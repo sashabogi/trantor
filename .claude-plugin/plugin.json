@@ -1,11 +1,12 @@
 {
   "name": "agent-bus",
-  "version": "0.10.0",
-  "description": "Live message bus + auto-discovery for independent Claude Code sessions (local + cross-machine)",
+  "version": "0.11.0",
+  "description": "Live message bus, presence, project Kanban + crew orchestration for independent AI coding agents (Claude, Codex, Gemini, Kimi, DeepSeek)",
   "mcpServers": {
     "relay": {
       "command": "node",
       "args": ["${CLAUDE_PLUGIN_ROOT}/mcp.mjs"]
     }
-  }
+  },
+  "skills": "./skills/"
 }
