@@ -44,6 +44,19 @@ function readStdin() {
 async function jget(u) { const r = await fetch(u, { signal: AbortSignal.timeout(2500) }); return r.json(); }
 async function jpost(u, b) { return fetch(u, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(b), signal: AbortSignal.timeout(2500) }); }
 
+// Strip control chars from untrusted injected text so the hook's JSON stdout (which
+// Claude Code parses) stays valid. Keeps tab/newline/CR; replaces 0x00-0x1F (minus
+// those), DEL, and the JS line/paragraph separators.
+function sanitize(s) {
+  let out = "";
+  for (const ch of String(s ?? "")) {
+    const c = ch.codePointAt(0);
+    const bad = (c < 0x20 && c !== 9 && c !== 10 && c !== 13) || c === 0x7f || c === 0x2028 || c === 0x2029;
+    out += bad ? " " : ch;
+  }
+  return out;
+}
+
 let additionalContext = "";
 try {
   await readStdin();
@@ -64,7 +77,7 @@ try {
   if (others.length > 0) {
     additionalContext += `<claude-relay session="${session}" hub="${url}">\n`;
     additionalContext += `You are connected to the claude-relay session bus as "${session}". Other LIVE Claude Code sessions are running right now:\n`;
-    for (const p of others) additionalContext += `- ${p.session}\n`;
+    for (const p of others) additionalContext += `- ${sanitize(p.session)}\n`;
     additionalContext += `Use the relay MCP tools (relay_peers, relay_send, relay_inbox, relay_wait) to coordinate with them — hand off work, check for overlap before editing shared files, or ask another session for help. If a sibling session is touching the same project, coordinate before making conflicting changes.\n`;
     additionalContext += `</claude-relay>\n`;
   }
@@ -74,19 +87,24 @@ try {
   const handoff = loadPendingHandoff(basename(projectDir));
   if (handoff) {
     process.stderr.write(`[claude-relay] loaded pending handoff ${handoff.id}\n`);
-    additionalContext += `<claude-relay-handoff id="${handoff.id}" from="${handoff.machine}" trigger="${handoff.trigger}">\n`;
+    additionalContext += `<claude-relay-handoff id="${sanitize(handoff.id)}" from="${sanitize(handoff.machine)}" trigger="${sanitize(handoff.trigger)}">\n`;
     additionalContext += `🔄 **You are taking over from a prior session that hit its context limit.** This is a fresh full window. Resume the work below — the prior session's summary, git state, and a pointer to its full transcript (searchable; Foundation/Gaia has it ingested) follow. Continue from "OPEN THREADS & NEXT STEPS"; do not restart from scratch.\n\n`;
-    additionalContext += `## Handoff summary\n${handoff.summary}\n`;
-    if (handoff.gitStatus) additionalContext += `\n## Git working-tree at handoff\n\`\`\`\n${handoff.gitStatus}\n\`\`\`\n`;
-    if (handoff.transcript_path) additionalContext += `\n_Full prior transcript: ${handoff.transcript_path}_\n`;
+    additionalContext += `## Handoff summary\n${sanitize(handoff.summary)}\n`;
+    if (handoff.gitStatus) additionalContext += `\n## Git working-tree at handoff\n\`\`\`\n${sanitize(handoff.gitStatus)}\n\`\`\`\n`;
+    if (handoff.transcript_path) additionalContext += `\n_Full prior transcript: ${sanitize(handoff.transcript_path)}_\n`;
     additionalContext += `</claude-relay-handoff>\n`;
   }
 } catch (err) {
   process.stderr.write(`[claude-relay] sessionstart error: ${err?.message || err}\n`);
 }
 
-// Hook protocol: emit additionalContext via stdout JSON
-process.stdout.write(JSON.stringify(additionalContext
-  ? { hookSpecificOutput: { hookEventName: "SessionStart", additionalContext } }
-  : {}));
+// Hook protocol: emit additionalContext via stdout JSON. Self-validate so we never
+// emit something Claude Code can't parse — fall back to sanitized, then to {}.
+function emit(ctx) {
+  const obj = ctx ? { hookSpecificOutput: { hookEventName: "SessionStart", additionalContext: ctx } } : {};
+  const out = JSON.stringify(obj);
+  try { JSON.parse(out); return out; } catch { /* fall through */ }
+  try { return JSON.stringify({ hookSpecificOutput: { hookEventName: "SessionStart", additionalContext: sanitize(ctx) } }); } catch { return "{}"; }
+}
+process.stdout.write(emit(additionalContext));
 process.exit(0);
