@@ -13,14 +13,14 @@ const DATA_DIR = join(homedir(), ".agent-bus");
 const DATA = join(DATA_DIR, "bus.json");
 if (!existsSync(DATA_DIR)) mkdirSync(DATA_DIR, { recursive: true });
 
-// peers: { session: { lastSeen, status } }
-let state = { messages: [], peers: {}, seq: 0 };
+// peers: { session: { lastSeen, status, project } } ; tasks: kanban cards
+let state = { messages: [], peers: {}, seq: 0, tasks: [], taskSeq: 0 };
 try {
   if (existsSync(DATA)) {
     const loaded = JSON.parse(readFileSync(DATA, "utf8"));
-    state = { messages: loaded.messages || [], peers: {}, seq: loaded.seq || 0 };
+    state = { messages: loaded.messages || [], peers: {}, seq: loaded.seq || 0, tasks: loaded.tasks || [], taskSeq: loaded.taskSeq || 0 };
     for (const [s, v] of Object.entries(loaded.peers || {})) // migrate old numeric form
-      state.peers[s] = typeof v === "number" ? { lastSeen: v, status: "" } : { lastSeen: v.lastSeen || 0, status: v.status || "" };
+      state.peers[s] = typeof v === "number" ? { lastSeen: v, status: "", project: "" } : { lastSeen: v.lastSeen || 0, status: v.status || "", project: v.project || "" };
   }
 } catch {}
 let dirty = false;
@@ -36,11 +36,14 @@ const streams = [];
 const now = () => Date.now();
 function body(req) { return new Promise(r => { let d = ""; req.on("data", c => (d += c)); req.on("end", () => { try { r(d ? JSON.parse(d) : {}); } catch { r({}); } }); }); }
 function json(res, code, obj) { res.writeHead(code, { "content-type": "application/json", "access-control-allow-origin": "*" }); res.end(JSON.stringify(obj)); }
-function touch(session, status) {
+function touch(session, status, project) {
   if (!session || session === "all") return;   // "all" is a wildcard, not a real peer
-  const p = state.peers[session] || { lastSeen: 0, status: "" };
+  const p = state.peers[session] || { lastSeen: 0, status: "", project: "" };
   p.lastSeen = now();
   if (status !== undefined) p.status = String(status).slice(0, 280);
+  if (project) p.project = String(project).slice(0, 80);
+  // derive project from a "host:project" session id if none given
+  if (!p.project && session.includes(":")) p.project = session.split(":").pop().slice(0, 80);
   state.peers[session] = p; dirty = true;
 }
 function deliverable(m, session) { return (m.to === session || m.to === "all") && m.from !== session; }
@@ -51,11 +54,43 @@ function pushToStreams(msg) {
 const server = http.createServer(async (req, res) => {
   const u = new URL(req.url, "http://x"); const q = Object.fromEntries(u.searchParams); const P = u.pathname;
   try {
-    if (req.method === "POST" && P === "/register") { const b = await body(req); touch(b.session, b.status); return json(res, 200, { ok: true, session: b.session, peers: Object.keys(state.peers) }); }
-    if (req.method === "POST" && P === "/status") { const b = await body(req); touch(b.session, b.status ?? ""); return json(res, 200, { ok: true }); }
+    if (req.method === "POST" && P === "/register") { const b = await body(req); touch(b.session, b.status, b.project); return json(res, 200, { ok: true, session: b.session, peers: Object.keys(state.peers) }); }
+    if (req.method === "POST" && P === "/status") { const b = await body(req); touch(b.session, b.status ?? "", b.project); return json(res, 200, { ok: true }); }
     if (req.method === "GET" && P === "/peers") {
       const cutoff = now() - 5 * 60 * 1000;
-      return json(res, 200, { peers: Object.entries(state.peers).map(([s, v]) => ({ session: s, lastSeen: v.lastSeen, online: v.lastSeen > cutoff, status: v.status || "" })) });
+      return json(res, 200, { peers: Object.entries(state.peers).map(([s, v]) => ({ session: s, lastSeen: v.lastSeen, online: v.lastSeen > cutoff, status: v.status || "", project: v.project || "" })) });
+    }
+    // --- Kanban tasks ---
+    if (req.method === "POST" && P === "/task") {           // create a card
+      const b = await body(req); touch(b.by, undefined, b.project);
+      const t = { id: ++state.taskSeq, project: String(b.project || "").slice(0,80), title: String(b.title||"").slice(0,200),
+        assignee: b.assignee || "", status: ["todo","doing","done","blocked"].includes(b.status) ? b.status : "todo",
+        by: b.by || "", ts: now(), updated: now() };
+      state.tasks.push(t); if (state.tasks.length > 2000) state.tasks.splice(0, 500);
+      dirty = true; return json(res, 200, { ok: true, task: t });
+    }
+    if (req.method === "POST" && P === "/task/update") {    // move/edit a card
+      const b = await body(req); const t = state.tasks.find(x => x.id === Number(b.id));
+      if (!t) return json(res, 404, { error: "no such task" });
+      if (b.status && ["todo","doing","done","blocked"].includes(b.status)) t.status = b.status;
+      if (b.assignee !== undefined) t.assignee = b.assignee;
+      if (b.title !== undefined) t.title = String(b.title).slice(0,200);
+      if (b.delete) state.tasks = state.tasks.filter(x => x.id !== t.id);
+      t.updated = now(); dirty = true; return json(res, 200, { ok: true, task: t });
+    }
+    if (req.method === "GET" && P === "/tasks") {
+      const proj = q.project; const ts = proj ? state.tasks.filter(t => t.project === proj) : state.tasks;
+      return json(res, 200, { tasks: ts });
+    }
+    if (req.method === "GET" && P === "/projects") {        // project-grouped view
+      const cutoff = now() - 5 * 60 * 1000; const byProj = {};
+      const proj = p => p || "(unassigned)";
+      for (const [s, v] of Object.entries(state.peers)) {
+        const k = proj(v.project); (byProj[k] ||= { project: k, agents: [], tasks: { todo:0,doing:0,done:0,blocked:0 } });
+        byProj[k].agents.push({ session: s, online: v.lastSeen > cutoff, status: v.status || "" });
+      }
+      for (const t of state.tasks) { const k = proj(t.project); (byProj[k] ||= { project: k, agents: [], tasks: { todo:0,doing:0,done:0,blocked:0 } }); byProj[k].tasks[t.status] = (byProj[k].tasks[t.status]||0)+1; }
+      return json(res, 200, { projects: Object.values(byProj) });
     }
     if (req.method === "POST" && P === "/send") {
       const b = await body(req); touch(b.from);

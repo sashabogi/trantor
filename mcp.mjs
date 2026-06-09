@@ -21,6 +21,7 @@ function relayUrl() {
 }
 const URL_BASE = relayUrl();
 const SESSION = process.env.RELAY_SESSION || `${hostname()}:${basename(process.env.CLAUDE_PROJECT_DIR || process.cwd())}`;
+const PROJECT = process.env.RELAY_PROJECT || basename(process.env.CLAUDE_PROJECT_DIR || process.cwd());
 let cursor = 0;
 
 async function api(method, path, payload) {
@@ -34,9 +35,32 @@ const fmt = (m) => `#${m.id} [${m.from} -> ${m.to}] ${new Date(m.ts).toLocaleTim
 
 const server = new McpServer({ name: "agent-bus", version: "0.1.0" });
 
-server.tool("relay_whoami", "Show this session's relay identity and the hub URL.", {}, async () => {
-  await api("POST", "/register", { session: SESSION }).catch(() => {});
-  return { content: [{ type: "text", text: `session=${SESSION}\nhub=${URL_BASE}` }] };
+server.tool("relay_whoami", "Show this session's relay identity, project, and the hub URL.", {}, async () => {
+  await api("POST", "/register", { session: SESSION, project: PROJECT }).catch(() => {});
+  return { content: [{ type: "text", text: `session=${SESSION}\nproject=${PROJECT}\nhub=${URL_BASE}` }] };
+});
+
+server.tool("relay_task_add", "Add a Kanban card to THIS project's board on the dashboard (what you're about to work on). Defaults: assigned to you, status 'todo'. Keep the team's progress visible.",
+  { title: z.string().describe("short task title"), status: z.enum(["todo","doing","done","blocked"]).optional(), assignee: z.string().optional().describe("session id to assign (default: you)") },
+  async ({ title, status, assignee }) => {
+    const { task } = await api("POST", "/task", { project: PROJECT, title, status: status || "todo", assignee: assignee || SESSION, by: SESSION });
+    return { content: [{ type: "text", text: `card #${task.id} added to ${PROJECT}: "${title}" [${task.status}]` }] };
+  });
+
+server.tool("relay_task_move", "Move a Kanban card to a new status (todo/doing/done/blocked) as you make progress. Use relay_board to see card ids.",
+  { id: z.number(), status: z.enum(["todo","doing","done","blocked"]) },
+  async ({ id, status }) => {
+    await api("POST", "/task/update", { id, status });
+    return { content: [{ type: "text", text: `card #${id} -> ${status}` }] };
+  });
+
+server.tool("relay_board", "Show THIS project's Kanban board (all cards + their status + assignee).", {}, async () => {
+  const { tasks } = await api("GET", `/tasks?project=${encodeURIComponent(PROJECT)}`);
+  if (!tasks.length) return { content: [{ type: "text", text: `${PROJECT}: no cards yet` }] };
+  const by = { todo: [], doing: [], done: [], blocked: [] };
+  for (const t of tasks) (by[t.status] || by.todo).push(`#${t.id} ${t.title}${t.assignee ? ` (@${t.assignee})` : ""}`);
+  const cols = Object.entries(by).filter(([, v]) => v.length).map(([k, v]) => `${k.toUpperCase()}:\n  ${v.join("\n  ")}`);
+  return { content: [{ type: "text", text: `${PROJECT} board\n${cols.join("\n")}` }] };
 });
 
 server.tool("relay_peers", "List other Claude sessions connected to the relay (online in last 5 min).", {}, async () => {
@@ -55,7 +79,7 @@ server.tool("relay_send", "Send a live message to another Claude session (or 'al
 server.tool("relay_status", "Set this session's one-line status on the presence board (what you're working on / idle). Cheap — other sessions read it instantly via relay_peers without messaging you.",
   { status: z.string().describe("short status, e.g. 'building auth in crebral' or 'idle'") },
   async ({ status }) => {
-    await api("POST", "/status", { session: SESSION, status });
+    await api("POST", "/status", { session: SESSION, status, project: PROJECT });
     return { content: [{ type: "text", text: `status set: ${status}` }] };
   });
 
@@ -89,6 +113,6 @@ server.tool("relay_wait", "Block up to `timeout` seconds waiting for the next me
     return { content: [{ type: "text", text: messages.length ? messages.map(fmt).join("\n") : "(timed out, no message)" }] };
   });
 
-await api("POST", "/register", { session: SESSION }).catch(() => {});
+await api("POST", "/register", { session: SESSION, project: PROJECT, status: `active in ${PROJECT}` }).catch(() => {});
 await server.connect(new StdioServerTransport());
 process.stderr.write(`[agent-bus-mcp] connected as ${SESSION} -> ${URL_BASE}\n`);
