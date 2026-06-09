@@ -1,6 +1,6 @@
 {
   "name": "claude-relay",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Live message bus + auto-discovery for independent Claude Code sessions (local + cross-machine)",
   "mcpServers": {
     "relay": {
