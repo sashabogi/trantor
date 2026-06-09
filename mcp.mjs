@@ -54,6 +54,13 @@ server.tool("relay_task_move", "Move a Kanban card to a new status (todo/doing/d
     return { content: [{ type: "text", text: `card #${id} -> ${status}` }] };
   });
 
+server.tool("relay_project_brief", "Set a one-paragraph brief for THIS project shown on the dashboard: what it is, why it matters, and the goal. Set it once when you start work so anyone watching the board understands the project at a glance (the board itself shows where it is in the process).",
+  { brief: z.string().describe("1-3 sentences: what this project is + why + the goal") },
+  async ({ brief }) => {
+    await api("POST", "/project", { project: PROJECT, brief, by: SESSION });
+    return { content: [{ type: "text", text: `brief set for ${PROJECT}` }] };
+  });
+
 server.tool("relay_board", "Show THIS project's Kanban board (all cards + their status + assignee).", {}, async () => {
   const { tasks } = await api("GET", `/tasks?project=${encodeURIComponent(PROJECT)}`);
   if (!tasks.length) return { content: [{ type: "text", text: `${PROJECT}: no cards yet` }] };

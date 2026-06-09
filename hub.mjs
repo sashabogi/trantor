@@ -14,11 +14,12 @@ const DATA = join(DATA_DIR, "bus.json");
 if (!existsSync(DATA_DIR)) mkdirSync(DATA_DIR, { recursive: true });
 
 // peers: { session: { lastSeen, status, project } } ; tasks: kanban cards
-let state = { messages: [], peers: {}, seq: 0, tasks: [], taskSeq: 0 };
+// projectMeta: { project: { brief, by, updated } } — the "what & why" blurb per project
+let state = { messages: [], peers: {}, seq: 0, tasks: [], taskSeq: 0, projectMeta: {} };
 try {
   if (existsSync(DATA)) {
     const loaded = JSON.parse(readFileSync(DATA, "utf8"));
-    state = { messages: loaded.messages || [], peers: {}, seq: loaded.seq || 0, tasks: loaded.tasks || [], taskSeq: loaded.taskSeq || 0 };
+    state = { messages: loaded.messages || [], peers: {}, seq: loaded.seq || 0, tasks: loaded.tasks || [], taskSeq: loaded.taskSeq || 0, projectMeta: loaded.projectMeta || {} };
     for (const [s, v] of Object.entries(loaded.peers || {})) // migrate old numeric form
       state.peers[s] = typeof v === "number" ? { lastSeen: v, status: "", project: "" } : { lastSeen: v.lastSeen || 0, status: v.status || "", project: v.project || "" };
   }
@@ -82,14 +83,33 @@ const server = http.createServer(async (req, res) => {
       const proj = q.project; const ts = proj ? state.tasks.filter(t => t.project === proj) : state.tasks;
       return json(res, 200, { tasks: ts });
     }
+    if (req.method === "POST" && P === "/project") {        // set a project's brief (what & why)
+      const b = await body(req); const k = String(b.project || "").slice(0, 80);
+      if (!k) return json(res, 400, { error: "project required" });
+      const m = state.projectMeta[k] || {};
+      if (b.brief !== undefined) m.brief = String(b.brief).slice(0, 600);
+      m.by = b.by || m.by || ""; m.updated = now();
+      state.projectMeta[k] = m; dirty = true;
+      return json(res, 200, { ok: true, project: k, brief: m.brief || "" });
+    }
     if (req.method === "GET" && P === "/projects") {        // project-grouped view
       const cutoff = now() - 5 * 60 * 1000; const byProj = {};
       const proj = p => p || "(unassigned)";
+      const mk = k => (byProj[k] ||= { project: k, brief: (state.projectMeta[k]?.brief) || "", agents: [], tasks: { todo:0,doing:0,done:0,blocked:0 }, doingTitles: [] });
       for (const [s, v] of Object.entries(state.peers)) {
-        const k = proj(v.project); (byProj[k] ||= { project: k, agents: [], tasks: { todo:0,doing:0,done:0,blocked:0 } });
-        byProj[k].agents.push({ session: s, online: v.lastSeen > cutoff, status: v.status || "" });
+        const k = proj(v.project); mk(k).agents.push({ session: s, online: v.lastSeen > cutoff, status: v.status || "" });
       }
-      for (const t of state.tasks) { const k = proj(t.project); (byProj[k] ||= { project: k, agents: [], tasks: { todo:0,doing:0,done:0,blocked:0 } }); byProj[k].tasks[t.status] = (byProj[k].tasks[t.status]||0)+1; }
+      for (const t of state.tasks) { const e = mk(proj(t.project)); e.tasks[t.status] = (e.tasks[t.status]||0)+1; if (t.status === "doing") e.doingTitles.push(t.title); }
+      // derive a one-line phase ("where it is in the process") from the board
+      for (const e of Object.values(byProj)) {
+        const { todo, doing, done, blocked } = e.tasks; const total = todo+doing+done+blocked;
+        e.phase = total === 0 ? "no cards yet"
+          : blocked > 0 ? `blocked on ${blocked} card${blocked>1?"s":""}`
+          : doing > 0 ? `building: ${e.doingTitles.slice(0,2).join(", ")}${e.doingTitles.length>2?"…":""}`
+          : done === total ? "shipped — all cards done"
+          : todo > 0 ? `planned: ${todo} card${todo>1?"s":""} queued`
+          : "in progress";
+      }
       return json(res, 200, { projects: Object.values(byProj) });
     }
     if (req.method === "POST" && P === "/send") {
