@@ -7,7 +7,7 @@ const project = process.env.CLAUDE_PROJECT_DIR || process.cwd();
 const name = basename(project);
 let summary = ""; process.stdin.setEncoding("utf8");
 for await (const c of process.stdin) summary += c;
-const dir = join(homedir(), ".claude-relay", "handoffs");
+const dir = join(homedir(), ".agent-bus", "handoffs");
 if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
 const stamp = (() => { try { return execSync("date +%s",{encoding:"utf8"}).trim(); } catch { return String(process.pid); } })();
 let git=""; try { git = execSync("git -C "+JSON.stringify(project)+" status --short 2>/dev/null | head -30",{encoding:"utf8"}).trim(); } catch {}

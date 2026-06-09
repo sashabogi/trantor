@@ -1,21 +1,23 @@
 <div align="center">
 
 ```
- ██████╗██╗      █████╗ ██╗   ██╗██████╗ ███████╗      ██████╗ ███████╗██╗      █████╗ ██╗   ██╗
-██╔════╝██║     ██╔══██╗██║   ██║██╔══██╗██╔════╝      ██╔══██╗██╔════╝██║     ██╔══██╗╚██╗ ██╔╝
-██║     ██║     ███████║██║   ██║██║  ██║█████╗        ██████╔╝█████╗  ██║     ███████║ ╚████╔╝
-██║     ██║     ██╔══██║██║   ██║██║  ██║██╔══╝        ██╔══██╗██╔══╝  ██║     ██╔══██║  ╚██╔╝
-╚██████╗███████╗██║  ██║╚██████╔╝██████╔╝███████╗      ██║  ██║███████╗███████╗██║  ██║   ██║
- ╚═════╝╚══════╝╚═╝  ╚═╝ ╚═════╝ ╚═════╝ ╚══════╝      ╚═╝  ╚═╝╚══════╝╚══════╝╚═╝  ╚═╝   ╚═╝
+ █████╗  ██████╗ ███████╗███╗   ██╗████████╗    ██████╗ ██╗   ██╗███████╗
+██╔══██╗██╔════╝ ██╔════╝████╗  ██║╚══██╔══╝    ██╔══██╗██║   ██║██╔════╝
+███████║██║  ███╗█████╗  ██╔██╗ ██║   ██║       ██████╔╝██║   ██║███████╗
+██╔══██║██║   ██║██╔══╝  ██║╚██╗██║   ██║       ██╔══██╗██║   ██║╚════██║
+██║  ██║╚██████╔╝███████╗██║ ╚████║   ██║       ██████╔╝╚██████╔╝███████║
+╚═╝  ╚═╝ ╚═════╝ ╚══════╝╚═╝  ╚═══╝   ╚═╝       ╚═════╝  ╚═════╝ ╚══════╝
+                                                                         
 ```
 
-### Let your Claude Code sessions talk to each other — live.
+### Let your AI coding agents talk to each other — live.
 
-**Open six terminals. Now they know about each other, share status, hand off work, and message in real time.**
+**Claude Code, Codex, Gemini, Kimi — any MCP-capable agent CLI. Open terminals across any tools; now
+they know about each other, share status, hand off work, and message in real time.**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
 ![Node](https://img.shields.io/badge/node-%E2%89%A518-339933?logo=node.js&logoColor=white)
-![Claude Code](https://img.shields.io/badge/Claude%20Code-plugin-D97757)
+![Agents](https://img.shields.io/badge/agents-Claude%20%C2%B7%20Codex%20%C2%B7%20Gemini%20%C2%B7%20any%20MCP-D97757)
 ![Status](https://img.shields.io/badge/status-working-2DD4BF)
 
 </div>
@@ -24,20 +26,23 @@
 
 ## Why this exists
 
-Claude Code runs each terminal session in its own bubble. Two sessions you start separately can't
-see or talk to each other — Agent Teams only covers teammates one lead *spawns*, locally. So if you
-run several Claude sessions at once (different projects, a long build here, research there), they're
-blind to each other, and the only way to "continue" a full context window is to compact and lose detail.
+Every AI coding CLI runs each terminal session in its own bubble. Two sessions you start separately —
+even in the *same* tool — can't see or talk to each other, and there's no way to coordinate a Claude
+session, a Codex session, and a Gemini session running in parallel. The only way to "continue" a full
+context window is to compact and lose detail.
 
-**claude-relay** is a tiny message bus that fixes all of that:
+**agent-bus** is a tiny, **agent-agnostic** message bus that fixes all of that. It's plain HTTP plus
+standard **MCP**, so *any* agent CLI that speaks MCP joins the same bus — verified with Claude Code and a
+Gemini CLI agent messaging each other live.
 
-- 🛰️ **Live messaging** — any session can `relay_send` to any other and `relay_wait` for a reply.
-- 🟢 **Presence board** — every session auto-registers and posts a one-line status. See *what all your
-  sessions are doing* with a single instant, zero-cost read (no LLM round-trip).
-- ⚡ **Instant push** — an `SSE` stream + a `relay-watch` terminal feed show messages the moment they land.
-- 🔄 **Context handoff** — at the compaction wall, a session writes a rich handoff; you open a fresh
-  terminal and it **takes over with a brand-new full context window** instead of compacting.
-- 🌐 **Local or cross-machine** — one machine over `localhost`, or many machines over Tailscale/any network.
+- 🛰️ **Live cross-agent messaging** — any session messages any other and waits for a reply. A Claude
+  session and a Codex session can talk.
+- 🟢 **Presence board** — every session auto-registers and posts a one-line status. See what *all* your
+  agents are doing with one instant, zero-cost read (no LLM round-trip).
+- ⚡ **Instant push** — an `SSE` stream + a live terminal feed show messages the moment they land.
+- 🔄 **Context handoff** — at the compaction wall, a session writes a rich handoff; open a fresh terminal
+  and it **takes over with a brand-new full context window** instead of compacting.
+- 🌐 **Local or cross-machine** — one machine over `localhost`, or many over Tailscale / any network.
 
 It's ~300 lines, has no database, and the hub uses only Node built-ins.
 
@@ -47,18 +52,18 @@ It's ~300 lines, has no database, and the hub uses only Node built-ins.
 
 ```bash
 # 1. Clone + install deps (the MCP server needs them)
-git clone https://github.com/sashabogi/claude-relay ~/claude-relay
-cd ~/claude-relay && npm install
+git clone https://github.com/sashabogi/agent-bus ~/agent-bus
+cd ~/agent-bus && npm install
 
 # 2. Start a hub — the rendezvous both sessions reach.
 #    Local-only: run it right here. Multi-machine: run it on any always-on box they can all reach.
 node hub.mjs &                                   # http://127.0.0.1:4477
-mkdir -p ~/.claude-relay
-echo '{"url":"http://127.0.0.1:4477"}' > ~/.claude-relay/config.json
+mkdir -p ~/.agent-bus
+echo '{"url":"http://127.0.0.1:4477"}' > ~/.agent-bus/config.json
 
 # 3. Install the plugin (auto-register hook + handoff hook + relay tools)
-claude plugin marketplace add sashabogi/claude-relay
-claude plugin install claude-relay
+claude plugin marketplace add sashabogi/agent-bus
+claude plugin install agent-bus
 ```
 
 Now **every new `claude` session auto-registers** with the hub and, if other sessions are live, gets a
@@ -105,7 +110,7 @@ Instead of compacting a full window and limping along, **hand the work to a fres
    summary, git state, and a pointer to the full prior transcript.
 
 Net: **compaction, but with a better summary and a brand-new million-token window.** You can also trigger
-it proactively with the `/claude-relay:relay-handoff` skill (the model writes a higher-quality handoff
+it proactively with the `/agent-bus:relay-handoff` skill (the model writes a higher-quality handoff
 because it still has full context).
 
 ---
@@ -136,7 +141,7 @@ curl -s "$HUB/poll?session=my-id&since=0&wait=25"
                          ▼
                  ┌───────────────┐
                  │   hub.mjs     │  HTTP bus + presence board + SSE push
-                 │  (no deps)    │  state persists to ~/.claude-relay/bus.json
+                 │  (no deps)    │  state persists to ~/.agent-bus/bus.json
                  └───────────────┘
 ```
 
@@ -146,7 +151,7 @@ curl -s "$HUB/poll?session=my-id&since=0&wait=25"
 - **`hooks/sessionstart.mjs`** — auto-register + roster injection + pending-handoff takeover.
 - **`hooks/precompact.mjs`** — writes the handoff at the compaction threshold.
 
-Config resolution everywhere: `RELAY_URL` env → `~/.claude-relay/config.json` → `http://127.0.0.1:4477`.
+Config resolution everywhere: `RELAY_URL` env → `~/.agent-bus/config.json` → `http://127.0.0.1:4477`.
 Session identity: `RELAY_SESSION` env → `<hostname>:<project-folder>`.
 
 ### Cross-machine
@@ -184,7 +189,7 @@ npm test     # hermetic: feeds adversarial handoff content, asserts the hook alw
 ## Notes
 
 - The optional handoff summarizer is any CLI that reads text on stdin and writes a summary. By default
-  claude-relay looks for [**Scrooge**](https://github.com/sashabogi/token-scrooge) — an open-source CLI
+  agent-bus looks for [**Scrooge**](https://github.com/sashabogi/token-scrooge) — an open-source CLI
   that routes each task to the cheapest capable LLM and logs the spend — so handoff summaries cost a
-  fraction of a cent. Without it, claude-relay falls back to a raw transcript tail (no extra dependencies).
+  fraction of a cent. Without it, agent-bus falls back to a raw transcript tail (no extra dependencies).
 - Built for, and tested with, [Claude Code](https://claude.com/claude-code).

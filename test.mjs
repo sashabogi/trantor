@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// claude-relay tests — hermetic (no network: RELAY_URL points at a closed port).
+// agent-bus tests — hermetic (no network: RELAY_URL points at a closed port).
 // Focus: the hook must ALWAYS emit valid JSON, even when injected handoff content
 // contains control chars / U+2028 / quotes (the non-deterministic bug we hit).
 import { writeFileSync, mkdirSync, existsSync, readFileSync, rmSync } from "node:fs";
@@ -17,7 +17,7 @@ const runHook = (projDir, sess) => spawnSync("node", ["hooks/sessionstart.mjs"],
 
 const proj = "relay-selftest-" + process.pid;
 const projDir = join(tmpdir(), proj);
-const handoffDir = join(homedir(), ".claude-relay", "handoffs");
+const handoffDir = join(homedir(), ".agent-bus", "handoffs");
 mkdirSync(handoffDir, { recursive: true });
 const hfFile = join(handoffDir, `${proj}-9999999999.json`);
 
@@ -29,7 +29,7 @@ writeFileSync(hfFile, JSON.stringify({
   gitStatus: "M file", transcript_path: "/tmp/x.jsonl", consumed: false,
 }, null, 2));
 
-console.log("# claude-relay tests");
+console.log("# agent-bus tests");
 const r = runHook(projDir, proj);
 ok("hook exits 0", r.status === 0);
 
@@ -39,7 +39,7 @@ ok("hook stdout is VALID JSON despite adversarial handoff content", valid);
 if (!valid) console.log("    raw stdout (first 160):", JSON.stringify(r.stdout.slice(0, 160)));
 
 const ctx = parsed?.hookSpecificOutput?.additionalContext || "";
-ok("injected the <claude-relay-handoff> block", ctx.includes("<claude-relay-handoff"));
+ok("injected the <agent-bus-handoff> block", ctx.includes("<agent-bus-handoff"));
 ok("no raw control chars left in injected context",
    ![...ctx].some(ch => { const c = ch.codePointAt(0); return (c < 0x20 && c !== 9 && c !== 10 && c !== 13) || c === 0x7f || c === 0x2028 || c === 0x2029; }));
 ok("handoff marked consumed after load",
@@ -48,7 +48,7 @@ ok("handoff marked consumed after load",
 const r2 = runHook(projDir, proj);
 let ctx2 = "";
 try { ctx2 = JSON.parse(r2.stdout || "{}")?.hookSpecificOutput?.additionalContext || ""; } catch {}
-ok("consumed handoff is NOT re-injected on next start", !ctx2.includes("claude-relay-handoff"));
+ok("consumed handoff is NOT re-injected on next start", !ctx2.includes("agent-bus-handoff"));
 
 rmSync(hfFile, { force: true });
 console.log(`\n${pass} passed, ${fail} failed`);

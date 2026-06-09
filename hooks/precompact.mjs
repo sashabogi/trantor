@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// claude-relay PreCompact hook — fires right before Claude Code compacts a full
+// agent-bus PreCompact hook — fires right before Claude Code compacts a full
 // context window. Instead of (just) compacting, it writes a rich HANDOFF so you can
 // open a FRESH session that takes over with a new full window. The SessionStart hook
 // detects the pending handoff and loads it.
@@ -11,7 +11,7 @@ import { join, basename } from "node:path";
 import { homedir, hostname } from "node:os";
 import { execSync } from "node:child_process";
 
-const HANDOFF_DIR = join(homedir(), ".claude-relay", "handoffs");
+const HANDOFF_DIR = join(homedir(), ".agent-bus", "handoffs");
 
 function readStdin() {
   return new Promise(res => { let d = ""; process.stdin.setEncoding("utf8");
@@ -49,7 +49,7 @@ function summarize(convo) {
       return execSync(`scrooge -t summarize -d medium --system ${JSON.stringify(sys)}`, {
         input: convo, encoding: "utf8", timeout: 45000, maxBuffer: 4 * 1024 * 1024,
       }).trim();
-    } catch (e) { process.stderr.write(`[claude-relay] scrooge summarize failed: ${e?.message}\n`); }
+    } catch (e) { process.stderr.write(`[agent-bus] scrooge summarize failed: ${e?.message}\n`); }
   }
   // fallback: raw recent tail
   return `*(no summarizer available — raw recent transcript tail)*\n\n${convo.slice(-6000)}`;
@@ -84,18 +84,18 @@ try {
   };
   const file = join(HANDOFF_DIR, `${record.id}.json`);
   writeFileSync(file, JSON.stringify(record, null, 2));
-  process.stderr.write(`[claude-relay] handoff written: ${file} (trigger=${trigger})\n`);
+  process.stderr.write(`[agent-bus] handoff written: ${file} (trigger=${trigger})\n`);
 
   // best-effort: ping the relay hub so other sessions/machines know a handoff is ready
   try {
-    const cfg = join(homedir(), ".claude-relay", "config.json");
+    const cfg = join(homedir(), ".agent-bus", "config.json");
     const url = process.env.RELAY_URL || (existsSync(cfg) ? JSON.parse(readFileSync(cfg, "utf8")).url : "") || "http://127.0.0.1:4477";
     await fetch(`${url}/send`, { method: "POST", headers: { "content-type": "application/json" },
       body: JSON.stringify({ from: `${hostname()}:${projectName}`, to: "all", text: `📋 Handoff ready for ${projectName} — open a fresh session here to take over (id ${record.id}).` }),
       signal: AbortSignal.timeout(2000) }).catch(() => {});
   } catch {}
 } catch (err) {
-  process.stderr.write(`[claude-relay] precompact error: ${err?.message || err}\n`);
+  process.stderr.write(`[agent-bus] precompact error: ${err?.message || err}\n`);
 }
 process.stdout.write("{}");
 process.exit(0);

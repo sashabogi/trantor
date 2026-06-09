@@ -1,10 +1,10 @@
 #!/usr/bin/env node
-// claude-relay SessionStart hook — every session auto-registers with the hub and
+// agent-bus SessionStart hook — every session auto-registers with the hub and
 // gets a roster of OTHER live sessions injected into context, so independent
 // sessions discover each other automatically (locally or across machines).
 //
 // Config resolution (first hit wins):
-//   env RELAY_URL  →  ~/.claude-relay/config.json {"url": "..."}  →  http://127.0.0.1:4477
+//   env RELAY_URL  →  ~/.agent-bus/config.json {"url": "..."}  →  http://127.0.0.1:4477
 // Identity: env RELAY_SESSION  →  "<hostname>:<basename(cwd)>"  (stable per project/machine)
 import { readFileSync, writeFileSync, existsSync, readdirSync } from "node:fs";
 import { join, basename } from "node:path";
@@ -13,7 +13,7 @@ import { homedir, hostname } from "node:os";
 // Load the most recent UNCONSUMED handoff for this project (written by precompact.mjs).
 function loadPendingHandoff(projectName) {
   try {
-    const dir = join(homedir(), ".claude-relay", "handoffs");
+    const dir = join(homedir(), ".agent-bus", "handoffs");
     if (!existsSync(dir)) return null;
     const files = readdirSync(dir).filter(f => f.startsWith(projectName + "-") && f.endsWith(".json")).sort().reverse();
     for (const f of files) {
@@ -31,7 +31,7 @@ function loadPendingHandoff(projectName) {
 function relayUrl() {
   if (process.env.RELAY_URL) return process.env.RELAY_URL;
   try {
-    const cfg = join(homedir(), ".claude-relay", "config.json");
+    const cfg = join(homedir(), ".agent-bus", "config.json");
     if (existsSync(cfg)) { const u = JSON.parse(readFileSync(cfg, "utf8")).url; if (u) return u; }
   } catch {}
   return "http://127.0.0.1:4477";
@@ -72,30 +72,30 @@ try {
   try { peers = (await jget(`${url}/peers`)).peers || []; } catch {}
   const others = peers.filter(p => p.online && p.session !== session);
 
-  process.stderr.write(`[claude-relay] registered as ${session} -> ${url} (${others.length} other live session(s))\n`);
+  process.stderr.write(`[agent-bus] registered as ${session} -> ${url} (${others.length} other live session(s))\n`);
 
   if (others.length > 0) {
-    additionalContext += `<claude-relay session="${session}" hub="${url}">\n`;
-    additionalContext += `You are connected to the claude-relay session bus as "${session}". Other LIVE Claude Code sessions are running right now:\n`;
+    additionalContext += `<agent-bus session="${session}" hub="${url}">\n`;
+    additionalContext += `You are connected to agent-bus (the cross-agent session bus) as "${session}". Other LIVE agent sessions are running right now:\n`;
     for (const p of others) additionalContext += `- ${sanitize(p.session)}\n`;
     additionalContext += `Use the relay MCP tools (relay_peers, relay_send, relay_inbox, relay_wait) to coordinate with them — hand off work, check for overlap before editing shared files, or ask another session for help. If a sibling session is touching the same project, coordinate before making conflicting changes.\n`;
-    additionalContext += `</claude-relay>\n`;
+    additionalContext += `</agent-bus>\n`;
   }
 
   // Pending handoff? A prior session hit the context limit and left a handoff for this
   // project — take over with this fresh full window instead of starting cold.
   const handoff = loadPendingHandoff(basename(projectDir));
   if (handoff) {
-    process.stderr.write(`[claude-relay] loaded pending handoff ${handoff.id}\n`);
-    additionalContext += `<claude-relay-handoff id="${sanitize(handoff.id)}" from="${sanitize(handoff.machine)}" trigger="${sanitize(handoff.trigger)}">\n`;
+    process.stderr.write(`[agent-bus] loaded pending handoff ${handoff.id}\n`);
+    additionalContext += `<agent-bus-handoff id="${sanitize(handoff.id)}" from="${sanitize(handoff.machine)}" trigger="${sanitize(handoff.trigger)}">\n`;
     additionalContext += `🔄 **You are taking over from a prior session that hit its context limit.** This is a fresh full window. Resume the work below — the prior session's summary, git state, and a pointer to its full transcript (searchable; Foundation/Gaia has it ingested) follow. Continue from "OPEN THREADS & NEXT STEPS"; do not restart from scratch.\n\n`;
     additionalContext += `## Handoff summary\n${sanitize(handoff.summary)}\n`;
     if (handoff.gitStatus) additionalContext += `\n## Git working-tree at handoff\n\`\`\`\n${sanitize(handoff.gitStatus)}\n\`\`\`\n`;
     if (handoff.transcript_path) additionalContext += `\n_Full prior transcript: ${sanitize(handoff.transcript_path)}_\n`;
-    additionalContext += `</claude-relay-handoff>\n`;
+    additionalContext += `</agent-bus-handoff>\n`;
   }
 } catch (err) {
-  process.stderr.write(`[claude-relay] sessionstart error: ${err?.message || err}\n`);
+  process.stderr.write(`[agent-bus] sessionstart error: ${err?.message || err}\n`);
 }
 
 // Hook protocol: emit additionalContext via stdout JSON. Self-validate so we never

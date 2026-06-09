@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// claude-relay MCP server — gives a Claude Code session tools to talk to OTHER
+// agent-bus MCP server — gives a Claude Code session tools to talk to OTHER
 // live Claude sessions through the relay hub. Loaded per-session via --mcp-config
 // or `claude mcp add`. Identity + hub URL come from env (RELAY_SESSION, RELAY_URL).
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
@@ -12,7 +12,7 @@ import { z } from "zod";
 function relayUrl() {
   if (process.env.RELAY_URL) return process.env.RELAY_URL;
   try {
-    const cfg = join(homedir(), ".claude-relay", "config.json");
+    const cfg = join(homedir(), ".agent-bus", "config.json");
     if (existsSync(cfg)) { const u = JSON.parse(readFileSync(cfg, "utf8")).url; if (u) return u; }
   } catch {}
   return "http://127.0.0.1:4477";
@@ -30,7 +30,7 @@ async function api(method, path, payload) {
 }
 const fmt = (m) => `#${m.id} [${m.from} -> ${m.to}] ${new Date(m.ts).toLocaleTimeString()}: ${m.text}`;
 
-const server = new McpServer({ name: "claude-relay", version: "0.1.0" });
+const server = new McpServer({ name: "agent-bus", version: "0.1.0" });
 
 server.tool("relay_whoami", "Show this session's relay identity and the hub URL.", {}, async () => {
   await api("POST", "/register", { session: SESSION }).catch(() => {});
@@ -74,4 +74,4 @@ server.tool("relay_wait", "Block up to `timeout` seconds waiting for the next me
 
 await api("POST", "/register", { session: SESSION }).catch(() => {});
 await server.connect(new StdioServerTransport());
-process.stderr.write(`[claude-relay-mcp] connected as ${SESSION} -> ${URL_BASE}\n`);
+process.stderr.write(`[agent-bus-mcp] connected as ${SESSION} -> ${URL_BASE}\n`);

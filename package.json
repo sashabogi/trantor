@@ -1,11 +1,11 @@
 {
-  "name": "claude-relay",
+  "name": "agent-bus",
   "private": true,
-  "version": "0.3.0",
+  "version": "0.4.0",
   "type": "module",
   "bin": {
-    "claude-relay-hub": "./hub.mjs",
-    "claude-relay-mcp": "./mcp.mjs"
+    "agent-bus-hub": "./hub.mjs",
+    "agent-bus-mcp": "./mcp.mjs"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",

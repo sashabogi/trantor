@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// claude-relay hub — message bus + presence/status board + SSE push, so independent
+// agent-bus hub — message bus + presence/status board + SSE push, so independent
 // Claude Code sessions can coordinate (near-instant for watchers, cheap for idle peers).
 // Binds to 0.0.0.0 by default so localhost AND Tailscale peers reach it.
 import http from "node:http";
@@ -9,7 +9,7 @@ import { join } from "node:path";
 
 const PORT = Number(process.env.RELAY_PORT || 4477);
 const HOST = process.env.RELAY_HOST || "0.0.0.0";
-const DATA_DIR = join(homedir(), ".claude-relay");
+const DATA_DIR = join(homedir(), ".agent-bus");
 const DATA = join(DATA_DIR, "bus.json");
 if (!existsSync(DATA_DIR)) mkdirSync(DATA_DIR, { recursive: true });
 
@@ -91,4 +91,4 @@ const server = http.createServer(async (req, res) => {
     json(res, 404, { error: "not found" });
   } catch (e) { json(res, 500, { error: String(e?.message || e) }); }
 });
-server.listen(PORT, HOST, () => console.error(`[claude-relay] hub on http://${HOST}:${PORT} (data: ${DATA})`));
+server.listen(PORT, HOST, () => console.error(`[agent-bus] hub on http://${HOST}:${PORT} (data: ${DATA})`));

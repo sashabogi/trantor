@@ -8,7 +8,7 @@ import { homedir } from "node:os";
 
 function relayUrl() {
   if (process.env.RELAY_URL) return process.env.RELAY_URL;
-  try { const c = join(homedir(), ".claude-relay", "config.json"); if (existsSync(c)) { const u = JSON.parse(readFileSync(c, "utf8")).url; if (u) return u; } } catch {}
+  try { const c = join(homedir(), ".agent-bus", "config.json"); if (existsSync(c)) { const u = JSON.parse(readFileSync(c, "utf8")).url; if (u) return u; } } catch {}
   return "http://127.0.0.1:4477";
 }
 const URL_BASE = relayUrl();
