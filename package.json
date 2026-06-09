@@ -1,0 +1,14 @@
+{
+  "name": "claude-relay",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "bin": {
+    "claude-relay-hub": "./hub.mjs",
+    "claude-relay-mcp": "./mcp.mjs"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "zod": "^4.4.3"
+  }
+}
