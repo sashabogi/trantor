@@ -67,7 +67,7 @@ const server = http.createServer(async (req, res) => {
     if (req.method === "POST" && P === "/task") {           // create a card
       const b = await body(req); touch(b.by, undefined, b.project);
       const t = { id: ++state.taskSeq, project: String(b.project || "").slice(0,80), title: String(b.title||"").slice(0,200),
-        assignee: b.assignee || "", status: ["todo","doing","done","blocked"].includes(b.status) ? b.status : "todo",
+        assignee: b.assignee || "", status: ["todo","doing","testing","failed","done","blocked"].includes(b.status) ? b.status : "todo",
         by: b.by || "", ts: now(), updated: now() };
       state.tasks.push(t); if (state.tasks.length > 2000) state.tasks.splice(0, 500);
       dirty = true; return json(res, 200, { ok: true, task: t });
@@ -75,7 +75,7 @@ const server = http.createServer(async (req, res) => {
     if (req.method === "POST" && P === "/task/update") {    // move/edit a card
       const b = await body(req); const t = state.tasks.find(x => x.id === Number(b.id));
       if (!t) return json(res, 404, { error: "no such task" });
-      if (b.status && ["todo","doing","done","blocked"].includes(b.status)) t.status = b.status;
+      if (b.status && ["todo","doing","testing","failed","done","blocked"].includes(b.status)) t.status = b.status;
       if (b.assignee !== undefined) t.assignee = b.assignee;
       if (b.title !== undefined) t.title = String(b.title).slice(0,200);
       if (b.delete) state.tasks = state.tasks.filter(x => x.id !== t.id);
@@ -97,16 +97,18 @@ const server = http.createServer(async (req, res) => {
     if (req.method === "GET" && P === "/projects") {        // project-grouped view
       const cutoff = now() - 5 * 60 * 1000; const byProj = {};
       const proj = p => p || "(unassigned)";
-      const mk = k => (byProj[k] ||= { project: k, brief: (state.projectMeta[k]?.brief) || "", agents: [], tasks: { todo:0,doing:0,done:0,blocked:0 }, doingTitles: [] });
+      const mk = k => (byProj[k] ||= { project: k, brief: (state.projectMeta[k]?.brief) || "", agents: [], tasks: { todo:0,doing:0,testing:0,failed:0,done:0,blocked:0 }, doingTitles: [] });
       for (const [s, v] of Object.entries(state.peers)) {
         const k = proj(v.project); mk(k).agents.push({ session: s, online: v.lastSeen > cutoff, status: v.status || "" });
       }
       for (const t of state.tasks) { const e = mk(proj(t.project)); e.tasks[t.status] = (e.tasks[t.status]||0)+1; if (t.status === "doing") e.doingTitles.push(t.title); }
       // derive a one-line phase ("where it is in the process") from the board
       for (const e of Object.values(byProj)) {
-        const { todo, doing, done, blocked } = e.tasks; const total = todo+doing+done+blocked;
+        const { todo, doing, testing=0, failed=0, done, blocked } = e.tasks; const total = todo+doing+testing+failed+done+blocked;
         e.phase = total === 0 ? "no cards yet"
+          : failed > 0 ? `${failed} FAILED — fixing`
           : blocked > 0 ? `blocked on ${blocked} card${blocked>1?"s":""}`
+          : testing > 0 ? `verifying: ${testing} in test`
           : doing > 0 ? `building: ${e.doingTitles.slice(0,2).join(", ")}${e.doingTitles.length>2?"…":""}`
           : done === total ? "shipped — all cards done"
           : todo > 0 ? `planned: ${todo} card${todo>1?"s":""} queued`

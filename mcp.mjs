@@ -44,14 +44,14 @@ server.tool("relay_whoami", "Show this session's relay identity, project, and th
 });
 
 server.tool("relay_task_add", "Add a Kanban card to THIS project's board on the dashboard (what you're about to work on). Defaults: assigned to you, status 'todo'. Keep the team's progress visible.",
-  { title: z.string().describe("short task title"), status: z.enum(["todo","doing","done","blocked"]).optional(), assignee: z.string().optional().describe("session id to assign (default: you)") },
+  { title: z.string().describe("short task title"), status: z.enum(["todo","doing","testing","failed","done","blocked"]).optional(), assignee: z.string().optional().describe("session id to assign (default: you)") },
   async ({ title, status, assignee }) => {
     const { task } = await api("POST", "/task", { project: PROJECT, title, status: status || "todo", assignee: assignee || SESSION, by: SESSION });
     return { content: [{ type: "text", text: `card #${task.id} added to ${PROJECT}: "${title}" [${task.status}]` }] };
   });
 
-server.tool("relay_task_move", "Move a Kanban card to a new status (todo/doing/done/blocked) as you make progress. Use relay_board to see card ids.",
-  { id: z.number(), status: z.enum(["todo","doing","done","blocked"]) },
+server.tool("relay_task_move", "Move a Kanban card as you progress: todo -> doing -> testing -> done. NEVER move straight to done: move to 'testing' when you finish, run the project's tests/typecheck, then 'done' only if green — or 'failed' (with a relay_send explaining what broke) if not. The orchestrator bounces failed cards back to doing. blocked = waiting on something external.",
+  { id: z.number(), status: z.enum(["todo","doing","testing","failed","done","blocked"]) },
   async ({ id, status }) => {
     await api("POST", "/task/update", { id, status });
     return { content: [{ type: "text", text: `card #${id} -> ${status}` }] };
@@ -67,7 +67,7 @@ server.tool("relay_project_brief", "Set a one-paragraph brief for THIS project s
 server.tool("relay_board", "Show THIS project's Kanban board (all cards + their status + assignee).", {}, async () => {
   const { tasks } = await api("GET", `/tasks?project=${encodeURIComponent(PROJECT)}`);
   if (!tasks.length) return { content: [{ type: "text", text: `${PROJECT}: no cards yet` }] };
-  const by = { todo: [], doing: [], done: [], blocked: [] };
+  const by = { todo: [], doing: [], testing: [], failed: [], done: [], blocked: [] };
   for (const t of tasks) (by[t.status] || by.todo).push(`#${t.id} ${t.title}${t.assignee ? ` (@${t.assignee})` : ""}`);
   const cols = Object.entries(by).filter(([, v]) => v.length).map(([k, v]) => `${k.toUpperCase()}:\n  ${v.join("\n  ")}`);
   return { content: [{ type: "text", text: `${PROJECT} board\n${cols.join("\n")}` }] };
