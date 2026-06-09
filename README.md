@@ -115,6 +115,25 @@ because it still has full context).
 
 ---
 
+
+### Auto-handoff prompt (opt-in)
+
+By default the PreCompact hook just *writes* the handoff. If you also want it to **ask you, with a timer,
+whether to spin up a fresh session that takes over** — enable it in `~/.agent-bus/config.json`:
+
+```json
+{ "url": "http://127.0.0.1:4477", "autoHandoffPrompt": true, "handoffPromptTimeout": 25 }
+```
+
+Then, at the compaction wall, a macOS dialog appears — *"Open a fresh session to take over? [Open fresh
+session] [Keep compacting]"* — defaulting to **open fresh** after the timeout. On confirm/timeout it opens a
+new terminal running the **same agent** (`claude`) in the same project, which auto-loads the handoff. Notes:
+the current session still compacts (a hook can't cancel that) — the fresh one is the better continuation you
+switch to; it's **macOS-only** (uses `osascript`) and **same-agent only** (a handoff is a context summary for
+the same model to continue, so cross-agent doesn't apply).
+
+---
+
 ## Attach an already-running session
 
 A session that started *before* you installed the plugin can still join the bus via `curl`:

@@ -7,9 +7,10 @@
 // Handoff generation: if `scrooge` is on PATH, it summarizes the recent transcript
 // into a structured handoff cheaply; otherwise it falls back to a raw transcript tail.
 import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync } from "node:fs";
-import { join, basename } from "node:path";
+import { join, basename, dirname } from "node:path";
 import { homedir, hostname } from "node:os";
-import { execSync } from "node:child_process";
+import { execSync, spawn } from "node:child_process";
+import { fileURLToPath } from "node:url";
 
 const HANDOFF_DIR = join(homedir(), ".agent-bus", "handoffs");
 
@@ -93,6 +94,22 @@ try {
     await fetch(`${url}/send`, { method: "POST", headers: { "content-type": "application/json" },
       body: JSON.stringify({ from: `${hostname()}:${projectName}`, to: "all", text: `📋 Handoff ready for ${projectName} — open a fresh session here to take over (id ${record.id}).` }),
       signal: AbortSignal.timeout(2000) }).catch(() => {});
+  } catch {}
+
+  // OPT-IN: on macOS, if config.autoHandoffPrompt is true, ask the user (with a timeout,
+  // default = yes) whether to spawn a FRESH same-agent session that takes over via the
+  // handoff. Detached so it never blocks compaction. Off by default.
+  try {
+    const cfg = join(homedir(), ".agent-bus", "config.json");
+    const conf = existsSync(cfg) ? JSON.parse(readFileSync(cfg, "utf8")) : {};
+    if (conf.autoHandoffPrompt && process.platform === "darwin") {
+      const script = join(dirname(fileURLToPath(import.meta.url)), "..", "bin", "handoff-prompt.sh");
+      if (existsSync(script)) {
+        const child = spawn("/bin/bash", [script, projectDir, String(conf.handoffPromptTimeout || 25)], { detached: true, stdio: "ignore" });
+        child.unref();
+        process.stderr.write(`[agent-bus] handoff prompt launched (opt-in)\n`);
+      }
+    }
   } catch {}
 } catch (err) {
   process.stderr.write(`[agent-bus] precompact error: ${err?.message || err}\n`);
