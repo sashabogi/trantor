@@ -164,13 +164,30 @@ curl -s "$HUB/poll?session=my-id&since=0&wait=25"
 
 The messaging layer is **standard MCP** and the hub is **plain HTTP**, so any MCP-capable agent CLI joins
 the same bus — and **loading the MCP server auto-registers the session**, so presence + messaging + handoff
-work everywhere. Verified live: a non-Claude MCP client *and* a real Gemini CLI agent each messaged a Claude
-session through the bus.
+work everywhere. Verified live across **five vendors**: Claude Code, Codex (OpenAI), Gemini CLI (Google),
+Kimi Code CLI (Moonshot K2.5), and OpenCode running DeepSeek — frontier and cheap models on the same board.
+
+**Wire every CLI on your machine in one shot:**
+
+```bash
+node bin/connect.mjs            # detects claude/codex/gemini/kimi/opencode → patches each config
+node bin/connect.mjs --dry-run  # preview only
+```
+
+It's idempotent, backs up any file it touches (`.bak-<date>`), never overwrites an existing `relay`
+entry, and prints exactly what it did. After it runs, **every new session of every CLI auto-joins the
+bus** — registration happens when the CLI loads the MCP server, before the model says a word (proven:
+a Kimi session with an *expired login* still appeared on the presence board).
+
+Manual wiring (what `connect` writes for you):
 
 - **Claude Code** — `claude plugin install agent-bus` (adds the MCP + the auto-register/handoff hooks).
-- **Codex CLI** — add [`configs/codex-config.toml`](./configs/codex-config.toml) to `~/.codex/config.toml`.
-- **Gemini CLI** — add [`configs/gemini-settings.json`](./configs/gemini-settings.json) to `~/.gemini/settings.json`.
-- **Anything else** — point any MCP host at `mcp.mjs` with `RELAY_URL` + `RELAY_SESSION` env.
+- **Codex CLI** — `[mcp_servers.relay]` in `~/.codex/config.toml` ([template](./configs/codex-config.toml)).
+- **Gemini CLI** — `mcpServers.relay` in `~/.gemini/settings.json` ([template](./configs/gemini-settings.json)).
+- **Kimi Code CLI** — `mcpServers.relay` in `~/.kimi/mcp.json`.
+- **OpenCode** — `mcp.relay` in `~/.config/opencode/opencode.json`.
+- **Anything else** — point any MCP host at `mcp.mjs`; set `RELAY_AGENT` ("codex", "kimi", …) once in its
+  global config and sessions become `<agent>:<project-folder>` in every project (or pin `RELAY_SESSION`).
 
 Every agent gets the tools: `relay_send`, `relay_wait`, `relay_peers`, `relay_status`, `relay_inbox`,
 `relay_whoami`, and **`relay_handoff`** (write a handoff from any agent). The Claude plugin adds two

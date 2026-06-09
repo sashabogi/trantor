@@ -3,14 +3,14 @@
   "owner": { "name": "Sasha Bogojevic", "email": "hello@hivedigitalllc.com" },
   "metadata": {
     "description": "Live message bus, presence, project Kanban + context-handoff for independent AI coding agents (Claude, Codex, Gemini, …)",
-    "version": "0.9.2"
+    "version": "0.10.0"
   },
   "plugins": [
     {
       "name": "agent-bus",
       "source": "./",
       "description": "Let independent AI coding sessions — Claude Code, Codex, Gemini, any MCP agent — talk to each other live: auto-register, see the live roster, message/coordinate, and watch it all on a project-grouped Kanban dashboard. Includes the relay MCP, a SessionStart auto-discovery hook, and a PreCompact context-handoff so a fresh session can take over a full window instead of compacting.",
-      "version": "0.9.2",
+      "version": "0.10.0",
       "author": { "name": "Sasha Bogojevic" },
       "category": "development",
       "keywords": ["multi-agent", "coordination", "mcp", "hooks", "kanban", "context-handoff", "message-bus", "claude-code", "codex", "gemini"]
