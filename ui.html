@@ -36,7 +36,9 @@ main{flex:1;display:grid;grid-template-columns:1fr 330px;min-height:0}
 .pbar{height:4px;border-radius:3px;background:#0d1320;margin:2px 16px 0;overflow:hidden}
 .pbar i{display:block;height:100%;background:linear-gradient(90deg,var(--grn2),var(--grn));border-radius:3px;transition:width .4s}
 .kanban{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;padding:12px 16px}
-.col{background:#0d1320;border:1px solid var(--line);border-radius:10px;padding:9px;min-height:60px}
+.col{background:#0d1320;border:1px solid var(--line);border-radius:10px;padding:9px;min-height:60px;max-height:300px;overflow-y:auto}
+.col::-webkit-scrollbar{width:6px}.col::-webkit-scrollbar-thumb{background:#243049;border-radius:3px}
+.col h4{position:sticky;top:-9px;background:#0d1320;padding:9px 0 6px;margin-top:-9px;z-index:1}
 .col h4{margin:0 0 8px;font-size:10.5px;text-transform:uppercase;letter-spacing:.08em;color:var(--dim);display:flex;justify-content:space-between}
 .col.todo h4 i{color:var(--mut)}.col.doing h4 i{color:var(--blu)}.col.done h4 i{color:var(--grn)}.col.blocked h4 i{color:var(--red)}
 .col h4 i{font-style:normal}
@@ -148,7 +150,8 @@ async function render(){
     const pct=pt.length?Math.round(done/pt.length*100):0;
     const agents=p.agents.sort((a,b)=>b.online-a.online).map(a=>`<span class="agent ${a.online?'':'offl'}" title="${esc(a.session)}${a.online?' · online':' · offline'}">${iconFor(a.session,15)}<span class="nm">${esc(a.session)}</span>${a.status?` <span class="ast">· ${esc(a.status)}</span>`:''}</span>`).join('');
     const cols=COLS.map(([k,label])=>{
-      const cards=pt.filter(t=>t.status===k);
+      let cards=pt.filter(t=>t.status===k);
+      if(k==='done')cards=[...cards].sort((a,b)=>(b.updated||0)-(a.updated||0)); // newest finished on top
       return `<div class="col ${k}"><h4>${label} <i>${cards.length}</i></h4>${cards.map(t=>`<div class="tcard ${k}" data-id="${t.id}" title="click to advance status"><span>${esc(t.title)}</span>${t.assignee?`<div class="who">${iconFor(t.assignee,12)}@${esc(t.assignee)}</div>`:''}</div>`).join('')}</div>`;
     }).join('');
     const ph=p.phase||'';
