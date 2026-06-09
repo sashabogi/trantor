@@ -114,8 +114,8 @@ server.tool("relay_inbox", "Read NEW messages addressed to this session since th
   return { content: [{ type: "text", text: messages.length ? messages.map(fmt).join("\n") : "(no new messages)" }] };
 });
 
-server.tool("relay_wait", "Block up to `timeout` seconds waiting for the next message to this session (long-poll). Returns the instant a message arrives. When idle, park on a long wait (e.g. 280) for instant, near-free wake-up.",
-  { timeout: z.number().optional().describe("seconds to wait, default 25, max 280 (use a high value to idle-park for an instant wake)") },
+server.tool("relay_wait", "Block up to `timeout` seconds waiting for the next message to this session (long-poll). Returns the instant a message arrives. When idle, park by calling this repeatedly. IMPORTANT: some MCP clients cap tool calls (Codex ~120s, OpenCode ~60s) — use timeout 50 and loop, unless you know your client allows more (Claude Code handles 280).",
+  { timeout: z.number().optional().describe("seconds to wait, default 25, max 280. Use 50 and call repeatedly for cross-client safety; only Claude Code reliably supports 280.") },
   async ({ timeout }) => {
     const w = Math.min(timeout ?? 25, 280);
     const { messages, cursor: c } = await api("GET", `/poll?session=${encodeURIComponent(SESSION)}&since=${cursor}&wait=${w}`);
