@@ -47,6 +47,18 @@ main{flex:1;display:grid;grid-template-columns:1fr 330px;min-height:0}
 .tcard.done{opacity:.65}.tcard.done span{text-decoration:line-through}
 .empty{color:var(--dim);text-align:center;padding:30px}
 .empty.big{padding:60px 20px;font-size:15px}
+/* per-project inter-agent conversation lane */
+.proj-chat{margin:4px 16px 14px;border:1px solid var(--line);border-radius:10px;background:#0c111c}
+.proj-chat h5{margin:0;padding:7px 11px;font-size:10px;text-transform:uppercase;letter-spacing:.09em;color:var(--dim);border-bottom:1px solid var(--line);display:flex;align-items:center;gap:6px}
+.proj-chat h5 .lc{width:6px;height:6px;border-radius:50%;background:var(--grn);box-shadow:0 0 6px var(--grn)}
+.chatlog{max-height:132px;overflow-y:auto;padding:7px 11px;display:flex;flex-direction:column;gap:5px}
+.cmsg{font-size:12px;line-height:1.4;color:var(--tx)}
+.cmsg .ct{color:var(--dim);font-family:ui-monospace,monospace;font-size:10px;margin-right:5px}
+.cmsg .cf{font-weight:600}
+.cmsg .arr{color:var(--dim);margin:0 4px}
+.cmsg .cto{color:var(--blu)}.cmsg.bc .cto{color:var(--amb)}
+.cmsg svg{vertical-align:-2px;margin-right:3px}
+.chatempty{color:var(--dim);font-size:11.5px;padding:8px 11px;font-style:italic}
 aside{border-left:1px solid var(--line);background:var(--panel);display:flex;flex-direction:column;min-height:0}
 aside h2{font-size:10.5px;text-transform:uppercase;letter-spacing:.09em;color:var(--dim);margin:0;padding:13px 14px 8px;font-weight:700}
 .feed{flex:1;overflow-y:auto;padding:0 14px 10px}
@@ -104,10 +116,17 @@ function brandOf(s){const x=String(s).toLowerCase();for(const[re,b]of BRAND)if(r
 function iconFor(s,size){const b=brandOf(s);if(!b||!ICON[b])return `<span style="display:inline-flex;width:${size}px;height:${size}px;align-items:center;justify-content:center;border-radius:50%;background:#2a3346;color:#aeb9c9;font-size:${Math.round(size*.55)}px;font-weight:700">${esc(String(s).slice(0,1).toUpperCase())}</span>`;const i=ICON[b];return `<svg viewBox="0 0 24 24" width="${size}" height="${size}" fill="currentColor" style="color:${i.c}">${i.p.map(d=>`<path d="${d}"/>`).join('')}</svg>`;}
 const phaseClass=ph=>/blocked/.test(ph)?'blocked':/building|progress/.test(ph)?'building':/shipped|done/.test(ph)?'shipped':'planned';
 
+function projOf(m){return m.project||(String(m.from).includes(':')?String(m.from).split(':').pop():'');}
+function chatLane(msgs){
+  if(!msgs.length)return `<div class="proj-chat"><h5><span class="lc"></span>conversation</h5><div class="chatempty">no messages yet — agents talk here as they coordinate</div></div>`;
+  const rows=msgs.slice(-8).map(m=>`<div class="cmsg ${m.to==='all'?'bc':''}"><span class="ct">${new Date(m.ts).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'})}</span>${iconFor(m.from,13)}<span class="cf">${esc(String(m.from).split(':')[0])}</span><span class="arr">→</span><span class="cto">${esc(m.to==='all'?'all':String(m.to).split(':')[0])}</span>: ${esc(m.text)}</div>`).join('');
+  return `<div class="proj-chat"><h5><span class="lc"></span>conversation · ${msgs.length}</h5><div class="chatlog">${rows}</div></div>`;
+}
 async function render(){
-  let projects=[],tasks=[];
+  let projects=[],tasks=[],msgs=[];
   try{projects=(await (await fetch('/projects')).json()).projects||[];}catch(e){}
   try{tasks=(await (await fetch('/tasks')).json()).tasks||[];}catch(e){}
+  try{msgs=(await (await fetch('/recent?limit=200')).json()).messages||[];}catch(e){}
   const liveSess=new Set();projects.forEach(p=>p.agents.forEach(a=>{if(a.online)liveSess.add(a.session)}));
   $('#nproj').textContent=projects.filter(p=>p.project!=='(unassigned)').length;
   $('#nsess').textContent=liveSess.size;
@@ -132,12 +151,17 @@ async function render(){
     }).join('');
     const ph=p.phase||'';
     const brief=p.brief?`<span class="brief">${esc(p.brief)}</span>`:`<span class="brief dim">— no brief yet · an agent sets it with relay_project_brief</span>`;
+    const pmsgs=msgs.filter(m=>projOf(m)===p.project);
     return `<div class="proj">`+
       `<div class="proj-h"><span class="pname">📁 <b>${esc(p.project)}</b></span><div class="agents">${agents||'<span class="dim">no agents</span>'}</div><span class="spacer"></span><span class="prog">${done}/${pt.length} done · ${pct}%</span></div>`+
       `<div class="proj-brief">${brief}${ph?`<span class="phase ${phaseClass(ph)}">${esc(ph)}</span>`:''}</div>`+
       `<div class="pbar"><i style="width:${pct}%"></i></div>`+
-      `<div class="kanban">${cols}</div></div>`;
+      `<div class="kanban">${cols}</div>`+
+      chatLane(pmsgs)+
+    `</div>`;
   }).join('');
+  // keep each project's chat scrolled to the latest line
+  el.querySelectorAll('.chatlog').forEach(c=>c.scrollTop=c.scrollHeight);
   // click a card -> advance status todo->doing->done
   el.querySelectorAll('.tcard').forEach(c=>c.onclick=async()=>{
     const id=+c.dataset.id,t=tasks.find(x=>x.id===id);if(!t)return;

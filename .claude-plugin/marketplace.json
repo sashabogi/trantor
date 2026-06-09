@@ -3,14 +3,14 @@
   "owner": { "name": "Sasha Bogojevic", "email": "sashabogi@gmail.com" },
   "metadata": {
     "description": "Live message bus + auto-discovery for independent Claude Code sessions",
-    "version": "0.8.0"
+    "version": "0.9.0"
   },
   "plugins": [
     {
       "name": "agent-bus",
       "source": "./",
       "description": "Let independent Claude Code sessions talk to each other live — auto-register, see the live-session roster, and message/coordinate across terminals and machines (Tailscale). Includes the relay MCP + a SessionStart auto-discovery hook.",
-      "version": "0.8.0",
+      "version": "0.9.0",
       "author": { "name": "Sasha Bogojevic" },
       "category": "development",
       "keywords": ["multi-session", "coordination", "mcp", "hooks", "tailscale", "message-bus"]

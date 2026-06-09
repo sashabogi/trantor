@@ -114,7 +114,10 @@ const server = http.createServer(async (req, res) => {
     }
     if (req.method === "POST" && P === "/send") {
       const b = await body(req); touch(b.from);
-      const msg = { id: ++state.seq, ts: now(), from: b.from || "anon", to: b.to || "all", text: String(b.text ?? "") };
+      // attribute the message to a project so the dashboard can show it in that project's lane.
+      // explicit b.project wins; else the sender's known project; else parsed from a "host:project" id.
+      const fromProj = state.peers[b.from]?.project || (b.from && b.from.includes(":") ? b.from.split(":").pop() : "");
+      const msg = { id: ++state.seq, ts: now(), from: b.from || "anon", to: b.to || "all", text: String(b.text ?? ""), project: String(b.project || fromProj || "").slice(0, 80) };
       state.messages.push(msg); if (state.messages.length > 5000) state.messages.splice(0, 1000);
       dirty = true; pushToStreams(msg);               // <-- instant push to live watchers
       return json(res, 200, { ok: true, id: msg.id });
