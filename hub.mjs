@@ -1,14 +1,16 @@
 #!/usr/bin/env node
 // agent-bus hub — message bus + presence/status board + SSE push, so independent
 // Claude Code sessions can coordinate (near-instant for watchers, cheap for idle peers).
-// Binds to 0.0.0.0 by default so localhost AND Tailscale peers reach it.
+// Binds to LOOPBACK (127.0.0.1) by default — local-first and safe (no auth yet). To let other
+// machines reach it (e.g. over a Tailscale tailnet), set RELAY_HOST=0.0.0.0 — but only on a
+// private network, or add auth first. See "Always-on / remote hub" in the README (roadmap).
 import http from "node:http";
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
 const PORT = Number(process.env.RELAY_PORT || 4477);
-const HOST = process.env.RELAY_HOST || "0.0.0.0";
+const HOST = process.env.RELAY_HOST || "127.0.0.1";
 const DATA_DIR = join(homedir(), ".agent-bus");
 const DATA = join(DATA_DIR, "bus.json");
 if (!existsSync(DATA_DIR)) mkdirSync(DATA_DIR, { recursive: true });

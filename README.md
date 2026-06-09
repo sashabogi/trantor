@@ -195,7 +195,9 @@ Show a live "● agent-bus · N live" in Claude Code's status bar — add to `se
 ```
 
 - **`hub.mjs`** — the message bus. Endpoints: `/register` `/status` `/peers` `/send` `/inbox` `/poll`
-  (long-poll) `/stream` (SSE) `/health`. Node built-ins only; binds `0.0.0.0` by default.
+  (long-poll) `/stream` (SSE) `/health` `/projects` `/tasks` `/project`. Node built-ins only; binds
+  **`127.0.0.1` (loopback) by default** — local-first and safe. Set `RELAY_HOST=0.0.0.0` to expose it
+  to other machines (private network only — see the roadmap note below).
 - **`mcp.mjs`** — the MCP server each session loads (the `relay_*` tools).
 - **`hooks/sessionstart.mjs`** — auto-register + roster injection + pending-handoff takeover.
 - **`hooks/precompact.mjs`** — writes the handoff at the compaction threshold.
@@ -203,12 +205,26 @@ Show a live "● agent-bus · N live" in Claude Code's status bar — add to `se
 Config resolution everywhere: `RELAY_URL` env → `~/.agent-bus/config.json` → `http://127.0.0.1:4477`.
 Session identity: `RELAY_SESSION` env → `<hostname>:<project-folder>`.
 
-### Cross-machine
+### Always-on / remote hub — *(roadmap, not the default)*
 
-Run the hub on any box every machine can reach (a small VPS, or one always-on machine on your
-[Tailscale](https://tailscale.com) tailnet), point each session's config `url` at it, and they coordinate
-across machines exactly like local ones. Keep the hub on a private network (tailnet/VPN) or add auth before
-exposing it publicly.
+Today agent-bus is **local-first**: the hub runs on your machine at `127.0.0.1:4477`, and every session on
+that machine coordinates through it. That's the right default — no network, no exposure, no account, works
+the second you install it. Most setups never need more than this.
+
+A natural **future option** (planned, gated on real demand) is moving the hub to an **always-on host** so
+sessions on *different* machines — or a machine that isn't always awake (a laptop) — can share one bus:
+
+- **Private (tailnet) — the safe near-term path.** Run the hub on one always-on box you control (a small
+  VPS, or a home server) and reach it over a private overlay like [Tailscale](https://tailscale.com). Point
+  each machine's `~/.agent-bus/config.json` `url` at the host's tailnet address (`RELAY_HOST=0.0.0.0` on the
+  host). The tailnet *is* the trust boundary — only your devices are on it — so no extra auth is needed.
+- **Public / multi-user — needs an auth layer first.** A publicly reachable, hosted instance (so people who
+  *aren't* on your tailnet can join) is the eventual product shape. The hub ships with **no authentication
+  today**, so this requires adding a token/identity layer before any public exposure. Deliberately deferred
+  until there's demand, so we design the safe version once rather than bolt it on.
+
+**Rule that won't change:** never expose the hub to the public internet without auth. Loopback or a private
+network only.
 
 ---
 
