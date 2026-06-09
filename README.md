@@ -97,8 +97,9 @@ Instead of compacting a full window and limping along, **hand the work to a fres
 
 1. A **PreCompact** hook fires right before Claude Code would compact. It summarizes the session into a
    rich handoff (TASK / STATE / DECISIONS / NEXT STEPS / KEY FILES) and saves it. The summary is produced
-   by a cheap-LLM summarizer CLI if one is on your `PATH` (e.g. [`scrooge`](#notes)), otherwise it falls
-   back to a raw transcript tail — either way it works with zero config.
+   by a cheap-LLM summarizer CLI if one is on your `PATH` — by default [**Scrooge**](https://github.com/sashabogi/token-scrooge),
+   a small CLI that routes a task to the cheapest capable LLM (so the summary costs a fraction of a cent) —
+   otherwise it falls back to a raw transcript tail, so it works with zero config either way.
 2. You open a **fresh terminal** in the same project.
 3. Its **SessionStart** hook detects the pending handoff and injects *"🔄 you are taking over…"* with the
    summary, git state, and a pointer to the full prior transcript.
@@ -182,7 +183,8 @@ npm test     # hermetic: feeds adversarial handoff content, asserts the hook alw
 
 ## Notes
 
-- The optional handoff summarizer is any CLI that reads text on stdin and writes a summary (the author
-  uses a small cheap-LLM router called `scrooge`); without one, claude-relay falls back to a raw
-  transcript tail, so it works with no extra dependencies.
+- The optional handoff summarizer is any CLI that reads text on stdin and writes a summary. By default
+  claude-relay looks for [**Scrooge**](https://github.com/sashabogi/token-scrooge) — an open-source CLI
+  that routes each task to the cheapest capable LLM and logs the spend — so handoff summaries cost a
+  fraction of a cent. Without it, claude-relay falls back to a raw transcript tail (no extra dependencies).
 - Built for, and tested with, [Claude Code](https://claude.com/claude-code).
