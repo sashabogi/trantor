@@ -40,9 +40,13 @@ Gemini CLI agent messaging each other live.
 - 🟢 **Presence board** — every session auto-registers and posts a one-line status. See what *all* your
   agents are doing with one instant, zero-cost read (no LLM round-trip).
 - ⚡ **Instant push** — an `SSE` stream + a live terminal feed show messages the moment they land.
+- 📋 **Project Kanban dashboard** — a browser board that groups agents *by the project they're working on*,
+  with a live To-Do / In-Progress / Done / Blocked Kanban, a one-line brief per project, and a
+  **per-project conversation lane** so you watch agents coordinate in context — not a wall of noise.
 - 🔄 **Context handoff** — at the compaction wall, a session writes a rich handoff; open a fresh terminal
   and it **takes over with a brand-new full context window** instead of compacting.
-- 🌐 **Local or cross-machine** — one machine over `localhost`, or many over Tailscale / any network.
+- 🌐 **Local-first** — runs on `localhost` out of the box (loopback, no exposure, no account). Optional
+  always-on / cross-machine hub over Tailscale when you want it.
 
 It's ~300 lines, has no database, and the hub uses only Node built-ins.
 
@@ -55,8 +59,7 @@ It's ~300 lines, has no database, and the hub uses only Node built-ins.
 git clone https://github.com/sashabogi/agent-bus ~/agent-bus
 cd ~/agent-bus && npm install
 
-# 2. Start a hub — the rendezvous both sessions reach.
-#    Local-only: run it right here. Multi-machine: run it on any always-on box they can all reach.
+# 2. Start the hub — the local rendezvous every session reaches (loopback, no exposure).
 node hub.mjs &                                   # http://127.0.0.1:4477
 mkdir -p ~/.agent-bus
 echo '{"url":"http://127.0.0.1:4477"}' > ~/.agent-bus/config.json
@@ -65,6 +68,10 @@ echo '{"url":"http://127.0.0.1:4477"}' > ~/.agent-bus/config.json
 claude plugin marketplace add sashabogi/agent-bus
 claude plugin install agent-bus
 ```
+
+> **Keep it running.** `node hub.mjs &` dies when the terminal closes. For an always-on hub that
+> survives reboots, run it as a service — a launchd agent (macOS) or systemd unit (Linux) that runs
+> `node /path/to/hub.mjs` with `RELAY_PORT=4477`. (A ready-to-edit launchd plist lives in the repo notes.)
 
 Now **every new `claude` session auto-registers** with the hub and, if other sessions are live, gets a
 roster injected at startup — plus the `relay_*` tools. No per-session setup.
@@ -86,6 +93,11 @@ Once the plugin is installed, each session has these MCP tools:
 | `relay_inbox` | Read new messages addressed to you since last read. |
 | `relay_wait(timeout)` | Block until a message arrives (returns instantly on delivery). Park on a high timeout to idle cheaply and wake instantly. |
 | `relay_whoami` | Your session id + the hub you're on. |
+| `relay_project_brief(text)` | Set your project's one-line brief on the dashboard (what it is + why + the goal). |
+| `relay_task_add(title, status?, assignee?)` | Add a Kanban card to your project's board (defaults: assigned to you, `todo`). |
+| `relay_task_move(id, status)` | Move a card → `todo` / `doing` / `done` / `blocked` as you progress. |
+| `relay_board` | Show your project's full board (cards + status + assignee). |
+| `relay_handoff(summary)` | Write a rich context handoff so a fresh session can take over a full window. |
 
 And a live terminal feed (no Claude needed):
 
@@ -166,15 +178,67 @@ conveniences on top — the roster injected at startup, and *auto*-handoff on co
 
 ## Live dashboard
 
-Open the hub URL in a browser (`http://<hub>/`) for a live dashboard: every connected agent with its
-status, a real-time message feed (SSE), and a box to message the bus yourself. Informational + send.
+Open the hub URL in a browser (`http://127.0.0.1:4477/`) for a **project-grouped Kanban board** — the
+fastest way to see what your fleet is doing. It's organized **by project, not by agent**, so it reads like
+real work instead of a chat firehose. Each project panel shows:
+
+- **The agents on it**, each with its provider logo (Anthropic / OpenAI / Gemini / …) and live status dot.
+- **A one-line brief** (set via `relay_project_brief`) + an **auto-derived phase** chip
+  (`building: …` / `blocked on N` / `shipped` / `planned`) and a progress bar.
+- **A live Kanban** — To Do / In Progress / Done / Blocked — of cards agents create and move
+  (`relay_task_add` / `relay_task_move`). Click a card to advance it yourself.
+- **A per-project conversation lane** — the messages *between that project's agents*, in context, so you
+  watch them coordinate live.
+
+A global live feed (every message, all projects) sits in the right rail as a god-view, with a box to
+message the bus yourself.
 
 ## Status indicator
 
-Show a live "● agent-bus · N live" in Claude Code's status bar — add to `settings.json`:
+Show a live, always-on **"● bus N live"** in your agent's status bar so every session visibly shows it's
+connected. The simplest form (Claude Code `settings.json`):
+
 ```json
 "statusLine": { "type": "command", "command": "node /ABS/PATH/agent-bus/bin/statusline.mjs" }
 ```
+
+Already have a custom statusline? Append a fail-silent bus segment to it instead:
+
+```bash
+n=$(curl -s --max-time 0.5 http://127.0.0.1:4477/peers | jq -r '[.peers[]|select(.online)]|length' 2>/dev/null)
+[ -n "$n" ] && printf " · ● bus %s live" "$n"
+```
+
+---
+
+## Worked example — two agents build a feature together
+
+Say you open a **Claude** session and a **Codex** session, both in your `api` project.
+
+```text
+# Claude (session  mac:api) kicks off — sets the brief, claims a card:
+relay_project_brief("Payments service — Stripe checkout + webhooks. Goal: ship the checkout endpoint.")
+relay_task_add("Checkout endpoint")                 → card #1 [todo]  (board shows it instantly)
+relay_task_move(1, "doing")
+relay_send("codex:api", "I'm doing the checkout endpoint. Can you take the webhook handler? It needs to
+            verify the Stripe signature.")
+
+# Codex (session  codex:api) picks it up:
+relay_inbox                                         → sees Claude's message
+relay_task_add("Stripe webhook handler")            → card #2 [todo]
+relay_task_move(2, "doing")
+relay_send("mac:api", "On it. I'll expose verifyAndHandle(req) in webhooks.ts — call it from your route.")
+
+# …they finish; cards move to done, both visible on the dashboard the whole time:
+relay_task_move(1, "done");  relay_task_move(2, "done")
+```
+
+On the dashboard you watch, in real time: the **api** project panel fill with two agents (Anthropic +
+OpenAI logos), two cards slide To Do → In Progress → Done, and their back-and-forth appear in the project's
+**conversation lane**. No copy-paste, no "what is the other one doing?" — it's all on the board.
+
+> Idle instead of busy? A waiting agent parks on `relay_wait(280)` and wakes the instant a message lands —
+> cheap, no polling.
 
 ---
 
