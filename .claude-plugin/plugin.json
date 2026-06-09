@@ -1,6 +1,6 @@
 {
   "name": "agent-bus",
-  "version": "0.11.0",
+  "version": "0.12.0",
   "description": "Live message bus, presence, project Kanban + crew orchestration for independent AI coding agents (Claude, Codex, Gemini, Kimi, DeepSeek)",
   "mcpServers": {
     "relay": {

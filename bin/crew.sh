@@ -1,15 +1,18 @@
 #!/bin/bash
-# agent-bus crew launcher — open visible terminal windows for helper agents and tear them down.
+# agent-bus crew launcher v2 — visible terminal windows that CANNOT silently die or silently fail.
 #
-#   bin/crew.sh up codex gemini kimi deepseek    # one Terminal window per agent, in the CURRENT project dir
-#   bin/crew.sh down                             # kill crew processes + close their windows (no dialogs)
+#   bin/crew.sh up codex gemini kimi deepseek    # one window per agent, in the CURRENT project dir
+#   bin/crew.sh down                             # kill crew processes + close windows (no dialogs)
 #
-# Each window runs that agent's CLI with a minimal kickoff: join the bus, announce yourself,
-# then park on relay_wait(50) loops and follow instructions that arrive OVER THE BUS.
-# The orchestrating agent sends the actual work contracts via relay_send after the crew is up.
+# Each window runs bin/crew-runner.mjs: the CLI does one turn and exits; the RUNNER long-polls
+# the bus (free, doubles as heartbeat) and resumes the CLI — with full context — whenever a
+# message arrives. No model-side parking, no harness fights, no token burn while idle.
 #
-# macOS (Terminal.app). Geometry: env CREW_RECT="X,Y,W,H" (default: right half of a 1440-pt
-# display scaled by what AppleScript reports). State: ~/.agent-bus/crew-windows.txt
+# Spawns are SERIALIZED and then VERIFIED on the bus (crew-verify.mjs); failures retry once and
+# are reported loudly — the orchestrator never gets a green lie.
+#
+# Geometry: "crewRect": "X,Y,W,H" in ~/.agent-bus/config.json (or CREW_RECT env) — set once per
+# machine; used for every spawn including respawns. Default: right half of the main display.
 set -u
 CMD="${1:-up}"; shift 2>/dev/null || true
 DIR="$(pwd)"
@@ -23,8 +26,8 @@ down() {
   while read -r wid; do
     TTY=$(osascript -e "tell application \"Terminal\" to get tty of (first window whose id is $wid)" 2>/dev/null)
     if [ -n "$TTY" ]; then
-      # SIGKILL everything on the tty, login included — TUIs trap SIGTERM, and Terminal
-      # counts a live login as "a running process" and raises the Terminate dialog.
+      # SIGKILL everything on the tty, login included — TUIs trap SIGTERM, and a live login
+      # makes Terminal raise the "Terminate running processes?" dialog on close.
       for pid in $(ps -t "${TTY#/dev/}" -o pid= 2>/dev/null); do kill -9 "$pid" 2>/dev/null; done
     fi
   done < "$STATE"
@@ -32,7 +35,7 @@ down() {
   while read -r wid; do
     osascript -e "tell application \"Terminal\" to close (first window whose id is $wid)" 2>/dev/null
   done < "$STATE"
-  sleep 0.5  # dismiss any Terminate sheet that slipped through anyway
+  sleep 0.5
   osascript -e 'tell application "System Events" to tell process "Terminal"' \
             -e 'repeat with w in windows' -e 'try' \
             -e 'if exists sheet 1 of w then click button "Terminate" of sheet 1 of w' \
@@ -45,64 +48,63 @@ down() {
 [ $# -eq 0 ] && { echo "usage: crew.sh up codex gemini kimi deepseek (any subset)"; exit 1; }
 
 if [ "$(uname)" != "Darwin" ]; then
-  echo "Window spawning is macOS-only. Run these manually, one per terminal, in $DIR:"
-  for a in "$@"; do echo "  <$a's CLI> with the kickoff: join agent-bus, announce yourself, park on relay_wait(50) and follow bus instructions"; done
+  echo "Window spawning is macOS-only. Run one per terminal, in $DIR:"
+  for a in "$@"; do echo "  node $BUS_DIR/bin/crew-runner.mjs $a $DIR"; done
   exit 0
 fi
 
 # one-time wiring for every detected CLI (idempotent, backed up)
 node "$BUS_DIR/bin/connect.mjs" | tail -n +2
 
-down >/dev/null 2>&1  # idempotent relaunch
-
-# generic kickoff (work contracts arrive over the bus afterwards)
-kick() { # $1 agent
-  echo "You are $1 on the agent-bus crew for project '$PROJ'. Do this now: 1) relay_status \"crew member ready\". 2) relay_send to \"all\": \"$1 reporting — window open, awaiting contract\". 3) Park: call relay_wait with timeout 50 repeatedly (NEVER higher — some MCP clients cap tool calls); when a message addressed to you arrives, follow its instructions, report progress on the bus, and move your Kanban card (relay_task_move) as you work."
-}
-# command per agent (override with CREW_CMD_<AGENT>)
-cmd_for() {
-  case "$1" in
-    codex)    echo "codex --dangerously-bypass-approvals-and-sandbox \\\"\$(cat {K})\\\"";;
-    gemini)   echo "gemini --yolo -i \\\"\$(cat {K})\\\"";;
-    kimi)     echo "kimi --yolo -p \\\"\$(cat {K})\\\"";;
-    deepseek|opencode) echo "opencode run \\\"\$(cat {K})\\\"";;
-    claude)   echo "claude \\\"\$(cat {K})\\\" --permission-mode acceptEdits";;
-    *)        echo "";;
-  esac
-}
-
-# geometry: default = right half of the FIRST display; override with CREW_RECT="X,Y,W,H"
-if [ -n "${CREW_RECT:-}" ]; then
-  IFS=',' read -r GX GY GW GH <<< "$CREW_RECT"
+# ---- geometry: CREW_RECT env > config.json crewRect > right half of main display ----
+RECT="${CREW_RECT:-$(node -e 'try{const c=require(require("os").homedir()+"/.agent-bus/config.json");process.stdout.write(c.crewRect||"")}catch{}' 2>/dev/null)}"
+if [ -n "$RECT" ]; then
+  IFS=',' read -r GX GY GW GH <<< "$RECT"
 else
   read -r _ _ SW SH <<< "$(osascript -e 'tell application "Finder" to get bounds of window of desktop' | tr ',' ' ')"
   GX=$(( SW / 2 )); GY=25; GW=$(( SW / 2 )); GH=$(( SH - 25 ))
 fi
-N=$#; COLS=2; [ $N -le 2 ] && COLS=1
-ROWS=$(( (N + COLS - 1) / COLS ))
-CW=$(( GW / COLS )); CH=$(( GH / ROWS ))
 
-i=0
-for AGENT in "$@"; do
-  TPL=$(cmd_for "$AGENT")
-  OVERRIDE_VAR="CREW_CMD_$(echo "$AGENT" | tr '[:lower:]' '[:upper:]')"
-  TPL="${!OVERRIDE_VAR:-$TPL}"
-  [ -z "$TPL" ] && { echo "  ✗ $AGENT: unknown CLI (set $OVERRIDE_VAR)"; continue; }
-  KF="$HOME/.agent-bus/kick-$AGENT.txt"; kick "$AGENT" > "$KF"
-  RUN="${TPL//\{K\}/$KF}"
-  # deepseek/opencode may need provider keys from a local env file
-  [ "$AGENT" = "deepseek" ] && [ -f "$HOME/.token-scrooge/.env" ] && RUN="set -a; source ~/.token-scrooge/.env; set +a; $RUN"
-  C=$(( i % COLS )); R=$(( i / COLS ))
-  X1=$(( GX + C * CW )); Y1=$(( GY + R * CH )); X2=$(( X1 + CW )); Y2=$(( Y1 + CH ))
-  osascript \
-    -e 'tell application "Terminal"' \
-    -e "  set w to do script \"cd $DIR && clear && $RUN\"" \
-    -e "  set custom title of w to \"$(echo "$AGENT" | tr '[:lower:]' '[:upper:]') — agent-bus crew\"" \
-    -e "  set theWin to first window whose tabs contains w" \
-    -e "  set bounds of theWin to {$X1, $Y1, $X2, $Y2}" \
-    -e "  return id of theWin" \
-    -e 'end tell' >> "$STATE"
-  echo "  ✓ $AGENT window up"
-  i=$(( i + 1 ))
-done
-echo "crew up in $DIR — they join the bus and park; send contracts with relay_send. Teardown: crew.sh down"
+spawn_grid() {  # $@ = agents — (re)computes the grid for THIS batch and spawns serially
+  local N=$# COLS=2
+  [ $N -le 2 ] && COLS=1
+  local ROWS=$(( (N + COLS - 1) / COLS ))
+  local CW=$(( GW / COLS )) CH=$(( GH / ROWS ))
+  local i=0 AGENT
+  for AGENT in "$@"; do
+    local C=$(( i % COLS )) R=$(( i / COLS ))
+    local X1=$(( GX + C * CW )) Y1=$(( GY + R * CH ))
+    osascript \
+      -e 'tell application "Terminal"' \
+      -e "  set w to do script \"cd $DIR && clear && node $BUS_DIR/bin/crew-runner.mjs $AGENT $DIR\"" \
+      -e "  set custom title of w to \"$(echo "$AGENT" | tr '[:lower:]' '[:upper:]') — agent-bus crew\"" \
+      -e "  set theWin to first window whose tabs contains w" \
+      -e "  set bounds of theWin to {$X1, $Y1, $(( X1 + CW )), $(( Y1 + CH ))}" \
+      -e "  return id of theWin" \
+      -e 'end tell' >> "$STATE" 2>/dev/null && echo "  → $AGENT window spawned" || echo "  ✗ $AGENT osascript spawn ERROR"
+    sleep 1.2   # serialize — rapid-fire 'do script' calls race and silently drop windows
+    i=$(( i + 1 ))
+  done
+}
+
+echo "— spawning crew (serialized) —"
+spawn_grid "$@"
+
+echo "— verifying on the bus (the spawn is not the truth; the bus is) —"
+VER=$(node "$BUS_DIR/bin/crew-verify.mjs" "$PROJ" "$@" --timeout 30)
+echo "$VER"
+RETRY=$(echo "$VER" | grep "^FAILED:" | cut -d: -f2 | tr ',' ' ')
+if [ -n "${RETRY// }" ]; then
+  echo "— retrying failed spawns: $RETRY —"
+  spawn_grid $RETRY
+  VER2=$(node "$BUS_DIR/bin/crew-verify.mjs" "$PROJ" $RETRY --timeout 30)
+  echo "$VER2"
+  STILL=$(echo "$VER2" | grep "^FAILED:" | cut -d: -f2)
+  if [ -n "$STILL" ]; then
+    echo ""
+    echo "✗✗ CREW INCOMPLETE — these agents are NOT on the bus: $STILL"
+    echo "   Do NOT assign them work. Investigate their windows or run: crew.sh up ${STILL//,/ }"
+    exit 1
+  fi
+fi
+echo "— crew verified on the bus. Send contracts with relay_send; runners keep agents alive for free. Teardown: crew.sh down —"

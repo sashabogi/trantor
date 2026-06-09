@@ -13,15 +13,16 @@ const PORT = Number(process.env.RELAY_PORT || 4477);
 const HOST = process.env.RELAY_HOST || "127.0.0.1";
 const DATA_DIR = join(homedir(), ".agent-bus");
 const DATA = join(DATA_DIR, "bus.json");
+const ONLINE_MS = Number(process.env.RELAY_ONLINE_MS || 5 * 60 * 1000);
 if (!existsSync(DATA_DIR)) mkdirSync(DATA_DIR, { recursive: true });
 
 // peers: { session: { lastSeen, status, project } } ; tasks: kanban cards
 // projectMeta: { project: { brief, by, updated } } — the "what & why" blurb per project
-let state = { messages: [], peers: {}, seq: 0, tasks: [], taskSeq: 0, projectMeta: {} };
+let state = { messages: [], peers: {}, seq: 0, tasks: [], taskSeq: 0, projectMeta: {}, lessons: [] };
 try {
   if (existsSync(DATA)) {
     const loaded = JSON.parse(readFileSync(DATA, "utf8"));
-    state = { messages: loaded.messages || [], peers: {}, seq: loaded.seq || 0, tasks: loaded.tasks || [], taskSeq: loaded.taskSeq || 0, projectMeta: loaded.projectMeta || {} };
+    state = { messages: loaded.messages || [], peers: {}, seq: loaded.seq || 0, tasks: loaded.tasks || [], taskSeq: loaded.taskSeq || 0, projectMeta: loaded.projectMeta || {}, lessons: loaded.lessons || [] };
     for (const [s, v] of Object.entries(loaded.peers || {})) // migrate old numeric form
       state.peers[s] = typeof v === "number" ? { lastSeen: v, status: "", project: "" } : { lastSeen: v.lastSeen || 0, status: v.status || "", project: v.project || "" };
   }
@@ -60,7 +61,7 @@ const server = http.createServer(async (req, res) => {
     if (req.method === "POST" && P === "/register") { const b = await body(req); touch(b.session, b.status, b.project); return json(res, 200, { ok: true, session: b.session, peers: Object.keys(state.peers) }); }
     if (req.method === "POST" && P === "/status") { const b = await body(req); touch(b.session, b.status ?? "", b.project); return json(res, 200, { ok: true }); }
     if (req.method === "GET" && P === "/peers") {
-      const cutoff = now() - 5 * 60 * 1000;
+      const cutoff = now() - ONLINE_MS;
       return json(res, 200, { peers: Object.entries(state.peers).map(([s, v]) => ({ session: s, lastSeen: v.lastSeen, online: v.lastSeen > cutoff, status: v.status || "", project: v.project || "" })) });
     }
     // --- Kanban tasks ---
@@ -95,7 +96,7 @@ const server = http.createServer(async (req, res) => {
       return json(res, 200, { ok: true, project: k, brief: m.brief || "" });
     }
     if (req.method === "GET" && P === "/projects") {        // project-grouped view
-      const cutoff = now() - 5 * 60 * 1000; const byProj = {};
+      const cutoff = now() - ONLINE_MS; const byProj = {};
       const proj = p => p || "(unassigned)";
       const mk = k => (byProj[k] ||= { project: k, brief: (state.projectMeta[k]?.brief) || "", agents: [], tasks: { todo:0,doing:0,testing:0,failed:0,done:0,blocked:0 }, doingTitles: [] });
       for (const [s, v] of Object.entries(state.peers)) {
@@ -115,6 +116,22 @@ const server = http.createServer(async (req, res) => {
           : "in progress";
       }
       return json(res, 200, { projects: Object.values(byProj) });
+    }
+    // --- lessons: cross-agent learning from failures. scope = "global" or an agent brand ("kimi") ---
+    if (req.method === "POST" && P === "/lesson") {
+      const b = await body(req);
+      const text = String(b.text || "").trim().slice(0, 400);
+      const scope = String(b.scope || "global").toLowerCase().slice(0, 40);
+      if (!text) return json(res, 400, { error: "text required" });
+      if (state.lessons.some(l => l.scope === scope && l.text === text)) return json(res, 200, { ok: true, dedup: true });
+      state.lessons.push({ id: state.lessons.length + 1, scope, text, by: b.by || "", ts: now() });
+      if (state.lessons.length > 500) state.lessons.splice(0, 100);
+      dirty = true; return json(res, 200, { ok: true, count: state.lessons.length });
+    }
+    if (req.method === "GET" && P === "/lessons") {
+      const agent = (q.agent || "").toLowerCase();
+      const ls = state.lessons.filter(l => l.scope === "global" || (agent && l.scope === agent));
+      return json(res, 200, { lessons: ls });
     }
     if (req.method === "POST" && P === "/send") {
       const b = await body(req); touch(b.from);

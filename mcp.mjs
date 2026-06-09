@@ -64,6 +64,13 @@ server.tool("relay_project_brief", "Set a one-paragraph brief for THIS project s
     return { content: [{ type: "text", text: `brief set for ${PROJECT}` }] };
   });
 
+server.tool("relay_lesson", "Record a LESSON learned from a failure so future crews avoid it — injected into agents' kickoff prompts automatically. Use when you diagnose a recurring or preventable failure. scope: 'global' (applies to every agent) or an agent brand ('kimi','codex','gemini','deepseek') when it's that CLI's quirk.",
+  { text: z.string().describe("one-line imperative guardrail, e.g. 'never move a card to done without npm test passing'"), scope: z.string().optional().describe("'global' (default) or an agent brand") },
+  async ({ text, scope }) => {
+    const r = await api("POST", "/lesson", { text, scope: scope || "global", by: SESSION });
+    return { content: [{ type: "text", text: r.dedup ? "lesson already recorded" : `lesson recorded (${r.count} total)` }] };
+  });
+
 server.tool("relay_board", "Show THIS project's Kanban board (all cards + their status + assignee).", {}, async () => {
   const { tasks } = await api("GET", `/tasks?project=${encodeURIComponent(PROJECT)}`);
   if (!tasks.length) return { content: [{ type: "text", text: `${PROJECT}: no cards yet` }] };
