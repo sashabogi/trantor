@@ -20,8 +20,11 @@ function relayUrl() {
   return "http://127.0.0.1:4477";
 }
 const URL_BASE = relayUrl();
-const SESSION = process.env.RELAY_SESSION || `${hostname()}:${basename(process.env.CLAUDE_PROJECT_DIR || process.cwd())}`;
 const PROJECT = process.env.RELAY_PROJECT || basename(process.env.CLAUDE_PROJECT_DIR || process.cwd());
+// Identity: RELAY_SESSION wins; else RELAY_AGENT ("codex", "kimi", …) brands the session per-project
+// (set it once in the CLI's global MCP config — works in every project); else hostname:project.
+const SESSION = process.env.RELAY_SESSION
+  || (process.env.RELAY_AGENT ? `${process.env.RELAY_AGENT}:${PROJECT}` : `${hostname()}:${PROJECT}`);
 let cursor = 0;
 
 async function api(method, path, payload) {
