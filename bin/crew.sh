@@ -56,14 +56,26 @@ fi
 # one-time wiring for every detected CLI (idempotent, backed up)
 node "$BUS_DIR/bin/connect.mjs" | tail -n +2
 
-# ---- geometry: CREW_RECT env > config.json crewRect > right half of main display ----
-RECT="${CREW_RECT:-$(node -e 'try{const c=require(require("os").homedir()+"/.agent-bus/config.json");process.stdout.write(c.crewRect||"")}catch{}' 2>/dev/null)}"
-if [ -n "$RECT" ]; then
-  IFS=',' read -r GX GY GW GH <<< "$RECT"
+# ---- geometry: AUTO-DETECTED from the screen you're working on (never hard-coded coords).
+# NSScreen.mainScreen = the display with keyboard focus; visibleFrame excludes menu bar/Dock.
+# Crew tiles into the RIGHT 58% of THAT screen (left side stays for dashboard/main terminal).
+# One-off override: CREW_RECT="X,Y,W,H" env (no persistent config — display setups change).
+if [ -n "${CREW_RECT:-}" ]; then
+  IFS=',' read -r GX GY GW GH <<< "$CREW_RECT"
 else
-  read -r _ _ SW SH <<< "$(osascript -e 'tell application "Finder" to get bounds of window of desktop' | tr ',' ' ')"
-  GX=$(( SW / 2 )); GY=25; GW=$(( SW / 2 )); GH=$(( SH - 25 ))
+  eval "$(osascript -l JavaScript -e '
+    ObjC.import("AppKit");
+    const f=$.NSScreen.mainScreen.visibleFrame, prim=$.NSScreen.screens.objectAtIndex(0).frame;
+    const yTop = prim.size.height - (f.origin.y + f.size.height);
+    const x=Math.round(f.origin.x), y=Math.round(yTop), w=Math.round(f.size.width), h=Math.round(f.size.height);
+    `SX=${x} SY=${y} SW=${w} SH=${h}`' 2>/dev/null)"
+  if [ -z "${SW:-}" ]; then  # fallback: primary display via Finder
+    read -r SX SY SW SH <<< "$(osascript -e 'tell application "Finder" to get bounds of window of desktop' | tr ',' ' ')"
+    SY=25; SH=$(( SH - 25 ))
+  fi
+  GX=$(( SX + SW * 42 / 100 )); GY=$SY; GW=$(( SW * 58 / 100 )); GH=$SH
 fi
+echo "— crew area: ${GW}x${GH} at ${GX},${GY} (focused screen, auto-detected) —"
 
 spawn_grid() {  # $@ = agents — (re)computes the grid for THIS batch and spawns serially
   local N=$# COLS=2
