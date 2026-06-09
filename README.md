@@ -57,7 +57,7 @@ Instead of compacting a full window, **hand the work to a fresh session with a n
 - **`hooks/sessionstart.mjs`** — a fresh session started in the same project detects the unconsumed
   handoff, injects a `🔄 You are taking over…` block (summary + git state + a pointer to the full prior
   transcript, which Foundation/Gaia has ingested and is searchable), and marks it consumed.
-- **`/foundation:relay-handoff`** — trigger a handoff *proactively* (the model writes a higher-quality
+- **`/claude-relay:relay-handoff`** — trigger a handoff *proactively* (the model writes a higher-quality
   one than the auto-summary because it has full context). Then open a fresh terminal here.
 
 Net: "compaction, but better summary + a brand-new million-token window + searchable history." Verified
