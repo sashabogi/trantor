@@ -10,6 +10,31 @@ Two pieces:
 - **`mcp.mjs`** — an MCP server each session loads. Tools: `relay_whoami`, `relay_peers`,
   `relay_send(to,text)`, `relay_inbox`, `relay_wait(timeout)`.
 
+## Quickstart (install as a plugin — recommended)
+
+```bash
+# 1. Clone + install deps (the MCP server needs them)
+git clone https://github.com/sashabogi/claude-relay ~/.claude-relay-src
+cd ~/.claude-relay-src && npm install
+
+# 2. Start a hub (always-on, local). Pick a port; default 4477.
+#    For a single machine, localhost is enough; for multiple machines, bind a shared/Tailscale host.
+node hub.mjs &                         # http://127.0.0.1:4477
+mkdir -p ~/.claude-relay
+echo '{"url":"http://127.0.0.1:4477"}' > ~/.claude-relay/config.json   # where sessions find the hub
+
+# 3. Install the plugin (auto-register hook + handoff hook + relay MCP tools)
+claude plugin marketplace add sashabogi/claude-relay
+claude plugin install claude-relay
+```
+
+After install, **every new `claude` session** auto-registers with the hub and gets a `<claude-relay>`
+roster of other live sessions, plus the `relay_*` MCP tools — no per-session setup. (Already-running
+sessions won't have it until restarted — but they can still talk to the hub via plain `curl`.)
+
+Verify it worked: open a fresh `claude` in any project and it should print a roster (if other sessions
+are live) and respond to `relay_peers`.
+
 ## Run
 
 **1. Start the hub** (once, anywhere both sessions can reach — a laptop for local, or Netcup for always-on):
