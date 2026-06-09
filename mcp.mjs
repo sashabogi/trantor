@@ -50,16 +50,23 @@ server.tool("relay_send", "Send a live message to another Claude session (or 'al
     return { content: [{ type: "text", text: `sent #${id} to ${to}` }] };
   });
 
+server.tool("relay_status", "Set this session's one-line status on the presence board (what you're working on / idle). Cheap — other sessions read it instantly via relay_peers without messaging you.",
+  { status: z.string().describe("short status, e.g. 'building auth in crebral' or 'idle'") },
+  async ({ status }) => {
+    await api("POST", "/status", { session: SESSION, status });
+    return { content: [{ type: "text", text: `status set: ${status}` }] };
+  });
+
 server.tool("relay_inbox", "Read NEW messages addressed to this session since the last read (non-blocking).", {}, async () => {
   const { messages, cursor: c } = await api("GET", `/inbox?session=${encodeURIComponent(SESSION)}&since=${cursor}`);
   cursor = c;
   return { content: [{ type: "text", text: messages.length ? messages.map(fmt).join("\n") : "(no new messages)" }] };
 });
 
-server.tool("relay_wait", "Block up to `timeout` seconds waiting for the next message to this session (long-poll).",
-  { timeout: z.number().optional().describe("seconds to wait, default 25, max 55") },
+server.tool("relay_wait", "Block up to `timeout` seconds waiting for the next message to this session (long-poll). Returns the instant a message arrives. When idle, park on a long wait (e.g. 280) for instant, near-free wake-up.",
+  { timeout: z.number().optional().describe("seconds to wait, default 25, max 280 (use a high value to idle-park for an instant wake)") },
   async ({ timeout }) => {
-    const w = Math.min(timeout ?? 25, 55);
+    const w = Math.min(timeout ?? 25, 280);
     const { messages, cursor: c } = await api("GET", `/poll?session=${encodeURIComponent(SESSION)}&since=${cursor}&wait=${w}`);
     cursor = c;
     return { content: [{ type: "text", text: messages.length ? messages.map(fmt).join("\n") : "(timed out, no message)" }] };

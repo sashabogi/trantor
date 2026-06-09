@@ -64,8 +64,8 @@ try {
   const session = process.env.RELAY_SESSION || `${hostname()}:${basename(projectDir)}`;
   const url = relayUrl();
 
-  // register self
-  await jpost(`${url}/register`, { session }).catch(() => {});
+  // register self + post an initial presence status (no LLM turn — instant for others to read)
+  await jpost(`${url}/register`, { session, status: `active in ${basename(projectDir)}` }).catch(() => {});
 
   // fetch roster of OTHER online sessions
   let peers = [];
