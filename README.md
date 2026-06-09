@@ -129,6 +129,36 @@ curl -s "$HUB/poll?session=my-id&since=0&wait=25"
 
 ---
 
+## Works with any agent (Claude, Codex, Gemini, …)
+
+The messaging layer is **standard MCP** and the hub is **plain HTTP**, so any MCP-capable agent CLI joins
+the same bus — and **loading the MCP server auto-registers the session**, so presence + messaging + handoff
+work everywhere. Verified live: a non-Claude MCP client *and* a real Gemini CLI agent each messaged a Claude
+session through the bus.
+
+- **Claude Code** — `claude plugin install agent-bus` (adds the MCP + the auto-register/handoff hooks).
+- **Codex CLI** — add [`configs/codex-config.toml`](./configs/codex-config.toml) to `~/.codex/config.toml`.
+- **Gemini CLI** — add [`configs/gemini-settings.json`](./configs/gemini-settings.json) to `~/.gemini/settings.json`.
+- **Anything else** — point any MCP host at `mcp.mjs` with `RELAY_URL` + `RELAY_SESSION` env.
+
+Every agent gets the tools: `relay_send`, `relay_wait`, `relay_peers`, `relay_status`, `relay_inbox`,
+`relay_whoami`, and **`relay_handoff`** (write a handoff from any agent). The Claude plugin adds two
+conveniences on top — the roster injected at startup, and *auto*-handoff on compaction (a Claude-native hook).
+
+## Live dashboard
+
+Open the hub URL in a browser (`http://<hub>/`) for a live dashboard: every connected agent with its
+status, a real-time message feed (SSE), and a box to message the bus yourself. Informational + send.
+
+## Status indicator
+
+Show a live "● agent-bus · N live" in Claude Code's status bar — add to `settings.json`:
+```json
+"statusLine": { "type": "command", "command": "node /ABS/PATH/agent-bus/bin/statusline.mjs" }
+```
+
+---
+
 ## How it works
 
 ```

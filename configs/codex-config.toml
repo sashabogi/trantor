@@ -1,0 +1,6 @@
+# agent-bus for Codex CLI — add to ~/.codex/config.toml
+# Loading this MCP auto-registers the Codex session on the bus + gives the relay_* tools.
+[mcp_servers.relay]
+command = "node"
+args = ["REPLACE/WITH/ABSOLUTE/PATH/agent-bus/mcp.mjs"]
+env = { RELAY_URL = "http://127.0.0.1:4477", RELAY_SESSION = "codex:myproject" }

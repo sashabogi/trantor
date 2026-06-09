@@ -27,13 +27,17 @@ let dirty = false;
 const persist = () => { if (dirty) { try { writeFileSync(DATA, JSON.stringify(state)); dirty = false; } catch {} } };
 setInterval(persist, 1000).unref?.();
 
+// dashboard HTML (read once at startup)
+let UI = "";
+try { UI = readFileSync(new URL("./ui.html", import.meta.url), "utf8"); } catch {}
+
 // open SSE streams: [{ session, res }]
 const streams = [];
 const now = () => Date.now();
 function body(req) { return new Promise(r => { let d = ""; req.on("data", c => (d += c)); req.on("end", () => { try { r(d ? JSON.parse(d) : {}); } catch { r({}); } }); }); }
 function json(res, code, obj) { res.writeHead(code, { "content-type": "application/json", "access-control-allow-origin": "*" }); res.end(JSON.stringify(obj)); }
 function touch(session, status) {
-  if (!session) return;
+  if (!session || session === "all") return;   // "all" is a wildcard, not a real peer
   const p = state.peers[session] || { lastSeen: 0, status: "" };
   p.lastSeen = now();
   if (status !== undefined) p.status = String(status).slice(0, 280);
@@ -86,6 +90,13 @@ const server = http.createServer(async (req, res) => {
       const ka = setInterval(() => { try { res.write(": ka\n\n"); touch(session); } catch {} }, 20000);
       req.on("close", () => { clearInterval(ka); const i = streams.indexOf(entry); if (i >= 0) streams.splice(i, 1); });
       return;
+    }
+    if (req.method === "GET" && P === "/recent") {   // god-view: last N messages, for the dashboard feed
+      const n = Math.min(Number(q.limit || 50), 200);
+      return json(res, 200, { messages: state.messages.slice(-n) });
+    }
+    if (req.method === "GET" && (P === "/" || P === "/ui")) {
+      res.writeHead(200, { "content-type": "text/html; charset=utf-8" }); return res.end(UI || "<h1>agent-bus</h1><p>dashboard unavailable</p>");
     }
     if (P === "/health") return json(res, 200, { ok: true, peers: Object.keys(state.peers).length, messages: state.messages.length, streams: streams.length });
     json(res, 404, { error: "not found" });

@@ -1,12 +1,14 @@
 #!/usr/bin/env node
-// agent-bus MCP server — gives a Claude Code session tools to talk to OTHER
-// live Claude sessions through the relay hub. Loaded per-session via --mcp-config
-// or `claude mcp add`. Identity + hub URL come from env (RELAY_SESSION, RELAY_URL).
+// agent-bus MCP server — gives ANY MCP-capable agent (Claude Code, Codex, Gemini, …)
+// tools to talk to OTHER live agent sessions through the relay hub. Loaded per-session
+// via the agent's MCP config. Identity + hub URL come from env (RELAY_SESSION, RELAY_URL).
+// Loading this server AUTO-REGISTERS the session — so presence works on every agent.
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import { readFileSync, existsSync } from "node:fs";
+import { readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
 import { join, basename } from "node:path";
 import { homedir, hostname } from "node:os";
+import { execSync } from "node:child_process";
 import { z } from "zod";
 
 function relayUrl() {
@@ -55,6 +57,21 @@ server.tool("relay_status", "Set this session's one-line status on the presence 
   async ({ status }) => {
     await api("POST", "/status", { session: SESSION, status });
     return { content: [{ type: "text", text: `status set: ${status}` }] };
+  });
+
+server.tool("relay_handoff", "Write a rich handoff for THIS session so a fresh session (any agent) can take over with a full context window instead of compacting. Provide a complete markdown summary (TASK / STATE / KEY DECISIONS / NEXT STEPS / KEY FILES). Universal — works in any agent, not just Claude's PreCompact hook.",
+  { summary: z.string().describe("complete markdown handoff: TASK, STATE, KEY DECISIONS, NEXT STEPS, KEY FILES & locations") },
+  async ({ summary }) => {
+    const project = process.env.CLAUDE_PROJECT_DIR || process.cwd();
+    const name = basename(project);
+    const dir = join(homedir(), ".agent-bus", "handoffs");
+    if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+    const stamp = (() => { try { return execSync("date +%s", { encoding: "utf8" }).trim(); } catch { return String(process.pid); } })();
+    let git = ""; try { git = execSync("git -C " + JSON.stringify(project) + " status --short 2>/dev/null | head -30", { encoding: "utf8" }).trim(); } catch {}
+    const rec = { id: `${name}-${stamp}`, project, projectName: name, machine: hostname(), trigger: "relay_handoff-tool", stamp: Number(stamp) || 0, summary: String(summary), gitStatus: git, consumed: false };
+    writeFileSync(join(dir, `${rec.id}.json`), JSON.stringify(rec, null, 2));
+    await api("POST", "/send", { from: SESSION, to: "all", text: `📋 Handoff ready for ${name} — open a fresh session here to take over (${rec.id}).` }).catch(() => {});
+    return { content: [{ type: "text", text: `handoff saved (${rec.id}). A fresh session in ${name} will load it on start. Tell the user to open a new terminal here.` }] };
   });
 
 server.tool("relay_inbox", "Read NEW messages addressed to this session since the last read (non-blocking).", {}, async () => {
