@@ -6,9 +6,27 @@
 // Config resolution (first hit wins):
 //   env RELAY_URL  →  ~/.claude-relay/config.json {"url": "..."}  →  http://127.0.0.1:4477
 // Identity: env RELAY_SESSION  →  "<hostname>:<basename(cwd)>"  (stable per project/machine)
-import { readFileSync, existsSync } from "node:fs";
+import { readFileSync, writeFileSync, existsSync, readdirSync } from "node:fs";
 import { join, basename } from "node:path";
 import { homedir, hostname } from "node:os";
+
+// Load the most recent UNCONSUMED handoff for this project (written by precompact.mjs).
+function loadPendingHandoff(projectName) {
+  try {
+    const dir = join(homedir(), ".claude-relay", "handoffs");
+    if (!existsSync(dir)) return null;
+    const files = readdirSync(dir).filter(f => f.startsWith(projectName + "-") && f.endsWith(".json")).sort().reverse();
+    for (const f of files) {
+      const p = join(dir, f);
+      const rec = JSON.parse(readFileSync(p, "utf8"));
+      if (!rec.consumed) {
+        rec.consumed = true; writeFileSync(p, JSON.stringify(rec, null, 2)); // claim it
+        return rec;
+      }
+    }
+  } catch {}
+  return null;
+}
 
 function relayUrl() {
   if (process.env.RELAY_URL) return process.env.RELAY_URL;
@@ -49,6 +67,19 @@ try {
     for (const p of others) additionalContext += `- ${p.session}\n`;
     additionalContext += `Use the relay MCP tools (relay_peers, relay_send, relay_inbox, relay_wait) to coordinate with them — hand off work, check for overlap before editing shared files, or ask another session for help. If a sibling session is touching the same project, coordinate before making conflicting changes.\n`;
     additionalContext += `</claude-relay>\n`;
+  }
+
+  // Pending handoff? A prior session hit the context limit and left a handoff for this
+  // project — take over with this fresh full window instead of starting cold.
+  const handoff = loadPendingHandoff(basename(projectDir));
+  if (handoff) {
+    process.stderr.write(`[claude-relay] loaded pending handoff ${handoff.id}\n`);
+    additionalContext += `<claude-relay-handoff id="${handoff.id}" from="${handoff.machine}" trigger="${handoff.trigger}">\n`;
+    additionalContext += `🔄 **You are taking over from a prior session that hit its context limit.** This is a fresh full window. Resume the work below — the prior session's summary, git state, and a pointer to its full transcript (searchable; Foundation/Gaia has it ingested) follow. Continue from "OPEN THREADS & NEXT STEPS"; do not restart from scratch.\n\n`;
+    additionalContext += `## Handoff summary\n${handoff.summary}\n`;
+    if (handoff.gitStatus) additionalContext += `\n## Git working-tree at handoff\n\`\`\`\n${handoff.gitStatus}\n\`\`\`\n`;
+    if (handoff.transcript_path) additionalContext += `\n_Full prior transcript: ${handoff.transcript_path}_\n`;
+    additionalContext += `</claude-relay-handoff>\n`;
   }
 } catch (err) {
   process.stderr.write(`[claude-relay] sessionstart error: ${err?.message || err}\n`);

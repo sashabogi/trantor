@@ -46,3 +46,19 @@ claude -p "Use the relay MCP: relay_inbox, answer MAIN's question, relay_send th
   --mcp-config relay-B.json --dangerously-skip-permissions
 curl -s "localhost:4477/inbox?session=MAIN&since=0"   # -> B's reply
 ```
+
+## Context-handoff / successor sessions (the headline feature)
+
+Instead of compacting a full window, **hand the work to a fresh session with a new full window.**
+
+- **`hooks/precompact.mjs`** (PreCompact) — fires right before Claude Code compacts. It summarizes the
+  recent transcript into a rich handoff (via `scrooge` if present, else a raw tail), saves it to
+  `~/.claude-relay/handoffs/<project>-<ts>.json`, and pings the hub so siblings know.
+- **`hooks/sessionstart.mjs`** — a fresh session started in the same project detects the unconsumed
+  handoff, injects a `🔄 You are taking over…` block (summary + git state + a pointer to the full prior
+  transcript, which Foundation/Gaia has ingested and is searchable), and marks it consumed.
+- **`/foundation:relay-handoff`** — trigger a handoff *proactively* (the model writes a higher-quality
+  one than the auto-summary because it has full context). Then open a fresh terminal here.
+
+Net: "compaction, but better summary + a brand-new million-token window + searchable history." Verified
+end-to-end (PreCompact wrote a handoff; a fresh SessionStart loaded and consumed it).
