@@ -1,0 +1,8 @@
+{
+  "description": "claude-relay — auto-register each session with the hub + inject the live-sessions roster",
+  "hooks": {
+    "SessionStart": [
+      { "matcher": "", "hooks": [ { "type": "command", "command": "node ${CLAUDE_PLUGIN_ROOT}/hooks/sessionstart.mjs" } ] }
+    ]
+  }
+}

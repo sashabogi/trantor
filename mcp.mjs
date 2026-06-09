@@ -4,10 +4,21 @@
 // or `claude mcp add`. Identity + hub URL come from env (RELAY_SESSION, RELAY_URL).
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { readFileSync, existsSync } from "node:fs";
+import { join, basename } from "node:path";
+import { homedir, hostname } from "node:os";
 import { z } from "zod";
 
-const URL_BASE = process.env.RELAY_URL || "http://127.0.0.1:4477";
-const SESSION = process.env.RELAY_SESSION || `sess-${process.pid}`;
+function relayUrl() {
+  if (process.env.RELAY_URL) return process.env.RELAY_URL;
+  try {
+    const cfg = join(homedir(), ".claude-relay", "config.json");
+    if (existsSync(cfg)) { const u = JSON.parse(readFileSync(cfg, "utf8")).url; if (u) return u; }
+  } catch {}
+  return "http://127.0.0.1:4477";
+}
+const URL_BASE = relayUrl();
+const SESSION = process.env.RELAY_SESSION || `${hostname()}:${basename(process.env.CLAUDE_PROJECT_DIR || process.cwd())}`;
 let cursor = 0;
 
 async function api(method, path, payload) {
