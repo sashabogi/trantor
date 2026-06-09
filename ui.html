@@ -127,6 +127,8 @@ async function render(){
   try{projects=(await (await fetch('/projects')).json()).projects||[];}catch(e){}
   try{tasks=(await (await fetch('/tasks')).json()).tasks||[];}catch(e){}
   try{msgs=(await (await fetch('/recent?limit=200')).json()).messages||[];}catch(e){}
+  // hub was reset (server empty but feed shows history) -> clear the stale client-side feed
+  if(!msgs.length&&$('#feed').childElementCount>0){$('#feed').innerHTML='';nmsg=0;}
   const liveSess=new Set();projects.forEach(p=>p.agents.forEach(a=>{if(a.online)liveSess.add(a.session)}));
   $('#nproj').textContent=projects.filter(p=>p.project!=='(unassigned)').length;
   $('#nsess').textContent=liveSess.size;
