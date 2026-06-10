@@ -67,16 +67,24 @@ const server = http.createServer(async (req, res) => {
     // --- Kanban tasks ---
     if (req.method === "POST" && P === "/task") {           // create a card
       const b = await body(req); touch(b.by, undefined, b.project);
+      const st0 = ["todo","doing","testing","failed","done","blocked"].includes(b.status) ? b.status : "todo";
       const t = { id: ++state.taskSeq, project: String(b.project || "").slice(0,80), title: String(b.title||"").slice(0,200),
-        assignee: b.assignee || "", status: ["todo","doing","testing","failed","done","blocked"].includes(b.status) ? b.status : "todo",
-        by: b.by || "", ts: now(), updated: now() };
+        assignee: b.assignee || "", status: st0,
+        difficulty: ["easy","medium","hard"].includes(b.difficulty) ? b.difficulty : "",
+        by: b.by || "", ts: now(), updated: now(),
+        history: [{ to: st0, by: b.by || "", ts: now() }] };
       state.tasks.push(t); if (state.tasks.length > 2000) state.tasks.splice(0, 500);
       dirty = true; return json(res, 200, { ok: true, task: t });
     }
     if (req.method === "POST" && P === "/task/update") {    // move/edit a card
       const b = await body(req); const t = state.tasks.find(x => x.id === Number(b.id));
       if (!t) return json(res, 404, { error: "no such task" });
-      if (b.status && ["todo","doing","testing","failed","done","blocked"].includes(b.status)) t.status = b.status;
+      if (b.status && ["todo","doing","testing","failed","done","blocked"].includes(b.status) && b.status !== t.status) {
+        (t.history ||= []).push({ from: t.status, to: b.status, by: b.by || "", ts: now() });
+        if (t.history.length > 40) t.history.splice(0, 10);
+        t.status = b.status;
+      }
+      if (b.difficulty && ["easy","medium","hard"].includes(b.difficulty)) t.difficulty = b.difficulty;
       if (b.assignee !== undefined) t.assignee = b.assignee;
       if (b.title !== undefined) t.title = String(b.title).slice(0,200);
       if (b.delete) state.tasks = state.tasks.filter(x => x.id !== t.id);
@@ -127,6 +135,26 @@ const server = http.createServer(async (req, res) => {
       state.lessons.push({ id: state.lessons.length + 1, scope, text, by: b.by || "", ts: now() });
       if (state.lessons.length > 500) state.lessons.splice(0, 100);
       dirty = true; return json(res, 200, { ok: true, count: state.lessons.length });
+    }
+    if (req.method === "GET" && P === "/economics") {   // the brain's books, surfaced: scrooge ledger + quota profile
+      const out = { scrooge: null, profile: null };
+      try { out.profile = JSON.parse(readFileSync(join(homedir(), ".agent-bus", "profile.json"), "utf8")).providers || {}; } catch {}
+      try {
+        const since = now() / 1000 - (Number(q.hours || 24) * 3600);
+        const lines = readFileSync(join(homedir(), ".token-scrooge", "calls.jsonl"), "utf8").trim().split("\n").slice(-3000);
+        const calls = lines.map(l => { try { return JSON.parse(l); } catch { return null; } }).filter(c => c && c.ts >= since && c.ok);
+        const sum = { calls: calls.length, tokens_in: 0, tokens_out: 0, cost_usd: 0, by_model: {} };
+        for (const c of calls) {
+          sum.tokens_in += c.tokens_in || 0; sum.tokens_out += c.tokens_out || 0; sum.cost_usd += c.cost_usd || 0;
+          const m = sum.by_model[c.model] ||= { calls: 0, cost_usd: 0 };
+          m.calls++; m.cost_usd += c.cost_usd || 0;
+        }
+        // savings vs Opus reference (~$15/M in, $75/M out — same yardstick scrooge ledger uses)
+        sum.opus_equiv_usd = +(sum.tokens_in * 15 / 1e6 + sum.tokens_out * 75 / 1e6).toFixed(2);
+        sum.cost_usd = +sum.cost_usd.toFixed(4);
+        out.scrooge = sum;
+      } catch {}
+      return json(res, 200, out);
     }
     if (req.method === "GET" && P === "/lessons") {
       const agent = (q.agent || "").toLowerCase();

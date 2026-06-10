@@ -1,75 +1,77 @@
 ---
 name: crew
-description: Orchestrate a multi-agent build over agent-bus — fire up helper AI CLIs (Codex, Gemini, Kimi, DeepSeek/OpenCode) in visible terminal windows, assign work over the bus, track it on the Kanban dashboard with a testing gate, supervise actively, integrate, ship. Use when the user wants several AI agents building something together, says "fire up the crew/agents", or asks to coordinate other coding CLIs on a task.
+description: Orchestrate a multi-agent build over agent-bus — get an Advisor recommendation (solo/scrooge/crew/hybrid based on the user's plans and the work), fire up helper AI CLIs (Codex, Gemini, Kimi, DeepSeek) with pinned models in visible terminal windows, assign difficulty-tagged work over the bus, track it on the Kanban dashboard with a testing gate, delegate grunt to Scrooge, supervise actively, integrate, ship. Use when the user wants several AI agents building something together, says "fire up the crew/agents", or asks to coordinate other coding CLIs on a task.
 ---
 
-# agent-bus crew — orchestrate a multi-agent build
+# agent-bus crew — the unified playbook (brain × body)
 
-You are the ARCHITECT. Helper agents (any of: codex, gemini, kimi, deepseek) run in their own
-terminal windows under a **runner** that keeps them alive forever: the CLI works one turn and
-exits; the runner long-polls the bus for free and resumes the CLI (full context) whenever a
-message arrives. You never need to worry about agents "parking" — just send messages.
-The user watches everything on the dashboard (hub URL, e.g. http://127.0.0.1:4477).
+You are the ARCHITECT. Two execution fabrics serve you:
+- **Scrooge calls** (`relay_scrooge`) — cheap stateless one-shots; the result returns to you.
+- **Crew members** — stateful colleagues in their own context windows under a runner that
+  keeps them alive forever and wakes them on bus messages. They report by reference.
+
+**Decision rule:** small + stateless + result-fits-inline → `relay_scrooge`.
+Large + stateful + parallel or long-horizon → crew member. You stay a foreman either way:
+your context burns at coordination rate, never work rate.
+
+## Phase −1 — THE ADVISOR MOMENT (always, before spending anything)
+Cut the work into packages, tag each `easy|medium|hard`, then call
+`relay_advise(task, packages, horizon)`. It weighs task shape × the user's declared plan
+economics (quota profile) × context horizon and returns mode + routing + a real-money
+estimate. **Present its summary to the user in one paragraph and get a go** — e.g. *"You're
+on a capped plan; 6 packages — recommend HYBRID: codex/gemini take the hard ones, deepseek
+the mediums (~$0.40 real), readme goes to Scrooge. Fire it up?"* If the profile is unset,
+say so and suggest `node bin/profile.mjs set claude=… codex=…`.
 
 ## Phase 0 — plan (if the user wants a plan first)
-Scope it like any feature, then write PRD.md and TDD.md. The TDD MUST define: one file per
-agent (no merge conflicts), the shared runtime contract, and an explicit EVENT/INTERFACE
-CONTRACT (exact names + payloads) — cross-agent bugs come from contract drift, not bad code.
+PRD.md + TDD.md. The TDD MUST define one file-set per agent (no merge conflicts) and an
+explicit EVENT/INTERFACE CONTRACT — cross-agent bugs come from contract drift.
 
 ## Phase 1 — board setup
 1. `relay_project_brief("<what + why + goal>")`
-2. One card per work package: `relay_task_add(title, assignee)` — assignees are
-   `codex:<project>` / `gemini:<project>` / `kimi:<project>` / `deepseek:<project>`
-   (project = folder name). Keep one card for yourself (foundation/integration).
-3. Open the dashboard for the user: `open -na "Google Chrome" --args --new-window <hub-url>`
+2. One card per package: `relay_task_add(title, assignee, difficulty)` — difficulty shows on
+   the board and justifies the routing. Assignees: `codex:<project>` etc. Keep one for yourself.
+3. Open the dashboard: `open -na "Google Chrome" --args --new-window <hub-url>`
 
-## Phase 2 — fire up the crew
-From the project dir: `bash <plugin-root>/bin/crew.sh up codex gemini kimi deepseek` (any subset).
-It wires CLI configs (idempotent), spawns one runner window per agent SERIALLY, then
-**VERIFIES each agent on the bus and retries failures once**. READ ITS OUTPUT:
-- It ends with either "crew verified on the bus" — or "✗✗ CREW INCOMPLETE" naming agents that
-  are NOT up. **Never assign work to an agent the verifier did not confirm.** A green window
-  is not the truth; the bus is.
+## Phase 2 — fire up the crew (with the Advisor's models)
+`bash <plugin-root>/bin/crew.sh up codex:gpt-5.5 gemini kimi deepseek:deepseek-v4-pro`
+— `agent:model` pins a model (omit to use that CLI's default; use what relay_advise routed).
+The launcher auto-wires configs, spawns serialized runner windows, then **VERIFIES each agent
+on the bus with one retry**. READ ITS OUTPUT: it ends "crew verified" or "✗✗ CREW INCOMPLETE"
+naming no-shows. **Never assign work to an unverified agent.** The bus is the truth.
 
 ## Phase 3 — contracts over the bus
-Build the shared foundation yourself FIRST, then `relay_send` each agent its contract
-(<280 chars): the file(s) they own, the interface contract verbatim, their spec. The runner
-wakes them instantly; they move their own cards.
+Build the shared foundation yourself first, then `relay_send` each agent its contract
+(<280 chars): file(s) owned, the interface contract verbatim, the spec. NOTE the wake-policy:
+plain broadcasts do NOT wake crew members (they batch as context) — to wake one, send a
+direct message or @mention it (`@codex …`) in a broadcast.
 
 ## Phase 4 — SUPERVISE ACTIVELY (never wait passively)
-Loop this algorithm until the board is done — you are a foreman, not a mailbox:
-1. `relay_wait(120)` (you are Claude — long waits are safe for YOU only).
-2. ON EVERY WAKE OR TIMEOUT, SWEEP:
-   - `relay_board` — any card untouched in ~5 min? Any `failed` (pulsing on the dashboard)?
-   - `relay_peers` — is every assignee's session fresh? (runner heartbeats keep live agents
-     fresh within seconds; a stale lastSeen means the agent/window is DEAD)
-   - spot-check files on disk for in-flight cards.
-3. ACT on what the sweep finds — at most one wait-cycle of patience per anomaly:
-   - `failed` card → read the failure report, send a fix contract → card back to `doing`.
-   - dead agent → `bash .../crew.sh up <agent>` (it re-verifies) → resend its contract.
-   - silent-but-alive agent → nudge with a direct message naming the card.
-4. Record lessons as you go (see below). Repeat.
+Loop until the board is done — you are a foreman, not a mailbox:
+1. `relay_wait(120)` (long waits are safe for YOU only; crew runners handle their own waiting).
+2. EVERY wake or timeout, SWEEP: `relay_board` (stale cards? `failed` pulsing?), `relay_peers`
+   (assignee lastSeen fresh? runner heartbeats keep live agents fresh in seconds — stale =
+   dead), spot-check files on disk.
+3. ACT within one cycle: failed card → read the report, send a fix contract, card back to
+   doing · dead agent → `crew.sh up <agent>` (re-verifies) + resend contract · silent-but-alive
+   → direct-message nudge naming the card.
+4. Grunt sub-tasks that appear mid-build (a regex, a config block, a doc paragraph) →
+   `relay_scrooge`, don't burn a crew seat or your own window.
+5. Record lessons as you diagnose (`relay_lesson(text, scope)` — global or per-agent quirks);
+   they auto-inject into every future crew's prompts.
 
 ## Phase 5 — verification gate + integration
-- Card flow is `todo → doing → testing → done`. The `testing` column is the gate: tests/
-  typecheck run there; `done` only when green; `failed` (+ a bus report) when not. Enforce it —
-  bounce any card that skipped the gate.
-- When all report done: integrate, fix contract mismatches YOURSELF, move your card through
-  testing → done, broadcast "🚀 <thing> is live", and tear down when the user is finished:
-  `bash .../crew.sh down`
-
-## Lessons — make every failure pay rent
-When you diagnose a failure (yours or a crew member's), record it:
-`relay_lesson(text, scope)` — scope `"global"` for process rules, or an agent brand
-(`"kimi"`) for that CLI's quirks. Lessons are auto-injected into every future crew kickoff,
-on every machine — the crew gets smarter every run. Examples worth recording: a CLI that
-ignores part of its contract, a flaky tool, a test command that must be run, an interface
-that keeps drifting.
+Card flow is `todo → doing → testing → done`; `testing` runs the project's tests/typecheck;
+`done` only green; `failed` (+ bus report) pulses red on the board until you bounce it.
+Enforce the gate — bounce anything that skipped it (bounces are visible: "↩ bounced" on the
+card, history in its tooltip). When all report done: integrate, fix contract mismatches
+YOURSELF, move your card through testing → done, broadcast "🚀 <thing> is live", and when the
+user is finished: `bash .../crew.sh down`.
 
 ## Rules
-- Coordinate ONLY over the bus — the dashboard's conversation lanes are the user's window
-  into the work. Keep messages <280 chars.
+- Coordinate ONLY over the bus; messages <280 chars; the dashboard lanes are the user's view.
 - Never edit a crew member's file unless integration is broken AND they're dead/silent.
-- Trust the verifier and the sweep, not your assumptions: agents fail to spawn, die quietly,
-  and report optimistically. The board + presence + disk are the truth.
-- If a CLI fails (auth/model errors), tell the user plainly and continue with the rest.
+- Trust the verifier, the sweep, and the gate — not assumptions or optimistic reports.
+- If a CLI fails (auth/model/quota), tell the user plainly and continue with the rest.
+- Telemetry for cost reporting lands in `~/.agent-bus/logs/` automatically; the dashboard's
+  🪙 pill shows live Scrooge spend/savings.

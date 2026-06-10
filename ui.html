@@ -49,6 +49,9 @@ main{flex:1;display:grid;grid-template-columns:1fr 330px;min-height:0}
 .tcard.failed .who{color:#ef6a6a}
 @keyframes failpulse{0%,100%{box-shadow:0 0 0 0 rgba(239,106,106,0)}50%{box-shadow:0 0 14px 2px rgba(239,106,106,.55);border-color:#ef6a6a}}
 .tcard .who{color:var(--dim);font-size:11px;margin-top:4px;display:flex;align-items:center;gap:3px}
+.diff{font-size:9px;font-weight:800;letter-spacing:.04em;padding:1px 5px;border-radius:8px;margin-left:5px;vertical-align:1px}
+.diff.easy{background:#13302b;color:#2dd4bf}.diff.medium{background:#2c2a17;color:#f5d90b}.diff.hard{background:#33181f;color:#ff7a90}
+.bounce{display:inline-block;font-size:9.5px;font-weight:700;color:#ef6a6a;background:#2a1517;border:1px solid #5a2c2c;border-radius:8px;padding:1px 6px;margin-left:5px}
 .tcard.done{opacity:.65}.tcard.done span{text-decoration:line-through}
 .empty{color:var(--dim);text-align:center;padding:30px}
 .empty.big{padding:60px 20px;font-size:15px}
@@ -83,6 +86,7 @@ aside h2{font-size:10.5px;text-transform:uppercase;letter-spacing:.09em;color:va
   <span class="logo">agent<b>·</b>bus</span>
   <span class="pill" id="hub">—</span>
   <span class="spacer"></span>
+  <span class="pill" id="econ" title="Scrooge ledger, last 24h" style="display:none"></span>
   <span class="pill"><span id="nproj">0</span> projects · <span id="nsess">0</span> live · <span id="ntask">0</span> cards</span>
 </header>
 <main>
@@ -121,6 +125,20 @@ function brandOf(s){const x=String(s).toLowerCase();for(const[re,b]of BRAND)if(r
 function iconFor(s,size){const b=brandOf(s);if(!b||!ICON[b])return `<span style="display:inline-flex;width:${size}px;height:${size}px;align-items:center;justify-content:center;border-radius:50%;background:#2a3346;color:#aeb9c9;font-size:${Math.round(size*.55)}px;font-weight:700">${esc(String(s).slice(0,1).toUpperCase())}</span>`;const i=ICON[b];return `<svg viewBox="0 0 24 24" width="${size}" height="${size}" fill="currentColor" style="color:${i.c}">${i.p.map(d=>`<path d="${d}"/>`).join('')}</svg>`;}
 const phaseClass=ph=>/FAILED|blocked/.test(ph)?'blocked':/building|verifying|progress/.test(ph)?'building':/shipped|done/.test(ph)?'shipped':'planned';
 
+let POOLS={};
+async function econ(){
+  try{
+    const e=await (await fetch('/economics')).json();
+    POOLS={}; for(const[k,v]of Object.entries(e.profile||{}))POOLS[k]=v.tier;
+    if(e.scrooge&&e.scrooge.calls>0){
+      const s=e.scrooge;
+      const el=$('#econ'); el.style.display='';
+      el.innerHTML=`🪙 scrooge 24h: <b style="color:var(--grn)">$${s.cost_usd}</b> · saved ~$${Math.max(0,(s.opus_equiv_usd-s.cost_usd)).toFixed(2)} · ${s.calls} calls`;
+    }
+  }catch(_){}
+}
+econ();setInterval(econ,15000);
+function poolOf(session){const b=brandOf(session);const k=b==='anthropic'?'claude':b==='openai'?'codex':b==='moonshot'?'kimi':b;return POOLS[k]||'';}
 function projOf(m){return m.project||(String(m.from).includes(':')?String(m.from).split(':').pop():'');}
 function chatLane(msgs){
   if(!msgs.length)return `<div class="proj-chat"><h5><span class="lc"></span>conversation</h5><div class="chatempty">no messages yet — agents talk here as they coordinate</div></div>`;
@@ -151,12 +169,19 @@ async function render(){
     const pt=tasks.filter(t=>t.project===p.project);
     const done=pt.filter(t=>t.status==='done').length;
     const pct=pt.length?Math.round(done/pt.length*100):0;
-    const agents=p.agents.sort((a,b)=>b.online-a.online).map(a=>`<span class="agent ${a.online?'':'offl'}" title="${esc(a.session)}${a.online?' · online':' · offline'}">${iconFor(a.session,15)}<span class="nm">${esc(a.session)}</span>${a.status?` <span class="ast">· ${esc(a.status)}</span>`:''}</span>`).join('');
+    const agents=p.agents.sort((a,b)=>b.online-a.online).map(a=>`<span class="agent ${a.online?'':'offl'}" title="${esc(a.session)}${a.online?' · online':' · offline'}">${iconFor(a.session,15)}<span class="nm">${esc(a.session)}</span>${a.status?` <span class="ast">· ${esc(a.status)}</span>`:''}${poolOf(a.session)?` <span class="ast" style="opacity:.7">[${esc(poolOf(a.session))}]</span>`:''}</span>`).join('');
     const cols=COLS.map(([k,label])=>{
       let cards=pt.filter(t=>k==='testing'?(t.status==='testing'||t.status==='failed'):t.status===k);
       if(k==='done')cards=[...cards].sort((a,b)=>(b.updated||0)-(a.updated||0)); // newest finished on top
       if(k==='testing')cards=[...cards].sort((a,b)=>(a.status==='failed'?-1:1)-(b.status==='failed'?-1:1)); // failures float up
-      return `<div class="col ${k}"><h4>${label} <i>${cards.length}</i></h4>${cards.map(t=>`<div class="tcard ${t.status}" data-id="${t.id}" title="click to advance status"><span>${esc(t.title)}</span>${t.assignee?`<div class="who">${iconFor(t.assignee,12)}@${esc(t.assignee)}</div>`:''}</div>`).join('')}</div>`;
+      return `<div class="col ${k}"><h4>${label} <i>${cards.length}</i></h4>${cards.map(t=>(()=>{
+        const hist=(t.history||[]);
+        const last=hist[hist.length-1];
+        const rank={todo:0,doing:1,testing:2,done:3};
+        const bounced=last&&last.from!==undefined&&rank[last.to]<rank[last.from]&&(Date.now()-last.ts)<10*60*1000;
+        const trail=hist.map(h=>`${h.from?h.from+'→':''}${h.to}${h.by?' by '+String(h.by).split(':')[0]:''} @${new Date(h.ts).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'})}`).join('\n');
+        return `<div class="tcard ${t.status}" data-id="${t.id}" title="${esc(trail)||'click to advance'}"><span>${esc(t.title)}</span>${t.difficulty?`<span class="diff ${t.difficulty}">${t.difficulty[0].toUpperCase()}</span>`:''}${bounced?`<span class="bounce">↩ bounced${last.by?' by '+esc(String(last.by).split(':')[0]):''}</span>`:''}${t.assignee?`<div class="who">${iconFor(t.assignee,12)}@${esc(t.assignee)}</div>`:''}</div>`;
+      })()).join('')}</div>`;
     }).join('');
     const ph=p.phase||'';
     const brief=p.brief?`<span class="brief">${esc(p.brief)}</span>`:`<span class="brief dim">— no brief yet · an agent sets it with relay_project_brief</span>`;

@@ -26,26 +26,39 @@ function hubUrl() {
 }
 const HUB = hubUrl();
 const log = (s) => console.log(`\x1b[38;5;43m[runner]\x1b[0m ${s}`);
+const LOGDIR = join(homedir(), ".agent-bus", "logs");
+import { mkdirSync } from "node:fs";
+try { mkdirSync(LOGDIR, { recursive: true }); } catch {}
+let TURN = 0;
+const telemetry = (rec) => { try { appendFileSync(join(LOGDIR, `${AGENT}-${PROJ}.jsonl`), JSON.stringify(rec) + "\n"); } catch {} };
+const banner = (trigger) => {
+  console.log(`\x1b[2J\x1b[H\x1b[48;5;236m\x1b[38;5;43m  ◤ ${AGENT.toUpperCase()} ◢  agent-bus crew · ${PROJ} · turn ${TURN} · ${trigger}${MODEL ? ` · ${MODEL}` : ""}  \x1b[0m\n`);
+};
 
 async function api(path, body) {
-  const r = await fetch(HUB + path, body ? { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) } : {});
+  const opts = body
+    ? { method: "POST", headers: { "content-type": "application/json", connection: "close" }, body: JSON.stringify(body) }
+    : { headers: { connection: "close" } };   // fresh socket per call — long-polls on stale keep-alive sockets reset
+  const r = await fetch(HUB + path, opts);
   return r.json();
 }
 
 // ---- per-CLI invocation (first turn vs resume turn). {P} = prompt file path ----
+// CREW_MODEL env pins the model: each CLI gets its own flag via {M} (empty when unset).
+const MODEL = process.env.CREW_MODEL || "";
 const CLI = {
-  codex:    { first: `codex exec --skip-git-repo-check --dangerously-bypass-approvals-and-sandbox "$(cat {P})" < /dev/null`,
-              next:  `codex exec resume --last --skip-git-repo-check --dangerously-bypass-approvals-and-sandbox "$(cat {P})" < /dev/null` },
-  gemini:   { first: `gemini --yolo -p "$(cat {P})"`,
-              next:  `gemini --yolo -r latest -p "$(cat {P})"` },
-  kimi:     { first: `kimi --print --yolo -p "$(cat {P})" < /dev/null`,
-              next:  `kimi --print --yolo -r {SID} -p "$(cat {P})" < /dev/null`, sid: /To resume this session: kimi -r ([a-f0-9-]+)/ },
-  deepseek: { first: `opencode run "$(cat {P})"`,
-              next:  `opencode run -c "$(cat {P})"`, env: join(homedir(), ".token-scrooge", ".env") },
-  opencode: { first: `opencode run "$(cat {P})"`,
-              next:  `opencode run -c "$(cat {P})"`, env: join(homedir(), ".token-scrooge", ".env") },
-  claude:   { first: `claude -p "$(cat {P})" --dangerously-skip-permissions`,
-              next:  `claude -c -p "$(cat {P})" --dangerously-skip-permissions` },
+  codex:    { first: `codex exec{M} --skip-git-repo-check --dangerously-bypass-approvals-and-sandbox "$(cat {P})" < /dev/null`,
+              next:  `codex exec resume --last{M} --skip-git-repo-check --dangerously-bypass-approvals-and-sandbox "$(cat {P})" < /dev/null`, mflag: " -m " },
+  gemini:   { first: `gemini --yolo{M} -p "$(cat {P})"`,
+              next:  `gemini --yolo{M} -r latest -p "$(cat {P})"`, mflag: " -m " },
+  kimi:     { first: `kimi --print --yolo{M} -p "$(cat {P})" < /dev/null`,
+              next:  `kimi --print --yolo{M} -r {SID} -p "$(cat {P})" < /dev/null`, mflag: " --model ", sid: /To resume this session: kimi -r ([a-f0-9-]+)/ },
+  deepseek: { first: `opencode run{M} "$(cat {P})"`,
+              next:  `opencode run -c{M} "$(cat {P})"`, mflag: " -m ", env: join(homedir(), ".token-scrooge", ".env") },
+  opencode: { first: `opencode run{M} "$(cat {P})"`,
+              next:  `opencode run -c{M} "$(cat {P})"`, mflag: " -m ", env: join(homedir(), ".token-scrooge", ".env") },
+  claude:   { first: `claude{M} -p "$(cat {P})" --dangerously-skip-permissions`,
+              next:  `claude -c{M} -p "$(cat {P})" --dangerously-skip-permissions`, mflag: " --model " },
 };
 const cli = CLI[AGENT];
 if (!cli) { console.error(`unknown agent '${AGENT}' (known: ${Object.keys(CLI).join(", ")})`); process.exit(1); }
@@ -53,14 +66,17 @@ if (!cli) { console.error(`unknown agent '${AGENT}' (known: ${Object.keys(CLI).j
 const RULES = `Rules: you are ${SESSION} on the agent-bus crew. Work your assigned file(s), report on the bus (relay_send, <280 chars), move your Kanban card as you go (doing -> testing -> done; run the tests in 'testing', use 'failed' + a report if they break). When your work for THIS message is finished, END YOUR TURN — do NOT park, do NOT loop relay_wait; the runner waits for you and will wake you with the next message.`;
 
 let sid = "";
-function runTurn(prompt, isFirst) {
+function runTurn(prompt, isFirst, trigger = "kickoff") {
+  TURN++; banner(trigger);
+  const t0 = Date.now();
   const pf = join(homedir(), ".agent-bus", `turn-${AGENT}-${PROJ}.txt`);
   appendFileSync(pf, "", { flag: "w" }); // truncate
   appendFileSync(pf, prompt);
   let cmd = (isFirst || (cli.sid && !sid)) ? cli.first : cli.next;
-  cmd = cmd.replaceAll("{P}", pf).replaceAll("{SID}", sid);
+  const mfrag = MODEL && cli.mflag ? `${cli.mflag}${MODEL}` : "";
+  cmd = cmd.replaceAll("{M}", mfrag).replaceAll("{P}", pf).replaceAll("{SID}", sid);
   if (cli.env && existsSync(cli.env)) cmd = `set -a; source ${cli.env}; set +a; ${cmd}`;
-  log(`turn starting (${isFirst ? "fresh session" : "resume"})`);
+  log(`turn starting (${isFirst ? "fresh session" : "resume"})${MODEL ? ` · model=${MODEL}` : ""}`);
   // inherit stdio so the window shows the agent working live; also capture for sid-parsing
   const r = spawnSync("/bin/bash", ["-c", cli.sid ? `${cmd} | tee /dev/stderr` : cmd], {
     cwd: DIR, encoding: "utf8", stdio: cli.sid ? ["ignore", "pipe", "inherit"] : "inherit",
@@ -68,7 +84,8 @@ function runTurn(prompt, isFirst) {
     maxBuffer: 16 * 1024 * 1024,
   });
   if (cli.sid && r.stdout) { const m = r.stdout.match(cli.sid); if (m) sid = m[1]; }
-  log(`turn ended (exit ${r.status})`);
+  telemetry({ ts: Date.now(), agent: AGENT, project: PROJ, turn: TURN, trigger, model: MODEL || "default", duration_ms: Date.now() - t0, exit: r.status });
+  log(`turn ended (exit ${r.status}, ${((Date.now() - t0) / 1000).toFixed(0)}s)`);
   return r.status;
 }
 
@@ -91,7 +108,8 @@ async function loadLessons() {
   try { const r = await api(`/inbox?session=${encodeURIComponent(SESSION)}&since=0`); cursor = r.cursor || 0; } catch {}
   await api("/register", { session: SESSION, project: PROJ, status: "crew member booting" }).catch(() => {});
 
-  runTurn(KICKOFF + LESSONS, true);
+  let pendingBcast = [];
+  runTurn(KICKOFF + LESSONS, true, "kickoff");
   log(`parked — long-polling the bus as ${SESSION} (free; this poll is also the heartbeat)`);
 
   while (true) {
@@ -102,14 +120,16 @@ async function loadLessons() {
     } catch (e) { log(`hub unreachable (${e.message}) — retrying in 5s`); await new Promise(s => setTimeout(s, 5000)); continue; }
     if (!msgs.length) continue;                       // heartbeat tick, nothing for us
     const direct = msgs.filter(m => m.to === SESSION);
-    const bcast = msgs.filter(m => m.to === "all");
-    if (!direct.length && !bcast.length) continue;
-    const lines = [...direct, ...bcast].map(m => `[${m.from}${m.to === "all" ? " -> all" : ""}]: ${m.text}`).join("\n");
-    const prompt = `NEW BUS MESSAGE${direct.length + bcast.length > 1 ? "S" : ""} for you:\n${lines}\n\n` +
-      (direct.length ? `Act on the message(s) addressed to you, then end your turn.` :
-        `These are broadcasts — act ONLY if one requires something from you (otherwise reply nothing and end your turn immediately).`) +
-      `\n\n${RULES}`;
-    await loadLessons(); runTurn(prompt + LESSONS, false);
+    const mentions = msgs.filter(m => m.to === "all" && (m.text.includes(`@${AGENT}`) || m.text.toLowerCase().includes(`${AGENT}:`)));
+    const bcast = msgs.filter(m => m.to === "all" && !mentions.includes(m));
+    pendingBcast.push(...bcast);                      // wake-policy: plain broadcasts batch, they don't wake
+    const wake = [...direct, ...mentions];
+    if (!wake.length) { if (bcast.length) log(`${bcast.length} broadcast(s) batched (no wake) — ${pendingBcast.length} pending`); continue; }
+    const ctx = pendingBcast.length ? `\nFYI broadcasts since your last turn (context only):\n${pendingBcast.map(m => `[${m.from} -> all]: ${m.text}`).join("\n")}\n` : "";
+    pendingBcast = [];
+    const lines = wake.map(m => `[${m.from}${m.to === "all" ? " -> all (mentions you)" : ""}]: ${m.text}`).join("\n");
+    const prompt = `NEW BUS MESSAGE${wake.length > 1 ? "S" : ""} for you:\n${lines}\n${ctx}\nAct on what's addressed to you, then end your turn.\n\n${RULES}`;
+    await loadLessons(); runTurn(prompt + LESSONS, false, direct.length ? "direct message" : "@mention");
     log("parked — waiting for the next message");
   }
 })();

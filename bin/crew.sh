@@ -45,7 +45,7 @@ down() {
 }
 [ "$CMD" = "down" ] && { down; exit 0; }
 [ "$CMD" != "up" ] && { echo "usage: crew.sh up <agent...> | crew.sh down"; exit 1; }
-[ $# -eq 0 ] && { echo "usage: crew.sh up codex gemini kimi deepseek (any subset)"; exit 1; }
+[ $# -eq 0 ] && { echo "usage: crew.sh up codex gemini kimi deepseek (any subset; agent:model pins a model, e.g. deepseek:deepseek-v4-pro)"; exit 1; }
 
 if [ "$(uname)" != "Darwin" ]; then
   echo "Window spawning is macOS-only. Run one per terminal, in $DIR:"
@@ -82,13 +82,15 @@ spawn_grid() {  # $@ = agents — (re)computes the grid for THIS batch and spawn
   [ $N -le 2 ] && COLS=1
   local ROWS=$(( (N + COLS - 1) / COLS ))
   local CW=$(( GW / COLS )) CH=$(( GH / ROWS ))
-  local i=0 AGENT
-  for AGENT in "$@"; do
+  local i=0 SPEC AGENT MODEL
+  for SPEC in "$@"; do
+    AGENT="${SPEC%%:*}"                       # agent[:model] — model rides in as CREW_MODEL
+    MODEL=""; [ "$SPEC" != "$AGENT" ] && MODEL="${SPEC#*:}"
     local C=$(( i % COLS )) R=$(( i / COLS ))
     local X1=$(( GX + C * CW )) Y1=$(( GY + R * CH ))
     osascript \
       -e 'tell application "Terminal"' \
-      -e "  set w to do script \"cd $DIR && clear && node $BUS_DIR/bin/crew-runner.mjs $AGENT $DIR\"" \
+      -e "  set w to do script \"cd $DIR && clear && CREW_MODEL=$MODEL node $BUS_DIR/bin/crew-runner.mjs $AGENT $DIR\"" \
       -e "  set custom title of w to \"$(echo "$AGENT" | tr '[:lower:]' '[:upper:]') — agent-bus crew\"" \
       -e "  set theWin to first window whose tabs contains w" \
       -e "  set bounds of theWin to {$X1, $Y1, $(( X1 + CW )), $(( Y1 + CH ))}" \
@@ -103,7 +105,8 @@ echo "— spawning crew (serialized) —"
 spawn_grid "$@"
 
 echo "— verifying on the bus (the spawn is not the truth; the bus is) —"
-VER=$(node "$BUS_DIR/bin/crew-verify.mjs" "$PROJ" "$@" --timeout 30)
+AGENTS_ONLY=$(for a in "$@"; do printf "%s " "${a%%:*}"; done)
+VER=$(node "$BUS_DIR/bin/crew-verify.mjs" "$PROJ" $AGENTS_ONLY --timeout 30)
 echo "$VER"
 RETRY=$(echo "$VER" | grep "^FAILED:" | cut -d: -f2 | tr ',' ' ')
 if [ -n "${RETRY// }" ]; then
