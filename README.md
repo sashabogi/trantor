@@ -24,6 +24,29 @@ they know about each other, share status, hand off work, and message in real tim
 
 ---
 
+## One system: brain × body
+
+agent-bus pairs with [**Scrooge**](https://github.com/sashabogi/token-scrooge) as a single
+orchestration system — Scrooge is the **brain** (capability-weighted model routing, the cost
+ledger, per-model lessons), agent-bus is the **body** (stateful crews in their own context
+windows, presence, the testing gate, handoffs, the dashboard). Full design: [docs/UNIFIED.md](./docs/UNIFIED.md).
+
+- **Declare your plans once:** `node bin/profile.mjs set claude=max codex=plus deepseek=api …`
+- **The Advisor** (`relay_advise`): before a build, the orchestrator weighs task shape × your
+  plan economics × context horizon and recommends `solo | scrooge | crew | hybrid` with
+  per-package model routing and a real-money estimate — and tells you why, in one paragraph.
+- **Quota pooling:** a crew spreads one build across your separate subscription buckets
+  (Claude + ChatGPT + Kimi + Gemini), with only true API lines costing real money. Proven:
+  a five-vendor 3D game build, API-equivalent ~$200–600, actual spend **$2.29**.
+- **Fractal delegation** (`relay_scrooge`): the architect *and* crew members push grunt
+  one-shots to cheap models with ledger receipts. Routing all the way down.
+- **Model pins:** `crew.sh up codex:gpt-5.5 deepseek:deepseek-v4-pro` — the Advisor's routing
+  is executable.
+- **The dashboard is the ledger's face:** live 🪙 spend/savings, per-card difficulty badges,
+  per-agent quota pools, and card history ("↩ bounced" — a demoted card looks demoted).
+
+---
+
 ## Why this exists
 
 Every AI coding CLI runs each terminal session in its own bubble. Two sessions you start separately —
@@ -94,8 +117,11 @@ Once the plugin is installed, each session has these MCP tools:
 | `relay_wait(timeout)` | Block until a message arrives (returns instantly on delivery). Park on a high timeout to idle cheaply and wake instantly. |
 | `relay_whoami` | Your session id + the hub you're on. |
 | `relay_project_brief(text)` | Set your project's one-line brief on the dashboard (what it is + why + the goal). |
-| `relay_task_add(title, status?, assignee?)` | Add a Kanban card to your project's board (defaults: assigned to you, `todo`). |
-| `relay_task_move(id, status)` | Move a card → `todo` / `doing` / `done` / `blocked` as you progress. |
+| `relay_task_add(title, status?, assignee?, difficulty?)` | Add a Kanban card (difficulty drives routing + shows as a badge). |
+| `relay_task_move(id, status)` | Move a card → `todo` → `doing` → `testing` → `done` (the gate: tests run in `testing`; `failed` pulses red) / `blocked`. |
+| `relay_advise(task, packages, horizon?)` | **The Advisor** — recommended mode (solo/scrooge/crew/hybrid) + model routing + cost estimate from your quota profile. |
+| `relay_scrooge(prompt, task?, difficulty?)` | Fractal delegation: push a stateless one-shot to a cheap model, get the output + ledger receipt. |
+| `relay_lesson(text, scope?)` | Record a failure lesson (global or per-agent) — auto-injected into every future crew's prompts. |
 | `relay_board` | Show your project's full board (cards + status + assignee). |
 | `relay_handoff(summary)` | Write a rich context handoff so a fresh session can take over a full window. |
 

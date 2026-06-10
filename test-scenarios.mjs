@@ -68,6 +68,40 @@ try {
   ok("kimi sees global + own lessons", forKimi.length === 2);
   ok("codex sees only global", forCodex.length === 1);
 
+  console.log("scenario: difficulty + history + bounce trail");
+  const { task: t2 } = await api("/task", { project: "proj", title: "hist", assignee: "kimi:proj", difficulty: "hard", by: "arch" });
+  ok("difficulty stored", t2.difficulty === "hard");
+  ok("creation in history", t2.history?.length === 1 && t2.history[0].to === "todo");
+  for (const st of ["doing", "testing", "done"]) await api("/task/update", { id: t2.id, status: st, by: "kimi:proj" });
+  await api("/task/update", { id: t2.id, status: "doing", by: "arch" });   // the bounce
+  const t2b = (await api("/tasks?project=proj")).tasks.find(t => t.id === t2.id);
+  const lastH = t2b.history.at(-1);
+  ok("bounce recorded with attribution", lastH.from === "done" && lastH.to === "doing" && lastH.by === "arch");
+  ok("bogus difficulty ignored", (await api("/task/update", { id: t2.id, difficulty: "impossible" })).task.difficulty === "hard");
+
+  console.log("scenario: /economics shape (ledger may be absent in sandbox HOME)");
+  const ec = await api("/economics");
+  ok("economics responds with profile+scrooge keys", "profile" in ec && "scrooge" in ec);
+
+  console.log("scenario: advisor — plan economics drive the mode");
+  const { advise } = await import(join(ROOT, "bin/advise.mjs"));
+  const world = (prof) => ({ profile: { providers: prof }, registry: { models: { "deepseek-v4-flash": { provider: "deepseek", cost_in: 0.14, cost_out: 0.28, good_for: ["code"] } }, tasks: {} }, caps: { "deepseek-v4-flash": { coding: 38 } }, agents: ["codex", "gemini", "kimi", "deepseek"], scrooge: true });
+  const pk = (n, d = "medium") => Array.from({ length: n }, (_, i) => ({ title: "p" + i, difficulty: d }));
+  ok("api-billed orchestrator → crew even for 2 packages",
+     advise({ packages: pk(2) }, world({ claude: { tier: "api" } })).mode !== "solo");
+  ok("capped-sub orchestrator → crew for 2 packages",
+     ["crew", "hybrid"].includes(advise({ packages: pk(2) }, world({ claude: { tier: "capped-sub" } })).mode));
+  ok("high-sub orchestrator → solo for 2 small mediums",
+     advise({ packages: pk(2) }, world({ claude: { tier: "high-sub" } })).mode === "solo");
+  ok("high-sub + hard packages → crew",
+     advise({ packages: pk(3, "hard") }, world({ claude: { tier: "high-sub" } })).mode === "crew");
+  const hy = advise({ packages: [...pk(3, "hard"), ...pk(2, "easy")] }, world({ claude: { tier: "high-sub" } }));
+  ok("easy packages peel off to scrooge (hybrid)", hy.mode === "hybrid" && hy.routing.filter(r => r.executor === "scrooge").length === 2);
+  ok("single easy package → scrooge inline",
+     advise({ packages: pk(1, "easy") }, world({ claude: { tier: "high-sub" } })).mode === "scrooge");
+  ok("hard packages route to frontier agents first",
+     advise({ packages: pk(2, "hard") }, world({ claude: { tier: "api" } })).routing.every(r => ["codex", "gemini"].includes(r.executor)));
+
   console.log("scenario: messages carry their project for the dashboard lanes");
   await api("/send", { from: "kimi:proj", to: "all", text: "hello" });
   const last = (await api("/recent?limit=1")).messages.at(-1);
