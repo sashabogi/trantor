@@ -56,6 +56,30 @@ main{flex:1;display:grid;grid-template-columns:1fr 330px;min-height:0}
 .tcard.done{opacity:.65}.tcard.done span{text-decoration:line-through}
 .empty{color:var(--dim);text-align:center;padding:30px}
 .empty.big{padding:60px 20px;font-size:15px}
+/* flow (DAG) view */
+.vtog{display:flex;gap:2px;margin-left:10px}
+.vbtn{font-size:10px;font-weight:700;letter-spacing:.05em;padding:2px 9px;border-radius:10px;border:1px solid var(--line);background:var(--card);color:var(--dim);cursor:pointer}
+.vbtn.on{color:var(--grn);border-color:#1d4a44;background:#0f1d1b}
+.flowwrap{padding:14px 16px;overflow:auto}
+.flowwrap svg{display:block}
+.fnode{cursor:pointer}
+.fnode rect{fill:var(--card);stroke:var(--line);stroke-width:1.4;rx:9}
+.fnode.todo rect{stroke:#3a4458}
+.fnode.doing rect{stroke:var(--blu);filter:drop-shadow(0 0 5px rgba(74,144,217,.45))}
+.fnode.testing rect{stroke:var(--amb);filter:drop-shadow(0 0 5px rgba(245,158,11,.4))}
+.fnode.done rect{stroke:var(--grn);fill:#0f1d1b}
+.fnode.blocked rect{stroke:var(--red)}
+.fnode.failed rect{stroke:var(--red);animation:fpulse 1.1s ease-in-out infinite}
+@keyframes fpulse{0%,100%{filter:drop-shadow(0 0 0 rgba(239,106,106,0))}50%{filter:drop-shadow(0 0 9px rgba(239,106,106,.8))}}
+.fnode text{fill:var(--tx);font-size:11.5px;font-family:ui-sans-serif,system-ui}
+.fnode .fmeta{fill:var(--dim);font-size:9.5px}
+.fnode.done .ftitle{fill:#7d9b95;text-decoration:line-through}
+.fedge{fill:none;stroke:#2b3650;stroke-width:1.6}
+.fedge.done{stroke:var(--grn2);opacity:.8}
+.fedge.active{stroke:var(--blu);stroke-dasharray:6 5;animation:fdash 1s linear infinite}
+@keyframes fdash{to{stroke-dashoffset:-11}}
+.floop{fill:none;stroke:var(--red);stroke-width:1.4;opacity:.85}
+.floopn{fill:var(--red);font-size:9px;font-weight:700}
 /* per-project inter-agent conversation lane */
 .proj-chat{margin:4px 16px 14px;border:1px solid var(--line);border-radius:10px;background:#0c111c}
 .proj-chat h5{margin:0;padding:7px 11px;font-size:10px;text-transform:uppercase;letter-spacing:.09em;color:var(--dim);border-bottom:1px solid var(--line);display:flex;align-items:center;gap:6px}
@@ -140,6 +164,65 @@ async function econ(){
 }
 econ();setInterval(econ,15000);
 function poolOf(session){const b=brandOf(session);const k=b==='anthropic'?'claude':b==='openai'?'codex':b==='moonshot'?'kimi':b;return POOLS[k]||'';}
+const VIEWS = JSON.parse(localStorage.getItem("abViews") || "{}");
+function setView(proj, v){ VIEWS[proj] = v; localStorage.setItem("abViews", JSON.stringify(VIEWS)); render(); }
+function flowLayout(cards){
+  const byId = Object.fromEntries(cards.map(t => [t.id, t]));
+  // synthesize edges when none are set: integration-ish cards depend on everything else
+  let anyDeps = cards.some(t => (t.deps || []).length);
+  const deps = t => {
+    if (anyDeps) return (t.deps || []).filter(d => byId[d]);
+    if (/integrat|assemb|ship it|final/i.test(t.title)) return cards.filter(o => o.id !== t.id).map(o => o.id);
+    return [];
+  };
+  const L = {};
+  const layer = (t, seen = new Set()) => {
+    if (L[t.id] !== undefined) return L[t.id];
+    if (seen.has(t.id)) return (L[t.id] = 0);
+    seen.add(t.id);
+    const ds = deps(t);
+    return (L[t.id] = ds.length ? 1 + Math.max(...ds.map(d => layer(byId[d], seen))) : 0);
+  };
+  cards.forEach(t => layer(t));
+  const cols = {};
+  cards.forEach(t => (cols[L[t.id]] ||= []).push(t));
+  const NW = 190, NH = 64, GX = 70, GY = 26;
+  const nodes = {}, maxRows = Math.max(...Object.values(cols).map(c => c.length));
+  const totalH = maxRows * (NH + GY) - GY;
+  for (const [li, col] of Object.entries(cols)) {
+    const colH = col.length * (NH + GY) - GY, y0 = (totalH - colH) / 2;
+    col.forEach((t, ri) => { nodes[t.id] = { t, x: li * (NW + GX), y: y0 + ri * (NH + GY) }; });
+  }
+  const edges = [];
+  cards.forEach(t => deps(t).forEach(d => edges.push([d, t.id])));
+  return { nodes, edges, NW, NH, W: (Math.max(...cards.map(t => L[t.id])) + 1) * (NW + GX) - GX, H: totalH };
+}
+function flowHTML(pt){
+  if (!pt.length) return '<div class="empty">no cards yet</div>';
+  const { nodes, edges, NW, NH, W, H } = flowLayout(pt);
+  const PAD = 18;
+  let svg = `<svg width="${W + PAD * 2}" height="${H + PAD * 2 + 14}" viewBox="${-PAD} ${-PAD} ${W + PAD * 2} ${H + PAD * 2 + 14}">`;
+  svg += `<defs><marker id="arr" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="#2b3650"/></marker><marker id="arrg" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="#14b8a6"/></marker><marker id="arrb" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="#4a90d9"/></marker></defs>`;
+  for (const [a, b] of edges) {
+    const A = nodes[a], B = nodes[b]; if (!A || !B) continue;
+    const x1 = A.x + NW, y1 = A.y + NH / 2, x2 = B.x, y2 = B.y + NH / 2, mx = (x1 + x2) / 2;
+    const cls = A.t.status === "done" ? "done" : (B.t.status === "doing" || B.t.status === "testing") ? "active" : "";
+    const mk = cls === "done" ? "arrg" : cls === "active" ? "arrb" : "arr";
+    svg += `<path class="fedge ${cls}" marker-end="url(#${mk})" d="M${x1},${y1} C${mx},${y1} ${mx},${y2} ${x2},${y2}"/>`;
+  }
+  for (const { t, x, y } of Object.values(nodes)) {
+    const bounces = (t.history || []).filter(h => ({todo:0,doing:1,testing:2,done:3}[h.to] ?? 0) < ({todo:0,doing:1,testing:2,done:3}[h.from] ?? 0)).length;
+    svg += `<g class="fnode ${t.status}" data-id="${t.id}" transform="translate(${x},${y})">`;
+    svg += `<rect width="${NW}" height="${NH}" rx="9"/>`;
+    svg += `<text class="ftitle" x="10" y="20">${esc(t.title.slice(0, 26))}${t.title.length > 26 ? "…" : ""}</text>`;
+    svg += `<text class="fmeta" x="10" y="37">${esc(String(t.assignee || "").split(":")[0])}${t.difficulty ? " · " + t.difficulty : ""}${t.model ? " · " + esc(t.model.slice(0, 16)) : ""}</text>`;
+    svg += `<text class="fmeta" x="10" y="53">${t.status}</text>`;
+    if (bounces) svg += `<path class="floop" marker-end="url(#arr)" d="M${NW - 34},0 C${NW - 34},-16 ${NW - 6},-16 ${NW - 6},-1"/><text class="floopn" x="${NW - 30}" y="-7">↩${bounces}</text>`;
+    svg += `</g>`;
+  }
+  svg += `</svg>`;
+  return `<div class="flowwrap">${svg}</div>`;
+}
 function projOf(m){return m.project||(String(m.from).includes(':')?String(m.from).split(':').pop():'');}
 function chatLane(msgs){
   if(!msgs.length)return `<div class="proj-chat"><h5><span class="lc"></span>conversation</h5><div class="chatempty">no messages yet — agents talk here as they coordinate</div></div>`;
@@ -187,18 +270,21 @@ async function render(){
     const ph=p.phase||'';
     const brief=p.brief?`<span class="brief">${esc(p.brief)}</span>`:`<span class="brief dim">— no brief yet · an agent sets it with relay_project_brief</span>`;
     const pmsgs=msgs.filter(m=>projOf(m)===p.project);
+    const view = VIEWS[p.project] || "board";
+    const vtog = `<div class="vtog"><button class="vbtn ${view==="board"?"on":""}" data-proj="${esc(p.project)}" data-view="board">BOARD</button><button class="vbtn ${view==="flow"?"on":""}" data-proj="${esc(p.project)}" data-view="flow">FLOW</button></div>`;
     return `<div class="proj">`+
-      `<div class="proj-h"><span class="pname">📁 <b>${esc(p.project)}</b></span><div class="agents">${agents||'<span class="dim">no agents</span>'}</div><span class="spacer"></span><span class="prog">${done}/${pt.length} done · ${pct}%</span></div>`+
+      `<div class="proj-h"><span class="pname">📁 <b>${esc(p.project)}</b></span>${vtog}<div class="agents">${agents||'<span class="dim">no agents</span>'}</div><span class="spacer"></span><span class="prog">${done}/${pt.length} done · ${pct}%</span></div>`+
       `<div class="proj-brief">${brief}${ph?`<span class="phase ${phaseClass(ph)}">${esc(ph)}</span>`:''}</div>`+
       `<div class="pbar"><i style="width:${pct}%"></i></div>`+
-      `<div class="kanban">${cols}</div>`+
+      (view === "flow" ? flowHTML(pt) : `<div class="kanban">${cols}</div>`)+
       chatLane(pmsgs)+
     `</div>`;
   }).join('');
   // keep each project's chat scrolled to the latest line
   el.querySelectorAll('.chatlog').forEach(c=>c.scrollTop=c.scrollHeight);
   // click a card -> advance status todo->doing->done
-  el.querySelectorAll('.tcard').forEach(c=>c.onclick=async()=>{
+  el.querySelectorAll('.vbtn').forEach(b=>b.onclick=()=>setView(b.dataset.proj,b.dataset.view));
+  el.querySelectorAll('.tcard, .fnode').forEach(c=>c.onclick=async()=>{
     const id=+c.dataset.id,t=tasks.find(x=>x.id===id);if(!t)return;
     const next={todo:'doing',doing:'testing',testing:'done',failed:'doing',done:'todo',blocked:'doing'}[t.status];
     await fetch('/task/update',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({id,status:next})});render();

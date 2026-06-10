@@ -111,6 +111,14 @@ try {
   ok("hard packages route to frontier agents first",
      advise({ packages: pk(2, "hard") }, world({ claude: { tier: "api" } })).routing.every(r => ["codex", "gemini"].includes(r.executor)));
 
+  console.log("scenario: deps — the flow-view edge primitive");
+  const { task: dep1 } = await api("/task", { project: "proj", title: "shipv2", by: "arch" });
+  const { task: dep2 } = await api("/task", { project: "proj", title: "integration v2", deps: [dep1.id, dep1.id, -3, "x"], by: "arch" });
+  ok("deps dedupe + validate", JSON.stringify(dep2.deps) === JSON.stringify([dep1.id]));
+  await api("/task/update", { id: dep2.id, deps: [dep1.id, dep2.id] });
+  const dep2b = (await api("/tasks?project=proj")).tasks.find(t => t.id === dep2.id);
+  ok("self-dep rejected on update", JSON.stringify(dep2b.deps) === JSON.stringify([dep1.id]));
+
   console.log("scenario: messages carry their project for the dashboard lanes");
   await api("/send", { from: "kimi:proj", to: "all", text: "hello" });
   const last = (await api("/recent?limit=1")).messages.at(-1);

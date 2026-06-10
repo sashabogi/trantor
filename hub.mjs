@@ -72,6 +72,7 @@ const server = http.createServer(async (req, res) => {
         assignee: b.assignee || "", status: st0,
         difficulty: ["easy","medium","hard"].includes(b.difficulty) ? b.difficulty : "",
         model: String(b.model || "").slice(0, 60),
+        deps: Array.isArray(b.deps) ? [...new Set(b.deps.map(Number).filter(n => Number.isInteger(n) && n > 0))].slice(0, 20) : [],
         by: b.by || "", ts: now(), updated: now(),
         history: [{ to: st0, by: b.by || "", ts: now() }] };
       state.tasks.push(t); if (state.tasks.length > 2000) state.tasks.splice(0, 500);
@@ -87,6 +88,7 @@ const server = http.createServer(async (req, res) => {
       }
       if (b.difficulty && ["easy","medium","hard"].includes(b.difficulty)) t.difficulty = b.difficulty;
       if (b.model !== undefined) t.model = String(b.model).slice(0, 60);
+      if (Array.isArray(b.deps)) t.deps = [...new Set(b.deps.map(Number).filter(n => Number.isInteger(n) && n > 0 && n !== t.id))].slice(0, 20);
       if (b.assignee !== undefined) t.assignee = b.assignee;
       if (b.title !== undefined) t.title = String(b.title).slice(0,200);
       if (b.delete) state.tasks = state.tasks.filter(x => x.id !== t.id);
