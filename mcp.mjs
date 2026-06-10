@@ -8,7 +8,8 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
 import { join, basename } from "node:path";
 import { homedir, hostname } from "node:os";
-import { execSync } from "node:child_process";
+import { execSync, spawnSync } from "node:child_process";
+import { advise } from "./bin/advise.mjs";
 import { z } from "zod";
 
 function relayUrl() {
@@ -62,6 +63,26 @@ server.tool("relay_project_brief", "Set a one-paragraph brief for THIS project s
   async ({ brief }) => {
     await api("POST", "/project", { project: PROJECT, brief, by: SESSION });
     return { content: [{ type: "text", text: `brief set for ${PROJECT}` }] };
+  });
+
+server.tool("relay_advise", "THE ADVISOR — ask the brain how to execute a body of work before spending tokens. Give it your work packages (with difficulty); it weighs task shape x the user's plan economics x context horizon and returns: mode (solo|scrooge|crew|hybrid), per-package executor+model routing, and a real-money estimate with quota-pool accounting. Call this at project kickoff and PRESENT the summary to the user before firing anything up.",
+  { task: z.string().describe("one-line description of the overall job"),
+    packages: z.array(z.object({ title: z.string(), difficulty: z.enum(["easy","medium","hard"]).optional(), kind: z.string().optional() })).describe("the work packages you'd cut as cards"),
+    horizon: z.enum(["short","medium","long"]).optional().describe("how long this build will run (default inferred from package count)") },
+  async ({ task, packages, horizon }) => {
+    const out = advise({ task, packages, horizon });
+    return { content: [{ type: "text", text: JSON.stringify(out, null, 2) }] };
+  });
+
+server.tool("relay_scrooge", "Delegate a SMALL, SELF-CONTAINED piece of grunt work (draft a function, summarize, extract, classify, boilerplate) to a cheap external model via Scrooge — costs a fraction of a cent and keeps the result OUT of expensive context where possible. Returns the model's output plus the ledger receipt. Use for stateless one-shots; use the crew for anything stateful or large.",
+  { prompt: z.string().describe("the complete, self-contained task (include all needed context — the cheap model sees ONLY this)"),
+    task: z.string().optional().describe("scrooge task type: code, summarize, extract, draft, verify, reason, cheap (default code)"),
+    difficulty: z.enum(["easy","medium","hard"]).optional() },
+  async ({ prompt, task, difficulty }) => {
+    const r = spawnSync("scrooge", ["-t", task || "code", "-d", difficulty || "easy"], { input: prompt, encoding: "utf8", timeout: 120000, maxBuffer: 8 * 1024 * 1024 });
+    if (r.error || r.status !== 0) return { content: [{ type: "text", text: `scrooge failed: ${r.error?.message || r.stderr?.slice(-300) || "exit " + r.status}` }] };
+    const receipt = (r.stderr || "").split("\n").filter(l => l.includes("\u{1FA99}") || l.includes("scrooge")).slice(-1)[0] || "";
+    return { content: [{ type: "text", text: `${r.stdout.trim()}\n\n[receipt] ${receipt.trim()}` }] };
   });
 
 server.tool("relay_lesson", "Record a LESSON learned from a failure so future crews avoid it — injected into agents' kickoff prompts automatically. Use when you diagnose a recurring or preventable failure. scope: 'global' (applies to every agent) or an agent brand ('kimi','codex','gemini','deepseek') when it's that CLI's quirk.",
