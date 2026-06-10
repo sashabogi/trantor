@@ -45,9 +45,9 @@ server.tool("relay_whoami", "Show this session's relay identity, project, and th
 });
 
 server.tool("relay_task_add", "Add a Kanban card to THIS project's board on the dashboard (what you're about to work on). Defaults: assigned to you, status 'todo'. Keep the team's progress visible.",
-  { title: z.string().describe("short task title"), status: z.enum(["todo","doing","testing","failed","done","blocked"]).optional(), assignee: z.string().optional().describe("session id to assign (default: you)"), difficulty: z.enum(["easy","medium","hard"]).optional().describe("difficulty tag — drives model/agent routing (relay_advise) and shows on the board") },
-  async ({ title, status, assignee, difficulty }) => {
-    const { task } = await api("POST", "/task", { project: PROJECT, title, status: status || "todo", assignee: assignee || SESSION, difficulty, by: SESSION });
+  { title: z.string().describe("short task title"), status: z.enum(["todo","doing","testing","failed","done","blocked"]).optional(), assignee: z.string().optional().describe("session id to assign (default: you)"), difficulty: z.enum(["easy","medium","hard"]).optional().describe("difficulty tag — drives model/agent routing (relay_advise) and shows on the board"), model: z.string().optional().describe("the model this card is routed to (from relay_advise routing, or the CLI default) — shown on the card") },
+  async ({ title, status, assignee, difficulty, model }) => {
+    const { task } = await api("POST", "/task", { project: PROJECT, title, status: status || "todo", assignee: assignee || SESSION, difficulty, model, by: SESSION });
     return { content: [{ type: "text", text: `card #${task.id} added to ${PROJECT}: "${title}" [${task.status}]` }] };
   });
 

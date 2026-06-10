@@ -17,11 +17,16 @@ your context burns at coordination rate, never work rate.
 ## Phase −1 — THE ADVISOR MOMENT (always, before spending anything)
 Cut the work into packages, tag each `easy|medium|hard`, then call
 `relay_advise(task, packages, horizon)`. It weighs task shape × the user's declared plan
-economics (quota profile) × context horizon and returns mode + routing + a real-money
-estimate. **Present its summary to the user in one paragraph and get a go** — e.g. *"You're
-on a capped plan; 6 packages — recommend HYBRID: codex/gemini take the hard ones, deepseek
-the mediums (~$0.40 real), readme goes to Scrooge. Fire it up?"* If the profile is unset,
-say so and suggest `node bin/profile.mjs set claude=… codex=…`.
+economics (quota profile) × context horizon and returns mode + per-package routing — each
+route carries a `reason`, and `crew.why` explains the SEAT COUNT (seats follow the work,
+not the install list). **Never present a bare go/no-go.** Show the user the full picture:
+1. The mode + the `why` bullets.
+2. The routing TABLE: package | difficulty | executor (model) | pool | est $ | reason.
+3. The crew-size line (`crew.why`) — how many seats and WHY that many (and which installed
+   CLIs stay idle).
+4. The real-money total + which quota pools absorb the rest.
+THEN ask go / adjust / hold. If the profile is unset, say so and suggest
+`node bin/profile.mjs set claude=… codex=…`.
 
 ## Phase 0 — plan (if the user wants a plan first)
 PRD.md + TDD.md. The TDD MUST define one file-set per agent (no merge conflicts) and an
@@ -29,8 +34,9 @@ explicit EVENT/INTERFACE CONTRACT — cross-agent bugs come from contract drift.
 
 ## Phase 1 — board setup
 1. `relay_project_brief("<what + why + goal>")`
-2. One card per package: `relay_task_add(title, assignee, difficulty)` — difficulty shows on
-   the board and justifies the routing. Assignees: `codex:<project>` etc. Keep one for yourself.
+2. One card per package: `relay_task_add(title, assignee, difficulty, model)` — set `model`
+   to the advisor-routed model (or the CLI's default name); difficulty + model show as badges
+   on the card. Assignees: `codex:<project>` etc. Keep one for yourself.
 3. Open the dashboard: `open -na "Google Chrome" --args --new-window <hub-url>`
 
 ## Phase 2 — fire up the crew (with the Advisor's models)
