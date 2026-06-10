@@ -162,7 +162,9 @@ const server = http.createServer(async (req, res) => {
       return json(res, 200, { lessons: ls });
     }
     if (req.method === "POST" && P === "/send") {
-      const b = await body(req); touch(b.from);
+      const b = await body(req);
+      if (!b.from || !String(b.text ?? "").trim()) return json(res, 400, { error: "from and non-empty text required" });
+      touch(b.from);
       // attribute the message to a project so the dashboard can show it in that project's lane.
       // explicit b.project wins; else the sender's known project; else parsed from a "host:project" id.
       const fromProj = state.peers[b.from]?.project || (b.from && b.from.includes(":") ? b.from.split(":").pop() : "");

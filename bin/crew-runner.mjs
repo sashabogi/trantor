@@ -25,6 +25,8 @@ function hubUrl() {
   return "http://127.0.0.1:4477";
 }
 const HUB = hubUrl();
+process.on("uncaughtException", (e) => { console.log(`\x1b[31m[runner] UNCAUGHT: ${e?.stack || e}\x1b[0m`); });
+process.on("unhandledRejection", (e) => { console.log(`\x1b[31m[runner] UNHANDLED REJECTION: ${e?.stack || e}\x1b[0m`); });
 const log = (s) => console.log(`\x1b[38;5;43m[runner]\x1b[0m ${s}`);
 const LOGDIR = join(homedir(), ".agent-bus", "logs");
 import { mkdirSync } from "node:fs";
