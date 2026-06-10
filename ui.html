@@ -52,6 +52,7 @@ main{flex:1;display:grid;grid-template-columns:1fr 330px;min-height:0}
 .diff{font-size:9px;font-weight:800;letter-spacing:.04em;padding:1px 5px;border-radius:8px;margin-left:5px;vertical-align:1px}
 .diff.easy{background:#13302b;color:#2dd4bf}.diff.medium{background:#2c2a17;color:#f5d90b}.diff.hard{background:#33181f;color:#ff7a90}
 .bounce{display:inline-block;font-size:9.5px;font-weight:700;color:#ef6a6a;background:#2a1517;border:1px solid #5a2c2c;border-radius:8px;padding:1px 6px;margin-left:5px}
+.mdl{font-size:9px;font-family:ui-monospace,monospace;color:#8fa3be;background:#16202f;border:1px solid #243049;border-radius:7px;padding:1px 5px;margin-left:4px;vertical-align:1px}
 .tcard.done{opacity:.65}.tcard.done span{text-decoration:line-through}
 .empty{color:var(--dim);text-align:center;padding:30px}
 .empty.big{padding:60px 20px;font-size:15px}
@@ -180,7 +181,7 @@ async function render(){
         const rank={todo:0,doing:1,testing:2,done:3};
         const bounced=last&&last.from!==undefined&&rank[last.to]<rank[last.from]&&(Date.now()-last.ts)<10*60*1000;
         const trail=hist.map(h=>`${h.from?h.from+'→':''}${h.to}${h.by?' by '+String(h.by).split(':')[0]:''} @${new Date(h.ts).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'})}`).join('\n');
-        return `<div class="tcard ${t.status}" data-id="${t.id}" title="${esc(trail)||'click to advance'}"><span>${esc(t.title)}</span>${t.difficulty?`<span class="diff ${t.difficulty}">${t.difficulty[0].toUpperCase()}</span>`:''}${bounced?`<span class="bounce">↩ bounced${last.by?' by '+esc(String(last.by).split(':')[0]):''}</span>`:''}${t.assignee?`<div class="who">${iconFor(t.assignee,12)}@${esc(t.assignee)}</div>`:''}</div>`;
+        return `<div class="tcard ${t.status}" data-id="${t.id}" title="${esc(trail)||'click to advance'}"><span>${esc(t.title)}</span>${t.difficulty?`<span class="diff ${t.difficulty}">${t.difficulty[0].toUpperCase()}</span>`:''}${t.model?`<span class="mdl">${esc(t.model)}</span>`:''}${bounced?`<span class="bounce">↩ bounced${last.by?' by '+esc(String(last.by).split(':')[0]):''}</span>`:''}${t.assignee?`<div class="who">${iconFor(t.assignee,12)}@${esc(t.assignee)}</div>`:''}</div>`;
       })()).join('')}</div>`;
     }).join('');
     const ph=p.phase||'';

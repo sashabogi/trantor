@@ -71,6 +71,7 @@ const server = http.createServer(async (req, res) => {
       const t = { id: ++state.taskSeq, project: String(b.project || "").slice(0,80), title: String(b.title||"").slice(0,200),
         assignee: b.assignee || "", status: st0,
         difficulty: ["easy","medium","hard"].includes(b.difficulty) ? b.difficulty : "",
+        model: String(b.model || "").slice(0, 60),
         by: b.by || "", ts: now(), updated: now(),
         history: [{ to: st0, by: b.by || "", ts: now() }] };
       state.tasks.push(t); if (state.tasks.length > 2000) state.tasks.splice(0, 500);
@@ -85,6 +86,7 @@ const server = http.createServer(async (req, res) => {
         t.status = b.status;
       }
       if (b.difficulty && ["easy","medium","hard"].includes(b.difficulty)) t.difficulty = b.difficulty;
+      if (b.model !== undefined) t.model = String(b.model).slice(0, 60);
       if (b.assignee !== undefined) t.assignee = b.assignee;
       if (b.title !== undefined) t.title = String(b.title).slice(0,200);
       if (b.delete) state.tasks = state.tasks.filter(x => x.id !== t.id);

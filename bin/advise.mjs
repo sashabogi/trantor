@@ -75,9 +75,10 @@ export function advise(input, world = loadWorld()) {
       const m = scroogeModelFor(registry, caps, p.kind, p.difficulty);
       const tok = FORECAST.easy;
       const cost = m ? +(tok * 0.6 * m.cost_in / 1e6 + tok * 0.4 * m.cost_out / 1e6).toFixed(3) : null;
-      return { ...p, executor: "scrooge", model: m?.model, pool: "api", est_cost_usd: cost };
+      return { ...p, executor: "scrooge", model: m?.model, pool: "api", est_cost_usd: cost,
+        reason: `easy + stateless → cheapest capable model (${m?.model}); not worth a crew seat` };
     }
-    if (mode === "solo") return { ...p, executor: "orchestrator", pool: tierOf(profile, "claude") };
+    if (mode === "solo") return { ...p, executor: "orchestrator", pool: tierOf(profile, "claude"), reason: "small enough to do inline" };
     const pref = CREW_PREF[p.difficulty].filter(a => agents.includes(a));
     const agent = pref.sort((a, b) => (used[a] || 0) - (used[b] || 0))[0] || "deepseek";
     used[agent] = (used[agent] || 0) + 1;
@@ -87,8 +88,20 @@ export function advise(input, world = loadWorld()) {
       const m = registry.models?.["deepseek-v4-flash"] || { cost_in: 0.14, cost_out: 0.28 };
       est = +((FORECAST[p.difficulty] * 0.85 * m.cost_in + FORECAST[p.difficulty] * 0.15 * m.cost_out) / 1e6).toFixed(2);
     }
-    return { ...p, executor: agent, pool, est_cost_usd: est };
+    const why_r = p.difficulty === "hard"
+      ? `hard → strongest available coder (${agent}); its ${pool} pool means ${pool === "api" ? "real $ but cheapest capable" : "$0 marginal on existing quota"}`
+      : p.difficulty === "medium"
+        ? `medium → solid mid-tier (${agent}) keeps frontier seats free for hard work; ${pool === "api" ? "metered" : "quota"} pool`
+        : `easy → cheapest seat (${agent})`;
+    return { ...p, executor: agent, pool, est_cost_usd: est, reason: why_r };
   });
+  // crew-size rationale: seats are EMERGENT from the work, and we say so
+  const seats = [...new Set(routing.filter(r => !["scrooge", "orchestrator"].includes(r.executor)).map(r => r.executor))];
+  const crew = {
+    seats: seats.length, of_available: agents.length, members: seats,
+    why: seats.length === 0 ? "no crew needed" :
+      `${routing.filter(r => seats.includes(r.executor)).length} crew-bound package(s) → ${seats.length} seat(s), one per concurrent work stream (load-balanced); ${agents.length - seats.length > 0 ? `${agents.length - seats.length} installed CLI(s) left idle — seats follow the work, not the install list` : "all installed CLIs engaged because the work fans that wide"}`
+  };
 
   const apiCost = +(routing.reduce((s, r) => s + (r.est_cost_usd || 0), 0)).toFixed(2);
   const pools = [...new Set(routing.map(r => `${r.executor}:${r.pool}`))];
@@ -98,7 +111,7 @@ export function advise(input, world = loadWorld()) {
       ? `Routing: ${routing.map(r => `${r.title}→${r.executor}${r.model ? `(${r.model})` : ""}`).join(", ")}. ` +
         `Estimated real-money cost ≈ $${apiCost} (everything on a subscription pool is $0 marginal — quota pooling across ${pools.length} pools).`
       : "");
-  return { mode, why, routing, est_api_cost_usd: apiCost, quota_pools: pools, summary, orchestrator_tier: orchTier, agents_available: agents };
+  return { mode, why, crew, routing, est_api_cost_usd: apiCost, quota_pools: pools, summary, orchestrator_tier: orchTier, agents_available: agents };
 }
 
 // ---- CLI ----

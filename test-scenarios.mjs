@@ -99,6 +99,11 @@ try {
   ok("easy packages peel off to scrooge (hybrid)", hy.mode === "hybrid" && hy.routing.filter(r => r.executor === "scrooge").length === 2);
   ok("single easy package → scrooge inline",
      advise({ packages: pk(1, "easy") }, world({ claude: { tier: "high-sub" } })).mode === "scrooge");
+  const adv = advise({ packages: pk(3, "hard") }, world({ claude: { tier: "high-sub" } }));
+  ok("every route carries a reason", adv.routing.every(r => r.reason && r.reason.length > 10));
+  ok("crew rationale explains seat count", /seat/.test(adv.crew.why) && adv.crew.seats > 0);
+  const { task: tm } = await api("/task", { project: "proj", title: "modeled", model: "gpt-5.5", difficulty: "hard", by: "arch" });
+  ok("card stores its routed model", tm.model === "gpt-5.5");
   ok("hard packages route to frontier agents first",
      advise({ packages: pk(2, "hard") }, world({ claude: { tier: "api" } })).routing.every(r => ["codex", "gemini"].includes(r.executor)));
 
