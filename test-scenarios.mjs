@@ -104,6 +104,10 @@ try {
   ok("crew rationale explains seat count", /seat/.test(adv.crew.why) && adv.crew.seats > 0);
   const { task: tm } = await api("/task", { project: "proj", title: "modeled", model: "gpt-5.5", difficulty: "hard", by: "arch" });
   ok("card stores its routed model", tm.model === "gpt-5.5");
+  const advA = advise({ packages: [{title:"core foundation", difficulty:"hard"}, ...pk(2,"hard")] }, world({ claude: { tier: "high-sub" } }));
+  ok("foundation auto-reserves to orchestrator", advA.routing[0].executor === "orchestrator");
+  ok("advisor emits markdown table", advA.routing_table_md.includes("| package |"));
+  ok("advisor emits ready card_args with models", advA.card_args.every(c => c.model && c.via));
   ok("hard packages route to frontier agents first",
      advise({ packages: pk(2, "hard") }, world({ claude: { tier: "api" } })).routing.every(r => ["codex", "gemini"].includes(r.executor)));
 

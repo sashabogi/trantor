@@ -46,7 +46,7 @@ const CREW_PREF = { hard: ["codex", "gemini", "kimi", "deepseek"], medium: ["kim
 
 export function advise(input, world = loadWorld()) {
   const { profile, registry, caps, agents, scrooge } = world;
-  const pkgs = (input.packages || []).map(p => ({ title: p.title || "work", difficulty: ["easy", "medium", "hard"].includes(p.difficulty) ? p.difficulty : "medium", kind: p.kind || "code" }));
+  const pkgs = (input.packages || []).map(p => ({ title: p.title || "work", difficulty: ["easy", "medium", "hard"].includes(p.difficulty) ? p.difficulty : "medium", kind: p.kind || "code", owner: p.owner === "self" ? "self" : (/(foundation|integration|scaffold)/i.test(p.title) ? "self" : "") }));
   const horizon = input.horizon || (pkgs.length >= 4 ? "long" : pkgs.length >= 2 ? "medium" : "short");
   const orchTier = tierOf(profile, "claude");
   const n = pkgs.length, hard = pkgs.filter(p => p.difficulty === "hard").length, easy = pkgs.filter(p => p.difficulty === "easy").length;
@@ -78,6 +78,7 @@ export function advise(input, world = loadWorld()) {
       return { ...p, executor: "scrooge", model: m?.model, pool: "api", est_cost_usd: cost,
         reason: `easy + stateless → cheapest capable model (${m?.model}); not worth a crew seat` };
     }
+    if (p.owner === "self") return { ...p, executor: "orchestrator", pool: tierOf(profile, "claude"), reason: "architect-owned (foundation/integration doctrine) — the orchestrator keeps the shared contract in its own hands" };
     if (mode === "solo") return { ...p, executor: "orchestrator", pool: tierOf(profile, "claude"), reason: "small enough to do inline" };
     const pref = CREW_PREF[p.difficulty].filter(a => agents.includes(a));
     const agent = pref.sort((a, b) => (used[a] || 0) - (used[b] || 0))[0] || "deepseek";
@@ -111,7 +112,14 @@ export function advise(input, world = loadWorld()) {
       ? `Routing: ${routing.map(r => `${r.title}→${r.executor}${r.model ? `(${r.model})` : ""}`).join(", ")}. ` +
         `Estimated real-money cost ≈ $${apiCost} (everything on a subscription pool is $0 marginal — quota pooling across ${pools.length} pools).`
       : "");
-  return { mode, why, crew, routing, est_api_cost_usd: apiCost, quota_pools: pools, summary, orchestrator_tier: orchTier, agents_available: agents };
+  const table = ["| package | diff | executor (model) | pool | est $ | reason |", "|---|---|---|---|---|---|",
+    ...routing.map(r => `| ${r.title} | ${r.difficulty} | ${r.executor}${r.model ? ` (${r.model})` : ""} | ${r.pool} | ${r.est_cost_usd ?? "—"} | ${r.reason} |`)].join("\n");
+  const cards = routing.filter(r => r.executor !== "orchestrator").map(r => ({
+    title: r.title, difficulty: r.difficulty,
+    assignee: r.executor === "scrooge" ? undefined : `${r.executor}:<project>`,
+    model: r.model || (r.executor === "scrooge" ? undefined : `${r.executor}-default`),
+    via: r.executor === "scrooge" ? "relay_scrooge" : "relay_task_add" }));
+  return { mode, why, crew, routing, routing_table_md: table, card_args: cards, est_api_cost_usd: apiCost, quota_pools: pools, summary, orchestrator_tier: orchTier, agents_available: agents };
 }
 
 // ---- CLI ----

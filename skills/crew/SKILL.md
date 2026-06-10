@@ -19,14 +19,13 @@ Cut the work into packages, tag each `easy|medium|hard`, then call
 `relay_advise(task, packages, horizon)`. It weighs task shape × the user's declared plan
 economics (quota profile) × context horizon and returns mode + per-package routing — each
 route carries a `reason`, and `crew.why` explains the SEAT COUNT (seats follow the work,
-not the install list). **Never present a bare go/no-go.** Show the user the full picture:
-1. The mode + the `why` bullets.
-2. The routing TABLE: package | difficulty | executor (model) | pool | est $ | reason.
-3. The crew-size line (`crew.why`) — how many seats and WHY that many (and which installed
-   CLIs stay idle).
-4. The real-money total + which quota pools absorb the rest.
-THEN ask go / adjust / hold. If the profile is unset, say so and suggest
-`node bin/profile.mjs set claude=… codex=…`.
+not the install list). Mark packages you'll own yourself with `owner:"self"` (foundation/
+integration are auto-reserved). **Never present a bare go/no-go.** In your TEXT REPLY (not
+inside a question dialog), paste verbatim: `routing_table_md`, the `why` bullets, `crew.why`,
+and the real-money total + quota pools. ONLY THEN ask go / adjust / hold. When creating the
+board, use `card_args` exactly — each entry is a ready `relay_task_add` call (title,
+difficulty, assignee with your project substituted, model). Cards without their model set
+are a defect. If the profile is unset, say so and suggest `node bin/profile.mjs set …`.
 
 ## Phase 0 — plan (if the user wants a plan first)
 PRD.md + TDD.md. The TDD MUST define one file-set per agent (no merge conflicts) and an
