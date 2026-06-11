@@ -107,8 +107,8 @@ A live command center at `http://127.0.0.1:4477`, grouped by **project**:
 
 ## The brain — plan-aware economics
 
-Trantor pairs with [**Scrooge**](https://github.com/sashabogi/token-scrooge) (optional but
-recommended) as one system: Scrooge knows model capabilities, per-1M costs, and keeps the
+Trantor's economics engine ([Scrooge](https://github.com/sashabogi/token-scrooge) — installed
+automatically by `trantor setup`) knows model capabilities, per-1M costs, and keeps the
 ledger; Trantor turns that into decisions:
 
 - **Declare your plans once:** `trantor profile set claude=max codex=plus gemini=tier kimi=coding-plan deepseek=api`

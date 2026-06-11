@@ -62,8 +62,9 @@ if (!installed) warn("no crew CLIs found", "install at least one of: codex, gemi
 
 // brain
 console.log("\nthe brain");
-has("scrooge") ? ok("scrooge installed (cheap-model routing + ledger active)")
-  : console.log("  – scrooge not installed (optional): advisor still works; relay_scrooge and the 🪙 ledger pill stay dormant.\n      → https://github.com/sashabogi/token-scrooge");
+has("scrooge") || existsSync(join(H, ".local", "bin", "scrooge"))
+  ? ok("economics engine installed (routing + cost ledger active)")
+  : warn("economics engine missing — Advisor runs without live pricing; relay_scrooge dormant", "trantor setup   (installs it automatically)");
 const prof = read(join(H, ".agent-bus", "profile.json"));
 prof?.providers && Object.keys(prof.providers).length
   ? ok(`quota profile set (${Object.entries(prof.providers).map(([k, v]) => `${k}=${v.plan}`).join(", ")})`)

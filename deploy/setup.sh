@@ -16,14 +16,13 @@ if [ "$(uname)" = "Darwin" ]; then
 else
   echo "Linux: run the hub under systemd/tmux:  RELAY_PORT=4477 node $REPO/hub.mjs"
 fi
-# the economics engine (Scrooge) — install if missing, with consent
-if ! command -v scrooge >/dev/null 2>&1; then
-  printf "Install the Scrooge economics engine? (cheap-model routing + cost ledger) [Y/n] "
-  read -r ANS </dev/tty 2>/dev/null || ANS=n   # non-interactive runs skip silently
-  if [ "${ANS:-Y}" != "n" ] && [ "${ANS:-Y}" != "N" ]; then
-    if command -v pipx >/dev/null 2>&1; then pipx install token-scrooge 2>/dev/null || true; fi
-    command -v scrooge >/dev/null 2>&1 || { git clone -q https://github.com/sashabogi/token-scrooge "$HOME/.trantor-scrooge" 2>/dev/null && bash "$HOME/.trantor-scrooge/install.sh" 2>/dev/null || echo "  (manual install: https://github.com/sashabogi/token-scrooge)"; }
-  fi
+# the economics engine — part of Trantor, installed automatically (it IS the brain)
+if ! command -v scrooge >/dev/null 2>&1 && [ ! -x "$HOME/.local/bin/scrooge" ]; then
+  echo "▸ installing the economics engine (routing + cost ledger)…"
+  curl -fsSL https://raw.githubusercontent.com/sashabogi/token-scrooge/main/install.sh | bash \
+    && echo "✓ economics engine installed" \
+    || echo "  (engine install failed — Trantor still works; the Advisor runs without live pricing. Retry: trantor setup)"
+  case ":$PATH:" in *":$HOME/.local/bin:"*) ;; *) echo "  note: add ~/.local/bin to your PATH";; esac
 fi
 node "$REPO/bin/connect.mjs"
 echo
