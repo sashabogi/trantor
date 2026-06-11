@@ -80,13 +80,14 @@ main{flex:1;display:grid;grid-template-columns:1fr 330px;min-height:0}
 @keyframes fdash{to{stroke-dashoffset:-11}}
 .floop{fill:none;stroke:var(--red);stroke-width:1.4;opacity:.85}
 .floopn{fill:var(--red);font-size:9px;font-weight:700}
-.flowwrap{position:relative;height:56vh;min-height:340px;overflow:hidden;background:radial-gradient(circle at 1px 1px, #18233a 1px, transparent 0);background-size:26px 26px;border-top:1px solid var(--line);border-bottom:1px solid var(--line);cursor:grab}
+.flowwrap{position:relative;height:66vh;min-height:340px;overflow:hidden;background:radial-gradient(circle at 1px 1px, #18233a 1px, transparent 0);background-size:26px 26px;border-top:1px solid var(--line);border-bottom:1px solid var(--line);cursor:grab}
 .flowwrap.panning{cursor:grabbing}
 .flowwrap svg{position:absolute;inset:0;width:100%;height:100%}
 .fnode{cursor:move}
 .fctl{position:absolute;top:8px;right:10px;display:flex;gap:4px;z-index:2}
 .fctl button{font-size:10px;font-weight:700;padding:3px 9px;border-radius:8px;border:1px solid var(--line);background:var(--card);color:var(--mut);cursor:pointer}
 .fctl button:hover{color:var(--grn);border-color:#1d4a44}
+.fhint{position:absolute;bottom:7px;right:10px;font-size:9.5px;color:var(--dim);z-index:2;pointer-events:none}
 .fedge-hit{fill:none;stroke:transparent;stroke-width:12;cursor:pointer}
 .felabel{fill:#7e8ca3;font-size:9px;font-family:ui-monospace,monospace;opacity:0;pointer-events:none;transition:opacity .15s}
 .fe:hover .felabel{opacity:1}
@@ -236,7 +237,7 @@ function flowHTML(pt, proj){
     inner += `</g>`;
   }
   const defs = `<defs><marker id="arr" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="#2b3650"/></marker><marker id="arrg" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="#14b8a6"/></marker><marker id="arrb" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="#4a90d9"/></marker></defs>`;
-  return `<div class="flowwrap" data-proj="${esc(proj)}"><div class="fctl"><button data-fa="fit">FIT</button><button data-fa="auto">AUTO-LAYOUT</button></div><svg>${defs}<g class="fcam" transform="translate(${cam.tx},${cam.ty}) scale(${cam.s})">${inner}</g></svg></div>`;
+  return `<div class="flowwrap" data-proj="${esc(proj)}"><div class="fctl"><button data-fa="out">−</button><button data-fa="in">+</button><button data-fa="fit">FIT</button><button data-fa="auto">AUTO</button></div><div class="fhint">⌘+scroll or pinch to zoom · drag canvas to pan</div><svg>${defs}<g class="fcam" transform="translate(${cam.tx},${cam.ty}) scale(${cam.s})">${inner}</g></svg></div>`;
 }
 let dragging = null;   // suppresses re-render mid-gesture
 function saveCam(proj, cam){ const c = JSON.parse(localStorage.getItem("abFlowCam") || "{}"); c[proj] = cam; localStorage.setItem("abFlowCam", JSON.stringify(c)); }
@@ -245,14 +246,29 @@ function wireFlow(el){
     const proj = w.dataset.proj, svg = w.querySelector("svg"), g = w.querySelector(".fcam");
     let cam = (JSON.parse(localStorage.getItem("abFlowCam") || "{}"))[proj] || { s: 0.9, tx: 30, ty: 20 };
     const apply = () => g.setAttribute("transform", `translate(${cam.tx},${cam.ty}) scale(${cam.s})`);
-    w.addEventListener("wheel", e => {
-      e.preventDefault();
-      const r = w.getBoundingClientRect(), px = e.clientX - r.left, py = e.clientY - r.top;
-      const k = e.deltaY < 0 ? 1.1 : 1 / 1.1, ns = Math.min(2.5, Math.max(0.25, cam.s * k));
+    const zoomAt = (px, py, k) => {
+      const ns = Math.min(2.5, Math.max(0.2, cam.s * k));
       cam.tx = px - (px - cam.tx) * (ns / cam.s); cam.ty = py - (py - cam.ty) * (ns / cam.s); cam.s = ns;
       apply(); saveCam(proj, cam);
+    };
+    const fit = () => {
+      try {
+        const bb = g.getBBox(), r = w.getBoundingClientRect();
+        const sc = Math.min((r.width - 40) / bb.width, (r.height - 40) / bb.height, 1.6);
+        cam = { s: sc, tx: (r.width - bb.width * sc) / 2 - bb.x * sc, ty: (r.height - bb.height * sc) / 2 - bb.y * sc };
+        apply(); saveCam(proj, cam);
+      } catch {}
+    };
+    w.__fit = fit;
+    // wheel: ONLY zoom with cmd/ctrl held (trackpad pinch reports as ctrl+wheel) — plain wheel scrolls the PAGE
+    w.addEventListener("wheel", e => {
+      if (!(e.metaKey || e.ctrlKey)) return;          // let it through — never trap page scroll
+      e.preventDefault();
+      const r = w.getBoundingClientRect();
+      zoomAt(e.clientX - r.left, e.clientY - r.top, e.deltaY < 0 ? 1.1 : 1 / 1.1);
     }, { passive: false });
     w.addEventListener("pointerdown", e => {
+      if (e.target.closest(".fctl")) return;          // controls are not a pan gesture
       const node = e.target.closest(".fnode");
       if (node) {           // drag a node
         const id = node.dataset.id;
@@ -287,10 +303,21 @@ function wireFlow(el){
       dragging = null;
     });
     w.querySelectorAll(".fctl button").forEach(b => b.onclick = (e) => {
-      e.stopPropagation();
-      if (b.dataset.fa === "auto") { const pos = JSON.parse(localStorage.getItem("abFlowPos") || "{}"); delete pos[proj]; localStorage.setItem("abFlowPos", JSON.stringify(pos)); }
-      cam = { s: 0.9, tx: 30, ty: 20 }; saveCam(proj, cam); render();
+      e.stopPropagation(); e.preventDefault();
+      const r = w.getBoundingClientRect();
+      if (b.dataset.fa === "in") zoomAt(r.width / 2, r.height / 2, 1.25);
+      else if (b.dataset.fa === "out") zoomAt(r.width / 2, r.height / 2, 0.8);
+      else if (b.dataset.fa === "fit") fit();
+      else if (b.dataset.fa === "auto") {
+        const pos = JSON.parse(localStorage.getItem("abFlowPos") || "{}");
+        delete pos[proj]; localStorage.setItem("abFlowPos", JSON.stringify(pos));
+        const cams = JSON.parse(localStorage.getItem("abFlowCam") || "{}");
+        delete cams[proj]; localStorage.setItem("abFlowCam", JSON.stringify(cams));
+        render();
+      }
     });
+    // first load of this project's flow (no saved camera): fit the whole graph into the stage
+    if (!(JSON.parse(localStorage.getItem("abFlowCam") || "{}"))[proj]) fit();
   });
 }
 let suppressClickId = null;
@@ -353,7 +380,7 @@ async function render(){
     `</div>`;
   }).join('');
   // keep each project's chat scrolled to the latest line
-  el.querySelectorAll('.chatlog').forEach(c=>c.scrollTop=c.scrollHeight);
+  el.querySelectorAll('.chatlog').forEach(c=>{if(c.scrollHeight-c.clientHeight<60||c.dataset.stuck!=='0')c.scrollTop=c.scrollHeight;c.onscroll=()=>{c.dataset.stuck=(c.scrollHeight-c.scrollTop-c.clientHeight<40)?'1':'0';};});
   // click a card -> advance status todo->doing->done
   el.querySelectorAll('.vbtn').forEach(b=>b.onclick=()=>setView(b.dataset.proj,b.dataset.view));
   wireFlow(el);
@@ -368,7 +395,7 @@ function addMsg(m,count=true){
   if(count){nmsg++;$('#ntask');}
   const d=document.createElement('div');d.className='msg'+(m.to==='all'?' bc':'');
   d.innerHTML=`<span class="t">${new Date(m.ts).toLocaleTimeString()}</span> ${iconFor(m.from,12)} <span class="from">${esc(m.from)}</span> → <span class="to">${esc(m.to)}</span>: ${esc(m.text)}`;
-  const f=$('#feed');f.appendChild(d);f.scrollTop=f.scrollHeight;
+  const f=$('#feed');const stick=f.scrollHeight-f.scrollTop-f.clientHeight<50;f.appendChild(d);if(stick)f.scrollTop=f.scrollHeight;
 }
 function stream(){const ev=new EventSource('/stream?session=all');
   ev.onmessage=e=>{try{addMsg(JSON.parse(e.data));render();}catch(_){}};
