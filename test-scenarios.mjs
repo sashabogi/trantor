@@ -17,6 +17,10 @@ const ok = (name, cond, detail = "") => { if (cond) { pass++; console.log(`  ✓
 const api = async (path, body) => (await fetch(HUB + path, body ? { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) } : {})).json();
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
+// refuse to run against a squatter: an orphaned hub on the test port would silently
+// serve STALE code (spawn's EADDRINUSE dies into stdio:ignore) and poison every drill
+try { await fetch(`${HUB}/health`, { signal: AbortSignal.timeout(700) }); console.error(`✗ something is already listening on :${PORT} — kill it first (lsof -ti :${PORT} | xargs kill)`); process.exit(2); } catch {}
+
 // isolated hub: fake HOME (own bus.json), test port, 2s online cutoff so death is observable fast
 const hub = spawn("node", [join(ROOT, "hub.mjs")], { env: { ...process.env, HOME: FAKE_HOME, RELAY_PORT: String(PORT), RELAY_HOST: "127.0.0.1", RELAY_ONLINE_MS: "2000" }, stdio: "ignore" });
 await sleep(900);
@@ -128,6 +132,22 @@ try {
   await api("/send", { from: "kimi:proj", to: "all", text: "hello" });
   const last = (await api("/recent?limit=1")).messages.at(-1);
   ok("message stamped with project", last?.project === "proj");
+
+  console.log("scenario: /project/delete forgets a dead project (cards, peers, brief, lane)");
+  await api("/register", { session: "ghost:zombieproj", project: "zombieproj", status: "abandoned" });
+  await api("/task", { project: "zombieproj", title: "stale work", by: "ghost:zombieproj", status: "doing" });
+  await api("/project", { project: "zombieproj", brief: "a project nobody closed", by: "ghost:zombieproj" });
+  await api("/send", { from: "ghost:zombieproj", to: "all", text: "last words", project: "zombieproj" });
+  let zdel = await api("/project/delete", { project: "zombieproj" });
+  ok("delete reports what it removed", zdel.ok === true && zdel.removed.tasks === 1 && zdel.removed.peers === 1 && zdel.removed.messages >= 1);
+  const zprojects = (await api("/projects")).projects.map(p => p.project);
+  ok("forgotten project gone from /projects", !zprojects.includes("zombieproj"));
+  ok("other projects untouched by the delete", zprojects.includes("proj"));
+  ok("its cards are gone too", !(await api("/tasks?project=zombieproj")).tasks.length);
+  await api("/register", { session: "ghost:zombieproj", project: "zombieproj", status: "back" });
+  ok("project returns cleanly when an agent re-registers", (await api("/projects")).projects.some(p => p.project === "zombieproj"));
+  await api("/project/delete", { project: "zombieproj" });   // re-forget; leave state clean for later drills
+
   console.log("scenario: virgin-user doctor (sandbox HOME)");
   const doc = spawn("node", [join(ROOT, "bin/doctor.mjs")], { env: { ...process.env, HOME: FAKE_HOME, RELAY_URL: HUB }, stdio: ["ignore", "pipe", "pipe"] });
   let dout = ""; doc.stdout.on("data", d => (dout += d));

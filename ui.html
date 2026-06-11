@@ -61,6 +61,14 @@ main{flex:1;display:grid;grid-template-columns:1fr 330px;min-height:0}
 .idle-row{display:flex;align-items:center;gap:7px;background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:7px 14px;margin-bottom:7px;font-size:12.5px;color:var(--mut);cursor:pointer}
 .idle-row:hover{background:var(--card);border-color:#2c3a52}
 .idle-row .nm{color:var(--tx);font-weight:600}
+.mv{display:inline-flex;gap:3px;margin-left:6px}
+.mv b{cursor:pointer;color:var(--dim);font-size:10px;line-height:1;padding:3px 5px;border:1px solid var(--line);border-radius:6px;background:var(--card);font-weight:400}
+.mv b:hover{color:var(--tx);border-color:#2c3a52}
+.pdel{cursor:pointer;color:var(--dim);font-size:10.5px;padding:2px 7px;border:1px solid var(--line);border-radius:6px;background:var(--card);margin-left:5px;white-space:nowrap}
+.pdel:hover{color:var(--red);border-color:#5a2c2c}
+.pdel.arm{color:#fff;background:var(--red);border-color:var(--red)}
+.sortmode{font-size:10.5px;color:var(--dim);margin:0 0 10px;cursor:pointer;user-select:none}
+.sortmode:hover{color:var(--mut)}
 .proj.idle .proj-h{opacity:.55;cursor:pointer}
 /* flow (DAG) view */
 .vtog{display:flex;gap:2px;margin-left:10px}
@@ -185,6 +193,15 @@ function poolOf(session){const b=brandOf(session);const k=b==='anthropic'?'claud
 const VIEWS = JSON.parse(localStorage.getItem("abViews") || "{}");
 function setView(proj, v){ VIEWS[proj] = v; localStorage.setItem("abViews", JSON.stringify(VIEWS)); render(); }
 function toggleIdle(name){ if(!name)return; const s=new Set(JSON.parse(localStorage.getItem("abIdleOpen")||"[]")); s.has(name)?s.delete(name):s.add(name); localStorage.setItem("abIdleOpen",JSON.stringify([...s])); render(); }
+let armedDel=null,armedTs=0;   // pending ✕ confirmation (project name + when it was armed)
+// ▲▼: snapshot the currently displayed order, swap, persist — manual order then wins until ↺ reset
+function moveProj(name,dir){
+  const names=[...document.querySelectorAll('#boards [data-projname]')].map(d=>d.dataset.projname);
+  const i=names.indexOf(name),j=i+dir;
+  if(i<0||j<0||j>=names.length)return;
+  [names[i],names[j]]=[names[j],names[i]];
+  localStorage.setItem("abOrder",JSON.stringify(names)); render();
+}
 function flowLayout(cards, proj){
   const byId = Object.fromEntries(cards.map(t => [t.id, t]));
   let anyDeps = cards.some(t => (t.deps || []).length);
@@ -350,8 +367,16 @@ async function render(){
   const sel=$('#to'),cur=sel.value;
   sel.innerHTML='<option value="all">all (broadcast)</option>'+allS.map(s=>`<option value="${esc(s)}">${esc(s)}</option>`).join('');
   sel.value=cur;
-  // sort: projects with online agents first, then by name; unassigned last
-  projects.sort((a,b)=>{const oa=a.agents.some(x=>x.online),ob=b.agents.some(x=>x.online);if(oa!==ob)return ob-oa;if(a.project==='(unassigned)')return 1;if(b.project==='(unassigned)')return -1;return a.project.localeCompare(b.project);});
+  // sort: manual order (abOrder, set via the ▲▼ controls) wins; otherwise online
+  // first, then most-recent activity — working boards float to the top on their own
+  const ORDER=JSON.parse(localStorage.getItem("abOrder")||"[]");
+  projects.sort((a,b)=>{
+    const ia=ORDER.indexOf(a.project),ib=ORDER.indexOf(b.project);
+    if(ia>=0||ib>=0)return (ia<0?1e9:ia)-(ib<0?1e9:ib);
+    const oa=a.agents.some(x=>x.online),ob=b.agents.some(x=>x.online);if(oa!==ob)return ob-oa;
+    if(a.project==='(unassigned)')return 1;if(b.project==='(unassigned)')return -1;
+    return (b.lastActivity||0)-(a.lastActivity||0)||a.project.localeCompare(b.project);
+  });
   const el=$('#boards');
   if(dragging)return;                                  // never rebuild mid-gesture
   if(!projects.length){el.innerHTML='<div class="empty big">no projects yet — agents register a project on connect</div>';return;}
@@ -379,8 +404,9 @@ async function render(){
     const pmsgs=msgs.filter(m=>projOf(m)===p.project);
     const view = VIEWS[p.project] || "board";
     const vtog = `<div class="vtog"><button class="vbtn ${view==="board"?"on":""}" data-proj="${esc(p.project)}" data-view="board">BOARD</button><button class="vbtn ${view==="flow"?"on":""}" data-proj="${esc(p.project)}" data-view="flow">FLOW</button></div>`;
-    return `<div class="proj${p.idle===true?' idle':''}"${p.idle===true?` data-idleproj="${esc(p.project)}"`:''}>`+
-      `<div class="proj-h"><span class="pname">📁 <b>${esc(p.project)}</b></span>${vtog}<div class="agents">${agents||'<span class="dim">no agents</span>'}</div><span class="spacer"></span><span class="prog">${done}/${pt.length} done · ${pct}%</span></div>`+
+    const ctl=`<span class="mv"><b class="mvup" data-proj="${esc(p.project)}" title="move up">▲</b><b class="mvdn" data-proj="${esc(p.project)}" title="move down">▼</b></span>${p.idle===true?`<span class="pdel" data-proj="${esc(p.project)}" title="forget this project (cards, peers, brief) — it returns if an agent registers it again">✕</span>`:''}`;
+    return `<div class="proj${p.idle===true?' idle':''}" data-projname="${esc(p.project)}"${p.idle===true?` data-idleproj="${esc(p.project)}"`:''}>`+
+      `<div class="proj-h"><span class="pname">📁 <b>${esc(p.project)}</b></span>${vtog}<div class="agents">${agents||'<span class="dim">no agents</span>'}</div><span class="spacer"></span><span class="prog">${done}/${pt.length} done · ${pct}%</span>${ctl}</div>`+
       `<div class="proj-brief">${brief}${ph?`<span class="phase ${phaseClass(ph)}">${esc(ph)}</span>`:''}</div>`+
       `<div class="pbar"><i style="width:${pct}%"></i></div>`+
       (view === "flow" ? flowHTML(pt, p.project) : `<div class="kanban">${cols}</div>`)+
@@ -390,18 +416,34 @@ async function render(){
   // idle projects (zero online agents) collapse to thin rows below the live boards
   const idleRow=p=>{
     const pt=tasks.filter(t=>t.project===p.project);const done=pt.filter(t=>t.status==='done').length;
-    return `<div class="idle-row" data-idleproj="${esc(p.project)}" title="click to expand">💤 <span class="nm">${esc(p.project)}</span><span class="dim">· ${esc(p.phase||'')} · ${done}/${pt.length} cards</span></div>`;
+    return `<div class="idle-row" data-projname="${esc(p.project)}" data-idleproj="${esc(p.project)}" title="click to expand">💤 <span class="nm">${esc(p.project)}</span><span class="dim">· ${esc(p.phase||'')} · ${done}/${pt.length} cards</span><span class="spacer"></span><span class="mv"><b class="mvup" data-proj="${esc(p.project)}" title="move up">▲</b><b class="mvdn" data-proj="${esc(p.project)}" title="move down">▼</b></span><span class="pdel" data-proj="${esc(p.project)}" title="forget this project (cards, peers, brief) — it returns if an agent registers it again">✕</span></div>`;
   };
   const live=projects.filter(p=>p.idle!==true),idlers=projects.filter(p=>p.idle===true);
-  el.innerHTML=live.map(projBlock).join('')
+  el.innerHTML=(ORDER.length?`<div class="sortmode" id="sortreset" title="you've ordered projects manually — click to go back to automatic (recency) ordering">sort: manual · ↺ back to auto</div>`:'')
+    +live.map(projBlock).join('')
     +(idlers.length?`<div class="idle-head">idle projects · ${idlers.length}</div>`+idlers.map(p=>idleOpen.has(p.project)?projBlock(p):idleRow(p)).join(''):'');
   // keep each project's chat scrolled to the latest line
   el.querySelectorAll('.chatlog').forEach(c=>{if(c.scrollHeight-c.clientHeight<60||c.dataset.stuck!=='0')c.scrollTop=c.scrollHeight;c.onscroll=()=>{c.dataset.stuck=(c.scrollHeight-c.scrollTop-c.clientHeight<40)?'1':'0';};});
   // click a card -> advance status todo->doing->done
   el.querySelectorAll('.vbtn').forEach(b=>b.onclick=()=>setView(b.dataset.proj,b.dataset.view));
   // collapsed idle row -> expand; expanded idle project's header -> collapse again
-  el.querySelectorAll('.idle-row').forEach(r=>r.onclick=()=>toggleIdle(r.dataset.idleproj));
-  el.querySelectorAll('.proj.idle .proj-h').forEach(h=>h.onclick=e=>{if(e.target.closest('.vbtn,.agent'))return;toggleIdle(h.closest('.proj').dataset.idleproj);});
+  el.querySelectorAll('.idle-row').forEach(r=>r.onclick=e=>{if(e.target.closest('.mv,.pdel'))return;toggleIdle(r.dataset.idleproj);});
+  el.querySelectorAll('.proj.idle .proj-h').forEach(h=>h.onclick=e=>{if(e.target.closest('.vbtn,.agent,.mv,.pdel'))return;toggleIdle(h.closest('.proj').dataset.idleproj);});
+  // ▲▼ reorder (persists as a manual order); ✕ forget — armed two-step, no popup
+  el.querySelectorAll('.mvup').forEach(b=>b.onclick=e=>{e.stopPropagation();moveProj(b.dataset.proj,-1);});
+  el.querySelectorAll('.mvdn').forEach(b=>b.onclick=e=>{e.stopPropagation();moveProj(b.dataset.proj,1);});
+  el.querySelectorAll('.pdel').forEach(b=>b.onclick=async e=>{
+    e.stopPropagation();
+    const p=b.dataset.proj;
+    if(!(armedDel===p&&Date.now()-armedTs<4000)){armedDel=p;armedTs=Date.now();b.classList.add('arm');b.textContent='✕ sure?';return;}
+    armedDel=null;
+    await fetch('/project/delete',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({project:p})});
+    render();
+  });
+  // the 2.5s re-render rebuilds the DOM — re-apply a still-fresh armed state so the
+  // "✕ sure?" confirmation survives until it expires instead of silently resetting
+  if(armedDel&&Date.now()-armedTs<4000){const ab=el.querySelector(`.pdel[data-proj="${CSS.escape(armedDel)}"]`);if(ab){ab.classList.add('arm');ab.textContent='✕ sure?';}}
+  const sr=$('#sortreset');if(sr)sr.onclick=()=>{localStorage.removeItem('abOrder');render();};
   wireFlow(el);
   el.querySelectorAll('.tcard, .fnode').forEach(c=>c.onclick=async()=>{
     const id=+c.dataset.id,t=tasks.find(x=>x.id===id);if(!t)return;

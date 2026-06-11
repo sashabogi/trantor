@@ -108,6 +108,17 @@ const server = http.createServer(async (req, res) => {
       state.projectMeta[k] = m; dirty = true;
       return json(res, 200, { ok: true, project: k, brief: m.brief || "" });
     }
+    if (req.method === "POST" && P === "/project/delete") { // forget a project: its cards, peers, brief, and lane
+      const b = await body(req); const k = String(b.project || "").slice(0, 80);
+      if (!k) return json(res, 400, { error: "project required" });
+      const nt = state.tasks.length, np = Object.keys(state.peers).length, nm = state.messages.length;
+      state.tasks = state.tasks.filter(t => t.project !== k);
+      for (const [s, v] of Object.entries(state.peers)) if (v.project === k) delete state.peers[s];
+      delete state.projectMeta[k];
+      state.messages = state.messages.filter(m2 => (m2.project || "") !== k);
+      dirty = true;   // the project reappears cleanly if an agent ever registers it again
+      return json(res, 200, { ok: true, project: k, removed: { tasks: nt - state.tasks.length, peers: np - Object.keys(state.peers).length, messages: nm - state.messages.length } });
+    }
     if (req.method === "GET" && P === "/projects") {        // project-grouped view
       const cutoff = now() - ONLINE_MS; const byProj = {};
       const proj = p => p || "(unassigned)";
