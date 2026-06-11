@@ -1,19 +1,23 @@
 <div align="center">
 
 ```
- █████╗  ██████╗ ███████╗███╗   ██╗████████╗    ██████╗ ██╗   ██╗███████╗
-██╔══██╗██╔════╝ ██╔════╝████╗  ██║╚══██╔══╝    ██╔══██╗██║   ██║██╔════╝
-███████║██║  ███╗█████╗  ██╔██╗ ██║   ██║       ██████╔╝██║   ██║███████╗
-██╔══██║██║   ██║██╔══╝  ██║╚██╗██║   ██║       ██╔══██╗██║   ██║╚════██║
-██║  ██║╚██████╔╝███████╗██║ ╚████║   ██║       ██████╔╝╚██████╔╝███████║
-╚═╝  ╚═╝ ╚═════╝ ╚══════╝╚═╝  ╚═══╝   ╚═╝       ╚═════╝  ╚═════╝ ╚══════╝
-                                                                         
+████████╗██████╗  █████╗ ███╗   ██╗████████╗ ██████╗ ██████╗
+╚══██╔══╝██╔══██╗██╔══██╗████╗  ██║╚══██╔══╝██╔═══██╗██╔══██╗
+   ██║   ██████╔╝███████║██╔██╗ ██║   ██║   ██║   ██║██████╔╝
+   ██║   ██╔══██╗██╔══██║██║╚██╗██║   ██║   ██║   ██║██╔══██╗
+   ██║   ██║  ██║██║  ██║██║ ╚████║   ██║   ╚██████╔╝██║  ██║
+   ╚═╝   ╚═╝  ╚═╝╚═╝  ╚═╝╚═╝  ╚═══╝   ╚═╝    ╚═════╝ ╚═╝  ╚═╝
 ```
 
-### Let your AI coding agents talk to each other — live.
+### The hub-world for AI agent crews.
 
-**Claude Code, Codex, Gemini, Kimi — any MCP-capable agent CLI. Open terminals across any tools; now
-they know about each other, share status, hand off work, and message in real time.**
+**One Advisor decides how work runs — solo, cheap inline calls, or a live crew of Claude Code,
+Codex, Gemini, Kimi & DeepSeek in their own terminal windows — routed by your actual plans,
+supervised on a live board, learning from every failure.**
+
+*Formerly **agent-bus**, with the [Scrooge](https://github.com/sashabogi/token-scrooge) economics
+brain built in. (Package/tool ids still say `agent-bus`/`relay_*` — full id migration comes with
+the public launch.)*
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
 ![Node](https://img.shields.io/badge/node-%E2%89%A518-339933?logo=node.js&logoColor=white)
