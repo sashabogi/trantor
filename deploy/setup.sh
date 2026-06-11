@@ -16,6 +16,15 @@ if [ "$(uname)" = "Darwin" ]; then
 else
   echo "Linux: run the hub under systemd/tmux:  RELAY_PORT=4477 node $REPO/hub.mjs"
 fi
+# the economics engine (Scrooge) — install if missing, with consent
+if ! command -v scrooge >/dev/null 2>&1; then
+  printf "Install the Scrooge economics engine? (cheap-model routing + cost ledger) [Y/n] "
+  read -r ANS </dev/tty 2>/dev/null || ANS=n   # non-interactive runs skip silently
+  if [ "${ANS:-Y}" != "n" ] && [ "${ANS:-Y}" != "N" ]; then
+    if command -v pipx >/dev/null 2>&1; then pipx install token-scrooge 2>/dev/null || true; fi
+    command -v scrooge >/dev/null 2>&1 || { git clone -q https://github.com/sashabogi/token-scrooge "$HOME/.trantor-scrooge" 2>/dev/null && bash "$HOME/.trantor-scrooge/install.sh" 2>/dev/null || echo "  (manual install: https://github.com/sashabogi/token-scrooge)"; }
+  fi
+fi
 node "$REPO/bin/connect.mjs"
 echo
 node "$REPO/bin/doctor.mjs" || true
