@@ -1,0 +1,53 @@
+#!/usr/bin/env node
+// trantor — the command. Thin dispatcher over the toolkit so a global npm install
+// gives you everything:  trantor setup | doctor | connect | profile | advise | up | down | hub | ui
+import { spawn } from "node:child_process";
+import { join, dirname } from "node:path";
+import { fileURLToPath } from "node:url";
+import { readFileSync } from "node:fs";
+
+const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
+const [, , cmd, ...args] = process.argv;
+const run = (file, runner = process.execPath) => {
+  const child = spawn(runner, [join(ROOT, file), ...args], { stdio: "inherit", cwd: process.cwd() });
+  child.on("exit", (c) => process.exit(c ?? 0));
+};
+
+switch (cmd) {
+  case "setup":   run("deploy/setup.sh", "/bin/bash"); break;
+  case "doctor":  run("bin/doctor.mjs"); break;
+  case "connect": run("bin/connect.mjs"); break;
+  case "profile": run("bin/profile.mjs"); break;
+  case "advise":  run("bin/advise.mjs"); break;
+  case "verify":  run("bin/crew-verify.mjs"); break;
+  case "up":      process.argv.splice(2, 1); spawn("/bin/bash", [join(ROOT, "bin/crew.sh"), "up", ...args], { stdio: "inherit", cwd: process.cwd() }).on("exit", c => process.exit(c ?? 0)); break;
+  case "down":    spawn("/bin/bash", [join(ROOT, "bin/crew.sh"), "down"], { stdio: "inherit", cwd: process.cwd() }).on("exit", c => process.exit(c ?? 0)); break;
+  case "hub":     run("hub.mjs"); break;
+  case "watch":   run("bin/relay-watch.mjs"); break;
+  case "ui": {
+    let url = "http://127.0.0.1:4477";
+    try { url = JSON.parse(readFileSync(join(process.env.HOME || "", ".agent-bus", "config.json"), "utf8")).url || url; } catch {}
+    spawn(process.platform === "darwin" ? "open" : "xdg-open", [url], { stdio: "ignore", detached: true }).unref();
+    console.log(`dashboard → ${url}`);
+    break;
+  }
+  case "version": case "-v": case "--version":
+    console.log(JSON.parse(readFileSync(join(ROOT, "package.json"), "utf8")).version); break;
+  default:
+    console.log(`trantor — the hub-world for AI agent crews
+
+  trantor setup       one-shot install: hub as an always-on service + config + CLI wiring + doctor
+  trantor doctor      where do I stand? hub/plugin/CLIs/auth/keys/profile, with copy-paste fixes
+  trantor connect     (re)wire every installed AI CLI to the bus
+  trantor profile     declare your plans:  trantor profile set claude=max codex=plus deepseek=api
+  trantor up …        spawn a crew here:   trantor up codex gemini kimi deepseek:deepseek-v4-pro
+  trantor down        tear the crew down (kills processes, closes windows, no dialogs)
+  trantor ui          open the live dashboard (board + flow views)
+  trantor advise      ask the Advisor directly (JSON on stdin; --demo to see it)
+  trantor hub         run the hub in the foreground (setup installs it as a service instead)
+  trantor watch       live bus feed in the terminal
+
+Claude Code plugin (the orchestrator side):
+  claude plugin marketplace add sashabogi/trantor && claude plugin install agent-bus
+Docs: https://github.com/sashabogi/trantor`);
+}
