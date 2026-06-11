@@ -35,7 +35,7 @@ Then give Claude Code (the orchestrator) the plugin:
 
 ```bash
 claude plugin marketplace add sashabogi/trantor
-claude plugin install agent-bus
+claude plugin install trantor
 ```
 
 That's it. (Prefer source? `git clone https://github.com/sashabogi/trantor && cd trantor &&
@@ -53,7 +53,7 @@ core
   ✓ hub up at http://127.0.0.1:4477
 claude (the orchestrator)
   ✗ plugin not installed
-      → claude plugin marketplace add sashabogi/trantor && claude plugin install agent-bus
+      → claude plugin marketplace add sashabogi/trantor && claude plugin install trantor
 crew CLIs (install any subset — seats follow the work)
   ✓ codex: wired to the bus
   ✗ codex: NOT authenticated — it will join the bus but fail on its first turn
@@ -63,11 +63,33 @@ the brain
   ✗ quota profile not set → trantor profile set claude=max codex=plus deepseek=api
 ```
 
-Fix the `→` lines (each CLI's own sign-in happens once, in that CLI), re-run `trantor doctor`
-until it's clean, then open a Claude session in any project and say **"fire up the crew."**
+Fix the `→` lines (each CLI's own sign-in happens once, in that CLI) and re-run `trantor doctor`
+until it's clean.
 
 Provider API keys (e.g. `DEEPSEEK_API_KEY`) live in one file: **`~/.agent-bus/.env`** — the
 crew runners source it automatically.
+
+## Your first build
+
+Open Claude Code in the project you want built and say it in plain words:
+
+> **fire up the crew** — build me a 2-player asteroids game with power-ups
+
+Any phrasing works ("build it with the crew", "build this with trantor"), or invoke the
+skill directly: **`/trantor:crew`**. Claude becomes the architect: it cuts the work into
+difficulty-tagged packages, asks the Advisor, and shows you the routing table with a
+real-money estimate **before spending anything**. You say go — terminal windows open, the
+board fills, and you watch it live:
+
+```bash
+trantor ui
+```
+
+No crew CLIs installed yet? It still works — the Advisor routes the work `solo` or to cheap
+inline `scrooge` calls instead of seats. Seats follow the work *and* what's actually installed.
+
+Running low on context mid-build? Say **`/trantor:handoff`** — a fresh session in the same
+project takes over with a full window (and a PreCompact hook does this automatically).
 
 ## What happens when you fire up a crew
 
@@ -183,8 +205,10 @@ Identity: `RELAY_SESSION` → `RELAY_AGENT:<project-folder>` → `<hostname>:<pr
 always-on/remote hub (private tailnet, or public with auth) is on the roadmap — never expose
 the hub publicly without auth.
 
-*Heritage note: Trantor grew out of **agent-bus** — package internals still carry some
-`agent-bus`/`relay_*` identifiers; they migrate in one planned breaking release.*
+*Heritage note: Trantor grew out of **agent-bus**. As of v0.17 the plugin and skills are
+named `trantor` (formerly `agent-bus` — if you installed before v0.17:
+`claude plugin uninstall agent-bus && claude plugin marketplace update && claude plugin install trantor`).
+The `relay_*` tool names and the `~/.agent-bus` state dir remain until a later release.*
 
 ## Honest limits
 

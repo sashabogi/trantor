@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// agent-bus PreCompact hook — fires right before Claude Code compacts a full
+// trantor PreCompact hook — fires right before Claude Code compacts a full
 // context window. Instead of (just) compacting, it writes a rich HANDOFF so you can
 // open a FRESH session that takes over with a new full window. The SessionStart hook
 // detects the pending handoff and loads it.
@@ -50,7 +50,7 @@ function summarize(convo) {
       return execSync(`scrooge -t summarize -d medium --system ${JSON.stringify(sys)}`, {
         input: convo, encoding: "utf8", timeout: 45000, maxBuffer: 4 * 1024 * 1024,
       }).trim();
-    } catch (e) { process.stderr.write(`[agent-bus] scrooge summarize failed: ${e?.message}\n`); }
+    } catch (e) { process.stderr.write(`[trantor] scrooge summarize failed: ${e?.message}\n`); }
   }
   // fallback: raw recent tail
   return `*(no summarizer available — raw recent transcript tail)*\n\n${convo.slice(-6000)}`;
@@ -85,7 +85,7 @@ try {
   };
   const file = join(HANDOFF_DIR, `${record.id}.json`);
   writeFileSync(file, JSON.stringify(record, null, 2));
-  process.stderr.write(`[agent-bus] handoff written: ${file} (trigger=${trigger})\n`);
+  process.stderr.write(`[trantor] handoff written: ${file} (trigger=${trigger})\n`);
 
   // best-effort: ping the relay hub so other sessions/machines know a handoff is ready
   try {
@@ -107,12 +107,12 @@ try {
       if (existsSync(script)) {
         const child = spawn("/bin/bash", [script, projectDir, String(conf.handoffPromptTimeout || 25)], { detached: true, stdio: "ignore" });
         child.unref();
-        process.stderr.write(`[agent-bus] handoff prompt launched (opt-in)\n`);
+        process.stderr.write(`[trantor] handoff prompt launched (opt-in)\n`);
       }
     }
   } catch {}
 } catch (err) {
-  process.stderr.write(`[agent-bus] precompact error: ${err?.message || err}\n`);
+  process.stderr.write(`[trantor] precompact error: ${err?.message || err}\n`);
 }
 process.stdout.write("{}");
 process.exit(0);

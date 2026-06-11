@@ -48,6 +48,6 @@ switch (cmd) {
   trantor watch       live bus feed in the terminal
 
 Claude Code plugin (the orchestrator side):
-  claude plugin marketplace add sashabogi/trantor && claude plugin install agent-bus
+  claude plugin marketplace add sashabogi/trantor && claude plugin install trantor
 Docs: https://github.com/sashabogi/trantor`);
 }

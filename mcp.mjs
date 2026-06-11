@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// agent-bus MCP server — gives ANY MCP-capable agent (Claude Code, Codex, Gemini, …)
+// trantor MCP server — gives ANY MCP-capable agent (Claude Code, Codex, Gemini, …)
 // tools to talk to OTHER live agent sessions through the relay hub. Loaded per-session
 // via the agent's MCP config. Identity + hub URL come from env (RELAY_SESSION, RELAY_URL).
 // Loading this server AUTO-REGISTERS the session — so presence works on every agent.
@@ -37,7 +37,7 @@ async function api(method, path, payload) {
 }
 const fmt = (m) => `#${m.id} [${m.from} -> ${m.to}] ${new Date(m.ts).toLocaleTimeString()}: ${m.text}`;
 
-const server = new McpServer({ name: "agent-bus", version: "0.1.0" });
+const server = new McpServer({ name: "trantor", version: "0.1.0" });
 
 server.tool("relay_whoami", "Show this session's relay identity, project, and the hub URL.", {}, async () => {
   await api("POST", "/register", { session: SESSION, project: PROJECT }).catch(() => {});
@@ -153,4 +153,4 @@ server.tool("relay_wait", "Block up to `timeout` seconds waiting for the next me
 
 await api("POST", "/register", { session: SESSION, project: PROJECT, status: `active in ${PROJECT}` }).catch(() => {});
 await server.connect(new StdioServerTransport());
-process.stderr.write(`[agent-bus-mcp] connected as ${SESSION} -> ${URL_BASE}\n`);
+process.stderr.write(`[trantor-mcp] connected as ${SESSION} -> ${URL_BASE}\n`);

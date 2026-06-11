@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// agent-bus scenario harness — protocol-level failure drills with MOCK agents (no LLMs, free,
+// trantor scenario harness — protocol-level failure drills with MOCK agents (no LLMs, free,
 // deterministic, seconds). These encode the failure modes that broke the 2026-06-09 live run,
 // so they can never silently regress. Run: node test-scenarios.mjs   (part of npm test)
 import { spawn } from "node:child_process";

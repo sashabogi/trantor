@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// agent-bus SessionStart hook — every session auto-registers with the hub and
+// trantor SessionStart hook — every session auto-registers with the hub and
 // gets a roster of OTHER live sessions injected into context, so independent
 // sessions discover each other automatically (locally or across machines).
 //
@@ -72,30 +72,30 @@ try {
   try { peers = (await jget(`${url}/peers`)).peers || []; } catch {}
   const others = peers.filter(p => p.online && p.session !== session);
 
-  process.stderr.write(`[agent-bus] registered as ${session} -> ${url} (${others.length} other live session(s))\n`);
+  process.stderr.write(`[trantor] registered as ${session} -> ${url} (${others.length} other live session(s))\n`);
 
   if (others.length > 0) {
-    additionalContext += `<agent-bus session="${session}" hub="${url}">\n`;
-    additionalContext += `You are connected to agent-bus (the cross-agent session bus) as "${session}". Other LIVE agent sessions are running right now:\n`;
+    additionalContext += `<trantor session="${session}" hub="${url}">\n`;
+    additionalContext += `You are connected to Trantor (the cross-agent session bus) as "${session}". Other LIVE agent sessions are running right now:\n`;
     for (const p of others) additionalContext += `- ${sanitize(p.session)}\n`;
     additionalContext += `Use the relay MCP tools (relay_peers, relay_send, relay_inbox, relay_wait) to coordinate with them — hand off work, check for overlap before editing shared files, or ask another session for help. If a sibling session is touching the same project, coordinate before making conflicting changes.\n`;
-    additionalContext += `</agent-bus>\n`;
+    additionalContext += `</trantor>\n`;
   }
 
   // Pending handoff? A prior session hit the context limit and left a handoff for this
   // project — take over with this fresh full window instead of starting cold.
   const handoff = loadPendingHandoff(basename(projectDir));
   if (handoff) {
-    process.stderr.write(`[agent-bus] loaded pending handoff ${handoff.id}\n`);
-    additionalContext += `<agent-bus-handoff id="${sanitize(handoff.id)}" from="${sanitize(handoff.machine)}" trigger="${sanitize(handoff.trigger)}">\n`;
+    process.stderr.write(`[trantor] loaded pending handoff ${handoff.id}\n`);
+    additionalContext += `<trantor-handoff id="${sanitize(handoff.id)}" from="${sanitize(handoff.machine)}" trigger="${sanitize(handoff.trigger)}">\n`;
     additionalContext += `🔄 **You are taking over from a prior session that hit its context limit.** This is a fresh full window. Resume the work below — the prior session's summary, git state, and a pointer to its full transcript (searchable; Foundation/Gaia has it ingested) follow. Continue from "OPEN THREADS & NEXT STEPS"; do not restart from scratch.\n\n`;
     additionalContext += `## Handoff summary\n${sanitize(handoff.summary)}\n`;
     if (handoff.gitStatus) additionalContext += `\n## Git working-tree at handoff\n\`\`\`\n${sanitize(handoff.gitStatus)}\n\`\`\`\n`;
     if (handoff.transcript_path) additionalContext += `\n_Full prior transcript: ${sanitize(handoff.transcript_path)}_\n`;
-    additionalContext += `</agent-bus-handoff>\n`;
+    additionalContext += `</trantor-handoff>\n`;
   }
 } catch (err) {
-  process.stderr.write(`[agent-bus] sessionstart error: ${err?.message || err}\n`);
+  process.stderr.write(`[trantor] sessionstart error: ${err?.message || err}\n`);
 }
 
 // Hook protocol: emit additionalContext via stdout JSON. Self-validate so we never

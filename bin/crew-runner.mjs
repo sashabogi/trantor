@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// agent-bus crew runner — keeps a crew agent alive forever without burning tokens.
+// trantor crew runner — keeps a crew agent alive forever without burning tokens.
 //
 //   node crew-runner.mjs <agent> [project-dir]
 //
@@ -34,7 +34,7 @@ try { mkdirSync(LOGDIR, { recursive: true }); } catch {}
 let TURN = 0;
 const telemetry = (rec) => { try { appendFileSync(join(LOGDIR, `${AGENT}-${PROJ}.jsonl`), JSON.stringify(rec) + "\n"); } catch {} };
 const banner = (trigger) => {
-  console.log(`\x1b[2J\x1b[H\x1b[48;5;236m\x1b[38;5;43m  ◤ ${AGENT.toUpperCase()} ◢  agent-bus crew · ${PROJ} · turn ${TURN} · ${trigger}${MODEL ? ` · ${MODEL}` : ""}  \x1b[0m\n`);
+  console.log(`\x1b[2J\x1b[H\x1b[48;5;236m\x1b[38;5;43m  ◤ ${AGENT.toUpperCase()} ◢  trantor crew · ${PROJ} · turn ${TURN} · ${trigger}${MODEL ? ` · ${MODEL}` : ""}  \x1b[0m\n`);
 };
 
 async function api(path, body) {
@@ -67,7 +67,7 @@ const CLI = {
 const cli = CLI[AGENT];
 if (!cli) { console.error(`unknown agent '${AGENT}' (known: ${Object.keys(CLI).join(", ")})`); process.exit(1); }
 
-const RULES = `Rules: you are ${SESSION} on the agent-bus crew. Work your assigned file(s), report on the bus (relay_send, <280 chars), move your Kanban card as you go (doing -> testing -> done; run the tests in 'testing', use 'failed' + a report if they break). When your work for THIS message is finished, END YOUR TURN — do NOT park, do NOT loop relay_wait; the runner waits for you and will wake you with the next message.`;
+const RULES = `Rules: you are ${SESSION} on the trantor crew. Work your assigned file(s), report on the bus (relay_send, <280 chars), move your Kanban card as you go (doing -> testing -> done; run the tests in 'testing', use 'failed' + a report if they break). When your work for THIS message is finished, END YOUR TURN — do NOT park, do NOT loop relay_wait; the runner waits for you and will wake you with the next message.`;
 
 let sid = "";
 function runTurn(prompt, isFirst, trigger = "kickoff") {

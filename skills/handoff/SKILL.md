@@ -1,9 +1,9 @@
 ---
-name: relay-handoff
+name: handoff
 description: |
   Write a rich handoff for the CURRENT session so a fresh Claude Code session can take over
   with a full new context window (instead of compacting). Use proactively when context is
-  getting full, or before ending, to pass the baton cleanly. Trigger: /agent-bus:relay-handoff
+  getting full, or before ending, to pass the baton cleanly. Trigger: /trantor:handoff
 user-invocable: true
 ---
 

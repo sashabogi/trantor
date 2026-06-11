@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// agent-bus quota profile — declare what plan each provider runs on, once.
+// trantor quota profile — declare what plan each provider runs on, once.
 // The Advisor uses this to pick execution modes (plans can't be detected reliably).
 //
 //   node bin/profile.mjs                       # show current profile

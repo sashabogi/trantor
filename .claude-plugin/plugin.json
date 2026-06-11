@@ -1,7 +1,7 @@
 {
-  "name": "agent-bus",
-  "version": "0.14.0",
-  "description": "Live message bus, presence, project Kanban + crew orchestration for independent AI coding agents (Claude, Codex, Gemini, Kimi, DeepSeek)",
+  "name": "trantor",
+  "version": "0.17.0",
+  "description": "Trantor — the hub-world for AI agent crews: live message bus, presence, project Kanban/flow board + crew orchestration for independent AI coding agents (Claude, Codex, Gemini, Kimi, DeepSeek)",
   "mcpServers": {
     "relay": {
       "command": "node",

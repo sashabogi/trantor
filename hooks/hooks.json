@@ -1,5 +1,5 @@
 {
-  "description": "agent-bus — auto-register each session + inject live roster (SessionStart); write a handoff before compaction (PreCompact)",
+  "description": "trantor — auto-register each session + inject live roster (SessionStart); write a handoff before compaction (PreCompact)",
   "hooks": {
     "SessionStart": [
       { "matcher": "", "hooks": [ { "type": "command", "command": "node ${CLAUDE_PLUGIN_ROOT}/hooks/sessionstart.mjs" } ] }

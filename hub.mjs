@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// agent-bus hub — message bus + presence/status board + SSE push, so independent
+// trantor hub — message bus + presence/status board + SSE push, so independent
 // Claude Code sessions can coordinate (near-instant for watchers, cheap for idle peers).
 // Binds to LOOPBACK (127.0.0.1) by default — local-first and safe (no auth yet). To let other
 // machines reach it (e.g. over a Tailscale tailnet), set RELAY_HOST=0.0.0.0 — but only on a
@@ -209,10 +209,10 @@ const server = http.createServer(async (req, res) => {
       return json(res, 200, { messages: state.messages.slice(-n) });
     }
     if (req.method === "GET" && (P === "/" || P === "/ui")) {
-      res.writeHead(200, { "content-type": "text/html; charset=utf-8" }); return res.end(UI || "<h1>agent-bus</h1><p>dashboard unavailable</p>");
+      res.writeHead(200, { "content-type": "text/html; charset=utf-8" }); return res.end(UI || "<h1>trantor</h1><p>dashboard unavailable</p>");
     }
     if (P === "/health") return json(res, 200, { ok: true, peers: Object.keys(state.peers).length, messages: state.messages.length, streams: streams.length });
     json(res, 404, { error: "not found" });
   } catch (e) { json(res, 500, { error: String(e?.message || e) }); }
 });
-server.listen(PORT, HOST, () => console.error(`[agent-bus] hub on http://${HOST}:${PORT} (data: ${DATA})`));
+server.listen(PORT, HOST, () => console.error(`[trantor] hub on http://${HOST}:${PORT} (data: ${DATA})`));

@@ -1,12 +1,12 @@
 #!/usr/bin/env node
-// agent-bus connect — wire every AI coding CLI on this machine to the bus, in one shot.
+// trantor connect — wire every AI coding CLI on this machine to the bus, in one shot.
 //
 //   node bin/connect.mjs            # detect installed CLIs, patch each one's MCP config (idempotent)
 //   node bin/connect.mjs --dry-run  # show what would change, touch nothing
 //
 // Each CLI keeps its own MCP config file/format; this writes the one "relay" entry into each
 // (with a timestamped .bak backup the first time it changes a file). Claude Code is handled by
-// the plugin (claude plugin install agent-bus), so it's only verified here, not patched.
+// the plugin (claude plugin install trantor), so it's only verified here, not patched.
 import { readFileSync, writeFileSync, existsSync, mkdirSync, copyFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { homedir } from "node:os";
@@ -39,10 +39,10 @@ const relayEnv = (agent) => ({ RELAY_URL: URL_, RELAY_AGENT: agent });
 
 // ---- Claude Code: plugin handles it; verify only ----
 if (has("claude")) {
-  let st = "plugin not detected — run: claude plugin marketplace add sashabogi/trantor && claude plugin install agent-bus";
+  let st = "plugin not detected — run: claude plugin marketplace add sashabogi/trantor && claude plugin install trantor";
   try {
     const s = JSON.parse(readFileSync(join(homedir(), ".claude", "settings.json"), "utf8"));
-    if (Object.keys(s.enabledPlugins || {}).some(k => k.startsWith("agent-bus@"))) st = "plugin installed ✓";
+    if (Object.keys(s.enabledPlugins || {}).some(k => k.startsWith("trantor@") || k.startsWith("agent-bus@"))) st = "plugin installed ✓";
   } catch {}
   report("claude", st);
 }
@@ -53,7 +53,7 @@ if (has("codex")) {
   const cur = existsSync(p) ? readFileSync(p, "utf8") : "";
   if (cur.includes("[mcp_servers.relay]")) report("codex", "already wired");
   else {
-    const block = `\n# agent-bus — auto-registers each Codex session on the bus + adds relay_* tools\n[mcp_servers.relay]\ncommand = "node"\nargs = ["${MCP}"]\nenv = { RELAY_URL = "${URL_}", RELAY_AGENT = "codex" }\n`;
+    const block = `\n# trantor — auto-registers each Codex session on the bus + adds relay_* tools\n[mcp_servers.relay]\ncommand = "node"\nargs = ["${MCP}"]\nenv = { RELAY_URL = "${URL_}", RELAY_AGENT = "codex" }\n`;
     if (!DRY) { if (existsSync(p)) backup(p); else mkdirSync(dirname(p), { recursive: true }); writeFileSync(p, cur + block); }
     report("codex", cur ? "wired" : "wired (new config)", p);
   }
@@ -88,7 +88,7 @@ if (has("opencode")) {
 }
 
 const found = out.length;
-console.log(`agent-bus connect${DRY ? " (dry run)" : ""} — hub: ${URL_}`);
+console.log(`trantor connect${DRY ? " (dry run)" : ""} — hub: ${URL_}`);
 for (const r of out) console.log(`  ${r.cli.padEnd(9)} ${r.status}${r.detail ? `  (${r.detail})` : ""}`);
 if (!found) console.log("  no supported CLIs found on PATH (claude, codex, gemini, kimi, opencode)");
 console.log(DRY ? "\nRun without --dry-run to apply." : "\nDone. New sessions of each CLI auto-join the bus.");

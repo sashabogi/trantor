@@ -38,7 +38,7 @@ else {
   const st = read(join(H, ".claude", "settings.json")) || {};
   Object.keys(st.enabledPlugins || {}).some(k => k.startsWith("agent-bus@") || k.startsWith("trantor@"))
     ? ok("plugin installed")
-    : warn("plugin not installed", "claude plugin marketplace add sashabogi/trantor && claude plugin install agent-bus");
+    : warn("plugin not installed", "claude plugin marketplace add sashabogi/trantor && claude plugin install trantor");
 }
 
 // crew CLIs: installed / wired / authenticated

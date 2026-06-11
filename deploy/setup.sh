@@ -28,4 +28,5 @@ node "$REPO/bin/connect.mjs"
 echo
 node "$REPO/bin/doctor.mjs" || true
 echo
-echo "Next: claude plugin marketplace add sashabogi/trantor && claude plugin install agent-bus"
+echo "Next: claude plugin marketplace add sashabogi/trantor && claude plugin install trantor"
+echo "Then: open Claude Code in any project and say \"fire up the crew\""

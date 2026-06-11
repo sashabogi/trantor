@@ -1,9 +1,9 @@
 {
-  "//": "agent-bus for Gemini CLI — merge into ~/.gemini/settings.json (or a project .gemini/settings.json).",
+  "//": "trantor for Gemini CLI — merge into ~/.gemini/settings.json (or a project .gemini/settings.json).",
   "mcpServers": {
     "relay": {
       "command": "node",
-      "args": ["REPLACE/WITH/ABSOLUTE/PATH/agent-bus/mcp.mjs"],
+      "args": ["REPLACE/WITH/ABSOLUTE/PATH/trantor/mcp.mjs"],
       "env": { "RELAY_URL": "http://127.0.0.1:4477", "RELAY_SESSION": "gemini:myproject" }
     }
   }

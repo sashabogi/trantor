@@ -1,5 +1,5 @@
 #!/bin/bash
-# agent-bus crew launcher v2 — visible terminal windows that CANNOT silently die or silently fail.
+# trantor crew launcher v2 — visible terminal windows that CANNOT silently die or silently fail.
 #
 #   bin/crew.sh up codex gemini kimi deepseek    # one window per agent, in the CURRENT project dir
 #   bin/crew.sh down                             # kill crew processes + close windows (no dialogs)
@@ -91,7 +91,7 @@ spawn_grid() {  # $@ = agents — (re)computes the grid for THIS batch and spawn
     osascript \
       -e 'tell application "Terminal"' \
       -e "  set w to do script \"cd $DIR && clear && CREW_MODEL=$MODEL node $BUS_DIR/bin/crew-runner.mjs $AGENT $DIR\"" \
-      -e "  set custom title of w to \"$(echo "$AGENT" | tr '[:lower:]' '[:upper:]') — agent-bus crew\"" \
+      -e "  set custom title of w to \"$(echo "$AGENT" | tr '[:lower:]' '[:upper:]') — trantor crew\"" \
       -e "  set theWin to first window whose tabs contains w" \
       -e "  set bounds of theWin to {$X1, $Y1, $(( X1 + CW )), $(( Y1 + CH ))}" \
       -e "  return id of theWin" \
