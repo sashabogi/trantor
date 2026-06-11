@@ -107,7 +107,12 @@ try {
   const advA = advise({ packages: [{title:"core foundation", difficulty:"hard"}, ...pk(2,"hard")] }, world({ claude: { tier: "high-sub" } }));
   ok("foundation auto-reserves to orchestrator", advA.routing[0].executor === "orchestrator");
   ok("advisor emits markdown table", advA.routing_table_md.includes("| package |"));
-  ok("advisor emits ready card_args with models", advA.card_args.every(c => c.model && c.via));
+  ok("advisor emits ready card_args with models", advA.card_args.every(c => c.via) && advA.card_args.filter(c => c.assignee).every(c => c.model));
+  const advD = advise({ packages: [{title:"core foundation", difficulty:"hard"}, {title:"feature A", difficulty:"hard"}, {title:"integration", difficulty:"hard", owner:"self"}] }, world({ claude: { tier: "high-sub" } }));
+  const integ = advD.card_args.find(c => /integration/.test(c.title));
+  const feat = advD.card_args.find(c => /feature/.test(c.title));
+  ok("card_args born as DAG: integration depends on all, crew depends on foundation",
+     integ.deps_orders.length === 2 && JSON.stringify(feat.deps_orders) === JSON.stringify([1]));
   ok("hard packages route to frontier agents first",
      advise({ packages: pk(2, "hard") }, world({ claude: { tier: "api" } })).routing.every(r => ["codex", "gemini"].includes(r.executor)));
 

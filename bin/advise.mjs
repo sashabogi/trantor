@@ -114,11 +114,19 @@ export function advise(input, world = loadWorld()) {
       : "");
   const table = ["| package | diff | executor (model) | pool | est $ | reason |", "|---|---|---|---|---|---|",
     ...routing.map(r => `| ${r.title} | ${r.difficulty} | ${r.executor}${r.model ? ` (${r.model})` : ""} | ${r.pool} | ${r.est_cost_usd ?? "—"} | ${r.reason} |`)].join("\n");
-  const cards = routing.filter(r => r.executor !== "orchestrator").map(r => ({
-    title: r.title, difficulty: r.difficulty,
-    assignee: r.executor === "scrooge" ? undefined : `${r.executor}:<project>`,
-    model: r.model || (r.executor === "scrooge" ? undefined : `${r.executor}-default`),
-    via: r.executor === "scrooge" ? "relay_scrooge" : "relay_task_add" }));
+  // card_args are born as a DAG: crew cards depend on architect-owned foundation card(s);
+  // integration-titled architect cards depend on every crew card. (Indices are 1-based card
+  // creation order — the architect substitutes real ids as it creates them.)
+  const selfPkgs = routing.filter(r => r.executor === "orchestrator");
+  const foundationIdx = selfPkgs.length ? [1] : [];
+  const cards = routing.map((r, i) => ({
+    order: i + 1, title: r.title, difficulty: r.difficulty,
+    assignee: r.executor === "scrooge" || r.executor === "orchestrator" ? undefined : `${r.executor}:<project>`,
+    model: r.model || (["scrooge", "orchestrator"].includes(r.executor) ? undefined : `${r.executor}-default`),
+    via: r.executor === "scrooge" ? "relay_scrooge" : "relay_task_add",
+    deps_orders: r.executor === "orchestrator" && /integrat/i.test(r.title)
+      ? routing.map((x, j) => j + 1).filter(j => j !== i + 1)
+      : (r.executor !== "orchestrator" ? foundationIdx.filter(f => f !== i + 1) : []) }));
   return { mode, why, crew, routing, routing_table_md: table, card_args: cards, est_api_cost_usd: apiCost, quota_pools: pools, summary, orchestrator_tier: orchTier, agents_available: agents };
 }
 

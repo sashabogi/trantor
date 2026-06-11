@@ -80,6 +80,17 @@ main{flex:1;display:grid;grid-template-columns:1fr 330px;min-height:0}
 @keyframes fdash{to{stroke-dashoffset:-11}}
 .floop{fill:none;stroke:var(--red);stroke-width:1.4;opacity:.85}
 .floopn{fill:var(--red);font-size:9px;font-weight:700}
+.flowwrap{position:relative;height:56vh;min-height:340px;overflow:hidden;background:radial-gradient(circle at 1px 1px, #18233a 1px, transparent 0);background-size:26px 26px;border-top:1px solid var(--line);border-bottom:1px solid var(--line);cursor:grab}
+.flowwrap.panning{cursor:grabbing}
+.flowwrap svg{position:absolute;inset:0;width:100%;height:100%}
+.fnode{cursor:move}
+.fctl{position:absolute;top:8px;right:10px;display:flex;gap:4px;z-index:2}
+.fctl button{font-size:10px;font-weight:700;padding:3px 9px;border-radius:8px;border:1px solid var(--line);background:var(--card);color:var(--mut);cursor:pointer}
+.fctl button:hover{color:var(--grn);border-color:#1d4a44}
+.fedge-hit{fill:none;stroke:transparent;stroke-width:12;cursor:pointer}
+.felabel{fill:#7e8ca3;font-size:9px;font-family:ui-monospace,monospace;opacity:0;pointer-events:none;transition:opacity .15s}
+.fe:hover .felabel{opacity:1}
+.fe:hover .fedge{stroke:#5fa8ff}
 /* per-project inter-agent conversation lane */
 .proj-chat{margin:4px 16px 14px;border:1px solid var(--line);border-radius:10px;background:#0c111c}
 .proj-chat h5{margin:0;padding:7px 11px;font-size:10px;text-transform:uppercase;letter-spacing:.09em;color:var(--dim);border-bottom:1px solid var(--line);display:flex;align-items:center;gap:6px}
@@ -166,9 +177,8 @@ econ();setInterval(econ,15000);
 function poolOf(session){const b=brandOf(session);const k=b==='anthropic'?'claude':b==='openai'?'codex':b==='moonshot'?'kimi':b;return POOLS[k]||'';}
 const VIEWS = JSON.parse(localStorage.getItem("abViews") || "{}");
 function setView(proj, v){ VIEWS[proj] = v; localStorage.setItem("abViews", JSON.stringify(VIEWS)); render(); }
-function flowLayout(cards){
+function flowLayout(cards, proj){
   const byId = Object.fromEntries(cards.map(t => [t.id, t]));
-  // synthesize edges when none are set: integration-ish cards depend on everything else
   let anyDeps = cards.some(t => (t.deps || []).length);
   const deps = t => {
     if (anyDeps) return (t.deps || []).filter(d => byId[d]);
@@ -186,43 +196,104 @@ function flowLayout(cards){
   cards.forEach(t => layer(t));
   const cols = {};
   cards.forEach(t => (cols[L[t.id]] ||= []).push(t));
-  const NW = 190, NH = 64, GX = 70, GY = 26;
+  const NW = 190, NH = 64, GX = 90, GY = 26;
   const nodes = {}, maxRows = Math.max(...Object.values(cols).map(c => c.length));
   const totalH = maxRows * (NH + GY) - GY;
+  const manual = (JSON.parse(localStorage.getItem("abFlowPos") || "{}"))[proj] || {};
   for (const [li, col] of Object.entries(cols)) {
     const colH = col.length * (NH + GY) - GY, y0 = (totalH - colH) / 2;
-    col.forEach((t, ri) => { nodes[t.id] = { t, x: li * (NW + GX), y: y0 + ri * (NH + GY) }; });
+    col.forEach((t, ri) => {
+      const m = manual[t.id];
+      nodes[t.id] = { t, x: m ? m.x : li * (NW + GX), y: m ? m.y : y0 + ri * (NH + GY) };
+    });
   }
   const edges = [];
   cards.forEach(t => deps(t).forEach(d => edges.push([d, t.id])));
-  return { nodes, edges, NW, NH, W: (Math.max(...cards.map(t => L[t.id])) + 1) * (NW + GX) - GX, H: totalH };
+  return { nodes, edges, NW, NH };
 }
-function flowHTML(pt){
+function flowHTML(pt, proj){
   if (!pt.length) return '<div class="empty">no cards yet</div>';
-  const { nodes, edges, NW, NH, W, H } = flowLayout(pt);
-  const PAD = 18;
-  let svg = `<svg width="${W + PAD * 2}" height="${H + PAD * 2 + 14}" viewBox="${-PAD} ${-PAD} ${W + PAD * 2} ${H + PAD * 2 + 14}">`;
-  svg += `<defs><marker id="arr" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="#2b3650"/></marker><marker id="arrg" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="#14b8a6"/></marker><marker id="arrb" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="#4a90d9"/></marker></defs>`;
+  const { nodes, edges, NW, NH } = flowLayout(pt, proj);
+  const cam = (JSON.parse(localStorage.getItem("abFlowCam") || "{}"))[proj] || { s: 0.9, tx: 30, ty: 20 };
+  let inner = "";
   for (const [a, b] of edges) {
     const A = nodes[a], B = nodes[b]; if (!A || !B) continue;
     const x1 = A.x + NW, y1 = A.y + NH / 2, x2 = B.x, y2 = B.y + NH / 2, mx = (x1 + x2) / 2;
     const cls = A.t.status === "done" ? "done" : (B.t.status === "doing" || B.t.status === "testing") ? "active" : "";
     const mk = cls === "done" ? "arrg" : cls === "active" ? "arrb" : "arr";
-    svg += `<path class="fedge ${cls}" marker-end="url(#${mk})" d="M${x1},${y1} C${mx},${y1} ${mx},${y2} ${x2},${y2}"/>`;
+    const d = `M${x1},${y1} C${mx},${y1} ${mx},${y2} ${x2},${y2}`;
+    const label = `${String(A.t.title).slice(0, 18)} → ${String(B.t.title).slice(0, 18)}`;
+    inner += `<g class="fe"><path class="fedge-hit" d="${d}"><title>${esc(A.t.title)} → ${esc(B.t.title)}</title></path><path class="fedge ${cls}" marker-end="url(#${mk})" d="${d}"/><text class="felabel" x="${mx}" y="${(y1 + y2) / 2 - 6}" text-anchor="middle">${esc(label)}</text></g>`;
   }
   for (const { t, x, y } of Object.values(nodes)) {
     const bounces = (t.history || []).filter(h => ({todo:0,doing:1,testing:2,done:3}[h.to] ?? 0) < ({todo:0,doing:1,testing:2,done:3}[h.from] ?? 0)).length;
-    svg += `<g class="fnode ${t.status}" data-id="${t.id}" transform="translate(${x},${y})">`;
-    svg += `<rect width="${NW}" height="${NH}" rx="9"/>`;
-    svg += `<text class="ftitle" x="10" y="20">${esc(t.title.slice(0, 26))}${t.title.length > 26 ? "…" : ""}</text>`;
-    svg += `<text class="fmeta" x="10" y="37">${esc(String(t.assignee || "").split(":")[0])}${t.difficulty ? " · " + t.difficulty : ""}${t.model ? " · " + esc(t.model.slice(0, 16)) : ""}</text>`;
-    svg += `<text class="fmeta" x="10" y="53">${t.status}</text>`;
-    if (bounces) svg += `<path class="floop" marker-end="url(#arr)" d="M${NW - 34},0 C${NW - 34},-16 ${NW - 6},-16 ${NW - 6},-1"/><text class="floopn" x="${NW - 30}" y="-7">↩${bounces}</text>`;
-    svg += `</g>`;
+    inner += `<g class="fnode ${t.status}" data-id="${t.id}" transform="translate(${x},${y})">`;
+    inner += `<rect width="${NW}" height="${NH}" rx="9"/>`;
+    inner += `<text class="ftitle" x="10" y="20">${esc(t.title.slice(0, 26))}${t.title.length > 26 ? "…" : ""}</text>`;
+    inner += `<text class="fmeta" x="10" y="37">${esc(String(t.assignee || "").split(":")[0])}${t.difficulty ? " · " + t.difficulty : ""}${t.model ? " · " + esc(t.model.slice(0, 16)) : ""}</text>`;
+    inner += `<text class="fmeta" x="10" y="53">${t.status}</text>`;
+    if (bounces) inner += `<path class="floop" marker-end="url(#arr)" d="M${NW - 34},0 C${NW - 34},-16 ${NW - 6},-16 ${NW - 6},-1"/><text class="floopn" x="${NW - 30}" y="-7">↩${bounces}</text>`;
+    inner += `</g>`;
   }
-  svg += `</svg>`;
-  return `<div class="flowwrap">${svg}</div>`;
+  const defs = `<defs><marker id="arr" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="#2b3650"/></marker><marker id="arrg" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="#14b8a6"/></marker><marker id="arrb" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="#4a90d9"/></marker></defs>`;
+  return `<div class="flowwrap" data-proj="${esc(proj)}"><div class="fctl"><button data-fa="fit">FIT</button><button data-fa="auto">AUTO-LAYOUT</button></div><svg>${defs}<g class="fcam" transform="translate(${cam.tx},${cam.ty}) scale(${cam.s})">${inner}</g></svg></div>`;
 }
+let dragging = null;   // suppresses re-render mid-gesture
+function saveCam(proj, cam){ const c = JSON.parse(localStorage.getItem("abFlowCam") || "{}"); c[proj] = cam; localStorage.setItem("abFlowCam", JSON.stringify(c)); }
+function wireFlow(el){
+  el.querySelectorAll(".flowwrap").forEach(w => {
+    const proj = w.dataset.proj, svg = w.querySelector("svg"), g = w.querySelector(".fcam");
+    let cam = (JSON.parse(localStorage.getItem("abFlowCam") || "{}"))[proj] || { s: 0.9, tx: 30, ty: 20 };
+    const apply = () => g.setAttribute("transform", `translate(${cam.tx},${cam.ty}) scale(${cam.s})`);
+    w.addEventListener("wheel", e => {
+      e.preventDefault();
+      const r = w.getBoundingClientRect(), px = e.clientX - r.left, py = e.clientY - r.top;
+      const k = e.deltaY < 0 ? 1.1 : 1 / 1.1, ns = Math.min(2.5, Math.max(0.25, cam.s * k));
+      cam.tx = px - (px - cam.tx) * (ns / cam.s); cam.ty = py - (py - cam.ty) * (ns / cam.s); cam.s = ns;
+      apply(); saveCam(proj, cam);
+    }, { passive: false });
+    w.addEventListener("pointerdown", e => {
+      const node = e.target.closest(".fnode");
+      if (node) {           // drag a node
+        const id = node.dataset.id;
+        const tr = /translate\(([-\d.]+),([-\d.]+)\)/.exec(node.getAttribute("transform"));
+        dragging = { kind: "node", node, id, sx: e.clientX, sy: e.clientY, ox: +tr[1], oy: +tr[2], moved: false, proj };
+      } else {              // pan the canvas
+        dragging = { kind: "pan", sx: e.clientX, sy: e.clientY, ox: cam.tx, oy: cam.ty, w, proj };
+        w.classList.add("panning");
+      }
+      w.setPointerCapture(e.pointerId);
+    });
+    w.addEventListener("pointermove", e => {
+      if (!dragging) return;
+      const dx = e.clientX - dragging.sx, dy = e.clientY - dragging.sy;
+      if (dragging.kind === "node") {
+        if (Math.abs(dx) + Math.abs(dy) > 3) dragging.moved = true;
+        dragging.nx = dragging.ox + dx / cam.s; dragging.ny = dragging.oy + dy / cam.s;
+        dragging.node.setAttribute("transform", `translate(${dragging.nx},${dragging.ny})`);
+      } else { cam.tx = dragging.ox + dx; cam.ty = dragging.oy + dy; apply(); }
+    });
+    w.addEventListener("pointerup", () => {
+      if (!dragging) return;
+      if (dragging.kind === "node" && dragging.moved) {
+        const pos = JSON.parse(localStorage.getItem("abFlowPos") || "{}");
+        (pos[proj] ||= {})[dragging.id] = { x: dragging.nx, y: dragging.ny };
+        localStorage.setItem("abFlowPos", JSON.stringify(pos));
+        dragging.suppressClick = dragging.node.dataset.id;   // a drag is not a click
+        setTimeout(() => (suppressClickId = null), 50);
+        suppressClickId = dragging.id;
+      }
+      if (dragging.kind === "pan") { saveCam(proj, cam); w.classList.remove("panning"); }
+      dragging = null;
+    });
+    w.querySelectorAll(".fctl button").forEach(b => b.onclick = (e) => {
+      e.stopPropagation();
+      if (b.dataset.fa === "auto") { const pos = JSON.parse(localStorage.getItem("abFlowPos") || "{}"); delete pos[proj]; localStorage.setItem("abFlowPos", JSON.stringify(pos)); }
+      cam = { s: 0.9, tx: 30, ty: 20 }; saveCam(proj, cam); render();
+    });
+  });
+}
+let suppressClickId = null;
 function projOf(m){return m.project||(String(m.from).includes(':')?String(m.from).split(':').pop():'');}
 function chatLane(msgs){
   if(!msgs.length)return `<div class="proj-chat"><h5><span class="lc"></span>conversation</h5><div class="chatempty">no messages yet — agents talk here as they coordinate</div></div>`;
@@ -248,6 +319,7 @@ async function render(){
   // sort: projects with online agents first, then by name; unassigned last
   projects.sort((a,b)=>{const oa=a.agents.some(x=>x.online),ob=b.agents.some(x=>x.online);if(oa!==ob)return ob-oa;if(a.project==='(unassigned)')return 1;if(b.project==='(unassigned)')return -1;return a.project.localeCompare(b.project);});
   const el=$('#boards');
+  if(dragging)return;                                  // never rebuild mid-gesture
   if(!projects.length){el.innerHTML='<div class="empty big">no projects yet — agents register a project on connect</div>';return;}
   el.innerHTML=projects.map(p=>{
     const pt=tasks.filter(t=>t.project===p.project);
@@ -276,7 +348,7 @@ async function render(){
       `<div class="proj-h"><span class="pname">📁 <b>${esc(p.project)}</b></span>${vtog}<div class="agents">${agents||'<span class="dim">no agents</span>'}</div><span class="spacer"></span><span class="prog">${done}/${pt.length} done · ${pct}%</span></div>`+
       `<div class="proj-brief">${brief}${ph?`<span class="phase ${phaseClass(ph)}">${esc(ph)}</span>`:''}</div>`+
       `<div class="pbar"><i style="width:${pct}%"></i></div>`+
-      (view === "flow" ? flowHTML(pt) : `<div class="kanban">${cols}</div>`)+
+      (view === "flow" ? flowHTML(pt, p.project) : `<div class="kanban">${cols}</div>`)+
       chatLane(pmsgs)+
     `</div>`;
   }).join('');
@@ -284,8 +356,10 @@ async function render(){
   el.querySelectorAll('.chatlog').forEach(c=>c.scrollTop=c.scrollHeight);
   // click a card -> advance status todo->doing->done
   el.querySelectorAll('.vbtn').forEach(b=>b.onclick=()=>setView(b.dataset.proj,b.dataset.view));
+  wireFlow(el);
   el.querySelectorAll('.tcard, .fnode').forEach(c=>c.onclick=async()=>{
     const id=+c.dataset.id,t=tasks.find(x=>x.id===id);if(!t)return;
+    if(suppressClickId&&+suppressClickId===id)return;   // drag-end, not a click
     const next={todo:'doing',doing:'testing',testing:'done',failed:'doing',done:'todo',blocked:'doing'}[t.status];
     await fetch('/task/update',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({id,status:next})});render();
   });
