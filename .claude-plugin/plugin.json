@@ -1,11 +1,13 @@
 {
   "name": "trantor",
-  "version": "0.17.0",
+  "version": "0.17.1",
   "description": "Trantor — the hub-world for AI agent crews: live message bus, presence, project Kanban/flow board + crew orchestration for independent AI coding agents (Claude, Codex, Gemini, Kimi, DeepSeek)",
   "mcpServers": {
     "relay": {
       "command": "node",
-      "args": ["${CLAUDE_PLUGIN_ROOT}/mcp.mjs"]
+      "args": [
+        "${CLAUDE_PLUGIN_ROOT}/mcp.mjs"
+      ]
     }
   },
   "skills": "./skills/"

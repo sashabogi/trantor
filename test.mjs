@@ -50,6 +50,19 @@ let ctx2 = "";
 try { ctx2 = JSON.parse(r2.stdout || "{}")?.hookSpecificOutput?.additionalContext || ""; } catch {}
 ok("consumed handoff is NOT re-injected on next start", !ctx2.includes("trantor-handoff"));
 
+// home-directory guard: a session opened in ~ itself must NOT register (it would
+// spawn a phantom "<username>" project board) — unless RELAY_SESSION opts it in.
+const envSansOptIn = Object.fromEntries(Object.entries(process.env).filter(([k]) => k !== "RELAY_SESSION" && k !== "RELAY_PROJECT"));
+const rh = spawnSync("node", ["hooks/sessionstart.mjs"], {
+  input: '{"source":"startup"}', encoding: "utf8", timeout: 15000,
+  env: { ...envSansOptIn, CLAUDE_PROJECT_DIR: homedir(), RELAY_URL: CLOSED },
+});
+ok("home-dir session exits 0", rh.status === 0);
+ok("home-dir session emits {} — no registration, no phantom project", rh.stdout.trim() === "{}");
+ok("home-dir session says why on stderr", rh.stderr.includes("home directory"));
+const rh2 = runHook(homedir(), "deliberate:home");
+ok("RELAY_SESSION opts a home-dir session back in", rh2.status === 0 && !rh2.stderr.includes("not registering"));
+
 rmSync(hfFile, { force: true });
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

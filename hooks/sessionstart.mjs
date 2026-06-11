@@ -61,6 +61,14 @@ let additionalContext = "";
 try {
   await readStdin();
   const projectDir = process.env.CLAUDE_PROJECT_DIR || process.cwd();
+  // Sessions started in the home directory itself aren't project work — registering
+  // them spawns a phantom "<username>" project board on the dashboard. Set
+  // RELAY_SESSION (or RELAY_PROJECT) to deliberately put a home-dir session on the bus.
+  if (!process.env.RELAY_SESSION && !process.env.RELAY_PROJECT && projectDir === homedir()) {
+    process.stderr.write("[trantor] session in the home directory — not registering on the bus (set RELAY_SESSION to opt in)\n");
+    process.stdout.write("{}");
+    process.exit(0);
+  }
   const session = process.env.RELAY_SESSION || `${hostname()}:${basename(projectDir)}`;
   const url = relayUrl();
 
