@@ -39,7 +39,7 @@ const relayEnv = (agent) => ({ RELAY_URL: URL_, RELAY_AGENT: agent });
 
 // ---- Claude Code: plugin handles it; verify only ----
 if (has("claude")) {
-  let st = "plugin not detected — run: claude plugin marketplace add sashabogi/agent-bus && claude plugin install agent-bus";
+  let st = "plugin not detected — run: claude plugin marketplace add sashabogi/trantor && claude plugin install agent-bus";
   try {
     const s = JSON.parse(readFileSync(join(homedir(), ".claude", "settings.json"), "utf8"));
     if (Object.keys(s.enabledPlugins || {}).some(k => k.startsWith("agent-bus@"))) st = "plugin installed ✓";

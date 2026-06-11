@@ -79,7 +79,8 @@ function runTurn(prompt, isFirst, trigger = "kickoff") {
   let cmd = (isFirst || (cli.sid && !sid)) ? cli.first : cli.next;
   const mfrag = MODEL && cli.mflag ? `${cli.mflag}${MODEL}` : "";
   cmd = cmd.replaceAll("{M}", mfrag).replaceAll("{P}", pf).replaceAll("{SID}", sid);
-  if (cli.env && existsSync(cli.env)) cmd = `set -a; source ${cli.env}; set +a; ${cmd}`;
+  const envs = [join(homedir(), ".agent-bus", ".env"), cli.env].filter(f => f && existsSync(f));
+  for (const f of envs.reverse()) cmd = `set -a; source ${f}; set +a; ${cmd}`;   // ~/.agent-bus/.env wins
   log(`turn starting (${isFirst ? "fresh session" : "resume"})${MODEL ? ` · model=${MODEL}` : ""}`);
   // inherit stdio so the window shows the agent working live; also capture for sid-parsing
   const r = spawnSync("/bin/bash", ["-c", cli.sid ? `${cmd} | tee /dev/stderr` : cmd], {

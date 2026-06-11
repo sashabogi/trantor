@@ -86,19 +86,20 @@ It's ~300 lines, has no database, and the hub uses only Node built-ins.
 git clone https://github.com/sashabogi/agent-bus ~/agent-bus
 cd ~/agent-bus && npm install
 
-# 2. Start the hub — the local rendezvous every session reaches (loopback, no exposure).
-node hub.mjs &                                   # http://127.0.0.1:4477
-mkdir -p ~/.agent-bus
-echo '{"url":"http://127.0.0.1:4477"}' > ~/.agent-bus/config.json
+# 2. One-shot setup: installs the hub as an always-on service (launchd), writes config,
+#    wires every AI CLI you have, and runs the doctor to tell you what's left.
+bash deploy/setup.sh
 
 # 3. Install the plugin (auto-register hook + handoff hook + relay tools)
-claude plugin marketplace add sashabogi/agent-bus
+claude plugin marketplace add sashabogi/trantor
 claude plugin install agent-bus
 ```
 
-> **Keep it running.** `node hub.mjs &` dies when the terminal closes. For an always-on hub that
-> survives reboots, run it as a service — a launchd agent (macOS) or systemd unit (Linux) that runs
-> `node /path/to/hub.mjs` with `RELAY_PORT=4477`. (A ready-to-edit launchd plist lives in the repo notes.)
+> **`node bin/doctor.mjs`** any time — it checks the hub, the plugin, every CLI's wiring AND
+> auth state, your API keys, and the quota profile, with copy-paste fixes for anything missing.
+> Provider API keys (e.g. `DEEPSEEK_API_KEY`) live in **`~/.agent-bus/.env`** — one file, the
+> crew runners source it automatically. Each CLI's own login (ChatGPT, Google, Kimi) happens in
+> that CLI once: run it, sign in, done.
 
 Now **every new `claude` session auto-registers** with the hub and, if other sessions are live, gets a
 roster injected at startup — plus the `relay_*` tools. No per-session setup.

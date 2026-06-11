@@ -128,6 +128,14 @@ try {
   await api("/send", { from: "kimi:proj", to: "all", text: "hello" });
   const last = (await api("/recent?limit=1")).messages.at(-1);
   ok("message stamped with project", last?.project === "proj");
+  console.log("scenario: virgin-user doctor (sandbox HOME)");
+  const doc = spawn("node", [join(ROOT, "bin/doctor.mjs")], { env: { ...process.env, HOME: FAKE_HOME, RELAY_URL: HUB }, stdio: ["ignore", "pipe", "pipe"] });
+  let dout = ""; doc.stdout.on("data", d => (dout += d));
+  const dcode = await new Promise(r => doc.on("exit", r));
+  ok("doctor exits non-zero on a virgin machine", dcode === 1);
+  ok("doctor flags missing plugin with the fix", /plugin not installed/.test(dout) && /sashabogi\/trantor/.test(dout));
+  ok("doctor flags unset profile", /quota profile not set/.test(dout));
+  ok("doctor sees the hub", /hub up/.test(dout));
 } finally {
   hub.kill("SIGKILL");
   rmSync(FAKE_HOME, { recursive: true, force: true });
