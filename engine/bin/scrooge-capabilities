@@ -1,0 +1,209 @@
+#!/usr/bin/env python3
+"""
+scrooge-capabilities — refresh per-model quality scores for the weighted router.
+
+Pulls live model-capability data and writes ~/.token-scrooge/capabilities.json, which
+`scrooge` uses to route a --task to the best value model (quality-for-task ÷ cost, gated
+by difficulty) instead of always the cheapest. Run it weekly (cron) so routing tracks how
+models actually rank as they improve and get retired.
+
+Sources (zero new deps — plain HTTPS GET + JSON):
+  • Artificial Analysis  (https://artificialanalysis.ai)  — Intelligence/Coding/Math indices,
+      GPQA (reasoning proxy), output tok/s. Needs a FREE key in $AA_API_KEY (or
+      $ARTIFICIAL_ANALYSIS_API_KEY); header x-api-key. Attribution: artificialanalysis.ai.
+  • OpenRouter  (/api/v1/models) — context length + input/output modalities (best-effort,
+      uses your existing OpenRouter key if present).
+
+Matching: each registry model id maps to an AA slug via its stored `aa_slug` (from the seed),
+else by normalising the id (lowercase, '.'/'_' → '-'). Unmatched models are reported and
+left as-is. Nothing is overwritten destructively — only the score fields are updated.
+
+Usage:  scrooge-capabilities            # refresh from AA (+OpenRouter), show a report
+        scrooge-capabilities --dry-run  # fetch + match, print, but don't write
+Exit: 0 updated · 1 nothing fetched (no key / network) · 2 error.
+"""
+import sys, os, json, argparse, urllib.request, urllib.error
+
+HOME = os.path.expanduser("~")
+SCROOGE_DIR = os.environ.get("SCROOGE_HOME", os.path.join(HOME, ".token-scrooge"))
+REGISTRY = os.path.join(SCROOGE_DIR, "registry.json")
+CAPS = os.path.join(SCROOGE_DIR, "capabilities.json")
+AA_URL = "https://artificialanalysis.ai/api/v2/data/llms/models"
+
+def _c(code, s):
+    return s if not sys.stderr.isatty() else "\033[%sm%s\033[0m" % (code, s)
+GOLD = lambda s: _c("38;5;208", s)
+DIM = lambda s: _c("2", s)
+OK = lambda s: _c("32", s)
+WARN = lambda s: _c("33", s)
+ERR = lambda s: _c("31", s)
+
+def load_env_file(path):
+    if not os.path.exists(path):
+        return
+    try:
+        for line in open(path):
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            k, v = line.split("=", 1)
+            k = k.strip()
+            if k.startswith("export "):
+                k = k[len("export "):].strip()
+            v = v.strip().strip('"').strip("'")
+            if k and k not in os.environ:
+                os.environ[k] = v
+    except Exception:
+        pass
+
+def http_get_json(url, headers, timeout=30):
+    req = urllib.request.Request(url, headers=headers, method="GET")
+    with urllib.request.urlopen(req, timeout=timeout) as r:
+        return json.loads(r.read().decode())
+
+def norm(s):
+    return s.lower().replace(".", "-").replace("_", "-")
+
+def load_json(path):
+    try:
+        with open(path) as fh:
+            d = json.load(fh)
+        return d if isinstance(d, dict) else {}
+    except Exception:
+        return {}
+
+def seed_path():
+    here = os.path.dirname(os.path.realpath(__file__))
+    for c in (os.path.join(SCROOGE_DIR, "capabilities.seed.json"),
+              os.path.join(here, "..", "capabilities.seed.json")):
+        if os.path.exists(c):
+            return c
+    return None
+
+def fetch_aa():
+    key = os.environ.get("AA_API_KEY") or os.environ.get("ARTIFICIAL_ANALYSIS_API_KEY")
+    if not key:
+        sys.stderr.write(WARN("  Artificial Analysis: no $AA_API_KEY set — skipping quality refresh.\n"))
+        return {}
+    try:
+        data = http_get_json(AA_URL, {"x-api-key": key})
+    except urllib.error.HTTPError as e:
+        sys.stderr.write(ERR("  Artificial Analysis: HTTP %s (%s)\n" % (e.code, "bad key?" if e.code in (401, 403) else "")))
+        return {}
+    except Exception as e:
+        sys.stderr.write(ERR("  Artificial Analysis: %s\n" % str(e)[:80]))
+        return {}
+    rows = data.get("data") if isinstance(data, dict) else data
+    by_slug = {}
+    for m in (rows or []):
+        s = m.get("slug")
+        if s:
+            by_slug[s] = m
+    sys.stderr.write(DIM("  Artificial Analysis: %d model endpoints fetched.\n" % len(by_slug)))
+    return by_slug
+
+def fetch_openrouter():
+    reg = load_json(REGISTRY)
+    prov = (reg.get("providers", {}) or {}).get("openrouter", {})
+    key = None
+    for name in prov.get("env", ["OPENROUTER_API_KEY"]):
+        if os.environ.get(name):
+            key = os.environ[name]; break
+    if not key:
+        return {}
+    base = prov.get("base_url", "https://openrouter.ai/api/v1").rstrip("/")
+    try:
+        data = http_get_json(base + "/models", {"Authorization": "Bearer " + key})
+    except Exception:
+        return {}
+    out = {}
+    for m in (data.get("data") or []):
+        mid = m.get("id")
+        if not mid:
+            continue
+        arch = m.get("architecture") or {}
+        out[norm(mid.split("/")[-1])] = {
+            "context": m.get("context_length"),
+            "modalities": arch.get("input_modalities"),
+        }
+    sys.stderr.write(DIM("  OpenRouter: %d models fetched (context/modality).\n" % len(out)))
+    return out
+
+def aa_scores(m):
+    ev = m.get("evaluations") or {}
+    g = ev.get("gpqa")
+    return {
+        "intelligence": ev.get("artificial_analysis_intelligence_index"),
+        "coding": ev.get("artificial_analysis_coding_index"),
+        "math": ev.get("artificial_analysis_math_index"),
+        "reasoning": round(g * 100, 1) if isinstance(g, (int, float)) else None,
+        "speed_tps": m.get("median_output_tokens_per_second"),
+        "aa_slug": m.get("slug"),
+    }
+
+def main():
+    ap = argparse.ArgumentParser(prog="scrooge-capabilities")
+    ap.add_argument("--dry-run", action="store_true", help="fetch + match + print, but don't write")
+    args = ap.parse_args()
+
+    load_env_file(os.path.join(SCROOGE_DIR, ".env"))
+    reg = load_json(REGISTRY)
+    if not reg.get("models"):
+        sys.stderr.write(ERR("No registry at %s — run `scrooge setup` first.\n" % REGISTRY)); return 2
+
+    # base store: existing user caps, else the shipped seed
+    caps = load_json(CAPS) or load_json(seed_path() or "")
+    caps.setdefault("_meta", {})
+
+    by_slug = fetch_aa()
+    by_or = fetch_openrouter()
+    if not by_slug and not by_or:
+        sys.stderr.write(WARN("Nothing fetched — set $AA_API_KEY (free at artificialanalysis.ai) and/or an OpenRouter key.\n"))
+        return 1
+
+    today = __import__("time").strftime("%Y-%m-%d")
+    matched, unmatched = [], []
+    for mid in reg["models"]:
+        existing = caps.get(mid) if isinstance(caps.get(mid), dict) else {}
+        slug = (existing.get("aa_slug") or norm(mid))
+        m = by_slug.get(slug) or by_slug.get(norm(mid))
+        rec = dict(existing)
+        if m:
+            rec.update({k: v for k, v in aa_scores(m).items() if v is not None or k == "math"})
+            rec["updated"] = today
+            rec["source"] = "artificialanalysis"
+            matched.append(mid)
+        elif by_slug:
+            unmatched.append(mid)
+        orx = by_or.get(norm(mid))
+        if orx:
+            if orx.get("context"):
+                rec["context"] = orx["context"]
+            if orx.get("modalities"):
+                rec["modalities"] = orx["modalities"]
+        if rec:
+            caps[mid] = rec
+
+    caps["_meta"].update({"source": "artificialanalysis.ai + openrouter", "refreshed": today,
+                          "attribution": "https://artificialanalysis.ai/"})
+
+    sys.stderr.write(GOLD("🪙 scrooge-capabilities — %d matched, %d unmatched\n" % (len(matched), len(unmatched))))
+    for mid in matched:
+        c = caps[mid]
+        sys.stderr.write("  %s %-24s intel=%-5s code=%-5s reason=%-5s %st/s\n" % (
+            OK("✓"), mid, c.get("intelligence"), c.get("coding"), c.get("reasoning"),
+            (str(round(c["speed_tps"])) if isinstance(c.get("speed_tps"), (int, float)) else "?")))
+    for mid in unmatched:
+        sys.stderr.write("  %s %-24s %s\n" % (WARN("?"), mid,
+                         DIM("no AA match for slug '%s' — set its aa_slug in capabilities.json" % norm(mid))))
+
+    if args.dry_run:
+        sys.stderr.write(DIM("  (--dry-run: not written)\n")); return 0
+    os.makedirs(SCROOGE_DIR, exist_ok=True)
+    with open(CAPS, "w") as fh:
+        json.dump(caps, fh, indent=2); fh.write("\n")
+    sys.stderr.write(OK("  wrote %s\n" % CAPS.replace(HOME, "~")))
+    return 0
+
+if __name__ == "__main__":
+    sys.exit(main())

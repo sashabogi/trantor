@@ -1,0 +1,263 @@
+#!/usr/bin/env python3
+"""
+diverge — native "diverge then focus" idea generator (claude-adhd pattern).
+
+PHASE 1 (Diverge): spawn N isolated ideation calls, each under a DIFFERENT
+cognitive frame, fanned across DIFFERENT cheap model families (DeepSeek / GLM /
+Gemini / Kimi) so branches can't anchor on each other or on one model's bias.
+Runs in parallel via the ~/.claude/bin/llm harness (cheap, ~free, transparent).
+
+PHASE 2 (Focus): a critic pass scores ideas (novelty/viability/fit), flags
+seductive-but-broken "traps", clusters by approach, and deepens the top-K.
+
+  • Default                : Phase 1 (cheap, parallel) + Phase 2 critic (cheap model).
+  • --raw                  : Phase 1 only — emit aggregated ideas JSON so OPUS
+                             (the orchestrator) can run the focus pass at full quality.
+                             This is the preferred flow inside Claude Code.
+
+Usage:
+  diverge "design a rate limiter that survives leader election"
+  diverge "name this function" --frames 4 --ideas 6 --top 2
+  diverge "..." --raw                 # ideas JSON -> Opus does the critic
+  diverge "..." --critic kimi         # autonomous, pick the critic model
+  diverge --list-frames
+
+Only for DIVERGENT problems (design, naming, API surface, debug hypotheses,
+"a few ways to X"). Not for convergent/execution work.
+"""
+import sys, os, json, argparse, subprocess, re, concurrent.futures, shutil
+
+# Resolve the cheap-model router (sibling `scrooge`), with PATH fallback.
+_HERE = os.path.dirname(os.path.realpath(__file__))
+LLM = os.path.join(_HERE, "scrooge")
+if not os.path.exists(LLM):
+    LLM = shutil.which("scrooge") or LLM
+
+# Cheap model families to rotate across (maximizes cross-family diversity).
+# Only models that are funded/working belong here; edit freely.
+# Fast, non-thinking models with clean JSON output across diverse families.
+# (Thinking models like gemini-2.5-flash / kimi-k2.6 burn the token budget on
+#  reasoning and truncate the JSON — use them explicitly, not in the default fan.)
+DIVERGE_MODELS = ["deepseek-chat", "glm-4.6", "glm-4.5-air", "gemini-2.5-flash-lite"]
+DEFAULT_CRITIC = "deepseek-chat"
+
+# --- live-model resolution (only fan across models the user actually has keys for) ---
+def _scrooge_home():
+    return os.environ.get("SCROOGE_HOME", os.path.join(os.path.expanduser("~"), ".opus-scrooge"))
+
+def _load_keys():
+    """Load SCROOGE_HOME/.env and $SCROOGE_ENV_FILE into os.environ (no override)."""
+    for path in (os.path.join(_scrooge_home(), ".env"), os.environ.get("SCROOGE_ENV_FILE", "")):
+        if path and os.path.exists(path):
+            for line in open(path):
+                line = line.strip()
+                if line and not line.startswith("#") and "=" in line:
+                    k, v = line.split("=", 1); k = k.strip()
+                    if k.startswith("export "): k = k[7:].strip()
+                    if k and k not in os.environ: os.environ[k] = v.strip().strip('"').strip("'")
+
+def live_models(prefer):
+    """Filter `prefer` to models whose provider has a live key; fall back to any live model."""
+    _load_keys()
+    try:
+        reg = json.load(open(os.path.join(_scrooge_home(), "registry.json")))
+    except Exception:
+        return prefer
+    provs, models = reg.get("providers", {}), reg.get("models", {})
+    has = lambda p: any(os.environ.get(n) for n in provs.get(p, {}).get("env", []))
+    live = [m for m in prefer if m in models and has(models[m]["provider"])]
+    if live:
+        return live
+    return [m for m, c in models.items() if has(c["provider"])] or prefer
+
+def first_live(prefer_list):
+    pool = live_models(prefer_list)
+    return pool[0] if pool else prefer_list[0]
+
+FRAMES = [
+    ("first-principles", "Ignore all convention and prior art. Derive solutions purely from the underlying constraints and physics of the problem."),
+    ("constraint-inversion", "Identify the single biggest assumed constraint, then imagine it removed or reversed. What becomes possible?"),
+    ("adversary", "Think like an attacker / red-teamer. Design from the angle of how this breaks, gets abused, or fails under hostile conditions — then what design survives that."),
+    ("minimalist", "Find the absolute simplest thing that could possibly work. Strip every non-essential part. Bias toward less."),
+    ("extreme-scale", "Assume 1000x the load, users, data, or concurrency. What designs only make sense at extreme scale?"),
+    ("cross-domain", "Borrow from a completely different field (biology, logistics, games, finance, distributed systems). What analogy transfers?"),
+    ("user-empathy", "Reason only from the end-user's lived experience and emotional needs. What do THEY actually feel and want?"),
+    ("temporal", "Think 2 years out. What ages badly, what becomes legacy, what is still good in the long run?"),
+    ("pragmatic-cost", "Optimize for cheapest and fastest to ship and operate. What is the 80/20 that ships this week?"),
+    ("composition", "Solve it by combining existing, proven building blocks rather than inventing anything new."),
+    ("contrarian", "Argue hard for the OPPOSITE of the obvious/popular approach. Make the strongest case for the unconventional path."),
+    ("second-order", "Focus on downstream and emergent effects. What does this cause two steps later that nobody planned for?"),
+]
+
+def frame_lookup():
+    return {n: v for n, v in FRAMES}
+
+def extract_json(text):
+    """Pull a JSON object/array out of model output (handles code fences/prose)."""
+    if not text:
+        return None
+    t = text.strip()
+    t = re.sub(r"^```(?:json)?\s*|\s*```$", "", t, flags=re.MULTILINE).strip()
+    for opener, closer in (("{", "}"), ("[", "]")):
+        i = t.find(opener)
+        if i >= 0:
+            depth = 0
+            for j in range(i, len(t)):
+                if t[j] == opener: depth += 1
+                elif t[j] == closer:
+                    depth -= 1
+                    if depth == 0:
+                        try:
+                            return json.loads(t[i:j+1])
+                        except Exception:
+                            break
+    try:
+        return json.loads(t)
+    except Exception:
+        pass
+    # Salvage: pull complete {...} objects out of a truncated array.
+    objs = []
+    for m in re.finditer(r"\{[^{}]*\}", t):
+        try:
+            objs.append(json.loads(m.group(0)))
+        except Exception:
+            continue
+    return objs or None
+
+def call_llm(model, prompt, system=None, max_tokens=900, want_json=True):
+    cmd = [LLM, "--model", model, "--max-tokens", str(max_tokens)]
+    if want_json:
+        cmd.append("--json")
+    if system:
+        cmd += ["--system", system]
+    cmd.append(prompt)
+    # stderr inherits -> the 🔶 EXTERNAL-LLM banners stay visible (transparency).
+    r = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=None, text=True)
+    return r.stdout
+
+def run_frame(problem, frame_name, vantage, model, ideas_per_frame):
+    system = ("You are an idea GENERATOR working under a strict cognitive frame. "
+              "Generate diverse ideas ONLY — do NOT evaluate, rank, or hedge. "
+              "Adopt this lens completely: " + vantage)
+    prompt = (f'PROBLEM: {problem}\n\n'
+              f'Through the "{frame_name}" lens above, produce {ideas_per_frame} DISTINCT ideas. '
+              f'Each idea: a short title and a 1-3 sentence sketch. '
+              f'Respond as JSON: {{"ideas":[{{"title":"...","sketch":"..."}}]}}')
+    out = call_llm(model, prompt, system=system, max_tokens=1400)
+    parsed = extract_json(out)
+    ideas = []
+    if isinstance(parsed, dict):
+        ideas = parsed.get("ideas", []) or []
+    elif isinstance(parsed, list):
+        ideas = parsed
+    norm = []
+    for it in ideas:
+        if isinstance(it, dict) and it.get("title"):
+            norm.append({"title": str(it.get("title"))[:160], "sketch": str(it.get("sketch", ""))[:600],
+                         "frame": frame_name, "model": model})
+    return norm
+
+def diverge(problem, n_frames, ideas_per_frame, workers):
+    chosen = FRAMES[:n_frames] if n_frames <= len(FRAMES) else FRAMES
+    pool = live_models(DIVERGE_MODELS)   # only models the user has keys for
+    sys.stderr.write("\n\033[1m◆ DIVERGE\033[0m — %d frames × %d ideas, fanned across %d cheap model(s) (parallel)\n" % (len(chosen), ideas_per_frame, len(pool)))
+    sys.stderr.write("  frames: %s\n  models: %s\n\n" % (", ".join(n for n, _ in chosen), ", ".join(pool)))
+    results = []
+    with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as ex:
+        futs = {}
+        for i, (fname, vantage) in enumerate(chosen):
+            model = pool[i % len(pool)]
+            futs[ex.submit(run_frame, problem, fname, vantage, model, ideas_per_frame)] = fname
+        for fut in concurrent.futures.as_completed(futs):
+            try:
+                ideas = fut.result()
+                results.extend(ideas)
+                sys.stderr.write("  ✓ %-20s %d ideas\n" % (futs[fut], len(ideas)))
+            except Exception as e:
+                sys.stderr.write("  ✗ %-20s %s\n" % (futs[fut], e))
+    return results
+
+def focus(problem, ideas, top_k, critic_model):
+    # De-identify frames so the critic doesn't bias toward a label.
+    listing = "\n".join("%d. %s — %s" % (i+1, it["title"], it["sketch"]) for i, it in enumerate(ideas))
+    system = ("You are a sharp, skeptical critic. You evaluate a pool of candidate ideas. "
+              "Your highest-value job is spotting SEDUCTIVE-BUT-BROKEN ideas (traps) and saying why. "
+              "Be concrete and honest; do not inflate scores.")
+    prompt = (f'PROBLEM: {problem}\n\nCANDIDATE IDEAS:\n{listing}\n\n'
+              f'Do all of the following and respond as JSON:\n'
+              f'1. Cluster the ideas into a few distinct approaches (name each cluster).\n'
+              f'2. Flag "traps": ideas that look attractive but are broken/risky, WITH the reason.\n'
+              f'3. Pick the top {top_k} ideas overall (by novelty+viability+fit) and DEEPEN each into '
+              f'{{"title","why_it_wins","risks":["..."],"first_steps":["..."]}}.\n'
+              f'JSON shape: {{"clusters":[{{"name","idea_indexes":[..]}}],'
+              f'"traps":[{{"title","why_broken"}}],'
+              f'"top":[{{"title","why_it_wins","risks":[],"first_steps":[]}}]}}')
+    sys.stderr.write("\n\033[1m◆ FOCUS\033[0m — critic pass on %s\n" % critic_model)
+    out = call_llm(critic_model, prompt, system=system, max_tokens=2000)
+    return extract_json(out)
+
+def render(problem, ideas, report):
+    print("=" * 70)
+    print("DIVERGE → FOCUS:", problem)
+    print("=" * 70)
+    print("\nGenerated %d ideas across %d frames.\n" % (len(ideas), len(set(i["frame"] for i in ideas))))
+    if not report:
+        print("(critic returned no parseable result — raw ideas below)")
+        for it in ideas:
+            print("  • [%s] %s — %s" % (it["frame"], it["title"], it["sketch"]))
+        return
+    cl = report.get("clusters", [])
+    if cl:
+        print("APPROACHES:")
+        for c in cl:
+            print("  ▸ %s  (%d ideas)" % (c.get("name", "?"), len(c.get("idea_indexes", []))))
+    traps = report.get("traps", [])
+    if traps:
+        print("\n⚠ TRAPS (seductive but broken):")
+        for t in traps:
+            print("  ✗ %s — %s" % (t.get("title", "?"), t.get("why_broken", "")))
+    top = report.get("top", [])
+    if top:
+        print("\n★ TOP %d (deepened):" % len(top))
+        for i, t in enumerate(top, 1):
+            print("\n  %d. %s" % (i, t.get("title", "?")))
+            print("     why: %s" % t.get("why_it_wins", ""))
+            for r in t.get("risks", []): print("     risk: %s" % r)
+            for s in t.get("first_steps", []): print("     step: %s" % s)
+    print()
+
+def main():
+    ap = argparse.ArgumentParser(prog="diverge")
+    ap.add_argument("problem", nargs="?")
+    ap.add_argument("--frames", type=int, default=6)
+    ap.add_argument("--ideas", type=int, default=5, help="ideas per frame")
+    ap.add_argument("--top", type=int, default=3)
+    ap.add_argument("--workers", type=int, default=6)
+    ap.add_argument("--critic", default=DEFAULT_CRITIC)
+    ap.add_argument("--raw", action="store_true", help="emit ideas JSON only (Opus does the focus)")
+    ap.add_argument("--list-frames", action="store_true")
+    args = ap.parse_args()
+
+    if args.list_frames:
+        for n, v in FRAMES:
+            print("%-20s %s" % (n, v))
+        return
+    if not args.problem:
+        ap.error("provide a problem, or --list-frames")
+
+    ideas = diverge(args.problem, args.frames, args.ideas, args.workers)
+    if not ideas:
+        sys.stderr.write("No ideas generated.\n"); sys.exit(2)
+
+    if args.raw:
+        # Hand structured ideas to the orchestrator (Opus) for a full-quality focus pass.
+        json.dump({"problem": args.problem, "ideas": ideas}, sys.stdout, indent=2)
+        sys.stdout.write("\n")
+        return
+
+    critic = first_live([args.critic] + DIVERGE_MODELS)   # ensure the critic model is live
+    report = focus(args.problem, ideas, args.top, critic)
+    render(args.problem, ideas, report)
+
+if __name__ == "__main__":
+    main()

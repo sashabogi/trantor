@@ -1,0 +1,126 @@
+#!/usr/bin/env python3
+"""
+scrooge-drift — detect when the scrooge registry has fallen behind reality.
+
+For every provider that has a live API key, lists the models the provider
+actually serves right now (`scrooge models <provider>`) and diffs that against
+the model ids the registry routes to.
+
+Reports:
+  DEAD   — model id in the registry that the provider no longer serves
+           (these calls will FAIL — fix ASAP)
+  NEW    — current-gen model the provider serves that the registry doesn't know
+           (candidate to adopt; filtered to likely chat models)
+
+Exit code 0 = registry in sync. Exit code 1 = drift found (DEAD or NEW).
+Run weekly via cron; act on the report next session.
+
+Usage: scrooge-drift [--json] [--quiet]
+"""
+import os, sys, json, subprocess, re
+
+HOME = os.path.expanduser("~")
+SCROOGE_DIR = os.environ.get("SCROOGE_HOME", os.path.join(HOME, ".token-scrooge"))
+REGISTRY = os.path.join(SCROOGE_DIR, "registry.json")
+SCROOGE = os.environ.get("SCROOGE_BIN", os.path.join(HOME, ".local", "bin", "scrooge"))
+
+# Live model ids matching these are noise we'd never route grunt work to:
+# media/audio/embeddings/etc, legacy generations, and dated pin snapshots.
+NOISE = re.compile(
+    r"(image|video|audio|tts|embed|whisper|imagine|aqa|computer-use|"
+    r"deep-research|antigravity|guard|rerank|moderation|robotics|realtime|"
+    r"transcribe|search-preview|sora|veo|lyria|gemma|nano-banana|"
+    r"babbage|davinci|instruct|moonshot-v1|"
+    r"gpt-3|gpt-4-|gpt-4o|gpt-4\.|gpt-4$|"           # superseded OpenAI gens
+    r"gemini-2\.0|gemini-1|"                          # superseded Gemini gens
+    r"o1|o3|o4-|"                                      # superseded OpenAI reasoners
+    r"-latest$|"                                       # rolling aliases, not pinned ids
+    r"-\d{4}-\d{2}-\d{2}|-\d{6}$|-\d{4}$|-preview-\d)",  # dated pin snapshots
+    re.I,
+)
+NEW_CAP = 10  # don't flood the report; the refresh pass does the real curation
+
+
+def load_registry():
+    with open(REGISTRY) as fh:
+        return json.load(fh)
+
+
+def live_models(provider):
+    """Return the set of model ids the provider serves right now, or None on error."""
+    try:
+        out = subprocess.run(
+            [SCROOGE, "models", provider],
+            capture_output=True, text=True, timeout=40,
+        )
+    except Exception as e:
+        return None, str(e)
+    if out.returncode != 0:
+        return None, (out.stderr or out.stdout).strip()[:200]
+    ids = set()
+    for line in out.stdout.splitlines():
+        s = line.strip()
+        if not s or " " in s:          # skip headers / banner lines
+            continue
+        ids.add(s.split("/")[-1])      # strip "models/" gemini prefix
+    return ids, None
+
+
+def main():
+    as_json = "--json" in sys.argv
+    quiet = "--quiet" in sys.argv
+    reg = load_registry()
+
+    # provider -> registry model ids
+    reg_by_prov = {}
+    for mid, m in reg["models"].items():
+        reg_by_prov.setdefault(m["provider"], set()).add(mid)
+
+    report = {"dead": {}, "new": {}, "errors": {}}
+    for prov in reg["providers"]:
+        # only providers we actually route to AND have a key for
+        if prov not in reg_by_prov:
+            continue
+        live, err = live_models(prov)
+        if live is None:
+            report["errors"][prov] = err
+            continue
+        registered = reg_by_prov[prov]
+        dead = sorted(m for m in registered if m.split("/")[-1] not in live)
+        new = sorted(
+            m for m in live
+            if m not in {r.split("/")[-1] for r in registered} and not NOISE.search(m)
+        )
+        if dead:
+            report["dead"][prov] = dead
+        if new:
+            report["new"][prov] = new
+
+    drift = bool(report["dead"] or report["new"])
+
+    if as_json:
+        print(json.dumps({"drift": drift, **report}, indent=2))
+    elif not quiet or drift:
+        if report["dead"]:
+            print("DEAD (registry routes to retired models — calls will FAIL):")
+            for p, ms in report["dead"].items():
+                print("  %-10s %s" % (p, ", ".join(ms)))
+        if report["new"]:
+            print("NEW (current-gen models not yet in registry):")
+            for p, ms in report["new"].items():
+                shown = ms[:NEW_CAP]
+                extra = len(ms) - len(shown)
+                tail = "  (+%d more)" % extra if extra > 0 else ""
+                print("  %-10s %s%s" % (p, ", ".join(shown), tail))
+        if report["errors"]:
+            print("ERRORS (couldn't list — skipped):")
+            for p, e in report["errors"].items():
+                print("  %-10s %s" % (p, e))
+        if not drift and not report["errors"]:
+            print("registry in sync — no drift.")
+
+    sys.exit(1 if drift else 0)
+
+
+if __name__ == "__main__":
+    main()

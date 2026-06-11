@@ -1,0 +1,112 @@
+{
+  "_comment": "Token Scrooge capability seed \u2014 per-model quality scores used by the weighted router (quality-for-task / cost), gated by difficulty. Numbers are Artificial Analysis (artificialanalysis.ai) metrics, snapshot 2026-06-04: intelligence=AA Intelligence Index, coding=AA Coding Index, math=AA Math Index, reasoning=GPQA Diamond x100, speed_tps=median output tokens/sec (all 0-100 except speed). Committed as a starter set; refresh/override the user-local ~/.token-scrooge/capabilities.json weekly via `scrooge-capabilities` (AA + OpenRouter). null = AA had no score for that eval; the router falls back to the intelligence index.",
+  "_meta": {
+    "source": "artificialanalysis.ai",
+    "snapshot": "2026-06-04",
+    "attribution": "https://artificialanalysis.ai/"
+  },
+  "deepseek-v4-flash": {
+    "intelligence": 46.5,
+    "coding": 38.7,
+    "math": null,
+    "reasoning": 89.4,
+    "speed_tps": 119.722,
+    "aa_slug": "deepseek-v4-flash"
+  },
+  "deepseek-v4-pro": {
+    "intelligence": 51.5,
+    "coding": 47.5,
+    "math": null,
+    "reasoning": 88.8,
+    "speed_tps": 46.223,
+    "aa_slug": "deepseek-v4-pro"
+  },
+  "kimi-k2.6": {
+    "intelligence": 53.9,
+    "coding": 47.1,
+    "math": null,
+    "reasoning": 91.1,
+    "speed_tps": 41.575,
+    "aa_slug": "kimi-k2-6"
+  },
+  "glm-4.5-air": {
+    "intelligence": 23.2,
+    "coding": 23.8,
+    "math": 80.7,
+    "reasoning": 73.3,
+    "speed_tps": 74.495,
+    "aa_slug": "glm-4-5-air"
+  },
+  "glm-4.7": {
+    "intelligence": 42.1,
+    "coding": 36.3,
+    "math": 95,
+    "reasoning": 85.9,
+    "speed_tps": 79.245,
+    "aa_slug": "glm-4-7"
+  },
+  "glm-5": {
+    "intelligence": 49.8,
+    "coding": 44.2,
+    "math": null,
+    "reasoning": 82.0,
+    "speed_tps": 79.532,
+    "aa_slug": "glm-5"
+  },
+  "gemini-2.5-flash-lite": {
+    "intelligence": 12.7,
+    "coding": 7.4,
+    "math": 35.3,
+    "reasoning": 47.4,
+    "speed_tps": 229.515,
+    "aa_slug": "gemini-2-5-flash-lite"
+  },
+  "gemini-2.5-flash": {
+    "intelligence": 20.6,
+    "coding": 17.8,
+    "math": 60.3,
+    "reasoning": 68.3,
+    "speed_tps": 185.129,
+    "aa_slug": "gemini-2-5-flash"
+  },
+  "gemini-3-flash-preview": {
+    "intelligence": 35,
+    "coding": 37.8,
+    "math": 55.7,
+    "reasoning": 81.2,
+    "speed_tps": 181.264,
+    "aa_slug": "gemini-3-flash"
+  },
+  "gpt-5-nano": {
+    "intelligence": 26.8,
+    "coding": 20.3,
+    "math": 83.7,
+    "reasoning": 67.6,
+    "speed_tps": 150.373,
+    "aa_slug": "gpt-5-nano"
+  },
+  "gpt-5-mini": {
+    "intelligence": 41.2,
+    "coding": 35.3,
+    "math": 90.7,
+    "reasoning": 82.8,
+    "speed_tps": 87.426,
+    "aa_slug": "gpt-5-mini"
+  },
+  "gpt-4.1-mini": {
+    "intelligence": 22.9,
+    "coding": 18.5,
+    "math": 46.3,
+    "reasoning": 66.4,
+    "speed_tps": 79.254,
+    "aa_slug": "gpt-4-1-mini"
+  },
+  "grok-4.3": {
+    "intelligence": 53.2,
+    "coding": 41,
+    "math": null,
+    "reasoning": 90.1,
+    "speed_tps": 125.405,
+    "aa_slug": "grok-4-3"
+  }
+}

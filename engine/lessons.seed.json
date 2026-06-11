@@ -1,0 +1,17 @@
+{
+  "_comment": "Token Scrooge live-training seed lessons. Short corrective guardrails injected into a cheap model's system prompt at routing time. Shape: { \"<model-id-or-alias>\": { \"<task>\"|\"*\": [\"one-liner\", ...] } }, plus a top-level \"*\" model bucket for lessons that apply to EVERY routed (cheap, execution-only) model. This file is COMMITTED and read-only at runtime; on first use it is copied to the user-local $SCROOGE_HOME/lessons.json, which then overrides/extends it (edit there via `scrooge learn` / `scrooge forget`, or re-merge new seeds with `scrooge learn --seed`). Keys starting with \"_\" are metadata and ignored by the loader.",
+  "_generalization_note": "The three deepseek-v4-flash/code lessons come from the 2026-06-04 polymarket dogfood. Decision: the order-book ordering pitfall is kept model-specific (deepseek-v4-flash, where it was observed), while the two model-agnostic correctness rules (absent numerics -> 0.0/schema default, exact schema key names) are promoted to the top-level \"*\"/code bucket so EVERY cheap code model inherits them. Scrooge only ever routes cheap execution models, so a \"*\" lesson never reaches an orchestrator. Exact-text de-dup means deepseek/code still shows all three with no duplication.",
+  "deepseek-v4-flash": {
+    "code": [
+      "Never assume API array ordering — sort order-book bids/asks explicitly by price.",
+      "Use 0.0 (or the schema default) for absent numeric values, not None.",
+      "Use the exact key names from the provided schema/example; do not invent fields."
+    ]
+  },
+  "*": {
+    "code": [
+      "Use 0.0 (or the schema default) for absent numeric values, not None.",
+      "Use the exact key names from the provided schema/example; do not invent fields."
+    ]
+  }
+}

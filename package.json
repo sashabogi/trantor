@@ -1,6 +1,6 @@
 {
   "name": "trantor",
-  "version": "0.15.0",
+  "version": "0.16.0",
   "type": "module",
   "bin": {
     "trantor": "bin/cli.mjs"
@@ -24,7 +24,8 @@
     "configs/",
     ".claude-plugin/",
     "README.md",
-    "LICENSE"
+    "LICENSE",
+    "engine/"
   ],
   "repository": {
     "type": "git",

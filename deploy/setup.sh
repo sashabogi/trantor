@@ -16,10 +16,10 @@ if [ "$(uname)" = "Darwin" ]; then
 else
   echo "Linux: run the hub under systemd/tmux:  RELAY_PORT=4477 node $REPO/hub.mjs"
 fi
-# the economics engine — part of Trantor, installed automatically (it IS the brain)
-if ! command -v scrooge >/dev/null 2>&1 && [ ! -x "$HOME/.local/bin/scrooge" ]; then
+# the economics engine — vendored in engine/, installed automatically (it IS the brain)
+if [ -f "$REPO/engine/install.sh" ]; then
   echo "▸ installing the economics engine (routing + cost ledger)…"
-  curl -fsSL https://raw.githubusercontent.com/sashabogi/token-scrooge/main/install.sh | bash \
+  bash "$REPO/engine/install.sh" >/dev/null 2>&1 \
     && echo "✓ economics engine installed" \
     || echo "  (engine install failed — Trantor still works; the Advisor runs without live pricing. Retry: trantor setup)"
   case ":$PATH:" in *":$HOME/.local/bin:"*) ;; *) echo "  note: add ~/.local/bin to your PATH";; esac

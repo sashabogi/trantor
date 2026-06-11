@@ -1,0 +1,190 @@
+#!/usr/bin/env python3
+"""
+verify — harness-backed verification gate (Tier 3 executor).
+
+Two-part verification, cheapest-first:
+  1. DETERMINISTIC (free, ground truth): detect the toolchain and actually run
+     build / typecheck / test, capturing real exit codes + output tails. A
+     non-zero exit is an objective FAIL — no LLM can override it.
+  2. JUDGMENT (cheap LLM via ~/.claude/bin/llm --task verify): only if the
+     deterministic steps pass AND a --claim is given, ask a cheap model whether
+     the evidence actually SUPPORTS the claim and what it does NOT cover
+     (e.g. "tests pass but none exercise the new function"). Opus adjudicates last.
+
+The agent that wrote the code is never the judge: this re-runs everything itself.
+
+Usage:
+  verify --dir . --claim "added POST /v1/refunds that 409s on duplicate"
+  verify --dir path/to/repo                 # deterministic only (no claim)
+  verify --cmd "npm test" --claim "..."     # explicit command instead of autodetect
+  verify --no-llm                           # deterministic only, skip judgment
+  verify --judge kimi --json                # choose judge model / JSON output
+
+Verdict: VERIFIED (built+tested+judgment supports) · FAILED (a step errored or
+judge refutes) · INCONCLUSIVE (passes but judge finds gaps / nothing to run).
+Exit code: 0 VERIFIED, 1 INCONCLUSIVE, 2 FAILED.
+"""
+import sys, os, json, argparse, subprocess, shutil
+
+# Resolve the cheap-model router (sibling `scrooge`), with PATH fallback.
+_HERE = os.path.dirname(os.path.realpath(__file__))
+LLM = os.path.join(_HERE, "scrooge")
+if not os.path.exists(LLM):
+    LLM = shutil.which("scrooge") or LLM
+
+def sh(cmd, cwd, timeout=600):
+    try:
+        r = subprocess.run(cmd, cwd=cwd, shell=True, stdout=subprocess.PIPE,
+                           stderr=subprocess.STDOUT, text=True, timeout=timeout)
+        return r.returncode, r.stdout
+    except subprocess.TimeoutExpired:
+        return 124, "(timed out after %ds)" % timeout
+    except Exception as e:
+        return 1, str(e)
+
+def tail(s, n=30):
+    lines = (s or "").strip().splitlines()
+    return "\n".join(lines[-n:])
+
+def has(cwd, *names):
+    return any(os.path.exists(os.path.join(cwd, n)) for n in names)
+
+def pkg_scripts(cwd):
+    try:
+        return json.load(open(os.path.join(cwd, "package.json"))).get("scripts", {}) or {}
+    except Exception:
+        return {}
+
+def detect_steps(cwd):
+    """Return [(name, cmd), ...] of build/typecheck/test commands that exist."""
+    steps = []
+    if has(cwd, "package.json"):
+        sc = pkg_scripts(cwd)
+        runner = "npm run"
+        pm = "npm"
+        if has(cwd, "pnpm-lock.yaml"): runner, pm = "pnpm", "pnpm"
+        elif has(cwd, "yarn.lock"): runner, pm = "yarn", "yarn"
+        if "build" in sc: steps.append(("build", "%s build" % runner))
+        if "typecheck" in sc: steps.append(("typecheck", "%s typecheck" % runner))
+        elif "type-check" in sc: steps.append(("typecheck", "%s type-check" % runner))
+        elif has(cwd, "tsconfig.json") and shutil.which("npx"): steps.append(("typecheck", "npx tsc --noEmit"))
+        if "test" in sc: steps.append(("test", "npm test" if pm == "npm" else "%s test" % runner))
+        return "node", steps
+    if has(cwd, "Cargo.toml"):
+        return "rust", [("build", "cargo build"), ("test", "cargo test")]
+    if has(cwd, "go.mod"):
+        return "go", [("build", "go build ./..."), ("test", "go test ./...")]
+    if has(cwd, "pyproject.toml", "setup.py", "pytest.ini", "tox.ini"):
+        steps = []
+        if shutil.which("ruff"): steps.append(("lint", "ruff check ."))
+        steps.append(("test", "python3 -m pytest -q"))
+        return "python", steps
+    if has(cwd, "Makefile"):
+        steps = []
+        mk = open(os.path.join(cwd, "Makefile")).read()
+        if "\nbuild:" in mk or mk.startswith("build:"): steps.append(("build", "make build"))
+        if "\ntest:" in mk or mk.startswith("test:"): steps.append(("test", "make test"))
+        return "make", steps
+    return "unknown", []
+
+def judge(claim, steps, judge_model):
+    ev = "\n".join("- %s: `%s` → exit %d\n  output tail:\n%s" %
+                   (s["name"], s["cmd"], s["exit"], "\n".join("    " + l for l in s["tail"].splitlines()[-12:]))
+                   for s in steps)
+    prompt = (
+        "You are a skeptical verification judge. A claim of completed work is below, "
+        "with the ACTUAL build/test commands that were run and their real output.\n\n"
+        "CLAIM: %s\n\nEVIDENCE (commands actually executed):\n%s\n\n"
+        "Decide, strictly from the evidence, whether it SUPPORTS the claim. Passing tests "
+        "on unrelated code do NOT support a specific claim. If nothing here actually exercises "
+        "the claimed behavior, say so. Respond as JSON: "
+        '{"supports": true|false, "gaps": ["what is not proven by this evidence"], '
+        '"verdict": "VERIFIED|INCONCLUSIVE|FAILED", "reasoning": "one or two sentences"}'
+    ) % (claim, ev)
+    try:
+        out = subprocess.run([LLM, "--task", "verify", "--model", judge_model, "--json",
+                              "--max-tokens", "700", prompt],
+                             stdout=subprocess.PIPE, stderr=None, text=True).stdout
+        import re
+        m = re.search(r"\{.*\}", out, re.DOTALL)
+        return json.loads(m.group(0)) if m else None
+    except Exception as e:
+        sys.stderr.write("[verify] judge error: %s\n" % e)
+        return None
+
+def main():
+    ap = argparse.ArgumentParser(prog="verify")
+    ap.add_argument("--dir", default=".")
+    ap.add_argument("--claim")
+    ap.add_argument("--cmd", action="append", help="explicit command(s) to run instead of autodetect")
+    ap.add_argument("--judge", default="deepseek-chat")
+    ap.add_argument("--no-llm", action="store_true")
+    ap.add_argument("--json", action="store_true")
+    ap.add_argument("--timeout", type=int, default=600)
+    args = ap.parse_args()
+
+    cwd = os.path.abspath(args.dir)
+    if not os.path.isdir(cwd):
+        sys.stderr.write("no such dir: %s\n" % cwd); sys.exit(2)
+
+    if args.cmd:
+        toolchain, plan = "custom", [("cmd%d" % i, c) for i, c in enumerate(args.cmd, 1)]
+    else:
+        toolchain, plan = detect_steps(cwd)
+
+    sys.stderr.write("\033[1m◆ VERIFY\033[0m %s  [toolchain: %s]\n" % (cwd, toolchain))
+    steps = []
+    any_fail = False
+    for name, cmd in plan:
+        sys.stderr.write("  ▶ %-10s %s\n" % (name, cmd))
+        code, out = sh(cmd, cwd, args.timeout)
+        ok = code == 0
+        any_fail = any_fail or not ok
+        steps.append({"name": name, "cmd": cmd, "exit": code, "ok": ok, "tail": tail(out)})
+        sys.stderr.write("    %s exit %d\n" % ("✓" if ok else "✗", code))
+
+    built = any(s["name"] in ("build", "typecheck") and s["ok"] for s in steps) or \
+            not any(s["name"] in ("build", "typecheck") for s in steps)
+    tested = any(s["name"] == "test" and s["ok"] for s in steps)
+
+    result = {"dir": cwd, "toolchain": toolchain, "steps": steps,
+              "built": built, "tested": tested, "ran_anything": bool(steps)}
+
+    if any_fail:
+        verdict = "FAILED"
+        result["blockingIssues"] = ["%s failed (exit %d)" % (s["name"], s["exit"]) for s in steps if not s["ok"]]
+    elif not steps:
+        verdict = "INCONCLUSIVE"
+        result["blockingIssues"] = ["no build/test commands detected — nothing was actually run"]
+    elif args.claim and not args.no_llm:
+        j = judge(args.claim, steps, args.judge)
+        result["llm_judgment"] = j
+        if not j:
+            verdict = "INCONCLUSIVE"
+            result["blockingIssues"] = ["judge unavailable; deterministic steps passed but claim not independently assessed"]
+        elif j.get("verdict") == "FAILED" or j.get("supports") is False:
+            verdict = "FAILED"
+            result["blockingIssues"] = j.get("gaps", []) or ["judge refuted the claim"]
+        elif j.get("verdict") == "INCONCLUSIVE" or j.get("gaps"):
+            verdict = "INCONCLUSIVE"
+            result["blockingIssues"] = j.get("gaps", [])
+        else:
+            verdict = "VERIFIED"
+    else:
+        verdict = "VERIFIED"  # steps passed, no claim to judge
+
+    result["verdict"] = verdict
+
+    if args.json:
+        json.dump(result, sys.stdout, indent=2); sys.stdout.write("\n")
+    else:
+        icon = {"VERIFIED": "✅", "INCONCLUSIVE": "⚠️", "FAILED": "❌"}[verdict]
+        sys.stderr.write("\n%s \033[1mVERDICT: %s\033[0m\n" % (icon, verdict))
+        for b in result.get("blockingIssues", []):
+            sys.stderr.write("   • %s\n" % b)
+        if result.get("llm_judgment", {}).get("reasoning"):
+            sys.stderr.write("   judge: %s\n" % result["llm_judgment"]["reasoning"])
+    sys.exit({"VERIFIED": 0, "INCONCLUSIVE": 1, "FAILED": 2}[verdict])
+
+if __name__ == "__main__":
+    main()

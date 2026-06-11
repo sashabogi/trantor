@@ -1,0 +1,1276 @@
+#!/usr/bin/env python3
+"""
+scrooge — make the cheap models do the grunt work.
+
+Routes a single task to a CHEAP external model (DeepSeek/Kimi/ZAI-GLM/Gemini/
+OpenAI/xAI/OpenRouter, …) via the OpenAI-compatible chat API. Your expensive
+orchestrator (Claude Opus, etc.) stays in charge; this is ONLY for disconnected,
+individually-scoped execution work — drafts, summaries, extraction, judgment.
+
+TRANSPARENCY (the whole point): every call prints a loud banner to STDERR and
+appends to a cost ledger. The model's text goes to STDOUT only.
+
+Usage:
+  scrooge "prompt"                          # default = cheapest live model (nothing hardcoded)
+  scrooge --latest "prompt"                 # re-check the provider's live model list now
+  scrooge --model kimi "prompt"             # force a model (alias or full id)
+  scrooge --task code "prompt"              # weigh capability×cost for the task (best value)
+  scrooge --task code -d hard "prompt"      # difficulty floor → escalate hard work off the cheap model
+  scrooge --task code --spread 3 "prompt"   # fan a batch across the top-3 capable models
+  scrooge --json --system "..." "prompt"    # JSON-object output + system prompt
+  echo "long input" | scrooge --task summarize   # prompt from stdin (or - )
+  scrooge models <provider>                 # list live model ids from a provider
+  scrooge list                              # show registry (providers/models/tasks)
+  scrooge ledger [--since 24h|7d|all]       # usage + cost totals, savings vs Opus
+  scrooge watch  [--tail N|--all]           # LIVE feed of cheap-model calls as they happen
+
+Live training (per-model lessons): short corrective guardrails, learned from
+observed failures, are auto-injected into the model's system prompt at routing
+time (the banner shows "+N lessons"; --no-lessons bypasses):
+  scrooge learn  -m <model> [-t <task>] "lesson"   # capture (dedup; -t omitted => "*")
+  scrooge learn  --seed                              # merge the shipped seed set
+  scrooge lessons [-m <model>] [-t <task>]          # show the store
+  scrooge forget -m <model> [-t <task>] <index>|--all   # remove
+
+Config:  $SCROOGE_HOME (default ~/.token-scrooge) holds registry.json + calls.jsonl
+         + lessons.json (user-local; seeded from the committed lessons.seed.json)
+Keys:    read from the environment; optionally also from $SCROOGE_ENV_FILE (KEY=VALUE)
+Exit: 0 ok, non-zero on error (message to stderr).
+"""
+import sys, os, json, time, argparse, urllib.request, urllib.error, re, shutil, hashlib
+
+HOME = os.path.expanduser("~")
+SCROOGE_DIR = os.environ.get("SCROOGE_HOME", os.path.join(HOME, ".token-scrooge"))
+REGISTRY = os.path.join(SCROOGE_DIR, "registry.json")
+LEDGER = os.path.join(SCROOGE_DIR, "calls.jsonl")
+MODELS_CACHE = os.path.join(SCROOGE_DIR, "models-cache.json")   # short-lived /models snapshots per provider
+CAPS = os.path.join(SCROOGE_DIR, "capabilities.json")           # per-model quality scores for the weighted router
+ENV_FALLBACK = os.environ.get("SCROOGE_ENV_FILE", "")   # optional extra KEY=VALUE file (e.g. a proxy .env)
+OPUS_IN, OPUS_OUT = 15.0, 75.0   # $/1M reference for savings math (Opus 4.x)
+
+# ---- ANSI (stderr only) -------------------------------------------------
+def _c(code, s):
+    return s if not sys.stderr.isatty() else "\033[%sm%s\033[0m" % (code, s)
+ORANGE = lambda s: _c("38;5;208", s)
+DIM = lambda s: _c("2", s)
+RED = lambda s: _c("31", s)
+
+def err(*a):
+    sys.stderr.write(" ".join(str(x) for x in a) + "\n")
+
+# ---- key loading --------------------------------------------------------
+def _load_env_file(path):
+    """Merge KEY=VALUE lines from a file into os.environ (no override of existing)."""
+    if not path or not os.path.exists(path):
+        return
+    try:
+        with open(path) as fh:
+            for line in fh:
+                line = line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                k, v = line.split("=", 1)
+                k = k.strip()
+                if k.startswith("export "):
+                    k = k[len("export "):].strip()
+                v = v.strip().strip('"').strip("'")
+                if k and k not in os.environ:
+                    os.environ[k] = v
+    except Exception as e:
+        err(DIM("[scrooge] could not read %s: %s" % (path, e)))
+
+def load_env_fallback():
+    """Keys come from the environment, plus (no override): ~/.token-scrooge/.env
+    (written by `scrooge setup`) and an optional $SCROOGE_ENV_FILE."""
+    _load_env_file(os.path.join(SCROOGE_DIR, ".env"))
+    _load_env_file(ENV_FALLBACK)
+
+def load_registry():
+    with open(REGISTRY) as fh:
+        return json.load(fh)
+
+def provider_key(reg, provider):
+    p = reg["providers"].get(provider) or {}
+    for name in p.get("env", []):
+        if os.environ.get(name):
+            return os.environ[name]
+    return None
+
+# ---- model resolution ---------------------------------------------------
+def resolve_model(reg, model=None, task=None, latest=False):
+    """Return (model_id, provider) or raise."""
+    if model:
+        model = reg.get("aliases", {}).get(model, model)
+        if model in reg["models"]:
+            return model, reg["models"][model]["provider"]
+        if "/" in model:   # provider/model form, e.g. openrouter explicit
+            prov, _ = model.split("/", 1)
+            if prov in reg["providers"]:
+                return model, prov
+        # unknown but maybe valid for openrouter
+        raise SystemExit("Unknown model '%s'. Try: scrooge list" % model)
+    if task:
+        cands = reg.get("tasks", {}).get(task)
+        if not cands:
+            raise SystemExit("Unknown task '%s'. Tasks: %s" % (task, ", ".join(reg.get("tasks", {}))))
+        for mid in cands:
+            prov = reg["models"][mid]["provider"]
+            if provider_key(reg, prov):
+                return mid, prov
+        raise SystemExit("No live API key for any model serving task '%s'." % task)
+    # No model, no task: derive the default dynamically from what's actually live.
+    return default_model(reg, latest=latest)
+
+# ---- capability-weighted routing ----------------------------------------
+# Pick the best *value* model for a task: weight each candidate's quality-for-the-task
+# against its price, but first gate by a DIFFICULTY floor so hard work escalates off the
+# cheapest model while easy work stays cheap. Quality data lives in capabilities.json
+# (seeded from the committed capabilities.seed.json; refreshed by `scrooge-capabilities`).
+TASK_METRIC = {"code": "coding", "code-review": "coding", "reason": "reasoning",
+               "verify": "reasoning", "math": "math"}   # else -> "intelligence"
+DIFF_PCTL = {"easy": 0.0, "medium": 0.5, "hard": 0.8}    # capability floor = this percentile of candidates
+HARD_TASKS = ("code", "code-review", "reason", "verify")  # default to 'medium' difficulty when unspecified
+
+def _caps_seed_path():
+    here = os.path.dirname(os.path.realpath(__file__))
+    for cand in (os.path.join(SCROOGE_DIR, "capabilities.seed.json"),
+                 os.path.join(here, "..", "capabilities.seed.json")):
+        if os.path.exists(cand):
+            return cand
+    return None
+
+def load_caps():
+    """Per-model quality scores (user store → seed). Missing/malformed → {}."""
+    for path in (CAPS, _caps_seed_path()):
+        if not path:
+            continue
+        try:
+            with open(path) as fh:
+                d = json.load(fh)
+            if isinstance(d, dict):
+                return {k: v for k, v in d.items() if not k.startswith("_")}
+        except Exception:
+            continue
+    return {}
+
+def task_metric(task):
+    return TASK_METRIC.get(task or "", "intelligence")
+
+def infer_difficulty(task, prompt):
+    """Fallback when --difficulty is omitted: harder default for code/reasoning tasks,
+    bumped a notch for very long prompts."""
+    base = "medium" if (task in HARD_TASKS) else "easy"
+    if prompt and len(prompt) > 8000:
+        base = {"easy": "medium", "medium": "hard", "hard": "hard"}[base]
+    return base
+
+def model_quality(caps, mid, metric):
+    c = caps.get(mid) or {}
+    v = c.get(metric)
+    if not isinstance(v, (int, float)):
+        v = c.get("intelligence")          # fall back to the general index
+    return float(v) if isinstance(v, (int, float)) else 0.0
+
+def blended_cost(reg, mid):
+    m = reg["models"].get(mid, {})
+    return max(1e-6, 0.3 * m.get("cost_in", 0) + 0.7 * m.get("cost_out", 0))
+
+def weigh_candidates(reg, caps, cand_ids, task, difficulty):
+    """Apply the difficulty floor, then rank survivors by quality^qw / cost^cw.
+    Returns [(model_id, score)] best-first."""
+    metric = task_metric(task)
+    quals = [(mid, model_quality(caps, mid, metric)) for mid in cand_ids]
+    scored_q = sorted(q for _, q in quals if q > 0)
+    pct = DIFF_PCTL.get(difficulty, 0.5)
+    floor = 0.0
+    if scored_q and pct > 0:
+        floor = scored_q[min(len(scored_q) - 1, int(round(pct * (len(scored_q) - 1))))]
+    survivors = [(mid, q) for mid, q in quals if q >= floor] or quals
+    rw = reg.get("routing") or {}
+    qw, cw = rw.get("q_weight", 1.5), rw.get("c_weight", 0.5)
+    out = [(mid, (max(q, 1e-6) ** qw) / (blended_cost(reg, mid) ** cw)) for mid, q in survivors]
+    out.sort(key=lambda x: -x[1])
+    return out
+
+def _spread_index(prompt, k):
+    """Deterministic, process-independent bucket so a parallel batch fans across the
+    top-k models instead of hammering one (built-in hash() is salted — use sha1)."""
+    h = int(hashlib.sha1((prompt or "").encode("utf-8", "replace")).hexdigest()[:8], 16)
+    return h % k
+
+def route_task(reg, caps, task, difficulty, prompt, spread=0):
+    """Capability-weighted pick for a --task. Returns (model_id, provider, info).
+    Falls back to registry cheapest-first order when no capability data is available."""
+    cands = reg.get("tasks", {}).get(task)
+    if not cands:
+        raise SystemExit("Unknown task '%s'. Tasks: %s" % (task, ", ".join(reg.get("tasks", {}))))
+    live = [m for m in cands if provider_key(reg, reg["models"][m]["provider"])]
+    if not live:
+        raise SystemExit("No live API key for any model serving task '%s'." % task)
+    if not caps:                                   # no quality data → legacy cheapest-first
+        return live[0], reg["models"][live[0]]["provider"], {"difficulty": None, "weighed": False}
+    diff = difficulty or infer_difficulty(task, prompt)
+    scored = weigh_candidates(reg, caps, live, task, diff)
+    ranked = [m for m, _ in scored]
+    if spread and len(ranked) > 1:
+        k = min(spread, len(ranked))
+        mid = ranked[_spread_index(prompt, k)]
+    else:
+        mid = ranked[0]
+    return mid, reg["models"][mid]["provider"], {
+        "difficulty": diff, "weighed": True, "metric": task_metric(task),
+        "considered": len(live), "pool": ranked[:max(spread, 1)] if spread else ranked[:1]}
+
+# ---- HTTP ---------------------------------------------------------------
+def http_post(url, headers, payload, timeout=120):
+    data = json.dumps(payload).encode()
+    req = urllib.request.Request(url, data=data, headers=headers, method="POST")
+    with urllib.request.urlopen(req, timeout=timeout) as r:
+        return json.loads(r.read().decode())
+
+def http_get(url, headers, timeout=30):
+    req = urllib.request.Request(url, headers=headers, method="GET")
+    with urllib.request.urlopen(req, timeout=timeout) as r:
+        return json.loads(r.read().decode())
+
+def list_live_models(reg, provider, ttl=600):
+    """The model ids a provider actually serves *right now*, via its OpenAI-compatible
+    /models endpoint. Cached per provider in MODELS_CACHE for `ttl` seconds so routing
+    never hardcodes a model id yet stays fast. Returns [] (best-effort) on any failure
+    — callers must tolerate an empty list (offline, no key, rate-limited)."""
+    cache = {}
+    try:
+        with open(MODELS_CACHE) as fh:
+            cache = json.load(fh)
+        if not isinstance(cache, dict):
+            cache = {}
+    except Exception:
+        cache = {}
+    ent = cache.get(provider)
+    if ttl and isinstance(ent, dict) and isinstance(ent.get("ids"), list) \
+            and (time.time() - ent.get("ts", 0)) < ttl:
+        return ent["ids"]
+    key = provider_key(reg, provider)
+    if not key:
+        return []
+    base = reg["providers"][provider]["base_url"].rstrip("/")
+    headers = {"Authorization": "Bearer " + key}
+    headers.update(reg["providers"][provider].get("extra_headers", {}))
+    try:
+        data = http_get(base + "/models", headers, timeout=15)
+        ids = sorted(str(m.get("id")) for m in (data.get("data") or []) if m.get("id"))
+    except Exception:
+        return []
+    cache[provider] = {"ts": int(time.time()), "ids": ids}
+    try:
+        os.makedirs(SCROOGE_DIR, exist_ok=True)
+        with open(MODELS_CACHE, "w") as fh:
+            json.dump(cache, fh)
+    except Exception:
+        pass
+    return ids
+
+def default_model(reg, latest=False):
+    """Pick the default model dynamically — NOTHING is hardcoded. Among the registry's
+    models whose provider currently has a key, choose the cheapest one the provider is
+    actually serving live (verified against /models). If every priced candidate has
+    drifted out of the live list, fall back to a live-discovered id (pricing unknown).
+    `latest=True` bypasses the cache to force a fresh liveness check."""
+    priced = sorted(
+        ((mid, cfg["provider"], cfg.get("cost_in", 0) + cfg.get("cost_out", 0))
+         for mid, cfg in reg["models"].items() if provider_key(reg, cfg["provider"])),
+        key=lambda x: x[2])
+    if not priced:
+        raise SystemExit("No default model available — no API key is set for any provider. "
+                         "Run `scrooge setup` (or set a provider key), then `scrooge list`.")
+    ttl = 0 if latest else 600
+    live_by_provider = {}
+    for mid, prov, _ in priced:
+        if prov not in live_by_provider:
+            live_by_provider[prov] = set(list_live_models(reg, prov, ttl=ttl))
+        live = live_by_provider[prov]
+        # Empty set ⇒ couldn't reach the API (offline/etc.): trust the registry rather than block.
+        if not live or mid in live:
+            return mid, prov
+    # Every priced candidate has drifted vs the live list — route to a real live id.
+    prov = priced[0][1]
+    live = sorted(live_by_provider.get(prov) or [])
+    if live:
+        err(DIM("[scrooge] registry models for %s look stale; routing to live '%s' "
+                "(pricing unknown — run scrooge-drift)" % (prov, live[0])))
+        return live[0], prov
+    return priced[0][0], priced[0][1]
+
+# ---- ledger -------------------------------------------------------------
+def project_label(start=None):
+    """A stable per-project name so a single shared ledger can be filtered by project.
+    Priority: $SCROOGE_PROJECT (explicit, set it per terminal for full control) →
+    nearest enclosing git repo's dir name → the cwd's base name."""
+    env = os.environ.get("SCROOGE_PROJECT")
+    if env:
+        return env
+    base = start or os.getcwd()
+    cur = base
+    for _ in range(40):
+        if os.path.isdir(os.path.join(cur, ".git")):
+            return os.path.basename(cur) or cur
+        parent = os.path.dirname(cur)
+        if parent == cur:
+            break
+        cur = parent
+    return os.path.basename(base.rstrip("/")) or base
+
+def append_ledger(entry):
+    try:
+        os.makedirs(SCROOGE_DIR, exist_ok=True)
+        with open(LEDGER, "a") as fh:
+            fh.write(json.dumps(entry) + "\n")
+        # return 1-based line count cheaply
+        with open(LEDGER) as fh:
+            return sum(1 for _ in fh)
+    except Exception:
+        return None
+
+def cost_usd(reg, model, tin, tout):
+    m = reg["models"].get(model.split("/")[-1]) or reg["models"].get(model)
+    if not m:
+        return 0.0
+    return (tin / 1e6) * m.get("cost_in", 0) + (tout / 1e6) * m.get("cost_out", 0)
+
+# ---- live training: per-model lessons -----------------------------------
+# A user-local, mutable store of short corrective guardrails learned from
+# observed cheap-model failures. The relevant lessons are auto-injected into a
+# model's system prompt at routing time so recurring bugs are preempted. The
+# store is SEPARATE from the capability/pricing registry. Shape:
+#   { "<model-id-or-alias>": { "<task>"|"*": ["one-liner", ...] }, "*": {...} }
+# Keys starting with "_" are metadata (comments) and ignored.
+LESSONS = os.path.join(SCROOGE_DIR, "lessons.json")
+LESSON_CAP = 8          # max lessons taken per (model, task) bucket
+LESSON_CHAR_CAP = 1200  # total injected-char ceiling for the guardrail block
+
+def _is_meta_key(k):
+    return isinstance(k, str) and k.startswith("_")
+
+def load_lessons():
+    """Read the user-local lessons store. Missing/malformed -> empty dict."""
+    try:
+        with open(LESSONS) as fh:
+            d = json.load(fh)
+        return d if isinstance(d, dict) else {}
+    except Exception:
+        return {}
+
+def save_lessons(store):
+    os.makedirs(SCROOGE_DIR, exist_ok=True)
+    with open(LESSONS, "w") as fh:
+        json.dump(store, fh, indent=2)
+        fh.write("\n")
+
+def _seed_path():
+    """Locate the committed seed set (SCROOGE_HOME first, then alongside the repo)."""
+    here = os.path.dirname(os.path.realpath(__file__))   # resolves symlinks → repo/bin
+    for cand in (os.path.join(SCROOGE_DIR, "lessons.seed.json"),
+                 os.path.join(here, "..", "lessons.seed.json")):
+        if os.path.exists(cand):
+            return cand
+    return None
+
+def load_seed():
+    p = _seed_path()
+    if not p:
+        return {}
+    try:
+        with open(p) as fh:
+            d = json.load(fh)
+        return d if isinstance(d, dict) else {}
+    except Exception:
+        return {}
+
+def merge_seed(store):
+    """Add seed lessons not already present (dedup on exact text). Returns count added."""
+    added = 0
+    for model, tasks in load_seed().items():
+        if _is_meta_key(model) or not isinstance(tasks, dict):
+            continue
+        for task, lessons in tasks.items():
+            if _is_meta_key(task) or not isinstance(lessons, list):
+                continue
+            bucket = store.setdefault(model, {}).setdefault(task, [])
+            for L in lessons:
+                if L not in bucket:
+                    bucket.append(L); added += 1
+    return added
+
+def seed_lessons_if_absent():
+    """First-use bootstrap: if no user store exists yet, copy the shipped seed in."""
+    if os.path.exists(LESSONS):
+        return
+    seed = load_seed()
+    if seed:
+        save_lessons(seed)
+
+def aliases_for(reg, model):
+    """All alias names that resolve to this full model id."""
+    return [a for a, full in reg.get("aliases", {}).items() if full == model]
+
+def gather_lessons(reg, model, task):
+    """Ordered, de-duplicated lessons for (full id + aliases) × (task + '*'),
+    then the top-level universal '*' model bucket. <=LESSON_CAP per bucket."""
+    store = load_lessons()
+    if not store:
+        return []
+    model_keys = [model] + [a for a in aliases_for(reg, model) if a != model]
+    task_keys = ([task] if task else []) + ["*"]
+    out, seen = [], set()
+
+    def drain(mkey):
+        mbucket = store.get(mkey)
+        if not isinstance(mbucket, dict):
+            return
+        for tkey in task_keys:
+            lst = mbucket.get(tkey)
+            if not isinstance(lst, list):
+                continue
+            taken = 0
+            for L in lst:
+                if taken >= LESSON_CAP:
+                    break
+                if L not in seen:
+                    seen.add(L); out.append(L)
+                taken += 1
+
+    for mkey in model_keys:
+        drain(mkey)
+    drain("*")   # universal lessons (apply to every routed cheap model)
+    return out
+
+def build_lessons_block(reg, model, task):
+    """Compose the terse guardrail block and its lesson count, within the char cap."""
+    lessons = gather_lessons(reg, model, task)
+    if not lessons:
+        return "", 0
+    header = "Known pitfalls to avoid:"
+    lines, used, n = [header], len(header), 0
+    for L in lessons:
+        line = "- " + L
+        if used + 1 + len(line) > LESSON_CHAR_CAP:
+            break
+        lines.append(line); used += 1 + len(line); n += 1
+    if not n:
+        return "", 0
+    return "\n".join(lines), n
+
+# ---- commands -----------------------------------------------------------
+def cmd_call(reg, args):
+    # Read the prompt first — the capability weigher uses it to infer difficulty and to
+    # fan a --spread batch deterministically.
+    prompt = args.prompt
+    if prompt in (None, "-"):
+        prompt = sys.stdin.read()
+    if not prompt or not prompt.strip():
+        raise SystemExit("Empty prompt.")
+
+    # Route: explicit --model wins; a --task is weighed by capability×cost (gated by
+    # difficulty); otherwise the dynamic cheapest-live default.
+    route_info = {}
+    if args.model:
+        model, provider = resolve_model(reg, model=args.model)
+    elif args.task and not getattr(args, "no_weigh", False):
+        model, provider, route_info = route_task(
+            reg, load_caps(), args.task, getattr(args, "difficulty", None),
+            prompt, spread=getattr(args, "spread", 0) or 0)
+    else:
+        model, provider = resolve_model(reg, args.model, args.task,
+                                        latest=getattr(args, "latest", False))
+    key = provider_key(reg, provider)
+    if not key:
+        raise SystemExit("No API key set for provider '%s' (env: %s)" %
+                         (provider, ", ".join(reg["providers"][provider].get("env", []))))
+
+    cwd = os.getcwd()
+    proj = project_label(cwd)   # stamped on the ledger so `scrooge watch --here` can filter
+
+    base = reg["providers"][provider]["base_url"].rstrip("/")
+    url = base + "/chat/completions"
+    headers = {"Authorization": "Bearer " + key, "Content-Type": "application/json"}
+    headers.update(reg["providers"][provider].get("extra_headers", {}))
+
+    # Live training: gather per-model lessons and fold them into the system prompt.
+    lessons_block, n_lessons = ("", 0)
+    if not args.no_lessons:
+        seed_lessons_if_absent()
+        lessons_block, n_lessons = build_lessons_block(reg, model, args.task)
+
+    # Compose the system message: user's --system (or the JSON-mode instruction)
+    # leads; injected guardrails follow.
+    sys_parts = []
+    if args.system:
+        sys_parts.append(args.system)
+    elif args.json:
+        sys_parts.append("Respond ONLY with a single valid JSON object. No prose, no code fences.")
+    if lessons_block:
+        sys_parts.append(lessons_block)
+    msgs = []
+    if sys_parts:
+        msgs.append({"role": "system", "content": "\n\n".join(sys_parts)})
+    msgs.append({"role": "user", "content": prompt})
+    # Per-model constraint: some models (e.g. kimi-k2.6) require a fixed temperature.
+    mcfg = reg["models"].get(model, {})
+    temp = mcfg["force_temperature"] if "force_temperature" in mcfg else args.temperature
+    payload = {"model": model.split("/", 1)[1] if (provider == "openrouter" and "/" in model) else model,
+               "messages": msgs, "temperature": temp}
+    if provider == "openrouter":
+        payload["model"] = model if "/" in model else model
+    if args.max_tokens:
+        # Some models (OpenAI GPT-5 / reasoning class) reject "max_tokens" and
+        # require "max_completion_tokens" — overridable per-model in the registry.
+        payload[mcfg.get("token_param", "max_tokens")] = args.max_tokens
+    if args.json:
+        payload["response_format"] = {"type": "json_object"}
+        # (the "JSON object only" system instruction is composed above)
+
+    if args.task and route_info.get("difficulty"):
+        spread_n = len(route_info.get("pool") or [])
+        sp = " · spread/%d" % spread_n if spread_n > 1 else ""
+        label = "[task: %s · %s%s]" % (args.task, route_info["difficulty"], sp)
+    else:
+        label = ("[task: %s]" % args.task) if args.task else ""
+    extra = (" +%d lessons" % n_lessons) if n_lessons else ""
+    err(ORANGE("🪙 scrooge ▸ %s/%s %s%s" % (provider, model, label, extra)))
+
+    t0 = time.time()
+    try:
+        resp = http_post(url, headers, payload)
+    except urllib.error.HTTPError as e:
+        body = e.read().decode(errors="replace")[:500]
+        err(RED("🪙 scrooge ✗ %s/%s HTTP %s: %s" % (provider, model, e.code, body)))
+        append_ledger({"ts": int(t0), "provider": provider, "model": model, "task": args.task,
+                       "project": proj, "cwd": cwd,
+                       "ok": False, "error": "HTTP %s" % e.code, "duration_ms": int((time.time()-t0)*1000)})
+        raise SystemExit(2)
+    except Exception as e:
+        err(RED("🪙 scrooge ✗ %s/%s: %s" % (provider, model, e)))
+        append_ledger({"ts": int(t0), "provider": provider, "model": model, "task": args.task,
+                       "project": proj, "cwd": cwd,
+                       "ok": False, "error": str(e), "duration_ms": int((time.time()-t0)*1000)})
+        raise SystemExit(2)
+
+    dt = time.time() - t0
+    choice = (resp.get("choices") or [{}])[0]
+    msg = choice.get("message", {}) or {}
+    text = msg.get("content") or msg.get("reasoning_content") or ""
+    usage = resp.get("usage", {}) or {}
+    tin = usage.get("prompt_tokens") or 0
+    tout = usage.get("completion_tokens") or 0
+    c = cost_usd(reg, model, tin, tout)
+    # A short, whitespace-collapsed preview so `scrooge watch` can show WHAT each cheap
+    # model is doing in real time. Local-only (the ledger is gitignored); opt out with
+    # SCROOGE_NO_PREVIEW=1 if you'd rather not write any prompt text to disk.
+    preview = "" if os.environ.get("SCROOGE_NO_PREVIEW", "").lower() in ("1", "true", "yes") \
+              else " ".join(prompt.split())[:100]
+    line_no = append_ledger({"ts": int(t0), "provider": provider, "model": model, "task": args.task,
+                             "project": proj, "cwd": cwd,
+                             "tokens_in": tin, "tokens_out": tout, "cost_usd": round(c, 6),
+                             "duration_ms": int(dt*1000), "ok": True, "prompt_chars": len(prompt),
+                             "prompt_preview": preview})
+    err(ORANGE("🪙 scrooge ✓ %s/%s · %d→%d tok · ~$%.5f · %.1fs%s" %
+               (provider, model, tin, tout, c, dt, (" · ledger#%d" % line_no) if line_no else "")))
+    sys.stdout.write(text)
+    if not text.endswith("\n"):
+        sys.stdout.write("\n")
+
+def cmd_models(reg, args):
+    provider = args.provider
+    if provider not in reg["providers"]:
+        raise SystemExit("Unknown provider. Known: %s" % ", ".join(reg["providers"]))
+    if not provider_key(reg, provider):
+        raise SystemExit("No key for %s" % provider)
+    ids = list_live_models(reg, provider, ttl=0)   # always show a fresh list here
+    err(DIM("[scrooge] %d models from %s:" % (len(ids), provider)))
+    for i in ids:
+        print(i)
+
+def cmd_list(reg, args):
+    print("PROVIDERS (live = key present):")
+    for p, cfg in reg["providers"].items():
+        live = "✓" if provider_key(reg, p) else "✗"
+        print("  %s %-11s %s" % (live, p, cfg["base_url"]))
+    caps = load_caps()
+    cap_hdr = "intel/code/reason · " if caps else ""
+    print("\nMODELS ($/1M in/out · %strust · good_for):" % cap_hdr)
+    for m, c in reg["models"].items():
+        live = "✓" if provider_key(reg, c["provider"]) else "✗"
+        cap = ""
+        if caps:
+            q = caps.get(m) or {}
+            fmt = lambda v: ("%2.0f" % v) if isinstance(v, (int, float)) else " -"
+            cap = "%s/%s/%s " % (fmt(q.get("intelligence")), fmt(q.get("coding")), fmt(q.get("reasoning")))
+        print("  %s %-24s %5.2f/%-5.2f %s%-9s %s" % (live, m, c.get("cost_in",0), c.get("cost_out",0),
+              cap, c.get("trust",""), ",".join(c.get("good_for", []))))
+    print("\nTASKS (weighed by capability×cost, gated by difficulty):")
+    for t, ms in reg.get("tasks", {}).items():
+        print("  %-13s → %s" % (t, ", ".join(ms)))
+    print("\nALIASES:", ", ".join("%s=%s" % (k, v) for k, v in reg.get("aliases", {}).items()))
+
+def parse_since(s):
+    if s == "all":
+        return 0
+    m = re.match(r"(\d+)([hd])", s or "24h")
+    if not m:
+        return 0
+    n, u = int(m.group(1)), m.group(2)
+    return time.time() - n * (3600 if u == "h" else 86400)
+
+def cmd_ledger(reg, args):
+    since = parse_since(args.since)
+    want_proj = project_label(os.getcwd()) if getattr(args, "here", False) else getattr(args, "project", None)
+    if not os.path.exists(LEDGER):
+        print("No calls logged yet."); return
+    rows = []
+    with open(LEDGER) as fh:
+        for line in fh:
+            try:
+                o = json.loads(line)
+            except Exception:
+                continue
+            if want_proj and (o.get("project") or "") != want_proj:
+                continue
+            if o.get("ts", 0) >= since and o.get("ok"):
+                rows.append(o)
+    scope = (" · project=%s" % want_proj) if want_proj else ""
+    if not rows:
+        print("No successful calls in window '%s'%s." % (args.since, scope)); return
+    orch = reg.get("orchestrator") or {}
+    base_in = orch.get("cost_in", OPUS_IN)
+    base_out = orch.get("cost_out", OPUS_OUT)
+    orch_name = orch.get("name", "Opus")
+    total_cost = sum(r.get("cost_usd", 0) for r in rows)
+    tin = sum(r.get("tokens_in", 0) for r in rows)
+    tout = sum(r.get("tokens_out", 0) for r in rows)
+    orch_equiv = (tin/1e6)*base_in + (tout/1e6)*base_out
+    by = {}
+    for r in rows:
+        k = "%s/%s" % (r.get("provider"), r.get("model"))
+        d = by.setdefault(k, {"n": 0, "cost": 0, "tin": 0, "tout": 0})
+        d["n"] += 1; d["cost"] += r.get("cost_usd", 0)
+        d["tin"] += r.get("tokens_in", 0); d["tout"] += r.get("tokens_out", 0)
+    print("SCROOGE LEDGER — window: %s%s   (%d calls)" % (args.since, scope, len(rows)))
+    print("  tokens: %s in / %s out" % (f"{tin:,}", f"{tout:,}"))
+    print("  spent on cheap models: $%.4f" % total_cost)
+    print("  same tokens on %s: ~$%.2f" % (orch_name, orch_equiv))
+    if orch_equiv > 0:
+        print("  → saved ~$%.2f (%.0f%% cheaper)" % (orch_equiv - total_cost, 100*(1 - total_cost/orch_equiv)))
+    print("\n  by model:")
+    for k, d in sorted(by.items(), key=lambda x: -x[1]["cost"]):
+        print("    %-28s %3d calls  $%.4f  (%s→%s tok)" % (k, d["n"], d["cost"], f"{d['tin']:,}", f"{d['tout']:,}"))
+
+def cmd_watch(reg, args):
+    """Live feed of every cheap-model call as it hits the ledger — a real-time view of
+    the orchestrator delegating grunt work. Catches foreground, background, and subagent
+    calls alike (they all append to the ledger). Keep it open in a side pane."""
+    try:
+        sys.stdout.reconfigure(line_buffering=True)   # flush each line even when piped/backgrounded
+    except Exception:
+        pass
+    orch = reg.get("orchestrator") or {}
+    base_in, base_out = orch.get("cost_in", OPUS_IN), orch.get("cost_out", OPUS_OUT)
+    orch_name = orch.get("name", "Opus")
+    tot = {"n": 0, "cost": 0.0, "tin": 0, "tout": 0}
+
+    # ---- per-project filter (many projects share one ledger) ----------------
+    want_proj = project_label(os.getcwd()) if getattr(args, "here", False) else getattr(args, "project", None)
+    cwd_prefix = os.path.abspath(os.path.expanduser(args.cwd)) if getattr(args, "cwd", None) else None
+    single = bool(want_proj or cwd_prefix)   # single-project view → no per-line project tag
+
+    def matches(o):
+        if want_proj and (o.get("project") or "") != want_proj:
+            return False
+        if cwd_prefix:
+            c = o.get("cwd") or ""
+            if not (c == cwd_prefix or c.startswith(cwd_prefix.rstrip("/") + "/")):
+                return False
+        return True
+
+    def render(o):
+        ts = time.strftime("%H:%M:%S", time.localtime(o.get("ts", 0)))
+        pm = "%s/%s" % (o.get("provider"), o.get("model"))
+        tag = AMBER("[%s]" % o["task"]) if o.get("task") else GREYc("[·]")
+        pfx = "" if single else GREYc("%-16s " % (o.get("project") or "?")[:16])
+        if not o.get("ok", False):
+            return "%s%s %s %s %s  %s" % (pfx, GREYc(ts), ERRc("✗"), GOLD(pm), tag,
+                                          ERRc(str(o.get("error", "error"))))
+        tin, tout = o.get("tokens_in", 0), o.get("tokens_out", 0)
+        dur = o.get("duration_ms", 0) / 1000.0
+        prev = (o.get("prompt_preview") or "").strip()
+        return "%s%s %s %s %s %s %s %s%s" % (
+            pfx, GREYc(ts), OKc("✓"), GOLD(pm), tag,
+            GREYc("%d→%d tok" % (tin, tout)), AMBER("$%.5f" % o.get("cost_usd", 0)),
+            GREYc("%.1fs" % dur), ("  " + GREYc("· " + prev)) if prev else "")
+
+    def summary(final=False):
+        if not tot["n"]:
+            if final:
+                print(GREYc("  (no calls observed while watching)"))
+            return
+        equiv = (tot["tin"] / 1e6) * base_in + (tot["tout"] / 1e6) * base_out
+        saved = equiv - tot["cost"]
+        pct = (100 * (1 - tot["cost"] / equiv)) if equiv > 0 else 0
+        print(AMBER("  ── %d calls · $%.4f cheap · ~$%.2f on %s · saved ~$%.2f (%.0f%%) ──"
+                    % (tot["n"], tot["cost"], equiv, orch_name, saved, pct)))
+
+    def show(o):
+        if not matches(o):
+            return
+        print(render(o))
+        if o.get("ok"):
+            tot["n"] += 1; tot["cost"] += o.get("cost_usd", 0)
+            tot["tin"] += o.get("tokens_in", 0); tot["tout"] += o.get("tokens_out", 0)
+            if tot["n"] % 10 == 0:
+                summary()
+
+    path = LEDGER
+    scope = ("project=%s" % want_proj) if want_proj else \
+            ("cwd=%s" % cwd_prefix.replace(HOME, "~")) if cwd_prefix else "all projects"
+    print(GOLD(BOLD("🪙 scrooge watch")) +
+          GREYc("  %s  ·  following %s  ·  Ctrl-C to stop" % (scope, path.replace(HOME, "~"))))
+    # Where to start: --all replays the whole ledger; otherwise follow only NEW calls
+    # (so you literally watch them happen), with --tail N backfilling recent context.
+    last = 0
+    if os.path.exists(path):
+        last = 0 if args.all else os.path.getsize(path)
+    if args.tail and not args.all and os.path.exists(path):
+        with open(path, "rb") as fh:
+            recent = [l for l in fh.read().split(b"\n") if l.strip()][-args.tail:]
+        for bl in recent:
+            try: show(json.loads(bl.decode("utf-8", "replace")))
+            except Exception: pass
+    try:
+        while True:
+            if not os.path.exists(path):
+                time.sleep(0.5); continue
+            size = os.path.getsize(path)
+            if size < last:      # truncated / rotated
+                last = 0
+            if size > last:
+                with open(path, "rb") as fh:
+                    fh.seek(last)
+                    raw = fh.read()
+                cut = raw.rfind(b"\n")
+                if cut != -1:
+                    chunk = raw[:cut + 1]
+                    last += len(chunk)
+                    for bl in chunk.split(b"\n"):
+                        if not bl.strip():
+                            continue
+                        try: show(json.loads(bl.decode("utf-8", "replace")))
+                        except Exception: pass
+            if not args.follow:
+                break
+            time.sleep(0.3)
+    except KeyboardInterrupt:
+        pass
+    print()
+    summary(final=True)
+
+# ---- live-training subcommands (learn / lessons / forget) ---------------
+def cmd_learn(reg, args):
+    """Append a lesson (dedup exact). --seed merges the shipped seed set."""
+    if args.seed:
+        store = load_lessons()
+        added = merge_seed(store)
+        save_lessons(store)
+        print("%s merged %d seed lesson(s) into %s" %
+              (OKc("✓"), added, LESSONS.replace(HOME, "~")))
+        return
+    if not args.model:
+        raise SystemExit("learn: -m/--model is required (or use --seed to load the shipped seed set).")
+    if not args.text or not args.text.strip():
+        raise SystemExit('learn: provide the lesson text, e.g. scrooge learn -m deepseek -t code "Sort explicitly; never assume API ordering."')
+    seed_lessons_if_absent()   # first-use bootstrap, regardless of entry point
+    model = reg.get("aliases", {}).get(args.model, args.model)   # store under canonical full id
+    task = args.task or "*"
+    store = load_lessons()
+    bucket = store.setdefault(model, {}).setdefault(task, [])
+    text = args.text.strip()
+    scope = "%s/%s" % (GOLD(model), task)
+    if text in bucket:
+        print("%s already known for %s" % (GREYc("•"), scope)); return
+    bucket.append(text)
+    save_lessons(store)
+    note = "" if (model in reg["models"] or args.model in reg.get("aliases", {})) \
+           else GREYc("  (note: '%s' isn't a known model/alias — stored anyway)" % model)
+    print("%s learned for %s: %s%s" % (OKc("✓"), scope, text, note))
+
+def _print_model_lessons(model, tasks, tfilter):
+    """Print one model's buckets; returns how many lessons were shown."""
+    shown = 0
+    header_done = False
+    for task in sorted(tasks.keys()):
+        if _is_meta_key(task):
+            continue
+        if tfilter and task != tfilter:
+            continue
+        lessons = tasks.get(task) or []
+        if not isinstance(lessons, list) or not lessons:
+            continue
+        if not header_done:
+            print("\n" + GOLD("● " + model)); header_done = True
+        print("  " + AMBER(task if task != "*" else "* (all tasks)"))
+        for i, L in enumerate(lessons):
+            print("    %s %s" % (GREYc("%d." % i), L)); shown += 1
+    return shown
+
+def cmd_lessons(reg, args):
+    """Pretty-print the lessons store (optionally filtered by -m / -t)."""
+    seed_lessons_if_absent()
+    store = load_lessons()
+    real = {k: v for k, v in store.items() if not _is_meta_key(k)}
+    print(GOLD(BOLD("LESSONS")) + GREYc("  (%s)" % LESSONS.replace(HOME, "~")))
+    if not real:
+        print(GREYc('  none yet — add one:  scrooge learn -m <model> -t <task> "…"')); return
+    mfilter = reg.get("aliases", {}).get(args.model, args.model) if args.model else None
+    shown = 0
+    if mfilter:
+        # the model's own buckets, plus the universal "*" bucket that also applies
+        shown += _print_model_lessons(mfilter, real.get(mfilter, {}), args.task)
+        if "*" in real and mfilter != "*":
+            shown += _print_model_lessons("* (every cheap model)", real.get("*", {}), args.task)
+    else:
+        for model in sorted(real.keys()):
+            shown += _print_model_lessons(model, real.get(model, {}), args.task)
+    if not shown:
+        print(GREYc("  (nothing matches that filter)"))
+
+def cmd_forget(reg, args):
+    """Remove a lesson by 0-based index, or --all for a whole (model[/task]) scope."""
+    if not args.model:
+        raise SystemExit("forget: -m/--model is required.")
+    seed_lessons_if_absent()   # so a fresh store reflects the shipped seed before removal
+    model = reg.get("aliases", {}).get(args.model, args.model)
+    store = load_lessons()
+    tasks = store.get(model)
+    if not isinstance(tasks, dict) or not tasks:
+        raise SystemExit("No lessons stored for model '%s'." % model)
+    if args.all:
+        if args.task:
+            if args.task not in tasks:
+                raise SystemExit("No lessons for %s/%s." % (model, args.task))
+            tasks.pop(args.task, None)
+            scope = "%s/%s" % (model, args.task)
+        else:
+            store.pop(model, None)
+            scope = model
+        if model in store and not store[model]:
+            store.pop(model, None)
+        save_lessons(store)
+        print("%s forgot all lessons for %s" % (OKc("✓"), GOLD(scope)))
+        return
+    task = args.task or "*"
+    bucket = tasks.get(task)
+    if not isinstance(bucket, list) or not bucket:
+        raise SystemExit("No lessons for %s/%s." % (model, task))
+    try:
+        idx = int(args.index)
+    except (TypeError, ValueError):
+        raise SystemExit("forget: give a 0-based <index> (see `scrooge lessons`) or --all.")
+    if idx < 0 or idx >= len(bucket):
+        raise SystemExit("Index %s out of range (0..%d) for %s/%s." % (args.index, len(bucket) - 1, model, task))
+    removed = bucket.pop(idx)
+    if not bucket:
+        tasks.pop(task, None)
+    if not tasks:
+        store.pop(model, None)
+    save_lessons(store)
+    print("%s forgot %s/%s[%d]: %s" % (OKc("✓"), GOLD(model), task, idx, removed))
+
+# ---- pretty UI (stdlib only: truecolor + box-drawing + arrow menu) ------
+def _uitty(): return sys.stdout.isatty() and os.environ.get("TERM", "") not in ("", "dumb") and not os.environ.get("NO_COLOR")
+def _rgb(r, g, b, s): return ("\033[38;2;%d;%d;%dm%s\033[0m" % (r, g, b, s)) if _uitty() else s
+GOLD  = lambda s: _rgb(240, 196, 80, s)
+AMBER = lambda s: _rgb(190, 145, 45, s)
+GREYc = lambda s: _rgb(128, 128, 138, s)
+OKc   = lambda s: _rgb(90, 200, 130, s)
+ERRc  = lambda s: _rgb(230, 100, 100, s)
+def BOLD(s):  return ("\033[1m%s\033[0m" % s) if _uitty() else s
+def GREEN(s): return OKc(s)
+_ANSI = re.compile(r"\033\[[0-9;]*m")
+def _vlen(s): return len(_ANSI.sub("", s))
+UW = 60  # panel inner width
+
+def _box(lines, color=AMBER, pad=2):
+    """Draw a rounded box. Content lines must be ASCII-display-width (ANSI ok)."""
+    top = color("╭" + "─" * UW + "╮"); bot = color("╰" + "─" * UW + "╯")
+    body = []
+    for ln in lines:
+        space = UW - pad - _vlen(ln)
+        body.append(color("│") + " " * pad + ln + " " * max(0, space) + color("│"))
+    return "\n".join([top] + body + [bot])
+
+def _banner():
+    if not _uitty():
+        print("Token Scrooge — setup"); return
+    print()
+    print(_box([GOLD(BOLD("TOKEN  SCROOGE")) + GREYc("   $ make the cheap models do the grunt work"),
+                GREYc("one orchestrator in charge · cheap labor with receipts")], color=GOLD))
+
+def _step(n, total, title, sub=""):
+    print()
+    print(" " + GOLD(BOLD("%d/%d" % (n, total))) + "  " + BOLD(title) + (("   " + GREYc(sub)) if sub else ""))
+    print(" " + AMBER("─" * UW))
+
+def _menu(options, default=0):
+    """options: list of (label, hint). Arrow-key select with ❯; numbered fallback when not a TTY."""
+    if not (sys.stdin.isatty() and _uitty()):
+        for i, (lab, hint) in enumerate(options, 1):
+            print("   %d) %s  %s" % (i, lab, GREYc(hint)))
+        c = _ask("   Select [1-%d] (default %d): " % (len(options), default + 1), str(default + 1))
+        try: return max(1, min(len(options), int(c))) - 1
+        except ValueError: return default
+    import termios, tty
+    idx = default; fd = sys.stdin.fileno(); old = termios.tcgetattr(fd)
+    def draw(first=False):
+        if not first: sys.stdout.write("\033[%dA" % len(options))
+        for i, (lab, hint) in enumerate(options):
+            sel = i == idx
+            ptr = GOLD("❯") if sel else " "
+            txt = GOLD(BOLD(lab)) if sel else lab
+            sys.stdout.write("\r\033[K   %s %s  %s\n" % (ptr, txt, GREYc(hint)))
+        sys.stdout.flush()
+    try:
+        sys.stdout.write(GREYc("   (↑/↓ to move, Enter to select)\n"))
+        draw(first=True)
+        tty.setcbreak(fd)
+        while True:
+            ch = sys.stdin.read(1)
+            if ch in ("\r", "\n"): break
+            elif ch == "\x1b":
+                seq = sys.stdin.read(2)
+                if seq == "[A": idx = (idx - 1) % len(options); draw()
+                elif seq == "[B": idx = (idx + 1) % len(options); draw()
+            elif ch == "k": idx = (idx - 1) % len(options); draw()
+            elif ch == "j": idx = (idx + 1) % len(options); draw()
+            elif ch.isdigit() and 1 <= int(ch) <= len(options): idx = int(ch) - 1; draw()
+            elif ch == "\x03": raise KeyboardInterrupt
+    except Exception:
+        return default
+    finally:
+        termios.tcsetattr(fd, termios.TCSADRAIN, old)
+    return idx
+
+def _spin(label, fn):
+    """Run fn() while animating a spinner on `label`; return fn()'s result. Plain when not a TTY."""
+    if not _uitty():
+        return fn()
+    import threading, itertools, time as _t
+    box = {}
+    th = threading.Thread(target=lambda: box.__setitem__("r", fn())); th.start()
+    for fr in itertools.cycle("⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"):
+        if not th.is_alive(): break
+        sys.stdout.write("\r   %s %s" % (GOLD(fr), label)); sys.stdout.flush()
+        _t.sleep(0.08)
+    th.join()
+    sys.stdout.write("\r\033[K")
+    return box.get("r")
+
+# Orchestrator presets: (key, label, $/1M in, $/1M out). The orchestrator is the
+# model YOU drive your agent with; it only sets the ledger's savings baseline
+# (Scrooge never calls it). Prices are approximate and editable in registry.json.
+# Ordered premium → budget: a cheap flagship can orchestrate for the truly thrifty.
+ORCHESTRATORS = [
+    # frontier / premium
+    ("claude-opus",    "Claude Opus",            15.0, 75.0),
+    ("claude-sonnet",  "Claude Sonnet",           3.0, 15.0),
+    ("gpt-flagship",   "OpenAI GPT (flagship)",  10.0, 30.0),
+    ("gemini-pro",     "Gemini Pro",              1.25, 10.0),
+    ("grok",           "xAI Grok",                3.0, 15.0),
+    ("mistral-large",  "Mistral Large",           2.0,  6.0),
+    # budget flagships (cheap enough to orchestrate on a tight budget)
+    ("deepseek",       "DeepSeek V3 / R1  · budget", 0.27, 1.10),
+    ("kimi",           "Kimi K2 (Moonshot) · budget", 0.60, 2.50),
+    ("qwen",           "Qwen Max · budget",       1.60, 6.40),
+    ("glm",            "Zhipu GLM-4.6 · budget",  0.60, 2.20),
+    ("custom",         "Other flagship / custom", 0.0,  0.0),
+]
+
+def _ask(prompt, default=""):
+    try:
+        v = input(prompt).strip()
+        return v or default
+    except EOFError:
+        return default
+
+def _ask_secret(prompt):
+    if sys.stdin.isatty():
+        import getpass
+        try:
+            return getpass.getpass(prompt).strip()
+        except Exception:
+            return _ask(prompt)
+    return _ask(prompt)  # piped (non-interactive / tests)
+
+def _ensure_registry():
+    os.makedirs(SCROOGE_DIR, exist_ok=True)
+    if os.path.exists(REGISTRY):
+        return
+    here = os.path.dirname(os.path.realpath(__file__))
+    for cand in (os.path.join(SCROOGE_DIR, "registry.template.json"),
+                 os.path.join(here, "..", "registry.template.json")):
+        if os.path.exists(cand):
+            shutil.copy(cand, REGISTRY)
+            return
+    raise SystemExit("No registry template found near %s — reinstall Token Scrooge." % here)
+
+def _write_env_file(new_keys):
+    """Merge new KEY=VALUE pairs into ~/.token-scrooge/.env, preserving existing, chmod 600."""
+    path = os.path.join(SCROOGE_DIR, ".env")
+    existing = {}
+    if os.path.exists(path):
+        for line in open(path):
+            line = line.strip()
+            if line and not line.startswith("#") and "=" in line:
+                k, v = line.split("=", 1); existing[k.strip()] = v.strip()
+    existing.update({k: v for k, v in new_keys.items() if v})
+    with open(path, "w") as fh:
+        fh.write("# Token Scrooge — provider API keys. Loaded automatically by `scrooge`.\n")
+        fh.write("# Created by `scrooge setup`. Keep private (this file is chmod 600).\n")
+        for k, v in existing.items():
+            fh.write("%s=%s\n" % (k, v))
+    os.chmod(path, 0o600)
+    return path
+
+def _ping(reg, provider):
+    """Live-test a provider key by listing its models. Returns (ok, detail)."""
+    key = provider_key(reg, provider)
+    if not key:
+        return False, "no key"
+    base = reg["providers"][provider]["base_url"].rstrip("/")
+    headers = {"Authorization": "Bearer " + key}
+    headers.update(reg["providers"][provider].get("extra_headers", {}))
+    try:
+        data = http_get(base + "/models", headers, timeout=15)
+        n = len(data.get("data", []) or [])
+        return True, "%d models" % n
+    except urllib.error.HTTPError as e:
+        return False, "HTTP %s" % e.code
+    except Exception as e:
+        return False, str(e)[:40]
+
+def _install_claude_gate():
+    """Opt-in: copy the verification gate (hook + agent + skill) into ~/.claude and
+    wire the Stop/SubagentStop hook idempotently. Non-destructive."""
+    repo = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
+    claude = os.path.join(HOME, ".claude")
+    copies = [
+        (os.path.join(repo, "hooks", "verify-done-gate.py"), os.path.join(claude, "hooks", "verify-done-gate.py")),
+        (os.path.join(repo, "hooks", "scrooge-announce.py"), os.path.join(claude, "hooks", "scrooge-announce.py")),
+        (os.path.join(repo, "agents", "adversarial-verifier.md"), os.path.join(claude, "agents", "adversarial-verifier.md")),
+        (os.path.join(repo, "skills", "diverge", "SKILL.md"), os.path.join(claude, "skills", "diverge", "SKILL.md")),
+    ]
+    for src, dst in copies:
+        if not os.path.exists(src):
+            err(RED("  skipped (missing in repo): %s" % src)); continue
+        os.makedirs(os.path.dirname(dst), exist_ok=True)
+        shutil.copy(src, dst)
+        print("  ✓ %s" % dst.replace(HOME, "~"))
+    # merge hooks into settings.json
+    sp = os.path.join(claude, "settings.json")
+    settings = {}
+    if os.path.exists(sp):
+        try: settings = json.load(open(sp))
+        except Exception: settings = {}
+    hooks = settings.setdefault("hooks", {})
+    gate = {"type": "command", "command": "python3 %s" % os.path.join(claude, "hooks", "verify-done-gate.py")}
+    def _has(arr, needle): return any(any(needle in h.get("command","") for h in e.get("hooks",[])) for e in arr)
+    for ev in ("Stop", "SubagentStop"):
+        arr = hooks.setdefault(ev, [])
+        if not _has(arr, "verify-done-gate.py"):
+            arr.append({"hooks": [gate]})
+    # surface scrooge delegations live (PreToolUse on Bash)
+    announce = {"type": "command", "command": "python3 %s" % os.path.join(claude, "hooks", "scrooge-announce.py")}
+    pre = hooks.setdefault("PreToolUse", [])
+    if not _has(pre, "scrooge-announce.py"):
+        pre.append({"matcher": "Bash", "hooks": [announce]})
+    json.dump(settings, open(sp, "w"), indent=2); open(sp, "a").write("\n")
+    print("  ✓ wired verify-done-gate.py into Stop + SubagentStop (%s)" % sp.replace(HOME, "~"))
+    print("  ✓ wired scrooge-announce.py into PreToolUse(Bash) — marks cheap-model delegations")
+    print(DIM("  (disable a block any time with VERIFY_DONE_GATE_OFF=1)"))
+
+def cmd_setup(args):
+    _banner()
+    _ensure_registry()
+    reg = load_registry()
+    TOTAL = 4
+
+    # 1) Orchestrator — arrow-key menu
+    _step(1, TOTAL, "Your orchestrator", "the expensive model you drive with — sets the savings baseline")
+    opts = [(label, ("$%.0f/$%.0f per 1M" % (ci, co)) if k != "custom" else "enter your own pricing")
+            for (k, label, ci, co) in ORCHESTRATORS]
+    idx = _menu(opts, default=0)
+    okey, olabel, oci, oco = ORCHESTRATORS[idx]
+    if okey == "custom":
+        olabel = _ask("   Orchestrator name: ", "Custom")
+        oci = float(_ask("   Its input  $/1M tokens: ", "15") or 15)
+        oco = float(_ask("   Its output $/1M tokens: ", "75") or 75)
+    reg["orchestrator"] = {"name": olabel, "cost_in": oci, "cost_out": oco}
+    print("   " + OKc("✓") + " orchestrator: " + GOLD(BOLD(olabel)))
+
+    # 2) Keys — show status dots, prompt only for missing
+    _step(2, TOTAL, "Provider API keys", "paste to enable · Enter to skip · detected env keys kept")
+    new_keys = {}
+    for provider, cfg in reg["providers"].items():
+        env_names = cfg.get("env", [])
+        already = next((n for n in env_names if os.environ.get(n)), None)
+        if already:
+            print("   %s %-11s %s" % (GOLD("●"), provider, GREYc("detected · " + already)))
+            continue
+        print("   %s %-11s %s" % (GREYc("○"), provider, GREYc("needs " + (env_names[0] if env_names else "key"))))
+        val = _ask_secret("       ↳ paste key (or Enter to skip): ")
+        if val:
+            new_keys[(env_names[0] if env_names else provider.upper() + "_API_KEY")] = val
+            print("       " + OKc("✓ added"))
+    # Optional Artificial Analysis key — powers capability-aware routing's WEEKLY score refresh.
+    # Routing already works from the shipped capabilities.seed.json; this just keeps the numbers
+    # current as models change. Free key: artificialanalysis.ai (create account → API).
+    if os.environ.get("AA_API_KEY") or os.environ.get("ARTIFICIAL_ANALYSIS_API_KEY"):
+        print("   %s %-11s %s" % (GOLD("●"), "capability", GREYc("AA key detected · model quality scores will auto-refresh weekly")))
+    else:
+        print("   %s %-11s %s" % (GREYc("○"), "capability", GREYc("optional · keeps model quality scores fresh for smart routing")))
+        print("       " + GREYc("free key at artificialanalysis.ai (account → API). Skip and scrooge still"))
+        print("       " + GREYc("routes from the shipped scores — this only enables the weekly refresh."))
+        aav = _ask_secret("       ↳ paste Artificial Analysis key (or Enter to skip): ")
+        if aav:
+            new_keys["AA_API_KEY"] = aav
+            print("       " + OKc("✓ added — weekly capability refresh enabled"))
+    env_path = _write_env_file(new_keys)
+    json.dump(reg, open(REGISTRY, "w"), indent=2); open(REGISTRY, "a").write("\n")
+    print("   " + OKc("✓") + " keys saved to " + GOLD(env_path.replace(HOME, "~")) + GREYc(" (chmod 600)"))
+
+    # 3) Live test — spinner per provider, with inline retry for failures
+    _step(3, TOTAL, "Testing live providers", "")
+    def run_tests():
+        load_env_fallback()
+        r = load_registry()
+        livec, failed = 0, []
+        for provider in r["providers"]:
+            if not provider_key(r, provider):
+                continue
+            ok, detail = _spin("testing %s …" % provider, lambda p=provider: _ping(r, p))
+            print("   %s %-11s %s" % (OKc("✓") if ok else ERRc("✗"), provider, (OKc(detail) if ok else ERRc(detail))))
+            if ok: livec += 1
+            else: failed.append(provider)
+        return r, livec, failed
+    reg, live, failed = run_tests()
+    # A failure is almost always a wrong paste or a stale/auto-detected key.
+    # Offer to re-enter the right key and re-test, in place, until resolved.
+    while failed and sys.stdin.isatty():
+        print("   " + AMBER("%d provider(s) failed — usually a wrong or stale key." % len(failed)))
+        if not _ask("   Re-enter keys for the failed ones now? " + GREYc("[Y/n]") + " ", "y").lower().startswith("y"):
+            break
+        fixes = {}
+        for provider in failed:
+            envn = reg["providers"][provider].get("env", [])
+            primary = envn[0] if envn else provider.upper() + "_API_KEY"
+            val = _ask_secret("   %s → paste %s (Enter to skip): " % (provider, primary))
+            if val:
+                fixes[primary] = val
+                os.environ[primary] = val  # picked up on the next test pass
+        if not fixes:
+            break
+        _write_env_file(fixes)
+        print("   " + GREYc("re-testing…"))
+        reg, live, failed = run_tests()
+    print("   " + (OKc("● %d provider(s) live" % live) if live else ERRc("no working providers yet — add a key and re-run `scrooge setup`")))
+
+    # 4) Optional Claude Code gate
+    _step(4, TOTAL, "Claude Code verification gate", "optional")
+    print("   " + GREYc("diverge skill + adversarial-verifier agent + a Stop hook that blocks"))
+    print("   " + GREYc("'done' claims with no build/test evidence."))
+    if _ask("   Install into ~/.claude? " + GREYc("[y/N]") + " ", "n").lower().startswith("y"):
+        _install_claude_gate()
+    else:
+        print("   " + GREYc("skipped — run `scrooge setup` again any time to add it."))
+
+    # Done panel
+    print()
+    print(_box([OKc(BOLD("✓ Ready.")) + GREYc("  saving baseline: ") + GOLD(olabel),
+                "",
+                GREYc("try  ") + GOLD("scrooge list"),
+                GREYc("     ") + GOLD("scrooge --task summarize < file.md"),
+                GREYc("     ") + GOLD("scrooge ledger") + GREYc("   # spend + savings")], color=OKc))
+    print()
+
+def main():
+    load_env_fallback()
+    argv = sys.argv[1:]
+    if argv and argv[0] == "setup":
+        return cmd_setup(None)
+    reg = load_registry()
+
+    # Manual subcommand dispatch (avoids argparse subparser vs positional-prompt clash).
+    if argv and argv[0] in ("models", "list", "ledger", "watch", "learn", "lessons", "forget"):
+        cmd, rest = argv[0], argv[1:]
+        if cmd == "models":
+            ap = argparse.ArgumentParser(prog="scrooge models"); ap.add_argument("provider")
+            return cmd_models(reg, ap.parse_args(rest))
+        if cmd == "list":
+            return cmd_list(reg, None)
+        if cmd == "ledger":
+            ap = argparse.ArgumentParser(prog="scrooge ledger")
+            ap.add_argument("--since", default="24h")
+            ap.add_argument("--here", action="store_true", help="only this project (cwd's git repo / dir)")
+            ap.add_argument("--project", help="only this project name (see SCROOGE_PROJECT)")
+            return cmd_ledger(reg, ap.parse_args(rest))
+        if cmd == "watch":
+            ap = argparse.ArgumentParser(prog="scrooge watch")
+            ap.add_argument("--tail", type=int, default=3, help="show the last N calls before following")
+            ap.add_argument("--all", action="store_true", help="replay the entire ledger, then follow")
+            ap.add_argument("--no-follow", action="store_false", dest="follow",
+                            help="print matching calls and exit (don't stream)")
+            ap.add_argument("--here", action="store_true",
+                            help="only THIS project (cwd's git repo / dir) — run it in the project's terminal")
+            ap.add_argument("--project", help="only this project name (the SCROOGE_PROJECT / git-dir label)")
+            ap.add_argument("--cwd", help="only calls whose working dir is under this path")
+            return cmd_watch(reg, ap.parse_args(rest))
+        if cmd == "learn":
+            ap = argparse.ArgumentParser(prog="scrooge learn")
+            ap.add_argument("--model", "-m")
+            ap.add_argument("--task", "-t")
+            ap.add_argument("--seed", action="store_true", help="merge the shipped seed set into your store")
+            ap.add_argument("text", nargs="?")
+            return cmd_learn(reg, ap.parse_args(rest))
+        if cmd == "lessons":
+            ap = argparse.ArgumentParser(prog="scrooge lessons")
+            ap.add_argument("--model", "-m")
+            ap.add_argument("--task", "-t")
+            return cmd_lessons(reg, ap.parse_args(rest))
+        if cmd == "forget":
+            ap = argparse.ArgumentParser(prog="scrooge forget")
+            ap.add_argument("--model", "-m")
+            ap.add_argument("--task", "-t")
+            ap.add_argument("--all", action="store_true")
+            ap.add_argument("index", nargs="?")
+            return cmd_forget(reg, ap.parse_args(rest))
+
+    # Default: a model call.
+    ap = argparse.ArgumentParser(prog="scrooge")
+    ap.add_argument("prompt", nargs="?")
+    ap.add_argument("--model", "-m")
+    ap.add_argument("--task", "-t")
+    ap.add_argument("--system", "-s")
+    ap.add_argument("--json", action="store_true")
+    ap.add_argument("--max-tokens", type=int, dest="max_tokens")
+    ap.add_argument("--temperature", type=float, default=0.3)
+    ap.add_argument("--no-lessons", action="store_true", dest="no_lessons",
+                    help="skip injecting learned per-model lessons (A/B comparison)")
+    ap.add_argument("--latest", action="store_true",
+                    help="for the default model, re-check the provider's live model list now (bypass cache)")
+    ap.add_argument("--difficulty", "-d", choices=["easy", "medium", "hard"],
+                    help="task difficulty → sets the capability floor (else inferred)")
+    ap.add_argument("--spread", type=int, default=0, metavar="N",
+                    help="fan a batch across the top-N capable models (rate-limit/throughput)")
+    ap.add_argument("--no-weigh", action="store_true", dest="no_weigh",
+                    help="skip capability weighing; use the registry's cheapest-first task order")
+    return cmd_call(reg, ap.parse_args(argv))
+
+if __name__ == "__main__":
+    main()
