@@ -38,6 +38,7 @@ try { UI = readFileSync(new URL("./ui.html", import.meta.url), "utf8"); } catch 
 // open SSE streams: [{ session, res }]
 const streams = [];
 const now = () => Date.now();
+const fmtAge = ms => { const m = Math.floor(ms / 60000); return m > 48 * 60 ? `${Math.floor(m / 1440)}d ago` : m > 90 ? `${Math.floor(m / 60)}h ago` : `${m}m ago`; };
 function body(req) { return new Promise(r => { let d = ""; req.on("data", c => (d += c)); req.on("end", () => { try { r(d ? JSON.parse(d) : {}); } catch { r({}); } }); }); }
 function json(res, code, obj) { res.writeHead(code, { "content-type": "application/json", "access-control-allow-origin": "*" }); res.end(JSON.stringify(obj)); }
 function touch(session, status, project) {
@@ -110,13 +111,16 @@ const server = http.createServer(async (req, res) => {
     if (req.method === "GET" && P === "/projects") {        // project-grouped view
       const cutoff = now() - ONLINE_MS; const byProj = {};
       const proj = p => p || "(unassigned)";
-      const mk = k => (byProj[k] ||= { project: k, brief: (state.projectMeta[k]?.brief) || "", agents: [], tasks: { todo:0,doing:0,testing:0,failed:0,done:0,blocked:0 }, doingTitles: [] });
+      const mk = k => (byProj[k] ||= { project: k, brief: (state.projectMeta[k]?.brief) || "", agents: [], tasks: { todo:0,doing:0,testing:0,failed:0,done:0,blocked:0 }, doingTitles: [], lastActivity: 0 });
       for (const [s, v] of Object.entries(state.peers)) {
-        const k = proj(v.project); mk(k).agents.push({ session: s, online: v.lastSeen > cutoff, status: v.status || "" });
+        const k = proj(v.project); const e = mk(k); e.agents.push({ session: s, online: v.lastSeen > cutoff, status: v.status || "" });
+        if ((v.lastSeen || 0) > e.lastActivity) e.lastActivity = v.lastSeen;
       }
-      for (const t of state.tasks) { const e = mk(proj(t.project)); e.tasks[t.status] = (e.tasks[t.status]||0)+1; if (t.status === "doing") e.doingTitles.push(t.title); }
+      for (const t of state.tasks) { const e = mk(proj(t.project)); e.tasks[t.status] = (e.tasks[t.status]||0)+1; if (t.status === "doing") e.doingTitles.push(t.title); if ((t.updated || 0) > e.lastActivity) e.lastActivity = t.updated; }
       // derive a one-line phase ("where it is in the process") from the board
       for (const e of Object.values(byProj)) {
+        const mu = state.projectMeta[e.project]?.updated || 0; if (mu > e.lastActivity) e.lastActivity = mu;
+        e.idle = !e.agents.some(a => a.online);
         const { todo, doing, testing=0, failed=0, done, blocked } = e.tasks; const total = todo+doing+testing+failed+done+blocked;
         e.phase = total === 0 ? "no cards yet"
           : failed > 0 ? `${failed} FAILED — fixing`
@@ -126,6 +130,8 @@ const server = http.createServer(async (req, res) => {
           : done === total ? "shipped — all cards done"
           : todo > 0 ? `planned: ${todo} card${todo>1?"s":""} queued`
           : "in progress";
+        // dead board: no live agents -> the phase above is stale, say so honestly
+        if (e.idle) e.phase = `idle · last activity ${e.lastActivity ? fmtAge(now() - e.lastActivity) : "unknown"}`;
       }
       return json(res, 200, { projects: Object.values(byProj) });
     }

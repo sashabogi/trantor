@@ -56,6 +56,12 @@ main{flex:1;display:grid;grid-template-columns:1fr 330px;min-height:0}
 .tcard.done{opacity:.65}.tcard.done span{text-decoration:line-through}
 .empty{color:var(--dim);text-align:center;padding:30px}
 .empty.big{padding:60px 20px;font-size:15px}
+/* idle projects — collapsed thin rows below the live boards */
+.idle-head{font-size:10.5px;text-transform:uppercase;letter-spacing:.09em;color:var(--dim);font-weight:700;margin:18px 2px 8px}
+.idle-row{display:flex;align-items:center;gap:7px;background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:7px 14px;margin-bottom:7px;font-size:12.5px;color:var(--mut);cursor:pointer}
+.idle-row:hover{background:var(--card);border-color:#2c3a52}
+.idle-row .nm{color:var(--tx);font-weight:600}
+.proj.idle .proj-h{opacity:.55;cursor:pointer}
 /* flow (DAG) view */
 .vtog{display:flex;gap:2px;margin-left:10px}
 .vbtn{font-size:10px;font-weight:700;letter-spacing:.05em;padding:2px 9px;border-radius:10px;border:1px solid var(--line);background:var(--card);color:var(--dim);cursor:pointer}
@@ -120,7 +126,7 @@ aside h2{font-size:10.5px;text-transform:uppercase;letter-spacing:.09em;color:va
 <body>
 <header>
   <span class="dot" id="livedot"></span>
-  <span class="logo">agent<b>·</b>bus</span>
+  <span class="logo">tran<b>t</b>or</span>
   <span class="pill" id="hub">—</span>
   <span class="spacer"></span>
   <span class="pill" id="econ" title="Scrooge ledger, last 24h" style="display:none"></span>
@@ -160,7 +166,7 @@ const ICON={
 const BRAND=[[/claude|anthropic/,'anthropic'],[/codex|openai|gpt|chatgpt/,'openai'],[/gemini|bard/,'gemini'],[/mistral|mixtral/,'mistral'],[/deepseek/,'deepseek'],[/kimi|moonshot|\bk2\b/,'moonshot'],[/qwen/,'qwen'],[/grok|xai/,'grok'],[/cursor/,'cursor']];
 function brandOf(s){const x=String(s).toLowerCase();for(const[re,b]of BRAND)if(re.test(x))return b;return null;}
 function iconFor(s,size){const b=brandOf(s);if(!b||!ICON[b])return `<span style="display:inline-flex;width:${size}px;height:${size}px;align-items:center;justify-content:center;border-radius:50%;background:#2a3346;color:#aeb9c9;font-size:${Math.round(size*.55)}px;font-weight:700">${esc(String(s).slice(0,1).toUpperCase())}</span>`;const i=ICON[b];return `<svg viewBox="0 0 24 24" width="${size}" height="${size}" fill="currentColor" style="color:${i.c}">${i.p.map(d=>`<path d="${d}"/>`).join('')}</svg>`;}
-const phaseClass=ph=>/FAILED|blocked/.test(ph)?'blocked':/building|verifying|progress/.test(ph)?'building':/shipped|done/.test(ph)?'shipped':'planned';
+const phaseClass=ph=>/^idle ·/.test(ph)?'planned':/FAILED|blocked/.test(ph)?'blocked':/building|verifying|progress/.test(ph)?'building':/shipped|done/.test(ph)?'shipped':'planned';
 
 let POOLS={};
 async function econ(){
@@ -178,6 +184,7 @@ econ();setInterval(econ,15000);
 function poolOf(session){const b=brandOf(session);const k=b==='anthropic'?'claude':b==='openai'?'codex':b==='moonshot'?'kimi':b;return POOLS[k]||'';}
 const VIEWS = JSON.parse(localStorage.getItem("abViews") || "{}");
 function setView(proj, v){ VIEWS[proj] = v; localStorage.setItem("abViews", JSON.stringify(VIEWS)); render(); }
+function toggleIdle(name){ if(!name)return; const s=new Set(JSON.parse(localStorage.getItem("abIdleOpen")||"[]")); s.has(name)?s.delete(name):s.add(name); localStorage.setItem("abIdleOpen",JSON.stringify([...s])); render(); }
 function flowLayout(cards, proj){
   const byId = Object.fromEntries(cards.map(t => [t.id, t]));
   let anyDeps = cards.some(t => (t.deps || []).length);
@@ -348,7 +355,8 @@ async function render(){
   const el=$('#boards');
   if(dragging)return;                                  // never rebuild mid-gesture
   if(!projects.length){el.innerHTML='<div class="empty big">no projects yet — agents register a project on connect</div>';return;}
-  el.innerHTML=projects.map(p=>{
+  const idleOpen=new Set(JSON.parse(localStorage.getItem("abIdleOpen")||"[]"));
+  const projBlock=p=>{
     const pt=tasks.filter(t=>t.project===p.project);
     const done=pt.filter(t=>t.status==='done').length;
     const pct=pt.length?Math.round(done/pt.length*100):0;
@@ -371,18 +379,29 @@ async function render(){
     const pmsgs=msgs.filter(m=>projOf(m)===p.project);
     const view = VIEWS[p.project] || "board";
     const vtog = `<div class="vtog"><button class="vbtn ${view==="board"?"on":""}" data-proj="${esc(p.project)}" data-view="board">BOARD</button><button class="vbtn ${view==="flow"?"on":""}" data-proj="${esc(p.project)}" data-view="flow">FLOW</button></div>`;
-    return `<div class="proj">`+
+    return `<div class="proj${p.idle===true?' idle':''}"${p.idle===true?` data-idleproj="${esc(p.project)}"`:''}>`+
       `<div class="proj-h"><span class="pname">📁 <b>${esc(p.project)}</b></span>${vtog}<div class="agents">${agents||'<span class="dim">no agents</span>'}</div><span class="spacer"></span><span class="prog">${done}/${pt.length} done · ${pct}%</span></div>`+
       `<div class="proj-brief">${brief}${ph?`<span class="phase ${phaseClass(ph)}">${esc(ph)}</span>`:''}</div>`+
       `<div class="pbar"><i style="width:${pct}%"></i></div>`+
       (view === "flow" ? flowHTML(pt, p.project) : `<div class="kanban">${cols}</div>`)+
       chatLane(pmsgs)+
     `</div>`;
-  }).join('');
+  };
+  // idle projects (zero online agents) collapse to thin rows below the live boards
+  const idleRow=p=>{
+    const pt=tasks.filter(t=>t.project===p.project);const done=pt.filter(t=>t.status==='done').length;
+    return `<div class="idle-row" data-idleproj="${esc(p.project)}" title="click to expand">💤 <span class="nm">${esc(p.project)}</span><span class="dim">· ${esc(p.phase||'')} · ${done}/${pt.length} cards</span></div>`;
+  };
+  const live=projects.filter(p=>p.idle!==true),idlers=projects.filter(p=>p.idle===true);
+  el.innerHTML=live.map(projBlock).join('')
+    +(idlers.length?`<div class="idle-head">idle projects · ${idlers.length}</div>`+idlers.map(p=>idleOpen.has(p.project)?projBlock(p):idleRow(p)).join(''):'');
   // keep each project's chat scrolled to the latest line
   el.querySelectorAll('.chatlog').forEach(c=>{if(c.scrollHeight-c.clientHeight<60||c.dataset.stuck!=='0')c.scrollTop=c.scrollHeight;c.onscroll=()=>{c.dataset.stuck=(c.scrollHeight-c.scrollTop-c.clientHeight<40)?'1':'0';};});
   // click a card -> advance status todo->doing->done
   el.querySelectorAll('.vbtn').forEach(b=>b.onclick=()=>setView(b.dataset.proj,b.dataset.view));
+  // collapsed idle row -> expand; expanded idle project's header -> collapse again
+  el.querySelectorAll('.idle-row').forEach(r=>r.onclick=()=>toggleIdle(r.dataset.idleproj));
+  el.querySelectorAll('.proj.idle .proj-h').forEach(h=>h.onclick=e=>{if(e.target.closest('.vbtn,.agent'))return;toggleIdle(h.closest('.proj').dataset.idleproj);});
   wireFlow(el);
   el.querySelectorAll('.tcard, .fnode').forEach(c=>c.onclick=async()=>{
     const id=+c.dataset.id,t=tasks.find(x=>x.id===id);if(!t)return;
