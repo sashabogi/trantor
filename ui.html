@@ -458,14 +458,25 @@ function addMsg(m,count=true){
   d.innerHTML=`<span class="t">${new Date(m.ts).toLocaleTimeString()}</span> ${iconFor(m.from,12)} <span class="from">${esc(m.from)}</span> → <span class="to">${esc(m.to)}</span>: ${esc(m.text)}`;
   const f=$('#feed');const stick=f.scrollHeight-f.scrollTop-f.clientHeight<50;f.appendChild(d);if(stick)f.scrollTop=f.scrollHeight;
 }
-function stream(){const ev=new EventSource('/stream?session=all');
+let _ev=null;
+function stream(){
+  try{_ev&&_ev.close();}catch(_){}                       // drop any prior connection before reopening (no duplicate streams)
+  const ev=new EventSource('/stream?session=all');_ev=ev;
   ev.onmessage=e=>{try{addMsg(JSON.parse(e.data));render();}catch(_){}};
-  ev.onerror=()=>{$('#livedot').classList.add('off');setTimeout(()=>{ev.close();stream();$('#livedot').classList.remove('off');},2000);};}
+  ev.onerror=()=>{$('#livedot').classList.add('off');setTimeout(()=>{ev.close();if(_ev===ev)stream();$('#livedot').classList.remove('off');},2000);};}
 $('#send').onclick=async()=>{const t=$('#text').value.trim();if(!t)return;
   await fetch('/send',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({from:'dashboard',to:$('#to').value,text:t})});$('#text').value='';};
 $('#text').addEventListener('keydown',e=>{if(e.key==='Enter')$('#send').click();});
 fetch('/recent?limit=40').then(r=>r.json()).then(d=>(d.messages||[]).forEach(m=>addMsg(m,false))).catch(()=>{});
 $('#hub').textContent=location.host;
 render();setInterval(render,2500);stream();
+// Self-heal after the laptop sleeps / the tab is backgrounded: browser timers and the SSE
+// stream get suspended and don't reliably resume, so the board freezes on stale data. The
+// moment the tab becomes visible / focused / regains network, force an immediate refresh +
+// stream reconnect — the equivalent of the heartbeat's "first action after wake" on the UI side.
+function wake(){render();stream();}
+document.addEventListener('visibilitychange',()=>{if(!document.hidden)wake();});
+addEventListener('focus',wake);
+addEventListener('online',wake);
 </script>
 </body></html>
