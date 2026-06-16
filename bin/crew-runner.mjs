@@ -48,8 +48,11 @@ async function api(path, body) {
 // ---- per-CLI invocation (first turn vs resume turn). {P} = prompt file path ----
 // CREW_MODEL env pins the model: each CLI gets its own flag via {M} (empty when unset).
 let MODEL = process.env.CREW_MODEL || "";
-// opencode expects provider/model — qualify bare ids for the deepseek/opencode agents
-if (MODEL && !MODEL.includes("/") && (AGENT === "deepseek" || AGENT === "opencode")) MODEL = `deepseek/${MODEL}`;
+// opencode expects provider/model. A BARE id for the `deepseek` agent qualifies to its
+// own provider; `opencode` ids must already be provider-qualified (e.g.
+// `zai-coding-plan/glm-5.1`) — never assume `deepseek/` for opencode (that mangled
+// ZAI-coding-plan models into deepseek/…). `scrooge route` returns qualified ids.
+if (MODEL && !MODEL.includes("/") && AGENT === "deepseek") MODEL = `deepseek/${MODEL}`;
 const CLI = {
   codex:    { first: `codex exec{M} --skip-git-repo-check --dangerously-bypass-approvals-and-sandbox "$(cat {P})" < /dev/null`,
               next:  `codex exec resume --last{M} --skip-git-repo-check --dangerously-bypass-approvals-and-sandbox "$(cat {P})" < /dev/null`, mflag: " -m " },

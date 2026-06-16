@@ -590,6 +590,86 @@ def cmd_models(reg, args):
     for i in ids:
         print(i)
 
+def _model_version_key(mid):
+    """Best-effort 'newest' ordering when no capability data exists: the trailing
+    numeric version wins (glm-5.2 > glm-5.1 > glm-4.7). Returns a sortable tuple."""
+    m = re.search(r"(\d+(?:\.\d+)*)", mid)
+    return tuple(int(x) for x in m.group(1).split(".")) if m else (0,)
+
+_SMALL_VARIANT = ("air", "mini", "flash", "lite", "turbo", "nano", "small")
+def _is_small_variant(mid):
+    low = mid.lower()
+    return any(s in low for s in _SMALL_VARIANT)
+
+def _heuristic_pick(cands, difficulty):
+    """No capability data → pick by newest version, difficulty-aware on size variants
+    (easy prefers a small/turbo variant; medium/hard prefers the full model)."""
+    top_ver = max(_model_version_key(c) for c in cands)
+    top = [c for c in cands if _model_version_key(c) == top_ver]
+    if difficulty == "easy":
+        smalls = sorted(c for c in top if _is_small_variant(c))
+        if smalls:
+            return smalls[0]
+    bigs = sorted(c for c in top if not _is_small_variant(c))
+    return (bigs or sorted(top))[0]
+
+def cmd_route(reg, args):
+    """Pick ONE deliberate live model for the crew path (task × difficulty).
+    Enumeration is the CALLER's job for CLI-managed providers — pass ids via
+    --candidates (e.g. `opencode models <provider>`); for raw-API providers in the
+    registry, --provider self-enumerates via /models. Scoring uses capabilities when
+    available, else a newest-version heuristic. JSON with --json. NEVER guesses an
+    endpoint."""
+    caps = load_caps()
+    provider = args.provider
+    raw = []
+    if args.candidates:
+        raw = [c.strip() for c in re.split(r"[,\s]+", args.candidates) if c.strip()]
+    elif provider:
+        if provider not in reg["providers"]:
+            print(json.dumps({"error": "unknown provider '%s' and no --candidates given" % provider}))
+            raise SystemExit(2)
+        if not provider_key(reg, provider):
+            print(json.dumps({"error": "no API key for provider '%s'" % provider}))
+            raise SystemExit(2)
+        raw = list_live_models(reg, provider, ttl=0)
+    if not raw:
+        print(json.dumps({"error": "no candidate models (provider offline / no key / empty --candidates)"}))
+        raise SystemExit(2)
+    # bare id (strip any provider/ prefix) → first original (qualified) form seen
+    by_bare = {}
+    for r in raw:
+        by_bare.setdefault(r.split("/")[-1], r)
+    bare_ids = list(by_bare.keys())
+    task = args.task or "code"
+    difficulty = args.difficulty or "medium"
+    metric = task_metric(task)
+    # Only trust the capability-weighted router when the NEWEST-version candidate is itself
+    # scored. Otherwise stale caps (which lag new releases) would demote a newer model to 0
+    # and pick an old one — the exact failure that motivated this. Then prefer newest.
+    top_ver = max(_model_version_key(b) for b in bare_ids)
+    top_scored = any(model_quality(caps, b, metric) > 0
+                     for b in bare_ids if _model_version_key(b) == top_ver)
+    if top_scored:
+        scored = weigh_candidates(reg, caps, bare_ids, task, difficulty)
+        pick_bare = scored[0][0]
+        weighed, why = True, "capability×cost ranked (%s · %s floor) over %d live" % (task, difficulty, len(bare_ids))
+        cand_out = [{"model": b, "score": round(s, 4)} for b, s in scored[:6]]
+    else:
+        pick_bare = _heuristic_pick(bare_ids, difficulty)
+        weighed, why = False, "capabilities lag the newest model(s) → newest-version heuristic (difficulty-aware); run scrooge-capabilities to enrich"
+        cand_out = [{"model": b} for b in sorted(bare_ids, key=_model_version_key, reverse=True)[:6]]
+    original = by_bare[pick_bare]
+    qualified = original if "/" in original else (("%s/%s" % (provider, pick_bare)) if provider else pick_bare)
+    result = {"provider": provider, "model": pick_bare, "qualified": qualified,
+              "weighed": weighed, "task": task, "difficulty": difficulty, "why": why, "candidates": cand_out}
+    if getattr(args, "json", False):
+        print(json.dumps(result))
+    else:
+        err(DIM("[scrooge route] %s → %s (%s)" % (provider or "?", qualified, "weighed" if weighed else "heuristic")))
+        print(qualified)
+    return 0
+
 def cmd_list(reg, args):
     print("PROVIDERS (live = key present):")
     for p, cfg in reg["providers"].items():
@@ -1207,11 +1287,19 @@ def main():
     reg = load_registry()
 
     # Manual subcommand dispatch (avoids argparse subparser vs positional-prompt clash).
-    if argv and argv[0] in ("models", "list", "ledger", "watch", "learn", "lessons", "forget"):
+    if argv and argv[0] in ("models", "route", "list", "ledger", "watch", "learn", "lessons", "forget"):
         cmd, rest = argv[0], argv[1:]
         if cmd == "models":
             ap = argparse.ArgumentParser(prog="scrooge models"); ap.add_argument("provider")
             return cmd_models(reg, ap.parse_args(rest))
+        if cmd == "route":
+            ap = argparse.ArgumentParser(prog="scrooge route")
+            ap.add_argument("--provider", "-p", help="registry API provider to self-enumerate via /models")
+            ap.add_argument("--candidates", "-c", help="comma/space-separated model ids (e.g. `opencode models <p>`); takes precedence over --provider enumeration")
+            ap.add_argument("--task", "-t", default="code")
+            ap.add_argument("--difficulty", "-d", choices=["easy", "medium", "hard"], default="medium")
+            ap.add_argument("--json", action="store_true")
+            return cmd_route(reg, ap.parse_args(rest))
         if cmd == "list":
             return cmd_list(reg, None)
         if cmd == "ledger":

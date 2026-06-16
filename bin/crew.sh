@@ -45,7 +45,43 @@ down() {
 }
 [ "$CMD" = "down" ] && { down; exit 0; }
 [ "$CMD" != "up" ] && { echo "usage: crew.sh up <agent...> | crew.sh down"; exit 1; }
-[ $# -eq 0 ] && { echo "usage: crew.sh up codex gemini kimi deepseek (any subset; agent:model pins a model, e.g. deepseek:deepseek-v4-pro)"; exit 1; }
+
+# --task/--difficulty drive LAZY live-model selection for provider-only specs (agent:provider).
+# An agent spec is one of: `codex` (CLI default) · `opencode:zai-coding-plan` (provider only →
+# pick the best live model now) · `opencode:zai-coding-plan/glm-5.2` (full pin, used as-is).
+TASK="code"; DIFF="medium"; _ARGS=()
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --task) TASK="${2:-code}"; shift 2 || shift ;;
+    --difficulty|--diff) DIFF="${2:-medium}"; shift 2 || shift ;;
+    *) _ARGS+=("$1"); shift ;;
+  esac
+done
+if [ ${#_ARGS[@]} -gt 0 ]; then set -- "${_ARGS[@]}"; else set --; fi
+[ $# -eq 0 ] && { echo "usage: crew.sh up [--task K --difficulty D] codex gemini kimi deepseek (agent:provider picks a live model; agent:provider/model pins one)"; exit 1; }
+
+# scrooge (the model-routing brain) is bundled with this trantor install; fall back to PATH.
+SCROOGE="$BUS_DIR/engine/bin/scrooge"
+[ -f "$SCROOGE" ] || SCROOGE="$(command -v scrooge 2>/dev/null || echo scrooge)"
+
+# resolve_model <agent> <provider> <task> <diff> -> echoes a runner-ready model id, or empty
+# (→ CLI default). Enumeration is CLI-aware and never guesses an endpoint: opencode-managed
+# agents list via `opencode models <provider>`; others self-enumerate via the provider's /models.
+resolve_model() {
+  local agent="$1" provider="$2" task="$3" diff="$4" cands="" out=""
+  case "$agent" in
+    opencode|deepseek)
+      cands="$(opencode models "$provider" 2>/dev/null | tr '\n' ' ')"
+      [ -n "$cands" ] || { echo "[crew] no live models via 'opencode models $provider' — CLI default" >&2; return 0; }
+      out="$(python3 "$SCROOGE" route --candidates "$cands" -t "$task" -d "$diff" --json 2>/dev/null)" ;;
+    *)
+      out="$(python3 "$SCROOGE" route --provider "$provider" -t "$task" -d "$diff" --json 2>/dev/null)" ;;
+  esac
+  [ -n "$out" ] || { echo "[crew] live model selection failed for $agent:$provider — CLI default" >&2; return 0; }
+  printf '%s' "$out" | python3 -c 'import json,sys
+try: print(json.load(sys.stdin).get("qualified") or "")
+except Exception: pass' 2>/dev/null
+}
 
 if [ "$(uname)" != "Darwin" ]; then
   echo "Window spawning is macOS-only. Run one per terminal, in $DIR:"
@@ -82,10 +118,19 @@ spawn_grid() {  # $@ = agents — (re)computes the grid for THIS batch and spawn
   [ $N -le 2 ] && COLS=1
   local ROWS=$(( (N + COLS - 1) / COLS ))
   local CW=$(( GW / COLS )) CH=$(( GH / ROWS ))
-  local i=0 SPEC AGENT MODEL
+  local i=0 SPEC AGENT FIELD MODEL
   for SPEC in "$@"; do
-    AGENT="${SPEC%%:*}"                       # agent[:model] — model rides in as CREW_MODEL
-    MODEL=""; [ "$SPEC" != "$AGENT" ] && MODEL="${SPEC#*:}"
+    AGENT="${SPEC%%:*}"                       # agent[:provider[/model]] — model rides in as CREW_MODEL
+    FIELD=""; [ "$SPEC" != "$AGENT" ] && FIELD="${SPEC#*:}"
+    MODEL=""
+    if [ -n "$FIELD" ]; then
+      case "$FIELD" in
+        */*) MODEL="$FIELD" ;;                                          # full pin: provider/model
+        *)   MODEL="$(resolve_model "$AGENT" "$FIELD" "$TASK" "$DIFF")"  # provider only: pick live now
+             if [ -n "$MODEL" ]; then echo "  → $AGENT: live model $MODEL ($FIELD · $TASK/$DIFF)"
+             else echo "  → $AGENT: '$FIELD' live selection unavailable — CLI default"; fi ;;
+      esac
+    fi
     local C=$(( i % COLS )) R=$(( i / COLS ))
     local X1=$(( GX + C * CW )) Y1=$(( GY + R * CH ))
     osascript \
