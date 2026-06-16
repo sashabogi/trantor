@@ -1,7 +1,10 @@
 # TDD — Crew robustness: live model selection + real-time failure visibility
 
-Status: DRAFT — core decisions made 2026-06-15 (lazy selection · `trantor swap` command · fix prefix
-logic). Awaiting final review before build.
+Status: IN BUILD (2026-06-15). DONE+verified+committed: **A core** (`scrooge route` + `crew.sh`
+lazy `agent:provider` + prefix fix — commit 875c51f) and **B core** (runner real-time failure
+visibility + hub health + advise "auto" — commit c09f2ff). Suite 57/57. REMAINING: `trantor swap`
+command (crew.sh window-mgmt), dashboard rendering of errored/down (ui.html + mcp.mjs relay_peers),
+Teams merge. Decisions locked: lazy selection · `trantor swap` its own command · prefix fixed.
 Scope: public `trantor` (advisor + engine + crew launch + runner). Propagates to `trantor-teams` via
 `git merge upstream/main`. Two related crew-robustness fixes: **(A)** the crew picks live models
 (§3–§9), and **(B)** crew failures are surfaced to the orchestrator in real time (§11).
