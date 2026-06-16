@@ -50,11 +50,11 @@ function scanTelemetry() {
 
 // peers: { session: { lastSeen, status, project } } ; tasks: kanban cards
 // projectMeta: { project: { brief, by, updated } } — the "what & why" blurb per project
-let state = { messages: [], peers: {}, seq: 0, tasks: [], taskSeq: 0, projectMeta: {}, lessons: [], cardEvents: [] };
+let state = { messages: [], peers: {}, seq: 0, tasks: [], taskSeq: 0, projectMeta: {}, lessons: [], cardEvents: [], cardEventsBackfilled: false };
 try {
   if (existsSync(DATA)) {
     const loaded = JSON.parse(readFileSync(DATA, "utf8"));
-    state = { messages: loaded.messages || [], peers: {}, seq: loaded.seq || 0, tasks: loaded.tasks || [], taskSeq: loaded.taskSeq || 0, projectMeta: loaded.projectMeta || {}, lessons: loaded.lessons || [], cardEvents: Array.isArray(loaded.cardEvents) ? loaded.cardEvents : [] };
+    state = { messages: loaded.messages || [], peers: {}, seq: loaded.seq || 0, tasks: loaded.tasks || [], taskSeq: loaded.taskSeq || 0, projectMeta: loaded.projectMeta || {}, lessons: loaded.lessons || [], cardEvents: Array.isArray(loaded.cardEvents) ? loaded.cardEvents : [], cardEventsBackfilled: !!loaded.cardEventsBackfilled };
     for (const [s, v] of Object.entries(loaded.peers || {})) // migrate old numeric form
       state.peers[s] = typeof v === "number" ? { lastSeen: v, status: "", project: "" } : { lastSeen: v.lastSeen || 0, status: v.status || "", project: v.project || "" };
   }
@@ -62,6 +62,28 @@ try {
 let dirty = false;
 const persist = () => { if (dirty) { try { writeFileSync(DATA, JSON.stringify(state)); dirty = false; } catch {} } };
 setInterval(persist, 1000).unref?.();
+// One-time backfill: reconstruct the cardEvents history log from each card's authoritative per-card
+// `history` trail, so projects that existed BEFORE the cardEvents log show their FULL past in the
+// TIMELINE view (not just events from now on). Guarded by a flag so it runs once where cardEvents
+// persists; in team mode cardEvents is in-memory, so this re-derives from the persisted task.history
+// on every boot — which is exactly right.
+function backfillCardEvents() {
+  if (state.cardEventsBackfilled && state.cardEvents.length) return;
+  const events = [];
+  for (const t of (state.tasks || [])) for (const h of (t.history || [])) {
+    events.push({ ts: h.ts || 0, type: h.from ? "moved" : "created", taskId: t.id, project: t.project,
+      title: t.title, from: h.from || null, to: h.to || null, by: h.by || "",
+      difficulty: t.difficulty || null, assignee: t.assignee || null });
+  }
+  if (events.length) {
+    events.sort((a, b) => (a.ts || 0) - (b.ts || 0));
+    if (events.length > 5000) events.splice(0, events.length - 5000);
+    events.forEach((e, i) => { e.id = i + 1; });
+    state.cardEvents = events; dirty = true;
+  }
+  state.cardEventsBackfilled = true; dirty = true;
+}
+backfillCardEvents();
 function prunePeers() {
   const cutoff = now() - PEER_TTL_MS;
   let removed = false;

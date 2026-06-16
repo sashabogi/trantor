@@ -3,7 +3,7 @@
 // deterministic, seconds). These encode the failure modes that broke the 2026-06-09 live run,
 // so they can never silently regress. Run: node test-scenarios.mjs   (part of npm test)
 import { spawn } from "node:child_process";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -191,6 +191,23 @@ try {
   ok("moved event has correct from, to, by", moved && moved.by === "kimi:proj");
   const finalMove = hEvents.find(e => e.type === "moved" && e.to === "done");
   ok("final move to done present", finalMove && finalMove.by === "kimi:proj");
+
+  console.log("scenario: cardEvents backfill — a hub booting with legacy task.history (no cardEvents) reconstructs /history");
+  {
+    const BHOME = mkdtempSync(join(tmpdir(), "ab-bf-"));
+    const seeded = { messages: [], peers: {}, seq: 0, taskSeq: 1, projectMeta: {}, lessons: [],
+      tasks: [{ id: 1, project: "legacy", title: "old card", status: "done", assignee: "kimi:legacy", difficulty: "hard", by: "arch", ts: 1000, updated: 3000,
+        history: [{ to: "todo", by: "arch", ts: 1000 }, { from: "todo", to: "doing", by: "kimi:legacy", ts: 2000 }, { from: "doing", to: "done", by: "kimi:legacy", ts: 3000 }] }] };
+    writeFileSync(join(BHOME, "bus.json"), JSON.stringify(seeded));
+    const BPORT = 4952;
+    const bh = spawn("node", [join(ROOT, "hub.mjs")], { env: { ...process.env, HOME: BHOME, RELAY_DATA_DIR: BHOME, RELAY_PORT: String(BPORT), RELAY_HOST: "127.0.0.1" }, stdio: "ignore" });
+    await sleep(900);
+    const bev = (await (await fetch(`http://127.0.0.1:${BPORT}/history?project=legacy`)).json()).events;
+    ok("backfill reconstructed all 3 legacy history entries", bev.length === 3);
+    ok("backfill first event is created->todo", bev[0]?.type === "created" && bev[0]?.to === "todo");
+    ok("backfill rebuilds moves chronologically with from/to/by", bev[1]?.type === "moved" && bev[1]?.from === "todo" && bev[1]?.to === "doing" && bev[1]?.by === "kimi:legacy" && bev[2]?.to === "done");
+    bh.kill("SIGKILL"); rmSync(BHOME, { recursive: true, force: true });
+  }
 
 } finally {
   hub.kill("SIGKILL");
