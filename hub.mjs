@@ -250,7 +250,8 @@ const server = http.createServer(async (req, res) => {
       // ts must not throw (new Date(NaN).toISOString() does) and 500 the whole endpoint — return null
       // and let callers skip that day-bucket.
       const dayOf = ts => { const n = Number(ts); if (!n) return null; const d = new Date(n > 2e10 ? n : n * 1000); return Number.isNaN(d.getTime()) ? null : d.toISOString().slice(0, 10); };
-      const out = { totals: {}, lessons: { global: [], byAgent: {}, byProject: {}, projects: [] }, agents: [], models: [] };
+      const ALL = "*";   // the cross-project ("All projects") bucket
+      const out = { totals: {}, lessons: { global: [], byAgent: {}, byProject: {}, projects: [] }, agents: [], agentsByProject: {}, models: [], modelsByProject: {} };
 
       // relay lessons → global / by-agent / by-project (project derived from the recorder's session id)
       const projSet = new Set();
@@ -259,55 +260,76 @@ const server = http.createServer(async (req, res) => {
         if (l.scope === "global") out.lessons.global.push(rec); else (out.lessons.byAgent[l.scope] ||= []).push(rec);
         if (rec.project) { (out.lessons.byProject[rec.project] ||= []).push(rec); projSet.add(rec.project); }
       }
-      out.lessons.projects = [...projSet].sort();
 
-      // per-LLM reliability from turn telemetry: turns, failures (exit!=0), daily fail-rate series
+      // per-LLM reliability from turn telemetry, bucketed BY PROJECT (+ a global ALL bucket) so the
+      // sidebar's project filter scopes the charts. Each turn carries its own project.
       const turns = scanTelemetry();
-      const byAgent = {}; let totalTurns = 0, totalFails = 0; const modelsSeen = new Set();
-      for (const t of turns) {
-        const a = (byAgent[t.agent] ||= { agent: t.agent, turns: 0, failures: 0, models: new Set(), lastFailure: null, days: {} });
-        a.turns++; totalTurns++;
-        if (t.model) { a.models.add(t.model); if (t.model !== "default") modelsSeen.add(t.model); }
+      const relAgg = {};       // scope -> agent -> {turns,failures,models:Set,lastFailure,days}
+      const scopeModels = {};  // scope -> Set(model used)
+      let totalTurns = 0, totalFails = 0;
+      const bumpRel = (scope, t) => {
+        const a = ((relAgg[scope] ||= {})[t.agent] ||= { agent: t.agent, turns: 0, failures: 0, models: new Set(), lastFailure: null, days: {} });
+        a.turns++;
+        if (t.model) { a.models.add(t.model); if (t.model !== "default") (scopeModels[scope] ||= new Set()).add(t.model); }
         const dk = dayOf(t.ts); const d = dk ? (a.days[dk] ||= { turns: 0, failures: 0 }) : null; if (d) d.turns++;
-        if (t.exit && t.exit !== 0) { a.failures++; totalFails++; if (d) d.failures++; if (!a.lastFailure || t.ts > a.lastFailure.ts) a.lastFailure = { ts: t.ts, exit: t.exit, project: t.project || "" }; }
+        if (t.exit && t.exit !== 0) { a.failures++; if (d) d.failures++; if (!a.lastFailure || t.ts > a.lastFailure.ts) a.lastFailure = { ts: t.ts, exit: t.exit, project: t.project || "" }; }
+      };
+      for (const t of turns) {
+        if (!t.agent) continue;
+        totalTurns++; if (t.exit && t.exit !== 0) totalFails++;
+        bumpRel(ALL, t);
+        if (t.project) { bumpRel(t.project, t); projSet.add(t.project); }
       }
-      // lessons-accumulated-over-time per agent scope (relay lessons carry a ts; skip the unstamped older ones)
-      const lessonDays = {};
-      for (const l of state.lessons) { const d = dayOf(l.ts); if (!d) continue; (lessonDays[l.scope] ||= {}); lessonDays[l.scope][d] = (lessonDays[l.scope][d] || 0) + 1; }
-      out.agents = Object.values(byAgent).sort((a, b) => b.turns - a.turns).map(a => {
-        const days = Object.keys(a.days).sort();
-        let cum = 0; const ld = lessonDays[a.agent] || {};
-        return {
-          agent: a.agent, turns: a.turns, failures: a.failures, failRate: a.turns ? +(a.failures / a.turns).toFixed(3) : 0,
+      // lessons-accumulated-over-time per scope -> agent brand -> day (agent-scoped lessons only)
+      const lessonAgg = {};
+      for (const l of state.lessons) {
+        if (l.scope === "global") continue; const d = dayOf(l.ts); if (!d) continue;
+        const bump = scope => { (((lessonAgg[scope] ||= {})[l.scope] ||= {})[d]) = (lessonAgg[scope][l.scope][d] || 0) + 1; };
+        bump(ALL); const p = projOf(l.by); if (p) bump(p);
+      }
+      const buildAgents = scope => Object.values(relAgg[scope] || {}).sort((a, b) => b.turns - a.turns).map(a => {
+        const days = Object.keys(a.days).sort(); let cum = 0; const ld = (lessonAgg[scope] || {})[a.agent] || {};
+        return { agent: a.agent, turns: a.turns, failures: a.failures, failRate: a.turns ? +(a.failures / a.turns).toFixed(3) : 0,
           lastFailure: a.lastFailure, models: [...a.models],
           series: {
             failRate: days.map(d => ({ day: d, turns: a.days[d].turns, failures: a.days[d].failures, rate: a.days[d].turns ? +(a.days[d].failures / a.days[d].turns).toFixed(3) : 0 })),
             lessons: Object.keys(ld).sort().map(d => ({ day: d, count: (cum += ld[d]) })),
-          },
-        };
+          } };
       });
 
-      // Scrooge guardrails (per model → per task) + per-model economics from the cached ledger
+      // Scrooge guardrails (global per model) + per-model economics from the ledger, bucketed by project
       let guard = {}; try { guard = JSON.parse(readFileSync(join(homedir(), ".token-scrooge", "lessons.json"), "utf8")) || {}; } catch {}
       try { const lp = join(homedir(), ".token-scrooge", "calls.jsonl"); const st = statSync(lp); if (st.mtimeMs !== _ledgerCache.mtimeMs) { const rows = readFileSync(lp, "utf8").trim().split("\n").map(l => { try { return JSON.parse(l); } catch { return null; } }).filter(c => c && c.ok); _ledgerCache = { mtimeMs: st.mtimeMs, rows }; } } catch {}
-      const ledgerByModel = {};
-      for (const c of _ledgerCache.rows) {
-        const m = (ledgerByModel[c.model] ||= { calls: 0, ti: 0, to: 0, cost: 0, days: {} });
+      const ledAgg = {};   // scope -> model -> {calls,ti,to,cost,days}
+      const bumpLed = (scope, c) => {
+        const m = ((ledAgg[scope] ||= {})[c.model] ||= { calls: 0, ti: 0, to: 0, cost: 0, days: {} });
         m.calls++; m.ti += c.tokens_in || 0; m.to += c.tokens_out || 0; m.cost += c.cost_usd || 0;
         const dk = dayOf(c.ts); if (dk) { const d = (m.days[dk] ||= { cost: 0, ti: 0, to: 0 }); d.cost += c.cost_usd || 0; d.ti += c.tokens_in || 0; d.to += c.tokens_out || 0; }
-      }
+        (scopeModels[scope] ||= new Set()).add(c.model);
+      };
+      for (const c of _ledgerCache.rows) { if (!c.model) continue; bumpLed(ALL, c); if (c.project) { bumpLed(c.project, c); projSet.add(c.project); } }
+
       const savedOf = (ti, to, cost) => +Math.max(0, ti * 15 / 1e6 + to * 75 / 1e6 - cost).toFixed(2);
       let totalGuardrails = 0;
-      const mkModel = (model, g) => {
+      const mkModel = (scope, model, g) => {
         const gcount = Object.values(g || {}).reduce((s, arr) => s + (Array.isArray(arr) ? arr.length : 0), 0);
-        totalGuardrails += gcount; const lm = ledgerByModel[model];
+        if (scope === ALL) totalGuardrails += gcount;   // guardrails are global — count once
+        const lm = (ledAgg[scope] || {})[model];
         return { model, guardrails: g || {}, guardrailCount: gcount, calls: lm ? lm.calls : 0, cost_usd: lm ? +lm.cost.toFixed(4) : 0,
           saved_usd: lm ? savedOf(lm.ti, lm.to, lm.cost) : 0,
           series: { saved: lm ? Object.keys(lm.days).sort().map(d => ({ day: d, saved: savedOf(lm.days[d].ti, lm.days[d].to, lm.days[d].cost) })) : [] } };
       };
-      const modelKeys = new Set([...Object.keys(guard).filter(k => k !== "*"), ...Object.keys(ledgerByModel), ...modelsSeen]);
-      out.models = [...modelKeys].sort().map(m => mkModel(m, guard[m]));
-      if (guard["*"]) out.models.unshift(mkModel("∗ all models", guard["*"]));   // guardrails that apply to every model
+      const buildModels = scope => {
+        const keys = new Set(scopeModels[scope] || []);          // models used in this scope
+        if (scope === ALL) for (const k of Object.keys(guard)) if (k !== "*") keys.add(k);   // global view also lists every guardrailed model
+        const arr = [...keys].sort().map(m => mkModel(scope, m, guard[m]));
+        if (guard["*"]) arr.unshift(mkModel(scope, "∗ all models", guard["*"]));   // guardrails that apply to every model
+        return arr;
+      };
+
+      out.lessons.projects = [...projSet].sort();
+      out.agents = buildAgents(ALL); out.models = buildModels(ALL);
+      for (const p of out.lessons.projects) { out.agentsByProject[p] = buildAgents(p); out.modelsByProject[p] = buildModels(p); }
 
       out.totals = { lessons: state.lessons.length, guardrails: totalGuardrails, turns: totalTurns, failures: totalFails, failRate: totalTurns ? +(totalFails / totalTurns).toFixed(3) : 0, models: out.models.length };
       return json(res, 200, out);

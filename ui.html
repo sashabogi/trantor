@@ -557,20 +557,22 @@ function renderLearnBody(){const el=$('#learnBody');if(!el)return;if(!LEARN){el.
   else h+=lessons.slice(0,40).map(l=>`<div class="lles"><span class="sc">${esc(l.scope)}</span>${esc(l.text)}</div>`).join('');
   if(!learnProj)for(const[ag,arr]of Object.entries(L.lessons.byAgent||{}))h+=`<div class="lles"><span class="sc">${esc(ag)}</span>${esc(arr[0].text)}${arr.length>1?` <span class="dim">+${arr.length-1} more</span>`:''}</div>`;
   h+=`</div>`;
-  // Per-LLM reliability + progression charts
-  h+=`<div class="lsec"><h3>Per-LLM reliability</h3>`;
-  if(!(L.agents||[]).length)h+=`<div class="lempty">no turn telemetry yet</div>`;
-  for(const a of (L.agents||[])){const fr=(a.failRate*100).toFixed(1);
+  // Per-LLM reliability + progression charts — scoped to the selected project (or all)
+  const scopeLbl=learnProj?` <span class="dim" style="text-transform:none;letter-spacing:0">· ${esc(learnProj)}</span>`:'';
+  const ags=learnProj?(L.agentsByProject[learnProj]||[]):(L.agents||[]);
+  h+=`<div class="lsec"><h3>Per-LLM reliability${scopeLbl}</h3>`;
+  if(!ags.length)h+=`<div class="lempty">no turn telemetry${learnProj?' for this project':''} yet</div>`;
+  for(const a of ags){const fr=(a.failRate*100).toFixed(1);
     h+=`<div class="lcard"><div class="lc-h">${iconFor(a.agent,14)}<span class="nm">${esc(a.agent)}</span><span class="mut">${a.models.filter(m=>m!=='default').join(', ')||'default'}</span></div>`;
     h+=`<span class="lstat"><b>${a.turns}</b> turns</span><span class="lstat ${a.failures?'bad':'good'}"><b>${fr}%</b> fail</span>${a.lastFailure?`<span class="lstat">last exit ${a.lastFailure.exit}</span>`:''}`;
     if((a.series.failRate||[]).length>1)h+=`<div class="lchart"><div class="ltask">fail-rate / day</div>${lcLine(a.series.failRate,'rate',{color:LRED,fill:true})}</div>`;
     if((a.series.lessons||[]).length>1)h+=`<div class="lchart"><div class="ltask">lessons learned (cumulative)</div>${lcLine(a.series.lessons,'count',{color:LGRN,fill:true})}</div>`;
     h+=`</div>`;}
   h+=`</div>`;
-  // Baked-in guardrails per model + savings chart
-  h+=`<div class="lsec"><h3>Baked-in improvements <span class="lbadge">auto-injected into prompts</span></h3>`;
-  const gm=(L.models||[]).filter(m=>m.guardrailCount>0);
-  if(!gm.length)h+=`<div class="lempty">no model guardrails yet</div>`;
+  // Baked-in guardrails per model + savings chart — guardrails are global; savings scoped to the project
+  h+=`<div class="lsec"><h3>Baked-in improvements${scopeLbl} <span class="lbadge">auto-injected into prompts</span></h3>`;
+  const gm=(learnProj?(L.modelsByProject[learnProj]||[]):(L.models||[])).filter(m=>m.guardrailCount>0);
+  if(!gm.length)h+=`<div class="lempty">no guardrailed models${learnProj?' used in this project':''} yet</div>`;
   for(const m of gm){h+=`<div class="lcard"><div class="lc-h"><span class="nm">${esc(m.model)}</span>${m.saved_usd?`<span class="mut">$${m.saved_usd} saved · ${m.calls} calls</span>`:''}</div>`;
     for(const[task,arr]of Object.entries(m.guardrails||{})){h+=`<div class="ltask">${esc(task)}</div>`;for(const g of arr)h+=`<div class="lguard">${esc(g)}</div>`;}
     if((m.series.saved||[]).length>1)h+=`<div class="lchart"><div class="ltask">savings / day</div>${lcBars(m.series.saved,'saved',{color:LGRN})}</div>`;

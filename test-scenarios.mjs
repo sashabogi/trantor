@@ -97,6 +97,9 @@ try {
      Array.isArray(lr.lessons.global) && lr.lessons.global.length >= 1 &&
      Array.isArray(lr.lessons.byAgent.kimi) && lr.lessons.byProject.proj);
   ok("learning totals.lessons counts recorded lessons", lr.totals.lessons >= 2);
+  ok("learning exposes per-project reliability/guardrail maps (not just global aggregates)",
+     lr.agentsByProject && typeof lr.agentsByProject === "object" &&
+     lr.modelsByProject && typeof lr.modelsByProject === "object");
 
   console.log("scenario: advisor — plan economics drive the mode");
   const { advise } = await import(join(ROOT, "bin/advise.mjs"));
