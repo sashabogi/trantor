@@ -51,6 +51,15 @@ function touch(session, status, project) {
   if (!p.project && session.includes(":")) p.project = session.split(":").pop().slice(0, 80);
   state.peers[session] = p; dirty = true;
 }
+// Derive a coarse health from the free-text status the runner sets on a failed turn
+// ("errored: <reason>" / "down: <reason>") — lets the board show a failing-but-alive agent
+// distinctly instead of a healthy green. Default "ok".
+function healthOf(status) {
+  const s = String(status || "").toLowerCase();
+  if (s.startsWith("down")) return "down";
+  if (s.startsWith("errored")) return "errored";
+  return "ok";
+}
 function deliverable(m, session) { return (m.to === session || m.to === "all") && m.from !== session; }
 function pushToStreams(msg) {
   for (const s of streams) if (deliverable(msg, s.session)) { try { s.res.write(`data: ${JSON.stringify(msg)}\n\n`); } catch {} }
@@ -63,7 +72,7 @@ const server = http.createServer(async (req, res) => {
     if (req.method === "POST" && P === "/status") { const b = await body(req); touch(b.session, b.status ?? "", b.project); return json(res, 200, { ok: true }); }
     if (req.method === "GET" && P === "/peers") {
       const cutoff = now() - ONLINE_MS;
-      return json(res, 200, { peers: Object.entries(state.peers).map(([s, v]) => ({ session: s, lastSeen: v.lastSeen, online: v.lastSeen > cutoff, status: v.status || "", project: v.project || "" })) });
+      return json(res, 200, { peers: Object.entries(state.peers).map(([s, v]) => ({ session: s, lastSeen: v.lastSeen, online: v.lastSeen > cutoff, status: v.status || "", health: healthOf(v.status), project: v.project || "" })) });
     }
     // --- Kanban tasks ---
     if (req.method === "POST" && P === "/task") {           // create a card
@@ -124,7 +133,7 @@ const server = http.createServer(async (req, res) => {
       const proj = p => p || "(unassigned)";
       const mk = k => (byProj[k] ||= { project: k, brief: (state.projectMeta[k]?.brief) || "", agents: [], tasks: { todo:0,doing:0,testing:0,failed:0,done:0,blocked:0 }, doingTitles: [], lastActivity: 0 });
       for (const [s, v] of Object.entries(state.peers)) {
-        const k = proj(v.project); const e = mk(k); e.agents.push({ session: s, online: v.lastSeen > cutoff, status: v.status || "" });
+        const k = proj(v.project); const e = mk(k); e.agents.push({ session: s, online: v.lastSeen > cutoff, status: v.status || "", health: healthOf(v.status) });
         if ((v.lastSeen || 0) > e.lastActivity) e.lastActivity = v.lastSeen;
       }
       for (const t of state.tasks) { const e = mk(proj(t.project)); e.tasks[t.status] = (e.tasks[t.status]||0)+1; if (t.status === "doing") e.doingTitles.push(t.title); if ((t.updated || 0) > e.lastActivity) e.lastActivity = t.updated; }

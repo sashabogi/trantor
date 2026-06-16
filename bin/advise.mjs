@@ -122,7 +122,10 @@ export function advise(input, world = loadWorld()) {
   const cards = routing.map((r, i) => ({
     order: i + 1, title: r.title, difficulty: r.difficulty,
     assignee: r.executor === "scrooge" || r.executor === "orchestrator" ? undefined : `${r.executor}:<project>`,
-    model: r.model || (["scrooge", "orchestrator"].includes(r.executor) ? undefined : `${r.executor}-default`),
+    // "auto" = resolve a LIVE model at spawn (the orchestrator runs `trantor up <agent>:<provider>
+    // --task --difficulty`, which picks the best live model). Was `<cli>-default` — a stale default.
+    model: r.model || (["scrooge", "orchestrator"].includes(r.executor) ? undefined : "auto"),
+    task: ["scrooge", "orchestrator"].includes(r.executor) ? undefined : r.kind,
     via: r.executor === "scrooge" ? "relay_scrooge" : "relay_task_add",
     deps_orders: r.executor === "orchestrator" && /integrat/i.test(r.title)
       ? routing.map((x, j) => j + 1).filter(j => j !== i + 1)

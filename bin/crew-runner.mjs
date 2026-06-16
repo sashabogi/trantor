@@ -72,6 +72,46 @@ if (!cli) { console.error(`unknown agent '${AGENT}' (known: ${Object.keys(CLI).j
 
 const RULES = `Rules: you are ${SESSION} on the trantor crew. Work your assigned file(s), report on the bus (relay_send, <280 chars), move your Kanban card as you go (doing -> testing -> done; run the tests in 'testing', use 'failed' + a report if they break). When your work for THIS message is finished, END YOUR TURN — do NOT park, do NOT loop relay_wait; the runner waits for you and will wake you with the next message.`;
 
+// ---- failure visibility ----------------------------------------------------
+// A turn's CLI can fail (credits exhausted, auth, crash) and the runner would just
+// re-park — staying green on the bus, telling the orchestrator NOTHING. These surface
+// every non-zero turn to the bus in real time so the orchestrator (and `trantor swap`)
+// can react, and flip presence to errored/down.
+let consecFails = 0;
+let lastErrText = "";
+const ERRF = join(homedir(), ".agent-bus", `err-${AGENT}-${PROJ}.txt`);
+
+function classifyFailure(exit, errText) {
+  const t = (errText || "").toLowerCase();
+  if (exit === 127) return "missing-cli";
+  if (/quota|insufficient|credit|balance|payment required|402|429|too many requests|rate.?limit|exceeded your|out of (credit|quota)/.test(t)) return "exhausted";
+  if (/unauthor|401|invalid[ _-]?api[ _-]?key|forbidden|403|token expired|expired/.test(t)) return "auth";
+  return "crashed";
+}
+
+async function reportFailure(exit, trigger) {
+  consecFails++;
+  const reason = classifyFailure(exit, lastErrText);
+  const down = consecFails >= 2;
+  const status = down ? `down: ${reason} · ${consecFails} fails` : `errored: ${reason}`;
+  await api("/register", { session: SESSION, project: PROJ, status }).catch(() => {});
+  const hint = reason === "exhausted" ? " — needs `trantor swap`"
+    : reason === "auth" ? " — check credentials"
+    : reason === "missing-cli" ? " — CLI not on PATH" : "";
+  const text = down
+    ? `🛑 ${SESSION} DOWN — ${consecFails} consecutive failures (${reason}, exit ${exit})${hint}`
+    : `⚠️ ${SESSION} turn FAILED (${trigger}, exit ${exit} · ${reason})${hint}`;
+  await api("/send", { from: SESSION, to: "all", text, project: PROJ }).catch(() => {});
+  log(`\x1b[31mreported failure to bus: ${reason} (exit ${exit})\x1b[0m`);
+}
+
+async function reportHealthy() {
+  if (consecFails === 0) return;        // already healthy — don't spam
+  consecFails = 0;
+  await api("/register", { session: SESSION, project: PROJ, status: `active in ${PROJ}` }).catch(() => {});
+  await api("/send", { from: SESSION, to: "all", text: `✅ ${SESSION} recovered`, project: PROJ }).catch(() => {});
+}
+
 let sid = "";
 function runTurn(prompt, isFirst, trigger = "kickoff") {
   TURN++; banner(trigger);
@@ -85,12 +125,16 @@ function runTurn(prompt, isFirst, trigger = "kickoff") {
   const envs = [join(homedir(), ".agent-bus", ".env"), cli.env].filter(f => f && existsSync(f));
   for (const f of envs.reverse()) cmd = `set -a; source ${f}; set +a; ${cmd}`;   // ~/.agent-bus/.env wins
   log(`turn starting (${isFirst ? "fresh session" : "resume"})${MODEL ? ` · model=${MODEL}` : ""}`);
-  // inherit stdio so the window shows the agent working live; also capture for sid-parsing
-  const r = spawnSync("/bin/bash", ["-c", cli.sid ? `${cmd} | tee /dev/stderr` : cmd], {
+  // inherit stdio so the window shows the agent working live; also capture for sid-parsing.
+  // Tee stderr to ERRF (still shown live in the window) so a failed turn can be classified.
+  try { appendFileSync(ERRF, "", { flag: "w" }); } catch {}
+  const inner = cli.sid ? `${cmd} | tee /dev/stderr` : cmd;
+  const r = spawnSync("/bin/bash", ["-c", `{ ${inner} ; } 2> >(tee -a ${ERRF} >&2)`], {
     cwd: DIR, encoding: "utf8", stdio: cli.sid ? ["ignore", "pipe", "inherit"] : "inherit",
     env: { ...process.env, RELAY_URL: HUB, RELAY_AGENT: AGENT, RELAY_PROJECT: PROJ },
     maxBuffer: 16 * 1024 * 1024,
   });
+  try { lastErrText = readFileSync(ERRF, "utf8").slice(-4000); } catch { lastErrText = ""; }
   if (cli.sid && r.stdout) { const m = r.stdout.match(cli.sid); if (m) sid = m[1]; }
   telemetry({ ts: Date.now(), agent: AGENT, project: PROJ, turn: TURN, trigger, model: MODEL || "default", duration_ms: Date.now() - t0, exit: r.status });
   log(`turn ended (exit ${r.status}, ${((Date.now() - t0) / 1000).toFixed(0)}s)`);
@@ -117,7 +161,8 @@ async function loadLessons() {
   await api("/register", { session: SESSION, project: PROJ, status: "crew member booting" }).catch(() => {});
 
   let pendingBcast = [];
-  runTurn(KICKOFF + LESSONS, true, "kickoff");
+  const ec0 = runTurn(KICKOFF + LESSONS, true, "kickoff");
+  if (ec0) await reportFailure(ec0, "kickoff");   // a failed kickoff = the "fired up, died, nobody knew" case
   log(`parked — long-polling the bus as ${SESSION} (free; this poll is also the heartbeat)`);
 
   while (true) {
@@ -137,7 +182,9 @@ async function loadLessons() {
     pendingBcast = [];
     const lines = wake.map(m => `[${m.from}${m.to === "all" ? " -> all (mentions you)" : ""}]: ${m.text}`).join("\n");
     const prompt = `NEW BUS MESSAGE${wake.length > 1 ? "S" : ""} for you:\n${lines}\n${ctx}\nAct on what's addressed to you, then end your turn.\n\n${RULES}`;
-    await loadLessons(); runTurn(prompt + LESSONS, false, direct.length ? "direct message" : "@mention");
+    await loadLessons();
+    const ec = runTurn(prompt + LESSONS, false, direct.length ? "direct message" : "@mention");
+    if (ec) await reportFailure(ec, "message"); else await reportHealthy();
     log("parked — waiting for the next message");
   }
 })();
