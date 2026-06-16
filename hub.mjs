@@ -11,7 +11,7 @@ import { join } from "node:path";
 
 const PORT = Number(process.env.RELAY_PORT || 4477);
 const HOST = process.env.RELAY_HOST || "127.0.0.1";
-const DATA_DIR = join(homedir(), ".agent-bus");
+const DATA_DIR = process.env.RELAY_DATA_DIR || join(homedir(), ".agent-bus");
 const DATA = join(DATA_DIR, "bus.json");
 const ONLINE_MS = Number(process.env.RELAY_ONLINE_MS || 5 * 60 * 1000);
 if (!existsSync(DATA_DIR)) mkdirSync(DATA_DIR, { recursive: true });

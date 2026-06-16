@@ -103,7 +103,12 @@ server.tool("relay_board", "Show THIS project's Kanban board (all cards + their 
 
 server.tool("relay_peers", "List other Claude sessions connected to the relay (online in last 5 min).", {}, async () => {
   const { peers } = await api("GET", "/peers");
-  const lines = peers.map(p => `${p.online ? "🟢" : "⚪"} ${p.session}${p.session === SESSION ? " (you)" : ""}`);
+  const lines = peers.map(p => {
+    // health surfaces a failing-but-alive agent (runner-reported) — not a green lie
+    const icon = !p.online ? "⚪" : p.health === "down" ? "🛑" : p.health === "errored" ? "🔴" : "🟢";
+    const note = (p.health === "errored" || p.health === "down") && p.status ? ` — ${p.status}` : "";
+    return `${icon} ${p.session}${p.session === SESSION ? " (you)" : ""}${note}`;
+  });
   return { content: [{ type: "text", text: lines.join("\n") || "no peers yet" }] };
 });
 

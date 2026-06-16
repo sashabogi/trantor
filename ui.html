@@ -22,6 +22,10 @@ main{flex:1;display:grid;grid-template-columns:1fr 330px;min-height:0}
 .agent .nm{color:var(--tx)}
 .agent svg{flex:none}
 .agent.offl{opacity:.42}
+.agent.err{border-color:#ef4444;color:#ef4444}
+.agent.err .nm{color:#ef4444}
+.agent.down{border-color:#ef4444;background:rgba(239,68,68,.14);color:#ef4444}
+.agent.down .nm{color:#ef4444;font-weight:600}
 .agent .ast{color:var(--mut)}
 .prog{font-size:11.5px;color:var(--dim);white-space:nowrap}
 /* project brief + phase row */
@@ -385,7 +389,7 @@ async function render(){
     const pt=tasks.filter(t=>t.project===p.project);
     const done=pt.filter(t=>t.status==='done').length;
     const pct=pt.length?Math.round(done/pt.length*100):0;
-    const agents=p.agents.sort((a,b)=>b.online-a.online).map(a=>`<span class="agent ${a.online?'':'offl'}" title="${esc(a.session)}${a.online?' · online':' · offline'}">${iconFor(a.session,15)}<span class="nm">${esc(a.session)}</span>${a.status?` <span class="ast">· ${esc(a.status)}</span>`:''}${poolOf(a.session)?` <span class="ast" style="opacity:.7">[${esc(poolOf(a.session))}]</span>`:''}</span>`).join('');
+    const agents=p.agents.sort((a,b)=>b.online-a.online).map(a=>`<span class="agent ${a.online?'':'offl'}${a.health==='down'?' down':a.health==='errored'?' err':''}" title="${esc(a.session)}${a.online?' · online':' · offline'}${a.health&&a.health!=='ok'?' · '+a.health:''}">${iconFor(a.session,15)}<span class="nm">${esc(a.session)}</span>${a.status?` <span class="ast">· ${esc(a.status)}</span>`:''}${poolOf(a.session)?` <span class="ast" style="opacity:.7">[${esc(poolOf(a.session))}]</span>`:''}</span>`).join('');
     const cols=COLS.map(([k,label])=>{
       let cards=pt.filter(t=>k==='testing'?(t.status==='testing'||t.status==='failed'):t.status===k);
       if(k==='done')cards=[...cards].sort((a,b)=>(b.updated||0)-(a.updated||0)); // newest finished on top
