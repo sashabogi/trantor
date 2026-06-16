@@ -22,6 +22,7 @@ switch (cmd) {
   case "verify":  run("bin/crew-verify.mjs"); break;
   case "up":      process.argv.splice(2, 1); spawn("/bin/bash", [join(ROOT, "bin/crew.sh"), "up", ...args], { stdio: "inherit", cwd: process.cwd() }).on("exit", c => process.exit(c ?? 0)); break;
   case "down":    spawn("/bin/bash", [join(ROOT, "bin/crew.sh"), "down"], { stdio: "inherit", cwd: process.cwd() }).on("exit", c => process.exit(c ?? 0)); break;
+  case "swap":    spawn("/bin/bash", [join(ROOT, "bin/crew.sh"), "swap", ...args], { stdio: "inherit", cwd: process.cwd() }).on("exit", c => process.exit(c ?? 0)); break;
   case "hub":     run("hub.mjs"); break;
   case "watch":   run("bin/relay-watch.mjs"); break;
   case "ui": {

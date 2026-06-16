@@ -23,7 +23,8 @@ mkdir -p "$HOME/.agent-bus"
 
 down() {
   [ -f "$STATE" ] || { echo "no tracked crew windows"; return 0; }
-  while read -r wid; do
+  while IFS=$'\t' read -r a wid; do
+    [ -n "${wid:-}" ] || wid="$a"          # back-compat: old STATE stored bare window ids
     TTY=$(osascript -e "tell application \"Terminal\" to get tty of (first window whose id is $wid)" 2>/dev/null)
     if [ -n "$TTY" ]; then
       # SIGKILL everything on the tty, login included — TUIs trap SIGTERM, and a live login
@@ -32,7 +33,8 @@ down() {
     fi
   done < "$STATE"
   sleep 1
-  while read -r wid; do
+  while IFS=$'\t' read -r a wid; do
+    [ -n "${wid:-}" ] || wid="$a"
     osascript -e "tell application \"Terminal\" to close (first window whose id is $wid)" 2>/dev/null
   done < "$STATE"
   sleep 0.5
@@ -44,7 +46,7 @@ down() {
   echo "crew torn down"
 }
 [ "$CMD" = "down" ] && { down; exit 0; }
-[ "$CMD" != "up" ] && { echo "usage: crew.sh up <agent...> | crew.sh down"; exit 1; }
+case "$CMD" in up|swap) ;; *) echo "usage: crew.sh up <agent...> | crew.sh swap <oldAgent> <newAgent[:provider[/model]]> | crew.sh down"; exit 1 ;; esac
 
 # --task/--difficulty drive LAZY live-model selection for provider-only specs (agent:provider).
 # An agent spec is one of: `codex` (CLI default) · `opencode:zai-coding-plan` (provider only →
@@ -132,19 +134,51 @@ spawn_grid() {  # $@ = agents — (re)computes the grid for THIS batch and spawn
       esac
     fi
     local C=$(( i % COLS )) R=$(( i / COLS ))
-    local X1=$(( GX + C * CW )) Y1=$(( GY + R * CH ))
-    osascript \
+    local X1=$(( GX + C * CW )) Y1=$(( GY + R * CH )) WID=""
+    WID="$(osascript \
       -e 'tell application "Terminal"' \
       -e "  set w to do script \"cd $DIR && clear && CREW_MODEL=$MODEL node $BUS_DIR/bin/crew-runner.mjs $AGENT $DIR\"" \
       -e "  set custom title of w to \"$(echo "$AGENT" | tr '[:lower:]' '[:upper:]') — trantor crew\"" \
       -e "  set theWin to first window whose tabs contains w" \
       -e "  set bounds of theWin to {$X1, $Y1, $(( X1 + CW )), $(( Y1 + CH ))}" \
       -e "  return id of theWin" \
-      -e 'end tell' >> "$STATE" 2>/dev/null && echo "  → $AGENT window spawned" || echo "  ✗ $AGENT osascript spawn ERROR"
+      -e 'end tell' 2>/dev/null)"
+    if [ -n "$WID" ]; then printf '%s\t%s\n' "$AGENT" "$WID" >> "$STATE"; echo "  → $AGENT window spawned"; else echo "  ✗ $AGENT osascript spawn ERROR"; fi
     sleep 1.2   # serialize — rapid-fire 'do script' calls race and silently drop windows
     i=$(( i + 1 ))
   done
 }
+
+# swap <oldAgent> <newSpec>: replace a live agent (e.g. one reported exhausted) with a fresh
+# one whose model is live-selected. Tears down the old agent's window, spawns the new spec.
+swap() {
+  local OLD="${1:-}" NEWSPEC="${2:-}"
+  [ -n "$OLD" ] && [ -n "$NEWSPEC" ] || { echo "usage: trantor swap <oldAgent> <newAgent[:provider[/model]]> [--task K --difficulty D]"; exit 1; }
+  if [ -f "$STATE" ]; then
+    local tmp="$STATE.tmp"; : > "$tmp"
+    while IFS=$'\t' read -r a wid; do
+      [ -n "${wid:-}" ] || { wid="$a"; a=""; }
+      if [ "$a" = "$OLD" ]; then
+        echo "— tearing down old agent '$OLD' (window $wid) —"
+        local TTY; TTY=$(osascript -e "tell application \"Terminal\" to get tty of (first window whose id is $wid)" 2>/dev/null)
+        [ -n "$TTY" ] && for pid in $(ps -t "${TTY#/dev/}" -o pid= 2>/dev/null); do kill -9 "$pid" 2>/dev/null; done
+        sleep 0.5
+        osascript -e "tell application \"Terminal\" to close (first window whose id is $wid)" 2>/dev/null
+      else
+        printf '%s\t%s\n' "$a" "$wid" >> "$tmp"
+      fi
+    done < "$STATE"
+    mv "$tmp" "$STATE"
+  fi
+  echo "— spawning replacement: $NEWSPEC ($TASK/$DIFF) —"
+  spawn_grid "$NEWSPEC"
+  local NEWAGENT="${NEWSPEC%%:*}"
+  echo "— verifying replacement on the bus —"
+  node "$BUS_DIR/bin/crew-verify.mjs" "$PROJ" "$NEWAGENT" --timeout 30
+  echo "— swapped. RESEND the contract to '$NEWAGENT' (it joined fresh with no context). —"
+}
+
+if [ "$CMD" = "swap" ]; then swap "$@"; exit 0; fi
 
 echo "— spawning crew (serialized) —"
 spawn_grid "$@"
