@@ -87,6 +87,17 @@ try {
   const ec = await api("/economics");
   ok("economics responds with profile+scrooge keys", "profile" in ec && "scrooge" in ec);
 
+  console.log("scenario: /learning shape (lessons + per-LLM reliability + baked-in guardrails)");
+  await api("/lesson", { text: "end your turn when done", scope: "global", by: "host:proj" });
+  await api("/lesson", { text: "kimi: avoid huge diffs", scope: "kimi", by: "kimi:proj" });
+  const lr = await api("/learning");
+  ok("learning responds with totals+lessons+agents+models keys",
+     "totals" in lr && "lessons" in lr && Array.isArray(lr.agents) && Array.isArray(lr.models));
+  ok("learning groups lessons (global array + per-agent + per-project)",
+     Array.isArray(lr.lessons.global) && lr.lessons.global.length >= 1 &&
+     Array.isArray(lr.lessons.byAgent.kimi) && lr.lessons.byProject.proj);
+  ok("learning totals.lessons counts recorded lessons", lr.totals.lessons >= 2);
+
   console.log("scenario: advisor — plan economics drive the mode");
   const { advise } = await import(join(ROOT, "bin/advise.mjs"));
   const world = (prof) => ({ profile: { providers: prof }, registry: { models: { "deepseek-v4-flash": { provider: "deepseek", cost_in: 0.14, cost_out: 0.28, good_for: ["code"] } }, tasks: {} }, caps: { "deepseek-v4-flash": { coding: 38 } }, agents: ["codex", "gemini", "kimi", "deepseek"], scrooge: true });

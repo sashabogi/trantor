@@ -11,8 +11,38 @@ header{display:flex;align-items:center;gap:13px;padding:11px 18px;border-bottom:
 .dot.off{background:var(--dim);box-shadow:none}
 .muted{color:var(--mut)}.dim{color:var(--dim)}.spacer{flex:1}
 .pill{background:var(--card);border:1px solid var(--line);border-radius:20px;padding:3px 11px;font-size:12px;color:var(--mut)}
-main{flex:1;display:grid;grid-template-columns:1fr 330px;min-height:0}
+main{flex:1;display:grid;grid-template-columns:var(--lw,44px) 1fr 330px;min-height:0}
+main.learn-open{--lw:372px}
 .boards{overflow-y:auto;padding:16px 18px}
+/* Learning sidebar (collapsible left rail) — surfaces the self-learning loop */
+.learn{background:var(--panel);border-right:1px solid var(--line);display:flex;flex-direction:column;min-height:0;overflow:hidden}
+.learn-head{display:flex;align-items:center;gap:8px;padding:11px 12px;border-bottom:1px solid var(--line);cursor:pointer;white-space:nowrap;user-select:none}
+.learn-head .lt{font-weight:700;font-size:13px;color:var(--tx)}.learn-head .lt b{color:var(--grn)}
+.learn-head .chev{margin-left:auto;color:var(--mut);font-size:14px}
+main:not(.learn-open) .learn-head{flex-direction:column;gap:12px;padding:14px 0;height:100%;border-bottom:none;justify-content:flex-start}
+main:not(.learn-open) .learn-head .lt{writing-mode:vertical-rl;transform:rotate(180deg);letter-spacing:.6px}
+main:not(.learn-open) .learn-head .chev{margin:0}
+main:not(.learn-open) .learn-body{display:none}
+.learn-body{overflow-y:auto;padding:10px 12px 26px;flex:1}
+.lsum{font-size:11.5px;color:var(--mut);line-height:1.5;margin-bottom:13px}.lsum b{color:var(--grn)}
+.lsec{margin-bottom:17px}
+.lsec>h3{font-size:10.5px;text-transform:uppercase;letter-spacing:.6px;color:var(--dim);margin:0 0 7px;display:flex;align-items:center;gap:6px}
+.lsel{background:var(--card);color:var(--tx);border:1px solid var(--line);border-radius:6px;font:inherit;font-size:11px;padding:2px 4px;margin-left:auto;cursor:pointer;outline:none}
+.lcard{background:var(--card);border:1px solid var(--line);border-radius:9px;padding:8px 10px;margin-bottom:7px}
+.lcard .lc-h{display:flex;align-items:center;gap:7px;font-size:12px;margin-bottom:5px}
+.lcard .lc-h .nm{font-weight:600;color:var(--tx)}
+.lcard .lc-h .mut{color:var(--mut);font-size:10.5px;margin-left:auto}
+.lles{font-size:11.5px;color:var(--mut);line-height:1.45;padding:5px 0;border-top:1px solid var(--line)}
+.lles:first-child{border-top:none}
+.lles .sc{display:inline-block;font-size:9px;color:var(--dim);border:1px solid var(--line);border-radius:8px;padding:0 5px;margin-right:5px;vertical-align:1px;text-transform:uppercase;letter-spacing:.4px}
+.lguard{font-size:11px;color:var(--mut);line-height:1.42;padding:3px 0 3px 13px;position:relative}
+.lguard:before{content:"";position:absolute;left:3px;top:9px;width:4px;height:4px;border-radius:50%;background:var(--grn)}
+.ltask{font-size:9px;color:var(--dim);text-transform:uppercase;letter-spacing:.5px;margin:5px 0 2px}
+.lstat{display:inline-block;font-size:10.5px;color:var(--mut);margin-right:10px}
+.lstat b{color:var(--tx)}.lstat.bad b{color:var(--red)}.lstat.good b{color:var(--grn)}
+.lchart{margin-top:4px}.lchart svg{display:block;width:100%;height:42px}
+.lbadge{font-size:8.5px;color:var(--grn);border:1px solid #1d4a44;border-radius:8px;padding:1px 6px;text-transform:none;letter-spacing:0}
+.lempty{font-size:11px;color:var(--dim);font-style:italic;padding:4px 0}
 .proj{background:var(--panel);border:1px solid var(--line);border-radius:14px;margin-bottom:16px;overflow:hidden}
 .proj-h{display:flex;align-items:center;gap:10px;padding:12px 16px;border-bottom:1px solid var(--line);background:#0e1421}
 .proj-h .pname{font-family:'Sora',ui-sans-serif,sans-serif;font-weight:700;font-size:15px}
@@ -145,6 +175,12 @@ aside h2{font-size:10.5px;text-transform:uppercase;letter-spacing:.09em;color:va
   <span class="pill"><span id="nproj">0</span> projects · <span id="nsess">0</span> live · <span id="ntask">0</span> cards</span>
 </header>
 <main>
+  <section class="learn" id="learn">
+    <div class="learn-head" id="learnToggle" title="Learning — lessons, per-LLM reliability, baked-in guardrails">
+      <span class="lt">🧠 <b>Learning</b></span><span class="chev" id="learnChev">›</span>
+    </div>
+    <div class="learn-body" id="learnBody"></div>
+  </section>
   <div class="boards" id="boards"><div class="empty big">no projects yet — agents register a project on connect</div></div>
   <aside>
     <h2>Live feed</h2>
@@ -492,6 +528,60 @@ $('#send').onclick=async()=>{const t=$('#text').value.trim();if(!t)return;
 $('#text').addEventListener('keydown',e=>{if(e.key==='Enter')$('#send').click();});
 fetch('/recent?limit=40').then(r=>r.json()).then(d=>(d.messages||[]).forEach(m=>addMsg(m,false))).catch(()=>{});
 $('#hub').textContent=location.host;
+/* ---- Learning sidebar: the self-learning loop, surfaced ---- */
+const LGRN='#2dd4bf',LRED='#ef6a6a';
+// tiny inline-SVG charts (no library) — match the flow view's hand-rolled SVG approach
+function lcLine(pts,key,opt){opt=opt||{};const w=300,h=42,pad=4,color=opt.color||LGRN;if(!pts||!pts.length)return '';
+  const ys=pts.map(p=>+p[key]||0),max=Math.max(1e-6,...ys),n=pts.length;
+  const X=i=>pad+(n<=1?(w-2*pad)/2:i*(w-2*pad)/(n-1)),Y=v=>h-pad-(v/max)*(h-2*pad);
+  const pl=pts.map((p,i)=>`${X(i).toFixed(1)},${Y(+p[key]||0).toFixed(1)}`).join(' ');
+  return `<svg viewBox="0 0 ${w} ${h}" preserveAspectRatio="none">`+
+    (opt.fill?`<polygon points="${pad},${h-pad} ${pl} ${X(n-1).toFixed(1)},${h-pad}" fill="${color}" opacity=".13"/>`:'')+
+    `<polyline points="${pl}" fill="none" stroke="${color}" stroke-width="1.5" stroke-linejoin="round"/>`+
+    (n===1?`<circle cx="${X(0).toFixed(1)}" cy="${Y(ys[0]).toFixed(1)}" r="2.2" fill="${color}"/>`:'')+`</svg>`;}
+function lcBars(pts,key,opt){opt=opt||{};const w=300,h=42,pad=4,color=opt.color||LGRN;if(!pts||!pts.length)return '';
+  const ys=pts.map(p=>+p[key]||0),max=Math.max(1e-6,...ys),n=pts.length,gap=(w-2*pad)/n,bw=gap*0.68;
+  return `<svg viewBox="0 0 ${w} ${h}" preserveAspectRatio="none">`+pts.map((p,i)=>{const v=+p[key]||0,bh=(v/max)*(h-2*pad),x=pad+i*gap+(gap-bw)/2;
+    return `<rect x="${x.toFixed(1)}" y="${(h-pad-bh).toFixed(1)}" width="${bw.toFixed(1)}" height="${Math.max(0.5,bh).toFixed(1)}" rx="1" fill="${color}" opacity=".75"/>`;}).join('')+`</svg>`;}
+let LEARN=null,learnProj=localStorage.getItem('abLearnProj')||'';
+let learnOpen=localStorage.getItem('abLearnOpen')==='1';
+function applyLearnState(){document.querySelector('main').classList.toggle('learn-open',learnOpen);$('#learnChev').textContent=learnOpen?'‹':'›';}
+function renderLearnBody(){const el=$('#learnBody');if(!el)return;if(!LEARN){el.innerHTML='<div class="lempty">loading…</div>';return;}
+  const L=LEARN,t=L.totals||{};
+  let h=`<div class="lsum">Trantor has recorded <b>${t.lessons||0}</b> lessons and baked <b>${t.guardrails||0}</b> guardrails into model prompts. Across <b>${t.turns||0}</b> crew turns the failure rate is <b>${((t.failRate||0)*100).toFixed(1)}%</b> — self-healing as fixes compound.</div>`;
+  // Lessons (project filter; lifetime also shows per-agent lessons)
+  const projOpts=['<option value="">All projects (lifetime)</option>'].concat((L.lessons.projects||[]).map(p=>`<option value="${esc(p)}"${p===learnProj?' selected':''}>${esc(p)}</option>`)).join('');
+  h+=`<div class="lsec"><h3>Lessons <select class="lsel" id="lprojSel">${projOpts}</select></h3>`;
+  const lessons=learnProj?(L.lessons.byProject[learnProj]||[]):(L.lessons.global||[]);
+  if(!lessons.length)h+=`<div class="lempty">no lessons recorded for this scope yet</div>`;
+  else h+=lessons.slice(0,40).map(l=>`<div class="lles"><span class="sc">${esc(l.scope)}</span>${esc(l.text)}</div>`).join('');
+  if(!learnProj)for(const[ag,arr]of Object.entries(L.lessons.byAgent||{}))h+=`<div class="lles"><span class="sc">${esc(ag)}</span>${esc(arr[0].text)}${arr.length>1?` <span class="dim">+${arr.length-1} more</span>`:''}</div>`;
+  h+=`</div>`;
+  // Per-LLM reliability + progression charts
+  h+=`<div class="lsec"><h3>Per-LLM reliability</h3>`;
+  if(!(L.agents||[]).length)h+=`<div class="lempty">no turn telemetry yet</div>`;
+  for(const a of (L.agents||[])){const fr=(a.failRate*100).toFixed(1);
+    h+=`<div class="lcard"><div class="lc-h">${iconFor(a.agent,14)}<span class="nm">${esc(a.agent)}</span><span class="mut">${a.models.filter(m=>m!=='default').join(', ')||'default'}</span></div>`;
+    h+=`<span class="lstat"><b>${a.turns}</b> turns</span><span class="lstat ${a.failures?'bad':'good'}"><b>${fr}%</b> fail</span>${a.lastFailure?`<span class="lstat">last exit ${a.lastFailure.exit}</span>`:''}`;
+    if((a.series.failRate||[]).length>1)h+=`<div class="lchart"><div class="ltask">fail-rate / day</div>${lcLine(a.series.failRate,'rate',{color:LRED,fill:true})}</div>`;
+    if((a.series.lessons||[]).length>1)h+=`<div class="lchart"><div class="ltask">lessons learned (cumulative)</div>${lcLine(a.series.lessons,'count',{color:LGRN,fill:true})}</div>`;
+    h+=`</div>`;}
+  h+=`</div>`;
+  // Baked-in guardrails per model + savings chart
+  h+=`<div class="lsec"><h3>Baked-in improvements <span class="lbadge">auto-injected into prompts</span></h3>`;
+  const gm=(L.models||[]).filter(m=>m.guardrailCount>0);
+  if(!gm.length)h+=`<div class="lempty">no model guardrails yet</div>`;
+  for(const m of gm){h+=`<div class="lcard"><div class="lc-h"><span class="nm">${esc(m.model)}</span>${m.saved_usd?`<span class="mut">$${m.saved_usd} saved · ${m.calls} calls</span>`:''}</div>`;
+    for(const[task,arr]of Object.entries(m.guardrails||{})){h+=`<div class="ltask">${esc(task)}</div>`;for(const g of arr)h+=`<div class="lguard">${esc(g)}</div>`;}
+    if((m.series.saved||[]).length>1)h+=`<div class="lchart"><div class="ltask">savings / day</div>${lcBars(m.series.saved,'saved',{color:LGRN})}</div>`;
+    h+=`</div>`;}
+  h+=`</div>`;
+  el.innerHTML=h;
+  const ps=$('#lprojSel');if(ps)ps.onchange=()=>{learnProj=ps.value;localStorage.setItem('abLearnProj',learnProj);renderLearnBody();};}
+async function learn(){try{LEARN=await (await fetch('/learning')).json();if(learnOpen)renderLearnBody();}catch(_){}}
+$('#learnToggle').onclick=()=>{learnOpen=!learnOpen;localStorage.setItem('abLearnOpen',learnOpen?'1':'0');applyLearnState();if(learnOpen)renderLearnBody();};
+applyLearnState();learn();setInterval(learn,20000);
+
 render();setInterval(render,2500);stream();
 // Self-heal after the laptop sleeps / the tab is backgrounded: browser timers and the SSE
 // stream get suspended and don't reliably resume, so the board freezes on stale data. The
