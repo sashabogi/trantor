@@ -85,6 +85,12 @@ try: print(json.load(sys.stdin).get("qualified") or "")
 except Exception: pass' 2>/dev/null
 }
 
+# epoch_ms: milliseconds since the epoch, captured BEFORE a spawn so crew-verify can count an
+# agent the moment it registers (even "booting"), instead of racing its own start time. A slow
+# first turn (opencode+GLM cold start ~40s) means no heartbeat for the whole turn; anchoring the
+# verifier to this pre-spawn epoch lets the early "booting" registration satisfy it.
+epoch_ms() { python3 -c 'import time;print(int(time.time()*1000))'; }
+
 if [ "$(uname)" != "Darwin" ]; then
   echo "Window spawning is macOS-only. Run one per terminal, in $DIR:"
   for a in "$@"; do echo "  node $BUS_DIR/bin/crew-runner.mjs $a $DIR"; done
@@ -171,27 +177,36 @@ swap() {
     mv "$tmp" "$STATE"
   fi
   echo "— spawning replacement: $NEWSPEC ($TASK/$DIFF) —"
+  local SWAP_EPOCH; SWAP_EPOCH=$(epoch_ms)
   spawn_grid "$NEWSPEC"
   local NEWAGENT="${NEWSPEC%%:*}"
   echo "— verifying replacement on the bus —"
-  node "$BUS_DIR/bin/crew-verify.mjs" "$PROJ" "$NEWAGENT" --timeout 30
+  node "$BUS_DIR/bin/crew-verify.mjs" "$PROJ" "$NEWAGENT" --since "$SWAP_EPOCH" --timeout 30
   echo "— swapped. RESEND the contract to '$NEWAGENT' (it joined fresh with no context). —"
 }
 
 if [ "$CMD" = "swap" ]; then swap "$@"; exit 0; fi
 
+# spec_for_agent <agent> <spec...>: echo the FULL original spec (agent:provider[/model]) whose
+# agent part matches — so a retry respawns on the SAME live-selected model, not the CLI default.
+spec_for_agent() { local want="$1"; shift; local s; for s in "$@"; do [ "${s%%:*}" = "$want" ] && { printf '%s' "$s"; return; }; done; printf '%s' "$want"; }
+
 echo "— spawning crew (serialized) —"
+SPAWN_EPOCH=$(epoch_ms)
 spawn_grid "$@"
 
 echo "— verifying on the bus (the spawn is not the truth; the bus is) —"
 AGENTS_ONLY=$(for a in "$@"; do printf "%s " "${a%%:*}"; done)
-VER=$(node "$BUS_DIR/bin/crew-verify.mjs" "$PROJ" $AGENTS_ONLY --timeout 30)
+VER=$(node "$BUS_DIR/bin/crew-verify.mjs" "$PROJ" $AGENTS_ONLY --since "$SPAWN_EPOCH" --timeout 30)
 echo "$VER"
 RETRY=$(echo "$VER" | grep "^FAILED:" | cut -d: -f2 | tr ',' ' ')
 if [ -n "${RETRY// }" ]; then
-  echo "— retrying failed spawns: $RETRY —"
-  spawn_grid $RETRY
-  VER2=$(node "$BUS_DIR/bin/crew-verify.mjs" "$PROJ" $RETRY --timeout 30)
+  # map failed agent names back to their FULL specs (preserve provider/model on respawn)
+  RETRY_SPECS=""; for a in $RETRY; do RETRY_SPECS="$RETRY_SPECS $(spec_for_agent "$a" "$@")"; done
+  echo "— retrying failed spawns:$RETRY_SPECS —"
+  RETRY_EPOCH=$(epoch_ms)
+  spawn_grid $RETRY_SPECS
+  VER2=$(node "$BUS_DIR/bin/crew-verify.mjs" "$PROJ" $RETRY --since "$RETRY_EPOCH" --timeout 30)
   echo "$VER2"
   STILL=$(echo "$VER2" | grep "^FAILED:" | cut -d: -f2)
   if [ -n "$STILL" ]; then
