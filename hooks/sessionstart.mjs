@@ -69,11 +69,13 @@ try {
     process.stdout.write("{}");
     process.exit(0);
   }
-  const session = process.env.RELAY_SESSION || `${hostname()}:${basename(projectDir)}`;
+  const project = process.env.RELAY_PROJECT || basename(projectDir);
+  const session = process.env.RELAY_SESSION
+    || (process.env.RELAY_AGENT ? `${process.env.RELAY_AGENT}:${project}` : `${hostname()}:${project}`);
   const url = relayUrl();
 
   // register self + post an initial presence status (no LLM turn — instant for others to read)
-  await jpost(`${url}/register`, { session, project: basename(projectDir), status: `active in ${basename(projectDir)}` }).catch(() => {});
+  await jpost(`${url}/register`, { session, project, status: `active in ${project}` }).catch(() => {});
 
   // fetch roster of OTHER online sessions
   let peers = [];

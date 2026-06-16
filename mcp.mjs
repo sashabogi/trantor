@@ -161,19 +161,32 @@ server.tool("relay_wait", "Block up to `timeout` seconds waiting for the next me
     return { content: [{ type: "text", text: messages.length ? messages.map(fmt).join("\n") : "(timed out, no message)" }] };
   });
 
-await api("POST", "/register", { session: SESSION, project: PROJECT, status: `active in ${PROJECT}` }).catch(() => {});
-
-// Heartbeat — keep this session's presence fresh for as long as the MCP process lives.
-// Registration alone decays after the hub's online window (5 min); without this, idle agents
-// — and EVERY agent after the laptop sleeps (dead connection, no resume event) — fall off the
-// board while their process is still alive. This is the UNIVERSAL counterpart to the Claude-only
-// PostToolUse heartbeat hook: it runs inside the relay every agent loads (Claude, codex, gemini,
-// kimi, deepseek), so the whole crew stays tracked. We POST /register with NO status, so the
-// hub refreshes lastSeen but preserves the session's meaningful status. setInterval pauses during
-// sleep and fires on wake, so presence self-heals within one interval; .unref() lets the process
-// still exit cleanly when the agent closes the stdio transport (no phantom peers).
 const HEARTBEAT_MS = Number(process.env.RELAY_HEARTBEAT_MS || 60 * 1000);
-setInterval(() => { api("POST", "/register", { session: SESSION, project: PROJECT }).catch(() => {}); }, HEARTBEAT_MS).unref?.();
+
+// Mirror the SessionStart/PostToolUse hooks: a session opened in the home directory itself
+// isn't project work — auto-registering it would spawn a phantom "<username>" project board.
+// Opt in explicitly with RELAY_SESSION or RELAY_PROJECT. The MCP server still starts so the
+// user can call relay tools (e.g. relay_whoami) deliberately; we just skip auto-presence.
+const projectDir = process.env.CLAUDE_PROJECT_DIR || process.cwd();
+const isHomeDirSession = !process.env.RELAY_SESSION && !process.env.RELAY_PROJECT && projectDir === homedir();
+
+if (!isHomeDirSession) {
+  await api("POST", "/register", { session: SESSION, project: PROJECT, status: `active in ${PROJECT}` })
+    .catch((err) => { process.stderr.write(`[trantor-mcp] initial register failed: ${err?.message || err}\n`); });
+
+  // Heartbeat — keep this session's presence fresh for as long as the MCP process lives.
+  // Registration alone decays after the hub's online window (5 min); without this, idle agents
+  // — and EVERY agent after the laptop sleeps (dead connection, no resume event) — fall off the
+  // board while their process is still alive. This is the UNIVERSAL counterpart to the Claude-only
+  // PostToolUse heartbeat hook: it runs inside the relay every agent loads (Claude, codex, gemini,
+  // kimi, deepseek), so the whole crew stays tracked. We POST /register with NO status, so the
+  // hub refreshes lastSeen but preserves the session's meaningful status. setInterval pauses during
+  // sleep and fires on wake, so presence self-heals within one interval; .unref() lets the process
+  // still exit cleanly when the agent closes the stdio transport (no phantom peers).
+  setInterval(() => { api("POST", "/register", { session: SESSION, project: PROJECT }).catch(() => {}); }, HEARTBEAT_MS).unref?.();
+} else {
+  process.stderr.write("[trantor-mcp] home directory — not auto-registering on the bus (set RELAY_SESSION or RELAY_PROJECT to opt in)\n");
+}
 
 await server.connect(new StdioServerTransport());
-process.stderr.write(`[trantor-mcp] connected as ${SESSION} -> ${URL_BASE} (heartbeat ${HEARTBEAT_MS}ms)\n`);
+process.stderr.write(`[trantor-mcp] connected as ${SESSION} -> ${URL_BASE}${isHomeDirSession ? " (no auto-presence: home dir)" : ` (heartbeat ${HEARTBEAT_MS}ms)`}\n`);

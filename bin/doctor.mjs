@@ -19,7 +19,7 @@ let issues = 0;
 
 console.log("TRANTOR DOCTOR\n");
 
-// runtime + hub
+// runtime + hub + client version
 console.log("core");
 Number(process.versions.node.split(".")[0]) >= 18 ? ok(`node ${process.versions.node}`) : warn(`node ${process.versions.node} too old`, "install node >= 18");
 const cfg = read(join(H, ".agent-bus", "config.json")) || {};
@@ -30,6 +30,15 @@ try {
 } catch {
   warn(`hub not reachable at ${HUB}`, `bash ${join(ROOT, "deploy", "setup.sh")}   # installs the always-on service`);
 }
+
+// version — heartbeat/presence support
+const pkg = read(join(ROOT, "package.json"));
+if (pkg?.version) {
+  const min = [0, 17, 0];
+  const cur = pkg.version.split(".").map(Number);
+  const tooOld = cur[0] < min[0] || (cur[0] === min[0] && (cur[1] < min[1] || (cur[1] === min[1] && cur[2] < min[2])));
+  tooOld ? warn(`trantor v${pkg.version} too old — heartbeat/presence requires v0.17.0+`, "npm update -g trantor") : ok(`trantor v${pkg.version}`);
+} else warn("could not read trantor version", "reinstall: npm install -g trantor");
 
 // claude plugin
 console.log("\nclaude (the orchestrator)");

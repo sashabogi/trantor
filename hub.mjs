@@ -14,6 +14,9 @@ const HOST = process.env.RELAY_HOST || "127.0.0.1";
 const DATA_DIR = process.env.RELAY_DATA_DIR || join(homedir(), ".agent-bus");
 const DATA = join(DATA_DIR, "bus.json");
 const ONLINE_MS = Number(process.env.RELAY_ONLINE_MS || 5 * 60 * 1000);
+const PEER_TTL_DEFAULT_MS = 21600000; // 6h
+const _peerTtlRaw = Number(process.env.RELAY_PEER_TTL_MS || PEER_TTL_DEFAULT_MS);
+const PEER_TTL_MS = Math.max(Number.isFinite(_peerTtlRaw) ? _peerTtlRaw : PEER_TTL_DEFAULT_MS, ONLINE_MS);
 if (!existsSync(DATA_DIR)) mkdirSync(DATA_DIR, { recursive: true });
 
 // Scrooge ledger cache: /economics is polled every ~15s by the dashboard, but the ledger
@@ -47,11 +50,11 @@ function scanTelemetry() {
 
 // peers: { session: { lastSeen, status, project } } ; tasks: kanban cards
 // projectMeta: { project: { brief, by, updated } } — the "what & why" blurb per project
-let state = { messages: [], peers: {}, seq: 0, tasks: [], taskSeq: 0, projectMeta: {}, lessons: [] };
+let state = { messages: [], peers: {}, seq: 0, tasks: [], taskSeq: 0, projectMeta: {}, lessons: [], cardEvents: [] };
 try {
   if (existsSync(DATA)) {
     const loaded = JSON.parse(readFileSync(DATA, "utf8"));
-    state = { messages: loaded.messages || [], peers: {}, seq: loaded.seq || 0, tasks: loaded.tasks || [], taskSeq: loaded.taskSeq || 0, projectMeta: loaded.projectMeta || {}, lessons: loaded.lessons || [] };
+    state = { messages: loaded.messages || [], peers: {}, seq: loaded.seq || 0, tasks: loaded.tasks || [], taskSeq: loaded.taskSeq || 0, projectMeta: loaded.projectMeta || {}, lessons: loaded.lessons || [], cardEvents: Array.isArray(loaded.cardEvents) ? loaded.cardEvents : [] };
     for (const [s, v] of Object.entries(loaded.peers || {})) // migrate old numeric form
       state.peers[s] = typeof v === "number" ? { lastSeen: v, status: "", project: "" } : { lastSeen: v.lastSeen || 0, status: v.status || "", project: v.project || "" };
   }
@@ -59,6 +62,15 @@ try {
 let dirty = false;
 const persist = () => { if (dirty) { try { writeFileSync(DATA, JSON.stringify(state)); dirty = false; } catch {} } };
 setInterval(persist, 1000).unref?.();
+function prunePeers() {
+  const cutoff = now() - PEER_TTL_MS;
+  let removed = false;
+  for (const [session, peer] of Object.entries(state.peers)) {
+    if ((peer.lastSeen || 0) < cutoff) { delete state.peers[session]; removed = true; }
+  }
+  if (removed) dirty = true;
+}
+setInterval(prunePeers, 60000).unref?.();
 
 // dashboard HTML (read once at startup)
 let UI = "";
@@ -93,6 +105,23 @@ function deliverable(m, session) { return (m.to === session || m.to === "all") &
 function pushToStreams(msg) {
   for (const s of streams) if (deliverable(msg, s.session)) { try { s.res.write(`data: ${JSON.stringify(msg)}\n\n`); } catch {} }
 }
+function appendCardEvent(type, task, by, from = null, to = null) {
+  const last = state.cardEvents[state.cardEvents.length - 1];
+  state.cardEvents.push({
+    id: (last?.id || 0) + 1,
+    ts: now(),
+    type,
+    taskId: task.id,
+    project: task.project,
+    title: task.title,
+    from,
+    to,
+    by: by || "",
+    difficulty: task.difficulty || null,
+    assignee: task.assignee || null,
+  });
+  if (state.cardEvents.length > 5000) state.cardEvents.splice(0, state.cardEvents.length - 5000);
+}
 
 const server = http.createServer(async (req, res) => {
   const u = new URL(req.url, "http://x"); const q = Object.fromEntries(u.searchParams); const P = u.pathname;
@@ -100,6 +129,7 @@ const server = http.createServer(async (req, res) => {
     if (req.method === "POST" && P === "/register") { const b = await body(req); touch(b.session, b.status, b.project); return json(res, 200, { ok: true, session: b.session, peers: Object.keys(state.peers) }); }
     if (req.method === "POST" && P === "/status") { const b = await body(req); touch(b.session, b.status ?? "", b.project); return json(res, 200, { ok: true }); }
     if (req.method === "GET" && P === "/peers") {
+      prunePeers();
       const cutoff = now() - ONLINE_MS;
       return json(res, 200, { peers: Object.entries(state.peers).map(([s, v]) => ({ session: s, lastSeen: v.lastSeen, online: v.lastSeen > cutoff, status: v.status || "", health: healthOf(v.status), project: v.project || "" })) });
     }
@@ -115,12 +145,15 @@ const server = http.createServer(async (req, res) => {
         by: b.by || "", ts: now(), updated: now(),
         history: [{ to: st0, by: b.by || "", ts: now() }] };
       state.tasks.push(t); if (state.tasks.length > 2000) state.tasks.splice(0, 500);
+      appendCardEvent("created", t, b.by, null, st0);
       dirty = true; return json(res, 200, { ok: true, task: t });
     }
     if (req.method === "POST" && P === "/task/update") {    // move/edit a card
       const b = await body(req); const t = state.tasks.find(x => x.id === Number(b.id));
       if (!t) return json(res, 404, { error: "no such task" });
+      let eventType = "updated", eventFrom = null, eventTo = null;
       if (b.status && ["todo","doing","testing","failed","done","blocked"].includes(b.status) && b.status !== t.status) {
+        eventType = "moved"; eventFrom = t.status; eventTo = b.status;
         (t.history ||= []).push({ from: t.status, to: b.status, by: b.by || "", ts: now() });
         if (t.history.length > 40) t.history.splice(0, 10);
         t.status = b.status;
@@ -130,12 +163,19 @@ const server = http.createServer(async (req, res) => {
       if (Array.isArray(b.deps)) t.deps = [...new Set(b.deps.map(Number).filter(n => Number.isInteger(n) && n > 0 && n !== t.id))].slice(0, 20);
       if (b.assignee !== undefined) t.assignee = b.assignee;
       if (b.title !== undefined) t.title = String(b.title).slice(0,200);
-      if (b.delete) state.tasks = state.tasks.filter(x => x.id !== t.id);
+      if (b.delete) { eventType = "deleted"; eventFrom = null; eventTo = null; state.tasks = state.tasks.filter(x => x.id !== t.id); }
+      appendCardEvent(eventType, t, b.by, eventFrom, eventTo);
       t.updated = now(); dirty = true; return json(res, 200, { ok: true, task: t });
     }
     if (req.method === "GET" && P === "/tasks") {
       const proj = q.project; const ts = proj ? state.tasks.filter(t => t.project === proj) : state.tasks;
       return json(res, 200, { tasks: ts });
+    }
+    if (req.method === "GET" && P === "/history") {
+      const requestedLimit = Number(q.limit || 200);
+      const limit = Math.min(Math.max(Number.isFinite(requestedLimit) ? requestedLimit : 200, 0), 1000);
+      const events = (q.project ? state.cardEvents.filter(e => e.project === q.project) : state.cardEvents).slice(-limit);
+      return json(res, 200, { events });
     }
     if (req.method === "POST" && P === "/project") {        // set a project's brief (what & why)
       const b = await body(req); const k = String(b.project || "").slice(0, 80);
@@ -158,6 +198,7 @@ const server = http.createServer(async (req, res) => {
       return json(res, 200, { ok: true, project: k, removed: { tasks: nt - state.tasks.length, peers: np - Object.keys(state.peers).length, messages: nm - state.messages.length } });
     }
     if (req.method === "GET" && P === "/projects") {        // project-grouped view
+      prunePeers();
       const cutoff = now() - ONLINE_MS; const byProj = {};
       const proj = p => p || "(unassigned)";
       const mk = k => (byProj[k] ||= { project: k, brief: (state.projectMeta[k]?.brief) || "", agents: [], tasks: { todo:0,doing:0,testing:0,failed:0,done:0,blocked:0 }, doingTitles: [], lastActivity: 0 });

@@ -22,7 +22,7 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 try { await fetch(`${HUB}/health`, { signal: AbortSignal.timeout(700) }); console.error(`✗ something is already listening on :${PORT} — kill it first (lsof -ti :${PORT} | xargs kill)`); process.exit(2); } catch {}
 
 // isolated hub: fake HOME (own bus.json), test port, 2s online cutoff so death is observable fast
-const hub = spawn("node", [join(ROOT, "hub.mjs")], { env: { ...process.env, HOME: FAKE_HOME, RELAY_PORT: String(PORT), RELAY_HOST: "127.0.0.1", RELAY_ONLINE_MS: "2000" }, stdio: "ignore" });
+const hub = spawn("node", [join(ROOT, "hub.mjs")], { env: { ...process.env, HOME: FAKE_HOME, RELAY_PORT: String(PORT), RELAY_HOST: "127.0.0.1", RELAY_ONLINE_MS: "2000", RELAY_PEER_TTL_MS: "4000" }, stdio: "ignore" });
 await sleep(900);
 
 try {
@@ -170,6 +170,28 @@ try {
   ok("doctor flags missing plugin with the fix", /plugin not installed/.test(dout) && /sashabogi\/trantor/.test(dout));
   ok("doctor flags unset profile", /quota profile not set/.test(dout));
   ok("doctor sees the hub", /hub up/.test(dout));
+  console.log("scenario: prune — old peers vanish but their project cards survive");
+  await api("/register", { session: "oldie:prune-proj", project: "prune-proj", status: "idle" });
+  const { task: ptask } = await api("/task", { project: "prune-proj", title: "survivor", by: "oldie:prune-proj" });
+  let pBefore = (await api("/peers")).peers;
+  ok("prune-target peer is present before TTL", pBefore.some(p => p.session === "oldie:prune-proj"));
+  await sleep(5000);                                    // past RELAY_PEER_TTL_MS=4000
+  let pAfter = (await api("/peers")).peers;             // /peers triggers opportunistic prune
+  ok("prune-target peer removed from /peers after TTL", !pAfter.some(p => p.session === "oldie:prune-proj"));
+  ok("prune project cards survive purge", (await api("/tasks?project=prune-proj")).tasks.some(t => t.id === ptask.id));
+
+  console.log("scenario: /history — card create+move produces chronological events with correct from/to/by");
+  const { task: ht } = await api("/task", { project: "proj", title: "timeline-test", by: "arch" });
+  for (const st of ["doing", "testing", "done"]) await api("/task/update", { id: ht.id, status: st, by: "kimi:proj" });
+  const hist = (await api("/history?project=proj")).events;
+  const hEvents = hist.filter(e => e.taskId === ht.id);
+  ok("/history returns events in chronological order", hEvents.length >= 2 && hEvents[0].ts <= hEvents[1].ts);
+  ok("created event has to=todo and by=arch", hEvents[0].type === "created" && hEvents[0].to === "todo" && hEvents[0].by === "arch");
+  const moved = hEvents.find(e => e.type === "moved" && e.from === "doing" && e.to === "testing");
+  ok("moved event has correct from, to, by", moved && moved.by === "kimi:proj");
+  const finalMove = hEvents.find(e => e.type === "moved" && e.to === "done");
+  ok("final move to done present", finalMove && finalMove.by === "kimi:proj");
+
 } finally {
   hub.kill("SIGKILL");
   rmSync(FAKE_HOME, { recursive: true, force: true });

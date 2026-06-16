@@ -140,6 +140,19 @@ main:not(.learn-open) .learn-body{display:none}
 .felabel{fill:#7e8ca3;font-size:9px;font-family:ui-monospace,monospace;opacity:0;pointer-events:none;transition:opacity .15s}
 .fe:hover .felabel{opacity:1}
 .fe:hover .fedge{stroke:#5fa8ff}
+/* timeline view */
+.timeline{padding:14px 18px;overflow-y:auto;max-height:66vh;display:flex;flex-direction:column;gap:5px;background:#0c111c;border-top:1px solid var(--line)}
+.tevent{font-size:12.5px;line-height:1.4;color:var(--mut);display:flex;align-items:center;gap:7px;padding:4px 0}
+.tevent .tts{font-family:ui-monospace,monospace;font-size:10px;color:var(--dim);min-width:64px}
+.tevent .tphrase b{color:var(--tx)}
+.tevent .tstatus{font-weight:700;font-size:11px;text-transform:uppercase;letter-spacing:.04em}
+.tevent .tstatus.todo{color:var(--mut)}
+.tevent .tstatus.doing{color:var(--blu)}
+.tevent .tstatus.testing{color:var(--amb)}
+.tevent .tstatus.failed{color:var(--red)}
+.tevent .tstatus.done{color:var(--grn)}
+.tevent .tstatus.blocked{color:var(--red)}
+.tevent .arr{color:var(--dim);margin:0 2px}
 /* per-project inter-agent conversation lane */
 .proj-chat{margin:4px 16px 14px;border:1px solid var(--line);border-radius:10px;background:#0c111c}
 .proj-chat h5{margin:0;padding:7px 11px;font-size:10px;text-transform:uppercase;letter-spacing:.09em;color:var(--dim);border-bottom:1px solid var(--line);display:flex;align-items:center;gap:6px}
@@ -250,6 +263,7 @@ async function econ(){
 econ();setInterval(econ,15000);
 function poolOf(session){const b=brandOf(session);const k=b==='anthropic'?'claude':b==='openai'?'codex':b==='moonshot'?'kimi':b;return POOLS[k]||'';}
 const VIEWS = JSON.parse(localStorage.getItem("abViews") || "{}");
+let HISTORY = {};
 function setView(proj, v){ VIEWS[proj] = v; localStorage.setItem("abViews", JSON.stringify(VIEWS)); render(); }
 function toggleIdle(name){ if(!name)return; const s=new Set(JSON.parse(localStorage.getItem("abIdleOpen")||"[]")); s.has(name)?s.delete(name):s.add(name); localStorage.setItem("abIdleOpen",JSON.stringify([...s])); render(); }
 let armedDel=null,armedTs=0;   // pending ✕ confirmation (project name + when it was armed)
@@ -405,6 +419,19 @@ function wireFlow(el){
 }
 let suppressClickId = null;
 function projOf(m){return m.project||(String(m.from).includes(':')?String(m.from).split(':').pop():'');}
+function timelineHTML(proj) {
+  const events = HISTORY[proj] || [];
+  if (!events.length) return '<div class="timeline empty">no history yet</div>';
+  const rows = events.map(e => {
+    const time = new Date(e.ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    let phrase = "";
+    if (e.type === "created") phrase = `created "<b>${esc(e.title)}</b>" as <span class="tstatus ${esc(e.to)}">${esc(e.to)}</span>`;
+    else if (e.type === "moved") phrase = `moved "<b>${esc(e.title)}</b>" <span class="tstatus ${esc(e.from)}">${esc(e.from)}</span> <span class="arr">→</span> <span class="tstatus ${esc(e.to)}">${esc(e.to)}</span>`;
+    else phrase = `${esc(e.type)} "<b>${esc(e.title)}</b>"`;
+    return `<div class="tevent"><span class="tts">${time}</span>${iconFor(e.by, 13)} <span class="tphrase">${phrase}</span> <span class="dim">by @${esc(String(e.by).split(':')[0])}</span></div>`;
+  }).join('');
+  return `<div class="timeline" data-proj="${esc(proj)}">${rows}</div>`;
+}
 function chatLane(msgs){
   if(!msgs.length)return `<div class="proj-chat"><h5><span class="lc"></span>conversation</h5><div class="chatempty">no messages yet — agents talk here as they coordinate</div></div>`;
   const rows=msgs.slice(-8).map(m=>`<div class="cmsg ${m.to==='all'?'bc':''}"><span class="ct">${new Date(m.ts).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'})}</span>${iconFor(m.from,13)}<span class="cf">${esc(String(m.from).split(':')[0])}</span><span class="arr">→</span><span class="cto">${esc(m.to==='all'?'all':String(m.to).split(':')[0])}</span>: ${esc(m.text)}</div>`).join('');
@@ -415,6 +442,15 @@ async function render(){
   try{projects=(await (await fetch('/projects')).json()).projects||[];}catch(e){}
   try{tasks=(await (await fetch('/tasks')).json()).tasks||[];}catch(e){}
   try{msgs=(await (await fetch('/recent?limit=200')).json()).messages||[];}catch(e){}
+
+  const histP = projects.filter(p => VIEWS[p.project] === "timeline").map(async p => {
+    try {
+      const h = await (await fetch(`/history?project=${encodeURIComponent(p.project)}`)).json();
+      HISTORY[p.project] = h.events || [];
+    } catch(e) {}
+  });
+  await Promise.all(histP);
+
   // hub was reset (server empty but feed shows history) -> clear the stale client-side feed
   if(!msgs.length&&$('#feed').childElementCount>0){$('#feed').innerHTML='';nmsg=0;}
   const liveSess=new Set();projects.forEach(p=>p.agents.forEach(a=>{if(a.online)liveSess.add(a.session)}));
@@ -441,7 +477,8 @@ async function render(){
   if(!projects.length){el.innerHTML='<div class="empty big">no projects yet — agents register a project on connect</div>';return;}
   const idleOpen=new Set(JSON.parse(localStorage.getItem("abIdleOpen")||"[]"));
   const projBlock=p=>{
-    const pt=tasks.filter(t=>t.project===p.project);
+    const pt = tasks.filter(t=>t.project===p.project);
+    const pmsgs = msgs.filter(m=>projOf(m)===p.project);
     const done=pt.filter(t=>t.status==='done').length;
     const pct=pt.length?Math.round(done/pt.length*100):0;
     const agents=p.agents.sort((a,b)=>b.online-a.online).map(a=>`<span class="agent ${a.online?'':'offl'}${a.health==='down'?' down':a.health==='errored'?' err':''}" title="${esc(a.session)}${a.online?' · online':' · offline'}${a.health&&a.health!=='ok'?' · '+a.health:''}">${iconFor(a.session,15)}<span class="nm">${esc(a.session)}</span>${a.status?` <span class="ast">· ${esc(a.status)}</span>`:''}${poolOf(a.session)?` <span class="ast" style="opacity:.7">[${esc(poolOf(a.session))}]</span>`:''}</span>`).join('');
@@ -460,15 +497,15 @@ async function render(){
     }).join('');
     const ph=p.phase||'';
     const brief=p.brief?`<span class="brief">${esc(p.brief)}</span>`:`<span class="brief dim">— no brief yet · an agent sets it with relay_project_brief</span>`;
-    const pmsgs=msgs.filter(m=>projOf(m)===p.project);
     const view = VIEWS[p.project] || "board";
-    const vtog = `<div class="vtog"><button class="vbtn ${view==="board"?"on":""}" data-proj="${esc(p.project)}" data-view="board">BOARD</button><button class="vbtn ${view==="flow"?"on":""}" data-proj="${esc(p.project)}" data-view="flow">FLOW</button></div>`;
+    const vtog = `<div class="vtog"><button class="vbtn ${view==="board"?"on":""}" data-proj="${esc(p.project)}" data-view="board">BOARD</button><button class="vbtn ${view==="flow"?"on":""}" data-proj="${esc(p.project)}" data-view="flow">FLOW</button><button class="vbtn ${view==="timeline"?"on":""}" data-proj="${esc(p.project)}" data-view="timeline">TIMELINE</button></div>`;
     const ctl=`<span class="mv"><b class="mvup" data-proj="${esc(p.project)}" title="move up">▲</b><b class="mvdn" data-proj="${esc(p.project)}" title="move down">▼</b></span>${p.idle===true?`<span class="pdel" data-proj="${esc(p.project)}" title="forget this project (cards, peers, brief) — it returns if an agent registers it again">✕</span>`:''}`;
+
     return `<div class="proj${p.idle===true?' idle':''}" data-projname="${esc(p.project)}"${p.idle===true?` data-idleproj="${esc(p.project)}"`:''}>`+
       `<div class="proj-h"><span class="pname">📁 <b>${esc(p.project)}</b></span>${vtog}<div class="agents">${agents||'<span class="dim">no agents</span>'}</div><span class="spacer"></span><span class="prog">${done}/${pt.length} done · ${pct}%</span>${ctl}</div>`+
       `<div class="proj-brief">${brief}${ph?`<span class="phase ${phaseClass(ph)}">${esc(ph)}</span>`:''}</div>`+
       `<div class="pbar"><i style="width:${pct}%"></i></div>`+
-      (view === "flow" ? flowHTML(pt, p.project) : `<div class="kanban">${cols}</div>`)+
+      (view === "flow" ? flowHTML(pt, p.project) : view === "timeline" ? timelineHTML(p.project) : `<div class="kanban">${cols}</div>`)+
       chatLane(pmsgs)+
     `</div>`;
   };
@@ -504,6 +541,8 @@ async function render(){
   if(armedDel&&Date.now()-armedTs<4000){const ab=el.querySelector(`.pdel[data-proj="${CSS.escape(armedDel)}"]`);if(ab){ab.classList.add('arm');ab.textContent='✕ sure?';}}
   const sr=$('#sortreset');if(sr)sr.onclick=()=>{localStorage.removeItem('abOrder');render();};
   wireFlow(el);
+  // keep each timeline scrolled to the latest event
+  el.querySelectorAll('.timeline').forEach(c=>{if(c.scrollHeight-c.clientHeight<60||c.dataset.stuck!=='0')c.scrollTop=c.scrollHeight;c.onscroll=()=>{c.dataset.stuck=(c.scrollHeight-c.scrollTop-c.clientHeight<40)?'1':'0';};});
   el.querySelectorAll('.tcard, .fnode').forEach(c=>c.onclick=async()=>{
     const id=+c.dataset.id,t=tasks.find(x=>x.id===id);if(!t)return;
     if(suppressClickId&&+suppressClickId===id)return;   // drag-end, not a click
