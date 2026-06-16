@@ -1,11 +1,12 @@
 {
-  "description": "trantor — auto-register each session + inject live roster (SessionStart); heartbeat presence on every tool call so live sessions stay green and recover after sleep (PostToolUse); write a handoff before compaction (PreCompact)",
+  "description": "trantor — auto-register each session + inject live roster (SessionStart); heartbeat presence on every tool call + mirror the session's TodoWrite list onto the board as cards (PostToolUse); write a handoff before compaction (PreCompact)",
   "hooks": {
     "SessionStart": [
       { "matcher": "", "hooks": [ { "type": "command", "command": "node ${CLAUDE_PLUGIN_ROOT}/hooks/sessionstart.mjs" } ] }
     ],
     "PostToolUse": [
-      { "matcher": "", "hooks": [ { "type": "command", "command": "node ${CLAUDE_PLUGIN_ROOT}/hooks/heartbeat.mjs" } ] }
+      { "matcher": "", "hooks": [ { "type": "command", "command": "node ${CLAUDE_PLUGIN_ROOT}/hooks/heartbeat.mjs" } ] },
+      { "matcher": "TodoWrite", "hooks": [ { "type": "command", "command": "node ${CLAUDE_PLUGIN_ROOT}/hooks/todo-sync.mjs" } ] }
     ],
     "PreCompact": [
       { "matcher": "", "hooks": [ { "type": "command", "command": "node ${CLAUDE_PLUGIN_ROOT}/hooks/precompact.mjs" } ] }

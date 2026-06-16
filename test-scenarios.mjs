@@ -209,6 +209,33 @@ try {
     bh.kill("SIGKILL"); rmSync(BHOME, { recursive: true, force: true });
   }
 
+  console.log("scenario: /todos — a session's TodoWrite list mirrors onto its board as cards");
+  await api("/todos", { session: "host:tp", project: "tp", todos: [
+    { content: "design schema", status: "completed" },
+    { content: "write handler", status: "in_progress" },
+    { content: "add tests", status: "pending" }] });
+  let tcards = (await api("/tasks?project=tp")).tasks.filter(t => t.source === "todo");
+  ok("todo sync creates a card per todo", tcards.length === 3);
+  ok("status maps pending/in_progress/completed -> todo/doing/done",
+     tcards.find(c => c.todoKey === "design schema")?.status === "done" &&
+     tcards.find(c => c.todoKey === "write handler")?.status === "doing" &&
+     tcards.find(c => c.todoKey === "add tests")?.status === "todo");
+  await api("/todos", { session: "host:tp", project: "tp", todos: [
+    { content: "design schema", status: "completed" },
+    { content: "write handler", status: "completed" },
+    { content: "add tests", status: "in_progress" }] });
+  tcards = (await api("/tasks?project=tp")).tasks.filter(t => t.source === "todo");
+  ok("a changed todo moves its card (stable card, not a dup)", tcards.length === 3 &&
+     tcards.find(c => c.todoKey === "write handler")?.status === "done" &&
+     tcards.find(c => c.todoKey === "add tests")?.status === "doing");
+  await api("/todos", { session: "host:tp", project: "tp", todos: [
+    { content: "design schema", status: "completed" },
+    { content: "write handler", status: "completed" }] });
+  tcards = (await api("/tasks?project=tp")).tasks.filter(t => t.source === "todo");
+  ok("a dropped non-done todo's card is removed", !tcards.find(c => c.todoKey === "add tests"));
+  ok("done cards stay on the board (accomplished work)", tcards.filter(c => c.status === "done").length === 2);
+  ok("/history captured the todo card lifecycle", (await api("/history?project=tp")).events.some(e => e.title === "add tests"));
+
 } finally {
   hub.kill("SIGKILL");
   rmSync(FAKE_HOME, { recursive: true, force: true });

@@ -189,6 +189,44 @@ const server = http.createServer(async (req, res) => {
       appendCardEvent(eventType, t, b.by, eventFrom, eventTo);
       t.updated = now(); dirty = true; return json(res, 200, { ok: true, task: t });
     }
+    // Mirror a session's TodoWrite list onto its board as cards, so SOLO work (no crew) shows up live
+    // and accrues timeline history. pending/in_progress/completed -> todo/doing/done. Reconciled by
+    // todo text per session: present todos create/update; a vanished todo's card is deleted UNLESS it
+    // was already done (accomplished work stays in the DONE column). Posted by hooks/todo-sync.mjs.
+    if (req.method === "POST" && P === "/todos") {
+      const b = await body(req);
+      const session = String(b.session || b.by || "").slice(0, 120);
+      const project = String(b.project || "").slice(0, 80);
+      if (!session || !project) return json(res, 400, { error: "session and project required" });
+      touch(session, undefined, project);
+      const ST = { pending: "todo", in_progress: "doing", completed: "done" };
+      const todos = Array.isArray(b.todos) ? b.todos : [];
+      const mine = state.tasks.filter(t => t.source === "todo" && t.assignee === session && t.project === project);
+      const seen = new Set();
+      for (const todo of todos) {
+        const key = String(todo?.content || "").trim().slice(0, 200);
+        if (!key) continue;
+        seen.add(key);
+        const want = ST[todo.status] || "todo";
+        let t = mine.find(c => c.todoKey === key);
+        if (!t) {
+          t = { id: ++state.taskSeq, project, title: key, assignee: session, status: want, difficulty: "", model: "",
+            deps: [], by: session, ts: now(), updated: now(), source: "todo", todoKey: key,
+            history: [{ to: want, by: session, ts: now() }] };
+          state.tasks.push(t); appendCardEvent("created", t, session, null, want); dirty = true;
+        } else if (t.status !== want) {
+          (t.history ||= []).push({ from: t.status, to: want, by: session, ts: now() });
+          if (t.history.length > 40) t.history.splice(0, 10);
+          appendCardEvent("moved", t, session, t.status, want); t.status = want; t.updated = now(); dirty = true;
+        }
+      }
+      for (const t of mine) {
+        if (seen.has(t.todoKey) || t.status === "done") continue;   // keep accomplished work on the board
+        state.tasks = state.tasks.filter(x => x.id !== t.id); appendCardEvent("deleted", t, session, null, null); dirty = true;
+      }
+      if (state.tasks.length > 2000) state.tasks.splice(0, state.tasks.length - 2000);
+      return json(res, 200, { ok: true, count: todos.length });
+    }
     if (req.method === "GET" && P === "/tasks") {
       const proj = q.project; const ts = proj ? state.tasks.filter(t => t.project === proj) : state.tasks;
       return json(res, 200, { tasks: ts });
