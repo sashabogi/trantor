@@ -141,7 +141,7 @@ aside h2{font-size:10.5px;text-transform:uppercase;letter-spacing:.09em;color:va
   <span class="logo">tran<b>t</b>or</span>
   <span class="pill" id="hub">—</span>
   <span class="spacer"></span>
-  <span class="pill" id="econ" title="Scrooge ledger, last 24h" style="display:none"></span>
+  <span class="pill" id="econ" title="Trantor savings vs frontier models — lifetime running total + last 24h (from the Scrooge ledger)" style="display:none"></span>
   <span class="pill"><span id="nproj">0</span> projects · <span id="nsess">0</span> live · <span id="ntask">0</span> cards</span>
 </header>
 <main>
@@ -181,15 +181,34 @@ function iconFor(s,size){const b=brandOf(s);if(!b||!ICON[b])return `<span style=
 const phaseClass=ph=>/^idle ·/.test(ph)?'planned':/FAILED|blocked/.test(ph)?'blocked':/building|verifying|progress/.test(ph)?'building':/shipped|done/.test(ph)?'shipped':'planned';
 
 let POOLS={};
+let ECON=null;
+const ECON_WINS=[['24h','last 24h'],['week','last week'],['month','last month'],['quarter','last quarter'],['year','last year']];
+let econWin=localStorage.getItem('abEconWin')||'24h';
+const econSaved=x=>x?(x.saved_usd!=null?(+x.saved_usd):Math.max(0,(x.opus_equiv_usd||0)-(x.cost_usd||0))):0;
+function renderEcon(){
+  if(!ECON||!ECON.lifetime||!ECON.lifetime.calls)return;
+  const el=$('#econ'); el.style.display='';
+  // lifetime running total is the fixed headline; the dropdown picks the comparison window.
+  if(!el.dataset.built){
+    el.innerHTML=`🪙 Trantor saved <b style="color:var(--grn)" id="econlife"></b> vs frontier`+
+      `<span style="opacity:.55"> · lifetime · </span>`+
+      `<select id="econsel" title="comparison window" style="background:#1a2030;color:inherit;border:1px solid rgba(255,255,255,.18);border-radius:4px;font:inherit;font-size:11px;padding:1px 3px;cursor:pointer;outline:none">`+
+        ECON_WINS.map(([k,l])=>`<option value="${k}">${l}</option>`).join('')+`</select>`+
+      `<span style="opacity:.85" id="econwinval"></span>`;
+    const sel=$('#econsel'); sel.value=econWin;
+    sel.onchange=()=>{econWin=sel.value; localStorage.setItem('abEconWin',econWin); renderEcon();};
+    el.dataset.built='1';
+  }
+  const w=(ECON.windows&&ECON.windows[econWin])||ECON.scrooge, wc=w?w.calls:0;
+  $('#econlife').textContent='$'+econSaved(ECON.lifetime).toFixed(2);
+  $('#econwinval').textContent=' $'+econSaved(w).toFixed(2)+' ('+wc+' call'+(wc===1?'':'s')+')';
+  const sel=$('#econsel'); if(sel)sel.value=econWin;
+}
 async function econ(){
   try{
     const e=await (await fetch('/economics')).json();
     POOLS={}; for(const[k,v]of Object.entries(e.profile||{}))POOLS[k]=v.tier;
-    if(e.scrooge&&e.scrooge.calls>0){
-      const s=e.scrooge;
-      const el=$('#econ'); el.style.display='';
-      el.innerHTML=`🪙 scrooge 24h: <b style="color:var(--grn)">$${s.cost_usd}</b> · saved ~$${Math.max(0,(s.opus_equiv_usd-s.cost_usd)).toFixed(2)} · ${s.calls} calls`;
-    }
+    ECON=e; renderEcon();
   }catch(_){}
 }
 econ();setInterval(econ,15000);

@@ -5,7 +5,7 @@
 // machines reach it (e.g. over a Tailscale tailnet), set RELAY_HOST=0.0.0.0 — but only on a
 // private network, or add auth first. See "Always-on / remote hub" in the README (roadmap).
 import http from "node:http";
-import { readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
+import { readFileSync, writeFileSync, existsSync, mkdirSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
@@ -15,6 +15,12 @@ const DATA_DIR = process.env.RELAY_DATA_DIR || join(homedir(), ".agent-bus");
 const DATA = join(DATA_DIR, "bus.json");
 const ONLINE_MS = Number(process.env.RELAY_ONLINE_MS || 5 * 60 * 1000);
 if (!existsSync(DATA_DIR)) mkdirSync(DATA_DIR, { recursive: true });
+
+// Scrooge ledger cache: /economics is polled every ~15s by the dashboard, but the ledger
+// (~/.token-scrooge/calls.jsonl) only changes when a cheap-model call lands. Re-parse the whole
+// file only when its mtime moves; otherwise reuse the parsed rows. Keeps the lifetime running
+// total cheap to serve no matter how big the ledger grows.
+let _ledgerCache = { mtimeMs: -1, rows: [] };
 
 // peers: { session: { lastSeen, status, project } } ; tasks: kanban cards
 // projectMeta: { project: { brief, by, updated } } — the "what & why" blurb per project
@@ -167,22 +173,43 @@ const server = http.createServer(async (req, res) => {
       dirty = true; return json(res, 200, { ok: true, count: state.lessons.length });
     }
     if (req.method === "GET" && P === "/economics") {   // the brain's books, surfaced: scrooge ledger + quota profile
-      const out = { scrooge: null, profile: null };
+      const out = { scrooge: null, lifetime: null, profile: null };
       try { out.profile = JSON.parse(readFileSync(join(homedir(), ".agent-bus", "profile.json"), "utf8")).providers || {}; } catch {}
       try {
-        const since = now() / 1000 - (Number(q.hours || 24) * 3600);
-        const lines = readFileSync(join(homedir(), ".token-scrooge", "calls.jsonl"), "utf8").trim().split("\n").slice(-3000);
-        const calls = lines.map(l => { try { return JSON.parse(l); } catch { return null; } }).filter(c => c && c.ts >= since && c.ok);
-        const sum = { calls: calls.length, tokens_in: 0, tokens_out: 0, cost_usd: 0, by_model: {} };
-        for (const c of calls) {
-          sum.tokens_in += c.tokens_in || 0; sum.tokens_out += c.tokens_out || 0; sum.cost_usd += c.cost_usd || 0;
-          const m = sum.by_model[c.model] ||= { calls: 0, cost_usd: 0 };
-          m.calls++; m.cost_usd += c.cost_usd || 0;
+        const ledger = join(homedir(), ".token-scrooge", "calls.jsonl");
+        const st = statSync(ledger);
+        if (st.mtimeMs !== _ledgerCache.mtimeMs) {   // ledger changed → reparse the whole file once
+          const rows = readFileSync(ledger, "utf8").trim().split("\n")
+            .map(l => { try { return JSON.parse(l); } catch { return null; } })
+            .filter(c => c && c.ok);
+          _ledgerCache = { mtimeMs: st.mtimeMs, rows };
         }
-        // savings vs Opus reference (~$15/M in, $75/M out — same yardstick scrooge ledger uses)
-        sum.opus_equiv_usd = +(sum.tokens_in * 15 / 1e6 + sum.tokens_out * 75 / 1e6).toFixed(2);
-        sum.cost_usd = +sum.cost_usd.toFixed(4);
-        out.scrooge = sum;
+        const rows = _ledgerCache.rows;
+        // Roll up a set of calls into spend + the frontier-model yardstick (~$15/M in, $75/M out,
+        // same reference scrooge's own ledger uses) and the resulting savings.
+        const rollup = calls => {
+          const s = { calls: calls.length, tokens_in: 0, tokens_out: 0, cost_usd: 0, by_model: {} };
+          for (const c of calls) {
+            s.tokens_in += c.tokens_in || 0; s.tokens_out += c.tokens_out || 0; s.cost_usd += c.cost_usd || 0;
+            const m = s.by_model[c.model] ||= { calls: 0, cost_usd: 0 };
+            m.calls++; m.cost_usd += c.cost_usd || 0;
+          }
+          s.opus_equiv_usd = +(s.tokens_in * 15 / 1e6 + s.tokens_out * 75 / 1e6).toFixed(2);
+          s.cost_usd = +s.cost_usd.toFixed(4);
+          s.saved_usd = +Math.max(0, s.opus_equiv_usd - s.cost_usd).toFixed(2);
+          return s;
+        };
+        // Named rolling windows the dashboard dropdown offers, all served in one response so
+        // switching the selector is instant (no refetch) — cheap because the rows are cached.
+        const nowS = now() / 1000;
+        const WINDOWS = { "24h": 24, "week": 168, "month": 720, "quarter": 2160, "year": 8760 };
+        out.windows = {};
+        for (const [k, hrs] of Object.entries(WINDOWS)) out.windows[k] = rollup(rows.filter(c => c.ts >= nowS - hrs * 3600));
+        out.lifetime = rollup(rows);                             // all-time running total
+        out.lifetime.since_ts = rows.length ? rows[0].ts : null; // first ledgered call
+        out.windows.lifetime = out.lifetime;
+        // back-compat: `scrooge` is the window older dashboards read (honor ?hours= if passed)
+        out.scrooge = q.hours ? rollup(rows.filter(c => c.ts >= nowS - Number(q.hours) * 3600)) : out.windows["24h"];
       } catch {}
       return json(res, 200, out);
     }

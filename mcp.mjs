@@ -44,11 +44,12 @@ server.tool("relay_whoami", "Show this session's relay identity, project, and th
   return { content: [{ type: "text", text: `session=${SESSION}\nproject=${PROJECT}\nhub=${URL_BASE}` }] };
 });
 
-server.tool("relay_task_add", "Add a Kanban card to THIS project's board on the dashboard (what you're about to work on). Defaults: assigned to you, status 'todo'. Keep the team's progress visible.",
-  { title: z.string().describe("short task title"), status: z.enum(["todo","doing","testing","failed","done","blocked"]).optional(), assignee: z.string().optional().describe("session id to assign (default: you)"), difficulty: z.enum(["easy","medium","hard"]).optional().describe("difficulty tag — drives model/agent routing (relay_advise) and shows on the board"), model: z.string().optional().describe("the model this card is routed to (from relay_advise routing, or the CLI default) — shown on the card"), deps: z.array(z.number()).optional().describe("card ids this card depends on — drawn as edges in the Flow view (e.g. integration depends on every crew card)") },
-  async ({ title, status, assignee, difficulty, model, deps }) => {
-    const { task } = await api("POST", "/task", { project: PROJECT, title, status: status || "todo", assignee: assignee || SESSION, difficulty, model, deps, by: SESSION });
-    return { content: [{ type: "text", text: `card #${task.id} added to ${PROJECT}: "${title}" [${task.status}]` }] };
+server.tool("relay_task_add", "Add a Kanban card to a project's board on the dashboard (what you're about to work on). Defaults: THIS project, assigned to you, status 'todo'. Pass `project` to target another board — e.g. when you orchestrate a crew that runs in a different directory than the one you launched Claude from. Keep the team's progress visible.",
+  { title: z.string().describe("short task title"), status: z.enum(["todo","doing","testing","failed","done","blocked"]).optional(), assignee: z.string().optional().describe("session id to assign (default: you)"), difficulty: z.enum(["easy","medium","hard"]).optional().describe("difficulty tag — drives model/agent routing (relay_advise) and shows on the board"), model: z.string().optional().describe("the model this card is routed to (from relay_advise routing, or the CLI default) — shown on the card"), deps: z.array(z.number()).optional().describe("card ids this card depends on — drawn as edges in the Flow view (e.g. integration depends on every crew card)"), project: z.string().optional().describe("board to add to (default: this session's project). Set to the crew's project when you orchestrate from a different directory") },
+  async ({ title, status, assignee, difficulty, model, deps, project }) => {
+    const proj = project || PROJECT;
+    const { task } = await api("POST", "/task", { project: proj, title, status: status || "todo", assignee: assignee || SESSION, difficulty, model, deps, by: SESSION });
+    return { content: [{ type: "text", text: `card #${task.id} added to ${proj}: "${title}" [${task.status}]` }] };
   });
 
 server.tool("relay_task_move", "Move a Kanban card as you progress: todo -> doing -> testing -> done. NEVER move straight to done: move to 'testing' when you finish, run the project's tests/typecheck, then 'done' only if green — or 'failed' (with a relay_send explaining what broke) if not. The orchestrator bounces failed cards back to doing. blocked = waiting on something external.",
@@ -58,11 +59,12 @@ server.tool("relay_task_move", "Move a Kanban card as you progress: todo -> doin
     return { content: [{ type: "text", text: `card #${id} -> ${status}` }] };
   });
 
-server.tool("relay_project_brief", "Set a one-paragraph brief for THIS project shown on the dashboard: what it is, why it matters, and the goal. Set it once when you start work so anyone watching the board understands the project at a glance (the board itself shows where it is in the process).",
-  { brief: z.string().describe("1-3 sentences: what this project is + why + the goal") },
-  async ({ brief }) => {
-    await api("POST", "/project", { project: PROJECT, brief, by: SESSION });
-    return { content: [{ type: "text", text: `brief set for ${PROJECT}` }] };
+server.tool("relay_project_brief", "Set a one-paragraph brief for a project shown on the dashboard: what it is, why it matters, and the goal. Defaults to THIS project; pass `project` to brief a crew board you orchestrate from elsewhere. Set it once when you start work so anyone watching the board understands the project at a glance (the board itself shows where it is in the process).",
+  { brief: z.string().describe("1-3 sentences: what this project is + why + the goal"), project: z.string().optional().describe("board to brief (default: this session's project)") },
+  async ({ brief, project }) => {
+    const proj = project || PROJECT;
+    await api("POST", "/project", { project: proj, brief, by: SESSION });
+    return { content: [{ type: "text", text: `brief set for ${proj}` }] };
   });
 
 server.tool("relay_advise", "THE ADVISOR — ask the brain how to execute a body of work before spending tokens. Give it your work packages (with difficulty); it weighs task shape x the user's plan economics x context horizon and returns: mode (solo|scrooge|crew|hybrid), per-package executor+model routing, and a real-money estimate with quota-pool accounting. Call this at project kickoff and PRESENT the summary to the user before firing anything up.",
@@ -92,13 +94,16 @@ server.tool("relay_lesson", "Record a LESSON learned from a failure so future cr
     return { content: [{ type: "text", text: r.dedup ? "lesson already recorded" : `lesson recorded (${r.count} total)` }] };
   });
 
-server.tool("relay_board", "Show THIS project's Kanban board (all cards + their status + assignee).", {}, async () => {
-  const { tasks } = await api("GET", `/tasks?project=${encodeURIComponent(PROJECT)}`);
-  if (!tasks.length) return { content: [{ type: "text", text: `${PROJECT}: no cards yet` }] };
+server.tool("relay_board", "Show a project's Kanban board (all cards + their status + assignee). Defaults to THIS project; pass `project` to read a crew board you orchestrate from elsewhere.",
+  { project: z.string().optional().describe("board to show (default: this session's project)") },
+  async ({ project }) => {
+  const proj = project || PROJECT;
+  const { tasks } = await api("GET", `/tasks?project=${encodeURIComponent(proj)}`);
+  if (!tasks.length) return { content: [{ type: "text", text: `${proj}: no cards yet` }] };
   const by = { todo: [], doing: [], testing: [], failed: [], done: [], blocked: [] };
   for (const t of tasks) (by[t.status] || by.todo).push(`#${t.id} ${t.title}${t.assignee ? ` (@${t.assignee})` : ""}`);
   const cols = Object.entries(by).filter(([, v]) => v.length).map(([k, v]) => `${k.toUpperCase()}:\n  ${v.join("\n  ")}`);
-  return { content: [{ type: "text", text: `${PROJECT} board\n${cols.join("\n")}` }] };
+  return { content: [{ type: "text", text: `${proj} board\n${cols.join("\n")}` }] };
 });
 
 server.tool("relay_peers", "List other Claude sessions connected to the relay (online in last 5 min).", {}, async () => {
