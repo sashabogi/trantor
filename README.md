@@ -13,12 +13,13 @@
 
 **One Advisor decides how your work runs — solo, cheap inline calls, or a live crew of
 Claude Code, Codex, Gemini, Kimi & DeepSeek in their own terminal windows — routed by your
-actual plans, supervised on a live board, learning from every failure.**
+actual plans, supervised on a live + historical board you can scroll back through, learning
+from every failure.**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
 ![Node](https://img.shields.io/badge/node-%E2%89%A518-339933?logo=node.js&logoColor=white)
 ![Agents](https://img.shields.io/badge/crew-Claude%20%C2%B7%20Codex%20%C2%B7%20Gemini%20%C2%B7%20Kimi%20%C2%B7%20DeepSeek-D97757)
-![Tests](https://img.shields.io/badge/tests-37%2F37-2DD4BF)
+![Tests](https://img.shields.io/badge/tests-80%2F80-2DD4BF)
 
 </div>
 
@@ -99,9 +100,11 @@ project takes over with a full window (and a PreCompact hook does this automatic
    that many seats ("seats follow the work, not the install list"), and a real-money estimate
    with quota-pool accounting. You say go.
 2. **Windows open.** `trantor up codex gemini kimi deepseek:deepseek-v4-pro` spawns one titled
-   terminal window per agent (`agent:model` pins a model), **serialized and then verified on
-   the bus** — the launcher ends with "crew verified" or names the no-shows loudly. The
-   orchestrator never gets a green lie.
+   terminal window per agent. `agent:model` pins a model; `agent:provider --difficulty hard`
+   picks the **best live model** for the work at spawn (capability × cost), enumerated from the
+   CLI itself — never a guessed endpoint. **Serialized and then verified on the bus** — the
+   launcher ends with "crew verified" or names the no-shows loudly. The orchestrator never gets
+   a green lie.
 3. **Work flows over the bus.** Contracts arrive as messages; each agent owns its own files;
    coordination happens in <280-char messages you can read on the dashboard. Crew members
    live under a **runner**: the CLI works one turn and exits, the runner long-polls the bus
@@ -110,22 +113,45 @@ project takes over with a full window (and a PreCompact hook does this automatic
 4. **The board tells the truth.** Cards flow `todo → doing → testing → done` — `testing` is a
    real gate (tests/typecheck run there); failures turn the card **pulsing red** until the
    orchestrator bounces them back; demoted cards wear an "↩ bounced" mark with full history.
-5. **It learns.** Failures become lessons (`relay_lesson`), stored on the hub and **injected
+5. **Failures surface in real time.** A crew agent whose turn fails (credits exhausted, auth,
+   crash) no longer re-parks silently — it classifies the failure, posts a ⚠️ to the bus, and
+   flips its dashboard chip **red** (escalating to 🛑 if it keeps failing). `trantor swap <old>
+   <new>` tears down an exhausted agent and spawns a live-selected replacement, ready for a fresh
+   contract.
+6. **It learns.** Failures become lessons (`relay_lesson`), stored on the hub and **injected
    into every future crew's prompts** — global or per-CLI. Your crew gets smarter every run.
 
 ## The dashboard — `trantor ui`
 
-A live command center at `http://127.0.0.1:4477`, grouped by **project**:
+A live command center at `http://127.0.0.1:4477`, grouped by **project** — and a *durable,
+self-maintaining record*, not just a snapshot. Dead sessions self-prune (no more graveyard of
+stale boards), and the project order is **stable**: a working board updates in place instead of
+jumping to the top while you're reading it.
 
-- **BOARD view** — Kanban with the testing gate, difficulty + model badges per card, agent
-  chips with provider logos, live status, and quota-pool tags.
-- **FLOW view** — the same work as an n8n-style dependency graph: parallel streams fanning
-  out and converging into integration, edges lighting up as work flows (green = done feeding
-  forward, animated blue = active), **red ↩n loops where work bounced back**. Drag nodes to
-  rearrange, ⌘+scroll / pinch to zoom, FIT/AUTO controls. Pick per project; your choice sticks.
+Three views per project (your choice sticks):
+
+- **BOARD** — Kanban with the testing gate, difficulty + model badges per card, agent chips with
+  provider logos, live status, quota-pool tags, and **red / 🛑 chips for errored / down agents**.
+- **FLOW** — a **development timeline**: every card laid left→right in **build order** across
+  **agent lanes**, each card a readable block segmented by the time it spent in each status, with
+  dependency edges converging where parallel work merged. Scroll the project's whole history
+  left/right. **Click any card** to open its full story — the contract it was given, the agent's
+  plan, its build report, the files it changed — reconstructed from that agent's own bus messages.
+- **TIMELINE** — the same history as a chronological event log.
+
+Plus:
+
+- **🧠 Learning sidebar** — the self-learning loop, made visible: lessons (global / per-agent /
+  per-project), **per-LLM reliability** (turns, fail-rate, trend charts) from real turn telemetry,
+  and the guardrails baked into each model's prompts. Watch the platform get smarter over time.
+- **🪙 savings pill** — a lifetime running total of what cheap-model routing has saved vs running
+  the frontier model, with a selectable window (24h / week / month / quarter / year).
 - **Per-project conversation lanes** — watch agents negotiate interfaces in context — plus a
-  global live feed, and a composer so *you* can message the bus (or any single agent).
-- **🪙 economics pill** — live Scrooge ledger: real spend, savings vs frontier pricing.
+  global live feed and a composer so *you* can message the bus (or any single agent).
+
+Every session registers automatically — **crew or not** — and a solo session's own todo list
+shows up on the board as cards, so the dashboard reflects *all* the work on a project, not just
+crew runs.
 
 ## The brain — plan-aware economics
 
@@ -160,7 +186,7 @@ rate, not work rate.
 | `relay_send(to, text)` / `relay_inbox` / `relay_wait(t)` | Live messaging: direct, read-new, long-poll wake |
 | `relay_peers` / `relay_status(text)` / `relay_whoami` | Presence: who's alive (honest, heartbeat-backed), doing what |
 | `relay_project_brief(text)` | The project's what/why on the dashboard |
-| `relay_task_add(title, …, difficulty, model, deps)` | Cards with difficulty/model badges + DAG edges for the flow view |
+| `relay_task_add(title, …, difficulty, model, deps, project?)` | Cards with difficulty/model badges + DAG edges; `project` targets another board when you orchestrate from elsewhere |
 | `relay_task_move(id, status)` | `todo → doing → testing → done` (the gate), `failed`, `blocked` |
 | `relay_board` | The project's full board, as text |
 | `relay_scrooge(prompt, task?, difficulty?)` | Fractal cheap-model delegation, with the ledger receipt |
@@ -170,13 +196,15 @@ rate, not work rate.
 ## The CLI
 
 ```
-trantor setup | doctor | connect | profile | up <agents…> | down | ui | advise | hub | watch
+trantor setup | doctor | connect | profile | up <agents…> | swap <old> <new> | down | ui | advise | hub | watch
 ```
 
-`trantor up` notes: `agent:model` pins a model (`deepseek:deepseek-v4-pro`); spawns are
-verified on the bus with one retry; geometry auto-detects the screen you're working on
-(`CREW_RECT="X,Y,W,H"` to override); `trantor down` kills crew processes via their ttys and
-closes windows without macOS "Terminate?" dialogs.
+`trantor up` notes: `agent:model` pins a model (`deepseek:deepseek-v4-pro`); `agent:provider
+--task <k> --difficulty <d>` picks the **best live model** for the work at spawn
+(`opencode:zai-coding-plan --difficulty hard`); spawns are verified on the bus with one retry;
+geometry auto-detects the screen you're working on (`CREW_RECT="X,Y,W,H"` to override). `trantor
+swap <oldAgent> <newSpec>` replaces an exhausted agent with a live-selected one. `trantor down`
+kills crew processes via their ttys and closes windows without macOS "Terminate?" dialogs.
 
 ## Works with any MCP agent
 
@@ -192,10 +220,10 @@ server auto-registers the session, so presence works before the model says a wor
         │ advise/contracts        │ one turn, exit; runner long-polls (free) + resumes with context
         └───────────┬─────────────┴──────────────┴────────────────┴────────────────┘
                     ▼
-              hub.mjs  ←— plain HTTP + SSE · presence/messages/board/lessons/economics
+              hub.mjs  ←— plain HTTP + SSE · presence/messages/board/history/lessons/learning/economics
               (Node built-ins only · state in ~/.agent-bus/bus.json · loopback by default)
                     ▲
-              dashboard (ui.html) · BOARD/FLOW · conversation lanes · 🪙 ledger
+              dashboard (ui.html) · BOARD/FLOW/TIMELINE · 🧠 Learning · 🪙 savings · conversation lanes
 ```
 
 Config: `RELAY_URL` env → `~/.agent-bus/config.json` → `http://127.0.0.1:4477`.
@@ -223,9 +251,10 @@ The `relay_*` tool names and the `~/.agent-bus` state dir remain until a later r
 ## Tests
 
 ```bash
-npm test    # unit + 37 protocol-level scenario drills with mock agents (no LLMs, seconds, $0):
-            # honest presence, spawn no-shows, the testing gate, bounce trails, lessons,
-            # advisor decisions across plan tiers, deps validation, virgin-machine doctor
+npm test    # 80 checks: unit + protocol-level scenario drills with mock agents (no LLMs, seconds, $0):
+            # honest presence + TTL prune, spawn no-shows, the testing gate, bounce trails, lessons,
+            # /history + backfill, /learning shape, /todos sync, /card detail, advisor decisions across
+            # plan tiers, deps validation, virgin-machine doctor, and failure-classification drills
 ```
 
 ## License
