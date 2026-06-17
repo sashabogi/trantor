@@ -237,6 +237,20 @@ const server = http.createServer(async (req, res) => {
       const events = (q.project ? state.cardEvents.filter(e => e.project === q.project) : state.cardEvents).slice(-limit);
       return json(res, 200, { events });
     }
+    // A single card's FULL story for the detail panel: the card itself, its status events, and the
+    // bus messages that reference it (#<id>) — i.e. the agent's own reports of what it did, why, how.
+    if (req.method === "GET" && P === "/card") {
+      const id = Number(q.id);
+      if (!Number.isInteger(id)) return json(res, 400, { error: "numeric id required" });
+      const task = state.tasks.find(t => t.id === id) || null;
+      const events = state.cardEvents.filter(e => e.taskId === id);
+      const re = new RegExp("#" + id + "(?![0-9])");   // #5 but not #50
+      const messages = state.messages.filter(m => re.test(String(m.text || ""))).slice(-200);
+      // fall back to the last event for title/project/assignee when the card was deleted
+      const last = events[events.length - 1];
+      const meta = task || (last ? { id, title: last.title, project: last.project, status: "deleted", assignee: last.assignee, difficulty: last.difficulty } : null);
+      return json(res, 200, { task: meta, events, messages });
+    }
     if (req.method === "POST" && P === "/project") {        // set a project's brief (what & why)
       const b = await body(req); const k = String(b.project || "").slice(0, 80);
       if (!k) return json(res, 400, { error: "project required" });

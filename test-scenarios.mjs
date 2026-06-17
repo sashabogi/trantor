@@ -236,6 +236,16 @@ try {
   ok("done cards stay on the board (accomplished work)", tcards.filter(c => c.status === "done").length === 2);
   ok("/history captured the todo card lifecycle", (await api("/history?project=tp")).events.some(e => e.title === "add tests"));
 
+  console.log("scenario: /card detail — the card + its status events + ONLY the bus reports referencing #id");
+  const { task: ct } = await api("/task", { project: "cardproj", title: "build the widget", assignee: "codex:cardproj", by: "arch" });
+  await api("/task/update", { id: ct.id, status: "doing", by: "codex:cardproj" });
+  await api("/send", { from: "codex:cardproj", to: "all", text: `#${ct.id} doing: building the widget now`, project: "cardproj" });
+  await api("/send", { from: "x:cardproj", to: "all", text: `unrelated #${ct.id}0 chatter`, project: "cardproj" });   // #id0 must NOT match #id
+  const cd = await api(`/card?id=${ct.id}`);
+  ok("card detail returns the task", cd.task && cd.task.id === ct.id && cd.task.title === "build the widget");
+  ok("card detail includes its status events (created + move)", cd.events.length >= 2 && cd.events[0].type === "created");
+  ok("card detail matches only #id reports (word boundary, not #id0)", cd.messages.length === 1 && /doing: building/.test(cd.messages[0].text));
+
 } finally {
   hub.kill("SIGKILL");
   rmSync(FAKE_HOME, { recursive: true, force: true });
