@@ -140,6 +140,28 @@ main:not(.learn-open) .learn-body{display:none}
 .felabel{fill:#7e8ca3;font-size:9px;font-family:ui-monospace,monospace;opacity:0;pointer-events:none;transition:opacity .15s}
 .fe:hover .felabel{opacity:1}
 .fe:hover .fedge{stroke:#5fa8ff}
+/* FLOW = development timeline: build-order columns, agent lanes, readable fixed cards, native scroll */
+.tlwrap{position:relative;background:#0b1019;border-top:1px solid var(--line);overflow:hidden}
+.tlscroll{position:absolute;inset:0;overflow-x:auto;overflow-y:auto}
+.tlscroll svg{display:block}
+.tlband{fill:#101827}
+.tlsep{stroke:#161e2c;stroke-width:1}
+.tlgrid{stroke:#161e2c;stroke-width:1}
+.tlt{fill:var(--dim);font-size:9px;font-family:ui-sans-serif,system-ui;text-anchor:middle}
+.tledge{fill:none;stroke:#33405c;stroke-width:1.6;opacity:.8}
+.tledge.done{stroke:var(--grn2)}
+.tlbar{fill:none;stroke:rgba(255,255,255,.14);stroke-width:1}
+.tlnode{cursor:default}
+.tlnode:hover .tlbar{stroke:rgba(255,255,255,.55)}
+.tlnode.doing .tlbar,.tlnode.testing .tlbar{stroke:rgba(255,255,255,.3)}
+.tlnode.failed .tlbar,.tlnode.blocked .tlbar{stroke:var(--red)}
+.tltitle{fill:#eaf1fa;font-size:10.5px;font-family:ui-sans-serif,system-ui;pointer-events:none}
+/* pinned lane-label gutter (stays put while the chart scrolls) */
+.tlgut{position:absolute;left:0;top:0;bottom:0;background:#0b1019;border-right:1px solid var(--line);z-index:3;pointer-events:none}
+.tlguth{display:flex;align-items:center;padding-left:8px;font-size:9px;color:var(--dim);border-bottom:1px solid #161e2c}
+.tlgl{display:flex;align-items:center;gap:6px;padding-left:8px;font-size:11px;font-weight:600;color:var(--mut)}
+.tlgl svg{flex:none}
+.tlwrap .fhint{position:absolute;right:10px;bottom:6px;z-index:3}
 /* timeline view */
 .timeline{padding:14px 18px;overflow-y:auto;max-height:66vh;display:flex;flex-direction:column;gap:5px;background:#0c111c;border-top:1px solid var(--line)}
 .tevent{font-size:12.5px;line-height:1.4;color:var(--mut);display:flex;align-items:center;gap:7px;padding:4px 0}
@@ -275,66 +297,70 @@ function moveProj(name,dir){
   [names[i],names[j]]=[names[j],names[i]];
   localStorage.setItem("abOrder",JSON.stringify(names)); render();
 }
-function flowLayout(cards, proj){
-  const byId = Object.fromEntries(cards.map(t => [t.id, t]));
-  let anyDeps = cards.some(t => (t.deps || []).length);
-  const deps = t => {
-    if (anyDeps) return (t.deps || []).filter(d => byId[d]);
-    if (/integrat|assemb|ship it|final/i.test(t.title)) return cards.filter(o => o.id !== t.id).map(o => o.id);
-    return [];
-  };
-  const L = {};
-  const layer = (t, seen = new Set()) => {
-    if (L[t.id] !== undefined) return L[t.id];
-    if (seen.has(t.id)) return (L[t.id] = 0);
-    seen.add(t.id);
-    const ds = deps(t);
-    return (L[t.id] = ds.length ? 1 + Math.max(...ds.map(d => layer(byId[d], seen))) : 0);
-  };
-  cards.forEach(t => layer(t));
-  const cols = {};
-  cards.forEach(t => (cols[L[t.id]] ||= []).push(t));
-  const NW = 190, NH = 64, GX = 90, GY = 26;
-  const nodes = {}, maxRows = Math.max(...Object.values(cols).map(c => c.length));
-  const totalH = maxRows * (NH + GY) - GY;
-  const manual = (JSON.parse(localStorage.getItem("abFlowPos") || "{}"))[proj] || {};
-  for (const [li, col] of Object.entries(cols)) {
-    const colH = col.length * (NH + GY) - GY, y0 = (totalH - colH) / 2;
-    col.forEach((t, ri) => {
-      const m = manual[t.id];
-      nodes[t.id] = { t, x: m ? m.x : li * (NW + GX), y: m ? m.y : y0 + ri * (NH + GY) };
-    });
-  }
-  const edges = [];
-  cards.forEach(t => deps(t).forEach(d => edges.push([d, t.id])));
-  return { nodes, edges, NW, NH };
-}
+// FLOW = development timeline. Cards laid left→right in BUILD ORDER (even slots — bursts don't cram,
+// idle gaps don't waste space), one lane per agent, each card a readable FIXED-width block segmented
+// by the time it spent in each status. Natively scrollable left/right; lane labels pinned in a left
+// gutter; dependency edges converge = merges. (No proportional-time slivers, no zoom cut-off.)
+const TLSCROLL = {};
 function flowHTML(pt, proj){
   if (!pt.length) return '<div class="empty">no cards yet</div>';
-  const { nodes, edges, NW, NH } = flowLayout(pt, proj);
-  const cam = (JSON.parse(localStorage.getItem("abFlowCam") || "{}"))[proj] || { s: 0.9, tx: 30, ty: 20 };
-  let inner = "";
-  for (const [a, b] of edges) {
-    const A = nodes[a], B = nodes[b]; if (!A || !B) continue;
-    const x1 = A.x + NW, y1 = A.y + NH / 2, x2 = B.x, y2 = B.y + NH / 2, mx = (x1 + x2) / 2;
-    const cls = A.t.status === "done" ? "done" : (B.t.status === "doing" || B.t.status === "testing") ? "active" : "";
-    const mk = cls === "done" ? "arrg" : cls === "active" ? "arrb" : "arr";
-    const d = `M${x1},${y1} C${mx},${y1} ${mx},${y2} ${x2},${y2}`;
-    const label = `${String(A.t.title).slice(0, 18)} → ${String(B.t.title).slice(0, 18)}`;
-    inner += `<g class="fe"><path class="fedge-hit" d="${d}"><title>${esc(A.t.title)} → ${esc(B.t.title)}</title></path><path class="fedge ${cls}" marker-end="url(#${mk})" d="${d}"/><text class="felabel" x="${mx}" y="${(y1 + y2) / 2 - 6}" text-anchor="middle">${esc(label)}</text></g>`;
+  const NOW = Date.now();
+  const SCOL = { todo:'#3a4458', doing:'#4a90d9', testing:'#f59e0b', failed:'#ef6a6a', blocked:'#ef6a6a', done:'#14b8a6' };
+  const GUT = 96, TH = 24, ROW = 42, BAR = 26, SLOT = 188, CW = 172, PAD = 10;
+  const cards = pt.map(t => {
+    const h = (t.history && t.history.length) ? t.history.slice() : [{ to: t.status || 'todo', ts: t.ts || NOW }];
+    return { t, h, tStart: h[0].ts || t.ts || NOW, tEnd: (t.status === 'done' ? (h[h.length-1].ts || NOW) : NOW) };
+  });
+  cards.sort((a,b)=> a.tStart - b.tStart || a.t.id - b.t.id);
+  cards.forEach((c,i)=> c.col = i);
+  const byId = {}; for (const c of cards) byId[c.t.id] = c;
+  const laneKey = t => (String(t.assignee || 'unassigned').split(':')[0] || 'unassigned');
+  const laneFirst = {}; for (const c of cards){ const k = laneKey(c.t); if (laneFirst[k] == null) laneFirst[k] = c.col; }
+  const lanes = [...new Set(cards.map(c => laneKey(c.t)))].sort((a,b)=> laneFirst[a]-laneFirst[b]);
+  const laneIdx = Object.fromEntries(lanes.map((k,i)=>[k,i]));
+  const X = col => GUT + col*SLOT + PAD;
+  const laneY = i => TH + i*ROW + (ROW-BAR)/2;
+  const totalW = GUT + cards.length*SLOT + 24, totalH = TH + lanes.length*ROW + 8;
+  let svg = '';
+  for (let i=0;i<lanes.length;i++){ const yb = TH + i*ROW;
+    if (i%2) svg += `<rect class="tlband" x="${GUT}" y="${yb}" width="${totalW-GUT}" height="${ROW}"/>`;
+    svg += `<line class="tlsep" x1="${GUT}" y1="${yb}" x2="${totalW}" y2="${yb}"/>`;
   }
-  for (const { t, x, y } of Object.values(nodes)) {
-    const bounces = (t.history || []).filter(h => ({todo:0,doing:1,testing:2,done:3}[h.to] ?? 0) < ({todo:0,doing:1,testing:2,done:3}[h.from] ?? 0)).length;
-    inner += `<g class="fnode ${t.status}" data-id="${t.id}" transform="translate(${x},${y})">`;
-    inner += `<rect width="${NW}" height="${NH}" rx="9"/>`;
-    inner += `<text class="ftitle" x="10" y="20">${esc(t.title.slice(0, 26))}${t.title.length > 26 ? "…" : ""}</text>`;
-    inner += `<text class="fmeta" x="10" y="37">${esc(String(t.assignee || "").split(":")[0])}${t.difficulty ? " · " + t.difficulty : ""}${t.model ? " · " + esc(t.model.slice(0, 16)) : ""}</text>`;
-    inner += `<text class="fmeta" x="10" y="53">${t.status}</text>`;
-    if (bounces) inner += `<path class="floop" marker-end="url(#arr)" d="M${NW - 34},0 C${NW - 34},-16 ${NW - 6},-16 ${NW - 6},-1"/><text class="floopn" x="${NW - 30}" y="-7">↩${bounces}</text>`;
-    inner += `</g>`;
+  // build-order time markers (every few cards, label that card's real timestamp) — scroll with the chart
+  const step = Math.max(1, Math.round(cards.length/12));
+  for (let i=0;i<cards.length;i+=step){ const xx = X(cards[i].col) + CW/2;
+    svg += `<line class="tlgrid" x1="${xx}" y1="${TH}" x2="${xx}" y2="${totalH-6}"/>`;
+    svg += `<text class="tlt" x="${xx}" y="15">${esc(new Date(cards[i].tStart).toLocaleString([], {month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'}))}</text>`;
   }
-  const defs = `<defs><marker id="arr" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="#2b3650"/></marker><marker id="arrg" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="#14b8a6"/></marker><marker id="arrb" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="#4a90d9"/></marker></defs>`;
-  return `<div class="flowwrap" data-proj="${esc(proj)}"><div class="fctl"><button data-fa="out">−</button><button data-fa="in">+</button><button data-fa="fit">FIT</button><button data-fa="auto">AUTO</button></div><div class="fhint">⌘+scroll or pinch to zoom · drag canvas to pan</div><svg>${defs}<g class="fcam" transform="translate(${cam.tx},${cam.ty}) scale(${cam.s})">${inner}</g></svg></div>`;
+  for (const c of cards) for (const d of (c.t.deps||[])){ const A = byId[d]; if (!A) continue;
+    const x1 = X(A.col)+CW, y1 = laneY(laneIdx[laneKey(A.t)])+BAR/2, x2 = X(c.col), y2 = laneY(laneIdx[laneKey(c.t)])+BAR/2, mx = (x1+x2)/2;
+    svg += `<path class="tledge ${A.t.status==='done'?'done':''}" marker-end="url(#tarr)" d="M${x1},${y1} C${mx},${y1} ${mx},${y2} ${x2},${y2}"/>`;
+  }
+  for (const c of cards){ const xx = X(c.col), yy = laneY(laneIdx[laneKey(c.t)]), dur = Math.max(1, c.tEnd - c.tStart);
+    svg += `<g class="tlnode ${c.t.status}" data-id="${c.t.id}"><title>${esc(c.t.title)} — ${c.t.status} · @${esc(laneKey(c.t))}\n${esc(new Date(c.tStart).toLocaleString())}</title>`;
+    let sx = xx;
+    for (let i=0;i<c.h.length;i++){ const s0 = c.h[i].ts || c.tStart, s1 = (i+1<c.h.length) ? (c.h[i+1].ts||s0) : c.tEnd;
+      const w = Math.max(1.5, (Math.max(0, s1-s0)/dur)*CW);
+      svg += `<rect x="${sx.toFixed(1)}" y="${yy}" width="${w.toFixed(1)}" height="${BAR}" fill="${SCOL[c.h[i].to]||'#3a4458'}"/>`; sx += w;
+    }
+    svg += `<rect class="tlbar" x="${xx}" y="${yy}" width="${CW}" height="${BAR}" rx="5"/>`;
+    svg += `<text class="tltitle" x="${xx+7}" y="${yy+BAR/2+4}">${esc(c.t.title.slice(0,25))}${c.t.title.length>25?'…':''}</text>`;
+    svg += `</g>`;
+  }
+  const defs = `<defs><marker id="tarr" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="6" markerHeight="6" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="#14b8a6"/></marker></defs>`;
+  let gut = `<div class="tlgut" style="width:${GUT}px"><div class="tlguth" style="height:${TH}px">time →</div>`;
+  for (const k of lanes) gut += `<div class="tlgl" style="height:${ROW}px">${iconFor(k,13)}<span>${esc(k)}</span></div>`;
+  gut += `</div>`;
+  return `<div class="tlwrap" data-proj="${esc(proj)}" style="height:${Math.min(totalH+14, 540)}px">`
+    + `<div class="tlscroll" data-proj="${esc(proj)}"><svg width="${totalW}" height="${totalH}">${defs}${svg}</svg></div>`
+    + gut + `<div class="fhint">build order →  ·  scroll left/right</div></div>`;
+}
+function wireTimeline(el){
+  el.querySelectorAll('.tlscroll').forEach(s => {
+    const proj = s.dataset.proj;
+    if (TLSCROLL[proj] != null) s.scrollLeft = TLSCROLL[proj];
+    s.onscroll = () => { TLSCROLL[proj] = s.scrollLeft; };
+  });
 }
 let dragging = null;   // suppresses re-render mid-gesture
 function saveCam(proj, cam){ const c = JSON.parse(localStorage.getItem("abFlowCam") || "{}"); c[proj] = cam; localStorage.setItem("abFlowCam", JSON.stringify(c)); }
@@ -462,15 +488,21 @@ async function render(){
   const sel=$('#to'),cur=sel.value;
   sel.innerHTML='<option value="all">all (broadcast)</option>'+allS.map(s=>`<option value="${esc(s)}">${esc(s)}</option>`).join('');
   sel.value=cur;
-  // sort: manual order (abOrder, set via the ▲▼ controls) wins; otherwise online
-  // first, then most-recent activity — working boards float to the top on their own
+  // STABLE display order: projects keep their first-seen position so the board NEVER reshuffles on
+  // activity — a working board updates in place instead of jumping to the top (which made boards
+  // pop in and out and impossible to read). Manual ▲▼ (abOrder) still wins; live boards group above
+  // idle. (Recency auto-sort removed — that was the thrash.)
+  let SEEN=JSON.parse(localStorage.getItem("abSeen")||"[]");
+  const curNames=projects.map(p=>p.project);
+  const SEEN2=[...SEEN.filter(n=>curNames.includes(n)),...curNames.filter(n=>!SEEN.includes(n))];
+  if(JSON.stringify(SEEN2)!==JSON.stringify(SEEN)){SEEN=SEEN2;localStorage.setItem("abSeen",JSON.stringify(SEEN));}
   const ORDER=JSON.parse(localStorage.getItem("abOrder")||"[]");
   projects.sort((a,b)=>{
     const ia=ORDER.indexOf(a.project),ib=ORDER.indexOf(b.project);
     if(ia>=0||ib>=0)return (ia<0?1e9:ia)-(ib<0?1e9:ib);
     const oa=a.agents.some(x=>x.online),ob=b.agents.some(x=>x.online);if(oa!==ob)return ob-oa;
     if(a.project==='(unassigned)')return 1;if(b.project==='(unassigned)')return -1;
-    return (b.lastActivity||0)-(a.lastActivity||0)||a.project.localeCompare(b.project);
+    return SEEN.indexOf(a.project)-SEEN.indexOf(b.project);   // stable first-seen order
   });
   const el=$('#boards');
   if(dragging)return;                                  // never rebuild mid-gesture
@@ -540,7 +572,7 @@ async function render(){
   // "✕ sure?" confirmation survives until it expires instead of silently resetting
   if(armedDel&&Date.now()-armedTs<4000){const ab=el.querySelector(`.pdel[data-proj="${CSS.escape(armedDel)}"]`);if(ab){ab.classList.add('arm');ab.textContent='✕ sure?';}}
   const sr=$('#sortreset');if(sr)sr.onclick=()=>{localStorage.removeItem('abOrder');render();};
-  wireFlow(el);
+  wireFlow(el);wireTimeline(el);
   // keep each timeline scrolled to the latest event
   el.querySelectorAll('.timeline').forEach(c=>{if(c.scrollHeight-c.clientHeight<60||c.dataset.stuck!=='0')c.scrollTop=c.scrollHeight;c.onscroll=()=>{c.dataset.stuck=(c.scrollHeight-c.scrollTop-c.clientHeight<40)?'1':'0';};});
   el.querySelectorAll('.tcard, .fnode').forEach(c=>c.onclick=async()=>{
