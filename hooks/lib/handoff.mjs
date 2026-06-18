@@ -16,7 +16,7 @@ import { homedir, hostname } from "node:os";
 import { execSync, spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
-export const HANDOFF_DIR = join(homedir(), ".agent-bus", "handoffs");
+export const HANDOFF_DIR = join(process.env.RELAY_DATA_DIR || join(homedir(), ".agent-bus"), "handoffs");
 const HERE = dirname(fileURLToPath(import.meta.url));
 
 export function readConfig() {

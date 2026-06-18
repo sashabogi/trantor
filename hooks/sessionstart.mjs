@@ -21,7 +21,17 @@ function loadPendingHandoff(projectName, { claim = true } = {}) {
   try {
     const dir = join(homedir(), ".agent-bus", "handoffs");
     if (!existsSync(dir)) return null;
-    const files = readdirSync(dir).filter(f => f.startsWith(projectName + "-") && f.endsWith(".json")).sort().reverse();
+    // Match ONLY this project's handoffs: "<projectName>-<numeric stamp>.json".
+    // NOT a loose startsWith() — that also caught leaked test fixtures like
+    // "trantor-handoff-61385-….json" for project "trantor". And sort by the numeric
+    // stamp (newest first), NOT lexicographically — string sort ranks a letter prefix
+    // ("…-handoff-…") above a digit one, so it could pick a stale/wrong handoff.
+    const re = new RegExp("^" + projectName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "-(\\d+)\\.json$");
+    const files = readdirSync(dir)
+      .map(f => { const m = re.exec(f); return m ? { f, stamp: Number(m[1]) } : null; })
+      .filter(Boolean)
+      .sort((a, b) => b.stamp - a.stamp)
+      .map(x => x.f);
     for (const f of files) {
       const p = join(dir, f);
       const rec = JSON.parse(readFileSync(p, "utf8"));

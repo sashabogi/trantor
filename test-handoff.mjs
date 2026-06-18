@@ -65,7 +65,7 @@ ok("summary includes the SESSION START (not just the tail)", summary.includes(FI
 ok("summary includes the SESSION END", summary.includes(LAST));
 // baton pass: the handoff record must carry a VERBATIM recent-exchange block (exact in-flight state)
 ok("verbatimRecentTail returns the exact recent text", verbatimRecentTail(transcript).includes(LAST));
-const { record: hrec } = writeHandoff({ projectDir: tmp, sessionId: "vt", transcript, trigger: "context-warn" });
+const { record: hrec, file: hfile } = writeHandoff({ projectDir: tmp, sessionId: "vt", transcript, trigger: "context-warn" });
 ok("writeHandoff embeds the verbatim in-flight block", /Verbatim recent exchange/.test(hrec.summary) && hrec.summary.includes(LAST));
 // manual baton: when spawning is disabled it must NOT touch any window (spawned:false, armed:false)
 process.env.TRANTOR_NO_HANDOFF_SPAWN = "1";
@@ -91,6 +91,24 @@ ok("compact start does NOT consume it (reserved for fresh window)", consumed() =
 const rs = ss("startup");
 ok("startup consumes the handoff", consumed() === true);
 
+// --- regression: select newest-by-STAMP for THIS project, ignore look-alike names ---
+// Bug (2026-06-18): loose startsWith()+lexicographic sort grabbed a stale
+// "<proj>-handoff-<pid>-….json" leaked fixture over the real "<proj>-<stamp>.json",
+// because a letter ('h') sorts above a digit. So a manual baton handed the fresh
+// session synthetic test data instead of the just-written handoff. Lock it down.
+rmSync(hf, { force: true });
+const older = join(handoffDir, `${proj}-1000000000.json`);
+const newer = join(handoffDir, `${proj}-2000000000.json`);
+const decoy = join(handoffDir, `${proj}-handoff-${process.pid}-9999999999.json`); // look-alike, lexically higher
+const mk = (f, id) => writeFileSync(f, JSON.stringify({ id, project: projDir, projectName: proj, machine: "h", trigger: "auto", summary: id, gitStatus: "", consumed: false }, null, 2));
+mk(older, "OLDER_HANDOFF"); mk(newer, "NEWER_HANDOFF"); mk(decoy, "DECOY_FIXTURE");
+const rsel = ss("startup");
+const selCtx = (() => { try { return JSON.parse(rsel.stdout).hookSpecificOutput.additionalContext; } catch { return ""; } })();
+ok("selector injects the NEWEST valid handoff (by stamp, not lexicographic)", selCtx.includes("NEWER_HANDOFF") && !selCtx.includes("OLDER_HANDOFF"));
+ok("selector ignores look-alike '<proj>-handoff-…' fixtures", !selCtx.includes("DECOY_FIXTURE") && JSON.parse(readFileSync(decoy, "utf8")).consumed === false);
+rmSync(older, { force: true }); rmSync(newer, { force: true }); rmSync(decoy, { force: true });
+seed();
+
 // --- precompact: writes a handoff (consumed:false), never spawns under guard ---
 seed(); rmSync(hf, { force: true });
 const pc = spawnSync("node", ["hooks/precompact.mjs"], {
@@ -109,6 +127,7 @@ if (wrec) { const m = /handoff written: (\S+\.json)/.exec(pc.stderr); if (m) rmS
 
 // cleanup
 rmSync(hf, { force: true });
+rmSync(hfile, { force: true }); // the writeHandoff() record above — was leaking into the live handoffs dir
 rmSync(join(homedir(), ".agent-bus", `handoff-fired-pctest-${process.pid}.json`), { force: true });
 rmSync(tmp, { recursive: true, force: true });
 rmSync(projDir, { recursive: true, force: true });
