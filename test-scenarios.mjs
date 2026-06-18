@@ -305,6 +305,20 @@ try {
   const { task: nowCard } = await api("/task", { project: "backfillproj", title: "live one", ts: Date.now() + 1e10, by: "host:backfillproj" });
   ok("a bogus/future ts is ignored → card gets now()", Math.abs(Date.now() - nowCard.ts) < 60000);
 
+  console.log("scenario: sub-agent cost — notional pricing math + the hub stores costKind/costUsd/tokens");
+  const { costOfTurn, notionalCost, tierFor } = await import("./hooks/pricing.mjs");
+  ok("pricing: opus 1M in + 1M out = $30", costOfTurn({ model: "claude-opus-4-8", input: 1e6, output: 1e6 }) === 30);
+  ok("pricing: sonnet cache-read 1M = $0.30 (0.1x input)", Math.abs(costOfTurn({ model: "claude-sonnet-4-6", cacheRead: 1e6 }) - 0.3) < 1e-9);
+  ok("pricing: cache-write defaults to 5m (haiku 1M = $1.25)", Math.abs(costOfTurn({ model: "claude-haiku-4-5", cacheWrite: 1e6 }) - 1.25) < 1e-9);
+  ok("pricing: unknown model → null (never fabricate)", costOfTurn({ model: "gpt-5", input: 1e6 }) === null && tierFor("gpt-5") === null);
+  const nc = notionalCost([{ model: "claude-opus-4-8", input: 1000, output: 500 }, { model: "gpt-5", input: 999 }]);
+  ok("notionalCost sums priced rows + counts unpriced (no fabrication)", nc.usd > 0 && nc.unpriced === 1 && nc.tokens.input === 1999);
+  const { task: sc } = await api("/task", { project: "ccproj", title: "claude-code-guide: research hooks", status: "done",
+    assignee: "claude-code-guide:ccproj", source: "cc-subagent", costKind: "subagent-notional", costUsd: 1.2345,
+    model: "claude-sonnet-4-6", effort: "medium", tokens: { input: 26, output: 7616, cacheWrite: 209810, cacheRead: 1016405 }, by: "host:ccproj" });
+  ok("hub stores costKind + costUsd on the card", sc.costKind === "subagent-notional" && sc.costUsd === 1.2345);
+  ok("hub stores the token breakdown", sc.tokens && sc.tokens.cacheRead === 1016405 && sc.source === "cc-subagent");
+
 } finally {
   hub.kill("SIGKILL");
   rmSync(FAKE_HOME, { recursive: true, force: true });

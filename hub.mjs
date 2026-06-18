@@ -262,7 +262,17 @@ const server = http.createServer(async (req, res) => {
       const t = { id: ++state.taskSeq, project: canon(String(b.project || "").slice(0,80)), title: String(b.title||"").slice(0,200),
         assignee: b.assignee || "", status: st0,
         phase: String(b.phase || "").slice(0, 40),   // explicit phase tag (FLOW v2) — wins over title-prefix inference
-        source: String(b.source || "").slice(0, 20), // e.g. "git" (backfill), "todo" — provenance
+        source: String(b.source || "").slice(0, 20), // e.g. "git" (backfill), "todo", "cc-subagent" — provenance
+        // economics: how this card's cost should be counted. costKind discriminates the source so the
+        // dashboard can show notional (plan-covered) vs real spend inline-but-differentiated.
+        costKind: String(b.costKind || "").slice(0, 24),         // subagent-notional|orchestrator-notional|crew-subscription|scrooge-real
+        costUsd: (typeof b.costUsd === "number" && isFinite(b.costUsd)) ? b.costUsd : null,
+        costNote: String(b.costNote || "").slice(0, 80),
+        effort: String(b.effort || "").slice(0, 12),
+        tokens: (b.tokens && typeof b.tokens === "object") ? {
+          input: Number(b.tokens.input) || 0, output: Number(b.tokens.output) || 0,
+          cacheWrite: Number(b.tokens.cacheWrite) || 0, cacheRead: Number(b.tokens.cacheRead) || 0,
+        } : null,
         difficulty: ["easy","medium","hard"].includes(b.difficulty) ? b.difficulty : "",
         model: String(b.model || "").slice(0, 60),
         deps: Array.isArray(b.deps) ? [...new Set(b.deps.map(Number).filter(n => Number.isInteger(n) && n > 0))].slice(0, 20) : [],

@@ -1,5 +1,5 @@
 {
-  "description": "trantor — auto-register each session + inject live roster (SessionStart); heartbeat presence on every tool call + mirror the session's TodoWrite list onto the board as cards (PostToolUse); write a handoff before compaction (PreCompact)",
+  "description": "trantor — auto-register each session + inject live roster (SessionStart); heartbeat presence on every tool call + mirror the session's TodoWrite list onto the board as cards (PostToolUse); write a handoff before compaction (PreCompact); card each sub-agent's notional API cost when it finishes (SubagentStop)",
   "hooks": {
     "SessionStart": [
       { "matcher": "", "hooks": [ { "type": "command", "command": "node ${CLAUDE_PLUGIN_ROOT}/hooks/sessionstart.mjs" } ] }
@@ -10,6 +10,9 @@
     ],
     "PreCompact": [
       { "matcher": "", "hooks": [ { "type": "command", "command": "node ${CLAUDE_PLUGIN_ROOT}/hooks/precompact.mjs" } ] }
+    ],
+    "SubagentStop": [
+      { "matcher": "", "hooks": [ { "type": "command", "command": "node ${CLAUDE_PLUGIN_ROOT}/hooks/subagent-cost.mjs" } ] }
     ]
   }
 }
