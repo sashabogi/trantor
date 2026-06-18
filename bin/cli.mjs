@@ -25,6 +25,7 @@ switch (cmd) {
   case "swap":    spawn("/bin/bash", [join(ROOT, "bin/crew.sh"), "swap", ...args], { stdio: "inherit", cwd: process.cwd() }).on("exit", c => process.exit(c ?? 0)); break;
   case "hub":     run("hub.mjs"); break;
   case "watch":   run("bin/relay-watch.mjs"); break;
+  case "catchup": run("bin/catchup.mjs"); break;
   case "ui": {
     let url = "http://127.0.0.1:4477";
     try { url = JSON.parse(readFileSync(join(process.env.HOME || "", ".agent-bus", "config.json"), "utf8")).url || url; } catch {}
@@ -44,6 +45,7 @@ switch (cmd) {
   trantor up …        spawn a crew here:   trantor up codex gemini kimi deepseek:deepseek-v4-pro
   trantor down        tear the crew down (kills processes, closes windows, no dialogs)
   trantor ui          open the live dashboard (board + flow views)
+  trantor catchup     "where are we?" — the continuous board + git, with a synthesized brief
   trantor advise      ask the Advisor directly (JSON on stdin; --demo to see it)
   trantor hub         run the hub in the foreground (setup installs it as a service instead)
   trantor watch       live bus feed in the terminal

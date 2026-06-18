@@ -246,6 +246,34 @@ try {
   ok("card detail includes its status events (created + move)", cd.events.length >= 2 && cd.events[0].type === "created");
   ok("card detail matches only #id reports (word boundary, not #id0)", cd.messages.length === 1 && /doing: building/.test(cd.messages[0].text));
 
+  console.log("scenario: canonical project identity — one repo = one lane (no fragmentation)");
+  // reproduce the bug: a host lane and a crew lane for the SAME project under different keys
+  await api("/task", { project: "myapp.ai", title: "host card", by: "host:myapp.ai" });
+  await api("/task", { project: "myapp", title: "crew card", by: "codex:myapp" });
+  await api("/register", { session: "codex:myapp", project: "myapp", status: "building" });
+  const projsBefore = (await api("/projects")).projects.map(p => p.project);
+  ok("both lanes exist before merge", projsBefore.includes("myapp") && projsBefore.includes("myapp.ai"));
+  const mg = await api("/project/merge", { from: "myapp", to: "myapp.ai" });
+  ok("merge reports cards+peers moved", mg.ok && mg.moved.cards >= 1 && mg.moved.peers >= 1);
+  const projsAfter = (await api("/projects")).projects.map(p => p.project);
+  ok("the 'myapp' lane is gone after merge", !projsAfter.includes("myapp") && projsAfter.includes("myapp.ai"));
+  const merged = (await api("/tasks?project=myapp.ai")).tasks.map(t => t.title);
+  ok("both cards now live on the canonical lane", merged.includes("host card") && merged.includes("crew card"));
+  ok("querying the OLD key folds in via alias", (await api("/tasks?project=myapp")).tasks.length === merged.length);
+  await api("/task", { project: "myapp", title: "post-merge crew card", by: "kimi:myapp" });
+  ok("a NEW card under the old key lands on the canonical lane", (await api("/tasks?project=myapp.ai")).tasks.some(t => t.title === "post-merge crew card"));
+  const peerCanon = (await api("/peers")).peers.find(p => p.session === "codex:myapp");
+  ok("a peer under the old key shows the canonical project", peerCanon && peerCanon.project === "myapp.ai");
+
+  console.log("scenario: /catchup — a fresh session's view of the continuous board");
+  await api("/project", { project: "myapp.ai", brief: "the north star" });
+  await api("/task/update", { id: (await api("/tasks?project=myapp.ai")).tasks.find(t => t.title === "host card").id, status: "doing", by: "host:myapp.ai" });
+  const cu = await api("/catchup?project=myapp.ai");
+  ok("catchup returns the brief", cu.brief === "the north star");
+  ok("catchup counts cards by status", cu.total >= 3 && cu.counts.doing >= 1);
+  ok("catchup lists in-progress work", cu.doing.some(t => t.title === "host card"));
+  ok("catchup accepts the aliased key too", (await api("/catchup?project=myapp")).project === "myapp.ai");
+
 } finally {
   hub.kill("SIGKILL");
   rmSync(FAKE_HOME, { recursive: true, force: true });

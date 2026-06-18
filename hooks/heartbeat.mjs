@@ -14,11 +14,54 @@
 // We POST /register WITHOUT a status field so the session's meaningful status is preserved
 // (the hub only overwrites status when one is supplied).
 import { readFileSync, writeFileSync, existsSync } from "node:fs";
-import { join, basename } from "node:path";
+import { join, basename, dirname } from "node:path";
 import { homedir, hostname } from "node:os";
+import { spawn } from "node:child_process";
+import { fileURLToPath } from "node:url";
+import { readConfig, contextUsage, warnFrac, alreadyHandedOff } from "./lib/handoff.mjs";
+import { resolveProject } from "../lib/project.mjs";
 
 const HEARTBEAT_MS = Number(process.env.RELAY_HEARTBEAT_MS || 60 * 1000);
 const FETCH_TIMEOUT_MS = Number(process.env.RELAY_HEARTBEAT_TIMEOUT_MS || 1500);
+const INFLIGHT_MS = 5 * 60 * 1000;
+const HERE = dirname(fileURLToPath(import.meta.url));
+
+function readStdin() {
+  return new Promise(res => { let d = ""; process.stdin.setEncoding("utf8");
+    process.stdin.on("data", c => (d += c)); process.stdin.on("end", () => res(d));
+    setTimeout(() => res(d), 80); });
+}
+
+// Proactive early-warning: when the live context occupancy crosses the warn
+// fraction of a KNOWN window (env RELAY_CONTEXT_WINDOW / config.contextWindow —
+// the transcript can't reveal 200k vs 1M, so it must be declared), hand off
+// BEFORE the compaction wall. The heavy summary runs in a detached worker so we
+// never block this tool call. No-op when the window is unknown.
+async function maybeEarlyWarn(stdinRaw, session) {
+  try {
+    const conf = readConfig();
+    const input = JSON.parse(stdinRaw || "{}");
+    const transcript = input.transcript_path || "";
+    const sessionId = input.session_id || "";
+    if (!transcript) return;
+    const usage = contextUsage(transcript, conf);
+    if (!usage || !usage.window || usage.frac == null) return; // window unknown → only PreCompact guards
+    if (usage.frac < warnFrac(conf)) return;
+    if (alreadyHandedOff(sessionId, usage.tokens)) return;
+
+    // In-flight guard: the detached worker takes ~tens of seconds to summarize;
+    // don't launch a second one on the next heartbeat tick meanwhile.
+    const inflight = join(homedir(), ".agent-bus", `handoff-inflight-${String(sessionId).replace(/[^A-Za-z0-9_.-]/g, "_")}.stamp`);
+    try { if (existsSync(inflight) && Date.now() - (Number(readFileSync(inflight, "utf8")) || 0) < INFLIGHT_MS) return; } catch {}
+    try { writeFileSync(inflight, String(Date.now())); } catch {}
+
+    const projectDir = process.env.CLAUDE_PROJECT_DIR || process.cwd();
+    process.stderr.write(`[trantor] context ${Math.round(usage.frac * 100)}% of ${usage.window} — launching early handoff\n`);
+    const child = spawn(process.execPath, [join(HERE, "handoff-now.mjs"), projectDir, sessionId, transcript, "context-warn"],
+      { detached: true, stdio: "ignore" });
+    child.unref();
+  } catch {}
+}
 
 function relayUrl() {
   if (process.env.RELAY_URL) return process.env.RELAY_URL;
@@ -29,7 +72,7 @@ function relayUrl() {
   return "http://127.0.0.1:4477";
 }
 
-async function main() {
+async function main(stdinRaw) {
   const projectDir = process.env.CLAUDE_PROJECT_DIR || process.cwd();
   // Mirror sessionstart.mjs: home-directory sessions aren't project work — don't register
   // them (would spawn a phantom "<username>" board). Opt in with RELAY_SESSION/RELAY_PROJECT.
@@ -38,11 +81,11 @@ async function main() {
   // Mirror mcp.mjs identity resolution EXACTLY so we refresh the same peer the relay
   // registered (not a phantom): RELAY_PROJECT wins for project; RELAY_SESSION wins for
   // identity, else a RELAY_AGENT brand ("codex","kimi",…) per project, else hostname:project.
-  const project = process.env.RELAY_PROJECT || basename(projectDir);
+  const project = resolveProject(projectDir);
   const session = process.env.RELAY_SESSION
     || (process.env.RELAY_AGENT ? `${process.env.RELAY_AGENT}:${project}` : `${hostname()}:${project}`);
 
-  // Throttle: only ping if HEARTBEAT_MS has elapsed since the last ping for THIS session.
+  // Throttle: only act if HEARTBEAT_MS has elapsed since the last tick for THIS session.
   const stamp = join(homedir(), ".agent-bus", `hb-${session.replace(/[^A-Za-z0-9_.-]/g, "_")}.stamp`);
   try {
     if (existsSync(stamp)) {
@@ -62,7 +105,11 @@ async function main() {
       signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
     });
   } catch {}
+
+  // Same cadence as the presence ping: check context pressure and hand off early
+  // if we've crossed the warn threshold of a known window.
+  await maybeEarlyWarn(stdinRaw, session);
 }
 
 // Never block or break the tool flow: swallow everything, always exit clean.
-main().catch(() => {}).finally(() => process.exit(0));
+readStdin().then(main).catch(() => {}).finally(() => process.exit(0));

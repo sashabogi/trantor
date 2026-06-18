@@ -16,7 +16,10 @@
 set -u
 CMD="${1:-up}"; shift 2>/dev/null || true
 DIR="$(pwd)"
-PROJ="$(basename "$DIR")"
+# Canonical project key: the orchestrator's RELAY_PROJECT wins, else the GIT REPO ROOT
+# basename (stable across subdirs), else the cwd basename. The crew inherits this exact
+# key so one repo = one lane (no host "builtbetter.ai" vs crew "builtbetter" split).
+PROJ="${RELAY_PROJECT:-$(basename "$(git -C "$DIR" rev-parse --show-toplevel 2>/dev/null || echo "$DIR")")}"
 BUS_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 STATE="$HOME/.agent-bus/crew-windows.txt"
 mkdir -p "$HOME/.agent-bus"
@@ -143,7 +146,7 @@ spawn_grid() {  # $@ = agents — (re)computes the grid for THIS batch and spawn
     local X1=$(( GX + C * CW )) Y1=$(( GY + R * CH )) WID=""
     WID="$(osascript \
       -e 'tell application "Terminal"' \
-      -e "  set w to do script \"cd $DIR && clear && CREW_MODEL=$MODEL node $BUS_DIR/bin/crew-runner.mjs $AGENT $DIR\"" \
+      -e "  set w to do script \"cd $DIR && clear && CREW_MODEL=$MODEL RELAY_PROJECT=$PROJ node $BUS_DIR/bin/crew-runner.mjs $AGENT $DIR\"" \
       -e "  set custom title of w to \"$(echo "$AGENT" | tr '[:lower:]' '[:upper:]') — trantor crew\"" \
       -e "  set theWin to first window whose tabs contains w" \
       -e "  set bounds of theWin to {$X1, $Y1, $(( X1 + CW )), $(( Y1 + CH ))}" \

@@ -10,6 +10,7 @@ import { join, basename } from "node:path";
 import { homedir, hostname } from "node:os";
 import { execSync, spawnSync } from "node:child_process";
 import { advise } from "./bin/advise.mjs";
+import { resolveProject } from "./lib/project.mjs";
 import { z } from "zod";
 
 function relayUrl() {
@@ -21,7 +22,9 @@ function relayUrl() {
   return "http://127.0.0.1:4477";
 }
 const URL_BASE = relayUrl();
-const PROJECT = process.env.RELAY_PROJECT || basename(process.env.CLAUDE_PROJECT_DIR || process.cwd());
+// Stable project key: RELAY_PROJECT > git-repo-root basename > cwd basename. Keying by
+// the git root (not a loose cwd basename) stops one repo fragmenting into several lanes.
+const PROJECT = resolveProject(process.env.CLAUDE_PROJECT_DIR || process.cwd());
 // Identity: RELAY_SESSION wins; else RELAY_AGENT ("codex", "kimi", …) brands the session per-project
 // (set it once in the CLI's global MCP config — works in every project); else hostname:project.
 const SESSION = process.env.RELAY_SESSION

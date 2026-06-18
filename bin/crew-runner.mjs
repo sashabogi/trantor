@@ -12,10 +12,15 @@ import { execSync, spawnSync } from "node:child_process";
 import { readFileSync, existsSync, appendFileSync } from "node:fs";
 import { join, basename } from "node:path";
 import { homedir } from "node:os";
+import { resolveProject } from "../lib/project.mjs";
 
 const AGENT = process.argv[2];
 const DIR = process.argv[3] || process.cwd();
-const PROJ = basename(DIR);
+// Crew agents MUST share the orchestrator's project key (one repo = one lane).
+// RELAY_PROJECT is inherited from crew.sh (the host's resolved key); else fall
+// back to the git-repo-root basename — never a loose dir basename that could
+// fork the host's "builtbetter.ai" into a separate "builtbetter" lane.
+const PROJ = process.env.RELAY_PROJECT || resolveProject(DIR);
 const SESSION = `${AGENT}:${PROJ}`;
 if (!AGENT) { console.error("usage: crew-runner.mjs <agent> [project-dir]"); process.exit(1); }
 

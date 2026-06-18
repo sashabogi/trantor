@@ -50,11 +50,11 @@ function scanTelemetry() {
 
 // peers: { session: { lastSeen, status, project } } ; tasks: kanban cards
 // projectMeta: { project: { brief, by, updated } } — the "what & why" blurb per project
-let state = { messages: [], peers: {}, seq: 0, tasks: [], taskSeq: 0, projectMeta: {}, lessons: [], cardEvents: [], cardEventsBackfilled: false };
+let state = { messages: [], peers: {}, seq: 0, tasks: [], taskSeq: 0, projectMeta: {}, lessons: [], cardEvents: [], cardEventsBackfilled: false, aliases: {} };
 try {
   if (existsSync(DATA)) {
     const loaded = JSON.parse(readFileSync(DATA, "utf8"));
-    state = { messages: loaded.messages || [], peers: {}, seq: loaded.seq || 0, tasks: loaded.tasks || [], taskSeq: loaded.taskSeq || 0, projectMeta: loaded.projectMeta || {}, lessons: loaded.lessons || [], cardEvents: Array.isArray(loaded.cardEvents) ? loaded.cardEvents : [], cardEventsBackfilled: !!loaded.cardEventsBackfilled };
+    state = { messages: loaded.messages || [], peers: {}, seq: loaded.seq || 0, tasks: loaded.tasks || [], taskSeq: loaded.taskSeq || 0, projectMeta: loaded.projectMeta || {}, lessons: loaded.lessons || [], cardEvents: Array.isArray(loaded.cardEvents) ? loaded.cardEvents : [], cardEventsBackfilled: !!loaded.cardEventsBackfilled, aliases: (loaded.aliases && typeof loaded.aliases === "object") ? loaded.aliases : {} };
     for (const [s, v] of Object.entries(loaded.peers || {})) // migrate old numeric form
       state.peers[s] = typeof v === "number" ? { lastSeen: v, status: "", project: "" } : { lastSeen: v.lastSeen || 0, status: v.status || "", project: v.project || "" };
   }
@@ -104,14 +104,23 @@ const now = () => Date.now();
 const fmtAge = ms => { const m = Math.floor(ms / 60000); return m > 48 * 60 ? `${Math.floor(m / 1440)}d ago` : m > 90 ? `${Math.floor(m / 60)}h ago` : `${m}m ago`; };
 function body(req) { return new Promise(r => { let d = ""; req.on("data", c => (d += c)); req.on("end", () => { try { r(d ? JSON.parse(d) : {}); } catch { r({}); } }); }); }
 function json(res, code, obj) { res.writeHead(code, { "content-type": "application/json", "access-control-allow-origin": "*" }); res.end(JSON.stringify(obj)); }
+// Canonical project name: follow the alias chain so historically-divergent keys
+// (e.g. "builtbetter" → "builtbetter.ai") fold into one lane on every read AND
+// write. Cycle-guarded. Empty/"all" pass through untouched.
+function canon(name) {
+  let n = String(name || "").slice(0, 80);
+  const seen = new Set();
+  while (n && state.aliases[n] && !seen.has(n)) { seen.add(n); n = state.aliases[n]; }
+  return n;
+}
 function touch(session, status, project) {
   if (!session || session === "all") return;   // "all" is a wildcard, not a real peer
   const p = state.peers[session] || { lastSeen: 0, status: "", project: "" };
   p.lastSeen = now();
   if (status !== undefined) p.status = String(status).slice(0, 280);
-  if (project) p.project = String(project).slice(0, 80);
+  if (project) p.project = canon(String(project).slice(0, 80));
   // derive project from a "host:project" session id if none given
-  if (!p.project && session.includes(":")) p.project = session.split(":").pop().slice(0, 80);
+  if (!p.project && session.includes(":")) p.project = canon(session.split(":").pop().slice(0, 80));
   state.peers[session] = p; dirty = true;
 }
 // Derive a coarse health from the free-text status the runner sets on a failed turn
@@ -159,7 +168,7 @@ const server = http.createServer(async (req, res) => {
     if (req.method === "POST" && P === "/task") {           // create a card
       const b = await body(req); touch(b.by, undefined, b.project);
       const st0 = ["todo","doing","testing","failed","done","blocked"].includes(b.status) ? b.status : "todo";
-      const t = { id: ++state.taskSeq, project: String(b.project || "").slice(0,80), title: String(b.title||"").slice(0,200),
+      const t = { id: ++state.taskSeq, project: canon(String(b.project || "").slice(0,80)), title: String(b.title||"").slice(0,200),
         assignee: b.assignee || "", status: st0,
         difficulty: ["easy","medium","hard"].includes(b.difficulty) ? b.difficulty : "",
         model: String(b.model || "").slice(0, 60),
@@ -196,7 +205,7 @@ const server = http.createServer(async (req, res) => {
     if (req.method === "POST" && P === "/todos") {
       const b = await body(req);
       const session = String(b.session || b.by || "").slice(0, 120);
-      const project = String(b.project || "").slice(0, 80);
+      const project = canon(String(b.project || "").slice(0, 80));
       if (!session || !project) return json(res, 400, { error: "session and project required" });
       touch(session, undefined, project);
       const ST = { pending: "todo", in_progress: "doing", completed: "done" };
@@ -228,13 +237,14 @@ const server = http.createServer(async (req, res) => {
       return json(res, 200, { ok: true, count: todos.length });
     }
     if (req.method === "GET" && P === "/tasks") {
-      const proj = q.project; const ts = proj ? state.tasks.filter(t => t.project === proj) : state.tasks;
+      const proj = q.project ? canon(q.project) : ""; const ts = proj ? state.tasks.filter(t => canon(t.project) === proj) : state.tasks;
       return json(res, 200, { tasks: ts });
     }
     if (req.method === "GET" && P === "/history") {
       const requestedLimit = Number(q.limit || 200);
       const limit = Math.min(Math.max(Number.isFinite(requestedLimit) ? requestedLimit : 200, 0), 1000);
-      const events = (q.project ? state.cardEvents.filter(e => e.project === q.project) : state.cardEvents).slice(-limit);
+      const proj = q.project ? canon(q.project) : "";
+      const events = (proj ? state.cardEvents.filter(e => canon(e.project) === proj) : state.cardEvents).slice(-limit);
       return json(res, 200, { events });
     }
     // A single card's FULL story for the detail panel: the card itself, its status events, and the
@@ -252,7 +262,7 @@ const server = http.createServer(async (req, res) => {
       return json(res, 200, { task: meta, events, messages });
     }
     if (req.method === "POST" && P === "/project") {        // set a project's brief (what & why)
-      const b = await body(req); const k = String(b.project || "").slice(0, 80);
+      const b = await body(req); const k = canon(String(b.project || "").slice(0, 80));
       if (!k) return json(res, 400, { error: "project required" });
       const m = state.projectMeta[k] || {};
       if (b.brief !== undefined) m.brief = String(b.brief).slice(0, 600);
@@ -271,10 +281,52 @@ const server = http.createServer(async (req, res) => {
       dirty = true;   // the project reappears cleanly if an agent ever registers it again
       return json(res, 200, { ok: true, project: k, removed: { tasks: nt - state.tasks.length, peers: np - Object.keys(state.peers).length, messages: nm - state.messages.length } });
     }
+    // Fold one project lane into another: rewrite all stored project fields from→to AND
+    // record an alias so future writes under `from` canonicalize to `to`. Idempotent.
+    // This is how a fragmented project (one repo, two lane keys) becomes one continuous lane.
+    if (req.method === "POST" && P === "/project/merge") {
+      const b = await body(req);
+      const from = String(b.from || "").slice(0, 80), to = String(b.to || "").slice(0, 80);
+      if (!from || !to || from === to) return json(res, 400, { error: "distinct from+to required" });
+      let cards = 0, events = 0, peers = 0, msgs = 0;
+      for (const t of state.tasks) if (t.project === from) { t.project = to; cards++; }
+      for (const e of state.cardEvents) if (e.project === from) { e.project = to; events++; }
+      for (const v of Object.values(state.peers)) if (v.project === from) { v.project = to; peers++; }
+      for (const m of state.messages) if ((m.project || "") === from) { m.project = to; msgs++; }
+      if (state.projectMeta[from]) {
+        if (!state.projectMeta[to]) state.projectMeta[to] = state.projectMeta[from];
+        else if (!state.projectMeta[to].brief && state.projectMeta[from].brief) state.projectMeta[to].brief = state.projectMeta[from].brief;
+        delete state.projectMeta[from];
+      }
+      state.aliases[from] = to;                       // future writes fold automatically
+      for (const [k, v] of Object.entries(state.aliases)) if (v === from) state.aliases[k] = to; // re-point chains
+      dirty = true;
+      return json(res, 200, { ok: true, from, to, moved: { cards, events, peers, messages: msgs } });
+    }
+    // Catch-up snapshot: everything a NEW session needs to resume a project's continuous
+    // lane — the brief, card counts, what's in-flight (doing/testing/todo) and the most
+    // recent done work, plus last activity. Cheap + LLM-free; the SessionStart hook injects it.
+    if (req.method === "GET" && P === "/catchup") {
+      const proj = canon(q.project || "");
+      if (!proj) return json(res, 400, { error: "project required" });
+      const mine = state.tasks.filter(t => canon(t.project) === proj);
+      const counts = { todo:0, doing:0, testing:0, failed:0, done:0, blocked:0 };
+      for (const t of mine) counts[t.status] = (counts[t.status] || 0) + 1;
+      const pick = (st, n) => mine.filter(t => t.status === st).sort((a,b)=>(b.updated||0)-(a.updated||0)).slice(0, n)
+        .map(t => ({ id: t.id, title: t.title, assignee: t.assignee || "", updated: t.updated || 0 }));
+      const lastActivity = mine.reduce((mx,t)=>Math.max(mx, t.updated||0), state.projectMeta[proj]?.updated || 0);
+      return json(res, 200, {
+        project: proj, brief: state.projectMeta[proj]?.brief || "",
+        counts, total: mine.length,
+        doing: pick("doing", 8), testing: pick("testing", 8), failed: pick("failed", 8),
+        blocked: pick("blocked", 8), todo: pick("todo", 10), recentDone: pick("done", 8),
+        lastActivity,
+      });
+    }
     if (req.method === "GET" && P === "/projects") {        // project-grouped view
       prunePeers();
       const cutoff = now() - ONLINE_MS; const byProj = {};
-      const proj = p => p || "(unassigned)";
+      const proj = p => canon(p) || "(unassigned)";
       const mk = k => (byProj[k] ||= { project: k, brief: (state.projectMeta[k]?.brief) || "", agents: [], tasks: { todo:0,doing:0,testing:0,failed:0,done:0,blocked:0 }, doingTitles: [], lastActivity: 0 });
       for (const [s, v] of Object.entries(state.peers)) {
         const k = proj(v.project); const e = mk(k); e.agents.push({ session: s, online: v.lastSeen > cutoff, status: v.status || "", health: healthOf(v.status) });

@@ -9,9 +9,15 @@
 import { readFileSync, writeFileSync, existsSync, readdirSync } from "node:fs";
 import { join, basename } from "node:path";
 import { homedir, hostname } from "node:os";
+import { execSync } from "node:child_process";
+import { resolveProject } from "../lib/project.mjs";
 
-// Load the most recent UNCONSUMED handoff for this project (written by precompact.mjs).
-function loadPendingHandoff(projectName) {
+// Load the most recent UNCONSUMED handoff for this project (written by precompact.mjs
+// / the heartbeat early-warning). `claim` marks it consumed so exactly one session
+// takes it. A compaction-triggered SessionStart (source="compact") is the SAME session
+// that just wrote the handoff for a FRESH window to pick up — it may show the summary
+// for continuity but must NOT claim it, or it steals the handoff from the new window.
+function loadPendingHandoff(projectName, { claim = true } = {}) {
   try {
     const dir = join(homedir(), ".agent-bus", "handoffs");
     if (!existsSync(dir)) return null;
@@ -20,7 +26,7 @@ function loadPendingHandoff(projectName) {
       const p = join(dir, f);
       const rec = JSON.parse(readFileSync(p, "utf8"));
       if (!rec.consumed) {
-        rec.consumed = true; writeFileSync(p, JSON.stringify(rec, null, 2)); // claim it
+        if (claim) { rec.consumed = true; writeFileSync(p, JSON.stringify(rec, null, 2)); }
         return rec;
       }
     }
@@ -59,7 +65,8 @@ function sanitize(s) {
 
 let additionalContext = "";
 try {
-  await readStdin();
+  let source = "";
+  try { source = (JSON.parse((await readStdin()) || "{}").source) || ""; } catch {}
   const projectDir = process.env.CLAUDE_PROJECT_DIR || process.cwd();
   // Sessions started in the home directory itself aren't project work — registering
   // them spawns a phantom "<username>" project board on the dashboard. Set
@@ -69,7 +76,7 @@ try {
     process.stdout.write("{}");
     process.exit(0);
   }
-  const project = process.env.RELAY_PROJECT || basename(projectDir);
+  const project = resolveProject(projectDir);
   const session = process.env.RELAY_SESSION
     || (process.env.RELAY_AGENT ? `${process.env.RELAY_AGENT}:${project}` : `${hostname()}:${project}`);
   const url = relayUrl();
@@ -92,11 +99,44 @@ try {
     additionalContext += `</trantor>\n`;
   }
 
+  // CATCH-UP: a project is a DURABLE, continuous lane — not a session. Before doing
+  // anything, this session reconciles with the living board: what's been built, what's
+  // in flight, what's queued, plus the latest commits. So a fresh window resumes the
+  // SAME project where it stands instead of starting blind. Cheap + LLM-free.
+  try {
+    const cu = await jget(`${url}/catchup?project=${encodeURIComponent(project)}`).catch(() => null);
+    let gitlog = "";
+    try { gitlog = execSync(`git -C ${JSON.stringify(projectDir)} log --oneline -5 2>/dev/null`, { encoding: "utf8", timeout: 2500 }).trim(); } catch {}
+    if ((cu && cu.total > 0) || gitlog) {
+      const line = (arr) => (arr || []).map(t => `#${t.id} ${String(t.title).slice(0, 72)}${t.assignee ? ` @${t.assignee}` : ""}`).join("\n  ");
+      additionalContext += `<trantor-project-state project="${sanitize(project)}">\n`;
+      additionalContext += `📋 **Catching up on the continuous "${sanitize(project)}" board** (this project's living record across all sessions — read it before starting; don't duplicate done work).\n`;
+      if (cu && cu.brief) additionalContext += `\n**Brief:** ${sanitize(cu.brief)}\n`;
+      if (cu && cu.total > 0) {
+        const c = cu.counts;
+        additionalContext += `\n**Cards:** ${cu.total} total — ${c.done} done · ${c.doing} doing · ${c.testing} testing · ${c.todo} todo · ${c.failed} failed · ${c.blocked} blocked.\n`;
+        if (cu.doing?.length)   additionalContext += `\n_In progress:_\n  ${sanitize(line(cu.doing))}\n`;
+        if (cu.testing?.length) additionalContext += `\n_In testing:_\n  ${sanitize(line(cu.testing))}\n`;
+        if (cu.failed?.length)  additionalContext += `\n_Failed (needs attention):_\n  ${sanitize(line(cu.failed))}\n`;
+        if (cu.blocked?.length) additionalContext += `\n_Blocked:_\n  ${sanitize(line(cu.blocked))}\n`;
+        if (cu.todo?.length)    additionalContext += `\n_Queued (todo):_\n  ${sanitize(line(cu.todo))}\n`;
+        if (cu.recentDone?.length) additionalContext += `\n_Recently done:_\n  ${sanitize(line(cu.recentDone))}\n`;
+      }
+      if (gitlog) additionalContext += `\n**Recent commits:**\n\`\`\`\n${sanitize(gitlog)}\n\`\`\`\n`;
+      additionalContext += `\nFor a synthesized "where are we" narrative on demand, run \`trantor catchup\`.\n`;
+      additionalContext += `</trantor-project-state>\n`;
+      process.stderr.write(`[trantor] injected project-state catch-up for ${project} (${cu?.total || 0} cards)\n`);
+    }
+  } catch {}
+
   // Pending handoff? A prior session hit the context limit and left a handoff for this
-  // project — take over with this fresh full window instead of starting cold.
-  const handoff = loadPendingHandoff(basename(projectDir));
+  // project — take over with this fresh full window instead of starting cold. On a
+  // compaction-triggered start, DON'T claim it (that's the same session that wrote it;
+  // claiming would steal it from the freshly-spawned window) — show it for continuity only.
+  const isCompact = source === "compact";
+  const handoff = loadPendingHandoff(basename(projectDir), { claim: !isCompact });
   if (handoff) {
-    process.stderr.write(`[trantor] loaded pending handoff ${handoff.id}\n`);
+    process.stderr.write(`[trantor] ${isCompact ? "showing (not claiming, compact)" : "loaded"} pending handoff ${handoff.id}\n`);
     additionalContext += `<trantor-handoff id="${sanitize(handoff.id)}" from="${sanitize(handoff.machine)}" trigger="${sanitize(handoff.trigger)}">\n`;
     additionalContext += `🔄 **You are taking over from a prior session that hit its context limit.** This is a fresh full window. Resume the work below — the prior session's summary, git state, and a pointer to its full transcript (searchable; Foundation/Gaia has it ingested) follow. Continue from "OPEN THREADS & NEXT STEPS"; do not restart from scratch.\n\n`;
     additionalContext += `## Handoff summary\n${sanitize(handoff.summary)}\n`;
