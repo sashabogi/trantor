@@ -229,7 +229,12 @@ export function terminalWindowForTty(tty) {
     end repeat
     return ""
   end tell`;
-  try { return execSync(`osascript -e ${JSON.stringify(osa)}`, { encoding: "utf8", timeout: 3000 }).trim(); } catch { return ""; }
+  // Pass the MULTI-LINE script via stdin, NOT `-e ${JSON.stringify(osa)}`: a single -e arg keeps the
+  // newlines as literal "\n" (JSON escapes them, the shell's double-quotes don't expand them), so
+  // osascript saw `…"Terminal"\n  repeat…` and died with "27:28: Expected end of line but found unknown
+  // token". stdin gives it real newlines. (This silently returned "" for years → callers always fell
+  // through to frontTerminalWindow, which after a spawn grabs the WRONG window.)
+  try { return execSync(`osascript`, { input: osa, encoding: "utf8", timeout: 3000 }).trim(); } catch { return ""; }
 }
 
 // Arm the baton-close watcher: a DETACHED process that waits until the fresh session consumes the
@@ -301,14 +306,28 @@ export function frontTerminalWindow() {
   } catch { return { id: "", tty: "" }; }
 }
 
-// MANUAL one-command baton: spawn the fresh session (no dialog) + arm the close of THIS window once the
-// fresh one consumes the handoff. Window detection: controlling tty first (if invoked with one), else
-// Terminal's front window. Returns { spawned, armed }.
-export function spawnBaton({ projectDir, handoffFile, conf = readConfig() }) {
-  const spawned = spawnFresh(projectDir);
-  if (!spawned) return { spawned: false, armed: false };
+// Resolve the ORIGINAL window (id + tty) to close on takeover. Controlling tty first (if we were
+// invoked with one — heartbeat/precompact have it), else the CURRENT front window (a manual baton
+// runs through the headless Bash tool with no tty; the session you're looking at is frontmost).
+// MUST be called BEFORE spawning the fresh session — once the new window opens it becomes frontmost
+// and this would capture IT instead.
+export function resolveOriginalWindow() {
   let tty = controllingTty(), windowId = tty ? terminalWindowForTty(tty) : "";
   if (!windowId) { const f = frontTerminalWindow(); windowId = f.id; tty = f.tty; }
-  const armed = windowId ? armBatonClose(handoffFile, windowId, tty, conf) : false;
+  return { windowId, tty };
+}
+
+// MANUAL one-command baton: spawn the fresh session (no dialog) + arm the close of THIS window once the
+// fresh one consumes the handoff. Returns { spawned, armed, windowId }.
+// ORDER IS LOAD-BEARING: resolve the original window BEFORE spawning. Reversing it is the
+// "successor closes ITSELF" bug — the just-opened window is frontmost, the front-window fallback
+// captures it, and baton-close then kills the FRESH session the moment it takes over. The seams
+// (_resolveWindow/_spawnFresh/_armClose) exist so the ordering can be regression-tested headlessly.
+export function spawnBaton({ projectDir, handoffFile, conf = readConfig(),
+  _resolveWindow = resolveOriginalWindow, _spawnFresh = spawnFresh, _armClose = armBatonClose }) {
+  const { windowId, tty } = _resolveWindow();   // original window FIRST, while it's still frontmost
+  const spawned = _spawnFresh(projectDir);
+  if (!spawned) return { spawned: false, armed: false, windowId: "" };
+  const armed = windowId ? _armClose(handoffFile, windowId, tty, conf) : false;
   return { spawned, armed, windowId };
 }

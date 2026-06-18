@@ -12,6 +12,7 @@ import { spawnSync } from "node:child_process";
 import {
   contextUsage, resolveWindow, warnFrac,
   alreadyHandedOff, markHandedOff, buildSummary, verbatimRecentTail, writeHandoff, spawnBaton,
+  resolveOriginalWindow,
 } from "./hooks/lib/handoff.mjs";
 
 let pass = 0, fail = 0;
@@ -73,6 +74,26 @@ const b = spawnBaton({ projectDir: tmp, handoffFile: "/tmp/nope.json" });
 ok("spawnBaton is a no-op (no window) when spawning is disabled", b.spawned === false && b.armed === false);
 delete process.env.TRANTOR_NO_HANDOFF_SPAWN;
 delete process.env.TRANTOR_NO_SCROOGE;
+
+// --- regression: baton must close the ORIGINAL window, never the freshly-spawned successor ---
+// Bug (2026-06-18): spawnBaton spawned the fresh session FIRST, then detected the window to close.
+// The new window was frontmost, so the front-window fallback captured IT — and baton-close killed
+// the SUCCESSOR the instant it took over ("you're supposed to shut yourself off, not the other one").
+// Lock the order: resolve the original window BEFORE spawning, and arm the close against it.
+{
+  const order = [];
+  const b2 = spawnBaton({
+    projectDir: tmp, handoffFile: "/tmp/x.json",
+    _resolveWindow: () => { order.push("detect"); return { windowId: "W-ORIGINAL", tty: "/dev/ttysORIG" }; },
+    _spawnFresh: () => { order.push("spawn"); return true; },
+    _armClose: (hf, id) => { order.push(`arm:${id}`); return true; },
+  });
+  ok("spawnBaton resolves the original window BEFORE spawning the fresh one", order[0] === "detect" && order[1] === "spawn");
+  ok("spawnBaton arms the close against the ORIGINAL window, not the successor", order[2] === "arm:W-ORIGINAL" && b2.windowId === "W-ORIGINAL");
+  // resolveOriginalWindow is callable and shaped right (returns {windowId,tty}); headless → empty, never throws
+  const rw = resolveOriginalWindow();
+  ok("resolveOriginalWindow returns a {windowId,tty} shape", typeof rw.windowId === "string" && typeof rw.tty === "string");
+}
 
 // --- sessionstart: compact must NOT consume; startup MUST consume ---
 const proj = "hoff-selftest-" + process.pid;

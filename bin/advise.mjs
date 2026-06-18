@@ -14,6 +14,7 @@ import { readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
 import { execSync } from "node:child_process";
+import { pathToFileURL } from "node:url";
 
 const H = homedir();
 const read = (p, fb) => { try { return JSON.parse(readFileSync(p, "utf8")); } catch { return fb; } };
@@ -134,7 +135,9 @@ export function advise(input, world = loadWorld()) {
 }
 
 // ---- CLI ----
-if (import.meta.url === `file://${process.argv[1]}`) {
+// is-main guard via PROPERLY ENCODED file URL — a hand-built `file://${argv[1]}` silently no-ops when the
+// install path contains a URL-reserved char (e.g. a SPACE in ".../Application Support/..."). See profile.mjs.
+if (import.meta.url === pathToFileURL(process.argv[1]).href) {
   let input;
   if (process.argv.includes("--demo")) {
     input = { task: "neon asteroids game", packages: [

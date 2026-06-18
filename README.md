@@ -42,6 +42,41 @@ claude plugin install trantor
 That's it. (Prefer source? `git clone https://github.com/sashabogi/trantor && cd trantor &&
 npm install && bash deploy/setup.sh` — identical result.)
 
+## What gets installed — footprint & safety
+
+Trantor is a **local-first multi-agent orchestrator with a built-in cost router** — not a cloud
+service, and not an agent that runs off on its own. Here is *exactly* what the two steps above put
+on your machine, so you (or an agent installing it for you) can see the whole footprint up front:
+
+**`npm install -g trantor` + `trantor setup`**
+- The `trantor` CLI — one global npm package.
+- `~/.agent-bus/` — a single local directory holding **all** state: `config.json`, the board data
+  (`bus.json`), and `.env` for any **provider API keys you choose to add** (e.g. `DEEPSEEK_API_KEY`).
+  Nothing in here ever leaves your machine.
+- A local **hub** at `http://127.0.0.1:4477` — **loopback only**, not reachable from the network. On
+  macOS it's a launchd agent (`com.trantor.hub`) so it restarts at login; on Linux you run it yourself.
+- The economics engine (Scrooge) into `~/.local/bin` — the cost ledger and cheap-model router.
+
+**`claude plugin install trantor`** adds, inside Claude Code only:
+- An MCP server (`relay`) exposing the `relay_*` tools, plus the `/trantor:*` skills.
+- Hooks on four events — local Node scripts that only POST to the loopback hub: **SessionStart**
+  (register the session + show the live roster), **PostToolUse** (presence heartbeat + mirror your
+  TodoWrite list onto the board), **PreCompact** (write a handoff before the context window compacts),
+  **SubagentStop** (record each sub-agent's notional cost on the board).
+
+**What it does *not* do:** no cloud, no accounts, no telemetry, nothing phones home; it never uploads
+your code or keys; it doesn't touch other CLIs' credentials — Codex, Gemini, Kimi and DeepSeek are
+ones *you* already installed and signed into, and Trantor just coordinates them locally. The optional
+API keys in `~/.agent-bus/.env` are used only to call the cheap models *you* opted into for routing.
+
+**Remove everything, anytime:**
+```bash
+claude plugin uninstall trantor                  # drop the MCP tools, skills, and hooks
+launchctl bootout gui/$(id -u)/com.trantor.hub   # stop the hub service (macOS)
+rm -f ~/Library/LaunchAgents/com.trantor.hub.plist
+rm -rf ~/.agent-bus                              # delete all local state + keys
+```
+
 ## What to expect on first run
 
 `trantor setup` ends with the **doctor** — an honest map of where you stand:

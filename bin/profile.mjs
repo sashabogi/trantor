@@ -12,9 +12,10 @@
 //                  for real builds; the plan's quota is a scarce budget)
 //   max | max-5x | max-20x | ultra — high-tier subscription (cost moot; context horizon decides)
 //   none         — provider not available on this machine
-import { readFileSync, writeFileSync, existsSync } from "node:fs";
-import { join } from "node:path";
+import { readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
+import { join, dirname } from "node:path";
 import { homedir } from "node:os";
+import { pathToFileURL } from "node:url";
 
 const FILE = join(homedir(), ".agent-bus", "profile.json");
 const KNOWN = ["claude", "codex", "gemini", "kimi", "deepseek", "opencode"];
@@ -32,7 +33,11 @@ export function loadProfile() {
 export function tierOf(profile, provider) { return TIER(profile?.providers?.[provider]?.plan); }
 
 const [, , cmd, ...args] = process.argv;
-if (import.meta.url === `file://${process.argv[1]}`) {
+// is-main guard: compare against a PROPERLY ENCODED file URL. A hand-built `file://${argv[1]}` is raw
+// text, but import.meta.url is percent-encoded — so any URL-reserved char in the install path (most
+// commonly a SPACE, e.g. ".../Application Support/...") made this false and silently skipped main (exit 0,
+// no write). pathToFileURL is the canonical Node idiom. See regression in test-handoff.mjs / test.mjs.
+if (import.meta.url === pathToFileURL(process.argv[1]).href) {
   const prof = loadProfile();
   prof.providers ||= {};
   if (cmd === "set") {
@@ -42,6 +47,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
       prof.providers[prov.toLowerCase()] = { plan: plan.toLowerCase(), tier: TIER(plan) };
     }
     prof.updated = new Date().toISOString().slice(0, 10);
+    mkdirSync(dirname(FILE), { recursive: true });   // `set` creates its own ~/.agent-bus if absent
     writeFileSync(FILE, JSON.stringify(prof, null, 2) + "\n");
     console.log("profile saved →", FILE);
   } else if (cmd && cmd !== "show") {
