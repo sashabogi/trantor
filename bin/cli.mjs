@@ -27,6 +27,7 @@ switch (cmd) {
   case "watch":   run("bin/relay-watch.mjs"); break;
   case "catchup": run("bin/catchup.mjs"); break;
   case "backfill": run("bin/git-backfill.mjs"); break;
+  case "handoff": run("bin/baton.mjs"); break;
   case "ui": {
     let url = "http://127.0.0.1:4477";
     try { url = JSON.parse(readFileSync(join(process.env.HOME || "", ".agent-bus", "config.json"), "utf8")).url || url; } catch {}
@@ -48,6 +49,7 @@ switch (cmd) {
   trantor ui          open the live dashboard (board + flow views)
   trantor catchup     "where are we?" — the continuous board + git, with a synthesized brief
   trantor backfill    card past GIT work onto the board (solo commits that were never carded) — [--since "14 days ago"] [--dry-run]
+  trantor handoff     finish this session NOW: write a handoff, open a fresh session that takes over, and close this one (manual baton)
   trantor advise      ask the Advisor directly (JSON on stdin; --demo to see it)
   trantor hub         run the hub in the foreground (setup installs it as a service instead)
   trantor watch       live bus feed in the terminal

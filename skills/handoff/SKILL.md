@@ -1,9 +1,10 @@
 ---
 name: handoff
 description: |
-  Write a rich handoff for the CURRENT session so a fresh Claude Code session can take over
-  with a full new context window (instead of compacting). Use proactively when context is
-  getting full, or before ending, to pass the baton cleanly. Trigger: /trantor:handoff
+  Finish the CURRENT session in one move: write a rich model-authored handoff, open a fresh
+  full-window session that takes over (it auto-recaps the handoff), and close this one once the
+  fresh session has it — a clean baton pass, one session at a time. Use when you want to wrap up
+  and continue fresh on demand (not just at the compaction threshold). Trigger: /trantor:handoff
 user-invocable: true
 ---
 
@@ -23,14 +24,17 @@ re-deriving context, and save it so the next session in this project auto-loads 
    - **KEY FILES & LOCATIONS** — exact paths, commands, URLs, IDs the successor needs
    - **GOTCHAS** — anything that will bite if forgotten
 
-2. Save it by piping the markdown to the helper:
+2. Save it AND pass the baton in one shot — pipe the markdown to the helper with `--baton`:
    ```bash
-   cat << 'HANDOFF' | node "$(dirname "$(command -v claude)")/../<plugin>/bin/write-handoff.mjs"
+   cat << 'HANDOFF' | node "${CLAUDE_PLUGIN_ROOT}/bin/write-handoff.mjs" --baton
    <your handoff markdown>
    HANDOFF
    ```
-   (Or call the plugin's `bin/write-handoff.mjs` directly via its `${CLAUDE_PLUGIN_ROOT}`.)
+   `--baton` writes the handoff, opens a FRESH session that takes over (it auto-recaps the handoff
+   on open), and closes THIS Terminal window once the fresh session has consumed it — a true baton
+   pass, one session at a time. (Omit `--baton` to only write the handoff without spawning/closing.)
+   It's safe: the original window is closed ONLY after the fresh session confirms it took over, and
+   never if the fresh session fails to start.
 
-3. Tell the user: open a fresh terminal + `claude` in this same project directory — the
-   SessionStart hook will detect the handoff and the new session takes over with a full window.
-   (The PreCompact hook also writes one automatically at the compaction threshold.)
+3. Tell the user briefly: "Handoff written — a fresh session is opening and will recap it; this
+   window closes once it takes over." Then stop (the baton will close this session shortly).

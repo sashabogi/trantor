@@ -11,7 +11,7 @@ import { homedir, tmpdir } from "node:os";
 import { spawnSync } from "node:child_process";
 import {
   contextUsage, resolveWindow, warnFrac,
-  alreadyHandedOff, markHandedOff, buildSummary, verbatimRecentTail, writeHandoff,
+  alreadyHandedOff, markHandedOff, buildSummary, verbatimRecentTail, writeHandoff, spawnBaton,
 } from "./hooks/lib/handoff.mjs";
 
 let pass = 0, fail = 0;
@@ -67,6 +67,11 @@ ok("summary includes the SESSION END", summary.includes(LAST));
 ok("verbatimRecentTail returns the exact recent text", verbatimRecentTail(transcript).includes(LAST));
 const { record: hrec } = writeHandoff({ projectDir: tmp, sessionId: "vt", transcript, trigger: "context-warn" });
 ok("writeHandoff embeds the verbatim in-flight block", /Verbatim recent exchange/.test(hrec.summary) && hrec.summary.includes(LAST));
+// manual baton: when spawning is disabled it must NOT touch any window (spawned:false, armed:false)
+process.env.TRANTOR_NO_HANDOFF_SPAWN = "1";
+const b = spawnBaton({ projectDir: tmp, handoffFile: "/tmp/nope.json" });
+ok("spawnBaton is a no-op (no window) when spawning is disabled", b.spawned === false && b.armed === false);
+delete process.env.TRANTOR_NO_HANDOFF_SPAWN;
 delete process.env.TRANTOR_NO_SCROOGE;
 
 // --- sessionstart: compact must NOT consume; startup MUST consume ---

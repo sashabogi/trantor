@@ -274,3 +274,41 @@ export function maybeSpawn(projectDir, conf = readConfig()) {
     return true;
   } catch (e) { process.stderr.write(`[trantor] maybeSpawn error: ${e?.message}\n`); return false; }
 }
+
+// The self-announcing fresh session command (single-quoted so it survives osascript→shell un-escaped).
+export const RECAP_CMD = "claude 'Recap the handoff you just took over — what was the previous session doing, and where do we continue? Then wait for me.'";
+
+// Spawn a fresh self-announcing session WITHOUT the dialog (manual handoff — the user already decided).
+export function spawnFresh(projectDir) {
+  try {
+    if (process.platform !== "darwin" || process.env.TRANTOR_NO_HANDOFF_SPAWN === "1") return false;
+    const script = join(HERE, "..", "..", "bin", "open-session.sh");
+    if (!existsSync(script)) return false;
+    const child = spawn("/bin/bash", [script, projectDir, RECAP_CMD], { detached: true, stdio: "ignore" });
+    child.unref();
+    return true;
+  } catch { return false; }
+}
+
+// Terminal.app's front window (id + tty) — the fallback when there's no controlling tty (a manual
+// handoff runs through the headless Bash tool). The session you're looking at when you invoke it.
+export function frontTerminalWindow() {
+  if (process.platform !== "darwin") return { id: "", tty: "" };
+  try {
+    const out = execSync(`osascript -e ${JSON.stringify(`tell application "Terminal" to return (id of front window as string) & "|" & (tty of selected tab of front window)`)}`,
+      { encoding: "utf8", timeout: 3000 }).trim();
+    const [id, tty] = out.split("|"); return { id: id || "", tty: tty || "" };
+  } catch { return { id: "", tty: "" }; }
+}
+
+// MANUAL one-command baton: spawn the fresh session (no dialog) + arm the close of THIS window once the
+// fresh one consumes the handoff. Window detection: controlling tty first (if invoked with one), else
+// Terminal's front window. Returns { spawned, armed }.
+export function spawnBaton({ projectDir, handoffFile, conf = readConfig() }) {
+  const spawned = spawnFresh(projectDir);
+  if (!spawned) return { spawned: false, armed: false };
+  let tty = controllingTty(), windowId = tty ? terminalWindowForTty(tty) : "";
+  if (!windowId) { const f = frontTerminalWindow(); windowId = f.id; tty = f.tty; }
+  const armed = windowId ? armBatonClose(handoffFile, windowId, tty, conf) : false;
+  return { spawned, armed, windowId };
+}
