@@ -27,6 +27,7 @@ const me = `${hostId()}:${project}`;
 
 const themeOf = (s) => {
   let m;
+  if ((m = s.match(/^release:\s*v?(\d+\.\d+\.\d+)/i))) return "v" + m[1];     // release: v0.17.15 → v0.17.15 (one card per version)
   if ((m = s.match(/^[a-z]+\(([^)]+)\)\s*:/i))) return m[1].trim();           // feat(engine): → engine
   if ((m = s.match(/^([A-Za-z][\w &+/.]*?)\s*:/))) return m[1].trim();        // "Landing: …" → Landing
   if ((m = s.match(/^([A-Za-z][\w.+-]*)/))) return m[1];                      // first word
@@ -57,7 +58,11 @@ const ents = [...groups.entries()].sort((a, b) => a[1].latest - b[1].latest);
 let posted = 0, skipped = 0;
 for (const [theme, g] of ents) {
   const latest = g.commits.sort((a, b) => b.ts - a.ts)[0];
-  const subj = latest.subject.replace(/^[a-z]+\([^)]*\)\s*:\s*/i, "").replace(/^[A-Za-z][\w &+/.]*?:\s*/, "").slice(0, 70);
+  const subj = latest.subject
+    .replace(/^[a-z]+\([^)]*\)\s*:\s*/i, "")          // strip feat(scope):
+    .replace(/^[A-Za-z][\w &+/.]*?:\s*/, "")           // strip "release:" / "Landing:"
+    .replace(/^v?\d+\.\d+\.\d+\s*[—–-]\s*/, "")        // strip a leading "v0.17.15 — " (release version dup)
+    .slice(0, 70);
   const title = `${theme}: ${subj}${g.commits.length > 1 ? ` (+${g.commits.length - 1} more)` : ""}`.slice(0, 190);
   if (existing.has(title)) { skipped++; continue; }
   if (dry) { console.log(`+ [${new Date(g.latest).toISOString().slice(0, 10)}] ${theme.padEnd(20)} ${g.commits.length}c  ${title.slice(0, 64)}`); posted++; continue; }
