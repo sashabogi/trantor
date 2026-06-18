@@ -10,7 +10,7 @@ import { join, basename } from "node:path";
 import { homedir, hostname } from "node:os";
 import { execSync, spawnSync } from "node:child_process";
 import { advise } from "./bin/advise.mjs";
-import { resolveProject } from "./lib/project.mjs";
+import { resolveProject, hostId } from "./lib/project.mjs";
 import { z } from "zod";
 
 function relayUrl() {
@@ -28,7 +28,7 @@ const PROJECT = resolveProject(process.env.CLAUDE_PROJECT_DIR || process.cwd());
 // Identity: RELAY_SESSION wins; else RELAY_AGENT ("codex", "kimi", …) brands the session per-project
 // (set it once in the CLI's global MCP config — works in every project); else hostname:project.
 const SESSION = process.env.RELAY_SESSION
-  || (process.env.RELAY_AGENT ? `${process.env.RELAY_AGENT}:${PROJECT}` : `${hostname()}:${PROJECT}`);
+  || (process.env.RELAY_AGENT ? `${process.env.RELAY_AGENT}:${PROJECT}` : `${hostId()}:${PROJECT}`);
 let cursor = 0;
 
 async function api(method, path, payload) {
@@ -48,11 +48,19 @@ server.tool("relay_whoami", "Show this session's relay identity, project, and th
 });
 
 server.tool("relay_task_add", "Add a Kanban card to a project's board on the dashboard (what you're about to work on). Defaults: THIS project, assigned to you, status 'todo'. Pass `project` to target another board — e.g. when you orchestrate a crew that runs in a different directory than the one you launched Claude from. Keep the team's progress visible.",
-  { title: z.string().describe("short task title"), status: z.enum(["todo","doing","testing","failed","done","blocked"]).optional(), assignee: z.string().optional().describe("session id to assign (default: you)"), difficulty: z.enum(["easy","medium","hard"]).optional().describe("difficulty tag — drives model/agent routing (relay_advise) and shows on the board"), model: z.string().optional().describe("the model this card is routed to (from relay_advise routing, or the CLI default) — shown on the card"), deps: z.array(z.number()).optional().describe("card ids this card depends on — drawn as edges in the Flow view (e.g. integration depends on every crew card)"), project: z.string().optional().describe("board to add to (default: this session's project). Set to the crew's project when you orchestrate from a different directory") },
-  async ({ title, status, assignee, difficulty, model, deps, project }) => {
+  { title: z.string().describe("short task title"), status: z.enum(["todo","doing","testing","failed","done","blocked"]).optional(), assignee: z.string().optional().describe("session id to assign (default: you)"), difficulty: z.enum(["easy","medium","hard"]).optional().describe("difficulty tag — drives model/agent routing (relay_advise) and shows on the board"), model: z.string().optional().describe("the model this card is routed to (from relay_advise routing, or the CLI default) — shown on the card"), deps: z.array(z.number()).optional().describe("card ids this card depends on — drawn as branch edges in the Flow view (e.g. integration depends on every crew card)"), phase: z.string().optional().describe("phase/milestone this card belongs to (e.g. 'P5', 'Auth', 'Launch') — groups it in the Flow view's phase flowchart. Optional; otherwise inferred from the title prefix + time."), project: z.string().optional().describe("board to add to (default: this session's project). Set to the crew's project when you orchestrate from a different directory") },
+  async ({ title, status, assignee, difficulty, model, deps, phase, project }) => {
     const proj = project || PROJECT;
-    const { task } = await api("POST", "/task", { project: proj, title, status: status || "todo", assignee: assignee || SESSION, difficulty, model, deps, by: SESSION });
-    return { content: [{ type: "text", text: `card #${task.id} added to ${proj}: "${title}" [${task.status}]` }] };
+    const { task } = await api("POST", "/task", { project: proj, title, status: status || "todo", assignee: assignee || SESSION, difficulty, model, deps, phase, by: SESSION });
+    return { content: [{ type: "text", text: `card #${task.id} added to ${proj}: "${title}" [${task.status}]${phase?` · phase ${phase}`:""}` }] };
+  });
+
+server.tool("relay_phase_goal", "Set what a PHASE is for — its goal — shown as the phase header in the Flow view (overrides the theme auto-derived from card titles). Capture this when you plan a phase so the board says what each milestone needs to do, not just 'P5'. Phase keys match relay_task_add's `phase` (or the inferred title-prefix family like 'P5').",
+  { phase: z.string().describe("the phase key (e.g. 'P5', 'Auth', 'Launch')"), goal: z.string().describe("1-2 sentences: what this phase delivers + done-criteria"), project: z.string().optional().describe("board (default: this session's project)") },
+  async ({ phase, goal, project }) => {
+    const proj = project || PROJECT;
+    await api("POST", "/phase", { project: proj, phase, goal, by: SESSION });
+    return { content: [{ type: "text", text: `phase "${phase}" goal set for ${proj}` }] };
   });
 
 server.tool("relay_task_move", "Move a Kanban card as you progress: todo -> doing -> testing -> done. NEVER move straight to done: move to 'testing' when you finish, run the project's tests/typecheck, then 'done' only if green — or 'failed' (with a relay_send explaining what broke) if not. The orchestrator bounces failed cards back to doing. blocked = waiting on something external.",

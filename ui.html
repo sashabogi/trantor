@@ -107,9 +107,14 @@ main:not(.learn-open) .learn-body{display:none}
 .sortmode:hover{color:var(--mut)}
 .proj.idle .proj-h{opacity:.55;cursor:pointer}
 /* flow (DAG) view */
-.vtog{display:flex;gap:2px;margin-left:10px}
-.vbtn{font-size:10px;font-weight:700;letter-spacing:.05em;padding:2px 9px;border-radius:10px;border:1px solid var(--line);background:var(--card);color:var(--dim);cursor:pointer}
-.vbtn.on{color:var(--grn);border-color:#1d4a44;background:#0f1d1b}
+/* view switcher — a clearly-labelled segmented control so it doesn't disappear next to the model chips */
+.vtog{display:inline-flex;align-items:stretch;margin-left:12px;border:1px solid #34465f;border-radius:11px;overflow:hidden;background:#0c121e;flex:none}
+.vtog .vlbl{display:flex;align-items:center;font-size:8.5px;font-weight:800;letter-spacing:.09em;color:var(--mut);padding:0 8px;text-transform:uppercase;background:#131c2c;border-right:1px solid #34465f}
+.vbtn{font-size:10.5px;font-weight:800;letter-spacing:.04em;padding:4px 13px;border:0;border-left:1px solid #1f2839;background:transparent;color:#9fb0c4;cursor:pointer}
+.vbtn:first-of-type{border-left:0}
+.vbtn:hover{background:#172339;color:var(--tx)}
+.vbtn.on{color:#04110e;background:var(--grn)}
+.vbtn.on:hover{background:var(--grn);color:#04110e}
 .flowwrap{padding:14px 16px;overflow:auto}
 .flowwrap svg{display:block}
 .fnode{cursor:pointer}
@@ -165,6 +170,34 @@ main:not(.learn-open) .learn-body{display:none}
 .tlgl svg{flex:none}
 .tlwrap .fhint{position:absolute;right:10px;bottom:6px;z-index:3}
 .tlnode{cursor:pointer}
+/* FLOW v2 = horizontal orchestrator-rooted flowchart TREE. A spine runs left→right; each phase is a
+   ◇ plan node that fans OUT (drawn edges) to its crew/LLM card nodes, then converges INTO a ◆ integrate
+   node, which connects to the next phase. Agent is a node property, not the axis. Native horizontal scroll. */
+.pflowwrap{background:#0b1019;border-top:1px solid var(--line)}
+.finfo{background:#1a2030;border:1px solid var(--line);border-radius:8px;padding:7px 10px;font-size:11px;color:var(--mut);margin:10px 14px 0}
+.pflowwrap.gflow{position:relative;padding-bottom:22px}
+.gscroll{overflow-x:auto;overflow-y:hidden;padding:4px 0 2px}
+.gscroll svg{display:block}
+.gedge{fill:none;stroke:#33405c;stroke-width:1.6;opacity:.8}
+.gedge.done{stroke:var(--grn2);opacity:.5}
+.gspine{fill:none;stroke:#5a6b86;stroke-width:2.5}
+.gnode{cursor:default}
+.gnode[data-id]{cursor:pointer}
+.gnbox{fill:#101827;stroke:rgba(255,255,255,.12);stroke-width:1}
+.gnode[data-id]:hover .gnbox{stroke:rgba(255,255,255,.55);fill:#162032}
+.gnode.orch .gnbox{fill:#0e1730;stroke:#2c3a55;stroke-dasharray:4 3}
+.gnode.failed .gnbox,.gnode.blocked .gnbox{stroke:var(--red)}
+.gntext{fill:#eaf1fa;font-size:11px;font-family:ui-sans-serif,system-ui;pointer-events:none}
+.gnsub{fill:var(--mut);font-size:9.5px;font-family:ui-sans-serif,system-ui;pointer-events:none}
+.pfband{fill:#0c1320;opacity:.45}
+.pfband.alt{fill:#0e1626;opacity:.55}
+.pfbandtop{opacity:.12}
+.pfbandtop.done{fill:var(--grn2)}.pfbandtop.active{fill:#f0b24b}.pfbandtop.failed,.pfbandtop.blocked{fill:var(--red)}.pfbandtop.planned{fill:#46566f}
+.pflabel{font-size:16px;font-weight:800;font-family:ui-sans-serif,system-ui}
+.pflabel.done{fill:var(--grn2)}.pflabel.active{fill:#f0b24b}.pflabel.failed{fill:var(--red)}.pflabel.planned,.pflabel.blocked{fill:#aeb9c8}
+.pfcount{fill:var(--mut);font-size:10.5px;font-family:ui-sans-serif,system-ui}
+.pfsub{fill:#9fb0c4;font-size:10.5px;font-family:ui-sans-serif,system-ui}
+.pflowwrap .fhint{position:absolute;right:12px;bottom:5px}
 /* card detail modal — the full story of one card: status journey + the agent's own bus reports */
 .cmodal{position:fixed;inset:0;z-index:60;display:flex;align-items:center;justify-content:center;background:rgba(4,7,12,.62)}
 .cmpanel{background:var(--panel);border:1px solid var(--line);border-radius:14px;width:min(760px,93vw);max-height:84vh;display:flex;flex-direction:column;box-shadow:0 20px 64px rgba(0,0,0,.55)}
@@ -309,6 +342,7 @@ econ();setInterval(econ,15000);
 function poolOf(session){const b=brandOf(session);const k=b==='anthropic'?'claude':b==='openai'?'codex':b==='moonshot'?'kimi':b;return POOLS[k]||'';}
 const VIEWS = JSON.parse(localStorage.getItem("abViews") || "{}");
 let HISTORY = {};
+let PHASES = {};
 function setView(proj, v){ VIEWS[proj] = v; localStorage.setItem("abViews", JSON.stringify(VIEWS)); render(); }
 function toggleIdle(name){ if(!name)return; const s=new Set(JSON.parse(localStorage.getItem("abIdleOpen")||"[]")); s.has(name)?s.delete(name):s.add(name); localStorage.setItem("abIdleOpen",JSON.stringify([...s])); render(); }
 let armedDel=null,armedTs=0;   // pending ✕ confirmation (project name + when it was armed)
@@ -320,71 +354,104 @@ function moveProj(name,dir){
   [names[i],names[j]]=[names[j],names[i]];
   localStorage.setItem("abOrder",JSON.stringify(names)); render();
 }
-// FLOW = development timeline. Cards laid left→right in BUILD ORDER (even slots — bursts don't cram,
-// idle gaps don't waste space), one lane per agent, each card a readable FIXED-width block segmented
-// by the time it spent in each status. Natively scrollable left/right; lane labels pinned in a left
-// gutter; dependency edges converge = merges. (No proportional-time slivers, no zoom cut-off.)
-const TLSCROLL = {};
+// FLOW v2 = the project's TRUE shape: an orchestrator-rooted phase flowchart. The orchestrator is the
+// spine (the left rail); each PHASE blooms — ◇ plan → the crew fans out to its cards → ◆ converge —
+// then the next phase begins. Agent identity is a node badge, not the axis. Phases come from the hub
+// (/phases: title-prefix + time-cluster; deps-sparse boards fall back to time + a visible notice).
+// Each crew node keeps its full /card detail on click.
 function flowHTML(pt, proj){
-  if (!pt.length) return '<div class="empty">no cards yet</div>';
-  const NOW = Date.now();
+  const data = PHASES[proj];
+  if (!data) return '<div class="pflowwrap"><div class="empty">loading flow…</div></div>';
+  if (!data.phases || !data.phases.length) return '<div class="pflowwrap"><div class="empty">no cards yet</div></div>';
   const SCOL = { todo:'#3a4458', doing:'#4a90d9', testing:'#f59e0b', failed:'#ef6a6a', blocked:'#ef6a6a', done:'#14b8a6' };
-  const GUT = 96, TH = 24, ROW = 42, BAR = 26, SLOT = 188, CW = 172, PAD = 10;
-  const cards = pt.map(t => {
-    const h = (t.history && t.history.length) ? t.history.slice() : [{ to: t.status || 'todo', ts: t.ts || NOW }];
-    return { t, h, tStart: h[0].ts || t.ts || NOW, tEnd: (t.status === 'done' ? (h[h.length-1].ts || NOW) : NOW) };
+  const NW = 168, NH = 34, RG = 11, CG = 64, PGAP = 76, MT = 64, MB = 22;
+  const stackH = n => n*NH + Math.max(0,n-1)*RG;
+  // Per-phase layout: cards spread by their INTRA-PHASE dependency depth. Independent cards share
+  // column 0 (parallel, hanging off the plan node); a card that depends on another lands one column
+  // to the right of its parent (a branch/chain). Leaves (no dependents) converge into integrate.
+  const layouts = data.phases.map(ph => {
+    const work = [...ph.crew.map(n => ({ ...n, _orch:false })), ...ph.orchestrators.map(n => ({ ...n, _orch:true }))];
+    const cards = work.length ? work : [{ id:0, title:'(no cards)', status:ph.status, agent:'', synthetic:true, deps:[] }];
+    const idSet = new Set(cards.map(c => c.id)); const byId = {}; cards.forEach(c => byId[c.id] = c);
+    const parentsOf = c => (c.deps || []).filter(d => idSet.has(d) && d !== c.id);
+    const dmemo = {}; const depth = (c, seen) => {
+      if (dmemo[c.id] != null) return dmemo[c.id];
+      seen = seen || new Set(); if (seen.has(c.id)) return 0; seen.add(c.id);
+      const ps = parentsOf(c); const d = ps.length ? Math.max(...ps.map(p => depth(byId[p], seen))) + 1 : 0;
+      return (dmemo[c.id] = d);
+    };
+    cards.forEach(c => c._d = depth(c));
+    const maxDepth = Math.max(0, ...cards.map(c => c._d));
+    const cols = []; for (let d = 0; d <= maxDepth; d++) cols[d] = cards.filter(c => c._d === d);
+    const hasChild = c => cards.some(o => parentsOf(o).includes(c.id));
+    return { ph, cards, byId, parentsOf, hasChild, maxDepth, cols };
   });
-  cards.sort((a,b)=> a.tStart - b.tStart || a.t.id - b.t.id);
-  cards.forEach((c,i)=> c.col = i);
-  const byId = {}; for (const c of cards) byId[c.t.id] = c;
-  const laneKey = t => (String(t.assignee || 'unassigned').split(':')[0] || 'unassigned');
-  const laneFirst = {}; for (const c of cards){ const k = laneKey(c.t); if (laneFirst[k] == null) laneFirst[k] = c.col; }
-  const lanes = [...new Set(cards.map(c => laneKey(c.t)))].sort((a,b)=> laneFirst[a]-laneFirst[b]);
-  const laneIdx = Object.fromEntries(lanes.map((k,i)=>[k,i]));
-  const X = col => GUT + col*SLOT + PAD;
-  const laneY = i => TH + i*ROW + (ROW-BAR)/2;
-  const totalW = GUT + cards.length*SLOT + 24, totalH = TH + lanes.length*ROW + 8;
-  let svg = '';
-  for (let i=0;i<lanes.length;i++){ const yb = TH + i*ROW;
-    if (i%2) svg += `<rect class="tlband" x="${GUT}" y="${yb}" width="${totalW-GUT}" height="${ROW}"/>`;
-    svg += `<line class="tlsep" x1="${GUT}" y1="${yb}" x2="${totalW}" y2="${yb}"/>`;
-  }
-  // build-order time markers (every few cards, label that card's real timestamp) — scroll with the chart
-  const step = Math.max(1, Math.round(cards.length/12));
-  for (let i=0;i<cards.length;i+=step){ const xx = X(cards[i].col) + CW/2;
-    svg += `<line class="tlgrid" x1="${xx}" y1="${TH}" x2="${xx}" y2="${totalH-6}"/>`;
-    svg += `<text class="tlt" x="${xx}" y="15">${esc(new Date(cards[i].tStart).toLocaleString([], {month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'}))}</text>`;
-  }
-  for (const c of cards) for (const d of (c.t.deps||[])){ const A = byId[d]; if (!A) continue;
-    const x1 = X(A.col)+CW, y1 = laneY(laneIdx[laneKey(A.t)])+BAR/2, x2 = X(c.col), y2 = laneY(laneIdx[laneKey(c.t)])+BAR/2, mx = (x1+x2)/2;
-    svg += `<path class="tledge ${A.t.status==='done'?'done':''}" marker-end="url(#tarr)" d="M${x1},${y1} C${mx},${y1} ${mx},${y2} ${x2},${y2}"/>`;
-  }
-  for (const c of cards){ const xx = X(c.col), yy = laneY(laneIdx[laneKey(c.t)]), dur = Math.max(1, c.tEnd - c.tStart);
-    svg += `<g class="tlnode ${c.t.status}" data-id="${c.t.id}"><title>${esc(c.t.title)} — ${c.t.status} · @${esc(laneKey(c.t))}\n${esc(new Date(c.tStart).toLocaleString())}</title>`;
-    let sx = xx;
-    for (let i=0;i<c.h.length;i++){ const s0 = c.h[i].ts || c.tStart, s1 = (i+1<c.h.length) ? (c.h[i+1].ts||s0) : c.tEnd;
-      const w = Math.max(1.5, (Math.max(0, s1-s0)/dur)*CW);
-      svg += `<rect x="${sx.toFixed(1)}" y="${yy}" width="${w.toFixed(1)}" height="${BAR}" fill="${SCOL[c.h[i].to]||'#3a4458'}"/>`; sx += w;
+  const maxColCount = Math.max(1, ...layouts.flatMap(L => L.cols.map(c => c.length)));
+  const Y0 = MT + stackH(maxColCount)/2;               // shared horizontal spine midline
+  const totalH = MT + stackH(maxColCount) + MB;
+  const gnode = (x, y, title, status, id, orch, agent) => {
+    const stripe = SCOL[status] || '#3a4458';
+    return `<g class="gnode ${status}${orch?' orch':''}"${id?` data-id="${id}"`:''}>`
+      + `<rect class="gnbox" x="${x}" y="${y}" width="${NW}" height="${NH}" rx="8"/>`
+      + `<rect x="${x}" y="${y}" width="4" height="${NH}" rx="2" fill="${stripe}"/>`
+      + `<text class="gntext" x="${x+11}" y="${y+(agent?15:23)}">${esc(title.slice(0,24))}${title.length>24?'…':''}</text>`
+      + (agent?`<text class="gnsub" x="${x+11}" y="${y+29}">@${esc(agent)}</text>`:'')
+      + `<title>${esc(title)}${agent?' · @'+esc(agent):''} — ${status}</title></g>`;
+  };
+  const gedge = (x1,y1,x2,y2,done) => { const mx=(x1+x2)/2;
+    return `<path class="gedge${done?' done':''}" d="M${x1},${y1} C${mx},${y1} ${mx},${y2} ${x2},${y2}"/>`; };
+  let x = 26, svg = '', bands = '', prevIntRight = null, pi = 0;
+  for (const L of layouts){
+    const { ph, cards, byId, parentsOf, hasChild, maxDepth, cols } = L;
+    const planX = x, planY = Y0 - NH/2;
+    const colX = d => planX + (d+1)*(NW+CG);
+    const intX = colX(maxDepth + 1), intY = Y0 - NH/2;
+    // per-phase background band (alternating) so each phase reads as one region; collected separately
+    // so all bands paint BEHIND the edges/nodes. The header sits inside the band's top strip.
+    const bx = planX - 16, bw = (intX + NW + 16) - bx;
+    bands += `<rect class="pfband ${pi%2?'alt':''}" x="${bx}" y="2" width="${bw}" height="${totalH-4}" rx="10"/>`
+          +  `<rect class="pfbandtop ${ph.status}" x="${bx}" y="2" width="${bw}" height="${MT-12}" rx="10"/>`;
+    // header: phase label + the GOAL (explicit) or derived THEME — "what this phase is about"
+    const desc = (ph.goal || ph.theme || '').slice(0, Math.max(28, Math.floor(bw/7)));
+    svg += `<text class="pflabel ${ph.status}" x="${planX}" y="${MT-38}">${esc(ph.label)}</text>`
+        +  `<text class="pfcount" x="${planX}" y="${MT-38}" dx="${(esc(ph.label).length*9)+12}">${ph.status} · ${ph.total} card${ph.total>1?'s':''}</text>`
+        +  `<text class="pfsub" x="${planX}" y="${MT-21}">${esc(desc)}</text>`;
+    if (prevIntRight != null) svg += `<path class="gspine" marker-end="url(#garr)" d="M${prevIntRight},${Y0} L${planX},${Y0}"/>`;
+    svg += gnode(planX, planY, '◇ '+ph.label+' · plan', ph.status, null, true, '');
+    // position every card: x by dep-depth column, y stacked + centered on the spine within its column
+    const pos = {};
+    cols.forEach((colCards, d) => {
+      const startY = Y0 - stackH(colCards.length)/2;
+      colCards.forEach((c, k) => { pos[c.id] = { x: colX(d), y: startY + k*(NH+RG) }; });
+    });
+    for (const c of cards){
+      const p = pos[c.id], parents = parentsOf(c);
+      if (parents.length) for (const pid of parents){ const pp = pos[pid]; if (pp) svg += gedge(pp.x+NW, pp.y+NH/2, p.x, p.y+NH/2, byId[pid].status==='done'); }
+      else svg += gedge(planX+NW, planY+NH/2, p.x, p.y+NH/2, ph.status==='done');   // root → plan
+      svg += gnode(p.x, p.y, (c.id?'#'+c.id+' ':'')+c.title, c.status, c.synthetic?null:c.id, !!c._orch, c.agent||'');
+      if (!hasChild(c)) svg += gedge(p.x+NW, p.y+NH/2, intX, intY+NH/2, c.status==='done');   // leaf → integrate
     }
-    svg += `<rect class="tlbar" x="${xx}" y="${yy}" width="${CW}" height="${BAR}" rx="5"/>`;
-    svg += `<text class="tltitle" x="${xx+7}" y="${yy+BAR/2+4}">${esc(c.t.title.slice(0,25))}${c.t.title.length>25?'…':''}</text>`;
-    svg += `</g>`;
+    svg += gnode(intX, intY, '◆ integrate', ph.status, null, true, '');
+    prevIntRight = intX + NW;
+    x = intX + NW + PGAP;
+    pi++;
   }
-  const defs = `<defs><marker id="tarr" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="6" markerHeight="6" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="#14b8a6"/></marker></defs>`;
-  let gut = `<div class="tlgut" style="width:${GUT}px"><div class="tlguth" style="height:${TH}px">time →</div>`;
-  for (const k of lanes) gut += `<div class="tlgl" style="height:${ROW}px">${iconFor(k,13)}<span>${esc(k)}</span></div>`;
-  gut += `</div>`;
-  return `<div class="tlwrap" data-proj="${esc(proj)}" style="height:${Math.min(totalH+14, 540)}px">`
-    + `<div class="tlscroll" data-proj="${esc(proj)}"><svg width="${totalW}" height="${totalH}">${defs}${svg}</svg></div>`
-    + gut + `<div class="fhint">build order →  ·  scroll left/right</div></div>`;
+  const totalW = x + 10;
+  const defs = `<defs><marker id="garr" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="6" markerHeight="6" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="#46566f"/></marker></defs>`;
+  const notice = data.sparse ? `<div class="finfo">⚠ inferred phases — few cards carry explicit tags (P1/P5…), so they're grouped by time + title. Prefix cards (e.g. "P6 …") for sharper phases.</div>` : '';
+  return `<div class="pflowwrap gflow" data-proj="${esc(proj)}">${notice}`
+    + `<div class="gscroll" data-proj="${esc(proj)}"><svg width="${totalW}" height="${totalH}">${defs}${bands}${svg}</svg></div>`
+    + `<div class="fhint">orchestrator → crew → integrate · phase by phase  ·  scroll left/right →</div></div>`;
 }
+const GSCROLL = {};
 function wireTimeline(el){
-  el.querySelectorAll('.tlscroll').forEach(s => {
+  // FLOW v2 graph: click a card node to open its full /card detail; preserve horizontal scroll per project.
+  el.querySelectorAll('.gscroll').forEach(s => {
     const proj = s.dataset.proj;
-    if (TLSCROLL[proj] != null) s.scrollLeft = TLSCROLL[proj];
-    s.onscroll = () => { TLSCROLL[proj] = s.scrollLeft; };
+    if (GSCROLL[proj] != null) s.scrollLeft = GSCROLL[proj];
+    s.onscroll = () => { GSCROLL[proj] = s.scrollLeft; };
   });
-  el.querySelectorAll('.tlnode').forEach(n => n.onclick = () => openCard(+n.dataset.id));
+  el.querySelectorAll('.gnode[data-id]').forEach(n => n.onclick = () => openCard(+n.dataset.id));
 }
 // Card detail modal: one card's FULL story — its status journey interleaved with the agent's own bus
 // reports (what it did, why, how). Click any card in the FLOW timeline to open it.
@@ -531,7 +598,10 @@ async function render(){
       HISTORY[p.project] = h.events || [];
     } catch(e) {}
   });
-  await Promise.all(histP);
+  const phaseP = projects.filter(p => VIEWS[p.project] === "flow").map(async p => {
+    try { PHASES[p.project] = await (await fetch(`/phases?project=${encodeURIComponent(p.project)}`)).json(); } catch(e) {}
+  });
+  await Promise.all([...histP, ...phaseP]);
 
   // hub was reset (server empty but feed shows history) -> clear the stale client-side feed
   if(!msgs.length&&$('#feed').childElementCount>0){$('#feed').innerHTML='';nmsg=0;}
@@ -586,7 +656,7 @@ async function render(){
     const ph=p.phase||'';
     const brief=p.brief?`<span class="brief">${esc(p.brief)}</span>`:`<span class="brief dim">— no brief yet · an agent sets it with relay_project_brief</span>`;
     const view = VIEWS[p.project] || "board";
-    const vtog = `<div class="vtog"><button class="vbtn ${view==="board"?"on":""}" data-proj="${esc(p.project)}" data-view="board">BOARD</button><button class="vbtn ${view==="flow"?"on":""}" data-proj="${esc(p.project)}" data-view="flow">FLOW</button><button class="vbtn ${view==="timeline"?"on":""}" data-proj="${esc(p.project)}" data-view="timeline">TIMELINE</button></div>`;
+    const vtog = `<div class="vtog"><span class="vlbl">view</span><button class="vbtn ${view==="board"?"on":""}" data-proj="${esc(p.project)}" data-view="board">BOARD</button><button class="vbtn ${view==="flow"?"on":""}" data-proj="${esc(p.project)}" data-view="flow">FLOW</button><button class="vbtn ${view==="timeline"?"on":""}" data-proj="${esc(p.project)}" data-view="timeline">TIMELINE</button></div>`;
     const ctl=`<span class="mv"><b class="mvup" data-proj="${esc(p.project)}" title="move up">▲</b><b class="mvdn" data-proj="${esc(p.project)}" title="move down">▼</b></span>${p.idle===true?`<span class="pdel" data-proj="${esc(p.project)}" title="forget this project (cards, peers, brief) — it returns if an agent registers it again">✕</span>`:''}`;
 
     return `<div class="proj${p.idle===true?' idle':''}" data-projname="${esc(p.project)}"${p.idle===true?` data-idleproj="${esc(p.project)}"`:''}>`+

@@ -10,7 +10,7 @@ import { readFileSync, writeFileSync, existsSync, readdirSync } from "node:fs";
 import { join, basename } from "node:path";
 import { homedir, hostname } from "node:os";
 import { execSync } from "node:child_process";
-import { resolveProject } from "../lib/project.mjs";
+import { resolveProject, hostId } from "../lib/project.mjs";
 
 // Load the most recent UNCONSUMED handoff for this project (written by precompact.mjs
 // / the heartbeat early-warning). `claim` marks it consumed so exactly one session
@@ -78,7 +78,7 @@ try {
   }
   const project = resolveProject(projectDir);
   const session = process.env.RELAY_SESSION
-    || (process.env.RELAY_AGENT ? `${process.env.RELAY_AGENT}:${project}` : `${hostname()}:${project}`);
+    || (process.env.RELAY_AGENT ? `${process.env.RELAY_AGENT}:${project}` : `${hostId()}:${project}`);
   const url = relayUrl();
 
   // register self + post an initial presence status (no LLM turn — instant for others to read)

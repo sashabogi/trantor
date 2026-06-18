@@ -19,7 +19,7 @@ import { homedir, hostname } from "node:os";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { readConfig, contextUsage, warnFrac, alreadyHandedOff } from "./lib/handoff.mjs";
-import { resolveProject } from "../lib/project.mjs";
+import { resolveProject, hostId } from "../lib/project.mjs";
 
 const HEARTBEAT_MS = Number(process.env.RELAY_HEARTBEAT_MS || 60 * 1000);
 const FETCH_TIMEOUT_MS = Number(process.env.RELAY_HEARTBEAT_TIMEOUT_MS || 1500);
@@ -83,7 +83,7 @@ async function main(stdinRaw) {
   // identity, else a RELAY_AGENT brand ("codex","kimi",…) per project, else hostname:project.
   const project = resolveProject(projectDir);
   const session = process.env.RELAY_SESSION
-    || (process.env.RELAY_AGENT ? `${process.env.RELAY_AGENT}:${project}` : `${hostname()}:${project}`);
+    || (process.env.RELAY_AGENT ? `${process.env.RELAY_AGENT}:${project}` : `${hostId()}:${project}`);
 
   // Throttle: only act if HEARTBEAT_MS has elapsed since the last tick for THIS session.
   const stamp = join(homedir(), ".agent-bus", `hb-${session.replace(/[^A-Za-z0-9_.-]/g, "_")}.stamp`);

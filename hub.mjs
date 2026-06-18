@@ -50,11 +50,11 @@ function scanTelemetry() {
 
 // peers: { session: { lastSeen, status, project } } ; tasks: kanban cards
 // projectMeta: { project: { brief, by, updated } } — the "what & why" blurb per project
-let state = { messages: [], peers: {}, seq: 0, tasks: [], taskSeq: 0, projectMeta: {}, lessons: [], cardEvents: [], cardEventsBackfilled: false, aliases: {} };
+let state = { messages: [], peers: {}, seq: 0, tasks: [], taskSeq: 0, projectMeta: {}, lessons: [], cardEvents: [], cardEventsBackfilled: false, aliases: {}, phaseMeta: {} };
 try {
   if (existsSync(DATA)) {
     const loaded = JSON.parse(readFileSync(DATA, "utf8"));
-    state = { messages: loaded.messages || [], peers: {}, seq: loaded.seq || 0, tasks: loaded.tasks || [], taskSeq: loaded.taskSeq || 0, projectMeta: loaded.projectMeta || {}, lessons: loaded.lessons || [], cardEvents: Array.isArray(loaded.cardEvents) ? loaded.cardEvents : [], cardEventsBackfilled: !!loaded.cardEventsBackfilled, aliases: (loaded.aliases && typeof loaded.aliases === "object") ? loaded.aliases : {} };
+    state = { messages: loaded.messages || [], peers: {}, seq: loaded.seq || 0, tasks: loaded.tasks || [], taskSeq: loaded.taskSeq || 0, projectMeta: loaded.projectMeta || {}, lessons: loaded.lessons || [], cardEvents: Array.isArray(loaded.cardEvents) ? loaded.cardEvents : [], cardEventsBackfilled: !!loaded.cardEventsBackfilled, aliases: (loaded.aliases && typeof loaded.aliases === "object") ? loaded.aliases : {}, phaseMeta: (loaded.phaseMeta && typeof loaded.phaseMeta === "object") ? loaded.phaseMeta : {} };
     for (const [s, v] of Object.entries(loaded.peers || {})) // migrate old numeric form
       state.peers[s] = typeof v === "number" ? { lastSeen: v, status: "", project: "" } : { lastSeen: v.lastSeen || 0, status: v.status || "", project: v.project || "" };
   }
@@ -154,6 +154,95 @@ function appendCardEvent(type, task, by, from = null, to = null) {
   if (state.cardEvents.length > 5000) state.cardEvents.splice(0, state.cardEvents.length - 5000);
 }
 
+// --- FLOW v2: derive a project's PHASES (the orchestrator-rooted flowchart spine) ---
+// Real data is deps-sparse (most cards carry no deps), so we DON'T derive phases from the
+// dependency graph. Instead: a card's phase = its title-prefix family (P5a/P5b → "P5",
+// CBv2-1/CBfix → "CB", FA-comp1 → "FA", …) when present; otherwise it's clustered with its
+// time-neighbours into a "Setup N" round (gap > 8h opens a new round). Phases are ordered by
+// first-seen. The orchestrator (host session, "machine:project") vs crew ("brand:project")
+// split gives each phase its fan-out actors; the plan/integrate spine nodes are synthetic
+// because real per-phase orchestrator cards are rare. `sparse` flags a board that's mostly
+// un-prefixed (the UI shows an "inferred phases" notice — never a silent blob).
+const PHASE_GAP_MS = 8 * 60 * 60 * 1000;
+const agentBrand = (a) => { const s = String(a || ""); const i = s.indexOf(":"); return i > 0 ? s.slice(0, i) : (s || ""); };
+// Crew = a known helper-CLI brand; anything else with a brand (a machine hostname like
+// "MacBook-Pro-M1.local" or "MacBookPro.hsd1.fl.comcast.net", or a generic "host") is the
+// orchestrator. Brand-based (not hostname-pattern) so it's robust to hostname instability.
+const CREW_BRANDS = /^(codex|gemini|kimi|deepseek|claude|qwen|grok|glm|mistral|llama)$/i;
+const isOrchAssignee = (a) => { const b = agentBrand(a); return !!b && !CREW_BRANDS.test(b); };
+function phaseFamily(title) {
+  const s = String(title || "").trim();
+  // "P5a Structured…", "P4-construction", "P3 Quantity" → P5/P4/P3 (group all P5a/b/c/d together).
+  // The trailing letter and the separator must NOT be swallowed by \b (P5a has none between 5 and a).
+  let m;
+  if ((m = s.match(/^P(\d+)[a-z]?(?:[\s\-:.]|$)/i))) return "P" + m[1];
+  if (/^CBv?\d/i.test(s) || /^CBfix/i.test(s) || /^CB[\s\-:.]/i.test(s)) return "CB";
+  if (/^FA[\s\-:.\d]/i.test(s)) return "FA";
+  if (/^RunCost/i.test(s)) return "RunCost";
+  return null;
+}
+function phaseStatus(counts) {
+  if (counts.failed) return "failed";
+  if (counts.doing || counts.testing) return "active";
+  const total = counts.todo + counts.doing + counts.testing + counts.failed + counts.done + counts.blocked;
+  if (total > 0 && counts.done === total) return "done";
+  if (counts.blocked) return "blocked";
+  if (counts.todo === total) return "planned";
+  return "active";
+}
+// A human "what is this phase about" line derived from the cards themselves: strip the phase-prefix
+// token, take the subject before the first em/en-dash, dedupe, join the first few. Retroactive — no
+// captured plan needed. An explicit phase goal (phaseMeta) overrides this in the /phases endpoint.
+function phaseTheme(cards) {
+  const subs = [];
+  const seen = new Set();
+  for (const c of cards) {
+    let s = String(c.title || "")
+      // drop the phase token INCLUDING any sub-index (P3.5, P5a, CBv2-1) + separators, so no "1"/".5" leaks
+      .replace(/^\s*(P\d+[a-z]?(?:[.\-]\d+)?|CBv?\d+(?:[.\-]\d+)?|CBfix|FA[-\s:]?\w*|RunCost)[\s:\-–—#]*/i, "")
+      .split(/[—–]| - /)[0].trim();                                                    // subject before a dash
+    if (!s) continue;
+    const k = s.toLowerCase().slice(0, 22);
+    if (seen.has(k)) continue;
+    seen.add(k); subs.push(s.slice(0, 48));
+    if (subs.length >= 3) break;
+  }
+  return subs.join(" · ").slice(0, 120);
+}
+function derivePhases(tasks) {
+  const sorted = [...tasks].sort((a, b) => (a.ts || 0) - (b.ts || 0));
+  let miscRound = 0, lastMiscTs = 0;
+  for (const t of sorted) {
+    // an explicit phase tag (set at plan time) wins; else infer from the title prefix; else time-cluster.
+    const explicit = t.phase && String(t.phase).trim();
+    const fam = explicit || phaseFamily(t.title);
+    if (fam) { t._phase = fam; }
+    else {
+      if (!lastMiscTs || (t.ts || 0) - lastMiscTs > PHASE_GAP_MS) miscRound++;
+      lastMiscTs = t.ts || lastMiscTs;
+      t._phase = `Setup ${miscRound}`;
+    }
+  }
+  const byPhase = new Map();
+  for (const t of sorted) { if (!byPhase.has(t._phase)) byPhase.set(t._phase, []); byPhase.get(t._phase).push(t); }
+  const phases = [...byPhase.entries()].map(([key, cards]) => {
+    const counts = { todo:0, doing:0, testing:0, failed:0, done:0, blocked:0 };
+    for (const c of cards) counts[c.status] = (counts[c.status] || 0) + 1;
+    const node = (c) => ({ id: c.id, title: c.title, assignee: c.assignee || "", agent: agentBrand(c.assignee), model: c.model || "", status: c.status, difficulty: c.difficulty || "", ts: c.ts || 0, updated: c.updated || c.ts || 0, deps: Array.isArray(c.deps) ? c.deps : [] });
+    const crew = cards.filter(c => !isOrchAssignee(c.assignee)).map(node);
+    const orchestrators = cards.filter(c => isOrchAssignee(c.assignee)).map(node);
+    return {
+      key, label: key, theme: phaseTheme(cards),
+      start: Math.min(...cards.map(c => c.ts || 0)), end: Math.max(...cards.map(c => c.updated || c.ts || 0)),
+      counts, total: cards.length, status: phaseStatus(counts),
+      agents: [...new Set(crew.map(c => c.agent).filter(Boolean))],
+      crew, orchestrators,
+    };
+  }).sort((a, b) => a.start - b.start);
+  const miscCount = sorted.filter(t => /^Setup /.test(t._phase)).length;
+  return { phases, total: sorted.length, sparse: sorted.length > 0 && miscCount / sorted.length > 0.5, derivedBy: "title-prefix + time-cluster" };
+}
+
 const server = http.createServer(async (req, res) => {
   const u = new URL(req.url, "http://x"); const q = Object.fromEntries(u.searchParams); const P = u.pathname;
   try {
@@ -170,6 +259,7 @@ const server = http.createServer(async (req, res) => {
       const st0 = ["todo","doing","testing","failed","done","blocked"].includes(b.status) ? b.status : "todo";
       const t = { id: ++state.taskSeq, project: canon(String(b.project || "").slice(0,80)), title: String(b.title||"").slice(0,200),
         assignee: b.assignee || "", status: st0,
+        phase: String(b.phase || "").slice(0, 40),   // explicit phase tag (FLOW v2) — wins over title-prefix inference
         difficulty: ["easy","medium","hard"].includes(b.difficulty) ? b.difficulty : "",
         model: String(b.model || "").slice(0, 60),
         deps: Array.isArray(b.deps) ? [...new Set(b.deps.map(Number).filter(n => Number.isInteger(n) && n > 0))].slice(0, 20) : [],
@@ -322,6 +412,28 @@ const server = http.createServer(async (req, res) => {
         blocked: pick("blocked", 8), todo: pick("todo", 10), recentDone: pick("done", 8),
         lastActivity,
       });
+    }
+    // FLOW v2: the orchestrator-rooted phase flowchart. Returns the project's cards grouped into
+    // ordered phases (title-prefix + time-cluster), each with its crew fan-out + orchestrator nodes.
+    if (req.method === "GET" && P === "/phases") {
+      const proj = canon(q.project || "");
+      if (!proj) return json(res, 400, { error: "project required" });
+      const mine = state.tasks.filter(t => canon(t.project) === proj);
+      const out = derivePhases(mine);
+      for (const p of out.phases) p.goal = state.phaseMeta[`${proj}::${p.key}`]?.goal || "";   // explicit goal overrides the derived theme
+      return json(res, 200, { project: proj, brief: state.projectMeta[proj]?.brief || "", ...out });
+    }
+    // Set a phase's explicit GOAL — what this phase needs to do (the orchestrator captures this at plan
+    // time, like a per-phase brief). Surfaces in the FLOW v2 header in place of the derived theme.
+    if (req.method === "POST" && P === "/phase") {
+      const b = await body(req);
+      const proj = canon(String(b.project || "").slice(0, 80)), phase = String(b.phase || "").slice(0, 40);
+      if (!proj || !phase) return json(res, 400, { error: "project + phase required" });
+      const k = `${proj}::${phase}`; const m = state.phaseMeta[k] || {};
+      if (b.goal !== undefined) m.goal = String(b.goal).slice(0, 400);
+      m.by = b.by || m.by || ""; m.updated = now();
+      state.phaseMeta[k] = m; dirty = true;
+      return json(res, 200, { ok: true, project: proj, phase, goal: m.goal || "" });
     }
     if (req.method === "GET" && P === "/projects") {        // project-grouped view
       prunePeers();

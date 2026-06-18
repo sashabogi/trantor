@@ -274,6 +274,30 @@ try {
   ok("catchup lists in-progress work", cu.doing.some(t => t.title === "host card"));
   ok("catchup accepts the aliased key too", (await api("/catchup?project=myapp")).project === "myapp.ai");
 
+  console.log("scenario: /phases — FLOW v2 orchestrator-rooted phase derivation (title-prefix + time)");
+  await api("/task", { project: "flowproj", title: "P1a backend schema", assignee: "codex:flowproj", by: "host:flowproj" });
+  await api("/task", { project: "flowproj", title: "P1b frontend", assignee: "gemini:flowproj", by: "host:flowproj" });
+  await api("/task", { project: "flowproj", title: "P2 wire it up", assignee: "kimi:flowproj", by: "host:flowproj" });
+  await api("/task", { project: "flowproj", title: "CBv2-1 cost book layout", assignee: "deepseek:flowproj", by: "host:flowproj" });
+  await api("/task", { project: "flowproj", title: "audit the existing code", assignee: "host:flowproj", by: "host:flowproj" }); // misc → Setup, orchestrator-owned
+  const ph = await api("/phases?project=flowproj");
+  const labels = ph.phases.map(p => p.label);
+  ok("phases group P1a+P1b into one P1 phase", ph.phases.find(p => p.label === "P1")?.total === 2);
+  ok("P-prefix, CB and a misc Setup phase all derived", labels.includes("P1") && labels.includes("P2") && labels.includes("CB") && labels.some(l => /^Setup/.test(l)));
+  ok("every card lands in exactly one phase (no blob, no loss)", ph.phases.reduce((s, p) => s + p.total, 0) === 5);
+  ok("crew vs orchestrator split per phase", ph.phases.find(p => p.label === "P1").crew.length === 2 && ph.phases.find(p => /^Setup/.test(p.label)).orchestrators.length === 1);
+  ok("a P1 node carries its agent brand + status for the flowchart", ph.phases.find(p => p.label === "P1").crew.every(n => n.agent && n.status));
+  ok("phases ordered by first-seen time", ph.phases.every((p, i, a) => i === 0 || a[i - 1].start <= p.start));
+  ok("a phase carries a derived THEME from its card titles (not just the token)", /backend|frontend/i.test(ph.phases.find(p => p.label === "P1").theme || ""));
+  // an explicit phase tag wins over title-prefix inference
+  await api("/task", { project: "flowproj", title: "ship the thing", phase: "Launch", assignee: "codex:flowproj", by: "host:flowproj" });
+  const ph2 = await api("/phases?project=flowproj");
+  ok("an explicit phase tag groups the card under that phase", ph2.phases.find(p => p.label === "Launch")?.total === 1);
+  // an explicit phase GOAL overrides the derived theme in the header
+  await api("/phase", { project: "flowproj", phase: "P1", goal: "stand up the backend + UI" });
+  const ph3 = await api("/phases?project=flowproj");
+  ok("POST /phase sets an explicit goal returned by /phases", ph3.phases.find(p => p.label === "P1")?.goal === "stand up the backend + UI");
+
 } finally {
   hub.kill("SIGKILL");
   rmSync(FAKE_HOME, { recursive: true, force: true });
