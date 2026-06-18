@@ -470,25 +470,26 @@ function wireTimeline(el){
       view.style.left = (100 * s.scrollLeft / w) + '%';
       view.style.width = Math.min(100, 100 * s.clientWidth / w) + '%';
     };
-    s.onscroll = () => { GSCROLL[proj] = s.scrollLeft; syncView(); };
+    s.onscroll = () => { GSCROLL[proj] = s.scrollLeft; flowBusy = Date.now(); syncView(); }; // flag busy so render() defers
     requestAnimationFrame(syncView);
     if (map) {
       const scrubTo = (clientX) => {                           // map a pointer x onto a scroll position (centered)
         const r = map.getBoundingClientRect();
         const ratio = Math.max(0, Math.min(1, (clientX - r.left) / r.width));
+        flowBusy = Date.now();                                 // keep render() off the board WHILE scrubbing
         s.scrollLeft = ratio * s.scrollWidth - s.clientWidth / 2;
       };
-      let dragging = false;
+      let scrubbing = false;
       map.addEventListener('pointerdown', e => {
-        dragging = true;
+        scrubbing = true; flowBusy = Date.now();
         try { map.setPointerCapture?.(e.pointerId); } catch {}
         const seg = e.target.closest && e.target.closest('.gmapseg');   // click a phase segment → jump to that phase
         if (seg && seg.dataset.cx != null) s.scrollLeft = +seg.dataset.cx - 40; else scrubTo(e.clientX);
         e.preventDefault();
       });
-      map.addEventListener('pointermove', e => { if (dragging) scrubTo(e.clientX); });
-      const end = () => { dragging = false; };
-      map.addEventListener('pointerup', end); map.addEventListener('pointercancel', end);
+      map.addEventListener('pointermove', e => { if (scrubbing) scrubTo(e.clientX); });
+      const end = () => { scrubbing = false; flowBusy = Date.now(); };   // freshen lock on release so the next render is deferred ~1s
+      map.addEventListener('pointerup', end); map.addEventListener('pointercancel', end); map.addEventListener('lostpointercapture', end);
     }
   });
   el.querySelectorAll('.gnode[data-id]').forEach(n => n.onclick = () => openCard(+n.dataset.id));
@@ -526,6 +527,8 @@ async function openCard(id){
 }
 function closeCard(){ const el=$('#cardmodal'); el.style.display='none'; el.innerHTML=''; if(cardEsc){ document.removeEventListener('keydown', cardEsc); cardEsc=null; } }
 let dragging = null;   // suppresses re-render mid-gesture
+let flowBusy = 0;      // timestamp of the last FLOW scrub/scroll — render() defers while you interact
+                       // (the 2.5s poll / SSE rebuild was replacing the scrubber DOM mid-drag → freeze)
 function saveCam(proj, cam){ const c = JSON.parse(localStorage.getItem("abFlowCam") || "{}"); c[proj] = cam; localStorage.setItem("abFlowCam", JSON.stringify(c)); }
 function wireFlow(el){
   el.querySelectorAll(".flowwrap").forEach(w => {
@@ -671,7 +674,8 @@ async function render(){
     return SEEN.indexOf(a.project)-SEEN.indexOf(b.project);   // stable first-seen order
   });
   const el=$('#boards');
-  if(dragging)return;                                  // never rebuild mid-gesture
+  if(dragging)return;                                  // never rebuild mid-gesture (project drag / pan)
+  if(Date.now()-flowBusy < 1000){ clearTimeout(render._t); render._t=setTimeout(render,1100); return; } // ...nor mid-scrub/scroll; catch up shortly after
   if(!projects.length){el.innerHTML='<div class="empty big">no projects yet — agents register a project on connect</div>';return;}
   const idleOpen=new Set(JSON.parse(localStorage.getItem("abIdleOpen")||"[]"));
   const projBlock=p=>{
