@@ -11,7 +11,7 @@ import { homedir, tmpdir } from "node:os";
 import { spawnSync } from "node:child_process";
 import {
   contextUsage, resolveWindow, warnFrac,
-  alreadyHandedOff, markHandedOff, buildSummary,
+  alreadyHandedOff, markHandedOff, buildSummary, verbatimRecentTail, writeHandoff,
 } from "./hooks/lib/handoff.mjs";
 
 let pass = 0, fail = 0;
@@ -45,7 +45,7 @@ const win = contextUsage(transcript, { contextWindow: 1_000_000 });
 ok("window declared → frac computed", win && Math.abs(win.frac - 0.910) < 0.01);
 ok("resolveWindow honors config.contextWindow", resolveWindow("claude-opus-4-8", { contextWindow: 200000 }) === 200000);
 ok("resolveWindow honors a [1m] model marker", resolveWindow("claude-opus-4-8[1m]", {}) === 1_000_000);
-ok("warnFrac default 0.85", warnFrac({}) === 0.85);
+ok("warnFrac default 0.90 (baton pass fires at 90%)", warnFrac({}) === 0.90);
 ok("warnFrac config override", warnFrac({ contextWarnFrac: 0.9 }) === 0.9);
 
 // --- per-session guard (shared by heartbeat + precompact) ---
@@ -63,6 +63,10 @@ process.env.TRANTOR_NO_SCROOGE = "1";
 const summary = buildSummary(transcript);
 ok("summary includes the SESSION START (not just the tail)", summary.includes(FIRST));
 ok("summary includes the SESSION END", summary.includes(LAST));
+// baton pass: the handoff record must carry a VERBATIM recent-exchange block (exact in-flight state)
+ok("verbatimRecentTail returns the exact recent text", verbatimRecentTail(transcript).includes(LAST));
+const { record: hrec } = writeHandoff({ projectDir: tmp, sessionId: "vt", transcript, trigger: "context-warn" });
+ok("writeHandoff embeds the verbatim in-flight block", /Verbatim recent exchange/.test(hrec.summary) && hrec.summary.includes(LAST));
 delete process.env.TRANTOR_NO_SCROOGE;
 
 // --- sessionstart: compact must NOT consume; startup MUST consume ---

@@ -6,8 +6,8 @@
 // full window. The new session's SessionStart hook loads the handoff. This is the
 // at-the-wall backstop; the heartbeat hook can also fire this earlier when the
 // context window size is known (see hooks/lib/handoff.mjs).
-import { readConfig, writeHandoff, pingBus, maybeSpawn,
-         contextUsage, alreadyHandedOff, markHandedOff } from "./lib/handoff.mjs";
+import { readConfig, writeHandoff, pingBus, maybeSpawn, armBatonClose,
+         contextUsage, alreadyHandedOff, markHandedOff, controllingTty, terminalWindowForTty } from "./lib/handoff.mjs";
 import { basename } from "node:path";
 
 function readStdin() {
@@ -37,7 +37,11 @@ try {
     process.stderr.write(`[trantor] fresh session already spawned for this window — handoff refreshed only\n`);
   } else if (maybeSpawn(projectDir, conf)) {
     markHandedOff(sessionId, cur);
-    process.stderr.write(`[trantor] fresh-session prompt launched (PreCompact)\n`);
+    // baton pass: arm the close of THIS window once the fresh session takes over (we have the tty here)
+    const tty = controllingTty();
+    const windowId = tty ? terminalWindowForTty(tty) : "";
+    const armed = windowId ? armBatonClose(file, windowId, tty, conf) : false;
+    process.stderr.write(`[trantor] fresh-session spawned (PreCompact)${armed ? ` · baton-close armed for window ${windowId}` : ""}\n`);
   }
 } catch (err) {
   process.stderr.write(`[trantor] precompact error: ${err?.message || err}\n`);

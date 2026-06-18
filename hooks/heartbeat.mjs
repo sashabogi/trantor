@@ -18,7 +18,7 @@ import { join, basename, dirname } from "node:path";
 import { homedir, hostname } from "node:os";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { readConfig, contextUsage, warnFrac, alreadyHandedOff } from "./lib/handoff.mjs";
+import { readConfig, contextUsage, warnFrac, alreadyHandedOff, controllingTty, terminalWindowForTty } from "./lib/handoff.mjs";
 import { resolveProject, hostId } from "../lib/project.mjs";
 
 const HEARTBEAT_MS = Number(process.env.RELAY_HEARTBEAT_MS || 60 * 1000);
@@ -56,8 +56,12 @@ async function maybeEarlyWarn(stdinRaw, session) {
     try { writeFileSync(inflight, String(Date.now())); } catch {}
 
     const projectDir = process.env.CLAUDE_PROJECT_DIR || process.cwd();
-    process.stderr.write(`[trantor] context ${Math.round(usage.frac * 100)}% of ${usage.window} — launching early handoff\n`);
-    const child = spawn(process.execPath, [join(HERE, "handoff-now.mjs"), projectDir, sessionId, transcript, "context-warn"],
+    // Detect THIS session's Terminal window NOW (the hook has the controlling tty; the detached worker
+    // won't) so the baton-close can replace this exact window once the fresh session takes over.
+    const tty = controllingTty();
+    const windowId = tty ? terminalWindowForTty(tty) : "";
+    process.stderr.write(`[trantor] context ${Math.round(usage.frac * 100)}% of ${usage.window} — baton pass (window ${windowId || "?"})\n`);
+    const child = spawn(process.execPath, [join(HERE, "handoff-now.mjs"), projectDir, sessionId, transcript, "context-warn", windowId, tty],
       { detached: true, stdio: "ignore" });
     child.unref();
   } catch {}

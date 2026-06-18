@@ -75,8 +75,8 @@ export function resolveWindow(model = "", conf = readConfig()) {
 }
 
 export function warnFrac(conf = readConfig()) {
-  const f = Number(process.env.RELAY_CONTEXT_WARN_FRAC || conf.contextWarnFrac || 0.85);
-  return f > 0 && f < 1 ? f : 0.85;
+  const f = Number(process.env.RELAY_CONTEXT_WARN_FRAC || conf.contextWarnFrac || 0.90);
+  return f > 0 && f < 1 ? f : 0.90;   // baton pass fires at 90% — runway to summarize + hand off before the wall
 }
 
 // ---- per-session guard (shared by both paths) -------------------------------
@@ -176,6 +176,13 @@ export function buildSummary(transcriptPath) {
   return `*(no summarizer available — representative transcript digest)*\n\n${convo.slice(-12000)}`;
 }
 
+// The exact recent exchange, VERBATIM (not summarized/sampled) — so a baton-pass handoff carries the
+// precise in-flight state (e.g. the live cs_live_… URL, the exact decision point) even if the scrooge
+// narrative times out on a huge transcript. This is what lets the fresh session truly continue, not guess.
+export function verbatimRecentTail(transcript, chars = 7000) {
+  try { return collectTurns(transcript).join("\n\n").slice(-chars); } catch { return ""; }
+}
+
 // ---- write + announce + spawn ----------------------------------------------
 export function writeHandoff({ projectDir, sessionId, transcript, trigger, summary }) {
   const projectName = basename(projectDir);
@@ -183,17 +190,61 @@ export function writeHandoff({ projectDir, sessionId, transcript, trigger, summa
   const stamp = nowSec() || Date.now();
   let gitStatus = "";
   try { gitStatus = execSync("git -C " + JSON.stringify(projectDir) + " status --short 2>/dev/null | head -30", { encoding: "utf8" }).trim(); } catch {}
+  const narrative = summary ?? buildSummary(transcript);
+  const tail = verbatimRecentTail(transcript);
   const record = {
     id: `${projectName}-${stamp}`,
     project: projectDir, projectName, machine: hostname(),
     session_id: sessionId || "", trigger: trigger || "auto",
     transcript_path: transcript || "", stamp: Number(stamp) || 0,
-    summary: summary ?? buildSummary(transcript),
+    // narrative + a verbatim recent-exchange block so exact in-flight state always survives
+    summary: narrative + (tail ? `\n\n---\n## Verbatim recent exchange (exact in-flight state — continue from here)\n${tail}` : ""),
     gitStatus, consumed: false,
   };
   const file = join(HANDOFF_DIR, `${record.id}.json`);
   writeFileSync(file, JSON.stringify(record, null, 2));
   return { file, record };
+}
+
+// --- baton pass: the original session's Terminal window (macOS), so the fresh session can replace it ---
+// Walk the process tree to the controlling tty (the hook itself may show "??" but its parent claude
+// owns the Terminal's tty). Returns "/dev/ttysNNN" or "".
+export function controllingTty() {
+  for (const pid of [process.pid, process.ppid, getPpid(process.ppid)]) {
+    if (!pid) continue;
+    try { const t = execSync(`ps -o tty= -p ${pid}`, { encoding: "utf8" }).trim(); if (t && t !== "??" && t !== "?") return "/dev/" + t; } catch {}
+  }
+  return "";
+}
+function getPpid(pid) { if (!pid) return 0; try { return Number(execSync(`ps -o ppid= -p ${pid}`, { encoding: "utf8" }).trim()) || 0; } catch { return 0; } }
+
+// Find the Terminal.app window id whose selected tab is on `tty` — the window to close on takeover.
+export function terminalWindowForTty(tty) {
+  if (process.platform !== "darwin" || !tty) return "";
+  const osa = `tell application "Terminal"
+    repeat with w in windows
+      try
+        if (tty of selected tab of w) is "${tty}" then return (id of w) as string
+      end try
+    end repeat
+    return ""
+  end tell`;
+  try { return execSync(`osascript -e ${JSON.stringify(osa)}`, { encoding: "utf8", timeout: 3000 }).trim(); } catch { return ""; }
+}
+
+// Arm the baton-close watcher: a DETACHED process that waits until the fresh session consumes the
+// handoff (consumed:true), then closes the original Terminal window. Never closes blind: aborts on
+// timeout (fresh never showed) and re-validates the window's tty before closing.
+export function armBatonClose(handoffFile, originalWindowId, originalTty, conf = readConfig()) {
+  try {
+    if (process.platform !== "darwin" || !originalWindowId) return false;
+    if (process.env.TRANTOR_NO_BATON_CLOSE === "1" || conf.batonClose === false) return false;
+    const closer = join(HERE, "..", "..", "bin", "baton-close.mjs");
+    if (!existsSync(closer)) return false;
+    const child = spawn(process.execPath, [closer, handoffFile, String(originalWindowId), originalTty || ""], { detached: true, stdio: "ignore" });
+    child.unref();
+    return true;
+  } catch { return false; }
 }
 
 export async function pingBus(projectName, id, conf = readConfig()) {
