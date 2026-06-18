@@ -228,7 +228,7 @@ function derivePhases(tasks) {
   const phases = [...byPhase.entries()].map(([key, cards]) => {
     const counts = { todo:0, doing:0, testing:0, failed:0, done:0, blocked:0 };
     for (const c of cards) counts[c.status] = (counts[c.status] || 0) + 1;
-    const node = (c) => ({ id: c.id, title: c.title, assignee: c.assignee || "", agent: agentBrand(c.assignee), model: c.model || "", status: c.status, difficulty: c.difficulty || "", ts: c.ts || 0, updated: c.updated || c.ts || 0, deps: Array.isArray(c.deps) ? c.deps : [] });
+    const node = (c) => ({ id: c.id, title: c.title, assignee: c.assignee || "", agent: agentBrand(c.assignee), model: c.model || "", status: c.status, difficulty: c.difficulty || "", ts: c.ts || 0, updated: c.updated || c.ts || 0, deps: Array.isArray(c.deps) ? c.deps : [], costKind: c.costKind || "", costUsd: (typeof c.costUsd === "number") ? c.costUsd : null, source: c.source || "" });
     const crew = cards.filter(c => !isOrchAssignee(c.assignee)).map(node);
     const orchestrators = cards.filter(c => isOrchAssignee(c.assignee)).map(node);
     return {
@@ -525,6 +525,39 @@ const server = http.createServer(async (req, res) => {
         out.windows.lifetime = out.lifetime;
         // back-compat: `scrooge` is the window older dashboards read (honor ?hours= if passed)
         out.scrooge = q.hours ? rollup(rows.filter(c => c.ts >= nowS - Number(q.hours) * 3600)) : out.windows["24h"];
+      } catch {}
+      // --- card-based costs (FLOW v2): the orchestrator's OWN work, by costKind ---
+      // NOTIONAL (Claude sub-agents/orchestrator — plan-covered) is kept STRICTLY SEPARATE from REAL
+      // spend (Scrooge). We never sum them into one headline — that would imply we paid for plan-covered
+      // tokens. Crew is subscription (no per-task $). Card ts is in ms (the scrooge ledger is in seconds).
+      try {
+        const WINDOWS_MS = { "24h": 864e5, week: 7 * 864e5, month: 30 * 864e5, quarter: 90 * 864e5, year: 365 * 864e5 };
+        const costCards = state.tasks.filter(t => t.costKind || t.costUsd != null);
+        const rollupCards = cards => {
+          const byKind = {};
+          for (const t of cards) {
+            const k = t.costKind || "other";
+            const e = byKind[k] ||= { count: 0, usd: 0, tokens_in: 0, tokens_out: 0, cache_read: 0, cache_write: 0, by_model: {}, hasUsd: false };
+            e.count++;
+            if (typeof t.costUsd === "number") { e.usd += t.costUsd; e.hasUsd = true; }
+            if (t.tokens) { e.tokens_in += t.tokens.input || 0; e.tokens_out += t.tokens.output || 0; e.cache_read += t.tokens.cacheRead || 0; e.cache_write += t.tokens.cacheWrite || 0; }
+            if (t.model) { const m = e.by_model[t.model] ||= { count: 0, usd: 0 }; m.count++; m.usd += t.costUsd || 0; }
+          }
+          for (const e of Object.values(byKind)) { e.usd = +e.usd.toFixed(4); e.usd = e.hasUsd ? e.usd : null; }
+          return byKind;
+        };
+        out.costKinds = {};
+        const nowMs = now();
+        for (const [k, ms] of Object.entries(WINDOWS_MS)) out.costKinds[k] = rollupCards(costCards.filter(t => (t.ts || 0) >= nowMs - ms));
+        out.costKinds.lifetime = rollupCards(costCards);
+        // per-project notional totals (subagent+orchestrator) so the dashboard can scope it like reliability
+        const perProject = {};
+        for (const t of costCards) {
+          if (typeof t.costUsd !== "number") continue;
+          if (t.costKind !== "subagent-notional" && t.costKind !== "orchestrator-notional") continue;
+          perProject[canon(t.project)] = +((perProject[canon(t.project)] || 0) + t.costUsd).toFixed(4);
+        }
+        out.notionalByProject = perProject;
       } catch {}
       return json(res, 200, out);
     }

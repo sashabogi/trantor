@@ -318,6 +318,14 @@ try {
     model: "claude-sonnet-4-6", effort: "medium", tokens: { input: 26, output: 7616, cacheWrite: 209810, cacheRead: 1016405 }, by: "host:ccproj" });
   ok("hub stores costKind + costUsd on the card", sc.costKind === "subagent-notional" && sc.costUsd === 1.2345);
   ok("hub stores the token breakdown", sc.tokens && sc.tokens.cacheRead === 1016405 && sc.source === "cc-subagent");
+  // a second notional card + a (notional-irrelevant) scrooge stays SEPARATE — /economics never mixes them
+  await api("/task", { project: "ccproj", title: "Explore: map the repo", status: "done", assignee: "Explore:ccproj",
+    source: "cc-subagent", costKind: "subagent-notional", costUsd: 0.5, model: "claude-haiku-4-5", tokens: { input: 10, output: 100, cacheWrite: 0, cacheRead: 0 }, by: "host:ccproj" });
+  const eco = await api("/economics");
+  const life = eco.costKinds && eco.costKinds.lifetime && eco.costKinds.lifetime["subagent-notional"];
+  ok("/economics rolls up subagent-notional cost across cards", life && Math.abs(life.usd - 1.7345) < 1e-6 && life.count === 2);
+  ok("/economics scopes notional per project", eco.notionalByProject && Math.abs(eco.notionalByProject["ccproj"] - 1.7345) < 1e-6);
+  ok("notional rollup is its OWN bucket, not folded into scrooge real-spend", !("subagent-notional" in (eco.scrooge?.by_model || {})));
 
 } finally {
   hub.kill("SIGKILL");

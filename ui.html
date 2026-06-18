@@ -189,6 +189,7 @@ main:not(.learn-open) .learn-body{display:none}
 .gnode.failed .gnbox,.gnode.blocked .gnbox{stroke:var(--red)}
 .gntext{fill:#eaf1fa;font-size:11px;font-family:ui-sans-serif,system-ui;pointer-events:none}
 .gnsub{fill:var(--mut);font-size:9.5px;font-family:ui-sans-serif,system-ui;pointer-events:none}
+.gncost{fill:var(--blu);font-size:9px;font-family:ui-sans-serif,system-ui;text-anchor:end;pointer-events:none}
 .pfband{fill:#0c1320;opacity:.45}
 .pfband.alt{fill:#0e1626;opacity:.55}
 .pfbandtop{opacity:.12}
@@ -318,8 +319,16 @@ let ECON=null;
 const ECON_WINS=[['24h','last 24h'],['week','last week'],['month','last month'],['quarter','last quarter'],['year','last year']];
 let econWin=localStorage.getItem('abEconWin')||'24h';
 const econSaved=x=>x?(x.saved_usd!=null?(+x.saved_usd):Math.max(0,(x.opus_equiv_usd||0)-(x.cost_usd||0))):0;
+// notional (plan-covered) cost of the orchestrator's OWN Claude work for a window — subagent +
+// orchestrator costKinds, summed ONLY with each other (never with real Scrooge spend).
+function econNotional(win){
+  const ck=ECON&&ECON.costKinds&&ECON.costKinds[win]; if(!ck)return 0;
+  return ((ck['subagent-notional']&&ck['subagent-notional'].usd)||0)+((ck['orchestrator-notional']&&ck['orchestrator-notional'].usd)||0);
+}
 function renderEcon(){
-  if(!ECON||!ECON.lifetime||!ECON.lifetime.calls)return;
+  const lifeCalls=(ECON&&ECON.lifetime&&ECON.lifetime.calls)||0;
+  const notionalLife=ECON?econNotional('lifetime'):0;
+  if(!ECON||(!lifeCalls&&!(notionalLife>0)))return;     // show once we have EITHER real savings OR notional CC cost
   const el=$('#econ'); el.style.display='';
   // lifetime running total is the fixed headline; the dropdown picks the comparison window.
   if(!el.dataset.built){
@@ -327,7 +336,8 @@ function renderEcon(){
       `<span style="opacity:.55"> · lifetime · </span>`+
       `<select id="econsel" title="comparison window" style="background:#1a2030;color:inherit;border:1px solid rgba(255,255,255,.18);border-radius:4px;font:inherit;font-size:11px;padding:1px 3px;cursor:pointer;outline:none">`+
         ECON_WINS.map(([k,l])=>`<option value="${k}">${l}</option>`).join('')+`</select>`+
-      `<span style="opacity:.85" id="econwinval"></span>`;
+      `<span style="opacity:.85" id="econwinval"></span>`+
+      `<span id="econnotional" title="Claude's OWN sub-agent work (Agent/Workflow/ultracode) at API rates — plan-covered on a subscription, NOT real spend. Shown separately so it's never confused with the real Scrooge \$ saved." style="opacity:.9;margin-left:2px"></span>`;
     const sel=$('#econsel'); sel.value=econWin;
     sel.onchange=()=>{econWin=sel.value; localStorage.setItem('abEconWin',econWin); renderEcon();};
     el.dataset.built='1';
@@ -335,6 +345,11 @@ function renderEcon(){
   const w=(ECON.windows&&ECON.windows[econWin])||ECON.scrooge, wc=w?w.calls:0;
   $('#econlife').textContent='$'+econSaved(ECON.lifetime).toFixed(2);
   $('#econwinval').textContent=' $'+econSaved(w).toFixed(2)+' ('+wc+' call'+(wc===1?'':'s')+')';
+  // separate notional line — distinct icon + "notional" wording, never added to the savings number
+  const nEl=$('#econnotional');
+  if(nEl) nEl.innerHTML = notionalLife>0
+    ? `<span style="opacity:.5"> · </span>🤖 CC sub-agents <b style="color:var(--blu)">$${notionalLife.toFixed(2)}</b> <span style="opacity:.7">notional</span>`
+    : '';
   const sel=$('#econsel'); if(sel)sel.value=econWin;
 }
 async function econ(){
@@ -395,14 +410,16 @@ function flowHTML(pt, proj){
   const maxColCount = Math.max(1, ...layouts.flatMap(L => L.cols.map(c => c.length)));
   const Y0 = MT + stackH(maxColCount)/2;               // shared horizontal spine midline
   const totalH = MT + stackH(maxColCount) + MB;
-  const gnode = (x, y, title, status, id, orch, agent) => {
+  const gnode = (x, y, title, status, id, orch, agent, cost) => {
     const stripe = SCOL[status] || '#3a4458';
+    const c = (typeof cost === 'number') ? (cost < 0.005 ? '$' + cost.toFixed(4) : '$' + cost.toFixed(2)) : '';
     return `<g class="gnode ${status}${orch?' orch':''}"${id?` data-id="${id}"`:''}>`
       + `<rect class="gnbox" x="${x}" y="${y}" width="${NW}" height="${NH}" rx="8"/>`
       + `<rect x="${x}" y="${y}" width="4" height="${NH}" rx="2" fill="${stripe}"/>`
       + `<text class="gntext" x="${x+11}" y="${y+(agent?15:23)}">${esc(title.slice(0,24))}${title.length>24?'…':''}</text>`
       + (agent?`<text class="gnsub" x="${x+11}" y="${y+29}">@${esc(agent)}</text>`:'')
-      + `<title>${esc(title)}${agent?' · @'+esc(agent):''} — ${status}</title></g>`;
+      + (c?`<text class="gncost" x="${x+NW-8}" y="${y+(agent?15:23)}">${c}</text>`:'')
+      + `<title>${esc(title)}${agent?' · @'+esc(agent):''}${c?` · ${c} notional`:''} — ${status}</title></g>`;
   };
   const gedge = (x1,y1,x2,y2,done) => { const mx=(x1+x2)/2;
     return `<path class="gedge${done?' done':''}" d="M${x1},${y1} C${mx},${y1} ${mx},${y2} ${x2},${y2}"/>`; };
@@ -435,7 +452,7 @@ function flowHTML(pt, proj){
       const p = pos[c.id], parents = parentsOf(c);
       if (parents.length) for (const pid of parents){ const pp = pos[pid]; if (pp) svg += gedge(pp.x+NW, pp.y+NH/2, p.x, p.y+NH/2, byId[pid].status==='done'); }
       else svg += gedge(planX+NW, planY+NH/2, p.x, p.y+NH/2, ph.status==='done');   // root → plan
-      svg += gnode(p.x, p.y, (c.id?'#'+c.id+' ':'')+c.title, c.status, c.synthetic?null:c.id, !!c._orch, c.agent||'');
+      svg += gnode(p.x, p.y, (c.id?'#'+c.id+' ':'')+c.title, c.status, c.synthetic?null:c.id, !!c._orch, c.agent||'', c.costUsd);
       if (!hasChild(c)) svg += gedge(p.x+NW, p.y+NH/2, intX, intY+NH/2, c.status==='done');   // leaf → integrate
     }
     svg += gnode(intX, intY, '◆ integrate', ph.status, null, true, '');
