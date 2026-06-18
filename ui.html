@@ -198,6 +198,12 @@ main:not(.learn-open) .learn-body{display:none}
 .pfcount{fill:var(--mut);font-size:10.5px;font-family:ui-sans-serif,system-ui}
 .pfsub{fill:#9fb0c4;font-size:10.5px;font-family:ui-sans-serif,system-ui}
 .pflowwrap .fhint{position:absolute;right:12px;bottom:5px}
+/* mini-map scrubber: whole project compressed to a bar; click/drag to jump, .gmapview shows position */
+.gmap{position:relative;height:18px;margin:10px 16px 4px;border-radius:6px;background:#0c1320;border:1px solid var(--line);overflow:hidden;cursor:pointer;touch-action:none}
+.gmapseg{position:absolute;top:2px;bottom:2px;border-radius:2px;opacity:.5}
+.gmapseg.done{background:var(--grn2)}.gmapseg.active{background:#f0b24b}.gmapseg.failed,.gmapseg.blocked{background:var(--red)}.gmapseg.planned{background:#46566f}
+.gmap:hover .gmapseg{opacity:.7}
+.gmapview{position:absolute;top:-1px;bottom:-1px;min-width:8px;background:rgba(255,255,255,.14);border:1.5px solid rgba(255,255,255,.6);border-radius:5px;pointer-events:none;transition:left .04s linear}
 /* card detail modal — the full story of one card: status journey + the agent's own bus reports */
 .cmodal{position:fixed;inset:0;z-index:60;display:flex;align-items:center;justify-content:center;background:rgba(4,7,12,.62)}
 .cmpanel{background:var(--panel);border:1px solid var(--line);border-radius:14px;width:min(760px,93vw);max-height:84vh;display:flex;flex-direction:column;box-shadow:0 20px 64px rgba(0,0,0,.55)}
@@ -400,7 +406,7 @@ function flowHTML(pt, proj){
   };
   const gedge = (x1,y1,x2,y2,done) => { const mx=(x1+x2)/2;
     return `<path class="gedge${done?' done':''}" d="M${x1},${y1} C${mx},${y1} ${mx},${y2} ${x2},${y2}"/>`; };
-  let x = 26, svg = '', bands = '', prevIntRight = null, pi = 0;
+  let x = 26, svg = '', bands = '', segs = [], prevIntRight = null, pi = 0;
   for (const L of layouts){
     const { ph, cards, byId, parentsOf, hasChild, maxDepth, cols } = L;
     const planX = x, planY = Y0 - NH/2;
@@ -411,6 +417,7 @@ function flowHTML(pt, proj){
     const bx = planX - 16, bw = (intX + NW + 16) - bx;
     bands += `<rect class="pfband ${pi%2?'alt':''}" x="${bx}" y="2" width="${bw}" height="${totalH-4}" rx="10"/>`
           +  `<rect class="pfbandtop ${ph.status}" x="${bx}" y="2" width="${bw}" height="${MT-12}" rx="10"/>`;
+    segs.push({ label: ph.label, status: ph.status, total: ph.total, x0: bx, cx: planX, x1: bx + bw });
     // header: phase label + the GOAL (explicit) or derived THEME — "what this phase is about"
     const desc = (ph.goal || ph.theme || '').slice(0, Math.max(28, Math.floor(bw/7)));
     svg += `<text class="pflabel ${ph.status}" x="${planX}" y="${MT-38}">${esc(ph.label)}</text>`
@@ -439,17 +446,50 @@ function flowHTML(pt, proj){
   const totalW = x + 10;
   const defs = `<defs><marker id="garr" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="6" markerHeight="6" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="#46566f"/></marker></defs>`;
   const notice = data.sparse ? `<div class="finfo">⚠ inferred phases — few cards carry explicit tags (P1/P5…), so they're grouped by time + title. Prefix cards (e.g. "P6 …") for sharper phases.</div>` : '';
-  return `<div class="pflowwrap gflow" data-proj="${esc(proj)}">${notice}`
+  // mini-map / scrubber: each phase a status-colored segment (% of total width). Click or drag to
+  // jump anywhere; the .gmapview overlay tracks where you are. data-total lets the JS map px↔ratio.
+  const pct = v => (100 * v / totalW).toFixed(3);
+  const mapsegs = segs.map(s =>
+    `<div class="gmapseg ${s.status}" style="left:${pct(s.x0)}%;width:${pct(s.x1 - s.x0)}%" data-cx="${s.cx}" title="${esc(s.label)} · ${s.status} · ${s.total} card${s.total>1?'s':''}"></div>`).join('');
+  const map = `<div class="gmap" data-proj="${esc(proj)}" data-total="${totalW}">${mapsegs}<div class="gmapview"></div></div>`;
+  return `<div class="pflowwrap gflow" data-proj="${esc(proj)}">${notice}${map}`
     + `<div class="gscroll" data-proj="${esc(proj)}"><svg width="${totalW}" height="${totalH}">${defs}${bands}${svg}</svg></div>`
-    + `<div class="fhint">orchestrator → crew → integrate · phase by phase  ·  scroll left/right →</div></div>`;
+    + `<div class="fhint">orchestrator → crew → integrate · phase by phase  ·  click/drag the bar above to scrub →</div></div>`;
 }
 const GSCROLL = {};
 function wireTimeline(el){
-  // FLOW v2 graph: click a card node to open its full /card detail; preserve horizontal scroll per project.
-  el.querySelectorAll('.gscroll').forEach(s => {
-    const proj = s.dataset.proj;
+  // FLOW v2 graph: scroll-position scrubber (mini-map) + click a card node for its /card detail.
+  el.querySelectorAll('.gflow').forEach(wrap => {
+    const proj = wrap.dataset.proj;
+    const s = wrap.querySelector('.gscroll'), map = wrap.querySelector('.gmap'), view = map && map.querySelector('.gmapview');
+    if (!s) return;
     if (GSCROLL[proj] != null) s.scrollLeft = GSCROLL[proj];
-    s.onscroll = () => { GSCROLL[proj] = s.scrollLeft; };
+    const syncView = () => {                                   // reflect where we are onto the mini-map
+      if (!view) return;
+      const w = s.scrollWidth || 1;
+      view.style.left = (100 * s.scrollLeft / w) + '%';
+      view.style.width = Math.min(100, 100 * s.clientWidth / w) + '%';
+    };
+    s.onscroll = () => { GSCROLL[proj] = s.scrollLeft; syncView(); };
+    requestAnimationFrame(syncView);
+    if (map) {
+      const scrubTo = (clientX) => {                           // map a pointer x onto a scroll position (centered)
+        const r = map.getBoundingClientRect();
+        const ratio = Math.max(0, Math.min(1, (clientX - r.left) / r.width));
+        s.scrollLeft = ratio * s.scrollWidth - s.clientWidth / 2;
+      };
+      let dragging = false;
+      map.addEventListener('pointerdown', e => {
+        dragging = true;
+        try { map.setPointerCapture?.(e.pointerId); } catch {}
+        const seg = e.target.closest && e.target.closest('.gmapseg');   // click a phase segment → jump to that phase
+        if (seg && seg.dataset.cx != null) s.scrollLeft = +seg.dataset.cx - 40; else scrubTo(e.clientX);
+        e.preventDefault();
+      });
+      map.addEventListener('pointermove', e => { if (dragging) scrubTo(e.clientX); });
+      const end = () => { dragging = false; };
+      map.addEventListener('pointerup', end); map.addEventListener('pointercancel', end);
+    }
   });
   el.querySelectorAll('.gnode[data-id]').forEach(n => n.onclick = () => openCard(+n.dataset.id));
 }
