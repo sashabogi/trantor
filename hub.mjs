@@ -257,14 +257,17 @@ const server = http.createServer(async (req, res) => {
     if (req.method === "POST" && P === "/task") {           // create a card
       const b = await body(req); touch(b.by, undefined, b.project);
       const st0 = ["todo","doing","testing","failed","done","blocked"].includes(b.status) ? b.status : "todo";
+      // optional historical ts (backfill from git/import) — accept a past epoch-ms; else now().
+      const ts0 = (Number.isFinite(b.ts) && b.ts > 0 && b.ts <= now() + 864e5) ? Math.floor(b.ts) : now();
       const t = { id: ++state.taskSeq, project: canon(String(b.project || "").slice(0,80)), title: String(b.title||"").slice(0,200),
         assignee: b.assignee || "", status: st0,
         phase: String(b.phase || "").slice(0, 40),   // explicit phase tag (FLOW v2) — wins over title-prefix inference
+        source: String(b.source || "").slice(0, 20), // e.g. "git" (backfill), "todo" — provenance
         difficulty: ["easy","medium","hard"].includes(b.difficulty) ? b.difficulty : "",
         model: String(b.model || "").slice(0, 60),
         deps: Array.isArray(b.deps) ? [...new Set(b.deps.map(Number).filter(n => Number.isInteger(n) && n > 0))].slice(0, 20) : [],
-        by: b.by || "", ts: now(), updated: now(),
-        history: [{ to: st0, by: b.by || "", ts: now() }] };
+        by: b.by || "", ts: ts0, updated: ts0,
+        history: [{ to: st0, by: b.by || "", ts: ts0 }] };
       state.tasks.push(t); if (state.tasks.length > 2000) state.tasks.splice(0, 500);
       appendCardEvent("created", t, b.by, null, st0);
       dirty = true; return json(res, 200, { ok: true, task: t });

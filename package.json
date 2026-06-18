@@ -1,6 +1,6 @@
 {
   "name": "trantor",
-  "version": "0.17.15",
+  "version": "0.17.16",
   "type": "module",
   "bin": {
     "trantor": "bin/cli.mjs"

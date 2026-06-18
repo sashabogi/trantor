@@ -297,6 +297,13 @@ try {
   await api("/phase", { project: "flowproj", phase: "P1", goal: "stand up the backend + UI" });
   const ph3 = await api("/phases?project=flowproj");
   ok("POST /phase sets an explicit goal returned by /phases", ph3.phases.find(p => p.label === "P1")?.goal === "stand up the backend + UI");
+  // git-backfill: a card created with a HISTORICAL ts (past commit time) keeps that ts (not now())
+  const past = 1700000000000; // 2023 — clearly historical
+  const { task: gt } = await api("/task", { project: "backfillproj", title: "scaffold: initial", status: "done", ts: past, source: "git", by: "host:backfillproj" });
+  ok("a backfilled card keeps its historical ts (not now)", gt.ts === past && gt.history[0].ts === past);
+  ok("a backfilled card records its source provenance", gt.source === "git");
+  const { task: nowCard } = await api("/task", { project: "backfillproj", title: "live one", ts: Date.now() + 1e10, by: "host:backfillproj" });
+  ok("a bogus/future ts is ignored → card gets now()", Math.abs(Date.now() - nowCard.ts) < 60000);
 
 } finally {
   hub.kill("SIGKILL");
