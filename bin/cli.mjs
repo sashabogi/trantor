@@ -28,7 +28,6 @@ switch (cmd) {
   case "catchup": run("bin/catchup.mjs"); break;
   case "backfill": run("bin/git-backfill.mjs"); break;
   case "handoff": run("bin/baton.mjs"); break;
-  case "east-radar": case "radar": run("bin/east-radar.mjs"); break;
   case "ui": {
     let url = "http://127.0.0.1:4477";
     try { url = JSON.parse(readFileSync(join(process.env.HOME || "", ".agent-bus", "config.json"), "utf8")).url || url; } catch {}

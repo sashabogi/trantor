@@ -47,6 +47,3 @@ claim, what's dated, what's contested. Translate non-English sources and keep th
 Write a tight, **cited** answer: the finding, the evidence (with links + dates), the disagreements,
 and the confidence. Lead with what the user didn't already know. End with the open questions a
 follow-up pass should chase.
-
-> Sibling routine: for the standing East/West "what are we missing on the Chinese side" scan, use
-> **/trantor:east-radar** — it's this engine pointed at a fixed CN-AI query set with a delta gate.
