@@ -10,7 +10,7 @@
     "zod": "^4.4.3"
   },
   "scripts": {
-    "test": "node test.mjs && node test-scenarios.mjs && node test-failure.mjs && node test-handoff.mjs"
+    "test": "node test.mjs && node test-scenarios.mjs && node test-failure.mjs && node test-handoff.mjs && node test-radar.mjs"
   },
   "description": "The hub-world for AI agent crews \u2014 orchestrate Claude Code, Codex, Gemini, Kimi & DeepSeek as live crews with a plan-aware Advisor, a Kanban/flow command center, a testing gate, and an economics brain (Scrooge).",
   "files": [
