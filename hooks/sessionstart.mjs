@@ -171,7 +171,11 @@ try {
     const upd = await updateAvailable();
     if (upd.available) {
       if (readConfig().updateDesktopNotify === true) maybeNotifyDesktop(upd);   // opt-in only
-      userBanner = `⬆️  Trantor update available: ${upd.installed} → ${upd.latest}  ·  update with:  claude plugin update trantor@trantor`;
+      // Bold-orange ANSI so it's not lost in Claude Code's dim systemMessage styling; a leading
+      // 🟠 emoji anchor keeps it visibly colored even on a terminal that ignores the ANSI (so it
+      // can never silently fall back to low-contrast gray). \x1b[1;38;5;208m = bold orange, \x1b[0m resets.
+      const O = "\x1b[1;38;5;208m", R = "\x1b[0m";
+      userBanner = `🟠 ${O}Trantor update available: ${upd.installed} → ${upd.latest}${R}  ·  update with:  ${O}claude plugin update trantor@trantor${R}`;
       additionalContext += `<trantor-update installed="${sanitize(upd.installed)}" latest="${sanitize(upd.latest)}">\n`;
       additionalContext += `⬆️ **A newer Trantor is available — ${sanitize(upd.installed)} → ${sanitize(upd.latest)}.** Tell the user, and offer the update: \`claude plugin update trantor@trantor\` (plugin) + \`npm i -g trantor@${sanitize(upd.latest)}\` (CLI), then restart to apply.\n`;
       additionalContext += `</trantor-update>\n`;
