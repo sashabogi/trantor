@@ -11,6 +11,7 @@ import { join, basename } from "node:path";
 import { homedir, hostname } from "node:os";
 import { execSync } from "node:child_process";
 import { resolveProject, hostId } from "../lib/project.mjs";
+import { updateAvailable, maybeNotifyDesktop } from "./lib/update-check.mjs";
 
 // Load the most recent UNCONSUMED handoff for this project (written by precompact.mjs
 // / the heartbeat early-warning). `claim` marks it consumed so exactly one session
@@ -154,6 +155,21 @@ try {
       additionalContext += `\nFor a synthesized "where are we" narrative on demand, run \`trantor catchup\`.\n`;
       additionalContext += `</trantor-project-state>\n`;
       process.stderr.write(`[trantor] injected project-state catch-up for ${project} (${cu?.total || 0} cards)\n`);
+    }
+  } catch {}
+
+  // Update available? Like a desktop app's "an update is ready" — surface it two ways: a one-time
+  // native desktop notification (once per new version, not per session) AND an in-session context
+  // block so the running model can tell the user the exact update commands. Throttled + fail-silent;
+  // most starts do zero network (6h TTL cache). Disable: TRANTOR_NO_UPDATE_CHECK / _NOTIFY.
+  try {
+    const upd = await updateAvailable();
+    if (upd.available) {
+      maybeNotifyDesktop(upd);
+      additionalContext += `<trantor-update installed="${sanitize(upd.installed)}" latest="${sanitize(upd.latest)}">\n`;
+      additionalContext += `⬆️ **A newer Trantor is available — ${sanitize(upd.installed)} → ${sanitize(upd.latest)}.** Tell the user, and offer the update: \`claude plugin update trantor@trantor\` (plugin) + \`npm i -g trantor@${sanitize(upd.latest)}\` (CLI), then restart to apply.\n`;
+      additionalContext += `</trantor-update>\n`;
+      process.stderr.write(`[trantor] update available: ${upd.installed} -> ${upd.latest}\n`);
     }
   } catch {}
 
