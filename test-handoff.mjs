@@ -5,16 +5,16 @@
 // windows (TRANTOR_NO_HANDOFF_SPAWN=1). Regression coverage for the three gaps
 // that broke the promise: tail-only summary, compact eating its own handoff,
 // and the spawn never firing.
-import { writeFileSync, mkdirSync, existsSync, readFileSync, rmSync } from "node:fs";
+import { writeFileSync, mkdirSync, existsSync, readFileSync, rmSync, utimesSync } from "node:fs";
 import { join } from "node:path";
 import { homedir, tmpdir } from "node:os";
 import { spawnSync } from "node:child_process";
 import {
   contextUsage, resolveWindow, warnFrac,
   alreadyHandedOff, markHandedOff, buildSummary, verbatimRecentTail, writeHandoff, spawnBaton,
-  resolveOriginalWindow, supersedeOlderHandoffs,
+  resolveOriginalWindow, supersedeOlderHandoffs, subagentsActive, armBatonClose,
 } from "./hooks/lib/handoff.mjs";
-import { freshEngaged } from "./bin/baton-close.mjs";
+import { freshEngaged, originalStillWorking } from "./bin/baton-close.mjs";
 
 let pass = 0, fail = 0;
 const ok = (name, cond) => { console.log(`  ${cond ? "PASS" : "FAIL"}  ${name}`); cond ? pass++ : fail++; };
@@ -187,6 +187,48 @@ seed();
   ok("freshEngaged: false when the handoff has no consumedBy transcript (older record)", freshEngaged({ consumed: true }) === false);
   rmSync(chf, { force: true });
   rmSync(cpDir, { recursive: true, force: true });
+}
+
+// --- SAFETY (incident 2026-06-21): auto-baton must not fire mid-build, and must never auto-close ---
+// A 90% baton fired while the session was orchestrating 2 agents and the original was SIGKILLed
+// mid-flight. Three guards now: (1) detect live sub-agents, (2) auto-close is opt-in only,
+// (3) baton-close aborts if the original is still working.
+{
+  // (1) subagentsActive — the mid-build signal the heartbeat defers on.
+  const sd = join(tmpdir(), "subact-" + process.pid);
+  mkdirSync(sd, { recursive: true });
+  const stp = join(sd, "s.jsonl"); writeFileSync(stp, "x\n");
+  ok("subagentsActive: false when there's no subagents dir", subagentsActive(stp) === false);
+  const sub = join(sd, "s", "subagents"); mkdirSync(sub, { recursive: true });
+  const ag = join(sub, "agent-abc.jsonl"); writeFileSync(ag, "y\n");
+  ok("subagentsActive: true when an agent-*.jsonl was just written", subagentsActive(stp) === true);
+  const oldT = (Date.now() - 200_000) / 1000;
+  utimesSync(ag, oldT, oldT);
+  ok("subagentsActive: false once the agent transcript ages past the window", subagentsActive(stp) === false);
+  ok("subagentsActive: false for an empty path", subagentsActive("") === false);
+  rmSync(sd, { recursive: true, force: true });
+
+  // (2) armBatonClose — auto path never arms a close without explicit opt-in.
+  ok("armBatonClose: AUTO does not arm without config.autoCloseOriginal",
+    armBatonClose("/tmp/nope.json", "9999", "", {}, { auto: true }) === false);
+  ok("armBatonClose: AUTO opt-in still blocked by batonClose:false",
+    armBatonClose("/tmp/nope.json", "9999", "", { autoCloseOriginal: true, batonClose: false }, { auto: true }) === false);
+  ok("armBatonClose: never arms without a window id",
+    armBatonClose("/tmp/nope.json", "", "", { autoCloseOriginal: true }, { auto: true }) === false);
+
+  // (3) originalStillWorking — baton-close's final abort gate.
+  const od = join(tmpdir(), "origbusy-" + process.pid);
+  mkdirSync(od, { recursive: true });
+  const ot = join(od, "orig.jsonl"); writeFileSync(ot, "x\n");
+  ok("originalStillWorking: true when the original transcript was just written", originalStillWorking({ transcript_path: ot }) === true);
+  const quietT = (Date.now() - 60_000) / 1000;
+  utimesSync(ot, quietT, quietT);
+  ok("originalStillWorking: false when quiet + no sub-agents", originalStillWorking({ transcript_path: ot }) === false);
+  const osub = join(od, "orig", "subagents"); mkdirSync(osub, { recursive: true });
+  writeFileSync(join(osub, "agent-1.jsonl"), "z\n");
+  ok("originalStillWorking: true when a sub-agent transcript is fresh (still building)", originalStillWorking({ transcript_path: ot }) === true);
+  ok("originalStillWorking: false for a record with no transcript", originalStillWorking({}) === false);
+  rmSync(od, { recursive: true, force: true });
 }
 
 // --- precompact: writes a handoff (consumed:false), never spawns under guard ---

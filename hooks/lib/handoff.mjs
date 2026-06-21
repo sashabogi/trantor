@@ -10,7 +10,7 @@
 // session that loads the handoff. The heartbeat path lets us do that BEFORE the
 // wall when we know the window size. Both paths share a per-session guard so we
 // never write/spawn twice for the same context window.
-import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync, openSync, readSync, fstatSync, closeSync } from "node:fs";
+import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync, statSync, openSync, readSync, fstatSync, closeSync } from "node:fs";
 import { join, basename, dirname } from "node:path";
 import { homedir, hostname } from "node:os";
 import { execSync, spawn } from "node:child_process";
@@ -104,6 +104,34 @@ export function markHandedOff(sessionId, curTokens = 0) {
 }
 
 function nowSec() { try { return Number(execSync("date +%s", { encoding: "utf8" }).trim()) || 0; } catch { return 0; } }
+
+// ---- in-flight guard --------------------------------------------------------
+// True when this session is actively orchestrating sub-agents (Agent/Task tool, Workflow swarms,
+// agent-teams): any `agent-*.jsonl` under <transcriptDir>/<sid>/subagents/ (incl. workflows/) was
+// written within `withinMs`. The auto baton-pass uses this to DEFER — we must never yank a fresh
+// window up (or, before the 2026-06-21 fix, kill the original) while real in-flight agent work is
+// running. INCIDENT 2026-06-21: a 90% baton fired mid 2-agent build and the original session was
+// SIGKILLed mid-flight. Best-effort; returns false on any error.
+export function subagentsActive(transcriptPath, withinMs = 90_000) {
+  try {
+    if (!transcriptPath) return false;
+    const sub = join(dirname(transcriptPath), basename(transcriptPath).replace(/\.jsonl$/i, ""), "subagents");
+    if (!existsSync(sub)) return false;
+    const cutoff = Date.now() - withinMs;
+    const stack = [sub];
+    while (stack.length) {
+      const d = stack.pop();
+      let entries; try { entries = readdirSync(d, { withFileTypes: true }); } catch { continue; }
+      for (const e of entries) {
+        const p = join(d, e.name);
+        if (e.isDirectory()) { stack.push(p); continue; }
+        if (!/^agent-.*\.jsonl$/i.test(e.name)) continue;
+        try { if (statSync(p).mtimeMs >= cutoff) return true; } catch {}
+      }
+    }
+    return false;
+  } catch { return false; }
+}
 
 // ---- whole-session summary --------------------------------------------------
 function collectTurns(transcriptPath) {
@@ -262,10 +290,17 @@ export function terminalWindowForTty(tty) {
 // Arm the baton-close watcher: a DETACHED process that waits until the fresh session consumes the
 // handoff (consumed:true), then closes the original Terminal window. Never closes blind: aborts on
 // timeout (fresh never showed) and re-validates the window's tty before closing.
-export function armBatonClose(handoffFile, originalWindowId, originalTty, conf = readConfig()) {
+export function armBatonClose(handoffFile, originalWindowId, originalTty, conf = readConfig(), { auto = false } = {}) {
   try {
     if (process.platform !== "darwin" || !originalWindowId) return false;
     if (process.env.TRANTOR_NO_BATON_CLOSE === "1" || conf.batonClose === false) return false;
+    // SAFETY (incident 2026-06-21): an AUTOMATIC baton must NEVER close the original session. At 90%
+    // (10% headroom) mid 2-agent build, auto-close SIGKILLed the original window's processes and killed
+    // in-flight work — the scariest possible failure. Auto-close is now strictly opt-in
+    // (config.autoCloseOriginal:true). The default auto baton just opens the fresh window and LEAVES the
+    // original alive. Manual /trantor:handoff still closes (the user explicitly invoked a wrap-up) — and
+    // even that is now non-destructive (baton-close never SIGKILLs and aborts if the original is busy).
+    if (auto && conf.autoCloseOriginal !== true) return false;
     const closer = join(HERE, "..", "..", "bin", "baton-close.mjs");
     if (!existsSync(closer)) return false;
     const child = spawn(process.execPath, [closer, handoffFile, String(originalWindowId), originalTty || ""], { detached: true, stdio: "ignore" });

@@ -16,8 +16,11 @@ try {
   process.stderr.write(`[trantor] baton handoff written: ${file}\n`);
   await pingBus(basename(projectDir), record.id, conf);
   if (maybeSpawn(projectDir, conf)) {                 // open the fresh session that takes over
-    const armed = windowId ? armBatonClose(file, windowId, tty, conf) : false;  // close the original once fresh confirms
-    process.stderr.write(`[trantor] fresh session spawned${armed ? ` · baton-close armed for window ${windowId}` : " · no original-window close (none detected / disabled)"}\n`);
+    // AUTO baton: close the original ONLY if explicitly opted in (config.autoCloseOriginal:true).
+    // Default = leave the original alive (the fresh window takes over; you close the old one). This is
+    // the 2026-06-21 fix — an auto-close must never kill an in-flight session.
+    const armed = windowId ? armBatonClose(file, windowId, tty, conf, { auto: true }) : false;
+    process.stderr.write(`[trantor] fresh session spawned${armed ? ` · baton-close armed for window ${windowId}` : " · original window left alive (auto-close off by default)"}\n`);
   }
 } catch (e) {
   process.stderr.write(`[trantor] handoff-now error: ${e?.message || e}\n`);

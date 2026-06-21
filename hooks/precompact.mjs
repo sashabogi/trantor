@@ -37,11 +37,13 @@ try {
     process.stderr.write(`[trantor] fresh session already spawned for this window — handoff refreshed only\n`);
   } else if (maybeSpawn(projectDir, conf)) {
     markHandedOff(sessionId, cur);
-    // baton pass: arm the close of THIS window once the fresh session takes over (we have the tty here)
+    // baton pass: at-the-wall fresh session. Close THIS window ONLY if opted in
+    // (config.autoCloseOriginal:true) — default leaves the original alive (2026-06-21 fix: an auto
+    // baton must never kill a session). We have the controlling tty here for the opt-in case.
     const tty = controllingTty();
     const windowId = tty ? terminalWindowForTty(tty) : "";
-    const armed = windowId ? armBatonClose(file, windowId, tty, conf) : false;
-    process.stderr.write(`[trantor] fresh-session spawned (PreCompact)${armed ? ` · baton-close armed for window ${windowId}` : ""}\n`);
+    const armed = windowId ? armBatonClose(file, windowId, tty, conf, { auto: true }) : false;
+    process.stderr.write(`[trantor] fresh-session spawned (PreCompact)${armed ? ` · baton-close armed for window ${windowId}` : " · original window left alive (auto-close off by default)"}\n`);
   }
 } catch (err) {
   process.stderr.write(`[trantor] precompact error: ${err?.message || err}\n`);

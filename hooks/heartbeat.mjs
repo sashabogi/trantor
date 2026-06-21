@@ -18,7 +18,7 @@ import { join, basename, dirname } from "node:path";
 import { homedir, hostname } from "node:os";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { readConfig, contextUsage, warnFrac, alreadyHandedOff, markHandedOff, controllingTty, terminalWindowForTty } from "./lib/handoff.mjs";
+import { readConfig, contextUsage, warnFrac, alreadyHandedOff, markHandedOff, controllingTty, terminalWindowForTty, subagentsActive } from "./lib/handoff.mjs";
 import { resolveProject, hostId } from "../lib/project.mjs";
 
 const HEARTBEAT_MS = Number(process.env.RELAY_HEARTBEAT_MS || 60 * 1000);
@@ -48,6 +48,16 @@ async function maybeEarlyWarn(stdinRaw, session) {
     if (!usage || !usage.window || usage.frac == null) return; // window unknown → only PreCompact guards
     if (usage.frac < warnFrac(conf)) return;
     if (alreadyHandedOff(sessionId, usage.tokens)) return;
+
+    // Mid-build guard (incident 2026-06-21): never fire an auto baton-pass while this session is
+    // actively orchestrating sub-agents — popping a fresh window (or, before the fix, killing the
+    // original) mid 2-agent build is exactly the failure we must prevent. Defer: the next heartbeat
+    // re-checks once the agents finish, and PreCompact remains the at-the-wall backstop. We do NOT
+    // markHandedOff here, so the baton genuinely retries later instead of being silently skipped.
+    if (subagentsActive(transcript)) {
+      process.stderr.write(`[trantor] context ${Math.round(usage.frac * 100)}% but sub-agents active — deferring baton pass\n`);
+      return;
+    }
 
     // In-flight guard: the detached worker takes ~tens of seconds to summarize;
     // don't launch a second one on the next heartbeat tick meanwhile.
