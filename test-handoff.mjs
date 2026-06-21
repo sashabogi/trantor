@@ -12,8 +12,9 @@ import { spawnSync } from "node:child_process";
 import {
   contextUsage, resolveWindow, warnFrac,
   alreadyHandedOff, markHandedOff, buildSummary, verbatimRecentTail, writeHandoff, spawnBaton,
-  resolveOriginalWindow,
+  resolveOriginalWindow, supersedeOlderHandoffs,
 } from "./hooks/lib/handoff.mjs";
+import { freshEngaged } from "./bin/baton-close.mjs";
 
 let pass = 0, fail = 0;
 const ok = (name, cond) => { console.log(`  ${cond ? "PASS" : "FAIL"}  ${name}`); cond ? pass++ : fail++; };
@@ -129,6 +130,64 @@ ok("selector injects the NEWEST valid handoff (by stamp, not lexicographic)", se
 ok("selector ignores look-alike '<proj>-handoff-…' fixtures", !selCtx.includes("DECOY_FIXTURE") && JSON.parse(readFileSync(decoy, "utf8")).consumed === false);
 rmSync(older, { force: true }); rmSync(newer, { force: true }); rmSync(decoy, { force: true });
 seed();
+
+// --- regression: a new handoff SUPERSEDES older unconsumed siblings (no stale-pile / scrambled load) ---
+// Bug (2026-06-21): the early-warning re-fired every 5 min (guarded only by the inflight stamp, never
+// markHandedOff), stacking 8 unconsumed handoffs ~5 min apart for one project. A scrambled spawn could
+// then load an OLD snapshot ("stale by ~15 commits"). writeHandoff now retires older unconsumed ones.
+{
+  const sp = "supersede-" + process.pid;
+  const spDir = join(tmpdir(), sp);
+  mkdirSync(spDir, { recursive: true });
+  const a = join(handoffDir, `${sp}-1000000000.json`);
+  const b = join(handoffDir, `${sp}-1000000300.json`);
+  writeFileSync(a, JSON.stringify({ id: `${sp}-1000000000`, projectName: sp, consumed: false, summary: "A" }, null, 2));
+  writeFileSync(b, JSON.stringify({ id: `${sp}-1000000300`, projectName: sp, consumed: false, summary: "B" }, null, 2));
+  // a third, real one lands (via writeHandoff, which calls supersedeOlderHandoffs)
+  process.env.TRANTOR_NO_SCROOGE = "1"; // hermetic: deterministic digest, no LLM call
+  const { file: cFile } = writeHandoff({ projectDir: spDir, sessionId: "s", transcript, trigger: "context-warn" });
+  delete process.env.TRANTOR_NO_SCROOGE;
+  const ja = JSON.parse(readFileSync(a, "utf8")), jb = JSON.parse(readFileSync(b, "utf8")), jc = JSON.parse(readFileSync(cFile, "utf8"));
+  ok("supersede: the just-written handoff stays unconsumed", jc.consumed === false);
+  ok("supersede: older unconsumed siblings are retired (consumed+superseded)", ja.consumed === true && ja.superseded === true && jb.consumed === true);
+  // direct call is idempotent + keeps the named id
+  supersedeOlderHandoffs(sp, jc.id);
+  ok("supersede: keepId is never retired by a direct call", JSON.parse(readFileSync(cFile, "utf8")).consumed === false);
+  rmSync(a, { force: true }); rmSync(b, { force: true }); rmSync(cFile, { force: true });
+  rmSync(spDir, { recursive: true, force: true });
+}
+
+// --- regression: claiming a handoff stamps WHO took over, and baton-close waits for a real turn ---
+// Bug (2026-06-21): `consumed` flips at SessionStart (inject time), and baton-close closed the original
+// ~4s later — before the fresh model had read the handoff. Now sessionstart records consumedBy/consumedAt
+// and baton-close (freshEngaged) waits for the fresh session's first assistant turn.
+{
+  const cp = "consumedby-" + process.pid;
+  const cpDir = join(tmpdir(), cp);
+  mkdirSync(cpDir, { recursive: true });
+  const chf = join(handoffDir, `${cp}-1500000000.json`);
+  writeFileSync(chf, JSON.stringify({ id: `${cp}-1500000000`, project: cpDir, projectName: cp, machine: "h", trigger: "context-warn", summary: "S", gitStatus: "", consumed: false }, null, 2));
+  const freshTranscript = join(cpDir, "fresh.jsonl");
+  const r = spawnSync("node", ["hooks/sessionstart.mjs"], {
+    input: JSON.stringify({ source: "startup", session_id: "FRESH-SID", transcript_path: freshTranscript }),
+    encoding: "utf8", timeout: 15000,
+    env: { ...process.env, CLAUDE_PROJECT_DIR: cpDir, RELAY_SESSION: cp, RELAY_URL: CLOSED },
+  });
+  const claimed = JSON.parse(readFileSync(chf, "utf8"));
+  ok("consumedBy: claim records the fresh session id + transcript path", claimed.consumed === true && claimed.consumedBy?.session_id === "FRESH-SID" && claimed.consumedBy?.transcript_path === freshTranscript);
+  ok("consumedBy: claim stamps consumedAt (epoch sec)", typeof claimed.consumedAt === "number" && claimed.consumedAt > 1_700_000_000);
+
+  // freshEngaged: false until the fresh transcript shows an assistant turn; true once it does.
+  ok("freshEngaged: false before any fresh turn exists", freshEngaged(claimed) === false);
+  writeFileSync(freshTranscript, JSON.stringify({ type: "user", message: { content: "Recap…" } }) + "\n");
+  ok("freshEngaged: still false with only a user turn", freshEngaged(claimed) === false);
+  writeFileSync(freshTranscript, JSON.stringify({ type: "user", message: { content: "Recap…" } }) + "\n" +
+    JSON.stringify({ type: "assistant", message: { content: [{ type: "text", text: "Taking over." }] } }) + "\n");
+  ok("freshEngaged: true once the fresh session produces an assistant turn", freshEngaged(claimed) === true);
+  ok("freshEngaged: false when the handoff has no consumedBy transcript (older record)", freshEngaged({ consumed: true }) === false);
+  rmSync(chf, { force: true });
+  rmSync(cpDir, { recursive: true, force: true });
+}
 
 // --- precompact: writes a handoff (consumed:false), never spawns under guard ---
 seed(); rmSync(hf, { force: true });

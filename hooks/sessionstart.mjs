@@ -17,7 +17,7 @@ import { resolveProject, hostId } from "../lib/project.mjs";
 // takes it. A compaction-triggered SessionStart (source="compact") is the SAME session
 // that just wrote the handoff for a FRESH window to pick up — it may show the summary
 // for continuity but must NOT claim it, or it steals the handoff from the new window.
-function loadPendingHandoff(projectName, { claim = true } = {}) {
+function loadPendingHandoff(projectName, { claim = true, freshSession = null } = {}) {
   try {
     const dir = join(homedir(), ".agent-bus", "handoffs");
     if (!existsSync(dir)) return null;
@@ -36,13 +36,31 @@ function loadPendingHandoff(projectName, { claim = true } = {}) {
       const p = join(dir, f);
       const rec = JSON.parse(readFileSync(p, "utf8"));
       if (!rec.consumed) {
-        if (claim) { rec.consumed = true; writeFileSync(p, JSON.stringify(rec, null, 2)); }
+        if (claim) {
+          // `consumed` means "injected into THIS fresh session's first-turn context" — which happens
+          // here at hook time, BEFORE the model has actually read anything. So we also record WHO is
+          // taking over (session id + transcript path) and when. baton-close watches that transcript
+          // for the fresh session's first assistant turn and only then closes the original window —
+          // otherwise it pulled the original ~4s after the fresh window booted, "before it even read
+          // the handoff."
+          rec.consumed = true;
+          rec.consumedAt = nowSec();
+          if (freshSession && (freshSession.session_id || freshSession.transcript_path)) {
+            rec.consumedBy = {
+              session_id: freshSession.session_id || "",
+              transcript_path: freshSession.transcript_path || "",
+            };
+          }
+          writeFileSync(p, JSON.stringify(rec, null, 2));
+        }
         return rec;
       }
     }
   } catch {}
   return null;
 }
+
+function nowSec() { try { return Number(execSync("date +%s", { encoding: "utf8" }).trim()) || 0; } catch { return 0; } }
 
 function relayUrl() {
   if (process.env.RELAY_URL) return process.env.RELAY_URL;
@@ -75,8 +93,8 @@ function sanitize(s) {
 
 let additionalContext = "";
 try {
-  let source = "";
-  try { source = (JSON.parse((await readStdin()) || "{}").source) || ""; } catch {}
+  let source = "", stdinObj = {};
+  try { stdinObj = JSON.parse((await readStdin()) || "{}"); source = stdinObj.source || ""; } catch {}
   const projectDir = process.env.CLAUDE_PROJECT_DIR || process.cwd();
   // Sessions started in the home directory itself aren't project work — registering
   // them spawns a phantom "<username>" project board on the dashboard. Set
@@ -144,7 +162,10 @@ try {
   // compaction-triggered start, DON'T claim it (that's the same session that wrote it;
   // claiming would steal it from the freshly-spawned window) — show it for continuity only.
   const isCompact = source === "compact";
-  const handoff = loadPendingHandoff(basename(projectDir), { claim: !isCompact });
+  const handoff = loadPendingHandoff(basename(projectDir), {
+    claim: !isCompact,
+    freshSession: { session_id: stdinObj.session_id || "", transcript_path: stdinObj.transcript_path || "" },
+  });
   if (handoff) {
     process.stderr.write(`[trantor] ${isCompact ? "showing (not claiming, compact)" : "loaded"} pending handoff ${handoff.id}\n`);
     additionalContext += `<trantor-handoff id="${sanitize(handoff.id)}" from="${sanitize(handoff.machine)}" trigger="${sanitize(handoff.trigger)}">\n`;

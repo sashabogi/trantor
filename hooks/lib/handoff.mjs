@@ -10,7 +10,7 @@
 // session that loads the handoff. The heartbeat path lets us do that BEFORE the
 // wall when we know the window size. Both paths share a per-session guard so we
 // never write/spawn twice for the same context window.
-import { readFileSync, writeFileSync, existsSync, mkdirSync, openSync, readSync, fstatSync, closeSync } from "node:fs";
+import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync, openSync, readSync, fstatSync, closeSync } from "node:fs";
 import { join, basename, dirname } from "node:path";
 import { homedir, hostname } from "node:os";
 import { execSync, spawn } from "node:child_process";
@@ -203,7 +203,29 @@ export function writeHandoff({ projectDir, sessionId, transcript, trigger, summa
   };
   const file = join(HANDOFF_DIR, `${record.id}.json`);
   writeFileSync(file, JSON.stringify(record, null, 2));
+  supersedeOlderHandoffs(projectName, record.id);
   return { file, record };
+}
+
+// Retire any OTHER still-unconsumed handoff for the same project the moment a newer one lands. The
+// fresh session loads the newest-unconsumed; leaving stale siblings around means a scrambled spawn
+// (or a future session) could load an out-of-date snapshot. Marking them consumed:true + superseded
+// keeps exactly one live handoff per project. Best-effort; never throws into the caller.
+export function supersedeOlderHandoffs(projectName, keepId) {
+  try {
+    if (!existsSync(HANDOFF_DIR)) return;
+    const re = new RegExp("^" + String(projectName).replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "-(\\d+)\\.json$");
+    for (const f of readdirSync(HANDOFF_DIR)) {
+      if (!re.test(f)) continue;
+      const p = join(HANDOFF_DIR, f);
+      try {
+        const rec = JSON.parse(readFileSync(p, "utf8"));
+        if (rec.id === keepId || rec.consumed) continue;
+        rec.consumed = true; rec.superseded = true; rec.supersededBy = keepId;
+        writeFileSync(p, JSON.stringify(rec, null, 2));
+      } catch {}
+    }
+  } catch {}
 }
 
 // --- baton pass: the original session's Terminal window (macOS), so the fresh session can replace it ---

@@ -18,7 +18,7 @@ import { join, basename, dirname } from "node:path";
 import { homedir, hostname } from "node:os";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { readConfig, contextUsage, warnFrac, alreadyHandedOff, controllingTty, terminalWindowForTty } from "./lib/handoff.mjs";
+import { readConfig, contextUsage, warnFrac, alreadyHandedOff, markHandedOff, controllingTty, terminalWindowForTty } from "./lib/handoff.mjs";
 import { resolveProject, hostId } from "../lib/project.mjs";
 
 const HEARTBEAT_MS = Number(process.env.RELAY_HEARTBEAT_MS || 60 * 1000);
@@ -64,6 +64,12 @@ async function maybeEarlyWarn(stdinRaw, session) {
     const child = spawn(process.execPath, [join(HERE, "handoff-now.mjs"), projectDir, sessionId, transcript, "context-warn", windowId, tty],
       { detached: true, stdio: "ignore" });
     child.unref();
+    // Persistent per-window guard — the SAME one precompact uses. Without this the early-warning was
+    // gated ONLY by the 5-minute inflight stamp, so a session parked above the warn line re-fired every
+    // 5 minutes: a STORM of handoffs + a new fresh window + a new baton-close each tick (seen as 8 stacked
+    // handoffs ~5 min apart). markHandedOff makes alreadyHandedOff() short-circuit until the context
+    // actually resets (<70% of where we fired), so it's exactly ONE baton per context window.
+    markHandedOff(sessionId, usage.tokens);
   } catch {}
 }
 
