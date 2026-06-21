@@ -6,6 +6,8 @@
 import { mkdirSync, writeFileSync, rmSync, readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
+import { execFileSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
 
 let pass = 0, fail = 0;
 const ok = (name, cond) => { console.log(`  ${cond ? "PASS" : "FAIL"}  ${name}`); cond ? pass++ : fail++; };
@@ -58,6 +60,33 @@ seedStamp({ checkedAt: nowSec(), latest: "99.0.0", notifiedVersion: "99.0.0" });
 ok("notify: already-notified for this version → no re-fire (per-version throttle)", m.maybeNotifyDesktop({ installed: inst, latest: "99.0.0" }, {}) === false);
 ok("notify: no latest → no fire", m.maybeNotifyDesktop({ installed: inst, latest: "" }, {}) === false);
 ok("notify: did NOT overwrite the stamp on a no-fire path", JSON.parse(readFileSync(stampPath, "utf8")).notifiedVersion === "99.0.0");
+
+// --- SessionStart hook surfaces the update as a USER-facing `systemMessage` (in-terminal),
+//     NOT a desktop notification. Spawn the real hook hermetically (temp data dir + unreachable
+//     hub so registration/catchup fail-silently and never touch a live hub). ---
+const here = fileURLToPath(new URL(".", import.meta.url));
+const hookPath = join(here, "hooks", "sessionstart.mjs");
+const runHook = () => {
+  const stdin = JSON.stringify({ session_id: "test", transcript_path: "/tmp/x", source: "startup", cwd: here });
+  const out = execFileSync(process.execPath, [hookPath], {
+    input: stdin, encoding: "utf8", timeout: 10000,
+    env: { ...process.env, RELAY_DATA_DIR: data, RELAY_URL: "http://127.0.0.1:1", TRANTOR_UPDATE_TTL_H: "999" },
+  });
+  return JSON.parse(out);
+};
+
+seedStamp({ checkedAt: nowSec(), latest: "99.0.0" });            // update pending
+const fired = runHook();
+ok("sessionstart: emits a user-facing systemMessage when an update is available",
+   typeof fired.systemMessage === "string" && /update available/i.test(fired.systemMessage) && fired.systemMessage.includes("99.0.0"));
+ok("sessionstart: model still gets the <trantor-update> context block",
+   /<trantor-update/.test(fired.hookSpecificOutput?.additionalContext || ""));
+
+seedStamp({ checkedAt: nowSec(), latest: inst });               // already on latest
+const quiet = runHook();
+ok("sessionstart: NO systemMessage when already on latest", !("systemMessage" in quiet));
+ok("sessionstart: NO <trantor-update> block when already on latest",
+   !/<trantor-update/.test(quiet.hookSpecificOutput?.additionalContext || ""));
 
 // cleanup
 rmSync(data, { recursive: true, force: true });

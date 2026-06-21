@@ -11,7 +11,7 @@ import { join, basename } from "node:path";
 import { homedir, hostname } from "node:os";
 import { execSync } from "node:child_process";
 import { resolveProject, hostId } from "../lib/project.mjs";
-import { updateAvailable, maybeNotifyDesktop } from "./lib/update-check.mjs";
+import { updateAvailable, maybeNotifyDesktop, readConfig } from "./lib/update-check.mjs";
 
 // Load the most recent UNCONSUMED handoff for this project (written by precompact.mjs
 // / the heartbeat early-warning). `claim` marks it consumed so exactly one session
@@ -93,6 +93,7 @@ function sanitize(s) {
 }
 
 let additionalContext = "";
+let userBanner = "";   // shown to the USER in-terminal via the hook's `systemMessage` (not model-only context)
 try {
   let source = "", stdinObj = {};
   try { stdinObj = JSON.parse((await readStdin()) || "{}"); source = stdinObj.source || ""; } catch {}
@@ -158,14 +159,19 @@ try {
     }
   } catch {}
 
-  // Update available? Like a desktop app's "an update is ready" — surface it two ways: a one-time
-  // native desktop notification (once per new version, not per session) AND an in-session context
-  // block so the running model can tell the user the exact update commands. Throttled + fail-silent;
-  // most starts do zero network (6h TTL cache). Disable: TRANTOR_NO_UPDATE_CHECK / _NOTIFY.
+  // Update available? Surface it the way a terminal tool should — an in-terminal `systemMessage`
+  // line the USER sees at session start (NOT a macOS desktop popup, which macOS misattributes to
+  // Script Editor and which fires off-screen). It shows every session while an update is pending and
+  // auto-clears the moment they update (updateAvailable() flips false) — a persistent-until-resolved
+  // reminder, like the built-in MCP-disconnected indicator. The model also gets the <trantor-update>
+  // context block so it can give the exact commands on request. Desktop notification is now OPT-IN
+  // (config.updateDesktopNotify:true) for anyone who genuinely wants the OS-level ping.
+  // Throttled + fail-silent; most starts do zero network (6h TTL cache). Disable: TRANTOR_NO_UPDATE_CHECK.
   try {
     const upd = await updateAvailable();
     if (upd.available) {
-      maybeNotifyDesktop(upd);
+      if (readConfig().updateDesktopNotify === true) maybeNotifyDesktop(upd);   // opt-in only
+      userBanner = `⬆️  Trantor update available: ${upd.installed} → ${upd.latest}  ·  update with:  claude plugin update trantor@trantor`;
       additionalContext += `<trantor-update installed="${sanitize(upd.installed)}" latest="${sanitize(upd.latest)}">\n`;
       additionalContext += `⬆️ **A newer Trantor is available — ${sanitize(upd.installed)} → ${sanitize(upd.latest)}.** Tell the user, and offer the update: \`claude plugin update trantor@trantor\` (plugin) + \`npm i -g trantor@${sanitize(upd.latest)}\` (CLI), then restart to apply.\n`;
       additionalContext += `</trantor-update>\n`;
@@ -195,13 +201,21 @@ try {
   process.stderr.write(`[trantor] sessionstart error: ${err?.message || err}\n`);
 }
 
-// Hook protocol: emit additionalContext via stdout JSON. Self-validate so we never
-// emit something Claude Code can't parse — fall back to sanitized, then to {}.
-function emit(ctx) {
-  const obj = ctx ? { hookSpecificOutput: { hookEventName: "SessionStart", additionalContext: ctx } } : {};
+// Hook protocol: emit additionalContext (model-facing) via stdout JSON, plus an optional
+// `systemMessage` (USER-facing — rendered as a line in the terminal, our update indicator).
+// Self-validate so we never emit something Claude Code can't parse — fall back to sanitized, then {}.
+function emit(ctx, sysMsg) {
+  const obj = {};
+  if (ctx) obj.hookSpecificOutput = { hookEventName: "SessionStart", additionalContext: ctx };
+  if (sysMsg) obj.systemMessage = sysMsg;
   const out = JSON.stringify(obj);
   try { JSON.parse(out); return out; } catch { /* fall through */ }
-  try { return JSON.stringify({ hookSpecificOutput: { hookEventName: "SessionStart", additionalContext: sanitize(ctx) } }); } catch { return "{}"; }
+  try {
+    const safe = {};
+    if (ctx) safe.hookSpecificOutput = { hookEventName: "SessionStart", additionalContext: sanitize(ctx) };
+    if (sysMsg) safe.systemMessage = sanitize(sysMsg);
+    return JSON.stringify(safe);
+  } catch { return "{}"; }
 }
-process.stdout.write(emit(additionalContext));
+process.stdout.write(emit(additionalContext, userBanner));
 process.exit(0);
