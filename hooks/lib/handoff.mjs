@@ -227,6 +227,15 @@ export function writeHandoff({ projectDir, sessionId, transcript, trigger, summa
   // baked copy is just orientation if the live command isn't available. Best-effort; never throws.
   let subagents = null;
   try { subagents = deriveSubagentManifest(transcript, { projectRoot: projectDir }); } catch {}
+  // Open verification gates for this project — structured "must verify before shipping" claims that
+  // MUST survive the handoff (a narrative line gets skimmed past; this is what the v0.17.31 incident
+  // taught — the "verify Gail coefficients" intent vanished into prose). Fetched synchronously from
+  // the local hub; best-effort, never blocks the handoff.
+  let verifyGates = [];
+  try {
+    const out = execSync(`curl -s --max-time 2 ${JSON.stringify(relayUrl() + "/verify-gates?project=" + encodeURIComponent(projectName))}`, { encoding: "utf8", timeout: 2500 });
+    verifyGates = JSON.parse(out).gates || [];
+  } catch {}
   const record = {
     id: `${projectName}-${stamp}`,
     project: projectDir, projectName, machine: hostname(),
@@ -234,7 +243,7 @@ export function writeHandoff({ projectDir, sessionId, transcript, trigger, summa
     transcript_path: transcript || "", stamp: Number(stamp) || 0,
     // narrative + a verbatim recent-exchange block so exact in-flight state always survives
     summary: narrative + (tail ? `\n\n---\n## Verbatim recent exchange (exact in-flight state — continue from here)\n${tail}` : ""),
-    gitStatus, subagents, consumed: false,
+    gitStatus, subagents, verifyGates, consumed: false,
   };
   const file = join(HANDOFF_DIR, `${record.id}.json`);
   writeFileSync(file, JSON.stringify(record, null, 2));

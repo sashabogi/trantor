@@ -50,11 +50,11 @@ function scanTelemetry() {
 
 // peers: { session: { lastSeen, status, project } } ; tasks: kanban cards
 // projectMeta: { project: { brief, by, updated } } — the "what & why" blurb per project
-let state = { messages: [], peers: {}, seq: 0, tasks: [], taskSeq: 0, projectMeta: {}, lessons: [], cardEvents: [], cardEventsBackfilled: false, aliases: {}, phaseMeta: {} };
+let state = { messages: [], peers: {}, seq: 0, tasks: [], taskSeq: 0, projectMeta: {}, lessons: [], cardEvents: [], cardEventsBackfilled: false, aliases: {}, phaseMeta: {}, verifyGates: [], verifyGateSeq: 0 };
 try {
   if (existsSync(DATA)) {
     const loaded = JSON.parse(readFileSync(DATA, "utf8"));
-    state = { messages: loaded.messages || [], peers: {}, seq: loaded.seq || 0, tasks: loaded.tasks || [], taskSeq: loaded.taskSeq || 0, projectMeta: loaded.projectMeta || {}, lessons: loaded.lessons || [], cardEvents: Array.isArray(loaded.cardEvents) ? loaded.cardEvents : [], cardEventsBackfilled: !!loaded.cardEventsBackfilled, aliases: (loaded.aliases && typeof loaded.aliases === "object") ? loaded.aliases : {}, phaseMeta: (loaded.phaseMeta && typeof loaded.phaseMeta === "object") ? loaded.phaseMeta : {} };
+    state = { messages: loaded.messages || [], peers: {}, seq: loaded.seq || 0, tasks: loaded.tasks || [], taskSeq: loaded.taskSeq || 0, projectMeta: loaded.projectMeta || {}, lessons: loaded.lessons || [], cardEvents: Array.isArray(loaded.cardEvents) ? loaded.cardEvents : [], cardEventsBackfilled: !!loaded.cardEventsBackfilled, aliases: (loaded.aliases && typeof loaded.aliases === "object") ? loaded.aliases : {}, phaseMeta: (loaded.phaseMeta && typeof loaded.phaseMeta === "object") ? loaded.phaseMeta : {}, verifyGates: Array.isArray(loaded.verifyGates) ? loaded.verifyGates : [], verifyGateSeq: loaded.verifyGateSeq || 0 };
     for (const [s, v] of Object.entries(loaded.peers || {})) // migrate old numeric form
       state.peers[s] = typeof v === "number" ? { lastSeen: v, status: "", project: "" } : { lastSeen: v.lastSeen || 0, status: v.status || "", project: v.project || "" };
   }
@@ -486,6 +486,34 @@ const server = http.createServer(async (req, res) => {
       state.lessons.push({ id: state.lessons.length + 1, scope, text, by: b.by || "", ts: now() });
       if (state.lessons.length > 500) state.lessons.splice(0, 100);
       dirty = true; return json(res, 200, { ok: true, count: state.lessons.length });
+    }
+    // --- verification gates: structured "must verify before shipping" claims that travel with
+    // handoffs and surface PROMINENTLY to whoever takes over (so a safety-critical check can't be
+    // skimmed past in narrative prose — the "verify Gail coefficients" intent that got lost). ---
+    if (req.method === "POST" && P === "/verify-gate") {
+      const b = await body(req); touch(b.by, undefined, b.project);
+      const project = canon(String(b.project || "").slice(0, 80));
+      if (b.resolve) {
+        const g = state.verifyGates.find(x => x.id === Number(b.id) && x.project === project);
+        if (!g) return json(res, 404, { error: "gate not found" });
+        g.status = ["verified", "failed", "waived"].includes(b.status) ? b.status : "verified";
+        g.resolvedBy = b.by || ""; g.resolvedNote = String(b.note || "").slice(0, 300); g.resolvedTs = now();
+        dirty = true; return json(res, 200, { ok: true, gate: g });
+      }
+      const claim = String(b.claim || "").trim().slice(0, 300);
+      if (!claim) return json(res, 400, { error: "claim required" });
+      const dup = state.verifyGates.find(x => x.project === project && x.claim === claim && x.status === "open");
+      if (dup) return json(res, 200, { ok: true, gate: dup, dedup: true });
+      const g = { id: ++state.verifyGateSeq, project, claim, why: String(b.why || "").slice(0, 300),
+        howToVerify: String(b.howToVerify || "").slice(0, 300), status: "open", by: b.by || "", ts: now() };
+      state.verifyGates.push(g); if (state.verifyGates.length > 500) state.verifyGates.splice(0, 100);
+      dirty = true; return json(res, 200, { ok: true, gate: g });
+    }
+    if (req.method === "GET" && P === "/verify-gates") {
+      const project = canon(String(q.project || ""));
+      let gates = state.verifyGates.filter(g => !project || g.project === project);
+      if (q.all !== "1") gates = gates.filter(g => g.status === "open");
+      return json(res, 200, { gates });
     }
     if (req.method === "GET" && P === "/economics") {   // the brain's books, surfaced: scrooge ledger + quota profile
       const out = { scrooge: null, lifetime: null, profile: null };

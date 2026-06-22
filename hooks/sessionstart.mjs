@@ -197,6 +197,19 @@ try {
     process.stderr.write(`[trantor] ${isCompact ? "showing (not claiming, compact)" : "loaded"} pending handoff ${handoff.id}\n`);
     additionalContext += `<trantor-handoff id="${sanitize(handoff.id)}" from="${sanitize(handoff.machine)}" trigger="${sanitize(handoff.trigger)}">\n`;
     additionalContext += `🔄 **You are taking over from a prior session that hit its context limit.** This is a fresh full window. Resume the work below — the prior session's summary, git state, and a pointer to its full transcript (searchable; Foundation/Gaia has it ingested) follow. Continue from "OPEN THREADS & NEXT STEPS"; do not restart from scratch.\n\n`;
+    // Verification gates FIRST — these are structured "must verify before shipping" claims the prior
+    // session couldn't independently prove. They go above the summary on purpose: a safety-critical
+    // check must not be skimmed past (the lesson of the lost "verify Gail coefficients" intent).
+    if (Array.isArray(handoff.verifyGates) && handoff.verifyGates.length) {
+      additionalContext += `## ⚠️ UNVERIFIED — verify before shipping (${handoff.verifyGates.length})\n`;
+      additionalContext += `The prior session flagged these as NOT independently verified. Do NOT commit or ship the related work until each is verified (or explicitly waived WITH the user) — passing the author's own tests is not verification. Resolve via the \`relay_verify_gate\` tool (action "resolve") once checked.\n`;
+      for (const g of handoff.verifyGates) {
+        additionalContext += `- **#${sanitize(String(g.id))}: ${sanitize(g.claim)}**${g.why ? ` — ${sanitize(g.why)}` : ""}`;
+        if (g.howToVerify) additionalContext += `\n    how to verify: ${sanitize(g.howToVerify)}`;
+        additionalContext += `\n`;
+      }
+      additionalContext += `\n`;
+    }
     additionalContext += `## Handoff summary\n${sanitize(handoff.summary)}\n`;
     if (handoff.gitStatus) additionalContext += `\n## Git working-tree at handoff\n\`\`\`\n${sanitize(handoff.gitStatus)}\n\`\`\`\n`;
     // Sub-agent manifest: LIVE-primary, snapshot-as-fallback. The prior session may have had

@@ -72,6 +72,22 @@ try {
   ok("kimi sees global + own lessons", forKimi.length === 2);
   ok("codex sees only global", forCodex.length === 1);
 
+  console.log("scenario: verification gates — add, dedupe, list open, resolve");
+  const g1 = await api("/verify-gate", { project: "proj", claim: "Gail coefficients match published BCRAT", why: "absolute-risk calibration is risky", howToVerify: "cross-check vs the BCRA R package", by: "arch" });
+  ok("gate created with an id + open status", g1.gate?.id > 0 && g1.gate.status === "open");
+  const g1dup = await api("/verify-gate", { project: "proj", claim: "Gail coefficients match published BCRAT", by: "arch" });
+  ok("same open claim dedupes (no duplicate gate)", g1dup.dedup === true && g1dup.gate.id === g1.gate.id);
+  await api("/verify-gate", { project: "proj", claim: "colorectal matches NCI macro output", by: "arch" });
+  const openGates = (await api("/verify-gates?project=proj")).gates;
+  ok("two open gates listed for the project", openGates.length === 2 && openGates.every(g => g.status === "open"));
+  ok("gates are project-scoped", (await api("/verify-gates?project=other")).gates.length === 0);
+  const gr = await api("/verify-gate", { project: "proj", resolve: true, id: g1.gate.id, status: "verified", note: "matched BCRA to 1e-7", by: "arch" });
+  ok("resolve flips status + records the note", gr.gate?.status === "verified" && gr.gate.resolvedNote.includes("1e-7"));
+  ok("resolved gate drops out of the open list", (await api("/verify-gates?project=proj")).gates.length === 1);
+  ok("--all includes resolved gates", (await api("/verify-gates?project=proj&all=1")).gates.length === 2);
+  ok("resolving an unknown id errors", (await api("/verify-gate", { project: "proj", resolve: true, id: 99999 })).error != null);
+  ok("a claimless add is rejected", (await api("/verify-gate", { project: "proj", by: "arch" })).error != null);
+
   console.log("scenario: difficulty + history + bounce trail");
   const { task: t2 } = await api("/task", { project: "proj", title: "hist", assignee: "kimi:proj", difficulty: "hard", by: "arch" });
   ok("difficulty stored", t2.difficulty === "hard");

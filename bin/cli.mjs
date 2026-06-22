@@ -27,6 +27,7 @@ switch (cmd) {
   case "watch":   run("bin/relay-watch.mjs"); break;
   case "catchup": run("bin/catchup.mjs"); break;
   case "agents":  run("bin/agents.mjs"); break;
+  case "gates":   run("bin/gates.mjs"); break;
   case "backfill": run("bin/git-backfill.mjs"); break;
   case "handoff": run("bin/baton.mjs"); break;
   case "ui": {
@@ -50,6 +51,7 @@ switch (cmd) {
   trantor ui          open the live dashboard (board + flow views)
   trantor catchup     "where are we?" — the continuous board + git, with a synthesized brief
   trantor agents      what this session's sub-agents did (task · returned? · files written · survived on disk) — [<sessionId>] [--json]
+  trantor gates       verification gates: "must verify before shipping" claims that survive handoffs — [--all] [--json]
   trantor backfill    card past GIT work onto the board (solo commits that were never carded) — [--since "14 days ago"] [--dry-run]
   trantor handoff     finish this session NOW: write a handoff, open a fresh session that takes over, and close this one (manual baton)
   trantor advise      ask the Advisor directly (JSON on stdin; --demo to see it)

@@ -105,6 +105,32 @@ server.tool("relay_lesson", "Record a LESSON learned from a failure so future cr
     return { content: [{ type: "text", text: r.dedup ? "lesson already recorded" : `lesson recorded (${r.count} total)` }] };
   });
 
+server.tool("relay_verify_gate", "Record a VERIFICATION GATE — a claim that MUST be independently verified before the related work ships (e.g. 'Gail breast coefficients match the published BCRAT model'). Unlike a note buried in a handoff narrative, a gate is STRUCTURED: it travels with handoffs and is shown PROMINENTLY to whoever takes over, so a safety-critical 'verify before commit' can't be skimmed past. action 'add' when you produce code whose correctness you have NOT independently proven (especially formulas/coefficients/security/data-shape); 'resolve' once you've verified it (or waived with the user); 'list' to see open gates. Defaults to THIS project.",
+  { action: z.enum(["add", "resolve", "list"]).describe("add a gate · resolve one · list open gates"),
+    claim: z.string().optional().describe("what must be verified (required for add) — a specific, checkable claim"),
+    why: z.string().optional().describe("why it matters / the risk if it ships unverified"),
+    howToVerify: z.string().optional().describe("the concrete check that would verify it (source to cross-check, command to run)"),
+    id: z.number().optional().describe("gate id to resolve"),
+    status: z.string().optional().describe("resolve status: 'verified' (default) | 'failed' | 'waived'"),
+    note: z.string().optional().describe("resolution note (what you checked / why waived)"),
+    project: z.string().optional().describe("target project (default: this session's project)") },
+  async ({ action, claim, why, howToVerify, id, status, note, project }) => {
+    const proj = project || PROJECT;
+    if (action === "list") {
+      const { gates } = await api("GET", `/verify-gates?project=${encodeURIComponent(proj)}`);
+      if (!gates || !gates.length) return { content: [{ type: "text", text: `${proj}: no open verification gates` }] };
+      return { content: [{ type: "text", text: gates.map(g => `#${g.id} ⚠️ ${g.claim}${g.why ? ` — ${g.why}` : ""}`).join("\n") }] };
+    }
+    if (action === "resolve") {
+      if (!id) return { content: [{ type: "text", text: "id required to resolve a gate" }] };
+      const r = await api("POST", "/verify-gate", { resolve: true, id, status: status || "verified", note, project: proj, by: SESSION });
+      return { content: [{ type: "text", text: r.error ? `error: ${r.error}` : `gate #${id} resolved (${r.gate?.status || status || "verified"})` }] };
+    }
+    if (!claim) return { content: [{ type: "text", text: "claim required to add a gate" }] };
+    const r = await api("POST", "/verify-gate", { claim, why, howToVerify, project: proj, by: SESSION });
+    return { content: [{ type: "text", text: r.dedup ? `gate already open (#${r.gate.id})` : `🔒 verification gate #${r.gate.id} recorded — surfaces on every handoff until you resolve it` }] };
+  });
+
 server.tool("relay_board", "Show a project's Kanban board (all cards + their status + assignee). Defaults to THIS project; pass `project` to read a crew board you orchestrate from elsewhere.",
   { project: z.string().optional().describe("board to show (default: this session's project)") },
   async ({ project }) => {
