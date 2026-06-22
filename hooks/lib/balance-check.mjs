@@ -7,6 +7,7 @@ import { join } from "node:path";
 import { homedir } from "node:os";
 import { fetchBalances, isLow, fmtBalance, DEFAULT_LOW, DEFAULT_LOW_QUOTA_PCT } from "../../lib/balances.mjs";
 import { loadProfile } from "../../bin/profile.mjs";
+import { resolveKeys } from "../../lib/provider-keys.mjs";
 
 const STAMP = join(homedir(), ".agent-bus", "balances-check.json");
 const TTL_MS = 3 * 3600 * 1000;
@@ -34,7 +35,7 @@ export async function maybeCheckBalances() {
   if (!only.length) return { low: [] };   // no profile → nothing to report
 
   let balances;
-  try { balances = await Promise.race([fetchBalances(process.env, { only }), new Promise((_, rej) => setTimeout(() => rej(new Error("cap")), CAP_MS))]); }
+  try { balances = await Promise.race([fetchBalances(resolveKeys(process.env), { only }), new Promise((_, rej) => setTimeout(() => rej(new Error("cap")), CAP_MS))]); }
   catch { return { low: stamp.low || [] }; }   // timed out / errored — keep the last known low list, don't rewrite the stamp
   if (!Array.isArray(balances) || !balances.length) { try { writeFileSync(STAMP, JSON.stringify({ ts: Date.now(), low: [] })); } catch {} return { low: [] }; }
 

@@ -9,6 +9,7 @@ import { join } from "node:path";
 import { homedir } from "node:os";
 import { fetchBalances, isLow, fmtBalance, DEFAULT_LOW, DEFAULT_LOW_QUOTA_PCT } from "../lib/balances.mjs";
 import { loadProfile } from "./profile.mjs";
+import { resolveKeys } from "../lib/provider-keys.mjs";
 
 const args = process.argv.slice(2);
 const asJson = args.includes("--json");
@@ -28,7 +29,7 @@ function thresholds() {
   return DEFAULT_LOW;
 }
 
-const balances = await fetchBalances(process.env, { only: configured });
+const balances = await fetchBalances(resolveKeys(process.env), { only: configured });
 const low = thresholds();
 
 // push the snapshot to the hub (best-effort) so the dashboard + warning line can use it

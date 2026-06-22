@@ -378,28 +378,34 @@ async function credits(){
   try{
     const b=await (await fetch('/balances')).json();
     const el=$('#credits'); if(!el)return;
-    const all=(b.entries||[]).filter(e=>e.kind==='prepaid'||e.kind==='quota');
+    const all=(b.entries||[]);
     if(!all.length){el.style.display='none';return;}
     el.style.display='';
     const sym=c=>c==='CNY'?'¥':c==='EUR'?'€':'$';
     const lbl=e=>e.label.replace(/ \(.*/,'');
+    const cap=s=>String(s||'').replace(/^./,c=>c.toUpperCase());
     const txt=e=>e.kind==='quota'
       ? `${lbl(e)} ${e.remainingPct==null?'?':e.remainingPct+'%'}`
       : `${lbl(e)} ${e.remaining==null?'∞':$usd(e.remaining,sym(e.currency))}`;
-    const ok=all.filter(e=>e.ok && (e.remaining!=null||e.remainingPct!=null));
+    const metered=all.filter(e=>e.kind==='prepaid'||e.kind==='quota');
+    const subs=all.filter(e=>e.kind==='subscription');
+    const ok=metered.filter(e=>e.ok && (e.remaining!=null||e.remainingPct!=null));
     const lows=ok.filter(e=>e.low);
-    const errs=all.filter(e=>!e.ok).map(lbl);
+    const errs=metered.filter(e=>!e.ok).map(lbl);
     const staleTag=b.stale?' · <span style="opacity:.6">stale</span>':'';
+    // subscriptions (claude/codex/gemini) have no balance to refill — show them dimmed so the configured
+    // crew is fully visible, just not as $ figures.
+    const subTxt=subs.length?` <span style="opacity:.5">· ${subs.map(e=>cap(lbl(e))+(e.plan?' ('+e.plan+')':'')).join(' · ')} (sub)</span>`:'';
     if(lows.length){
       el.classList.add('lowbal');
       const rest=ok.filter(e=>!e.low);
-      el.innerHTML=`🔴 <b>low:</b> ${lows.map(txt).join(' · ')}`+(rest.length?` <span style="opacity:.7">| ${rest.map(txt).join(' · ')}</span>`:'')+staleTag;
+      el.innerHTML=`🔴 <b>low:</b> ${lows.map(txt).join(' · ')}`+(rest.length?` <span style="opacity:.7">| ${rest.map(txt).join(' · ')}</span>`:'')+subTxt+staleTag;
     } else if(ok.length){
       el.classList.remove('lowbal');
-      el.innerHTML=`💳 ${ok.map(txt).join(' · ')}`+(errs.length?` <span style="opacity:.55">· ${errs.join(',')} ?</span>`:'')+staleTag;
+      el.innerHTML=`💳 ${ok.map(txt).join(' · ')}`+(errs.length?` <span style="opacity:.55">· ${errs.join(',')} ?</span>`:'')+subTxt+staleTag;
     } else {
       el.classList.remove('lowbal');
-      el.innerHTML=`💳 <span style="opacity:.6">no credit reporting${errs.length?' ('+errs.join(',')+' ?)':''}</span>`;
+      el.innerHTML=`💳 <span style="opacity:.6">${subs.length?'metered: none':'no credit reporting'}${errs.length?' ('+errs.join(',')+' ?)':''}</span>`+subTxt;
     }
   }catch(_){}
 }
