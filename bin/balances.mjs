@@ -7,7 +7,7 @@
 import { readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
-import { fetchBalances, isLow, fmtBalance, DEFAULT_LOW } from "../lib/balances.mjs";
+import { fetchBalances, isLow, fmtBalance, DEFAULT_LOW, DEFAULT_LOW_QUOTA_PCT } from "../lib/balances.mjs";
 
 const args = process.argv.slice(2);
 const asJson = args.includes("--json");
@@ -18,8 +18,9 @@ function relayUrl() {
   try { const c = join(homedir(), ".agent-bus", "config.json"); if (existsSync(c)) { const u = JSON.parse(readFileSync(c, "utf8")).url; if (u) return u; } } catch {}
   return "http://127.0.0.1:4477";
 }
+let _qpct = DEFAULT_LOW_QUOTA_PCT;
 function thresholds() {
-  try { const c = JSON.parse(readFileSync(join(homedir(), ".agent-bus", "config.json"), "utf8")); if (c.lowBalance && typeof c.lowBalance === "object") return { ...DEFAULT_LOW, ...c.lowBalance }; } catch {}
+  try { const c = JSON.parse(readFileSync(join(homedir(), ".agent-bus", "config.json"), "utf8")); if (typeof c.lowQuotaPct === "number") _qpct = c.lowQuotaPct; if (c.lowBalance && typeof c.lowBalance === "object") return { ...DEFAULT_LOW, ...c.lowBalance }; } catch {}
   return DEFAULT_LOW;
 }
 
@@ -34,17 +35,18 @@ if (!noPush) {
   } catch {}
 }
 
-if (asJson) { console.log(JSON.stringify({ balances, low: balances.filter((b) => isLow(b, low)).map((b) => b.provider) }, null, 2)); process.exit(0); }
+if (asJson) { console.log(JSON.stringify({ balances, low: balances.filter((b) => isLow(b, low, _qpct)).map((b) => b.provider) }, null, 2)); process.exit(0); }
 
 if (!balances.length) {
-  console.log("no prepaid providers configured in this environment.");
-  console.log("set a key (e.g. DEEPSEEK_API_KEY, OPENROUTER_API_KEY, KIMI_API_KEY) and re-run.");
+  console.log("no providers configured in this environment.");
+  console.log("set a key (e.g. DEEPSEEK_API_KEY, OPENROUTER_API_KEY, KIMI_API_KEY, ZAI_API_KEY) and re-run.");
   process.exit(0);
 }
 console.log("PROVIDER CREDITS\n");
 for (const b of balances) {
-  const flag = b.ok && isLow(b, low) ? "  🔴 REFILL SOON" : (b.ok && b.remaining != null ? "  🟢" : "");
+  const hasNum = b.ok && (b.remaining != null || b.remainingPct != null);
+  const flag = isLow(b, low, _qpct) ? "  🔴 REFILL SOON" : (hasNum ? "  🟢" : "");
   console.log("  " + fmtBalance(b) + flag);
 }
-const lows = balances.filter((b) => isLow(b, low));
-if (lows.length) console.log(`\n⚠ ${lows.length} provider(s) low — refill: ${lows.map((b) => b.label).join(", ")}`);
+const lows = balances.filter((b) => isLow(b, low, _qpct));
+if (lows.length) console.log(`\n⚠ ${lows.length} provider(s) low — top up / pace: ${lows.map((b) => b.label).join(", ")}`);

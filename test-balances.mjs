@@ -19,6 +19,12 @@ ok(isLow({ ok: true, remaining: 1, currency: "USD" }, { USD: 0.5 }) === false, "
 ok(fmtBalance({ ok: true, label: "DeepSeek", remaining: 3.5, currency: "CNY", kind: "prepaid" }).includes("¥3.50"), "fmtBalance: CNY symbol + 2dp");
 ok(fmtBalance({ ok: false, label: "Kimi", error: "401" }).includes("⚠"), "fmtBalance: errored shows warning");
 ok(fmtBalance({ ok: true, label: "Sub", kind: "subscription", remaining: null }).includes("subscription"), "fmtBalance: subscription label");
+// quota kind
+ok(isLow({ ok: true, kind: "quota", remainingPct: 8 }) === true, "isLow: quota 8% < 15% default → low");
+ok(isLow({ ok: true, kind: "quota", remainingPct: 99 }) === false, "isLow: quota 99% → not low");
+ok(isLow({ ok: true, kind: "quota", remainingPct: 40 }, DEFAULT_LOW, 50) === true, "isLow: quota respects custom pct (40<50)");
+ok(isLow({ ok: true, kind: "quota", remainingPct: null }) === false, "isLow: quota unknown% → never low");
+ok(fmtBalance({ ok: true, kind: "quota", label: "Kimi Code", plan: "intermediate", remainingPct: 99 }).includes("99% left"), "fmtBalance: quota shows % left + plan");
 
 // --- fetchBalances skips providers with no key present ---
 const empty = await fetchBalances({});
@@ -41,6 +47,7 @@ await post("/balances", { ts: 1000, by: "old:trantor", balances: [{ provider: "o
 await post("/balances", { ts: 2000, by: "new:trantor", balances: [
   { provider: "openrouter", label: "OpenRouter", kind: "prepaid", ok: true, remaining: 11.68, currency: "USD" },
   { provider: "deepseek", label: "DeepSeek", kind: "prepaid", ok: true, remaining: 2.10, currency: "USD" },
+  { provider: "zai", label: "Z.ai (GLM)", kind: "quota", ok: true, remainingPct: 6, plan: "GLM Coding Max" },
   { provider: "moonshot", label: "Kimi (Moonshot)", kind: "prepaid", ok: false, error: "HTTP 401" },
 ] });
 const g = await get("/balances");
@@ -49,7 +56,9 @@ const or = g.entries.find(e => e.provider === "openrouter");
 const ds = g.entries.find(e => e.provider === "deepseek");
 ok(or && or.remaining === 11.68 && or.low === false, "hub: OpenRouter $11.68 not low");
 ok(ds && ds.low === true, "hub: DeepSeek $2.10 flagged low");
-ok(g.lowCount === 1, `hub: lowCount=1 (got ${g.lowCount})`);
+const zai = g.entries.find(e => e.provider === "zai");
+ok(zai && zai.kind === "quota" && zai.low === true, "hub: Z.ai quota 6% flagged low");
+ok(g.lowCount === 2, `hub: lowCount=2 (DeepSeek + Z.ai) (got ${g.lowCount})`);
 const kimi = g.entries.find(e => e.provider === "moonshot");
 ok(kimi && kimi.kind === "subscription", "hub: errored Kimi reconciled to subscription (profile kimi=coding-plan)");
 const claude = g.entries.find(e => e.provider === "claude");
