@@ -12,7 +12,9 @@ import { basename } from "node:path";
 const [, , projectDir = process.cwd(), sessionId = "", transcript = "", trigger = "context-warn", windowId = "", tty = ""] = process.argv;
 try {
   const conf = readConfig();
-  const { file, record } = writeHandoff({ projectDir, sessionId, transcript, trigger });
+  const result = writeHandoff({ projectDir, sessionId, transcript, trigger });   // auto path — honors the hub storm guard
+  if (result.skipped) { process.stderr.write(`[trantor] handoff SKIPPED by storm-guard (${result.reason}; ${result.sinceSec ?? "?"}s since last) — no fresh window spawned\n`); process.exit(0); }
+  const { file, record } = result;
   process.stderr.write(`[trantor] baton handoff written: ${file}\n`);
   await pingBus(basename(projectDir), record.id, conf);
   if (maybeSpawn(projectDir, conf)) {                 // open the fresh session that takes over

@@ -25,7 +25,7 @@ try {
   const sessionId = input.session_id || "";
   const conf = readConfig();
 
-  const { file, record } = writeHandoff({ projectDir, sessionId, transcript, trigger });
+  const { file, record } = writeHandoff({ projectDir, sessionId, transcript, trigger, force: true });   // at-wall backstop — must never be storm-guard-suppressed
   process.stderr.write(`[trantor] handoff written: ${file} (trigger=${trigger})\n`);
 
   await pingBus(projectName, record.id, conf);

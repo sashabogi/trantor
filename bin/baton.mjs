@@ -30,7 +30,7 @@ function findTranscript() {
 }
 
 const transcript = findTranscript();
-const { file } = writeHandoff({ projectDir: cwd, sessionId: "", transcript, trigger: "manual-cli" });
+const { file } = writeHandoff({ projectDir: cwd, sessionId: "", transcript, trigger: "manual-cli", force: true });   // manual = intentional, bypass the storm guard
 console.log(`📋 handoff saved for ${project}: ${file}`);
 const { spawned, armed, windowId } = spawnBaton({ projectDir: cwd, handoffFile: file });
 console.log(spawned

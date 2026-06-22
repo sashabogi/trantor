@@ -213,8 +213,21 @@ export function verbatimRecentTail(transcript, chars = 7000) {
 }
 
 // ---- write + announce + spawn ----------------------------------------------
-export function writeHandoff({ projectDir, sessionId, transcript, trigger, summary }) {
+export function writeHandoff({ projectDir, sessionId, transcript, trigger, summary, force = false }) {
   const projectName = basename(projectDir);
+  // Server-side storm guard: a session running OLD hooks (before the local markHandedOff guard) re-fires
+  // context-warn handoffs every few minutes — the crebral-cortex storm (9 in 49 min, each spawning a
+  // window). Ask the hub for clearance (rate-limit per project+session); a non-forced handoff inside the
+  // cooldown is SKIPPED — no file, no spawn. Manual (/trantor:handoff) + at-wall (precompact) handoffs
+  // force through. Fail-OPEN if the hub is unreachable, so a legit handoff is never blocked.
+  if (!force) {
+    try {
+      const body = JSON.stringify({ project: projectName, session: sessionId || "", trigger: trigger || "auto" });
+      const out = execSync(`curl -s --max-time 2 -X POST -H 'content-type: application/json' -d ${JSON.stringify(body)} ${JSON.stringify(relayUrl() + "/handoff")}`, { encoding: "utf8", timeout: 2500 });
+      const r = JSON.parse(out);
+      if (r && r.allow === false) return { skipped: true, reason: r.reason || "storm-guard", sinceSec: r.sinceSec };
+    } catch {}
+  }
   if (!existsSync(HANDOFF_DIR)) mkdirSync(HANDOFF_DIR, { recursive: true });
   const stamp = nowSec() || Date.now();
   let gitStatus = "";

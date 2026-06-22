@@ -20,6 +20,7 @@ import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { readConfig, contextUsage, warnFrac, alreadyHandedOff, markHandedOff, controllingTty, terminalWindowForTty, subagentsActive } from "./lib/handoff.mjs";
 import { resolveProject, hostId } from "../lib/project.mjs";
+import { installedVersion } from "./lib/update-check.mjs";   // report our hook version so the hub can flag stale sessions
 
 const HEARTBEAT_MS = Number(process.env.RELAY_HEARTBEAT_MS || 60 * 1000);
 const FETCH_TIMEOUT_MS = Number(process.env.RELAY_HEARTBEAT_TIMEOUT_MS || 1500);
@@ -121,7 +122,7 @@ async function main(stdinRaw) {
     await fetch(`${relayUrl()}/register`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ session, project }),
+      body: JSON.stringify({ session, project, hookVersion: (() => { try { return installedVersion(); } catch { return ""; } })() }),
       signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
     });
   } catch {}
