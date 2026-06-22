@@ -13,6 +13,7 @@ import { execSync } from "node:child_process";
 import { resolveProject, hostId } from "../lib/project.mjs";
 import { formatSubagentManifest } from "../lib/subagent-manifest.mjs";
 import { updateAvailable, maybeNotifyDesktop, readConfig } from "./lib/update-check.mjs";
+import { maybeCheckBalances } from "./lib/balance-check.mjs";
 
 // Load the most recent UNCONSUMED handoff for this project (written by precompact.mjs
 // / the heartbeat early-warning). `claim` marks it consumed so exactly one session
@@ -181,6 +182,20 @@ try {
       additionalContext += `⬆️ **A newer Trantor is available — ${sanitize(upd.installed)} → ${sanitize(upd.latest)}.** Tell the user, and offer the update: \`claude plugin update trantor@trantor\` (plugin) + \`npm i -g trantor@${sanitize(upd.latest)}\` (CLI), then restart to apply.\n`;
       additionalContext += `</trantor-update>\n`;
       process.stderr.write(`[trantor] update available: ${upd.installed} -> ${upd.latest}\n`);
+    }
+  } catch {}
+
+  // Provider credit low? The session env has the keys (the hub doesn't), so check + push the snapshot
+  // here and warn in-terminal so you refill BEFORE a build stalls. Throttled (3h TTL) + 4s-capped +
+  // fail-silent — most starts do zero network. Disable: TRANTOR_NO_BALANCE_CHECK=1.
+  try {
+    const bal = await maybeCheckBalances();
+    if (bal.low && bal.low.length) {
+      const O = "\x1b[1;38;5;208m", R = "\x1b[0m";
+      const line = `🟠 ${O}Provider credit low — refill soon:${R} ${bal.low.map(l => l.line).join("  ·  ")}  ·  check:  ${O}trantor balances${R}`;
+      userBanner = userBanner ? `${userBanner}\n${line}` : line;
+      additionalContext += `<trantor-balance-low>\n⚠️ ${bal.low.length} provider(s) low on prepaid credit: ${sanitize(bal.low.map(l => l.line).join("; "))}. Tell the user to refill before relying on those providers for a build.\n</trantor-balance-low>\n`;
+      process.stderr.write(`[trantor] low balance: ${bal.low.map(l => l.label).join(", ")}\n`);
     }
   } catch {}
 

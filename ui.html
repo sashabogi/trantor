@@ -11,6 +11,7 @@ header{display:flex;align-items:center;gap:13px;padding:11px 18px;border-bottom:
 .dot.off{background:var(--dim);box-shadow:none}
 .muted{color:var(--mut)}.dim{color:var(--dim)}.spacer{flex:1}
 .pill{background:var(--card);border:1px solid var(--line);border-radius:20px;padding:3px 11px;font-size:12px;color:var(--mut)}
+.pill.lowbal{color:#ffb4b4;border-color:#5a2c2c;background:#2a1517;animation:failpulse 2.4s ease-in-out infinite}
 main{flex:1;display:grid;grid-template-columns:var(--lw,44px) 1fr 330px;min-height:0}
 main.learn-open{--lw:372px}
 .boards{overflow-y:auto;padding:16px 18px}
@@ -270,6 +271,7 @@ aside h2{font-size:10.5px;text-transform:uppercase;letter-spacing:.09em;color:va
   <span class="pill" id="hub">—</span>
   <span class="spacer"></span>
   <span class="pill" id="econ" title="Trantor savings vs frontier models — lifetime running total + last 24h (from the Scrooge ledger)" style="display:none"></span>
+  <span class="pill" id="credits" title="Prepaid provider credit remaining — refill before a build stalls. Pushed by sessions/CLI (the hub has no keys)." style="display:none"></span>
   <span class="pill"><span id="nproj">0</span> projects · <span id="nsess">0</span> live · <span id="ntask">0</span> cards</span>
 </header>
 <main>
@@ -361,6 +363,32 @@ async function econ(){
   }catch(_){}
 }
 econ();setInterval(econ,15000);
+async function credits(){
+  try{
+    const b=await (await fetch('/balances')).json();
+    const el=$('#credits'); if(!el)return;
+    const prepaid=(b.entries||[]).filter(e=>e.kind==='prepaid');
+    if(!prepaid.length && !(b.entries||[]).length){el.style.display='none';return;}
+    el.style.display='';
+    const sym=c=>c==='CNY'?'¥':c==='EUR'?'€':'$';
+    const ok=prepaid.filter(e=>e.ok && e.remaining!=null);
+    const lows=ok.filter(e=>e.low);
+    const parts=ok.map(e=>`${e.label.replace(/ \(.*/,'')} ${sym(e.currency)}${(+e.remaining).toFixed(2)}`);
+    const errs=prepaid.filter(e=>!e.ok).map(e=>e.label.replace(/ \(.*/,''));
+    const staleTag=b.stale?' · <span style="opacity:.6">stale</span>':'';
+    if(lows.length){
+      el.classList.add('lowbal');
+      el.innerHTML=`🔴 <b>refill:</b> ${lows.map(e=>`${e.label.replace(/ \(.*/,'')} ${sym(e.currency)}${(+e.remaining).toFixed(2)}`).join(' · ')}`+(ok.length>lows.length?` <span style="opacity:.7">| ${parts.filter((_,i)=>!ok[i].low).join(' · ')}</span>`:'')+staleTag;
+    } else if(ok.length){
+      el.classList.remove('lowbal');
+      el.innerHTML=`💳 ${parts.join(' · ')}`+(errs.length?` <span style="opacity:.55">· ${errs.join(',')} ?</span>`:'')+staleTag;
+    } else {
+      el.classList.remove('lowbal');
+      el.innerHTML=`💳 <span style="opacity:.6">no prepaid credit reporting${errs.length?' ('+errs.join(',')+' ?)':''}</span>`;
+    }
+  }catch(_){}
+}
+credits();setInterval(credits,30000);
 function poolOf(session){const b=brandOf(session);const k=b==='anthropic'?'claude':b==='openai'?'codex':b==='moonshot'?'kimi':b;return POOLS[k]||'';}
 const VIEWS = JSON.parse(localStorage.getItem("abViews") || "{}");
 let HISTORY = {};
