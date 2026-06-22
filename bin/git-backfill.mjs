@@ -27,6 +27,7 @@ const me = `${hostId()}:${project}`;
 
 const themeOf = (s) => {
   let m;
+  if ((m = s.match(/\bv?(\d+\.\d+\.\d+)\b/i))) return "v" + m[1];             // any "v0.17.33" anywhere (feat: v0.17.33 — …) → one card per release
   if ((m = s.match(/^release:\s*v?(\d+\.\d+\.\d+)/i))) return "v" + m[1];     // release: v0.17.15 → v0.17.15 (one card per version)
   if ((m = s.match(/^[a-z]+\(([^)]+)\)\s*:/i))) return m[1].trim();           // feat(engine): → engine
   if ((m = s.match(/^([A-Za-z][\w &+/.]*?)\s*:/))) return m[1].trim();        // "Landing: …" → Landing

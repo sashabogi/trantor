@@ -29,6 +29,7 @@ switch (cmd) {
   case "agents":  run("bin/agents.mjs"); break;
   case "gates":   run("bin/gates.mjs"); break;
   case "backfill": run("bin/git-backfill.mjs"); break;
+  case "init-hooks": run("bin/init-hooks.mjs"); break;
   case "handoff": run("bin/baton.mjs"); break;
   case "ui": {
     let url = "http://127.0.0.1:4477";
@@ -53,6 +54,7 @@ switch (cmd) {
   trantor agents      what this session's sub-agents did (task · returned? · files written · survived on disk) — [<sessionId>] [--json]
   trantor gates       verification gates: "must verify before shipping" claims that survive handoffs — [--all] [--json]
   trantor backfill    card past GIT work onto the board (solo commits that were never carded) — [--since "14 days ago"] [--dry-run]
+  trantor init-hooks  install a git post-commit hook so EVERY commit auto-cards on the board (reliable solo-work backstop) — [--uninstall]
   trantor handoff     finish this session NOW: write a handoff, open a fresh session that takes over, and close this one (manual baton)
   trantor advise      ask the Advisor directly (JSON on stdin; --demo to see it)
   trantor hub         run the hub in the foreground (setup installs it as a service instead)
