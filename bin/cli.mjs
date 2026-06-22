@@ -31,6 +31,7 @@ switch (cmd) {
   case "backfill": run("bin/git-backfill.mjs"); break;
   case "init-hooks": run("bin/init-hooks.mjs"); break;
   case "balances": case "balance": case "credits": run("bin/balances.mjs"); break;
+  case "recost": run("bin/recost.mjs"); break;
   case "handoff": run("bin/baton.mjs"); break;
   case "ui": {
     let url = "http://127.0.0.1:4477";
@@ -56,7 +57,8 @@ switch (cmd) {
   trantor gates       verification gates: "must verify before shipping" claims that survive handoffs — [--all] [--json]
   trantor backfill    card past GIT work onto the board (solo commits that were never carded) — [--since "14 days ago"] [--dry-run]
   trantor init-hooks  install a git post-commit hook so EVERY commit auto-cards on the board (reliable solo-work backstop) — [--uninstall]
-  trantor balances    how much credit is left on each prepaid provider (DeepSeek/Kimi/OpenRouter…) — refill before you stall — [--json]
+  trantor balances    how much credit is left on each CONFIGURED provider (from your profile) — refill before you stall — [--json]
+  trantor recost      recompute sub-agent notional cost from on-disk transcripts + reseed the board (repair after upgrade) — [--dry-run]
   trantor handoff     finish this session NOW: write a handoff, open a fresh session that takes over, and close this one (manual baton)
   trantor advise      ask the Advisor directly (JSON on stdin; --demo to see it)
   trantor hub         run the hub in the foreground (setup installs it as a service instead)

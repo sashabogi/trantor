@@ -26,15 +26,23 @@ ok(isLow({ ok: true, kind: "quota", remainingPct: 40 }, DEFAULT_LOW, 50) === tru
 ok(isLow({ ok: true, kind: "quota", remainingPct: null }) === false, "isLow: quota unknown% → never low");
 ok(fmtBalance({ ok: true, kind: "quota", label: "Kimi Code", plan: "intermediate", remainingPct: 99 }).includes("99% left"), "fmtBalance: quota shows % left + plan");
 
-// --- fetchBalances skips providers with no key present ---
-const empty = await fetchBalances({});
-ok(Array.isArray(empty) && empty.length === 0, "fetchBalances: no keys in env → empty (no network)");
+// --- fetchBalances is scoped to the configured profile, NOT ambient env keys ---
+const noProfile = await fetchBalances({ OPENROUTER_API_KEY: "x", KIMI_API_KEY: "y" });
+ok(Array.isArray(noProfile) && noProfile.length === 0, "fetchBalances: no `only` (no profile) → empty even with keys present (no scraping, no network)");
+const notConfigured = await fetchBalances({ OPENROUTER_API_KEY: "x" }, { only: ["deepseek", "claude"] });
+ok(notConfigured.length === 0, "fetchBalances: OpenRouter key in env but NOT in profile → skipped (the .env-scraping bug fix)");
+const noKey = await fetchBalances({}, { only: ["deepseek"] });
+ok(noKey.length === 0, "fetchBalances: provider configured but no key in env → skipped (no network)");
 
 // --- hub POST/GET /balances round-trip ---
 const dir = mkdtempSync(join(tmpdir(), "trantor-bal-"));
 mkdirSync(join(dir, ".agent-bus"), { recursive: true });
-// seed a profile so the subscription-merge path is exercised (hub reads ~/.agent-bus/profile.json)
-writeFileSync(join(dir, ".agent-bus", "profile.json"), JSON.stringify({ providers: { claude: { plan: "max", tier: "capped-sub" }, kimi: { plan: "coding-plan", tier: "capped-sub" } } }));
+// seed a profile: providers under test must be here (the hub filters /balances to the profile), plus a
+// pure-subscription (claude) to exercise the subscription merge.
+writeFileSync(join(dir, ".agent-bus", "profile.json"), JSON.stringify({ providers: {
+  claude: { plan: "max", tier: "capped-sub" }, kimi: { plan: "coding-plan", tier: "capped-sub" },
+  openrouter: { plan: "api", tier: "api" }, deepseek: { plan: "api", tier: "api" }, zai: { plan: "coding-plan", tier: "capped-sub" },
+} }));
 const PORT = 47713;
 const hub = spawn("node", ["hub.mjs"], { env: { ...process.env, RELAY_DATA_DIR: dir, HOME: dir, RELAY_PORT: String(PORT), PORT: String(PORT) }, stdio: ["ignore", "ignore", "pipe"] });
 let err = ""; hub.stderr.on("data", d => err += d);
@@ -49,8 +57,10 @@ await post("/balances", { ts: 2000, by: "new:trantor", balances: [
   { provider: "deepseek", label: "DeepSeek", kind: "prepaid", ok: true, remaining: 2.10, currency: "USD" },
   { provider: "zai", label: "Z.ai (GLM)", kind: "quota", ok: true, remainingPct: 6, plan: "GLM Coding Max" },
   { provider: "moonshot", label: "Kimi (Moonshot)", kind: "prepaid", ok: false, error: "HTTP 401" },
+  { provider: "xai", label: "xAI", kind: "prepaid", ok: true, remaining: 99, currency: "USD" },   // NOT in profile
 ] });
 const g = await get("/balances");
+ok(!g.entries.find(e => e.provider === "xai"), "hub: xAI NOT in profile → filtered out of /balances (no .env scraping)");
 ok(g.by === "new:trantor", "hub: newer snapshot wins (latest writer)");
 const or = g.entries.find(e => e.provider === "openrouter");
 const ds = g.entries.find(e => e.provider === "deepseek");

@@ -37,7 +37,7 @@ const [, , cmd, ...args] = process.argv;
 // text, but import.meta.url is percent-encoded — so any URL-reserved char in the install path (most
 // commonly a SPACE, e.g. ".../Application Support/...") made this false and silently skipped main (exit 0,
 // no write). pathToFileURL is the canonical Node idiom. See regression in test-handoff.mjs / test.mjs.
-if (import.meta.url === pathToFileURL(process.argv[1]).href) {
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const prof = loadProfile();
   prof.providers ||= {};
   if (cmd === "set") {

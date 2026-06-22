@@ -8,10 +8,14 @@ import { readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
 import { fetchBalances, isLow, fmtBalance, DEFAULT_LOW, DEFAULT_LOW_QUOTA_PCT } from "../lib/balances.mjs";
+import { loadProfile } from "./profile.mjs";
 
 const args = process.argv.slice(2);
 const asJson = args.includes("--json");
 const noPush = args.includes("--no-push");
+
+// Only check providers the user configured in `trantor profile` — never stray keys in the ambient env.
+const configured = Object.keys(loadProfile().providers || {});
 
 function relayUrl() {
   if (process.env.RELAY_URL) return process.env.RELAY_URL;
@@ -24,7 +28,7 @@ function thresholds() {
   return DEFAULT_LOW;
 }
 
-const balances = await fetchBalances(process.env);
+const balances = await fetchBalances(process.env, { only: configured });
 const low = thresholds();
 
 // push the snapshot to the hub (best-effort) so the dashboard + warning line can use it
@@ -38,8 +42,13 @@ if (!noPush) {
 if (asJson) { console.log(JSON.stringify({ balances, low: balances.filter((b) => isLow(b, low, _qpct)).map((b) => b.provider) }, null, 2)); process.exit(0); }
 
 if (!balances.length) {
-  console.log("no providers configured in this environment.");
-  console.log("set a key (e.g. DEEPSEEK_API_KEY, OPENROUTER_API_KEY, KIMI_API_KEY, ZAI_API_KEY) and re-run.");
+  if (!configured.length) {
+    console.log("no quota profile set — Trantor doesn't know which providers you use.");
+    console.log("declare them:  trantor profile set claude=max kimi=coding-plan deepseek=api zai=coding-plan");
+  } else {
+    console.log(`configured providers: ${configured.join(", ")} — but none expose a balance/quota API with a key present.`);
+    console.log("(subscriptions like claude/codex/gemini have nothing to refill; prepaid/coding-plan providers need their key in the env.)");
+  }
   process.exit(0);
 }
 console.log("PROVIDER CREDITS\n");
