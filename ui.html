@@ -89,6 +89,7 @@ main:not(.learn-open) .learn-body{display:none}
 .diff.easy{background:#13302b;color:#2dd4bf}.diff.medium{background:#2c2a17;color:#f5d90b}.diff.hard{background:#33181f;color:#ff7a90}
 .bounce{display:inline-block;font-size:9.5px;font-weight:700;color:#ef6a6a;background:#2a1517;border:1px solid #5a2c2c;border-radius:8px;padding:1px 6px;margin-left:5px}
 .mdl{font-size:9px;font-family:ui-monospace,monospace;color:#8fa3be;background:#16202f;border:1px solid #243049;border-radius:7px;padding:1px 5px;margin-left:4px;vertical-align:1px}
+.xcount{font-size:9px;font-weight:800;color:#cbd5e1;background:#1c2740;border:1px solid #2c3a52;border-radius:8px;padding:1px 5px;margin-left:5px;vertical-align:1px}
 .tcard.done{opacity:.65}.tcard.done span{text-decoration:line-through}
 .empty{color:var(--dim);text-align:center;padding:30px}
 .empty.big{padding:60px 20px;font-size:15px}
@@ -386,6 +387,8 @@ function flowHTML(pt, proj){
   if (!data.phases || !data.phases.length) return '<div class="pflowwrap"><div class="empty">no cards yet</div></div>';
   const SCOL = { todo:'#3a4458', doing:'#4a90d9', testing:'#f59e0b', failed:'#ef6a6a', blocked:'#ef6a6a', done:'#14b8a6' };
   const NW = 168, NH = 34, RG = 11, CG = 64, PGAP = 76, MT = 64, MB = 22;
+  const MAXPC = 10;            // max nodes stacked per column before collapsing into a "+N more" node
+  let pi0 = 0;                 // running id base so each phase's overflow nodes get unique negative ids
   const stackH = n => n*NH + Math.max(0,n-1)*RG;
   // Per-phase layout: cards spread by their INTRA-PHASE dependency depth. Independent cards share
   // column 0 (parallel, hanging off the plan node); a card that depends on another lands one column
@@ -403,9 +406,23 @@ function flowHTML(pt, proj){
     };
     cards.forEach(c => c._d = depth(c));
     const maxDepth = Math.max(0, ...cards.map(c => c._d));
-    const cols = []; for (let d = 0; d <= maxDepth; d++) cols[d] = cards.filter(c => c._d === d);
+    let cols = []; for (let d = 0; d <= maxDepth; d++) cols[d] = cards.filter(c => c._d === d);
     const hasChild = c => cards.some(o => parentsOf(o).includes(c.id));
-    return { ph, cards, byId, parentsOf, hasChild, maxDepth, cols };
+    // DEFENSIVE CAP: never stack more than MAXPC nodes in one column. A phase that legitimately (or
+    // through a bug — see the cc-subagent dedup) has hundreds of independent cards would otherwise make
+    // the whole canvas thousands of px tall. Collapse the overflow into one "+N more" summary node.
+    cols = cols.map((col, d) => {
+      if (col.length <= MAXPC) return col;
+      const shown = col.slice(0, MAXPC - 1);
+      const rest = col.slice(MAXPC - 1);
+      const runs = rest.reduce((n, c) => n + (c.count || 1), 0);
+      shown.push({ id: -(pi0 + d + 1), title: `+${rest.length} more · ${runs} run${runs > 1 ? 's' : ''}`,
+        status: rest[0].status, agent: '', synthetic: true, deps: [], _d: d, _overflow: true });
+      return shown;
+    });
+    pi0 += maxDepth + 1;
+    const displayCards = cols.flat();
+    return { ph, cards: displayCards, byId, parentsOf, hasChild, maxDepth, cols };
   });
   const maxColCount = Math.max(1, ...layouts.flatMap(L => L.cols.map(c => c.length)));
   const Y0 = MT + stackH(maxColCount)/2;               // shared horizontal spine midline
@@ -452,7 +469,9 @@ function flowHTML(pt, proj){
       const p = pos[c.id], parents = parentsOf(c);
       if (parents.length) for (const pid of parents){ const pp = pos[pid]; if (pp) svg += gedge(pp.x+NW, pp.y+NH/2, p.x, p.y+NH/2, byId[pid].status==='done'); }
       else svg += gedge(planX+NW, planY+NH/2, p.x, p.y+NH/2, ph.status==='done');   // root → plan
-      svg += gnode(p.x, p.y, (c.id?'#'+c.id+' ':'')+c.title, c.status, c.synthetic?null:c.id, !!c._orch, c.agent||'', c.costUsd);
+      const idPrefix = (c.id > 0 && !c.synthetic) ? '#'+c.id+' ' : '';
+      const cnt = (c.count > 1) ? ' ×'+c.count : '';
+      svg += gnode(p.x, p.y, idPrefix+c.title+cnt, c.status, c.synthetic?null:c.id, !!c._orch, c.agent||'', c.costUsd);
       if (!hasChild(c)) svg += gedge(p.x+NW, p.y+NH/2, intX, intY+NH/2, c.status==='done');   // leaf → integrate
     }
     svg += gnode(intX, intY, '◆ integrate', ph.status, null, true, '');
@@ -711,7 +730,7 @@ async function render(){
         const rank={todo:0,doing:1,testing:2,done:3};
         const bounced=last&&last.from!==undefined&&rank[last.to]<rank[last.from]&&(Date.now()-last.ts)<10*60*1000;
         const trail=hist.map(h=>`${h.from?h.from+'→':''}${h.to}${h.by?' by '+String(h.by).split(':')[0]:''} @${new Date(h.ts).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'})}`).join('\n');
-        return `<div class="tcard ${t.status}" data-id="${t.id}" title="${esc(trail)||'click to advance'}"><span>${esc(t.title)}</span>${t.difficulty?`<span class="diff ${t.difficulty}">${t.difficulty[0].toUpperCase()}</span>`:''}${t.model?`<span class="mdl">${esc(t.model)}</span>`:''}${bounced?`<span class="bounce">↩ bounced${last.by?' by '+esc(String(last.by).split(':')[0]):''}</span>`:''}${t.assignee?`<div class="who">${iconFor(t.assignee,12)}@${esc(t.assignee)}</div>`:''}</div>`;
+        return `<div class="tcard ${t.status}" data-id="${t.id}" title="${esc(trail)||'click to advance'}"><span>${esc(t.title)}</span>${t.count>1?`<span class="xcount">×${t.count}</span>`:''}${t.difficulty?`<span class="diff ${t.difficulty}">${t.difficulty[0].toUpperCase()}</span>`:''}${t.model?`<span class="mdl">${esc(t.model)}</span>`:''}${bounced?`<span class="bounce">↩ bounced${last.by?' by '+esc(String(last.by).split(':')[0]):''}</span>`:''}${t.assignee?`<div class="who">${iconFor(t.assignee,12)}@${esc(t.assignee)}</div>`:''}</div>`;
       })()).join('')}</div>`;
     }).join('');
     const ph=p.phase||'';
