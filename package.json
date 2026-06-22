@@ -1,6 +1,6 @@
 {
   "name": "trantor",
-  "version": "0.17.36",
+  "version": "0.17.37",
   "type": "module",
   "bin": {
     "trantor": "bin/cli.mjs"
@@ -10,7 +10,7 @@
     "zod": "^4.4.3"
   },
   "scripts": {
-    "test": "node test.mjs && node test-scenarios.mjs && node test-failure.mjs && node test-handoff.mjs && node test-agents.mjs && node test-update.mjs && node test-balances.mjs"
+    "test": "node test.mjs && node test-scenarios.mjs && node test-failure.mjs && node test-handoff.mjs && node test-agents.mjs && node test-update.mjs && node test-balances.mjs && node test-subagent-cost.mjs"
   },
   "description": "The hub-world for AI agent crews — orchestrate Claude Code, Codex, Gemini, Kimi & DeepSeek as live crews with a plan-aware Advisor, a Kanban/flow command center, a testing gate, and an economics brain (Scrooge).",
   "files": [

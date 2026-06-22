@@ -70,6 +70,14 @@ await post("/balances", { ts: 500, balances: [{ provider: "openrouter", label: "
 const g2 = await get("/balances");
 ok(g2.entries.find(e => e.provider === "openrouter").remaining === 11.68, "hub: stale snapshot rejected (kept newer)");
 
+// --- hub guard: an old/buggy client can't inject an inflated cc-subagent cost (v0.17.37) ---
+const bogus = await post("/task", { project: "guardp", title: "subagent: recall memory", status: "done",
+  source: "cc-subagent", costKind: "subagent-notional", costUsd: 46554, tokens: { cacheRead: 65953e6, input: 0, output: 0, cacheWrite: 0 }, by: "x:guardp" });
+ok(bogus.task && bogus.task.costUsd === null && bogus.task.tokens === null, "hub: implausible cc-subagent cost ($46k/66B cache-read) rejected → null");
+const fine = await post("/task", { project: "guardp", title: "general-purpose: build feature", status: "done",
+  source: "cc-subagent", costKind: "subagent-notional", costUsd: 12.5, tokens: { cacheRead: 20e6, input: 1e6, output: 5e5, cacheWrite: 0 }, by: "x:guardp" });
+ok(fine.task && fine.task.costUsd === 12.5, "hub: plausible cc-subagent cost ($12.50/20M) kept");
+
 hub.kill();
 console.log(fail ? `\n${fail} FAILED` : "\nALL PASS");
 process.exit(fail ? 1 : 0);

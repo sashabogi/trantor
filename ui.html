@@ -296,6 +296,10 @@ aside h2{font-size:10.5px;text-transform:uppercase;letter-spacing:.09em;color:va
 <script>
 const $=s=>document.querySelector(s);
 const esc=s=>String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+// money: thousands separators + 2dp, readable as dollar amounts ($131,965.50). `usd()` returns just the
+// number; `$usd()` prefixes the currency symbol.
+const usd=(n,dp=2)=>(Number(n)||0).toLocaleString('en-US',{minimumFractionDigits:dp,maximumFractionDigits:dp});
+const $usd=(n,sym='$',dp=2)=>sym+usd(n,dp);
 const COLS=[['todo','To Do'],['doing','In Progress'],['testing','Testing'],['done','Done'],['blocked','Blocked']];
 let nmsg=0;
 
@@ -328,10 +332,17 @@ function econNotional(win){
   const ck=ECON&&ECON.costKinds&&ECON.costKinds[win]; if(!ck)return 0;
   return ((ck['subagent-notional']&&ck['subagent-notional'].usd)||0)+((ck['orchestrator-notional']&&ck['orchestrator-notional'].usd)||0);
 }
+// invocation count behind the notional figure — lets the pill stay visible (rebuilding) at $0 after a
+// reset, instead of vanishing, since there's still recorded sub-agent activity.
+function econNotionalCount(win){
+  const ck=ECON&&ECON.costKinds&&ECON.costKinds[win]; if(!ck)return 0;
+  return ((ck['subagent-notional']&&ck['subagent-notional'].count)||0)+((ck['orchestrator-notional']&&ck['orchestrator-notional'].count)||0);
+}
 function renderEcon(){
   const lifeCalls=(ECON&&ECON.lifetime&&ECON.lifetime.calls)||0;
   const notionalLife=ECON?econNotional('lifetime'):0;
-  if(!ECON||(!lifeCalls&&!(notionalLife>0)))return;     // show once we have EITHER real savings OR notional CC cost
+  const notionalCnt=ECON?econNotionalCount('lifetime'):0;
+  if(!ECON||(!lifeCalls&&!notionalCnt&&!(notionalLife>0)))return;     // show once we have real savings OR any CC sub-agent activity
   const el=$('#econ'); el.style.display='';
   // lifetime running total is the fixed headline; the dropdown picks the comparison window.
   if(!el.dataset.built){
@@ -346,12 +357,12 @@ function renderEcon(){
     el.dataset.built='1';
   }
   const w=(ECON.windows&&ECON.windows[econWin])||ECON.scrooge, wc=w?w.calls:0;
-  $('#econlife').textContent='$'+econSaved(ECON.lifetime).toFixed(2);
-  $('#econwinval').textContent=' $'+econSaved(w).toFixed(2)+' ('+wc+' call'+(wc===1?'':'s')+')';
+  $('#econlife').textContent=$usd(econSaved(ECON.lifetime));
+  $('#econwinval').textContent=' '+$usd(econSaved(w))+' ('+wc+' call'+(wc===1?'':'s')+')';
   // separate notional line — distinct icon + "notional" wording, never added to the savings number
   const nEl=$('#econnotional');
-  if(nEl) nEl.innerHTML = notionalLife>0
-    ? `<span style="opacity:.5"> · </span>🤖 CC sub-agents <b style="color:var(--blu)">$${notionalLife.toFixed(2)}</b> <span style="opacity:.7">notional</span>`
+  if(nEl) nEl.innerHTML = (notionalLife>0||notionalCnt>0)
+    ? `<span style="opacity:.5"> · </span>🤖 CC sub-agents <b style="color:var(--blu)">${$usd(notionalLife)}</b> <span style="opacity:.7">notional${notionalLife<=0&&notionalCnt>0?' · rebuilding':''}</span>`
     : '';
   const sel=$('#econsel'); if(sel)sel.value=econWin;
 }
@@ -374,7 +385,7 @@ async function credits(){
     const lbl=e=>e.label.replace(/ \(.*/,'');
     const txt=e=>e.kind==='quota'
       ? `${lbl(e)} ${e.remainingPct==null?'?':e.remainingPct+'%'}`
-      : `${lbl(e)} ${e.remaining==null?'∞':sym(e.currency)+(+e.remaining).toFixed(2)}`;
+      : `${lbl(e)} ${e.remaining==null?'∞':$usd(e.remaining,sym(e.currency))}`;
     const ok=all.filter(e=>e.ok && (e.remaining!=null||e.remainingPct!=null));
     const lows=ok.filter(e=>e.low);
     const errs=all.filter(e=>!e.ok).map(lbl);
@@ -461,7 +472,7 @@ function flowHTML(pt, proj){
   const totalH = MT + stackH(maxColCount) + MB;
   const gnode = (x, y, title, status, id, orch, agent, cost) => {
     const stripe = SCOL[status] || '#3a4458';
-    const c = (typeof cost === 'number') ? (cost < 0.005 ? '$' + cost.toFixed(4) : '$' + cost.toFixed(2)) : '';
+    const c = (typeof cost === 'number') ? (cost < 0.005 ? '$' + cost.toFixed(4) : $usd(cost)) : '';
     return `<g class="gnode ${status}${orch?' orch':''}"${id?` data-id="${id}"`:''}>`
       + `<rect class="gnbox" x="${x}" y="${y}" width="${NW}" height="${NH}" rx="8"/>`
       + `<rect x="${x}" y="${y}" width="4" height="${NH}" rx="2" fill="${stripe}"/>`

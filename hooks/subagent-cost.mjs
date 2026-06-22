@@ -10,6 +10,7 @@ import { join, basename } from "node:path";
 import { homedir } from "node:os";
 import { resolveProject, hostId } from "../lib/project.mjs";
 import { notionalCost } from "./pricing.mjs";
+import { isSubagentTranscript, isImplausibleCost } from "./lib/subagent-cost-lib.mjs";
 
 function readStdin() {
   return new Promise(res => { let d = ""; process.stdin.setEncoding("utf8");
@@ -22,10 +23,11 @@ function relayUrl() {
   return "http://127.0.0.1:4477";
 }
 
-// Resolve the sub-agent's transcript: the payload path, else reconstruct, else newest agent-*.jsonl.
+// Resolve the sub-agent's OWN transcript: the payload path ONLY if it's truly a sub-agent transcript,
+// else reconstruct from the subagents tree (which can only ever find real agent-*.jsonl), else "".
 function findTranscript(input) {
   const direct = input.transcript_path;
-  if (direct && existsSync(direct)) return direct;
+  if (direct && existsSync(direct) && isSubagentTranscript(direct)) return direct;
   const sid = input.session_id, aid = input.agent_id;
   // search the session's subagents tree (plain Task → subagents/agent-<id>.jsonl; Workflow → subagents/workflows/<wf>/agent-<id>.jsonl)
   const roots = [];
@@ -86,6 +88,15 @@ try {
   const ttl = process.env.TRANTOR_CACHE_TTL === "1h" ? "1h" : "5m";
   const { usd, tokens, unpriced, model } = notionalCost(rows, ttl);
 
+  // Sanity guard: a single sub-agent with >50M cache-read (or >$50 notional) is almost certainly a
+  // mis-resolved transcript (e.g. a parent session summed in). Don't card a bogus cost — better a card
+  // with no $ than one claiming thousands. (Real agents top out ~40M cache-read / ~$30; see the v0.17.37 fix.)
+  const totalCacheRead = (tokens?.cacheRead || 0);
+  const suspect = isImplausibleCost({ usd, cacheRead: totalCacheRead });
+  const safeUsd = suspect ? null : usd;
+  const safeNote = suspect ? "skipped-implausible-cost (likely mis-resolved transcript)" : (usd == null ? "usage-unavailable-or-unpriced" : (unpriced ? `${unpriced} turn(s) unpriced` : ""));
+  if (suspect) process.stderr.write(`[trantor] subagent-cost: SKIPPED implausible cost ($${usd?.toFixed?.(0)}, ${(totalCacheRead/1e6).toFixed(0)}M cache-read) — ${basename(file)}\n`);
+
   const task = (firstUserText || agentType).replace(/\s+/g, " ").slice(0, 90);
   const title = `${agentType}: ${task}`.slice(0, 180);
   const costNote = usd == null ? "usage-unavailable-or-unpriced" : (unpriced ? `${unpriced} turn(s) unpriced` : "");
@@ -96,7 +107,7 @@ try {
       project, title, status: "done",
       assignee: `${agentType}:${project}`, by: `${hostId()}:${project}`,
       source: "cc-subagent", costKind: "subagent-notional",
-      costUsd: usd, costNote, model, effort, tokens,
+      costUsd: safeUsd, costNote: safeNote, model, effort, tokens: suspect ? null : tokens,
       phase: "sub-agents",
     }),
     signal: AbortSignal.timeout(2500),
