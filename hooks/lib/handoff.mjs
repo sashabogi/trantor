@@ -15,6 +15,7 @@ import { join, basename, dirname } from "node:path";
 import { homedir, hostname } from "node:os";
 import { execSync, spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import { deriveSubagentManifest } from "../../lib/subagent-manifest.mjs";
 
 export const HANDOFF_DIR = join(process.env.RELAY_DATA_DIR || join(homedir(), ".agent-bus"), "handoffs");
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -220,6 +221,12 @@ export function writeHandoff({ projectDir, sessionId, transcript, trigger, summa
   try { gitStatus = execSync("git -C " + JSON.stringify(projectDir) + " status --short 2>/dev/null | head -30", { encoding: "utf8" }).trim(); } catch {}
   const narrative = summary ?? buildSummary(transcript);
   const tail = verbatimRecentTail(transcript);
+  // Sub-agent manifest SNAPSHOT (fallback). The successor should re-derive it LIVE via
+  // `trantor agents <sid>` (catches files an agent finished that were clobbered AFTER this
+  // snapshot — the kill that motivated this corrupted a completed 30KB lib post-handoff). This
+  // baked copy is just orientation if the live command isn't available. Best-effort; never throws.
+  let subagents = null;
+  try { subagents = deriveSubagentManifest(transcript, { projectRoot: projectDir }); } catch {}
   const record = {
     id: `${projectName}-${stamp}`,
     project: projectDir, projectName, machine: hostname(),
@@ -227,7 +234,7 @@ export function writeHandoff({ projectDir, sessionId, transcript, trigger, summa
     transcript_path: transcript || "", stamp: Number(stamp) || 0,
     // narrative + a verbatim recent-exchange block so exact in-flight state always survives
     summary: narrative + (tail ? `\n\n---\n## Verbatim recent exchange (exact in-flight state — continue from here)\n${tail}` : ""),
-    gitStatus, consumed: false,
+    gitStatus, subagents, consumed: false,
   };
   const file = join(HANDOFF_DIR, `${record.id}.json`);
   writeFileSync(file, JSON.stringify(record, null, 2));

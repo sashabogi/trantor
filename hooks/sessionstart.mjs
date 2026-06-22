@@ -11,6 +11,7 @@ import { join, basename } from "node:path";
 import { homedir, hostname } from "node:os";
 import { execSync } from "node:child_process";
 import { resolveProject, hostId } from "../lib/project.mjs";
+import { formatSubagentManifest } from "../lib/subagent-manifest.mjs";
 import { updateAvailable, maybeNotifyDesktop, readConfig } from "./lib/update-check.mjs";
 
 // Load the most recent UNCONSUMED handoff for this project (written by precompact.mjs
@@ -198,6 +199,17 @@ try {
     additionalContext += `🔄 **You are taking over from a prior session that hit its context limit.** This is a fresh full window. Resume the work below — the prior session's summary, git state, and a pointer to its full transcript (searchable; Foundation/Gaia has it ingested) follow. Continue from "OPEN THREADS & NEXT STEPS"; do not restart from scratch.\n\n`;
     additionalContext += `## Handoff summary\n${sanitize(handoff.summary)}\n`;
     if (handoff.gitStatus) additionalContext += `\n## Git working-tree at handoff\n\`\`\`\n${sanitize(handoff.gitStatus)}\n\`\`\`\n`;
+    // Sub-agent manifest: LIVE-primary, snapshot-as-fallback. The prior session may have had
+    // sub-agents (Agent/Task, Workflow) building things you can't see in its narrative — and a
+    // kill can corrupt an agent's finished file on disk. Direct the successor to re-derive LIVE
+    // (reconciles against current disk) and trust that over the baked snapshot.
+    if (handoff.subagents && handoff.subagents.counts && handoff.subagents.counts.total) {
+      const sa = handoff.subagents;
+      additionalContext += `\n## Sub-agents the prior session ran (${sa.counts.total}: ${sa.counts.completed} completed, ${sa.counts.inFlight} in-flight at handoff)\n`;
+      additionalContext += `**Before continuing, get the LIVE manifest** — run \`trantor agents ${sanitize(handoff.session_id)}\` (or \`trantor agents\` from this project). It re-derives from CURRENT disk, flagging any file an agent finished that was later clobbered — do NOT assume "nothing survived"; recover from the agent's transcript. Trust the live command over the snapshot below.\n`;
+      if (sa.counts.suspectFiles) additionalContext += `⚠️ ${sa.counts.suspectFiles} file(s) an agent wrote looked CLOBBERED at handoff time — verify with the live command and recover.\n`;
+      additionalContext += `\n\`\`\`\n${sanitize(formatSubagentManifest(sa, { heading: false }))}\n\`\`\`\n`;
+    }
     if (handoff.transcript_path) additionalContext += `\n_Full prior transcript: ${sanitize(handoff.transcript_path)}_\n`;
     additionalContext += `</trantor-handoff>\n`;
   }
