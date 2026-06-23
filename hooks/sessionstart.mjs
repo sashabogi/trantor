@@ -94,11 +94,35 @@ function sanitize(s) {
   return out;
 }
 
+// Session title for the picker / `claude --resume` / Claude mobile. Claude Code otherwise names a session
+// after its FIRST PROMPT (the `ai-title` transcript entry) — so several sessions started with the same
+// prompt (or sibling sessions in different projects) all look alike. We name it "<project> · <current work>"
+// where the work is the single most relevant in-flight item from the board, so concurrent sessions are
+// instantly distinguishable. (SessionStart can set the title via hookSpecificOutput.sessionTitle; it has no
+// mid-session rename, so this reflects the project's state at startup.)
+function sessionTitleFrom(project, cu) {
+  let work = "";
+  if (cu) {
+    // prefer real work cards (doing → testing → todo), skipping transient cc-subagent infra cards which
+    // would otherwise dominate "most recent" and make every session title noise; then the project brief.
+    const real = a => (Array.isArray(a) ? a.filter(t => t.source !== "cc-subagent") : []);
+    const first = a => (a.length ? a[0].title : "");
+    work = first(real(cu.doing)) || first(real(cu.testing)) || first(real(cu.todo)) || cu.brief || "";
+  }
+  work = String(work || "").replace(/\s+/g, " ").trim()
+    .replace(/^v?\d+\.\d+\.\d+\s*[:—–•·-]\s*/i, "");   // drop a leading release-version prefix (just noise here)
+  if (work.length > 44) work = work.slice(0, 43).trimEnd() + "…";
+  return sanitize(work ? `${project} · ${work}` : project).slice(0, 90);
+}
+
 let additionalContext = "";
 let userBanner = "";   // shown to the USER in-terminal via the hook's `systemMessage` (not model-only context)
+let sessionTitle = "";  // picker / --resume / mobile title — set to "<project> · <current work>" below
+let userTitle = "";     // a title the USER set explicitly (--name / rename); never override it
 try {
   let source = "", stdinObj = {};
   try { stdinObj = JSON.parse((await readStdin()) || "{}"); source = stdinObj.source || ""; } catch {}
+  userTitle = (stdinObj && stdinObj.session_title) ? String(stdinObj.session_title) : "";   // user already named it
   const projectDir = process.env.CLAUDE_PROJECT_DIR || process.cwd();
   // Sessions started in the home directory itself aren't project work — registering
   // them spawns a phantom "<username>" project board on the dashboard. Set
@@ -109,6 +133,7 @@ try {
     process.exit(0);
   }
   const project = resolveProject(projectDir);
+  sessionTitle = project;   // baseline — enriched with the current work item after the catch-up fetch below
   const session = process.env.RELAY_SESSION
     || (process.env.RELAY_AGENT ? `${process.env.RELAY_AGENT}:${project}` : `${hostId()}:${project}`);
   const url = relayUrl();
@@ -137,6 +162,7 @@ try {
   // SAME project where it stands instead of starting blind. Cheap + LLM-free.
   try {
     const cu = await jget(`${url}/catchup?project=${encodeURIComponent(project)}`).catch(() => null);
+    sessionTitle = sessionTitleFrom(project, cu);   // "<project> · <current work>" for the picker/--resume/mobile
     let gitlog = "";
     try { gitlog = execSync(`git -C ${JSON.stringify(projectDir)} log --oneline -5 2>/dev/null`, { encoding: "utf8", timeout: 2500 }).trim(); } catch {}
     if ((cu && cu.total > 0) || gitlog) {
@@ -248,18 +274,21 @@ try {
 // Hook protocol: emit additionalContext (model-facing) via stdout JSON, plus an optional
 // `systemMessage` (USER-facing — rendered as a line in the terminal, our update indicator).
 // Self-validate so we never emit something Claude Code can't parse — fall back to sanitized, then {}.
-function emit(ctx, sysMsg) {
+function emit(ctx, sysMsg, title) {
   const obj = {};
   if (ctx) obj.hookSpecificOutput = { hookEventName: "SessionStart", additionalContext: ctx };
+  if (title) (obj.hookSpecificOutput ||= { hookEventName: "SessionStart" }).sessionTitle = title;
   if (sysMsg) obj.systemMessage = sysMsg;
   const out = JSON.stringify(obj);
   try { JSON.parse(out); return out; } catch { /* fall through */ }
   try {
     const safe = {};
     if (ctx) safe.hookSpecificOutput = { hookEventName: "SessionStart", additionalContext: sanitize(ctx) };
+    if (title) (safe.hookSpecificOutput ||= { hookEventName: "SessionStart" }).sessionTitle = sanitize(title);
     if (sysMsg) safe.systemMessage = sanitize(sysMsg);
     return JSON.stringify(safe);
   } catch { return "{}"; }
 }
-process.stdout.write(emit(additionalContext, userBanner));
+// Set the session title unless the user already named it explicitly (--name / rename).
+process.stdout.write(emit(additionalContext, userBanner, userTitle ? "" : sessionTitle));
 process.exit(0);
