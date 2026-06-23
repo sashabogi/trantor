@@ -1,8 +1,11 @@
 {
-  "description": "trantor — auto-register each session + inject live roster (SessionStart); post an in-flight 'doing' card when a sub-agent is dispatched (PreToolUse); heartbeat presence on every tool call + deliver unread bus messages to a busy session mid-turn + mirror the session's TodoWrite list onto the board as cards (PostToolUse); write a handoff before compaction (PreCompact); card each sub-agent's notional API cost when it finishes (SubagentStop)",
+  "description": "trantor — auto-register each session + inject live roster (SessionStart); turn each substantive user prompt into the session's live 'focus' card so a regular session's own work shows IN PROGRESS (UserPromptSubmit); post an in-flight 'doing' card when a sub-agent is dispatched (PreToolUse); heartbeat presence on every tool call + deliver unread bus messages to a busy session mid-turn + mirror the session's TodoWrite list onto the board as cards (PostToolUse); write a handoff before compaction (PreCompact); card each sub-agent's notional API cost when it finishes (SubagentStop)",
   "hooks": {
     "SessionStart": [
       { "matcher": "", "hooks": [ { "type": "command", "command": "node ${CLAUDE_PLUGIN_ROOT}/hooks/sessionstart.mjs" } ] }
+    ],
+    "UserPromptSubmit": [
+      { "matcher": "", "hooks": [ { "type": "command", "command": "node ${CLAUDE_PLUGIN_ROOT}/hooks/prompt-focus.mjs" } ] }
     ],
     "PreToolUse": [
       { "matcher": "Task|Agent", "hooks": [ { "type": "command", "command": "node ${CLAUDE_PLUGIN_ROOT}/hooks/subagent-start.mjs" } ] }
