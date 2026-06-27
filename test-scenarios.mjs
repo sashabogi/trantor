@@ -164,6 +164,23 @@ try {
      advOR.routing.some(r => /scrooge-capabilities/.test(r.reason) && /pin/i.test(r.reason)));
   ok("openrouter sits last → native seats win hard work first",
      advise({ packages: pk(2, "hard") }, world({ claude: { tier: "api" } })).routing.every(r => r.executor !== "openrouter"));
+  // T3 BYOM: the roster DERIVES from config — a brought opencode provider becomes a seat, no code change.
+  const { buildRoster, discoverSeats } = await import(join(ROOT, "bin/advise.mjs"));
+  const brought = discoverSeats({ providers: { inception: { plan: "api", tier: "api" } } },
+                                { provider: { inception: { options: { apiKey: "x" } }, "zai-coding-plan": {} } });
+  ok("a brought opencode provider becomes a discovered seat (own launch + session)",
+     brought.inception?.discovered && brought.inception.launch === "inception:inception" && brought.inception.session === "inception");
+  ok("discovery never duplicates a built-in opencode provider (zai-coding-plan → glm)",
+     !brought["zai-coding-plan"] && !brought.glm);
+  ok("discovery skips native CLIs / built-in aliases",
+     Object.keys(discoverSeats({ providers: { codex: {}, zai: {}, claude: {} } }, {})).length === 0);
+  const fullRoster = buildRoster({ providers: { inception: { tier: "api" } } }, { provider: { inception: { options: { apiKey: "x" } } } });
+  ok("buildRoster merges built-ins + brought", !!(fullRoster.codex && fullRoster.glm && fullRoster.inception));
+  const advB = advise({ packages: pk(2, "hard") }, { ...world({ claude: { tier: "api" } }), roster: fullRoster, agents: ["inception"] });
+  ok("advise routes work to a brought provider under its own session",
+     advB.card_args.filter(c => c.assignee).every(c => c.assignee === "inception:<project>" && c.launch === "inception:inception"));
+  ok("a brought provider never collides with a built-in session",
+     advB.card_args.every(c => c.assignee !== "opencode:<project>"));
 
   console.log("scenario: deps — the flow-view edge primitive");
   const { task: dep1 } = await api("/task", { project: "proj", title: "shipv2", by: "arch" });

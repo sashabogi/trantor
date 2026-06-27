@@ -18,6 +18,8 @@ switch (cmd) {
   case "doctor":  run("bin/doctor.mjs"); break;
   case "connect": run("bin/connect.mjs"); break;
   case "profile": run("bin/profile.mjs"); break;
+  case "provider": case "providers": run("bin/provider.mjs"); break;
+  case "models": run("bin/models.mjs"); break;
   case "advise":  run("bin/advise.mjs"); break;
   case "verify":  run("bin/crew-verify.mjs"); break;
   case "up":      process.argv.splice(2, 1); spawn("/bin/bash", [join(ROOT, "bin/crew.sh"), "up", ...args], { stdio: "inherit", cwd: process.cwd() }).on("exit", c => process.exit(c ?? 0)); break;
@@ -49,6 +51,8 @@ switch (cmd) {
   trantor doctor      where do I stand? hub/plugin/CLIs/auth/keys/profile, with copy-paste fixes
   trantor connect     (re)wire every installed AI CLI to the bus
   trantor profile     declare your plans:  trantor profile set claude=max codex=plus deepseek=api
+  trantor provider    bring ANY model (BYOM): list seats · add <name> --key … · remove <name>
+  trantor models      browse live models behind each seat + the router's pick per difficulty
   trantor up …        spawn a crew here:   trantor up codex kimi deepseek:deepseek opencode:zai-coding-plan
   trantor down        tear the crew down (kills processes, closes windows, no dialogs)
   trantor ui          open the live dashboard (board + flow views)

@@ -54,11 +54,15 @@ EXACT launch spec per provider (do not improvise these):
 
 `agent:provider` live-selects the best model now; `agent:provider/model` pins one. Example:
 `trantor up codex kimi deepseek:deepseek opencode:zai-coding-plan --task code --difficulty hard`.
-**Whatever the advisor's `launch` field says, run that verbatim** — the roster above is the menu,
-but the advisor already picked the right seats and specs for THIS work (a user who's only brought
-an OpenRouter key, for instance, gets `openrouter` for everything; one who brought five providers
-gets a load-balanced spread). New providers a user brings (OpenRouter today; any opencode-supported
-vendor next) appear automatically once declared via `trantor profile set <name>=api` + a key.
+**Whatever the advisor's `launch` field says, run that verbatim** — the roster above is just the
+built-in menu, but the advisor picks the right seats/specs for THIS work (a user who's only brought
+an OpenRouter key gets `openrouter` for everything; one who brought five providers gets a
+load-balanced spread). **BYOM is fully general:** the roster is DERIVED, not hardcoded — ANY
+opencode-supported provider the user configures becomes a seat with its own bus label, no code
+change. A user adds one with `trantor provider add <name> --key … --plan api` (then
+`scrooge-capabilities` to score it for difficulty routing); `trantor provider` lists all seats and
+`trantor models [<provider>]` browses the live models + the router's pick per difficulty. If the
+advisor routes to a brought provider you don't recognize, that's expected — run its `launch` spec.
 
 ⚠️ **Gemini CLI is RETIRED (Google killed the free seat 2026-06-18).** The advisor no longer
 offers it and you must NOT fire up `gemini` — `gemini --yolo` exits 1 and crash-loops on the

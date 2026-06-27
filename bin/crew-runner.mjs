@@ -78,8 +78,14 @@ const CLI = {
   claude:   { first: `claude{M} -p "$(cat {P})" --dangerously-skip-permissions`,
               next:  `claude -c{M} -p "$(cat {P})" --dangerously-skip-permissions`, mflag: " --model " },
 };
-const cli = CLI[AGENT];
-if (!cli) { console.error(`unknown agent '${AGENT}' (known: ${Object.keys(CLI).join(", ")})`); process.exit(1); }
+// BYOM: any agent label that isn't a known native CLI is treated as an opencode-driven provider
+// seat (opencode is the universal adapter). This is what lets a BROUGHT provider — `trantor up
+// <label>:<provider>` for any opencode vendor the user configured — run with no per-provider code
+// here; its model id arrives pre-qualified (`<provider>/<model>`) as CREW_MODEL.
+const NATIVE = new Set(["codex", "gemini", "kimi", "claude"]);
+const cli = CLI[AGENT] || (NATIVE.has(AGENT) ? null : CLI.opencode);
+if (!cli) { console.error(`unknown agent '${AGENT}' (native: ${[...NATIVE].join(", ")}; any other name = an opencode provider seat)`); process.exit(1); }
+if (!CLI[AGENT]) log(`'${AGENT}' is not a built-in seat — running it as an opencode provider (BYOM)`);
 
 const RULES = `Rules: you are ${SESSION} on the trantor crew. Work your assigned file(s), report on the bus (relay_send, <280 chars), move your Kanban card as you go (doing -> testing -> done; run the tests in 'testing', use 'failed' + a report if they break). When your work for THIS message is finished, END YOUR TURN — do NOT park, do NOT loop relay_wait; the runner waits for you and will wake you with the next message.`;
 

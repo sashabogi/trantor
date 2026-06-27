@@ -70,18 +70,18 @@ SCROOGE="$BUS_DIR/engine/bin/scrooge"
 [ -f "$SCROOGE" ] || SCROOGE="$(command -v scrooge 2>/dev/null || echo scrooge)"
 
 # resolve_model <agent> <provider> <task> <diff> -> echoes a runner-ready model id, or empty
-# (→ CLI default). Enumeration is CLI-aware and never guesses an endpoint: opencode-managed
-# agents list via `opencode models <provider>`; others self-enumerate via the provider's /models.
+# (→ CLI default). PROVIDER-AGNOSTIC: if opencode knows the provider (ANY of its vendors — built-in
+# or BROUGHT), enumerate via `opencode models <provider>`; else self-enumerate via the provider's
+# OpenAI-compatible /models. No hardcoded provider list — a newly-brought opencode provider routes
+# with zero change here. Never guesses an endpoint.
 resolve_model() {
   local agent="$1" provider="$2" task="$3" diff="$4" cands="" out=""
-  case "$agent" in
-    opencode|deepseek|openrouter)
-      cands="$(opencode models "$provider" 2>/dev/null | tr '\n' ' ')"
-      [ -n "$cands" ] || { echo "[crew] no live models via 'opencode models $provider' — CLI default" >&2; return 0; }
-      out="$(python3 "$SCROOGE" route --candidates "$cands" -t "$task" -d "$diff" --json 2>/dev/null)" ;;
-    *)
-      out="$(python3 "$SCROOGE" route --provider "$provider" -t "$task" -d "$diff" --json 2>/dev/null)" ;;
-  esac
+  cands="$(opencode models "$provider" 2>/dev/null | tr '\n' ' ')"
+  if [ -n "$cands" ]; then
+    out="$(python3 "$SCROOGE" route --candidates "$cands" -t "$task" -d "$diff" --json 2>/dev/null)"
+  else
+    out="$(python3 "$SCROOGE" route --provider "$provider" -t "$task" -d "$diff" --json 2>/dev/null)"
+  fi
   [ -n "$out" ] || { echo "[crew] live model selection failed for $agent:$provider — CLI default" >&2; return 0; }
   printf '%s' "$out" | python3 -c 'import json,sys
 try: print(json.load(sys.stdin).get("qualified") or "")
