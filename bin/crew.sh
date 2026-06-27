@@ -75,7 +75,7 @@ SCROOGE="$BUS_DIR/engine/bin/scrooge"
 resolve_model() {
   local agent="$1" provider="$2" task="$3" diff="$4" cands="" out=""
   case "$agent" in
-    opencode|deepseek)
+    opencode|deepseek|openrouter)
       cands="$(opencode models "$provider" 2>/dev/null | tr '\n' ' ')"
       [ -n "$cands" ] || { echo "[crew] no live models via 'opencode models $provider' — CLI default" >&2; return 0; }
       out="$(python3 "$SCROOGE" route --candidates "$cands" -t "$task" -d "$diff" --json 2>/dev/null)" ;;
@@ -133,6 +133,9 @@ spawn_grid() {  # $@ = agents — (re)computes the grid for THIS batch and spawn
   for SPEC in "$@"; do
     AGENT="${SPEC%%:*}"                       # agent[:provider[/model]] — model rides in as CREW_MODEL
     FIELD=""; [ "$SPEC" != "$AGENT" ] && FIELD="${SPEC#*:}"
+    # `trantor up openrouter` (no provider) → default the opencode provider to openrouter so it
+    # live-selects from the OpenRouter catalog instead of falling back to opencode's default model.
+    [ "$AGENT" = "openrouter" ] && [ -z "$FIELD" ] && FIELD="openrouter"
     MODEL=""
     if [ -n "$FIELD" ]; then
       case "$FIELD" in

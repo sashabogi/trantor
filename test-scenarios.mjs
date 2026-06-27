@@ -153,6 +153,17 @@ try {
      !advise({ packages: pk(3, "hard") }, world({ claude: { tier: "api" } })).routing.some(r => r.executor === "gemini"));
   ok("glm card carries the opencode:zai-coding-plan launch spec",
      advise({ packages: pk(4, "hard") }, world({ claude: { tier: "api" } })).card_args.some(c => c.launch === "opencode:zai-coding-plan" && c.assignee === "opencode:<project>"));
+  // BYOM: a user who brought ONLY an OpenRouter key — every seat is openrouter, distinct bus identity.
+  const orOnly = (prof) => ({ ...world(prof), agents: ["openrouter"] });
+  const advOR = advise({ packages: pk(2, "hard") }, orOnly({ claude: { tier: "api" } }));
+  ok("openrouter-only user routes all work to the openrouter seat",
+     advOR.card_args.filter(c => c.assignee).every(c => c.launch === "openrouter:openrouter" && c.assignee === "openrouter:<project>"));
+  ok("openrouter never collides with the glm opencode seat (distinct session)",
+     advOR.card_args.every(c => c.assignee !== "opencode:<project>"));
+  ok("openrouter hard route warns to pin a strong model (capability-ingestion is the follow-up)",
+     advOR.routing.some(r => /PIN a strong model/.test(r.reason)));
+  ok("openrouter sits last → native seats win hard work first",
+     advise({ packages: pk(2, "hard") }, world({ claude: { tier: "api" } })).routing.every(r => r.executor !== "openrouter"));
 
   console.log("scenario: deps — the flow-view edge primitive");
   const { task: dep1 } = await api("/task", { project: "proj", title: "shipv2", by: "arch" });

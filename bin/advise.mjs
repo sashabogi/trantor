@@ -35,6 +35,14 @@ export const ROSTER = {
   kimi:     { cli: "kimi",     launch: "kimi",                   session: "kimi",     provider: "kimi" },
   deepseek: { cli: "opencode", launch: "deepseek:deepseek",      session: "deepseek", provider: "deepseek" },
   glm:      { cli: "opencode", launch: "opencode:zai-coding-plan", session: "opencode", provider: "zai" },
+  // OpenRouter = the BYOM on-ramp: one key fronts hundreds of models (incl. vendors with no
+  // CLI of their own). Rides the opencode runner like glm/deepseek, but under its OWN bus label
+  // `openrouter` (distinct session, never collides with the glm `opencode` seat). The launcher
+  // live-selects the best OpenRouter model for the work's difficulty (or pin one:
+  // `openrouter:openrouter/<vendor>/<model>`). The model picked is what determines its strength,
+  // so it sits LAST in every CREW_PREF tier — a wildcard that fills once the proven native seats
+  // are taken, and the ONLY seat for a user who brought nothing but an OpenRouter key.
+  openrouter: { cli: "opencode", launch: "openrouter:openrouter", session: "openrouter", provider: "openrouter" },
 };
 
 export function loadWorld() {
@@ -42,12 +50,17 @@ export function loadWorld() {
   const registry = read(join(H, ".token-scrooge", "registry.json"), { models: {}, tasks: {} });
   const caps = read(join(H, ".token-scrooge", "capabilities.json"), {});
   const has = (c) => { try { execSync(`command -v ${c}`, { stdio: "ignore", shell: "/bin/sh" }); return true; } catch { return false; } };
-  const opencodeKey = () => !!read(join(H, ".config", "opencode", "opencode.json"), {})?.provider?.["zai-coding-plan"]?.options?.apiKey;
+  const opencodeKey = (prov) => !!read(join(H, ".config", "opencode", "opencode.json"), {})?.provider?.[prov]?.options?.apiKey;
+  // a key the user already has for Scrooge counts too — the opencode runner sources these .env
+  // files, so OPENROUTER_API_KEY in ~/.token-scrooge/.env lights up the crew seat with no extra setup.
+  const envHasKey = (k) => !!process.env[k] || [join(H, ".token-scrooge", ".env"), join(H, ".agent-bus", ".env")]
+    .some(f => { try { return readFileSync(f, "utf8").includes(k); } catch { return false; } });
   // a seat is available only if its CLI exists AND its provider is actually set up — a present
-  // binary with a dead/missing seat (gemini, or opencode with no zai key) must NOT be recommended.
+  // binary with a dead/missing seat (gemini, or opencode with no provider key) must NOT be recommended.
   const hasSeat = (tok) => {
     const r = ROSTER[tok]; if (!r || !has(r.cli)) return false;
-    if (tok === "glm") return !!profile?.providers?.zai || opencodeKey();
+    if (tok === "glm") return !!profile?.providers?.zai || opencodeKey("zai-coding-plan");
+    if (tok === "openrouter") return !!profile?.providers?.openrouter || opencodeKey("openrouter") || envHasKey("OPENROUTER_API_KEY");
     return true;
   };
   const agents = Object.keys(ROSTER).filter(hasSeat);
@@ -70,7 +83,7 @@ export function scroogeModelFor(registry, caps, kind = "code", difficulty = "eas
 const FORECAST = { easy: 0.3e6, medium: 1.5e6, hard: 6e6 };  // tokens
 // crew agent preference per difficulty: frontier subs take hard, cheap takes easy.
 // (gemini retired → its slot goes to glm, a strong coding-plan seat on $0 marginal quota.)
-const CREW_PREF = { hard: ["codex", "glm", "kimi", "deepseek"], medium: ["kimi", "glm", "codex", "deepseek"], easy: ["deepseek", "kimi", "glm", "codex"] };
+const CREW_PREF = { hard: ["codex", "glm", "kimi", "deepseek", "openrouter"], medium: ["kimi", "glm", "codex", "deepseek", "openrouter"], easy: ["deepseek", "kimi", "glm", "codex", "openrouter"] };
 
 export function advise(input, world = loadWorld()) {
   const { profile, registry, caps, agents, scrooge } = world;
@@ -117,11 +130,15 @@ export function advise(input, world = loadWorld()) {
       const m = registry.models?.["deepseek-v4-flash"] || { cost_in: 0.14, cost_out: 0.28 };
       est = +((FORECAST[p.difficulty] * 0.85 * m.cost_in + FORECAST[p.difficulty] * 0.15 * m.cost_out) / 1e6).toFixed(2);
     }
-    const why_r = p.difficulty === "hard"
+    let why_r = p.difficulty === "hard"
       ? `hard → strongest available coder (${agent}); its ${pool} pool means ${pool === "api" ? "real $ but cheapest capable" : "$0 marginal on existing quota"}`
       : p.difficulty === "medium"
         ? `medium → solid mid-tier (${agent}) keeps frontier seats free for hard work; ${pool === "api" ? "metered" : "quota"} pool`
         : `easy → cheapest seat (${agent})`;
+    // OpenRouter live-select ranks by COST only (the 335-model catalog has no capability scores
+    // yet — that's the capability-ingestion follow-up), so for HARD work it can land a cheap model.
+    // Flag it: pin a strong model explicitly (openrouter:openrouter/<vendor>/<model>) for hard work.
+    if (agent === "openrouter" && p.difficulty === "hard") why_r += ` — ⚠️ live-select ranks by cost; PIN a strong model (e.g. openrouter:openrouter/anthropic/claude-opus-latest) for hard work until capability data lands`;
     return { ...p, executor: agent, pool, est_cost_usd: est, reason: why_r };
   });
   // crew-size rationale: seats are EMERGENT from the work, and we say so

@@ -69,6 +69,12 @@ const CLI = {
               next:  `opencode run -c{M} "$(cat {P})"`, mflag: " -m ", env: join(homedir(), ".token-scrooge", ".env") },
   opencode: { first: `opencode run{M} "$(cat {P})"`,
               next:  `opencode run -c{M} "$(cat {P})"`, mflag: " -m ", env: join(homedir(), ".token-scrooge", ".env") },
+  // OpenRouter rides the opencode CLI exactly like deepseek/glm, but under its OWN agent label so
+  // its bus identity is `openrouter:<project>` (RELAY_AGENT is set per-spawn) — never colliding with
+  // the glm `opencode` seat. Model ids come pre-qualified (`openrouter/<vendor>/<model>`). Sources
+  // the token-scrooge .env so an existing OPENROUTER_API_KEY authenticates with no extra wiring.
+  openrouter: { first: `opencode run{M} "$(cat {P})"`,
+              next:  `opencode run -c{M} "$(cat {P})"`, mflag: " -m ", env: join(homedir(), ".token-scrooge", ".env") },
   claude:   { first: `claude{M} -p "$(cat {P})" --dangerously-skip-permissions`,
               next:  `claude -c{M} -p "$(cat {P})" --dangerously-skip-permissions`, mflag: " --model " },
 };
