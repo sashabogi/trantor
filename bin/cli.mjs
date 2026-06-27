@@ -53,7 +53,7 @@ switch (cmd) {
   trantor profile     declare your plans:  trantor profile set claude=max codex=plus deepseek=api
   trantor provider    bring ANY model (BYOM): list seats · add <name> --key … · remove <name>
   trantor models      browse live models behind each seat + the router's pick per difficulty
-  trantor up …        spawn a crew here:   trantor up codex kimi deepseek:deepseek opencode:zai-coding-plan
+  trantor up …        spawn a crew here:   trantor up codex kimi deepseek:deepseek glm:zai-coding-plan
   trantor down        tear the crew down (kills processes, closes windows, no dialogs)
   trantor ui          open the live dashboard (board + flow views)
   trantor catchup     "where are we?" — the continuous board + git, with a synthesized brief

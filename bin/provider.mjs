@@ -4,11 +4,14 @@
 //
 //   trantor provider                 # list seats: built-in + discovered, with availability + tier
 //   trantor provider add <name> [--key sk-…] [--plan api|coding-plan|max] [--label <bus-name>]
+//                       [--base-url <url> [--models m1,m2]]   # wire a CUSTOM OpenAI-compatible endpoint
 //   trantor provider remove <name>   # drop it from your profile (leaves the key in place)
 //
 // `add` writes <NAME>_API_KEY to ~/.agent-bus/.env (if --key given), declares the plan in your
-// quota profile, verifies opencode can see the provider's models, and prints the seat spec. The
-// Advisor then routes to it automatically; run `scrooge-capabilities` so it routes well by difficulty.
+// quota profile, verifies opencode can see the provider's models, and prints the seat spec. For a
+// provider opencode already knows (openrouter, groq, …) the key is enough; for a CUSTOM endpoint,
+// pass --base-url and it writes the opencode.json provider block for you. The Advisor then routes
+// to it automatically; run `scrooge-capabilities` so it routes well by difficulty.
 import { readFileSync, writeFileSync, existsSync, mkdirSync, chmodSync, appendFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { homedir } from "node:os";
@@ -22,6 +25,26 @@ const read = (p, fb) => { try { return JSON.parse(readFileSync(p, "utf8")); } ca
 const has = (c) => { try { execSync(`command -v ${c}`, { stdio: "ignore", shell: "/bin/sh" }); return true; } catch { return false; } };
 const C = { dim: "\x1b[2m", grn: "\x1b[32m", red: "\x1b[31m", yel: "\x1b[33m", gold: "\x1b[38;5;208m", off: "\x1b[0m" };
 const envKeyName = (p) => `${String(p).toUpperCase().replace(/[^A-Z0-9]/g, "_")}_API_KEY`;
+
+const OC_CONFIG = join(H, ".config", "opencode", "opencode.json");
+// Wire a CUSTOM OpenAI-compatible provider into opencode.json (matching opencode's schema +
+// the existing providers' `options.apiKey` style). Merges, never clobbers other providers.
+// `configPath` is injectable so it can be unit-tested against a temp file.
+export function wireOpencodeProvider(name, baseUrl, models, configPath = OC_CONFIG) {
+  const cfg = existsSync(configPath) ? read(configPath, {}) : {};
+  cfg.$schema ||= "https://opencode.ai/config.json";
+  cfg.provider ||= {};
+  const block = {
+    npm: "@ai-sdk/openai-compatible",
+    name: name.charAt(0).toUpperCase() + name.slice(1),
+    options: { baseURL: baseUrl, apiKey: `{env:${envKeyName(name)}}` },
+  };
+  if (models && models.length) block.models = Object.fromEntries(models.map(m => [m, {}]));
+  cfg.provider[name] = { ...cfg.provider[name], ...block };
+  mkdirSync(dirname(configPath), { recursive: true });
+  writeFileSync(configPath, JSON.stringify(cfg, null, 2) + "\n");
+  return configPath;
+}
 
 function opencodeModelCount(providerOc) {
   if (!has("opencode")) return null;
@@ -47,7 +70,7 @@ function listSeats() {
 }
 
 function addProvider(name, opts) {
-  if (!name) { console.error("usage: trantor provider add <name> [--key sk-…] [--plan api] [--label <bus-name>]"); process.exit(1); }
+  if (!name) { console.error("usage: trantor provider add <name> [--key sk-…] [--plan api] [--label <bus-name>] [--base-url <url> [--models m1,m2]]"); process.exit(1); }
   const provider = name.toLowerCase();
   const label = (opts.label || provider).toLowerCase().replace(/[^a-z0-9-]/g, "-");
   const plan = (opts.plan || "api").toLowerCase();
@@ -73,13 +96,20 @@ function addProvider(name, opts) {
     console.log(`${C.grn}✓${C.off} profile: ${provider}=${plan}`);
   } catch (e) { console.log(`${C.yel}⚠${C.off} could not set profile (run: trantor profile set ${provider}=${plan})`); }
 
-  // 3) verify opencode can see the provider's models
+  // 3) custom endpoint → write the opencode.json provider block (known providers skip this)
+  if (opts.baseUrl) {
+    const models = (opts.models || "").split(",").map(s => s.trim()).filter(Boolean);
+    const where = wireOpencodeProvider(provider, opts.baseUrl, models);
+    console.log(`${C.grn}✓${C.off} wired custom provider '${provider}' → ${where.replace(H, "~")} (baseURL ${opts.baseUrl}${models.length ? `, ${models.length} models` : ""})`);
+  }
+
+  // 4) verify opencode can see the provider's models
   const n = opencodeModelCount(provider);
   if (n == null) console.log(`${C.yel}⚠${C.off} opencode not on PATH — install it to run this seat (it's the universal adapter)`);
-  else if (n === 0) console.log(`${C.yel}⚠${C.off} opencode lists 0 models for '${provider}'. If it's a known provider, the key above is enough; for a custom endpoint, add it to ~/.config/opencode/opencode.json (provider config). Then re-check: trantor models ${provider}`);
+  else if (n === 0) console.log(`${C.yel}⚠${C.off} opencode lists 0 models for '${provider}'.${opts.baseUrl ? " Check the baseURL/key, or pass --models m1,m2 to declare them." : " If it's a known provider, the key above is enough; for a CUSTOM endpoint re-run with --base-url <url> [--models m1,m2]."} Re-check: trantor models ${provider}`);
   else console.log(`${C.grn}✓${C.off} opencode sees ${n} models for '${provider}'`);
 
-  // 4) score it for difficulty-aware routing + show the seat
+  // 5) score it for difficulty-aware routing + show the seat
   console.log(`\n${C.gold}Seat ready.${C.off} Launch it:`);
   console.log(`  trantor up ${label === provider ? label : `${label}:${provider}`}            ${C.dim}# live-selects the best model for the work${C.off}`);
   console.log(`  trantor up ${label}:${provider}/<model>     ${C.dim}# pin a specific model${C.off}`);
@@ -106,6 +136,8 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     if (rest[i] === "--key") opts.key = rest[++i];
     else if (rest[i] === "--plan") opts.plan = rest[++i];
     else if (rest[i] === "--label") opts.label = rest[++i];
+    else if (rest[i] === "--base-url" || rest[i] === "--baseurl") opts.baseUrl = rest[++i];
+    else if (rest[i] === "--models") opts.models = rest[++i];
     else pos.push(rest[i]);
   }
   if (!sub || sub === "list") listSeats();

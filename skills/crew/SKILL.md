@@ -49,11 +49,11 @@ EXACT launch spec per provider (do not improvise these):
 | Codex | `codex` (or `codex:gpt-5.5` to pin) | OpenAI CLI |
 | Kimi | `kimi` | Moonshot coding-plan |
 | DeepSeek | `deepseek:deepseek` | runs via opencode; `deepseek` alone = CLI default |
-| **GLM (Z.ai)** | **`opencode:zai-coding-plan`** | **runs via opencode, NOT a bare `glm`/`zai` terminal command.** `opencode:zai-coding-plan/glm-5.2` pins a model; `opencode:zai-coding-plan` live-selects. |
+| **GLM (Z.ai)** | **`glm:zai-coding-plan`** | **runs via opencode, NOT a bare `glm`/`zai` terminal command.** `glm:zai-coding-plan/glm-5.2` pins a model; `glm:zai-coding-plan` live-selects. (Legacy `opencode:zai-coding-plan` still works.) |
 | **OpenRouter (BYOM)** | **`openrouter`** | **the bring-your-own-model on-ramp — one key fronts hundreds of vendors (incl. ones with no CLI).** Bare `openrouter` live-selects the best OpenRouter model for the difficulty; pin one with `openrouter:openrouter/<vendor>/<model>`. Its own bus identity `openrouter:<project>` (never collides with the GLM `opencode` seat). |
 
 `agent:provider` live-selects the best model now; `agent:provider/model` pins one. Example:
-`trantor up codex kimi deepseek:deepseek opencode:zai-coding-plan --task code --difficulty hard`.
+`trantor up codex kimi deepseek:deepseek glm:zai-coding-plan --task code --difficulty hard`.
 **Whatever the advisor's `launch` field says, run that verbatim** — the roster above is just the
 built-in menu, but the advisor picks the right seats/specs for THIS work (a user who's only brought
 an OpenRouter key gets `openrouter` for everything; one who brought five providers gets a
@@ -66,7 +66,7 @@ advisor routes to a brought provider you don't recognize, that's expected — ru
 
 ⚠️ **Gemini CLI is RETIRED (Google killed the free seat 2026-06-18).** The advisor no longer
 offers it and you must NOT fire up `gemini` — `gemini --yolo` exits 1 and crash-loops on the
-bus. Its replacement seat is **GLM via `opencode:zai-coding-plan`**. (Gemini still serves as a
+bus. Its replacement seat is **GLM via `glm:zai-coding-plan`**. (Gemini still serves as a
 Scrooge cheap-model via `GEMINI_API_KEY` — that's a separate, working path, not a crew seat.)
 Only a holder of a paid Gemini enterprise key should ever `trantor up gemini`.
 

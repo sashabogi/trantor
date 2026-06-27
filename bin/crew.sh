@@ -52,8 +52,9 @@ down() {
 case "$CMD" in up|swap) ;; *) echo "usage: crew.sh up <agent...> | crew.sh swap <oldAgent> <newAgent[:provider[/model]]> | crew.sh down"; exit 1 ;; esac
 
 # --task/--difficulty drive LAZY live-model selection for provider-only specs (agent:provider).
-# An agent spec is one of: `codex` (CLI default) · `opencode:zai-coding-plan` (provider only →
-# pick the best live model now) · `opencode:zai-coding-plan/glm-5.2` (full pin, used as-is).
+# An agent spec is one of: `codex` (CLI default) · `glm:zai-coding-plan` (provider only → pick the
+# best live model now) · `glm:zai-coding-plan/glm-5.2` (full pin). The agent label is the bus
+# identity; any non-native label runs via opencode (legacy `opencode:zai-coding-plan` still works).
 TASK="code"; DIFF="medium"; _ARGS=()
 while [ $# -gt 0 ]; do
   case "$1" in

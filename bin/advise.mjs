@@ -36,7 +36,7 @@ export const BUILTIN_ROSTER = {
   codex:      { cli: "codex",    launch: "codex",                   session: "codex",      provider: "codex" },
   kimi:       { cli: "kimi",     launch: "kimi",                    session: "kimi",       provider: "kimi" },
   deepseek:   { cli: "opencode", launch: "deepseek:deepseek",       session: "deepseek",   provider: "deepseek",   providerOc: "deepseek" },
-  glm:        { cli: "opencode", launch: "opencode:zai-coding-plan", session: "opencode",  provider: "zai",        providerOc: "zai-coding-plan" },
+  glm:        { cli: "opencode", launch: "glm:zai-coding-plan",      session: "glm",        provider: "zai",        providerOc: "zai-coding-plan" },
   openrouter: { cli: "opencode", launch: "openrouter:openrouter",   session: "openrouter", provider: "openrouter", providerOc: "openrouter" },
 };
 // opencode provider ids already claimed by a built-in (so discovery never duplicates them) + the
@@ -193,12 +193,12 @@ export function advise(input, world = loadWorld()) {
     const seat = roster[r.executor];
     return {
     order: i + 1, title: r.title, difficulty: r.difficulty,
-    // bus identity = the runner's session name (spec's agent part) — glm rides the `opencode`
-    // runner so its session/assignee is `opencode:<project>`, NOT `glm:<project>`.
+    // bus identity = the seat's session label (every opencode-driven seat has its OWN label, so
+    // glm is `glm:<project>`, openrouter `openrouter:<project>`, a brought provider `<name>:<project>`).
     assignee: r.executor === "scrooge" || r.executor === "orchestrator" ? undefined : `${seat?.session || r.executor}:<project>`,
     // launch = the EXACT `trantor up` spec to spawn this seat; the orchestrator runs
     // `trantor up <launch> --task <task> --difficulty <difficulty>`. Carrying it explicitly is
-    // what teaches the orchestrator the GLM path (`opencode:zai-coding-plan`) instead of guessing.
+    // what teaches the orchestrator the GLM path (`glm:zai-coding-plan`) instead of guessing.
     launch: ["scrooge", "orchestrator"].includes(r.executor) ? undefined : (seat?.launch || r.executor),
     // "auto" = resolve a LIVE model at spawn (the launch spec already pins the provider; the
     // runner picks the best live model for it). Was `<cli>-default` — a stale default.

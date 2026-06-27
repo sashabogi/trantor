@@ -151,15 +151,15 @@ try {
      advise({ packages: pk(2, "hard") }, world({ claude: { tier: "api" } })).routing.every(r => ["codex", "glm"].includes(r.executor)));
   ok("retired gemini is never an available crew seat",
      !advise({ packages: pk(3, "hard") }, world({ claude: { tier: "api" } })).routing.some(r => r.executor === "gemini"));
-  ok("glm card carries the opencode:zai-coding-plan launch spec",
-     advise({ packages: pk(4, "hard") }, world({ claude: { tier: "api" } })).card_args.some(c => c.launch === "opencode:zai-coding-plan" && c.assignee === "opencode:<project>"));
+  ok("glm card carries its own glm:zai-coding-plan launch + glm session",
+     advise({ packages: pk(4, "hard") }, world({ claude: { tier: "api" } })).card_args.some(c => c.launch === "glm:zai-coding-plan" && c.assignee === "glm:<project>"));
   // BYOM: a user who brought ONLY an OpenRouter key — every seat is openrouter, distinct bus identity.
   const orOnly = (prof) => ({ ...world(prof), agents: ["openrouter"] });
   const advOR = advise({ packages: pk(2, "hard") }, orOnly({ claude: { tier: "api" } }));
   ok("openrouter-only user routes all work to the openrouter seat",
      advOR.card_args.filter(c => c.assignee).every(c => c.launch === "openrouter:openrouter" && c.assignee === "openrouter:<project>"));
-  ok("openrouter never collides with the glm opencode seat (distinct session)",
-     advOR.card_args.every(c => c.assignee !== "opencode:<project>"));
+  ok("openrouter seat has its own session, distinct from the glm seat",
+     advOR.card_args.filter(c => c.assignee).every(c => c.assignee === "openrouter:<project>" && c.assignee !== "glm:<project>"));
   ok("openrouter hard route points at scrooge-capabilities (catalog scoring) or pinning",
      advOR.routing.some(r => /scrooge-capabilities/.test(r.reason) && /pin/i.test(r.reason)));
   ok("openrouter sits last → native seats win hard work first",
@@ -179,8 +179,27 @@ try {
   const advB = advise({ packages: pk(2, "hard") }, { ...world({ claude: { tier: "api" } }), roster: fullRoster, agents: ["inception"] });
   ok("advise routes work to a brought provider under its own session",
      advB.card_args.filter(c => c.assignee).every(c => c.assignee === "inception:<project>" && c.launch === "inception:inception"));
-  ok("a brought provider never collides with a built-in session",
-     advB.card_args.every(c => c.assignee !== "opencode:<project>"));
+  ok("a brought provider never collides with a built-in session (glm/openrouter/deepseek)",
+     advB.card_args.filter(c => c.assignee).every(c => !["glm:<project>", "openrouter:<project>", "deepseek:<project>"].includes(c.assignee)));
+  ok("glm now has its own bus label (not the generic opencode session)",
+     buildRoster({}, {}).glm.session === "glm" && buildRoster({}, {}).glm.launch === "glm:zai-coding-plan");
+  // custom-endpoint wiring: provider add --base-url writes a valid opencode.json provider block
+  const { wireOpencodeProvider } = await import(join(ROOT, "bin/provider.mjs"));
+  const tmpCfg = join(ROOT, ".test-opencode.json");
+  try {
+    wireOpencodeProvider("acme", "https://api.acme.ai/v1", ["acme-large", "acme-mini"], tmpCfg);
+    const wrote = JSON.parse((await import("node:fs")).readFileSync(tmpCfg, "utf8"));
+    ok("custom endpoint → valid opencode provider block (npm + baseURL + env-keyed apiKey + models)",
+       wrote.provider.acme.npm === "@ai-sdk/openai-compatible" &&
+       wrote.provider.acme.options.baseURL === "https://api.acme.ai/v1" &&
+       wrote.provider.acme.options.apiKey === "{env:ACME_API_KEY}" &&
+       Object.keys(wrote.provider.acme.models).length === 2);
+    // a second provider merges, never clobbers
+    wireOpencodeProvider("beta", "https://api.beta.ai/v1", [], tmpCfg);
+    const merged = JSON.parse((await import("node:fs")).readFileSync(tmpCfg, "utf8"));
+    ok("wiring a second custom provider preserves the first (merge, no clobber)",
+       merged.provider.acme && merged.provider.beta);
+  } finally { try { (await import("node:fs")).unlinkSync(tmpCfg); } catch {} }
 
   console.log("scenario: deps — the flow-view edge primitive");
   const { task: dep1 } = await api("/task", { project: "proj", title: "shipv2", by: "arch" });

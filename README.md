@@ -134,7 +134,7 @@ project takes over with a full window (and a PreCompact hook does this automatic
    (`solo | scrooge | crew | hybrid`), a routing table with a **reason per package**, why
    that many seats ("seats follow the work, not the install list"), and a real-money estimate
    with quota-pool accounting. You say go.
-2. **Windows open.** `trantor up codex kimi deepseek:deepseek opencode:zai-coding-plan` spawns one titled
+2. **Windows open.** `trantor up codex kimi deepseek:deepseek glm:zai-coding-plan` spawns one titled
    terminal window per agent. `agent:model` pins a model; `agent:provider --difficulty hard`
    picks the **best live model** for the work at spawn (capability × cost), enumerated from the
    CLI itself — never a guessed endpoint. **Serialized and then verified on the bus** — the
@@ -236,7 +236,7 @@ trantor setup | doctor | connect | profile | up <agents…> | swap <old> <new> |
 
 `trantor up` notes: `agent:model` pins a model (`deepseek:deepseek-v4-pro`); `agent:provider
 --task <k> --difficulty <d>` picks the **best live model** for the work at spawn
-(`opencode:zai-coding-plan --difficulty hard`); spawns are verified on the bus with one retry;
+(`glm:zai-coding-plan --difficulty hard`); spawns are verified on the bus with one retry;
 geometry auto-detects the screen you're working on (`CREW_RECT="X,Y,W,H"` to override). `trantor
 swap <oldAgent> <newSpec>` replaces an exhausted agent with a live-selected one. `trantor down`
 kills crew processes via their ttys and closes windows without macOS "Terminate?" dialogs.
