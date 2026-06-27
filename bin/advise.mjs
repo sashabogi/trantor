@@ -135,10 +135,10 @@ export function advise(input, world = loadWorld()) {
       : p.difficulty === "medium"
         ? `medium → solid mid-tier (${agent}) keeps frontier seats free for hard work; ${pool === "api" ? "metered" : "quota"} pool`
         : `easy → cheapest seat (${agent})`;
-    // OpenRouter live-select ranks by COST only (the 335-model catalog has no capability scores
-    // yet — that's the capability-ingestion follow-up), so for HARD work it can land a cheap model.
-    // Flag it: pin a strong model explicitly (openrouter:openrouter/<vendor>/<model>) for hard work.
-    if (agent === "openrouter" && p.difficulty === "hard") why_r += ` — ⚠️ live-select ranks by cost; PIN a strong model (e.g. openrouter:openrouter/anthropic/claude-opus-latest) for hard work until capability data lands`;
+    // OpenRouter live-select ranks capability×cost ACROSS the catalog once `scrooge-capabilities`
+    // has scored it (AA scores + price proxy + per-difficulty cost weighting → hard escalates to a
+    // strong model, easy stays cheap). If it hasn't been run, routing falls back to cost-only.
+    if (agent === "openrouter" && p.difficulty === "hard") why_r += ` — OpenRouter ranks capability×cost; run \`scrooge-capabilities\` to keep the catalog scored (or pin openrouter:openrouter/<vendor>/<model>)`;
     return { ...p, executor: agent, pool, est_cost_usd: est, reason: why_r };
   });
   // crew-size rationale: seats are EMERGENT from the work, and we say so

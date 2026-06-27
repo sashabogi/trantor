@@ -160,8 +160,8 @@ try {
      advOR.card_args.filter(c => c.assignee).every(c => c.launch === "openrouter:openrouter" && c.assignee === "openrouter:<project>"));
   ok("openrouter never collides with the glm opencode seat (distinct session)",
      advOR.card_args.every(c => c.assignee !== "opencode:<project>"));
-  ok("openrouter hard route warns to pin a strong model (capability-ingestion is the follow-up)",
-     advOR.routing.some(r => /PIN a strong model/.test(r.reason)));
+  ok("openrouter hard route points at scrooge-capabilities (catalog scoring) or pinning",
+     advOR.routing.some(r => /scrooge-capabilities/.test(r.reason) && /pin/i.test(r.reason)));
   ok("openrouter sits last → native seats win hard work first",
      advise({ packages: pk(2, "hard") }, world({ claude: { tier: "api" } })).routing.every(r => r.executor !== "openrouter"));
 

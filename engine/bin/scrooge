@@ -171,8 +171,11 @@ def model_quality(caps, mid, metric):
         v = c.get("intelligence")          # fall back to the general index
     return float(v) if isinstance(v, (int, float)) else 0.0
 
-def blended_cost(reg, mid):
-    m = reg["models"].get(mid, {})
+def blended_cost(reg, caps, mid):
+    # The curated registry carries cost for its own models; for CATALOG models (OpenRouter's
+    # hundreds, brought via --candidates) the per-model price rides on the capability entry
+    # instead — so a brought model is ranked on its real price without bloating the registry.
+    m = reg["models"].get(mid) or (caps.get(mid) if isinstance(caps, dict) else None) or {}
     return max(1e-6, 0.3 * m.get("cost_in", 0) + 0.7 * m.get("cost_out", 0))
 
 def weigh_candidates(reg, caps, cand_ids, task, difficulty):
@@ -187,8 +190,16 @@ def weigh_candidates(reg, caps, cand_ids, task, difficulty):
         floor = scored_q[min(len(scored_q) - 1, int(round(pct * (len(scored_q) - 1))))]
     survivors = [(mid, q) for mid, q in quals if q >= floor] or quals
     rw = reg.get("routing") or {}
-    qw, cw = rw.get("q_weight", 1.5), rw.get("c_weight", 0.5)
-    out = [(mid, (max(q, 1e-6) ** qw) / (blended_cost(reg, mid) ** cw)) for mid, q in survivors]
+    qw = rw.get("q_weight", 1.5)
+    # cost-weight scales DOWN as difficulty rises: EASY work optimizes price (cheap wins), HARD
+    # work prioritizes capability so it can escalate to a genuinely strong model instead of the
+    # cheapest-that-clears-the-floor (the "deepseek-flash wins everything" trap on a huge catalog).
+    # It still weighs cost (hard picks a strong *value* model, not a blind frontier overpay).
+    # Per-difficulty override via registry.routing.c_weight_<difficulty>; legacy c_weight still honored.
+    CW_BY_DIFF = {"easy": 0.65, "medium": 0.5, "hard": 0.1}
+    cw_key = "c_weight_" + str(difficulty)
+    cw = rw[cw_key] if cw_key in rw else (CW_BY_DIFF[difficulty] if difficulty in CW_BY_DIFF else rw.get("c_weight", 0.5))
+    out = [(mid, (max(q, 1e-6) ** qw) / (blended_cost(reg, caps, mid) ** cw)) for mid, q in survivors]
     out.sort(key=lambda x: -x[1])
     return out
 

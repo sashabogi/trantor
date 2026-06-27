@@ -6,14 +6,14 @@
   },
   "metadata": {
     "description": "Trantor — the hub-world for AI agent crews: live message bus, presence, project Kanban/flow board + context-handoff for independent AI coding agents (Claude, Codex, Gemini, …)",
-    "version": "0.17.45"
+    "version": "0.17.46"
   },
   "plugins": [
     {
       "name": "trantor",
       "source": "./",
       "description": "The hub-world for AI agent crews. Say \"fire up the crew\" and Claude becomes the architect: a plan-aware Advisor routes the work (solo / cheap inline calls / live crew of Codex, GLM, Kimi & DeepSeek in their own terminal windows), a Kanban/flow command center with a testing gate tracks it, and an economics brain (Scrooge) keeps the receipts. Includes the relay MCP, a SessionStart auto-discovery hook, and a PreCompact context-handoff so a fresh session can take over a full window instead of compacting.",
-      "version": "0.17.45",
+      "version": "0.17.46",
       "author": {
         "name": "Sasha Bogojevic"
       },

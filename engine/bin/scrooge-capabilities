@@ -22,7 +22,7 @@ Usage:  scrooge-capabilities            # refresh from AA (+OpenRouter), show a 
         scrooge-capabilities --dry-run  # fetch + match, print, but don't write
 Exit: 0 updated · 1 nothing fetched (no key / network) · 2 error.
 """
-import sys, os, json, argparse, urllib.request, urllib.error
+import sys, os, json, argparse, math, urllib.request, urllib.error
 
 HOME = os.path.expanduser("~")
 SCROOGE_DIR = os.environ.get("SCROOGE_HOME", os.path.join(HOME, ".token-scrooge"))
@@ -122,12 +122,34 @@ def fetch_openrouter():
         if not mid:
             continue
         arch = m.get("architecture") or {}
-        out[norm(mid.split("/")[-1])] = {
+        pr = m.get("pricing") or {}
+        def _per_m(v):                       # OpenRouter prices are USD PER TOKEN → $/1M tokens
+            try:
+                return round(float(v) * 1e6, 4)
+            except Exception:
+                return None
+        # KEY BY THE RAW LAST SEGMENT (dots intact) — this is exactly what `scrooge route` uses to
+        # look a candidate up (by_bare = id.split("/")[-1], no normalisation), so the keys must match.
+        out[mid.split("/")[-1]] = {
+            "full": mid,
             "context": m.get("context_length"),
             "modalities": arch.get("input_modalities"),
+            "cost_in": _per_m(pr.get("prompt")),
+            "cost_out": _per_m(pr.get("completion")),
         }
-    sys.stderr.write(DIM("  OpenRouter: %d models fetched (context/modality).\n" % len(out)))
+    sys.stderr.write(DIM("  OpenRouter: %d models fetched (pricing/context/modality).\n" % len(out)))
     return out
+
+def price_proxy_capability(cost_out):
+    """A transparent fallback capability when AA has no score for a brought model: price is a
+    decent proxy for tier (frontier models cost more). Monotonic in cost_out ($/1M), with an
+    HONEST ceiling — never claim frontier capability from price alone. Gives every catalog model
+    a non-zero, rank-able score so the difficulty floor can separate hard from easy work; a later
+    AA refresh upgrades it to a real score."""
+    if not isinstance(cost_out, (int, float)) or cost_out <= 0:
+        return 8.0                            # free / unknown price → low floor
+    cap = 30.0 + 20.0 * math.log10(cost_out + 0.1)
+    return round(max(5.0, min(72.0, cap)), 1)
 
 def aa_scores(m):
     ev = m.get("evaluations") or {}
@@ -162,6 +184,7 @@ def main():
         return 1
 
     today = __import__("time").strftime("%Y-%m-%d")
+    by_or_norm = {norm(k): v for k, v in by_or.items()}   # by_or is raw-keyed; registry ids are dash-form
     matched, unmatched = [], []
     for mid in reg["models"]:
         existing = caps.get(mid) if isinstance(caps.get(mid), dict) else {}
@@ -175,7 +198,7 @@ def main():
             matched.append(mid)
         elif by_slug:
             unmatched.append(mid)
-        orx = by_or.get(norm(mid))
+        orx = by_or_norm.get(norm(mid))
         if orx:
             if orx.get("context"):
                 rec["context"] = orx["context"]
@@ -184,10 +207,53 @@ def main():
         if rec:
             caps[mid] = rec
 
+    # ---- OpenRouter CATALOG ingestion: make every brought model routable by difficulty -------
+    # The crew passes OpenRouter's hundreds of models as candidates; the router ranks by
+    # capability (gated by a difficulty floor) ÷ price. Write each catalog model as a first-class
+    # entry keyed by its RAW bare name (matching `scrooge route`'s lookup): a REAL AA score when
+    # the model matches a slug, else a transparent price-tier PROXY — plus its real price so cost
+    # ranking works. Registry-curated models are never shadowed. Marked `_src` for honesty; a
+    # later AA refresh upgrades proxies in place.
+    or_real = or_proxy = 0
+    for bare, info in by_or.items():
+        if bare in reg["models"]:                     # curated registry model — leave it authoritative
+            continue
+        existing = caps.get(bare) if isinstance(caps.get(bare), dict) else {}
+        rec = dict(existing)
+        if info.get("cost_in") is not None:
+            rec["cost_in"] = info["cost_in"]
+        if info.get("cost_out") is not None:
+            rec["cost_out"] = info["cost_out"]
+        if info.get("context"):
+            rec.setdefault("context", info["context"])
+        has_real = isinstance(rec.get("coding"), (int, float)) or isinstance(rec.get("intelligence"), (int, float))
+        am = None
+        if by_slug:
+            full = info.get("full", "")
+            am = by_slug.get(norm(full)) or by_slug.get(norm(full.split("/")[-1])) or by_slug.get(bare)
+        if am:
+            rec.update({k: v for k, v in aa_scores(am).items() if v is not None})
+            rec["updated"] = today
+            rec["source"] = "artificialanalysis"
+            rec.pop("_src", None)
+            or_real += 1
+        elif not has_real or rec.get("_src") == "openrouter-price-proxy":
+            p = price_proxy_capability(rec.get("cost_out"))
+            if p is not None:
+                rec["coding"] = rec["intelligence"] = rec["reasoning"] = p
+                rec["_src"] = "openrouter-price-proxy"
+                rec["updated"] = today
+                or_proxy += 1
+        if rec:
+            caps[bare] = rec
+
     caps["_meta"].update({"source": "artificialanalysis.ai + openrouter", "refreshed": today,
-                          "attribution": "https://artificialanalysis.ai/"})
+                          "attribution": "https://artificialanalysis.ai/",
+                          "openrouter_catalog": {"aa_scored": or_real, "price_proxy": or_proxy}})
 
     sys.stderr.write(GOLD("🪙 scrooge-capabilities — %d matched, %d unmatched\n" % (len(matched), len(unmatched))))
+    if by_or:
+        sys.stderr.write(GOLD("   OpenRouter catalog — %d AA-scored, %d price-proxy (now routable by difficulty)\n" % (or_real, or_proxy)))
     for mid in matched:
         c = caps[mid]
         sys.stderr.write("  %s %-24s intel=%-5s code=%-5s reason=%-5s %st/s\n" % (
