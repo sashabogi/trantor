@@ -1,6 +1,6 @@
 ---
 name: crew
-description: Orchestrate a multi-agent build with Trantor — get an Advisor recommendation (solo/scrooge/crew/hybrid based on the user's plans and the work), fire up helper AI CLIs (Codex, Gemini, Kimi, DeepSeek) with pinned models in visible terminal windows, assign difficulty-tagged work over the bus, track it on the Kanban dashboard with a testing gate, delegate grunt to Scrooge, supervise actively, integrate, ship. Use when the user wants several AI agents building something together, says "fire up the crew/agents", "build it with trantor / with the crew", or asks to coordinate other coding CLIs on a task.
+description: Orchestrate a multi-agent build with Trantor — get an Advisor recommendation (solo/scrooge/crew/hybrid based on the user's plans and the work), fire up helper AI CLIs (Codex, GLM, Kimi, DeepSeek) with pinned models in visible terminal windows, assign difficulty-tagged work over the bus, track it on the Kanban dashboard with a testing gate, delegate grunt to Scrooge, supervise actively, integrate, ship. Use when the user wants several AI agents building something together, says "fire up the crew/agents", "build it with trantor / with the crew", or asks to coordinate other coding CLIs on a task.
 ---
 
 # Trantor crew — the unified playbook (brain × body)
@@ -39,12 +39,32 @@ explicit EVENT/INTERFACE CONTRACT — cross-agent bugs come from contract drift.
 3. Open the dashboard: `trantor ui` (or `open -na "Google Chrome" --args --new-window <hub-url>`)
 
 ## Phase 2 — fire up the crew (with the Advisor's models)
-`trantor up codex:gpt-5.5 gemini kimi deepseek:deepseek-v4-pro`
-— `agent:model` pins a model (omit to use that CLI's default; use what relay_advise routed).
+**Each crew card from `relay_advise` carries a `launch` spec — run it VERBATIM; never invent a
+CLI invocation or run an agent "in a terminal" yourself.** Spawn every seat in one call:
+`trantor up <launch> <launch> … --task <kind> --difficulty <diff>`. The live roster + the
+EXACT launch spec per provider (do not improvise these):
+
+| seat | launch spec | notes |
+|---|---|---|
+| Codex | `codex` (or `codex:gpt-5.5` to pin) | OpenAI CLI |
+| Kimi | `kimi` | Moonshot coding-plan |
+| DeepSeek | `deepseek:deepseek` | runs via opencode; `deepseek` alone = CLI default |
+| **GLM (Z.ai)** | **`opencode:zai-coding-plan`** | **runs via opencode, NOT a bare `glm`/`zai` terminal command.** `opencode:zai-coding-plan/glm-5.2` pins a model; `opencode:zai-coding-plan` live-selects. |
+
+`agent:provider` live-selects the best model now; `agent:provider/model` pins one. Example:
+`trantor up codex kimi deepseek:deepseek opencode:zai-coding-plan --task code --difficulty hard`.
+
+⚠️ **Gemini CLI is RETIRED (Google killed the free seat 2026-06-18).** The advisor no longer
+offers it and you must NOT fire up `gemini` — `gemini --yolo` exits 1 and crash-loops on the
+bus. Its replacement seat is **GLM via `opencode:zai-coding-plan`**. (Gemini still serves as a
+Scrooge cheap-model via `GEMINI_API_KEY` — that's a separate, working path, not a crew seat.)
+Only a holder of a paid Gemini enterprise key should ever `trantor up gemini`.
+
 (If `trantor` isn't on PATH, the same launcher is `bash <plugin-root>/bin/crew.sh up …`.)
 The launcher auto-wires configs, spawns serialized runner windows, then **VERIFIES each agent
 on the bus with one retry**. READ ITS OUTPUT: it ends "crew verified" or "✗✗ CREW INCOMPLETE"
-naming no-shows. **Never assign work to an unverified agent.** The bus is the truth.
+naming no-shows. **Never assign work to an unverified agent.** The bus is the truth. If a seat
+fails to verify, run `trantor doctor` — it shows each CLI's wired/auth state and the exact fix.
 
 ## Phase 3 — contracts over the bus
 Build the shared foundation yourself first, then `relay_send` each agent its contract

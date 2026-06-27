@@ -12,7 +12,7 @@
 ### The hub-world for AI agent crews.
 
 **One Advisor decides how your work runs — solo, cheap inline calls, or a live crew of
-Claude Code, Codex, Gemini, Kimi & DeepSeek in their own terminal windows — routed by your
+Claude Code, Codex, GLM, Kimi & DeepSeek in their own terminal windows — routed by your
 actual plans, supervised on a live + historical board you can scroll back through, learning
 from every failure.**
 
@@ -134,7 +134,7 @@ project takes over with a full window (and a PreCompact hook does this automatic
    (`solo | scrooge | crew | hybrid`), a routing table with a **reason per package**, why
    that many seats ("seats follow the work, not the install list"), and a real-money estimate
    with quota-pool accounting. You say go.
-2. **Windows open.** `trantor up codex gemini kimi deepseek:deepseek-v4-pro` spawns one titled
+2. **Windows open.** `trantor up codex kimi deepseek:deepseek opencode:zai-coding-plan` spawns one titled
    terminal window per agent. `agent:model` pins a model; `agent:provider --difficulty hard`
    picks the **best live model** for the work at spawn (capability × cost), enumerated from the
    CLI itself — never a guessed endpoint. **Serialized and then verified on the bus** — the
@@ -194,7 +194,7 @@ Trantor's economics engine ([Scrooge](https://github.com/sashabogi/token-scrooge
 automatically by `trantor setup`) knows model capabilities, per-1M costs, and keeps the
 ledger; Trantor turns that into decisions:
 
-- **Declare your plans once:** `trantor profile set claude=max codex=plus gemini=tier kimi=coding-plan deepseek=api`
+- **Declare your plans once:** `trantor profile set claude=max codex=plus zai=coding-plan kimi=coding-plan deepseek=api`
 - The Advisor routes by **your economics**: API-billed orchestrator → offload everything;
   $20-tier plan → the crew *is* the only way a real build fits; max-tier → context horizon
   decides. **Quota pooling**: one build spread across your separate subscription buckets —

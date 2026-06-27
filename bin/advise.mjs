@@ -19,12 +19,38 @@ import { pathToFileURL } from "node:url";
 const H = homedir();
 const read = (p, fb) => { try { return JSON.parse(readFileSync(p, "utf8")); } catch { return fb; } };
 
+// ---- canonical crew roster (single source of truth, mirrors bin/doctor.mjs) ----
+// Each token maps to: the CLI binary that must exist · the `trantor up` LAUNCH spec the
+// orchestrator runs · the bus SESSION name (= spec's agent part) · the profile PROVIDER
+// key that gates the seat and supplies the tier.
+//
+// GEMINI is deliberately ABSENT: Google retired the free Gemini CLI seat (2026-06-18), so
+// even though the `gemini` binary is usually still on PATH, `gemini --yolo` crashes (exit 1)
+// for everyone without a paid enterprise key. Its replacement seat is GLM via opencode.
+// (Gemini still works as a Scrooge cheap-model via GEMINI_API_KEY — a separate path.) A
+// paid-key holder can still force it with an explicit `trantor up gemini`; we just never
+// auto-recommend a dead seat.
+export const ROSTER = {
+  codex:    { cli: "codex",    launch: "codex",                  session: "codex",    provider: "codex" },
+  kimi:     { cli: "kimi",     launch: "kimi",                   session: "kimi",     provider: "kimi" },
+  deepseek: { cli: "opencode", launch: "deepseek:deepseek",      session: "deepseek", provider: "deepseek" },
+  glm:      { cli: "opencode", launch: "opencode:zai-coding-plan", session: "opencode", provider: "zai" },
+};
+
 export function loadWorld() {
   const profile = read(join(H, ".agent-bus", "profile.json"), { providers: {} });
   const registry = read(join(H, ".token-scrooge", "registry.json"), { models: {}, tasks: {} });
   const caps = read(join(H, ".token-scrooge", "capabilities.json"), {});
   const has = (c) => { try { execSync(`command -v ${c}`, { stdio: "ignore", shell: "/bin/sh" }); return true; } catch { return false; } };
-  const agents = ["codex", "gemini", "kimi", "deepseek"].filter(a => has(a === "deepseek" ? "opencode" : a));
+  const opencodeKey = () => !!read(join(H, ".config", "opencode", "opencode.json"), {})?.provider?.["zai-coding-plan"]?.options?.apiKey;
+  // a seat is available only if its CLI exists AND its provider is actually set up — a present
+  // binary with a dead/missing seat (gemini, or opencode with no zai key) must NOT be recommended.
+  const hasSeat = (tok) => {
+    const r = ROSTER[tok]; if (!r || !has(r.cli)) return false;
+    if (tok === "glm") return !!profile?.providers?.zai || opencodeKey();
+    return true;
+  };
+  const agents = Object.keys(ROSTER).filter(hasSeat);
   return { profile, registry, caps, agents, scrooge: has("scrooge") };
 }
 
@@ -42,8 +68,9 @@ export function scroogeModelFor(registry, caps, kind = "code", difficulty = "eas
 
 // crude per-package token forecast (input+output through the executor)
 const FORECAST = { easy: 0.3e6, medium: 1.5e6, hard: 6e6 };  // tokens
-// crew agent preference per difficulty: frontier subs take hard, cheap takes easy
-const CREW_PREF = { hard: ["codex", "gemini", "kimi", "deepseek"], medium: ["kimi", "gemini", "codex", "deepseek"], easy: ["deepseek", "kimi", "gemini", "codex"] };
+// crew agent preference per difficulty: frontier subs take hard, cheap takes easy.
+// (gemini retired → its slot goes to glm, a strong coding-plan seat on $0 marginal quota.)
+const CREW_PREF = { hard: ["codex", "glm", "kimi", "deepseek"], medium: ["kimi", "glm", "codex", "deepseek"], easy: ["deepseek", "kimi", "glm", "codex"] };
 
 export function advise(input, world = loadWorld()) {
   const { profile, registry, caps, agents, scrooge } = world;
@@ -82,9 +109,9 @@ export function advise(input, world = loadWorld()) {
     if (p.owner === "self") return { ...p, executor: "orchestrator", pool: tierOf(profile, "claude"), reason: "architect-owned (foundation/integration doctrine) — the orchestrator keeps the shared contract in its own hands" };
     if (mode === "solo") return { ...p, executor: "orchestrator", pool: tierOf(profile, "claude"), reason: "small enough to do inline" };
     const pref = CREW_PREF[p.difficulty].filter(a => agents.includes(a));
-    const agent = pref.sort((a, b) => (used[a] || 0) - (used[b] || 0))[0] || "deepseek";
+    const agent = pref.sort((a, b) => (used[a] || 0) - (used[b] || 0))[0] || agents[0] || "deepseek";
     used[agent] = (used[agent] || 0) + 1;
-    const pool = tierOf(profile, agent === "deepseek" ? "deepseek" : agent);
+    const pool = tierOf(profile, ROSTER[agent]?.provider || agent);
     let est = null;
     if (pool === "api") { // deepseek API etc — estimate real $ via registry
       const m = registry.models?.["deepseek-v4-flash"] || { cost_in: 0.14, cost_out: 0.28 };
@@ -120,17 +147,26 @@ export function advise(input, world = loadWorld()) {
   // creation order — the architect substitutes real ids as it creates them.)
   const selfPkgs = routing.filter(r => r.executor === "orchestrator");
   const foundationIdx = selfPkgs.length ? [1] : [];
-  const cards = routing.map((r, i) => ({
+  const cards = routing.map((r, i) => {
+    const seat = ROSTER[r.executor];
+    return {
     order: i + 1, title: r.title, difficulty: r.difficulty,
-    assignee: r.executor === "scrooge" || r.executor === "orchestrator" ? undefined : `${r.executor}:<project>`,
-    // "auto" = resolve a LIVE model at spawn (the orchestrator runs `trantor up <agent>:<provider>
-    // --task --difficulty`, which picks the best live model). Was `<cli>-default` — a stale default.
+    // bus identity = the runner's session name (spec's agent part) — glm rides the `opencode`
+    // runner so its session/assignee is `opencode:<project>`, NOT `glm:<project>`.
+    assignee: r.executor === "scrooge" || r.executor === "orchestrator" ? undefined : `${seat?.session || r.executor}:<project>`,
+    // launch = the EXACT `trantor up` spec to spawn this seat; the orchestrator runs
+    // `trantor up <launch> --task <task> --difficulty <difficulty>`. Carrying it explicitly is
+    // what teaches the orchestrator the GLM path (`opencode:zai-coding-plan`) instead of guessing.
+    launch: ["scrooge", "orchestrator"].includes(r.executor) ? undefined : (seat?.launch || r.executor),
+    // "auto" = resolve a LIVE model at spawn (the launch spec already pins the provider; the
+    // runner picks the best live model for it). Was `<cli>-default` — a stale default.
     model: r.model || (["scrooge", "orchestrator"].includes(r.executor) ? undefined : "auto"),
     task: ["scrooge", "orchestrator"].includes(r.executor) ? undefined : r.kind,
     via: r.executor === "scrooge" ? "relay_scrooge" : "relay_task_add",
     deps_orders: r.executor === "orchestrator" && /integrat/i.test(r.title)
       ? routing.map((x, j) => j + 1).filter(j => j !== i + 1)
-      : (r.executor !== "orchestrator" ? foundationIdx.filter(f => f !== i + 1) : []) }));
+      : (r.executor !== "orchestrator" ? foundationIdx.filter(f => f !== i + 1) : []) };
+  });
   return { mode, why, crew, routing, routing_table_md: table, card_args: cards, est_api_cost_usd: apiCost, quota_pools: pools, summary, orchestrator_tier: orchTier, agents_available: agents };
 }
 

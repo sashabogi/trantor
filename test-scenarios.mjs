@@ -119,7 +119,7 @@ try {
 
   console.log("scenario: advisor — plan economics drive the mode");
   const { advise } = await import(join(ROOT, "bin/advise.mjs"));
-  const world = (prof) => ({ profile: { providers: prof }, registry: { models: { "deepseek-v4-flash": { provider: "deepseek", cost_in: 0.14, cost_out: 0.28, good_for: ["code"] } }, tasks: {} }, caps: { "deepseek-v4-flash": { coding: 38 } }, agents: ["codex", "gemini", "kimi", "deepseek"], scrooge: true });
+  const world = (prof) => ({ profile: { providers: prof }, registry: { models: { "deepseek-v4-flash": { provider: "deepseek", cost_in: 0.14, cost_out: 0.28, good_for: ["code"] } }, tasks: {} }, caps: { "deepseek-v4-flash": { coding: 38 } }, agents: ["codex", "glm", "kimi", "deepseek"], scrooge: true });
   const pk = (n, d = "medium") => Array.from({ length: n }, (_, i) => ({ title: "p" + i, difficulty: d }));
   ok("api-billed orchestrator → crew even for 2 packages",
      advise({ packages: pk(2) }, world({ claude: { tier: "api" } })).mode !== "solo");
@@ -148,7 +148,11 @@ try {
   ok("card_args born as DAG: integration depends on all, crew depends on foundation",
      integ.deps_orders.length === 2 && JSON.stringify(feat.deps_orders) === JSON.stringify([1]));
   ok("hard packages route to frontier agents first",
-     advise({ packages: pk(2, "hard") }, world({ claude: { tier: "api" } })).routing.every(r => ["codex", "gemini"].includes(r.executor)));
+     advise({ packages: pk(2, "hard") }, world({ claude: { tier: "api" } })).routing.every(r => ["codex", "glm"].includes(r.executor)));
+  ok("retired gemini is never an available crew seat",
+     !advise({ packages: pk(3, "hard") }, world({ claude: { tier: "api" } })).routing.some(r => r.executor === "gemini"));
+  ok("glm card carries the opencode:zai-coding-plan launch spec",
+     advise({ packages: pk(4, "hard") }, world({ claude: { tier: "api" } })).card_args.some(c => c.launch === "opencode:zai-coding-plan" && c.assignee === "opencode:<project>"));
 
   console.log("scenario: deps — the flow-view edge primitive");
   const { task: dep1 } = await api("/task", { project: "proj", title: "shipv2", by: "arch" });

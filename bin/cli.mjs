@@ -49,7 +49,7 @@ switch (cmd) {
   trantor doctor      where do I stand? hub/plugin/CLIs/auth/keys/profile, with copy-paste fixes
   trantor connect     (re)wire every installed AI CLI to the bus
   trantor profile     declare your plans:  trantor profile set claude=max codex=plus deepseek=api
-  trantor up …        spawn a crew here:   trantor up codex gemini kimi deepseek:deepseek-v4-pro
+  trantor up …        spawn a crew here:   trantor up codex kimi deepseek:deepseek opencode:zai-coding-plan
   trantor down        tear the crew down (kills processes, closes windows, no dialogs)
   trantor ui          open the live dashboard (board + flow views)
   trantor catchup     "where are we?" — the continuous board + git, with a synthesized brief
