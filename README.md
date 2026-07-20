@@ -12,14 +12,14 @@
 ### The hub-world for AI agent crews.
 
 **One Advisor decides how your work runs — solo, cheap inline calls, or a live crew of
-Claude Code, Codex, GLM, Kimi & DeepSeek in their own terminal windows — routed by your
-actual plans, supervised on a live + historical board you can scroll back through, learning
-from every failure.**
+Claude Code, Codex, GLM, Kimi, DeepSeek — or *any model you bring* — in their own terminal
+windows, routed by your actual plans, supervised on a live + historical board you can scroll
+back through, learning from every failure.**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
 ![Node](https://img.shields.io/badge/node-%E2%89%A518-339933?logo=node.js&logoColor=white)
-![Agents](https://img.shields.io/badge/crew-Claude%20%C2%B7%20Codex%20%C2%B7%20Gemini%20%C2%B7%20Kimi%20%C2%B7%20DeepSeek-D97757)
-![Tests](https://img.shields.io/badge/tests-80%2F80-2DD4BF)
+![Agents](https://img.shields.io/badge/crew-Claude%20%C2%B7%20Codex%20%C2%B7%20GLM%20%C2%B7%20Kimi%20%C2%B7%20DeepSeek%20%C2%B7%20%2BBYOM-D97757)
+![Tests](https://img.shields.io/badge/tests-passing-2DD4BF)
 
 </div>
 
@@ -65,9 +65,10 @@ on your machine, so you (or an agent installing it for you) can see the whole fo
   **SubagentStop** (record each sub-agent's notional cost on the board).
 
 **What it does *not* do:** no cloud, no accounts, no telemetry, nothing phones home; it never uploads
-your code or keys; it doesn't touch other CLIs' credentials — Codex, Gemini, Kimi and DeepSeek are
-ones *you* already installed and signed into, and Trantor just coordinates them locally. The optional
-API keys in `~/.agent-bus/.env` are used only to call the cheap models *you* opted into for routing.
+your code or keys; it doesn't touch other CLIs' credentials — Codex, Kimi, DeepSeek, GLM (and any
+provider you bring) are ones *you* already installed and signed into, and Trantor just coordinates
+them locally. The optional API keys in `~/.agent-bus/.env` are used only to call the models *you*
+opted into for routing.
 
 **Remove everything, anytime:**
 ```bash
@@ -135,11 +136,13 @@ project takes over with a full window (and a PreCompact hook does this automatic
    that many seats ("seats follow the work, not the install list"), and a real-money estimate
    with quota-pool accounting. You say go.
 2. **Windows open.** `trantor up codex kimi deepseek:deepseek glm:zai-coding-plan` spawns one titled
-   terminal window per agent. `agent:model` pins a model; `agent:provider --difficulty hard`
-   picks the **best live model** for the work at spawn (capability × cost), enumerated from the
-   CLI itself — never a guessed endpoint. **Serialized and then verified on the bus** — the
-   launcher ends with "crew verified" or names the no-shows loudly. The orchestrator never gets
-   a green lie.
+   terminal window per agent. The seats aren't a fixed list — they're **whatever you've got**:
+   the native CLIs (Codex, Kimi) plus *any* provider wired through OpenCode (DeepSeek, GLM, and
+   **OpenRouter's hundreds of models, or a custom endpoint you bring** — see *Bring your own
+   model* below). `agent:model` pins a model; `agent:provider --difficulty hard` picks the
+   **best live model** for the work at spawn (capability × cost), enumerated from the provider
+   itself — never a guessed endpoint. **Serialized and then verified on the bus** — the launcher
+   ends with "crew verified" or names the no-shows loudly. The orchestrator never gets a green lie.
 3. **Work flows over the bus.** Contracts arrive as messages; each agent owns its own files;
    coordination happens in <280-char messages you can read on the dashboard. Crew members
    live under a **runner**: the CLI works one turn and exits, the runner long-polls the bus
@@ -202,6 +205,39 @@ ledger; Trantor turns that into decisions:
 - **Fractal delegation** (`relay_scrooge`): the architect *and* crew members push stateless
   grunt work to cheap models, with ledger receipts.
 
+## Bring your own model (BYOM)
+
+The crew roster isn't a hardcoded list — it's **derived from what you've configured**. Trantor
+ships built-in seats for Codex and Kimi (native CLIs) and DeepSeek + GLM (via OpenCode), but
+**any** provider OpenCode can reach becomes a first-class seat with its own identity on the
+board — no code change, no waiting for us to add it.
+
+- **OpenRouter is the on-ramp.** One key fronts **hundreds of models** (incl. vendors that have
+  no CLI of their own). Drop `OPENROUTER_API_KEY` in `~/.agent-bus/.env` and `openrouter` is a
+  seat: `trantor up openrouter` live-selects the best model for the work, or
+  `trantor up openrouter:openrouter/<vendor>/<model>` pins one.
+- **Add any provider in one command:**
+  ```bash
+  trantor provider add <name> --key sk-… --plan api          # a provider OpenCode already knows
+  trantor provider add acme --key sk-… --base-url https://api.acme.ai/v1 --models acme-lg,acme-sm
+  ```
+  The second form wires a **custom OpenAI-compatible endpoint** into OpenCode for you (no
+  hand-editing config). Then `trantor provider` lists every seat with its availability + tier, and
+  `trantor models [<provider>]` browses the live models behind a seat — including the router's pick
+  per difficulty so you can see *hard → strong, easy → cheap* at a glance.
+- **It routes by difficulty, not just price.** `scrooge-capabilities` scores a provider's whole
+  catalog (real Artificial-Analysis benchmarks where a model matches, a price-tier proxy for the
+  long tail) and the router weighs **capability × cost, gated by the work's difficulty** — so hard
+  work escalates to a genuinely strong model while easy work stays cheap. Run it once (a weekly
+  cron keeps it fresh): `scrooge-capabilities`.
+- **Every seat is its own colleague.** Each opencode-driven provider gets a distinct bus label
+  (`glm:<project>`, `openrouter:<project>`, `acme:<project>`), so they never collide and each shows
+  up as its own agent on the dashboard.
+
+> Brought a key for Inception, a new Japanese model, a niche fine-tune? `trantor provider add` it,
+> `scrooge-capabilities` scores it, and the Advisor routes to it by difficulty — same as the
+> built-ins.
+
 ## Context handoff — sessions that never hit the wall
 
 A PreCompact hook writes a rich handoff before Claude Code compacts; a fresh session in the
@@ -231,29 +267,41 @@ rate, not work rate.
 ## The CLI
 
 ```
-trantor setup | doctor | connect | profile | up <agents…> | swap <old> <new> | down | ui | advise | hub | watch
+trantor setup | doctor | connect | profile | provider | models
+        | up <agents…> | swap <old> <new> | down | ui | advise | hub | watch
 ```
 
-`trantor up` notes: `agent:model` pins a model (`deepseek:deepseek-v4-pro`); `agent:provider
---task <k> --difficulty <d>` picks the **best live model** for the work at spawn
-(`glm:zai-coding-plan --difficulty hard`); spawns are verified on the bus with one retry;
-geometry auto-detects the screen you're working on (`CREW_RECT="X,Y,W,H"` to override). `trantor
-swap <oldAgent> <newSpec>` replaces an exhausted agent with a live-selected one. `trantor down`
-kills crew processes via their ttys and closes windows without macOS "Terminate?" dialogs.
+- **`trantor provider`** — `list` every crew seat (built-in + brought) with availability + tier ·
+  `add <name> --key … [--plan api] [--base-url <url> --models a,b]` to bring any provider (custom
+  endpoints are wired into OpenCode for you) · `remove <name>`.
+- **`trantor models [<provider>]`** — browse the live models behind each seat + the router's pick
+  per difficulty.
+- **`trantor up`** — `agent:model` pins a model (`deepseek:deepseek-v4-pro`); `agent:provider
+  --task <k> --difficulty <d>` picks the **best live model** for the work at spawn
+  (`glm:zai-coding-plan --difficulty hard`); spawns are verified on the bus with one retry;
+  geometry auto-detects the screen you're working on (`CREW_RECT="X,Y,W,H"` to override).
+- **`trantor swap <oldAgent> <newSpec>`** replaces an exhausted agent with a live-selected one.
+- **`trantor down`** kills crew processes via their ttys and closes windows without macOS
+  "Terminate?" dialogs.
 
 ## Works with any MCP agent
 
-Claude Code, Codex CLI, Gemini CLI, Kimi Code CLI, OpenCode (DeepSeek) are wired by
-`trantor connect` automatically (idempotent, backed-up, never overwrites your customizations).
-Anything else that speaks MCP: point it at `mcp.mjs` with `RELAY_AGENT=<brand>` — loading the
-server auto-registers the session, so presence works before the model says a word.
+Claude Code, Codex CLI, Kimi Code CLI, and **OpenCode** (the universal adapter — DeepSeek, GLM,
+OpenRouter, and any provider you bring) are wired by `trantor connect` automatically (idempotent,
+backed-up, never overwrites your customizations). Anything else that speaks MCP: point it at
+`mcp.mjs` with `RELAY_AGENT=<brand>` — loading the server auto-registers the session, so presence
+works before the model says a word.
+
+*(Gemini CLI: Google retired the free seat in 2026, so it's no longer a default crew seat —
+GLM via OpenCode is its replacement. Gemini still works as a Scrooge cheap-model via
+`GEMINI_API_KEY`, and a paid-key holder can still run `trantor up gemini`.)*
 
 ## How it works
 
 ```
- Claude (architect/plugin)   codex ─ runner   gemini ─ runner   kimi ─ runner   deepseek ─ runner
+ Claude (architect/plugin)   codex ─ runner   kimi ─ runner   opencode ─ runner (DeepSeek·GLM·OpenRouter·BYOM)
         │ advise/contracts        │ one turn, exit; runner long-polls (free) + resumes with context
-        └───────────┬─────────────┴──────────────┴────────────────┴────────────────┘
+        └───────────┬─────────────┴──────────────┴───────────────────────────────────┘
                     ▼
               hub.mjs  ←— plain HTTP + SSE · presence/messages/board/history/lessons/learning/economics
               (Node built-ins only · state in ~/.agent-bus/bus.json · loopback by default)
@@ -286,10 +334,11 @@ The `relay_*` tool names and the `~/.agent-bus` state dir remain until a later r
 ## Tests
 
 ```bash
-npm test    # 80 checks: unit + protocol-level scenario drills with mock agents (no LLMs, seconds, $0):
-            # honest presence + TTL prune, spawn no-shows, the testing gate, bounce trails, lessons,
-            # /history + backfill, /learning shape, /todos sync, /card detail, advisor decisions across
-            # plan tiers, deps validation, virgin-machine doctor, and failure-classification drills
+npm test    # unit + 120+ protocol-level scenario drills + capability-routing, all with mock agents
+            # (no LLMs, seconds, $0): honest presence + TTL prune, spawn no-shows, the testing gate,
+            # bounce trails, lessons, /history + backfill, /learning shape, /todos sync, /card detail,
+            # advisor decisions across plan tiers, BYOM roster derivation + brought-provider routing,
+            # difficulty-aware model selection, deps validation, virgin-machine doctor, failure drills
 ```
 
 ## License

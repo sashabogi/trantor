@@ -189,10 +189,12 @@ server.tool("relay_inbox", "Read NEW messages addressed to this session since th
   return { content: [{ type: "text", text: messages.length ? messages.map(fmt).join("\n") : "(no new messages)" }] };
 });
 
-server.tool("relay_wait", "Block up to `timeout` seconds waiting for the next message to this session (long-poll). Returns the instant a message arrives. When idle, park by calling this repeatedly. IMPORTANT: some MCP clients cap tool calls (Codex ~120s, OpenCode ~60s) — use timeout 50 and loop, unless you know your client allows more (Claude Code handles 280).",
-  { timeout: z.number().optional().describe("seconds to wait, default 25, max 280. Use 50 and call repeatedly for cross-client safety; only Claude Code reliably supports 280.") },
+server.tool("relay_wait", "Block up to `timeout` seconds waiting for the next message to this session (long-poll). Returns the instant a message arrives. When idle, park by calling this repeatedly. IMPORTANT: MCP clients cap or background long tool calls — OpenCode ~60s; Codex ~120s; Claude Code auto-backgrounds ANY MCP call at 120s (CC 2.1.212+, tunable via CLAUDE_CODE_MCP_AUTO_BACKGROUND_MS), which breaks inline parking. Use timeout 50 and loop for cross-client safety.",
+  { timeout: z.number().optional().describe("seconds to wait, default 25. Effective wait is capped at 110s so the call always returns inline (a longer wait would be auto-backgrounded by Claude Code's 120s MCP floor or dropped by other clients). Use 50 and call repeatedly to park while idle.") },
   async ({ timeout }) => {
-    const w = Math.min(timeout ?? 25, 280);
+    // Cap below the 120s MCP auto-background floor (CC 2.1.212+) so relay_wait always
+    // resolves inline on every current client instead of being shipped to the background.
+    const w = Math.min(timeout ?? 25, 110);
     const { messages, cursor: c } = await api("GET", `/poll?session=${encodeURIComponent(SESSION)}&since=${cursor}&wait=${w}`);
     cursor = c;
     return { content: [{ type: "text", text: messages.length ? messages.map(fmt).join("\n") : "(timed out, no message)" }] };

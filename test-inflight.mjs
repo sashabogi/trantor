@@ -30,9 +30,13 @@ const post = (p, b) => fetch(base + p, { method: "POST", headers: { "content-typ
 const get = (p) => fetch(base + p).then(r => r.json());
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 const PROJ = "inflightproj";
-const start = (title) => post("/task", { project: PROJ, title, status: "doing", source: "cc-subagent", costKind: "subagent-notional", phase: "sub-agents", by: "host:" + PROJ });
+const start = (title, agentType) => post("/task", { project: PROJ, title, status: "doing", agentType, source: "cc-subagent", costKind: "subagent-notional", phase: "sub-agents", by: "host:" + PROJ });
 const stop = (title, costUsd, tokens) => post("/task", { project: PROJ, title, status: "done", source: "cc-subagent", costKind: "subagent-notional", costUsd, tokens, by: "host:" + PROJ });
+// native SubagentStart enrich (attach agent_id + parent to the in-flight card) and SubagentStop keyed by agent_id
+const enrich = (agentType, agentId, parent) => post("/task", { project: PROJ, enrich: true, agentType, agentId, parent, source: "cc-subagent", costKind: "subagent-notional", by: "host:" + PROJ });
+const stopById = (title, agentId, agentType, costUsd, tokens) => post("/task", { project: PROJ, title, status: "done", agentId, agentType, source: "cc-subagent", costKind: "subagent-notional", costUsd, tokens, by: "host:" + PROJ });
 const cardFor = async (title) => (await get("/tasks")).tasks.find(t => t.source === "cc-subagent" && t.title === title);
+const cardById = async (agentId) => (await get("/tasks")).tasks.find(t => t.source === "cc-subagent" && t._aid === agentId);
 
 console.log("# trantor in-flight sub-agent card tests");
 
@@ -89,6 +93,33 @@ try {
   c = await cardFor(T3);
   ok("second stop → done (no more in flight)", c?.status === "done", `(got "${c?.status}")`);
   ok("parallel cost accumulated across both stops", Math.abs((c?.costUsd || 0) - 0.20) < 1e-9, `(got ${c?.costUsd})`);
+
+  // 5. native agent_id pairing (SubagentStart enrich → SubagentStop by id). The whole point: start & stop
+  //    can carry DIFFERENT titles (SubagentStart has no prompt) yet still fold into ONE card via agent_id.
+  const T5 = "general-purpose: fix the parser";
+  await start(T5, "general-purpose");                         // PreToolUse create (good title)
+  await enrich("general-purpose", "aid-100", "sess-parent");  // SubagentStart spawns → stamp agent_id + parent
+  let d = await cardById("aid-100");
+  ok("enrich stamps agent_id onto the existing create card (no new card)", !!d && d.title === T5, `(got "${d?.title}")`);
+  ok("enrich stamps parent for nesting", d?.parent === "sess-parent", `(got "${d?.parent}")`);
+  ok("enriched card still exactly one for this title", (await get("/tasks")).tasks.filter(t => t.source === "cc-subagent" && t.title === T5).length === 1);
+  // stop keyed by agent_id with a DIFFERENT (bare) title → must pair the SAME card, not orphan a new one
+  await stopById("general-purpose", "aid-100", "general-purpose", 0.33, { input: 5, output: 5, cacheWrite: 0, cacheRead: 0 });
+  d = await cardById("aid-100");
+  ok("stop pairs by agent_id despite title mismatch (no orphan)", d?.status === "done", `(got "${d?.status}")`);
+  ok("agent_id pairing kept the good create title", d?.title === T5, `(got "${d?.title}")`);
+  ok("cost recorded via agent_id pairing", d?.costUsd === 0.33, `(got ${d?.costUsd})`);
+  ok("no orphan bare-title card created", !(await get("/tasks")).tasks.some(t => t.source === "cc-subagent" && t.title === "general-purpose"), "(a 'general-purpose' orphan appeared)");
+
+  // 6. enrich with NO prior create card → creates one keyed by agent_id (spawn w/o matching PreToolUse)
+  await enrich("code-reviewer", "aid-200", "sess-parent");
+  d = await cardById("aid-200");
+  ok("enrich-without-create makes a doing card keyed by agent_id", d?.status === "doing" && d?.title === "code-reviewer");
+  ok("idempotent: repeat enrich for same agent_id makes no 2nd card", (await enrich("code-reviewer", "aid-200", "sess-parent"), (await get("/tasks")).tasks.filter(t => t._aid === "aid-200").length === 1));
+  await stopById("code-reviewer: reviewed the PR", "aid-200", "code-reviewer", 0.05, { input: 1, output: 1, cacheWrite: 0, cacheRead: 0 });
+  d = await cardById("aid-200");
+  ok("stop flips the id-created card to done", d?.status === "done", `(got "${d?.status}")`);
+  ok("bare fallback title upgraded to the completion's real title", d?.title === "code-reviewer: reviewed the PR", `(got "${d?.title}")`);
 } catch (e) {
   fail++; console.log("  ✗ threw:", e?.message || e, herr ? `\n  hub stderr: ${herr}` : "");
 } finally {

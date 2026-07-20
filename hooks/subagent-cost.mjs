@@ -81,6 +81,10 @@ try {
   const project = resolveProject(cwd);
   const agentType = String(input.agent_type || "subagent").slice(0, 40);
   const effort = input.effort?.level || "";
+  // agent_id pairs this completion with its SubagentStart "doing" card (robust key, replaces the fragile
+  // title match); parent nests it under the spawning session's focus card. Both native SubagentStop fields.
+  const agentId = String(input.agent_id || "").slice(0, 80);
+  const parent = String(input.parent_session_id || input.session_id || "").slice(0, 120);
 
   const file = findTranscript(input);
   if (!file) { process.stderr.write("[trantor] subagent-cost: no transcript found\n"); process.stdout.write("{}"); process.exit(0); }
@@ -104,7 +108,7 @@ try {
   await fetch(`${relayUrl()}/task`, {
     method: "POST", headers: { "content-type": "application/json" },
     body: JSON.stringify({
-      project, title, status: "done",
+      project, title, status: "done", agentType, agentId, parent,
       assignee: `${agentType}:${project}`, by: `${hostId()}:${project}`,
       source: "cc-subagent", costKind: "subagent-notional",
       costUsd: safeUsd, costNote: safeNote, model, effort, tokens: suspect ? null : tokens,

@@ -70,7 +70,7 @@ const runHook = () => {
   const stdin = JSON.stringify({ session_id: "test", transcript_path: "/tmp/x", source: "startup", cwd: here });
   const out = execFileSync(process.execPath, [hookPath], {
     input: stdin, encoding: "utf8", timeout: 10000,
-    env: { ...process.env, RELAY_DATA_DIR: data, RELAY_URL: "http://127.0.0.1:1", TRANTOR_UPDATE_TTL_H: "999" },
+    env: { ...process.env, RELAY_DATA_DIR: data, RELAY_URL: "http://127.0.0.1:1", TRANTOR_UPDATE_TTL_H: "999", TRANTOR_NO_BALANCE_CHECK: "1" },
   });
   return JSON.parse(out);
 };
