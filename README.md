@@ -42,6 +42,12 @@ claude plugin install trantor
 That's it. (Prefer source? `git clone https://github.com/sashabogi/trantor && cd trantor &&
 npm install && bash deploy/setup.sh` — identical result.)
 
+**Recommended companion (macOS):** [**cmux**](https://cmux.com) — `brew install --cask cmux` — a
+native terminal built for running multiple AI agents. Trantor groups each crew into one cmux workspace
+with live per-seat status in the sidebar and project-scoped teardown. See
+*[Grouped crews in cmux](#grouped-crews-in-cmux-recommended)*. Optional — crews also run in tmux or plain
+Terminal windows.
+
 ## What gets installed — footprint & safety
 
 Trantor is a **local-first multi-agent orchestrator with a built-in cost router** — not a cloud
@@ -135,8 +141,10 @@ project takes over with a full window (and a PreCompact hook does this automatic
    (`solo | scrooge | crew | hybrid`), a routing table with a **reason per package**, why
    that many seats ("seats follow the work, not the install list"), and a real-money estimate
    with quota-pool accounting. You say go.
-2. **Windows open.** `trantor up codex kimi deepseek:deepseek glm:zai-coding-plan` spawns one titled
-   terminal window per agent. The seats aren't a fixed list — they're **whatever you've got**:
+2. **Windows open.** `trantor up codex kimi deepseek:deepseek glm:zai-coding-plan` spawns the crew in
+   visible terminals — grouped into **one [cmux](https://cmux.com) workspace per project** when cmux is
+   installed (seats tiled, live status in the sidebar; see *[Grouped crews in cmux](#grouped-crews-in-cmux-recommended)*
+   below), else tmux, else one titled Terminal window per seat. The seats aren't a fixed list — they're **whatever you've got**:
    the native CLIs (Codex, Kimi) plus *any* provider wired through OpenCode (DeepSeek, GLM, and
    **OpenRouter's hundreds of models, or a custom endpoint you bring** — see *Bring your own
    model* below). `agent:model` pins a model; `agent:provider --difficulty hard` picks the
@@ -158,6 +166,33 @@ project takes over with a full window (and a PreCompact hook does this automatic
    contract.
 6. **It learns.** Failures become lessons (`relay_lesson`), stored on the hub and **injected
    into every future crew's prompts** — global or per-CLI. Your crew gets smarter every run.
+
+### Grouped crews in cmux (recommended)
+
+Trantor runs crews in visible terminals so nothing dies or fails silently. On macOS it prefers
+**[cmux](https://cmux.com)** — a native, Ghostty-based terminal *built for managing multiple AI coding
+agents* — and falls back to **tmux**, then plain Terminal windows.
+
+With cmux, each crew becomes **one workspace tab per project**, its seats tiled inside, every pane
+labeled `<agent> · <project>`, and each seat pushes its **live state into cmux's sidebar** —
+`building` (blue) while a turn runs, `idle` when it's waiting, `error`/`down` (red) on a failed turn —
+plus a per-crew progress pill. Teardown is **project-scoped**: `trantor down` closes only *this*
+project's workspace, so when you run several sessions each driving its own crew, one session's teardown
+can't nuke another's. `trantor down <agent>` drops a single seat; `trantor down --all --yes` tears down
+every project's crew.
+
+**One-time setup:**
+- Install cmux — `brew install --cask cmux` (or grab it from **[cmux.com](https://cmux.com)**).
+- Trantor drives cmux over its control socket, which is off to outside processes by default. Enable it in
+  `~/.config/cmux/cmux.json` (cmux auto-reloads):
+  ```json
+  { "automation": { "socketControlMode": "allowAll" } }
+  ```
+  This lets local processes drive your terminals. Leave it on the default `cmuxOnly` and Trantor
+  automatically falls back to AppleScript (same grouped layout, minus the native sidebar status).
+- The `cmux` CLI is symlinked onto your PATH on your first `trantor up`.
+
+No cmux or tmux? Crews still work — one titled Terminal window per seat, still project-scoped teardown.
 
 ## The dashboard — `trantor ui`
 

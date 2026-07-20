@@ -50,6 +50,22 @@ async function api(path, body) {
   return r.json();
 }
 
+// ---- cmux sidebar integration ----
+// When this runner is inside a cmux surface (CMUX_SURFACE_ID is auto-set there), push its live state into
+// cmux's sidebar for THIS seat. An inside process is allowed by cmux's default cmuxOnly socket mode — no
+// allowAll needed. Fail-silent + short timeout; must never block or slow a turn.
+const CMUX_BIN = process.env.CMUX_BIN
+  || (existsSync("/Applications/cmux.app/Contents/Resources/bin/cmux") ? "/Applications/cmux.app/Contents/Resources/bin/cmux" : "cmux");
+const inCmux = () => !!process.env.CMUX_SURFACE_ID;
+function cmuxStatus(value, color, icon = "robot") {
+  if (!inCmux()) return;
+  try { spawnSync(CMUX_BIN, ["set-status", "trantor", value, "--color", color, "--icon", icon], { stdio: "ignore", timeout: 1500, env: { ...process.env, CMUX_QUIET: "1" } }); } catch {}
+}
+function cmuxLog(message, level = "info") {
+  if (!inCmux()) return;
+  try { spawnSync(CMUX_BIN, ["log", String(message).slice(0, 200), "--level", level], { stdio: "ignore", timeout: 1500, env: { ...process.env, CMUX_QUIET: "1" } }); } catch {}
+}
+
 // ---- per-CLI invocation (first turn vs resume turn). {P} = prompt file path ----
 // CREW_MODEL env pins the model: each CLI gets its own flag via {M} (empty when unset).
 let MODEL = process.env.CREW_MODEL || "";
@@ -119,6 +135,7 @@ async function reportFailure(exit, trigger) {
     ? `🛑 ${SESSION} DOWN — ${consecFails} consecutive failures (${reason}, exit ${exit})${hint}`
     : `⚠️ ${SESSION} turn FAILED (${trigger}, exit ${exit} · ${reason})${hint}`;
   await api("/send", { from: SESSION, to: "all", text, project: PROJ }).catch(() => {});
+  cmuxStatus(down ? "down" : "error", "#ef6a6a", "alert"); cmuxLog(`turn failed: ${reason} (exit ${exit})`, "error");
   log(`\x1b[31mreported failure to bus: ${reason} (exit ${exit})\x1b[0m`);
 }
 
@@ -127,6 +144,7 @@ async function reportHealthy() {
   consecFails = 0;
   await api("/register", { session: SESSION, project: PROJ, status: `active in ${PROJ}` }).catch(() => {});
   await api("/send", { from: SESSION, to: "all", text: `✅ ${SESSION} recovered`, project: PROJ }).catch(() => {});
+  cmuxStatus("ok", "#14b8a6", "check");
 }
 
 let sid = "";
@@ -142,6 +160,7 @@ function runTurn(prompt, isFirst, trigger = "kickoff") {
   const envs = [join(homedir(), ".agent-bus", ".env"), cli.env].filter(f => f && existsSync(f));
   for (const f of envs.reverse()) cmd = `set -a; source ${f}; set +a; ${cmd}`;   // ~/.agent-bus/.env wins
   log(`turn starting (${isFirst ? "fresh session" : "resume"})${MODEL ? ` · model=${MODEL}` : ""}`);
+  cmuxStatus("building", "#4a90d9", "hammer");
   // inherit stdio so the window shows the agent working live; also capture for sid-parsing.
   // Tee stderr to ERRF (still shown live in the window) so a failed turn can be classified.
   try { appendFileSync(ERRF, "", { flag: "w" }); } catch {}
@@ -155,6 +174,7 @@ function runTurn(prompt, isFirst, trigger = "kickoff") {
   if (cli.sid && r.stdout) { const m = r.stdout.match(cli.sid); if (m) sid = m[1]; }
   telemetry({ ts: Date.now(), agent: AGENT, project: PROJ, turn: TURN, trigger, model: MODEL || "default", duration_ms: Date.now() - t0, exit: r.status });
   log(`turn ended (exit ${r.status}, ${((Date.now() - t0) / 1000).toFixed(0)}s)`);
+  if (r.status === 0) cmuxStatus("idle", "#8a94a6", "robot");   // finished this turn, waiting for the next
   return r.status;
 }
 

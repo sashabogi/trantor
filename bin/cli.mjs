@@ -23,7 +23,7 @@ switch (cmd) {
   case "advise":  run("bin/advise.mjs"); break;
   case "verify":  run("bin/crew-verify.mjs"); break;
   case "up":      process.argv.splice(2, 1); spawn("/bin/bash", [join(ROOT, "bin/crew.sh"), "up", ...args], { stdio: "inherit", cwd: process.cwd() }).on("exit", c => process.exit(c ?? 0)); break;
-  case "down":    spawn("/bin/bash", [join(ROOT, "bin/crew.sh"), "down"], { stdio: "inherit", cwd: process.cwd() }).on("exit", c => process.exit(c ?? 0)); break;
+  case "down":    spawn("/bin/bash", [join(ROOT, "bin/crew.sh"), "down", ...args], { stdio: "inherit", cwd: process.cwd() }).on("exit", c => process.exit(c ?? 0)); break;
   case "swap":    spawn("/bin/bash", [join(ROOT, "bin/crew.sh"), "swap", ...args], { stdio: "inherit", cwd: process.cwd() }).on("exit", c => process.exit(c ?? 0)); break;
   case "hub":     run("hub.mjs"); break;
   case "watch":   run("bin/relay-watch.mjs"); break;
@@ -31,6 +31,7 @@ switch (cmd) {
   case "agents":  run("bin/agents.mjs"); break;
   case "gates":   run("bin/gates.mjs"); break;
   case "backfill": run("bin/git-backfill.mjs"); break;
+  case "sweep": run("bin/sweep.mjs"); break;
   case "init-hooks": run("bin/init-hooks.mjs"); break;
   case "balances": case "balance": case "credits": run("bin/balances.mjs"); break;
   case "recost": run("bin/recost.mjs"); break;

@@ -91,16 +91,17 @@ main:not(.learn-open) .learn-body{display:none}
 .phase.planned{color:var(--mut)}
 .pbar{height:4px;border-radius:3px;background:#0d1320;margin:2px 16px 0;overflow:hidden}
 .pbar i{display:block;height:100%;background:linear-gradient(90deg,var(--grn2),var(--grn));border-radius:3px;transition:width .4s}
-.kanban{display:grid;grid-template-columns:repeat(5,1fr);gap:10px;padding:12px 16px}
+.kanban{display:grid;grid-template-columns:repeat(6,1fr);gap:10px;padding:12px 16px}
 .col{background:#0d1320;border:1px solid var(--line);border-radius:10px;padding:9px;min-height:140px;max-height:clamp(280px,58vh,1100px);overflow-y:auto}
 .col::-webkit-scrollbar{width:6px}.col::-webkit-scrollbar-thumb{background:#243049;border-radius:3px}
 .col h4{position:sticky;top:-9px;background:#0d1320;padding:9px 0 6px;margin-top:-9px;z-index:1}
 .col h4{margin:0 0 8px;font-size:10.5px;text-transform:uppercase;letter-spacing:.08em;color:var(--dim);display:flex;justify-content:space-between}
-.col.todo h4 i{color:var(--mut)}.col.doing h4 i{color:var(--blu)}.col.testing h4 i{color:var(--amb)}.col.done h4 i{color:var(--grn)}.col.blocked h4 i{color:var(--red)}
+.col.todo h4 i{color:var(--mut)}.col.doing h4 i{color:var(--blu)}.col.testing h4 i{color:var(--amb)}.col.done h4 i{color:var(--grn)}.col.blocked h4 i{color:var(--red)}.col.stale h4 i{color:#a99fd0}
 .col h4 i{font-style:normal}
 .tcard{background:var(--card);border:1px solid var(--line);border-left:3px solid var(--mut);border-radius:7px;padding:7px 9px;margin-bottom:7px;cursor:pointer;font-size:13px}
 .tcard:hover{background:var(--card2);border-color:#2c3a52}
-.col.doing .tcard{border-left-color:var(--blu)}.col.testing .tcard{border-left-color:var(--amb)}.col.done .tcard{border-left-color:var(--grn)}.col.blocked .tcard{border-left-color:var(--red)}
+.col.doing .tcard{border-left-color:var(--blu)}.col.testing .tcard{border-left-color:var(--amb)}.col.done .tcard{border-left-color:var(--grn)}.col.blocked .tcard{border-left-color:var(--red)}.col.stale .tcard{border-left-color:#8a7fb0;opacity:.82}
+.swp{cursor:pointer;font-size:11px;color:var(--dim);border:1px solid var(--line);border-radius:5px;padding:1px 7px;margin-left:6px;user-select:none}.swp:hover{color:var(--amb);border-color:#3a4458}.swp.arm{color:#0b1120;background:var(--amb);border-color:var(--amb)}
 .tcard.failed{border-left-color:var(--red);border-color:#5a2c2c;animation:failpulse 1.1s ease-in-out infinite}
 .tcard.failed .who{color:#ef6a6a}
 @keyframes failpulse{0%,100%{box-shadow:0 0 0 0 rgba(239,106,106,0)}50%{box-shadow:0 0 14px 2px rgba(239,106,106,.55);border-color:#ef6a6a}}
@@ -257,6 +258,7 @@ main:not(.learn-open) .learn-body{display:none}
 .tevent .tstatus.failed{color:var(--red)}
 .tevent .tstatus.done{color:var(--grn)}
 .tevent .tstatus.blocked{color:var(--red)}
+.tevent .tstatus.stale{color:#a99fd0}
 .tevent .arr{color:var(--dim);margin:0 2px}
 /* per-project inter-agent conversation lane */
 .proj-chat{margin:4px 16px 14px;border:1px solid var(--line);border-radius:10px;background:#0c111c}
@@ -320,7 +322,7 @@ const esc=s=>String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;',
 // number; `$usd()` prefixes the currency symbol.
 const usd=(n,dp=2)=>(Number(n)||0).toLocaleString('en-US',{minimumFractionDigits:dp,maximumFractionDigits:dp});
 const $usd=(n,sym='$',dp=2)=>sym+usd(n,dp);
-const COLS=[['todo','To Do'],['doing','In Progress'],['testing','Testing'],['done','Done'],['blocked','Blocked']];
+const COLS=[['todo','To Do'],['doing','In Progress'],['testing','Testing'],['done','Done'],['blocked','Blocked'],['stale','Stale']];
 let nmsg=0;
 // SOLO = single-project full-window mode via deep link ?project=<name>. Parsed once (search is static
 // per load). When set, render() shows ONLY that project's board/FLOW/TIMELINE and hides the side rails.
@@ -440,6 +442,7 @@ let PHASES = {};
 function setView(proj, v){ VIEWS[proj] = v; localStorage.setItem("abViews", JSON.stringify(VIEWS)); render(); }
 function toggleIdle(name){ if(!name)return; const s=new Set(JSON.parse(localStorage.getItem("abIdleOpen")||"[]")); s.has(name)?s.delete(name):s.add(name); localStorage.setItem("abIdleOpen",JSON.stringify([...s])); render(); }
 let armedDel=null,armedTs=0;   // pending ✕ confirmation (project name + when it was armed)
+let armedSwp=null,armedSwpTs=0,armedSwpCount=0;   // pending 🧹 sweep confirmation (project + when armed + previewed count)
 // ▲▼: snapshot the currently displayed order, swap, persist — manual order then wins until ↺ reset
 function moveProj(name,dir){
   const names=[...document.querySelectorAll('#boards [data-projname]')].map(d=>d.dataset.projname);
@@ -457,7 +460,7 @@ function flowHTML(pt, proj){
   const data = PHASES[proj];
   if (!data) return '<div class="pflowwrap"><div class="empty">loading flow…</div></div>';
   if (!data.phases || !data.phases.length) return '<div class="pflowwrap"><div class="empty">no cards yet</div></div>';
-  const SCOL = { todo:'#3a4458', doing:'#4a90d9', testing:'#f59e0b', failed:'#ef6a6a', blocked:'#ef6a6a', done:'#14b8a6' };
+  const SCOL = { todo:'#3a4458', doing:'#4a90d9', testing:'#f59e0b', failed:'#ef6a6a', blocked:'#ef6a6a', done:'#14b8a6', stale:'#8a7fb0' };
   const NW = 168, NH = 34, RG = 11, CG = 64, PGAP = 76, MT = 64, MB = 22;
   const MAXPC = 10;            // max nodes stacked per column before collapsing into a "+N more" node
   let pi0 = 0;                 // running id base so each phase's overflow nodes get unique negative ids
@@ -608,7 +611,7 @@ let cardEsc = null;
 async function openCard(id){
   let d; try { d = await (await fetch('/card?id=' + id)).json(); } catch { return; }
   const t = d.task; if (!t) return;
-  const SC = { todo:'var(--mut)', doing:'var(--blu)', testing:'var(--amb)', failed:'var(--red)', blocked:'var(--red)', done:'var(--grn)', deleted:'var(--dim)' };
+  const SC = { todo:'var(--mut)', doing:'var(--blu)', testing:'var(--amb)', failed:'var(--red)', blocked:'var(--red)', done:'var(--grn)', deleted:'var(--dim)', stale:'#a99fd0' };
   const items = [];
   for (const e of (d.events||[])) items.push({ ts:e.ts, ev:e });
   for (const m of (d.messages||[])) items.push({ ts:m.ts, m });
@@ -829,7 +832,7 @@ async function render(){
     const brief=p.brief?`<span class="brief">${esc(p.brief)}</span>`:`<span class="brief dim">— no brief yet · an agent sets it with relay_project_brief</span>`;
     const view = VIEWS[p.project] || "board";
     const vtog = `<div class="vtog"><span class="vlbl">view</span><button class="vbtn ${view==="board"?"on":""}" data-proj="${esc(p.project)}" data-view="board">BOARD</button><button class="vbtn ${view==="flow"?"on":""}" data-proj="${esc(p.project)}" data-view="flow">FLOW</button><button class="vbtn ${view==="timeline"?"on":""}" data-proj="${esc(p.project)}" data-view="timeline">TIMELINE</button></div>`;
-    const ctl=`<span class="mv"><b class="mvup" data-proj="${esc(p.project)}" title="move up">▲</b><b class="mvdn" data-proj="${esc(p.project)}" title="move down">▼</b></span>${p.idle===true?`<span class="pdel" data-proj="${esc(p.project)}" title="forget this project (cards, peers, brief) — it returns if an agent registers it again">✕</span>`:''}`;
+    const ctl=`<span class="swp" data-proj="${esc(p.project)}" title="sweep stuck in-progress cards (idle > 30m) to the Stale lane — first click previews the count, second click within 4s confirms">🧹 sweep</span><span class="mv"><b class="mvup" data-proj="${esc(p.project)}" title="move up">▲</b><b class="mvdn" data-proj="${esc(p.project)}" title="move down">▼</b></span>${p.idle===true?`<span class="pdel" data-proj="${esc(p.project)}" title="forget this project (cards, peers, brief) — it returns if an agent registers it again">✕</span>`:''}`;
 
     return `<div class="proj${p.idle===true?' idle':''}" data-projname="${esc(p.project)}"${p.idle===true?` data-idleproj="${esc(p.project)}"`:''}>`+
       `<div class="proj-h"><span class="pname">📁 <b>${esc(p.project)}</b></span><a class="popout" href="?project=${encodeURIComponent(p.project)}" target="_blank" rel="noopener" title="open this project in its own window" onclick="event.stopPropagation()">↗</a>${vtog}<div class="agents">${agents||'<span class="dim">no agents</span>'}</div><span class="spacer"></span><span class="prog">${done}/${pt.length} done · ${pct}%</span>${ctl}</div>`+
@@ -867,6 +870,19 @@ async function render(){
   // ▲▼ reorder (persists as a manual order); ✕ forget — armed two-step, no popup
   el.querySelectorAll('.mvup').forEach(b=>b.onclick=e=>{e.stopPropagation();moveProj(b.dataset.proj,-1);});
   el.querySelectorAll('.mvdn').forEach(b=>b.onclick=e=>{e.stopPropagation();moveProj(b.dataset.proj,1);});
+  // 🧹 sweep — armed two-step (no popup): first click previews the count via dryRun, second confirms.
+  el.querySelectorAll('.swp').forEach(b=>b.onclick=async e=>{
+    e.stopPropagation();
+    const p=b.dataset.proj;
+    if(!(armedSwp===p&&Date.now()-armedSwpTs<4000)){
+      const dry=await fetch('/sweep',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({project:p,olderMs:1800000,dryRun:true})}).then(r=>r.json()).catch(()=>({count:0}));
+      if(!dry.count){b.textContent='🧹 nothing idle';setTimeout(()=>{b.textContent='🧹 sweep';},1600);return;}
+      armedSwp=p;armedSwpTs=Date.now();armedSwpCount=dry.count;b.classList.add('arm');b.textContent=`🧹 sweep ${dry.count}?`;return;
+    }
+    armedSwp=null;b.classList.remove('arm');
+    await fetch('/sweep',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({project:p,olderMs:1800000,by:'dashboard'})});
+    render();
+  });
   el.querySelectorAll('.pdel').forEach(b=>b.onclick=async e=>{
     e.stopPropagation();
     const p=b.dataset.proj;
@@ -878,6 +894,7 @@ async function render(){
   // the 2.5s re-render rebuilds the DOM — re-apply a still-fresh armed state so the
   // "✕ sure?" confirmation survives until it expires instead of silently resetting
   if(armedDel&&Date.now()-armedTs<4000){const ab=el.querySelector(`.pdel[data-proj="${CSS.escape(armedDel)}"]`);if(ab){ab.classList.add('arm');ab.textContent='✕ sure?';}}
+  if(armedSwp&&Date.now()-armedSwpTs<4000){const sb=el.querySelector(`.swp[data-proj="${CSS.escape(armedSwp)}"]`);if(sb){sb.classList.add('arm');sb.textContent=`🧹 sweep ${armedSwpCount||''}?`;}}else{armedSwp=null;}
   const sr=$('#sortreset');if(sr)sr.onclick=()=>{localStorage.removeItem('abOrder');render();};
   wireFlow(el);wireTimeline(el);
   // keep each timeline scrolled to the latest event
@@ -885,7 +902,7 @@ async function render(){
   el.querySelectorAll('.tcard, .fnode').forEach(c=>c.onclick=async()=>{
     const id=+c.dataset.id,t=tasks.find(x=>x.id===id);if(!t)return;
     if(suppressClickId&&+suppressClickId===id)return;   // drag-end, not a click
-    const next={todo:'doing',doing:'testing',testing:'done',failed:'doing',done:'todo',blocked:'doing'}[t.status];
+    const next={todo:'doing',doing:'testing',testing:'done',failed:'doing',done:'todo',blocked:'doing',stale:'todo'}[t.status];
     await fetch('/task/update',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({id,status:next})});render();
   });
 }
