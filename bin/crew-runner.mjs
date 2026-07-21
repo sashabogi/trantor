@@ -79,8 +79,10 @@ const CLI = {
               next:  `codex exec resume --last{M} --skip-git-repo-check --dangerously-bypass-approvals-and-sandbox "$(cat {P})" < /dev/null`, mflag: " -m " },
   gemini:   { first: `gemini --yolo{M} -p "$(cat {P})"`,
               next:  `gemini --yolo{M} -r latest -p "$(cat {P})"`, mflag: " -m " },
-  kimi:     { first: `kimi --print --yolo{M} -p "$(cat {P})" < /dev/null`,
-              next:  `kimi --print --yolo{M} -r {SID} -p "$(cat {P})" < /dev/null`, mflag: " --model ", sid: /To resume this session: kimi -r ([a-f0-9-]+)/ },
+  // kimi-code (successor to kimi-cli) has no --print (-p alone is non-interactive), REJECTS
+  // --yolo in prompt mode (prompt mode auto-approves tools), and emits session_-prefixed ids.
+  kimi:     { first: `kimi{M} -p "$(cat {P})" < /dev/null`,
+              next:  `kimi{M} -r {SID} -p "$(cat {P})" < /dev/null`, mflag: " --model ", sid: /To resume this session: kimi -r (\S+)/ },
   deepseek: { first: `opencode run{M} "$(cat {P})"`,
               next:  `opencode run -c{M} "$(cat {P})"`, mflag: " -m ", env: join(homedir(), ".token-scrooge", ".env") },
   opencode: { first: `opencode run{M} "$(cat {P})"`,
@@ -164,8 +166,10 @@ function runTurn(prompt, isFirst, trigger = "kickoff") {
   // inherit stdio so the window shows the agent working live; also capture for sid-parsing.
   // Tee stderr to ERRF (still shown live in the window) so a failed turn can be classified.
   try { appendFileSync(ERRF, "", { flag: "w" }); } catch {}
+  // pipefail: without it the sid-capture `| tee` makes a FAILED turn exit 0 (tee's status),
+  // so the failure reporter never fires and a dead seat heartbeats green on the bus.
   const inner = cli.sid ? `${cmd} | tee /dev/stderr` : cmd;
-  const r = spawnSync("/bin/bash", ["-c", `{ ${inner} ; } 2> >(tee -a ${ERRF} >&2)`], {
+  const r = spawnSync("/bin/bash", ["-c", `set -o pipefail; { ${inner} ; } 2> >(tee -a ${ERRF} >&2)`], {
     cwd: DIR, encoding: "utf8", stdio: cli.sid ? ["ignore", "pipe", "inherit"] : "inherit",
     env: { ...process.env, RELAY_URL: HUB, RELAY_AGENT: AGENT, RELAY_PROJECT: PROJ },
     maxBuffer: 16 * 1024 * 1024,
