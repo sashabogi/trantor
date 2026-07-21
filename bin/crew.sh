@@ -368,12 +368,17 @@ spawn_cmux() {   # $@ = specs
     echo "  ~/.config/cmux/cmux.json (cmux auto-reloads). —"
     spawn_cmux_applescript "$@"; return
   fi
-  local first=1 SPEC wsid="" surf="" i=0
-  local dirs=(down right down right down right down right)
+  # Grid tiling: COLS = ceil(sqrt(N)) → 2 seats side-by-side, 4 = 2×2, 6 = 3×2. Row 0 is built with
+  # RIGHT splits off the previous column; each later row splits DOWN from the pane directly above it.
+  # Every split TARGETS a recorded surface id (--surface) — never "whatever pane happens to be focused",
+  # which is what produced the old staircase layout.
+  local N=$# COLS=1; while [ $(( COLS * COLS )) -lt "$N" ]; do COLS=$(( COLS + 1 )); done
+  local SPEC wsid="" surf="" i=0
+  local surfs=()
   for SPEC in "$@"; do
     resolve_spec "$SPEC"
     local cmd launcher; cmd="$(RUN_CMD)"; launcher="$(_seat_launcher "$AGENT" "$cmd")"
-    if [ "$first" = "1" ]; then
+    if [ "$i" = "0" ]; then
       if [ "$DRY" = "1" ]; then
         echo "[dry] cmux: new-workspace (cwd $DIR) --command 'bash $launcher' → rename 'trantor:$PROJ'"
         wsid="%DRYWS"; surf="%DRYT0"
@@ -384,16 +389,19 @@ spawn_cmux() {   # $@ = specs
         surf="$(_cmux list-pane-surfaces --workspace "$wsid" --id-format uuids --json 2>/dev/null | node -e 'let d="";process.stdin.on("data",c=>d+=c).on("end",()=>{try{const o=JSON.parse(d.slice(d.search(/[\[{]/)));const a=o.surfaces||o.panes||o||[];const s=Array.isArray(a)?a[0]:null;process.stdout.write((s&&(s.id||s.surface_id))||"")}catch(e){}})')"
       fi
       record_state "$PROJ" "cmuxws" "__ws__" "$wsid"
-      first=0
     else
-      local dir="${dirs[$(( i % ${#dirs[@]} ))]}"
+      local dir target
+      if [ $(( i / COLS )) = "0" ]; then dir="right"; target="${surfs[$(( i - 1 ))]}"
+      else dir="down"; target="${surfs[$(( i - COLS ))]}"; fi
       if [ "$DRY" = "1" ]; then
-        echo "[dry] cmux: new-split $dir + send 'bash $launcher'"; surf="%DRYT$i"
+        echo "[dry] cmux: new-split $dir --surface ${target:-<focused>} + send 'bash $launcher'"; surf="%DRYT$i"
       else
-        surf="$(_cmux new-split "$dir" --workspace "$wsid" --id-format uuids --json 2>/dev/null | _cmux_surf_json)"
+        local tflag=(); [ -n "$target" ] && [ "${target#\%DRY}" = "$target" ] && tflag=(--surface "$target")
+        surf="$(_cmux new-split "$dir" --workspace "$wsid" "${tflag[@]}" --id-format uuids --json 2>/dev/null | _cmux_surf_json)"
         [ -n "$surf" ] && { _cmux send --surface "$surf" "bash $launcher" >/dev/null 2>&1; _cmux send-key --surface "$surf" enter >/dev/null 2>&1; }
       fi
     fi
+    surfs+=("$surf")
     record_state "$PROJ" "cmux" "$AGENT" "$surf"
     echo "  → $AGENT seat in cmux workspace ($PROJ)"
     i=$(( i + 1 ))
@@ -404,12 +412,15 @@ spawn_cmux() {   # $@ = specs
 
 # AppleScript fallback (cmux control socket off): same one-tab-per-project layout, minus native sidebar status.
 spawn_cmux_applescript() {   # $@ = specs
-  local first=1 SPEC tabid="" termid="" i=0
-  local dirs=(down right down right down right down right)
+  # Same grid math as spawn_cmux: COLS = ceil(sqrt(N)); row 0 splits RIGHT off the previous column,
+  # later rows split DOWN from the terminal directly above — targeted by stable terminal id.
+  local N=$# COLS=1; while [ $(( COLS * COLS )) -lt "$N" ]; do COLS=$(( COLS + 1 )); done
+  local SPEC tabid="" termid="" i=0
+  local terms=()
   for SPEC in "$@"; do
     resolve_spec "$SPEC"
     local cmd launcher; cmd="$(RUN_CMD)"; launcher="$(_seat_launcher "$AGENT" "$cmd")"
-    if [ "$first" = "1" ]; then
+    if [ "$i" = "0" ]; then
       if [ "$DRY" = "1" ]; then
         echo "[dry] cmux(AppleScript): new tab (trantor:$PROJ) + run 'bash $launcher'"; tabid="%DRYTAB"; termid="%DRYT0"
       else
@@ -431,11 +442,12 @@ OSA
         tabid="${out%%|*}"; termid="${out##*|}"
       fi
       record_state "$PROJ" "cmuxws" "__ws__" "$tabid"
-      first=0
     else
-      local dir="${dirs[$(( i % ${#dirs[@]} ))]}"
+      local dir target
+      if [ $(( i / COLS )) = "0" ]; then dir="right"; target="${terms[$(( i - 1 ))]}"
+      else dir="down"; target="${terms[$(( i - COLS ))]}"; fi
       if [ "$DRY" = "1" ]; then
-        echo "[dry] cmux(AppleScript): split $dir + run 'bash $launcher'"; termid="%DRYT$i"
+        echo "[dry] cmux(AppleScript): split $dir from ${target:-<focused>} + run 'bash $launcher'"; termid="%DRYT$i"
       else
         termid="$(osascript 2>/dev/null <<OSA
 tell application "cmux"
@@ -446,7 +458,12 @@ tell application "cmux"
     end repeat
   end repeat
   if theTab is missing value then return "ERR"
-  set newterm to (split (focused terminal of theTab) direction $dir)
+  set srcTerm to missing value
+  repeat with tm in terminals of theTab
+    if (id of tm) is "$target" then set srcTerm to tm
+  end repeat
+  if srcTerm is missing value then set srcTerm to (focused terminal of theTab)
+  set newterm to (split srcTerm direction $dir)
   delay 0.25
   input text ("bash $launcher" & return) to newterm
   return (id of newterm)
@@ -455,6 +472,7 @@ OSA
 )"
       fi
     fi
+    terms+=("$termid")
     record_state "$PROJ" "cmux" "$AGENT" "$termid"
     echo "  → $AGENT seat in cmux workspace ($PROJ)"
     i=$(( i + 1 ))

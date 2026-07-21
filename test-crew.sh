@@ -135,6 +135,13 @@ ok "cmux spawn creates ONE workspace via new-workspace" 'echo "$OUT12" | grep -q
 ok "cmux spawn tiles extra seats via new-split" '[ "$(echo "$OUT12" | grep -c "cmux: new-split")" = "2" ]'
 ok "cmux spawn reports the grouped workspace + sidebar status" 'echo "$OUT12" | grep -q "seats tiled + sidebar status"'
 
+# 13. cmux GRID tiling: 4 seats = 2×2 — row 0 splits RIGHT off the previous column, row 1 splits DOWN
+# from the pane directly above (surface-targeted, never focus-dependent; the old staircase regression)
+OUT13="$(CREW_MUX=cmux CREW_DRY_RUN=1 HOME="$TMP" PATH="$TMP/fakebin:$PATH" RELAY_PROJECT=testproj bash "$ROOT/bin/crew.sh" up codex glm deepseek kimi 2>&1)"
+ok "cmux 4-seat grid: seat 2 splits RIGHT from seat 1" 'echo "$OUT13" | grep -q "new-split right --surface %DRYT0"'
+ok "cmux 4-seat grid: seat 3 splits DOWN from seat 1" 'echo "$OUT13" | grep -q "new-split down --surface %DRYT0"'
+ok "cmux 4-seat grid: seat 4 splits DOWN from seat 2" 'echo "$OUT13" | grep -q "new-split down --surface %DRYT1"'
+
 echo ""
 if [ "$FAIL" = "0" ]; then echo "ALL PASS ($PASS)"; else echo "$FAIL FAILED"; fi
 exit $([ "$FAIL" = "0" ] && echo 0 || echo 1)
