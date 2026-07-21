@@ -179,6 +179,12 @@ try {
         if (cu.blocked?.length) additionalContext += `\n_Blocked:_\n  ${sanitize(line(cu.blocked))}\n`;
         if (cu.todo?.length)    additionalContext += `\n_Queued (todo):_\n  ${sanitize(line(cu.todo))}\n`;
         if (cu.recentDone?.length) additionalContext += `\n_Recently done:_\n  ${sanitize(line(cu.recentDone))}\n`;
+        // Intelligent-cleanup nudge: if the board has a pile of in-flight/stale cards, some are probably
+        // already shipped (a stuck card ≠ unfinished work). Point the session at `trantor reconcile`, which
+        // judges each stuck card against git + memory (cheap model) and closes what's done — so no session
+        // burns tokens re-doing finished work — and stales what's truly abandoned.
+        const stuck = (c.doing || 0) + (c.testing || 0) + (c.stale || 0);
+        if (stuck >= 4 || (c.stale || 0) > 0) additionalContext += `\n🧠 **${stuck} card(s) look stuck** (doing/testing/stale). Some may already be shipped. Run \`trantor reconcile\` — it checks git + memory (cheap model), closes anything already done so you don't re-do it, and stales what's abandoned. Preview first; \`--yes\` applies.\n`;
       }
       if (gitlog) additionalContext += `\n**Recent commits:**\n\`\`\`\n${sanitize(gitlog)}\n\`\`\`\n`;
       additionalContext += `\nFor a synthesized "where are we" narrative on demand, run \`trantor catchup\`.\n`;

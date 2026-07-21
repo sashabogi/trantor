@@ -32,6 +32,7 @@ switch (cmd) {
   case "gates":   run("bin/gates.mjs"); break;
   case "backfill": run("bin/git-backfill.mjs"); break;
   case "sweep": run("bin/sweep.mjs"); break;
+  case "reconcile": run("bin/reconcile.mjs"); break;
   case "init-hooks": run("bin/init-hooks.mjs"); break;
   case "balances": case "balance": case "credits": run("bin/balances.mjs"); break;
   case "recost": run("bin/recost.mjs"); break;
