@@ -146,6 +146,78 @@ async function testWakerStandsDown() {
   ok("a stale/invalid pane is rejected, not typed into", /pane-invalid/.test(out) || /no pane address/.test(out), out.trim());
 }
 
+// ---------------------------------------------------------------- T2: the Stop hook
+// The middle rung: a message landing as a turn ENDS. We still have the model's attention, so blocking the
+// stop and handing it over beats waiting for the deferred waker to type it in.
+async function testStopHook() {
+  console.log("\nStop hook: won't go idle with a peer waiting:");
+  const S = "h:stoptest";
+  const cursorFile = join(dir, ".agent-bus", `inbox-cursor-${S.replace(/[^A-Za-z0-9_.-]/g, "_")}.id`);
+  const runStop = (stopHookActive = false) => {
+    const out = execFileSync(process.execPath, [join(HERE, "hooks", "stop-inbox.mjs")], {
+      input: JSON.stringify({ stop_hook_active: stopHookActive, cwd: HERE }),
+      env: { ...process.env, RELAY_URL: URL_BASE, RELAY_SESSION: S, RELAY_PROJECT: "stoptest", HOME: dir },
+      timeout: 15000, encoding: "utf8",
+    });
+    try { return JSON.parse(out || "{}"); } catch { return { _unparseable: out }; }
+  };
+
+  await post("/register", { session: S, project: "stoptest" });
+  writeFileSync(cursorFile, "0");
+
+  ok("empty inbox -> allows the stop", !runStop().decision);
+
+  const { id: dm } = await post("/send", { from: "h:beta", to: S, text: "I finished the migration, your turn" });
+  const blocked = runStop();
+  ok("an unread DIRECT message BLOCKS the stop", blocked.decision === "block", JSON.stringify(blocked).slice(0, 120));
+  ok("the message text is handed to the model", /I finished the migration/.test(blocked.reason || ""));
+  ok("the sender is named", /h:beta/.test(blocked.reason || ""));
+  ok("it tells the model it won't be blocked twice", /not block you a second time/.test(blocked.reason || ""));
+
+  ok("after surfacing, the same message does not block again", !runStop().decision);
+
+  console.log("\nStop hook: the guards:");
+  const { id: dm2 } = await post("/send", { from: "h:beta", to: S, text: "second one" });
+  ok("stop_hook_active ALWAYS allows (never loops)", !runStop(true).decision);
+  ok("...and a peek did not falsely claim delivery", (await get(`/peer?session=${encodeURIComponent(S)}`)).body.deliveredUpTo < dm2,
+     `deliveredUpTo=${(await get(`/peer?session=${encodeURIComponent(S)}`)).body.deliveredUpTo} dm2=${dm2}`);
+  ok("so it still blocks on the next real stop", runStop().decision === "block");
+
+  await post("/send", { from: "h:beta", to: "all", text: "broadcast — everyone please note" });
+  ok("a BROADCAST never blocks the stop", !runStop().decision);
+
+  await post("/send", { from: "h:beta", to: S, text: "disabled path" });
+  const off = execFileSync(process.execPath, [join(HERE, "hooks", "stop-inbox.mjs")], {
+    input: JSON.stringify({ stop_hook_active: false, cwd: HERE }),
+    env: { ...process.env, RELAY_URL: URL_BASE, RELAY_SESSION: S, RELAY_PROJECT: "stoptest", HOME: dir, RELAY_STOP_INBOX: "0" },
+    timeout: 15000, encoding: "utf8",
+  });
+  ok("RELAY_STOP_INBOX=0 disables it", !JSON.parse(off || "{}").decision);
+
+  const noCursor = "h:nocursor";
+  await post("/register", { session: noCursor, project: "nocursor" });
+  await post("/send", { from: "h:beta", to: noCursor, text: "old backlog message" });
+  const fresh = execFileSync(process.execPath, [join(HERE, "hooks", "stop-inbox.mjs")], {
+    input: JSON.stringify({ stop_hook_active: false, cwd: HERE }),
+    env: { ...process.env, RELAY_URL: URL_BASE, RELAY_SESSION: noCursor, RELAY_PROJECT: "nocursor", HOME: dir },
+    timeout: 15000, encoding: "utf8",
+  });
+  ok("a session with no cursor yet is not blocked by the backlog", !JSON.parse(fresh || "{}").decision);
+
+  const down = execFileSync(process.execPath, [join(HERE, "hooks", "stop-inbox.mjs")], {
+    input: JSON.stringify({ stop_hook_active: false, cwd: HERE }),
+    env: { ...process.env, RELAY_URL: "http://127.0.0.1:4599", RELAY_SESSION: S, RELAY_PROJECT: "stoptest", HOME: dir },
+    timeout: 15000, encoding: "utf8",
+  });
+  ok("a DOWN hub allows the stop (never traps a session)", !JSON.parse(down || "{}").decision);
+
+  console.log("\nStop hook + waker share one ledger:");
+  const { id: dm3 } = await post("/send", { from: "h:beta", to: S, text: "handled at stop time" });
+  ok("blocks on it", runStop().decision === "block");
+  const led = (await get(`/peer?session=${encodeURIComponent(S)}`)).body.deliveredUpTo;
+  ok("surfacing it DOES claim delivery, so the waker stands down", led >= dm3, `deliveredUpTo=${led} dm3=${dm3}`);
+}
+
 // ---------------------------------------------------------------- injected prompt must not become a focus card
 // A woken message arrives through the SAME door as a human prompt (UserPromptSubmit). Without a guard,
 // hooks/prompt-focus.mjs would card a peer's message as this session's focus — putting another agent's
@@ -231,6 +303,7 @@ try {
   testEscaping();
   await testHubPaneAndLedger();
   await testWakerStandsDown();
+  await testStopHook();
   await testInjectedPromptIsNotFocus();
   await testE2E();
 } catch (e) {
