@@ -93,6 +93,34 @@ function relayUrl() {
   return "http://127.0.0.1:4477";
 }
 
+// WHERE this session lives, so an idle peer can be woken by typing into its terminal (lib/wake.mjs).
+// The heartbeat is the only thing that knows: it runs inside the session and can walk up to the
+// controlling tty. Without this the hub knows a session exists and is idle but has no way to reach it.
+//
+// Cost discipline: controllingTty() is a couple of `ps` calls (cheap), but terminalWindowForTty() walks
+// every Terminal window over AppleScript (~100ms+) — far too expensive to repeat on each heartbeat. So we
+// cache the window id and key the cache ON THE TTY: the tty is fixed for a session's life, and a session
+// id (host:project) is REUSED by the next session in the same project, so a tty-blind cache would happily
+// hand out the window of a terminal that closed yesterday. tty changes -> re-resolve. The waker
+// re-validates once more before typing, so a stale address is caught even if this cache is wrong.
+function paneAddress(session) {
+  try {
+    if (process.platform !== "darwin") return undefined;
+    const tty = controllingTty();
+    if (!tty) return undefined;
+    const f = join(homedir(), ".agent-bus", `pane-${session.replace(/[^A-Za-z0-9_.-]/g, "_")}.json`);
+    if (existsSync(f)) {
+      const c = JSON.parse(readFileSync(f, "utf8"));
+      if (c && c.tty === tty && c.windowId) return { tty, windowId: c.windowId, host: hostId() };
+    }
+    const windowId = terminalWindowForTty(tty);
+    if (!windowId) return undefined;                       // not a Terminal.app session (iTerm, cmux, tmux…)
+    const pane = { tty, windowId, host: hostId() };
+    try { writeFileSync(f, JSON.stringify(pane)); } catch {}
+    return pane;
+  } catch { return undefined; }                            // never let addressing break the heartbeat
+}
+
 async function main(stdinRaw) {
   const projectDir = process.env.CLAUDE_PROJECT_DIR || process.cwd();
   // Mirror sessionstart.mjs: home-directory sessions aren't project work — don't register
@@ -122,7 +150,7 @@ async function main(stdinRaw) {
     await fetch(`${relayUrl()}/register`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ session, project, hookVersion: (() => { try { return installedVersion(); } catch { return ""; } })() }),
+      body: JSON.stringify({ session, project, hookVersion: (() => { try { return installedVersion(); } catch { return ""; } })(), pane: paneAddress(session) }),
       signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
     });
   } catch {}
