@@ -260,6 +260,38 @@ main:not(.learn-open) .learn-body{display:none}
 .tevent .tstatus.blocked{color:var(--red)}
 .tevent .tstatus.stale{color:#a99fd0}
 .tevent .arr{color:var(--dim);margin:0 2px}
+/* FEED view — the unified event log, the board's second lens (v0.17.54) */
+.feed{display:flex;flex-direction:column;background:#0c111c;border-top:1px solid var(--line)}
+.feedbar{display:flex;align-items:center;gap:6px;padding:8px 18px;border-bottom:1px solid var(--line);flex-wrap:wrap}
+.feedbar .flbl{font-size:10px;text-transform:uppercase;letter-spacing:.09em;color:var(--dim);margin-right:2px}
+.fchip{background:#131a29;border:1px solid var(--line);color:var(--mut);border-radius:999px;padding:2px 10px;font-size:10.5px;cursor:pointer;text-transform:uppercase;letter-spacing:.05em}
+.fchip:hover{color:var(--tx);border-color:#2c3550}
+.fchip.on{background:var(--grn);border-color:var(--grn);color:#04120c;font-weight:700}
+.fthread{margin-left:auto;display:flex;align-items:center;gap:7px;font-size:11px;color:var(--mut)}
+.fthread b{color:var(--tx)}
+.fthread .fclr{cursor:pointer;color:var(--dim);border:1px solid var(--line);border-radius:6px;padding:1px 6px}
+.fthread .fclr:hover{color:var(--red);border-color:var(--red)}
+.feedlog{padding:12px 18px;overflow-y:auto;max-height:66vh;display:flex;flex-direction:column;gap:2px}
+.feedlog.empty{color:var(--dim);font-size:12px;padding:18px}
+.fev{display:flex;align-items:flex-start;gap:8px;padding:4px 6px;border-radius:6px;font-size:12.5px;line-height:1.45;color:var(--mut);border-left:2px solid transparent}
+.fev:hover{background:#111828}
+.fev .fts{font-family:ui-monospace,monospace;font-size:10px;color:var(--dim);min-width:64px;padding-top:2px}
+.fev .fgl{min-width:15px;text-align:center;padding-top:1px}
+.fev .fbody{flex:1;min-width:0;overflow-wrap:anywhere}
+.fev .fwho{font-weight:600;color:var(--tx)}
+.fev b{color:var(--tx);font-weight:600}
+.fev .fmeta{color:var(--dim);font-size:10.5px}
+.fev .fref{display:inline-block;background:#16203a;border:1px solid #27324d;color:#8fb4ff;border-radius:5px;padding:0 5px;font-family:ui-monospace,monospace;font-size:10.5px;cursor:pointer;margin:0 1px}
+.fev .fref:hover{background:#1e2c4d;color:#bcd4ff}
+.fev.k-message{border-left-color:#3b7dd8;color:var(--tx)}
+.fev.k-card{border-left-color:#2f8f6b}
+.fev.k-presence{border-left-color:#39415a}
+.fev.k-focus{border-left-color:#7f6fd0}
+.fev.k-handoff{border-left-color:#d08a3a}
+.fev.k-gate{border-left-color:#d05a5a}
+.fev.k-lesson{border-left-color:#2dd4bf}
+.fev.k-commit{border-left-color:#8a8f9c}
+.fev.k-cost{border-left-color:#c9a227}
 /* per-project inter-agent conversation lane */
 .proj-chat{margin:4px 16px 14px;border:1px solid var(--line);border-radius:10px;background:#0c111c}
 .proj-chat h5{margin:0;padding:7px 11px;font-size:10px;text-transform:uppercase;letter-spacing:.09em;color:var(--dim);border-bottom:1px solid var(--line);display:flex;align-items:center;gap:6px}
@@ -439,7 +471,12 @@ function poolOf(session){const b=brandOf(session);const k=b==='anthropic'?'claud
 const VIEWS = JSON.parse(localStorage.getItem("abViews") || "{}");
 let HISTORY = {};
 let PHASES = {};
+let EVENTS = {};                                                   // project -> unified log (the FEED)
+const FEEDF = JSON.parse(localStorage.getItem("abFeedFilter") || "{}");   // project -> filter key
+const FEEDT = {};                                                  // project -> pinned thread (card id) or null
 function setView(proj, v){ VIEWS[proj] = v; localStorage.setItem("abViews", JSON.stringify(VIEWS)); render(); }
+function setFeedFilter(proj, f){ FEEDF[proj] = f; localStorage.setItem("abFeedFilter", JSON.stringify(FEEDF)); render(); }
+function setFeedThread(proj, id){ if(id) FEEDT[proj] = id; else delete FEEDT[proj]; render(); }
 function toggleIdle(name){ if(!name)return; const s=new Set(JSON.parse(localStorage.getItem("abIdleOpen")||"[]")); s.has(name)?s.delete(name):s.add(name); localStorage.setItem("abIdleOpen",JSON.stringify([...s])); render(); }
 let armedDel=null,armedTs=0;   // pending ✕ confirmation (project name + when it was armed)
 let armedSwp=null,armedSwpTs=0,armedSwpCount=0;   // pending 🧹 sweep confirmation (project + when armed + previewed count)
@@ -735,6 +772,92 @@ function timelineHTML(proj) {
   }).join('');
   return `<div class="timeline" data-proj="${esc(proj)}">${rows}</div>`;
 }
+// --- FEED: the unified event log as the board's second lens -------------------------------
+// BOARD answers "where does everything stand"; FEED answers "what actually happened, in order,
+// and who did it". Same data — /events is the log the board's cards are derived from. A card id
+// anywhere in the stream is a clickable #chip that pins the thread (that card's events + every
+// message citing it), which is the closest thing here to a chat thread.
+const FEEDKINDS = [
+  ["all",      "all",      () => true],
+  ["chat",     "chat",     e => e.type === "message"],
+  ["cards",    "cards",    e => ["created","moved","updated"].includes(e.type)],
+  ["presence", "presence", e => e.type.startsWith("presence.") || e.type === "focus"],
+  ["flow",     "handoff·gates", e => e.type.startsWith("handoff.") || e.type.startsWith("verify.") || e.type === "lesson"],
+];
+function feedKindClass(e){
+  if (e.type === "message") return "k-message";
+  if (e.type === "focus") return "k-focus";
+  if (e.type.startsWith("presence.")) return "k-presence";
+  if (e.type.startsWith("handoff.")) return "k-handoff";
+  if (e.type.startsWith("verify.")) return "k-gate";
+  if (e.type === "lesson") return "k-lesson";
+  if (e.source === "git") return "k-commit";
+  if (e.costUsd != null) return "k-cost";
+  return "k-card";
+}
+function feedGlyph(e){
+  if (e.type === "message") return "💬";
+  if (e.type === "focus") return "◆";
+  if (e.type === "presence.online") return "○";
+  if (e.type === "presence.offline") return "◌";
+  if (e.type === "handoff.written") return "⇄";
+  if (e.type === "handoff.claimed") return "⇄";
+  if (e.type === "verify.gate.opened") return "⚠";
+  if (e.type === "verify.gate.resolved") return "✓";
+  if (e.type === "lesson") return "🎓";
+  if (e.source === "git") return "⑂";
+  if (e.costUsd != null) return "$";
+  return "●";
+}
+// Linkify "#123" into a thread chip. Runs on ALREADY-ESCAPED text — never on raw input.
+function feedRefs(escaped){
+  return escaped.replace(/#(\d{1,7})(?![0-9])/g, (m, id) => `<span class="fref" data-ref="${id}">#${id}</span>`);
+}
+function feedPhrase(e){
+  const st = s => `<span class="tstatus ${esc(s)}">${esc(s)}</span>`;
+  switch (true) {
+    case e.type === "message":
+      return `<span class="fmeta">→ ${esc(e.toSession === "all" ? "all" : String(e.toSession||"").split(":")[0])}</span> ${feedRefs(esc(e.text || ""))}`;
+    case e.type === "focus":
+      return `${e.shift ? "refocused" : "focused"} on “<b>${esc(e.title)}</b>”`;
+    case e.type === "presence.online":  return `came online${e.status?` <span class="fmeta">— ${esc(e.status)}</span>`:""}`;
+    case e.type === "presence.offline": return `went offline`;
+    case e.type === "handoff.written":  return `wrote a handoff <span class="fmeta">(${esc(e.trigger||"manual")})</span>`;
+    case e.type === "handoff.claimed":  return `claimed the handoff <span class="fmeta">${esc(e.handoffId||"")}</span>`;
+    case e.type === "verify.gate.opened":   return `opened verify gate <b>#${esc(String(e.gateId))}</b> — “${esc(e.claim)}”`;
+    case e.type === "verify.gate.resolved": return `resolved gate <b>#${esc(String(e.gateId))}</b> as ${st(e.status||"verified")}`;
+    case e.type === "lesson":           return `recorded a lesson — “${esc(e.text)}”`;
+    case e.source === "git":            return `committed “<b>${esc(e.title)}</b>”`;
+    case e.type === "created":          return `created “<b>${esc(e.title)}</b>” as ${st(e.to)}${e.costUsd!=null?` <span class="fmeta">· $${e.costUsd.toFixed(3)}</span>`:""}`;
+    case e.type === "moved":            return `moved “<b>${esc(e.title)}</b>” ${st(e.from)} <span class="arr">→</span> ${st(e.to)}`;
+    case e.type === "updated":          return `re-titled “<b>${esc(e.title)}</b>”`;
+    default:                            return `${esc(e.type)} ${e.title?`“<b>${esc(e.title)}</b>”`:""}`;
+  }
+}
+function feedHTML(proj){
+  const all = EVENTS[proj] || [];
+  const fkey = FEEDF[proj] || "all";
+  const thread = FEEDT[proj] || null;
+  const kind = FEEDKINDS.find(k => k[0] === fkey) || FEEDKINDS[0];
+  const inThread = e => e.taskId === thread || (Array.isArray(e.refs) && e.refs.includes(thread));
+  const shown = all.filter(e => (thread ? inThread(e) : kind[2](e)));
+  const chips = FEEDKINDS.map(([k, label]) => {
+    const n = all.filter(FEEDKINDS.find(x => x[0] === k)[2]).length;
+    return `<button class="fchip ${fkey===k&&!thread?"on":""}" data-proj="${esc(proj)}" data-feedf="${k}">${esc(label)} ${n}</button>`;
+  }).join("");
+  const tbar = thread
+    ? `<span class="fthread">thread <b>#${esc(String(thread))}</b> · ${shown.length} event(s) <span class="fclr" data-proj="${esc(proj)}" data-feedclear="1">clear ✕</span></span>`
+    : `<span class="fthread fmeta">${all.length} event(s) · click any #id to open its thread</span>`;
+  const rows = shown.length ? shown.map(e => {
+    const time = new Date(e.ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    const who = String(e.by || "system").split(":")[0];
+    const ref = e.taskId ? `<span class="fref" data-ref="${e.taskId}">#${e.taskId}</span> ` : "";
+    return `<div class="fev ${feedKindClass(e)}"><span class="fts">${time}</span><span class="fgl">${feedGlyph(e)}</span>`+
+      `<span class="fbody">${ref}${iconFor(e.by, 13)} <span class="fwho">${esc(who)}</span> ${feedPhrase(e)}</span></div>`;
+  }).join("") : `<div class="feedlog empty">nothing matches this filter yet</div>`;
+  return `<div class="feed" data-proj="${esc(proj)}"><div class="feedbar"><span class="flbl">feed</span>${chips}${tbar}</div>`+
+    (shown.length ? `<div class="feedlog" data-proj="${esc(proj)}">${rows}</div>` : rows)+`</div>`;
+}
 function chatLane(msgs){
   if(!msgs.length)return `<div class="proj-chat"><h5><span class="lc"></span>conversation</h5><div class="chatempty">no messages yet — agents talk here as they coordinate</div></div>`;
   const rows=msgs.slice(-8).map(m=>`<div class="cmsg ${m.to==='all'?'bc':''}"><span class="ct">${new Date(m.ts).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'})}</span>${iconFor(m.from,13)}<span class="cf">${esc(String(m.from).split(':')[0])}</span><span class="arr">→</span><span class="cto">${esc(m.to==='all'?'all':String(m.to).split(':')[0])}</span>: ${esc(m.text)}</div>`).join('');
@@ -775,7 +898,12 @@ async function render(){
   const phaseP = projects.filter(p => VIEWS[p.project] === "flow").map(async p => {
     try { PHASES[p.project] = await (await fetch(`/phases?project=${encodeURIComponent(p.project)}`)).json(); } catch(e) {}
   });
-  await Promise.all([...histP, ...phaseP]);
+  // FEED pulls the unified log. Unfiltered by type — the chips filter client-side, so switching
+  // filters is instant and the counts on every chip stay honest.
+  const feedP = projects.filter(p => VIEWS[p.project] === "feed").map(async p => {
+    try { EVENTS[p.project] = (await (await fetch(`/events?project=${encodeURIComponent(p.project)}&limit=500`)).json()).events || []; } catch(e) {}
+  });
+  await Promise.all([...histP, ...phaseP, ...feedP]);
 
   // hub was reset (server empty but feed shows history) -> clear the stale client-side feed
   if(!msgs.length&&$('#feed').childElementCount>0){$('#feed').innerHTML='';nmsg=0;}
@@ -831,14 +959,14 @@ async function render(){
     const ph=p.phase||'';
     const brief=p.brief?`<span class="brief">${esc(p.brief)}</span>`:`<span class="brief dim">— no brief yet · an agent sets it with relay_project_brief</span>`;
     const view = VIEWS[p.project] || "board";
-    const vtog = `<div class="vtog"><span class="vlbl">view</span><button class="vbtn ${view==="board"?"on":""}" data-proj="${esc(p.project)}" data-view="board">BOARD</button><button class="vbtn ${view==="flow"?"on":""}" data-proj="${esc(p.project)}" data-view="flow">FLOW</button><button class="vbtn ${view==="timeline"?"on":""}" data-proj="${esc(p.project)}" data-view="timeline">TIMELINE</button></div>`;
+    const vtog = `<div class="vtog"><span class="vlbl">view</span><button class="vbtn ${view==="board"?"on":""}" data-proj="${esc(p.project)}" data-view="board">BOARD</button><button class="vbtn ${view==="flow"?"on":""}" data-proj="${esc(p.project)}" data-view="flow">FLOW</button><button class="vbtn ${view==="timeline"?"on":""}" data-proj="${esc(p.project)}" data-view="timeline">TIMELINE</button><button class="vbtn ${view==="feed"?"on":""}" data-proj="${esc(p.project)}" data-view="feed" title="the unified event log — cards, chat, presence, handoffs and gates in one stream">FEED</button></div>`;
     const ctl=`<span class="swp" data-proj="${esc(p.project)}" title="sweep stuck in-progress cards (idle > 30m) to the Stale lane — first click previews the count, second click within 4s confirms">🧹 sweep</span><span class="mv"><b class="mvup" data-proj="${esc(p.project)}" title="move up">▲</b><b class="mvdn" data-proj="${esc(p.project)}" title="move down">▼</b></span>${p.idle===true?`<span class="pdel" data-proj="${esc(p.project)}" title="forget this project (cards, peers, brief) — it returns if an agent registers it again">✕</span>`:''}`;
 
     return `<div class="proj${p.idle===true?' idle':''}" data-projname="${esc(p.project)}"${p.idle===true?` data-idleproj="${esc(p.project)}"`:''}>`+
       `<div class="proj-h"><span class="pname">📁 <b>${esc(p.project)}</b></span><a class="popout" href="?project=${encodeURIComponent(p.project)}" target="_blank" rel="noopener" title="open this project in its own window" onclick="event.stopPropagation()">↗</a>${vtog}<div class="agents">${agents||'<span class="dim">no agents</span>'}</div><span class="spacer"></span><span class="prog">${done}/${pt.length} done · ${pct}%</span>${ctl}</div>`+
       `<div class="proj-brief">${brief}${ph?`<span class="phase ${phaseClass(ph)}">${esc(ph)}</span>`:''}</div>`+
       `<div class="pbar"><i style="width:${pct}%"></i></div>`+
-      (view === "flow" ? flowHTML(pt, p.project) : view === "timeline" ? timelineHTML(p.project) : `<div class="kanban">${cols}</div>`)+
+      (view === "flow" ? flowHTML(pt, p.project) : view === "timeline" ? timelineHTML(p.project) : view === "feed" ? feedHTML(p.project) : `<div class="kanban">${cols}</div>`)+
       chatLane(pmsgs)+
     `</div>`;
   };
@@ -899,6 +1027,15 @@ async function render(){
   wireFlow(el);wireTimeline(el);
   // keep each timeline scrolled to the latest event
   el.querySelectorAll('.timeline').forEach(c=>{if(c.scrollHeight-c.clientHeight<60||c.dataset.stuck!=='0')c.scrollTop=c.scrollHeight;c.onscroll=()=>{c.dataset.stuck=(c.scrollHeight-c.scrollTop-c.clientHeight<40)?'1':'0';};});
+  // FEED: filter chips, #id thread pinning, and the same stick-to-latest scroll as the timeline
+  el.querySelectorAll('.fchip[data-feedf]').forEach(b=>b.onclick=e=>{e.stopPropagation();setFeedThread(b.dataset.proj,null);setFeedFilter(b.dataset.proj,b.dataset.feedf);});
+  el.querySelectorAll('.fclr[data-feedclear]').forEach(b=>b.onclick=e=>{e.stopPropagation();setFeedThread(b.dataset.proj,null);});
+  el.querySelectorAll('.feed .fref[data-ref]').forEach(b=>b.onclick=e=>{
+    e.stopPropagation();
+    const proj=b.closest('.feed')?.dataset.proj;if(!proj)return;
+    setFeedThread(proj,+b.dataset.ref);
+  });
+  el.querySelectorAll('.feedlog').forEach(c=>{if(c.scrollHeight-c.clientHeight<60||c.dataset.stuck!=='0')c.scrollTop=c.scrollHeight;c.onscroll=()=>{c.dataset.stuck=(c.scrollHeight-c.scrollTop-c.clientHeight<40)?'1':'0';};});
   el.querySelectorAll('.tcard, .fnode').forEach(c=>c.onclick=async()=>{
     const id=+c.dataset.id,t=tasks.find(x=>x.id===id);if(!t)return;
     if(suppressClickId&&+suppressClickId===id)return;   // drag-end, not a click
@@ -915,8 +1052,17 @@ function addMsg(m,count=true){
 let _ev=null;
 function stream(){
   try{_ev&&_ev.close();}catch(_){}                       // drop any prior connection before reopening (no duplicate streams)
-  const ev=new EventSource('/stream?session=all');_ev=ev;
+  const ev=new EventSource('/stream?session=all&events=1');_ev=ev;
   ev.onmessage=e=>{try{addMsg(JSON.parse(e.data));render();}catch(_){}};
+  // The unified log arrives on its own NAMED channel ("ev") so it can never be mistaken for a bus
+  // message by onmessage above. Append in place, then re-render — the FEED is live, not polled.
+  ev.addEventListener('ev',e=>{try{
+    const x=JSON.parse(e.data),p=x.project||'';
+    if(!p||VIEWS[p]!=='feed')return;                       // only for a project actually showing the feed
+    const arr=EVENTS[p]||(EVENTS[p]=[]);
+    if(!arr.some(y=>y.id===x.id)){arr.push(x);if(arr.length>500)arr.splice(0,arr.length-500);}
+    render();
+  }catch(_){}});
   ev.onerror=()=>{$('#livedot').classList.add('off');setTimeout(()=>{ev.close();if(_ev===ev)stream();$('#livedot').classList.remove('off');},2000);};}
 $('#send').onclick=async()=>{const t=$('#text').value.trim();if(!t)return;
   await fetch('/send',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({from:'dashboard',to:$('#to').value,text:t})});$('#text').value='';};
