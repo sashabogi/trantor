@@ -8,7 +8,7 @@ import http from "node:http";
 import { readFileSync, writeFileSync, existsSync, mkdirSync, statSync, readdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { timingSafeEqual } from "node:crypto";
+import { timingSafeEqual, randomBytes } from "node:crypto";
 import { verifyRequest, publicView } from "./lib/identity.mjs";
 import { DEFAULT_ORG } from "./lib/store-contract.mjs";
 import { assertNoSecrets } from "./lib/scrub.mjs";
@@ -347,7 +347,7 @@ function cmpSemver(a, b) {
 }
 const AUTH_HEADERS = ["x-trantor-pubkey", "x-trantor-sig", "x-trantor-ts", "x-trantor-nonce"];
 const PUBLIC_ENDPOINTS = new Set(["/", "/ui", "/health", "/enroll"]);
-const OWNER_ENDPOINTS = new Set(["/project/delete", "/sweep", "/reconcile"]);
+const OWNER_ENDPOINTS = new Set(["/project/delete", "/sweep", "/reconcile", "/invite"]);
 const READ_ENDPOINTS = new Set(["/peers", "/tasks", "/events", "/inbox", "/peer", "/card", "/stream", "/history", "/projects", "/catchup", "/phases", "/recent", "/handoffs", "/verify-gates"]);
 const roleRank = { read: 1, write: 2, owner: 3 };
 const hasAuthHeaders = (req) => AUTH_HEADERS.some(h => !!req.headers[h]);
@@ -690,6 +690,26 @@ const server = http.createServer(async (req, res) => {
       return json(res, 200, { ok: true, identity: publicView(identity), scopes: identity.scopes });
     }
     const auth = PUBLIC_ENDPOINTS.has(P) ? { ok: true, mode: AUTH_MODE, trusted: false } : await authenticate(req, authPath(u));
+    // Mint a single-use invite. /enroll has always READ state.inviteTokens, but nothing ever wrote
+    // one — bin/cli.mjs shipped a `trantor invite` command against an endpoint that returned 404, so
+    // the only way onto a fresh remote hub was the bootstrap token. Owner-gated via OWNER_ENDPOINTS.
+    if (req.method === "POST" && P === "/invite") {
+      if (!auth.ok) return json(res, auth.code || 401, { error: auth.error || "unauthorized" });
+      const az = authorize(auth, req.method, P, "*");
+      if (!az.ok) return json(res, az.code || 403, { error: az.error || "forbidden" });
+      const bi = await body(req);
+      const scopes = (Array.isArray(bi.scopes) ? bi.scopes : []).map(cleanScope).filter(Boolean).slice(0, 20);
+      if (!scopes.length) return json(res, 400, { error: "scopes required" });
+      // Honour the requested TTL. A 60s FLOOR here silently inflated `ttlSec: 1` to a minute, so a
+      // token the caller asked to expire in a second stayed valid — and an expired-token test passed
+      // a live token straight through /enroll. Cap the ceiling, never the floor.
+      const ttlSec = Math.min(Math.max(Number(bi.ttlSec) || 86400, 1), 30 * 86400);
+      const token = randomBytes(24).toString("hex");
+      state.inviteTokens[token] = { scopes, expiresAt: now() + ttlSec * 1000, used: false,
+        createdBy: auth.identity?.pubkey || "", createdAt: now() };
+      dirty = true;
+      return json(res, 200, { ok: true, token, scopes, expiresAt: state.inviteTokens[token].expiresAt });
+    }
     if (!auth.ok) return json(res, auth.code || 401, { error: auth.error || "unauthorized" });
     const authz = authorize(auth, req.method, P, projectFromRequest(P, q, b0));
     if (!authz.ok) return json(res, authz.code || 403, { error: authz.error || "forbidden" });
