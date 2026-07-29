@@ -32,6 +32,11 @@ export type HubEvent = {
   by?: string; taskId?: number; [k: string]: unknown;
 };
 
+export type Message = {
+  id: number; ts: number; from: string; to: string;
+  project?: string; text: string; refs?: number[];
+};
+
 export type Peer = {
   session: string; project?: string; status?: string;
   lastSeen?: number; online?: boolean; hookVersion?: string;
@@ -66,6 +71,19 @@ export class HubClient {
     return this.request<{ events: HubEvent[]; cursor?: number; latest?: number }>("GET", `/events${s ? "?" + s : ""}`);
   }
   moveCard(id: number, status: string) { return this.request("POST", "/task/update", { id, status }); }
+
+  /**
+   * Messages addressed to `session`. peek=1 reads WITHOUT advancing the delivery ledger — the app is
+   * a viewer here, and marking a message delivered because a human glanced at a list would hide it
+   * from the session's own hooks, which are the thing that actually acts on it.
+   */
+  inbox(session: string, since = 0) {
+    const q = `?session=${encodeURIComponent(session)}&since=${since}&peek=1`;
+    return this.request<{ messages: Message[]; cursor: number }>("GET", `/inbox${q}`);
+  }
+  send(to: string, text: string, project?: string) {
+    return this.request<{ ok: boolean; id: number }>("POST", "/send", { to, text, project });
+  }
 
   /**
    * Live event stream. Replaces EventSource, which cannot send our auth headers.

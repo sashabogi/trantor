@@ -5,6 +5,8 @@ import { HubClient, hubForProject, knownProjects } from "../shared/api/client";
 import { Board } from "../features/board/Board";
 import { Feed } from "../features/feed/Feed";
 import { Agents } from "../features/agents/Agents";
+import { Inbox } from "../features/inbox/Inbox";
+import { Settings } from "../features/settings/Settings";
 import { notifyIfWorthIt } from "../shared/notify";
 
 // Umbrella grouping: a project prefix becomes a sidebar SECTION rather than a nested tree. Slack has
@@ -20,7 +22,10 @@ function group(projects: string[]) {
   return [...out.entries()].sort((a, b) => b[1].length - a[1].length);
 }
 
-type Lens = "board" | "feed" | "agents";
+type Lens = "board" | "feed" | "agents" | "inbox" | "settings";
+
+// Who this app signs as. Mirrors the Rust default; RELAY_OWNER_IDENTITY overrides it there.
+const ME = "sasha@mac";
 
 export function AppShell() {
   const [lens, setLens] = useState<Lens>("board");
@@ -37,7 +42,7 @@ export function AppShell() {
   // exactly once — a per-view subscription would notify twice when two lenses were mounted.
   useEffect(() => {
     if (!client) return;
-    return client.streamEvents(ev => { void notifyIfWorthIt(ev, "sasha@mac"); });
+    return client.streamEvents(ev => { void notifyIfWorthIt(ev, ME); });
   }, [client]);
   const sections = useMemo(() => group(projects), [projects]);
 
@@ -65,7 +70,7 @@ export function AppShell() {
       </aside>
       <main className="flex min-w-0 flex-1 flex-col">
         <div className="flex gap-1 border-b border-[var(--color-tr-edge)] px-4 py-2">
-          {(["board", "feed", "agents"] as Lens[]).map(l => (
+          {(["board", "feed", "agents", "inbox", "settings"] as Lens[]).map(l => (
             <button key={l} onClick={() => setLens(l)}
               className={`rounded px-3 py-1 text-xs uppercase tracking-wide ${
                 lens === l ? "bg-black/40 text-[var(--color-tr-text)]" : "text-[var(--color-tr-muted)] hover:bg-black/20"}`}>
@@ -76,7 +81,9 @@ export function AppShell() {
         {client && active
           ? (lens === "board" ? <Board client={client} project={active} />
              : lens === "feed" ? <Feed client={client} project={active} />
-             : <Agents client={client} project={active} />)
+             : lens === "agents" ? <Agents client={client} project={active} />
+             : lens === "inbox" ? <Inbox client={client} me={ME} />
+             : <Settings me={ME} />)
           : <div className="p-6 text-sm text-[var(--color-tr-muted)]">No projects pinned. Run: trantor hub set &lt;project&gt; &lt;url&gt;</div>}
       </main>
     </div>
