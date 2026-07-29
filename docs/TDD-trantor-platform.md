@@ -233,11 +233,52 @@ already renders on the board — the go/no-go UI is an existing primitive, not a
 | 3 | acp-host; crew seats migrate; T3 delivery | a seat completes work driven only by ACP |
 | 4 | overseer at levels 1→2; then 3 with mobile | zero false-positive collisions over a week |
 
-## 12. Open questions
+## 12. Decisions (settled 2026-07-29) + remaining question
 
-1. Does the desktop client hold **one hub at a time or several**? Solo-local plus team-remote makes
-   this immediate, and it is far cheaper to design in than retrofit.
-2. Card titles are cleaned **prompt text**. Before any remote hub, decide the privacy gate —
-   summarise, redact, or make titles opt-in per project. `crebral-health` is a healthcare product.
-3. Do interactive sessions ever migrate into the app (owned, hence T3-capable), or stay in Terminal
-   forever? The accepted gap in §5 is only acceptable while the answer is "stay".
+### 12.1 DECIDED — multi-hub client, single-hub project
+The client connects to **several hubs**, shown as sidebar sections. But **a project lives on exactly
+one hub, and codependent projects MUST share one.** There is **no merged view.**
+
+*Why:* collision detection and lateral review only work over work on the same hub. Split the hub and
+the overseer goes blind precisely at the boundary between two teams — which is where collisions
+happen. A merged view is worse than separate ones because it implies cross-hub detection that cannot
+exist.
+
+*Consequence, and the reason to decide before Phase 1:* **`RELAY_URL` becomes per-project config, not
+one global value.** Cheap now, miserable to retrofit.
+
+*Migration:* the **Crebral umbrella moves to the remote hub as a unit** — `crebral-health`,
+`crebral-cortex`, `crebral-legal`, `crebral`, `crebral-scribe`, `crebral-health-ios` (85% of the
+board, and the interdependent cluster). Projects with no cross-dependencies may stay local.
+
+### 12.2 DECIDED — protect at the access layer, do not redact content
+Audited the live board 2026-07-29 (1,542 cards / 109 message events):
+
+| surface | finding |
+|---|---|
+| prompt-derived card titles (102, 6.6%) | **zero** emails, digit-runs, key-like tokens, home paths, URLs, person-names |
+| message text | **zero** real credential-shaped strings; the "key-ish" hits were the *words* key/token |
+| 18 "PHI-term" messages | domain **vocabulary** (`patientId` as a variable), not patient data |
+
+So titles are benign and need no gate. The genuine sensitivity is different: messages carry
+**unpatched vulnerability disclosures for a live healthcare product** (e.g. a service-role insert
+accepting a caller-supplied `patientId`) — an attack map for crebral.health.
+
+**Therefore: do NOT redact or summarise.** The overseer and lateral review need exactly that detail;
+a summary of a vulnerability finding is worthless. Redaction optimises the wrong variable and breaks
+the product.
+
+**Protect at the access layer instead — the machinery Phase 0 already shipped:** scope-filtered reads
+(a member sees only projects they are scoped to), plus TLS in transit, encryption at rest on the VPS,
+and a **time-based** retention policy for a shared hub (the log is currently capped by count, 20k).
+
+**One hard rule, enforced in code:** a credential-shaped string must never reach the bus. Today there
+are zero; one `sk-…` pasted into `/send` would be replicated to a server and live in an append-only
+log forever. Client-side scrubber on send — cheap, and the one unrecoverable failure.
+
+*Threat model, stated:* the remote hub is the user's **own VPS**, not a third party. The adversary is
+server compromise and, later, an over-scoped teammate — not a vendor.
+
+### 12.3 STILL OPEN
+Do interactive sessions ever migrate into the app (owned, hence T3-capable), or stay in Terminal
+forever? The accepted delivery gap in §5 is only acceptable while the answer is "stay".
