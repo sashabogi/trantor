@@ -11,16 +11,12 @@ import { homedir } from "node:os";
 import { resolveProject, hostId } from "../lib/project.mjs";
 import { notionalCost } from "./pricing.mjs";
 import { isSubagentTranscript, isImplausibleCost } from "./lib/subagent-cost-lib.mjs";
+import { signedPost } from "./lib/api.mjs";
 
 function readStdin() {
   return new Promise(res => { let d = ""; process.stdin.setEncoding("utf8");
     process.stdin.on("data", c => (d += c)); process.stdin.on("end", () => res(d));
     setTimeout(() => res(d), 100); });
-}
-function relayUrl() {
-  if (process.env.RELAY_URL) return process.env.RELAY_URL;
-  try { const c = join(homedir(), ".agent-bus", "config.json"); if (existsSync(c)) { const u = JSON.parse(readFileSync(c, "utf8")).url; if (u) return u; } } catch {}
-  return "http://127.0.0.1:4477";
 }
 
 // Resolve the sub-agent's OWN transcript: the payload path ONLY if it's truly a sub-agent transcript,
@@ -105,17 +101,13 @@ try {
   const title = `${agentType}: ${task}`.slice(0, 180);
   const costNote = usd == null ? "usage-unavailable-or-unpriced" : (unpriced ? `${unpriced} turn(s) unpriced` : "");
 
-  await fetch(`${relayUrl()}/task`, {
-    method: "POST", headers: { "content-type": "application/json" },
-    body: JSON.stringify({
-      project, title, status: "done", agentType, agentId, parent,
-      assignee: `${agentType}:${project}`, by: `${hostId()}:${project}`,
-      source: "cc-subagent", costKind: "subagent-notional",
-      costUsd: safeUsd, costNote: safeNote, model, effort, tokens: suspect ? null : tokens,
-      phase: "sub-agents",
-    }),
-    signal: AbortSignal.timeout(2500),
-  }).catch(() => {});
+  await signedPost("/task", {
+    project, title, status: "done", agentType, agentId, parent,
+    assignee: `${agentType}:${project}`, by: `${hostId()}:${project}`,
+    source: "cc-subagent", costKind: "subagent-notional",
+    costUsd: safeUsd, costNote: safeNote, model, effort, tokens: suspect ? null : tokens,
+    phase: "sub-agents",
+  }, { timeoutMs: 2500 });
   process.stderr.write(`[trantor] subagent-cost: ${agentType} ${model} ~$${usd == null ? "?" : usd.toFixed(4)} (${tokens.input + tokens.output + tokens.cacheWrite + tokens.cacheRead} tok) → ${project}\n`);
   // surface it back to the parent's Claude inline
   process.stdout.write(JSON.stringify({ hookSpecificOutput: { hookEventName: "SubagentStop", additionalContext: `[trantor] logged sub-agent ${agentType} — notional $${usd == null ? "?" : usd.toFixed(4)}` } }));

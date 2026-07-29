@@ -24,28 +24,19 @@ import { readFileSync, writeFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
 import { resolveProject, hostId } from "../lib/project.mjs";
+import { getJSON } from "./lib/api.mjs";
 
 const POLL_MS = Number(process.env.RELAY_INBOX_POLL_MS || 4000);
 const FETCH_TIMEOUT_MS = Number(process.env.RELAY_INBOX_TIMEOUT_MS || 1500);
-
-function relayUrl() {
-  if (process.env.RELAY_URL) return process.env.RELAY_URL;
-  try {
-    const cfg = join(homedir(), ".agent-bus", "config.json");
-    if (existsSync(cfg)) { const u = JSON.parse(readFileSync(cfg, "utf8")).url; if (u) return u; }
-  } catch {}
-  return "http://127.0.0.1:4477";
-}
 
 // Keep injected text safe to embed in JSON: drop control chars that could corrupt the
 // additionalContext payload (the model still gets the readable message).
 function sanitize(s) { return String(s == null ? "" : s).replace(/[\x00-\x1f\x7f-\x9f]/g, " "); }
 
-async function getInbox(url, session, since) {
-  const r = await fetch(`${url}/inbox?session=${encodeURIComponent(session)}&since=${since}`,
-    { signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) });
-  if (!r.ok) throw new Error(`hub ${r.status}`);
-  return r.json();   // { messages: [...], cursor }
+async function getInbox(session, since) {
+  const { ok, json } = await getJSON(`/inbox?session=${encodeURIComponent(session)}&since=${since}`, { timeoutMs: FETCH_TIMEOUT_MS });
+  if (!ok || !json) throw new Error("hub unreachable");
+  return json;   // { messages: [...], cursor }
 }
 
 // PostToolUse hands us the tool-input JSON on stdin. We don't need it, but we must DRAIN it:
@@ -94,13 +85,11 @@ async function main() {
   } catch {}
   try { writeFileSync(pollStamp, String(Date.now())); } catch {}
 
-  const url = relayUrl();
-
   // First run: no cursor yet. Initialise to the current max deliverable id and inject NOTHING,
   // so we start listening "from now" instead of replaying the whole backlog of old broadcasts.
   if (!existsSync(cursorFile)) {
     try {
-      const { cursor } = await getInbox(url, session, 0);
+      const { cursor } = await getInbox(session, 0);
       writeFileSync(cursorFile, String(cursor || 0));
     } catch {}
     return "{}";
@@ -111,7 +100,7 @@ async function main() {
 
   let messages = [], next = cursor;
   try {
-    const res = await getInbox(url, session, cursor);
+    const res = await getInbox(session, cursor);
     messages = Array.isArray(res.messages) ? res.messages : [];
     next = res.cursor || cursor;
   } catch { return "{}"; }   // hub down / timeout — never block the tool flow

@@ -12,20 +12,13 @@
 // (session_id + notification_type + message are the confirmed fields). We read several candidates and let the
 // hub key/guard on whatever we send; TRANTOR_DEBUG_NOTIFY=1 dumps the raw payload to stderr so the first real
 // firing reveals the true shape. Fail-silent: a notification must never block the session.
-import { readFileSync, existsSync } from "node:fs";
-import { join } from "node:path";
-import { homedir } from "node:os";
 import { resolveProject, hostId } from "../lib/project.mjs";
+import { signedPost } from "./lib/api.mjs";
 
 function readStdin() {
   return new Promise(res => { let d = ""; process.stdin.setEncoding("utf8");
     process.stdin.on("data", c => (d += c)); process.stdin.on("end", () => res(d));
     setTimeout(() => res(d), 100); });
-}
-function relayUrl() {
-  if (process.env.RELAY_URL) return process.env.RELAY_URL;
-  try { const c = join(homedir(), ".agent-bus", "config.json"); if (existsSync(c)) { const u = JSON.parse(readFileSync(c, "utf8")).url; if (u) return u; } } catch {}
-  return "http://127.0.0.1:4477";
 }
 
 try {
@@ -48,15 +41,11 @@ try {
   const msg = String(input.message || "").replace(/\s+/g, " ").trim().slice(0, 90);
   const title = `${agentType}${msg ? `: ${msg}` : ""}`.slice(0, 180);
 
-  await fetch(`${relayUrl()}/task`, {
-    method: "POST", headers: { "content-type": "application/json" },
-    body: JSON.stringify({
+  await signedPost("/task", {
       project, source: "cc-bg-agent", notificationType: ntype,
       title, agentId, agentType, parent,
       assignee: `${agentType}:${project}`, by: `${hostId()}:${project}`, phase: "sub-agents",
-    }),
-    signal: AbortSignal.timeout(1500),
-  }).catch(() => {});
+    });
 } catch (e) {
   process.stderr.write(`[trantor] agent-notify error: ${e?.message || e}\n`);
 }

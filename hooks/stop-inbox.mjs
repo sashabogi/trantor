@@ -25,17 +25,9 @@ import { readFileSync, writeFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
 import { resolveProject, hostId } from "../lib/project.mjs";
+import { getJSON } from "./lib/api.mjs";
 
 const FETCH_TIMEOUT_MS = Number(process.env.RELAY_STOP_TIMEOUT_MS || 1500);
-
-function relayUrl() {
-  if (process.env.RELAY_URL) return process.env.RELAY_URL;
-  try {
-    const cfg = join(homedir(), ".agent-bus", "config.json");
-    if (existsSync(cfg)) { const u = JSON.parse(readFileSync(cfg, "utf8")).url; if (u) return u; }
-  } catch {}
-  return "http://127.0.0.1:4477";
-}
 
 function sanitize(s) { return String(s == null ? "" : s).replace(/[\x00-\x1f\x7f-\x9f]/g, " "); }
 const allow = () => { process.stdout.write("{}"); process.exit(0); };
@@ -80,14 +72,12 @@ async function main() {
   let cursor = 0;
   try { cursor = Number(readFileSync(cursorFile, "utf8")) || 0; } catch { return allow(); }
 
-  const url = relayUrl();
   let messages = [];
   try {
     // PEEK: look without claiming delivery. We may yet decide to let the stop through.
-    const r = await fetch(`${url}/inbox?session=${encodeURIComponent(session)}&since=${cursor}&peek=1`,
-      { signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) });
-    if (!r.ok) return allow();
-    messages = (await r.json()).messages || [];
+    const peek = await getJSON(`/inbox?session=${encodeURIComponent(session)}&since=${cursor}&peek=1`, { timeoutMs: FETCH_TIMEOUT_MS });
+    if (!peek.ok) return allow();
+    messages = peek.json?.messages || [];
   } catch { return allow(); }        // hub down — never trap the session
 
   const direct = messages.filter(m => m.to === session);
@@ -96,9 +86,8 @@ async function main() {
   // Committed now: claim delivery for real so neither inbox-deliver nor the deferred waker repeats it.
   let next = cursor;
   try {
-    const r = await fetch(`${url}/inbox?session=${encodeURIComponent(session)}&since=${cursor}`,
-      { signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) });
-    if (r.ok) next = (await r.json()).cursor || cursor;
+    const claim = await getJSON(`/inbox?session=${encodeURIComponent(session)}&since=${cursor}`, { timeoutMs: FETCH_TIMEOUT_MS });
+    if (claim.ok) next = claim.json?.cursor || cursor;
   } catch {}
   try { writeFileSync(cursorFile, String(next)); } catch {}
 

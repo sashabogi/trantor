@@ -37,6 +37,67 @@ switch (cmd) {
   case "balances": case "balance": case "credits": run("bin/balances.mjs"); break;
   case "recost": run("bin/recost.mjs"); break;
   case "handoff": run("bin/baton.mjs"); break;
+  case "identity": {
+    const { load, publicView, generate, keyPath } = await import(join(ROOT, "lib/identity.mjs"));
+    const sub = args[0], name = args[1] || "human";
+    if (sub === "show") {
+      const id = load(name);
+      if (!id) { console.error(`No identity found for "${name}".`); process.exit(1); }
+      console.log(JSON.stringify(publicView(id), null, 2));
+    } else if (sub === "rotate") {
+      const { writeFileSync, chmodSync, renameSync, mkdirSync } = await import("node:fs");
+      const { randomBytes } = await import("node:crypto");
+      const { pubkey, privkey } = generate();
+      const nId = { name: String(name), kind: "human", pubkey, privkey, createdAt: Date.now() };
+      const f = keyPath(name);
+      mkdirSync(join(f, ".."), { recursive: true, mode: 0o700 });
+      try { chmodSync(join(f, ".."), 0o700); } catch {}
+      const tmp = `${f}.${process.pid}.${randomBytes(4).toString("hex")}.tmp`;
+      writeFileSync(tmp, JSON.stringify(nId), { mode: 0o600 });
+      renameSync(tmp, f);
+      chmodSync(f, 0o600);
+      console.log(JSON.stringify({ name: String(name), pubkey, rotated: true }, null, 2));
+    } else {
+      console.error("usage: trantor identity <show|rotate> [name]");
+      process.exit(1);
+    }
+    break;
+  }
+  case "invite": {
+    const { loadOrCreate, signRequest } = await import(join(ROOT, "lib/identity.mjs"));
+    const nameIdx = args.indexOf("--name"), scopeIdx = args.indexOf("--scope");
+    const name = nameIdx >= 0 ? args[nameIdx + 1] : "";
+    const scopeRaw = scopeIdx >= 0 ? (args[scopeIdx + 1] || "") : "";
+    if (!name || !scopeRaw) { console.error("usage: trantor invite --name <name> --scope <project>:<role>"); process.exit(1); }
+    const [project, role = "write"] = scopeRaw.split(":");
+    let hub = "http://127.0.0.1:4477";
+    try { hub = JSON.parse(readFileSync(join(process.env.HOME || "", ".agent-bus", "config.json"), "utf8")).url || hub; } catch {}
+    const id = loadOrCreate("admin", "human");
+    const payload = { scopes: [{ project, role }], ttlSec: 86400 };
+    const body = JSON.stringify(payload);
+    const sig = signRequest(id, { method: "POST", path: "/invite", body });
+    const r = await fetch(`${hub}/invite`, { method: "POST", headers: { "content-type": "application/json", ...sig }, body });
+    const j = await r.json();
+    if (r.ok) console.log(`Invite token: ${j.token}\nShare this with the new member: trantor enroll ${j.token}`);
+    else console.error(`Invite failed: ${j.error || r.statusText}`);
+    break;
+  }
+  case "enroll": {
+    const token = args[0];
+    if (!token) { console.error("usage: trantor enroll <token>"); process.exit(1); }
+    let hub = "http://127.0.0.1:4477";
+    try { hub = JSON.parse(readFileSync(join(process.env.HOME || "", ".agent-bus", "config.json"), "utf8")).url || hub; } catch {}
+    const { loadOrCreate, signRequest } = await import(join(ROOT, "lib/identity.mjs"));
+    const id = loadOrCreate("human", "human");
+    const payload = { token, name: "human", pubkey: id.pubkey, kind: "human" };
+    const body = JSON.stringify(payload);
+    const sig = signRequest(id, { method: "POST", path: "/enroll", body });
+    const r = await fetch(`${hub}/enroll`, { method: "POST", headers: { "content-type": "application/json", ...sig }, body });
+    const j = await r.json();
+    if (r.ok) console.log(`Enrolled! Pubkey: ${id.pubkey.slice(0, 16)}…`);
+    else console.error(`Enrollment failed: ${j.error || r.statusText}`);
+    break;
+  }
   case "ui": {
     let url = "http://127.0.0.1:4477";
     try { url = JSON.parse(readFileSync(join(process.env.HOME || "", ".agent-bus", "config.json"), "utf8")).url || url; } catch {}

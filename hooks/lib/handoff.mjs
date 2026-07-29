@@ -16,6 +16,7 @@ import { homedir, hostname } from "node:os";
 import { execSync, spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { deriveSubagentManifest } from "../../lib/subagent-manifest.mjs";
+import { signedPost } from "./api.mjs";
 
 export const HANDOFF_DIR = join(process.env.RELAY_DATA_DIR || join(homedir(), ".agent-bus"), "handoffs");
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -339,14 +340,12 @@ export function armBatonClose(handoffFile, originalWindowId, originalTty, conf =
 }
 
 export async function pingBus(projectName, id, conf = readConfig()) {
-  try {
-    await fetch(`${relayUrl(conf)}/send`, {
-      method: "POST", headers: { "content-type": "application/json" },
-      body: JSON.stringify({ from: `${hostname()}:${projectName}`, to: "all",
-        text: `📋 Handoff ready for ${projectName} — open a fresh session here to take over (id ${id}).` }),
-      signal: AbortSignal.timeout(2000),
-    }).catch(() => {});
-  } catch {}
+  // The detached handoff worker announces on the bus. `from` is the signing identity name so /send's
+  // from==signer binding holds; signedPost is fail-open (a down hub never breaks the baton pass).
+  const from = `${hostname()}:${projectName}`;
+  await signedPost("/send", { from, to: "all",
+    text: `📋 Handoff ready for ${projectName} — open a fresh session here to take over (id ${id}).` },
+    { session: from, timeoutMs: 2000 });
 }
 
 // Spawn a fresh same-agent session (macOS) that takes over via the handoff.

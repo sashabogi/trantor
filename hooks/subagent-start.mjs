@@ -17,31 +17,19 @@
 // Registering BOTH never double-posts: on modern CC the PreToolUse create runs first, then SubagentStart
 // finds that card by (project, agentType) and enriches in place (creates nothing). Fail-silent throughout —
 // never block or delay a dispatch.
-import { readFileSync, existsSync } from "node:fs";
-import { join } from "node:path";
-import { homedir } from "node:os";
 import { resolveProject, hostId } from "../lib/project.mjs";
+import { signedPost } from "./lib/api.mjs";
 
 function readStdin() {
   return new Promise(res => { let d = ""; process.stdin.setEncoding("utf8");
     process.stdin.on("data", c => (d += c)); process.stdin.on("end", () => res(d));
     setTimeout(() => res(d), 100); });
 }
-function relayUrl() {
-  if (process.env.RELAY_URL) return process.env.RELAY_URL;
-  try { const c = join(homedir(), ".agent-bus", "config.json"); if (existsSync(c)) { const u = JSON.parse(readFileSync(c, "utf8")).url; if (u) return u; } } catch {}
-  return "http://127.0.0.1:4477";
-}
-const post = (url, body) => fetch(url, {
-  method: "POST", headers: { "content-type": "application/json" },
-  body: JSON.stringify(body), signal: AbortSignal.timeout(1500),
-}).catch(() => {});
 
 try {
   const input = JSON.parse((await readStdin()) || "{}");
   const cwd = input.cwd || process.env.CLAUDE_PROJECT_DIR || process.cwd();
   const project = resolveProject(cwd);
-  const url = `${relayUrl()}/task`;
 
   if (input.hook_event_name === "SubagentStart") {
     // ENRICH path — the sub-agent has spawned; attach its real id + parent to the in-flight card.
@@ -51,7 +39,7 @@ try {
     // parent = the session that spawned this sub-agent → nest it under that session's focus card.
     const parent = String(input.parent_session_id || input.session_id || "").slice(0, 120);
     if (agentId) {
-      await post(url, {
+      await signedPost("/task", {
         project, enrich: true, agentType, agentId, parent,
         by: `${hostId()}:${project}`,
         source: "cc-subagent", costKind: "subagent-notional", phase: "sub-agents",
@@ -65,7 +53,7 @@ try {
     // with the SubagentStop "done" card on any client that predates agent_id pairing (legacy fallback).
     const task = String(ti.prompt || ti.description || agentType).replace(/\s+/g, " ").trim().slice(0, 90);
     const title = `${agentType}: ${task}`.slice(0, 180);
-    await post(url, {
+    await signedPost("/task", {
       project, title, status: "doing", agentType,
       assignee: `${agentType}:${project}`, by: `${hostId()}:${project}`,
       source: "cc-subagent", costKind: "subagent-notional", phase: "sub-agents",

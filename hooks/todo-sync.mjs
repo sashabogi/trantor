@@ -3,18 +3,9 @@
 // so SOLO work (no crew fired up) shows up live and accrues timeline history. The hub reconciles by
 // todo text (pending/in_progress/completed -> todo/doing/done). Fail-silent by contract: a bad hub,
 // a home-dir session, or any error must never block or break the tool flow.
-import { readFileSync, existsSync } from "node:fs";
-import { join, basename } from "node:path";
+import { basename } from "node:path";
 import { homedir, hostname } from "node:os";
-
-function relayUrl() {
-  if (process.env.RELAY_URL) return process.env.RELAY_URL;
-  try {
-    const cfg = join(homedir(), ".agent-bus", "config.json");
-    if (existsSync(cfg)) { const u = JSON.parse(readFileSync(cfg, "utf8")).url; if (u) return u; }
-  } catch {}
-  return "http://127.0.0.1:4477";
-}
+import { signedPost } from "./lib/api.mjs";
 function readStdin() {
   return new Promise(res => { let d = ""; process.stdin.setEncoding("utf8");
     process.stdin.on("data", c => (d += c)); process.stdin.on("end", () => res(d));
@@ -38,14 +29,7 @@ async function main() {
   const session = process.env.RELAY_SESSION
     || (process.env.RELAY_AGENT ? `${process.env.RELAY_AGENT}:${project}` : `${hostname()}:${project}`);
 
-  try {
-    await fetch(`${relayUrl()}/todos`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ session, project, by: session, todos: todos.map(t => ({ content: t.content, status: t.status })) }),
-      signal: AbortSignal.timeout(1500),
-    });
-  } catch {}
+  await signedPost("/todos", { session, project, by: session, todos: todos.map(t => ({ content: t.content, status: t.status })) });
 }
 
 // Never block or break the tool flow: swallow everything, always exit clean.

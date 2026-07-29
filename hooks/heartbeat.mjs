@@ -21,6 +21,7 @@ import { fileURLToPath } from "node:url";
 import { readConfig, contextUsage, warnFrac, alreadyHandedOff, markHandedOff, controllingTty, terminalWindowForTty, subagentsActive } from "./lib/handoff.mjs";
 import { resolveProject, hostId } from "../lib/project.mjs";
 import { installedVersion } from "./lib/update-check.mjs";   // report our hook version so the hub can flag stale sessions
+import { signedPost } from "./lib/api.mjs";
 
 const HEARTBEAT_MS = Number(process.env.RELAY_HEARTBEAT_MS || 60 * 1000);
 const FETCH_TIMEOUT_MS = Number(process.env.RELAY_HEARTBEAT_TIMEOUT_MS || 1500);
@@ -84,15 +85,6 @@ async function maybeEarlyWarn(stdinRaw, session) {
   } catch {}
 }
 
-function relayUrl() {
-  if (process.env.RELAY_URL) return process.env.RELAY_URL;
-  try {
-    const cfg = join(homedir(), ".agent-bus", "config.json");
-    if (existsSync(cfg)) { const u = JSON.parse(readFileSync(cfg, "utf8")).url; if (u) return u; }
-  } catch {}
-  return "http://127.0.0.1:4477";
-}
-
 async function main(stdinRaw) {
   const projectDir = process.env.CLAUDE_PROJECT_DIR || process.cwd();
   // Mirror sessionstart.mjs: home-directory sessions aren't project work — don't register
@@ -118,14 +110,7 @@ async function main(stdinRaw) {
   try { writeFileSync(stamp, String(Date.now())); } catch {}
 
   // POST /register with no status -> hub refreshes lastSeen + project, preserves status.
-  try {
-    await fetch(`${relayUrl()}/register`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ session, project, hookVersion: (() => { try { return installedVersion(); } catch { return ""; } })() }),
-      signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
-    });
-  } catch {}
+  await signedPost("/register", { session, project, hookVersion: (() => { try { return installedVersion(); } catch { return ""; } })() }, { session, timeoutMs: Number(process.env.RELAY_HEARTBEAT_TIMEOUT_MS || 1500) });
 
   // Same cadence as the presence ping: check context pressure and hand off early
   // if we've crossed the warn threshold of a known window.

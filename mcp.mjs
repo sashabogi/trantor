@@ -11,6 +11,7 @@ import { homedir, hostname } from "node:os";
 import { execSync, spawnSync } from "node:child_process";
 import { advise } from "./bin/advise.mjs";
 import { resolveProject, hostId } from "./lib/project.mjs";
+import { signedPost, getJSON } from "./hooks/lib/api.mjs";
 import { z } from "zod";
 
 function relayUrl() {
@@ -30,13 +31,33 @@ const PROJECT = resolveProject(process.env.CLAUDE_PROJECT_DIR || process.cwd());
 const SESSION = process.env.RELAY_SESSION
   || (process.env.RELAY_AGENT ? `${process.env.RELAY_AGENT}:${PROJECT}` : `${hostId()}:${PROJECT}`);
 let cursor = 0;
+// First-call guard: a brand-new MCP process must NOT replay the entire historical backlog (observed:
+// 2,379 msgs / 520KB back to an old asteroids project) the instant relay_inbox/relay_wait is called.
+// Seed the cursor to the current max deliverable id once, exactly like hooks/inbox-deliver.mjs does on
+// its first run. The seed uses a non-peek /inbox so the hub's shared delivery ledger advances too —
+// telling stop-inbox "this session is caught up to now", so a fresh session isn't blocked on backlog it
+// was never meant to act on. After the seed, the model starts listening "from now".
+let cursorSeeded = false;
+async function seedCursor() {
+  if (cursorSeeded) return;
+  cursorSeeded = true;
+  try {
+    const r = await api("GET", `/inbox?session=${encodeURIComponent(SESSION)}&since=0`);
+    cursor = r?.cursor || 0;
+  } catch { /* hub down: the subsequent real call surfaces the error; leave cursor at 0 */ }
+}
 
+// Every hub WRITE is SIGNED with this session's Ed25519 keypair (TDD §7.3) via the shared client in
+// hooks/lib/api.mjs — that is what binds /send's `from` to the signer and closes the self-asserted
+// `from` hole (the 2026-07-28 RCE). Reads go unsigned for now (pending the hub's DM scope-filtering
+// fix — see hooks/lib/api.mjs:getJSON). The client fail-opens on a down hub (returns {ok:false}); we
+// surface that as a thrown Error so individual tools can .catch it exactly as they did for a bare fetch.
 async function api(method, path, payload) {
-  const opts = { method, headers: { "content-type": "application/json" } };
-  if (payload) opts.body = JSON.stringify(payload);
-  const r = await fetch(URL_BASE + path, opts);
+  const r = method.toUpperCase() === "GET"
+    ? await getJSON(path)
+    : await signedPost(path, payload, { session: SESSION });
   if (!r.ok) throw new Error(`hub ${r.status} on ${path}`);
-  return r.json();
+  return r.json;
 }
 const fmt = (m) => `#${m.id} [${m.from} -> ${m.to}] ${new Date(m.ts).toLocaleTimeString()}: ${m.text}`;
 
@@ -184,6 +205,7 @@ server.tool("relay_handoff", "Write a rich handoff for THIS session so a fresh s
   });
 
 server.tool("relay_inbox", "Read NEW messages addressed to this session since the last read (non-blocking).", {}, async () => {
+  await seedCursor();
   const { messages, cursor: c } = await api("GET", `/inbox?session=${encodeURIComponent(SESSION)}&since=${cursor}`);
   cursor = c;
   return { content: [{ type: "text", text: messages.length ? messages.map(fmt).join("\n") : "(no new messages)" }] };
@@ -195,6 +217,7 @@ server.tool("relay_wait", "Block up to `timeout` seconds waiting for the next me
     // Cap below the 120s MCP auto-background floor (CC 2.1.212+) so relay_wait always
     // resolves inline on every current client instead of being shipped to the background.
     const w = Math.min(timeout ?? 25, 110);
+    await seedCursor();
     const { messages, cursor: c } = await api("GET", `/poll?session=${encodeURIComponent(SESSION)}&since=${cursor}&wait=${w}`);
     cursor = c;
     return { content: [{ type: "text", text: messages.length ? messages.map(fmt).join("\n") : "(timed out, no message)" }] };

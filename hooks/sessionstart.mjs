@@ -14,6 +14,7 @@ import { resolveProject, hostId } from "../lib/project.mjs";
 import { formatSubagentManifest } from "../lib/subagent-manifest.mjs";
 import { updateAvailable, maybeNotifyDesktop, readConfig } from "./lib/update-check.mjs";
 import { maybeCheckBalances } from "./lib/balance-check.mjs";
+import { relayUrl, getJSON, signedPost } from "./lib/api.mjs";
 
 // Load the most recent UNCONSUMED handoff for this project (written by precompact.mjs
 // / the heartbeat early-warning). `claim` marks it consumed so exactly one session
@@ -65,21 +66,17 @@ function loadPendingHandoff(projectName, { claim = true, freshSession = null } =
 
 function nowSec() { try { return Number(execSync("date +%s", { encoding: "utf8" }).trim()) || 0; } catch { return 0; } }
 
-function relayUrl() {
-  if (process.env.RELAY_URL) return process.env.RELAY_URL;
-  try {
-    const cfg = join(homedir(), ".agent-bus", "config.json");
-    if (existsSync(cfg)) { const u = JSON.parse(readFileSync(cfg, "utf8")).url; if (u) return u; }
-  } catch {}
-  return "http://127.0.0.1:4477";
-}
 function readStdin() {
   return new Promise(res => { let d = ""; process.stdin.setEncoding("utf8");
     process.stdin.on("data", c => (d += c)); process.stdin.on("end", () => res(d));
     setTimeout(() => res(d), 100); });
 }
-async function jget(u) { const r = await fetch(u, { signal: AbortSignal.timeout(2500) }); return r.json(); }
-async function jpost(u, b) { return fetch(u, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(b), signal: AbortSignal.timeout(2500) }); }
+// Hub reads/writes through the shared client (TDD §8). Writes are SIGNED (Ed25519, via signedPost);
+// reads go unsigned for now (see api.mjs:getJSON — pending the hub's DM scope-filtering fix). Each
+// resolves to {ok,status,json}; a down hub returns {ok:false,json:null} and the caller's catch keeps
+// the session alive (fail-open contract, acceptance §9 #10).
+async function jget(u, session) { const r = await getJSON(u, { timeoutMs: 2500 }); return r.ok ? (r.json || {}) : {}; }
+async function jpost(u, b, session) { return (await signedPost(u, b, { session, timeoutMs: 2500 })).ok; }
 
 // Strip control chars from untrusted injected text so the hook's JSON stdout (which
 // Claude Code parses) stays valid. Keeps tab/newline/CR; replaces 0x00-0x1F (minus
@@ -139,11 +136,11 @@ try {
   const url = relayUrl();
 
   // register self + post an initial presence status (no LLM turn — instant for others to read)
-  await jpost(`${url}/register`, { session, project, status: `active in ${project}` }).catch(() => {});
+  await jpost(`${url}/register`, { session, project, status: `active in ${project}` }, session).catch(() => {});
 
   // fetch roster of OTHER online sessions
   let peers = [];
-  try { peers = (await jget(`${url}/peers`)).peers || []; } catch {}
+  try { peers = (await jget(`${url}/peers`, session)).peers || []; } catch {}
   const others = peers.filter(p => p.online && p.session !== session);
 
   process.stderr.write(`[trantor] registered as ${session} -> ${url} (${others.length} other live session(s))\n`);
@@ -161,7 +158,7 @@ try {
   // in flight, what's queued, plus the latest commits. So a fresh window resumes the
   // SAME project where it stands instead of starting blind. Cheap + LLM-free.
   try {
-    const cu = await jget(`${url}/catchup?project=${encodeURIComponent(project)}`).catch(() => null);
+    const cu = await jget(`${url}/catchup?project=${encodeURIComponent(project)}`, session).catch(() => null);
     sessionTitle = sessionTitleFrom(project, cu);   // "<project> · <current work>" for the picker/--resume/mobile
     let gitlog = "";
     try { gitlog = execSync(`git -C ${JSON.stringify(projectDir)} log --oneline -5 2>/dev/null`, { encoding: "utf8", timeout: 2500 }).trim(); } catch {}
