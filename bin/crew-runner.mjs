@@ -12,7 +12,10 @@ import { execSync, spawnSync } from "node:child_process";
 import { readFileSync, existsSync, appendFileSync } from "node:fs";
 import { join, basename } from "node:path";
 import { homedir } from "node:os";
-import { resolveProject } from "../lib/project.mjs";
+import { resolveProject, resolveHub } from "../lib/project.mjs";
+import { loadOrCreate } from "../lib/identity.mjs";
+import { signedHeaders } from "../lib/signed-fetch.mjs";
+import { ensureEnrolled } from "../lib/enroll.mjs";
 
 const AGENT = process.argv[2];
 const DIR = process.argv[3] || process.cwd();
@@ -22,14 +25,27 @@ const DIR = process.argv[3] || process.cwd();
 // fork the host's "builtbetter.ai" into a separate "builtbetter" lane.
 const PROJ = process.env.RELAY_PROJECT || resolveProject(DIR);
 const SESSION = `${AGENT}:${PROJ}`;
+// One keypair per seat, so `deepseek:crebral` and `deepseek:trantor` are genuinely different
+// identities on the bus rather than one shared string label.
+const identity = loadOrCreate(SESSION, "agent");
 if (!AGENT) { console.error("usage: crew-runner.mjs <agent> [project-dir]"); process.exit(1); }
 
+// Per-project routing (TDD §12.1): a seat MUST reach the same hub as the project it serves. Reading
+// only the global default sent seats on a migrated project to the local hub while their orchestrator
+// talked to the remote one — the crew would look alive and record onto a different board entirely.
 function hubUrl() {
   if (process.env.RELAY_URL) return process.env.RELAY_URL;
-  try { const u = JSON.parse(readFileSync(join(homedir(), ".agent-bus", "config.json"), "utf8")).url; if (u) return u; } catch {}
+  try { return resolveHub(PROJ); } catch {}
   return "http://127.0.0.1:4477";
 }
 const HUB = hubUrl();
+// On an authenticated hub a freshly-created seat keypair is an UNKNOWN identity, so every call 401s
+// and the seat goes silently quiet (we fail open by design). Self-enrol first, using the operator's
+// owner key to mint a short-lived project-scoped invite the seat immediately spends.
+const enrolment = await ensureEnrolled(HUB, identity, PROJ);
+if (!enrolment.ok && enrolment.reason !== "hub-unreachable") {
+  console.log(`\x1b[33m[runner]\x1b[0m not enrolled on ${HUB} (${enrolment.reason}) — cards may not record`);
+}
 process.on("uncaughtException", (e) => { console.log(`\x1b[31m[runner] UNCAUGHT: ${e?.stack || e}\x1b[0m`); });
 process.on("unhandledRejection", (e) => { console.log(`\x1b[31m[runner] UNHANDLED REJECTION: ${e?.stack || e}\x1b[0m`); });
 const log = (s) => console.log(`\x1b[38;5;43m[runner]\x1b[0m ${s}`);
@@ -46,7 +62,11 @@ async function api(path, body) {
   const opts = body
     ? { method: "POST", headers: { "content-type": "application/json", connection: "close" }, body: JSON.stringify(body) }
     : { headers: { connection: "close" } };   // fresh socket per call — long-polls on stale keep-alive sockets reset
-  const r = await fetch(HUB + path, opts);
+  // Sign as THIS seat. Unsigned calls are 401 on an enforce hub, and because the runner fails open
+  // that shows up as a seat that quietly records nothing rather than one that errors.
+  const url = HUB + path;
+  const sig = signedHeaders(identity, url, opts);
+  const r = await fetch(url, { ...opts, headers: { ...opts.headers, ...sig } });
   return r.json();
 }
 
