@@ -22,9 +22,19 @@ const LANE_COLOR: Record<string, string> = {
   stale: "var(--color-tr-muted)",
 };
 
-function CardTile({ card }: { card: Card }) {
+// The hub's own card flow. NEVER jump straight to done: `testing` is a real gate, and the whole
+// crew protocol depends on it (bin/crew.sh bounces anything that skips it), so the client must not
+// offer a shortcut the protocol forbids.
+const NEXT: Record<string, string> = { todo: "doing", doing: "testing", testing: "done" };
+
+function CardTile({ card, onAdvance }: { card: Card; onAdvance?: (c: Card) => void }) {
+  const next = NEXT[card.status];
   return (
-    <div className="rounded-lg border border-[var(--color-tr-edge)] bg-[var(--color-tr-panel)] p-3 text-sm">
+    <div
+      onClick={() => next && onAdvance?.(card)}
+      title={next ? `move to ${next}` : undefined}
+      className={`rounded-lg border border-[var(--color-tr-edge)] bg-[var(--color-tr-panel)] p-3 text-sm ${
+        next ? "cursor-pointer hover:border-[var(--color-tr-doing)]" : ""}`}>
       <div className="leading-snug">{card.title}</div>
       <div className="mt-2 flex flex-wrap items-center gap-1.5 text-[11px] text-[var(--color-tr-muted)]">
         {card.assignee && <span className="rounded bg-black/30 px-1.5 py-0.5">@{card.assignee}</span>}
@@ -60,6 +70,16 @@ export function Board({ client, project }: { client: HubClient; project: string 
     });
   }, [client, project]);
 
+  // Optimistic, with rollback. The stream will confirm it a beat later; showing the move immediately
+  // is the difference between a tool and a dashboard.
+  const advance = (card: Card) => {
+    const next = NEXT[card.status];
+    if (!next || !cards) return;
+    const before = cards;
+    setCards(cards.map(c => (c.id === card.id ? { ...c, status: next } : c)));
+    client.moveCard(card.id, next).catch(() => setCards(before));
+  };
+
   if (error) return <div className="p-6 text-sm text-[var(--color-tr-fail)]">Board unavailable: {error}</div>;
   if (!cards) return <div className="p-6 text-sm text-[var(--color-tr-muted)]">Loading {project}…</div>;
 
@@ -83,7 +103,7 @@ export function Board({ client, project }: { client: HubClient; project: string 
               <span className="ml-auto text-[var(--color-tr-muted)]">{list.length}</span>
             </div>
             <div className="flex flex-col gap-2 overflow-y-auto">
-              {list.slice(0, 200).map(c => <CardTile key={c.id} card={c} />)}
+              {list.slice(0, 200).map(c => <CardTile key={c.id} card={c} onAdvance={advance} />)}
             </div>
           </section>
         ))}

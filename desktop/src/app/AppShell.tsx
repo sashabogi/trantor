@@ -4,6 +4,8 @@ import { useEffect, useMemo, useState } from "react";
 import { HubClient, hubForProject, knownProjects } from "../shared/api/client";
 import { Board } from "../features/board/Board";
 import { Feed } from "../features/feed/Feed";
+import { Agents } from "../features/agents/Agents";
+import { notifyIfWorthIt } from "../shared/notify";
 
 // Umbrella grouping: a project prefix becomes a sidebar SECTION rather than a nested tree. Slack has
 // no sub-channels for good reasons, and 85% of this board is one Crebral program.
@@ -18,7 +20,7 @@ function group(projects: string[]) {
   return [...out.entries()].sort((a, b) => b[1].length - a[1].length);
 }
 
-type Lens = "board" | "feed";
+type Lens = "board" | "feed" | "agents";
 
 export function AppShell() {
   const [lens, setLens] = useState<Lens>("board");
@@ -30,6 +32,13 @@ export function AppShell() {
   useEffect(() => { if (active) hubForProject(active).then(setHub); }, [active]);
 
   const client = useMemo(() => (hub ? new HubClient(hub) : null), [hub]);
+
+  // Shell-level on purpose: a notification must fire whether or not the relevant lens is open, and
+  // exactly once — a per-view subscription would notify twice when two lenses were mounted.
+  useEffect(() => {
+    if (!client) return;
+    return client.streamEvents(ev => { void notifyIfWorthIt(ev, "sasha@mac"); });
+  }, [client]);
   const sections = useMemo(() => group(projects), [projects]);
 
   return (
@@ -56,7 +65,7 @@ export function AppShell() {
       </aside>
       <main className="flex min-w-0 flex-1 flex-col">
         <div className="flex gap-1 border-b border-[var(--color-tr-edge)] px-4 py-2">
-          {(["board", "feed"] as Lens[]).map(l => (
+          {(["board", "feed", "agents"] as Lens[]).map(l => (
             <button key={l} onClick={() => setLens(l)}
               className={`rounded px-3 py-1 text-xs uppercase tracking-wide ${
                 lens === l ? "bg-black/40 text-[var(--color-tr-text)]" : "text-[var(--color-tr-muted)] hover:bg-black/20"}`}>
@@ -65,9 +74,9 @@ export function AppShell() {
           ))}
         </div>
         {client && active
-          ? (lens === "board"
-              ? <Board client={client} project={active} />
-              : <Feed client={client} project={active} />)
+          ? (lens === "board" ? <Board client={client} project={active} />
+             : lens === "feed" ? <Feed client={client} project={active} />
+             : <Agents client={client} project={active} />)
           : <div className="p-6 text-sm text-[var(--color-tr-muted)]">No projects pinned. Run: trantor hub set &lt;project&gt; &lt;url&gt;</div>}
       </main>
     </div>

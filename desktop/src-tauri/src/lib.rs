@@ -58,6 +58,7 @@ async fn start_stream(app: tauri::AppHandle, base: String) {
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_notification::init())
         .invoke_handler(tauri::generate_handler![greet, sign_request, hub_for_project, known_projects, hub_request, start_stream])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
