@@ -20,17 +20,28 @@ fi
 chown -R trantor:trantor /opt/trantor
 
 # secrets: generate Postgres password, write to /etc/trantor/env
-if [ ! -f /etc/trantor/env ]; then
+# Secrets live in /etc/trantor/pg.env — the EXACT path trantor-hub.service reads via
+# EnvironmentFile. That file is prefixed `-`, so a name mismatch fails SILENTLY: the hub would boot
+# with no DATABASE_URL and no RELAY_STORE, quietly ignoring the Postgres we just provisioned.
+# It must also carry RELAY_STORE=pg — lib/store-pg.mjs is only selected when that is set.
+if [ ! -f /etc/trantor/pg.env ]; then
   PG_PASS="$(openssl rand -base64 32 | tr -d '/+=' | head -c 32)"
   install -d -m 750 /etc/trantor
-  cat > /etc/trantor/env <<EOF
+  # One-time bootstrap secret for the FIRST admin. A remote hub binds non-loopback, so it must run
+  # enforce+invite — but minting an invite needs an enrolled owner, and there is none. This token is
+  # accepted ONLY while the identity store is empty; the first enrollment closes the path for good.
+  BOOT_TOK="$(openssl rand -hex 24)"
+  cat > /etc/trantor/pg.env <<EOF
 PG_PASSWORD=$PG_PASS
+RELAY_STORE=pg
+DATABASE_URL=postgresql://trantor:$PG_PASS@127.0.0.1:5432/trantor
+RELAY_BOOTSTRAP_TOKEN=$BOOT_TOK
 EOF
-  chmod 600 /etc/trantor/env
-  echo "wrote /etc/trantor/env"
+  chmod 600 /etc/trantor/pg.env
+  echo "wrote /etc/trantor/pg.env (RELAY_STORE=pg + DATABASE_URL)"
 fi
-source /etc/trantor/env
-export PG_PASSWORD
+source /etc/trantor/pg.env
+export PG_PASSWORD DATABASE_URL RELAY_STORE
 
 # install dependencies (node 20 native — no build tools needed)
 cd /opt/trantor

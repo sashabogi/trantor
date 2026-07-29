@@ -8,6 +8,7 @@ import http from "node:http";
 import { readFileSync, writeFileSync, existsSync, mkdirSync, statSync, readdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { timingSafeEqual } from "node:crypto";
 import { verifyRequest, publicView } from "./lib/identity.mjs";
 import { DEFAULT_ORG } from "./lib/store-contract.mjs";
 import { assertNoSecrets } from "./lib/scrub.mjs";
@@ -648,7 +649,26 @@ const server = http.createServer(async (req, res) => {
       let enrolledBy = "";
       let scopes = [];
       const token = String(b0.token || "");
-      if (token) {
+      // BOOTSTRAP. A fresh REMOTE hub is unusable without this: it binds non-loopback, so it must run
+      // RELAY_AUTH=enforce with RELAY_ENROLL=invite — but minting an invite requires an already-enrolled
+      // owner, and there is none. Chicken-and-egg, and it locks the operator out of their own server.
+      //
+      // The escape is a single-use operator secret, and it is safe because it is fenced three ways:
+      //   1. RELAY_BOOTSTRAP_TOKEN must be set (it lives in /etc/trantor/pg.env, mode 600, root-owned);
+      //   2. the identity store must be EMPTY — one existing identity closes this path permanently;
+      //   3. the request is still signature-verified above, so the token alone proves nothing.
+      // Compared with timingSafeEqual on equal-length buffers to avoid leaking the token byte-by-byte.
+      const bootstrap = String(process.env.RELAY_BOOTSTRAP_TOKEN || "");
+      const noIdentitiesYet = Object.keys(state.identities || {}).length === 0;
+      const tokenMatchesBootstrap = !!bootstrap && !!token && token.length === bootstrap.length &&
+        timingSafeEqual(Buffer.from(token), Buffer.from(bootstrap));
+      if (bootstrap && noIdentitiesYet && tokenMatchesBootstrap) {
+        // cleanScope takes an OBJECT, not a "project:role" string — a string returns null, the array
+        // empties, and defaultScopesFor() silently scopes the first admin to a project guessed from
+        // their session name instead of the whole hub. Owner of "*" is what lets them mint invites.
+        scopes = [cleanScope({ project: "*", role: "owner" })].filter(Boolean);
+        enrolledBy = "bootstrap";
+      } else if (token) {
         const invite = state.inviteTokens?.[token];
         if (!invite || invite.used || (invite.expiresAt && invite.expiresAt < now())) return json(res, 403, { error: "invalid invite" });
         scopes = Array.isArray(invite.scopes) ? invite.scopes.map(cleanScope).filter(Boolean) : [];
