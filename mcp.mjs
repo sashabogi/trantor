@@ -8,35 +8,10 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
 import { join, basename } from "node:path";
 import { homedir, hostname } from "node:os";
-import { execSync, spawnSync, spawn } from "node:child_process";
-import { fileURLToPath } from "node:url";
+import { execSync, spawnSync } from "node:child_process";
 import { advise } from "./bin/advise.mjs";
 import { resolveProject, hostId } from "./lib/project.mjs";
 import { z } from "zod";
-
-const HERE = join(fileURLToPath(new URL(".", import.meta.url)));
-
-// Arm a deferred wake for a DIRECT message, so a recipient that is sitting idle at its prompt still gets
-// it. Everything in-session (relay_inbox, hooks/inbox-deliver.mjs) only reaches a session that is RUNNING;
-// an idle one fires no hooks and stays deaf until a human relays the message by hand.
-//
-// Detached on purpose — bin/wake-peer.mjs sleeps before acting and must outlive us, because the archetypal
-// case is this session sending "I'm done" and then going idle itself. It is also the only place the wake
-// CAN run: the hub is a launchd job and macOS TCC blocks it from driving Terminal, whereas a descendant of
-// this session keeps the Automation permission even after we exit (verified 2026-07-28).
-//
-// Broadcasts are excluded deliberately: "to: all" is FYI traffic, and typing it into every idle session on
-// the machine would be the notification spam that makes people turn the whole feature off.
-function armWake(to, msgId) {
-  if (!to || to === "all" || !msgId) return false;
-  if (process.env.RELAY_WAKE === "0" || process.platform !== "darwin") return false;
-  try {
-    const child = spawn(process.execPath, [join(HERE, "bin", "wake-peer.mjs"), to, String(msgId), URL_BASE],
-      { detached: true, stdio: "ignore" });
-    child.unref();
-    return true;
-  } catch { return false; }   // a failed wake must never fail the send
-}
 
 function relayUrl() {
   if (process.env.RELAY_URL) return process.env.RELAY_URL;
@@ -183,8 +158,7 @@ server.tool("relay_send", "Send a live message to another Claude session (or 'al
   { to: z.string().describe("target session id, or 'all'"), text: z.string().describe("message body") },
   async ({ to, text }) => {
     const { id } = await api("POST", "/send", { from: SESSION, to, text });
-    const woke = armWake(to, id);
-    return { content: [{ type: "text", text: `sent #${id} to ${to}${woke ? " (recipient will be woken if it stays idle)" : ""}` }] };
+    return { content: [{ type: "text", text: `sent #${id} to ${to}` }] };
   });
 
 server.tool("relay_status", "Set this session's one-line status on the presence board (what you're working on / idle). Cheap — other sessions read it instantly via relay_peers without messaging you.",

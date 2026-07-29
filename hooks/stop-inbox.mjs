@@ -1,12 +1,15 @@
 #!/usr/bin/env node
 // trantor Stop hook — don't go idle with a peer waiting on you.
 //
-// This is the middle rung of the wake ladder. The other two:
-//   * hooks/inbox-deliver.mjs (PostToolUse) reaches a session while it is MID-TURN calling tools.
-//   * bin/wake-peer.mjs types into the pane of a session that is ALREADY idle.
-// Between them sits the moment a turn ends. A message landing there would otherwise wait for the
-// deferred waker to type it in — clumsier and slower than simply not stopping yet. Here we still have
-// the model's attention, so we hand it the message and let it keep working.
+// Pairs with hooks/inbox-deliver.mjs (PostToolUse), which reaches a session while it is MID-TURN calling
+// tools. Between them they cover a running session; this one covers the moment it is about to stop.
+//
+// Both deliver the SAME way, and it is the only way that is safe: a session's own hook reads that
+// session's own inbox and hands the text to its own model through the harness's sanctioned channel.
+// Nothing reaches across a process boundary. An earlier attempt DID reach across — it typed messages
+// into another session's terminal — and was removed: /send is unauthenticated with a self-asserted
+// `from`, so any local process could have aimed keystrokes at an agent running with permissions
+// bypassed. Delivery must go through the receiving agent's own harness, never by driving its terminal.
 //
 // The mechanism is the one already proven in-house by ~/.claude/hooks/verify-done-gate.py: a Stop hook
 // that prints {"decision":"block","reason":…} makes the model continue with `reason` as its instruction.

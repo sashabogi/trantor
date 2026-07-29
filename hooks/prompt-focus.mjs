@@ -39,11 +39,6 @@ try {
   const trimmed = prompt.replace(/\s+/g, " ").trim();
   // skip empties, tiny continuations, and pure acks — they're not a new focus
   if (!trimmed || trimmed.length < 12 || ACK.test(trimmed)) { process.stdout.write("{}"); process.exit(0); }
-  // Skip a bus message that bin/wake-peer.mjs typed into this pane to wake us. It ARRIVES as a user
-  // prompt, but it is a peer talking, not the human setting a new objective — carding it would put
-  // another agent's words on the board as this session's focus, and the message is already in the log
-  // as a `message` event from its real author.
-  if (/^\[trantor\]\s+📨\s+DIRECT from /.test(trimmed)) { process.stdout.write("{}"); process.exit(0); }
   const project = resolveProject(cwd);
   const session = process.env.RELAY_SESSION
     || (process.env.RELAY_AGENT ? `${process.env.RELAY_AGENT}:${project}` : `${hostId()}:${project}`);
