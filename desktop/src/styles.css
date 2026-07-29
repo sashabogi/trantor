@@ -1,0 +1,17 @@
+@import "tailwindcss";
+
+/* Trantor's palette — already in use by crew-runner.mjs for seat status, so the app and the
+   terminal seats speak the same colour language. Deliberately NOT Buzz's yellow. */
+@theme {
+  --color-tr-bg:      #0f1115;
+  --color-tr-panel:   #161a21;
+  --color-tr-edge:    #232935;
+  --color-tr-text:    #e6e9ef;
+  --color-tr-muted:   #8a94a6;   /* idle */
+  --color-tr-ok:      #14b8a6;   /* done  */
+  --color-tr-doing:   #4a90d9;   /* building */
+  --color-tr-fail:    #ef6a6a;   /* error */
+  --color-tr-warn:    #d9a441;
+}
+html, body, #root { height: 100%; }
+body { background: var(--color-tr-bg); color: var(--color-tr-text); }
