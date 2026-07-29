@@ -177,3 +177,53 @@ pub async fn request(identity: &str, base: &str, method: &str, path: &str, body:
     let text = res.text().await.map_err(|e| e.to_string())?;
     Ok((status, text))
 }
+
+/// Open the hub's SSE stream and hand each event to `on_event`.
+///
+/// In Rust rather than the webview for the same reason as request(): macOS ATS blocks cleartext HTTP
+/// from WKWebView. It also means EventSource's absence costs us nothing — we were already parsing
+/// frames by hand because EventSource cannot send auth headers.
+///
+/// Reconnect is ours to own: backoff capped so a hub restart recovers fast while a dead network does
+/// not spin, and `since` resumes from the last id so a reconnect never drops events.
+pub async fn stream(identity: &str, base: &str, mut on_event: impl FnMut(String)) {
+    use futures_util::StreamExt;
+    let mut last_id: u64 = 0;
+    let mut backoff = 1u64;
+    loop {
+        let path = if last_id > 0 { format!("/stream?events=1&since={last_id}") } else { "/stream?events=1".into() };
+        let headers = match sign(identity, "GET", &path, None) { Ok(h) => h, Err(_) => return };
+        let client = match reqwest::Client::builder().build() { Ok(c) => c, Err(_) => return };
+        let mut req = client.get(format!("{}{}", base.trim_end_matches('/'), path));
+        for (k, v) in headers { req = req.header(k, v); }
+
+        match req.send().await {
+            Ok(res) if res.status().is_success() => {
+                backoff = 1;
+                let mut buf = String::new();
+                let mut body = res.bytes_stream();
+                while let Some(chunk) = body.next().await {
+                    let Ok(bytes) = chunk else { break };
+                    buf.push_str(&String::from_utf8_lossy(&bytes));
+                    // A chunk can split a frame, so only consume complete blank-line-delimited blocks.
+                    while let Some(sep) = buf.find("\n\n") {
+                        let frame: String = buf.drain(..sep + 2).collect();
+                        let (mut name, mut data) = (String::new(), String::new());
+                        for line in frame.lines() {
+                            if let Some(v) = line.strip_prefix("event:") { name = v.trim().to_string(); }
+                            else if let Some(v) = line.strip_prefix("data:") { data.push_str(v.trim()); }
+                            else if let Some(v) = line.strip_prefix("id:") {
+                                if let Ok(n) = v.trim().parse::<u64>() { last_id = n; }
+                            }
+                        }
+                        // The hub emits a NAMED `ev` channel; anything else is keepalive or legacy.
+                        if name == "ev" && !data.is_empty() { on_event(data); }
+                    }
+                }
+            }
+            _ => {}
+        }
+        tokio::time::sleep(std::time::Duration::from_secs(backoff)).await;
+        backoff = (backoff * 2).min(15);
+    }
+}

@@ -12,10 +12,12 @@
 //      streaming fetch (decision: Option A — one auth mechanism, not two; a token-in-URL scheme would
 //      have put secrets in logs and history AND added a second thing to get wrong).
 //
-//   2. Signing happens in RUST, never here. The private key lives in ~/.agent-bus/keys/*.json and the
-//      webview must never see it. The TS side asks Tauri to sign a request description and gets back
-//      headers. If we later move the whole stream into Rust (Option B), only this file changes.
+//   2. Signing AND transport both happen in RUST. The key lives in ~/.agent-bus/keys/*.json and the
+//      webview never sees it — nor a signature, nor even a header, only JSON. That was forced as well
+//      as chosen: macOS App Transport Security blocks cleartext HTTP from WKWebView, so fetch() to a
+//      hub on http://<tailnet>:4477 fails with an opaque "Load failed" that CSP cannot waive.
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 
 export type Scope = { project: string; role: "read" | "write" | "owner" };
 
@@ -34,11 +36,6 @@ export type Peer = {
   session: string; project?: string; status?: string;
   lastSeen?: number; online?: boolean; hookVersion?: string;
 };
-
-/** Rust returns the four signature headers for one request description. */
-async function signHeaders(method: string, path: string, body?: string): Promise<Record<string, string>> {
-  return invoke<Record<string, string>>("sign_request", { method, path, body: body ?? null });
-}
 
 export class HubClient {
   constructor(readonly baseUrl: string) {}
@@ -80,58 +77,26 @@ export class HubClient {
    *   • reconnect uses exponential backoff, and resumes from the last id so nothing is missed
    * Returns an unsubscribe function.
    */
-  streamEvents(onEvent: (e: HubEvent) => void, onState?: (s: "open" | "closed" | "retrying") => void) {
-    let stop = false, retry = 0, lastId = 0;
-    const ctrl = { abort: () => {} };
-
-    const run = async () => {
-      while (!stop) {
-        const ac = new AbortController();
-        ctrl.abort = () => ac.abort();
-        try {
-          const path = `/stream?events=1${lastId ? `&since=${lastId}` : ""}`;
-          const headers = await signHeaders("GET", path);
-          const res = await fetch(this.baseUrl + path, { headers, signal: ac.signal });
-          if (!res.ok || !res.body) throw new Error(`stream ${res.status}`);
-          onState?.("open");
-          retry = 0;
-
-          const reader = res.body.getReader();
-          const dec = new TextDecoder();
-          let buf = "";
-          while (!stop) {
-            const { done, value } = await reader.read();
-            if (done) break;
-            buf += dec.decode(value, { stream: true });
-            let sep: number;
-            // A chunk can end mid-frame, so only consume up to the last complete blank-line break.
-            while ((sep = buf.indexOf("\n\n")) >= 0) {
-              const frame = buf.slice(0, sep); buf = buf.slice(sep + 2);
-              let name = "message", data = "";
-              for (const line of frame.split("\n")) {
-                if (line.startsWith("event:")) name = line.slice(6).trim();
-                else if (line.startsWith("data:")) data += line.slice(5).trim();
-                else if (line.startsWith("id:")) lastId = Number(line.slice(3).trim()) || lastId;
-              }
-              if (name !== "ev" || !data) continue;   // ignore keepalives and the legacy channel
-              try {
-                const ev = JSON.parse(data) as HubEvent;
-                if (ev.id && ev.id > lastId) lastId = ev.id;
-                onEvent(ev);
-              } catch { /* a malformed frame must never kill the stream */ }
-            }
-          }
-        } catch {
-          if (stop) break;
-          onState?.("retrying");
-          // Backoff caps at 15s: a hub restart should reconnect quickly, a dead network shouldn't spin.
-          await new Promise(r => setTimeout(r, Math.min(1000 * 2 ** retry++, 15000)));
-        }
-      }
-      onState?.("closed");
-    };
-    void run();
-    return () => { stop = true; ctrl.abort(); };
+  /**
+   * Live event stream, fed by RUST (see identity.rs::stream).
+   *
+   * EventSource was never an option — it cannot send our four auth headers. The fetch+ReadableStream
+   * version that replaced it then hit macOS App Transport Security, which blocks cleartext HTTP from
+   * the webview and cannot be waived by CSP. So frame parsing, reconnect, backoff and `since` resume
+   * all live in Rust, and the webview just receives parsed JSON on a Tauri event.
+   */
+  streamEvents(onEvent: (e: HubEvent) => void, onOpen?: () => void) {
+    let unlisten: (() => void) | undefined;
+    let stopped = false;
+    void (async () => {
+      unlisten = await listen<string>("hub-event", ev => {
+        if (stopped) return;
+        try { onEvent(JSON.parse(ev.payload) as HubEvent); } catch { /* a bad frame must not kill the feed */ }
+      });
+      await invoke("start_stream", { base: this.baseUrl });
+      onOpen?.();   // connected — distinct from "an event arrived", which may be much later on an idle project
+    })();
+    return () => { stopped = true; unlisten?.(); };
   }
 }
 

@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { HubClient, hubForProject, knownProjects } from "../shared/api/client";
 import { Board } from "../features/board/Board";
+import { Feed } from "../features/feed/Feed";
 
 // Umbrella grouping: a project prefix becomes a sidebar SECTION rather than a nested tree. Slack has
 // no sub-channels for good reasons, and 85% of this board is one Crebral program.
@@ -17,7 +18,10 @@ function group(projects: string[]) {
   return [...out.entries()].sort((a, b) => b[1].length - a[1].length);
 }
 
+type Lens = "board" | "feed";
+
 export function AppShell() {
+  const [lens, setLens] = useState<Lens>("board");
   const [projects, setProjects] = useState<string[]>([]);
   const [active, setActive] = useState<string>("");
   const [hub, setHub] = useState<string>("");
@@ -50,9 +54,20 @@ export function AppShell() {
           {hub ? hub.replace(/^https?:\/\//, "") : "resolving hub…"}
         </div>
       </aside>
-      <main className="min-w-0 flex-1">
+      <main className="flex min-w-0 flex-1 flex-col">
+        <div className="flex gap-1 border-b border-[var(--color-tr-edge)] px-4 py-2">
+          {(["board", "feed"] as Lens[]).map(l => (
+            <button key={l} onClick={() => setLens(l)}
+              className={`rounded px-3 py-1 text-xs uppercase tracking-wide ${
+                lens === l ? "bg-black/40 text-[var(--color-tr-text)]" : "text-[var(--color-tr-muted)] hover:bg-black/20"}`}>
+              {l}
+            </button>
+          ))}
+        </div>
         {client && active
-          ? <Board client={client} project={active} />
+          ? (lens === "board"
+              ? <Board client={client} project={active} />
+              : <Feed client={client} project={active} />)
           : <div className="p-6 text-sm text-[var(--color-tr-muted)]">No projects pinned. Run: trantor hub set &lt;project&gt; &lt;url&gt;</div>}
       </main>
     </div>
