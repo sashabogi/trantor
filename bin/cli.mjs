@@ -25,7 +25,36 @@ switch (cmd) {
   case "up":      process.argv.splice(2, 1); spawn("/bin/bash", [join(ROOT, "bin/crew.sh"), "up", ...args], { stdio: "inherit", cwd: process.cwd() }).on("exit", c => process.exit(c ?? 0)); break;
   case "down":    spawn("/bin/bash", [join(ROOT, "bin/crew.sh"), "down", ...args], { stdio: "inherit", cwd: process.cwd() }).on("exit", c => process.exit(c ?? 0)); break;
   case "swap":    spawn("/bin/bash", [join(ROOT, "bin/crew.sh"), "swap", ...args], { stdio: "inherit", cwd: process.cwd() }).on("exit", c => process.exit(c ?? 0)); break;
-  case "hub":     run("hub.mjs"); break;
+  case "hub": {
+    const sub = args[0];
+    // Per-project hub routing (TDD §12.1): a project lives on exactly ONE hub; codependent
+    // projects MUST share one. The mapping lives in ~/.agent-bus/config.json `hubs`.
+    if (sub === "list" || sub === "set" || sub === "unset") {
+      const { readConfig, setProjectHub, unsetProjectHub, resolveProject, resolveHub, DEFAULT_HUB_URL } = await import(join(ROOT, "lib/project.mjs"));
+      if (sub === "list") {
+        const cfg = readConfig();
+        const here = resolveProject();
+        console.log(`global default: ${cfg.url || DEFAULT_HUB_URL}${cfg.url ? "" : " (built-in)"}`);
+        const hubs = cfg.hubs && typeof cfg.hubs === "object" ? Object.entries(cfg.hubs) : [];
+        if (!hubs.length) console.log("no per-project pins — every project uses the global default");
+        for (const [p, u] of hubs) console.log(`${p === here ? "*" : " "} ${p} → ${u}`);
+        console.log(`effective hub for this project (${here}): ${resolveHub(here)}`);
+      } else if (sub === "set") {
+        const [, project, url] = args;
+        if (!project || !url) { console.error("usage: trantor hub set <project> <url>"); process.exit(1); }
+        try { setProjectHub(project, url); }
+        catch (e) { console.error(`error: ${e.message}`); process.exit(1); }
+        console.log(`${project} → ${String(url).replace(/\/+$/, "")} (pinned in ~/.agent-bus/config.json)`);
+      } else {
+        const project = args[1];
+        if (!project) { console.error("usage: trantor hub unset <project>"); process.exit(1); }
+        const had = unsetProjectHub(project);
+        console.log(had ? `${project} unpinned — falls back to the global default` : `${project} had no per-project pin`);
+      }
+      break;
+    }
+    run("hub.mjs"); break;
+  }
   case "watch":   run("bin/relay-watch.mjs"); break;
   case "catchup": run("bin/catchup.mjs"); break;
   case "agents":  run("bin/agents.mjs"); break;
@@ -129,6 +158,7 @@ switch (cmd) {
   trantor handoff     finish this session NOW: write a handoff, open a fresh session that takes over, and close this one (manual baton)
   trantor advise      ask the Advisor directly (JSON on stdin; --demo to see it)
   trantor hub         run the hub in the foreground (setup installs it as a service instead)
+                      …or manage per-project hub pins: hub list · hub set <project> <url> · hub unset <project>
   trantor watch       live bus feed in the terminal
 
 Claude Code plugin (the orchestrator side):

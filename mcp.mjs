@@ -5,27 +5,23 @@
 // Loading this server AUTO-REGISTERS the session — so presence works on every agent.
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import { readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
+import { writeFileSync, existsSync, mkdirSync } from "node:fs";
 import { join, basename } from "node:path";
 import { homedir, hostname } from "node:os";
 import { execSync, spawnSync } from "node:child_process";
 import { advise } from "./bin/advise.mjs";
-import { resolveProject, hostId } from "./lib/project.mjs";
+import { resolveProject, hostId, resolveHub } from "./lib/project.mjs";
 import { signedPost, getJSON } from "./hooks/lib/api.mjs";
+import { assertNoSecrets } from "./lib/scrub.mjs";
 import { z } from "zod";
 
-function relayUrl() {
-  if (process.env.RELAY_URL) return process.env.RELAY_URL;
-  try {
-    const cfg = join(homedir(), ".agent-bus", "config.json");
-    if (existsSync(cfg)) { const u = JSON.parse(readFileSync(cfg, "utf8")).url; if (u) return u; }
-  } catch {}
-  return "http://127.0.0.1:4477";
-}
-const URL_BASE = relayUrl();
 // Stable project key: RELAY_PROJECT > git-repo-root basename > cwd basename. Keying by
 // the git root (not a loose cwd basename) stops one repo fragmenting into several lanes.
 const PROJECT = resolveProject(process.env.CLAUDE_PROJECT_DIR || process.cwd());
+// Hub URL is PER-PROJECT (TDD §12.1): RELAY_URL env → config.json hubs[PROJECT] → legacy
+// global `url` → local default. A project lives on exactly one hub; codependent projects
+// must share one, so both are pinned to the same hub via `trantor hub set`.
+const URL_BASE = resolveHub(PROJECT);
 // Identity: RELAY_SESSION wins; else RELAY_AGENT ("codex", "kimi", …) brands the session per-project
 // (set it once in the CLI's global MCP config — works in every project); else hostname:project.
 const SESSION = process.env.RELAY_SESSION
@@ -178,6 +174,12 @@ server.tool("relay_peers", "List other Claude sessions connected to the relay (o
 server.tool("relay_send", "Send a live message to another Claude session (or 'all' to broadcast).",
   { to: z.string().describe("target session id, or 'all'"), text: z.string().describe("message body") },
   async ({ to, text }) => {
+    // The event log is append-only — a secret in it is unrecoverable, so refuse BEFORE
+    // anything reaches the hub. Returns the offending kinds so the caller can fix it.
+    const scrub = assertNoSecrets(text);
+    if (!scrub.ok) {
+      return { content: [{ type: "text", text: `REFUSED — not sent. Credential-shaped string(s) detected: ${scrub.kinds.join(", ")}. Remove them and resend.` }], isError: true };
+    }
     const { id } = await api("POST", "/send", { from: SESSION, to, text });
     return { content: [{ type: "text", text: `sent #${id} to ${to}` }] };
   });

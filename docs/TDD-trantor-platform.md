@@ -93,6 +93,63 @@ state.orgPolicy = {
 `state.peers` keeps its display name. **Identity is the pubkey; the label is cosmetic.** That alone
 resolves the seat/orchestrator collision.
 
+## 6b. Tenancy — `org_id` from day one (decided 2026-07-29)
+
+Every scoped row carries an **`org_id`**, and there is a minimal `orgs` table, from the first
+migration. Not because multi-tenant SaaS is a near-term goal — it is still a non-goal (§2) — but
+because adding a tenant discriminator to an EMPTY schema is free, and adding it after 1,542 cards
+and six Crebral projects have migrated is surgery on live data. Buzz reached the same conclusion
+the expensive way: their multi-tenant spec exists precisely to collapse a relay-per-community
+boundary into a row-level one after the fact.
+
+```
+orgs(id, name, created_at, owner_pubkey)
+org_members(org_id, pubkey, role)              -- role: owner|admin|member
+<every scoped table>.org_id                    -- events, tasks, messages, peers, gates, …
+```
+
+Identity scoping becomes two levels: **org** (who you are with) and **project** (what you may
+touch). Phase 0 shipped project scopes; this adds the level above.
+
+## 6c. Cross-machine collision detection is a DIFFERENT implementation
+
+The overseer's cheapest, most certain local signal — *same git root, two live sessions* — is
+**local-only and does not transfer to teams.** Agents run on each developer's own machine against
+their own clone; there is no shared filesystem to compare. The hub carries messages, cards,
+presence and events — never code, never a working tree.
+
+Cross-machine signals, in priority order for the same-repo case (two people, one repo — the
+Sasha/Julian pilot):
+
+1. **Declared file intent — build this first.** Hooks already parse tool input (`todo-sync` does it
+   for TodoWrite), so a PostToolUse hook can publish *"session X is editing `<path>`"* as an event.
+   A peer's session is then warned that someone touched that file seconds ago. Mechanical,
+   cross-machine, and needs no GitHub. **This is the teams feature.**
+2. **Git remote state** — branches, pushes, open PRs on the shared remote. Good for "already
+   pushed", useless for "editing right now".
+3. **Card claims** — coarse; exists today; weakest.
+
+Privacy note: a file *path* is far less sensitive than file *content*, but it is still codebase
+structure — it must obey the same org/project scoping as everything else.
+
+## 6d. Team authentication — GitHub device flow (design)
+
+For teams, humans authenticate with **GitHub's device flow** (the `gh auth login` pattern: CLI
+prints a code, user pastes it in a browser), **not web OAuth** — web OAuth needs a public callback
+URL, which would force the hub onto the public internet and discard the tailnet posture.
+
+GitHub login authenticates the **human**; the Ed25519 keypair still authenticates the **session**.
+It replaces the invite *token* as the proof, not the enrollment mechanism: "prove you are @julian"
+binds that machine's pubkey to that identity. Agents keep their own keys regardless.
+
+`resolveProject()` already keys off the git repo root, so `github.com/org/repo → project` is a
+natural join and repo collaborators make a sensible **default** roster — but only a default: a
+project may span repos (crebral-cortex + crebral-health are one program, two repos) and a
+collaborator may not need board access.
+
+*Not built for the pilot.* One friend needs `trantor invite` + `trantor enroll`, which shipped in
+Phase 0. Device flow is a scale feature.
+
 ## 7. Phase 0 — identity and authentication
 
 ### 7.1 Scheme: Ed25519, native, zero dependencies

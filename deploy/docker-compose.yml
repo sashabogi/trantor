@@ -1,0 +1,29 @@
+# trantor netcup deploy — Dockerised Postgres for the relay hub.
+# Start:  docker compose -f deploy/docker-compose.yml up -d
+# Stop:   docker compose -f deploy/docker-compose.yml down
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: trantor-pg
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: trantor
+      POSTGRES_PASSWORD: ${PG_PASSWORD:?set PG_PASSWORD in .env}
+      POSTGRES_DB: trantor
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    ports:
+      - "127.0.0.1:5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U trantor -d trantor"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  pgdata:

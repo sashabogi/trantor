@@ -9,11 +9,17 @@ import { readFileSync, writeFileSync, existsSync, mkdirSync, statSync, readdirSy
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { verifyRequest, publicView } from "./lib/identity.mjs";
+import { DEFAULT_ORG } from "./lib/store-contract.mjs";
+import { assertNoSecrets } from "./lib/scrub.mjs";
 
 const PORT = Number(process.env.RELAY_PORT || 4477);
 const HOST = process.env.RELAY_HOST || "127.0.0.1";
 const DATA_DIR = process.env.RELAY_DATA_DIR || join(homedir(), ".agent-bus");
-const DATA = join(DATA_DIR, "bus.json");
+const DATA = process.env.RELAY_STATE || join(DATA_DIR, "bus.json");
+const RAW_STORE_KIND = String(process.env.RELAY_STORE || "").toLowerCase();
+const PG_URL = process.env.RELAY_DATABASE_URL || process.env.POSTGRES_URL || ((RAW_STORE_KIND === "pg" || RAW_STORE_KIND === "postgres") ? process.env.DATABASE_URL : "");
+const STORE_KIND = RAW_STORE_KIND || (PG_URL ? "pg" : "json");
+const ORG_ID = process.env.RELAY_ORG_ID || DEFAULT_ORG;
 const AUTH_MODE = ["off", "warn", "enforce"].includes(process.env.RELAY_AUTH) ? process.env.RELAY_AUTH : "warn";
 const ENROLL_MODE = process.env.RELAY_ENROLL || "tofu";
 const ONLINE_MS = Number(process.env.RELAY_ONLINE_MS || 5 * 60 * 1000);
@@ -78,20 +84,80 @@ function scanTelemetry() {
 // their legacy flat shape + legacy type names ("created"/"moved"/"updated") so /history and the
 // TIMELINE view are untouched; every NEW type is dotted ("message", "presence.online", …) and is
 // filtered OUT of /history. Loads from the old `cardEvents` key when `events` is absent.
-let state = { messages: [], peers: {}, seq: 0, tasks: [], taskSeq: 0, projectMeta: {}, lessons: [], events: [], cardEventsBackfilled: false, aliases: {}, phaseMeta: {}, verifyGates: [], verifyGateSeq: 0, balances: { ts: 0, by: "", entries: [] }, subagentCostReset: false, handoffLog: [], identities: {}, inviteTokens: {} };
-try {
-  if (existsSync(DATA)) {
-    const loaded = JSON.parse(readFileSync(DATA, "utf8"));
-    state = { messages: loaded.messages || [], peers: {}, seq: loaded.seq || 0, tasks: loaded.tasks || [], taskSeq: loaded.taskSeq || 0, projectMeta: loaded.projectMeta || {}, lessons: loaded.lessons || [], events: Array.isArray(loaded.events) ? loaded.events : (Array.isArray(loaded.cardEvents) ? loaded.cardEvents : []), cardEventsBackfilled: !!loaded.cardEventsBackfilled, aliases: (loaded.aliases && typeof loaded.aliases === "object") ? loaded.aliases : {}, phaseMeta: (loaded.phaseMeta && typeof loaded.phaseMeta === "object") ? loaded.phaseMeta : {}, verifyGates: Array.isArray(loaded.verifyGates) ? loaded.verifyGates : [], verifyGateSeq: loaded.verifyGateSeq || 0, balances: (loaded.balances && typeof loaded.balances === "object") ? loaded.balances : { ts: 0, by: "", entries: [] }, subagentCostReset: !!loaded.subagentCostReset, handoffLog: Array.isArray(loaded.handoffLog) ? loaded.handoffLog : [], identities: (loaded.identities && typeof loaded.identities === "object") ? loaded.identities : {}, inviteTokens: (loaded.inviteTokens && typeof loaded.inviteTokens === "object") ? loaded.inviteTokens : {} };
-    for (const [s, v] of Object.entries(loaded.peers || {})) // migrate old numeric form
-      state.peers[s] = typeof v === "number" ? { lastSeen: v, status: "", project: "" } : { lastSeen: v.lastSeen || 0, status: v.status || "", project: v.project || "", pubkey: v.pubkey || "", identity: v.identity || null, authWarning: v.authWarning || "" };
+function emptyState() {
+  return { messages: [], peers: {}, seq: 0, tasks: [], taskSeq: 0, projectMeta: {}, lessons: [], events: [], cardEventsBackfilled: false, aliases: {}, phaseMeta: {}, verifyGates: [], verifyGateSeq: 0, balances: { ts: 0, by: "", entries: [] }, subagentCostReset: false, handoffLog: [], identities: {}, inviteTokens: {}, focus: {}, orgPolicy: {} };
+}
+
+function normalizeState(loaded = {}) {
+  const s = emptyState();
+  s.messages = Array.isArray(loaded.messages) ? loaded.messages : [];
+  s.seq = Number(loaded.seq || 0);
+  s.tasks = Array.isArray(loaded.tasks) ? loaded.tasks : [];
+  s.taskSeq = Number(loaded.taskSeq || Math.max(0, ...s.tasks.map(t => Number(t.id) || 0))) || 0;
+  s.projectMeta = loaded.projectMeta && typeof loaded.projectMeta === "object" ? loaded.projectMeta : {};
+  s.lessons = Array.isArray(loaded.lessons) ? loaded.lessons : [];
+  s.events = Array.isArray(loaded.events) ? loaded.events : (Array.isArray(loaded.cardEvents) ? loaded.cardEvents : []);
+  s.cardEventsBackfilled = !!loaded.cardEventsBackfilled;
+  s.aliases = loaded.aliases && typeof loaded.aliases === "object" ? loaded.aliases : {};
+  s.phaseMeta = loaded.phaseMeta && typeof loaded.phaseMeta === "object" ? loaded.phaseMeta : {};
+  s.verifyGates = Array.isArray(loaded.verifyGates) ? loaded.verifyGates : [];
+  s.verifyGateSeq = Number(loaded.verifyGateSeq || Math.max(0, ...s.verifyGates.map(g => Number(g.id) || 0))) || 0;
+  s.balances = loaded.balances && typeof loaded.balances === "object" ? loaded.balances : { ts: 0, by: "", entries: [] };
+  s.subagentCostReset = !!loaded.subagentCostReset;
+  s.handoffLog = Array.isArray(loaded.handoffLog) ? loaded.handoffLog : [];
+  s.identities = loaded.identities && typeof loaded.identities === "object" ? loaded.identities : {};
+  s.inviteTokens = loaded.inviteTokens && typeof loaded.inviteTokens === "object" ? loaded.inviteTokens : {};
+  s.focus = loaded.focus && typeof loaded.focus === "object" ? loaded.focus : {};
+  s.orgPolicy = loaded.orgPolicy && typeof loaded.orgPolicy === "object" ? loaded.orgPolicy : {};
+  for (const [session, v] of Object.entries(loaded.peers || {})) {
+    // migrate old numeric form
+    s.peers[session] = typeof v === "number"
+      ? { lastSeen: v, status: "", project: "" }
+      : { lastSeen: v.lastSeen || 0, status: v.status || "", project: v.project || "", pubkey: v.pubkey || "", identity: v.identity || null, authWarning: v.authWarning || "", hookVersion: v.hookVersion || "", deliveredUpTo: v.deliveredUpTo || v.delivered_up_to || 0, _on: v._on === true || v.online === true };
   }
-} catch {}
+  return s;
+}
+
+let durableStore = null;
+let state = emptyState();
+if (STORE_KIND === "pg" || STORE_KIND === "postgres") {
+  try {
+    const { createPgStore } = await import("./lib/store-pg.mjs");
+    durableStore = createPgStore({ url: PG_URL });
+    await durableStore.init();
+    if (ORG_ID !== DEFAULT_ORG) await durableStore.createOrg({ id: ORG_ID, name: ORG_ID, ownerPubkey: "local-owner" });
+    state = normalizeState(await durableStore.loadSnapshot(ORG_ID));
+  } catch (e) {
+    process.stderr.write(`[trantor] failed to initialise Postgres store: ${e.message || e}\n`);
+    process.exit(1);
+  }
+} else {
+  try {
+    if (existsSync(DATA)) state = normalizeState(JSON.parse(readFileSync(DATA, "utf8")));
+  } catch {}
+}
 let dirty = false;
 // Persist the unified log under `events`, AND mirror the card-only subset under the legacy
 // `cardEvents` key — so downgrading to a pre-0.17.54 hub still boots with its full TIMELINE
 // instead of a silently empty history. Cheap insurance on a live hub; drop the mirror later.
-const persist = () => { if (dirty) { try { writeFileSync(DATA, JSON.stringify({ ...state, cardEvents: state.events.filter(isCardEvent) })); dirty = false; } catch {} } };
+let persisting = false;
+const snapshotState = () => JSON.parse(JSON.stringify({ ...state, cardEvents: state.events.filter(e => ["created", "moved", "updated"].includes(e?.type)) }));
+const persist = () => {
+  if (!dirty || persisting) return;
+  if (durableStore) {
+    const snapshot = snapshotState();
+    dirty = false; persisting = true;
+    durableStore.saveSnapshot(ORG_ID, snapshot).catch(e => {
+      dirty = true;
+      process.stderr.write(`[trantor] Postgres persist failed: ${e.message || e}\n`);
+    }).finally(() => {
+      persisting = false;
+      if (dirty) persist();
+    });
+    return;
+  }
+  try { writeFileSync(DATA, JSON.stringify(snapshotState())); dirty = false; } catch {}
+};
 setInterval(persist, 1000).unref?.();
 // One-time migration: collapse legacy un-deduped cc-subagent cards. Each SubagentStop minted a fresh
 // card, and the infra recall/last-handoff sub-agents fire EVERY session → hundreds of near-identical
@@ -1407,13 +1473,16 @@ const server = http.createServer(async (req, res) => {
     }
     if (req.method === "POST" && P === "/send") {
       const b = await body(req);
-      if (!b.from || !String(b.text ?? "").trim()) return json(res, 400, { error: "from and non-empty text required" });
+      const text = String(b.text ?? "");
+      if (!b.from || !text.trim()) return json(res, 400, { error: "from and non-empty text required" });
+      const secretCheck = assertNoSecrets(text);
+      if (!secretCheck.ok) return json(res, 400, { error: "secret detected", kinds: secretCheck.kinds || [] });
       if (auth?.identity && String(b.from) !== String(auth.identity.name || "")) return json(res, 403, { error: "from must match signer" });
       touch(b.from, undefined, undefined, undefined, auth);
       // attribute the message to a project so the dashboard can show it in that project's lane.
       // explicit b.project wins; else the sender's known project; else parsed from a "host:project" id.
       const fromProj = state.peers[b.from]?.project || (b.from && b.from.includes(":") ? b.from.split(":").pop() : "");
-      const msg = { id: ++state.seq, ts: now(), from: b.from || "anon", to: b.to || "all", text: String(b.text ?? ""), project: String(b.project || fromProj || "").slice(0, 80) };
+      const msg = { id: ++state.seq, ts: now(), from: b.from || "anon", to: b.to || "all", text, project: String(b.project || fromProj || "").slice(0, 80) };
       state.messages.push(msg); if (state.messages.length > 5000) state.messages.splice(0, 1000);
       dirty = true; pushToStreams(msg);               // <-- instant push to live watchers
       // Mirror onto the unified log. `refs` = the card ids this message cites (#3701), which is what

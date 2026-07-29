@@ -7,7 +7,8 @@
 //
 // This module wraps lib/signed-fetch.mjs (the frozen interface contract from #3916) with three
 // things every caller needs and none of them should re-implement:
-//   1. hub URL resolution (env RELAY_URL → ~/.agent-bus/config.json → 127.0.0.1:4477)
+//   1. hub URL resolution, per-project (env RELAY_URL → config.json hubs[project] → config.json
+//      url → 127.0.0.1:4477) — TDD §12.1: a project lives on exactly one hub
 //   2. session identity resolution (RELAY_SESSION → RELAY_AGENT:project → hostId:project) — the
 //      SAME derivation mcp.mjs uses, so we sign as the peer the relay registered
 //   3. the Ed25519 keypair for that name (loadOrCreate: atomic, 0600, race-safe)
@@ -22,21 +23,19 @@
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
-import { resolveProject, hostId } from "../../lib/project.mjs";
+import { resolveProject, hostId, resolveHub } from "../../lib/project.mjs";
 import { loadOrCreate } from "../../lib/identity.mjs";
 import { sfetchJson } from "../../lib/signed-fetch.mjs";
 
 export const DEFAULT_TIMEOUT_MS = 1500;
 
-// Hub URL. Env wins (tests / explicit override), then the shared config the CLI writes, then the
-// local default. Reading the config here means a hook works the moment `trantor` has been run once.
-export function relayUrl() {
-  if (process.env.RELAY_URL) return process.env.RELAY_URL;
-  try {
-    const cfg = join(homedir(), ".agent-bus", "config.json");
-    if (existsSync(cfg)) { const u = JSON.parse(readFileSync(cfg, "utf8")).url; if (u) return u; }
-  } catch {}
-  return "http://127.0.0.1:4477";
+// Hub URL, PER-PROJECT (TDD §12.1): a project resolves to exactly one hub; codependent projects
+// share one. Env RELAY_URL wins (tests / explicit override / crew seats), then the per-project
+// `hubs` map in the shared config, then the legacy global `url`, then the local default. Reading
+// the config here means a hook works the moment `trantor` has been run once. resolveHub never
+// throws, keeping hooks fail-open.
+export function relayUrl(project) {
+  return resolveHub(project || sessionContext().project);
 }
 
 // The session identity name + project, resolved EXACTLY as mcp.mjs / every prior hook did, so the

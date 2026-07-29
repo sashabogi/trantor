@@ -266,6 +266,10 @@ AGENT=""; MODEL=""
 resolve_spec() {
   local SPEC="$1" FIELD
   AGENT="${SPEC%%:*}"; MODEL=""
+  # Replace, never stack. Reaps here — as a plain statement — because the alternative home, RUN_CMD,
+  # is always invoked as `cmd="$(RUN_CMD)"`, and command substitution would swallow run()'s output
+  # into the launcher string. AGENT is set above and DIR is fixed, so this is the earliest safe point.
+  reap_seat
   FIELD=""; [ "$SPEC" != "$AGENT" ] && FIELD="${SPEC#*:}"
   [ "$AGENT" = "openrouter" ] && [ -z "$FIELD" ] && FIELD="openrouter"
   if [ -n "$FIELD" ]; then
@@ -277,6 +281,27 @@ resolve_spec() {
     esac
   fi
 }
+# Kill any runner ALREADY serving this exact agent+project before starting another.
+#
+# Without this, `trantor up <agent>` ADDS a runner instead of replacing one — and every duplicate
+# long-polls the SAME inbox, so a single contract wakes N runners and each burns a full CLI turn on
+# the same card, racing to edit the same files. Observed 2026-07-29 on one project: codex x2, glm x3,
+# deepseek x3; three byte-identical "#3931 doing" broadcasts seconds apart; an OpenRouter key at $55
+# against a $20 cap; a seat blowing its context window at 362k tokens. It read as heavy usage. It was
+# duplicated usage.
+#
+# Scoped to agent+project on purpose: re-firing one seat must not disturb its siblings, and a crew in
+# another project is never ours to touch.
+reap_seat() {
+  local pid
+  for pid in $(pgrep -f "crew-runner\.mjs $AGENT $DIR" 2>/dev/null); do
+    run "kill -9 $pid 2>/dev/null"
+  done
+}
+# RUN_CMD must stay PURE: every caller invokes it as `cmd="$(RUN_CMD)"`, i.e. command substitution,
+# which captures ALL stdout. Anything that prints — including run()'s `[dry]` echo — would be swallowed
+# into the command string and end up inside the launcher. The reap therefore lives in resolve_spec(),
+# which every spawn path calls as a plain statement immediately before this.
 RUN_CMD() { printf 'cd %q && CREW_MODEL=%q RELAY_PROJECT=%q node %q %q %q' "$DIR" "$MODEL" "$PROJ" "$BUS_DIR/bin/crew-runner.mjs" "$AGENT" "$DIR"; }
 
 # ── tmux spawn: ONE session `trantor:$PROJ`, one named pane per seat, one Terminal window attached ────

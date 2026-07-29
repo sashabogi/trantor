@@ -59,7 +59,12 @@ const CMUX_BIN = process.env.CMUX_BIN
 const inCmux = () => !!process.env.CMUX_SURFACE_ID;
 function cmuxStatus(value, color, icon = "robot") {
   if (!inCmux()) return;
-  try { spawnSync(CMUX_BIN, ["set-status", "trantor", value, "--color", color, "--icon", icon], { stdio: "ignore", timeout: 1500, env: { ...process.env, CMUX_QUIET: "1" } }); } catch {}
+  // Label with the REAL seat identity, not a literal. This was hardcoded to "trantor", so every seat
+  // in every project reported under one name — four different agents (and their duplicates) rendered
+  // identically in the sidebar, which is why a runner leak looked like mystery sessions instead of
+  // obvious duplicates. Note this is the DISPLAY path; two previous fixes to the crossed-label
+  // symptom both landed on the *bus* identity and never touched this line.
+  try { spawnSync(CMUX_BIN, ["set-status", SESSION, value, "--color", color, "--icon", icon], { stdio: "ignore", timeout: 1500, env: { ...process.env, CMUX_QUIET: "1" } }); } catch {}
 }
 function cmuxLog(message, level = "info") {
   if (!inCmux()) return;

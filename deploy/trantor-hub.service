@@ -1,0 +1,50 @@
+# trantor hub — systemd service for Debian 13 (netcup).
+# Install: sudo cp deploy/trantor-hub.service /etc/systemd/system/ && sudo systemctl daemon-reload
+
+[Unit]
+Description=trantor relay hub (agent bus + dashboard)
+After=network-online.target docker.service
+Wants=network-online.target
+Requires=docker.service
+
+[Service]
+Type=simple
+User=trantor
+Group=trantor
+WorkingDirectory=/opt/trantor
+ExecStart=/usr/bin/node /opt/trantor/hub.mjs
+Restart=always
+RestartSec=10
+
+# Bind tailnet IP 100.79.242.104 (non-loopback).
+# hub.mjs L39-42 REFUSES non-loopback unless RELAY_AUTH=enforce.
+Environment=RELAY_HOST=100.79.242.104
+Environment=RELAY_PORT=4477
+Environment=RELAY_AUTH=enforce
+Environment=RELAY_ENROLL=invite
+
+# Data directory — persistent, outside the repo.
+Environment=RELAY_DATA_DIR=/var/lib/trantor/data
+
+# TIME-based retention controls (all env-overridable; defaults shown).
+Environment=RELAY_EVENT_CAP=50000
+Environment=RELAY_ONLINE_MS=300000
+Environment=RELAY_PEER_TTL_MS=21600000
+Environment=RELAY_REAP_GRACE_MS=900000
+
+# Postgres connection (pg-store lands via #3931).
+EnvironmentFile=-/etc/trantor/pg.env
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=trantor-hub
+
+# Security hardening
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/var/lib/trantor /tmp
+ReadOnlyPaths=/opt/trantor
+
+[Install]
+WantedBy=multi-user.target
