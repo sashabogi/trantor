@@ -96,12 +96,33 @@ async fn card_code(project: String, card_id: i64, candidates: Vec<String>) -> Re
     let Some(dir) = project_dir(&project) else {
         return Ok(String::from("{\"dir\":null,\"files\":[],\"commits\":[],\"origin\":null}"));
     };
-    // files: candidates that really exist, confined to the repo (no traversal)
+    // files: resolve each cited path against the repo. Direct join first; then git's own index
+    // with a suffix pathspec — a monorepo crew cites paths relative to ITS app root
+    // ("lib/marketing/x.ts") while the file lives at apps/web/src/lib/marketing/x.ts, and
+    // `git ls-files '*<cited>'` finds it wherever it is (wildmatch spans directories).
     let mut files: Vec<String> = Vec::new();
+    let mut unresolved: Vec<String> = Vec::new();
     for c in candidates.iter().take(40) {
         if c.contains("..") { continue; }
-        let p = dir.join(c.trim_start_matches('/'));
-        if p.is_file() && files.len() < 20 && !files.contains(c) { files.push(c.clone()); }
+        let rel = c.trim_start_matches('/');
+        if dir.join(rel).is_file() {
+            if files.len() < 20 && !files.contains(&rel.to_string()) { files.push(rel.to_string()); }
+        } else {
+            unresolved.push(rel.to_string());
+        }
+    }
+    if !unresolved.is_empty() {
+        let mut args: Vec<String> = vec!["ls-files".into(), "--".into()];
+        for u in unresolved.iter().take(30) { args.push(format!("*{u}")); }
+        let out = tokio::process::Command::new("git")
+            .arg("-C").arg(&dir).args(&args)
+            .output().await.ok()
+            .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
+            .unwrap_or_default();
+        for line in out.lines() {
+            let f = line.trim().to_string();
+            if !f.is_empty() && files.len() < 20 && !files.contains(&f) { files.push(f); }
+        }
     }
     let git = |args: Vec<String>| {
         let dir = dir.clone();
