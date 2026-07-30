@@ -9,6 +9,7 @@ import { useEffect, useMemo, useState } from "react";
 import type { Card, HubClient } from "../../shared/api/client";
 import { CardDetail } from "./CardDetail";
 import { ProjectHeader } from "../project/ProjectHeader";
+import { AgentChip, cleanTitle } from "../../shared/Avatar";
 
 // Lane order matches the hub's own card flow: todo -> doing -> testing -> done, with the two
 // exception lanes last. `stale` comes from the reaper, `blocked` is set by hand.
@@ -50,9 +51,9 @@ function CardTile({ card, onOpen, onAdvance }: {
     <div
       onClick={() => onOpen(card)}
       className="tr-card tr-card-hover min-w-0 shrink-0 cursor-pointer overflow-hidden p-3.5 text-[13px]">
-      <div className="leading-snug break-words [overflow-wrap:anywhere]">{card.title}</div>
+      <div className="leading-snug break-words [overflow-wrap:anywhere]">{cleanTitle(card.title)}</div>
       <div className="mt-2 flex flex-wrap items-center gap-1.5 text-[11px] text-[var(--color-tr-muted)]">
-        {card.assignee && <span className="rounded bg-black/30 px-1.5 py-0.5">@{card.assignee}</span>}
+        {card.assignee && <AgentChip session={card.assignee} />}
         {card.difficulty && <span className="rounded bg-black/30 px-1.5 py-0.5">{card.difficulty[0].toUpperCase()}</span>}
         {card.model && <span className="tr-mono max-w-[150px] truncate rounded bg-black/30 px-1.5 py-0.5">{card.model}</span>}
         <span className="tr-mono ml-auto opacity-60">#{card.id}</span>

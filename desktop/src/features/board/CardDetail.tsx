@@ -6,6 +6,7 @@
 // the agent's own reports are in the messages, and the moves are in the events.
 import { useEffect, useState } from "react";
 import type { Card, HubClient, HubEvent, Message } from "../../shared/api/client";
+import { AgentChip, cleanTitle } from "../../shared/Avatar";
 
 // Same flow map as the board: testing is a real gate the crew protocol depends on, so the drawer
 // must not offer a shortcut the protocol forbids either.
@@ -100,10 +101,10 @@ export function CardDetail({ client, id, onClose, onMoved }: {
             })}
             <button onClick={onClose} className="ml-auto rounded px-2 text-[var(--color-tr-muted)] hover:text-[var(--color-tr-text)]">✕</button>
           </div>
-          <div className="mt-2 text-sm leading-snug">{task ? task.title : error ? `Card unavailable: ${error}` : "Loading…"}</div>
+          <div className="mt-2 text-sm leading-snug break-words">{task ? cleanTitle(task.title) : error ? `Card unavailable: ${error}` : "Loading…"}</div>
           {task && (
             <div className="mt-2 flex flex-wrap gap-1.5 text-[11px] text-[var(--color-tr-muted)]">
-              {task.assignee && <span className="rounded bg-black/30 px-1.5 py-0.5">@{task.assignee}</span>}
+              {task.assignee && <AgentChip session={task.assignee} />}
               {task.difficulty && <span className="rounded bg-black/30 px-1.5 py-0.5">{task.difficulty}</span>}
               {task.model && <span className="rounded bg-black/30 px-1.5 py-0.5">{task.model}</span>}
               {task.source && <span className="rounded bg-black/30 px-1.5 py-0.5">{task.source}</span>}

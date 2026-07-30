@@ -87,3 +87,42 @@ export function displayName(session: string, llm?: string): string {
   if (brand && HOSTISH.test(head)) return `${brand.label.toLowerCase().split(" ")[0]} · ${head}`;
   return head;
 }
+
+/** The bare tinted mark, for inline use next to a name — no circle. */
+export function BrandGlyph({ name, llm, size = 13 }: { name: string; llm?: string; size?: number }) {
+  const brand = brandFor(name, llm);
+  if (!brand) return null;
+  return (
+    <span aria-label={brand.label} title={brand.label}
+          style={{ color: brand.hex, fontSize: size, lineHeight: 0, display: "inline-flex" }}
+          dangerouslySetInnerHTML={{ __html: brand.svg }} />
+  );
+}
+
+/** One inline identity everywhere an agent is named: mark + LLM-first name + model when known. */
+export function AgentChip({ session, llm, model, size = 12 }: {
+  session: string; llm?: string; model?: string; size?: number;
+}) {
+  return (
+    <span className="tr-chip max-w-full">
+      <BrandGlyph name={session} llm={llm} size={size} />
+      <span className="truncate">{displayName(session, llm)}</span>
+      {model && <span className="tr-mono truncate opacity-75">{model}</span>}
+    </span>
+  );
+}
+
+/** Machine-generated card titles, made human-readable. The REAL fix is upstream (the focus hook now
+ * refuses to card harness-injected prompts; Scrooge-summarized titles are the follow-up) — this
+ * cleans what is ALREADY on the board and whatever still slips through. */
+export function cleanTitle(raw: string): string {
+  const s = String(raw ?? "");
+  if (/^\s*<task-notification>/i.test(s)) return "background task update";
+  if (/^\s*<teammate-message/i.test(s)) return "teammate message";
+  let t = s.replace(/<[^>]{1,120}>/g, " ");            // XML-ish frames
+  t = t.replace(/\[Image #\d+\]/g, " ");
+  t = t.replace(/^\s*(subagent|general-purpose|Explore|explore|Task|Plan):\s*/i, "");
+  t = t.replace(/^\s*(you are|you're)\s+/i, "");
+  t = t.replace(/\s+/g, " ").trim();
+  return t || "untitled";
+}

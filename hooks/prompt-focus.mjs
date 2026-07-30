@@ -33,6 +33,12 @@ try {
   const trimmed = prompt.replace(/\s+/g, " ").trim();
   // skip empties, tiny continuations, and pure acks — they're not a new focus
   if (!trimmed || trimmed.length < 12 || ACK.test(trimmed)) { process.stdout.write("{}"); process.exit(0); }
+  // HARNESS-INJECTED prompts are not a human's focus. Task notifications, hook system-reminders and
+  // protocol frames arrive through the same UserPromptSubmit channel, and carding one titled a board
+  // card "<task-notification> <task-id>bavlqfmzq</task-id>…" — pure noise a human cannot read.
+  if (/^\s*[<{[]/.test(trimmed) || /<task-notification>|<system-reminder>|<teammate-message/i.test(trimmed)) {
+    process.stdout.write("{}"); process.exit(0);
+  }
   const project = resolveProject(cwd);
   const session = process.env.RELAY_SESSION
     || (process.env.RELAY_AGENT ? `${process.env.RELAY_AGENT}:${project}` : `${hostId()}:${project}`);

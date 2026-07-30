@@ -7,6 +7,7 @@
 // ledger and profile.json are files on this machine); cards/peers/lessons ride the project hub.
 import { useEffect, useState } from "react";
 import { HubClient } from "../../shared/api/client";
+import { cleanTitle } from "../../shared/Avatar";
 import type { BalancesReport, Card, Economics, Handoff, Peer } from "../../shared/api/client";
 
 const LOCAL_HUB = "http://127.0.0.1:4477";
@@ -120,7 +121,7 @@ export function Home({ client, me, onOpenProject }: {
                       className="tr-card tr-card-hover flex items-center gap-3 p-3.5 text-left">
                 <span className="tr-dot shrink-0"
                       style={{ background: c.status === "stale" ? "var(--color-tr-muted)" : "var(--color-tr-fail)" }} />
-                <span className="min-w-0 flex-1 truncate text-[13px]">{c.title}</span>
+                <span className="min-w-0 flex-1 truncate text-[13px]">{cleanTitle(c.title)}</span>
                 <span className="tr-chip shrink-0">{c.project}</span>
                 <span className="tr-chip shrink-0">{c.status}</span>
               </button>

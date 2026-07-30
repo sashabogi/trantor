@@ -7,6 +7,7 @@ import { useEffect, useMemo, useState } from "react";
 import type { HubClient, HubEvent } from "../../shared/api/client";
 import { CardDetail } from "../board/CardDetail";
 import { ProjectHeader } from "../project/ProjectHeader";
+import { AgentChip, cleanTitle } from "../../shared/Avatar";
 
 const KIND_COLOR = (t: string) =>
   t === "message" ? "var(--color-tr-doing)"
@@ -34,16 +35,22 @@ function label(e: HubEvent): string {
   const any = e as Record<string, unknown>;
   if (t === "message") return String(any.text ?? "");
   if (CARD_TYPES.has(t)) {
-    const status = any.status ? ` → ${String(any.status)}` : "";
-    const title = any.title ? `: ${String(any.title)}` : "";
-    return `#${e.taskId ?? "?"} ${t}${status}${title}`;
+    // narrate the card's movement, not its schema: "#3986 → testing · P1-D Social UI"
+    const move = any.from && any.to ? `${String(any.from)} → ${String(any.to)}`
+      : any.status ? `→ ${String(any.status)}` : t;
+    const title = any.title ? ` · ${cleanTitle(String(any.title))}` : "";
+    return `#${e.taskId ?? "?"} ${move}${title}`;
   }
-  if (t.startsWith("presence")) return `${e.by ?? "?"} ${t.split(".")[1] ?? ""}`;
-  if (t.startsWith("handoff")) return `handoff written by ${e.by ?? "?"}`;
+  if (t === "focus") return `now working on: ${cleanTitle(String(any.title ?? ""))}`;
+  if (t === "file.claim") return `editing ${String(any.file ?? "a file")}`;
+  if (t === "file.conflict") return `⚠ editing ${String(any.file ?? "a file")} at the same time as ${Array.isArray(any.with) ? (any.with as string[]).join(", ") : "another session"}`;
+  if (t === "project.adopted") return `project adopted onto this hub`;
+  if (t === "lesson") return `recorded a lesson: ${cleanTitle(String(any.text ?? ""))}`;
+  if (t.startsWith("presence")) return `${t.split(".")[1] ?? t}`;
+  if (t.startsWith("handoff")) return `wrote a handoff`;
   if (t.startsWith("verify")) return `verify gate ${t.split(".").slice(1).join(" ")}`;
-  const rest = { ...any };
-  for (const k of ["ts", "type", "by", "project", "id"]) delete rest[k];
-  return JSON.stringify(rest).slice(0, 180);
+  const known = String(any.title ?? any.text ?? "");
+  return known ? cleanTitle(known) : t;
 }
 
 // The card an event leads to: card events carry taskId; a message mentions one as "#123".
@@ -123,7 +130,9 @@ export function Feed({ client, project, lens, onLens }: {
               <span className="tr-mono w-14 shrink-0 text-[11px] text-[var(--color-tr-muted)]">
                 {new Date(e.ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
               </span>
-              <span className="w-36 shrink-0 truncate text-[11px] text-[var(--color-tr-muted)]">{e.by ?? "—"}</span>
+              <span className="flex w-44 shrink-0 items-center gap-1.5 truncate text-[11px] text-[var(--color-tr-muted)]">
+                {e.by ? <AgentChip session={String(e.by)} /> : "—"}
+              </span>
               <span className="min-w-0 flex-1 break-words">{label(e)}</span>
             </div>
           );
