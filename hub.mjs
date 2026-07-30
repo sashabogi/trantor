@@ -143,12 +143,21 @@ let dirty = false;
 // instead of a silently empty history. Cheap insurance on a live hub; drop the mirror later.
 let persisting = false;
 const snapshotState = () => JSON.parse(JSON.stringify({ ...state, cardEvents: state.events.filter(e => ["created", "moved", "updated"].includes(e?.type)) }));
+// This hub's writer id: saveDelta stamps it into every NOTIFY so we can tell our own change
+// notifications apart from a second writer's (importer, admin psql, another hub instance).
+const HUB_SRC = `hub-${process.pid}-${randomBytes(4).toString("hex")}`;
+// What the DB currently holds, as of our last successful persist. saveDelta diffs against this and
+// writes ONLY the difference — it never deletes rows it has not seen, so a second writer's rows
+// survive our persist ticks (the old saveSnapshot wholesale delete+rewrite destroyed them).
+let lastPersisted = durableStore ? snapshotState() : null;
 const persist = () => {
   if (!dirty || persisting) return;
   if (durableStore) {
     const snapshot = snapshotState();
     dirty = false; persisting = true;
-    durableStore.saveSnapshot(ORG_ID, snapshot).catch(e => {
+    durableStore.saveDelta(ORG_ID, lastPersisted, snapshot, { src: HUB_SRC }).then(() => {
+      lastPersisted = snapshot;
+    }).catch(e => {
       dirty = true;
       process.stderr.write(`[trantor] Postgres persist failed: ${e.message || e}\n`);
     }).finally(() => {
@@ -160,6 +169,46 @@ const persist = () => {
   try { writeFileSync(DATA, JSON.stringify(snapshotState())); dirty = false; } catch {}
 };
 setInterval(persist, 1000).unref?.();
+
+// --- reload on external change (the boot-cache fix) -------------------------------------------
+// A NOTIFY from any writer that isn't us means Postgres has rows our in-memory projection has
+// never seen. Flush our own un-persisted delta first (delta writes can't clobber foreign rows),
+// then reload the snapshot and swap it in. If a request mutated state while the reload was in
+// flight, discard the loaded snapshot and go again — hub writes are never lost to a reload.
+let reloadTimer = null, reloading = false, reloadAgain = false;
+function scheduleStoreReload() {
+  if (reloadTimer || reloading) { reloadAgain = reloading; return; }
+  reloadTimer = setTimeout(() => { reloadTimer = null; reloadFromStore(); }, 250);
+}
+async function reloadFromStore() {
+  if (!durableStore || reloading) { reloadAgain = reloading; return; }
+  reloading = true;
+  try {
+    for (let i = 0; i < 100 && (dirty || persisting); i++) {
+      persist();
+      await new Promise(r => setTimeout(r, 50));
+    }
+    const loaded = normalizeState(await durableStore.loadSnapshot(ORG_ID));
+    if (dirty || persisting) {
+      reloadAgain = true;                      // raced with a request: flush + reload again
+    } else {
+      state = loaded;
+      lastPersisted = snapshotState();
+      pushEventToStreams({ ts: Date.now(), type: "hub.reload", project: "", by: "" });
+    }
+  } catch (e) {
+    process.stderr.write(`[trantor] store reload failed: ${e.message || e}\n`);
+  } finally {
+    reloading = false;
+    if (reloadAgain) { reloadAgain = false; scheduleStoreReload(); }
+  }
+}
+if (durableStore?.subscribeChanges) {
+  durableStore.subscribeChanges((p) => {
+    if (p && p.src === HUB_SRC) return;
+    scheduleStoreReload();
+  }).catch(e => process.stderr.write(`[trantor] LISTEN ${e.message || e} — external writes will NOT surface until restart\n`));
+}
 // One-time migration: collapse legacy un-deduped cc-subagent cards. Each SubagentStop minted a fresh
 // card, and the infra recall/last-handoff sub-agents fire EVERY session → hundreds of near-identical
 // dupes that drowned the board + stretched the FLOW canvas to thousands of px. Merge by

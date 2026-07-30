@@ -20,6 +20,7 @@
 import { readFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import pg from "pg";
+import { CHANGE_CHANNEL } from "../lib/store-contract.mjs";
 
 const argv = process.argv.slice(2);
 const arg = (k, d = "") => { const i = argv.indexOf(`--${k}`); return i >= 0 ? (argv[i + 1] ?? "") : d; };
@@ -154,6 +155,9 @@ for (const project of PROJECTS) {
   if (!(okCards && okEv && okMs)) bad++;
   console.log(`  ${okCards && okEv && okMs ? "✓" : "✗"} ${project.padEnd(20)} cards ${r.rows.length}/${srcTasks.length} sum ${dstSum === srcSum ? "match" : `MISMATCH ${srcSum}≠${dstSum}`} · events ${ev.rows[0].c} · msgs ${ms.rows[0].c}`);
 }
+// Tell any RUNNING hub on this database to reload its in-memory projection — without this the
+// imported rows stay invisible (and were previously DESTROYED by the hub's next snapshot save).
+if (!bad) { try { await client.query("SELECT pg_notify($1, $2)", [CHANGE_CHANNEL, JSON.stringify({ src: "migrate-store" })]); } catch {} }
 await client.end();
 console.log(bad ? `\n✗ ${bad} project(s) FAILED verification` : "\n✓ all projects verified");
 process.exit(bad ? 1 : 0);
