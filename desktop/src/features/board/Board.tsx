@@ -5,8 +5,9 @@
 // Apache-2.0 obligations land on an MIT repo. Colours are Trantor's own: the same hex values
 // bin/crew-runner.mjs already pushes into the cmux sidebar, so a seat that is "building" in the
 // terminal is the same blue here.
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { Card, HubClient } from "../../shared/api/client";
+import { CardDetail } from "./CardDetail";
 
 // Lane order matches the hub's own card flow: todo -> doing -> testing -> done, with the two
 // exception lanes last. `stale` comes from the reaper, `blocked` is set by hand.
@@ -27,20 +28,41 @@ const LANE_COLOR: Record<string, string> = {
 // offer a shortcut the protocol forbids.
 const NEXT: Record<string, string> = { todo: "doing", doing: "testing", testing: "done" };
 
-function CardTile({ card, onAdvance }: { card: Card; onAdvance?: (c: Card) => void }) {
+// Search understands the board's own vocabulary: plain text matches titles, `#123` a card id,
+// `@name` an assignee. One box, no advanced-search modal.
+function matches(card: Card, query: string): boolean {
+  const q = query.trim().toLowerCase();
+  if (!q) return true;
+  if (q.startsWith("#")) return String(card.id).startsWith(q.slice(1));
+  if (q.startsWith("@")) return (card.assignee || "").toLowerCase().includes(q.slice(1));
+  return card.title.toLowerCase().includes(q) || (card.assignee || "").toLowerCase().includes(q);
+}
+
+function CardTile({ card, onOpen, onAdvance }: {
+  card: Card; onOpen: (c: Card) => void; onAdvance?: (c: Card) => void;
+}) {
   const next = NEXT[card.status];
   return (
+    // Click opens the drawer. The first cut advanced the card on click — a misclick MOVED a card,
+    // which is exactly the kind of surprise a shared board cannot afford. Advancing is now the
+    // explicit → button, here and in the drawer.
     <div
-      onClick={() => next && onAdvance?.(card)}
-      title={next ? `move to ${next}` : undefined}
-      className={`rounded-lg border border-[var(--color-tr-edge)] bg-[var(--color-tr-panel)] p-3 text-sm ${
-        next ? "cursor-pointer hover:border-[var(--color-tr-doing)]" : ""}`}>
+      onClick={() => onOpen(card)}
+      className="cursor-pointer rounded-lg border border-[var(--color-tr-edge)] bg-[var(--color-tr-panel)] p-3 text-sm hover:border-[var(--color-tr-doing)]">
       <div className="leading-snug">{card.title}</div>
       <div className="mt-2 flex flex-wrap items-center gap-1.5 text-[11px] text-[var(--color-tr-muted)]">
         {card.assignee && <span className="rounded bg-black/30 px-1.5 py-0.5">@{card.assignee}</span>}
         {card.difficulty && <span className="rounded bg-black/30 px-1.5 py-0.5">{card.difficulty[0].toUpperCase()}</span>}
         {card.model && <span className="rounded bg-black/30 px-1.5 py-0.5">{card.model}</span>}
         <span className="ml-auto opacity-60">#{card.id}</span>
+        {next && (
+          <button
+            title={`move to ${next}`}
+            onClick={e => { e.stopPropagation(); onAdvance?.(card); }}
+            className="rounded border border-[var(--color-tr-edge)] px-1.5 py-0.5 hover:border-[var(--color-tr-doing)] hover:text-[var(--color-tr-text)]">
+            →
+          </button>
+        )}
       </div>
     </div>
   );
@@ -49,10 +71,13 @@ function CardTile({ card, onAdvance }: { card: Card; onAdvance?: (c: Card) => vo
 export function Board({ client, project }: { client: HubClient; project: string }) {
   const [cards, setCards] = useState<Card[] | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [query, setQuery] = useState("");
+  const [assignee, setAssignee] = useState("");
+  const [open, setOpen] = useState<number | null>(null);
 
   useEffect(() => {
     let alive = true;
-    setCards(null); setError(null);
+    setCards(null); setError(null); setOpen(null); setQuery(""); setAssignee("");
     client.tasks(project)
       .then(t => { if (alive) setCards(t); })
       .catch(e => { if (alive) setError(String(e.message || e)); });
@@ -61,10 +86,11 @@ export function Board({ client, project }: { client: HubClient; project: string 
 
   // Live updates ride the SAME stream the FEED uses. A card event is cheap to react to: refetch the
   // project rather than trying to replay hub-side card mutation logic in the client, which is exactly
-  // the kind of duplicated state machine that drifts.
+  // the kind of duplicated state machine that drifts. `hub.reload` means the hub swapped its whole
+  // in-memory state after an external write — refetch then too.
   useEffect(() => {
     return client.streamEvents(ev => {
-      if (ev.project === project && ["created", "moved", "updated"].includes(ev.type)) {
+      if ((ev.project === project && ["created", "moved", "updated"].includes(ev.type)) || ev.type === "hub.reload") {
         client.tasks(project).then(setCards).catch(() => {});
       }
     });
@@ -80,19 +106,42 @@ export function Board({ client, project }: { client: HubClient; project: string 
     client.moveCard(card.id, next).catch(() => setCards(before));
   };
 
+  const assignees = useMemo(
+    () => [...new Set((cards ?? []).map(c => c.assignee).filter((a): a is string => !!a))].sort(),
+    [cards],
+  );
+
   if (error) return <div className="p-6 text-sm text-[var(--color-tr-fail)]">Board unavailable: {error}</div>;
   if (!cards) return <div className="p-6 text-sm text-[var(--color-tr-muted)]">Loading {project}…</div>;
 
-  const byLane = LANES.map(l => [l, cards.filter(c => (c.status || "todo") === l)] as const);
+  const visible = cards.filter(c => matches(c, query) && (!assignee || c.assignee === assignee));
+  const byLane = LANES.map(l => [l, visible.filter(c => (c.status || "todo") === l)] as const);
   const done = cards.filter(c => c.status === "done").length;
+  const filtered = visible.length !== cards.length;
 
   return (
-    <div className="flex h-full flex-col">
-      <header className="flex items-baseline gap-3 border-b border-[var(--color-tr-edge)] px-5 py-3">
+    <div className="relative flex h-full flex-col">
+      <header className="flex items-center gap-3 border-b border-[var(--color-tr-edge)] px-5 py-3">
         <h1 className="text-base font-semibold">{project}</h1>
         <span className="text-xs text-[var(--color-tr-muted)]">
           {done}/{cards.length} done · {Math.round((done / Math.max(cards.length, 1)) * 100)}%
+          {filtered && <span> · showing {visible.length}</span>}
         </span>
+        <input
+          value={query}
+          onChange={e => setQuery(e.target.value)}
+          placeholder="search — text, #id, @assignee"
+          className="ml-auto w-56 rounded border border-[var(--color-tr-edge)] bg-black/20 px-2 py-1 text-xs outline-none placeholder:text-[var(--color-tr-muted)] focus:border-[var(--color-tr-doing)]"
+        />
+        {assignees.length > 0 && (
+          <select
+            value={assignee}
+            onChange={e => setAssignee(e.target.value)}
+            className="rounded border border-[var(--color-tr-edge)] bg-black/20 px-2 py-1 text-xs text-[var(--color-tr-muted)] outline-none focus:border-[var(--color-tr-doing)]">
+            <option value="">everyone</option>
+            {assignees.map(a => <option key={a} value={a}>@{a}</option>)}
+          </select>
+        )}
       </header>
       <div className="flex flex-1 gap-3 overflow-x-auto p-4">
         {byLane.map(([lane, list]) => (
@@ -103,11 +152,17 @@ export function Board({ client, project }: { client: HubClient; project: string 
               <span className="ml-auto text-[var(--color-tr-muted)]">{list.length}</span>
             </div>
             <div className="flex flex-col gap-2 overflow-y-auto">
-              {list.slice(0, 200).map(c => <CardTile key={c.id} card={c} onAdvance={advance} />)}
+              {list.slice(0, 200).map(c => (
+                <CardTile key={c.id} card={c} onOpen={c2 => setOpen(c2.id)} onAdvance={advance} />
+              ))}
             </div>
           </section>
         ))}
       </div>
+      {open !== null && (
+        <CardDetail client={client} id={open} onClose={() => setOpen(null)}
+                    onMoved={() => client.tasks(project).then(setCards).catch(() => {})} />
+      )}
     </div>
   );
 }

@@ -73,6 +73,14 @@ export class HubClient {
   moveCard(id: number, status: string) { return this.request("POST", "/task/update", { id, status }); }
 
   /**
+   * One card's FULL story: the card, its status events, and the bus messages that reference it
+   * (#<id>) — the agent's own reports of what it did and why. Backs the detail drawer.
+   */
+  card(id: number) {
+    return this.request<{ task: Card | null; events: HubEvent[]; messages: Message[] }>("GET", `/card?id=${id}`);
+  }
+
+  /**
    * Messages addressed to `session`. peek=1 reads WITHOUT advancing the delivery ledger — the app is
    * a viewer here, and marking a message delivered because a human glanced at a list would hide it
    * from the session's own hooks, which are the thing that actually acts on it.
