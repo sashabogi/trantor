@@ -25,6 +25,8 @@ export type Card = {
   id: number; project: string; title: string; status: string;
   assignee?: string; source?: string; difficulty?: string; model?: string;
   phase?: string; costUsd?: number; created?: number; updated?: number;
+  /** the narrative line ("assigned — did"), written by the cheap summarizer */
+  summary?: string;
 };
 
 export type HubEvent = {

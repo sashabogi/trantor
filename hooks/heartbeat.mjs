@@ -133,6 +133,20 @@ async function main(stdinRaw) {
   await signedPost("/register", { session, project, llm: "claude", model: modelFromTranscript(stdinRaw),
     hookVersion: (() => { try { return installedVersion(); } catch { return ""; } })() }, { session, timeoutMs: Number(process.env.RELAY_HEARTBEAT_TIMEOUT_MS || 1500) });
 
+  // Ambient narratives: once an hour (machine-wide stamp), spawn the summarizer detached — the
+  // board's machine-titled cards gain a plain-language "assigned — did" line without anyone asking.
+  try {
+    const sumStamp = join(homedir(), ".agent-bus", "summarize.stamp");
+    const last = existsSync(sumStamp) ? Number(readFileSync(sumStamp, "utf8")) || 0 : 0;
+    if (Date.now() - last > 60 * 60 * 1000) {
+      writeFileSync(sumStamp, String(Date.now()));
+      const worker = spawn(process.execPath, [join(HERE, "..", "bin", "summarize.mjs"), "--quiet"], {
+        detached: true, stdio: "ignore",
+      });
+      worker.unref();
+    }
+  } catch {}
+
   // Same cadence as the presence ping: check context pressure and hand off early
   // if we've crossed the warn threshold of a known window.
   await maybeEarlyWarn(stdinRaw, session);

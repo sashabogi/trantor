@@ -51,7 +51,7 @@ function CardTile({ card, onOpen, onAdvance }: {
     <div
       onClick={() => onOpen(card)}
       className="tr-card tr-card-hover min-w-0 shrink-0 cursor-pointer overflow-hidden p-3.5 text-[13px]">
-      <div className="leading-snug break-words [overflow-wrap:anywhere]">{cleanTitle(card.title)}</div>
+      <div className="leading-snug break-words [overflow-wrap:anywhere]">{card.summary || cleanTitle(card.title)}</div>
       <div className="mt-2 flex flex-wrap items-center gap-1.5 text-[11px] text-[var(--color-tr-muted)]">
         {card.assignee && <AgentChip session={card.assignee} />}
         {card.difficulty && <span className="rounded bg-black/30 px-1.5 py-0.5">{card.difficulty[0].toUpperCase()}</span>}

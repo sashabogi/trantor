@@ -121,7 +121,7 @@ export function Home({ client, me, onOpenProject }: {
                       className="tr-card tr-card-hover flex items-center gap-3 p-3.5 text-left">
                 <span className="tr-dot shrink-0"
                       style={{ background: c.status === "stale" ? "var(--color-tr-muted)" : "var(--color-tr-fail)" }} />
-                <span className="min-w-0 flex-1 truncate text-[13px]">{cleanTitle(c.title)}</span>
+                <span className="min-w-0 flex-1 truncate text-[13px]">{c.summary || cleanTitle(c.title)}</span>
                 <span className="tr-chip shrink-0">{c.project}</span>
                 <span className="tr-chip shrink-0">{c.status}</span>
               </button>

@@ -1153,6 +1153,9 @@ const server = http.createServer(async (req, res) => {
       if (Array.isArray(b.deps)) t.deps = [...new Set(b.deps.map(Number).filter(n => Number.isInteger(n) && n > 0 && n !== t.id))].slice(0, 20);
       if (b.assignee !== undefined) t.assignee = b.assignee;
       if (b.title !== undefined) t.title = String(b.title).slice(0,200);
+      // the narrative line a human reads on the board ("assigned — did"), written by the cheap
+      // summarizer; rides the tasks.extra column, so it survives restarts everywhere
+      if (b.summary !== undefined) t.summary = String(b.summary).slice(0, 220);
       if (b.delete) { eventType = "deleted"; eventFrom = null; eventTo = null; state.tasks = state.tasks.filter(x => x.id !== t.id); }
       appendCardEvent(eventType, t, b.by, eventFrom, eventTo);
       t.updated = now(); dirty = true; return json(res, 200, { ok: true, task: t });

@@ -101,7 +101,10 @@ export function CardDetail({ client, id, onClose, onMoved }: {
             })}
             <button onClick={onClose} className="ml-auto rounded px-2 text-[var(--color-tr-muted)] hover:text-[var(--color-tr-text)]">✕</button>
           </div>
-          <div className="mt-2 text-sm leading-snug break-words">{task ? cleanTitle(task.title) : error ? `Card unavailable: ${error}` : "Loading…"}</div>
+          <div className="mt-2 text-sm leading-snug break-words">{task ? (task.summary || cleanTitle(task.title)) : error ? `Card unavailable: ${error}` : "Loading…"}</div>
+          {task?.summary && cleanTitle(task.title) !== task.summary && (
+            <div className="mt-1 text-[11px] leading-snug break-words text-[var(--color-tr-muted)]">{cleanTitle(task.title)}</div>
+          )}
           {task && (
             <div className="mt-2 flex flex-wrap gap-1.5 text-[11px] text-[var(--color-tr-muted)]">
               {task.assignee && <AgentChip session={task.assignee} />}
