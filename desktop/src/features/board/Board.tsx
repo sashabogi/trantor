@@ -49,8 +49,8 @@ function CardTile({ card, onOpen, onAdvance }: {
     // explicit → button, here and in the drawer.
     <div
       onClick={() => onOpen(card)}
-      className="tr-card tr-card-hover cursor-pointer p-3.5 text-[13px]">
-      <div className="leading-snug">{card.title}</div>
+      className="tr-card tr-card-hover min-w-0 cursor-pointer overflow-hidden p-3.5 text-[13px]">
+      <div className="leading-snug break-words [overflow-wrap:anywhere]">{card.title}</div>
       <div className="mt-2 flex flex-wrap items-center gap-1.5 text-[11px] text-[var(--color-tr-muted)]">
         {card.assignee && <span className="rounded bg-black/30 px-1.5 py-0.5">@{card.assignee}</span>}
         {card.difficulty && <span className="rounded bg-black/30 px-1.5 py-0.5">{card.difficulty[0].toUpperCase()}</span>}
@@ -150,7 +150,7 @@ export function Board({ client, project, lens, onLens }: {
               <span className="tr-label">{lane}</span>
               <span className="tr-mono ml-auto text-[11px] text-[var(--color-tr-muted)]">{list.length}</span>
             </div>
-            <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto px-0.5 pb-1">
+            <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-x-hidden overflow-y-auto px-0.5 pb-1">
               {list.slice(0, 200).map(c => (
                 <CardTile key={c.id} card={c} onOpen={c2 => setOpen(c2.id)} onAdvance={advance} />
               ))}
