@@ -12,12 +12,11 @@
 import { useEffect, useMemo, useState } from "react";
 import type { HubClient, HubEvent, Peer } from "../../shared/api/client";
 import { ProjectHeader } from "../project/ProjectHeader";
-import { Avatar } from "../../shared/Avatar";
+import { Avatar, displayName } from "../../shared/Avatar";
 import { Composer } from "../../shared/Composer";
 
 const ONLINE_MS = 5 * 60 * 1000;
 const BUSY_MS = 90 * 1000;
-const brandOf = (s: string) => s.split(":")[0] ?? s;
 
 function presence(p: Peer) {
   const age = Date.now() - (p.lastSeen ?? 0);
@@ -73,6 +72,10 @@ export function Conversation({ client, project, me, lens, onLens }: {
     () => peers.filter(p => p.project === project)
                .sort((a, b) => (b.lastSeen ?? 0) - (a.lastSeen ?? 0)),
     [peers, project]);
+  const peerOf = useMemo(() => {
+    const m = new Map(peers.map(p => [p.session, p]));
+    return (session: string) => m.get(session);
+  }, [peers]);
 
   const send = async () => {
     if (!text.trim() || busy) return;
@@ -125,15 +128,16 @@ export function Conversation({ client, project, me, lens, onLens }: {
               ) : (
                 <div key={r.m.id + ":" + i} className={`flex gap-3 ${r.first ? "mt-4" : "mt-0.5"}`}>
                   <span className="w-[34px] shrink-0">
-                    {r.first && <Avatar name={brandOf(r.m.by)} size={34} />}
+                    {r.first && <Avatar name={r.m.by} llm={peerOf(r.m.by)?.llm} size={34} />}
                   </span>
                   <div className="min-w-0 flex-1">
                     {r.first && (
                       <div className="flex items-baseline gap-2">
                         <span className="text-[13px] font-semibold"
                               style={r.m.by === me ? { color: "var(--color-tr-ok)" } : undefined}>
-                          {r.m.by}
+                          {displayName(r.m.by, peerOf(r.m.by)?.llm)}
                         </span>
+                        {peerOf(r.m.by)?.model && <span className="tr-chip tr-mono">{peerOf(r.m.by)!.model}</span>}
                         {r.m.to !== "all" && (
                           <span className="tr-chip"
                                 style={r.m.to === me ? { color: "var(--color-tr-doing)" } : undefined}>
@@ -172,13 +176,15 @@ export function Conversation({ client, project, me, lens, onLens }: {
             return (
               <div key={p.session} className="mb-3 flex items-center gap-2.5">
                 <span className="relative shrink-0">
-                  <Avatar name={brandOf(p.session)} size={28} />
+                  <Avatar name={p.session} llm={p.llm} size={28} />
                   <span className="tr-dot absolute -right-0.5 -bottom-0.5 border-2 border-[var(--color-tr-main)]"
                         style={{ background: st.color, width: 9, height: 9 }} />
                 </span>
                 <div className="min-w-0">
-                  <div className="truncate text-[13px]">{brandOf(p.session)}</div>
-                  <div className="truncate text-[11px] text-[var(--color-tr-muted)]">{st.label}{p.status ? ` · ${p.status}` : ""}</div>
+                  <div className="truncate text-[13px]">{displayName(p.session, p.llm)}</div>
+                  <div className="truncate text-[11px] text-[var(--color-tr-muted)]">
+                    {p.model ? <span className="tr-mono">{p.model}</span> : st.label}{p.status ? ` · ${p.status}` : ""}
+                  </div>
                 </div>
               </div>
             );

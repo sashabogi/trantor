@@ -49,7 +49,7 @@ export function Inbox({ client, me }: { client: HubClient; me: string }) {
       <div className="flex-1 overflow-y-auto px-10 pb-4">
         {messages.map(m => (
           <div key={m.id} className="tr-card mb-2.5 flex gap-3 p-4">
-            <Avatar name={brandOf(m.from)} size={34} />
+            <Avatar name={m.from} size={34} />
             <div className="min-w-0 flex-1">
               <div className="flex items-baseline gap-2">
                 <span className="truncate text-[13px] font-semibold">{m.from}</span>

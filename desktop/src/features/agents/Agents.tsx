@@ -10,7 +10,7 @@
 import { useEffect, useState } from "react";
 import { doctor, type DoctorReport } from "../../shared/api/client";
 import type { HubClient, Peer } from "../../shared/api/client";
-import { Avatar } from "../../shared/Avatar";
+import { Avatar, displayName } from "../../shared/Avatar";
 
 const ONLINE_MS = 5 * 60 * 1000;   // matches the hub's RELAY_ONLINE_MS default
 const BUSY_MS = 90 * 1000;         // heartbeat is ~60s, so fresher than this means mid-turn
@@ -29,7 +29,6 @@ const COLOR: Record<State, string> = {
 
 // A seat's identity is `<brand>:<project>`; the human sessions are `<host>:<project>`. Splitting on
 // the colon gives the brand, which is what the operator actually thinks in ("is codex up?").
-const brandOf = (session: string) => session.split(":")[0] ?? session;
 const projectOf = (session: string) => (session.includes(":") ? session.split(":").slice(1).join(":") : "");
 
 function ago(ts?: number) {
@@ -81,13 +80,14 @@ export function Agents({ client, project }: { client: HubClient; project: string
     return (
       <div className="tr-card flex items-center gap-3 px-4 py-3">
         <span className="relative shrink-0">
-          <Avatar name={brandOf(p.session)} size={30} />
+          <Avatar name={p.session} llm={p.llm} size={30} />
           <span className="tr-dot absolute -right-0.5 -bottom-0.5 border-2 border-[var(--color-tr-panel)]"
                 style={{ background: COLOR[st], width: 9, height: 9 }} />
         </span>
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">
-            <span className="truncate text-[13px]">{brandOf(p.session)}</span>
+            <span className="truncate text-[13px]">{displayName(p.session, p.llm)}</span>
+            {p.model && <span className="tr-chip tr-mono shrink-0">{p.model}</span>}
             {proj && <span className="tr-chip shrink-0">{proj}</span>}
           </div>
           <div className="truncate text-[12px] text-[var(--color-tr-muted)]">{p.status || "—"}</div>

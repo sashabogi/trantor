@@ -40,6 +40,7 @@ export type Message = {
 export type Peer = {
   session: string; project?: string; status?: string;
   lastSeen?: number; online?: boolean; hookVersion?: string;
+  llm?: string; model?: string;
 };
 
 export class HubClient {
