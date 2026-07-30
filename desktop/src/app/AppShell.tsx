@@ -9,6 +9,8 @@
 // never in chrome. The old header dump was the altitude mistake made visible.
 import { useEffect, useMemo, useRef, useState } from "react";
 import { HubClient, hubForProject, knownProjects } from "../shared/api/client";
+
+const LOCAL_HUB = "http://127.0.0.1:4477";
 import { Home } from "../features/home/Home";
 import { Board } from "../features/board/Board";
 import { Feed } from "../features/feed/Feed";
@@ -50,7 +52,25 @@ export function AppShell() {
   const [hub, setHub] = useState<string>("");
   const [pane, setPane] = useState<Pane>({ kind: "home" });
 
-  useEffect(() => { knownProjects().then(p => { setProjects(p); setActive(a => a || p[0] || ""); }); }, []);
+  // Pinned projects PLUS whatever lives on the machine-local hub. A brand-new project has no
+  // routing pin yet — it falls back to the local hub BY DESIGN (TDD §12.1's default), and a
+  // project the app cannot see is a project that "isn't registering in Trantor at all" (the
+  // crm-platform incident: a whole live crew, invisible, because only pins were listed).
+  useEffect(() => {
+    let alive = true;
+    Promise.all([
+      knownProjects().catch(() => [] as string[]),
+      new HubClient(LOCAL_HUB).tasks().then(ts => [...new Set(ts.map(t => t.project).filter(Boolean))]).catch(() => [] as string[]),
+      new HubClient(LOCAL_HUB).peers().then(ps => [...new Set(ps.map(pr => pr.project || "").filter(Boolean))]).catch(() => [] as string[]),
+    ]).then(([pinned, localCards, localPeers]) => {
+      if (!alive) return;
+      const junk = (n: string) => n.startsWith("_") || n.startsWith(".") || n.startsWith("__");
+      const all = [...new Set([...pinned, ...localCards, ...localPeers])].filter(n => n && !junk(n)).sort();
+      setProjects(all);
+      setActive(a => a || all[0] || "");
+    });
+    return () => { alive = false; };
+  }, []);
   useEffect(() => { if (active) hubForProject(active).then(setHub); }, [active]);
 
   const client = useMemo(() => (hub ? new HubClient(hub) : null), [hub]);
