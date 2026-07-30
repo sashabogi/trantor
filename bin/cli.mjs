@@ -68,6 +68,7 @@ switch (cmd) {
   case "handoff": run("bin/baton.mjs"); break;
   case "adopt": run("bin/adopt.mjs"); break;
   case "summarize": run("bin/summarize.mjs"); break;
+  case "policy": run("bin/policy.mjs"); break;
   case "identity": {
     const { load, publicView, generate, keyPath } = await import(join(ROOT, "lib/identity.mjs"));
     const sub = args[0], name = args[1] || "human";

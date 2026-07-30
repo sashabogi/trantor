@@ -32,6 +32,7 @@ export function Settings({ me }: { me: string }) {
   const [hubs, setHubs] = useState<HubRow[]>([]);
   const [notify, setNotify] = useState(notificationsEnabled());
   const [editor, setEditor] = useState<EditorPref>(editorPref());
+  const [autonomy, setAutonomy] = useState<Map<string, { client: HubClient; levels: Record<string, number> }>>(new Map());
   const [version, setVersion] = useState("");
 
   useEffect(() => { getVersion().then(setVersion).catch(() => {}); }, []);
@@ -48,9 +49,13 @@ export function Settings({ me }: { me: string }) {
       if (alive) setHubs(rows);
       // reachability is a live fact, not a config value — probe each hub's /health
       for (const r of rows) {
-        new HubClient(r.url).peers()
+        const c = new HubClient(r.url);
+        c.peers()
           .then(() => { if (alive) setHubs(cur => cur.map(x => x.url === r.url ? { ...x, ok: true } : x)); })
           .catch(() => { if (alive) setHubs(cur => cur.map(x => x.url === r.url ? { ...x, ok: false } : x)); });
+        c.policy()
+          .then(pol => { if (alive) setAutonomy(cur => new Map(cur).set(r.url, { client: c, levels: pol.autonomy })); })
+          .catch(() => {});
       }
     });
     return () => { alive = false; };
@@ -118,6 +123,49 @@ export function Settings({ me }: { me: string }) {
               </div>
             </div>
             <Toggle on={notify} onChange={v => { setNotify(v); setNotificationsEnabled(v); }} />
+          </div>
+        </section>
+
+        <section className="mb-8">
+          <h2 className="tr-sec-title">Autonomy</h2>
+          <p className="tr-sec-sub">The overseer's ladder, per project: 1 observe · 2 warn · 3 gate · 4 auto.</p>
+          <div className="mt-3 flex flex-col gap-2.5">
+            {hubs.map(h => {
+              const pol = autonomy.get(h.url);
+              if (!pol) return null;
+              return (
+                <div key={h.url} className="tr-card p-4">
+                  <div className="tr-mono mb-2 text-[12px] text-[var(--color-tr-muted)]">{h.url.replace(/^https?:\/\//, "")}</div>
+                  <div className="flex flex-col gap-1.5">
+                    {["*", ...h.projects].map(proj => (
+                      <div key={proj} className="flex items-center gap-3">
+                        <span className="min-w-0 flex-1 truncate text-[13px]">{proj === "*" ? "default (every project)" : proj}</span>
+                        <select value={pol.levels[proj] ?? pol.levels["*"] ?? 1}
+                                onChange={e => {
+                                  const lvl = Number(e.target.value);
+                                  void pol.client.setAutonomy(proj, lvl).then(() =>
+                                    setAutonomy(cur => {
+                                      const next = new Map(cur);
+                                      const entry = next.get(h.url)!;
+                                      next.set(h.url, { ...entry, levels: { ...entry.levels, [proj]: lvl } });
+                                      return next;
+                                    }));
+                                }}
+                                className="tr-input shrink-0">
+                          <option value={1}>1 observe</option>
+                          <option value={2}>2 warn</option>
+                          <option value={3}>3 gate</option>
+                          <option value={4}>4 auto</option>
+                        </select>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              );
+            })}
+            {![...autonomy.keys()].length && (
+              <div className="tr-card-ghost flex items-center justify-center p-5 text-[13px]">Policy loads once a hub answers.</div>
+            )}
           </div>
         </section>
 

@@ -119,6 +119,28 @@ export async function getJSON(pathOrUrl, { timeoutMs = DEFAULT_TIMEOUT_MS } = {}
   } catch { return { ok: false, status: 0, json: null }; }
 }
 
+// Signed GET → { ok, status, json|null }. Never throws. The "one-liner" the getJSON comment
+// promised: for reads that MUST work under RELAY_AUTH=enforce (which 401s unsigned reads).
+// First user: the overseer-warn hook's /overseer/context — a project-scoped read, so the
+// enforce hub's own-project scope filtering is the correct behavior, not a loss. Roster-style
+// reads (/peers, /catchup cross-project discovery) stay on getJSON on purpose — see above.
+export async function signedGet(pathOrUrl, { timeoutMs = DEFAULT_TIMEOUT_MS, session } = {}) {
+  const sess = session || sessionContext().session;
+  const id = loadIdentity(sess);
+  await ensureEnrolled(sess, id);
+  try {
+    const r = await sfetchJson(toUrl(pathOrUrl), {
+      method: "GET",
+      identity: id,
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+    if (!r.ok) return { ok: false, status: r.status, json: null };
+    const text = await r.text();
+    let json = null; try { json = text ? JSON.parse(text) : null; } catch {}
+    return { ok: true, status: r.status, json };
+  } catch { return { ok: false, status: 0, json: null }; }
+}
+
 // Signed POST → { ok, status, json|null }. Never throws.
 export async function signedPost(pathOrUrl, payload, { timeoutMs = DEFAULT_TIMEOUT_MS, session } = {}) {
   const sess = session || sessionContext().session;

@@ -8,6 +8,7 @@
 import { useEffect, useState } from "react";
 import { HubClient } from "../../shared/api/client";
 import { cleanTitle } from "../../shared/Avatar";
+import { Collisions } from "./Collisions";
 import type { BalancesReport, Card, Economics, Handoff, Peer } from "../../shared/api/client";
 
 const LOCAL_HUB = "http://127.0.0.1:4477";
@@ -133,6 +134,8 @@ export function Home({ client, me, onOpenProject }: {
             )}
           </div>
         </section>
+
+        <Collisions client={client} />
 
         <section className="min-w-0">
           <h2 className="tr-sec-title">Handoffs</h2>

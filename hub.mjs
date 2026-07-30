@@ -203,6 +203,59 @@ async function reloadFromStore() {
     if (reloadAgain) { reloadAgain = false; scheduleStoreReload(); }
   }
 }
+// --- the OVERSEER (levels 1-2 + the level-3 gate) -------------------------------------------
+// Detection is MECHANICAL (lib/overseer.mjs, pure); the LLM only narrates (bin/overseer-narrate).
+// Lazy import: the engine module lands from a crew seat in parallel — the hub runs without it and
+// picks it up on next restart. Warnings dedup on a 10-minute window so a standing collision does
+// not spam the feed; at level >= 3 a file-conflict opens a verify gate (the go/no-go primitive).
+let _overseer = null;
+import("./lib/overseer.mjs").then(m => { _overseer = m; }).catch(() => {});
+const OVERSEER_TICK_MS = Number(process.env.RELAY_OVERSEER_TICK_MS || 30 * 1000);
+const OVERSEER_DEDUP_MS = Number(process.env.RELAY_OVERSEER_DEDUP_MS || 10 * 60 * 1000);
+const overseerWarned = new Map();   // dedup key -> ts
+function overseerPolicy() {
+  const p = state.orgPolicy && typeof state.orgPolicy === "object" ? state.orgPolicy : {};
+  return {
+    autonomy: { "*": 1, ...(p.autonomy || {}) },
+    links: Array.isArray(p.links) ? p.links : [],
+  };
+}
+function overseerInputs() {
+  return {
+    peers: Object.entries(state.peers).map(([session, v]) => ({
+      session, project: v.project || "", lastSeen: v.lastSeen || 0,
+      llm: v.llm || "", model: v.model || "", status: v.status || "",
+    })),
+    claims: [...fileClaims.values()],
+    ...overseerPolicy(),
+    now: now(),
+  };
+}
+function overseerTick() {
+  if (!_overseer?.detectCollisions) return;
+  let collisions = [];
+  try { collisions = _overseer.detectCollisions(overseerInputs()) || []; } catch { return; }
+  const cut = now() - OVERSEER_DEDUP_MS;
+  for (const [k, ts] of overseerWarned) if (ts < cut) overseerWarned.delete(k);
+  const pol = overseerPolicy();
+  for (const c of collisions) {
+    const key = `${c.project} ${c.kind} ${(c.sessions || []).join(",")} ${(c.files || []).join(",")}`;
+    if (overseerWarned.has(key)) continue;
+    overseerWarned.set(key, now());
+    appendEvent("overseer.warn", c.project, "overseer",
+      { kind: c.kind, sessions: c.sessions || [], files: c.files || [], detail: c.detail || "", narrated: false });
+    const level = _overseer.levelFor ? _overseer.levelFor(c.project, pol.autonomy) : 1;
+    if (level >= 3 && c.kind === "file-conflict") {
+      const g = { id: ++state.verifyGateSeq, project: c.project, status: "open", ts: now(),
+        by: "overseer", claim: `file conflict: ${(c.files || []).join(", ")} — ${(c.sessions || []).join(" vs ")}`,
+        why: c.detail || "two live sessions on the same file", howToVerify: "decide who proceeds; coordinate over the bus" };
+      state.verifyGates.push(g); dirty = true;
+      appendEvent("verify.gate.opened", c.project, "overseer", { gateId: g.id, claim: g.claim, why: g.why });
+    }
+  }
+}
+setInterval(overseerTick, OVERSEER_TICK_MS).unref?.();
+
 if (durableStore?.subscribeChanges) {
   durableStore.subscribeChanges((p) => {
     if (p && p.src === HUB_SRC) return;
@@ -404,8 +457,8 @@ function cmpSemver(a, b) {
 }
 const AUTH_HEADERS = ["x-trantor-pubkey", "x-trantor-sig", "x-trantor-ts", "x-trantor-nonce"];
 const PUBLIC_ENDPOINTS = new Set(["/", "/ui", "/health", "/enroll"]);
-const OWNER_ENDPOINTS = new Set(["/project/delete", "/sweep", "/reconcile", "/invite", "/import"]);
-const READ_ENDPOINTS = new Set(["/peers", "/tasks", "/events", "/inbox", "/peer", "/card", "/stream", "/history", "/projects", "/catchup", "/phases", "/recent", "/handoffs", "/verify-gates", "/claims"]);
+const OWNER_ENDPOINTS = new Set(["/project/delete", "/sweep", "/reconcile", "/invite", "/import", "/policy"]);
+const READ_ENDPOINTS = new Set(["/peers", "/tasks", "/events", "/inbox", "/peer", "/card", "/stream", "/history", "/projects", "/catchup", "/phases", "/recent", "/handoffs", "/verify-gates", "/claims", "/overseer/context"]);
 const roleRank = { read: 1, write: 2, owner: 3 };
 const hasAuthHeaders = (req) => AUTH_HEADERS.some(h => !!req.headers[h]);
 const authPath = (u) => `${u.pathname}${u.search || ""}`;
@@ -871,6 +924,60 @@ const server = http.createServer(async (req, res) => {
       dirty = true;
       appendEvent("project.adopted", proj, String(b.by || ""), { counts: added });
       return json(res, 200, { ok: true, ...added });
+    }
+    if (req.method === "GET" && P === "/policy") {
+      return json(res, 200, overseerPolicy());
+    }
+    if (req.method === "POST" && P === "/policy") {
+      const b = await body(req);
+      const p = state.orgPolicy && typeof state.orgPolicy === "object" ? state.orgPolicy : {};
+      p.autonomy = { ...(p.autonomy || {}) };
+      p.links = Array.isArray(p.links) ? p.links : [];
+      if (b.autonomy && typeof b.autonomy === "object") {
+        for (const [proj, lvl] of Object.entries(b.autonomy)) {
+          const n = Number(lvl);
+          if ([1, 2, 3, 4].includes(n)) p.autonomy[canon(String(proj).slice(0, 80))] = n;
+        }
+      }
+      if (b.link && Array.isArray(b.link.projects) && b.link.projects.length >= 2 && b.link.reason) {
+        const projects = b.link.projects.slice(0, 4).map(x => canon(String(x).slice(0, 80))).sort();
+        const key = projects.join(" ");
+        if (!p.links.some(l => (l.projects || []).slice().sort().join(" ") === key)) {
+          p.links.push({ projects, reason: String(b.link.reason).slice(0, 140),
+            declaredBy: auth?.identity?.name || String(b.by || ""), ts: now() });
+        }
+      }
+      state.orgPolicy = p; dirty = true;
+      return json(res, 200, { ok: true, ...overseerPolicy() });
+    }
+    // What a session arriving on <project> needs to know: its autonomy level, who else is live,
+    // which files are in flight, which projects are declared codependent, current collisions.
+    if (req.method === "GET" && P === "/overseer/context") {
+      const proj = canon(String(q.project || "").slice(0, 80));
+      if (!proj) return json(res, 400, { error: "project required" });
+      const pol = overseerPolicy();
+      const level = _overseer?.levelFor ? _overseer.levelFor(proj, pol.autonomy) : (pol.autonomy[proj] ?? pol.autonomy["*"] ?? 1);
+      const links = pol.links.filter(l => (l.projects || []).includes(proj));
+      const linked = new Set(links.flatMap(l => l.projects).filter(x => x !== proj));
+      const cutoff = now() - ONLINE_MS;
+      const peersOut = Object.entries(state.peers)
+        .filter(([, v]) => v.lastSeen > cutoff && (v.project === proj || linked.has(v.project)))
+        .map(([session, v]) => ({ session, project: v.project || "", llm: v.llm || "", model: v.model || "", status: v.status || "" }));
+      pruneClaims();
+      const inflight = [...fileClaims.values()].filter(c => c.project === proj)
+        .map(c => ({ file: c.file, session: c.session, agoSec: Math.round((now() - c.ts) / 1000) }));
+      let warnings = [];
+      try { warnings = (_overseer?.detectCollisions ? _overseer.detectCollisions(overseerInputs()) : [])
+        .filter(c => c.project === proj || linked.has(c.project)); } catch {}
+      return json(res, 200, { level, links: links.map(l => ({ projects: l.projects, reason: l.reason })), peers: peersOut, inflight, warnings });
+    }
+    if (req.method === "POST" && P === "/overseer/narrate") {
+      const b = await body(req);
+      const ev = state.events.find(e => e.id === Number(b.eventId) && e.type === "overseer.warn");
+      if (!ev) return json(res, 404, { error: "no such overseer.warn event" });
+      ev.narrated = true; ev.narration = String(b.text || "").slice(0, 300);
+      dirty = true;
+      return json(res, 200, { ok: true });
     }
     if (req.method === "POST" && P === "/claim") {
       const b = await body(req);

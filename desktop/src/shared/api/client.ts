@@ -106,6 +106,14 @@ export class HubClient {
     return this.request<{ claims: FileClaim[] }>("GET", `/claims${q}`).then(r => r.claims ?? []);
   }
 
+  /** The autonomy ladder (PRD §6): levels per project + declared codependency links. */
+  policy() {
+    return this.request<{ autonomy: Record<string, number>; links: { projects: string[]; reason: string }[] }>("GET", "/policy");
+  }
+  setAutonomy(project: string, level: number) {
+    return this.request("POST", "/policy", { autonomy: { [project]: level } });
+  }
+
   /**
    * Provider balances/quotas/subscriptions, server-scoped to the operator's configured profile.
    * MACHINE-LOCAL by nature (profile.json + the crew's own balance snapshots live on this machine),
