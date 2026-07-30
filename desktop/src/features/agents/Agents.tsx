@@ -10,6 +10,7 @@
 import { useEffect, useState } from "react";
 import { doctor, type DoctorReport } from "../../shared/api/client";
 import type { HubClient, Peer } from "../../shared/api/client";
+import { Avatar } from "../../shared/Avatar";
 
 const ONLINE_MS = 5 * 60 * 1000;   // matches the hub's RELAY_ONLINE_MS default
 const BUSY_MS = 90 * 1000;         // heartbeat is ~60s, so fresher than this means mid-turn
@@ -30,26 +31,6 @@ const COLOR: Record<State, string> = {
 // the colon gives the brand, which is what the operator actually thinks in ("is codex up?").
 const brandOf = (session: string) => session.split(":")[0] ?? session;
 const projectOf = (session: string) => (session.includes(":") ? session.split(":").slice(1).join(":") : "");
-
-// Buzz's avatars carry the personality; ours are monograms on a per-brand hue. Deterministic —
-// the same brand is the same color on every machine, no asset pipeline.
-function hueOf(name: string) {
-  let h = 0;
-  for (const c of name) h = (h * 31 + c.charCodeAt(0)) % 360;
-  return h;
-}
-function Avatar({ name, size = 52 }: { name: string; size?: number }) {
-  const h = hueOf(name);
-  return (
-    <span className="flex items-center justify-center rounded-full font-semibold"
-          style={{
-            width: size, height: size, fontSize: size * 0.36,
-            background: `hsl(${h} 32% 26%)`, color: `hsl(${h} 55% 72%)`,
-          }}>
-      {name.slice(0, 2)}
-    </span>
-  );
-}
 
 function ago(ts?: number) {
   if (!ts) return "never";
