@@ -63,7 +63,12 @@ async fn doctor() -> Result<String, String> {
         let home = std::env::var("HOME").unwrap_or_default();
         format!("{home}/development/trantor")
     });
-    let out = tokio::process::Command::new("node")
+    // Finder-launched apps get the bare system PATH (no /opt/homebrew/bin), so "node" alone
+    // fails outside a terminal. Probe the usual install locations before falling back to PATH.
+    let node = ["/opt/homebrew/bin/node", "/usr/local/bin/node", "/usr/bin/node"]
+        .iter().find(|p| std::path::Path::new(p).exists())
+        .map(|p| p.to_string()).unwrap_or_else(|| "node".to_string());
+    let out = tokio::process::Command::new(node)
         .arg(format!("{root}/bin/doctor.mjs")).arg("--json")
         .output().await.map_err(|e| format!("doctor: {e}"))?;
     let text = String::from_utf8_lossy(&out.stdout).trim().to_string();
