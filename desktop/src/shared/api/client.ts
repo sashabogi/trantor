@@ -124,6 +124,17 @@ export class HubAuthError extends Error {}
 export async function hubForProject(project: string): Promise<string> {
   return invoke<string>("hub_for_project", { project });
 }
+export type DoctorEntry = { section: string; message: string; fix?: string | null };
+export type DoctorReport = {
+  sections: string[]; ok: DoctorEntry[]; issues: DoctorEntry[];
+  notes: DoctorEntry[]; issueCount: number;
+};
+
+/** Harness detection, from the SAME engine `trantor doctor` uses. */
+export async function doctor(): Promise<DoctorReport> {
+  return JSON.parse(await invoke<string>("doctor"));
+}
+
 export async function knownProjects(): Promise<string[]> {
   return invoke<string[]>("known_projects");
 }

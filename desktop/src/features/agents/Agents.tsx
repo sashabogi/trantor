@@ -6,6 +6,7 @@
 // means "actively calling tools" and a stale one means idle-at-the-prompt. That distinction is the
 // whole reason the wake ladder exists, so it is surfaced here rather than flattened to a dot.
 import { useEffect, useState } from "react";
+import { doctor, type DoctorReport } from "../../shared/api/client";
 import type { HubClient, Peer } from "../../shared/api/client";
 
 const ONLINE_MS = 5 * 60 * 1000;   // matches the hub's RELAY_ONLINE_MS default
@@ -38,6 +39,12 @@ function ago(ts?: number) {
 export function Agents({ client, project }: { client: HubClient; project: string }) {
   const [peers, setPeers] = useState<Peer[] | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [health, setHealth] = useState<DoctorReport | null>(null);
+
+  // Harness detection: WHICH seats could run at all, as opposed to which happen to be alive. A brand
+  // missing from here can never come up, and no amount of staring at presence dots will say why —
+  // that was the single most portable idea in Buzz's onboarding.
+  useEffect(() => { doctor().then(setHealth).catch(() => {}); }, []);
 
   useEffect(() => {
     let alive = true;
@@ -88,6 +95,49 @@ export function Agents({ client, project }: { client: HubClient; project: string
         <span className="text-xs text-[var(--color-tr-muted)]">{live} live · {peers.length} known</span>
       </header>
       <div className="flex-1 overflow-y-auto p-4">
+        {health && (() => {
+          const crew = [
+            ...health.ok.filter(e => e.section.startsWith("crew")).map(e => ({ ...e, state: "ok" as const })),
+            ...health.issues.filter(e => e.section.startsWith("crew")).map(e => ({ ...e, state: "bad" as const })),
+            ...health.notes.filter(e => e.section.startsWith("crew")).map(e => ({ ...e, state: "missing" as const })),
+          ];
+          // "codex: wired to the bus" / "codex: authenticated" -> one row per brand, both facts.
+          const byBrand = new Map<string, { wired?: boolean; auth?: boolean; missing?: boolean; fix?: string | null }>();
+          for (const e of crew) {
+            const brand = e.message.split(":")[0].trim();
+            const cur = byBrand.get(brand) ?? {};
+            if (e.state === "missing") cur.missing = true;
+            else if (/authenticated/i.test(e.message)) cur.auth = e.state === "ok";
+            else if (/wired/i.test(e.message)) cur.wired = e.state === "ok";
+            if (e.state === "bad" && e.fix) cur.fix = e.fix;
+            byBrand.set(brand, cur);
+          }
+          return (
+            <>
+              <div className="mb-2 text-[11px] uppercase tracking-wider text-[var(--color-tr-muted)]">
+                harnesses {health.issueCount > 0 && <span className="text-[var(--color-tr-fail)]">· {health.issueCount} issue(s)</span>}
+              </div>
+              <div className="mb-6 flex flex-wrap gap-2">
+                {[...byBrand.entries()].map(([brand, st]) => {
+                  const ready = st.wired && st.auth;
+                  const color = st.missing ? "var(--color-tr-edge)" : ready ? "var(--color-tr-ok)" : "var(--color-tr-fail)";
+                  return (
+                    <div key={brand} title={st.fix ?? undefined}
+                         className="rounded-lg border border-[var(--color-tr-edge)] bg-[var(--color-tr-panel)] px-3 py-2">
+                      <div className="flex items-center gap-2 text-sm">
+                        <span className="h-2 w-2 rounded-full" style={{ background: color }} />
+                        {brand}
+                      </div>
+                      <div className="mt-0.5 text-[10px] uppercase tracking-wide text-[var(--color-tr-muted)]">
+                        {st.missing ? "not installed" : ready ? "ready" : !st.wired ? "not wired" : "not authenticated"}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </>
+          );
+        })()}
         <div className="mb-2 text-[11px] uppercase tracking-wider text-[var(--color-tr-muted)]">{project}</div>
         <div className="mb-6 flex flex-col gap-2">
           {mine.length ? mine.map(p => <Row key={p.session} p={p} />)

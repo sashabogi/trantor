@@ -13,14 +13,23 @@ const H = homedir();
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const has = (c) => { try { execSync(`command -v ${c}`, { stdio: "ignore", shell: "/bin/sh" }); return true; } catch { return false; } };
 const read = (p) => { try { return JSON.parse(readFileSync(p, "utf8")); } catch { return null; } };
-const ok = (m) => console.log(`  ✓ ${m}`);
-const warn = (m, fix) => { console.log(`  ✗ ${m}`); if (fix) console.log(`      → ${fix}`); issues++; };
+// --json makes the SAME engine feed the desktop app. Without it the app would have to re-implement
+// detection (or parse this text), and the two would drift — the CLI would say a seat is wired while
+// the app said otherwise, with no way to tell which was right.
+const JSON_MODE = process.argv.includes("--json");
+const REPORT = { ok: [], issues: [], notes: [], sections: [] };
+let SECTION = "";
+const say = (line) => { if (!JSON_MODE) console.log(line); };
+const section = (name) => { SECTION = name; REPORT.sections.push(name); say((REPORT.sections.length > 1 ? "\n" : "") + name); };
+const ok = (m) => { REPORT.ok.push({ section: SECTION, message: m }); say(`  ✓ ${m}`); };
+const warn = (m, fix) => { REPORT.issues.push({ section: SECTION, message: m, fix: fix || null }); say(`  ✗ ${m}`); if (fix) say(`      → ${fix}`); issues++; };
+const note = (m) => { REPORT.notes.push({ section: SECTION, message: m }); say(`  – ${m}`); };
 let issues = 0;
 
-console.log("TRANTOR DOCTOR\n");
+say("TRANTOR DOCTOR\n");
 
 // runtime + hub + client version
-console.log("core");
+section("core");
 Number(process.versions.node.split(".")[0]) >= 18 ? ok(`node ${process.versions.node}`) : warn(`node ${process.versions.node} too old`, "install node >= 18");
 const cfg = read(join(H, ".agent-bus", "config.json")) || {};
 const HUB = process.env.RELAY_URL || cfg.url || "http://127.0.0.1:4477";
@@ -41,7 +50,7 @@ if (pkg?.version) {
 } else warn("could not read trantor version", "reinstall: npm install -g trantor");
 
 // claude plugin
-console.log("\nclaude (the orchestrator)");
+section("claude (the orchestrator)");
 if (!has("claude")) warn("claude CLI not found", "install Claude Code: https://claude.com/claude-code");
 else {
   const st = read(join(H, ".claude", "settings.json")) || {};
@@ -51,7 +60,7 @@ else {
 }
 
 // crew CLIs: installed / wired / authenticated
-console.log("\ncrew CLIs (install any subset — seats follow the work)");
+section("crew CLIs (install any subset — seats follow the work)");
 const CLIS = [
   { name: "codex",  bin: "codex",    wired: () => (readFileSync(join(H, ".codex", "config.toml"), "utf8")).includes("[mcp_servers.relay]"), auth: () => existsSync(join(H, ".codex", "auth.json")), login: "codex   (sign in with your ChatGPT account on first run)" },
   // Gemini CLI was retired 2026-06-18 for free/Pro/Ultra (Google → Antigravity `agy`). Kept as an
@@ -68,7 +77,7 @@ const CLIS = [
 ];
 let installed = 0;
 for (const c of CLIS) {
-  if (!has(c.bin)) { console.log(`  – ${c.name}: not installed (optional)`); continue; }
+  if (!has(c.bin)) { note(`${c.name}: not installed (optional)`); continue; }
   installed++;
   let wired = false; try { wired = c.wired(); } catch {}
   wired ? ok(`${c.name}: wired to the bus`) : warn(`${c.name}: installed but not wired`, `node ${join(ROOT, "bin", "connect.mjs")}`);
@@ -78,7 +87,7 @@ for (const c of CLIS) {
 if (!installed) warn("no crew CLIs found", "install at least one of: codex, gemini, kimi, opencode — Trantor orchestrates whatever you have");
 
 // brain
-console.log("\nthe brain");
+section("the brain");
 has("scrooge") || existsSync(join(H, ".local", "bin", "scrooge"))
   ? ok("economics engine installed (routing + cost ledger active)")
   : warn("economics engine missing — Advisor runs without live pricing; relay_scrooge dormant", "trantor setup   (installs it automatically)");
@@ -87,5 +96,7 @@ prof?.providers && Object.keys(prof.providers).length
   ? ok(`quota profile set (${Object.entries(prof.providers).map(([k, v]) => `${k}=${v.plan}`).join(", ")})`)
   : warn("quota profile not set — the Advisor will assume API billing everywhere", `node ${join(ROOT, "bin", "profile.mjs")} set claude=max codex=plus deepseek=api …  (use YOUR real plans)`);
 
-console.log(issues ? `\n${issues} issue(s) — fix the → lines above, then re-run the doctor.` : "\nAll clear — open a claude session in any project and say: \"fire up the crew\".");
+say(issues ? `\n${issues} issue(s) — fix the → lines above, then re-run the doctor.` : "\nAll clear — open a claude session in any project and say: \"fire up the crew\".");
+// Must come BEFORE the exit — process.exit() here truncated the report entirely.
+if (JSON_MODE) console.log(JSON.stringify({ ...REPORT, issueCount: issues }));
 process.exit(issues ? 1 : 0);

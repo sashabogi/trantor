@@ -54,12 +54,29 @@ async fn start_stream(app: tauri::AppHandle, base: String) {
     });
 }
 
+/// Run the EXISTING doctor engine and hand back its JSON. Deliberately shelling out rather than
+/// re-implementing detection in Rust: two detectors would drift, and then the CLI and the app would
+/// disagree about whether a seat is wired with no way to tell which is right.
+#[tauri::command]
+async fn doctor() -> Result<String, String> {
+    let root = std::env::var("TRANTOR_ROOT").unwrap_or_else(|_| {
+        let home = std::env::var("HOME").unwrap_or_default();
+        format!("{home}/development/trantor")
+    });
+    let out = tokio::process::Command::new("node")
+        .arg(format!("{root}/bin/doctor.mjs")).arg("--json")
+        .output().await.map_err(|e| format!("doctor: {e}"))?;
+    let text = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    if text.is_empty() { return Err(String::from_utf8_lossy(&out.stderr).to_string()); }
+    Ok(text)
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_notification::init())
-        .invoke_handler(tauri::generate_handler![greet, sign_request, hub_for_project, known_projects, hub_request, start_stream])
+        .invoke_handler(tauri::generate_handler![greet, sign_request, hub_for_project, known_projects, hub_request, start_stream, doctor])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
