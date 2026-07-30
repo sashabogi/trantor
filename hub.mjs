@@ -358,6 +358,14 @@ try { UI = readFileSync(new URL("./ui.html", import.meta.url), "utf8"); } catch 
 
 // open SSE streams: [{ session, res }]
 const streams = [];
+// live file claims: "project file session" -> { project, file, session, ts }. Ephemeral like
+// presence — see the /claim handler for the design.
+const CLAIM_TTL_MS = Number(process.env.RELAY_CLAIM_TTL_MS || 10 * 60 * 1000);
+const fileClaims = new Map();
+function pruneClaims() {
+  const cut = now() - CLAIM_TTL_MS;
+  for (const [k, c] of fileClaims) if (c.ts < cut) fileClaims.delete(k);
+}
 const now = () => Date.now();
 const fmtAge = ms => { const m = Math.floor(ms / 60000); return m > 48 * 60 ? `${Math.floor(m / 1440)}d ago` : m > 90 ? `${Math.floor(m / 60)}h ago` : `${m}m ago`; };
 function rawBody(req) {
@@ -397,7 +405,7 @@ function cmpSemver(a, b) {
 const AUTH_HEADERS = ["x-trantor-pubkey", "x-trantor-sig", "x-trantor-ts", "x-trantor-nonce"];
 const PUBLIC_ENDPOINTS = new Set(["/", "/ui", "/health", "/enroll"]);
 const OWNER_ENDPOINTS = new Set(["/project/delete", "/sweep", "/reconcile", "/invite"]);
-const READ_ENDPOINTS = new Set(["/peers", "/tasks", "/events", "/inbox", "/peer", "/card", "/stream", "/history", "/projects", "/catchup", "/phases", "/recent", "/handoffs", "/verify-gates"]);
+const READ_ENDPOINTS = new Set(["/peers", "/tasks", "/events", "/inbox", "/peer", "/card", "/stream", "/history", "/projects", "/catchup", "/phases", "/recent", "/handoffs", "/verify-gates", "/claims"]);
 const roleRank = { read: 1, write: 2, owner: 3 };
 const hasAuthHeaders = (req) => AUTH_HEADERS.some(h => !!req.headers[h]);
 const authPath = (u) => `${u.pathname}${u.search || ""}`;
@@ -802,6 +810,40 @@ const server = http.createServer(async (req, res) => {
       const lim = Math.min(200, Number(q.limit) || 50);
       const rows = filterReadable(auth, state.handoffLog.filter(h => !proj || h.project === proj), h => h.project).slice(-lim).reverse();
       return json(res, 200, { handoffs: rows });
+    }
+    // --- file claims: shared-resource awareness (the "two sessions, one file" problem) ----------
+    // A claim says "this session touched this file moments ago". The PreToolUse hook posts one
+    // BEFORE every file edit, and the response carries any live claims by OTHER sessions — which
+    // the hook hands to the acting session's own model, so an orchestrator learns about a
+    // collision before the edit lands, not at git time. Ephemeral BY DESIGN: like presence, a
+    // claim describes NOW, and a restart forgetting it is correct, so nothing touches the store.
+    if (req.method === "POST" && P === "/claim") {
+      const b = await body(req);
+      const proj = canon(String(b.project || "").slice(0, 80));
+      const file = String(b.file || "").slice(0, 400);
+      const session = String(b.session || "").slice(0, 120);
+      if (!proj || !file || !session) return json(res, 400, { error: "project, file and session required" });
+      pruneClaims();
+      const key = `${proj} ${file} ${session}`;
+      const mine = fileClaims.get(key);
+      const conflicts = [...fileClaims.values()]
+        .filter(c => c.project === proj && c.file === file && c.session !== session)
+        .map(c => ({ session: c.session, ts: c.ts, agoSec: Math.round((now() - c.ts) / 1000) }));
+      fileClaims.set(key, { project: proj, file, session, ts: now() });
+      touch(session, undefined, undefined, undefined, auth);
+      // Feed events, throttled by design: the FIRST touch inside a TTL window says "claimed";
+      // a collision says so every time — that is the one worth seeing on the FEED.
+      if (!mine) appendEvent("file.claim", proj, session, { file });
+      if (conflicts.length) appendEvent("file.conflict", proj, session, { file, with: conflicts.map(c => c.session) });
+      return json(res, 200, { ok: true, conflicts, ttlMs: CLAIM_TTL_MS });
+    }
+    if (req.method === "GET" && P === "/claims") {
+      pruneClaims();
+      const proj = q.project ? canon(String(q.project).slice(0, 80)) : "";
+      const rows = filterReadable(auth, [...fileClaims.values()].filter(c => !proj || c.project === proj), c => c.project)
+        .map(c => ({ ...c, agoSec: Math.round((now() - c.ts) / 1000) }))
+        .sort((a, b) => b.ts - a.ts);
+      return json(res, 200, { claims: rows });
     }
     if (req.method === "GET" && P === "/peers") {
       prunePeers();
