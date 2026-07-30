@@ -142,6 +142,29 @@ ok "cmux 4-seat grid: seat 2 splits RIGHT from seat 1" 'echo "$OUT13" | grep -q 
 ok "cmux 4-seat grid: seat 3 splits DOWN from seat 1" 'echo "$OUT13" | grep -q "new-split down --surface %DRYT0"'
 ok "cmux 4-seat grid: seat 4 splits DOWN from seat 2" 'echo "$OUT13" | grep -q "new-split down --surface %DRYT1"'
 
+# 14. reap-on-up regression (2026-07-29): `trantor up <agent>` REPLACES a live runner for the same
+# agent+project instead of stacking a duplicate (the 17-runner incident: N runners long-polling ONE
+# inbox, every contract waking all of them). Three properties, proven against REAL decoy processes:
+#   a. the reap happens, and its output is VISIBLE — i.e. it runs in resolve_spec() as a plain
+#      statement, not inside RUN_CMD, whose `cmd="$(RUN_CMD)"` call would swallow it into the
+#      launcher string (the exact placement bug the fix moved it away from);
+#   b. it is scoped to agent+project: a different agent on the same project survives;
+#   c. the pgrep pattern is ANCHORED: the same agent in ".../proj2" must survive a reap for
+#      ".../proj" — an unanchored pattern kills siblings on a directory-name prefix collision.
+mkdir -p "$TMP/proj" "$TMP/proj2"
+printf 'setInterval(() => {}, 1 << 30);\n' > "$TMP/crew-runner.mjs"
+node "$TMP/crew-runner.mjs" codex "$TMP/proj"  & DECOY_SAME=$!
+node "$TMP/crew-runner.mjs" glm   "$TMP/proj"  & DECOY_AGENT=$!
+node "$TMP/crew-runner.mjs" codex "$TMP/proj2" & DECOY_PREFIX=$!
+sleep 0.5
+OUT14="$(cd "$TMP/proj" && CREW_MUX=cmux CREW_DRY_RUN=1 HOME="$TMP" PATH="$TMP/fakebin:$PATH" RELAY_PROJECT=testproj bash "$ROOT/bin/crew.sh" up codex 2>&1)"
+ok "up reaps the live runner for the SAME agent+project" 'echo "$OUT14" | grep -q "^\[dry\] kill -9 $DECOY_SAME "'
+ok "the reap is not swallowed into the launcher string" '! echo "$OUT14" | grep -v "^\[dry\] kill -9" | grep -q "kill -9 $DECOY_SAME"'
+ok "up does NOT reap a different agent on the same project" '! echo "$OUT14" | grep -q "kill -9 $DECOY_AGENT"'
+ok "up does NOT reap the same agent in a prefix-named sibling dir" '! echo "$OUT14" | grep -q "kill -9 $DECOY_PREFIX"'
+kill -9 "$DECOY_SAME" "$DECOY_AGENT" "$DECOY_PREFIX" 2>/dev/null
+wait 2>/dev/null || true
+
 echo ""
 if [ "$FAIL" = "0" ]; then echo "ALL PASS ($PASS)"; else echo "$FAIL FAILED"; fi
 exit $([ "$FAIL" = "0" ] && echo 0 || echo 1)

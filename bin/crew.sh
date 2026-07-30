@@ -294,7 +294,9 @@ resolve_spec() {
 # another project is never ours to touch.
 reap_seat() {
   local pid
-  for pid in $(pgrep -f "crew-runner\.mjs $AGENT $DIR" 2>/dev/null); do
+  # Anchored: the runner's argv ends with DIR, and without the $ a reap for …/proj also matches a
+  # runner in …/proj2 — killing a SIBLING project's seat on a directory-name prefix collision.
+  for pid in $(pgrep -f "crew-runner\.mjs $AGENT $DIR"'$' 2>/dev/null); do
     run "kill -9 $pid 2>/dev/null"
   done
 }
