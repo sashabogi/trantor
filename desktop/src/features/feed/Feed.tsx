@@ -6,6 +6,7 @@
 import { useEffect, useMemo, useState } from "react";
 import type { HubClient, HubEvent } from "../../shared/api/client";
 import { CardDetail } from "../board/CardDetail";
+import { ProjectHeader } from "../project/ProjectHeader";
 
 const KIND_COLOR = (t: string) =>
   t === "message" ? "var(--color-tr-doing)"
@@ -55,7 +56,9 @@ function cardRef(e: HubEvent): number | null {
   return null;
 }
 
-export function Feed({ client, project }: { client: HubClient; project: string }) {
+export function Feed({ client, project, lens, onLens }: {
+  client: HubClient; project: string; lens: string; onLens: (l: string) => void;
+}) {
   const [events, setEvents] = useState<HubEvent[]>([]);
   const [live, setLive] = useState(false);
   const [chip, setChip] = useState<ChipKey>("all");
@@ -93,26 +96,23 @@ export function Feed({ client, project }: { client: HubClient; project: string }
 
   return (
     <div className="tr-pane relative flex h-full flex-col">
-      <header className="flex items-center gap-3 border-b border-[var(--color-tr-edge)] px-5 py-3">
-        <h1 className="text-base font-semibold">{project}</h1>
-        <div className="flex items-center gap-1">
-          {CHIPS.map(c => (
-            <button key={c.key} onClick={() => setChip(c.key)}
-              className={`rounded-full px-2.5 py-0.5 text-[11px] ${
-                chip === c.key
-                  ? "bg-black/40 text-[var(--color-tr-text)]"
-                  : "text-[var(--color-tr-muted)] hover:bg-black/20"}`}>
-              {c.key}{counts[c.key] ? ` ${counts[c.key]}` : ""}
-            </button>
-          ))}
-        </div>
-        <span className="ml-auto flex items-center gap-1.5 text-[11px] text-[var(--color-tr-muted)]">
-          <span className="mr-1.5 inline-block h-2 w-2 rounded-full align-middle"
-                style={{ background: live ? "var(--color-tr-ok)" : "var(--color-tr-muted)" }} />
-          {live ? "live" : "connecting…"}
-        </span>
-      </header>
-      <div className="flex-1 overflow-y-auto px-4 py-3">
+      <ProjectHeader project={project} lens={lens} onLens={onLens}
+        sub={<span className="inline-flex items-center gap-1.5">
+          <span className="tr-dot" style={{ background: live ? "var(--color-tr-ok)" : "var(--color-tr-muted)" }} />
+          {live ? "live" : "connecting…"} · everything that happens, as it happens
+        </span>} />
+      <div className="flex items-center gap-1.5 px-8 pb-3">
+        {CHIPS.map(c => (
+          <button key={c.key} onClick={() => setChip(c.key)}
+            className={`rounded-full px-3 py-1 text-[12px] ${
+              chip === c.key
+                ? "bg-white/[0.08] font-medium text-[var(--color-tr-text)]"
+                : "text-[var(--color-tr-muted)] hover:bg-white/[0.04] hover:text-[var(--color-tr-text)]"}`}>
+            {c.key}{counts[c.key] ? ` ${counts[c.key]}` : ""}
+          </button>
+        ))}
+      </div>
+      <div className="flex-1 overflow-y-auto px-8 pb-4">
         {visible.map((e, i) => {
           const ref = cardRef(e);
           return (

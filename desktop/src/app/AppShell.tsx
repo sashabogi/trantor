@@ -1,19 +1,15 @@
-// Shell — sidebar + main.
+// Shell — sidebar on the backdrop, content on a FLOATING main panel (the Buzz layout DNA).
 //
-// The first cut got the IA wrong by stacking everything into one tab strip. The distinction the app
-// actually has is SCOPE, and the layout should say so:
+// The IA is SCOPE, and the layout says so:
+//   FLEET    Home, Inbox, Agents, Learning — cross-project by definition. Sidebar, top.
+//   PROJECT  BOARD | FEED | CHAT — the only things that change when you pick a project.
+//   APP      Settings + identity. Sidebar footer.
 //
-//   GLOBAL   Inbox and Agents are not properties of a project. Messages are addressed to YOU, and a
-//            seat busy on ANOTHER project is exactly what you need to see. Sidebar, above the
-//            project list — where Buzz puts them, and for the same reason.
-//   APP      Settings belongs beside the identity it configures. Sidebar footer.
-//   PROJECT  BOARD and FEED are two LENSES on one project, and the only things that belong in the
-//            main pane's tab strip — because they are the only things that change when you pick a
-//            different project.
-//
-// Putting a global view in a per-project tab strip implies it is scoped to that project. It is not.
+// Fleet telemetry (economics, providers, tallies) lives on the HOME view as designed cards —
+// never in chrome. The old header dump was the altitude mistake made visible.
 import { useEffect, useMemo, useState } from "react";
 import { HubClient, hubForProject, knownProjects } from "../shared/api/client";
+import { Home } from "../features/home/Home";
 import { Board } from "../features/board/Board";
 import { Feed } from "../features/feed/Feed";
 import { Agents } from "../features/agents/Agents";
@@ -21,11 +17,11 @@ import { Inbox } from "../features/inbox/Inbox";
 import { Learning } from "../features/learning/Learning";
 import { Settings } from "../features/settings/Settings";
 import { Conversation } from "../features/chat/Conversation";
-import { CostStrip } from "../shared/CostStrip";
 import { notifyIfWorthIt } from "../shared/notify";
 
 type Lens = "board" | "feed" | "chat";
 type Pane =
+  | { kind: "home" }
   | { kind: "project"; lens: Lens }
   | { kind: "inbox" }
   | { kind: "agents" }
@@ -41,7 +37,7 @@ function group(projects: string[]) {
   const out = new Map<string, string[]>();
   for (const p of projects) {
     const key = p.includes("-") ? p.split("-")[0] : p;
-    const section = projects.filter(x => x === key || x.startsWith(key + "-")).length > 1 ? key : "other";
+    const section = projects.filter(x => x === key || x.startsWith(key + "-")).length > 1 ? key : "projects";
     if (!out.has(section)) out.set(section, []);
     out.get(section)!.push(p);
   }
@@ -52,7 +48,7 @@ export function AppShell() {
   const [projects, setProjects] = useState<string[]>([]);
   const [active, setActive] = useState<string>("");
   const [hub, setHub] = useState<string>("");
-  const [pane, setPane] = useState<Pane>({ kind: "project", lens: "board" });
+  const [pane, setPane] = useState<Pane>({ kind: "home" });
 
   useEffect(() => { knownProjects().then(p => { setProjects(p); setActive(a => a || p[0] || ""); }); }, []);
   useEffect(() => { if (active) hubForProject(active).then(setHub); }, [active]);
@@ -67,91 +63,88 @@ export function AppShell() {
     return client.streamEvents(ev => { void notifyIfWorthIt(ev, ME); });
   }, [client]);
 
+  const openProject = (p: string) => {
+    if (projects.includes(p)) setActive(p);
+    setPane({ kind: "project", lens: "board" });
+  };
+
   const NavItem = ({ label, on, onClick }: { label: string; on: boolean; onClick: () => void }) => (
     <button onClick={onClick}
-      className={`block w-full rounded border-l-2 px-2 py-1 text-left text-sm ${
-        on
-          ? "border-[var(--color-tr-ok)] bg-black/40 text-[var(--color-tr-text)]"
-          : "border-transparent text-[var(--color-tr-muted)] hover:bg-black/20 hover:text-[var(--color-tr-text)]"}`}>
+      className={`block w-full rounded-lg px-3 py-1.5 text-left text-[13px] ${
+        on ? "bg-white/[0.07] font-medium text-[var(--color-tr-text)]"
+           : "text-[var(--color-tr-muted)] hover:bg-white/[0.04] hover:text-[var(--color-tr-text)]"}`}>
       {label}
     </button>
   );
 
   return (
-    <div className="flex h-full">
-      <aside className="flex w-60 shrink-0 flex-col border-r border-[var(--color-tr-edge)] bg-[var(--color-tr-panel)]">
-        {/* Wordmark: the hub node. Same teal, same glow, as a lane's live dot. */}
-        <div className="flex items-center gap-2 px-4 py-3.5">
-          <span className="h-2 w-2 rounded-full bg-[var(--color-tr-ok)]"
-                style={{ boxShadow: "0 0 8px var(--color-tr-ok)" }} />
-          <span className="text-[13px] font-semibold uppercase tracking-[0.22em]">Trantor</span>
+    <div className="flex h-full gap-0 bg-[var(--color-tr-bg)]">
+      <aside className="flex w-60 shrink-0 flex-col px-3 py-4">
+        <div className="mb-5 flex items-center gap-2.5 px-3">
+          <span className="tr-dot" style={{ background: "var(--color-tr-ok)" }} />
+          <span className="text-[13px] font-semibold tracking-[0.18em]">TRANTOR</span>
         </div>
 
-        {/* GLOBAL — not scoped to the selected project. Learning lives here on purpose: a lesson
-            learned on one project exists to be applied on the next. */}
-        <div className="px-2 pb-2">
+        {/* FLEET — cross-project views */}
+        <div className="mb-4 flex flex-col gap-0.5">
+          <NavItem label="Home"     on={pane.kind === "home"}     onClick={() => setPane({ kind: "home" })} />
           <NavItem label="Inbox"    on={pane.kind === "inbox"}    onClick={() => setPane({ kind: "inbox" })} />
           <NavItem label="Agents"   on={pane.kind === "agents"}   onClick={() => setPane({ kind: "agents" })} />
           <NavItem label="Learning" on={pane.kind === "learning"} onClick={() => setPane({ kind: "learning" })} />
         </div>
 
-        <nav className="flex-1 overflow-y-auto px-2 pb-3">
+        <nav className="flex-1 overflow-y-auto">
           {sections.map(([section, list]) => (
-            <div key={section} className="mb-3">
-              <div className="tr-label px-2 pb-1">{section}</div>
-              {list.map(p => (
-                <button key={p}
-                  onClick={() => {
-                    setActive(p);
-                    setPane(cur => ({ kind: "project", lens: cur.kind === "project" ? cur.lens : "board" }));
-                  }}
-                  className={`block w-full truncate rounded border-l-2 px-2 py-1 text-left text-sm ${
-                    p === active && pane.kind === "project"
-                      ? "border-[var(--color-tr-ok)] bg-black/40 text-[var(--color-tr-text)]"
-                      : "border-transparent text-[var(--color-tr-muted)] hover:bg-black/20 hover:text-[var(--color-tr-text)]"}`}>
-                  {p}
-                </button>
-              ))}
+            <div key={section} className="mb-4">
+              <div className="px-3 pb-1.5 text-[11px] font-medium uppercase tracking-[0.08em] text-[var(--color-tr-muted)]/70">{section}</div>
+              <div className="flex flex-col gap-0.5">
+                {list.map(p => (
+                  <button key={p}
+                    onClick={() => { setActive(p); setPane(cur => ({ kind: "project", lens: cur.kind === "project" ? cur.lens : "board" })); }}
+                    className={`block w-full truncate rounded-lg px-3 py-1.5 text-left text-[13px] ${
+                      p === active && pane.kind === "project"
+                        ? "bg-white/[0.07] font-medium text-[var(--color-tr-text)]"
+                        : "text-[var(--color-tr-muted)] hover:bg-white/[0.04] hover:text-[var(--color-tr-text)]"}`}>
+                    {p}
+                  </button>
+                ))}
+              </div>
             </div>
           ))}
         </nav>
 
-        {/* APP — settings sits with the identity it configures */}
-        <div className="border-t border-[var(--color-tr-edge)] px-2 py-2">
+        {/* APP — identity + settings live together */}
+        <div className="mt-2 flex flex-col gap-0.5">
           <NavItem label="Settings" on={pane.kind === "settings"} onClick={() => setPane({ kind: "settings" })} />
-          <div className="tr-mono truncate px-2 pt-1 text-[10px] text-[var(--color-tr-muted)]">
-            {ME} · {hub ? hub.replace(/^https?:\/\//, "") : "resolving…"}
+          <div className="flex items-center gap-2.5 px-3 pt-2">
+            <span className="relative flex h-7 w-7 items-center justify-center rounded-full bg-[var(--color-tr-panel)] text-[12px] font-semibold">
+              {ME[0].toUpperCase()}
+              <span className="tr-dot absolute -right-0.5 -bottom-0.5 border-2 border-[var(--color-tr-bg)]"
+                    style={{ background: "var(--color-tr-ok)", width: 9, height: 9 }} />
+            </span>
+            <span className="min-w-0">
+              <span className="block truncate text-[13px]">{ME}</span>
+              <span className="block truncate text-[11px] text-[var(--color-tr-muted)]">
+                {hub ? hub.replace(/^https?:\/\//, "") : "resolving…"}
+              </span>
+            </span>
           </div>
         </div>
       </aside>
 
-      <main className="flex min-w-0 flex-1 flex-col">
-        {/* Lens tabs belong to the PROJECT pane only — they are meaningless for a global view. */}
-        {pane.kind === "project" && (
-          <div className="flex items-center gap-1 border-b border-[var(--color-tr-edge)] px-4 py-2">
-            {(["board", "feed", "chat"] as Lens[]).map(l => (
-              <button key={l} onClick={() => setPane({ kind: "project", lens: l })}
-                className={`rounded px-3 py-1 text-xs uppercase tracking-wide ${
-                  pane.lens === l ? "bg-black/40 text-[var(--color-tr-text)]" : "text-[var(--color-tr-muted)] hover:bg-black/20"}`}>
-                {l}
-              </button>
-            ))}
-            <span className="ml-3 text-xs text-[var(--color-tr-muted)]">{active}</span>
-            {client && <CostStrip client={client} project={active} projectCount={projects.length} />}
-          </div>
-        )}
-
+      <main className="tr-main my-2.5 mr-2.5 flex min-w-0 flex-1 flex-col overflow-hidden">
         {!client ? (
-          <div className="p-6 text-sm text-[var(--color-tr-muted)]">
+          <div className="p-10 text-sm text-[var(--color-tr-muted)]">
             No projects pinned. Run <code>trantor hub set &lt;project&gt; &lt;url&gt;</code>
           </div>
-        ) : pane.kind === "inbox" ? <Inbox client={client} me={ME} />
+        ) : pane.kind === "home" ? <Home client={client} me={ME} onOpenProject={openProject} />
+          : pane.kind === "inbox" ? <Inbox client={client} me={ME} />
           : pane.kind === "agents" ? <Agents client={client} project={active} />
           : pane.kind === "learning" ? <Learning client={client} />
           : pane.kind === "settings" ? <Settings me={ME} />
-          : pane.lens === "board" ? <Board client={client} project={active} />
-          : pane.lens === "chat" ? <Conversation client={client} project={active} me={ME} />
-          : <Feed client={client} project={active} />}
+          : pane.lens === "board" ? <Board client={client} project={active} lens={pane.lens} onLens={l => setPane({ kind: "project", lens: l as Lens })} />
+          : pane.lens === "chat" ? <Conversation client={client} project={active} me={ME} lens={pane.lens} onLens={l => setPane({ kind: "project", lens: l as Lens })} />
+          : <Feed client={client} project={active} lens={pane.lens} onLens={l => setPane({ kind: "project", lens: l as Lens })} />}
       </main>
     </div>
   );

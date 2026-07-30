@@ -1,21 +1,27 @@
 @import "tailwindcss";
 
-/* Trantor's palette — already in use by crew-runner.mjs for seat status, so the app and the
-   terminal seats speak the same colour language. Deliberately NOT Buzz's yellow. */
+/* ── Trantor design system v2 — the "Buzz calibration" ─────────────────────────────────────────
+   The reference (Sasha, 2026-07-29): Buzz's Agents screen. What it does that v1 didn't:
+     • a floating inset content panel with real margins — not edge-to-edge density
+     • a big friendly page title + one muted subtitle on EVERY screen
+     • generous card grids, soft corners, dashed add-slots
+     • a calm NEUTRAL dark palette — color appears in CONTENT and status, never in chrome
+     • quiet typography — no mono dumps in chrome, no glow, no 11px data soup
+   The old --color-tr-* names keep working (every view references them); their VALUES moved to
+   the neutral system. Status hues are unchanged — they match the cmux sidebar and crew-runner. */
 @theme {
-  --color-tr-bg:      #0f1115;
-  --color-tr-panel:   #161a21;
-  --color-tr-edge:    #232935;
-  --color-tr-text:    #e6e9ef;
-  --color-tr-muted:   #8a94a6;   /* idle */
-  --color-tr-ok:      #14b8a6;   /* done  */
-  --color-tr-doing:   #4a90d9;   /* building */
-  --color-tr-fail:    #ef6a6a;   /* error */
+  --color-tr-bg:      #131316;   /* window backdrop the panel floats on */
+  --color-tr-panel:   #1e1e22;   /* cards / raised surfaces */
+  --color-tr-edge:    #2a2a30;   /* hairline borders */
+  --color-tr-text:    #ececf0;
+  --color-tr-muted:   #9a9aa3;
+  --color-tr-ok:      #14b8a6;   /* done / online   */
+  --color-tr-doing:   #4a90d9;   /* building        */
+  --color-tr-fail:    #ef6a6a;   /* error / blocked */
   --color-tr-warn:    #d9a441;
 
-  /* Flight-deck type: a characterful geometric that SHIPS WITH macOS (the CSP blocks webfonts,
-     and an ops console must not look different offline), and a real mono for every number the
-     eye has to trust — ids, counts, costs, timestamps. */
+  --color-tr-main:    #19191d;   /* the floating main panel */
+
   --font-ui:   "Avenir Next", "Avenir", "Helvetica Neue", ui-sans-serif, sans-serif;
   --font-mono: "SF Mono", ui-monospace, "Menlo", monospace;
 }
@@ -24,85 +30,123 @@ html, body, #root { height: 100%; }
 
 body {
   font-family: var(--font-ui);
+  font-size: 14px;
   color: var(--color-tr-text);
-  letter-spacing: 0.01em;
-  /* Atmosphere instead of a flat fill: a faint phosphor glow bleeding from the top — the same
-     teal the OK state uses — over a near-black base. Fixed, so scrolling content moves through
-     the light rather than dragging it along. */
-  background:
-    radial-gradient(120% 60% at 50% -10%, rgba(20, 184, 166, 0.07), transparent 60%),
-    radial-gradient(80% 40% at 85% 110%, rgba(74, 144, 217, 0.04), transparent 60%),
-    var(--color-tr-bg);
-  background-attachment: fixed;
+  background: var(--color-tr-bg);
+  letter-spacing: 0.005em;
+  -webkit-font-smoothing: antialiased;
 }
 
-/* Grain: a whisper of noise so large dark panels read as material, not dead pixels. */
-body::after {
-  content: "";
-  position: fixed;
-  inset: 0;
-  pointer-events: none;
-  z-index: 50;
-  opacity: 0.05;
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='120' height='120'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2'/%3E%3C/filter%3E%3Crect width='120' height='120' filter='url(%23n)' opacity='0.5'/%3E%3C/svg%3E");
-}
-
-/* Numbers the eye has to trust are mono, everywhere, without per-view effort. */
+/* Numbers the eye has to compare stay mono — INSIDE content only, never in chrome. */
 code, .tr-mono { font-family: var(--font-mono); font-size: 0.92em; letter-spacing: 0; }
 
-::selection { background: rgba(20, 184, 166, 0.28); }
+::selection { background: rgba(20, 184, 166, 0.25); }
 
-/* Thin console scrollbars — the default macOS overlay is fine, but WKWebView's fallback is not. */
 *::-webkit-scrollbar { width: 8px; height: 8px; }
-*::-webkit-scrollbar-thumb { background: rgba(138, 148, 166, 0.22); border-radius: 4px; }
-*::-webkit-scrollbar-thumb:hover { background: rgba(138, 148, 166, 0.38); }
+*::-webkit-scrollbar-thumb { background: rgba(154, 154, 163, 0.18); border-radius: 4px; }
+*::-webkit-scrollbar-thumb:hover { background: rgba(154, 154, 163, 0.32); }
 *::-webkit-scrollbar-track { background: transparent; }
 
-/* One deliberate motion moment: content panes materialise with a short rise; board lanes stagger
-   (see .tr-lane) so the board reads left-to-right as it arrives. Everything else is micro. */
-@keyframes tr-rise { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
-@keyframes tr-slide-in { from { opacity: 0; transform: translateX(24px); } to { opacity: 1; transform: none; } }
+/* ── page scaffolding ── */
 
-.tr-pane { animation: tr-rise 0.28s cubic-bezier(0.2, 0.7, 0.2, 1) both; }
-.tr-lane { animation: tr-rise 0.32s cubic-bezier(0.2, 0.7, 0.2, 1) both; }
-.tr-lane:nth-child(2) { animation-delay: 0.04s; }
-.tr-lane:nth-child(3) { animation-delay: 0.08s; }
-.tr-lane:nth-child(4) { animation-delay: 0.12s; }
-.tr-lane:nth-child(5) { animation-delay: 0.16s; }
-.tr-lane:nth-child(6) { animation-delay: 0.20s; }
-.tr-lane:nth-child(7) { animation-delay: 0.24s; }
-
-/* The card tile: a panel with depth, not a bordered rectangle. Hover lifts it toward the light. */
-.tr-card {
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.025), transparent 55%), var(--color-tr-panel);
+/* The floating main panel: content lives on this, with margin to the window on all sides. */
+.tr-main {
+  background: var(--color-tr-main);
   border: 1px solid var(--color-tr-edge);
-  border-radius: 0.55rem;
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.35);
-  transition: transform 0.12s ease, border-color 0.12s ease, box-shadow 0.12s ease;
+  border-radius: 12px;
 }
-.tr-card:hover {
+
+/* Every screen opens the same way: a title a human would say out loud, then one quiet line. */
+.tr-page-title { font-size: 26px; font-weight: 600; letter-spacing: -0.01em; }
+.tr-page-sub   { margin-top: 2px; font-size: 14px; color: var(--color-tr-muted); }
+.tr-sec-title  { font-size: 16px; font-weight: 600; }
+.tr-sec-sub    { margin-top: 1px; font-size: 13px; color: var(--color-tr-muted); }
+
+/* ── surfaces ── */
+
+.tr-card {
+  background: var(--color-tr-panel);
+  border: 1px solid var(--color-tr-edge);
+  border-radius: 14px;
+  transition: border-color 0.12s ease, transform 0.12s ease, box-shadow 0.12s ease;
+}
+.tr-card-hover:hover {
   transform: translateY(-1px);
-  border-color: rgba(74, 144, 217, 0.55);
-  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.45), 0 0 0 1px rgba(74, 144, 217, 0.12);
+  border-color: #3a3a42;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.35);
 }
+/* the inviting empty slot — Buzz's dashed "+" cell */
+.tr-card-ghost {
+  border: 1px dashed #34343c;
+  border-radius: 14px;
+  color: var(--color-tr-muted);
+  transition: border-color 0.12s ease, color 0.12s ease;
+}
+.tr-card-ghost:hover { border-color: var(--color-tr-muted); color: var(--color-tr-text); }
 
-/* Drawer: slides in from the card's board, backdrop frosts the console behind it. */
-.tr-drawer { animation: tr-slide-in 0.22s cubic-bezier(0.2, 0.7, 0.2, 1) both; }
-.tr-backdrop { background: rgba(8, 10, 14, 0.55); backdrop-filter: blur(3px); }
-
-/* Micro-labels — lane names, section headers — in tracked caps. The flight-deck voice. */
-.tr-label {
-  font-size: 10px;
-  font-weight: 600;
-  letter-spacing: 0.14em;
-  text-transform: uppercase;
+.tr-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.05);
+  padding: 2px 7px;
+  font-size: 11px;
   color: var(--color-tr-muted);
 }
 
-/* Inputs and selects share one console voice; focus is the phosphor ring, not the browser's. */
+/* status dot — small, honest, no glow */
+.tr-dot { display: inline-block; width: 7px; height: 7px; border-radius: 9999px; }
+
+/* segmented control (project lenses) */
+.tr-seg { display: inline-flex; gap: 2px; background: rgba(255, 255, 255, 0.04); border-radius: 9px; padding: 3px; }
+.tr-seg > button {
+  border-radius: 7px;
+  padding: 4px 12px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--color-tr-muted);
+}
+.tr-seg > button[data-on="true"] { background: var(--color-tr-panel); color: var(--color-tr-text); box-shadow: 0 1px 3px rgba(0,0,0,0.3); }
+.tr-seg > button:not([data-on="true"]):hover { color: var(--color-tr-text); }
+
+/* inputs share one quiet voice */
 input, select, textarea, button { font-family: inherit; }
+.tr-input {
+  border: 1px solid var(--color-tr-edge);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.03);
+  padding: 6px 10px;
+  font-size: 13px;
+  color: var(--color-tr-text);
+  outline: none;
+  transition: border-color 0.12s ease;
+}
+.tr-input::placeholder { color: var(--color-tr-muted); }
+.tr-input:focus { border-color: #44444e; }
+select.tr-input { padding: 5px 8px; color: var(--color-tr-muted); }
+
 input:focus-visible, select:focus-visible, textarea:focus-visible, button:focus-visible {
-  outline: 1px solid rgba(20, 184, 166, 0.65);
+  outline: 1px solid rgba(154, 154, 163, 0.5);
   outline-offset: 1px;
 }
 button { transition: background-color 0.12s ease, border-color 0.12s ease, color 0.12s ease; }
+
+/* one gentle arrival, no theatrics */
+@keyframes tr-rise { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+.tr-pane { animation: tr-rise 0.22s ease-out both; }
+
+/* drawer */
+@keyframes tr-slide-in { from { opacity: 0; transform: translateX(20px); } to { opacity: 1; transform: none; } }
+.tr-drawer { animation: tr-slide-in 0.2s ease-out both; }
+.tr-backdrop { background: rgba(10, 10, 12, 0.5); backdrop-filter: blur(2px); }
+
+/* legacy classes still referenced by views — quiet equivalents */
+.tr-label {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--color-tr-muted);
+}
+.tr-lane { animation: tr-rise 0.22s ease-out both; }

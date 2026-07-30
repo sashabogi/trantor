@@ -89,12 +89,12 @@ export function Agents({ client, project }: { client: HubClient; project: string
   };
 
   return (
-    <div className="flex h-full flex-col">
-      <header className="flex items-center gap-3 border-b border-[var(--color-tr-edge)] px-5 py-3">
-        <h1 className="text-base font-semibold">agents</h1>
-        <span className="text-xs text-[var(--color-tr-muted)]">{live} live · {peers.length} known</span>
+    <div className="tr-pane flex h-full flex-col">
+      <header className="px-10 pt-8 pb-5">
+        <h1 className="tr-page-title">Agents</h1>
+        <p className="tr-page-sub">{live} live · {peers.length} known across the fleet.</p>
       </header>
-      <div className="flex-1 overflow-y-auto p-4">
+      <div className="flex-1 overflow-y-auto px-10 pb-8">
         {health && (() => {
           const crew = [
             ...health.ok.filter(e => e.section.startsWith("crew")).map(e => ({ ...e, state: "ok" as const })),

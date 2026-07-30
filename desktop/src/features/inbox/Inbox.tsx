@@ -36,13 +36,13 @@ export function Inbox({ client, me }: { client: HubClient; me: string }) {
   };
 
   return (
-    <div className="flex h-full flex-col">
-      <header className="flex items-center gap-3 border-b border-[var(--color-tr-edge)] px-5 py-3">
-        <h1 className="text-base font-semibold">inbox</h1>
-        <span className="text-xs text-[var(--color-tr-muted)]">{me} · {messages.length}</span>
+    <div className="tr-pane flex h-full flex-col">
+      <header className="px-10 pt-8 pb-5">
+        <h1 className="tr-page-title">Inbox</h1>
+        <p className="tr-page-sub">{me} · {messages.length}</p>
       </header>
 
-      <div className="flex-1 overflow-y-auto px-4 py-3">
+      <div className="flex-1 overflow-y-auto px-10 pb-8">
         {messages.map(m => {
           return (
             <div key={m.id} className="mb-2 rounded-lg border border-[var(--color-tr-edge)] bg-[var(--color-tr-panel)] p-3">

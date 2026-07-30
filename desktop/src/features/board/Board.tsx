@@ -8,6 +8,7 @@
 import { useEffect, useMemo, useState } from "react";
 import type { Card, HubClient } from "../../shared/api/client";
 import { CardDetail } from "./CardDetail";
+import { ProjectHeader } from "../project/ProjectHeader";
 
 // Lane order matches the hub's own card flow: todo -> doing -> testing -> done, with the two
 // exception lanes last. `stale` comes from the reaper, `blocked` is set by hand.
@@ -48,7 +49,7 @@ function CardTile({ card, onOpen, onAdvance }: {
     // explicit → button, here and in the drawer.
     <div
       onClick={() => onOpen(card)}
-      className="tr-card cursor-pointer p-3 text-sm">
+      className="tr-card tr-card-hover cursor-pointer p-3.5 text-[13px]">
       <div className="leading-snug">{card.title}</div>
       <div className="mt-2 flex flex-wrap items-center gap-1.5 text-[11px] text-[var(--color-tr-muted)]">
         {card.assignee && <span className="rounded bg-black/30 px-1.5 py-0.5">@{card.assignee}</span>}
@@ -68,7 +69,9 @@ function CardTile({ card, onOpen, onAdvance }: {
   );
 }
 
-export function Board({ client, project }: { client: HubClient; project: string }) {
+export function Board({ client, project, lens, onLens }: {
+  client: HubClient; project: string; lens: string; onLens: (l: string) => void;
+}) {
   const [cards, setCards] = useState<Card[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [query, setQuery] = useState("");
@@ -121,33 +124,26 @@ export function Board({ client, project }: { client: HubClient; project: string 
 
   return (
     <div className="tr-pane relative flex h-full flex-col">
-      <header className="flex items-center gap-3 border-b border-[var(--color-tr-edge)] px-5 py-3">
-        <h1 className="text-base font-semibold">{project}</h1>
-        <span className="tr-mono text-xs text-[var(--color-tr-muted)]">
-          {done}/{cards.length} done · {Math.round((done / Math.max(cards.length, 1)) * 100)}%
-          {filtered && <span> · showing {visible.length}</span>}
-        </span>
+      <ProjectHeader project={project} lens={lens} onLens={onLens}
+        sub={<>{done}/{cards.length} done · {Math.round((done / Math.max(cards.length, 1)) * 100)}%{filtered && <> · showing {visible.length}</>}</>}>
         <input
           value={query}
           onChange={e => setQuery(e.target.value)}
-          placeholder="search — text, #id, @assignee"
-          className="ml-auto w-56 rounded border border-[var(--color-tr-edge)] bg-black/20 px-2 py-1 text-xs outline-none placeholder:text-[var(--color-tr-muted)] focus:border-[var(--color-tr-doing)]"
+          placeholder="Search — text, #id, @assignee"
+          className="tr-input w-56"
         />
         {assignees.length > 0 && (
-          <select
-            value={assignee}
-            onChange={e => setAssignee(e.target.value)}
-            className="rounded border border-[var(--color-tr-edge)] bg-black/20 px-2 py-1 text-xs text-[var(--color-tr-muted)] outline-none focus:border-[var(--color-tr-doing)]">
+          <select value={assignee} onChange={e => setAssignee(e.target.value)} className="tr-input">
             <option value="">everyone</option>
             {assignees.map(a => <option key={a} value={a}>@{a}</option>)}
           </select>
         )}
-      </header>
-      <div className="flex flex-1 gap-3 overflow-x-auto p-4">
+      </ProjectHeader>
+      <div className="flex flex-1 gap-4 overflow-x-auto px-8 pb-6">
         {byLane.map(([lane, list]) => (
           <section key={lane} className="tr-lane flex min-w-[240px] flex-1 flex-col">
-            <div className="mb-2 flex items-center gap-2">
-              <span className="h-2 w-2 rounded-full" style={{ background: LANE_COLOR[lane], boxShadow: `0 0 6px ${LANE_COLOR[lane]}` }} />
+            <div className="mb-2.5 flex items-center gap-2 px-0.5">
+              <span className="tr-dot" style={{ background: LANE_COLOR[lane] }} />
               <span className="tr-label">{lane}</span>
               <span className="tr-mono ml-auto text-[11px] text-[var(--color-tr-muted)]">{list.length}</span>
             </div>

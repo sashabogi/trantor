@@ -21,9 +21,10 @@ export function Settings({ me }: { me: string }) {
   const remote = rows.filter(([, u]) => !u.includes("127.0.0.1") && !u.includes("localhost"));
 
   return (
-    <div className="flex h-full flex-col">
-      <header className="border-b border-[var(--color-tr-edge)] px-5 py-3">
-        <h1 className="text-base font-semibold">settings</h1>
+    <div className="tr-pane flex h-full flex-col">
+      <header className="px-10 pt-8 pb-5">
+        <h1 className="tr-page-title">Settings</h1>
+        <p className="tr-page-sub">Identity, hubs and app configuration.</p>
       </header>
       <div className="flex-1 overflow-y-auto p-5 text-sm">
         <section className="mb-6">

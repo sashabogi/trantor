@@ -11,6 +11,7 @@
 // have to read two terminal windows to follow one exchange.
 import { useEffect, useMemo, useState } from "react";
 import type { HubClient, HubEvent, Peer } from "../../shared/api/client";
+import { ProjectHeader } from "../project/ProjectHeader";
 
 const ONLINE_MS = 5 * 60 * 1000;
 const BUSY_MS = 90 * 1000;
@@ -25,7 +26,9 @@ function presence(p: Peer) {
 
 type Msg = { id: number; ts: number; by: string; text: string; to: string };
 
-export function Conversation({ client, project, me }: { client: HubClient; project: string; me: string }) {
+export function Conversation({ client, project, me, lens, onLens }: {
+  client: HubClient; project: string; me: string; lens: string; onLens: (l: string) => void;
+}) {
   const [msgs, setMsgs] = useState<Msg[]>([]);
   const [peers, setPeers] = useState<Peer[]>([]);
   const [to, setTo] = useState("all");
@@ -68,9 +71,12 @@ export function Conversation({ client, project, me }: { client: HubClient; proje
   };
 
   return (
-    <div className="flex min-h-0 flex-1">
+    <div className="tr-pane flex h-full flex-col">
+      <ProjectHeader project={project} lens={lens} onLens={onLens}
+        sub={<>{roster.length} in the room · agents talking to each other</>} />
+      <div className="flex min-h-0 flex-1">
       <div className="flex min-w-0 flex-1 flex-col">
-        <div className="flex-1 overflow-y-auto px-4 py-3">
+        <div className="flex-1 overflow-y-auto px-8 py-2">
           {err && <div className="mb-2 text-[11px] text-[var(--color-tr-fail)]">{err}</div>}
           {msgs.map(m => {
             const mine = m.by === me;
@@ -96,19 +102,19 @@ export function Conversation({ client, project, me }: { client: HubClient; proje
           {!msgs.length && <div className="p-4 text-sm text-[var(--color-tr-muted)]">No conversation in {project} yet.</div>}
         </div>
 
-        <div className="border-t border-[var(--color-tr-edge)] p-3">
+        <div className="border-t border-[var(--color-tr-edge)] px-8 py-4">
           <div className="flex gap-2">
             <select value={to} onChange={e => setTo(e.target.value)}
-                    className="w-52 shrink-0 rounded border border-[var(--color-tr-edge)] bg-[var(--color-tr-bg)] px-2 py-1.5 text-sm">
+                    className="tr-input w-52 shrink-0">
               <option value="all">everyone in {project}</option>
               {roster.map(p => <option key={p.session} value={p.session}>{p.session}</option>)}
             </select>
             <input value={text} onChange={e => setText(e.target.value)}
                    onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); void send(); } }}
                    placeholder={`message ${project}…`}
-                   className="min-w-0 flex-1 rounded border border-[var(--color-tr-edge)] bg-[var(--color-tr-bg)] px-3 py-1.5 text-sm" />
+                   className="tr-input min-w-0 flex-1" />
             <button onClick={() => void send()} disabled={!text.trim() || busy}
-                    className="shrink-0 rounded bg-[var(--color-tr-doing)] px-3 py-1.5 text-sm text-white disabled:opacity-40">
+                    className="shrink-0 rounded-lg bg-[var(--color-tr-doing)] px-4 py-1.5 text-sm font-medium text-white disabled:opacity-40">
               {busy ? "…" : "send"}
             </button>
           </div>
@@ -134,6 +140,7 @@ export function Conversation({ client, project, me }: { client: HubClient; proje
         })}
         {!roster.length && <div className="text-[11px] text-[var(--color-tr-muted)]">Nobody here.</div>}
       </aside>
+      </div>
     </div>
   );
 }

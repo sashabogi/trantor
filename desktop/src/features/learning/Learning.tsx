@@ -124,19 +124,18 @@ export function Learning({ client }: { client: HubClient }) {
   const t = data.totals;
   return (
     <div className="tr-pane flex h-full flex-col">
-      <header className="flex items-center gap-3 border-b border-[var(--color-tr-edge)] px-5 py-3">
-        <h1 className="text-base font-semibold">Learning</h1>
-        <span className="tr-mono text-xs text-[var(--color-tr-muted)]">
-          {t.lessons} lessons · {t.guardrails} guardrails · {t.turns} turns · {Math.round(t.failRate * 100)}% fail
-        </span>
-        <select value={scope} onChange={e => setScope(e.target.value)}
-                className="ml-auto rounded border border-[var(--color-tr-edge)] bg-black/20 px-2 py-1 text-xs text-[var(--color-tr-muted)] outline-none focus:border-[var(--color-tr-doing)]">
+      <header className="flex items-start justify-between px-10 pt-8 pb-5">
+        <div>
+          <h1 className="tr-page-title">Learning</h1>
+          <p className="tr-page-sub">{t.lessons} lessons · {t.guardrails} guardrails · {t.turns.toLocaleString()} turns · {Math.round(t.failRate * 100)}% fail</p>
+        </div>
+        <select value={scope} onChange={e => setScope(e.target.value)} className="tr-input mt-1">
           <option value={ALL}>{ALL}</option>
           {data.lessons.projects.map(p => <option key={p} value={p}>{p}</option>)}
         </select>
       </header>
 
-      <div className="flex flex-1 gap-4 overflow-hidden p-4">
+      <div className="flex flex-1 gap-8 overflow-hidden px-10 pb-8">
         {/* what was learned */}
         <section className="flex min-w-0 flex-[3] flex-col">
           <div className="tr-label mb-2">
