@@ -1,35 +1,42 @@
 // Brand avatars — the REAL marks, not letters. Sasha: "give all of the LLMs their appropriate
 // logos… instead of just having these little letters."
 //
-// Icons come from simple-icons (bundled SVG paths — the CSP forbids remote assets). Two brands are
-// missing from that set by the brands' own trademark policy (OpenAI/codex, Zhipu/glm); they keep a
-// styled monogram in their brand color until official assets are dropped in.
+// Source: @lobehub/icons-static-svg — the AI-brand icon collection, bundled at build time (the
+// CSP forbids remote assets). One source for every mark, including the two simple-icons cannot
+// carry (OpenAI honors takedowns there; Zhipu was never contributed): Codex has its own official
+// mark, GLM ships as Z.ai. Each SVG is viewBox 24 with currentColor fill, so the brand color is
+// just CSS `color` on the wrapper.
 //
-// Resolution order: an explicit `llm` prop wins (the bus now carries llm+model per peer); else the
+// Resolution order: an explicit `llm` prop wins (the bus carries llm+model per peer); else the
 // name's brand token; else host-looking names resolve to Claude — an orchestrator session named
 // after the laptop is still Claude doing the work, which was exactly the complaint. Anything else
 // (projects, humans) stays a deterministic monogram.
-import {
-  siClaude, siDeepseek, siKimi, siMoonshotai, siGooglegemini, siOpenrouter, siOllama,
-} from "simple-icons";
+import claudeSvg from "@lobehub/icons-static-svg/icons/claude.svg?raw";
+import deepseekSvg from "@lobehub/icons-static-svg/icons/deepseek.svg?raw";
+import kimiSvg from "@lobehub/icons-static-svg/icons/kimi.svg?raw";
+import moonshotSvg from "@lobehub/icons-static-svg/icons/moonshot.svg?raw";
+import geminiSvg from "@lobehub/icons-static-svg/icons/gemini.svg?raw";
+import openrouterSvg from "@lobehub/icons-static-svg/icons/openrouter.svg?raw";
+import ollamaSvg from "@lobehub/icons-static-svg/icons/ollama.svg?raw";
+import codexSvg from "@lobehub/icons-static-svg/icons/codex.svg?raw";
+import openaiSvg from "@lobehub/icons-static-svg/icons/openai.svg?raw";
+import zaiSvg from "@lobehub/icons-static-svg/icons/zai.svg?raw";
 
-type Brand = { path?: string; hex: string; label: string; mono?: string };
+type Brand = { svg: string; hex: string; label: string };
 
 const BRANDS: Record<string, Brand> = {
-  claude:     { path: siClaude.path, hex: "#D97757", label: "Claude" },
-  anthropic:  { path: siClaude.path, hex: "#D97757", label: "Claude" },
-  deepseek:   { path: siDeepseek.path, hex: "#5786FE", label: "DeepSeek" },
-  kimi:       { path: siKimi.path, hex: "#8b8bf5", label: "Kimi" },
-  moonshot:   { path: siMoonshotai.path, hex: "#8b8bf5", label: "Moonshot" },
-  gemini:     { path: siGooglegemini.path, hex: "#8E75B2", label: "Gemini" },
-  openrouter: { path: siOpenrouter.path, hex: "#94A3B8", label: "OpenRouter" },
-  ollama:     { path: siOllama.path, hex: "#c8c8d0", label: "Ollama" },
-  // trademark-restricted in simple-icons — branded monograms until official assets are provided
-  codex:      { hex: "#74AA9C", label: "Codex", mono: "co" },
-  openai:     { hex: "#74AA9C", label: "OpenAI", mono: "oa" },
-  glm:        { hex: "#4268FA", label: "GLM", mono: "Z" },
-  zai:        { hex: "#4268FA", label: "Z.ai", mono: "Z" },
-  opencode:   { hex: "#9a9aa3", label: "opencode", mono: "oc" },
+  claude:     { svg: claudeSvg, hex: "#D97757", label: "Claude" },
+  anthropic:  { svg: claudeSvg, hex: "#D97757", label: "Claude" },
+  codex:      { svg: codexSvg, hex: "#e8e8ee", label: "Codex" },
+  openai:     { svg: openaiSvg, hex: "#e8e8ee", label: "OpenAI" },
+  deepseek:   { svg: deepseekSvg, hex: "#5786FE", label: "DeepSeek" },
+  kimi:       { svg: kimiSvg, hex: "#8b8bf5", label: "Kimi" },
+  moonshot:   { svg: moonshotSvg, hex: "#8b8bf5", label: "Moonshot" },
+  glm:        { svg: zaiSvg, hex: "#5ea0f5", label: "GLM (Z.ai)" },
+  zai:        { svg: zaiSvg, hex: "#5ea0f5", label: "Z.ai" },
+  gemini:     { svg: geminiSvg, hex: "#8E75B2", label: "Gemini" },
+  openrouter: { svg: openrouterSvg, hex: "#94A3B8", label: "OpenRouter" },
+  ollama:     { svg: ollamaSvg, hex: "#c8c8d0", label: "Ollama" },
 };
 
 const HOSTISH = /^(macbook|imac|mac[-.]|.*\.local$)|@/i;
@@ -54,14 +61,10 @@ export function Avatar({ name, llm, size = 52 }: { name: string; llm?: string; s
     return (
       <span className="flex shrink-0 items-center justify-center rounded-full"
             title={brand.label}
-            style={{ width: size, height: size, background: `${brand.hex}26` }}>
-        {brand.path ? (
-          <svg viewBox="0 0 24 24" width={size * 0.55} height={size * 0.55} aria-label={brand.label}>
-            <path d={brand.path} fill={brand.hex} />
-          </svg>
-        ) : (
-          <span className="font-semibold" style={{ color: brand.hex, fontSize: size * 0.34 }}>{brand.mono}</span>
-        )}
+            style={{ width: size, height: size, background: `${brand.hex}22` }}>
+        <span aria-label={brand.label}
+              style={{ color: brand.hex, fontSize: size * 0.55, lineHeight: 0 }}
+              dangerouslySetInnerHTML={{ __html: brand.svg }} />
       </span>
     );
   }
@@ -81,6 +84,6 @@ export function Avatar({ name, llm, size = 52 }: { name: string; llm?: string; s
 export function displayName(session: string, llm?: string): string {
   const head = session.split(":")[0] ?? session;
   const brand = brandFor(session, llm);
-  if (brand && HOSTISH.test(head)) return `${brand.label.toLowerCase()} · ${head}`;
+  if (brand && HOSTISH.test(head)) return `${brand.label.toLowerCase().split(" ")[0]} · ${head}`;
   return head;
 }
