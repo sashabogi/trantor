@@ -70,6 +70,25 @@ console.log("saveDelta: statement selection");
   ok(!stmts.some(s => s.includes("NOT (id = ANY")), "NO delete-everything-not-in-memory anywhere (foreign rows survive)");
 }
 
+console.log("task extra fields: pack + unpack (the cost-metadata fidelity fix)");
+{
+  const { PgStore: PS } = await import("./lib/store-pg.mjs");
+  const { taskExtra } = await import("./lib/store-pg.mjs");
+  // pack: non-column fields → extra; column fields stay out of it
+  const t = task(7, { costKind: "subagent-notional", tokens: { input: 5, output: 9 }, count: 3, _aid: "a1" });
+  const extra = taskExtra(t);
+  ok(extra.costKind === "subagent-notional" && extra.count === 3 && extra._aid === "a1" && extra.tokens?.output === 9,
+     "costKind/tokens/count/_aid land in extra");
+  ok(!("title" in extra) && !("status" in extra) && !("costUsd" in extra), "column fields stay OUT of extra");
+  // write path: the INSERT actually carries the extra parameter
+  const { log, pool } = mockPool();
+  const store = new PS({ pool });
+  await store.saveDelta("local", baseState(), baseState({ tasks: [t] }), { src: "t" });
+  const ins = log.find(l => l.sql.includes("INSERT INTO tasks"));
+  ok(!!ins && ins.sql.includes("extra") && JSON.parse(ins.vals[15]).costKind === "subagent-notional",
+     "task INSERT persists extra as the 16th column");
+}
+
 console.log("saveDelta: no-op short-circuit");
 {
   const { log, pool } = mockPool();
