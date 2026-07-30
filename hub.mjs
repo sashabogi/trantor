@@ -404,7 +404,7 @@ function cmpSemver(a, b) {
 }
 const AUTH_HEADERS = ["x-trantor-pubkey", "x-trantor-sig", "x-trantor-ts", "x-trantor-nonce"];
 const PUBLIC_ENDPOINTS = new Set(["/", "/ui", "/health", "/enroll"]);
-const OWNER_ENDPOINTS = new Set(["/project/delete", "/sweep", "/reconcile", "/invite"]);
+const OWNER_ENDPOINTS = new Set(["/project/delete", "/sweep", "/reconcile", "/invite", "/import"]);
 const READ_ENDPOINTS = new Set(["/peers", "/tasks", "/events", "/inbox", "/peer", "/card", "/stream", "/history", "/projects", "/catchup", "/phases", "/recent", "/handoffs", "/verify-gates", "/claims"]);
 const roleRank = { read: 1, write: 2, owner: 3 };
 const hasAuthHeaders = (req) => AUTH_HEADERS.some(h => !!req.headers[h]);
@@ -770,7 +770,14 @@ const server = http.createServer(async (req, res) => {
     if (!auth.ok) return json(res, auth.code || 401, { error: auth.error || "unauthorized" });
     const authz = authorize(auth, req.method, P, projectFromRequest(P, q, b0));
     if (!authz.ok) return json(res, authz.code || 403, { error: authz.error || "forbidden" });
-    if (req.method === "POST" && P === "/register") { const b = await body(req); touch(b.session, b.status, b.project, b.hookVersion, auth); return json(res, 200, { ok: true, session: b.session, peers: Object.keys(state.peers) }); }
+    if (req.method === "POST" && P === "/register") {
+      const b = await body(req); touch(b.session, b.status, b.project, b.hookVersion, auth);
+      // WHO is this, really: the LLM brand + the exact model currently loaded. In-memory like the
+      // rest of presence — the next heartbeat re-supplies it after a restart.
+      const pr = state.peers[b.session];
+      if (pr) { if (b.model) pr.model = String(b.model).slice(0, 80); if (b.llm) pr.llm = String(b.llm).slice(0, 40); }
+      return json(res, 200, { ok: true, session: b.session, peers: Object.keys(state.peers) });
+    }
     if (req.method === "POST" && P === "/status") { const b = await body(req); touch(b.session, b.status ?? "", b.project, b.hookVersion, auth); return json(res, 200, { ok: true }); }
     // Single-peer lookup, including the read receipt (how far this session's inbox has actually been
     // handed over). Kept out of /peers, which feeds the dashboard and wants presence, not delivery state.
@@ -817,6 +824,45 @@ const server = http.createServer(async (req, res) => {
     // the hook hands to the acting session's own model, so an orchestrator learns about a
     // collision before the edit lands, not at git time. Ephemeral BY DESIGN: like presence, a
     // claim describes NOW, and a restart forgetting it is correct, so nothing touches the store.
+    // --- project adoption: merge one project's rows brought from ANOTHER hub -------------------
+    // The other half of `trantor adopt`: the CLI reads the project's data off the machine-local
+    // hub and POSTs it here (owner-signed), so onboarding needs no ssh and no direct Postgres
+    // access. Colliding card ids get FRESH ids (both hubs mint from their own taskSeq — the
+    // split-brain lesson from the first migration), and their events are re-pointed. Events append
+    // with new log ids; messages take the next seq. Idempotence is the CALLER's contract: adopt
+    // refuses to run when the project already has cards here, unless forced.
+    if (req.method === "POST" && P === "/import") {
+      const b = await body(req);
+      const proj = canon(String(b.project || "").slice(0, 80));
+      if (!proj) return json(res, 400, { error: "project required" });
+      const existing = state.tasks.filter(t => t.project === proj).length;
+      if (existing && !b.force) return json(res, 409, { error: "project already has cards here", existing });
+      const remap = new Map();
+      const added = { tasks: 0, events: 0, messages: 0, remapped: 0 };
+      const have = new Set(state.tasks.map(t => t.id));
+      for (const t of (Array.isArray(b.tasks) ? b.tasks : [])) {
+        let id = Number(t.id);
+        if (!Number.isFinite(id)) continue;
+        if (have.has(id)) { const nid = ++state.taskSeq; remap.set(id, nid); id = nid; added.remapped++; }
+        else state.taskSeq = Math.max(state.taskSeq, id);
+        state.tasks.push({ ...t, id, project: proj });
+        have.add(id); added.tasks++;
+      }
+      for (const e of (Array.isArray(b.events) ? b.events : [])) {
+        const last = state.events[state.events.length - 1];
+        const ev = { ...e, id: (last?.id || 0) + 1, project: proj };
+        if (ev.taskId != null && remap.has(Number(ev.taskId))) ev.taskId = remap.get(Number(ev.taskId));
+        state.events.push(ev); added.events++;
+      }
+      if (state.events.length > EVENT_CAP) state.events.splice(0, state.events.length - EVENT_CAP);
+      for (const m of (Array.isArray(b.messages) ? b.messages : [])) {
+        state.messages.push({ ...m, id: ++state.seq, project: proj }); added.messages++;
+      }
+      if (state.messages.length > 5000) state.messages.splice(0, 1000);
+      dirty = true;
+      appendEvent("project.adopted", proj, String(b.by || ""), { counts: added });
+      return json(res, 200, { ok: true, ...added });
+    }
     if (req.method === "POST" && P === "/claim") {
       const b = await body(req);
       const proj = canon(String(b.project || "").slice(0, 80));
@@ -851,7 +897,7 @@ const server = http.createServer(async (req, res) => {
       const peerRows = filterReadable(auth, Object.entries(state.peers), ([, v]) => v.project || "");
       return json(res, 200, { hubVersion: HUB_VERSION, authMode: AUTH_MODE, peers: peerRows.map(([s, v]) => ({ session: s, lastSeen: v.lastSeen, online: v.lastSeen > cutoff, status: v.status || "", health: healthOf(v.status), project: v.project || "",
         pubkey: v.pubkey || "", identity: v.identity || null, authWarning: v.authWarning || "",
-        hookVersion: v.hookVersion || "", staleHooks: !!(v.lastSeen > cutoff && v.hookVersion && HUB_VERSION && cmpSemver(v.hookVersion, HUB_VERSION) < 0) })) });
+        llm: v.llm || "", model: v.model || "", hookVersion: v.hookVersion || "", staleHooks: !!(v.lastSeen > cutoff && v.hookVersion && HUB_VERSION && cmpSemver(v.hookVersion, HUB_VERSION) < 0) })) });
     }
     // --- Provider balances (prepaid credit) ---
     // The hub runs under launchd with no provider keys, so it can't fetch balances itself. Env-having
@@ -1357,7 +1403,7 @@ const server = http.createServer(async (req, res) => {
       const mk = k => (byProj[k] ||= { project: k, brief: (state.projectMeta[k]?.brief) || "", agents: [], tasks: { todo:0,doing:0,testing:0,failed:0,done:0,blocked:0 }, doingTitles: [], lastActivity: 0 });
       for (const [s, v] of filterReadable(auth, Object.entries(state.peers), ([, v]) => v.project || "")) {
         const k = proj(v.project); const e = mk(k); e.agents.push({ session: s, online: v.lastSeen > cutoff, status: v.status || "", health: healthOf(v.status),
-          hookVersion: v.hookVersion || "", staleHooks: !!(v.lastSeen > cutoff && v.hookVersion && HUB_VERSION && cmpSemver(v.hookVersion, HUB_VERSION) < 0) });
+          llm: v.llm || "", model: v.model || "", hookVersion: v.hookVersion || "", staleHooks: !!(v.lastSeen > cutoff && v.hookVersion && HUB_VERSION && cmpSemver(v.hookVersion, HUB_VERSION) < 0) });
         if ((v.lastSeen || 0) > e.lastActivity) e.lastActivity = v.lastSeen;
       }
       for (const t of filterReadable(auth, state.tasks, t => t.project || "")) { const e = mk(proj(t.project)); e.tasks[t.status] = (e.tasks[t.status]||0)+1; if (t.status === "doing") e.doingTitles.push(t.title); if ((t.updated || 0) > e.lastActivity) e.lastActivity = t.updated; }

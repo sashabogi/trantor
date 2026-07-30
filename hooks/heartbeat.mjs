@@ -13,7 +13,7 @@
 // per HEARTBEAT_MS, and a short fetch timeout means we never add real latency to a tool call.
 // We POST /register WITHOUT a status field so the session's meaningful status is preserved
 // (the hub only overwrites status when one is supplied).
-import { readFileSync, writeFileSync, existsSync } from "node:fs";
+import { readFileSync, writeFileSync, existsSync, statSync, openSync, readSync, closeSync } from "node:fs";
 import { join, basename, dirname } from "node:path";
 import { homedir, hostname } from "node:os";
 import { spawn } from "node:child_process";
@@ -27,6 +27,26 @@ const HEARTBEAT_MS = Number(process.env.RELAY_HEARTBEAT_MS || 60 * 1000);
 const FETCH_TIMEOUT_MS = Number(process.env.RELAY_HEARTBEAT_TIMEOUT_MS || 1500);
 const INFLIGHT_MS = 5 * 60 * 1000;
 const HERE = dirname(fileURLToPath(import.meta.url));
+
+// The model this session is ACTUALLY running, read from the transcript tail — the harness does not
+// hand hooks a model field, but every assistant entry records one. Tail-read only (transcripts grow
+// to MBs); any failure returns "" and the peer simply keeps its last known model.
+function modelFromTranscript(stdinRaw) {
+  try {
+    const tp = JSON.parse(stdinRaw || "{}").transcript_path;
+    if (!tp || !existsSync(tp)) return "";
+    const size = statSync(tp).size, want = Math.min(size, 65536);
+    const f = openSync(tp, "r");
+    try {
+      const buf = Buffer.alloc(want);
+      readSync(f, buf, 0, want, size - want);
+      const m = [...buf.toString("utf8").matchAll(/"model"\s*:\s*"([^"]+)"/g)]
+        .map(x => x[1]).filter(v => v.startsWith("claude"));
+      return m.length ? m[m.length - 1] : "";
+    } finally { closeSync(f); }
+  } catch { return ""; }
+}
+
 
 function readStdin() {
   return new Promise(res => { let d = ""; process.stdin.setEncoding("utf8");
@@ -110,7 +130,8 @@ async function main(stdinRaw) {
   try { writeFileSync(stamp, String(Date.now())); } catch {}
 
   // POST /register with no status -> hub refreshes lastSeen + project, preserves status.
-  await signedPost("/register", { session, project, hookVersion: (() => { try { return installedVersion(); } catch { return ""; } })() }, { session, timeoutMs: Number(process.env.RELAY_HEARTBEAT_TIMEOUT_MS || 1500) });
+  await signedPost("/register", { session, project, llm: "claude", model: modelFromTranscript(stdinRaw),
+    hookVersion: (() => { try { return installedVersion(); } catch { return ""; } })() }, { session, timeoutMs: Number(process.env.RELAY_HEARTBEAT_TIMEOUT_MS || 1500) });
 
   // Same cadence as the presence ping: check context pressure and hand off early
   // if we've crossed the warn threshold of a known window.

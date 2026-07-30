@@ -154,7 +154,7 @@ async function reportFailure(exit, trigger) {
   const reason = classifyFailure(exit, lastErrText);
   const down = consecFails >= 2;
   const status = down ? `down: ${reason} · ${consecFails} fails` : `errored: ${reason}`;
-  await api("/register", { session: SESSION, project: PROJ, status }).catch(() => {});
+  await api("/register", { session: SESSION, project: PROJ, status, llm: AGENT, model: MODEL }).catch(() => {});
   const hint = reason === "exhausted" ? " — needs `trantor swap`"
     : reason === "auth" ? " — check credentials"
     : reason === "missing-cli" ? " — CLI not on PATH" : "";
@@ -169,7 +169,7 @@ async function reportFailure(exit, trigger) {
 async function reportHealthy() {
   if (consecFails === 0) return;        // already healthy — don't spam
   consecFails = 0;
-  await api("/register", { session: SESSION, project: PROJ, status: `active in ${PROJ}` }).catch(() => {});
+  await api("/register", { session: SESSION, project: PROJ, status: `active in ${PROJ}`, llm: AGENT, model: MODEL }).catch(() => {});
   await api("/send", { from: SESSION, to: "all", text: `✅ ${SESSION} recovered`, project: PROJ }).catch(() => {});
   cmuxStatus("ok", "#14b8a6", "check");
 }
@@ -209,7 +209,7 @@ function runTurn(prompt, isFirst, trigger = "kickoff") {
 
 // ---- main loop ----
 const KICKOFF = process.env.CREW_KICKOFF ||
-  `You just joined. 1) relay_send to "all": "${AGENT} reporting — ready for a contract". 2) relay_inbox — if a contract for you is already waiting, do it now per the Rules. 3) End your turn.\n\n${RULES}`;
+  `You just joined (your arrival was already announced on the bus). 1) relay_inbox — if a contract for you is already waiting, do it now per the Rules. 2) End your turn.\n\n${RULES}`;
 
 let LESSONS = "";
 async function loadLessons() {
@@ -224,7 +224,19 @@ async function loadLessons() {
   // start cursor at the CURRENT tip so we don't replay history
   let cursor = 0;
   try { const r = await api(`/inbox?session=${encodeURIComponent(SESSION)}&since=0`); cursor = r.cursor || 0; } catch {}
-  await api("/register", { session: SESSION, project: PROJ, status: "crew member booting" }).catch(() => {});
+  await api("/register", { session: SESSION, project: PROJ, status: "crew member booting", llm: AGENT, model: MODEL }).catch(() => {});
+  // Announce runner-side, signed as THIS seat. Asking the seat to announce itself sent glm's hello
+  // out under deepseek's identity whenever opencode seats shared one MCP daemon (lesson on the bus,
+  // 2026-07-29): the runner process is per-seat by construction, so its signature cannot be borrowed.
+  try {
+    const { sfetchJson } = await import("../lib/signed-fetch.mjs");
+    const { loadOrCreate } = await import("../lib/identity.mjs");
+    await sfetchJson(`${HUB}/send`, {
+      identity: loadOrCreate(SESSION, "agent"),
+      payload: { from: SESSION, to: "all", project: PROJ, text: `${AGENT} reporting — ready for a contract${MODEL ? ` (${MODEL})` : ""}` },
+      signal: AbortSignal.timeout(2500),
+    });
+  } catch {}
 
   let pendingBcast = [];
   const ec0 = runTurn(KICKOFF + LESSONS, true, "kickoff");
