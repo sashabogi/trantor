@@ -69,6 +69,7 @@ switch (cmd) {
   case "adopt": run("bin/adopt.mjs"); break;
   case "summarize": run("bin/summarize.mjs"); break;
   case "policy": run("bin/policy.mjs"); break;
+  case "inbox": run("bin/inbox.mjs"); break;
   case "identity": {
     const { load, publicView, generate, keyPath } = await import(join(ROOT, "lib/identity.mjs"));
     const sub = args[0], name = args[1] || "human";
@@ -163,6 +164,8 @@ switch (cmd) {
   trantor hub         run the hub in the foreground (setup installs it as a service instead)
                       …or manage per-project hub pins: hub list · hub set <project> <url> · hub unset <project>
   trantor watch       live bus feed in the terminal
+  trantor inbox       THIS session's unread bus messages, signed (works under enforce) — [--all] [--consume] [--json]
+  trantor policy      the autonomy ladder: show | set <project> <1-4> | link <a> <b> --reason "<why>"
 
 Claude Code plugin (the orchestrator side):
   claude plugin marketplace add sashabogi/trantor && claude plugin install trantor

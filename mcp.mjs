@@ -11,7 +11,7 @@ import { homedir, hostname } from "node:os";
 import { execSync, spawnSync } from "node:child_process";
 import { advise } from "./bin/advise.mjs";
 import { resolveProject, hostId, resolveHub } from "./lib/project.mjs";
-import { signedPost, getJSON } from "./hooks/lib/api.mjs";
+import { signedPost, signedGet } from "./hooks/lib/api.mjs";
 import { assertNoSecrets } from "./lib/scrub.mjs";
 import { z } from "zod";
 
@@ -43,14 +43,16 @@ async function seedCursor() {
   } catch { /* hub down: the subsequent real call surfaces the error; leave cursor at 0 */ }
 }
 
-// Every hub WRITE is SIGNED with this session's Ed25519 keypair (TDD §7.3) via the shared client in
-// hooks/lib/api.mjs — that is what binds /send's `from` to the signer and closes the self-asserted
-// `from` hole (the 2026-07-28 RCE). Reads go unsigned for now (pending the hub's DM scope-filtering
-// fix — see hooks/lib/api.mjs:getJSON). The client fail-opens on a down hub (returns {ok:false}); we
-// surface that as a thrown Error so individual tools can .catch it exactly as they did for a bare fetch.
+// Every hub call is SIGNED with this session's Ed25519 keypair (TDD §7.3) via the shared client in
+// hooks/lib/api.mjs. Writes: that is what binds /send's `from` to the signer and closes the
+// self-asserted `from` hole (the 2026-07-28 RCE). Reads TOO (the 2026-07-30 agent-UX gap): an
+// enforce hub 401s unsigned reads, which made relay_inbox/board/peers dead for the very agents the
+// bus exists for. Signed reads are scope-filtered by the hub to this identity's grants — for a
+// session reading its own project + DMs that is the intended behavior. The client fail-opens on a
+// down hub (returns {ok:false}); we surface that as a thrown Error so individual tools .catch it.
 async function api(method, path, payload) {
   const r = method.toUpperCase() === "GET"
-    ? await getJSON(path)
+    ? await signedGet(path, { session: SESSION })
     : await signedPost(path, payload, { session: SESSION });
   if (!r.ok) throw new Error(`hub ${r.status} on ${path}`);
   return r.json;
