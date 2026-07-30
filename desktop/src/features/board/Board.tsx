@@ -118,7 +118,10 @@ export function Board({ client, project, lens, onLens }: {
   if (!cards) return <div className="p-6 text-sm text-[var(--color-tr-muted)]">Loading {project}…</div>;
 
   const visible = cards.filter(c => matches(c, query) && (!assignee || c.assignee === assignee));
-  const byLane = LANES.map(l => [l, visible.filter(c => (c.status || "todo") === l)] as const);
+  // Exception lanes earn their width by having cards in them; the four flow lanes are always the
+  // board's shape. Seven permanent columns forced a horizontal scroll that clipped lane counts.
+  const byLane = LANES.map(l => [l, visible.filter(c => (c.status || "todo") === l)] as const)
+    .filter(([l, list]) => !["failed", "blocked", "stale"].includes(l) || list.length > 0);
   const done = cards.filter(c => c.status === "done").length;
   const filtered = visible.length !== cards.length;
 
@@ -141,7 +144,7 @@ export function Board({ client, project, lens, onLens }: {
       </ProjectHeader>
       <div className="flex flex-1 gap-4 overflow-x-auto px-8 pb-6">
         {byLane.map(([lane, list]) => (
-          <section key={lane} className="tr-lane flex min-w-[240px] flex-1 flex-col">
+          <section key={lane} className="tr-lane flex w-[270px] shrink-0 flex-col xl:w-auto xl:flex-1 xl:shrink">
             <div className="mb-2.5 flex items-center gap-2 px-0.5">
               <span className="tr-dot" style={{ background: LANE_COLOR[lane] }} />
               <span className="tr-label">{lane}</span>

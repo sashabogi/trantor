@@ -1,6 +1,8 @@
 // AGENTS — the roster. Humans and agents are both peers on the bus; the difference is `kind`, not
 // a separate concept. This is the view Buzz got right and nobody else has: which harnesses exist,
-// which are alive, and what each is doing right now.
+// which are alive, and what each is doing right now — and Buzz's Agents screen is the design
+// reference for the whole app, so THIS view carries its language hardest: a card grid with big
+// colorful avatars for the harnesses, quiet rows for the live sessions.
 //
 // Presence is derived, not stored: the hub's heartbeat fires on PostToolUse, so a FRESH lastSeen
 // means "actively calling tools" and a stale one means idle-at-the-prompt. That distinction is the
@@ -27,6 +29,27 @@ const COLOR: Record<State, string> = {
 // A seat's identity is `<brand>:<project>`; the human sessions are `<host>:<project>`. Splitting on
 // the colon gives the brand, which is what the operator actually thinks in ("is codex up?").
 const brandOf = (session: string) => session.split(":")[0] ?? session;
+const projectOf = (session: string) => (session.includes(":") ? session.split(":").slice(1).join(":") : "");
+
+// Buzz's avatars carry the personality; ours are monograms on a per-brand hue. Deterministic —
+// the same brand is the same color on every machine, no asset pipeline.
+function hueOf(name: string) {
+  let h = 0;
+  for (const c of name) h = (h * 31 + c.charCodeAt(0)) % 360;
+  return h;
+}
+function Avatar({ name, size = 52 }: { name: string; size?: number }) {
+  const h = hueOf(name);
+  return (
+    <span className="flex items-center justify-center rounded-full font-semibold"
+          style={{
+            width: size, height: size, fontSize: size * 0.36,
+            background: `hsl(${h} 32% 26%)`, color: `hsl(${h} 55% 72%)`,
+          }}>
+      {name.slice(0, 2)}
+    </span>
+  );
+}
 
 function ago(ts?: number) {
   if (!ts) return "never";
@@ -62,8 +85,8 @@ export function Agents({ client, project }: { client: HubClient; project: string
     if (ev.type?.startsWith("presence")) client.peers().then(setPeers).catch(() => {});
   }), [client]);
 
-  if (error) return <div className="p-6 text-sm text-[var(--color-tr-fail)]">Agents unavailable: {error}</div>;
-  if (!peers) return <div className="p-6 text-sm text-[var(--color-tr-muted)]">Loading roster…</div>;
+  if (error) return <div className="p-10 text-sm text-[var(--color-tr-fail)]">Agents unavailable: {error}</div>;
+  if (!peers) return <div className="p-10 text-sm text-[var(--color-tr-muted)]">Loading roster…</div>;
 
   // This project first — that is what the operator is looking at — then everyone else for context,
   // because a seat busy on ANOTHER project is exactly what explains a quota stall here.
@@ -73,12 +96,20 @@ export function Agents({ client, project }: { client: HubClient; project: string
 
   const Row = ({ p }: { p: Peer }) => {
     const st = stateOf(p);
+    const proj = p.project || projectOf(p.session);
     return (
-      <div className="flex items-center gap-3 rounded-lg border border-[var(--color-tr-edge)] bg-[var(--color-tr-panel)] px-3 py-2">
-        <span className="h-2.5 w-2.5 shrink-0 rounded-full" style={{ background: COLOR[st] }} />
+      <div className="tr-card flex items-center gap-3 px-4 py-3">
+        <span className="relative shrink-0">
+          <Avatar name={brandOf(p.session)} size={30} />
+          <span className="tr-dot absolute -right-0.5 -bottom-0.5 border-2 border-[var(--color-tr-panel)]"
+                style={{ background: COLOR[st], width: 9, height: 9 }} />
+        </span>
         <div className="min-w-0 flex-1">
-          <div className="truncate text-sm">{brandOf(p.session)}</div>
-          <div className="truncate text-[11px] text-[var(--color-tr-muted)]">{p.status || "—"}</div>
+          <div className="flex items-center gap-2">
+            <span className="truncate text-[13px]">{brandOf(p.session)}</span>
+            {proj && <span className="tr-chip shrink-0">{proj}</span>}
+          </div>
+          <div className="truncate text-[12px] text-[var(--color-tr-muted)]">{p.status || "—"}</div>
         </div>
         <div className="shrink-0 text-right text-[11px] text-[var(--color-tr-muted)]">
           <div>{st}</div>
@@ -101,7 +132,7 @@ export function Agents({ client, project }: { client: HubClient; project: string
             ...health.issues.filter(e => e.section.startsWith("crew")).map(e => ({ ...e, state: "bad" as const })),
             ...health.notes.filter(e => e.section.startsWith("crew")).map(e => ({ ...e, state: "missing" as const })),
           ];
-          // "codex: wired to the bus" / "codex: authenticated" -> one row per brand, both facts.
+          // "codex: wired to the bus" / "codex: authenticated" -> one card per brand, both facts.
           const byBrand = new Map<string, { wired?: boolean; auth?: boolean; missing?: boolean; fix?: string | null }>();
           for (const e of crew) {
             const brand = e.message.split(":")[0].trim();
@@ -113,43 +144,63 @@ export function Agents({ client, project }: { client: HubClient; project: string
             byBrand.set(brand, cur);
           }
           return (
-            <>
-              <div className="mb-2 text-[11px] uppercase tracking-wider text-[var(--color-tr-muted)]">
-                harnesses {health.issueCount > 0 && <span className="text-[var(--color-tr-fail)]">· {health.issueCount} issue(s)</span>}
-              </div>
-              <div className="mb-6 flex flex-wrap gap-2">
+            <section className="mb-8">
+              <h2 className="tr-sec-title">Harnesses</h2>
+              <p className="tr-sec-sub">
+                The seats a crew can run on this machine.
+                {health.issueCount > 0 && <span className="text-[var(--color-tr-fail)]"> {health.issueCount} issue(s).</span>}
+              </p>
+              <div className="mt-3 grid grid-cols-[repeat(auto-fill,minmax(160px,1fr))] gap-4">
                 {[...byBrand.entries()].map(([brand, st]) => {
                   const ready = st.wired && st.auth;
-                  const color = st.missing ? "var(--color-tr-edge)" : ready ? "var(--color-tr-ok)" : "var(--color-tr-fail)";
+                  const name = brand.split(" ")[0];
                   return (
-                    <div key={brand} title={st.fix ?? undefined}
-                         className="rounded-lg border border-[var(--color-tr-edge)] bg-[var(--color-tr-panel)] px-3 py-2">
-                      <div className="flex items-center gap-2 text-sm">
-                        <span className="h-2 w-2 rounded-full" style={{ background: color }} />
-                        {brand}
-                      </div>
-                      <div className="mt-0.5 text-[10px] uppercase tracking-wide text-[var(--color-tr-muted)]">
-                        {st.missing ? "not installed" : ready ? "ready" : !st.wired ? "not wired" : "not authenticated"}
+                    <div key={brand} title={st.fix ?? brand} className="tr-card tr-card-hover flex flex-col items-center gap-3 p-5">
+                      <span className="relative">
+                        <Avatar name={name} />
+                        <span className="tr-dot absolute -right-0.5 -bottom-0.5 border-2 border-[var(--color-tr-panel)]"
+                              style={{
+                                background: st.missing ? "var(--color-tr-edge)" : ready ? "var(--color-tr-ok)" : "var(--color-tr-fail)",
+                                width: 11, height: 11,
+                              }} />
+                      </span>
+                      <div className="w-full text-center">
+                        <div className="truncate text-[13px] font-medium">{name}</div>
+                        <div className="mt-0.5 text-[11px] text-[var(--color-tr-muted)]">
+                          {st.missing ? "not installed" : ready ? "ready" : !st.wired ? "not wired" : "not authenticated"}
+                        </div>
                       </div>
                     </div>
                   );
                 })}
+                <div className="tr-card-ghost flex min-h-[120px] flex-col items-center justify-center gap-1 p-5"
+                     title="Any opencode provider can become a seat">
+                  <span className="text-xl leading-none">+</span>
+                  <span className="text-[12px]">Add a seat</span>
+                  <code className="text-[10px] opacity-70">trantor provider add</code>
+                </div>
               </div>
-            </>
+            </section>
           );
         })()}
-        <div className="mb-2 text-[11px] uppercase tracking-wider text-[var(--color-tr-muted)]">{project}</div>
-        <div className="mb-6 flex flex-col gap-2">
-          {mine.length ? mine.map(p => <Row key={p.session} p={p} />)
-            : <div className="text-sm text-[var(--color-tr-muted)]">No agents on this project.</div>}
-        </div>
+
+        <section className="mb-8">
+          <h2 className="tr-sec-title">On {project}</h2>
+          <p className="tr-sec-sub">Sessions in the project you're looking at.</p>
+          <div className="mt-3 flex flex-col gap-2">
+            {mine.length ? mine.map(p => <Row key={p.session} p={p} />)
+              : <div className="tr-card-ghost flex items-center justify-center p-5 text-[13px]">No agents on this project right now.</div>}
+          </div>
+        </section>
+
         {others.length > 0 && (
-          <>
-            <div className="mb-2 text-[11px] uppercase tracking-wider text-[var(--color-tr-muted)]">elsewhere</div>
-            <div className="flex flex-col gap-2 opacity-70">
+          <section>
+            <h2 className="tr-sec-title">Elsewhere</h2>
+            <p className="tr-sec-sub">A seat busy on another project is exactly what explains a stall here.</p>
+            <div className="mt-3 flex flex-col gap-2 opacity-80">
               {others.map(p => <Row key={p.session} p={p} />)}
             </div>
-          </>
+          </section>
         )}
       </div>
     </div>

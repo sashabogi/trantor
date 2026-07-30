@@ -114,7 +114,7 @@ export function AppShell() {
         </nav>
 
         {/* APP — identity + settings live together */}
-        <div className="mt-2 flex flex-col gap-0.5">
+        <div className="mt-2 flex flex-col gap-0.5 border-t border-white/[0.06] pt-2">
           <NavItem label="Settings" on={pane.kind === "settings"} onClick={() => setPane({ kind: "settings" })} />
           <div className="flex items-center gap-2.5 px-3 pt-2">
             <span className="relative flex h-7 w-7 items-center justify-center rounded-full bg-[var(--color-tr-panel)] text-[12px] font-semibold">

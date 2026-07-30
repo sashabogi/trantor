@@ -80,7 +80,7 @@ export function Home({ client, me, onOpenProject }: {
       <div className="mb-8 flex gap-4">
         <StatCard label="Saved vs frontier" tone="var(--color-tr-ok)"
                   value={lifetime ? `$${lifetime.saved_usd.toFixed(0)}` : "—"}
-                  sub={lifetime ? `$${lifetime.cost_usd.toFixed(2)} spent · ${lifetime.calls.toLocaleString()} cheap-model calls` : "no ledger on this machine"} />
+                  sub={lifetime ? `$${lifetime.cost_usd.toFixed(2)} spent · ${lifetime.calls.toLocaleString()} calls` : "no ledger on this machine"} />
         <StatCard label="Claude notional" value={notional ? `$${Math.round(notional).toLocaleString()}` : "—"}
                   sub="plan-covered, never billed" />
         <StatCard label="Fleet" value={`${projects.size} projects`}
