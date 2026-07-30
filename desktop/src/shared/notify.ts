@@ -26,13 +26,23 @@ async function ensurePermission(): Promise<boolean> {
 }
 
 /** Returns a notification for an event, or null when it does not warrant interrupting a human. */
-export function notificationFor(ev: HubEvent, me: string): { title: string; body: string } | null {
+export function notificationFor(ev: HubEvent, me: string, isOffline?: (session: string) => boolean): { title: string; body: string } | null {
   const any = ev as Record<string, unknown>;
   if (ev.type === "message") {
     // toSession is the addressee; "all" is a broadcast and must never raise a notification.
     const to = String(any.toSession ?? "");
-    if (!to || to === "all" || to !== me) return null;
-    return { title: `Message from ${ev.by ?? "an agent"}`, body: String(any.text ?? "").slice(0, 240) };
+    if (!to || to === "all") return null;
+    if (to === me) return { title: `Message from ${ev.by ?? "an agent"}`, body: String(any.text ?? "").slice(0, 240) };
+    // The safe T3 of the wake ladder: an agent messaged a session that is OFFLINE. T1/T2 reach a
+    // session that is running or stopping; nothing can safely reach one that is truly idle — except
+    // the human. So the stuck message becomes YOUR notification: you are the only one who can wake it.
+    if (to.includes(":") && isOffline?.(to)) {
+      return {
+        title: `${ev.by ?? "an agent"} → ${to} (idle)`,
+        body: `That session is offline and will only see this on its next turn: "${String(any.text ?? "").slice(0, 160)}"`,
+      };
+    }
+    return null;
   }
   if (ev.type === "verify.gate.opened") {
     return { title: "Verify gate opened", body: `${ev.project ?? ""} — ${String(any.reason ?? "a decision is needed")}`.trim() };
@@ -56,9 +66,9 @@ export function setNotificationsEnabled(on: boolean) {
   try { localStorage.setItem("tr.notifications", on ? "on" : "off"); } catch {}
 }
 
-export async function notifyIfWorthIt(ev: HubEvent, me: string) {
+export async function notifyIfWorthIt(ev: HubEvent, me: string, isOffline?: (session: string) => boolean) {
   if (!notificationsEnabled()) return false;
-  const n = notificationFor(ev, me);
+  const n = notificationFor(ev, me, isOffline);
   if (!n) return false;
   if (!(await ensurePermission())) return false;
   try { sendNotification(n); return true; } catch { return false; }

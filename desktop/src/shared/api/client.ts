@@ -91,6 +91,18 @@ export class HubClient {
   /** The self-learning loop: relay lessons, per-agent reliability, per-model economics + guardrails. */
   learning() { return this.request<Learning>("GET", "/learning"); }
 
+  /** Cross-session batons: who handed off what, where, and why. */
+  handoffs(project?: string) {
+    const q = project ? `?project=${encodeURIComponent(project)}` : "";
+    return this.request<{ handoffs: Handoff[] }>("GET", `/handoffs${q}`).then(r => r.handoffs ?? []);
+  }
+
+  /** Live file claims — which session is touching which file, right now. */
+  claims(project?: string) {
+    const q = project ? `?project=${encodeURIComponent(project)}` : "";
+    return this.request<{ claims: FileClaim[] }>("GET", `/claims${q}`).then(r => r.claims ?? []);
+  }
+
   /**
    * Provider balances/quotas/subscriptions, server-scoped to the operator's configured profile.
    * MACHINE-LOCAL by nature (profile.json + the crew's own balance snapshots live on this machine),
@@ -175,6 +187,9 @@ export type BalanceEntry = {
   remainingPct?: number | null; plan?: string;
 };
 export type BalancesReport = { ts: number; entries: BalanceEntry[]; lowCount: number; stale: boolean };
+
+export type Handoff = { project: string; session: string; ts: number; trigger?: string; id?: string };
+export type FileClaim = { project: string; file: string; session: string; ts: number; agoSec: number };
 
 export class HubAuthError extends Error {}
 

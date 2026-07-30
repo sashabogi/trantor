@@ -7,7 +7,7 @@
 // ledger and profile.json are files on this machine); cards/peers/lessons ride the project hub.
 import { useEffect, useState } from "react";
 import { HubClient } from "../../shared/api/client";
-import type { BalancesReport, Card, Economics, Peer } from "../../shared/api/client";
+import type { BalancesReport, Card, Economics, Handoff, Peer } from "../../shared/api/client";
 
 const LOCAL_HUB = "http://127.0.0.1:4477";
 const ONLINE_MS = 5 * 60 * 1000;
@@ -15,6 +15,7 @@ const ONLINE_MS = 5 * 60 * 1000;
 type Snapshot = {
   econ: Economics | null; balances: BalancesReport | null;
   cards: Card[]; peers: Peer[]; lessons: { text: string; scope: string; by: string; ts: number }[];
+  handoffs: Handoff[];
 };
 const cache: { snap: Snapshot | null } = { snap: null };
 
@@ -38,19 +39,20 @@ export function Home({ client, me, onOpenProject }: {
     const isLocal = client.baseUrl.includes("127.0.0.1") || client.baseUrl.includes("localhost");
     const local = isLocal ? client : new HubClient(LOCAL_HUB);
     const pull = async () => {
-      const [econ, balances, cards, peers, learning] = await Promise.all([
+      const [econ, balances, cards, peers, learning, handoffs] = await Promise.all([
         local.economics().catch(() => null),
         local.balances().catch(() => null),
         client.tasks().catch(() => [] as Card[]),
         client.peers().catch(() => [] as Peer[]),
         client.learning().catch(() => null),
+        client.handoffs().catch(() => [] as Handoff[]),
       ]);
       if (!alive) return;
       const lessons = learning
         ? [...learning.lessons.global, ...Object.values(learning.lessons.byAgent).flat()]
             .sort((a, b) => (b.ts || 0) - (a.ts || 0)).slice(0, 6)
         : [];
-      const s = { econ, balances, cards, peers, lessons };
+      const s = { econ, balances, cards, peers, lessons, handoffs: handoffs.slice(0, 5) };
       cache.snap = s;
       setSnap(s);
     };
@@ -108,7 +110,8 @@ export function Home({ client, me, onOpenProject }: {
 
       <div className="flex gap-8">
         {/* what needs a human */}
-        <section className="min-w-0 flex-1">
+        <div className="flex min-w-0 flex-1 flex-col gap-8">
+        <section className="min-w-0">
           <h2 className="tr-sec-title">Needs attention</h2>
           <p className="tr-sec-sub">Failed, blocked and stale cards across every project.</p>
           <div className="mt-3 flex flex-col gap-2">
@@ -129,6 +132,28 @@ export function Home({ client, me, onOpenProject }: {
             )}
           </div>
         </section>
+
+        <section className="min-w-0">
+          <h2 className="tr-sec-title">Handoffs</h2>
+          <p className="tr-sec-sub">Batons passed between sessions — context that survived a context window.</p>
+          <div className="mt-3 flex flex-col gap-2">
+            {(snap?.handoffs ?? []).map((h, i) => (
+              <button key={i} onClick={() => onOpenProject(h.project)}
+                      className="tr-card tr-card-hover flex items-center gap-3 p-3.5 text-left">
+                <span className="min-w-0 flex-1 truncate text-[13px]">{h.session}</span>
+                <span className="tr-chip shrink-0">{h.project}</span>
+                {h.trigger && <span className="tr-chip shrink-0">{h.trigger}</span>}
+                <span className="shrink-0 text-[11px] text-[var(--color-tr-muted)]">
+                  {h.ts ? new Date(h.ts).toLocaleDateString([], { month: "short", day: "numeric" }) : ""}
+                </span>
+              </button>
+            ))}
+            {!snap?.handoffs?.length && (
+              <div className="tr-card-ghost flex items-center justify-center p-5 text-[13px]">No handoffs yet.</div>
+            )}
+          </div>
+        </section>
+        </div>
 
         {/* what the fleet learned */}
         <section className="min-w-0 flex-1">

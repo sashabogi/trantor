@@ -7,7 +7,7 @@
 //
 // Fleet telemetry (economics, providers, tallies) lives on the HOME view as designed cards —
 // never in chrome. The old header dump was the altitude mistake made visible.
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { HubClient, hubForProject, knownProjects } from "../shared/api/client";
 import { Home } from "../features/home/Home";
 import { Board } from "../features/board/Board";
@@ -58,9 +58,27 @@ export function AppShell() {
 
   // Shell-level on purpose: a notification must fire whichever pane is open, and exactly once — a
   // per-view subscription would double-notify whenever two views happened to be mounted.
+  // The presence cache feeds the offline-receiver rule (safe T3): when an agent messages a session
+  // that is idle, the HUMAN gets the notification — nothing else can safely wake it.
+  const lastSeenRef = useRef(new Map<string, number>());
   useEffect(() => {
     if (!client) return;
-    return client.streamEvents(ev => { void notifyIfWorthIt(ev, ME); });
+    const pull = () => client.peers().then(ps => {
+      const m = new Map<string, number>();
+      for (const p of ps) m.set(p.session, p.online ? Date.now() : (p.lastSeen ?? 0));
+      lastSeenRef.current = m;
+    }).catch(() => {});
+    pull();
+    const t = setInterval(pull, 60_000);
+    return () => clearInterval(t);
+  }, [client]);
+  useEffect(() => {
+    if (!client) return;
+    const isOffline = (session: string) => {
+      const seen = lastSeenRef.current.get(session);
+      return seen === undefined || Date.now() - seen > 5 * 60 * 1000;
+    };
+    return client.streamEvents(ev => { void notifyIfWorthIt(ev, ME, isOffline); });
   }, [client]);
 
   const openProject = (p: string) => {
