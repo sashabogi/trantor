@@ -137,7 +137,7 @@ export function AppShell() {
               </button>
             ))}
             <span className="ml-3 text-xs text-[var(--color-tr-muted)]">{active}</span>
-            {client && <CostStrip client={client} project={active} />}
+            {client && <CostStrip client={client} project={active} projectCount={projects.length} />}
           </div>
         )}
 

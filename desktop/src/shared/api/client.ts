@@ -92,6 +92,13 @@ export class HubClient {
   learning() { return this.request<Learning>("GET", "/learning"); }
 
   /**
+   * Provider balances/quotas/subscriptions, server-scoped to the operator's configured profile.
+   * MACHINE-LOCAL by nature (profile.json + the crew's own balance snapshots live on this machine),
+   * so callers should ask the local hub.
+   */
+  balances() { return this.request<BalancesReport>("GET", "/balances"); }
+
+  /**
    * Messages addressed to `session`. peek=1 reads WITHOUT advancing the delivery ledger — the app is
    * a viewer here, and marking a message delivered because a human glanced at a list would hide it
    * from the session's own hooks, which are the thing that actually acts on it.
@@ -159,6 +166,15 @@ export type Learning = {
   agents: LearningAgent[]; agentsByProject: Record<string, LearningAgent[]>;
   models: LearningModel[]; modelsByProject: Record<string, LearningModel[]>;
 };
+
+export type BalanceEntry = {
+  provider: string; label?: string;
+  kind: "prepaid" | "quota" | "subscription";
+  ok: boolean; low: boolean;
+  remaining?: number | null; currency?: string;
+  remainingPct?: number | null; plan?: string;
+};
+export type BalancesReport = { ts: number; entries: BalanceEntry[]; lowCount: number; stale: boolean };
 
 export class HubAuthError extends Error {}
 
