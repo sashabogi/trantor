@@ -10,10 +10,12 @@
 // room while they talk is most of the context, and it is exactly what the operator loses when they
 // have to read two terminal windows to follow one exchange.
 import { useEffect, useMemo, useState } from "react";
-import type { HubClient, HubEvent, Peer } from "../../shared/api/client";
+import type { Card, HubClient, HubEvent, Peer } from "../../shared/api/client";
 import { ProjectHeader } from "../project/ProjectHeader";
 import { Avatar, displayName } from "../../shared/Avatar";
 import { Composer } from "../../shared/Composer";
+import { CardDetail } from "../board/CardDetail";
+import { cleanTitle } from "../../shared/Avatar";
 
 const ONLINE_MS = 5 * 60 * 1000;
 const BUSY_MS = 90 * 1000;
@@ -46,6 +48,8 @@ export function Conversation({ client, project, me, lens, onLens }: {
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  const [cards, setCards] = useState<Map<number, Card>>(new Map());
+  const [openCard, setOpenCard] = useState<number | null>(null);
 
   // Messages come from the event log rather than /inbox: /inbox is per-recipient, and this view is
   // the whole ROOM — including traffic between two agents that was never addressed to us.
@@ -60,6 +64,10 @@ export function Conversation({ client, project, me, lens, onLens }: {
     client.peers().then(setPeers).catch(() => {});
     return () => clearInterval(t);
   }, [client]);
+
+  useEffect(() => {
+    client.tasks(project).then(ts => setCards(new Map(ts.map(t => [t.id, t])))).catch(() => {});
+  }, [client, project]);
 
   useEffect(() => client.streamEvents(ev => {
     if (ev.type === "message" && ev.project === project) {
@@ -85,22 +93,48 @@ export function Conversation({ client, project, me, lens, onLens }: {
     finally { setBusy(false); }
   };
 
-  // Group consecutive messages by sender so a burst reads as one block, the way Slack/Buzz do.
+  // The chat is THREADED, not flat: a run of consecutive messages about the same card (#N refs —
+  // invariant 3, threads are derived) folds into one thread block with the card's narrative as its
+  // title. Messages about nothing in particular stay chronological. Within any run, consecutive
+  // messages by one sender group the way Slack/Buzz group them.
+  const primaryRef = (m: Msg) => { const x = /#(\d{2,7})(?![0-9])/.exec(m.text); return x ? Number(x[1]) : null; };
+  type Item =
+    | { kind: "day"; label: string }
+    | { kind: "msg"; m: Msg; first: boolean }
+    | { kind: "thread"; ref: number; msgs: Msg[] };
   const rows = useMemo(() => {
-    const out: ({ kind: "day"; label: string } | { kind: "msg"; m: Msg; first: boolean })[] = [];
+    const out: Item[] = [];
     let lastDay = "", lastBy = "", lastTs = 0;
+    const flushable: Msg[] = [];
+    let runRef: number | null = null;
+    const flushRun = () => {
+      if (!flushable.length) return;
+      if (runRef !== null && flushable.length >= 2) out.push({ kind: "thread", ref: runRef, msgs: [...flushable] });
+      else for (const m of flushable) {
+        const first = m.by !== lastBy || m.ts - lastTs > 5 * 60 * 1000;
+        out.push({ kind: "msg", m, first });
+        lastBy = m.by; lastTs = m.ts;
+      }
+      flushable.length = 0;
+    };
     for (const m of msgs) {
       const day = dayLabel(m.ts);
-      if (day !== lastDay) { out.push({ kind: "day", label: day }); lastDay = day; lastBy = ""; }
-      const first = m.by !== lastBy || m.ts - lastTs > 5 * 60 * 1000;
-      out.push({ kind: "msg", m, first });
-      lastBy = m.by; lastTs = m.ts;
+      if (day !== lastDay) { flushRun(); runRef = null; out.push({ kind: "day", label: day }); lastDay = day; lastBy = ""; lastTs = 0; }
+      const ref = primaryRef(m);
+      if (ref !== runRef) { flushRun(); runRef = ref; }
+      flushable.push(m);
     }
+    flushRun();
     return out;
   }, [msgs]);
 
+  const threadTitle = (ref: number) => {
+    const c = cards.get(ref);
+    return c ? (c.summary || cleanTitle(c.title)) : `card #${ref}`;
+  };
+
   return (
-    <div className="tr-pane flex h-full flex-col">
+    <div className="tr-pane relative flex h-full flex-col">
       <ProjectHeader project={project} lens={lens} onLens={onLens}
         sub={<>{roster.length} in the room · agents talking to each other</>} />
       <div className="flex min-h-0 flex-1">
@@ -118,41 +152,67 @@ export function Conversation({ client, project, me, lens, onLens }: {
                 </div>
               </div>
             )}
-            {rows.map((r, i) =>
-              r.kind === "day" ? (
-                <div key={`d${i}`} className="my-4 flex items-center gap-3">
-                  <span className="h-px flex-1 bg-[var(--color-tr-edge)]" />
-                  <span className="text-[11px] text-[var(--color-tr-muted)]">{r.label}</span>
-                  <span className="h-px flex-1 bg-[var(--color-tr-edge)]" />
-                </div>
-              ) : (
-                <div key={r.m.id + ":" + i} className={`flex gap-3 ${r.first ? "mt-4" : "mt-0.5"}`}>
-                  <span className="w-[34px] shrink-0">
-                    {r.first && <Avatar name={r.m.by} llm={peerOf(r.m.by)?.llm} size={34} />}
+            {(() => {
+              const MsgRow = ({ m, first, dense }: { m: Msg; first: boolean; dense?: boolean }) => (
+                <div className={`flex gap-3 ${first ? (dense ? "mt-2.5" : "mt-4") : "mt-0.5"}`}>
+                  <span className="w-[30px] shrink-0">
+                    {first && <Avatar name={m.by} llm={peerOf(m.by)?.llm} size={30} />}
                   </span>
                   <div className="min-w-0 flex-1">
-                    {r.first && (
+                    {first && (
                       <div className="flex items-baseline gap-2">
                         <span className="text-[13px] font-semibold"
-                              style={r.m.by === me ? { color: "var(--color-tr-ok)" } : undefined}>
-                          {displayName(r.m.by, peerOf(r.m.by)?.llm)}
+                              style={m.by === me ? { color: "var(--color-tr-ok)" } : undefined}>
+                          {displayName(m.by, peerOf(m.by)?.llm)}
                         </span>
-                        {peerOf(r.m.by)?.model && <span className="tr-chip tr-mono">{peerOf(r.m.by)!.model}</span>}
-                        {r.m.to !== "all" && (
+                        {peerOf(m.by)?.model && <span className="tr-chip tr-mono">{peerOf(m.by)!.model}</span>}
+                        {m.to !== "all" && (
                           <span className="tr-chip"
-                                style={r.m.to === me ? { color: "var(--color-tr-doing)" } : undefined}>
-                            → {r.m.to}
+                                style={m.to === me ? { color: "var(--color-tr-doing)" } : undefined}>
+                            → {m.to.split(":")[0]}
                           </span>
                         )}
                         <span className="text-[11px] text-[var(--color-tr-muted)]">
-                          {new Date(r.m.ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                          {new Date(m.ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
                         </span>
                       </div>
                     )}
-                    <div className="whitespace-pre-wrap break-words text-sm leading-relaxed">{r.m.text}</div>
+                    <div className="whitespace-pre-wrap break-words text-[13.5px] leading-relaxed">{m.text}</div>
                   </div>
                 </div>
-              ))}
+              );
+              return rows.map((r, i) => {
+                if (r.kind === "day") return (
+                  <div key={`d${i}`} className="my-4 flex items-center gap-3">
+                    <span className="h-px flex-1 bg-[var(--color-tr-edge)]" />
+                    <span className="text-[11px] text-[var(--color-tr-muted)]">{r.label}</span>
+                    <span className="h-px flex-1 bg-[var(--color-tr-edge)]" />
+                  </div>
+                );
+                if (r.kind === "thread") {
+                  let lastBy = "", lastTs = 0;
+                  return (
+                    <div key={`t${i}`} className="mt-4 overflow-hidden rounded-xl border border-[var(--color-tr-edge)] bg-white/[0.02]">
+                      <button onClick={() => setOpenCard(r.ref)}
+                              className="flex w-full items-center gap-2 border-b border-[var(--color-tr-edge)] px-3.5 py-2 text-left hover:bg-white/[0.03]">
+                        <span className="text-[12px]">🧵</span>
+                        <span className="tr-mono shrink-0 text-[11px] text-[var(--color-tr-muted)]">#{r.ref}</span>
+                        <span className="min-w-0 flex-1 truncate text-[12px] font-medium">{threadTitle(r.ref)}</span>
+                        <span className="shrink-0 text-[11px] text-[var(--color-tr-muted)]">{r.msgs.length} messages · open card →</span>
+                      </button>
+                      <div className="px-3.5 pb-3">
+                        {r.msgs.map((m, j) => {
+                          const first = m.by !== lastBy || m.ts - lastTs > 5 * 60 * 1000;
+                          lastBy = m.by; lastTs = m.ts;
+                          return <MsgRow key={m.id + ":" + j} m={m} first={first} dense />;
+                        })}
+                      </div>
+                    </div>
+                  );
+                }
+                return <MsgRow key={r.m.id + ":" + i} m={r.m} first={r.first} />;
+              });
+            })()}
           </div>
 
           <div className="px-8 pb-5 pt-2">
@@ -192,6 +252,7 @@ export function Conversation({ client, project, me, lens, onLens }: {
           {!roster.length && <div className="text-[12px] text-[var(--color-tr-muted)]">Nobody here.</div>}
         </aside>
       </div>
+      {openCard !== null && <CardDetail client={client} id={openCard} onClose={() => setOpenCard(null)} />}
     </div>
   );
 }

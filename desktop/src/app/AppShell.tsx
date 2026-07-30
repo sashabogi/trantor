@@ -56,20 +56,29 @@ export function AppShell() {
   // routing pin yet — it falls back to the local hub BY DESIGN (TDD §12.1's default), and a
   // project the app cannot see is a project that "isn't registering in Trantor at all" (the
   // crm-platform incident: a whole live crew, invisible, because only pins were listed).
+  // The list is ALIVE and it only GROWS during a run: fetched at mount, refreshed every 45s,
+  // merged into what we already know. Both failure modes were real within one hour: crebral-fleet
+  // was born after launch (a fetch-once list never shows it), and crm-platform vanished because
+  // one fetch raced a hub restart (a failed fetch must never shrink the list).
   useEffect(() => {
     let alive = true;
-    Promise.all([
+    const junk = (n: string) => n.startsWith("_") || n.startsWith(".") || n.startsWith("__");
+    const pull = () => Promise.all([
       knownProjects().catch(() => [] as string[]),
       new HubClient(LOCAL_HUB).tasks().then(ts => [...new Set(ts.map(t => t.project).filter(Boolean))]).catch(() => [] as string[]),
       new HubClient(LOCAL_HUB).peers().then(ps => [...new Set(ps.map(pr => pr.project || "").filter(Boolean))]).catch(() => [] as string[]),
     ]).then(([pinned, localCards, localPeers]) => {
       if (!alive) return;
-      const junk = (n: string) => n.startsWith("_") || n.startsWith(".") || n.startsWith("__");
-      const all = [...new Set([...pinned, ...localCards, ...localPeers])].filter(n => n && !junk(n)).sort();
-      setProjects(all);
-      setActive(a => a || all[0] || "");
+      const found = [...pinned, ...localCards, ...localPeers].filter(n => n && !junk(n));
+      setProjects(prev => {
+        const all = [...new Set([...prev, ...found])].sort();
+        return all.length === prev.length && all.every((v, i) => v === prev[i]) ? prev : all;
+      });
+      setActive(a => a || found.sort()[0] || "");
     });
-    return () => { alive = false; };
+    void pull();
+    const t = setInterval(pull, 45_000);
+    return () => { alive = false; clearInterval(t); };
   }, []);
   useEffect(() => { if (active) hubForProject(active).then(setHub); }, [active]);
 
