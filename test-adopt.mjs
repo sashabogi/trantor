@@ -103,5 +103,32 @@ try {
 } catch (e) { fail++; console.log(`  ✗ ${e.message}`); }
 finally { hub.kill(); }
 
+// ── warn mode NEVER blocks — it annotates ─────────────────────────────────────────────────────────
+// The local-hub incident: a restarted hub 401'd signed requests from a not-yet-enrolled identity
+// while UNSIGNED requests passed — warn mode punished exactly the clients doing the right thing.
+const PW = 47932, hubW = spawnHub(PW);
+hubW.spawnargs && null;
+await sleep(800);
+try {
+  // spawnHub forces RELAY_AUTH off; override with a dedicated warn hub
+  hubW.kill();
+  const dir2 = mkdtempSync(join(tmpdir(), "trantor-warn-"));
+  mkdirSync(join(dir2, ".agent-bus"), { recursive: true });
+  const hub2 = spawn("node", [join(ROOT, "hub.mjs")], {
+    env: { ...process.env, RELAY_DATA_DIR: dir2, HOME: dir2, RELAY_PORT: String(PW), PORT: String(PW), TRANTOR_NO_UPDATE_CHECK: "1", RELAY_AUTH: "warn" },
+    stdio: ["ignore", "ignore", "pipe"],
+  });
+  await sleep(800);
+  const { loadOrCreate, signRequest } = await import(join(ROOT, "lib/identity.mjs"));
+  process.env.AGENT_BUS_DIR = join(dir2, ".agent-bus");
+  const id = loadOrCreate("stranger@test", "human");
+  const sig = signRequest(id, { method: "GET", path: "/tasks" });
+  const r = await fetch(`http://127.0.0.1:${PW}/tasks`, { headers: sig });
+  ok(r.status === 200, "warn mode: a SIGNED request from an unknown identity passes (annotated, not blocked)");
+  const r2 = await fetch(`http://127.0.0.1:${PW}/tasks`);
+  ok(r2.status === 200, "warn mode: unsigned still passes");
+  hub2.kill();
+} catch (e) { fail++; console.log(`  ✗ warn mode: ${e.message}`); }
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

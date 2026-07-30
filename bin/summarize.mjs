@@ -45,7 +45,12 @@ const machineTitled = (t) =>
 
 const hubs = new Set([config.url || "http://127.0.0.1:4477", ...Object.values(config.hubs || {})]);
 const get = async (hub, path) => (await sfetchJson(`${hub}${path}`, { method: "GET", identity: ownerId, signal: AbortSignal.timeout(8000) })).json();
-const post = async (hub, path, payload) => (await sfetchJson(`${hub}${path}`, { identity: ownerId, payload, signal: AbortSignal.timeout(8000) })).json();
+const post = async (hub, path, payload) => {
+  const r = await sfetchJson(`${hub}${path}`, { identity: ownerId, payload, signal: AbortSignal.timeout(8000) });
+  const j = await r.json();
+  if (!r.ok || j?.error) throw new Error(`${path} → ${r.status} ${j?.error || ""}`);
+  return j;
+};
 
 let wrote = 0, considered = 0;
 for (const hub of hubs) {

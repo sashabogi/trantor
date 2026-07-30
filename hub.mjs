@@ -463,15 +463,24 @@ async function authenticate(req, path) {
     return { ok: false, code: 401, error: "signature required" };
   }
   const raw = req.method === "GET" || req.method === "HEAD" ? undefined : await rawBody(req);
+  // WARN MODE NEVER BLOCKS — it annotates. That is its entire contract: an observation period
+  // where the hub records what WOULD fail under enforce. The restarted local hub proved the
+  // failure mode: signed requests from a not-yet-enrolled identity got 401 "unknown identity"
+  // while UNSIGNED requests passed — punishing exactly the clients that already do the right
+  // thing. Under warn: bad signature, replay and unknown identity all pass with a warning;
+  // under enforce they are the hard failures they should be.
+  const soft = (warning) => AUTH_MODE === "warn"
+    ? { ok: true, mode: AUTH_MODE, trusted: false, warning }
+    : { ok: false, code: 401, error: warning };
   const verified = verifyRequest({ headers: req.headers, method: req.method, path, body: raw });
-  if (!verified.ok) return { ok: false, code: 401, error: verified.reason || "bad signature" };
+  if (!verified.ok) return soft(verified.reason || "bad signature");
   const nonceKey = `${verified.pubkey}:${verified.nonce}`;
   for (const [k, ts] of seenNonces) if (Math.abs(now() - ts) > 120000) seenNonces.delete(k);
-  if (seenNonces.has(nonceKey)) return { ok: false, code: 401, error: "replay" };
+  if (seenNonces.has(nonceKey)) return soft("replay");
   seenNonces.set(nonceKey, verified.ts);
   if (seenNonces.size > 10000) seenNonces.delete(seenNonces.keys().next().value);
   const identity = findIdentity(verified.pubkey);
-  if (!identity) return { ok: false, code: 401, error: "unknown identity" };
+  if (!identity) return soft("unknown identity");
   return { ok: true, mode: AUTH_MODE, trusted: true, pubkey: verified.pubkey, identity };
 }
 function authorize(auth, method, P, project) {
