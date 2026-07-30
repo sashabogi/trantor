@@ -19,9 +19,10 @@ import { Feed } from "../features/feed/Feed";
 import { Agents } from "../features/agents/Agents";
 import { Inbox } from "../features/inbox/Inbox";
 import { Settings } from "../features/settings/Settings";
+import { Conversation } from "../features/chat/Conversation";
 import { notifyIfWorthIt } from "../shared/notify";
 
-type Lens = "board" | "feed";
+type Lens = "board" | "feed" | "chat";
 type Pane =
   | { kind: "project"; lens: Lens }
   | { kind: "inbox" }
@@ -116,7 +117,7 @@ export function AppShell() {
         {/* Lens tabs belong to the PROJECT pane only — they are meaningless for a global view. */}
         {pane.kind === "project" && (
           <div className="flex items-center gap-1 border-b border-[var(--color-tr-edge)] px-4 py-2">
-            {(["board", "feed"] as Lens[]).map(l => (
+            {(["board", "feed", "chat"] as Lens[]).map(l => (
               <button key={l} onClick={() => setPane({ kind: "project", lens: l })}
                 className={`rounded px-3 py-1 text-xs uppercase tracking-wide ${
                   pane.lens === l ? "bg-black/40 text-[var(--color-tr-text)]" : "text-[var(--color-tr-muted)] hover:bg-black/20"}`}>
@@ -135,6 +136,7 @@ export function AppShell() {
           : pane.kind === "agents" ? <Agents client={client} project={active} />
           : pane.kind === "settings" ? <Settings me={ME} />
           : pane.lens === "board" ? <Board client={client} project={active} />
+          : pane.lens === "chat" ? <Conversation client={client} project={active} me={ME} />
           : <Feed client={client} project={active} />}
       </main>
     </div>

@@ -1,5 +1,9 @@
-// INBOX — what was addressed to YOU. The counterpart to notifications: a notification says something
-// happened, this is where it can be read and answered.
+// INBOX — ONLY what needs an answer from you, across every project.
+//
+// Scope correction: this used to hold every message the hub would hand over, broadcasts included,
+// which buried the handful that actually wanted a human. Agent-to-agent traffic now lives in each
+// project's Conversation, where it belongs and where the roster gives it context. What is left here
+// is the question Sasha actually asks of an inbox: "is anything waiting on ME?"
 //
 // Reads with peek=1 on purpose. The app is a viewer; advancing the delivery ledger because a human
 // glanced at a list would hide the message from the receiving SESSION's hooks, which are the thing
@@ -15,7 +19,11 @@ export function Inbox({ client, me }: { client: HubClient; me: string }) {
   const [sending, setSending] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
-  const load = () => client.inbox(me).then(r => setMessages((r.messages ?? []).slice().reverse())).catch(e => setErr(String(e.message || e)));
+  // Filter to DIRECT only. The hub's deliverable() also hands over broadcasts (to === "all"), and
+  // those are FYI — the same distinction the notification policy and T2's block-the-stop rule use.
+  const load = () => client.inbox(me)
+    .then(r => setMessages((r.messages ?? []).filter(m => m.to === me).reverse()))
+    .catch(e => setErr(String(e.message || e)));
   useEffect(() => { load(); client.peers().then(setPeers).catch(() => {}); }, [client, me]);
   useEffect(() => client.streamEvents(ev => { if (ev.type === "message") load(); }), [client, me]);
 
@@ -36,17 +44,13 @@ export function Inbox({ client, me }: { client: HubClient; me: string }) {
 
       <div className="flex-1 overflow-y-auto px-4 py-3">
         {messages.map(m => {
-          const direct = m.to === me;
           return (
             <div key={m.id} className="mb-2 rounded-lg border border-[var(--color-tr-edge)] bg-[var(--color-tr-panel)] p-3">
               <div className="mb-1 flex items-center gap-2 text-[11px] text-[var(--color-tr-muted)]">
-                <span className="rounded px-1.5 py-0.5"
-                      style={{ background: direct ? "var(--color-tr-doing)" : "transparent",
-                               color: direct ? "#fff" : "var(--color-tr-muted)" }}>
-                  {direct ? "direct" : "broadcast"}
-                </span>
-                <span className="truncate">{m.from}</span>
-                {m.project && <span className="opacity-60">· {m.project}</span>}
+                <span className="truncate text-[var(--color-tr-text)]">{m.from}</span>
+                {m.project && (
+                  <span className="rounded border border-[var(--color-tr-edge)] px-1.5 py-0.5">{m.project}</span>
+                )}
                 <span className="ml-auto">{new Date(m.ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</span>
               </div>
               <div className="whitespace-pre-wrap break-words text-sm">{m.text}</div>
@@ -57,7 +61,7 @@ export function Inbox({ client, me }: { client: HubClient; me: string }) {
             </div>
           );
         })}
-        {!messages.length && <div className="p-4 text-sm text-[var(--color-tr-muted)]">Nothing addressed to you.</div>}
+        {!messages.length && <div className="p-4 text-sm text-[var(--color-tr-muted)]">Nothing waiting on you. Agent-to-agent traffic lives in each project\u2019s conversation.</div>}
       </div>
 
       <div className="border-t border-[var(--color-tr-edge)] p-3">
