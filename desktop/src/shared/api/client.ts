@@ -214,3 +214,34 @@ export async function doctor(): Promise<DoctorReport> {
 export async function knownProjects(): Promise<string[]> {
   return invoke<string[]>("known_projects");
 }
+
+export type CardCode = {
+  dir: string | null;
+  files: string[];
+  commits: { sha: string; subject: string }[];
+  origin: string | null;
+};
+
+/** The card→code link, resolved on THIS machine (repos live here, hubs don't have them). */
+export async function cardCode(project: string, cardId: number, candidates: string[]): Promise<CardCode> {
+  return JSON.parse(await invoke<string>("card_code", { project, cardId, candidates }));
+}
+
+/** Open a file/url the way the operator prefers (Settings → "Open code in"). */
+export async function openCode(target: string, kind: "url" | "path" | "reveal" = "path"): Promise<void> {
+  return invoke("open_code", { target, kind });
+}
+
+export type EditorPref = "default" | "vscode" | "cursor" | "zed" | "reveal";
+export function editorPref(): EditorPref {
+  try { return (localStorage.getItem("tr.editor") as EditorPref) || "default"; } catch { return "default"; }
+}
+export function setEditorPref(v: EditorPref) { try { localStorage.setItem("tr.editor", v); } catch {} }
+export function openFileInEditor(absPath: string) {
+  const pref = editorPref();
+  if (pref === "vscode") return openCode(`vscode://file${absPath}`, "url");
+  if (pref === "cursor") return openCode(`cursor://file${absPath}`, "url");
+  if (pref === "zed")    return openCode(`zed://file${absPath}`, "url");
+  if (pref === "reveal") return openCode(absPath, "reveal");
+  return openCode(absPath, "path");
+}

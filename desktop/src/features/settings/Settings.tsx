@@ -10,7 +10,8 @@
 // there is no button pretending we do. About says how updates actually arrive.
 import { useEffect, useState } from "react";
 import { getVersion } from "@tauri-apps/api/app";
-import { HubClient, knownProjects, hubForProject } from "../../shared/api/client";
+import { HubClient, knownProjects, hubForProject, editorPref, setEditorPref } from "../../shared/api/client";
+import type { EditorPref } from "../../shared/api/client";
 import { Avatar } from "../../shared/Avatar";
 import { notificationsEnabled, setNotificationsEnabled } from "../../shared/notify";
 
@@ -30,6 +31,7 @@ type HubRow = { url: string; projects: string[]; ok: boolean | null };
 export function Settings({ me }: { me: string }) {
   const [hubs, setHubs] = useState<HubRow[]>([]);
   const [notify, setNotify] = useState(notificationsEnabled());
+  const [editor, setEditor] = useState<EditorPref>(editorPref());
   const [version, setVersion] = useState("");
 
   useEffect(() => { getVersion().then(setVersion).catch(() => {}); }, []);
@@ -116,6 +118,27 @@ export function Settings({ me }: { me: string }) {
               </div>
             </div>
             <Toggle on={notify} onChange={v => { setNotify(v); setNotificationsEnabled(v); }} />
+          </div>
+        </section>
+
+        <section className="mb-8">
+          <h2 className="tr-sec-title">Code</h2>
+          <p className="tr-sec-sub">A card's files and commits open here (the card drawer's Code section).</p>
+          <div className="tr-card mt-3 flex items-center gap-4 p-4">
+            <div className="min-w-0 flex-1">
+              <div className="text-[13px] font-medium">Open code in</div>
+              <div className="mt-0.5 text-[12px] text-[var(--color-tr-muted)]">
+                Repos are found at <code>~/development/&lt;project&gt;</code> (override with <code>TRANTOR_DEV_ROOT</code>).
+              </div>
+            </div>
+            <select value={editor} onChange={e => { const v = e.target.value as EditorPref; setEditor(v); setEditorPref(v); }}
+                    className="tr-input shrink-0">
+              <option value="default">System default</option>
+              <option value="vscode">VS Code</option>
+              <option value="cursor">Cursor</option>
+              <option value="zed">Zed</option>
+              <option value="reveal">Reveal in Finder</option>
+            </select>
           </div>
         </section>
 

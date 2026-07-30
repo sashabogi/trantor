@@ -76,12 +76,98 @@ async fn doctor() -> Result<String, String> {
     Ok(text)
 }
 
+
+/// Where a project's code lives on THIS machine. Convention first (~/development/<project>),
+/// TRANTOR_DEV_ROOT to relocate. Returns None when the repo simply isn't here — a card can
+/// reference code on another operator's machine and the UI degrades to text.
+fn project_dir(project: &str) -> Option<std::path::PathBuf> {
+    let root = std::env::var("TRANTOR_DEV_ROOT").unwrap_or_else(|_| {
+        format!("{}/development", std::env::var("HOME").unwrap_or_default())
+    });
+    let dir = std::path::Path::new(&root).join(project);
+    if dir.is_dir() { Some(dir) } else { None }
+}
+
+/// The card→code link: which of the thread's file mentions exist in the repo, and which commits
+/// touch the card (by "#id" in the message, or failing that, by the card's own files). Runs git
+/// HERE because the hub cannot: repos live on operator machines, hubs do not have them.
+#[tauri::command]
+async fn card_code(project: String, card_id: i64, candidates: Vec<String>) -> Result<String, String> {
+    let Some(dir) = project_dir(&project) else {
+        return Ok(String::from("{\"dir\":null,\"files\":[],\"commits\":[],\"origin\":null}"));
+    };
+    // files: candidates that really exist, confined to the repo (no traversal)
+    let mut files: Vec<String> = Vec::new();
+    for c in candidates.iter().take(40) {
+        if c.contains("..") { continue; }
+        let p = dir.join(c.trim_start_matches('/'));
+        if p.is_file() && files.len() < 20 && !files.contains(c) { files.push(c.clone()); }
+    }
+    let git = |args: Vec<String>| {
+        let dir = dir.clone();
+        async move {
+            tokio::process::Command::new("git")
+                .arg("-C").arg(&dir).args(&args)
+                .output().await.ok()
+                .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
+                .unwrap_or_default()
+        }
+    };
+    // commits citing the card id, then commits touching the card's files — dedup, id-cites first
+    let mut commits: Vec<(String, String)> = Vec::new();
+    let mut push_lines = |out: String, commits: &mut Vec<(String, String)>| {
+        for line in out.lines().take(8) {
+            if let Some((sha, subject)) = line.split_once(' ') {
+                if commits.iter().any(|(s, _)| s == sha) { continue; }
+                if commits.len() >= 8 { break; }
+                commits.push((sha.to_string(), subject.to_string()));
+            }
+        }
+    };
+    let by_id = git(vec!["log".into(), "--all".into(), "-n".into(), "8".into(), "--oneline".into(),
+                        format!("--grep=#{}", card_id)]).await;
+    push_lines(by_id, &mut commits);
+    if !files.is_empty() {
+        let mut args: Vec<String> = vec!["log".into(), "-n".into(), "6".into(), "--oneline".into(), "--".into()];
+        args.extend(files.iter().cloned());
+        let by_files = git(args).await;
+        push_lines(by_files, &mut commits);
+    }
+    // origin → a clickable commit URL when the repo is on GitHub
+    let origin_raw = git(vec!["remote".into(), "get-url".into(), "origin".into()]).await;
+    let origin = origin_raw.trim();
+    let web = if origin.contains("github.com") {
+        let o = origin
+            .trim_end_matches(".git")
+            .replace("git@github.com:", "https://github.com/");
+        Some(o)
+    } else { None };
+    let json = serde_json::json!({
+        "dir": dir.to_string_lossy(),
+        "files": files,
+        "commits": commits.iter().map(|(sha, subject)| serde_json::json!({"sha": sha, "subject": subject})).collect::<Vec<_>>(),
+        "origin": web,
+    });
+    Ok(json.to_string())
+}
+
+/// Open code where the operator wants it. Shelled `open` on purpose: macOS routes editor URL
+/// schemes (vscode://, cursor://, zed://) without plugin scope ceremony, and `open -R` reveals.
+#[tauri::command]
+async fn open_code(target: String, kind: String) -> Result<(), String> {
+    let mut c = tokio::process::Command::new("open");
+    if kind == "reveal" { c.arg("-R"); }
+    c.arg(&target);
+    let st = c.status().await.map_err(|e| format!("open: {e}"))?;
+    if st.success() { Ok(()) } else { Err(format!("open failed for {target}")) }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_notification::init())
-        .invoke_handler(tauri::generate_handler![greet, sign_request, hub_for_project, known_projects, hub_request, start_stream, doctor])
+        .invoke_handler(tauri::generate_handler![greet, sign_request, hub_for_project, known_projects, hub_request, start_stream, doctor, card_code, open_code])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

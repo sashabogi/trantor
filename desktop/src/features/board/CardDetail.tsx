@@ -5,7 +5,8 @@
 // This exists because a board tile can only say WHAT state a card is in; the drawer says WHY —
 // the agent's own reports are in the messages, and the moves are in the events.
 import { useEffect, useState } from "react";
-import type { Card, HubClient, HubEvent, Message } from "../../shared/api/client";
+import { cardCode, openFileInEditor, openCode } from "../../shared/api/client";
+import type { Card, CardCode, HubClient, HubEvent, Message } from "../../shared/api/client";
 import { AgentChip, cleanTitle } from "../../shared/Avatar";
 
 // Same flow map as the board: testing is a real gate the crew protocol depends on, so the drawer
@@ -45,15 +46,34 @@ function rows(events: HubEvent[], messages: Message[]): Row[] {
   return out.sort((a, b) => a.ts - b.ts);
 }
 
+// File-looking tokens in the card's own thread — the raw material of the card→code link.
+function fileCandidates(task: Card | null, messages: Message[]): string[] {
+  const text = [task?.title ?? "", ...messages.map(m => m.text)].join("\n");
+  const out = new Set<string>();
+  const re = /(?:^|[\s"'`(=,])((?:[\w@.-]+\/)+[\w@.-]+\.[A-Za-z]{1,6})(?=[\s"'`),.:;]|$)/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(text)) && out.size < 40) out.add(m[1]);
+  return [...out];
+}
+
 export function CardDetail({ client, id, onClose, onMoved }: {
   client: HubClient; id: number; onClose: () => void; onMoved?: () => void;
 }) {
   const [data, setData] = useState<{ task: Card | null; events: HubEvent[]; messages: Message[] } | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [code, setCode] = useState<CardCode | null>(null);
 
   const load = () => client.card(id).then(setData).catch(e => setError(String(e.message || e)));
 
-  useEffect(() => { setData(null); setError(null); void load(); }, [client, id]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { setData(null); setError(null); setCode(null); void load(); }, [client, id]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // The card→code link resolves on THIS machine once the thread is here: which mentioned files
+  // exist in the repo, which commits touch the card (or its files), where origin lives.
+  useEffect(() => {
+    if (!data?.task) return;
+    const cands = fileCandidates(data.task, data.messages);
+    cardCode(data.task.project, id, cands).then(setCode).catch(() => {});
+  }, [data, id]);
 
   // The thread stays live the same way the board does: react to this card's events by refetching
   // rather than replaying hub-side mutation logic client-side.
@@ -115,6 +135,31 @@ export function CardDetail({ client, id, onClose, onMoved }: {
             </div>
           )}
         </header>
+        {code && code.dir && (code.files.length > 0 || code.commits.length > 0) && (
+          <div className="border-b border-[var(--color-tr-edge)] px-4 py-3">
+            <div className="tr-label mb-2">code · <span className="tr-mono normal-case tracking-normal">{code.dir.replace(/^\/Users\/[^/]+/, "~")}</span></div>
+            {code.files.length > 0 && (
+              <div className="mb-2 flex flex-wrap gap-1.5">
+                {code.files.map(f => (
+                  <button key={f} onClick={() => void openFileInEditor(`${code.dir}/${f}`)}
+                          title={`open ${f} in your editor (Settings → Open code in)`}
+                          className="tr-chip tr-mono hover:text-[var(--color-tr-text)]">
+                    📄 {f}
+                  </button>
+                ))}
+              </div>
+            )}
+            {code.commits.map(c => (
+              <button key={c.sha}
+                      onClick={() => code.origin ? void openCode(`${code.origin}/commit/${c.sha}`, "url") : void navigator.clipboard?.writeText(c.sha)}
+                      title={code.origin ? "open commit on GitHub" : "copy sha"}
+                      className="flex w-full items-baseline gap-2 rounded px-1 py-0.5 text-left hover:bg-white/[0.04]">
+                <span className="tr-mono shrink-0 text-[11px] text-[var(--color-tr-warn)]">{c.sha.slice(0, 8)}</span>
+                <span className="min-w-0 flex-1 truncate text-[12px] text-[var(--color-tr-muted)]">{c.subject}</span>
+              </button>
+            ))}
+          </div>
+        )}
         <div className="flex-1 overflow-y-auto px-4 py-3">
           {data && rows(data.events, data.messages).map((r, i) => (
             <div key={i} className="flex gap-3 py-1.5 text-sm">
