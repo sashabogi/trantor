@@ -69,7 +69,8 @@ process. It is never something reaching across a boundary.
 | T1 | mid-turn | `inbox-deliver.mjs` PostToolUse → `additionalContext` | shipped |
 | T2 | turn ending | `stop-inbox.mjs` Stop → `{"decision":"block","reason":…}` | shipped `cb97aea` |
 | T3 | idle, harness-owned | acp-host `session/prompt` | **phase 3** |
-| — | idle, interactive | *no mechanism. Accepted gap.* | by design |
+| T3½ | idle, interactive | the DESKTOP APP notifies the HUMAN when an agent messages an offline session — the only safe actor | shipped 2026-07-30 |
+| — | idle, interactive, unattended | *no mechanism. Accepted gap.* | by design |
 
 All tiers share one delivery ledger (`deliveredUpTo`, `/inbox?peek=1`) so nothing is surfaced twice
 and nothing is marked delivered that was never seen.
@@ -339,3 +340,41 @@ server compromise and, later, an over-scoped teammate — not a vendor.
 ### 12.3 STILL OPEN
 Do interactive sessions ever migrate into the app (owned, hence T3-capable), or stay in Terminal
 forever? The accepted delivery gap in §5 is only acceptable while the answer is "stay".
+
+---
+
+## 13. As-built addendum (2026-07-30)
+
+**Phases 0–2 shipped**, with these deltas from the design above:
+
+- **§5**: T3½ added — offline-receiver messages notify the human via the desktop app.
+- **§6c signal #1 shipped as FILE CLAIMS**: `POST /claim` (pre-edit, from a PreToolUse hook on
+  Edit|Write|MultiEdit|NotebookEdit), `GET /claims`, conflicts returned to the ACTING session and
+  injected via its own harness. Ephemeral (TTL 10m) like presence. `file.claim`/`file.conflict`
+  events. Informational, never a lock — a lock server that fails open is worse than none.
+- **§7.5 hardened**: warn mode NEVER blocks — bad signature, replay and unknown identity pass WITH
+  a warning under `warn` and are hard 401s under `enforce`. (A restarted hub had 401'd signed
+  requests from not-yet-enrolled identities while unsigned passed — warn punished exactly the
+  clients doing the right thing.)
+- **§10 store**: not snapshot-writes but **saveDelta** — the hub diffs against its last persisted
+  snapshot and writes only changes (never touching rows it has not seen), plus **LISTEN/NOTIFY**
+  (`CHANGE_CHANNEL` in the store contract): any foreign writer notifies; the hub flushes its own
+  delta, reloads, swaps state, and pushes a `hub.reload` SSE frame. `tasks.extra JSONB` carries
+  every card field without a column (costKind/tokens/count/summary/…).
+- **New endpoints beyond the §7.6 table**: `/claim` `/claims` (write/read), `/import` (owner —
+  the `trantor adopt` migration surface, remaps colliding ids server-side), `/economics`
+  `/learning` `/balances` `/handoffs` (reads). `/register` carries `llm` + `model` per peer.
+- **New CLI**: `trantor adopt` · `trantor summarize` (narrative cards, Scrooge-batched, ambient
+  hourly via heartbeat) · `trantor identity|invite|enroll` (Phase 0, as designed).
+- **Desktop client (Phase 2) exceeds §10's sketch**: design system ("Buzz calibration"), Home
+  mission-control (economics, providers, attention, handoffs, lessons), Learning view (two-hub
+  merge: lessons from the project hub, telemetry/ledger from the machine-local hub), threaded
+  chat, card→code (git-index resolution, editor URL schemes), live grow-only project list
+  (pins ∪ local-hub projects), real brand marks.
+- **Migration reality (§12.1)**: ALL 16 projects moved to the remote hub 2026-07-29–30; the
+  Crebral-umbrella-first plan was overtaken. Split-brain id collisions during the window were
+  remapped; taskSeq/seq now advance past imports. `trantor adopt` exists so the next project is
+  one command.
+
+**Unbuilt, unchanged from the design**: overseer (§10) — now unblocked; autonomy ladder + 
+`orgPolicy.links` (storage only today); acp-host (phase 3); mobile (phase 4); GitHub device flow (§6d).

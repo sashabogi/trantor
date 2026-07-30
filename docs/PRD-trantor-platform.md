@@ -169,3 +169,44 @@ to translate.
 
 **Phase 0 is bus authentication and keypair identity.** It closes a live security hole, kills the
 identity collision, needs no further product decisions, and everything else depends on it.
+
+---
+
+## 11. Status — as built (updated 2026-07-30)
+
+### Shipped, per this PRD
+- **§5.1 Channels = projects** — sidebar sections, per-project BOARD | FEED | CHAT. FLOW/TIMELINE retired in the app.
+- **§5.2 Two lenses** — BOARD + FEED on the unified event log; chat is a filter and a lens.
+- **§5.3 Agents (partial)** — per-seat keypairs, live roster with presence, harness detection,
+  **llm + model on every peer** (heartbeat reads the model actually loaded from the transcript;
+  crew seats report CREW_MODEL). Missing: personas decoupled from harness, crew start/stop from the app.
+- **§5.4 Inbox** — direct-to-you only; agent↔agent traffic lives in each project's conversation.
+- **§8.2 met**: two sessions are warned BEFORE either writes — see file claims below.
+- **§9 held**: warn-mode auth annotates and never blocks (hardened 2026-07-30); `/send` binds `from`
+  to the signer; the terminal-injection ban stands.
+
+### Added while building (not in the original PRD)
+- **File claims** — every Edit/Write posts intent to the hub pre-edit; a second live session on the
+  same file gets a warning injected through its own harness. This is TDD §6c signal #1, and it is
+  cross-machine by construction. `file.claim` / `file.conflict` ride the FEED.
+- **Narrative cards** — `trantor summarize`: a cheap model writes "assigned — did" one-liners from
+  each card's own thread; ambient (hourly) + on demand; permanent, never recomputed.
+- **Card → code** — the drawer links a card to the files it touched (resolved through git's index,
+  monorepo-safe) and the commits that touched them; opens in the operator's editor of choice.
+- **`trantor adopt <project>`** — one-command graduation of a project from the local hub to a remote
+  hub: enroll + import (server-side id remapping) + verify + pin.
+- **The safe T3** — when an agent messages an OFFLINE session, the human gets the native
+  notification; nothing else may reach an idle interactive session (§9 stands).
+- **Threaded chat** — runs of messages about one card fold into a thread block titled by the card's
+  narrative, click-through to the card.
+- **Delta persistence + LISTEN/NOTIFY** — the hub writes only diffs and reloads on foreign writes;
+  a second writer (importer, another hub) surfaces live. Was the pre-Julian blocker.
+- **Brand identity everywhere** — real LLM marks (LobeHub set), LLM-first display names
+  ("claude · MacBook-Pro-M1"), model chips in chat/roster/agents.
+
+### Still open, per this PRD
+- **§5.5 Overseer** — NOT built; its dependency gate (delivery + mechanical detection) is now open.
+- **§6 Autonomy ladder** — `orgPolicy` exists as storage only; no levels, no links, no admin surface.
+- **§5.6 Mobile go/no-go** — not built (the gate primitive it needs exists: verify-gates).
+- **§12.3 / acp-host** — idle interactive sessions remain the accepted gap; ACP is the strategic answer.
+- Success criteria: **2 met**, 3 partially (gates exist; no structured cross-review record), 1/4/5 open.
