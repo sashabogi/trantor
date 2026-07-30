@@ -54,7 +54,7 @@ function CardTile({ card, onOpen, onAdvance }: {
       <div className="mt-2 flex flex-wrap items-center gap-1.5 text-[11px] text-[var(--color-tr-muted)]">
         {card.assignee && <span className="rounded bg-black/30 px-1.5 py-0.5">@{card.assignee}</span>}
         {card.difficulty && <span className="rounded bg-black/30 px-1.5 py-0.5">{card.difficulty[0].toUpperCase()}</span>}
-        {card.model && <span className="tr-mono rounded bg-black/30 px-1.5 py-0.5">{card.model}</span>}
+        {card.model && <span className="tr-mono max-w-[150px] truncate rounded bg-black/30 px-1.5 py-0.5">{card.model}</span>}
         <span className="tr-mono ml-auto opacity-60">#{card.id}</span>
         {next && (
           <button
@@ -144,13 +144,13 @@ export function Board({ client, project, lens, onLens }: {
       </ProjectHeader>
       <div className="flex flex-1 gap-4 overflow-x-auto px-8 pb-6">
         {byLane.map(([lane, list]) => (
-          <section key={lane} className="tr-lane flex w-[270px] shrink-0 flex-col xl:w-auto xl:flex-1 xl:shrink">
-            <div className="mb-2.5 flex items-center gap-2 px-0.5">
+          <section key={lane} className="tr-lane flex w-[290px] shrink-0 grow-0 flex-col rounded-xl bg-white/[0.025] p-2.5">
+            <div className="mb-2.5 flex items-center gap-2 px-1.5 pt-1">
               <span className="tr-dot" style={{ background: LANE_COLOR[lane] }} />
               <span className="tr-label">{lane}</span>
               <span className="tr-mono ml-auto text-[11px] text-[var(--color-tr-muted)]">{list.length}</span>
             </div>
-            <div className="flex flex-col gap-2 overflow-y-auto">
+            <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto px-0.5 pb-1">
               {list.slice(0, 200).map(c => (
                 <CardTile key={c.id} card={c} onOpen={c2 => setOpen(c2.id)} onAdvance={advance} />
               ))}
