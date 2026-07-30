@@ -47,7 +47,17 @@ export function notificationFor(ev: HubEvent, me: string): { title: string; body
   return null;
 }
 
+// The user's off-switch, persisted locally. Read at fire time so the Settings toggle takes
+// effect immediately — no restart, no plumbing.
+export function notificationsEnabled(): boolean {
+  try { return localStorage.getItem("tr.notifications") !== "off"; } catch { return true; }
+}
+export function setNotificationsEnabled(on: boolean) {
+  try { localStorage.setItem("tr.notifications", on ? "on" : "off"); } catch {}
+}
+
 export async function notifyIfWorthIt(ev: HubEvent, me: string) {
+  if (!notificationsEnabled()) return false;
   const n = notificationFor(ev, me);
   if (!n) return false;
   if (!(await ensurePermission())) return false;
