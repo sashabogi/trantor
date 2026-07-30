@@ -48,13 +48,13 @@ function CardTile({ card, onOpen, onAdvance }: {
     // explicit → button, here and in the drawer.
     <div
       onClick={() => onOpen(card)}
-      className="cursor-pointer rounded-lg border border-[var(--color-tr-edge)] bg-[var(--color-tr-panel)] p-3 text-sm hover:border-[var(--color-tr-doing)]">
+      className="tr-card cursor-pointer p-3 text-sm">
       <div className="leading-snug">{card.title}</div>
       <div className="mt-2 flex flex-wrap items-center gap-1.5 text-[11px] text-[var(--color-tr-muted)]">
         {card.assignee && <span className="rounded bg-black/30 px-1.5 py-0.5">@{card.assignee}</span>}
         {card.difficulty && <span className="rounded bg-black/30 px-1.5 py-0.5">{card.difficulty[0].toUpperCase()}</span>}
-        {card.model && <span className="rounded bg-black/30 px-1.5 py-0.5">{card.model}</span>}
-        <span className="ml-auto opacity-60">#{card.id}</span>
+        {card.model && <span className="tr-mono rounded bg-black/30 px-1.5 py-0.5">{card.model}</span>}
+        <span className="tr-mono ml-auto opacity-60">#{card.id}</span>
         {next && (
           <button
             title={`move to ${next}`}
@@ -120,10 +120,10 @@ export function Board({ client, project }: { client: HubClient; project: string 
   const filtered = visible.length !== cards.length;
 
   return (
-    <div className="relative flex h-full flex-col">
+    <div className="tr-pane relative flex h-full flex-col">
       <header className="flex items-center gap-3 border-b border-[var(--color-tr-edge)] px-5 py-3">
         <h1 className="text-base font-semibold">{project}</h1>
-        <span className="text-xs text-[var(--color-tr-muted)]">
+        <span className="tr-mono text-xs text-[var(--color-tr-muted)]">
           {done}/{cards.length} done · {Math.round((done / Math.max(cards.length, 1)) * 100)}%
           {filtered && <span> · showing {visible.length}</span>}
         </span>
@@ -145,11 +145,11 @@ export function Board({ client, project }: { client: HubClient; project: string 
       </header>
       <div className="flex flex-1 gap-3 overflow-x-auto p-4">
         {byLane.map(([lane, list]) => (
-          <section key={lane} className="flex min-w-[240px] flex-1 flex-col">
-            <div className="mb-2 flex items-center gap-2 text-[11px] uppercase tracking-wide">
-              <span className="h-2 w-2 rounded-full" style={{ background: LANE_COLOR[lane] }} />
-              <span className="text-[var(--color-tr-muted)]">{lane}</span>
-              <span className="ml-auto text-[var(--color-tr-muted)]">{list.length}</span>
+          <section key={lane} className="tr-lane flex min-w-[240px] flex-1 flex-col">
+            <div className="mb-2 flex items-center gap-2">
+              <span className="h-2 w-2 rounded-full" style={{ background: LANE_COLOR[lane], boxShadow: `0 0 6px ${LANE_COLOR[lane]}` }} />
+              <span className="tr-label">{lane}</span>
+              <span className="tr-mono ml-auto text-[11px] text-[var(--color-tr-muted)]">{list.length}</span>
             </div>
             <div className="flex flex-col gap-2 overflow-y-auto">
               {list.slice(0, 200).map(c => (

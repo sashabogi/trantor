@@ -10,6 +10,16 @@ import type { Card, HubClient, HubEvent, Message } from "../../shared/api/client
 // Same flow map as the board: testing is a real gate the crew protocol depends on, so the drawer
 // must not offer a shortcut the protocol forbids either.
 const NEXT: Record<string, string> = { todo: "doing", doing: "testing", testing: "done" };
+const FLOW = ["todo", "doing", "testing", "done"];
+
+// What the drawer lets a human do with a card's status. Forward: ONE step (the gate stays a gate).
+// Backward: ANY earlier stage — a misclicked card must be recoverable, and rolling back skips no
+// gate. Exception lanes (failed/blocked/stale) re-enter the flow at todo or doing.
+function allowedMoves(status: string): string[] {
+  const i = FLOW.indexOf(status);
+  if (i >= 0) return [...FLOW.slice(0, i), ...(NEXT[status] ? [NEXT[status]] : [])];
+  return ["todo", "doing"];
+}
 
 const STATUS_COLOR: Record<string, string> = {
   todo: "var(--color-tr-muted)",
@@ -55,32 +65,39 @@ export function CardDetail({ client, id, onClose, onMoved }: {
   }, [client, id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const task = data?.task ?? null;
-  const next = task ? NEXT[task.status] : undefined;
-  const advance = () => {
-    if (!task || !next) return;
-    client.moveCard(task.id, next).then(() => { void load(); onMoved?.(); }).catch(() => {});
+  const moves = task ? allowedMoves(task.status) : [];
+  const moveTo = (status: string) => {
+    if (!task) return;
+    client.moveCard(task.id, status).then(() => { void load(); onMoved?.(); }).catch(() => {});
   };
 
   return (
     <div className="absolute inset-0 z-20 flex" onClick={onClose}>
-      <div className="flex-1 bg-black/50" />
-      <div className="flex h-full w-[440px] shrink-0 flex-col border-l border-[var(--color-tr-edge)] bg-[var(--color-tr-panel)]"
+      <div className="tr-backdrop flex-1" />
+      <div className="tr-drawer flex h-full w-[440px] shrink-0 flex-col border-l border-[var(--color-tr-edge)] bg-[var(--color-tr-panel)]"
            onClick={e => e.stopPropagation()}>
         <header className="border-b border-[var(--color-tr-edge)] px-4 py-3">
           <div className="flex items-center gap-2">
-            <span className="text-xs text-[var(--color-tr-muted)]">#{id}</span>
+            <span className="tr-mono text-xs text-[var(--color-tr-muted)]">#{id}</span>
             {task && (
               <span className="rounded px-1.5 py-0.5 text-[11px] uppercase tracking-wide"
                     style={{ background: "rgba(0,0,0,.3)", color: STATUS_COLOR[task.status] ?? "var(--color-tr-muted)" }}>
                 {task.status}
               </span>
             )}
-            {task && next && (
-              <button onClick={advance}
-                      className="rounded border border-[var(--color-tr-edge)] px-2 py-0.5 text-[11px] text-[var(--color-tr-muted)] hover:border-[var(--color-tr-doing)] hover:text-[var(--color-tr-text)]">
-                → {next}
-              </button>
-            )}
+            {task && moves.map(s => {
+              const forward = s === NEXT[task.status];
+              return (
+                <button key={s} onClick={() => moveTo(s)}
+                        title={forward ? `advance to ${s}` : `move back to ${s}`}
+                        className={`rounded border px-2 py-0.5 text-[11px] ${
+                          forward
+                            ? "border-[var(--color-tr-doing)] text-[var(--color-tr-text)] hover:bg-black/30"
+                            : "border-[var(--color-tr-edge)] text-[var(--color-tr-muted)] hover:border-[var(--color-tr-warn)] hover:text-[var(--color-tr-text)]"}`}>
+                  {forward ? "→" : "←"} {s}
+                </button>
+              );
+            })}
             <button onClick={onClose} className="ml-auto rounded px-2 text-[var(--color-tr-muted)] hover:text-[var(--color-tr-text)]">✕</button>
           </div>
           <div className="mt-2 text-sm leading-snug">{task ? task.title : error ? `Card unavailable: ${error}` : "Loading…"}</div>
@@ -97,7 +114,7 @@ export function CardDetail({ client, id, onClose, onMoved }: {
         <div className="flex-1 overflow-y-auto px-4 py-3">
           {data && rows(data.events, data.messages).map((r, i) => (
             <div key={i} className="flex gap-3 py-1.5 text-sm">
-              <span className="w-20 shrink-0 text-[11px] leading-5 text-[var(--color-tr-muted)]">
+              <span className="tr-mono w-20 shrink-0 text-[11px] leading-5 text-[var(--color-tr-muted)]">
                 {new Date(r.ts).toLocaleDateString([], { month: "short", day: "numeric" })}{" "}
                 {new Date(r.ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
               </span>

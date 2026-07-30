@@ -92,7 +92,7 @@ export function Feed({ client, project }: { client: HubClient; project: string }
   }, [events]);
 
   return (
-    <div className="relative flex h-full flex-col">
+    <div className="tr-pane relative flex h-full flex-col">
       <header className="flex items-center gap-3 border-b border-[var(--color-tr-edge)] px-5 py-3">
         <h1 className="text-base font-semibold">{project}</h1>
         <div className="flex items-center gap-1">
@@ -120,7 +120,7 @@ export function Feed({ client, project }: { client: HubClient; project: string }
                  onClick={ref !== null ? () => setOpen(ref) : undefined}
                  className={`flex gap-3 border-l-2 py-1.5 pl-3 text-sm ${ref !== null ? "cursor-pointer hover:bg-black/20" : ""}`}
                  style={{ borderColor: KIND_COLOR(e.type) }}>
-              <span className="w-14 shrink-0 text-[11px] text-[var(--color-tr-muted)]">
+              <span className="tr-mono w-14 shrink-0 text-[11px] text-[var(--color-tr-muted)]">
                 {new Date(e.ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
               </span>
               <span className="w-36 shrink-0 truncate text-[11px] text-[var(--color-tr-muted)]">{e.by ?? "—"}</span>

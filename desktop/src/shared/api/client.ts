@@ -81,6 +81,17 @@ export class HubClient {
   }
 
   /**
+   * The brain's books: Scrooge ledger windows (real spend + frontier-yardstick savings) and
+   * card-based costs. NOTIONAL (plan-covered Claude work) stays strictly separate from REAL spend —
+   * summing them would imply we paid for plan-covered tokens. Ledger sections are empty on a hub
+   * whose machine has no Scrooge ledger (the remote hub); card costs work everywhere.
+   */
+  economics() { return this.request<Economics>("GET", "/economics"); }
+
+  /** The self-learning loop: relay lessons, per-agent reliability, per-model economics + guardrails. */
+  learning() { return this.request<Learning>("GET", "/learning"); }
+
+  /**
    * Messages addressed to `session`. peek=1 reads WITHOUT advancing the delivery ledger — the app is
    * a viewer here, and marking a message delivered because a human glanced at a list would hide it
    * from the session's own hooks, which are the thing that actually acts on it.
@@ -125,6 +136,29 @@ export class HubClient {
     return () => { stopped = true; unlisten?.(); };
   }
 }
+
+export type EconWindow = {
+  calls: number; tokens_in: number; tokens_out: number;
+  cost_usd: number; opus_equiv_usd: number; saved_usd: number;
+};
+export type Economics = {
+  windows?: Record<string, EconWindow>;
+  costKinds?: Record<string, Record<string, { count: number; usd: number | null }>>;
+  notionalByProject?: Record<string, number>;
+};
+
+export type LessonRec = { text: string; scope: string; by: string; project?: string; ts: number };
+export type LearningAgent = {
+  agent: string; turns: number; failures: number; failRate: number;
+  models: string[]; lastFailure?: { ts: number; exit: number; project: string } | null;
+};
+export type LearningModel = { model: string; guardrailCount: number; calls: number; cost_usd: number; saved_usd: number };
+export type Learning = {
+  totals: { lessons: number; guardrails: number; turns: number; failures: number; failRate: number; models: number };
+  lessons: { global: LessonRec[]; byAgent: Record<string, LessonRec[]>; byProject: Record<string, LessonRec[]>; projects: string[] };
+  agents: LearningAgent[]; agentsByProject: Record<string, LearningAgent[]>;
+  models: LearningModel[]; modelsByProject: Record<string, LearningModel[]>;
+};
 
 export class HubAuthError extends Error {}
 

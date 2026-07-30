@@ -18,8 +18,10 @@ import { Board } from "../features/board/Board";
 import { Feed } from "../features/feed/Feed";
 import { Agents } from "../features/agents/Agents";
 import { Inbox } from "../features/inbox/Inbox";
+import { Learning } from "../features/learning/Learning";
 import { Settings } from "../features/settings/Settings";
 import { Conversation } from "../features/chat/Conversation";
+import { CostStrip } from "../shared/CostStrip";
 import { notifyIfWorthIt } from "../shared/notify";
 
 type Lens = "board" | "feed" | "chat";
@@ -27,6 +29,7 @@ type Pane =
   | { kind: "project"; lens: Lens }
   | { kind: "inbox" }
   | { kind: "agents" }
+  | { kind: "learning" }
   | { kind: "settings" };
 
 // Who this app signs as. Mirrors the Rust default; RELAY_OWNER_IDENTITY overrides it there.
@@ -66,8 +69,10 @@ export function AppShell() {
 
   const NavItem = ({ label, on, onClick }: { label: string; on: boolean; onClick: () => void }) => (
     <button onClick={onClick}
-      className={`block w-full rounded px-2 py-1 text-left text-sm ${
-        on ? "bg-black/40 text-[var(--color-tr-text)]" : "text-[var(--color-tr-muted)] hover:bg-black/20"}`}>
+      className={`block w-full rounded border-l-2 px-2 py-1 text-left text-sm ${
+        on
+          ? "border-[var(--color-tr-ok)] bg-black/40 text-[var(--color-tr-text)]"
+          : "border-transparent text-[var(--color-tr-muted)] hover:bg-black/20 hover:text-[var(--color-tr-text)]"}`}>
       {label}
     </button>
   );
@@ -75,28 +80,35 @@ export function AppShell() {
   return (
     <div className="flex h-full">
       <aside className="flex w-60 shrink-0 flex-col border-r border-[var(--color-tr-edge)] bg-[var(--color-tr-panel)]">
-        <div className="px-4 py-3 text-sm font-semibold tracking-wide">trantor</div>
+        {/* Wordmark: the hub node. Same teal, same glow, as a lane's live dot. */}
+        <div className="flex items-center gap-2 px-4 py-3.5">
+          <span className="h-2 w-2 rounded-full bg-[var(--color-tr-ok)]"
+                style={{ boxShadow: "0 0 8px var(--color-tr-ok)" }} />
+          <span className="text-[13px] font-semibold uppercase tracking-[0.22em]">Trantor</span>
+        </div>
 
-        {/* GLOBAL — not scoped to the selected project */}
+        {/* GLOBAL — not scoped to the selected project. Learning lives here on purpose: a lesson
+            learned on one project exists to be applied on the next. */}
         <div className="px-2 pb-2">
-          <NavItem label="Inbox"  on={pane.kind === "inbox"}  onClick={() => setPane({ kind: "inbox" })} />
-          <NavItem label="Agents" on={pane.kind === "agents"} onClick={() => setPane({ kind: "agents" })} />
+          <NavItem label="Inbox"    on={pane.kind === "inbox"}    onClick={() => setPane({ kind: "inbox" })} />
+          <NavItem label="Agents"   on={pane.kind === "agents"}   onClick={() => setPane({ kind: "agents" })} />
+          <NavItem label="Learning" on={pane.kind === "learning"} onClick={() => setPane({ kind: "learning" })} />
         </div>
 
         <nav className="flex-1 overflow-y-auto px-2 pb-3">
           {sections.map(([section, list]) => (
             <div key={section} className="mb-3">
-              <div className="px-2 pb-1 text-[10px] uppercase tracking-wider text-[var(--color-tr-muted)]">{section}</div>
+              <div className="tr-label px-2 pb-1">{section}</div>
               {list.map(p => (
                 <button key={p}
                   onClick={() => {
                     setActive(p);
                     setPane(cur => ({ kind: "project", lens: cur.kind === "project" ? cur.lens : "board" }));
                   }}
-                  className={`block w-full truncate rounded px-2 py-1 text-left text-sm ${
+                  className={`block w-full truncate rounded border-l-2 px-2 py-1 text-left text-sm ${
                     p === active && pane.kind === "project"
-                      ? "bg-black/40 text-[var(--color-tr-text)]"
-                      : "text-[var(--color-tr-muted)] hover:bg-black/20"}`}>
+                      ? "border-[var(--color-tr-ok)] bg-black/40 text-[var(--color-tr-text)]"
+                      : "border-transparent text-[var(--color-tr-muted)] hover:bg-black/20 hover:text-[var(--color-tr-text)]"}`}>
                   {p}
                 </button>
               ))}
@@ -107,7 +119,7 @@ export function AppShell() {
         {/* APP — settings sits with the identity it configures */}
         <div className="border-t border-[var(--color-tr-edge)] px-2 py-2">
           <NavItem label="Settings" on={pane.kind === "settings"} onClick={() => setPane({ kind: "settings" })} />
-          <div className="truncate px-2 pt-1 text-[10px] text-[var(--color-tr-muted)]">
+          <div className="tr-mono truncate px-2 pt-1 text-[10px] text-[var(--color-tr-muted)]">
             {ME} · {hub ? hub.replace(/^https?:\/\//, "") : "resolving…"}
           </div>
         </div>
@@ -125,6 +137,7 @@ export function AppShell() {
               </button>
             ))}
             <span className="ml-3 text-xs text-[var(--color-tr-muted)]">{active}</span>
+            {client && <CostStrip client={client} project={active} />}
           </div>
         )}
 
@@ -134,6 +147,7 @@ export function AppShell() {
           </div>
         ) : pane.kind === "inbox" ? <Inbox client={client} me={ME} />
           : pane.kind === "agents" ? <Agents client={client} project={active} />
+          : pane.kind === "learning" ? <Learning client={client} />
           : pane.kind === "settings" ? <Settings me={ME} />
           : pane.lens === "board" ? <Board client={client} project={active} />
           : pane.lens === "chat" ? <Conversation client={client} project={active} me={ME} />

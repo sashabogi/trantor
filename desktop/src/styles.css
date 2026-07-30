@@ -12,6 +12,97 @@
   --color-tr-doing:   #4a90d9;   /* building */
   --color-tr-fail:    #ef6a6a;   /* error */
   --color-tr-warn:    #d9a441;
+
+  /* Flight-deck type: a characterful geometric that SHIPS WITH macOS (the CSP blocks webfonts,
+     and an ops console must not look different offline), and a real mono for every number the
+     eye has to trust — ids, counts, costs, timestamps. */
+  --font-ui:   "Avenir Next", "Avenir", "Helvetica Neue", ui-sans-serif, sans-serif;
+  --font-mono: "SF Mono", ui-monospace, "Menlo", monospace;
 }
+
 html, body, #root { height: 100%; }
-body { background: var(--color-tr-bg); color: var(--color-tr-text); }
+
+body {
+  font-family: var(--font-ui);
+  color: var(--color-tr-text);
+  letter-spacing: 0.01em;
+  /* Atmosphere instead of a flat fill: a faint phosphor glow bleeding from the top — the same
+     teal the OK state uses — over a near-black base. Fixed, so scrolling content moves through
+     the light rather than dragging it along. */
+  background:
+    radial-gradient(120% 60% at 50% -10%, rgba(20, 184, 166, 0.07), transparent 60%),
+    radial-gradient(80% 40% at 85% 110%, rgba(74, 144, 217, 0.04), transparent 60%),
+    var(--color-tr-bg);
+  background-attachment: fixed;
+}
+
+/* Grain: a whisper of noise so large dark panels read as material, not dead pixels. */
+body::after {
+  content: "";
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 50;
+  opacity: 0.05;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='120' height='120'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2'/%3E%3C/filter%3E%3Crect width='120' height='120' filter='url(%23n)' opacity='0.5'/%3E%3C/svg%3E");
+}
+
+/* Numbers the eye has to trust are mono, everywhere, without per-view effort. */
+code, .tr-mono { font-family: var(--font-mono); font-size: 0.92em; letter-spacing: 0; }
+
+::selection { background: rgba(20, 184, 166, 0.28); }
+
+/* Thin console scrollbars — the default macOS overlay is fine, but WKWebView's fallback is not. */
+*::-webkit-scrollbar { width: 8px; height: 8px; }
+*::-webkit-scrollbar-thumb { background: rgba(138, 148, 166, 0.22); border-radius: 4px; }
+*::-webkit-scrollbar-thumb:hover { background: rgba(138, 148, 166, 0.38); }
+*::-webkit-scrollbar-track { background: transparent; }
+
+/* One deliberate motion moment: content panes materialise with a short rise; board lanes stagger
+   (see .tr-lane) so the board reads left-to-right as it arrives. Everything else is micro. */
+@keyframes tr-rise { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+@keyframes tr-slide-in { from { opacity: 0; transform: translateX(24px); } to { opacity: 1; transform: none; } }
+
+.tr-pane { animation: tr-rise 0.28s cubic-bezier(0.2, 0.7, 0.2, 1) both; }
+.tr-lane { animation: tr-rise 0.32s cubic-bezier(0.2, 0.7, 0.2, 1) both; }
+.tr-lane:nth-child(2) { animation-delay: 0.04s; }
+.tr-lane:nth-child(3) { animation-delay: 0.08s; }
+.tr-lane:nth-child(4) { animation-delay: 0.12s; }
+.tr-lane:nth-child(5) { animation-delay: 0.16s; }
+.tr-lane:nth-child(6) { animation-delay: 0.20s; }
+.tr-lane:nth-child(7) { animation-delay: 0.24s; }
+
+/* The card tile: a panel with depth, not a bordered rectangle. Hover lifts it toward the light. */
+.tr-card {
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.025), transparent 55%), var(--color-tr-panel);
+  border: 1px solid var(--color-tr-edge);
+  border-radius: 0.55rem;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.35);
+  transition: transform 0.12s ease, border-color 0.12s ease, box-shadow 0.12s ease;
+}
+.tr-card:hover {
+  transform: translateY(-1px);
+  border-color: rgba(74, 144, 217, 0.55);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.45), 0 0 0 1px rgba(74, 144, 217, 0.12);
+}
+
+/* Drawer: slides in from the card's board, backdrop frosts the console behind it. */
+.tr-drawer { animation: tr-slide-in 0.22s cubic-bezier(0.2, 0.7, 0.2, 1) both; }
+.tr-backdrop { background: rgba(8, 10, 14, 0.55); backdrop-filter: blur(3px); }
+
+/* Micro-labels — lane names, section headers — in tracked caps. The flight-deck voice. */
+.tr-label {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--color-tr-muted);
+}
+
+/* Inputs and selects share one console voice; focus is the phosphor ring, not the browser's. */
+input, select, textarea, button { font-family: inherit; }
+input:focus-visible, select:focus-visible, textarea:focus-visible, button:focus-visible {
+  outline: 1px solid rgba(20, 184, 166, 0.65);
+  outline-offset: 1px;
+}
+button { transition: background-color 0.12s ease, border-color 0.12s ease, color 0.12s ease; }
