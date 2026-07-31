@@ -18,11 +18,8 @@ const noPush = args.includes("--no-push");
 // Only check providers the user configured in `trantor profile` — never stray keys in the ambient env.
 const configured = Object.keys(loadProfile().providers || {});
 
-function relayUrl() {
-  if (process.env.RELAY_URL) return process.env.RELAY_URL;
-  try { const c = join(homedir(), ".agent-bus", "config.json"); if (existsSync(c)) { const u = JSON.parse(readFileSync(c, "utf8")).url; if (u) return u; } } catch {}
-  return "http://127.0.0.1:4477";
-}
+// Signed via the shared client (2026-07-31, agent-UX audit): unsigned POST rejected under enforce.
+import { signedPost } from "../hooks/lib/api.mjs";
 let _qpct = DEFAULT_LOW_QUOTA_PCT;
 function thresholds() {
   try { const c = JSON.parse(readFileSync(join(homedir(), ".agent-bus", "config.json"), "utf8")); if (typeof c.lowQuotaPct === "number") _qpct = c.lowQuotaPct; if (c.lowBalance && typeof c.lowBalance === "object") return { ...DEFAULT_LOW, ...c.lowBalance }; } catch {}
@@ -35,8 +32,7 @@ const low = thresholds();
 // push the snapshot to the hub (best-effort) so the dashboard + warning line can use it
 if (!noPush) {
   try {
-    await fetch(`${relayUrl()}/balances`, { method: "POST", headers: { "content-type": "application/json" },
-      body: JSON.stringify({ balances, ts: Date.now() }), signal: AbortSignal.timeout(2500) });
+    await signedPost("/balances", { balances, ts: Date.now() }, { timeoutMs: 2500 });
   } catch {}
 }
 

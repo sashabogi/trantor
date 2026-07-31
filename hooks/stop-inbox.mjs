@@ -25,7 +25,7 @@ import { readFileSync, writeFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
 import { resolveProject, hostId } from "../lib/project.mjs";
-import { getJSON } from "./lib/api.mjs";
+import { signedGet } from "./lib/api.mjs";   // signed: enforce hubs 401 unsigned reads — unsigned, T2 delivery is silently dead
 
 const FETCH_TIMEOUT_MS = Number(process.env.RELAY_STOP_TIMEOUT_MS || 1500);
 
@@ -75,7 +75,7 @@ async function main() {
   let messages = [];
   try {
     // PEEK: look without claiming delivery. We may yet decide to let the stop through.
-    const peek = await getJSON(`/inbox?session=${encodeURIComponent(session)}&since=${cursor}&peek=1`, { timeoutMs: FETCH_TIMEOUT_MS });
+    const peek = await signedGet(`/inbox?session=${encodeURIComponent(session)}&since=${cursor}&peek=1`, { timeoutMs: FETCH_TIMEOUT_MS, session });
     if (!peek.ok) return allow();
     messages = peek.json?.messages || [];
   } catch { return allow(); }        // hub down — never trap the session
@@ -86,7 +86,7 @@ async function main() {
   // Committed now: claim delivery for real so neither inbox-deliver nor the deferred waker repeats it.
   let next = cursor;
   try {
-    const claim = await getJSON(`/inbox?session=${encodeURIComponent(session)}&since=${cursor}`, { timeoutMs: FETCH_TIMEOUT_MS });
+    const claim = await signedGet(`/inbox?session=${encodeURIComponent(session)}&since=${cursor}`, { timeoutMs: FETCH_TIMEOUT_MS, session });
     if (claim.ok) next = claim.json?.cursor || cursor;
   } catch {}
   try { writeFileSync(cursorFile, String(next)); } catch {}

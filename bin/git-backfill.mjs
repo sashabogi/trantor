@@ -11,18 +11,16 @@ import { join } from "node:path";
 import { homedir } from "node:os";
 import { resolveProject, hostId } from "../lib/project.mjs";
 
-function relayUrl() {
-  if (process.env.RELAY_URL) return process.env.RELAY_URL;
-  try { const c = join(homedir(), ".agent-bus", "config.json"); if (existsSync(c)) { const u = JSON.parse(readFileSync(c, "utf8")).url; if (u) return u; } } catch {}
-  return "http://127.0.0.1:4477";
-}
+// Signed via the shared client (2026-07-31, agent-UX audit): unsigned POST /task was rejected
+// under enforce; hand-rolled relayUrl missed the per-project hubs map.
+import { relayUrl, signedGet, signedPost } from "../hooks/lib/api.mjs";
 const args = process.argv.slice(2);
 const arg = (name, def) => { const i = args.indexOf("--" + name); return i >= 0 ? args[i + 1] : def; };
 const dir = process.cwd();
 const project = arg("project", resolveProject(dir));
 const since = arg("since", "14 days ago");
 const dry = args.includes("--dry-run");
-const url = relayUrl();
+const url = relayUrl(project);
 const me = `${hostId()}:${project}`;
 
 const themeOf = (s) => {
@@ -53,7 +51,7 @@ for (const r of rows) {
 }
 
 let existing = new Set();
-try { const t = (await (await fetch(`${url}/tasks?project=${encodeURIComponent(project)}`)).json()).tasks || []; existing = new Set(t.map(x => x.title)); } catch {}
+try { const r = await signedGet(`/tasks?project=${encodeURIComponent(project)}`, { session: me }); const t = r.json?.tasks || []; existing = new Set(t.map(x => x.title)); } catch {}
 
 const ents = [...groups.entries()].sort((a, b) => a[1].latest - b[1].latest);
 let posted = 0, skipped = 0;
@@ -68,8 +66,7 @@ for (const [theme, g] of ents) {
   if (existing.has(title)) { skipped++; continue; }
   if (dry) { console.log(`+ [${new Date(g.latest).toISOString().slice(0, 10)}] ${theme.padEnd(20)} ${g.commits.length}c  ${title.slice(0, 64)}`); posted++; continue; }
   try {
-    await fetch(`${url}/task`, { method: "POST", headers: { "content-type": "application/json" },
-      body: JSON.stringify({ project, title, status: "done", phase: theme, source: "git", ts: g.latest, assignee: me, by: me }) });
+    await signedPost("/task", { project, title, status: "done", phase: theme, source: "git", ts: g.latest, assignee: me, by: me }, { session: me });
     posted++;
   } catch (e) { console.error(`post failed for "${title}": ${e.message}`); }
 }

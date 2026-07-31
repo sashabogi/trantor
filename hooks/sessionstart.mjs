@@ -71,11 +71,14 @@ function readStdin() {
     process.stdin.on("data", c => (d += c)); process.stdin.on("end", () => res(d));
     setTimeout(() => res(d), 100); });
 }
-// Hub reads/writes through the shared client (TDD §8). Writes are SIGNED (Ed25519, via signedPost);
-// reads go unsigned for now (see api.mjs:getJSON — pending the hub's DM scope-filtering fix). Each
-// resolves to {ok,status,json}; a down hub returns {ok:false,json:null} and the caller's catch keeps
-// the session alive (fail-open contract, acceptance §9 #10).
-async function jget(u, session) { const r = await getJSON(u, { timeoutMs: 2500 }); return r.ok ? (r.json || {}) : {}; }
+// Hub reads/writes through the shared client (TDD §8), ALL signed (Ed25519). Writes via signedPost
+// close the self-asserted `from` hole; reads via signedGet survive RELAY_AUTH=enforce, which 401s
+// unsigned reads (unsigned, the roster/handoff injection was silently dead on the remote hub — the
+// 2026-07-30 agent-UX gap). The hub scope-filters signed reads to this identity's grants; for a
+// session reading its own project + declared links that is the intended shape. Each resolves to
+// {ok,status,json}; a down hub returns {ok:false,json:null} and the caller's catch keeps the
+// session alive (fail-open contract, acceptance §9 #10).
+async function jget(u, session) { const r = await signedGet(u, { timeoutMs: 2500, session }); return r.ok ? (r.json || {}) : {}; }
 async function jpost(u, b, session) { return (await signedPost(u, b, { session, timeoutMs: 2500 })).ok; }
 
 // Strip control chars from untrusted injected text so the hook's JSON stdout (which

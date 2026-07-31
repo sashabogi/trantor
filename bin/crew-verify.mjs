@@ -24,12 +24,13 @@ const SINCE = si >= 0 ? Number(args.splice(si, 2)[1]) : NaN;
 const [PROJ, ...AGENTS] = args;
 if (!PROJ || !AGENTS.length) { console.error("usage: crew-verify.mjs <project> <agent...> [--timeout 30] [--since <ms>]"); process.exit(2); }
 
-function hubUrl() {
-  if (process.env.RELAY_URL) return process.env.RELAY_URL;
-  try { const u = JSON.parse(readFileSync(join(homedir(), ".agent-bus", "config.json"), "utf8")).url; if (u) return u; } catch {}
-  return "http://127.0.0.1:4477";
-}
-const HUB = hubUrl();
+// Signed + per-project hub (2026-07-31, agent-UX audit): unsigned /peers is a dead 401 under
+// enforce — crew verification would report every seat missing while the crew was fine.
+import { resolveHub, hostId } from "../lib/project.mjs";
+import { loadOrCreate } from "../lib/identity.mjs";
+import { sfetchJson } from "../lib/signed-fetch.mjs";
+const HUB = process.env.RELAY_URL || resolveHub(PROJ);
+const VERIFY_ID = loadOrCreate(process.env.RELAY_SESSION || `${hostId()}:${PROJ}`, "agent");
 // Two distinct clocks, deliberately separate:
 //  - FRESH_SINCE: the freshness threshold. A registration counts only if lastSeen >= this.
 //    Prefer the launcher's pre-spawn epoch (so an early "booting" beat counts); else our start.
@@ -43,7 +44,7 @@ const FRESH_SINCE = Number.isFinite(SINCE) ? SINCE : Date.now();
   const up = new Set();
   while (Date.now() < DEADLINE && up.size < want.size) {
     try {
-      const { peers } = await (await fetch(`${HUB}/peers`)).json();
+      const { peers } = await (await sfetchJson(`${HUB}/peers`, { method: "GET", identity: VERIFY_ID })).json();
       for (const p of peers) if (want.has(p.session) && p.lastSeen >= FRESH_SINCE) up.add(p.session);
     } catch {}
     if (up.size < want.size) await new Promise(s => setTimeout(s, 1500));

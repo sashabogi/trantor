@@ -12,11 +12,11 @@ import { join } from "node:path";
 import { homedir } from "node:os";
 import { resolveProject } from "../lib/project.mjs";
 
-function relayUrl() {
-  if (process.env.RELAY_URL) return process.env.RELAY_URL;
-  try { const c = join(homedir(), ".agent-bus", "config.json"); if (existsSync(c)) { const u = JSON.parse(readFileSync(c, "utf8")).url; if (u) return u; } } catch {}
-  return "http://127.0.0.1:4477";
-}
+// Signed as the OWNER (2026-07-31, agent-UX audit): /sweep is an owner endpoint — an unsigned
+// POST is rejected under enforce. Sign with config.ownerIdentity, same pattern as bin/policy.mjs.
+import { relayUrl } from "../hooks/lib/api.mjs";
+import { loadOrCreate } from "../lib/identity.mjs";
+import { sfetchJson } from "../lib/signed-fetch.mjs";
 function parseDur(s, def) {
   if (!s) return def;
   const m = String(s).match(/^(\d+(?:\.\d+)?)\s*(ms|s|m|h|d)?$/i);
@@ -33,12 +33,15 @@ const olderMs = parseDur(val("--older", "-o"), 30 * 60 * 1000);
 const doIt = has("--yes", "-y");
 const allProjects = has("--all-projects", "--all");
 const project = allProjects ? null : resolveProject(process.cwd());
-const url = relayUrl();
+const url = relayUrl(project || undefined);
+let ownerName = "admin";
+try { ownerName = JSON.parse(readFileSync(join(homedir(), ".agent-bus", "config.json"), "utf8")).ownerIdentity || "admin"; } catch {}
+const ownerId = loadOrCreate(ownerName, "human");
 
 async function sweep(dryRun) {
   const body = { olderMs, dryRun, by: "cli-sweep" };
   if (project) body.project = project;
-  const r = await fetch(`${url}/sweep`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body), signal: AbortSignal.timeout(6000) });
+  const r = await sfetchJson(`${url}/sweep`, { identity: ownerId, payload: body, signal: AbortSignal.timeout(6000) });
   return r.json();
 }
 

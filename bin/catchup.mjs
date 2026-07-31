@@ -10,19 +10,20 @@ import { homedir } from "node:os";
 import { execSync } from "node:child_process";
 import { resolveProject } from "../lib/project.mjs";
 
-function relayUrl() {
-  if (process.env.RELAY_URL) return process.env.RELAY_URL;
-  try { const c = join(homedir(), ".agent-bus", "config.json"); if (existsSync(c)) { const u = JSON.parse(readFileSync(c, "utf8")).url; if (u) return u; } } catch {}
-  return "http://127.0.0.1:4477";
-}
+// Signed read via the shared client (2026-07-31, agent-UX audit): hand-rolled relayUrl missed the
+// per-project hubs map; unsigned reads 401 under enforce. signedGet resolves + signs per call.
+import { relayUrl, signedGet } from "../hooks/lib/api.mjs";
 const haveScrooge = () => { try { execSync("command -v scrooge", { stdio: "ignore" }); return true; } catch { return false; } };
 
 const dir = process.cwd();
 const project = resolveProject(dir);
-const url = relayUrl();
+const url = relayUrl(project);
 
 let cu = null;
-try { cu = await (await fetch(`${url}/catchup?project=${encodeURIComponent(project)}`, { signal: AbortSignal.timeout(4000) })).json(); } catch (e) { console.error(`could not reach hub at ${url}: ${e.message}`); }
+{
+  const r = await signedGet(`/catchup?project=${encodeURIComponent(project)}`, { timeoutMs: 4000 });
+  if (r.ok) cu = r.json; else console.error(`could not reach hub at ${url} (status ${r.status})`);
+}
 let gitlog = "";
 try { gitlog = execSync(`git -C ${JSON.stringify(dir)} log --oneline -12 2>/dev/null`, { encoding: "utf8" }).trim(); } catch {}
 

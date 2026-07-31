@@ -10,11 +10,8 @@ import { join } from "node:path";
 import { homedir } from "node:os";
 import { scanSubagentCosts } from "../lib/subagent-scan.mjs";
 
-function relayUrl() {
-  if (process.env.RELAY_URL) return process.env.RELAY_URL;
-  try { const c = join(homedir(), ".agent-bus", "config.json"); if (existsSync(c)) { const u = JSON.parse(readFileSync(c, "utf8")).url; if (u) return u; } } catch {}
-  return "http://127.0.0.1:4477";
-}
+// Signed via the shared client (2026-07-31, agent-UX audit): unsigned POST rejected under enforce.
+import { relayUrl, signedPost } from "../hooks/lib/api.mjs";
 
 const dry = process.argv.includes("--dry-run");
 const asJson = process.argv.includes("--json");
@@ -35,10 +32,11 @@ if (dry) {
 }
 
 let result;
-try {
-  result = await fetch(`${relayUrl()}/subagent-recost`, { method: "POST", headers: { "content-type": "application/json" },
-    body: JSON.stringify({ entries: allEntries }), signal: AbortSignal.timeout(15000) }).then(x => x.json());
-} catch (e) { console.error(`recost failed: ${e.message}`); process.exit(1); }
+{
+  const r = await signedPost("/subagent-recost", { entries: allEntries }, { timeoutMs: 15000 });
+  if (!r.ok) { console.error(`recost failed: hub ${r.status} at ${relayUrl()}`); process.exit(1); }
+  result = r.json;
+}
 
 const projs = (result?.projects || []);
 const seeded = projs.filter(p => !p.skipped);

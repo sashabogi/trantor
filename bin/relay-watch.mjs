@@ -2,22 +2,24 @@
 // relay-watch — a live feed of the bus via SSE (true push, no polling). Run in a terminal
 // to watch sessions talk in real time, or to monitor a presence/status board.
 //   node bin/relay-watch.mjs [session]   (default: "all" — see every message)
-import { readFileSync, existsSync } from "node:fs";
-import { join } from "node:path";
-import { homedir } from "node:os";
+// Signed + per-project hub (2026-07-31, agent-UX audit): the hand-rolled relayUrl() here read
+// only the global config `url` (wrong hub for a migrated project) and fetched unsigned (dead
+// 401 under RELAY_AUTH=enforce). Now: canonical resolver + this session's keypair on every call.
+import { resolveProject, hostId, resolveHub } from "../lib/project.mjs";
+import { loadOrCreate } from "../lib/identity.mjs";
+import { sfetch, sfetchJson } from "../lib/signed-fetch.mjs";
 
-function relayUrl() {
-  if (process.env.RELAY_URL) return process.env.RELAY_URL;
-  try { const c = join(homedir(), ".agent-bus", "config.json"); if (existsSync(c)) { const u = JSON.parse(readFileSync(c, "utf8")).url; if (u) return u; } } catch {}
-  return "http://127.0.0.1:4477";
-}
-const URL_BASE = relayUrl();
+const PROJECT = resolveProject(process.cwd());
+const ME = process.env.RELAY_SESSION
+  || (process.env.RELAY_AGENT ? `${process.env.RELAY_AGENT}:${PROJECT}` : `${hostId()}:${PROJECT}`);
+const identity = loadOrCreate(ME, "agent");
+const URL_BASE = resolveHub(PROJECT);
 const SESSION = process.argv[2] || "all";
 const t = () => new Date().toLocaleTimeString();
 
 async function showPeers() {
   try {
-    const { peers } = await (await fetch(`${URL_BASE}/peers`)).json();
+    const { peers } = await (await sfetchJson(`${URL_BASE}/peers`, { method: "GET", identity })).json();
     const live = peers.filter(p => p.online);
     console.log(`\n  live sessions (${live.length}):`);
     for (const p of live) console.log(`   🟢 ${p.session}${p.status ? `  — ${p.status}` : ""}`);
@@ -30,7 +32,7 @@ async function watch() {
   await showPeers();
   for (;;) {
     try {
-      const r = await fetch(`${URL_BASE}/stream?session=${encodeURIComponent(SESSION)}`, { headers: { accept: "text/event-stream" } });
+      const r = await sfetch(`${URL_BASE}/stream?session=${encodeURIComponent(SESSION)}`, { headers: { accept: "text/event-stream" } }, identity);
       if (!r.ok || !r.body) throw new Error(`stream ${r.status}`);
       let buf = "";
       const dec = new TextDecoder();

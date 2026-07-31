@@ -21,7 +21,7 @@ const PROJECT = resolveProject(process.env.CLAUDE_PROJECT_DIR || process.cwd());
 // Hub URL is PER-PROJECT (TDD §12.1): RELAY_URL env → config.json hubs[PROJECT] → legacy
 // global `url` → local default. A project lives on exactly one hub; codependent projects
 // must share one, so both are pinned to the same hub via `trantor hub set`.
-const URL_BASE = resolveHub(PROJECT);
+const URL_BASE = resolveHub(PROJECT);   // boot-time snapshot: startup log only — every api() call re-resolves
 // Identity: RELAY_SESSION wins; else RELAY_AGENT ("codex", "kimi", …) brands the session per-project
 // (set it once in the CLI's global MCP config — works in every project); else hostname:project.
 const SESSION = process.env.RELAY_SESSION
@@ -63,7 +63,7 @@ const server = new McpServer({ name: "trantor", version: "0.1.0" });
 
 server.tool("relay_whoami", "Show this session's relay identity, project, and the hub URL.", {}, async () => {
   await api("POST", "/register", { session: SESSION, project: PROJECT }).catch(() => {});
-  return { content: [{ type: "text", text: `session=${SESSION}\nproject=${PROJECT}\nhub=${URL_BASE}` }] };
+  return { content: [{ type: "text", text: `session=${SESSION}\nproject=${PROJECT}\nhub=${resolveHub(PROJECT)}` }] };
 });
 
 server.tool("relay_task_add", "Add a Kanban card to a project's board on the dashboard (what you're about to work on). Defaults: THIS project, assigned to you, status 'todo'. Pass `project` to target another board — e.g. when you orchestrate a crew that runs in a different directory than the one you launched Claude from. Keep the team's progress visible.",

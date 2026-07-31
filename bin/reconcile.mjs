@@ -14,11 +14,10 @@ import { homedir } from "node:os";
 import { execSync, spawnSync } from "node:child_process";
 import { resolveProject } from "../lib/project.mjs";
 
-function relayUrl() {
-  if (process.env.RELAY_URL) return process.env.RELAY_URL;
-  try { const c = join(homedir(), ".agent-bus", "config.json"); if (existsSync(c)) { const u = JSON.parse(readFileSync(c, "utf8")).url; if (u) return u; } } catch {}
-  return "http://127.0.0.1:4477";
-}
+// Signed via the shared client (2026-07-31, agent-UX audit): the unsigned POST /task/update was
+// rejected outright under enforce and merely flagged under warn; the hand-rolled relayUrl missed
+// the per-project hubs map. signedGet/signedPost resolve the cwd project's hub + sign per call.
+import { relayUrl, signedGet, signedPost } from "../hooks/lib/api.mjs";
 function parseDur(s, def) {
   if (!s) return def;
   const m = String(s).match(/^(\d+(?:\.\d+)?)\s*(ms|s|m|h|d)?$/i);
@@ -38,16 +37,16 @@ const doIt = has("--yes", "-y");
 const difficulty = ["easy", "medium", "hard"].includes(val("--difficulty", "-d")) ? val("--difficulty", "-d") : "medium";
 const dir = process.cwd();
 const project = resolveProject(dir);
-const url = relayUrl();
+const url = relayUrl(project);
 
 async function tasks() {
-  const r = await fetch(`${url}/tasks?project=${encodeURIComponent(project)}`, { signal: AbortSignal.timeout(6000) });
-  const j = await r.json();
-  return Array.isArray(j) ? j : (j.tasks || j.cards || []);
+  const r = await signedGet(`/tasks?project=${encodeURIComponent(project)}`, { timeoutMs: 6000 });
+  if (!r.ok) return [];
+  const j = r.json;
+  return Array.isArray(j) ? j : (j?.tasks || j?.cards || []);
 }
 async function move(id, status) {
-  await fetch(`${url}/task/update`, { method: "POST", headers: { "content-type": "application/json" },
-    body: JSON.stringify({ id, status, by: "reconcile" }), signal: AbortSignal.timeout(4000) }).catch(() => {});
+  await signedPost("/task/update", { id, status, by: "reconcile" }, { timeoutMs: 4000 }).catch(() => {});
 }
 // the memory record for THIS project (Claude Code stores it per encoded-cwd); optional context.
 function memoryExcerpt() {

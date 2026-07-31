@@ -11,21 +11,20 @@ const args = process.argv.slice(2);
 const all = args.includes("--all");
 const asJson = args.includes("--json");
 
-function relayUrl() {
-  if (process.env.RELAY_URL) return process.env.RELAY_URL;
-  try { const u = JSON.parse(readFileSync(join(homedir(), ".agent-bus", "config.json"), "utf8")).url; if (u) return u; } catch {}
-  return "http://127.0.0.1:4477";
-}
+// Signed read via the shared client (2026-07-31, agent-UX audit): the hand-rolled relayUrl here
+// missed the per-project hubs map AND sent unsigned (401 under enforce). relayUrl/signedGet from
+// hooks/lib/api.mjs resolve the cwd project's hub and sign as this session.
+import { relayUrl, signedGet } from "../hooks/lib/api.mjs";
 
 const project = resolveProject(process.cwd());
-const url = `${relayUrl()}/verify-gates?project=${encodeURIComponent(project)}${all ? "&all=1" : ""}`;
 let gates = [];
-try {
-  const r = await fetch(url, { signal: AbortSignal.timeout(2500) });
-  gates = (await r.json()).gates || [];
-} catch {
-  console.error(`could not reach the hub at ${relayUrl()} — is it running? (trantor setup / trantor hub)`);
-  process.exit(1);
+{
+  const r = await signedGet(`/verify-gates?project=${encodeURIComponent(project)}${all ? "&all=1" : ""}`, { timeoutMs: 2500 });
+  if (!r.ok) {
+    console.error(`could not reach the hub at ${relayUrl(project)} (status ${r.status}) — is it running? (trantor setup / trantor hub)`);
+    process.exit(1);
+  }
+  gates = r.json?.gates || [];
 }
 
 if (asJson) { process.stdout.write(JSON.stringify(gates, null, 2) + "\n"); process.exit(0); }

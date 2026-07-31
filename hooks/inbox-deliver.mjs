@@ -24,7 +24,7 @@ import { readFileSync, writeFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
 import { resolveProject, hostId } from "../lib/project.mjs";
-import { getJSON } from "./lib/api.mjs";
+import { signedGet } from "./lib/api.mjs";   // signed: enforce hubs 401 unsigned reads — unsigned, T1 delivery is silently dead
 
 const POLL_MS = Number(process.env.RELAY_INBOX_POLL_MS || 4000);
 const FETCH_TIMEOUT_MS = Number(process.env.RELAY_INBOX_TIMEOUT_MS || 1500);
@@ -34,7 +34,7 @@ const FETCH_TIMEOUT_MS = Number(process.env.RELAY_INBOX_TIMEOUT_MS || 1500);
 function sanitize(s) { return String(s == null ? "" : s).replace(/[\x00-\x1f\x7f-\x9f]/g, " "); }
 
 async function getInbox(session, since) {
-  const { ok, json } = await getJSON(`/inbox?session=${encodeURIComponent(session)}&since=${since}`, { timeoutMs: FETCH_TIMEOUT_MS });
+  const { ok, json } = await signedGet(`/inbox?session=${encodeURIComponent(session)}&since=${since}`, { timeoutMs: FETCH_TIMEOUT_MS, session });
   if (!ok || !json) throw new Error("hub unreachable");
   return json;   // { messages: [...], cursor }
 }
