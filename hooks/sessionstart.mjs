@@ -242,6 +242,12 @@ try {
   });
   if (handoff) {
     process.stderr.write(`[trantor] ${isCompact ? "showing (not claiming, compact)" : "loaded"} pending handoff ${handoff.id}\n`);
+    // Baton claimed → supersede every OTHER instance of this durable identity (instance-keys
+    // contract). The dying twin's next /inbox or /poll answer tells its model to stand down —
+    // the hub-enforced end of the twin message race. Best-effort; compact shows don't claim.
+    if (!isCompact && stdinObj.session_id) {
+      await jpost(`${url}/instance/supersede`, { name: session, exceptInstanceId: String(stdinObj.session_id) }, session).catch(() => {});
+    }
     additionalContext += `<trantor-handoff id="${sanitize(handoff.id)}" from="${sanitize(handoff.machine)}" trigger="${sanitize(handoff.trigger)}">\n`;
     additionalContext += `🔄 **You are taking over from a prior session that hit its context limit.** This is a fresh full window. Resume the work below — the prior session's summary, git state, and a pointer to its full transcript (searchable; Foundation/Gaia has it ingested) follow. Continue from "OPEN THREADS & NEXT STEPS"; do not restart from scratch.\n\n`;
     // Verification gates FIRST — these are structured "must verify before shipping" claims the prior

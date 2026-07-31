@@ -9,7 +9,7 @@ import { readFileSync, writeFileSync, existsSync, mkdirSync, statSync, readdirSy
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { timingSafeEqual, randomBytes } from "node:crypto";
-import { verifyRequest, publicView } from "./lib/identity.mjs";
+import { verifyRequest, verifyEndorsement, publicView } from "./lib/identity.mjs";
 import { DEFAULT_ORG } from "./lib/store-contract.mjs";
 import { assertNoSecrets } from "./lib/scrub.mjs";
 
@@ -86,7 +86,7 @@ function scanTelemetry() {
 // TIMELINE view are untouched; every NEW type is dotted ("message", "presence.online", …) and is
 // filtered OUT of /history. Loads from the old `cardEvents` key when `events` is absent.
 function emptyState() {
-  return { messages: [], peers: {}, seq: 0, tasks: [], taskSeq: 0, projectMeta: {}, lessons: [], events: [], cardEventsBackfilled: false, aliases: {}, phaseMeta: {}, verifyGates: [], verifyGateSeq: 0, balances: { ts: 0, by: "", entries: [] }, subagentCostReset: false, handoffLog: [], identities: {}, inviteTokens: {}, focus: {}, orgPolicy: {} };
+  return { messages: [], peers: {}, seq: 0, tasks: [], taskSeq: 0, projectMeta: {}, lessons: [], events: [], cardEventsBackfilled: false, aliases: {}, phaseMeta: {}, verifyGates: [], verifyGateSeq: 0, balances: { ts: 0, by: "", entries: [] }, subagentCostReset: false, handoffLog: [], identities: {}, inviteTokens: {}, focus: {}, orgPolicy: {}, instances: {} };
 }
 
 function normalizeState(loaded = {}) {
@@ -108,6 +108,7 @@ function normalizeState(loaded = {}) {
   s.handoffLog = Array.isArray(loaded.handoffLog) ? loaded.handoffLog : [];
   s.identities = loaded.identities && typeof loaded.identities === "object" ? loaded.identities : {};
   s.inviteTokens = loaded.inviteTokens && typeof loaded.inviteTokens === "object" ? loaded.inviteTokens : {};
+  s.instances = loaded.instances && typeof loaded.instances === "object" ? loaded.instances : {};
   s.focus = loaded.focus && typeof loaded.focus === "object" ? loaded.focus : {};
   s.orgPolicy = loaded.orgPolicy && typeof loaded.orgPolicy === "object" ? loaded.orgPolicy : {};
   for (const [session, v] of Object.entries(loaded.peers || {})) {
@@ -532,6 +533,30 @@ async function authenticate(req, path) {
   if (seenNonces.has(nonceKey)) return soft("replay");
   seenNonces.set(nonceKey, verified.ts);
   if (seenNonces.size > 10000) seenNonces.delete(seenNonces.keys().next().value);
+  // Instance-subkey path (docs/INSTANCE-KEYS-CONTRACT.md): when the three endorsement headers ride
+  // along, x-trantor-pubkey was the INSTANCE key (whose signature we just verified). Verify that the
+  // claimed DURABLE key endorsed it, then authenticate AS the durable identity — the instance mints
+  // no authority of its own; it is the durable identity, time-boxed to one session.
+  const h = (k) => req.headers[k] ?? "";
+  const durableHdr = h("x-trantor-durable"), instId = h("x-trantor-inst");
+  if (durableHdr && instId) {
+    const endorsed = verifyEndorsement({
+      durablePubkey: durableHdr, instancePubkey: verified.pubkey, instanceId: instId,
+      createdAt: state.instances?.[verified.pubkey]?.createdAt || Number(h("x-trantor-inst-ts")) || 0,
+      endorsement: h("x-trantor-endorse"),
+    });
+    if (!endorsed) return soft("bad endorsement");
+    const identity = findIdentity(durableHdr);
+    if (!identity) return soft("unknown identity");
+    if (!state.instances || typeof state.instances !== "object") state.instances = {};
+    const rec = state.instances[verified.pubkey] ||
+      { durable: durableHdr, instanceId: instId, name: identity.name || "", firstSeen: now(),
+        createdAt: Number(h("x-trantor-inst-ts")) || now(), superseded: false };
+    rec.lastSeen = now();
+    state.instances[verified.pubkey] = rec; dirty = true;
+    return { ok: true, mode: AUTH_MODE, trusted: true, pubkey: durableHdr, identity,
+             instanceId: instId, instancePubkey: verified.pubkey, superseded: !!rec.superseded };
+  }
   const identity = findIdentity(verified.pubkey);
   if (!identity) return soft("unknown identity");
   return { ok: true, mode: AUTH_MODE, trusted: true, pubkey: verified.pubkey, identity };
@@ -970,6 +995,30 @@ const server = http.createServer(async (req, res) => {
       try { warnings = (_overseer?.detectCollisions ? _overseer.detectCollisions(overseerInputs()) : [])
         .filter(c => c.project === proj || linked.has(c.project)); } catch {}
       return json(res, 200, { level, links: links.map(l => ({ projects: l.projects, reason: l.reason })), peers: peersOut, inflight, warnings });
+    }
+    // Supersession (docs/INSTANCE-KEYS-CONTRACT.md): EXPLICIT, never automatic — the baton-claim
+    // path calls this when a fresh session consumes a handoff. Marks every OTHER instance of the
+    // named durable identity superseded; their /inbox + /poll answers then carry superseded:true so
+    // their own hooks tell the model to stand down. Informational, never a hard block. Accepted
+    // only from an endorsed instance of the SAME durable identity, or the owner.
+    if (req.method === "POST" && P === "/instance/supersede") {
+      const b = await body(req);
+      const name = String(b.name || "").slice(0, 200);
+      const except = String(b.exceptInstanceId || "").slice(0, 200);
+      if (!name) return json(res, 400, { error: "name required" });
+      if (AUTH_MODE !== "off") {
+        const sameIdentity = auth?.identity && String(auth.identity.name || "") === name;
+        const isOwner = auth?.identity?.kind === "human" || scopeAllows(auth?.identity, "", "owner");
+        if (!sameIdentity && !isOwner && AUTH_MODE === "enforce") return json(res, 403, { error: "forbidden" });
+      }
+      let flipped = 0;
+      for (const rec of Object.values(state.instances || {})) {
+        if (rec.name !== name || rec.superseded) continue;
+        if (except && rec.instanceId === except) continue;
+        rec.superseded = now(); flipped++;
+      }
+      if (flipped) dirty = true;
+      return json(res, 200, { ok: true, superseded: flipped });
     }
     if (req.method === "POST" && P === "/overseer/narrate") {
       const b = await body(req);
@@ -1798,7 +1847,9 @@ const server = http.createServer(async (req, res) => {
       // through). Advancing the ledger on a peek would tell the deferred waker the message had been
       // delivered when nobody ever saw it — a silent hole exactly where this feature is supposed to help.
       if (q.peek !== "1") markDelivered(q.session, cursor);
-      return json(res, 200, { messages: msgs, cursor });
+      // superseded (instance-keys contract): a baton twin that lost the claim learns it HERE, via
+      // its own read — its hooks turn this into a stand-down note for the model. Never a block.
+      return json(res, 200, auth?.superseded ? { messages: msgs, cursor, superseded: true } : { messages: msgs, cursor });
     }
     if (req.method === "GET" && P === "/poll") {
       if (!canUseInboxSession(auth, q.session)) return json(res, 403, { error: "forbidden" });
@@ -1807,7 +1858,7 @@ const server = http.createServer(async (req, res) => {
       const deadline = now() + waitMs;
       const tick = () => {
         const msgs = state.messages.filter(m => m.id > since && deliverable(m, q.session) && inboxReadable(auth, m, q.session));
-        if (msgs.length || now() >= deadline) { touch(q.session, undefined, undefined, undefined, auth); const cursor = msgs.length ? msgs[msgs.length - 1].id : since; markDelivered(q.session, cursor); return json(res, 200, { messages: msgs, cursor }); }
+        if (msgs.length || now() >= deadline) { touch(q.session, undefined, undefined, undefined, auth); const cursor = msgs.length ? msgs[msgs.length - 1].id : since; markDelivered(q.session, cursor); return json(res, 200, auth?.superseded ? { messages: msgs, cursor, superseded: true } : { messages: msgs, cursor }); }
         setTimeout(tick, 300);
       };
       return tick();

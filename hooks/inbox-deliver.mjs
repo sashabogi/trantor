@@ -33,10 +33,10 @@ const FETCH_TIMEOUT_MS = Number(process.env.RELAY_INBOX_TIMEOUT_MS || 1500);
 // additionalContext payload (the model still gets the readable message).
 function sanitize(s) { return String(s == null ? "" : s).replace(/[\x00-\x1f\x7f-\x9f]/g, " "); }
 
-async function getInbox(session, since) {
-  const { ok, json } = await signedGet(`/inbox?session=${encodeURIComponent(session)}&since=${since}`, { timeoutMs: FETCH_TIMEOUT_MS, session });
+async function getInbox(session, since, instance) {
+  const { ok, json } = await signedGet(`/inbox?session=${encodeURIComponent(session)}&since=${since}`, { timeoutMs: FETCH_TIMEOUT_MS, session, instance });
   if (!ok || !json) throw new Error("hub unreachable");
-  return json;   // { messages: [...], cursor }
+  return json;   // { messages: [...], cursor, superseded? }
 }
 
 // PostToolUse hands us the tool-input JSON on stdin. We don't need it, but we must DRAIN it:
@@ -58,7 +58,12 @@ function emit(ctx) {
   try { JSON.parse(out); return out; } catch { return "{}"; }
 }
 
-async function main() {
+async function main(stdinRaw) {
+  // The harness session_id is this session's INSTANCE id (docs/INSTANCE-KEYS-CONTRACT.md): it keys
+  // the endorsed subkey that signs our reads AND the local cursor, so a baton twin (same durable
+  // name, different session_id) has its own ledger and can't eat this session's messages.
+  let instanceId = "";
+  try { instanceId = String(JSON.parse(stdinRaw || "{}").session_id || ""); } catch {}
   const projectDir = process.env.CLAUDE_PROJECT_DIR || process.cwd();
   // Mirror heartbeat.mjs / sessionstart.mjs: a home-directory session isn't project work and
   // isn't on the bus — nothing to deliver. Opt in with RELAY_SESSION / RELAY_PROJECT.
@@ -70,7 +75,7 @@ async function main() {
   const session = process.env.RELAY_SESSION
     || (process.env.RELAY_AGENT ? `${process.env.RELAY_AGENT}:${project}` : `${hostId()}:${project}`);
 
-  const safe = session.replace(/[^A-Za-z0-9_.-]/g, "_");
+  const safe = (session + (instanceId ? `@${instanceId.slice(0, 8)}` : "")).replace(/[^A-Za-z0-9_.@-]/g, "_");
   const dir = join(homedir(), ".agent-bus");
   const pollStamp = join(dir, `inbox-poll-${safe}.stamp`);
   const cursorFile = join(dir, `inbox-cursor-${safe}.id`);
@@ -89,7 +94,7 @@ async function main() {
   // so we start listening "from now" instead of replaying the whole backlog of old broadcasts.
   if (!existsSync(cursorFile)) {
     try {
-      const { cursor } = await getInbox(session, 0);
+      const { cursor } = await getInbox(session, 0, instanceId);
       writeFileSync(cursorFile, String(cursor || 0));
     } catch {}
     return "{}";
@@ -98,12 +103,18 @@ async function main() {
   let cursor = 0;
   try { cursor = Number(readFileSync(cursorFile, "utf8")) || 0; } catch {}
 
-  let messages = [], next = cursor;
+  let messages = [], next = cursor, superseded = false;
   try {
-    const res = await getInbox(session, cursor);
+    const res = await getInbox(session, cursor, instanceId);
     messages = Array.isArray(res.messages) ? res.messages : [];
     next = res.cursor || cursor;
+    superseded = res.superseded === true;
   } catch { return "{}"; }   // hub down / timeout — never block the tool flow
+
+  // Stand-down note (never a block): a newer instance of this durable identity claimed the baton.
+  if (superseded && !messages.length) {
+    return emit(`<trantor-inbox count="0">\n⚠️ A newer instance of this session has claimed the baton (instance supersession). Stand down: finish your current thought, do not consume bus messages, and let the new session carry the work.\n</trantor-inbox>\n`);
+  }
 
   if (!messages.length) return "{}";
 
@@ -119,6 +130,7 @@ async function main() {
 
   const ctx =
     `<trantor-inbox count="${messages.length}">\n` +
+    (superseded ? `⚠️ A newer instance of this session has claimed the baton — stand down after handling anything addressed directly to you; the new session carries the work.\n` : "") +
     `📬 ${messages.length} new bus message(s) arrived while you were working (you did not poll for these — Trantor surfaced them automatically):\n` +
     lines.join("\n") + `\n` +
     `If a peer is asking you something or waiting on you, reply now with the relay_send tool (to their session id). ` +

@@ -63,7 +63,10 @@ async function main() {
 
   // Share inbox-deliver.mjs's cursor: ONE local delivery ledger, so a message injected mid-turn is never
   // re-surfaced here, and vice versa.
-  const safe = session.replace(/[^A-Za-z0-9_.-]/g, "_");
+  // Same instance id + per-instance cursor as inbox-deliver (docs/INSTANCE-KEYS-CONTRACT.md):
+  // T1 and T2 share one ledger within a session; a baton twin gets its own.
+  const instanceId = String(input.session_id || "");
+  const safe = (session + (instanceId ? `@${instanceId.slice(0, 8)}` : "")).replace(/[^A-Za-z0-9_.@-]/g, "_");
   const cursorFile = join(homedir(), ".agent-bus", `inbox-cursor-${safe}.id`);
   // No cursor yet means inbox-deliver has never run for this session; it initialises to "now" on its
   // first tool call. Blocking on the whole backlog of old messages would be a terrible first impression.
@@ -75,8 +78,11 @@ async function main() {
   let messages = [];
   try {
     // PEEK: look without claiming delivery. We may yet decide to let the stop through.
-    const peek = await signedGet(`/inbox?session=${encodeURIComponent(session)}&since=${cursor}&peek=1`, { timeoutMs: FETCH_TIMEOUT_MS, session });
+    const peek = await signedGet(`/inbox?session=${encodeURIComponent(session)}&since=${cursor}&peek=1`, { timeoutMs: FETCH_TIMEOUT_MS, session, instance: instanceId });
     if (!peek.ok) return allow();
+    // Superseded twin (instance-keys contract): a newer instance claimed the baton — this session
+    // stands down. Blocking ITS stop over messages the new instance will handle would trap it.
+    if (peek.json?.superseded === true) return allow();
     messages = peek.json?.messages || [];
   } catch { return allow(); }        // hub down — never trap the session
 
@@ -86,7 +92,7 @@ async function main() {
   // Committed now: claim delivery for real so neither inbox-deliver nor the deferred waker repeats it.
   let next = cursor;
   try {
-    const claim = await signedGet(`/inbox?session=${encodeURIComponent(session)}&since=${cursor}`, { timeoutMs: FETCH_TIMEOUT_MS, session });
+    const claim = await signedGet(`/inbox?session=${encodeURIComponent(session)}&since=${cursor}`, { timeoutMs: FETCH_TIMEOUT_MS, session, instance: instanceId });
     if (claim.ok) next = claim.json?.cursor || cursor;
   } catch {}
   try { writeFileSync(cursorFile, String(next)); } catch {}

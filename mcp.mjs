@@ -50,10 +50,14 @@ async function seedCursor() {
 // bus exists for. Signed reads are scope-filtered by the hub to this identity's grants — for a
 // session reading its own project + DMs that is the intended behavior. The client fail-opens on a
 // down hub (returns {ok:false}); we surface that as a thrown Error so individual tools .catch it.
+// Instance id (docs/INSTANCE-KEYS-CONTRACT.md): the MCP server has no harness session_id, so it
+// mints a random id at boot — its lifetime ≈ the session's. The endorsed subkey it keys signs all
+// traffic; the durable identity keeps enrollment and attribution.
+const INSTANCE_ID = `mcp-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
 async function api(method, path, payload) {
   const r = method.toUpperCase() === "GET"
-    ? await signedGet(path, { session: SESSION })
-    : await signedPost(path, payload, { session: SESSION });
+    ? await signedGet(path, { session: SESSION, instance: INSTANCE_ID })
+    : await signedPost(path, payload, { session: SESSION, instance: INSTANCE_ID });
   if (!r.ok) throw new Error(`hub ${r.status} on ${path}`);
   return r.json;
 }
