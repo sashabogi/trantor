@@ -167,6 +167,7 @@ switch (cmd) {
   trantor watch       live bus feed in the terminal
   trantor inbox       THIS session's unread bus messages, signed (works under enforce) — [--all] [--consume] [--json]
   trantor policy      the autonomy ladder: show | set <project> <1-4> | link <a> <b> --reason "<why>"
+  trantor duty        the always-on fleet duty agent: up | down | status — hub-escalated triage so you are not the switchboard
 
 Claude Code plugin (the orchestrator side):
   claude plugin marketplace add sashabogi/trantor && claude plugin install trantor
