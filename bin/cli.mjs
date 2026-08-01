@@ -70,6 +70,7 @@ switch (cmd) {
   case "summarize": run("bin/summarize.mjs"); break;
   case "policy": run("bin/policy.mjs"); break;
   case "inbox": run("bin/inbox.mjs"); break;
+  case "duty": run("bin/duty.mjs"); break;
   case "identity": {
     const { load, publicView, generate, keyPath } = await import(join(ROOT, "lib/identity.mjs"));
     const sub = args[0], name = args[1] || "human";

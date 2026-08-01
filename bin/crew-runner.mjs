@@ -136,7 +136,9 @@ const cli = CLI[AGENT] || (NATIVE.has(AGENT) ? null : CLI.opencode);
 if (!cli) { console.error(`unknown agent '${AGENT}' (native: ${[...NATIVE].join(", ")}; any other name = an opencode provider seat)`); process.exit(1); }
 if (!CLI[AGENT]) log(`'${AGENT}' is not a built-in seat — running it as an opencode provider (BYOM)`);
 
-const RULES = `Rules: you are ${SESSION} on the trantor crew. Work your assigned file(s), report on the bus (relay_send, <280 chars), move your Kanban card as you go (doing -> testing -> done; run the tests in 'testing', use 'failed' + a report if they break). When your work for THIS message is finished, END YOUR TURN — do NOT park, do NOT loop relay_wait; the runner waits for you and will wake you with the next message.`;
+// RUNNER_RULES / RUNNER_KICKOFF env overrides: the runner is also the substrate for non-crew
+// always-on seats (the fleet DUTY agent, bin/duty.mjs) whose doctrine is not "work your card".
+const RULES = process.env.RUNNER_RULES || `Rules: you are ${SESSION} on the trantor crew. Work your assigned file(s), report on the bus (relay_send, <280 chars), move your Kanban card as you go (doing -> testing -> done; run the tests in 'testing', use 'failed' + a report if they break). When your work for THIS message is finished, END YOUR TURN — do NOT park, do NOT loop relay_wait; the runner waits for you and will wake you with the next message.`;
 
 // ---- failure visibility ----------------------------------------------------
 // A turn's CLI can fail (credits exhausted, auth, crash) and the runner would just

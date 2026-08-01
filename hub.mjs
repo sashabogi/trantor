@@ -245,6 +245,7 @@ function overseerTick() {
     overseerWarned.set(key, now());
     appendEvent("overseer.warn", c.project, "overseer",
       { kind: c.kind, sessions: c.sessions || [], files: c.files || [], detail: c.detail || "", narrated: false });
+    if (DUTY_SESSION) hubSend(DUTY_SESSION, `⚠️ OVERSEER ${c.kind} [${c.project}]: ${c.detail || ""} — if the parties are not already coordinating, message them.`, c.project);
     const level = _overseer.levelFor ? _overseer.levelFor(c.project, pol.autonomy) : 1;
     if (level >= 3 && c.kind === "file-conflict") {
       const g = { id: ++state.verifyGateSeq, project: c.project, status: "open", ts: now(),
@@ -256,6 +257,41 @@ function overseerTick() {
   }
 }
 setInterval(overseerTick, OVERSEER_TICK_MS).unref?.();
+
+// --- the DUTY AGENT feed (deterministic escalation; the seat itself is bin/duty.mjs) -----------
+// RELAY_DUTY_SESSION names the always-on triage seat (e.g. "claude:fleet"). The hub DMs it when:
+//   1. a DIRECT message has sat undelivered past RELAY_DUTY_UNDELIVERED_MS — the sender believes
+//      it was heard and nobody is listening (the crebral-health 4-day failure mode);
+//   2. the overseer emits a warning (wired inside overseerTick below).
+// Escalations are hub-authored ("hub:duty") — they never impersonate a session — and dedup per
+// message id so a standing outage escalates once, not every tick.
+const DUTY_SESSION = String(process.env.RELAY_DUTY_SESSION || "");
+const DUTY_UNDELIVERED_MS = Number(process.env.RELAY_DUTY_UNDELIVERED_MS || 10 * 60 * 1000);
+const dutyEscalated = new Set();
+function hubSend(to, text, project) {
+  const msg = { id: ++state.seq, ts: now(), from: "hub:duty", to, text: String(text).slice(0, 2000), project: String(project || "").slice(0, 80) };
+  state.messages.push(msg); if (state.messages.length > 5000) state.messages.splice(0, 1000);
+  dirty = true; pushToStreams(msg);
+  appendEvent("message", msg.project, msg.from, { msgId: msg.id, toSession: msg.to, text: msg.text.slice(0, 2000), refs: [] });
+  return msg;
+}
+function dutyTick() {
+  if (!DUTY_SESSION) return;
+  const cutoff = now() - DUTY_UNDELIVERED_MS;
+  const floor = now() - 24 * 3600 * 1000;                 // never escalate ancient history
+  for (const m of state.messages) {
+    if (m.ts > cutoff || m.ts < floor) continue;
+    if (!m.to || m.to === "all" || m.to === DUTY_SESSION || m.from === "hub:duty") continue;
+    if (dutyEscalated.has(m.id)) continue;
+    if ((state.peers[m.to]?.deliveredUpTo || 0) >= m.id) continue;
+    dutyEscalated.add(m.id);
+    hubSend(DUTY_SESSION,
+      `⚠️ UNDELIVERED for ${Math.round((now() - m.ts) / 60000)}m: #${m.id} ${m.from} -> ${m.to} — "${String(m.text).slice(0, 280)}" — the recipient has not been handed this. Triage: is the recipient's session idle, deaf (wrong hub / old hooks), or gone? Relay, wake, or note it on their board.`,
+      m.project || "");
+  }
+  if (dutyEscalated.size > 5000) { let n = dutyEscalated.size - 4000; for (const k of dutyEscalated) { dutyEscalated.delete(k); if (--n <= 0) break; } }
+}
+setInterval(dutyTick, OVERSEER_TICK_MS).unref?.();
 
 if (durableStore?.subscribeChanges) {
   durableStore.subscribeChanges((p) => {
