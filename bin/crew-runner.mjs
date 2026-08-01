@@ -66,7 +66,13 @@ async function api(path, body) {
   // that shows up as a seat that quietly records nothing rather than one that errors.
   const url = HUB + path;
   const sig = signedHeaders(identity, url, opts);
-  const r = await fetch(url, { ...opts, headers: { ...opts.headers, ...sig } });
+  // HARD DEADLINE on every call (2026-08-01, crebral-health kimi seat): a long-poll whose socket
+  // dies silently (idle NAT/tailscale reset, no RST delivered) otherwise hangs fetch FOREVER —
+  // the runner sat "parked" with zero connections and zero retries while its crew was rebuilt
+  // around it. Deadline = the poll's own wait window + slack, so a healthy long-poll never trips
+  // it and a dead one surfaces as a catchable error that the main loop retries in 5s.
+  const waitS = Number((path.match(/[?&]wait=(\d+)/) || [])[1] || 0);
+  const r = await fetch(url, { ...opts, headers: { ...opts.headers, ...sig }, signal: AbortSignal.timeout((waitS + 30) * 1000) });
   return r.json();
 }
 
