@@ -39,6 +39,40 @@ claude plugin marketplace add sashabogi/trantor
 claude plugin install trantor
 ```
 
+**Kimi Code CLI as orchestrator** (same capabilities — the `relay_*` MCP tools, the crew/handoff/
+research skills, and the full hook set: session registration, focus cards, todo mirroring,
+heartbeats, inbox delivery, handoff/baton pass, sub-agent cards):
+
+1. Register the relay MCP server in `~/.kimi-code/mcp.json`:
+
+   ```json
+   {
+     "mcpServers": {
+       "relay": {
+         "command": "node",
+         "args": ["<absolute-path-to-trantor>/mcp.mjs"],
+         "env": { "RELAY_URL": "http://127.0.0.1:4477", "RELAY_AGENT": "kimi-orch" },
+         "startupTimeoutMs": 15000,
+         "toolTimeoutMs": 150000
+       }
+     }
+   }
+   ```
+
+2. In the Kimi TUI: `/plugins install <absolute-path-to-trantor>` (or the GitHub URL), then
+   `/reload`, then start a new session.
+
+Notes: Kimi plugin installs are **snapshots** (`~/.kimi-code/plugins/managed/trantor/`) — after
+updating trantor, re-run `/plugins install` to refresh the skills/hooks. The MCP entry above always
+runs your live checkout, so the relay server itself never goes stale. Invoke the skills with
+`/skill:crew`, `/skill:handoff`, `/skill:research`. Set `TRANTOR_DEBUG_HOOKS=1` on the `kimi`
+process to dump raw hook payloads to `~/.agent-bus/kimi-hook-debug.jsonl`.
+
+The orchestrator's bus identity is `kimi-orch:<project>` — deliberately distinct from `kimi:<project>`,
+which belongs to a kimi CREW SEAT (`trantor up kimi`). Same doctrine as the openrouter seat label:
+one bus peer per role, so an orchestrator and its own kimi seat never share a heartbeat, inbox, or
+card attribution.
+
 That's it. (Prefer source? `git clone https://github.com/sashabogi/trantor && cd trantor &&
 npm install && bash deploy/setup.sh` — identical result.)
 

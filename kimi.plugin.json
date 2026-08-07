@@ -1,0 +1,66 @@
+{
+  "name": "trantor",
+  "version": "0.17.61",
+  "description": "Trantor — the hub-world for AI agent crews: live message bus, presence, project Kanban/flow board + crew orchestration for independent AI coding agents (Claude, Codex, Gemini, Kimi, DeepSeek). This manifest makes Kimi Code CLI a first-class ORCHESTRATOR, mirroring .claude-plugin/plugin.json.",
+  "interface": {
+    "displayName": "Trantor",
+    "shortDescription": "Multi-agent crew orchestration: bus, board, Advisor, Scrooge — Kimi as orchestrator",
+    "developerName": "sashabogi",
+    "websiteURL": "https://github.com/sashabogi/trantor"
+  },
+  "skills": "./kimi/skills/",
+  "hooks": [
+    {
+      "event": "SessionStart",
+      "command": "RELAY_AGENT=kimi-orch node ./kimi/hooks/sessionstart.mjs",
+      "timeout": 30
+    },
+    {
+      "event": "UserPromptSubmit",
+      "command": "RELAY_AGENT=kimi-orch node ./kimi/hooks/prompt-focus.mjs",
+      "timeout": 10
+    },
+    {
+      "event": "PreToolUse",
+      "matcher": "Agent|AgentSwarm",
+      "command": "RELAY_AGENT=kimi-orch node ./kimi/hooks/subagent-start.mjs",
+      "timeout": 10
+    },
+    {
+      "event": "SubagentStart",
+      "command": "RELAY_AGENT=kimi-orch node ./kimi/hooks/subagent-start.mjs",
+      "timeout": 10
+    },
+    {
+      "event": "PostToolUse",
+      "command": "RELAY_AGENT=kimi-orch node ./kimi/hooks/heartbeat.mjs",
+      "timeout": 10
+    },
+    {
+      "event": "PostToolUse",
+      "command": "RELAY_AGENT=kimi-orch node ./kimi/hooks/inbox-deliver.mjs",
+      "timeout": 10
+    },
+    {
+      "event": "PostToolUse",
+      "matcher": "TodoList",
+      "command": "RELAY_AGENT=kimi-orch node ./kimi/hooks/todo-sync.mjs",
+      "timeout": 10
+    },
+    {
+      "event": "PreCompact",
+      "command": "RELAY_AGENT=kimi-orch node ./kimi/hooks/precompact.mjs",
+      "timeout": 120
+    },
+    {
+      "event": "Notification",
+      "command": "RELAY_AGENT=kimi-orch node ./kimi/hooks/agent-notify.mjs",
+      "timeout": 10
+    },
+    {
+      "event": "SubagentStop",
+      "command": "RELAY_AGENT=kimi-orch node ./kimi/hooks/subagent-cost.mjs",
+      "timeout": 30
+    }
+  ]
+}
