@@ -245,16 +245,17 @@ case "$CMD" in up|swap|prune) ;; *) echo "usage: crew.sh up <agent...> | crew.sh
 prune_dead_state() {
   [ -f "$STATE" ] || return 0
   [ "$DRY" = "1" ] && return 0
-  local CLIVE=""
+  # CLIVE = live workspace uuids · CLIVE_NAMES = their titles. Seat (`cmux`) rows are validated at
+  # WORKSPACE granularity — is a live workspace named trantor:<their project> still up? — NOT per
+  # surface: `list-pane-surfaces --workspace` only returns the FIRST pane's surfaces, so a
+  # per-surface check reaps every split-created live seat's row (bug shipped 0.17.61, caught
+  # 2026-08-07 when it stripped two live crews' seat rows).
+  local CLIVE="" CLIVE_NAMES=""
   if _cmux_ok; then
-    local wids wid
-    wids="$(_cmux workspace list --id-format both --json 2>/dev/null | node -e 'let d="";process.stdin.on("data",c=>d+=c).on("end",()=>{try{const o=JSON.parse(d.slice(d.search(/[\[{]/)));const a=Array.isArray(o)?o:(o.workspaces||[]);console.log(a.map(x=>x.id).filter(Boolean).join(" "))}catch(e){}})')"
-    if [ -n "$wids" ]; then
-      CLIVE="$wids"
-      for wid in $wids; do
-        CLIVE="$CLIVE $(_cmux list-pane-surfaces --workspace "$wid" --id-format uuids --json 2>/dev/null | node -e 'let d="";process.stdin.on("data",c=>d+=c).on("end",()=>{try{const o=JSON.parse(d.slice(d.search(/[\[{]/)));const a=o.surfaces||o.panes||o;console.log((Array.isArray(a)?a:[]).map(s=>s.id||s.surface_id).filter(Boolean).join(" "))}catch(e){}})')"
-      done
-    fi
+    local pair
+    pair="$(_cmux workspace list --id-format both --json 2>/dev/null | node -e 'let d="";process.stdin.on("data",c=>d+=c).on("end",()=>{try{const o=JSON.parse(d.slice(d.search(/[\[{]/)));const a=Array.isArray(o)?o:(o.workspaces||[]);console.log(a.map(x=>x.id).filter(Boolean).join(" "));console.log(""+a.map(x=>x.custom_title||x.name||"").filter(Boolean).join("")+"")}catch(e){}})')"
+    CLIVE="$(printf '%s' "$pair" | sed -n 1p)"
+    CLIVE_NAMES="$(printf '%s' "$pair" | sed -n 2p)"
   fi
   local tmp="$STATE.tmp" line alive
   : > "$tmp"
@@ -266,8 +267,11 @@ prune_dead_state() {
       [ -n "$(osascript -e "tell application \"Terminal\" to get id of (first window whose id is $RH)" 2>/dev/null)" ] || alive=0
     elif [ "$RK" = "tmux" ]; then
       tmux has-session -t "trantor:$RP" 2>/dev/null || alive=0
-    elif [ "$RK" = "cmuxws" ] || [ "$RK" = "cmux" ]; then
+    elif [ "$RK" = "cmuxws" ]; then
       if [ -n "$CLIVE" ]; then case " $CLIVE " in *" $RH "*) : ;; *) alive=0 ;; esac; fi
+    elif [ "$RK" = "cmux" ]; then
+      # seat row lives exactly as long as its project still has a live crew workspace
+      if [ -n "$CLIVE" ]; then case "$CLIVE_NAMES" in *$'\x01'"trantor:$RP"$'\x01'*) : ;; *) alive=0 ;; esac; fi
     fi
     [ "$alive" = "1" ] && printf '%s\t%s\t%s\t%s\n' "$RP" "$RK" "$RA" "$RH" >> "$tmp"
   done < "$STATE"

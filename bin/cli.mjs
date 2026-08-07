@@ -73,6 +73,7 @@ switch (cmd) {
   case "inbox": run("bin/inbox.mjs"); break;
   case "duty": run("bin/duty.mjs"); break;
   case "app": run("bin/app.mjs"); break;
+  case "patrol": run("bin/patrol.mjs"); break;
   case "identity": {
     const { load, publicView, generate, keyPath } = await import(join(ROOT, "lib/identity.mjs"));
     const sub = args[0], name = args[1] || "human";
@@ -172,6 +173,7 @@ switch (cmd) {
   trantor inbox       THIS session's unread bus messages, signed (works under enforce) — [--all] [--consume] [--json]
   trantor policy      the autonomy ladder: show | set <project> <1-4> | link <a> <b> --reason "<why>"
   trantor duty        the always-on fleet duty agent: up | down | status — hub-escalated triage so you are not the switchboard
+  trantor patrol      machine-wide resource sweep: crews/runners/workspaces/orphans — [--json] [--reap] (reap = dead rows + stale artifacts ONLY)
 
 Claude Code plugin (the orchestrator side):
   claude plugin marketplace add sashabogi/trantor && claude plugin install trantor

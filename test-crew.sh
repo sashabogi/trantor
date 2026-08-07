@@ -184,8 +184,10 @@ OUT16="$(CREW_MUX=cmux CREW_DRY_RUN=1 HOME="$TMP" PATH="$TMP/fakebin:$PATH" RELA
 ok "re-up of a live seat splits replacing its old pane" 'echo "$OUT16" | grep -q "new-split for codex (replacing TERM-1)"'
 ok "re-up closes the seat's old pane" 'echo "$OUT16" | grep -q "close-surface TERM-1"'
 
-# 17. prune validates cmux rows against the LIVE socket state: rows whose workspace/surface no longer
-# exists are dropped; live ones survive. (A stub cmux answers workspace list / list-pane-surfaces.)
+# 17. prune validates cmux rows against the LIVE socket state — cmuxws rows by workspace uuid, seat
+# rows at WORKSPACE granularity (is a live workspace named trantor:<their project> still up?). NOT
+# per surface: list-pane-surfaces only returns the FIRST pane's surfaces, so a per-surface check
+# reaped every split-created live seat's row (the 0.17.61 bug that stripped two live crews' rows).
 mkdir -p "$TMP/fakebin_cmuxlive"
 cp "$TMP/fakebin/osascript" "$TMP/fakebin_cmuxlive/osascript"
 cat > "$TMP/fakebin_cmuxlive/cmux" <<'EOF'
@@ -193,18 +195,17 @@ cat > "$TMP/fakebin_cmuxlive/cmux" <<'EOF'
 # quiet-wrapper passes CMUX_QUIET; args arrive verbatim
 case "$1" in
   ping) exit 0 ;;
-  workspace) [ "$2" = "list" ] && echo '{"workspaces":[{"ref":"workspace:1","id":"WS-LIVE"}]}' ;;
-  list-pane-surfaces) echo '{"surfaces":[{"id":"SURF-LIVE"}]}' ;;
+  workspace) [ "$2" = "list" ] && echo '{"workspaces":[{"ref":"workspace:1","id":"WS-LIVE","custom_title":"trantor:protest"}]}' ;;
 esac
 exit 0
 EOF
 chmod +x "$TMP/fakebin_cmuxlive/cmux"
-seed "protest\tcmuxws\t__ws__\tWS-LIVE\nprotest\tcmuxws\t__ws__\tWS-DEAD\nprotest\tcmux\tglm\tSURF-LIVE\nprotest\tcmux\tcodex\tSURF-DEAD\n"
+seed "protest\tcmuxws\t__ws__\tWS-LIVE\nprotest\tcmuxws\t__ws__\tWS-DEAD\nprotest\tcmux\tglm\tSURF-A\nprotest\tcmux\tcodex\tSURF-B\nghostproj\tcmux\tkimi\tSURF-C\n"
 CREW_MUX=cmux HOME="$TMP" PATH="$TMP/fakebin_cmuxlive:$PATH" RELAY_PROJECT=protest bash "$ROOT/bin/crew.sh" prune >/dev/null 2>&1
 ok "prune keeps the live cmux workspace row" 'has_row "protest	cmuxws	__ws__	WS-LIVE"'
 ok "prune drops the dead cmux workspace row" '! has_row "WS-DEAD"'
-ok "prune keeps the live seat row" 'has_row "protest	cmux	glm	SURF-LIVE"'
-ok "prune drops the dead seat row" '! has_row "SURF-DEAD"'
+ok "prune keeps EVERY seat row of a live-workspace project (split seats too)" 'has_row "protest	cmux	glm	SURF-A" && has_row "protest	cmux	codex	SURF-B"'
+ok "prune drops seat rows of a project with no live workspace" '! has_row "SURF-C"'
 
 # 18. per-seat down also kills the seat's PROCESSES (anchored) — a stale pane handle must not leave an
 # invisible runner long-polling the inbox (the 2026-07-30 duplicate-row incident). Proven against real

@@ -7,9 +7,10 @@
 //   env RELAY_URL  →  ~/.agent-bus/config.json {"url": "..."}  →  http://127.0.0.1:4477
 // Identity: env RELAY_SESSION  →  "<hostname>:<basename(cwd)>"  (stable per project/machine)
 import { readFileSync, writeFileSync, existsSync, readdirSync } from "node:fs";
-import { join, basename } from "node:path";
+import { join, basename, dirname } from "node:path";
 import { homedir, hostname } from "node:os";
-import { execSync } from "node:child_process";
+import { execSync, spawn } from "node:child_process";
+import { fileURLToPath } from "node:url";
 import { resolveProject, hostId } from "../lib/project.mjs";
 import { formatSubagentManifest } from "../lib/subagent-manifest.mjs";
 import { updateAvailable, maybeNotifyDesktop, readConfig } from "./lib/update-check.mjs";
@@ -94,6 +95,11 @@ function sanitize(s) {
   return out;
 }
 
+// Fail-silent wrapper for the optional #4214 resources detection lib (hooks/lib/resources.mjs).
+// A throwing detector — or a half-landed lib whose export isn't a function yet — must never break
+// session start; this returns dft on any error. The lib is itself fail-silent, this is defense-in-depth.
+function safeInv(fn, dft = []) { try { const r = fn(); return r == null ? dft : r; } catch { return dft; } }
+
 // Session title for the picker / `claude --resume` / Claude mobile. Claude Code otherwise names a session
 // after its FIRST PROMPT (the `ai-title` transcript entry) — so several sessions started with the same
 // prompt (or sibling sessions in different projects) all look alike. We name it "<project> · <current work>"
@@ -154,6 +160,64 @@ try {
     for (const p of others) additionalContext += `- ${sanitize(p.session)}\n`;
     additionalContext += `Use the relay MCP tools (relay_peers, relay_send, relay_inbox, relay_wait) to coordinate with them — hand off work, check for overlap before editing shared files, or ask another session for help. If a sibling session is touching the same project, coordinate before making conflicting changes.\n`;
     additionalContext += `</trantor>\n`;
+  }
+
+  // ── ADOPT live crews (intersession-ops S1+S2, contract #4215) ─────────────────
+  // Every boot inventories leftover crew resources via the #4214 detection lib and steers the
+  // session toward ADOPTING a live crew rather than `trantor up`-ing over it (replace-in-place
+  // kills the seats' accumulated context). Detection is sync + fail-silent; the dead-row cleanup
+  // runs in a detached, unref'd child so it NEVER blocks session start. The lib import is OPTIONAL
+  // on purpose — until kimi lands #4214 this whole block is a no-op rather than a hard import
+  // error that would break every session start. Added latency <300ms; everything wrapped; all
+  // injected text is sanitized; block kept ≤12 lines.
+  let res = null;
+  try { res = await import("./lib/resources.mjs"); } catch {}
+  if (res) {
+    try {
+      const __t0 = process.hrtime.bigint();
+      const __elapsedMs = () => Number(process.hrtime.bigint() - __t0) / 1e6;
+      const runners  = safeInv(() => (typeof res.liveRunners === "function" ? res.liveRunners(project) : []), []);
+      const rows     = safeInv(() => (typeof res.listCrewRows  === "function" ? res.listCrewRows()        : []), []);
+      const projRows = (Array.isArray(rows) ? rows : []).filter(r => r && r.project === project);
+      // Only touch the (relatively) costly devServers/lsof when we're actually emitting a block.
+      if ((Array.isArray(runners) && runners.length > 0) || projRows.length > 0) {
+        // devServers is "report only" and (per kimi's #4214 impl) costs ~180ms via per-match lsof.
+        // Include it only while the <300ms hard latency budget still has room; otherwise defer to the
+        // duty patrol (#4216), which inventories dev servers machine-wide. A solo session (no crew →
+        // liveRunners ~50ms) always gets the dev-server line; a live multi-seat crew usually defers.
+        let devSrv = [];
+        if (__elapsedMs() < 120) devSrv = safeInv(() => (typeof res.devServers === "function" ? res.devServers(projectDir) : []), []);
+        else process.stderr.write(`[trantor] devServers deferred to patrol (${__elapsedMs().toFixed(0)}ms elapsed, <300ms budget)\n`);
+        const seats = (Array.isArray(runners) ? runners : [])
+          .map(r => `${sanitize(r.agent || "?")}(${r.pid || "?"})`).filter(Boolean).join(", ");
+        const devs = (Array.isArray(devSrv) ? devSrv : [])
+          .map(d => `${sanitize(String(d.cmd || "dev").trim().split(/\s+/)[0] || "dev")}(${d.pid || "?"})`).join(", ");
+        const adopt = [];
+        if (Array.isArray(runners) && runners.length > 0) {
+          adopt.push(`A LIVE crew for "${sanitize(project)}" is already running (seats: ${seats}).`);
+          adopt.push(`ADOPT it: read \`relay_board\`, announce yourself to the seats over the bus, and continue their in-flight work.`);
+          adopt.push(`Do NOT run \`trantor up\` over healthy seats — replace-in-place kills their context.`);
+          if (devs) adopt.push(`Dev servers already up: ${devs} (report only — leave them running).`);
+          adopt.push(`Provably-dead tracking rows are being cleaned up in the background.`);
+        } else {
+          adopt.push(`No live crew for "${sanitize(project)}", but ${projRows.length} stale tracking row(s) exist from a prior session.`);
+          adopt.push(`Background cleanup is verifying them and dropping only the provably-dead (no live process AND no heartbeat AND no owning session).`);
+          if (devs) adopt.push(`Dev servers up: ${devs} (report only).`);
+        }
+        additionalContext += `<trantor-resources>\n${adopt.join("\n")}\n</trantor-resources>\n`;
+        process.stderr.write(`[trantor] crew inventory: ${runners.length} live, ${projRows.length} stale row(s) for ${project}\n`);
+      }
+    } catch {}
+    // Fire-and-forget dead-row cleanup — detached + unref'd + stdio ignored, NEVER awaited. We call
+    // cleanDead(project) by name through the #4214 lib; a missing/half-landed lib → child exits
+    // silently. This is the ONLY mutation and it drops dead tracking rows, nothing live.
+    try {
+      const modPath = join(dirname(fileURLToPath(import.meta.url)), "lib", "resources.mjs");
+      const kid = spawn(process.execPath, ["--input-type=module", "-e",
+        `import(${JSON.stringify(modPath)}).then(m=>{try{if(typeof m.cleanDead==="function")m.cleanDead(${JSON.stringify(project)})}catch{}}).catch(()=>{})`
+      ], { detached: true, stdio: "ignore", env: { ...process.env, RELAY_PROJECT: project } });
+      kid.unref();
+    } catch {}
   }
 
   // CATCH-UP: a project is a DURABLE, continuous lane — not a session. Before doing
