@@ -9,7 +9,8 @@ import { useEffect, useMemo, useState } from "react";
 import type { Card, HubClient } from "../../shared/api/client";
 import { CardDetail } from "./CardDetail";
 import { ProjectHeader } from "../project/ProjectHeader";
-import { AgentChip, cleanTitle } from "../../shared/Avatar";
+import { AgentChip, Avatar, cleanTitle, displayName } from "../../shared/Avatar";
+import { usePeers, presenceMap, stateOf, PRESENCE_COLOR, type PresenceState } from "../../shared/presence";
 
 // Lane order matches the hub's own card flow: todo -> doing -> testing -> done, with the two
 // exception lanes last. `stale` comes from the reaper, `blocked` is set by hand.
@@ -40,19 +41,28 @@ function matches(card: Card, query: string): boolean {
   return card.title.toLowerCase().includes(q) || (card.assignee || "").toLowerCase().includes(q);
 }
 
-function CardTile({ card, onOpen, onAdvance }: {
-  card: Card; onOpen: (c: Card) => void; onAdvance?: (c: Card) => void;
+function CardTile({ card, onOpen, onAdvance, presence }: {
+  card: Card; onOpen: (c: Card) => void; onAdvance?: (c: Card) => void; presence?: PresenceState;
 }) {
   const next = NEXT[card.status];
+  // A card is only believably IN MOTION when its assignee's heartbeat is fresh — "doing" with a
+  // dead assignee is exactly the stall the operator needs to spot. Live work breathes (ring +
+  // pulsing dot); failed/blocked pulse red like the old web UI did; a doing-card whose assignee
+  // is offline says so instead of pretending.
+  const inMotion = card.status === "doing" && presence === "busy";
+  const alarmed = card.status === "failed" || card.status === "blocked";
+  const stalled = card.status === "doing" && (!presence || presence === "offline");
   return (
     // Click opens the drawer. The first cut advanced the card on click — a misclick MOVED a card,
     // which is exactly the kind of surprise a shared board cannot afford. Advancing is now the
     // explicit → button, here and in the drawer.
     <div
       onClick={() => onOpen(card)}
-      className="tr-card tr-card-hover min-w-0 shrink-0 cursor-pointer overflow-hidden p-3.5 text-[13px]">
+      className={`tr-card tr-card-hover min-w-0 shrink-0 cursor-pointer overflow-hidden p-3.5 text-[13px] ${inMotion ? "tr-card-live" : ""} ${alarmed ? "tr-card-alarm" : ""}`}>
       <div className="leading-snug break-words [overflow-wrap:anywhere]">{card.summary || cleanTitle(card.title)}</div>
       <div className="mt-2 flex flex-wrap items-center gap-1.5 text-[11px] text-[var(--color-tr-muted)]">
+        {inMotion && <span className="tr-dot tr-dot-pulse shrink-0" style={{ background: "var(--color-tr-doing)" }} title="assignee is mid-turn right now" />}
+        {stalled && <span className="shrink-0 rounded bg-black/30 px-1.5 py-0.5 text-[var(--color-tr-warn)]" title="doing, but the assignee has no heartbeat">assignee offline</span>}
         {card.assignee && <AgentChip session={card.assignee} />}
         {card.difficulty && <span className="rounded bg-black/30 px-1.5 py-0.5">{card.difficulty[0].toUpperCase()}</span>}
         {card.model && <span className="tr-mono max-w-[150px] truncate rounded bg-black/30 px-1.5 py-0.5">{card.model}</span>}
@@ -78,6 +88,15 @@ export function Board({ client, project, lens, onLens }: {
   const [query, setQuery] = useState("");
   const [assignee, setAssignee] = useState("");
   const [open, setOpen] = useState<number | null>(null);
+  const { peers } = usePeers(client);
+  const presence = useMemo(() => presenceMap(peers), [peers]);
+  // Who is HERE, alive, right now — surfaced in the header so a project screen never again reads
+  // as a dead list. Busy sessions breathe; idle ones sit still; offline ones don't appear.
+  const liveHere = useMemo(
+    () => (peers ?? []).filter(p => p.project === project && stateOf(p) !== "offline")
+      .sort((a, b) => (stateOf(a) === "busy" ? 0 : 1) - (stateOf(b) === "busy" ? 0 : 1)),
+    [peers, project],
+  );
 
   useEffect(() => {
     let alive = true;
@@ -129,7 +148,23 @@ export function Board({ client, project, lens, onLens }: {
   return (
     <div className="tr-pane relative flex h-full flex-col">
       <ProjectHeader project={project} lens={lens} onLens={onLens}
-        sub={<>{done}/{cards.length} done · {Math.round((done / Math.max(cards.length, 1)) * 100)}%{filtered && <> · showing {visible.length}</>}</>}>
+        sub={<span className="flex flex-wrap items-center gap-x-2 gap-y-1">
+          <span>{done}/{cards.length} done · {Math.round((done / Math.max(cards.length, 1)) * 100)}%{filtered && <> · showing {visible.length}</>}</span>
+          {liveHere.length > 0 && <span className="flex items-center gap-1.5">
+            <span className="opacity-60">·</span>
+            {liveHere.slice(0, 8).map(p => {
+              const st = stateOf(p);
+              return (
+                <span key={p.session} className="relative inline-flex" title={`${displayName(p.session, p.llm)} — ${st}`}>
+                  <Avatar name={p.session} llm={p.llm} size={18} />
+                  <span className={`tr-dot absolute -right-0.5 -bottom-0.5 ${st === "busy" ? "tr-dot-pulse" : ""}`}
+                        style={{ background: PRESENCE_COLOR[st], width: 7, height: 7, border: "1.5px solid var(--color-tr-panel)" }} />
+                </span>
+              );
+            })}
+            <span className="text-[11px]">{liveHere.length} live</span>
+          </span>}
+        </span>}>
         <input
           value={query}
           onChange={e => setQuery(e.target.value)}
@@ -153,7 +188,8 @@ export function Board({ client, project, lens, onLens }: {
             </div>
             <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-x-hidden overflow-y-auto px-0.5 pb-1">
               {list.slice(0, 200).map(c => (
-                <CardTile key={c.id} card={c} onOpen={c2 => setOpen(c2.id)} onAdvance={advance} />
+                <CardTile key={c.id} card={c} onOpen={c2 => setOpen(c2.id)} onAdvance={advance}
+                          presence={c.assignee ? presence.get(c.assignee) : undefined} />
               ))}
             </div>
           </section>

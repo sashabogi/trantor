@@ -150,3 +150,25 @@ button { transition: background-color 0.12s ease, border-color 0.12s ease, color
   color: var(--color-tr-muted);
 }
 .tr-lane { animation: tr-rise 0.22s ease-out both; }
+
+/* ── liveness (2026-08-07) ──────────────────────────────────────────────────────────────────
+   The board looked dead: "doing" was a word, not a signal. These are the ONLY animated states,
+   and they stay calm per the design system — a breathing dot and a faint ring, no glow, no
+   flashing. `tr-dot-pulse` = the assignee is mid-turn RIGHT NOW (heartbeat < 90s). `tr-card-live`
+   marks a doing-card whose assignee is live; `tr-card-alarm` is the failed/blocked pulse the old
+   web UI had and the desktop lost. */
+@keyframes tr-breathe {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
+.tr-dot-pulse { animation: tr-breathe 1.8s ease-in-out infinite; }
+@keyframes tr-ring-live {
+  0%, 100% { box-shadow: 0 0 0 1px color-mix(in srgb, var(--color-tr-doing) 45%, transparent); }
+  50% { box-shadow: 0 0 0 1px color-mix(in srgb, var(--color-tr-doing) 12%, transparent); }
+}
+.tr-card-live { animation: tr-ring-live 1.8s ease-in-out infinite; }
+@keyframes tr-ring-alarm {
+  0%, 100% { box-shadow: 0 0 0 1px color-mix(in srgb, var(--color-tr-fail) 55%, transparent); }
+  50% { box-shadow: 0 0 0 1px color-mix(in srgb, var(--color-tr-fail) 18%, transparent); }
+}
+.tr-card-alarm { animation: tr-ring-alarm 1.4s ease-in-out infinite; }

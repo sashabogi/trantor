@@ -40,7 +40,10 @@ function installedVersion() {
 // Newest release carrying a Trantor DMG for this arch (falls back to any Trantor DMG — old
 // releases may predate multi-arch naming). GITHUB_TOKEN is honored but not required (public repo).
 async function latestAppRelease() {
-  const headers = { accept: "application/vnd.github+json", "user-agent": "trantor-app" };
+  // cache-control: GitHub serves unauthenticated API responses through a shared ~60s cache — a
+  // release published seconds ago comes back MISSING and `app update` re-installs the previous
+  // version (observed live on the 0.2.0 release). no-cache punches through it.
+  const headers = { accept: "application/vnd.github+json", "user-agent": "trantor-app", "cache-control": "no-cache" };
   if (process.env.GITHUB_TOKEN) headers.authorization = `Bearer ${process.env.GITHUB_TOKEN}`;
   const r = await fetch(`https://api.github.com/repos/${REPO}/releases?per_page=30`, { headers, signal: AbortSignal.timeout(15000) });
   if (!r.ok) throw new Error(`GitHub API ${r.status} — ${(await r.text()).slice(0, 200)}`);

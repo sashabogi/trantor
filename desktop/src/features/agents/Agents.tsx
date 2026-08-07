@@ -11,37 +11,20 @@ import { useEffect, useState } from "react";
 import { doctor, type DoctorReport } from "../../shared/api/client";
 import type { HubClient, Peer } from "../../shared/api/client";
 import { Avatar, displayName } from "../../shared/Avatar";
-
-const ONLINE_MS = 5 * 60 * 1000;   // matches the hub's RELAY_ONLINE_MS default
-const BUSY_MS = 90 * 1000;         // heartbeat is ~60s, so fresher than this means mid-turn
-
-type State = "busy" | "idle" | "offline";
-function stateOf(p: Peer): State {
-  const age = Date.now() - (p.lastSeen ?? 0);
-  if (age > ONLINE_MS) return "offline";
-  return age < BUSY_MS ? "busy" : "idle";
-}
-const COLOR: Record<State, string> = {
-  busy: "var(--color-tr-doing)",
-  idle: "var(--color-tr-muted)",
-  offline: "var(--color-tr-edge)",
-};
+import { stateOf, ago, usePeers, PRESENCE_COLOR as COLOR, type PresenceState } from "../../shared/presence";
 
 // A seat's identity is `<brand>:<project>`; the human sessions are `<host>:<project>`. Splitting on
 // the colon gives the brand, which is what the operator actually thinks in ("is codex up?").
 const projectOf = (session: string) => (session.includes(":") ? session.split(":").slice(1).join(":") : "");
 
-function ago(ts?: number) {
-  if (!ts) return "never";
-  const s = Math.round((Date.now() - ts) / 1000);
-  if (s < 60) return `${s}s`;
-  if (s < 3600) return `${Math.round(s / 60)}m`;
-  return `${Math.round(s / 3600)}h`;
-}
+// Live first, and busy before merely-online — the roster answers "who is working right now" before
+// it archives who has ever existed. Within a state, most-recently-seen first.
+const ORDER: Record<PresenceState, number> = { busy: 0, idle: 1, offline: 2 };
+const byLiveness = (a: Peer, b: Peer) =>
+  ORDER[stateOf(a)] - ORDER[stateOf(b)] || (b.lastSeen ?? 0) - (a.lastSeen ?? 0);
 
 export function Agents({ client, project }: { client: HubClient; project: string }) {
-  const [peers, setPeers] = useState<Peer[] | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const { peers, error } = usePeers(client);
   const [health, setHealth] = useState<DoctorReport | null>(null);
 
   // Harness detection: WHICH seats could run at all, as opposed to which happen to be alive. A brand
@@ -49,39 +32,28 @@ export function Agents({ client, project }: { client: HubClient; project: string
   // that was the single most portable idea in Buzz's onboarding.
   useEffect(() => { doctor().then(setHealth).catch(() => {}); }, []);
 
-  useEffect(() => {
-    let alive = true;
-    const load = () => client.peers()
-      .then(p => { if (alive) { setPeers(p); setError(null); } })
-      .catch(e => { if (alive) setError(String(e.message || e)); });
-    load();
-    // Presence decays on a timer, so poll rather than relying purely on events — a peer going quiet
-    // produces no event until the hub's 60s sweep notices.
-    const t = setInterval(load, 15000);
-    return () => { alive = false; clearInterval(t); };
-  }, [client]);
-
-  useEffect(() => client.streamEvents(ev => {
-    if (ev.type?.startsWith("presence")) client.peers().then(setPeers).catch(() => {});
-  }), [client]);
-
-  if (error) return <div className="p-10 text-sm text-[var(--color-tr-fail)]">Agents unavailable: {error}</div>;
+  if (error && !peers) return <div className="p-10 text-sm text-[var(--color-tr-fail)]">Agents unavailable: {error}</div>;
   if (!peers) return <div className="p-10 text-sm text-[var(--color-tr-muted)]">Loading roster…</div>;
 
   // This project first — that is what the operator is looking at — then everyone else for context,
   // because a seat busy on ANOTHER project is exactly what explains a quota stall here.
-  const mine = peers.filter(p => p.project === project);
-  const others = peers.filter(p => p.project !== project);
+  const mine = [...peers.filter(p => p.project === project)].sort(byLiveness);
+  const others = [...peers.filter(p => p.project !== project)].sort(byLiveness);
   const live = peers.filter(p => stateOf(p) !== "offline").length;
+  const busy = peers.filter(p => stateOf(p) === "busy").length;
 
   const Row = ({ p }: { p: Peer }) => {
     const st = stateOf(p);
     const proj = p.project || projectOf(p.session);
+    // Liveness must be discernible at a GLANCE, not by reading 11px state text: busy rows breathe
+    // (pulsing dot) and carry a colored state word; offline rows drop to background opacity so the
+    // living stand out from the archive. This was Sasha's direct complaint — "just a list that's
+    // grayed out and hard to discern what's going on."
     return (
-      <div className="tr-card flex items-center gap-3 px-4 py-3">
+      <div className={`tr-card flex items-center gap-3 px-4 py-3 ${st === "offline" ? "opacity-45" : ""}`}>
         <span className="relative shrink-0">
           <Avatar name={p.session} llm={p.llm} size={30} />
-          <span className="tr-dot absolute -right-0.5 -bottom-0.5 border-2 border-[var(--color-tr-panel)]"
+          <span className={`tr-dot absolute -right-0.5 -bottom-0.5 border-2 border-[var(--color-tr-panel)] ${st === "busy" ? "tr-dot-pulse" : ""}`}
                 style={{ background: COLOR[st], width: 9, height: 9 }} />
         </span>
         <div className="min-w-0 flex-1">
@@ -92,9 +64,11 @@ export function Agents({ client, project }: { client: HubClient; project: string
           </div>
           <div className="truncate text-[12px] text-[var(--color-tr-muted)]">{p.status || "—"}</div>
         </div>
-        <div className="shrink-0 text-right text-[11px] text-[var(--color-tr-muted)]">
-          <div>{st}</div>
-          <div className="opacity-70">{ago(p.lastSeen)}</div>
+        <div className="shrink-0 text-right text-[11px]">
+          <div style={{ color: st === "busy" ? "var(--color-tr-doing)" : st === "idle" ? "var(--color-tr-text)" : "var(--color-tr-muted)" }}>
+            {st === "busy" ? "working" : st}
+          </div>
+          <div className="text-[var(--color-tr-muted)] opacity-70">{ago(p.lastSeen)}</div>
         </div>
       </div>
     );
@@ -104,7 +78,7 @@ export function Agents({ client, project }: { client: HubClient; project: string
     <div className="tr-pane flex h-full flex-col">
       <header className="px-10 pt-8 pb-5">
         <h1 className="tr-page-title">Agents</h1>
-        <p className="tr-page-sub">{live} live · {peers.length} known across the fleet.</p>
+        <p className="tr-page-sub">{busy > 0 && <>{busy} working now · </>}{live} live · {peers.length} known across the fleet.</p>
       </header>
       <div className="flex-1 overflow-y-auto px-10 pb-8">
         {health && (() => {

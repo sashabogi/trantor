@@ -66,7 +66,9 @@ async function ensureFleetIdentity(hub) {
 function alivePid() {
   try {
     const pid = Number(readFileSync(PIDF, "utf8"));
-    if (pid && process.kill(pid, 0) === undefined) return pid;
+    // process.kill(pid, 0) returns TRUE on success (it throws when the pid is gone) — the original
+    // `=== undefined` comparison made alivePid always 0, so `duty status` reported NOT running forever.
+    if (pid) { process.kill(pid, 0); return pid; }
   } catch {}
   return 0;
 }

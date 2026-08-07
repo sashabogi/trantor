@@ -554,7 +554,8 @@ spawn_cmux() {   # $@ = specs
     echo "  → $AGENT seat in cmux workspace ($PROJ)"
     i=$(( i + 1 ))
   done
-  [ "$DRY" = "1" ] || [ -z "$wsid" ] || _cmux set-status trantor "crew up" --icon rocket --color "#14b8a6" --workspace "$wsid" >/dev/null 2>&1
+  # (no workspace-level "crew up" pill — the per-seat pills the runners push carry all the signal;
+  # a fifth static pill just forced the sidebar into "Show more".)
   echo "— crew grouped in cmux: ONE workspace tab for $PROJ, seats tiled + sidebar status. Teardown (this project only): trantor down —"
 }
 

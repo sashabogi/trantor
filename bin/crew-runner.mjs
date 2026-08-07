@@ -83,14 +83,23 @@ async function api(path, body) {
 const CMUX_BIN = process.env.CMUX_BIN
   || (existsSync("/Applications/cmux.app/Contents/Resources/bin/cmux") ? "/Applications/cmux.app/Contents/Resources/bin/cmux" : "cmux");
 const inCmux = () => !!process.env.CMUX_SURFACE_ID;
-function cmuxStatus(value, color, icon = "robot") {
+// Brand colors — the SAME hexes the desktop app's Avatar.tsx uses, so a seat is the same color in
+// the cmux sidebar and the Trantor app. cmux status icons are a fixed named set (no images), so an
+// actual LLM logo in the pill is not possible — brand COLOR + the agent's name in the label is the
+// closest cmux allows.
+const BRAND_HEX = { claude: "#D97757", codex: "#e8e8ee", openai: "#e8e8ee", deepseek: "#5786FE",
+  kimi: "#8b8bf5", moonshot: "#8b8bf5", glm: "#5ea0f5", zai: "#5ea0f5", gemini: "#8E75B2", openrouter: "#94A3B8" };
+function cmuxStatus(value, color, icon = "robot", opts = {}) {
   if (!inCmux()) return;
   // Label with the REAL seat identity, not a literal. This was hardcoded to "trantor", so every seat
   // in every project reported under one name — four different agents (and their duplicates) rendered
   // identically in the sidebar, which is why a runner leak looked like mystery sessions instead of
   // obvious duplicates. Note this is the DISPLAY path; two previous fixes to the crossed-label
   // symptom both landed on the *bus* identity and never touched this line.
-  try { spawnSync(CMUX_BIN, ["set-status", SESSION, value, "--color", color, "--icon", icon], { stdio: "ignore", timeout: 1500, env: { ...process.env, CMUX_QUIET: "1" } }); } catch {}
+  // Pill = "<agent> · <state>" in the agent's BRAND color (alerts keep their alarm color — a red
+  // error must read as red at a glance); errors sort first via --priority.
+  const col = opts.alert ? color : (BRAND_HEX[AGENT.toLowerCase()] || color);
+  try { spawnSync(CMUX_BIN, ["set-status", SESSION, `${AGENT} · ${value}`, "--color", col, "--icon", icon, "--priority", String(opts.priority ?? 0)], { stdio: "ignore", timeout: 1500, env: { ...process.env, CMUX_QUIET: "1" } }); } catch {}
 }
 function cmuxLog(message, level = "info") {
   if (!inCmux()) return;
@@ -170,7 +179,7 @@ async function reportFailure(exit, trigger) {
     ? `🛑 ${SESSION} DOWN — ${consecFails} consecutive failures (${reason}, exit ${exit})${hint}`
     : `⚠️ ${SESSION} turn FAILED (${trigger}, exit ${exit} · ${reason})${hint}`;
   await api("/send", { from: SESSION, to: "all", text, project: PROJ }).catch(() => {});
-  cmuxStatus(down ? "down" : "error", "#ef6a6a", "alert"); cmuxLog(`turn failed: ${reason} (exit ${exit})`, "error");
+  cmuxStatus(down ? "down" : "error", "#ef6a6a", "alert", { alert: true, priority: 90 }); cmuxLog(`turn failed: ${reason} (exit ${exit})`, "error");
   log(`\x1b[31mreported failure to bus: ${reason} (exit ${exit})\x1b[0m`);
 }
 
@@ -195,7 +204,7 @@ function runTurn(prompt, isFirst, trigger = "kickoff") {
   const envs = [join(homedir(), ".agent-bus", ".env"), cli.env].filter(f => f && existsSync(f));
   for (const f of envs.reverse()) cmd = `set -a; source ${f}; set +a; ${cmd}`;   // ~/.agent-bus/.env wins
   log(`turn starting (${isFirst ? "fresh session" : "resume"})${MODEL ? ` · model=${MODEL}` : ""}`);
-  cmuxStatus("building", "#4a90d9", "hammer");
+  cmuxStatus("building", "#4a90d9", "hammer", { priority: 50 });
   // inherit stdio so the window shows the agent working live; also capture for sid-parsing.
   // Tee stderr to ERRF (still shown live in the window) so a failed turn can be classified.
   try { appendFileSync(ERRF, "", { flag: "w" }); } catch {}
@@ -256,7 +265,14 @@ async function loadLessons() {
     try {
       const r = await api(`/poll?session=${encodeURIComponent(SESSION)}&since=${cursor}&wait=280`);
       msgs = r.messages || []; cursor = r.cursor ?? cursor;
-    } catch (e) { log(`hub unreachable (${e.message}) — retrying in 5s`); await new Promise(s => setTimeout(s, 5000)); continue; }
+    } catch (e) {
+      // Deadline-abort on the LONG-POLL is not an outage — it means the hold expired with no hub
+      // response (stalled event loop, napped machine, dead socket). Reconnect immediately and say
+      // so calmly; reserve the scary "hub unreachable" + 5s backoff for real connection failures.
+      const expired = e && (e.name === "TimeoutError" || /abort/i.test(String(e.message)));
+      log(expired ? `long-poll hold expired with no hub response — reconnecting` : `hub unreachable (${e.message}) — retrying in 5s`);
+      await new Promise(s => setTimeout(s, expired ? 250 : 5000)); continue;
+    }
     if (!msgs.length) continue;                       // heartbeat tick, nothing for us
     const direct = msgs.filter(m => m.to === SESSION);
     const mentions = msgs.filter(m => m.to === "all" && (m.text.includes(`@${AGENT}`) || m.text.toLowerCase().includes(`${AGENT}:`)));
