@@ -44,7 +44,9 @@ STATE="$TMP/.agent-bus/crew-windows.txt"
 seed(){ printf '%b' "$1" > "$STATE"; }
 rows(){ [ -f "$STATE" ] && wc -l < "$STATE" | tr -d ' ' || echo 0; }
 has_row(){ [ -f "$STATE" ] && grep -qF "$1" "$STATE"; }
-downcmd(){ HOME="$TMP" PATH="$TMP/fakebin:$PATH" RELAY_PROJECT="$1" bash "$ROOT/bin/crew.sh" down "${@:2}" </dev/null; }
+# CREW_NO_PROC_KILL: these tests seed REAL project names (crebral-health) — without the guard, the
+# per-seat proc-kill sweep would pgrep live crew runners on the host machine during `npm test`.
+downcmd(){ HOME="$TMP" PATH="$TMP/fakebin:$PATH" RELAY_PROJECT="$1" CREW_NO_PROC_KILL=1 bash "$ROOT/bin/crew.sh" down "${@:2}" </dev/null; }
 
 echo "# trantor crew teardown-scoping tests"
 
@@ -163,6 +165,59 @@ ok "the reap is not swallowed into the launcher string" '! echo "$OUT14" | grep 
 ok "up does NOT reap a different agent on the same project" '! echo "$OUT14" | grep -q "kill -9 $DECOY_AGENT"'
 ok "up does NOT reap the same agent in a prefix-named sibling dir" '! echo "$OUT14" | grep -q "kill -9 $DECOY_PREFIX"'
 kill -9 "$DECOY_SAME" "$DECOY_AGENT" "$DECOY_PREFIX" 2>/dev/null
+wait 2>/dev/null || true
+
+# 15. replace-never-stack (2026-08-07): a second `up` REUSES the tracked workspace instead of stacking
+# a new one; older stacked workspaces (the 6-deep crebral-health pileup) are closed. Dry mode reads
+# STATE (read-only) so we can seed the board.
+seed "testproj\tcmuxws\t__ws__\tTAB-OLD\ntestproj\tcmuxws\t__ws__\tTAB-NEW\n"
+OUT15="$(CREW_MUX=cmux CREW_DRY_RUN=1 HOME="$TMP" PATH="$TMP/fakebin:$PATH" RELAY_PROJECT=testproj bash "$ROOT/bin/crew.sh" up codex glm 2>&1)"
+ok "up on a tracked crew does NOT create a new workspace" '! echo "$OUT15" | grep -q "cmux: new-workspace"'
+ok "up reuses the NEWEST tracked workspace" '[ "$(echo "$OUT15" | grep -c "reuse workspace TAB-NEW")" = "2" ]'
+ok "up closes the older stacked workspace" 'echo "$OUT15" | grep -q "close-workspace TAB-OLD"'
+ok "up does not close the workspace it reuses" '! echo "$OUT15" | grep -q "close-workspace TAB-NEW"'
+
+# 16. replace-in-place: re-upping a seat that already has a pane replaces THAT pane (split off it,
+# then close it) instead of adding a duplicate.
+seed "testproj\tcmuxws\t__ws__\tTAB-NEW\ntestproj\tcmux\tcodex\tTERM-1\n"
+OUT16="$(CREW_MUX=cmux CREW_DRY_RUN=1 HOME="$TMP" PATH="$TMP/fakebin:$PATH" RELAY_PROJECT=testproj bash "$ROOT/bin/crew.sh" up codex 2>&1)"
+ok "re-up of a live seat splits replacing its old pane" 'echo "$OUT16" | grep -q "new-split for codex (replacing TERM-1)"'
+ok "re-up closes the seat's old pane" 'echo "$OUT16" | grep -q "close-surface TERM-1"'
+
+# 17. prune validates cmux rows against the LIVE socket state: rows whose workspace/surface no longer
+# exists are dropped; live ones survive. (A stub cmux answers workspace list / list-pane-surfaces.)
+mkdir -p "$TMP/fakebin_cmuxlive"
+cp "$TMP/fakebin/osascript" "$TMP/fakebin_cmuxlive/osascript"
+cat > "$TMP/fakebin_cmuxlive/cmux" <<'EOF'
+#!/bin/bash
+# quiet-wrapper passes CMUX_QUIET; args arrive verbatim
+case "$1" in
+  ping) exit 0 ;;
+  workspace) [ "$2" = "list" ] && echo '{"workspaces":[{"ref":"workspace:1","id":"WS-LIVE"}]}' ;;
+  list-pane-surfaces) echo '{"surfaces":[{"id":"SURF-LIVE"}]}' ;;
+esac
+exit 0
+EOF
+chmod +x "$TMP/fakebin_cmuxlive/cmux"
+seed "protest\tcmuxws\t__ws__\tWS-LIVE\nprotest\tcmuxws\t__ws__\tWS-DEAD\nprotest\tcmux\tglm\tSURF-LIVE\nprotest\tcmux\tcodex\tSURF-DEAD\n"
+CREW_MUX=cmux HOME="$TMP" PATH="$TMP/fakebin_cmuxlive:$PATH" RELAY_PROJECT=protest bash "$ROOT/bin/crew.sh" prune >/dev/null 2>&1
+ok "prune keeps the live cmux workspace row" 'has_row "protest	cmuxws	__ws__	WS-LIVE"'
+ok "prune drops the dead cmux workspace row" '! has_row "WS-DEAD"'
+ok "prune keeps the live seat row" 'has_row "protest	cmux	glm	SURF-LIVE"'
+ok "prune drops the dead seat row" '! has_row "SURF-DEAD"'
+
+# 18. per-seat down also kills the seat's PROCESSES (anchored) — a stale pane handle must not leave an
+# invisible runner long-polling the inbox (the 2026-07-30 duplicate-row incident). Proven against real
+# decoys, dry mode so the kill is printed not executed; the anchor keeps prj-x from matching prj-xy.
+node "$TMP/crew-runner.mjs" codex "$TMP/prj-x"  & DECOY_SEAT=$!
+node "$TMP/crew-runner.mjs" codex "$TMP/prj-xy" & DECOY_OTHER=$!
+sleep 0.5
+seed "prj-x\tcmuxws\t__ws__\tTAB-P\nprj-x\tcmux\tcodex\tTERM-P\n"
+OUT18="$(CREW_DRY_RUN=1 HOME="$TMP" PATH="$TMP/fakebin:$PATH" RELAY_PROJECT=prj-x bash "$ROOT/bin/crew.sh" down codex 2>&1)"
+ok "per-seat down kills the seat's runner process" 'echo "$OUT18" | grep -q "^\[dry\] kill -9 $DECOY_SEAT "'
+ok "per-seat down does NOT kill a prefix-named sibling project's runner" '! echo "$OUT18" | grep -q "kill -9 $DECOY_OTHER"'
+ok "CREW_NO_PROC_KILL suppresses the proc sweep (test-suite guard)" '! CREW_DRY_RUN=1 HOME="$TMP" PATH="$TMP/fakebin:$PATH" RELAY_PROJECT=prj-x CREW_NO_PROC_KILL=1 bash "$ROOT/bin/crew.sh" down codex 2>&1 | grep -q "kill -9 $DECOY_SEAT"'
+kill -9 "$DECOY_SEAT" "$DECOY_OTHER" 2>/dev/null
 wait 2>/dev/null || true
 
 echo ""

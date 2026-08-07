@@ -125,6 +125,36 @@ end tell
 OSA
 }
 
+# surgical STATE row removal: drop every row matching PROJECT+KIND (+AGENT/+HANDLE when given).
+# Empty $3/$4 = wildcard. Callers beware: uses _parse_row, which clobbers the RP/RK/RA/RH globals.
+_state_drop() {   # $1=project $2=kind $3=agent(''=any) $4=handle(''=any)
+  [ "$DRY" = "1" ] && return 0
+  [ -f "$STATE" ] || return 0
+  local tmp="$STATE.tmp" line
+  : > "$tmp"
+  while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    _parse_row "$line"
+    if [ "$RP" = "$1" ] && [ "$RK" = "$2" ] && { [ -z "$3" ] || [ "$RA" = "$3" ]; } && { [ -z "$4" ] || [ "$RH" = "$4" ]; }; then continue; fi
+    printf '%s\t%s\t%s\t%s\n' "$RP" "$RK" "$RA" "$RH" >> "$tmp"
+  done < "$STATE"
+  mv "$tmp" "$STATE"; [ -s "$STATE" ] || rm -f "$STATE"
+}
+
+# Belt-and-suspenders on seat teardown: closing the pane/window SHOULD take the runner with it, but a
+# STALE handle (the 2026-07-30 duplicate-row incident) closes nothing while teardown thinks it's done —
+# the runner survives invisible, still long-polling the inbox. So teardown also kills the seat's
+# processes directly: the per-seat launcher shell, and the runner via the same ANCHORED pattern
+# doctrine as reap_seat (…/<project>$ — a sibling project can never match). CREW_NO_PROC_KILL=1 is the
+# test-suite escape hatch: the suite seeds real project names, and a live crew must survive `npm test`.
+_kill_seat_procs() {   # $1=project $2=agent
+  [ "${CREW_NO_PROC_KILL:-0}" = "1" ] && return 0
+  [ -n "$1" ] && [ -n "$2" ] || return 0
+  local pid
+  for pid in $(pgrep -f "seats/$1-$2\.sh" 2>/dev/null); do run "kill -9 $pid 2>/dev/null"; done
+  for pid in $(pgrep -f "crew-runner\.mjs $2 .*/$1"'$' 2>/dev/null); do run "kill -9 $pid 2>/dev/null"; done
+}
+
 # ── down: PROJECT-SCOPED teardown (never touches another project's crew) ─────────────────────────────
 usage_down() {
   cat <<EOF
@@ -187,6 +217,7 @@ down() {
         fi ;;
       win|attach) { [ "${#AGENTS[@]}" -gt 0 ] && [ "$K2" = "attach" ]; } && continue; _kill_win "$H2" ;;
     esac
+    case "$K2" in cmuxws|attach) : ;; *) _kill_seat_procs "$P2" "$A2" ;; esac
   done
 
   # rewrite STATE minus the rows we tore down (leaves OTHER projects' rows intact)
@@ -205,13 +236,26 @@ down() {
   echo "— crew torn down ($SCOPE_DESC)"
 }
 [ "$CMD" = "down" ] && { down "$@"; exit $?; }
-case "$CMD" in up|swap) ;; *) echo "usage: crew.sh up <agent...> | crew.sh swap <old> <new[:provider[/model]]> | crew.sh down [<agent>...] [--all --yes]"; exit 1 ;; esac
+case "$CMD" in up|swap|prune) ;; *) echo "usage: crew.sh up <agent...> | crew.sh swap <old> <new[:provider[/model]]> | crew.sh down [<agent>...] [--all --yes] | crew.sh prune"; exit 1 ;; esac
 
 # self-heal: drop STATE rows whose Terminal window is already gone (dead crews from past sessions), so the
-# file doesn't accumulate ghosts across ups. tmux rows are validated by their session existing.
+# file doesn't accumulate ghosts across ups. tmux rows are validated by their session existing; cmux rows
+# by the workspace/surface uuid still existing on the control socket. Socket off (or an empty/unparsable
+# workspace list) ⇒ cmux rows are KEPT — we can't prove death, and they self-heal next time it answers.
 prune_dead_state() {
   [ -f "$STATE" ] || return 0
   [ "$DRY" = "1" ] && return 0
+  local CLIVE=""
+  if _cmux_ok; then
+    local wids wid
+    wids="$(_cmux workspace list --id-format both --json 2>/dev/null | node -e 'let d="";process.stdin.on("data",c=>d+=c).on("end",()=>{try{const o=JSON.parse(d.slice(d.search(/[\[{]/)));const a=Array.isArray(o)?o:(o.workspaces||[]);console.log(a.map(x=>x.id).filter(Boolean).join(" "))}catch(e){}})')"
+    if [ -n "$wids" ]; then
+      CLIVE="$wids"
+      for wid in $wids; do
+        CLIVE="$CLIVE $(_cmux list-pane-surfaces --workspace "$wid" --id-format uuids --json 2>/dev/null | node -e 'let d="";process.stdin.on("data",c=>d+=c).on("end",()=>{try{const o=JSON.parse(d.slice(d.search(/[\[{]/)));const a=o.surfaces||o.panes||o;console.log((Array.isArray(a)?a:[]).map(s=>s.id||s.surface_id).filter(Boolean).join(" "))}catch(e){}})')"
+      done
+    fi
+  fi
   local tmp="$STATE.tmp" line alive
   : > "$tmp"
   while IFS= read -r line; do
@@ -222,11 +266,15 @@ prune_dead_state() {
       [ -n "$(osascript -e "tell application \"Terminal\" to get id of (first window whose id is $RH)" 2>/dev/null)" ] || alive=0
     elif [ "$RK" = "tmux" ]; then
       tmux has-session -t "trantor:$RP" 2>/dev/null || alive=0
+    elif [ "$RK" = "cmuxws" ] || [ "$RK" = "cmux" ]; then
+      if [ -n "$CLIVE" ]; then case " $CLIVE " in *" $RH "*) : ;; *) alive=0 ;; esac; fi
     fi
     [ "$alive" = "1" ] && printf '%s\t%s\t%s\t%s\n' "$RP" "$RK" "$RA" "$RH" >> "$tmp"
   done < "$STATE"
   mv "$tmp" "$STATE"; [ -s "$STATE" ] || rm -f "$STATE"
 }
+# `crew.sh prune` — run the self-heal on demand (ops: clean ghost rows without spawning anything).
+[ "$CMD" = "prune" ] && { prune_dead_state; echo "— pruned dead crew rows ($STATE) —"; exit 0; }
 
 # --task/--difficulty drive LAZY live-model selection for provider-only specs (agent:provider).
 TASK="code"; DIFF="medium"; _ARGS=()
@@ -395,17 +443,86 @@ spawn_cmux() {   # $@ = specs
     echo "  ~/.config/cmux/cmux.json (cmux auto-reloads). —"
     spawn_cmux_applescript "$@"; return
   fi
+  # ── replace, never stack (workspace edition, 2026-08-07) ──────────────────────────────────────────
+  # Every `up` used to create a brand-new workspace — no awareness of a crew already on screen — so
+  # repeated ups (and the bus-verify RETRY path, which re-enters spawn_crew) stacked dead
+  # trantor:<proj> tabs in the sidebar. Observed six deep on crebral-health. Now the NEWEST tracked
+  # workspace for this project is REUSED: each spec becomes a fresh pane inside it, replacing any old
+  # pane for the same agent; older stacked workspaces are closed. Rows are read even in DRY mode
+  # (read-only) so tests can seed a board.
+  local REUSE_WS="" line w
+  local stale_ws=()
+  if [ -f "$STATE" ]; then
+    while IFS= read -r line; do
+      [ -n "$line" ] || continue
+      _parse_row "$line"
+      { [ "$RP" = "$PROJ" ] && [ "$RK" = "cmuxws" ]; } || continue
+      [ -n "$REUSE_WS" ] && stale_ws+=("$REUSE_WS")
+      REUSE_WS="$RH"
+    done < "$STATE"
+  fi
+  if [ "${#stale_ws[@]}" -gt 0 ]; then
+    for w in "${stale_ws[@]}"; do
+      echo "  → closing stale stacked crew workspace for $PROJ ($w)"
+      _cmux_close_tab "$w"; _state_drop "$PROJ" "cmuxws" "" "$w"
+    done
+    prune_dead_state    # the closed workspaces' seat rows just died with them
+  fi
+  # Untracked strays: LIVE workspaces named trantor:<proj> that STATE doesn't know (rows lost, or a
+  # pre-fix pileup). Adopt one as the reuse target if we have none; close the rest.
+  if [ "$DRY" != "1" ]; then
+    local named nid
+    named="$(_cmux workspace list --id-format both --json 2>/dev/null | WSNAME="trantor:$PROJ" node -e 'let d="";process.stdin.on("data",c=>d+=c).on("end",()=>{try{const o=JSON.parse(d.slice(d.search(/[\[{]/)));const a=Array.isArray(o)?o:(o.workspaces||[]);console.log(a.filter(x=>x.custom_title===process.env.WSNAME||x.name===process.env.WSNAME).map(x=>x.id).filter(Boolean).join(" "))}catch(e){}})')"
+    for nid in $named; do
+      [ "$nid" = "$REUSE_WS" ] && continue
+      [ -f "$STATE" ] && grep -qF "$nid" "$STATE" && continue     # tracked → handled above
+      if [ -z "$REUSE_WS" ]; then
+        echo "  → adopting existing untracked crew workspace for $PROJ ($nid)"
+        REUSE_WS="$nid"; record_state "$PROJ" "cmuxws" "__ws__" "$nid"
+      else
+        echo "  → closing stray crew workspace for $PROJ ($nid)"
+        _cmux_close_tab "$nid"
+      fi
+    done
+  fi
   # Grid tiling: COLS = ceil(sqrt(N)) → 2 seats side-by-side, 4 = 2×2, 6 = 3×2. Row 0 is built with
   # RIGHT splits off the previous column; each later row splits DOWN from the pane directly above it.
   # Every split TARGETS a recorded surface id (--surface) — never "whatever pane happens to be focused",
-  # which is what produced the old staircase layout.
+  # which is what produced the old staircase layout. (In REUSE mode a replaced seat splits off its OWN
+  # old pane — keeping its spot — and added seats split right off the previous new pane; the fresh-grid
+  # math only applies to a fresh workspace.)
   local N=$# COLS=1; while [ $(( COLS * COLS )) -lt "$N" ]; do COLS=$(( COLS + 1 )); done
   local SPEC wsid="" surf="" i=0
   local surfs=()
+  [ -n "$REUSE_WS" ] && wsid="$REUSE_WS"
   for SPEC in "$@"; do
     resolve_spec "$SPEC"
     local cmd launcher; cmd="$(RUN_CMD)"; launcher="$(_seat_launcher "$AGENT" "$cmd")"
-    if [ "$i" = "0" ]; then
+    if [ -n "$REUSE_WS" ]; then
+      # replace-in-place: split the fresh pane FIRST (targeting the agent's old pane when tracked),
+      # then close the old pane — split-first so the workspace can never hit zero surfaces mid-swap.
+      local OLD_SURF=""
+      if [ -f "$STATE" ]; then
+        while IFS= read -r line; do
+          [ -n "$line" ] || continue
+          _parse_row "$line"
+          [ "$RP" = "$PROJ" ] && [ "$RK" = "cmux" ] && [ "$RA" = "$AGENT" ] && OLD_SURF="$RH"
+        done < "$STATE"
+      fi
+      if [ "$DRY" = "1" ]; then
+        echo "[dry] cmux: reuse workspace $wsid — new-split for $AGENT${OLD_SURF:+ (replacing $OLD_SURF)}"
+        surf="%DRYT$i"
+        [ -n "$OLD_SURF" ] && _cmux_close_term "$OLD_SURF"
+      else
+        local tflag=()
+        if [ -n "$OLD_SURF" ]; then tflag=(--surface "$OLD_SURF")
+        elif [ "$i" -gt 0 ] && [ -n "${surfs[$(( i - 1 ))]}" ]; then tflag=(--surface "${surfs[$(( i - 1 ))]}"); fi
+        surf="$(_cmux new-split right --workspace "$wsid" ${tflag[@]+"${tflag[@]}"} --id-format uuids --json 2>/dev/null | _cmux_surf_json)"
+        [ -n "$surf" ] || surf="$(_cmux new-split right --workspace "$wsid" --id-format uuids --json 2>/dev/null | _cmux_surf_json)"
+        [ -n "$surf" ] && { _cmux send --surface "$surf" "bash $launcher" >/dev/null 2>&1; _cmux send-key --surface "$surf" enter >/dev/null 2>&1; }
+        if [ -n "$OLD_SURF" ]; then _cmux_close_term "$OLD_SURF"; _state_drop "$PROJ" "cmux" "$AGENT" ""; fi
+      fi
+    elif [ "$i" = "0" ]; then
       if [ "$DRY" = "1" ]; then
         echo "[dry] cmux: new-workspace (cwd $DIR) --command 'bash $launcher' → rename 'trantor:$PROJ'"
         wsid="%DRYWS"; surf="%DRYT0"
@@ -444,10 +561,54 @@ spawn_cmux_applescript() {   # $@ = specs
   local N=$# COLS=1; while [ $(( COLS * COLS )) -lt "$N" ]; do COLS=$(( COLS + 1 )); done
   local SPEC tabid="" termid="" i=0
   local terms=()
+  # replace, never stack — AppleScript edition. No socket ⇒ no liveness list, so the newest tracked
+  # tab is validated by asking cmux for it directly; a dead tracked tab is dropped, older stacked
+  # tabs are closed. Reuse then rides the normal split path (i>0) from the first seat.
+  local line t REUSE_TAB=""
+  local stale_tabs=()
+  if [ -f "$STATE" ]; then
+    while IFS= read -r line; do
+      [ -n "$line" ] || continue
+      _parse_row "$line"
+      { [ "$RP" = "$PROJ" ] && [ "$RK" = "cmuxws" ]; } || continue
+      [ -n "$REUSE_TAB" ] && stale_tabs+=("$REUSE_TAB")
+      REUSE_TAB="$RH"
+    done < "$STATE"
+  fi
+  if [ "${#stale_tabs[@]}" -gt 0 ]; then
+    for t in "${stale_tabs[@]}"; do
+      echo "  → closing stale stacked crew workspace for $PROJ ($t)"
+      _cmux_close_tab "$t"; _state_drop "$PROJ" "cmuxws" "" "$t"
+    done
+  fi
+  if [ -n "$REUSE_TAB" ] && [ "$DRY" != "1" ]; then
+    local ok; ok="$(osascript 2>/dev/null <<OSA
+tell application "cmux"
+  repeat with w in windows
+    repeat with tt in tabs of w
+      if (id of tt) is "$REUSE_TAB" then return "OK"
+    end repeat
+  end repeat
+  return "ERR"
+end tell
+OSA
+)"
+    [ "$ok" = "OK" ] || { _state_drop "$PROJ" "cmuxws" "" "$REUSE_TAB"; _state_drop "$PROJ" "cmux" "" ""; REUSE_TAB=""; }
+  fi
+  [ -n "$REUSE_TAB" ] && { tabid="$REUSE_TAB"; echo "  → reusing existing crew workspace for $PROJ ($tabid)"; }
   for SPEC in "$@"; do
     resolve_spec "$SPEC"
     local cmd launcher; cmd="$(RUN_CMD)"; launcher="$(_seat_launcher "$AGENT" "$cmd")"
-    if [ "$i" = "0" ]; then
+    # In REUSE mode, replace-in-place: split off the agent's old terminal when tracked, close it after.
+    local OLD_SURF=""
+    if [ -n "$REUSE_TAB" ] && [ -f "$STATE" ]; then
+      while IFS= read -r line; do
+        [ -n "$line" ] || continue
+        _parse_row "$line"
+        [ "$RP" = "$PROJ" ] && [ "$RK" = "cmux" ] && [ "$RA" = "$AGENT" ] && OLD_SURF="$RH"
+      done < "$STATE"
+    fi
+    if [ -z "$tabid" ] && [ "$i" = "0" ]; then
       if [ "$DRY" = "1" ]; then
         echo "[dry] cmux(AppleScript): new tab (trantor:$PROJ) + run 'bash $launcher'"; tabid="%DRYTAB"; termid="%DRYT0"
       else
@@ -470,11 +631,15 @@ OSA
       fi
       record_state "$PROJ" "cmuxws" "__ws__" "$tabid"
     else
-      local dir target
-      if [ $(( i / COLS )) = "0" ]; then dir="right"; target="${terms[$(( i - 1 ))]}"
-      else dir="down"; target="${terms[$(( i - COLS ))]}"; fi
+      local dir target=""
+      if [ -n "$OLD_SURF" ]; then dir="right"; target="$OLD_SURF"          # replace-in-place: keep the seat's spot
+      elif [ "$i" -gt 0 ]; then
+        if [ $(( i / COLS )) = "0" ]; then dir="right"; target="${terms[$(( i - 1 ))]}"
+        else dir="down"; target="${terms[$(( i - COLS ))]}"; fi
+      else dir="right"; fi                                                 # reuse mode, first seat, nothing tracked → focused terminal
       if [ "$DRY" = "1" ]; then
         echo "[dry] cmux(AppleScript): split $dir from ${target:-<focused>} + run 'bash $launcher'"; termid="%DRYT$i"
+        [ -n "$OLD_SURF" ] && _cmux_close_term "$OLD_SURF"
       else
         termid="$(osascript 2>/dev/null <<OSA
 tell application "cmux"
@@ -497,6 +662,7 @@ tell application "cmux"
 end tell
 OSA
 )"
+        [ -n "$OLD_SURF" ] && [ -n "$termid" ] && [ "$termid" != "ERR" ] && { _cmux_close_term "$OLD_SURF"; _state_drop "$PROJ" "cmux" "$AGENT" ""; }
       fi
     fi
     terms+=("$termid")

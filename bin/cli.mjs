@@ -25,6 +25,7 @@ switch (cmd) {
   case "up":      process.argv.splice(2, 1); spawn("/bin/bash", [join(ROOT, "bin/crew.sh"), "up", ...args], { stdio: "inherit", cwd: process.cwd() }).on("exit", c => process.exit(c ?? 0)); break;
   case "down":    spawn("/bin/bash", [join(ROOT, "bin/crew.sh"), "down", ...args], { stdio: "inherit", cwd: process.cwd() }).on("exit", c => process.exit(c ?? 0)); break;
   case "swap":    spawn("/bin/bash", [join(ROOT, "bin/crew.sh"), "swap", ...args], { stdio: "inherit", cwd: process.cwd() }).on("exit", c => process.exit(c ?? 0)); break;
+  case "prune":   spawn("/bin/bash", [join(ROOT, "bin/crew.sh"), "prune", ...args], { stdio: "inherit", cwd: process.cwd() }).on("exit", c => process.exit(c ?? 0)); break;
   case "hub": {
     const sub = args[0];
     // Per-project hub routing (TDD §12.1): a project lives on exactly ONE hub; codependent
