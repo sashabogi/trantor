@@ -72,6 +72,7 @@ switch (cmd) {
   case "policy": run("bin/policy.mjs"); break;
   case "inbox": run("bin/inbox.mjs"); break;
   case "duty": run("bin/duty.mjs"); break;
+  case "app": run("bin/app.mjs"); break;
   case "identity": {
     const { load, publicView, generate, keyPath } = await import(join(ROOT, "lib/identity.mjs"));
     const sub = args[0], name = args[1] || "human";
@@ -153,7 +154,9 @@ switch (cmd) {
   trantor models      browse live models behind each seat + the router's pick per difficulty
   trantor up …        spawn a crew here:   trantor up codex kimi deepseek:deepseek glm:zai-coding-plan
   trantor down        tear the crew down (kills processes, closes windows, no dialogs)
+  trantor prune       drop dead crew-window tracking rows (ghost workspaces/panes) without spawning anything
   trantor ui          open the live dashboard (board + flow views)
+  trantor app         the DESKTOP app: status | install | update — pulls the latest DMG from GitHub Releases
   trantor catchup     "where are we?" — the continuous board + git, with a synthesized brief
   trantor agents      what this session's sub-agents did (task · returned? · files written · survived on disk) — [<sessionId>] [--json]
   trantor gates       verification gates: "must verify before shipping" claims that survive handoffs — [--all] [--json]
