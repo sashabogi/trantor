@@ -45,6 +45,18 @@ export type Peer = {
   llm?: string; model?: string;
 };
 
+export type OverseerWarning = {
+  project: string; kind: string; sessions: string[]; files: string[]; detail: string;
+};
+export type OverseerStatus = {
+  engine: boolean; lastTickTs: number; tickMs: number; dedupMs: number; dutySession: string;
+  watching: { sessions: number; projects: number; claims: number; links: number };
+  autonomy: Record<string, number>;
+  links: { projects: string[]; reason: string }[];
+  warnings: OverseerWarning[];
+  warnedRecent: number;
+};
+
 export class HubClient {
   constructor(readonly baseUrl: string) {}
 
@@ -109,6 +121,10 @@ export class HubClient {
   /** The autonomy ladder (PRD §6): levels per project + declared codependency links. */
   policy() {
     return this.request<{ autonomy: Record<string, number>; links: { projects: string[]; reason: string }[] }>("GET", "/policy");
+  }
+  /** The overseer's own heartbeat + live watch state — quiet must be distinguishable from dead. */
+  overseerStatus() {
+    return this.request<OverseerStatus>("GET", "/overseer/status");
   }
   setAutonomy(project: string, level: number) {
     return this.request("POST", "/policy", { autonomy: { [project]: level } });

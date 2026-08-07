@@ -18,6 +18,7 @@ import { Feed } from "../features/feed/Feed";
 import { Agents } from "../features/agents/Agents";
 import { Inbox } from "../features/inbox/Inbox";
 import { Learning } from "../features/learning/Learning";
+import { Overseer } from "../features/overseer/Overseer";
 import { Settings } from "../features/settings/Settings";
 import { Conversation } from "../features/chat/Conversation";
 import { notifyIfWorthIt } from "../shared/notify";
@@ -29,6 +30,7 @@ type Pane =
   | { kind: "inbox" }
   | { kind: "agents" }
   | { kind: "learning" }
+  | { kind: "overseer" }
   | { kind: "settings" };
 
 // Who this app signs as. Mirrors the Rust default; RELAY_OWNER_IDENTITY overrides it there.
@@ -171,6 +173,7 @@ export function AppShell() {
           <NavItem label="Inbox"    on={pane.kind === "inbox"}    onClick={() => setPane({ kind: "inbox" })} />
           <NavItem label="Agents"   on={pane.kind === "agents"}   onClick={() => setPane({ kind: "agents" })} />
           <NavItem label="Learning" on={pane.kind === "learning"} onClick={() => setPane({ kind: "learning" })} />
+          <NavItem label="Overseer" on={pane.kind === "overseer"} onClick={() => setPane({ kind: "overseer" })} />
         </div>
 
         <nav className="flex-1 overflow-y-auto">
@@ -230,6 +233,7 @@ export function AppShell() {
           : pane.kind === "inbox" ? <Inbox client={client} me={ME} />
           : pane.kind === "agents" ? <Agents client={client} project={active} />
           : pane.kind === "learning" ? <Learning client={client} />
+          : pane.kind === "overseer" ? <Overseer client={client} />
           : pane.kind === "settings" ? <Settings me={ME} />
           : pane.lens === "board" ? <Board client={client} project={active} lens={pane.lens} onLens={l => setPane({ kind: "project", lens: l as Lens })} />
           : pane.lens === "chat" ? <Conversation client={client} project={active} me={ME} lens={pane.lens} onLens={l => setPane({ kind: "project", lens: l as Lens })} />

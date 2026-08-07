@@ -147,6 +147,22 @@ async function main(stdinRaw) {
     }
   } catch {}
 
+  // Overseer narration, same ambient pattern (10-min machine-wide stamp): the narrate worker was
+  // built "to run ambiently from the heartbeat" but was never actually wired in — warns sat
+  // mechanical forever unless someone ran it by hand. The worker exits in one cheap signed GET per
+  // hub when nothing is unnarrated; Scrooge is only invoked when there IS a warn to explain.
+  try {
+    const narStamp = join(homedir(), ".agent-bus", "narrate.stamp");
+    const last = existsSync(narStamp) ? Number(readFileSync(narStamp, "utf8")) || 0 : 0;
+    if (Date.now() - last > 10 * 60 * 1000) {
+      writeFileSync(narStamp, String(Date.now()));
+      const worker = spawn(process.execPath, [join(HERE, "..", "bin", "overseer-narrate.mjs"), "--quiet"], {
+        detached: true, stdio: "ignore",
+      });
+      worker.unref();
+    }
+  } catch {}
+
   // Same cadence as the presence ping: check context pressure and hand off early
   // if we've crossed the warn threshold of a known window.
   await maybeEarlyWarn(stdinRaw, session);

@@ -214,6 +214,10 @@ import("./lib/overseer.mjs").then(m => { _overseer = m; }).catch(() => {});
 const OVERSEER_TICK_MS = Number(process.env.RELAY_OVERSEER_TICK_MS || 30 * 1000);
 const OVERSEER_DEDUP_MS = Number(process.env.RELAY_OVERSEER_DEDUP_MS || 10 * 60 * 1000);
 const overseerWarned = new Map();   // dedup key -> ts
+// Heartbeat for the WATCHER itself: /overseer/status must distinguish "fleet is clear" from "the
+// overseer stopped ticking" — a monitor that cannot prove it is alive reads as clear when dead.
+let overseerLastTick = 0;
+let overseerLastCollisions = [];
 function overseerPolicy() {
   const p = state.orgPolicy && typeof state.orgPolicy === "object" ? state.orgPolicy : {};
   return {
@@ -236,6 +240,7 @@ function overseerTick() {
   if (!_overseer?.detectCollisions) return;
   let collisions = [];
   try { collisions = _overseer.detectCollisions(overseerInputs()) || []; } catch { return; }
+  overseerLastTick = now(); overseerLastCollisions = collisions;
   const cut = now() - OVERSEER_DEDUP_MS;
   for (const [k, ts] of overseerWarned) if (ts < cut) overseerWarned.delete(k);
   const pol = overseerPolicy();
@@ -495,7 +500,7 @@ function cmpSemver(a, b) {
 const AUTH_HEADERS = ["x-trantor-pubkey", "x-trantor-sig", "x-trantor-ts", "x-trantor-nonce"];
 const PUBLIC_ENDPOINTS = new Set(["/", "/ui", "/health", "/enroll"]);
 const OWNER_ENDPOINTS = new Set(["/project/delete", "/sweep", "/reconcile", "/invite", "/import", "/policy"]);
-const READ_ENDPOINTS = new Set(["/peers", "/tasks", "/events", "/inbox", "/peer", "/card", "/stream", "/history", "/projects", "/catchup", "/phases", "/recent", "/handoffs", "/verify-gates", "/claims", "/overseer/context"]);
+const READ_ENDPOINTS = new Set(["/peers", "/tasks", "/events", "/inbox", "/peer", "/card", "/stream", "/history", "/projects", "/catchup", "/phases", "/recent", "/handoffs", "/verify-gates", "/claims", "/overseer/context", "/overseer/status"]);
 const roleRank = { read: 1, write: 2, owner: 3 };
 const hasAuthHeaders = (req) => AUTH_HEADERS.some(h => !!req.headers[h]);
 const authPath = (u) => `${u.pathname}${u.search || ""}`;
@@ -1013,6 +1018,32 @@ const server = http.createServer(async (req, res) => {
     }
     // What a session arriving on <project> needs to know: its autonomy level, who else is live,
     // which files are in flight, which projects are declared codependent, current collisions.
+    if (req.method === "GET" && P === "/overseer/status") {
+      // The Overseer view's backbone: is the watcher ALIVE, and what is it watching right now.
+      // `warnings` is the LIVE detection result from the last tick (pre-dedup), not the event log —
+      // the log answers "what did it do", this answers "what does it see".
+      const pol = overseerPolicy();
+      const cutoff = now() - ONLINE_MS;
+      const livePeers = Object.entries(state.peers).filter(([, v]) => v.lastSeen > cutoff);
+      pruneClaims();
+      return json(res, 200, {
+        engine: !!_overseer?.detectCollisions,
+        lastTickTs: overseerLastTick,
+        tickMs: OVERSEER_TICK_MS,
+        dedupMs: OVERSEER_DEDUP_MS,
+        dutySession: DUTY_SESSION || "",
+        watching: {
+          sessions: livePeers.length,
+          projects: new Set(livePeers.map(([, v]) => v.project).filter(Boolean)).size,
+          claims: fileClaims.size,
+          links: pol.links.length,
+        },
+        autonomy: pol.autonomy,
+        links: pol.links,
+        warnings: overseerLastCollisions,
+        warnedRecent: overseerWarned.size,
+      });
+    }
     if (req.method === "GET" && P === "/overseer/context") {
       const proj = canon(String(q.project || "").slice(0, 80));
       if (!proj) return json(res, 400, { error: "project required" });
