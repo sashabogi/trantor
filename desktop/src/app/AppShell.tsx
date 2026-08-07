@@ -8,7 +8,8 @@
 // Fleet telemetry (economics, providers, tallies) lives on the HOME view as designed cards —
 // never in chrome. The old header dump was the altitude mistake made visible.
 import { useEffect, useMemo, useRef, useState } from "react";
-import { HubClient, hubForProject, knownProjects } from "../shared/api/client";
+import { HubClient, hubForProject, knownProjects, type Peer } from "../shared/api/client";
+import { stateOf } from "../shared/presence";
 
 const LOCAL_HUB = "http://127.0.0.1:4477";
 import { Home } from "../features/home/Home";
@@ -85,6 +86,38 @@ export function AppShell() {
   const client = useMemo(() => (hub ? new HubClient(hub) : null), [hub]);
   const sections = useMemo(() => group(projects), [projects]);
 
+  // Sidebar activity: which projects have someone ALIVE in them right now. "The sidebar has no
+  // indication of an active project or project in flight" — this is that indication, at the nav's
+  // own altitude: a breathing dot when a session there is mid-turn, a still one when it's merely
+  // online. Peers are aggregated from BOTH the active hub and the machine-local hub (a crew on an
+  // unpinned/local project — the crm-platform incident — must still light its row), freshest
+  // lastSeen wins per session.
+  const [activity, setActivity] = useState<Map<string, "busy" | "live">>(new Map());
+  useEffect(() => {
+    let alive = true;
+    const pull = async () => {
+      const urls = [...new Set([hub, LOCAL_HUB].filter(Boolean))];
+      const lists = await Promise.all(urls.map(u => new HubClient(u).peers().catch(() => [] as Peer[])));
+      if (!alive) return;
+      const best = new Map<string, Peer>();
+      for (const ps of lists) for (const p of ps) {
+        const cur = best.get(p.session);
+        if (!cur || (p.lastSeen ?? 0) > (cur.lastSeen ?? 0)) best.set(p.session, p);
+      }
+      const m = new Map<string, "busy" | "live">();
+      for (const p of best.values()) {
+        if (!p.project) continue;
+        const st = stateOf(p);
+        if (st === "busy") m.set(p.project, "busy");
+        else if (st === "idle" && !m.has(p.project)) m.set(p.project, "live");
+      }
+      setActivity(m);
+    };
+    void pull();
+    const t = setInterval(pull, 15_000);
+    return () => { alive = false; clearInterval(t); };
+  }, [hub]);
+
   // Shell-level on purpose: a notification must fire whichever pane is open, and exactly once — a
   // per-view subscription would double-notify whenever two views happened to be mounted.
   // The presence cache feeds the offline-receiver rule (safe T3): when an agent messages a session
@@ -145,16 +178,25 @@ export function AppShell() {
             <div key={section} className="mb-4">
               <div className="px-3 pb-1.5 text-[11px] font-medium uppercase tracking-[0.08em] text-[var(--color-tr-muted)]/70">{section}</div>
               <div className="flex flex-col gap-0.5">
-                {list.map(p => (
-                  <button key={p}
-                    onClick={() => { setActive(p); setPane(cur => ({ kind: "project", lens: cur.kind === "project" ? cur.lens : "board" })); }}
-                    className={`block w-full truncate rounded-lg px-3 py-1.5 text-left text-[13px] ${
-                      p === active && pane.kind === "project"
-                        ? "bg-white/[0.07] font-medium text-[var(--color-tr-text)]"
-                        : "text-[var(--color-tr-muted)] hover:bg-white/[0.04] hover:text-[var(--color-tr-text)]"}`}>
-                    {p}
-                  </button>
-                ))}
+                {list.map(p => {
+                  const act = activity.get(p);
+                  return (
+                    <button key={p}
+                      onClick={() => { setActive(p); setPane(cur => ({ kind: "project", lens: cur.kind === "project" ? cur.lens : "board" })); }}
+                      title={act === "busy" ? "a session here is mid-turn right now" : act === "live" ? "sessions online, idle" : undefined}
+                      className={`flex w-full items-center gap-2 rounded-lg px-3 py-1.5 text-left text-[13px] ${
+                        p === active && pane.kind === "project"
+                          ? "bg-white/[0.07] font-medium text-[var(--color-tr-text)]"
+                          : act ? "text-[var(--color-tr-text)]/85 hover:bg-white/[0.04]"
+                                : "text-[var(--color-tr-muted)] hover:bg-white/[0.04] hover:text-[var(--color-tr-text)]"}`}>
+                      <span className="min-w-0 flex-1 truncate">{p}</span>
+                      {act && (
+                        <span className={`tr-dot shrink-0 ${act === "busy" ? "tr-dot-pulse" : ""}`}
+                              style={{ background: act === "busy" ? "var(--color-tr-doing)" : "var(--color-tr-muted)", width: 6, height: 6 }} />
+                      )}
+                    </button>
+                  );
+                })}
               </div>
             </div>
           ))}
