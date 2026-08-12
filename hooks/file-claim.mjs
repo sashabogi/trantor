@@ -74,10 +74,14 @@ try {
   if (!conflicts.length) allow();
 
   const who = conflicts.map(c => `${c.session} (${ago(c.agoSec)} ago)`).join(", ");
+  // NO permissionDecision on purpose. This hook exists to WARN, and `additionalContext` reaches the
+  // model on its own — a decision is not required to deliver it. Setting "allow" here (as this did
+  // until 2026-08-12) approves the tool call and bypasses the operator's own permission rules, so a
+  // deny or an approval prompt on Edit/Write was silently overridden for exactly the files two
+  // sessions were fighting over. Omitting it leaves the normal permission flow untouched.
   process.stdout.write(JSON.stringify({
     hookSpecificOutput: {
       hookEventName: "PreToolUse",
-      permissionDecision: "allow",
       additionalContext:
         `⚠️ trantor: ${who} also edited ${file} in project "${ctx.project}" within the last few minutes — ` +
         `you are both touching the same file RIGHT NOW. Before making conflicting changes, coordinate over ` +

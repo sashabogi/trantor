@@ -111,7 +111,16 @@ try {
   const ctx = out2?.hookSpecificOutput?.additionalContext ?? "";
   ok(r2.status === 0 && ctx.includes("host:claimhook") && ctx.includes("src/index.ts"),
      "hook: second session gets the collision handed to its model");
-  ok(out2?.hookSpecificOutput?.permissionDecision === "allow", "hook: informational, never blocking");
+  // This asserted `=== "allow"` until 2026-08-12. "Informational, never blocking" was the right
+  // intent, but "allow" is not neutral: it APPROVES the call and bypasses the operator's permission
+  // rules, so a deny or an approval prompt on Edit/Write was silently overridden for exactly the
+  // files two sessions were fighting over. additionalContext reaches the model with no decision at
+  // all, so the hook now sets none and the normal permission flow governs the edit.
+  const hso = out2?.hookSpecificOutput ?? {};
+  ok(hso.permissionDecision === undefined,
+     `hook: sets NO permissionDecision, so the operator's own rules still govern (got ${JSON.stringify(hso.permissionDecision)})`);
+  ok(hso.hookEventName === "PreToolUse" && !!hso.additionalContext,
+     "hook: the collision warning still reaches the model without any decision");
 
   const r3 = runHook("codex:claimhook", "src/index.ts");
   ok(r3.status === 0 && r3.stdout.trim() === "{}", "hook: re-claim throttled by the stamp window");
