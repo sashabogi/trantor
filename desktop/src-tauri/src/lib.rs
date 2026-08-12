@@ -54,6 +54,42 @@ async fn start_stream(app: tauri::AppHandle, base: String) {
     });
 }
 
+/// The PATH a terminal would have. A Finder-launched app inherits only /usr/bin:/bin:/usr/sbin:/sbin,
+/// so every brew/npm/cargo-installed CLI is invisible to anything we spawn. Fixing `node` alone was
+/// not enough: the doctor probes each seat with `command -v`, so it reported a machine with no crew
+/// CLIs at all while the same command in a terminal found six.
+///
+/// Ask the user's login shell first (it knows about the install dirs we can't guess, e.g. kimi's
+/// ~/.kimi-code/bin), then union the usual roots, then whatever we inherited. Order is preserved and
+/// duplicates dropped, so the shell's own precedence wins.
+fn terminal_path() -> String {
+    let home = std::env::var("HOME").unwrap_or_default();
+    let mut parts: Vec<String> = Vec::new();
+    let mut push = |raw: &str| {
+        for p in raw.split(':') {
+            let p = p.trim();
+            if !p.is_empty() && !parts.iter().any(|q| q == p) { parts.push(p.to_string()); }
+        }
+    };
+
+    let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".to_string());
+    // -lic so rc files that set PATH are read. Take the LAST line: a noisy profile may print a
+    // banner first, and a banner silently swallowing the PATH is exactly this bug again.
+    if let Ok(out) = std::process::Command::new(&shell).arg("-lic").arg("printf '%s' \"$PATH\"").output() {
+        if out.status.success() {
+            let text = String::from_utf8_lossy(&out.stdout);
+            if let Some(line) = text.lines().filter(|l| l.contains('/')).next_back() { push(line); }
+        }
+    }
+    for p in ["/opt/homebrew/bin", "/opt/homebrew/sbin", "/usr/local/bin",
+              &format!("{home}/.local/bin"), &format!("{home}/.bun/bin"),
+              &format!("{home}/.cargo/bin"), &format!("{home}/.volta/bin")] {
+        push(p);
+    }
+    push(&std::env::var("PATH").unwrap_or_else(|_| "/usr/bin:/bin:/usr/sbin:/sbin".to_string()));
+    parts.join(":")
+}
+
 /// Run the EXISTING doctor engine and hand back its JSON. Deliberately shelling out rather than
 /// re-implementing detection in Rust: two detectors would drift, and then the CLI and the app would
 /// disagree about whether a seat is wired with no way to tell which is right.
@@ -70,6 +106,7 @@ async fn doctor() -> Result<String, String> {
         .map(|p| p.to_string()).unwrap_or_else(|| "node".to_string());
     let out = tokio::process::Command::new(node)
         .arg(format!("{root}/bin/doctor.mjs")).arg("--json")
+        .env("PATH", terminal_path())
         .output().await.map_err(|e| format!("doctor: {e}"))?;
     let text = String::from_utf8_lossy(&out.stdout).trim().to_string();
     if text.is_empty() { return Err(String::from_utf8_lossy(&out.stderr).to_string()); }

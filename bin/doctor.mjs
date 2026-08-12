@@ -12,6 +12,13 @@ import { fileURLToPath } from "node:url";
 const H = homedir();
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const has = (c) => { try { execSync(`command -v ${c}`, { stdio: "ignore", shell: "/bin/sh" }); return true; } catch { return false; } };
+// Claude Code keeps its credentials in the macOS Keychain. Attribute-only lookup (no -w, no -g), so
+// it never reads the secret and never raises an access prompt — a GUI prompt from a health check
+// would be worse than the unknown it answers.
+const keychainHas = (svc) => {
+  if (process.platform !== "darwin") return false;
+  try { execSync(`security find-generic-password -s ${JSON.stringify(svc)}`, { stdio: "ignore" }); return true; } catch { return false; }
+};
 const read = (p) => { try { return JSON.parse(readFileSync(p, "utf8")); } catch { return null; } };
 // --json makes the SAME engine feed the desktop app. Without it the app would have to re-implement
 // detection (or parse this text), and the two would drift — the CLI would say a seat is wired while
@@ -62,7 +69,15 @@ else {
 // crew CLIs: installed / wired / authenticated
 section("crew CLIs (install any subset — seats follow the work)");
 const CLIS = [
-  { name: "codex",  bin: "codex",    wired: () => (readFileSync(join(H, ".codex", "config.toml"), "utf8")).includes("[mcp_servers.relay]"), auth: () => existsSync(join(H, ".codex", "auth.json")), login: "codex   (sign in with your ChatGPT account on first run)" },
+  // Claude is a SEAT, not only the orchestrator — crew-runner.mjs has a `claude` entry and the fleet
+  // duty agent runs on it. It was checked only under "claude (the orchestrator)", which the Agents
+  // view filters out, so the one harness that is always present had no card. Wired = the plugin,
+  // since that is what carries the relay MCP server into the session.
+  { name: "claude", bin: "claude",
+    wired: () => Object.keys((read(join(H, ".claude", "settings.json")) || {}).enabledPlugins || {}).some(k => k.startsWith("agent-bus@") || k.startsWith("trantor@")),
+    auth: () => !!process.env.ANTHROPIC_API_KEY || existsSync(join(H, ".claude", ".credentials.json")) || keychainHas("Claude Code-credentials"),
+    login: "claude   (sign in with your Anthropic account on first run)" },
+  { name: "codex",  bin: "codex",  wired: () => (readFileSync(join(H, ".codex", "config.toml"), "utf8")).includes("[mcp_servers.relay]"), auth: () => existsSync(join(H, ".codex", "auth.json")), login: "codex   (sign in with your ChatGPT account on first run)" },
   // Gemini CLI was retired 2026-06-18 for free/Pro/Ultra (Google → Antigravity `agy`). Kept as an
   // optional seat for enterprise/paid-key holders; for everyone else the seat moved to GLM/opencode,
   // and Gemini lives on only as a Scrooge cheap-model via GEMINI_API_KEY (the API/models aren't retired).

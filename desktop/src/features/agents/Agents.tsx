@@ -90,7 +90,12 @@ export function Agents({ client, project }: { client: HubClient; project: string
           // "codex: wired to the bus" / "codex: authenticated" -> one card per brand, both facts.
           const byBrand = new Map<string, { wired?: boolean; auth?: boolean; missing?: boolean; fix?: string | null }>();
           for (const e of crew) {
-            const brand = e.message.split(":")[0].trim();
+            // Every per-seat line is "<brand>: <fact>". The section also carries aggregates with no
+            // colon ("no crew CLIs found"), and splitting one of those produced a phantom seat card
+            // named "no" — the first word of the warning, sitting where a real harness should be.
+            const sep = e.message.indexOf(":");
+            if (sep <= 0) continue;
+            const brand = e.message.slice(0, sep).trim();
             const cur = byBrand.get(brand) ?? {};
             if (e.state === "missing") cur.missing = true;
             else if (/authenticated/i.test(e.message)) cur.auth = e.state === "ok";
