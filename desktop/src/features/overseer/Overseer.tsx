@@ -9,6 +9,7 @@
 import { useEffect, useState } from "react";
 import type { HubClient, HubEvent, OverseerStatus } from "../../shared/api/client";
 import { usePeers, stateOf } from "../../shared/presence";
+import { rollUp, lasting } from "../../shared/rollup";
 
 const LEVEL_LABEL: Record<number, string> = { 1: "observe", 2: "warn", 3: "gate", 4: "auto" };
 
@@ -18,36 +19,6 @@ function agoS(ts: number) {
   if (s < 90) return `${s}s ago`;
   if (s < 3600) return `${Math.round(s / 60)}m ago`;
   return `${Math.round(s / 3600)}h ago`;
-}
-function lasting(ts?: number) {
-  if (!ts) return "";
-  const s = Math.round((Date.now() - ts) / 1000);
-  if (s < 90) return "just started";
-  if (s < 3600) return `standing ${Math.round(s / 60)}m`;
-  if (s < 86400) return `standing ${Math.round(s / 3600)}h`;
-  return `standing ${Math.round(s / 86400)}d`;
-}
-
-/** History repeats itself — literally. Before episode-based warning (0.17.66) a standing condition
- * re-fired every 10 minutes, so the log holds hundreds of identical rows. Collapse them into one
- * entry per distinct condition with a count and a span; a stuck record is not a history. */
-type Rolled = { rep: HubEvent; count: number; first: number; last: number };
-function rollUp(events: HubEvent[]): Rolled[] {
-  const by = new Map<string, Rolled>();
-  for (const e of events) {
-    const any = e as Record<string, unknown>;
-    const sig = `${e.type}|${e.project}|${String(any.kind ?? "")}|${String(any.detail ?? any.claim ?? "")}`;
-    const cur = by.get(sig);
-    if (!cur) by.set(sig, { rep: e, count: 1, first: e.ts, last: e.ts });
-    else {
-      cur.count++;
-      cur.first = Math.min(cur.first, e.ts);
-      cur.last = Math.max(cur.last, e.ts);
-      // keep the NARRATED representative when one exists — narration lands on individual events
-      if (!(cur.rep as Record<string, unknown>).narration && (any.narration || e.ts > cur.rep.ts)) cur.rep = e;
-    }
-  }
-  return [...by.values()].sort((a, b) => b.last - a.last);
 }
 
 export function Overseer({ client }: { client: HubClient }) {
