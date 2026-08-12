@@ -63,6 +63,31 @@ ok("home-dir session says why on stderr", rh.stderr.includes("home directory"));
 const rh2 = runHook(homedir(), "deliberate:home");
 ok("RELAY_SESSION opts a home-dir session back in", rh2.status === 0 && !rh2.stderr.includes("not registering"));
 
+// plugin-cache guard: verifying `node mcp.mjs` boots from a plugin snapshot is the documented
+// check after an update, but PROJECT falls back to the cwd basename — so each check used to
+// leave a lane named after the VERSION (a real "0.17.66" lane sat in the sidebar until 2026-08-12).
+{
+  // realpath: macOS tmpdir() is a symlink (/var -> /private/var) but process.cwd() reports the
+  // real path, so a raw join() would never prefix-match. CLAUDE_PROJECT_DIR must be stripped too —
+  // it OVERRIDES cwd, and this suite runs inside a Claude session that sets it.
+  const cacheRoot = realpathSync(mkdirSync(join(tmpdir(), `tt-pcache-${process.pid}`), { recursive: true })
+    || join(tmpdir(), `tt-pcache-${process.pid}`));
+  const cacheDir = join(cacheRoot, "plugins", "cache", "trantor", "trantor", "9.9.9");
+  mkdirSync(cacheDir, { recursive: true });
+  const envSansDir = Object.fromEntries(Object.entries(envSansOptIn).filter(([k]) => k !== "CLAUDE_PROJECT_DIR"));
+  const runMcp = (cwd, extra = {}) => spawnSync("node", [join(process.cwd(), "mcp.mjs")], {
+    cwd, input: "", encoding: "utf8", timeout: 20000,
+    env: { ...envSansDir, RELAY_URL: CLOSED, CLAUDE_CONFIG_DIR: cacheRoot, ...extra },
+  });
+  const rp = runMcp(cacheDir);
+  ok("a snapshot dir does NOT auto-register (no version-named phantom lane)", rp.stderr.includes("no auto-presence: plugin cache"));
+  ok("and it never even attempts the register call", !rp.stderr.includes("initial register failed"));
+  ok("the relay server still starts, so tools stay callable", rp.stderr.includes("connected as"));
+  const rp2 = runMcp(cacheDir, { RELAY_PROJECT: "deliberate" });
+  ok("RELAY_PROJECT opts a snapshot dir back in", !rp2.stderr.includes("no auto-presence"));
+  try { rmSync(cacheRoot, { recursive: true, force: true }); } catch {}
+}
+
 // --- regression: is-main guard must fire when the install path contains a SPACE ---
 // Bug (0.17.24): bin/profile.mjs & bin/advise.mjs compared import.meta.url to a hand-built
 // `file://${argv[1]}` (raw, unencoded). import.meta.url is percent-encoded, so a space in the path

@@ -278,12 +278,22 @@ server.tool("relay_wait", "Block up to `timeout` seconds waiting for the next me
 
 const HEARTBEAT_MS = Number(process.env.RELAY_HEARTBEAT_MS || 60 * 1000);
 
-// Mirror the SessionStart/PostToolUse hooks: a session opened in the home directory itself
-// isn't project work — auto-registering it would spawn a phantom "<username>" project board.
+// Mirror the SessionStart/PostToolUse hooks: some directories aren't project work, and
+// auto-registering from them spawns a phantom project lane that then sits in the sidebar forever.
+// PROJECT falls back to the cwd basename, so the directory name becomes the lane name:
+//   - the home directory itself      → a "<username>" lane
+//   - a plugin-cache snapshot        → a lane named after the VERSION, e.g. "0.17.66"
+// The second one is not hypothetical: `cd ~/.claude/plugins/cache/trantor/trantor/<ver> &&
+// node mcp.mjs` is the documented way to check the relay server still boots after a plugin
+// update, and every such check was leaving a version-numbered lane behind.
 // Opt in explicitly with RELAY_SESSION or RELAY_PROJECT. The MCP server still starts so the
 // user can call relay tools (e.g. relay_whoami) deliberately; we just skip auto-presence.
 const projectDir = process.env.CLAUDE_PROJECT_DIR || process.cwd();
-const isHomeDirSession = !process.env.RELAY_SESSION && !process.env.RELAY_PROJECT && projectDir === homedir();
+const claudeDir = process.env.CLAUDE_CONFIG_DIR || join(homedir(), ".claude");
+const nonProjectReason = projectDir === homedir() ? "home dir"
+  : projectDir.startsWith(join(claudeDir, "plugins", "cache")) ? "plugin cache"
+  : "";
+const isHomeDirSession = !process.env.RELAY_SESSION && !process.env.RELAY_PROJECT && !!nonProjectReason;
 
 if (!isHomeDirSession) {
   await api("POST", "/register", { session: SESSION, project: PROJECT, status: `active in ${PROJECT}` })
@@ -300,8 +310,8 @@ if (!isHomeDirSession) {
   // still exit cleanly when the agent closes the stdio transport (no phantom peers).
   setInterval(() => { api("POST", "/register", { session: SESSION, project: PROJECT }).catch(() => {}); }, HEARTBEAT_MS).unref?.();
 } else {
-  process.stderr.write("[trantor-mcp] home directory — not auto-registering on the bus (set RELAY_SESSION or RELAY_PROJECT to opt in)\n");
+  process.stderr.write(`[trantor-mcp] ${nonProjectReason} — not auto-registering on the bus (set RELAY_SESSION or RELAY_PROJECT to opt in)\n`);
 }
 
 await server.connect(new StdioServerTransport());
-process.stderr.write(`[trantor-mcp] connected as ${SESSION} -> ${URL_BASE}${isHomeDirSession ? " (no auto-presence: home dir)" : ` (heartbeat ${HEARTBEAT_MS}ms)`}\n`);
+process.stderr.write(`[trantor-mcp] connected as ${SESSION} -> ${URL_BASE}${isHomeDirSession ? ` (no auto-presence: ${nonProjectReason})` : ` (heartbeat ${HEARTBEAT_MS}ms)`}\n`);
