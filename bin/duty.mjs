@@ -63,6 +63,22 @@ async function ensureFleetIdentity(hub) {
   return true;
 }
 
+// Tell the hub which seat is on duty. Printing "set RELAY_DUTY_SESSION=… on the hub service" was
+// advice nobody could act on: the fleet hub is usually REMOTE, so no local env var reaches it, and
+// the hub read that var once at boot anyway. The seat knows it came up, so the seat says so.
+async function registerDutySeat(hub, session) {
+  const r = await sfetchJson(`${hub}/overseer/duty`, {
+    identity: loadOrCreate(SESSION, "agent"), payload: { session }, signal: AbortSignal.timeout(5000),
+  }).catch((e) => ({ ok: false, status: 0, _err: e?.message || String(e) }));
+  if (r?.ok) return true;
+  const why = r?.status === 404
+    ? `that hub predates /overseer/duty — redeploy it, or set RELAY_DUTY_SESSION=${session} on the hub service`
+    : (r?._err || `HTTP ${r?.status}`);
+  console.error(`  ⚠️  hub did NOT register the duty seat: ${why}`);
+  console.error("     the seat is running, but the hub will not feed it undelivered DMs or overseer warnings.");
+  return false;
+}
+
 function alivePid() {
   try {
     const pid = Number(readFileSync(PIDF, "utf8"));
@@ -88,8 +104,9 @@ if (cmd === "up") {
   child.unref();
   writeFileSync(PIDF, String(child.pid));
   console.log(`— duty agent up: ${SESSION} (pid ${child.pid}) watching ${hub} — log: ${LOGF}`);
-  console.log(`  hub feeds it: undelivered DMs (>${Math.round(Number(process.env.RELAY_DUTY_UNDELIVERED_MS || 600000) / 60000)}m) + overseer warnings — set RELAY_DUTY_SESSION=${SESSION} on the hub service.`);
-  process.exit(0);
+  const fed = await registerDutySeat(hub, SESSION);
+  if (fed) console.log(`  hub feeds it: undelivered DMs (>${Math.round(Number(process.env.RELAY_DUTY_UNDELIVERED_MS || 600000) / 60000)}m) + overseer warnings.`);
+  process.exit(0);   // the seat IS up; a hub that won't feed it is a warning, not a failed start
 }
 
 if (cmd === "down") {
@@ -98,6 +115,9 @@ if (cmd === "down") {
   else console.log("no duty seat running");
   try { execSync(`pkill -f "crew-runner.mjs ${AGENT} ${DIR}"`, { stdio: "ignore" }); } catch {}
   try { rmSync(PIDF, { force: true }); } catch {}
+  // Clear the hub's pointer too — escalations aimed at a seat that no longer exists are messages
+  // sent into a hole, and the hub has no other way to learn the seat went away.
+  await registerDutySeat(fleetHub(), "");
   process.exit(0);
 }
 
@@ -105,6 +125,15 @@ if (cmd === "down") {
 {
   const pid = alivePid();
   console.log(pid ? `duty seat RUNNING (pid ${pid}) as ${SESSION}` : "duty seat NOT running");
+  // A running seat the hub isn't feeding looks identical to a working one from the outside — which
+  // is the whole failure mode this command exists to make visible. So ask the hub, don't assume.
+  const hub = fleetHub();
+  const ov = await sfetchJson(`${hub}/overseer/status`, { method: "GET", identity: loadOrCreate(SESSION, "agent"), signal: AbortSignal.timeout(5000) })
+    .then((r) => (r?.ok ? r.json() : null)).catch(() => null);
+  if (!ov) console.log(`hub feed: UNKNOWN — could not read ${hub}/overseer/status`);
+  else if (!ov.dutySession) console.log(`hub feed: NOT WIRED — ${hub} has no duty seat registered; run \`trantor duty up\``);
+  else if (ov.dutySession !== SESSION) console.log(`hub feed: pointed at ${ov.dutySession}, NOT ${SESSION} — another seat owns duty on ${hub}`);
+  else console.log(`hub feed: wired — ${hub} escalates to ${SESSION}`);
   try {
     const lines = readFileSync(join(BUS, "logs", `${AGENT}-fleet.jsonl`), "utf8").trim().split("\n").slice(-3);
     console.log("last turns:"); for (const l of lines) console.log(`  ${l}`);

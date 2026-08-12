@@ -86,7 +86,7 @@ function scanTelemetry() {
 // TIMELINE view are untouched; every NEW type is dotted ("message", "presence.online", …) and is
 // filtered OUT of /history. Loads from the old `cardEvents` key when `events` is absent.
 function emptyState() {
-  return { messages: [], peers: {}, seq: 0, tasks: [], taskSeq: 0, projectMeta: {}, lessons: [], events: [], cardEventsBackfilled: false, aliases: {}, phaseMeta: {}, verifyGates: [], verifyGateSeq: 0, balances: { ts: 0, by: "", entries: [] }, subagentCostReset: false, handoffLog: [], identities: {}, inviteTokens: {}, focus: {}, orgPolicy: {}, instances: {} };
+  return { messages: [], peers: {}, seq: 0, tasks: [], taskSeq: 0, projectMeta: {}, lessons: [], events: [], cardEventsBackfilled: false, aliases: {}, phaseMeta: {}, verifyGates: [], verifyGateSeq: 0, balances: { ts: 0, by: "", entries: [] }, subagentCostReset: false, handoffLog: [], identities: {}, inviteTokens: {}, focus: {}, orgPolicy: {}, instances: {}, dutySession: "" };
 }
 
 function normalizeState(loaded = {}) {
@@ -111,6 +111,7 @@ function normalizeState(loaded = {}) {
   s.instances = loaded.instances && typeof loaded.instances === "object" ? loaded.instances : {};
   s.focus = loaded.focus && typeof loaded.focus === "object" ? loaded.focus : {};
   s.orgPolicy = loaded.orgPolicy && typeof loaded.orgPolicy === "object" ? loaded.orgPolicy : {};
+  s.dutySession = String(loaded.dutySession || "");
   for (const [session, v] of Object.entries(loaded.peers || {})) {
     // migrate old numeric form
     s.peers[session] = typeof v === "number"
@@ -292,7 +293,11 @@ setTimeout(overseerTick, 2000).unref?.();
 //   2. the overseer emits a warning (wired inside overseerTick below).
 // Escalations are hub-authored ("hub:duty") — they never impersonate a session — and dedup per
 // message id so a standing outage escalates once, not every tick.
-const DUTY_SESSION = String(process.env.RELAY_DUTY_SESSION || "");
+// Settable at runtime via POST /overseer/duty, because the seat is the only party that knows it
+// came up — and it often enrolls with a REMOTE hub, where no local env var could ever reach.
+// Env still wins at boot (an operator's declared config beats a seat's claim); otherwise the last
+// registered seat is restored from state, so a hub restart doesn't silently end the duty feed.
+let DUTY_SESSION = String(process.env.RELAY_DUTY_SESSION || state.dutySession || "");
 const DUTY_UNDELIVERED_MS = Number(process.env.RELAY_DUTY_UNDELIVERED_MS || 10 * 60 * 1000);
 const dutyEscalated = new Set();
 function hubSend(to, text, project) {
@@ -1110,6 +1115,15 @@ const server = http.createServer(async (req, res) => {
       }
       if (flipped) dirty = true;
       return json(res, 200, { ok: true, superseded: flipped });
+    }
+    if (req.method === "POST" && P === "/overseer/duty") {
+      const b = await body(req);
+      if (b.session === undefined) return json(res, 400, { error: "session required (send \"\" to clear the duty seat)" });
+      const session = String(b.session).slice(0, 120);
+      DUTY_SESSION = session;
+      state.dutySession = session;
+      dirty = true;
+      return json(res, 200, { ok: true, dutySession: DUTY_SESSION });
     }
     if (req.method === "POST" && P === "/overseer/narrate") {
       const b = await body(req);

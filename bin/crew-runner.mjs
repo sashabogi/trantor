@@ -161,7 +161,9 @@ const ERRF = join(homedir(), ".agent-bus", `err-${AGENT}-${PROJ}.txt`);
 function classifyFailure(exit, errText) {
   const t = (errText || "").toLowerCase();
   if (exit === 127) return "missing-cli";
-  if (/quota|insufficient|credit|balance|payment required|402|429|too many requests|rate.?limit|exceeded your|out of (credit|quota)/.test(t)) return "exhausted";
+  // "reached your … limit" / "usage limit" catch the subscription CLIs (Claude's "You've reached
+  // your Fable 5 limit"), which say nothing about quota or credits and would otherwise read as a crash.
+  if (/quota|insufficient|credit|balance|payment required|402|429|too many requests|rate.?limit|exceeded your|reached your [^.\n]*limit|usage limit|out of (credit|quota)/.test(t)) return "exhausted";
   if (/unauthor|401|invalid[ _-]?api[ _-]?key|forbidden|403|token expired|expired/.test(t)) return "auth";
   return "crashed";
 }
@@ -210,7 +212,12 @@ function runTurn(prompt, isFirst, trigger = "kickoff") {
   try { appendFileSync(ERRF, "", { flag: "w" }); } catch {}
   // pipefail: without it the sid-capture `| tee` makes a FAILED turn exit 0 (tee's status),
   // so the failure reporter never fires and a dead seat heartbeats green on the bus.
-  const inner = cli.sid ? `${cmd} | tee /dev/stderr` : cmd;
+  // A CLI's own explanation for quitting often goes to STDOUT, not stderr — Claude's usage-limit
+  // notice is the case that bit us: ERRF stayed empty, so a plainly exhausted seat was reported as
+  // `crashed` and nobody knew to swap it. sid seats already fold stdout into the ERRF stream via
+  // `tee /dev/stderr`; the rest now tee straight into ERRF. A real pipeline (not a process
+  // substitution) so bash waits for tee to flush before we read the file back.
+  const inner = cli.sid ? `${cmd} | tee /dev/stderr` : `${cmd} | tee -a ${ERRF}`;
   const r = spawnSync("/bin/bash", ["-c", `set -o pipefail; { ${inner} ; } 2> >(tee -a ${ERRF} >&2)`], {
     cwd: DIR, encoding: "utf8", stdio: cli.sid ? ["ignore", "pipe", "inherit"] : "inherit",
     env: { ...process.env, RELAY_URL: HUB, RELAY_AGENT: AGENT, RELAY_PROJECT: PROJ },

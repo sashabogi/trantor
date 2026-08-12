@@ -25,7 +25,7 @@ const env = {
   RELAY_ONLINE_MS: "60000",
 };
 delete env.RELAY_URL;
-const hub = spawn(process.execPath, [join(HERE, "hub.mjs")], { env, stdio: ["ignore", "pipe", "pipe"] });
+let hub = spawn(process.execPath, [join(HERE, "hub.mjs")], { env, stdio: ["ignore", "pipe", "pipe"] });
 let er = ""; hub.stderr.on("data", d => { er += d; });
 const B = `http://127.0.0.1:${port}`;
 const j = (r) => r.json();
@@ -78,6 +78,41 @@ try {
   inbox = await get(`/inbox?session=${encodeURIComponent("claude:fleet")}&since=0&peek=1`);
   const ow = (inbox.messages || []).filter(m => m.from === "hub:duty" && /OVERSEER same-project-sessions/.test(m.text) && /projB/.test(m.text));
   ok("overseer warning is forwarded to the duty session", ow.length >= 1, `got ${ow.length}`);
+
+  // 6. the seat can name ITSELF at runtime — `trantor duty up` talks to a hub it cannot set env on
+  //    (regression: DUTY_SESSION was a boot-time const, so a remote hub could never be told).
+  let st = await get("/overseer/status");
+  ok("status reports the boot-time duty session", st.dutySession === "claude:fleet", `got ${JSON.stringify(st.dutySession)}`);
+  const setRes = await post("/overseer/duty", { session: "claude:relief" });
+  ok("POST /overseer/duty accepts a new seat", setRes.ok === true && setRes.dutySession === "claude:relief", JSON.stringify(setRes));
+  st = await get("/overseer/status");
+  ok("status reflects the runtime duty session", st.dutySession === "claude:relief");
+  await post("/send", { from: "arch:projC", to: "ghost:projC", text: "after the handover", project: "projC" });
+  await sleep(1800);
+  const relief = await get(`/inbox?session=${encodeURIComponent("claude:relief")}&since=0&peek=1`);
+  ok("escalations follow the new seat", (relief.messages || []).some(m => m.from === "hub:duty" && /after the handover/.test(m.text)));
+  const oldSeat = await get(`/inbox?session=${encodeURIComponent("claude:fleet")}&since=0&peek=1`);
+  ok("the replaced seat stops receiving escalations", !(oldSeat.messages || []).some(m => /after the handover/.test(m.text)));
+  const badRes = await post("/overseer/duty", {});
+  ok("a missing session field is rejected", !!badRes.error);
+  const clearRes = await post("/overseer/duty", { session: "" });
+  ok("an empty session clears the duty seat", clearRes.ok === true && clearRes.dutySession === "");
+  st = await get("/overseer/status");
+  ok("a cleared duty seat reads as empty, not stale", st.dutySession === "");
+
+  // 7. it survives a hub restart — otherwise the feed dies silently whenever the hub bounces
+  //    and the seat, still running, looks perfectly healthy.
+  await post("/overseer/duty", { session: "claude:relief" });
+  await sleep(1400);                                   // persist runs on a 1s timer
+  hub.kill(); await sleep(400);
+  const envNoDuty = { ...env }; delete envNoDuty.RELAY_DUTY_SESSION;
+  hub = spawn(process.execPath, [join(HERE, "hub.mjs")], { env: envNoDuty, stdio: ["ignore", "pipe", "pipe"] });
+  hub.stderr.on("data", d => { er += d; });
+  let back = false;
+  for (let i = 0; i < 90 && !back; i++) { try { back = (await fetch(B + "/health")).ok; } catch {} if (!back) await sleep(80); }
+  ok("hub restarts", back, er.slice(-200));
+  st = await get("/overseer/status");
+  ok("the duty seat survives a hub restart with no env var", st.dutySession === "claude:relief", `got ${JSON.stringify(st.dutySession)}`);
 } finally {
   try { hub.kill(); } catch {}
   try { rmSync(dir, { recursive: true, force: true }); } catch {}
