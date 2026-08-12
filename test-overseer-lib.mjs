@@ -91,7 +91,33 @@ await test("linked-activity reports one collision for a declared active link", (
   assert.equal(linked.project, "alpha");
   assert.deepEqual(linked.sessions, ["a:alpha", "b:bravo", "c:charlie"]);
   assert.deepEqual(linked.files, []);
-  assert.equal(linked.detail, "Linked projects alpha, bravo, charlie have live sessions a:alpha, b:bravo, c:charlie.");
+  assert.equal(linked.detail, "Linked projects alpha, bravo, charlie are being worked on at the same time by a:alpha, b:bravo, c:charlie.");
+});
+
+// Regression (2026-08-12): linked-activity used to fire on mere PRESENCE, so two linked projects
+// with idle-but-online sessions warned every dedup window forever — 468 identical events in 8 days.
+// A link is DECLARED; restating it is not a collision. Only CONCURRENT WORK counts: a peer inside
+// the 90s work window, or a fresh file claim.
+await test("linked-activity ignores linked projects whose sessions are merely online, not working", () => {
+  const idle = (session, project) => live(session, project, 3 * 60 * 1000);   // online (<5m), not working (>90s)
+  const collisions = detectCollisions({
+    now,
+    peers: [idle("a:alpha", "alpha"), idle("b:bravo", "bravo")],
+    links: [{ projects: ["alpha", "bravo"], reason: "shared schema" }],
+  });
+  assert.equal(collisions.find((c) => c.kind === "linked-activity"), undefined);
+});
+
+await test("linked-activity fires when a linked project's work is proven by a fresh file claim", () => {
+  const collisions = detectCollisions({
+    now,
+    peers: [live("a:alpha", "alpha"), live("b:bravo", "bravo", 3 * 60 * 1000)],
+    claims: [{ project: "bravo", file: "src/schema.ts", session: "b:bravo", ts: now - 1000 }],
+    links: [{ projects: ["alpha", "bravo"], reason: "shared schema" }],
+  });
+  const linked = collisions.find((c) => c.kind === "linked-activity");
+  assert.ok(linked, "a fresh claim proves work even when the heartbeat is older than the work window");
+  assert.deepEqual(linked.sessions, ["a:alpha", "b:bravo"]);
 });
 
 await test("deduplicates duplicate peers, claims, and links", () => {

@@ -47,14 +47,16 @@ export type Peer = {
 
 export type OverseerWarning = {
   project: string; kind: string; sessions: string[]; files: string[]; detail: string;
+  /** When this episode STARTED — a standing condition is reported once and dated, not re-fired. */
+  since?: number;
 };
 export type OverseerStatus = {
-  engine: boolean; lastTickTs: number; tickMs: number; dedupMs: number; dutySession: string;
+  engine: boolean; lastTickTs: number; tickMs: number; clearMs: number; dutySession: string;
   watching: { sessions: number; projects: number; claims: number; links: number };
   autonomy: Record<string, number>;
   links: { projects: string[]; reason: string }[];
   warnings: OverseerWarning[];
-  warnedRecent: number;
+  standing: number;
 };
 
 export class HubClient {

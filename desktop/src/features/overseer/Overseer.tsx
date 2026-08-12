@@ -19,6 +19,36 @@ function agoS(ts: number) {
   if (s < 3600) return `${Math.round(s / 60)}m ago`;
   return `${Math.round(s / 3600)}h ago`;
 }
+function lasting(ts?: number) {
+  if (!ts) return "";
+  const s = Math.round((Date.now() - ts) / 1000);
+  if (s < 90) return "just started";
+  if (s < 3600) return `standing ${Math.round(s / 60)}m`;
+  if (s < 86400) return `standing ${Math.round(s / 3600)}h`;
+  return `standing ${Math.round(s / 86400)}d`;
+}
+
+/** History repeats itself — literally. Before episode-based warning (0.17.66) a standing condition
+ * re-fired every 10 minutes, so the log holds hundreds of identical rows. Collapse them into one
+ * entry per distinct condition with a count and a span; a stuck record is not a history. */
+type Rolled = { rep: HubEvent; count: number; first: number; last: number };
+function rollUp(events: HubEvent[]): Rolled[] {
+  const by = new Map<string, Rolled>();
+  for (const e of events) {
+    const any = e as Record<string, unknown>;
+    const sig = `${e.type}|${e.project}|${String(any.kind ?? "")}|${String(any.detail ?? any.claim ?? "")}`;
+    const cur = by.get(sig);
+    if (!cur) by.set(sig, { rep: e, count: 1, first: e.ts, last: e.ts });
+    else {
+      cur.count++;
+      cur.first = Math.min(cur.first, e.ts);
+      cur.last = Math.max(cur.last, e.ts);
+      // keep the NARRATED representative when one exists — narration lands on individual events
+      if (!(cur.rep as Record<string, unknown>).narration && (any.narration || e.ts > cur.rep.ts)) cur.rep = e;
+    }
+  }
+  return [...by.values()].sort((a, b) => b.last - a.last);
+}
 
 export function Overseer({ client }: { client: HubClient }) {
   const [status, setStatus] = useState<OverseerStatus | null>(null);
@@ -38,11 +68,13 @@ export function Overseer({ client }: { client: HubClient }) {
 
   useEffect(() => {
     let cancelled = false;
+    // Fetch DEEP (not 30) so the roll-up's counts are true — the whole point is to show that one
+    // condition accounts for hundreds of rows rather than pretending each is news.
     const load = () => Promise.all([
-      client.events({ type: "overseer.", limit: 30 }).then(r => r.events).catch(() => [] as HubEvent[]),
-      client.events({ type: "verify.gate.", limit: 10 }).then(r => r.events).catch(() => [] as HubEvent[]),
+      client.events({ type: "overseer.", limit: 300 }).then(r => r.events).catch(() => [] as HubEvent[]),
+      client.events({ type: "verify.gate.", limit: 30 }).then(r => r.events).catch(() => [] as HubEvent[]),
     ]).then(([warns, gates]) => {
-      if (!cancelled) setHistory([...warns, ...gates].sort((a, b) => b.ts - a.ts).slice(0, 20));
+      if (!cancelled) setHistory([...warns, ...gates].sort((a, b) => b.ts - a.ts));
     });
     load();
     return client.streamEvents(ev => {
@@ -56,6 +88,7 @@ export function Overseer({ client }: { client: HubClient }) {
   // Alive = the tick ran within two periods. The whole point of this strip: an empty warnings list
   // only means "clear" when the watcher can prove it is still looking.
   const alive = status.engine && status.lastTickTs > 0 && Date.now() - status.lastTickTs < status.tickMs * 2 + 5000;
+  const rolled = rollUp(history);
   const projectsWithLevel = Object.entries(status.autonomy).filter(([k]) => k !== "*").sort();
   const liveByProject = new Map<string, number>();
   for (const p of peers ?? []) {
@@ -109,6 +142,7 @@ export function Overseer({ client }: { client: HubClient }) {
                   <div className="mt-1 flex flex-wrap items-baseline gap-1.5">
                     <span className="tr-chip shrink-0">{w.project}</span>
                     <span className="tr-chip shrink-0">{w.kind}</span>
+                    {w.since ? <span className="text-[11px] text-[var(--color-tr-muted)]">{lasting(w.since)}</span> : null}
                     {w.sessions.map(s => <span key={s} className="tr-chip tr-mono shrink-0">{s}</span>)}
                     {w.files.slice(0, 3).map(f => <span key={f} className="tr-chip tr-mono shrink-0">{f}</span>)}
                   </div>
@@ -177,12 +211,15 @@ export function Overseer({ client }: { client: HubClient }) {
 
         <section>
           <h2 className="tr-sec-title">What it did</h2>
-          <p className="tr-sec-sub">Warnings issued and gates opened — narrated where the cheap model has caught up.</p>
+          <p className="tr-sec-sub">
+            Warnings issued and gates opened, one row per distinct condition — narrated where the cheap model has caught up.
+          </p>
           <div className="mt-3 flex flex-col gap-2">
-            {history.map((e, i) => {
+            {rolled.slice(0, 20).map(({ rep: e, count, first, last }, i) => {
               const any = e as Record<string, unknown>;
               const gate = e.type === "verify.gate.opened";
               const narration = any.narration as string | undefined;
+              const when = (ts: number) => new Date(ts).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
               return (
                 <div key={e.id ?? i} className="tr-card flex items-start gap-3 p-3.5">
                   <span className="tr-dot shrink-0"
@@ -194,18 +231,24 @@ export function Overseer({ client }: { client: HubClient }) {
                     <div className="mt-1 flex flex-wrap items-baseline gap-1.5">
                       {e.project && <span className="tr-chip shrink-0">{e.project}</span>}
                       <span className="tr-chip shrink-0">{gate ? "verify gate" : String(any.kind ?? "warn")}</span>
+                      {count > 1 && <span className="tr-chip shrink-0 text-[var(--color-tr-warn)]">×{count}</span>}
                       <span className="text-[11px] text-[var(--color-tr-muted)]">
-                        {new Date(e.ts).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}
+                        {count > 1 ? <>{when(first)} → {when(last)}</> : when(last)}
                       </span>
                     </div>
                   </div>
                 </div>
               );
             })}
-            {!history.length && (
+            {!rolled.length && (
               <div className="tr-card-ghost flex items-center justify-center p-6 text-[13px]">
                 No interventions on record for this hub.
               </div>
+            )}
+            {history.length > 0 && (
+              <p className="px-1 pt-1 text-[11px] text-[var(--color-tr-muted)]">
+                {rolled.length} distinct condition(s) across {history.length} logged event(s).
+              </p>
             )}
           </div>
         </section>

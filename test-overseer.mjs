@@ -158,5 +158,43 @@ try {
 } catch (e) { fail++; console.log(`  ✗ narrate: ${e.message}`); }
 finally { hubF.kill(); }
 
+// ── EPISODES, not a metronome (regression 2026-08-12) ──────────────────────────────────────────
+// A collision is a STATE. The old code cleared its dedup map on a timer, so a standing condition
+// re-fired every window forever — 500 events for 4 distinct conditions in 8 days, each one also
+// waking the duty seat for a full turn. A held condition must warn EXACTLY ONCE, and must be able
+// to fire again only after it has genuinely cleared.
+const PG = 47937, hubG = spawnHub(PG, {
+  RELAY_OVERSEER_TICK_MS: "300", RELAY_OVERSEER_CLEAR_MS: "1000",
+  RELAY_OVERSEER_PEER_LIVE_MS: "800",   // so the condition can actually go away inside a test
+});
+await sleep(1500);
+try {
+  const G = mk(`http://127.0.0.1:${PG}`);
+  await G.post("/policy", { autonomy: { alpha: 2 } });
+  // Keep the condition CONTINUOUSLY true across many ticks by re-registering (fresh heartbeats).
+  for (let i = 0; i < 12; i++) {
+    await G.post("/register", { session: "host:alpha", project: "alpha" });
+    await G.post("/register", { session: "codex:alpha", project: "alpha" });
+    await sleep(250);
+  }
+  const ev = await G.get("/events?type=overseer.&limit=100");
+  const warns = (ev.events ?? []).filter(e => e.type === "overseer.warn");
+  ok(warns.length === 1, `standing condition warns ONCE across ~10 ticks (got ${warns.length})`);
+
+  const st = await G.get("/overseer/status");
+  ok(st.standing >= 1, "status reports the condition as standing");
+  ok(Number(st.warnings?.[0]?.since) > 0, "live detection carries `since` (a duration, not just a fact)");
+
+  // Let it clear (no heartbeats past CLEAR_MS), then bring it back: a genuine recurrence re-warns.
+  await sleep(2600);
+  await G.post("/register", { session: "host:alpha", project: "alpha" });
+  await G.post("/register", { session: "codex:alpha", project: "alpha" });
+  await sleep(1200);
+  const ev2 = await G.get("/events?type=overseer.&limit=100");
+  const warns2 = (ev2.events ?? []).filter(e => e.type === "overseer.warn");
+  ok(warns2.length === 2, `a recurrence AFTER the condition cleared warns again (got ${warns2.length})`);
+} catch (e) { fail++; console.log(`  ✗ episodes: ${e.message}`); }
+finally { hubG.kill(); }
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

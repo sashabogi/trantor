@@ -212,8 +212,16 @@ async function reloadFromStore() {
 let _overseer = null;
 import("./lib/overseer.mjs").then(m => { _overseer = m; }).catch(() => {});
 const OVERSEER_TICK_MS = Number(process.env.RELAY_OVERSEER_TICK_MS || 30 * 1000);
-const OVERSEER_DEDUP_MS = Number(process.env.RELAY_OVERSEER_DEDUP_MS || 10 * 60 * 1000);
-const overseerWarned = new Map();   // dedup key -> ts
+// How long a condition must be ABSENT before we consider the episode over. This is NOT a re-warn
+// timer: see overseerTick.
+const OVERSEER_CLEAR_MS = Number(process.env.RELAY_OVERSEER_CLEAR_MS || process.env.RELAY_OVERSEER_DEDUP_MS || 10 * 60 * 1000);
+// Standing conditions, keyed by collision identity -> { since, lastTick }. A collision is a STATE,
+// not an event: it persists. Emitting on a 10-minute timer turned the watcher into a metronome —
+// 500 events for 4 distinct conditions (2026-08-12 audit), each one also waking the duty seat for a
+// full turn. Now an episode fires ONCE when it starts and stays quiet while it holds; the entry is
+// forgotten only after the condition has been gone for OVERSEER_CLEAR_MS, so a genuine recurrence
+// warns again.
+const overseerActive = new Map();
 // Heartbeat for the WATCHER itself: /overseer/status must distinguish "fleet is clear" from "the
 // overseer stopped ticking" — a monitor that cannot prove it is alive reads as clear when dead.
 let overseerLastTick = 0;
@@ -240,14 +248,18 @@ function overseerTick() {
   if (!_overseer?.detectCollisions) return;
   let collisions = [];
   try { collisions = _overseer.detectCollisions(overseerInputs()) || []; } catch { return; }
-  overseerLastTick = now(); overseerLastCollisions = collisions;
-  const cut = now() - OVERSEER_DEDUP_MS;
-  for (const [k, ts] of overseerWarned) if (ts < cut) overseerWarned.delete(k);
+  const t = now();
+  overseerLastTick = t;
   const pol = overseerPolicy();
+  const seen = new Set();
   for (const c of collisions) {
     const key = `${c.project} ${c.kind} ${(c.sessions || []).join(",")} ${(c.files || []).join(",")}`;
-    if (overseerWarned.has(key)) continue;
-    overseerWarned.set(key, now());
+    c.key = key;
+    seen.add(key);
+    const standing = overseerActive.get(key);
+    if (standing) { standing.lastTick = t; c.since = standing.since; continue; }   // holds — stay quiet
+    overseerActive.set(key, { since: t, lastTick: t });
+    c.since = t;
     appendEvent("overseer.warn", c.project, "overseer",
       { kind: c.kind, sessions: c.sessions || [], files: c.files || [], detail: c.detail || "", narrated: false });
     if (DUTY_SESSION) hubSend(DUTY_SESSION, `⚠️ OVERSEER ${c.kind} [${c.project}]: ${c.detail || ""} — if the parties are not already coordinating, message them.`, c.project);
@@ -260,8 +272,18 @@ function overseerTick() {
       appendEvent("verify.gate.opened", c.project, "overseer", { gateId: g.id, claim: g.claim, why: g.why });
     }
   }
+  // Episode end: a condition gone for the whole clear window is over, so a LATER recurrence is a
+  // new episode and warns again. Without this the map would grow forever and nothing could re-fire.
+  for (const [k, v] of overseerActive) {
+    if (!seen.has(k) && t - v.lastTick > OVERSEER_CLEAR_MS) overseerActive.delete(k);
+  }
+  overseerLastCollisions = collisions;
 }
 setInterval(overseerTick, OVERSEER_TICK_MS).unref?.();
+// setInterval waits a FULL period before its first call, so for 30s after every restart the watcher
+// had no lastTick and honestly reported itself stalled. Tick once shortly after boot (the delay lets
+// the lazy lib import land) so a restarted hub proves it is alive immediately.
+setTimeout(overseerTick, 2000).unref?.();
 
 // --- the DUTY AGENT feed (deterministic escalation; the seat itself is bin/duty.mjs) -----------
 // RELAY_DUTY_SESSION names the always-on triage seat (e.g. "claude:fleet"). The hub DMs it when:
@@ -1030,7 +1052,7 @@ const server = http.createServer(async (req, res) => {
         engine: !!_overseer?.detectCollisions,
         lastTickTs: overseerLastTick,
         tickMs: OVERSEER_TICK_MS,
-        dedupMs: OVERSEER_DEDUP_MS,
+        clearMs: OVERSEER_CLEAR_MS,
         dutySession: DUTY_SESSION || "",
         watching: {
           sessions: livePeers.length,
@@ -1040,8 +1062,10 @@ const server = http.createServer(async (req, res) => {
         },
         autonomy: pol.autonomy,
         links: pol.links,
-        warnings: overseerLastCollisions,
-        warnedRecent: overseerWarned.size,
+        // `since` turns a detection into a duration — "standing 4h" reads very differently from
+        // "just started", and that distinction is the whole point of episode-based warning.
+        warnings: overseerLastCollisions.map(c => ({ ...c, since: c.since || 0 })),
+        standing: overseerActive.size,
       });
     }
     if (req.method === "GET" && P === "/overseer/context") {
