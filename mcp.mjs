@@ -211,7 +211,7 @@ server.tool("relay_board", "Show a project's Kanban board (all cards + their sta
   return { content: [{ type: "text", text: `${proj} board\n${cols.join("\n")}` }] };
 });
 
-server.tool("relay_peers", "List other Claude sessions connected to the relay (online in last 5 min).", {}, async () => {
+server.tool("relay_peers", "Find who you can talk to: the live agent sessions on the relay (online in last 5 min), including sessions in projects linked to yours. Call this BEFORE concluding you have no way to reach someone — the session ids it returns are what relay_send takes.", {}, async () => {
   const { peers } = await api("GET", "/peers");
   const lines = peers.map(p => {
     // health surfaces a failing-but-alive agent (runner-reported) — not a green lie
@@ -222,7 +222,7 @@ server.tool("relay_peers", "List other Claude sessions connected to the relay (o
   return { content: [{ type: "text", text: lines.join("\n") || "no peers yet" }] };
 });
 
-server.tool("relay_send", "Send a live message to another Claude session (or 'all' to broadcast).",
+server.tool("relay_send", "Send a live message to another agent session (or 'all' to broadcast). Reach the other agent YOURSELF: if you are about to ask the human to pass something along, tell the session directly instead — asking a person to carry a message between two agents is a failure, not politeness. Don't know the id? relay_peers lists them, linked projects included. Cross-project sends are allowed.",
   { to: z.string().describe("target session id, or 'all'"), text: z.string().describe("message body") },
   async ({ to, text }) => {
     // The event log is append-only — a secret in it is unrecoverable, so refuse BEFORE

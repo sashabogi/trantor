@@ -264,6 +264,21 @@ function overseerTick() {
     appendEvent("overseer.warn", c.project, "overseer",
       { kind: c.kind, sessions: c.sessions || [], files: c.files || [], detail: c.detail || "", narrated: false });
     if (DUTY_SESSION) hubSend(DUTY_SESSION, `⚠️ OVERSEER ${c.kind} [${c.project}]: ${c.detail || ""} — if the parties are not already coordinating, message them.`, c.project);
+    // INTRODUCE the parties to each other. Telling two sessions to "coordinate over the bus" is
+    // useless if neither knows the other's session id, and until now the warning went only to the
+    // duty seat and the log — so coordination needed a human to carry the ids across. Hand each
+    // party the others' ids at the moment coordination is warranted. This sits inside the
+    // episode-start branch, so it fires ONCE per episode, not once per tick: a standing condition
+    // must not re-wake two sessions every 30 seconds.
+    const parties = [...new Set(c.sessions || [])].filter(s => s && s !== DUTY_SESSION);
+    if (parties.length > 1) {
+      for (const me of parties) {
+        const others = parties.filter(p => p !== me);
+        hubSend(me,
+          `🤝 OVERSEER ${c.kind}: you and ${others.join(", ")} are working on overlapping ground${c.files?.length ? ` (${c.files.slice(0, 3).join(", ")})` : ""}. ${c.detail || ""} Coordinate directly — relay_send to ${others[0]} — and split the work between you. No human needs to relay this.`,
+          c.project);
+      }
+    }
     const level = _overseer.levelFor ? _overseer.levelFor(c.project, pol.autonomy) : 1;
     if (level >= 3 && c.kind === "file-conflict") {
       const g = { id: ++state.verifyGateSeq, project: c.project, status: "open", ts: now(),
@@ -639,6 +654,31 @@ function authorize(auth, method, P, project) {
 function filterReadable(auth, rows, projectOf) {
   if (AUTH_MODE !== "enforce" && !auth?.identity) return rows;
   return rows.filter(row => canRead(auth, projectOf(row)));
+}
+// DISCOVERY follows declared links, and is deliberately wider than read.
+//
+// Sending across projects was never blocked: /send authorizes against the SENDER's project, so any
+// session can DM any session id it happens to know. Only the ROSTER was scoped — which meant two
+// sessions the operator had explicitly declared codependent could not learn each other's ids. The
+// overseer would tell both of them to "coordinate over the bus" and neither could find the other,
+// so the only remaining channel was the human. That is the exact traffic-cop role this project
+// exists to delete.
+//
+// A link is an operator declaration that two projects share resources. Treating it as mutual
+// discovery grants nothing a linked pair wasn't already told to do.
+function canDiscover(auth, project) {
+  if (canRead(auth, project)) return true;
+  const proj = canon(project || "");
+  if (!proj) return false;
+  for (const l of overseerPolicy().links) {
+    const ps = (l.projects || []).map(p => canon(p));
+    if (ps.includes(proj) && ps.some(p => p !== proj && canRead(auth, p))) return true;
+  }
+  return false;
+}
+function filterDiscoverable(auth, rows, projectOf) {
+  if (AUTH_MODE !== "enforce" && !auth?.identity) return rows;
+  return rows.filter(row => canDiscover(auth, projectOf(row)));
 }
 function inboxReadable(auth, msg, session) {
   if (msg.to === session) return !auth?.identity || String(auth.identity.name || "") === String(session || "");
@@ -1164,7 +1204,7 @@ const server = http.createServer(async (req, res) => {
     if (req.method === "GET" && P === "/peers") {
       prunePeers();
       const cutoff = now() - ONLINE_MS;
-      const peerRows = filterReadable(auth, Object.entries(state.peers), ([, v]) => v.project || "");
+      const peerRows = filterDiscoverable(auth, Object.entries(state.peers), ([, v]) => v.project || "");
       return json(res, 200, { hubVersion: HUB_VERSION, authMode: AUTH_MODE, peers: peerRows.map(([s, v]) => ({ session: s, lastSeen: v.lastSeen, online: v.lastSeen > cutoff, status: v.status || "", health: healthOf(v.status), project: v.project || "",
         pubkey: v.pubkey || "", identity: v.identity || null, authWarning: v.authWarning || "",
         llm: v.llm || "", model: v.model || "", hookVersion: v.hookVersion || "", staleHooks: !!(v.lastSeen > cutoff && v.hookVersion && HUB_VERSION && cmpSemver(v.hookVersion, HUB_VERSION) < 0) })) });
