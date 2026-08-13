@@ -31,7 +31,7 @@ type Pane =
   | { kind: "home" }
   | { kind: "project"; lens: Lens }
   | { kind: "inbox" }
-  | { kind: "messages" }
+  | { kind: "messages"; focus?: string }
   | { kind: "agents" }
   | { kind: "learning" }
   | { kind: "overseer" }
@@ -337,8 +337,8 @@ export function AppShell() {
             No projects pinned. Run <code>trantor hub set &lt;project&gt; &lt;url&gt;</code>
           </div>
         ) : pane.kind === "home" ? <Home client={client} me={ME} onOpenProject={openProject} />
-          : pane.kind === "inbox" ? <Inbox client={client} me={ME} />
-          : pane.kind === "messages" ? <Messages client={client} me={ME} />
+          : pane.kind === "inbox" ? <Inbox client={client} me={ME} onOpenConversation={s => setPane({ kind: "messages", focus: s })} />
+          : pane.kind === "messages" ? <Messages client={client} me={ME} focus={pane.focus} />
           : pane.kind === "agents" ? <Agents client={client} project={active} />
           : pane.kind === "learning" ? <Learning client={client} />
           : pane.kind === "overseer" ? <Overseer client={client} />

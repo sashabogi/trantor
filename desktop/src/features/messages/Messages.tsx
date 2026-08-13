@@ -25,6 +25,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { HubClient, HubEvent, Peer } from "../../shared/api/client";
 import { Avatar, BrandGlyph, displayName } from "../../shared/Avatar";
 import { Composer } from "../../shared/Composer";
+import { clock, when } from "../../shared/time";
 
 type Msg = { id: number; ts: number; from: string; to: string; project: string; text: string };
 
@@ -92,8 +93,28 @@ function buildThreads(msgs: Msg[]): Thread[] {
   return [...map.values()].sort((a, b) => (b.msgs[b.msgs.length - 1]?.ts ?? 0) - (a.msgs[a.msgs.length - 1]?.ts ?? 0));
 }
 
-const timeShort = (ts: number) => new Date(ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 const dayOf = (ts: number) => new Date(ts).toDateString();
+
+// The doctrine rule this view initially broke: any surface that renders a log must ROLL IT UP.
+// The hub's overseer notices arrive dozens at a time with near-identical text, and rendering
+// them verbatim buried the two real messages in a 150-row wall (Sasha: "unreadable and
+// completely useless"). Consecutive synthetic-sender messages collapse into ONE quiet row —
+// count + span, expandable — while real agents' words always render in full.
+type ThreadItem = { kind: "msg"; msg: Msg } | { kind: "run"; msgs: Msg[] };
+function collapseRuns(msgs: Msg[]): ThreadItem[] {
+  const out: ThreadItem[] = [];
+  for (const m of msgs) {
+    const last = out[out.length - 1];
+    if (isSynthetic(m.from)) {
+      if (last?.kind === "run") { last.msgs.push(m); continue; }
+      out.push({ kind: "run", msgs: [m] });
+    } else {
+      out.push({ kind: "msg", msg: m });
+    }
+  }
+  // a lone notice reads fine as a message; only actual RUNS earn the collapse
+  return out.map(it => (it.kind === "run" && it.msgs.length === 1 ? { kind: "msg" as const, msg: it.msgs[0] } : it));
+}
 
 function PairAvatars({ parties }: { parties: string[] }) {
   return (
@@ -108,7 +129,7 @@ function PairAvatars({ parties }: { parties: string[] }) {
   );
 }
 
-export function Messages({ client, me }: { client: HubClient; me: string }) {
+export function Messages({ client, me, focus }: { client: HubClient; me: string; focus?: string | null }) {
   const [msgs, setMsgs] = useState<Msg[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [sel, setSel] = useState<string | null>(null);
@@ -122,6 +143,7 @@ export function Messages({ client, me }: { client: HubClient; me: string }) {
   /** a conversation being STARTED — no messages exist yet, so no thread does either */
   const [compose, setCompose] = useState<{ picking: boolean; to: string | null }>({ picking: false, to: null });
   const [peers, setPeers] = useState<Peer[]>([]);
+  const [openRuns, setOpenRuns] = useState<Record<string, boolean>>({});
   const bottomRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
@@ -141,11 +163,25 @@ export function Messages({ client, me }: { client: HubClient; me: string }) {
   }), [client]);
 
   const threads = useMemo(() => buildThreads(msgs ?? []), [msgs]);
+  // an Inbox jump lands on the conversation with that sender — existing thread or a fresh compose
+  useEffect(() => {
+    if (!focus) return;
+    const key = pairKey(me, focus);
+    setCompose({ picking: false, to: null });
+    setSel(key);
+  }, [focus, me]);
   // selection is PINNED: pick the newest thread once at load, then never auto-switch — a live
   // message reordering the list must not change what the user is reading or composing into
   useEffect(() => {
     if (sel === null && !compose.to && threads.length) setSel(threads[0].key);
   }, [sel, compose.to, threads]);
+  // a focus jump to a pair with no history yet: fall through to compose mode with that peer
+  useEffect(() => {
+    if (focus && sel === pairKey(me, focus) && !threads.some(t => t.key === sel)) {
+      setCompose({ picking: false, to: focus });
+      setSel(null);
+    }
+  }, [focus, sel, threads, me]);
   const open = threads.find(t => t.key === sel) ?? null;
 
   // A pair thread folds in the human's own exchanges with either party: the interjection and its
@@ -250,7 +286,7 @@ export function Messages({ client, me }: { client: HubClient; me: string }) {
                 <span className="min-w-0 flex-1">
                   <span className="flex items-baseline gap-2">
                     <span className="min-w-0 truncate text-[13px] font-medium">{title}</span>
-                    {last && <span className="tr-mono ml-auto shrink-0 text-[10px] text-[var(--color-tr-muted)]">{timeShort(last.ts)}</span>}
+                    {last && <span className="tr-mono ml-auto shrink-0 text-[10px] text-[var(--color-tr-muted)]">{when(last.ts)}</span>}
                   </span>
                   <span className="block truncate text-[12px] text-[var(--color-tr-muted)]">
                     {last ? `${shortName(last.from)}: ${last.text}` : ""}
@@ -300,40 +336,80 @@ export function Messages({ client, me }: { client: HubClient; me: string }) {
               </div>
 
               <div className="min-h-0 flex-1 overflow-y-auto px-6 py-4">
-                {openMsgs.map((m, i) => {
-                  const prev = openMsgs[i - 1];
-                  const newDay = !prev || dayOf(prev.ts) !== dayOf(m.ts);
-                  const grouped = !newDay && prev && prev.from === m.from && prev.to === m.to && m.ts - prev.ts < 5 * 60 * 1000;
-                  const interjection = isPair && (m.from === me || m.to === me);
-                  return (
-                    <div key={`${m.id}-${m.ts}`}>
-                      {newDay && (
-                        <div className="my-4 flex items-center gap-3 text-[11px] text-[var(--color-tr-muted)]">
-                          <span className="h-px flex-1 bg-[var(--color-tr-edge)]" />
-                          {new Date(m.ts).toLocaleDateString([], { weekday: "short", month: "short", day: "numeric" })}
-                          <span className="h-px flex-1 bg-[var(--color-tr-edge)]" />
-                        </div>
-                      )}
-                      <div className={`flex gap-3 ${grouped ? "mt-0.5 pl-[44px]" : "mt-3"} ${interjection ? "rounded-lg bg-white/[0.02] py-1 pr-2 -mr-2" : ""}`}>
-                        {!grouped && <Avatar name={m.from} size={32} />}
-                        <div className="min-w-0 flex-1">
-                          {!grouped && (
-                            <div className="flex items-baseline gap-2">
-                              <span className="text-[13px] font-semibold" title={m.from}>{displayName(m.from)}</span>
-                              {/* on a pair thread, who a side-message was AIMED at is the information */}
-                              {interjection && <span className="tr-chip">→ {shortName(m.to)}</span>}
-                              {open.kind === "broadcast" && <span className="tr-mono text-[10px] text-[var(--color-tr-muted)]" title={m.from}>{m.from}</span>}
-                              <span className="tr-mono text-[10px] text-[var(--color-tr-muted)]">{timeShort(m.ts)}</span>
+                {(() => {
+                  const items = collapseRuns(openMsgs);
+                  let lastTs = 0;
+                  return items.map((it, i) => {
+                    const ts = it.kind === "msg" ? it.msg.ts : it.msgs[0].ts;
+                    const newDay = i === 0 || dayOf(lastTs) !== dayOf(ts);
+                    const divider = newDay && (
+                      <div className="my-4 flex items-center gap-3 text-[11px] text-[var(--color-tr-muted)]">
+                        <span className="h-px flex-1 bg-[var(--color-tr-edge)]" />
+                        {new Date(ts).toLocaleDateString([], { weekday: "short", month: "short", day: "numeric" })}
+                        <span className="h-px flex-1 bg-[var(--color-tr-edge)]" />
+                      </div>
+                    );
+                    if (it.kind === "run") {
+                      const runKey = `${it.msgs[0].id}-${it.msgs[0].ts}`;
+                      const expanded = !!openRuns[runKey];
+                      const span = dayOf(it.msgs[0].ts) === dayOf(it.msgs[it.msgs.length - 1].ts)
+                        ? `${clock(it.msgs[0].ts)} → ${clock(it.msgs[it.msgs.length - 1].ts)}`
+                        : `${when(it.msgs[0].ts)} → ${when(it.msgs[it.msgs.length - 1].ts)}`;
+                      lastTs = it.msgs[it.msgs.length - 1].ts;
+                      return (
+                        <div key={runKey}>
+                          {divider}
+                          <button
+                            onClick={() => setOpenRuns(cur => ({ ...cur, [runKey]: !expanded }))}
+                            className="mt-3 flex w-full items-center gap-2 rounded-lg border border-dashed border-[var(--color-tr-edge)] px-3 py-1.5 text-left text-[11px] text-[var(--color-tr-muted)] hover:text-[var(--color-tr-text)]">
+                            <span>{expanded ? "▾" : "▸"}</span>
+                            <span>
+                              <span className="tr-mono">{it.msgs.length}</span> overseer/system notices
+                            </span>
+                            <span className="tr-mono ml-auto">{span}</span>
+                          </button>
+                          {expanded && (
+                            <div className="mt-1 border-l border-[var(--color-tr-edge)] pl-3">
+                              {it.msgs.map(m => (
+                                <div key={`${m.id}-${m.ts}`} className="mt-2 text-[11px] leading-relaxed text-[var(--color-tr-muted)]">
+                                  <span className="tr-mono mr-2">{clock(m.ts)}</span>
+                                  <span className="break-words whitespace-pre-wrap [overflow-wrap:anywhere]">{m.text}</span>
+                                </div>
+                              ))}
                             </div>
                           )}
-                          <div className="text-[13px] leading-relaxed break-words whitespace-pre-wrap [overflow-wrap:anywhere]">
-                            {m.text}
+                        </div>
+                      );
+                    }
+                    const m = it.msg;
+                    const prevItem = items[i - 1];
+                    const prevMsg = prevItem?.kind === "msg" ? prevItem.msg : null;
+                    const grouped = !newDay && prevMsg && prevMsg.from === m.from && prevMsg.to === m.to && m.ts - prevMsg.ts < 5 * 60 * 1000;
+                    const interjection = isPair && (m.from === me || m.to === me);
+                    lastTs = m.ts;
+                    return (
+                      <div key={`${m.id}-${m.ts}`}>
+                        {divider}
+                        <div className={`flex gap-3 ${grouped ? "mt-0.5 pl-[44px]" : "mt-3"} ${interjection ? "rounded-lg bg-white/[0.02] py-1 pr-2 -mr-2" : ""}`}>
+                          {!grouped && <Avatar name={m.from} size={32} />}
+                          <div className="min-w-0 flex-1">
+                            {!grouped && (
+                              <div className="flex items-baseline gap-2">
+                                <span className="text-[13px] font-semibold" title={m.from}>{displayName(m.from)}</span>
+                                {interjection && <span className="tr-chip">→ {shortName(m.to)}</span>}
+                                {open.kind === "broadcast" && <span className="tr-mono text-[10px] text-[var(--color-tr-muted)]" title={m.from}>{m.from}</span>}
+                                <span className="tr-mono text-[10px] text-[var(--color-tr-muted)]">{clock(m.ts)}</span>
+                              </div>
+                            )}
+                            <div className="text-[13px] leading-relaxed break-words whitespace-pre-wrap [overflow-wrap:anywhere]">
+                              {m.text}
+                            </div>
                           </div>
                         </div>
                       </div>
-                    </div>
-                  );
-                })}
+                    );
+                  });
+                })()}
                 <div ref={bottomRef} />
               </div>
 

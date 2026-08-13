@@ -12,10 +12,13 @@ import { useEffect, useState } from "react";
 import type { HubClient, Message, Peer } from "../../shared/api/client";
 import { Avatar } from "../../shared/Avatar";
 import { Composer } from "../../shared/Composer";
+import { when } from "../../shared/time";
 
 const brandOf = (s: string) => s.split(":")[0] ?? s;
 
-export function Inbox({ client, me }: { client: HubClient; me: string }) {
+export function Inbox({ client, me, onOpenConversation }: {
+  client: HubClient; me: string; onOpenConversation?: (session: string) => void;
+}) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [peers, setPeers] = useState<Peer[]>([]);
   const [to, setTo] = useState("");
@@ -55,14 +58,20 @@ export function Inbox({ client, me }: { client: HubClient; me: string }) {
                 <span className="truncate text-[13px] font-semibold">{m.from}</span>
                 {m.project && <span className="tr-chip shrink-0">{m.project}</span>}
                 <span className="ml-auto shrink-0 text-[11px] text-[var(--color-tr-muted)]">
-                  {new Date(m.ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                  {when(m.ts)}
                 </span>
               </div>
               <div className="mt-1 whitespace-pre-wrap break-words text-sm leading-relaxed">{m.text}</div>
-              <button onClick={() => setTo(m.from)}
-                      className="mt-2 text-[12px] text-[var(--color-tr-muted)] hover:text-[var(--color-tr-doing)]">
-                Reply to {brandOf(m.from)}
-              </button>
+              <div className="mt-2 flex gap-4 text-[12px] text-[var(--color-tr-muted)]">
+                <button onClick={() => setTo(m.from)} className="hover:text-[var(--color-tr-doing)]">
+                  Reply to {brandOf(m.from)}
+                </button>
+                {onOpenConversation && (
+                  <button onClick={() => onOpenConversation(m.from)} className="hover:text-[var(--color-tr-doing)]">
+                    View conversation
+                  </button>
+                )}
+              </div>
             </div>
           </div>
         ))}
