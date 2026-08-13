@@ -9,7 +9,7 @@
 // never in chrome. The old header dump was the altitude mistake made visible.
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ArrowDownToLine, Bot, Eye, GraduationCap, House, Inbox as InboxIcon, Settings as SettingsIcon } from "lucide-react";
-import { appUpdateCheck, HubClient, hubForProject, knownProjects, type AppUpdate, type Peer } from "../shared/api/client";
+import { appUpdateCheck, HubClient, hubForProject, knownProjects, localSessions, type AppUpdate, type Peer } from "../shared/api/client";
 import { stateOf } from "../shared/presence";
 import { ProjectIcon } from "../shared/ProjectIcon";
 
@@ -107,30 +107,35 @@ export function AppShell() {
 
   const client = useMemo(() => (hub ? new HubClient(hub) : null), [hub]);
 
-  // Sidebar activity: which projects have someone ALIVE in them right now. "The sidebar has no
-  // indication of an active project or project in flight" — this is that indication, at the nav's
-  // own altitude: a breathing dot when a session there is mid-turn, a still one when it's merely
-  // online. Peers are aggregated from BOTH the active hub and the machine-local hub (a crew on an
-  // unpinned/local project — the crm-platform incident — must still light its row), freshest
-  // lastSeen wins per session.
-  const [activity, setActivity] = useState<Map<string, "busy" | "live">>(new Map());
+  // Sidebar activity — Sasha's ruling (2026-08-13): ACTIVE means "a terminal window is open and
+  // registered", and the dot BLINKS only for actual activity, never for merely sitting open.
+  // Two independent truths feed it:
+  //   • OPEN — a live session process on this machine (local_sessions: claude windows + crew
+  //     seats). Process truth, so an idle-but-open window stays active; heartbeats ride hook
+  //     fires and go dark after 5 quiet minutes, which is how crebral-health vanished from
+  //     ACTIVE NOW while its window sat right there (quiet ≠ dead).
+  //   • BUSY — a hub heartbeat inside the 90s work window (mid-turn NOW). Blink. Also counts as
+  //     open on its own, so a busy session on ANOTHER machine (teams) still lights its row.
+  // Peers still aggregate from BOTH the active hub and the machine-local hub, freshest wins.
+  const [activity, setActivity] = useState<Map<string, "busy" | "open">>(new Map());
   useEffect(() => {
     let alive = true;
     const pull = async () => {
       const urls = [...new Set([hub, LOCAL_HUB].filter(Boolean))];
-      const lists = await Promise.all(urls.map(u => new HubClient(u).peers().catch(() => [] as Peer[])));
+      const [open, ...lists] = await Promise.all([
+        localSessions(),
+        ...urls.map(u => new HubClient(u).peers().catch(() => [] as Peer[])),
+      ]);
       if (!alive) return;
       const best = new Map<string, Peer>();
       for (const ps of lists) for (const p of ps) {
         const cur = best.get(p.session);
         if (!cur || (p.lastSeen ?? 0) > (cur.lastSeen ?? 0)) best.set(p.session, p);
       }
-      const m = new Map<string, "busy" | "live">();
+      const m = new Map<string, "busy" | "open">();
+      for (const p of open) m.set(p, "open");
       for (const p of best.values()) {
-        if (!p.project) continue;
-        const st = stateOf(p);
-        if (st === "busy") m.set(p.project, "busy");
-        else if (st === "idle" && !m.has(p.project)) m.set(p.project, "live");
+        if (p.project && stateOf(p) === "busy") m.set(p.project, "busy");
       }
       setActivity(m);
     };
@@ -239,16 +244,18 @@ export function AppShell() {
     return (
       <button key={p}
         onClick={() => { setActive(p); setPane(cur => ({ kind: "project", lens: cur.kind === "project" ? cur.lens : "board" })); }}
-        title={act === "busy" ? "a session here is mid-turn right now" : act === "live" ? "sessions online, idle" : undefined}
+        title={act === "busy" ? "a session here is mid-turn right now" : act === "open" ? "session open, idle" : undefined}
         className={`flex w-full items-center gap-2.5 rounded-lg px-3 py-1.5 text-left text-[13px] ${
           on ? "bg-white/[0.07] font-medium text-[var(--color-tr-text)]"
              : act ? "text-[var(--color-tr-text)]/85 hover:bg-white/[0.04]"
                    : "text-[var(--color-tr-muted)] hover:bg-white/[0.04] hover:text-[var(--color-tr-text)]"}`}>
         <ProjectIcon project={p} size={20} />
         <span className="min-w-0 flex-1 truncate">{p}</span>
+        {/* the dot is BLUE for any open session and blinks ONLY when work is actually happening —
+            a window sitting open earns presence, never motion */}
         {act && (
           <span className={`tr-dot shrink-0 ${act === "busy" ? "tr-dot-pulse" : ""}`}
-                style={{ background: act === "busy" ? "var(--color-tr-doing)" : "var(--color-tr-muted)", width: 6, height: 6 }} />
+                style={{ background: "var(--color-tr-doing)", width: 6, height: 6 }} />
         )}
       </button>
     );

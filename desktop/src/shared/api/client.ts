@@ -275,6 +275,13 @@ export async function projectIcon(project: string): Promise<string | null> {
   } catch { return null; }
 }
 
+/** Projects with a live session PROCESS on this machine — interactive claude windows + crew
+ * seats. This, not heartbeat freshness, is what "a terminal window is open" means; heartbeats
+ * ride hook fires, so an idle-but-open session goes dark on the hub after 5 quiet minutes. */
+export async function localSessions(): Promise<string[]> {
+  try { return await invoke<string[]>("local_sessions"); } catch { return []; }
+}
+
 export type AppUpdate = {
   current: string; latest: string; tag: string;
   assetName: string; url: string; size: number; updateAvailable: boolean;

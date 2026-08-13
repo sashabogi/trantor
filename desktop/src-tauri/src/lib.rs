@@ -211,6 +211,64 @@ fn b64(data: &[u8]) -> String {
     out
 }
 
+// ── local session truth ────────────────────────────────────────────────────────────────────────
+// Sasha's ruling on what ACTIVE means (2026-08-13): "any project that has a terminal window open
+// and is registered." Hub heartbeats cannot answer that — they ride hook fires, so an idle session
+// goes dark after 5 quiet minutes and its project fell out of ACTIVE NOW while its window sat
+// right there. Same quiet≠dead trap the delivery fix hit; same cure: consult PROCESS truth.
+// Heartbeats keep the one job they are good at — "actually mid-turn right now" (the blink).
+
+/// Parse `lsof -Fn` field output (p<pid> / fcwd / n<path>) into cwd paths.
+fn lsof_cwds(out: &str) -> Vec<String> {
+    out.lines().filter(|l| l.starts_with('n')).map(|l| l[1..].to_string()).collect()
+}
+
+/// A cwd is a project when it sits DIRECTLY under the dev root (or IS a project dir): the project
+/// is the first path component after the root, so a session deep in a monorepo still maps to it.
+fn project_of_cwd(cwd: &str, root: &str) -> Option<String> {
+    let rel = cwd.strip_prefix(root)?.trim_start_matches('/');
+    let first = rel.split('/').next()?.trim();
+    if first.is_empty() || first.starts_with('.') { return None; }
+    Some(first.to_string())
+}
+
+/// Projects with a live session process on THIS machine: interactive `claude` windows (cwd under
+/// the dev root) plus crew-runner seats (project dir is argv[2]; ~/.agent-bus/fleet → "fleet").
+#[tauri::command]
+fn local_sessions() -> Vec<String> {
+    let root = std::env::var("TRANTOR_DEV_ROOT").unwrap_or_else(|_| {
+        format!("{}/development", std::env::var("HOME").unwrap_or_default())
+    });
+    let sh = |bin: &str, args: &[&str]| -> String {
+        std::process::Command::new(bin).args(args).output()
+            .map(|o| String::from_utf8_lossy(&o.stdout).to_string()).unwrap_or_default()
+    };
+    let mut out: Vec<String> = Vec::new();
+
+    // interactive claude windows
+    let pids: Vec<String> = sh("/usr/bin/pgrep", &["-x", "claude"])
+        .lines().map(|l| l.trim().to_string()).filter(|l| !l.is_empty()).collect();
+    if !pids.is_empty() {
+        let list = pids.join(",");
+        for cwd in lsof_cwds(&sh("/usr/sbin/lsof", &["-a", "-d", "cwd", "-p", &list, "-Fn"])) {
+            if let Some(p) = project_of_cwd(&cwd, &root) { out.push(p); }
+        }
+    }
+
+    // crew seats: `node …/crew-runner.mjs <agent> <projectDir>`
+    for line in sh("/usr/bin/pgrep", &["-fl", "crew-runner.mjs"]).lines() {
+        if let Some(dir) = line.split_whitespace().last() {
+            if let Some(name) = std::path::Path::new(dir).file_name().and_then(|n| n.to_str()) {
+                if !name.is_empty() && !name.starts_with('.') { out.push(name.to_string()); }
+            }
+        }
+    }
+
+    out.sort();
+    out.dedup();
+    out
+}
+
 // ── self-update ────────────────────────────────────────────────────────────────────────────────
 // The app used to have NO idea a newer release existed: the only update path was someone typing
 // `trantor app update` by hand, so a teammate's install stayed stale silently forever. These two
@@ -458,7 +516,7 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_notification::init())
-        .invoke_handler(tauri::generate_handler![greet, sign_request, hub_for_project, known_projects, hub_request, start_stream, doctor, card_code, open_code, project_icon, app_update_check, app_update_install])
+        .invoke_handler(tauri::generate_handler![greet, sign_request, hub_for_project, known_projects, hub_request, start_stream, doctor, card_code, open_code, project_icon, local_sessions, app_update_check, app_update_install])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
@@ -512,6 +570,30 @@ mod icon_tests {
         assert!(pos("public/icon.png") < pos("public/favicon.ico"));
         assert!(pos("public/apple-touch-icon.png") < pos("public/favicon.ico"));
         assert!(pos("public/favicon.png") < pos("public/favicon.ico"));
+    }
+}
+
+#[cfg(test)]
+mod session_tests {
+    use super::*;
+
+    #[test]
+    fn lsof_field_output_yields_only_paths() {
+        let out = "p31023\nfcwd\nn/Users/s/development/crebral-scribe\np33890\nfcwd\nn/Users/s/development/crebral-health\n";
+        assert_eq!(lsof_cwds(out), vec!["/Users/s/development/crebral-scribe", "/Users/s/development/crebral-health"]);
+        assert!(lsof_cwds("").is_empty());
+    }
+
+    // a session deep inside a monorepo still belongs to its project, and a shell sitting AT the
+    // dev root belongs to nothing
+    #[test]
+    fn cwd_maps_to_the_first_component_under_the_root() {
+        let r = "/Users/s/development";
+        assert_eq!(project_of_cwd("/Users/s/development/crebral-health", r), Some("crebral-health".into()));
+        assert_eq!(project_of_cwd("/Users/s/development/crm-platform/apps/web", r), Some("crm-platform".into()));
+        assert_eq!(project_of_cwd("/Users/s/development", r), None);
+        assert_eq!(project_of_cwd("/Users/s/development/.hidden", r), None);
+        assert_eq!(project_of_cwd("/Users/s/elsewhere/thing", r), None);
     }
 }
 
