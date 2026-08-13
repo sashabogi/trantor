@@ -27,6 +27,17 @@ export type Card = {
   phase?: string; costUsd?: number; created?: number; updated?: number;
   /** the narrative line ("assigned — did"), written by the cheap summarizer */
   summary?: string;
+  /** Who POSTED the card — `${hostId()}:${project}`, the same shape a focus card's assignee has.
+   * This, not `parent`, is what actually joins a sub-agent to the session that spawned it. */
+  by?: string;
+  /** The spawning session as Claude Code names it: a session UUID, NOT a bus session id. Kept
+   * because the hub stores it, but it does not join to anything today — see `parentFocusKeys` in
+   * features/board/Board.tsx before reaching for this. */
+  parent?: string;
+  /** Sub-agent kind ("Explore", "general-purpose", …) — set by hooks/subagent-cost.mjs. */
+  agentType?: string;
+  /** Rolling count: the hub collapses repeat sub-agent runs into ONE card rather than minting dupes. */
+  count?: number;
 };
 
 export type HubEvent = {
@@ -251,6 +262,17 @@ export type CardCode = {
 /** The card→code link, resolved on THIS machine (repos live here, hubs don't have them). */
 export async function cardCode(project: string, cardId: number, candidates: string[]): Promise<CardCode> {
   return JSON.parse(await invoke<string>("card_code", { project, cardId, candidates }));
+}
+
+/** A project's own icon, read off the repo on THIS machine — same reason as cardCode: repos live
+ * here, hubs don't have them. Returns a `data:` URI, or null when the repo ships no art (roughly
+ * 60% of them), which is the caller's cue to fall back to a monogram. Never throws: a project the
+ * app can see but whose directory is missing must still render a row. */
+export async function projectIcon(project: string): Promise<string | null> {
+  try {
+    const v = await invoke<string | null>("project_icon", { project });
+    return v || null;
+  } catch { return null; }
 }
 
 /** Open a file/url the way the operator prefers (Settings → "Open code in"). */

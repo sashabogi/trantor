@@ -8,6 +8,7 @@
 import { useEffect, useMemo, useState } from "react";
 import type { Card, HubClient } from "../../shared/api/client";
 import { CardDetail } from "./CardDetail";
+import { SubagentGroup } from "./SubagentGroup";
 import { ProjectHeader } from "../project/ProjectHeader";
 import { AgentChip, Avatar, cleanTitle, displayName } from "../../shared/Avatar";
 import { usePeers, presenceMap, stateOf, PRESENCE_COLOR, type PresenceState } from "../../shared/presence";
@@ -39,6 +40,45 @@ function matches(card: Card, query: string): boolean {
   if (q.startsWith("#")) return String(card.id).startsWith(q.slice(1));
   if (q.startsWith("@")) return (card.assignee || "").toLowerCase().includes(q.slice(1));
   return card.title.toLowerCase().includes(q) || (card.assignee || "").toLowerCase().includes(q);
+}
+
+// Sub-agent cards do not belong to a session — and that is a DATA fact, not a styling choice.
+//
+// The obvious design is "nest each sub-agent under the focus card of the session that spawned it",
+// and it cannot be built on today's model. Two keys look like they identify that session and
+// neither does:
+//   • `parent` — set by hooks/subagent-cost.mjs from `parent_session_id`, a Claude Code session
+//     UUID. A focus card's assignee is a BUS session id ("MacBook-Pro-M1:trantor"). Different
+//     namespaces: measured over 431 live cards, joining on `parent` resolved 0 of them.
+//   • `by` / assignee — right namespace, wrong granularity. A bus session id is per (host,
+//     project), so ALL 28 of crebral-health's focus cards share one. Joining on it piles every
+//     sub-agent the machine ever ran onto whichever focus card renders last: one tile claiming
+//     "2157 sub-agents · $9068.89".
+// On top of that the hub COLLAPSES repeat runs into one rolling card (count up to 739 on a single
+// card), so 84 of 198 sub-agent cards genuinely span many sessions and cannot belong to one.
+//
+// So we group by LANE instead. That delivers the thing actually wanted — sub-agent noise stops
+// burying real work, 412 done-lane tiles become one line — and it claims only what is true. Real
+// nesting needs the hook to send a per-session bus identity first; see docs/HANDOFF-next-session.md.
+type Lane = { cards: Card[]; subagents: Card[]; openSubagents: boolean };
+
+function passesAssignee(card: Card, assignee: string): boolean {
+  return !assignee || card.assignee === assignee;
+}
+
+const isSubagent = (c: Card) => c.source === "cc-subagent";
+
+/** Split one lane's cards into real work and the sub-agent roll-up that sits under it.
+ *
+ * A sub-agent card matched by an ACTIVE search is never hidden inside a collapsed group — the
+ * group opens instead. Searching for something and having it silently swallowed by a collapsed
+ * summary is the one behaviour a board cannot have. */
+function splitLane(cards: Card[], query: string, assignee: string): Lane {
+  const searching = query.trim() !== "" || assignee !== "";
+  const visible = cards.filter(c => matches(c, query) && passesAssignee(c, assignee));
+  const work = visible.filter(c => !isSubagent(c));
+  const subagents = visible.filter(isSubagent);
+  return { cards: work, subagents, openSubagents: searching && subagents.length > 0 };
 }
 
 function CardTile({ card, onOpen, onAdvance, presence }: {
@@ -133,23 +173,27 @@ export function Board({ client, project, lens, onLens }: {
     () => [...new Set((cards ?? []).map(c => c.assignee).filter((a): a is string => !!a))].sort(),
     [cards],
   );
+  // Exception lanes earn their width by having cards in them; the four flow lanes are always the
+  // board's shape. Seven permanent columns forced a horizontal scroll that clipped lane counts.
+  const byLane = useMemo(() => {
+    const all = cards ?? [];
+    return LANES
+      .map(l => [l, splitLane(all.filter(c => (c.status || "todo") === l), query, assignee)] as const)
+      .filter(([l, lane]) => !["failed", "blocked", "stale"].includes(l) || lane.cards.length + lane.subagents.length > 0);
+  }, [cards, query, assignee]);
 
   if (error) return <div className="p-6 text-sm text-[var(--color-tr-fail)]">Board unavailable: {error}</div>;
   if (!cards) return <div className="p-6 text-sm text-[var(--color-tr-muted)]">Loading {project}…</div>;
 
-  const visible = cards.filter(c => matches(c, query) && (!assignee || c.assignee === assignee));
-  // Exception lanes earn their width by having cards in them; the four flow lanes are always the
-  // board's shape. Seven permanent columns forced a horizontal scroll that clipped lane counts.
-  const byLane = LANES.map(l => [l, visible.filter(c => (c.status || "todo") === l)] as const)
-    .filter(([l, list]) => !["failed", "blocked", "stale"].includes(l) || list.length > 0);
   const done = cards.filter(c => c.status === "done").length;
-  const filtered = visible.length !== cards.length;
+  const filtered = query.trim() !== "" || assignee !== "";
+  const shown = byLane.reduce((n, [, lane]) => n + lane.cards.length + lane.subagents.length, 0);
 
   return (
     <div className="tr-pane relative flex h-full flex-col">
       <ProjectHeader project={project} lens={lens} onLens={onLens}
         sub={<span className="flex flex-wrap items-center gap-x-2 gap-y-1">
-          <span>{done}/{cards.length} done · {Math.round((done / Math.max(cards.length, 1)) * 100)}%{filtered && <> · showing {visible.length}</>}</span>
+          <span>{done}/{cards.length} done · {Math.round((done / Math.max(cards.length, 1)) * 100)}%{filtered && <> · showing {shown}</>}</span>
           {liveHere.length > 0 && <span className="flex items-center gap-1.5">
             <span className="opacity-60">·</span>
             {liveHere.slice(0, 8).map(p => {
@@ -179,15 +223,21 @@ export function Board({ client, project, lens, onLens }: {
         )}
       </ProjectHeader>
       <div className="flex flex-1 gap-4 overflow-x-auto px-8 pb-6">
-        {byLane.map(([lane, list]) => (
+        {byLane.map(([lane, { cards: work, subagents, openSubagents }]) => (
           <section key={lane} className="tr-lane flex w-[290px] shrink-0 grow-0 flex-col rounded-xl bg-white/[0.025] p-2.5">
             <div className="mb-2.5 flex items-center gap-2 px-1.5 pt-1">
               <span className="tr-dot" style={{ background: LANE_COLOR[lane] }} />
               <span className="tr-label">{lane}</span>
-              <span className="tr-mono ml-auto text-[11px] text-[var(--color-tr-muted)]">{list.length}</span>
+              <span className="tr-mono ml-auto text-[11px] text-[var(--color-tr-muted)]">
+                {work.length + subagents.length}
+              </span>
             </div>
             <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-x-hidden overflow-y-auto px-0.5 pb-1">
-              {list.slice(0, 200).map(c => (
+              {/* The roll-up leads the lane. It is one collapsed line, so it cannot compete with
+                  real work — and putting it last buried it under up to 200 cards (the done lane
+                  holds 871), which is not a place anyone would find it. A summary goes at the top. */}
+              <SubagentGroup items={subagents} forceOpen={openSubagents} onOpen={c => setOpen(c.id)} />
+              {work.slice(0, 200).map(c => (
                 <CardTile key={c.id} card={c} onOpen={c2 => setOpen(c2.id)} onAdvance={advance}
                           presence={c.assignee ? presence.get(c.assignee) : undefined} />
               ))}

@@ -8,8 +8,10 @@
 // Fleet telemetry (economics, providers, tallies) lives on the HOME view as designed cards —
 // never in chrome. The old header dump was the altitude mistake made visible.
 import { useEffect, useMemo, useRef, useState } from "react";
+import { Bot, Eye, GraduationCap, House, Inbox as InboxIcon, Settings as SettingsIcon } from "lucide-react";
 import { HubClient, hubForProject, knownProjects, type Peer } from "../shared/api/client";
 import { stateOf } from "../shared/presence";
+import { ProjectIcon } from "../shared/ProjectIcon";
 
 const LOCAL_HUB = "http://127.0.0.1:4477";
 import { Home } from "../features/home/Home";
@@ -36,17 +38,35 @@ type Pane =
 // Who this app signs as. Mirrors the Rust default; RELAY_OWNER_IDENTITY overrides it there.
 const ME = "sasha@mac";
 
-// Umbrella grouping: a shared prefix becomes a sidebar SECTION rather than a nested tree. Slack has
-// no sub-channels for good reasons, and 85% of this board is one Crebral program.
-function group(projects: string[]) {
-  const out = new Map<string, string[]>();
-  for (const p of projects) {
-    const key = p.includes("-") ? p.split("-")[0] : p;
-    const section = projects.filter(x => x === key || x.startsWith(key + "-")).length > 1 ? key : "projects";
-    if (!out.has(section)) out.set(section, []);
-    out.get(section)!.push(p);
-  }
-  return [...out.entries()].sort((a, b) => b[1].length - a[1].length);
+// The fleet nav, as DATA — five hand-written <NavItem> lines was how the operational half of the
+// sidebar ended up typographically identical to the project half.
+//
+// Icons are Lucide: one stroke weight, one grid, drawn by people who draw icons. Hand-rolling six
+// SVGs to save a dependency is exactly the "rabid dogs were taught how to code" failure mode, and
+// the marks here do real work — they are the only thing that separates FLEET rows from PROJECT rows
+// at a glance, which is the complaint this whole pass exists to answer.
+const FLEET_NAV = [
+  { kind: "home",     label: "Home",     Icon: House },
+  { kind: "inbox",    label: "Inbox",    Icon: InboxIcon },
+  { kind: "agents",   label: "Agents",   Icon: Bot },
+  { kind: "overseer", label: "Overseer", Icon: Eye },
+  { kind: "learning", label: "Learning", Icon: GraduationCap },
+] as const;
+
+// Sidebar sections announce themselves. Previously the FLEET block had NO header at all, so
+// "Home" and "crebral-health" were the same object rendered twice — which is why the sidebar read
+// as one undifferentiated list that "just keeps going".
+function SectionLabel({ children, count }: { children: React.ReactNode; count?: number }) {
+  return (
+    <div className="flex items-center gap-2 px-3 pt-1 pb-1.5">
+      <span className="text-[10px] font-semibold uppercase tracking-[0.13em] text-[var(--color-tr-muted)]/60">
+        {children}
+      </span>
+      {count !== undefined && count > 0 && (
+        <span className="tr-mono text-[10px] text-[var(--color-tr-muted)]/40">{count}</span>
+      )}
+    </div>
+  );
 }
 
 export function AppShell() {
@@ -86,7 +106,6 @@ export function AppShell() {
   useEffect(() => { if (active) hubForProject(active).then(setHub); }, [active]);
 
   const client = useMemo(() => (hub ? new HubClient(hub) : null), [hub]);
-  const sections = useMemo(() => group(projects), [projects]);
 
   // Sidebar activity: which projects have someone ALIVE in them right now. "The sidebar has no
   // indication of an active project or project in flight" — this is that indication, at the nav's
@@ -120,6 +139,37 @@ export function AppShell() {
     return () => { alive = false; clearInterval(t); };
   }, [hub]);
 
+  // ACTIVE NOW vs the rest. This is the answer to "I have a hard time figuring out where the
+  // projects are": the handful you are actually working in rise to the top, and everything else
+  // stays alphabetical below so it is still a predictable place to look.
+  //
+  // Sorted busy-before-idle inside the active group, and the group only EXISTS when something is
+  // live — an empty "Active now" header on a quiet machine would be chrome that says nothing.
+  const [activeProjects, restProjects] = useMemo(() => {
+    const live = projects.filter(p => activity.has(p))
+      .sort((a, b) => {
+        const rank = (p: string) => (activity.get(p) === "busy" ? 0 : 1);
+        return rank(a) - rank(b) || a.localeCompare(b);
+      });
+    return [live, projects.filter(p => !activity.has(p))] as const;
+  }, [projects, activity]);
+
+  // How many messages are waiting for the HUMAN. Same call and same DIRECT-only filter the Inbox
+  // view uses (peek, so reading the badge never advances the delivery ledger the receiving
+  // session's hooks depend on). A real count or no badge at all — never a decorative dot.
+  const [unread, setUnread] = useState(0);
+  useEffect(() => {
+    if (!client) return;
+    let alive = true;
+    const pull = () => client.inbox(ME)
+      .then(r => { if (alive) setUnread((r.messages ?? []).filter(m => m.to === ME).length); })
+      .catch(() => {});
+    void pull();
+    const t = setInterval(pull, 30_000);
+    const off = client.streamEvents(ev => { if (ev.type === "message") pull(); });
+    return () => { alive = false; clearInterval(t); off(); };
+  }, [client]);
+
   // Shell-level on purpose: a notification must fire whichever pane is open, and exactly once — a
   // per-view subscription would double-notify whenever two views happened to be mounted.
   // The presence cache feeds the offline-receiver rule (safe T3): when an agent messages a session
@@ -150,14 +200,46 @@ export function AppShell() {
     setPane({ kind: "project", lens: "board" });
   };
 
-  const NavItem = ({ label, on, onClick }: { label: string; on: boolean; onClick: () => void }) => (
+  const NavItem = ({ label, Icon, on, onClick, badge }: {
+    label: string;
+    Icon: React.ComponentType<{ size?: number; strokeWidth?: number; className?: string }>;
+    on: boolean; onClick: () => void; badge?: number;
+  }) => (
     <button onClick={onClick}
-      className={`block w-full rounded-lg px-3 py-1.5 text-left text-[13px] ${
+      className={`flex w-full items-center gap-2.5 rounded-lg px-3 py-1.5 text-left text-[13px] ${
         on ? "bg-white/[0.07] font-medium text-[var(--color-tr-text)]"
            : "text-[var(--color-tr-muted)] hover:bg-white/[0.04] hover:text-[var(--color-tr-text)]"}`}>
-      {label}
+      <Icon size={15} strokeWidth={1.75} className="shrink-0 opacity-80" />
+      <span className="min-w-0 flex-1 truncate">{label}</span>
+      {badge !== undefined && badge > 0 && (
+        <span className="tr-mono shrink-0 rounded-full bg-[var(--color-tr-doing)]/20 px-1.5 text-[10px] text-[var(--color-tr-doing)]">
+          {badge > 99 ? "99+" : badge}
+        </span>
+      )}
     </button>
   );
+
+  // One project row, used by both groups so ACTIVE NOW and PROJECTS can never drift apart.
+  const ProjectRow = ({ p }: { p: string }) => {
+    const act = activity.get(p);
+    const on = p === active && pane.kind === "project";
+    return (
+      <button key={p}
+        onClick={() => { setActive(p); setPane(cur => ({ kind: "project", lens: cur.kind === "project" ? cur.lens : "board" })); }}
+        title={act === "busy" ? "a session here is mid-turn right now" : act === "live" ? "sessions online, idle" : undefined}
+        className={`flex w-full items-center gap-2.5 rounded-lg px-3 py-1.5 text-left text-[13px] ${
+          on ? "bg-white/[0.07] font-medium text-[var(--color-tr-text)]"
+             : act ? "text-[var(--color-tr-text)]/85 hover:bg-white/[0.04]"
+                   : "text-[var(--color-tr-muted)] hover:bg-white/[0.04] hover:text-[var(--color-tr-text)]"}`}>
+        <ProjectIcon project={p} size={20} />
+        <span className="min-w-0 flex-1 truncate">{p}</span>
+        {act && (
+          <span className={`tr-dot shrink-0 ${act === "busy" ? "tr-dot-pulse" : ""}`}
+                style={{ background: act === "busy" ? "var(--color-tr-doing)" : "var(--color-tr-muted)", width: 6, height: 6 }} />
+        )}
+      </button>
+    );
+  };
 
   return (
     <div className="flex h-full gap-0 bg-[var(--color-tr-bg)]">
@@ -167,47 +249,40 @@ export function AppShell() {
           <span className="text-[13px] font-semibold tracking-[0.18em]">TRANTOR</span>
         </div>
 
-        {/* FLEET — cross-project views */}
+        {/* FLEET — cross-project views. Labelled, so the operational half of the app announces
+            itself as a different KIND of thing than the projects below it. */}
         <div className="mb-4 flex flex-col gap-0.5">
-          <NavItem label="Home"     on={pane.kind === "home"}     onClick={() => setPane({ kind: "home" })} />
-          <NavItem label="Inbox"    on={pane.kind === "inbox"}    onClick={() => setPane({ kind: "inbox" })} />
-          <NavItem label="Agents"   on={pane.kind === "agents"}   onClick={() => setPane({ kind: "agents" })} />
-          <NavItem label="Learning" on={pane.kind === "learning"} onClick={() => setPane({ kind: "learning" })} />
-          <NavItem label="Overseer" on={pane.kind === "overseer"} onClick={() => setPane({ kind: "overseer" })} />
+          <SectionLabel>Fleet</SectionLabel>
+          {FLEET_NAV.map(({ kind, label, Icon }) => (
+            <NavItem key={kind} label={label} Icon={Icon}
+                     badge={kind === "inbox" ? unread : undefined}
+                     on={pane.kind === kind}
+                     onClick={() => setPane({ kind } as Pane)} />
+          ))}
         </div>
 
         <nav className="flex-1 overflow-y-auto">
-          {sections.map(([section, list]) => (
-            <div key={section} className="mb-4">
-              <div className="px-3 pb-1.5 text-[11px] font-medium uppercase tracking-[0.08em] text-[var(--color-tr-muted)]/70">{section}</div>
+          {activeProjects.length > 0 && (
+            <div className="mb-4">
+              <SectionLabel count={activeProjects.length}>Active now</SectionLabel>
               <div className="flex flex-col gap-0.5">
-                {list.map(p => {
-                  const act = activity.get(p);
-                  return (
-                    <button key={p}
-                      onClick={() => { setActive(p); setPane(cur => ({ kind: "project", lens: cur.kind === "project" ? cur.lens : "board" })); }}
-                      title={act === "busy" ? "a session here is mid-turn right now" : act === "live" ? "sessions online, idle" : undefined}
-                      className={`flex w-full items-center gap-2 rounded-lg px-3 py-1.5 text-left text-[13px] ${
-                        p === active && pane.kind === "project"
-                          ? "bg-white/[0.07] font-medium text-[var(--color-tr-text)]"
-                          : act ? "text-[var(--color-tr-text)]/85 hover:bg-white/[0.04]"
-                                : "text-[var(--color-tr-muted)] hover:bg-white/[0.04] hover:text-[var(--color-tr-text)]"}`}>
-                      <span className="min-w-0 flex-1 truncate">{p}</span>
-                      {act && (
-                        <span className={`tr-dot shrink-0 ${act === "busy" ? "tr-dot-pulse" : ""}`}
-                              style={{ background: act === "busy" ? "var(--color-tr-doing)" : "var(--color-tr-muted)", width: 6, height: 6 }} />
-                      )}
-                    </button>
-                  );
-                })}
+                {activeProjects.map(p => <ProjectRow key={p} p={p} />)}
               </div>
             </div>
-          ))}
+          )}
+          {restProjects.length > 0 && (
+            <div className="mb-4">
+              <SectionLabel count={restProjects.length}>Projects</SectionLabel>
+              <div className="flex flex-col gap-0.5">
+                {restProjects.map(p => <ProjectRow key={p} p={p} />)}
+              </div>
+            </div>
+          )}
         </nav>
 
         {/* APP — identity + settings live together */}
         <div className="mt-2 flex flex-col gap-0.5 border-t border-white/[0.06] pt-2">
-          <NavItem label="Settings" on={pane.kind === "settings"} onClick={() => setPane({ kind: "settings" })} />
+          <NavItem label="Settings" Icon={SettingsIcon} on={pane.kind === "settings"} onClick={() => setPane({ kind: "settings" })} />
           <div className="flex items-center gap-2.5 px-3 pt-2">
             <span className="relative flex h-7 w-7 items-center justify-center rounded-full bg-[var(--color-tr-panel)] text-[12px] font-semibold">
               {ME[0].toUpperCase()}

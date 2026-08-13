@@ -1,0 +1,6 @@
+# pnpm 11 asks, per dependency, whether its install script may run. esbuild's is required: it is
+# what links the platform-specific binary that vite builds through, so a "false" here breaks the
+# build. The file arrived as an unanswered stub ("set this to true or false") from an interrupted
+# install — this is that answer.
+allowBuilds:
+  esbuild: true
