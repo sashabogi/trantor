@@ -21,3 +21,12 @@ export function when(ts: number): string {
   }
   return `${d.toLocaleDateString([], { month: "short", day: "numeric" })}, ${clock(ts)}`;
 }
+
+/** "12m ago" · "18h ago" · "3d ago" — the age of a thing, for judging whether it still matters. */
+export function ago(ts: number): string {
+  const m = Math.max(1, Math.round((Date.now() - ts) / 60000));
+  if (m < 60) return `${m}m ago`;
+  const h = Math.round(m / 60);
+  if (h < 48) return `${h}h ago`;
+  return `${Math.round(h / 24)}d ago`;
+}

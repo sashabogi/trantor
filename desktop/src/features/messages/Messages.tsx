@@ -64,6 +64,12 @@ function msgOf(ev: HubEvent): Msg | null {
   const from = String(ev.by ?? "");
   const to = String((ev as Record<string, unknown>).toSession ?? "");
   if (!text || !from || !to) return null;
+  // Sasha's question, answered: "are those even messages and conversations? Or are they notices?"
+  // Notices. hub:* traffic is the overseer reporting STATE — it has a real surface (the Overseer
+  // view, with per-condition roll-ups) and rendering it here as fake conversations buried every
+  // real exchange under walls of boilerplate. Messages is conversations between parties that can
+  // actually converse.
+  if (isSynthetic(from) || isSynthetic(to)) return null;
   return { id: Number(ev.msgId ?? ev.id ?? 0), ts: ev.ts, from, to, project: String(ev.project ?? ""), text };
 }
 
@@ -142,6 +148,7 @@ export function Messages({ client, me, focus }: { client: HubClient; me: string;
   const [aim, setAim] = useState<Record<string, string>>({});
   /** a conversation being STARTED — no messages exist yet, so no thread does either */
   const [compose, setCompose] = useState<{ picking: boolean; to: string | null }>({ picking: false, to: null });
+  const [pickQ, setPickQ] = useState("");
   const [peers, setPeers] = useState<Peer[]>([]);
   const [openRuns, setOpenRuns] = useState<Record<string, boolean>>({});
   const bottomRef = useRef<HTMLDivElement | null>(null);
@@ -175,13 +182,15 @@ export function Messages({ client, me, focus }: { client: HubClient; me: string;
   useEffect(() => {
     if (sel === null && !compose.to && threads.length) setSel(threads[0].key);
   }, [sel, compose.to, threads]);
-  // a focus jump to a pair with no history yet: fall through to compose mode with that peer
+  // a focus jump to a pair with no history yet: fall through to compose mode with that peer.
+  // Guarded on the log having LOADED — before that, threads is [] for every pair, and this
+  // fallback fired during loading, which is why "View conversation" landed on a blank screen.
   useEffect(() => {
-    if (focus && sel === pairKey(me, focus) && !threads.some(t => t.key === sel)) {
+    if (msgs !== null && focus && sel === pairKey(me, focus) && !threads.some(t => t.key === sel)) {
       setCompose({ picking: false, to: focus });
       setSel(null);
     }
-  }, [focus, sel, threads, me]);
+  }, [msgs, focus, sel, threads, me]);
   const open = threads.find(t => t.key === sel) ?? null;
 
   // A pair thread folds in the human's own exchanges with either party: the interjection and its
@@ -251,9 +260,12 @@ export function Messages({ client, me, focus }: { client: HubClient; me: string;
             + New message
           </button>
           {compose.picking && (
-            <div className="tr-card mb-3 max-h-64 overflow-y-auto p-1.5">
+            <div className="tr-card mb-3 max-h-72 overflow-y-auto p-1.5">
+              <div className="px-2 pt-1.5 pb-1 text-[10px] font-semibold uppercase tracking-[0.13em] text-[var(--color-tr-muted)]/60">To</div>
+              <input autoFocus value={pickQ} onChange={e => setPickQ(e.target.value)}
+                     placeholder="Filter sessions…" className="tr-input mb-1.5 w-full" />
               {startable.length === 0 && <div className="p-3 text-[12px] text-[var(--color-tr-muted)]">No live sessions on this hub.</div>}
-              {startable.map(p => (
+              {startable.filter(p => !pickQ.trim() || p.session.toLowerCase().includes(pickQ.trim().toLowerCase())).map(p => (
                 <button key={p.session}
                   onClick={() => { setCompose({ picking: false, to: p.session }); setSel(null); setDraft(""); }}
                   className="flex w-full items-center gap-2.5 rounded-lg px-2 py-1.5 text-left hover:bg-white/[0.04]">
@@ -273,9 +285,6 @@ export function Messages({ client, me, focus }: { client: HubClient; me: string;
           {threads.map(t => {
             const last = t.msgs[t.msgs.length - 1];
             const on = t.key === (open?.key ?? "");
-            const title = t.kind === "dm"
-              ? t.parties.map(shortName).join(" ↔ ")
-              : `# ${t.key.slice(1)}`;
             return (
               <button key={t.key} onClick={() => { setSel(t.key); setCompose({ picking: false, to: null }); }}
                 className={`flex w-full items-center gap-3 rounded-xl p-2.5 text-left ${
@@ -284,17 +293,33 @@ export function Messages({ client, me, focus }: { client: HubClient; me: string;
                   ? <PairAvatars parties={t.parties} />
                   : <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-white/[0.05] text-[15px] text-[var(--color-tr-muted)]">#</span>}
                 <span className="min-w-0 flex-1">
-                  <span className="flex items-baseline gap-2">
-                    <span className="min-w-0 truncate text-[13px] font-medium">{title}</span>
-                    {last && <span className="tr-mono ml-auto shrink-0 text-[10px] text-[var(--color-tr-muted)]">{when(last.ts)}</span>}
-                  </span>
-                  <span className="block truncate text-[12px] text-[var(--color-tr-muted)]">
+                  {/* BOTH parties, stacked — a truncated "A ↔ …" made every row a mystery */}
+                  {t.kind === "dm" ? (
+                    <span className="block">
+                      <span className="flex items-baseline gap-2">
+                        <span className="min-w-0 truncate text-[13px] font-medium">{shortName(t.parties[0] ?? "")}</span>
+                        {last && <span className="tr-mono ml-auto shrink-0 text-[10px] text-[var(--color-tr-muted)]">{when(last.ts)}</span>}
+                      </span>
+                      <span className="block truncate text-[12px] font-medium text-[var(--color-tr-text)]/80">↔ {shortName(t.parties[1] ?? "")}</span>
+                    </span>
+                  ) : (
+                    <span className="flex items-baseline gap-2">
+                      <span className="min-w-0 truncate text-[13px] font-medium"># {t.key.slice(1)}</span>
+                      {last && <span className="tr-mono ml-auto shrink-0 text-[10px] text-[var(--color-tr-muted)]">{when(last.ts)}</span>}
+                    </span>
+                  )}
+                  <span className="mt-0.5 block truncate text-[12px] text-[var(--color-tr-muted)]">
                     {last ? `${shortName(last.from)}: ${last.text}` : ""}
                   </span>
                 </span>
               </button>
             );
           })}
+          {threads.length > 0 && (
+            <div className="px-2 pt-3 text-[11px] leading-relaxed text-[var(--color-tr-muted)]/60">
+              Overseer and system notices aren't conversations — they live in the Overseer view.
+            </div>
+          )}
         </aside>
 
         {/* thread */}

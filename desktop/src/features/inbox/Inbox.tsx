@@ -12,7 +12,7 @@ import { useEffect, useState } from "react";
 import type { HubClient, Message, Peer } from "../../shared/api/client";
 import { Avatar } from "../../shared/Avatar";
 import { Composer } from "../../shared/Composer";
-import { when } from "../../shared/time";
+import { ago, when } from "../../shared/time";
 
 const brandOf = (s: string) => s.split(":")[0] ?? s;
 
@@ -59,6 +59,12 @@ export function Inbox({ client, me, onOpenConversation }: {
                 {m.project && <span className="tr-chip shrink-0">{m.project}</span>}
                 <span className="ml-auto shrink-0 text-[11px] text-[var(--color-tr-muted)]">
                   {when(m.ts)}
+                </span>
+                <span className={`shrink-0 rounded px-1.5 py-0.5 text-[10px] ${
+                  Date.now() - m.ts > 24 * 60 * 60 * 1000
+                    ? "bg-[var(--color-tr-warn)]/15 text-[var(--color-tr-warn)]"
+                    : "bg-white/[0.05] text-[var(--color-tr-muted)]"}`}>
+                  waiting {ago(m.ts)}
                 </span>
               </div>
               <div className="mt-1 whitespace-pre-wrap break-words text-sm leading-relaxed">{m.text}</div>
