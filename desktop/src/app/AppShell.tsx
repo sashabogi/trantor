@@ -8,7 +8,7 @@
 // Fleet telemetry (economics, providers, tallies) lives on the HOME view as designed cards —
 // never in chrome. The old header dump was the altitude mistake made visible.
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ArrowDownToLine, Bot, Eye, GraduationCap, House, Inbox as InboxIcon, Settings as SettingsIcon } from "lucide-react";
+import { ArrowDownToLine, Bot, Eye, GraduationCap, House, Inbox as InboxIcon, MessagesSquare, Settings as SettingsIcon } from "lucide-react";
 import { appUpdateCheck, HubClient, hubForProject, knownProjects, localSessions, type AppUpdate, type Peer } from "../shared/api/client";
 import { stateOf } from "../shared/presence";
 import { ProjectIcon } from "../shared/ProjectIcon";
@@ -19,6 +19,7 @@ import { Board } from "../features/board/Board";
 import { Feed } from "../features/feed/Feed";
 import { Agents } from "../features/agents/Agents";
 import { Inbox } from "../features/inbox/Inbox";
+import { Messages } from "../features/messages/Messages";
 import { Learning } from "../features/learning/Learning";
 import { Overseer } from "../features/overseer/Overseer";
 import { Settings } from "../features/settings/Settings";
@@ -30,6 +31,7 @@ type Pane =
   | { kind: "home" }
   | { kind: "project"; lens: Lens }
   | { kind: "inbox" }
+  | { kind: "messages" }
   | { kind: "agents" }
   | { kind: "learning" }
   | { kind: "overseer" }
@@ -48,6 +50,7 @@ const ME = "sasha@mac";
 const FLEET_NAV = [
   { kind: "home",     label: "Home",     Icon: House },
   { kind: "inbox",    label: "Inbox",    Icon: InboxIcon },
+  { kind: "messages", label: "Messages", Icon: MessagesSquare },
   { kind: "agents",   label: "Agents",   Icon: Bot },
   { kind: "overseer", label: "Overseer", Icon: Eye },
   { kind: "learning", label: "Learning", Icon: GraduationCap },
@@ -335,6 +338,7 @@ export function AppShell() {
           </div>
         ) : pane.kind === "home" ? <Home client={client} me={ME} onOpenProject={openProject} />
           : pane.kind === "inbox" ? <Inbox client={client} me={ME} />
+          : pane.kind === "messages" ? <Messages client={client} me={ME} />
           : pane.kind === "agents" ? <Agents client={client} project={active} />
           : pane.kind === "learning" ? <Learning client={client} />
           : pane.kind === "overseer" ? <Overseer client={client} />
