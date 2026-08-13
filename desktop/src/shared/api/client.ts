@@ -275,6 +275,24 @@ export async function projectIcon(project: string): Promise<string | null> {
   } catch { return null; }
 }
 
+export type AppUpdate = {
+  current: string; latest: string; tag: string;
+  assetName: string; url: string; size: number; updateAvailable: boolean;
+};
+
+/** Is a newer app release out? Runs in Rust (GitHub API — the webview's CSP can't go there).
+ * Returns null on any failure: an update check that can't reach GitHub is a non-event, not an
+ * error the operator should see. */
+export async function appUpdateCheck(): Promise<AppUpdate | null> {
+  try { return await invoke<AppUpdate>("app_update_check"); } catch { return null; }
+}
+
+/** Download + install the release DMG and relaunch. On SUCCESS this promise never resolves —
+ * the process exits mid-flight and the new app takes over. It only ever rejects. */
+export async function appUpdateInstall(u: AppUpdate): Promise<void> {
+  return invoke("app_update_install", { url: u.url, assetName: u.assetName });
+}
+
 /** Open a file/url the way the operator prefers (Settings → "Open code in"). */
 export async function openCode(target: string, kind: "url" | "path" | "reveal" = "path"): Promise<void> {
   return invoke("open_code", { target, kind });

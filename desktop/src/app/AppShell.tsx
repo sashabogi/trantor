@@ -8,8 +8,8 @@
 // Fleet telemetry (economics, providers, tallies) lives on the HOME view as designed cards —
 // never in chrome. The old header dump was the altitude mistake made visible.
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Bot, Eye, GraduationCap, House, Inbox as InboxIcon, Settings as SettingsIcon } from "lucide-react";
-import { HubClient, hubForProject, knownProjects, type Peer } from "../shared/api/client";
+import { ArrowDownToLine, Bot, Eye, GraduationCap, House, Inbox as InboxIcon, Settings as SettingsIcon } from "lucide-react";
+import { appUpdateCheck, HubClient, hubForProject, knownProjects, type AppUpdate, type Peer } from "../shared/api/client";
 import { stateOf } from "../shared/presence";
 import { ProjectIcon } from "../shared/ProjectIcon";
 
@@ -154,6 +154,19 @@ export function AppShell() {
     return [live, projects.filter(p => !activity.has(p))] as const;
   }, [projects, activity]);
 
+  // Newer app release out? Checked at launch and every 6h — the release cadence here is days, not
+  // minutes, and unauthenticated GitHub API calls are rate-limited. The chip this feeds is the
+  // answer to "how does a teammate ever find out 0.3.3 is stale": before this, the app itself
+  // never knew.
+  const [update, setUpdate] = useState<AppUpdate | null>(null);
+  useEffect(() => {
+    let alive = true;
+    const check = () => appUpdateCheck().then(u => { if (alive && u) setUpdate(u); });
+    void check();
+    const t = setInterval(check, 6 * 60 * 60 * 1000);
+    return () => { alive = false; clearInterval(t); };
+  }, []);
+
   // How many messages are waiting for the HUMAN. Same call and same DIRECT-only filter the Inbox
   // view uses (peek, so reading the badge never advances the delivery ledger the receiving
   // session's hooks depend on). A real count or no badge at all — never a decorative dot.
@@ -282,6 +295,15 @@ export function AppShell() {
 
         {/* APP — identity + settings live together */}
         <div className="mt-2 flex flex-col gap-0.5 border-t border-white/[0.06] pt-2">
+          {update?.updateAvailable && (
+            <button onClick={() => setPane({ kind: "settings" })}
+              title={`Trantor ${update.latest} is out (you have ${update.current}) — install from Settings`}
+              className="flex w-full items-center gap-2.5 rounded-lg px-3 py-1.5 text-left text-[13px] text-[var(--color-tr-doing)] hover:bg-white/[0.04]">
+              <ArrowDownToLine size={15} strokeWidth={1.75} className="shrink-0" />
+              <span className="min-w-0 flex-1 truncate">Update</span>
+              <span className="tr-mono shrink-0 text-[11px]">v{update.latest}</span>
+            </button>
+          )}
           <NavItem label="Settings" Icon={SettingsIcon} on={pane.kind === "settings"} onClick={() => setPane({ kind: "settings" })} />
           <div className="flex items-center gap-2.5 px-3 pt-2">
             <span className="relative flex h-7 w-7 items-center justify-center rounded-full bg-[var(--color-tr-panel)] text-[12px] font-semibold">
@@ -309,7 +331,7 @@ export function AppShell() {
           : pane.kind === "agents" ? <Agents client={client} project={active} />
           : pane.kind === "learning" ? <Learning client={client} />
           : pane.kind === "overseer" ? <Overseer client={client} />
-          : pane.kind === "settings" ? <Settings me={ME} />
+          : pane.kind === "settings" ? <Settings me={ME} update={update} />
           : pane.lens === "board" ? <Board client={client} project={active} lens={pane.lens} onLens={l => setPane({ kind: "project", lens: l as Lens })} />
           : pane.lens === "chat" ? <Conversation client={client} project={active} me={ME} lens={pane.lens} onLens={l => setPane({ kind: "project", lens: l as Lens })} />
           : <Feed client={client} project={active} lens={pane.lens} onLens={l => setPane({ kind: "project", lens: l as Lens })} />}

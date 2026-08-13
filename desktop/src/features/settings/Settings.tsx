@@ -6,12 +6,12 @@
 // first question when something 401s. What IS writable here is app behavior (notifications),
 // because that is the app's own preference, nobody else's.
 //
-// No fake affordances: Buzz shows an auto-updater and compute sharing; we don't have those, so
-// there is no button pretending we do. About says how updates actually arrive.
+// The Update button below is NOT a fake affordance (the sin the first Buzz pass was warned off):
+// it fronts a real in-process updater — download the release DMG, swap /Applications, relaunch.
 import { useEffect, useState } from "react";
 import { getVersion } from "@tauri-apps/api/app";
-import { HubClient, knownProjects, hubForProject, editorPref, setEditorPref } from "../../shared/api/client";
-import type { EditorPref } from "../../shared/api/client";
+import { HubClient, knownProjects, hubForProject, editorPref, setEditorPref, appUpdateCheck, appUpdateInstall } from "../../shared/api/client";
+import type { AppUpdate, EditorPref } from "../../shared/api/client";
 import { Avatar } from "../../shared/Avatar";
 import { notificationsEnabled, setNotificationsEnabled } from "../../shared/notify";
 
@@ -28,7 +28,7 @@ function Toggle({ on, onChange }: { on: boolean; onChange: (v: boolean) => void 
 
 type HubRow = { url: string; projects: string[]; ok: boolean | null };
 
-export function Settings({ me }: { me: string }) {
+export function Settings({ me, update: updateFromShell }: { me: string; update?: AppUpdate | null }) {
   const [hubs, setHubs] = useState<HubRow[]>([]);
   const [notify, setNotify] = useState(notificationsEnabled());
   const [editor, setEditor] = useState<EditorPref>(editorPref());
@@ -36,6 +36,29 @@ export function Settings({ me }: { me: string }) {
   const [version, setVersion] = useState("");
 
   useEffect(() => { getVersion().then(setVersion).catch(() => {}); }, []);
+
+  // The shell's launch-time check seeds this; "Check now" refreshes it on demand. One of three
+  // update states is always visibly true: current / newer available / couldn't reach GitHub.
+  const [update, setUpdate] = useState<AppUpdate | null>(updateFromShell ?? null);
+  const [checking, setChecking] = useState(false);
+  const [installing, setInstalling] = useState(false);
+  const [updateErr, setUpdateErr] = useState("");
+  useEffect(() => { if (updateFromShell) setUpdate(updateFromShell); }, [updateFromShell]);
+  const checkNow = async () => {
+    setChecking(true); setUpdateErr("");
+    const u = await appUpdateCheck();
+    if (u) setUpdate(u); else setUpdateErr("couldn't reach GitHub — try again later");
+    setChecking(false);
+  };
+  const installNow = async () => {
+    if (!update) return;
+    setInstalling(true); setUpdateErr("");
+    // on success this never resolves — the app relaunches out from under us
+    await appUpdateInstall(update).catch(e => {
+      setUpdateErr(String((e as Error)?.message ?? e));
+      setInstalling(false);
+    });
+  };
 
   useEffect(() => {
     let alive = true;
@@ -193,9 +216,31 @@ export function Settings({ me }: { me: string }) {
         <section>
           <h2 className="tr-sec-title">About</h2>
           <p className="tr-sec-sub">Trantor Desktop{version ? ` · v${version}` : ""}</p>
-          <div className="tr-card mt-3 p-4 text-[12px] text-[var(--color-tr-muted)]">
-            Updates ship through the repo for now — rebuild with <code>npm run tauri build</code>.
-            An auto-updater arrives with the first packaged release.
+          <div className="tr-card mt-3 flex items-center gap-4 p-4">
+            <div className="min-w-0 flex-1">
+              <div className="text-[13px] font-medium">
+                {update?.updateAvailable ? `Update available: v${update.latest}` : "Updates"}
+              </div>
+              <div className="mt-0.5 text-[12px] text-[var(--color-tr-muted)]">
+                {installing ? "Downloading and installing — the app will relaunch itself…"
+                  : update?.updateAvailable ? `You have v${update.current}. Installing replaces the app and relaunches it.`
+                  : update ? `v${update.current} is the latest release.`
+                  : "Ships as GitHub release DMGs; the app checks at launch and every few hours."}
+                {updateErr && <span className="text-[var(--color-tr-fail)]"> {updateErr}</span>}
+              </div>
+            </div>
+            {update?.updateAvailable ? (
+              <button onClick={installNow} disabled={installing}
+                className="shrink-0 rounded-lg px-3.5 py-1.5 text-[13px] font-medium text-white disabled:opacity-60"
+                style={{ background: "var(--color-tr-doing)" }}>
+                {installing ? "Installing…" : `Update to v${update.latest}`}
+              </button>
+            ) : (
+              <button onClick={checkNow} disabled={checking}
+                className="tr-input shrink-0 disabled:opacity-60">
+                {checking ? "Checking…" : "Check now"}
+              </button>
+            )}
           </div>
         </section>
       </div>
