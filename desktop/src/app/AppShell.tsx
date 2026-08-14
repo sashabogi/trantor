@@ -11,6 +11,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { ArrowDownToLine, Bot, Eye, GraduationCap, House, Inbox as InboxIcon, MessagesSquare, Settings as SettingsIcon } from "lucide-react";
 import { appUpdateCheck, HubClient, hubForProject, knownProjects, localSessions, type AppUpdate, type Peer } from "../shared/api/client";
 import { stateOf } from "../shared/presence";
+import { usePendingProposals } from "../shared/Proposals";
 import { ProjectIcon } from "../shared/ProjectIcon";
 
 const LOCAL_HUB = "http://127.0.0.1:4477";
@@ -191,6 +192,10 @@ export function AppShell() {
     return () => { alive = false; clearInterval(t); off(); };
   }, [client]);
 
+  // How many agent proposals await the human. Badges Home (where the queue renders first) — the
+  // count comes from the same shared hook every proposals surface reads, so they can't disagree.
+  const pendingProposals = usePendingProposals(client).length;
+
   // Shell-level on purpose: a notification must fire whichever pane is open, and exactly once — a
   // per-view subscription would double-notify whenever two views happened to be mounted.
   // The presence cache feeds the offline-receiver rule (safe T3): when an agent messages a session
@@ -278,7 +283,7 @@ export function AppShell() {
           <SectionLabel>Fleet</SectionLabel>
           {FLEET_NAV.map(({ kind, label, Icon }) => (
             <NavItem key={kind} label={label} Icon={Icon}
-                     badge={kind === "inbox" ? unread : undefined}
+                     badge={kind === "inbox" ? unread : kind === "home" ? pendingProposals : undefined}
                      on={pane.kind === kind}
                      onClick={() => setPane({ kind } as Pane)} />
           ))}

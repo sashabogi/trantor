@@ -47,6 +47,14 @@ export function notificationFor(ev: HubEvent, me: string, isOffline?: (session: 
   if (ev.type === "verify.gate.opened") {
     return { title: "Verify gate opened", body: `${ev.project ?? ""} — ${String(any.reason ?? "a decision is needed")}`.trim() };
   }
+  // Same class as a verify gate: an agent filed a bounded permission ask and is working around the
+  // gap until the human rules. Filing is a transition (once per proposal), so this can't spam.
+  if (ev.type === "proposal.filed") {
+    return {
+      title: `${ev.by ?? "an agent"} proposes a permission`,
+      body: `${ev.project ? `[${ev.project}] ` : ""}${String(any.scope ?? "").slice(0, 200)} — approve or deny on Home`,
+    };
+  }
   if (ev.type === "presence.offline" && String(ev.by ?? "").includes(":")) {
     const brand = String(ev.by).split(":")[0];
     // Only crew brands, not the operator's own sessions going quiet.

@@ -7,7 +7,8 @@
 // the live watch map (/overseer/status: links, autonomy levels, current detections), and the event
 // history of what it actually did. Fleet altitude: everything here is cross-project by definition.
 import { useEffect, useState } from "react";
-import type { HubClient, HubEvent, OverseerStatus, Proposal } from "../../shared/api/client";
+import type { HubClient, HubEvent, OverseerStatus } from "../../shared/api/client";
+import { ProposalsSection } from "../../shared/Proposals";
 import { usePeers, stateOf } from "../../shared/presence";
 import { rollUp, lasting } from "../../shared/rollup";
 
@@ -26,31 +27,6 @@ export function Overseer({ client }: { client: HubClient }) {
   const [error, setError] = useState<string | null>(null);
   const [history, setHistory] = useState<HubEvent[]>([]);
   const { peers } = usePeers(client);
-  // Agent-proposed permissions waiting on the HUMAN — the one part of this view that asks for a
-  // decision rather than reporting one. Hidden entirely when empty: an empty approval queue is
-  // not news, and doctrine says never render a standing "nothing to see" row.
-  const [proposals, setProposals] = useState<Proposal[]>([]);
-  const [denying, setDenying] = useState<number | null>(null);
-  const [denyNote, setDenyNote] = useState("");
-  const [busy, setBusy] = useState<number | null>(null);
-
-  useEffect(() => {
-    let cancelled = false;
-    const load = () => client.proposals({ status: "pending" })
-      .then(r => { if (!cancelled) setProposals(r.proposals ?? []); })
-      .catch(() => { /* an older hub has no /proposals — the section simply doesn't render */ });
-    load();
-    const off = client.streamEvents(ev => { if (ev.type?.startsWith("proposal.")) load(); });
-    return () => { cancelled = true; off(); };
-  }, [client]);
-
-  const decide = (id: number, verdict: "approved" | "denied", note?: string) => {
-    setBusy(id);
-    client.decideProposal(id, verdict, note)
-      .then(() => setProposals(ps => ps.filter(p => p.id !== id)))
-      .catch(e => setError(String(e?.message || e)))
-      .finally(() => { setBusy(null); setDenying(null); setDenyNote(""); });
-  };
 
   useEffect(() => {
     let alive = true;
@@ -125,54 +101,7 @@ export function Overseer({ client }: { client: HubClient }) {
                   : "no RELAY_DUTY_SESSION on this hub"} />
         </div>
 
-        {proposals.length > 0 && (
-          <section className="mb-8">
-            <h2 className="tr-sec-title">Proposals</h2>
-            <p className="tr-sec-sub">
-              {proposals.length} standing permission{proposals.length > 1 ? "s" : ""} proposed by agents — each states its bound; you are the only approver.
-            </p>
-            <div className="mt-3 flex flex-col gap-2">
-              {proposals.map(p => (
-                <div key={p.id} className="tr-card p-3.5" style={{ borderStyle: "dashed" }}>
-                  <div className="text-[13px] leading-snug">{p.scope}</div>
-                  <div className="mt-1.5 grid grid-cols-[auto_1fr] gap-x-2 gap-y-0.5 text-[12px] text-[var(--color-tr-muted)]">
-                    <span className="text-right opacity-70">when</span><span className="min-w-0 break-words">{p.condition}</span>
-                    <span className="text-right opacity-70">not covered</span><span className="min-w-0 break-words">{p.exclusions}</span>
-                  </div>
-                  <div className="mt-2 flex flex-wrap items-center gap-1.5">
-                    <span className="tr-chip shrink-0">{p.project}</span>
-                    <span className="tr-chip tr-mono shrink-0">{p.session}</span>
-                    <span className="text-[11px] text-[var(--color-tr-muted)]">{agoS(p.ts)}</span>
-                    <span className="flex-1" />
-                    {denying === p.id ? (
-                      <>
-                        <input autoFocus value={denyNote} onChange={e => setDenyNote(e.target.value)}
-                               onKeyDown={e => { if (e.key === "Enter" && denyNote.trim()) decide(p.id, "denied", denyNote.trim()); if (e.key === "Escape") { setDenying(null); setDenyNote(""); } }}
-                               placeholder="Why not? The agent remembers this…" className="tr-input w-64 text-[12px]" />
-                        <button disabled={!denyNote.trim() || busy === p.id}
-                                onClick={() => decide(p.id, "denied", denyNote.trim())}
-                                className="tr-chip shrink-0 px-2.5 py-1 text-[var(--color-tr-fail)] disabled:opacity-40">
-                          Deny
-                        </button>
-                      </>
-                    ) : (
-                      <>
-                        <button disabled={busy === p.id} onClick={() => decide(p.id, "approved")}
-                                className="tr-chip shrink-0 px-2.5 py-1 text-[var(--color-tr-ok)] disabled:opacity-40">
-                          Approve
-                        </button>
-                        <button disabled={busy === p.id} onClick={() => { setDenying(p.id); setDenyNote(""); }}
-                                className="tr-chip shrink-0 px-2.5 py-1 text-[var(--color-tr-muted)] disabled:opacity-40">
-                          Deny…
-                        </button>
-                      </>
-                    )}
-                  </div>
-                </div>
-              ))}
-            </div>
-          </section>
-        )}
+        <div className="mb-8 empty:mb-0 empty:hidden"><ProposalsSection client={client} /></div>
 
         <section className="mb-8">
           <h2 className="tr-sec-title">Seeing now</h2>
