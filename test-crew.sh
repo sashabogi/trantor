@@ -221,6 +221,20 @@ ok "CREW_NO_PROC_KILL suppresses the proc sweep (test-suite guard)" '! CREW_DRY_
 kill -9 "$DECOY_SEAT" "$DECOY_OTHER" 2>/dev/null
 wait 2>/dev/null || true
 
+# 19. hub binding: the project's config PIN beats an inherited RELAY_URL (the 2026-08-14
+# split-brain: a crew launched from a local-hub seat inherited its RELAY_URL and recorded a
+# whole build onto a board nobody was looking at). CREW_HUB stays the explicit override.
+printf '{"url":"http://127.0.0.1:4477","hubs":{"testproj":"http://10.9.9.9:4477"}}' > "$TMP/.agent-bus/config.json"
+OUT19="$(CREW_MUX=tmux CREW_DRY_RUN=1 HOME="$TMP" RELAY_URL=http://127.0.0.1:1111 PATH="$TMP/fakebin:$PATH" RELAY_PROJECT=testproj bash "$ROOT/bin/crew.sh" up codex 2>&1)"
+ok "seat command bakes the PINNED hub (inherited RELAY_URL loses)" 'echo "$OUT19" | grep -q "RELAY_URL=http://10.9.9.9:4477"'
+ok "the stale inherited hub never reaches a seat" '! echo "$OUT19" | grep -q "RELAY_URL=http://127.0.0.1:1111"'
+ok "the binding is announced at launch" 'echo "$OUT19" | grep -q "hub for testproj: http://10.9.9.9:4477"'
+OUT19B="$(CREW_MUX=tmux CREW_DRY_RUN=1 HOME="$TMP" CREW_HUB=http://10.8.8.8:4477 RELAY_URL=http://127.0.0.1:1111 PATH="$TMP/fakebin:$PATH" RELAY_PROJECT=testproj bash "$ROOT/bin/crew.sh" up codex 2>&1)"
+ok "CREW_HUB override wins over the pin" 'echo "$OUT19B" | grep -q "RELAY_URL=http://10.8.8.8:4477"'
+OUT19C="$(CREW_MUX=tmux CREW_DRY_RUN=1 HOME="$TMP" RELAY_URL=http://127.0.0.1:2222 PATH="$TMP/fakebin:$PATH" RELAY_PROJECT=unpinnedproj bash "$ROOT/bin/crew.sh" up codex 2>&1)"
+ok "no pin -> inherited RELAY_URL still honored (test harness contract)" 'echo "$OUT19C" | grep -q "RELAY_URL=http://127.0.0.1:2222"'
+rm -f "$TMP/.agent-bus/config.json"
+
 echo ""
 if [ "$FAIL" = "0" ]; then echo "ALL PASS ($PASS)"; else echo "$FAIL FAILED"; fi
 exit $([ "$FAIL" = "0" ] && echo 0 || echo 1)

@@ -26,6 +26,17 @@ DIR="$(pwd)"
 # across subdirs), else the cwd basename. The crew inherits this exact key so one repo = one lane.
 PROJ="${RELAY_PROJECT:-$(basename "$(git -C "$DIR" rev-parse --show-toplevel 2>/dev/null || echo "$DIR")")}"
 BUS_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+# Hub binding for every seat, resolved HERE and BAKED into the seat command (RELAY_URL=…), so the
+# launcher's environment can never silently rebind a crew. Precedence: CREW_HUB (explicit operator
+# override) > the project's config PIN > inherited RELAY_URL (tests, unpinned setups) > config.url
+# > default. The pin beating inherited env is the 2026-08-14 lesson: a crew launched from a seat
+# that lives on the local hub (kimi-orch) inherited its RELAY_URL and recorded a whole build onto
+# a board nobody was looking at.
+HUB_URL="${CREW_HUB:-$(CFG="${AGENT_BUS_DIR:-$HOME/.agent-bus}/config.json" HUBPROJ="$PROJ" node -e '
+const fs=require("fs");let c={};try{c=JSON.parse(fs.readFileSync(process.env.CFG,"utf8"))}catch{}
+const pin=c.hubs&&c.hubs[process.env.HUBPROJ];
+console.log(pin||process.env.RELAY_URL||c.url||"http://127.0.0.1:4477");' 2>/dev/null)}"
+[ -n "$HUB_URL" ] || HUB_URL="${RELAY_URL:-http://127.0.0.1:4477}"
 STATE="$HOME/.agent-bus/crew-windows.txt"
 mkdir -p "$HOME/.agent-bus"
 TMUX_SESS="trantor:$PROJ"                                  # one tmux session per project
@@ -291,6 +302,7 @@ while [ $# -gt 0 ]; do
 done
 if [ ${#_ARGS[@]} -gt 0 ]; then set -- "${_ARGS[@]}"; else set --; fi
 [ $# -eq 0 ] && { echo "usage: crew.sh up [--task K --difficulty D] codex glm kimi deepseek (agent:provider picks a live model; agent:provider/model pins one)"; exit 1; }
+echo "[crew] hub for $PROJ: $HUB_URL (baked into every seat; CREW_HUB=<url> overrides)"
 
 # scrooge (the model-routing brain) is bundled with this trantor install; fall back to PATH.
 SCROOGE="$BUS_DIR/engine/bin/scrooge"
@@ -356,7 +368,7 @@ reap_seat() {
 # which captures ALL stdout. Anything that prints — including run()'s `[dry]` echo — would be swallowed
 # into the command string and end up inside the launcher. The reap therefore lives in resolve_spec(),
 # which every spawn path calls as a plain statement immediately before this.
-RUN_CMD() { printf 'cd %q && CREW_MODEL=%q RELAY_PROJECT=%q node %q %q %q' "$DIR" "$MODEL" "$PROJ" "$BUS_DIR/bin/crew-runner.mjs" "$AGENT" "$DIR"; }
+RUN_CMD() { printf 'cd %q && CREW_MODEL=%q RELAY_PROJECT=%q RELAY_URL=%q node %q %q %q' "$DIR" "$MODEL" "$PROJ" "$HUB_URL" "$BUS_DIR/bin/crew-runner.mjs" "$AGENT" "$DIR"; }
 
 # ── tmux spawn: ONE session `trantor:$PROJ`, one named pane per seat, one Terminal window attached ────
 spawn_tmux() {   # $@ = specs

@@ -57,6 +57,9 @@ import { mkdirSync } from "node:fs";
 try { mkdirSync(LOGDIR, { recursive: true }); } catch {}
 let TURN = 0;
 const telemetry = (rec) => { try { appendFileSync(join(LOGDIR, `${AGENT}-${PROJ}.jsonl`), JSON.stringify(rec) + "\n"); } catch {} };
+// Boot line records the HUB this runner bound to — the 2026-08-14 split-brain took an hour to
+// diagnose because nothing on disk said which hub a seat was talking to.
+telemetry({ ts: Date.now(), agent: AGENT, project: PROJ, boot: true, hub: HUB });
 const banner = (trigger) => {
   console.log(`\x1b[2J\x1b[H\x1b[48;5;236m\x1b[38;5;43m  ◤ ${AGENT.toUpperCase()} ◢  trantor crew · ${PROJ} · turn ${TURN} · ${trigger}${MODEL ? ` · ${MODEL}` : ""}  \x1b[0m\n`);
 };
