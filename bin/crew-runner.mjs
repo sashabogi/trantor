@@ -24,7 +24,10 @@ const DIR = process.argv[3] || process.cwd();
 // back to the git-repo-root basename — never a loose dir basename that could
 // fork the host's "builtbetter.ai" into a separate "builtbetter" lane.
 const PROJ = process.env.RELAY_PROJECT || resolveProject(DIR);
-const SESSION = `${AGENT}:${PROJ}`;
+// RUNNER_SESSION override: an orchestrator seat (bin/orchestrate.mjs) runs the same CLI as a crew
+// seat but must live on the bus under its own name (claude-orch:proj), or it would collide with a
+// plain claude crew seat on the same project.
+const SESSION = process.env.RUNNER_SESSION || `${AGENT}:${PROJ}`;
 // One keypair per seat, so `deepseek:crebral` and `deepseek:trantor` are genuinely different
 // identities on the bus rather than one shared string label.
 const identity = loadOrCreate(SESSION, "agent");
@@ -147,7 +150,17 @@ if (!CLI[AGENT]) log(`'${AGENT}' is not a built-in seat — running it as an ope
 
 // RUNNER_RULES / RUNNER_KICKOFF env overrides: the runner is also the substrate for non-crew
 // always-on seats (the fleet DUTY agent, bin/duty.mjs) whose doctrine is not "work your card".
-const RULES = process.env.RUNNER_RULES || `Rules: you are ${SESSION} on the trantor crew. Work your assigned file(s), report on the bus (relay_send, <280 chars), move your Kanban card as you go (doing -> testing -> done; run the tests in 'testing', use 'failed' + a report if they break). If you need something from another session, message THAT SESSION (relay_peers to find its id, relay_send to reach it) — never ask the human to pass it along; carrying messages between agents is the job this bus exists to remove. When your work for THIS message is finished, END YOUR TURN — do NOT park, do NOT loop relay_wait; the runner waits for you and will wake you with the next message.`;
+const RULES = process.env.RUNNER_RULES || `Rules: you are ${SESSION} on the trantor crew. Before starting a card, query the board for related PAST cards and lessons (relay_board — 1900+ cards of tribal knowledge; prior work may already answer half of it). Work your assigned file(s), report on the bus (relay_send, <280 chars), move your Kanban card as you go (doing -> testing -> done; run the tests in 'testing', use 'failed' + a report if they break). If you need something from another session, message THAT SESSION (relay_peers to find its id, relay_send to reach it) — never ask the human to pass it along; carrying messages between agents is the job this bus exists to remove. When your work for THIS message is finished, END YOUR TURN — do NOT park, do NOT loop relay_wait; the runner waits for you and will wake you with the next message.`;
+
+// ---- the pulse (Scape's Lloyd/Argus loop, Trantor-shaped) --------------------
+// A message-driven seat is DEAF between messages. An orchestrator seat with a mission needs a
+// metronome: RUNNER_PULSE_MS re-runs its mission note on a cadence even when the bus is silent.
+// The pulse prompt is deliberately almost verbatim the one that works in the wild: re-read the
+// note, continue, check your children, record. Boot discipline rides with it — an empty mission
+// means STAND BY, never invented work.
+const PULSE_MS = Math.max(0, Number(process.env.RUNNER_PULSE_MS || 0));
+const MISSION_FILE = process.env.RUNNER_MISSION_FILE || "MISSION.md";
+const PULSE_PROMPT = `[pulse] Re-read your mission note (${MISSION_FILE} in your working directory) and continue your mission. Check on your children and your board, unblock what is stuck, and record what you did. If the mission note is missing, empty, or has no actionable mission, reply ONLY that you are standing by and end your turn — do NOT invent work, create files, or spawn anything.`;
 
 // ---- failure visibility ----------------------------------------------------
 // A turn's CLI can fail (credits exhausted, auth, crash) and the runner would just
@@ -265,12 +278,27 @@ async function loadLessons() {
   let pendingBcast = [];
   const ec0 = runTurn(KICKOFF + LESSONS, true, "kickoff");
   if (ec0) await reportFailure(ec0, "kickoff");   // a failed kickoff = the "fired up, died, nobody knew" case
+  let lastTurnAt = Date.now();
+  if (PULSE_MS) log(`pulse armed — mission re-read every ${Math.round(PULSE_MS / 1000)}s (${MISSION_FILE})`);
   log(`parked — long-polling the bus as ${SESSION} (free; this poll is also the heartbeat)`);
 
   while (true) {
+    // pulse first: a due mission beat runs even on a silent bus. Measured from the END of the
+    // last turn, so a long turn doesn't stack an immediate pulse on top of itself.
+    if (PULSE_MS && Date.now() - lastTurnAt >= PULSE_MS) {
+      const ecp = runTurn(PULSE_PROMPT + "\n\n" + RULES + LESSONS, false, "pulse");
+      if (ecp) await reportFailure(ecp, "pulse"); else await reportHealthy();
+      lastTurnAt = Date.now();
+      log("parked — waiting for the next message or pulse");
+      continue;
+    }
+    // cap the long-poll hold so a due pulse never waits out a full silent 280s window
+    const holdS = PULSE_MS
+      ? Math.max(5, Math.min(280, Math.ceil((PULSE_MS - (Date.now() - lastTurnAt)) / 1000)))
+      : 280;
     let msgs = [];
     try {
-      const r = await api(`/poll?session=${encodeURIComponent(SESSION)}&since=${cursor}&wait=280`);
+      const r = await api(`/poll?session=${encodeURIComponent(SESSION)}&since=${cursor}&wait=${holdS}`);
       msgs = r.messages || []; cursor = r.cursor ?? cursor;
     } catch (e) {
       // Deadline-abort on the LONG-POLL is not an outage — it means the hold expired with no hub
@@ -281,6 +309,9 @@ async function loadLessons() {
       await new Promise(s => setTimeout(s, expired ? 250 : 5000)); continue;
     }
     if (!msgs.length) continue;                       // heartbeat tick, nothing for us
+    // never wake on your own broadcasts: a claude seat's report contains "claude:" and matched the
+    // @mention filter, buying one echo turn per report (seen live on the first pulsed orchestrator)
+    msgs = msgs.filter(m => m.from !== SESSION);
     const direct = msgs.filter(m => m.to === SESSION);
     const mentions = msgs.filter(m => m.to === "all" && (m.text.includes(`@${AGENT}`) || m.text.toLowerCase().includes(`${AGENT}:`)));
     const bcast = msgs.filter(m => m.to === "all" && !mentions.includes(m));
@@ -294,6 +325,7 @@ async function loadLessons() {
     await loadLessons();
     const ec = runTurn(prompt + LESSONS, false, direct.length ? "direct message" : "@mention");
     if (ec) await reportFailure(ec, "message"); else await reportHealthy();
+    lastTurnAt = Date.now();
     log("parked — waiting for the next message");
   }
 })();

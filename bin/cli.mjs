@@ -72,6 +72,7 @@ switch (cmd) {
   case "policy": run("bin/policy.mjs"); break;
   case "inbox": run("bin/inbox.mjs"); break;
   case "duty": run("bin/duty.mjs"); break;
+  case "orchestrate": run("bin/orchestrate.mjs"); break;
   case "app": run("bin/app.mjs"); break;
   case "patrol": run("bin/patrol.mjs"); break;
   case "identity": {
@@ -173,6 +174,7 @@ switch (cmd) {
   trantor inbox       THIS session's unread bus messages, signed (works under enforce) — [--all] [--consume] [--json]
   trantor policy      the autonomy ladder: show | set <project> <1-4> | link <a> <b> --reason "<why>"
   trantor duty        the always-on fleet duty agent: up | down | status — hub-escalated triage so you are not the switchboard
+  trantor orchestrate a per-project ORCHESTRATOR with a MISSION.md and a pulse: up [--every 10m] | down | status — the loop-orchestrator pattern
   trantor patrol      machine-wide resource sweep: crews/runners/workspaces/orphans — [--json] [--reap] (reap = dead rows + stale artifacts ONLY)
 
 Claude Code plugin (the orchestrator side):
