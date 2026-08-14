@@ -70,6 +70,7 @@ switch (cmd) {
   case "adopt": run("bin/adopt.mjs"); break;
   case "summarize": run("bin/summarize.mjs"); break;
   case "policy": run("bin/policy.mjs"); break;
+  case "proposals": case "proposal": run("bin/proposals.mjs"); break;
   case "inbox": run("bin/inbox.mjs"); break;
   case "duty": run("bin/duty.mjs"); break;
   case "orchestrate": run("bin/orchestrate.mjs"); break;
@@ -173,6 +174,7 @@ switch (cmd) {
   trantor watch       live bus feed in the terminal
   trantor inbox       THIS session's unread bus messages, signed (works under enforce) — [--all] [--consume] [--json]
   trantor policy      the autonomy ladder: show | set <project> <1-4> | link <a> <b> --reason "<why>"
+  trantor proposals   agent-proposed permissions awaiting YOUR decision: [--all] | approve <id> [--note "…"] | deny <id> --note "…"
   trantor duty        the always-on fleet duty agent: up | down | status — hub-escalated triage so you are not the switchboard
   trantor orchestrate a per-project ORCHESTRATOR with a MISSION.md and a pulse: up [--every 10m] | down | status — the loop-orchestrator pattern
   trantor patrol      machine-wide resource sweep: crews/runners/workspaces/orphans — [--json] [--reap] (reap = dead rows + stale artifacts ONLY)

@@ -86,7 +86,7 @@ function scanTelemetry() {
 // TIMELINE view are untouched; every NEW type is dotted ("message", "presence.online", …) and is
 // filtered OUT of /history. Loads from the old `cardEvents` key when `events` is absent.
 function emptyState() {
-  return { messages: [], peers: {}, seq: 0, tasks: [], taskSeq: 0, projectMeta: {}, lessons: [], events: [], cardEventsBackfilled: false, aliases: {}, phaseMeta: {}, verifyGates: [], verifyGateSeq: 0, balances: { ts: 0, by: "", entries: [] }, subagentCostReset: false, handoffLog: [], identities: {}, inviteTokens: {}, focus: {}, orgPolicy: {}, instances: {}, dutySession: "" };
+  return { messages: [], peers: {}, seq: 0, tasks: [], taskSeq: 0, projectMeta: {}, lessons: [], events: [], cardEventsBackfilled: false, aliases: {}, phaseMeta: {}, verifyGates: [], verifyGateSeq: 0, proposals: [], proposalSeq: 0, balances: { ts: 0, by: "", entries: [] }, subagentCostReset: false, handoffLog: [], identities: {}, inviteTokens: {}, focus: {}, orgPolicy: {}, instances: {}, dutySession: "" };
 }
 
 function normalizeState(loaded = {}) {
@@ -103,6 +103,8 @@ function normalizeState(loaded = {}) {
   s.phaseMeta = loaded.phaseMeta && typeof loaded.phaseMeta === "object" ? loaded.phaseMeta : {};
   s.verifyGates = Array.isArray(loaded.verifyGates) ? loaded.verifyGates : [];
   s.verifyGateSeq = Number(loaded.verifyGateSeq || Math.max(0, ...s.verifyGates.map(g => Number(g.id) || 0))) || 0;
+  s.proposals = Array.isArray(loaded.proposals) ? loaded.proposals : [];
+  s.proposalSeq = Number(loaded.proposalSeq || Math.max(0, ...s.proposals.map(p => Number(p.id) || 0))) || 0;
   s.balances = loaded.balances && typeof loaded.balances === "object" ? loaded.balances : { ts: 0, by: "", entries: [] };
   s.subagentCostReset = !!loaded.subagentCostReset;
   s.handoffLog = Array.isArray(loaded.handoffLog) ? loaded.handoffLog : [];
@@ -532,6 +534,11 @@ function canon(name) {
 function subFp(title) {
   return String(title || "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim().slice(0, 80);
 }
+// Governance (agent-proposed permissions): pending-per-session cap, and the normalized fingerprint
+// the denial memory compares against. scope+condition define WHAT is being asked; exclusions are
+// deliberately left out of the fingerprint so narrowing the exclusions alone cannot dodge a denial.
+const PROPOSAL_CAP = Number(process.env.RELAY_PROPOSAL_CAP || 3);
+const propFp = (scope, condition) => `${scope} ${condition}`.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
 let HUB_VERSION = ""; try { HUB_VERSION = JSON.parse(readFileSync(new URL("./package.json", import.meta.url), "utf8")).version || ""; } catch {}
 // dependency-free semver compare: -1 if a<b, 0 if equal, 1 if a>b (numeric parts only)
 function cmpSemver(a, b) {
@@ -541,8 +548,8 @@ function cmpSemver(a, b) {
 }
 const AUTH_HEADERS = ["x-trantor-pubkey", "x-trantor-sig", "x-trantor-ts", "x-trantor-nonce"];
 const PUBLIC_ENDPOINTS = new Set(["/", "/ui", "/health", "/enroll"]);
-const OWNER_ENDPOINTS = new Set(["/project/delete", "/sweep", "/reconcile", "/invite", "/import", "/policy"]);
-const READ_ENDPOINTS = new Set(["/peers", "/tasks", "/events", "/inbox", "/peer", "/card", "/stream", "/history", "/projects", "/catchup", "/phases", "/recent", "/handoffs", "/verify-gates", "/claims", "/overseer/context", "/overseer/status"]);
+const OWNER_ENDPOINTS = new Set(["/project/delete", "/sweep", "/reconcile", "/invite", "/import", "/policy", "/proposal/decide"]);
+const READ_ENDPOINTS = new Set(["/peers", "/tasks", "/events", "/inbox", "/peer", "/card", "/stream", "/history", "/projects", "/catchup", "/phases", "/recent", "/handoffs", "/verify-gates", "/claims", "/proposals", "/overseer/context", "/overseer/status"]);
 const roleRank = { read: 1, write: 2, owner: 3 };
 const hasAuthHeaders = (req) => AUTH_HEADERS.some(h => !!req.headers[h]);
 const authPath = (u) => `${u.pathname}${u.search || ""}`;
@@ -587,6 +594,12 @@ function projectFromRequest(P, q, b) {
     return canon(String(b?.project || fromProj || "").slice(0, 80));
   }
   if (P === "/project/merge") return canon(String(b?.to || b?.from || "").slice(0, 80));
+  // decide/withdraw carry only an id — authorization must run against the PROPOSAL's project, or a
+  // project-scoped owner could decide any proposal on the hub through the empty-project wildcard.
+  if (P === "/proposal/decide" || P === "/proposal/withdraw") {
+    const p = state.proposals.find(x => x.id === Number(b?.id ?? q?.id));
+    return p?.project || "";
+  }
   return canon(String(b?.project || q?.project || "").slice(0, 80));
 }
 async function authenticate(req, path) {
@@ -1786,6 +1799,95 @@ const server = http.createServer(async (req, res) => {
       let gates = filterReadable(auth, state.verifyGates.filter(g => !project || g.project === project), g => g.project || "");
       if (q.all !== "1") gates = gates.filter(g => g.status === "open");
       return json(res, 200, { gates });
+    }
+    // --- agent-proposed permissions (governance): the autonomy ladder made two-directional ---
+    // The operator sets levels top-down (`trantor policy`); this is the bottom-up half — an agent
+    // that needs more rope FILES A PROPOSAL instead of assuming, working around, or DM'ing the
+    // human free-form. Three rules, all Argus-derived and all enforced HERE, not by convention:
+    //   1. A proposal must state its BOUND — scope (what), condition (when), exclusions (what is
+    //      still NOT covered). A permission without a bound is a blank cheque, so an unbounded
+    //      proposal is a 400, not a pending row.
+    //   2. The queue is CAPPED per session (default 3 pending). To file past the cap the agent
+    //      must withdraw one of its own — a full queue is a prioritization exercise, not a bug.
+    //   3. Denials are REMEMBERED. A near-duplicate of a denied proposal (normalized scope +
+    //      condition, same project) is refused with the operator's original note, so "ask again
+    //      until the human gives in" is structurally impossible.
+    // Deciding is the HUMAN's act alone: /proposal/decide is owner-gated (OWNER_ENDPOINTS) and
+    // nothing hub-side ever flips a proposal to approved. Approval grants nothing mechanical
+    // today — it is a recorded operator decision the agent may rely on, like a mission note line.
+    if (req.method === "POST" && P === "/propose") {
+      const b = await body(req);
+      const session = String(b.session || b.by || "").slice(0, 120);
+      if (!session) return json(res, 400, { error: "session required" });
+      if (auth?.identity && String(session) !== String(auth.identity.name || "")) return json(res, 403, { error: "session must match signer" });
+      const proj = canon(String(b.project || state.peers[session]?.project || (session.includes(":") ? session.split(":").pop() : "")).slice(0, 80));
+      const scope = String(b.scope || "").trim().slice(0, 300);
+      const condition = String(b.condition || "").trim().slice(0, 300);
+      const exclusions = String(b.exclusions || "").trim().slice(0, 300);
+      if (!scope || !condition || !exclusions) {
+        return json(res, 400, { error: "a proposal must state its bound: scope (what), condition (when), exclusions (what is still NOT covered) — a permission without a bound is a blank cheque" });
+      }
+      const fp = propFp(scope, condition);
+      const denied = state.proposals.find(p => p.status === "denied" && p.project === proj && propFp(p.scope, p.condition) === fp);
+      if (denied) {
+        return json(res, 409, { error: "near-duplicate of a DENIED proposal — do not re-propose; refine the bound or move on",
+          deniedId: denied.id, note: denied.note || "", decidedTs: denied.decidedTs || 0 });
+      }
+      const pending = state.proposals.filter(p => p.status === "pending" && p.session === session);
+      const dup = pending.find(p => p.project === proj && propFp(p.scope, p.condition) === fp);
+      if (dup) return json(res, 200, { ok: true, proposal: dup, dedup: true });
+      if (pending.length >= PROPOSAL_CAP) {
+        return json(res, 409, { error: `queue full: ${pending.length}/${PROPOSAL_CAP} pending for this session — withdraw one of yours to file another`,
+          pending: pending.map(p => ({ id: p.id, scope: p.scope })) });
+      }
+      touch(session, undefined, proj, undefined, auth);
+      const pr = { id: ++state.proposalSeq, session, project: proj, scope, condition, exclusions,
+        status: "pending", ts: now(), decidedTs: 0, decidedBy: "", note: "" };
+      state.proposals.push(pr); if (state.proposals.length > 500) state.proposals.splice(0, 100);
+      dirty = true;
+      appendEvent("proposal.filed", proj, session, { proposalId: pr.id, scope, condition, exclusions });
+      return json(res, 200, { ok: true, proposal: pr });
+    }
+    if (req.method === "POST" && P === "/proposal/decide") {
+      const b = await body(req);
+      const pr = state.proposals.find(p => p.id === Number(b.id));
+      if (!pr) return json(res, 404, { error: "no such proposal" });
+      if (pr.status !== "pending") return json(res, 409, { error: `already ${pr.status}`, proposal: pr });
+      const decision = ["approved", "denied"].includes(b.status) ? b.status : "";
+      if (!decision) return json(res, 400, { error: "status must be 'approved' or 'denied'" });
+      pr.status = decision; pr.decidedTs = now();
+      pr.decidedBy = String(auth?.identity?.name || b.by || "").slice(0, 120);
+      pr.note = String(b.note || "").slice(0, 300);
+      dirty = true;
+      appendEvent("proposal.decided", pr.project, pr.decidedBy, { proposalId: pr.id, scope: pr.scope, status: decision, note: pr.note });
+      // Tell the proposer directly — a decision it never hears about is a decision it will act
+      // around. One DM per decision (a transition, never a repeat), hub-authored like escalations.
+      hubSend(pr.session,
+        `📜 proposal #${pr.id} ${decision.toUpperCase()}${pr.note ? `: ${pr.note}` : ""} — scope was "${pr.scope}". ${decision === "approved" ? "You may rely on it within its stated bound." : "Do not re-propose this; refine the bound or move on."}`,
+        pr.project);
+      return json(res, 200, { ok: true, proposal: pr });
+    }
+    if (req.method === "POST" && P === "/proposal/withdraw") {
+      const b = await body(req);
+      const pr = state.proposals.find(p => p.id === Number(b.id));
+      if (!pr) return json(res, 404, { error: "no such proposal" });
+      if (pr.status !== "pending") return json(res, 409, { error: `already ${pr.status}`, proposal: pr });
+      // own proposals only — a signed request must BE the proposer; unsigned (warn/off) must claim it
+      const claimant = String(auth?.identity?.name || b.session || b.by || "").slice(0, 120);
+      if (claimant !== pr.session) return json(res, 403, { error: "only the proposing session may withdraw" });
+      pr.status = "withdrawn"; pr.decidedTs = now(); pr.decidedBy = pr.session;
+      dirty = true;
+      appendEvent("proposal.withdrawn", pr.project, pr.session, { proposalId: pr.id, scope: pr.scope });
+      return json(res, 200, { ok: true, proposal: pr });
+    }
+    if (req.method === "GET" && P === "/proposals") {
+      const proj = q.project ? canon(String(q.project).slice(0, 80)) : "";
+      const rows = filterReadable(auth, state.proposals.filter(p =>
+        (!proj || p.project === proj) &&
+        (!q.status || p.status === q.status) &&
+        (!q.session || p.session === q.session)), p => p.project || "").slice(-200);
+      const pendingCount = filterReadable(auth, state.proposals.filter(p => p.status === "pending"), p => p.project || "").length;
+      return json(res, 200, { proposals: rows, pendingCount });
     }
     if (req.method === "GET" && P === "/economics") {   // the brain's books, surfaced: scrooge ledger + quota profile
       const out = { scrooge: null, lifetime: null, profile: null };

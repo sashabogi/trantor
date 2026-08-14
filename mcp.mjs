@@ -199,6 +199,44 @@ server.tool("relay_verify_gate", "Record a VERIFICATION GATE — a claim that MU
     return { content: [{ type: "text", text: r.dedup ? `gate already open (#${r.gate.id})` : `🔒 verification gate #${r.gate.id} recorded — surfaces on every handoff until you resolve it` }] };
   });
 
+server.tool("relay_propose", "PROPOSE a standing permission or scope change to the human operator — the ONLY approver; nothing auto-approves. A proposal must state its BOUND: scope (what), condition (when it applies), exclusions (what is still NOT covered) — a permission without a bound is a blank cheque and is rejected. It sits pending (max 3 per session — withdraw one to file another) until the operator decides in the app or CLI; you get a bus message with the decision. Denials are REMEMBERED: a near-duplicate of a denied proposal is refused, so never re-propose — refine the bound or move on. File it and continue your mission; never nag.",
+  { scope: z.string().describe("WHAT standing permission you want, specific and checkable — e.g. 'push directly to main in this repo'"),
+    condition: z.string().describe("WHEN it applies — e.g. 'only after the full test suite exits 0'"),
+    exclusions: z.string().describe("what is still NOT covered — e.g. 'never force-push, never touch release tags'"),
+    project: z.string().optional().describe("project the permission concerns (default: this session's project)") },
+  async ({ scope, condition, exclusions, project }) => {
+    // signedPost directly (not api()) — a refusal's BODY is the teaching moment (denial note,
+    // queue guidance) and api() throws it away, leaving only "hub 409".
+    const r = await signedPost("/propose", { session: SESSION, project: project || PROJECT, scope, condition, exclusions }, { session: SESSION, instance: INSTANCE_ID });
+    if (!r.ok) {
+      const j = r.json || {};
+      const extra = j.note ? ` The operator's note on the prior denial: "${j.note}".` : "";
+      return { content: [{ type: "text", text: `REFUSED: ${j.error || `hub ${r.status}`}.${extra}` }], isError: true };
+    }
+    const pr = r.json.proposal;
+    return { content: [{ type: "text", text: r.json.dedup
+      ? `already pending as proposal #${pr.id} — the operator has it; do not re-file`
+      : `proposal #${pr.id} filed and PENDING operator review. Continue your mission — you'll get a bus message when it's decided. Do NOT act as if it were approved.` }] };
+  });
+
+server.tool("relay_proposals", "List THIS session's permission proposals and their statuses (pending / approved / denied / withdrawn), including the operator's decision notes. Check here before relying on a permission you proposed — pending is not approved.", {},
+  async () => {
+    const { proposals } = await api("GET", `/proposals?session=${encodeURIComponent(SESSION)}`);
+    if (!proposals?.length) return { content: [{ type: "text", text: "no proposals filed by this session" }] };
+    const icon = { pending: "⏳", approved: "✅", denied: "⛔", withdrawn: "↩️" };
+    const lines = proposals.map(p =>
+      `#${p.id} ${icon[p.status] || ""} ${p.status.toUpperCase()} — ${p.scope} · when: ${p.condition} · NOT covered: ${p.exclusions}${p.note ? ` · operator: "${p.note}"` : ""}`);
+    return { content: [{ type: "text", text: lines.join("\n") }] };
+  });
+
+server.tool("relay_withdraw_proposal", "Withdraw one of THIS session's PENDING permission proposals (frees a queue slot — the pending queue caps at 3 per session).",
+  { id: z.number().describe("proposal id to withdraw (yours, pending only)") },
+  async ({ id }) => {
+    const r = await signedPost("/proposal/withdraw", { id, session: SESSION }, { session: SESSION, instance: INSTANCE_ID });
+    if (!r.ok) return { content: [{ type: "text", text: `could not withdraw: ${r.json?.error || `hub ${r.status}`}` }], isError: true };
+    return { content: [{ type: "text", text: `proposal #${id} withdrawn — one queue slot free` }] };
+  });
+
 server.tool("relay_board", "Show a project's Kanban board (all cards + their status + assignee). Defaults to THIS project; pass `project` to read a crew board you orchestrate from elsewhere.",
   { project: z.string().optional().describe("board to show (default: this session's project)") },
   async ({ project }) => {

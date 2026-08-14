@@ -61,6 +61,15 @@ export type OverseerWarning = {
   /** When this episode STARTED — a standing condition is reported once and dated, not re-fired. */
   since?: number;
 };
+/** An agent-proposed permission (governance) — filed over the bus, decided ONLY by the human. */
+export type Proposal = {
+  id: number; session: string; project: string;
+  /** The BOUND — all three are mandatory hub-side; an unbounded proposal never becomes a row. */
+  scope: string; condition: string; exclusions: string;
+  status: "pending" | "approved" | "denied" | "withdrawn";
+  ts: number; decidedTs?: number; decidedBy?: string; note?: string;
+};
+
 export type OverseerStatus = {
   engine: boolean; lastTickTs: number; tickMs: number; clearMs: number; dutySession: string;
   watching: { sessions: number; projects: number; claims: number; links: number };
@@ -141,6 +150,17 @@ export class HubClient {
   }
   setAutonomy(project: string, level: number) {
     return this.request("POST", "/policy", { autonomy: { [project]: level } });
+  }
+  /** Agent-proposed permissions awaiting (or past) the human's decision. */
+  proposals(opts: { project?: string; status?: string } = {}) {
+    const q = new URLSearchParams();
+    for (const [k, v] of Object.entries(opts)) if (v !== undefined) q.set(k, String(v));
+    const s = q.toString();
+    return this.request<{ proposals: Proposal[]; pendingCount: number }>("GET", `/proposals${s ? "?" + s : ""}`);
+  }
+  /** THE human act in the governance loop — owner-signed via hub_request; nothing auto-approves. */
+  decideProposal(id: number, status: "approved" | "denied", note?: string) {
+    return this.request<{ ok: boolean; proposal: Proposal }>("POST", "/proposal/decide", { id, status, note });
   }
 
   /**
