@@ -203,11 +203,12 @@ server.tool("relay_propose", "PROPOSE a standing permission or scope change to t
   { scope: z.string().describe("WHAT standing permission you want, specific and checkable — e.g. 'push directly to main in this repo'"),
     condition: z.string().describe("WHEN it applies — e.g. 'only after the full test suite exits 0'"),
     exclusions: z.string().describe("what is still NOT covered — e.g. 'never force-push, never touch release tags'"),
+    key: z.string().optional().describe("optional machine-readable capability slug (e.g. 'patrol.reap-orphans') — lets tools check the grant exactly instead of matching prose"),
     project: z.string().optional().describe("project the permission concerns (default: this session's project)") },
-  async ({ scope, condition, exclusions, project }) => {
+  async ({ scope, condition, exclusions, key, project }) => {
     // signedPost directly (not api()) — a refusal's BODY is the teaching moment (denial note,
     // queue guidance) and api() throws it away, leaving only "hub 409".
-    const r = await signedPost("/propose", { session: SESSION, project: project || PROJECT, scope, condition, exclusions }, { session: SESSION, instance: INSTANCE_ID });
+    const r = await signedPost("/propose", { session: SESSION, project: project || PROJECT, scope, condition, exclusions, key }, { session: SESSION, instance: INSTANCE_ID });
     if (!r.ok) {
       const j = r.json || {};
       const extra = j.note ? ` The operator's note on the prior denial: "${j.note}".` : "";
@@ -219,11 +220,11 @@ server.tool("relay_propose", "PROPOSE a standing permission or scope change to t
       : `proposal #${pr.id} filed and PENDING operator review. Continue your mission — you'll get a bus message when it's decided. Do NOT act as if it were approved.` }] };
   });
 
-server.tool("relay_proposals", "List THIS session's permission proposals and their statuses (pending / approved / denied / withdrawn), including the operator's decision notes. Check here before relying on a permission you proposed — pending is not approved.", {},
+server.tool("relay_proposals", "List THIS session's permission proposals and their statuses (pending / approved / denied / revoked / withdrawn), including the operator's decision notes. An APPROVED proposal is a standing GRANT — act within its stated bound without re-asking. Check here before relying on a permission you proposed — pending is not approved.", {},
   async () => {
     const { proposals } = await api("GET", `/proposals?session=${encodeURIComponent(SESSION)}`);
     if (!proposals?.length) return { content: [{ type: "text", text: "no proposals filed by this session" }] };
-    const icon = { pending: "⏳", approved: "✅", denied: "⛔", withdrawn: "↩️" };
+    const icon = { pending: "⏳", approved: "✅", denied: "⛔", withdrawn: "↩️", revoked: "🚫" };
     const lines = proposals.map(p =>
       `#${p.id} ${icon[p.status] || ""} ${p.status.toUpperCase()} — ${p.scope} · when: ${p.condition} · NOT covered: ${p.exclusions}${p.note ? ` · operator: "${p.note}"` : ""}`);
     return { content: [{ type: "text", text: lines.join("\n") }] };

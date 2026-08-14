@@ -549,7 +549,7 @@ function cmpSemver(a, b) {
 const AUTH_HEADERS = ["x-trantor-pubkey", "x-trantor-sig", "x-trantor-ts", "x-trantor-nonce"];
 const PUBLIC_ENDPOINTS = new Set(["/", "/ui", "/health", "/enroll"]);
 const OWNER_ENDPOINTS = new Set(["/project/delete", "/sweep", "/reconcile", "/invite", "/import", "/policy", "/proposal/decide"]);
-const READ_ENDPOINTS = new Set(["/peers", "/tasks", "/events", "/inbox", "/peer", "/card", "/stream", "/history", "/projects", "/catchup", "/phases", "/recent", "/handoffs", "/verify-gates", "/claims", "/proposals", "/overseer/context", "/overseer/status"]);
+const READ_ENDPOINTS = new Set(["/peers", "/tasks", "/events", "/inbox", "/peer", "/card", "/stream", "/history", "/projects", "/catchup", "/phases", "/recent", "/handoffs", "/verify-gates", "/claims", "/proposals", "/grants", "/overseer/context", "/overseer/status"]);
 const roleRank = { read: 1, write: 2, owner: 3 };
 const hasAuthHeaders = (req) => AUTH_HEADERS.some(h => !!req.headers[h]);
 const authPath = (u) => `${u.pathname}${u.search || ""}`;
@@ -1827,6 +1827,10 @@ const server = http.createServer(async (req, res) => {
       if (!scope || !condition || !exclusions) {
         return json(res, 400, { error: "a proposal must state its bound: scope (what), condition (when), exclusions (what is still NOT covered) — a permission without a bound is a blank cheque" });
       }
+      // optional machine-readable capability key ("patrol.reap-orphans") — lets a TOOL check a
+      // grant exactly instead of text-matching prose. Never part of the denial fingerprint.
+      const key = String(b.key || "").trim().toLowerCase().slice(0, 60);
+      if (key && !/^[a-z0-9][a-z0-9._-]*$/.test(key)) return json(res, 400, { error: "key must be a slug: [a-z0-9._-]" });
       const fp = propFp(scope, condition);
       const denied = state.proposals.find(p => p.status === "denied" && p.project === proj && propFp(p.scope, p.condition) === fp);
       if (denied) {
@@ -1841,20 +1845,25 @@ const server = http.createServer(async (req, res) => {
           pending: pending.map(p => ({ id: p.id, scope: p.scope })) });
       }
       touch(session, undefined, proj, undefined, auth);
-      const pr = { id: ++state.proposalSeq, session, project: proj, scope, condition, exclusions,
+      const pr = { id: ++state.proposalSeq, session, project: proj, scope, condition, exclusions, key,
         status: "pending", ts: now(), decidedTs: 0, decidedBy: "", note: "" };
       state.proposals.push(pr); if (state.proposals.length > 500) state.proposals.splice(0, 100);
       dirty = true;
-      appendEvent("proposal.filed", proj, session, { proposalId: pr.id, scope, condition, exclusions });
+      appendEvent("proposal.filed", proj, session, { proposalId: pr.id, scope, condition, exclusions, ...(key ? { key } : {}) });
       return json(res, 200, { ok: true, proposal: pr });
     }
     if (req.method === "POST" && P === "/proposal/decide") {
       const b = await body(req);
       const pr = state.proposals.find(p => p.id === Number(b.id));
       if (!pr) return json(res, 404, { error: "no such proposal" });
-      if (pr.status !== "pending") return json(res, 409, { error: `already ${pr.status}`, proposal: pr });
-      const decision = ["approved", "denied"].includes(b.status) ? b.status : "";
-      if (!decision) return json(res, 400, { error: "status must be 'approved' or 'denied'" });
+      // A grant that GATES tool behavior needs an off-switch: the operator may REVOKE an
+      // approved proposal. Revocation is not a denial — it leaves no denial memory, so the
+      // agent may re-propose a refined bound later.
+      if (b.status === "revoked") {
+        if (pr.status !== "approved") return json(res, 409, { error: `only an approved proposal can be revoked (is ${pr.status})`, proposal: pr });
+      } else if (pr.status !== "pending") return json(res, 409, { error: `already ${pr.status}`, proposal: pr });
+      const decision = ["approved", "denied", "revoked"].includes(b.status) ? b.status : "";
+      if (!decision) return json(res, 400, { error: "status must be 'approved', 'denied' or 'revoked'" });
       pr.status = decision; pr.decidedTs = now();
       pr.decidedBy = String(auth?.identity?.name || b.by || "").slice(0, 120);
       pr.note = String(b.note || "").slice(0, 300);
@@ -1863,7 +1872,7 @@ const server = http.createServer(async (req, res) => {
       // Tell the proposer directly — a decision it never hears about is a decision it will act
       // around. One DM per decision (a transition, never a repeat), hub-authored like escalations.
       hubSend(pr.session,
-        `📜 proposal #${pr.id} ${decision.toUpperCase()}${pr.note ? `: ${pr.note}` : ""} — scope was "${pr.scope}". ${decision === "approved" ? "You may rely on it within its stated bound." : "Do not re-propose this; refine the bound or move on."}`,
+        `📜 proposal #${pr.id} ${decision.toUpperCase()}${pr.note ? `: ${pr.note}` : ""} — scope was "${pr.scope}". ${decision === "approved" ? "You may rely on it within its stated bound." : decision === "revoked" ? "This grant no longer applies — stop relying on it. You may propose a refined bound." : "Do not re-propose this; refine the bound or move on."}`,
         pr.project);
       return json(res, 200, { ok: true, proposal: pr });
     }
@@ -1888,6 +1897,21 @@ const server = http.createServer(async (req, res) => {
         (!q.session || p.session === q.session)), p => p.project || "").slice(-200);
       const pendingCount = filterReadable(auth, state.proposals.filter(p => p.status === "pending"), p => p.project || "").length;
       return json(res, 200, { proposals: rows, pendingCount });
+    }
+    // GRANTS = the mechanical face of approvals: the ACTIVE approved proposals, queryable by the
+    // tools and sessions that must honor them. Same rows as /proposals?status=approved, but this
+    // is the contract surface — a grant listed here may be relied on within its stated bound;
+    // revocation removes it here first.
+    if (req.method === "GET" && P === "/grants") {
+      const proj = q.project ? canon(String(q.project).slice(0, 80)) : "";
+      const rows = filterReadable(auth, state.proposals.filter(p =>
+        p.status === "approved" &&
+        (!proj || p.project === proj) &&
+        (!q.key || (p.key || "") === String(q.key).toLowerCase()) &&
+        (!q.session || p.session === q.session)), p => p.project || "").slice(-200);
+      return json(res, 200, { grants: rows.map(p => ({ id: p.id, session: p.session, project: p.project,
+        scope: p.scope, condition: p.condition, exclusions: p.exclusions, key: p.key || "",
+        decidedBy: p.decidedBy, decidedTs: p.decidedTs, note: p.note || "" })) });
     }
     if (req.method === "GET" && P === "/economics") {   // the brain's books, surfaced: scrooge ledger + quota profile
       const out = { scrooge: null, lifetime: null, profile: null };

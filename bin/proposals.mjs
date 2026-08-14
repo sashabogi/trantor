@@ -5,6 +5,7 @@
 //   trantor proposals --all                 every proposal, all statuses
 //   trantor proposals approve <id> [--note "…"]
 //   trantor proposals deny <id> --note "…"       (a denial without a reason teaches nothing)
+//   trantor proposals revoke <id> [--note "…"]   (withdraw a GRANT — not a denial, no denial memory)
 //   [--hub <url>]                           target one hub when an id exists on several
 // Owner-signed: /proposal/decide is owner-gated hub-side — approval is the human's act alone.
 import { readFileSync } from "node:fs";
@@ -33,7 +34,7 @@ const post = async (hub, path, payload) => {
   return j;
 };
 
-const ICON = { pending: "⏳", approved: "✅", denied: "⛔", withdrawn: "↩️" };
+const ICON = { pending: "⏳", approved: "✅", denied: "⛔", withdrawn: "↩️", revoked: "🚫" };
 const when = (ts) => ts ? new Date(ts).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }) : "";
 function show(p, hub) {
   console.log(`  #${p.id} ${ICON[p.status] || ""} ${p.status.toUpperCase()} · ${p.project} · from ${p.session} · ${when(p.ts)}`);
@@ -43,7 +44,7 @@ function show(p, hub) {
   if (p.status !== "pending") console.log(`      decided ${when(p.decidedTs)} by ${p.decidedBy}${p.note ? ` — "${p.note}"` : ""}`);
 }
 function usage() {
-  console.log('usage: trantor proposals [--all] | approve <id> [--note "…"] | deny <id> --note "…"  [--hub <url>]');
+  console.log('usage: trantor proposals [--all] | approve <id> [--note "…"] | deny <id> --note "…" | revoke <id> [--note "…"]  [--hub <url>]');
   process.exit(1);
 }
 
@@ -65,24 +66,27 @@ if (cmd === "list") {
   process.exit(0);
 }
 
-if (cmd === "approve" || cmd === "deny") {
+if (cmd === "approve" || cmd === "deny" || cmd === "revoke") {
   const id = Number(argv[1]);
   if (!Number.isInteger(id) || id <= 0) usage();
   const note = val("note");
   if (cmd === "deny" && !note) { console.error('a denial needs a reason: deny <id> --note "why" — the note is what stops the agent re-proposing blind'); process.exit(1); }
-  // an id is only unique per hub — find where THIS pending proposal lives before deciding
+  // an id is only unique per hub — find where THIS proposal lives before deciding
+  // (approve/deny act on a PENDING row; revoke acts on an APPROVED one)
+  const wantStatus = cmd === "revoke" ? "approved" : "pending";
   const holding = [];
   for (const hub of hubs) {
     try {
-      const { proposals } = await get(hub, "/proposals?status=pending");
+      const { proposals } = await get(hub, `/proposals?status=${wantStatus}`);
       if (proposals?.some(p => p.id === id)) holding.push(hub);
     } catch {}
   }
-  if (!holding.length) { console.error(`no PENDING proposal #${id} on ${hubs.length > 1 ? "any of your hubs" : hubs[0]}`); process.exit(1); }
-  if (holding.length > 1) { console.error(`proposal #${id} is pending on several hubs (${holding.join(", ")}) — pick one with --hub <url>`); process.exit(1); }
+  if (!holding.length) { console.error(`no ${wantStatus.toUpperCase()} proposal #${id} on ${hubs.length > 1 ? "any of your hubs" : hubs[0]}`); process.exit(1); }
+  if (holding.length > 1) { console.error(`proposal #${id} is ${wantStatus} on several hubs (${holding.join(", ")}) — pick one with --hub <url>`); process.exit(1); }
   try {
     // `by` is the warn-mode fallback only — under enforce the hub stamps the SIGNER's name over it
-    const { proposal } = await post(holding[0], "/proposal/decide", { id, status: cmd === "approve" ? "approved" : "denied", note, by: ownerId.name || "owner" });
+    const status = cmd === "approve" ? "approved" : cmd === "deny" ? "denied" : "revoked";
+    const { proposal } = await post(holding[0], "/proposal/decide", { id, status, note, by: ownerId.name || "owner" });
     console.log(`${ICON[proposal.status]} #${proposal.id} ${proposal.status} on ${holding[0]} — the proposer (${proposal.session}) has been told over the bus`);
   } catch (err) { console.error(`⚠ ${holding[0]}: ${err.message}`); process.exit(1); }
   process.exit(0);

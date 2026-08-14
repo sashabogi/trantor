@@ -128,6 +128,29 @@ try {
   ok("proposals survive restart", (afterRestart.proposals || []).length === 4, `got ${afterRestart.proposals?.length}`);
   const p5 = await A.post("/propose", { session: S, project: "govtest", ...BOUND(5) });
   ok("proposalSeq survives restart (fresh id, no collision)", p5.ok === true && !afterRestart.proposals.some(x => x.id === p5.proposal.id), JSON.stringify(p5.proposal?.id));
+
+  console.log("\n[9] grants — the mechanical face of approvals (key · /grants · revoke):");
+  const S2 = "codex:grantstest";   // own session+project: no interplay with the cap/count checks above
+  const KB = { scope: "reap provably-dead orphan runners during patrol", condition: "process gone AND row stale >24h", exclusions: "never a live process" };
+  const kp = await A.post("/propose", { session: S2, project: "grantstest", ...KB, key: "patrol.reap-orphans" });
+  ok("keyed proposal files (key stored)", kp.ok === true && kp.proposal.key === "patrol.reap-orphans", JSON.stringify(kp.proposal || kp));
+  const badKey = await A.post("/propose", { session: S2, project: "grantstest", scope: "x", condition: "y", exclusions: "z", key: "Not A Slug!" });
+  ok("malformed key -> 400", badKey.status === 400, `got ${badKey.status}`);
+  const g0 = await A.get("/grants?project=grantstest");
+  ok("a PENDING proposal is not a grant", (g0.grants || []).length === 0, JSON.stringify(g0.grants));
+  const rvEarly = await A.post("/proposal/decide", { id: kp.proposal.id, status: "revoked", by: "sasha@test" });
+  ok("cannot revoke a pending proposal -> 409", rvEarly.status === 409, `got ${rvEarly.status}`);
+  await A.post("/proposal/decide", { id: kp.proposal.id, status: "approved", note: "bounded, fine", by: "sasha@test" });
+  const g1 = await A.get("/grants?project=grantstest&key=patrol.reap-orphans");
+  ok("approved keyed proposal IS a grant (exact key filter)", g1.grants?.length === 1 && g1.grants[0].id === kp.proposal.id && g1.grants[0].key === "patrol.reap-orphans", JSON.stringify(g1.grants));
+  const gOtherKey = await A.get("/grants?project=grantstest&key=other.key");
+  ok("key filter is exact (no prose matching)", (gOtherKey.grants || []).length === 0, JSON.stringify(gOtherKey.grants));
+  const rv = await A.post("/proposal/decide", { id: kp.proposal.id, status: "revoked", note: "changed my mind", by: "sasha@test" });
+  ok("owner revokes an approved grant", rv.ok === true && rv.proposal.status === "revoked", JSON.stringify(rv));
+  const g2 = await A.get("/grants?project=grantstest");
+  ok("revoked grant disappears from /grants", (g2.grants || []).length === 0, JSON.stringify(g2.grants));
+  const refile = await A.post("/propose", { session: S2, project: "grantstest", ...KB, key: "patrol.reap-orphans" });
+  ok("revocation leaves NO denial memory (a refined re-propose is allowed)", refile.ok === true && refile.proposal.status === "pending", JSON.stringify(refile));
 } catch (e) {
   fail++; console.log(`  ✗ hub A block threw: ${e.message}\n${errA.slice(-500)}`);
 } finally {

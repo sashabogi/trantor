@@ -117,6 +117,48 @@ ok("RELAY_SESSION opts a home-dir session back in", rh2.status === 0 && !rh2.std
   rmSync(spBase, { recursive: true, force: true });
 }
 
+// --- regression: sessionstart's hub reads must actually WORK against a live hub ---
+// Bug (≤0.17.68): jget() called signedGet without importing it from ./lib/api.mjs. Every hub read
+// (peers, catchup, board context) threw ReferenceError — swallowed by the callers' catch{}, so the
+// hook exited 0 with its context injection silently EMPTY. The closed-port tests above can't see
+// this class (network failure and a ReferenceError look identical there), so: live hub, real read.
+{
+  const { spawn } = await import("node:child_process");
+  const PORT = 47911;
+  const hubDir = join(realpathSync(tmpdir()), `trantor-ss-live-${process.pid}`);
+  mkdirSync(hubDir, { recursive: true });
+  const hub = spawn("node", ["hub.mjs"], { env: { ...process.env, RELAY_PORT: String(PORT), RELAY_DATA_DIR: hubDir, RELAY_HOST: "127.0.0.1" }, stdio: "ignore" });
+  try {
+    await new Promise(r => setTimeout(r, 900));
+    const sess = `livetest:${proj}`;
+    // a SECOND live session in the same project makes the hook render its peers block — which only
+    // happens if jget('/peers') returns real data instead of throwing
+    await fetch(`http://127.0.0.1:${PORT}/register`, { method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ session: `other:${proj}`, project: proj }) });
+    const r2 = spawnSync("node", ["hooks/sessionstart.mjs"], {
+      input: '{"source":"startup"}', encoding: "utf8", timeout: 15000,
+      env: { ...process.env, CLAUDE_PROJECT_DIR: projDir, RELAY_SESSION: sess, RELAY_URL: `http://127.0.0.1:${PORT}` },
+    });
+    let ctx = "";
+    try { ctx = JSON.parse(r2.stdout)?.hookSpecificOutput?.additionalContext || ""; } catch {}
+    ok("sessionstart reads a LIVE hub (peers block rendered — signedGet import intact)", ctx.includes(`other:${proj}`));
+    ok("sessionstart live run has no ReferenceError on stderr", !/ReferenceError|is not defined/.test(r2.stderr || ""));
+
+    // grants injection: an APPROVED proposal must reach every future session's context
+    const fp = await fetch(`http://127.0.0.1:${PORT}/propose`, { method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ session: sess, project: proj, scope: "grant-inject probe", condition: "always in this test", exclusions: "nothing else" }) }).then(r => r.json());
+    await fetch(`http://127.0.0.1:${PORT}/proposal/decide`, { method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ id: fp.proposal.id, status: "approved", by: "owner@test" }) });
+    const r3 = spawnSync("node", ["hooks/sessionstart.mjs"], {
+      input: '{"source":"startup"}', encoding: "utf8", timeout: 15000,
+      env: { ...process.env, CLAUDE_PROJECT_DIR: projDir, RELAY_SESSION: sess, RELAY_URL: `http://127.0.0.1:${PORT}` },
+    });
+    let ctx3 = "";
+    try { ctx3 = JSON.parse(r3.stdout)?.hookSpecificOutput?.additionalContext || ""; } catch {}
+    ok("an approved GRANT is injected into the next session's context", ctx3.includes("<trantor-grants") && ctx3.includes("grant-inject probe"));
+  } finally { hub.kill(); rmSync(hubDir, { recursive: true, force: true }); }
+}
+
 rmSync(hfFile, { force: true });
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

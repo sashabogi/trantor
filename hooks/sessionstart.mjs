@@ -15,7 +15,7 @@ import { resolveProject, hostId } from "../lib/project.mjs";
 import { formatSubagentManifest } from "../lib/subagent-manifest.mjs";
 import { updateAvailable, maybeNotifyDesktop, readConfig } from "./lib/update-check.mjs";
 import { maybeCheckBalances } from "./lib/balance-check.mjs";
-import { relayUrl, getJSON, signedPost } from "./lib/api.mjs";
+import { relayUrl, getJSON, signedGet, signedPost } from "./lib/api.mjs";
 
 // Load the most recent UNCONSUMED handoff for this project (written by precompact.mjs
 // / the heartbeat early-warning). `claim` marks it consumed so exactly one session
@@ -161,6 +161,21 @@ try {
     additionalContext += `Use the relay MCP tools (relay_peers, relay_send, relay_inbox, relay_wait) to coordinate with them — hand off work, check for overlap before editing shared files, or ask another session for help. If a sibling session is touching the same project, coordinate before making conflicting changes.\n`;
     additionalContext += `</trantor>\n`;
   }
+
+  // ── GRANTS: standing permissions the operator has APPROVED for this project ──────
+  // The mechanical half of governance: an approval used to live only in a one-shot DM that died
+  // with the session that received it. Injecting the active grants here means EVERY future seat
+  // (including the duty agent and orchestrators, whose runners fire this hook each turn) inherits
+  // the operator's recorded decisions instead of re-asking or acting around them.
+  try {
+    const { grants = [] } = await jget(`${url}/grants?project=${encodeURIComponent(project)}`, session);
+    if (grants.length) {
+      additionalContext += `<trantor-grants project="${sanitize(project)}">\n`;
+      additionalContext += `Standing permissions the operator has APPROVED (act within the stated bound without re-asking; everything outside it still needs a proposal):\n`;
+      for (const g of grants.slice(-10)) additionalContext += `- [#${g.id}${g.key ? ` ${sanitize(g.key)}` : ""}] ${sanitize(g.scope)} — WHEN: ${sanitize(g.condition)} — NOT covered: ${sanitize(g.exclusions)}\n`;
+      additionalContext += `</trantor-grants>\n`;
+    }
+  } catch {}
 
   // ── ADOPT live crews (intersession-ops S1+S2, contract #4215) ─────────────────
   // Every boot inventories leftover crew resources via the #4214 detection lib and steers the
