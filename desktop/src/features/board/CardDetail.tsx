@@ -56,8 +56,10 @@ function fileCandidates(task: Card | null, messages: Message[]): string[] {
   return [...out];
 }
 
-export function CardDetail({ client, id, onClose, onMoved }: {
+export function CardDetail({ client, id, onClose, onMoved, onOpen }: {
   client: HubClient; id: number; onClose: () => void; onMoved?: () => void;
+  /** follow a link to another card without closing the drawer */
+  onOpen?: (id: number) => void;
 }) {
   const [data, setData] = useState<{ task: Card | null; events: HubEvent[]; messages: Message[] } | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -133,6 +135,16 @@ export function CardDetail({ client, id, onClose, onMoved }: {
               {task.source && <span className="rounded bg-black/30 px-1.5 py-0.5">{task.source}</span>}
               {typeof task.costUsd === "number" && <span className="rounded bg-black/30 px-1.5 py-0.5">${task.costUsd.toFixed(2)}</span>}
             </div>
+          )}
+          {/* A commit and the session work it finished point at each other. Following the link is
+              the whole value — "what shipped this" and "what did this ship" are one click apart. */}
+          {task && (task.commitCard || task.focusCard) && (
+            <button
+              type="button"
+              onClick={() => onOpen?.(Number(task.commitCard ?? task.focusCard))}
+              className="mt-2 text-[11px] text-[var(--color-tr-muted)] underline decoration-dotted underline-offset-2 hover:text-[var(--color-tr-text)]">
+              {task.commitCard ? `closed by commit #${task.commitCard}` : `closed the session's work #${task.focusCard}`}
+            </button>
           )}
         </header>
         {code && code.dir && (code.files.length > 0 || code.commits.length > 0) && (
