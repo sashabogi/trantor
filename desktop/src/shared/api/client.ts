@@ -30,10 +30,19 @@ export type Card = {
   /** Who POSTED the card — `${hostId()}:${project}`, the same shape a focus card's assignee has.
    * This, not `parent`, is what actually joins a sub-agent to the session that spawned it. */
   by?: string;
-  /** The spawning session as Claude Code names it: a session UUID, NOT a bus session id. Kept
-   * because the hub stores it, but it does not join to anything today — see `parentFocusKeys` in
-   * features/board/Board.tsx before reaching for this. */
+  /** The spawning session as Claude Code names it: a session UUID, NOT a bus session id. This is
+   * the join key for nesting: it matches the `cc` of the focus card for that same Claude session. */
   parent?: string;
+  /** FOCUS CARDS ONLY (source "session"): the Claude Code session UUID this card belongs to.
+   * `assignee` is a bus id and is per host+project, so it cannot tell two Claude sessions in one
+   * project apart; `cc` can, and it is what a sub-agent's `parent` joins to. Absent on cards
+   * written by a client older than 0.17.70. */
+  cc?: string;
+  /** FOCUS CARDS: the git card whose commit closed this focus. */
+  commitCard?: number;
+  /** GIT CARDS: the focus card this commit closed. The pair links both ways, so the drawer can
+   * walk from a commit to the session's work and back. */
+  focusCard?: number;
   /** Sub-agent kind ("Explore", "general-purpose", …) — set by hooks/subagent-cost.mjs. */
   agentType?: string;
   /** Rolling count: the hub collapses repeat sub-agent runs into ONE card rather than minting dupes. */

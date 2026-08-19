@@ -36,6 +36,11 @@ const PEER_TTL_MS = Math.max(Number.isFinite(_peerTtlRaw) ? _peerTtlRaw : PEER_T
 // long-running task is never touched — the owner-alive-but-idle case is handled by the manual /sweep path.
 const REAP_GRACE_MS = Number(process.env.RELAY_REAP_GRACE_MS || 15 * 60 * 1000);    // 15m offline + untouched
 const FOCUS_OFFLINE_MS = Number(process.env.RELAY_FOCUS_OFFLINE_MS || ONLINE_MS);   // close a focus card once its session is offline (not the old 6h)
+// Backstop for the case the peer heartbeat cannot see: several Claude sessions share ONE bus
+// identity (it is per host+project), so a sibling that is still alive keeps the whole assignee
+// "online" and a dead session's focus card would hang in `doing` forever. Long, because a card
+// untouched for an hour is routine — a big task runs a long time between prompts.
+const FOCUS_IDLE_MS = Number(process.env.RELAY_FOCUS_IDLE_MS || 6 * 60 * 60 * 1000);
 const REAP_INTERVAL_MS = Number(process.env.RELAY_REAP_INTERVAL_MS || 60000);       // how often the reaper sweeps (env-tunable; tests set it low)
 if (!existsSync(DATA_DIR)) mkdirSync(DATA_DIR, { recursive: true });
 const isLoopbackHost = (host) => {
@@ -429,13 +434,47 @@ backfillCardEvents();
 // A session's live "focus" card (source:"session") tracks what a REGULAR session is working on RIGHT NOW
 // (set from each user prompt by hooks/prompt-focus.mjs). When the session ends (pruned offline), close its
 // open focus card to "done" so the board doesn't keep a dead session "in progress" forever.
-function closeFocus(session) {
-  const t = state.tasks.find(x => x.source === "session" && x.assignee === session && x.status !== "done");
-  if (!t) return false;
-  (t.history ||= []).push({ from: t.status, to: "done", by: session, ts: now() });
+function closeFocusCard(t, by) {
+  if (!t || t.status === "done") return false;
+  (t.history ||= []).push({ from: t.status, to: "done", by, ts: now() });
   if (t.history.length > 60) t.history.splice(0, 20);
-  appendCardEvent("moved", t, session, t.status, "done");
+  appendCardEvent("moved", t, by, t.status, "done");
   t.status = "done"; t.updated = now();
+  return true;
+}
+// A bus session id is per (host, project), so ONE assignee can own SEVERAL open focus cards — one
+// per live Claude session in that project. Close every one of them when the peer goes away; the
+// old single-card `find` left the rest sitting in `doing` forever.
+function closeFocus(session) {
+  let closed = false;
+  for (const t of state.tasks) {
+    if (t.source === "session" && t.assignee === session && t.status !== "done") closed = closeFocusCard(t, session) || closed;
+  }
+  return closed;
+}
+// A git card and a focus card meet on the same bus id (`${hostId()}:${project}`), which is what the
+// backfill posts as its assignee. One bus id can own several open focus cards now, so close the
+// most recently active one — the session that just committed is the one that most recently spoke.
+const COMMIT_FOCUS_WINDOW_MS = Number(process.env.RELAY_COMMIT_FOCUS_MS || 10 * 60 * 1000);
+function linkCommitToFocus(commitCard, by) {
+  // A HISTORICAL backfill (`--since "14 days ago"`) posts dozens of old commits at once and must
+  // never close whatever a session happens to be doing today. Only a fresh commit closes a focus.
+  if (Math.abs(now() - (commitCard.ts || 0)) > COMMIT_FOCUS_WINDOW_MS) return false;
+  const owner = commitCard.assignee || by || "";
+  if (!owner) return false;
+  const proj = canon(commitCard.project || "");
+  const open = state.tasks
+    .filter(x => x.source === "session" && x.status !== "done" && x.assignee === owner && canon(x.project) === proj)
+    .sort((a, b2) => (b2.updated || 0) - (a.updated || 0));
+  const focus = open[0];
+  if (!focus) return false;
+  focus.commitCard = commitCard.id;                 // the two halves point at each other, so the
+  commitCard.focusCard = focus.id;                  // card drawer can walk either way
+  (focus.history ||= []).push({ from: focus.status, to: "done", by: owner, ts: now(), note: `closed by commit — ${String(commitCard.title || "").slice(0, 80)}` });
+  if (focus.history.length > 60) focus.history.splice(0, 20);
+  appendCardEvent("moved", focus, owner, focus.status, "done");
+  focus.status = "done"; focus.updated = now();
+  appendEvent("focus", focus.project, owner, { taskId: focus.id, closedBy: commitCard.id, reason: "commit" });
   return true;
 }
 function prunePeers() {
@@ -469,13 +508,18 @@ function cardOwnerOnline(t, cutoff) {
 function reapStaleCards() {
   const onCut = now() - ONLINE_MS;
   const focusCut = now() - FOCUS_OFFLINE_MS;
+  const idleCut = now() - FOCUS_IDLE_MS;
   const graceCut = now() - REAP_GRACE_MS;
   let changed = false;
   for (const t of state.tasks) {
     if (t.status === "done" || t.status === "stale") continue;
     if (t.source === "session") {                                  // (a) focus cards → done when session offline
       const p = state.peers[t.assignee];
-      if (!p || (p.lastSeen || 0) < focusCut) { if (closeFocus(t.assignee)) changed = true; }
+      const peerGone = !p || (p.lastSeen || 0) < focusCut;
+      // …or when THIS card has gone quiet for a very long time, which is the only signal available
+      // for a dead Claude session whose bus identity a living sibling keeps warm.
+      const longIdle = (t.updated || t.ts || 0) < idleCut;
+      if (peerGone || longIdle) { if (closeFocusCard(t, peerGone ? t.assignee : "reaper")) changed = true; }
       continue;
     }
     if ((t.status === "doing" || t.status === "testing")           // (b) offline-owner work cards → stale
@@ -1459,6 +1503,11 @@ const server = http.createServer(async (req, res) => {
       if (b.source === "cc-subagent") { t._fp = subFp(b.title); if (b.agentType) t._atype = String(b.agentType).slice(0, 40); if (b.agentId) t._aid = String(b.agentId).slice(0, 80); if (b.parent) t.parent = String(b.parent).slice(0, 120); t.count = 1; if (t.status === "doing") { t._everStarted = true; t._inflight = 1; } }
       state.tasks.push(t); if (state.tasks.length > 2000) state.tasks.splice(0, 500);
       appendCardEvent("created", t, b.by, null, st0);
+      // A COMMIT closes the focus. A focus card says "this session is working on X right now"; the
+      // commit is X arriving, so the card that was rolling forever now completes with the commit
+      // attached to it — the board finally shows a finished unit of work instead of an open card
+      // whose title keeps changing. The next prompt opens a fresh one.
+      if (b.source === "git" && st0 === "done") linkCommitToFocus(t, b.by);
       dirty = true; return json(res, 200, { ok: true, task: t });
     }
     if (req.method === "POST" && P === "/task/update") {    // move/edit a card
@@ -1556,20 +1605,38 @@ const server = http.createServer(async (req, res) => {
       const session = String(b.session || b.by || "").slice(0, 120);
       const project = canon(String(b.project || "").slice(0, 80));
       const title = String(b.title || "").replace(/\s+/g, " ").trim().slice(0, 200);
+      // `cc` = the Claude Code session UUID (hooks/prompt-focus.mjs passes session_id). It is the
+      // ONLY per-session key on the board: `assignee` is a bus id, which is per host+project, so
+      // two Claude sessions in one project used to fight over a single rolling card — and every
+      // sub-agent card, whose `parent` is that same UUID, had nothing to join to (measured over
+      // 431 live cards, joining on the bus id resolved 0 of them). With `cc` stored here, a
+      // sub-agent nests under the session that actually spawned it.
+      const cc = String(b.cc || "").slice(0, 120);
       if (!session || !project || !title) return json(res, 400, { error: "session, project, title required" });
       touch(session, undefined, project, undefined, auth);
-      let t = state.tasks.find(x => x.source === "session" && x.assignee === session && canon(x.project) === project && x.status !== "done");
+      // Match on cc when the client sends one — but never let a cc-bearing prompt adopt a card
+      // from a DIFFERENT session. A client too old to send cc keeps the original assignee match.
+      let t = cc
+        ? state.tasks.find(x => x.source === "session" && x.cc === cc && canon(x.project) === project && x.status !== "done")
+          || state.tasks.find(x => x.source === "session" && !x.cc && x.assignee === session && canon(x.project) === project && x.status !== "done")
+        : state.tasks.find(x => x.source === "session" && x.assignee === session && canon(x.project) === project && x.status !== "done");
       if (t) {
         if (t.title !== title) {            // refocus: re-title in place + record the shift (keeps the trail)
           (t.history ||= []).push({ from: t.status, to: t.status, by: session, ts: now(), note: title.slice(0, 90) });
           if (t.history.length > 60) t.history.splice(0, 20);
+          // A rolling card's narrative describes the OLD focus. The board renders `summary ||
+          // title`, so leaving it would let a stale one-liner shadow what the session is doing
+          // right now — the summarizer (or bin/focus-title.mjs) writes a fresh one.
+          if (t.summary) t.summary = "";
           t.title = title; appendCardEvent("updated", t, session, null, null);
           appendEvent("focus", project, session, { taskId: t.id, title, shift: true });
         }
+        if (cc && !t.cc) t.cc = cc;          // an in-flight card from an older client gets its key
         t.status = "doing"; t.updated = now();
       } else {
         t = { id: ++state.taskSeq, project, title, assignee: session, status: "doing", source: "session",
           difficulty: "", model: "", deps: [], by: session, ts: now(), updated: now(),
+          cc: cc || undefined,
           history: [{ to: "doing", by: session, ts: now() }] };
         state.tasks.push(t); appendCardEvent("created", t, session, null, "doing");
         appendEvent("focus", project, session, { taskId: t.id, title, shift: false });
@@ -1579,7 +1646,11 @@ const server = http.createServer(async (req, res) => {
     }
     if (req.method === "GET" && P === "/focus") {     // the session's open focus card (for sub-agent nesting)
       const session = String(q.session || "");
-      const t = state.tasks.find(x => x.source === "session" && x.assignee === session && x.status !== "done");
+      const cc = String(q.cc || "");
+      // ?cc= is the precise lookup (one Claude session); ?session= stays the coarse one.
+      const t = cc
+        ? state.tasks.find(x => x.source === "session" && x.cc === cc && x.status !== "done")
+        : state.tasks.find(x => x.source === "session" && x.assignee === session && x.status !== "done");
       if (t && !canRead(auth, t.project || "")) return json(res, 404, { id: null, task: null });
       return json(res, 200, { id: t ? t.id : null, task: t || null });
     }

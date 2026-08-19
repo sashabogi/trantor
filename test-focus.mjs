@@ -34,7 +34,7 @@ console.log("# trantor session-focus card tests");
 const PORT = 47831, base = `http://127.0.0.1:${PORT}`;
 const post = (p, b) => fetch(base + p, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(b) }).then(r => r.json());
 const get = (p) => fetch(base + p).then(r => r.json());
-const focus = (session, title) => post("/focus", { session, project: PROJ, title, by: session });
+const focus = (session, title, cc) => post("/focus", { session, project: PROJ, title, by: session, ...(cc ? { cc } : {}) });
 const sessionCards = async () => (await get(`/tasks?project=${PROJ}`)).tasks.filter(t => t.source === "session");
 
 try { await fetch(`${base}/health`, { signal: AbortSignal.timeout(700) }); console.error(`✗ something already listening on :${PORT}`); process.exit(2); } catch {}
@@ -76,6 +76,59 @@ try {
   // 5. validation: missing fields rejected
   const bad = await post("/focus", { session: S1, project: PROJ });   // no title
   ok("missing title is rejected", !!bad.error);
+
+  // 6. cc — the Claude session UUID, and the only per-session key on the board.
+  // The bus id (`assignee`) is per HOST+PROJECT: two Claude sessions in one repo share it, so
+  // without cc they fought over a single rolling card and sub-agent cards, whose `parent` is that
+  // same UUID, had nothing to join to. crebral-health had 28 focus cards on one assignee.
+  const S3 = "host:focusproj";                  // deliberately the SAME bus id as S1
+  const A = "11111111-aaaa-4aaa-8aaa-111111111111", B = "22222222-bbbb-4bbb-8bbb-222222222222";
+  await focus(S3, "session A is doing this", A);
+  await focus(S3, "session B is doing something else", B);
+  const withCc = (await sessionCards()).filter(t => t.cc);
+  ok("two Claude sessions on ONE bus id get TWO focus cards", withCc.length === 2, `(got ${withCc.length})`);
+  ok("each card carries its own cc", withCc.some(t => t.cc === A) && withCc.some(t => t.cc === B));
+  ok("neither stole the other's title",
+    withCc.find(t => t.cc === A)?.title === "session A is doing this" &&
+    withCc.find(t => t.cc === B)?.title === "session B is doing something else");
+  const idA = withCc.find(t => t.cc === A)?.id;
+  await focus(S3, "session A moved on", A);
+  const afterA = (await sessionCards()).filter(t => t.cc);
+  ok("a refocus still rolls the SAME card, matched by cc", afterA.length === 2 && afterA.find(t => t.cc === A)?.id === idA);
+  ok("...and only that session's title changed",
+    afterA.find(t => t.cc === A)?.title === "session A moved on" &&
+    afterA.find(t => t.cc === B)?.title === "session B is doing something else");
+  // GET /focus?cc= is the lookup a sub-agent hook uses to find its parent card
+  const lookedUp = await get(`/focus?cc=${B}`);
+  ok("GET /focus?cc= returns that session's card", lookedUp.id === afterA.find(t => t.cc === B)?.id);
+  ok("GET /focus?session= still answers for older callers", !!(await get(`/focus?session=${encodeURIComponent(S1)}`)).id);
+  // 7. a COMMIT closes the focus card it belongs to, and the two link to each other.
+  // A focus card otherwise rolls forever — its title changes but it never completes, so a session's
+  // finished work never reaches the done lane under its own name.
+  const S4 = "host:committer";
+  await post("/focus", { session: S4, project: PROJ, title: "wire the badge count", by: S4, cc: "cc-commit-1" });
+  const beforeCommit = (await sessionCards()).find(t => t.assignee === S4);
+  ok("focus card open before the commit", beforeCommit?.status === "doing");
+  const commit = await post("/task", { project: PROJ, title: "badge: fix the off-by-one", status: "done", source: "git", ts: Date.now(), assignee: S4, by: S4 });
+  const afterCommit = (await sessionCards()).find(t => t.id === beforeCommit.id);
+  ok("the commit closed the focus card", afterCommit?.status === "done", `(got "${afterCommit?.status}")`);
+  ok("the focus card points at the commit card", afterCommit?.commitCard === commit.task.id);
+  ok("the commit card points back at the focus card", commit.task.focusCard === beforeCommit.id);
+  ok("history says WHY it closed", (afterCommit?.history || []).some(h => /closed by commit/.test(h.note || "")));
+
+  // …but a historical backfill must not close whatever a session is doing TODAY
+  const S5 = "host:historian";
+  await post("/focus", { session: S5, project: PROJ, title: "today's actual work", by: S5, cc: "cc-commit-2" });
+  const old = await post("/task", { project: PROJ, title: "ancient: something from last month", status: "done", source: "git", ts: Date.now() - 30 * 24 * 3600 * 1000, assignee: S5, by: S5 });
+  const stillOpen = (await sessionCards()).find(t => t.assignee === S5);
+  ok("a 30-day-old backfilled commit leaves today's focus alone", stillOpen?.status === "doing", `(got "${stillOpen?.status}")`);
+  ok("...and links nothing", !old.task.focusCard);
+
+  // a non-git card must never close a focus card either
+  const S6 = "host:noncommit";
+  await post("/focus", { session: S6, project: PROJ, title: "work in flight", by: S6, cc: "cc-commit-3" });
+  await post("/task", { project: PROJ, title: "some crew card", status: "done", assignee: S6, by: S6 });
+  ok("an ordinary done card does not close the focus", (await sessionCards()).find(t => t.assignee === S6)?.status === "doing");
 } catch (e) {
   fail++; console.log("  ✗ threw:", e?.message || e, herr ? `\n  hub stderr: ${herr}` : "");
 } finally {
@@ -95,6 +148,18 @@ try {
   await fetch(base2 + "/peers");   // any read triggers prunePeers(); stale peer → closeFocus()
   f = (await fetch(`${base2}/tasks?project=${PROJ}`).then(r => r.json())).tasks.filter(t => t.source === "session");
   ok("pruned session → focus auto-closed to done", f[0]?.status === "done", `(got "${f[0]?.status}")`);
+
+  // One bus id can now own SEVERAL open focus cards. The old close() took the first match and
+  // left the rest sitting in "doing" forever, which is a dead session the board calls live.
+  for (const cc of ["aaaa-1", "aaaa-2", "aaaa-3"]) {
+    await fetch(base2 + "/focus", { method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ session: "multi:focusproj", project: PROJ, title: `work ${cc}`, by: "multi:focusproj", cc }) });
+  }
+  await sleep(60);
+  await fetch(base2 + "/peers");
+  const multi = (await fetch(`${base2}/tasks?project=${PROJ}`).then(r => r.json())).tasks.filter(t => t.source === "session" && t.assignee === "multi:focusproj");
+  ok("EVERY focus card on a pruned bus id is closed, not just the first",
+    multi.length === 3 && multi.every(t => t.status === "done"), `(got ${multi.map(t => t.status).join(",")})`);
 } catch (e) {
   fail++; console.log("  ✗ threw (prune):", e?.message || e, herr2 ? `\n  hub stderr: ${herr2}` : "");
 } finally {

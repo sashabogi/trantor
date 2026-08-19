@@ -3,11 +3,17 @@
 // so a REGULAR (non-crew) Claude session's OWN work shows IN PROGRESS on the board as it happens — not only
 // when it commits or dispatches a sub-agent. ONE rolling card per session (the hub re-titles it as the focus
 // shifts and closes it to "done" when the session goes offline). Trivial acks ("yes", "go ahead") don't
-// refocus. Fail-silent + fast: NO LLM call (the title is a heuristic clean of the prompt; Scrooge-summarized
-// titles are a follow-up). Never blocks or delays the turn.
+// refocus. Fail-silent + fast: NO LLM call ON THE TURN PATH — the title is a heuristic clean of the
+// prompt, posted immediately. A long prompt then hands its rewrite to bin/focus-title.mjs, spawned
+// DETACHED so a cheap model can produce a readable board line a few seconds later without the user
+// ever waiting on it. Never blocks or delays the turn.
 import { homedir } from "node:os";
+import { join, dirname } from "node:path";
+import { writeFileSync, mkdirSync } from "node:fs";
+import { spawn } from "node:child_process";
+import { fileURLToPath } from "node:url";
 import { resolveProject, hostId } from "../lib/project.mjs";
-import { signedPost } from "./lib/api.mjs";
+import { signedPost, relayUrl } from "./lib/api.mjs";
 
 function readStdin() {
   return new Promise(res => { let d = ""; process.stdin.setEncoding("utf8");
@@ -42,7 +48,29 @@ try {
   const project = resolveProject(cwd);
   const session = process.env.RELAY_SESSION
     || (process.env.RELAY_AGENT ? `${process.env.RELAY_AGENT}:${project}` : `${hostId()}:${project}`);
-  await signedPost("/focus", { session, project, title: titleFrom(trimmed), by: session }, { session });
+  // The Claude Code session UUID. `session` above is a BUS id — per host+project — so without this
+  // two Claude sessions in one project share (and fight over) a single focus card, and sub-agent
+  // cards, whose `parent` is exactly this UUID, have nothing to nest under.
+  const cc = String(input.session_id || "").slice(0, 120);
+  const r = await signedPost("/focus", { session, project, title: titleFrom(trimmed), by: session, cc }, { session });
+
+  // Only pay a model when the heuristic actually mangles the prompt. A short, already-clear ask
+  // ("fix the login redirect") reads fine as-is and buying a rewrite for it is exactly the kind of
+  // reflexive spend the economics doctrine exists to stop.
+  const id = r?.json?.id;
+  if (id && trimmed.length > 90 && process.env.TRANTOR_NO_SCROOGE_TITLES !== "1") {
+    try {
+      const busDir = process.env.AGENT_BUS_DIR || join(homedir(), ".agent-bus");
+      mkdirSync(busDir, { recursive: true });
+      const pf = join(busDir, `focus-prompt-${String(cc || session).replace(/[^A-Za-z0-9_.-]/g, "_")}.txt`);
+      writeFileSync(pf, trimmed);
+      const worker = join(dirname(dirname(fileURLToPath(import.meta.url))), "bin", "focus-title.mjs");
+      // Detached + unref'd + stdio ignored: the hook returns NOW. Nothing downstream waits on this,
+      // and a worker that dies takes the heuristic title with it, which is a fine outcome.
+      spawn(process.execPath, [worker, "--id", String(id), "--hub", relayUrl(project), "--prompt-file", pf, "--project", project],
+        { detached: true, stdio: "ignore" }).unref();
+    } catch {}
+  }
 } catch (e) {
   process.stderr.write(`[trantor] prompt-focus error: ${e?.message || e}\n`);
 }

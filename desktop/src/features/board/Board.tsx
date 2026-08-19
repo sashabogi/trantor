@@ -42,25 +42,40 @@ function matches(card: Card, query: string): boolean {
   return card.title.toLowerCase().includes(q) || (card.assignee || "").toLowerCase().includes(q);
 }
 
-// Sub-agent cards do not belong to a session — and that is a DATA fact, not a styling choice.
+// Sub-agents nest under the session that spawned them, and the join is `subagent.parent === focus.cc`.
 //
-// The obvious design is "nest each sub-agent under the focus card of the session that spawned it",
-// and it cannot be built on today's model. Two keys look like they identify that session and
-// neither does:
-//   • `parent` — set by hooks/subagent-cost.mjs from `parent_session_id`, a Claude Code session
-//     UUID. A focus card's assignee is a BUS session id ("MacBook-Pro-M1:trantor"). Different
-//     namespaces: measured over 431 live cards, joining on `parent` resolved 0 of them.
-//   • `by` / assignee — right namespace, wrong granularity. A bus session id is per (host,
-//     project), so ALL 28 of crebral-health's focus cards share one. Joining on it piles every
-//     sub-agent the machine ever ran onto whichever focus card renders last: one tile claiming
-//     "2157 sub-agents · $9068.89".
-// On top of that the hub COLLAPSES repeat runs into one rolling card (count up to 739 on a single
-// card), so 84 of 198 sub-agent cards genuinely span many sessions and cannot belong to one.
+// That took a data change to make possible. `parent` has always been a Claude Code session UUID,
+// while a focus card's `assignee` is a BUS session id ("MacBook-Pro-M1:trantor") — different
+// namespaces, so joining on it resolved 0 of 431 live cards. And a bus id is per (host, project),
+// so ALL 28 of crebral-health's focus cards shared one: joining on THAT piled every sub-agent the
+// machine ever ran onto whichever tile rendered last ("2157 sub-agents · $9068.89"). Focus cards
+// now carry `cc`, the Claude session UUID, which is exactly the key `parent` already spoke.
 //
-// So we group by LANE instead. That delivers the thing actually wanted — sub-agent noise stops
-// burying real work, 412 done-lane tiles become one line — and it claims only what is true. Real
-// nesting needs the hook to send a per-session bus identity first; see docs/HANDOFF-next-session.md.
+// Two things stay true and the fallback keeps honouring them: the hub COLLAPSES repeat runs into
+// one rolling card (counts reach 739), so a card can genuinely span many sessions; and a card
+// written before 0.17.70 has no `cc` to join to. Anything that does not resolve to a focus card in
+// this project keeps the LANE roll-up — one quiet line per lane, claiming only what is true.
 type Lane = { cards: Card[]; subagents: Card[]; openSubagents: boolean };
+
+/** focus card (by cc) ← its sub-agent children, plus the ids that are now rendered as children. */
+type Nesting = { childrenOf: Map<number, Card[]>; nested: Set<number> };
+
+function buildNesting(cards: Card[]): Nesting {
+  const focusByCc = new Map<string, Card>();
+  for (const c of cards) if (c.source === "session" && c.cc) focusByCc.set(c.cc, c);
+  const childrenOf = new Map<number, Card[]>();
+  const nested = new Set<number>();
+  for (const c of cards) {
+    if (c.source !== "cc-subagent" || !c.parent) continue;
+    const parent = focusByCc.get(c.parent);
+    if (!parent) continue;                       // unresolvable → the lane roll-up still has it
+    const kids = childrenOf.get(parent.id);
+    kids ? kids.push(c) : childrenOf.set(parent.id, [c]);
+    nested.add(c.id);
+  }
+  for (const kids of childrenOf.values()) kids.sort((a, b) => (b.updated ?? 0) - (a.updated ?? 0));
+  return { childrenOf, nested };
+}
 
 function passesAssignee(card: Card, assignee: string): boolean {
   return !assignee || card.assignee === assignee;
@@ -73,16 +88,25 @@ const isSubagent = (c: Card) => c.source === "cc-subagent";
  * A sub-agent card matched by an ACTIVE search is never hidden inside a collapsed group — the
  * group opens instead. Searching for something and having it silently swallowed by a collapsed
  * summary is the one behaviour a board cannot have. */
-function splitLane(cards: Card[], query: string, assignee: string): Lane {
+function splitLane(cards: Card[], query: string, assignee: string, nesting: Nesting): Lane {
   const searching = query.trim() !== "" || assignee !== "";
-  const visible = cards.filter(c => matches(c, query) && passesAssignee(c, assignee));
+  const hit = (c: Card) => matches(c, query) && passesAssignee(c, assignee);
+  const visible = cards.filter(c => {
+    if (nesting.nested.has(c.id)) return false;      // it renders under its parent, never as a sibling
+    if (hit(c)) return true;
+    // A parent stays on the board when the thing you searched for is one of its children —
+    // otherwise the match would vanish with the tile that holds it.
+    return !!nesting.childrenOf.get(c.id)?.some(hit);
+  });
   const work = visible.filter(c => !isSubagent(c));
   const subagents = visible.filter(isSubagent);
   return { cards: work, subagents, openSubagents: searching && subagents.length > 0 };
 }
 
-function CardTile({ card, onOpen, onAdvance, presence }: {
+function CardTile({ card, onOpen, onAdvance, presence, subagents, subagentsOpen }: {
   card: Card; onOpen: (c: Card) => void; onAdvance?: (c: Card) => void; presence?: PresenceState;
+  /** sub-agents this session spawned — rendered INSIDE the tile, so the tree reads as one thing */
+  subagents?: Card[]; subagentsOpen?: boolean;
 }) {
   const next = NEXT[card.status];
   // A card is only believably IN MOTION when its assignee's heartbeat is fresh — "doing" with a
@@ -116,6 +140,13 @@ function CardTile({ card, onOpen, onAdvance, presence }: {
           </button>
         )}
       </div>
+      {subagents && subagents.length > 0 && (
+        // Inside the tile, not beside it: a sub-agent belongs to this session's story, and a
+        // sibling tile is exactly the flat shape that buried real work in the first place.
+        <div onClick={e => e.stopPropagation()}>
+          <SubagentGroup items={subagents} forceOpen={!!subagentsOpen} variant="nested" onOpen={onOpen} />
+        </div>
+      )}
     </div>
   );
 }
@@ -175,12 +206,13 @@ export function Board({ client, project, lens, onLens }: {
   );
   // Exception lanes earn their width by having cards in them; the four flow lanes are always the
   // board's shape. Seven permanent columns forced a horizontal scroll that clipped lane counts.
+  const nesting = useMemo(() => buildNesting(cards ?? []), [cards]);
   const byLane = useMemo(() => {
     const all = cards ?? [];
     return LANES
-      .map(l => [l, splitLane(all.filter(c => (c.status || "todo") === l), query, assignee)] as const)
+      .map(l => [l, splitLane(all.filter(c => (c.status || "todo") === l), query, assignee, nesting)] as const)
       .filter(([l, lane]) => !["failed", "blocked", "stale"].includes(l) || lane.cards.length + lane.subagents.length > 0);
-  }, [cards, query, assignee]);
+  }, [cards, query, assignee, nesting]);
 
   if (error) return <div className="p-6 text-sm text-[var(--color-tr-fail)]">Board unavailable: {error}</div>;
   if (!cards) return <div className="p-6 text-sm text-[var(--color-tr-muted)]">Loading {project}…</div>;
@@ -237,16 +269,23 @@ export function Board({ client, project, lens, onLens }: {
                   real work — and putting it last buried it under up to 200 cards (the done lane
                   holds 871), which is not a place anyone would find it. A summary goes at the top. */}
               <SubagentGroup items={subagents} forceOpen={openSubagents} onOpen={c => setOpen(c.id)} />
-              {work.slice(0, 200).map(c => (
-                <CardTile key={c.id} card={c} onOpen={c2 => setOpen(c2.id)} onAdvance={advance}
-                          presence={c.assignee ? presence.get(c.assignee) : undefined} />
-              ))}
+              {work.slice(0, 200).map(c => {
+                // A search filters the nested list too, and opens it — a matched sub-agent must
+                // never be swallowed by the collapsed summary that holds it.
+                const kids = nesting.childrenOf.get(c.id);
+                const shownKids = filtered && kids ? kids.filter(k => matches(k, query) && passesAssignee(k, assignee)) : kids;
+                return (
+                  <CardTile key={c.id} card={c} onOpen={c2 => setOpen(c2.id)} onAdvance={advance}
+                            presence={c.assignee ? presence.get(c.assignee) : undefined}
+                            subagents={shownKids} subagentsOpen={filtered && !!shownKids?.length} />
+                );
+              })}
             </div>
           </section>
         ))}
       </div>
       {open !== null && (
-        <CardDetail client={client} id={open} onClose={() => setOpen(null)}
+        <CardDetail client={client} id={open} onClose={() => setOpen(null)} onOpen={setOpen}
                     onMoved={() => client.tasks(project).then(setCards).catch(() => {})} />
       )}
     </div>

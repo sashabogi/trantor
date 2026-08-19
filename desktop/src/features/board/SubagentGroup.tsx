@@ -3,8 +3,12 @@
 // crebral-health they are 412 of the done lane's tiles, and as flat siblings they buried every
 // piece of real work on the board.
 //
-// It is a LANE roll-up rather than a per-session one on purpose; Board.tsx documents why the
-// per-session shape cannot be built on the current data.
+// It renders in two places. Under a focus card (`variant="nested"`) it is that session's own
+// sub-agents, joined on `parent === cc`. At the head of a lane (`variant="lane"`) it is the
+// fallback for everything that could not be resolved to a session — a pre-0.17.70 card with no
+// `cc` to join to, or a rolling card the hub collapsed across many sessions. Board.tsx has the
+// join. Nesting takes a card out of its lane, so the child rows carry their own STATUS colour:
+// lane position is no longer saying it for them.
 import { useState } from "react";
 import type { Card } from "../../shared/api/client";
 import { cleanTitle } from "../../shared/Avatar";
@@ -25,10 +29,17 @@ function totalCost(cards: Card[]): number | null {
 
 const formatCost = (v: number) => `$${v.toFixed(2)}`;
 
-export function SubagentGroup({ items, forceOpen, onOpen }: {
+const STATUS_COLOR: Record<string, string> = {
+  doing: "var(--color-tr-doing)", testing: "var(--color-tr-warn)", done: "var(--color-tr-ok)",
+  failed: "var(--color-tr-fail)", blocked: "var(--color-tr-fail)",
+};
+const statusColor = (s?: string) => STATUS_COLOR[s || ""] || "var(--color-tr-muted)";
+
+export function SubagentGroup({ items, forceOpen, onOpen, variant = "lane" }: {
   items: Card[];
   forceOpen: boolean;
   onOpen: (card: Card) => void;
+  variant?: "lane" | "nested";
 }) {
   const [expanded, setExpanded] = useState(false);
   const open = forceOpen || expanded;
@@ -45,8 +56,11 @@ export function SubagentGroup({ items, forceOpen, onOpen }: {
   const LIMIT = 50;
   const shown = items.slice(0, LIMIT);
 
+  const nested = variant === "nested";
   return (
-    <div className="mt-1 rounded-lg border border-dashed border-[var(--color-tr-edge)] p-2 text-[11px] text-[var(--color-tr-muted)]">
+    <div className={nested
+      ? "mt-2.5 border-l border-[var(--color-tr-edge)] pl-2 text-[11px] text-[var(--color-tr-muted)]"
+      : "mt-1 rounded-lg border border-dashed border-[var(--color-tr-edge)] p-2 text-[11px] text-[var(--color-tr-muted)]"}>
       <button
         type="button"
         aria-expanded={open}
@@ -54,7 +68,7 @@ export function SubagentGroup({ items, forceOpen, onOpen }: {
         className="flex w-full items-center gap-1.5 text-left hover:text-[var(--color-tr-text)]">
         <span className="shrink-0">{open ? "▾" : "▸"}</span>
         <span className="min-w-0 flex-1 truncate">
-          <span className="tr-mono">{items.length}</span> sub-agent card{items.length === 1 ? "" : "s"}
+          <span className="tr-mono">{items.length}</span> sub-agent{nested ? "" : " card"}{items.length === 1 ? "" : "s"}
           {runs > items.length && <> · <span className="tr-mono">{runs}</span> runs</>}
         </span>
         {cost !== null && <span className="tr-mono shrink-0">{formatCost(cost)}</span>}
@@ -67,7 +81,7 @@ export function SubagentGroup({ items, forceOpen, onOpen }: {
               type="button"
               onClick={e => { e.stopPropagation(); onOpen(child); }}
               className="flex min-w-0 items-start gap-2 rounded px-1.5 py-1 text-left hover:bg-white/[0.03] hover:text-[var(--color-tr-text)]">
-              <span className="tr-dot mt-1.5 shrink-0 bg-[var(--color-tr-muted)]" />
+              <span className="tr-dot mt-1.5 shrink-0" style={{ background: statusColor(child.status) }} title={child.status} />
               <span className="min-w-0 flex-1">
                 <span className="block truncate">{child.agentType || "sub-agent"}</span>
                 <span className="block truncate text-[var(--color-tr-muted)]">{cleanTitle(child.title)}</span>

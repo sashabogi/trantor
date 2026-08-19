@@ -53,8 +53,11 @@ try {
     // with the SubagentStop "done" card on any client that predates agent_id pairing (legacy fallback).
     const task = String(ti.prompt || ti.description || agentType).replace(/\s+/g, " ").trim().slice(0, 90);
     const title = `${agentType}: ${task}`.slice(0, 180);
+    // parent at CREATE time too, not only on the SubagentStart enrich — a card that spends its
+    // whole doing-life unparented is un-nestable exactly while it is the interesting one.
     await signedPost("/task", {
       project, title, status: "doing", agentType,
+      parent: String(input.session_id || "").slice(0, 120),
       assignee: `${agentType}:${project}`, by: `${hostId()}:${project}`,
       source: "cc-subagent", costKind: "subagent-notional", phase: "sub-agents",
     });
