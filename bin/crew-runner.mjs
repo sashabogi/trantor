@@ -9,7 +9,7 @@
 // agent arrives it RESUMES the CLI session (native resume = full context kept) with that
 // message as the prompt. The model just works and ends its turn; the runner does the rest.
 import { execSync, spawnSync } from "node:child_process";
-import { readFileSync, existsSync, appendFileSync } from "node:fs";
+import { readFileSync, writeFileSync, unlinkSync, existsSync, appendFileSync } from "node:fs";
 import { join, basename } from "node:path";
 import { homedir } from "node:os";
 import { resolveProject, resolveHub } from "../lib/project.mjs";
@@ -174,6 +174,39 @@ let consecFails = 0;
 let lastErrText = "";
 const ERRF = join(homedir(), ".agent-bus", `err-${AGENT}-${PROJ}.txt`);
 
+// ---- undelivered wake messages (the runner owns delivery, not the hub) ----
+// The hub hands a message out exactly ONCE: the poll cursor advances the instant we read it, and
+// nothing ever re-fires. So a turn that died — API outage, quota wall, crashed CLI — used to take
+// its wake message down with it, and an escalation addressed to this seat was gone forever with
+// no trace anywhere. The queue below makes delivery the runner's job: a message is not consumed
+// until a turn actually exits 0. It survives a runner restart on disk, retries on its own backoff
+// so a silent bus still gets it through, and says how many are outstanding every time it reports.
+const PENDF = join(homedir(), ".agent-bus", `pending-${AGENT}-${PROJ}.json`);
+// A cap, so a long outage cannot grow the queue without bound. Overflow drops the OLDEST and says
+// so on the bus — a silent drop is the exact failure this whole mechanism exists to end.
+const PENDING_MAX = 50;
+// Backoff between redelivery attempts. Starts fast (a blip clears in 30s) and lands at 15 minutes,
+// which is the cadence for "this seat is properly down" rather than a retry storm against a hub
+// that is already refusing us.
+// TRANTOR_RETRY_MS (comma-separated ms) shortens the ladder so the redelivery drill can exercise
+// a real backoff in seconds instead of waiting out the production one.
+const RETRY_MS = (() => {
+  const custom = String(process.env.TRANTOR_RETRY_MS || "").split(",").map(Number).filter(n => Number.isFinite(n) && n >= 0);
+  return custom.length ? custom : [30e3, 60e3, 120e3, 300e3, 900e3];
+})();
+function savePending(wake, bcast) {
+  try {
+    if (!wake.length && !bcast.length) { try { unlinkSync(PENDF); } catch {} return; }
+    writeFileSync(PENDF, JSON.stringify({ agent: AGENT, project: PROJ, ts: Date.now(), wake, bcast }));
+  } catch {}
+}
+function loadPending() {
+  try {
+    const j = JSON.parse(readFileSync(PENDF, "utf8"));
+    return { wake: Array.isArray(j.wake) ? j.wake : [], bcast: Array.isArray(j.bcast) ? j.bcast : [] };
+  } catch { return { wake: [], bcast: [] }; }
+}
+
 function classifyFailure(exit, errText) {
   const t = (errText || "").toLowerCase();
   if (exit === 127) return "missing-cli";
@@ -184,7 +217,7 @@ function classifyFailure(exit, errText) {
   return "crashed";
 }
 
-async function reportFailure(exit, trigger) {
+async function reportFailure(exit, trigger, undelivered = 0) {
   consecFails++;
   const reason = classifyFailure(exit, lastErrText);
   const down = consecFails >= 2;
@@ -193,9 +226,12 @@ async function reportFailure(exit, trigger) {
   const hint = reason === "exhausted" ? " — needs `trantor swap`"
     : reason === "auth" ? " — check credentials"
     : reason === "missing-cli" ? " — CLI not on PATH" : "";
+  // The count of messages this seat is HOLDING is the operator-actionable half of a failure: a
+  // crashed pulse costs nothing, a crashed turn sitting on three escalations is someone waiting.
+  const held = undelivered ? ` · holding ${undelivered} undelivered message${undelivered > 1 ? "s" : ""} (will retry)` : "";
   const text = down
-    ? `🛑 ${SESSION} DOWN — ${consecFails} consecutive failures (${reason}, exit ${exit})${hint}`
-    : `⚠️ ${SESSION} turn FAILED (${trigger}, exit ${exit} · ${reason})${hint}`;
+    ? `🛑 ${SESSION} DOWN — ${consecFails} consecutive failures (${reason}, exit ${exit})${hint}${held}`
+    : `⚠️ ${SESSION} turn FAILED (${trigger}, exit ${exit} · ${reason})${hint}${held}`;
   await api("/send", { from: SESSION, to: "all", text, project: PROJ }).catch(() => {});
   cmuxStatus(down ? "down" : "error", "#ef6a6a", "alert", { alert: true, priority: 90 }); cmuxLog(`turn failed: ${reason} (exit ${exit})`, "error");
   log(`\x1b[31mreported failure to bus: ${reason} (exit ${exit})\x1b[0m`);
@@ -278,9 +314,18 @@ async function loadLessons() {
     });
   } catch {}
 
-  let pendingBcast = [];
+  // Wake messages this seat has PULLED off the bus but not yet worked successfully, plus the
+  // broadcasts batched behind them. Restored from disk first: a runner that was killed mid-turn
+  // (or a machine that rebooted) still owes those messages, and the hub will never send them again.
+  const restored = loadPending();
+  let pendingWake = restored.wake;
+  let pendingBcast = restored.bcast;
+  let retryAt = 0;            // 0 = deliver at the next opportunity
+  let deliveryFails = 0;      // consecutive failed attempts at the SAME pending batch
+  if (pendingWake.length) log(`\x1b[33m${pendingWake.length} message(s) survived from a previous run — redelivering\x1b[0m`);
+
   const ec0 = runTurn(KICKOFF + LESSONS, true, "kickoff");
-  if (ec0) await reportFailure(ec0, "kickoff");   // a failed kickoff = the "fired up, died, nobody knew" case
+  if (ec0) await reportFailure(ec0, "kickoff", pendingWake.length);   // a failed kickoff = the "fired up, died, nobody knew" case
   let lastTurnAt = Date.now();
   if (PULSE_MS) log(`pulse armed — mission re-read every ${Math.round(PULSE_MS / 1000)}s (${MISSION_FILE})`);
   log(`parked — long-polling the bus as ${SESSION} (free; this poll is also the heartbeat)`);
@@ -295,9 +340,15 @@ async function loadLessons() {
       log("parked — waiting for the next message or pulse");
       continue;
     }
-    // cap the long-poll hold so a due pulse never waits out a full silent 280s window
-    const holdS = PULSE_MS
-      ? Math.max(5, Math.min(280, Math.ceil((PULSE_MS - (Date.now() - lastTurnAt)) / 1000)))
+    // A due REDELIVERY runs before we go back to waiting — during an outage the bus is silent by
+    // definition, so the retry timer is the only thing that will ever move these messages.
+    if (pendingWake.length && Date.now() >= retryAt) { await deliverWake(); continue; }
+    // cap the long-poll hold so neither a due pulse nor a due redelivery waits out a silent 280s window
+    const due = [];
+    if (PULSE_MS) due.push(PULSE_MS - (Date.now() - lastTurnAt));
+    if (pendingWake.length) due.push(retryAt - Date.now());
+    const holdS = due.length
+      ? Math.max(5, Math.min(280, Math.ceil(Math.min(...due) / 1000)))
       : 280;
     let msgs = [];
     try {
@@ -320,15 +371,51 @@ async function loadLessons() {
     const bcast = msgs.filter(m => m.to === "all" && !mentions.includes(m));
     pendingBcast.push(...bcast);                      // wake-policy: plain broadcasts batch, they don't wake
     const wake = [...direct, ...mentions];
-    if (!wake.length) { if (bcast.length) log(`${bcast.length} broadcast(s) batched (no wake) — ${pendingBcast.length} pending`); continue; }
-    const ctx = pendingBcast.length ? `\nFYI broadcasts since your last turn (context only):\n${pendingBcast.map(m => `[${m.from} -> all]: ${m.text}`).join("\n")}\n` : "";
-    pendingBcast = [];
-    const lines = wake.map(m => `[${m.from}${m.to === "all" ? " -> all (mentions you)" : ""}]: ${m.text}`).join("\n");
-    const prompt = `NEW BUS MESSAGE${wake.length > 1 ? "S" : ""} for you:\n${lines}\n${ctx}\nAct on what's addressed to you, then end your turn.\n\n${RULES}`;
-    await loadLessons();
-    const ec = runTurn(prompt + LESSONS, false, direct.length ? "direct message" : "@mention");
-    if (ec) await reportFailure(ec, "message"); else await reportHealthy();
-    lastTurnAt = Date.now();
+    if (!wake.length) { if (bcast.length) { savePending(pendingWake, pendingBcast); log(`${bcast.length} broadcast(s) batched (no wake) — ${pendingBcast.length} pending`); } continue; }
+    // Queue BEFORE running the turn, and persist immediately. Everything between here and a clean
+    // exit 0 — the CLI dying, the machine losing power — now leaves a record of what this seat owes.
+    pendingWake.push(...wake);
+    if (pendingWake.length > PENDING_MAX) {
+      const dropped = pendingWake.splice(0, pendingWake.length - PENDING_MAX);
+      log(`\x1b[31mundelivered queue overflowed — dropped ${dropped.length} oldest message(s)\x1b[0m`);
+      await api("/send", { from: SESSION, to: "all", project: PROJ,
+        text: `⚠️ ${SESSION} dropped ${dropped.length} undelivered message(s) — queue hit its ${PENDING_MAX} cap during a failure streak` }).catch(() => {});
+    }
+    savePending(pendingWake, pendingBcast);
+    // Respect an active backoff: a new message during an outage joins the batch, it does not
+    // reset the clock and hammer a CLI that is already failing.
+    if (Date.now() < retryAt) { log(`queued — ${pendingWake.length} undelivered, next attempt in ${Math.max(0, Math.round((retryAt - Date.now()) / 1000))}s`); continue; }
+    await deliverWake();
     log("parked — waiting for the next message");
+  }
+
+  // Run the pending batch. The messages are cleared ONLY on exit 0; any other outcome leaves them
+  // queued, on disk, with a backoff — which is the whole point of the change.
+  async function deliverWake() {
+    const wake = pendingWake;
+    const ctx = pendingBcast.length ? `\nFYI broadcasts since your last turn (context only):\n${pendingBcast.map(m => `[${m.from} -> all]: ${m.text}`).join("\n")}\n` : "";
+    const lines = wake.map(m => `[${m.from}${m.to === "all" ? " -> all (mentions you)" : ""}]: ${m.text}`).join("\n");
+    // Say plainly that this is a second look. Without it the model re-reads an old escalation as
+    // brand new and can redo work it already half-did before the turn died.
+    const again = deliveryFails
+      ? `\n(REDELIVERY, attempt ${deliveryFails + 1} — an earlier turn failed before acting on ${wake.length > 1 ? "these" : "this"}. Check what you already did before repeating it.)\n`
+      : "";
+    const prompt = `NEW BUS MESSAGE${wake.length > 1 ? "S" : ""} for you:\n${lines}\n${ctx}${again}\nAct on what's addressed to you, then end your turn.\n\n${RULES}`;
+    await loadLessons();
+    const trigger = wake.some(m => m.to === SESSION) ? "direct message" : "@mention";
+    const ec = runTurn(prompt + LESSONS, false, deliveryFails ? `${trigger} (redelivery)` : trigger);
+    if (ec) {
+      deliveryFails++;
+      const wait = RETRY_MS[Math.min(deliveryFails - 1, RETRY_MS.length - 1)];
+      retryAt = Date.now() + wait;
+      savePending(pendingWake, pendingBcast);
+      await reportFailure(ec, "message", pendingWake.length);
+      log(`\x1b[31m${pendingWake.length} message(s) still UNDELIVERED — next attempt in ${Math.round(wait / 1000)}s\x1b[0m`);
+    } else {
+      pendingWake = []; pendingBcast = []; deliveryFails = 0; retryAt = 0;
+      savePending([], []);
+      await reportHealthy();
+    }
+    lastTurnAt = Date.now();
   }
 })();
