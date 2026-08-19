@@ -8,6 +8,9 @@ import { join, dirname } from "node:path";
 import { homedir } from "node:os";
 import { execSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import { resolveProject, resolveHub, DEFAULT_HUB_URL } from "../lib/project.mjs";
+import { loadOrCreate } from "../lib/identity.mjs";
+import { scan } from "../lib/splitbrain.mjs";
 
 const H = homedir();
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
@@ -39,7 +42,11 @@ say("TRANTOR DOCTOR\n");
 section("core");
 Number(process.versions.node.split(".")[0]) >= 18 ? ok(`node ${process.versions.node}`) : warn(`node ${process.versions.node} too old`, "install node >= 18");
 const cfg = read(join(H, ".agent-bus", "config.json")) || {};
-const HUB = process.env.RELAY_URL || cfg.url || "http://127.0.0.1:4477";
+// The hub THIS directory's project actually routes to — pins first. Reading only the global
+// default meant the doctor could report a healthy local hub while every session in the project
+// was talking to netcup, which is exactly the blindness the routing section below exists to end.
+const PROJECT = resolveProject(process.cwd());
+const HUB = resolveHub(PROJECT);
 try {
   const h = await (await fetch(`${HUB}/health`, { signal: AbortSignal.timeout(2000) })).json();
   ok(`hub up at ${HUB} (${h.peers} peers known)`);
@@ -55,6 +62,30 @@ if (pkg?.version) {
   const tooOld = cur[0] < min[0] || (cur[0] === min[0] && (cur[1] < min[1] || (cur[1] === min[1] && cur[2] < min[2])));
   tooOld ? warn(`trantor v${pkg.version} too old — heartbeat/presence requires v0.17.0+`, "npm update -g trantor") : ok(`trantor v${pkg.version}`);
 } else warn("could not read trantor version", "reinstall: npm install -g trantor");
+
+// ── hub routing: is any project split across two hubs? ───────────────────────────────────────
+// Cards, messages and collision detection only work over ONE hub. A project split across two
+// breaks silently — every seat reports healthy and half the work records where nobody looks.
+section("hub routing");
+{
+  const pin = (cfg.hubs || {})[PROJECT] || "";
+  say(`  ${PROJECT} → ${HUB}${pin ? "  (pinned)" : process.env.RELAY_URL ? "  (RELAY_URL override)" : "  (unpinned — falls back to the default)"}`);
+  const owner = String(cfg.ownerIdentity || "");
+  // Unsigned, an enforce hub answers "signature required" and a full hub reads as deserted. Sign
+  // as the owner when we have one, and say plainly when we cannot rather than guessing.
+  const identity = owner ? (() => { try { return loadOrCreate(owner, "human"); } catch { return null; } })() : null;
+  if (!identity) note("no owner identity in config — hubs are probed UNSIGNED, so an enforce hub will refuse the read");
+  let scanned = null;
+  try { scanned = await scan(cfg, identity, { defaultUrl: DEFAULT_HUB_URL, timeoutMs: 6000 }); }
+  catch (e) { note(`split-brain check could not run (${e?.message || e})`); }
+  if (scanned) {
+    REPORT.splitbrain = { findings: scanned.findings, blind: scanned.blind, checked: scanned.checked };
+    for (const b of scanned.blind) warn(`hub ${b.url} could not be read — ${b.reason}`, "detection is PARTIAL until this hub answers; a split hiding behind it will not be reported");
+    for (const f of scanned.findings) f.severity === "warn" ? warn(f.message, f.fix) : warn(`SPLIT-BRAIN — ${f.message}`, f.fix);
+    if (!scanned.findings.length && !scanned.blind.length) ok(`no split-brain — every live project sits on exactly one hub (${scanned.checked} hub${scanned.checked === 1 ? "" : "s"} cross-checked)`);
+    else if (!scanned.findings.length) ok(`no split-brain among the ${scanned.checked} hub${scanned.checked === 1 ? "" : "s"} that answered`);
+  }
+}
 
 // claude plugin
 section("claude (the orchestrator)");

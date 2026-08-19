@@ -18,9 +18,10 @@
 import { readFileSync, writeFileSync, existsSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
-import { hostId } from "../lib/project.mjs";
+import { hostId, DEFAULT_HUB_URL } from "../lib/project.mjs";
 import { loadOrCreate, signRequest } from "../lib/identity.mjs";
 import { sfetchJson } from "../lib/signed-fetch.mjs";
+import { scan } from "../lib/splitbrain.mjs";
 
 const argv = process.argv.slice(2);
 const PROJECT = argv.find(a => !a.startsWith("--")) || "";
@@ -104,12 +105,44 @@ try {
   config.hubs[PROJECT] = TARGET;
   writeFileSync(CONFIG_PATH, JSON.stringify(config, null, 2) + "\n");
   console.log(`pinned   : ${PROJECT} → ${TARGET}`);
+
+  // TELL the stale sessions, don't just print at a human who may never see this terminal again.
+  // A live session holds its hub URL for its whole life: its MCP server resolved the route at
+  // boot and nothing re-reads config.json. So the moment the pin is written, every one of these
+  // is recording onto a hub nobody reads any more — the exact split-brain crebral-health spent
+  // two sessions diagnosing. They are still listening on the OLD hub, so that is where the
+  // notice has to go.
   if (livePeers.length) {
-    console.log(`\n⚠ live sessions still route to the OLD hub until restarted:`);
+    const notice = `📦 ${PROJECT} has MOVED to ${TARGET}. You are still bound to ${LOCAL}, so your cards and messages now land on a hub nobody is reading. RESTART to pick up the pin — crew seats: \`trantor down && trantor up\` · Claude sessions: restart the session.`;
+    let told = 0;
+    for (const [session] of livePeers) {
+      try {
+        await sfetchJson(`${LOCAL}/send`, { identity: ownerId, payload: { from: owner, to: session, project: PROJECT, text: notice }, signal: AbortSignal.timeout(8000) });
+        told++;
+      } catch (e) { console.log(`  ⚠ could not notify ${session}: ${e.message}`); }
+    }
+    // …and once to the room, for anything live that never registered as a peer.
+    try { await sfetchJson(`${LOCAL}/send`, { identity: ownerId, payload: { from: owner, to: "all", project: PROJECT, text: notice }, signal: AbortSignal.timeout(8000) }); } catch {}
+    console.log(`\n⚠ ${livePeers.length} live session(s) still route to the OLD hub — told ${told} of them to restart:`);
     for (const [s] of livePeers) console.log(`    ${s}`);
     console.log(`  crew seats: trantor down && trantor up · Claude sessions: restart them when convenient.`);
   }
   console.log(`\n✓ adopted. New sessions on ${PROJECT} land on ${TARGET}.`);
+
+  // Prove the move actually landed as one hub, rather than trusting that it did. A migration is
+  // precisely the moment a project is most likely to end up living in two places at once.
+  try {
+    const { findings, blind } = await scan(config, ownerId, { defaultUrl: DEFAULT_HUB_URL, timeoutMs: 6000 });
+    const mine = findings.filter(f => f.project === PROJECT);
+    if (mine.length) {
+      console.log(`\n⚠ split-brain check on ${PROJECT}:`);
+      for (const f of mine) { console.log(`    ${f.message}`); console.log(`      → ${f.fix}`); }
+    } else if (blind.length) {
+      console.log(`\nsplit-brain check: partial — could not read ${blind.map(b => b.url).join(", ")}`);
+    } else {
+      console.log(`split-brain check: clean — ${PROJECT} is live on one hub only.`);
+    }
+  } catch {}
 } catch (e) {
   console.error(`\n✗ adopt failed: ${e.message}`);
   console.error("nothing was pinned — routing is unchanged.");
