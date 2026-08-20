@@ -35,6 +35,10 @@ const PEER_TTL_MS = Math.max(Number.isFinite(_peerTtlRaw) ? _peerTtlRaw : PEER_T
 // moves to "stale" (a distinct terminal lane you triage by hand). Only fires on an OFFLINE owner, so a live
 // long-running task is never touched — the owner-alive-but-idle case is handled by the manual /sweep path.
 const REAP_GRACE_MS = Number(process.env.RELAY_REAP_GRACE_MS || 15 * 60 * 1000);    // 15m offline + untouched
+const TODO_STALE_DEFAULT_MS = 14 * 24 * 60 * 60 * 1000;
+const TODO_STALE_MS = Number.isFinite(Number(process.env.RELAY_TODO_STALE_MS))
+  ? Math.max(0, Number(process.env.RELAY_TODO_STALE_MS))
+  : TODO_STALE_DEFAULT_MS;
 const FOCUS_OFFLINE_MS = Number(process.env.RELAY_FOCUS_OFFLINE_MS || ONLINE_MS);   // close a focus card once its session is offline (not the old 6h)
 // Backstop for the case the peer heartbeat cannot see: several Claude sessions share ONE bus
 // identity (it is per host+project), so a sibling that is still alive keeps the whole assignee
@@ -92,6 +96,54 @@ function scanTelemetry() {
 // filtered OUT of /history. Loads from the old `cardEvents` key when `events` is absent.
 function emptyState() {
   return { messages: [], peers: {}, seq: 0, tasks: [], taskSeq: 0, projectMeta: {}, lessons: [], events: [], cardEventsBackfilled: false, aliases: {}, phaseMeta: {}, verifyGates: [], verifyGateSeq: 0, proposals: [], proposalSeq: 0, balances: { ts: 0, by: "", entries: [] }, subagentCostReset: false, handoffLog: [], identities: {}, inviteTokens: {}, focus: {}, orgPolicy: {}, instances: {}, dutySession: "" };
+}
+
+const CARD_LOG_MAX = 40;
+const CARD_LOG_TEXT_MAX = 2000;
+const CARD_LOG_BY_MAX = 120;
+function normalizeTaskLog(t) {
+  if (!Array.isArray(t.log)) { if (t.log !== undefined) delete t.log; return false; }
+  const before = JSON.stringify(t.log);
+  t.log = t.log
+    .filter(e => e && typeof e === "object" && typeof e.text === "string")
+    .map(e => ({
+      ts: Number.isFinite(Number(e.ts)) && Number(e.ts) > 0 ? Math.floor(Number(e.ts)) : Date.now(),
+      by: String(e.by || "").slice(0, CARD_LOG_BY_MAX),
+      text: String(e.text || "").slice(0, CARD_LOG_TEXT_MAX),
+    }))
+    .slice(-CARD_LOG_MAX);
+  if (!t.log.length) delete t.log;
+  return JSON.stringify(t.log) !== before;
+}
+function appendTaskLog(t, by, text, ts = Date.now()) {
+  if (typeof text !== "string" || text.trim() === "") return false;
+  const entry = {
+    ts: Number.isFinite(Number(ts)) && Number(ts) > 0 ? Math.floor(Number(ts)) : Date.now(),
+    by: String(by || "").slice(0, CARD_LOG_BY_MAX),
+    text: String(text).slice(0, CARD_LOG_TEXT_MAX),
+  };
+  const log = Array.isArray(t.log) ? t.log : [];
+  log.push(entry);
+  if (log.length > CARD_LOG_MAX) log.splice(0, log.length - CARD_LOG_MAX);
+  t.log = log;
+  return true;
+}
+function appendTaskNote(t, b, ts = Date.now()) {
+  if (!b || typeof b.note !== "string") return false;
+  return appendTaskLog(t, b.by || "", b.note, ts);
+}
+function runTaskBootMigrations() {
+  let changed = false;
+  const bootNow = Date.now();
+  for (const t of state.tasks) {
+    if (!t || typeof t !== "object") continue;
+    if (!t.ts) {
+      t.ts = t.history?.[0]?.ts || t.updated || bootNow;
+      changed = true;
+    }
+    if (normalizeTaskLog(t)) changed = true;
+  }
+  return changed;
 }
 
 function normalizeState(loaded = {}) {
@@ -159,6 +211,7 @@ const HUB_SRC = `hub-${process.pid}-${randomBytes(4).toString("hex")}`;
 // writes ONLY the difference — it never deletes rows it has not seen, so a second writer's rows
 // survive our persist ticks (the old saveSnapshot wholesale delete+rewrite destroyed them).
 let lastPersisted = durableStore ? snapshotState() : null;
+if (runTaskBootMigrations()) dirty = true;
 const persist = () => {
   if (!dirty || persisting) return;
   if (durableStore) {
@@ -513,6 +566,17 @@ function reapStaleCards() {
   let changed = false;
   for (const t of state.tasks) {
     if (t.status === "done" || t.status === "stale") continue;
+    if (t.status === "todo" && (t.updated || t.ts || 0) < now() - TODO_STALE_MS) {
+      const from = t.status;
+      const untouchedAt = t.updated || t.ts || 0;
+      const agedDays = Math.floor((now() - untouchedAt) / 86400000);
+      (t.history ||= []).push({ from, to: "stale", by: "reaper", ts: now() });
+      if (t.history.length > 60) t.history.splice(0, 20);
+      appendTaskLog(t, "reaper", `todo aged out after ${agedDays}d untouched`);
+      appendCardEvent("moved", t, "reaper", from, "stale");
+      t.status = "stale"; t.updated = now(); t._reaped = true; changed = true;
+      continue;
+    }
     if (t.source === "session") {                                  // (a) focus cards → done when session offline
       const p = state.peers[t.assignee];
       const peerGone = !p || (p.lastSeen || 0) < focusCut;
@@ -1401,6 +1465,7 @@ const server = http.createServer(async (req, res) => {
             .sort((a, c) => (c.ts || 0) - (a.ts || 0))[0];
           if (cand) {
             cand._aid = agentId; if (parent && !cand.parent) cand.parent = parent; cand.updated = ts0;
+            appendTaskNote(cand, b, ts0);
             dirty = true; return json(res, 200, { ok: true, task: cand, deduped: true, enriched: true });
           }
           const title = String(atype || "subagent").slice(0, 180);
@@ -1410,6 +1475,7 @@ const server = http.createServer(async (req, res) => {
             parent: parent || undefined, by: b.by || "", ts: ts0, updated: ts0,
             history: [{ to: "doing", by: b.by || "", ts: ts0 }] };
           t._fp = subFp(title); t._atype = atype; t._aid = agentId; t.count = 1; t._everStarted = true; t._inflight = 1;
+          appendTaskNote(t, b, ts0);
           state.tasks.push(t); appendCardEvent("created", t, b.by, null, "doing");
           dirty = true; return json(res, 200, { ok: true, task: t, created: true });
         }
@@ -1430,6 +1496,7 @@ const server = http.createServer(async (req, res) => {
             ex._inflight = (ex._inflight || 0) + 1; ex._everStarted = true;
             if (ex.status === "done") { (ex.history ||= []).push({ from: "done", to: "doing", by: b.by || "", ts: ts0 }); appendCardEvent("moved", ex, b.by, "done", "doing"); }
             ex.status = "doing"; ex.ts = ts0; ex.updated = ts0;
+            appendTaskNote(ex, b, ts0);
             dirty = true; return json(res, 200, { ok: true, task: ex, deduped: true, count: ex.count, started: true });
           }
           // a completion (SubagentStop) or recost: accumulate cost, retire one in-flight, flip to done when none remain
@@ -1448,6 +1515,7 @@ const server = http.createServer(async (req, res) => {
           ex.status = (ex._everStarted && ex._inflight > 0) ? "doing" : "done";
           if (wasDoing && ex.status === "done") { (ex.history ||= []).push({ from: "doing", to: "done", by: b.by || "", ts: ts0 }); appendCardEvent("moved", ex, b.by, "doing", "done"); }
           ex.ts = ts0; ex.updated = ts0;
+          appendTaskNote(ex, b, ts0);
           dirty = true; return json(res, 200, { ok: true, task: ex, deduped: true, count: ex.count });
         }
       }
@@ -1469,6 +1537,7 @@ const server = http.createServer(async (req, res) => {
           if (b.parent && !ex.parent) ex.parent = String(b.parent).slice(0, 120);
           if (b.title && b.title.length > (ex.title || "").length) ex.title = String(b.title).slice(0, 200);
           if (from !== target) { (ex.history ||= []).push({ from, to: target, by: b.by || "", ts: ts0 }); appendCardEvent("moved", ex, b.by, from, target); }
+          appendTaskNote(ex, b, ts0);
           dirty = true; return json(res, 200, { ok: true, task: ex, deduped: true });
         }
         const bt = { id: ++state.taskSeq, project: proj0, title: String(b.title || b.agentType || "background agent").slice(0, 200),
@@ -1477,6 +1546,7 @@ const server = http.createServer(async (req, res) => {
           difficulty: "", model: "", deps: [], parent: b.parent ? String(b.parent).slice(0, 120) : undefined,
           by: b.by || "", ts: ts0, updated: ts0, history: [{ to: target, by: b.by || "", ts: ts0 }] };
         if (bgId) bt._aid = bgId; if (b.agentType) bt._atype = String(b.agentType).slice(0, 40);
+        appendTaskNote(bt, b, ts0);
         state.tasks.push(bt); if (state.tasks.length > 2000) state.tasks.splice(0, 500);
         appendCardEvent("created", bt, b.by, null, target);
         dirty = true; return json(res, 200, { ok: true, task: bt, created: true });
@@ -1501,6 +1571,7 @@ const server = http.createServer(async (req, res) => {
         by: b.by || "", ts: ts0, updated: ts0,
         history: [{ to: st0, by: b.by || "", ts: ts0 }] };
       if (b.source === "cc-subagent") { t._fp = subFp(b.title); if (b.agentType) t._atype = String(b.agentType).slice(0, 40); if (b.agentId) t._aid = String(b.agentId).slice(0, 80); if (b.parent) t.parent = String(b.parent).slice(0, 120); t.count = 1; if (t.status === "doing") { t._everStarted = true; t._inflight = 1; } }
+      appendTaskNote(t, b, ts0);
       state.tasks.push(t); if (state.tasks.length > 2000) state.tasks.splice(0, 500);
       appendCardEvent("created", t, b.by, null, st0);
       // A COMMIT closes the focus. A focus card says "this session is working on X right now"; the
@@ -1528,6 +1599,7 @@ const server = http.createServer(async (req, res) => {
       // the narrative line a human reads on the board ("assigned — did"), written by the cheap
       // summarizer; rides the tasks.extra column, so it survives restarts everywhere
       if (b.summary !== undefined) t.summary = String(b.summary).slice(0, 220);
+      appendTaskNote(t, b);
       if (b.delete) { eventType = "deleted"; eventFrom = null; eventTo = null; state.tasks = state.tasks.filter(x => x.id !== t.id); }
       appendCardEvent(eventType, t, b.by, eventFrom, eventTo);
       t.updated = now(); dirty = true; return json(res, 200, { ok: true, task: t });

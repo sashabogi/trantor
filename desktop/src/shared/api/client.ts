@@ -25,6 +25,12 @@ export type Card = {
   id: number; project: string; title: string; status: string;
   assignee?: string; source?: string; difficulty?: string; model?: string;
   phase?: string; costUsd?: number; created?: number; updated?: number;
+  /** Creation stamp as the hub serves it — tasks are born `ts === updated`, and the CARDLOG boot
+   * backfill fills it for cards minted before it existed. The tile age badge reads `updated || ts`. */
+  ts?: number;
+  /** The card's STORY (CARDLOG contract): notes attached on /task + /task/update, capped 40
+   * entries × 2000 chars hub-side, chronological oldest→newest. The drawer's primary block. */
+  log?: { ts: number; by: string; text: string }[];
   /** the narrative line ("assigned — did"), written by the cheap summarizer */
   summary?: string;
   /** Who POSTED the card — `${hostId()}:${project}`, the same shape a focus card's assignee has.

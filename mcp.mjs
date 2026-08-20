@@ -117,11 +117,11 @@ server.tool("relay_whoami", "Show this session's relay identity, project, and th
   return { content: [{ type: "text", text: `session=${SESSION}\nproject=${PROJECT}\nhub=${resolveHub(PROJECT)}` }] };
 });
 
-server.tool("relay_task_add", "Add a Kanban card to a project's board on the dashboard (what you're about to work on). Defaults: THIS project, assigned to you, status 'todo'. Pass `project` to target another board — e.g. when you orchestrate a crew that runs in a different directory than the one you launched Claude from. Keep the team's progress visible.",
-  { title: z.string().describe("short task title"), status: z.enum(["todo","doing","testing","failed","done","blocked"]).optional(), assignee: z.string().optional().describe("session id to assign (default: you)"), difficulty: z.enum(["easy","medium","hard"]).optional().describe("difficulty tag — drives model/agent routing (relay_advise) and shows on the board"), model: z.string().optional().describe("the model this card is routed to (from relay_advise routing, or the CLI default) — shown on the card"), deps: z.array(z.number()).optional().describe("card ids this card depends on — drawn as branch edges in the Flow view (e.g. integration depends on every crew card)"), phase: z.string().optional().describe("phase/milestone this card belongs to (e.g. 'P5', 'Auth', 'Launch') — groups it in the Flow view's phase flowchart. Optional; otherwise inferred from the title prefix + time."), project: z.string().optional().describe("board to add to (default: this session's project). Set to the crew's project when you orchestrate from a different directory") },
-  async ({ title, status, assignee, difficulty, model, deps, phase, project }) => {
+server.tool("relay_task_add", "Add a Kanban card to a project's board on the dashboard (what you're about to work on). Defaults: THIS project, assigned to you, status 'todo'. Pass `project` to target another board — e.g. when you orchestrate a crew that runs in a different directory than the one you launched Claude from. Keep the team's progress visible. Attach a `note` whenever context isn't obvious from the title — it lands on the card's permanent log ({ts,by,text}, kept: last 40).",
+  { title: z.string().describe("short task title"), status: z.enum(["todo","doing","testing","failed","done","blocked"]).optional(), assignee: z.string().optional().describe("session id to assign (default: you)"), difficulty: z.enum(["easy","medium","hard"]).optional().describe("difficulty tag — drives model/agent routing (relay_advise) and shows on the board"), model: z.string().optional().describe("the model this card is routed to (from relay_advise routing, or the CLI default) — shown on the card"), deps: z.array(z.number()).optional().describe("card ids this card depends on — drawn as branch edges in the Flow view (e.g. integration depends on every crew card)"), phase: z.string().optional().describe("phase/milestone this card belongs to (e.g. 'P5', 'Auth', 'Launch') — groups it in the Flow view's phase flowchart. Optional; otherwise inferred from the title prefix + time."), note: z.string().max(2000).optional().describe("optional card-log entry (<=2000 chars): context, the plan, or a link — stored on the card as {ts,by,text}"), project: z.string().optional().describe("board to add to (default: this session's project). Set to the crew's project when you orchestrate from a different directory") },
+  async ({ title, status, assignee, difficulty, model, deps, phase, note, project }) => {
     const proj = project || PROJECT;
-    const { task } = await api("POST", "/task", { project: proj, title, status: status || "todo", assignee: assignee || SESSION, difficulty, model, deps, phase, by: SESSION });
+    const { task } = await api("POST", "/task", { project: proj, title, status: status || "todo", assignee: assignee || SESSION, difficulty, model, deps, phase, note, by: SESSION });
     return { content: [{ type: "text", text: `card #${task.id} added to ${proj}: "${title}" [${task.status}]${phase?` · phase ${phase}`:""}` }] };
   });
 
@@ -133,10 +133,10 @@ server.tool("relay_phase_goal", "Set what a PHASE is for — its goal — shown 
     return { content: [{ type: "text", text: `phase "${phase}" goal set for ${proj}` }] };
   });
 
-server.tool("relay_task_move", "Move a Kanban card as you progress: todo -> doing -> testing -> done. NEVER move straight to done: move to 'testing' when you finish, run the project's tests/typecheck, then 'done' only if green — or 'failed' (with a relay_send explaining what broke) if not. The orchestrator bounces failed cards back to doing. blocked = waiting on something external.",
-  { id: z.number(), status: z.enum(["todo","doing","testing","failed","done","blocked"]) },
-  async ({ id, status }) => {
-    await api("POST", "/task/update", { id, status, by: SESSION });
+server.tool("relay_task_move", "Move a Kanban card as you progress: todo -> doing -> testing -> done. NEVER move straight to done: move to 'testing' when you finish, run the project's tests/typecheck, then 'done' only if green — or 'failed' (with a relay_send explaining what broke) if not. The orchestrator bounces failed cards back to doing. blocked = waiting on something external. A move to 'testing' or 'done' MUST carry a `note` (<=2000 chars): what you changed and the evidence (the test command + counts). The note lands on the card's permanent log — the board shows its ·N count, so a silent move reads as unverified work.",
+  { id: z.number(), status: z.enum(["todo","doing","testing","failed","done","blocked"]), note: z.string().max(2000).optional().describe("card-log entry (<=2000 chars) — REQUIRED on moves to testing/done: what changed + the evidence (command, pass counts)") },
+  async ({ id, status, note }) => {
+    await api("POST", "/task/update", { id, status, note, by: SESSION });
     return { content: [{ type: "text", text: `card #${id} -> ${status}` }] };
   });
 
@@ -240,14 +240,14 @@ server.tool("relay_withdraw_proposal", "Withdraw one of THIS session's PENDING p
     return { content: [{ type: "text", text: `proposal #${id} withdrawn — one queue slot free` }] };
   });
 
-server.tool("relay_board", "Show a project's Kanban board (all cards + their status + assignee). Defaults to THIS project; pass `project` to read a crew board you orchestrate from elsewhere.",
+server.tool("relay_board", "Show a project's Kanban board (all cards + their status + assignee). Defaults to THIS project; pass `project` to read a crew board you orchestrate from elsewhere. Cards carrying log notes show a ·N count (the card's note-log size).",
   { project: z.string().optional().describe("board to show (default: this session's project)") },
   async ({ project }) => {
   const proj = project || PROJECT;
   const { tasks } = await api("GET", `/tasks?project=${encodeURIComponent(proj)}`);
   if (!tasks.length) return { content: [{ type: "text", text: `${proj}: no cards yet` }] };
   const by = { todo: [], doing: [], testing: [], failed: [], done: [], blocked: [] };
-  for (const t of tasks) (by[t.status] || by.todo).push(`#${t.id} ${t.title}${t.assignee ? ` (@${t.assignee})` : ""}`);
+  for (const t of tasks) (by[t.status] || by.todo).push(`#${t.id} ${t.title}${t.assignee ? ` (@${t.assignee})` : ""}${t.log?.length ? ` ·${t.log.length}` : ""}`);
   const cols = Object.entries(by).filter(([, v]) => v.length).map(([k, v]) => `${k.toUpperCase()}:\n  ${v.join("\n  ")}`);
   return { content: [{ type: "text", text: `${proj} board\n${cols.join("\n")}` }] };
 });

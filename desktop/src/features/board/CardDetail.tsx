@@ -3,7 +3,9 @@
 // the /card endpoint's thread derivation (invariant 3: threads are DERIVED, never stored).
 //
 // This exists because a board tile can only say WHAT state a card is in; the drawer says WHY —
-// the agent's own reports are in the messages, and the moves are in the events.
+// the agent's own reports are in the messages, and the moves are in the events. Since the CARDLOG
+// contract, the card's own `log` (notes attached as it moved) leads as the STORY — the timeline
+// of events/messages follows as the supplement.
 import { useEffect, useState } from "react";
 import { cardCode, openFileInEditor, openCode } from "../../shared/api/client";
 import type { Card, CardCode, HubClient, HubEvent, Message } from "../../shared/api/client";
@@ -173,6 +175,27 @@ export function CardDetail({ client, id, onClose, onMoved, onOpen }: {
           </div>
         )}
         <div className="flex-1 overflow-y-auto px-4 py-3">
+          {/* The STORY is the card's own log — notes its author attached as it moved. It is the
+              primary narrative (CARDLOG contract): first, visually distinct, written in the agent's
+              own words. Events and messages below stay as the supplement they always were. */}
+          {task?.log && task.log.length > 0 && (
+            <div className="mb-3 border-b border-[var(--color-tr-edge)] pb-2">
+              <div className="tr-label mb-1">story</div>
+              {task.log.map((e, i) => (
+                <div key={i} className="flex gap-3 py-1.5 text-sm">
+                  <span className="tr-mono w-20 shrink-0 text-[11px] leading-5 text-[var(--color-tr-muted)]">
+                    {new Date(e.ts).toLocaleDateString([], { month: "short", day: "numeric" })}{" "}
+                    {new Date(e.ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                  </span>
+                  <div className="min-w-0 flex-1">
+                    <span className="mr-2 text-[11px] text-[var(--color-tr-muted)]">{e.by || "—"}</span>
+                    <div className="whitespace-pre-wrap break-words text-[13px]">{e.text}</div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+          {task?.log && task.log.length > 0 && <div className="tr-label mb-1">timeline</div>}
           {data && rows(data.events, data.messages).map((r, i) => (
             <div key={i} className="flex gap-3 py-1.5 text-sm">
               <span className="tr-mono w-20 shrink-0 text-[11px] leading-5 text-[var(--color-tr-muted)]">
@@ -187,7 +210,7 @@ export function CardDetail({ client, id, onClose, onMoved, onOpen }: {
               </div>
             </div>
           ))}
-          {data && !data.events.length && !data.messages.length && (
+          {data && !data.events.length && !data.messages.length && !task?.log?.length && (
             <div className="p-2 text-sm text-[var(--color-tr-muted)]">No history for this card yet.</div>
           )}
         </div>

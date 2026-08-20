@@ -116,6 +116,11 @@ function CardTile({ card, onOpen, onAdvance, presence, subagents, subagentsOpen 
   const inMotion = card.status === "doing" && presence === "busy";
   const alarmed = card.status === "failed" || card.status === "blocked";
   const stalled = card.status === "doing" && (!presence || presence === "offline");
+  // TODO ROT (CARDLOG contract): a todo card untouched >7d wears its age — quiet between 7 and
+  // 14 days, warn-colored from 14. Untouched = now - (updated || ts), the same clock the hub's
+  // own todo reaper reads, so the badge and the "stale" lane can never disagree about age.
+  const ageDays = Math.floor((Date.now() - (card.updated || card.ts || 0)) / 864e5);
+  const agedTodo = card.status === "todo" && ageDays > 7;
   return (
     // Click opens the drawer. The first cut advanced the card on click — a misclick MOVED a card,
     // which is exactly the kind of surprise a shared board cannot afford. Advancing is now the
@@ -130,6 +135,10 @@ function CardTile({ card, onOpen, onAdvance, presence, subagents, subagentsOpen 
         {card.assignee && <AgentChip session={card.assignee} />}
         {card.difficulty && <span className="rounded bg-black/30 px-1.5 py-0.5">{card.difficulty[0].toUpperCase()}</span>}
         {card.model && <span className="tr-mono max-w-[150px] truncate rounded bg-black/30 px-1.5 py-0.5">{card.model}</span>}
+        {agedTodo && (
+          <span className={`shrink-0 rounded bg-black/30 px-1.5 py-0.5 ${ageDays >= 14 ? "text-[var(--color-tr-warn)]" : "text-[var(--color-tr-muted)]"}`}
+                title={`todo, untouched for ${ageDays}d`}>{ageDays}d</span>
+        )}
         <span className="tr-mono ml-auto opacity-60">#{card.id}</span>
         {next && (
           <button
