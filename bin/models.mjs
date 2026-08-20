@@ -7,7 +7,7 @@
 import { execSync } from "node:child_process";
 import { dirname, join } from "node:path";
 import { homedir } from "node:os";
-import { existsSync } from "node:fs";
+import { existsSync, statSync } from "node:fs";
 import { pathToFileURL, fileURLToPath } from "node:url";
 import { buildRoster, loadWorld } from "./advise.mjs";
 
@@ -57,7 +57,10 @@ function detail(name) {
   if (existsSync(SCROOGE) || has("scrooge")) {
     console.log(`\n${C.gold}router picks (code task):${C.off}`);
     for (const d of ["easy", "medium", "hard"]) console.log(`  ${d.padEnd(7)} → ${routePick(models, d)}`);
-    console.log(`${C.dim}(run scrooge-capabilities to (re)score the catalog for accurate difficulty routing)${C.off}`);
+    const caps = join(H, ".token-scrooge", "capabilities.json");
+    // only nag when the scores are missing or older than the weekly refresh allows for
+    const ageDays = existsSync(caps) ? (Date.now() - statSync(caps).mtimeMs) / 86400e3 : Infinity;
+    if (ageDays > 9) console.log(`${C.dim}(scores ${ageDays === Infinity ? "missing" : `${Math.floor(ageDays)}d old`} — run scrooge-capabilities to (re)score the catalog for accurate difficulty routing)${C.off}`);
   }
 }
 

@@ -22,7 +22,7 @@ Usage:  scrooge-capabilities            # refresh from AA (+OpenRouter), show a 
         scrooge-capabilities --dry-run  # fetch + match, print, but don't write
 Exit: 0 updated · 1 nothing fetched (no key / network) · 2 error.
 """
-import sys, os, json, argparse, math, urllib.request, urllib.error
+import sys, os, json, argparse, math, time, urllib.request, urllib.error
 
 HOME = os.path.expanduser("~")
 SCROOGE_DIR = os.environ.get("SCROOGE_HOME", os.path.join(HOME, ".token-scrooge"))
@@ -56,10 +56,21 @@ def load_env_file(path):
     except Exception:
         pass
 
-def http_get_json(url, headers, timeout=30):
+def http_get_json(url, headers, timeout=30, retries=(5, 20, 60)):
+    # the weekly launchd run can land while the Mac has no network yet (2026-08-17: DNS error,
+    # scores went a week stale) -- back off and retry on connection failures, not on HTTP errors
     req = urllib.request.Request(url, headers=headers, method="GET")
-    with urllib.request.urlopen(req, timeout=timeout) as r:
-        return json.loads(r.read().decode())
+    for i, wait in enumerate(list(retries) + [None]):
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as r:
+                return json.loads(r.read().decode())
+        except urllib.error.HTTPError:
+            raise
+        except (urllib.error.URLError, OSError) as e:
+            if wait is None:
+                raise
+            sys.stderr.write(WARN("  network: %s -- retry %d in %ds\n" % (str(e)[:60], i + 1, wait)))
+            time.sleep(wait)
 
 def norm(s):
     return s.lower().replace(".", "-").replace("_", "-")
