@@ -103,11 +103,21 @@ if (has("dsh")) {
   const pkgPath = join(prof, "package.json");
   const patchPath = join(prof, "cordis.patch.yml");
   const seatHooksPath = join(prof, "hooks.seat.json");
+  // Pin the bridge packages to the INSTALLED dsh version. dsh releases ride the `next` dist-tag;
+  // `latest` is stale (0.0.1-rc.x while the CLI is 0.1.0-rc.x), so an unpinned add installs an
+  // ancient bridge whose peer range can't even see the modern protocol lib. Matching the CLI's own
+  // version keeps one generation of the core in play (deepseek-harness discussions #3515/#3516).
+  const dshVersion = (() => {
+    try {
+      const root = execSync("npm root -g", { encoding: "utf8" }).trim();
+      return JSON.parse(readFileSync(join(root, "@deepseek-ai", "dsh", "package.json"), "utf8")).version || "next";
+    } catch { return "next"; }
+  })();
   const pkg = {
     name: "dsh-profile-trantor", private: true,
     dependencies: {
-      "@deepseek-ai/dsh-hooks-claude-code": "*",
-      "@deepseek-ai/dsh-hook-protocol": "*",
+      "@deepseek-ai/dsh-hooks-claude-code": dshVersion,
+      "@deepseek-ai/dsh-hook-protocol": dshVersion,
     },
     dsh: { profile: { bundles: ["@deepseek-ai/dsh-base", "@deepseek-ai/dsh-headless"] } },
   };
