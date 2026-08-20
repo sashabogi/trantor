@@ -7,7 +7,7 @@
 // parking was dead, and the tool only ever "worked" when a message happened to beat the abort.
 // The drill drives the REAL mcp.mjs over the real MCP stdio protocol against the REAL hub.
 import { spawn } from "node:child_process";
-import { mkdtempSync, mkdirSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, rmSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -83,6 +83,17 @@ const text = (r) => r?.result?.content?.[0]?.text ?? JSON.stringify(r?.result ??
   const out = text(r);
   ok("a message landing mid-wait is delivered", /wake up, drill message/.test(out), out.slice(0, 90));
   ok("...promptly (the poll returned on arrival, not at the cap)", took > 2000 && took < 15000, `${took}ms`);
+}
+
+// ---- 3. the peer row is truthful from BOOT: the MCP stamps its own version -------------
+// Only the tool-use heartbeat hook used to write hookVersion, so a fresh-but-idle session wore
+// its dead predecessor's version until its first tool call (misread twice on 2026-08-19).
+{
+  const r = await (await fetch(`${HUB}/peers`)).json();
+  const me = (r.peers || []).find(p => p.session === "waiter:waitproj");
+  const expected = JSON.parse(readFileSync(new URL("./package.json", import.meta.url), "utf8")).version;
+  ok("the MCP's own /register stamps hookVersion at boot, before any tool call",
+    me?.hookVersion === expected, `row=${me?.hookVersion} expected=${expected}`);
 }
 
 mcp.kill(); hub.kill();

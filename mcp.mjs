@@ -3,7 +3,7 @@
 // tools to talk to OTHER live agent sessions through the relay hub. Loaded per-session
 // via the agent's MCP config. Identity + hub URL come from env (RELAY_SESSION, RELAY_URL).
 // Loading this server AUTO-REGISTERS the session — so presence works on every agent.
-import { writeFileSync, existsSync, mkdirSync } from "node:fs";
+import { writeFileSync, readFileSync, existsSync, mkdirSync } from "node:fs";
 import { join, basename, dirname } from "node:path";
 import { homedir, hostname } from "node:os";
 import { execSync, spawnSync } from "node:child_process";
@@ -113,7 +113,7 @@ const fmt = (m) => `#${m.id} [${m.from} -> ${m.to}] ${new Date(m.ts).toLocaleTim
 const server = new McpServer({ name: "trantor", version: "0.1.0" });
 
 server.tool("relay_whoami", "Show this session's relay identity, project, and the hub URL.", {}, async () => {
-  await api("POST", "/register", { session: SESSION, project: PROJECT }).catch(() => {});
+  await api("POST", "/register", { session: SESSION, project: PROJECT, hookVersion: MCP_VERSION }).catch(() => {});
   return { content: [{ type: "text", text: `session=${SESSION}\nproject=${PROJECT}\nhub=${resolveHub(PROJECT)}` }] };
 });
 
@@ -323,6 +323,22 @@ server.tool("relay_wait", "Block up to `timeout` seconds waiting for the next me
 
 const HEARTBEAT_MS = Number(process.env.RELAY_HEARTBEAT_MS || 60 * 1000);
 
+// This server's own plugin version, stamped on every /register. Only the tool-use heartbeat HOOK
+// used to write hookVersion, so a fresh-but-idle session's peer row kept its DEAD predecessor's
+// version until the first tool call — misread twice on 2026-08-19 as "wrong plugin version after
+// restart". The MCP boots with the session and registers immediately, so it makes the row truthful
+// from second one. Same lookup as hooks/lib/update-check.mjs: plugin.json beside this file, then
+// package.json (running straight from the repo).
+const MCP_VERSION = (() => {
+  for (const rel of ["./.claude-plugin/plugin.json", "./package.json"]) {
+    try {
+      const v = JSON.parse(readFileSync(new URL(rel, import.meta.url), "utf8")).version;
+      if (v) return v;
+    } catch {}
+  }
+  return "";
+})();
+
 // Mirror the SessionStart/PostToolUse hooks: some directories aren't project work, and
 // auto-registering from them spawns a phantom project lane that then sits in the sidebar forever.
 // PROJECT falls back to the cwd basename, so the directory name becomes the lane name:
@@ -341,7 +357,7 @@ const nonProjectReason = projectDir === homedir() ? "home dir"
 const isHomeDirSession = !process.env.RELAY_SESSION && !process.env.RELAY_PROJECT && !!nonProjectReason;
 
 if (!isHomeDirSession) {
-  await api("POST", "/register", { session: SESSION, project: PROJECT, status: `active in ${PROJECT}` })
+  await api("POST", "/register", { session: SESSION, project: PROJECT, status: `active in ${PROJECT}`, hookVersion: MCP_VERSION })
     .catch((err) => { process.stderr.write(`[trantor-mcp] initial register failed: ${err?.message || err}\n`); });
 
   // Heartbeat — keep this session's presence fresh for as long as the MCP process lives.
@@ -353,7 +369,7 @@ if (!isHomeDirSession) {
   // hub refreshes lastSeen but preserves the session's meaningful status. setInterval pauses during
   // sleep and fires on wake, so presence self-heals within one interval; .unref() lets the process
   // still exit cleanly when the agent closes the stdio transport (no phantom peers).
-  setInterval(() => { api("POST", "/register", { session: SESSION, project: PROJECT }).catch(() => {}); }, HEARTBEAT_MS).unref?.();
+  setInterval(() => { api("POST", "/register", { session: SESSION, project: PROJECT, hookVersion: MCP_VERSION }).catch(() => {}); }, HEARTBEAT_MS).unref?.();
 } else {
   process.stderr.write(`[trantor-mcp] ${nonProjectReason} — not auto-registering on the bus (set RELAY_SESSION or RELAY_PROJECT to opt in)\n`);
 }
