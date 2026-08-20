@@ -43,7 +43,7 @@ await new Promise(r => hub.listen(0, "127.0.0.1", r));
 const HUB = `http://127.0.0.1:${hub.address().port}`;
 
 // ---- harness: the REAL runner + a fake `codex` that fails the first N message turns ----
-async function drill({ failTurns = 0, seedPending = null, noMsg = false, waitMs = 9000 }) {
+async function drill({ failTurns = 0, seedPending = null, noMsg = false, waitMs = 9000, noBackoffOverride = false }) {
   sends.length = 0; served = 0; serveMsg = !noMsg;
   const work = mkdtempSync(join(tmpdir(), "tt-redeliver-"));
   const HOME = join(work, "home");
@@ -70,7 +70,7 @@ exit 0
     env: { ...process.env, HOME, PATH: `${fakebin}:${process.env.PATH}`,
       RELAY_URL: HUB, RELAY_AGENT: "codex", RELAY_PROJECT: PROJ,
       CREW_KICKOFF: "say hi and end your turn",
-      TRANTOR_RETRY_MS: "1200" },
+      ...(noBackoffOverride ? {} : { TRANTOR_RETRY_MS: "1200" }) },
   });
   // sample the pending file WHILE the batch is undelivered — it must exist between attempts
   let sawPendingOnDisk = false;
@@ -101,6 +101,17 @@ exit 0
     held.length === 2, `${held.length} notice(s): ${r.sends.map(s => s.text).join(" | ").slice(0, 220)}`);
   ok("recovery is announced once the batch finally lands",
     r.sends.some(s => /recovered/.test(s.text || "")));
+}
+
+// ---- drill 1b: PRODUCTION defaults — a failure must NOT retry instantly ----------------
+// The bug this pins: with TRANTOR_RETRY_MS unset, "".split(",") -> [""] -> Number("") -> 0
+// passed a >=0 filter, so the production ladder was [0] and a failing seat retry-STORMED
+// (43 crashed turns in ~3 minutes, observed live on the first dsh seat). With the default
+// 30s ladder, a 10s window must see exactly ONE delivery attempt.
+{
+  const r = await drill({ failTurns: 99, waitMs: 10000, noBackoffOverride: true });
+  ok("with NO env override, a failed delivery does not retry within 10s (default ladder is 30s+)",
+    r.wakeTurns.length === 1, `got ${r.wakeTurns.length} attempts in 10s`);
 }
 
 // ---- drill 2: a runner killed mid-outage still owes the message on restart -------------

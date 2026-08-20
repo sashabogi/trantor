@@ -116,6 +116,13 @@ const CLIS = [
   { name: "kimi",   bin: "kimi",     wired: () => !!read(join(H, ".kimi", "mcp.json"))?.mcpServers?.relay, auth: () => existsSync(join(H, ".kimi", "credentials")), login: "kimi → /login   (Kimi account or Moonshot API key)" },
   { name: "deepseek (via opencode)", bin: "opencode", wired: () => !!read(join(H, ".config", "opencode", "opencode.json"))?.mcp?.relay, auth: () => !!process.env.DEEPSEEK_API_KEY || (existsSync(join(H, ".agent-bus", ".env")) && readFileSync(join(H, ".agent-bus", ".env"), "utf8").includes("DEEPSEEK_API_KEY")) || !!read(join(H, ".local", "share", "opencode", "auth.json")), login: `get a key at platform.deepseek.com, then: echo 'DEEPSEEK_API_KEY=sk-…' >> ~/.agent-bus/.env` },
   { name: "glm (via opencode · coding plan)", bin: "opencode", wired: () => !!read(join(H, ".config", "opencode", "opencode.json"))?.mcp?.relay, auth: () => !!read(join(H, ".config", "opencode", "opencode.json"))?.provider?.["zai-coding-plan"]?.options?.apiKey, login: `put your Z.ai coding-plan key at ~/.config/opencode/opencode.json → provider["zai-coding-plan"].options.apiKey, then seat: trantor up glm:zai-coding-plan/glm-5.1` },
+  // DeepSeek Harness — the open-source harness (everything-is-a-plugin). Wired = the trantor
+  // profile exists (built by `trantor connect`: their CC-hooks bridge running OUR hooks + their MCP
+  // client running our relay). API-billed via DEEPSEEK_API_KEY, same key the opencode deepseek seat uses.
+  { name: "dsh (DeepSeek Harness)", bin: "dsh",
+    wired: () => existsSync(join(H, ".dsh", "profiles", "trantor", "cordis.patch.yml")),
+    auth: () => !!process.env.DEEPSEEK_API_KEY || [join(H, ".token-scrooge", ".env"), join(H, ".agent-bus", ".env")].some(f => { try { return readFileSync(f, "utf8").includes("DEEPSEEK_API_KEY"); } catch { return false; } }),
+    login: "npm i -g @deepseek-ai/dsh && trantor connect   (uses DEEPSEEK_API_KEY). Seat: trantor up dsh" },
   // OpenRouter — the BYOM on-ramp: ONE key fronts hundreds of models. Rides opencode; the same
   // OPENROUTER_API_KEY Scrooge already uses authenticates the crew seat (the runner sources the
   // .env files). Available the moment the key exists in env/opencode + declared `openrouter=api`.

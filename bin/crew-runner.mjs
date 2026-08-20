@@ -94,6 +94,7 @@ const inCmux = () => !!process.env.CMUX_SURFACE_ID;
 // actual LLM logo in the pill is not possible — brand COLOR + the agent's name in the label is the
 // closest cmux allows.
 const BRAND_HEX = { claude: "#D97757", codex: "#e8e8ee", openai: "#e8e8ee", deepseek: "#5786FE",
+  dsh: "#4D6BFE",
   kimi: "#8b8bf5", moonshot: "#8b8bf5", glm: "#5ea0f5", zai: "#5ea0f5", gemini: "#8E75B2", openrouter: "#94A3B8" };
 function cmuxStatus(value, color, icon = "robot", opts = {}) {
   if (!inCmux()) return;
@@ -141,12 +142,19 @@ const CLI = {
               next:  `opencode run -c{M} "$(cat {P})"`, mflag: " -m ", env: join(homedir(), ".token-scrooge", ".env") },
   claude:   { first: `claude{M} -p "$(cat {P})" --dangerously-skip-permissions`,
               next:  `claude -c{M} -p "$(cat {P})" --dangerously-skip-permissions`, mflag: " --model " },
+  // DeepSeek Harness. Every turn is a FRESH session — headless has no resume yet — so the seat
+  // relies on the wake prompt + the board (via the relay tools its profile mounts) rather than
+  // conversation memory. `trantor connect` builds the ~/.dsh/profiles/trantor composition: their
+  // CC-hooks bridge running OUR hooks + their MCP client running our relay server. No model flag:
+  // headless takes only the task; the model is profile config.
+  dsh:      { first: `dsh --profile trantor "$(cat {P})" < /dev/null`,
+              next:  `dsh --profile trantor "$(cat {P})" < /dev/null`, mflag: "", env: join(homedir(), ".token-scrooge", ".env") },
 };
 // BYOM: any agent label that isn't a known native CLI is treated as an opencode-driven provider
 // seat (opencode is the universal adapter). This is what lets a BROUGHT provider — `trantor up
 // <label>:<provider>` for any opencode vendor the user configured — run with no per-provider code
 // here; its model id arrives pre-qualified (`<provider>/<model>`) as CREW_MODEL.
-const NATIVE = new Set(["codex", "gemini", "kimi", "claude"]);
+const NATIVE = new Set(["codex", "gemini", "kimi", "claude", "dsh"]);
 const cli = CLI[AGENT] || (NATIVE.has(AGENT) ? null : CLI.opencode);
 if (!cli) { console.error(`unknown agent '${AGENT}' (native: ${[...NATIVE].join(", ")}; any other name = an opencode provider seat)`); process.exit(1); }
 if (!CLI[AGENT]) log(`'${AGENT}' is not a built-in seat — running it as an opencode provider (BYOM)`);
@@ -191,7 +199,12 @@ const PENDING_MAX = 50;
 // TRANTOR_RETRY_MS (comma-separated ms) shortens the ladder so the redelivery drill can exercise
 // a real backoff in seconds instead of waiting out the production one.
 const RETRY_MS = (() => {
-  const custom = String(process.env.TRANTOR_RETRY_MS || "").split(",").map(Number).filter(n => Number.isFinite(n) && n >= 0);
+  // Guard the UNSET case explicitly: "".split(",") is [""], Number("") is 0, and a >=0 filter
+  // accepted it — so every production runner got a ZERO backoff and a failing seat became a
+  // retry storm (observed live: 43 crashed turns in ~3 minutes on the first dsh seat). The
+  // hermetic drill never caught it because it always SET the override.
+  const raw = process.env.TRANTOR_RETRY_MS;
+  const custom = raw ? raw.split(",").map(Number).filter(n => Number.isFinite(n) && n > 0) : [];
   return custom.length ? custom : [30e3, 60e3, 120e3, 300e3, 900e3];
 })();
 function savePending(wake, bcast) {
