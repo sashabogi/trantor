@@ -51,7 +51,7 @@ heartbeats, inbox delivery, handoff/baton pass, sub-agent cards):
        "relay": {
          "command": "node",
          "args": ["<absolute-path-to-trantor>/mcp.mjs"],
-         "env": { "RELAY_URL": "http://127.0.0.1:4477", "RELAY_AGENT": "kimi-orch" },
+         "env": { "RELAY_AGENT": "kimi-orch" },
          "startupTimeoutMs": 15000,
          "toolTimeoutMs": 150000
        }
@@ -61,6 +61,13 @@ heartbeats, inbox delivery, handoff/baton pass, sub-agent cards):
 
 2. In the Kimi TUI: `/plugins install <absolute-path-to-trantor>` (or the GitHub URL), then
    `/reload`, then start a new session.
+
+Since 0.17.76 the Kimi hooks are a **dialect bridge**, not a fork: `kimi/bridge.mjs` runs the
+canonical hooks as children and translates Kimi's input/output conventions at the edges
+(SessionStart context is stashed and delivered on the first prompt). Kimi hooks therefore sign
+their hub calls, follow per-project hub pins, and inherit every future hook fix automatically.
+Do **not** set `RELAY_URL` in MCP configs — a hardcoded URL overrides the per-project pin and
+splits the project across hubs; the pin decides the hub.
 
 Notes: Kimi plugin installs are **snapshots** (`~/.kimi-code/plugins/managed/trantor/`) — after
 updating trantor, re-run `/plugins install` to refresh the skills/hooks. The MCP entry above always
@@ -260,6 +267,24 @@ Every session registers automatically — **crew or not** — and a solo session
 shows up on the board as cards, so the dashboard reflects *all* the work on a project, not just
 crew runs.
 
+## The board keeps itself honest
+
+Cards carry their **story on the card**: every `note` lands in a permanent per-card log (last 40
+entries) that survives restarts, retention, and id remaps — the drawer shows it as the card's
+narrative, so clicking an old card tells you what actually happened, not a one-line status trail.
+The `todo` lane has a lifecycle: cards untouched for 14 days (`RELAY_TODO_STALE_MS`) move to
+STALE with an "aged out" note instead of rotting silently, and todo tiles wear an age badge from
+day 7. A commit closes the session's focus card and the two link both ways. `trantor doctor`
+cross-checks every hub you know about against the per-project pins and reports any **split-brain**
+(a project live on two hubs) with the exact fix — and `trantor adopt <project>` migrates a project
+between hubs in one verified step, telling stale sessions to restart.
+
+Crew output is gated mechanically, too: `bin/slop-gate.mjs` runs the vendored
+[anti-slop](https://github.com/dmmulroy/anti-slop) Oxlint rules over an agent's **changed files
+only** — unexplained type assertions, `unknown` laundering, runtime `typeof`, Reflect tricks and
+friends fail the card before it can reach done, while legacy debt burns down on its own card
+instead of blocking everyone.
+
 ## The brain — plan-aware economics
 
 Trantor's economics engine ([Scrooge](https://github.com/sashabogi/token-scrooge) — installed
@@ -326,8 +351,8 @@ rate, not work rate.
 | `relay_send(to, text)` / `relay_inbox` / `relay_wait(t)` | Live messaging: direct, read-new, long-poll wake |
 | `relay_peers` / `relay_status(text)` / `relay_whoami` | Presence: who's alive (honest, heartbeat-backed), doing what |
 | `relay_project_brief(text)` | The project's what/why on the dashboard |
-| `relay_task_add(title, …, difficulty, model, deps, project?)` | Cards with difficulty/model badges + DAG edges; `project` targets another board when you orchestrate from elsewhere |
-| `relay_task_move(id, status)` | `todo → doing → testing → done` (the gate), `failed`, `blocked` |
+| `relay_task_add(title, …, difficulty, model, deps, note?, project?)` | Cards with difficulty/model badges + DAG edges; `note` seeds the card's **permanent log**; `project` targets another board when you orchestrate from elsewhere |
+| `relay_task_move(id, status, note?)` | `todo → doing → testing → done` (the gate), `failed`, `blocked` — moves to testing/done should carry a `note`: what you did + the evidence, stored on the card forever |
 | `relay_board` | The project's full board, as text |
 | `relay_scrooge(prompt, task?, difficulty?)` | Fractal cheap-model delegation, with the ledger receipt |
 | `relay_lesson(text, scope?)` | Record a failure lesson — auto-injected into all future crews |
@@ -338,6 +363,7 @@ rate, not work rate.
 ```
 trantor setup | doctor | connect | profile | provider | models
         | up <agents…> | swap <old> <new> | down | ui | advise | hub | watch
+        | adopt <project> | reconcile | duty | orchestrate | patrol | app | backfill | init-hooks
 ```
 
 - **`trantor provider`** — `list` every crew seat (built-in + brought) with availability + tier ·
@@ -355,9 +381,12 @@ trantor setup | doctor | connect | profile | provider | models
 
 ## Works with any MCP agent
 
-Claude Code, Codex CLI, Kimi Code CLI, and **OpenCode** (the universal adapter — DeepSeek, GLM,
-OpenRouter, and any provider you bring) are wired by `trantor connect` automatically (idempotent,
-backed-up, never overwrites your customizations). Anything else that speaks MCP: point it at
+Claude Code, Codex CLI, Kimi Code CLI, **DeepSeek Harness (`dsh`)**, and **OpenCode** (the
+universal adapter — DeepSeek, GLM, OpenRouter, and any provider you bring) are wired by
+`trantor connect` automatically (idempotent, backed-up, never overwrites your customizations).
+For `dsh`, connect builds a full profile (`~/.dsh/profiles/trantor`): DeepSeek's own Claude Code
+hooks bridge running the trantor hooks, plus their MCP client running the relay server — then
+`trantor up dsh` runs it as a crew seat (fresh session per turn; uses `DEEPSEEK_API_KEY`). Anything else that speaks MCP: point it at
 `mcp.mjs` with `RELAY_AGENT=<brand>` — loading the server auto-registers the session, so presence
 works before the model says a word.
 

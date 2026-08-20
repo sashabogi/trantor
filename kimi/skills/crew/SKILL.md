@@ -52,6 +52,7 @@ EXACT launch spec per provider (do not improvise these):
 | DeepSeek | `deepseek:deepseek` | runs via opencode; `deepseek` alone = CLI default |
 | **GLM (Z.ai)** | **`glm:zai-coding-plan`** | **runs via opencode, NOT a bare `glm`/`zai` terminal command.** `glm:zai-coding-plan/glm-5.2` pins a model; `glm:zai-coding-plan` live-selects. (Legacy `opencode:zai-coding-plan` still works.) |
 | **OpenRouter (BYOM)** | **`openrouter`** | **the bring-your-own-model on-ramp — one key fronts hundreds of vendors (incl. ones with no CLI).** Bare `openrouter` live-selects the best OpenRouter model for the difficulty; pin one with `openrouter:openrouter/<vendor>/<model>`. Its own bus identity `openrouter:<project>` (never collides with the GLM `opencode` seat). |
+| **DeepSeek Harness** | **`dsh`** | DeepSeek's own open-source harness as a seat (API-billed via `DEEPSEEK_API_KEY`). `trantor connect` builds its profile (their CC-hooks bridge running trantor's hooks + their MCP client running the relay). **Fresh session per turn — no resume** — so the seat relies on the wake prompt + the board, not conversation memory; give it self-contained contracts. |
 
 `agent:provider` live-selects the best model now; `agent:provider/model` pins one. Example:
 `trantor up codex kimi deepseek:deepseek glm:zai-coding-plan --task code --difficulty hard`.
@@ -98,8 +99,12 @@ Loop until the board is done — you are a foreman, not a mailbox:
    they auto-inject into every future crew's prompts.
 
 ## Phase 5 — verification gate + integration
-Card flow is `todo → doing → testing → done`; `testing` runs the project's tests/typecheck;
-`done` only green; `failed` (+ bus report) pulses red on the board until you bounce it.
+Card flow is `todo → doing → testing → done`; `testing` runs the seat's OWN test file (never the
+full suite from a seat — suites spawn hubs on fixed ports and collide across seats; the
+orchestrator runs the full suite at integration) plus `node bin/slop-gate.mjs` where the repo has
+one (the anti-slop lint over the seat's changed files — a card must not reach done failing it);
+`done` only green, and moves to testing/done carry a `note` with the evidence — the note is the
+card's permanent story; `failed` (+ bus report) pulses red on the board until you bounce it.
 Enforce the gate — bounce anything that skipped it (bounces are visible: "↩ bounced" on the
 card, history in its tooltip). When all report done: integrate, fix contract mismatches
 YOURSELF, move your card through testing → done, broadcast "🚀 <thing> is live", and when the
