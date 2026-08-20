@@ -133,7 +133,10 @@ async function main(stdinRaw) {
   try { writeFileSync(stamp, String(Date.now())); } catch {}
 
   // POST /register with no status -> hub refreshes lastSeen + project, preserves status.
-  await signedPost("/register", { session, project, llm: "claude", model: modelFromTranscript(stdinRaw),
+  // llm from the seat brand when a dialect bridge runs us (RELAY_AGENT=kimi-orch etc.), else claude.
+  await signedPost("/register", { session, project,
+    llm: process.env.RELAY_LLM || (process.env.RELAY_AGENT ? process.env.RELAY_AGENT.replace(/-orch$/, "") : "claude"),
+    model: modelFromTranscript(stdinRaw),
     hookVersion: (() => { try { return installedVersion(); } catch { return ""; } })() }, { session, timeoutMs: Number(process.env.RELAY_HEARTBEAT_TIMEOUT_MS || 1500) });
 
   // Ambient narratives: once an hour (machine-wide stamp), spawn the summarizer detached — the

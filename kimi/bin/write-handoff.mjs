@@ -7,7 +7,7 @@ import { writeFileSync, existsSync, mkdirSync } from "node:fs";
 import { join, basename } from "node:path";
 import { homedir, hostname } from "node:os";
 import { execSync } from "node:child_process";
-import { spawnBaton } from "../hooks/lib/handoff.mjs";
+import { spawnBaton } from "./lib/handoff.mjs";
 
 const baton = process.argv.includes("--baton");
 // This runs through the agent's Bash tool, whose cwd IS the session's project directory.

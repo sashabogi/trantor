@@ -9,7 +9,7 @@
 import { readFileSync, existsSync, statSync } from "node:fs";
 import { execSync } from "node:child_process";
 import { pathToFileURL } from "node:url";
-import { subagentsActive } from "../hooks/lib/handoff.mjs";
+import { subagentsActive } from "./lib/handoff.mjs";
 
 const [, , handoffFile, windowId, originalTty] = process.argv;
 const POLL_MS = 1500, TIMEOUT_MS = 180_000;
