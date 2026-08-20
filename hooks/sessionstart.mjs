@@ -129,7 +129,10 @@ try {
   let source = "", stdinObj = {};
   try { stdinObj = JSON.parse((await readStdin()) || "{}"); source = stdinObj.source || ""; } catch {}
   userTitle = (stdinObj && stdinObj.session_title) ? String(stdinObj.session_title) : "";   // user already named it
-  const projectDir = process.env.CLAUDE_PROJECT_DIR || process.cwd();
+  // input.cwd FIRST, matching hooks/prompt-focus.mjs. When they disagreed, two hooks in ONE
+  // session resolved two different projects — and therefore two different hubs — so half a
+  // session's work recorded on a hub nobody was reading.
+  const projectDir = stdinObj.cwd || process.env.CLAUDE_PROJECT_DIR || process.cwd();
   // Sessions started in the home directory itself aren't project work — registering
   // them spawns a phantom "<username>" project board on the dashboard. Set
   // RELAY_SESSION (or RELAY_PROJECT) to deliberately put a home-dir session on the bus.
@@ -142,7 +145,9 @@ try {
   sessionTitle = project;   // baseline — enriched with the current work item after the catch-up fetch below
   const session = process.env.RELAY_SESSION
     || (process.env.RELAY_AGENT ? `${process.env.RELAY_AGENT}:${project}` : `${hostId()}:${project}`);
-  const url = relayUrl();
+  // relayUrl() with no project resolves from the hook process's cwd, which is not always the
+  // project the session is about. Pass it, or every call below can address the wrong hub.
+  const url = relayUrl(project);
 
   // register self + post an initial presence status (no LLM turn — instant for others to read)
   await jpost(`${url}/register`, { session, project, status: `active in ${project}` }, session).catch(() => {});

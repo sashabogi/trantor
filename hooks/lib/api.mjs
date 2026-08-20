@@ -49,6 +49,32 @@ export function sessionContext(projectDir) {
   return { session, project, projectDir: dir };
 }
 
+// THE PROJECT A REQUEST IS ABOUT, which is not always the project the hook process is standing in.
+//
+// This distinction cost two diagnosis sessions. A hook stamps its payload with the project from
+// Claude's session cwd (`input.cwd`), but the hub URL used to come from the HOOK PROCESS's cwd.
+// Launch a session from ~/development and those disagree: every card says "crebral-health" and
+// every one of them lands on the LOCAL hub, because "development" has no pin and falls through to
+// the global default. Nothing errors, the seat looks healthy, and half the work records where
+// nobody reads. So: the project travels WITH the request, explicit > payload > query > cwd.
+function projectFromQuery(pathOrUrl) {
+  const m = String(pathOrUrl).match(/[?&]project=([^&]*)/);
+  try { return m ? decodeURIComponent(m[1]) : ""; } catch { return m ? m[1] : ""; }
+}
+function projectOf(explicit, payload, pathOrUrl) {
+  if (explicit) return explicit;
+  if (payload && typeof payload === "object" && payload.project) return String(payload.project);
+  return projectFromQuery(pathOrUrl);
+}
+// The signing identity for a request about `project`. An explicit RELAY_SESSION/RELAY_AGENT still
+// wins (crew seats inherit them); otherwise the peer is named for the project being written, not
+// for wherever the hook happens to be running.
+function sessionFor(project) {
+  if (process.env.RELAY_SESSION) return process.env.RELAY_SESSION;
+  const p = project || sessionContext().project;
+  return process.env.RELAY_AGENT ? `${process.env.RELAY_AGENT}:${p}` : `${hostId()}:${p}`;
+}
+
 // The keypair for a session name, memoised per process. loadOrCreate is itself idempotent + atomic,
 // but a hook may sign several requests in one run — avoid re-reading the file each time.
 const _idCache = new Map();
@@ -86,14 +112,19 @@ function enrolledPath(session) {
   const busDir = process.env.AGENT_BUS_DIR || join(homedir(), ".agent-bus");
   return join(busDir, "keys", `${String(session).replace(/[^A-Za-z0-9_.-]/g, "_")}.enrolled`);
 }
-export async function ensureEnrolled(session, identity) {
+export async function ensureEnrolled(session, identity, project) {
   if (!identity?.pubkey) return;
+  const hub = relayUrl(project);
   const stamp = enrolledPath(session);
-  try { if (existsSync(stamp) && readFileSync(stamp, "utf8").trim() === identity.pubkey) return; } catch {}
+  // The stamp records the HUB as well as the key. It used to record only the key, so a session
+  // enrolled on one hub was considered enrolled everywhere — and its first request to a second
+  // hub went out as an unknown identity.
+  const mark = `${identity.pubkey}\t${hub}`;
+  try { if (existsSync(stamp) && readFileSync(stamp, "utf8").trim() === mark) return; } catch {}
   try {
     // sfetchJson is the FROZEN single call-site shape (lib/signed-fetch.mjs): it stringifies the
     // payload, sets content-type, and signs — so every hook signs identically with zero hand-rolling.
-    const r = await sfetchJson(`${relayUrl()}/enroll`, {
+    const r = await sfetchJson(`${hub}/enroll`, {
       method: "POST",
       payload: { pubkey: identity.pubkey, name: session, kind: "agent" },
       identity,
@@ -101,7 +132,7 @@ export async function ensureEnrolled(session, identity) {
     });
     if (r.ok) {
       try { mkdirSync(join((process.env.AGENT_BUS_DIR || join(homedir(), ".agent-bus")), "keys"), { recursive: true }); } catch {}
-      try { writeFileSync(stamp, identity.pubkey, { mode: 0o600 }); } catch {}
+      try { writeFileSync(stamp, mark, { mode: 0o600 }); } catch {}
     }
   } catch {}
 }
@@ -109,8 +140,8 @@ export async function ensureEnrolled(session, identity) {
 // Accept either a full URL (rare — a caller that already built one) or a hub-relative path. We do
 // NOT fold the origin into the signature (signed-fetch signs path+query only), so a request proxied
 // through a different host still verifies.
-function toUrl(pathOrUrl) {
-  return /^https?:\/\//.test(pathOrUrl) ? pathOrUrl : `${relayUrl()}${pathOrUrl}`;
+function toUrl(pathOrUrl, project) {
+  return /^https?:\/\//.test(pathOrUrl) ? pathOrUrl : `${relayUrl(project || projectFromQuery(pathOrUrl))}${pathOrUrl}`;
 }
 
 // Unsigned GET → { ok, status, json|null }. Never throws.
@@ -123,8 +154,8 @@ function toUrl(pathOrUrl) {
 // /peers roster. So reads stay unsigned: accepted+flagged under the default `warn` mode, and the
 // roster stays global. Flipping individual reads to signed later is a one-liner once a read needs
 // enforce-mode attribution (add a signedGet that passes `identity` through sfetchJson with GET).
-export async function getJSON(pathOrUrl, { timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
-  const url = toUrl(pathOrUrl);
+export async function getJSON(pathOrUrl, { timeoutMs = DEFAULT_TIMEOUT_MS, project } = {}) {
+  const url = toUrl(pathOrUrl, projectOf(project, null, pathOrUrl));
   try {
     const r = await fetch(url, { method: "GET", signal: AbortSignal.timeout(timeoutMs) });
     // parse the body on FAILURE too — a refusal's payload (denial note, queue guidance,
@@ -145,13 +176,14 @@ export async function getJSON(pathOrUrl, { timeoutMs = DEFAULT_TIMEOUT_MS } = {}
 // First user: the overseer-warn hook's /overseer/context — a project-scoped read, so the
 // enforce hub's own-project scope filtering is the correct behavior, not a loss. Roster-style
 // reads (/peers, /catchup cross-project discovery) stay on getJSON on purpose — see above.
-export async function signedGet(pathOrUrl, { timeoutMs = DEFAULT_TIMEOUT_MS, session, instance } = {}) {
-  const sess = session || sessionContext().session;
+export async function signedGet(pathOrUrl, { timeoutMs = DEFAULT_TIMEOUT_MS, session, instance, project } = {}) {
+  const proj = projectOf(project, null, pathOrUrl);
+  const sess = session || sessionFor(proj);
   const durable = loadIdentity(sess);
   const id = instance ? loadInstance(sess, instance) : durable;
-  await ensureEnrolled(sess, durable);           // instances never enroll — the DURABLE key does
+  await ensureEnrolled(sess, durable, proj);     // instances never enroll — the DURABLE key does
   try {
-    const r = await sfetchJson(toUrl(pathOrUrl), {
+    const r = await sfetchJson(toUrl(pathOrUrl, proj), {
       method: "GET",
       identity: id,
       signal: AbortSignal.timeout(timeoutMs),
@@ -170,15 +202,16 @@ export async function signedGet(pathOrUrl, { timeoutMs = DEFAULT_TIMEOUT_MS, ses
 }
 
 // Signed POST → { ok, status, json|null }. Never throws.
-export async function signedPost(pathOrUrl, payload, { timeoutMs = DEFAULT_TIMEOUT_MS, session, instance } = {}) {
-  const sess = session || sessionContext().session;
+export async function signedPost(pathOrUrl, payload, { timeoutMs = DEFAULT_TIMEOUT_MS, session, instance, project } = {}) {
+  const proj = projectOf(project, payload, pathOrUrl);
+  const sess = session || sessionFor(proj);
   const durable = loadIdentity(sess);
   const id = instance ? loadInstance(sess, instance) : durable;
-  await ensureEnrolled(sess, durable);           // instances never enroll — the DURABLE key does
+  await ensureEnrolled(sess, durable, proj);     // instances never enroll — the DURABLE key does
   try {
     // sfetchJson (FROZEN) stringifies the payload + signs with `id` in one call — the single shape
     // every client uses (lib/signed-fetch.mjs). We pass our memoised identity so it doesn't re-load.
-    const r = await sfetchJson(toUrl(pathOrUrl), {
+    const r = await sfetchJson(toUrl(pathOrUrl, proj), {
       method: "POST",
       payload,
       identity: id,

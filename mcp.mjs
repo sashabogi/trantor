@@ -100,9 +100,11 @@ async function seedCursor() {
 // traffic; the durable identity keeps enrollment and attribution.
 const INSTANCE_ID = `mcp-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
 async function api(method, path, payload) {
+  // PROJECT explicitly, never the client's cwd fallback: this server's project is fixed at boot,
+  // and letting the hub be re-derived per call is how a session ends up writing to two hubs.
   const r = method.toUpperCase() === "GET"
-    ? await signedGet(path, { session: SESSION, instance: INSTANCE_ID })
-    : await signedPost(path, payload, { session: SESSION, instance: INSTANCE_ID });
+    ? await signedGet(path, { session: SESSION, instance: INSTANCE_ID, project: PROJECT })
+    : await signedPost(path, payload, { session: SESSION, instance: INSTANCE_ID, project: PROJECT });
   if (!r.ok) throw new Error(`hub ${r.status} on ${path}`);
   return r.json;
 }

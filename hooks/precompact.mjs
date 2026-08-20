@@ -18,7 +18,9 @@ function readStdin() {
 
 try {
   const input = JSON.parse((await readStdin()) || "{}");
-  const projectDir = process.env.CLAUDE_PROJECT_DIR || process.cwd();
+  // input.cwd FIRST — every hook must derive the project the SAME way, or two hooks in one
+  // session resolve two projects, two hubs, and half the work records where nobody reads.
+  const projectDir = input.cwd || process.env.CLAUDE_PROJECT_DIR || process.cwd();
   const projectName = basename(projectDir);
   const transcript = input.transcript_path || "";
   const trigger = input.trigger || "auto";

@@ -106,7 +106,10 @@ async function maybeEarlyWarn(stdinRaw, session) {
 }
 
 async function main(stdinRaw) {
-  const projectDir = process.env.CLAUDE_PROJECT_DIR || process.cwd();
+  // input.cwd FIRST — every hook must derive the project the SAME way, or two hooks in one
+  // session resolve two projects, two hubs, and half the work records where nobody reads.
+  let _in = {}; try { _in = JSON.parse(stdinRaw || "{}"); } catch {}
+  const projectDir = _in.cwd || process.env.CLAUDE_PROJECT_DIR || process.cwd();
   // Mirror sessionstart.mjs: home-directory sessions aren't project work — don't register
   // them (would spawn a phantom "<username>" board). Opt in with RELAY_SESSION/RELAY_PROJECT.
   if (!process.env.RELAY_SESSION && !process.env.RELAY_PROJECT && projectDir === homedir()) return;

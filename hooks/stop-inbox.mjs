@@ -78,7 +78,7 @@ async function main() {
   let messages = [];
   try {
     // PEEK: look without claiming delivery. We may yet decide to let the stop through.
-    const peek = await signedGet(`/inbox?session=${encodeURIComponent(session)}&since=${cursor}&peek=1`, { timeoutMs: FETCH_TIMEOUT_MS, session, instance: instanceId });
+    const peek = await signedGet(`/inbox?session=${encodeURIComponent(session)}&since=${cursor}&peek=1`, { timeoutMs: FETCH_TIMEOUT_MS, session, instance: instanceId, project });
     if (!peek.ok) return allow();
     // Superseded twin (instance-keys contract): a newer instance claimed the baton — this session
     // stands down. Blocking ITS stop over messages the new instance will handle would trap it.
@@ -92,7 +92,7 @@ async function main() {
   // Committed now: claim delivery for real so neither inbox-deliver nor the deferred waker repeats it.
   let next = cursor;
   try {
-    const claim = await signedGet(`/inbox?session=${encodeURIComponent(session)}&since=${cursor}`, { timeoutMs: FETCH_TIMEOUT_MS, session, instance: instanceId });
+    const claim = await signedGet(`/inbox?session=${encodeURIComponent(session)}&since=${cursor}`, { timeoutMs: FETCH_TIMEOUT_MS, session, instance: instanceId, project });
     if (claim.ok) next = claim.json?.cursor || cursor;
   } catch {}
   try { writeFileSync(cursorFile, String(next)); } catch {}

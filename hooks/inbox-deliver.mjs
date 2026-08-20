@@ -33,20 +33,28 @@ const FETCH_TIMEOUT_MS = Number(process.env.RELAY_INBOX_TIMEOUT_MS || 1500);
 // additionalContext payload (the model still gets the readable message).
 function sanitize(s) { return String(s == null ? "" : s).replace(/[\x00-\x1f\x7f-\x9f]/g, " "); }
 
-async function getInbox(session, since, instance) {
-  const { ok, json } = await signedGet(`/inbox?session=${encodeURIComponent(session)}&since=${since}`, { timeoutMs: FETCH_TIMEOUT_MS, session, instance });
+async function getInbox(session, since, instance, project) {
+  const { ok, json } = await signedGet(`/inbox?session=${encodeURIComponent(session)}&since=${since}`, { timeoutMs: FETCH_TIMEOUT_MS, session, instance, project });
   if (!ok || !json) throw new Error("hub unreachable");
   return json;   // { messages: [...], cursor, superseded? }
 }
 
-// PostToolUse hands us the tool-input JSON on stdin. We don't need it, but we must DRAIN it:
-// a large tool input (e.g. a big Write) can exceed the 64KB pipe buffer and block the parent's
-// write if nobody reads. Consume + discard, with a short timeout so we never hang.
+// PostToolUse hands us the tool-input JSON on stdin, and we MUST drain it: a large tool input
+// (e.g. a big Write) can exceed the 64KB pipe buffer and block the parent's write if nobody reads.
+// It used to drain into the void and resolve with NOTHING, so `main(stdinRaw)` always got
+// undefined — which silently cost two things: `session_id` (so the per-instance cursor in
+// docs/INSTANCE-KEYS-CONTRACT.md never actually keyed by instance) and `cwd` (so this hook could
+// only ever guess its project from the process directory). Draining and KEEPING the bytes is the
+// same protection, minus the amnesia.
 function drainStdin() {
   return new Promise(res => {
-    try { process.stdin.resume(); process.stdin.on("data", () => {}); process.stdin.on("end", res); }
-    catch { res(); }
-    setTimeout(res, 80);
+    let d = "";
+    try {
+      process.stdin.setEncoding("utf8"); process.stdin.resume();
+      process.stdin.on("data", c => (d += c));
+      process.stdin.on("end", () => res(d));
+    } catch { res(d); }
+    setTimeout(() => res(d), 80);
   });
 }
 
@@ -64,7 +72,10 @@ async function main(stdinRaw) {
   // name, different session_id) has its own ledger and can't eat this session's messages.
   let instanceId = "";
   try { instanceId = String(JSON.parse(stdinRaw || "{}").session_id || ""); } catch {}
-  const projectDir = process.env.CLAUDE_PROJECT_DIR || process.cwd();
+  // input.cwd FIRST — every hook must derive the project the SAME way, or two hooks in one
+  // session resolve two projects, two hubs, and half the work records where nobody reads.
+  let _in = {}; try { _in = JSON.parse(stdinRaw || "{}"); } catch {}
+  const projectDir = _in.cwd || process.env.CLAUDE_PROJECT_DIR || process.cwd();
   // Mirror heartbeat.mjs / sessionstart.mjs: a home-directory session isn't project work and
   // isn't on the bus — nothing to deliver. Opt in with RELAY_SESSION / RELAY_PROJECT.
   if (!process.env.RELAY_SESSION && !process.env.RELAY_PROJECT && projectDir === homedir()) return "{}";
@@ -94,7 +105,7 @@ async function main(stdinRaw) {
   // so we start listening "from now" instead of replaying the whole backlog of old broadcasts.
   if (!existsSync(cursorFile)) {
     try {
-      const { cursor } = await getInbox(session, 0, instanceId);
+      const { cursor } = await getInbox(session, 0, instanceId, project);
       writeFileSync(cursorFile, String(cursor || 0));
     } catch {}
     return "{}";
@@ -105,7 +116,7 @@ async function main(stdinRaw) {
 
   let messages = [], next = cursor, superseded = false;
   try {
-    const res = await getInbox(session, cursor, instanceId);
+    const res = await getInbox(session, cursor, instanceId, project);
     messages = Array.isArray(res.messages) ? res.messages : [];
     next = res.cursor || cursor;
     superseded = res.superseded === true;
