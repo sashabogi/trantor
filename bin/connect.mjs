@@ -136,11 +136,12 @@ if (has("dsh")) {
   else {
     if (!DRY) {
       mkdirSync(prof, { recursive: true });
-      // The seat runs the plugin's hooks MINUS SessionStart. Two reasons: the crew runner already
-      // owns registration/announcement, and dsh (rc.7/8) crashes at headless teardown when a slow
-      // detached SessionStart hook resolves late — its agent.inject() races disposal ("Cannot read
-      // properties of undefined (reading 'prepare')", exit code flips). Verified: with SessionStart
-      // present the crash reproduces; without it, 0 failures across repeated runs.
+      // The seat runs the plugin's hooks MINUS SessionStart: the crew runner already owns
+      // registration/announcement, and per-turn roster/catchup injection is wasted spend in a
+      // fresh one-shot session (headless has no resume — every turn re-pays it). Note: an earlier
+      // version of this comment blamed a dsh teardown crash on SessionStart; that was FALSE — the
+      // crash was the duplicated-core install below, refuted by a clean-profile repro before we
+      // reported upstream (deepseek-harness discussions #3515/#3516).
       try {
         const full = JSON.parse(readFileSync(join(ROOT, "hooks", "hooks.json"), "utf8"));
         const subset = Object.fromEntries(Object.entries(full.hooks || {}).filter(([k]) => k !== "SessionStart"));
