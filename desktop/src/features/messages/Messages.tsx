@@ -60,9 +60,9 @@ export function shortName(session: string): string {
 }
 
 function msgOf(ev: HubEvent): Msg | null {
-  const text = String(ev.text ?? "");
-  const from = String(ev.by ?? "");
-  const to = String((ev as Record<string, unknown>).toSession ?? "");
+  const text = ev.text ?? "";
+  const from = ev.by ?? "";
+  const to = ev.toSession ?? "";
   if (!text || !from || !to) return null;
   // Sasha's question, answered: "are those even messages and conversations? Or are they notices?"
   // Notices. hub:* traffic is the overseer reporting STATE — it has a real surface (the Overseer
@@ -232,7 +232,7 @@ export function Messages({ client, me, focus }: { client: HubClient; me: string;
         setDraft("");
         if (composeTo) { setSel(pairKey(me, composeTo)); setCompose({ picking: false, to: null }); }
       })
-      .catch(e => setError(String((e as Error).message || e)))
+      .catch(e => setError(e instanceof Error && e.message ? e.message : String(e)))
       .finally(() => setSending(false));
   };
 

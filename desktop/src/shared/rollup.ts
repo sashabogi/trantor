@@ -12,8 +12,7 @@ export type Rolled = { rep: HubEvent; count: number; first: number; last: number
 export function rollUp(events: HubEvent[]): Rolled[] {
   const by = new Map<string, Rolled>();
   for (const e of events) {
-    const any = e as Record<string, unknown>;
-    const sig = `${e.type}|${e.project}|${String(any.kind ?? "")}|${String(any.detail ?? any.claim ?? "")}`;
+    const sig = `${e.type}|${e.project}|${e.kind ?? ""}|${e.detail ?? e.claim ?? ""}`;
     const cur = by.get(sig);
     if (!cur) by.set(sig, { rep: e, count: 1, first: e.ts, last: e.ts });
     else {
@@ -22,7 +21,7 @@ export function rollUp(events: HubEvent[]): Rolled[] {
       cur.last = Math.max(cur.last, e.ts);
       // Prefer a NARRATED representative: narration lands on individual events, so the newest
       // event is often the one the cheap model hasn't reached yet.
-      if (!(cur.rep as Record<string, unknown>).narration && (any.narration || e.ts > cur.rep.ts)) cur.rep = e;
+      if (!cur.rep.narration && (e.narration || e.ts > cur.rep.ts)) cur.rep = e;
     }
   }
   return [...by.values()].sort((a, b) => b.last - a.last);

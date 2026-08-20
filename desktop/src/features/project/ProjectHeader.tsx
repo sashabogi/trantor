@@ -4,9 +4,10 @@
 import type { ReactNode } from "react";
 
 const LENSES = ["board", "feed", "chat"] as const;
+export type Lens = (typeof LENSES)[number];
 
 export function ProjectHeader({ project, sub, lens, onLens, children }: {
-  project: string; sub: ReactNode; lens: string; onLens: (l: string) => void; children?: ReactNode;
+  project: string; sub: ReactNode; lens: Lens; onLens: (l: Lens) => void; children?: ReactNode;
 }) {
   return (
     <header className="flex items-start justify-between gap-4 px-8 pt-6 pb-4">

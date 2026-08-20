@@ -36,16 +36,14 @@ export function Collisions({ client }: { client: HubClient }) {
       <p className="tr-sec-sub">Where two agents are about to step on each other — one row per condition.</p>
       <div className="mt-3 flex flex-col gap-2">
         {rolled.slice(0, 4).map(({ rep: e, count, first, last }, i) => {
-          const any = e as Record<string, unknown>;
-          const kind = String(any.kind ?? "");
-          const narration = any.narration as string | undefined;
-          const files = (any.files as string[] | undefined) ?? [];
+          const kind = e.kind ?? "";
+          const files = e.files ?? [];
           const dot = kind === "file-conflict" ? "var(--color-tr-fail)" : "var(--color-tr-warn)";
           return (
             <div key={e.id ?? i} className="tr-card flex items-start gap-3 p-3.5">
               <span className="tr-dot shrink-0" style={{ background: dot, marginTop: 6 }} />
               <div className="min-w-0 flex-1">
-                <div className="break-words text-[13px] leading-snug">{narration ?? String(any.detail ?? "")}</div>
+                <div className="break-words text-[13px] leading-snug">{e.narration ?? e.detail ?? ""}</div>
                 <div className="mt-1 flex flex-wrap items-baseline gap-1.5">
                   {e.project && <span className="tr-chip shrink-0">{e.project}</span>}
                   {kind && <span className="tr-chip shrink-0">{kind}</span>}

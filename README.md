@@ -283,7 +283,8 @@ Crew output is gated mechanically, too: `bin/slop-gate.mjs` runs the vendored
 [anti-slop](https://github.com/dmmulroy/anti-slop) Oxlint rules over an agent's **changed files
 only** — unexplained type assertions, `unknown` laundering, runtime `typeof`, Reflect tricks and
 friends fail the card before it can reach done, while legacy debt burns down on its own card
-instead of blocking everyone.
+instead of blocking everyone. A surface that has paid its debt off stays paid: `desktop/src` is at
+zero and `npm test` now lints it in full (`node bin/slop-gate.mjs --surface desktop/src`).
 
 ## The brain — plan-aware economics
 

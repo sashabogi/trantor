@@ -9,15 +9,17 @@ import { useEffect, useMemo, useState } from "react";
 import type { Card, HubClient } from "../../shared/api/client";
 import { CardDetail } from "./CardDetail";
 import { SubagentGroup } from "./SubagentGroup";
-import { ProjectHeader } from "../project/ProjectHeader";
+import { ProjectHeader, type Lens } from "../project/ProjectHeader";
 import { AgentChip, Avatar, cleanTitle, displayName } from "../../shared/Avatar";
 import { usePeers, presenceMap, stateOf, PRESENCE_COLOR, type PresenceState } from "../../shared/presence";
+import { dictGet } from "../../shared/dict";
 
 // Lane order matches the hub's own card flow: todo -> doing -> testing -> done, with the two
 // exception lanes last. `stale` comes from the reaper, `blocked` is set by hand.
 const LANES = ["todo", "doing", "testing", "done", "failed", "blocked", "stale"] as const;
+type LaneName = (typeof LANES)[number];
 
-const LANE_COLOR: Record<string, string> = {
+const LANE_COLOR = {
   todo: "var(--color-tr-muted)",
   doing: "var(--color-tr-doing)",
   testing: "var(--color-tr-warn)",
@@ -25,12 +27,14 @@ const LANE_COLOR: Record<string, string> = {
   failed: "var(--color-tr-fail)",
   blocked: "var(--color-tr-fail)",
   stale: "var(--color-tr-muted)",
-};
+} as const satisfies Record<LaneName, string>;
 
 // The hub's own card flow. NEVER jump straight to done: `testing` is a real gate, and the whole
 // crew protocol depends on it (bin/crew.sh bounces anything that skips it), so the client must not
-// offer a shortcut the protocol forbids.
-const NEXT: Record<string, string> = { todo: "doing", doing: "testing", testing: "done" };
+// offer a shortcut the protocol forbids. Keyed by a card's live `status`, which is not a closed
+// type client-side — a hub-side status this build has never seen must fall through to "no move",
+// not a type error, so lookups go through `dictGet` rather than indexing directly.
+const NEXT = { todo: "doing", doing: "testing", testing: "done" } as const satisfies Record<string, string>;
 
 // Search understands the board's own vocabulary: plain text matches titles, `#123` a card id,
 // `@name` an assignee. One box, no advanced-search modal.
@@ -108,7 +112,7 @@ function CardTile({ card, onOpen, onAdvance, presence, subagents, subagentsOpen 
   /** sub-agents this session spawned — rendered INSIDE the tile, so the tree reads as one thing */
   subagents?: Card[]; subagentsOpen?: boolean;
 }) {
-  const next = NEXT[card.status];
+  const next = dictGet(NEXT, card.status);
   // A card is only believably IN MOTION when its assignee's heartbeat is fresh — "doing" with a
   // dead assignee is exactly the stall the operator needs to spot. Live work breathes (ring +
   // pulsing dot); failed/blocked pulse red like the old web UI did; a doing-card whose assignee
@@ -161,7 +165,7 @@ function CardTile({ card, onOpen, onAdvance, presence, subagents, subagentsOpen 
 }
 
 export function Board({ client, project, lens, onLens }: {
-  client: HubClient; project: string; lens: string; onLens: (l: string) => void;
+  client: HubClient; project: string; lens: Lens; onLens: (l: Lens) => void;
 }) {
   const [cards, setCards] = useState<Card[] | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -202,7 +206,7 @@ export function Board({ client, project, lens, onLens }: {
   // Optimistic, with rollback. The stream will confirm it a beat later; showing the move immediately
   // is the difference between a tool and a dashboard.
   const advance = (card: Card) => {
-    const next = NEXT[card.status];
+    const next = dictGet(NEXT, card.status);
     if (!next || !cards) return;
     const before = cards;
     setCards(cards.map(c => (c.id === card.id ? { ...c, status: next } : c)));

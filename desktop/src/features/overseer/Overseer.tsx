@@ -11,8 +11,12 @@ import type { HubClient, HubEvent, OverseerStatus } from "../../shared/api/clien
 import { ProposalsSection } from "../../shared/Proposals";
 import { usePeers, stateOf } from "../../shared/presence";
 import { rollUp, lasting } from "../../shared/rollup";
+import { dictGet } from "../../shared/dict";
 
-const LEVEL_LABEL: Record<number, string> = { 1: "observe", 2: "warn", 3: "gate", 4: "auto" };
+// Autonomy levels are 1-4 by contract, but a level read off the hub isn't a closed type
+// client-side, so this stays an open lookup (`dictGet`, string-keyed) rather than a literal-keyed
+// Record indexed directly.
+const LEVEL_LABEL = { "1": "observe", "2": "warn", "3": "gate", "4": "auto" } as const satisfies Record<string, string>;
 
 function agoS(ts: number) {
   if (!ts) return "never";
@@ -43,8 +47,8 @@ export function Overseer({ client }: { client: HubClient }) {
     // Fetch DEEP (not 30) so the roll-up's counts are true — the whole point is to show that one
     // condition accounts for hundreds of rows rather than pretending each is news.
     const load = () => Promise.all([
-      client.events({ type: "overseer.", limit: 300 }).then(r => r.events).catch(() => [] as HubEvent[]),
-      client.events({ type: "verify.gate.", limit: 30 }).then(r => r.events).catch(() => [] as HubEvent[]),
+      client.events({ type: "overseer.", limit: 300 }).then(r => r.events).catch((): HubEvent[] => []),
+      client.events({ type: "verify.gate.", limit: 30 }).then(r => r.events).catch((): HubEvent[] => []),
     ]).then(([warns, gates]) => {
       if (!cancelled) setHistory([...warns, ...gates].sort((a, b) => b.ts - a.ts));
     });
@@ -167,16 +171,16 @@ export function Overseer({ client }: { client: HubClient }) {
                       <span className="min-w-0 flex-1 truncate">{proj}</span>
                       {(liveByProject.get(proj) ?? 0) > 0 &&
                         <span className="tr-dot" style={{ background: "var(--color-tr-doing)", width: 6, height: 6 }} />}
-                      <span className={`tr-chip shrink-0 ${lvl >= 3 ? "text-[var(--color-tr-warn)]" : ""}`}>{lvl} {LEVEL_LABEL[lvl] ?? ""}</span>
+                      <span className={`tr-chip shrink-0 ${lvl >= 3 ? "text-[var(--color-tr-warn)]" : ""}`}>{lvl} {dictGet(LEVEL_LABEL, String(lvl)) ?? ""}</span>
                     </div>
                   ))}
                   <div className="mt-1 border-t border-white/[0.06] pt-1.5 text-[12px] text-[var(--color-tr-muted)]">
-                    everything else: {status.autonomy["*"] ?? 1} {LEVEL_LABEL[status.autonomy["*"] ?? 1]}
+                    everything else: {status.autonomy["*"] ?? 1} {dictGet(LEVEL_LABEL, String(status.autonomy["*"] ?? 1))}
                   </div>
                 </div>
               ) : (
                 <div className="text-[13px] text-[var(--color-tr-muted)]">
-                  Whole fleet at level {status.autonomy["*"] ?? 1} ({LEVEL_LABEL[status.autonomy["*"] ?? 1]}).
+                  Whole fleet at level {status.autonomy["*"] ?? 1} ({dictGet(LEVEL_LABEL, String(status.autonomy["*"] ?? 1))}).
                 </div>
               )}
             </div>
@@ -190,9 +194,7 @@ export function Overseer({ client }: { client: HubClient }) {
           </p>
           <div className="mt-3 flex flex-col gap-2">
             {rolled.slice(0, 20).map(({ rep: e, count, first, last }, i) => {
-              const any = e as Record<string, unknown>;
               const gate = e.type === "verify.gate.opened";
-              const narration = any.narration as string | undefined;
               const when = (ts: number) => new Date(ts).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
               return (
                 <div key={e.id ?? i} className="tr-card flex items-start gap-3 p-3.5">
@@ -200,11 +202,11 @@ export function Overseer({ client }: { client: HubClient }) {
                         style={{ background: gate ? "var(--color-tr-fail)" : "var(--color-tr-warn)", marginTop: 6 }} />
                   <div className="min-w-0 flex-1">
                     <div className="break-words text-[13px] leading-snug">
-                      {gate ? `gate opened — ${String(any.claim ?? "")}` : (narration ?? String(any.detail ?? ""))}
+                      {gate ? `gate opened — ${e.claim ?? ""}` : (e.narration ?? e.detail ?? "")}
                     </div>
                     <div className="mt-1 flex flex-wrap items-baseline gap-1.5">
                       {e.project && <span className="tr-chip shrink-0">{e.project}</span>}
-                      <span className="tr-chip shrink-0">{gate ? "verify gate" : String(any.kind ?? "warn")}</span>
+                      <span className="tr-chip shrink-0">{gate ? "verify gate" : (e.kind ?? "warn")}</span>
                       {count > 1 && <span className="tr-chip shrink-0 text-[var(--color-tr-warn)]">×{count}</span>}
                       <span className="text-[11px] text-[var(--color-tr-muted)]">
                         {count > 1 ? <>{when(first)} → {when(last)}</> : when(last)}

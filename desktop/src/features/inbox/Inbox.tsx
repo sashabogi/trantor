@@ -38,7 +38,7 @@ export function Inbox({ client, me, onOpenConversation }: {
     if (!to || !text.trim() || sending) return;
     setSending(true); setErr(null);
     try { await client.send(to, text.trim()); setText(""); load(); }
-    catch (e) { setErr(String((e as Error).message || e)); }
+    catch (e) { setErr(e instanceof Error && e.message ? e.message : String(e)); }
     finally { setSending(false); }
   };
 

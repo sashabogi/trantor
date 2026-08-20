@@ -55,9 +55,25 @@ export type Card = {
   count?: number;
 };
 
+// Event payloads are heterogeneous by `type` — the fields below are named per the actual event
+// kinds that carry them, instead of an open `[k: string]: unknown` index that gave every consumer
+// license to read anything and cast its way there. Add a field here (not a cast at the call site)
+// the next time a new event kind needs one.
 export type HubEvent = {
   id?: number; ts: number; type: string; project?: string;
-  by?: string; taskId?: number; [k: string]: unknown;
+  by?: string; taskId?: number;
+  /** message events */
+  msgId?: number; text?: string; toSession?: string;
+  /** card events: created / moved / updated */
+  from?: string; to?: string; status?: string; title?: string;
+  /** file.claim / file.conflict */
+  file?: string; with?: string[];
+  /** overseer.warn / verify.gate.* roll-up fields */
+  kind?: string; detail?: string; claim?: string; narration?: string; files?: string[];
+  /** proposal.filed */
+  scope?: string;
+  /** verify.gate.opened */
+  reason?: string;
 };
 
 export type Message = {
@@ -101,14 +117,19 @@ export class HubClient {
   // Goes through RUST, not fetch(). macOS App Transport Security blocks cleartext HTTP from the
   // webview, so a hub on http://<tailnet>:4477 fails with an opaque "Load failed" that CSP cannot
   // fix. Routing via Rust also means the webview never handles a key or a signature — only JSON.
-  private async request<T>(method: string, path: string, payload?: unknown): Promise<T> {
+  // P is inferred from whatever object literal each call site builds (e.g. `{ id, status }`) —
+  // there is no one shape to name here, since this is the shared transport for every endpoint's
+  // own already-typed request body.
+  private async request<T, P = never>(method: string, path: string, payload?: P): Promise<T> {
     const body = payload === undefined ? undefined : JSON.stringify(payload);
     const res = await invoke<{ status: number; body: string }>("hub_request", {
       base: this.baseUrl, method, path, body: body ?? null,
     });
     if (res.status === 401) throw new HubAuthError(`not enrolled on ${this.baseUrl}`);
     if (res.status >= 400) throw new Error(`${method} ${path} → ${res.status}`);
-    return JSON.parse(res.body) as T;
+    // The return type carries the contract; JSON.parse's `any` result flows into it without a
+    // cast the same way it already does for doctor()/cardCode() below.
+    return JSON.parse(res.body);
   }
 
   tasks(project?: string) {
@@ -174,8 +195,8 @@ export class HubClient {
     return this.request<{ proposals: Proposal[]; pendingCount: number }>("GET", `/proposals${s ? "?" + s : ""}`);
   }
   /** THE human act in the governance loop — owner-signed via hub_request; nothing auto-approves. */
-  decideProposal(id: number, status: "approved" | "denied", note?: string) {
-    return this.request<{ ok: boolean; proposal: Proposal }>("POST", "/proposal/decide", { id, status, note });
+  decideProposal(id: number, status: "approved" | "denied", note?: string): Promise<{ ok: boolean; proposal: Proposal }> {
+    return this.request("POST", "/proposal/decide", { id, status, note });
   }
 
   /**
@@ -194,8 +215,8 @@ export class HubClient {
     const q = `?session=${encodeURIComponent(session)}&since=${since}&peek=1`;
     return this.request<{ messages: Message[]; cursor: number }>("GET", `/inbox${q}`);
   }
-  send(to: string, text: string, project?: string) {
-    return this.request<{ ok: boolean; id: number }>("POST", "/send", { to, text, project });
+  send(to: string, text: string, project?: string): Promise<{ ok: boolean; id: number }> {
+    return this.request("POST", "/send", { to, text, project });
   }
 
   /**
@@ -222,7 +243,8 @@ export class HubClient {
     void (async () => {
       unlisten = await listen<string>("hub-event", ev => {
         if (stopped) return;
-        try { onEvent(JSON.parse(ev.payload) as HubEvent); } catch { /* a bad frame must not kill the feed */ }
+        // onEvent expects a HubEvent; JSON.parse's `any` flows into that parameter with no cast.
+        try { onEvent(JSON.parse(ev.payload)); } catch { /* a bad frame must not kill the feed */ }
       });
       await invoke("start_stream", { base: this.baseUrl });
       onOpen?.();   // connected — distinct from "an event arrived", which may be much later on an idle project
@@ -340,9 +362,17 @@ export async function openCode(target: string, kind: "url" | "path" | "reveal" =
   return invoke("open_code", { target, kind });
 }
 
-export type EditorPref = "default" | "vscode" | "cursor" | "zed" | "reveal";
+const EDITOR_PREFS = ["default", "vscode", "cursor", "zed", "reveal"] as const;
+export type EditorPref = (typeof EDITOR_PREFS)[number];
+const EDITOR_PREF_SET: ReadonlySet<string> = new Set(EDITOR_PREFS);
+/** localStorage holds whatever a prior app version wrote; only trust it once it's been checked
+ * against the live set of prefs. */
+export function isEditorPref(s: string): s is EditorPref { return EDITOR_PREF_SET.has(s); }
 export function editorPref(): EditorPref {
-  try { return (localStorage.getItem("tr.editor") as EditorPref) || "default"; } catch { return "default"; }
+  try {
+    const v = localStorage.getItem("tr.editor");
+    return v !== null && isEditorPref(v) ? v : "default";
+  } catch { return "default"; }
 }
 export function setEditorPref(v: EditorPref) { try { localStorage.setItem("tr.editor", v); } catch {} }
 export function openFileInEditor(absPath: string) {

@@ -11,7 +11,7 @@
 // have to read two terminal windows to follow one exchange.
 import { useEffect, useMemo, useState } from "react";
 import type { Card, HubClient, HubEvent, Peer } from "../../shared/api/client";
-import { ProjectHeader } from "../project/ProjectHeader";
+import { ProjectHeader, type Lens } from "../project/ProjectHeader";
 import { Avatar, displayName } from "../../shared/Avatar";
 import { Composer } from "../../shared/Composer";
 import { CardDetail } from "../board/CardDetail";
@@ -40,7 +40,7 @@ function dayLabel(ts: number) {
 }
 
 export function Conversation({ client, project, me, lens, onLens }: {
-  client: HubClient; project: string; me: string; lens: string; onLens: (l: string) => void;
+  client: HubClient; project: string; me: string; lens: Lens; onLens: (l: Lens) => void;
 }) {
   const [msgs, setMsgs] = useState<Msg[]>([]);
   const [peers, setPeers] = useState<Peer[]>([]);
@@ -89,7 +89,7 @@ export function Conversation({ client, project, me, lens, onLens }: {
     if (!text.trim() || busy) return;
     setBusy(true); setErr(null);
     try { await client.send(to, text.trim(), project); setText(""); load(); }
-    catch (e) { setErr(String((e as Error).message || e)); }
+    catch (e) { setErr(e instanceof Error && e.message ? e.message : String(e)); }
     finally { setBusy(false); }
   };
 
@@ -262,15 +262,12 @@ export function Conversation({ client, project, me, lens, onLens }: {
 function toMsgs(events: HubEvent[]): Msg[] {
   return events
     .filter(e => e.type === "message")
-    .map(e => {
-      const a = e as Record<string, unknown>;
-      return {
-        id: Number(a.msgId ?? e.id ?? e.ts),
-        ts: e.ts,
-        by: String(e.by ?? "?"),
-        to: String(a.toSession ?? "all"),
-        text: String(a.text ?? ""),
-      };
-    })
+    .map(e => ({
+      id: e.msgId ?? e.id ?? e.ts,
+      ts: e.ts,
+      by: e.by ?? "?",
+      to: e.toSession ?? "all",
+      text: e.text ?? "",
+    }))
     .sort((x, y) => x.ts - y.ts);
 }

@@ -18,11 +18,11 @@ export function stateOf(p: Peer): PresenceState {
   return age < BUSY_MS ? "busy" : "idle";
 }
 
-export const PRESENCE_COLOR: Record<PresenceState, string> = {
+export const PRESENCE_COLOR = {
   busy: "var(--color-tr-doing)",
   idle: "var(--color-tr-muted)",
   offline: "var(--color-tr-edge)",
-};
+} as const satisfies Record<PresenceState, string>;
 
 export function ago(ts?: number) {
   if (!ts) return "never";
@@ -32,10 +32,12 @@ export function ago(ts?: number) {
   return `${Math.round(s / 3600)}h`;
 }
 
+export type PeersResult = { peers: Peer[] | null; error: string | null };
+
 /** Poll + presence-stream refresh, shared by every view that shows liveness. Presence decays on a
  * timer, so poll rather than relying purely on events — a peer going quiet produces no event until
  * the hub's sweep notices. */
-export function usePeers(client: HubClient): { peers: Peer[] | null; error: string | null } {
+export function usePeers(client: HubClient): PeersResult {
   const [peers, setPeers] = useState<Peer[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   useEffect(() => {

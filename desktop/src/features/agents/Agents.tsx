@@ -19,7 +19,7 @@ const projectOf = (session: string) => (session.includes(":") ? session.split(":
 
 // Live first, and busy before merely-online — the roster answers "who is working right now" before
 // it archives who has ever existed. Within a state, most-recently-seen first.
-const ORDER: Record<PresenceState, number> = { busy: 0, idle: 1, offline: 2 };
+const ORDER = { busy: 0, idle: 1, offline: 2 } as const satisfies Record<PresenceState, number>;
 const byLiveness = (a: Peer, b: Peer) =>
   ORDER[stateOf(a)] - ORDER[stateOf(b)] || (b.lastSeen ?? 0) - (a.lastSeen ?? 0);
 

@@ -10,7 +10,7 @@
 // it fronts a real in-process updater — download the release DMG, swap /Applications, relaunch.
 import { useEffect, useState } from "react";
 import { getVersion } from "@tauri-apps/api/app";
-import { HubClient, knownProjects, hubForProject, editorPref, setEditorPref, appUpdateCheck, appUpdateInstall } from "../../shared/api/client";
+import { HubClient, knownProjects, hubForProject, editorPref, setEditorPref, isEditorPref, appUpdateCheck, appUpdateInstall } from "../../shared/api/client";
 import type { AppUpdate, EditorPref } from "../../shared/api/client";
 import { Avatar } from "../../shared/Avatar";
 import { notificationsEnabled, setNotificationsEnabled } from "../../shared/notify";
@@ -55,7 +55,7 @@ export function Settings({ me, update: updateFromShell }: { me: string; update?:
     setInstalling(true); setUpdateErr("");
     // on success this never resolves — the app relaunches out from under us
     await appUpdateInstall(update).catch(e => {
-      setUpdateErr(String((e as Error)?.message ?? e));
+      setUpdateErr(e instanceof Error && e.message ? e.message : String(e));
       setInstalling(false);
     });
   };
@@ -202,7 +202,7 @@ export function Settings({ me, update: updateFromShell }: { me: string; update?:
                 Repos are found at <code>~/development/&lt;project&gt;</code> (override with <code>TRANTOR_DEV_ROOT</code>).
               </div>
             </div>
-            <select value={editor} onChange={e => { const v = e.target.value as EditorPref; setEditor(v); setEditorPref(v); }}
+            <select value={editor} onChange={e => { const v = e.target.value; if (isEditorPref(v)) { setEditor(v); setEditorPref(v); } }}
                     className="tr-input shrink-0">
               <option value="default">System default</option>
               <option value="vscode">VS Code</option>

@@ -21,10 +21,11 @@ import ollamaSvg from "@lobehub/icons-static-svg/icons/ollama.svg?raw";
 import codexSvg from "@lobehub/icons-static-svg/icons/codex.svg?raw";
 import openaiSvg from "@lobehub/icons-static-svg/icons/openai.svg?raw";
 import zaiSvg from "@lobehub/icons-static-svg/icons/zai.svg?raw";
+import { dictGet } from "./dict";
 
 type Brand = { svg: string; hex: string; label: string };
 
-const BRANDS: Record<string, Brand> = {
+const BRANDS = {
   claude:     { svg: claudeSvg, hex: "#D97757", label: "Claude" },
   anthropic:  { svg: claudeSvg, hex: "#D97757", label: "Claude" },
   codex:      { svg: codexSvg, hex: "#e8e8ee", label: "Codex" },
@@ -37,14 +38,15 @@ const BRANDS: Record<string, Brand> = {
   gemini:     { svg: geminiSvg, hex: "#8E75B2", label: "Gemini" },
   openrouter: { svg: openrouterSvg, hex: "#94A3B8", label: "OpenRouter" },
   ollama:     { svg: ollamaSvg, hex: "#c8c8d0", label: "Ollama" },
-};
+} as const satisfies Record<string, Brand>;
 
 const HOSTISH = /^(macbook|imac|mac[-.]|.*\.local$)|@/i;
 
 /** The brand for a session/name: "deepseek:crm-platform" → deepseek; "MacBook-Pro-M1:x" → claude. */
 export function brandFor(name: string, llm?: string): Brand | null {
   const key = (llm || name.split(":")[0] || "").toLowerCase().trim();
-  if (BRANDS[key]) return BRANDS[key];
+  const brand = dictGet(BRANDS, key);
+  if (brand) return brand;
   if (HOSTISH.test(name.split(":")[0] ?? "")) return BRANDS.claude;
   return null;
 }

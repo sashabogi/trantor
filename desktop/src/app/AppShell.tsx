@@ -13,6 +13,7 @@ import { appUpdateCheck, HubClient, hubForProject, knownProjects, localSessions,
 import { stateOf } from "../shared/presence";
 import { usePendingProposals } from "../shared/Proposals";
 import { ProjectIcon } from "../shared/ProjectIcon";
+import type { Lens } from "../features/project/ProjectHeader";
 
 const LOCAL_HUB = "http://127.0.0.1:4477";
 import { Home } from "../features/home/Home";
@@ -27,7 +28,6 @@ import { Settings } from "../features/settings/Settings";
 import { Conversation } from "../features/chat/Conversation";
 import { notifyIfWorthIt } from "../shared/notify";
 
-type Lens = "board" | "feed" | "chat";
 type Pane =
   | { kind: "home" }
   | { kind: "project"; lens: Lens }
@@ -91,9 +91,9 @@ export function AppShell() {
     let alive = true;
     const junk = (n: string) => n.startsWith("_") || n.startsWith(".") || n.startsWith("__");
     const pull = () => Promise.all([
-      knownProjects().catch(() => [] as string[]),
-      new HubClient(LOCAL_HUB).tasks().then(ts => [...new Set(ts.map(t => t.project).filter(Boolean))]).catch(() => [] as string[]),
-      new HubClient(LOCAL_HUB).peers().then(ps => [...new Set(ps.map(pr => pr.project || "").filter(Boolean))]).catch(() => [] as string[]),
+      knownProjects().catch((): string[] => []),
+      new HubClient(LOCAL_HUB).tasks().then(ts => [...new Set(ts.map(t => t.project).filter(Boolean))]).catch((): string[] => []),
+      new HubClient(LOCAL_HUB).peers().then(ps => [...new Set(ps.map(pr => pr.project || "").filter(Boolean))]).catch((): string[] => []),
     ]).then(([pinned, localCards, localPeers]) => {
       if (!alive) return;
       const found = [...pinned, ...localCards, ...localPeers].filter(n => n && !junk(n));
@@ -128,7 +128,7 @@ export function AppShell() {
       const urls = [...new Set([hub, LOCAL_HUB].filter(Boolean))];
       const [open, ...lists] = await Promise.all([
         localSessions(),
-        ...urls.map(u => new HubClient(u).peers().catch(() => [] as Peer[])),
+        ...urls.map(u => new HubClient(u).peers().catch((): Peer[] => [])),
       ]);
       if (!alive) return;
       const best = new Map<string, Peer>();
@@ -285,6 +285,9 @@ export function AppShell() {
             <NavItem key={kind} label={label} Icon={Icon}
                      badge={kind === "inbox" ? unread : kind === "home" ? pendingProposals : undefined}
                      on={pane.kind === kind}
+                     // SAFETY: every FLEET_NAV entry's `kind` is one of Pane's no-argument
+                     // variants (home/inbox/messages/agents/overseer/learning) — none of them
+                     // require fields beyond `kind`, so `{ kind }` alone is always a valid Pane.
                      onClick={() => setPane({ kind } as Pane)} />
           ))}
         </div>
@@ -348,9 +351,9 @@ export function AppShell() {
           : pane.kind === "learning" ? <Learning client={client} />
           : pane.kind === "overseer" ? <Overseer client={client} />
           : pane.kind === "settings" ? <Settings me={ME} update={update} />
-          : pane.lens === "board" ? <Board client={client} project={active} lens={pane.lens} onLens={l => setPane({ kind: "project", lens: l as Lens })} />
-          : pane.lens === "chat" ? <Conversation client={client} project={active} me={ME} lens={pane.lens} onLens={l => setPane({ kind: "project", lens: l as Lens })} />
-          : <Feed client={client} project={active} lens={pane.lens} onLens={l => setPane({ kind: "project", lens: l as Lens })} />}
+          : pane.lens === "board" ? <Board client={client} project={active} lens={pane.lens} onLens={l => setPane({ kind: "project", lens: l })} />
+          : pane.lens === "chat" ? <Conversation client={client} project={active} me={ME} lens={pane.lens} onLens={l => setPane({ kind: "project", lens: l })} />
+          : <Feed client={client} project={active} lens={pane.lens} onLens={l => setPane({ kind: "project", lens: l })} />}
       </main>
     </div>
   );

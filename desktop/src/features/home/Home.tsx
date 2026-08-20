@@ -20,7 +20,9 @@ type Snapshot = {
   cards: Card[]; peers: Peer[]; lessons: { text: string; scope: string; by: string; ts: number }[];
   handoffs: Handoff[];
 };
-const cache: { snap: Snapshot | null } = { snap: null };
+// Module-level so a pane switch away from Home and back repaints instantly from the last pull
+// instead of a blank screen while the next poll lands.
+let cachedSnap: Snapshot | null = null;
 
 function StatCard({ label, value, sub, tone }: { label: string; value: string; sub?: string; tone?: string }) {
   return (
@@ -35,7 +37,7 @@ function StatCard({ label, value, sub, tone }: { label: string; value: string; s
 export function Home({ client, me, onOpenProject }: {
   client: HubClient; me: string; onOpenProject: (project: string) => void;
 }) {
-  const [snap, setSnap] = useState<Snapshot | null>(cache.snap);
+  const [snap, setSnap] = useState<Snapshot | null>(cachedSnap);
 
   useEffect(() => {
     let alive = true;
@@ -45,10 +47,10 @@ export function Home({ client, me, onOpenProject }: {
       const [econ, balances, cards, peers, learning, handoffs] = await Promise.all([
         local.economics().catch(() => null),
         local.balances().catch(() => null),
-        client.tasks().catch(() => [] as Card[]),
-        client.peers().catch(() => [] as Peer[]),
+        client.tasks().catch((): Card[] => []),
+        client.peers().catch((): Peer[] => []),
         client.learning().catch(() => null),
-        client.handoffs().catch(() => [] as Handoff[]),
+        client.handoffs().catch((): Handoff[] => []),
       ]);
       if (!alive) return;
       const lessons = learning
@@ -56,7 +58,7 @@ export function Home({ client, me, onOpenProject }: {
             .sort((a, b) => (b.ts || 0) - (a.ts || 0)).slice(0, 6)
         : [];
       const s = { econ, balances, cards, peers, lessons, handoffs: handoffs.slice(0, 5) };
-      cache.snap = s;
+      cachedSnap = s;
       setSnap(s);
     };
     void pull();

@@ -12,6 +12,7 @@
 import { useState } from "react";
 import type { Card } from "../../shared/api/client";
 import { cleanTitle } from "../../shared/Avatar";
+import { dictGet } from "../../shared/dict";
 
 function runCount(card: Card): number {
   return Math.max(1, Number(card.count ?? 1) || 1);
@@ -23,17 +24,17 @@ function runCount(card: Card): number {
  * null when NOTHING in the group had a real figure, and the caller renders no cost at all. */
 function totalCost(cards: Card[]): number | null {
   let sum = 0, any = false;
-  for (const c of cards) if (typeof c.costUsd === "number") { sum += c.costUsd; any = true; }
+  for (const c of cards) if (c.costUsd != null) { sum += c.costUsd; any = true; }
   return any ? sum : null;
 }
 
 const formatCost = (v: number) => `$${v.toFixed(2)}`;
 
-const STATUS_COLOR: Record<string, string> = {
+const STATUS_COLOR = {
   doing: "var(--color-tr-doing)", testing: "var(--color-tr-warn)", done: "var(--color-tr-ok)",
   failed: "var(--color-tr-fail)", blocked: "var(--color-tr-fail)",
-};
-const statusColor = (s?: string) => STATUS_COLOR[s || ""] || "var(--color-tr-muted)";
+} as const satisfies Record<string, string>;
+const statusColor = (s?: string) => dictGet(STATUS_COLOR, s || "") || "var(--color-tr-muted)";
 
 export function SubagentGroup({ items, forceOpen, onOpen, variant = "lane" }: {
   items: Card[];
@@ -86,7 +87,7 @@ export function SubagentGroup({ items, forceOpen, onOpen, variant = "lane" }: {
                 <span className="block truncate">{child.agentType || "sub-agent"}</span>
                 <span className="block truncate text-[var(--color-tr-muted)]">{cleanTitle(child.title)}</span>
               </span>
-              {typeof child.costUsd === "number" && (
+              {child.costUsd != null && (
                 <span className="tr-mono shrink-0">{formatCost(child.costUsd)}</span>
               )}
             </button>

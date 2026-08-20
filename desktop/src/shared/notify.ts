@@ -27,32 +27,31 @@ async function ensurePermission(): Promise<boolean> {
 
 /** Returns a notification for an event, or null when it does not warrant interrupting a human. */
 export function notificationFor(ev: HubEvent, me: string, isOffline?: (session: string) => boolean): { title: string; body: string } | null {
-  const any = ev as Record<string, unknown>;
   if (ev.type === "message") {
     // toSession is the addressee; "all" is a broadcast and must never raise a notification.
-    const to = String(any.toSession ?? "");
+    const to = ev.toSession ?? "";
     if (!to || to === "all") return null;
-    if (to === me) return { title: `Message from ${ev.by ?? "an agent"}`, body: String(any.text ?? "").slice(0, 240) };
+    if (to === me) return { title: `Message from ${ev.by ?? "an agent"}`, body: (ev.text ?? "").slice(0, 240) };
     // The safe T3 of the wake ladder: an agent messaged a session that is OFFLINE. T1/T2 reach a
     // session that is running or stopping; nothing can safely reach one that is truly idle — except
     // the human. So the stuck message becomes YOUR notification: you are the only one who can wake it.
     if (to.includes(":") && isOffline?.(to)) {
       return {
         title: `${ev.by ?? "an agent"} → ${to} (idle)`,
-        body: `That session is offline and will only see this on its next turn: "${String(any.text ?? "").slice(0, 160)}"`,
+        body: `That session is offline and will only see this on its next turn: "${(ev.text ?? "").slice(0, 160)}"`,
       };
     }
     return null;
   }
   if (ev.type === "verify.gate.opened") {
-    return { title: "Verify gate opened", body: `${ev.project ?? ""} — ${String(any.reason ?? "a decision is needed")}`.trim() };
+    return { title: "Verify gate opened", body: `${ev.project ?? ""} — ${ev.reason ?? "a decision is needed"}`.trim() };
   }
   // Same class as a verify gate: an agent filed a bounded permission ask and is working around the
   // gap until the human rules. Filing is a transition (once per proposal), so this can't spam.
   if (ev.type === "proposal.filed") {
     return {
       title: `${ev.by ?? "an agent"} proposes a permission`,
-      body: `${ev.project ? `[${ev.project}] ` : ""}${String(any.scope ?? "").slice(0, 200)} — approve or deny on Home`,
+      body: `${ev.project ? `[${ev.project}] ` : ""}${(ev.scope ?? "").slice(0, 200)} — approve or deny on Home`,
     };
   }
   if (ev.type === "presence.offline" && String(ev.by ?? "").includes(":")) {

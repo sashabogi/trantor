@@ -3,6 +3,7 @@
 //
 //   node bin/slop-gate.mjs           # lint changed + untracked lintable files (the crew gate)
 //   node bin/slop-gate.mjs --all     # lint the whole configured surface (advisory audit)
+//   node bin/slop-gate.mjs --surface desktop/src   # lint ONE paid-off surface in full (hard gate in npm test)
 //
 // The rules are the vendored dmmulroy/anti-slop set (tools/oxlint/anti-slop — ours to tune):
 // they mechanically reject low-evidence AI patterns — unexplained type assertions, unknown
@@ -13,6 +14,10 @@
 import { execSync, spawnSync } from "node:child_process";
 
 const ALL = process.argv.includes("--all");
+// A surface that has burned its debt down to zero (desktop/src, #4798) is gated in FULL, not by
+// diff: the whole point of paying it off is that it stays paid. npm test runs this.
+const SURFACE_AT = process.argv.indexOf("--surface");
+const SURFACE = SURFACE_AT > -1 ? process.argv[SURFACE_AT + 1] : null;
 const LINTABLE = /\.(ts|tsx|mts|cts|js|jsx|mjs|cjs)$/;
 
 function sh(cmd) {
@@ -21,7 +26,9 @@ function sh(cmd) {
 }
 
 let args;
-if (ALL) {
+if (SURFACE) {
+  args = [SURFACE];
+} else if (ALL) {
   args = ["."];
 } else {
   const changed = sh("git diff --name-only HEAD");
@@ -40,9 +47,10 @@ const hits = out.split("\n").filter(l => /error\s+anti-slop\(/.test(l));
 
 if (hits.length) {
   console.log(hits.join("\n"));
-  console.log(`\nslop-gate: ${hits.length} anti-slop error(s) in your changes — fix them (or state the SAFETY invariant) before moving the card to testing.`);
+  const where = SURFACE ? `in ${SURFACE} (a zero-debt surface — keep it at zero)` : "in your changes";
+  console.log(`\nslop-gate: ${hits.length} anti-slop error(s) ${where} — fix them (or state the SAFETY invariant) before moving the card to testing.`);
   process.exit(1);
 }
 const warnings = out.split("\n").filter(l => /\bwarning\b/.test(l)).length;
-console.log(`slop-gate: clean${warnings ? ` (${warnings} advisory warning(s) — not gating)` : ""}.`);
+console.log(`slop-gate${SURFACE ? ` (${SURFACE})` : ""}: clean${warnings ? ` (${warnings} advisory warning(s) — not gating)` : ""}.`);
 process.exit(0);

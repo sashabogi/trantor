@@ -10,10 +10,12 @@ import { useEffect, useState } from "react";
 import { cardCode, openFileInEditor, openCode } from "../../shared/api/client";
 import type { Card, CardCode, HubClient, HubEvent, Message } from "../../shared/api/client";
 import { AgentChip, cleanTitle } from "../../shared/Avatar";
+import { dictGet } from "../../shared/dict";
 
 // Same flow map as the board: testing is a real gate the crew protocol depends on, so the drawer
-// must not offer a shortcut the protocol forbids either.
-const NEXT: Record<string, string> = { todo: "doing", doing: "testing", testing: "done" };
+// must not offer a shortcut the protocol forbids either. Keyed by a card's live `status`, not a
+// closed type client-side, so lookups go through `dictGet` rather than indexing directly.
+const NEXT = { todo: "doing", doing: "testing", testing: "done" } as const satisfies Record<string, string>;
 const FLOW = ["todo", "doing", "testing", "done"];
 
 // What the drawer lets a human do with a card's status. Forward: ONE step (the gate stays a gate).
@@ -21,11 +23,12 @@ const FLOW = ["todo", "doing", "testing", "done"];
 // gate. Exception lanes (failed/blocked/stale) re-enter the flow at todo or doing.
 function allowedMoves(status: string): string[] {
   const i = FLOW.indexOf(status);
-  if (i >= 0) return [...FLOW.slice(0, i), ...(NEXT[status] ? [NEXT[status]] : [])];
+  const next = dictGet(NEXT, status);
+  if (i >= 0) return [...FLOW.slice(0, i), ...(next ? [next] : [])];
   return ["todo", "doing"];
 }
 
-const STATUS_COLOR: Record<string, string> = {
+const STATUS_COLOR = {
   todo: "var(--color-tr-muted)",
   doing: "var(--color-tr-doing)",
   testing: "var(--color-tr-warn)",
@@ -33,15 +36,14 @@ const STATUS_COLOR: Record<string, string> = {
   failed: "var(--color-tr-fail)",
   blocked: "var(--color-tr-fail)",
   stale: "var(--color-tr-muted)",
-};
+} as const satisfies Record<string, string>;
 
 type Row = { ts: number; by: string; kind: "event" | "message"; text: string };
 
 function rows(events: HubEvent[], messages: Message[]): Row[] {
   const out: Row[] = [];
   for (const e of events) {
-    const any = e as Record<string, unknown>;
-    const move = any.from && any.to ? `${String(any.from)} → ${String(any.to)}` : String(e.type);
+    const move = e.from && e.to ? `${e.from} → ${e.to}` : e.type;
     out.push({ ts: e.ts, by: e.by ?? "", kind: "event", text: move });
   }
   for (const m of messages) out.push({ ts: m.ts, by: m.from, kind: "message", text: m.text });
@@ -83,7 +85,7 @@ export function CardDetail({ client, id, onClose, onMoved, onOpen }: {
   // rather than replaying hub-side mutation logic client-side.
   useEffect(() => {
     return client.streamEvents(ev => {
-      if (ev.taskId === id || (ev.type === "message" && new RegExp(`#${id}(?![0-9])`).test(String((ev as Record<string, unknown>).text ?? "")))) {
+      if (ev.taskId === id || (ev.type === "message" && new RegExp(`#${id}(?![0-9])`).test(ev.text ?? ""))) {
         void load();
       }
     });
@@ -106,12 +108,12 @@ export function CardDetail({ client, id, onClose, onMoved, onOpen }: {
             <span className="tr-mono text-xs text-[var(--color-tr-muted)]">#{id}</span>
             {task && (
               <span className="rounded px-1.5 py-0.5 text-[11px] uppercase tracking-wide"
-                    style={{ background: "rgba(0,0,0,.3)", color: STATUS_COLOR[task.status] ?? "var(--color-tr-muted)" }}>
+                    style={{ background: "rgba(0,0,0,.3)", color: dictGet(STATUS_COLOR, task.status) ?? "var(--color-tr-muted)" }}>
                 {task.status}
               </span>
             )}
             {task && moves.map(s => {
-              const forward = s === NEXT[task.status];
+              const forward = s === dictGet(NEXT, task.status);
               return (
                 <button key={s} onClick={() => moveTo(s)}
                         title={forward ? `advance to ${s}` : `move back to ${s}`}
@@ -135,7 +137,7 @@ export function CardDetail({ client, id, onClose, onMoved, onOpen }: {
               {task.difficulty && <span className="rounded bg-black/30 px-1.5 py-0.5">{task.difficulty}</span>}
               {task.model && <span className="rounded bg-black/30 px-1.5 py-0.5">{task.model}</span>}
               {task.source && <span className="rounded bg-black/30 px-1.5 py-0.5">{task.source}</span>}
-              {typeof task.costUsd === "number" && <span className="rounded bg-black/30 px-1.5 py-0.5">${task.costUsd.toFixed(2)}</span>}
+              {task.costUsd != null && <span className="rounded bg-black/30 px-1.5 py-0.5">${task.costUsd.toFixed(2)}</span>}
             </div>
           )}
           {/* A commit and the session work it finished point at each other. Following the link is

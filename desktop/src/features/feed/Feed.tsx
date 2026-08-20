@@ -6,7 +6,7 @@
 import { useEffect, useMemo, useState } from "react";
 import type { HubClient, HubEvent } from "../../shared/api/client";
 import { CardDetail } from "../board/CardDetail";
-import { ProjectHeader } from "../project/ProjectHeader";
+import { ProjectHeader, type Lens } from "../project/ProjectHeader";
 import { AgentChip, cleanTitle } from "../../shared/Avatar";
 
 const KIND_COLOR = (t: string) =>
@@ -32,39 +32,38 @@ type ChipKey = (typeof CHIPS)[number]["key"];
 
 function label(e: HubEvent): string {
   const t = e.type;
-  const any = e as Record<string, unknown>;
-  if (t === "message") return String(any.text ?? "");
+  if (t === "message") return e.text ?? "";
   if (CARD_TYPES.has(t)) {
     // narrate the card's movement, not its schema: "#3986 → testing · P1-D Social UI"
-    const move = any.from && any.to ? `${String(any.from)} → ${String(any.to)}`
-      : any.status ? `→ ${String(any.status)}` : t;
-    const title = any.title ? ` · ${cleanTitle(String(any.title))}` : "";
+    const move = e.from && e.to ? `${e.from} → ${e.to}`
+      : e.status ? `→ ${e.status}` : t;
+    const title = e.title ? ` · ${cleanTitle(e.title)}` : "";
     return `#${e.taskId ?? "?"} ${move}${title}`;
   }
-  if (t === "focus") return `now working on: ${cleanTitle(String(any.title ?? ""))}`;
-  if (t === "file.claim") return `editing ${String(any.file ?? "a file")}`;
-  if (t === "file.conflict") return `⚠ editing ${String(any.file ?? "a file")} at the same time as ${Array.isArray(any.with) ? (any.with as string[]).join(", ") : "another session"}`;
+  if (t === "focus") return `now working on: ${cleanTitle(e.title ?? "")}`;
+  if (t === "file.claim") return `editing ${e.file ?? "a file"}`;
+  if (t === "file.conflict") return `⚠ editing ${e.file ?? "a file"} at the same time as ${Array.isArray(e.with) ? e.with.join(", ") : "another session"}`;
   if (t === "project.adopted") return `project adopted onto this hub`;
-  if (t === "lesson") return `recorded a lesson: ${cleanTitle(String(any.text ?? ""))}`;
+  if (t === "lesson") return `recorded a lesson: ${cleanTitle(e.text ?? "")}`;
   if (t.startsWith("presence")) return `${t.split(".")[1] ?? t}`;
   if (t.startsWith("handoff")) return `wrote a handoff`;
   if (t.startsWith("verify")) return `verify gate ${t.split(".").slice(1).join(" ")}`;
-  const known = String(any.title ?? any.text ?? "");
+  const known = e.title ?? e.text ?? "";
   return known ? cleanTitle(known) : t;
 }
 
 // The card an event leads to: card events carry taskId; a message mentions one as "#123".
 function cardRef(e: HubEvent): number | null {
-  if (typeof e.taskId === "number") return e.taskId;
+  if (e.taskId != null) return e.taskId;
   if (e.type === "message") {
-    const m = /#(\d+)(?![0-9])/.exec(String((e as Record<string, unknown>).text ?? ""));
+    const m = /#(\d+)(?![0-9])/.exec(e.text ?? "");
     if (m) return Number(m[1]);
   }
   return null;
 }
 
 export function Feed({ client, project, lens, onLens }: {
-  client: HubClient; project: string; lens: string; onLens: (l: string) => void;
+  client: HubClient; project: string; lens: Lens; onLens: (l: Lens) => void;
 }) {
   const [events, setEvents] = useState<HubEvent[]>([]);
   const [live, setLive] = useState(false);
@@ -96,7 +95,7 @@ export function Feed({ client, project, lens, onLens }: {
   const active = CHIPS.find(c => c.key === chip) ?? CHIPS[0];
   const visible = useMemo(() => events.filter(active.test), [events, active]);
   const counts = useMemo(() => {
-    const out = {} as Record<ChipKey, number>;
+    const out: Partial<Record<ChipKey, number>> = {};
     for (const c of CHIPS) out[c.key] = c.key === "all" ? events.length : events.filter(c.test).length;
     return out;
   }, [events]);
