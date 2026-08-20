@@ -99,12 +99,12 @@ async function seedCursor() {
 // mints a random id at boot — its lifetime ≈ the session's. The endorsed subkey it keys signs all
 // traffic; the durable identity keeps enrollment and attribution.
 const INSTANCE_ID = `mcp-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
-async function api(method, path, payload) {
+async function api(method, path, payload, { timeoutMs } = {}) {
   // PROJECT explicitly, never the client's cwd fallback: this server's project is fixed at boot,
   // and letting the hub be re-derived per call is how a session ends up writing to two hubs.
   const r = method.toUpperCase() === "GET"
-    ? await signedGet(path, { session: SESSION, instance: INSTANCE_ID, project: PROJECT })
-    : await signedPost(path, payload, { session: SESSION, instance: INSTANCE_ID, project: PROJECT });
+    ? await signedGet(path, { session: SESSION, instance: INSTANCE_ID, project: PROJECT, timeoutMs })
+    : await signedPost(path, payload, { session: SESSION, instance: INSTANCE_ID, project: PROJECT, timeoutMs });
   if (!r.ok) throw new Error(`hub ${r.status} on ${path}`);
   return r.json;
 }
@@ -312,7 +312,11 @@ server.tool("relay_wait", "Block up to `timeout` seconds waiting for the next me
     // resolves inline on every current client instead of being shipped to the background.
     const w = Math.min(timeout ?? 25, 110);
     await seedCursor();
-    const { messages, cursor: c } = await api("GET", `/poll?session=${encodeURIComponent(SESSION)}&since=${cursor}&wait=${w}`);
+    // The client-side deadline must OUTLIVE the hub's hold. Since reads moved onto the shared
+    // signed client, this call inherited its 1.5s default — so every long-poll that had no message
+    // already waiting was aborted at 1.5s and surfaced as "hub 0 on /poll". Parking was dead: the
+    // tool erred on every quiet wait and only ever "worked" when a message beat the abort.
+    const { messages, cursor: c } = await api("GET", `/poll?session=${encodeURIComponent(SESSION)}&since=${cursor}&wait=${w}`, undefined, { timeoutMs: (w + 15) * 1000 });
     cursor = c;
     return { content: [{ type: "text", text: messages.length ? messages.map(fmt).join("\n") : "(timed out, no message)" }] };
   });
