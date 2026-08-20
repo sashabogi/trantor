@@ -35,7 +35,11 @@ function patchJson(path, mutate) {
   return exists ? "wired" : "wired (new config)";
 }
 
-const relayEnv = (agent) => ({ RELAY_URL: URL_, RELAY_AGENT: agent });
+// NO RELAY_URL here. A hardcoded URL in a CLI's MCP config OVERRIDES the per-project hub pin
+// (env wins in resolveHub), which silently sent every crew seat's relay tools to the local hub
+// while its runner sat on the pinned one — the residual split-brain mechanism (2026-08-20).
+// mcp.mjs resolves the hub from the session's project pin; that resolution must stay in charge.
+const relayEnv = (agent) => ({ RELAY_AGENT: agent });
 
 // ---- Claude Code: plugin handles it; verify only ----
 if (has("claude")) {
@@ -53,7 +57,7 @@ if (has("codex")) {
   const cur = existsSync(p) ? readFileSync(p, "utf8") : "";
   if (cur.includes("[mcp_servers.relay]")) report("codex", "already wired");
   else {
-    const block = `\n# trantor — auto-registers each Codex session on the bus + adds relay_* tools\n[mcp_servers.relay]\ncommand = "node"\nargs = ["${MCP}"]\nenv = { RELAY_URL = "${URL_}", RELAY_AGENT = "codex" }\n`;
+    const block = `\n# trantor — auto-registers each Codex session on the bus + adds relay_* tools\n# (no RELAY_URL on purpose: the per-project hub pin decides the hub)\n[mcp_servers.relay]\ncommand = "node"\nargs = ["${MCP}"]\nenv = { RELAY_AGENT = "codex" }\n`;
     if (!DRY) { if (existsSync(p)) backup(p); else mkdirSync(dirname(p), { recursive: true }); writeFileSync(p, cur + block); }
     report("codex", cur ? "wired" : "wired (new config)", p);
   }
