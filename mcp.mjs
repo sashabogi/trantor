@@ -12,6 +12,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { advise } from "./bin/advise.mjs";
 import { resolveProject, hostId, resolveHub } from "./lib/project.mjs";
 import { signedPost, signedGet } from "./hooks/lib/api.mjs";
+import { anchorCursor } from "./hooks/lib/inbox-ledger.mjs";
 import { assertNoSecrets } from "./lib/scrub.mjs";
 
 // ---- runtime dep resolution -------------------------------------------------
@@ -74,18 +75,19 @@ const SESSION = process.env.RELAY_SESSION
 let cursor = 0;
 // First-call guard: a brand-new MCP process must NOT replay the entire historical backlog (observed:
 // 2,379 msgs / 520KB back to an old asteroids project) the instant relay_inbox/relay_wait is called.
-// Seed the cursor to the current max deliverable id once, exactly like hooks/inbox-deliver.mjs does on
-// its first run. The seed uses a non-peek /inbox so the hub's shared delivery ledger advances too —
-// telling stop-inbox "this session is caught up to now", so a fresh session isn't blocked on backlog it
-// was never meant to act on. After the seed, the model starts listening "from now".
+// The seed anchors to BOOT (this server starts with the session), never to the time of the first call:
+// seeding to "now at first call" swallowed #7282 on 2026-08-20 — the call came 33 minutes into the
+// session, prompted by a nudge ABOUT that message. PEEK only: the hooks own the hub's delivery ledger
+// (sessionstart claims the pre-start backlog); a non-peek seed here marked unseen messages delivered.
+const BOOT_TS = Date.now();
 let cursorSeeded = false;
 async function seedCursor() {
   if (cursorSeeded) return;
-  cursorSeeded = true;
   try {
-    const r = await api("GET", `/inbox?session=${encodeURIComponent(SESSION)}&since=0`);
-    cursor = r?.cursor || 0;
-  } catch { /* hub down: the subsequent real call surfaces the error; leave cursor at 0 */ }
+    const r = await api("GET", `/inbox?session=${encodeURIComponent(SESSION)}&since=0&peek=1`);
+    cursor = anchorCursor(r?.messages, BOOT_TS);
+    cursorSeeded = true;
+  } catch { /* hub down: the subsequent real call surfaces the error; retry the seed next time */ }
 }
 
 // Every hub call is SIGNED with this session's Ed25519 keypair (TDD §7.3) via the shared client in

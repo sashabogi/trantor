@@ -18,23 +18,28 @@
 //
 // Cheap + fail-silent by contract: a per-session poll stamp gates the network call, a short
 // fetch timeout means we never add real latency, and we ALWAYS exit clean with valid stdout.
-// First run initialises the cursor to "now" (current max id) and injects NOTHING, so a
-// session is never flooded with the whole backlog of old broadcasts on its first tool call.
+// First run anchors the cursor to SESSION START (hooks/lib/inbox-ledger.mjs): backlog from before
+// the session is never replayed, while anything that arrived on this session's watch is delivered
+// even when the very first poll failed.
 import { readFileSync, writeFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
 import { resolveProject, hostId } from "../lib/project.mjs";
 import { signedGet } from "./lib/api.mjs";   // signed: enforce hubs 401 unsigned reads — unsigned, T1 delivery is silently dead
+import { ledgerPaths, ensureStart, anchorCursor, writeCursor } from "./lib/inbox-ledger.mjs";
 
 const POLL_MS = Number(process.env.RELAY_INBOX_POLL_MS || 4000);
 const FETCH_TIMEOUT_MS = Number(process.env.RELAY_INBOX_TIMEOUT_MS || 1500);
+// The first poll of a session also enrolls its instance key on the hub (up to 4s on a remote hub);
+// 1.5s guaranteed it timed out and the seed slid to a later, random tool call. Paid once per session.
+const FIRST_RUN_TIMEOUT_MS = Number(process.env.RELAY_INBOX_FIRST_TIMEOUT_MS || 4000);
 
 // Keep injected text safe to embed in JSON: drop control chars that could corrupt the
 // additionalContext payload (the model still gets the readable message).
 function sanitize(s) { return String(s == null ? "" : s).replace(/[\x00-\x1f\x7f-\x9f]/g, " "); }
 
-async function getInbox(session, since, instance, project) {
-  const { ok, json } = await signedGet(`/inbox?session=${encodeURIComponent(session)}&since=${since}`, { timeoutMs: FETCH_TIMEOUT_MS, session, instance, project });
+async function getInbox(session, since, instance, project, { peek = false, timeoutMs = FETCH_TIMEOUT_MS } = {}) {
+  const { ok, json } = await signedGet(`/inbox?session=${encodeURIComponent(session)}&since=${since}${peek ? "&peek=1" : ""}`, { timeoutMs, session, instance, project });
   if (!ok || !json) throw new Error("hub unreachable");
   return json;   // { messages: [...], cursor, superseded? }
 }
@@ -86,10 +91,11 @@ async function main(stdinRaw) {
   const session = process.env.RELAY_SESSION
     || (process.env.RELAY_AGENT ? `${process.env.RELAY_AGENT}:${project}` : `${hostId()}:${project}`);
 
-  const safe = (session + (instanceId ? `@${instanceId.slice(0, 8)}` : "")).replace(/[^A-Za-z0-9_.@-]/g, "_");
-  const dir = join(homedir(), ".agent-bus");
-  const pollStamp = join(dir, `inbox-poll-${safe}.stamp`);
-  const cursorFile = join(dir, `inbox-cursor-${safe}.id`);
+  const paths = ledgerPaths(session, instanceId);
+  const { pollStamp, cursorFile } = paths;
+  // Session start, as this ledger knows it: stamped before any network call so a failed first poll
+  // can't move it. Written on the first run of the session (sessionstart.mjs usually got there first).
+  const startTs = ensureStart(paths);
 
   // Throttle: poll the hub at most once per POLL_MS. Write the stamp BEFORE the network call
   // so a burst of parallel tool calls doesn't all fire (and double-deliver).
@@ -101,18 +107,20 @@ async function main(stdinRaw) {
   } catch {}
   try { writeFileSync(pollStamp, String(Date.now())); } catch {}
 
-  // First run: no cursor yet. Initialise to the current max deliverable id and inject NOTHING,
-  // so we start listening "from now" instead of replaying the whole backlog of old broadcasts.
-  if (!existsSync(cursorFile)) {
-    try {
-      const { cursor } = await getInbox(session, 0, instanceId, project);
-      writeFileSync(cursorFile, String(cursor || 0));
-    } catch {}
-    return "{}";
-  }
-
   let cursor = 0;
-  try { cursor = Number(readFileSync(cursorFile, "utf8")) || 0; } catch {}
+  if (!existsSync(cursorFile)) {
+    // First successful run: PEEK the whole inbox and anchor to session start. Backlog from before the
+    // session is skipped (and claimed below, so the hub's ledger agrees); anything newer falls through
+    // to the normal path and is delivered right now. On failure write nothing — the start stamp keeps
+    // the anchor honest for the next attempt.
+    try {
+      const res = await getInbox(session, 0, instanceId, project, { peek: true, timeoutMs: FIRST_RUN_TIMEOUT_MS });
+      cursor = anchorCursor(res.messages, startTs);
+      writeCursor(paths, cursor);
+    } catch { return "{}"; }
+  } else {
+    try { cursor = Number(readFileSync(cursorFile, "utf8")) || 0; } catch {}
+  }
 
   let messages = [], next = cursor, superseded = false;
   try {

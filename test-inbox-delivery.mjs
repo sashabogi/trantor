@@ -151,6 +151,69 @@ async function testStopHook() {
   ok("surfacing it DOES claim delivery (receipt advances)", led >= dm3, `deliveredUpTo=${led} dm3=${dm3}`);
 }
 
+
+// ---------------------------------------------------------------- the seed anchors to SESSION START
+// 2026-08-20, crebral-health #7282: the first PostToolUse poll timed out, so the "seed to now" slid to the
+// next tool call 33 minutes later and swallowed (and marked delivered) the message a nudge had just
+// announced. The seed must anchor to session start, whenever the first SUCCESSFUL poll happens.
+async function testStartAnchor() {
+  console.log("\nFirst run: the seed anchors to session start, not to the first successful poll:");
+  const { anchorCursor, ledgerPaths } = await import("./hooks/lib/inbox-ledger.mjs");
+  ok("anchorCursor: newest id at or before start", anchorCursor([{ id: 1, ts: 10 }, { id: 2, ts: 20 }, { id: 3, ts: 30 }], 20) === 2);
+  ok("anchorCursor: nothing before start -> 0", anchorCursor([{ id: 5, ts: 50 }], 10) === 0);
+  ok("anchorCursor: empty inbox -> 0", anchorCursor([], 10) === 0 && anchorCursor(undefined, 10) === 0);
+
+  const S = "h:anchortest", INST = "11112222-aaaa-bbbb-cccc-333344445555";
+  const paths = ledgerPaths(S, INST, join(dir, ".agent-bus"));
+  mkdirSync(paths.dir, { recursive: true });
+  const runDeliver = () => {
+    const out = execFileSync(process.execPath, [join(HERE, "hooks", "inbox-deliver.mjs")], {
+      input: JSON.stringify({ session_id: INST, cwd: HERE, tool_name: "Bash" }),
+      env: { ...process.env, RELAY_URL: URL_BASE, RELAY_SESSION: S, RELAY_PROJECT: "anchortest", HOME: dir, RELAY_INBOX_POLL_MS: "0" },
+      timeout: 15000, encoding: "utf8",
+    });
+    try { return JSON.parse(out || "{}"); } catch { return { _unparseable: out }; }
+  };
+  await post("/register", { session: S, project: "anchortest" });
+  await post("/register", { session: "h:sender", project: "anchortest" });
+
+  // backlog from BEFORE the session started, then the session starts, then a message on its watch
+  const { id: old } = await post("/send", { from: "h:sender", to: S, text: "ancient backlog, never replay this" });
+  await sleep(30);
+  writeFileSync(paths.startFile, String(Date.now()));     // the session starts here (first poll "failed": no cursor file)
+  await sleep(30);
+  const { id: fresh } = await post("/send", { from: "h:sender", to: S, text: "arrived on this session's watch" });
+
+  const first = runDeliver();   // the first SUCCESSFUL poll, late
+  const ctx = first?.hookSpecificOutput?.additionalContext || "";
+  ok("a late first poll still delivers what arrived after session start", ctx.includes("arrived on this session's watch"), JSON.stringify(first).slice(0, 200));
+  ok("...and never replays the pre-start backlog", !ctx.includes("ancient backlog"));
+  ok("cursor file lands past the delivered message", Number(readFileSync(paths.cursorFile, "utf8")) >= fresh, readFileSync(paths.cursorFile, "utf8"));
+  const led = (await get(`/peer?session=${encodeURIComponent(S)}`)).body.deliveredUpTo;
+  ok("hub receipt covers the backlog too (it will not escalate as undelivered)", led >= old, `deliveredUpTo=${led} old=${old}`);
+
+  const second = runDeliver();
+  ok("second run is quiet", !second?.hookSpecificOutput, JSON.stringify(second).slice(0, 120));
+
+  // the Stop hook with NO cursor yet: anchors the same way and still blocks on a post-start DM
+  const S2 = "h:anchorstop", INST2 = "99998888-aaaa-bbbb-cccc-777766665555";
+  const p2 = ledgerPaths(S2, INST2, join(dir, ".agent-bus"));
+  await post("/register", { session: S2, project: "anchortest" });
+  await post("/send", { from: "h:sender", to: S2, text: "before S2 existed" });
+  await sleep(30);
+  writeFileSync(p2.startFile, String(Date.now()));
+  await sleep(30);
+  await post("/send", { from: "h:sender", to: S2, text: "S2 you there" });
+  const stop = execFileSync(process.execPath, [join(HERE, "hooks", "stop-inbox.mjs")], {
+    input: JSON.stringify({ stop_hook_active: false, cwd: HERE, session_id: INST2 }),
+    env: { ...process.env, RELAY_URL: URL_BASE, RELAY_SESSION: S2, RELAY_PROJECT: "anchortest", HOME: dir },
+    timeout: 15000, encoding: "utf8",
+  });
+  let stopOut = {}; try { stopOut = JSON.parse(stop || "{}"); } catch { stopOut = { _unparseable: stop }; }
+  ok("Stop hook with no cursor yet blocks on the post-start DM", stopOut.decision === "block" && String(stopOut.reason).includes("S2 you there"), JSON.stringify(stopOut).slice(0, 160));
+  ok("...without dragging in the pre-start backlog", !String(stopOut.reason).includes("before S2 existed"));
+}
+
 // ---------------------------------------------------------------- run
 try {
   await startHub();
@@ -159,6 +222,7 @@ try {
 
   await testStopHook();
 
+  await testStartAnchor();
 
 } catch (e) {
   fail++; console.log(`  ✗ harness error: ${e && e.message}`);

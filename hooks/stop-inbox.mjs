@@ -26,6 +26,7 @@ import { join } from "node:path";
 import { homedir } from "node:os";
 import { resolveProject, hostId } from "../lib/project.mjs";
 import { signedGet } from "./lib/api.mjs";   // signed: enforce hubs 401 unsigned reads — unsigned, T2 delivery is silently dead
+import { ledgerPaths, ensureStart, anchorCursor, writeCursor } from "./lib/inbox-ledger.mjs";
 
 const FETCH_TIMEOUT_MS = Number(process.env.RELAY_STOP_TIMEOUT_MS || 1500);
 
@@ -66,14 +67,23 @@ async function main() {
   // Same instance id + per-instance cursor as inbox-deliver (docs/INSTANCE-KEYS-CONTRACT.md):
   // T1 and T2 share one ledger within a session; a baton twin gets its own.
   const instanceId = String(input.session_id || "");
-  const safe = (session + (instanceId ? `@${instanceId.slice(0, 8)}` : "")).replace(/[^A-Za-z0-9_.@-]/g, "_");
-  const cursorFile = join(homedir(), ".agent-bus", `inbox-cursor-${safe}.id`);
-  // No cursor yet means inbox-deliver has never run for this session; it initialises to "now" on its
-  // first tool call. Blocking on the whole backlog of old messages would be a terrible first impression.
-  if (!existsSync(cursorFile)) return allow();
-
+  const paths = ledgerPaths(session, instanceId);
+  const cursorFile = paths.cursorFile;
   let cursor = 0;
-  try { cursor = Number(readFileSync(cursorFile, "utf8")) || 0; } catch { return allow(); }
+  if (existsSync(cursorFile)) {
+    try { cursor = Number(readFileSync(cursorFile, "utf8")) || 0; } catch { return allow(); }
+  } else {
+    // No cursor yet: no poll has succeeded this session. Anchor to session start (the same ledger
+    // inbox-deliver uses) so a message that arrived on this session's watch still blocks the stop,
+    // while the backlog from before it never does.
+    const startTs = ensureStart(paths);
+    try {
+      const seed = await signedGet(`/inbox?session=${encodeURIComponent(session)}&since=0&peek=1`, { timeoutMs: FETCH_TIMEOUT_MS, session, instance: instanceId, project });
+      if (!seed.ok) return allow();
+      cursor = anchorCursor(seed.json?.messages, startTs);
+      writeCursor(paths, cursor);
+    } catch { return allow(); }
+  }
 
   let messages = [];
   try {

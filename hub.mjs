@@ -393,7 +393,7 @@ function dutyTick() {
     if ((state.peers[m.to]?.deliveredUpTo || 0) >= m.id) continue;
     dutyEscalated.add(m.id);
     hubSend(DUTY_SESSION,
-      `⚠️ UNDELIVERED for ${Math.round((now() - m.ts) / 60000)}m: #${m.id} ${m.from} -> ${m.to} — "${String(m.text).slice(0, 280)}" — the recipient has not been handed this. Triage: is the recipient's session idle, deaf (wrong hub / old hooks), or gone? Relay, wake, or note it on their board.`,
+      `⚠️ UNDELIVERED for ${Math.round((now() - m.ts) / 60000)}m: #${m.id} ${m.from} -> ${m.to} — "${String(m.text).slice(0, 280)}" — the recipient has not been handed this (recipient last seen ${state.peers[m.to]?.lastSeen ? Math.round((now() - state.peers[m.to].lastSeen) / 60000) + "m ago" : "never"}). Triage: is the recipient's session idle, deaf (wrong hub / old hooks), or gone? Relay, wake, or note it on their board.`,
       m.project || "");
   }
   if (dutyEscalated.size > 5000) { let n = dutyEscalated.size - 4000; for (const k of dutyEscalated) { dutyEscalated.delete(k); if (--n <= 0) break; } }

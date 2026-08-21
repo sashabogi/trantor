@@ -16,6 +16,7 @@ import { formatSubagentManifest } from "../lib/subagent-manifest.mjs";
 import { updateAvailable, maybeNotifyDesktop, readConfig } from "./lib/update-check.mjs";
 import { maybeCheckBalances } from "./lib/balance-check.mjs";
 import { relayUrl, getJSON, signedGet, signedPost } from "./lib/api.mjs";
+import { ledgerPaths, ensureStart, anchorCursor, writeCursor } from "./lib/inbox-ledger.mjs";
 
 // Load the most recent UNCONSUMED handoff for this project (written by precompact.mjs
 // / the heartbeat early-warning). `claim` marks it consumed so exactly one session
@@ -153,8 +154,8 @@ try {
   await jpost(`${url}/register`, { session, project, status: `active in ${project}` }, session).catch(() => {});
 
   // fetch roster of OTHER online sessions
-  let peers = [];
-  try { peers = (await jget(`${url}/peers`, session)).peers || []; } catch {}
+  let peers = [], hubAnswered = false;
+  try { peers = (await jget(`${url}/peers`, session)).peers || []; hubAnswered = true; } catch {}
   const others = peers.filter(p => p.online && p.session !== session);
 
   process.stderr.write(`[trantor] registered as ${session} -> ${url} (${others.length} other live session(s))\n`);
@@ -196,8 +197,10 @@ try {
     try {
       const __t0 = process.hrtime.bigint();
       const __elapsedMs = () => Number(process.hrtime.bigint() - __t0) / 1e6;
-      const runners  = safeInv(() => (typeof res.liveRunners === "function" ? res.liveRunners(project) : []), []);
-      const rows     = safeInv(() => (typeof res.listCrewRows  === "function" ? res.listCrewRows()        : []), []);
+      // resources.mjs is optional and versioned separately: take its exports once, with no-op defaults
+      const { liveRunners = () => [], listCrewRows = () => [], devServers = () => [] } = res;
+      const runners  = safeInv(() => liveRunners(project), []);
+      const rows     = safeInv(() => listCrewRows(), []);
       const projRows = (Array.isArray(rows) ? rows : []).filter(r => r && r.project === project);
       // Only touch the (relatively) costly devServers/lsof when we're actually emitting a block.
       if ((Array.isArray(runners) && runners.length > 0) || projRows.length > 0) {
@@ -206,7 +209,7 @@ try {
         // duty patrol (#4216), which inventories dev servers machine-wide. A solo session (no crew →
         // liveRunners ~50ms) always gets the dev-server line; a live multi-seat crew usually defers.
         let devSrv = [];
-        if (__elapsedMs() < 120) devSrv = safeInv(() => (typeof res.devServers === "function" ? res.devServers(projectDir) : []), []);
+        if (__elapsedMs() < 120) devSrv = safeInv(() => devServers(projectDir), []);
         else process.stderr.write(`[trantor] devServers deferred to patrol (${__elapsedMs().toFixed(0)}ms elapsed, <300ms budget)\n`);
         const seats = (Array.isArray(runners) ? runners : [])
           .map(r => `${sanitize(r.agent || "?")}(${r.pid || "?"})`).filter(Boolean).join(", ");
@@ -314,6 +317,27 @@ try {
       process.stderr.write(`[trantor] low balance: ${bal.low.map(l => l.label).join(", ")}\n`);
     }
   } catch {}
+
+  // Inbox ledger: stamp session start and seed the cursor NOW, the moment that defines "backlog".
+  // Seeding used to happen on the first successful PostToolUse poll, which on a remote hub timed out
+  // and slid the seed to a later tool call, swallowing (and marking delivered) everything in between.
+  // Compaction keeps the session_id, so an existing ledger is left alone. Best-effort: the start
+  // stamp is written before any network I/O, so inbox-deliver can still anchor correctly if this fails.
+  if (stdinObj.session_id && source !== "compact") {
+    try {
+      const paths = ledgerPaths(session, String(stdinObj.session_id));
+      const startTs = ensureStart(paths);   // the stamp costs nothing and must land even when the hub is down
+      if (hubAnswered && !existsSync(paths.cursorFile)) {
+        const seed = await signedGet(`/inbox?session=${encodeURIComponent(session)}&since=0&peek=1`, { timeoutMs: 3000, session, instance: String(stdinObj.session_id), project });
+        if (seed.ok) {
+          const cursor = anchorCursor(seed.json?.messages, startTs);
+          writeCursor(paths, cursor);
+          // claim the pre-start backlog on the hub too, so it never escalates as undelivered
+          await signedGet(`/inbox?session=${encodeURIComponent(session)}&since=${Math.max(0, cursor - 1)}`, { timeoutMs: 1500, session, instance: String(stdinObj.session_id), project }).catch(() => {});
+        }
+      }
+    } catch {}
+  }
 
   // Pending handoff? A prior session hit the context limit and left a handoff for this
   // project — take over with this fresh full window instead of starting cold. On a
