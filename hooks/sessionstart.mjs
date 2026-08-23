@@ -161,6 +161,16 @@ try {
     ctx += `- The hubs are almost certainly healthy. "Trantor is unreachable" is the WRONG diagnosis here; the right one is "this window is in the wrong directory".\n\n`;
     ctx += `**Tell the user this, in your first reply, before doing anything else.** The fix is to close this window and start Claude from the project directory (\`cd <project> && claude\`), which is what makes it a seat. A session can also be forced onto the bus with \`RELAY_PROJECT=<project> claude\`, but only when there is a reason it cannot run from the directory itself.\n`;
     if (known.length) ctx += `\nProjects pinned on this machine: ${sanitize(known.slice(0, 24).join(", "))}${known.length > 24 ? ", …" : ""}.\n`;
+    // If the operator has DECLARED seats, recovery is one command — name it rather than making
+    // them remember which directory each project lives in.
+    try {
+      const { readSeats } = await import("../lib/seats.mjs");
+      const declared = Object.keys(readSeats());
+      if (declared.length) {
+        ctx += `\nDeclared seats on this machine: ${sanitize(declared.slice(0, 24).join(", "))}. `;
+        ctx += `\`trantor seats\` shows which are missing and \`trantor seats up\` reopens each one in its own directory.\n`;
+      }
+    } catch {}
     ctx += `</trantor-not-a-seat>\n`;
     process.stderr.write(`[trantor] ${notSeat} — not registering on the bus (set RELAY_PROJECT to opt in)\n`);
     process.stdout.write(emit(ctx, banner, ""));
