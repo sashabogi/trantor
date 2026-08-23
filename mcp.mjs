@@ -10,7 +10,7 @@ import { execSync, spawnSync } from "node:child_process";
 import { createRequire } from "node:module";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { advise } from "./bin/advise.mjs";
-import { resolveProject, hostId, resolveHub } from "./lib/project.mjs";
+import { resolveProject, hostId, resolveHub, resolveHubInfo, nonSeatReason } from "./lib/project.mjs";
 import { signedPost, signedGet } from "./hooks/lib/api.mjs";
 import { anchorCursor } from "./hooks/lib/inbox-ledger.mjs";
 import { assertNoSecrets } from "./lib/scrub.mjs";
@@ -114,9 +114,26 @@ const fmt = (m) => `#${m.id} [${m.from} -> ${m.to}] ${new Date(m.ts).toLocaleTim
 
 const server = new McpServer({ name: "trantor", version: "0.1.0" });
 
-server.tool("relay_whoami", "Show this session's relay identity, project, and the hub URL.", {}, async () => {
-  await api("POST", "/register", { session: SESSION, project: PROJECT, hookVersion: MCP_VERSION }).catch(() => {});
-  return { content: [{ type: "text", text: `session=${SESSION}\nproject=${PROJECT}\nhub=${resolveHub(PROJECT)}` }] };
+server.tool("relay_whoami", "Show this session's relay identity, project, hub URL, HOW that hub was chosen, and whether this session is actually a registered seat.", {}, async () => {
+  // This tool used to POST /register before answering — so asking "where am I?" from a
+  // non-project directory CREATED the phantom seat it then reported, on the local hub, and the
+  // answer looked healthy. A diagnostic must observe, never mutate. It now reports the truth,
+  // including the two things that actually go wrong: an unregistered session, and a hub that was
+  // a fallback rather than a pin.
+  const { url, via } = resolveHubInfo(PROJECT);
+  const viaText = { env: "RELAY_URL env override", pin: "pinned for this project", global: "GLOBAL DEFAULT — this project is not pinned", default: "BUILT-IN DEFAULT — no config found" }[via] || via;
+  let text = `session=${SESSION}\nproject=${PROJECT}\nhub=${url}\nhub_via=${via} (${viaText})\nregistered=${isHomeDirSession ? "NO" : "yes"}`;
+  if (isHomeDirSession) {
+    text += `\n\n⚠️ This session is NOT a seat — its directory is ${nonProjectReason}, so it never registered.`
+      + ` relay_peers will look empty and relay_send reaches nobody. That is NOT the bus being down.`
+      + ` Fix it by running Claude from the project directory (cd <project> && claude).`;
+  }
+  if (via === "global" || via === "default") {
+    text += `\n\n⚠️ "${PROJECT}" has no hub pin, so ${url} is a fallback, not a routing decision.`
+      + ` If the crew is pinned elsewhere this seat cannot see them. Check \`trantor hub list\`;`
+      + ` pin with \`trantor hub set ${PROJECT} <url>\`.`;
+  }
+  return { content: [{ type: "text", text }] };
 });
 
 server.tool("relay_task_add", "Add a Kanban card to a project's board on the dashboard (what you're about to work on). Defaults: THIS project, assigned to you, status 'todo'. Pass `project` to target another board — e.g. when you orchestrate a crew that runs in a different directory than the one you launched Claude from. Keep the team's progress visible. Attach a `note` whenever context isn't obvious from the title — it lands on the card's permanent log ({ts,by,text}, kept: last 40).",
@@ -352,11 +369,13 @@ const MCP_VERSION = (() => {
 // Opt in explicitly with RELAY_SESSION or RELAY_PROJECT. The MCP server still starts so the
 // user can call relay tools (e.g. relay_whoami) deliberately; we just skip auto-presence.
 const projectDir = process.env.CLAUDE_PROJECT_DIR || process.cwd();
-const claudeDir = process.env.CLAUDE_CONFIG_DIR || join(homedir(), ".claude");
-const nonProjectReason = projectDir === homedir() ? "home dir"
-  : projectDir.startsWith(join(claudeDir, "plugins", "cache")) ? "plugin cache"
-  : "";
-const isHomeDirSession = !process.env.RELAY_SESSION && !process.env.RELAY_PROJECT && !!nonProjectReason;
+// ONE definition of "is this a seat", shared with the SessionStart hook (lib/project.mjs). When
+// the hook and this server disagreed, a session in a non-repo directory got the hook's "not a
+// seat" verdict AND an MCP registration — a phantom peer on the fallback hub, which is the
+// split-brain the whole fix exists to remove. nonSeatReason() also covers a plain non-git
+// directory (~/development), the case the old home-dir-only check let through.
+const nonProjectReason = nonSeatReason(projectDir);
+const isHomeDirSession = !!nonProjectReason;
 
 if (!isHomeDirSession) {
   await api("POST", "/register", { session: SESSION, project: PROJECT, status: `active in ${PROJECT}`, hookVersion: MCP_VERSION })

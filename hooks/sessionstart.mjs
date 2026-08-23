@@ -11,11 +11,11 @@ import { join, basename, dirname } from "node:path";
 import { homedir, hostname } from "node:os";
 import { execSync, spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { resolveProject, hostId } from "../lib/project.mjs";
+import { resolveProject, hostId, resolveHubInfo, knownProjects, nonSeatReason } from "../lib/project.mjs";
 import { formatSubagentManifest } from "../lib/subagent-manifest.mjs";
 import { updateAvailable, maybeNotifyDesktop, readConfig } from "./lib/update-check.mjs";
 import { maybeCheckBalances } from "./lib/balance-check.mjs";
-import { relayUrl, getJSON, signedGet, signedPost } from "./lib/api.mjs";
+import { getJSON, signedGet, signedPost } from "./lib/api.mjs";
 import { ledgerPaths, ensureStart, anchorCursor, writeCursor } from "./lib/inbox-ledger.mjs";
 
 // Load the most recent UNCONSUMED handoff for this project (written by precompact.mjs
@@ -134,12 +134,36 @@ try {
   // session resolved two different projects — and therefore two different hubs — so half a
   // session's work recorded on a hub nobody was reading.
   const projectDir = stdinObj.cwd || process.env.CLAUDE_PROJECT_DIR || process.cwd();
-  // Sessions started in the home directory itself aren't project work — registering
-  // them spawns a phantom "<username>" project board on the dashboard. Set
-  // RELAY_SESSION (or RELAY_PROJECT) to deliberately put a home-dir session on the bus.
-  if (!process.env.RELAY_SESSION && !process.env.RELAY_PROJECT && projectDir === homedir()) {
-    process.stderr.write("[trantor] session in the home directory — not registering on the bus (set RELAY_SESSION to opt in)\n");
-    process.stdout.write("{}");
+  // NOT A SEAT — say so, loudly, to BOTH the user and the model.
+  //
+  // A session started outside a project (the home directory, a non-repo like ~/development, the
+  // plugin cache) is not project work, and registering it mints a phantom "<username>" board that,
+  // being unpinned, lands on the LOCAL hub while the real crew lives on the remote one. Declining
+  // to register was always right. Doing it via a stderr line NOBODY READS was not: the session
+  // then spends an hour believing it is the crebral-health seat and eventually reports "Trantor is
+  // unreachable" — with every hub healthy. That is what a macOS reboot produces every time, since
+  // reopened Terminal windows come back in $HOME and `claude --resume` restores the conversation
+  // but not the directory. So: no registration, and an unmissable explanation of what this session
+  // is not, what it therefore cannot do, and the one command that fixes it.
+  const notSeat = nonSeatReason(projectDir);
+  if (notSeat) {
+    const known = knownProjects();
+    const O = "\x1b[1;38;5;208m", R = "\x1b[0m";
+    const banner = `🟠 ${O}Not a Trantor seat${R} — ${projectDir} is ${notSeat}. `
+      + `It is NOT on the bus: no board, no peers, no inbox. `
+      + `Start it from the project directory instead:  ${O}cd <project> && claude${R}`;
+    let ctx = `<trantor-not-a-seat cwd="${sanitize(projectDir)}" reason="${sanitize(notSeat)}">\n`;
+    ctx += `⚠️ **This session is NOT registered on Trantor.** Its working directory `;
+    ctx += `(\`${sanitize(projectDir)}\`) is ${sanitize(notSeat)} — not a project — so no seat was created for it.\n\n`;
+    ctx += `**What that means — do not work around it, and do not report the bus as broken:**\n`;
+    ctx += `- You have no project board, no peers, and no inbox. \`relay_peers\` will look empty and \`relay_send\` reaches nobody.\n`;
+    ctx += `- Messages other sessions address to this project are NOT lost — they are waiting on the hub for a real seat.\n`;
+    ctx += `- The hubs are almost certainly healthy. "Trantor is unreachable" is the WRONG diagnosis here; the right one is "this window is in the wrong directory".\n\n`;
+    ctx += `**Tell the user this, in your first reply, before doing anything else.** The fix is to close this window and start Claude from the project directory (\`cd <project> && claude\`), which is what makes it a seat. A session can also be forced onto the bus with \`RELAY_PROJECT=<project> claude\`, but only when there is a reason it cannot run from the directory itself.\n`;
+    if (known.length) ctx += `\nProjects pinned on this machine: ${sanitize(known.slice(0, 24).join(", "))}${known.length > 24 ? ", …" : ""}.\n`;
+    ctx += `</trantor-not-a-seat>\n`;
+    process.stderr.write(`[trantor] ${notSeat} — not registering on the bus (set RELAY_PROJECT to opt in)\n`);
+    process.stdout.write(emit(ctx, banner, ""));
     process.exit(0);
   }
   const project = resolveProject(projectDir);
@@ -148,7 +172,9 @@ try {
     || (process.env.RELAY_AGENT ? `${process.env.RELAY_AGENT}:${project}` : `${hostId()}:${project}`);
   // relayUrl() with no project resolves from the hook process's cwd, which is not always the
   // project the session is about. Pass it, or every call below can address the wrong hub.
-  const url = relayUrl(project);
+  // resolveHubInfo carries HOW the hub was chosen so an unpinned project can be flagged below
+  // instead of silently routing to the default.
+  const { url, via: hubVia } = resolveHubInfo(project);
 
   // register self + post an initial presence status (no LLM turn — instant for others to read)
   await jpost(`${url}/register`, { session, project, status: `active in ${project}` }, session).catch(() => {});
@@ -158,7 +184,25 @@ try {
   try { peers = (await jget(`${url}/peers`, session)).peers || []; hubAnswered = true; } catch {}
   const others = peers.filter(p => p.online && p.session !== session);
 
-  process.stderr.write(`[trantor] registered as ${session} -> ${url} (${others.length} other live session(s))\n`);
+  process.stderr.write(`[trantor] registered as ${session} -> ${url} (via ${hubVia}, ${others.length} other live session(s))\n`);
+
+  // UNPINNED → the hub was a FALLBACK, not a decision. This session is on the bus, but possibly not
+  // the bus its crew is on: pins route the known projects to the remote hub, and anything unpinned
+  // drops to the global default. Two seats that believe they are the same project then read and
+  // write different stores, each looking perfectly healthy. Never let that be silent.
+  if (hubVia === "global" || hubVia === "default") {
+    const known = knownProjects();
+    const O = "\x1b[1;38;5;208m", R = "\x1b[0m";
+    const line = `🟠 ${O}"${project}" is not pinned to a hub${R} — falling back to ${url}. `
+      + `If the crew is on another hub this seat cannot see them. Pin it:  ${O}trantor hub set ${project} <url>${R}`;
+    userBanner = userBanner ? `${userBanner}\n${line}` : line;
+    additionalContext += `<trantor-hub-unpinned project="${sanitize(project)}" hub="${sanitize(url)}" via="${sanitize(hubVia)}">\n`;
+    additionalContext += `⚠️ **The project "${sanitize(project)}" has no hub pin.** This seat fell back to \`${sanitize(url)}\` (${hubVia === "global" ? "the global default" : "the built-in local default"}), which is a guess, not a routing decision.\n`;
+    additionalContext += `If the rest of the crew is pinned to a different hub, you will see an empty board and no peers while every hub is healthy — do NOT diagnose that as "Trantor is down". Confirm with \`trantor hub list\`, and pin this project with \`trantor hub set ${sanitize(project)} <url>\` so the routing is deliberate.\n`;
+    if (known.length) additionalContext += `\nPinned projects: ${sanitize(known.slice(0, 24).join(", "))}${known.length > 24 ? ", …" : ""}.\n`;
+    additionalContext += `</trantor-hub-unpinned>\n`;
+    process.stderr.write(`[trantor] WARNING: project "${project}" is unpinned; hub ${url} chosen via ${hubVia}\n`);
+  }
 
   if (others.length > 0) {
     additionalContext += `<trantor session="${session}" hub="${url}">\n`;

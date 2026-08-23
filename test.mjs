@@ -58,7 +58,16 @@ const rh = spawnSync("node", ["hooks/sessionstart.mjs"], {
   env: { ...envSansOptIn, CLAUDE_PROJECT_DIR: homedir(), RELAY_URL: CLOSED },
 });
 ok("home-dir session exits 0", rh.status === 0);
-ok("home-dir session emits {} — no registration, no phantom project", rh.stdout.trim() === "{}");
+// Was: assert stdout is exactly "{}". Silence was the bug (2026-08-23) — a reboot put every
+// window in $HOME, each session assumed it was still its old seat, and one finally reported
+// "Trantor is unreachable" with every hub healthy. The INVARIANT is unchanged (no registration,
+// no phantom project); the session must now also be TOLD, so the output carries the not-a-seat
+// block and never the registered-session block.
+{
+  let hctx = ""; try { hctx = JSON.parse(rh.stdout || "{}")?.hookSpecificOutput?.additionalContext || ""; } catch {}
+  ok("home-dir session does not register — no phantom project", !hctx.includes("<trantor session="));
+  ok("home-dir session is TOLD it is not a seat (not silent)", hctx.includes("<trantor-not-a-seat"));
+}
 ok("home-dir session says why on stderr", rh.stderr.includes("home directory"));
 const rh2 = runHook(homedir(), "deliberate:home");
 ok("RELAY_SESSION opts a home-dir session back in", rh2.status === 0 && !rh2.stderr.includes("not registering"));
@@ -80,7 +89,9 @@ ok("RELAY_SESSION opts a home-dir session back in", rh2.status === 0 && !rh2.std
     env: { ...envSansDir, RELAY_URL: CLOSED, CLAUDE_CONFIG_DIR: cacheRoot, ...extra },
   });
   const rp = runMcp(cacheDir);
-  ok("a snapshot dir does NOT auto-register (no version-named phantom lane)", rp.stderr.includes("no auto-presence: plugin cache"));
+  // reason phrasing now comes from the ONE shared nonSeatReason() (lib/project.mjs), so the hook
+  // and the MCP server can never disagree about what a seat is; it reads "the plugin cache".
+  ok("a snapshot dir does NOT auto-register (no version-named phantom lane)", rp.stderr.includes("no auto-presence: the plugin cache"));
   ok("and it never even attempts the register call", !rp.stderr.includes("initial register failed"));
   ok("the relay server still starts, so tools stay callable", rp.stderr.includes("connected as"));
   const rp2 = runMcp(cacheDir, { RELAY_PROJECT: "deliberate" });
