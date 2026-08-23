@@ -17,7 +17,7 @@
 // Run against an older tree with TRANTOR_ROOT=<path> to prove these fail before the fix.
 import http from "node:http";
 import { spawnSync, spawn } from "node:child_process";
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir, homedir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -136,6 +136,28 @@ console.log("\n4. A pinned project routes to its hub, silently (no false alarm):
   ok("never touches the fallback hub", r.onFallback === 0);
   ok("no unpinned warning", !/hub-unpinned/.test(r.ctx));
   ok("no not-a-seat warning", !/not-a-seat/.test(r.ctx));
+}
+
+console.log("\n4b. A drill must never touch the REAL bus directory:");
+{
+  // Regression for 2026-08-23: this very pre-flight, pointed at a temp AGENT_BUS_DIR, claimed two
+  // live pending handoffs because the handoff READER joined homedir() directly while the WRITER
+  // honoured RELAY_DATA_DIR. Both now resolve through busDir().
+  const hoDir = join(BUS, "handoffs"); mkdirSync(hoDir, { recursive: true });
+  const proj = "pinned-proj";
+  writeFileSync(join(hoDir, `${proj}-1700000001.json`), JSON.stringify({
+    id: `${proj}-1700000001`, projectName: proj, stamp: 1700000001,
+    summary: "SENTINEL handoff — must come from the TEMP bus dir", consumed: false,
+  }));
+  const r = await runHook(pinnedRepo);
+  ok("reads the handoff from AGENT_BUS_DIR", /SENTINEL handoff/.test(r.ctx), r.ctx.slice(0, 120));
+  const after = JSON.parse(readFileSync(join(hoDir, `${proj}-1700000001.json`), "utf8"));
+  ok("claims the TEMP copy", after.consumed === true);
+  process.env.AGENT_BUS_DIR = BUS;   // the child already had it; the parent needs it to assert
+  const m2 = await import(join(ROOT, "lib", "project.mjs"));
+  ok("handoffDir() follows AGENT_BUS_DIR", m2.handoffDir?.() === hoDir, m2.handoffDir?.());
+  const realDir = join(homedir(), ".agent-bus", "handoffs");
+  ok("and is NOT the real ~/.agent-bus/handoffs", m2.handoffDir?.() !== realDir);
 }
 
 console.log("\n5. Hub provenance is part of the answer (unit):");

@@ -18,7 +18,9 @@ import { fileURLToPath } from "node:url";
 import { deriveSubagentManifest } from "../../lib/subagent-manifest.mjs";
 import { signedPost } from "./api.mjs";
 
-export const HANDOFF_DIR = join(process.env.RELAY_DATA_DIR || join(homedir(), ".agent-bus"), "handoffs");
+// Writer and reader MUST resolve the same directory — see lib/project.mjs busDir(). This used to
+// honour only RELAY_DATA_DIR while the reader honoured neither override.
+export const HANDOFF_DIR = join(process.env.AGENT_BUS_DIR || process.env.RELAY_DATA_DIR || join(homedir(), ".agent-bus"), "handoffs");
 const HERE = dirname(fileURLToPath(import.meta.url));
 
 export function readConfig() {

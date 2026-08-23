@@ -11,7 +11,7 @@ import { join, basename, dirname } from "node:path";
 import { homedir, hostname } from "node:os";
 import { execSync, spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { resolveProject, hostId, resolveHubInfo, knownProjects, nonSeatReason } from "../lib/project.mjs";
+import { resolveProject, hostId, resolveHubInfo, knownProjects, nonSeatReason, handoffDir } from "../lib/project.mjs";
 import { formatSubagentManifest } from "../lib/subagent-manifest.mjs";
 import { updateAvailable, maybeNotifyDesktop, readConfig } from "./lib/update-check.mjs";
 import { maybeCheckBalances } from "./lib/balance-check.mjs";
@@ -25,7 +25,7 @@ import { ledgerPaths, ensureStart, anchorCursor, writeCursor } from "./lib/inbox
 // for continuity but must NOT claim it, or it steals the handoff from the new window.
 function loadPendingHandoff(projectName, { claim = true, freshSession = null } = {}) {
   try {
-    const dir = join(homedir(), ".agent-bus", "handoffs");
+    const dir = handoffDir();   // NEVER join(homedir(), …) here: a drill pointed at a temp bus dir must not claim the real handoffs
     if (!existsSync(dir)) return null;
     // Match ONLY this project's handoffs: "<projectName>-<numeric stamp>.json".
     // NOT a loose startsWith() — that also caught leaked test fixtures like
