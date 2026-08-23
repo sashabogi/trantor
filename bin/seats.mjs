@@ -40,8 +40,10 @@ function printStatus() {
   for (const r of rows) {
     const status = r.live ? `${G}live${R} ${D}(${r.agent} ${r.pid})${R}`
       : r.exists ? `${O}MISSING${R}` : `${O}NO DIR${R}`;
+    // (why is printed below for anything not live)
     const pad = " ".repeat(Math.max(0, w - r.project.length));
     console.log(`${r.project}${pad}  ${status}${" ".repeat(Math.max(1, 20 - (r.live ? 4 + String(r.pid).length + r.agent.length + 4 : 7)))}${D}${r.dir}${R}`);
+    if (!r.live && r.why) console.log(`${" ".repeat(w + 2)}${D}${r.why}${R}`);
     if (r.via !== "pin") console.log(`${" ".repeat(w + 2)}${O}⚠ hub not pinned${R} ${D}— resolves to ${r.hub} via ${r.via}; pin it: trantor hub set ${r.project} <url>${R}`);
   }
   const miss = rows.filter(r => !r.live && r.exists);
@@ -93,9 +95,10 @@ switch (sub) {
   case "add": {
     const project = rest[0] || projectForDir(process.cwd());
     const dir = resolve(rest[1] || process.cwd());
+    const agentArg = (args.find(a => a.startsWith("--agent=")) || "").split("=")[1] || "claude";
     try {
-      const s = declareSeat(project, dir);
-      console.log(`${G}declared${R} ${s.project} → ${s.dir}`);
+      const s = declareSeat(project, dir, agentArg);
+      console.log(`${G}declared${R} ${s.project} → ${s.dir} ${D}(agent: ${s.agent})${R}`);
       const natural = projectForDir(dir);
       if (natural !== project) {
         console.log(`${O}⚠ that directory registers as "${natural}", not "${project}"${R}`);
@@ -159,21 +162,34 @@ switch (sub) {
       const delay = Number(rest[1] || 60);
       writeFileSync(PLIST, plistBody(Number.isFinite(delay) && delay >= 0 ? delay : 60));
       try { execFileSync("/bin/launchctl", ["bootout", `gui/${process.getuid()}/${LABEL}`], { stdio: "ignore" }); } catch {}
-      try {
-        execFileSync("/bin/launchctl", ["bootstrap", `gui/${process.getuid()}`, PLIST], { stdio: "ignore" });
-        console.log(`${G}installed${R} — after a reboot, missing seats reopen in their own directories (${delay}s after login).`);
-        console.log(`${D}plist: ${PLIST}   log: /tmp/trantor-seats-login.log${R}`);
-        console.log(`${D}one-shot job, no KeepAlive — it runs once per login and exits.${R}`);
-      } catch (e) { console.error(`wrote ${PLIST} but launchctl bootstrap failed: ${e?.message || e}`); process.exit(1); }
+      // Deliberately NOT bootstrapped here. RunAtLoad fires on bootstrap, not only at login, so
+      // `seats login install` would immediately open a window for every missing seat — which is
+      // never what installing a RECOVERY job means, and on 2026-08-23 it very nearly reopened two
+      // sessions the operator was deliberately holding closed. The plist on disk is the install;
+      // launchd loads it at the next login. --now is the explicit opt-in for right this second.
+      if (flag("now")) {
+        try {
+          execFileSync("/bin/launchctl", ["bootstrap", `gui/${process.getuid()}`, PLIST], { stdio: "ignore" });
+          console.log(`${G}installed and started${R} — missing seats reopen in ${delay}s, and after every login.`);
+        } catch (e) { console.error(`wrote ${PLIST} but launchctl bootstrap failed: ${e?.message || e}`); process.exit(1); }
+      } else {
+        console.log(`${G}installed${R} — takes effect at your NEXT login: missing seats reopen in their own directories, ${delay}s in.`);
+        console.log(`${D}Nothing was launched now. Use \`trantor seats up\` to recover seats in this session, or --now to start the job immediately.${R}`);
+      }
+      console.log(`${D}plist: ${PLIST}   log: /tmp/trantor-seats-login.log${R}`);
+      console.log(`${D}one-shot job, no KeepAlive — it runs once per login and exits.${R}`);
     } else if (action === "uninstall") {
       try { execFileSync("/bin/launchctl", ["bootout", `gui/${process.getuid()}/${LABEL}`], { stdio: "ignore" }); } catch {}
       if (existsSync(PLIST)) { unlinkSync(PLIST); console.log("removed the login agent"); }
       else console.log("no login agent installed");
     } else {
       const installed = existsSync(PLIST);
-      console.log(installed ? `login agent INSTALLED (${PLIST})` : "login agent not installed");
       if (installed) {
-        try { console.log(execFileSync("/bin/launchctl", ["list"], { encoding: "utf8" }).split("\n").filter(l => l.includes(LABEL)).join("\n") || "(loaded state unknown)"); } catch {}
+        let loaded = false;
+        try { loaded = execFileSync("/bin/launchctl", ["list"], { encoding: "utf8" }).split("\n").some(l => l.includes(LABEL)); } catch {}
+        console.log(`login agent ${G}INSTALLED${R} ${D}(${PLIST})${R}`);
+        console.log(loaded ? `${D}loaded now — it will also run at each login${R}`
+                           : `${D}not loaded in this session; launchd loads it at your next login (that is the normal state)${R}`);
       } else {
         console.log(`Install it with:  ${O}trantor seats login install${R}`);
       }
@@ -185,12 +201,12 @@ switch (sub) {
     console.log(`usage: trantor seats [status|add|remove|adopt|up|login]
 
   status                    which declared seats are live, which are missing (default)
-  add <project> [dir]       declare a seat (dir defaults to the current directory)
+  add <project> [dir]       declare a seat (dir defaults to cwd; --agent=claude|codex|opencode)
   remove <project>          undeclare a seat
   adopt [workspace] --yes   declare every pinned project that has a directory there
   up [project…]             open a window for each missing seat, in its own directory
                             (--dry-run to see the commands, --force past the 6-seat cap)
-  login install [delay]     reopen missing seats automatically after a reboot
+  login install [delay]     reopen missing seats automatically after a reboot (--now to start it immediately)
   login uninstall|status
 
 Seats live in ~/.agent-bus/config.json alongside the hub pins. A seat is "live" when a real agent

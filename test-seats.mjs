@@ -47,9 +47,27 @@ S.declareSeat("crebral-scribe", scribe);
   const s = rows.find(r => r.project === "crebral-scribe");
   ok("a seat with a process in its dir is live", h.live === true && h.pid === 4242);
   ok("a seat with nothing in its dir is missing", s.live === false);
-  ok("…and says why", /no agent process/.test(s.why), s.why);
+  ok("…and says why, naming the agent it wants", /no claude process/.test(s.why), s.why);
   ok("a process in the WRONG dir does not count", S.seatStatus([{ pid: 9, comm: "claude", cwd: join(dir, "elsewhere") }]).every(r => !r.live));
   ok("missingSeats lists exactly the missing ones", S.missingSeats(live).map(m => m.project).join() === "crebral-scribe");
+}
+
+console.log("\nA seat is held only by the agent it was declared for:");
+{
+  // Caught live on 2026-08-23: crebral-health reported "live (opencode 40249)" because a CREW seat
+  // was working in the repo, while the operator's Claude window — the thing that actually went
+  // missing — was gone. Counting another agent as the seat is a false green in the exact place
+  // this feature exists to prevent one.
+  const crew = [{ pid: 40249, comm: "opencode", cwd: health }];
+  const row = S.seatStatus(crew).find(r => r.project === "crebral-health");
+  ok("another agent in the dir does NOT hold the seat", row.live === false);
+  ok("…and it is named in the reason", /opencode 40249/.test(row.why), row.why);
+  ok("the seat is still offered for recovery", S.missingSeats(crew).some(m => m.project === "crebral-health"));
+  S.declareSeat("crew-seat", scribe, "opencode");
+  const row2 = S.seatStatus([{ pid: 7, comm: "opencode", cwd: scribe }]).find(r => r.project === "crew-seat");
+  ok("a seat declared for opencode IS held by opencode", row2.live === true && row2.pid === 7);
+  ok("launch uses the seat's own agent", S.launchSeat(S.missingSeats([]).find(m => m.project === "crew-seat"), { dryRun: true }).command.endsWith("&& opencode"));
+  S.undeclareSeat("crew-seat");
 }
 
 console.log("\nA seat carries its hub provenance (an unpinned seat is still a warning):");
