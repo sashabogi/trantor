@@ -412,6 +412,14 @@ export function resolveOriginalWindow() {
 // (_resolveWindow/_spawnFresh/_armClose) exist so the ordering can be regression-tested headlessly.
 export function spawnBaton({ projectDir, handoffFile, conf = readConfig(),
   _resolveWindow = resolveOriginalWindow, _spawnFresh = spawnFresh, _armClose = armBatonClose }) {
+  // A DRILL MUST BE ABLE TO SAY NO. There was no such switch, so exercising the baton path in a
+  // test opened real Terminal windows running real `claude` sessions in temp directories the test
+  // then deleted, each parked on a "do you trust this folder?" prompt. Five of them were found by
+  // the operator on 2026-08-24. A code path that spawns windows needs an off switch, or it cannot
+  // be tested honestly and someone will fake one that does not exist.
+  if (process.env.TRANTOR_NO_BATON_SPAWN === "1" || conf.batonSpawn === false) {
+    return { spawned: false, armed: false, windowId: "", suppressed: true };
+  }
   const { windowId, tty } = _resolveWindow();   // original window FIRST, while it's still frontmost
   const spawned = _spawnFresh(projectDir);
   if (!spawned) return { spawned: false, armed: false, windowId: "" };

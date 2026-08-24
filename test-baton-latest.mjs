@@ -30,9 +30,11 @@ function run(args, { seed = null, stdin = "" } = {}) {
   if (seed) writeFileSync(join(BUS, "handoffs", `${seed.id}.json`), JSON.stringify(seed, null, 2));
   const r = spawnSync(process.execPath, [join(ROOT, "bin", "write-handoff.mjs"), ...args], {
     input: stdin, encoding: "utf8", timeout: 20000, cwd: proj,
-    // TRANTOR_NO_SPAWN keeps the drill from opening real Terminal windows
+    // TRANTOR_NO_BATON_SPAWN is a REAL guard in hooks/lib/handoff.mjs. The first version of this
+    // drill passed TRANTOR_NO_SPAWN, which does not exist, so every run opened live Terminal
+    // windows running `claude` in these temp dirs and left them parked on a trust prompt.
     env: { ...process.env, HOME: w, AGENT_BUS_DIR: BUS, RELAY_DATA_DIR: BUS,
-           CLAUDE_PROJECT_DIR: proj, TRANTOR_NO_SPAWN: "1" },
+           CLAUDE_PROJECT_DIR: proj, TRANTOR_NO_BATON_SPAWN: "1" },
   });
   const files = readdirSync(join(BUS, "handoffs"));
   return { out: (r.stdout || "") + (r.stderr || ""), status: r.status, files, BUS };
@@ -70,6 +72,18 @@ console.log("\nThe original stdin path is untouched:");
   ok("piping on stdin still writes a handoff", r.status === 0 && r.files.length === 1, `${r.out.slice(0, 140)}`);
   const rec = JSON.parse(readFileSync(join(r.BUS, "handoffs", r.files[0]), "utf8"));
   ok("…with the piped content", /written the old way/.test(rec.summary || ""), (rec.summary || "").slice(0, 80));
+}
+
+
+console.log("\nThe drill's own safety catch is real, not imagined:");
+{
+  // Regression for 2026-08-24: the guard this file relies on must EXIST. A test that thinks it has
+  // suppressed a side effect, and has not, does the side effect every run.
+  const src = readFileSync(join(ROOT, "hooks", "lib", "handoff.mjs"), "utf8");
+  ok("spawnBaton honours TRANTOR_NO_BATON_SPAWN", /TRANTOR_NO_BATON_SPAWN/.test(src), "no such guard in handoff.mjs");
+  const r = run(["--baton", "--latest"], { seed: seeded });
+  ok("…and with it set, nothing is spawned", /could not spawn|suppressed|baton on the existing/.test(r.out) && !/fresh session opening/.test(r.out),
+    r.out.slice(0, 200));
 }
 
 console.log(`\n${fail === 0 ? "✅" : "❌"} baton-latest: ${pass} passed, ${fail} failed`);
