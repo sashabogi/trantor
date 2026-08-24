@@ -250,6 +250,25 @@ async function reportFailure(exit, trigger, undelivered = 0) {
   log(`\x1b[31mreported failure to bus: ${reason} (exit ${exit})\x1b[0m`);
 }
 
+// ---- telling the ASSIGNER, mechanically ------------------------------------
+// A seat used to finish its contract and say nothing. Completion lived only in the RULES prompt
+// ("report on the bus"), so a cheap model that did the work and ended its turn left the
+// orchestrator blind, and nothing watched for the omission. Failures were mechanical but went to
+// "all", and a plain broadcast does not wake anyone (see the wake policy in the main loop). From
+// the orchestrator's seat a finished crew and a crew that never started looked identical.
+//
+// So: whoever sent the message that woke this seat gets told DIRECTLY what became of it. Direct
+// messages wake; that is the whole difference. Kept short, like every other bus line.
+async function notifyAssigners(froms, text) {
+  const seen = new Set();
+  for (const f of froms) {
+    if (!f || f === "all" || f === SESSION || seen.has(f)) continue;
+    seen.add(f);
+    await api("/send", { from: SESSION, to: f, text: text.slice(0, 280), project: PROJ }).catch(() => {});
+  }
+  if (seen.size) log(`reported outcome to ${[...seen].join(", ")}`);
+}
+
 async function reportHealthy() {
   if (consecFails === 0) return;        // already healthy — don't spam
   consecFails = 0;
@@ -416,18 +435,28 @@ async function loadLessons() {
     const prompt = `NEW BUS MESSAGE${wake.length > 1 ? "S" : ""} for you:\n${lines}\n${ctx}${again}\nAct on what's addressed to you, then end your turn.\n\n${RULES}`;
     await loadLessons();
     const trigger = wake.some(m => m.to === SESSION) ? "direct message" : "@mention";
+    // Who is owed an answer, captured BEFORE the turn: pendingWake is cleared on success.
+    const assigners = [...new Set(wake.map(m => m.from).filter(Boolean))];
+    const asked = String(wake[0]?.text || "").replace(/\s+/g, " ").trim().slice(0, 90);
+    const tStart = Date.now();
     const ec = runTurn(prompt + LESSONS, false, deliveryFails ? `${trigger} (redelivery)` : trigger);
+    const secs = Math.round((Date.now() - tStart) / 1000);
     if (ec) {
       deliveryFails++;
       const wait = RETRY_MS[Math.min(deliveryFails - 1, RETRY_MS.length - 1)];
       retryAt = Date.now() + wait;
       savePending(pendingWake, pendingBcast);
       await reportFailure(ec, "message", pendingWake.length);
+      // The room hears the broadcast above; the one who is actually blocked hears it directly.
+      await notifyAssigners(assigners,
+        `⚠️ your contract FAILED on ${SESSION} (exit ${ec}, ${classifyFailure(ec, lastErrText)}) · retrying in ${Math.round(wait / 1000)}s · asked: "${asked}"`);
       log(`\x1b[31m${pendingWake.length} message(s) still UNDELIVERED — next attempt in ${Math.round(wait / 1000)}s\x1b[0m`);
     } else {
       pendingWake = []; pendingBcast = []; deliveryFails = 0; retryAt = 0;
       savePending([], []);
       await reportHealthy();
+      await notifyAssigners(assigners,
+        `✅ done on ${SESSION} (exit 0, ${secs}s) · asked: "${asked}" · check the board card and the files for what changed`);
     }
     lastTurnAt = Date.now();
   }
