@@ -259,12 +259,14 @@ async function reportFailure(exit, trigger, undelivered = 0) {
 //
 // So: whoever sent the message that woke this seat gets told DIRECTLY what became of it. Direct
 // messages wake; that is the whole difference. Kept short, like every other bus line.
-async function notifyAssigners(froms, text) {
+async function notifyAssigners(pairs, text) {
   const seen = new Set();
-  for (const f of froms) {
+  for (const { from: f, id } of pairs) {
     if (!f || f === "all" || f === SESSION || seen.has(f)) continue;
     seen.add(f);
-    await api("/send", { from: SESSION, to: f, text: text.slice(0, 280), project: PROJ }).catch(() => {});
+    // `re` threads this outcome to the exact contract it answers, so the sender's ledger closes the
+    // right one instead of guessing from timing.
+    await api("/send", { from: SESSION, to: f, text: text.slice(0, 280), project: PROJ, ...(id ? { re: id } : {}) }).catch(() => {});
   }
   if (seen.size) log(`reported outcome to ${[...seen].join(", ")}`);
 }
@@ -436,7 +438,8 @@ async function loadLessons() {
     await loadLessons();
     const trigger = wake.some(m => m.to === SESSION) ? "direct message" : "@mention";
     // Who is owed an answer, captured BEFORE the turn: pendingWake is cleared on success.
-    const assigners = [...new Set(wake.map(m => m.from).filter(Boolean))];
+    const assigners = [];
+    for (const m of wake) if (m.from && !assigners.some(a => a.from === m.from)) assigners.push({ from: m.from, id: m.id });
     const asked = String(wake[0]?.text || "").replace(/\s+/g, " ").trim().slice(0, 90);
     const tStart = Date.now();
     const ec = runTurn(prompt + LESSONS, false, deliveryFails ? `${trigger} (redelivery)` : trigger);

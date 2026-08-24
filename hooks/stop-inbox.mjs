@@ -42,6 +42,56 @@ function readStdin() {
   });
 }
 
+
+// ---- the metronome: never park while a dispatched contract is stalled ----------------------
+// An empty inbox is not the same as nothing outstanding. A session that dispatched work to a seat
+// that then died sees silence and parks, and the human becomes the one who remembers, which is the
+// complaint this exists to answer. So before letting a stop through we ask the hub what this
+// session is still owed, and refuse ONCE if any of it has gone quiet.
+//
+// Deliberately narrow: only a contract whose assignee is offline, or one that is overdue, blocks.
+// An open contract with a healthy seat working on it is exactly what "in progress" looks like, and
+// nagging about it every stop would be worse than saying nothing. Fail-open throughout: a hub that
+// is down or slow must never trap a session.
+const OVERDUE_MS = (() => {
+  const raw = process.env.TRANTOR_CONTRACT_OVERDUE_MS;
+  const n = raw === undefined || raw === "" ? NaN : Number(raw);
+  return Number.isFinite(n) && n >= 0 ? n : 10 * 60 * 1000;
+})();
+
+async function stalledContractCheck({ session, project, instanceId }) {
+  if (process.env.RELAY_STOP_CONTRACTS === "0") return allow();
+  let contracts = [];
+  try {
+    const r = await signedGet(`/contracts?session=${encodeURIComponent(session)}&project=${encodeURIComponent(project)}`,
+      { timeoutMs: FETCH_TIMEOUT_MS, session, instance: instanceId, project });
+    if (!r.ok) return allow();
+    contracts = r.json?.contracts || [];
+  } catch { return allow(); }
+
+  const stalled = contracts.filter(c => !c.answered && (!c.assigneeOnline || c.ageMs >= OVERDUE_MS));
+  if (!stalled.length) return allow();
+
+  const mins = (ms) => (ms >= 60000 ? `${Math.round(ms / 60000)}m` : `${Math.round(ms / 1000)}s`);
+  const lines = stalled.slice(0, 6).map(c => {
+    const health = c.assigneeOnline ? `online, status "${sanitize(c.assigneeStatus || "?")}"`
+      : c.assigneeLastSeenMs == null ? "never seen on the bus"
+      : `LAST SEEN ${mins(c.assigneeLastSeenMs)} ago`;
+    return `- ${sanitize(c.to)} (${health}) — asked ${mins(c.ageMs)} ago: "${sanitize(String(c.text).slice(0, 120))}"`;
+  }).join("\n");
+
+  const reason =
+    `You dispatched ${stalled.length} contract(s) that have gone quiet, and you were about to go idle:\n` +
+    lines + `\n\n` +
+    `Do not just wait, and do not ask the human to check. Use relay_contracts to see everything you are owed, ` +
+    `relay_peers to see whether the seat is alive, and relay_send to ask it directly. If a seat is down, say so and ` +
+    `either swap it (\`trantor swap <agent>\`) or reassign the work. If the work is genuinely still running, say that ` +
+    `plainly and stop. This check will not block you a second time.`;
+
+  process.stdout.write(JSON.stringify({ decision: "block", reason }));
+  process.exit(0);
+}
+
 async function main() {
   const raw = await readStdin();
   let input = {};
@@ -97,7 +147,7 @@ async function main() {
   } catch { return allow(); }        // hub down — never trap the session
 
   const direct = messages.filter(m => m.to === session);
-  if (!direct.length) return allow();
+  if (!direct.length) return stalledContractCheck({ session, project, instanceId });
 
   // Committed now: claim delivery for real so neither inbox-deliver nor the deferred waker repeats it.
   let next = cursor;

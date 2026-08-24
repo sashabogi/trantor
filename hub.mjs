@@ -2241,7 +2241,11 @@ const server = http.createServer(async (req, res) => {
       // attribute the message to a project so the dashboard can show it in that project's lane.
       // explicit b.project wins; else the sender's known project; else parsed from a "host:project" id.
       const fromProj = state.peers[b.from]?.project || (b.from && b.from.includes(":") ? b.from.split(":").pop() : "");
-      const msg = { id: ++state.seq, ts: now(), from: b.from || "anon", to: b.to || "all", text, project: String(b.project || fromProj || "").slice(0, 80) };
+      // `re` threads an OUTCOME back to the CONTRACT it answers. Without it "what am I still owed"
+      // is guesswork: a seat still working and a seat that died look identical from the sender's
+      // side, which is how an orchestrator ends up waiting forever on a dead peer.
+      const re = Number.isFinite(Number(b.re)) && Number(b.re) > 0 ? Number(b.re) : 0;
+      const msg = { id: ++state.seq, ts: now(), from: b.from || "anon", to: b.to || "all", text, project: String(b.project || fromProj || "").slice(0, 80), ...(re ? { re } : {}) };
       state.messages.push(msg); if (state.messages.length > 5000) state.messages.splice(0, 1000);
       dirty = true; pushToStreams(msg);               // <-- instant push to live watchers
       // Mirror onto the unified log. `refs` = the card ids this message cites (#3701), which is what
@@ -2251,6 +2255,46 @@ const server = http.createServer(async (req, res) => {
       appendEvent("message", msg.project, msg.from, { msgId: msg.id, toSession: msg.to, text: msg.text.slice(0, 2000), refs });
       return json(res, 200, { ok: true, id: msg.id });
     }
+    // ---- /contracts: what this session dispatched and has not been answered on ----------------
+    // A contract is a DIRECT message from you to one peer. It closes when that peer sends you an
+    // outcome: strictly by `re`, or, for seats that predate it, oldest-open-first. Broadcasts are
+    // never contracts. Each open one carries the assignee's presence, because the actionable half
+    // of "still waiting" is whether anyone is still on the other end.
+    if (req.method === "GET" && P === "/contracts") {
+      const session = String(q.session || "");
+      if (!session) return json(res, 400, { error: "session required" });
+      const proj = String(q.project || "");
+      const windowMs = Math.max(60000, Number(q.windowMs || 24 * 3600 * 1000));
+      const cutoff = now() - windowMs;
+      const mine = state.messages.filter(m => m.from === session && m.to && m.to !== "all" && m.ts >= cutoff && (!proj || m.project === proj));
+      const replies = state.messages.filter(m => m.to === session && m.from !== session && m.ts >= cutoff);
+      const byRe = new Map();
+      for (const r of replies) if (r.re) byRe.set(Number(r.re), r);
+      const looseByPeer = new Map();
+      for (const r of replies) if (!r.re) { if (!looseByPeer.has(r.from)) looseByPeer.set(r.from, []); looseByPeer.get(r.from).push(r); }
+      for (const arr of looseByPeer.values()) arr.sort((a, b) => a.ts - b.ts);
+      const out = [];
+      for (const c of mine.sort((a, b) => a.ts - b.ts)) {
+        let answer = byRe.get(c.id) || null;
+        if (!answer) {
+          const pool = looseByPeer.get(c.to) || [];
+          const i = pool.findIndex(r => r.ts > c.ts);
+          if (i >= 0) answer = pool.splice(i, 1)[0];
+        }
+        const peer = state.peers[c.to] || null;
+        const seen = peer?.lastSeen || 0;
+        out.push({
+          id: c.id, to: c.to, text: c.text, ts: c.ts, ageMs: now() - c.ts,
+          answered: !!answer,
+          answer: answer ? { id: answer.id, ts: answer.ts, text: answer.text } : null,
+          assigneeOnline: !!seen && (now() - seen) < ONLINE_MS,
+          assigneeStatus: String(peer?.status || ""),
+          assigneeLastSeenMs: seen ? now() - seen : null,
+        });
+      }
+      return json(res, 200, { session, contracts: out, open: out.filter(c => !c.answered).length });
+    }
+
     if (req.method === "GET" && P === "/inbox") {
       if (!canUseInboxSession(auth, q.session)) return json(res, 403, { error: "forbidden" });
       touch(q.session, undefined, undefined, undefined, auth); const since = Number(q.since || 0);

@@ -136,6 +136,29 @@ server.tool("relay_whoami", "Show this session's relay identity, project, hub UR
   return { content: [{ type: "text", text }] };
 });
 
+server.tool("relay_contracts", "What you dispatched and are still owed. Lists every DIRECT message you sent to another session that has not been answered yet, with how long it has been outstanding, whether that session is still alive, and its last known status. Call this before concluding a crew is idle, stuck, or done — silence on the bus is not evidence either way. Answered contracts carry the outcome text.", {},
+  async () => {
+    let r;
+    try { r = await api("GET", `/contracts?session=${encodeURIComponent(SESSION)}&project=${encodeURIComponent(PROJECT)}`); }
+    catch (e) { return { content: [{ type: "text", text: `could not reach the hub: ${e?.message || e}` }] }; }
+    const all = r?.contracts || [];
+    const open = all.filter(c => !c.answered);
+    if (!all.length) return { content: [{ type: "text", text: "You have not dispatched any contracts in the last 24h." }] };
+    const mins = (ms) => (ms >= 60000 ? `${Math.round(ms / 60000)}m` : `${Math.round(ms / 1000)}s`);
+    const line = (c) => {
+      const health = c.answered ? "" :
+        c.assigneeOnline ? ` · alive (${c.assigneeStatus || "no status"})`
+        : c.assigneeLastSeenMs == null ? " · NEVER SEEN on the bus"
+        : ` · LAST SEEN ${mins(c.assigneeLastSeenMs)} ago`;
+      const out = c.answered ? ` → ${String(c.answer?.text || "").slice(0, 120)}` : "";
+      return `${c.answered ? "✅" : "⏳"} #${c.id} → ${c.to} (${mins(c.ageMs)} ago)${health}: "${String(c.text).slice(0, 100)}"${out}`;
+    };
+    const text = `${open.length} outstanding of ${all.length} contract(s) in the last 24h:\n`
+      + all.slice(-25).map(line).join("\n")
+      + (open.some(c => !c.assigneeOnline) ? "\n\n⚠️ At least one assignee is not alive on the bus. Waiting on it will not finish the work — check it, swap it, or reassign." : "");
+    return { content: [{ type: "text", text }] };
+  });
+
 server.tool("relay_task_add", "Add a Kanban card to a project's board on the dashboard (what you're about to work on). Defaults: THIS project, assigned to you, status 'todo'. Pass `project` to target another board — e.g. when you orchestrate a crew that runs in a different directory than the one you launched Claude from. Keep the team's progress visible. Attach a `note` whenever context isn't obvious from the title — it lands on the card's permanent log ({ts,by,text}, kept: last 40).",
   { title: z.string().describe("short task title"), status: z.enum(["todo","doing","testing","failed","done","blocked"]).optional(), assignee: z.string().optional().describe("session id to assign (default: you)"), difficulty: z.enum(["easy","medium","hard"]).optional().describe("difficulty tag — drives model/agent routing (relay_advise) and shows on the board"), model: z.string().optional().describe("the model this card is routed to (from relay_advise routing, or the CLI default) — shown on the card"), deps: z.array(z.number()).optional().describe("card ids this card depends on — drawn as branch edges in the Flow view (e.g. integration depends on every crew card)"), phase: z.string().optional().describe("phase/milestone this card belongs to (e.g. 'P5', 'Auth', 'Launch') — groups it in the Flow view's phase flowchart. Optional; otherwise inferred from the title prefix + time."), note: z.string().max(2000).optional().describe("optional card-log entry (<=2000 chars): context, the plan, or a link — stored on the card as {ts,by,text}"), project: z.string().optional().describe("board to add to (default: this session's project). Set to the crew's project when you orchestrate from a different directory") },
   async ({ title, status, assignee, difficulty, model, deps, phase, note, project }) => {
