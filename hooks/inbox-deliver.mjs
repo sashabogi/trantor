@@ -24,7 +24,7 @@
 import { readFileSync, writeFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
-import { resolveProject, hostId } from "../lib/project.mjs";
+import { resolveProject, hostId, busDir } from "../lib/project.mjs";
 import { signedGet } from "./lib/api.mjs";   // signed: enforce hubs 401 unsigned reads — unsigned, T1 delivery is silently dead
 import { ledgerPaths, ensureStart, anchorCursor, writeCursor } from "./lib/inbox-ledger.mjs";
 
@@ -88,6 +88,42 @@ async function main(stdinRaw) {
   // Resolve THIS session's identity EXACTLY as mcp.mjs / heartbeat.mjs do, so we poll the
   // same peer the relay registered (RELAY_SESSION wins; else RELAY_AGENT brand; else host:project).
   const project = resolveProject(projectDir);
+
+  // IDENTITY DRIFT. The relay MCP server is a separate long-lived process: it resolved its project
+  // once, from the directory the session STARTED in, and cannot see a later `cd`. These hooks
+  // resolve per call from the CURRENT directory. Move between projects mid-session and the two stop
+  // agreeing: mail arrives as one identity while relay_send speaks as the other, so reads work and
+  // sends can 401 on an enrolled hub. Both halves had real traffic on the production hub before
+  // anyone noticed. It cannot be repaired from here (the MCP's cwd is fixed), so say it plainly,
+  // once, with the two ways out.
+  const driftNote = (() => {
+    try {
+      const startDir = process.env.CLAUDE_PROJECT_DIR || "";
+      if (!startDir || startDir === projectDir) return "";
+      const startProject = resolveProject(startDir);
+      if (!startProject || startProject === project) return "";
+      const session0 = String(_in.session_id || "s");
+      const seat = (p) => (process.env.RELAY_AGENT ? `${process.env.RELAY_AGENT}:${p}` : `${hostId()}:${p}`);
+      const marker = join(busDir(), `inbox-drift-${[session0, startProject, project].join("-")}`.replace(/[^A-Za-z0-9_.@-]/g, "_"));
+      if (existsSync(marker)) return "";
+      try { writeFileSync(marker, String(Date.now())); } catch {}
+      return `<trantor-identity-drift receiving="${seat(project)}" sending="${seat(startProject)}">\n`
+        + `⚠️ **This session now has two bus identities.** You are working in \`${projectDir}\` but the session `
+        + `started in \`${startDir}\`, and the relay MCP server is a separate process that resolved its project `
+        + `once at boot and cannot follow a directory change.\n`
+        + `- Mail reaches you as **${seat(project)}** (this directory).\n`
+        + `- \`relay_send\`, \`relay_task_add\` and the other relay tools speak as **${seat(startProject)}** (where the session began).\n`
+        + `So reads can work while sends fail: on a hub running RELAY_AUTH=enforce the sending identity may not be `
+        + `enrolled, and relay_send returns 401 while messages keep arriving.\n`
+        + `**Two ways out:** start the session from the project directory (\`cd ${projectDir} && claude\`), or set `
+        + `\`RELAY_PROJECT=${project}\` for the session so both halves resolve the same way. Until then, say so rather `
+        + `than reporting the bus as broken.\n</trantor-identity-drift>\n`;
+    } catch { return ""; }
+  })();
+
+  // Surface it on its own call. The paths below bail early on a poll throttle, an empty inbox or a
+  // down hub, so folding the notice in there would mean it almost never appears.
+  if (driftNote) return emit(driftNote);
   const session = process.env.RELAY_SESSION
     || (process.env.RELAY_AGENT ? `${process.env.RELAY_AGENT}:${project}` : `${hostId()}:${project}`);
 
