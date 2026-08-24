@@ -27,6 +27,7 @@ const read = (p) => { try { return readFileSync(p, "utf8"); } catch { return "";
 console.log("# trantor crew-completion drill");
 
 const ORCH = "MacBook-Pro-M1:crebral-health";   // the session that assigns the work
+let servedFrom = ORCH;                          // who the waking message claims to be from
 const sends = [];
 let served = 0;
 const hub = http.createServer((req, res) => {
@@ -38,7 +39,7 @@ const hub = http.createServer((req, res) => {
     if (P === "/inbox") return reply({ messages: [], cursor: 0 });
     if (P === "/lessons") return reply({ lessons: [] });
     if (P === "/poll") {
-      if (served++ === 0) return reply({ messages: [{ id: 11, from: ORCH, to: u.searchParams.get("session"),
+      if (served++ === 0) return reply({ messages: [{ id: 11, from: servedFrom, to: u.searchParams.get("session"),
         text: "Take the cardiology formulary file and land the first 40 rules.", ts: Date.now() }], cursor: 1 });
       return setTimeout(() => reply({ messages: [], cursor: 1 }), 250);
     }
@@ -102,6 +103,21 @@ console.log("\nA seat whose turn FAILS tells the assigner directly, not just the
     toOrch.some(s => /fail|error|down|exit [1-9]/i.test(s.text || "")),
     toOrch.map(s => s.text).join(" | ").slice(0, 160));
   console.log(`     ↳ what the orchestrator receives: ${JSON.stringify(toOrch[0]?.text || "")}`);
+}
+
+console.log("\nAn outcome is never acked back to a hub pseudo-id (that loops):");
+{
+  // The duty agent caught this minutes after 0.17.85 shipped: an OVERSEER wake comes from
+  // "hub:duty", which never reads its inbox. Acking it goes undelivered, escalates back to duty,
+  // and wakes the seat again, so every overseer-woken turn loops forever.
+  const prevServe = servedFrom;
+  servedFrom = "hub:duty";
+  const r = await drill({ exitCode: 0, waitMs: 8000 });
+  servedFrom = prevServe;
+  ok("the seat still ran the overseer's wake", r.wakeTurns.length === 1, `${r.wakeTurns.length} wake turn(s)`);
+  ok("but nothing is addressed back to hub:duty",
+    !r.sends.some(s => s.to === "hub:duty"),
+    JSON.stringify(r.sends.map(s => ({ to: s.to, text: (s.text || "").slice(0, 40) }))));
 }
 
 console.log("\nAnd the orchestrator actually SEES it, without polling for it:");

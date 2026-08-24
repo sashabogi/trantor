@@ -262,7 +262,11 @@ async function reportFailure(exit, trigger, undelivered = 0) {
 async function notifyAssigners(pairs, text) {
   const seen = new Set();
   for (const { from: f, id } of pairs) {
-    if (!f || f === "all" || f === SESSION || seen.has(f)) continue;
+    // `hub:*` senders are the hub's own pseudo-ids (hub:duty, the overseer), not sessions: nothing
+    // is ever on the other end reading. Acking one goes undelivered, escalates back to duty, and
+    // wakes this seat again — every overseer-woken turn loops. Found by the duty agent within
+    // minutes of 0.17.85 shipping, which is the bus doing its job.
+    if (!f || f === "all" || f === SESSION || f.startsWith("hub:") || seen.has(f)) continue;
     seen.add(f);
     // `re` threads this outcome to the exact contract it answers, so the sender's ledger closes the
     // right one instead of guessing from timing.
