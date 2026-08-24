@@ -19,7 +19,7 @@ const port = 5000 + Math.floor(Math.random() * 20000);
 const env = {
   ...process.env, HOME: dir, AGENT_BUS_DIR: join(dir, ".agent-bus"), RELAY_DATA_DIR: dir,
   RELAY_PORT: String(port), RELAY_HOST: "127.0.0.1", RELAY_AUTH: "off",
-  RELAY_DUTY_SESSION: "claude:fleet",
+  RELAY_DUTY_SESSION: "claude:trantor-duty",
   RELAY_DUTY_UNDELIVERED_MS: "600",       // 0.6s: "undelivered" fast
   RELAY_OVERSEER_TICK_MS: "300",          // duty tick shares this cadence
   RELAY_ONLINE_MS: "60000",
@@ -41,13 +41,13 @@ try {
   // 1. a DM to a session nobody delivers -> duty gets ONE escalation citing it
   await post("/send", { from: "arch:projA", to: "ghost:projA", text: "please do the thing", project: "projA" });
   await sleep(1800);   // > undelivered window + a couple of ticks
-  let inbox = await get(`/inbox?session=${encodeURIComponent("claude:fleet")}&since=0&peek=1`);
+  let inbox = await get(`/inbox?session=${encodeURIComponent("claude:trantor-duty")}&since=0&peek=1`);
   let esc = (inbox.messages || []).filter(m => m.from === "hub:duty" && /UNDELIVERED/.test(m.text));
   ok("undelivered DM escalates to the duty session", esc.length >= 1, `got ${esc.length}`);
   ok("escalation cites sender, recipient, and content", esc.length > 0 && /arch:projA/.test(esc[0].text) && /ghost:projA/.test(esc[0].text) && /please do the thing/.test(esc[0].text));
   ok("escalation is hub-authored, not impersonated", esc.every(m => m.from === "hub:duty"));
   await sleep(1000);
-  inbox = await get(`/inbox?session=${encodeURIComponent("claude:fleet")}&since=0&peek=1`);
+  inbox = await get(`/inbox?session=${encodeURIComponent("claude:trantor-duty")}&since=0&peek=1`);
   const esc2 = (inbox.messages || []).filter(m => m.from === "hub:duty" && /UNDELIVERED/.test(m.text));
   ok("a standing outage escalates ONCE (dedup per message)", esc2.length === esc.length, `${esc.length} -> ${esc2.length}`);
 
@@ -55,19 +55,19 @@ try {
   await post("/send", { from: "arch:projA", to: "alive:projA", text: "you will hear this", project: "projA" });
   await get(`/inbox?session=${encodeURIComponent("alive:projA")}&since=0`);   // non-peek: advances the ledger
   await sleep(1500);
-  inbox = await get(`/inbox?session=${encodeURIComponent("claude:fleet")}&since=0&peek=1`);
+  inbox = await get(`/inbox?session=${encodeURIComponent("claude:trantor-duty")}&since=0&peek=1`);
   ok("delivered messages do not escalate", !(inbox.messages || []).some(m => /alive:projA/.test(m.text) && /UNDELIVERED/.test(m.text)));
 
   // 3. broadcasts never escalate
   await post("/send", { from: "arch:projA", to: "all", text: "broadcast noise", project: "projA" });
   await sleep(1500);
-  inbox = await get(`/inbox?session=${encodeURIComponent("claude:fleet")}&since=0&peek=1`);
+  inbox = await get(`/inbox?session=${encodeURIComponent("claude:trantor-duty")}&since=0&peek=1`);
   ok("broadcasts do not escalate", !(inbox.messages || []).some(m => /broadcast noise/.test(m.text) && /UNDELIVERED/.test(m.text)));
 
   // 4. messages TO the duty session never re-escalate (no feedback loop)
-  await post("/send", { from: "arch:projA", to: "claude:fleet", text: "direct ask for duty", project: "projA" });
+  await post("/send", { from: "arch:projA", to: "claude:trantor-duty", text: "direct ask for duty", project: "projA" });
   await sleep(1500);
-  inbox = await get(`/inbox?session=${encodeURIComponent("claude:fleet")}&since=0&peek=1`);
+  inbox = await get(`/inbox?session=${encodeURIComponent("claude:trantor-duty")}&since=0&peek=1`);
   ok("no self-escalation loop for duty's own inbox", !(inbox.messages || []).some(m => /direct ask for duty/.test(m.text) && /UNDELIVERED/.test(m.text)));
 
   // 5. an overseer warning is forwarded to duty
@@ -75,14 +75,14 @@ try {
   await post("/register", { session: "a:projB", project: "projB", status: "working" });
   await post("/register", { session: "b:projB", project: "projB", status: "working" });
   await sleep(1500);
-  inbox = await get(`/inbox?session=${encodeURIComponent("claude:fleet")}&since=0&peek=1`);
+  inbox = await get(`/inbox?session=${encodeURIComponent("claude:trantor-duty")}&since=0&peek=1`);
   const ow = (inbox.messages || []).filter(m => m.from === "hub:duty" && /OVERSEER same-project-sessions/.test(m.text) && /projB/.test(m.text));
   ok("overseer warning is forwarded to the duty session", ow.length >= 1, `got ${ow.length}`);
 
   // 6. the seat can name ITSELF at runtime — `trantor duty up` talks to a hub it cannot set env on
   //    (regression: DUTY_SESSION was a boot-time const, so a remote hub could never be told).
   let st = await get("/overseer/status");
-  ok("status reports the boot-time duty session", st.dutySession === "claude:fleet", `got ${JSON.stringify(st.dutySession)}`);
+  ok("status reports the boot-time duty session", st.dutySession === "claude:trantor-duty", `got ${JSON.stringify(st.dutySession)}`);
   const setRes = await post("/overseer/duty", { session: "claude:relief" });
   ok("POST /overseer/duty accepts a new seat", setRes.ok === true && setRes.dutySession === "claude:relief", JSON.stringify(setRes));
   st = await get("/overseer/status");
@@ -91,7 +91,7 @@ try {
   await sleep(1800);
   const relief = await get(`/inbox?session=${encodeURIComponent("claude:relief")}&since=0&peek=1`);
   ok("escalations follow the new seat", (relief.messages || []).some(m => m.from === "hub:duty" && /after the handover/.test(m.text)));
-  const oldSeat = await get(`/inbox?session=${encodeURIComponent("claude:fleet")}&since=0&peek=1`);
+  const oldSeat = await get(`/inbox?session=${encodeURIComponent("claude:trantor-duty")}&since=0&peek=1`);
   ok("the replaced seat stops receiving escalations", !(oldSeat.messages || []).some(m => /after the handover/.test(m.text)));
   const badRes = await post("/overseer/duty", {});
   ok("a missing session field is rejected", !!badRes.error);

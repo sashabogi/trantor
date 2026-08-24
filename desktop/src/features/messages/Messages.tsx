@@ -43,7 +43,7 @@ type Thread = {
  * crebral-health":
  *   MacBook-Pro-M1:crebral-health → "crebral-health"   (interactive window: machine head is chrome)
  *   glm:crebral-health            → "glm:crebral-health" (crew seat: the AGENT is the identity)
- *   claude:fleet                  → "duty seat"          (the fleet's acting brain, by its job)
+ *   claude:trantor-duty           → "Trantor Duty Agent"  (the always-on triage seat, by its job)
  *   sasha@mac                     → "sasha@mac"
  * Full session id stays available as a tooltip wherever this renders. */
 const HOSTISH = /^(macbook|imac|mac[-.]|.*\.local$)|@/i;
@@ -52,7 +52,7 @@ const HOSTISH = /^(macbook|imac|mac[-.]|.*\.local$)|@/i;
  * offer them as recipients. */
 const isSynthetic = (session: string) => session.startsWith("hub:");
 export function shortName(session: string): string {
-  if (session === "claude:fleet") return "duty seat";
+  if (session === "claude:trantor-duty" || session === "claude:fleet") return "Trantor Duty Agent";   // claude:fleet = its pre-0.17.88 id
   const [head, ...rest] = session.split(":");
   const tail = rest.join(":");
   if (!tail) return head;
@@ -243,7 +243,7 @@ export function Messages({ client, me, focus }: { client: HubClient; me: string;
   // overseer's acting half, and "tell the overseer something" needs an address, not a mystery
   const startable = [...peers]
     .filter(p => p.session !== me && !isSynthetic(p.session))
-    .sort((a, b) => (a.session === "claude:fleet" ? -1 : 0) - (b.session === "claude:fleet" ? -1 : 0) || a.session.localeCompare(b.session));
+    .sort((a, b) => (a.session.startsWith("claude:trantor-duty") || a.session === "claude:fleet" ? -1 : 0) - (b.session.startsWith("claude:trantor-duty") || b.session === "claude:fleet" ? -1 : 0) || a.session.localeCompare(b.session));
 
   return (
     <div className="tr-pane flex h-full flex-col">

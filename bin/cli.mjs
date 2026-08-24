@@ -178,6 +178,7 @@ switch (cmd) {
   trantor policy      the autonomy ladder: show | set <project> <1-4> | link <a> <b> --reason "<why>"
   trantor proposals   agent-proposed permissions awaiting YOUR decision: [--all] | approve <id> [--note "…"] | deny <id> --note "…"
   trantor duty        the always-on fleet duty agent: up | down | status — hub-escalated triage so you are not the switchboard
+                      runs on sonnet by default (it never writes code); duty up --model <m> to pick, or --model inherit for the CLI default
   trantor orchestrate a per-project ORCHESTRATOR with a MISSION.md and a pulse: up [--every 10m] | down | status — the loop-orchestrator pattern
   trantor patrol      machine-wide resource sweep: crews/runners/workspaces/orphans — [--json] [--reap] (reap = dead rows + stale artifacts ONLY)
 
