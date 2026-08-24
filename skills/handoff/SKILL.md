@@ -15,7 +15,15 @@ re-deriving context, and save it so the next session in this project auto-loads 
 
 ## Instructions
 
-1. Compose a thorough markdown handoff for the current task with these sections (be specific —
+0. **Already written one this session?** Then do NOT write it again — pass the baton on it:
+   ```bash
+   node "${CLAUDE_PLUGIN_ROOT}/bin/write-handoff.mjs" --baton --latest
+   ```
+   That picks this project's newest unconsumed handoff and hands it over untouched, and exits
+   non-zero if there isn't one. Recomposing a handoff you already wrote costs minutes and produces
+   a second, slightly different document.
+
+1. Otherwise, compose a thorough markdown handoff for the current task with these sections (be specific —
    exact file paths, concrete next actions; the successor has a fresh window and only this):
    - **TASK** — what we're doing and the goal
    - **STATE** — what's done, what's in progress
