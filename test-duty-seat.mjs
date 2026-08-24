@@ -46,6 +46,9 @@ async function dutyUp(extraArgs = [], extraEnv = {}) {
   const ARGV = join(w, "argv.log");
   writeFileSync(join(fakebin, "claude"), `#!/bin/sh\necho "$@" >> ${ARGV}\nexit 0\n`);
   chmodSync(join(fakebin, "claude"), 0o755);
+  const OSA = join(w, "osascript.log");
+  writeFileSync(join(fakebin, "osascript"), `#!/bin/sh\necho "$@" >> ${OSA}\ncat >> ${OSA} 2>/dev/null </dev/stdin\nexit 0\n`);
+  chmodSync(join(fakebin, "osascript"), 0o755);
   writeFileSync(join(BUS, "config.json"), JSON.stringify({ url: HUB, ownerIdentity: "admin" }));
 
   // async spawn, never spawnSync: the mock hub lives in THIS process, so a synchronous child would
@@ -65,7 +68,9 @@ async function dutyUp(extraArgs = [], extraEnv = {}) {
   try { const pid = Number(readFileSync(join(BUS, "duty.pid"), "utf8")); process.kill(pid, "SIGKILL"); } catch {}
   spawnSync("pkill", ["-f", `crew-runner.mjs claude ${join(BUS, "fleet")}`]);
   const log = (() => { try { return readFileSync(join(BUS, "duty.log"), "utf8"); } catch { return ""; } })();
-  return { argv: existsSync(ARGV) ? readFileSync(ARGV, "utf8") : "", stdout: r.stdout || "", stderr: r.stderr || "", log };
+  const osa = (() => { try { return readFileSync(join(w, "osascript.log"), "utf8"); } catch { return ""; } })();
+  const launcher = (() => { try { return readFileSync(join(BUS, "duty-launch.sh"), "utf8"); } catch { return ""; } })();
+  return { osa, launcher, argv: existsSync(ARGV) ? readFileSync(ARGV, "utf8") : "", stdout: r.stdout || "", stderr: r.stderr || "", log };
 }
 
 console.log("\nThe triage seat pins its own model instead of inheriting yours:");
@@ -110,6 +115,28 @@ console.log("\nA stranger who sees this window can tell what it is:");
   ok("nothing still calls it \"fleet\"", !/:fleet|· fleet/.test(r.log + r.stdout), (r.log + r.stdout).slice(0, 200));
   const first = (r.log.match(/Trantor Duty Agent[^\n]*/) || [""])[0];
   if (first) console.log(`     ↳ window header: ${JSON.stringify(first.replace(/\x1b\[[0-9;]*m/g, "").slice(0, 120))}`);
+}
+
+
+console.log("\nBy default the seat runs in a window you can see:");
+{
+  // An always-on agent you cannot see is the thing that made the operator uneasy in the first
+  // place, and the self-introduction printed on turn 1 is worthless in a log file nobody opens.
+  const r = await dutyUp();
+  ok("a terminal window is opened for it", /Terminal/.test(r.osa) && /do script/.test(r.osa), r.osa.slice(0, 160));
+  ok("…via a launcher script, since the rules are far too long for a command line",
+    r.launcher.length > 500 && /crew-runner\.mjs/.test(r.launcher), `${r.launcher.length} chars`);
+  ok("…carrying the rules, the model and the hub", /Trantor Duty Agent/.test(r.launcher) && /CREW_MODEL/.test(r.launcher) && /RELAY_URL/.test(r.launcher),
+    r.launcher.slice(0, 200));
+  ok("the launcher never leaks the rules onto the command line", !/do script[^"]*You NEVER write code/.test(r.osa));
+  ok("status can still find it", /RUNNING|pid/.test(r.stdout), r.stdout.slice(0, 140));
+}
+
+console.log("\nAnd headless is still available for launchd and CI:");
+{
+  const r = await dutyUp(["--headless"]);
+  ok("--headless opens no window", !/do script/.test(r.osa), r.osa.slice(0, 120));
+  ok("…and still runs the seat", /--model/.test(r.argv), r.argv.slice(0, 120));
 }
 
 hub.close();

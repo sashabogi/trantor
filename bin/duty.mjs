@@ -46,6 +46,8 @@ function fleetHub() {
 // a patrol script, send a templated nudge, post 280 chars. Nobody chose that; it was inherited.
 // Precedence: --model flag > CREW_MODEL env > sonnet. `--model inherit` restores the old behaviour.
 const DUTY_MODEL = val("model", "") || process.env.CREW_MODEL || "sonnet";
+// Visible by default; --headless keeps the old background behaviour for launchd and CI.
+const WINDOW = !argv.includes("--headless") && process.platform === "darwin";
 const AGENT = val("agent", "claude");
 // Named, not inherited. It used to be "claude:fleet" purely because the seat's directory was
 // called fleet and identity is derived from directory basename — the same identity-by-position
@@ -121,19 +123,47 @@ if (cmd === "up") {
   if (prior) { console.log(`— reaping prior duty seat (pid ${prior}) —`); try { process.kill(prior); } catch {} }
   try { execSync(`pkill -f "crew-runner.mjs ${AGENT} ${DIR}"`, { stdio: "ignore" }); } catch {}
   if (!(await ensureFleetIdentity(hub))) process.exit(1);
-  const out = openSync(LOGF, "a");
-  const child = spawn(process.execPath, [join(ROOT, "bin", "crew-runner.mjs"), AGENT, DIR], {
-    detached: true, stdio: ["ignore", out, out],
-    env: (() => {
-      const e = { ...process.env, RELAY_URL: hub, RUNNER_RULES: RULES, CREW_KICKOFF: KICKOFF,
-                  RUNNER_TITLE: "Trantor Duty Agent", RUNNER_ABOUT: ABOUT };
-      if (DUTY_MODEL === "inherit") delete e.CREW_MODEL; else e.CREW_MODEL = DUTY_MODEL;
-      return e;
-    })(),
-  });
-  child.unref();
-  writeFileSync(PIDF, String(child.pid));
-  console.log(`— duty agent up: ${SESSION} (pid ${child.pid}) on ${DUTY_MODEL === "inherit" ? "the CLI default model" : DUTY_MODEL} watching ${hub} — log: ${LOGF}`);
+  const env = (() => {
+    const e = { RELAY_URL: hub, RUNNER_RULES: RULES, CREW_KICKOFF: KICKOFF,
+                RUNNER_TITLE: "Trantor Duty Agent", RUNNER_ABOUT: ABOUT };
+    if (DUTY_MODEL !== "inherit") e.CREW_MODEL = DUTY_MODEL;
+    return e;
+  })();
+
+  let pid = 0;
+  if (WINDOW) {
+    // A WINDOW, by default. Headless was the old behaviour and it hid the thing: an always-on agent
+    // nobody can see is exactly what unsettles a person who finds the process, and the seat's own
+    // introduction (RUNNER_ABOUT) is worthless printed into a log file nobody opens. Crew seats have
+    // always opened windows; the duty seat now does too.
+    //
+    // The rules are ~4KB of prose with backticks, quotes and $ in them, so they cannot ride a
+    // command line or an AppleScript string. A launcher script carries them instead: a quoted
+    // heredoc means the shell expands nothing, and osascript only ever sees the path.
+    const launcher = join(BUS, "duty-launch.sh");
+    const exports = Object.entries(env).map(([k, v]) =>
+      `export ${k}=$(cat <<'TRANTOR_${k}_EOF'\n${v}\nTRANTOR_${k}_EOF\n)`).join("\n");
+    writeFileSync(launcher, `#!/bin/bash\n# written by \`trantor duty up\` — safe to delete when the seat is down\n${exports}\nexec ${JSON.stringify(process.execPath)} ${JSON.stringify(join(ROOT, "bin", "crew-runner.mjs"))} ${AGENT} ${JSON.stringify(DIR)}\n`, { mode: 0o700 });
+    const osa = `tell application "Terminal"\n  do script ${JSON.stringify(`bash ${launcher}`)}\n  activate\nend tell\n`;
+    try { execSync(`osascript -e ${JSON.stringify(osa)}`, { stdio: "ignore", timeout: 8000 }); }
+    catch (e) { console.error(`could not open a window (${e?.message || e}) — falling back to headless`); }
+    // The runner lives inside Terminal, so its pid is not ours to know: find it the same way `down`
+    // does. Poll briefly, since Terminal takes a moment to start the shell.
+    for (let i = 0; i < 25 && !pid; i++) {
+      try { pid = Number(execSync(`pgrep -f "crew-runner.mjs ${AGENT} ${DIR}" | head -1`, { encoding: "utf8" }).trim()) || 0; } catch {}
+      if (!pid) execSync("sleep 0.2");
+    }
+  }
+  if (!pid) {
+    const out = openSync(LOGF, "a");
+    const child = spawn(process.execPath, [join(ROOT, "bin", "crew-runner.mjs"), AGENT, DIR], {
+      detached: true, stdio: ["ignore", out, out], env: { ...process.env, ...env },
+    });
+    child.unref();
+    pid = child.pid;
+  }
+  writeFileSync(PIDF, String(pid));
+  console.log(`— duty agent up: ${SESSION} (pid ${pid})${WINDOW ? " in a Terminal window" : " headless"} on ${DUTY_MODEL === "inherit" ? "the CLI default model" : DUTY_MODEL} watching ${hub} — log: ${LOGF}`);
   const fed = await registerDutySeat(hub, SESSION);
   if (fed) console.log(`  hub feeds it: undelivered DMs (>${Math.round(Number(process.env.RELAY_DUTY_UNDELIVERED_MS || 600000) / 60000)}m) + overseer warnings.`);
   process.exit(0);   // the seat IS up; a hub that won't feed it is a warning, not a failed start
