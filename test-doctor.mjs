@@ -45,5 +45,50 @@ const bareBrands = brandsOf(bareEntries);
 ok("parsing an empty machine invents no seat called 'no'", !bareBrands.includes("no"), bareBrands.join(", "));
 ok("every surviving brand came from a real seat line", bareBrands.every(b => /^[a-z]/.test(b)), bareBrands.join(", "));
 
+// 3. Key attribution. A provider key that authenticates BOTH the crew seats and Scrooge makes a
+// spend spike unattributable — that is exactly how a $14 DeepSeek day (2026-08-25) took an
+// investigation to explain, when Scrooge turned out to be 0.15% of the tokens on the key.
+{
+  const { mkdtempSync, mkdirSync, writeFileSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const runHome = (home) => {
+    const opts = { encoding: "utf8", env: { HOME: home, PATH: "/usr/bin:/bin" }, maxBuffer: 8 * 1024 * 1024 };
+    try { return JSON.parse(execFileSync(process.execPath, [join(HERE, "bin", "doctor.mjs"), "--json"], opts)); }
+    catch (e) { return JSON.parse(e.stdout); }
+  };
+  const mkHome = (crew, scrooge) => {
+    const h = mkdtempSync(join(tmpdir(), "trantor-keys-"));
+    mkdirSync(join(h, ".agent-bus"), { recursive: true });
+    mkdirSync(join(h, ".token-scrooge"), { recursive: true });
+    if (crew !== null) writeFileSync(join(h, ".agent-bus", ".env"), crew);
+    if (scrooge !== null) writeFileSync(join(h, ".token-scrooge", ".env"), scrooge);
+    return h;
+  };
+  const keySection = (r) => [...r.ok, ...r.issues, ...r.notes].filter(e => String(e.section || "").startsWith("provider keys"));
+
+  // (a) no crew layer at all — the seat falls through to Scrooge's key
+  const SECRET = "sk-1111secretmiddle2222";
+  let r = runHome(mkHome(null, `DEEPSEEK_API_KEY=${SECRET}\n`));
+  let sec = keySection(r);
+  ok("a crew seat falling through to Scrooge's key is reported as double duty",
+    sec.some(e => /DEEPSEEK_API_KEY.*share ONE key/.test(e.message)), sec.map(e => e.message).join(" | "));
+  ok("…and it raises exactly ONE issue, not one per provider",
+    r.issues.filter(e => String(e.section || "").startsWith("provider keys")).length === 1);
+  ok("the key itself is NEVER printed in full",
+    !JSON.stringify(r).includes(SECRET), "the raw key leaked into the report");
+  ok("…but enough of it shows to match a line item on the provider's bill",
+    sec.some(e => e.message.includes("2222")));
+
+  // (b) the crew has its OWN key — the whole point of the split
+  r = runHome(mkHome(`DEEPSEEK_API_KEY=sk-9999crewkey8888\n`, `DEEPSEEK_API_KEY=${SECRET}\n`));
+  sec = keySection(r);
+  ok("a crew key of its own clears the double-duty finding",
+    !sec.some(e => /share ONE key/.test(e.message)), sec.map(e => e.message).join(" | "));
+  ok("…and doctor says the two are separately billable",
+    sec.some(e => /separate keys/.test(e.message)), sec.map(e => e.message).join(" | "));
+  ok("…naming the crew layer as the source, so precedence is legible",
+    sec.some(e => /agent-bus\/\.env \(crew\)/.test(e.message)), sec.map(e => e.message).join(" | "));
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

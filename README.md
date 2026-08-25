@@ -151,7 +151,15 @@ Fix the `→` lines (each CLI's own sign-in happens once, in that CLI) and re-ru
 until it's clean.
 
 Provider API keys (e.g. `DEEPSEEK_API_KEY`) live in one file: **`~/.agent-bus/.env`** — the
-crew runners source it automatically.
+crew runners source it automatically, and it wins over anything Scrooge has.
+
+That precedence is the point. Scrooge (the cheap-model router) keeps its own keys in
+`~/.token-scrooge/.env`, and if the crew has no key of its own it falls through to Scrooge's. That
+still works, but then one key authenticates both and your provider bill cannot tell them apart —
+a crew seat and a batch of grunt summaries land on the same line item. Give the crew **separate
+keys**, minted in the provider console rather than copied, and each shows up on its own line and
+can be capped independently. `trantor doctor` reports which key each surface resolves to, masked,
+under "provider keys".
 
 ## Your first build
 

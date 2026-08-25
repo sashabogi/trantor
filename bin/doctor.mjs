@@ -139,6 +139,58 @@ for (const c of CLIS) {
 }
 if (!installed) warn("no crew CLIs found", "install at least one of: codex, gemini, kimi, opencode — Trantor orchestrates whatever you have");
 
+// ---- key attribution: WHICH key does each surface actually spend on? ------------------------
+// Provider keys resolve through a LAYERED lookup and nothing ever showed which layer won. On
+// 2026-08-25 a $14 DeepSeek day could not be explained: ~/.token-scrooge/.env held the only
+// DEEPSEEK_API_KEY, so Scrooge's `dev-infra` key was ALSO authenticating every crew seat (the
+// runner sources that file). Scrooge turned out to be 0.15% of the tokens on that key and the
+// crew was the other 99.85%, but the bill could not say so — one key, two jobs, one line item.
+//
+// The layers, highest priority first — this MIRRORS bin/crew-runner.mjs, which sources
+// ~/.agent-bus/.env last so it wins:
+//   1. the process environment
+//   2. ~/.agent-bus/.env      — the CREW layer (seats: opencode/deepseek/openrouter/dsh)
+//   3. ~/.token-scrooge/.env  — the SCROOGE layer (cheap-model grunt routing)
+section("provider keys (who spends on what)");
+const KEY_VARS = ["DEEPSEEK_API_KEY", "OPENROUTER_API_KEY", "MOONSHOT_API_KEY", "ZAI_API_KEY", "OPENAI_API_KEY", "GEMINI_API_KEY", "XAI_API_KEY"];
+const CREW_ENV = join(H, ".agent-bus", ".env");
+const SCROOGE_ENV = join(H, ".token-scrooge", ".env");
+const readEnvFile = (f) => {
+  const out = {};
+  try {
+    for (const line of readFileSync(f, "utf8").split("\n")) {
+      const m = line.match(/^\s*(?:export\s+)?([A-Z0-9_]+)\s*=\s*(.*)$/);
+      if (m) out[m[1]] = m[2].trim().replace(/^["']|["']$/g, "");
+    }
+  } catch {}
+  return out;
+};
+// Never print a key. The suffix is enough to match a line item in a provider console.
+const mask = (v) => (!v ? "" : v.length <= 12 ? "****" : `${v.slice(0, 5)}…${v.slice(-4)}`);
+const crewEnv = readEnvFile(CREW_ENV), scroogeEnv = readEnvFile(SCROOGE_ENV);
+let anyKey = false, shared = 0; const sharedVars = [];
+for (const v of KEY_VARS) {
+  const crew = process.env[v] || crewEnv[v] || "";
+  const scrooge = process.env[v] || scroogeEnv[v] || "";
+  if (!crew && !scrooge) continue;
+  anyKey = true;
+  const crewSrc = process.env[v] ? "process env" : crewEnv[v] ? "~/.agent-bus/.env (crew)" : scroogeEnv[v] ? "~/.token-scrooge/.env (FALLBACK)" : "none";
+  const crewKey = crew || scrooge;
+  const scroogeFileKey = scroogeEnv[v] || "";
+  if (crewKey && scroogeFileKey && crewKey === scroogeFileKey) {
+    shared++; sharedVars.push(v);
+    note(`${v}: crew + Scrooge share ONE key ${mask(crewKey)} — spend is indistinguishable on the bill`);
+  } else {
+    ok(`${v}: crew ${mask(crewKey)} via ${crewSrc}${scroogeFileKey && scroogeFileKey !== crewKey ? ` · scrooge ${mask(scroogeFileKey)} via ~/.token-scrooge/.env` : ""}`);
+  }
+}
+if (!anyKey) note("no provider API keys found in env, ~/.agent-bus/.env or ~/.token-scrooge/.env");
+else if (!shared) ok("crew and Scrooge spend on separate keys — each shows up as its own line item");
+else {
+  warn(`${shared} provider key(s) do double duty (${sharedVars.join(", ")}) — a spike on the bill cannot be attributed to the crew or to Scrooge`,
+    `mint a second key per provider and give the CREW its own, e.g.: echo 'DEEPSEEK_API_KEY=<new-crew-key>' >> ~/.agent-bus/.env   (Scrooge keeps ~/.token-scrooge/.env; the runner sources ~/.agent-bus/.env last, so it wins)`);
+}
+
 // brain
 section("the brain");
 has("scrooge") || existsSync(join(H, ".local", "bin", "scrooge"))
