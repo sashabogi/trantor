@@ -22,11 +22,16 @@
 //     delivered and then letting the stop through would hide it from the waker too — a silent hole.
 //   * Any error, or a hub that is down -> allow the stop. Never trap a session because of us.
 import { readFileSync, writeFileSync, existsSync } from "node:fs";
-import { join } from "node:path";
+import { join, dirname } from "node:path";
+import { spawn } from "node:child_process";
+import { fileURLToPath } from "node:url";
 import { homedir } from "node:os";
 import { resolveProject, hostId } from "../lib/project.mjs";
 import { signedGet } from "./lib/api.mjs";   // signed: enforce hubs 401 unsigned reads — unsigned, T2 delivery is silently dead
 import { ledgerPaths, ensureStart, anchorCursor, writeCursor } from "./lib/inbox-ledger.mjs";
+import { readArm, clearArm, markHandedOff } from "./lib/handoff.mjs";
+
+const HERE = dirname(fileURLToPath(import.meta.url));
 
 const FETCH_TIMEOUT_MS = Number(process.env.RELAY_STOP_TIMEOUT_MS || 1500);
 
@@ -103,6 +108,27 @@ async function main() {
   if (process.env.RELAY_STOP_INBOX === "0") return allow();
 
   const projectDir = input.cwd || process.env.CLAUDE_PROJECT_DIR || process.cwd();
+
+  // A Stop IS the turn boundary. If the heartbeat armed a baton while this session was mid-turn,
+  // this is the first honest moment to fire it: the turn is complete, so the summary describes
+  // finished work rather than a session thirty seconds from its own conclusions. Fired detached and
+  // never awaited, and the arming is cleared FIRST so a crash in the worker cannot re-fire it on
+  // every subsequent Stop.
+  try {
+    const armed = readArm(input.session_id || "");
+    if (armed) {
+      clearArm(input.session_id || "");
+      const kid = spawn(process.execPath, [join(HERE, "handoff-now.mjs"),
+        armed.projectDir || projectDir, String(input.session_id || ""), armed.transcript || "",
+        armed.reason || "context-warn", armed.windowId || "", armed.tty || ""],
+        { detached: true, stdio: "ignore" });
+      kid.unref();
+      // Mark it here, on the path that actually fired, so a session parked above the warn line
+      // cannot re-arm and re-fire every tick.
+      try { markHandedOff(String(input.session_id || ""), Number(armed.tokens) || 0); } catch {}
+      process.stderr.write("[trantor] turn boundary reached — firing the armed baton\n");
+    }
+  } catch {}
   // Mirror the other hooks: a home-directory session isn't project work and isn't on the bus.
   if (!process.env.RELAY_SESSION && !process.env.RELAY_PROJECT && projectDir === homedir()) return allow();
 

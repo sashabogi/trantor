@@ -18,13 +18,14 @@ import { join, basename, dirname } from "node:path";
 import { homedir, hostname } from "node:os";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { readConfig, contextUsage, warnFrac, alreadyHandedOff, markHandedOff, controllingTty, terminalWindowForTty, subagentsActive } from "./lib/handoff.mjs";
+import { armBaton, readArm, clearArm, readConfig, contextUsage, warnFrac, alreadyHandedOff, markHandedOff, controllingTty, terminalWindowForTty, subagentsActive } from "./lib/handoff.mjs";
 import { resolveProject, hostId } from "../lib/project.mjs";
 import { installedVersion } from "./lib/update-check.mjs";   // report our hook version so the hub can flag stale sessions
 import { signedPost } from "./lib/api.mjs";
 
 const HEARTBEAT_MS = Number(process.env.RELAY_HEARTBEAT_MS || 60 * 1000);
 const FETCH_TIMEOUT_MS = Number(process.env.RELAY_HEARTBEAT_TIMEOUT_MS || 1500);
+const ARM_MAX_MS = Number(process.env.TRANTOR_BATON_ARM_MAX_MS || 15 * 60 * 1000);
 const INFLIGHT_MS = 5 * 60 * 1000;
 const HERE = dirname(fileURLToPath(import.meta.url));
 
@@ -83,25 +84,56 @@ async function maybeEarlyWarn(stdinRaw, session) {
 
     // In-flight guard: the detached worker takes ~tens of seconds to summarize;
     // don't launch a second one on the next heartbeat tick meanwhile.
+    // NOTE the ordering: this debounce guards the SPAWN, not the arming. It used to sit here and
+    // return before any of the logic below, which meant the arm/backstop path never ran a second
+    // time and a session that reached no turn boundary would stay armed forever. Arming is cheap
+    // and idempotent; only launching the worker needs debouncing.
     const inflight = join(homedir(), ".agent-bus", `handoff-inflight-${String(sessionId).replace(/[^A-Za-z0-9_.-]/g, "_")}.stamp`);
-    try { if (existsSync(inflight) && Date.now() - (Number(readFileSync(inflight, "utf8")) || 0) < INFLIGHT_MS) return; } catch {}
-    try { writeFileSync(inflight, String(Date.now())); } catch {}
+    const spawnDebounced = () => {
+      try { if (existsSync(inflight) && Date.now() - (Number(readFileSync(inflight, "utf8")) || 0) < INFLIGHT_MS) return false; } catch {}
+      try { writeFileSync(inflight, String(Date.now())); } catch {}
+      return true;
+    };
 
     const projectDir = process.env.CLAUDE_PROJECT_DIR || process.cwd();
     // Detect THIS session's Terminal window NOW (the hook has the controlling tty; the detached worker
     // won't) so the baton-close can replace this exact window once the fresh session takes over.
     const tty = controllingTty();
     const windowId = tty ? terminalWindowForTty(tty) : "";
-    process.stderr.write(`[trantor] context ${Math.round(usage.frac * 100)}% of ${usage.window} — baton pass (window ${windowId || "?"})\n`);
-    const child = spawn(process.execPath, [join(HERE, "handoff-now.mjs"), projectDir, sessionId, transcript, "context-warn", windowId, tty],
-      { detached: true, stdio: "ignore" });
-    child.unref();
-    // Persistent per-window guard — the SAME one precompact uses. Without this the early-warning was
-    // gated ONLY by the 5-minute inflight stamp, so a session parked above the warn line re-fired every
-    // 5 minutes: a STORM of handoffs + a new fresh window + a new baton-close each tick (seen as 8 stacked
-    // handoffs ~5 min apart). markHandedOff makes alreadyHandedOff() short-circuit until the context
-    // actually resets (<70% of where we fired), so it's exactly ONE baton per context window.
-    markHandedOff(sessionId, usage.tokens);
+    // ARM, do not fire. This hook is PostToolUse: the only moment it can ever run is between two
+    // tool calls, i.e. mid-turn. Firing here produced a handoff written 36 seconds before the work
+    // it described was committed (2026-08-24), and the successor reported four finished things as
+    // still open. The Stop hook fires it at the next turn boundary, where the turn is complete.
+    //
+    // The window id and tty are captured HERE on purpose: this hook has the controlling tty and the
+    // detached worker does not, so the baton-close can still replace this exact window later.
+    const armed = readArm(sessionId);
+    const age = armed ? Date.now() - (Number(armed.ts) || 0) : 0;
+    if (armed && age < ARM_MAX_MS) {
+      process.stderr.write(`[trantor] context ${Math.round(usage.frac * 100)}% — baton already armed ${Math.round(age / 1000)}s ago, waiting for a turn boundary\n`);
+      return;
+    }
+    if (armed) {
+      // Backstop: a session that never reaches a Stop (parked, or looping without ending a turn)
+      // must still hand off rather than never. Fire it directly and say that is what happened.
+      process.stderr.write(`[trantor] baton armed ${Math.round(age / 60000)}m ago with no turn boundary — firing anyway\n`);
+      clearArm(sessionId);
+      if (spawnDebounced()) {
+        const child = spawn(process.execPath, [join(HERE, "handoff-now.mjs"), projectDir, sessionId, transcript, "context-warn", windowId, tty],
+          { detached: true, stdio: "ignore" });
+        child.unref();
+        markHandedOff(sessionId, usage.tokens);
+      }
+      return;
+    }
+    process.stderr.write(`[trantor] context ${Math.round(usage.frac * 100)}% of ${usage.window} — arming the baton for the next turn boundary (window ${windowId || "?"})\n`);
+    // Arming does NOT markHandedOff. That guard exists so a session parked above the warn line does
+    // not re-fire every tick (8 stacked handoffs ~5 min apart, once observed) — but it makes
+    // alreadyHandedOff() short-circuit this whole block, so marking at ARM time meant no later
+    // heartbeat could ever run the backstop and a session that reached no Stop stayed armed
+    // forever. It is marked where the baton actually fires: here on the backstop path, and in the
+    // Stop hook on the normal path. Re-arming every tick is prevented by the age check above.
+    armBaton(sessionId, { projectDir, transcript, reason: "context-warn", windowId, tty, tokens: usage.tokens });
   } catch {}
 }
 

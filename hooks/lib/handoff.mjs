@@ -10,7 +10,7 @@
 // session that loads the handoff. The heartbeat path lets us do that BEFORE the
 // wall when we know the window size. Both paths share a per-session guard so we
 // never write/spawn twice for the same context window.
-import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync, statSync, openSync, readSync, fstatSync, closeSync } from "node:fs";
+import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync, statSync, openSync, readSync, fstatSync, closeSync, rmSync } from "node:fs";
 import { join, basename, dirname } from "node:path";
 import { homedir, hostname } from "node:os";
 import { execSync, spawn } from "node:child_process";
@@ -116,6 +116,30 @@ function nowSec() { try { return Number(execSync("date +%s", { encoding: "utf8" 
 // window up (or, before the 2026-06-21 fix, kill the original) while real in-flight agent work is
 // running. INCIDENT 2026-06-21: a 90% baton fired mid 2-agent build and the original session was
 // SIGKILLed mid-flight. Best-effort; returns false on any error.
+// ---- ARMING: the baton waits for a turn boundary --------------------------------------------
+// The heartbeat runs on PostToolUse, so the only moment it can ever fire is BETWEEN TWO TOOL CALLS
+// — the middle of a turn. On 2026-08-24 that produced a handoff written 36 seconds before the work
+// it described was committed, and the successor reported four finished things as still open.
+// subagentsActive() was the only mid-flight guard and it only sees spawned sub-agents, not a
+// session driving tool calls in its own loop.
+//
+// So the threshold ARMS and the Stop hook FIRES: at a Stop the turn is complete, which is the only
+// point where a summary can describe something finished. One resolver for the marker path, used by
+// both hooks, because two hooks disagreeing about a file path is its own recurring bug here.
+export function armPath(sessionId) {
+  const safe = String(sessionId || "s").replace(/[^A-Za-z0-9_.-]/g, "_");
+  return join(process.env.AGENT_BUS_DIR || process.env.RELAY_DATA_DIR || join(homedir(), ".agent-bus"), `handoff-armed-${safe}.json`);
+}
+export function armBaton(sessionId, payload) {
+  try { writeFileSync(armPath(sessionId), JSON.stringify({ ts: Date.now(), ...payload })); return true; } catch { return false; }
+}
+export function readArm(sessionId) {
+  try { const p = armPath(sessionId); if (!existsSync(p)) return null; return JSON.parse(readFileSync(p, "utf8")); } catch { return null; }
+}
+export function clearArm(sessionId) {
+  try { rmSync(armPath(sessionId), { force: true }); } catch {}
+}
+
 export function subagentsActive(transcriptPath, withinMs = 90_000) {
   try {
     if (!transcriptPath) return false;
