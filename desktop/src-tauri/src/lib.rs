@@ -17,6 +17,12 @@ fn sign_request(method: String, path: String, body: Option<String>) -> Result<st
     identity::sign(&owner_identity(), &method, &path, body.as_deref())
 }
 
+/// The name this app SIGNS as. The hub rejects any /send whose `from` does not match the signer,
+/// so the web side has to know it rather than assume "sasha@mac" — TRANTOR_IDENTITY can change it,
+/// and a hardcoded copy would 403 the moment it did.
+#[tauri::command]
+fn identity_name() -> String { owner_identity() }
+
 #[tauri::command]
 fn hub_for_project(project: String) -> String { identity::hub_for_project(&project) }
 
@@ -516,7 +522,7 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_notification::init())
-        .invoke_handler(tauri::generate_handler![greet, sign_request, hub_for_project, known_projects, hub_request, start_stream, doctor, card_code, open_code, project_icon, local_sessions, app_update_check, app_update_install])
+        .invoke_handler(tauri::generate_handler![greet, sign_request, identity_name, hub_for_project, known_projects, hub_request, start_stream, doctor, card_code, open_code, project_icon, local_sessions, app_update_check, app_update_install])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

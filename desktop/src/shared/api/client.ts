@@ -215,8 +215,22 @@ export class HubClient {
     const q = `?session=${encodeURIComponent(session)}&since=${since}&peek=1`;
     return this.request<{ messages: Message[]; cursor: number }>("GET", `/inbox${q}`);
   }
-  send(to: string, text: string, project?: string): Promise<{ ok: boolean; id: number }> {
-    return this.request("POST", "/send", { to, text, project });
+  /** The name we SIGN as, fetched once from Rust. */
+  private meCache = "";
+  private async me(): Promise<string> {
+    if (!this.meCache) this.meCache = await invoke<string>("identity_name");
+    return this.meCache;
+  }
+
+  /**
+   * The hub requires `from` and rejects it unless it matches the request signer:
+   *   if (!b.from || !text.trim()) return 400 "from and non-empty text required"
+   * This omitted it entirely, so every send from the app — the composer as well as the new inbox
+   * quick actions — came back 400. Nothing surfaced it until a reply button put the failure where
+   * someone would look.
+   */
+  async send(to: string, text: string, project?: string): Promise<{ ok: boolean; id: number }> {
+    return this.request("POST", "/send", { from: await this.me(), to, text, project });
   }
 
   /**
