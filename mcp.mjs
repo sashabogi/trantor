@@ -141,7 +141,9 @@ server.tool("relay_contracts", "What you dispatched and are still owed. Lists ev
     let r;
     try { r = await api("GET", `/contracts?session=${encodeURIComponent(SESSION)}&project=${encodeURIComponent(PROJECT)}`); }
     catch (e) { return { content: [{ type: "text", text: `could not reach the hub: ${e?.message || e}` }] }; }
-    const all = r?.contracts || [];
+    // The hub keeps abandoned contracts in their own key so older stop hooks stop blocking on them.
+    // The ledger still wants to SHOW them, so put the two halves back together here.
+    const all = [...(r?.contracts || []), ...(r?.abandonedContracts || [])].sort((a, b) => a.ts - b.ts);
     if (!all.length) return { content: [{ type: "text", text: "You have not dispatched any contracts in the last 24h." }] };
     // Fall back to the pre-disposition shape when talking to an older hub.
     const disp = (c) => c.disposition || (c.answered ? "answered" : (c.assigneeOnline ? "waiting" : "stalled"));

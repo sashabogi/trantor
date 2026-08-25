@@ -70,6 +70,58 @@ console.log("saveDelta: statement selection");
   ok(!stmts.some(s => s.includes("NOT (id = ANY")), "NO delete-everything-not-in-memory anywhere (foreign rows survive)");
 }
 
+console.log("the append-only log actually appends (the 18-day silent death)");
+{
+  // Production hub, 2026-08-25: the events table had not grown since 7 August. Cause: eventFromRow
+  // spread the JSON payload AFTER the column fields, so an event whose payload carried its own `id`
+  // came back with the WRONG id. 1198 rows on the live hub carried one. The array tail then reported
+  // id 4655 while the table held 9903, appendEvent minted 4656, and every insert from then on hit
+  // ON CONFLICT (id) DO NOTHING and was thrown away without a word.
+  const { PgStore: PS } = await import("./lib/store-pg.mjs");
+
+  // 1. the read side: a column can never be clobbered by the payload
+  const rows = {
+    tasks: [], peers: [], messages: [], identities: [], kv: [],
+    events: [{ id: 9903, org_id: "local", ts: 5, type: "moved", project: "p", by_session: "s", task_id: 3125,
+               payload: { id: 4655, from: "doing", to: "done" } }],
+  };
+  const client = {
+    query: async (sql) => {
+      if (/COALESCE\(MAX\(id\),0\)/.test(String(sql))) return { rows: [{ max_id: 9903 }] };
+      const t = String(sql).match(/FROM (\w+)/)?.[1] || "";
+      return { rows: rows[t] || [], rowCount: 0 };
+    },
+    release: () => {}, on: () => client, once: () => client,
+  };
+  const store = new PS({ pool: { query: client.query, connect: async () => client } });
+  const snap = await store.loadSnapshot("local");
+  const ev = snap.events[0];
+  ok(ev.id === 9903, "a payload id can NEVER overwrite the row id");
+  ok(ev.from === "doing" && ev.to === "done", "…while the genuine payload fields still come through");
+  ok(snap.eventSeq === 9903, "loadSnapshot reports the table's true MAX(id) as the high-water mark");
+
+  // 2. the write side: a column key riding inside the payload is never stored
+  const { log, pool } = mockPool();
+  const store2 = new PS({ pool });
+  const bad = { id: 12, ts: 1, type: "moved", project: "p", by: "s", taskId: 7, payload: { id: 4655, note: "keep" } };
+  await store2.saveDelta("local", baseState({ events: [] }), baseState({ events: [bad] }), { src: "t" });
+  const ins = log.filter(l => l.sql.includes("INSERT INTO events"))[0];
+  const stored = JSON.parse(ins.vals[7]);
+  ok(ins.vals[0] === 12, "the row id is the event's own id");
+  ok(!("id" in stored), "a shadow id inside the payload is stripped before storage");
+  ok(stored.note === "keep", "…without losing the real payload fields");
+
+  // 3. a dropped append is LOUD, never silent
+  let dropped = null;
+  const noisy = new PS({ pool: { query: async () => ({ rows: [], rowCount: 0 }), connect: async () => ({
+    query: async (sql) => ({ rows: [], rowCount: String(sql).includes("INSERT INTO events") ? 0 : 1 }),
+    release: () => {}, on() { return this; }, once() { return this; },
+  }) } });
+  noisy.onDroppedEvent = (d) => { dropped = d; };
+  await noisy.saveDelta("local", baseState({ events: [] }), baseState({ events: [{ id: 3, ts: 1, type: "x", project: "p", by: "s" }] }), { src: "t" });
+  ok(dropped && dropped.id === 3, "an ON CONFLICT drop reports itself instead of vanishing");
+}
+
 console.log("contractReap: the kv key survives the round-trip (the ghost backlog must not rebuild)");
 {
   // The reap record says a dispatched contract's assignee went quiet for good. Held only in memory

@@ -192,8 +192,16 @@ await sleep(1600);
 await sleep(2300);
 {
   const r = await ctr2(O);
-  const m = Object.fromEntries((r.contracts || []).map(c => [c.id, c]));
+  const m = Object.fromEntries([...(r.contracts || []), ...(r.abandonedContracts || [])].map(c => [c.id, c]));
   ok("a contract nobody can ever answer becomes ABANDONED", m[gone.id]?.disposition === "abandoned", m[gone.id]?.disposition);
+  // The split is what reaches a session whose hooks are pinned to an older release: an old stop hook
+  // iterates `contracts` with its own predicate, so a ghost left in that array keeps blocking forever
+  // no matter what the hub calls it.
+  ok("…and it LEAVES the contracts array, so an old pinned stop hook stops blocking on it",
+    !(r.contracts || []).some(c => Number(c.id) === Number(gone.id)),
+    JSON.stringify((r.contracts || []).map(c => c.id)));
+  ok("…riding in abandonedContracts instead, so the ledger can still show what died",
+    (r.abandonedContracts || []).some(c => Number(c.id) === Number(gone.id)));
   ok("…it stops counting as open work, so it stops nagging every future session",
     r.open === 1 && r.abandoned === 1, JSON.stringify({ open: r.open, abandoned: r.abandoned }));
   ok("…but it is still LISTED, with the evidence, so the ledger can show what died",
@@ -217,7 +225,7 @@ clearInterval(beat);
 await post2("/send", { from: DEAD, to: O, project: PROJ2, text: "✅ ortho done (exit 0)", re: gone.id });
 {
   const r = await ctr2(O);
-  const m = Object.fromEntries((r.contracts || []).map(c => [c.id, c]));
+  const m = Object.fromEntries([...(r.contracts || []), ...(r.abandonedContracts || [])].map(c => [c.id, c]));
   ok("a late outcome still closes an abandoned contract — the reap is evidence, not a tombstone",
     m[gone.id]?.disposition === "answered" && m[gone.id]?.answered === true,
     `${m[gone.id]?.disposition}`);
@@ -237,13 +245,14 @@ await post2("/send", { from: DEAD, to: O, project: PROJ2, text: "✅ ortho done 
 // Persistence: the whole point of the kv key. A restart must not resurrect the ghost backlog.
 {
   const before = await ctr2(O);
-  const abandonedBefore = (before.contracts || []).filter(c => c.reaped).length;
+  const reapedIn = (r) => [...(r.contracts || []), ...(r.abandonedContracts || [])].filter(c => c.reaped).length;
+  const abandonedBefore = reapedIn(before);
   hub2.kill("SIGKILL");
   await sleep(400);
   hub2 = spawn("node", [join(ROOT, "hub.mjs")], { env: { ...process.env, ...life }, stdio: ["ignore", "ignore", "pipe"] });
   await sleep(1200);
   const after = await ctr2(O);
-  const abandonedAfter = (after.contracts || []).filter(c => c.reaped).length;
+  const abandonedAfter = reapedIn(after);
   ok("a hub restart remembers what it already reaped (no re-announced ghost backlog)",
     abandonedAfter >= abandonedBefore && abandonedBefore > 0,
     `before=${abandonedBefore} after=${abandonedAfter}`);

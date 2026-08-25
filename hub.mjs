@@ -111,7 +111,7 @@ function scanTelemetry() {
 // TIMELINE view are untouched; every NEW type is dotted ("message", "presence.online", …) and is
 // filtered OUT of /history. Loads from the old `cardEvents` key when `events` is absent.
 function emptyState() {
-  return { messages: [], peers: {}, seq: 0, tasks: [], taskSeq: 0, projectMeta: {}, lessons: [], events: [], cardEventsBackfilled: false, aliases: {}, phaseMeta: {}, verifyGates: [], verifyGateSeq: 0, proposals: [], proposalSeq: 0, balances: { ts: 0, by: "", entries: [] }, subagentCostReset: false, handoffLog: [], identities: {}, inviteTokens: {}, focus: {}, orgPolicy: {}, instances: {}, dutySession: "", contractReap: {} };
+  return { messages: [], peers: {}, seq: 0, tasks: [], taskSeq: 0, projectMeta: {}, lessons: [], events: [], cardEventsBackfilled: false, aliases: {}, phaseMeta: {}, verifyGates: [], verifyGateSeq: 0, proposals: [], proposalSeq: 0, balances: { ts: 0, by: "", entries: [] }, subagentCostReset: false, handoffLog: [], identities: {}, inviteTokens: {}, focus: {}, orgPolicy: {}, instances: {}, dutySession: "", contractReap: {}, eventSeq: 0 };
 }
 
 const CARD_LOG_MAX = 40;
@@ -188,6 +188,14 @@ function normalizeState(loaded = {}) {
   s.orgPolicy = loaded.orgPolicy && typeof loaded.orgPolicy === "object" ? loaded.orgPolicy : {};
   s.dutySession = String(loaded.dutySession || "");
   s.contractReap = loaded.contractReap && typeof loaded.contractReap === "object" ? loaded.contractReap : {};
+  // The event id high-water mark. Seeded from the store's own MAX(id) where it supplied one, and
+  // otherwise from the largest id in the array — never from the array TAIL, which is exactly the
+  // assumption that let a clobbered id mint colliding event ids and kill the log.
+  s.eventSeq = Math.max(
+    Number(loaded.eventSeq || 0),
+    ...s.events.map(e => Number(e?.id) || 0),
+    0,
+  );
   for (const [session, v] of Object.entries(loaded.peers || {})) {
     // migrate old numeric form
     s.peers[session] = typeof v === "number"
@@ -203,6 +211,11 @@ if (STORE_KIND === "pg" || STORE_KIND === "postgres") {
   try {
     const { createPgStore } = await import("./lib/store-pg.mjs");
     durableStore = createPgStore({ url: PG_URL });
+    // An event insert that hits ON CONFLICT DO NOTHING is a LOST append, not a no-op. Silence here
+    // hid a dead log for 18 days. Never let it be quiet again.
+    durableStore.onDroppedEvent = ({ id, type }) => {
+      process.stderr.write(`[trantor] EVENT DROPPED: id ${id} (${type}) already exists — the append-only log is not appending. This is a bug, not routine.\n`);
+    };
     await durableStore.init();
     if (ORG_ID !== DEFAULT_ORG) await durableStore.createOrg({ id: ORG_ID, name: ORG_ID, ownerPubkey: "local-owner" });
     state = normalizeState(await durableStore.loadSnapshot(ORG_ID));
@@ -1039,8 +1052,13 @@ const CARD_TYPES = new Set(["created", "moved", "updated"]);
 const isCardEvent = e => CARD_TYPES.has(e?.type);
 
 function appendEvent(type, project, by, extra = {}) {
+  // The id comes from a monotonic high-water mark, NOT from the tail of the array. Trusting the tail
+  // meant one bad id anywhere in the log made every future append collide, and ON CONFLICT DO NOTHING
+  // then dropped them all without a word. `extra` is spread FIRST so a stray id in a payload can
+  // never take over the event's own identity.
   const last = state.events[state.events.length - 1];
-  const ev = { id: (last?.id || 0) + 1, ts: now(), type, project: project || "", by: by || "", ...extra };
+  state.eventSeq = Math.max(Number(state.eventSeq || 0), Number(last?.id) || 0) + 1;
+  const ev = { ...extra, id: state.eventSeq, ts: now(), type, project: project || "", by: by || "" };
   state.events.push(ev);
   if (state.events.length > EVENT_CAP) state.events.splice(0, state.events.length - EVENT_CAP);
   pushEventToStreams(ev);
@@ -1307,7 +1325,11 @@ const server = http.createServer(async (req, res) => {
       }
       for (const e of (Array.isArray(b.events) ? b.events : [])) {
         const last = state.events[state.events.length - 1];
-        const ev = { ...e, id: (last?.id || 0) + 1, project: proj };
+        // Spread the incoming event FIRST, then stamp OUR id and project over it. The incoming `id`
+        // belongs to the other hub's log and must not survive in any form: carried into the payload
+        // it comes back on load and overwrites the real row id.
+        state.eventSeq = Math.max(Number(state.eventSeq || 0), Number(last?.id) || 0) + 1;
+        const ev = { ...e, id: state.eventSeq, project: proj };
         if (ev.taskId != null && remap.has(Number(ev.taskId))) ev.taskId = remap.get(Number(ev.taskId));
         state.events.push(ev); added.events++;
       }
@@ -2426,13 +2448,20 @@ const server = http.createServer(async (req, res) => {
       const windowMs = Math.max(60000, Number(q.windowMs || CONTRACT_WINDOW_MS));
       const rawOverdue = q.overdueMs === undefined || q.overdueMs === "" ? null : Number(q.overdueMs);
       const overdueMs = Number.isFinite(rawOverdue) ? Math.max(0, rawOverdue) : null;
-      const out = contractsFor(session, { project: String(q.project || ""), windowMs, overdueMs });
-      const by = (d) => out.filter(c => c.disposition === d).length;
-      // `open` stays the count a caller has to DO something about, which is what it always meant.
-      // Abandoned ones are reported separately: they are the ledger's record of what died, not work.
+      const all = contractsFor(session, { project: String(q.project || ""), windowMs, overdueMs });
+      const by = (d) => all.filter(c => c.disposition === d).length;
+      // Abandoned contracts leave `contracts` entirely and ride in their own key.
+      //
+      // Not cosmetic. A session's hooks are PINNED at session start, so an older stop hook iterates
+      // `contracts` with its own predicate and knows nothing about `disposition` — it kept blocking on
+      // ghosts no matter what the hub called them. Keeping them in the array meant the fix only
+      // reached sessions that restarted, and a live one nagged its operator every single turn.
+      // Splitting them out fixes every running session the moment the hub redeploys, and the ledger
+      // still shows what died via `abandonedContracts`.
+      const out = all.filter(c => c.disposition !== "abandoned");
       return json(res, 200, {
-        session, contracts: out,
-        open: out.filter(c => !c.answered && c.disposition !== "abandoned").length,
+        session, contracts: out, abandonedContracts: all.filter(c => c.disposition === "abandoned"),
+        open: out.filter(c => !c.answered).length,
         waiting: by("waiting"), stalled: by("stalled"), abandoned: by("abandoned"), answered: by("answered"),
       });
     }
