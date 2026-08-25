@@ -8,13 +8,35 @@
 // Reads with peek=1 on purpose. The app is a viewer; advancing the delivery ledger because a human
 // glanced at a list would hide the message from the receiving SESSION's hooks, which are the thing
 // that actually acts on it. Marking-as-read is the agent's business, not the dashboard's.
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { hasSeen, markSeen } from "../../shared/seen";
 import type { HubClient, Message, Peer } from "../../shared/api/client";
 import { Avatar } from "../../shared/Avatar";
 import { Composer } from "../../shared/Composer";
 import { ago, when } from "../../shared/time";
 
 const brandOf = (s: string) => s.split(":")[0] ?? s;
+
+
+// A row marks itself read once it has actually been ON SCREEN, not merely rendered. The badge is a
+// human-side count (shared/seen.ts), so "read" has to mean the human could see it: a list that
+// marks everything read on mount would clear the badge for messages scrolled past in a blink.
+// Half-visible for 600ms is the bar, which a glance clears and a scroll-by does not.
+function MessageRow({ id, children }: { id: number; children: React.ReactNode }) {
+  const ref = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    const el = ref.current;
+    if (!el || hasSeen(id)) return;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const obs = new IntersectionObserver(([e]) => {
+      if (e?.isIntersecting) { if (!timer) timer = setTimeout(() => markSeen(id), 600); }
+      else if (timer) { clearTimeout(timer); timer = null; }
+    }, { threshold: 0.5 });
+    obs.observe(el);
+    return () => { if (timer) clearTimeout(timer); obs.disconnect(); };
+  }, [id]);
+  return <div ref={ref} className="tr-card mb-2.5 flex gap-3 p-4">{children}</div>;
+}
 
 export function Inbox({ client, me, onOpenConversation }: {
   client: HubClient; me: string; onOpenConversation?: (session: string) => void;
@@ -51,7 +73,7 @@ export function Inbox({ client, me, onOpenConversation }: {
 
       <div className="flex-1 overflow-y-auto px-10 pb-4">
         {messages.map(m => (
-          <div key={m.id} className="tr-card mb-2.5 flex gap-3 p-4">
+          <MessageRow key={m.id} id={m.id}>
             <Avatar name={m.from} size={34} />
             <div className="min-w-0 flex-1">
               <div className="flex items-baseline gap-2">
@@ -79,7 +101,7 @@ export function Inbox({ client, me, onOpenConversation }: {
                 )}
               </div>
             </div>
-          </div>
+          </MessageRow>
         ))}
         {!messages.length && (
           <div className="tr-card-ghost flex flex-col items-center justify-center gap-1 p-10 text-center">

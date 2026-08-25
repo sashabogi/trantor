@@ -11,6 +11,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { ArrowDownToLine, Bot, Eye, GraduationCap, House, Inbox as InboxIcon, MessagesSquare, Settings as SettingsIcon } from "lucide-react";
 import { appUpdateCheck, HubClient, hubForProject, knownProjects, localSessions, type AppUpdate, type Peer } from "../shared/api/client";
 import { stateOf } from "../shared/presence";
+import { countUnseen, onSeenChange } from "../shared/seen";
 import { usePendingProposals } from "../shared/Proposals";
 import { ProjectIcon } from "../shared/ProjectIcon";
 import type { Lens } from "../features/project/ProjectHeader";
@@ -180,16 +181,28 @@ export function AppShell() {
   // view uses (peek, so reading the badge never advances the delivery ledger the receiving
   // session's hooks depend on). A real count or no badge at all — never a decorative dot.
   const [unread, setUnread] = useState(0);
+  const directIds = useRef<number[]>([]);
   useEffect(() => {
     if (!client) return;
     let alive = true;
+    // Count only what the human has NOT looked at. inbox() peeks with since=0, so it returns
+    // everything ever addressed to ME; counting all of it made a lifetime total that could only
+    // climb, and nothing in the app could bring it down. "Seen" is tracked locally rather than by
+    // advancing the hub cursor, because that cursor belongs to the receiving session's delivery
+    // hooks and peeking must never steal a message a session still has to act on.
     const pull = () => client.inbox(ME)
-      .then(r => { if (alive) setUnread((r.messages ?? []).filter(m => m.to === ME).length); })
+      .then(r => {
+        if (!alive) return;
+        directIds.current = (r.messages ?? []).filter(m => m.to === ME).map(m => m.id);
+        setUnread(countUnseen(directIds.current));
+      })
       .catch(() => {});
     void pull();
     const t = setInterval(pull, 30_000);
     const off = client.streamEvents(ev => { if (ev.type === "message") pull(); });
-    return () => { alive = false; clearInterval(t); off(); };
+    // Re-count the instant a row is read, rather than waiting up to 30s for the next poll.
+    const offSeen = onSeenChange(() => { if (alive) setUnread(countUnseen(directIds.current)); });
+    return () => { alive = false; clearInterval(t); off(); offSeen(); };
   }, [client]);
 
   // How many agent proposals await the human. Badges Home (where the queue renders first) — the
