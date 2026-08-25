@@ -12,7 +12,7 @@ import { execSync, spawnSync } from "node:child_process";
 import { readFileSync, writeFileSync, unlinkSync, existsSync, appendFileSync } from "node:fs";
 import { join, basename } from "node:path";
 import { homedir } from "node:os";
-import { resolveProject, resolveHub } from "../lib/project.mjs";
+import { resolveProject, resolveHub, withEnvFiles } from "../lib/project.mjs";
 import { loadOrCreate } from "../lib/identity.mjs";
 import { signedHeaders } from "../lib/signed-fetch.mjs";
 import { ensureEnrolled } from "../lib/enroll.mjs";
@@ -301,8 +301,16 @@ function runTurn(prompt, isFirst, trigger = "kickoff") {
   let cmd = (isFirst || (cli.sid && !sid)) ? cli.first : cli.next;
   const mfrag = MODEL && cli.mflag ? `${cli.mflag}${MODEL}` : "";
   cmd = cmd.replaceAll("{M}", mfrag).replaceAll("{P}", pf).replaceAll("{SID}", sid);
+  // PRECEDENCE, and it is easy to get backwards — this is the second time.
+  // Each file is PREPENDED, so the one prepended LAST runs FIRST, and in shell the file that runs
+  // LAST wins. To make ~/.agent-bus/.env (the CREW layer) win it must be prepended FIRST, i.e.
+  // iterate the list in its written order — highest priority first. A `.reverse()` here inverted it
+  // and handed every seat Scrooge's key instead of the crew's, which is why one key was paying for
+  // both and no provider bill could tell them apart. `.reverse()` also mutated the array in place.
+  // Verified by test-crew-env.mjs, which runs the real shell rather than reading this comment.
+  // Priority order: the CREW layer first, the agent's own fallback (Scrooge's .env) after it.
   const envs = [join(homedir(), ".agent-bus", ".env"), cli.env].filter(f => f && existsSync(f));
-  for (const f of envs.reverse()) cmd = `set -a; source ${f}; set +a; ${cmd}`;   // ~/.agent-bus/.env wins
+  cmd = withEnvFiles(cmd, envs);
   log(`turn starting (${isFirst ? "fresh session" : "resume"})${MODEL ? ` · model=${MODEL}` : ""}`);
   cmuxStatus("building", "#4a90d9", "hammer", { priority: 50 });
   // inherit stdio so the window shows the agent working live; also capture for sid-parsing.
