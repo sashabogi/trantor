@@ -10,7 +10,8 @@
 // that actually acts on it. Marking-as-read is the agent's business, not the dashboard's.
 import { useEffect, useRef, useState } from "react";
 import { hasSeen, markSeen } from "../../shared/seen";
-import type { HubClient, Message, Peer } from "../../shared/api/client";
+import { stalenessOf } from "./staleness";
+import type { Card, HubClient, Message, Peer } from "../../shared/api/client";
 import { Avatar } from "../../shared/Avatar";
 import { Composer } from "../../shared/Composer";
 import { ago, when } from "../../shared/time";
@@ -105,7 +106,7 @@ function QuickActions({ msg, client, onSent, onOpenConversation }: {
 // human-side count (shared/seen.ts), so "read" has to mean the human could see it: a list that
 // marks everything read on mount would clear the badge for messages scrolled past in a blink.
 // Half-visible for 600ms is the bar, which a glance clears and a scroll-by does not.
-function MessageRow({ id, children }: { id: number; children: React.ReactNode }) {
+function MessageRow({ id, dim, children }: { id: number; dim?: boolean; children: React.ReactNode }) {
   const ref = useRef<HTMLDivElement | null>(null);
   useEffect(() => {
     const el = ref.current;
@@ -118,7 +119,7 @@ function MessageRow({ id, children }: { id: number; children: React.ReactNode })
     obs.observe(el);
     return () => { if (timer) clearTimeout(timer); obs.disconnect(); };
   }, [id]);
-  return <div ref={ref} className="tr-card mb-2.5 flex gap-3 p-4">{children}</div>;
+  return <div ref={ref} className={`tr-card mb-2.5 flex gap-3 p-4 ${dim ? "opacity-55" : ""}`}>{children}</div>;
 }
 
 export function Inbox({ client, me, onOpenConversation }: {
@@ -126,6 +127,8 @@ export function Inbox({ client, me, onOpenConversation }: {
 }) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [peers, setPeers] = useState<Peer[]>([]);
+  const [cards, setCards] = useState<Card[]>([]);
+  const [staleOpen, setStaleOpen] = useState<Record<number, boolean>>({});
   const [to, setTo] = useState("");
   const [text, setText] = useState("");
   const [sending, setSending] = useState(false);
@@ -136,8 +139,18 @@ export function Inbox({ client, me, onOpenConversation }: {
   const load = () => client.inbox(me)
     .then(r => setMessages((r.messages ?? []).filter(m => m.to === me).reverse()))
     .catch(e => setErr(String(e.message || e)));
-  useEffect(() => { load(); client.peers().then(setPeers).catch(() => {}); }, [client, me]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    load();
+    client.peers().then(setPeers).catch(() => {});
+    client.tasks().then(setCards).catch(() => {});   // card status is how we know the work moved on
+  }, [client, me]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => client.streamEvents(ev => { if (ev.type === "message") load(); }), [client, me]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Computed once per render rather than per row: the bulk action and the rows must agree about
+  // what is stale, or "Dismiss all 6" leaves something behind and the count stops being trustworthy.
+  const staleIds = messages.filter(m => stalenessOf(m, messages, peers, cards).stale).map(m => m.id);
+  const staleCount = staleIds.filter(id => !hasSeen(id)).length;
+  const dismissStale = () => { for (const id of staleIds) markSeen(id); load(); };
 
   const submit = async () => {
     if (!to || !text.trim() || sending) return;
@@ -152,11 +165,24 @@ export function Inbox({ client, me, onOpenConversation }: {
       <header className="px-10 pt-8 pb-5">
         <h1 className="tr-page-title">Inbox</h1>
         <p className="tr-page-sub">Messages that need an answer from you.</p>
+        {staleCount > 0 && (
+          <div className="mt-2 flex items-center gap-3 text-[12px] text-[var(--color-tr-muted)]">
+            <span>
+              {staleCount} of {messages.length} {staleCount === 1 ? "has" : "have"} gone stale —
+              the asker is gone, the card is closed, or they asked again since.
+            </span>
+            <button onClick={dismissStale} className="tr-chip hover:text-[var(--color-tr-doing)]">
+              Dismiss {staleCount === 1 ? "it" : "all " + staleCount}
+            </button>
+          </div>
+        )}
       </header>
 
       <div className="flex-1 overflow-y-auto px-10 pb-4">
-        {messages.map(m => (
-          <MessageRow key={m.id} id={m.id}>
+        {messages.map(m => {
+          const st = stalenessOf(m, messages, peers, cards);
+          return (
+          <MessageRow key={m.id} id={m.id} dim={st.stale}>
             <Avatar name={m.from} size={34} />
             <div className="min-w-0 flex-1">
               <div className="flex items-baseline gap-2">
@@ -173,10 +199,28 @@ export function Inbox({ client, me, onOpenConversation }: {
                 </span>
               </div>
               <div className="mt-1 whitespace-pre-wrap break-words text-sm leading-relaxed">{m.text}</div>
-              <QuickActions msg={m} client={client} onSent={load} onOpenConversation={onOpenConversation} />
+              {st.stale ? (
+                <div className="mt-2 flex flex-wrap items-center gap-3 text-[12px] text-[var(--color-tr-muted)]">
+                  <span className="tr-chip">stale — {st.reason}</span>
+                  <button onClick={() => markSeen(m.id)} className="hover:text-[var(--color-tr-doing)]">Dismiss</button>
+                  <button onClick={() => setStaleOpen(o => ({ ...o, [m.id]: !o[m.id] }))}
+                          className="hover:text-[var(--color-tr-doing)]">
+                    {staleOpen[m.id] ? "Never mind" : "Answer anyway"}
+                  </button>
+                  {onOpenConversation && (
+                    <button onClick={() => onOpenConversation(m.from)} className="hover:text-[var(--color-tr-doing)]">
+                      View conversation
+                    </button>
+                  )}
+                </div>
+              ) : null}
+              {(!st.stale || staleOpen[m.id]) && (
+                <QuickActions msg={m} client={client} onSent={load} onOpenConversation={onOpenConversation} />
+              )}
             </div>
           </MessageRow>
-        ))}
+          );
+        })}
         {!messages.length && (
           <div className="tr-card-ghost flex flex-col items-center justify-center gap-1 p-10 text-center">
             <span className="text-[13px]">Nothing waiting on you.</span>
