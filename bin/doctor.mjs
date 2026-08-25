@@ -153,6 +153,24 @@ if (!installed) warn("no crew CLIs found", "install at least one of: codex, gemi
 //   3. ~/.token-scrooge/.env  — the SCROOGE layer (cheap-model grunt routing)
 section("provider keys (who spends on what)");
 const KEY_VARS = ["DEEPSEEK_API_KEY", "OPENROUTER_API_KEY", "MOONSHOT_API_KEY", "ZAI_API_KEY", "OPENAI_API_KEY", "GEMINI_API_KEY", "XAI_API_KEY"];
+// Only some of these are a CREW credential. A seat that authenticates through its own config never
+// reads the env var at all, so a shared value there costs nothing and flagging it is noise:
+//   glm    → opencode.json provider["zai-coding-plan"].options.apiKey  (and a coding plan is flat
+//            rate, so there is no per-token bill to attribute even in principle)
+//   kimi   → ~/.kimi/credentials      codex → its own login      gemini → retired
+// The opencode-driven seats that DO take their key from the env layer are deepseek and openrouter,
+// and even then only when opencode.json has not already given that provider its own key.
+// Getting this wrong cries wolf: the first version flagged all seven and five were false positives,
+// which is how a doctor becomes something you skip.
+const OPENCODE_CFG = read(join(H, ".config", "opencode", "opencode.json")) || {};
+const SEAT_ENV_VARS = { DEEPSEEK_API_KEY: "deepseek", OPENROUTER_API_KEY: "openrouter" };
+const crewUsesVar = (v) => {
+  const provider = SEAT_ENV_VARS[v];
+  if (!provider) return false;
+  const configured = OPENCODE_CFG?.provider?.[provider]?.options?.apiKey;
+  if (typeof configured === "string" && configured.includes("{env:")) return true;   // resolves from env at run time
+  return !configured;                                                                 // a LITERAL key bypasses the env layer
+};
 const CREW_ENV = join(H, ".agent-bus", ".env");
 const SCROOGE_ENV = join(H, ".token-scrooge", ".env");
 const readEnvFile = (f) => {
@@ -177,7 +195,9 @@ for (const v of KEY_VARS) {
   const crewSrc = process.env[v] ? "process env" : crewEnv[v] ? "~/.agent-bus/.env (crew)" : scroogeEnv[v] ? "~/.token-scrooge/.env (FALLBACK)" : "none";
   const crewKey = crew || scrooge;
   const scroogeFileKey = scroogeEnv[v] || "";
-  if (crewKey && scroogeFileKey && crewKey === scroogeFileKey) {
+  if (!crewUsesVar(v)) {
+    ok(`${v}: Scrooge only ${mask(scroogeFileKey || crewKey)} — no crew seat reads this var`);
+  } else if (crewKey && scroogeFileKey && crewKey === scroogeFileKey) {
     shared++; sharedVars.push(v);
     note(`${v}: crew + Scrooge share ONE key ${mask(crewKey)} — spend is indistinguishable on the bill`);
   } else {

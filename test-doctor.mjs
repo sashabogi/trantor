@@ -56,12 +56,16 @@ ok("every surviving brand came from a real seat line", bareBrands.every(b => /^[
     try { return JSON.parse(execFileSync(process.execPath, [join(HERE, "bin", "doctor.mjs"), "--json"], opts)); }
     catch (e) { return JSON.parse(e.stdout); }
   };
-  const mkHome = (crew, scrooge) => {
+  const mkHome = (crew, scrooge, opencode) => {
     const h = mkdtempSync(join(tmpdir(), "trantor-keys-"));
     mkdirSync(join(h, ".agent-bus"), { recursive: true });
     mkdirSync(join(h, ".token-scrooge"), { recursive: true });
     if (crew !== null) writeFileSync(join(h, ".agent-bus", ".env"), crew);
     if (scrooge !== null) writeFileSync(join(h, ".token-scrooge", ".env"), scrooge);
+    if (opencode) {
+      mkdirSync(join(h, ".config", "opencode"), { recursive: true });
+      writeFileSync(join(h, ".config", "opencode", "opencode.json"), JSON.stringify(opencode));
+    }
     return h;
   };
   const keySection = (r) => [...r.ok, ...r.issues, ...r.notes].filter(e => String(e.section || "").startsWith("provider keys"));
@@ -78,6 +82,20 @@ ok("every surviving brand came from a real seat line", bareBrands.every(b => /^[
     !JSON.stringify(r).includes(SECRET), "the raw key leaked into the report");
   ok("…but enough of it shows to match a line item on the provider's bill",
     sec.some(e => e.message.includes("2222")));
+
+  // (a2) a seat whose provider config holds a LITERAL key never reads the env var, so a shared value
+  // there costs nothing. Flagging it is noise — five of the first seven findings were this.
+  r = runHome(mkHome(null, `ZAI_API_KEY=${SECRET}\n`, { provider: { "zai-coding-plan": { options: { apiKey: "literal-plan-key" } } } }));
+  sec = keySection(r);
+  ok("a provider with a LITERAL key in its own config is reported as Scrooge-only, not shared",
+    sec.some(e => /ZAI_API_KEY.*Scrooge only/.test(e.message)), sec.map(e => e.message).join(" | "));
+
+  // (a3) …but "{env:VAR}" resolves from the environment at run time, so that seat DOES read the var.
+  // Conflating the two reported a correctly-split key as "no crew seat reads this var".
+  r = runHome(mkHome(null, `DEEPSEEK_API_KEY=${SECRET}\n`, { provider: { deepseek: { options: { apiKey: "{env:DEEPSEEK_API_KEY}" } } } }));
+  sec = keySection(r);
+  ok("an {env:…} template still counts as the seat reading the env var",
+    sec.some(e => /DEEPSEEK_API_KEY.*share ONE key/.test(e.message)), sec.map(e => e.message).join(" | "));
 
   // (b) the crew has its OWN key — the whole point of the split
   r = runHome(mkHome(`DEEPSEEK_API_KEY=sk-9999crewkey8888\n`, `DEEPSEEK_API_KEY=${SECRET}\n`));
