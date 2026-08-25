@@ -38,6 +38,19 @@ try {
   if (!up) throw new Error("hub no start: " + er.slice(-300));
   console.log("\n# test-duty — hub escalation feed for the duty agent");
 
+  // 0. mail addressed to the hub's own pseudo-identity must NEVER escalate. Nothing polls hub:*,
+  // so it can never be delivered; escalating it makes the duty seat ack into the same hole, and
+  // that ack escalates in turn. The seat reported it as "a fresh identical echo every stop-hook
+  // cycle" and it ran for hours.
+  await post("/send", { from: "claude:trantor-duty", to: "hub:duty", text: "Ack #9059. standing closure applies", project: "projA" });
+  await sleep(1800);
+  {
+    const box = await get(`/inbox?session=${encodeURIComponent("claude:trantor-duty")}&since=0&peek=1`);
+    const echo = (box.messages || []).filter(m => m.from === "hub:duty" && /-> hub:duty/.test(m.text));
+    ok("a message addressed to hub:* is never escalated back", echo.length === 0,
+      `${echo.length} echo(es): ${echo.map(m => m.text.slice(0, 70)).join(" | ")}`);
+  }
+
   // 1. a DM to a session nobody delivers -> duty gets ONE escalation citing it
   await post("/send", { from: "arch:projA", to: "ghost:projA", text: "please do the thing", project: "projA" });
   await sleep(1800);   // > undelivered window + a couple of ticks

@@ -388,7 +388,13 @@ function dutyTick() {
   const floor = now() - 24 * 3600 * 1000;                 // never escalate ancient history
   for (const m of state.messages) {
     if (m.ts > cutoff || m.ts < floor) continue;
-    if (!m.to || m.to === "all" || m.to === DUTY_SESSION || m.from === "hub:duty") continue;
+    // `hub:*` is the hub's own pseudo-identity, not a session: nothing polls it and nothing ever
+    // will, so a message addressed there can never be "delivered". Escalating it is a category
+    // error that feeds itself — the duty seat acks the escalation to hub:duty, that ack is
+    // undelivered too, and since dutyEscalated prunes its oldest ids at 5,000 the same ones come
+    // back around. Reported from the seat as "a fresh identical echo every stop-hook cycle".
+    // Skipping the FROM side was already here; the TO side is the half that loops.
+    if (!m.to || m.to === "all" || m.to === DUTY_SESSION || m.from === "hub:duty" || m.to.startsWith("hub:")) continue;
     if (dutyEscalated.has(m.id)) continue;
     if ((state.peers[m.to]?.deliveredUpTo || 0) >= m.id) continue;
     dutyEscalated.add(m.id);
