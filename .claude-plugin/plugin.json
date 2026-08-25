@@ -1,6 +1,6 @@
 {
   "name": "trantor",
-  "version": "0.17.99",
+  "version": "0.18.0",
   "description": "Trantor \u2014 the hub-world for AI agent crews: live message bus, presence, project Kanban/flow board + crew orchestration for independent AI coding agents (Claude, Codex, Gemini, Kimi, DeepSeek)",
   "mcpServers": {
     "relay": {
