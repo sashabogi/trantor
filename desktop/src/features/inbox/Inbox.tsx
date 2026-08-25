@@ -18,6 +18,89 @@ import { ago, when } from "../../shared/time";
 const brandOf = (s: string) => s.split(":")[0] ?? s;
 
 
+
+// QUICK ACTIONS — answer without leaving the row.
+//
+// "Reply to X" only set the recipient on the footer composer, so answering a yes/no question meant
+// three moves: click, scroll, type. The inbox exists to hold decisions that are waiting on a human,
+// and a decision you cannot take in one click isn't really in an inbox, it's in a queue.
+//
+// The three canned answers are deliberately blunt and few. A longer menu becomes a thing to read,
+// which is the cost this is meant to remove; anything subtler goes in the free-text box next to
+// them. Sending marks the message read, because answering IS reading, and the badge drops at once.
+const QUICK_ANSWERS = ["Go ahead", "No", "Hold off for now"] as const;
+
+function QuickActions({ msg, client, onSent, onOpenConversation }: {
+  msg: Message;
+  client: HubClient;
+  onSent: () => void;
+  onOpenConversation?: (session: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [text, setText] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [sent, setSent] = useState("");
+  const [err, setErr] = useState("");
+
+  const reply = async (body: string) => {
+    const trimmed = body.trim();
+    if (!trimmed || busy) return;
+    setBusy(true); setErr("");
+    try {
+      await client.send(msg.from, trimmed, msg.project);
+      markSeen(msg.id);          // answered is read; the badge drops without waiting for a poll
+      setSent(trimmed);
+      setOpen(false); setText("");
+      onSent();
+    } catch (e) {
+      setErr(e instanceof Error && e.message ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  if (sent) {
+    return (
+      <div className="mt-2 text-[12px] text-[var(--color-tr-muted)]">
+        replied to {brandOf(msg.from)}: <span className="opacity-80">{sent}</span>
+      </div>
+    );
+  }
+
+  return (
+    <div className="mt-2">
+      <div className="flex flex-wrap items-center gap-2 text-[12px]">
+        {QUICK_ANSWERS.map(a => (
+          <button key={a} onClick={() => void reply(a)} disabled={busy}
+                  className="tr-chip hover:text-[var(--color-tr-doing)] disabled:opacity-50">
+            {a}
+          </button>
+        ))}
+        <button onClick={() => setOpen(o => !o)} disabled={busy}
+                className="text-[var(--color-tr-muted)] hover:text-[var(--color-tr-doing)]">
+          {open ? "Cancel" : "Reply…"}
+        </button>
+        {onOpenConversation && (
+          <button onClick={() => onOpenConversation(msg.from)}
+                  className="text-[var(--color-tr-muted)] hover:text-[var(--color-tr-doing)]">
+            View conversation
+          </button>
+        )}
+      </div>
+      {open && (
+        <div className="mt-2 flex gap-2">
+          <input autoFocus value={text} onChange={e => setText(e.target.value)}
+                 onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); void reply(text); } }}
+                 placeholder={`Reply to ${msg.from}`} className="tr-input flex-1" />
+          <button onClick={() => void reply(text)} disabled={busy || !text.trim()}
+                  className="tr-chip disabled:opacity-40">Send</button>
+        </div>
+      )}
+      {err && <div className="mt-1 text-[11px] text-[var(--color-tr-fail)]">{err}</div>}
+    </div>
+  );
+}
+
 // A row marks itself read once it has actually been ON SCREEN, not merely rendered. The badge is a
 // human-side count (shared/seen.ts), so "read" has to mean the human could see it: a list that
 // marks everything read on mount would clear the badge for messages scrolled past in a blink.
@@ -90,16 +173,7 @@ export function Inbox({ client, me, onOpenConversation }: {
                 </span>
               </div>
               <div className="mt-1 whitespace-pre-wrap break-words text-sm leading-relaxed">{m.text}</div>
-              <div className="mt-2 flex gap-4 text-[12px] text-[var(--color-tr-muted)]">
-                <button onClick={() => setTo(m.from)} className="hover:text-[var(--color-tr-doing)]">
-                  Reply to {brandOf(m.from)}
-                </button>
-                {onOpenConversation && (
-                  <button onClick={() => onOpenConversation(m.from)} className="hover:text-[var(--color-tr-doing)]">
-                    View conversation
-                  </button>
-                )}
-              </div>
+              <QuickActions msg={m} client={client} onSent={load} onOpenConversation={onOpenConversation} />
             </div>
           </MessageRow>
         ))}
