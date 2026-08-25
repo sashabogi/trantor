@@ -215,6 +215,17 @@ export class HubClient {
     const q = `?session=${encodeURIComponent(session)}&since=${since}&peek=1`;
     return this.request<{ messages: Message[]; cursor: number }>("GET", `/inbox${q}`);
   }
+  /**
+   * Tell the hub this endpoint has actually read up to `upTo`. The app lists with peek=1 so it
+   * never steals a message from a session's delivery hooks, but a HUMAN endpoint has no hooks —
+   * this app is the only reader — so without an explicit ack sasha@mac's watermark stayed at 0 and
+   * every message already read kept escalating as undelivered. Monotonic hub-side.
+   */
+  async delivered(upTo: number): Promise<void> {
+    if (!Number.isSafeInteger(upTo) || upTo <= 0) return;
+    await this.request("POST", "/delivered", { session: await this.me(), upTo }).catch(() => {});
+  }
+
   /** The name we SIGN as, fetched once from Rust. */
   private meCache = "";
   private async me(): Promise<string> {

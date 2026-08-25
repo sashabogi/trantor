@@ -50,6 +50,7 @@ function QuickActions({ msg, client, onSent, onOpenConversation }: {
     try {
       await client.send(msg.from, trimmed, msg.project);
       markSeen(msg.id);          // answered is read; the badge drops without waiting for a poll
+      void client.delivered(msg.id);   // …and the hub stops calling it undelivered
       setSent(trimmed);
       setOpen(false); setText("");
       onSent();
@@ -106,19 +107,19 @@ function QuickActions({ msg, client, onSent, onOpenConversation }: {
 // human-side count (shared/seen.ts), so "read" has to mean the human could see it: a list that
 // marks everything read on mount would clear the badge for messages scrolled past in a blink.
 // Half-visible for 600ms is the bar, which a glance clears and a scroll-by does not.
-function MessageRow({ id, dim, children }: { id: number; dim?: boolean; children: React.ReactNode }) {
+function MessageRow({ id, dim, onRead, children }: { id: number; dim?: boolean; onRead: (id: number) => void; children: React.ReactNode }) {
   const ref = useRef<HTMLDivElement | null>(null);
   useEffect(() => {
     const el = ref.current;
     if (!el || hasSeen(id)) return;
     let timer: ReturnType<typeof setTimeout> | null = null;
     const obs = new IntersectionObserver(([e]) => {
-      if (e?.isIntersecting) { if (!timer) timer = setTimeout(() => markSeen(id), 600); }
+      if (e?.isIntersecting) { if (!timer) timer = setTimeout(() => onRead(id), 600); }
       else if (timer) { clearTimeout(timer); timer = null; }
     }, { threshold: 0.5 });
     obs.observe(el);
     return () => { if (timer) clearTimeout(timer); obs.disconnect(); };
-  }, [id]);
+  }, [id, onRead]);
   return <div ref={ref} className={`tr-card mb-2.5 flex gap-3 p-4 ${dim ? "opacity-55" : ""}`}>{children}</div>;
 }
 
@@ -155,9 +156,14 @@ export function Inbox({ client, me, onOpenConversation }: {
 
   // Computed once per render rather than per row: the bulk action and the rows must agree about
   // what is stale, or "Dismiss all 6" leaves something behind and the count stops being trustworthy.
+  // ONE definition of "the human has read this": the local badge count and the hub's delivery
+  // watermark move together, so the hub can never think mail is undelivered that is sitting read on
+  // the screen.
+  const see = (id: number) => { markSeen(id); void client.delivered(id); };
+
   const staleIds = messages.filter(m => stalenessOf(m, messages, peers, cards).stale).map(m => m.id);
   const staleCount = staleIds.filter(id => !hasSeen(id)).length;
-  const dismissStale = () => { for (const id of staleIds) markSeen(id); load(); };
+  const dismissStale = () => { for (const id of staleIds) see(id); load(); };
 
   const submit = async () => {
     if (!to || !text.trim() || sending) return;
@@ -189,7 +195,7 @@ export function Inbox({ client, me, onOpenConversation }: {
         {messages.map(m => {
           const st = stalenessOf(m, messages, peers, cards);
           return (
-          <MessageRow key={m.id} id={m.id} dim={st.stale}>
+          <MessageRow key={m.id} id={m.id} dim={st.stale} onRead={see}>
             <Avatar name={m.from} size={34} />
             <div className="min-w-0 flex-1">
               <div className="flex items-baseline gap-2">
@@ -209,7 +215,7 @@ export function Inbox({ client, me, onOpenConversation }: {
               {st.stale ? (
                 <div className="mt-2 flex flex-wrap items-center gap-3 text-[12px] text-[var(--color-tr-muted)]">
                   <span className="tr-chip">stale — {st.reason}</span>
-                  <button onClick={() => markSeen(m.id)} className="hover:text-[var(--color-tr-doing)]">Dismiss</button>
+                  <button onClick={() => see(m.id)} className="hover:text-[var(--color-tr-doing)]">Dismiss</button>
                   <button onClick={() => setStaleOpen(o => ({ ...o, [m.id]: !o[m.id] }))}
                           className="hover:text-[var(--color-tr-doing)]">
                     {staleOpen[m.id] ? "Never mind" : "Answer anyway"}

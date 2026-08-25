@@ -2266,6 +2266,25 @@ const server = http.createServer(async (req, res) => {
     // outcome: strictly by `re`, or, for seats that predate it, oldest-open-first. Broadcasts are
     // never contracts. Each open one carries the assignee's presence, because the actionable half
     // of "still waiting" is whether anyone is still on the other end.
+    // ---- /delivered: an endpoint that has actually READ its mail says so ----------------------
+    // The desktop app lists with peek=1 on purpose, so it never steals a message from a session's
+    // delivery hooks. For a HUMAN endpoint there are no hooks — the app is the only reader — so
+    // sasha@mac's deliveredUpTo sat at 0 forever while mail piled up. dutyTick then escalated every
+    // message the human had already read, told the duty seat about it, the seat messaged the human,
+    // and that was undelivered too: about six escalations a minute, all about mail already read.
+    // Peeking stays the default; this lets a reader record delivery explicitly instead.
+    if (req.method === "POST" && P === "/delivered") {
+      const b = await body(req);
+      const session = String(b.session || "");
+      if (!session) return json(res, 400, { error: "session required" });
+      if (auth?.identity && String(auth.identity.name || "") !== session) {
+        return json(res, 403, { error: "session must match signer" });
+      }
+      touch(session, undefined, undefined, undefined, auth);
+      markDelivered(session, Number(b.upTo || 0));
+      return json(res, 200, { ok: true, deliveredUpTo: state.peers[session]?.deliveredUpTo || 0 });
+    }
+
     if (req.method === "GET" && P === "/contracts") {
       const session = String(q.session || "");
       if (!session) return json(res, 400, { error: "session required" });

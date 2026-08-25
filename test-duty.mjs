@@ -51,6 +51,29 @@ try {
       `${echo.length} echo(es): ${echo.map(m => m.text.slice(0, 70)).join(" | ")}`);
   }
 
+  // 0b. A HUMAN endpoint read in the desktop app must be able to record delivery. The app lists
+  // with peek=1 on purpose, so sasha@mac's deliveredUpTo sat at 0 forever while 17 messages piled
+  // up — every one of them escalated to the duty seat as undelivered, which then messaged the
+  // human about it, which was also undelivered. Six escalations a minute about mail already read.
+  await post("/send", { from: "arch:projA", to: "sasha@mac", text: "a question for the human", project: "projA" });
+  const humanBox = await get(`/inbox?session=${encodeURIComponent("sasha@mac")}&since=0&peek=1`);
+  const humanMsg = (humanBox.messages || []).filter(m => m.to === "sasha@mac").pop();
+  ok("the human's message is there to be read", !!humanMsg, JSON.stringify(humanBox).slice(0, 120));
+  const ackRes = await post("/delivered", { session: "sasha@mac", upTo: humanMsg?.id ?? 0 });
+  await sleep(1800);
+  {
+    const box = await get(`/inbox?session=${encodeURIComponent("claude:trantor-duty")}&since=0&peek=1`);
+    const nagged = (box.messages || []).filter(m => m.from === "hub:duty" && new RegExp(`#${humanMsg?.id}\\b`).test(m.text));
+    ok("a message the human has acknowledged is not escalated", nagged.length === 0,
+      `${nagged.length}: ${nagged.map(m => m.text.slice(0, 80)).join(" | ")}`);
+    // Straight from the endpoint that recorded it — /peers does not serialize deliveredUpTo.
+    ok("…and the hub reports the new delivery watermark", (ackRes?.deliveredUpTo || 0) >= (humanMsg?.id ?? 1),
+      JSON.stringify(ackRes || {}));
+    const again = await post("/delivered", { session: "sasha@mac", upTo: 1 });
+    ok("…monotonically — a lower ack never rewinds it", (again?.deliveredUpTo || 0) >= (humanMsg?.id ?? 1),
+      JSON.stringify(again || {}));
+  }
+
   // 1. a DM to a session nobody delivers -> duty gets ONE escalation citing it
   await post("/send", { from: "arch:projA", to: "ghost:projA", text: "please do the thing", project: "projA" });
   await sleep(1800);   // > undelivered window + a couple of ticks
