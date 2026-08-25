@@ -16,6 +16,7 @@
 //      webview never sees it — nor a signature, nor even a header, only JSON. That was forced as well
 //      as chosen: macOS App Transport Security blocks cleartext HTTP from WKWebView, so fetch() to a
 //      hub on http://<tailnet>:4477 fails with an opaque "Load failed" that CSP cannot waive.
+import { describeTransportFailure } from "./transport-errors";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 
@@ -122,9 +123,18 @@ export class HubClient {
   // own already-typed request body.
   private async request<T, P = never>(method: string, path: string, payload?: P): Promise<T> {
     const body = payload === undefined ? undefined : JSON.stringify(payload);
-    const res = await invoke<{ status: number; body: string }>("hub_request", {
-      base: this.baseUrl, method, path, body: body ?? null,
-    });
+    let res: { status: number; body: string };
+    try {
+      res = await invoke<{ status: number; body: string }>("hub_request", {
+        base: this.baseUrl, method, path, body: body ?? null,
+      });
+    } catch (e) {
+      // The operator gets the translation; the console keeps the original, so translating a failure
+      // never costs us the string a bug report needs.
+      const raw = String(e);
+      console.warn(`[trantor] hub transport failure on ${method} ${path}:`, raw);
+      throw new HubTransportError(describeTransportFailure(raw, this.baseUrl), raw);
+    }
     if (res.status === 401) throw new HubAuthError(`not enrolled on ${this.baseUrl}`);
     if (res.status >= 400) throw new Error(`${method} ${path} → ${res.status}`);
     // The return type carries the contract; JSON.parse's `any` result flows into it without a
@@ -312,6 +322,14 @@ export type BalancesReport = { ts: number; entries: BalanceEntry[]; lowCount: nu
 
 export type Handoff = { project: string; session: string; ts: number; trigger?: string; id?: string };
 export type FileClaim = { project: string; file: string; session: string; ts: number; agoSec: number };
+
+/** The hub was unreachable or the reply never arrived intact — a transport failure, not a refusal.
+ * `detail` keeps the original transport string: the point is to TRANSLATE the failure, never to hide
+ * it, so the raw text stays one property away for a bug report. */
+export class HubTransportError extends Error {
+  readonly detail: string;
+  constructor(message: string, detail: string) { super(message); this.detail = detail; }
+}
 
 export class HubAuthError extends Error {}
 
