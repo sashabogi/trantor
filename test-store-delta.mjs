@@ -70,6 +70,46 @@ console.log("saveDelta: statement selection");
   ok(!stmts.some(s => s.includes("NOT (id = ANY")), "NO delete-everything-not-in-memory anywhere (foreign rows survive)");
 }
 
+console.log("contractReap: the kv key survives the round-trip (the ghost backlog must not rebuild)");
+{
+  // The reap record says a dispatched contract's assignee went quiet for good. Held only in memory
+  // it would rebuild on every hub restart and the whole ghost backlog would re-announce itself, the
+  // same shape as the in-memory escalation set. So it has to be a real kv key in BOTH directions,
+  // and the file store proving it is not enough: production is Postgres.
+  const { log, pool } = mockPool();
+  const store = new PgStore({ pool });
+  const reap = { "42": { ts: 7, from: "host:p", to: "codex:p", reason: "assignee codex:p never seen on the bus, past the 60m abandon window", dispatchedTs: 5 } };
+  await store.saveDelta("local", baseState({ contractReap: {} }), baseState({ contractReap: reap }), { src: "test-hub" });
+  const kvInserts = log.filter(l => l.sql.includes("INSERT INTO kv"));
+  ok(kvInserts.length === 1 && kvInserts[0].vals[1] === "contractReap", "saveDelta writes contractReap when it changes");
+  ok(JSON.parse(kvInserts[0].vals[2] || "{}")["42"]?.to === "codex:p", "…carrying the record itself, not an empty object");
+
+  // and an UNCHANGED reap map must not be rewritten every persist tick
+  const { log: log2, pool: pool2 } = mockPool();
+  const store2 = new PgStore({ pool: pool2 });
+  await store2.saveDelta("local", baseState({ contractReap: reap, focus: { a: 1 } }), baseState({ contractReap: reap, focus: { a: 2 } }), { src: "test-hub" });
+  const kv2 = log2.filter(l => l.sql.includes("INSERT INTO kv"));
+  ok(kv2.length === 1 && kv2[0].vals[1] === "focus", "…and is NOT rewritten when it has not changed");
+}
+
+{
+  // the read half: a kv row must come back as state.contractReap, or the restart forgets everything
+  const rows = {
+    tasks: [], peers: [], events: [], messages: [], identities: [],
+    kv: [{ key: "contractReap", value: { "42": { ts: 7, to: "codex:p", reason: "gone" } } }],
+  };
+  const client = {
+    query: async (sql) => {
+      const t = String(sql).match(/FROM (\w+)/)?.[1] || "";
+      return { rows: rows[t] || [], rowCount: 0 };
+    },
+    release: () => {}, on: () => client, once: () => client,
+  };
+  const store = new PgStore({ pool: { query: client.query, connect: async () => client } });
+  const snap = await store.loadSnapshot("local");
+  ok(snap.contractReap && snap.contractReap["42"]?.to === "codex:p", "loadSnapshot rehydrates contractReap from kv");
+}
+
 console.log("task extra fields: pack + unpack (the cost-metadata fidelity fix)");
 {
   const { PgStore: PS } = await import("./lib/store-pg.mjs");
