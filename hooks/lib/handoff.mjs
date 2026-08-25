@@ -187,9 +187,26 @@ function digest(turns, budget = 56_000) {
   return out;
 }
 
-function haveScrooge() {
-  if (process.env.TRANTOR_NO_SCROOGE === "1") return false; // opt out (tests / no-LLM summary)
-  try { execSync("command -v scrooge", { stdio: "ignore" }); return true; } catch { return false; }
+// Where scrooge actually lives. `command -v` alone was the bug: it installs into ~/.local/bin,
+// which is NOT on a default PATH, so every handoff written from a hook, launchd job or precompact
+// silently failed the check and dumped raw transcript instead. Those are precisely the automatic
+// paths, so the summarizer was missing exactly when nobody was watching. Resolve to an absolute
+// path and exec THAT.
+const SCROOGE_DIRS = [
+  join(homedir(), ".local", "bin"),
+  "/opt/homebrew/bin",
+  "/usr/local/bin",
+  "/usr/bin",
+];
+function resolveScrooge() {
+  if (process.env.TRANTOR_NO_SCROOGE === "1") return "";   // opt out (tests / no-LLM summary)
+  if (process.env.TRANTOR_SCROOGE_BIN && existsSync(process.env.TRANTOR_SCROOGE_BIN)) return process.env.TRANTOR_SCROOGE_BIN;
+  try {
+    const p = execSync("command -v scrooge", { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim();
+    if (p && existsSync(p)) return p;
+  } catch {}
+  for (const d of SCROOGE_DIRS) { const p = join(d, "scrooge"); if (existsSync(p)) return p; }
+  return "";
 }
 
 export function buildSummary(transcriptPath) {
@@ -198,14 +215,38 @@ export function buildSummary(transcriptPath) {
   try { convo = digest(collectTurns(transcriptPath)); } catch { convo = ""; }
   if (!convo) return "*(transcript unreadable)*";
   const sys = "You are writing a SESSION HANDOFF so a fresh Claude Code session can take over without losing context. The text spans an entire (possibly multi-hour) session: opening turns, an even sample of the middle, and the recent tail. Produce a concise but COMPLETE markdown handoff with these sections: TASK (what we're doing + the goal), STATE (done / in-progress), KEY DECISIONS, OPEN THREADS & NEXT STEPS (concrete actions), KEY FILES & locations (exact paths). Be specific. Cover the whole arc, not just the end. Do not pad.";
-  if (haveScrooge()) {
+  // Cut the raw tail on a TURN boundary. A blind slice(-12000) opens mid-sentence, which is how the
+  // 2026-08-24 handoff began, and a successor cannot tell a truncated thought from a complete one.
+  const tail = (n) => {
+    // Only trim to a turn boundary when we ACTUALLY truncated. When the whole digest fits, trimming
+    // would throw away the session's opening — which is the part a successor needs most, and which
+    // test-handoff.mjs rightly insists on.
+    if (convo.length <= n) return convo;
+    const cut = convo.slice(-n);
+    const b = cut.indexOf("\n\n");
+    return b > 0 && b < 2000 ? cut.slice(b + 2) : cut;
+  };
+  // Say WHICH failure this was. One string for "not installed" and "the call died" meant nobody
+  // could tell a missing tool from a broken one, and the reason only ever reached stderr.
+  const degraded = (why) =>
+    `*(⚠️ DEGRADED HANDOFF — this is a raw transcript tail, not a written summary.*\n`
+    + `*Reason: ${why}. It may open mid-thought and it OMITS anything older than the tail;*\n`
+    + `*treat the project's memory files as the reliable record and re-read them before acting.)*\n\n${tail(12000)}`;
+
+  const bin = resolveScrooge();
+  if (bin) {
     try {
-      return execSync(`scrooge -t summarize -d medium --system ${JSON.stringify(sys)}`, {
-        input: convo, encoding: "utf8", timeout: 60_000, maxBuffer: 8 * 1024 * 1024,
-      }).trim() || `*(empty summary — raw recent tail)*\n\n${convo.slice(-8000)}`;
-    } catch (e) { process.stderr.write(`[trantor] scrooge summarize failed: ${e?.message}\n`); }
+      // 29s observed summarizing a 56KB digest, so 60s left almost no headroom on a slow provider.
+      return execSync(`${JSON.stringify(bin)} -t summarize -d medium --system ${JSON.stringify(sys)}`, {
+        input: convo, encoding: "utf8", timeout: 180_000, maxBuffer: 8 * 1024 * 1024,
+      }).trim() || degraded("the summarizer returned nothing");
+    } catch (e) {
+      const why = `the summarizer failed: ${String(e?.message || e).slice(0, 200)}`;
+      process.stderr.write(`[trantor] scrooge summarize failed: ${e?.message}\n`);
+      return degraded(why);
+    }
   }
-  return `*(no summarizer available — representative transcript digest)*\n\n${convo.slice(-12000)}`;
+  return degraded("no summarizer is installed (scrooge was not found on PATH or in the usual locations)");
 }
 
 // The exact recent exchange, VERBATIM (not summarized/sampled) — so a baton-pass handoff carries the
