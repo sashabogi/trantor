@@ -46,7 +46,8 @@ const env = (W) => ({
   RELAY_CONTEXT_WINDOW: "200000",       // 190k of 200k → ~95%, over the 90% warn line
   RELAY_SESSION: "", RELAY_PROJECT: "", RELAY_URL: "http://127.0.0.1:9",   // hub unreachable: irrelevant here
   TRANTOR_NO_SCROOGE: "1",              // no LLM in a drill
-  TRANTOR_NO_BATON_SPAWN: "1",          // and never open a real Terminal window
+  TRANTOR_NO_BATON_SPAWN: "1",          // and never open a real Terminal window…
+  TRANTOR_NO_HANDOFF_SPAWN: "1",        // …by EITHER name. Setting only the first opened eight.
 });
 
 function runHook(hook, W, stdin) {

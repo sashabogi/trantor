@@ -436,9 +436,17 @@ export function maybeSpawn(projectDir, conf = readConfig()) {
 export const RECAP_CMD = "claude 'Recap the handoff you just took over — what was the previous session doing, and where do we continue? Then wait for me.'";
 
 // Spawn a fresh self-announcing session WITHOUT the dialog (manual handoff — the user already decided).
+// ONE suppression check for every path that can open a terminal window. There were two names for
+// this — TRANTOR_NO_HANDOFF_SPAWN here and TRANTOR_NO_BATON_SPAWN on spawnBaton — and a drill that
+// set the wrong one opened eight live sessions in deleted temp directories, twice. A guard with two
+// names is a guard you can miss, so both are honoured wherever a window is opened.
+export function spawnSuppressed() {
+  return process.env.TRANTOR_NO_HANDOFF_SPAWN === "1" || process.env.TRANTOR_NO_BATON_SPAWN === "1";
+}
+
 export function spawnFresh(projectDir) {
   try {
-    if (process.platform !== "darwin" || process.env.TRANTOR_NO_HANDOFF_SPAWN === "1") return false;
+    if (process.platform !== "darwin" || spawnSuppressed()) return false;
     const script = join(HERE, "..", "..", "bin", "open-session.sh");
     if (!existsSync(script)) return false;
     const child = spawn("/bin/bash", [script, projectDir, RECAP_CMD], { detached: true, stdio: "ignore" });
@@ -482,7 +490,7 @@ export function spawnBaton({ projectDir, handoffFile, conf = readConfig(),
   // then deleted, each parked on a "do you trust this folder?" prompt. Five of them were found by
   // the operator on 2026-08-24. A code path that spawns windows needs an off switch, or it cannot
   // be tested honestly and someone will fake one that does not exist.
-  if (process.env.TRANTOR_NO_BATON_SPAWN === "1" || conf.batonSpawn === false) {
+  if (spawnSuppressed() || conf.batonSpawn === false) {
     return { spawned: false, armed: false, windowId: "", suppressed: true };
   }
   const { windowId, tty } = _resolveWindow();   // original window FIRST, while it's still frontmost
