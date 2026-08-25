@@ -140,9 +140,16 @@ export function Inbox({ client, me, onOpenConversation }: {
     .then(r => setMessages((r.messages ?? []).filter(m => m.to === me).reverse()))
     .catch(e => setErr(String(e.message || e)));
   useEffect(() => {
-    load();
-    client.peers().then(setPeers).catch(() => {});
-    client.tasks().then(setCards).catch(() => {});   // card status is how we know the work moved on
+    // Refreshed, not snapshotted. Fetching these once on mount and then reasoning about them
+    // against a live clock is exactly how a healthy seat got reported as gone.
+    const refresh = () => {
+      load();
+      client.peers().then(setPeers).catch(() => {});
+      client.tasks().then(setCards).catch(() => {});   // card status is how we know the work moved on
+    };
+    refresh();
+    const t = setInterval(refresh, 30_000);
+    return () => clearInterval(t);
   }, [client, me]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => client.streamEvents(ev => { if (ev.type === "message") load(); }), [client, me]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -169,7 +176,7 @@ export function Inbox({ client, me, onOpenConversation }: {
           <div className="mt-2 flex items-center gap-3 text-[12px] text-[var(--color-tr-muted)]">
             <span>
               {staleCount} of {messages.length} {staleCount === 1 ? "has" : "have"} gone stale —
-              the asker is gone, the card is closed, or they asked again since.
+              the card is closed, or they asked again since.
             </span>
             <button onClick={dismissStale} className="tr-chip hover:text-[var(--color-tr-doing)]">
               Dismiss {staleCount === 1 ? "it" : "all " + staleCount}
