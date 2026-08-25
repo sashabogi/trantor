@@ -92,6 +92,17 @@ Loop until the board is done — you are a foreman, not a mailbox:
 3. ACT within one cycle: failed card → read the report, send a fix contract, card back to
    doing · dead agent → `trantor up <agent>` (re-verifies) + resend contract · silent-but-alive
    → direct-message nudge naming the card.
+   Use `relay_contracts` for the ledger of what you dispatched and are still owed. Every contract
+   carries a **disposition**, and each one means a different action:
+   - **WAITING** — assignee alive, inside the overdue window. This is what progress looks like. Do
+     nothing; do not nudge it just because it is quiet.
+   - **STALLED** — assignee offline, or overdue while online. Act NOW: check the seat, `trantor up`
+     / `trantor swap` it, or reassign. This is also the only disposition that blocks your stop.
+   - **ABANDONED** — the assignee has been gone long enough that the contract can never be
+     answered. Nobody is coming back. **Reassign the work or drop it deliberately** — it will not
+     block you again, and it will not resolve itself.
+   A contract is never closed on the assignee's behalf: quiet is not an outcome. An abandoned one
+   stays in the ledger with the evidence, and a seat that revives still closes its own contract.
 4. Grunt sub-tasks that appear mid-build (a regex, a config block, a doc paragraph) →
    `relay_scrooge`, don't burn a crew seat or your own window.
 5. Record lessons as you diagnose (`relay_lesson(text, scope)` — global or per-agent quirks);

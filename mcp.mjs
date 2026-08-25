@@ -136,26 +136,40 @@ server.tool("relay_whoami", "Show this session's relay identity, project, hub UR
   return { content: [{ type: "text", text }] };
 });
 
-server.tool("relay_contracts", "What you dispatched and are still owed. Lists every DIRECT message you sent to another session that has not been answered yet, with how long it has been outstanding, whether that session is still alive, and its last known status. Call this before concluding a crew is idle, stuck, or done — silence on the bus is not evidence either way. Answered contracts carry the outcome text.", {},
+server.tool("relay_contracts", "What you dispatched and are still owed. Lists every DIRECT message you sent to another session, with how long it has been outstanding, whether that session is still alive, and its last known status. Each one carries a disposition: WAITING (assignee alive and working — normal), STALLED (assignee offline or overdue — poke it, swap it, or reassign), ABANDONED (assignee gone so long the contract can never be answered — the work needs reassigning, nobody is coming back), or answered, with the outcome text. Call this before concluding a crew is idle, stuck, or done — silence on the bus is not evidence either way.", {},
   async () => {
     let r;
     try { r = await api("GET", `/contracts?session=${encodeURIComponent(SESSION)}&project=${encodeURIComponent(PROJECT)}`); }
     catch (e) { return { content: [{ type: "text", text: `could not reach the hub: ${e?.message || e}` }] }; }
     const all = r?.contracts || [];
-    const open = all.filter(c => !c.answered);
     if (!all.length) return { content: [{ type: "text", text: "You have not dispatched any contracts in the last 24h." }] };
+    // Fall back to the pre-disposition shape when talking to an older hub.
+    const disp = (c) => c.disposition || (c.answered ? "answered" : (c.assigneeOnline ? "waiting" : "stalled"));
+    const open = all.filter(c => disp(c) === "waiting" || disp(c) === "stalled");
+    const abandoned = all.filter(c => disp(c) === "abandoned");
     const mins = (ms) => (ms >= 60000 ? `${Math.round(ms / 60000)}m` : `${Math.round(ms / 1000)}s`);
+    const MARK = { answered: "✅", waiting: "⏳", stalled: "⚠️", abandoned: "🪦" };
     const line = (c) => {
-      const health = c.answered ? "" :
+      const d = disp(c);
+      const health = d === "answered" ? "" :
         c.assigneeOnline ? ` · alive (${c.assigneeStatus || "no status"})`
         : c.assigneeLastSeenMs == null ? " · NEVER SEEN on the bus"
         : ` · LAST SEEN ${mins(c.assigneeLastSeenMs)} ago`;
-      const out = c.answered ? ` → ${String(c.answer?.text || "").slice(0, 120)}` : "";
-      return `${c.answered ? "✅" : "⏳"} #${c.id} → ${c.to} (${mins(c.ageMs)} ago)${health}: "${String(c.text).slice(0, 100)}"${out}`;
+      const out = d === "answered" ? ` → ${String(c.answer?.text || "").slice(0, 120)}` : "";
+      const tag = d === "answered" ? "" : ` [${d.toUpperCase()}]`;
+      return `${MARK[d] || "⏳"} #${c.id} → ${c.to} (${mins(c.ageMs)} ago)${tag}${health}: "${String(c.text).slice(0, 100)}"${out}`;
     };
-    const text = `${open.length} outstanding of ${all.length} contract(s) in the last 24h:\n`
+    const notes = [];
+    if (open.some(c => disp(c) === "stalled")) {
+      notes.push("⚠️ A STALLED contract's assignee is offline or overdue. Waiting will not finish the work — check it, swap it (`trantor swap <agent>`), or reassign.");
+    }
+    if (abandoned.length) {
+      notes.push(`🪦 ${abandoned.length} ABANDONED: the assignee has been gone too long for these to ever be answered. Nobody is coming back — reassign the work or drop it deliberately.`);
+    }
+    const text = `${open.length} outstanding of ${all.length} contract(s) in the last 24h`
+      + (abandoned.length ? ` (plus ${abandoned.length} abandoned)` : "") + `:\n`
       + all.slice(-25).map(line).join("\n")
-      + (open.some(c => !c.assigneeOnline) ? "\n\n⚠️ At least one assignee is not alive on the bus. Waiting on it will not finish the work — check it, swap it, or reassign." : "");
+      + (notes.length ? "\n\n" + notes.join("\n") : "");
     return { content: [{ type: "text", text }] };
   });
 

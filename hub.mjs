@@ -46,6 +46,22 @@ const FOCUS_OFFLINE_MS = Number(process.env.RELAY_FOCUS_OFFLINE_MS || ONLINE_MS)
 // untouched for an hour is routine — a big task runs a long time between prompts.
 const FOCUS_IDLE_MS = Number(process.env.RELAY_FOCUS_IDLE_MS || 6 * 60 * 60 * 1000);
 const REAP_INTERVAL_MS = Number(process.env.RELAY_REAP_INTERVAL_MS || 60000);       // how often the reaper sweeps (env-tunable; tests set it low)
+// Contract lifecycle. A contract closes when the ASSIGNEE answers — so a seat that does the work and
+// then dies never closes one, and a session found 16 such ghosts in a day, every one with its files
+// already on disk. The dispatcher then gets nagged about them at every stop, forever, and the human
+// becomes the one who remembers. That is the complaint this whole area exists to answer.
+//
+// The fix is the stale-card lane's shape, not an auto-close: quiet is NOT proof of death, so the hub
+// never marks a contract answered on the assignee's behalf. Instead a contract walks a lifecycle —
+//   waiting   assignee online and inside the overdue window; this is what progress looks like
+//   stalled   assignee offline, or overdue while online; ACTIONABLE, and what blocks a stop
+//   abandoned assignee quiet past CONTRACT_ABANDON_MS; it can no longer resolve itself
+// — and only the middle state nags. Abandoned ones stay in the ledger with their evidence so
+// `relay_contracts` can still show what died, but they stop trapping every future session.
+// The window is deliberately much longer than the stop hook's overdue window, so a contract is
+// always surfaced as `stalled` (and acted on) BEFORE it can go quiet as `abandoned`.
+const CONTRACT_ABANDON_MS = Number(process.env.RELAY_CONTRACT_ABANDON_MS || 60 * 60 * 1000);
+const CONTRACT_WINDOW_MS = Number(process.env.RELAY_CONTRACT_WINDOW_MS || 24 * 60 * 60 * 1000);
 if (!existsSync(DATA_DIR)) mkdirSync(DATA_DIR, { recursive: true });
 const isLoopbackHost = (host) => {
   const h = String(host || "").toLowerCase();
@@ -95,7 +111,7 @@ function scanTelemetry() {
 // TIMELINE view are untouched; every NEW type is dotted ("message", "presence.online", …) and is
 // filtered OUT of /history. Loads from the old `cardEvents` key when `events` is absent.
 function emptyState() {
-  return { messages: [], peers: {}, seq: 0, tasks: [], taskSeq: 0, projectMeta: {}, lessons: [], events: [], cardEventsBackfilled: false, aliases: {}, phaseMeta: {}, verifyGates: [], verifyGateSeq: 0, proposals: [], proposalSeq: 0, balances: { ts: 0, by: "", entries: [] }, subagentCostReset: false, handoffLog: [], identities: {}, inviteTokens: {}, focus: {}, orgPolicy: {}, instances: {}, dutySession: "" };
+  return { messages: [], peers: {}, seq: 0, tasks: [], taskSeq: 0, projectMeta: {}, lessons: [], events: [], cardEventsBackfilled: false, aliases: {}, phaseMeta: {}, verifyGates: [], verifyGateSeq: 0, proposals: [], proposalSeq: 0, balances: { ts: 0, by: "", entries: [] }, subagentCostReset: false, handoffLog: [], identities: {}, inviteTokens: {}, focus: {}, orgPolicy: {}, instances: {}, dutySession: "", contractReap: {} };
 }
 
 const CARD_LOG_MAX = 40;
@@ -171,6 +187,7 @@ function normalizeState(loaded = {}) {
   s.focus = loaded.focus && typeof loaded.focus === "object" ? loaded.focus : {};
   s.orgPolicy = loaded.orgPolicy && typeof loaded.orgPolicy === "object" ? loaded.orgPolicy : {};
   s.dutySession = String(loaded.dutySession || "");
+  s.contractReap = loaded.contractReap && typeof loaded.contractReap === "object" ? loaded.contractReap : {};
   for (const [session, v] of Object.entries(loaded.peers || {})) {
     // migrate old numeric form
     s.peers[session] = typeof v === "number"
@@ -604,6 +621,124 @@ function reapStaleCards() {
   if (changed) dirty = true;
 }
 setInterval(reapStaleCards, REAP_INTERVAL_MS).unref?.();
+
+// ---- the contract ledger -------------------------------------------------------------------
+// ONE derivation, shared by GET /contracts and the reaper below. Two copies of this is how you get
+// an endpoint and a sweeper that disagree about what is open, which is the same "two names for one
+// intent" mistake the spawn guards made.
+//
+// A contract is a DIRECT message from `session` to one peer. It closes when that peer answers:
+// strictly by `re`, or, for seats that predate that column, oldest-open-first. Excluded outright,
+// because none of these can ever be answered and so would hang open forever:
+//   - broadcasts (`to === "all"`)
+//   - self-dispatch (`from === to`) — a reply from yourself is never counted as an answer
+//   - the hub's own pseudo-identities (`hub:*`) and hub-authored mail — nothing polls them (0.17.87)
+// Durations an agent READS and acts on, so they must not round to nonsense. Minutes are the useful
+// unit in production (the abandon window is an hour), but the drills run in seconds and "past the 0m
+// abandon window" is a sentence that tells the reader nothing.
+function humanMs(ms) {
+  const n = Math.max(0, Number(ms) || 0);
+  if (n < 60000) return `${Math.max(1, Math.round(n / 1000))}s`;
+  if (n < 3600000) return `${Math.round(n / 60000)}m`;
+  return `${(n / 3600000).toFixed(n < 36000000 ? 1 : 0)}h`;
+}
+
+function contractRecipientIsAnswerable(m) {
+  return !!m.to && m.to !== "all" && m.from !== m.to && !m.to.startsWith("hub:") && !m.from.startsWith("hub:");
+}
+
+function contractsFor(session, { project = "", windowMs = CONTRACT_WINDOW_MS, overdueMs = null } = {}) {
+  const t = now();
+  const cutoff = t - windowMs;
+  const abandonCut = t - CONTRACT_ABANDON_MS;
+  const onCut = t - ONLINE_MS;
+  const mine = state.messages.filter(m =>
+    m.from === session && m.ts >= cutoff && contractRecipientIsAnswerable(m) && (!project || m.project === project));
+  const replies = state.messages.filter(m => m.to === session && m.from !== session && m.ts >= cutoff);
+  const byRe = new Map();
+  for (const r of replies) if (r.re) byRe.set(Number(r.re), r);
+  const looseByPeer = new Map();
+  for (const r of replies) if (!r.re) { if (!looseByPeer.has(r.from)) looseByPeer.set(r.from, []); looseByPeer.get(r.from).push(r); }
+  for (const arr of looseByPeer.values()) arr.sort((a, b) => a.ts - b.ts);
+
+  const out = [];
+  for (const c of mine.sort((a, b) => a.ts - b.ts)) {
+    let answer = byRe.get(c.id) || null;
+    if (!answer) {
+      const pool = looseByPeer.get(c.to) || [];
+      const i = pool.findIndex(r => r.ts > c.ts);
+      if (i >= 0) answer = pool.splice(i, 1)[0];
+    }
+    const peer = state.peers[c.to] || null;
+    const seen = peer?.lastSeen || 0;
+    const online = !!seen && seen > onCut;
+    const ageMs = t - c.ts;
+    const reaped = state.contractReap?.[String(c.id)] || null;
+
+    // An answer ALWAYS wins, including over a recorded abandonment: the reap is evidence, not a
+    // tombstone. A seat that comes back and reports still closes its own contract.
+    let disposition;
+    if (answer) disposition = "answered";
+    else if (seen < abandonCut) disposition = "abandoned";     // covers never-seen (seen === 0)
+    else if (!online || (overdueMs != null && ageMs >= overdueMs)) disposition = "stalled";
+    else disposition = "waiting";
+
+    out.push({
+      id: c.id, to: c.to, text: c.text, ts: c.ts, ageMs,
+      answered: !!answer,
+      answer: answer ? { id: answer.id, ts: answer.ts, text: answer.text } : null,
+      disposition,
+      assigneeOnline: online,
+      assigneeStatus: String(peer?.status || ""),
+      assigneeLastSeenMs: seen ? t - seen : null,
+      reaped: reaped ? { ts: reaped.ts, reason: reaped.reason } : null,
+    });
+  }
+  return out;
+}
+
+// Every session that has dispatched inside the ledger window. The reaper needs all of them; the
+// endpoint only ever asks about one.
+function contractDispatchers(windowMs = CONTRACT_WINDOW_MS) {
+  const cutoff = now() - windowMs;
+  const set = new Set();
+  for (const m of state.messages) if (m.ts >= cutoff && contractRecipientIsAnswerable(m)) set.add(m.from);
+  return set;
+}
+
+// The contract reaper. Records — never invents an answer for — a contract whose assignee has been
+// quiet past CONTRACT_ABANDON_MS, so the abandonment survives a hub restart (in-memory-only state is
+// exactly why the escalation backlog re-fires on every restart) and shows up once in the FEED.
+// After this the contract stops counting as open, so it stops nagging every future session; it stays
+// listed with its evidence, so `relay_contracts` can still show what died.
+function reapAbandonedContracts() {
+  let changed = false;
+  for (const session of contractDispatchers()) {
+    for (const c of contractsFor(session)) {
+      if (c.disposition !== "abandoned") continue;
+      const key = String(c.id);
+      if (state.contractReap[key]) continue;
+      const quiet = c.assigneeLastSeenMs == null
+        ? "never seen on the bus"
+        : `last seen ${humanMs(c.assigneeLastSeenMs)} ago`;
+      const reason = `assignee ${c.to} ${quiet}, past the ${humanMs(CONTRACT_ABANDON_MS)} abandon window`;
+      state.contractReap[key] = { ts: now(), from: session, to: c.to, reason, dispatchedTs: c.ts };
+      appendEvent("contract.abandoned", "", "reaper", {
+        msgId: c.id, fromSession: session, toSession: c.to, reason,
+        text: String(c.text || "").slice(0, 500),
+      });
+      changed = true;
+    }
+  }
+  // Forget reap records whose contract has aged out of the ledger window entirely — nothing can
+  // read them any more and the map would grow without bound.
+  const cutoff = now() - CONTRACT_WINDOW_MS;
+  for (const [key, r] of Object.entries(state.contractReap)) {
+    if ((r?.dispatchedTs || 0) < cutoff) { delete state.contractReap[key]; changed = true; }
+  }
+  if (changed) dirty = true;
+}
+setInterval(reapAbandonedContracts, REAP_INTERVAL_MS).unref?.();
 
 // dashboard HTML (read once at startup)
 let UI = "";
@@ -2288,36 +2423,18 @@ const server = http.createServer(async (req, res) => {
     if (req.method === "GET" && P === "/contracts") {
       const session = String(q.session || "");
       if (!session) return json(res, 400, { error: "session required" });
-      const proj = String(q.project || "");
-      const windowMs = Math.max(60000, Number(q.windowMs || 24 * 3600 * 1000));
-      const cutoff = now() - windowMs;
-      const mine = state.messages.filter(m => m.from === session && m.to && m.to !== "all" && m.ts >= cutoff && (!proj || m.project === proj));
-      const replies = state.messages.filter(m => m.to === session && m.from !== session && m.ts >= cutoff);
-      const byRe = new Map();
-      for (const r of replies) if (r.re) byRe.set(Number(r.re), r);
-      const looseByPeer = new Map();
-      for (const r of replies) if (!r.re) { if (!looseByPeer.has(r.from)) looseByPeer.set(r.from, []); looseByPeer.get(r.from).push(r); }
-      for (const arr of looseByPeer.values()) arr.sort((a, b) => a.ts - b.ts);
-      const out = [];
-      for (const c of mine.sort((a, b) => a.ts - b.ts)) {
-        let answer = byRe.get(c.id) || null;
-        if (!answer) {
-          const pool = looseByPeer.get(c.to) || [];
-          const i = pool.findIndex(r => r.ts > c.ts);
-          if (i >= 0) answer = pool.splice(i, 1)[0];
-        }
-        const peer = state.peers[c.to] || null;
-        const seen = peer?.lastSeen || 0;
-        out.push({
-          id: c.id, to: c.to, text: c.text, ts: c.ts, ageMs: now() - c.ts,
-          answered: !!answer,
-          answer: answer ? { id: answer.id, ts: answer.ts, text: answer.text } : null,
-          assigneeOnline: !!seen && (now() - seen) < ONLINE_MS,
-          assigneeStatus: String(peer?.status || ""),
-          assigneeLastSeenMs: seen ? now() - seen : null,
-        });
-      }
-      return json(res, 200, { session, contracts: out, open: out.filter(c => !c.answered).length });
+      const windowMs = Math.max(60000, Number(q.windowMs || CONTRACT_WINDOW_MS));
+      const rawOverdue = q.overdueMs === undefined || q.overdueMs === "" ? null : Number(q.overdueMs);
+      const overdueMs = Number.isFinite(rawOverdue) ? Math.max(0, rawOverdue) : null;
+      const out = contractsFor(session, { project: String(q.project || ""), windowMs, overdueMs });
+      const by = (d) => out.filter(c => c.disposition === d).length;
+      // `open` stays the count a caller has to DO something about, which is what it always meant.
+      // Abandoned ones are reported separately: they are the ledger's record of what died, not work.
+      return json(res, 200, {
+        session, contracts: out,
+        open: out.filter(c => !c.answered && c.disposition !== "abandoned").length,
+        waiting: by("waiting"), stalled: by("stalled"), abandoned: by("abandoned"), answered: by("answered"),
+      });
     }
 
     if (req.method === "GET" && P === "/inbox") {

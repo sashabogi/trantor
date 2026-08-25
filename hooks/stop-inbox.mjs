@@ -54,10 +54,17 @@ function readStdin() {
 // complaint this exists to answer. So before letting a stop through we ask the hub what this
 // session is still owed, and refuse ONCE if any of it has gone quiet.
 //
-// Deliberately narrow: only a contract whose assignee is offline, or one that is overdue, blocks.
-// An open contract with a healthy seat working on it is exactly what "in progress" looks like, and
-// nagging about it every stop would be worse than saying nothing. Fail-open throughout: a hub that
-// is down or slow must never trap a session.
+// Deliberately narrow: only a contract the hub calls `stalled` blocks — assignee offline, or overdue
+// while online. An open contract with a healthy seat working on it is exactly what "in progress"
+// looks like, and nagging about it every stop would be worse than saying nothing. Fail-open
+// throughout: a hub that is down or slow must never trap a session.
+//
+// `abandoned` deliberately does NOT block. Its assignee has been quiet so long the contract can no
+// longer resolve itself, and blocking on it would nag every future session forever about a seat that
+// is never coming back — the ghost problem this hook was accused of causing. The lifecycle guarantees
+// the dispatcher was already told: a contract is always `stalled` (and blocking) for a long while
+// before it can become `abandoned`. After that the hub keeps it in the ledger, and relay_contracts
+// still shows it, but it stops trapping anyone.
 const OVERDUE_MS = (() => {
   const raw = process.env.TRANTOR_CONTRACT_OVERDUE_MS;
   const n = raw === undefined || raw === "" ? NaN : Number(raw);
@@ -68,13 +75,18 @@ async function stalledContractCheck({ session, project, instanceId }) {
   if (process.env.RELAY_STOP_CONTRACTS === "0") return allow();
   let contracts = [];
   try {
-    const r = await signedGet(`/contracts?session=${encodeURIComponent(session)}&project=${encodeURIComponent(project)}`,
+    const r = await signedGet(`/contracts?session=${encodeURIComponent(session)}&project=${encodeURIComponent(project)}&overdueMs=${OVERDUE_MS}`,
       { timeoutMs: FETCH_TIMEOUT_MS, session, instance: instanceId, project });
     if (!r.ok) return allow();
     contracts = r.json?.contracts || [];
   } catch { return allow(); }
 
-  const stalled = contracts.filter(c => !c.answered && (!c.assigneeOnline || c.ageMs >= OVERDUE_MS));
+  // The hub owns the verdict now (it also knows the abandon window). An older hub that does not send
+  // `disposition` falls back to the original predicate, so a new hook against an old hub is unchanged.
+  const stalled = contracts.filter(c => c.disposition
+    ? c.disposition === "stalled"
+    : (!c.answered && (!c.assigneeOnline || c.ageMs >= OVERDUE_MS)));
+  const abandoned = contracts.filter(c => c.disposition === "abandoned");
   if (!stalled.length) return allow();
 
   const mins = (ms) => (ms >= 60000 ? `${Math.round(ms / 60000)}m` : `${Math.round(ms / 1000)}s`);
@@ -85,9 +97,15 @@ async function stalledContractCheck({ session, project, instanceId }) {
     return `- ${sanitize(c.to)} (${health}) — asked ${mins(c.ageMs)} ago: "${sanitize(String(c.text).slice(0, 120))}"`;
   }).join("\n");
 
+  const ghosts = abandoned.length
+    ? `\n\nAlso ${abandoned.length} contract(s) are ABANDONED — their assignee has been gone long enough ` +
+      `that they can never be answered (${abandoned.slice(0, 3).map(c => sanitize(c.to)).join(", ")}). ` +
+      `They no longer block you and you will not be told again. If that work still matters, reassign it.`
+    : "";
+
   const reason =
     `You dispatched ${stalled.length} contract(s) that have gone quiet, and you were about to go idle:\n` +
-    lines + `\n\n` +
+    lines + ghosts + `\n\n` +
     `Do not just wait, and do not ask the human to check. Use relay_contracts to see everything you are owed, ` +
     `relay_peers to see whether the seat is alive, and relay_send to ask it directly. If a seat is down, say so and ` +
     `either swap it (\`trantor swap <agent>\`) or reassign the work. If the work is genuinely still running, say that ` +

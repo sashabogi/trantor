@@ -136,6 +136,156 @@ console.log("\nAn outcome is threaded to the contract it names, not merely the o
     `c3=${m2[c3.id]?.answered} c4=${m2[c4.id]?.answered}`);
 }
 
+// ---- the lifecycle: waiting → stalled → abandoned -------------------------------------------
+// A contract closes only when the ASSIGNEE answers, so a seat that does the work and then dies never
+// closes one. A live session found 16 such ghosts in a day, each with its files already on disk, and
+// the stop guard then nagged about them at every stop forever. These drills run a SECOND hub with
+// tiny windows and assert the whole lifecycle, including that quiet is never treated as an answer.
+console.log("\nA contract whose assignee dies walks a lifecycle instead of hanging open forever:");
+const PORT2 = 47932;
+const dir2 = mkdtempSync(join(tmpdir(), "trantor-ctrlife-"));
+mkdirSync(join(dir2, ".agent-bus"), { recursive: true });
+const life = {
+  RELAY_DATA_DIR: dir2, HOME: dir2, RELAY_PORT: String(PORT2), PORT: String(PORT2),
+  TRANTOR_NO_UPDATE_CHECK: "1",
+  RELAY_ONLINE_MS: "600",                  // offline after 0.6s quiet
+  RELAY_CONTRACT_ABANDON_MS: "2500",       // abandoned after 2.5s quiet
+  RELAY_REAP_INTERVAL_MS: "300",           // sweep fast
+};
+let hub2 = spawn("node", [join(ROOT, "hub.mjs")], { env: { ...process.env, ...life }, stdio: ["ignore", "ignore", "pipe"] });
+await sleep(900);
+const BASE2 = `http://127.0.0.1:${PORT2}`;
+const post2 = (p, b) => fetch(BASE2 + p, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(b) }).then(r => r.json()).catch(e => ({ error: String(e) }));
+const get2 = (p) => fetch(BASE2 + p).then(r => r.json()).catch(e => ({ error: String(e) }));
+const ctr2 = (sess) => get2(`/contracts?session=${encodeURIComponent(sess)}`);
+
+const O = "host:life", DEAD = "codex:life", LIVE = "glm:life", PROJ2 = "life";
+await post2("/register", { session: O, project: PROJ2, status: "orchestrating" });
+await post2("/register", { session: DEAD, project: PROJ2, status: "working" });
+await post2("/register", { session: LIVE, project: PROJ2, status: "working" });
+
+const gone = await post2("/send", { from: O, to: DEAD, project: PROJ2, text: "port the ortho ruleset" });
+const kept = await post2("/send", { from: O, to: LIVE, project: PROJ2, text: "port the endo ruleset" });
+
+{
+  const r = await ctr2(O);
+  const m = Object.fromEntries((r.contracts || []).map(c => [c.id, c]));
+  ok("a fresh contract to a live seat is WAITING, not stalled",
+    m[gone.id]?.disposition === "waiting" && m[kept.id]?.disposition === "waiting",
+    `${m[gone.id]?.disposition} / ${m[kept.id]?.disposition}`);
+  ok("…and waiting contracts count as open work", r.open === 2 && r.waiting === 2, JSON.stringify({ open: r.open, waiting: r.waiting }));
+}
+
+// DEAD stops heartbeating; LIVE keeps checking in. Only the dead one should decay. LIVE's heartbeat
+// runs on a timer rather than hand-paced awaits: a drill that lets its own control seat lapse is
+// measuring the test's timing, not the hub's behaviour.
+const beat = setInterval(() => { post2("/register", { session: LIVE, project: PROJ2, status: "working" }); }, 200);
+await sleep(1600);
+{
+  const r = await ctr2(O);
+  const m = Object.fromEntries((r.contracts || []).map(c => [c.id, c]));
+  ok("the dead seat's contract goes STALLED once it drops offline", m[gone.id]?.disposition === "stalled", m[gone.id]?.disposition);
+  ok("…while the live seat's contract is untouched", m[kept.id]?.disposition === "waiting", m[kept.id]?.disposition);
+}
+
+// Past the abandon window the ghost stops being work. LIVE's heartbeat is still running.
+await sleep(2300);
+{
+  const r = await ctr2(O);
+  const m = Object.fromEntries((r.contracts || []).map(c => [c.id, c]));
+  ok("a contract nobody can ever answer becomes ABANDONED", m[gone.id]?.disposition === "abandoned", m[gone.id]?.disposition);
+  ok("…it stops counting as open work, so it stops nagging every future session",
+    r.open === 1 && r.abandoned === 1, JSON.stringify({ open: r.open, abandoned: r.abandoned }));
+  ok("…but it is still LISTED, with the evidence, so the ledger can show what died",
+    !!m[gone.id] && m[gone.id].answered === false && /never seen|last seen/i.test(m[gone.id]?.reaped?.reason || ""),
+    JSON.stringify(m[gone.id]?.reaped || null));
+  ok("…and it is NEVER marked answered — quiet is not an outcome", m[gone.id]?.answered === false && m[gone.id]?.answer === null);
+  ok("the live seat's contract is still open the whole time", m[kept.id]?.disposition === "waiting", m[kept.id]?.disposition);
+}
+
+{
+  const ev = await get2(`/events?limit=200`);
+  const list = ev?.events || ev || [];
+  const found = (Array.isArray(list) ? list : []).some(e => e.type === "contract.abandoned" && Number(e.msgId) === Number(gone.id));
+  ok("the reaper records the abandonment as an event, so it shows up in the FEED", found,
+    JSON.stringify((Array.isArray(list) ? list : []).map(e => e.type).slice(-8)));
+}
+
+clearInterval(beat);
+
+// The reap is EVIDENCE, not a tombstone: a seat that comes back still closes its own contract.
+await post2("/send", { from: DEAD, to: O, project: PROJ2, text: "✅ ortho done (exit 0)", re: gone.id });
+{
+  const r = await ctr2(O);
+  const m = Object.fromEntries((r.contracts || []).map(c => [c.id, c]));
+  ok("a late outcome still closes an abandoned contract — the reap is evidence, not a tombstone",
+    m[gone.id]?.disposition === "answered" && m[gone.id]?.answered === true,
+    `${m[gone.id]?.disposition}`);
+}
+
+// Contracts that could never be answered must never have been contracts.
+{
+  const self = await post2("/send", { from: O, to: O, project: PROJ2, text: "note to self" });
+  await sleep(400);
+  const r = await ctr2(O);
+  const ids = new Set((r.contracts || []).map(c => Number(c.id)));
+  ok("a message to YOURSELF is never a contract (it could never be answered)", !ids.has(Number(self.id)));
+  ok("…and neither is anything addressed to a hub:* pseudo-identity",
+    (r.contracts || []).every(c => !String(c.to).startsWith("hub:")));
+}
+
+// Persistence: the whole point of the kv key. A restart must not resurrect the ghost backlog.
+{
+  const before = await ctr2(O);
+  const abandonedBefore = (before.contracts || []).filter(c => c.reaped).length;
+  hub2.kill("SIGKILL");
+  await sleep(400);
+  hub2 = spawn("node", [join(ROOT, "hub.mjs")], { env: { ...process.env, ...life }, stdio: ["ignore", "ignore", "pipe"] });
+  await sleep(1200);
+  const after = await ctr2(O);
+  const abandonedAfter = (after.contracts || []).filter(c => c.reaped).length;
+  ok("a hub restart remembers what it already reaped (no re-announced ghost backlog)",
+    abandonedAfter >= abandonedBefore && abandonedBefore > 0,
+    `before=${abandonedBefore} after=${abandonedAfter}`);
+}
+
+// The stop guard must not block on a ghost it can never resolve.
+{
+  const { spawnSync } = await import("node:child_process");
+  const { writeFileSync } = await import("node:fs");
+  const w = mkdtempSync(join(tmpdir(), "trantor-lifestop-"));
+  const BUS = join(w, "bus"); mkdirSync(BUS, { recursive: true });
+  const repo = join(w, "life"); mkdirSync(repo, { recursive: true });
+  spawnSync("git", ["init", "-q"], { cwd: repo });
+  writeFileSync(join(BUS, "config.json"), JSON.stringify({ url: BASE2, hubs: { life: BASE2 } }));
+  // GHOST dispatches to a seat that never checks in again, then we let it decay all the way through.
+  const GHOST = "host:ghost";
+  await post2("/register", { session: GHOST, project: PROJ2, status: "orchestrating" });
+  await post2("/send", { from: GHOST, to: DEAD, project: PROJ2, text: "a job for a seat that is gone" });
+  await sleep(3200);   // past the abandon window; the reaper sweeps every 300ms
+  // Drain GHOST's mail first. The unread-DM guard runs BEFORE the contracts guard, so an overseer
+  // warning sitting in its inbox would block the stop for a reason this drill is not about — and the
+  // drill would then "pass" the wrong assertion. A consuming read (no peek) empties it.
+  await get2(`/inbox?session=${encodeURIComponent(GHOST)}`);
+  const runStop = (active) => new Promise((resolve) => {
+    const kid = spawn(process.execPath, [join(ROOT, "hooks", "stop-inbox.mjs")], {
+      cwd: ROOT, stdio: ["pipe", "pipe", "pipe"],
+      env: { ...process.env, AGENT_BUS_DIR: BUS, CLAUDE_PROJECT_DIR: repo, RELAY_HOST_ID: "host",
+             RELAY_SESSION: GHOST, RELAY_PROJECT: PROJ2, RELAY_URL: BASE2,
+             TRANTOR_CONTRACT_OVERDUE_MS: "0" },
+    });
+    let so = ""; kid.stdout.on("data", d => (so += d));
+    kid.on("close", () => resolve(so));
+    kid.stdin.end(JSON.stringify({ session_id: "life-stop-1", cwd: repo, stop_hook_active: active }));
+    setTimeout(() => { try { kid.kill("SIGKILL"); } catch {} }, 15000).unref?.();
+  });
+  const out = await runStop(false);
+  let o = {}; try { o = JSON.parse(out || "{}"); } catch {}
+  ok("the stop guard does NOT block on an abandoned contract (the ghost-nag is over)",
+    o.decision !== "block", (o.reason || out || "").slice(0, 200));
+}
+
+hub2.kill("SIGKILL");
 hub.kill("SIGKILL");
 console.log(`\n${fail === 0 ? "✅" : "❌"} contracts: ${pass} passed, ${fail} failed`);
 process.exit(fail === 0 ? 0 : 1);
