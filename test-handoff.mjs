@@ -69,11 +69,20 @@ ok("summary includes the SESSION END", summary.includes(LAST));
 ok("verbatimRecentTail returns the exact recent text", verbatimRecentTail(transcript).includes(LAST));
 const { record: hrec, file: hfile } = writeHandoff({ projectDir: tmp, sessionId: "vt", transcript, trigger: "context-warn" });
 ok("writeHandoff embeds the verbatim in-flight block", /Verbatim recent exchange/.test(hrec.summary) && hrec.summary.includes(LAST));
+// The operator's OWN spawn guards, if they exported them. The GOTCHAS tell every session to set
+// TRANTOR_NO_HANDOFF_SPAWN and TRANTOR_NO_BATON_SPAWN before running anything that can open a
+// window, so this suite must assume they are set — and must put them back exactly as it found them
+// rather than deleting them, which would strip the operator's protection for the rest of the file.
+const GUARDS = ["TRANTOR_NO_HANDOFF_SPAWN", "TRANTOR_NO_BATON_SPAWN"];
+const savedGuards = Object.fromEntries(GUARDS.map(k => [k, process.env[k]]));
+const restoreGuards = () => { for (const k of GUARDS) { if (savedGuards[k] === undefined) delete process.env[k]; else process.env[k] = savedGuards[k]; } };
+const clearGuards = () => { for (const k of GUARDS) delete process.env[k]; };
+
 // manual baton: when spawning is disabled it must NOT touch any window (spawned:false, armed:false)
 process.env.TRANTOR_NO_HANDOFF_SPAWN = "1";
 const b = spawnBaton({ projectDir: tmp, handoffFile: "/tmp/nope.json" });
 ok("spawnBaton is a no-op (no window) when spawning is disabled", b.spawned === false && b.armed === false);
-delete process.env.TRANTOR_NO_HANDOFF_SPAWN;
+restoreGuards();
 delete process.env.TRANTOR_NO_SCROOGE;
 
 // --- regression: baton must close the ORIGINAL window, never the freshly-spawned successor ---
@@ -82,15 +91,26 @@ delete process.env.TRANTOR_NO_SCROOGE;
 // the SUCCESSOR the instant it took over ("you're supposed to shut yourself off, not the other one").
 // Lock the order: resolve the original window BEFORE spawning, and arm the close against it.
 {
+  // 0.17.98 moved spawnBaton onto spawnSuppressed(), which honours BOTH guard names — and that check
+  // runs BEFORE the injected seams. So an operator who exported the guards (as the GOTCHAS instruct)
+  // turned this ordering regression test into a silent no-op that reported two spurious failures.
+  // Clearing them here is safe BY CONSTRUCTION: every seam that could touch a real window is mocked
+  // below, so nothing can spawn. Restored in the finally, whatever happens.
   const order = [];
-  const b2 = spawnBaton({
-    projectDir: tmp, handoffFile: "/tmp/x.json",
-    _resolveWindow: () => { order.push("detect"); return { windowId: "W-ORIGINAL", tty: "/dev/ttysORIG" }; },
-    _spawnFresh: () => { order.push("spawn"); return true; },
-    _armClose: (hf, id) => { order.push(`arm:${id}`); return true; },
-  });
+  let b2;
+  clearGuards();
+  try {
+    b2 = spawnBaton({
+      projectDir: tmp, handoffFile: "/tmp/x.json",
+      _resolveWindow: () => { order.push("detect"); return { windowId: "W-ORIGINAL", tty: "/dev/ttysORIG" }; },
+      _spawnFresh: () => { order.push("spawn"); return true; },
+      _armClose: (hf, id) => { order.push(`arm:${id}`); return true; },
+    });
+  } finally { restoreGuards(); }
   ok("spawnBaton resolves the original window BEFORE spawning the fresh one", order[0] === "detect" && order[1] === "spawn");
   ok("spawnBaton arms the close against the ORIGINAL window, not the successor", order[2] === "arm:W-ORIGINAL" && b2.windowId === "W-ORIGINAL");
+  ok("…and the drill still works with the operator's spawn guards exported (it mocks every seam)",
+    order.length === 3, `order=${JSON.stringify(order)}`);
   // resolveOriginalWindow is callable and shaped right (returns {windowId,tty}); headless → empty, never throws
   const rw = resolveOriginalWindow();
   ok("resolveOriginalWindow returns a {windowId,tty} shape", typeof rw.windowId === "string" && typeof rw.tty === "string");
