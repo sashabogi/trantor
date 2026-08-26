@@ -152,7 +152,7 @@ if (!installed) warn("no crew CLIs found", "install at least one of: codex, gemi
 //   2. ~/.agent-bus/.env      — the CREW layer (seats: opencode/deepseek/openrouter/dsh)
 //   3. ~/.token-scrooge/.env  — the SCROOGE layer (cheap-model grunt routing)
 section("provider keys (who spends on what)");
-const KEY_VARS = ["DEEPSEEK_API_KEY", "OPENROUTER_API_KEY", "MOONSHOT_API_KEY", "ZAI_API_KEY", "OPENAI_API_KEY", "GEMINI_API_KEY", "XAI_API_KEY"];
+const KEY_VARS = ["DEEPSEEK_API_KEY", "OPENROUTER_API_KEY", "MOONSHOT_API_KEY", "ZAI_API_KEY", "OPENAI_API_KEY", "GEMINI_API_KEY", "XAI_API_KEY", "INCEPTION_API_KEY"];
 // Only some of these are a CREW credential. A seat that authenticates through its own config never
 // reads the env var at all, so a shared value there costs nothing and flagging it is noise:
 //   glm    → opencode.json provider["zai-coding-plan"].options.apiKey  (and a coding plan is flat
@@ -164,7 +164,15 @@ const KEY_VARS = ["DEEPSEEK_API_KEY", "OPENROUTER_API_KEY", "MOONSHOT_API_KEY", 
 // which is how a doctor becomes something you skip.
 const OPENCODE_CFG = read(join(H, ".config", "opencode", "opencode.json")) || {};
 const SEAT_ENV_VARS = { DEEPSEEK_API_KEY: "deepseek", OPENROUTER_API_KEY: "openrouter" };
+const ENV_TEMPLATE = /\{env:([A-Z0-9_]+)\}/;
+// Every var any opencode provider resolves from the environment, read out of opencode's own config.
+const opencodeEnvVars = new Set();
+for (const cfg of Object.values(OPENCODE_CFG?.provider || {})) {
+  const m = ENV_TEMPLATE.exec(String(cfg?.options?.apiKey || ""));
+  if (m) opencodeEnvVars.add(m[1]);
+}
 const crewUsesVar = (v) => {
+  if (opencodeEnvVars.has(v)) return true;      // a seat resolves this var at run time — stated by the config itself
   const provider = SEAT_ENV_VARS[v];
   if (!provider) return false;
   const configured = OPENCODE_CFG?.provider?.[provider]?.options?.apiKey;
