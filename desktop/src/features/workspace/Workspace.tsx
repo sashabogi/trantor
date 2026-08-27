@@ -7,6 +7,7 @@ import { useEffect, useMemo, useState } from "react";
 import type { Card, HubClient, HubEvent, Peer } from "../../shared/api/client";
 import { ProjectHeader, type Lens } from "../project/ProjectHeader";
 import { TerminalPane } from "./TerminalPane";
+import { orchestratorOf, type HerdrSeat } from "./herdr";
 import { when } from "../../shared/time";
 
 // A seat = a crew peer of this project (agent:project). Host sessions (MacBook-*:project) are
@@ -25,10 +26,23 @@ function hostOf(peers: Peer[], project: string): Peer | undefined {
 
 const seatName = (session: string) => session.split(":")[0];
 
-function SeatDot({ p }: { p: Peer }) {
-  const cls = p.online ? "bg-tr-doing" : "bg-tr-muted/50";
-  return <span className={`tr-dot ${cls}`} />;
+function SeatDot({ online }: { online: boolean }) {
+  return <span className={`tr-dot ${online ? "bg-tr-doing" : "bg-tr-muted/50"}`} />;
 }
+
+// One row in the pane strip. The crew's seats and the operator's own orchestrator pane are both
+// just panes you can open, so they share a shape here — the difference is that the orchestrator is
+// the person's session, which is why it leads the row and says so.
+type PaneTarget = {
+  key: string;
+  label: string;
+  agent: string;
+  session: string;
+  online: boolean;
+  lastSeen?: number;
+  status?: string;
+  isOrchestrator: boolean;
+};
 
 export function Workspace({ client, project, lens, onLens }: {
   client: HubClient; project: string; lens: Lens; onLens: (l: Lens) => void;
@@ -52,7 +66,44 @@ export function Workspace({ client, project, lens, onLens }: {
 
   const seats = useMemo(() => seatsOf(peers, project), [peers, project]);
   const host = useMemo(() => hostOf(peers, project), [peers, project]);
-  const selected = seats.find(s => s.session === sel) ?? seats[0];
+
+  // Is this project's own session hosted as a pane? `trantor open` records it, and until it does
+  // the host stays the quiet "you" chip it has always been.
+  const [orch, setOrch] = useState<HerdrSeat | null>(null);
+  useEffect(() => {
+    let alive = true;
+    const look = () => { orchestratorOf(project).then(o => { if (alive) setOrch(o); }).catch(() => {}); };
+    look();
+    const iv = setInterval(look, 12_000);
+    return () => { alive = false; clearInterval(iv); };
+  }, [project]);
+
+  const targets = useMemo<PaneTarget[]>(() => {
+    const rows: PaneTarget[] = seats.map(s => ({
+      key: s.session,
+      label: seatName(s.session),
+      agent: seatName(s.session),
+      session: s.session,
+      online: !!s.online,
+      lastSeen: s.lastSeen,
+      status: s.status,
+      isOrchestrator: false,
+    }));
+    if (!orch) return rows;
+    // Leads the row: it is the session the person actually drives, not a worker to supervise.
+    return [{
+      key: "__orchestrator__",
+      label: "orchestrator",
+      agent: orch.agent,
+      session: host?.session ?? `${project} orchestrator`,
+      online: host ? !!host.online : true,
+      lastSeen: host?.lastSeen,
+      status: host?.status,
+      isOrchestrator: true,
+    }, ...rows];
+  }, [seats, orch, host, project]);
+
+  const selected = targets.find(t => t.key === sel) ?? targets[0];
   const inFlight = useMemo(
     () => tasks.filter(t => t.status === "doing" || t.status === "testing"),
     [tasks],
@@ -72,26 +123,27 @@ export function Workspace({ client, project, lens, onLens }: {
         <div className="flex min-w-0 flex-1 flex-col">
           {/* seat tabs */}
           <div className="flex items-center gap-1">
-            {seats.length === 0 && (
+            {targets.length === 0 && (
               <div className="tr-card-ghost px-4 py-2 text-[12.5px]">
                 No seats on this project — fire some up with <span className="tr-mono">trantor up</span>
               </div>
             )}
-            {seats.map(s => (
+            {targets.map(t => (
               <button
-                key={s.session}
-                onClick={() => setSel(s.session)}
-                data-on={selected?.session === s.session}
+                key={t.key}
+                onClick={() => setSel(t.key)}
+                data-on={selected?.key === t.key}
                 className="flex items-center gap-2 rounded-[9px] px-3 py-[7px] text-[12.5px] font-medium text-tr-muted data-[on=true]:bg-tr-panel data-[on=true]:text-tr-text data-[on=true]:shadow-sm"
               >
-                <SeatDot p={s} />
-                {seatName(s.session)}
+                <SeatDot online={t.online} />
+                {t.label}
+                {t.isOrchestrator && <span className="text-[11px] text-tr-muted/70">you</span>}
               </button>
             ))}
-            {/* the host's own session is not a seat — a quiet "you" chip at the row's end */}
-            {host && (
+            {/* no hosted orchestrator pane yet: the host stays a quiet chip at the row's end */}
+            {host && !orch && (
               <span className="ml-auto flex items-center gap-2 rounded-[9px] px-3 py-[7px] text-[12px] text-tr-muted">
-                <SeatDot p={host} />
+                <SeatDot online={!!host.online} />
                 you
               </span>
             )}
@@ -113,10 +165,7 @@ export function Workspace({ client, project, lens, onLens }: {
               {selected ? `${selected.session} — live terminal` : "live terminal"}
             </div>
             {selected ? (
-              <TerminalPane
-                project={project}
-                agent={seatName(selected.session)}
-              />
+              <TerminalPane project={project} agent={selected.agent} />
             ) : (
               <div className="flex flex-1 items-center justify-center">
                 <div className="tr-card-ghost max-w-[440px] px-6 py-5 text-center text-[12.5px] leading-relaxed">

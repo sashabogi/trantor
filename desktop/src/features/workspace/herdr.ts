@@ -8,7 +8,13 @@
 // raw bytes; there is no pane-read polling path anymore.
 import { Channel, invoke } from "@tauri-apps/api/core";
 
-export type HerdrSeat = { project: string; agent: string; surface: string };
+export type HerdrSeat = {
+  project: string;
+  agent: string;
+  surface: string;
+  /** "herdr" = a crew seat, "orch" = the operator's own session hosted by `trantor open` */
+  kind: string;
+};
 export type TerminalBytes = number[] | Uint8Array | ArrayBuffer;
 
 /** JSON.parse's `any` flows into HerdrSeat[] without a cast — the same pattern client.ts
@@ -51,4 +57,13 @@ export function terminalBytes(bytes: TerminalBytes): Uint8Array {
   if (bytes instanceof Uint8Array) return bytes;
   if (bytes instanceof ArrayBuffer) return new Uint8Array(bytes);
   return new Uint8Array(bytes);
+}
+
+/** The project's orchestrator pane, or null when `trantor open` has not hosted one here. The
+ *  agent column arrives already renamed to "orchestrator" by Rust, so surfaceFor() finds it
+ *  under that name like any other pane. */
+export async function orchestratorOf(project: string): Promise<HerdrSeat | null> {
+  const seats = await herdrSeats();
+  const mine = seats.filter(s => s.project === project && s.kind === "orch");
+  return mine.length ? mine[mine.length - 1] : null;
 }

@@ -451,6 +451,9 @@ struct HerdrSeat {
     project: String,
     agent: String,
     surface: String,
+    /// "herdr" for a crew seat, "orch" for the operator's own orchestrator pane. The pane strip
+    /// needs the difference: an orchestrator is the person's session, not a worker to supervise.
+    kind: String,
 }
 
 fn parse_herdr_seats(raw: &str) -> Vec<HerdrSeat> {
@@ -467,15 +470,21 @@ fn parse_herdr_seats(raw: &str) -> Vec<HerdrSeat> {
         let kind = fields[1].trim();
         let agent = fields[2].trim();
         let surface = fields[3].trim();
-        if kind != "herdr" || project.is_empty() || agent.is_empty() || surface.is_empty() {
+        // `orch` rides the same file as the crew seats (crew.sh records both). Dropping it here is
+        // what made `trantor open` land a live pane the app could never show.
+        if (kind != "herdr" && kind != "orch") || project.is_empty() || agent.is_empty() || surface.is_empty() {
             continue;
         }
+        // crew.sh writes the orchestrator's agent column as the literal `__orch__` placeholder;
+        // nobody should have to read that in a tab.
+        let agent = if kind == "orch" { "orchestrator" } else { agent };
         by_seat.insert(
             (project.to_string(), agent.to_string()),
             HerdrSeat {
                 project: project.to_string(),
                 agent: agent.to_string(),
                 surface: surface.to_string(),
+                kind: kind.to_string(),
             },
         );
     }
@@ -1116,15 +1125,52 @@ mod herdr_tests {
                 HerdrSeat {
                     project: "other".into(),
                     agent: "kimi".into(),
-                    surface: "pane-k".into()
+                    surface: "pane-k".into(),
+                    kind: "herdr".into()
                 },
                 HerdrSeat {
                     project: "trantor".into(),
                     agent: "codex".into(),
-                    surface: "pane-new".into()
+                    surface: "pane-new".into(),
+                    kind: "herdr".into()
                 },
             ]
         );
+    }
+
+    #[test]
+    fn herdr_seat_rows_carry_the_orchestrator_pane() {
+        // `trantor open` records kind `orch` into the same file as the crew seats. Dropping it was
+        // why a live orchestrator pane existed on disk and in herdr but never in the app.
+        let rows = [
+            "trantor\therdr\tcodex\tw2:p1",
+            "trantor\torch\t__orch__\tw2:p5",
+        ]
+        .join("\n");
+        let seats = parse_herdr_seats(&rows);
+        assert_eq!(
+            seats,
+            vec![
+                HerdrSeat {
+                    project: "trantor".into(),
+                    agent: "codex".into(),
+                    surface: "w2:p1".into(),
+                    kind: "herdr".into()
+                },
+                HerdrSeat {
+                    project: "trantor".into(),
+                    agent: "orchestrator".into(),
+                    surface: "w2:p5".into(),
+                    kind: "orch".into()
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn herdr_seat_rows_still_drop_other_muxes() {
+        let rows = ["trantor\tcmux\tglm\tsurface-no", "trantor\therdrws\t__ws__\tw2"].join("\n");
+        assert_eq!(parse_herdr_seats(&rows), vec![]);
     }
 
     #[test]
