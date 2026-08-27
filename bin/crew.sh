@@ -46,11 +46,19 @@ HAVE_TMUX=0; command -v tmux >/dev/null 2>&1 && HAVE_TMUX=1
 # Events) — NOT the control socket — so it needs NO socket password (the socket denies external processes
 # by default; AppleScript bypasses that, exactly like we already script Terminal.app).
 HAVE_CMUX=0; [ -d "/Applications/cmux.app" ] && HAVE_CMUX=1
-# explicit override (user preference or tests): CREW_MUX=cmux|tmux|terminal forces the grouping UI.
+# herdr (https://herdr.dev — a server-held terminal runtime: panes live in its background server, so a
+# crew survives the launcher exiting) is OPT-IN ONLY, never auto-detected — a machine with herdr
+# installed keeps its default cmux→tmux→terminal dispatch untouched. CREW_MUX=herdr is the explicit
+# switch; opting in without the binary is a HARD ERROR, because a silent fallback would defeat the ask.
+HAVE_HERDR=0
+# explicit override (user preference or tests): CREW_MUX=cmux|tmux|terminal|herdr forces the grouping UI.
 case "${CREW_MUX:-}" in
   cmux)     HAVE_CMUX=1; HAVE_TMUX=0 ;;
   tmux)     HAVE_CMUX=0; HAVE_TMUX=1 ;;
   terminal) HAVE_CMUX=0; HAVE_TMUX=0 ;;
+  herdr)    HAVE_CMUX=0; HAVE_TMUX=0
+            command -v herdr >/dev/null 2>&1 || { echo "CREW_MUX=herdr but herdr is not installed — user-local (no sudo): curl -fsSL https://herdr.dev/install.sh | sh — see https://herdr.dev"; exit 1; }
+            HAVE_HERDR=1 ;;
 esac
 SEATDIR="$HOME/.agent-bus/seats"; mkdir -p "$SEATDIR"
 DRY="${CREW_DRY_RUN:-0}"
@@ -136,6 +144,137 @@ end tell
 OSA
 }
 
+# ── herdr helpers (active ONLY under the explicit CREW_MUX=herdr opt-in) ────────────────────────────
+# herdr's creation commands print JSON ids — capture them, never predict (herdr.dev/docs). All parsing
+# tolerates a bare array or a .result wrapper, and a failed/empty parse yields "" (the caller records
+# the empty handle and crew-verify flags the dead seat on the bus — the spawn is not the truth).
+_herdr() { herdr "$@"; }
+_herdr_ws_create() {   # $1=cwd $2=label → "workspace_id<TAB>root_pane_id"
+  _herdr workspace create --cwd "$1" --label "$2" --no-focus 2>/dev/null | node -e '
+let d="";process.stdin.on("data",c=>d+=c).on("end",()=>{try{const r=(JSON.parse(d.slice(d.search(/[\[{]/))).result)||{};
+process.stdout.write((((r.workspace||{}).workspace_id)||"")+"\t"+(((r.root_pane||{}).pane_id)||""))}catch(e){}})'
+}
+_herdr_split() {   # $1=pane id ("" = UI-focused pane)  $2=right|down → new pane id
+  local a=(pane split); [ -n "$1" ] && a+=("$1"); a+=(--direction "$2" --no-focus)
+  _herdr "${a[@]}" 2>/dev/null | node -e '
+let d="";process.stdin.on("data",c=>d+=c).on("end",()=>{try{const r=(JSON.parse(d.slice(d.search(/[\[{]/))).result)||{};
+process.stdout.write(((r.pane||{}).pane_id)||"")}catch(e){}})'
+}
+_herdr_ws_live() {   # workspace list → "ids<TABnewline>names" (names \x01-wrapped+joined, like cmux)
+  _herdr workspace list 2>/dev/null | node -e '
+let d="";process.stdin.on("data",c=>d+=c).on("end",()=>{try{const o=JSON.parse(d.slice(d.search(/[\[{]/)));
+const a=Array.isArray(o)?o:(o.workspaces||((o.result||{}).workspaces)||[]);
+console.log(a.map(x=>x.workspace_id||x.id||"").filter(Boolean).join(" "));
+console.log("\u0001"+a.map(x=>x.label||x.name||x.custom_title||"").filter(Boolean).join("\u0001")+"\u0001")}catch(e){}})'
+}
+# Teardown works regardless of CREW_MUX: you must never need to remember the flag to tear a crew down.
+_herdr_close_ws()   { [ "$DRY" = "1" ] && { echo "[dry] herdr workspace close $1"; return 0; }; _herdr workspace close "$1" >/dev/null 2>&1; }
+_herdr_close_pane() { [ "$DRY" = "1" ] && { echo "[dry] herdr pane close $1";    return 0; }; _herdr pane close    "$1" >/dev/null 2>&1; }
+
+# ── herdr spawn: ONE workspace `trantor:$PROJ`, one named pane per seat ─────────────────────────────
+# Topology = workspace create (its root pane runs seat 1) + pane split for the rest, same ceil(√N) grid
+# doctrine as cmux; pane rename labels each seat; pane run submits the seat command (bracketed-paste
+# safe, sends Enter). Same replace-never-stack doctrine: REUSE the newest tracked workspace for this
+# project, close older stacked ones, adopt one untracked live trantor:$PROJ workspace.
+spawn_herdr() {   # $@ = specs
+  local REUSE_WS="" line w
+  local stale_ws=()
+  if [ -f "$STATE" ]; then
+    while IFS= read -r line; do
+      [ -n "$line" ] || continue
+      _parse_row "$line"
+      { [ "$RP" = "$PROJ" ] && [ "$RK" = "herdrws" ]; } || continue
+      [ -n "$REUSE_WS" ] && stale_ws+=("$REUSE_WS")
+      REUSE_WS="$RH"
+    done < "$STATE"
+  fi
+  if [ "${#stale_ws[@]}" -gt 0 ]; then
+    for w in "${stale_ws[@]}"; do
+      echo "  → closing stale stacked crew workspace for $PROJ ($w)"
+      _herdr_close_ws "$w"; _state_drop "$PROJ" "herdrws" "" "$w"
+    done
+    prune_dead_state    # the closed workspaces' seat rows just died with them
+  fi
+  # Untracked strays: LIVE workspaces labeled trantor:$proj that STATE doesn't know. Adopt one as the
+  # reuse target if we have none; close the rest. (Skipped in DRY: read-only drills seed STATE instead.)
+  if [ "$DRY" != "1" ]; then
+    local named nid
+    named="$(_herdr workspace list 2>/dev/null | WSNAME="trantor:$PROJ" node -e 'let d="";process.stdin.on("data",c=>d+=c).on("end",()=>{try{const o=JSON.parse(d.slice(d.search(/[\[{]/)));const a=Array.isArray(o)?o:(o.workspaces||((o.result||{}).workspaces)||[]);console.log(a.filter(x=>x.label===process.env.WSNAME||x.name===process.env.WSNAME||x.custom_title===process.env.WSNAME).map(x=>x.workspace_id||x.id||"").filter(Boolean).join(" "))}catch(e){}})')"
+    for nid in $named; do
+      [ "$nid" = "$REUSE_WS" ] && continue
+      [ -f "$STATE" ] && grep -qF "$nid" "$STATE" && continue     # tracked → handled above
+      if [ -z "$REUSE_WS" ]; then
+        echo "  → adopting existing untracked crew workspace for $PROJ ($nid)"
+        REUSE_WS="$nid"; record_state "$PROJ" "herdrws" "__ws__" "$nid"
+      else
+        echo "  → closing stray crew workspace for $PROJ ($nid)"
+        _herdr_close_ws "$nid"
+      fi
+    done
+  fi
+  # Grid tiling (identical math to cmux): row 0 splits RIGHT off the previous column, later rows split
+  # DOWN from the pane directly above. In REUSE mode a replaced seat splits off its OWN old pane —
+  # keeping its spot — and added seats split right off the previous new pane.
+  local N=$# COLS=1; while [ $(( COLS * COLS )) -lt "$N" ]; do COLS=$(( COLS + 1 )); done
+  local SPEC wsid="" surf i=0
+  local surfs=()
+  [ -n "$REUSE_WS" ] && wsid="$REUSE_WS"
+  for SPEC in "$@"; do
+    resolve_spec "$SPEC"
+    local cmd; cmd="$(RUN_CMD)"
+    if [ -n "$REUSE_WS" ]; then
+      # replace-in-place: split the fresh pane FIRST (targeting the agent's old pane when tracked),
+      # then close the old pane — split-first so the workspace never dips to zero panes mid-swap.
+      local OLD_SURF=""
+      if [ -f "$STATE" ]; then
+        while IFS= read -r line; do
+          [ -n "$line" ] || continue
+          _parse_row "$line"
+          [ "$RP" = "$PROJ" ] && [ "$RK" = "herdr" ] && [ "$RA" = "$AGENT" ] && OLD_SURF="$RH"
+        done < "$STATE"
+      fi
+      local t=""
+      [ -n "$OLD_SURF" ] && t="$OLD_SURF"
+      { [ -z "$t" ] && [ "$i" -gt 0 ]; } && t="${surfs[$(( i - 1 ))]}"
+      if [ "$DRY" = "1" ]; then
+        echo "[dry] herdr: reuse workspace $wsid — pane split for $AGENT${OLD_SURF:+ (replacing $OLD_SURF)}"
+        surf="%DRYT$i"
+        [ -n "$OLD_SURF" ] && _herdr_close_pane "$OLD_SURF"
+      else
+        surf="$(_herdr_split "$t" right)"
+        [ -n "$surf" ] && { _herdr pane rename "$surf" "$AGENT · $PROJ" >/dev/null 2>&1; _herdr pane run "$surf" "$cmd" >/dev/null 2>&1; }
+        if [ -n "$OLD_SURF" ]; then _herdr_close_pane "$OLD_SURF"; _state_drop "$PROJ" "herdr" "$AGENT" ""; fi
+      fi
+    elif [ "$i" = "0" ]; then
+      if [ "$DRY" = "1" ]; then
+        echo "[dry] herdr: workspace create (cwd $DIR) --label 'trantor:$PROJ' → root pane + run '$cmd'"
+        wsid="%DRYWS"; surf="%DRYT0"
+      else
+        local pair; pair="$(_herdr_ws_create "$DIR" "trantor:$PROJ")"
+        wsid="${pair%%$'\t'*}"; surf="${pair##*$'\t'}"
+        [ -n "$surf" ] && { _herdr pane rename "$surf" "$AGENT · $PROJ" >/dev/null 2>&1; _herdr pane run "$surf" "$cmd" >/dev/null 2>&1; }
+      fi
+      record_state "$PROJ" "herdrws" "__ws__" "$wsid"
+    else
+      local dir target
+      if [ $(( i / COLS )) = "0" ]; then dir="right"; target="${surfs[$(( i - 1 ))]}"
+      else dir="down"; target="${surfs[$(( i - COLS ))]}"; fi
+      if [ "$DRY" = "1" ]; then
+        echo "[dry] herdr: pane split ${target:-<focused>} --direction $dir + run '$cmd'"
+        surf="%DRYT$i"
+      else
+        surf="$(_herdr_split "$target" "$dir")"
+        [ -n "$surf" ] && { _herdr pane rename "$surf" "$AGENT · $PROJ" >/dev/null 2>&1; _herdr pane run "$surf" "$cmd" >/dev/null 2>&1; }
+      fi
+    fi
+    surfs+=("$surf")
+    record_state "$PROJ" "herdr" "$AGENT" "$surf"
+    echo "  → $AGENT seat in herdr workspace ($PROJ)"
+    i=$(( i + 1 ))
+  done
+  echo "— crew grouped in herdr: ONE workspace for $PROJ, seats as named panes in its server. Teardown (this project only): trantor down —"
+}
+
 # surgical STATE row removal: drop every row matching PROJECT+KIND (+AGENT/+HANDLE when given).
 # Empty $3/$4 = wildcard. Callers beware: uses _parse_row, which clobbers the RP/RK/RA/RH globals.
 _state_drop() {   # $1=project $2=kind $3=agent(''=any) $4=handle(''=any)
@@ -202,7 +341,7 @@ down() {
       [ "$match" = "1" ] || continue
     fi
     scoped+=("$RP|$RK|$RA|$RH")
-    case "$RK" in attach|cmuxws) continue ;; esac       # infra rows (attach window / cmux workspace) — not seats
+    case "$RK" in attach|cmuxws|herdrws) continue ;; esac       # infra rows (attach/cmux/herdr workspace) — not seats
     killlist="$killlist  • ${RP:-<legacy>} · $RA ($RK)"$'\n'
   done < "$STATE"
 
@@ -220,6 +359,8 @@ down() {
     case "$K2" in
       cmuxws) [ "${#AGENTS[@]}" -gt 0 ] || _cmux_close_tab "$H2" ;;   # whole workspace (no specific seats)
       cmux)   [ "${#AGENTS[@]}" -gt 0 ] && _cmux_close_term "$H2" ;;  # a single seat's pane
+      herdrws) [ "${#AGENTS[@]}" -gt 0 ] || _herdr_close_ws "$H2" ;;  # whole workspace (no specific seats)
+      herdr)   [ "${#AGENTS[@]}" -gt 0 ] && _herdr_close_pane "$H2" ;;# a single seat's pane
       tmux)
         if [ "${#AGENTS[@]}" -gt 0 ]; then run "tmux kill-pane -t '$H2' 2>/dev/null"      # per-seat
         else
@@ -228,7 +369,7 @@ down() {
         fi ;;
       win|attach) { [ "${#AGENTS[@]}" -gt 0 ] && [ "$K2" = "attach" ]; } && continue; _kill_win "$H2" ;;
     esac
-    case "$K2" in cmuxws|attach) : ;; *) _kill_seat_procs "$P2" "$A2" ;; esac
+    case "$K2" in cmuxws|attach|herdrws) : ;; *) _kill_seat_procs "$P2" "$A2" ;; esac
   done
 
   # rewrite STATE minus the rows we tore down (leaves OTHER projects' rows intact)
@@ -268,6 +409,15 @@ prune_dead_state() {
     CLIVE="$(printf '%s' "$pair" | sed -n 1p)"
     CLIVE_NAMES="$(printf '%s' "$pair" | sed -n 2p)"
   fi
+  # herdr liveness is queried ONLY under the explicit opt-in (CREW_MUX=herdr): a default run never
+  # invokes herdr at all. Same keep-when-unprovable doctrine as cmux — no answer ⇒ rows are KEPT.
+  local HLIVE="" HLIVE_NAMES=""
+  if [ "$HAVE_HERDR" = "1" ]; then
+    local hpair
+    hpair="$(_herdr_ws_live)"
+    HLIVE="$(printf '%s' "$hpair" | sed -n 1p)"
+    HLIVE_NAMES="$(printf '%s' "$hpair" | sed -n 2p)"
+  fi
   local tmp="$STATE.tmp" line alive
   : > "$tmp"
   while IFS= read -r line; do
@@ -283,6 +433,12 @@ prune_dead_state() {
     elif [ "$RK" = "cmux" ]; then
       # seat row lives exactly as long as its project still has a live crew workspace
       if [ -n "$CLIVE" ]; then case "$CLIVE_NAMES" in *$'\x01'"trantor:$RP"$'\x01'*) : ;; *) alive=0 ;; esac; fi
+    elif [ "$RK" = "herdrws" ]; then
+      if [ -n "$HLIVE" ]; then case " $HLIVE " in *" $RH "*) : ;; *) alive=0 ;; esac; fi
+    elif [ "$RK" = "herdr" ]; then
+      # seat row lives exactly as long as its project still has a live crew workspace — validated at
+      # WORKSPACE granularity, never per pane (the cmux 0.17.61 lesson generalized)
+      if [ -n "$HLIVE" ]; then case "$HLIVE_NAMES" in *$'\x01'"trantor:$RP"$'\x01'*) : ;; *) alive=0 ;; esac; fi
     fi
     [ "$alive" = "1" ] && printf '%s\t%s\t%s\t%s\n' "$RP" "$RK" "$RA" "$RH" >> "$tmp"
   done < "$STATE"
@@ -690,8 +846,9 @@ OSA
   echo "— crew grouped in cmux (AppleScript): ONE workspace tab for $PROJ, seats tiled. Teardown: trantor down —"
 }
 
-spawn_crew() {   # dispatch: cmux (preferred) → tmux → Terminal grid
-  if [ "$HAVE_CMUX" = "1" ]; then spawn_cmux "$@"
+spawn_crew() {   # dispatch: herdr (explicit opt-in) → cmux → tmux → Terminal grid
+  if [ "$HAVE_HERDR" = "1" ]; then spawn_herdr "$@"
+  elif [ "$HAVE_CMUX" = "1" ]; then spawn_cmux "$@"
   elif [ "$HAVE_TMUX" = "1" ]; then spawn_tmux "$@"
   else
     echo "— no cmux/tmux → per-agent Terminal windows. For ONE grouped, named window per crew (and"
@@ -729,7 +886,7 @@ fi
 
 spec_for_agent() { local want="$1"; shift; local s; for s in "$@"; do [ "${s%%:*}" = "$want" ] && { printf '%s' "$s"; return; }; done; printf '%s' "$want"; }
 
-CREW_UI="Terminal windows"; [ "$HAVE_TMUX" = "1" ] && CREW_UI="tmux"; [ "$HAVE_CMUX" = "1" ] && CREW_UI="cmux"
+CREW_UI="Terminal windows"; [ "$HAVE_TMUX" = "1" ] && CREW_UI="tmux"; [ "$HAVE_CMUX" = "1" ] && CREW_UI="cmux"; [ "$HAVE_HERDR" = "1" ] && CREW_UI="herdr"
 echo "— bringing up crew for $PROJ ($CREW_UI) —"
 SPAWN_EPOCH=$(epoch_ms)
 spawn_crew "$@"
