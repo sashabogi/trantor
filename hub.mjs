@@ -343,32 +343,46 @@ function overseerTick() {
   overseerLastTick = t;
   const pol = overseerPolicy();
   const seen = new Set();
+  // Hand each party the others' session ids at the moment coordination is warranted. Telling two
+  // sessions to "coordinate over the bus" is useless if neither knows the other's id, and the
+  // warning alone went only to the duty seat and the log — so coordination needed a human to carry
+  // the ids across. Shared by the episode-start branch (all parties) and the standing branch
+  // (newcomers only): existing members never re-hear it, so a standing condition must not re-wake
+  // every party every tick.
+  const intro = (c, me, others) => {
+    const rest = others.filter(p => p !== me);
+    if (rest.length === 0) return;
+    hubSend(me,
+      `🤝 OVERSEER ${c.kind}: you and ${rest.join(", ")} are working on overlapping ground${c.files?.length ? ` (${c.files.slice(0, 3).join(", ")})` : ""}. ${c.detail || ""} Coordinate directly — relay_send to ${rest[0]} — and split the work between you. No human needs to relay this.`,
+      c.project);
+  };
   for (const c of collisions) {
-    const key = `${c.project} ${c.kind} ${(c.sessions || []).join(",")} ${(c.files || []).join(",")}`;
+    // Episode identity is the CONDITION (project+kind+files), never the session list (#5350):
+    // membership is volatile — a third seat bouncing in and out of a standing collision minted a
+    // fresh key, so a fresh episode, so a fresh warn (+ duty wake + party intros) per permutation.
+    // Sessions are participants, not identity; current membership still rides every warn payload.
+    const key = `${c.project} ${c.kind} ${(c.files || []).join(",")}`;
     c.key = key;
     seen.add(key);
+    const parties = [...new Set(c.sessions || [])].filter(s => s && s !== DUTY_SESSION);
     const standing = overseerActive.get(key);
-    if (standing) { standing.lastTick = t; c.since = standing.since; continue; }   // holds — stay quiet
-    overseerActive.set(key, { since: t, lastTick: t });
+    if (standing) {
+      // The episode HOLDS — no new warn. But a NEWCOMER to a standing collision still needs the
+      // intro: it was not present when the episode started, so it never learned the others' ids.
+      // Diff the current membership against the set the episode has already introduced, hand the
+      // intro only to newly arrived sessions, and remember them so they are not re-introduced.
+      standing.lastTick = t;
+      c.since = standing.since;
+      for (const me of parties) if (!standing.sessions.has(me)) intro(c, me, parties);
+      for (const me of parties) standing.sessions.add(me);
+      continue;
+    }
+    overseerActive.set(key, { since: t, lastTick: t, sessions: new Set(parties) });
     c.since = t;
     appendEvent("overseer.warn", c.project, "overseer",
       { kind: c.kind, sessions: c.sessions || [], files: c.files || [], detail: c.detail || "", narrated: false });
     if (DUTY_SESSION) hubSend(DUTY_SESSION, `⚠️ OVERSEER ${c.kind} [${c.project}]: ${c.detail || ""} — if the parties are not already coordinating, message them.`, c.project);
-    // INTRODUCE the parties to each other. Telling two sessions to "coordinate over the bus" is
-    // useless if neither knows the other's session id, and until now the warning went only to the
-    // duty seat and the log — so coordination needed a human to carry the ids across. Hand each
-    // party the others' ids at the moment coordination is warranted. This sits inside the
-    // episode-start branch, so it fires ONCE per episode, not once per tick: a standing condition
-    // must not re-wake two sessions every 30 seconds.
-    const parties = [...new Set(c.sessions || [])].filter(s => s && s !== DUTY_SESSION);
-    if (parties.length > 1) {
-      for (const me of parties) {
-        const others = parties.filter(p => p !== me);
-        hubSend(me,
-          `🤝 OVERSEER ${c.kind}: you and ${others.join(", ")} are working on overlapping ground${c.files?.length ? ` (${c.files.slice(0, 3).join(", ")})` : ""}. ${c.detail || ""} Coordinate directly — relay_send to ${others[0]} — and split the work between you. No human needs to relay this.`,
-          c.project);
-      }
-    }
+    if (parties.length > 1) for (const me of parties) intro(c, me, parties);
     const level = _overseer.levelFor ? _overseer.levelFor(c.project, pol.autonomy) : 1;
     if (level >= 3 && c.kind === "file-conflict") {
       const g = { id: ++state.verifyGateSeq, project: c.project, status: "open", ts: now(),

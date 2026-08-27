@@ -164,8 +164,8 @@ finally { hubF.kill(); }
 // waking the duty seat for a full turn. A held condition must warn EXACTLY ONCE, and must be able
 // to fire again only after it has genuinely cleared.
 const PG = 47937, hubG = spawnHub(PG, {
-  RELAY_OVERSEER_TICK_MS: "300", RELAY_OVERSEER_CLEAR_MS: "1500",
-  RELAY_OVERSEER_PEER_LIVE_MS: "1500",  // so the condition can actually go away inside a test —
+  RELAY_OVERSEER_TICK_MS: "300", RELAY_OVERSEER_CLEAR_MS: "2500",
+  RELAY_OVERSEER_PEER_LIVE_MS: "2500",  // so the condition can actually go away inside a test —
   // but with margin: the original 800ms window was narrower than an event-loop stall on a loaded
   // machine, so a stretched heartbeat FLAPPED the condition and the hub (correctly, per its own
   // contract) opened a fresh episode. "got 2/3/4 warns" tracked machine load exactly (#4854 family).
@@ -192,7 +192,7 @@ try {
   ok(Number(st.warnings?.[0]?.since) > 0, "live detection carries `since` (a duration, not just a fact)");
 
   // Let it clear (no heartbeats past CLEAR_MS), then bring it back: a genuine recurrence re-warns.
-  await sleep(3400);
+  await sleep(6200);
   await G.post("/register", { session: "host:alpha", project: "alpha" });
   await G.post("/register", { session: "codex:alpha", project: "alpha" });
   await sleep(1200);
@@ -201,6 +201,59 @@ try {
   ok(warns2.length === 2, `a recurrence AFTER the condition cleared warns again (got ${warns2.length})`);
 } catch (e) { fail++; console.log(`  ✗ episodes: ${e.message}`); }
 finally { hubG.kill(); }
+
+// ── EPISODE IDENTITY is the condition, not the membership (fixes #5350) ────────────────────────
+// The episode key included the session list, so a seat bouncing in and out of a STANDING collision
+// minted a new episode per membership permutation: a new warn, another duty wake, another round of
+// party intros — churn proportional to how often seats come and go, not to how often conditions
+// actually start. The episode must be the CONDITION (project+kind+files): membership volatility
+// holds the existing episode; only a genuine clear-then-recur may warn again.
+const PH = 47938, hubH = spawnHub(PH, {
+  RELAY_OVERSEER_TICK_MS: "300", RELAY_OVERSEER_CLEAR_MS: "1500", RELAY_OVERSEER_PEER_LIVE_MS: "1500",
+});
+await sleep(1500);
+try {
+  const H = mk(`http://127.0.0.1:${PH}`);
+  await H.post("/policy", { autonomy: { alpha: 2 } });
+  // The standing pair beats continuously; a THIRD seat flaps in and out of liveness. Old keying:
+  // {host,codex} and {host,codex,kimi} are two episodes -> 2 warns. Fixed: one holds throughout.
+  let flap = false;
+  const beat = setInterval(() => {
+    H.post("/register", { session: "host:alpha", project: "alpha" }).catch(() => {});
+    H.post("/register", { session: "codex:alpha", project: "alpha" }).catch(() => {});
+    if (flap) H.post("/register", { session: "kimi:alpha", project: "alpha" }).catch(() => {});
+  }, 150);
+  await sleep(900);               // pair alone: the episode opens (warn #1)
+  flap = true;  await sleep(900); // trio joins: SAME condition, must stay quiet
+  flap = false; await sleep(900); // trio leaves: SAME condition, must stay quiet
+  clearInterval(beat);
+  const ev = await H.get("/events?type=overseer.&limit=100");
+  const warns = (ev.events ?? []).filter(e => e.type === "overseer.warn" && e.kind === "same-project-sessions");
+  ok(warns.length === 1, `membership churn holds ONE episode (got ${warns.length})`);
+
+  // A NEWCOMER to a standing episode still needs the intro — it was not present at episode start,
+  // so it never learned the others' ids — but it must NOT re-open the episode (no new warn) and
+  // existing members must NOT re-hear the intro. kimi joined mid-episode: exactly one 🤝 addressed
+  // to kimi, naming the existing parties it now overlaps with.
+  const msgEv = await H.get("/events?type=message&limit=200");
+  const kimiIntros = (msgEv.events ?? []).filter(e => e.toSession === "kimi:alpha" && /🤝 OVERSEER/.test(e.text || ""));
+  ok(kimiIntros.length === 1, `newcomer to a standing episode gets exactly ONE 🤝 (got ${kimiIntros.length})`);
+  const firstIntro = kimiIntros[0]?.text || "";
+  ok(/host:alpha/.test(firstIntro) && /codex:alpha/.test(firstIntro),
+     "the newcomer intro names the existing parties it now overlaps with");
+  const memberIntros = (msgEv.events ?? []).filter(e => /🤝 OVERSEER/.test(e.text || "") && e.toSession !== "kimi:alpha");
+  ok(memberIntros.length === 2, `each existing member introed once at episode start, never re-heard (got ${memberIntros.length})`);
+
+  // The fix must not swallow genuine recurrence: let it clear past CLEAR_MS, recur -> warn again.
+  await sleep(6200);
+  await H.post("/register", { session: "host:alpha", project: "alpha" });
+  await H.post("/register", { session: "codex:alpha", project: "alpha" });
+  await sleep(1200);
+  const ev2 = await H.get("/events?type=overseer.&limit=100");
+  const warns2 = (ev2.events ?? []).filter(e => e.type === "overseer.warn" && e.kind === "same-project-sessions");
+  ok(warns2.length === 2, `recurrence after a genuine clear still re-warns (got ${warns2.length})`);
+} catch (e) { fail++; console.log(`  ✗ churn: ${e.message}`); }
+finally { hubH.kill(); }
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
