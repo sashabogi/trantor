@@ -1,4 +1,5 @@
 pub mod identity;
+mod terminal;
 
 use serde::Serialize;
 use std::collections::BTreeMap;
@@ -1034,6 +1035,7 @@ async fn open_code(target: String, kind: String) -> Result<(), String> {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .manage(terminal::TerminalManager::default())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_notification::init())
         .invoke_handler(tauri::generate_handler![
@@ -1053,7 +1055,12 @@ pub fn run() {
             herdr_seats,
             seat_diff,
             app_update_check,
-            app_update_install
+            app_update_install,
+            terminal::orchestrator_open,
+            terminal::term_attach,
+            terminal::term_write,
+            terminal::term_resize,
+            terminal::term_detach
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

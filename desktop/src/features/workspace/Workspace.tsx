@@ -2,9 +2,7 @@
 // collapse here: seats across the top, the seat's terminal in the center, the record on the right.
 //
 // HONESTY RULE (design system: no fake affordances): everything rendered is REAL hub data — peers,
-// cards, events. Anything without a live data source ships as a stated placeholder,
-// not imitations: the terminal pane says plainly that the live pane arrives with the herdr wiring,
-// and the composer is disabled with the phase that enables it named on the control itself.
+// cards, events. Anything without a live data source ships as a stated placeholder, not imitations.
 import { useEffect, useMemo, useState } from "react";
 import type { Card, HubClient, HubEvent, Peer } from "../../shared/api/client";
 import { ProjectHeader, type Lens } from "../project/ProjectHeader";
@@ -118,15 +116,6 @@ export function Workspace({ client, project, lens, onLens }: {
               <TerminalPane
                 project={project}
                 agent={seatName(selected.session)}
-                fallback={
-                  <div className="flex flex-1 items-center justify-center">
-                    <div className="tr-card-ghost max-w-[440px] px-6 py-5 text-center text-[12.5px] leading-relaxed">
-                      This seat runs outside herdr, so its terminal can&rsquo;t render here.
-                      Relaunch this project&rsquo;s crew with <span className="tr-mono">trantor up</span> —
-                      herdr is the default now — and the pane goes live. Its work is in the record either way →
-                    </div>
-                  </div>
-                }
               />
             ) : (
               <div className="flex flex-1 items-center justify-center">
@@ -136,12 +125,6 @@ export function Workspace({ client, project, lens, onLens }: {
                 </div>
               </div>
             )}
-          </div>
-
-          {/* composer — present, honest about when it turns on */}
-          <div className="tr-card mt-2.5 flex items-center gap-2.5 px-3.5 py-2.5 opacity-70">
-            <span className="tr-mono text-[13px] text-tr-ok">›</span>
-            <span className="text-[13px] text-tr-muted">Typing into a seat lands in Phase 2 — messages ride the bus until then</span>
           </div>
         </div>
 
