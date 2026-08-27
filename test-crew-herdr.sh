@@ -69,8 +69,15 @@ ok "failed opt-in records no state" '[ "$(rows)" = "0" ]'
 
 # 2. opt-in ONLY: herdr on PATH but CREW_MUX unset → the default dispatch never invokes herdr
 OUT2="$(cd "$TMP/proj" && CREW_DRY_RUN=1 HOME="$TMP" PATH="$TMP/fakebin:$PATH" RELAY_PROJECT=testproj RELAY_URL=http://127.0.0.1:1111 bash "$ROOT/bin/crew.sh" up codex </dev/null 2>&1)"
-ok "default dispatch still prefers cmux (herdr ignored)" 'echo "$OUT2" | grep -q "seats tiled + sidebar status"'
-ok "an un-opted run NEVER invokes herdr" 'nolog'
+# CONTRACT CHANGE (0.18.10): herdr is auto-preferred when its binary is present — it is the only
+# backend the app's Workspace pane can render, and the opt-in default left every other project's
+# crew invisible. With the stub herdr on PATH the un-opted default now selects herdr; forcing
+# CREW_MUX=cmux restores the old dispatch; a PATH without herdr falls back to cmux on its own.
+ok "default dispatch prefers herdr when the binary is present" 'echo "$OUT2" | grep -q "herdr"'
+OUT2b="$(cd "$TMP/proj" && CREW_MUX=cmux CREW_DRY_RUN=1 HOME="$TMP" PATH="$TMP/fakebin:$PATH" RELAY_PROJECT=testproj RELAY_URL=http://127.0.0.1:1111 bash "$ROOT/bin/crew.sh" up codex </dev/null 2>&1)"
+ok "CREW_MUX=cmux still forces the old dispatch" 'echo "$OUT2b" | grep -q "seats tiled + sidebar status"'
+OUT2c="$(cd "$TMP/proj" && CREW_DRY_RUN=1 HOME="$TMP" PATH="$TMP/fakebin_noherdr:/usr/bin:/bin" RELAY_PROJECT=testproj RELAY_URL=http://127.0.0.1:1111 bash "$ROOT/bin/crew.sh" up codex </dev/null 2>&1)"
+ok "no herdr on PATH -> the old cmux default, no error" 'echo "$OUT2c" | grep -q "seats tiled + sidebar status"'
 
 # 3. the tmux path is untouched by herdr's presence
 rm -f "$TMP/herdr.log" "$TMP/tmux.log"
@@ -145,12 +152,14 @@ ok "prune drops the dead workspace row" '! has_row "WS-DEAD"'
 ok "prune keeps EVERY seat row of a live-workspace project" 'has_row "protest	herdr	glm	SURF-A" && has_row "protest	herdr	codex	SURF-B"'
 ok "prune drops seat rows of a project with no live workspace" '! has_row "SURF-C"'
 
-# 12. prune WITHOUT the opt-in never touches herdr rows (and never invokes herdr at all)
+# 12. prune with NO herdr on PATH preserves herdr rows and cannot invoke the binary — the row-
+# preservation invariant survives the auto-preference change; only the "never consults herdr while
+# it is installed" claim died with the opt-in contract.
 seed "protest\therdrws\t__ws__\tWS-LIVE\nprotest\therdr\tglm\tSURF-A\n"
 rm -f "$TMP/herdr.log"
-HOME="$TMP" PATH="$TMP/fakebin:$PATH" RELAY_PROJECT=protest bash "$ROOT/bin/crew.sh" prune </dev/null >/dev/null 2>&1
-ok "un-opted prune keeps herdr rows" 'has_row "protest	herdr	glm	SURF-A" && has_row "protest	herdrws	__ws__	WS-LIVE"'
-ok "un-opted prune never invokes herdr" 'nolog'
+HOME="$TMP" PATH="$TMP/fakebin_noherdr:/usr/bin:/bin" RELAY_PROJECT=protest bash "$ROOT/bin/crew.sh" prune </dev/null >/dev/null 2>&1
+ok "herdr-less prune keeps herdr rows" 'has_row "protest	herdr	glm	SURF-A" && has_row "protest	herdrws	__ws__	WS-LIVE"'
+ok "herdr-less prune never invokes herdr" 'nolog'
 
 echo ""
 if [ "$FAIL" = "0" ]; then echo "ALL PASS ($PASS)"; else echo "$FAIL FAILED"; fi

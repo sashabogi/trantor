@@ -46,11 +46,21 @@ HAVE_TMUX=0; command -v tmux >/dev/null 2>&1 && HAVE_TMUX=1
 # Events) — NOT the control socket — so it needs NO socket password (the socket denies external processes
 # by default; AppleScript bypasses that, exactly like we already script Terminal.app).
 HAVE_CMUX=0; [ -d "/Applications/cmux.app" ] && HAVE_CMUX=1
+# PRESENCE vs PREFERENCE: HAVE_* answer "which mux do NEW crews get" and are stomped by CREW_MUX and
+# the herdr auto-preference below. *_PRESENT answer "is this mux on the machine at all" and are what
+# PRUNE keys on — a row is validated by ITS OWN kind's liveness, never by which mux new crews prefer.
+# Conflating them let a dead cmux row survive prune the moment herdr became the preferred default.
+CMUX_PRESENT=$HAVE_CMUX
+HERDR_PRESENT=0; command -v herdr >/dev/null 2>&1 && HERDR_PRESENT=1
 # herdr (https://herdr.dev — a server-held terminal runtime: panes live in its background server, so a
-# crew survives the launcher exiting) is OPT-IN ONLY, never auto-detected — a machine with herdr
-# installed keeps its default cmux→tmux→terminal dispatch untouched. CREW_MUX=herdr is the explicit
-# switch; opting in without the binary is a HARD ERROR, because a silent fallback would defeat the ask.
+# crew survives the launcher exiting) is the PREFERRED mux when its binary is installed: it is the
+# only backend the desktop app's Workspace pane can render, so an auto-detected herdr means every
+# `trantor up` on every project shows up live in the app with no flag. (It was opt-in for exactly one
+# wave; the first thing the operator noticed was that other projects' crews stayed invisible.)
+# CREW_MUX=cmux|tmux|terminal still forces the old dispatch; CREW_MUX=herdr without the binary stays
+# a HARD ERROR, because an explicit ask must never silently fall back.
 HAVE_HERDR=0
+[ -z "${CREW_MUX:-}" ] && command -v herdr >/dev/null 2>&1 && { HAVE_HERDR=1; HAVE_CMUX=0; HAVE_TMUX=0; }
 # explicit override (user preference or tests): CREW_MUX=cmux|tmux|terminal|herdr forces the grouping UI.
 case "${CREW_MUX:-}" in
   cmux)     HAVE_CMUX=1; HAVE_TMUX=0 ;;
@@ -100,7 +110,7 @@ _cmux() { CMUX_QUIET=1 "$CMUX_BIN" "$@"; }            # quiet CLI wrapper (suppr
 _CMUX_OK=""                                          # cached: does the control socket accept us (allowAll)?
 _cmux_ok() {
   [ -n "$_CMUX_OK" ] && { [ "$_CMUX_OK" = "1" ] && return 0 || return 1; }
-  if [ "$HAVE_CMUX" = "1" ] && _cmux ping >/dev/null 2>&1; then _CMUX_OK=1; return 0; fi
+  if [ "$CMUX_PRESENT" = "1" ] && _cmux ping >/dev/null 2>&1; then _CMUX_OK=1; return 0; fi
   _CMUX_OK=0; return 1
 }
 # resolve a freshly-created workspace REF (workspace:N) → its stable UUID (survives index shifts).
@@ -409,10 +419,11 @@ prune_dead_state() {
     CLIVE="$(printf '%s' "$pair" | sed -n 1p)"
     CLIVE_NAMES="$(printf '%s' "$pair" | sed -n 2p)"
   fi
-  # herdr liveness is queried ONLY under the explicit opt-in (CREW_MUX=herdr): a default run never
-  # invokes herdr at all. Same keep-when-unprovable doctrine as cmux — no answer ⇒ rows are KEPT.
+  # herdr liveness is queried whenever the BINARY is present (herdr rows deserve validation no
+  # matter which mux new crews prefer). Same keep-when-unprovable doctrine as cmux — no answer,
+  # or no binary at all ⇒ rows are KEPT.
   local HLIVE="" HLIVE_NAMES=""
-  if [ "$HAVE_HERDR" = "1" ]; then
+  if [ "$HERDR_PRESENT" = "1" ]; then
     local hpair
     hpair="$(_herdr_ws_live)"
     HLIVE="$(printf '%s' "$hpair" | sed -n 1p)"
