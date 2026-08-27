@@ -32,7 +32,74 @@ const THEME = {
   selectionBackground: "rgba(20, 184, 166, 0.25)",
 };
 
-export function TerminalPane({ project, agent }: { project: string; agent: string }) {
+// Everything this pane reaches outside itself, behind one narrow surface. The component never
+// imports xterm or the Rust bridge directly, so a test supplies a faithful stand-in instead of
+// rewriting the module graph underneath it (anti-slop: no-module-mocking).
+//
+// The three xterm objects collapse into ONE session because the pane only ever uses them together:
+// a terminal, its fit addon and its webgl addon share a lifetime and are disposed as a unit.
+export type PaneSession = {
+  onData(cb: (data: string) => void): { dispose(): void };
+  write(bytes: Uint8Array): void;
+  writeln(text: string): void;
+  fit(): void;
+  readonly cols: number;
+  readonly rows: number;
+  dispose(): void;
+};
+
+export type TerminalDeps = {
+  createSession(host: HTMLElement): PaneSession;
+  surfaceFor(project: string, agent: string): Promise<string | null>;
+  orchestratorOpen(project: string): Promise<string>;
+  termAttach(target: string, onBytes: (bytes: TerminalBytes) => void): Promise<number>;
+  termWrite(sub: number, data: string): Promise<void>;
+  termResize(sub: number, cols: number, rows: number): Promise<void>;
+  termDetach(sub: number): Promise<void>;
+};
+
+// The real xterm wiring lives here and nowhere else, so its concrete types line up naturally
+// instead of being asserted into place at a call site.
+function createXtermSession(host: HTMLElement): PaneSession {
+  const term = new Terminal({
+    convertEol: true,
+    fontSize: 12,
+    fontFamily: '"SF Mono", ui-monospace, "Menlo", monospace',
+    theme: THEME,
+    scrollback: 5000,
+  });
+  const fit = new FitAddon();
+  const webgl = new WebglAddon();
+  term.loadAddon(fit);
+  try { term.loadAddon(webgl); } catch { /* WebGL can be unavailable; xterm falls back to DOM. */ }
+  term.open(host);
+  fit.fit();
+  return {
+    onData: cb => term.onData(cb),
+    write: bytes => term.write(bytes),
+    writeln: text => term.writeln(text),
+    fit: () => fit.fit(),
+    get cols() { return term.cols; },
+    get rows() { return term.rows; },
+    dispose() { webgl.dispose(); fit.dispose(); term.dispose(); },
+  };
+}
+
+export const DEFAULT_TERMINAL_DEPS: TerminalDeps = {
+  createSession: createXtermSession,
+  surfaceFor,
+  orchestratorOpen,
+  termAttach,
+  termWrite,
+  termResize,
+  termDetach,
+};
+
+export function TerminalPane({
+  project,
+  agent,
+  deps = DEFAULT_TERMINAL_DEPS,
+}: { project: string; agent: string; deps?: TerminalDeps }) {
   const hostRef = useRef<HTMLDivElement | null>(null);
   const subRef = useRef<number | null>(null);
   const lastInputAtRef = useRef<number | null>(null);
@@ -49,62 +116,50 @@ export function TerminalPane({ project, agent }: { project: string; agent: strin
     setLatencyMs(null);
     setOpenError(null);
     const lookup = () =>
-      surfaceFor(project, agent)
+      deps.surfaceFor(project, agent)
         .then(s => { if (alive) setSurface(s); })
         .catch(() => { if (alive) setSurface(null); });
     lookup();
     const iv = setInterval(lookup, SEATS_POLL_MS);
     return () => { alive = false; clearInterval(iv); };
-  }, [project, agent]);
+  }, [project, agent, deps]);
 
   const attachOpenSession = useCallback(async () => {
     setOpening(true);
     setOpenError(null);
     try {
-      setSurface(await orchestratorOpen(project));
+      setSurface(await deps.orchestratorOpen(project));
     } catch (err) {
       setOpenError(err instanceof Error ? err.message : String(err));
     } finally {
       setOpening(false);
     }
-  }, [project]);
+  }, [project, deps]);
 
   // Open xterm, attach to the Rust pty, and keep resize/input lifecycles tied to this component.
   // Frequent terminal bytes stay inside refs and xterm; React only sees the low-rate latency chip.
   useEffect(() => {
     if (!surface || !hostRef.current) return;
     subRef.current = null;
-    const term = new Terminal({
-      convertEol: true,
-      fontSize: 12,
-      fontFamily: '"SF Mono", ui-monospace, "Menlo", monospace',
-      theme: THEME,
-      scrollback: 5000,
-    });
-    const fit = new FitAddon();
-    const webgl = new WebglAddon();
-    term.loadAddon(fit);
-    try { term.loadAddon(webgl); } catch { /* WebGL can be unavailable; xterm falls back to DOM. */ }
-    term.open(hostRef.current);
-    fit.fit();
+    const session = deps.createSession(hostRef.current);
 
     let alive = true;
-    const onData = term.onData(data => {
+    const onData = session.onData(data => {
       lastInputAtRef.current = performance.now();
       const sub = subRef.current;
-      if (sub !== null) void termWrite(sub, data);
+      if (sub !== null) void deps.termWrite(sub, data);
     });
     const resize = () => {
       if (!hostRef.current) return;
-      try { fit.fit(); } catch { return; }
+      try { session.fit(); } catch { return; }
       const sub = subRef.current;
-      if (sub !== null) void termResize(sub, term.cols, term.rows);
+      if (sub !== null) void deps.termResize(sub, session.cols, session.rows);
     };
     const ro = new ResizeObserver(resize);
     ro.observe(hostRef.current);
 
     const onBytes = (bytes: TerminalBytes) => {
-      term.write(terminalBytes(bytes));
+      session.write(terminalBytes(bytes));
       const inputAt = lastInputAtRef.current;
       if (inputAt !== null) {
         setLatencyMs(Math.max(0, Math.round(performance.now() - inputAt)));
@@ -112,17 +167,17 @@ export function TerminalPane({ project, agent }: { project: string; agent: strin
       }
     };
 
-    termAttach(surface, onBytes)
+    deps.termAttach(surface, onBytes)
       .then(sub => {
         if (!alive) {
-          void termDetach(sub);
+          void deps.termDetach(sub);
           return;
         }
         subRef.current = sub;
         resize();
       })
       .catch(err => {
-        if (alive) term.writeln(`\r\nterminal attach failed: ${err instanceof Error ? err.message : String(err)}`);
+        if (alive) session.writeln(`\r\nterminal attach failed: ${err instanceof Error ? err.message : String(err)}`);
       });
 
     return () => {
@@ -131,12 +186,10 @@ export function TerminalPane({ project, agent }: { project: string; agent: strin
       onData.dispose();
       const sub = subRef.current;
       subRef.current = null;
-      if (sub !== null) void termDetach(sub);
-      webgl.dispose();
-      fit.dispose();
-      term.dispose();
+      if (sub !== null) void deps.termDetach(sub);
+      session.dispose();
     };
-  }, [surface]);
+  }, [surface, deps]);
 
   if (!surface) {
     return (

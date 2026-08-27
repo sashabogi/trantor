@@ -3,6 +3,8 @@
 # session's teardown can't nuke out from under ANOTHER session's crew.
 #
 #   bin/crew.sh up codex glm kimi deepseek   # bring up THIS project's crew (tmux panes, or Terminal windows)
+#   bin/crew.sh open [<project>]              # host the operator's claude as the `orchestrator · <project>`
+#                                             #   pane in herdr (reattaches; never stacks a second one)
 #   bin/crew.sh down                          # tear down ONLY THIS PROJECT's crew (scoped, prints what it kills)
 #   bin/crew.sh down codex                    # tear down ONE seat
 #   bin/crew.sh down --all --yes              # tear down EVERY project's crew (global; --yes required)
@@ -338,7 +340,7 @@ down() {
 
   # collect the rows in scope + build a human kill-list. `scoped` entries are joined with '|' (NOT a tab):
   # tab is IFS whitespace, so re-splitting a tab-joined string would collapse an empty leading PROJECT.
-  local scoped=() line killlist="" seentmux=""
+  local scoped=() line killlist="" seentmux="" orch_scopes=""
   while IFS= read -r line; do
     [ -n "$line" ] || continue
     _parse_row "$line"                                       # → RP RK RA RH
@@ -346,14 +348,19 @@ down() {
     # SKIPPED by a scoped down — we can't prove they're ours, and killing another project's crew is the exact
     # bug we're fixing. `trantor down --all` reaches them; otherwise they self-heal via prune_dead_state.
     if [ "$WANT_ALL" != "1" ] && [ "$RP" != "$PROJ" ]; then continue; fi
+    # a project hosting the orchestrator pane degrades to PER-SEAT teardown: its workspace must survive
+    # (the orch pane lives inside it — closing the workspace closes the terminal the operator is typing
+    # in, from inside that terminal), so only the seat panes are closed.
+    [ "$RK" = "orch" ] && case ";$orch_scopes;" in *";$RP;"*) : ;; *) orch_scopes="$orch_scopes;$RP;" ;; esac
     if [ "${#AGENTS[@]}" -gt 0 ]; then                       # agent filter (if specific seats named)
       local match=0 want; for want in "${AGENTS[@]}"; do [ "$RA" = "$want" ] && match=1; done
       [ "$match" = "1" ] || continue
     fi
     scoped+=("$RP|$RK|$RA|$RH")
-    case "$RK" in attach|cmuxws|herdrws) continue ;; esac       # infra rows (attach/cmux/herdr workspace) — not seats
+    case "$RK" in attach|cmuxws|herdrws|orch) continue ;; esac # infra rows (attach/cmux/herdr workspace/orch) — not seats; `orch` is SPARED entirely
     killlist="$killlist  • ${RP:-<legacy>} · $RA ($RK)"$'\n'
   done < "$STATE"
+  _has_orch() { case "$orch_scopes" in *";$1;"*) return 0 ;; esac; return 1; }
 
   if [ "${#scoped[@]}" -eq 0 ]; then echo "nothing to tear down for $SCOPE_DESC"; return 0; fi
   echo "— tearing down ($SCOPE_DESC):"; printf '%s' "$killlist"
@@ -367,10 +374,10 @@ down() {
   for s in "${scoped[@]}"; do
     IFS='|' read -r P2 K2 A2 H2 <<< "$s"
     case "$K2" in
-      cmuxws) [ "${#AGENTS[@]}" -gt 0 ] || _cmux_close_tab "$H2" ;;   # whole workspace (no specific seats)
-      cmux)   [ "${#AGENTS[@]}" -gt 0 ] && _cmux_close_term "$H2" ;;  # a single seat's pane
-      herdrws) [ "${#AGENTS[@]}" -gt 0 ] || _herdr_close_ws "$H2" ;;  # whole workspace (no specific seats)
-      herdr)   [ "${#AGENTS[@]}" -gt 0 ] && _herdr_close_pane "$H2" ;;# a single seat's pane
+      cmuxws) { [ "${#AGENTS[@]}" -gt 0 ] || _has_orch "$P2"; } || _cmux_close_tab "$H2" ;;   # whole workspace (unless seats are named or an orch pane lives in it)
+      cmux)   { [ "${#AGENTS[@]}" -gt 0 ] || _has_orch "$P2"; } && _cmux_close_term "$H2" ;;  # a single seat's pane
+      herdrws) { [ "${#AGENTS[@]}" -gt 0 ] || _has_orch "$P2"; } || _herdr_close_ws "$H2" ;;  # whole workspace (unless seats are named or an orch pane lives in it)
+      herdr)   { [ "${#AGENTS[@]}" -gt 0 ] || _has_orch "$P2"; } && _herdr_close_pane "$H2" ;;# a single seat's pane
       tmux)
         if [ "${#AGENTS[@]}" -gt 0 ]; then run "tmux kill-pane -t '$H2' 2>/dev/null"      # per-seat
         else
@@ -382,7 +389,8 @@ down() {
     case "$K2" in cmuxws|attach|herdrws) : ;; *) _kill_seat_procs "$P2" "$A2" ;; esac
   done
 
-  # rewrite STATE minus the rows we tore down (leaves OTHER projects' rows intact)
+  # rewrite STATE minus the rows we tore down (leaves OTHER projects' rows intact). An orch-hosting
+  # project's workspace rows survive too — the workspace is still needed by the spared orch pane.
   if [ "$DRY" != "1" ]; then
     local tmp="$STATE.tmp"; : > "$tmp"
     while IFS= read -r line; do
@@ -390,6 +398,10 @@ down() {
       _parse_row "$line"
       local drop=0
       for s in "${scoped[@]}"; do [ "$s" = "$RP|$RK|$RA|$RH" ] && drop=1; done
+      # `orch` itself is spared alongside the workspace that hosts it: down never closes the
+      # orchestrator pane, so dropping its row would orphan a live pane and let the next `open`
+      # stack a second orchestrator on top of it.
+      [ "$drop" = "1" ] && _has_orch "$RP" && case "$RK" in herdrws|cmuxws|orch) drop=0 ;; esac
       [ "$drop" = "1" ] || printf '%s\t%s\t%s\t%s\n' "$RP" "$RK" "$RA" "$RH" >> "$tmp"
     done < "$STATE"
     mv "$tmp" "$STATE"
@@ -398,7 +410,7 @@ down() {
   echo "— crew torn down ($SCOPE_DESC)"
 }
 [ "$CMD" = "down" ] && { down "$@"; exit $?; }
-case "$CMD" in up|swap|prune) ;; *) echo "usage: crew.sh up <agent...> | crew.sh swap <old> <new[:provider[/model]]> | crew.sh down [<agent>...] [--all --yes] | crew.sh prune"; exit 1 ;; esac
+case "$CMD" in up|open|swap|prune) ;; *) echo "usage: crew.sh up <agent...> | crew.sh open [<project>] | crew.sh swap <old> <new[:provider[/model]]> | crew.sh down [<agent>...] [--all --yes] | crew.sh prune"; exit 1 ;; esac
 
 # self-heal: drop STATE rows whose Terminal window is already gone (dead crews from past sessions), so the
 # file doesn't accumulate ghosts across ups. tmux rows are validated by their session existing; cmux rows
@@ -446,9 +458,9 @@ prune_dead_state() {
       if [ -n "$CLIVE" ]; then case "$CLIVE_NAMES" in *$'\x01'"trantor:$RP"$'\x01'*) : ;; *) alive=0 ;; esac; fi
     elif [ "$RK" = "herdrws" ]; then
       if [ -n "$HLIVE" ]; then case " $HLIVE " in *" $RH "*) : ;; *) alive=0 ;; esac; fi
-    elif [ "$RK" = "herdr" ]; then
-      # seat row lives exactly as long as its project still has a live crew workspace — validated at
-      # WORKSPACE granularity, never per pane (the cmux 0.17.61 lesson generalized)
+    elif [ "$RK" = "herdr" ] || [ "$RK" = "orch" ]; then
+      # seat + orchestrator rows live exactly as long as their project still has a live crew workspace
+      # — validated at WORKSPACE granularity, never per pane (the cmux 0.17.61 lesson generalized)
       if [ -n "$HLIVE" ]; then case "$HLIVE_NAMES" in *$'\x01'"trantor:$RP"$'\x01'*) : ;; *) alive=0 ;; esac; fi
     fi
     [ "$alive" = "1" ] && printf '%s\t%s\t%s\t%s\n' "$RP" "$RK" "$RA" "$RH" >> "$tmp"
@@ -457,6 +469,111 @@ prune_dead_state() {
 }
 # `crew.sh prune` — run the self-heal on demand (ops: clean ghost rows without spawning anything).
 [ "$CMD" = "prune" ] && { prune_dead_state; echo "— pruned dead crew rows ($STATE) —"; exit 0; }
+
+# ── open: host the OPERATOR's session as the `orchestrator · <project>` pane (card #5396) ────────────
+# The session a developer actually works in used to be an unowned Terminal window — invisible to the
+# app, and killed by any whole-project `down` that closed the workspace under it. `trantor open`
+# hosts it as a herdr pane in the SAME `trantor:<project>` workspace the crew uses (herdr keeps the
+# pane alive server-side; Terminal attaches to the SAME session), and prints the pane TARGET on
+# stdout as ONE line:   herdr:<workspace_id>/<pane_id>   (human chatter goes to stderr, so the
+# target is capturable). REATTACH, NEVER STACK: a second open finds the tracked `orch` row alive and
+# reprints the target — two orchestrator claude processes on one project would fight over one bus
+# identity (the duplicated-runner lesson, crew.sh edition). The liveness probe is an idempotent
+# rename to the pane's own title: no per-pane list API is trusted (the 0.17.61 workspace-granularity
+# lesson), and a closed pane can never pass it. `down` SPARES `orch` rows for the same reason.
+usage_open() {
+  cat <<EOF
+usage: trantor open [<project>]
+  host THIS project's orchestrator session as a herdr pane in workspace trantor:<project>
+  (creating the workspace if needed) and print its TARGET on stdout. A second open REATTACHES:
+  it prints the existing target and exits 0 without spawning a second orchestrator.
+EOF
+}
+open_orchestrator() {
+  local a
+  for a in "$@"; do case "$a" in
+    --help|-h) usage_open; return 0 ;;
+    --*) echo "trantor open: unknown flag '$a'"; usage_open; return 1 ;;
+    *) PROJ="$a" ;;
+  esac; done
+  command -v herdr >/dev/null 2>&1 || { echo "trantor open needs herdr (the pane host) — install: curl -fsSL https://herdr.dev/install.sh | sh"; exit 1; }
+  local wsid="" orch="" live_ids="" live_names="" pair="" line fresh=0
+  if [ "$DRY" != "1" ]; then
+    pair="$(_herdr_ws_live)"
+    live_ids="$(printf '%s' "$pair" | sed -n 1p)"
+    live_names="$(printf '%s' "$pair" | sed -n 2p)"
+  fi
+  if [ -f "$STATE" ]; then
+    while IFS= read -r line; do
+      [ -n "$line" ] || continue
+      _parse_row "$line"
+      [ "$RP" = "$PROJ" ] || continue
+      case "$RK" in
+        herdrws)
+          # a tracked workspace is only usable while LIVE (label match); a provably dead row is dropped.
+          # No live answer ⇒ kept (the keep-when-unprovable doctrine shared with prune).
+          if [ "$DRY" != "1" ] && [ -n "$live_ids" ]; then
+            case " $live_ids " in *" $RH "*) wsid="$RH" ;; *) _state_drop "$PROJ" "herdrws" "" "$RH" ;; esac
+          else wsid="$RH"; fi ;;
+        orch) orch="$RH" ;;
+      esac
+    done < "$STATE"
+  fi
+  # REATTACH, never stack: a tracked orch pane that still answers is reused as-is.
+  if [ -n "$orch" ]; then
+    if [ "$DRY" = "1" ]; then
+      echo "herdr:${wsid:-%DRYWS}/$orch"
+      return 0
+    fi
+    if _herdr pane rename "$orch" "orchestrator · $PROJ" >/dev/null 2>&1; then
+      echo "herdr:${wsid:-?}/$orch"
+      echo "— orchestrator already hosted: reattached to herdr:${wsid:-?}/$orch —" >&2
+      return 0
+    fi
+    _state_drop "$PROJ" "orch" "" ""; orch=""     # stale row → healed by the create path below
+  fi
+  # No usable workspace yet: adopt an untracked LIVE crew workspace before creating a second one
+  # (spawn_herdr's adopt-else-create doctrine — open must not stack trantor:<project> workspaces).
+  if [ -z "$wsid" ]; then
+    if [ "$DRY" = "1" ]; then
+      wsid="%DRYWS"
+      echo "[dry] herdr: workspace create (cwd $DIR) --label 'trantor:$PROJ'" >&2
+    else
+      local found=""
+      case "$live_names" in
+        *$'\x01'"trantor:$PROJ"$'\x01'*)
+          found="$(_herdr workspace list 2>/dev/null | WSNAME="trantor:$PROJ" node -e 'let d="";process.stdin.on("data",c=>d+=c).on("end",()=>{try{const o=JSON.parse(d.slice(d.search(/[\[{]/)));const a=Array.isArray(o)?o:(o.workspaces||((o.result||{}).workspaces)||[]);console.log(a.filter(x=>x.label===process.env.WSNAME||x.name===process.env.WSNAME||x.custom_title===process.env.WSNAME).map(x=>x.workspace_id||x.id||"").filter(Boolean)[0]||"")}catch(e){}})')"
+          [ -n "$found" ] && echo "— adopting existing crew workspace for $PROJ ($found) —" >&2 ;;
+      esac
+      if [ -n "$found" ]; then wsid="$found"
+      else
+        pair="$(_herdr_ws_create "$DIR" "trantor:$PROJ")"
+        wsid="${pair%%$'\t'*}"; fresh=1
+      fi
+      [ -n "$wsid" ] || { echo "trantor open: herdr workspace create failed" >&2; exit 1; }
+    fi
+    record_state "$PROJ" "herdrws" "__ws__" "$wsid"
+  fi
+  # Host the pane: a JUST-created workspace's root pane IS the orchestrator pane (claude rides it);
+  # an existing workspace gets a split — the crew's seats tile off it on the next `up`, never
+  # replacing it (spawn_herdr's REUSE mode splits seats off their own old pane / the previous one).
+  if [ "$DRY" = "1" ]; then
+    orch="%DRYORCH"
+    echo "[dry] herdr: ${fresh:+root pane + }pane rename $orch 'orchestrator · $PROJ' + run 'claude'" >&2
+  else
+    if [ "$fresh" = "1" ]; then orch="${pair##*$'\t'}"
+    else orch="$(_herdr_split "" right)"; fi
+    [ -n "$orch" ] || { echo "trantor open: could not create the orchestrator pane" >&2; exit 1; }
+    _herdr pane rename "$orch" "orchestrator · $PROJ" >/dev/null 2>&1
+    _herdr pane run "$orch" "claude" >/dev/null 2>&1
+  fi
+  _state_drop "$PROJ" "orch" "" ""                 # replace-never-stack: exactly one orch row per project
+  record_state "$PROJ" "orch" "__orch__" "$orch"
+  echo "herdr:$wsid/$orch"
+  echo "— orchestrator pane hosted: herdr:$wsid/$orch (claude in $DIR). 'trantor down' spares it. —" >&2
+  return 0
+}
+[ "$CMD" = "open" ] && { open_orchestrator "$@"; exit $?; }
 
 # --task/--difficulty drive LAZY live-model selection for provider-only specs (agent:provider).
 TASK="code"; DIFF="medium"; _ARGS=()

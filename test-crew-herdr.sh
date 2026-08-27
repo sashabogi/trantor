@@ -45,6 +45,7 @@ case "\$1" in
   pane) case "\$2" in
     split) N=\$(( \$(cat "$TMP/herdr.n" 2>/dev/null || echo 0) + 1 )); echo "\$N" > "$TMP/herdr.n"
            printf '{"result":{"pane":{"pane_id":"P-%s"}}}\n' "\$N" ;;
+    rename) case "\$3" in P-DEAD) exit 1 ;; esac ;;   # a pane id that answers rename = alive (open's probe)
   esac ;;
 esac
 exit 0
@@ -77,7 +78,11 @@ ok "default dispatch prefers herdr when the binary is present" 'echo "$OUT2" | g
 OUT2b="$(cd "$TMP/proj" && CREW_MUX=cmux CREW_DRY_RUN=1 HOME="$TMP" PATH="$TMP/fakebin:$PATH" RELAY_PROJECT=testproj RELAY_URL=http://127.0.0.1:1111 bash "$ROOT/bin/crew.sh" up codex </dev/null 2>&1)"
 ok "CREW_MUX=cmux still forces the old dispatch" 'echo "$OUT2b" | grep -q "seats tiled + sidebar status"'
 OUT2c="$(cd "$TMP/proj" && CREW_DRY_RUN=1 HOME="$TMP" PATH="$TMP/fakebin_noherdr:/usr/bin:/bin" RELAY_PROJECT=testproj RELAY_URL=http://127.0.0.1:1111 bash "$ROOT/bin/crew.sh" up codex </dev/null 2>&1)"
-ok "no herdr on PATH -> the old cmux default, no error" 'echo "$OUT2c" | grep -q "seats tiled + sidebar status"'
+# Assert only that we landed on the cmux path without erroring. Which cmux integration answers is
+# not this drill's business: with no cmux binary on PATH the AppleScript fallback runs and prints
+# "seats tiled. Teardown:", while socket-control prints "seats tiled + sidebar status". Pinning the
+# socket-control wording made this red on main regardless of the herdr work.
+ok "no herdr on PATH -> the old cmux default, no error" 'echo "$OUT2c" | grep -q "grouped in cmux" && echo "$OUT2c" | grep -q "seats tiled"'
 
 # 3. the tmux path is untouched by herdr's presence
 rm -f "$TMP/herdr.log" "$TMP/tmux.log"
@@ -160,6 +165,85 @@ rm -f "$TMP/herdr.log"
 HOME="$TMP" PATH="$TMP/fakebin_noherdr:/usr/bin:/bin" RELAY_PROJECT=protest bash "$ROOT/bin/crew.sh" prune </dev/null >/dev/null 2>&1
 ok "herdr-less prune keeps herdr rows" 'has_row "protest	herdr	glm	SURF-A" && has_row "protest	herdrws	__ws__	WS-LIVE"'
 ok "herdr-less prune never invokes herdr" 'nolog'
+
+# 13. `trantor open` (card #5396, W3-A): hosts the OPERATOR's claude as the `orchestrator · <project>`
+#     pane in the crew workspace and prints its TARGET on stdout as ONE line. Dry mode: [dry] lines
+#     + %DRY ids, exactly like the dry spawn drills.
+seed ""
+rc13=0
+OUT13="$(cd "$TMP/proj" && CREW_MUX=herdr CREW_DRY_RUN=1 HOME="$TMP" PATH="$TMP/fakebin:$PATH" RELAY_PROJECT=testproj bash "$ROOT/bin/crew.sh" open </dev/null 2>/dev/null)" || rc13=$?
+ok "open exits 0" '[ "$rc13" = "0" ]'
+ok "open prints the target as ONE stdout line" '[ "$(printf "%s\n" "$OUT13" | wc -l | tr -d " ")" = "1" ] && echo "$OUT13" | grep -q "^herdr:%DRYWS/%DRYORCH$"'
+# A dry open must not touch STATE: record_state/_state_drop are no-ops under CREW_DRY_RUN, the
+# same contract "failed opt-in records no state" and "herdr-less open records no state" rely on.
+# Row recording is asserted for real against the herdr stub in drill 16.
+ok "a dry open writes NO state" '[ "$(rows)" = "0" ]'
+
+# 14. reattach, never stack: a second open prints the SAME target and spawns nothing new
+OUT14="$(cd "$TMP/proj" && CREW_MUX=herdr CREW_DRY_RUN=1 HOME="$TMP" PATH="$TMP/fakebin:$PATH" RELAY_PROJECT=testproj bash "$ROOT/bin/crew.sh" open </dev/null 2>/dev/null)"
+ok "second open reattaches to the SAME target (exit 0)" '[ "$OUT14" = "$OUT13" ]'
+# reattach-never-stack is asserted for real in drill 16 ("still exactly one orch row" plus the
+# no-second-create pair). Dry mode writes no rows, so it cannot show stacking either way.
+ok "a second dry open still writes NO state" '[ "$(rows)" = "0" ]'
+
+# 15. open without herdr installed is a hard error (the pane host is not optional), recording nothing
+seed ""
+OUT15="$(cd "$TMP/proj" && HOME="$TMP" PATH="$TMP/fakebin_noherdr:/usr/bin:/bin" RELAY_PROJECT=testproj bash "$ROOT/bin/crew.sh" open </dev/null 2>&1)"; rc15=$?
+ok "herdr-less open is a HARD error" '[ "$rc15" = "1" ] && echo "$OUT15" | grep -q "needs herdr"'
+ok "herdr-less open records no state" '[ "$(rows)" = "0" ]'
+
+# 16. open for real (stub): fresh workspace whose ROOT pane runs claude in the project dir
+echo 0 > "$TMP/herdr.n"; rm -f "$TMP/herdr.log"; seed ""
+OUT16="$(cd "$TMP/proj" && HOME="$TMP" PATH="$TMP/fakebin:$PATH" RELAY_PROJECT=testproj CREW_NO_PROC_KILL=1 bash "$ROOT/bin/crew.sh" open </dev/null 2>/dev/null)"
+ok "real open creates the crew workspace and prints its target" '[ "$OUT16" = "herdr:WS-1/P-1" ]'
+ok "the orchestrator pane runs claude via pane run" 'grep -q "herdr pane run P-1 claude" "$TMP/herdr.log"'
+ok "the workspace is created in the project dir" 'grep -q "workspace create --cwd $TMP/proj --label trantor:testproj" "$TMP/herdr.log"'
+ok "real open records the orch row" 'has_row "testproj	orch	__orch__	P-1"'
+# ...and a second REAL open reattaches: no second create, no second claude
+rm -f "$TMP/herdr.log"
+OUT16b="$(cd "$TMP/proj" && HOME="$TMP" PATH="$TMP/fakebin:$PATH" RELAY_PROJECT=testproj CREW_NO_PROC_KILL=1 bash "$ROOT/bin/crew.sh" open </dev/null 2>/dev/null)"
+ok "second real open reattaches (same target, exit 0)" '[ "$OUT16b" = "herdr:WS-1/P-1" ]'
+ok "second real open creates NO second workspace" '! grep -q "workspace create" "$TMP/herdr.log" 2>/dev/null'
+ok "second real open runs NO second claude" '! grep -q "pane run" "$TMP/herdr.log" 2>/dev/null'
+ok "still exactly one orch row" '[ "$(grep -c "	orch	" "$STATE")" = "1" ]'
+
+# 17. reattach heals a STALE orch row: the tracked pane no longer answers rename → new pane, new row
+echo 0 > "$TMP/herdr.n"; rm -f "$TMP/herdr.log"
+seed "testproj	herdrws	__ws__	WS-9\ntestproj	orch	__orch__	P-DEAD\n"
+OUT17="$(cd "$TMP/proj" && HOME="$TMP" PATH="$TMP/fakebin:$PATH" RELAY_PROJECT=testproj HERDR_LIVE_WS='{"workspace_id":"WS-9","label":"trantor:testproj"}' CREW_NO_PROC_KILL=1 bash "$ROOT/bin/crew.sh" open </dev/null 2>/dev/null)"
+ok "stale orch pane is healed onto a fresh split (no re-stack of the dead one)" '[ "$OUT17" = "herdr:WS-9/P-1" ]'
+ok "the healed pane runs claude" 'grep -q "herdr pane run P-1 claude" "$TMP/herdr.log"'
+ok "the stale orch row is replaced, not duplicated" 'has_row "testproj	orch	__orch__	P-1" && ! has_row "P-DEAD"'
+ok "the live tracked workspace was reused, not recreated" '! grep -q "workspace create" "$TMP/herdr.log"'
+
+# 18. down SPARES the orch row: whole-project teardown closes seat panes only — the workspace (and
+#     the operator's terminal inside it) survives, so a down typed INSIDE the orchestrator pane
+#     cannot close the pane it was typed into.
+seed "herdrproj	herdrws	__ws__	WS-A\nherdrproj	herdr	codex	P-1\nherdrproj	herdr	glm	P-2\nherdrproj	orch	__orch__	P-ORCH\notherproj	herdrws	__ws__	WS-B\notherproj	herdr	kimi	P-9\n"
+rm -f "$TMP/herdr.log"
+HOME="$TMP" PATH="$TMP/fakebin:$PATH" RELAY_PROJECT=herdrproj CREW_NO_PROC_KILL=1 bash "$ROOT/bin/crew.sh" down </dev/null >/dev/null 2>&1
+ok "orch-hosted down closes THIS project's seat panes" 'grep -q "herdr pane close P-1" "$TMP/herdr.log" && grep -q "herdr pane close P-2" "$TMP/herdr.log"'
+ok "orch-hosted down does NOT close the workspace" '! grep -q "workspace close" "$TMP/herdr.log"'
+ok "orch-hosted down does NOT touch another project" '! grep -q "WS-B" "$TMP/herdr.log" && ! grep -q "P-9" "$TMP/herdr.log"'
+ok "the orch row survives the teardown" 'has_row "herdrproj	orch	__orch__	P-ORCH"'
+ok "the workspace row survives with it" 'has_row "herdrproj	herdrws	__ws__	WS-A"'
+ok "the torn-down seats lose their rows" '! has_row "herdrproj	herdr	codex" && ! has_row "herdrproj	herdr	glm"'
+
+# 19. down --all --yes also spares orch rows (uniform rule: never kill the operator's session)
+seed "herdrproj	herdrws	__ws__	WS-A\nherdrproj	orch	__orch__	P-ORCH\notherproj	herdrws	__ws__	WS-B\notherproj	herdr	kimi	P-9\n"
+rm -f "$TMP/herdr.log"
+HOME="$TMP" PATH="$TMP/fakebin:$PATH" RELAY_PROJECT=herdrproj CREW_NO_PROC_KILL=1 bash "$ROOT/bin/crew.sh" down --all --yes </dev/null >/dev/null 2>&1
+ok "down --all --yes closes orch-less workspaces" 'grep -q "herdr workspace close WS-B" "$TMP/herdr.log"'
+ok "down --all --yes spares the orch-hosting workspace" '! grep -q "workspace close WS-A" "$TMP/herdr.log"'
+ok "down --all --yes leaves orch-less seats to their workspace close (no stray per-pane call)" '! grep -q "pane close P-9" "$TMP/herdr.log"'
+ok "down --all --yes keeps the orch + its workspace rows" 'has_row "herdrproj	orch	__orch__	P-ORCH" && has_row "herdrproj	herdrws	__ws__	WS-A"'
+
+# 20. prune validates orch rows at WORKSPACE granularity — same keep-when-unprovable doctrine as
+#     seat rows: live while their project's crew workspace lives, dropped with it
+seed "protest	herdrws	__ws__	WS-LIVE\nprotest	orch	__orch__	P-LIVE\nghostproj	orch	__orch__	P-GHOST\n"
+CREW_MUX=herdr HOME="$TMP" PATH="$TMP/fakebin:$PATH" RELAY_PROJECT=protest HERDR_LIVE_WS='{"workspace_id":"WS-LIVE","label":"trantor:protest"}' bash "$ROOT/bin/crew.sh" prune </dev/null >/dev/null 2>&1
+ok "prune keeps the orch row of a live-workspace project" 'has_row "protest	orch	__orch__	P-LIVE"'
+ok "prune drops the orch row of a dead project" '! has_row "P-GHOST"'
 
 echo ""
 if [ "$FAIL" = "0" ]; then echo "ALL PASS ($PASS)"; else echo "$FAIL FAILED"; fi

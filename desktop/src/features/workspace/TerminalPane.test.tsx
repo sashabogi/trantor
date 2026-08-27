@@ -1,36 +1,20 @@
 // @vitest-environment happy-dom
+//
+// The pane is exercised through injected dependencies, never through module mocking: it runs its
+// real effects against a faithful stand-in (terminalDouble.ts) that implements the same surface
+// the production wiring does.
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { TerminalPane } from "./TerminalPane";
-import {
-  emitAttachedBytes,
-  lastTerminal,
-  resetTerminalMocks,
-  resizeObserverInstances,
-} from "./testTerminalMocks";
-import { orchestratorOpen, termAttach, termDetach, termResize, termWrite } from "./herdr";
+import { installResizeObserver, makeTerminalDouble, type TerminalDouble } from "./terminalDouble";
 
+// SAFETY: React reads this flag off the global object to enable act(); it is not in lib.dom's
+// typing because it is React's own contract, not a platform API. The assertion only widens
+// globalThis by that one boolean and writes it, so nothing else is reinterpreted.
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
-vi.mock("@xterm/xterm", () => import("./testTerminalMocks").then(m => ({ Terminal: m.MockTerminal })));
-vi.mock("@xterm/addon-fit", () => import("./testTerminalMocks").then(m => ({ FitAddon: m.MockFitAddon })));
-vi.mock("@xterm/addon-webgl", () => import("./testTerminalMocks").then(m => ({ WebglAddon: m.MockWebglAddon })));
-vi.mock("./herdr", async () => {
-  const actual = await vi.importActual<typeof import("./herdr")>("./herdr");
-  return {
-    ...actual,
-    surfaceFor: vi.fn(async () => "pane-1"),
-    orchestratorOpen: vi.fn(async () => "opened-pane"),
-    termAttach: vi.fn(async (_target: string, onBytes: (bytes: number[]) => void) => {
-      emitAttachedBytes.current = onBytes;
-      return 42;
-    }),
-    termWrite: vi.fn(async () => undefined),
-    termResize: vi.fn(async () => undefined),
-    termDetach: vi.fn(async () => undefined),
-  };
-});
+installResizeObserver();
 
 const flush = () => act(async () => {
   await Promise.resolve();
@@ -40,10 +24,13 @@ const flush = () => act(async () => {
 describe("TerminalPane", () => {
   let host: HTMLDivElement;
   let root: Root;
+  let d: TerminalDouble;
+
+  const render = (double: TerminalDouble) =>
+    act(async () => root.render(<TerminalPane project="trantor" agent="codex" deps={double.deps} />));
 
   beforeEach(() => {
-    resetTerminalMocks();
-    vi.clearAllMocks();
+    d = makeTerminalDouble();
     host = document.createElement("div");
     document.body.appendChild(host);
     root = createRoot(host);
@@ -55,33 +42,34 @@ describe("TerminalPane", () => {
   });
 
   it("attaches the selected herdr surface and streams bytes into xterm", async () => {
-    await act(async () => root.render(<TerminalPane project="trantor" agent="codex" />));
+    await render(d);
     await flush();
 
-    expect(termAttach).toHaveBeenCalledWith("pane-1", expect.any(Function));
-    emitAttachedBytes.current?.([36, 32]);
-    expect(lastTerminal()?.writes).toEqual([new Uint8Array([36, 32])]);
+    expect(d.attached).toEqual(["pane-1"]);
+    d.emitBytes([36, 32]);
+    expect(d.writes).toEqual([new Uint8Array([36, 32])]);
   });
 
   it("sends xterm input straight to term_write and detaches on unmount", async () => {
-    await act(async () => root.render(<TerminalPane project="trantor" agent="codex" />));
+    await render(d);
     await flush();
 
-    lastTerminal()?.emitData("\u001b[A");
-    expect(termWrite).toHaveBeenCalledWith(42, "\u001b[A");
+    d.emitData("[A");
+    expect(d.written).toEqual([{ sub: 42, data: "[A" }]);
 
     act(() => root.unmount());
-    expect(termDetach).toHaveBeenCalledWith(42);
+    expect(d.detached).toEqual([42]);
+    expect(d.disposed).toBe(true);
   });
 
   it("records keystroke-to-echo latency when streamed bytes return", async () => {
-    await act(async () => root.render(<TerminalPane project="trantor" agent="codex" />));
+    await render(d);
     await flush();
 
-    lastTerminal()?.emitData("x");
+    d.emitData("x");
     await new Promise(resolve => setTimeout(resolve, 8));
     await act(async () => {
-      emitAttachedBytes.current?.([120]);
+      d.emitBytes([120]);
       await Promise.resolve();
     });
 
@@ -92,28 +80,27 @@ describe("TerminalPane", () => {
   });
 
   it("fits and resizes the pty after attach and container resize", async () => {
-    await act(async () => root.render(<TerminalPane project="trantor" agent="codex" />));
+    await render(d);
     await flush();
 
-    expect(termResize).toHaveBeenCalledWith(42, 100, 30);
-    resizeObserverInstances[resizeObserverInstances.length - 1]?.fire();
-    expect(termResize).toHaveBeenLastCalledWith(42, 100, 30);
+    expect(d.resized).toEqual([{ sub: 42, cols: 100, rows: 30 }]);
+    d.fireResize();
+    expect(d.resized[d.resized.length - 1]).toEqual({ sub: 42, cols: 100, rows: 30 });
   });
 
   it("opens a project session when no pane exists", async () => {
-    vi.mocked(termAttach).mockClear();
-    const herdr = await import("./herdr");
-    vi.mocked(herdr.surfaceFor).mockResolvedValueOnce(null);
-
-    await act(async () => root.render(<TerminalPane project="trantor" agent="codex" />));
+    const empty = makeTerminalDouble({ surface: null });
+    await render(empty);
     await flush();
+
+    expect(empty.attached).toEqual([]);
 
     await act(async () => {
       host.querySelector("button")?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     });
     await flush();
 
-    expect(orchestratorOpen).toHaveBeenCalledWith("trantor");
-    expect(termAttach).toHaveBeenCalledWith("opened-pane", expect.any(Function));
+    expect(empty.opened).toEqual(["trantor"]);
+    expect(empty.attached).toEqual(["opened-pane"]);
   });
 });
