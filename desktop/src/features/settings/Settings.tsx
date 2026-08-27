@@ -28,7 +28,9 @@ function Toggle({ on, onChange }: { on: boolean; onChange: (v: boolean) => void 
 
 type HubRow = { url: string; projects: string[]; ok: boolean | null };
 
-export function Settings({ me, update: updateFromShell }: { me: string; update?: AppUpdate | null }) {
+import { Autonomy as AutonomyLocal } from "./Autonomy";
+
+export function Settings({ me, update: updateFromShell, projects = [] }: { me: string; update?: AppUpdate | null; projects?: string[] }) {
   const [hubs, setHubs] = useState<HubRow[]>([]);
   const [notify, setNotify] = useState(notificationsEnabled());
   const [editor, setEditor] = useState<EditorPref>(editorPref());
@@ -193,6 +195,11 @@ export function Settings({ me, update: updateFromShell }: { me: string; update?:
         </section>
 
         <section className="mb-8">
+
+          {/* Local dials. The block above is the overseer's level — shared team state on the hub —
+              so the two never claim to own the same thing. */}
+          <AutonomyLocal projects={projects} />
+
           <h2 className="tr-sec-title">Code</h2>
           <p className="tr-sec-sub">A card's files and commits open here (the card drawer's Code section).</p>
           <div className="tr-card mt-3 flex items-center gap-4 p-4">

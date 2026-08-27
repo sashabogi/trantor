@@ -25,7 +25,7 @@ console.log("\nA fresh install does nothing on its own:");
   ok("it will not push", a.push === false);
   ok("it will not deploy", a.deploy === false);
   ok("the operator's harness still asks before acting", a.harness === "prompt");
-  ok("seats propose rather than act", a.seats === "propose");
+  ok("it does not carry a seats dial — the overseer owns that, on the hub", !("seats" in a));
   ok("…but replacing a dead seat is allowed, which loses nothing", a.swapDeadSeat === true);
 }
 

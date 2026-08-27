@@ -374,6 +374,61 @@ fn project_files(project: String, sub: Option<String>, seat: Option<String>) -> 
     serde_json::to_string(&out).map_err(|e| e.to_string())
 }
 
+/// The autonomy dials, read and written through the CLI rather than by parsing autonomy.json here.
+///
+/// The dependency rules between dials (push implies commit, deploy implies push) live in
+/// lib/autonomy.mjs. A second implementation in Rust would drift from it the first time either
+/// side changed, and the thing that drifts would be the one deciding whether we push to a remote.
+#[tauri::command]
+fn autonomy_get(project: Option<String>) -> Result<String, String> {
+    let mut cmd = std::process::Command::new("trantor");
+    cmd.arg("autonomy").arg("json");
+    match project.as_deref() {
+        Some(p) if !p.trim().is_empty() => { cmd.arg("--project").arg(p); }
+        _ => { cmd.arg("--global"); }
+    }
+    let out = cmd
+        .env("PATH", terminal_path())
+        .output()
+        .map_err(|e| format!("trantor autonomy: {e}"))?;
+    if !out.status.success() {
+        return Err(String::from_utf8_lossy(&out.stderr).trim().to_string());
+    }
+    Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
+}
+
+#[tauri::command]
+fn autonomy_set(project: Option<String>, dial: String, value: String) -> Result<String, String> {
+    // The dial name and value are the only things the front end may choose, and both are checked
+    // against a fixed list here as well as in the CLI: this command runs a subprocess, so an
+    // unvalidated string would be an argument-injection surface rather than a typo.
+    // No "seats" here on purpose: what a crew agent may do unattended is the overseer's level,
+    // per project, on the hub. This command must not offer a second way to set it.
+    const DIALS: &[&str] = &["harness", "commit", "push", "deploy", "swapDeadSeat", "retryFailedTurn"];
+    const VALUES: &[&str] = &["on", "off", "prompt", "bypass"];
+    if !DIALS.contains(&dial.as_str()) {
+        return Err(format!("unknown dial '{dial}'"));
+    }
+    if !VALUES.contains(&value.as_str()) {
+        return Err(format!("unknown value '{value}'"));
+    }
+    let mut cmd = std::process::Command::new("trantor");
+    cmd.arg("autonomy").arg("set").arg(&dial).arg(&value);
+    match project.as_deref() {
+        Some(p) if !p.trim().is_empty() => { cmd.arg("--project").arg(p); }
+        _ => { cmd.arg("--global"); }
+    }
+    let out = cmd
+        .env("PATH", terminal_path())
+        .output()
+        .map_err(|e| format!("trantor autonomy set: {e}"))?;
+    if !out.status.success() {
+        return Err(String::from_utf8_lossy(&out.stderr).trim().to_string());
+    }
+    // Hand back the resolved state, because the dependencies may have refused what was just asked.
+    autonomy_get(project)
+}
+
 /// Candidate icon paths, best first. This is a FIXED list rather than a directory walk on purpose:
 /// a walk of a repo the size of `flutter` or `crm-platform` would hit node_modules and cost more
 /// than the row it decorates. Order encodes quality, not just likelihood — a purpose-built app icon
@@ -1256,6 +1311,8 @@ pub fn run() {
             project_files,
             read_file,
             file_diff,
+            autonomy_get,
+            autonomy_set,
             app_update_check,
             app_update_install,
             terminal::orchestrator_open,

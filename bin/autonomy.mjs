@@ -18,7 +18,7 @@ function projectFlag() {
 }
 
 const BOOLS = ["commit", "push", "deploy", "swapDeadSeat", "retryFailedTurn"];
-const ENUMS = { seats: ["ask", "propose", "act"], harness: ["prompt", "bypass"] };
+const ENUMS = { harness: ["prompt", "bypass"] };
 
 if (cmd === "get") {
   // Machine-readable, one value, no decoration — crew.sh reads this.
@@ -51,6 +51,19 @@ if (cmd === "get") {
   if (key === "deploy" && value === true && out.deploy === false) {
     console.log(`${D}deploy stayed off: it needs push on first${R}`);
   }
+} else if (cmd === "json") {
+  // The app reads through THIS, not by parsing autonomy.json itself. The dependency rules (push
+  // implies commit, deploy implies push) live in one place, and a second implementation in Rust
+  // would drift from it the first time either side changed.
+  const project = projectFlag();
+  const cfg = loadAutonomy();
+  console.log(JSON.stringify({
+    project,
+    resolved: resolveAutonomy(project || "", cfg),
+    defaults: resolveAutonomy("", { ...cfg, projects: {} }),
+    overridden: project && cfg.projects?.[project] ? Object.keys(cfg.projects[project]) : [],
+    path: AUTONOMY_PATH(),
+  }));
 } else if (cmd === "show" || cmd === "list") {
   const project = projectFlag();
   const a = resolveAutonomy(project || "");
@@ -58,8 +71,8 @@ if (cmd === "get") {
   const overridden = project && cfg.projects?.[project] ? Object.keys(cfg.projects[project]) : [];
   const mark = k => (overridden.includes(k) ? `${D} (set for ${project})${R}` : "");
   console.log(`${B}autonomy${R}${project ? ` · ${project}` : " · defaults"}`);
-  console.log(`\n  ${B}seats${R}      ${a.seats}${mark("seats")}      ${D}what a crew agent may do unattended${R}`);
-  console.log(`  ${B}harness${R}    ${a.harness}${mark("harness")}    ${D}whether YOUR claude asks before acting${R}`);
+  console.log(`\n  ${B}harness${R}    ${a.harness}${mark("harness")}    ${D}whether YOUR claude asks before acting${R}`);
+  console.log(`  ${D}what a crew AGENT may do unattended is the overseer's level, per project, on the hub${R}`);
   console.log(`\n  ${D}what Trantor does on your behalf:${R}`);
   for (const k of BOOLS) console.log(`  ${B}${k}${R}${" ".repeat(Math.max(1, 11 - k.length))}${a[k] ? "on" : "off"}${mark(k)}`);
   console.log(`\n${D}${AUTONOMY_PATH()}${R}`);
