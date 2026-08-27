@@ -24,6 +24,7 @@ switch (cmd) {
   case "verify":  run("bin/crew-verify.mjs"); break;
   case "up":      process.argv.splice(2, 1); spawn("/bin/bash", [join(ROOT, "bin/crew.sh"), "up", ...args], { stdio: "inherit", cwd: process.cwd() }).on("exit", c => process.exit(c ?? 0)); break;
   case "open":    spawn("/bin/bash", [join(ROOT, "bin/crew.sh"), "open", ...args], { stdio: "inherit", cwd: process.cwd() }).on("exit", c => process.exit(c ?? 0)); break;
+  case "herdr":   spawn(process.execPath, [join(ROOT, "bin/herdr-agent.mjs"), ...args], { stdio: "inherit", cwd: process.cwd() }).on("exit", c => process.exit(c ?? 0)); break;
   case "down":    spawn("/bin/bash", [join(ROOT, "bin/crew.sh"), "down", ...args], { stdio: "inherit", cwd: process.cwd() }).on("exit", c => process.exit(c ?? 0)); break;
   case "swap":    spawn("/bin/bash", [join(ROOT, "bin/crew.sh"), "swap", ...args], { stdio: "inherit", cwd: process.cwd() }).on("exit", c => process.exit(c ?? 0)); break;
   case "prune":   spawn("/bin/bash", [join(ROOT, "bin/crew.sh"), "prune", ...args], { stdio: "inherit", cwd: process.cwd() }).on("exit", c => process.exit(c ?? 0)); break;
@@ -187,6 +188,7 @@ switch (cmd) {
   trantor models      browse live models behind each seat + the router's pick per difficulty
   trantor up …        spawn a crew here:   trantor up codex kimi deepseek:deepseek glm:zai-coding-plan
   trantor open        host THIS session as the project's orchestrator pane (trantor down spares it)
+  trantor herdr       install|remove|status the login agent that keeps panes alive across a reboot
   trantor down        tear the crew down (kills processes, closes windows, no dialogs)
   trantor prune       drop dead crew-window tracking rows (ghost workspaces/panes) without spawning anything
   trantor ui          open the live dashboard (board + flow views)

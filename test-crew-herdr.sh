@@ -46,6 +46,17 @@ case "\$1" in
     split) N=\$(( \$(cat "$TMP/herdr.n" 2>/dev/null || echo 0) + 1 )); echo "\$N" > "$TMP/herdr.n"
            printf '{"result":{"pane":{"pane_id":"P-%s"}}}\n' "\$N" ;;
     rename) case "\$3" in P-DEAD) exit 1 ;; esac ;;   # a pane id that answers rename = alive (open's probe)
+    report-agent) echo "\$3" >> "$TMP/herdr.agents" ;;   # a pane herdr now considers an agent
+  esac ;;
+  # Only panes that were REPORTED are agents. That is the real asymmetry: a pane can answer rename
+  # while nothing runs inside it, which is what open's liveness probe has to catch.
+  agent) case "\$2" in
+    list) printf '{"result":{"agents":['
+          if [ -f "$TMP/herdr.agents" ]; then
+            sep=""
+            while read -r pid; do [ -n "\$pid" ] || continue; printf '%s{"pane_id":"%s"}' "\$sep" "\$pid"; sep=","; done < "$TMP/herdr.agents"
+          fi
+          printf ']}}' ;;
   esac ;;
 esac
 exit 0
@@ -247,6 +258,35 @@ seed "protest	herdrws	__ws__	WS-LIVE\nprotest	orch	__orch__	P-LIVE\nghostproj	or
 CREW_MUX=herdr HOME="$TMP" PATH="$TMP/fakebin:$PATH" RELAY_PROJECT=protest HERDR_LIVE_WS='{"workspace_id":"WS-LIVE","label":"trantor:protest"}' bash "$ROOT/bin/crew.sh" prune </dev/null >/dev/null 2>&1
 ok "prune keeps the orch row of a live-workspace project" 'has_row "protest	orch	__orch__	P-LIVE"'
 ok "prune drops the orch row of a dead project" '! has_row "P-GHOST"'
+
+# 19. persistence (card #5401). herdr keeps the PANE across an app quit and launchd keeps its
+#     server across a reboot, but neither keeps the CONVERSATION — a pty that dies comes back
+#     empty. So the project owns one claude session id and `open` resumes it.
+echo ""
+echo "The pane can die; the conversation should not:"
+echo 0 > "$TMP/herdr.n"; rm -f "$TMP/herdr.log" "$TMP/herdr.agents"; seed ""
+OUT19="$(cd "$TMP/proj" && HOME="$TMP" PATH="$TMP/fakebin:$PATH" RELAY_PROJECT=testproj CREW_NO_PROC_KILL=1 bash "$ROOT/bin/crew.sh" open </dev/null 2>/dev/null)"
+ok "a first open starts claude under an id WE chose" 'grep -qE "pane run P-1 claude --session-id [0-9a-f-]{36}" "$TMP/herdr.log"'
+ok "the id is recorded against the project" 'grep -q "^testproj	" "$TMP/.agent-bus/orch-sessions.txt" 2>/dev/null'
+SID19="$(cut -f2 < "$TMP/.agent-bus/orch-sessions.txt" 2>/dev/null | head -1)"
+ok "the recorded id is the one claude was given" 'grep -q "pane run P-1 claude --session-id $SID19" "$TMP/herdr.log"'
+
+# the pane outlives its claude: herdr still answers rename, but nothing is running in it
+rm -f "$TMP/herdr.log" "$TMP/herdr.agents"
+SLUG19="$(printf '%s' "$TMP/proj" | tr '/.' '--')"
+mkdir -p "$TMP/.claude/projects/$SLUG19"; : > "$TMP/.claude/projects/$SLUG19/$SID19.jsonl"
+OUT19b="$(cd "$TMP/proj" && HOME="$TMP" PATH="$TMP/fakebin:$PATH" RELAY_PROJECT=testproj CREW_NO_PROC_KILL=1 bash "$ROOT/bin/crew.sh" open </dev/null 2>/dev/null)"
+ok "an empty pane is refilled by RESUMING the conversation" 'grep -q "pane run P-1 claude --resume $SID19" "$TMP/herdr.log"'
+ok "…in the same pane, with no second workspace" '! grep -q "workspace create" "$TMP/herdr.log"'
+ok "…and the project still has exactly one orch row" '[ "$(grep -c "	orch	" "$STATE")" = "1" ]'
+ok "…and it mints no second session id" '[ "$(wc -l < "$TMP/.agent-bus/orch-sessions.txt")" -eq 1 ]'
+ok "the reattach still prints the same target" '[ "$OUT19b" = "$OUT19" ]'
+
+# a pane that IS running claude must be left strictly alone
+rm -f "$TMP/herdr.log"; echo "P-1" > "$TMP/herdr.agents"
+OUT19c="$(cd "$TMP/proj" && HOME="$TMP" PATH="$TMP/fakebin:$PATH" RELAY_PROJECT=testproj CREW_NO_PROC_KILL=1 bash "$ROOT/bin/crew.sh" open </dev/null 2>/dev/null)"
+ok "a LIVE orchestrator is reattached, never restarted" '! grep -q "pane run" "$TMP/herdr.log"'
+ok "…and still reports the same target" '[ "$OUT19c" = "$OUT19" ]'
 
 echo ""
 if [ "$FAIL" = "0" ]; then echo "ALL PASS ($PASS)"; else echo "$FAIL FAILED"; fi

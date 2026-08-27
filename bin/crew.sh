@@ -186,6 +186,43 @@ _herdr_close_pane() { [ "$DRY" = "1" ] && { echo "[dry] herdr pane close $1";   
 # attach` answers agent_not_found, and the app's terminal shows that error instead of the seat —
 # observed 2026-08-27 on every seat while the orchestrator (claude, which herdr detects on its own)
 # streamed fine. NOTE the argument order: the pane id must come FIRST, before the flags.
+# ── orchestrator continuity ────────────────────────────────────────────────────────────────────
+# herdr keeps the PANE alive across an app quit, and launchd keeps its server alive across a
+# reboot. Neither preserves the CONVERSATION: a pty that dies comes back empty, because the
+# transcript was never a property of the terminal. That part is ours.
+#
+# So the project gets ONE claude session id, chosen by us and remembered. First open starts claude
+# under it; every later open resumes it. Discovering the id afterwards would be guesswork, and
+# `--continue` would grab whatever ran last in this directory, which may be a different window.
+_orch_sid() {   # $1=project → the project's session uuid, minting one on first use
+  local f="${STATE%/*}/orch-sessions.txt" p sid
+  if [ -f "$f" ]; then
+    while IFS="$(printf '\t')" read -r p sid; do
+      [ "$p" = "$1" ] && [ -n "$sid" ] && { printf '%s' "$sid"; return 0; }
+    done < "$f"
+  fi
+  sid="$(uuidgen 2>/dev/null | tr 'A-Z' 'a-z')"
+  [ -n "$sid" ] || return 1
+  [ "$DRY" = "1" ] || { mkdir -p "${f%/*}"; printf '%s\t%s\n' "$1" "$sid" >> "$f"; }
+  printf '%s' "$sid"
+}
+
+# claude writes each conversation to ~/.claude/projects/<slug>/<session-id>.jsonl, where the slug
+# is the working directory with every / and . turned into -.
+_orch_transcript() { printf '%s' "$HOME/.claude/projects/$(printf '%s' "$1" | tr '/.' '--')/$2.jsonl"; }
+
+# Resume when the conversation already exists on disk; otherwise start it under the id we picked so
+# the NEXT open can resume it.
+_orch_cmd() {   # $1=dir $2=sid
+  if [ -f "$(_orch_transcript "$1" "$2")" ]; then printf 'claude --resume %s' "$2"
+  else printf 'claude --session-id %s' "$2"; fi
+}
+
+# Does herdr see a LIVE agent in this pane? A pane answering `rename` only proves the pane exists;
+# the process inside it can be long gone, and reattaching to a dead shell shows the operator an
+# empty terminal that never fills.
+_herdr_pane_has_agent() { _herdr agent list 2>/dev/null | grep -q "\"pane_id\":\"$1\""; }
+
 _herdr_report_agent() {   # $1=pane $2=agent-label
   [ "$DRY" = "1" ] && { echo "[dry] herdr pane report-agent $1 --source crew --agent $2 --state working"; return 0; }
   _herdr pane report-agent "$1" --source crew --agent "$2" --state working >/dev/null 2>&1
@@ -509,6 +546,7 @@ open_orchestrator() {
   esac; done
   command -v herdr >/dev/null 2>&1 || { echo "trantor open needs herdr (the pane host) — install: curl -fsSL https://herdr.dev/install.sh | sh"; exit 1; }
   local wsid="" orch="" live_ids="" live_names="" pair="" line fresh=0
+  local sid; sid="$(_orch_sid "$PROJ")" || { echo "trantor open: could not mint a session id (uuidgen missing?)" >&2; exit 1; }
   if [ "$DRY" != "1" ]; then
     pair="$(_herdr_ws_live)"
     live_ids="$(printf '%s' "$pair" | sed -n 1p)"
@@ -537,8 +575,17 @@ open_orchestrator() {
       return 0
     fi
     if _herdr pane rename "$orch" "orchestrator · $PROJ" >/dev/null 2>&1; then
+      if _herdr_pane_has_agent "$orch"; then
+        echo "herdr:${wsid:-?}/$orch"
+        echo "— orchestrator already hosted: reattached to herdr:${wsid:-?}/$orch —" >&2
+        return 0
+      fi
+      # The pane outlived its claude (a crash, or a reboot that took the process but not the row).
+      # Restart the CONVERSATION in the same pane rather than handing back an empty terminal.
+      _herdr pane run "$orch" "$(_orch_cmd "$DIR" "$sid")" >/dev/null 2>&1
+      _herdr_report_agent "$orch" "claude"
       echo "herdr:${wsid:-?}/$orch"
-      echo "— orchestrator already hosted: reattached to herdr:${wsid:-?}/$orch —" >&2
+      echo "— orchestrator pane was empty: resumed session $sid in herdr:${wsid:-?}/$orch —" >&2
       return 0
     fi
     _state_drop "$PROJ" "orch" "" ""; orch=""     # stale row → healed by the create path below
@@ -570,13 +617,14 @@ open_orchestrator() {
   # replacing it (spawn_herdr's REUSE mode splits seats off their own old pane / the previous one).
   if [ "$DRY" = "1" ]; then
     orch="%DRYORCH"
-    echo "[dry] herdr: ${fresh:+root pane + }pane rename $orch 'orchestrator · $PROJ' + run 'claude'" >&2
+    echo "[dry] herdr: ${fresh:+root pane + }pane rename $orch 'orchestrator · $PROJ' + run '$(_orch_cmd "$DIR" "$sid")'" >&2
   else
     if [ "$fresh" = "1" ]; then orch="${pair##*$'\t'}"
     else orch="$(_herdr_split "" right)"; fi
     [ -n "$orch" ] || { echo "trantor open: could not create the orchestrator pane" >&2; exit 1; }
     _herdr pane rename "$orch" "orchestrator · $PROJ" >/dev/null 2>&1
-    _herdr pane run "$orch" "claude" >/dev/null 2>&1
+    _herdr pane run "$orch" "$(_orch_cmd "$DIR" "$sid")" >/dev/null 2>&1
+    _herdr_report_agent "$orch" "claude"
   fi
   _state_drop "$PROJ" "orch" "" ""                 # replace-never-stack: exactly one orch row per project
   record_state "$PROJ" "orch" "__orch__" "$orch"
