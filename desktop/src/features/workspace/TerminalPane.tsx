@@ -69,11 +69,24 @@ function createXtermSession(host: HTMLElement): PaneSession {
     scrollback: 5000,
   });
   const fit = new FitAddon();
-  const webgl = new WebglAddon();
   term.loadAddon(fit);
-  try { term.loadAddon(webgl); } catch { /* WebGL can be unavailable; xterm falls back to DOM. */ }
+
+  // WebGL is an optimisation and it is NOT always available in a WKWebView. Two things follow, and
+  // getting either wrong takes the whole app down rather than the renderer:
+  //   1. Only hold the addon if loadAddon actually accepted it. Disposing an addon that never
+  //      activated throws, and that throw lands in a React effect cleanup during a tab switch,
+  //      which unmounts the tree and leaves a blank frozen window (observed 2026-08-27).
+  //   2. A lost context must dispose the addon, or xterm keeps drawing into a dead surface.
+  let webgl: WebglAddon | null = null;
+  try {
+    const addon = new WebglAddon();
+    term.loadAddon(addon);
+    addon.onContextLoss(() => { try { addon.dispose(); } catch { /* already gone */ } webgl = null; });
+    webgl = addon;
+  } catch { webgl = null; }
+
   term.open(host);
-  fit.fit();
+  try { fit.fit(); } catch { /* host not laid out yet; the ResizeObserver fits again shortly. */ }
   return {
     onData: cb => term.onData(cb),
     write: bytes => term.write(bytes),
@@ -81,7 +94,13 @@ function createXtermSession(host: HTMLElement): PaneSession {
     fit: () => fit.fit(),
     get cols() { return term.cols; },
     get rows() { return term.rows; },
-    dispose() { webgl.dispose(); fit.dispose(); term.dispose(); },
+    // Teardown runs inside a React cleanup, where a throw is fatal to the whole tree. Each step
+    // is independent: one failing addon must not strand the terminal itself undisposed.
+    dispose() {
+      try { webgl?.dispose(); } catch { /* never activated, or context already lost */ }
+      try { fit.dispose(); } catch { /* addon may be detached already */ }
+      try { term.dispose(); } catch { /* nothing further we can do here */ }
+    },
   };
 }
 

@@ -8,6 +8,7 @@ import type { Card, HubClient, HubEvent, Peer } from "../../shared/api/client";
 import { ProjectHeader, type Lens } from "../project/ProjectHeader";
 import { TerminalPane } from "./TerminalPane";
 import { orchestratorOf, type HerdrSeat } from "./herdr";
+import { PaneBoundary } from "./PaneBoundary";
 import { when } from "../../shared/time";
 
 // A seat = a crew peer of this project (agent:project). Host sessions (MacBook-*:project) are
@@ -165,7 +166,9 @@ export function Workspace({ client, project, lens, onLens }: {
               {selected ? `${selected.session} — live terminal` : "live terminal"}
             </div>
             {selected ? (
-              <TerminalPane project={project} agent={selected.agent} />
+              <PaneBoundary key={selected.key}>
+                <TerminalPane project={project} agent={selected.agent} />
+              </PaneBoundary>
             ) : (
               <div className="flex flex-1 items-center justify-center">
                 <div className="tr-card-ghost max-w-[440px] px-6 py-5 text-center text-[12.5px] leading-relaxed">
