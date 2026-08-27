@@ -29,6 +29,7 @@ import { Learning } from "../features/learning/Learning";
 import { Overseer } from "../features/overseer/Overseer";
 import { Settings } from "../features/settings/Settings";
 import { FileTree } from "../features/files/FileTree";
+import { Files } from "../features/files/Files";
 import { Conversation } from "../features/chat/Conversation";
 import { notifyIfWorthIt } from "../shared/notify";
 
@@ -86,6 +87,10 @@ export function AppShell() {
   // decision. Defaults OPEN: the tree is the reason the section exists.
   const [filesOpen, setFilesOpen] = useState<boolean>(() => localStorage.getItem("trantor.files.open") !== "0");
   useEffect(() => { try { localStorage.setItem("trantor.files.open", filesOpen ? "1" : "0"); } catch { /* private mode */ } }, [filesOpen]);
+  // Which file is open, and WHOSE copy of it. Both live here because the tree (sidebar) and the
+  // viewer (main pane) are two halves of one thing: clicking in one has to land in the other.
+  const [filePath, setFilePath] = useState<string | null>(null);
+  const [fileSeat, setFileSeat] = useState<string | null>(null);
 
   // Pinned projects PLUS whatever lives on the machine-local hub. A brand-new project has no
   // routing pin yet — it falls back to the local hub BY DESIGN (TDD §12.1's default), and a
@@ -326,7 +331,13 @@ export function AppShell() {
                 <SectionLabel>{`Files · ${active}`}</SectionLabel>
                 <span className="ml-auto text-[11px] text-tr-muted">{filesOpen ? "hide" : "show"}</span>
               </button>
-              {filesOpen && <FileTree project={active} />}
+              {filesOpen && (
+                <FileTree
+                  project={active}
+                  seat={fileSeat}
+                  onOpen={p => { setFilePath(p); setPane({ kind: "project", lens: "files" }); }}
+                />
+              )}
             </div>
           )}
           {activeProjects.length > 0 && (
@@ -391,6 +402,8 @@ export function AppShell() {
           : pane.lens === "board" ? <Board client={client} project={active} lens={pane.lens} onLens={l => setPane({ kind: "project", lens: l })} />
           : pane.lens === "chat" ? <Conversation client={client} project={active} me={ME} lens={pane.lens} onLens={l => setPane({ kind: "project", lens: l })} />
           : pane.lens === "review" ? <Review client={client} project={active} lens={pane.lens} onLens={l => setPane({ kind: "project", lens: l })} />
+          : pane.lens === "files" ? <Files client={client} project={active} lens={pane.lens} onLens={l => setPane({ kind: "project", lens: l })}
+                                           path={filePath} seat={fileSeat} onSeat={setFileSeat} />
           : <Feed client={client} project={active} lens={pane.lens} onLens={l => setPane({ kind: "project", lens: l })} />}
       </main>
     </div>

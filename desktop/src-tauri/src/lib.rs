@@ -242,11 +242,108 @@ fn parse_status_porcelain(raw: &str) -> std::collections::HashMap<String, String
     map
 }
 
+/// The tree and the viewer read from ONE of two places, and leaving that implicit is why "which
+/// files is the crew touching" had two different answers at once: the project checkout, or a
+/// seat's worktree. Callers name which they mean.
+fn source_root(project: &str, seat: Option<&str>) -> Result<std::path::PathBuf, String> {
+    if project.contains("..") || project.contains('/') {
+        return Err("project is invalid".into());
+    }
+    match seat {
+        None => project_dir(project).ok_or_else(|| format!("no local checkout for {project}")),
+        Some(agent) => {
+            if agent.contains("..") || agent.contains('/') {
+                return Err("seat is invalid".into());
+            }
+            let wt = desktop_bus_dir().join("worktrees").join(project).join(agent);
+            if wt.is_dir() { Ok(wt) } else { Err(format!("{agent} has no worktree yet")) }
+        }
+    }
+}
+
+/// A file's text, for the viewer. Guarded on two axes because a file tree will eventually be
+/// pointed at something that is neither small nor text.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+struct FileBody {
+    text: String,
+    /// set when the file was cut at the cap, so the UI can say so instead of implying it is whole
+    truncated: bool,
+    bytes: u64,
+}
+
+const FILE_VIEW_CAP: u64 = 512 * 1024;
+
+#[tauri::command]
+fn read_file(project: String, path: String, seat: Option<String>) -> Result<String, String> {
+    let root = source_root(&project, seat.as_deref())?;
+    if path.contains("..") {
+        return Err("path escapes the project".into());
+    }
+    let full = root.join(&path);
+    let meta = std::fs::metadata(&full).map_err(|e| format!("cannot read {path}: {e}"))?;
+    if meta.is_dir() {
+        return Err("that is a directory".into());
+    }
+    let bytes = meta.len();
+    let raw = std::fs::read(&full).map_err(|e| format!("cannot read {path}: {e}"))?;
+    // A NUL in the head is the same cheap binary test `grep` uses; rendering a binary as text
+    // produces a screen of noise the operator then has to diagnose.
+    if raw.iter().take(8192).any(|b| *b == 0) {
+        return Err("binary file".into());
+    }
+    let truncated = bytes > FILE_VIEW_CAP;
+    let slice = if truncated { &raw[..FILE_VIEW_CAP as usize] } else { &raw[..] };
+    let body = FileBody {
+        text: String::from_utf8_lossy(slice).to_string(),
+        truncated,
+        bytes,
+    };
+    serde_json::to_string(&body).map_err(|e| e.to_string())
+}
+
+/// A single file's diff against its base. The viewer needs this so "read the code, then decide if
+/// you like it" happens in ONE place — sending the operator to another lens to see whether the
+/// file they are looking at changed is the kind of dead end this tree already had once.
+#[tauri::command]
+fn file_diff(project: String, path: String, seat: Option<String>) -> Result<String, String> {
+    let root = source_root(&project, seat.as_deref())?;
+    if path.contains("..") {
+        return Err("path escapes the project".into());
+    }
+    // HEAD, not the seat's branch point: the question the viewer answers is "what is different
+    // about this file right now", which is what an uncommitted edit means.
+    let out = std::process::Command::new("git")
+        .args(["diff", "HEAD", "--", &path])
+        .current_dir(&root)
+        .output()
+        .map_err(|e| format!("git diff failed: {e}"))?;
+    let text = String::from_utf8_lossy(&out.stdout).to_string();
+    if !text.trim().is_empty() {
+        return Ok(text);
+    }
+    // Untracked: git diff says nothing about a file it has never seen, but the operator still
+    // wants to read it as "all new" rather than be told there is no diff.
+    let untracked = std::process::Command::new("git")
+        .args(["ls-files", "--others", "--exclude-standard", "--", &path])
+        .current_dir(&root)
+        .output()
+        .map_err(|e| format!("git ls-files failed: {e}"))?;
+    if String::from_utf8_lossy(&untracked.stdout).trim().is_empty() {
+        return Ok(String::new());
+    }
+    let no_index = std::process::Command::new("git")
+        .args(["diff", "--no-index", "--", "/dev/null", &path])
+        .current_dir(&root)
+        .output()
+        .map_err(|e| format!("git diff failed: {e}"))?;
+    Ok(String::from_utf8_lossy(&no_index.stdout).to_string())
+}
+
 /// One level of the project's tree. Lazy by design: the front end asks for a subtree when a folder
 /// opens, so a repo with thousands of files costs only what is actually expanded.
 #[tauri::command]
-fn project_files(project: String, sub: Option<String>) -> Result<String, String> {
-    let root = project_dir(&project).ok_or_else(|| format!("no local checkout for {project}"))?;
+fn project_files(project: String, sub: Option<String>, seat: Option<String>) -> Result<String, String> {
+    let root = source_root(&project, seat.as_deref())?;
     let rel = sub.unwrap_or_default();
     // Refuse to escape the project root: `sub` comes from the front end and a "../" would walk out.
     if rel.contains("..") {
@@ -1157,6 +1254,8 @@ pub fn run() {
             herdr_seats,
             seat_diff,
             project_files,
+            read_file,
+            file_diff,
             app_update_check,
             app_update_install,
             terminal::orchestrator_open,

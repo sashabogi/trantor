@@ -238,18 +238,32 @@ export function TerminalPane({
     return (
       <div className="flex flex-1 items-center justify-center">
         <div className="tr-card-ghost max-w-[460px] px-6 py-5 text-center text-[12.5px] leading-relaxed">
-          <div>
-            This seat has no herdr terminal pane. Its work is still in the record rail.
-          </div>
-          <button
-            type="button"
-            onClick={attachOpenSession}
-            disabled={opening}
-            className="mt-3 rounded-[8px] bg-tr-ok px-3 py-1.5 text-[12px] font-semibold text-[#07130f] disabled:opacity-60"
-          >
-            {opening ? "Opening..." : "Open session"}
-          </button>
-          {openError && <div className="mt-2 text-[11.5px] text-tr-danger">{openError}</div>}
+          {/* "Open session" starts the ORCHESTRATOR, which is only the right verb on the
+              orchestrator's own pane. Offering it on a seat meant clicking it under kimi opened
+              your own session and rendered it under kimi's name. A seat is started by the crew,
+              not from here, so say that instead of offering the wrong action. */}
+          {agent === "orchestrator" ? (
+            <>
+              <div>No session is hosted for this project yet.</div>
+              <button
+                type="button"
+                onClick={attachOpenSession}
+                disabled={opening}
+                className="mt-3 rounded-[8px] bg-tr-ok px-3 py-1.5 text-[12px] font-semibold text-[#07130f] disabled:opacity-60"
+              >
+                {opening ? "Opening..." : "Open session"}
+              </button>
+              {openError && <div className="mt-2 text-[11.5px] text-tr-danger">{openError}</div>}
+            </>
+          ) : (
+            <>
+              <div>{agent} has no terminal pane — it is not running under this crew.</div>
+              <div className="mt-2 text-tr-muted">
+                Start it with <span className="tr-mono">trantor up {agent}</span>. Its past work is
+                still in the record rail either way.
+              </div>
+            </>
+          )}
         </div>
       </div>
     );

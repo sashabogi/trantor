@@ -11,8 +11,17 @@ export type FileEntry = {
   status: string;
 };
 
-export async function projectFiles(project: string, sub?: string): Promise<FileEntry[]> {
-  return JSON.parse(await invoke<string>("project_files", { project, sub: sub ?? null }));
+/** `seat` picks WHICH copy: undefined = the project checkout, otherwise that seat's worktree.
+ *  The two genuinely differ — a seat's worktree carries work the checkout has never seen — so the
+ *  caller always says which one it means. */
+export async function projectFiles(project: string, sub?: string, seat?: string): Promise<FileEntry[]> {
+  return JSON.parse(await invoke<string>("project_files", { project, sub: sub ?? null, seat: seat ?? null }));
+}
+
+export type FileBody = { text: string; truncated: boolean; bytes: number };
+
+export async function readFile(project: string, path: string, seat?: string): Promise<FileBody> {
+  return JSON.parse(await invoke<string>("read_file", { project, path, seat: seat ?? null }));
 }
 
 /** What a porcelain code means to someone watching agents work. Untracked reads as "new" because
@@ -32,4 +41,10 @@ export function statusColor(code: string): string {
   if (code === "??" || code.startsWith("A")) return "var(--color-tr-ok)";
   if (code.startsWith("D")) return "var(--color-tr-danger)";
   return "var(--color-tr-doing)";
+}
+
+/** This file's diff against HEAD, or an all-new diff when git has never seen it. Empty string
+ *  means unchanged. */
+export async function fileDiff(project: string, path: string, seat?: string): Promise<string> {
+  return invoke<string>("file_diff", { project, path, seat: seat ?? null });
 }

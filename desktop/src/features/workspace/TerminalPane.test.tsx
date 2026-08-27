@@ -88,9 +88,11 @@ describe("TerminalPane", () => {
     expect(d.resized[d.resized.length - 1]).toEqual({ sub: 42, cols: 100, rows: 30 });
   });
 
-  it("opens a project session when no pane exists", async () => {
+  it("opens a project session when the ORCHESTRATOR has no pane", async () => {
     const empty = makeTerminalDouble({ surface: null });
-    await render(empty);
+    await act(async () => root.render(
+      <TerminalPane project="trantor" agent="orchestrator" deps={empty.deps} />,
+    ));
     await flush();
 
     expect(empty.attached).toEqual([]);
@@ -102,5 +104,17 @@ describe("TerminalPane", () => {
 
     expect(empty.opened).toEqual(["trantor"]);
     expect(empty.attached).toEqual(["opened-pane"]);
+  });
+
+  // "Open session" starts the OPERATOR's session. Offering it on a seat meant clicking it under
+  // kimi opened your own session and rendered it under kimi's name.
+  it("never offers to open a session on a SEAT that has no pane", async () => {
+    const empty = makeTerminalDouble({ surface: null });
+    await render(empty);
+    await flush();
+
+    expect(host.querySelector("button")).toBeNull();
+    expect(host.textContent).toContain("trantor up codex");
+    expect(empty.opened).toEqual([]);
   });
 });

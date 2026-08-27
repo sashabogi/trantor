@@ -5,11 +5,11 @@
 // WITNESS — which files the crew is touching, right now, without asking anyone.
 import { useCallback, useEffect, useState } from "react";
 import { ChevronDown, ChevronRight, File as FileIcon, Folder } from "lucide-react";
-import { projectFiles, statusColor, statusLabel, type FileEntry } from "./files";
+import { projectFiles, statusColor, statusLabel, type FileEntry } from "./fileApi";
 
 const POLL_MS = 10_000;
 
-function Row({ entry, depth, project }: { entry: FileEntry; depth: number; project: string }) {
+function Row({ entry, depth, project, seat, onOpen }: { entry: FileEntry; depth: number; project: string; seat: string | null; onOpen: (path: string) => void }) {
   const [open, setOpen] = useState(false);
   const [kids, setKids] = useState<FileEntry[] | null>(null);
 
@@ -18,18 +18,18 @@ function Row({ entry, depth, project }: { entry: FileEntry; depth: number; proje
   useEffect(() => {
     if (!open || !entry.dir) return;
     let alive = true;
-    const load = () => { projectFiles(project, entry.path).then(k => { if (alive) setKids(k); }).catch(() => {}); };
+    const load = () => { projectFiles(project, entry.path, seat ?? undefined).then(k => { if (alive) setKids(k); }).catch(() => {}); };
     load();
     const iv = setInterval(load, POLL_MS);
     return () => { alive = false; clearInterval(iv); };
-  }, [open, entry.dir, entry.path, project]);
+  }, [open, entry.dir, entry.path, project, seat]);
 
   const color = statusColor(entry.status);
   return (
     <>
       <button
         type="button"
-        onClick={() => entry.dir && setOpen(o => !o)}
+        onClick={() => (entry.dir ? setOpen(o => !o) : onOpen(entry.path))}
         title={entry.status ? `${entry.path} — ${statusLabel(entry.status)}` : entry.path}
         className="flex w-full items-center gap-1.5 rounded-md py-[3px] pr-2 text-left text-[12px] text-tr-muted hover:bg-white/[0.04]"
         style={{ paddingLeft: 6 + depth * 11 }}
@@ -48,20 +48,20 @@ function Row({ entry, depth, project }: { entry: FileEntry; depth: number; proje
           <span className="shrink-0 text-[10px]" style={{ color }}>{statusLabel(entry.status)}</span>
         )}
       </button>
-      {open && kids?.map(k => <Row key={k.path} entry={k} depth={depth + 1} project={project} />)}
+      {open && kids?.map(k => <Row key={k.path} entry={k} depth={depth + 1} project={project} seat={seat} onOpen={onOpen} />)}
     </>
   );
 }
 
-export function FileTree({ project }: { project: string }) {
+export function FileTree({ project, seat, onOpen }: { project: string; seat: string | null; onOpen: (path: string) => void }) {
   const [roots, setRoots] = useState<FileEntry[] | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const load = useCallback(() => {
-    projectFiles(project)
+    projectFiles(project, undefined, seat ?? undefined)
       .then(r => { setRoots(r); setError(null); })
       .catch(e => setError(e instanceof Error ? e.message : String(e)));
-  }, [project]);
+  }, [project, seat]);
 
   useEffect(() => {
     setRoots(null);
@@ -80,7 +80,7 @@ export function FileTree({ project }: { project: string }) {
   }
   return (
     <div className="flex flex-col">
-      {roots.map(e => <Row key={e.path} entry={e} depth={0} project={project} />)}
+      {roots.map(e => <Row key={e.path} entry={e} depth={0} project={project} seat={seat} onOpen={onOpen} />)}
     </div>
   );
 }
