@@ -3,7 +3,7 @@
 // drifting apart — the whack-a-mole lesson, structural this time.
 import type { ReactNode } from "react";
 
-const LENSES = ["workspace", "board", "feed", "chat"] as const;
+const LENSES = ["workspace", "board", "feed", "chat", "review"] as const;
 export type Lens = (typeof LENSES)[number];
 
 export function ProjectHeader({ project, sub, lens, onLens, children }: {

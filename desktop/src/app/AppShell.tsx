@@ -20,6 +20,7 @@ const LOCAL_HUB = "http://127.0.0.1:4477";
 import { Home } from "../features/home/Home";
 import { Board } from "../features/board/Board";
 import { Workspace } from "../features/workspace/Workspace";
+import { Review } from "../features/review/Review";
 import { Feed } from "../features/feed/Feed";
 import { Agents } from "../features/agents/Agents";
 import { Inbox } from "../features/inbox/Inbox";
@@ -368,6 +369,7 @@ export function AppShell() {
           : pane.lens === "workspace" ? <Workspace client={client} project={active} lens={pane.lens} onLens={l => setPane({ kind: "project", lens: l })} />
           : pane.lens === "board" ? <Board client={client} project={active} lens={pane.lens} onLens={l => setPane({ kind: "project", lens: l })} />
           : pane.lens === "chat" ? <Conversation client={client} project={active} me={ME} lens={pane.lens} onLens={l => setPane({ kind: "project", lens: l })} />
+          : pane.lens === "review" ? <Review client={client} project={active} lens={pane.lens} onLens={l => setPane({ kind: "project", lens: l })} />
           : <Feed client={client} project={active} lens={pane.lens} onLens={l => setPane({ kind: "project", lens: l })} />}
       </main>
     </div>
