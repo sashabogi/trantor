@@ -8,15 +8,21 @@
 import { useEffect, useMemo, useState } from "react";
 import type { Card, HubClient, HubEvent, Peer } from "../../shared/api/client";
 import { ProjectHeader, type Lens } from "../project/ProjectHeader";
+import { TerminalPane } from "./TerminalPane";
 import { when } from "../../shared/time";
 
-// A seat = a crew peer of this project (agent:project). Host sessions (MacBook-*:project) are the
-// human's own windows — real peers, but not seats you'd open a terminal on, so they sit last.
+// A seat = a crew peer of this project (agent:project). Host sessions (MacBook-*:project) are
+// the human's own windows — real peers, but not seats you'd open a terminal on, and per #5367's
+// screenshot refinement the agents ARE the tabs: the host leaves the tab row and comes back as
+// a small "you" chip at its right end.
 function seatsOf(peers: Peer[], project: string): Peer[] {
-  const mine = peers.filter(p => p.session.endsWith(`:${project}`));
-  const crew = mine.filter(p => !p.session.toLowerCase().startsWith("macbook"));
-  const host = mine.filter(p => p.session.toLowerCase().startsWith("macbook"));
-  return [...crew, ...host];
+  return peers
+    .filter(p => p.session.endsWith(`:${project}`))
+    .filter(p => !p.session.toLowerCase().startsWith("macbook"));
+}
+
+function hostOf(peers: Peer[], project: string): Peer | undefined {
+  return peers.find(p => p.session.endsWith(`:${project}`) && p.session.toLowerCase().startsWith("macbook"));
 }
 
 const seatName = (session: string) => session.split(":")[0];
@@ -47,6 +53,7 @@ export function Workspace({ client, project, lens, onLens }: {
   }, [client, project]);
 
   const seats = useMemo(() => seatsOf(peers, project), [peers, project]);
+  const host = useMemo(() => hostOf(peers, project), [peers, project]);
   const selected = seats.find(s => s.session === sel) ?? seats[0];
   const inFlight = useMemo(
     () => tasks.filter(t => t.status === "doing" || t.status === "testing"),
@@ -83,6 +90,13 @@ export function Workspace({ client, project, lens, onLens }: {
                 {seatName(s.session)}
               </button>
             ))}
+            {/* the host's own session is not a seat — a quiet "you" chip at the row's end */}
+            {host && (
+              <span className="ml-auto flex items-center gap-2 rounded-[9px] px-3 py-[7px] text-[12px] text-tr-muted">
+                <SeatDot p={host} />
+                you
+              </span>
+            )}
           </div>
 
           {/* seat bar — the seat's REAL identity and status; branch/diffstat joins when P0-A lands */}
@@ -94,17 +108,33 @@ export function Workspace({ client, project, lens, onLens }: {
             </div>
           )}
 
-          {/* terminal pane — a stated placeholder until the herdr backend (P0-B) feeds it */}
+          {/* terminal pane — the seat's live herdr pane when one exists (#5367); the stated
+              placeholder stays the no-surface fallback, word for word */}
           <div className="mt-2.5 flex min-h-0 flex-1 flex-col rounded-xl border border-tr-edge bg-[#101013] p-4">
             <div className="tr-mono text-[12px] leading-[1.75] text-tr-muted">
               {selected ? `${selected.session} — live terminal` : "live terminal"}
             </div>
-            <div className="flex flex-1 items-center justify-center">
-              <div className="tr-card-ghost max-w-[420px] px-6 py-5 text-center text-[12.5px] leading-relaxed">
-                The live pane renders here once the herdr backend lands (P0-B).
-                Until then this seat is visible in cmux, and everything it does is in the record →
+            {selected ? (
+              <TerminalPane
+                project={project}
+                agent={seatName(selected.session)}
+                fallback={
+                  <div className="flex flex-1 items-center justify-center">
+                    <div className="tr-card-ghost max-w-[420px] px-6 py-5 text-center text-[12.5px] leading-relaxed">
+                      The live pane renders here once the herdr backend lands (P0-B).
+                      Until then this seat is visible in cmux, and everything it does is in the record →
+                    </div>
+                  </div>
+                }
+              />
+            ) : (
+              <div className="flex flex-1 items-center justify-center">
+                <div className="tr-card-ghost max-w-[420px] px-6 py-5 text-center text-[12.5px] leading-relaxed">
+                  The live pane renders here once the herdr backend lands (P0-B).
+                  Until then this seat is visible in cmux, and everything it does is in the record →
+                </div>
               </div>
-            </div>
+            )}
           </div>
 
           {/* composer — present, honest about when it turns on */}
@@ -121,6 +151,11 @@ export function Workspace({ client, project, lens, onLens }: {
               <div className="flex items-center gap-2">
                 <span className="tr-mono text-[12px] text-tr-muted">#{seatCard.id}</span>
                 <span className="tr-chip">{seatCard.status}</span>
+                {/* the rail leads with the selected seat's card, but falls through to ANY card in
+                    flight — when this one belongs to someone else, say whose it is (#5367) */}
+                {seatCard.assignee && seatCard.assignee !== selected?.session && (
+                  <span className="tr-chip">{seatName(seatCard.assignee)}'s card</span>
+                )}
                 {seatCard.difficulty && <span className="tr-chip ml-auto">{seatCard.difficulty}</span>}
               </div>
               <div className="mt-2 text-[13.5px] font-medium leading-snug">{seatCard.title}</div>
@@ -141,7 +176,7 @@ export function Workspace({ client, project, lens, onLens }: {
                   <span className="min-w-0 flex-1 truncate">
                     {e.type === "message"
                       ? `${seatName(e.by ?? "?")}: ${e.text ?? ""}`
-                      : `${e.type}${e.taskId ? ` #${e.taskId}` : ""}${e.by ? ` · ${seatName(e.by)}` : ""}`}
+                      : `${e.type}${e.taskId ? ` #${e.taskId}` : ""}${e.title ? ` · ${e.title}` : ""}${e.by ? ` · ${seatName(e.by)}` : ""}`}
                   </span>
                   <span className="shrink-0 text-[11px] text-tr-muted/70">{e.ts ? when(e.ts) : ""}</span>
                 </div>
