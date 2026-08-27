@@ -1,11 +1,14 @@
 pub mod identity;
 
+use serde::Serialize;
+use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
+
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
 #[tauri::command]
 fn greet(name: &str) -> String {
     format!("Hello, {}! You've been greeted from Rust!", name)
 }
-
 
 /// The identity this app signs as. Configurable so a second machine or a test can use another key.
 fn owner_identity() -> String {
@@ -13,7 +16,11 @@ fn owner_identity() -> String {
 }
 
 #[tauri::command]
-fn sign_request(method: String, path: String, body: Option<String>) -> Result<std::collections::HashMap<String, String>, String> {
+fn sign_request(
+    method: String,
+    path: String,
+    body: Option<String>,
+) -> Result<std::collections::HashMap<String, String>, String> {
     identity::sign(&owner_identity(), &method, &path, body.as_deref())
 }
 
@@ -21,19 +28,33 @@ fn sign_request(method: String, path: String, body: Option<String>) -> Result<st
 /// so the web side has to know it rather than assume "sasha@mac" — TRANTOR_IDENTITY can change it,
 /// and a hardcoded copy would 403 the moment it did.
 #[tauri::command]
-fn identity_name() -> String { owner_identity() }
+fn identity_name() -> String {
+    owner_identity()
+}
 
 #[tauri::command]
-fn hub_for_project(project: String) -> String { identity::hub_for_project(&project) }
+fn hub_for_project(project: String) -> String {
+    identity::hub_for_project(&project)
+}
 
 #[tauri::command]
-fn known_projects() -> Vec<String> { identity::known_projects() }
+fn known_projects() -> Vec<String> {
+    identity::known_projects()
+}
 
 #[derive(serde::Serialize)]
-pub struct HubResponse { pub status: u16, pub body: String }
+pub struct HubResponse {
+    pub status: u16,
+    pub body: String,
+}
 
 #[tauri::command]
-async fn hub_request(base: String, method: String, path: String, body: Option<String>) -> Result<HubResponse, String> {
+async fn hub_request(
+    base: String,
+    method: String,
+    path: String,
+    body: Option<String>,
+) -> Result<HubResponse, String> {
     let (status, body) = identity::request(&owner_identity(), &base, &method, &path, body).await?;
     Ok(HubResponse { status, body })
 }
@@ -43,7 +64,8 @@ async fn hub_request(base: String, method: String, path: String, body: Option<St
 /// Without this, every subscriber spawns its OWN connection: BOARD and FEED both subscribe, so each
 /// event arrived twice and was rendered twice. One stream per hub, fanned out to all listeners by
 /// Tauri's event bus — which is what the event bus is for.
-static STREAMS: std::sync::Mutex<Option<std::collections::HashSet<String>>> = std::sync::Mutex::new(None);
+static STREAMS: std::sync::Mutex<Option<std::collections::HashSet<String>>> =
+    std::sync::Mutex::new(None);
 
 #[tauri::command]
 async fn start_stream(app: tauri::AppHandle, base: String) {
@@ -51,12 +73,15 @@ async fn start_stream(app: tauri::AppHandle, base: String) {
     {
         let mut g = STREAMS.lock().unwrap();
         let set = g.get_or_insert_with(std::collections::HashSet::new);
-        if !set.insert(base.clone()) { return; }   // already streaming this hub
+        if !set.insert(base.clone()) {
+            return;
+        } // already streaming this hub
     }
     tauri::async_runtime::spawn(async move {
         identity::stream(&owner_identity(), &base, move |data| {
             let _ = app.emit("hub-event", data);
-        }).await;
+        })
+        .await;
     });
 }
 
@@ -74,22 +99,36 @@ fn terminal_path() -> String {
     let mut push = |raw: &str| {
         for p in raw.split(':') {
             let p = p.trim();
-            if !p.is_empty() && !parts.iter().any(|q| q == p) { parts.push(p.to_string()); }
+            if !p.is_empty() && !parts.iter().any(|q| q == p) {
+                parts.push(p.to_string());
+            }
         }
     };
 
     let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".to_string());
     // -lic so rc files that set PATH are read. Take the LAST line: a noisy profile may print a
     // banner first, and a banner silently swallowing the PATH is exactly this bug again.
-    if let Ok(out) = std::process::Command::new(&shell).arg("-lic").arg("printf '%s' \"$PATH\"").output() {
+    if let Ok(out) = std::process::Command::new(&shell)
+        .arg("-lic")
+        .arg("printf '%s' \"$PATH\"")
+        .output()
+    {
         if out.status.success() {
             let text = String::from_utf8_lossy(&out.stdout);
-            if let Some(line) = text.lines().filter(|l| l.contains('/')).next_back() { push(line); }
+            if let Some(line) = text.lines().filter(|l| l.contains('/')).next_back() {
+                push(line);
+            }
         }
     }
-    for p in ["/opt/homebrew/bin", "/opt/homebrew/sbin", "/usr/local/bin",
-              &format!("{home}/.local/bin"), &format!("{home}/.bun/bin"),
-              &format!("{home}/.cargo/bin"), &format!("{home}/.volta/bin")] {
+    for p in [
+        "/opt/homebrew/bin",
+        "/opt/homebrew/sbin",
+        "/usr/local/bin",
+        &format!("{home}/.local/bin"),
+        &format!("{home}/.bun/bin"),
+        &format!("{home}/.cargo/bin"),
+        &format!("{home}/.volta/bin"),
+    ] {
         push(p);
     }
     push(&std::env::var("PATH").unwrap_or_else(|_| "/usr/bin:/bin:/usr/sbin:/sbin".to_string()));
@@ -107,28 +146,41 @@ async fn doctor() -> Result<String, String> {
     });
     // Finder-launched apps get the bare system PATH (no /opt/homebrew/bin), so "node" alone
     // fails outside a terminal. Probe the usual install locations before falling back to PATH.
-    let node = ["/opt/homebrew/bin/node", "/usr/local/bin/node", "/usr/bin/node"]
-        .iter().find(|p| std::path::Path::new(p).exists())
-        .map(|p| p.to_string()).unwrap_or_else(|| "node".to_string());
+    let node = [
+        "/opt/homebrew/bin/node",
+        "/usr/local/bin/node",
+        "/usr/bin/node",
+    ]
+    .iter()
+    .find(|p| std::path::Path::new(p).exists())
+    .map(|p| p.to_string())
+    .unwrap_or_else(|| "node".to_string());
     let out = tokio::process::Command::new(node)
-        .arg(format!("{root}/bin/doctor.mjs")).arg("--json")
+        .arg(format!("{root}/bin/doctor.mjs"))
+        .arg("--json")
         .env("PATH", terminal_path())
-        .output().await.map_err(|e| format!("doctor: {e}"))?;
+        .output()
+        .await
+        .map_err(|e| format!("doctor: {e}"))?;
     let text = String::from_utf8_lossy(&out.stdout).trim().to_string();
-    if text.is_empty() { return Err(String::from_utf8_lossy(&out.stderr).to_string()); }
+    if text.is_empty() {
+        return Err(String::from_utf8_lossy(&out.stderr).to_string());
+    }
     Ok(text)
 }
-
 
 /// Where a project's code lives on THIS machine. Convention first (~/development/<project>),
 /// TRANTOR_DEV_ROOT to relocate. Returns None when the repo simply isn't here — a card can
 /// reference code on another operator's machine and the UI degrades to text.
 fn project_dir(project: &str) -> Option<std::path::PathBuf> {
-    let root = std::env::var("TRANTOR_DEV_ROOT").unwrap_or_else(|_| {
-        format!("{}/development", std::env::var("HOME").unwrap_or_default())
-    });
+    let root = std::env::var("TRANTOR_DEV_ROOT")
+        .unwrap_or_else(|_| format!("{}/development", std::env::var("HOME").unwrap_or_default()));
     let dir = std::path::Path::new(&root).join(project);
-    if dir.is_dir() { Some(dir) } else { None }
+    if dir.is_dir() {
+        Some(dir)
+    } else {
+        None
+    }
 }
 
 /// Candidate icon paths, best first. This is a FIXED list rather than a directory walk on purpose:
@@ -137,16 +189,30 @@ fn project_dir(project: &str) -> Option<std::path::PathBuf> {
 /// beats a 16px favicon.ico scaled up into a blurry smear, so .ico is deliberately LAST.
 const ICON_CANDIDATES: &[&str] = &[
     // purpose-built app icons (Next.js app router, Tauri, plain assets)
-    "src/app/icon.png", "public/icon.png", "assets/icon.png",
-    "src-tauri/icons/128x128@2x.png", "src-tauri/icons/128x128.png", "src-tauri/icons/icon.png",
+    "src/app/icon.png",
+    "public/icon.png",
+    "assets/icon.png",
+    "src-tauri/icons/128x128@2x.png",
+    "src-tauri/icons/128x128.png",
+    "src-tauri/icons/icon.png",
     // touch icons are ≥120px by spec — always better than a favicon
-    "public/apple-touch-icon.png", "apple-touch-icon.png", "assets/web/apple-touch-icon.png",
+    "public/apple-touch-icon.png",
+    "apple-touch-icon.png",
+    "assets/web/apple-touch-icon.png",
     // brand logos
-    "public/logo.png", "assets/logo.png", "assets/web/logo.png", ".github/assets/logo.png",
-    "public/logo.svg", "logo.svg", "logo.png",
+    "public/logo.png",
+    "assets/logo.png",
+    "assets/web/logo.png",
+    ".github/assets/logo.png",
+    "public/logo.svg",
+    "logo.svg",
+    "logo.png",
     // favicons — png before ico, ico last (16px, and WKWebView renders it poorly)
-    "public/favicon.png", "assets/favicon.png",
-    "src/app/favicon.ico", "public/favicon.ico", "favicon.ico",
+    "public/favicon.png",
+    "assets/favicon.png",
+    "src/app/favicon.ico",
+    "public/favicon.ico",
+    "favicon.ico",
 ];
 
 /// Monorepo layouts put the web app one level down. Checked only after the top-level list misses,
@@ -154,7 +220,14 @@ const ICON_CANDIDATES: &[&str] = &[
 /// `web/app/favicon.ico` (polymarket-playground) are both real cases on this machine.
 /// …and a desktop shell is very often its own subpackage — Trantor's own mark lives at
 /// `desktop/src-tauri/icons/`, so without this the app is the one project that cannot show its face.
-const ICON_SUBROOTS: &[&str] = &["apps/web", "apps/app", "web", "packages/web", "src", "desktop"];
+const ICON_SUBROOTS: &[&str] = &[
+    "apps/web",
+    "apps/app",
+    "web",
+    "packages/web",
+    "src",
+    "desktop",
+];
 
 fn mime_for(path: &std::path::Path) -> Option<&'static str> {
     match path.extension()?.to_str()?.to_ascii_lowercase().as_str() {
@@ -176,16 +249,22 @@ fn mime_for(path: &std::path::Path) -> Option<&'static str> {
 #[tauri::command]
 fn project_icon(project: String) -> Option<String> {
     // Never let a hub-supplied project name walk the filesystem.
-    if project.is_empty() || project.contains('/') || project.contains("..") { return None; }
+    if project.is_empty() || project.contains('/') || project.contains("..") {
+        return None;
+    }
     let dir = project_dir(&project)?;
 
     let mut roots: Vec<std::path::PathBuf> = vec![dir.clone()];
-    for sub in ICON_SUBROOTS { roots.push(dir.join(sub)); }
+    for sub in ICON_SUBROOTS {
+        roots.push(dir.join(sub));
+    }
 
     for root in roots {
         for cand in ICON_CANDIDATES {
             let p = root.join(cand);
-            if !p.is_file() { continue; }
+            if !p.is_file() {
+                continue;
+            }
             let Some(mime) = mime_for(&p) else { continue };
             // 512KB ceiling: this is a 20px sidebar glyph. Anything larger is a source asset
             // (crebral-desktop-lite ships a 512@2x App Store icon) and inlining it would bloat
@@ -194,7 +273,9 @@ fn project_icon(project: String) -> Option<String> {
                 Ok(m) if m.len() > 0 && m.len() <= 512 * 1024 => {}
                 _ => continue,
             }
-            let Ok(bytes) = std::fs::read(&p) else { continue };
+            let Ok(bytes) = std::fs::read(&p) else {
+                continue;
+            };
             return Some(format!("data:{};base64,{}", mime, b64(&bytes)));
         }
     }
@@ -211,8 +292,16 @@ fn b64(data: &[u8]) -> String {
         let n = ((b[0] as u32) << 16) | ((b[1] as u32) << 8) | b[2] as u32;
         out.push(T[(n >> 18 & 63) as usize] as char);
         out.push(T[(n >> 12 & 63) as usize] as char);
-        out.push(if c.len() > 1 { T[(n >> 6 & 63) as usize] as char } else { '=' });
-        out.push(if c.len() > 2 { T[(n & 63) as usize] as char } else { '=' });
+        out.push(if c.len() > 1 {
+            T[(n >> 6 & 63) as usize] as char
+        } else {
+            '='
+        });
+        out.push(if c.len() > 2 {
+            T[(n & 63) as usize] as char
+        } else {
+            '='
+        });
     }
     out
 }
@@ -226,7 +315,10 @@ fn b64(data: &[u8]) -> String {
 
 /// Parse `lsof -Fn` field output (p<pid> / fcwd / n<path>) into cwd paths.
 fn lsof_cwds(out: &str) -> Vec<String> {
-    out.lines().filter(|l| l.starts_with('n')).map(|l| l[1..].to_string()).collect()
+    out.lines()
+        .filter(|l| l.starts_with('n'))
+        .map(|l| l[1..].to_string())
+        .collect()
 }
 
 /// A cwd is a project when it sits DIRECTLY under the dev root (or IS a project dir): the project
@@ -234,7 +326,9 @@ fn lsof_cwds(out: &str) -> Vec<String> {
 fn project_of_cwd(cwd: &str, root: &str) -> Option<String> {
     let rel = cwd.strip_prefix(root)?.trim_start_matches('/');
     let first = rel.split('/').next()?.trim();
-    if first.is_empty() || first.starts_with('.') { return None; }
+    if first.is_empty() || first.starts_with('.') {
+        return None;
+    }
     Some(first.to_string())
 }
 
@@ -242,30 +336,45 @@ fn project_of_cwd(cwd: &str, root: &str) -> Option<String> {
 /// the dev root) plus crew-runner seats (project dir is argv[2]; ~/.agent-bus/fleet → "fleet").
 #[tauri::command]
 fn local_sessions() -> Vec<String> {
-    let root = std::env::var("TRANTOR_DEV_ROOT").unwrap_or_else(|_| {
-        format!("{}/development", std::env::var("HOME").unwrap_or_default())
-    });
+    let root = std::env::var("TRANTOR_DEV_ROOT")
+        .unwrap_or_else(|_| format!("{}/development", std::env::var("HOME").unwrap_or_default()));
     let sh = |bin: &str, args: &[&str]| -> String {
-        std::process::Command::new(bin).args(args).output()
-            .map(|o| String::from_utf8_lossy(&o.stdout).to_string()).unwrap_or_default()
+        std::process::Command::new(bin)
+            .args(args)
+            .output()
+            .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
+            .unwrap_or_default()
     };
     let mut out: Vec<String> = Vec::new();
 
     // interactive claude windows
     let pids: Vec<String> = sh("/usr/bin/pgrep", &["-x", "claude"])
-        .lines().map(|l| l.trim().to_string()).filter(|l| !l.is_empty()).collect();
+        .lines()
+        .map(|l| l.trim().to_string())
+        .filter(|l| !l.is_empty())
+        .collect();
     if !pids.is_empty() {
         let list = pids.join(",");
-        for cwd in lsof_cwds(&sh("/usr/sbin/lsof", &["-a", "-d", "cwd", "-p", &list, "-Fn"])) {
-            if let Some(p) = project_of_cwd(&cwd, &root) { out.push(p); }
+        for cwd in lsof_cwds(&sh(
+            "/usr/sbin/lsof",
+            &["-a", "-d", "cwd", "-p", &list, "-Fn"],
+        )) {
+            if let Some(p) = project_of_cwd(&cwd, &root) {
+                out.push(p);
+            }
         }
     }
 
     // crew seats: `node …/crew-runner.mjs <agent> <projectDir>`
     for line in sh("/usr/bin/pgrep", &["-fl", "crew-runner.mjs"]).lines() {
         if let Some(dir) = line.split_whitespace().last() {
-            if let Some(name) = std::path::Path::new(dir).file_name().and_then(|n| n.to_str()) {
-                if !name.is_empty() && !name.starts_with('.') { out.push(name.to_string()); }
+            if let Some(name) = std::path::Path::new(dir)
+                .file_name()
+                .and_then(|n| n.to_str())
+            {
+                if !name.is_empty() && !name.starts_with('.') {
+                    out.push(name.to_string());
+                }
             }
         }
     }
@@ -273,6 +382,283 @@ fn local_sessions() -> Vec<String> {
     out.sort();
     out.dedup();
     out
+}
+
+// ── herdr bridge ───────────────────────────────────────────────────────────────────────────────
+
+fn desktop_bus_dir() -> PathBuf {
+    std::env::var("AGENT_BUS_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| {
+            let home = std::env::var("HOME").unwrap_or_default();
+            PathBuf::from(home).join(".agent-bus")
+        })
+}
+
+fn find_herdr_binary() -> Option<PathBuf> {
+    let home = std::env::var("HOME").unwrap_or_default();
+    let local = PathBuf::from(&home).join(".local/bin/herdr");
+    if local.is_file() {
+        return Some(local);
+    }
+    for dir in terminal_path().split(':') {
+        if dir.is_empty() {
+            continue;
+        }
+        let p = Path::new(dir).join("herdr");
+        if p.is_file() {
+            return Some(p);
+        }
+    }
+    None
+}
+
+#[tauri::command]
+async fn herdr_pane_read(pane_id: String) -> Result<String, String> {
+    let id = pane_id.trim();
+    if id.is_empty() || id.contains('\0') {
+        return Err("herdr pane id is empty or invalid".into());
+    }
+    let Some(bin) = find_herdr_binary() else {
+        return Err("herdr is not installed".into());
+    };
+    let out = tokio::process::Command::new(bin)
+        .args(["pane", "read", id, "--source", "recent-unwrapped"])
+        .env("PATH", terminal_path())
+        .output()
+        .await
+        .map_err(|e| format!("herdr pane read could not start: {e}"))?;
+    if out.status.success() {
+        return Ok(String::from_utf8_lossy(&out.stdout).to_string());
+    }
+    let err = String::from_utf8_lossy(if out.stderr.is_empty() {
+        &out.stdout
+    } else {
+        &out.stderr
+    })
+    .trim()
+    .to_string();
+    Err(if err.is_empty() {
+        "herdr pane read failed".into()
+    } else {
+        format!("herdr pane read failed: {err}")
+    })
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+struct HerdrSeat {
+    project: String,
+    agent: String,
+    surface: String,
+}
+
+fn parse_herdr_seats(raw: &str) -> Vec<HerdrSeat> {
+    let mut by_seat: BTreeMap<(String, String), HerdrSeat> = BTreeMap::new();
+    for line in raw.lines() {
+        if line.trim().is_empty() {
+            continue;
+        }
+        let fields: Vec<&str> = line.split('\t').collect();
+        if fields.len() < 4 {
+            continue;
+        }
+        let project = fields[0].trim();
+        let kind = fields[1].trim();
+        let agent = fields[2].trim();
+        let surface = fields[3].trim();
+        if kind != "herdr" || project.is_empty() || agent.is_empty() || surface.is_empty() {
+            continue;
+        }
+        by_seat.insert(
+            (project.to_string(), agent.to_string()),
+            HerdrSeat {
+                project: project.to_string(),
+                agent: agent.to_string(),
+                surface: surface.to_string(),
+            },
+        );
+    }
+    by_seat.into_values().collect()
+}
+
+#[tauri::command]
+fn herdr_seats() -> Result<String, String> {
+    // One state file, one recorder: crew.sh records herdr seats into the SAME crew-windows.txt as
+    // every other mux (kind column = "herdr"). The original contract named a separate file, which was
+    // drift waiting to happen — verified live 2026-08-27 when the mapping came back empty.
+    let path = desktop_bus_dir().join("crew-windows.txt");
+    let raw = match std::fs::read_to_string(&path) {
+        Ok(s) => s,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(e) => return Err(format!("could not read herdr seat map: {e}")),
+    };
+    serde_json::to_string(&parse_herdr_seats(&raw)).map_err(|e| e.to_string())
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+struct SeatDiffFile {
+    path: String,
+    plus: Option<u64>,
+    minus: Option<u64>,
+    untracked: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+struct SeatDiff {
+    branch: String,
+    base: String,
+    files: Vec<SeatDiffFile>,
+    patch: String,
+    truncated: bool,
+}
+
+fn parse_numstat(raw: &str) -> Vec<SeatDiffFile> {
+    let mut out = Vec::new();
+    for line in raw.lines() {
+        let mut parts = line.splitn(3, '\t');
+        let Some(plus) = parts.next() else { continue };
+        let Some(minus) = parts.next() else { continue };
+        let Some(path) = parts.next() else { continue };
+        let path = path.trim();
+        if path.is_empty() {
+            continue;
+        }
+        out.push(SeatDiffFile {
+            path: path.to_string(),
+            plus: plus.parse::<u64>().ok(),
+            minus: minus.parse::<u64>().ok(),
+            untracked: false,
+        });
+    }
+    out
+}
+
+fn parse_untracked_porcelain(raw: &str) -> Vec<SeatDiffFile> {
+    raw.lines()
+        .filter_map(|line| {
+            let path = line.strip_prefix("?? ")?.trim();
+            if path.is_empty() {
+                return None;
+            }
+            Some(SeatDiffFile {
+                path: path.to_string(),
+                plus: None,
+                minus: None,
+                untracked: true,
+            })
+        })
+        .collect()
+}
+
+fn run_git_text(dir: &Path, args: &[&str]) -> Result<String, String> {
+    let out = std::process::Command::new("git")
+        .arg("-C")
+        .arg(dir)
+        .args(args)
+        .output()
+        .map_err(|e| format!("git could not start: {e}"))?;
+    if out.status.success() {
+        return Ok(String::from_utf8_lossy(&out.stdout).to_string());
+    }
+    let err = String::from_utf8_lossy(if out.stderr.is_empty() {
+        &out.stdout
+    } else {
+        &out.stderr
+    })
+    .trim()
+    .to_string();
+    Err(if err.is_empty() {
+        format!("git {} failed", args.join(" "))
+    } else {
+        format!("git {} failed: {err}", args.join(" "))
+    })
+}
+
+fn merge_base(dir: &Path) -> Result<String, String> {
+    for branch in ["main", "master", "origin/main", "origin/master"] {
+        if let Ok(base) = run_git_text(dir, &["merge-base", "HEAD", branch]) {
+            let base = base.trim().to_string();
+            if !base.is_empty() {
+                return Ok(base);
+            }
+        }
+    }
+    Err("could not find a merge base with main or master".into())
+}
+
+fn cap_patch(bytes: &[u8]) -> (String, bool) {
+    const PATCH_LIMIT: usize = 400_000;
+    if bytes.len() <= PATCH_LIMIT {
+        return (String::from_utf8_lossy(bytes).to_string(), false);
+    }
+    (
+        String::from_utf8_lossy(&bytes[..PATCH_LIMIT]).to_string(),
+        true,
+    )
+}
+
+fn seat_diff_from_bus_dir(bus: &Path, project: &str, agent: &str) -> Result<SeatDiff, String> {
+    if project.trim().is_empty()
+        || agent.trim().is_empty()
+        || project.contains("..")
+        || agent.contains("..")
+        || project.contains('/')
+        || agent.contains('/')
+    {
+        return Err("project or agent is invalid".into());
+    }
+    let worktree = bus.join("worktrees").join(project).join(agent);
+    if !worktree.is_dir() {
+        return Err("seat worktree does not exist".into());
+    }
+    let branch = run_git_text(&worktree, &["branch", "--show-current"])?
+        .trim()
+        .to_string();
+    let base = merge_base(&worktree)?;
+
+    let mut files = parse_numstat(&run_git_text(&worktree, &["diff", "--numstat", &base])?);
+    let untracked =
+        parse_untracked_porcelain(&run_git_text(&worktree, &["status", "--porcelain"])?);
+    for f in untracked {
+        if !files.iter().any(|existing| existing.path == f.path) {
+            files.push(f);
+        }
+    }
+
+    let patch_out = std::process::Command::new("git")
+        .arg("-C")
+        .arg(&worktree)
+        .args(["diff", &base])
+        .output()
+        .map_err(|e| format!("git diff could not start: {e}"))?;
+    if !patch_out.status.success() {
+        let err = String::from_utf8_lossy(&patch_out.stderr)
+            .trim()
+            .to_string();
+        return Err(if err.is_empty() {
+            "git diff failed".into()
+        } else {
+            format!("git diff failed: {err}")
+        });
+    }
+    let (patch, truncated) = cap_patch(&patch_out.stdout);
+    Ok(SeatDiff {
+        branch,
+        base,
+        files,
+        patch,
+        truncated,
+    })
+}
+
+#[tauri::command]
+fn seat_diff(project: String, agent: String) -> Result<String, String> {
+    serde_json::to_string(&seat_diff_from_bus_dir(
+        &desktop_bus_dir(),
+        &project,
+        &agent,
+    )?)
+    .map_err(|e| e.to_string())
 }
 
 // ── self-update ────────────────────────────────────────────────────────────────────────────────
@@ -301,14 +687,24 @@ pub struct AppUpdate {
 /// compare). Unparseable parts count as 0 so a weird tag never panics.
 fn version_newer(latest: &str, current: &str) -> bool {
     let parse = |s: &str| -> Vec<u64> {
-        s.trim().trim_start_matches('v').split('.')
-            .map(|p| p.chars().take_while(|c| c.is_ascii_digit()).collect::<String>().parse().unwrap_or(0))
+        s.trim()
+            .trim_start_matches('v')
+            .split('.')
+            .map(|p| {
+                p.chars()
+                    .take_while(|c| c.is_ascii_digit())
+                    .collect::<String>()
+                    .parse()
+                    .unwrap_or(0)
+            })
             .collect()
     };
     let (l, c) = (parse(latest), parse(current));
     for i in 0..l.len().max(c.len()) {
         let (a, b) = (*l.get(i).unwrap_or(&0), *c.get(i).unwrap_or(&0));
-        if a != b { return a > b; }
+        if a != b {
+            return a > b;
+        }
     }
     false
 }
@@ -319,11 +715,21 @@ fn asset_version(asset_name: &str, tag: &str) -> String {
     // the version is the digits-and-dots run BETWEEN separators: _0.3.4_ in Trantor_0.3.4_aarch64.dmg
     for (i, _) in asset_name.match_indices(|c| c == '_' || c == '-') {
         let rest = &asset_name[i + 1..];
-        let num: String = rest.chars().take_while(|c| c.is_ascii_digit() || *c == '.').collect();
-        let followed_by_sep = rest.as_bytes().get(num.len()).is_some_and(|c| *c == b'_' || *c == b'-');
-        if num.contains('.') && followed_by_sep { return num; }
+        let num: String = rest
+            .chars()
+            .take_while(|c| c.is_ascii_digit() || *c == '.')
+            .collect();
+        let followed_by_sep = rest
+            .as_bytes()
+            .get(num.len())
+            .is_some_and(|c| *c == b'_' || *c == b'-');
+        if num.contains('.') && followed_by_sep {
+            return num;
+        }
     }
-    tag.trim_start_matches("app-v").trim_start_matches('v').to_string()
+    tag.trim_start_matches("app-v")
+        .trim_start_matches('v')
+        .to_string()
 }
 
 #[tauri::command]
@@ -332,13 +738,18 @@ async fn app_update_check(app: tauri::AppHandle) -> Result<AppUpdate, String> {
     // no-cache: GitHub's shared ~60s API cache can hide a release published seconds ago — the
     // exact bug that made `app update` reinstall the PREVIOUS version on the 0.2.0 release.
     let client = reqwest::Client::new();
-    let r = client.get(RELEASES_URL)
+    let r = client
+        .get(RELEASES_URL)
         .header("accept", "application/vnd.github+json")
         .header("user-agent", "trantor-desktop")
         .header("cache-control", "no-cache")
         .timeout(std::time::Duration::from_secs(15))
-        .send().await.map_err(|e| format!("GitHub unreachable: {e}"))?;
-    if !r.status().is_success() { return Err(format!("GitHub API {}", r.status())); }
+        .send()
+        .await
+        .map_err(|e| format!("GitHub unreachable: {e}"))?;
+    if !r.status().is_success() {
+        return Err(format!("GitHub API {}", r.status()));
+    }
     // reqwest here is built without its `json` feature (rustls+stream only) — parse via text
     let body = r.text().await.map_err(|e| e.to_string())?;
     let releases: serde_json::Value = serde_json::from_str(&body).map_err(|e| e.to_string())?;
@@ -346,20 +757,35 @@ async fn app_update_check(app: tauri::AppHandle) -> Result<AppUpdate, String> {
     let empty: Vec<serde_json::Value> = Vec::new();
     for rel in releases.as_array().unwrap_or(&empty) {
         let assets = rel["assets"].as_array().unwrap_or(&empty);
-        let dmgs: Vec<&serde_json::Value> = assets.iter().filter(|a| {
-            let n = a["name"].as_str().unwrap_or("");
-            n.starts_with("Trantor") && n.ends_with(".dmg")
-        }).collect();
-        if dmgs.is_empty() { continue; }
-        let asset: &serde_json::Value = dmgs.iter().find(|a| a["name"].as_str().unwrap_or("").contains("_aarch64")).copied().unwrap_or(dmgs[0]);
+        let dmgs: Vec<&serde_json::Value> = assets
+            .iter()
+            .filter(|a| {
+                let n = a["name"].as_str().unwrap_or("");
+                n.starts_with("Trantor") && n.ends_with(".dmg")
+            })
+            .collect();
+        if dmgs.is_empty() {
+            continue;
+        }
+        let asset: &serde_json::Value = dmgs
+            .iter()
+            .find(|a| a["name"].as_str().unwrap_or("").contains("_aarch64"))
+            .copied()
+            .unwrap_or(dmgs[0]);
         let tag = rel["tag_name"].as_str().unwrap_or("").to_string();
         let asset_name = asset["name"].as_str().unwrap_or("").to_string();
         let latest = asset_version(&asset_name, &tag);
         return Ok(AppUpdate {
             update_available: version_newer(&latest, &current),
-            url: asset["browser_download_url"].as_str().unwrap_or("").to_string(),
+            url: asset["browser_download_url"]
+                .as_str()
+                .unwrap_or("")
+                .to_string(),
             size: asset["size"].as_u64().unwrap_or(0),
-            current, latest, tag, asset_name,
+            current,
+            latest,
+            tag,
+            asset_name,
         });
     }
     Err("no release with a Trantor DMG asset found".into())
@@ -370,42 +796,81 @@ async fn app_update_check(app: tauri::AppHandle) -> Result<AppUpdate, String> {
 /// apps with a bare PATH, and this must work from exactly such a launch.
 #[tauri::command]
 async fn app_update_install(url: String, asset_name: String) -> Result<(), String> {
-    if !asset_name.starts_with("Trantor") || !asset_name.ends_with(".dmg") || asset_name.contains('/') {
+    if !asset_name.starts_with("Trantor")
+        || !asset_name.ends_with(".dmg")
+        || asset_name.contains('/')
+    {
         return Err("refusing unexpected asset name".into());
     }
-    if !url.starts_with("https://github.com/") && !url.starts_with("https://objects.githubusercontent.com/") {
+    if !url.starts_with("https://github.com/")
+        && !url.starts_with("https://objects.githubusercontent.com/")
+    {
         return Err("refusing non-GitHub download URL".into());
     }
     let dmg = std::env::temp_dir().join(&asset_name);
-    let bytes = reqwest::Client::new().get(&url)
+    let bytes = reqwest::Client::new()
+        .get(&url)
         .header("user-agent", "trantor-desktop")
         .timeout(std::time::Duration::from_secs(300))
-        .send().await.map_err(|e| format!("download failed: {e}"))?
-        .error_for_status().map_err(|e| format!("download failed: {e}"))?
-        .bytes().await.map_err(|e| format!("download failed: {e}"))?;
+        .send()
+        .await
+        .map_err(|e| format!("download failed: {e}"))?
+        .error_for_status()
+        .map_err(|e| format!("download failed: {e}"))?
+        .bytes()
+        .await
+        .map_err(|e| format!("download failed: {e}"))?;
     std::fs::write(&dmg, &bytes).map_err(|e| format!("could not write DMG: {e}"))?;
 
     let run = |bin: &str, args: &[&str]| -> Result<String, String> {
-        let out = std::process::Command::new(bin).args(args).output()
+        let out = std::process::Command::new(bin)
+            .args(args)
+            .output()
             .map_err(|e| format!("{bin}: {e}"))?;
         if !out.status.success() {
-            return Err(format!("{bin} failed: {}", String::from_utf8_lossy(&out.stderr).trim()));
+            return Err(format!(
+                "{bin} failed: {}",
+                String::from_utf8_lossy(&out.stderr).trim()
+            ));
         }
         Ok(String::from_utf8_lossy(&out.stdout).to_string())
     };
 
-    let attach = run("/usr/bin/hdiutil", &["attach", "-nobrowse", "-readonly", dmg.to_str().unwrap_or_default()])?;
-    let mount = attach.trim().lines().last().unwrap_or("")
-        .split('\t').last().unwrap_or("").trim().to_string();
+    let attach = run(
+        "/usr/bin/hdiutil",
+        &[
+            "attach",
+            "-nobrowse",
+            "-readonly",
+            dmg.to_str().unwrap_or_default(),
+        ],
+    )?;
+    let mount = attach
+        .trim()
+        .lines()
+        .last()
+        .unwrap_or("")
+        .split('\t')
+        .last()
+        .unwrap_or("")
+        .trim()
+        .to_string();
     let result = (|| -> Result<(), String> {
         let src = std::path::Path::new(&mount).join("Trantor.app");
         if !mount.starts_with("/Volumes/") || !src.is_dir() {
-            return Err(format!("unexpected DMG layout (mount: {})", if mount.is_empty() { "none" } else { &mount }));
+            return Err(format!(
+                "unexpected DMG layout (mount: {})",
+                if mount.is_empty() { "none" } else { &mount }
+            ));
         }
         if std::path::Path::new(APP_PATH).exists() {
-            std::fs::remove_dir_all(APP_PATH).map_err(|e| format!("could not remove old app: {e}"))?;
+            std::fs::remove_dir_all(APP_PATH)
+                .map_err(|e| format!("could not remove old app: {e}"))?;
         }
-        run("/usr/bin/ditto", &[src.to_str().unwrap_or_default(), APP_PATH])?;
+        run(
+            "/usr/bin/ditto",
+            &[src.to_str().unwrap_or_default(), APP_PATH],
+        )?;
         // the download carries quarantine; the user explicitly clicked Update — clear it so
         // Gatekeeper doesn't refuse the unsigned build on relaunch
         let _ = run("/usr/bin/xattr", &["-dr", "com.apple.quarantine", APP_PATH]);
@@ -417,7 +882,9 @@ async fn app_update_install(url: String, asset_name: String) -> Result<(), Strin
 
     // -n: a fresh instance of the NEW bundle even though this (old) one is still alive for a
     // few more milliseconds. Then exit — the overlap is the handoff.
-    let _ = std::process::Command::new("/usr/bin/open").args(["-n", APP_PATH]).spawn();
+    let _ = std::process::Command::new("/usr/bin/open")
+        .args(["-n", APP_PATH])
+        .spawn();
     std::thread::sleep(std::time::Duration::from_millis(300));
     std::process::exit(0);
 }
@@ -426,9 +893,15 @@ async fn app_update_install(url: String, asset_name: String) -> Result<(), Strin
 /// touch the card (by "#id" in the message, or failing that, by the card's own files). Runs git
 /// HERE because the hub cannot: repos live on operator machines, hubs do not have them.
 #[tauri::command]
-async fn card_code(project: String, card_id: i64, candidates: Vec<String>) -> Result<String, String> {
+async fn card_code(
+    project: String,
+    card_id: i64,
+    candidates: Vec<String>,
+) -> Result<String, String> {
     let Some(dir) = project_dir(&project) else {
-        return Ok(String::from("{\"dir\":null,\"files\":[],\"commits\":[],\"origin\":null}"));
+        return Ok(String::from(
+            "{\"dir\":null,\"files\":[],\"commits\":[],\"origin\":null}",
+        ));
     };
     // files: resolve each cited path against the repo. Direct join first; then git's own index
     // with a suffix pathspec — a monorepo crew cites paths relative to ITS app root
@@ -437,53 +910,86 @@ async fn card_code(project: String, card_id: i64, candidates: Vec<String>) -> Re
     let mut files: Vec<String> = Vec::new();
     let mut unresolved: Vec<String> = Vec::new();
     for c in candidates.iter().take(40) {
-        if c.contains("..") { continue; }
+        if c.contains("..") {
+            continue;
+        }
         let rel = c.trim_start_matches('/');
         if dir.join(rel).is_file() {
-            if files.len() < 20 && !files.contains(&rel.to_string()) { files.push(rel.to_string()); }
+            if files.len() < 20 && !files.contains(&rel.to_string()) {
+                files.push(rel.to_string());
+            }
         } else {
             unresolved.push(rel.to_string());
         }
     }
     if !unresolved.is_empty() {
         let mut args: Vec<String> = vec!["ls-files".into(), "--".into()];
-        for u in unresolved.iter().take(30) { args.push(format!("*{u}")); }
+        for u in unresolved.iter().take(30) {
+            args.push(format!("*{u}"));
+        }
         let out = tokio::process::Command::new("git")
-            .arg("-C").arg(&dir).args(&args)
-            .output().await.ok()
+            .arg("-C")
+            .arg(&dir)
+            .args(&args)
+            .output()
+            .await
+            .ok()
             .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
             .unwrap_or_default();
         for line in out.lines() {
             let f = line.trim().to_string();
-            if !f.is_empty() && files.len() < 20 && !files.contains(&f) { files.push(f); }
+            if !f.is_empty() && files.len() < 20 && !files.contains(&f) {
+                files.push(f);
+            }
         }
     }
     let git = |args: Vec<String>| {
         let dir = dir.clone();
         async move {
             tokio::process::Command::new("git")
-                .arg("-C").arg(&dir).args(&args)
-                .output().await.ok()
+                .arg("-C")
+                .arg(&dir)
+                .args(&args)
+                .output()
+                .await
+                .ok()
                 .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
                 .unwrap_or_default()
         }
     };
     // commits citing the card id, then commits touching the card's files — dedup, id-cites first
     let mut commits: Vec<(String, String)> = Vec::new();
-    let mut push_lines = |out: String, commits: &mut Vec<(String, String)>| {
+    let push_lines = |out: String, commits: &mut Vec<(String, String)>| {
         for line in out.lines().take(8) {
             if let Some((sha, subject)) = line.split_once(' ') {
-                if commits.iter().any(|(s, _)| s == sha) { continue; }
-                if commits.len() >= 8 { break; }
+                if commits.iter().any(|(s, _)| s == sha) {
+                    continue;
+                }
+                if commits.len() >= 8 {
+                    break;
+                }
                 commits.push((sha.to_string(), subject.to_string()));
             }
         }
     };
-    let by_id = git(vec!["log".into(), "--all".into(), "-n".into(), "8".into(), "--oneline".into(),
-                        format!("--grep=#{}", card_id)]).await;
+    let by_id = git(vec![
+        "log".into(),
+        "--all".into(),
+        "-n".into(),
+        "8".into(),
+        "--oneline".into(),
+        format!("--grep=#{}", card_id),
+    ])
+    .await;
     push_lines(by_id, &mut commits);
     if !files.is_empty() {
-        let mut args: Vec<String> = vec!["log".into(), "-n".into(), "6".into(), "--oneline".into(), "--".into()];
+        let mut args: Vec<String> = vec![
+            "log".into(),
+            "-n".into(),
+            "6".into(),
+            "--oneline".into(),
+            "--".into(),
+        ];
         args.extend(files.iter().cloned());
         let by_files = git(args).await;
         push_lines(by_files, &mut commits);
@@ -496,7 +1002,9 @@ async fn card_code(project: String, card_id: i64, candidates: Vec<String>) -> Re
             .trim_end_matches(".git")
             .replace("git@github.com:", "https://github.com/");
         Some(o)
-    } else { None };
+    } else {
+        None
+    };
     let json = serde_json::json!({
         "dir": dir.to_string_lossy(),
         "files": files,
@@ -511,10 +1019,16 @@ async fn card_code(project: String, card_id: i64, candidates: Vec<String>) -> Re
 #[tauri::command]
 async fn open_code(target: String, kind: String) -> Result<(), String> {
     let mut c = tokio::process::Command::new("open");
-    if kind == "reveal" { c.arg("-R"); }
+    if kind == "reveal" {
+        c.arg("-R");
+    }
     c.arg(&target);
     let st = c.status().await.map_err(|e| format!("open: {e}"))?;
-    if st.success() { Ok(()) } else { Err(format!("open failed for {target}")) }
+    if st.success() {
+        Ok(())
+    } else {
+        Err(format!("open failed for {target}"))
+    }
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -522,9 +1036,184 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_notification::init())
-        .invoke_handler(tauri::generate_handler![greet, sign_request, identity_name, hub_for_project, known_projects, hub_request, start_stream, doctor, card_code, open_code, project_icon, local_sessions, app_update_check, app_update_install])
+        .invoke_handler(tauri::generate_handler![
+            greet,
+            sign_request,
+            identity_name,
+            hub_for_project,
+            known_projects,
+            hub_request,
+            start_stream,
+            doctor,
+            card_code,
+            open_code,
+            project_icon,
+            local_sessions,
+            herdr_pane_read,
+            herdr_seats,
+            seat_diff,
+            app_update_check,
+            app_update_install
+        ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+#[cfg(test)]
+mod herdr_tests {
+    use super::*;
+    use std::fs;
+    use std::process::Command;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn temp_dir(name: &str) -> PathBuf {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let p = std::env::temp_dir().join(format!("trantor-{name}-{}-{nonce}", std::process::id()));
+        fs::create_dir_all(&p).unwrap();
+        p
+    }
+
+    fn git(dir: &Path, args: &[&str]) -> String {
+        let out = Command::new("git")
+            .arg("-C")
+            .arg(dir)
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "git {:?}: {}",
+            args,
+            String::from_utf8_lossy(&out.stderr)
+        );
+        String::from_utf8_lossy(&out.stdout).trim().to_string()
+    }
+
+    #[test]
+    fn herdr_seat_rows_keep_only_last_modern_herdr_entry() {
+        let rows = [
+            "legacy-agent\tterminal-1",
+            "trantor\therdr\tcodex\tpane-old",
+            "trantor\tcmux\tglm\tsurface-no",
+            "trantor\therdr\tcodex\tpane-new",
+            "other\therdr\tkimi\tpane-k",
+        ]
+        .join("\n");
+        let seats = parse_herdr_seats(&rows);
+        assert_eq!(
+            seats,
+            vec![
+                HerdrSeat {
+                    project: "other".into(),
+                    agent: "kimi".into(),
+                    surface: "pane-k".into()
+                },
+                HerdrSeat {
+                    project: "trantor".into(),
+                    agent: "codex".into(),
+                    surface: "pane-new".into()
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn seat_diff_parses_numstat_and_untracked_porcelain() {
+        let files = parse_numstat("12\t3\tsrc/lib.rs\n-\t-\tassets/icon.png\n");
+        assert_eq!(
+            files[0],
+            SeatDiffFile {
+                path: "src/lib.rs".into(),
+                plus: Some(12),
+                minus: Some(3),
+                untracked: false
+            }
+        );
+        assert_eq!(
+            files[1],
+            SeatDiffFile {
+                path: "assets/icon.png".into(),
+                plus: None,
+                minus: None,
+                untracked: false
+            }
+        );
+        assert_eq!(
+            parse_untracked_porcelain(" M src/lib.rs\n?? new-file.txt\n?? nested/path.rs\n"),
+            vec![
+                SeatDiffFile {
+                    path: "new-file.txt".into(),
+                    plus: None,
+                    minus: None,
+                    untracked: true
+                },
+                SeatDiffFile {
+                    path: "nested/path.rs".into(),
+                    plus: None,
+                    minus: None,
+                    untracked: true
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn seat_diff_reports_branch_base_files_patch_and_truncation() {
+        let root = temp_dir("seat-diff");
+        let source = root.join("repo");
+        fs::create_dir_all(&source).unwrap();
+        git(&source, &["init", "-q", "-b", "main"]);
+        git(&source, &["config", "user.email", "trantor@example.test"]);
+        git(&source, &["config", "user.name", "Trantor Test"]);
+        fs::write(source.join("tracked.txt"), "one\n").unwrap();
+        fs::write(source.join("binary.bin"), [0u8, 1, 2, 3]).unwrap();
+        git(&source, &["add", "."]);
+        git(&source, &["commit", "-q", "-m", "base"]);
+
+        let bus = root.join("bus");
+        let wt = bus.join("worktrees/demo/codex");
+        fs::create_dir_all(wt.parent().unwrap()).unwrap();
+        git(
+            &source,
+            &[
+                "worktree",
+                "add",
+                "-q",
+                "-B",
+                "seat/codex",
+                wt.to_str().unwrap(),
+                "HEAD",
+            ],
+        );
+        fs::write(wt.join("tracked.txt"), "one\ntwo\nthree\n").unwrap();
+        fs::write(wt.join("new.txt"), "new\n").unwrap();
+        let diff = seat_diff_from_bus_dir(&bus, "demo", "codex").unwrap();
+
+        assert_eq!(diff.branch, "seat/codex");
+        assert_eq!(diff.base.len(), 40);
+        assert!(diff.files.contains(&SeatDiffFile {
+            path: "tracked.txt".into(),
+            plus: Some(2),
+            minus: Some(0),
+            untracked: false
+        }));
+        assert!(diff.files.contains(&SeatDiffFile {
+            path: "new.txt".into(),
+            plus: None,
+            minus: None,
+            untracked: true
+        }));
+        assert!(diff.patch.contains("two"));
+        assert!(!diff.truncated);
+
+        let huge = vec![b'x'; 400_010];
+        let (patch, truncated) = cap_patch(&huge);
+        assert_eq!(patch.len(), 400_000);
+        assert!(truncated);
+    }
 }
 
 #[cfg(test)]
@@ -586,7 +1275,13 @@ mod session_tests {
     #[test]
     fn lsof_field_output_yields_only_paths() {
         let out = "p31023\nfcwd\nn/Users/s/development/crebral-scribe\np33890\nfcwd\nn/Users/s/development/crebral-health\n";
-        assert_eq!(lsof_cwds(out), vec!["/Users/s/development/crebral-scribe", "/Users/s/development/crebral-health"]);
+        assert_eq!(
+            lsof_cwds(out),
+            vec![
+                "/Users/s/development/crebral-scribe",
+                "/Users/s/development/crebral-health"
+            ]
+        );
         assert!(lsof_cwds("").is_empty());
     }
 
@@ -595,8 +1290,14 @@ mod session_tests {
     #[test]
     fn cwd_maps_to_the_first_component_under_the_root() {
         let r = "/Users/s/development";
-        assert_eq!(project_of_cwd("/Users/s/development/crebral-health", r), Some("crebral-health".into()));
-        assert_eq!(project_of_cwd("/Users/s/development/crm-platform/apps/web", r), Some("crm-platform".into()));
+        assert_eq!(
+            project_of_cwd("/Users/s/development/crebral-health", r),
+            Some("crebral-health".into())
+        );
+        assert_eq!(
+            project_of_cwd("/Users/s/development/crm-platform/apps/web", r),
+            Some("crm-platform".into())
+        );
         assert_eq!(project_of_cwd("/Users/s/development", r), None);
         assert_eq!(project_of_cwd("/Users/s/development/.hidden", r), None);
         assert_eq!(project_of_cwd("/Users/s/elsewhere/thing", r), None);
@@ -630,8 +1331,14 @@ mod update_tests {
     // "what's latest" differently would be its own bug
     #[test]
     fn asset_version_matches_the_cli_parse() {
-        assert_eq!(asset_version("Trantor_0.3.4_aarch64.dmg", "app-v0.3.4"), "0.3.4");
-        assert_eq!(asset_version("Trantor-0.10.0-x64.dmg", "app-v0.10.0"), "0.10.0");
+        assert_eq!(
+            asset_version("Trantor_0.3.4_aarch64.dmg", "app-v0.3.4"),
+            "0.3.4"
+        );
+        assert_eq!(
+            asset_version("Trantor-0.10.0-x64.dmg", "app-v0.10.0"),
+            "0.10.0"
+        );
         // no embedded version → tag with prefixes stripped
         assert_eq!(asset_version("Trantor.dmg", "app-v0.2.0"), "0.2.0");
         assert_eq!(asset_version("Trantor.dmg", "v1.2.3"), "1.2.3");
@@ -640,9 +1347,16 @@ mod update_tests {
     #[test]
     fn install_refuses_off_github_urls_and_odd_names() {
         let rt = tokio::runtime::Runtime::new().unwrap();
-        let err = |u: &str, n: &str| rt.block_on(app_update_install(u.into(), n.into())).unwrap_err();
-        assert!(err("https://evil.example/x.dmg", "Trantor_0.3.4_aarch64.dmg").contains("non-GitHub"));
+        let err = |u: &str, n: &str| {
+            rt.block_on(app_update_install(u.into(), n.into()))
+                .unwrap_err()
+        };
+        assert!(
+            err("https://evil.example/x.dmg", "Trantor_0.3.4_aarch64.dmg").contains("non-GitHub")
+        );
         assert!(err("https://github.com/x/y.dmg", "NotTrantor.dmg").contains("unexpected asset"));
-        assert!(err("https://github.com/x/y.dmg", "Trantor_../../x.dmg").contains("unexpected asset"));
+        assert!(
+            err("https://github.com/x/y.dmg", "Trantor_../../x.dmg").contains("unexpected asset")
+        );
     }
 }
