@@ -61,9 +61,9 @@ nolog(){ [ ! -f "$TMP/herdr.log" ] || ! grep -q . "$TMP/herdr.log"; }
 echo "# herdr mux tests (CREW_MUX=herdr explicit opt-in)"
 
 # 1. opting in WITHOUT the binary → hard error + install hint; nothing spawned, nothing recorded
-if (cd "$TMP/proj" && HOME="$TMP" PATH="$TMP/fakebin_noherdr:$PATH" RELAY_PROJECT=testproj CREW_MUX=herdr bash "$ROOT/bin/crew.sh" up codex </dev/null >/dev/null 2>&1); then rc=0; else rc=1; fi
+if (cd "$TMP/proj" && HOME="$TMP" PATH="$TMP/fakebin_noherdr:/usr/bin:/bin" RELAY_PROJECT=testproj CREW_MUX=herdr bash "$ROOT/bin/crew.sh" up codex </dev/null >/dev/null 2>&1); then rc=0; else rc=1; fi
 ok "CREW_MUX=herdr without herdr installed is a HARD error" '[ "$rc" = "1" ]'
-OUT1="$(cd "$TMP/proj" && HOME="$TMP" PATH="$TMP/fakebin_noherdr:$PATH" RELAY_PROJECT=testproj CREW_MUX=herdr bash "$ROOT/bin/crew.sh" up codex </dev/null 2>&1)"
+OUT1="$(cd "$TMP/proj" && HOME="$TMP" PATH="$TMP/fakebin_noherdr:/usr/bin:/bin" RELAY_PROJECT=testproj CREW_MUX=herdr bash "$ROOT/bin/crew.sh" up codex </dev/null 2>&1)"
 ok "the error says how to install herdr (user-local, no sudo)" 'echo "$OUT1" | grep -q "herdr is not installed"'
 ok "failed opt-in records no state" '[ "$(rows)" = "0" ]'
 
