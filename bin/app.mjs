@@ -77,9 +77,21 @@ await pipeline(Readable.fromWeb(dl.body), createWriteStream(dmg));
 
 let mount = "";
 try {
-  // -nobrowse keeps the volume out of Finder; mount point is the last tab-field of the last line.
-  const out = sh("hdiutil", ["attach", "-nobrowse", "-readonly", dmg]);
-  mount = (out.trim().split("\n").pop() || "").split("\t").pop().trim();
+  // diskutil first: on macOS 26 the deprecated hdiutil shim IGNORES -nobrowse, so the mounted
+  // volume popped a Finder window mid-update and read as an install prompt (2026-08-27). Parse
+  // the mount point as everything after the last " at " — volume names can contain spaces.
+  try {
+    // real output (verified 2026-08-27): tab-separated, same shape as hdiutil —
+    // "/dev/disk12s1\tApple_HFS            \t/Volumes/Trantor" — last tab field is the mount.
+    const out = sh("diskutil", ["image", "attach", "--mountOptions", "nobrowse", "--readOnly", dmg]);
+    const line = out.trim().split("\n").filter(l => l.includes("/Volumes/")).pop() || "";
+    mount = line.split("\t").pop().trim();
+    if (!mount.startsWith("/Volumes/")) throw new Error("no mount point in diskutil output");
+  } catch {
+    // older macOS: the original hdiutil path, tab-field parse (robust to spaces)
+    const out = sh("hdiutil", ["attach", "-nobrowse", "-readonly", dmg]);
+    mount = (out.trim().split("\n").pop() || "").split("\t").pop().trim();
+  }
   const src = join(mount, "Trantor.app");
   if (!mount.startsWith("/Volumes/") || !existsSync(src)) throw new Error(`unexpected DMG layout (mount: ${mount || "none"})`);
   if (existsSync(APP)) { console.log(`replacing ${APP} (was ${have || "unknown"})`); rmSync(APP, { recursive: true, force: true }); }
@@ -91,6 +103,9 @@ try {
 } catch (e) {
   console.error(`install failed: ${e.message}`); process.exitCode = 1;
 } finally {
-  if (mount) try { sh("hdiutil", ["detach", mount, "-quiet"]); } catch {}
+  if (mount) {
+    try { sh("diskutil", ["eject", mount]); }
+    catch { try { sh("hdiutil", ["detach", mount, "-quiet"]); } catch {} }
+  }
   try { rmSync(dmg, { force: true }); } catch {}
 }
