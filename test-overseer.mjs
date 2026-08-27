@@ -164,19 +164,25 @@ finally { hubF.kill(); }
 // waking the duty seat for a full turn. A held condition must warn EXACTLY ONCE, and must be able
 // to fire again only after it has genuinely cleared.
 const PG = 47937, hubG = spawnHub(PG, {
-  RELAY_OVERSEER_TICK_MS: "300", RELAY_OVERSEER_CLEAR_MS: "1000",
-  RELAY_OVERSEER_PEER_LIVE_MS: "800",   // so the condition can actually go away inside a test
+  RELAY_OVERSEER_TICK_MS: "300", RELAY_OVERSEER_CLEAR_MS: "1500",
+  RELAY_OVERSEER_PEER_LIVE_MS: "1500",  // so the condition can actually go away inside a test —
+  // but with margin: the original 800ms window was narrower than an event-loop stall on a loaded
+  // machine, so a stretched heartbeat FLAPPED the condition and the hub (correctly, per its own
+  // contract) opened a fresh episode. "got 2/3/4 warns" tracked machine load exactly (#4854 family).
 });
 await sleep(1500);
 try {
   const G = mk(`http://127.0.0.1:${PG}`);
   await G.post("/policy", { autonomy: { alpha: 2 } });
   // Keep the condition CONTINUOUSLY true across many ticks by re-registering (fresh heartbeats).
-  for (let i = 0; i < 12; i++) {
-    await G.post("/register", { session: "host:alpha", project: "alpha" });
-    await G.post("/register", { session: "codex:alpha", project: "alpha" });
-    await sleep(250);
-  }
+  // Both sessions beat CONCURRENTLY on an interval, not via sequential awaits — one slow HTTP
+  // round-trip must not delay the other session's heartbeat past the liveness window.
+  const beat = setInterval(() => {
+    G.post("/register", { session: "host:alpha", project: "alpha" }).catch(() => {});
+    G.post("/register", { session: "codex:alpha", project: "alpha" }).catch(() => {});
+  }, 150);
+  await sleep(3000);
+  clearInterval(beat);
   const ev = await G.get("/events?type=overseer.&limit=100");
   const warns = (ev.events ?? []).filter(e => e.type === "overseer.warn");
   ok(warns.length === 1, `standing condition warns ONCE across ~10 ticks (got ${warns.length})`);
@@ -186,7 +192,7 @@ try {
   ok(Number(st.warnings?.[0]?.since) > 0, "live detection carries `since` (a duration, not just a fact)");
 
   // Let it clear (no heartbeats past CLEAR_MS), then bring it back: a genuine recurrence re-warns.
-  await sleep(2600);
+  await sleep(3400);
   await G.post("/register", { session: "host:alpha", project: "alpha" });
   await G.post("/register", { session: "codex:alpha", project: "alpha" });
   await sleep(1200);
