@@ -12,13 +12,13 @@ import { ProjectHeader, type Lens } from "../project/ProjectHeader";
 import { parsePatch, type DiffFile } from "./diff";
 import { seatDiff, type SeatDiff } from "./seatDiff";
 
-// Copied from Workspace.tsx per the card contract ("copy the 8-line helper, do not import across
-// features"): a seat = a crew peer of this project; host sessions (the human's windows) sit last.
+// A seat = a crew peer of this project. The operator's own sessions are excluded outright: review
+// compares a seat's WORKTREE against its base, and the operator has no worktree, so listing them
+// only ever offered a tab that could never hold a diff — under a raw bus id, next to real seats.
 function seatsOf(peers: Peer[], project: string): Peer[] {
-  const mine = peers.filter(p => p.session.endsWith(`:${project}`));
-  const crew = mine.filter(p => !p.session.toLowerCase().startsWith("macbook"));
-  const host = mine.filter(p => p.session.toLowerCase().startsWith("macbook"));
-  return [...crew, ...host];
+  return peers
+    .filter(p => p.session.endsWith(`:${project}`))
+    .filter(p => !p.session.toLowerCase().startsWith("macbook"));
 }
 
 const seatName = (session: string) => session.split(":")[0];

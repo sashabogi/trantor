@@ -34,6 +34,16 @@ function SeatDot({ online }: { online: boolean }) {
 // One row in the pane strip. The crew's seats and the operator's own orchestrator pane are both
 // just panes you can open, so they share a shape here — the difference is that the orchestrator is
 // the person's session, which is why it leads the row and says so.
+// Watching a crew and driving one seat are different jobs, and tabs only serve the second. cmux
+// and herdr both showed every seat at once; replacing that with clicking made supervision worse.
+// FOCUS stays the default (one seat, full size); GRID is the opt-in that puts them side by side.
+type PaneView = "focus" | "grid";
+const VIEW_KEY = "trantor.workspace.view";
+
+// Same ceil(sqrt(n)) tiling crew.sh uses for real panes, so the app and the multiplexer agree on
+// what a crew of N looks like.
+export const gridCols = (n: number) => { let c = 1; while (c * c < n) c += 1; return c; };
+
 type PaneTarget = {
   key: string;
   label: string;
@@ -52,6 +62,8 @@ export function Workspace({ client, project, lens, onLens }: {
   const [tasks, setTasks] = useState<Card[]>([]);
   const [events, setEvents] = useState<HubEvent[]>([]);
   const [sel, setSel] = useState<string | null>(null);
+  const [view, setView] = useState<PaneView>(() => (localStorage.getItem(VIEW_KEY) === "grid" ? "grid" : "focus"));
+  const setViewPersisted = (v: PaneView) => { setView(v); try { localStorage.setItem(VIEW_KEY, v); } catch { /* private mode */ } };
 
   useEffect(() => {
     let alive = true;
@@ -148,24 +160,69 @@ export function Workspace({ client, project, lens, onLens }: {
                 you
               </span>
             )}
+            {seats.length > 1 && (
+              <div className={`${host && !orch ? "" : "ml-auto"} flex items-center gap-1 rounded-[9px] bg-tr-panel/60 p-[3px]`}>
+                {(["focus", "grid"] as const).map(v => (
+                  <button
+                    key={v}
+                    type="button"
+                    onClick={() => setViewPersisted(v)}
+                    data-on={view === v}
+                    title={v === "grid" ? "every seat at once" : "one seat, full size"}
+                    className="rounded-[7px] px-2.5 py-[5px] text-[11.5px] font-medium text-tr-muted data-[on=true]:bg-tr-panel data-[on=true]:text-tr-text data-[on=true]:shadow-sm"
+                  >
+                    {v}
+                  </button>
+                ))}
+              </div>
+            )}
           </div>
 
+          {view === "grid" ? (
+            /* GRID: the whole crew at once, read-only. The orchestrator is deliberately absent —
+               it is the operator, not a seat to supervise, and it gets its own surface. */
+            <div
+              className="mt-2.5 grid min-h-0 flex-1 gap-2.5"
+              style={{ gridTemplateColumns: `repeat(${gridCols(seats.length)}, minmax(0, 1fr))` }}
+            >
+              {seats.map(sp => (
+                <div key={sp.session} className="flex min-h-0 flex-col overflow-hidden rounded-xl border border-tr-edge bg-[#101013] p-2.5">
+                  <button
+                    type="button"
+                    onClick={() => { setSel(sp.session); setViewPersisted("focus"); }}
+                    title="open this seat full size"
+                    className="mb-1.5 flex items-center gap-2 text-left"
+                  >
+                    <SeatDot online={!!sp.online} />
+                    <span className="tr-mono text-[11.5px] text-tr-text">{seatName(sp.session)}</span>
+                    {sp.status && <span className="truncate text-[11px] text-tr-muted">{sp.status}</span>}
+                  </button>
+                  <div className="flex min-h-0 flex-1 flex-col">
+                    <PaneBoundary key={sp.session}>
+                      <TerminalPane project={project} agent={seatName(sp.session)} />
+                    </PaneBoundary>
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <>
           {/* seat bar — the seat's REAL identity and status; branch/diffstat joins when P0-A lands */}
-          {selected && (
-            <div className="tr-card mt-2.5 flex items-center gap-3 px-3.5 py-2">
-              <span className="tr-mono text-[12px] text-tr-muted">{selected.session}</span>
-              <span className="tr-chip">{selected.online ? "online" : selected.lastSeen ? `last seen ${when(selected.lastSeen)}` : "never seen"}</span>
-              {selected.status && <span className="max-w-[340px] truncate text-[12px] text-tr-muted">{selected.status}</span>}
-            </div>
-          )}
+            {selected && (
+              <div className="tr-card mt-2.5 flex items-center gap-3 px-3.5 py-2">
+                <span className="tr-mono text-[12px] text-tr-muted">{selected.session}</span>
+                <span className="tr-chip">{selected.online ? "online" : selected.lastSeen ? `last seen ${when(selected.lastSeen)}` : "never seen"}</span>
+                {selected.status && <span className="max-w-[340px] truncate text-[12px] text-tr-muted">{selected.status}</span>}
+              </div>
+            )}
 
-          {/* terminal pane — the seat's live herdr pane when one exists (#5367); the stated
-              placeholder stays the no-surface fallback, word for word */}
-          <div className="mt-2.5 flex min-h-0 flex-1 flex-col rounded-xl border border-tr-edge bg-[#101013] p-4">
-            <div className="tr-mono text-[12px] leading-[1.75] text-tr-muted">
-              {selected ? `${selected.session} — live terminal` : "live terminal"}
-            </div>
-            {selected ? (
+            {/* terminal pane — the seat's live herdr pane when one exists (#5367); the stated
+                placeholder stays the no-surface fallback, word for word */}
+            <div className="mt-2.5 flex min-h-0 flex-1 flex-col rounded-xl border border-tr-edge bg-[#101013] p-4">
+              <div className="tr-mono text-[12px] leading-[1.75] text-tr-muted">
+                {selected ? `${selected.session} — live terminal` : "live terminal"}
+              </div>
+              {selected ? (
               <PaneBoundary key={selected.key}>
                 <TerminalPane project={project} agent={selected.agent} />
               </PaneBoundary>
@@ -176,8 +233,10 @@ export function Workspace({ client, project, lens, onLens }: {
                   &nbsp;and each seat&rsquo;s live terminal renders right here.
                 </div>
               </div>
-            )}
-          </div>
+              )}
+              </div>
+            </>
+          )}
         </div>
 
         {/* right: the record rail */}
