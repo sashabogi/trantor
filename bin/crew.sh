@@ -223,11 +223,21 @@ _orch_transcript() { printf '%s' "$HOME/.claude/projects/$(printf '%s' "$1" | tr
 ORCH_STRIP="CLAUDECODE CLAUDE_CODE_ENTRYPOINT CLAUDE_CODE_SESSION_ID CLAUDE_CODE_CHILD_SESSION CLAUDE_CODE_BRIDGE_SESSION_ID CLAUDE_CODE_MESSAGING_SOCKET CLAUDE_CODE_MESSAGING_TOKEN CLAUDE_CODE_EXECPATH CLAUDE_PID"
 _orch_env() { local v out="env"; for v in $ORCH_STRIP; do out="$out -u $v"; done; printf '%s' "$out"; }
 
+# The HARNESS dial (trantor autonomy). "bypass" is what the operator means by letting the agent
+# just work; "prompt" is the default because a fresh install must never silently skip a permission
+# the operator has not chosen to skip. Read per open, so changing it in the app takes effect the
+# next time the session is started rather than needing a reinstall.
+_orch_flags() {
+  local mode
+  mode="$(node "$(dirname "$0")/autonomy.mjs" get harness --project "$PROJ" 2>/dev/null)"
+  [ "$mode" = "bypass" ] && printf ' --dangerously-skip-permissions'
+}
+
 # Resume when the conversation already exists on disk; otherwise start it under the id we picked so
 # the NEXT open can resume it.
 _orch_cmd() {   # $1=dir $2=sid
-  if [ -f "$(_orch_transcript "$1" "$2")" ]; then printf '%s claude --resume %s' "$(_orch_env)" "$2"
-  else printf '%s claude --session-id %s' "$(_orch_env)" "$2"; fi
+  if [ -f "$(_orch_transcript "$1" "$2")" ]; then printf '%s claude%s --resume %s' "$(_orch_env)" "$(_orch_flags)" "$2"
+  else printf '%s claude%s --session-id %s' "$(_orch_env)" "$(_orch_flags)" "$2"; fi
 }
 
 # Does herdr see a LIVE agent in this pane? A pane answering `rename` only proves the pane exists;

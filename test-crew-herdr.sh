@@ -293,6 +293,18 @@ OUT19c="$(cd "$TMP/proj" && HOME="$TMP" PATH="$TMP/fakebin:$PATH" RELAY_PROJECT=
 ok "a LIVE orchestrator is reattached, never restarted" '! grep -q "pane run" "$TMP/herdr.log"'
 ok "…and still reports the same target" '[ "$OUT19c" = "$OUT19" ]'
 
+# 20. the HARNESS dial reaches the pane. A setting nobody can observe is not a setting, and this
+#     one decides whether the operator's own session skips permission prompts.
+echo ""
+echo "The harness dial decides what claude the pane runs:"
+echo 0 > "$TMP/herdr.n"; rm -f "$TMP/herdr.log" "$TMP/herdr.agents"; seed ""
+OUT20="$(cd "$TMP/proj" && CREW_MUX=herdr CREW_DRY_RUN=1 HOME="$TMP" PATH="$TMP/fakebin:$PATH" RELAY_PROJECT=testproj bash "$ROOT/bin/crew.sh" open </dev/null 2>&1)"
+ok "a fresh install does NOT skip permissions" '! echo "$OUT20" | grep -q "dangerously-skip-permissions"'
+printf '{"defaults":{"harness":"bypass"}}' > "$TMP/.agent-bus/autonomy.json"
+OUT20b="$(cd "$TMP/proj" && CREW_MUX=herdr CREW_DRY_RUN=1 HOME="$TMP" PATH="$TMP/fakebin:$PATH" RELAY_PROJECT=testproj bash "$ROOT/bin/crew.sh" open </dev/null 2>&1)"
+ok "turning the dial to bypass reaches the pane's command" 'echo "$OUT20b" | grep -q "claude --dangerously-skip-permissions"'
+rm -f "$TMP/.agent-bus/autonomy.json"
+
 echo ""
 if [ "$FAIL" = "0" ]; then echo "ALL PASS ($PASS)"; else echo "$FAIL FAILED"; fi
 exit $([ "$FAIL" = "0" ] && echo 0 || echo 1)
