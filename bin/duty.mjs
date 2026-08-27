@@ -116,6 +116,47 @@ function alivePid() {
   return 0;
 }
 
+// The cmux workspace this seat owns. One name, so `up` can find and replace its predecessor and
+// `down` can take the surface away with the process.
+const CMUX_WS_NAME = "trantor-duty";
+
+// Surface override, same variable and same values bin/crew.sh already uses for crew seats:
+//   CREW_MUX=terminal  force a Terminal window (what the window-content drills assert on)
+//   CREW_MUX=cmux      require cmux
+//   unset / anything else = auto: cmux when it answers, Terminal otherwise.
+const SURFACE = String(process.env.CREW_MUX || "auto").toLowerCase();
+
+function cmuxBinary() {
+  if (SURFACE === "terminal") return "";
+  for (const c of ["cmux", "/Applications/cmux.app/Contents/Resources/bin/cmux"]) {
+    try { execSync(`${c} ping`, { stdio: "ignore", timeout: 3000 }); return c; } catch {}
+  }
+  return "";
+}
+
+/** Close every workspace this seat owns. No-op when cmux is absent or its socket is off. */
+function closeDutyWorkspace() {
+  const bin = cmuxBinary();
+  if (!bin) return 0;
+  let closed = 0;
+  try {
+    const listed = JSON.parse(execSync(`${bin} workspace list --id-format both --json`,
+      { encoding: "utf8", timeout: 5000, env: { ...process.env, CMUX_QUIET: "1" } }));
+    for (const w of listed.workspaces || []) {
+      const title = w.custom_title || w.title || "";
+      // Title AND directory. Matching on title alone makes this global: a duty instance running
+      // with a temp HOME (which is exactly what test-duty-seat.mjs does) would close the REAL
+      // seat's workspace and take the production seat down with it. That happened once, on
+      // 2026-08-26, and the operator found their duty agent simply gone. Only ever close a
+      // workspace that belongs to THIS seat's bus directory.
+      if (title === CMUX_WS_NAME && w.id && w.current_directory === DIR) {
+        try { execSync(`${bin} close-workspace --workspace ${w.id}`, { stdio: "ignore", timeout: 5000 }); closed++; } catch {}
+      }
+    }
+  } catch {}
+  return closed;
+}
+
 if (cmd === "up") {
   const hub = fleetHub();
   mkdirSync(DIR, { recursive: true });
@@ -144,9 +185,35 @@ if (cmd === "up") {
     const exports = Object.entries(env).map(([k, v]) =>
       `export ${k}=$(cat <<'TRANTOR_${k}_EOF'\n${v}\nTRANTOR_${k}_EOF\n)`).join("\n");
     writeFileSync(launcher, `#!/bin/bash\n# written by \`trantor duty up\` — safe to delete when the seat is down\n${exports}\nexec ${JSON.stringify(process.execPath)} ${JSON.stringify(join(ROOT, "bin", "crew-runner.mjs"))} ${AGENT} ${JSON.stringify(DIR)}\n`, { mode: 0o700 });
-    const osa = `tell application "Terminal"\n  do script ${JSON.stringify(`bash ${launcher}`)}\n  activate\nend tell\n`;
-    try { execSync(`osascript -e ${JSON.stringify(osa)}`, { stdio: "ignore", timeout: 8000 }); }
-    catch (e) { console.error(`could not open a window (${e?.message || e}) — falling back to headless`); }
+    // PREFER CMUX. Terminal.app was the only surface here, and a plain window is stacking by
+    // construction: every `duty up` opens another one and nothing closes the last, so restarts
+    // accumulate windows that all look like live duty agents. cmux gives the seat ONE named
+    // workspace that gets REPLACED on each up — the same "replace, never stack" rule bin/crew.sh
+    // already applies to crew seats, which is why they never pile up and this did.
+    //
+    // Terminal remains the fallback: no cmux, or its control socket off, and nothing changes.
+    const cmuxBin = cmuxBinary();
+
+    let openedInCmux = false;
+    if (cmuxBin) {
+      try {
+        // Replace, never stack: take the previous duty workspace away before opening this one.
+        // Closing first is safe here (unlike a crew pane swap) — the seat is a single surface with
+        // nothing to preserve.
+        closeDutyWorkspace();
+        execSync(`${cmuxBin} new-workspace --name ${JSON.stringify(CMUX_WS_NAME)} --cwd ${JSON.stringify(DIR)} --command ${JSON.stringify(`bash ${launcher}`)} --focus false`,
+          { stdio: "ignore", timeout: 8000, env: { ...process.env, CMUX_QUIET: "1" } });
+        openedInCmux = true;
+      } catch (e) {
+        console.error(`cmux launch failed (${e?.message || e}) — falling back to a Terminal window`);
+      }
+    }
+
+    if (!openedInCmux) {
+      const osa = `tell application "Terminal"\n  do script ${JSON.stringify(`bash ${launcher}`)}\n  activate\nend tell\n`;
+      try { execSync(`osascript -e ${JSON.stringify(osa)}`, { stdio: "ignore", timeout: 8000 }); }
+      catch (e) { console.error(`could not open a window (${e?.message || e}) — falling back to headless`); }
+    }
     // The runner lives inside Terminal, so its pid is not ours to know: find it the same way `down`
     // does. Poll briefly, since Terminal takes a moment to start the shell.
     for (let i = 0; i < 25 && !pid; i++) {
@@ -163,7 +230,7 @@ if (cmd === "up") {
     pid = child.pid;
   }
   writeFileSync(PIDF, String(pid));
-  console.log(`— duty agent up: ${SESSION} (pid ${pid})${WINDOW ? " in a Terminal window" : " headless"} on ${DUTY_MODEL === "inherit" ? "the CLI default model" : DUTY_MODEL} watching ${hub} — log: ${LOGF}`);
+  console.log(`— duty agent up: ${SESSION} (pid ${pid})${WINDOW ? " in a window" : " headless"} on ${DUTY_MODEL === "inherit" ? "the CLI default model" : DUTY_MODEL} watching ${hub} — log: ${LOGF}`);
   const fed = await registerDutySeat(hub, SESSION);
   if (fed) console.log(`  hub feeds it: undelivered DMs (>${Math.round(Number(process.env.RELAY_DUTY_UNDELIVERED_MS || 600000) / 60000)}m) + overseer warnings.`);
   process.exit(0);   // the seat IS up; a hub that won't feed it is a warning, not a failed start
@@ -174,6 +241,10 @@ if (cmd === "down") {
   if (pid) { try { process.kill(pid); } catch {} console.log(`— duty seat stopped (pid ${pid}) —`); }
   else console.log("no duty seat running");
   try { execSync(`pkill -f "crew-runner.mjs ${AGENT} ${DIR}"`, { stdio: "ignore" }); } catch {}
+  // Close the seat's cmux workspace too. Killing the process leaves the surface behind, and a dead
+  // pane titled trantor-duty is indistinguishable from a live one at a glance — which is the exact
+  // confusion this whole change is about.
+  closeDutyWorkspace();
   try { rmSync(PIDF, { force: true }); } catch {}
   // Clear the hub's pointer too — escalations aimed at a seat that no longer exists are messages
   // sent into a hole, and the hub has no other way to learn the seat went away.

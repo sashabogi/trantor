@@ -326,7 +326,18 @@ function runTurn(prompt, isFirst, trigger = "kickoff") {
   const inner = cli.sid ? `${cmd} | tee /dev/stderr` : `${cmd} | tee -a ${ERRF}`;
   const r = spawnSync("/bin/bash", ["-c", `set -o pipefail; { ${inner} ; } 2> >(tee -a ${ERRF} >&2)`], {
     cwd: DIR, encoding: "utf8", stdio: cli.sid ? ["ignore", "pipe", "inherit"] : "inherit",
-    env: { ...process.env, RELAY_URL: HUB, RELAY_AGENT: AGENT, RELAY_PROJECT: PROJ },
+    env: { ...process.env, RELAY_URL: HUB, RELAY_AGENT: AGENT, RELAY_PROJECT: PROJ,
+      // A RUNNER-MANAGED SEAT MUST NEVER HAND ITSELF A BATON.
+      //
+      // The handoff machinery exists for an INTERACTIVE session: near its context limit it writes a
+      // handoff and opens a fresh window to carry on. A seat has no use for that — the runner is its
+      // lifecycle manager and wakes it per event — so the spawn just leaks an unmanaged interactive
+      // session into a window nobody asked for.
+      //
+      // Observed on the duty seat: handoff records at 17:24 and 18:59 on 2026-08-24, and two stray
+      // `claude` processes in ~/.agent-bus/trantor-duty started at 17:24:57 and 18:59:50, still
+      // sitting there days later. To the operator that reads as "why are there two duty agents".
+      TRANTOR_NO_HANDOFF_SPAWN: "1", TRANTOR_NO_BATON_SPAWN: "1" },
     maxBuffer: 16 * 1024 * 1024,
   });
   try { lastErrText = readFileSync(ERRF, "utf8").slice(-4000); } catch { lastErrText = ""; }

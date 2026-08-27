@@ -56,8 +56,13 @@ async function dutyUp(extraArgs = [], extraEnv = {}) {
   const r = await new Promise((resolve) => {
     const kid = spawn(process.execPath, [join(ROOT, "bin", "duty.mjs"), "up", "--hub", HUB, ...extraArgs], {
       stdio: ["ignore", "pipe", "pipe"],
+      // Pin the surface to Terminal. These drills assert on the WINDOW the seat opens — its title,
+      // what it says about itself — by stubbing osascript on PATH. Since 0.18.7 the seat prefers
+      // cmux when one answers, so on a machine with cmux installed every one of those assertions
+      // would test nothing and fail. CREW_MUX is the same override bin/crew.sh uses.
+      // The cmux path has its own drill below.
       env: { ...process.env, HOME: w, AGENT_BUS_DIR: BUS, PATH: `${fakebin}:${process.env.PATH}`,
-             RELAY_URL: HUB, TRANTOR_NO_UPDATE_CHECK: "1", ...extraEnv },
+             RELAY_URL: HUB, TRANTOR_NO_UPDATE_CHECK: "1", CREW_MUX: "terminal", ...extraEnv },
     });
     let so = "", se = "";
     kid.stdout.on("data", d => (so += d)); kid.stderr.on("data", d => (se += d));
