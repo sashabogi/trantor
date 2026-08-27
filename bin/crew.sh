@@ -182,6 +182,14 @@ console.log("\u0001"+a.map(x=>x.label||x.name||x.custom_title||"").filter(Boolea
 # Teardown works regardless of CREW_MUX: you must never need to remember the flag to tear a crew down.
 _herdr_close_ws()   { [ "$DRY" = "1" ] && { echo "[dry] herdr workspace close $1"; return 0; }; _herdr workspace close "$1" >/dev/null 2>&1; }
 _herdr_close_pane() { [ "$DRY" = "1" ] && { echo "[dry] herdr pane close $1";    return 0; }; _herdr pane close    "$1" >/dev/null 2>&1; }
+# Tell herdr a pane hosts an agent. WITHOUT this the pane is just a shell to herdr, `herdr agent
+# attach` answers agent_not_found, and the app's terminal shows that error instead of the seat —
+# observed 2026-08-27 on every seat while the orchestrator (claude, which herdr detects on its own)
+# streamed fine. NOTE the argument order: the pane id must come FIRST, before the flags.
+_herdr_report_agent() {   # $1=pane $2=agent-label
+  [ "$DRY" = "1" ] && { echo "[dry] herdr pane report-agent $1 --source crew --agent $2 --state working"; return 0; }
+  _herdr pane report-agent "$1" --source crew --agent "$2" --state working >/dev/null 2>&1
+}
 
 # ── herdr spawn: ONE workspace `trantor:$PROJ`, one named pane per seat ─────────────────────────────
 # Topology = workspace create (its root pane runs seat 1) + pane split for the rest, same ceil(√N) grid
@@ -279,6 +287,9 @@ spawn_herdr() {   # $@ = specs
         [ -n "$surf" ] && { _herdr pane rename "$surf" "$AGENT · $PROJ" >/dev/null 2>&1; _herdr pane run "$surf" "$cmd" >/dev/null 2>&1; }
       fi
     fi
+    # Every path, dry included: herdr must know this pane hosts an agent or `agent attach` — which
+    # is how the app streams it — answers agent_not_found and the seat renders as an error.
+    [ -n "$surf" ] && _herdr_report_agent "$surf" "$AGENT"
     surfs+=("$surf")
     record_state "$PROJ" "herdr" "$AGENT" "$surf"
     echo "  → $AGENT seat in herdr workspace ($PROJ)"

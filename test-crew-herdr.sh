@@ -97,6 +97,9 @@ ok "announces the herdr grouping UI" 'echo "$OUT4" | grep -q "bringing up crew f
 ok "creates ONE workspace labeled trantor:<project>" 'echo "$OUT4" | grep -q "herdr: workspace create (cwd" && echo "$OUT4" | grep -q "trantor:testproj"'
 ok "seat 2 arrives via a RIGHT split off seat 1" 'echo "$OUT4" | grep -q "pane split %DRYT0 --direction right"'
 ok "two seats spawned" '[ "$(echo "$OUT4" | grep -c "seat in herdr workspace")" = "2" ]'
+# Without report-agent the pane is only a shell to herdr, `herdr agent attach` answers
+# agent_not_found, and the app renders that error where the seat should be.
+ok "each seat is reported to herdr as an agent (pane id FIRST, then flags)" 'echo "$OUT4" | grep -q "report-agent %DRYT0 --source crew --agent codex --state working"'
 ok "the runner command rides pane run, hub binding baked in" 'echo "$OUT4" | grep -q "crew-runner\.mjs codex" && echo "$OUT4" | grep -q "RELAY_URL=http://10.7.7.7:4477"'
 ok "herdr spawn summary names the workspace + scoped teardown" 'echo "$OUT4" | grep -q "crew grouped in herdr"'
 ok "dry spawn does no bus verify" 'echo "$OUT4" | grep -q "dry run: no bus verify"'
