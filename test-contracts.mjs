@@ -294,6 +294,63 @@ await post2("/send", { from: DEAD, to: O, project: PROJ2, text: "✅ ortho done 
     o.decision !== "block", (o.reason || out || "").slice(0, 200));
 }
 
+// ---- superseded: an alive seat that moved on must not strand a row forever -------------------
+// The bug this drills, from production (#10573): a courtesy send to a seat that then restarted.
+// The seat came back HEALTHY and answered every later contract with an explicit `re`, so the row
+// could never be answered (nothing untagged ever reached the loose-reply fallback) and could never
+// be abandoned (`abandoned` keys on the assignee being GONE). It blocked the dispatcher's stop hook
+// every turn across two consecutive sessions. It must reach a terminal state on its own.
+console.log("\nA row an alive seat has moved on from is settled, not nagged forever:");
+{
+  const SUP = "kimi:life";
+  await post2("/register", { session: SUP, project: PROJ2, status: "working" });
+  const stranded = await post2("/send", { from: O, to: SUP, project: PROJ2, text: "courtesy: verified my side, nothing needed from you" });
+
+  // Age the row past the abandon window while the seat stays demonstrably ALIVE — that pairing is
+  // the whole bug. Re-registering inside the loop is the heartbeat.
+  for (let i = 0; i < 6; i++) { await sleep(550); await post2("/register", { session: SUP, project: PROJ2, status: "working" }); }
+
+  const realJob = await post2("/send", { from: O, to: SUP, project: PROJ2, text: "the actual job: port the cardio ruleset" });
+  await post2("/send", { from: SUP, to: O, project: PROJ2, text: "✅ done (exit 0)", re: realJob.id });
+  await post2("/register", { session: SUP, project: PROJ2, status: "working" });
+
+  const r = await ctr2(O);
+  const open = Object.fromEntries((r.contracts || []).map(c => [c.id, c]));
+  const sup = Object.fromEntries((r.supersededContracts || []).map(c => [c.id, c]));
+  ok("the stranded row leaves `contracts`, so a PINNED older stop hook stops blocking on it",
+    open[stranded.id] === undefined, JSON.stringify(open[stranded.id] || {}).slice(0, 160));
+  ok("…and rides in `supersededContracts`, so the ledger still shows it",
+    sup[stranded.id]?.disposition === "superseded", JSON.stringify(r.supersededContracts || []).slice(0, 200));
+  ok("the assignee is reported ALIVE — this is not abandonment wearing a new name",
+    sup[stranded.id]?.assigneeOnline === true, `online=${sup[stranded.id]?.assigneeOnline}`);
+  ok("the newer contract it moved on to is still answered", open[realJob.id]?.answered === true);
+
+  // and the guard must not block on it
+  const { writeFileSync } = await import("node:fs");
+  const w3 = mkdtempSync(join(tmpdir(), "trantor-supstop-"));
+  const BUS3 = join(w3, "bus"); mkdirSync(BUS3, { recursive: true });
+  const repo3 = join(w3, "life"); mkdirSync(repo3, { recursive: true });
+  const { spawnSync: sp3 } = await import("node:child_process");
+  sp3("git", ["init", "-q"], { cwd: repo3 });
+  writeFileSync(join(BUS3, "config.json"), JSON.stringify({ url: BASE2, hubs: { life: BASE2 } }));
+  await get2(`/inbox?session=${encodeURIComponent(O)}`);   // consuming read: unread mail would block for another reason
+  const so = await new Promise((resolve) => {
+    const kid = spawn(process.execPath, [join(ROOT, "hooks", "stop-inbox.mjs")], {
+      cwd: ROOT, stdio: ["pipe", "pipe", "pipe"],
+      env: { ...process.env, AGENT_BUS_DIR: BUS3, CLAUDE_PROJECT_DIR: repo3, RELAY_HOST_ID: "host",
+             RELAY_SESSION: O, RELAY_PROJECT: PROJ2, RELAY_URL: BASE2,
+             TRANTOR_CONTRACT_OVERDUE_MS: "0" },
+    });
+    let b = ""; kid.stdout.on("data", d => (b += d));
+    kid.on("close", () => resolve(b));
+    kid.stdin.end(JSON.stringify({ session_id: "sup-stop-1", cwd: repo3, stop_hook_active: false }));
+    setTimeout(() => { try { kid.kill("SIGKILL"); } catch {} }, 15000).unref?.();
+  });
+  let o = {}; try { o = JSON.parse(so || "{}"); } catch {}
+  const blockedOnIt = o.decision === "block" && new RegExp(String(stranded.id)).test(o.reason || "");
+  ok("the stop guard does NOT block on the superseded row", !blockedOnIt, (o.reason || so || "").slice(0, 220));
+}
+
 hub2.kill("SIGKILL");
 hub.kill("SIGKILL");
 console.log(`\n${fail === 0 ? "✅" : "❌"} contracts: ${pass} passed, ${fail} failed`);

@@ -721,6 +721,29 @@ function contractsFor(session, { project = "", windowMs = CONTRACT_WINDOW_MS, ov
       reaped: reaped ? { ts: reaped.ts, reason: reaped.reason } : null,
     });
   }
+
+  // ---- superseded: the terminal state for a row nobody will ever answer ------------------------
+  // `abandoned` keys on the ASSIGNEE being gone, so a permanently HEALTHY seat could strand a
+  // contract forever: it can never be answered (that seat's replies all carry `re` for other
+  // contracts, so the loose-reply fallback above never claims this one) and it can never be
+  // abandoned (the seat is alive). The row then blocks its dispatcher's stop hook every single
+  // turn, for days — observed on #10573 across two consecutive sessions.
+  //
+  // TWO signals must agree, because either alone is wrong. "The peer answered something newer" on
+  // its own would punish honest out-of-order completion — a seat handed three jobs may finish the
+  // third first and still be working the second, which is a real pattern this suite already drills.
+  // Age on its own would punish a seat legitimately grinding one long job. Together they are only
+  // true when the assignee is alive, has moved on to later work, AND the row has sat unanswered
+  // past the window in which any genuine in-flight job would have reported.
+  const newestAnswered = new Map();
+  for (const c of out) {
+    if (c.answered && c.ts > (newestAnswered.get(c.to) || 0)) newestAnswered.set(c.to, c.ts);
+  }
+  for (const c of out) {
+    if (c.answered || c.disposition === "abandoned") continue;
+    if (c.ageMs < CONTRACT_ABANDON_MS) continue;
+    if (c.ts < (newestAnswered.get(c.to) || 0)) c.disposition = "superseded";
+  }
   return out;
 }
 
@@ -2472,11 +2495,16 @@ const server = http.createServer(async (req, res) => {
       // reached sessions that restarted, and a live one nagged its operator every single turn.
       // Splitting them out fixes every running session the moment the hub redeploys, and the ledger
       // still shows what died via `abandonedContracts`.
-      const out = all.filter(c => c.disposition !== "abandoned");
+      // `superseded` leaves `contracts` for exactly the reason `abandoned` does: a session's hooks
+      // are PINNED at session start, so an older stop hook filters this array with its own
+      // predicate and would keep blocking on a row the hub has already settled.
+      const out = all.filter(c => c.disposition !== "abandoned" && c.disposition !== "superseded");
       return json(res, 200, {
         session, contracts: out, abandonedContracts: all.filter(c => c.disposition === "abandoned"),
+        supersededContracts: all.filter(c => c.disposition === "superseded"),
         open: out.filter(c => !c.answered).length,
-        waiting: by("waiting"), stalled: by("stalled"), abandoned: by("abandoned"), answered: by("answered"),
+        waiting: by("waiting"), stalled: by("stalled"), abandoned: by("abandoned"),
+        superseded: by("superseded"), answered: by("answered"),
       });
     }
 

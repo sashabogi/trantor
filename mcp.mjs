@@ -136,21 +136,23 @@ server.tool("relay_whoami", "Show this session's relay identity, project, hub UR
   return { content: [{ type: "text", text }] };
 });
 
-server.tool("relay_contracts", "What you dispatched and are still owed. Lists every DIRECT message you sent to another session, with how long it has been outstanding, whether that session is still alive, and its last known status. Each one carries a disposition: WAITING (assignee alive and working — normal), STALLED (assignee offline or overdue — poke it, swap it, or reassign), ABANDONED (assignee gone so long the contract can never be answered — the work needs reassigning, nobody is coming back), or answered, with the outcome text. Call this before concluding a crew is idle, stuck, or done — silence on the bus is not evidence either way.", {},
+server.tool("relay_contracts", "What you dispatched and are still owed. Lists every DIRECT message you sent to another session, with how long it has been outstanding, whether that session is still alive, and its last known status. Each one carries a disposition: WAITING (assignee alive and working — normal), STALLED (assignee offline or overdue — poke it, swap it, or reassign), ABANDONED (assignee gone so long the contract can never be answered — the work needs reassigning, nobody is coming back), SUPERSEDED (the assignee is alive and has since answered a NEWER contract from you, so this row was never going to be answered — no action needed), or answered, with the outcome text. Call this before concluding a crew is idle, stuck, or done — silence on the bus is not evidence either way.", {},
   async () => {
     let r;
     try { r = await api("GET", `/contracts?session=${encodeURIComponent(SESSION)}&project=${encodeURIComponent(PROJECT)}`); }
     catch (e) { return { content: [{ type: "text", text: `could not reach the hub: ${e?.message || e}` }] }; }
     // The hub keeps abandoned contracts in their own key so older stop hooks stop blocking on them.
     // The ledger still wants to SHOW them, so put the two halves back together here.
-    const all = [...(r?.contracts || []), ...(r?.abandonedContracts || [])].sort((a, b) => a.ts - b.ts);
+    const all = [...(r?.contracts || []), ...(r?.abandonedContracts || []), ...(r?.supersededContracts || [])]
+      .sort((a, b) => a.ts - b.ts);
     if (!all.length) return { content: [{ type: "text", text: "You have not dispatched any contracts in the last 24h." }] };
     // Fall back to the pre-disposition shape when talking to an older hub.
     const disp = (c) => c.disposition || (c.answered ? "answered" : (c.assigneeOnline ? "waiting" : "stalled"));
     const open = all.filter(c => disp(c) === "waiting" || disp(c) === "stalled");
     const abandoned = all.filter(c => disp(c) === "abandoned");
+    const superseded = all.filter(c => disp(c) === "superseded");
     const mins = (ms) => (ms >= 60000 ? `${Math.round(ms / 60000)}m` : `${Math.round(ms / 1000)}s`);
-    const MARK = { answered: "✅", waiting: "⏳", stalled: "⚠️", abandoned: "🪦" };
+    const MARK = { answered: "✅", waiting: "⏳", stalled: "⚠️", abandoned: "🪦", superseded: "⤳" };
     const line = (c) => {
       const d = disp(c);
       const health = d === "answered" ? "" :
@@ -168,8 +170,12 @@ server.tool("relay_contracts", "What you dispatched and are still owed. Lists ev
     if (abandoned.length) {
       notes.push(`🪦 ${abandoned.length} ABANDONED: the assignee has been gone too long for these to ever be answered. Nobody is coming back — reassign the work or drop it deliberately.`);
     }
+    if (superseded.length) {
+      notes.push(`⤳ ${superseded.length} SUPERSEDED: the assignee is alive and has since answered a newer contract from you, so these were never going to be answered. Nothing is owed — do not chase them.`);
+    }
     const text = `${open.length} outstanding of ${all.length} contract(s) in the last 24h`
-      + (abandoned.length ? ` (plus ${abandoned.length} abandoned)` : "") + `:\n`
+      + (abandoned.length ? ` (plus ${abandoned.length} abandoned)` : "")
+      + (superseded.length ? ` (plus ${superseded.length} superseded)` : "") + `:\n`
       + all.slice(-25).map(line).join("\n")
       + (notes.length ? "\n\n" + notes.join("\n") : "");
     return { content: [{ type: "text", text }] };
