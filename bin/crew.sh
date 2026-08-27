@@ -211,11 +211,23 @@ _orch_sid() {   # $1=project → the project's session uuid, minting one on firs
 # is the working directory with every / and . turned into -.
 _orch_transcript() { printf '%s' "$HOME/.claude/projects/$(printf '%s' "$1" | tr '/.' '--')/$2.jsonl"; }
 
+# A herdr server started from inside a Claude Code session hands its whole environment to every
+# pane it later spawns, and those markers are session-scoped, not machine-scoped. The damage is
+# quiet and total: claude sees CLAUDE_CODE_CHILD_SESSION, decides it is a sub-session and TURNS
+# TRANSCRIPT SAVING OFF — so --resume would have nothing to resume and the persistence above would
+# be theatre. CLAUDE_CODE_MESSAGING_SOCKET/TOKEN are worse: they point the new session at the
+# ORIGINATING session's socket, which is how a fresh pane ends up claiming another session's baton.
+#
+# Feature flags the operator actually set (AGENT_TEAMS, FORK_SUBAGENT, EFFORT) are deliberately
+# left alone. Only identity is stripped.
+ORCH_STRIP="CLAUDECODE CLAUDE_CODE_ENTRYPOINT CLAUDE_CODE_SESSION_ID CLAUDE_CODE_CHILD_SESSION CLAUDE_CODE_BRIDGE_SESSION_ID CLAUDE_CODE_MESSAGING_SOCKET CLAUDE_CODE_MESSAGING_TOKEN CLAUDE_CODE_EXECPATH CLAUDE_PID"
+_orch_env() { local v out="env"; for v in $ORCH_STRIP; do out="$out -u $v"; done; printf '%s' "$out"; }
+
 # Resume when the conversation already exists on disk; otherwise start it under the id we picked so
 # the NEXT open can resume it.
 _orch_cmd() {   # $1=dir $2=sid
-  if [ -f "$(_orch_transcript "$1" "$2")" ]; then printf 'claude --resume %s' "$2"
-  else printf 'claude --session-id %s' "$2"; fi
+  if [ -f "$(_orch_transcript "$1" "$2")" ]; then printf '%s claude --resume %s' "$(_orch_env)" "$2"
+  else printf '%s claude --session-id %s' "$(_orch_env)" "$2"; fi
 }
 
 # Does herdr see a LIVE agent in this pane? A pane answering `rename` only proves the pane exists;

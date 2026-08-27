@@ -210,7 +210,7 @@ ok "herdr-less open records no state" '[ "$(rows)" = "0" ]'
 echo 0 > "$TMP/herdr.n"; rm -f "$TMP/herdr.log"; seed ""
 OUT16="$(cd "$TMP/proj" && HOME="$TMP" PATH="$TMP/fakebin:$PATH" RELAY_PROJECT=testproj CREW_NO_PROC_KILL=1 bash "$ROOT/bin/crew.sh" open </dev/null 2>/dev/null)"
 ok "real open creates the crew workspace and prints its target" '[ "$OUT16" = "herdr:WS-1/P-1" ]'
-ok "the orchestrator pane runs claude via pane run" 'grep -q "herdr pane run P-1 claude" "$TMP/herdr.log"'
+ok "the orchestrator pane runs claude via pane run" 'grep -qE "herdr pane run P-1 env .* claude" "$TMP/herdr.log"'
 ok "the workspace is created in the project dir" 'grep -q "workspace create --cwd $TMP/proj --label trantor:testproj" "$TMP/herdr.log"'
 ok "real open records the orch row" 'has_row "testproj	orch	__orch__	P-1"'
 # ...and a second REAL open reattaches: no second create, no second claude
@@ -226,7 +226,7 @@ echo 0 > "$TMP/herdr.n"; rm -f "$TMP/herdr.log"
 seed "testproj	herdrws	__ws__	WS-9\ntestproj	orch	__orch__	P-DEAD\n"
 OUT17="$(cd "$TMP/proj" && HOME="$TMP" PATH="$TMP/fakebin:$PATH" RELAY_PROJECT=testproj HERDR_LIVE_WS='{"workspace_id":"WS-9","label":"trantor:testproj"}' CREW_NO_PROC_KILL=1 bash "$ROOT/bin/crew.sh" open </dev/null 2>/dev/null)"
 ok "stale orch pane is healed onto a fresh split (no re-stack of the dead one)" '[ "$OUT17" = "herdr:WS-9/P-1" ]'
-ok "the healed pane runs claude" 'grep -q "herdr pane run P-1 claude" "$TMP/herdr.log"'
+ok "the healed pane runs claude" 'grep -qE "herdr pane run P-1 env .* claude" "$TMP/herdr.log"'
 ok "the stale orch row is replaced, not duplicated" 'has_row "testproj	orch	__orch__	P-1" && ! has_row "P-DEAD"'
 ok "the live tracked workspace was reused, not recreated" '! grep -q "workspace create" "$TMP/herdr.log"'
 
@@ -266,17 +266,22 @@ echo ""
 echo "The pane can die; the conversation should not:"
 echo 0 > "$TMP/herdr.n"; rm -f "$TMP/herdr.log" "$TMP/herdr.agents"; seed ""
 OUT19="$(cd "$TMP/proj" && HOME="$TMP" PATH="$TMP/fakebin:$PATH" RELAY_PROJECT=testproj CREW_NO_PROC_KILL=1 bash "$ROOT/bin/crew.sh" open </dev/null 2>/dev/null)"
-ok "a first open starts claude under an id WE chose" 'grep -qE "pane run P-1 claude --session-id [0-9a-f-]{36}" "$TMP/herdr.log"'
+ok "a first open starts claude under an id WE chose" 'grep -qE "pane run P-1 env .* claude --session-id [0-9a-f-]{36}" "$TMP/herdr.log"'
+# A herdr server started from inside a Claude session poisons every pane it spawns: the child
+# marker turns transcript saving OFF, so --resume would have nothing to resume, and the
+# messaging socket points the new session at the originating one's baton.
+ok "the inherited child-session marker is stripped" 'grep -q "pane run P-1 env .*-u CLAUDE_CODE_CHILD_SESSION" "$TMP/herdr.log"'
+ok "…and so is the socket that would steal another session's baton" 'grep -q "pane run P-1 env .*-u CLAUDE_CODE_MESSAGING_SOCKET" "$TMP/herdr.log"'
 ok "the id is recorded against the project" 'grep -q "^testproj	" "$TMP/.agent-bus/orch-sessions.txt" 2>/dev/null'
 SID19="$(cut -f2 < "$TMP/.agent-bus/orch-sessions.txt" 2>/dev/null | head -1)"
-ok "the recorded id is the one claude was given" 'grep -q "pane run P-1 claude --session-id $SID19" "$TMP/herdr.log"'
+ok "the recorded id is the one claude was given" 'grep -q "claude --session-id $SID19" "$TMP/herdr.log"'
 
 # the pane outlives its claude: herdr still answers rename, but nothing is running in it
 rm -f "$TMP/herdr.log" "$TMP/herdr.agents"
 SLUG19="$(printf '%s' "$TMP/proj" | tr '/.' '--')"
 mkdir -p "$TMP/.claude/projects/$SLUG19"; : > "$TMP/.claude/projects/$SLUG19/$SID19.jsonl"
 OUT19b="$(cd "$TMP/proj" && HOME="$TMP" PATH="$TMP/fakebin:$PATH" RELAY_PROJECT=testproj CREW_NO_PROC_KILL=1 bash "$ROOT/bin/crew.sh" open </dev/null 2>/dev/null)"
-ok "an empty pane is refilled by RESUMING the conversation" 'grep -q "pane run P-1 claude --resume $SID19" "$TMP/herdr.log"'
+ok "an empty pane is refilled by RESUMING the conversation" 'grep -q "pane run P-1 env .* claude --resume $SID19" "$TMP/herdr.log"'
 ok "…in the same pane, with no second workspace" '! grep -q "workspace create" "$TMP/herdr.log"'
 ok "…and the project still has exactly one orch row" '[ "$(grep -c "	orch	" "$STATE")" = "1" ]'
 ok "…and it mints no second session id" '[ "$(wc -l < "$TMP/.agent-bus/orch-sessions.txt")" -eq 1 ]'
