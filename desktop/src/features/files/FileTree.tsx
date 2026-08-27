@@ -41,8 +41,11 @@ function Row({ entry, depth, project }: { entry: FileEntry; depth: number; proje
           ? <Folder size={12} strokeWidth={1.75} className="shrink-0 opacity-70" />
           : <FileIcon size={12} strokeWidth={1.75} className="shrink-0 opacity-70" />}
         <span className="min-w-0 flex-1 truncate" style={color ? { color } : undefined}>{entry.name}</span>
+        {/* The WORD, never git's code. "??" is porcelain's way of saying untracked, which means
+            nothing to someone watching their crew work — and showing an internal id where a name
+            belongs is exactly the habit this codebase bans elsewhere. */}
         {entry.status && (
-          <span className="tr-mono shrink-0 text-[10px]" style={{ color }}>{entry.status}</span>
+          <span className="shrink-0 text-[10px]" style={{ color }}>{statusLabel(entry.status)}</span>
         )}
       </button>
       {open && kids?.map(k => <Row key={k.path} entry={k} depth={depth + 1} project={project} />)}

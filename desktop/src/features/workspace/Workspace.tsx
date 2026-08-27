@@ -144,7 +144,10 @@ export function Workspace({ client, project, lens, onLens }: {
             {targets.map(t => (
               <button
                 key={t.key}
-                onClick={() => setSel(t.key)}
+                // The orchestrator is not in the grid — it is the operator, not a seat to watch.
+                // Selecting it therefore has to leave grid, or the click silently does nothing and
+                // you have to work out that "focus" is the way back.
+                onClick={() => { setSel(t.key); if (t.isOrchestrator) setViewPersisted("focus"); }}
                 data-on={selected?.key === t.key}
                 className="flex items-center gap-2 rounded-[9px] px-3 py-[7px] text-[12.5px] font-medium text-tr-muted data-[on=true]:bg-tr-panel data-[on=true]:text-tr-text data-[on=true]:shadow-sm"
               >
