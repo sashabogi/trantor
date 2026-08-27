@@ -9,7 +9,7 @@
 // agent arrives it RESUMES the CLI session (native resume = full context kept) with that
 // message as the prompt. The model just works and ends its turn; the runner does the rest.
 import { execSync, spawnSync } from "node:child_process";
-import { readFileSync, writeFileSync, unlinkSync, existsSync, appendFileSync } from "node:fs";
+import { readFileSync, writeFileSync, unlinkSync, existsSync, appendFileSync, mkdirSync } from "node:fs";
 import { join, basename } from "node:path";
 import { homedir } from "node:os";
 import { resolveProject, resolveHub, withEnvFiles } from "../lib/project.mjs";
@@ -24,6 +24,41 @@ const DIR = process.argv[3] || process.cwd();
 // back to the git-repo-root basename — never a loose dir basename that could
 // fork the host's "builtbetter.ai" into a separate "builtbetter" lane.
 const PROJ = process.env.RELAY_PROJECT || resolveProject(DIR);
+
+function safePathSegment(s) {
+  return String(s).replace(/\.{2,}/g, "_").replace(/[^A-Za-z0-9_.-]/g, "_");
+}
+
+function gitOut(args, cwd = DIR) {
+  const r = spawnSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], timeout: 8000 });
+  return r.status === 0 ? String(r.stdout || "").trim() : "";
+}
+
+function ensureSeatWorktree(sourceDir) {
+  if (process.env.TRANTOR_NO_WORKTREE === "1") return sourceDir;
+  const root = gitOut(["-C", sourceDir, "rev-parse", "--show-toplevel"], sourceDir);
+  if (!root) return sourceDir;
+
+  spawnSync("git", ["-C", root, "worktree", "prune"], { stdio: "ignore", timeout: 8000 });
+  const seatDir = join(homedir(), ".agent-bus", "worktrees", safePathSegment(PROJ), safePathSegment(AGENT));
+  const branch = `seat/${AGENT}`;
+  if (existsSync(seatDir)) {
+    const ok = gitOut(["-C", seatDir, "rev-parse", "--is-inside-work-tree"], seatDir) === "true";
+    if (ok) return seatDir;
+    console.log(`\x1b[33m[runner]\x1b[0m worktree path exists but is not a git worktree: ${seatDir} — using ${sourceDir}`);
+    return sourceDir;
+  }
+
+  try { mkdirSync(join(homedir(), ".agent-bus", "worktrees", safePathSegment(PROJ)), { recursive: true }); } catch {}
+  const r = spawnSync("git", ["-C", root, "worktree", "add", "-B", branch, seatDir, "HEAD"], {
+    encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], timeout: 30000,
+  });
+  if (r.status === 0) return seatDir;
+  console.log(`\x1b[33m[runner]\x1b[0m could not create ${branch} worktree — using ${sourceDir}`);
+  return sourceDir;
+}
+
+const TURN_DIR = ensureSeatWorktree(DIR);
 // RUNNER_SESSION override: an orchestrator seat (bin/orchestrate.mjs) runs the same CLI as a crew
 // seat but must live on the bus under its own name (claude-orch:proj), or it would collide with a
 // plain claude crew seat on the same project.
@@ -53,7 +88,6 @@ process.on("uncaughtException", (e) => { console.log(`\x1b[31m[runner] UNCAUGHT:
 process.on("unhandledRejection", (e) => { console.log(`\x1b[31m[runner] UNHANDLED REJECTION: ${e?.stack || e}\x1b[0m`); });
 const log = (s) => console.log(`\x1b[38;5;43m[runner]\x1b[0m ${s}`);
 const LOGDIR = join(homedir(), ".agent-bus", "logs");
-import { mkdirSync } from "node:fs";
 try { mkdirSync(LOGDIR, { recursive: true }); } catch {}
 let TURN = 0;
 const telemetry = (rec) => { try { appendFileSync(join(LOGDIR, `${AGENT}-${PROJ}.jsonl`), JSON.stringify(rec) + "\n"); } catch {} };
@@ -278,7 +312,9 @@ async function notifyAssigners(pairs, text) {
     seen.add(f);
     // `re` threads this outcome to the exact contract it answers, so the sender's ledger closes the
     // right one instead of guessing from timing.
-    await api("/send", { from: SESSION, to: f, text: text.slice(0, 280), project: PROJ, ...(id ? { re: id } : {}) }).catch(() => {});
+    const payload = { from: SESSION, to: f, text: text.slice(0, 280), project: PROJ };
+    if (id) payload.re = id;
+    await api("/send", payload).catch(() => {});
   }
   if (seen.size) log(`reported outcome to ${[...seen].join(", ")}`);
 }
@@ -325,7 +361,7 @@ function runTurn(prompt, isFirst, trigger = "kickoff") {
   // substitution) so bash waits for tee to flush before we read the file back.
   const inner = cli.sid ? `${cmd} | tee /dev/stderr` : `${cmd} | tee -a ${ERRF}`;
   const r = spawnSync("/bin/bash", ["-c", `set -o pipefail; { ${inner} ; } 2> >(tee -a ${ERRF} >&2)`], {
-    cwd: DIR, encoding: "utf8", stdio: cli.sid ? ["ignore", "pipe", "inherit"] : "inherit",
+    cwd: TURN_DIR, encoding: "utf8", stdio: cli.sid ? ["ignore", "pipe", "inherit"] : "inherit",
     env: { ...process.env, RELAY_URL: HUB, RELAY_AGENT: AGENT, RELAY_PROJECT: PROJ,
       // A RUNNER-MANAGED SEAT MUST NEVER HAND ITSELF A BATON.
       //
