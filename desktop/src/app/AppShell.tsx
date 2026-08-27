@@ -28,6 +28,7 @@ import { Messages } from "../features/messages/Messages";
 import { Learning } from "../features/learning/Learning";
 import { Overseer } from "../features/overseer/Overseer";
 import { Settings } from "../features/settings/Settings";
+import { FileTree } from "../features/files/FileTree";
 import { Conversation } from "../features/chat/Conversation";
 import { notifyIfWorthIt } from "../shared/notify";
 
@@ -81,6 +82,10 @@ export function AppShell() {
   const [active, setActive] = useState<string>("");
   const [hub, setHub] = useState<string>("");
   const [pane, setPane] = useState<Pane>({ kind: "home" });
+  // Remembered, because whether you want the file tree open is a working preference, not a per-visit
+  // decision. Defaults OPEN: the tree is the reason the section exists.
+  const [filesOpen, setFilesOpen] = useState<boolean>(() => localStorage.getItem("trantor.files.open") !== "0");
+  useEffect(() => { try { localStorage.setItem("trantor.files.open", filesOpen ? "1" : "0"); } catch { /* private mode */ } }, [filesOpen]);
 
   // Pinned projects PLUS whatever lives on the machine-local hub. A brand-new project has no
   // routing pin yet — it falls back to the local hub BY DESIGN (TDD §12.1's default), and a
@@ -308,6 +313,22 @@ export function AppShell() {
         </div>
 
         <nav className="flex-1 overflow-y-auto">
+          {/* Inside a project, its FILES lead the sidebar. The audience for this app is a developer
+              who wants to see what the crew is touching without asking anyone, so the tree belongs
+              above the fleet's project list, not buried under it. */}
+          {pane.kind === "project" && active && (
+            <div className="mb-4">
+              <button
+                type="button"
+                onClick={() => setFilesOpen(o => !o)}
+                className="flex w-full items-center gap-1 px-3 pb-1 text-left"
+              >
+                <SectionLabel>{`Files · ${active}`}</SectionLabel>
+                <span className="ml-auto text-[11px] text-tr-muted">{filesOpen ? "hide" : "show"}</span>
+              </button>
+              {filesOpen && <FileTree project={active} />}
+            </div>
+          )}
           {activeProjects.length > 0 && (
             <div className="mb-4">
               <SectionLabel count={activeProjects.length}>Active now</SectionLabel>

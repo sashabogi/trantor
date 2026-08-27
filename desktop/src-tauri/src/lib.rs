@@ -184,6 +184,99 @@ fn project_dir(project: &str) -> Option<std::path::PathBuf> {
     }
 }
 
+/// One entry in the project's file tree. `status` carries git's porcelain code for the file, which
+/// is the whole point of showing a tree here: a legacy developer wants to watch WHICH files the
+/// agents are touching, not just that a repo exists.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+struct FileEntry {
+    name: String,
+    /// path relative to the project root, so the front end can ask for a subtree by the same key
+    path: String,
+    dir: bool,
+    /// "" when unchanged, else git's two-letter porcelain code trimmed ("M", "A", "??", "D")
+    status: String,
+}
+
+/// Directories that are output or vendored. Walking them is how a file tree turns into a hang: a
+/// single `node_modules` dwarfs the source it sits next to, and none of it is work an agent did.
+const TREE_SKIP: &[&str] = &[
+    ".git", "node_modules", "target", "dist", "build", ".next", ".turbo", "__pycache__", ".venv",
+];
+
+/// git status for the whole repo, as a map of relative path -> code. Read ONCE per tree request
+/// rather than per entry: `git status` on a large repo is the expensive part, and asking per file
+/// would make an O(n) tree into O(n) subprocesses.
+fn git_status_map(dir: &Path) -> std::collections::HashMap<String, String> {
+    let mut map = std::collections::HashMap::new();
+    let out = match std::process::Command::new("git")
+        .args(["status", "--porcelain=v1", "--untracked-files=normal"])
+        .current_dir(dir)
+        .output()
+    {
+        Ok(o) => o,
+        Err(_) => return map,
+    };
+    parse_status_porcelain(&String::from_utf8_lossy(&out.stdout))
+}
+
+fn parse_status_porcelain(raw: &str) -> std::collections::HashMap<String, String> {
+    let mut map = std::collections::HashMap::new();
+    for line in raw.lines() {
+        if line.len() < 4 {
+            continue;
+        }
+        let code = line[..2].trim().to_string();
+        let path = line[3..].trim();
+        // a rename reads "old -> new"; the new name is the one on disk
+        let path = path.rsplit(" -> ").next().unwrap_or(path).trim_matches('"');
+        // Mark every ancestor too, or a closed folder gives no hint that something inside it moved.
+        let mut acc = String::new();
+        for part in path.split('/') {
+            if !acc.is_empty() {
+                acc.push('/');
+            }
+            acc.push_str(part);
+            map.entry(acc.clone()).or_insert_with(|| code.clone());
+        }
+    }
+    map
+}
+
+/// One level of the project's tree. Lazy by design: the front end asks for a subtree when a folder
+/// opens, so a repo with thousands of files costs only what is actually expanded.
+#[tauri::command]
+fn project_files(project: String, sub: Option<String>) -> Result<String, String> {
+    let root = project_dir(&project).ok_or_else(|| format!("no local checkout for {project}"))?;
+    let rel = sub.unwrap_or_default();
+    // Refuse to escape the project root: `sub` comes from the front end and a "../" would walk out.
+    if rel.contains("..") {
+        return Err("path escapes the project".into());
+    }
+    let dir = if rel.is_empty() { root.clone() } else { root.join(&rel) };
+    let status = git_status_map(&root);
+    let mut out: Vec<FileEntry> = Vec::new();
+    for entry in std::fs::read_dir(&dir).map_err(|e| format!("cannot read {}: {e}", dir.display()))? {
+        let entry = match entry {
+            Ok(e) => e,
+            Err(_) => continue,
+        };
+        let name = entry.file_name().to_string_lossy().to_string();
+        if name.starts_with('.') && name != ".github" {
+            continue;
+        }
+        let is_dir = entry.file_type().map(|t| t.is_dir()).unwrap_or(false);
+        if is_dir && TREE_SKIP.contains(&name.as_str()) {
+            continue;
+        }
+        let path = if rel.is_empty() { name.clone() } else { format!("{rel}/{name}") };
+        let st = status.get(&path).cloned().unwrap_or_default();
+        out.push(FileEntry { name, path, dir: is_dir, status: st });
+    }
+    // folders first, then alphabetical — the order every file explorer uses
+    out.sort_by(|a, b| b.dir.cmp(&a.dir).then(a.name.to_lowercase().cmp(&b.name.to_lowercase())));
+    serde_json::to_string(&out).map_err(|e| e.to_string())
+}
+
 /// Candidate icon paths, best first. This is a FIXED list rather than a directory walk on purpose:
 /// a walk of a repo the size of `flutter` or `crm-platform` would hit node_modules and cost more
 /// than the row it decorates. Order encodes quality, not just likelihood — a purpose-built app icon
@@ -1063,6 +1156,7 @@ pub fn run() {
             herdr_pane_read,
             herdr_seats,
             seat_diff,
+            project_files,
             app_update_check,
             app_update_install,
             terminal::orchestrator_open,
@@ -1171,6 +1265,23 @@ mod herdr_tests {
     fn herdr_seat_rows_still_drop_other_muxes() {
         let rows = ["trantor\tcmux\tglm\tsurface-no", "trantor\therdrws\t__ws__\tw2"].join("\n");
         assert_eq!(parse_herdr_seats(&rows), vec![]);
+    }
+
+    #[test]
+    fn file_tree_status_marks_the_file_and_every_folder_above_it() {
+        let m = parse_status_porcelain(" M bin/crew.sh\n?? desktop/src/features/workspace/new.tsx\n");
+        assert_eq!(m.get("bin/crew.sh"), Some(&"M".to_string()));
+        // a closed folder must still show that something inside it changed
+        assert_eq!(m.get("bin"), Some(&"M".to_string()));
+        assert_eq!(m.get("desktop/src/features/workspace"), Some(&"??".to_string()));
+        assert_eq!(m.get("README.md"), None);
+    }
+
+    #[test]
+    fn file_tree_status_follows_a_rename_to_its_new_name() {
+        let m = parse_status_porcelain("R  old/a.ts -> src/b.ts\n");
+        assert_eq!(m.get("src/b.ts"), Some(&"R".to_string()));
+        assert_eq!(m.get("old/a.ts"), None);
     }
 
     #[test]
