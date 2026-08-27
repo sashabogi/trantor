@@ -7,19 +7,11 @@
 import { useEffect, useMemo, useState } from "react";
 import type { HubClient, Peer } from "../../shared/api/client";
 import { ProjectHeader, type Lens } from "../project/ProjectHeader";
-import { fileDiff, readFile, statusLabel, type FileBody } from "./fileApi";
+import { fileDiff, readFile, seatState, statusLabel, writeFile, type FileBody } from "./fileApi";
 
 type Mode = "content" | "diff";
 
 const seatName = (session: string) => session.split(":")[0];
-
-/** A seat is IN FLIGHT while its bus status says it is working. Reading a half-written file is
- *  how you end up reviewing code that no longer exists a second later. */
-function inFlight(p: Peer | undefined): boolean {
-  if (!p?.online) return false;
-  const s = (p.status || "").toLowerCase();
-  return s.includes("build") || s.includes("working") || s.includes("booting");
-}
 
 export function Files({ client, project, lens, onLens, path, seat, onSeat }: {
   client: HubClient;
@@ -35,6 +27,12 @@ export function Files({ client, project, lens, onLens, path, seat, onSeat }: {
   const [body, setBody] = useState<FileBody | null>(null);
   const [diff, setDiff] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [draft, setDraft] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState<string | null>(null);
+  // ONE owner for "is this seat writing right now": herdr, asked through Rust. The UI used to guess
+  // it from bus status, which is a second answer to a question that gates an edit.
+  const [busy, setBusy] = useState(false);
 
   useEffect(() => {
     let alive = true;
@@ -48,16 +46,19 @@ export function Files({ client, project, lens, onLens, path, seat, onSeat }: {
     () => peers.filter(p => p.session.endsWith(`:${project}`) && !p.session.toLowerCase().startsWith("macbook")),
     [peers, project],
   );
-  const owner = useMemo(
-    () => (seat ? seats.find(s => seatName(s.session) === seat) : undefined),
-    [seats, seat],
-  );
-  const busy = inFlight(owner);
+  useEffect(() => {
+    if (!seat) { setBusy(false); return; }
+    let alive = true;
+    const look = () => { seatState(seat).then(st => { if (alive) setBusy(st === "working"); }).catch(() => {}); };
+    look();
+    const iv = setInterval(look, 5_000);
+    return () => { alive = false; clearInterval(iv); };
+  }, [seat]);
 
   useEffect(() => {
     if (!path) { setBody(null); setDiff(null); setError(null); return; }
     let alive = true;
-    setBody(null); setDiff(null); setError(null);
+    setBody(null); setDiff(null); setError(null); setDraft(null); setSaved(null);
     readFile(project, path, seat ?? undefined)
       .then(b => { if (alive) setBody(b); })
       .catch(e => { if (alive) setError(e instanceof Error ? e.message : String(e)); });
@@ -97,8 +98,17 @@ export function Files({ client, project, lens, onLens, path, seat, onSeat }: {
               {seatName(s.session)}
             </button>
           ))}
-          {path && diff && (
-            <div className="ml-auto flex items-center gap-1 rounded-[9px] bg-tr-panel/60 p-[3px]">
+          {path && body && !busy && (
+            <button
+              type="button"
+              onClick={() => setDraft(draft === null ? body.text : null)}
+              className="ml-auto rounded-[9px] px-3 py-[7px] text-[12.5px] font-medium text-tr-muted hover:text-tr-text"
+            >
+              {draft === null ? "edit" : "cancel"}
+            </button>
+          )}
+          {path && diff && draft === null && (
+            <div className="flex items-center gap-1 rounded-[9px] bg-tr-panel/60 p-[3px]">
               {(["content", "diff"] as const).map(m => (
                 <button
                   key={m}
@@ -118,8 +128,8 @@ export function Files({ client, project, lens, onLens, path, seat, onSeat }: {
             here, so the operator learns the rule before they meet the lock. */}
         {busy && (
           <div className="tr-card px-3.5 py-2 text-[12px] text-tr-warn">
-            {seat} is working in this worktree right now. What you are reading may change under you —
-            review it once the seat lands.
+            {seat} is working in this worktree right now, so this file cannot be edited. What you are
+            reading may change under you — review it once the seat lands.
           </div>
         )}
 
@@ -147,8 +157,49 @@ export function Files({ client, project, lens, onLens, path, seat, onSeat }: {
                 >{l}</div>
               ))}
             </pre>
+          ) : draft !== null ? (
+            <div className="flex h-full min-h-0 flex-col gap-2">
+              <textarea
+                value={draft}
+                onChange={e => setDraft(e.target.value)}
+                spellCheck={false}
+                className="tr-mono min-h-0 flex-1 resize-none rounded-lg bg-black/30 p-3 text-[12px] leading-[1.6] outline-none"
+              />
+              <div className="flex items-center gap-3">
+                <button
+                  type="button"
+                  disabled={saving || draft === body?.text}
+                  onClick={() => {
+                    if (!path) return;
+                    setSaving(true); setError(null);
+                    writeFile(project, path, seat ?? undefined, draft)
+                      .then(sha => {
+                        setSaved(sha || "unchanged");
+                        setDraft(null);
+                        return readFile(project, path, seat ?? undefined).then(setBody);
+                      })
+                      .then(() => fileDiff(project, path, seat ?? undefined).then(setDiff))
+                      .catch(e => setError(e instanceof Error ? e.message : String(e)))
+                      .finally(() => setSaving(false));
+                  }}
+                  className="rounded-[8px] bg-tr-ok px-3 py-1.5 text-[12px] font-semibold text-[#07130f] disabled:opacity-50"
+                >
+                  {saving ? "Saving…" : "Save"}
+                </button>
+                {/* Said before they click, not after: the commit is the thing that keeps their
+                    tweak from being attributed to the agent whose worktree this is. */}
+                <span className="text-[11.5px] text-tr-muted">
+                  Saving commits this file as you, so it stays yours and not {seat ?? "the project"}&rsquo;s.
+                </span>
+              </div>
+            </div>
           ) : body ? (
             <>
+              {saved && (
+                <div className="mb-3 text-[11.5px] text-tr-ok">
+                  {saved === "unchanged" ? "No change to save." : `Committed as you · ${saved}`}
+                </div>
+              )}
               <pre className="tr-mono whitespace-pre text-[12px] leading-[1.6]">{body.text}</pre>
               {body.truncated && (
                 <div className="mt-3 text-[11.5px] text-tr-warn">

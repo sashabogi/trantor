@@ -48,3 +48,18 @@ export function statusColor(code: string): string {
 export async function fileDiff(project: string, path: string, seat?: string): Promise<string> {
   return invoke<string>("file_diff", { project, path, seat: seat ?? null });
 }
+
+/** Whether a seat is writing to its worktree right now. ONE owner for this answer: herdr, which
+ *  the runner updates at every turn boundary. Deriving it a second way from bus status is how the
+ *  UI and the writer end up disagreeing about whether an edit is safe. */
+export async function seatState(agent: string): Promise<string> {
+  return invoke<string>("seat_state", { agent });
+}
+
+/** Save an edit. Returns the commit sha, or "" when the text was unchanged.
+ *
+ *  Saving commits, authored to you. `trantor integrate` commits a seat's dirty worktree AS THAT
+ *  SEAT, so an uncommitted tweak of yours would be attributed to the agent the next time it ran. */
+export async function writeFile(project: string, path: string, seat: string | undefined, text: string): Promise<string> {
+  return invoke<string>("write_file", { project, path, seat: seat ?? null, text });
+}

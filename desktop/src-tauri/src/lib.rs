@@ -374,6 +374,113 @@ fn project_files(project: String, sub: Option<String>, seat: Option<String>) -> 
     serde_json::to_string(&out).map_err(|e| e.to_string())
 }
 
+/// Is this seat writing to its worktree right now?
+///
+/// ONE owner for this answer. herdr is asked, because crew-runner reports the seat's state to it at
+/// every turn boundary and that reflects the process actually running. The UI used to guess from
+/// the seat's bus status instead, which is a second truth about the same fact — and this one
+/// decides whether a human edit is allowed, so it cannot be a guess.
+#[tauri::command]
+fn seat_state(agent: String) -> Result<String, String> {
+    if agent.trim().is_empty() {
+        return Ok("unknown".into());
+    }
+    let out = std::process::Command::new("herdr")
+        .args(["agent", "list"])
+        .env("PATH", terminal_path())
+        .output()
+        .map_err(|_| "herdr is not answering".to_string())?;
+    let raw = String::from_utf8_lossy(&out.stdout);
+    let v: serde_json::Value = match serde_json::from_str(raw.trim()) {
+        Ok(v) => v,
+        Err(_) => return Ok("unknown".into()),
+    };
+    let agents = v
+        .get("result")
+        .and_then(|r| r.get("agents"))
+        .and_then(|a| a.as_array())
+        .cloned()
+        .unwrap_or_default();
+    for a in agents {
+        if a.get("agent").and_then(|x| x.as_str()) == Some(agent.as_str()) {
+            return Ok(a
+                .get("agent_status")
+                .and_then(|x| x.as_str())
+                .unwrap_or("unknown")
+                .to_string());
+        }
+    }
+    Ok("unknown".into())
+}
+
+/// Save an edit, and COMMIT it as the operator.
+///
+/// Committing on save is not a convenience. `trantor integrate` commits a seat's dirty worktree AS
+/// THAT SEAT, so a human tweak left sitting uncommitted in glm's worktree would be attributed to
+/// glm the next time integration ran, and the record would be permanently wrong about who wrote
+/// it. Committing here closes that window, and git blame stays the durable answer.
+///
+/// Refused outright while the seat is working: editing a file an agent is part way through writing
+/// loses one of the two edits with no undo.
+#[tauri::command]
+fn write_file(
+    project: String,
+    path: String,
+    seat: Option<String>,
+    text: String,
+) -> Result<String, String> {
+    let root = source_root(&project, seat.as_deref())?;
+    if path.contains("..") {
+        return Err("path escapes the project".into());
+    }
+    if let Some(agent) = seat.as_deref() {
+        if seat_state(agent.to_string())? == "working" {
+            return Err(format!(
+                "{agent} is working in this worktree right now — edit it once the seat lands"
+            ));
+        }
+    }
+    let full = root.join(&path);
+    if !full.is_file() {
+        return Err("that file does not exist".into());
+    }
+    std::fs::write(&full, text).map_err(|e| format!("cannot write {path}: {e}"))?;
+
+    // Authorship comes from the repo's own git config, which IS the human. Nothing is overridden
+    // here on purpose: a seat's commits set an author explicitly, so leaving this alone is exactly
+    // what keeps the two distinguishable.
+    let add = std::process::Command::new("git")
+        .args(["add", "--", &path])
+        .current_dir(&root)
+        .output()
+        .map_err(|e| format!("git add failed: {e}"))?;
+    if !add.status.success() {
+        return Err(String::from_utf8_lossy(&add.stderr).trim().to_string());
+    }
+    let msg = format!("edit {path} in the app");
+    let commit = std::process::Command::new("git")
+        .args(["commit", "-q", "-m", &msg, "--", &path])
+        .current_dir(&root)
+        .output()
+        .map_err(|e| format!("git commit failed: {e}"))?;
+    if !commit.status.success() {
+        let err = String::from_utf8_lossy(&commit.stdout).to_string()
+            + &String::from_utf8_lossy(&commit.stderr);
+        // "nothing to commit" means the text was identical — saving an unchanged file is not an
+        // error, it just did not need a commit.
+        if err.contains("nothing to commit") || err.contains("no changes added") {
+            return Ok(String::new());
+        }
+        return Err(err.trim().to_string());
+    }
+    let sha = std::process::Command::new("git")
+        .args(["rev-parse", "--short", "HEAD"])
+        .current_dir(&root)
+        .output()
+        .map_err(|e| format!("git rev-parse failed: {e}"))?;
+    Ok(String::from_utf8_lossy(&sha.stdout).trim().to_string())
+}
+
 /// The autonomy dials, read and written through the CLI rather than by parsing autonomy.json here.
 ///
 /// The dependency rules between dials (push implies commit, deploy implies push) live in
@@ -1311,6 +1418,8 @@ pub fn run() {
             project_files,
             read_file,
             file_diff,
+            seat_state,
+            write_file,
             autonomy_get,
             autonomy_set,
             app_update_check,
