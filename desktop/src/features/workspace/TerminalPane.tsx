@@ -126,6 +126,7 @@ export function TerminalPane({
   const [opening, setOpening] = useState(false);
   const [openError, setOpenError] = useState<string | null>(null);
   const [latencyMs, setLatencyMs] = useState<number | null>(null);
+  const [attachError, setAttachError] = useState<string | null>(null);
 
   // Resolve (and re-resolve) the seat's herdr surface. Surfaces change when the crew restarts,
   // so this keeps polling at the hub-data cadence; terminal bytes stream over the pty once attached.
@@ -134,6 +135,7 @@ export function TerminalPane({
     setSurface(undefined);
     setLatencyMs(null);
     setOpenError(null);
+    setAttachError(null);
     const lookup = () =>
       deps.surfaceFor(project, agent)
         .then(s => { if (alive) setSurface(s); })
@@ -177,8 +179,18 @@ export function TerminalPane({
     const ro = new ResizeObserver(resize);
     ro.observe(hostRef.current);
 
+    // herdr answers a failed attach on STDOUT and exits, so its error arrives as terminal bytes
+    // rather than a rejected promise — which is how a raw JSON envelope ended up rendered as the
+    // seat's "terminal". Catch that one shape and say what it means instead.
+    let sniffed = "";
+    const decoder = new TextDecoder();
     const onBytes = (bytes: TerminalBytes) => {
-      session.write(terminalBytes(bytes));
+      const chunk = terminalBytes(bytes);
+      if (sniffed.length < 400) {
+        sniffed += decoder.decode(chunk, { stream: true });
+        if (sniffed.includes("agent_not_found")) setAttachError("notAnAgent");
+      }
+      session.write(chunk);
       const inputAt = lastInputAtRef.current;
       if (inputAt !== null) {
         setLatencyMs(Math.max(0, Math.round(performance.now() - inputAt)));
@@ -210,6 +222,18 @@ export function TerminalPane({
     };
   }, [surface, deps]);
 
+  if (attachError === "notAnAgent") {
+    return (
+      <div className="flex flex-1 items-center justify-center">
+        <div className="tr-card-ghost max-w-[460px] px-6 py-5 text-center text-[12.5px] leading-relaxed">
+          <div>This pane exists, but herdr is not tracking anything running in it, so there is no terminal to show.</div>
+          <div className="mt-2 text-tr-muted">
+            That usually means the seat&rsquo;s process exited. It comes back on the seat&rsquo;s next turn.
+          </div>
+        </div>
+      </div>
+    );
+  }
   if (!surface) {
     return (
       <div className="flex flex-1 items-center justify-center">

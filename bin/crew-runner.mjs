@@ -150,6 +150,28 @@ function cmuxStatus(value, color, icon = "robot", opts = {}) {
   const col = opts.alert ? color : (BRAND_HEX[AGENT.toLowerCase()] || color);
   try { spawnSync(CMUX_BIN, ["set-status", SESSION, `${AGENT} · ${value}`, "--color", col, "--icon", icon, "--priority", String(opts.priority ?? 0)], { stdio: "ignore", timeout: 1500, env: { ...process.env, CMUX_QUIET: "1" } }); } catch {}
 }
+// herdr drops a pane's agent registration when the process inside it exits — and a seat's CLI
+// exits at the END OF EVERY TURN. Reporting once when the pane is created is therefore not enough:
+// the seat vanishes from `herdr agent list` after its first turn, `herdr agent attach` starts
+// answering agent_not_found, and the app renders that raw error where the terminal should be.
+// Observed 2026-08-27 on codex, which was crash-looping on an exhausted quota.
+//
+// So re-report at every turn boundary, which also gives herdr a truthful working/idle state.
+// NOTE the argument order: the pane id comes FIRST, before the flags.
+function herdrAgent(state) {
+  try {
+    const f = join(homedir(), ".agent-bus", "crew-windows.txt");
+    if (!existsSync(f)) return;
+    const row = readFileSync(f, "utf8").split("\n")
+      .map(l => l.split("\t"))
+      .filter(c => c.length >= 4 && c[0] === PROJ && c[1] === "herdr" && c[2] === AGENT)
+      .pop();
+    if (!row || !row[3]) return;
+    spawnSync("herdr", ["pane", "report-agent", row[3], "--source", "crew", "--agent", AGENT, "--state", state],
+      { stdio: "ignore", timeout: 1500 });
+  } catch { /* no herdr, or no row for this seat: the cmux/tmux paths do not need it */ }
+}
+
 function cmuxLog(message, level = "info") {
   if (!inCmux()) return;
   try { spawnSync(CMUX_BIN, ["log", String(message).slice(0, 200), "--level", level], { stdio: "ignore", timeout: 1500, env: { ...process.env, CMUX_QUIET: "1" } }); } catch {}
@@ -288,7 +310,7 @@ async function reportFailure(exit, trigger, undelivered = 0) {
     ? `🛑 ${SESSION} DOWN — ${consecFails} consecutive failures (${reason}, exit ${exit})${hint}${held}`
     : `⚠️ ${SESSION} turn FAILED (${trigger}, exit ${exit} · ${reason})${hint}${held}`;
   await api("/send", { from: SESSION, to: "all", text, project: PROJ }).catch(() => {});
-  cmuxStatus(down ? "down" : "error", "#ef6a6a", "alert", { alert: true, priority: 90 }); cmuxLog(`turn failed: ${reason} (exit ${exit})`, "error");
+  cmuxStatus(down ? "down" : "error", "#ef6a6a", "alert", { alert: true, priority: 90 }); herdrAgent("blocked"); cmuxLog(`turn failed: ${reason} (exit ${exit})`, "error");
   log(`\x1b[31mreported failure to bus: ${reason} (exit ${exit})\x1b[0m`);
 }
 
@@ -324,7 +346,7 @@ async function reportHealthy() {
   consecFails = 0;
   await api("/register", { session: SESSION, project: PROJ, status: `active in ${PROJ}`, llm: AGENT, model: MODEL }).catch(() => {});
   await api("/send", { from: SESSION, to: "all", text: `✅ ${SESSION} recovered`, project: PROJ }).catch(() => {});
-  cmuxStatus("ok", "#14b8a6", "check");
+  cmuxStatus("ok", "#14b8a6", "check"); herdrAgent("idle");
 }
 
 let sid = "";
@@ -348,7 +370,7 @@ function runTurn(prompt, isFirst, trigger = "kickoff") {
   const envs = [join(homedir(), ".agent-bus", ".env"), cli.env].filter(f => f && existsSync(f));
   cmd = withEnvFiles(cmd, envs);
   log(`turn starting (${isFirst ? "fresh session" : "resume"})${MODEL ? ` · model=${MODEL}` : ""}`);
-  cmuxStatus("building", "#4a90d9", "hammer", { priority: 50 });
+  cmuxStatus("building", "#4a90d9", "hammer", { priority: 50 }); herdrAgent("working");
   // inherit stdio so the window shows the agent working live; also capture for sid-parsing.
   // Tee stderr to ERRF (still shown live in the window) so a failed turn can be classified.
   try { appendFileSync(ERRF, "", { flag: "w" }); } catch {}
@@ -380,7 +402,7 @@ function runTurn(prompt, isFirst, trigger = "kickoff") {
   if (cli.sid && r.stdout) { const m = r.stdout.match(cli.sid); if (m) sid = m[1]; }
   telemetry({ ts: Date.now(), agent: AGENT, project: PROJ, turn: TURN, trigger, model: MODEL || "default", duration_ms: Date.now() - t0, exit: r.status });
   log(`turn ended (exit ${r.status}, ${((Date.now() - t0) / 1000).toFixed(0)}s)`);
-  if (r.status === 0) cmuxStatus("idle", "#8a94a6", "robot");   // finished this turn, waiting for the next
+  if (r.status === 0) { cmuxStatus("idle", "#8a94a6", "robot"); herdrAgent("idle"); }   // finished this turn, waiting for the next
   return r.status;
 }
 
