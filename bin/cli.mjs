@@ -4,7 +4,7 @@
 import { spawn } from "node:child_process";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { readFileSync } from "node:fs";
+import { readFileSync, existsSync } from "node:fs";
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const [, , cmd, ...args] = process.argv;
@@ -138,9 +138,37 @@ switch (cmd) {
     else console.error(`Enrollment failed: ${j.error || r.statusText}`);
     break;
   }
+  // A BROWSER CANNOT READ AN ENFORCE-MODE HUB. The page itself is served (200), but every data
+  // endpoint answers 401 to an unsigned request — /projects, /tasks, /peers — because a browser has
+  // no keypair and nothing in a webview can safely hold one. So the dashboard renders as an empty
+  // shell with no projects, which reads as "the hub is broken" when the hub is fine and refusing
+  // correctly. That is exactly what happened to a crew launch on 2026-08-26.
+  //
+  // The desktop app is the surface that works: it signs every request in Rust, which is also why
+  // the webview never touches a key. Prefer it, and when it is missing say plainly why the browser
+  // will look empty rather than opening one and letting the operator draw the wrong conclusion.
   case "ui": {
-    let url = "http://127.0.0.1:4477";
-    try { url = JSON.parse(readFileSync(join(process.env.HOME || "", ".agent-bus", "config.json"), "utf8")).url || url; } catch {}
+    const { resolveHubInfo } = await import(join(ROOT, "lib/project.mjs"));
+    const { resolveProject } = await import(join(ROOT, "lib/project.mjs"));
+    const url = resolveHubInfo(resolveProject(process.cwd())).url;
+
+    let authMode = "";
+    try {
+      const r = await fetch(`${url}/health`, { signal: AbortSignal.timeout(5000) });
+      authMode = String((await r.json()).authMode || "");
+    } catch { /* hub unreachable — fall through and let the browser show that */ }
+
+    const hasApp = process.platform === "darwin" && existsSync("/Applications/Trantor.app");
+    if (authMode === "enforce" && hasApp) {
+      spawn("open", ["-a", "Trantor"], { stdio: "ignore", detached: true }).unref();
+      console.log(`dashboard → Trantor.app (${url} is auth:enforce — a browser cannot sign, so it would show an empty board)`);
+      break;
+    }
+    if (authMode === "enforce") {
+      console.log(`⚠ ${url} is auth:enforce. A browser cannot sign its requests, so the board will be EMPTY —`);
+      console.log(`  every data endpoint returns 401. Install the desktop app instead: trantor app install`);
+      console.log(`  Opening it anyway so you can see for yourself…`);
+    }
     spawn(process.platform === "darwin" ? "open" : "xdg-open", [url], { stdio: "ignore", detached: true }).unref();
     console.log(`dashboard → ${url}`);
     break;

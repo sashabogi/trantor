@@ -36,7 +36,11 @@ explicit EVENT/INTERFACE CONTRACT — cross-agent bugs come from contract drift.
 2. One card per package: `relay_task_add(title, assignee, difficulty, model)` — set `model`
    to the advisor-routed model (or the CLI's default name); difficulty + model show as badges
    on the card. Assignees: `codex:<project>` etc. Keep one for yourself.
-3. Open the dashboard: `trantor ui` (or `open -na "Google Chrome" --args --new-window <hub-url>`)
+3. Open the dashboard: **`trantor ui`** — which opens the **desktop app**, not a browser.
+   Do NOT open the hub URL in a browser. A remote hub runs `auth:enforce`, and a browser cannot
+   sign its requests: the page loads but `/projects`, `/tasks` and `/peers` all return 401, so the
+   board renders EMPTY. That looks like a broken hub and is not one. The desktop app signs every
+   request natively, which is the whole reason it exists. If it is missing: `trantor app install`.
 
 ## Phase 2 — fire up the crew (with the Advisor's models)
 **Each crew card from `relay_advise` carries a `launch` spec — run it VERBATIM; never invent a
