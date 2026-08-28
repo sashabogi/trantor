@@ -98,3 +98,61 @@ Neither touches the other's tree. Questions go to the orchestrator, not into the
 ## Definition of done (both)
 Own tests green (`cargo test` / `npx vitest run` — full desktop typecheck too: `npx tsc --noEmit`),
 card to `testing` with command + counts, `done` only green. The orchestrator integrates.
+
+---
+
+# v3 — wave 3 (2026-08-28 afternoon): chat UX + files column
+
+Ownership BY FILE TREE:
+- glm — `desktop/src/features/chat/**` only (#5521 #5522 #5523). May IMPORT from
+  features/workspace (the xterm pane component) but never edits outside chat/**. If a hook or
+  shared util must change elsewhere, STOP and tell the orchestrator.
+- deepseek — `desktop/src/features/files/**` + `desktop/src/app/AppShell.tsx` only (#5524).
+
+Design rules that bind BOTH seats (the Buzz calibration — violations get bounced):
+- Calm neutral chrome; color lives in CONTENT and STATUS, never in chrome washes.
+- Use the existing primitives (tr-card, tr-chip, tr-seg, tr-input, tr-dot) — no inline invention.
+- No fake affordances: a control that does nothing does not ship.
+- Every control explains itself: label or tooltip, and a disabled state says WHY.
+- Mono only where numbers are compared. Fixed widths over elastic where lists live.
+
+## glm
+
+#5521 chrome honesty:
+- The context gauge LEAVES the header and joins the composer bar (next to model/effort): slightly
+  wider bar + a visible percentage ("49%"), tinted by tone (neutral/amber/red — the existing
+  gaugeTone), tooltip keeps "489k / 1000k". Colorful means the TONE is unmistakable, not a
+  rainbow.
+- The dock toggle (the mystery square) gets an icon that reads (PanelBottom/PanelRight from
+  lucide) + tooltip "Dock chat to bottom/right".
+- REMOVE the X. Chat visibility is a labeled toggle where the chat lives, rediscoverable —
+  collapsing leaves a visible "Chat" affordance to bring it back. Never a dismissal that
+  requires prior knowledge to undo.
+
+#5522 reading comfort:
+- Font size control in the composer bar or chat menu: three steps (S/M/L) scaling the chat's
+  text sizes via a CSS variable on the chat root (not global). Persist in localStorage.
+- A drag handle on the chat panel's inner edge resizes its width (right dock) / height (bottom
+  dock), clamped to sane min/max, persisted per dock orientation.
+
+#5523 terminal tray:
+- A collapsible tray at the chat's bottom edge ("Terminal" with a chevron) that mounts the SAME
+  live xterm pane view the Workspace lens uses (import it; read-only). Collapsed by default,
+  state persisted. When open it shares the chat's vertical space (drag divider between them is
+  a nice-to-have, not required this pass).
+- vitest: reducer/persistence logic drills; tsc clean.
+
+## deepseek
+
+#5524 files column:
+- The FILES tree leaves the sidebar. The sidebar keeps ONE labeled row ("Files", lucide
+  FolderTree icon) that toggles a SECOND COLUMN rendered between the sidebar and the main
+  content: fixed width (~240px), its own scroll, collapsible, state persisted. The tree
+  component itself is reused as-is from features/files.
+- ACTIVE NOW and PROJECTS return to their full height — nothing inline pushes them down.
+- vitest for the toggle/persist logic if a pure helper exists; tsc clean; do not restyle
+  unrelated sidebar zones.
+
+## Definition of done (both)
+`npx tsc --noEmit` exit 0 + `npx vitest run` all green in YOUR worktree, card to testing with
+commands + counts, done only green. The orchestrator integrates, builds, and ships.
