@@ -32,9 +32,11 @@ export type FontStep = "s" | "m" | "l";
 export const FONT_SCALE = { s: 0.9, m: 1, l: 1.15 } satisfies Record<FontStep, number>;
 
 export const FONT_STEPS: Array<{ step: FontStep; label: string }> = [
-  { step: "s", label: "S" },
-  { step: "m", label: "M" },
-  { step: "l", label: "L" },
+  // The menu words a person reads (#5556); the step values and the storage key above are the
+  // machine's and do not move.
+  { step: "s", label: "Small" },
+  { step: "m", label: "Medium" },
+  { step: "l", label: "Large" },
 ];
 
 const FONT_KEY = "trantor.chat.font";
