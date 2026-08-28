@@ -79,6 +79,7 @@ switch (cmd) {
   case "inbox": run("bin/inbox.mjs"); break;
   case "duty": run("bin/duty.mjs"); break;
   case "seats": case "seat": run("bin/seats.mjs"); break;
+  case "seat-why": case "why": run("bin/seat-why.mjs"); break;
   case "orchestrate": run("bin/orchestrate.mjs"); break;
   case "app": run("bin/app.mjs"); break;
   case "patrol": run("bin/patrol.mjs"); break;
@@ -211,6 +212,7 @@ switch (cmd) {
   trantor hub         run the hub in the foreground (setup installs it as a service instead)
                       …or manage per-project hub pins: hub list · hub set <project> <url> · hub unset <project>
                       seats: which project lives in which directory — seats · seats add · seats up · seats login install
+  trantor seat-why    WHY a seat is down (err file, logs, pids): seat-why <agent> [--json] — quota, auth, crash, or just no pane
   trantor watch       live bus feed in the terminal
   trantor inbox       THIS session's unread bus messages, signed (works under enforce) — [--all] [--consume] [--json]
   trantor policy      the autonomy ladder: show | set <project> <1-4> | link <a> <b> --reason "<why>"
