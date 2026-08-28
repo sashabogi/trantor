@@ -23,11 +23,12 @@ import { orchestratorOf } from "../workspace/herdr";
 import { DEFAULT_TERMINAL_DEPS, TerminalPane, type TerminalDeps } from "../workspace/TerminalPane";
 import { Composer, type Provenance } from "./Composer";
 import {
-  clampPanel, fontScale, loadFontStep, loadPanelSize, loadTrayOpen,
-  saveFontStep, savePanelSize, saveTrayOpen, type FontStep,
+  clampPanel, fontScale, loadDismissedAt, loadFontStep, loadPanelSize, loadTrayOpen,
+  saveDismissedAt, saveFontStep, savePanelSize, saveTrayOpen, type FontStep,
 } from "./prefs";
 import {
-  applyBackfill, applyRows, applySessionChanged, emptyChat, isDividerTurn, sessionLiveness,
+  applyBackfill, applyRows, applySessionChanged, bannerVisible, emptyChat, isDividerTurn,
+  sessionLiveness,
   type Backfill, type Block, type ChatState, type RowsPayload,
   type SessionPayload, type ToolResult, type Turn,
 } from "./streaming";
@@ -78,7 +79,7 @@ function ToolRun({ blocks, results }: { blocks: Block[]; results: Record<string,
         <span className="tr-mono min-w-0 flex-1 truncate text-[length:calc(11px*var(--chat-scale,1))] text-tr-muted">
           {[...new Set(blocks.map(b => b.tool))].join(", ")}
         </span>
-        {failed > 0 && <span className="shrink-0 text-[length:calc(10.5px*var(--chat-scale,1))] text-tr-danger">{failed} failed</span>}
+        {failed > 0 && <span className="shrink-0 text-[length:calc(10.5px*var(--chat-scale,1))] text-tr-fail">{failed} failed</span>}
         {failed === 0 && running > 0 && <span className="shrink-0 text-[length:calc(10.5px*var(--chat-scale,1))] text-tr-doing">running</span>}
       </button>
       {open && blocks.map((b, i) => <ToolCard key={i} block={b} result={b.tool_id ? results[b.tool_id] : undefined} />)}
@@ -90,7 +91,7 @@ function ToolCard({ block, result }: { block: Block; result?: ToolResult }) {
   const [open, setOpen] = useState(false);
   // Running until its answer arrives. Saying so beats an empty card that looks finished.
   const state = result ? (result.ok ? "ok" : "failed") : "running";
-  const colour = state === "failed" ? "var(--color-tr-danger)" : state === "ok" ? "var(--color-tr-muted)" : "var(--color-tr-doing)";
+  const colour = state === "failed" ? "var(--color-tr-fail)" : state === "ok" ? "var(--color-tr-muted)" : "var(--color-tr-doing)";
   return (
     <div className="mt-1.5 overflow-hidden rounded-lg border border-tr-edge bg-black/20">
       <button type="button" onClick={() => setOpen(o => !o)} className="flex w-full items-center gap-1.5 px-2.5 py-1.5 text-left">
@@ -127,6 +128,54 @@ function Thinking({ text }: { text: string }) {
   );
 }
 
+/** The window's early warning, worn as a choice (#5509 W1): at the gauge's red threshold the
+ *  panel offers the handoff instead of just colouring a bar. [Hand off now] drives the same-pane
+ *  replacement through the Tauri command — busy while it runs, its failure shown HERE, because a
+ *  handoff that failed silently is a trap set for the next wall. Success stays quiet: the
+ *  session-changed flow already draws the "session continued" divider, and the composer's
+ *  liveness gate covers the gap while the pane restarts. */
+function HandoffBanner({ project, frac, onKeepGoing }: { project: string; frac: number; onKeepGoing: () => void }) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  // The same rounding the gauge shows, so the banner and the bar can never name different numbers.
+  const pct = Math.round(frac * 100);
+  const go = () => {
+    setBusy(true);
+    setError(null);
+    invoke<string>("handoff_now", { project })
+      .catch(e => setError(String(e)))
+      .finally(() => setBusy(false));
+  };
+  return (
+    <div className="mx-2 mb-1 rounded-lg border border-tr-fail/40 bg-tr-fail/10 px-2.5 py-1.5 text-[11.5px]">
+      <div className="flex items-center gap-2">
+        <span className="min-w-0 flex-1">
+          Context at <span className="tr-mono text-tr-fail">{pct}%</span> — hand off to a fresh session?
+        </span>
+        <button
+          type="button"
+          onClick={go}
+          disabled={busy}
+          title="Write the handoff, end this session, and open the next one in the same pane"
+          className="shrink-0 rounded-[8px] bg-tr-panel px-2.5 py-1 text-[11.5px] font-medium disabled:opacity-40"
+        >
+          {busy ? "handing off…" : "Hand off now"}
+        </button>
+        <button
+          type="button"
+          onClick={onKeepGoing}
+          disabled={busy}
+          title="Not yet — the offer returns once context grows another 2%"
+          className="shrink-0 text-tr-muted hover:underline disabled:opacity-40"
+        >
+          Keep going
+        </button>
+      </div>
+      {error && <div className="tr-mono mt-1 truncate text-[10.5px] text-tr-fail" title={error}>{error}</div>}
+    </div>
+  );
+}
+
 // The window filling up (#5508) moved to the composer (#5521) — the gauge lives beside the
 // model/effort dials that spend the window it measures. Its implementation moved with it.
 
@@ -157,6 +206,10 @@ export function Chat({ project, dock, onDock, onClose }: {
   );
   const [fontStep, setFontStep] = useState<FontStep>(() => loadFontStep());
   const [trayOpen, setTrayOpen] = useState<boolean>(() => loadTrayOpen());
+  // The handoff banner's episode marker (#5509 W1): the frac "keep going" was last said at, or
+  // null when the offer owes nothing. Persisted so a restart does not re-ask an answered
+  // question; cleared when the episode it belonged to is over.
+  const [dismissedAt, setDismissedAt] = useState<number | null>(() => loadDismissedAt());
   const root = useRef<HTMLDivElement | null>(null);
   // Mid-turn or not. Asked of the pane (herdr's agent list) rather than guessed from the
   // transcript, because a turn in progress has written nothing yet. The full status string also
@@ -173,8 +226,17 @@ export function Chat({ project, dock, onDock, onClose }: {
   // arrivals in one tick still see the cursor the first one left.
   const seenRef = useRef(0);
   const syncRef = useRef<() => void>(() => {});
+  // The project this panel mounted on (#5509 W1) — lets the [project] effect tell a real switch
+  // (a new episode, dismissals cleared) from the mount it must leave alone.
+  const prevProject = useRef(project);
 
   useEffect(() => {
+    // A DIFFERENT project's session is a different episode (#5509 W1): a dismissal must not
+    // travel across projects. Mount is not a switch — the persisted dismissal was recorded for
+    // the project this panel opened on, so it survives restarts.
+    const switched = prevProject.current !== project;
+    prevProject.current = project;
+    if (switched) { setDismissedAt(null); saveDismissedAt(null); }
     setChat(emptyChat); seenRef.current = 0; setError(null); setStatus("unknown");
     orchestratorOf(project).then(o => setTarget(o?.surface ?? null)).catch(() => setTarget(null));
   }, [project]);
@@ -200,6 +262,9 @@ export function Chat({ project, dock, onDock, onClose }: {
           // top as a continuation rather than skipping the new session entirely.
           seenRef.current = 0;
           setChat(s => applySessionChanged(s));
+          // The new session's window is a new episode (#5509 W1) — a dismissal said to the OLD
+          // context must not muzzle the offer when the new one fills up too.
+          setDismissedAt(null); saveDismissedAt(null);
           syncRef.current();
           return;
         }
@@ -249,6 +314,7 @@ export function Chat({ project, dock, onDock, onClose }: {
             if (p.project !== project) return;
             seenRef.current = 0;
             setChat(s => applySessionChanged(s));
+            setDismissedAt(null); saveDismissedAt(null);
             syncRef.current();
           } catch { if (++badFrames >= 3) setStreamed(false); }
         }));
@@ -312,6 +378,16 @@ export function Chat({ project, dock, onDock, onClose }: {
 
   const pickFont = (s: FontStep) => { setFontStep(s); saveFontStep(s); };
   const toggleTray = () => { const open = !trayOpen; setTrayOpen(open); saveTrayOpen(open); };
+
+  /** "Keep going" parks the offer at the frac it was said at (#5509 W1) — persisted, so neither
+   *  a restart nor a rerender re-asks an answered question; bannerVisible re-offers once context
+   *  has grown one more episode-step. */
+  const keepGoing = () => {
+    const at = chat.meta.context.frac;
+    if (at === null) return;
+    setDismissedAt(at);
+    saveDismissedAt(at);
+  };
 
   // CSS custom properties have no key in React's CSSProperties, so the variable is declared as
   // part of the object's own type — an intersection, not an assertion: every key is checked.
@@ -463,7 +539,14 @@ export function Chat({ project, dock, onDock, onClose }: {
         )}
       </div>
 
-      {error && <div className="tr-mono px-3 pb-1 text-[11px] text-tr-danger">{error}</div>}
+      {error && <div className="tr-mono px-3 pb-1 text-[11px] text-tr-fail">{error}</div>}
+
+      {/* The banner sits ABOVE the composer (#5509 W1): it is the last thing said before the
+          words you are about to type, at the moment the window it types into is running out. The
+          guard proves frac is known, so the ?? 0 below only satisfies the type. */}
+      {bannerVisible(chat.meta.context.frac, dismissedAt) && (
+        <HandoffBanner project={project} frac={chat.meta.context.frac ?? 0} onKeepGoing={keepGoing} />
+      )}
 
       <Composer
         project={project}

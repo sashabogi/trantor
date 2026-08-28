@@ -181,6 +181,24 @@ export function gaugeLabel(c: ContextGauge): string {
   return `${k(c.tokens ?? 0)} / ${k(c.window)} (${Math.round((c.frac ?? 0) * 100)}%)`;
 }
 
+/** The handoff banner's thresholds (#5509 W1). `HANDOFF_WARN_FRAC` IS the gauge's red threshold
+ *  (gaugeTone above) — the banner is the same warning wearing a choice, so the two can never
+ *  disagree about when the window is filling up. */
+export const HANDOFF_WARN_FRAC = 0.90;
+/** After a "keep going", the re-offer waits for one more episode of growth, this much. */
+export const HANDOFF_REARM_STEP = 0.02;
+
+/** The handoff banner's visibility rule (#5509 W1): show from the warning threshold, and after a
+ *  "keep going" stay hidden until frac has grown another step — an EPISODE, not a timer, so a
+ *  long turn at a flat fraction never re-nags while one more episode of growth does. Despite the
+ *  name (kept from the contract's wording), `dismissedAt` is the frac AT dismissal, not a time.
+ */
+export function bannerVisible(frac: number | null, dismissedAt: number | null): boolean {
+  if (frac === null || frac < HANDOFF_WARN_FRAC) return false;
+  if (dismissedAt === null) return true;
+  return frac >= dismissedAt + HANDOFF_REARM_STEP;
+}
+
 /** Bookkeeping never wears the user's face (#5502). A turn renders as a divider — centered, quiet,
  *  never a bubble — when the decoder called it `system`, and a divider BLOCK stays a divider even
  *  if it rides a non-system turn: the block kind is the Rust-side gate's verdict, not a hint. */
