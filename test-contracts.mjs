@@ -351,6 +351,46 @@ console.log("\nA row an alive seat has moved on from is settled, not nagged fore
   ok("the stop guard does NOT block on the superseded row", !blockedOnIt, (o.reason || so || "").slice(0, 220));
 }
 
+// ---- superseded by a later DIRECT reply: the morning case (#11047/#11048) --------------------
+// This morning a row sat WAITING forever while its assignee demonstrably moved on: the assignee
+// answered a NEWER re-dispatch and then acked the old rows "by reference" — direct replies that
+// never mapped to the old row. The loose-reply fallback consumed the ack for an EVEN OLDER row, so
+// the stranded row had no `re`, no loose reply, and no NEWER answered contract to the same peer
+// (nothing newer was ever answered) — the newestAnswered rule above could not settle it. The direct
+// reply itself was the signal: the assignee is alive and talking, so an old unanswered row past the
+// abandon window is dead weight, not in flight.
+console.log("\nA re-dispatch's direct reply settles the OLDER row it stranded (morning case):");
+{
+  const M = "deepseek:life";
+  await post2("/register", { session: M, project: PROJ2, status: "working" });
+  const older = await post2("/send", { from: O, to: M, project: PROJ2, text: "an older job, also superseded by the re-dispatch" });
+  const stranded = await post2("/send", { from: O, to: M, project: PROJ2, text: "the row that must not strand" });
+  // Age both rows past the abandon window while M stays demonstrably ALIVE (same heartbeat pattern
+  // as the stranded drill above). The age gate matters: a FRESH out-of-order reply must never
+  // settle a sibling row (drilled above), only a row past the in-flight window.
+  for (let i = 0; i < 6; i++) { await sleep(550); await post2("/register", { session: M, project: PROJ2, status: "working" }); }
+  const redispatch = await post2("/send", { from: O, to: M, project: PROJ2, text: "re-dispatch of the same work" });
+  // The assignee's reply is an "ack by reference": a DIRECT reply that names the re-dispatch but
+  // threads NO `re`, so the loose-reply fallback consumes it for the OLDEST open row (`older`) and
+  // `stranded` is left with nothing — no re, no loose reply, and no newer answered contract.
+  await post2("/send", { from: M, to: O, project: PROJ2, text: "✅ done on the re-dispatch (exit 0)" });
+  await post2("/register", { session: M, project: PROJ2, status: "working" });
+
+  const r = await ctr2(O);
+  const open = Object.fromEntries((r.contracts || []).map(c => [c.id, c]));
+  const sup = Object.fromEntries((r.supersededContracts || []).map(c => [c.id, c]));
+  ok("the row the assignee's direct replies passed over is settled, not WAITING",
+    sup[stranded.id]?.disposition === "superseded" && open[stranded.id] === undefined,
+    JSON.stringify({ open: open[stranded.id], sup: sup[stranded.id] }).slice(0, 220));
+  ok("…while the row that actually consumed the direct reply is answered",
+    open[older.id]?.answered === true || sup[older.id]?.disposition === "superseded",
+    JSON.stringify({ open: open[older.id], sup: sup[older.id] }).slice(0, 220));
+  ok("the assignee is still reported ALIVE — the reply proves it, this is not abandonment",
+    sup[stranded.id]?.assigneeOnline === true, `online=${sup[stranded.id]?.assigneeOnline}`);
+  ok("a FRESH re-dispatch is untouched by the direct-reply rule (age gate protects in-flight work)",
+    open[redispatch.id]?.disposition === "waiting", `${open[redispatch.id]?.disposition}`);
+}
+
 hub2.kill("SIGKILL");
 hub.kill("SIGKILL");
 console.log(`\n${fail === 0 ? "✅" : "❌"} contracts: ${pass} passed, ${fail} failed`);

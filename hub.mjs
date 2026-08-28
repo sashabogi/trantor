@@ -752,6 +752,31 @@ function contractsFor(session, { project = "", windowMs = CONTRACT_WINDOW_MS, ov
     if (c.ageMs < CONTRACT_ABANDON_MS) continue;
     if (c.ts < (newestAnswered.get(c.to) || 0)) c.disposition = "superseded";
   }
+  // ---- superseded by a later DIRECT reply: the morning case (#11047/#11048) --------------------
+  // A row can be unanswerable by a seat that is perfectly healthy: its later replies all carry `re`
+  // for NEWER contracts (a re-dispatch, or an "ack by reference" threaded to the newer id), so
+  // neither byRe nor the loose fallback ever claims the old row — the two matchers above only ever
+  // see replies aimed at the NEWER work. The row then sits WAITING forever: it can never be
+  // answered, it can never be abandoned (the seat is alive), and the newestAnswered rule above
+  // misses it whenever the newer work was dispatched under a peer identity the old row never shares.
+  //
+  // The signal both matchers ignored is the DIRECT reply itself: if the assignee has sent this
+  // session ANY message after the row was dispatched, the assignee is alive, reachable, and has
+  // demonstrably moved on to later work — an older row that has then sat unanswered past the
+  // abandon window is dead weight, not in flight. Age still gates it, so honest out-of-order
+  // completion (a seat that answered a newer job while still working an older one) is never
+  // punished — the older row stays open until the window that any genuine in-flight job would have
+  // reported within has passed.
+  const latestDirectReply = new Map();
+  for (const r of replies) {
+    if (r.ts > (latestDirectReply.get(r.from) || 0)) latestDirectReply.set(r.from, r.ts);
+  }
+  for (const c of out) {
+    if (c.answered || c.disposition === "abandoned") continue;
+    if (c.ageMs < CONTRACT_ABANDON_MS) continue;
+    const latest = latestDirectReply.get(c.to);
+    if (latest != null && c.ts < latest) c.disposition = "superseded";
+  }
   return out;
 }
 
