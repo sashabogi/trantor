@@ -109,19 +109,18 @@ export function AppShell() {
   // one fetch raced a hub restart (a failed fetch must never shrink the list).
   useEffect(() => {
     let alive = true;
-    const junk = (n: string) => n.startsWith("_") || n.startsWith(".") || n.startsWith("__");
-    const pull = () => Promise.all([
-      knownProjects().catch((): string[] => []),
-      new HubClient(LOCAL_HUB).tasks().then(ts => [...new Set(ts.map(t => t.project).filter(Boolean))]).catch((): string[] => []),
-      new HubClient(LOCAL_HUB).peers().then(ps => [...new Set(ps.map(pr => pr.project || "").filter(Boolean))]).catch((): string[] => []),
-    ]).then(([pinned, localCards, localPeers]) => {
+    // The LIST comes from known_projects alone — pinned hubs plus real checkouts. Bus traffic used
+    // to be merged in too, and since sessions register with whatever string they resolved, a path
+    // slug and an agent id ended up in the sidebar next to real work.
+    //
+    // It also REPLACES rather than accumulates. The old merge only ever added, so anything that
+    // appeared once stayed for the life of the window: the list read 26 while the hub reported no
+    // peers at all.
+    const pull = () => knownProjects().catch((): string[] => []).then(found => {
       if (!alive) return;
-      const found = [...pinned, ...localCards, ...localPeers].filter(n => n && !junk(n));
-      setProjects(prev => {
-        const all = [...new Set([...prev, ...found])].sort();
-        return all.length === prev.length && all.every((v, i) => v === prev[i]) ? prev : all;
-      });
-      setActive(a => a || found.sort()[0] || "");
+      const all = [...new Set(found)].sort();
+      setProjects(prev => (all.length === prev.length && all.every((v, i) => v === prev[i]) ? prev : all));
+      setActive(a => (a && all.includes(a) ? a : all[0] || ""));
     });
     void pull();
     const t = setInterval(pull, 45_000);
@@ -393,8 +392,8 @@ export function AppShell() {
         </div>
       </aside>
 
-      <div className={`relative my-2.5 mr-2.5 flex min-w-0 flex-1 overflow-hidden ${chatDock === "right" ? "flex-row" : "flex-col"}`}>
-      <main className="tr-main flex min-w-0 min-h-0 flex-1 flex-col overflow-hidden">
+      <div className={`relative my-2.5 mr-2.5 flex min-w-0 flex-1 ${chatDock === "right" ? "flex-row overflow-x-auto" : "flex-col overflow-hidden"}`}>
+      <main className={`tr-main flex min-h-0 flex-1 flex-col overflow-hidden ${chatDock === "right" ? "min-w-[560px]" : "min-w-0"}`}>
         {!client ? (
           <div className="p-10 text-sm text-[var(--color-tr-muted)]">
             No projects pinned. Run <code>trantor hub set &lt;project&gt; &lt;url&gt;</code>

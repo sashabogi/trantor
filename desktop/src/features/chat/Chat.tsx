@@ -172,18 +172,18 @@ export function Chat({ project, dock, onDock, onClose }: {
   const side = dock === "right";
   return (
     <div className={`flex min-h-0 flex-col border-tr-edge bg-tr-bg ${side ? "h-full w-[420px] shrink-0 border-l" : "h-[340px] shrink-0 border-t"}`}>
-      <div className="flex items-center gap-2 px-3 py-2">
-        <span className="text-[12.5px] font-semibold">Orchestrator</span>
-        <span className="tr-mono text-[11px] text-tr-muted">{project}</span>
-        {/* Reported by the session, never asserted. "You would not know what kind of agent it is"
-            was fair: nothing on screen said. */}
-        {meta.model && <span className="tr-chip text-[10.5px]">{meta.model}</span>}
-        {meta.branch && <span className="tr-mono text-[10.5px] text-tr-muted">{meta.branch}</span>}
-        <div className="ml-auto flex items-center gap-1">
-          <button type="button" onClick={() => onDock(side ? "bottom" : "right")} className="rounded-[7px] px-2 py-1 text-[11px] text-tr-muted hover:text-tr-text">
-            {side ? "dock bottom" : "dock right"}
+      {/* One row that cannot wrap. Every part is shrink-0 except the project name, which truncates,
+          because a header that reflows into three lines is what "mangled" looked like. */}
+      <div className="flex shrink-0 items-center gap-2 overflow-hidden px-3 py-2">
+        <span className="shrink-0 text-[12.5px] font-semibold">Orchestrator</span>
+        <span className="tr-mono min-w-0 flex-1 truncate text-[11px] text-tr-muted">{project}</span>
+        {/* Reported by the session, never asserted. */}
+        {meta.model && <span className="tr-chip shrink-0 text-[10.5px]">{meta.model}</span>}
+        <div className="flex shrink-0 items-center gap-1">
+          <button type="button" onClick={() => onDock(side ? "bottom" : "right")} title={side ? "move to the bottom" : "move to the right"} className="rounded-[7px] px-2 py-1 text-[11px] text-tr-muted hover:text-tr-text">
+            {side ? "▤" : "▥"}
           </button>
-          <button type="button" onClick={onClose} className="rounded-[7px] px-2 py-1 text-[11px] text-tr-muted hover:text-tr-text">hide</button>
+          <button type="button" onClick={onClose} title="hide" className="rounded-[7px] px-2 py-1 text-[11px] text-tr-muted hover:text-tr-text">✕</button>
         </div>
       </div>
 

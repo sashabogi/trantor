@@ -113,8 +113,15 @@ pub fn hub_for_project(project: &str) -> String {
     "http://127.0.0.1:4477".into()
 }
 
+/// A project is something you can actually OPEN: a hub you pinned, or a checkout on this machine.
+///
+/// It is deliberately NOT "any project name the bus has ever mentioned". Sessions register with
+/// whatever string they resolved, and a path slug or an agent id is not a project — that is how the
+/// sidebar ended up listing `-Users-sashabogojevic-…` and `agent-a52823753451c…` beside real work.
+/// A positive rule beats blocklisting name shapes, which only ever catches the junk you have
+/// already seen.
 pub fn known_projects() -> Vec<String> {
-    let mut out = Vec::new();
+    let mut out: Vec<String> = Vec::new();
     if let Ok(raw) = fs::read_to_string(bus_dir().join("config.json")) {
         if let Ok(v) = serde_json::from_str::<serde_json::Value>(&raw) {
             if let Some(h) = v.get("hubs").and_then(|h| h.as_object()) {
@@ -122,7 +129,27 @@ pub fn known_projects() -> Vec<String> {
             }
         }
     }
+    // Every checkout in the dev root, whether or not it was ever pinned. This is the list the
+    // operator means when they say "all of the projects are in the development folder".
+    let root = std::env::var("TRANTOR_DEV_ROOT")
+        .unwrap_or_else(|_| format!("{}/development", std::env::var("HOME").unwrap_or_default()));
+    if let Ok(rd) = fs::read_dir(&root) {
+        for e in rd.flatten() {
+            if !e.file_type().map(|t| t.is_dir()).unwrap_or(false) {
+                continue;
+            }
+            let name = e.file_name().to_string_lossy().to_string();
+            if name.starts_with('.') || name.starts_with('_') {
+                continue;
+            }
+            // A directory is a project when it is a repo. A scratch folder is not.
+            if e.path().join(".git").exists() {
+                out.push(name);
+            }
+        }
+    }
     out.sort();
+    out.dedup();
     out
 }
 
