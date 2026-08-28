@@ -35,6 +35,14 @@ const PEER_TTL_MS = Math.max(Number.isFinite(_peerTtlRaw) ? _peerTtlRaw : PEER_T
 // moves to "stale" (a distinct terminal lane you triage by hand). Only fires on an OFFLINE owner, so a live
 // long-running task is never touched — the owner-alive-but-idle case is handled by the manual /sweep path.
 const REAP_GRACE_MS = Number(process.env.RELAY_REAP_GRACE_MS || 15 * 60 * 1000);    // 15m offline + untouched
+// Supersession lapse. The baton claim was documented "never unset", which is right while the claimant
+// lives and wrong the moment it dies: a session that consumed a handoff, went quiet and was killed left
+// every other instance of that identity muzzled FOREVER, deferring to a process that no longer exists
+// (2026-08-27: 7e014e2a claimed the baton at 22:57, died by 23:13, and the orchestrator pane was still
+// being told to stand down for it an hour later). The CLAIM stays stored and permanent — supersession is
+// still explicit, we never invent one — but it is REPORTED only while the claimant is still being seen.
+// If the claimant comes back, the muzzle re-engages by itself; nothing needs re-claiming.
+const SUPERSEDE_GRACE_MS = Number(process.env.RELAY_SUPERSEDE_GRACE_MS || REAP_GRACE_MS);
 const TODO_STALE_DEFAULT_MS = 14 * 24 * 60 * 60 * 1000;
 const TODO_STALE_MS = Number.isFinite(Number(process.env.RELAY_TODO_STALE_MS))
   ? Math.max(0, Number(process.env.RELAY_TODO_STALE_MS))
@@ -901,6 +909,29 @@ function projectFromRequest(P, q, b) {
   }
   return canon(String(b?.project || q?.project || "").slice(0, 80));
 }
+// Is a stored baton claim still worth honouring? The claim names the instance it spared
+// (`exceptInstanceId`), so we defer to THAT instance only while it is still being seen. A claimant
+// that died stops muzzling its twins; one that comes back starts again. Records claimed before
+// `supersededBy` existed carry no claimant, so they fall back to "is any OTHER live instance of this
+// name still carrying it?" — an orphaned flag must not outlive every possible carrier.
+// NOTE lastSeen only advances on a request, and the heartbeat is PostToolUse, so an alive-but-idle
+// claimant reads as gone after the grace window. That is the intended trade: the only session that
+// ever asks this question is one a human is actively driving right now, and deferring to a claimant
+// that has been silent for longer than the window is worse than letting the driven session work.
+function supersessionActive(rec) {
+  if (!rec?.superseded) return false;
+  const cut = now() - SUPERSEDE_GRACE_MS;
+  const insts = Object.values(state.instances || {});
+  if (rec.supersededBy) {
+    const claimant = insts.find(i => i.name === rec.name && i.instanceId === rec.supersededBy);
+    // Claimant not seen YET — the owner can supersede on a session's behalf before its first signed
+    // request. Honour the claim for one grace window measured from the CLAIM, so a booting successor
+    // still lands its baton, but one that never arrives lapses like one that died.
+    if (!claimant) return rec.superseded > cut;
+    return (claimant.lastSeen || 0) > cut;
+  }
+  return insts.some(i => i !== rec && i.name === rec.name && !i.superseded && (i.lastSeen || 0) > cut);
+}
 async function authenticate(req, path) {
   if (AUTH_MODE === "off") return { ok: true, mode: AUTH_MODE, trusted: true };
   const signed = hasAuthHeaders(req);
@@ -950,7 +981,7 @@ async function authenticate(req, path) {
     rec.lastSeen = now();
     state.instances[verified.pubkey] = rec; dirty = true;
     return { ok: true, mode: AUTH_MODE, trusted: true, pubkey: durableHdr, identity,
-             instanceId: instId, instancePubkey: verified.pubkey, superseded: !!rec.superseded };
+             instanceId: instId, instancePubkey: verified.pubkey, superseded: supersessionActive(rec) };
   }
   const identity = findIdentity(verified.pubkey);
   if (!identity) return soft("unknown identity");
@@ -1472,7 +1503,7 @@ const server = http.createServer(async (req, res) => {
       for (const rec of Object.values(state.instances || {})) {
         if (rec.name !== name || rec.superseded) continue;
         if (except && rec.instanceId === except) continue;
-        rec.superseded = now(); flipped++;
+        rec.superseded = now(); rec.supersededBy = except || ""; flipped++;
       }
       if (flipped) dirty = true;
       return json(res, 200, { ok: true, superseded: flipped });

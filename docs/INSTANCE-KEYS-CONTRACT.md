@@ -48,7 +48,8 @@ x-trantor-endorse: <base64 endorsement>
 
 // hub state (persisted): state.instances[instancePubkey] = {
 //   durable: <durablePubkeyHex>, instanceId, name, firstSeen, lastSeen,
-//   superseded: false | <ms>,     // set by /instance/supersede — never unset
+//   superseded: false | <ms>,     // set by /instance/supersede — the claim, kept forever
+//   supersededBy: <instanceId>,   // WHICH instance the claim spared, so liveness can be checked
 // }
 ```
 
@@ -68,9 +69,10 @@ x-trantor-endorse: <base64 endorsement>
    run against it. The instance never enrolls and mints no new authority: it is the durable
    identity, time-boxed.
 5. Upsert `state.instances[instancePubkey]`, stamp `lastSeen`.
-6. If the record is `superseded`: the request still executes (never break a dying session's last
-   report), but the auth object carries `superseded: true`, and `/inbox` + `/poll` responses
-   include `"superseded": true` so the client's own hooks can tell its model to stand down.
+6. If the record is `superseded` AND the claim is still live (see below): the request still executes
+   (never break a dying session's last report), but the auth object carries `superseded: true`, and
+   `/inbox` + `/poll` responses include `"superseded": true` so the client's own hooks can tell its
+   model to stand down.
 
 ## Supersession (the twin fix)
 
@@ -82,6 +84,18 @@ x-trantor-endorse: <base64 endorsement>
   that durable name superseded. Called by the baton-claim path — the moment a fresh session
   consumes a `<trantor-handoff>`, its sessionstart hook fires this, and the old twin's next
   `/inbox` or `/poll` answer tells it to stand down.
+- **The claim lapses when the claimant stops being seen.** Stored supersession is permanent; the
+  *reported* boolean is not. `supersededBy` names the spared instance, and the hub reports
+  `superseded: true` only while that instance's `lastSeen` is inside `RELAY_SUPERSEDE_GRACE_MS`
+  (default `REAP_GRACE_MS`, 15m). A claimant with no record yet is honoured for one window from the
+  claim, so a booting successor still lands its baton. If the claimant returns, the muzzle re-engages
+  by itself — nothing is re-claimed, and no supersession is ever invented.
+  Why this exists: the flag used to be "never unset", so a session that claimed the baton and then
+  died left every twin muzzled forever, deferring to a process that no longer existed. Note the limit
+  honestly: `lastSeen` only advances on a request and the heartbeat is PostToolUse, so an alive-but-idle
+  claimant reads as gone after the window. That is the deliberate trade — the only session that ever
+  asks is one a human is actively driving, and deferring to a claimant silent for longer than the
+  window is worse than letting the driven session work.
 - A superseded instance's model sees, via its own hooks (T1/T2 additionalContext):
   "a newer instance of this session claimed the baton — stand down; do not consume bus messages."
   Informational, never a hard block — same doctrine as file claims and warn mode.

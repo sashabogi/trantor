@@ -136,6 +136,69 @@ try {
     r = await sFetch(hub.base, instA, "POST", "/send", { from: "alice:proj", to: "all", text: "last report from a dying twin", project: "proj" }, true);
     ok("superseded write still lands (never break the last report)", r.status === 200, `status ${r.status}`);
 
+    // ---- the claim lapses when the claimant dies (regression, 2026-08-27) -----------------------
+    // 7e014e2a claimed the baton at 22:57, died by 23:13, and the orchestrator pane was STILL being
+    // told to stand down for it an hour later, because `superseded` was documented "never unset".
+    // The claim stays stored; it is only REPORTED while the instance it spared is still being seen.
+    {
+      const lapse = await startHub({ RELAY_AUTH: "enforce", RELAY_ENROLL: "tofu",
+        RELAY_ONLINE_MS: "1500", RELAY_SUPERSEDE_GRACE_MS: "1200" });
+      const d2 = mDir();
+      process.env.AGENT_BUS_DIR = join(d2, ".agent-bus");
+      const dur2 = loadOrCreate("bob:proj", "agent");
+      await sFetch(lapse.base, dur2, "POST", "/enroll", { pubkey: dur2.pubkey, name: "bob:proj", kind: "agent" });
+      const older = loadOrCreateInstance(dur2, "sessOld");
+      const claimant = loadOrCreateInstance(dur2, "sessNew");
+
+      // both instances exist on the hub, then the newcomer claims the baton
+      await sFetch(lapse.base, older, "GET", "/inbox?session=bob:proj&since=0&peek=1", undefined, true);
+      await sFetch(lapse.base, claimant, "GET", "/inbox?session=bob:proj&since=0&peek=1", undefined, true);
+      await sFetch(lapse.base, dur2, "POST", "/instance/supersede", { name: "bob:proj", exceptInstanceId: "sessNew" });
+
+      let x = await sFetch(lapse.base, older, "GET", "/inbox?session=bob:proj&since=0&peek=1", undefined, true);
+      ok("live claimant still muzzles the older twin", x.json.superseded === true, JSON.stringify(x.json).slice(0, 120));
+
+      // claimant goes quiet past the grace window — it died, nobody is carrying the baton
+      await sleep(1500);
+      x = await sFetch(lapse.base, older, "GET", "/inbox?session=bob:proj&since=0&peek=1", undefined, true);
+      ok("a claimant that stops being seen releases the muzzle", x.json.superseded !== true, JSON.stringify(x.json).slice(0, 160));
+
+      // ...and the claim was not destroyed: the claimant coming back re-engages it
+      await sFetch(lapse.base, claimant, "GET", "/inbox?session=bob:proj&since=0&peek=1", undefined, true);
+      x = await sFetch(lapse.base, older, "GET", "/inbox?session=bob:proj&since=0&peek=1", undefined, true);
+      ok("a returning claimant re-engages the muzzle without re-claiming", x.json.superseded === true, JSON.stringify(x.json).slice(0, 160));
+
+      // the claimant itself never reads as superseded
+      x = await sFetch(lapse.base, claimant, "GET", "/inbox?session=bob:proj&since=0&peek=1", undefined, true);
+      ok("the claimant itself always reads clean", x.json.superseded !== true, JSON.stringify(x.json).slice(0, 120));
+
+      // Records claimed BEFORE supersededBy existed carry no claimant — this is exactly the shape on
+      // the live hub at upgrade time. They fall back to "is any OTHER live instance of this name still
+      // carrying it?". A blanket supersede (no exceptInstanceId) writes the same shape, so we reach the
+      // branch through the API instead of hand-surgery on bus.json.
+      await sFetch(lapse.base, dur2, "POST", "/instance/supersede", { name: "bob:proj" });
+      const orphan = loadOrCreateInstance(dur2, "sessOrphan");
+      await sFetch(lapse.base, orphan, "GET", "/inbox?session=bob:proj&since=0&peek=1", undefined, true);
+      x = await sFetch(lapse.base, orphan, "GET", "/inbox?session=bob:proj&since=0&peek=1", undefined, true);
+      ok("an instance born after a blanket supersede is not muzzled by it",
+        x.json.superseded !== true, JSON.stringify(x.json).slice(0, 160));
+
+      // sessNew was blanket-superseded too and has no claimant recorded — the legacy shape. It stays
+      // muzzled while sessOrphan (live, not superseded) is carrying the name...
+      x = await sFetch(lapse.base, claimant, "GET", "/inbox?session=bob:proj&since=0&peek=1", undefined, true);
+      ok("a claimless flag holds while another live instance carries the name",
+        x.json.superseded === true, JSON.stringify(x.json).slice(0, 160));
+
+      // ...and lapses once that carrier goes quiet too. This is the upgrade path that unsticks a hub
+      // whose records were written before this fix existed.
+      await sleep(1500);
+      x = await sFetch(lapse.base, claimant, "GET", "/inbox?session=bob:proj&since=0&peek=1", undefined, true);
+      ok("a claimless flag lapses once nothing live carries the name (upgrade path)",
+        x.json.superseded !== true, JSON.stringify(x.json).slice(0, 160));
+
+      process.env.AGENT_BUS_DIR = join(dir, ".agent-bus");
+    }
+
     const evil = loadOrCreate("mallory:proj", "agent");
     await sFetch(hub.base, evil, "POST", "/enroll", { pubkey: evil.pubkey, name: "mallory:proj", kind: "agent" });
     r = await sFetch(hub.base, evil, "POST", "/instance/supersede", { name: "alice:proj" });
