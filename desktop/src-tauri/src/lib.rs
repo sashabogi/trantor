@@ -405,12 +405,8 @@ fn project_files(project: String, sub: Option<String>, seat: Option<String>) -> 
 ///
 /// `after` is a line offset, not a timestamp: the transcript is append-only, so the count of lines
 /// already seen is the cheapest correct cursor and survives a restart.
-#[derive(Debug, Clone, Serialize)]
-struct ChatTurn {
-    role: String,
-    text: String,
-}
-
+/// The session id `trantor open` chose for this project. Recorded rather than discovered, which is
+/// the only reason the transcript is addressable at all.
 fn orch_session_id(project: &str) -> Option<String> {
     let p = desktop_bus_dir().join("orch-sessions.txt");
     let raw = std::fs::read_to_string(p).ok()?;
@@ -426,12 +422,88 @@ fn orch_session_id(project: &str) -> Option<String> {
     None
 }
 
+/// One renderable piece of a turn. Decoded from what a Claude transcript ACTUALLY contains, which
+/// was checked against a real file rather than assumed:
+///
+///   assistant::text · assistant::thinking · assistant::tool_use
+///   user::text · user::tool_result · user::image
+///
+/// Note what is NOT there: permission prompts and the agent's questions live in the TUI and never
+/// reach the transcript, so this cannot render approval cards. Building one would mean inventing a
+/// signal we do not have.
+#[derive(Debug, Clone, Serialize)]
+struct ChatBlock {
+    /// "text" | "thinking" | "tool" | "image"
+    kind: String,
+    text: String,
+    /// tool blocks only
+    tool: Option<String>,
+    tool_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct ChatTurn {
+    role: String,
+    blocks: Vec<ChatBlock>,
+}
+
+/// A tool's outcome, keyed by the call it answers. Returned SEPARATELY from the turns because a
+/// result usually arrives in a later batch than the call that produced it: the front end holds the
+/// rendered turns and fills each card in when its answer shows up, rather than the reader having to
+/// re-parse the whole file to pair them.
+#[derive(Debug, Clone, Serialize)]
+struct ChatToolResult {
+    tool_id: String,
+    ok: bool,
+    preview: String,
+}
+
+/// Tool inputs are objects of wildly different shapes. The one-line summary is the field a person
+/// would recognise, and everything else is noise in a chat.
+fn tool_summary(name: &str, input: &serde_json::Value) -> String {
+    let pick = |k: &str| input.get(k).and_then(|v| v.as_str()).unwrap_or("").to_string();
+    let s = match name {
+        "Bash" => pick("command"),
+        "Read" | "Write" | "Edit" | "NotebookEdit" => pick("file_path"),
+        "Glob" | "Grep" => {
+            let p = pick("pattern");
+            let path = pick("path");
+            if path.is_empty() { p } else { format!("{p}  in {path}") }
+        }
+        "WebFetch" => pick("url"),
+        "Task" | "Agent" => pick("description"),
+        _ => {
+            // An unknown tool gets its first string field rather than a guess at which key matters.
+            input
+                .as_object()
+                .and_then(|o| o.values().find_map(|v| v.as_str()))
+                .unwrap_or("")
+                .to_string()
+        }
+    };
+    let s = s.replace('\n', " ");
+    if s.chars().count() > 160 { s.chars().take(160).collect::<String>() + "…" } else { s }
+}
+
+fn preview_of(v: &serde_json::Value) -> String {
+    let raw = match v {
+        serde_json::Value::String(s) => s.clone(),
+        serde_json::Value::Array(a) => a
+            .iter()
+            .filter_map(|b| b.get("text").and_then(|t| t.as_str()))
+            .collect::<Vec<_>>()
+            .join("\n"),
+        _ => String::new(),
+    };
+    let raw = raw.trim();
+    if raw.chars().count() > 2000 { raw.chars().take(2000).collect::<String>() + "\n…" } else { raw.to_string() }
+}
+
 #[tauri::command]
 fn orchestrator_chat(project: String, after: usize) -> Result<String, String> {
     let sid = orch_session_id(&project)
         .ok_or_else(|| "no orchestrator session for this project yet".to_string())?;
     let dir = project_dir(&project).ok_or_else(|| format!("no local checkout for {project}"))?;
-    // claude's transcript directory is the working directory with every / and . turned into -
     let slug: String = dir
         .to_string_lossy()
         .chars()
@@ -444,12 +516,16 @@ fn orchestrator_chat(project: String, after: usize) -> Result<String, String> {
         .join(format!("{sid}.jsonl"));
     let raw = match std::fs::read_to_string(&path) {
         Ok(r) => r,
-        // No transcript yet is the normal state of a session nobody has spoken to.
-        Err(_) => return serde_json::to_string(&(Vec::<ChatTurn>::new(), 0usize)).map_err(|e| e.to_string()),
+        Err(_) => {
+            return serde_json::to_string(&(Vec::<ChatTurn>::new(), Vec::<ChatToolResult>::new(), 0usize))
+                .map_err(|e| e.to_string())
+        }
     };
     let lines: Vec<&str> = raw.lines().collect();
     let total = lines.len();
-    let mut out: Vec<ChatTurn> = Vec::new();
+    let mut turns: Vec<ChatTurn> = Vec::new();
+    let mut results: Vec<ChatToolResult> = Vec::new();
+
     for line in lines.iter().skip(after) {
         let v: serde_json::Value = match serde_json::from_str(line) {
             Ok(v) => v,
@@ -458,38 +534,79 @@ fn orchestrator_chat(project: String, after: usize) -> Result<String, String> {
         let role = match v.get("type").and_then(|t| t.as_str()) {
             Some("user") => "user",
             Some("assistant") => "assistant",
+            // `system` entries are hook summaries and harness notices addressed to the machinery.
             _ => continue,
         };
-        // Only the text blocks. Tool calls and their results are the machinery of a turn, not the
-        // conversation, and putting them here would rebuild the wall of terminal output that this
-        // view exists to replace.
-        let content = v.get("message").and_then(|m| m.get("content"));
-        let mut text = String::new();
+        let content = match v.get("message").and_then(|m| m.get("content")) {
+            Some(c) => c,
+            None => continue,
+        };
+        let mut blocks: Vec<ChatBlock> = Vec::new();
         match content {
-            Some(serde_json::Value::String(s)) => text.push_str(s),
-            Some(serde_json::Value::Array(blocks)) => {
-                for b in blocks {
-                    if b.get("type").and_then(|t| t.as_str()) == Some("text") {
-                        if let Some(t) = b.get("text").and_then(|t| t.as_str()) {
-                            if !text.is_empty() {
-                                text.push('\n');
+            serde_json::Value::String(s) if !s.trim().is_empty() => blocks.push(ChatBlock {
+                kind: "text".into(),
+                text: s.trim().to_string(),
+                tool: None,
+                tool_id: None,
+            }),
+            serde_json::Value::Array(items) => {
+                for b in items {
+                    match b.get("type").and_then(|t| t.as_str()) {
+                        Some("text") => {
+                            let t = b.get("text").and_then(|t| t.as_str()).unwrap_or("").trim();
+                            // Injected context is addressed to the model, not the reader, and it
+                            // dwarfs what the person actually typed.
+                            if t.is_empty() || t.starts_with('<') || t.contains("system-reminder") {
+                                continue;
                             }
-                            text.push_str(t);
+                            blocks.push(ChatBlock { kind: "text".into(), text: t.to_string(), tool: None, tool_id: None });
                         }
+                        Some("thinking") => {
+                            let t = b.get("thinking").and_then(|t| t.as_str()).unwrap_or("").trim();
+                            if t.is_empty() {
+                                continue;
+                            }
+                            blocks.push(ChatBlock { kind: "thinking".into(), text: t.to_string(), tool: None, tool_id: None });
+                        }
+                        Some("tool_use") => {
+                            let name = b.get("name").and_then(|n| n.as_str()).unwrap_or("tool");
+                            let empty = serde_json::Value::Null;
+                            let input = b.get("input").unwrap_or(&empty);
+                            blocks.push(ChatBlock {
+                                kind: "tool".into(),
+                                text: tool_summary(name, input),
+                                tool: Some(name.to_string()),
+                                tool_id: b.get("id").and_then(|i| i.as_str()).map(String::from),
+                            });
+                        }
+                        Some("tool_result") => {
+                            if let Some(id) = b.get("tool_use_id").and_then(|i| i.as_str()) {
+                                let empty = serde_json::Value::Null;
+                                results.push(ChatToolResult {
+                                    tool_id: id.to_string(),
+                                    ok: !b.get("is_error").and_then(|e| e.as_bool()).unwrap_or(false),
+                                    preview: preview_of(b.get("content").unwrap_or(&empty)),
+                                });
+                            }
+                        }
+                        Some("image") => blocks.push(ChatBlock {
+                            kind: "image".into(),
+                            text: "image".into(),
+                            tool: None,
+                            tool_id: None,
+                        }),
+                        _ => {}
                     }
                 }
             }
             _ => {}
         }
-        let text = text.trim().to_string();
-        // Injected context (system reminders, hook output, skill bodies) is addressed to the model,
-        // not to the person reading this, and it dwarfs what they actually typed.
-        if text.is_empty() || text.starts_with('<') || text.contains("system-reminder") {
+        if blocks.is_empty() {
             continue;
         }
-        out.push(ChatTurn { role: role.to_string(), text });
+        turns.push(ChatTurn { role: role.to_string(), blocks });
     }
-    serde_json::to_string(&(out, total)).map_err(|e| e.to_string())
+    serde_json::to_string(&(turns, results, total)).map_err(|e| e.to_string())
 }
 
 /// Send a line to a herdr pane, the way a person would type it.
@@ -1671,6 +1788,42 @@ mod herdr_tests {
     fn herdr_seat_rows_still_drop_other_muxes() {
         let rows = ["trantor\tcmux\tglm\tsurface-no", "trantor\therdrws\t__ws__\tw2"].join("\n");
         assert_eq!(parse_herdr_seats(&rows), vec![]);
+    }
+
+    #[test]
+    fn tool_summary_shows_the_field_a_person_would_recognise() {
+        let bash = serde_json::json!({ "command": "npm test", "description": "run the suite" });
+        assert_eq!(tool_summary("Bash", &bash), "npm test");
+        let read = serde_json::json!({ "file_path": "bin/crew.sh", "limit": 40 });
+        assert_eq!(tool_summary("Read", &read), "bin/crew.sh");
+        let grep = serde_json::json!({ "pattern": "orch", "path": "bin" });
+        assert_eq!(tool_summary("Grep", &grep), "orch  in bin");
+    }
+
+    #[test]
+    fn tool_summary_falls_back_rather_than_guessing_a_key() {
+        // An unknown tool takes its first string field. Guessing at "the important key" would be
+        // confidently wrong on every tool nobody thought of.
+        let unknown = serde_json::json!({ "target": "w2:p1", "n": 3 });
+        assert_eq!(tool_summary("herdr_thing", &unknown), "w2:p1");
+        assert_eq!(tool_summary("empty", &serde_json::json!({})), "");
+    }
+
+    #[test]
+    fn tool_summary_stays_one_line_and_bounded() {
+        let long = serde_json::json!({ "command": "x\ny".to_string() + &"z".repeat(400) });
+        let out = tool_summary("Bash", &long);
+        assert!(!out.contains('\n'), "newlines would break the one-line card");
+        assert!(out.chars().count() <= 161, "{}", out.chars().count());
+        assert!(out.ends_with('…'));
+    }
+
+    #[test]
+    fn tool_result_preview_handles_both_shapes_git_actually_writes() {
+        assert_eq!(preview_of(&serde_json::json!("done")), "done");
+        let blocks = serde_json::json!([{ "type": "text", "text": "line one" }, { "type": "text", "text": "line two" }]);
+        assert_eq!(preview_of(&blocks), "line one\nline two");
+        assert_eq!(preview_of(&serde_json::Value::Null), "");
     }
 
     #[test]
