@@ -11,7 +11,7 @@ import { join, basename, dirname } from "node:path";
 import { homedir, hostname } from "node:os";
 import { execSync, spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { resolveProject, hostId, resolveHubInfo, knownProjects, nonSeatReason, handoffDir } from "../lib/project.mjs";
+import { resolveProject, hostId, resolveHubInfo, knownProjects, nonSeatReason, handoffDir, readOrchSession, writeOrchSession } from "../lib/project.mjs";
 import { formatSubagentManifest } from "../lib/subagent-manifest.mjs";
 import { updateAvailable, maybeNotifyDesktop, readConfig } from "./lib/update-check.mjs";
 import { maybeCheckBalances } from "./lib/balance-check.mjs";
@@ -397,17 +397,48 @@ try {
   // project — take over with this fresh full window instead of starting cold. On a
   // compaction-triggered start, DON'T claim it (that's the same session that wrote it;
   // claiming would steal it from the freshly-spawned window) — show it for continuity only.
+  //
+  // WHO may claim depends on who WROTE it. A handoff written by the project's recorded
+  // orchestrator thread (orch-sessions.txt) is the ORCHESTRATOR'S baton: it is HELD for the
+  // orchestrator pane (`trantor open`, which marks itself with TRANTOR_ORCH) for a window,
+  // instead of going to whichever window happens to start first — on 2026-08-27 a stray 22:58
+  // Terminal session claimed the orch baton, then died, and the pane was muzzled all night.
+  // The hold LAPSES (default 30m) so an unclaimed baton never strands every other session.
+  // Any other handoff keeps first-fresh-session-wins.
   const isCompact = source === "compact";
-  const handoff = loadPendingHandoff(basename(projectDir), {
-    claim: !isCompact,
-    freshSession: { session_id: stdinObj.session_id || "", transcript_path: stdinObj.transcript_path || "" },
-  });
-  if (handoff) {
+  const orchEnv = process.env.TRANTOR_ORCH || "";
+  const isOrchPane = !!orchEnv && (orchEnv === "1" || orchEnv === project);   // project-matched: a child claude in another dir must not inherit the badge
+  const orchSid = readOrchSession(project);
+  const holdMs = Number(process.env.TRANTOR_ORCH_HOLD_MS || 30 * 60 * 1000);
+  const peek = loadPendingHandoff(basename(projectDir), { claim: false });
+  const orchOrigin = !!(peek && orchSid && peek.session_id && peek.session_id === orchSid);
+  const ageMs = peek ? Date.now() - (Number(peek.stamp) || 0) * 1000 : 0;
+  const held = orchOrigin && !isOrchPane && !isCompact && ageMs < holdMs;
+  const handoff = !peek ? null
+    : (isCompact || held) ? peek
+    : loadPendingHandoff(basename(projectDir), {
+        claim: true,
+        freshSession: { session_id: stdinObj.session_id || "", transcript_path: stdinObj.transcript_path || "" },
+      });
+  const claimed = !!handoff && !isCompact && !held;
+  // Follow the thread: claiming the orchestrator's baton makes THIS session the orchestrator
+  // thread, so the map `trantor open` resumes and the app's chat reads moves with it. The pane
+  // also records itself on every fresh start — that keeps the map honest even if a future
+  // claude forks the session id on resume.
+  if (claimed && orchOrigin && stdinObj.session_id) writeOrchSession(project, String(stdinObj.session_id));
+  if (isOrchPane && !isCompact && stdinObj.session_id) writeOrchSession(project, String(stdinObj.session_id));
+  if (handoff && held) {
+    process.stderr.write(`[trantor] pending handoff ${handoff.id} HELD for the orch pane (${Math.round(ageMs / 60000)}m old)\n`);
+    const mins = Math.max(1, Math.round((holdMs - ageMs) / 60000));
+    additionalContext += `<trantor-handoff-held id="${sanitize(handoff.id)}" from="${sanitize(handoff.machine)}">\n`;
+    additionalContext += `🔒 A handoff from this project's ORCHESTRATOR thread is pending, and it is being HELD for the Trantor orchestrator pane (\`trantor open\` claims it on start). This session did NOT claim it and does not have its content — do not act as the successor. If the user wants THIS session to take over instead: \`trantor adopt\`, then restart this session. Unclaimed, the hold lapses in ~${mins} minute(s) and the handoff becomes first-come.\n`;
+    additionalContext += `</trantor-handoff-held>\n`;
+  } else if (handoff) {
     process.stderr.write(`[trantor] ${isCompact ? "showing (not claiming, compact)" : "loaded"} pending handoff ${handoff.id}\n`);
     // Baton claimed → supersede every OTHER instance of this durable identity (instance-keys
     // contract). The dying twin's next /inbox or /poll answer tells its model to stand down —
     // the hub-enforced end of the twin message race. Best-effort; compact shows don't claim.
-    if (!isCompact && stdinObj.session_id) {
+    if (claimed && stdinObj.session_id) {
       await jpost(`${url}/instance/supersede`, { name: session, exceptInstanceId: String(stdinObj.session_id) }, session).catch(() => {});
     }
     additionalContext += `<trantor-handoff id="${sanitize(handoff.id)}" from="${sanitize(handoff.machine)}" trigger="${sanitize(handoff.trigger)}">\n`;

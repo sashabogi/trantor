@@ -10,7 +10,7 @@ import { execSync, spawnSync } from "node:child_process";
 import { createRequire } from "node:module";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { advise } from "./bin/advise.mjs";
-import { resolveProject, hostId, resolveHub, resolveHubInfo, nonSeatReason } from "./lib/project.mjs";
+import { resolveProject, hostId, resolveHub, resolveHubInfo, nonSeatReason, handoffDir, orchWriterSid } from "./lib/project.mjs";
 import { signedPost, signedGet } from "./hooks/lib/api.mjs";
 import { anchorCursor } from "./hooks/lib/inbox-ledger.mjs";
 import { assertNoSecrets } from "./lib/scrub.mjs";
@@ -352,11 +352,15 @@ server.tool("relay_handoff", "Write a rich handoff for THIS session so a fresh s
   async ({ summary }) => {
     const project = process.env.CLAUDE_PROJECT_DIR || process.cwd();
     const name = basename(project);
-    const dir = join(homedir(), ".agent-bus", "handoffs");
+    const dir = handoffDir();   // the SHARED resolver — a hardcoded homedir here diverged from the reader once already (handoff.mjs:21)
     if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
     const stamp = (() => { try { return execSync("date +%s", { encoding: "utf8" }).trim(); } catch { return String(process.pid); } })();
     let git = ""; try { git = execSync("git -C " + JSON.stringify(project) + " status --short 2>/dev/null | head -30", { encoding: "utf8" }).trim(); } catch {}
-    const rec = { id: `${name}-${stamp}`, project, projectName: name, machine: hostname(), trigger: "relay_handoff-tool", stamp: Number(stamp) || 0, summary: String(summary), gitStatus: git, consumed: false };
+    // session_id: WHO wrote this. This server has no harness session id, so it records the orch
+    // thread's id when the evidence says the writer IS that thread (orchWriterSid). Without it a
+    // tool-written orchestrator handoff carries no writer and the baton-hold + map-follow logic in
+    // sessionstart.mjs can never fire (found live 2026-08-28: trantor-1787886998 had session_id null).
+    const rec = { id: `${name}-${stamp}`, project, projectName: name, machine: hostname(), trigger: "relay_handoff-tool", session_id: orchWriterSid(project, PROJECT), stamp: Number(stamp) || 0, summary: String(summary), gitStatus: git, consumed: false };
     writeFileSync(join(dir, `${rec.id}.json`), JSON.stringify(rec, null, 2));
     await api("POST", "/send", { from: SESSION, to: "all", text: `📋 Handoff ready for ${name} — open a fresh session here to take over (${rec.id}).` }).catch(() => {});
     return { content: [{ type: "text", text: `handoff saved (${rec.id}). A fresh session in ${name} will load it on start. Tell the user to open a new terminal here.` }] };

@@ -4,7 +4,7 @@
 // self-announcing session, and closes THIS window once it takes over. Run from inside the session you
 // want to hand off. (The richer MODEL-authored handoff is the /trantor:handoff skill.)
 import { readdirSync, statSync } from "node:fs";
-import { join } from "node:path";
+import { join, basename } from "node:path";
 import { homedir } from "node:os";
 import { resolveProject } from "../lib/project.mjs";
 import { writeHandoff, spawnBaton } from "../hooks/lib/handoff.mjs";
@@ -30,7 +30,10 @@ function findTranscript() {
 }
 
 const transcript = findTranscript();
-const { file } = writeHandoff({ projectDir: cwd, sessionId: "", transcript, trigger: "manual-cli", force: true });   // manual = intentional, bypass the storm guard
+// The transcript's filename IS the writing session's id — record it, or an orchestrator-thread
+// handoff carries no writer and the baton-hold + map-follow logic in sessionstart.mjs can't fire.
+const sessionId = transcript ? basename(transcript, ".jsonl") : "";
+const { file } = writeHandoff({ projectDir: cwd, sessionId, transcript, trigger: "manual-cli", force: true });   // manual = intentional, bypass the storm guard
 console.log(`📋 handoff saved for ${project}: ${file}`);
 const { spawned, armed, windowId } = spawnBaton({ projectDir: cwd, handoffFile: file });
 console.log(spawned

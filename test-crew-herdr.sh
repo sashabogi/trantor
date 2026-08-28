@@ -305,6 +305,28 @@ OUT20b="$(cd "$TMP/proj" && CREW_MUX=herdr CREW_DRY_RUN=1 HOME="$TMP" PATH="$TMP
 ok "turning the dial to bypass reaches the pane's command" 'echo "$OUT20b" | grep -q "claude --dangerously-skip-permissions"'
 rm -f "$TMP/.agent-bus/autonomy.json"
 
+# 21. a recorded thread that HANDED OFF is not resumed. Its conversation ended in a handoff that
+#     waits for a successor; resuming the dead id replays the wrong thread (2026-08-27 seam). Open
+#     must start a FRESH id so the sessionstart hook can claim the baton and re-record the map.
+echo ""
+echo "A handed-off thread is not resumed:"
+echo 0 > "$TMP/herdr.n"; rm -f "$TMP/herdr.log" "$TMP/herdr.agents"; seed ""
+printf 'testproj\tDEAD-SID\n' > "$TMP/.agent-bus/orch-sessions.txt"
+mkdir -p "$TMP/.claude/projects/$SLUG19"; : > "$TMP/.claude/projects/$SLUG19/DEAD-SID.jsonl"
+mkdir -p "$TMP/.agent-bus/handoffs"
+printf '{"id":"testproj-1700000000","projectName":"testproj","session_id":"DEAD-SID","stamp":1700000000,"consumed":false}' > "$TMP/.agent-bus/handoffs/testproj-1700000000.json"
+OUT21="$(cd "$TMP/proj" && HOME="$TMP" PATH="$TMP/fakebin:$PATH" RELAY_PROJECT=testproj CREW_NO_PROC_KILL=1 bash "$ROOT/bin/crew.sh" open </dev/null 2>/dev/null)"
+ok "open does NOT resume the handed-off thread" '! grep -q "claude --resume DEAD-SID" "$TMP/herdr.log"'
+ok "open starts a FRESH session id instead" 'grep -qE "claude --session-id [0-9a-f-]{36}" "$TMP/herdr.log"'
+ok "the pane command carries the orchestrator badge" 'grep -q "TRANTOR_ORCH=testproj claude" "$TMP/herdr.log"'
+ok "open itself does not rewrite the map (the hook is the writer)" 'grep -q "^testproj	DEAD-SID$" "$TMP/.agent-bus/orch-sessions.txt"'
+# once the handoff is CONSUMED, the recorded thread is live again — resume as before
+printf '{"id":"testproj-1700000000","projectName":"testproj","session_id":"DEAD-SID","stamp":1700000000,"consumed":true}' > "$TMP/.agent-bus/handoffs/testproj-1700000000.json"
+echo 0 > "$TMP/herdr.n"; rm -f "$TMP/herdr.log" "$TMP/herdr.agents"; seed ""
+OUT21b="$(cd "$TMP/proj" && HOME="$TMP" PATH="$TMP/fakebin:$PATH" RELAY_PROJECT=testproj CREW_NO_PROC_KILL=1 bash "$ROOT/bin/crew.sh" open </dev/null 2>/dev/null)"
+ok "a CONSUMED handoff does not block resuming" 'grep -q "claude --resume DEAD-SID" "$TMP/herdr.log"'
+rm -f "$TMP/.agent-bus/handoffs/testproj-1700000000.json"
+
 echo ""
 if [ "$FAIL" = "0" ]; then echo "ALL PASS ($PASS)"; else echo "$FAIL FAILED"; fi
 exit $([ "$FAIL" = "0" ] && echo 0 || echo 1)

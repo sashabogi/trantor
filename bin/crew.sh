@@ -221,7 +221,10 @@ _orch_transcript() { printf '%s' "$HOME/.claude/projects/$(printf '%s' "$1" | tr
 # Feature flags the operator actually set (AGENT_TEAMS, FORK_SUBAGENT, EFFORT) are deliberately
 # left alone. Only identity is stripped.
 ORCH_STRIP="CLAUDECODE CLAUDE_CODE_ENTRYPOINT CLAUDE_CODE_SESSION_ID CLAUDE_CODE_CHILD_SESSION CLAUDE_CODE_BRIDGE_SESSION_ID CLAUDE_CODE_MESSAGING_SOCKET CLAUDE_CODE_MESSAGING_TOKEN CLAUDE_CODE_EXECPATH CLAUDE_PID"
-_orch_env() { local v out="env"; for v in $ORCH_STRIP; do out="$out -u $v"; done; printf '%s' "$out"; }
+# TRANTOR_ORCH marks the pane's claude as THE orchestrator pane for $PROJ: the sessionstart hook
+# uses it to claim a held orchestrator baton immediately and to record its own session id in
+# orch-sessions.txt (project-matched on the hook side, so a child claude elsewhere can't inherit it).
+_orch_env() { local v out="env"; for v in $ORCH_STRIP; do out="$out -u $v"; done; printf '%s TRANTOR_ORCH=%s' "$out" "$PROJ"; }
 
 # The HARNESS dial (trantor autonomy). "bypass" is what the operator means by letting the agent
 # just work; "prompt" is the default because a fresh install must never silently skip a permission
@@ -238,6 +241,33 @@ _orch_flags() {
 _orch_cmd() {   # $1=dir $2=sid
   if [ -f "$(_orch_transcript "$1" "$2")" ]; then printf '%s claude%s --resume %s' "$(_orch_env)" "$(_orch_flags)" "$2"
   else printf '%s claude%s --session-id %s' "$(_orch_env)" "$(_orch_flags)" "$2"; fi
+}
+
+# A recorded thread that HANDED OFF has ended: resuming it replays a dead conversation while the
+# handoff waits for a successor (the 2026-08-27 seam — "Trantor resumes the wrong thread"). When the
+# newest unconsumed handoff for the project was written BY the recorded session, open must start a
+# FRESH id instead; the sessionstart hook then claims the baton and records the fresh id in
+# orch-sessions.txt (single writer for the map: the hook + adopt — this function writes nothing).
+_orch_takeover_sid() {   # $1=project $2=recorded-sid → prints the sid open should use
+  local fresh
+  if node -e '
+const fs=require("fs"),path=require("path"),os=require("os");
+const dir=path.join(process.env.AGENT_BUS_DIR||process.env.RELAY_DATA_DIR||path.join(os.homedir(),".agent-bus"),"handoffs");
+const [proj,sid]=process.argv.slice(1);
+try{
+  const re=new RegExp("^"+proj.replace(/[.*+?^${}()|[\]\\]/g,"\\$&")+"-(\\d+)\\.json$");
+  const files=fs.readdirSync(dir).map(f=>{const m=re.exec(f);return m?{f,s:Number(m[1])}:null}).filter(Boolean).sort((a,b)=>b.s-a.s);
+  for(const {f} of files){
+    const r=JSON.parse(fs.readFileSync(path.join(dir,f),"utf8"));
+    if(r.consumed) continue;
+    process.exit(r.session_id&&r.session_id===sid?0:1);   // newest UNCONSUMED decides
+  }
+}catch(e){}
+process.exit(1);' "$1" "$2" 2>/dev/null; then
+    fresh="$(uuidgen 2>/dev/null | tr 'A-Z' 'a-z')"
+    [ -n "$fresh" ] && { echo "— recorded session $2 handed off: starting fresh as $fresh to claim it —" >&2; printf '%s' "$fresh"; return 0; }
+  fi
+  printf '%s' "$2"
 }
 
 # Does herdr see a LIVE agent in this pane? A pane answering `rename` only proves the pane exists;
@@ -569,6 +599,7 @@ open_orchestrator() {
   command -v herdr >/dev/null 2>&1 || { echo "trantor open needs herdr (the pane host) — install: curl -fsSL https://herdr.dev/install.sh | sh"; exit 1; }
   local wsid="" orch="" live_ids="" live_names="" pair="" line fresh=0
   local sid; sid="$(_orch_sid "$PROJ")" || { echo "trantor open: could not mint a session id (uuidgen missing?)" >&2; exit 1; }
+  sid="$(_orch_takeover_sid "$PROJ" "$sid")"
   if [ "$DRY" != "1" ]; then
     pair="$(_herdr_ws_live)"
     live_ids="$(printf '%s' "$pair" | sed -n 1p)"

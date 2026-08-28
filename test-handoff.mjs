@@ -14,6 +14,7 @@ import {
   alreadyHandedOff, markHandedOff, buildSummary, verbatimRecentTail, writeHandoff, spawnBaton,
   resolveOriginalWindow, supersedeOlderHandoffs, subagentsActive, armBatonClose,
 } from "./hooks/lib/handoff.mjs";
+import { orchWriterSid } from "./lib/project.mjs";
 import { freshEngaged, originalStillWorking } from "./bin/baton-close.mjs";
 
 let pass = 0, fail = 0;
@@ -249,6 +250,100 @@ seed();
   ok("originalStillWorking: true when a sub-agent transcript is fresh (still building)", originalStillWorking({ transcript_path: ot }) === true);
   ok("originalStillWorking: false for a record with no transcript", originalStillWorking({}) === false);
   rmSync(od, { recursive: true, force: true });
+}
+
+// --- orchestrator baton: held for the pane, and the map follows the thread (2026-08-27 seam) ---
+// A handoff written by the project's recorded orchestrator thread (orch-sessions.txt) must not go
+// to whichever window starts first: a stray 22:58 Terminal session claimed the orch baton, died,
+// and muzzled the pane all night. Held for the pane (TRANTOR_ORCH) for a window that LAPSES; and
+// whoever claims the orch baton becomes the recorded orch thread, so `trantor open` follows it.
+// Hermetic: its own AGENT_BUS_DIR, so nothing touches the real map or handoffs.
+{
+  const op = "orchbaton-" + process.pid;
+  const opDir = join(tmpdir(), op);
+  const bus = join(tmpdir(), "orchbus-" + process.pid);
+  mkdirSync(join(bus, "handoffs"), { recursive: true });
+  mkdirSync(opDir, { recursive: true });
+  const map = join(bus, "orch-sessions.txt");
+  const hfp = (stamp) => join(bus, "handoffs", `${op}-${stamp}.json`);
+  const mkhf = (stamp, sid) => writeFileSync(hfp(stamp), JSON.stringify({ id: `${op}-${stamp}`, project: opDir, projectName: op, machine: "h", trigger: "auto", session_id: sid, stamp, summary: "ORCH_SUMMARY", gitStatus: "", consumed: false }, null, 2));
+  const run = (env = {}, sid = "SUCC-SID") => {
+    const r = spawnSync("node", ["hooks/sessionstart.mjs"], {
+      input: JSON.stringify({ source: "startup", session_id: sid }),
+      encoding: "utf8", timeout: 15000,
+      env: { ...process.env, CLAUDE_PROJECT_DIR: opDir, RELAY_SESSION: op, RELAY_URL: CLOSED, AGENT_BUS_DIR: bus, TRANTOR_ORCH: "", TRANTOR_ORCH_HOLD_MS: "", ...env },
+    });
+    try { return JSON.parse(r.stdout).hookSpecificOutput?.additionalContext || ""; } catch { return ""; }
+  };
+  const consumedAt = (stamp) => JSON.parse(readFileSync(hfp(stamp), "utf8")).consumed;
+
+  // held: a fresh orch-origin handoff + a plain session → notice only, unconsumed, map untouched
+  writeFileSync(map, `${op}\tORCH-SID\n`);
+  let st = Math.floor(Date.now() / 1000) - 60;
+  mkhf(st, "ORCH-SID");
+  let ctx = run();
+  ok("orch-origin handoff is HELD for the pane (notice injected)", ctx.includes("trantor-handoff-held"));
+  ok("held: the summary is NOT injected", !ctx.includes("ORCH_SUMMARY"));
+  ok("held: the handoff stays unconsumed", consumedAt(st) === false);
+  ok("held: the orch map is untouched", readFileSync(map, "utf8").includes("ORCH-SID"));
+
+  // the pane claims immediately, and the map follows it
+  ctx = run({ TRANTOR_ORCH: op }, "PANE-SID");
+  ok("the orch pane claims the held baton immediately", ctx.includes("ORCH_SUMMARY") && consumedAt(st) === true);
+  ok("…and the map now points at the pane's session", readFileSync(map, "utf8").includes(`${op}\tPANE-SID`));
+  rmSync(hfp(st), { force: true });
+
+  // the hold lapses: an aged orch baton is first-come, and the map follows the claimant
+  writeFileSync(map, `${op}\tPANE-SID\n`);
+  st = Math.floor(Date.now() / 1000) - 3600;
+  mkhf(st, "PANE-SID");
+  ctx = run({}, "LATE-SID");
+  ok("the hold LAPSES: an aged orch baton is claimed first-come", ctx.includes("ORCH_SUMMARY") && consumedAt(st) === true);
+  ok("…and the map follows the late claimant", readFileSync(map, "utf8").includes(`${op}\tLATE-SID`));
+  rmSync(hfp(st), { force: true });
+
+  // a handoff from a NON-orch thread keeps first-wins and leaves the map alone
+  writeFileSync(map, `${op}\tOTHER-SID\n`);
+  st = Math.floor(Date.now() / 1000) - 60;
+  mkhf(st, "TERMINAL-SID");
+  ctx = run({}, "ANY-SID");
+  ok("a non-orch handoff keeps first-fresh-session-wins", ctx.includes("ORCH_SUMMARY") && consumedAt(st) === true);
+  ok("…and does NOT rewrite the orch map", readFileSync(map, "utf8").includes(`${op}\tOTHER-SID`));
+  rmSync(hfp(st), { force: true });
+  rmSync(bus, { recursive: true, force: true });
+  rmSync(opDir, { recursive: true, force: true });
+}
+
+// --- orchWriterSid: who is writing this handoff — evidence, not assertion ---
+// The relay MCP server has no harness session id (found live 2026-08-28: a tool-written orch
+// handoff carried session_id null, so the baton-hold could never fire). The writer is the orch
+// thread when the pane badge says so, or when the recorded thread's transcript is being written
+// RIGHT NOW (mtime — the adopt standard). Idle-thread and no-map cases must answer "".
+{
+  const wp = "orchwriter-" + process.pid;
+  const wpDir = join(tmpdir(), wp);
+  const bus = join(tmpdir(), "orchwbus-" + process.pid);
+  const cpd = join(tmpdir(), "orchwclaude-" + process.pid);
+  const slug = wpDir.replace(/[/.]/g, "-");
+  mkdirSync(join(cpd, slug), { recursive: true });
+  mkdirSync(bus, { recursive: true });
+  const prevBus = process.env.AGENT_BUS_DIR;   // restore, never delete — the operator may have set it
+  process.env.AGENT_BUS_DIR = bus;   // readOrchSession resolves through busDir()
+  const opts = { env: {}, claudeProjectsDir: cpd };
+  ok("orchWriterSid: no map row → empty", orchWriterSid(wpDir, wp, opts) === "");
+  writeFileSync(join(bus, "orch-sessions.txt"), `${wp}\tW-SID\n`);
+  ok("orchWriterSid: mapped but transcript missing → empty", orchWriterSid(wpDir, wp, opts) === "");
+  ok("orchWriterSid: the pane badge is definitive", orchWriterSid(wpDir, wp, { ...opts, env: { TRANTOR_ORCH: wp } }) === "W-SID");
+  ok("orchWriterSid: a badge for ANOTHER project does not count", orchWriterSid(wpDir, wp, { ...opts, env: { TRANTOR_ORCH: "other" } }) === "");
+  const tpath = join(cpd, slug, "W-SID.jsonl");
+  writeFileSync(tpath, "x\n");
+  ok("orchWriterSid: a freshly-written orch transcript is the writer", orchWriterSid(wpDir, wp, opts) === "W-SID");
+  const oldT = (Date.now() - 600_000) / 1000;
+  utimesSync(tpath, oldT, oldT);
+  ok("orchWriterSid: an idle orch thread is NOT the writer", orchWriterSid(wpDir, wp, opts) === "");
+  if (prevBus === undefined) delete process.env.AGENT_BUS_DIR; else process.env.AGENT_BUS_DIR = prevBus;
+  rmSync(bus, { recursive: true, force: true });
+  rmSync(cpd, { recursive: true, force: true });
 }
 
 // --- precompact: writes a handoff (consumed:false), never spawns under guard ---
