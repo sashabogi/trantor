@@ -29,11 +29,16 @@ function thresholds() {
 const balances = await fetchBalances(resolveKeys(process.env), { only: configured });
 const low = thresholds();
 
-// push the snapshot to the hub (best-effort) so the dashboard + warning line can use it
+// push the snapshot to the hub (best-effort) so the dashboard + warning line can use it.
+// TWO pushes on purpose: the project hub (fleet visibility) AND the LOCAL hub explicitly —
+// the desktop app reads balances from 127.0.0.1 because the data is machine-local, and the
+// project-resolved push goes to the REMOTE hub for pinned projects. That mismatch left the
+// local snapshot 11 days stale on 2026-08-28: the header chips faithfully rendered Aug-16
+// numbers, dimmed, while fresh pushes landed on a hub the app never asks.
 if (!noPush) {
-  try {
-    await signedPost("/balances", { balances, ts: Date.now() }, { timeoutMs: 2500 });
-  } catch {}
+  const snap = { balances, ts: Date.now() };
+  try { await signedPost("/balances", snap, { timeoutMs: 2500 }); } catch {}
+  try { await signedPost("http://127.0.0.1:4477/balances", snap, { timeoutMs: 2500 }); } catch {}
 }
 
 if (asJson) { console.log(JSON.stringify({ balances, low: balances.filter((b) => isLow(b, low, _qpct)).map((b) => b.provider) }, null, 2)); process.exit(0); }

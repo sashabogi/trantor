@@ -36,7 +36,11 @@ export async function maybeCheckBalances() {
   if (!Array.isArray(balances) || !balances.length) { try { writeFileSync(STAMP, JSON.stringify({ ts: Date.now(), low: [] })); } catch {} return { low: [] }; }
 
   // push the fresh snapshot to the hub for the dashboard + other sessions (best-effort, signed)
-  await signedPost("/balances", { balances, ts: Date.now(), by: process.env.TRANTOR_SESSION || "" }, { timeoutMs: 2000 });
+  const snap = { balances, ts: Date.now(), by: process.env.TRANTOR_SESSION || "" };
+  await signedPost("/balances", snap, { timeoutMs: 2000 });
+  // The desktop reads balances from the LOCAL hub (machine-local data); a pinned project's
+  // default push lands on the REMOTE one — the 11-day-stale-header bug. Push both.
+  await signedPost("http://127.0.0.1:4477/balances", snap, { timeoutMs: 2000 }).catch(() => {});
 
   const { t, q } = thresholds();
   const low = balances.filter(b => isLow(b, t, q)).map(b => ({ label: b.label, line: fmtBalance(b) }));

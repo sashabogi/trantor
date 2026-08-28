@@ -1369,6 +1369,13 @@ fn orchestrator_status(project: String) -> Result<String, String> {
     Ok("unknown".into())
 }
 
+/// Wrap text in bracketed-paste guards so the receiving TUI inserts it verbatim — newlines
+/// become newlines in the draft, never Enter presses. Single-line text is wrapped too: the
+/// guards are free, and one code path cannot regress into two.
+fn bracketed_paste(text: &str) -> String {
+    format!("\u{1b}[200~{text}\u{1b}[201~")
+}
+
 /// Send raw key presses to a pane. Separate from pane_send because interrupting a turn is a KEY,
 /// not text — typing the word "Escape" would just be typed.
 #[tauri::command]
@@ -1425,7 +1432,13 @@ fn pane_send(target: String, text: String) -> Result<(), String> {
     if pane_agent_status(&target) == "idle" {
         run(vec!["pane", "send-keys", &target, "esc", "esc", "esc"])?;
     }
-    run(vec!["pane", "send-text", &target, &text])?;
+    // BRACKETED PASTE, always. Typed text delivers every "\n" as an Enter press, so a multiline
+    // dictation submitted itself in fragments and stranded its tail in the input box — twice on
+    // 2026-08-28, the second time eating the operator's Orca instructions. Inside the paste
+    // guards the TUI inserts newlines literally (proven on a live claude TUI: three lines arrived
+    // as ONE draft, one Enter submitted one message).
+    let wrapped = bracketed_paste(&text);
+    run(vec!["pane", "send-text", &target, &wrapped])?;
     // Enter is a separate call: send-text is literal, so a newline inside it would be typed rather
     // than submitted.
     run(vec!["pane", "send-keys", &target, "Enter"])
@@ -3509,6 +3522,15 @@ mod herdr_tests {
         let snap = decode_chat_lines_with_context_window(rows, 3, 0);
         assert_eq!(snap.turns.len(), 1);
         assert_eq!(snap.turns[0].blocks[0].text, "real words from a person");
+    }
+
+    #[test]
+    fn bracketed_paste_wraps_multiline_verbatim() {
+        // A "\n" typed raw is an Enter press; inside the guards it is a newline in the draft.
+        let w = bracketed_paste("first\nsecond");
+        assert!(w.starts_with("\u{1b}[200~"));
+        assert!(w.ends_with("\u{1b}[201~"));
+        assert!(w.contains("first\nsecond"));
     }
 
     #[test]
