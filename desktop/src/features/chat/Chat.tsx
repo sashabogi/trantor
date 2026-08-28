@@ -15,16 +15,20 @@
 // only the wiring — backfill once via orchestrator_chat, then chat_watch + the two events, with
 // the old poll kept as the transport when the watcher is not offered (older build, or no session
 // behind the pane yet).
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type CSSProperties, type PointerEvent as RPointerEvent } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { ChevronRight, Wrench } from "lucide-react";
+import { ChevronDown, ChevronRight, PanelBottom, PanelBottomClose, PanelRight, PanelRightClose, Wrench } from "lucide-react";
 import { orchestratorOf } from "../workspace/herdr";
+import { DEFAULT_TERMINAL_DEPS, TerminalPane, type TerminalDeps } from "../workspace/TerminalPane";
 import { Composer, type Provenance } from "./Composer";
 import {
-  applyBackfill, applyRows, applySessionChanged, emptyChat, gaugeLabel, gaugeTone,
-  isDividerTurn, sessionLiveness,
-  type Backfill, type Block, type ChatState, type ContextGauge, type RowsPayload,
+  clampPanel, fontScale, loadFontStep, loadPanelSize, loadTrayOpen,
+  saveFontStep, savePanelSize, saveTrayOpen, type FontStep,
+} from "./prefs";
+import {
+  applyBackfill, applyRows, applySessionChanged, emptyChat, isDividerTurn, sessionLiveness,
+  type Backfill, type Block, type ChatState, type RowsPayload,
   type SessionPayload, type ToolResult, type Turn,
 } from "./streaming";
 
@@ -68,12 +72,12 @@ function ToolRun({ blocks, results }: { blocks: Block[]; results: Record<string,
       <button type="button" onClick={() => setOpen(o => !o)} className="flex w-full items-center gap-1.5 rounded-lg border border-tr-edge bg-black/20 px-2.5 py-1.5 text-left">
         <ChevronRight size={11} strokeWidth={2.5} className="shrink-0" style={{ transform: open ? "rotate(90deg)" : undefined }} />
         <Wrench size={11} strokeWidth={1.75} className="shrink-0 opacity-60" />
-        <span className="text-[11.5px] font-medium">{blocks.length} tools</span>
-        <span className="tr-mono min-w-0 flex-1 truncate text-[11px] text-tr-muted">
+        <span className="text-[length:calc(11.5px*var(--chat-scale,1))] font-medium">{blocks.length} tools</span>
+        <span className="tr-mono min-w-0 flex-1 truncate text-[length:calc(11px*var(--chat-scale,1))] text-tr-muted">
           {[...new Set(blocks.map(b => b.tool))].join(", ")}
         </span>
-        {failed > 0 && <span className="shrink-0 text-[10.5px] text-tr-danger">{failed} failed</span>}
-        {failed === 0 && running > 0 && <span className="shrink-0 text-[10.5px] text-tr-doing">running</span>}
+        {failed > 0 && <span className="shrink-0 text-[length:calc(10.5px*var(--chat-scale,1))] text-tr-danger">{failed} failed</span>}
+        {failed === 0 && running > 0 && <span className="shrink-0 text-[length:calc(10.5px*var(--chat-scale,1))] text-tr-doing">running</span>}
       </button>
       {open && blocks.map((b, i) => <ToolCard key={i} block={b} result={b.tool_id ? results[b.tool_id] : undefined} />)}
     </div>
@@ -90,17 +94,17 @@ function ToolCard({ block, result }: { block: Block; result?: ToolResult }) {
       <button type="button" onClick={() => setOpen(o => !o)} className="flex w-full items-center gap-1.5 px-2.5 py-1.5 text-left">
         <ChevronRight size={11} strokeWidth={2.5} className="shrink-0 transition-transform" style={{ transform: open ? "rotate(90deg)" : undefined, color: colour }} />
         <Wrench size={11} strokeWidth={1.75} className="shrink-0 opacity-60" />
-        <span className="shrink-0 text-[11.5px] font-medium">{block.tool}</span>
-        <span className="tr-mono min-w-0 flex-1 truncate text-[11px] text-tr-muted">{block.text}</span>
-        {state !== "ok" && <span className="shrink-0 text-[10.5px]" style={{ color: colour }}>{state}</span>}
+        <span className="shrink-0 text-[length:calc(11.5px*var(--chat-scale,1))] font-medium">{block.tool}</span>
+        <span className="tr-mono min-w-0 flex-1 truncate text-[length:calc(11px*var(--chat-scale,1))] text-tr-muted">{block.text}</span>
+        {state !== "ok" && <span className="shrink-0 text-[length:calc(10.5px*var(--chat-scale,1))]" style={{ color: colour }}>{state}</span>}
       </button>
       {open && (
         <div className="border-t border-tr-edge px-2.5 py-2">
-          {block.text && <pre className="tr-mono mb-2 whitespace-pre-wrap break-words text-[11px] text-tr-muted">{block.text}</pre>}
+          {block.text && <pre className="tr-mono mb-2 whitespace-pre-wrap break-words text-[length:calc(11px*var(--chat-scale,1))] text-tr-muted">{block.text}</pre>}
           {result ? (
-            <pre className="tr-mono max-h-[280px] overflow-auto whitespace-pre-wrap break-words text-[11px]">{result.preview || "(no output)"}</pre>
+            <pre className="tr-mono max-h-[280px] overflow-auto whitespace-pre-wrap break-words text-[length:calc(11px*var(--chat-scale,1))]">{result.preview || "(no output)"}</pre>
           ) : (
-            <div className="text-[11px] text-tr-muted">still running…</div>
+            <div className="text-[length:calc(11px*var(--chat-scale,1))] text-tr-muted">still running…</div>
           )}
         </div>
       )}
@@ -112,36 +116,30 @@ function Thinking({ text }: { text: string }) {
   const [open, setOpen] = useState(false);
   return (
     <div className="mt-1.5">
-      <button type="button" onClick={() => setOpen(o => !o)} className="flex items-center gap-1.5 text-[11px] text-tr-muted hover:text-tr-text">
+      <button type="button" onClick={() => setOpen(o => !o)} className="flex items-center gap-1.5 text-[length:calc(11px*var(--chat-scale,1))] text-tr-muted hover:text-tr-text">
         <ChevronRight size={11} strokeWidth={2.5} style={{ transform: open ? "rotate(90deg)" : undefined }} />
         thinking
       </button>
-      {open && <pre className="mt-1 whitespace-pre-wrap break-words rounded-lg bg-black/20 px-2.5 py-2 text-[11.5px] leading-relaxed text-tr-muted">{text}</pre>}
+      {open && <pre className="mt-1 whitespace-pre-wrap break-words rounded-lg bg-black/20 px-2.5 py-2 text-[length:calc(11.5px*var(--chat-scale,1))] leading-relaxed text-tr-muted">{text}</pre>}
     </div>
   );
 }
 
-// The window filling up (#5508). Colours come from the tokens that exist — tr-fail is the red,
-// tr-warn the amber — and the fill width is capped at 100 so an overflowed window shows a full
-// red bar rather than a bar wider than its track.
-const GAUGE_COLOUR: Record<"neutral" | "amber" | "red", string> = {
-  neutral: "var(--color-tr-muted)",
-  amber: "var(--color-tr-warn)",
-  red: "var(--color-tr-fail)",
-};
+// The window filling up (#5508) moved to the composer (#5521) — the gauge lives beside the
+// model/effort dials that spend the window it measures. Its implementation moved with it.
 
-function ContextGauge({ ctx }: { ctx: ContextGauge }) {
-  const tone = gaugeTone(ctx.frac);
-  if (tone === "hidden") return null;
-  // The guard above is what proves frac is known; the ?? 0 only satisfies the type at a point
-  // the early return has already made unreachable.
-  const frac = ctx.frac ?? 0;
-  return (
-    <div className="h-1 w-14 shrink-0 overflow-hidden rounded-full bg-tr-edge" title={gaugeLabel(ctx)}>
-      <div className="h-full rounded-full" style={{ width: `${Math.min(100, frac * 100)}%`, background: GAUGE_COLOUR[tone] }} />
-    </div>
-  );
-}
+// The reading size's units (#5522): the chat root carries the step as a `--chat-scale` custom
+// property, and the TRANSCRIPT's text sizes below are literal `calc()` Tailwind classes over
+// it — literal, NOT helper-built, because Tailwind only emits classes its scanner can read.
+// The header, composer and tray chrome keep their designed sizes, so comfort tuning never
+// reflows the controls. Scales stay on text: spacing and bubbles' padding are layout, not
+// reading size.
+
+// The tray mounts the Workspace lens's live pane WATCHING ONLY (#5523). TerminalPane is not
+// this tree's to edit, so the keyboard is severed at the deps seam it already exposes:
+// termWrite goes nowhere while bytes keep streaming in — the same live view, read-only by
+// construction rather than by a prop this file cannot add.
+const TRAY_DEPS: TerminalDeps = { ...DEFAULT_TERMINAL_DEPS, termWrite: () => Promise.resolve() };
 
 export function Chat({ project, dock, onDock, onClose }: {
   project: string; dock: Dock; onDock: (d: Dock) => void; onClose: () => void;
@@ -149,6 +147,15 @@ export function Chat({ project, dock, onDock, onClose }: {
   const [chat, setChat] = useState<ChatState>(emptyChat);
   const [target, setTarget] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // Reading comfort (#5522): the size the last drag left the panel at (null = the designed
+  // default), the transcript's S/M/L step, and the terminal tray's fold (#5523) — all persisted
+  // per the prefs module's contract, loaded once here and saved at the moment they change.
+  const [panel, setPanel] = useState<{ width: number | null; height: number | null }>(
+    () => ({ width: loadPanelSize("width"), height: loadPanelSize("height") }),
+  );
+  const [fontStep, setFontStep] = useState<FontStep>(() => loadFontStep());
+  const [trayOpen, setTrayOpen] = useState<boolean>(() => loadTrayOpen());
+  const root = useRef<HTMLDivElement | null>(null);
   // Mid-turn or not. Asked of the pane (herdr's agent list) rather than guessed from the
   // transcript, because a turn in progress has written nothing yet. The full status string also
   // decides whether the composer is worth typing into (#5477) — a registered pane whose agent
@@ -274,29 +281,98 @@ export function Chat({ project, dock, onDock, onClose }: {
   const working = status === "working";
   const liveness = sessionLiveness(status, target);
   const side = dock === "right";
+
+  /** Resize by dragging the panel's inner edge (#5522). The panel is anchored to the window's
+   *  far side (right of the content, or its bottom), so the dragged edge is the NEAR one and
+   *  the size is the anchored edge minus the pointer: pulling away from the content grows the
+   *  panel. Clamped on every move so the pointer can never stretch the panel past its sane
+   *  range; persisted once, on release. */
+  const startDrag = (e: RPointerEvent<HTMLDivElement>) => {
+    const anchored = root.current?.getBoundingClientRect();
+    if (!anchored) return;
+    e.preventDefault();
+    const axis: "width" | "height" = side ? "width" : "height";
+    const sizeAt = (ev: PointerEvent) =>
+      clampPanel(axis === "width" ? anchored.right - ev.clientX : anchored.bottom - ev.clientY, axis);
+    const move = (ev: PointerEvent) => setPanel(p => ({ ...p, [axis]: sizeAt(ev) }));
+    const up = (ev: PointerEvent) => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+      document.body.style.cursor = "";
+      const px = sizeAt(ev);
+      setPanel(p => ({ ...p, [axis]: px }));
+      savePanelSize(axis, px);
+    };
+    document.body.style.cursor = side ? "col-resize" : "row-resize";
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+  };
+
+  const pickFont = (s: FontStep) => { setFontStep(s); saveFontStep(s); };
+  const toggleTray = () => { const open = !trayOpen; setTrayOpen(open); saveTrayOpen(open); };
+
+  // CSS custom properties have no key in React's CSSProperties, so the variable is declared as
+  // part of the object's own type — an intersection, not an assertion: every key is checked.
+  const rootStyle: CSSProperties & Record<"--chat-scale", string> = {
+    ...(side ? { width: `${panel.width ?? 420}px` } : { height: `${panel.height ?? 340}px` }),
+    "--chat-scale": String(fontScale(fontStep)),
+  };
+
   return (
-    <div className={`flex min-h-0 flex-col border-tr-edge bg-tr-bg ${side ? "h-full w-[420px] shrink-0 border-l" : "h-[340px] shrink-0 border-t"}`}>
+    <div
+      ref={root}
+      style={rootStyle}
+      className={`relative flex min-h-0 flex-col border-tr-edge bg-tr-bg ${side ? "h-full shrink-0 border-l" : "shrink-0 border-t"}`}
+    >
+      {/* The inner edge, as a grab strip (#5522): left when the panel is docked right, top when
+          it is docked bottom. touch-none so a touch drag resizes instead of scrolling. */}
+      <div
+        role="separator"
+        aria-orientation={side ? "vertical" : "horizontal"}
+        aria-label={side ? "Resize chat width" : "Resize chat height"}
+        title="Drag to resize"
+        onPointerDown={startDrag}
+        style={{ touchAction: "none" }}
+        className={side
+          ? "absolute inset-y-0 left-0 z-10 w-[5px] cursor-col-resize hover:bg-white/[0.06]"
+          : "absolute inset-x-0 top-0 z-10 h-[5px] cursor-row-resize hover:bg-white/[0.06]"}
+      />
       {/* One row that cannot wrap. Every part is shrink-0 except the project name, which truncates,
           because a header that reflows into three lines is what "mangled" looked like. */}
       <div className="flex shrink-0 items-center gap-2 overflow-hidden px-3 py-2">
         <span className="shrink-0 text-[12.5px] font-semibold">Orchestrator</span>
         <span className="tr-mono min-w-0 flex-1 truncate text-[11px] text-tr-muted">{project}</span>
-        {/* Reported by the session, never asserted. */}
+        {/* Reported by the session, never asserted. The context gauge moved out of this header
+            to the composer bar (#5521), where the dials that fill the window live. */}
         {chat.meta.model && <span className="tr-chip shrink-0 text-[10.5px]">{chat.meta.model}</span>}
-        {/* The window filling up, live as usage rows land (#5508). Hidden until the first usage
-            row — an unknown window is absent, not a wrong number. */}
-        <ContextGauge ctx={chat.meta.context} />
         <div className="flex shrink-0 items-center gap-1">
-          <button type="button" onClick={() => onDock(side ? "bottom" : "right")} title={side ? "move to the bottom" : "move to the right"} className="rounded-[7px] px-2 py-1 text-[11px] text-tr-muted hover:text-tr-text">
-            {side ? "▤" : "▥"}
+          {/* The dock toggle says what it is (#5521): an icon that reads as the target dock,
+              not a mystery square. */}
+          <button
+            type="button"
+            onClick={() => onDock(side ? "bottom" : "right")}
+            title={side ? "Dock chat to bottom" : "Dock chat to right"}
+            className="rounded-[7px] p-1.5 text-tr-muted hover:text-tr-text"
+          >
+            {side ? <PanelBottom size={13} strokeWidth={1.75} /> : <PanelRight size={13} strokeWidth={1.75} />}
           </button>
-          <button type="button" onClick={onClose} title="hide" className="rounded-[7px] px-2 py-1 text-[11px] text-tr-muted hover:text-tr-text">✕</button>
+          {/* No bare ✕ (#5521): hiding is a labeled action whose undo is named right here, so
+              closing the chat never becomes a dismissal you need prior knowledge to reverse. */}
+          <button
+            type="button"
+            onClick={onClose}
+            title="Hide chat — the Orchestrator button in the corner brings it back"
+            className="flex items-center gap-1 rounded-[7px] px-2 py-1.5 text-[11px] text-tr-muted hover:text-tr-text"
+          >
+            {side ? <PanelRightClose size={13} strokeWidth={1.75} /> : <PanelBottomClose size={13} strokeWidth={1.75} />}
+            hide
+          </button>
         </div>
       </div>
 
       <div className="min-h-0 flex-1 overflow-y-auto px-3 pb-2">
         {!target && (
-          <div className="tr-card-ghost px-4 py-3 text-[12px] leading-relaxed">
+          <div className="tr-card-ghost px-4 py-3 text-[length:calc(12px*var(--chat-scale,1))] leading-relaxed">
             No orchestrator session is hosted for this project yet. Open one from the Workspace lens
             and this becomes the conversation with it.
           </div>
@@ -306,12 +382,12 @@ export function Chat({ project, dock, onDock, onClose }: {
              session, not more of the one you were reading. */
           <div className="my-2 flex items-center gap-2">
             <span className="h-px flex-1 bg-tr-edge" />
-            <span className="text-[10.5px] text-tr-muted">session continued</span>
+            <span className="text-[length:calc(10.5px*var(--chat-scale,1))] text-tr-muted">session continued</span>
             <span className="h-px flex-1 bg-tr-edge" />
           </div>
         )}
         {target && !chat.turns.length && !chat.continued && !error && (
-          <div className="px-1 py-2 text-[12px] leading-relaxed text-tr-muted">
+          <div className="px-1 py-2 text-[length:calc(12px*var(--chat-scale,1))] leading-relaxed text-tr-muted">
             Nothing said yet. Type below and it reaches the session exactly as if you had typed it in
             the terminal.
           </div>
@@ -322,14 +398,14 @@ export function Chat({ project, dock, onDock, onClose }: {
           isDividerTurn(t) ? (
             <div key={i}>
               {t.blocks.map((b, j) => (
-                <div key={j} title={b.text} className="tr-mono my-2 truncate text-center text-[10.5px] text-tr-muted">
+                <div key={j} title={b.text} className="tr-mono my-2 truncate text-center text-[length:calc(10.5px*var(--chat-scale,1))] text-tr-muted">
                   {b.text}
                 </div>
               ))}
             </div>
           ) : (
             <div key={i} className="mb-3">
-              <div className="mb-1 text-[10.5px] uppercase tracking-wider text-tr-muted">
+              <div className="mb-1 text-[length:calc(10.5px*var(--chat-scale,1))] uppercase tracking-wider text-tr-muted">
                 {t.role === "user" ? "you" : "orchestrator"}
               </div>
               {batch(t.blocks).map((b, j) =>
@@ -338,11 +414,11 @@ export function Chat({ project, dock, onDock, onClose }: {
                 ) : b.kind === "thinking" ? (
                   <Thinking key={j} text={b.text} />
                 ) : b.kind === "image" ? (
-                  <div key={j} className="mt-1.5 text-[11.5px] text-tr-muted">[image]</div>
+                  <div key={j} className="mt-1.5 text-[length:calc(11.5px*var(--chat-scale,1))] text-tr-muted">[image]</div>
                 ) : (
                   <div
                     key={j}
-                    className={`whitespace-pre-wrap break-words rounded-lg px-3 py-2 text-[12.5px] leading-relaxed ${
+                    className={`whitespace-pre-wrap break-words rounded-lg px-3 py-2 text-[length:calc(12.5px*var(--chat-scale,1))] leading-relaxed ${
                       t.role === "user" ? "bg-tr-panel" : "bg-black/25"
                     }`}
                   >
@@ -356,6 +432,27 @@ export function Chat({ project, dock, onDock, onClose }: {
         <div ref={foot} />
       </div>
 
+      {/* The terminal tray (#5523): the orchestrator's live pane folded under the transcript,
+          watching only. Collapsed by default; opening it takes the transcript's space, not the
+          composer's — reading stays possible with the terminal up. */}
+      <div className="shrink-0 border-t border-tr-edge">
+        <button
+          type="button"
+          onClick={toggleTray}
+          title="The orchestrator's live terminal — watching only, typing goes nowhere"
+          className="flex w-full items-center gap-1.5 px-3 py-1.5 text-[11px] text-tr-muted hover:text-tr-text"
+        >
+          <ChevronDown size={11} strokeWidth={2.5} className="shrink-0 transition-transform" style={{ transform: trayOpen ? undefined : "rotate(-90deg)" }} />
+          <span>Terminal</span>
+          <span className="text-[10.5px] opacity-70">read-only</span>
+        </button>
+        {trayOpen && (
+          <div className="flex h-[220px] min-h-0 flex-col overflow-hidden bg-black/20">
+            <TerminalPane project={project} agent="orchestrator" deps={TRAY_DEPS} />
+          </div>
+        )}
+      </div>
+
       {error && <div className="tr-mono px-3 pb-1 text-[11px] text-tr-danger">{error}</div>}
 
       <Composer
@@ -367,6 +464,9 @@ export function Chat({ project, dock, onDock, onClose }: {
         modelSource={pending ? "dispatched" : modelSource}
         working={working}
         userTexts={chat.turns.filter(t => t.role === "user").map(t => t.blocks.filter(b => b.kind === "text").map(b => b.text).join("\n"))}
+        context={chat.meta.context}
+        fontStep={fontStep}
+        onFontStep={pickFont}
         onSent={sync}
         onDispatch={(dial, value) => { if (dial === "model") { setPending(value); setModelSource("dispatched"); } }}
       />

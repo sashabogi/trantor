@@ -17,7 +17,8 @@ import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { ChevronDown, Paperclip, Square, ArrowUp } from "lucide-react";
 import { searchFiles } from "../files/fileApi";
-import { insertPaths, receiptFor, type PendingSend } from "./streaming";
+import { FONT_STEPS, type FontStep } from "./prefs";
+import { gaugeLabel, gaugeTone, insertPaths, receiptFor, type ContextGauge, type PendingSend } from "./streaming";
 
 export type Provenance = "reported" | "dispatched" | "unknown";
 
@@ -27,6 +28,37 @@ const MODELS = [
   { value: "fable", label: "fable" },
 ];
 const EFFORTS = ["low", "medium", "high", "xhigh", "max"];
+
+// The window filling up (#5508), living next to the dials that spend it (#5521). Colour comes
+// from the tokens that exist — tr-fail is the red, tr-warn the amber — and the fill width is
+// capped at 100 so an overflowed window shows a full red bar rather than a bar wider than its
+// track.
+const GAUGE_COLOUR: Record<"neutral" | "amber" | "red", string> = {
+  neutral: "var(--color-tr-muted)",
+  amber: "var(--color-tr-warn)",
+  red: "var(--color-tr-fail)",
+};
+
+// The gauge joined the composer (#5521) so the window it describes sits beside the model and
+// effort that fill it. Wider than the old header sliver, with the percentage spelled out and
+// tinted by tone — the tone must be unmistakable at a glance, which a 14px sliver never was.
+function ContextGauge({ ctx }: { ctx: ContextGauge }) {
+  const tone = gaugeTone(ctx.frac);
+  if (tone === "hidden") return null;
+  // The guard above is what proves frac is known; the ?? 0 only satisfies the type at a point
+  // the early return has already made unreachable.
+  const frac = ctx.frac ?? 0;
+  return (
+    <div className="flex shrink-0 items-center gap-1.5" title={gaugeLabel(ctx)}>
+      <div className="h-1.5 w-20 shrink-0 overflow-hidden rounded-full bg-tr-edge">
+        <div className="h-full rounded-full" style={{ width: `${Math.min(100, frac * 100)}%`, background: GAUGE_COLOUR[tone] }} />
+      </div>
+      <span className="tr-mono w-[30px] text-right text-[10.5px]" style={{ color: GAUGE_COLOUR[tone] }}>
+        {Math.round(frac * 100)}%
+      </span>
+    </div>
+  );
+}
 
 function Picker({ label, value, source, options, onPick, disabled, why }: {
   label: string;
@@ -76,7 +108,7 @@ function Picker({ label, value, source, options, onPick, disabled, why }: {
   );
 }
 
-export function Composer({ project, target, live, liveWhy, model, modelSource, working, userTexts, onSent, onDispatch }: {
+export function Composer({ project, target, live, liveWhy, model, modelSource, working, userTexts, context, fontStep, onFontStep, onSent, onDispatch }: {
   project: string;
   target: string | null;
   /** Is there an agent behind the pane to talk to (#5477)? Drives every input, with `liveWhy`
@@ -90,6 +122,11 @@ export function Composer({ project, target, live, liveWhy, model, modelSource, w
   /** The transcript's user turns, for delivery receipts (#5504): a send is only DELIVERED once
    *  one of these contains it — the transcript is the sole truth about arrival. */
   userTexts: string[];
+  /** The context window as the transcript reports it (#5508) — the gauge beside the dials. */
+  context: ContextGauge;
+  /** The reading size (#5522): owned by the panel (the var applies to its root), dialled here. */
+  fontStep: FontStep;
+  onFontStep: (s: FontStep) => void;
   onSent: () => void;
   onDispatch: (dial: "model" | "effort", value: string) => void;
 }) {
@@ -287,7 +324,19 @@ export function Composer({ project, target, live, liveWhy, model, modelSource, w
           disabled={!live}
           why={liveWhy}
         />
-        <div className="ml-auto flex items-center gap-1">
+        {/* The gauge sits beside the dials that fill the window (#5521) — the number is mono
+            because it is a number being compared, and it is hidden until truth exists. */}
+        <ContextGauge ctx={context} />
+        <div className="ml-auto flex items-center gap-2">
+          {/* Reading size (#5522): three steps over the transcript only — the chrome keeps its
+              designed sizes. The control rides the composer because that is where the dials live. */}
+          <div className="tr-seg" title="Reading size — the transcript only">
+            {FONT_STEPS.map(({ step, label }) => (
+              <button key={step} type="button" data-on={step === fontStep} onClick={() => onFontStep(step)}>
+                {label}
+              </button>
+            ))}
+          </div>
           {working ? (
             <button
               type="button"
