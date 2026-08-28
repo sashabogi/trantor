@@ -587,6 +587,7 @@ fn is_harness_injection(t: &str) -> bool {
         "Caveat: The messages below",
         "<system-reminder",
         "<command-name>",
+        "[SYSTEM NOTIFICATION",
         "This session is being continued from a previous conversation",
     ];
     let t = t.trim_start();
@@ -964,7 +965,11 @@ where
             Some("queue-operation") => {
                 if v.get("operation").and_then(|o| o.as_str()) == Some("enqueue") {
                     if let Some(text) = v.get("content").and_then(|c| c.as_str()) {
-                        if !text.trim().is_empty() {
+                        // The queue carries the HARNESS too: task-notifications and system
+                        // notices are enqueued exactly like operator messages (2026-08-28, a
+                        // build-completion notice rendered as "YOU" hours after this branch
+                        // was added). Same filter as every other user-shaped row.
+                        if !text.trim().is_empty() && !is_harness_injection(text) {
                             turns.push(ChatTurn {
                                 role: "user".into(),
                                 blocks: vec![ChatBlock {
@@ -2770,6 +2775,18 @@ mod herdr_tests {
         assert_eq!(snap.turns[0].role, "user");
         assert_eq!(snap.turns[0].blocks[0].kind, "text");
         assert_eq!(snap.turns[0].blocks[0].text, "sent while busy");
+    }
+
+    #[test]
+    fn a_queued_harness_notification_never_wears_the_operators_face() {
+        let rows = [
+            serde_json::json!({"type":"queue-operation","operation":"enqueue","content":"<task-notification>\n<task-id>x</task-id>\n</task-notification>"}).to_string(),
+            serde_json::json!({"type":"queue-operation","operation":"enqueue","content":"[SYSTEM NOTIFICATION - NOT USER INPUT]\nsomething automated"}).to_string(),
+            serde_json::json!({"type":"queue-operation","operation":"enqueue","content":"real words from a person"}).to_string(),
+        ];
+        let snap = decode_chat_lines_with_context_window(rows, 3, 0);
+        assert_eq!(snap.turns.len(), 1);
+        assert_eq!(snap.turns[0].blocks[0].text, "real words from a person");
     }
 
     #[test]
