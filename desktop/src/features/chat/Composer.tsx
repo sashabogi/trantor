@@ -14,9 +14,10 @@
 // names the reason on every locked control, because a control that explains itself is trusted.
 import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { ChevronDown, Paperclip, Square, ArrowUp } from "lucide-react";
 import { searchFiles } from "../files/fileApi";
-import { receiptFor, type PendingSend } from "./streaming";
+import { insertPaths, receiptFor, type PendingSend } from "./streaming";
 
 export type Provenance = "reported" | "dispatched" | "unknown";
 
@@ -127,6 +128,32 @@ export function Composer({ project, target, live, liveWhy, model, modelSource, w
     setDraft(draft.slice(0, at) + path + " " + draft.slice(cur));
     setMenu([]);
   };
+
+  // File drop (#5507). Tauri's webview intercepts native HTML5 drops by default, so
+  // onDragDropEvent is the only channel an ondrop handler would never fire on. A drop splices
+  // each absolute path plus a trailing space into the draft at the caret — the same splice the
+  // @-accept performs — and leaves the caret after the insertion.
+  useEffect(() => {
+    let alive = true;
+    let off: (() => void) | undefined;
+    try {
+      getCurrentWebview().onDragDropEvent(ev => {
+        if (ev.payload.type !== "drop") return;
+        const paths = ev.payload.paths;
+        if (!paths.length) return;
+        const cur = box.current?.selectionStart;
+        setDraft(d => insertPaths(d, cur ?? d.length, paths));
+        if (typeof cur === "number") {
+          const after = cur + paths.reduce((n, p) => n + p.length + 1, 0);
+          requestAnimationFrame(() => box.current?.setSelectionRange(after, after));
+        }
+      }).then(un => { if (alive) off = un; else un(); })
+        .catch(() => { /* no webview under this window (tests) — drops are a no-op there */ });
+    } catch {
+      // getCurrentWebview throws outside a Tauri window; the composer still works, just undroppable.
+    }
+    return () => { alive = false; off?.(); };
+  }, []);
 
   const line = (text: string) =>
     invoke("pane_send", { target, text }).catch(e => setError(String(e)));
