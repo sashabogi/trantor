@@ -1426,12 +1426,13 @@ fn pane_send(target: String, text: String) -> Result<(), String> {
             Err(String::from_utf8_lossy(&out.stderr).trim().to_string())
         }
     };
-    // Clear ONLY on a positive "idle". "working" → Escape would interrupt the running turn;
-    // "blocked" → Escape would dismiss the permission dialog the operator is being asked about;
-    // "unknown" → could be either, so the clear is skipped rather than risked.
-    if pane_agent_status(&target) == "idle" {
-        run(vec!["pane", "send-keys", &target, "esc", "esc", "esc"])?;
-    }
+    // NO automatic Escape, ever. The esc-esc-esc input clear (0.3.41) trusted herdr's "idle" —
+    // but herdr reads idle during the model's thinking phases, so the clear INTERRUPTED running
+    // turns: on 2026-08-28 every operator send for half an hour aborted the orchestrator's
+    // in-flight work ("Interrupted · What should Claude do instead?"), and queued messages never
+    // drained. The staged-input contamination the clear guarded against is rarer and survivable
+    // (delivery receipts treat a fused row as delivered-dirty); a killed turn is not. If a clear
+    // ever returns, its idle evidence must be the TRANSCRIPT's age, never a UI status.
     // BRACKETED PASTE, always. Typed text delivers every "\n" as an Enter press, so a multiline
     // dictation submitted itself in fragments and stranded its tail in the input box — twice on
     // 2026-08-28, the second time eating the operator's Orca instructions. Inside the paste
