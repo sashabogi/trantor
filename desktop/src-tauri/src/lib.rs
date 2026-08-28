@@ -955,6 +955,30 @@ where
         let role = match v.get("type").and_then(|t| t.as_str()) {
             Some("user") => "user",
             Some("assistant") => "assistant",
+            // A message sent while the agent is MID-TURN never becomes a `user` row: the CLI
+            // records an enqueue and folds the words into the running turn. The enqueue IS the
+            // operator speaking — without this branch their message neither rendered in the
+            // thread nor satisfied its delivery receipt, which then cried "not delivered" about
+            // a message that arrived (2026-08-28, third false alarm of the day). `remove` is the
+            // queue's own bookkeeping and stays invisible.
+            Some("queue-operation") => {
+                if v.get("operation").and_then(|o| o.as_str()) == Some("enqueue") {
+                    if let Some(text) = v.get("content").and_then(|c| c.as_str()) {
+                        if !text.trim().is_empty() {
+                            turns.push(ChatTurn {
+                                role: "user".into(),
+                                blocks: vec![ChatBlock {
+                                    kind: "text".into(),
+                                    text: text.to_string(),
+                                    tool: None,
+                                    tool_id: None,
+                                }],
+                            });
+                        }
+                    }
+                }
+                continue;
+            }
             // `system` entries are hook summaries and harness notices addressed to the machinery.
             _ => continue,
         };
@@ -2732,6 +2756,20 @@ mod herdr_tests {
         let snap = decode_chat_lines_with_context_window([row], 1, 0);
         assert_eq!(snap.turns[0].role, "user");
         assert_eq!(snap.turns[0].blocks[0].kind, "text");
+    }
+
+    #[test]
+    fn a_queued_mid_turn_message_renders_as_the_operator_speaking() {
+        let rows = [
+            serde_json::json!({"type":"queue-operation","operation":"enqueue","content":"sent while busy"}).to_string(),
+            serde_json::json!({"type":"queue-operation","operation":"remove","content":"sent while busy"}).to_string(),
+        ];
+        let snap = decode_chat_lines_with_context_window(rows, 2, 0);
+        // exactly ONE turn: the enqueue speaks, the remove is queue bookkeeping
+        assert_eq!(snap.turns.len(), 1);
+        assert_eq!(snap.turns[0].role, "user");
+        assert_eq!(snap.turns[0].blocks[0].kind, "text");
+        assert_eq!(snap.turns[0].blocks[0].text, "sent while busy");
     }
 
     #[test]
