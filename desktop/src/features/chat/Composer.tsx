@@ -19,6 +19,8 @@ import { ChevronDown, Paperclip, Square, ArrowUp } from "lucide-react";
 import { searchFiles } from "../files/fileApi";
 import { FONT_STEPS, type FontStep } from "./prefs";
 import { gaugeLabel, gaugeTone, insertPaths, receiptFor, type ContextGauge, type PendingSend } from "./streaming";
+import { projectSessions, takeoverAction, type ProjectSessions } from "./takeover";
+import { TakeoverStrip } from "./TakeoverStrip";
 
 export type Provenance = "reported" | "dispatched" | "unknown";
 
@@ -140,6 +142,22 @@ export function Composer({ project, target, live, liveWhy, model, modelSource, w
   const [menu, setMenu] = useState<string[]>([]);
   const [pick, setPick] = useState(0);
   const box = useRef<HTMLTextAreaElement | null>(null);
+
+  // The locked composer's one action (#5495), derived from the session inventory and polled
+  // ONLY while locked — the contract's gentle cadence, not a second heartbeat. A mid-turn
+  // Terminal conversation auto-enables the moment its turn ends; a live pane stops the poll
+  // entirely. A failed read keeps the last good inventory (transient), and none read yet means
+  // no offer: an unread state never wears a button.
+  const [inventory, setInventory] = useState<ProjectSessions | null>(null);
+  useEffect(() => {
+    if (live) return;
+    let alive = true;
+    const look = () => projectSessions(project).then(s => { if (alive) setInventory(s); }).catch(() => {});
+    look();
+    const iv = setInterval(look, 5_000);
+    return () => { alive = false; clearInterval(iv); };
+  }, [project, live]);
+  const action = live ? null : takeoverAction(inventory);
 
   /** The @token being typed, or null. Anchored to the LAST @ so a message can mention several. */
   const token = (() => {
@@ -274,6 +292,13 @@ export function Composer({ project, target, live, liveWhy, model, modelSource, w
       ))}
       {inFlight > 0 && (
         <div className="tr-mono mb-1 px-1 text-[10.5px] text-tr-muted">delivering…</div>
+      )}
+      {/* The locked state's one action (#5495): the biggest control explains itself by naming
+          what it would take to unlock — start, continue, reopen — instead of sitting grey. */}
+      {!live && action && (
+        <div className="mb-1">
+          <TakeoverStrip project={project} action={action} />
+        </div>
       )}
       <textarea
         ref={box}

@@ -9,6 +9,8 @@ import { ProjectHeader, type Lens } from "../project/ProjectHeader";
 import { TerminalPane } from "./TerminalPane";
 import { orchestratorOf, type HerdrSeat } from "./herdr";
 import { PaneBoundary } from "./PaneBoundary";
+import { newestTerminal, projectSessions, takeoverAction, type ProjectSessions } from "../chat/takeover";
+import { TakeoverStrip } from "../chat/TakeoverStrip";
 import { when } from "../../shared/time";
 
 // A seat = a crew peer of this project (agent:project). Host sessions (MacBook-*:project) are
@@ -43,6 +45,45 @@ const VIEW_KEY = "trantor.workspace.view";
 // Same ceil(sqrt(n)) tiling crew.sh uses for real panes, so the app and the multiplexer agree on
 // what a crew of N looks like.
 export const gridCols = (n: number) => { let c = 1; while (c * c < n) c += 1; return c; };
+
+// The pane area's empty state, honest by inventory (#5479). "No crew — trantor up" was a lie by
+// omission while the operator's own conversation ran in a Terminal; when the inventory sees one,
+// this says what IS true — the terminal cannot be mirrored (macOS will not hand one process
+// another's pty), but the conversation can be read in Chat and taken over, right here. Polls
+// only while shown: this card exists precisely when nothing else is rendering.
+function PaneEmptyState({ project }: { project: string }) {
+  const [inventory, setInventory] = useState<ProjectSessions | null>(null);
+  useEffect(() => {
+    let alive = true;
+    const look = () => projectSessions(project).then(s => { if (alive) setInventory(s); }).catch(() => {});
+    look();
+    const iv = setInterval(look, 5_000);
+    return () => { alive = false; clearInterval(iv); };
+  }, [project]);
+  const term = newestTerminal(inventory);
+  const action = takeoverAction(inventory);
+  if (!term || !action) {
+    // No Terminal conversation (or nothing readable yet): the stated placeholder stays, word
+    // for word — this surface never pretends a crew where none is.
+    return (
+      <div className="tr-card-ghost max-w-[440px] px-6 py-5 text-center text-[12.5px] leading-relaxed">
+        No crew on this project yet. Fire one up with <span className="tr-mono">trantor up</span>
+        &nbsp;and each seat&rsquo;s live terminal renders right here.
+      </div>
+    );
+  }
+  const pid = term.pid !== null ? `pid ${term.pid}` : "no pid";
+  const age = term.activeAgoSec !== null ? `last active ${term.activeAgoSec}s ago` : "quiet for over an hour";
+  return (
+    <div className="tr-card-ghost max-w-[440px] px-6 py-5 text-center text-[12.5px] leading-relaxed">
+      This conversation is running in a Terminal window ({pid}, {age}). The terminal itself cannot
+      be mirrored here — but the conversation can: read it in Chat, or take it over.
+      <div className="mt-3">
+        <TakeoverStrip project={project} action={action} bare />
+      </div>
+    </div>
+  );
+}
 
 type PaneTarget = {
   key: string;
@@ -231,10 +272,7 @@ export function Workspace({ client, project, lens, onLens }: {
               </PaneBoundary>
             ) : (
               <div className="flex flex-1 items-center justify-center">
-                <div className="tr-card-ghost max-w-[440px] px-6 py-5 text-center text-[12.5px] leading-relaxed">
-                  No crew on this project yet. Fire one up with <span className="tr-mono">trantor up</span>
-                  &nbsp;and each seat&rsquo;s live terminal renders right here.
-                </div>
+                <PaneEmptyState project={project} />
               </div>
               )}
               </div>
