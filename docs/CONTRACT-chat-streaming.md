@@ -322,3 +322,31 @@ Design rules bind as always (Buzz calibration): calm chrome, color only where it
 ## Definition of done
 Own tests + tsc green in YOUR worktree, cards #5555/#5556 through testing with evidence.
 Orchestrator integrates and ships app 0.3.51 (+ CLI 0.18.14 only if the codex row demands it).
+
+---
+
+# v7 — wave 7 (2026-08-28): balance chips v2 — icons, brightness, real Claude windows
+
+Ownership: deepseek — `desktop/src/features/fleet/**` + `desktop/src/app/AppShell.tsx` only.
+Orchestrator already shipped the data (lib/balances.mjs): a "windows" row kind for Claude —
+{ provider:"claude", kind:"windows", windows:[{name:"5h",usedPct,resetsAt,locked},{name:"7d",…}] }
+— pushed fresh to the LOCAL hub (the staleness bug is fixed CLI-side; snapshots now land where
+the app reads).
+
+Operator feedback the v1 strip earned, all binding:
+1. "Barely visible" — the muted base is TOO dim. Chips read at a glance: normal text at
+   text-tr-text brightness for the VALUE, muted only for the icon/label. Stale (snapshot ts older
+   than 30 min) dims AND says so in the tooltip ("as of 2h ago").
+2. ICONS, not words: each provider gets a small circular monogram in its brand hue (Claude
+   terracotta #D97757, OpenAI teal-ish for Codex, DeepSeek blue, GLM indigo, Kimi dark,
+   OpenRouter violet) — 16px circle + the number. No word labels in the strip; the tooltip
+   carries the full name. (Real brand SVGs can replace monograms later; monograms now.)
+3. The Claude chip shows BOTH windows compactly: "10% · 24%" with the tooltip spelling
+   "5-hour window 10% used, resets in 2h · weekly 24% used, resets in 5d". LOW/locked tints
+   tr-warn / tr-fail.
+4. Rows with no numbers (Codex subscription, plan-only rows) render as icon + "plan" — small,
+   honest, never fake numbers. A stale zombie row (gemini) older than 24h is HIDDEN entirely.
+5. Chip order: Claude first (the operator's primary), then prepaid $ rows, then quota rows,
+   then plan rows.
+vitest: extend the chip formatter drills for windows rows, stale-hide, brightness class logic.
+tsc clean. This is a REVISION of your own v1 — keep the refresh/focus machinery.
