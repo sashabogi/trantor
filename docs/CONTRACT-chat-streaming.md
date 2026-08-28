@@ -156,3 +156,65 @@ Design rules that bind BOTH seats (the Buzz calibration — violations get bounc
 ## Definition of done (both)
 `npx tsc --noEmit` exit 0 + `npx vitest run` all green in YOUR worktree, card to testing with
 commands + counts, done only green. The orchestrator integrates, builds, and ships.
+
+---
+
+# v4 — wave 4 (2026-08-28): in-app handoff W1 + tier-2 debts
+
+Ownership BY FILE TREE (design: docs/DESIGN-handoff-in-app.md — read it first for W1 packages):
+- codex — `desktop/src-tauri/src/**` only.
+- glm — `desktop/src/features/chat/**` only.
+- deepseek — `hub.mjs` + `test-contracts.mjs` only.
+- openrouter — `bin/advise.mjs` + `bin/models.mjs` + new `test-route-floor.mjs` only.
+- orchestrator — bin/baton.mjs, hooks/lib/handoff.mjs, bin/crew.sh (do not touch these).
+
+## codex — Tauri `handoff_now` (#5509 W1)
+`handoff_now(project: String) -> Result<String>` executes the same-pane replacement:
+1. Shell `trantor handoff --write-only` with cwd = the project dir (`~/development/<project>`),
+   PATH via terminal_path(). The flag lands in the CLI this same release; treat a nonzero exit OR
+   stderr mentioning the flag as a hard error returned to the UI — NEVER fall through to a flow
+   that could open a Terminal window.
+2. End the pane's claude GRACEFULLY by process signal, not keystrokes: resolve the orch pane from
+   crew-windows.txt (project + kind "orch"), `herdr pane process-info <pane>` for the foreground
+   pid, SIGTERM it, wait up to ~5s for exit (poll), SIGKILL only if still alive.
+3. Shell `trantor open` (cwd = project dir). The existing takeover path does the rest (fresh id,
+   baton claim, map re-record). Return a short staged log ("handoff written · session ended ·
+   pane reopened") for the UI to show.
+Pure helpers (arg building, pane row parsing) get cargo drills; the subprocess chain itself is
+integration-verified by the orchestrator.
+
+## glm — the handoff banner (#5509 W1 UI)
+- A banner ABOVE the composer when `meta.context.frac >= 0.90` (same threshold as the red gauge):
+  "Context at NN% — hand off to a fresh session?" with [Hand off now] and [Keep going].
+- [Keep going] hides it until frac grows by another 0.02 (episode, not a timer — a pure helper
+  `bannerVisible(frac, dismissedAt)` with vitest drills; persist dismissedAt in the chat prefs).
+- [Hand off now] → invoke("handoff_now", { project }), busy state on the button, error surfaced
+  in the banner; on success do nothing special — the chat-session-changed flow already shows the
+  "session continued" divider and the composer's liveness gate covers the gap.
+
+## deepseek — #5391 contract-ledger residue (hub)
+Live evidence from this morning: contracts #11047/#11048 stayed WAITING forever — their assignee
+answered a NEWER re-dispatch (#11074/#11061) and later even acked them by reference, yet the rows
+never closed; the stop hook nags every turn. In hub.mjs's contract/disposition logic:
+1. A DIRECT reply from peer B to A marks all of A→B's OLDER still-open contract rows (sent before
+   that reply) as answered-by-later-reply (disposition SUPERSEDED or a new "settled" — reuse
+   SUPERSEDED if it fits its meaning).
+2. Verify WHY the existing SUPERSEDED disposition did not fire for that morning case and cover it
+   with a drill reproducing it (send c1, send c2, answer c2 → c1 must not be WAITING).
+Drills in test-contracts.mjs (currently 36 — keep them all green).
+
+## openrouter — #5482 difficulty-router floor
+Twice this morning a flash-tier model acked a HARD contract without working. In the shared route
+pick (bin/advise.mjs / bin/models.mjs — find the ONE seam both the `trantor models` display and
+the crew live-selection use):
+- For difficulty "hard": candidates whose model id matches /(flash|turbo|lite|mini|highspeed|small)/i
+  are excluded when at least one non-matching candidate exists. Fall back to the full list only
+  when the floor would empty it. "medium"/"easy" unchanged.
+- New `test-route-floor.mjs`: floor filters when alternatives exist · keeps flash when it is ALL
+  there is · easy/medium untouched · the regex catches each tier word.
+
+## Definition of done (all)
+Your own tests green with commands + counts in the card note (codex: cargo; glm: vitest + tsc;
+deepseek: node test-contracts.mjs; openrouter: node test-route-floor.mjs + node --check on both
+edited files). Cards: #5509 stays doing (orchestrator closes after integration); others move
+themselves. The orchestrator integrates, runs everything, ships CLI 0.18.12 + app 0.3.49 together.
