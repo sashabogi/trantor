@@ -371,7 +371,7 @@ rate, not work rate.
 
 ```
 trantor setup | doctor | connect | profile | provider | models
-        | up <agents…> | swap <old> <new> | down | ui | advise | hub | watch
+        | up <agents…> | swap <old> <new> | down | seat-why <agent> | ui | advise | hub | watch
         | adopt <project> | reconcile | duty | orchestrate | patrol | app | backfill | init-hooks
 ```
 
@@ -385,6 +385,10 @@ trantor setup | doctor | connect | profile | provider | models
   (`glm:zai-coding-plan --difficulty hard`); spawns are verified on the bus with one retry;
   geometry auto-detects the screen you're working on (`CREW_RECT="X,Y,W,H"` to override).
 - **`trantor swap <oldAgent> <newSpec>`** replaces an exhausted agent with a live-selected one.
+- **`trantor seat-why <agent> [--json]`** — WHY a seat is down, from evidence (the err file first,
+  then logs, tracked panes, live pids): `live`, `dead-quota`, `dead-auth`, `dead-crash`,
+  `no-runner`, or `no-pane`, each with the advice that actually fits. A quota-dead seat is
+  indistinguishable from a broken bus until you read the err file — this reads it for you.
 - **`trantor down`** kills crew processes via their ttys and closes windows without macOS
   "Terminate?" dialogs.
 

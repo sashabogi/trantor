@@ -85,8 +85,9 @@ export function applyBackfill(s: ChatState, b: Backfill, after: number): ChatSta
 
 /** A session change: everything from the old session stops mattering. Clear the thread, restart
  *  the cursor at 0, and mark the restart so the view can say "session continued" instead of
- *  silently interleaving two sessions' rows. */
-export function applySessionChanged(s: ChatState): ChatState {
+ *  silently interleaving two sessions' rows. Takes the prior state and deliberately reads none
+ *  of it — the shape keeps it a state transition like its siblings. */
+export function applySessionChanged(_s: ChatState): ChatState {
   return { ...emptyChat, continued: true };
 }
 
