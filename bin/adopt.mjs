@@ -1,150 +1,107 @@
 #!/usr/bin/env node
-// trantor adopt — graduate a project from the machine-local hub to a remote hub, in ONE command.
+// `trantor adopt` — take over a session that is already running in a Terminal.
 //
-//   trantor adopt <project> [--hub <url>] [--dry] [--force]
+// You cannot move a running pty into herdr. That is the wall this hits, and it is not going away.
+// But the pty was never the valuable part: the CONVERSATION is, and that lives in a transcript on
+// disk. So adopting is a two-step move — learn which session id is live, then reopen THAT
+// conversation inside Trantor with --resume. The terminal changes; the thread does not.
 //
-// The crm-platform lesson: a new project is born unpinned, lives on the local hub (by design —
-// TDD §12.1's fallback), and moving it to the shared hub was three separate ceremonies (enroll
-// identities, migrate data, write the pin) spread across two machines. This collapses them:
-//
-//   1. read the project's rows off the LOCAL hub state (tasks/events/messages)
-//   2. enroll this machine's identities for the project on the target hub (owner-signed invites):
-//      the orchestrator (<host>:<project>) as owner, every existing seat key as write
-//   3. POST /import (owner-signed) — the hub merges, remapping colliding card ids itself
-//   4. verify the count round-trip, THEN write the routing pin
-//
-// No ssh, no direct Postgres access: the hub's /import endpoint is the migration surface.
-// Live sessions keep their old routing until restarted — adopt SAYS so rather than pretending.
-import { readFileSync, writeFileSync, existsSync, readdirSync } from "node:fs";
-import { join } from "node:path";
+// Which session is live cannot be read from the process: macOS does not expose another process's
+// environment, so CLAUDE_CODE_SESSION_ID is unreachable. The transcript's modification time is the
+// evidence we do have, and it is good evidence but not proof — a session that just ended and one
+// still running look similar for a minute. So this SHOWS the candidates and defaults to the
+// newest, rather than asserting which one is yours.
+import { readdirSync, statSync, existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { join, dirname } from "node:path";
 import { homedir } from "node:os";
-import { hostId, DEFAULT_HUB_URL } from "../lib/project.mjs";
-import { loadOrCreate, signRequest } from "../lib/identity.mjs";
-import { sfetchJson } from "../lib/signed-fetch.mjs";
-import { scan } from "../lib/splitbrain.mjs";
+import { resolveProject } from "../lib/project.mjs";
 
-const argv = process.argv.slice(2);
-const PROJECT = argv.find(a => !a.startsWith("--")) || "";
-const arg = (k) => { const i = argv.indexOf(`--${k}`); return i >= 0 ? (argv[i + 1] ?? "") : ""; };
-const has = (k) => argv.includes(`--${k}`);
-if (!PROJECT) { console.error("usage: trantor adopt <project> [--hub <url>] [--dry] [--force]"); process.exit(1); }
+const D = "\x1b[2m", B = "\x1b[1m", Y = "\x1b[33m", G = "\x1b[32m", R = "\x1b[0m";
+const args = process.argv.slice(2);
+const flag = (n) => { const i = args.indexOf(n); return i >= 0 ? args[i + 1] : null; };
 
-const BUS_DIR = process.env.AGENT_BUS_DIR || join(homedir(), ".agent-bus");
-const CONFIG_PATH = join(BUS_DIR, "config.json");
-let config = {}; try { config = JSON.parse(readFileSync(CONFIG_PATH, "utf8")); } catch {}
-const LOCAL = config.url || "http://127.0.0.1:4477";
-
-// target: --hub wins; else the hub most of the fleet already lives on
-const pinCounts = {};
-for (const u of Object.values(config.hubs || {})) if (!/127\.0\.0\.1|localhost/.test(u)) pinCounts[u] = (pinCounts[u] || 0) + 1;
-const TARGET = arg("hub") || Object.entries(pinCounts).sort((a, b) => b[1] - a[1])[0]?.[0] || "";
-if (!TARGET) { console.error("no remote hub known — pass --hub <url> (no non-local pins exist to infer one from)"); process.exit(1); }
-if ((config.hubs || {})[PROJECT] === TARGET) { console.log(`${PROJECT} is already pinned to ${TARGET} — nothing to do.`); process.exit(0); }
-
-// 1. the project's rows, straight from the local hub's state file (full fidelity, no pagination)
-const statePath = process.env.RELAY_STATE || join(BUS_DIR, "bus.json");
-let local = {}; try { local = JSON.parse(readFileSync(statePath, "utf8")); } catch {}
-const tasks = (local.tasks || []).filter(t => t.project === PROJECT);
-const events = (local.events || []).filter(e => e.project === PROJECT);
-const messages = (local.messages || []).filter(m => (m.project || "") === PROJECT);
-const livePeers = Object.entries(local.peers || {}).filter(([, p]) => p.project === PROJECT && Date.now() - (p.lastSeen || 0) < 5 * 60 * 1000);
-
-const owner = String(config.ownerIdentity || "");
-if (!owner) { console.error("config.ownerIdentity is not set — enrolments need an owner to sign invites"); process.exit(1); }
-
-// identities: the orchestrator as owner + every seat key that already exists for this project
-const safe = (s) => s.replace(/[^A-Za-z0-9_.-]/g, "_");
-const keyFiles = (() => { try { return readdirSync(join(BUS_DIR, "keys")); } catch { return []; } })();
-const orchestrator = `${hostId()}:${PROJECT}`;
-const seats = keyFiles
-  .filter(f => f.endsWith(`_${safe(PROJECT)}.json`))
-  .map(f => f.replace(/\.json$/, "").replace(`_${safe(PROJECT)}`, `:${PROJECT}`))
-  .filter(n => n !== safe(orchestrator).replace(`_${safe(PROJECT)}`, `:${PROJECT}`) && n !== orchestrator);
-
-console.log(`adopt    : ${PROJECT}`);
-console.log(`from     : ${LOCAL} (${tasks.length} cards · ${events.length} events · ${messages.length} messages)`);
-console.log(`to       : ${TARGET}`);
-console.log(`enroll   : ${orchestrator} (owner)${seats.length ? ` + ${seats.join(", ")} (write)` : ""}`);
-if (livePeers.length) console.log(`⚠ LIVE   : ${livePeers.map(([s]) => s).join(", ")} — they keep the OLD routing until restarted`);
-if (has("dry")) { console.log("\n[dry run] nothing changed."); process.exit(0); }
-
-const ownerId = loadOrCreate(owner, "human");
-async function enroll(name, role) {
-  const invBody = JSON.stringify({ scopes: [{ project: PROJECT, role }], ttlSec: 600 });
-  const invSig = signRequest(ownerId, { method: "POST", path: "/invite", body: invBody });
-  const inv = await (await fetch(`${TARGET}/invite`, { method: "POST", headers: { "content-type": "application/json", ...invSig }, body: invBody, signal: AbortSignal.timeout(8000) })).json();
-  if (!inv.token) throw new Error(`invite for ${name}: ${inv.error || "no token"}`);
-  const id = loadOrCreate(name, "agent");
-  const body = JSON.stringify({ token: inv.token, name, pubkey: id.pubkey, kind: "agent" });
-  const sig = signRequest(id, { method: "POST", path: "/enroll", body });
-  const r = await (await fetch(`${TARGET}/enroll`, { method: "POST", headers: { "content-type": "application/json", ...sig }, body, signal: AbortSignal.timeout(8000) })).json();
-  if (!r.ok) throw new Error(`enroll ${name}: ${r.error || "failed"}`);
-  console.log(`  ✓ enrolled ${name} (${role})`);
+const project = args.find(a => !a.startsWith("--") && args[args.indexOf(a) - 1] !== "--session")
+  || resolveProject(process.cwd());
+const devRoot = process.env.TRANTOR_DEV_ROOT || join(homedir(), "development");
+const dir = join(devRoot, project);
+if (!existsSync(dir)) {
+  console.error(`no local checkout for ${project} (looked in ${devRoot})`);
+  process.exit(1);
 }
 
-try {
-  await enroll(orchestrator, "owner");
-  for (const s of seats) await enroll(s, "write");
-
-  const imp = await sfetchJson(`${TARGET}/import`, {
-    identity: ownerId,
-    payload: { project: PROJECT, tasks, events, messages, by: owner, force: has("force") },
-    signal: AbortSignal.timeout(60000),
-  });
-  const impJson = await imp.json();
-  if (!impJson.ok) throw new Error(`import: ${impJson.error || imp.status}${impJson.existing ? ` (${impJson.existing} cards already there — --force to merge anyway)` : ""}`);
-  console.log(`imported : ${impJson.tasks} cards · ${impJson.events} events · ${impJson.messages} messages${impJson.remapped ? ` · ${impJson.remapped} card id(s) remapped` : ""}`);
-
-  // verify BEFORE pinning — a pin pointing at a hub that doesn't have the data is a data outage
-  const check = await (await sfetchJson(`${TARGET}/tasks?project=${encodeURIComponent(PROJECT)}`, { method: "GET", identity: ownerId })).json();
-  const remoteCount = (check.tasks || []).length;
-  if (remoteCount < tasks.length) throw new Error(`verify: target has ${remoteCount} cards, local has ${tasks.length} — NOT pinning`);
-  console.log(`verified : ${remoteCount} cards on target`);
-
-  config.hubs = config.hubs || {};
-  config.hubs[PROJECT] = TARGET;
-  writeFileSync(CONFIG_PATH, JSON.stringify(config, null, 2) + "\n");
-  console.log(`pinned   : ${PROJECT} → ${TARGET}`);
-
-  // TELL the stale sessions, don't just print at a human who may never see this terminal again.
-  // A live session holds its hub URL for its whole life: its MCP server resolved the route at
-  // boot and nothing re-reads config.json. So the moment the pin is written, every one of these
-  // is recording onto a hub nobody reads any more — the exact split-brain crebral-health spent
-  // two sessions diagnosing. They are still listening on the OLD hub, so that is where the
-  // notice has to go.
-  if (livePeers.length) {
-    const notice = `📦 ${PROJECT} has MOVED to ${TARGET}. You are still bound to ${LOCAL}, so your cards and messages now land on a hub nobody is reading. RESTART to pick up the pin — crew seats: \`trantor down && trantor up\` · Claude sessions: restart the session.`;
-    let told = 0;
-    for (const [session] of livePeers) {
-      try {
-        await sfetchJson(`${LOCAL}/send`, { identity: ownerId, payload: { from: owner, to: session, project: PROJECT, text: notice }, signal: AbortSignal.timeout(8000) });
-        told++;
-      } catch (e) { console.log(`  ⚠ could not notify ${session}: ${e.message}`); }
-    }
-    // …and once to the room, for anything live that never registered as a peer.
-    try { await sfetchJson(`${LOCAL}/send`, { identity: ownerId, payload: { from: owner, to: "all", project: PROJECT, text: notice }, signal: AbortSignal.timeout(8000) }); } catch {}
-    console.log(`\n⚠ ${livePeers.length} live session(s) still route to the OLD hub — told ${told} of them to restart:`);
-    for (const [s] of livePeers) console.log(`    ${s}`);
-    console.log(`  crew seats: trantor down && trantor up · Claude sessions: restart them when convenient.`);
-  }
-  console.log(`\n✓ adopted. New sessions on ${PROJECT} land on ${TARGET}.`);
-
-  // Prove the move actually landed as one hub, rather than trusting that it did. A migration is
-  // precisely the moment a project is most likely to end up living in two places at once.
-  try {
-    const { findings, blind } = await scan(config, ownerId, { defaultUrl: DEFAULT_HUB_URL, timeoutMs: 6000 });
-    const mine = findings.filter(f => f.project === PROJECT);
-    if (mine.length) {
-      console.log(`\n⚠ split-brain check on ${PROJECT}:`);
-      for (const f of mine) { console.log(`    ${f.message}`); console.log(`      → ${f.fix}`); }
-    } else if (blind.length) {
-      console.log(`\nsplit-brain check: partial — could not read ${blind.map(b => b.url).join(", ")}`);
-    } else {
-      console.log(`split-brain check: clean — ${PROJECT} is live on one hub only.`);
-    }
-  } catch {}
-} catch (e) {
-  console.error(`\n✗ adopt failed: ${e.message}`);
-  console.error("nothing was pinned — routing is unchanged.");
+/** claude keeps a project's transcripts under a slug of its working directory. */
+const slug = dir.replace(/[/.]/g, "-");
+const tdir = join(homedir(), ".claude", "projects", slug);
+if (!existsSync(tdir)) {
+  console.error(`no claude sessions have ever run in ${dir}`);
   process.exit(1);
+}
+
+const RECENT_MS = 60 * 60 * 1000;
+const now = Date.now();
+const candidates = readdirSync(tdir)
+  .filter(f => f.endsWith(".jsonl"))
+  .map(f => {
+    const p = join(tdir, f);
+    const st = statSync(p);
+    return { id: f.replace(/\.jsonl$/, ""), mtime: st.mtimeMs, size: st.size };
+  })
+  .filter(c => now - c.mtime < RECENT_MS)
+  .sort((a, b) => b.mtime - a.mtime);
+
+if (!candidates.length) {
+  console.error(`no session has written to ${project} in the last hour — nothing to adopt`);
+  console.error(`${D}start a fresh one instead: trantor open ${project}${R}`);
+  process.exit(1);
+}
+
+const chosen = flag("--session") || candidates[0].id;
+if (!candidates.some(c => c.id === chosen) && flag("--session")) {
+  console.error(`${chosen} has not written to ${project} recently`);
+  process.exit(1);
+}
+
+const ago = (ms) => { const s = Math.round((now - ms) / 1000); return s < 90 ? `${s}s ago` : `${Math.round(s / 60)}m ago`; };
+const kb = (n) => (n > 1e6 ? `${(n / 1e6).toFixed(1)}MB` : `${Math.round(n / 1e3)}KB`);
+
+console.log(`${B}adopt${R} · ${project}`);
+for (const c of candidates.slice(0, 5)) {
+  const mark = c.id === chosen ? `${G}→${R}` : " ";
+  console.log(`  ${mark} ${c.id}  ${D}${ago(c.mtime).padEnd(9)} ${kb(c.size)}${R}`);
+}
+if (candidates.length > 1) {
+  console.log(`${D}the newest is assumed to be yours; pick another with --session <id>${R}`);
+}
+
+// Record it where `trantor open` looks. Same file, same format the orchestrator pane already uses,
+// so adopting and opening fresh converge on one mechanism rather than two.
+const busDir = process.env.AGENT_BUS_DIR || join(homedir(), ".agent-bus");
+const store = join(busDir, "orch-sessions.txt");
+mkdirSync(dirname(store), { recursive: true });
+const rows = existsSync(store) ? readFileSync(store, "utf8").split("\n").filter(Boolean) : [];
+const kept = rows.filter(r => r.split("\t")[0] !== project);
+writeFileSync(store, [...kept, `${project}\t${chosen}`].join("\n") + "\n");
+console.log(`\n${G}recorded${R} ${chosen} as ${project}'s orchestrator session`);
+
+// Two live claudes on one transcript is the one thing that must not happen: they would interleave
+// writes into the same file. So say plainly what has to happen first.
+let running = [];
+try {
+  const pids = execFileSync("/usr/bin/pgrep", ["-x", "claude"], { encoding: "utf8" }).split("\n").filter(Boolean);
+  for (const pid of pids) {
+    try {
+      const out = execFileSync("/usr/sbin/lsof", ["-a", "-d", "cwd", "-p", pid, "-Fn"], { encoding: "utf8" });
+      if (out.split("\n").some(l => l.startsWith("n") && l.slice(1) === dir)) running.push(pid);
+    } catch { /* process went away between listing and asking */ }
+  }
+} catch { /* nothing running */ }
+
+if (running.length) {
+  console.log(`\n${Y}A claude is still running in ${dir} (pid ${running.join(", ")}).${R}`);
+  console.log(`Quit that window first — two sessions writing one transcript will corrupt the thread.`);
+  console.log(`Then: ${B}cd ${dir} && trantor open${R}`);
+} else {
+  console.log(`\nNothing is running there. Continue it in Trantor with:`);
+  console.log(`  ${B}cd ${dir} && trantor open${R}`);
 }

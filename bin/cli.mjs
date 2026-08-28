@@ -26,6 +26,7 @@ switch (cmd) {
   case "open":    spawn("/bin/bash", [join(ROOT, "bin/crew.sh"), "open", ...args], { stdio: "inherit", cwd: process.cwd() }).on("exit", c => process.exit(c ?? 0)); break;
   case "herdr":   spawn(process.execPath, [join(ROOT, "bin/herdr-agent.mjs"), ...args], { stdio: "inherit", cwd: process.cwd() }).on("exit", c => process.exit(c ?? 0)); break;
   case "autonomy": spawn(process.execPath, [join(ROOT, "bin/autonomy.mjs"), ...args], { stdio: "inherit", cwd: process.cwd() }).on("exit", c => process.exit(c ?? 0)); break;
+  case "adopt":   spawn(process.execPath, [join(ROOT, "bin/adopt.mjs"), ...args], { stdio: "inherit", cwd: process.cwd() }).on("exit", c => process.exit(c ?? 0)); break;
   case "integrate": spawn(process.execPath, [join(ROOT, "bin/integrate.mjs"), ...args], { stdio: "inherit", cwd: process.cwd() }).on("exit", c => process.exit(c ?? 0)); break;
   case "down":    spawn("/bin/bash", [join(ROOT, "bin/crew.sh"), "down", ...args], { stdio: "inherit", cwd: process.cwd() }).on("exit", c => process.exit(c ?? 0)); break;
   case "swap":    spawn("/bin/bash", [join(ROOT, "bin/crew.sh"), "swap", ...args], { stdio: "inherit", cwd: process.cwd() }).on("exit", c => process.exit(c ?? 0)); break;
@@ -192,6 +193,7 @@ switch (cmd) {
   trantor open        host THIS session as the project's orchestrator pane (trantor down spares it)
   trantor herdr       install|remove|status the login agent that keeps panes alive across a reboot
   trantor autonomy    how much Trantor may do unasked: seats, your harness, commit/push/deploy
+  trantor adopt       take over a session already running in a Terminal, then open it here
   trantor integrate   collect the crew's work, merge it, verify it, push it (--dry-run to rehearse)
   trantor down        tear the crew down (kills processes, closes windows, no dialogs)
   trantor prune       drop dead crew-window tracking rows (ghost workspaces/panes) without spawning anything
