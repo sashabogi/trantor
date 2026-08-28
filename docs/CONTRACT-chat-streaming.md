@@ -279,3 +279,46 @@ Exits nonzero with a one-line reason on refusal; --json emits {ok, stages[], sid
 codex: cargo green. glm: vitest + tsc green. Cards #5495 (button) / #5479 (visibility) move
 through testing with evidence. Orchestrator integrates, live-verifies with a REAL terminal
 session takeover drill, ships CLI 0.18.13 + app 0.3.50.
+
+---
+
+# v6 — wave 6 (2026-08-28): fleet balances in the header + composer standard pattern
+
+Ownership BY FILE TREE:
+- deepseek — `desktop/src/app/AppShell.tsx` + new `desktop/src/features/fleet/**` only (#5555).
+- glm — `desktop/src/features/chat/**` only (#5556).
+- orchestrator — lib/balances.mjs (codex subscription row). Do not touch.
+
+Design rules bind as always (Buzz calibration): calm chrome, color only where it means something
+(the LOW tint), primitives, tooltips on everything compact, no fake affordances.
+
+## deepseek — #5555 header balance strip
+- `client.balances()` (already typed, local hub) returns rows: prepaid {remaining, currency,
+  usage, limit} · quota {pct, resets} · plan/subscription rows. Codex arrives as kind
+  "subscription" (CLI-side, orchestrator).
+- A compact strip in the app header, right side: one chip per provider — short label + the one
+  number that matters ("OR $9.7" · "DS $23.8" · "GLM 89%·1h" · "Kimi plan" · "Codex sub").
+  Chip text muted normally; tinted tr-warn when the row is LOW (use the report's own low flag if
+  present, else remaining<threshold logic mirrored from the CLI: don't invent thresholds).
+- Tooltip per chip: full label, exact remaining/usage/limit or quota/reset, and the key source
+  ("via OPENROUTER_API_KEY").
+- Refresh: on mount, on window focus, and every 5 minutes — never tighter (the CLI itself
+  throttles provider calls; the hub snapshot is cheap to read). A failed fetch keeps the last
+  values with a dimmed strip, never an error banner.
+- Overflow: the strip truncates gracefully on narrow windows (chips shrink to monogram+number).
+- vitest for the pure chip-formatting helper (row → {label, value, low}), all row kinds.
+
+## glm — #5556 composer standard pattern
+- Send/stop move INSIDE the input box: the textarea's container becomes the visual field; the
+  send button (ArrowUp, existing style) sits bottom-right INSIDE it, and while the agent is
+  working it is REPLACED by the stop button (Square) in the same spot. One position, two states —
+  the Claude-desktop pattern. The old external send/stop go away.
+- The context gauge gains its word: a small muted "context" label before the bar (the tooltip
+  keeps the exact tokens). Nothing else about it moves.
+- The font stepper becomes self-explanatory: trigger shows "Aa", tooltip "Chat text size", and
+  the menu options read Small / Medium / Large (values unchanged, prefs key unchanged).
+- vitest: whatever pure state the send/stop swap uses gets a drill; tsc clean.
+
+## Definition of done
+Own tests + tsc green in YOUR worktree, cards #5555/#5556 through testing with evidence.
+Orchestrator integrates and ships app 0.3.51 (+ CLI 0.18.14 only if the codex row demands it).
