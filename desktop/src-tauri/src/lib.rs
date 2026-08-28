@@ -663,6 +663,59 @@ fn orchestrator_chat(project: String, after: usize) -> Result<String, String> {
     serde_json::to_string(&(turns, results, total, meta)).map_err(|e| e.to_string())
 }
 
+/// Is the orchestrator mid-turn? Resolved by PANE id rather than by agent label, because "claude"
+/// is not unique — a crew could run one as a seat. The pane is.
+#[tauri::command]
+fn orchestrator_status(project: String) -> Result<String, String> {
+    let rows = std::fs::read_to_string(desktop_bus_dir().join("crew-windows.txt")).unwrap_or_default();
+    let pane = rows
+        .lines()
+        .filter_map(|l| {
+            let f: Vec<&str> = l.split('\t').collect();
+            if f.len() >= 4 && f[0] == project && f[1] == "orch" { Some(f[3].to_string()) } else { None }
+        })
+        .next_back();
+    let pane = match pane {
+        Some(p) => p,
+        None => return Ok("none".into()),
+    };
+    let out = std::process::Command::new("herdr")
+        .args(["agent", "list"])
+        .env("PATH", terminal_path())
+        .output()
+        .map_err(|_| "herdr is not answering".to_string())?;
+    let v: serde_json::Value = serde_json::from_str(String::from_utf8_lossy(&out.stdout).trim())
+        .unwrap_or(serde_json::Value::Null);
+    let agents = v.get("result").and_then(|r| r.get("agents")).and_then(|a| a.as_array()).cloned().unwrap_or_default();
+    for a in agents {
+        if a.get("pane_id").and_then(|p| p.as_str()) == Some(pane.as_str()) {
+            return Ok(a.get("agent_status").and_then(|s| s.as_str()).unwrap_or("unknown").to_string());
+        }
+    }
+    Ok("unknown".into())
+}
+
+/// Send raw key presses to a pane. Separate from pane_send because interrupting a turn is a KEY,
+/// not text — typing the word "Escape" would just be typed.
+#[tauri::command]
+fn pane_keys(target: String, keys: String) -> Result<(), String> {
+    // Closed list. This runs a subprocess, so an arbitrary string would be an injection surface,
+    // and there is no reason the front end should be able to press anything it likes.
+    const ALLOWED: &[&str] = &["Escape", "Enter", "C-c"];
+    if !ALLOWED.contains(&keys.as_str()) {
+        return Err(format!("key '{keys}' is not offered"));
+    }
+    if target.trim().is_empty() {
+        return Err("no pane".into());
+    }
+    let out = std::process::Command::new("herdr")
+        .args(["pane", "send-keys", &target, &keys])
+        .env("PATH", terminal_path())
+        .output()
+        .map_err(|e| format!("herdr: {e}"))?;
+    if out.status.success() { Ok(()) } else { Err(String::from_utf8_lossy(&out.stderr).trim().to_string()) }
+}
+
 /// Send a line to a herdr pane, the way a person would type it.
 #[tauri::command]
 fn pane_send(target: String, text: String) -> Result<(), String> {
@@ -1731,6 +1784,8 @@ pub fn run() {
             seat_state,
             orchestrator_chat,
             pane_send,
+            pane_keys,
+            orchestrator_status,
             write_file,
             autonomy_get,
             autonomy_set,

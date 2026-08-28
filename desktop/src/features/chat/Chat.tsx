@@ -12,6 +12,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { ChevronRight, Wrench } from "lucide-react";
 import { orchestratorOf } from "../workspace/herdr";
+import { Composer, type Provenance } from "./Composer";
 
 export type Dock = "right" | "bottom";
 
@@ -24,6 +25,19 @@ type Meta = { model: string; version: string; branch: string };
 
 /** Consecutive turns from the same speaker are ONE thing to a reader. The transcript splits them
  *  every time a tool runs, which is why the panel showed "ORCHESTRATOR" stacked above every card. */
+/** Consecutive tool blocks become one array; everything else passes through. */
+function batch(blocks: Block[]): Array<Block | Block[]> {
+  const out: Array<Block | Block[]> = [];
+  for (const b of blocks) {
+    const last = out[out.length - 1];
+    if (b.kind === "tool") {
+      if (Array.isArray(last)) last.push(b);
+      else out.push([b]);
+    } else out.push(b);
+  }
+  return out;
+}
+
 function group(turns: Turn[]): Turn[] {
   const out: Turn[] = [];
   for (const t of turns) {
@@ -32,6 +46,31 @@ function group(turns: Turn[]): Turn[] {
     else out.push({ role: t.role, blocks: [...t.blocks] });
   }
   return out;
+}
+
+/** A run of consecutive tool calls is ONE act to a reader — "checked nine things" — not nine
+ *  stacked cards around a single sentence. Failures stay visible while collapsed, because a run
+ *  that went wrong is exactly the one you want to open. */
+function ToolRun({ blocks, results }: { blocks: Block[]; results: Record<string, ToolResult> }) {
+  const [open, setOpen] = useState(false);
+  const failed = blocks.filter(b => b.tool_id && results[b.tool_id] && !results[b.tool_id].ok).length;
+  const running = blocks.filter(b => !b.tool_id || !results[b.tool_id]).length;
+  if (blocks.length === 1) return <ToolCard block={blocks[0]} result={blocks[0].tool_id ? results[blocks[0].tool_id] : undefined} />;
+  return (
+    <div className="mt-1.5">
+      <button type="button" onClick={() => setOpen(o => !o)} className="flex w-full items-center gap-1.5 rounded-lg border border-tr-edge bg-black/20 px-2.5 py-1.5 text-left">
+        <ChevronRight size={11} strokeWidth={2.5} className="shrink-0" style={{ transform: open ? "rotate(90deg)" : undefined }} />
+        <Wrench size={11} strokeWidth={1.75} className="shrink-0 opacity-60" />
+        <span className="text-[11.5px] font-medium">{blocks.length} tools</span>
+        <span className="tr-mono min-w-0 flex-1 truncate text-[11px] text-tr-muted">
+          {[...new Set(blocks.map(b => b.tool))].join(", ")}
+        </span>
+        {failed > 0 && <span className="shrink-0 text-[10.5px] text-tr-danger">{failed} failed</span>}
+        {failed === 0 && running > 0 && <span className="shrink-0 text-[10.5px] text-tr-doing">running</span>}
+      </button>
+      {open && blocks.map((b, i) => <ToolCard key={i} block={b} result={b.tool_id ? results[b.tool_id] : undefined} />)}
+    </div>
+  );
 }
 
 function ToolCard({ block, result }: { block: Block; result?: ToolResult }) {
@@ -83,9 +122,11 @@ export function Chat({ project, dock, onDock, onClose }: {
   const [seen, setSeen] = useState(0);
   const [meta, setMeta] = useState<Meta>({ model: "", version: "", branch: "" });
   const [target, setTarget] = useState<string | null>(null);
-  const [draft, setDraft] = useState("");
   const [error, setError] = useState<string | null>(null);
-  const [sending, setSending] = useState(false);
+  const [working, setWorking] = useState(false);
+  // What the session REPORTED, versus what we sent and have not seen confirmed.
+  const [modelSource, setModelSource] = useState<Provenance>("unknown");
+  const [pending, setPending] = useState<string>("");
   const foot = useRef<HTMLDivElement | null>(null);
   const seenRef = useRef(0);
   seenRef.current = seen;
@@ -100,7 +141,11 @@ export function Chat({ project, dock, onDock, onClose }: {
     invoke<string>("orchestrator_chat", { project, after: seenRef.current })
       .then(raw => {
         const [fresh, rs, total, m]: [Turn[], ToolResult[], number, Meta] = JSON.parse(raw);
-        if (m.model || m.version || m.branch) setMeta(cur => ({ ...cur, ...m }));
+        if (m.model || m.version || m.branch) {
+          setMeta(cur => ({ ...cur, ...m }));
+          // A reported model outranks a dispatch: the session has spoken, so the guess retires.
+          if (m.model) { setModelSource("reported"); setPending(p => (p === m.model ? "" : p)); }
+        }
         if (fresh.length) setTurns(t => [...t, ...fresh]);
         // Results arrive after the calls they answer, so they are merged by id rather than
         // rendered in place — the card that has been on screen for a second fills itself in.
@@ -112,17 +157,17 @@ export function Chat({ project, dock, onDock, onClose }: {
   }, [project]);
 
   useEffect(() => { poll(); const iv = setInterval(poll, 2_000); return () => clearInterval(iv); }, [poll]);
-  useEffect(() => { foot.current?.scrollIntoView({ behavior: "smooth" }); }, [turns.length]);
 
-  const send = () => {
-    const text = draft.trim();
-    if (!text || !target) return;
-    setSending(true);
-    invoke("pane_send", { target, text })
-      .then(() => { setDraft(""); setError(null); })
-      .catch(e => setError(String(e)))
-      .finally(() => setSending(false));
-  };
+  // Mid-turn or not. Drives the stop button, and is asked of herdr rather than guessed from the
+  // transcript, because a turn in progress has written nothing yet.
+  useEffect(() => {
+    let alive = true;
+    const look = () => { invoke<string>("orchestrator_status", { project }).then(st => { if (alive) setWorking(st === "working"); }).catch(() => {}); };
+    look();
+    const iv = setInterval(look, 3_000);
+    return () => { alive = false; clearInterval(iv); };
+  }, [project]);
+  useEffect(() => { foot.current?.scrollIntoView({ behavior: "smooth" }); }, [turns.length]);
 
   const side = dock === "right";
   return (
@@ -160,9 +205,9 @@ export function Chat({ project, dock, onDock, onClose }: {
             <div className="mb-1 text-[10.5px] uppercase tracking-wider text-tr-muted">
               {t.role === "user" ? "you" : "orchestrator"}
             </div>
-            {t.blocks.map((b, j) =>
-              b.kind === "tool" ? (
-                <ToolCard key={j} block={b} result={b.tool_id ? results[b.tool_id] : undefined} />
+            {batch(t.blocks).map((b, j) =>
+              Array.isArray(b) ? (
+                <ToolRun key={j} blocks={b} results={results} />
               ) : b.kind === "thinking" ? (
                 <Thinking key={j} text={b.text} />
               ) : b.kind === "image" ? (
@@ -185,17 +230,14 @@ export function Chat({ project, dock, onDock, onClose }: {
 
       {error && <div className="tr-mono px-3 pb-1 text-[11px] text-tr-danger">{error}</div>}
 
-      <div className="border-t border-tr-edge p-2">
-        <textarea
-          value={draft}
-          onChange={e => setDraft(e.target.value)}
-          onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); } }}
-          placeholder={target ? "Message the orchestrator…  (⇧⏎ for a new line)" : "no session to talk to"}
-          disabled={!target || sending}
-          rows={side ? 3 : 2}
-          className="w-full resize-none rounded-lg bg-black/30 p-2.5 text-[12.5px] leading-relaxed outline-none placeholder:text-tr-muted disabled:opacity-50"
-        />
-      </div>
+      <Composer
+        target={target}
+        model={pending || meta.model}
+        modelSource={pending ? "dispatched" : modelSource}
+        working={working}
+        onSent={poll}
+        onDispatch={(dial, value) => { if (dial === "model") { setPending(value); setModelSource("dispatched"); } }}
+      />
     </div>
   );
 }
