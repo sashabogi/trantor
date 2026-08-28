@@ -423,6 +423,10 @@ export function maybeSpawn(projectDir, conf = readConfig()) {
     if (process.platform !== "darwin") return false;
     if (process.env.TRANTOR_NO_HANDOFF_SPAWN === "1") return false;
     if (conf.autoHandoffPrompt === false) return false;
+    if (hasOrchPane(basename(projectDir))) {
+      process.stderr.write(`[trantor] orch pane hosts ${basename(projectDir)} — no Terminal window; the pane claims the handoff on its next open\n`);
+      return false;
+    }
     const script = join(HERE, "..", "..", "bin", "handoff-prompt.sh");
     if (!existsSync(script)) { process.stderr.write(`[trantor] handoff-prompt.sh missing\n`); return false; }
     const timeout = String(conf.handoffPromptTimeout || 25);
@@ -446,9 +450,26 @@ export function spawnSuppressed() {
   return process.env.TRANTOR_NO_HANDOFF_SPAWN === "1" || process.env.TRANTOR_NO_BATON_SPAWN === "1";
 }
 
+// Does this project have a hosted orchestrator pane? When it does, the PANE is the successor
+// surface: `trantor open` claims the handoff there, and spawning a Terminal window would put the
+// fresh session on exactly the surface the operator is trying to leave (#5509 W1). The tracked
+// row is the signal — rows are recorded by open and dropped by teardown/prune, and a stale row
+// costs only a skipped window, never a lost handoff (the handoff waits, held for the pane).
+export function hasOrchPane(projectName) {
+  try {
+    const state = join(process.env.AGENT_BUS_DIR || process.env.RELAY_DATA_DIR || join(homedir(), ".agent-bus"), "crew-windows.txt");
+    if (!existsSync(state)) return false;
+    return readFileSync(state, "utf8").split("\n").some(l => {
+      const f = l.split("\t");
+      return f[0] === projectName && f[1] === "orch";
+    });
+  } catch { return false; }
+}
+
 export function spawnFresh(projectDir) {
   try {
     if (process.platform !== "darwin" || spawnSuppressed()) return false;
+    if (hasOrchPane(basename(projectDir))) return false;   // the pane is the successor surface (#5509)
     const script = join(HERE, "..", "..", "bin", "open-session.sh");
     if (!existsSync(script)) return false;
     const child = spawn("/bin/bash", [script, projectDir, RECAP_CMD], { detached: true, stdio: "ignore" });

@@ -369,5 +369,39 @@ rmSync(join(homedir(), ".agent-bus", `handoff-fired-pctest-${process.pid}.json`)
 rmSync(tmp, { recursive: true, force: true });
 rmSync(projDir, { recursive: true, force: true });
 
+// --- #5509 W1: the pane is the successor surface ---
+{
+  const bus = join(tmpdir(), "orchpane-" + process.pid);
+  mkdirSync(bus, { recursive: true });
+  const prevBus2 = process.env.AGENT_BUS_DIR;
+  process.env.AGENT_BUS_DIR = bus;
+  const { hasOrchPane } = await import("./hooks/lib/handoff.mjs?orchpane");
+  ok("hasOrchPane: false with no state file", hasOrchPane("paneproj") === false);
+  writeFileSync(join(bus, "crew-windows.txt"), "paneproj\therdrws\t__ws__\tw9\npaneproj\torch\t__orch__\tw9:p1\n");
+  ok("hasOrchPane: true when the project has a tracked orch row", hasOrchPane("paneproj") === true);
+  ok("hasOrchPane: false for a project with only seat rows", hasOrchPane("otherproj") === false);
+  if (prevBus2 === undefined) delete process.env.AGENT_BUS_DIR; else process.env.AGENT_BUS_DIR = prevBus2;
+  rmSync(bus, { recursive: true, force: true });
+}
+
+// --- baton --write-only: writes and announces, NEVER spawns (the in-app flow, #5509) ---
+{
+  const bus = join(tmpdir(), "wobus-" + process.pid);
+  const projDir2 = join(tmpdir(), "woproj-" + process.pid);
+  mkdirSync(join(bus, "handoffs"), { recursive: true });
+  mkdirSync(projDir2, { recursive: true });
+  const r = spawnSync("node", [join(process.cwd(), "bin", "baton.mjs"), "--write-only"], {
+    cwd: projDir2, encoding: "utf8", timeout: 30000,
+    env: { ...process.env, AGENT_BUS_DIR: bus, TRANTOR_NO_SCROOGE: "1", TRANTOR_NO_HANDOFF_SPAWN: "1", RELAY_URL: CLOSED },
+  });
+  const wrote = (await import("node:fs")).readdirSync(join(bus, "handoffs")).length;
+  ok("write-only exits 0", r.status === 0);
+  ok("write-only writes the handoff", wrote === 1);
+  ok("write-only announces itself and stops before any spawn", r.stdout.includes("write-only") && !r.stdout.includes("fresh session is opening"));
+  rmSync(bus, { recursive: true, force: true });
+  rmSync(projDir2, { recursive: true, force: true });
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
+

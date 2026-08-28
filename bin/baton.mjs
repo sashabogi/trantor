@@ -35,6 +35,13 @@ const transcript = findTranscript();
 const sessionId = transcript ? basename(transcript, ".jsonl") : "";
 const { file } = writeHandoff({ projectDir: cwd, sessionId, transcript, trigger: "manual-cli", force: true });   // manual = intentional, bypass the storm guard
 console.log(`📋 handoff saved for ${project}: ${file}`);
+// --write-only: the in-app flow (#5509). The app ends the pane's session itself and reopens it
+// through `trantor open`, which claims this handoff — a Terminal window here would be exactly the
+// wrong surface, so the flag writes, announces, and stops.
+if (process.argv.includes("--write-only")) {
+  console.log(`🔄 write-only: no window spawned — the pane takeover (trantor open) claims it next.`);
+  process.exit(0);
+}
 const { spawned, armed, windowId } = spawnBaton({ projectDir: cwd, handoffFile: file });
 console.log(spawned
   ? `🔄 baton: a fresh session is opening (it'll recap the handoff)${armed ? ` — this window (${windowId}) closes once it takes over` : " — couldn't detect this window; close it yourself once the new one is up"}`

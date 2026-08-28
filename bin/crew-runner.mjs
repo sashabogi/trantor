@@ -44,7 +44,22 @@ function ensureSeatWorktree(sourceDir) {
   const branch = `seat/${AGENT}`;
   if (existsSync(seatDir)) {
     const ok = gitOut(["-C", seatDir, "rev-parse", "--is-inside-work-tree"], seatDir) === "true";
-    if (ok) return seatDir;
+    if (ok) {
+      // #5403: a worktree created once builds against THAT day's main forever — every wave since
+      // has needed a hand fast-forward. Refresh only when it is CLEAN: a dirty tree is a seat's
+      // unintegrated work and a diverged branch is a decision, and refreshing must never eat
+      // either. Failure to refresh is loud but non-fatal: stale beats broken.
+      const dirty = gitOut(["-C", seatDir, "status", "--porcelain"], seatDir);
+      if (dirty === "") {
+        const head = gitOut(["-C", root, "rev-parse", "HEAD"], root);
+        const ff = head && spawnSync("git", ["-C", seatDir, "merge", "--ff-only", head], { stdio: "ignore", timeout: 15000 });
+        if (ff && ff.status === 0) console.log(`\x1b[2m[runner]\x1b[0m ${branch} worktree refreshed to ${head.slice(0, 7)}`);
+        else console.log(`\x1b[33m[runner]\x1b[0m ${branch} worktree diverged from main HEAD — left as-is (integrate or reset it)`);
+      } else {
+        console.log(`\x1b[33m[runner]\x1b[0m ${branch} worktree has uncommitted work — not refreshed`);
+      }
+      return seatDir;
+    }
     console.log(`\x1b[33m[runner]\x1b[0m worktree path exists but is not a git worktree: ${seatDir} — using ${sourceDir}`);
     return sourceDir;
   }
