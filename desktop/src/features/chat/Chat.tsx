@@ -241,6 +241,18 @@ export function Chat({ project, dock, onDock, onClose }: {
     orchestratorOf(project).then(o => setTarget(o?.surface ?? null)).catch(() => setTarget(null));
   }, [project]);
 
+  // A takeover hosts the pane AFTER this panel looked for one (#5495): while none is hosted,
+  // keep looking, so the conversation — and the composer's liveness — arrive on their own the
+  // moment `trantor open` lands, without a project switch to notice.
+  useEffect(() => {
+    if (target !== null) return;
+    let alive = true;
+    const iv = setInterval(() => {
+      orchestratorOf(project).then(o => { if (alive && o) setTarget(o.surface); }).catch(() => {});
+    }, 5_000);
+    return () => { alive = false; clearInterval(iv); };
+  }, [project, target]);
+
   /** Fetch everything past the cursor and fold it in. This is the backfill, the mismatch repair
    *  and the post-send refresh — one path, so they cannot disagree. */
   const sync = useCallback(() => {
