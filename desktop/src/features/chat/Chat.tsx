@@ -7,21 +7,27 @@
 //
 // The first version dropped tool calls to avoid a wall of text. That was the wrong call: what an
 // agent DID is most of what you want to see. They render as collapsed cards instead, and a result
-// fills its card in when it arrives, which is usually a later poll than the call.
+// fills its card in when it arrives, which is usually a later row than the call.
+//
+// Liveness is row-level (#5475): the watcher (#5474) pushes each transcript row as it lands, so a
+// turn in progress renders progressively instead of appearing on the next 2s poll. The whole state
+// machine lives in streaming.ts so the cursor rules are testable without a window; this file is
+// only the wiring — backfill once via orchestrator_chat, then chat_watch + the two events, with
+// the old poll kept as the transport when the watcher is not offered (older build, or no session
+// behind the pane yet).
 import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { ChevronRight, Wrench } from "lucide-react";
 import { orchestratorOf } from "../workspace/herdr";
 import { Composer, type Provenance } from "./Composer";
+import {
+  applyBackfill, applyRows, applySessionChanged, emptyChat, sessionLiveness,
+  type Backfill, type Block, type ChatState, type RowsPayload, type SessionPayload,
+  type ToolResult, type Turn,
+} from "./streaming";
 
 export type Dock = "right" | "bottom";
-
-type Block = { kind: "text" | "thinking" | "tool" | "image"; text: string; tool?: string; tool_id?: string };
-type Turn = { role: "user" | "assistant"; blocks: Block[] };
-type ToolResult = { tool_id: string; ok: boolean; preview: string };
-/** What the agent IS, reported by the session itself. Empty means unknown, and unknown renders as
- *  absent rather than as a default that would look like knowledge. */
-type Meta = { model: string; version: string; branch: string };
 
 /** Consecutive turns from the same speaker are ONE thing to a reader. The transcript splits them
  *  every time a tool runs, which is why the panel showed "ORCHESTRATOR" stacked above every card. */
@@ -117,58 +123,133 @@ function Thinking({ text }: { text: string }) {
 export function Chat({ project, dock, onDock, onClose }: {
   project: string; dock: Dock; onDock: (d: Dock) => void; onClose: () => void;
 }) {
-  const [turns, setTurns] = useState<Turn[]>([]);
-  const [results, setResults] = useState<Record<string, ToolResult>>({});
-  const [seen, setSeen] = useState(0);
-  const [meta, setMeta] = useState<Meta>({ model: "", version: "", branch: "" });
+  const [chat, setChat] = useState<ChatState>(emptyChat);
   const [target, setTarget] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [working, setWorking] = useState(false);
+  // Mid-turn or not. Asked of the pane (herdr's agent list) rather than guessed from the
+  // transcript, because a turn in progress has written nothing yet. The full status string also
+  // decides whether the composer is worth typing into (#5477) — a registered pane whose agent
+  // exited must not look like a conversation.
+  const [status, setStatus] = useState("unknown");
+  // True once the watcher is feeding us events; false means the 2s poll IS the transport.
+  const [streamed, setStreamed] = useState(false);
   // What the session REPORTED, versus what we sent and have not seen confirmed.
   const [modelSource, setModelSource] = useState<Provenance>("unknown");
   const [pending, setPending] = useState<string>("");
   const foot = useRef<HTMLDivElement | null>(null);
+  // The decision cursor: updated synchronously where the state is updated asynchronously, so two
+  // arrivals in one tick still see the cursor the first one left.
   const seenRef = useRef(0);
-  seenRef.current = seen;
+  const syncRef = useRef<() => void>(() => {});
 
   useEffect(() => {
-    setTurns([]); setResults({}); setSeen(0); seenRef.current = 0; setError(null);
-    setMeta({ model: "", version: "", branch: "" });
+    setChat(emptyChat); seenRef.current = 0; setError(null); setStatus("unknown");
     orchestratorOf(project).then(o => setTarget(o?.surface ?? null)).catch(() => setTarget(null));
   }, [project]);
 
-  const poll = useCallback(() => {
-    invoke<string>("orchestrator_chat", { project, after: seenRef.current })
+  /** Fetch everything past the cursor and fold it in. This is the backfill, the mismatch repair
+   *  and the post-send refresh — one path, so they cannot disagree. */
+  const sync = useCallback(() => {
+    const after = seenRef.current;
+    invoke<string>("orchestrator_chat", { project, after })
       .then(raw => {
-        const [fresh, rs, total, m]: [Turn[], ToolResult[], number, Meta] = JSON.parse(raw);
-        if (m.model || m.version || m.branch) {
-          setMeta(cur => ({ ...cur, ...m }));
+        // JSON.parse's `any` flows into the tuple without a cast — Rust owns validation, the
+        // same boundary herdr.ts documents for herdr_seats().
+        const b: Backfill = JSON.parse(raw);
+        const m = b[3];
+        if (m.model) {
           // A reported model outranks a dispatch: the session has spoken, so the guess retires.
-          if (m.model) { setModelSource("reported"); setPending(p => (p === m.model ? "" : p)); }
+          setModelSource("reported");
+          setPending(p => (p === m.model ? "" : p));
         }
-        if (fresh.length) setTurns(t => [...t, ...fresh]);
-        // Results arrive after the calls they answer, so they are merged by id rather than
-        // rendered in place — the card that has been on screen for a second fills itself in.
-        if (rs.length) setResults(m => { const n = { ...m }; for (const r of rs) n[r.tool_id] = r; return n; });
-        setSeen(total);
+        if (b[2] < after) {
+          // The transcript went BACKWARD — shorter than where we are. That is a handoff having
+          // swapped in a new file; rows 0..b[2] are the conversation now, so restart from the
+          // top as a continuation rather than skipping the new session entirely.
+          seenRef.current = 0;
+          setChat(s => applySessionChanged(s));
+          syncRef.current();
+          return;
+        }
+        seenRef.current = b[2];
+        setChat(s => applyBackfill(s, b, after));
         setError(null);
       })
       .catch(e => setError(String(e)));
   }, [project]);
+  syncRef.current = sync;
 
-  useEffect(() => { poll(); const iv = setInterval(poll, 2_000); return () => clearInterval(iv); }, [poll]);
-
-  // Mid-turn or not. Drives the stop button, and is asked of herdr rather than guessed from the
-  // transcript, because a turn in progress has written nothing yet.
   useEffect(() => {
     let alive = true;
-    const look = () => { invoke<string>("orchestrator_status", { project }).then(st => { if (alive) setWorking(st === "working"); }).catch(() => {}); };
+    const offs: Array<() => void> = [];
+    let badFrames = 0;
+    setStreamed(false);
+    // The contract keeps the initial whole-file read on orchestrator_chat; the watcher takes over
+    // from there. Until it can (its command missing on an older build, or no session yet), the
+    // poll below is the transport this view has always had.
+    sync();
+    void (async () => {
+      try {
+        const count = await invoke<number>("chat_watch", { project });
+        if (!alive) return;
+        // Rows that landed while the watcher was spinning up would otherwise sit between our
+        // cursor and the first event's after — close the gap now.
+        if (count > seenRef.current) sync();
+        offs.push(await listen<string>("chat-rows", ev => {
+          if (!alive) return;
+          try {
+            const p: RowsPayload = JSON.parse(ev.payload);
+            if (p.project !== project) return;
+            badFrames = 0;
+            if (p.after !== seenRef.current) { syncRef.current(); return; }
+            seenRef.current = p.total ?? p.after + p.turns.length;
+            setChat(s => applyRows(s, p).state);
+          } catch {
+            // Three bad frames in a row means the payload is not the shape we decode — say so by
+            // falling back to polling rather than dying silently.
+            if (++badFrames >= 3) setStreamed(false);
+          }
+        }));
+        offs.push(await listen<string>("chat-session-changed", ev => {
+          if (!alive) return;
+          try {
+            const p: SessionPayload = JSON.parse(ev.payload);
+            if (p.project !== project) return;
+            seenRef.current = 0;
+            setChat(s => applySessionChanged(s));
+            syncRef.current();
+          } catch { if (++badFrames >= 3) setStreamed(false); }
+        }));
+        if (alive) setStreamed(true);
+      } catch {
+        // No watcher to be had — the poll fallback carries the view.
+      }
+    })();
+    return () => {
+      alive = false;
+      for (const off of offs) off();
+      invoke("chat_unwatch", { project }).catch(() => {});
+    };
+  }, [project, target !== null, sync]);
+
+  // The poll transport: runs until the watcher takes over, and again if it ever gives up.
+  useEffect(() => {
+    if (streamed) return;
+    const iv = setInterval(sync, 2_000);
+    return () => clearInterval(iv);
+  }, [streamed, sync]);
+
+  useEffect(() => {
+    let alive = true;
+    const look = () => { invoke<string>("orchestrator_status", { project }).then(st => { if (alive) setStatus(st); }).catch(() => {}); };
     look();
     const iv = setInterval(look, 3_000);
     return () => { alive = false; clearInterval(iv); };
   }, [project]);
-  useEffect(() => { foot.current?.scrollIntoView({ behavior: "smooth" }); }, [turns.length]);
+  useEffect(() => { foot.current?.scrollIntoView({ behavior: "smooth" }); }, [chat.turns.length]);
 
+  const working = status === "working";
+  const liveness = sessionLiveness(status, target);
   const side = dock === "right";
   return (
     <div className={`flex min-h-0 flex-col border-tr-edge bg-tr-bg ${side ? "h-full w-[420px] shrink-0 border-l" : "h-[340px] shrink-0 border-t"}`}>
@@ -178,7 +259,7 @@ export function Chat({ project, dock, onDock, onClose }: {
         <span className="shrink-0 text-[12.5px] font-semibold">Orchestrator</span>
         <span className="tr-mono min-w-0 flex-1 truncate text-[11px] text-tr-muted">{project}</span>
         {/* Reported by the session, never asserted. */}
-        {meta.model && <span className="tr-chip shrink-0 text-[10.5px]">{meta.model}</span>}
+        {chat.meta.model && <span className="tr-chip shrink-0 text-[10.5px]">{chat.meta.model}</span>}
         <div className="flex shrink-0 items-center gap-1">
           <button type="button" onClick={() => onDock(side ? "bottom" : "right")} title={side ? "move to the bottom" : "move to the right"} className="rounded-[7px] px-2 py-1 text-[11px] text-tr-muted hover:text-tr-text">
             {side ? "▤" : "▥"}
@@ -194,20 +275,29 @@ export function Chat({ project, dock, onDock, onClose }: {
             and this becomes the conversation with it.
           </div>
         )}
-        {target && !turns.length && !error && (
+        {target && chat.continued && (
+          /* A handoff was adopted mid-view: what is above this line is the SAME project's next
+             session, not more of the one you were reading. */
+          <div className="my-2 flex items-center gap-2">
+            <span className="h-px flex-1 bg-tr-edge" />
+            <span className="text-[10.5px] text-tr-muted">session continued</span>
+            <span className="h-px flex-1 bg-tr-edge" />
+          </div>
+        )}
+        {target && !chat.turns.length && !chat.continued && !error && (
           <div className="px-1 py-2 text-[12px] leading-relaxed text-tr-muted">
             Nothing said yet. Type below and it reaches the session exactly as if you had typed it in
             the terminal.
           </div>
         )}
-        {group(turns).map((t, i) => (
+        {group(chat.turns).map((t, i) => (
           <div key={i} className="mb-3">
             <div className="mb-1 text-[10.5px] uppercase tracking-wider text-tr-muted">
               {t.role === "user" ? "you" : "orchestrator"}
             </div>
             {batch(t.blocks).map((b, j) =>
               Array.isArray(b) ? (
-                <ToolRun key={j} blocks={b} results={results} />
+                <ToolRun key={j} blocks={b} results={chat.results} />
               ) : b.kind === "thinking" ? (
                 <Thinking key={j} text={b.text} />
               ) : b.kind === "image" ? (
@@ -233,10 +323,12 @@ export function Chat({ project, dock, onDock, onClose }: {
       <Composer
         project={project}
         target={target}
-        model={pending || meta.model}
+        live={liveness.live}
+        liveWhy={liveness.why}
+        model={pending || chat.meta.model}
         modelSource={pending ? "dispatched" : modelSource}
         working={working}
-        onSent={poll}
+        onSent={sync}
         onDispatch={(dial, value) => { if (dial === "model") { setPending(value); setModelSource("dispatched"); } }}
       />
     </div>
