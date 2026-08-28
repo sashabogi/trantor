@@ -5,7 +5,7 @@
 // that fails like an exhausted account. Exercises the REAL bin/crew-runner.mjs.
 import http from "node:http";
 import { spawn } from "node:child_process";
-import { mkdtempSync, writeFileSync, chmodSync, mkdirSync } from "node:fs";
+import { mkdtempSync, writeFileSync, chmodSync, mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
@@ -72,7 +72,10 @@ async function drill(agent, script, opts = {}) {
   await sleep(opts.waitMs ?? 2500);
   runner.kill("SIGKILL");
   await sleep(150);
-  return { registers: [...registers], sends: [...sends] };
+  const errText = (() => {
+    try { return readFileSync(join(HOME, ".agent-bus", `err-${agent}-tt-fail-${agent}.txt`), "utf8"); } catch { return ""; }
+  })();
+  return { registers: [...registers], sends: [...sends], errText };
 }
 
 // ---- drill 1: an exhausted account complaining on STDERR ------------------------------
@@ -131,6 +134,36 @@ async function drill(agent, script, opts = {}) {
   const downReg = registers.filter(r => String(r.status || "").startsWith("down"));
   ok("the seat stays REGISTERED as down, which is where duration lives and costs nobody a turn",
      downReg.length >= 1, `${downReg.length} down registrations`);
+}
+
+// ---- drill 5: an auth failure that still EXITS 0 (opencode) -------------------------------
+// opencode prints "401 Unauthorized" / "Invalid API key" and exits 0, so a bare 0 was read as
+// success: the runner acked "✅ done", cleared the pending queue and stayed green through an auth
+// outage (card #5405). The turn output must be cross-checked before a 0 means anything.
+{
+  const r = await drill("opencode",
+    '#!/bin/sh\necho "Error: 401 Unauthorized — Invalid API key provided" >&2\nexit 0\n');
+  const failMsg = r.sends.find((m) => /turn FAILED/i.test(m.text || ""));
+  ok("an exit-0 auth failure is still reported to the bus", !!failMsg);
+  ok("...classified as auth (→ check credentials), never as success",
+     !!failMsg && /auth/i.test(failMsg.text));
+  ok("the error reached err-<agent>-<proj>.txt (operator reads it live)",
+     /invalid api key/i.test(r.errText), r.errText.slice(0, 120));
+  ok("no success/recovery ack was posted for the failed turn",
+     !r.sends.some((m) => /✅/.test(m.text || "")));
+  const authReg = r.registers.find((x) => /errored: auth|down: auth/.test(String(x.status || "")));
+  ok("presence flipped to an errored/down auth status (board shows it, not green)", !!authReg);
+}
+
+// ---- drill 6: an exit-0 auth STREAK flips the seat DOWN like any other failure ------------
+{
+  const r = await drill("opencode",
+    '#!/bin/sh\necho "Invalid API key" >&2\nexit 0\n',
+    { inbox: ["again", "and again"], waitMs: 9000 });
+  const downs = r.sends.filter(m => /DOWN/.test(m.text || "") && m.to === "all");
+  ok("an exit-0 auth streak still flips the seat DOWN", downs.length === 1, `${downs.length} DOWN broadcasts`);
+  ok("...labelled auth, so the operator checks credentials", downs.some(m => /auth/i.test(m.text || "")));
+  ok("no success ack across the streak", !r.sends.some(m => /✅/.test(m.text || "")));
 }
 
 hub.close();

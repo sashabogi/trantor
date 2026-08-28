@@ -290,6 +290,12 @@ function loadPending() {
   } catch { return { wake: [], bcast: [] }; }
 }
 
+// Auth-failure markers in TURN OUTPUT. opencode prints its auth error ("401 Unauthorized" /
+// "Invalid API key") and STILL exits 0, so a bare 0 from the CLI is not proof the turn ran
+// (card #5405). This regex gates the exit-0 path in runTurn; kept tighter than
+// classifyFailure's set (no bare /expired/) so a healthy transcript never trips it.
+const AUTH_MARKER_RE = /unauthor|401|403|forbidden|invalid[ _-]?api[ _-]?key|authentication? failed|token expired/i;
+
 function classifyFailure(exit, errText) {
   const t = (errText || "").toLowerCase();
   if (exit === 127) return "missing-cli";
@@ -417,10 +423,21 @@ function runTurn(prompt, isFirst, trigger = "kickoff") {
   });
   try { lastErrText = readFileSync(ERRF, "utf8").slice(-4000); } catch { lastErrText = ""; }
   if (cli.sid && r.stdout) { const m = r.stdout.match(cli.sid); if (m) sid = m[1]; }
-  telemetry({ ts: Date.now(), agent: AGENT, project: PROJ, turn: TURN, trigger, model: MODEL || "default", duration_ms: Date.now() - t0, exit: r.status });
-  log(`turn ended (exit ${r.status}, ${((Date.now() - t0) / 1000).toFixed(0)}s)`);
-  if (r.status === 0) { cmuxStatus("idle", "#8a94a6", "robot"); herdrAgent("idle"); }   // finished this turn, waiting for the next
-  return r.status;
+  const realExit = r.status;
+  // A zero exit is NOT proof the turn ran: opencode prints "401 Unauthorized" / "Invalid API key"
+  // and exits 0, so a bare 0 made the runner ack "✅ done", clear the pending queue and heartbeat
+  // green through an auth outage (card #5405). Cross-check the turn output and treat an
+  // exit-0-with-auth turn as FAILED. Telemetry keeps the REAL exit; the returned code is the
+  // effective one every call site branches on (kickoff, pulse, deliverWake).
+  let effExit = realExit;
+  if (realExit === 0 && AUTH_MARKER_RE.test(lastErrText)) {
+    effExit = 1;
+    log("\x1b[31mexit 0 but turn output shows an auth failure — treating as FAILED (auth)\x1b[0m");
+  }
+  telemetry({ ts: Date.now(), agent: AGENT, project: PROJ, turn: TURN, trigger, model: MODEL || "default", duration_ms: Date.now() - t0, exit: realExit, effExit, authFailed: effExit !== realExit });
+  log(`turn ended (exit ${realExit}${effExit !== realExit ? ` → effective ${effExit} (auth)` : ""}, ${((Date.now() - t0) / 1000).toFixed(0)}s)`);
+  if (realExit === 0 && effExit === 0) { cmuxStatus("idle", "#8a94a6", "robot"); herdrAgent("idle"); }   // finished this turn, waiting for the next
+  return effExit;
 }
 
 // ---- main loop ----
