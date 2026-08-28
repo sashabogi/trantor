@@ -442,7 +442,7 @@ try {
       await jpost(`${url}/instance/supersede`, { name: session, exceptInstanceId: String(stdinObj.session_id) }, session).catch(() => {});
     }
     additionalContext += `<trantor-handoff id="${sanitize(handoff.id)}" from="${sanitize(handoff.machine)}" trigger="${sanitize(handoff.trigger)}">\n`;
-    additionalContext += `🔄 **You are taking over from a prior session that hit its context limit.** This is a fresh full window. Resume the work below — the prior session's summary, git state, and a pointer to its full transcript (searchable; Foundation/Gaia has it ingested) follow. Continue from "OPEN THREADS & NEXT STEPS"; do not restart from scratch.\n\n`;
+    additionalContext += `🔄 **You are taking over from a prior session that hit its context limit.** This is a fresh full window. Resume the work below — the prior session's summary, git state, and a pointer to its full transcript (searchable; Foundation/Gaia has it ingested) follow. Continue from "OPEN THREADS & NEXT STEPS"; do not restart from scratch. Recap the task, state, and next step in at most 3 sentences, then wait. Keep replies short: no status tables, no headers, no walls of text unless the user explicitly asks for detail.\n\n`;
     // Verification gates FIRST — these are structured "must verify before shipping" claims the prior
     // session couldn't independently prove. They go above the summary on purpose: a safety-critical
     // check must not be skimmed past (the lesson of the lost "verify Gail coefficients" intent).

@@ -433,7 +433,9 @@ export function maybeSpawn(projectDir, conf = readConfig()) {
 }
 
 // The self-announcing fresh session command (single-quoted so it survives osascript→shell un-escaped).
-export const RECAP_CMD = "claude 'Recap the handoff you just took over — what was the previous session doing, and where do we continue? Then wait for me.'";
+// The recap must be READABLE: on 2026-08-27 a takeover session answered with three consecutive
+// 4-5k-character status dumps and the operator abandoned the app. Brevity is part of the prompt.
+export const RECAP_CMD = "claude 'Recap the handoff you just took over — task, state, next step — in at most 3 sentences. Then wait for me. Keep all replies short by default: no status tables, no headers, no walls of text unless I explicitly ask for detail.'";
 
 // Spawn a fresh self-announcing session WITHOUT the dialog (manual handoff — the user already decided).
 // ONE suppression check for every path that can open a terminal window. There were two names for
