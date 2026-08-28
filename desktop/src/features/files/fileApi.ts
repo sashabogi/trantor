@@ -70,3 +70,9 @@ export async function writeFile(project: string, path: string, seat: string | un
 export async function readFileAtHead(project: string, path: string, seat?: string): Promise<string> {
   return invoke<string>("read_file_at_head", { project, path, seat: seat ?? null });
 }
+
+/** Paths matching a query, for the composer's @-reference menu. Bounded in Rust on depth and
+ *  count, because this runs on every keystroke. */
+export async function searchFiles(project: string, query: string, seat?: string): Promise<string[]> {
+  return JSON.parse(await invoke<string>("search_files", { project, query, seat: seat ?? null }));
+}

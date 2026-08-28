@@ -361,6 +361,52 @@ fn file_diff(project: String, path: String, seat: Option<String>) -> Result<Stri
     Ok(String::from_utf8_lossy(&no_index.stdout).to_string())
 }
 
+/// Paths matching a query, for the composer's @-reference menu.
+///
+/// A flat search rather than the lazy tree: autocomplete needs to reach a file three folders deep
+/// from four typed characters, which a per-directory reader cannot do. Bounded on both sides —
+/// depth and result count — because this runs on every keystroke.
+#[tauri::command]
+fn search_files(project: String, query: String, seat: Option<String>) -> Result<String, String> {
+    let root = source_root(&project, seat.as_deref())?;
+    let q = query.to_lowercase();
+    let mut hits: Vec<String> = Vec::new();
+    let mut stack: Vec<(std::path::PathBuf, String, usize)> = vec![(root, String::new(), 0)];
+    while let Some((dir, rel, depth)) = stack.pop() {
+        if depth > 8 || hits.len() >= 40 {
+            continue;
+        }
+        let entries = match std::fs::read_dir(&dir) {
+            Ok(e) => e,
+            Err(_) => continue,
+        };
+        for entry in entries.flatten() {
+            let name = entry.file_name().to_string_lossy().to_string();
+            if name.starts_with('.') {
+                continue;
+            }
+            let is_dir = entry.file_type().map(|t| t.is_dir()).unwrap_or(false);
+            if is_dir && TREE_SKIP.contains(&name.as_str()) {
+                continue;
+            }
+            let path = if rel.is_empty() { name.clone() } else { format!("{rel}/{name}") };
+            if is_dir {
+                stack.push((entry.path(), path, depth + 1));
+            } else if q.is_empty() || path.to_lowercase().contains(&q) {
+                hits.push(path);
+                if hits.len() >= 40 {
+                    break;
+                }
+            }
+        }
+    }
+    // Shallower paths first: a query matching both README.md and a file buried six deep almost
+    // always means the shallow one.
+    hits.sort_by_key(|p| (p.matches('/').count(), p.len()));
+    hits.truncate(20);
+    serde_json::to_string(&hits).map_err(|e| e.to_string())
+}
+
 /// One level of the project's tree. Lazy by design: the front end asks for a subtree when a folder
 /// opens, so a repo with thousands of files costs only what is actually expanded.
 #[tauri::command]
@@ -1778,6 +1824,7 @@ pub fn run() {
             herdr_seats,
             seat_diff,
             project_files,
+            search_files,
             read_file,
             file_diff,
             read_file_at_head,

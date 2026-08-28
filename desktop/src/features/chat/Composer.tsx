@@ -8,9 +8,10 @@
 // Both option lists come from `claude --help`, not from memory: effort is a closed list, and model
 // takes documented aliases. Typing a model id from memory is a mistake this codebase has already
 // paid for once.
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { ChevronDown, Paperclip, Square, ArrowUp } from "lucide-react";
+import { searchFiles } from "../files/fileApi";
 
 export type Provenance = "reported" | "dispatched" | "unknown";
 
@@ -65,7 +66,8 @@ function Picker({ label, value, source, options, onPick, disabled }: {
   );
 }
 
-export function Composer({ target, model, modelSource, working, onSent, onDispatch }: {
+export function Composer({ project, target, model, modelSource, working, onSent, onDispatch }: {
+  project: string;
   target: string | null;
   model: string;
   modelSource: Provenance;
@@ -78,6 +80,36 @@ export function Composer({ target, model, modelSource, working, onSent, onDispat
   const [effortSource, setEffortSource] = useState<Provenance>("unknown");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // @-reference. This is how you point the session at a PRD without typing a path from memory,
+  // which is the same failure mode as typing a model id from memory.
+  const [menu, setMenu] = useState<string[]>([]);
+  const [pick, setPick] = useState(0);
+  const box = useRef<HTMLTextAreaElement | null>(null);
+
+  /** The @token being typed, or null. Anchored to the LAST @ so a message can mention several. */
+  const token = (() => {
+    const upto = draft.slice(0, box.current?.selectionStart ?? draft.length);
+    const at = upto.lastIndexOf("@");
+    if (at < 0) return null;
+    const frag = upto.slice(at + 1);
+    // A space ends it: "@ " is someone typing an email or a sentence, not a path.
+    return /\s/.test(frag) ? null : frag;
+  })();
+
+  useEffect(() => {
+    if (token === null) { setMenu([]); return; }
+    let alive = true;
+    searchFiles(project, token).then(r => { if (alive) { setMenu(r); setPick(0); } }).catch(() => {});
+    return () => { alive = false; };
+  }, [token, project]);
+
+  const accept = (path: string) => {
+    const cur = box.current?.selectionStart ?? draft.length;
+    const upto = draft.slice(0, cur);
+    const at = upto.lastIndexOf("@");
+    setDraft(draft.slice(0, at) + path + " " + draft.slice(cur));
+    setMenu([]);
+  };
 
   const line = (text: string) =>
     invoke("pane_send", { target, text }).catch(e => setError(String(e)));
@@ -106,10 +138,36 @@ export function Composer({ target, model, modelSource, working, onSent, onDispat
 
   return (
     <div className="border-t border-tr-edge p-2">
+      {menu.length > 0 && (
+        <div className="mb-1 max-h-[190px] overflow-y-auto rounded-lg border border-tr-edge bg-tr-panel">
+          {menu.map((f, i) => (
+            <button
+              key={f}
+              type="button"
+              onMouseEnter={() => setPick(i)}
+              onClick={() => accept(f)}
+              data-on={i === pick}
+              className="tr-mono block w-full truncate px-2.5 py-1 text-left text-[11.5px] text-tr-muted data-[on=true]:bg-white/[0.06] data-[on=true]:text-tr-text"
+            >
+              {f}
+            </button>
+          ))}
+        </div>
+      )}
       <textarea
+        ref={box}
         value={draft}
         onChange={e => setDraft(e.target.value)}
-        onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); } }}
+        onKeyDown={e => {
+          // While the menu is up it owns the arrows and Enter, the way every editor does it.
+          if (menu.length) {
+            if (e.key === "ArrowDown") { e.preventDefault(); setPick(p => (p + 1) % menu.length); return; }
+            if (e.key === "ArrowUp") { e.preventDefault(); setPick(p => (p - 1 + menu.length) % menu.length); return; }
+            if (e.key === "Enter" || e.key === "Tab") { e.preventDefault(); accept(menu[pick]); return; }
+            if (e.key === "Escape") { e.preventDefault(); setMenu([]); return; }
+          }
+          if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); }
+        }}
         placeholder={target ? "Message the orchestrator…  (⇧⏎ for a new line)" : "no session to talk to"}
         disabled={!target || busy}
         rows={2}
@@ -120,7 +178,7 @@ export function Composer({ target, model, modelSource, working, onSent, onDispat
             honest action is to reference the path, which is also how you point it at a PRD. */}
         <button
           type="button"
-          onClick={() => setDraft(d => (d.endsWith(" ") || !d ? d : d + " ") + "@")}
+          onClick={() => { setDraft(d => (d.endsWith(" ") || !d ? d : d + " ") + "@"); box.current?.focus(); }}
           disabled={!target}
           title="reference a file by path"
           className="rounded-[7px] p-1.5 text-tr-muted hover:text-tr-text disabled:opacity-40"

@@ -194,7 +194,7 @@ export function Files({ client, project, lens, onLens, path, seat, onSeat }: {
               </div>
             </div>
           ) : editing ? (
-            <CodeView value={draft} path={path} editable onChange={setDraft} />
+            <CodeView value={draft} path={path} editable onChange={setDraft} onSave={save} />
           ) : mode === "diff" && changed && head !== null && body ? (
             <DiffView base={head} head={body.text} path={path} />
           ) : body ? (

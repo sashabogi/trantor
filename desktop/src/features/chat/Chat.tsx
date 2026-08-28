@@ -231,6 +231,7 @@ export function Chat({ project, dock, onDock, onClose }: {
       {error && <div className="tr-mono px-3 pb-1 text-[11px] text-tr-danger">{error}</div>}
 
       <Composer
+        project={project}
         target={target}
         model={pending || meta.model}
         modelSource={pending ? "dispatched" : modelSource}

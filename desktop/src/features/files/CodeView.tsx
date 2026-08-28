@@ -54,11 +54,13 @@ const base = (editable: boolean): Extension[] => [
   }),
 ];
 
-export function CodeView({ value, path, editable, onChange }: {
+export function CodeView({ value, path, editable, onChange, onSave }: {
   value: string;
   path: string;
   editable: boolean;
   onChange?: (v: string) => void;
+  /** ⌘S. Every developer tries it within ten seconds of an editor appearing. */
+  onSave?: () => void;
 }) {
   const host = useRef<HTMLDivElement | null>(null);
   const view = useRef<EditorView | null>(null);
@@ -66,6 +68,8 @@ export function CodeView({ value, path, editable, onChange }: {
   // cursor and the undo history mid-edit.
   const cb = useRef(onChange);
   cb.current = onChange;
+  const saveCb = useRef(onSave);
+  saveCb.current = onSave;
 
   useEffect(() => {
     if (!host.current) return;
@@ -76,6 +80,9 @@ export function CodeView({ value, path, editable, onChange }: {
         extensions: [
           ...base(editable),
           ...languageFor(path),
+          // defaultKeymap does not bind Mod-s, so order does not matter here; preventDefault is
+          // what stops the webview trying to save the page instead.
+          keymap.of([{ key: "Mod-s", preventDefault: true, run: () => { saveCb.current?.(); return true; } }]),
           EditorView.updateListener.of(u => { if (u.docChanged) cb.current?.(u.state.doc.toString()); }),
         ],
       }),
