@@ -206,7 +206,15 @@ struct FileEntry {
 /// Directories that are output or vendored. Walking them is how a file tree turns into a hang: a
 /// single `node_modules` dwarfs the source it sits next to, and none of it is work an agent did.
 const TREE_SKIP: &[&str] = &[
-    ".git", "node_modules", "target", "dist", "build", ".next", ".turbo", "__pycache__", ".venv",
+    ".git",
+    "node_modules",
+    "target",
+    "dist",
+    "build",
+    ".next",
+    ".turbo",
+    "__pycache__",
+    ".venv",
 ];
 
 /// git status for the whole repo, as a map of relative path -> code. Read ONCE per tree request
@@ -261,8 +269,15 @@ fn source_root(project: &str, seat: Option<&str>) -> Result<std::path::PathBuf, 
             if agent.contains("..") || agent.contains('/') {
                 return Err("seat is invalid".into());
             }
-            let wt = desktop_bus_dir().join("worktrees").join(project).join(agent);
-            if wt.is_dir() { Ok(wt) } else { Err(format!("{agent} has no worktree yet")) }
+            let wt = desktop_bus_dir()
+                .join("worktrees")
+                .join(project)
+                .join(agent);
+            if wt.is_dir() {
+                Ok(wt)
+            } else {
+                Err(format!("{agent} has no worktree yet"))
+            }
         }
     }
 }
@@ -298,7 +313,11 @@ fn read_file(project: String, path: String, seat: Option<String>) -> Result<Stri
         return Err("binary file".into());
     }
     let truncated = bytes > FILE_VIEW_CAP;
-    let slice = if truncated { &raw[..FILE_VIEW_CAP as usize] } else { &raw[..] };
+    let slice = if truncated {
+        &raw[..FILE_VIEW_CAP as usize]
+    } else {
+        &raw[..]
+    };
     let body = FileBody {
         text: String::from_utf8_lossy(slice).to_string(),
         truncated,
@@ -311,7 +330,11 @@ fn read_file(project: String, path: String, seat: Option<String>) -> Result<Stri
 /// unified patch is a description of a change, and rendering it as text is what made the diff view
 /// a wall of plus signs rather than something you can read code in.
 #[tauri::command]
-fn read_file_at_head(project: String, path: String, seat: Option<String>) -> Result<String, String> {
+fn read_file_at_head(
+    project: String,
+    path: String,
+    seat: Option<String>,
+) -> Result<String, String> {
     let root = source_root(&project, seat.as_deref())?;
     if path.contains("..") {
         return Err("path escapes the project".into());
@@ -395,7 +418,11 @@ fn search_files(project: String, query: String, seat: Option<String>) -> Result<
             if is_dir && TREE_SKIP.contains(&name.as_str()) {
                 continue;
             }
-            let path = if rel.is_empty() { name.clone() } else { format!("{rel}/{name}") };
+            let path = if rel.is_empty() {
+                name.clone()
+            } else {
+                format!("{rel}/{name}")
+            };
             if is_dir {
                 stack.push((entry.path(), path, depth + 1));
             } else if q.is_empty() || path.to_lowercase().contains(&q) {
@@ -416,17 +443,27 @@ fn search_files(project: String, query: String, seat: Option<String>) -> Result<
 /// One level of the project's tree. Lazy by design: the front end asks for a subtree when a folder
 /// opens, so a repo with thousands of files costs only what is actually expanded.
 #[tauri::command]
-fn project_files(project: String, sub: Option<String>, seat: Option<String>) -> Result<String, String> {
+fn project_files(
+    project: String,
+    sub: Option<String>,
+    seat: Option<String>,
+) -> Result<String, String> {
     let root = source_root(&project, seat.as_deref())?;
     let rel = sub.unwrap_or_default();
     // Refuse to escape the project root: `sub` comes from the front end and a "../" would walk out.
     if rel.contains("..") {
         return Err("path escapes the project".into());
     }
-    let dir = if rel.is_empty() { root.clone() } else { root.join(&rel) };
+    let dir = if rel.is_empty() {
+        root.clone()
+    } else {
+        root.join(&rel)
+    };
     let status = git_status_map(&root);
     let mut out: Vec<FileEntry> = Vec::new();
-    for entry in std::fs::read_dir(&dir).map_err(|e| format!("cannot read {}: {e}", dir.display()))? {
+    for entry in
+        std::fs::read_dir(&dir).map_err(|e| format!("cannot read {}: {e}", dir.display()))?
+    {
         let entry = match entry {
             Ok(e) => e,
             Err(_) => continue,
@@ -439,12 +476,25 @@ fn project_files(project: String, sub: Option<String>, seat: Option<String>) -> 
         if is_dir && TREE_SKIP.contains(&name.as_str()) {
             continue;
         }
-        let path = if rel.is_empty() { name.clone() } else { format!("{rel}/{name}") };
+        let path = if rel.is_empty() {
+            name.clone()
+        } else {
+            format!("{rel}/{name}")
+        };
         let st = status.get(&path).cloned().unwrap_or_default();
-        out.push(FileEntry { name, path, dir: is_dir, status: st });
+        out.push(FileEntry {
+            name,
+            path,
+            dir: is_dir,
+            status: st,
+        });
     }
     // folders first, then alphabetical — the order every file explorer uses
-    out.sort_by(|a, b| b.dir.cmp(&a.dir).then(a.name.to_lowercase().cmp(&b.name.to_lowercase())));
+    out.sort_by(|a, b| {
+        b.dir
+            .cmp(&a.dir)
+            .then(a.name.to_lowercase().cmp(&b.name.to_lowercase()))
+    });
     serde_json::to_string(&out).map_err(|e| e.to_string())
 }
 
@@ -511,6 +561,14 @@ struct ChatMeta {
     model: String,
     version: String,
     branch: String,
+    context: ChatContext,
+}
+
+#[derive(Debug, Clone, Default, Serialize)]
+struct ChatContext {
+    tokens: Option<u64>,
+    window: u64,
+    frac: Option<f64>,
 }
 
 /// Text the HARNESS injected into the conversation, wearing the user's role.
@@ -533,6 +591,117 @@ fn is_harness_injection(t: &str) -> bool {
     ];
     let t = t.trim_start();
     t.starts_with('<') || MARKERS.iter().any(|m| t.starts_with(m)) || t.contains("system-reminder")
+}
+
+fn chat_context(tokens: Option<u64>, window: u64) -> ChatContext {
+    ChatContext {
+        tokens,
+        window,
+        frac: tokens.and_then(|t| {
+            if window > 0 {
+                Some(t as f64 / window as f64)
+            } else {
+                None
+            }
+        }),
+    }
+}
+
+fn read_context_window() -> u64 {
+    let path = desktop_bus_dir().join("config.json");
+    let raw = match std::fs::read_to_string(path) {
+        Ok(raw) => raw,
+        Err(_) => return 0,
+    };
+    match serde_json::from_str::<serde_json::Value>(&raw) {
+        Ok(v) => v.get("contextWindow").and_then(|w| w.as_u64()).unwrap_or(0),
+        Err(_) => 0,
+    }
+}
+
+fn assistant_usage_tokens(v: &serde_json::Value) -> Option<u64> {
+    let usage = v.get("message")?.get("usage")?;
+    let mut seen = false;
+    let total = [
+        "input_tokens",
+        "cache_read_input_tokens",
+        "cache_creation_input_tokens",
+    ]
+    .iter()
+    .filter_map(|k| {
+        let n = usage.get(*k).and_then(|v| v.as_u64());
+        if n.is_some() {
+            seen = true;
+        }
+        n
+    })
+    .sum();
+    if seen {
+        Some(total)
+    } else {
+        None
+    }
+}
+
+fn text_content(content: &serde_json::Value) -> String {
+    match content {
+        serde_json::Value::String(s) => s.clone(),
+        serde_json::Value::Array(items) => items
+            .iter()
+            .filter_map(|b| match b.get("type").and_then(|t| t.as_str()) {
+                Some("text") => b.get("text").and_then(|t| t.as_str()),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+            .join("\n"),
+        _ => String::new(),
+    }
+}
+
+fn bookkeeping_divider_text(v: &serde_json::Value, content: &serde_json::Value) -> Option<String> {
+    if v.get("isMeta").and_then(|m| m.as_bool()).unwrap_or(false) {
+        let text = text_content(content);
+        return if text.trim().is_empty() {
+            None
+        } else {
+            Some(text)
+        };
+    }
+    let serde_json::Value::String(s) = content else {
+        return None;
+    };
+    if s.starts_with('/')
+        || s.starts_with("<local-command-caveat>")
+        || s.starts_with("<local-command-stdout>")
+    {
+        Some(s.clone())
+    } else {
+        None
+    }
+}
+
+fn merge_chat_meta(current: &mut ChatMeta, next: ChatMeta) {
+    if !next.model.is_empty() {
+        current.model = next.model;
+    }
+    if !next.version.is_empty() {
+        current.version = next.version;
+    }
+    if !next.branch.is_empty() {
+        current.branch = next.branch;
+    }
+    current.context.window = next.context.window;
+    if next.context.tokens.is_some() {
+        current.context = next.context;
+    } else {
+        current.context.frac = current.context.tokens.and_then(|t| {
+            if current.context.window > 0 {
+                Some(t as f64 / current.context.window as f64)
+            } else {
+                None
+            }
+        });
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -605,7 +774,11 @@ impl TranscriptTail {
         let complete = text.ends_with('\n');
         let mut parts: Vec<&str> = text.split('\n').collect();
         if !complete {
-            self.pending = parts.pop().unwrap_or_default().trim_end_matches('\r').to_string();
+            self.pending = parts
+                .pop()
+                .unwrap_or_default()
+                .trim_end_matches('\r')
+                .to_string();
         } else if parts.last() == Some(&"") {
             parts.pop();
         }
@@ -636,7 +809,11 @@ fn complete_line_count(raw: &str) -> (usize, String) {
         return (raw.lines().count(), String::new());
     }
     let mut parts: Vec<&str> = raw.split('\n').collect();
-    let pending = parts.pop().unwrap_or_default().trim_end_matches('\r').to_string();
+    let pending = parts
+        .pop()
+        .unwrap_or_default()
+        .trim_end_matches('\r')
+        .to_string();
     (parts.len(), pending)
 }
 
@@ -650,7 +827,10 @@ fn complete_lines(raw: &str) -> Vec<&str> {
     } else {
         parts.pop();
     }
-    parts.into_iter().map(|s| s.trim_end_matches('\r')).collect()
+    parts
+        .into_iter()
+        .map(|s| s.trim_end_matches('\r'))
+        .collect()
 }
 
 fn orchestrator_transcript_path(project: &str, sid: &str) -> Result<PathBuf, String> {
@@ -670,14 +850,24 @@ fn orchestrator_transcript_path(project: &str, sid: &str) -> Result<PathBuf, Str
 /// Tool inputs are objects of wildly different shapes. The one-line summary is the field a person
 /// would recognise, and everything else is noise in a chat.
 fn tool_summary(name: &str, input: &serde_json::Value) -> String {
-    let pick = |k: &str| input.get(k).and_then(|v| v.as_str()).unwrap_or("").to_string();
+    let pick = |k: &str| {
+        input
+            .get(k)
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string()
+    };
     let s = match name {
         "Bash" => pick("command"),
         "Read" | "Write" | "Edit" | "NotebookEdit" => pick("file_path"),
         "Glob" | "Grep" => {
             let p = pick("pattern");
             let path = pick("path");
-            if path.is_empty() { p } else { format!("{p}  in {path}") }
+            if path.is_empty() {
+                p
+            } else {
+                format!("{p}  in {path}")
+            }
         }
         "WebFetch" => pick("url"),
         "Task" | "Agent" => pick("description"),
@@ -691,7 +881,11 @@ fn tool_summary(name: &str, input: &serde_json::Value) -> String {
         }
     };
     let s = s.replace('\n', " ");
-    if s.chars().count() > 160 { s.chars().take(160).collect::<String>() + "…" } else { s }
+    if s.chars().count() > 160 {
+        s.chars().take(160).collect::<String>() + "…"
+    } else {
+        s
+    }
 }
 
 fn preview_of(v: &serde_json::Value) -> String {
@@ -705,7 +899,11 @@ fn preview_of(v: &serde_json::Value) -> String {
         _ => String::new(),
     };
     let raw = raw.trim();
-    if raw.chars().count() > 2000 { raw.chars().take(2000).collect::<String>() + "\n…" } else { raw.to_string() }
+    if raw.chars().count() > 2000 {
+        raw.chars().take(2000).collect::<String>() + "\n…"
+    } else {
+        raw.to_string()
+    }
 }
 
 fn decode_chat_lines<I, S>(lines: I, total: usize) -> ChatSnapshot
@@ -713,9 +911,24 @@ where
     I: IntoIterator<Item = S>,
     S: AsRef<str>,
 {
+    decode_chat_lines_with_context_window(lines, total, read_context_window())
+}
+
+fn decode_chat_lines_with_context_window<I, S>(
+    lines: I,
+    total: usize,
+    context_window: u64,
+) -> ChatSnapshot
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<str>,
+{
     let mut turns: Vec<ChatTurn> = Vec::new();
     let mut results: Vec<ChatToolResult> = Vec::new();
-    let mut meta = ChatMeta::default();
+    let mut meta = ChatMeta {
+        context: chat_context(None, context_window),
+        ..ChatMeta::default()
+    };
 
     for line in lines {
         let v: serde_json::Value = match serde_json::from_str(line.as_ref()) {
@@ -731,24 +944,47 @@ where
         // Identity comes from the LAST assistant entry seen, so a model switch mid-session shows
         // the model that is actually answering rather than the one that started.
         if role == "assistant" {
-            if let Some(m) = v.get("message").and_then(|m| m.get("model")).and_then(|m| m.as_str()) {
+            if let Some(m) = v
+                .get("message")
+                .and_then(|m| m.get("model"))
+                .and_then(|m| m.as_str())
+            {
                 meta.model = m.to_string();
             }
+            if let Some(tokens) = assistant_usage_tokens(&v) {
+                meta.context = chat_context(Some(tokens), context_window);
+            }
         }
-        if let Some(x) = v.get("version").and_then(|x| x.as_str()) { meta.version = x.to_string(); }
-        if let Some(x) = v.get("gitBranch").and_then(|x| x.as_str()) { meta.branch = x.to_string(); }
+        if let Some(x) = v.get("version").and_then(|x| x.as_str()) {
+            meta.version = x.to_string();
+        }
+        if let Some(x) = v.get("gitBranch").and_then(|x| x.as_str()) {
+            meta.branch = x.to_string();
+        }
 
         let content = match v.get("message").and_then(|m| m.get("content")) {
             Some(c) => c,
             None => continue,
         };
+        if role == "user" {
+            if let Some(text) = bookkeeping_divider_text(&v, content) {
+                turns.push(ChatTurn {
+                    role: "system".into(),
+                    blocks: vec![ChatBlock {
+                        kind: "divider".into(),
+                        text,
+                        tool: None,
+                        tool_id: None,
+                    }],
+                });
+                continue;
+            }
+        }
         let mut blocks: Vec<ChatBlock> = Vec::new();
         match content {
             // A typed message is a plain string — and so is every hook injection, which is why
             // this branch has to filter exactly like the array branch does.
-            serde_json::Value::String(s)
-                if !s.trim().is_empty() && !is_harness_injection(s) =>
-            {
+            serde_json::Value::String(s) if !s.trim().is_empty() && !is_harness_injection(s) => {
                 blocks.push(ChatBlock {
                     kind: "text".into(),
                     text: s.trim().to_string(),
@@ -766,14 +1002,28 @@ where
                             if t.is_empty() || is_harness_injection(t) {
                                 continue;
                             }
-                            blocks.push(ChatBlock { kind: "text".into(), text: t.to_string(), tool: None, tool_id: None });
+                            blocks.push(ChatBlock {
+                                kind: "text".into(),
+                                text: t.to_string(),
+                                tool: None,
+                                tool_id: None,
+                            });
                         }
                         Some("thinking") => {
-                            let t = b.get("thinking").and_then(|t| t.as_str()).unwrap_or("").trim();
+                            let t = b
+                                .get("thinking")
+                                .and_then(|t| t.as_str())
+                                .unwrap_or("")
+                                .trim();
                             if t.is_empty() {
                                 continue;
                             }
-                            blocks.push(ChatBlock { kind: "thinking".into(), text: t.to_string(), tool: None, tool_id: None });
+                            blocks.push(ChatBlock {
+                                kind: "thinking".into(),
+                                text: t.to_string(),
+                                tool: None,
+                                tool_id: None,
+                            });
                         }
                         Some("tool_use") => {
                             let name = b.get("name").and_then(|n| n.as_str()).unwrap_or("tool");
@@ -791,7 +1041,10 @@ where
                                 let empty = serde_json::Value::Null;
                                 results.push(ChatToolResult {
                                     tool_id: id.to_string(),
-                                    ok: !b.get("is_error").and_then(|e| e.as_bool()).unwrap_or(false),
+                                    ok: !b
+                                        .get("is_error")
+                                        .and_then(|e| e.as_bool())
+                                        .unwrap_or(false),
                                     preview: preview_of(b.get("content").unwrap_or(&empty)),
                                 });
                             }
@@ -811,9 +1064,17 @@ where
         if blocks.is_empty() {
             continue;
         }
-        turns.push(ChatTurn { role: role.to_string(), blocks });
+        turns.push(ChatTurn {
+            role: role.to_string(),
+            blocks,
+        });
     }
-    ChatSnapshot { turns, results, total, meta }
+    ChatSnapshot {
+        turns,
+        results,
+        total,
+        meta,
+    }
 }
 
 fn read_chat_snapshot(project: &str, after: usize) -> Result<ChatSnapshot, String> {
@@ -822,34 +1083,48 @@ fn read_chat_snapshot(project: &str, after: usize) -> Result<ChatSnapshot, Strin
     let path = orchestrator_transcript_path(project, &sid)?;
     let raw = match std::fs::read_to_string(&path) {
         Ok(r) => r,
-        Err(_) => return Ok(ChatSnapshot {
-            turns: Vec::new(),
-            results: Vec::new(),
-            total: 0,
-            meta: ChatMeta::default(),
-        }),
+        Err(_) => {
+            return Ok(ChatSnapshot {
+                turns: Vec::new(),
+                results: Vec::new(),
+                total: 0,
+                meta: ChatMeta::default(),
+            })
+        }
     };
     let lines = complete_lines(&raw);
     let total = lines.len();
-    Ok(decode_chat_lines(lines.into_iter().skip(after), total))
+    let context_window = read_context_window();
+    let full_meta =
+        decode_chat_lines_with_context_window(lines.iter().copied(), total, context_window).meta;
+    let mut snap =
+        decode_chat_lines_with_context_window(lines.into_iter().skip(after), total, context_window);
+    snap.meta = full_meta;
+    Ok(snap)
 }
 
 #[tauri::command]
 fn orchestrator_chat(project: String, after: usize) -> Result<String, String> {
     let snap = read_chat_snapshot(&project, after)?;
-    serde_json::to_string(&(snap.turns, snap.results, snap.total, snap.meta)).map_err(|e| e.to_string())
+    serde_json::to_string(&(snap.turns, snap.results, snap.total, snap.meta))
+        .map_err(|e| e.to_string())
 }
 
 static CHAT_WATCHERS: std::sync::Mutex<Option<std::collections::HashMap<String, Arc<AtomicBool>>>> =
     std::sync::Mutex::new(None);
 
-fn seed_tail(path: &Path) -> (TranscriptTail, u64) {
+fn seed_tail(path: &Path) -> (TranscriptTail, u64, ChatMeta) {
     let mut tail = TranscriptTail::default();
+    let mut meta = ChatMeta {
+        context: chat_context(None, read_context_window()),
+        ..ChatMeta::default()
+    };
     if let Ok(raw) = std::fs::read_to_string(path) {
         tail.seed_from_raw(&raw);
+        meta = decode_chat_lines(complete_lines(&raw), tail.line_offset).meta;
     }
     let total = tail.line_offset as u64;
-    (tail, total)
+    (tail, total, meta)
 }
 
 fn forget_chat_watcher(project: &str, stop: &Arc<AtomicBool>) {
@@ -866,6 +1141,7 @@ fn spawn_chat_watcher(
     project: String,
     initial_session_id: String,
     mut tail: TranscriptTail,
+    mut meta: ChatMeta,
     stop: Arc<AtomicBool>,
 ) {
     use tauri::Emitter;
@@ -882,6 +1158,10 @@ fn spawn_chat_watcher(
                 if next_session_id != session_id {
                     session_id = next_session_id;
                     tail.reset();
+                    meta = ChatMeta {
+                        context: chat_context(None, read_context_window()),
+                        ..ChatMeta::default()
+                    };
                     path = orchestrator_transcript_path(&project, &session_id).ok();
                     let payload = ChatSessionChangedPayload {
                         project: project.clone(),
@@ -897,6 +1177,7 @@ fn spawn_chat_watcher(
                 match tail.read_new_lines(p) {
                     Ok((after, lines, total)) if !lines.is_empty() => {
                         let snap = decode_chat_lines(lines, total);
+                        merge_chat_meta(&mut meta, snap.meta.clone());
                         let payload = ChatRowsPayload {
                             project: project.clone(),
                             session_id: session_id.clone(),
@@ -904,7 +1185,7 @@ fn spawn_chat_watcher(
                             total,
                             turns: snap.turns,
                             results: snap.results,
-                            meta: snap.meta,
+                            meta: meta.clone(),
                         };
                         if window.emit("chat-rows", payload).is_err() {
                             break;
@@ -932,7 +1213,7 @@ fn chat_watch(window: tauri::Window, project: String) -> Result<u64, String> {
     let sid = orch_session_id(&project)
         .ok_or_else(|| "no orchestrator session for this project yet".to_string())?;
     let path = orchestrator_transcript_path(&project, &sid)?;
-    let (tail, current) = seed_tail(&path);
+    let (tail, current, meta) = seed_tail(&path);
     let stop = Arc::new(AtomicBool::new(false));
 
     {
@@ -944,7 +1225,7 @@ fn chat_watch(window: tauri::Window, project: String) -> Result<u64, String> {
         map.insert(project.clone(), Arc::clone(&stop));
     }
 
-    spawn_chat_watcher(window, project, sid, tail, stop);
+    spawn_chat_watcher(window, project, sid, tail, meta, stop);
     Ok(current)
 }
 
@@ -967,12 +1248,17 @@ fn chat_unwatch(project: String) {
 /// is not unique — a crew could run one as a seat. The pane is.
 #[tauri::command]
 fn orchestrator_status(project: String) -> Result<String, String> {
-    let rows = std::fs::read_to_string(desktop_bus_dir().join("crew-windows.txt")).unwrap_or_default();
+    let rows =
+        std::fs::read_to_string(desktop_bus_dir().join("crew-windows.txt")).unwrap_or_default();
     let pane = rows
         .lines()
         .filter_map(|l| {
             let f: Vec<&str> = l.split('\t').collect();
-            if f.len() >= 4 && f[0] == project && f[1] == "orch" { Some(f[3].to_string()) } else { None }
+            if f.len() >= 4 && f[0] == project && f[1] == "orch" {
+                Some(f[3].to_string())
+            } else {
+                None
+            }
         })
         .next_back();
     let pane = match pane {
@@ -986,10 +1272,19 @@ fn orchestrator_status(project: String) -> Result<String, String> {
         .map_err(|_| "herdr is not answering".to_string())?;
     let v: serde_json::Value = serde_json::from_str(String::from_utf8_lossy(&out.stdout).trim())
         .unwrap_or(serde_json::Value::Null);
-    let agents = v.get("result").and_then(|r| r.get("agents")).and_then(|a| a.as_array()).cloned().unwrap_or_default();
+    let agents = v
+        .get("result")
+        .and_then(|r| r.get("agents"))
+        .and_then(|a| a.as_array())
+        .cloned()
+        .unwrap_or_default();
     for a in agents {
         if a.get("pane_id").and_then(|p| p.as_str()) == Some(pane.as_str()) {
-            return Ok(a.get("agent_status").and_then(|s| s.as_str()).unwrap_or("unknown").to_string());
+            return Ok(a
+                .get("agent_status")
+                .and_then(|s| s.as_str())
+                .unwrap_or("unknown")
+                .to_string());
         }
     }
     Ok("unknown".into())
@@ -1013,7 +1308,11 @@ fn pane_keys(target: String, keys: String) -> Result<(), String> {
         .env("PATH", terminal_path())
         .output()
         .map_err(|e| format!("herdr: {e}"))?;
-    if out.status.success() { Ok(()) } else { Err(String::from_utf8_lossy(&out.stderr).trim().to_string()) }
+    if out.status.success() {
+        Ok(())
+    } else {
+        Err(String::from_utf8_lossy(&out.stderr).trim().to_string())
+    }
 }
 
 /// Send a line to a herdr pane, the way a person would type it.
@@ -1035,7 +1334,11 @@ fn pane_send(target: String, text: String) -> Result<(), String> {
             .env("PATH", terminal_path())
             .output()
             .map_err(|e| format!("herdr: {e}"))?;
-        if out.status.success() { Ok(()) } else { Err(String::from_utf8_lossy(&out.stderr).trim().to_string()) }
+        if out.status.success() {
+            Ok(())
+        } else {
+            Err(String::from_utf8_lossy(&out.stderr).trim().to_string())
+        }
     };
     // Clear ONLY on a positive "idle". "working" → Escape would interrupt the running turn;
     // "blocked" → Escape would dismiss the permission dialog the operator is being asked about;
@@ -1062,10 +1365,11 @@ fn pane_agent_status(pane: &str) -> String {
         Ok(o) => o,
         Err(_) => return "unknown".into(),
     };
-    let v: serde_json::Value = match serde_json::from_str(String::from_utf8_lossy(&out.stdout).trim()) {
-        Ok(v) => v,
-        Err(_) => return "unknown".into(),
-    };
+    let v: serde_json::Value =
+        match serde_json::from_str(String::from_utf8_lossy(&out.stdout).trim()) {
+            Ok(v) => v,
+            Err(_) => return "unknown".into(),
+        };
     for a in v
         .get("result")
         .and_then(|r| r.get("agents"))
@@ -1074,7 +1378,11 @@ fn pane_agent_status(pane: &str) -> String {
         .unwrap_or_default()
     {
         if a.get("pane_id").and_then(|p| p.as_str()) == Some(pane) {
-            return a.get("agent_status").and_then(|s| s.as_str()).unwrap_or("unknown").to_string();
+            return a
+                .get("agent_status")
+                .and_then(|s| s.as_str())
+                .unwrap_or("unknown")
+                .to_string();
         }
     }
     "unknown".into()
@@ -1197,8 +1505,12 @@ fn autonomy_get(project: Option<String>) -> Result<String, String> {
     let mut cmd = std::process::Command::new("trantor");
     cmd.arg("autonomy").arg("json");
     match project.as_deref() {
-        Some(p) if !p.trim().is_empty() => { cmd.arg("--project").arg(p); }
-        _ => { cmd.arg("--global"); }
+        Some(p) if !p.trim().is_empty() => {
+            cmd.arg("--project").arg(p);
+        }
+        _ => {
+            cmd.arg("--global");
+        }
     }
     let out = cmd
         .env("PATH", terminal_path())
@@ -1217,7 +1529,14 @@ fn autonomy_set(project: Option<String>, dial: String, value: String) -> Result<
     // unvalidated string would be an argument-injection surface rather than a typo.
     // No "seats" here on purpose: what a crew agent may do unattended is the overseer's level,
     // per project, on the hub. This command must not offer a second way to set it.
-    const DIALS: &[&str] = &["harness", "commit", "push", "deploy", "swapDeadSeat", "retryFailedTurn"];
+    const DIALS: &[&str] = &[
+        "harness",
+        "commit",
+        "push",
+        "deploy",
+        "swapDeadSeat",
+        "retryFailedTurn",
+    ];
     const VALUES: &[&str] = &["on", "off", "prompt", "bypass"];
     if !DIALS.contains(&dial.as_str()) {
         return Err(format!("unknown dial '{dial}'"));
@@ -1228,8 +1547,12 @@ fn autonomy_set(project: Option<String>, dial: String, value: String) -> Result<
     let mut cmd = std::process::Command::new("trantor");
     cmd.arg("autonomy").arg("set").arg(&dial).arg(&value);
     match project.as_deref() {
-        Some(p) if !p.trim().is_empty() => { cmd.arg("--project").arg(p); }
-        _ => { cmd.arg("--global"); }
+        Some(p) if !p.trim().is_empty() => {
+            cmd.arg("--project").arg(p);
+        }
+        _ => {
+            cmd.arg("--global");
+        }
     }
     let out = cmd
         .env("PATH", terminal_path())
@@ -1530,12 +1853,20 @@ fn parse_herdr_seats(raw: &str) -> Vec<HerdrSeat> {
         let surface = fields[3].trim();
         // `orch` rides the same file as the crew seats (crew.sh records both). Dropping it here is
         // what made `trantor open` land a live pane the app could never show.
-        if (kind != "herdr" && kind != "orch") || project.is_empty() || agent.is_empty() || surface.is_empty() {
+        if (kind != "herdr" && kind != "orch")
+            || project.is_empty()
+            || agent.is_empty()
+            || surface.is_empty()
+        {
             continue;
         }
         // crew.sh writes the orchestrator's agent column as the literal `__orch__` placeholder;
         // nobody should have to read that in a tab.
-        let agent = if kind == "orch" { "orchestrator" } else { agent };
+        let agent = if kind == "orch" {
+            "orchestrator"
+        } else {
+            agent
+        };
         by_seat.insert(
             (project.to_string(), agent.to_string()),
             HerdrSeat {
@@ -2242,7 +2573,11 @@ mod herdr_tests {
 
     #[test]
     fn herdr_seat_rows_still_drop_other_muxes() {
-        let rows = ["trantor\tcmux\tglm\tsurface-no", "trantor\therdrws\t__ws__\tw2"].join("\n");
+        let rows = [
+            "trantor\tcmux\tglm\tsurface-no",
+            "trantor\therdrws\t__ws__\tw2",
+        ]
+        .join("\n");
         assert_eq!(parse_herdr_seats(&rows), vec![]);
     }
 
@@ -2250,11 +2585,169 @@ mod herdr_tests {
     fn harness_injections_never_wear_the_operator_role() {
         // Every one of these arrives as an ordinary user turn. Rendering them as the person
         // speaking is what put a 6,849-character hook dump in the chat under "YOU".
-        assert!(is_harness_injection("Stop hook feedback:\nYou have 29 unread DIRECT message(s)"));
+        assert!(is_harness_injection(
+            "Stop hook feedback:\nYou have 29 unread DIRECT message(s)"
+        ));
         assert!(is_harness_injection("[Request interrupted by user]"));
-        assert!(is_harness_injection("<system-reminder>read this</system-reminder>"));
-        assert!(is_harness_injection("PostToolUse:Bash hook additional context: <trantor-inbox>"));
-        assert!(is_harness_injection("This session is being continued from a previous conversation"));
+        assert!(is_harness_injection(
+            "<system-reminder>read this</system-reminder>"
+        ));
+        assert!(is_harness_injection(
+            "PostToolUse:Bash hook additional context: <trantor-inbox>"
+        ));
+        assert!(is_harness_injection(
+            "This session is being continued from a previous conversation"
+        ));
+    }
+
+    #[test]
+    fn assistant_usage_sets_context_tokens_and_fraction() {
+        let rows = [
+            serde_json::json!({
+                "type": "assistant",
+                "message": {
+                    "model": "claude-opus",
+                    "usage": {
+                        "input_tokens": 400,
+                        "cache_read_input_tokens": 50,
+                        "cache_creation_input_tokens": 25
+                    },
+                    "content": [{"type": "text", "text": "done"}]
+                }
+            })
+            .to_string(),
+            serde_json::json!({
+                "type": "assistant",
+                "message": {
+                    "model": "claude-opus",
+                    "usage": {
+                        "input_tokens": 800,
+                        "cache_read_input_tokens": 100,
+                        "cache_creation_input_tokens": 100
+                    },
+                    "content": [{"type": "text", "text": "again"}]
+                }
+            })
+            .to_string(),
+        ];
+        let snap = decode_chat_lines_with_context_window(rows.iter(), rows.len(), 2_000);
+        assert_eq!(snap.meta.context.tokens, Some(1_000));
+        assert_eq!(snap.meta.context.window, 2_000);
+        assert_eq!(snap.meta.context.frac, Some(0.5));
+    }
+
+    #[test]
+    fn context_tokens_stay_null_until_assistant_usage_exists() {
+        let rows = [serde_json::json!({
+            "type": "assistant",
+            "message": {
+                "model": "claude-opus",
+                "content": [{"type": "text", "text": "no usage yet"}]
+            }
+        })
+        .to_string()];
+        let snap = decode_chat_lines_with_context_window(rows.iter(), rows.len(), 200_000);
+        assert_eq!(snap.meta.context.tokens, None);
+        assert_eq!(snap.meta.context.window, 200_000);
+        assert_eq!(snap.meta.context.frac, None);
+    }
+
+    #[test]
+    fn slash_command_record_renders_as_system_divider() {
+        let row = serde_json::json!({
+            "type": "user",
+            "message": { "content": "/compact fused words stay here" }
+        })
+        .to_string();
+        let snap = decode_chat_lines_with_context_window([row], 1, 0);
+        assert_eq!(snap.turns.len(), 1);
+        assert_eq!(snap.turns[0].role, "system");
+        assert_eq!(snap.turns[0].blocks[0].kind, "divider");
+        assert_eq!(
+            snap.turns[0].blocks[0].text,
+            "/compact fused words stay here"
+        );
+    }
+
+    #[test]
+    fn local_command_blocks_render_as_system_dividers() {
+        for text in [
+            "<local-command-caveat>do not show this as user speech</local-command-caveat>",
+            "<local-command-stdout>cargo test output</local-command-stdout>",
+        ] {
+            let row = serde_json::json!({
+                "type": "user",
+                "message": { "content": text }
+            })
+            .to_string();
+            let snap = decode_chat_lines_with_context_window([row], 1, 0);
+            assert_eq!(snap.turns.len(), 1);
+            assert_eq!(snap.turns[0].role, "system");
+            assert_eq!(snap.turns[0].blocks[0].kind, "divider");
+            assert_eq!(snap.turns[0].blocks[0].text, text);
+        }
+    }
+
+    #[test]
+    fn is_meta_user_entry_renders_as_system_divider() {
+        let row = serde_json::json!({
+            "type": "user",
+            "isMeta": true,
+            "message": { "content": [{ "type": "text", "text": "bookkeeping note" }] }
+        })
+        .to_string();
+        let snap = decode_chat_lines_with_context_window([row], 1, 0);
+        assert_eq!(snap.turns.len(), 1);
+        assert_eq!(snap.turns[0].role, "system");
+        assert_eq!(snap.turns[0].blocks[0].kind, "divider");
+        assert_eq!(snap.turns[0].blocks[0].text, "bookkeeping note");
+    }
+
+    #[test]
+    fn plain_user_message_stays_user_speech() {
+        let row = serde_json::json!({
+            "type": "user",
+            "message": { "content": "please /compact later, not now" }
+        })
+        .to_string();
+        let snap = decode_chat_lines_with_context_window([row], 1, 0);
+        assert_eq!(snap.turns.len(), 1);
+        assert_eq!(snap.turns[0].role, "user");
+        assert_eq!(snap.turns[0].blocks[0].kind, "text");
+        assert_eq!(
+            snap.turns[0].blocks[0].text,
+            "please /compact later, not now"
+        );
+    }
+
+    #[test]
+    fn chat_meta_merge_keeps_last_known_context_across_batches() {
+        let mut meta = decode_chat_lines_with_context_window(
+            [serde_json::json!({
+                "type": "assistant",
+                "message": {
+                    "usage": { "input_tokens": 80, "cache_read_input_tokens": 10, "cache_creation_input_tokens": 10 },
+                    "content": [{"type": "text", "text": "first"}]
+                }
+            })
+            .to_string()],
+            1,
+            1_000,
+        )
+        .meta;
+        let next = decode_chat_lines_with_context_window(
+            [serde_json::json!({
+                "type": "user",
+                "message": { "content": "next" }
+            })
+            .to_string()],
+            2,
+            1_000,
+        )
+        .meta;
+        merge_chat_meta(&mut meta, next);
+        assert_eq!(meta.context.tokens, Some(100));
+        assert_eq!(meta.context.frac, Some(0.1));
     }
 
     #[test]
@@ -2262,10 +2755,14 @@ mod herdr_tests {
         assert!(!is_harness_injection("hi"));
         assert!(!is_harness_injection("say only: PERSIST_OK"));
         // Length is not the signal. A long message from a person is still from a person.
-        assert!(!is_harness_injection(&"read docs/PRD.md and plan the build. ".repeat(300)));
+        assert!(!is_harness_injection(
+            &"read docs/PRD.md and plan the build. ".repeat(300)
+        ));
         // The word appearing mid-sentence in a discussion ABOUT hooks is the trap a naive
         // "contains" check falls into, so markers must anchor at the start.
-        assert!(!is_harness_injection("can you look at why the Stop hook feedback fires twice?"));
+        assert!(!is_harness_injection(
+            "can you look at why the Stop hook feedback fires twice?"
+        ));
     }
 
     #[test]
@@ -2291,7 +2788,10 @@ mod herdr_tests {
     fn tool_summary_stays_one_line_and_bounded() {
         let long = serde_json::json!({ "command": "x\ny".to_string() + &"z".repeat(400) });
         let out = tool_summary("Bash", &long);
-        assert!(!out.contains('\n'), "newlines would break the one-line card");
+        assert!(
+            !out.contains('\n'),
+            "newlines would break the one-line card"
+        );
         assert!(out.chars().count() <= 161, "{}", out.chars().count());
         assert!(out.ends_with('…'));
     }
@@ -2319,7 +2819,10 @@ mod herdr_tests {
 
         let (after, lines, total) = tail.push_chunk("\n");
         assert_eq!(after, 0);
-        assert_eq!(lines, vec![r#"{"type":"assistant","message":{"content":[]}}"#.to_string()]);
+        assert_eq!(
+            lines,
+            vec![r#"{"type":"assistant","message":{"content":[]}}"#.to_string()]
+        );
         assert_eq!(total, 1);
     }
 
@@ -2370,11 +2873,15 @@ mod herdr_tests {
 
     #[test]
     fn file_tree_status_marks_the_file_and_every_folder_above_it() {
-        let m = parse_status_porcelain(" M bin/crew.sh\n?? desktop/src/features/workspace/new.tsx\n");
+        let m =
+            parse_status_porcelain(" M bin/crew.sh\n?? desktop/src/features/workspace/new.tsx\n");
         assert_eq!(m.get("bin/crew.sh"), Some(&"M".to_string()));
         // a closed folder must still show that something inside it changed
         assert_eq!(m.get("bin"), Some(&"M".to_string()));
-        assert_eq!(m.get("desktop/src/features/workspace"), Some(&"??".to_string()));
+        assert_eq!(
+            m.get("desktop/src/features/workspace"),
+            Some(&"??".to_string())
+        );
         assert_eq!(m.get("README.md"), None);
     }
 
