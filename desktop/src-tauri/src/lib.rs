@@ -3,7 +3,13 @@ mod terminal;
 
 use serde::Serialize;
 use std::collections::BTreeMap;
+use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc,
+};
+use std::time::Duration;
 
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
 #[tauri::command]
@@ -207,7 +213,7 @@ const TREE_SKIP: &[&str] = &[
 /// rather than per entry: `git status` on a large repo is the expensive part, and asking per file
 /// would make an O(n) tree into O(n) subprocesses.
 fn git_status_map(dir: &Path) -> std::collections::HashMap<String, String> {
-    let mut map = std::collections::HashMap::new();
+    let map = std::collections::HashMap::new();
     let out = match std::process::Command::new("git")
         .args(["status", "--porcelain=v1", "--untracked-files=normal"])
         .current_dir(dir)
@@ -536,6 +542,131 @@ struct ChatToolResult {
     preview: String,
 }
 
+#[derive(Debug, Clone, Serialize)]
+struct ChatSnapshot {
+    turns: Vec<ChatTurn>,
+    results: Vec<ChatToolResult>,
+    total: usize,
+    meta: ChatMeta,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct ChatRowsPayload {
+    project: String,
+    #[serde(rename = "sessionId")]
+    session_id: String,
+    after: usize,
+    total: usize,
+    turns: Vec<ChatTurn>,
+    results: Vec<ChatToolResult>,
+    meta: ChatMeta,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct ChatSessionChangedPayload {
+    project: String,
+    #[serde(rename = "sessionId")]
+    session_id: String,
+}
+
+#[derive(Debug, Default)]
+struct TranscriptTail {
+    byte_offset: u64,
+    line_offset: usize,
+    pending: String,
+}
+
+impl TranscriptTail {
+    fn reset(&mut self) {
+        self.byte_offset = 0;
+        self.line_offset = 0;
+        self.pending.clear();
+    }
+
+    fn seed_from_raw(&mut self, raw: &str) {
+        self.byte_offset = raw.len() as u64;
+        let (complete, pending) = complete_line_count(raw);
+        self.line_offset = complete;
+        self.pending = pending;
+    }
+
+    fn push_chunk(&mut self, chunk: &str) -> (usize, Vec<String>, usize) {
+        let after = self.line_offset;
+        if chunk.is_empty() {
+            return (after, Vec::new(), self.line_offset);
+        }
+        let mut text = String::new();
+        if !self.pending.is_empty() {
+            text.push_str(&self.pending);
+            self.pending.clear();
+        }
+        text.push_str(chunk);
+
+        let complete = text.ends_with('\n');
+        let mut parts: Vec<&str> = text.split('\n').collect();
+        if !complete {
+            self.pending = parts.pop().unwrap_or_default().trim_end_matches('\r').to_string();
+        } else if parts.last() == Some(&"") {
+            parts.pop();
+        }
+        let lines = parts
+            .into_iter()
+            .map(|s| s.trim_end_matches('\r').to_string())
+            .collect::<Vec<_>>();
+        self.line_offset += lines.len();
+        (after, lines, self.line_offset)
+    }
+
+    fn read_new_lines(&mut self, path: &Path) -> std::io::Result<(usize, Vec<String>, usize)> {
+        let mut f = std::fs::File::open(path)?;
+        let len = f.metadata()?.len();
+        if len < self.byte_offset {
+            self.reset();
+        }
+        f.seek(SeekFrom::Start(self.byte_offset))?;
+        let mut chunk = String::new();
+        f.read_to_string(&mut chunk)?;
+        self.byte_offset = f.stream_position()?;
+        Ok(self.push_chunk(&chunk))
+    }
+}
+
+fn complete_line_count(raw: &str) -> (usize, String) {
+    if raw.is_empty() || raw.ends_with('\n') {
+        return (raw.lines().count(), String::new());
+    }
+    let mut parts: Vec<&str> = raw.split('\n').collect();
+    let pending = parts.pop().unwrap_or_default().trim_end_matches('\r').to_string();
+    (parts.len(), pending)
+}
+
+fn complete_lines(raw: &str) -> Vec<&str> {
+    if raw.is_empty() {
+        return Vec::new();
+    }
+    let mut parts: Vec<&str> = raw.split('\n').collect();
+    if parts.last() == Some(&"") {
+        parts.pop();
+    } else {
+        parts.pop();
+    }
+    parts.into_iter().map(|s| s.trim_end_matches('\r')).collect()
+}
+
+fn orchestrator_transcript_path(project: &str, sid: &str) -> Result<PathBuf, String> {
+    let dir = project_dir(project).ok_or_else(|| format!("no local checkout for {project}"))?;
+    let slug: String = dir
+        .to_string_lossy()
+        .chars()
+        .map(|c| if c == '/' || c == '.' { '-' } else { c })
+        .collect();
+    let home = std::env::var("HOME").unwrap_or_default();
+    Ok(std::path::Path::new(&home)
+        .join(".claude/projects")
+        .join(&slug)
+        .join(format!("{sid}.jsonl")))
+}
+
 /// Tool inputs are objects of wildly different shapes. The one-line summary is the field a person
 /// would recognise, and everything else is noise in a chat.
 fn tool_summary(name: &str, input: &serde_json::Value) -> String {
@@ -577,41 +708,17 @@ fn preview_of(v: &serde_json::Value) -> String {
     if raw.chars().count() > 2000 { raw.chars().take(2000).collect::<String>() + "\n…" } else { raw.to_string() }
 }
 
-#[tauri::command]
-fn orchestrator_chat(project: String, after: usize) -> Result<String, String> {
-    let sid = orch_session_id(&project)
-        .ok_or_else(|| "no orchestrator session for this project yet".to_string())?;
-    let dir = project_dir(&project).ok_or_else(|| format!("no local checkout for {project}"))?;
-    let slug: String = dir
-        .to_string_lossy()
-        .chars()
-        .map(|c| if c == '/' || c == '.' { '-' } else { c })
-        .collect();
-    let home = std::env::var("HOME").unwrap_or_default();
-    let path = std::path::Path::new(&home)
-        .join(".claude/projects")
-        .join(&slug)
-        .join(format!("{sid}.jsonl"));
-    let raw = match std::fs::read_to_string(&path) {
-        Ok(r) => r,
-        Err(_) => {
-            return serde_json::to_string(&(
-                Vec::<ChatTurn>::new(),
-                Vec::<ChatToolResult>::new(),
-                0usize,
-                ChatMeta::default(),
-            ))
-            .map_err(|e| e.to_string())
-        }
-    };
-    let lines: Vec<&str> = raw.lines().collect();
-    let total = lines.len();
+fn decode_chat_lines<I, S>(lines: I, total: usize) -> ChatSnapshot
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<str>,
+{
     let mut turns: Vec<ChatTurn> = Vec::new();
     let mut results: Vec<ChatToolResult> = Vec::new();
     let mut meta = ChatMeta::default();
 
-    for line in lines.iter().skip(after) {
-        let v: serde_json::Value = match serde_json::from_str(line) {
+    for line in lines {
+        let v: serde_json::Value = match serde_json::from_str(line.as_ref()) {
             Ok(v) => v,
             Err(_) => continue,
         };
@@ -706,7 +813,154 @@ fn orchestrator_chat(project: String, after: usize) -> Result<String, String> {
         }
         turns.push(ChatTurn { role: role.to_string(), blocks });
     }
-    serde_json::to_string(&(turns, results, total, meta)).map_err(|e| e.to_string())
+    ChatSnapshot { turns, results, total, meta }
+}
+
+fn read_chat_snapshot(project: &str, after: usize) -> Result<ChatSnapshot, String> {
+    let sid = orch_session_id(project)
+        .ok_or_else(|| "no orchestrator session for this project yet".to_string())?;
+    let path = orchestrator_transcript_path(project, &sid)?;
+    let raw = match std::fs::read_to_string(&path) {
+        Ok(r) => r,
+        Err(_) => return Ok(ChatSnapshot {
+            turns: Vec::new(),
+            results: Vec::new(),
+            total: 0,
+            meta: ChatMeta::default(),
+        }),
+    };
+    let lines = complete_lines(&raw);
+    let total = lines.len();
+    Ok(decode_chat_lines(lines.into_iter().skip(after), total))
+}
+
+#[tauri::command]
+fn orchestrator_chat(project: String, after: usize) -> Result<String, String> {
+    let snap = read_chat_snapshot(&project, after)?;
+    serde_json::to_string(&(snap.turns, snap.results, snap.total, snap.meta)).map_err(|e| e.to_string())
+}
+
+static CHAT_WATCHERS: std::sync::Mutex<Option<std::collections::HashMap<String, Arc<AtomicBool>>>> =
+    std::sync::Mutex::new(None);
+
+fn seed_tail(path: &Path) -> (TranscriptTail, u64) {
+    let mut tail = TranscriptTail::default();
+    if let Ok(raw) = std::fs::read_to_string(path) {
+        tail.seed_from_raw(&raw);
+    }
+    let total = tail.line_offset as u64;
+    (tail, total)
+}
+
+fn forget_chat_watcher(project: &str, stop: &Arc<AtomicBool>) {
+    let mut g = CHAT_WATCHERS.lock().unwrap();
+    if let Some(map) = g.as_mut() {
+        if map.get(project).is_some_and(|live| Arc::ptr_eq(live, stop)) {
+            map.remove(project);
+        }
+    }
+}
+
+fn spawn_chat_watcher(
+    window: tauri::Window,
+    project: String,
+    initial_session_id: String,
+    mut tail: TranscriptTail,
+    stop: Arc<AtomicBool>,
+) {
+    use tauri::Emitter;
+
+    tauri::async_runtime::spawn(async move {
+        let mut session_id = initial_session_id;
+        let mut path = orchestrator_transcript_path(&project, &session_id).ok();
+        loop {
+            if stop.load(Ordering::SeqCst) {
+                break;
+            }
+
+            if let Some(next_session_id) = orch_session_id(&project) {
+                if next_session_id != session_id {
+                    session_id = next_session_id;
+                    tail.reset();
+                    path = orchestrator_transcript_path(&project, &session_id).ok();
+                    let payload = ChatSessionChangedPayload {
+                        project: project.clone(),
+                        session_id: session_id.clone(),
+                    };
+                    if window.emit("chat-session-changed", payload).is_err() {
+                        break;
+                    }
+                }
+            }
+
+            if let Some(p) = path.as_deref() {
+                match tail.read_new_lines(p) {
+                    Ok((after, lines, total)) if !lines.is_empty() => {
+                        let snap = decode_chat_lines(lines, total);
+                        let payload = ChatRowsPayload {
+                            project: project.clone(),
+                            session_id: session_id.clone(),
+                            after,
+                            total,
+                            turns: snap.turns,
+                            results: snap.results,
+                            meta: snap.meta,
+                        };
+                        if window.emit("chat-rows", payload).is_err() {
+                            break;
+                        }
+                    }
+                    Ok(_) => {}
+                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                    Err(_) => {}
+                }
+            }
+
+            tokio::time::sleep(Duration::from_millis(300)).await;
+        }
+        stop.store(true, Ordering::SeqCst);
+        forget_chat_watcher(&project, &stop);
+    });
+}
+
+#[tauri::command]
+fn chat_watch(window: tauri::Window, project: String) -> Result<u64, String> {
+    let project = project.trim().to_string();
+    if project.is_empty() {
+        return Err("project is required".into());
+    }
+    let sid = orch_session_id(&project)
+        .ok_or_else(|| "no orchestrator session for this project yet".to_string())?;
+    let path = orchestrator_transcript_path(&project, &sid)?;
+    let (tail, current) = seed_tail(&path);
+    let stop = Arc::new(AtomicBool::new(false));
+
+    {
+        let mut g = CHAT_WATCHERS.lock().unwrap();
+        let map = g.get_or_insert_with(std::collections::HashMap::new);
+        if map.contains_key(&project) {
+            return Ok(current);
+        }
+        map.insert(project.clone(), Arc::clone(&stop));
+    }
+
+    spawn_chat_watcher(window, project, sid, tail, stop);
+    Ok(current)
+}
+
+#[tauri::command]
+fn chat_unwatch(project: String) {
+    let project = project.trim();
+    if project.is_empty() {
+        return;
+    }
+    let stop = {
+        let mut g = CHAT_WATCHERS.lock().unwrap();
+        g.as_mut().and_then(|map| map.remove(project))
+    };
+    if let Some(stop) = stop {
+        stop.store(true, Ordering::SeqCst);
+    }
 }
 
 /// Is the orchestrator mid-turn? Resolved by PANE id rather than by agent label, because "claude"
@@ -1830,6 +2084,8 @@ pub fn run() {
             read_file_at_head,
             seat_state,
             orchestrator_chat,
+            chat_watch,
+            chat_unwatch,
             pane_send,
             pane_keys,
             orchestrator_status,
@@ -2002,6 +2258,70 @@ mod herdr_tests {
         let blocks = serde_json::json!([{ "type": "text", "text": "line one" }, { "type": "text", "text": "line two" }]);
         assert_eq!(preview_of(&blocks), "line one\nline two");
         assert_eq!(preview_of(&serde_json::Value::Null), "");
+    }
+
+    #[test]
+    fn transcript_tail_buffers_partial_line_until_newline() {
+        let mut tail = TranscriptTail::default();
+        let (after, lines, total) = tail.push_chunk(r#"{"type":"assistant""#);
+        assert_eq!(after, 0);
+        assert!(lines.is_empty());
+        assert_eq!(total, 0);
+
+        let (after, lines, total) = tail.push_chunk(r#","message":{"content":[]}}"#);
+        assert_eq!(after, 0);
+        assert!(lines.is_empty());
+        assert_eq!(total, 0);
+
+        let (after, lines, total) = tail.push_chunk("\n");
+        assert_eq!(after, 0);
+        assert_eq!(lines, vec![r#"{"type":"assistant","message":{"content":[]}}"#.to_string()]);
+        assert_eq!(total, 1);
+    }
+
+    #[test]
+    fn transcript_tail_reports_cursor_continuity_by_complete_line() {
+        let mut tail = TranscriptTail::default();
+        let (after, lines, total) = tail.push_chunk("one\n");
+        assert_eq!(after, 0);
+        assert_eq!(lines, vec!["one".to_string()]);
+        assert_eq!(total, 1);
+
+        let (after, lines, total) = tail.push_chunk("two\nthree\n");
+        assert_eq!(after, 1);
+        assert_eq!(lines, vec!["two".to_string(), "three".to_string()]);
+        assert_eq!(total, 3);
+    }
+
+    #[test]
+    fn transcript_tail_seeds_existing_partial_without_marking_it_seen() {
+        let mut tail = TranscriptTail::default();
+        tail.seed_from_raw("one\ntwo");
+        assert_eq!(tail.line_offset, 1);
+
+        let (after, lines, total) = tail.push_chunk("\n");
+        assert_eq!(after, 1);
+        assert_eq!(lines, vec!["two".to_string()]);
+        assert_eq!(total, 2);
+    }
+
+    #[test]
+    fn transcript_tail_rotation_restarts_from_line_zero() {
+        let root = temp_dir("tail-rotation");
+        let path = root.join("session.jsonl");
+        fs::write(&path, "one\ntwo\n").unwrap();
+        let mut tail = TranscriptTail::default();
+
+        let (after, lines, total) = tail.read_new_lines(&path).unwrap();
+        assert_eq!(after, 0);
+        assert_eq!(lines, vec!["one".to_string(), "two".to_string()]);
+        assert_eq!(total, 2);
+
+        fs::write(&path, "new\n").unwrap();
+        let (after, lines, total) = tail.read_new_lines(&path).unwrap();
+        assert_eq!(after, 0);
+        assert_eq!(lines, vec!["new".to_string()]);
+        assert_eq!(total, 1);
     }
 
     #[test]
