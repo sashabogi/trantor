@@ -189,8 +189,8 @@ export function Files({ client, project, lens, onLens, path, seat, onSeat }: {
           {!path ? (
             <div className="flex h-full items-center justify-center">
               <div className="tr-card-ghost max-w-[440px] px-6 py-5 text-center text-[12.5px] leading-relaxed">
-                Pick a file in the sidebar to read it. Switch the source above to see the same path
-                as a seat has it, rather than as the project checkout has it.
+                Pick a file in the Files column to read it. Switch the source above to see the same
+                path as a seat has it, rather than as the project checkout has it.
               </div>
             </div>
           ) : editing ? (

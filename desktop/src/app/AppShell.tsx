@@ -8,7 +8,7 @@
 // Fleet telemetry (economics, providers, tallies) lives on the HOME view as designed cards —
 // never in chrome. The old header dump was the altitude mistake made visible.
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ArrowDownToLine, Bot, Eye, GraduationCap, House, Inbox as InboxIcon, MessagesSquare, Settings as SettingsIcon } from "lucide-react";
+import { ArrowDownToLine, Bot, Eye, FolderTree, GraduationCap, House, Inbox as InboxIcon, MessagesSquare, Settings as SettingsIcon } from "lucide-react";
 import { appUpdateCheck, HubClient, hubForProject, knownProjects, localSessions, type AppUpdate, type Peer } from "../shared/api/client";
 import { stateOf } from "../shared/presence";
 import { countUnseen, onSeenChange } from "../shared/seen";
@@ -30,6 +30,7 @@ import { Overseer } from "../features/overseer/Overseer";
 import { Settings } from "../features/settings/Settings";
 import { FileTree } from "../features/files/FileTree";
 import { Files } from "../features/files/Files";
+import { filesColumnOpen, persistFilesColumn } from "../features/files/filesColumn";
 import { Chat, type Dock } from "../features/chat/Chat";
 import { Conversation } from "../features/chat/Conversation";
 import { notifyIfWorthIt } from "../shared/notify";
@@ -86,8 +87,8 @@ export function AppShell() {
   const [pane, setPane] = useState<Pane>({ kind: "home" });
   // Remembered, because whether you want the file tree open is a working preference, not a per-visit
   // decision. Defaults OPEN: the tree is the reason the section exists.
-  const [filesOpen, setFilesOpen] = useState<boolean>(() => localStorage.getItem("trantor.files.open") !== "0");
-  useEffect(() => { try { localStorage.setItem("trantor.files.open", filesOpen ? "1" : "0"); } catch { /* private mode */ } }, [filesOpen]);
+  const [filesOpen, setFilesOpen] = useState<boolean>(() => filesColumnOpen(localStorage));
+  useEffect(() => { persistFilesColumn(localStorage, filesOpen); }, [filesOpen]);
   // Which file is open, and WHOSE copy of it. Both live here because the tree (sidebar) and the
   // viewer (main pane) are two halves of one thing: clicking in one has to land in the other.
   const [filePath, setFilePath] = useState<string | null>(null);
@@ -257,12 +258,12 @@ export function AppShell() {
     setPane({ kind: "project", lens: "board" });
   };
 
-  const NavItem = ({ label, Icon, on, onClick, badge }: {
+  const NavItem = ({ label, Icon, on, onClick, badge, title }: {
     label: string;
     Icon: React.ComponentType<{ size?: number; strokeWidth?: number; className?: string }>;
-    on: boolean; onClick: () => void; badge?: number;
+    on: boolean; onClick: () => void; badge?: number; title?: string;
   }) => (
-    <button onClick={onClick}
+    <button onClick={onClick} title={title}
       className={`flex w-full items-center gap-2.5 rounded-lg px-3 py-1.5 text-left text-[13px] ${
         on ? "bg-white/[0.07] font-medium text-[var(--color-tr-text)]"
            : "text-[var(--color-tr-muted)] hover:bg-white/[0.04] hover:text-[var(--color-tr-text)]"}`}>
@@ -324,26 +325,14 @@ export function AppShell() {
         </div>
 
         <nav className="flex-1 overflow-y-auto">
-          {/* Inside a project, its FILES lead the sidebar. The audience for this app is a developer
-              who wants to see what the crew is touching without asking anyone, so the tree belongs
-              above the fleet's project list, not buried under it. */}
+          {/* Inside a project, FILES is one labeled row that toggles a second column next to the
+              sidebar — the tree has its own fixed-width scroll, so it no longer pushes ACTIVE NOW
+              and PROJECTS down to a sliver. */}
           {pane.kind === "project" && active && (
-            <div className="mb-4">
-              <button
-                type="button"
-                onClick={() => setFilesOpen(o => !o)}
-                className="flex w-full items-center gap-1 px-3 pb-1 text-left"
-              >
-                <SectionLabel>{`Files · ${active}`}</SectionLabel>
-                <span className="ml-auto text-[11px] text-tr-muted">{filesOpen ? "hide" : "show"}</span>
-              </button>
-              {filesOpen && (
-                <FileTree
-                  project={active}
-                  seat={fileSeat}
-                  onOpen={p => { setFilePath(p); setPane({ kind: "project", lens: "files" }); }}
-                />
-              )}
+            <div className="mb-1">
+              <NavItem label="Files" Icon={FolderTree} on={filesOpen}
+                       title={filesOpen ? "hide the file tree" : "show the file tree"}
+                       onClick={() => setFilesOpen(o => !o)} />
             </div>
           )}
           {activeProjects.length > 0 && (
@@ -391,6 +380,20 @@ export function AppShell() {
           </div>
         </div>
       </aside>
+
+      {/* The Files column: the project's tree, in a fixed-width scroll of its own, sitting between
+          the sidebar and the content instead of pushing the project list down. Rendered only for a
+          project, and only while the sidebar's Files row keeps it open. */}
+      {filesOpen && pane.kind === "project" && active && (
+        <div className="flex w-60 shrink-0 flex-col overflow-y-auto border-r border-white/[0.06] px-3 py-4">
+          <SectionLabel>{`Files · ${active}`}</SectionLabel>
+          <FileTree
+            project={active}
+            seat={fileSeat}
+            onOpen={p => { setFilePath(p); setPane({ kind: "project", lens: "files" }); }}
+          />
+        </div>
+      )}
 
       <div className={`relative my-2.5 mr-2.5 flex min-w-0 flex-1 ${chatDock === "right" ? "flex-row overflow-x-auto" : "flex-col overflow-hidden"}`}>
       <main className={`tr-main flex min-h-0 flex-1 flex-col overflow-hidden ${chatDock === "right" ? "min-w-[560px]" : "min-w-0"}`}>
