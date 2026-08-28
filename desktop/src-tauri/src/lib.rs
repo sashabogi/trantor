@@ -670,7 +670,7 @@ fn bookkeeping_divider_text(v: &serde_json::Value, content: &serde_json::Value) 
     let serde_json::Value::String(s) = content else {
         return None;
     };
-    if s.starts_with('/')
+    if is_slash_command(s)
         || s.starts_with("<local-command-caveat>")
         || s.starts_with("<local-command-stdout>")
     {
@@ -678,6 +678,23 @@ fn bookkeeping_divider_text(v: &serde_json::Value, content: &serde_json::Value) 
     } else {
         None
     }
+}
+
+/// A slash-COMMAND record, not merely text starting with "/". A command's first token is one
+/// bare name — "/compact", "/model opus", "/trantor:handoff" — while an absolute path has more
+/// slashes inside its first token. The distinction is load-bearing: the first live file-drop
+/// ("/Users/…/shot.jpg  here is the screen shot") matched a bare starts_with('/'), rendered as
+/// bookkeeping, vanished from user turns, and the delivery receipt declared a delivered message
+/// lost (2026-08-28).
+fn is_slash_command(s: &str) -> bool {
+    let Some(rest) = s.strip_prefix('/') else {
+        return false;
+    };
+    let token = rest.split_whitespace().next().unwrap_or("");
+    !token.is_empty()
+        && token
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == ':')
 }
 
 fn merge_chat_meta(current: &mut ChatMeta, next: ChatMeta) {
@@ -2701,6 +2718,32 @@ mod herdr_tests {
         assert_eq!(snap.turns[0].role, "system");
         assert_eq!(snap.turns[0].blocks[0].kind, "divider");
         assert_eq!(snap.turns[0].blocks[0].text, "bookkeeping note");
+    }
+
+    #[test]
+    fn a_message_starting_with_an_absolute_path_stays_user_speech() {
+        // The first live file-drop regression: "/Users/…" matched a bare starts_with('/'),
+        // rendered as bookkeeping, and the delivery receipt declared a delivered message lost.
+        let row = serde_json::json!({
+            "type": "user",
+            "message": { "content": "/Users/sasha/Desktop/CleanShot 2026-08-28 at 12.14.58.jpg  here is the screen shot" }
+        })
+        .to_string();
+        let snap = decode_chat_lines_with_context_window([row], 1, 0);
+        assert_eq!(snap.turns[0].role, "user");
+        assert_eq!(snap.turns[0].blocks[0].kind, "text");
+    }
+
+    #[test]
+    fn slash_command_gate_takes_commands_and_refuses_paths() {
+        assert!(is_slash_command("/compact"));
+        assert!(is_slash_command("/compact with trailing words"));
+        assert!(is_slash_command("/model opus"));
+        assert!(is_slash_command("/trantor:handoff"));
+        assert!(!is_slash_command("/Users/sasha/x.jpg here"));
+        assert!(!is_slash_command("/tmp/scratch.txt"));
+        assert!(!is_slash_command("plain words"));
+        assert!(!is_slash_command("/"));
     }
 
     #[test]
