@@ -1017,6 +1017,13 @@ fn pane_keys(target: String, keys: String) -> Result<(), String> {
 }
 
 /// Send a line to a herdr pane, the way a person would type it.
+///
+/// The input line is SHARED: the CLI stages its own commands there (2026-08-28, a resumed session
+/// had "/compact" pre-filled — the operator's dictation fused onto it and their first message was
+/// eaten). So an IDLE pane gets its input cleared first: esc esc clears staged text, and the third
+/// esc cancels the rewind picker the second one opens when the input was already empty — all three
+/// proven against a live claude TUI. A WORKING pane is left alone: Escape there would interrupt
+/// the running turn, and text sent mid-turn queues correctly (proven by a mid-turn probe).
 #[tauri::command]
 fn pane_send(target: String, text: String) -> Result<(), String> {
     if target.trim().is_empty() {
@@ -1030,10 +1037,47 @@ fn pane_send(target: String, text: String) -> Result<(), String> {
             .map_err(|e| format!("herdr: {e}"))?;
         if out.status.success() { Ok(()) } else { Err(String::from_utf8_lossy(&out.stderr).trim().to_string()) }
     };
+    // Clear ONLY on a positive "idle". "working" → Escape would interrupt the running turn;
+    // "blocked" → Escape would dismiss the permission dialog the operator is being asked about;
+    // "unknown" → could be either, so the clear is skipped rather than risked.
+    if pane_agent_status(&target) == "idle" {
+        run(vec!["pane", "send-keys", &target, "esc", "esc", "esc"])?;
+    }
     run(vec!["pane", "send-text", &target, &text])?;
     // Enter is a separate call: send-text is literal, so a newline inside it would be typed rather
     // than submitted.
     run(vec!["pane", "send-keys", &target, "Enter"])
+}
+
+/// The agent state herdr reports for one pane ("working" | "idle" | "blocked" | …), "unknown" on
+/// any failure. The caller clears the input line only on a positive "idle", so "unknown" is the
+/// safe answer for every failure: a wrongly-skipped clear risks contamination, a wrongly-sent
+/// Escape risks interrupting a live turn or dismissing a permission dialog — the worse trade.
+fn pane_agent_status(pane: &str) -> String {
+    let out = match std::process::Command::new("herdr")
+        .args(["agent", "list"])
+        .env("PATH", terminal_path())
+        .output()
+    {
+        Ok(o) => o,
+        Err(_) => return "unknown".into(),
+    };
+    let v: serde_json::Value = match serde_json::from_str(String::from_utf8_lossy(&out.stdout).trim()) {
+        Ok(v) => v,
+        Err(_) => return "unknown".into(),
+    };
+    for a in v
+        .get("result")
+        .and_then(|r| r.get("agents"))
+        .and_then(|a| a.as_array())
+        .cloned()
+        .unwrap_or_default()
+    {
+        if a.get("pane_id").and_then(|p| p.as_str()) == Some(pane) {
+            return a.get("agent_status").and_then(|s| s.as_str()).unwrap_or("unknown").to_string();
+        }
+    }
+    "unknown".into()
 }
 
 /// Is this seat writing to its worktree right now?

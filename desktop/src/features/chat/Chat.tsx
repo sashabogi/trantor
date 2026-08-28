@@ -328,6 +328,7 @@ export function Chat({ project, dock, onDock, onClose }: {
         model={pending || chat.meta.model}
         modelSource={pending ? "dispatched" : modelSource}
         working={working}
+        userTexts={chat.turns.filter(t => t.role === "user").map(t => t.blocks.filter(b => b.kind === "text").map(b => b.text).join("\n"))}
         onSent={sync}
         onDispatch={(dial, value) => { if (dial === "model") { setPending(value); setModelSource("dispatched"); } }}
       />

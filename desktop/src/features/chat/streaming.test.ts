@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   applyBackfill, applyRows, applySessionChanged, emptyChat,
-  sessionLiveness, type Backfill, type ChatState, type RowsPayload,
+  sessionLiveness, receiptFor, LOST_AFTER_MS, type Backfill, type ChatState, type RowsPayload,
 } from "./streaming";
 
 const t = (text: string) => ({ role: "user" as const, blocks: [{ kind: "text" as const, text }] });
@@ -123,5 +123,30 @@ describe("sessionLiveness (#5477)", () => {
     expect(sessionLiveness("working", "w2:pB").live).toBe(true);
     expect(sessionLiveness("idle", "w2:pB").live).toBe(true);
     expect(sessionLiveness("starting", "w2:pB").live).toBe(true);
+  });
+});
+
+// #5504 — sending is not delivery; the transcript is the only truth about arrival.
+describe("receiptFor", () => {
+  const at = 1_000_000;
+
+  it("delivers when a user turn echoes the text exactly", () => {
+    expect(receiptFor({ text: "hello there", at }, ["hello there"], at + 100)).toBe("delivered");
+  });
+
+  it("delivers on CONTAINMENT — a row fused with staged input is delivered, just dirty", () => {
+    expect(receiptFor({ text: "tell me how we proceed", at }, ["/compact tell me how we proceed"], at + 100)).toBe("delivered");
+  });
+
+  it("stays sending inside the window while nothing echoes", () => {
+    expect(receiptFor({ text: "x", at }, [], at + LOST_AFTER_MS - 1)).toBe("sending");
+  });
+
+  it("declares LOST once the window closes with no echo — never silently", () => {
+    expect(receiptFor({ text: "x", at }, ["unrelated"], at + LOST_AFTER_MS + 1)).toBe("lost");
+  });
+
+  it("an empty send can never claim delivery off an unrelated row", () => {
+    expect(receiptFor({ text: "", at }, ["anything"], at + 100)).toBe("sending");
   });
 });

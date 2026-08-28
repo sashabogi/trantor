@@ -108,3 +108,21 @@ export function sessionLiveness(status: string, target: string | null): { live: 
   }
   return { live: true, why: "" };
 }
+
+/** A message the composer sent that the transcript has not yet echoed back (#5504). */
+export type PendingSend = { text: string; at: number };
+
+/** Silence past this window means the words never made it into the conversation. */
+export const LOST_AFTER_MS = 10_000;
+
+/** Judge one pending send against the transcript's user turns.
+ *
+ *  Sending is not delivery: text typed into the pane can be eaten by whatever UI state the CLI is
+ *  in (2026-08-28: two dictated messages vanished into a compacting TUI, and one fused onto a
+ *  staged "/compact"). The transcript is the only truth about arrival, so the composer holds each
+ *  send as pending until a user turn CONTAINS it — containment, not equality, because a fused row
+ *  is still delivered, just dirty. "lost" only after the window: silence before that is transit. */
+export function receiptFor(p: PendingSend, userTexts: string[], now: number): "sending" | "delivered" | "lost" {
+  if (p.text && userTexts.some(t => t.includes(p.text))) return "delivered";
+  return now - p.at > LOST_AFTER_MS ? "lost" : "sending";
+}

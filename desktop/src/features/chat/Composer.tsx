@@ -16,6 +16,7 @@ import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { ChevronDown, Paperclip, Square, ArrowUp } from "lucide-react";
 import { searchFiles } from "../files/fileApi";
+import { receiptFor, type PendingSend } from "./streaming";
 
 export type Provenance = "reported" | "dispatched" | "unknown";
 
@@ -74,7 +75,7 @@ function Picker({ label, value, source, options, onPick, disabled, why }: {
   );
 }
 
-export function Composer({ project, target, live, liveWhy, model, modelSource, working, onSent, onDispatch }: {
+export function Composer({ project, target, live, liveWhy, model, modelSource, working, userTexts, onSent, onDispatch }: {
   project: string;
   target: string | null;
   /** Is there an agent behind the pane to talk to (#5477)? Drives every input, with `liveWhy`
@@ -85,6 +86,9 @@ export function Composer({ project, target, live, liveWhy, model, modelSource, w
   model: string;
   modelSource: Provenance;
   working: boolean;
+  /** The transcript's user turns, for delivery receipts (#5504): a send is only DELIVERED once
+   *  one of these contains it — the transcript is the sole truth about arrival. */
+  userTexts: string[];
   onSent: () => void;
   onDispatch: (dial: "model" | "effort", value: string) => void;
 }) {
@@ -127,11 +131,39 @@ export function Composer({ project, target, live, liveWhy, model, modelSource, w
   const line = (text: string) =>
     invoke("pane_send", { target, text }).catch(e => setError(String(e)));
 
+  // Delivery receipts (#5504). Typed-into-a-terminal is not a delivery channel: the CLI's UI can
+  // eat or fuse what arrives, so every send is held as PENDING until the transcript echoes it
+  // back. While anything is pending, poll the transcript and re-judge; a send the transcript
+  // never echoes is declared LOST, visibly, with its words intact for retry — never silently.
+  const [pendings, setPendings] = useState<PendingSend[]>([]);
+  const [, setTick] = useState(0);
+  useEffect(() => {
+    if (!pendings.length) return;
+    const t = setInterval(() => { onSent(); setTick(n => n + 1); }, 2000);
+    return () => clearInterval(t);
+  }, [pendings.length, onSent]);
+  useEffect(() => {
+    setPendings(ps => {
+      const kept = ps.filter(p => receiptFor(p, userTexts, Date.now()) !== "delivered");
+      return kept.length === ps.length ? ps : kept;
+    });
+  }, [userTexts]);
+  const lost = pendings.filter(p => receiptFor(p, userTexts, Date.now()) === "lost");
+  const inFlight = pendings.length - lost.length;
+
   const send = () => {
     const text = draft.trim();
     if (!text || !target) return;
     setBusy(true);
-    line(text).then(() => { setDraft(""); setError(null); onSent(); }).finally(() => setBusy(false));
+    line(text).then(() => {
+      setPendings(ps => [...ps, { text, at: Date.now() }]);
+      setDraft(""); setError(null); onSent();
+    }).finally(() => setBusy(false));
+  };
+
+  const retry = (p: PendingSend) => {
+    setPendings(ps => ps.filter(x => x !== p));
+    line(p.text).then(() => setPendings(ps => [...ps, { text: p.text, at: Date.now() }]));
   };
 
   // Interrupting is a KEY, not a message. Escape is what stops a turn in the harness.
@@ -166,6 +198,18 @@ export function Composer({ project, target, live, liveWhy, model, modelSource, w
             </button>
           ))}
         </div>
+      )}
+      {lost.map((p, i) => (
+        <div key={`${p.at}-${i}`} className="mb-1 flex items-center gap-2 rounded-lg border border-tr-danger/40 bg-tr-danger/10 px-2.5 py-1.5 text-[11.5px]">
+          <span className="min-w-0 flex-1 truncate text-tr-danger">
+            not delivered — the session never received: “{p.text}”
+          </span>
+          <button type="button" onClick={() => retry(p)} className="shrink-0 text-tr-text hover:underline">retry</button>
+          <button type="button" onClick={() => setPendings(ps => ps.filter(x => x !== p))} className="shrink-0 text-tr-muted hover:underline">dismiss</button>
+        </div>
+      ))}
+      {inFlight > 0 && (
+        <div className="tr-mono mb-1 px-1 text-[10.5px] text-tr-muted">delivering…</div>
       )}
       <textarea
         ref={box}
