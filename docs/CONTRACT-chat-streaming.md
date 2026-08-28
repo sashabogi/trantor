@@ -218,3 +218,64 @@ Your own tests green with commands + counts in the card note (codex: cargo; glm:
 deepseek: node test-contracts.mjs; openrouter: node test-route-floor.mjs + node --check on both
 edited files). Cards: #5509 stays doing (orchestrator closes after integration); others move
 themselves. The orchestrator integrates, runs everything, ships CLI 0.18.12 + app 0.3.49 together.
+
+---
+
+# v5 — wave 5 (2026-08-28): takeover + visibility V1
+
+Design: docs/DESIGN-takeover-visibility.md — read it FIRST, it is the spec. Ownership BY FILE TREE:
+- codex — `desktop/src-tauri/src/**` only.
+- glm — `desktop/src/features/chat/**` + `desktop/src/features/workspace/**` only.
+- orchestrator — bin/takeover.mjs (new), bin/cli.mjs, bin/adopt.mjs. Do not touch.
+
+## Interface contract (exact shapes, both sides conform)
+Rust `project_sessions(project) -> String` (JSON):
+  { "sessions": [ { "kind": "pane"|"terminal"|"seat",
+      "pid": number|null, "sessionId": string|null, "state": string|null,
+      "activeAgoSec": number|null, "transcript": string|null } ] }
+- pane: from crew-windows.txt orch row + herdr agent list (state = agent_status; sessionId from
+  orch-sessions.txt).
+- terminal: claude pids whose lsof cwd == the project dir (exclude the pane's own pid via herdr
+  process-info); sessionId = newest .jsonl in ~/.claude/projects/<slug>/ modified within 1h,
+  activeAgoSec = seconds since its mtime, transcript = its path. Two fresh candidates → two rows.
+- seat: crew-runner argv match (existing local_sessions machinery), sessionId null.
+
+Rust `takeover_now(project) -> Result<String,String>`: shells `trantor takeover <project> --json`
+(cwd = project dir, PATH via terminal_path()), relays the staged log; a nonzero exit or a
+mid-turn refusal comes back VERBATIM as the error — never retried, never forced from the app.
+
+CLI (orchestrator): `trantor takeover [project] [--force] [--session <sid>] [--json]` — the
+inventory → idle gate (refuse when the newest transcript wrote <15s ago, unless --force) →
+SIGTERM the terminal claude, wait ≤8s, KILL last resort → adopt --session <sid> → trantor open.
+Exits nonzero with a one-line reason on refusal; --json emits {ok, stages[], sid, reason?}.
+
+## codex
+- Implement both commands per the shapes above. Reuse handoff_now's helpers (signal, pane row
+  parsing, run_command_output). The pane's own claude pid must NOT be listed as a terminal
+  session (compare against herdr process-info pgid).
+- cargo drills for the pure parts: inventory JSON assembly from fixture strings, terminal-vs-pane
+  pid exclusion, two-candidate case.
+
+## glm
+- Composer disabled-state ACTION (the #5477 doctrine, biggest control): derive from
+  project_sessions —
+  · no sessions → [Start the orchestrator here] → invoke takeover_now
+  · terminal + activeAgoSec >= 15 → [Continue this conversation in Trantor] with "running in a
+    Terminal window · last active Xs ago" → invoke takeover_now
+  · terminal + activeAgoSec < 15 → same button DISABLED: "it's mid-turn — takeover waits for a
+    turn boundary" (re-poll; auto-enables)
+  · pane exists but agent dead → [Reopen] → invoke takeover_now (the CLI handles that branch as
+    plain open)
+  Errors from takeover_now render verbatim next to the button. Poll the inventory at a gentle
+  cadence only while the composer is disabled.
+- Workspace empty state for a project whose inventory has a terminal session: replace "no crew —
+  trantor up" with the truth ("This conversation is running in a Terminal window (pid N, last
+  active Xs ago). The terminal itself cannot be mirrored — read it in Chat, or take it over.")
+  with the same button.
+- Pure helper `takeoverAction(sessions)` returning {label, enabled, why} — vitest drills for all
+  four branches + the two-candidate case (pick newest, say so).
+
+## Definition of done
+codex: cargo green. glm: vitest + tsc green. Cards #5495 (button) / #5479 (visibility) move
+through testing with evidence. Orchestrator integrates, live-verifies with a REAL terminal
+session takeover drill, ships CLI 0.18.13 + app 0.3.50.

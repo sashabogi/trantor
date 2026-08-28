@@ -73,6 +73,7 @@ switch (cmd) {
   case "recost": run("bin/recost.mjs"); break;
   case "handoff": run("bin/baton.mjs"); break;
   case "adopt": run("bin/adopt.mjs"); break;
+  case "takeover": run("bin/takeover.mjs"); break;
   case "summarize": run("bin/summarize.mjs"); break;
   case "policy": run("bin/policy.mjs"); break;
   case "proposals": case "proposal": run("bin/proposals.mjs"); break;
@@ -195,6 +196,7 @@ switch (cmd) {
   trantor herdr       install|remove|status the login agent that keeps panes alive across a reboot
   trantor autonomy    how much Trantor may do unasked: seats, your harness, commit/push/deploy
   trantor adopt       take over a session already running in a Terminal, then open it here
+  trantor takeover    the whole move in one command: idle-gate the Terminal session, end it gracefully, adopt, open in the pane — [--force] [--session <id>] [--dry-run]
   trantor integrate   collect the crew's work, merge it, verify it, push it (--dry-run to rehearse)
   trantor down        tear the crew down (kills processes, closes windows, no dialogs)
   trantor prune       drop dead crew-window tracking rows (ghost workspaces/panes) without spawning anything
