@@ -25,9 +25,14 @@ const liveModels = (providerOc) => {
   catch { return []; }
 };
 
+const FLASH_TIER = /(flash|turbo|lite|mini|highspeed|small)/i;
+
 function routePick(candList, diff) {
   try {
-    const out = execSync(`python3 ${SCROOGE} route --candidates ${JSON.stringify(candList.join(" "))} -t code -d ${diff} --json 2>/dev/null`, { encoding: "utf8" });
+    const hard = diff === "hard";
+    const strong = hard ? candList.filter(id => !FLASH_TIER.test(id)) : candList;
+    const pool = strong.length > 0 ? strong : candList;
+    const out = execSync(`python3 ${SCROOGE} route --candidates ${JSON.stringify(pool.join(" "))} -t code -d ${diff} --json 2>/dev/null`, { encoding: "utf8" });
     return JSON.parse(out).qualified || "?";
   } catch { return "?"; }
 }

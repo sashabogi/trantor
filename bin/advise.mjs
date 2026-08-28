@@ -90,14 +90,19 @@ export function loadWorld() {
 
 const tierOf = (profile, prov) => profile?.providers?.[prov]?.tier || "api";
 
+const FLASH_TIER = /(flash|turbo|lite|mini|highspeed|small)/i;
+
 // pick the cheapest Scrooge model that clears the difficulty floor for a task kind
 export function scroogeModelFor(registry, caps, kind = "code", difficulty = "easy") {
   const floor = { easy: 0, medium: 35, hard: 55 }[difficulty] ?? 0;
   const cands = Object.entries(registry.models || {})
     .filter(([, m]) => (m.good_for || []).includes(kind))
-    .filter(([id]) => (caps[id]?.coding ?? caps[id]?.intelligence ?? 40) >= floor)
-    .sort((a, b) => (a[1].cost_in + a[1].cost_out) - (b[1].cost_in + b[1].cost_out));
-  return cands[0] ? { model: cands[0][0], cost_in: cands[0][1].cost_in, cost_out: cands[0][1].cost_out } : null;
+    .filter(([id]) => (caps[id]?.coding ?? caps[id]?.intelligence ?? 40) >= floor);
+  const hard = difficulty === "hard";
+  const strong = hard ? cands.filter(([id]) => !FLASH_TIER.test(id)) : cands;
+  const pool = strong.length > 0 ? strong : cands;
+  pool.sort((a, b) => (a[1].cost_in + a[1].cost_out) - (b[1].cost_in + b[1].cost_out));
+  return pool[0] ? { model: pool[0][0], cost_in: pool[0][1].cost_in, cost_out: pool[0][1].cost_out } : null;
 }
 
 // crude per-package token forecast (input+output through the executor)
