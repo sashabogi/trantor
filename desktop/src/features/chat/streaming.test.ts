@@ -1,14 +1,18 @@
 import { describe, expect, it } from "vitest";
 import {
   applyBackfill, applyRows, applySessionChanged, emptyChat,
-  sessionLiveness, receiptFor, LOST_AFTER_MS, type Backfill, type ChatState, type RowsPayload,
+  gaugeLabel, gaugeTone, insertPaths, isDividerTurn,
+  sessionLiveness, receiptFor, LOST_AFTER_MS,
+  type Backfill, type ChatState, type ContextGauge, type Meta, type RowsPayload, type Turn,
 } from "./streaming";
 
 const t = (text: string) => ({ role: "user" as const, blocks: [{ kind: "text" as const, text }] });
 const r = (tool_id: string, ok = true) => ({ tool_id, ok, preview: `out ${tool_id}` });
+const CTX0 = (): ContextGauge => ({ tokens: null, window: 0, frac: null });
+const meta = (m: Partial<Meta> = {}): Meta => ({ model: "", version: "", branch: "", context: CTX0(), ...m });
 
 function rows(after: number, turns: RowsPayload["turns"], extra: Partial<RowsPayload> = {}): RowsPayload {
-  return { project: "p", sessionId: "s1", after, turns, results: [], meta: { model: "", version: "", branch: "" }, ...extra };
+  return { project: "p", sessionId: "s1", after, turns, results: [], meta: meta(), ...extra };
 }
 
 describe("applyRows", () => {
@@ -49,21 +53,29 @@ describe("applyRows", () => {
   });
 
   it("absorbs meta so a model switch shows as soon as its row lands", () => {
-    const s: ChatState = { ...emptyChat, seen: 5, meta: { model: "old", version: "1", branch: "main" } };
-    const { state } = applyRows(s, rows(5, [], { meta: { model: "new", version: "", branch: "" } }));
+    const s: ChatState = { ...emptyChat, seen: 5, meta: meta({ model: "old", version: "1", branch: "main" }) };
+    const { state } = applyRows(s, rows(5, [], { meta: meta({ model: "new" }) }));
     expect(state.meta.model).toBe("new");
+  });
+
+  it("carries the context gauge through a batch so the bar moves as rows land (#5508)", () => {
+    const s = { ...emptyChat, seen: 5 };
+    const { state } = applyRows(s, rows(5, [], { meta: meta({ context: { tokens: 489_000, window: 1_000_000, frac: 0.489 } }) }));
+    expect(state.meta.context).toEqual({ tokens: 489_000, window: 1_000_000, frac: 0.489 });
   });
 });
 
 describe("applyBackfill", () => {
   it("appends the fetch, merges results, and anchors the cursor to the authoritative total", () => {
     const s = { ...emptyChat, seen: 3 };
-    const b: Backfill = [[t("a")], [r("t9")], 7, { model: "m", version: "9", branch: "main" }];
+    const b: Backfill = [[t("a")], [r("t9")], 7, meta({ model: "m", version: "9", branch: "main" })];
     const state = applyBackfill(s, b, 3);
     expect(state.turns).toEqual([t("a")]);
     expect(state.results.t9).toBeDefined();
     expect(state.seen).toBe(7);
-    expect(state.meta).toEqual({ model: "m", version: "9", branch: "main" });
+    expect(state.meta.model).toBe("m");
+    expect(state.meta.version).toBe("9");
+    expect(state.meta.branch).toBe("main");
   });
 
   it("drops a stacked fetch whose rows an earlier answer already covered — no duplicates", () => {
@@ -84,7 +96,7 @@ describe("applySessionChanged", () => {
   it("clears the thread and results, restarts the cursor at 0, and raises the divider flag", () => {
     const s: ChatState = {
       turns: [t("old")], results: { t1: r("t1") }, seen: 40,
-      meta: { model: "m", version: "1", branch: "main" }, continued: false,
+      meta: meta({ model: "m", version: "1", branch: "main" }), continued: false,
     };
     const state = applySessionChanged(s);
     expect(state.turns).toEqual([]);
@@ -148,5 +160,76 @@ describe("receiptFor", () => {
 
   it("an empty send can never claim delivery off an unrelated row", () => {
     expect(receiptFor({ text: "", at }, ["anything"], at + 100)).toBe("sending");
+  });
+});
+
+// #5508 — the gauge tells the truth about a filling window, and stays absent until it knows one.
+describe("gaugeTone", () => {
+  it("is hidden while frac is unknown — no usage row seen yet", () => {
+    expect(gaugeTone(null)).toBe("hidden");
+  });
+
+  it("neutral strictly below 0.75", () => {
+    expect(gaugeTone(0)).toBe("neutral");
+    expect(gaugeTone(0.749)).toBe("neutral");
+  });
+
+  it("amber AT 0.75 and up to (not including) 0.90", () => {
+    expect(gaugeTone(0.75)).toBe("amber");
+    expect(gaugeTone(0.899)).toBe("amber");
+  });
+
+  it("red AT 0.90 and past it — an overflowed window is still red", () => {
+    expect(gaugeTone(0.90)).toBe("red");
+    expect(gaugeTone(1)).toBe("red");
+    expect(gaugeTone(1.2)).toBe("red");
+  });
+});
+
+describe("gaugeLabel", () => {
+  it("formats the tooltip exactly as the contract writes it: 489k / 1000k (49%)", () => {
+    expect(gaugeLabel({ tokens: 489_000, window: 1_000_000, frac: 0.489 })).toBe("489k / 1000k (49%)");
+  });
+
+  it("rounds to whole k rather than truncating — 999_600 reads 1000k", () => {
+    expect(gaugeLabel({ tokens: 999_600, window: 1_000_000, frac: 0.9996 })).toBe("1000k / 1000k (100%)");
+  });
+});
+
+// #5502 — bookkeeping never wears the user's face: divider material renders as a divider, and
+// real speech NEVER does.
+describe("isDividerTurn", () => {
+  const divider = (text: string): Turn => ({ role: "system", blocks: [{ kind: "divider", text }] });
+
+  it("a system turn with divider blocks is a divider", () => {
+    expect(isDividerTurn(divider("/compact"))).toBe(true);
+  });
+
+  it("a plain user speech turn stays speech — never a divider", () => {
+    expect(isDividerTurn(t("drop a screenshot into the chat"))).toBe(false);
+    expect(isDividerTurn({ role: "assistant", blocks: [{ kind: "text", text: "on it" }] })).toBe(false);
+  });
+
+  it("a divider BLOCK stays a divider even outside a system turn — the block kind is the verdict", () => {
+    expect(isDividerTurn({ role: "user", blocks: [{ kind: "divider", text: "<local-command-caveat>" }] })).toBe(true);
+  });
+});
+
+// #5507 — dropped paths splice into the draft at the caret, exactly like the @-accept.
+describe("insertPaths", () => {
+  it("inserts each absolute path plus a trailing space into an empty draft", () => {
+    expect(insertPaths("", 0, ["/Users/s/shot.png"])).toBe("/Users/s/shot.png ");
+  });
+
+  it("splices at the cursor and keeps whatever followed it", () => {
+    expect(insertPaths("see this", 3, ["/tmp/a.png", "/tmp/b.png"])).toBe("see/tmp/a.png /tmp/b.png  this");
+  });
+
+  it("appends at the end when the cursor sits past the last character", () => {
+    expect(insertPaths("look at ", 8, ["/tmp/x.png"])).toBe("look at /tmp/x.png ");
+  });
+
+  it("an empty drop is a no-op splice", () => {
+    expect(insertPaths("unchanged", 4, [])).toBe("unchanged");
   });
 });

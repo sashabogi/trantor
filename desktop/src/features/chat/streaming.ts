@@ -11,12 +11,16 @@
 // `after + turns.length` is a lower bound, not the truth. The mismatch path heals the drift —
 // a wrong guess costs one refetch, never a gap and never a duplicate. When the watcher offers
 // the post-batch line count as `total`, the guess becomes exact and the heals stop.
-export type Block = { kind: "text" | "thinking" | "tool" | "image"; text: string; tool?: string; tool_id?: string };
-export type Turn = { role: "user" | "assistant"; blocks: Block[] };
+export type Block = { kind: "text" | "thinking" | "tool" | "image" | "divider"; text: string; tool?: string; tool_id?: string };
+export type Turn = { role: "user" | "assistant" | "system"; blocks: Block[] };
 export type ToolResult = { tool_id: string; ok: boolean; preview: string };
+/** The context window as the transcript's usage rows report it (#5508). `tokens`/`frac` are null
+ *  until an assistant row with usage has been seen; `window` is 0 when unset — an unknown window
+ *  renders as absent, never as a guessed default that would look like knowledge. */
+export type ContextGauge = { tokens: number | null; window: number; frac: number | null };
 /** What the agent IS, reported by the session itself. Empty means unknown, and unknown renders as
  *  absent rather than as a default that would look like knowledge. */
-export type Meta = { model: string; version: string; branch: string };
+export type Meta = { model: string; version: string; branch: string; context: ContextGauge };
 
 export type ChatState = {
   turns: Turn[];
@@ -33,7 +37,7 @@ export type ChatState = {
 
 export const emptyChat: ChatState = {
   turns: [], results: {}, seen: 0,
-  meta: { model: "", version: "", branch: "" },
+  meta: { model: "", version: "", branch: "", context: { tokens: null, window: 0, frac: null } },
   continued: false,
 };
 
@@ -125,4 +129,35 @@ export const LOST_AFTER_MS = 10_000;
 export function receiptFor(p: PendingSend, userTexts: string[], now: number): "sending" | "delivered" | "lost" {
   if (p.text && userTexts.some(t => t.includes(p.text))) return "delivered";
   return now - p.at > LOST_AFTER_MS ? "lost" : "sending";
+}
+
+/** The gauge's colour contract (#5508): hidden while `frac` is unknown, quiet below 75%, amber
+ *  from 75%, red from 90%. Thresholds are exact — 0.75 IS amber and 0.90 IS red. */
+export function gaugeTone(frac: number | null): "hidden" | "neutral" | "amber" | "red" {
+  if (frac === null) return "hidden";
+  if (frac >= 0.90) return "red";
+  if (frac >= 0.75) return "amber";
+  return "neutral";
+}
+
+/** The gauge's tooltip, exactly "489k / 1000k (49%)" — k-rounded tokens out of window with the
+ *  percent, so the bar and the number can never disagree. Only called while the gauge shows. */
+export function gaugeLabel(c: ContextGauge): string {
+  const k = (n: number) => `${Math.round(n / 1000)}k`;
+  return `${k(c.tokens ?? 0)} / ${k(c.window)} (${Math.round((c.frac ?? 0) * 100)}%)`;
+}
+
+/** Bookkeeping never wears the user's face (#5502). A turn renders as a divider — centered, quiet,
+ *  never a bubble — when the decoder called it `system`, and a divider BLOCK stays a divider even
+ *  if it rides a non-system turn: the block kind is the Rust-side gate's verdict, not a hint. */
+export function isDividerTurn(t: Turn): boolean {
+  return t.role === "system" || t.blocks.some(b => b.kind === "divider");
+}
+
+/** Splice dropped file paths into the draft at the caret, each followed by one trailing space —
+ *  the same splice the @-accept performs (#5507). Pure on purpose: the drop event hands over
+ *  paths, the cursor does the placing, and this decides the text. */
+export function insertPaths(draft: string, cursor: number, paths: string[]): string {
+  const insertion = paths.map(p => `${p} `).join("");
+  return draft.slice(0, cursor) + insertion + draft.slice(cursor);
 }

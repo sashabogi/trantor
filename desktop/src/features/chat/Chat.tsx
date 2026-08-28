@@ -22,9 +22,10 @@ import { ChevronRight, Wrench } from "lucide-react";
 import { orchestratorOf } from "../workspace/herdr";
 import { Composer, type Provenance } from "./Composer";
 import {
-  applyBackfill, applyRows, applySessionChanged, emptyChat, sessionLiveness,
-  type Backfill, type Block, type ChatState, type RowsPayload, type SessionPayload,
-  type ToolResult, type Turn,
+  applyBackfill, applyRows, applySessionChanged, emptyChat, gaugeLabel, gaugeTone,
+  isDividerTurn, sessionLiveness,
+  type Backfill, type Block, type ChatState, type ContextGauge, type RowsPayload,
+  type SessionPayload, type ToolResult, type Turn,
 } from "./streaming";
 
 export type Dock = "right" | "bottom";
@@ -116,6 +117,28 @@ function Thinking({ text }: { text: string }) {
         thinking
       </button>
       {open && <pre className="mt-1 whitespace-pre-wrap break-words rounded-lg bg-black/20 px-2.5 py-2 text-[11.5px] leading-relaxed text-tr-muted">{text}</pre>}
+    </div>
+  );
+}
+
+// The window filling up (#5508). Colours come from the tokens that exist — tr-fail is the red,
+// tr-warn the amber — and the fill width is capped at 100 so an overflowed window shows a full
+// red bar rather than a bar wider than its track.
+const GAUGE_COLOUR: Record<"neutral" | "amber" | "red", string> = {
+  neutral: "var(--color-tr-muted)",
+  amber: "var(--color-tr-warn)",
+  red: "var(--color-tr-fail)",
+};
+
+function ContextGauge({ ctx }: { ctx: ContextGauge }) {
+  const tone = gaugeTone(ctx.frac);
+  if (tone === "hidden") return null;
+  // The guard above is what proves frac is known; the ?? 0 only satisfies the type at a point
+  // the early return has already made unreachable.
+  const frac = ctx.frac ?? 0;
+  return (
+    <div className="h-1 w-14 shrink-0 overflow-hidden rounded-full bg-tr-edge" title={gaugeLabel(ctx)}>
+      <div className="h-full rounded-full" style={{ width: `${Math.min(100, frac * 100)}%`, background: GAUGE_COLOUR[tone] }} />
     </div>
   );
 }
@@ -260,6 +283,9 @@ export function Chat({ project, dock, onDock, onClose }: {
         <span className="tr-mono min-w-0 flex-1 truncate text-[11px] text-tr-muted">{project}</span>
         {/* Reported by the session, never asserted. */}
         {chat.meta.model && <span className="tr-chip shrink-0 text-[10.5px]">{chat.meta.model}</span>}
+        {/* The window filling up, live as usage rows land (#5508). Hidden until the first usage
+            row — an unknown window is absent, not a wrong number. */}
+        <ContextGauge ctx={chat.meta.context} />
         <div className="flex shrink-0 items-center gap-1">
           <button type="button" onClick={() => onDock(side ? "bottom" : "right")} title={side ? "move to the bottom" : "move to the right"} className="rounded-[7px] px-2 py-1 text-[11px] text-tr-muted hover:text-tr-text">
             {side ? "▤" : "▥"}
@@ -290,31 +316,43 @@ export function Chat({ project, dock, onDock, onClose }: {
             the terminal.
           </div>
         )}
-        {group(chat.turns).map((t, i) => (
-          <div key={i} className="mb-3">
-            <div className="mb-1 text-[10.5px] uppercase tracking-wider text-tr-muted">
-              {t.role === "user" ? "you" : "orchestrator"}
-            </div>
-            {batch(t.blocks).map((b, j) =>
-              Array.isArray(b) ? (
-                <ToolRun key={j} blocks={b} results={chat.results} />
-              ) : b.kind === "thinking" ? (
-                <Thinking key={j} text={b.text} />
-              ) : b.kind === "image" ? (
-                <div key={j} className="mt-1.5 text-[11.5px] text-tr-muted">[image]</div>
-              ) : (
-                <div
-                  key={j}
-                  className={`whitespace-pre-wrap break-words rounded-lg px-3 py-2 text-[12.5px] leading-relaxed ${
-                    t.role === "user" ? "bg-tr-panel" : "bg-black/25"
-                  }`}
-                >
+        {group(chat.turns).map((t, i) =>
+          // Bookkeeping, not speech (#5502): a /compact record or a harness caveat renders as a
+          // centered quiet mono line with no speaker label — never a bubble, never "you".
+          isDividerTurn(t) ? (
+            <div key={i}>
+              {t.blocks.map((b, j) => (
+                <div key={j} title={b.text} className="tr-mono my-2 truncate text-center text-[10.5px] text-tr-muted">
                   {b.text}
                 </div>
-              ),
-            )}
-          </div>
-        ))}
+              ))}
+            </div>
+          ) : (
+            <div key={i} className="mb-3">
+              <div className="mb-1 text-[10.5px] uppercase tracking-wider text-tr-muted">
+                {t.role === "user" ? "you" : "orchestrator"}
+              </div>
+              {batch(t.blocks).map((b, j) =>
+                Array.isArray(b) ? (
+                  <ToolRun key={j} blocks={b} results={chat.results} />
+                ) : b.kind === "thinking" ? (
+                  <Thinking key={j} text={b.text} />
+                ) : b.kind === "image" ? (
+                  <div key={j} className="mt-1.5 text-[11.5px] text-tr-muted">[image]</div>
+                ) : (
+                  <div
+                    key={j}
+                    className={`whitespace-pre-wrap break-words rounded-lg px-3 py-2 text-[12.5px] leading-relaxed ${
+                      t.role === "user" ? "bg-tr-panel" : "bg-black/25"
+                    }`}
+                  >
+                    {b.text}
+                  </div>
+                ),
+              )}
+            </div>
+          ),
+        )}
         <div ref={foot} />
       </div>
 
