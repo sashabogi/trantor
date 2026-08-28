@@ -4,3 +4,5 @@
 # install — this is that answer.
 allowBuilds:
   esbuild: true
+minimumReleaseAgeExclude:
+  - happy-dom@20.11.12

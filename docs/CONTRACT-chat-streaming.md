@@ -49,3 +49,52 @@ Tests: cargo unit tests for the tail-reader (partial-line buffering, cursor cont
 Own tests green (`cargo test` in src-tauri / `npx vitest run` in desktop) — NOT the full repo
 suite (it collides across seats; the orchestrator runs it at integration). Card to `testing`
 with the command + counts in the note, then `done` only green.
+
+---
+
+# v2 — wave 2 (2026-08-28): context gauge, bookkeeping dividers, file drop
+
+Ownership this wave is BY FILE TREE, not by feature:
+- codex — `desktop/src-tauri/src/**` only.
+- glm — `desktop/src/features/chat/**` only.
+Neither touches the other's tree. Questions go to the orchestrator, not into the other tree.
+
+## Rust (codex): #5508 usage + #5502 bookkeeping rows
+
+1. `meta` gains `context`: `{ tokens: number|null, window: number, frac: number|null }`.
+   `tokens` = the LAST assistant row's usage sum (input_tokens + cache_read_input_tokens +
+   cache_creation_input_tokens); null until an assistant row with usage has been seen.
+   `window` = `contextWindow` from `~/.agent-bus/config.json` (0 when unset — never guess a
+   default; an unknown window renders as absent, not as a wrong number).
+   `frac` = tokens/window when both are known, else null.
+   Carried in BOTH `orchestrator_chat`'s meta and every `chat-rows` event's meta, so the gauge
+   moves live as rows land.
+2. Bookkeeping rows stop wearing the user's face (#5502): a `user` entry decodes as
+   role `"system"`, blocks `[{ kind: "divider", text: <the raw line> }]` when its string content
+   starts with `/` (a slash-command record, e.g. this morning's `/compact`), or is a
+   `<local-command-caveat>`/`<local-command-stdout>` block, or the entry carries `isMeta: true`.
+   Real user speech must NEVER become a divider — the gate is those exact shapes, no heuristics
+   on length or content. Note `/compact <fused words>` keeps the WHOLE line as the divider text:
+   eaten words stay readable.
+3. cargo tests for both: usage extraction (incl. no-usage-yet → null) and each divider gate
+   (slash record, caveat block, isMeta, and a plain user message that must stay a user turn).
+
+## UI (glm): #5507 drop + #5508 gauge + #5502 divider
+
+1. `streaming.ts` types widen: `Turn.role` adds `"system"`, `Block.kind` adds `"divider"`;
+   `Meta` gains `context: { tokens: number | null; window: number; frac: number | null }`.
+   (You own this file; codex conforms to these exact field names.)
+2. Gauge: a slim bar in the chat header. Hidden while `frac` is null. Neutral < 0.75, amber
+   ≥ 0.75, red ≥ 0.90. Tooltip "489k / 1000k (49%)". No animation needed, just truth.
+3. A `system`/`divider` turn renders as a centered, quiet, small mono line — never a bubble.
+4. Drop (#5507): dropping files anywhere on the chat inserts each absolute path plus a trailing
+   space into the draft at the cursor (exactly like @-accept). Use Tauri v2's webview drag-drop
+   events (`getCurrentWebview().onDragDropEvent`) — Tauri intercepts native HTML5 drops by
+   default, so do NOT rely on ondrop. If it turns out `dragDropEnabled` must change in
+   tauri.conf.json, STOP and tell the orchestrator — that file is not yours.
+5. vitest drills: divider rendering stays out of user bubbles; gauge thresholds; drop-insert
+   at cursor (pure helper, same style as the @-accept).
+
+## Definition of done (both)
+Own tests green (`cargo test` / `npx vitest run` — full desktop typecheck too: `npx tsc --noEmit`),
+card to `testing` with command + counts, `done` only green. The orchestrator integrates.
