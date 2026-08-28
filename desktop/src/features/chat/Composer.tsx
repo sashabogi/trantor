@@ -264,8 +264,8 @@ export function Composer({ project, target, live, liveWhy, model, modelSource, w
         </div>
       )}
       {lost.map((p, i) => (
-        <div key={`${p.at}-${i}`} className="mb-1 flex items-center gap-2 rounded-lg border border-tr-danger/40 bg-tr-danger/10 px-2.5 py-1.5 text-[11.5px]">
-          <span className="min-w-0 flex-1 truncate text-tr-danger">
+        <div key={`${p.at}-${i}`} className="mb-1 flex items-center gap-2 rounded-lg border border-tr-fail/40 bg-tr-fail/10 px-2.5 py-1.5 text-[11.5px]">
+          <span className="min-w-0 flex-1 truncate text-tr-fail">
             not delivered — the session never received: “{p.text}”
           </span>
           <button type="button" onClick={() => retry(p)} className="shrink-0 text-tr-text hover:underline">retry</button>
@@ -359,7 +359,7 @@ export function Composer({ project, target, live, liveWhy, model, modelSource, w
           )}
         </div>
       </div>
-      {error && <div className="tr-mono mt-1 text-[11px] text-tr-danger">{error}</div>}
+      {error && <div className="tr-mono mt-1 text-[11px] text-tr-fail">{error}</div>}
     </div>
   );
 }

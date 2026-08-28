@@ -5,8 +5,9 @@
 // and the REFUSING store exercises the private-mode paths the real window can hit.
 import { beforeEach, describe, expect, it } from "vitest";
 import {
-  FONT_SCALE, FONT_STEPS, PANEL_RANGE, clampPanel, fontScale, loadFontStep, loadPanelSize,
-  loadTrayOpen, saveFontStep, savePanelSize, saveTrayOpen, type Store,
+  FONT_SCALE, FONT_STEPS, PANEL_RANGE, clampPanel, fontScale, loadDismissedAt, loadFontStep,
+  loadPanelSize, loadTrayOpen, saveDismissedAt, saveFontStep, savePanelSize, saveTrayOpen,
+  type Store,
 } from "./prefs";
 
 /** A stand-in with localStorage's exact surface and lifetime: fresh per test, so every drill
@@ -124,5 +125,37 @@ describe("terminal tray fold (#5523)", () => {
     expect(loadTrayOpen(refusingStore())).toBe(false);
     expect(loadTrayOpen(null)).toBe(false);
     expect(() => saveTrayOpen(true, refusingStore())).not.toThrow();
+  });
+});
+
+describe("handoff banner dismissal (#5509 W1)", () => {
+  it("reads null when nothing was ever dismissed", () => {
+    expect(loadDismissedAt(store)).toBeNull();
+    expect(loadDismissedAt(null)).toBeNull();
+  });
+
+  it("round-trips the frac an episode was dismissed at", () => {
+    saveDismissedAt(0.92, store);
+    expect(loadDismissedAt(store)).toBe(0.92);
+    saveDismissedAt(0.95, store);
+    expect(loadDismissedAt(store)).toBe(0.95);
+  });
+
+  it("clearing (a new session, a new episode) reads back as never dismissed", () => {
+    saveDismissedAt(0.95, store);
+    saveDismissedAt(null, store);
+    expect(loadDismissedAt(store)).toBeNull();
+  });
+
+  it("foreign or negative bytes read as never dismissed — storage is a boundary", () => {
+    store.setItem("trantor.chat.handoff.dismissedAt", "soon");
+    expect(loadDismissedAt(store)).toBeNull();
+    store.setItem("trantor.chat.handoff.dismissedAt", "-1");
+    expect(loadDismissedAt(store)).toBeNull();
+  });
+
+  it("a refusing store reads as never dismissed and never throws on save", () => {
+    expect(loadDismissedAt(refusingStore())).toBeNull();
+    expect(() => saveDismissedAt(0.93, refusingStore())).not.toThrow();
   });
 });

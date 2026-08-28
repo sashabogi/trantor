@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
-  applyBackfill, applyRows, applySessionChanged, emptyChat,
+  applyBackfill, applyRows, applySessionChanged, bannerVisible, emptyChat,
   gaugeLabel, gaugeTone, insertPaths, isDividerTurn,
-  sessionLiveness, receiptFor, LOST_AFTER_MS,
+  sessionLiveness, receiptFor, LOST_AFTER_MS, HANDOFF_WARN_FRAC,
   type Backfill, type ChatState, type ContextGauge, type Meta, type RowsPayload, type Turn,
 } from "./streaming";
 
@@ -270,3 +270,34 @@ describe("queued turns and dequeue markers", () => {
     expect(state.turns[1].queued).toBeUndefined();
   });
 });
+
+describe("bannerVisible (#5509 W1)", () => {
+  it("shows from exactly the gauge's red threshold — unknown frac never shows", () => {
+    expect(gaugeTone(HANDOFF_WARN_FRAC)).toBe("red");
+    expect(bannerVisible(null, null)).toBe(false);
+    expect(bannerVisible(0.899, null)).toBe(false);
+    expect(bannerVisible(HANDOFF_WARN_FRAC, null)).toBe(true);
+    expect(bannerVisible(1, null)).toBe(true);
+  });
+
+  it("a keep-going parks the offer while frac stays within one step of the dismissal", () => {
+    expect(bannerVisible(0.9, 0.9)).toBe(false);
+    expect(bannerVisible(0.91, 0.9)).toBe(false);
+    expect(bannerVisible(0.919, 0.9)).toBe(false);
+  });
+
+  it("re-offers exactly at dismissal + 0.02 — an episode of growth, not a timer", () => {
+    expect(bannerVisible(0.92, 0.9)).toBe(true);
+    expect(bannerVisible(0.97, 0.95)).toBe(true);
+  });
+
+  it("below the warning band there is nothing to offer, dismissed or not", () => {
+    expect(bannerVisible(0.5, null)).toBe(false);
+    expect(bannerVisible(0.5, 0.9)).toBe(false);
+  });
+
+  it("a stale dismissal from below the band never muzzles the first qualifying arrival", () => {
+    expect(bannerVisible(0.9, 0.5)).toBe(true);
+  });
+});
+

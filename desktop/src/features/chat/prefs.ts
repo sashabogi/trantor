@@ -93,3 +93,23 @@ export function loadTrayOpen(store: Store | null = domStore()): boolean {
 export function saveTrayOpen(open: boolean, store: Store | null = domStore()): void {
   try { store?.setItem(TRAY_KEY, open ? "1" : "0"); } catch { /* refusing store — this session only */ }
 }
+
+const DISMISSED_KEY = "trantor.chat.handoff.dismissedAt";
+
+/** The frac the handoff banner was last dismissed at (#5509 W1), or null when nothing was ever
+ *  dismissed. An EPISODE marker, not a timestamp: it parks the re-offer until frac has grown
+ *  another step, and a session change clears it (a new window is a new episode). Absent, foreign
+ *  or negative bytes read as "never dismissed" — storage is a boundary, its bytes are decoded. */
+export function loadDismissedAt(store: Store | null = domStore()): number | null {
+  let raw: string | null;
+  try { raw = store?.getItem(DISMISSED_KEY) ?? null; } catch { return null; }
+  if (raw === null) return null;
+  const n = Number(raw);
+  return Number.isFinite(n) && n >= 0 ? n : null;
+}
+
+export function saveDismissedAt(frac: number | null, store: Store | null = domStore()): void {
+  // The seam's two-method store has no removeItem, so "cleared" is written as a sentinel that
+  // loadDismissedAt decodes back to null (Number("none") is NaN).
+  try { store?.setItem(DISMISSED_KEY, frac === null ? "none" : String(frac)); } catch { /* refusing store — this session only */ }
+}
