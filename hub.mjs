@@ -1821,6 +1821,13 @@ const server = http.createServer(async (req, res) => {
         (t.history ||= []).push({ from: t.status, to: b.status, by: b.by || "", ts: now() });
         if (t.history.length > 40) t.history.splice(0, 10);
         t.status = b.status;
+        // WHO is actually working this card — the SIGNED mover, not the assignee. A card filed by
+        // the orchestrator and built by a seat wore the orchestrator's face on every board
+        // (2026-08-28, operator caught it: "they all say claude"). The assignee stays intent;
+        // workedBy is evidence, stamped only on real work moves and never from a self-asserted by.
+        if (["doing","testing","done"].includes(b.status) && auth?.identity?.name) {
+          t.workedBy = String(auth.identity.name).slice(0, 120);
+        }
       }
       if (b.difficulty && ["easy","medium","hard"].includes(b.difficulty)) t.difficulty = b.difficulty;
       if (b.model !== undefined) t.model = String(b.model).slice(0, 60);

@@ -133,7 +133,12 @@ export function CardDetail({ client, id, onClose, onMoved, onOpen }: {
           )}
           {task && (
             <div className="mt-2 flex flex-wrap gap-1.5 text-[11px] text-[var(--color-tr-muted)]">
-              {task.assignee && <AgentChip session={task.assignee} />}
+              {task.workedBy && <AgentChip session={task.workedBy} />}
+              {task.assignee && task.assignee !== task.workedBy && (
+                <span className="flex items-center gap-1" title="filed for">
+                  <AgentChip session={task.assignee} />
+                </span>
+              )}
               {task.difficulty && <span className="rounded bg-black/30 px-1.5 py-0.5">{task.difficulty}</span>}
               {task.model && <span className="rounded bg-black/30 px-1.5 py-0.5">{task.model}</span>}
               {task.source && <span className="rounded bg-black/30 px-1.5 py-0.5">{task.source}</span>}

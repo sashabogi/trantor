@@ -136,7 +136,7 @@ function CardTile({ card, onOpen, onAdvance, presence, subagents, subagentsOpen 
       <div className="mt-2 flex flex-wrap items-center gap-1.5 text-[11px] text-[var(--color-tr-muted)]">
         {inMotion && <span className="tr-dot tr-dot-pulse shrink-0" style={{ background: "var(--color-tr-doing)" }} title="assignee is mid-turn right now" />}
         {stalled && <span className="shrink-0 rounded bg-black/30 px-1.5 py-0.5 text-[var(--color-tr-warn)]" title="doing, but the assignee has no heartbeat">assignee offline</span>}
-        {card.assignee && <AgentChip session={card.assignee} />}
+        {(card.workedBy || card.assignee) && <AgentChip session={card.workedBy || card.assignee!} />}
         {card.difficulty && <span className="rounded bg-black/30 px-1.5 py-0.5">{card.difficulty[0].toUpperCase()}</span>}
         {card.model && <span className="tr-mono max-w-[150px] truncate rounded bg-black/30 px-1.5 py-0.5">{card.model}</span>}
         {agedTodo && (

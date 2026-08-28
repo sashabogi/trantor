@@ -33,7 +33,7 @@ const EFFORTS = ["low", "medium", "high", "xhigh", "max"];
 // from the tokens that exist — tr-fail is the red, tr-warn the amber — and the fill width is
 // capped at 100 so an overflowed window shows a full red bar rather than a bar wider than its
 // track.
-const GAUGE_COLOUR: Record<"neutral" | "amber" | "red", string> = {
+const GAUGE_COLOUR = {
   neutral: "var(--color-tr-muted)",
   amber: "var(--color-tr-warn)",
   red: "var(--color-tr-fail)",
@@ -178,9 +178,9 @@ export function Composer({ project, target, live, liveWhy, model, modelSource, w
         if (ev.payload.type !== "drop") return;
         const paths = ev.payload.paths;
         if (!paths.length) return;
-        const cur = box.current?.selectionStart;
+        const cur = box.current?.selectionStart ?? null;
         setDraft(d => insertPaths(d, cur ?? d.length, paths));
-        if (typeof cur === "number") {
+        if (cur !== null) {
           const after = cur + paths.reduce((n, p) => n + p.length + 1, 0);
           requestAnimationFrame(() => box.current?.setSelectionRange(after, after));
         }

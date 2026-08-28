@@ -29,7 +29,7 @@ export type FontStep = "s" | "m" | "l";
 /** The three reading sizes (#5522) as multipliers of the transcript's designed sizes. The chat
  *  root carries the chosen number as the `--chat-scale` custom property; only this panel's own
  *  transcript reads it, so M (exactly 1) IS the designed size and nothing global moves. */
-export const FONT_SCALE: Record<FontStep, number> = { s: 0.9, m: 1, l: 1.15 };
+export const FONT_SCALE = { s: 0.9, m: 1, l: 1.15 } satisfies Record<FontStep, number>;
 
 export const FONT_STEPS: Array<{ step: FontStep; label: string }> = [
   { step: "s", label: "S" },
@@ -57,10 +57,10 @@ export function fontScale(step: FontStep): number {
 /** The panel's sane size range per axis (#5522). Width is the right dock's cross-size, height
  *  the bottom dock's: below the minimum the transcript stops reading, above the maximum the
  *  chat stops being a panel and takes the surface it sits beside. */
-export const PANEL_RANGE: Record<"width" | "height", [number, number]> = {
+export const PANEL_RANGE = {
   width: [320, 720],
   height: [220, 640],
-};
+} satisfies Record<"width" | "height", [number, number]>;
 
 export function clampPanel(px: number, axis: "width" | "height"): number {
   const [min, max] = PANEL_RANGE[axis];

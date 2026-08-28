@@ -25,6 +25,10 @@ export type Scope = { project: string; role: "read" | "write" | "owner" };
 export type Card = {
   id: number; project: string; title: string; status: string;
   assignee?: string; source?: string; difficulty?: string; model?: string;
+  /** The SIGNED identity that actually moved the card into doing/testing/done — evidence, where
+   *  `assignee` is only intent. A card filed by the orchestrator and built by a seat wears the
+   *  seat's face because of this field. */
+  workedBy?: string;
   phase?: string; costUsd?: number; created?: number; updated?: number;
   /** Creation stamp as the hub serves it — tasks are born `ts === updated`, and the CARDLOG boot
    * backfill fills it for cards minted before it existed. The tile age badge reads `updated || ts`. */

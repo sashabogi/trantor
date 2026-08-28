@@ -72,7 +72,11 @@ function absorb(s: ChatState, fresh: Turn[], rs: ToolResult[], m: Meta): ChatSta
 /** Apply one `chat-rows` batch. In order → append and advance the cursor. Out of order → resync:
  *  the payload is DISCARDED untouched and the caller refetches, because a cursor mismatch means a
  *  batch was missed and guessing where these rows belong is how gaps and duplicates happen. */
-export function applyRows(s: ChatState, p: RowsPayload): { state: ChatState; resync: boolean } {
+/** What applying a rows batch yields: the (possibly unchanged) state, and whether the caller
+ *  must refetch because the batch missed the cursor. */
+export type RowsApplied = { state: ChatState; resync: boolean };
+
+export function applyRows(s: ChatState, p: RowsPayload): RowsApplied {
   if (p.after !== s.seen) return { state: s, resync: true };
   const cursor = p.total ?? p.after + p.turns.length;
   return { state: { ...absorb(s, p.turns, p.results, p.meta), seen: cursor }, resync: false };
@@ -100,7 +104,10 @@ export function applySessionChanged(_s: ChatState): ChatState {
  *  guessed from a pane row existing: a registered pane whose agent exited is exactly the dead
  *  surface this check exists to catch. "none"/"unknown" are the closed not-live set — herdr only
  *  lists agents it vouches for, so any OTHER status (idle, working, …) means one is running. */
-export function sessionLiveness(status: string, target: string | null): { live: boolean; why: string } {
+/** Whether the operator can talk to the orchestrator, and if not, the reason the UI shows. */
+export type Liveness = { live: boolean; why: string };
+
+export function sessionLiveness(status: string, target: string | null): Liveness {
   if (target === null) {
     return { live: false, why: "no orchestrator pane is hosted for this project yet — open one from the Workspace lens" };
   }
