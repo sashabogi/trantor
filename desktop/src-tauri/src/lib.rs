@@ -301,6 +301,28 @@ fn read_file(project: String, path: String, seat: Option<String>) -> Result<Stri
     serde_json::to_string(&body).map_err(|e| e.to_string())
 }
 
+/// This file as HEAD has it. A real side-by-side diff needs the two DOCUMENTS, not a patch: a
+/// unified patch is a description of a change, and rendering it as text is what made the diff view
+/// a wall of plus signs rather than something you can read code in.
+#[tauri::command]
+fn read_file_at_head(project: String, path: String, seat: Option<String>) -> Result<String, String> {
+    let root = source_root(&project, seat.as_deref())?;
+    if path.contains("..") {
+        return Err("path escapes the project".into());
+    }
+    let out = std::process::Command::new("git")
+        .args(["show", &format!("HEAD:{path}")])
+        .current_dir(&root)
+        .output()
+        .map_err(|e| format!("git show failed: {e}"))?;
+    // A file git has never seen has no HEAD version, and that is not an error: it means the whole
+    // file is new, so the base side of the diff is simply empty.
+    if !out.status.success() {
+        return Ok(String::new());
+    }
+    Ok(String::from_utf8_lossy(&out.stdout).to_string())
+}
+
 /// A single file's diff against its base. The viewer needs this so "read the code, then decide if
 /// you like it" happens in ONE place — sending the operator to another lens to see whether the
 /// file they are looking at changed is the kind of dead end this tree already had once.
@@ -1418,6 +1440,7 @@ pub fn run() {
             project_files,
             read_file,
             file_diff,
+            read_file_at_head,
             seat_state,
             write_file,
             autonomy_get,

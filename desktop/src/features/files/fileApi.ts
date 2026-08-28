@@ -63,3 +63,10 @@ export async function seatState(agent: string): Promise<string> {
 export async function writeFile(project: string, path: string, seat: string | undefined, text: string): Promise<string> {
   return invoke<string>("write_file", { project, path, seat: seat ?? null, text });
 }
+
+/** This file as HEAD has it, or "" when git has never seen it (the whole file is new).
+ *  A real side-by-side diff needs the two DOCUMENTS; a unified patch is a description of the
+ *  change, and rendering that as text is not something you can read code in. */
+export async function readFileAtHead(project: string, path: string, seat?: string): Promise<string> {
+  return invoke<string>("read_file_at_head", { project, path, seat: seat ?? null });
+}
