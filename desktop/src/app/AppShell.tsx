@@ -30,6 +30,7 @@ import { Overseer } from "../features/overseer/Overseer";
 import { Settings } from "../features/settings/Settings";
 import { FileTree } from "../features/files/FileTree";
 import { Files } from "../features/files/Files";
+import { Chat, type Dock } from "../features/chat/Chat";
 import { Conversation } from "../features/chat/Conversation";
 import { notifyIfWorthIt } from "../shared/notify";
 
@@ -91,6 +92,12 @@ export function AppShell() {
   // viewer (main pane) are two halves of one thing: clicking in one has to land in the other.
   const [filePath, setFilePath] = useState<string | null>(null);
   const [fileSeat, setFileSeat] = useState<string | null>(null);
+  // Where the orchestrator conversation sits, and whether it is showing. Remembered, because it is
+  // a working preference rather than a per-visit decision — and IDEs let you choose, so this does.
+  const [chatOpen, setChatOpen] = useState<boolean>(() => localStorage.getItem("trantor.chat.open") === "1");
+  const [chatDock, setChatDock] = useState<Dock>(() => (localStorage.getItem("trantor.chat.dock") === "bottom" ? "bottom" : "right"));
+  useEffect(() => { try { localStorage.setItem("trantor.chat.open", chatOpen ? "1" : "0"); } catch { /* private mode */ } }, [chatOpen]);
+  useEffect(() => { try { localStorage.setItem("trantor.chat.dock", chatDock); } catch { /* private mode */ } }, [chatDock]);
 
   // Pinned projects PLUS whatever lives on the machine-local hub. A brand-new project has no
   // routing pin yet — it falls back to the local hub BY DESIGN (TDD §12.1's default), and a
@@ -386,7 +393,8 @@ export function AppShell() {
         </div>
       </aside>
 
-      <main className="tr-main my-2.5 mr-2.5 flex min-w-0 flex-1 flex-col overflow-hidden">
+      <div className={`relative my-2.5 mr-2.5 flex min-w-0 flex-1 overflow-hidden ${chatDock === "right" ? "flex-row" : "flex-col"}`}>
+      <main className="tr-main flex min-w-0 min-h-0 flex-1 flex-col overflow-hidden">
         {!client ? (
           <div className="p-10 text-sm text-[var(--color-tr-muted)]">
             No projects pinned. Run <code>trantor hub set &lt;project&gt; &lt;url&gt;</code>
@@ -400,12 +408,30 @@ export function AppShell() {
           : pane.kind === "settings" ? <Settings me={ME} update={update} projects={[...activeProjects, ...restProjects]} />
           : pane.lens === "workspace" ? <Workspace client={client} project={active} lens={pane.lens} onLens={l => setPane({ kind: "project", lens: l })} />
           : pane.lens === "board" ? <Board client={client} project={active} lens={pane.lens} onLens={l => setPane({ kind: "project", lens: l })} />
-          : pane.lens === "chat" ? <Conversation client={client} project={active} me={ME} lens={pane.lens} onLens={l => setPane({ kind: "project", lens: l })} />
+          : pane.lens === "bus" ? <Conversation client={client} project={active} me={ME} lens={pane.lens} onLens={l => setPane({ kind: "project", lens: l })} />
           : pane.lens === "review" ? <Review client={client} project={active} lens={pane.lens} onLens={l => setPane({ kind: "project", lens: l })} />
           : pane.lens === "files" ? <Files client={client} project={active} lens={pane.lens} onLens={l => setPane({ kind: "project", lens: l })}
                                            path={filePath} seat={fileSeat} onSeat={setFileSeat} />
           : <Feed client={client} project={active} lens={pane.lens} onLens={l => setPane({ kind: "project", lens: l })} />}
       </main>
+      {/* The orchestrator conversation. Only inside a project, because it IS that project's
+          session — there is no fleet-wide orchestrator to talk to. */}
+      {pane.kind === "project" && active && chatOpen && (
+        <Chat project={active} dock={chatDock} onDock={setChatDock} onClose={() => setChatOpen(false)} />
+      )}
+      {/* When it is hidden there has to be a way back, or the panel is a setting rather than a
+          surface. Floating rather than in the lens bar so no lens has to know about it. */}
+      {pane.kind === "project" && active && !chatOpen && (
+        <button
+          type="button"
+          onClick={() => setChatOpen(true)}
+          title="talk to this project's orchestrator"
+          className="tr-card absolute bottom-5 right-5 rounded-full px-4 py-2 text-[12.5px] font-medium shadow-lg"
+        >
+          Orchestrator
+        </button>
+      )}
+      </div>
     </div>
   );
 }

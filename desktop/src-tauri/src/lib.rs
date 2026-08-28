@@ -396,6 +396,122 @@ fn project_files(project: String, sub: Option<String>, seat: Option<String>) -> 
     serde_json::to_string(&out).map_err(|e| e.to_string())
 }
 
+/// The orchestrator's conversation, as chat.
+///
+/// The session runs in a terminal, but a terminal is a bad place to READ a conversation: escape
+/// codes, reflowed wrapping, and no structure to render against. Claude writes every turn to a
+/// JSONL transcript, and `trantor open` now chooses the session id, so that file is addressable
+/// rather than guessed at. This reads it.
+///
+/// `after` is a line offset, not a timestamp: the transcript is append-only, so the count of lines
+/// already seen is the cheapest correct cursor and survives a restart.
+#[derive(Debug, Clone, Serialize)]
+struct ChatTurn {
+    role: String,
+    text: String,
+}
+
+fn orch_session_id(project: &str) -> Option<String> {
+    let p = desktop_bus_dir().join("orch-sessions.txt");
+    let raw = std::fs::read_to_string(p).ok()?;
+    for line in raw.lines() {
+        let mut it = line.split('\t');
+        if it.next()? == project {
+            let sid = it.next()?.trim();
+            if !sid.is_empty() {
+                return Some(sid.to_string());
+            }
+        }
+    }
+    None
+}
+
+#[tauri::command]
+fn orchestrator_chat(project: String, after: usize) -> Result<String, String> {
+    let sid = orch_session_id(&project)
+        .ok_or_else(|| "no orchestrator session for this project yet".to_string())?;
+    let dir = project_dir(&project).ok_or_else(|| format!("no local checkout for {project}"))?;
+    // claude's transcript directory is the working directory with every / and . turned into -
+    let slug: String = dir
+        .to_string_lossy()
+        .chars()
+        .map(|c| if c == '/' || c == '.' { '-' } else { c })
+        .collect();
+    let home = std::env::var("HOME").unwrap_or_default();
+    let path = std::path::Path::new(&home)
+        .join(".claude/projects")
+        .join(&slug)
+        .join(format!("{sid}.jsonl"));
+    let raw = match std::fs::read_to_string(&path) {
+        Ok(r) => r,
+        // No transcript yet is the normal state of a session nobody has spoken to.
+        Err(_) => return serde_json::to_string(&(Vec::<ChatTurn>::new(), 0usize)).map_err(|e| e.to_string()),
+    };
+    let lines: Vec<&str> = raw.lines().collect();
+    let total = lines.len();
+    let mut out: Vec<ChatTurn> = Vec::new();
+    for line in lines.iter().skip(after) {
+        let v: serde_json::Value = match serde_json::from_str(line) {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+        let role = match v.get("type").and_then(|t| t.as_str()) {
+            Some("user") => "user",
+            Some("assistant") => "assistant",
+            _ => continue,
+        };
+        // Only the text blocks. Tool calls and their results are the machinery of a turn, not the
+        // conversation, and putting them here would rebuild the wall of terminal output that this
+        // view exists to replace.
+        let content = v.get("message").and_then(|m| m.get("content"));
+        let mut text = String::new();
+        match content {
+            Some(serde_json::Value::String(s)) => text.push_str(s),
+            Some(serde_json::Value::Array(blocks)) => {
+                for b in blocks {
+                    if b.get("type").and_then(|t| t.as_str()) == Some("text") {
+                        if let Some(t) = b.get("text").and_then(|t| t.as_str()) {
+                            if !text.is_empty() {
+                                text.push('\n');
+                            }
+                            text.push_str(t);
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+        let text = text.trim().to_string();
+        // Injected context (system reminders, hook output, skill bodies) is addressed to the model,
+        // not to the person reading this, and it dwarfs what they actually typed.
+        if text.is_empty() || text.starts_with('<') || text.contains("system-reminder") {
+            continue;
+        }
+        out.push(ChatTurn { role: role.to_string(), text });
+    }
+    serde_json::to_string(&(out, total)).map_err(|e| e.to_string())
+}
+
+/// Send a line to a herdr pane, the way a person would type it.
+#[tauri::command]
+fn pane_send(target: String, text: String) -> Result<(), String> {
+    if target.trim().is_empty() {
+        return Err("no pane".into());
+    }
+    let run = |args: Vec<&str>| -> Result<(), String> {
+        let out = std::process::Command::new("herdr")
+            .args(args)
+            .env("PATH", terminal_path())
+            .output()
+            .map_err(|e| format!("herdr: {e}"))?;
+        if out.status.success() { Ok(()) } else { Err(String::from_utf8_lossy(&out.stderr).trim().to_string()) }
+    };
+    run(vec!["pane", "send-text", &target, &text])?;
+    // Enter is a separate call: send-text is literal, so a newline inside it would be typed rather
+    // than submitted.
+    run(vec!["pane", "send-keys", &target, "Enter"])
+}
+
 /// Is this seat writing to its worktree right now?
 ///
 /// ONE owner for this answer. herdr is asked, because crew-runner reports the seat's state to it at
@@ -1442,6 +1558,8 @@ pub fn run() {
             file_diff,
             read_file_at_head,
             seat_state,
+            orchestrator_chat,
+            pane_send,
             write_file,
             autonomy_get,
             autonomy_set,
