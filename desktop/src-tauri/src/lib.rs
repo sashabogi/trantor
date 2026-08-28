@@ -451,6 +451,38 @@ struct ChatTurn {
 /// result usually arrives in a later batch than the call that produced it: the front end holds the
 /// rendered turns and fills each card in when its answer shows up, rather than the reader having to
 /// re-parse the whole file to pair them.
+/// What the agent IS, taken from the transcript rather than asserted. Every field here is what
+/// Orca would call `reported`: the session itself wrote it, so it is evidence. Nothing is guessed,
+/// and an empty field renders as absent rather than as a default that looks like knowledge.
+#[derive(Debug, Clone, Default, Serialize)]
+struct ChatMeta {
+    model: String,
+    version: String,
+    branch: String,
+}
+
+/// Text the HARNESS injected into the conversation, wearing the user's role.
+///
+/// Hook output, interruption notices and reminders all arrive as ordinary user turns, so without
+/// this a 6,849-character stop-hook dump renders as though the operator typed it — which is exactly
+/// what it did before this list existed. A closed list of known prefixes rather than a heuristic on
+/// length: a long message from a person is still a message from a person.
+fn is_harness_injection(t: &str) -> bool {
+    const MARKERS: &[&str] = &[
+        "Stop hook feedback:",
+        "[Request interrupted",
+        "PostToolUse:",
+        "PreToolUse:",
+        "SessionStart:",
+        "Caveat: The messages below",
+        "<system-reminder",
+        "<command-name>",
+        "This session is being continued from a previous conversation",
+    ];
+    let t = t.trim_start();
+    t.starts_with('<') || MARKERS.iter().any(|m| t.starts_with(m)) || t.contains("system-reminder")
+}
+
 #[derive(Debug, Clone, Serialize)]
 struct ChatToolResult {
     tool_id: String,
@@ -517,14 +549,20 @@ fn orchestrator_chat(project: String, after: usize) -> Result<String, String> {
     let raw = match std::fs::read_to_string(&path) {
         Ok(r) => r,
         Err(_) => {
-            return serde_json::to_string(&(Vec::<ChatTurn>::new(), Vec::<ChatToolResult>::new(), 0usize))
-                .map_err(|e| e.to_string())
+            return serde_json::to_string(&(
+                Vec::<ChatTurn>::new(),
+                Vec::<ChatToolResult>::new(),
+                0usize,
+                ChatMeta::default(),
+            ))
+            .map_err(|e| e.to_string())
         }
     };
     let lines: Vec<&str> = raw.lines().collect();
     let total = lines.len();
     let mut turns: Vec<ChatTurn> = Vec::new();
     let mut results: Vec<ChatToolResult> = Vec::new();
+    let mut meta = ChatMeta::default();
 
     for line in lines.iter().skip(after) {
         let v: serde_json::Value = match serde_json::from_str(line) {
@@ -537,18 +575,34 @@ fn orchestrator_chat(project: String, after: usize) -> Result<String, String> {
             // `system` entries are hook summaries and harness notices addressed to the machinery.
             _ => continue,
         };
+        // Identity comes from the LAST assistant entry seen, so a model switch mid-session shows
+        // the model that is actually answering rather than the one that started.
+        if role == "assistant" {
+            if let Some(m) = v.get("message").and_then(|m| m.get("model")).and_then(|m| m.as_str()) {
+                meta.model = m.to_string();
+            }
+        }
+        if let Some(x) = v.get("version").and_then(|x| x.as_str()) { meta.version = x.to_string(); }
+        if let Some(x) = v.get("gitBranch").and_then(|x| x.as_str()) { meta.branch = x.to_string(); }
+
         let content = match v.get("message").and_then(|m| m.get("content")) {
             Some(c) => c,
             None => continue,
         };
         let mut blocks: Vec<ChatBlock> = Vec::new();
         match content {
-            serde_json::Value::String(s) if !s.trim().is_empty() => blocks.push(ChatBlock {
-                kind: "text".into(),
-                text: s.trim().to_string(),
-                tool: None,
-                tool_id: None,
-            }),
+            // A typed message is a plain string — and so is every hook injection, which is why
+            // this branch has to filter exactly like the array branch does.
+            serde_json::Value::String(s)
+                if !s.trim().is_empty() && !is_harness_injection(s) =>
+            {
+                blocks.push(ChatBlock {
+                    kind: "text".into(),
+                    text: s.trim().to_string(),
+                    tool: None,
+                    tool_id: None,
+                })
+            }
             serde_json::Value::Array(items) => {
                 for b in items {
                     match b.get("type").and_then(|t| t.as_str()) {
@@ -556,7 +610,7 @@ fn orchestrator_chat(project: String, after: usize) -> Result<String, String> {
                             let t = b.get("text").and_then(|t| t.as_str()).unwrap_or("").trim();
                             // Injected context is addressed to the model, not the reader, and it
                             // dwarfs what the person actually typed.
-                            if t.is_empty() || t.starts_with('<') || t.contains("system-reminder") {
+                            if t.is_empty() || is_harness_injection(t) {
                                 continue;
                             }
                             blocks.push(ChatBlock { kind: "text".into(), text: t.to_string(), tool: None, tool_id: None });
@@ -606,7 +660,7 @@ fn orchestrator_chat(project: String, after: usize) -> Result<String, String> {
         }
         turns.push(ChatTurn { role: role.to_string(), blocks });
     }
-    serde_json::to_string(&(turns, results, total)).map_err(|e| e.to_string())
+    serde_json::to_string(&(turns, results, total, meta)).map_err(|e| e.to_string())
 }
 
 /// Send a line to a herdr pane, the way a person would type it.
@@ -1788,6 +1842,28 @@ mod herdr_tests {
     fn herdr_seat_rows_still_drop_other_muxes() {
         let rows = ["trantor\tcmux\tglm\tsurface-no", "trantor\therdrws\t__ws__\tw2"].join("\n");
         assert_eq!(parse_herdr_seats(&rows), vec![]);
+    }
+
+    #[test]
+    fn harness_injections_never_wear_the_operator_role() {
+        // Every one of these arrives as an ordinary user turn. Rendering them as the person
+        // speaking is what put a 6,849-character hook dump in the chat under "YOU".
+        assert!(is_harness_injection("Stop hook feedback:\nYou have 29 unread DIRECT message(s)"));
+        assert!(is_harness_injection("[Request interrupted by user]"));
+        assert!(is_harness_injection("<system-reminder>read this</system-reminder>"));
+        assert!(is_harness_injection("PostToolUse:Bash hook additional context: <trantor-inbox>"));
+        assert!(is_harness_injection("This session is being continued from a previous conversation"));
+    }
+
+    #[test]
+    fn a_real_message_is_never_mistaken_for_machinery() {
+        assert!(!is_harness_injection("hi"));
+        assert!(!is_harness_injection("say only: PERSIST_OK"));
+        // Length is not the signal. A long message from a person is still from a person.
+        assert!(!is_harness_injection(&"read docs/PRD.md and plan the build. ".repeat(300)));
+        // The word appearing mid-sentence in a discussion ABOUT hooks is the trap a naive
+        // "contains" check falls into, so markers must anchor at the start.
+        assert!(!is_harness_injection("can you look at why the Stop hook feedback fires twice?"));
     }
 
     #[test]

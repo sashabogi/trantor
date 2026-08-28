@@ -18,6 +18,21 @@ export type Dock = "right" | "bottom";
 type Block = { kind: "text" | "thinking" | "tool" | "image"; text: string; tool?: string; tool_id?: string };
 type Turn = { role: "user" | "assistant"; blocks: Block[] };
 type ToolResult = { tool_id: string; ok: boolean; preview: string };
+/** What the agent IS, reported by the session itself. Empty means unknown, and unknown renders as
+ *  absent rather than as a default that would look like knowledge. */
+type Meta = { model: string; version: string; branch: string };
+
+/** Consecutive turns from the same speaker are ONE thing to a reader. The transcript splits them
+ *  every time a tool runs, which is why the panel showed "ORCHESTRATOR" stacked above every card. */
+function group(turns: Turn[]): Turn[] {
+  const out: Turn[] = [];
+  for (const t of turns) {
+    const last = out[out.length - 1];
+    if (last && last.role === t.role) last.blocks = [...last.blocks, ...t.blocks];
+    else out.push({ role: t.role, blocks: [...t.blocks] });
+  }
+  return out;
+}
 
 function ToolCard({ block, result }: { block: Block; result?: ToolResult }) {
   const [open, setOpen] = useState(false);
@@ -66,6 +81,7 @@ export function Chat({ project, dock, onDock, onClose }: {
   const [turns, setTurns] = useState<Turn[]>([]);
   const [results, setResults] = useState<Record<string, ToolResult>>({});
   const [seen, setSeen] = useState(0);
+  const [meta, setMeta] = useState<Meta>({ model: "", version: "", branch: "" });
   const [target, setTarget] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -76,13 +92,15 @@ export function Chat({ project, dock, onDock, onClose }: {
 
   useEffect(() => {
     setTurns([]); setResults({}); setSeen(0); seenRef.current = 0; setError(null);
+    setMeta({ model: "", version: "", branch: "" });
     orchestratorOf(project).then(o => setTarget(o?.surface ?? null)).catch(() => setTarget(null));
   }, [project]);
 
   const poll = useCallback(() => {
     invoke<string>("orchestrator_chat", { project, after: seenRef.current })
       .then(raw => {
-        const [fresh, rs, total]: [Turn[], ToolResult[], number] = JSON.parse(raw);
+        const [fresh, rs, total, m]: [Turn[], ToolResult[], number, Meta] = JSON.parse(raw);
+        if (m.model || m.version || m.branch) setMeta(cur => ({ ...cur, ...m }));
         if (fresh.length) setTurns(t => [...t, ...fresh]);
         // Results arrive after the calls they answer, so they are merged by id rather than
         // rendered in place — the card that has been on screen for a second fills itself in.
@@ -112,6 +130,10 @@ export function Chat({ project, dock, onDock, onClose }: {
       <div className="flex items-center gap-2 px-3 py-2">
         <span className="text-[12.5px] font-semibold">Orchestrator</span>
         <span className="tr-mono text-[11px] text-tr-muted">{project}</span>
+        {/* Reported by the session, never asserted. "You would not know what kind of agent it is"
+            was fair: nothing on screen said. */}
+        {meta.model && <span className="tr-chip text-[10.5px]">{meta.model}</span>}
+        {meta.branch && <span className="tr-mono text-[10.5px] text-tr-muted">{meta.branch}</span>}
         <div className="ml-auto flex items-center gap-1">
           <button type="button" onClick={() => onDock(side ? "bottom" : "right")} className="rounded-[7px] px-2 py-1 text-[11px] text-tr-muted hover:text-tr-text">
             {side ? "dock bottom" : "dock right"}
@@ -133,7 +155,7 @@ export function Chat({ project, dock, onDock, onClose }: {
             the terminal.
           </div>
         )}
-        {turns.map((t, i) => (
+        {group(turns).map((t, i) => (
           <div key={i} className="mb-3">
             <div className="mb-1 text-[10.5px] uppercase tracking-wider text-tr-muted">
               {t.role === "user" ? "you" : "orchestrator"}
