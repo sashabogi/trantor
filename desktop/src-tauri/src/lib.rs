@@ -9,7 +9,7 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc,
 };
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
 #[tauri::command]
@@ -1845,6 +1845,303 @@ fn local_sessions() -> Vec<String> {
     out
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct TranscriptCandidate {
+    session_id: String,
+    active_ago_sec: u64,
+    transcript: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+struct ProjectSessionRow {
+    kind: String,
+    pid: Option<u32>,
+    #[serde(rename = "sessionId")]
+    session_id: Option<String>,
+    state: Option<String>,
+    #[serde(rename = "activeAgoSec")]
+    active_ago_sec: Option<u64>,
+    transcript: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+struct ProjectSessionsPayload {
+    sessions: Vec<ProjectSessionRow>,
+}
+
+fn orch_session_id_from_rows(raw: &str, project: &str) -> Option<String> {
+    raw.lines()
+        .filter_map(|line| {
+            let mut it = line.split('\t');
+            if it.next()?.trim() != project {
+                return None;
+            }
+            let sid = it.next()?.trim();
+            if sid.is_empty() {
+                None
+            } else {
+                Some(sid.to_string())
+            }
+        })
+        .next_back()
+}
+
+fn pane_state_from_agent_list(raw: &str, pane: &str) -> Option<String> {
+    let v: serde_json::Value = serde_json::from_str(raw.trim()).ok()?;
+    for a in v
+        .get("result")
+        .and_then(|r| r.get("agents"))
+        .and_then(|a| a.as_array())?
+    {
+        if a.get("pane_id").and_then(|p| p.as_str()) == Some(pane) {
+            return Some(
+                a.get("agent_status")
+                    .and_then(|s| s.as_str())
+                    .unwrap_or("unknown")
+                    .to_string(),
+            );
+        }
+    }
+    None
+}
+
+fn parse_lsof_pid_cwds(raw: &str) -> Vec<(u32, String)> {
+    let mut pid: Option<u32> = None;
+    let mut out = Vec::new();
+    for line in raw.lines() {
+        if let Some(rest) = line.strip_prefix('p') {
+            pid = rest.trim().parse::<u32>().ok();
+        } else if let (Some(rest), Some(current_pid)) = (line.strip_prefix('n'), pid) {
+            out.push((current_pid, rest.to_string()));
+        }
+    }
+    out
+}
+
+fn parse_crew_runner_pids(raw: &str, project: &str) -> Vec<u32> {
+    let mut out = Vec::new();
+    for line in raw.lines() {
+        let mut fields = line.split_whitespace();
+        let Some(pid) = fields.next().and_then(|p| p.parse::<u32>().ok()) else {
+            continue;
+        };
+        let Some(dir) = line.split_whitespace().last() else {
+            continue;
+        };
+        if std::path::Path::new(dir)
+            .file_name()
+            .and_then(|n| n.to_str())
+            == Some(project)
+        {
+            out.push(pid);
+        }
+    }
+    out.sort();
+    out.dedup();
+    out
+}
+
+fn transcript_dir_for_project_dir(dir: &Path) -> PathBuf {
+    let slug: String = dir
+        .to_string_lossy()
+        .chars()
+        .map(|c| if c == '/' || c == '.' { '-' } else { c })
+        .collect();
+    let home = std::env::var("HOME").unwrap_or_default();
+    Path::new(&home).join(".claude/projects").join(slug)
+}
+
+fn recent_transcript_candidates(dir: &Path) -> Vec<TranscriptCandidate> {
+    const RECENT: Duration = Duration::from_secs(60 * 60);
+    let tdir = transcript_dir_for_project_dir(dir);
+    let now = SystemTime::now();
+    let Ok(entries) = std::fs::read_dir(&tdir) else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|e| e.to_str()) != Some("jsonl") {
+            continue;
+        }
+        let Ok(meta) = entry.metadata() else { continue };
+        let Ok(mtime) = meta.modified() else { continue };
+        let Ok(age) = now.duration_since(mtime) else {
+            continue;
+        };
+        if age > RECENT {
+            continue;
+        }
+        let Some(session_id) = path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .map(|s| s.to_string())
+        else {
+            continue;
+        };
+        out.push(TranscriptCandidate {
+            session_id,
+            active_ago_sec: age.as_secs(),
+            transcript: path.to_string_lossy().to_string(),
+        });
+    }
+    out.sort_by(|a, b| a.active_ago_sec.cmp(&b.active_ago_sec));
+    out
+}
+
+fn project_sessions_json(
+    project: &str,
+    crew_rows: &str,
+    orch_rows: &str,
+    agent_list: &str,
+    pane_process_info: Option<&str>,
+    terminal_pids: Vec<u32>,
+    transcripts: Vec<TranscriptCandidate>,
+    seat_pids: Vec<u32>,
+) -> String {
+    let pane = orch_pane_from_rows(crew_rows, project);
+    let pane_pid = pane_process_info.and_then(foreground_pid_from_process_info);
+    let mut sessions = Vec::new();
+
+    if let Some(pane_id) = pane {
+        sessions.push(ProjectSessionRow {
+            kind: "pane".into(),
+            pid: pane_pid,
+            session_id: orch_session_id_from_rows(orch_rows, project),
+            state: pane_state_from_agent_list(agent_list, &pane_id)
+                .or_else(|| Some("unknown".into())),
+            active_ago_sec: None,
+            transcript: None,
+        });
+    }
+
+    let mut terminal_pids: Vec<u32> = terminal_pids
+        .into_iter()
+        .filter(|pid| Some(*pid) != pane_pid)
+        .collect();
+    terminal_pids.sort();
+    terminal_pids.dedup();
+    if terminal_pids.is_empty() {
+        // A recent JSONL proves a conversation exists on disk, not that a Terminal session is
+        // running now. Visibility/takeover V1 is process truth first, so disk-only transcripts do
+        // not become terminal rows.
+    } else if transcripts.is_empty() {
+        for pid in terminal_pids {
+            sessions.push(ProjectSessionRow {
+                kind: "terminal".into(),
+                pid: Some(pid),
+                session_id: None,
+                state: None,
+                active_ago_sec: None,
+                transcript: None,
+            });
+        }
+    } else {
+        for (idx, c) in transcripts.into_iter().enumerate() {
+            sessions.push(ProjectSessionRow {
+                kind: "terminal".into(),
+                pid: terminal_pids
+                    .get(idx)
+                    .copied()
+                    .or_else(|| terminal_pids.first().copied()),
+                session_id: Some(c.session_id),
+                state: None,
+                active_ago_sec: Some(c.active_ago_sec),
+                transcript: Some(c.transcript),
+            });
+        }
+    }
+
+    for pid in seat_pids {
+        sessions.push(ProjectSessionRow {
+            kind: "seat".into(),
+            pid: Some(pid),
+            session_id: None,
+            state: None,
+            active_ago_sec: None,
+            transcript: None,
+        });
+    }
+
+    serde_json::to_string(&ProjectSessionsPayload { sessions })
+        .unwrap_or_else(|_| "{\"sessions\":[]}".into())
+}
+
+fn shell_stdout(bin: &str, args: &[&str]) -> String {
+    std::process::Command::new(bin)
+        .args(args)
+        .env("PATH", terminal_path())
+        .output()
+        .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
+        .unwrap_or_default()
+}
+
+#[tauri::command]
+fn project_sessions(project: String) -> String {
+    let project = project.trim().to_string();
+    if project.is_empty() || project.contains('/') || project.contains("..") {
+        return "{\"sessions\":[]}".into();
+    }
+
+    let crew_rows =
+        std::fs::read_to_string(desktop_bus_dir().join("crew-windows.txt")).unwrap_or_default();
+    let orch_rows =
+        std::fs::read_to_string(desktop_bus_dir().join("orch-sessions.txt")).unwrap_or_default();
+    let pane = orch_pane_from_rows(&crew_rows, &project);
+    let agent_list = pane
+        .as_ref()
+        .map(|_| shell_stdout("herdr", &["agent", "list"]))
+        .unwrap_or_default();
+    let pane_process_info = pane.as_ref().and_then(|pane_id| {
+        let raw = shell_stdout("herdr", &["pane", "process-info", "--pane", pane_id]);
+        if raw.trim().is_empty() {
+            None
+        } else {
+            Some(raw)
+        }
+    });
+
+    let dir = project_dir(&project);
+    let (terminal_pids, transcripts) = if let Some(dir) = dir.as_ref() {
+        let wanted = dir.to_string_lossy().to_string();
+        let pids: Vec<String> = shell_stdout("/usr/bin/pgrep", &["-x", "claude"])
+            .lines()
+            .map(|l| l.trim().to_string())
+            .filter(|l| !l.is_empty())
+            .collect();
+        let terminal_pids = if pids.is_empty() {
+            Vec::new()
+        } else {
+            let list = pids.join(",");
+            parse_lsof_pid_cwds(&shell_stdout(
+                "/usr/sbin/lsof",
+                &["-a", "-d", "cwd", "-p", &list, "-Fn"],
+            ))
+            .into_iter()
+            .filter_map(|(pid, cwd)| if cwd == wanted { Some(pid) } else { None })
+            .collect()
+        };
+        (terminal_pids, recent_transcript_candidates(dir))
+    } else {
+        (Vec::new(), Vec::new())
+    };
+    let seat_pids = parse_crew_runner_pids(
+        &shell_stdout("/usr/bin/pgrep", &["-fl", "crew-runner.mjs"]),
+        &project,
+    );
+
+    project_sessions_json(
+        &project,
+        &crew_rows,
+        &orch_rows,
+        &agent_list,
+        pane_process_info.as_deref(),
+        terminal_pids,
+        transcripts,
+        seat_pids,
+    )
+}
+
 // ── herdr bridge ───────────────────────────────────────────────────────────────────────────────
 
 fn desktop_bus_dir() -> PathBuf {
@@ -1981,6 +2278,10 @@ fn trantor_handoff_args() -> [&'static str; 2] {
 
 fn trantor_reopen_args() -> [&'static str; 1] {
     ["open"]
+}
+
+fn trantor_takeover_args(project: &str) -> [&str; 3] {
+    ["takeover", project, "--json"]
 }
 
 fn write_only_flag_rejected(stderr: &str) -> bool {
@@ -2126,6 +2427,33 @@ async fn handoff_now(project: String) -> Result<String, String> {
     run_command_output(reopen, "trantor open").await?;
 
     Ok("handoff written · session ended · pane reopened".into())
+}
+
+#[tauri::command]
+async fn takeover_now(project: String) -> Result<String, String> {
+    let project = project.trim().to_string();
+    if project.is_empty() {
+        return Err("project is required".into());
+    }
+    let dir = project_dir(&project).ok_or_else(|| format!("no local checkout for {project}"))?;
+    let out = tokio::process::Command::new("trantor")
+        .args(trantor_takeover_args(&project))
+        .current_dir(&dir)
+        .env("PATH", terminal_path())
+        .output()
+        .await
+        .map_err(|e| format!("trantor takeover could not start: {e}"))?;
+    let stdout = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    let stderr = String::from_utf8_lossy(&out.stderr).trim().to_string();
+    if out.status.success() {
+        Ok(stdout)
+    } else if !stderr.is_empty() {
+        Err(stderr)
+    } else if !stdout.is_empty() {
+        Err(stdout)
+    } else {
+        Err("trantor takeover failed".into())
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -2683,6 +3011,7 @@ pub fn run() {
             open_code,
             project_icon,
             local_sessions,
+            project_sessions,
             herdr_pane_read,
             herdr_seats,
             seat_diff,
@@ -2699,6 +3028,7 @@ pub fn run() {
             pane_keys,
             orchestrator_status,
             handoff_now,
+            takeover_now,
             write_file,
             autonomy_get,
             autonomy_set,
@@ -2820,6 +3150,10 @@ mod herdr_tests {
     fn handoff_command_args_are_write_only_and_same_pane() {
         assert_eq!(trantor_handoff_args(), ["handoff", "--write-only"]);
         assert_eq!(trantor_reopen_args(), ["open"]);
+        assert_eq!(
+            trantor_takeover_args("trantor"),
+            ["takeover", "trantor", "--json"]
+        );
     }
 
     #[test]
@@ -2870,6 +3204,136 @@ mod herdr_tests {
         })
         .to_string();
         assert_eq!(foreground_pid_from_process_info(&raw), Some(20));
+    }
+
+    #[test]
+    fn lsof_pid_cwds_keep_pid_context() {
+        let raw =
+            "p111\nfcwd\nn/Users/s/development/trantor\np222\nfcwd\nn/Users/s/development/other\n";
+        assert_eq!(
+            parse_lsof_pid_cwds(raw),
+            vec![
+                (111, "/Users/s/development/trantor".into()),
+                (222, "/Users/s/development/other".into())
+            ]
+        );
+    }
+
+    #[test]
+    fn crew_runner_pids_match_the_project_dir_argv() {
+        let raw = "101 node /x/crew-runner.mjs codex /Users/s/.agent-bus/worktrees/trantor/codex\n102 node /x/crew-runner.mjs glm /Users/s/.agent-bus/worktrees/other/glm\n";
+        assert_eq!(parse_crew_runner_pids(raw, "codex"), vec![101]);
+        assert_eq!(parse_crew_runner_pids(raw, "glm"), vec![102]);
+    }
+
+    #[test]
+    fn project_sessions_json_assembles_pane_terminal_and_seat_rows() {
+        let crew_rows = [
+            "trantor\torch\t__orch__\tpane-1",
+            "trantor\therdr\tcodex\tseat-pane",
+        ]
+        .join("\n");
+        let orch_rows = "other\told\ntrantor\tsid-pane\n";
+        let agents = serde_json::json!({
+            "result": { "agents": [
+                { "pane_id": "pane-1", "agent_status": "idle" }
+            ]}
+        })
+        .to_string();
+        let proc = serde_json::json!({
+            "result": { "process_info": { "foreground_process_group_id": 700 } }
+        })
+        .to_string();
+        let raw = project_sessions_json(
+            "trantor",
+            &crew_rows,
+            orch_rows,
+            &agents,
+            Some(&proc),
+            vec![701],
+            vec![TranscriptCandidate {
+                session_id: "sid-term".into(),
+                active_ago_sec: 42,
+                transcript: "/tmp/sid-term.jsonl".into(),
+            }],
+            vec![990],
+        );
+        let v: serde_json::Value = serde_json::from_str(&raw).unwrap();
+        assert_eq!(v["sessions"][0]["kind"], "pane");
+        assert_eq!(v["sessions"][0]["pid"], 700);
+        assert_eq!(v["sessions"][0]["sessionId"], "sid-pane");
+        assert_eq!(v["sessions"][0]["state"], "idle");
+        assert_eq!(v["sessions"][1]["kind"], "terminal");
+        assert_eq!(v["sessions"][1]["pid"], 701);
+        assert_eq!(v["sessions"][1]["sessionId"], "sid-term");
+        assert_eq!(v["sessions"][1]["activeAgoSec"], 42);
+        assert_eq!(v["sessions"][1]["transcript"], "/tmp/sid-term.jsonl");
+        assert_eq!(v["sessions"][2]["kind"], "seat");
+        assert_eq!(v["sessions"][2]["pid"], 990);
+    }
+
+    #[test]
+    fn project_sessions_json_excludes_the_pane_pid_from_terminal_sessions() {
+        let crew_rows = "trantor\torch\t__orch__\tpane-1\n";
+        let agents = serde_json::json!({
+            "result": { "agents": [
+                { "pane_id": "pane-1", "agent_status": "working" }
+            ]}
+        })
+        .to_string();
+        let proc = serde_json::json!({
+            "result": { "process_info": { "foreground_process_group_id": 700 } }
+        })
+        .to_string();
+        let raw = project_sessions_json(
+            "trantor",
+            crew_rows,
+            "",
+            &agents,
+            Some(&proc),
+            vec![700, 701],
+            vec![TranscriptCandidate {
+                session_id: "sid-term".into(),
+                active_ago_sec: 12,
+                transcript: "/tmp/sid-term.jsonl".into(),
+            }],
+            vec![],
+        );
+        let v: serde_json::Value = serde_json::from_str(&raw).unwrap();
+        assert_eq!(v["sessions"][0]["kind"], "pane");
+        assert_eq!(v["sessions"][1]["kind"], "terminal");
+        assert_eq!(v["sessions"][1]["pid"], 701);
+    }
+
+    #[test]
+    fn project_sessions_json_preserves_two_recent_transcript_candidates() {
+        let raw = project_sessions_json(
+            "trantor",
+            "",
+            "",
+            "",
+            None,
+            vec![301],
+            vec![
+                TranscriptCandidate {
+                    session_id: "newest".into(),
+                    active_ago_sec: 8,
+                    transcript: "/tmp/newest.jsonl".into(),
+                },
+                TranscriptCandidate {
+                    session_id: "older".into(),
+                    active_ago_sec: 700,
+                    transcript: "/tmp/older.jsonl".into(),
+                },
+            ],
+            vec![],
+        );
+        let v: serde_json::Value = serde_json::from_str(&raw).unwrap();
+        assert_eq!(v["sessions"].as_array().unwrap().len(), 2);
+        assert_eq!(v["sessions"][0]["sessionId"], "newest");
+        assert_eq!(v["sessions"][0]["pid"], 301);
+        assert_eq!(v["sessions"][1]["sessionId"], "older");
+        assert_eq!(v["sessions"][1]["pid"], 301);
     }
 
     #[test]
