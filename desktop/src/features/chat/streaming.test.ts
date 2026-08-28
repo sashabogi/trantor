@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
-  applyBackfill, applyRows, applySessionChanged, bannerVisible, emptyChat,
+  applyBackfill, applyRows, applySessionChanged, bannerVisible, composerSlot, emptyChat,
   gaugeLabel, gaugeTone, insertPaths, isDividerTurn,
   sessionLiveness, receiptFor, LOST_AFTER_MS, HANDOFF_WARN_FRAC,
   type Backfill, type ChatState, type ContextGauge, type Meta, type RowsPayload, type Turn,
@@ -298,6 +298,27 @@ describe("bannerVisible (#5509 W1)", () => {
 
   it("a stale dismissal from below the band never muzzles the first qualifying arrival", () => {
     expect(bannerVisible(0.9, 0.5)).toBe(true);
+  });
+});
+
+describe("composerSlot (#5556)", () => {
+  it("while the agent works the slot is STOP — and interrupting is never gated", () => {
+    // Not by liveness, not by an empty draft, not by a send in flight: a working turn is its own
+    // proof there is something to interrupt.
+    expect(composerSlot(true, true, "hello", false)).toEqual({ kind: "stop" });
+    expect(composerSlot(true, false, "", true)).toEqual({ kind: "stop" });
+  });
+
+  it("otherwise the slot is SEND, enabled only when live, not busy, and the draft has words", () => {
+    expect(composerSlot(false, true, "hello", false)).toEqual({ kind: "send", disabled: false });
+    expect(composerSlot(false, false, "hello", false)).toEqual({ kind: "send", disabled: true });
+    expect(composerSlot(false, true, "hello", true)).toEqual({ kind: "send", disabled: true });
+  });
+
+  it("a draft of whitespace is a draft of nothing — trim decides, not length", () => {
+    expect(composerSlot(false, true, "", false)).toEqual({ kind: "send", disabled: true });
+    expect(composerSlot(false, true, "   \n\t ", false)).toEqual({ kind: "send", disabled: true });
+    expect(composerSlot(false, true, " x ", false)).toEqual({ kind: "send", disabled: false });
   });
 });
 

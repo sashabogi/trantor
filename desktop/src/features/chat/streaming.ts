@@ -181,6 +181,20 @@ export function gaugeLabel(c: ContextGauge): string {
   return `${k(c.tokens ?? 0)} / ${k(c.window)} (${Math.round((c.frac ?? 0) * 100)}%)`;
 }
 
+/** The composer's ONE action slot (#5556): while the agent works, the slot stops the turn;
+ *  otherwise it sends. One position, two states — never both, never neither. STOP ignores the
+ *  send gates entirely (the old external button behaved the same): interrupting a runaway turn
+ *  must not be locked behind liveness or an empty draft, because the turn ITSELF proves there is
+ *  something to interrupt. */
+export type ComposerSlot = { kind: "stop" } | { kind: "send"; disabled: boolean };
+
+/** Decide what the slot shows. The send state carries its own disabled rule so the wiring stays
+ *  honest: not live, mid-send (busy), or a draft of nothing leaves the button visible but inert. */
+export function composerSlot(working: boolean, live: boolean, draft: string, busy: boolean): ComposerSlot {
+  if (working) return { kind: "stop" };
+  return { kind: "send", disabled: !live || busy || !draft.trim() };
+}
+
 /** The handoff banner's thresholds (#5509 W1). `HANDOFF_WARN_FRAC` IS the gauge's red threshold
  *  (gaugeTone above) — the banner is the same warning wearing a choice, so the two can never
  *  disagree about when the window is filling up. */
