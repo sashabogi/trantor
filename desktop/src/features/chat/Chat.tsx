@@ -53,8 +53,10 @@ function group(turns: Turn[]): Turn[] {
   const out: Turn[] = [];
   for (const t of turns) {
     const last = out[out.length - 1];
-    if (last && last.role === t.role) last.blocks = [...last.blocks, ...t.blocks];
-    else out.push({ role: t.role, blocks: [...t.blocks] });
+    // A queued turn never merges into a seen one (or vice versa) — merging would erase the one
+    // flag that tells the operator "the session has not read this yet".
+    if (last && last.role === t.role && !!last.queued === !!t.queued) last.blocks = [...last.blocks, ...t.blocks];
+    else out.push({ role: t.role, blocks: [...t.blocks], queued: t.queued });
   }
   return out;
 }
@@ -405,8 +407,16 @@ export function Chat({ project, dock, onDock, onClose }: {
             </div>
           ) : (
             <div key={i} className="mb-3">
-              <div className="mb-1 text-[length:calc(10.5px*var(--chat-scale,1))] uppercase tracking-wider text-tr-muted">
-                {t.role === "user" ? "you" : "orchestrator"}
+              <div className="mb-1 flex items-center gap-1.5 text-[length:calc(10.5px*var(--chat-scale,1))] uppercase tracking-wider text-tr-muted">
+                <span>{t.role === "user" ? "you" : "orchestrator"}</span>
+                {t.queued && (
+                  <span
+                    className="rounded bg-black/30 px-1.5 py-0.5 normal-case tracking-normal text-tr-warn"
+                    title="Delivered to the session's queue — it has not read this yet; it will on its next turn boundary"
+                  >
+                    queued
+                  </span>
+                )}
               </div>
               {batch(t.blocks).map((b, j) =>
                 Array.isArray(b) ? (

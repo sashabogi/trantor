@@ -11,8 +11,11 @@
 // `after + turns.length` is a lower bound, not the truth. The mismatch path heals the drift —
 // a wrong guess costs one refetch, never a gap and never a duplicate. When the watcher offers
 // the post-batch line count as `total`, the guess becomes exact and the heals stop.
-export type Block = { kind: "text" | "thinking" | "tool" | "image" | "divider"; text: string; tool?: string; tool_id?: string };
-export type Turn = { role: "user" | "assistant" | "system"; blocks: Block[] };
+export type Block = { kind: "text" | "thinking" | "tool" | "image" | "divider" | "dequeue"; text: string; tool?: string; tool_id?: string };
+/** `queued`: sent while the agent was mid-turn and NOT yet seen by the session — the middle of
+ *  the three delivery states (sent, queued, seen). Cleared when the dequeue marker (the queue's
+ *  `remove` row) arrives. */
+export type Turn = { role: "user" | "assistant" | "system"; blocks: Block[]; queued?: boolean };
 export type ToolResult = { tool_id: string; ok: boolean; preview: string };
 /** The context window as the transcript's usage rows report it (#5508). `tokens`/`frac` are null
  *  until an assistant row with usage has been seen; `window` is 0 when unset — an unknown window
@@ -58,9 +61,33 @@ export type Backfill = [Turn[], ToolResult[], number, Meta];
 function absorb(s: ChatState, fresh: Turn[], rs: ToolResult[], m: Meta): ChatState {
   const results = { ...s.results };
   for (const r of rs) results[r.tool_id] = r;
+  // Dequeue markers are consumed here, never rendered: each one clears the queued flag on the
+  // NEWEST matching queued turn — same batch first, then the settled thread. A marker with no
+  // match (its enqueue predates the backfill window) is dropped harmlessly.
+  let settled = s.turns;
+  const additions: Turn[] = [];
+  for (const t of fresh) {
+    const marker = t.role === "system" && t.blocks.length === 1 && t.blocks[0].kind === "dequeue";
+    if (!marker) { additions.push(t); continue; }
+    const text = t.blocks[0].text;
+    const clearIn = (arr: Turn[]): boolean => {
+      for (let i = arr.length - 1; i >= 0; i--) {
+        const c = arr[i];
+        if (c.queued && c.blocks.some(b => b.kind === "text" && b.text === text)) {
+          arr[i] = { ...c, queued: undefined };
+          return true;
+        }
+      }
+      return false;
+    };
+    if (!clearIn(additions)) {
+      const copy = [...settled];
+      if (clearIn(copy)) settled = copy;
+    }
+  }
   return {
     ...s,
-    turns: fresh.length ? [...s.turns, ...fresh] : s.turns,
+    turns: additions.length || settled !== s.turns ? [...settled, ...additions] : s.turns,
     results,
     // Spread semantics inherited from the poll this replaces: a field the batch carries wins, even
     // as an empty string. Identity comes from the LAST assistant entry, so a model switch

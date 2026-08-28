@@ -233,3 +233,40 @@ describe("insertPaths", () => {
     expect(insertPaths("unchanged", 4, [])).toBe("unchanged");
   });
 });
+
+// Three delivery states (sent, queued, seen) — the chat's claim must match the terminal's queue.
+describe("queued turns and dequeue markers", () => {
+  const qt = (text: string): Turn => ({ role: "user", blocks: [{ kind: "text", text }], queued: true });
+  const dq = (text: string): Turn => ({ role: "system", blocks: [{ kind: "dequeue", text }] });
+
+  it("a queued turn arrives wearing its flag", () => {
+    const { state } = applyRows({ ...emptyChat, seen: 0 }, rows(0, [qt("while busy")]));
+    expect(state.turns[0].queued).toBe(true);
+  });
+
+  it("a later dequeue marker clears the flag and never renders", () => {
+    const first = applyRows({ ...emptyChat, seen: 0 }, rows(0, [qt("while busy")])).state;
+    const { state } = applyRows(first, rows(1, [dq("while busy")]));
+    expect(state.turns).toHaveLength(1);
+    expect(state.turns[0].queued).toBeUndefined();
+  });
+
+  it("enqueue and dequeue in ONE batch net a seen turn", () => {
+    const { state } = applyRows({ ...emptyChat, seen: 0 }, rows(0, [qt("fast"), dq("fast")]));
+    expect(state.turns).toHaveLength(1);
+    expect(state.turns[0].queued).toBeUndefined();
+  });
+
+  it("a marker with no matching queued turn is dropped harmlessly", () => {
+    const { state } = applyRows({ ...emptyChat, seen: 0 }, rows(0, [t("plain"), dq("never enqueued")]));
+    expect(state.turns).toEqual([t("plain")]);
+  });
+
+  it("the NEWEST matching queued turn is the one cleared", () => {
+    const s1 = applyRows({ ...emptyChat, seen: 0 }, rows(0, [qt("same words")])).state;
+    const s2 = applyRows(s1, rows(1, [qt("same words")])).state;
+    const { state } = applyRows(s2, rows(2, [dq("same words")]));
+    expect(state.turns[0].queued).toBe(true);
+    expect(state.turns[1].queued).toBeUndefined();
+  });
+});
