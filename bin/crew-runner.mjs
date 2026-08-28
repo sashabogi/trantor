@@ -243,6 +243,12 @@ const PULSE_PROMPT = `[pulse] Re-read your mission note (${MISSION_FILE} in your
 // every non-zero turn to the bus in real time so the orchestrator (and `trantor swap`)
 // can react, and flip presence to errored/down.
 let consecFails = 0;
+// The failure STATE the room has already been told about. A seat that is down stays down, and
+// saying so again every retry is repetition, not news — the monitoring doctrine this project holds
+// everyone else to says report duration, not repetition. Observed cost: a permanently exhausted
+// codex seat broadcast "DOWN" to `all` 31 times over six hours, and every broadcast is a turn for
+// every live seat, so two working agents spent the evening reading the same sentence.
+let announced = "";
 let lastErrText = "";
 const ERRF = join(homedir(), ".agent-bus", `err-${AGENT}-${PROJ}.txt`);
 
@@ -309,7 +315,16 @@ async function reportFailure(exit, trigger, undelivered = 0) {
   const text = down
     ? `🛑 ${SESSION} DOWN — ${consecFails} consecutive failures (${reason}, exit ${exit})${hint}${held}`
     : `⚠️ ${SESSION} turn FAILED (${trigger}, exit ${exit} · ${reason})${hint}${held}`;
-  await api("/send", { from: SESSION, to: "all", text, project: PROJ }).catch(() => {});
+  // Announce a CHANGE of state, never the continuation of one. The registered status above already
+  // carries "down: exhausted · N fails" for anyone who looks, which is state and costs nobody a
+  // turn; the broadcast is the event, and an unchanged state is not an event.
+  const state = `${down ? "down" : "error"}:${reason}`;
+  if (state !== announced) {
+    announced = state;
+    await api("/send", { from: SESSION, to: "all", text, project: PROJ }).catch(() => {});
+  } else {
+    log(`still ${state} (${consecFails} fails) — already announced, staying quiet`);
+  }
   cmuxStatus(down ? "down" : "error", "#ef6a6a", "alert", { alert: true, priority: 90 }); herdrAgent("blocked"); cmuxLog(`turn failed: ${reason} (exit ${exit})`, "error");
   log(`\x1b[31mreported failure to bus: ${reason} (exit ${exit})\x1b[0m`);
 }
@@ -344,6 +359,8 @@ async function notifyAssigners(pairs, text) {
 async function reportHealthy() {
   if (consecFails === 0) return;        // already healthy — don't spam
   consecFails = 0;
+  // Recovery is a change too, so the next failure is news again.
+  announced = "";
   await api("/register", { session: SESSION, project: PROJ, status: `active in ${PROJ}`, llm: AGENT, model: MODEL }).catch(() => {});
   await api("/send", { from: SESSION, to: "all", text: `✅ ${SESSION} recovered`, project: PROJ }).catch(() => {});
   cmuxStatus("ok", "#14b8a6", "check"); herdrAgent("idle");

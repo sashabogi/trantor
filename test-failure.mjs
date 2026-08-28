@@ -17,6 +17,7 @@ console.log("# trantor crew failure-visibility drill");
 
 // ---- mock hub: record /register + /send, answer the runner's polls -------------------
 const registers = [], sends = [];
+let inboxQueue = [];
 const hub = http.createServer((req, res) => {
   let buf = "";
   req.on("data", (c) => (buf += c));
@@ -26,7 +27,16 @@ const hub = http.createServer((req, res) => {
     const reply = (o) => { res.writeHead(200, { "content-type": "application/json" }); res.end(JSON.stringify(o)); };
     if (req.method === "POST" && P === "/register") { try { registers.push(JSON.parse(buf)); } catch {} return reply({ ok: true, session: "x", peers: [] }); }
     if (req.method === "POST" && P === "/send") { try { sends.push(JSON.parse(buf)); } catch {} return reply({ ok: true, id: sends.length }); }
+    // A drill can PRIME the inbox so the seat takes more than one turn. Without this the runner
+    // only ever runs its kickoff, which is why repeated-failure behaviour was untestable.
     if (P === "/inbox") return reply({ messages: [], cursor: 0 });
+    // The runner WAKES on /poll, not /inbox — the long-poll the main loop sits in. Serving only
+    // /inbox is why repeated-failure behaviour could not be drilled at all: the seat took its
+    // kickoff turn and then waited forever on an endpoint the mock did not answer.
+    if (P === "/poll") {
+      const m = inboxQueue.splice(0, 1);
+      return reply({ messages: m, cursor: (Number(u.searchParams.get("since")) || 0) + m.length });
+    }
     if (P === "/lessons") return reply({ lessons: [] });
     if (P === "/poll") return setTimeout(() => reply({ messages: [], cursor: 0 }), 200);
     return reply({ ok: true });
@@ -39,8 +49,9 @@ const HUB = `http://127.0.0.1:${PORT}`;
 // ---- drill harness: a fake CLI that fails, driven by the REAL runner -----------------
 // `script` is the whole body of the fake CLI, so a drill controls exactly WHICH STREAM the
 // CLI complains on — the distinction that hid a real outage (see the claude drills below).
-async function drill(agent, script) {
+async function drill(agent, script, opts = {}) {
   registers.length = 0; sends.length = 0;
+  inboxQueue = (opts.inbox || []).map((text, i) => ({ id: i + 1, from: "host:drill", to: `${agent}:tt-fail-${agent}`, text, project: `tt-fail-${agent}` }));
   const work = mkdtempSync(join(tmpdir(), `tt-fail-${agent}-`));
   const fakebin = join(work, "bin");
   mkdirSync(fakebin, { recursive: true });
@@ -54,11 +65,11 @@ async function drill(agent, script) {
     cwd: process.cwd(),
     env: { ...process.env, HOME, PATH: `${fakebin}:${process.env.PATH}`,
            RELAY_URL: HUB, RELAY_AGENT: agent, RELAY_PROJECT: `tt-fail-${agent}`,
-           CREW_KICKOFF: "say hi and end your turn" },
+           CREW_KICKOFF: "say hi and end your turn", ...(opts.env || {}) },
     stdio: "ignore",
   });
   // kickoff turn runs synchronously inside the runner; give it a moment to fail + report
-  await sleep(2500);
+  await sleep(opts.waitMs ?? 2500);
   runner.kill("SIGKILL");
   await sleep(150);
   return { registers: [...registers], sends: [...sends] };
@@ -99,6 +110,27 @@ async function drill(agent, script) {
   const { sends } = await drill("claude", '#!/bin/sh\necho "You\'ve reached your Opus 5 limit."\nexit 1\n');
   const failMsg = sends.find((m) => /turn FAILED/i.test(m.text || ""));
   ok("a bare subscription limit is classified exhausted", !!failMsg && /exhausted/i.test(failMsg.text));
+}
+
+// ---- drill: a seat that STAYS down says so once, not once per retry -------------------
+// A permanently exhausted codex seat broadcast "DOWN" to `all` 31 times over six hours. Every
+// broadcast is a turn for every live seat, so two working agents spent an evening re-reading the
+// same sentence. The doctrine this project holds everyone else to is: report duration, not
+// repetition — a state that has not changed is not news.
+{
+  const { sends, registers } = await drill("codex",
+    '#!/bin/sh\necho "Error: you exceeded your current quota" >&2\nexit 1\n',
+    // retry fast so several turns fail inside the drill's window
+    // three wake-ups after the kickoff, so the seat fails four times in a row
+    { inbox: ["again", "and again", "and again"], waitMs: 9000 });
+  const downs = sends.filter(m => /DOWN/.test(m.text || "") && m.to === "all");
+  const fails = sends.filter(m => /turn FAILED/i.test(m.text || "") && m.to === "all");
+  ok("the room is told the seat went down", downs.length >= 1, `${downs.length} DOWN broadcasts`);
+  ok("…exactly once, however many times it retries", downs.length === 1, `${downs.length} DOWN broadcasts`);
+  ok("…and the first failure is still announced separately", fails.length <= 1, `${fails.length} FAILED broadcasts`);
+  const downReg = registers.filter(r => String(r.status || "").startsWith("down"));
+  ok("the seat stays REGISTERED as down, which is where duration lives and costs nobody a turn",
+     downReg.length >= 1, `${downReg.length} down registrations`);
 }
 
 hub.close();
