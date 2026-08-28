@@ -5,8 +5,10 @@
 //   PROJECT  BOARD | FEED | CHAT — the only things that change when you pick a project.
 //   APP      Settings + identity. Sidebar footer.
 //
-// Fleet telemetry (economics, providers, tallies) lives on the HOME view as designed cards —
-// never in chrome. The old header dump was the altitude mistake made visible.
+// Fleet telemetry (economics, lessons, tallies) lives on the HOME view as designed cards —
+// never in chrome. The ONE exception is the balance strip (v6, #5555): a minimal row of
+// per-provider chips in the header, because "is a provider about to stall mid-build" is an
+// always-in-view question, not a "go look at Home" one. Chips only — the old text dump stays dead.
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ArrowDownToLine, Bot, Eye, FolderTree, GraduationCap, House, Inbox as InboxIcon, MessagesSquare, Settings as SettingsIcon } from "lucide-react";
 import { appUpdateCheck, HubClient, hubForProject, knownProjects, localSessions, type AppUpdate, type Peer } from "../shared/api/client";
@@ -33,6 +35,7 @@ import { Files } from "../features/files/Files";
 import { filesColumnOpen, persistFilesColumn } from "../features/files/filesColumn";
 import { Chat, type Dock } from "../features/chat/Chat";
 import { Conversation } from "../features/chat/Conversation";
+import { BalanceStrip } from "../features/fleet/BalanceStrip";
 import { notifyIfWorthIt } from "../shared/notify";
 
 type Pane =
@@ -130,6 +133,10 @@ export function AppShell() {
   useEffect(() => { if (active) hubForProject(active).then(setHub); }, [active]);
 
   const client = useMemo(() => (hub ? new HubClient(hub) : null), [hub]);
+  // The balance strip reads the MACHINE-LOCAL hub (balances/profile are files on this machine).
+  // With no active hub yet the local one still answers, so the strip has a stable client either
+  // way — it must not go dark just because no project is pinned.
+  const fleetClient = useMemo(() => client ?? new HubClient(LOCAL_HUB), [client]);
 
   // Sidebar activity — Sasha's ruling (2026-08-13): ACTIVE means "a terminal window is open and
   // registered", and the dot BLINKS only for actual activity, never for merely sitting open.
@@ -397,6 +404,10 @@ export function AppShell() {
 
       <div className={`relative my-2.5 mr-2.5 flex min-w-0 flex-1 ${chatDock === "right" ? "flex-row overflow-x-auto" : "flex-col overflow-hidden"}`}>
       <main className={`tr-main flex min-h-0 flex-1 flex-col overflow-hidden ${chatDock === "right" ? "min-w-[560px]" : "min-w-0"}`}>
+        {/* the app header: the balance strip right-aligned, nothing else. Renders null until the
+            local hub has a snapshot, so a profile-less machine gets no dead chrome bar. */}
+        <BalanceStrip client={fleetClient} />
+        <div className="min-h-0 flex-1 overflow-hidden">
         {!client ? (
           <div className="p-10 text-sm text-[var(--color-tr-muted)]">
             No projects pinned. Run <code>trantor hub set &lt;project&gt; &lt;url&gt;</code>
@@ -414,7 +425,8 @@ export function AppShell() {
           : pane.lens === "review" ? <Review client={client} project={active} lens={pane.lens} onLens={l => setPane({ kind: "project", lens: l })} />
           : pane.lens === "files" ? <Files client={client} project={active} lens={pane.lens} onLens={l => setPane({ kind: "project", lens: l })}
                                            path={filePath} seat={fileSeat} onSeat={setFileSeat} />
-          : <Feed client={client} project={active} lens={pane.lens} onLens={l => setPane({ kind: "project", lens: l })} />}
+           : <Feed client={client} project={active} lens={pane.lens} onLens={l => setPane({ kind: "project", lens: l })} />}
+        </div>
       </main>
       {/* The orchestrator conversation. Only inside a project, because it IS that project's
           session — there is no fleet-wide orchestrator to talk to. */}
