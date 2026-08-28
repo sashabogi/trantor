@@ -9,7 +9,7 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc,
 };
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
 #[tauri::command]
@@ -1321,24 +1321,26 @@ fn chat_unwatch(project: String) {
     }
 }
 
+fn orch_pane_from_rows(raw: &str, project: &str) -> Option<String> {
+    raw.lines()
+        .filter_map(|l| {
+            let f: Vec<&str> = l.split('\t').collect();
+            if f.len() >= 4 && f[0] == project && f[1] == "orch" && !f[3].trim().is_empty() {
+                Some(f[3].trim().to_string())
+            } else {
+                None
+            }
+        })
+        .next_back()
+}
+
 /// Is the orchestrator mid-turn? Resolved by PANE id rather than by agent label, because "claude"
 /// is not unique — a crew could run one as a seat. The pane is.
 #[tauri::command]
 fn orchestrator_status(project: String) -> Result<String, String> {
     let rows =
         std::fs::read_to_string(desktop_bus_dir().join("crew-windows.txt")).unwrap_or_default();
-    let pane = rows
-        .lines()
-        .filter_map(|l| {
-            let f: Vec<&str> = l.split('\t').collect();
-            if f.len() >= 4 && f[0] == project && f[1] == "orch" {
-                Some(f[3].to_string())
-            } else {
-                None
-            }
-        })
-        .next_back();
-    let pane = match pane {
+    let pane = match orch_pane_from_rows(&rows, &project) {
         Some(p) => p,
         None => return Ok("none".into()),
     };
@@ -1971,6 +1973,161 @@ fn herdr_seats() -> Result<String, String> {
     serde_json::to_string(&parse_herdr_seats(&raw)).map_err(|e| e.to_string())
 }
 
+const HANDOFF_EXIT_TIMEOUT: Duration = Duration::from_secs(5);
+
+fn trantor_handoff_args() -> [&'static str; 2] {
+    ["handoff", "--write-only"]
+}
+
+fn trantor_reopen_args() -> [&'static str; 1] {
+    ["open"]
+}
+
+fn write_only_flag_rejected(stderr: &str) -> bool {
+    stderr.contains("--write-only")
+}
+
+fn foreground_pid_from_process_info(raw: &str) -> Option<u32> {
+    let v: serde_json::Value = serde_json::from_str(raw).ok()?;
+    let info = v.get("result")?.get("process_info")?;
+    if let Some(pid) = info
+        .get("foreground_process_group_id")
+        .and_then(|p| p.as_u64())
+        .and_then(|p| u32::try_from(p).ok())
+        .filter(|p| *p > 0)
+    {
+        return Some(pid);
+    }
+    let procs = info
+        .get("foreground_processes")
+        .and_then(|p| p.as_array())
+        .cloned()
+        .unwrap_or_default();
+    for p in &procs {
+        let hay = [
+            p.get("name").and_then(|s| s.as_str()).unwrap_or(""),
+            p.get("argv0").and_then(|s| s.as_str()).unwrap_or(""),
+            p.get("cmdline").and_then(|s| s.as_str()).unwrap_or(""),
+        ]
+        .join(" ")
+        .to_lowercase();
+        if hay.contains("claude") {
+            if let Some(pid) = p
+                .get("pid")
+                .and_then(|p| p.as_u64())
+                .and_then(|p| u32::try_from(p).ok())
+            {
+                return Some(pid);
+            }
+        }
+    }
+    procs
+        .last()
+        .and_then(|p| p.get("pid"))
+        .and_then(|p| p.as_u64())
+        .and_then(|p| u32::try_from(p).ok())
+}
+
+async fn run_command_output(
+    mut cmd: tokio::process::Command,
+    label: &str,
+) -> Result<(String, String), String> {
+    let out = cmd
+        .output()
+        .await
+        .map_err(|e| format!("{label} could not start: {e}"))?;
+    let stdout = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    let stderr = String::from_utf8_lossy(&out.stderr).trim().to_string();
+    if out.status.success() {
+        Ok((stdout, stderr))
+    } else {
+        let detail = if stderr.is_empty() { stdout } else { stderr };
+        Err(if detail.is_empty() {
+            format!("{label} failed")
+        } else {
+            format!("{label} failed: {detail}")
+        })
+    }
+}
+
+fn signal_process(pid: u32, signal: &str) -> Result<(), String> {
+    let status = std::process::Command::new("/bin/kill")
+        .arg(format!("-{signal}"))
+        .arg(pid.to_string())
+        .status()
+        .map_err(|e| format!("kill {signal} {pid}: {e}"))?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(format!("kill {signal} {pid} failed"))
+    }
+}
+
+fn process_alive(pid: u32) -> bool {
+    std::process::Command::new("/bin/kill")
+        .arg("-0")
+        .arg(pid.to_string())
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
+}
+
+async fn end_process_gracefully(pid: u32) -> Result<(), String> {
+    signal_process(pid, "TERM")?;
+    let deadline = Instant::now() + HANDOFF_EXIT_TIMEOUT;
+    while Instant::now() < deadline {
+        if !process_alive(pid) {
+            return Ok(());
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    signal_process(pid, "KILL")?;
+    Ok(())
+}
+
+#[tauri::command]
+async fn handoff_now(project: String) -> Result<String, String> {
+    let project = project.trim().to_string();
+    if project.is_empty() {
+        return Err("project is required".into());
+    }
+    let dir = project_dir(&project).ok_or_else(|| format!("no local checkout for {project}"))?;
+
+    let mut handoff = tokio::process::Command::new("trantor");
+    handoff
+        .args(trantor_handoff_args())
+        .current_dir(&dir)
+        .env("PATH", terminal_path());
+    let (_, handoff_stderr) = run_command_output(handoff, "trantor handoff --write-only").await?;
+    if write_only_flag_rejected(&handoff_stderr) {
+        return Err(format!(
+            "trantor handoff --write-only rejected by CLI: {handoff_stderr}"
+        ));
+    }
+
+    let rows =
+        std::fs::read_to_string(desktop_bus_dir().join("crew-windows.txt")).unwrap_or_default();
+    let pane = orch_pane_from_rows(&rows, &project)
+        .ok_or_else(|| format!("no orchestrator pane recorded for {project}"))?;
+
+    let mut info = tokio::process::Command::new("herdr");
+    info.args(["pane", "process-info", "--pane", &pane])
+        .env("PATH", terminal_path());
+    let (process_info, _) = run_command_output(info, "herdr pane process-info").await?;
+    let pid = foreground_pid_from_process_info(&process_info)
+        .ok_or_else(|| format!("no foreground process for orchestrator pane {pane}"))?;
+    end_process_gracefully(pid).await?;
+
+    let mut reopen = tokio::process::Command::new("trantor");
+    reopen
+        .args(trantor_reopen_args())
+        .current_dir(&dir)
+        .env("PATH", terminal_path());
+    run_command_output(reopen, "trantor open").await?;
+
+    Ok("handoff written · session ended · pane reopened".into())
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 struct SeatDiffFile {
     path: String,
@@ -2541,6 +2698,7 @@ pub fn run() {
             pane_send,
             pane_keys,
             orchestrator_status,
+            handoff_now,
             write_file,
             autonomy_get,
             autonomy_set,
@@ -2656,6 +2814,70 @@ mod herdr_tests {
         ]
         .join("\n");
         assert_eq!(parse_herdr_seats(&rows), vec![]);
+    }
+
+    #[test]
+    fn handoff_command_args_are_write_only_and_same_pane() {
+        assert_eq!(trantor_handoff_args(), ["handoff", "--write-only"]);
+        assert_eq!(trantor_reopen_args(), ["open"]);
+    }
+
+    #[test]
+    fn orch_pane_resolves_the_last_project_orch_row() {
+        let rows = [
+            "trantor\torch\t__orch__\tw2:old",
+            "trantor\therdr\tcodex\tw2:seat",
+            "other\torch\t__orch__\tw9:other",
+            "trantor\torch\t__orch__\tw2:new",
+            "trantor\torch\t__orch__\t ",
+        ]
+        .join("\n");
+        assert_eq!(
+            orch_pane_from_rows(&rows, "trantor").as_deref(),
+            Some("w2:new")
+        );
+    }
+
+    #[test]
+    fn process_info_prefers_the_foreground_process_group_id() {
+        let raw = serde_json::json!({
+            "result": {
+                "process_info": {
+                    "foreground_process_group_id": 23311,
+                    "foreground_processes": [
+                        { "name": "node", "pid": 10 },
+                        { "name": "claude.exe", "pid": 20 }
+                    ]
+                }
+            }
+        })
+        .to_string();
+        assert_eq!(foreground_pid_from_process_info(&raw), Some(23311));
+    }
+
+    #[test]
+    fn process_info_can_fall_back_to_the_claude_process() {
+        let raw = serde_json::json!({
+            "result": {
+                "process_info": {
+                    "foreground_processes": [
+                        { "name": "node", "pid": 10 },
+                        { "argv0": "claude", "pid": 20 },
+                        { "name": "helper", "pid": 30 }
+                    ]
+                }
+            }
+        })
+        .to_string();
+        assert_eq!(foreground_pid_from_process_info(&raw), Some(20));
+    }
+
+    #[test]
+    fn write_only_flag_mentions_are_hard_errors() {
+        assert!(write_only_flag_rejected(
+            "error: unknown option '--write-only'"
+        ));
+        assert!(!write_only_flag_rejected("handoff saved"));
     }
 
     #[test]
