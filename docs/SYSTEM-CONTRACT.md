@@ -87,6 +87,8 @@ ownership gaps. Whack-a-mole was the symptom; missing ownership was the disease.
 | The record: board, cards, costs, messages, gates | hub + hooks (unchanged — the moat) | hooks, CLI, seats via bus | app (reader), duty, overseer | app writing board state directly |
 | Handoff lifecycle | the state machine in §5 | its named steps only | everything | any step silently skipped |
 | Provider balances | `lib/balances.mjs` → LOCAL hub snapshot (dual-push stays) | CLI + balance-check hook | header strip | app calling providers directly |
+| Crew-seat health (headless runners) | bus ledger + heartbeats (`seat-why` evidence) | crew-runner, hooks | board, app seat states | re-keying runner truth to herdr agent detection (§8) |
+| Fleet roster + routing | derived roster (`discoverSeats`) + scrooge capabilities | profile, opencode.json, `scrooge-capabilities` | advisor, `trantor up`, `trantor models` | hardcoded rosters; hard-tier routed to flash-class models |
 
 Two standing rules the table implies:
 - **If you are typing keystrokes at an agent, you are wrong.** The only keystroke paths are the
@@ -176,7 +178,69 @@ because unit suites passing while seams fail is this project's most-repeated les
    says so (running sessions pin old hooks until restart — the skew must be visible, not
    discovered).
 
-## 8. Keeping it on track
+## 8. The fleet layer — what the salvage must NOT regress (added 2026-08-30)
+
+The multi-LLM fleet is the moat's muscle and predates the one-surface pivot by months. The
+salvage touches the ORCHESTRATOR's seams; the fleet layer below is working design, frozen
+except where a phase names it. Verified live 2026-08-30 (`trantor provider list`):
+
+**The roster and why each seat exists:**
+- **claude** — the orchestrator harness itself (Sasha's Max plan) + the duty seat
+  (`claude:trantor-duty`, pinned sonnet). Never a crew seat; it conducts, integrates, verifies.
+- **codex** (OpenAI subscription) · **kimi** (Moonshot coding plan) — native-CLI seats,
+  capped-subscription tier: marginal-cost-≈0 workers.
+- **deepseek** (API) — the workhorse API seat; v4-pro for real work, flash only where the
+  router's floor allows (#5482: hard NEVER routes flash/turbo/lite-class).
+- **glm** (`glm:zai-coding-plan`, via opencode) — coding-plan seat, own bus label.
+- **openrouter** (356 models, one key) — the BYOM on-ramp; sits LAST in every preference tier.
+- **inception** (brought, diffusion LLM) — currently DOWN (#5481 max_tokens/null-output trap).
+- **gemini** — RETIRED 2026-06-18 (Google killed the CLI). Not special-cased anymore: simply
+  absent from the profile. `agy`/Antigravity remains an unbuilt optional seat.
+
+**The architecture underneath (the WHY, in one breath):** heterogeneous models are the point —
+lateral cross-review only works when reviewers fail differently. opencode is the universal
+adapter (any provider-qualified model id = a seat with zero code change); the roster is DERIVED
+(`discoverSeats(profile, opencode.json)` — T3, 0.17.47), never hardcoded; the advisor + scrooge
+capability scores route by difficulty with cost-weights (hard 0.1 → strong-value picks); every
+seat gets its own signed bus identity via per-spawn `RELAY_AGENT`/`RELAY_PROJECT`; seats work in
+worktree-per-seat isolation (branch `seat/<agent>`) under difficulty-tagged contracts with a
+testing gate and the bounce protocol for false-dones.
+
+**The line the salvage must respect:** herdr's lifecycle authority (ownership table row 2)
+applies to the INTERACTIVE orchestrator pane. Crew seats are HEADLESS RUNNER LOOPS
+(`crew-runner.mjs` invoking `claude -p` / `opencode run` per contract) — for them, the bus
+ledger + heartbeats + `seat-why` remain the health authority. Do not re-key seat truth to
+herdr's agent detection; a runner loop is not an interactive agent, and herdr's view of those
+panes is transient by nature. (P0a's integration install improves the interactive cases; it
+does not replace the runner ledger.)
+
+## 9. Claude Code native-overlap register (living — re-audit each CC release)
+
+Trantor is 8 months old; CC has been absorbing capabilities we built externally. Rule: when CC
+ships a native version of something Trantor does, we DELEGATE to native for Claude seats and
+keep our layer where it covers the non-Claude fleet or the durable record — that is the moat
+line, deliberately.
+
+Known overlaps as of CC 2.1.228 (audited; see trantor-cc-2.1.215-compat memory):
+- **Cross-session SendMessage/ListAgents (2.1.224)** — overlaps the wake-idle ladder for
+  Claude↔Claude only; the duty seat already rides it (T3). Non-Claude seats, board state, and
+  the overseer remain ours. Caveat: a bypassPermissions receiver holds messages unless the
+  sender also bypasses (`crossSessionInbound: accept`).
+- **Native SubagentStart/Stop with agent_id (2.1.215+)** — adopted 0.17.49; our cards enrich
+  from native events. Open: subagent spawn cap REMOVED in .224 (board-flood guard wanted);
+  `subagent-cost` may price the requested not the actual model.
+- **Native handoff/compaction machinery** — CC compacts on its own (the silent-compaction
+  incident); PreCompact hook is our only window. §5's machine must treat CC-initiated
+  compaction as a first-class trigger, not only our own baton.
+- **CC memory, plugins cache, sandbox, workflow scripts** — periodic compat audits are the
+  discipline (two audits, two Trantor bugs found by reading CC changelogs against our source;
+  the second was a permission bypass in our own hook).
+- **Unhandled new events** — `DirectoryAdded`, `TaskCreated`/`TaskCompleted`/`TeammateIdle`:
+  tracked, unadopted.
+The register gets a line whenever a CC release lands something we half-own. Salvage phases must
+check this register before building — never rebuild what CC now provides for Claude seats.
+
+## 10. Keeping it on track
 
 - Every PR/commit touching these areas names its ownership row ("row: transport") — a one-line
   discipline that forces the question "who owns this?" before code exists.

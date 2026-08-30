@@ -12,7 +12,11 @@ Legend: `[ ]` not started · `[~]` in progress (name the session/date) · `[x]` 
 
 ## Phase 0 — research spikes
 
-- [ ] **P0a** `server.live_handoff` semantics → decision in RESEARCH-herdr-handoff.md
+- [x] **P0a** (2026-08-30, card #5575) `live_handoff` = SERVER succession (updates/remote-attach),
+      not agent succession → ENDED→OPENED stays on signal + `trantor open`. Free findings:
+      native agent session restore ≈ #5401 once panes report sessions (Phase 2.1), and ZERO
+      herdr integrations installed machine-wide (heuristic-only agent states all along —
+      install recommendation pending Sasha's OK). Evidence: RESEARCH-herdr-handoff.md.
 - [x] **P0b** Live transport drill (2026-08-30, card #5576): **GO for Phase 1.** All 7 checks
       pass — whole multiline message as ONE user turn (\n preserved), --wait settles on real
       lifecycle, blocked detected on a question UI, prompt-into-blocked refused with ZERO bytes
@@ -20,8 +24,14 @@ Legend: `[ ]` not started · `[~]` in progress (name the session/date) · `[x]` 
       resumes the same session id with continuity. Evidence: RESEARCH-herdr-prompt.md.
       ⚠ New constraint discovered: split panes inherit CLAUDE_CODE_CHILD_SESSION → transcript
       saving OFF → invisible sessions. Every agent-spawn path must unset it (now a §7 assertion).
-- [ ] **P0c** Orca code-read (conversation binding · diff annotations→prompt · usage footer)
-      → RESEARCH-orca.md
+- [x] **P0c** (2026-08-30, card #5577) Orca read, path-cited → RESEARCH-orca.md. Binding =
+      env identity + managed hooks POSTing session_id/transcript_path (endpoint+spool durability)
+      + transcript tailing; adopt hook-reported transcript_path in Phase 2. #5570 unblocked:
+      Codex usage IS readable (~/.codex/auth.json → chatgpt.com/backend-api/wham/usage);
+      Claude OAuth usage confirmed + Fable-scoped limits + statusline sidechannel vs 429s.
+
+**PHASE 0 COMPLETE (2026-08-30).** Verdict: Phase 1 GO on agent.prompt; handoff stays on
+signal+open; integration-install decision with Sasha; Orca patterns folded into Phases 2/5570.
 
 ## Phase 1 — transport (gate: P0b green)
 
