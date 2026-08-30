@@ -68,6 +68,34 @@ pub fn prompt(target: &str, text: &str) -> Result<PromptOutcome, String> {
     map_prompt_response(&request(&req)?)
 }
 
+/// The session id the agent occupying `target` reported through its official herdr
+/// integration (`agent_session`, source e.g. "herdr:claude"). This is the RUNTIME identity
+/// authority (SYSTEM-CONTRACT §4): the pane itself says which conversation lives in it,
+/// reported by Claude Code's own SessionStart hook — so it is correct the moment a
+/// successor session boots, before any map file catches up. None when no agent occupies
+/// the target, no report was made (integration absent), or herdr is unreachable — callers
+/// fall back to the durable map.
+pub fn reported_session(target: &str) -> Option<String> {
+    let req = serde_json::json!({
+        "id": "trantor:agent.get",
+        "method": "agent.get",
+        "params": { "target": target },
+    });
+    let raw = request(&req).ok()?;
+    session_from_agent_get(&raw)
+}
+
+/// Pure extraction, unit-tested against a captured real `agent.get` response.
+fn session_from_agent_get(raw: &str) -> Option<String> {
+    let v: serde_json::Value = serde_json::from_str(raw.trim()).ok()?;
+    let s = v.get("result")?.get("agent")?.get("agent_session")?;
+    if s.get("kind").and_then(|k| k.as_str()) != Some("id") {
+        return None;
+    }
+    let sid = s.get("value")?.as_str()?.trim();
+    if sid.is_empty() { None } else { Some(sid.to_string()) }
+}
+
 /// Pure response mapping, unit-tested against captured real responses (P0b fixtures).
 /// Unknown error codes surface verbatim rather than being guessed into an outcome.
 fn map_prompt_response(raw: &str) -> Result<PromptOutcome, String> {
@@ -114,6 +142,26 @@ mod tests {
         assert!(matches!(map_prompt_response(NOT_FOUND), Ok(PromptOutcome::NoAgent)));
         assert!(matches!(map_prompt_response(NOT_READY), Ok(PromptOutcome::NotReady)));
         assert!(matches!(map_prompt_response(STALLED), Ok(PromptOutcome::Stalled)));
+    }
+
+    // Captured live 2026-08-30: the p2drill measurement (docs/CHECKLIST-reassembly.md Phase 2)
+    // — a fresh claude in a herdr pane, integration v8 installed, self-reported its session.
+    const AGENT_GET_WITH_SESSION: &str = r#"{"id":"trantor:agent.get","result":{"type":"agent_info","agent":{"agent":"claude","agent_status":"idle","name":"p2drill","pane_id":"w2:p18","agent_session":{"agent":"claude","kind":"id","source":"herdr:claude","value":"152505be-9b47-45e7-9c5c-211adda4695e"}}}}"#;
+    const AGENT_GET_NO_SESSION: &str = r#"{"id":"trantor:agent.get","result":{"type":"agent_info","agent":{"agent":"claude","agent_status":"idle","name":"drill","pane_id":"w2:p16"}}}"#;
+
+    #[test]
+    fn reported_session_reads_the_integration_report_and_nothing_else() {
+        assert_eq!(
+            session_from_agent_get(AGENT_GET_WITH_SESSION).as_deref(),
+            Some("152505be-9b47-45e7-9c5c-211adda4695e")
+        );
+        // No report (integration absent / pre-report) → None, never a guess.
+        assert_eq!(session_from_agent_get(AGENT_GET_NO_SESSION), None);
+        // No agent at the target → error response → None.
+        assert_eq!(session_from_agent_get(NOT_FOUND), None);
+        // A non-id reference kind (e.g. a path) is not a session id.
+        let path_kind = AGENT_GET_WITH_SESSION.replace("\"kind\":\"id\"", "\"kind\":\"path\"");
+        assert_eq!(session_from_agent_get(&path_kind), None);
     }
 
     #[test]

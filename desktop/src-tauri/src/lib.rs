@@ -508,9 +508,24 @@ fn project_files(
 ///
 /// `after` is a line offset, not a timestamp: the transcript is append-only, so the count of lines
 /// already seen is the cheapest correct cursor and survives a restart.
-/// The session id `trantor open` chose for this project. Recorded rather than discovered, which is
-/// the only reason the transcript is addressable at all.
+/// The session id of this project's orchestrator conversation.
+///
+/// Resolution order is the SYSTEM-CONTRACT §4 identity row, not a preference:
+/// 1. The pane's own report — Claude Code's herdr integration reports the session id at
+///    SessionStart (`agent_session`, source "herdr:claude"), so it is correct the moment a
+///    handoff successor boots, before the map file catches up.
+/// 2. `orch-sessions.txt`, the durable map — the cold-start fallback, and the only answer for
+///    sessions that are not in a herdr pane (a Terminal-window conversation being read here).
+/// Never "the newest transcript": guessing between conversations is the adopt PICKER's job,
+/// in front of the operator.
 fn orch_session_id(project: &str) -> Option<String> {
+    let rows =
+        std::fs::read_to_string(desktop_bus_dir().join("crew-windows.txt")).unwrap_or_default();
+    if let Some(pane) = orch_pane_from_rows(&rows, project) {
+        if let Some(sid) = herdr::reported_session(&pane) {
+            return Some(sid);
+        }
+    }
     let p = desktop_bus_dir().join("orch-sessions.txt");
     let raw = std::fs::read_to_string(p).ok()?;
     for line in raw.lines() {

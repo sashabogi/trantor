@@ -425,8 +425,8 @@ try {
   // thread, so the map `trantor open` resumes and the app's chat reads moves with it. The pane
   // also records itself on every fresh start — that keeps the map honest even if a future
   // claude forks the session id on resume.
-  if (claimed && orchOrigin && stdinObj.session_id) writeOrchSession(project, String(stdinObj.session_id));
-  if (isOrchPane && !isCompact && stdinObj.session_id) writeOrchSession(project, String(stdinObj.session_id));
+  if (claimed && orchOrigin && stdinObj.session_id) writeOrchSession(project, String(stdinObj.session_id), "sessionstart-claim");
+  if (isOrchPane && !isCompact && stdinObj.session_id) writeOrchSession(project, String(stdinObj.session_id), "orch-pane-start");
   if (handoff && held) {
     process.stderr.write(`[trantor] pending handoff ${handoff.id} HELD for the orch pane (${Math.round(ageMs / 60000)}m old)\n`);
     const mins = Math.max(1, Math.round((holdMs - ageMs) / 60000));

@@ -15,7 +15,7 @@ import { readdirSync, statSync, existsSync, readFileSync, writeFileSync, mkdirSy
 import { execFileSync } from "node:child_process";
 import { join, dirname } from "node:path";
 import { homedir } from "node:os";
-import { resolveProject } from "../lib/project.mjs";
+import { resolveProject, writeOrchSession } from "../lib/project.mjs";
 
 const D = "\x1b[2m", B = "\x1b[1m", Y = "\x1b[33m", G = "\x1b[32m", R = "\x1b[0m";
 const args = process.argv.slice(2);
@@ -74,14 +74,10 @@ if (candidates.length > 1) {
   console.log(`${D}the newest is assumed to be yours; pick another with --session <id>${R}`);
 }
 
-// Record it where `trantor open` looks. Same file, same format the orchestrator pane already uses,
-// so adopting and opening fresh converge on one mechanism rather than two.
-const busDir = process.env.AGENT_BUS_DIR || join(homedir(), ".agent-bus");
-const store = join(busDir, "orch-sessions.txt");
-mkdirSync(dirname(store), { recursive: true });
-const rows = existsSync(store) ? readFileSync(store, "utf8").split("\n").filter(Boolean) : [];
-const kept = rows.filter(r => r.split("\t")[0] !== project);
-writeFileSync(store, [...kept, `${project}\t${chosen}`].join("\n") + "\n");
+// Record it where `trantor open` looks. One choke point for the map (writeOrchSession) so every
+// rewrite is attributable in orch-sessions.log — adopt is one of the map's three writers
+// (SYSTEM-CONTRACT §4), and until 2026-08-30 it wrote the file by hand, invisibly.
+writeOrchSession(project, chosen, "adopt");
 console.log(`\n${G}recorded${R} ${chosen} as ${project}'s orchestrator session`);
 
 // Two live claudes on one transcript is the one thing that must not happen: they would interleave
