@@ -6,7 +6,8 @@
 // the bar dimmed — never an error banner — and the trailing refresh control re-reads the
 // snapshot on demand. Data rides the MACHINE-LOCAL hub by design (balances/profile are files
 // on this machine; the snapshot the CLI pushes there is cheap to read).
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import { RefreshCw } from "lucide-react";
 import { HubClient, type BalancesReport } from "../../shared/api/client";
 import { chipFrom, isStale, sortRows, toneClass, type BalanceRow } from "./balanceChips";
@@ -14,6 +15,12 @@ import { BRAND_PATHS } from "./brands";
 
 const LOCAL_HUB = "http://127.0.0.1:4477";
 const REFRESH_MS = 5 * 60 * 1000;
+// Semi-live contract (operator, 2026-08-30: "unless it's live or semi-live, it's useless"):
+// a snapshot older than this triggers a REAL provider re-fetch through the CLI on the next
+// tick — so the bar is never more than ~10 minutes behind reality, without per-minute
+// provider polling (the Claude OAuth usage endpoint 429s under real polling; Orca's
+// statusline sidechannel is the true-live v2, noted in RESEARCH-orca.md).
+const REFETCH_AFTER_MS = 10 * 60 * 1000;
 
 function BrandMark({ icon, mono, hue, fg }: { icon: string | null; mono: string; hue: string; fg: string }) {
   const d = icon ? BRAND_PATHS[icon] : undefined;
@@ -44,22 +51,41 @@ export function BalanceStrip({ client }: { client: HubClient }) {
   const isLocal = client.baseUrl.includes("127.0.0.1") || client.baseUrl.includes("localhost");
   const local = isLocal ? client : new HubClient(LOCAL_HUB);
   const pull = useCallback(() => {
-    setSpinning(true);
     return local.balances()
-      .then(r => { setReport(r); setFailed(false); })
-      .catch(() => setFailed(true))
-      .finally(() => setSpinning(false));
+      .then(r => { setReport(r); setFailed(false); return r; })
+      .catch(() => { setFailed(true); return null; });
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [client]);
 
+  // A REAL refresh: ask the CLI (the owner) to re-query every provider and push a fresh
+  // snapshot, then read it back. Guarded so overlapping triggers (tick + focus + click)
+  // never stack CLI runs.
+  const refetching = useRef(false);
+  const refetch = useCallback(async () => {
+    if (refetching.current) return;
+    refetching.current = true;
+    setSpinning(true);
+    try { await invoke("balances_refresh"); } catch { /* CLI missing/failed — the read below still shows the latest truth */ }
+    await pull();
+    setSpinning(false);
+    refetching.current = false;
+  }, [pull]);
+
   useEffect(() => {
     let alive = true;
-    const tick = () => { if (alive) void pull(); };
-    tick();
-    const t = setInterval(tick, REFRESH_MS);
-    window.addEventListener("focus", tick);
-    return () => { alive = false; clearInterval(t); window.removeEventListener("focus", tick); };
-  }, [pull]);
+    const tick = async () => {
+      if (!alive) return;
+      const r = await pull();
+      // Semi-live: a stale snapshot triggers the real re-fetch, so the bar follows reality
+      // even when no session start has pushed for hours.
+      if (alive && r && r.ts && Date.now() - r.ts > REFETCH_AFTER_MS) void refetch();
+    };
+    void tick();
+    const t = setInterval(() => void tick(), REFRESH_MS);
+    const onFocus = () => void tick();
+    window.addEventListener("focus", onFocus);
+    return () => { alive = false; clearInterval(t); window.removeEventListener("focus", onFocus); };
+  }, [pull, refetch]);
 
   // SAFETY: /balances entries are the adapter payloads spread with provider fields
   // (usage/limit/resetTime/via/unlimited/windows) that the conservative BalanceEntry type omits;
@@ -91,7 +117,7 @@ export function BalanceStrip({ client }: { client: HubClient }) {
           </span>
         ))}
       </div>
-      <button type="button" onClick={() => void pull()} title="Refresh balances"
+      <button type="button" onClick={() => void refetch()} title="Re-query every provider now"
         className="shrink-0 text-[var(--color-tr-muted)] hover:text-[var(--color-tr-text)]">
         <RefreshCw size={11} strokeWidth={1.75} className={spinning ? "animate-spin" : undefined} />
       </button>

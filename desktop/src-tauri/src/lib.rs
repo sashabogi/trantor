@@ -1376,6 +1376,25 @@ fn spawn_chat_watcher(
     });
 }
 
+/// Re-query the providers NOW, through their owner (SYSTEM-CONTRACT §4: balances belong to
+/// lib/balances.mjs → the local hub snapshot; the app never calls a provider itself). The CLI
+/// run fetches every configured provider and dual-pushes the snapshot; the strip re-reads it
+/// on completion. Without this, the footer only moved when a session started — the operator
+/// sat at a real 44% while the bar said 38% ("unless it's live or semi-live, it's useless").
+#[tauri::command]
+fn balances_refresh() -> Result<(), String> {
+    let out = std::process::Command::new("trantor")
+        .args(["balances", "--json"])
+        .env("PATH", terminal_path())
+        .output()
+        .map_err(|e| format!("trantor balances: {e}"))?;
+    if out.status.success() {
+        Ok(())
+    } else {
+        Err(String::from_utf8_lossy(&out.stderr).trim().to_string())
+    }
+}
+
 #[derive(Debug, Clone, Serialize)]
 struct OrchStatusPayload {
     project: String,
@@ -3178,6 +3197,7 @@ pub fn run() {
             read_file_at_head,
             seat_state,
             orchestrator_chat,
+            balances_refresh,
             chat_watch,
             chat_unwatch,
             pane_send,
