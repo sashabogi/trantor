@@ -107,6 +107,23 @@ function splitLane(cards: Card[], query: string, assignee: string, nesting: Nest
   return { cards: work, subagents, openSubagents: searching && subagents.length > 0 };
 }
 
+/** #5609 — what a card's face says about life, decided ONCE. Both active lanes wear liveness:
+ *  doing AND testing breathe while their assignee is mid-turn (verification is work too), a
+ *  doing card with a dead assignee says so, and a testing card whose assignee went quiet is
+ *  waiting on the OPERATOR — the card says "awaiting verdict" instead of sitting there looking
+ *  dead (the operator asked "why do these testing cards say nothing" twice on 2026-08-30). */
+export function cardLiveness(status: string, presence?: PresenceState): {
+  inMotion: boolean; alarmed: boolean; stalled: boolean; awaitingVerdict: boolean;
+} {
+  const activeLane = status === "doing" || status === "testing";
+  return {
+    inMotion: activeLane && presence === "busy",
+    alarmed: status === "failed" || status === "blocked",
+    stalled: status === "doing" && (!presence || presence === "offline"),
+    awaitingVerdict: status === "testing" && presence !== "busy",
+  };
+}
+
 function CardTile({ card, onOpen, onAdvance, presence, subagents, subagentsOpen }: {
   card: Card; onOpen: (c: Card) => void; onAdvance?: (c: Card) => void; presence?: PresenceState;
   /** sub-agents this session spawned — rendered INSIDE the tile, so the tree reads as one thing */
@@ -117,9 +134,7 @@ function CardTile({ card, onOpen, onAdvance, presence, subagents, subagentsOpen 
   // dead assignee is exactly the stall the operator needs to spot. Live work breathes (ring +
   // pulsing dot); failed/blocked pulse red like the old web UI did; a doing-card whose assignee
   // is offline says so instead of pretending.
-  const inMotion = card.status === "doing" && presence === "busy";
-  const alarmed = card.status === "failed" || card.status === "blocked";
-  const stalled = card.status === "doing" && (!presence || presence === "offline");
+  const { inMotion, alarmed, stalled, awaitingVerdict } = cardLiveness(card.status, presence);
   // TODO ROT (CARDLOG contract): a todo card untouched >7d wears its age — quiet between 7 and
   // 14 days, warn-colored from 14. Untouched = now - (updated || ts), the same clock the hub's
   // own todo reaper reads, so the badge and the "stale" lane can never disagree about age.
@@ -134,8 +149,14 @@ function CardTile({ card, onOpen, onAdvance, presence, subagents, subagentsOpen 
       className={`tr-card tr-card-hover min-w-0 shrink-0 cursor-pointer overflow-hidden p-3.5 text-[13px] ${inMotion ? "tr-card-live" : ""} ${alarmed ? "tr-card-alarm" : ""}`}>
       <div className="leading-snug break-words [overflow-wrap:anywhere]">{card.summary || cleanTitle(card.title)}</div>
       <div className="mt-2 flex flex-wrap items-center gap-1.5 text-[11px] text-[var(--color-tr-muted)]">
-        {inMotion && <span className="tr-dot tr-dot-pulse shrink-0" style={{ background: "var(--color-tr-doing)" }} title="assignee is mid-turn right now" />}
+        {inMotion && <span className="tr-dot tr-dot-pulse shrink-0" style={{ background: card.status === "testing" ? "var(--color-tr-warn)" : "var(--color-tr-doing)" }} title="assignee is mid-turn right now" />}
         {stalled && <span className="shrink-0 rounded bg-black/30 px-1.5 py-0.5 text-[var(--color-tr-warn)]" title="doing, but the assignee has no heartbeat">assignee offline</span>}
+        {awaitingVerdict && (
+          <span className="shrink-0 rounded bg-black/30 px-1.5 py-0.5 text-[var(--color-tr-warn)]"
+                title="verification finished — this card moves when the operator accepts or bounces it">
+            awaiting verdict
+          </span>
+        )}
         {(card.workedBy || card.assignee) && <AgentChip session={card.workedBy || card.assignee!} />}
         {card.difficulty && <span className="rounded bg-black/30 px-1.5 py-0.5">{card.difficulty[0].toUpperCase()}</span>}
         {card.model && <span className="tr-mono max-w-[150px] truncate rounded bg-black/30 px-1.5 py-0.5">{card.model}</span>}
