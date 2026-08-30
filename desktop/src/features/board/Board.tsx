@@ -295,11 +295,17 @@ export function Board({ client, project, lens, onLens, focusCard, onFocusConsume
             <span className="text-[11px]">{liveHere.length} live</span>
           </span>}
         </span>}>
+        {/* The assignee filter SAYS what it filters (operator, 2026-08-30: "what was your
+            intention with that?" — a bare 'everyone' dropdown stranded without its old search
+            sibling reads as mystery chrome; a control that needs explaining has failed). */}
         {assignees.length > 0 && (
-          <select value={assignee} onChange={e => setAssignee(e.target.value)} className="tr-input">
-            <option value="">everyone</option>
-            {assignees.map(a => <option key={a} value={a}>@{a}</option>)}
-          </select>
+          <label className="flex items-center gap-1.5 text-[11px] text-[var(--color-tr-muted)]" title="show only one assignee's cards">
+            <span className="shrink-0">cards by</span>
+            <select value={assignee} onChange={e => setAssignee(e.target.value)} className="tr-input">
+              <option value="">everyone</option>
+              {assignees.map(a => <option key={a} value={a}>@{a}</option>)}
+            </select>
+          </label>
         )}
       </ProjectHeader>
       <div className="flex flex-1 gap-4 overflow-x-auto px-8 pb-6">

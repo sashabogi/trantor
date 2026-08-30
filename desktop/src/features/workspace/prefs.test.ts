@@ -10,9 +10,9 @@ function memStore(seed: Record<string, string> = {}): Store {
 }
 
 describe("record rail prefs", () => {
-  it("defaults OPEN when nothing was ever persisted — the rail stays discoverable", () => {
-    expect(loadRailOpen(memStore())).toBe(true);
-    expect(loadRailOpen(null)).toBe(true);
+  it("defaults CLOSED when nothing was ever persisted — a log's resting state is folded", () => {
+    expect(loadRailOpen(memStore())).toBe(false);
+    expect(loadRailOpen(null)).toBe(false);
   });
 
   it("round-trips the fold", () => {
@@ -23,13 +23,13 @@ describe("record rail prefs", () => {
     expect(loadRailOpen(s)).toBe(true);
   });
 
-  it("treats foreign bytes as open — decoded, never trusted", () => {
-    expect(loadRailOpen(memStore({ "trantor.workspace.rail": "banana" }))).toBe(true);
+  it("treats foreign bytes as closed — decoded, never trusted", () => {
+    expect(loadRailOpen(memStore({ "trantor.workspace.rail": "banana" }))).toBe(false);
   });
 
   it("a refusing store cannot crash either direction", () => {
     const refusing: Store = { getItem: () => { throw new Error("no"); }, setItem: () => { throw new Error("no"); } };
-    expect(loadRailOpen(refusing)).toBe(true);
+    expect(loadRailOpen(refusing)).toBe(false);
     expect(() => saveRailOpen(false, refusing)).not.toThrow();
   });
 });

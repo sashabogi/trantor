@@ -6,10 +6,12 @@ import { domStore, type Store } from "../chat/prefs";
 
 const RAIL_KEY = "trantor.workspace.rail";
 
-/** Open unless the operator folded it — absence means "never touched", and the default stays
- *  open so the rail remains discoverable; folding is the deliberate act that persists. */
+/** CLOSED unless the operator opened it. The first cut defaulted open "for discoverability"
+ *  and the operator's screenshot answered that: at laptop width the rail dwarfed the terminal
+ *  it sits beside ("a log being bigger than the terminal itself is just dumb", 2026-08-30).
+ *  A log's resting state is folded; the labeled edge control IS the discoverability. */
 export function loadRailOpen(store: Store | null = domStore()): boolean {
-  try { return store?.getItem(RAIL_KEY) !== "0"; } catch { return true; }
+  try { return store?.getItem(RAIL_KEY) === "1"; } catch { return false; }
 }
 
 export function saveRailOpen(open: boolean, store: Store | null = domStore()): void {
