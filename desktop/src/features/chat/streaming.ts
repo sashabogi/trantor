@@ -169,15 +169,26 @@ export function receiptFor(p: PendingSend, userTexts: string[], now: number): "s
   const sent = (p.text ?? "").trim();
   if (sent) {
     if (userTexts.some(t => t.includes(sent))) return "delivered";
-    // LINE-WISE fallback (the third receipt gap, 2026-08-30): an image path followed by
-    // Shift+Enter prose gets SPLIT by the CLI — the path becomes an image block, the prose its
-    // own text block — so the full draft never exists as one containable string again. Every
-    // non-empty line arriving somewhere IS the message arriving; the path line still matches
-    // through its "[Image: source: <path>]" record.
+    // LINE-WISE fallback (gaps three AND four, 2026-08-30): the CLI transforms what the
+    // composer sent — an image path may survive as an "[Image: source: <path>]" text record,
+    // or vanish ENTIRELY into a pathless "[Image #7]" placeholder + binary block (both shapes
+    // observed in ONE two-image turn). So: every prose line must arrive verbatim; a PATH line
+    // arrives either verbatim or by consuming one pathless placeholder from the turn's budget.
+    // The budget keeps this honest: two images sent, one placeholder recorded → the second
+    // path finds no marker and the send still goes LOST, loudly.
     const lines = sent.split("\n").map(l => l.trim()).filter(Boolean);
-    if (lines.length > 1) {
+    if (lines.length >= 1) {
       const all = userTexts.join("\n");
-      if (lines.every(l => all.includes(l))) return "delivered";
+      let placeholders = (all.match(/\[Image #\d+\]/g) ?? []).length;
+      const arrived = lines.every(l => {
+        if (all.includes(l)) return true;
+        if ((l.startsWith("/") || l.startsWith("~/")) && placeholders > 0) {
+          placeholders--;
+          return true;
+        }
+        return false;
+      });
+      if (arrived) return "delivered";
     }
   }
   return now - p.at > LOST_AFTER_MS ? "lost" : "sending";

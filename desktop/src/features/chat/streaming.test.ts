@@ -187,6 +187,23 @@ describe("receiptFor", () => {
     const draft = "/Users/x/shot.jpg \nthe words that were eaten";
     expect(receiptFor({ text: draft, at }, ["[Image: source: /Users/x/shot.jpg]"], at + LOST_AFTER_MS + 1)).toBe("lost");
   });
+
+  it("a PATHLESS placeholder stands in for a dropped path — gap four (2026-08-30)", () => {
+    // One two-image turn produced BOTH shapes: '[Image #13]' (path vanished into a binary
+    // block) and '[Image: source: <path>]'. Each path line may consume one placeholder.
+    expect(receiptFor({ text: "/Users/x/a b/shot one.jpg ", at }, ["[Image #13]look at this"], at + 100)).toBe("delivered");
+    const two = "/Users/x/first.jpg \n/Users/x/second one.jpg ";
+    expect(receiptFor({ text: two, at }, ["[Image #1][Image: source: /Users/x/second one.jpg]"], at + 100)).toBe("delivered");
+  });
+
+  it("the placeholder BUDGET keeps it honest — two paths, one marker, no source record → lost", () => {
+    const two = "/Users/x/first.jpg \n/Users/x/second.jpg ";
+    expect(receiptFor({ text: two, at }, ["[Image #1] some prose"], at + LOST_AFTER_MS + 1)).toBe("lost");
+  });
+
+  it("a prose line can never ride a placeholder — only paths may", () => {
+    expect(receiptFor({ text: "words that never arrived", at }, ["[Image #1]"], at + LOST_AFTER_MS + 1)).toBe("lost");
+  });
 });
 
 // #5508 — the gauge tells the truth about a filling window, and stays absent until it knows one.
