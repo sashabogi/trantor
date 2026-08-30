@@ -12,6 +12,8 @@ import { PaneBoundary } from "./PaneBoundary";
 import { newestTerminal, projectSessions, takeoverAction, type ProjectSessions } from "../chat/takeover";
 import { TakeoverStrip } from "../chat/TakeoverStrip";
 import { when } from "../../shared/time";
+import { PanelRightClose, PanelRightOpen } from "lucide-react";
+import { loadRailOpen, saveRailOpen } from "./prefs";
 
 // A seat = a crew peer of this project (agent:project). Host sessions (MacBook-*:project) are
 // the human's own windows — real peers, but not seats you'd open a terminal on, and per #5367's
@@ -101,6 +103,11 @@ export function Workspace({ client, project, lens, onLens }: {
 }) {
   const [peers, setPeers] = useState<Peer[]>([]);
   const [tasks, setTasks] = useState<Card[]>([]);
+  // The record rail folds (#5593, operator: "it reads as a log, not a live surface") —
+  // persisted, and collapsing always leaves a visible edge control to bring it back
+  // (#5521 doctrine: never a dismissal that needs prior knowledge to undo).
+  const [railOpen, setRailOpen] = useState(loadRailOpen);
+  const toggleRail = () => setRailOpen(o => { saveRailOpen(!o); return !o; });
   const [events, setEvents] = useState<HubEvent[]>([]);
   const [sel, setSel] = useState<string | null>(null);
   const [view, setView] = useState<PaneView>(() => (localStorage.getItem(VIEW_KEY) === "grid" ? "grid" : "focus"));
@@ -280,7 +287,18 @@ export function Workspace({ client, project, lens, onLens }: {
           )}
         </div>
 
-        {/* right: the record rail */}
+        {/* right: the record rail — collapsible (#5593): a log earns its space on demand,
+            not by default. Folded, it survives as a slim edge control that names itself. */}
+        {!railOpen && (
+          <button type="button" onClick={toggleRail} title="Show the record rail"
+            className="flex w-7 shrink-0 flex-col items-center gap-2 rounded-xl border border-tr-edge bg-[#101013] py-3 text-tr-muted hover:text-[var(--color-tr-text)]">
+            <PanelRightOpen size={14} strokeWidth={1.75} />
+            <span className="text-[10px] font-medium uppercase tracking-widest" style={{ writingMode: "vertical-rl" }}>
+              Record
+            </span>
+          </button>
+        )}
+        {railOpen && (
         <div className="flex w-[296px] shrink-0 flex-col gap-3 overflow-hidden">
           {seatCard ? (
             <div className="tr-card px-4 py-3.5">
@@ -304,7 +322,13 @@ export function Workspace({ client, project, lens, onLens }: {
           )}
 
           <div className="tr-card flex min-h-0 flex-1 flex-col px-4 py-3.5">
-            <div className="text-[13px] font-semibold">Record</div>
+            <div className="flex items-center justify-between">
+              <div className="text-[13px] font-semibold">Record</div>
+              <button type="button" onClick={toggleRail} title="Collapse the record rail — the edge control brings it back"
+                className="text-tr-muted hover:text-[var(--color-tr-text)]">
+                <PanelRightClose size={14} strokeWidth={1.75} />
+              </button>
+            </div>
             <div className="mt-1 min-h-0 flex-1 overflow-y-auto">
               {events.length === 0 && <div className="py-2 text-[12px] text-tr-muted">Quiet so far.</div>}
               {events.slice(0, 20).map((e, i) => (
@@ -320,6 +344,7 @@ export function Workspace({ client, project, lens, onLens }: {
             </div>
           </div>
         </div>
+        )}
       </div>
     </div>
   );

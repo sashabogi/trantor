@@ -42,10 +42,19 @@ fn socket_path() -> PathBuf {
 /// fires within ~5s when no lifecycle change is observed), so a generous read timeout
 /// only guards against a hung server, not a slow turn.
 fn request(req: &serde_json::Value) -> Result<String, String> {
+    request_within(req, Duration::from_secs(30))
+}
+
+/// Same, with the caller's own read budget. QUERIES on hot paths use a short one: the chat
+/// watcher resolves identity every tick, and on 2026-08-30 a herdr server slowed by machine
+/// load held one agent.get for the full 30s default — which stalled the transcript tail and
+/// the operator watched their own message take ~34s to echo in the chat. A local socket
+/// answers a query in milliseconds or it is not going to answer usefully at all.
+fn request_within(req: &serde_json::Value, read_timeout: Duration) -> Result<String, String> {
     let mut s = UnixStream::connect(socket_path())
         .map_err(|e| format!("herdr is not reachable ({e}) — is the herdr server running?"))?;
     let _ = s.set_write_timeout(Some(Duration::from_secs(10)));
-    let _ = s.set_read_timeout(Some(Duration::from_secs(30)));
+    let _ = s.set_read_timeout(Some(read_timeout));
     let mut line = req.to_string();
     line.push('\n');
     s.write_all(line.as_bytes())
@@ -81,7 +90,7 @@ pub fn reported_session(target: &str) -> Option<String> {
         "method": "agent.get",
         "params": { "target": target },
     });
-    let raw = request(&req).ok()?;
+    let raw = request_within(&req, Duration::from_millis(1500)).ok()?;
     session_from_agent_get(&raw)
 }
 
@@ -104,7 +113,7 @@ pub fn agent_status(target: &str) -> Option<String> {
         "method": "agent.get",
         "params": { "target": target },
     });
-    let raw = request(&req).ok()?;
+    let raw = request_within(&req, Duration::from_millis(1500)).ok()?;
     let v: serde_json::Value = serde_json::from_str(raw.trim()).ok()?;
     v.get("result")?
         .get("agent")?

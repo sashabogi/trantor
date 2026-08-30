@@ -522,7 +522,29 @@ fn orch_session_id(project: &str) -> Option<String> {
     let rows =
         std::fs::read_to_string(desktop_bus_dir().join("crew-windows.txt")).unwrap_or_default();
     if let Some(pane) = orch_pane_from_rows(&rows, project) {
-        if let Some(sid) = herdr::reported_session(&pane) {
+        // The herdr leg is CACHED (3s): the chat watcher calls this every 300ms, and paying a
+        // socket round-trip per tick let a load-slowed herdr stall the transcript tail — the
+        // operator watched their own message take ~34s to echo (2026-08-30). Identity moves at
+        // handoff speed, not tick speed; 3 seconds of staleness is invisible, a blocked tail
+        // is not. The query itself also carries a 1.5s budget now (herdr.rs), so even a cache
+        // miss against a wedged server costs one bounded beat, once per 3 seconds.
+        static HERDR_SID: std::sync::Mutex<Option<(String, Instant, Option<String>)>> =
+            std::sync::Mutex::new(None);
+        let cached: Option<Option<String>> = {
+            let g = HERDR_SID.lock().unwrap();
+            g.as_ref()
+                .filter(|(p, at, _)| p == &pane && at.elapsed() < Duration::from_secs(3))
+                .map(|(_, _, sid)| sid.clone())
+        };
+        let reported = match cached {
+            Some(sid) => sid,
+            None => {
+                let sid = herdr::reported_session(&pane);
+                *HERDR_SID.lock().unwrap() = Some((pane.clone(), Instant::now(), sid.clone()));
+                sid
+            }
+        };
+        if let Some(sid) = reported {
             return Some(sid);
         }
     }
