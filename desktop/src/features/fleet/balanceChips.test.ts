@@ -2,7 +2,7 @@
 // the pure helper. Pure inputs, pure assertions — no window. Reset short-forms are asserted
 // against Date.now()-relative timestamps so they cannot decay.
 import { describe, expect, it } from "vitest";
-import { chipFrom, isStale, isZombie, sortRows, toneClass, type BalanceRow } from "./balanceChips";
+import { chipFrom, isStale, isZombie, sortRows, toneClass, untilLong, type BalanceRow } from "./balanceChips";
 
 const row = (r: Partial<BalanceRow>): BalanceRow => ({
   provider: "openrouter", label: "OpenRouter", kind: "prepaid", ok: true, low: false,
@@ -57,9 +57,10 @@ describe("prepaid rows", () => {
 });
 
 describe("quota rows", () => {
-  it("turns remainingPct into the number, with the reset suffix when known", () => {
+  it("reads as USED counting up, Orca-style, with the time-left beside it (#5570)", () => {
     const c = chipFrom(row({ kind: "quota", remainingPct: 89, resetTime: Date.now() + 3600e3 }))!;
-    expect(c.value).toBe("89%");
+    expect(c.value).toBe("11% used 1h");
+    expect(c.barPct).toBe(11);
     expect(c.tooltip).toContain("89% left");
     expect(c.tooltip).toContain("resets in 1h");
   });
@@ -86,15 +87,36 @@ describe("quota rows", () => {
 describe("windows rows (Claude)", () => {
   const win = (name: string, usedPct: number, resetsAt?: number) => ({ name, usedPct, resetsAt: resetsAt ?? null, locked: null });
 
-  it("folds both windows into one chip — '10% · 24%' with the windows spelled out", () => {
+  it("reads each window as 'N% used <time-left>' — the Orca standard (#5570)", () => {
     const c = chipFrom(row({
       provider: "claude", label: "Claude", kind: "windows",
       windows: [win("5h", 10, Date.now() + 2 * 3600e3), win("7d", 24, Date.now() + 5 * 24 * 3600e3)],
     }))!;
-    expect(c.value).toBe("10% · 24%");
+    expect(c.value).toBe("10% used 2h · 24% used 5d");
+    expect(c.barPct).toBe(10);
+    expect(c.icon).toBe("claude");
     expect(c.tooltip).toContain("5-hour window 10% used, resets in 2h");
     expect(c.tooltip).toContain("weekly 24% used, resets in 5d");
     expect(c.tone).toBe("ok");
+  });
+
+  it("a model-SCOPED window shows its name instead of a countdown — '37% used Fable'", () => {
+    const c = chipFrom(row({
+      provider: "claude", label: "Claude", kind: "windows",
+      windows: [win("5h", 8, Date.now() + 5 * 3600e3), win("7d", 30, Date.now() + 3 * 24 * 3600e3),
+                { name: "Fable", usedPct: 37, resetsAt: Date.now() + 3 * 24 * 3600e3, locked: null, scoped: true } as never],
+    }))!;
+    expect(c.value).toContain("37% used Fable");
+    expect(c.value).not.toContain("Fable ·");
+  });
+
+  it("codex windows ride the same shape with the openai mark", () => {
+    const c = chipFrom(row({
+      provider: "codex", label: "Codex", kind: "windows",
+      windows: [win("5h", 61, Date.now() + 12 * 60e3), win("7d", 25, Date.now() + 5 * 24 * 3600e3 + 20 * 3600e3)],
+    }))!;
+    expect(c.value).toBe("61% used 12m · 25% used 5d 20h");
+    expect(c.icon).toBe("codex");
   });
 
   it("tints tr-warn when a window is LOW — remaining under 15%", () => {
@@ -196,5 +218,20 @@ describe("chip order", () => {
     const claude = row({ provider: "claude", kind: "windows", windows: [] });
     const sorted = sortRows([sub, quota, prepaid, claude]).map(e => e.provider);
     expect(sorted).toEqual(["claude", "openrouter", "zai", "kimi"]);
+  });
+});
+
+describe("untilLong — the Orca countdown", () => {
+  const now = Date.now();
+  it("two units, largest first", () => {
+    expect(untilLong(now + (5 * 24 + 4) * 3600e3 + 30e3, now)).toBe("5d 4h");
+    expect(untilLong(now + 105 * 60e3, now)).toBe("1h 45m");
+    expect(untilLong(now + 12 * 60e3, now)).toBe("12m");
+    expect(untilLong(now + 24 * 3600e3, now)).toBe("1d");
+  });
+  it("past or garbage is honest", () => {
+    expect(untilLong(now - 1000, now)).toBe("now");
+    expect(untilLong("not-a-time", now)).toBe(null);
+    expect(untilLong(null, now)).toBe(null);
   });
 });

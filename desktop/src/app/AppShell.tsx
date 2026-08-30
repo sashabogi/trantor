@@ -309,7 +309,8 @@ export function AppShell() {
   };
 
   return (
-    <div className="flex h-full gap-0 bg-[var(--color-tr-bg)]">
+    <div className="flex h-full flex-col bg-[var(--color-tr-bg)]">
+    <div className="flex min-h-0 flex-1 gap-0">
       <aside className="flex w-60 shrink-0 flex-col px-3 py-4">
         <div className="mb-5 flex items-center gap-2.5 px-3">
           <span className="tr-dot" style={{ background: "var(--color-tr-ok)" }} />
@@ -404,9 +405,6 @@ export function AppShell() {
 
       <div className={`relative my-2.5 mr-2.5 flex min-w-0 flex-1 ${chatDock === "right" ? "flex-row overflow-x-auto" : "flex-col overflow-hidden"}`}>
       <main className={`tr-main flex min-h-0 flex-1 flex-col overflow-hidden ${chatDock === "right" ? "min-w-[560px]" : "min-w-0"}`}>
-        {/* the app header: the balance strip right-aligned, nothing else. Renders null until the
-            local hub has a snapshot, so a profile-less machine gets no dead chrome bar. */}
-        <BalanceStrip client={fleetClient} />
         <div className="min-h-0 flex-1 overflow-hidden">
         {!client ? (
           <div className="p-10 text-sm text-[var(--color-tr-muted)]">
@@ -446,6 +444,11 @@ export function AppShell() {
         </button>
       )}
       </div>
+    </div>
+    {/* The fleet status bar: the app's footer, to the Orca standard (#5570) — full window
+        width, under everything including the sidebar. Renders null until the local hub has a
+        snapshot, so a profile-less machine gets no dead chrome bar. */}
+    <BalanceStrip client={fleetClient} />
     </div>
   );
 }

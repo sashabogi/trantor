@@ -39,10 +39,12 @@ export type ChipTone = "ok" | "warn" | "fail";
 
 export type BalanceChip = {
   key: string;
-  mono: string;   // the monogram letters, e.g. "Cl", "Cx", "DS"
-  hue: string;    // brand hue — the circle's background
-  fg: string;     // monogram text color inside the circle (contrast vs the hue)
-  value: string;  // the number(s) that matter, e.g. "$9.7", "10% · 24%", "plan"
+  mono: string;   // monogram fallback for providers without a vendored brand mark
+  icon: string | null; // BRAND_PATHS key — the real brand glyph (#5570, the Orca standard)
+  hue: string;    // brand hue — tints the mark
+  fg: string;     // monogram text color (fallback rendering only)
+  value: string;  // Orca segments: "8% used 4h 32m · 30% used 3d 2h · 37% used Fable"
+  barPct: number | null; // micro progress bar fill (used%) — null hides the bar
   tone: ChipTone; // brightness/tint class: ok = full text brightness, warn/fail = status tint
   stale: boolean; // snapshot older than 30 min → dim the chip + "as of" in the tooltip
   tooltip: string; // full label, exact numbers, staleness line, and the key source
@@ -57,19 +59,21 @@ const LOW_QUOTA_PCT = 15;                     // mirrors lib/balances.mjs DEFAUL
 
 // Each provider gets a small circular monogram in its brand hue (operator-chosen): Claude
 // terracotta, OpenAI teal-ish for Codex, DeepSeek blue, GLM indigo, Kimi dark, OpenRouter violet.
-const BRAND: Record<string, { mono: string; hue: string; fg: string }> = {
-  claude:     { mono: "Cl", hue: "#D97757", fg: "#1c110b" },
-  anthropic:  { mono: "Cl", hue: "#D97757", fg: "#1c110b" },
-  codex:      { mono: "Cx", hue: "#2DD4BF", fg: "#0a1a18" },
-  openai:     { mono: "Cx", hue: "#2DD4BF", fg: "#0a1a18" },
-  deepseek:   { mono: "DS", hue: "#4D6BFE", fg: "#eef1ff" },
-  zai:        { mono: "GL", hue: "#6366F1", fg: "#eef0ff" },
-  glm:        { mono: "GL", hue: "#6366F1", fg: "#eef0ff" },
-  zhipu:      { mono: "GL", hue: "#6366F1", fg: "#eef0ff" },
-  kimi:       { mono: "Ki", hue: "#3A3A40", fg: "#f2f2f5" },
-  moonshot:   { mono: "MS", hue: "#3A3A40", fg: "#f2f2f5" },
-  gemini:     { mono: "Ge", hue: "#8A8A92", fg: "#1a1a1e" },
-  openrouter: { mono: "OR", hue: "#8B5CF6", fg: "#f1ecff" },
+// Real brand marks (brands.ts, vendored) tinted in the brand hue; the monogram survives only
+// as the fallback for providers without a vendored glyph.
+const BRAND: Record<string, { mono: string; icon: string | null; hue: string; fg: string }> = {
+  claude:     { mono: "Cl", icon: "claude",     hue: "#D97757", fg: "#1c110b" },
+  anthropic:  { mono: "Cl", icon: "claude",     hue: "#D97757", fg: "#1c110b" },
+  codex:      { mono: "Cx", icon: "codex",      hue: "#E4E4E7", fg: "#0a1a18" },
+  openai:     { mono: "Cx", icon: "codex",      hue: "#E4E4E7", fg: "#0a1a18" },
+  deepseek:   { mono: "DS", icon: "deepseek",   hue: "#4D6BFE", fg: "#eef1ff" },
+  zai:        { mono: "GL", icon: "glm",        hue: "#6366F1", fg: "#eef0ff" },
+  glm:        { mono: "GL", icon: "glm",        hue: "#6366F1", fg: "#eef0ff" },
+  zhipu:      { mono: "GL", icon: "glm",        hue: "#6366F1", fg: "#eef0ff" },
+  kimi:       { mono: "Ki", icon: "kimi",       hue: "#C9C9CF", fg: "#f2f2f5" },
+  moonshot:   { mono: "MS", icon: "kimi",       hue: "#C9C9CF", fg: "#f2f2f5" },
+  gemini:     { mono: "Ge", icon: null,         hue: "#8A8A92", fg: "#1a1a1e" },
+  openrouter: { mono: "OR", icon: "openrouter", hue: "#8B5CF6", fg: "#f1ecff" },
 };
 
 const WINDOW_LABEL: Record<string, string> = { "5h": "5-hour window", "7d": "weekly" };
@@ -92,6 +96,21 @@ function resetShort(t: number | string | null | undefined): string | null {
   return `${Math.round(hrs / 24)}d`;
 }
 
+// The Orca-standard time-remaining: two units, largest first — "1h 45m", "5d 4h", "12m".
+// This is what sits beside "N% used" in the status bar, so it reads as a countdown, not a date.
+export function untilLong(t: number | string | null | undefined, now = Date.now()): string | null {
+  if (t == null || t === "") return null;
+  const ms = typeof t === "number" ? t : Date.parse(t);
+  if (!ms || Number.isNaN(ms)) return null;
+  let mins = Math.floor((ms - now) / 60000);
+  if (mins <= 0) return "now";
+  const d = Math.floor(mins / 1440); mins -= d * 1440;
+  const h = Math.floor(mins / 60); const m = mins - h * 60;
+  if (d > 0) return h > 0 ? `${d}d ${h}h` : `${d}d`;
+  if (h > 0) return m > 0 ? `${h}h ${m}m` : `${h}h`;
+  return `${m}m`;
+}
+
 // "as of 2h ago" — the staleness line a stale snapshot earns.
 function agoLabel(ms: number): string {
   const mins = Math.round(ms / 60000);
@@ -101,12 +120,21 @@ function agoLabel(ms: number): string {
   return `${Math.round(hrs / 24)}d`;
 }
 
-// The Claude windows row folds BOTH windows into one chip: value "10% · 24%", tone from LOW
-// (remaining < LOW_QUOTA_PCT) or locked, tooltip spells each window with its reset.
-function windowsInfo(e: BalanceRow): { value: string; tone: ChipTone; tooltip: string } {
+// A windows row reads as Orca's footer does: one segment per window, "N% used <time-left>",
+// and a model-SCOPED window shows its scope's name instead of a countdown ("37% used Fable" —
+// the time matches the weekly anyway). Tone from LOW (remaining < LOW_QUOTA_PCT) or locked.
+function windowsInfo(e: BalanceRow, now: number): { value: string; barPct: number | null; tone: ChipTone; tooltip: string } {
   const wins = (e.windows ?? []).filter(Boolean);
-  const pcts = wins.filter(w => w.usedPct != null).map(w => `${Math.round(w.usedPct as number)}%`);
-  const value = pcts.length ? pcts.join(" · ") : "?";
+  const seg = (w: BalanceWindow) => {
+    if (w.usedPct == null) return null;
+    const used = `${Math.round(w.usedPct)}% used`;
+    if ((w as { scoped?: boolean }).scoped || !dictGet(WINDOW_LABEL, w.name)) return `${used} ${w.name}`;
+    const t = untilLong(w.resetsAt, now);
+    return t ? `${used} ${t}` : used;
+  };
+  const segs = wins.map(seg).filter((s): s is string => s != null);
+  const value = segs.length ? segs.join(" · ") : "?";
+  const barPct = wins.length && wins[0].usedPct != null ? Math.round(wins[0].usedPct as number) : null;
   const locked = wins.some(w => w.locked);
   const low = !locked && wins.some(w => w.usedPct != null && (100 - (w.usedPct as number)) < LOW_QUOTA_PCT);
   const tone: ChipTone = locked ? "fail" : low ? "warn" : "ok";
@@ -118,7 +146,7 @@ function windowsInfo(e: BalanceRow): { value: string; tone: ChipTone; tooltip: s
     const lk = w.locked ? " · LOCKED" : "";
     return `${label} ${used}${rl ? `, ${rl}` : ""}${lk}`;
   });
-  return { value, tone, tooltip: parts.join(" · ") || "windows unknown" };
+  return { value, barPct, tone, tooltip: parts.join(" · ") || "windows unknown" };
 }
 
 // A stale snapshot (ts older than 30 min) dims the strip AND earns a tooltip line; a gemini zombie
@@ -152,9 +180,10 @@ export function chipFrom(e: BalanceRow, opts: ChipOpts = {}): BalanceChip | null
   if (isZombie(e, snap, now)) return null;
 
   const brand = dictGet(BRAND, e.provider)
-    ?? { mono: (e.label ?? e.provider).slice(0, 2).toUpperCase(), hue: "#8A8A92", fg: "#1a1a1e" };
+    ?? { mono: (e.label ?? e.provider).slice(0, 2).toUpperCase(), icon: null, hue: "#8A8A92", fg: "#1a1a1e" };
   const full = e.label ?? e.provider;
   let value = "?";
+  let barPct: number | null = null;
   let tone: ChipTone = "ok";
   let detail: string;
 
@@ -162,14 +191,17 @@ export function chipFrom(e: BalanceRow, opts: ChipOpts = {}): BalanceChip | null
     detail = e.error ? `error: ${e.error}` : "unreachable";
     tone = "fail";
   } else if (e.kind === "windows") {
-    const w = windowsInfo(e);
-    value = w.value; tone = w.tone; detail = w.tooltip;
+    const w = windowsInfo(e, now);
+    value = w.value; barPct = w.barPct; tone = w.tone; detail = w.tooltip;
   } else if (e.kind === "quota") {
     const rs = resetShort(e.resetTime);
     if (e.remainingPct != null) {
-      const pct = Math.round(e.remainingPct);
-      value = `${pct}%`;
-      detail = `${pct}% left${rs ? ` · resets in ${rs}` : ""}`;
+      // The bar and the words agree with the windows rows: USED, counting up (Orca's read).
+      const usedPct = Math.max(0, Math.min(100, 100 - Math.round(e.remainingPct)));
+      const t = untilLong(e.resetTime, now);
+      value = `${usedPct}% used${t ? ` ${t}` : ""}`;
+      barPct = usedPct;
+      detail = `${Math.round(e.remainingPct)}% left${rs ? ` · resets in ${rs}` : ""}`;
       if (e.low) tone = "warn";
     } else {
       detail = "quota unknown";
@@ -198,7 +230,7 @@ export function chipFrom(e: BalanceRow, opts: ChipOpts = {}): BalanceChip | null
   const stale = isStale(snap, now);
   const staleLine = stale ? ` · as of ${agoLabel(now - snap)} ago` : "";
   return {
-    key: e.provider, mono: brand.mono, hue: brand.hue, fg: brand.fg,
-    value, tone, stale, tooltip: `${full} · ${detail}${via}${staleLine}`,
+    key: e.provider, mono: brand.mono, icon: brand.icon, hue: brand.hue, fg: brand.fg,
+    value, barPct, tone, stale, tooltip: `${full} · ${detail}${via}${staleLine}`,
   };
 }

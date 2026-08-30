@@ -26,11 +26,33 @@ ok(isLow({ ok: true, kind: "quota", remainingPct: 40 }, DEFAULT_LOW, 50) === tru
 ok(isLow({ ok: true, kind: "quota", remainingPct: null }) === false, "isLow: quota unknown% → never low");
 ok(fmtBalance({ ok: true, kind: "quota", label: "Kimi Code", plan: "intermediate", remainingPct: 99 }).includes("99% left"), "fmtBalance: quota shows % left + plan");
 
+// --- windows rows (#5570: Claude scoped limits + Codex real windows, Orca parity) ---
+// Shapes captured LIVE 2026-08-30: oauth/usage limits[] weekly_scoped → a named scoped window;
+// wham/usage primary/secondary → 5h/7d with unix-second resets (normalized to ms upstream).
+const claudeWin = { ok: true, label: "Claude", kind: "windows", windows: [
+  { name: "5h", usedPct: 8, resetsAt: new Date(Date.now() + 5 * 3600e3).toISOString() },
+  { name: "7d", usedPct: 30, resetsAt: new Date(Date.now() + 3 * 86400e3).toISOString() },
+  { name: "Fable", usedPct: 37, resetsAt: new Date(Date.now() + 3 * 86400e3).toISOString(), scoped: true },
+] };
+const cw = fmtBalance(claudeWin);
+ok(cw.includes("5h 8% used") && cw.includes("Fable 37% used"), "fmtBalance: windows row spells the scoped Fable segment");
+const codexWin = { ok: true, label: "Codex", kind: "windows", windows: [
+  { name: "5h", usedPct: 61, resetsAt: Date.now() + 12 * 60e3 },
+  { name: "7d", usedPct: 25, resetsAt: Date.now() + 5.8 * 86400e3 },
+] };
+ok(fmtBalance(codexWin).includes("5h 61% used"), "fmtBalance: codex windows row reads like claude's");
+ok(isLow(codexWin) === false, "isLow: 61%/25% used → not low");
+ok(isLow({ ok: true, kind: "windows", windows: [{ name: "5h", usedPct: 91 }] }) === true, "isLow: 91% used window (9% left < 15%) → low");
+
 // --- fetchBalances is scoped to the configured profile, NOT ambient env keys ---
 const noProfile = await fetchBalances({ OPENROUTER_API_KEY: "x", KIMI_API_KEY: "y" });
 ok(Array.isArray(noProfile) && noProfile.length === 0, "fetchBalances: no `only` (no profile) → empty even with keys present (no scraping, no network)");
 const notConfigured = await fetchBalances({ OPENROUTER_API_KEY: "x" }, { only: ["deepseek", "claude"] });
-ok(notConfigured.length === 0, "fetchBalances: OpenRouter key in env but NOT in profile → skipped (the .env-scraping bug fix)");
+// Assert the INTENT (no .env scraping), not a row count: claude is in the profile and its
+// keyless OAuth adapter may legitimately produce a row on a machine with Claude Code installed
+// (latent since 0.18.15 — this suite hadn't run between that adapter landing and 2026-08-30).
+ok(!notConfigured.find(e => e.provider === "openrouter"), "fetchBalances: OpenRouter key in env but NOT in profile → skipped (the .env-scraping bug fix)");
+ok(!notConfigured.find(e => e.provider === "deepseek"), "fetchBalances: deepseek configured but no key → still skipped");
 const noKey = await fetchBalances({}, { only: ["deepseek"] });
 ok(noKey.length === 0, "fetchBalances: provider configured but no key in env → skipped (no network)");
 
