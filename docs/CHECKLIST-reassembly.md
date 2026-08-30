@@ -13,9 +13,13 @@ Legend: `[ ]` not started · `[~]` in progress (name the session/date) · `[x]` 
 ## Phase 0 — research spikes
 
 - [ ] **P0a** `server.live_handoff` semantics → decision in RESEARCH-herdr-handoff.md
-- [ ] **P0b** Live transport drill: `agent start --kind claude` + `agent prompt --wait`
-      (multiline · blocked-refusal · `--resume` native args) → RESEARCH-herdr-prompt.md
-      **← the Phase 1 go/no-go**
+- [x] **P0b** Live transport drill (2026-08-30, card #5576): **GO for Phase 1.** All 7 checks
+      pass — whole multiline message as ONE user turn (\n preserved), --wait settles on real
+      lifecycle, blocked detected on a question UI, prompt-into-blocked refused with ZERO bytes
+      landed, dialogs answered by send-keys, startup trust dialog handled, `-- --resume <sid>`
+      resumes the same session id with continuity. Evidence: RESEARCH-herdr-prompt.md.
+      ⚠ New constraint discovered: split panes inherit CLAUDE_CODE_CHILD_SESSION → transcript
+      saving OFF → invisible sessions. Every agent-spawn path must unset it (now a §7 assertion).
 - [ ] **P0c** Orca code-read (conversation binding · diff annotations→prompt · usage footer)
       → RESEARCH-orca.md
 
