@@ -167,7 +167,19 @@ export function receiptFor(p: PendingSend, userTexts: string[], now: number): "s
   // and the receipt cried "not delivered" about a screenshot the session was actively answering
   // (2026-08-30, fourth member of the false-alarm family).
   const sent = (p.text ?? "").trim();
-  if (sent && userTexts.some(t => t.includes(sent))) return "delivered";
+  if (sent) {
+    if (userTexts.some(t => t.includes(sent))) return "delivered";
+    // LINE-WISE fallback (the third receipt gap, 2026-08-30): an image path followed by
+    // Shift+Enter prose gets SPLIT by the CLI — the path becomes an image block, the prose its
+    // own text block — so the full draft never exists as one containable string again. Every
+    // non-empty line arriving somewhere IS the message arriving; the path line still matches
+    // through its "[Image: source: <path>]" record.
+    const lines = sent.split("\n").map(l => l.trim()).filter(Boolean);
+    if (lines.length > 1) {
+      const all = userTexts.join("\n");
+      if (lines.every(l => all.includes(l))) return "delivered";
+    }
+  }
   return now - p.at > LOST_AFTER_MS ? "lost" : "sending";
 }
 

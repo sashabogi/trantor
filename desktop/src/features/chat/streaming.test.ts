@@ -174,6 +174,19 @@ describe("receiptFor", () => {
   it("a whitespace-only send never claims delivery", () => {
     expect(receiptFor({ text: "   ", at }, ["anything"], at + 100)).toBe("sending");
   });
+
+  it("image + Shift-Enter prose delivers LINE-WISE — the CLI splits them into separate blocks", () => {
+    // The third receipt gap (2026-08-30): path line became an image block, prose its own text
+    // block; the full draft never exists as one string again.
+    const draft = "/Users/x/CleanShot 2026-08-30 at 18.53.25.jpg \nGo ahead, but also one of the bigger annoyances";
+    const turns = ["[Image: source: /Users/x/CleanShot 2026-08-30 at 18.53.25.jpg]", "Go ahead, but also one of the bigger annoyances that I have"];
+    expect(receiptFor({ text: draft, at }, turns, at + 100)).toBe("delivered");
+  });
+
+  it("line-wise never claims delivery while a line is still missing", () => {
+    const draft = "/Users/x/shot.jpg \nthe words that were eaten";
+    expect(receiptFor({ text: draft, at }, ["[Image: source: /Users/x/shot.jpg]"], at + LOST_AFTER_MS + 1)).toBe("lost");
+  });
 });
 
 // #5508 — the gauge tells the truth about a filling window, and stays absent until it knows one.
