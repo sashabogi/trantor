@@ -143,9 +143,25 @@ The app half (resolution order) is already live in 0.3.55.**
 - [~] Gate wiring: no scripted release path exists (the dance is manual) — the gate is
       `trantor drill` + SYSTEM-CONTRACT §7's mandate + the release-dance docs. Revisit if a
       release script ever exists.
-- [ ] **BLOCKED ON THE 0.18.16 PUBLISH**: publish → `npm i -g` → `claude plugin update
-      trantor@trantor` → rerun drill → S4 green → three consecutive green runs → cards
-      #5581 + #5582 close and feature work reopens.
+- [x] 0.18.16 PUBLISHED (Sasha, 2026-08-30) → global 0.18.16 → plugin 0.18.16 → zero skew →
+      drill GREEN, then **THREE CONSECUTIVE GREENS** (12 passed / 0 failed / 1 named SKIP
+      each). S4 ran the full machine live every time: written→claimed→recapped on the ledger
+      of a real handoff between real sessions. Cards #5581 + #5582 closed with evidence.
+
+---
+
+# ✅ THE SALVAGE IS COMPLETE (2026-08-30)
+
+Phases 0–5 built, shipped, drill-gated in one arc: CLI 0.18.16 (npm) · app 0.3.57 (installed)
+· `trantor drill` green ×3 consecutive. The surface now runs on the SYSTEM-CONTRACT: herdr owns
+transport/lifecycle/runtime-identity, the transcript owns rendering, ONE guarded number owns
+context, the handoff machine cannot move silently, and the drill guards every future release.
+
+**Feature work is REOPEN.** The post-gate queue, in rough order: #5570 balance bar to the Orca
+spec (fully unblocked by RESEARCH-orca.md — Codex numbers included) · #5593 record rail
+collapsible · #5608 live turn ticker · #5609 card liveness pulse · #5610 happening-now rail ·
+#5525 color pass · #5401 persistence (mostly native now that panes report sessions).
+This file stays as the salvage's record; new work cards on the board, not here.
 
 ## After the gate (feature work reopens — separate cards, not this salvage)
 
