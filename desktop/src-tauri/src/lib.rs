@@ -1297,6 +1297,103 @@ fn spawn_chat_watcher(
     });
 }
 
+#[derive(Debug, Clone, Serialize)]
+struct OrchStatusPayload {
+    project: String,
+    pane: String,
+    status: String,
+}
+
+/// Push the orchestrator's lifecycle state instead of polling for it (Phase 3).
+///
+/// Replaces the 3-second `orchestrator_status` poll — which spawned a `herdr agent list`
+/// subprocess forever, per open chat — with one per-pane `pane.agent_status_changed`
+/// subscription. The stream's quiet read-timeout tick doubles as the health loop: it
+/// re-checks the pane mapping (a `trantor open` can mint a new pane) and re-seeds the
+/// status via one socket query, healing any missed frame. Reconnects with a short pause
+/// when herdr drops the stream — documented behavior across server replacement.
+fn spawn_status_watcher(window: tauri::Window, project: String, stop: Arc<AtomicBool>) {
+    use tauri::Emitter;
+    std::thread::spawn(move || {
+        let mut last = String::new();
+        let mut emit = |status: &str, pane: &str, last: &mut String| -> bool {
+            if *last == status {
+                return true;
+            }
+            *last = status.to_string();
+            window
+                .emit("orch-status", OrchStatusPayload {
+                    project: project.clone(),
+                    pane: pane.to_string(),
+                    status: status.to_string(),
+                })
+                .is_ok()
+        };
+        let orch_pane = |project: &str| -> Option<String> {
+            let rows = std::fs::read_to_string(desktop_bus_dir().join("crew-windows.txt"))
+                .unwrap_or_default();
+            orch_pane_from_rows(&rows, project)
+        };
+        let nap = |stop: &AtomicBool, ticks: u32| -> bool {
+            for _ in 0..ticks {
+                if stop.load(Ordering::SeqCst) {
+                    return false;
+                }
+                std::thread::sleep(Duration::from_millis(500));
+            }
+            true
+        };
+        while !stop.load(Ordering::SeqCst) {
+            let Some(pane) = orch_pane(&project) else {
+                if !emit("none", "", &mut last) {
+                    return;
+                }
+                if !nap(&stop, 10) {
+                    return;
+                }
+                continue;
+            };
+            let seeded = herdr::agent_status(&pane).unwrap_or_else(|| "unknown".to_string());
+            if !emit(&seeded, &pane, &mut last) {
+                return;
+            }
+            match herdr::subscribe_status(&pane, Duration::from_secs(15)) {
+                Ok(mut stream) => loop {
+                    if stop.load(Ordering::SeqCst) {
+                        return;
+                    }
+                    match stream.next_line() {
+                        Ok(Some(line)) => {
+                            if let Some(st) = herdr::status_from_frame(&line, &pane) {
+                                if !emit(&st, &pane, &mut last) {
+                                    return;
+                                }
+                            }
+                        }
+                        Ok(None) => {
+                            // Quiet tick: is this still the orch pane, and did we miss a frame?
+                            if orch_pane(&project).as_deref() != Some(pane.as_str()) {
+                                break;
+                            }
+                            if let Some(st) = herdr::agent_status(&pane) {
+                                if !emit(&st, &pane, &mut last) {
+                                    return;
+                                }
+                            }
+                        }
+                        Err(_) => break,
+                    }
+                },
+                Err(_) => {
+                    if !nap(&stop, 6) {
+                        return;
+                    }
+                }
+            }
+        }
+    });
+}
+
 #[tauri::command]
 fn chat_watch(window: tauri::Window, project: String) -> Result<u64, String> {
     let project = project.trim().to_string();
@@ -1318,6 +1415,7 @@ fn chat_watch(window: tauri::Window, project: String) -> Result<u64, String> {
         map.insert(project.clone(), Arc::clone(&stop));
     }
 
+    spawn_status_watcher(window.clone(), project.clone(), Arc::clone(&stop));
     spawn_chat_watcher(window, project, sid, tail, meta, stop);
     Ok(current)
 }

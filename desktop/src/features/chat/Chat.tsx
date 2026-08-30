@@ -349,12 +349,25 @@ export function Chat({ project, dock, onDock, onClose }: {
     return () => clearInterval(iv);
   }, [streamed, sync]);
 
+  // Status is PUSHED (Phase 3): the backend holds a per-pane herdr subscription (spawned with
+  // chat_watch) and emits "orch-status" on every lifecycle change. One seed call paints the
+  // first state; after that, no polling — the 3-second `orchestrator_status` loop this
+  // replaces spawned a subprocess per tick, forever.
   useEffect(() => {
     let alive = true;
-    const look = () => { invoke<string>("orchestrator_status", { project }).then(st => { if (alive) setStatus(st); }).catch(() => {}); };
-    look();
-    const iv = setInterval(look, 3_000);
-    return () => { alive = false; clearInterval(iv); };
+    invoke<string>("orchestrator_status", { project }).then(st => { if (alive) setStatus(st); }).catch(() => {});
+    const offs: Array<() => void> = [];
+    void (async () => {
+      const off = await listen<string>("orch-status", ev => {
+        if (!alive) return;
+        try {
+          const p = JSON.parse(ev.payload) as { project: string; status: string };
+          if (p.project === project && p.status) setStatus(p.status);
+        } catch {}
+      });
+      if (alive) offs.push(off); else off();
+    })();
+    return () => { alive = false; for (const off of offs) off(); };
   }, [project]);
   useEffect(() => { foot.current?.scrollIntoView({ behavior: "smooth" }); }, [chat.turns.length]);
 
