@@ -13,6 +13,7 @@ import { ProjectHeader, type Lens } from "../project/ProjectHeader";
 import { AgentChip, Avatar, cleanTitle, displayName } from "../../shared/Avatar";
 import { usePeers, presenceMap, stateOf, PRESENCE_COLOR, type PresenceState } from "../../shared/presence";
 import { dictGet } from "../../shared/dict";
+import { matchesCard } from "../search/match";
 
 // Lane order matches the hub's own card flow: todo -> doing -> testing -> done, with the two
 // exception lanes last. `stale` comes from the reaper, `blocked` is set by hand.
@@ -36,15 +37,6 @@ const LANE_COLOR = {
 // not a type error, so lookups go through `dictGet` rather than indexing directly.
 const NEXT = { todo: "doing", doing: "testing", testing: "done" } as const satisfies Record<string, string>;
 
-// Search understands the board's own vocabulary: plain text matches titles, `#123` a card id,
-// `@name` an assignee. One box, no advanced-search modal.
-function matches(card: Card, query: string): boolean {
-  const q = query.trim().toLowerCase();
-  if (!q) return true;
-  if (q.startsWith("#")) return String(card.id).startsWith(q.slice(1));
-  if (q.startsWith("@")) return (card.assignee || "").toLowerCase().includes(q.slice(1));
-  return card.title.toLowerCase().includes(q) || (card.assignee || "").toLowerCase().includes(q);
-}
 
 // Sub-agents nest under the session that spawned them, and the join is `subagent.parent === focus.cc`.
 //
@@ -94,7 +86,7 @@ const isSubagent = (c: Card) => c.source === "cc-subagent";
  * summary is the one behaviour a board cannot have. */
 function splitLane(cards: Card[], query: string, assignee: string, nesting: Nesting): Lane {
   const searching = query.trim() !== "" || assignee !== "";
-  const hit = (c: Card) => matches(c, query) && passesAssignee(c, assignee);
+  const hit = (c: Card) => matchesCard(c, query) && passesAssignee(c, assignee);
   const visible = cards.filter(c => {
     if (nesting.nested.has(c.id)) return false;      // it renders under its parent, never as a sibling
     if (hit(c)) return true;
@@ -207,14 +199,20 @@ function CardTile({ card, onOpen, onAdvance, presence, subagents, subagentsOpen 
   );
 }
 
-export function Board({ client, project, lens, onLens }: {
+export function Board({ client, project, lens, onLens, focusCard, onFocusConsumed }: {
   client: HubClient; project: string; lens: Lens; onLens: (l: Lens) => void;
+  /** a card the palette chose (#5625): opened once on arrival, then handed back */
+  focusCard?: number | null; onFocusConsumed?: () => void;
 }) {
   const [cards, setCards] = useState<Card[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [query, setQuery] = useState("");
   const [assignee, setAssignee] = useState("");
   const [open, setOpen] = useState<number | null>(null);
+  // The palette's pick (#5625): arrive on the board with the drawer already open.
+  useEffect(() => {
+    if (focusCard != null) { setOpen(focusCard); onFocusConsumed?.(); }
+  }, [focusCard, onFocusConsumed]);
   const { peers } = usePeers(client);
   const presence = useMemo(() => presenceMap(peers), [peers]);
   // Who is HERE, alive, right now — surfaced in the header so a project screen never again reads
@@ -297,12 +295,6 @@ export function Board({ client, project, lens, onLens }: {
             <span className="text-[11px]">{liveHere.length} live</span>
           </span>}
         </span>}>
-        <input
-          value={query}
-          onChange={e => setQuery(e.target.value)}
-          placeholder="Search — text, #id, @assignee"
-          className="tr-input w-56 min-w-0 shrink"
-        />
         {assignees.length > 0 && (
           <select value={assignee} onChange={e => setAssignee(e.target.value)} className="tr-input">
             <option value="">everyone</option>
@@ -329,7 +321,7 @@ export function Board({ client, project, lens, onLens }: {
                 // A search filters the nested list too, and opens it — a matched sub-agent must
                 // never be swallowed by the collapsed summary that holds it.
                 const kids = nesting.childrenOf.get(c.id);
-                const shownKids = filtered && kids ? kids.filter(k => matches(k, query) && passesAssignee(k, assignee)) : kids;
+                const shownKids = filtered && kids ? kids.filter(k => matchesCard(k, query) && passesAssignee(k, assignee)) : kids;
                 return (
                   <CardTile key={c.id} card={c} onOpen={c2 => setOpen(c2.id)} onAdvance={advance}
                             presence={c.assignee ? presence.get(c.assignee) : undefined}

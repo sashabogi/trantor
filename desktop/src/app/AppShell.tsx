@@ -10,9 +10,10 @@
 // per-provider chips in the header, because "is a provider about to stall mid-build" is an
 // always-in-view question, not a "go look at Home" one. Chips only — the old text dump stays dead.
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ArrowDownToLine, Bot, Eye, FolderTree, GraduationCap, House, Inbox as InboxIcon, MessagesSquare, Settings as SettingsIcon } from "lucide-react";
+import { ArrowDownToLine, Bot, Eye, FolderTree, GraduationCap, House, Inbox as InboxIcon, MessagesSquare, Search, Settings as SettingsIcon } from "lucide-react";
 import { appUpdateCheck, HubClient, hubForProject, knownProjects, localSessions, type AppUpdate, type Peer } from "../shared/api/client";
 import { ago, stateOf } from "../shared/presence";
+import { Palette, type PaletteScope } from "../features/search/Palette";
 import { countUnseen, onSeenChange } from "../shared/seen";
 import { usePendingProposals } from "../shared/Proposals";
 import { ProjectIcon } from "../shared/ProjectIcon";
@@ -202,6 +203,21 @@ export function AppShell() {
   // minutes, and unauthenticated GitHub API calls are rate-limited. The chip this feeds is the
   // answer to "how does a teammate ever find out 0.3.3 is stale": before this, the app itself
   // never knew.
+  // #5625 — the search palette: one component, two scopes. The trigger above every lens opens
+  // it scoped to the project; ⌘K anywhere opens it global (projects + cards of the live set).
+  const [palette, setPalette] = useState<PaletteScope | null>(null);
+  const [focusCard, setFocusCard] = useState<number | null>(null);
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
+        e.preventDefault();
+        setPalette(cur => cur ? null : { kind: "global" });
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
   const [update, setUpdate] = useState<AppUpdate | null>(null);
   useEffect(() => {
     let alive = true;
@@ -425,6 +441,21 @@ export function AppShell() {
 
       <div className={`relative my-2.5 mr-2.5 flex min-w-0 flex-1 ${chatDock === "right" ? "flex-row overflow-x-auto" : "flex-col overflow-hidden"}`}>
       <main className={`tr-main flex min-h-0 flex-1 flex-col overflow-hidden ${chatDock === "right" ? "min-w-[560px]" : "min-w-0"}`}>
+        {/* #5625 — the project's search, ON TOP and lens-independent (the operator's design:
+            "as long as you're in the particular project, the search bar should just be on
+            top"). A trigger, not an input: the palette owns focus, results and keys. */}
+        {pane.kind === "project" && active && (
+          <div className="flex shrink-0 items-center px-8 pt-4">
+            <button
+              type="button"
+              onClick={() => setPalette({ kind: "project", project: active })}
+              className="tr-input flex w-full items-center gap-2.5 text-left text-[12.5px] text-[var(--color-tr-muted)]/70 hover:text-[var(--color-tr-muted)]">
+              <Search size={13} strokeWidth={1.75} className="shrink-0" />
+              <span className="min-w-0 flex-1 truncate">Search {active} — text, #id, @assignee</span>
+              <kbd className="tr-mono shrink-0 rounded border border-[var(--color-tr-edge)] px-1.5 py-0.5 text-[10px]">⌘K everywhere</kbd>
+            </button>
+          </div>
+        )}
         <div className="min-h-0 flex-1 overflow-hidden">
         {!client ? (
           <div className="p-10 text-sm text-[var(--color-tr-muted)]">
@@ -438,7 +469,7 @@ export function AppShell() {
           : pane.kind === "overseer" ? <Overseer client={client} />
           : pane.kind === "settings" ? <Settings me={ME} update={update} projects={[...activeProjects, ...restProjects]} />
           : pane.lens === "workspace" ? <Workspace client={client} project={active} lens={pane.lens} onLens={l => setPane({ kind: "project", lens: l })} />
-          : pane.lens === "board" ? <Board client={client} project={active} lens={pane.lens} onLens={l => setPane({ kind: "project", lens: l })} />
+          : pane.lens === "board" ? <Board client={client} project={active} lens={pane.lens} onLens={l => setPane({ kind: "project", lens: l })} focusCard={focusCard} onFocusConsumed={() => setFocusCard(null)} />
           : pane.lens === "bus" ? <Conversation client={client} project={active} me={ME} lens={pane.lens} onLens={l => setPane({ kind: "project", lens: l })} />
           : pane.lens === "review" ? <Review client={client} project={active} lens={pane.lens} onLens={l => setPane({ kind: "project", lens: l })} />
           : pane.lens === "files" ? <Files client={client} project={active} lens={pane.lens} onLens={l => setPane({ kind: "project", lens: l })}
@@ -465,6 +496,17 @@ export function AppShell() {
       )}
       </div>
     </div>
+    {palette && (
+      <Palette
+        scope={palette}
+        projects={projects}
+        searchProjects={palette.kind === "project" ? [palette.project]
+          : [...new Set([active, ...activeProjects])].filter(Boolean)}
+        onClose={() => setPalette(null)}
+        onJumpProject={p => { setActive(p); setPane({ kind: "project", lens: "board" }); }}
+        onOpenCard={(p, id) => { setActive(p); setPane({ kind: "project", lens: "board" }); setFocusCard(id); }}
+      />
+    )}
     {/* The fleet status bar: the app's footer, to the Orca standard (#5570) — full window
         width, under everything including the sidebar. Renders null until the local hub has a
         snapshot, so a profile-less machine gets no dead chrome bar. */}
