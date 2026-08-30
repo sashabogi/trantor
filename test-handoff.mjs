@@ -402,6 +402,58 @@ rmSync(projDir, { recursive: true, force: true });
   rmSync(projDir2, { recursive: true, force: true });
 }
 
+// ---- #5572 context guard: the SHARED manifest both implementations must satisfy ----
+// (the Rust twin runs the same file in cargo — test/fixtures/context/manifest.json)
+{
+  const { guardContextTokens } = await import("./hooks/lib/handoff.mjs");
+  const manifest = JSON.parse(readFileSync(join(process.cwd(), "test/fixtures/context/manifest.json"), "utf8"));
+  for (const c of manifest.cases) {
+    const got = guardContextTokens(c.rows);
+    ok(`context guard: ${c.name} → ${c.expect}`, (got ?? null) === (c.expect ?? null));
+  }
+  // And end-to-end through contextUsage: a poisoned transcript tail reads as the real level.
+  const dir = join(tmpdir(), `tt-ctx-${process.pid}`);
+  mkdirSync(dir, { recursive: true });
+  const t = join(dir, "poisoned.jsonl");
+  const row = (tok) => JSON.stringify({ type: "assistant", message: { model: "fable", usage: { input_tokens: 1000, cache_read_input_tokens: tok - 1000 } } });
+  writeFileSync(t, [row(400000), row(884056), row(889929), row(70000)].join("\n") + "\n");
+  const u = contextUsage(t, { contextWindow: 1000000 });
+  ok("contextUsage survives a poisoned tail (reads 889929, not 70000)", u?.tokens === 889929 && Math.abs(u.frac - 0.889929) < 1e-6);
+  rmSync(dir, { recursive: true, force: true });
+}
+
+// ---- §5 state ledger + recap net (Phase 4B): the machine's transitions ride the handoff file ----
+{
+  const { appendHandoffState } = await import("./hooks/lib/handoff.mjs");
+  const { handoffDir } = await import("./lib/project.mjs");
+  const projDir = join(tmpdir(), `tt-h5-${process.pid}`); mkdirSync(projDir, { recursive: true });
+  const t = join(projDir, "t.jsonl");
+  writeFileSync(t, JSON.stringify({ type: "assistant", message: { role: "assistant", content: [{ type: "text", text: "work ".repeat(40) }], usage: { input_tokens: 100000 } } }) + "\n");
+  process.env.TRANTOR_NO_SCROOGE = "1";   // hermetic: deterministic digest, no LLM call
+  const { record: w, file: wfile } = writeHandoff({ projectDir: projDir, sessionId: "pred-1", transcript: t, trigger: "drill", force: true });
+  const rec0 = JSON.parse(readFileSync(join(handoffDir(), `${w.id}.json`), "utf8"));
+  ok("§5 ledger: a written handoff records WRITTEN with its author", rec0.states?.length === 1 && rec0.states[0].state === "written" && rec0.states[0].by === "pred-1");
+  appendHandoffState(w.id, "claimed", "succ-1");
+  appendHandoffState(w.id, "recapped", "succ-1");
+  const rec1 = JSON.parse(readFileSync(join(handoffDir(), `${w.id}.json`), "utf8"));
+  ok("§5 ledger: claimed and recapped append in order", rec1.states.map(s => s.state).join(",") === "written,claimed,recapped");
+
+  // The recap net, end to end through the REAL hooks as subprocesses.
+  const sid = "succ-net-1";
+  writeFileSync(join(handoffDir(), `recap-pending-${sid}.json`), JSON.stringify({ handoffId: w.id, ts: 1 }));
+  const hookEnv = { ...process.env, RELAY_URL: CLOSED, TRANTOR_NO_FOCUS: "" };
+  const pf = spawnSync(process.execPath, ["hooks/prompt-focus.mjs"], { input: JSON.stringify({ session_id: sid, prompt: "a stale queued message that must still carry the reminder", cwd: projDir }), encoding: "utf8", env: hookEnv, timeout: 15000 });
+  ok("recap net: every pre-recap prompt carries the reminder", pf.stdout.includes("additionalContext") && pf.stdout.includes(w.id));
+  const si = spawnSync(process.execPath, ["hooks/stop-inbox.mjs"], { input: JSON.stringify({ session_id: sid, cwd: projDir }), encoding: "utf8", env: { ...hookEnv, RELAY_STOP_TIMEOUT_MS: "200" }, timeout: 15000 });
+  const rec2 = JSON.parse(readFileSync(join(handoffDir(), `${w.id}.json`), "utf8"));
+  ok("recap net: the first Stop records RECAPPED on the ledger", rec2.states.some(s => s.state === "recapped" && s.by === sid));
+  ok("recap net: the stamp is cleared — the reminder stops", !existsSync(join(handoffDir(), `recap-pending-${sid}.json`)));
+  const pf2 = spawnSync(process.execPath, ["hooks/prompt-focus.mjs"], { input: JSON.stringify({ session_id: sid, prompt: "a later ordinary message", cwd: projDir }), encoding: "utf8", env: hookEnv, timeout: 15000 });
+  ok("recap net: after recap, prompts carry nothing", !pf2.stdout.includes("additionalContext"));
+  rmSync(projDir, { recursive: true, force: true });
+  rmSync(wfile, { force: true });   // like the earlier writeHandoff drill: never leak into the live handoffs dir
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
 

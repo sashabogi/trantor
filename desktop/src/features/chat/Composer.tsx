@@ -18,7 +18,7 @@ import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { ChevronDown, Paperclip, Square, ArrowUp } from "lucide-react";
 import { searchFiles } from "../files/fileApi";
 import { FONT_STEPS, type FontStep } from "./prefs";
-import { gaugeLabel, gaugeTone, composerSlot, insertPaths, receiptFor, type ContextGauge, type PendingSend } from "./streaming";
+import { gaugeLabel, gaugeTone, gaugeUnknownWindow, composerSlot, insertPaths, receiptFor, type ContextGauge, type PendingSend } from "./streaming";
 import { projectSessions, takeoverAction, type ProjectSessions } from "./takeover";
 import { TakeoverStrip } from "./TakeoverStrip";
 
@@ -46,6 +46,19 @@ const GAUGE_COLOUR = {
 // tinted by tone — the tone must be unmistakable at a glance, which a 14px sliver never was.
 function ContextGauge({ ctx }: { ctx: ContextGauge }) {
   const tone = gaugeTone(ctx.frac);
+  // Tokens without a window (#5503): say so instead of hiding — an absent gauge reads as
+  // "fine" while the auto-handoff is in fact disarmed for exactly the same reason.
+  if (tone === "hidden" && gaugeUnknownWindow(ctx)) {
+    return (
+      <div
+        className="flex shrink-0 items-center gap-1.5"
+        title={`${Math.round((ctx.tokens ?? 0) / 1000)}k used · context window unknown for this model — auto-handoff is disarmed (set contextWindow)`}
+      >
+        <span className="text-[10.5px] text-tr-muted">context</span>
+        <span className="tr-mono text-[10.5px] text-tr-muted">?</span>
+      </div>
+    );
+  }
   if (tone === "hidden") return null;
   // The guard above is what proves frac is known; the ?? 0 only satisfies the type at a point
   // the early return has already made unreachable.

@@ -18,7 +18,7 @@ function projectFlag() {
 }
 
 const BOOLS = ["commit", "push", "deploy", "swapDeadSeat", "retryFailedTurn"];
-const ENUMS = { harness: ["prompt", "bypass"] };
+const ENUMS = { harness: ["prompt", "bypass"], baton: ["ask", "auto"] };
 
 if (cmd === "get") {
   // Machine-readable, one value, no decoration — crew.sh reads this.

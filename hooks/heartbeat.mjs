@@ -96,6 +96,15 @@ async function maybeEarlyWarn(stdinRaw, session) {
     };
 
     const projectDir = process.env.CLAUDE_PROJECT_DIR || process.cwd();
+    // The baton dial (#5509 W2, SYSTEM-CONTRACT §5): "ask" (default) means the OPERATOR fires
+    // handoffs — the app's banner asks at this same threshold, and this hook neither arms nor
+    // auto-fires. "auto" restores the arm-here → fire-at-Stop chain below. PreCompact remains
+    // the at-the-wall backstop in both modes.
+    const { resolveAutonomy } = await import("../lib/autonomy.mjs");
+    if (resolveAutonomy(resolveProject(projectDir)).baton !== "auto") {
+      process.stderr.write(`[trantor] context ${Math.round(usage.frac * 100)}% — baton dial is 'ask': the banner offers, nothing auto-fires\n`);
+      return;
+    }
     // Detect THIS session's Terminal window NOW (the hook has the controlling tty; the detached worker
     // won't) so the baton-close can replace this exact window once the fresh session takes over.
     const tty = controllingTty();

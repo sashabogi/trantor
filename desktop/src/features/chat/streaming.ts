@@ -174,6 +174,13 @@ export function gaugeTone(frac: number | null): "hidden" | "neutral" | "amber" |
   return "neutral";
 }
 
+/** Tokens are known but the window is not (#5503, the fable case): the gauge must SAY so
+ *  rather than hide — a hidden gauge reads as "fine", and meanwhile the auto-baton is
+ *  silently disarmed because the heartbeat cannot compute a fraction either. */
+export function gaugeUnknownWindow(c: ContextGauge): boolean {
+  return c.tokens !== null && c.tokens > 0 && (!c.window || c.frac === null);
+}
+
 /** The gauge's tooltip, exactly "489k / 1000k (49%)" — k-rounded tokens out of window with the
  *  percent, so the bar and the number can never disagree. Only called while the gauge shows. */
 export function gaugeLabel(c: ContextGauge): string {

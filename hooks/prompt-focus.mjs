@@ -29,21 +29,46 @@ function titleFrom(prompt) {
   return s.slice(0, 120);
 }
 
+
+// §5 recap net (SYSTEM-CONTRACT): while this session carries a claimed-but-unrecapped handoff
+// (the recap-pending stamp sessionstart wrote), EVERY prompt before its first Stop carries the
+// reminder — including the stale queued message that ate the 2026-08-30 takeover. The stamp is
+// cleared (and RECAPPED recorded) by stop-inbox at the first turn boundary.
+import { handoffDir } from "../lib/project.mjs";
+import { existsSync as _ex, readFileSync as _rf } from "node:fs";
+let RECAP_CTX = "";
+function loadRecapCtx(sessionId) {
+  try {
+    if (!sessionId) return "";
+    const p = join(handoffDir(), `recap-pending-${String(sessionId).replace(/[^A-Za-z0-9_.-]/g, "_")}.json`);
+    if (!_ex(p)) return "";
+    const rec = JSON.parse(_rf(p, "utf8"));
+    return `<system-reminder>You took over via handoff ${rec.handoffId}. If you have not yet recapped it, your reply MUST begin with the ≤3-sentence recap (task, state, next step) before anything else — including before answering this message.</system-reminder>`;
+  } catch { return ""; }
+}
+function emitAndExit() {
+  process.stdout.write(RECAP_CTX
+    ? JSON.stringify({ hookSpecificOutput: { hookEventName: "UserPromptSubmit", additionalContext: RECAP_CTX } })
+    : "{}");
+  process.exit(0);
+}
+
 try {
-  if (process.env.TRANTOR_NO_FOCUS === "1") { process.stdout.write("{}"); process.exit(0); }   // opt-out
+  if (process.env.TRANTOR_NO_FOCUS === "1") { emitAndExit(); }   // opt-out
   const input = JSON.parse((await readStdin()) || "{}");
+  RECAP_CTX = loadRecapCtx(String(input.session_id || ""));
   const prompt = String(input.prompt || "");
   const cwd = input.cwd || process.env.CLAUDE_PROJECT_DIR || process.cwd();
   // don't card home-dir sessions (matches sessionstart's phantom-project guard)
-  if (!process.env.RELAY_SESSION && !process.env.RELAY_PROJECT && cwd === homedir()) { process.stdout.write("{}"); process.exit(0); }
+  if (!process.env.RELAY_SESSION && !process.env.RELAY_PROJECT && cwd === homedir()) { emitAndExit(); }
   const trimmed = prompt.replace(/\s+/g, " ").trim();
   // skip empties, tiny continuations, and pure acks — they're not a new focus
-  if (!trimmed || trimmed.length < 12 || ACK.test(trimmed)) { process.stdout.write("{}"); process.exit(0); }
+  if (!trimmed || trimmed.length < 12 || ACK.test(trimmed)) { emitAndExit(); }
   // HARNESS-INJECTED prompts are not a human's focus. Task notifications, hook system-reminders and
   // protocol frames arrive through the same UserPromptSubmit channel, and carding one titled a board
   // card "<task-notification> <task-id>bavlqfmzq</task-id>…" — pure noise a human cannot read.
   if (/^\s*[<{[]/.test(trimmed) || /<task-notification>|<system-reminder>|<teammate-message/i.test(trimmed)) {
-    process.stdout.write("{}"); process.exit(0);
+    emitAndExit();
   }
   const project = resolveProject(cwd);
   const session = process.env.RELAY_SESSION
@@ -74,5 +99,4 @@ try {
 } catch (e) {
   process.stderr.write(`[trantor] prompt-focus error: ${e?.message || e}\n`);
 }
-process.stdout.write("{}");
-process.exit(0);
+emitAndExit();

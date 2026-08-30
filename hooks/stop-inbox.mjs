@@ -21,15 +21,15 @@
 //   * Only claim delivery once we have actually decided to surface it (peek first). Marking a message
 //     delivered and then letting the stop through would hide it from the waker too — a silent hole.
 //   * Any error, or a hub that is down -> allow the stop. Never trap a session because of us.
-import { readFileSync, writeFileSync, existsSync } from "node:fs";
+import { readFileSync, writeFileSync, existsSync, unlinkSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { homedir } from "node:os";
-import { resolveProject, hostId } from "../lib/project.mjs";
+import { resolveProject, hostId, handoffDir } from "../lib/project.mjs";
 import { signedGet } from "./lib/api.mjs";   // signed: enforce hubs 401 unsigned reads — unsigned, T2 delivery is silently dead
 import { ledgerPaths, ensureStart, anchorCursor, writeCursor } from "./lib/inbox-ledger.mjs";
-import { readArm, clearArm, markHandedOff } from "./lib/handoff.mjs";
+import { readArm, clearArm, markHandedOff, appendHandoffState } from "./lib/handoff.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 
@@ -145,6 +145,23 @@ async function main() {
       // cannot re-arm and re-fire every tick.
       try { markHandedOff(String(input.session_id || ""), Number(armed.tokens) || 0); } catch {}
       process.stderr.write("[trantor] turn boundary reached — firing the armed baton\n");
+    }
+  } catch {}
+  // §5 RECAPPED (SYSTEM-CONTRACT): this session's FIRST turn boundary after claiming a handoff.
+  // By Stop time an assistant reply exists, and every prompt of that first turn carried the
+  // recap reminder (prompt-focus) — so the reply had the instruction in front of it. Record the
+  // transition on the handoff's own ledger and disarm the net.
+  try {
+    const sid = String(input.session_id || "");
+    if (sid) {
+      const stampPath = join(handoffDir(), `recap-pending-${sid.replace(/[^A-Za-z0-9_.-]/g, "_")}.json`);
+      if (existsSync(stampPath)) {
+        try {
+          const stamp = JSON.parse(readFileSync(stampPath, "utf8"));
+          appendHandoffState(stamp.handoffId, "recapped", sid);
+        } catch {}
+        try { unlinkSync(stampPath); } catch {}
+      }
     }
   } catch {}
   // Mirror the other hooks: a home-directory session isn't project work and isn't on the bus.

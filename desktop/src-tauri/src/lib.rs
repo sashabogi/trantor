@@ -585,6 +585,67 @@ struct ChatMeta {
     version: String,
     branch: String,
     context: ChatContext,
+    #[serde(skip)]
+    guard: ContextGuard,
+}
+
+/// The context gauge's poison guard (#5572, Phase 4A — SYSTEM-CONTRACT §4 "context %").
+///
+/// Within one session file, real context never collapses: across 1,839 usage rows in the two
+/// long incident-era transcripts (77b17edd, 52109744), zero drops below 40% of the running max
+/// were observed. So one row far below the session's max is an artifact — the recent maximum
+/// is reported instead — while a SUSTAINED new level (five consecutive low rows) is accepted
+/// and re-baselines the guard, so any future legitimate collapse (context editing, in-place
+/// compaction) heals on its own instead of pinning the gauge high forever.
+///
+/// The same rule, from the same fixture manifest, lives in hooks/lib/handoff.mjs — the baton
+/// reads what the gauge reads, or the banner and the heartbeat disagree (the #5572 disease).
+#[derive(Debug, Clone, Default)]
+struct ContextGuard {
+    max: u64,
+    recent: Vec<u64>,
+}
+
+impl ContextGuard {
+    const RING: usize = 5;
+    const FLOOR_FRAC: f64 = 0.4;
+
+    fn push(&mut self, tokens: u64) {
+        if tokens == 0 {
+            return;
+        }
+        self.recent.push(tokens);
+        if self.recent.len() > Self::RING {
+            self.recent.remove(0);
+        }
+        if tokens > self.max {
+            self.max = tokens;
+        }
+    }
+
+    fn absorb(&mut self, other: &ContextGuard) {
+        for t in &other.recent {
+            self.push(*t);
+        }
+        if other.max > self.max {
+            self.max = other.max;
+        }
+    }
+
+    fn report(&mut self) -> Option<u64> {
+        let last = *self.recent.last()?;
+        let floor = (self.max as f64 * Self::FLOOR_FRAC) as u64;
+        if last >= floor {
+            return Some(last);
+        }
+        if self.recent.len() == Self::RING && self.recent.iter().all(|r| *r < floor) {
+            // Five in a row agree: reality changed. Re-baseline so the guard follows it.
+            self.max = *self.recent.iter().max().unwrap();
+            return Some(last);
+        }
+        // A transient artifact: report the best recent evidence, never the poisoned row.
+        Some(*self.recent.iter().max().unwrap())
+    }
 }
 
 #[derive(Debug, Clone, Default, Serialize)]
@@ -732,17 +793,12 @@ fn merge_chat_meta(current: &mut ChatMeta, next: ChatMeta) {
         current.branch = next.branch;
     }
     current.context.window = next.context.window;
-    if next.context.tokens.is_some() {
-        current.context = next.context;
-    } else {
-        current.context.frac = current.context.tokens.and_then(|t| {
-            if current.context.window > 0 {
-                Some(t as f64 / current.context.window as f64)
-            } else {
-                None
-            }
-        });
-    }
+    // Usage rows fold through the persistent guard (#5572): a batch is often ONE row, so the
+    // poison filter must live across batches, in the meta the watcher carries — never in the
+    // stateless per-batch decode alone.
+    current.guard.absorb(&next.guard);
+    let tokens = current.guard.report().or(current.context.tokens);
+    current.context = chat_context(tokens, current.context.window);
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1043,7 +1099,8 @@ where
                 meta.model = m.to_string();
             }
             if let Some(tokens) = assistant_usage_tokens(&v) {
-                meta.context = chat_context(Some(tokens), context_window);
+                meta.guard.push(tokens);
+                meta.context = chat_context(meta.guard.report(), context_window);
             }
         }
         if let Some(x) = v.get("version").and_then(|x| x.as_str()) {
@@ -3119,6 +3176,57 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+#[cfg(test)]
+mod context_guard_tests {
+    use super::*;
+
+    /// The SHARED #5572 manifest — the mjs twin (hooks/lib/handoff.mjs guardContextTokens,
+    /// drilled by test-handoff.mjs) runs the same file. One spec, two bindings, zero drift.
+    const MANIFEST: &str = include_str!("../../../test/fixtures/context/manifest.json");
+
+    #[test]
+    fn the_guard_satisfies_every_manifest_case() {
+        let m: serde_json::Value = serde_json::from_str(MANIFEST).unwrap();
+        for case in m["cases"].as_array().unwrap() {
+            let name = case["name"].as_str().unwrap();
+            let mut g = ContextGuard::default();
+            for t in case["rows"].as_array().unwrap() {
+                g.push(t.as_u64().unwrap());
+            }
+            let got = g.report();
+            let expect = case["expect"].as_u64();
+            assert_eq!(got, expect, "case '{name}': got {got:?}, manifest says {expect:?}");
+        }
+    }
+
+    #[test]
+    fn merge_carries_the_guard_across_single_row_batches() {
+        // The incident shape: the watcher delivers ONE poisoned row as its own batch.
+        let window = 1_000_000;
+        let mut meta = ChatMeta {
+            context: chat_context(None, window),
+            ..ChatMeta::default()
+        };
+        for tokens in [400_000u64, 884_056, 889_929] {
+            let mut batch = ChatMeta {
+                context: chat_context(None, window),
+                ..ChatMeta::default()
+            };
+            batch.guard.push(tokens);
+            batch.context = chat_context(batch.guard.report(), window);
+            merge_chat_meta(&mut meta, batch);
+        }
+        let mut poison = ChatMeta {
+            context: chat_context(None, window),
+            ..ChatMeta::default()
+        };
+        poison.guard.push(70_000);
+        poison.context = chat_context(poison.guard.report(), window);
+        merge_chat_meta(&mut meta, poison);
+        assert_eq!(meta.context.tokens, Some(889_929), "the gauge must not read 7% at a real 88%");
+    }
 }
 
 #[cfg(test)]

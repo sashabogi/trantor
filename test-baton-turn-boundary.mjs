@@ -29,6 +29,10 @@ console.log("# trantor baton turn-boundary drill");
 function makeWorld() {
   const w = mkdtempSync(join(tmpdir(), "tt-baton-tb-"));
   const BUS = join(w, ".agent-bus"); mkdirSync(join(BUS, "handoffs"), { recursive: true });
+  // This suite drills the AUTO chain (arm at warn → fire at Stop). Since #5509 W2 the dial
+  // defaults to "ask" (the operator fires; nothing auto-arms), so the world opts in explicitly.
+  // The ask-mode default gets its own drill at the end of the suite.
+  writeFileSync(join(BUS, "autonomy.json"), JSON.stringify({ version: 1, defaults: { baton: "auto" }, projects: {} }));
   const proj = join(w, "proj"); mkdirSync(proj, { recursive: true });
   spawnSync("git", ["init", "-q"], { cwd: proj });
   const tdir = join(w, "transcripts"); mkdirSync(tdir, { recursive: true });
@@ -127,6 +131,17 @@ console.log("\nA session that never reaches a Stop still hands off eventually:")
   ok("a heartbeat past the bound fires it anyway", /firing anyway/.test(second), second.slice(0, 140));
   ok("…and the handoff exists", handoffs(W3).length === 1, `${handoffs(W3).length}`);
   ok("…and the arming is cleared, so it cannot fire twice", armedFile(W3).length === 0, armedFile(W3).join(", "));
+}
+
+// ---- the dial's DEFAULT is ask (#5509 W2): past the warn line, nothing arms, nothing fires ----
+{
+  const W4 = makeWorld();
+  writeFileSync(join(W4.BUS, "autonomy.json"), JSON.stringify({ version: 1, defaults: {}, projects: {} }));
+  const r = await runHook("heartbeat.mjs", W4, { session_id: "s-ask", cwd: W4.proj, transcript_path: W4.transcript });
+  await sleep(1200);
+  ok("ask (default): past the warn line the heartbeat says the banner offers", /dial is 'ask'/.test(r.se), r.se.slice(0, 160));
+  ok("ask (default): nothing armed", armedFile(W4).length === 0, armedFile(W4).join(", "));
+  ok("ask (default): no handoff written", handoffs(W4).length === 0, `${handoffs(W4).length}`);
 }
 
 console.log(`\n${fail === 0 ? "✅" : "❌"} baton-turn-boundary: ${pass} passed, ${fail} failed`);

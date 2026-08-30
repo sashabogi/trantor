@@ -57,7 +57,20 @@ function loadPendingHandoff(projectName, { claim = true, freshSession = null } =
               transcript_path: freshSession.transcript_path || "",
             };
           }
+          // §5 CLAIMED, on the machine's ledger (SYSTEM-CONTRACT), and the recap net armed:
+          // a recap-pending stamp names this successor. Every prompt before its first Stop
+          // carries a recap reminder (prompt-focus), and the first Stop marks RECAPPED —
+          // the 2026-08-30 failure (successor answered a stale queued message, never
+          // recapped) becomes mechanically impossible instead of hopefully avoided.
+          if (!Array.isArray(rec.states)) rec.states = [];
+          rec.states.push({ state: "claimed", ts: nowSec(), by: freshSession?.session_id || "" });
           writeFileSync(p, JSON.stringify(rec, null, 2));
+          if (freshSession?.session_id) {
+            try {
+              writeFileSync(join(dir, `recap-pending-${String(freshSession.session_id).replace(/[^A-Za-z0-9_.-]/g, "_")}.json`),
+                JSON.stringify({ handoffId: rec.id, ts: nowSec() }));
+            } catch {}
+          }
         }
         return rec;
       }

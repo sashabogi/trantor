@@ -53,18 +53,45 @@ export function contextUsage(transcriptPath, conf = readConfig()) {
   } catch { return null; }
 
   const lines = buf.split("\n").filter(Boolean);
-  for (let i = lines.length - 1; i >= 0; i--) {
-    let r; try { r = JSON.parse(lines[i]); } catch { continue; }
+  const rows = [];
+  let model = "";
+  for (const line of lines) {
+    let r; try { r = JSON.parse(line); } catch { continue; }
     const u = r?.message?.usage;
-    if (r?.type === "assistant" && u) {
-      const tokens = (u.input_tokens || 0) + (u.cache_read_input_tokens || 0) + (u.cache_creation_input_tokens || 0);
-      if (tokens <= 0) continue;
-      const model = r.message.model || "";
-      const window = resolveWindow(model, conf);
-      return { tokens, window, frac: window ? tokens / window : null, model };
-    }
+    if (r?.type !== "assistant" || !u) continue;
+    const tokens = (u.input_tokens || 0) + (u.cache_read_input_tokens || 0) + (u.cache_creation_input_tokens || 0);
+    if (tokens <= 0) continue;
+    rows.push(tokens);
+    model = r.message.model || model;
   }
-  return null;
+  const tokens = guardContextTokens(rows);
+  if (tokens == null) return null;
+  const window = resolveWindow(model, conf);
+  return { tokens, window, frac: window ? tokens / window : null, model };
+}
+
+// The #5572 poison guard — the SAME rule, from the SAME fixture manifest
+// (test/fixtures/context/manifest.json), as the desktop gauge's ContextGuard: the baton must
+// read what the gauge reads, or the banner and the heartbeat disagree. Report the last row
+// unless it falls below 40% of the session max; then report the recent maximum (a lone
+// collapsed row is an artifact — across 1,839 usage rows in the two incident-era transcripts,
+// zero real drops below that floor were observed) unless the last FIVE rows all sit below the
+// floor: a sustained new level is reality, accept it.
+export function guardContextTokens(rows) {
+  let max = 0;
+  const recent = [];
+  for (const t of rows) {
+    if (!t || t <= 0) continue;
+    recent.push(t);
+    if (recent.length > 5) recent.shift();
+    if (t > max) max = t;
+  }
+  if (!recent.length) return null;
+  const last = recent[recent.length - 1];
+  const floor = max * 0.4;
+  if (last >= floor) return last;
+  if (recent.length === 5 && recent.every(r => r < floor)) return last;
+  return Math.max(...recent);
 }
 
 // The transcript logs the model WITHOUT the [1m] marker, so we cannot tell a
@@ -281,6 +308,20 @@ export function verbatimRecentTail(transcript, chars = 7000) {
 }
 
 // ---- write + announce + spawn ----------------------------------------------
+/** Append one §5 state transition to a handoff's own file — the machine's ledger rides the
+ *  record it describes (SYSTEM-CONTRACT §5): every owner of a transition already holds this
+ *  file, it survives both sessions it connects, and no network is involved. Best-effort. */
+export function appendHandoffState(id, state, by = "") {
+  try {
+    const p = join(HANDOFF_DIR, `${id}.json`);
+    const rec = JSON.parse(readFileSync(p, "utf8"));
+    if (!Array.isArray(rec.states)) rec.states = [];
+    rec.states.push({ state, ts: nowSec() || Math.floor(Date.now() / 1000), by });
+    writeFileSync(p, JSON.stringify(rec, null, 2));
+    return true;
+  } catch { return false; }
+}
+
 export function writeHandoff({ projectDir, sessionId, transcript, trigger, summary, force = false }) {
   const projectName = basename(projectDir);
   // Server-side storm guard: a session running OLD hooks (before the local markHandedOff guard) re-fires
@@ -325,6 +366,8 @@ export function writeHandoff({ projectDir, sessionId, transcript, trigger, summa
     // narrative + a verbatim recent-exchange block so exact in-flight state always survives
     summary: narrative + (tail ? `\n\n---\n## Verbatim recent exchange (exact in-flight state — continue from here)\n${tail}` : ""),
     gitStatus, subagents, verifyGates, consumed: false,
+    // The §5 machine's ledger: every transition appends here via appendHandoffState.
+    states: [{ state: "written", ts: Number(stamp) || 0, by: sessionId || "" }],
   };
   const file = join(HANDOFF_DIR, `${record.id}.json`);
   writeFileSync(file, JSON.stringify(record, null, 2));

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   applyBackfill, applyRows, applySessionChanged, bannerVisible, composerSlot, emptyChat,
-  gaugeLabel, gaugeTone, insertPaths, isDividerTurn,
+  gaugeLabel, gaugeTone, gaugeUnknownWindow, insertPaths, isDividerTurn,
   sessionLiveness, receiptFor, LOST_AFTER_MS, HANDOFF_WARN_FRAC,
   type Backfill, type ChatState, type ContextGauge, type Meta, type RowsPayload, type Turn,
 } from "./streaming";
@@ -164,6 +164,15 @@ describe("receiptFor", () => {
 });
 
 // #5508 — the gauge tells the truth about a filling window, and stays absent until it knows one.
+describe("gaugeUnknownWindow", () => {
+  it("flags tokens-without-window (#5503, the fable case) and nothing else", () => {
+    expect(gaugeUnknownWindow({ tokens: 392607, window: 0, frac: null })).toBe(true);
+    expect(gaugeUnknownWindow({ tokens: 392607, window: 1000000, frac: 0.39 })).toBe(false);
+    expect(gaugeUnknownWindow({ tokens: null, window: 0, frac: null })).toBe(false);
+    expect(gaugeUnknownWindow({ tokens: 0, window: 0, frac: null })).toBe(false);
+  });
+});
+
 describe("gaugeTone", () => {
   it("is hidden while frac is unknown — no usage row seen yet", () => {
     expect(gaugeTone(null)).toBe("hidden");
