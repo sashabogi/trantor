@@ -74,6 +74,7 @@ switch (cmd) {
   case "handoff": run("bin/baton.mjs"); break;
   case "adopt": run("bin/adopt.mjs"); break;
   case "takeover": run("bin/takeover.mjs"); break;
+  case "drill": run("bin/drill-surface.mjs"); break;
   case "summarize": run("bin/summarize.mjs"); break;
   case "policy": run("bin/policy.mjs"); break;
   case "proposals": case "proposal": run("bin/proposals.mjs"); break;
