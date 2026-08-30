@@ -129,12 +129,23 @@ The app half (resolution order) is already live in 0.3.55.**
 - [ ] Drill §7 step 3 live (forced low-threshold handoff through the machine) — runs as part
       of Phase 5's `trantor drill`, where it belongs.
 
-## Phase 5 — the drill becomes the ship gate
+## Phase 5 — the drill becomes the ship gate — BUILT + FIRST LIVE RUN 2026-08-30 (card #5582)
 
-- [ ] `bin/drill-surface.mjs` (`trantor drill`) implements §7 steps 1–6 with per-step evidence
-- [ ] Release path runs it for desktop/chat/handoff/crew diffs and refuses red
-- [ ] Version-skew header (hooks/CLI/app) printed; mismatch is a named result
-- [ ] Three consecutive green runs on real components
+- [x] `bin/drill-surface.mjs` (`trantor drill`): S1 cold start (child-session trap asserted
+      absent; trust-dialog auto-recovery) · S2 transport (byte-identical socket call, ONE
+      whole multiline user turn, reply back) · S3 identity (pane report == live transcript) ·
+      S4 the full handoff machine on the ledger · S5 takeover = named SKIP (proven live
+      08-28; drill v2). Live run: **S1–S3 GREEN**; S4 red exactly as the skew header
+      predicts (sessions run installed 0.18.15 hooks, which predate the ledger) with an
+      explicit NOTE printed. The drill found a real bug on its first run (tmpdir() symlink
+      broke transcript-slug lookup).
+- [x] Version-skew header: prints cli/plugin/app; mismatch is a named WARN + S4 hint.
+- [~] Gate wiring: no scripted release path exists (the dance is manual) — the gate is
+      `trantor drill` + SYSTEM-CONTRACT §7's mandate + the release-dance docs. Revisit if a
+      release script ever exists.
+- [ ] **BLOCKED ON THE 0.18.16 PUBLISH**: publish → `npm i -g` → `claude plugin update
+      trantor@trantor` → rerun drill → S4 green → three consecutive green runs → cards
+      #5581 + #5582 close and feature work reopens.
 
 ## After the gate (feature work reopens — separate cards, not this salvage)
 
