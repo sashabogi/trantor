@@ -112,6 +112,22 @@ function splitLane(cards: Card[], query: string, assignee: string, nesting: Nest
  *  doing card with a dead assignee says so, and a testing card whose assignee went quiet is
  *  waiting on the OPERATOR — the card says "awaiting verdict" instead of sitting there looking
  *  dead (the operator asked "why do these testing cards say nothing" twice on 2026-08-30). */
+/** #5609 follow-up — the card's own pace, from the two truths it carries: when it was last
+ *  touched (`updated`, which log notes bump) and how deep its story runs (`log.length`). This
+ *  is what separates five identically-pulsing cards: "last activity 30s ago" is being driven,
+ *  "2h ago" is parked. Deliberately NOT a percentage: progress needs a denominator, open-ended
+ *  agent work has none, and the board never asserts knowledge it does not have. */
+export function cardPace(card: { updated?: number; ts?: number; log?: { ts: number }[] }, now = Date.now()): string | null {
+  const logs = card.log ?? [];
+  const lastLog = logs.length ? logs[logs.length - 1].ts : 0;
+  const touched = Math.max(card.updated ?? 0, card.ts ?? 0, lastLog);
+  if (!touched) return null;
+  const s = Math.max(0, Math.round((now - touched) / 1000));
+  const agoTxt = s < 60 ? `${s}s` : s < 3600 ? `${Math.round(s / 60)}m` : s < 172800 ? `${Math.round(s / 3600)}h` : `${Math.round(s / 86400)}d`;
+  const notes = logs.length ? ` · ${logs.length} note${logs.length === 1 ? "" : "s"}` : "";
+  return `last activity ${agoTxt} ago${notes}`;
+}
+
 export function cardLiveness(status: string, presence?: PresenceState): {
   inMotion: boolean; alarmed: boolean; stalled: boolean; awaitingVerdict: boolean;
 } {
@@ -135,6 +151,7 @@ function CardTile({ card, onOpen, onAdvance, presence, subagents, subagentsOpen 
   // pulsing dot); failed/blocked pulse red like the old web UI did; a doing-card whose assignee
   // is offline says so instead of pretending.
   const { inMotion, alarmed, stalled, awaitingVerdict } = cardLiveness(card.status, presence);
+  const pace = (card.status === "doing" || card.status === "testing") ? cardPace(card) : null;
   // TODO ROT (CARDLOG contract): a todo card untouched >7d wears its age — quiet between 7 and
   // 14 days, warn-colored from 14. Untouched = now - (updated || ts), the same clock the hub's
   // own todo reaper reads, so the badge and the "stale" lane can never disagree about age.
@@ -148,6 +165,11 @@ function CardTile({ card, onOpen, onAdvance, presence, subagents, subagentsOpen 
       onClick={() => onOpen(card)}
       className={`tr-card tr-card-hover min-w-0 shrink-0 cursor-pointer overflow-hidden p-3.5 text-[13px] ${inMotion ? "tr-card-live" : ""} ${alarmed ? "tr-card-alarm" : ""}`}>
       <div className="leading-snug break-words [overflow-wrap:anywhere]">{card.summary || cleanTitle(card.title)}</div>
+      {pace && (
+        <div className="tr-mono mt-1.5 truncate text-[10px] text-[var(--color-tr-muted)]/80" title="when this card was last touched — driven vs parked">
+          {pace}
+        </div>
+      )}
       <div className="mt-2 flex flex-wrap items-center gap-1.5 text-[11px] text-[var(--color-tr-muted)]">
         {inMotion && <span className="tr-dot tr-dot-pulse shrink-0" style={{ background: card.status === "testing" ? "var(--color-tr-warn)" : "var(--color-tr-doing)" }} title="assignee is mid-turn right now" />}
         {stalled && <span className="shrink-0 rounded bg-black/30 px-1.5 py-0.5 text-[var(--color-tr-warn)]" title="doing, but the assignee has no heartbeat">assignee offline</span>}

@@ -1,6 +1,6 @@
 // #5609 — a card's face tells the truth about life, drilled on the pure rule.
 import { describe, expect, it } from "vitest";
-import { cardLiveness } from "./Board";
+import { cardLiveness, cardPace } from "./Board";
 
 describe("cardLiveness", () => {
   it("doing + busy assignee breathes", () => {
@@ -33,5 +33,17 @@ describe("cardLiveness", () => {
   it("failed and blocked alarm regardless of presence", () => {
     expect(cardLiveness("failed", "busy").alarmed).toBe(true);
     expect(cardLiveness("blocked", undefined).alarmed).toBe(true);
+  });
+});
+
+describe("cardPace", () => {
+  const now = 1_000_000_000_000;
+  it("reads the freshest of updated / ts / last log note", () => {
+    expect(cardPace({ updated: now - 30_000, log: [{ ts: now - 5_000 }] }, now)).toBe("last activity 5s ago · 1 note");
+    expect(cardPace({ updated: now - 120_000, log: [] }, now)).toBe("last activity 2m ago");
+    expect(cardPace({ ts: now - 7_200_000, log: [{ ts: now - 7_200_000 }, { ts: now - 3_600_000 }] }, now)).toBe("last activity 1h ago · 2 notes");
+  });
+  it("says nothing when the card carries no clock — never a guessed pace", () => {
+    expect(cardPace({}, now)).toBe(null);
   });
 });

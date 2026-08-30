@@ -24,16 +24,20 @@ export function ProjectHeader({ project, sub, lens, onLens, children }: {
           <div className="flex items-center gap-x-2 overflow-hidden whitespace-nowrap">{sub}</div>
         </div>
       </div>
-      <div className="flex min-w-0 items-center gap-3">
-        <div className="tr-seg shrink-0 overflow-x-auto">
+      {/* WRAPPING row, not a shrinking one: shrink-0 tabs beside flex-1 tools let the two
+          OVERLAP once the row overflowed (operator screenshot #2, 2026-08-30 — "Review" under
+          the filter). Wrap puts the tools on their own line at narrow widths instead; the seg
+          itself scrolls only as the very last resort. */}
+      <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-2">
+        <div className="tr-seg min-w-0 max-w-full overflow-x-auto">
           {LENSES.map(l => (
-            <button key={l} data-on={lens === l} onClick={() => onLens(l)}>
+            <button key={l} data-on={lens === l} onClick={() => onLens(l)} className="shrink-0">
               {l.charAt(0).toUpperCase() + l.slice(1)}
             </button>
           ))}
         </div>
         {children && (
-          <div className="flex min-w-0 flex-1 items-center justify-end gap-2.5">{children}</div>
+          <div className="ml-auto flex min-w-0 items-center gap-2.5">{children}</div>
         )}
       </div>
     </header>
