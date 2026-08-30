@@ -43,10 +43,12 @@ signal+open; integration-install decision with Sasha; Orca patterns folded into 
       (existing setError path renders them; no frontend change needed)
 - [x] Delivery receipts unchanged (vitest 167/167; receipt machinery untouched)
 - [x] cargo 59/59 incl. 3 new fixture drills built from CAPTURED live responses
-- [~] Drill §7 steps 1–2: transport leg proven live (byte-identical socket request →
-      dash-leading multiline text as ONE user turn, reply received; blocked prompt refused,
-      zero bytes landed). REMAINING: operator sends a real message from the installed 0.3.54
-      chat — the in-app acceptance click.
+- [x] Drill §7 steps 1–2 PASS live end-to-end, ACCEPTED by the operator on installed 0.3.54:
+      a 3-paragraph dictated chat message arrived as ONE user turn, newlines preserved
+      (transcript-verified). Plus the socket-level leg: blocked prompt refused, zero bytes
+      landed. App restart rebind (step 4's shape) also observed after the 0.3.54 relaunch.
+
+**PHASE 1 COMPLETE (2026-08-30, app 0.3.54, card #5578 done).**
 
 ## Phase 2 — identity
 
