@@ -98,19 +98,36 @@ The app half (resolution order) is already live in 0.3.55.**
       flipping send↔stop the MOMENT a turn starts/ends (previously up to 3s lag), and
       blocked states naming themselves. Operator's eyes confirm on next use.
 
-## Phase 4 — context truth, then the handoff machine
+## Phase 4 — context truth, then the handoff machine — BUILT 2026-08-30 (card #5581);
+## app half SHIPPED 0.3.57, CLI half awaits the drill-gated 0.18.16 publish
 
-- [ ] **4A** One context algorithm + monotonic guard in `contextUsage()` AND `chat_context()`;
-      shared fixtures under `test/fixtures/context/` incl. the recorded 7%-at-88% transcript
-      (#5572)
-- [ ] **4A** Unknown window → frac null → gauge hidden + auto-baton disarmed visibly (#5503)
-- [ ] **4B** `handoff.<state>` bus events emitted per owner; chat renders each transition
-- [ ] **4B** Recap gate: handoff consumed only on `handoff.recapped`; stop-hook enforcement;
-      app shows "successor has not recapped" until then
-- [ ] **4B** ENDED→OPENED per P0a decision; `release_agent` wired in
-- [ ] **4B** `baton` dial ask/auto on the same machine
-- [ ] State-machine drills + live low-threshold handoff drill green
-- [ ] Drill §7 step 3 passes live
+- [x] **4A** One guard rule, one fixture manifest (`test/fixtures/context/manifest.json`),
+      two bindings: Rust `ContextGuard` (folded through merge — single-row poison batches
+      cannot lie) + `guardContextTokens` in `contextUsage()`. FORENSICS FIRST: 1,839 usage
+      rows across both incident-era transcripts show ZERO real sub-40% drops — the "stub"
+      hypothesis on #5572 is unconfirmed; the likelier 7%-at-88% culprit was identity
+      misresolution (killed by Phase 2). Guard = insurance; a sustained new level (5 rows)
+      re-baselines so a true collapse can never be pinned.
+- [x] **4A** Unknown window (#5503): the gauge SHOWS "context ?" + names the disarm in its
+      tooltip — never hides. vitest drill on `gaugeUnknownWindow`.
+- [x] **4B** The §5 ledger rides the handoff file itself (`states[]`: written→claimed→
+      recapped, appended by each owner). Bus events DEFERRED with reason: `/events` is
+      read-only, the hub is contract-frozen; the file is the durable record and the app can
+      render it in a later wave. ENDED/OPENED as explicit rows also deferred: OPENED≈claimed,
+      ENDED is bounded by written→claimed timestamps, herdr clears the agent on exit.
+- [x] **4B** The recap net (the 2026-08-30 failure, made impossible): sessionstart stamps the
+      successor at claim; EVERY prompt before its first Stop carries the recap reminder
+      (prompt-focus, hookSpecificOutput) — including a stale queued message; the first Stop
+      records RECAPPED and disarms. App "has not recapped" chip deferred to the app wave.
+- [x] **4B** `baton` dial (ask|auto), DEFAULT ask: the heartbeat neither arms nor auto-fires
+      unless told to; the banner is the ask; PreCompact stays the at-the-wall backstop.
+      ⚠ BEHAVIOR CHANGE at publish time: auto-handoffs stop until `trantor autonomy set
+      baton auto` (or per-project).
+- [x] Drills: test-handoff 84/84 (ledger + recap net end-to-end through the real hooks as
+      subprocesses) · baton-turn-boundary 16/16 (auto chain opts in; ask-default drilled) ·
+      cargo 64/64 · vitest 168/168 · tsc clean.
+- [ ] Drill §7 step 3 live (forced low-threshold handoff through the machine) — runs as part
+      of Phase 5's `trantor drill`, where it belongs.
 
 ## Phase 5 — the drill becomes the ship gate
 
