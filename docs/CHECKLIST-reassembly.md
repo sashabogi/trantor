@@ -50,14 +50,30 @@ signal+open; integration-install decision with Sasha; Orca patterns folded into 
 
 **PHASE 1 COMPLETE (2026-08-30, app 0.3.54, card #5578 done).**
 
-## Phase 2 — identity
+## Phase 2 — identity — SHIPPED CLI 0.18.16 + app 0.3.55, 2026-08-30 (card #5579)
 
-- [ ] `lib/herdr.mjs` adapter; `sessionstart.mjs` reports session→pane when `HERDR_ENV=1`
-- [ ] open / adopt / takeover report at their step; graceful-end calls `pane.release_agent`
-- [ ] Resolution order everywhere: herdr report → orch-sessions.txt → picker (never guess)
-- [ ] Map rewrites: exactly three writers, each emitting `map.rewrite` bus event
-- [ ] Drills green (resolution order cargo drill; claim→report→resolve→release node drill)
-- [ ] Drill §7 step 4 (app restart rebind) passes live
+- [x] Session→pane reporting comes FREE from herdr's official claude integration (installed
+      by Sasha, v8): it reports at SessionStart, so open/takeover/handoff successors all
+      self-report. Measured live BEFORE building: fresh pane agent carried
+      `agent_session {kind:id, source:herdr:claude}` matching its real transcript.
+      → `lib/herdr.mjs` + our own sessionstart reporter DROPPED — the integration is the
+      reporter; ours would be a second writer of the same fact (the exact §4 sin).
+- [x] `pane.release_agent` DROPPED with reason: herdr clears the report when the occupant
+      exits (observed live in P0b — name and report gone after /exit). Nothing to release.
+- [x] Resolution order in the app (`orch_session_id`): pane report → orch-sessions.txt →
+      never a guess (picker stays the only guessing surface). Fallback proven live: the
+      pre-integration session resolves via the map, binding unbroken.
+- [x] Map rewrites: three writers through ONE choke point — adopt stops hand-writing the
+      file; `writeOrchSession(project, sid, by)` logs every rewrite with author to
+      `orch-sessions.log`. (Bus event deferred to Phase 4, where `handoff.claimed` carries
+      the interesting rewrite — noted deviation from the TDD.)
+- [x] Drills green: cargo 60/60 (captured `agent.get` fixtures: report present / absent /
+      no-agent / non-id kind) · test-handoff 70/70 · tsc clean · vitest 167/167
+- [x] Drill §7 step 4 (app restart rebind): proven at the 0.3.54 relaunch; 0.3.55 relaunch
+      repeats it with herdr-first resolution live.
+
+**PHASE 2 COMPLETE (2026-08-30). npm publish of 0.18.16 pending (classifier-blocked — Sasha's
+`!` command); installed plugin picks up the hook changes at the next plugin update.**
 
 ## Phase 3 — events
 
