@@ -3,6 +3,7 @@ import {
   applyBackfill, applyRows, applySessionChanged, bannerVisible, composerSlot, emptyChat,
   gaugeLabel, gaugeTone, gaugeUnknownWindow, insertPaths, isDividerTurn,
   sessionLiveness, receiptFor, LOST_AFTER_MS, HANDOFF_WARN_FRAC,
+  elapsedShort, lastToolLabel, tickerText,
   type Backfill, type ChatState, type ContextGauge, type Meta, type RowsPayload, type Turn,
 } from "./streaming";
 
@@ -343,3 +344,46 @@ describe("composerSlot (#5556)", () => {
   });
 });
 
+
+// #5608 — the live turn ticker: the app must never look dead while a turn chews.
+describe("turn ticker", () => {
+  const toolTurn = (tool: string, text: string): Turn =>
+    ({ role: "assistant", blocks: [{ kind: "tool", text, tool, tool_id: "t1" }] });
+
+  it("working reads elapsed · tool · context", () => {
+    expect(tickerText("working", 252_000, "Bash(cargo test)", 391_000))
+      .toBe("working · 4m 12s · Bash(cargo test) · 391k ctx");
+  });
+
+  it("blocked names the wait and drops the tool — nothing is running", () => {
+    expect(tickerText("blocked", 8_000, "Bash(x)", 391_000))
+      .toBe("blocked — waiting on an approval · 8s · 391k ctx");
+  });
+
+  it("idle and none say NOTHING — absence is the idle state", () => {
+    expect(tickerText("idle", 1000, "Bash(x)", 391_000)).toBe(null);
+    expect(tickerText("none", null, null, null)).toBe(null);
+  });
+
+  it("unknown elapsed and tokens simply drop out", () => {
+    expect(tickerText("working", null, "Read(lib.rs)", null)).toBe("working · Read(lib.rs)");
+  });
+
+  it("lastToolLabel finds the newest tool and trims its argument to a whiff", () => {
+    const turns: Turn[] = [
+      toolTurn("Read", "old.rs"),
+      { role: "user", blocks: [{ kind: "text", text: "go" }] },
+      toolTurn("Bash", "  cargo   test --all " + "x".repeat(60)),
+    ];
+    const label = lastToolLabel(turns)!;
+    expect(label.startsWith("Bash(cargo test --all")).toBe(true);
+    expect(label.endsWith("…)")).toBe(true);
+    expect(lastToolLabel([{ role: "user", blocks: [{ kind: "text", text: "hi" }] }])).toBe(null);
+  });
+
+  it("elapsedShort steps through its units", () => {
+    expect(elapsedShort(8_000)).toBe("8s");
+    expect(elapsedShort(252_000)).toBe("4m 12s");
+    expect(elapsedShort(3_780_000)).toBe("1h 03m");
+  });
+});

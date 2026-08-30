@@ -28,7 +28,7 @@ import {
 } from "./prefs";
 import {
   applyBackfill, applyRows, applySessionChanged, bannerVisible, emptyChat, isDividerTurn,
-  sessionLiveness,
+  lastToolLabel, sessionLiveness, tickerText,
   type Backfill, type Block, type ChatState, type RowsPayload,
   type SessionPayload, type ToolResult, type Turn,
 } from "./streaming";
@@ -372,6 +372,18 @@ export function Chat({ project, dock, onDock, onClose }: {
   useEffect(() => { foot.current?.scrollIntoView({ behavior: "smooth" }); }, [chat.turns.length]);
 
   const working = status === "working";
+  // #5608 — the turn's clock, started when this panel OBSERVES the flip into working. A panel
+  // mounted mid-turn undercounts (elapsed-since-seen) rather than guessing a start it never saw.
+  const [turnSeenAt, setTurnSeenAt] = useState<number | null>(null);
+  useEffect(() => { setTurnSeenAt(working ? Date.now() : null); }, [working]);
+  const [, tickNow] = useState(0);
+  useEffect(() => {
+    if (!working) return;
+    const iv = setInterval(() => tickNow(n => n + 1), 1000);
+    return () => clearInterval(iv);
+  }, [working]);
+  const ticker = tickerText(status, turnSeenAt != null ? Date.now() - turnSeenAt : null,
+    lastToolLabel(chat.turns), chat.meta.context.tokens);
   const liveness = sessionLiveness(status, target);
   const side = dock === "right";
 
@@ -472,6 +484,17 @@ export function Chat({ project, dock, onDock, onClose }: {
           </button>
         </div>
       </div>
+
+      {/* #5608 — the live turn ticker: a working turn visibly chews (elapsed · current tool ·
+          context eaten), all from rows already streaming. Absent when idle: the missing line
+          IS the idle state, never dead chrome. The changing text is the motion — no animation. */}
+      {ticker && (
+        <div className="flex shrink-0 items-center gap-1.5 px-3 pb-1.5">
+          <span className="tr-dot shrink-0"
+            style={{ background: status === "blocked" ? "var(--color-tr-warn)" : "var(--color-tr-doing)", width: 6, height: 6 }} />
+          <span className="tr-mono min-w-0 truncate text-[10.5px] text-tr-muted">{ticker}</span>
+        </div>
+      )}
 
       <div className="min-h-0 flex-1 overflow-y-auto px-3 pb-2">
         {!target && (

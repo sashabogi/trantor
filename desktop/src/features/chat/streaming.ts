@@ -171,6 +171,50 @@ export function receiptFor(p: PendingSend, userTexts: string[], now: number): "s
   return now - p.at > LOST_AFTER_MS ? "lost" : "sending";
 }
 
+/** #5608 — the live turn ticker's tool label: the most recent tool the agent touched, with a
+ *  one-line whiff of its argument. Scans backward so the newest row wins; only rendered while
+ *  the agent is working/blocked, so a finished turn's last tool never masquerades as "now". */
+export function lastToolLabel(turns: Turn[]): string | null {
+  for (let i = turns.length - 1; i >= 0; i--) {
+    if (turns[i].role !== "assistant") continue;
+    for (let j = turns[i].blocks.length - 1; j >= 0; j--) {
+      const b = turns[i].blocks[j];
+      if (b.kind === "tool" && b.tool) {
+        const arg = (b.text ?? "").replace(/\s+/g, " ").trim();
+        return arg ? `${b.tool}(${arg.slice(0, 40)}${arg.length > 40 ? "…" : ""})` : b.tool;
+      }
+    }
+  }
+  return null;
+}
+
+/** Counting-up elapsed, compact: "8s", "4m 12s", "1h 03m". */
+export function elapsedShort(ms: number): string {
+  const s = Math.max(0, Math.floor(ms / 1000));
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m}m ${String(s - m * 60).padStart(2, "0")}s`;
+  const h = Math.floor(m / 60);
+  return `${h}h ${String(m - h * 60).padStart(2, "0")}m`;
+}
+
+/** The ticker line itself (#5608): a working turn visibly CHEWS — elapsed, the tool it is on,
+ *  the context it has eaten — all from data already streaming. Null when there is nothing to
+ *  say (idle/none): absence of the line IS the idle state; no dead chrome. */
+export function tickerText(
+  status: string,
+  elapsedMs: number | null,
+  lastTool: string | null,
+  tokens: number | null,
+): string | null {
+  if (status !== "working" && status !== "blocked") return null;
+  const parts: string[] = [status === "blocked" ? "blocked — waiting on an approval" : "working"];
+  if (elapsedMs != null && elapsedMs >= 1000) parts.push(elapsedShort(elapsedMs));
+  if (status === "working" && lastTool) parts.push(lastTool);
+  if (tokens != null && tokens > 0) parts.push(`${Math.round(tokens / 1000)}k ctx`);
+  return parts.join(" · ");
+}
+
 /** The gauge's colour contract (#5508): hidden while `frac` is unknown, quiet below 75%, amber
  *  from 75%, red from 90%. Thresholds are exact — 0.75 IS amber and 0.90 IS red. */
 export function gaugeTone(frac: number | null): "hidden" | "neutral" | "amber" | "red" {
