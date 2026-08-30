@@ -258,7 +258,7 @@ export function Board({ client, project, lens, onLens }: {
   return (
     <div className="tr-pane relative flex h-full flex-col">
       <ProjectHeader project={project} lens={lens} onLens={onLens}
-        sub={<span className="flex flex-wrap items-center gap-x-2 gap-y-1">
+        sub={<span className="flex items-center gap-x-2">
           <span>{done}/{cards.length} done · {Math.round((done / Math.max(cards.length, 1)) * 100)}%{filtered && <> · showing {shown}</>}</span>
           {liveHere.length > 0 && <span className="flex items-center gap-1.5">
             <span className="opacity-60">·</span>
@@ -279,7 +279,7 @@ export function Board({ client, project, lens, onLens }: {
           value={query}
           onChange={e => setQuery(e.target.value)}
           placeholder="Search — text, #id, @assignee"
-          className="tr-input w-56"
+          className="tr-input w-56 min-w-0 shrink"
         />
         {assignees.length > 0 && (
           <select value={assignee} onChange={e => setAssignee(e.target.value)} className="tr-input">
