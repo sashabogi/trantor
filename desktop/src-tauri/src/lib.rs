@@ -1,3 +1,4 @@
+mod herdr;
 pub mod identity;
 mod terminal;
 
@@ -1369,13 +1370,6 @@ fn orchestrator_status(project: String) -> Result<String, String> {
     Ok("unknown".into())
 }
 
-/// Wrap text in bracketed-paste guards so the receiving TUI inserts it verbatim — newlines
-/// become newlines in the draft, never Enter presses. Single-line text is wrapped too: the
-/// guards are free, and one code path cannot regress into two.
-fn bracketed_paste(text: &str) -> String {
-    format!("\u{1b}[200~{text}\u{1b}[201~")
-}
-
 /// Send raw key presses to a pane. Separate from pane_send because interrupting a turn is a KEY,
 /// not text — typing the word "Escape" would just be typed.
 #[tauri::command]
@@ -1401,84 +1395,40 @@ fn pane_keys(target: String, keys: String) -> Result<(), String> {
     }
 }
 
-/// Send a line to a herdr pane, the way a person would type it.
+/// Deliver the operator's message to the agent in a pane — through herdr's agent surface,
+/// never as keystrokes.
 ///
-/// The input line is SHARED: the CLI stages its own commands there (2026-08-28, a resumed session
-/// had "/compact" pre-filled — the operator's dictation fused onto it and their first message was
-/// eaten). So an IDLE pane gets its input cleared first: esc esc clears staged text, and the third
-/// esc cancels the rewind picker the second one opens when the input was already empty — all three
-/// proven against a live claude TUI. A WORKING pane is left alone: Escape there would interrupt
-/// the running turn, and text sent mid-turn queues correctly (proven by a mid-turn probe).
+/// This command spent August 2026 as hand-rolled terminal typing and collected the scars to
+/// prove it (bracketed-paste wrapping after newlines submitted fragments; an esc-esc-esc input
+/// clear that interrupted live turns and was reverted the same day). `agent.prompt` makes all
+/// of that herdr's job: it honors the pane's live paste mode, encodes Enter itself, refuses a
+/// blocked agent BEFORE any bytes land, and reports a stall instead of typing into the void.
+/// Delivery TRUTH is unchanged: the transcript receipt decides what the operator is told —
+/// this call's outcome only shapes the fast-path error states.
 #[tauri::command]
 fn pane_send(target: String, text: String) -> Result<(), String> {
     if target.trim().is_empty() {
         return Err("no pane".into());
     }
-    let run = |args: Vec<&str>| -> Result<(), String> {
-        let out = std::process::Command::new("herdr")
-            .args(args)
-            .env("PATH", terminal_path())
-            .output()
-            .map_err(|e| format!("herdr: {e}"))?;
-        if out.status.success() {
-            Ok(())
-        } else {
-            Err(String::from_utf8_lossy(&out.stderr).trim().to_string())
+    match herdr::prompt(&target, &text)? {
+        herdr::PromptOutcome::Delivered => Ok(()),
+        herdr::PromptOutcome::Blocked => Err(
+            "The agent is waiting on an approval or question in its terminal — answer it there \
+             (Terminal tray), then send again. Nothing was typed."
+                .into(),
+        ),
+        herdr::PromptOutcome::NotReady => {
+            Err("The agent is still starting up — try again in a moment. Nothing was typed.".into())
         }
-    };
-    // NO automatic Escape, ever. The esc-esc-esc input clear (0.3.41) trusted herdr's "idle" —
-    // but herdr reads idle during the model's thinking phases, so the clear INTERRUPTED running
-    // turns: on 2026-08-28 every operator send for half an hour aborted the orchestrator's
-    // in-flight work ("Interrupted · What should Claude do instead?"), and queued messages never
-    // drained. The staged-input contamination the clear guarded against is rarer and survivable
-    // (delivery receipts treat a fused row as delivered-dirty); a killed turn is not. If a clear
-    // ever returns, its idle evidence must be the TRANSCRIPT's age, never a UI status.
-    // BRACKETED PASTE, always. Typed text delivers every "\n" as an Enter press, so a multiline
-    // dictation submitted itself in fragments and stranded its tail in the input box — twice on
-    // 2026-08-28, the second time eating the operator's Orca instructions. Inside the paste
-    // guards the TUI inserts newlines literally (proven on a live claude TUI: three lines arrived
-    // as ONE draft, one Enter submitted one message).
-    let wrapped = bracketed_paste(&text);
-    run(vec!["pane", "send-text", &target, &wrapped])?;
-    // Enter is a separate call: send-text is literal, so a newline inside it would be typed rather
-    // than submitted.
-    run(vec!["pane", "send-keys", &target, "Enter"])
-}
-
-/// The agent state herdr reports for one pane ("working" | "idle" | "blocked" | …), "unknown" on
-/// any failure. The caller clears the input line only on a positive "idle", so "unknown" is the
-/// safe answer for every failure: a wrongly-skipped clear risks contamination, a wrongly-sent
-/// Escape risks interrupting a live turn or dismissing a permission dialog — the worse trade.
-fn pane_agent_status(pane: &str) -> String {
-    let out = match std::process::Command::new("herdr")
-        .args(["agent", "list"])
-        .env("PATH", terminal_path())
-        .output()
-    {
-        Ok(o) => o,
-        Err(_) => return "unknown".into(),
-    };
-    let v: serde_json::Value =
-        match serde_json::from_str(String::from_utf8_lossy(&out.stdout).trim()) {
-            Ok(v) => v,
-            Err(_) => return "unknown".into(),
-        };
-    for a in v
-        .get("result")
-        .and_then(|r| r.get("agents"))
-        .and_then(|a| a.as_array())
-        .cloned()
-        .unwrap_or_default()
-    {
-        if a.get("pane_id").and_then(|p| p.as_str()) == Some(pane) {
-            return a
-                .get("agent_status")
-                .and_then(|s| s.as_str())
-                .unwrap_or("unknown")
-                .to_string();
+        herdr::PromptOutcome::Stalled => Err(
+            "The send didn't register with the agent — no lifecycle change was observed. \
+             Try again."
+                .into(),
+        ),
+        herdr::PromptOutcome::NoAgent => {
+            Err("No agent is running in this pane — reopen the session first.".into())
         }
     }
-    "unknown".into()
 }
 
 /// Is this seat writing to its worktree right now?
@@ -3523,15 +3473,6 @@ mod herdr_tests {
         let snap = decode_chat_lines_with_context_window(rows, 3, 0);
         assert_eq!(snap.turns.len(), 1);
         assert_eq!(snap.turns[0].blocks[0].text, "real words from a person");
-    }
-
-    #[test]
-    fn bracketed_paste_wraps_multiline_verbatim() {
-        // A "\n" typed raw is an Enter press; inside the guards it is a newline in the draft.
-        let w = bracketed_paste("first\nsecond");
-        assert!(w.starts_with("\u{1b}[200~"));
-        assert!(w.ends_with("\u{1b}[201~"));
-        assert!(w.contains("first\nsecond"));
     }
 
     #[test]
