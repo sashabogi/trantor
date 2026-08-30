@@ -194,11 +194,11 @@ describe("staleness and zombies", () => {
     expect(isZombie(z, Date.now() - 25 * 3600e3)).toBe(true);
   });
 
-  it("a gemini row with a fresh snapshot stays visible — and non-gemini rows never zombie", () => {
+  it("a gemini row hides even on a FRESH snapshot — the CLI is retired, a row is always a ghost", () => {
     const z = row({ provider: "gemini", label: "Gemini", kind: "subscription", plan: "deprecated" });
-    expect(isZombie(z, Date.now())).toBe(false);
-    expect(chipFrom(z, { snapshotTs: Date.now() })).not.toBeNull();
-    expect(isZombie(row({ provider: "codex", kind: "subscription" }), Date.now() - 25 * 3600e3)).toBe(false);
+    expect(isZombie(z, Date.now())).toBe(true);
+    expect(chipFrom(z, { snapshotTs: Date.now() })).toBeNull();
+    expect(isZombie(row({ provider: "codex", kind: "subscription", plan: "plus" }), Date.now() - 25 * 3600e3)).toBe(false);
   });
 });
 

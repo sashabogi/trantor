@@ -161,7 +161,13 @@ export const LOST_AFTER_MS = 10_000;
  *  send as pending until a user turn CONTAINS it — containment, not equality, because a fused row
  *  is still delivered, just dirty. "lost" only after the window: silence before that is transit. */
 export function receiptFor(p: PendingSend, userTexts: string[], now: number): "sending" | "delivered" | "lost" {
-  if (p.text && userTexts.some(t => t.includes(p.text))) return "delivered";
+  // TRIMMED containment. The drop-insert appends a trailing space to each path by design
+  // (#5507), but CC records a dropped image as its own "[Image: source: <path>]" text block —
+  // path followed by "]", never by the draft's trailing space — so the untrimmed needle missed
+  // and the receipt cried "not delivered" about a screenshot the session was actively answering
+  // (2026-08-30, fourth member of the false-alarm family).
+  const sent = (p.text ?? "").trim();
+  if (sent && userTexts.some(t => t.includes(sent))) return "delivered";
   return now - p.at > LOST_AFTER_MS ? "lost" : "sending";
 }
 

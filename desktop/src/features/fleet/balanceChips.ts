@@ -156,7 +156,11 @@ export function isStale(snapshotTs: number, now = Date.now()): boolean {
 }
 
 export function isZombie(e: BalanceRow, snapshotTs: number, now = Date.now()): boolean {
-  return e.provider === "gemini" && snapshotTs > 0 && now - snapshotTs > ZOMBIE_HIDE_MS;
+  // Gemini's CLI was retired 2026-06-18 — a gemini row is ALWAYS a ghost (a stale profile
+  // entry the hub faithfully reconciled), never a live seat. Hide it outright; the old
+  // 24h-staleness rule let a fresh snapshot resurrect it (operator caught it 2026-08-30).
+  if (e.provider === "gemini") return true;
+  return snapshotTs > 0 && now - snapshotTs > ZOMBIE_HIDE_MS && e.kind === "subscription" && !e.plan;
 }
 
 // Brightness/tone class: ok = the VALUE reads at full text brightness; warn/fail carry the status

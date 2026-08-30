@@ -161,6 +161,18 @@ describe("receiptFor", () => {
   it("an empty send can never claim delivery off an unrelated row", () => {
     expect(receiptFor({ text: "", at }, ["anything"], at + 100)).toBe("sending");
   });
+
+  it("a dropped image path (trailing space by design, #5507) matches its [Image: source:] row", () => {
+    // The 2026-08-30 false alarm: single screenshot dropped, path + trailing space sent,
+    // transcript recorded "[Image: source: <path>]" — path followed by "]", not by a space.
+    const p = "/Users/x/Library/Application Support/CleanShot/media/m_1/CleanShot 2026-08-30 at 18.18.39.jpg";
+    expect(receiptFor({ text: `${p} `, at }, [`[Image: source: ${p}]`], at + 100)).toBe("delivered");
+    expect(receiptFor({ text: `${p} `, at }, ["[Image: source: /some/other.jpg]"], at + LOST_AFTER_MS + 1)).toBe("lost");
+  });
+
+  it("a whitespace-only send never claims delivery", () => {
+    expect(receiptFor({ text: "   ", at }, ["anything"], at + 100)).toBe("sending");
+  });
 });
 
 // #5508 — the gauge tells the truth about a filling window, and stays absent until it knows one.
