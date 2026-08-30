@@ -12,7 +12,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ArrowDownToLine, Bot, Eye, FolderTree, GraduationCap, House, Inbox as InboxIcon, MessagesSquare, Settings as SettingsIcon } from "lucide-react";
 import { appUpdateCheck, HubClient, hubForProject, knownProjects, localSessions, type AppUpdate, type Peer } from "../shared/api/client";
-import { stateOf } from "../shared/presence";
+import { ago, stateOf } from "../shared/presence";
 import { countUnseen, onSeenChange } from "../shared/seen";
 import { usePendingProposals } from "../shared/Proposals";
 import { ProjectIcon } from "../shared/ProjectIcon";
@@ -148,7 +148,12 @@ export function AppShell() {
   //   • BUSY — a hub heartbeat inside the 90s work window (mid-turn NOW). Blink. Also counts as
   //     open on its own, so a busy session on ANOTHER machine (teams) still lights its row.
   // Peers still aggregate from BOTH the active hub and the machine-local hub, freshest wins.
-  const [activity, setActivity] = useState<Map<string, "busy" | "open">>(new Map());
+  // #5610 v1 — Active Now carries the WHAT, not just a dot: each live row keeps the freshest
+  // peer's lastSeen + model so the sidebar can say "mid-turn · 8s ago · fable" from data this
+  // pull already fetched. Zero new requests; crew seats heartbeat as peers, so herdr's busy
+  // panes are already counted through presence.
+  type Activity = { kind: "busy" | "open"; lastSeen?: number; model?: string };
+  const [activity, setActivity] = useState<Map<string, Activity>>(new Map());
   useEffect(() => {
     let alive = true;
     const pull = async () => {
@@ -163,10 +168,13 @@ export function AppShell() {
         const cur = best.get(p.session);
         if (!cur || (p.lastSeen ?? 0) > (cur.lastSeen ?? 0)) best.set(p.session, p);
       }
-      const m = new Map<string, "busy" | "open">();
-      for (const p of open) m.set(p, "open");
+      const m = new Map<string, Activity>();
+      for (const p of open) m.set(p, { kind: "open" });
       for (const p of best.values()) {
-        if (p.project && stateOf(p) === "busy") m.set(p.project, "busy");
+        if (!p.project || stateOf(p) !== "busy") continue;
+        const cur = m.get(p.project);
+        if (cur?.kind === "busy" && (cur.lastSeen ?? 0) >= (p.lastSeen ?? 0)) continue;
+        m.set(p.project, { kind: "busy", lastSeen: p.lastSeen, model: p.model || p.llm });
       }
       setActivity(m);
     };
@@ -184,7 +192,7 @@ export function AppShell() {
   const [activeProjects, restProjects] = useMemo(() => {
     const live = projects.filter(p => activity.has(p))
       .sort((a, b) => {
-        const rank = (p: string) => (activity.get(p) === "busy" ? 0 : 1);
+        const rank = (p: string) => (activity.get(p)?.kind === "busy" ? 0 : 1);
         return rank(a) - rank(b) || a.localeCompare(b);
       });
     return [live, projects.filter(p => !activity.has(p))] as const;
@@ -288,20 +296,32 @@ export function AppShell() {
   const ProjectRow = ({ p }: { p: string }) => {
     const act = activity.get(p);
     const on = p === active && pane.kind === "project";
+    // #5610 v1 — the happening-now line: a BUSY row says what is true beneath its name
+    // ("mid-turn · 8s ago · fable"), from data the activity pull already holds. An open-idle
+    // row stays a quiet dot; absence of the line is the idle state, never dead chrome.
+    const busyLine = act?.kind === "busy"
+      ? ["mid-turn", act.lastSeen ? `${ago(act.lastSeen)} ago` : null, act.model || null]
+          .filter(Boolean).join(" · ")
+      : null;
     return (
       <button key={p}
         onClick={() => { setActive(p); setPane(cur => ({ kind: "project", lens: cur.kind === "project" ? cur.lens : "board" })); }}
-        title={act === "busy" ? "a session here is mid-turn right now" : act === "open" ? "session open, idle" : undefined}
+        title={act?.kind === "busy" ? "a session here is mid-turn right now" : act?.kind === "open" ? "session open, idle" : undefined}
         className={`flex w-full items-center gap-2.5 rounded-lg px-3 py-1.5 text-left text-[13px] ${
           on ? "bg-white/[0.07] font-medium text-[var(--color-tr-text)]"
              : act ? "text-[var(--color-tr-text)]/85 hover:bg-white/[0.04]"
                    : "text-[var(--color-tr-muted)] hover:bg-white/[0.04] hover:text-[var(--color-tr-text)]"}`}>
         <ProjectIcon project={p} size={20} />
-        <span className="min-w-0 flex-1 truncate">{p}</span>
+        <span className="min-w-0 flex-1">
+          <span className="block truncate">{p}</span>
+          {busyLine && (
+            <span className="tr-mono block truncate text-[10px] font-normal text-[var(--color-tr-muted)]">{busyLine}</span>
+          )}
+        </span>
         {/* the dot is BLUE for any open session and blinks ONLY when work is actually happening —
             a window sitting open earns presence, never motion */}
         {act && (
-          <span className={`tr-dot shrink-0 ${act === "busy" ? "tr-dot-pulse" : ""}`}
+          <span className={`tr-dot shrink-0 ${act.kind === "busy" ? "tr-dot-pulse" : ""}`}
                 style={{ background: "var(--color-tr-doing)", width: 6, height: 6 }} />
         )}
       </button>
