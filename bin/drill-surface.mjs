@@ -234,15 +234,23 @@ let predecessorSid = null;
 step("S4 · handoff machine: warn → arm → fire → WRITTEN → successor claims → RECAPPED");
 {
   // A turn that uses a tool: the heartbeat is PostToolUse, so only tool use can arm the baton.
-  const raw = await socketRequest({ id: "trantor:agent.prompt", method: "agent.prompt", params: {
-    target: pane, text: "Use the Bash tool to run exactly `pwd`, then reply with just DONE-S4." } });
-  if (JSON.parse(raw).result?.type !== "agent_prompted") FAIL("S4 prompt accepted", raw.slice(0, 100));
-  const handoffFile = await waitFor("handoff written", () => {
+  // The heartbeat is PostToolUse: only a REAL tool call can arm the baton. Models sometimes
+  // answer without the tool (observed: run 2 of 3 on 2026-08-30 — 1-in-3 prompt fragility,
+  // not a seam), so ask, verify tool use in the transcript, and re-ask up to twice.
+  const findHandoff = () => {
     try {
       const f = readdirSync(join(bus, "handoffs")).find(x => x.startsWith(`${projectName}-`) && x.endsWith(".json"));
       return f ? join(bus, "handoffs", f) : null;
     } catch { return null; }
-  }, { timeoutMs: 180_000, everyMs: 2_000 });
+  };
+  let handoffFile = null;
+  for (let attempt = 1; attempt <= 3 && !handoffFile; attempt++) {
+    const raw = await socketRequest({ id: "trantor:agent.prompt", method: "agent.prompt", params: {
+      target: pane, text: `You MUST call the Bash tool now and run exactly: pwd — do not answer without calling it. Then reply with just DONE-S4-${attempt}.` } });
+    if (JSON.parse(raw).result?.type !== "agent_prompted") { FAIL("S4 prompt accepted", raw.slice(0, 100)); break; }
+    handoffFile = await waitFor("handoff written", findHandoff, { timeoutMs: 120_000, everyMs: 2_000 });
+    if (!handoffFile) console.log(`  ${D}attempt ${attempt}: no handoff yet — re-asking with the tool requirement${R}`);
+  }
   if (!handoffFile) {
     FAIL("the armed baton fired and WROTE a handoff at the turn boundary");
   } else {
