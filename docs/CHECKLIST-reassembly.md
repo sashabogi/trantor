@@ -72,8 +72,10 @@ signal+open; integration-install decision with Sasha; Orca patterns folded into 
 - [x] Drill §7 step 4 (app restart rebind): proven at the 0.3.54 relaunch; 0.3.55 relaunch
       repeats it with herdr-first resolution live.
 
-**PHASE 2 COMPLETE (2026-08-30). npm publish of 0.18.16 pending (classifier-blocked — Sasha's
-`!` command); installed plugin picks up the hook changes at the next plugin update.**
+**PHASE 2 COMPLETE (2026-08-30). npm publish of 0.18.16 DELIBERATELY HELD (Sasha's call):
+its CLI half is diagnostics only (rewrite log, adopt choke point) — it ships in one release
+with Phase 4's substantive hook changes (#5572 guard, recap gate), after the drill is green.
+The app half (resolution order) is already live in 0.3.55.**
 
 ## Phase 3 — events
 
