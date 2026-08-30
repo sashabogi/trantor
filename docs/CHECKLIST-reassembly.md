@@ -33,14 +33,20 @@ Legend: `[ ]` not started · `[~]` in progress (name the session/date) · `[x]` 
 **PHASE 0 COMPLETE (2026-08-30).** Verdict: Phase 1 GO on agent.prompt; handoff stays on
 signal+open; integration-install decision with Sasha; Orca patterns folded into Phases 2/5570.
 
-## Phase 1 — transport (gate: P0b green)
+## Phase 1 — transport (gate: P0b green) — SHIPPED app 0.3.54, 2026-08-30 (card #5578)
 
-- [ ] `herdr.rs` adapter with `prompt() -> PromptOutcome`
-- [ ] `pane_send` shimmed over it; bracketed-paste wrapper + input-clear branches DELETED
-- [ ] Blocked / stalled / no-agent outcomes rendered in the composer
-- [ ] Delivery receipts unchanged and still green (queue path preserved)
-- [ ] cargo drills green (outcome mapping, arg building — fixtures from P0b)
-- [ ] Drill §7 steps 1–2 pass live
+- [x] `herdr.rs` adapter with `prompt() -> PromptOutcome` — SOCKET transport, not CLI (argv is
+      unsafe for arbitrary text: no `--` separator, verified; socket has no quoting layer)
+- [x] `pane_send` shimmed over it; bracketed-paste wrapper + `pane_agent_status` DELETED
+      (net −59 lines in lib.rs)
+- [x] Blocked / starting / stalled / no-agent come back as plain-word composer errors
+      (existing setError path renders them; no frontend change needed)
+- [x] Delivery receipts unchanged (vitest 167/167; receipt machinery untouched)
+- [x] cargo 59/59 incl. 3 new fixture drills built from CAPTURED live responses
+- [~] Drill §7 steps 1–2: transport leg proven live (byte-identical socket request →
+      dash-leading multiline text as ONE user turn, reply received; blocked prompt refused,
+      zero bytes landed). REMAINING: operator sends a real message from the installed 0.3.54
+      chat — the in-app acceptance click.
 
 ## Phase 2 — identity
 
