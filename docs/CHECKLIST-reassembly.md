@@ -77,12 +77,26 @@ its CLI half is diagnostics only (rewrite log, adopt choke point) — it ships i
 with Phase 4's substantive hook changes (#5572 guard, recap gate), after the drill is green.
 The app half (resolution order) is already live in 0.3.55.**
 
-## Phase 3 — events
+## Phase 3 — events — SHIPPED app 0.3.56, 2026-08-30 (card #5580)
 
-- [ ] `events.subscribe` stream in `herdr.rs` → `agent-status` / `pane-lifecycle` Tauri events
-- [ ] `orchestrator_status` 3s poll and seat polls REMOVED; composer gate is an event reducer
-- [ ] Reconnect + snapshot re-seed handled (drill: drop the stream, state recovers)
-- [ ] vitest reducer drills + cargo re-seed drill green
+- [x] Per-pane `pane.agent_status_changed` stream in `herdr.rs` (StatusStream + pure decoder)
+      → `orch-status` Tauri event, spawned with chat_watch, dies with chat_unwatch.
+      DESIGN CORRECTED BY LIVE CAPTURE: global pane.* subscriptions REPLAY history on
+      subscribe (35 dead panes arrived in one capture) and pane_updated does NOT fire on
+      status transitions → per-pane subscription + reseed, never the global stream. The TDD's
+      "one global stream" idea was wrong; reality won.
+- [x] `orchestrator_status` 3s poll REMOVED (was a herdr subprocess per tick, forever, per
+      open chat) → seed-once + listen. KEPT with reasons: composer's 5s inventory poll
+      (process/fs truth, only while locked — not herdr) and the 5s pane-arrival file check
+      (only while unhosted).
+- [x] Reconnect + re-seed: quiet-tick re-checks pane mapping and re-seeds via agent.get;
+      dropped stream reconnects after a nap; herdr-down degrades to one socket attempt/3s,
+      zero subprocesses.
+- [x] cargo 62/62 (frame decode drills from CAPTURED frames: dotted + underscored spellings,
+      wrong-pane, ack, garbage) · tsc clean · vitest 167/167.
+- [~] Live acceptance: 0.3.56 installed + relaunched; the visible signal is the composer
+      flipping send↔stop the MOMENT a turn starts/ends (previously up to 3s lag), and
+      blocked states naming themselves. Operator's eyes confirm on next use.
 
 ## Phase 4 — context truth, then the handoff machine
 
