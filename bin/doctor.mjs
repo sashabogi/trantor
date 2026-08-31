@@ -10,6 +10,7 @@ import { execSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { resolveProject, resolveHub, DEFAULT_HUB_URL } from "../lib/project.mjs";
 import { loadOrCreate } from "../lib/identity.mjs";
+import { sfetchJson } from "../lib/signed-fetch.mjs";
 import { scan } from "../lib/splitbrain.mjs";
 
 const H = homedir();
@@ -84,6 +85,55 @@ section("hub routing");
     for (const f of scanned.findings) f.severity === "warn" ? warn(f.message, f.fix) : warn(`SPLIT-BRAIN — ${f.message}`, f.fix);
     if (!scanned.findings.length && !scanned.blind.length) ok(`no split-brain — every live project sits on exactly one hub (${scanned.checked} hub${scanned.checked === 1 ? "" : "s"} cross-checked)`);
     else if (!scanned.findings.length) ok(`no split-brain among the ${scanned.checked} hub${scanned.checked === 1 ? "" : "s"} that answered`);
+  }
+}
+
+// ── duty seat: is the fleet's watcher actually alive? ────────────────────────────────────────
+// The duty seat sat dead for four days (2026-08-27→31) while everything else reported green.
+// A dead watcher raises no error of its own — it just stops producing nudges — so this row makes
+// that state loud: process, keepalive, hub registration and the freshness of the seat's last hub
+// beat, each with its fix.
+section("duty seat (the fleet watcher)");
+{
+  const BUSD = join(H, ".agent-bus");
+  const DUTY_PLIST = join(H, "Library", "LaunchAgents", "com.trantor.duty.plist");
+  const FIX_UP = "trantor duty up   (installs the launchd keepalive com.trantor.duty, which relaunches the seat after a crash or reboot)";
+  let pid = 0;
+  try { pid = Number(readFileSync(join(BUSD, "duty.pid"), "utf8")) || 0; if (pid) process.kill(pid, 0); else pid = 0; } catch { pid = 0; }
+  const keepalive = existsSync(DUTY_PLIST);
+  // The seat watches the FLEET hub — the most common project hub in config, the exact pick
+  // bin/duty.mjs makes — not necessarily THIS project's hub.
+  const counts = new Map();
+  for (const u of Object.values(cfg.hubs || {})) counts.set(u, (counts.get(u) || 0) + 1);
+  const fleet = [...counts.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] || cfg.url || "";
+  const signed = cfg.ownerIdentity ? (() => { try { return loadOrCreate(cfg.ownerIdentity, "human"); } catch { return null; } })() : null;
+  const hubGet = (path) => sfetchJson(`${fleet}${path}`, { method: "GET", identity: signed, signal: AbortSignal.timeout(4000) })
+    .then((r) => (r?.ok ? r.json() : null)).catch(() => null);
+  if (!fleet) {
+    note("duty seat: no hub pinned — cannot check the fleet feed");
+  } else {
+    const st = await hubGet("/overseer/status");
+    const peers = await hubGet("/peers");
+    const dutySession = st?.dutySession || "";
+    const beat = dutySession ? (peers?.sessions || []).find((p) => p.session === dutySession)?.lastSeen || 0 : 0;
+    const ageMin = beat ? Math.floor((Date.now() - beat) / 60000) : null;
+    const age = ageMin == null ? "no beat yet" : ageMin < 1 ? "beat just now" : ageMin < 60 ? `last beat ${ageMin}m ago` : `last beat ${Math.floor(ageMin / 60)}h ago`;
+    if (!st || !peers) {
+      // The core section already flags a dead hub; here we only refuse to guess.
+      note(`duty seat: hub feed UNKNOWN — ${fleet} did not answer the duty read${cfg.ownerIdentity ? "" : " (no owner identity to sign with)"}`);
+      pid ? ok(`duty seat: process running (pid ${pid})`) : warn("duty seat: not running and its hub feed cannot be checked", FIX_UP);
+    } else if (pid && dutySession && ageMin != null && ageMin > 5) {
+      warn(`duty seat: process up (pid ${pid}) but the hub heard nothing for ${Math.floor(ageMin / 60) >= 1 ? Math.floor(ageMin / 60) + "h " : ""}${ageMin % 60}m — it is running deaf`, "trantor duty down && trantor duty up");
+    } else if (pid) {
+      ok(`duty seat: running (pid ${pid}${dutySession ? `, ${dutySession} on the fleet hub` : ""}, ${age})`);
+      if (process.platform === "darwin" && !keepalive) warn("duty seat: running WITHOUT a keepalive — a crash or reboot leaves it down", FIX_UP);
+    } else if (dutySession) {
+      warn(`duty seat: the hub still points at ${dutySession} but no seat process is running — escalations go into a hole`, FIX_UP);
+    } else if (keepalive) {
+      warn("duty seat: keepalive installed but the seat is down — launchd should have relaunched it", `launchctl list | grep com.trantor.duty   then: trantor duty down && trantor duty up`);
+    } else {
+      warn("duty seat: none — nobody is watching the fleet (undelivered mail and dead seats go unnudged)", FIX_UP);
+    }
   }
 }
 

@@ -3,7 +3,7 @@
 // The app builds one harness card per crew-section entry by splitting "<brand>: <fact>". That grammar
 // is load-bearing UI, not an internal detail: when the section also carried a colon-less aggregate
 // ("no crew CLIs found"), the app rendered a phantom seat named "no" where a real harness belonged.
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { join, dirname } from "node:path";
 import { homedir } from "node:os";
 import { fileURLToPath } from "node:url";
@@ -106,6 +106,88 @@ ok("every surviving brand came from a real seat line", bareBrands.every(b => /^[
     sec.some(e => /separate keys/.test(e.message)), sec.map(e => e.message).join(" | "));
   ok("…naming the crew layer as the source, so precedence is legible",
     sec.some(e => /agent-bus\/\.env \(crew\)/.test(e.message)), sec.map(e => e.message).join(" | "));
+}
+
+// 4. The duty row. The fleet watcher sat dead for four days (2026-08-27→31) while everything
+// else reported green — a dead watcher raises no error, it just stops nudging. The doctor must
+// make every duty state loud, each with its fix.
+{
+  const { mkdtempSync, mkdirSync, writeFileSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const http = await import("node:http");
+  const dutyIssues = (r) => r.issues.filter(e => String(e.section || "").startsWith("duty seat"));
+  const dutyOks = (r) => r.ok.filter(e => String(e.section || "").startsWith("duty seat"));
+  // A stand-in fleet hub whose duty state the drill controls per case.
+  const hubState = { dutySession: "", sessions: [] };
+  const fh = http.createServer((req, res) => {
+    const u = new URL(req.url, "http://x");
+    res.writeHead(200, { "content-type": "application/json" });
+    if (u.pathname === "/overseer/status") return res.end(JSON.stringify({ dutySession: hubState.dutySession }));
+    if (u.pathname === "/peers") return res.end(JSON.stringify({ sessions: hubState.sessions }));
+    res.end(JSON.stringify({ ok: true }));
+  });
+  await new Promise((r) => fh.listen(0, "127.0.0.1", r));
+  const FURL = `http://127.0.0.1:${fh.address().port}`;
+  const mkDutyHome = (files = {}) => {
+    const h = mkdtempSync(join(tmpdir(), "trantor-duty-"));
+    mkdirSync(join(h, ".agent-bus"), { recursive: true });
+    writeFileSync(join(h, ".agent-bus", "config.json"), JSON.stringify({ url: FURL, ownerIdentity: "admin" }));
+    for (const [p, c] of Object.entries(files)) {
+      const f = join(h, p); mkdirSync(dirname(f), { recursive: true }); writeFileSync(f, c);
+    }
+    return h;
+  };
+  // Async spawn, never spawnSync: the fake hub lives in THIS process, so a synchronous child
+  // would block the event loop that has to answer the doctor's hub reads (the same trap
+  // test-duty-seat.mjs documents for its mock hub).
+  const runDuty = (home) => new Promise((resolve) => {
+    const kid = spawn(process.execPath, [join(HERE, "bin", "doctor.mjs"), "--json"], {
+      env: { HOME: home, PATH: "/usr/bin:/bin" },
+    });
+    let so = "";
+    kid.stdout?.on?.("data", (d) => (so += d));
+    kid.on("close", () => { try { resolve(JSON.parse(so)); } catch (e) { resolve({ ok: [], issues: [], notes: [], _err: String(e) }); } });
+  });
+
+  // (a) nothing anywhere — the exact state of 08-27→31
+  hubState.dutySession = ""; hubState.sessions = [];
+  let h = mkDutyHome();
+  let r = await runDuty(h);
+  ok("no duty process, no keepalive, no hub seat → nobody is watching the fleet",
+    dutyIssues(r).some(e => /nobody is watching the fleet/.test(e.message)), JSON.stringify(dutyIssues(r)));
+  ok("…and the fix names trantor duty up with the keepalive it installs",
+    dutyIssues(r).some(e => /trantor duty up/.test(e.fix || "") && /com\.trantor\.duty/.test(e.fix || "")), JSON.stringify(dutyIssues(r).map(e => e.fix)));
+
+  // (b) seat process up, hub beat fresh — the healthy state
+  hubState.dutySession = "claude:trantor-duty";
+  hubState.sessions = [{ session: "claude:trantor-duty", lastSeen: Date.now() }];
+  h = mkDutyHome({ ".agent-bus/duty.pid": String(process.pid) });   // a LIVE pid: this drill process
+  r = await runDuty(h);
+  ok("a running seat with a fresh beat reads as running", dutyOks(r).some(e => /running \(pid/.test(e.message) && /beat just now/.test(e.message)),
+    JSON.stringify(dutyOks(r)));
+
+  // (c) process up but the hub heard nothing for 20 minutes — running deaf
+  hubState.sessions = [{ session: "claude:trantor-duty", lastSeen: Date.now() - 20 * 60 * 1000 }];
+  h = mkDutyHome({ ".agent-bus/duty.pid": String(process.pid) });
+  r = await runDuty(h);
+  ok("a live process with a stale beat is reported as running deaf",
+    dutyIssues(r).some(e => /running deaf/.test(e.message)), JSON.stringify(dutyIssues(r)));
+
+  // (d) the hub still points at a seat with no process — escalations into a hole
+  hubState.sessions = [{ session: "claude:trantor-duty", lastSeen: Date.now() }];
+  h = mkDutyHome();
+  r = await runDuty(h);
+  ok("a hub pointer with no process behind it is flagged",
+    dutyIssues(r).some(e => /go into a hole/.test(e.message)), JSON.stringify(dutyIssues(r)));
+
+  // (e) keepalive installed but the seat down — launchd should have relaunched it
+  hubState.dutySession = ""; hubState.sessions = [];
+  h = mkDutyHome({ "Library/LaunchAgents/com.trantor.duty.plist": "<plist><dict><key>KeepAlive</key><true/></dict></plist>" });
+  r = await runDuty(h);
+  ok("an installed keepalive with a dead seat accuses launchd, not silence",
+    dutyIssues(r).some(e => /keepalive installed but the seat is down/.test(e.message)), JSON.stringify(dutyIssues(r)));
+
+  fh.close();
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);
