@@ -1,6 +1,8 @@
 // #5609 — a card's face tells the truth about life, drilled on the pure rule.
 import { describe, expect, it } from "vitest";
 import { cardLiveness, cardPace } from "./Board";
+import { checklistDone, checklistTotal } from "./CardDetail";
+import type { Card } from "../../shared/api/client";
 
 describe("cardLiveness", () => {
   it("doing + busy assignee breathes", () => {
@@ -23,7 +25,7 @@ describe("cardLiveness", () => {
     expect(cardLiveness("doing", "offline").stalled).toBe(true);
     expect(cardLiveness("doing", undefined).stalled).toBe(true);
     expect(cardLiveness("doing", "idle").stalled).toBe(false);
-    for (const s of ["done", "todo", "stale"]) {
+    for (const s of ["done", "todo", "stale"] as const) {
       const v = cardLiveness(s, "busy");
       expect(v.inMotion).toBe(false);
       expect(v.awaitingVerdict).toBe(false);

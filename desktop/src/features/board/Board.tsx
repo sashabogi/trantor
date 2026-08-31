@@ -120,7 +120,7 @@ export function cardPace(card: { updated?: number; ts?: number; log?: { ts: numb
   return `last activity ${agoTxt} ago${notes}`;
 }
 
-export function cardLiveness(status: string, presence?: PresenceState): {
+export function cardLiveness(status: LaneName, presence?: PresenceState): {
   inMotion: boolean; alarmed: boolean; stalled: boolean; awaitingVerdict: boolean;
 } {
   const activeLane = status === "doing" || status === "testing";
@@ -142,7 +142,7 @@ function CardTile({ card, onOpen, onAdvance, presence, subagents, subagentsOpen 
   // dead assignee is exactly the stall the operator needs to spot. Live work breathes (ring +
   // pulsing dot); failed/blocked pulse red like the old web UI did; a doing-card whose assignee
   // is offline says so instead of pretending.
-  const { inMotion, alarmed, stalled, awaitingVerdict } = cardLiveness(card.status, presence);
+  const { inMotion, alarmed, stalled, awaitingVerdict } = cardLiveness(card.status as LaneName, presence);
   const pace = (card.status === "doing" || card.status === "testing") ? cardPace(card) : null;
   // TODO ROT (CARDLOG contract): a todo card untouched >7d wears its age — quiet between 7 and
   // 14 days, warn-colored from 14. Untouched = now - (updated || ts), the same clock the hub's

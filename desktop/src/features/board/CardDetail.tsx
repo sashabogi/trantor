@@ -12,6 +12,13 @@ import type { Card, CardCode, HubClient, HubEvent, Message } from "../../shared/
 import { AgentChip, cleanTitle } from "../../shared/Avatar";
 import { dictGet } from "../../shared/dict";
 
+export function checklistDone(c: Card | null): number {
+  return (c?.checklist ?? []).filter(i => i.done).length;
+}
+export function checklistTotal(c: Card | null): number {
+  return (c?.checklist ?? []).length;
+}
+
 // Same flow map as the board: testing is a real gate the crew protocol depends on, so the drawer
 // must not offer a shortcut the protocol forbids either. Keyed by a card's live `status`, not a
 // closed type client-side, so lookups go through `dictGet` rather than indexing directly.
@@ -154,6 +161,29 @@ export function CardDetail({ client, id, onClose, onMoved, onOpen }: {
               className="mt-2 text-[11px] text-[var(--color-tr-muted)] underline decoration-dotted underline-offset-2 hover:text-[var(--color-tr-text)]">
               {task.commitCard ? `closed by commit #${task.commitCard}` : `closed the session's work #${task.focusCard}`}
             </button>
+          )}
+          {task && checklistTotal(task) > 0 && (
+            <div className="mt-3 border-t border-[var(--color-tr-edge)] pt-2">
+              <div className="flex items-center gap-2 text-[11px] text-[var(--color-tr-muted)]">
+                <span className="tr-mono">{checklistDone(task)}/{checklistTotal(task)}</span>
+                <div className="flex-1 h-1.5 rounded bg-black/20 overflow-hidden">
+                  <div className="h-full rounded bg-[var(--color-tr-ok)] transition-all"
+                       style={{ width: `${(checklistDone(task) / checklistTotal(task)) * 100}%` }} />
+                </div>
+              </div>
+              <div className="mt-1.5 flex flex-col gap-1">
+                {(task.checklist ?? []).map((item, i) => (
+                  <button key={i} type="button"
+                    onClick={() => void client.checklistToggle(task.id, i)}
+                    className={`flex items-center gap-2 text-left text-[12px] rounded px-1.5 py-0.5 hover:bg-white/[0.03] ${item.done ? "text-[var(--color-tr-muted)] line-through" : "text-[var(--color-tr-text)]"}`}>
+                    <span className={`shrink-0 w-3.5 h-3.5 rounded border flex items-center justify-center text-[10px] ${item.done ? "bg-[var(--color-tr-ok)] border-[var(--color-tr-ok)] text-white" : "border-[var(--color-tr-edge)]"}`}>
+                      {item.done ? "✓" : ""}
+                    </span>
+                    {item.text}
+                  </button>
+                ))}
+              </div>
+            </div>
           )}
         </header>
         {code && code.dir && (code.files.length > 0 || code.commits.length > 0) && (

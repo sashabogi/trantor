@@ -58,6 +58,8 @@ export type Card = {
   agentType?: string;
   /** Rolling count: the hub collapses repeat sub-agent runs into ONE card rather than minting dupes. */
   count?: number;
+  /** Acceptance checklist — [{text,done}]. Rendered as n/m + bar in the card detail drawer. */
+  checklist?: { text: string; done: boolean }[];
 };
 
 // Event payloads are heterogeneous by `type` — the fields below are named per the actual event
@@ -158,6 +160,7 @@ export class HubClient {
     return this.request<{ events: HubEvent[]; cursor?: number; latest?: number }>("GET", `/events${s ? "?" + s : ""}`);
   }
   moveCard(id: number, status: string) { return this.request("POST", "/task/update", { id, status }); }
+  checklistToggle(id: number, index: number) { return this.request("POST", "/task/checklist-toggle", { id, index }); }
 
   /**
    * One card's FULL story: the card, its status events, and the bus messages that reference it
