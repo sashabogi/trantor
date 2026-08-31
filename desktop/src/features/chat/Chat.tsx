@@ -367,6 +367,8 @@ export function Chat({ project, dock, onDock, onClose }: {
       const off = await listen<string>("orch-status", ev => {
         if (!alive) return;
         try {
+          // SAFETY: payload comes from our own Rust emitter (orch-status), and both fields are
+          // re-checked before use — a malformed payload falls through the guard or the catch.
           const p = JSON.parse(ev.payload) as { project: string; status: string };
           if (p.project === project && p.status) setStatus(p.status);
         } catch {}
@@ -556,15 +558,9 @@ export function Chat({ project, dock, onDock, onClose }: {
             and this becomes the conversation with it.
           </div>
         )}
-        {target && chat.continued && (
-          /* A handoff was adopted mid-view: what is above this line is the SAME project's next
-             session, not more of the one you were reading. */
-          <div className="my-2 flex items-center gap-2">
-            <span className="h-px flex-1 bg-tr-edge" />
-            <span className="text-[length:calc(10.5px*var(--chat-scale,1))] text-tr-muted">session continued</span>
-            <span className="h-px flex-1 bg-tr-edge" />
-          </div>
-        )}
+        {/* The "session continued" divider is a TURN now (#5646): applySessionChanged keeps the
+            predecessor thread and appends a divider item, so a second panel-level rule here would
+            draw the same line twice. */}
         {target && !chat.turns.length && !chat.continued && !error && (
           <div className="px-1 py-2 text-[length:calc(12px*var(--chat-scale,1))] leading-relaxed text-tr-muted">
             Nothing said yet. Type below and it reaches the session exactly as if you had typed it in
