@@ -64,6 +64,26 @@ export function notificationFor(ev: HubEvent, me: string, isOffline?: (session: 
   return null;
 }
 
+// The duty whitelist — a STATE edge, not a hub event (home/DutyStrip.tsx watches /health and
+// calls this only on the healthy→dark transition it observed, once per episode). A dead duty
+// seat is the same class as a failed crew seat: the fleet's watcher is gone and nothing else
+// will say so. First-read-dark stays silent (the strip says it; a notification for hours-old
+// news is noise).
+export async function notifyDutyDark(d: { lastSeenMs: number; queuedEscalations?: number }): Promise<boolean> {
+  if (!notificationsEnabled()) return false;
+  if (!(await ensurePermission())) return false;
+  const ago = d.lastSeenMs < 60_000 ? "under a minute"
+    : d.lastSeenMs < 3_600_000 ? `${Math.floor(d.lastSeenMs / 60_000)}m`
+    : `${Math.floor(d.lastSeenMs / 3_600_000)}h`;
+  try {
+    sendNotification({
+      title: "Duty seat dark — nobody is watching the bus",
+      body: `Duty last reported ${ago} ago${d.queuedEscalations ? ` · ${d.queuedEscalations} escalation${d.queuedEscalations === 1 ? "" : "s"} queued` : ""}. Bring it back: trantor duty up.`,
+    });
+    return true;
+  } catch { return false; }
+}
+
 // The user's off-switch, persisted locally. Read at fire time so the Settings toggle takes
 // effect immediately — no restart, no plumbing.
 export function notificationsEnabled(): boolean {
