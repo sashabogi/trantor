@@ -23,6 +23,17 @@ import { projectSessions, takeoverAction, type ProjectSessions } from "./takeove
 import { TakeoverStrip } from "./TakeoverStrip";
 
 export type Provenance = "reported" | "dispatched" | "unknown";
+type AutonomyJson = {
+  resolved?: { harness?: string; commit?: boolean; push?: boolean; deploy?: boolean };
+  overridden?: string[];
+};
+type LongRunState = {
+  known: boolean;
+  on: boolean;
+  busy: boolean;
+  error: string | null;
+  label: string;
+};
 
 const MODELS = [
   { value: "opus", label: "opus" },
@@ -162,7 +173,7 @@ function FontMenu({ step, onPick }: { step: FontStep; onPick: (s: FontStep) => v
   );
 }
 
-export function Composer({ project, target, live, liveWhy, model, modelSource, working, userTexts, context, fontStep, onFontStep, onSent, onDispatch }: {
+export function Composer({ project, target, live, liveWhy, model, modelSource, working, userTexts, context, fontStep, onFontStep, onSent, onLongRunChange, onDispatch }: {
   project: string;
   target: string | null;
   /** Is there an agent behind the pane to talk to (#5477)? Drives every input, with `liveWhy`
@@ -182,6 +193,7 @@ export function Composer({ project, target, live, liveWhy, model, modelSource, w
   fontStep: FontStep;
   onFontStep: (s: FontStep) => void;
   onSent: () => void;
+  onLongRunChange: (on: boolean) => void;
   onDispatch: (dial: "model" | "effort", value: string) => void;
 }) {
   const [draft, setDraft] = useState("");
@@ -189,6 +201,13 @@ export function Composer({ project, target, live, liveWhy, model, modelSource, w
   const [effortSource, setEffortSource] = useState<Provenance>("unknown");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [longRun, setLongRun] = useState<LongRunState>({
+    known: false,
+    on: false,
+    busy: false,
+    error: null,
+    label: "checking autonomy",
+  });
   // @-reference. This is how you point the session at a PRD without typing a path from memory,
   // which is the same failure mode as typing a model id from memory.
   const [menu, setMenu] = useState<string[]>([]);
@@ -210,6 +229,41 @@ export function Composer({ project, target, live, liveWhy, model, modelSource, w
     return () => { alive = false; clearInterval(iv); };
   }, [project, live]);
   const action = live ? null : takeoverAction(inventory);
+
+  const autonomyState = (raw: string, busyState = false): LongRunState => {
+    const data: AutonomyJson = JSON.parse(raw);
+    const resolved = data.resolved ?? {};
+    const harness = resolved.harness ?? "unknown";
+    const on = harness === "bypass";
+    return {
+      known: true,
+      on,
+      busy: busyState,
+      error: null,
+      label: `harness ${harness} · countdown ${on ? "skipped" : "asks"}`,
+    };
+  };
+
+  useEffect(() => {
+    let alive = true;
+    setLongRun(s => ({ ...s, known: false, busy: true, error: null, label: "checking autonomy" }));
+    invoke<string>("autonomy_get", { project })
+      .then(raw => { if (alive) setLongRun(autonomyState(raw)); })
+      .catch(e => { if (alive) setLongRun({ known: false, on: false, busy: false, error: String(e), label: "autonomy unavailable" }); });
+    return () => { alive = false; };
+  }, [project]);
+
+  useEffect(() => {
+    onLongRunChange(longRun.known && longRun.on);
+  }, [longRun.known, longRun.on, onLongRunChange]);
+
+  const toggleLongRun = () => {
+    const next = !longRun.on;
+    setLongRun(s => ({ ...s, busy: true, error: null, label: next ? "setting harness bypass" : "setting harness prompt" }));
+    invoke<string>("autonomy_set", { project, dial: "harness", value: next ? "bypass" : "prompt" })
+      .then(raw => setLongRun(autonomyState(raw)))
+      .catch(e => setLongRun(s => ({ ...s, busy: false, error: String(e), label: "autonomy change failed" })));
+  };
 
   /** The @token being typed, or null. Anchored to the LAST @ so a message can mention several. */
   const token = (() => {
@@ -431,6 +485,21 @@ export function Composer({ project, target, live, liveWhy, model, modelSource, w
           disabled={!live}
           why={liveWhy}
         />
+        <button
+          type="button"
+          role="switch"
+          aria-checked={longRun.known && longRun.on}
+          onClick={toggleLongRun}
+          disabled={longRun.busy}
+          title={longRun.error ?? `Long run changes: ${longRun.label}`}
+          className="flex items-center gap-1 rounded-[7px] px-2 py-1 text-[11px] text-tr-muted hover:text-tr-text disabled:opacity-40"
+        >
+          <span className={`h-3 w-5 rounded-full border ${longRun.known && longRun.on ? "border-tr-ok bg-tr-ok/20" : "border-tr-edge bg-black/20"}`}>
+            <span className={`block h-2.5 w-2.5 rounded-full ${longRun.known && longRun.on ? "translate-x-2 bg-tr-ok" : "bg-tr-muted"}`} />
+          </span>
+          <span>long run</span>
+          <span className="tr-mono max-w-[120px] truncate text-[10.5px] opacity-70">{longRun.label}</span>
+        </button>
         {/* The gauge sits beside the dials that fill the window (#5521) — the number is mono
             because it is a number being compared, and it is hidden until truth exists. */}
         <ContextGauge ctx={context} />
