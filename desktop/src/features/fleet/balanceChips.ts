@@ -78,11 +78,14 @@ const BRAND = {
   openrouter: { mono: "OR", icon: "openrouter", hue: "#8B5CF6", fg: "#f1ecff" },
 } satisfies Record<string, BrandStyle>;
 
-const WINDOW_LABEL = { "5h": "5-hour window", "7d": "weekly" } satisfies Record<string, string>;
+// Shared with the Usage popover (usageRoster.ts) so the chip and the drill-in can never
+// disagree about what a window is called.
+export const WINDOW_LABEL = { "5h": "5-hour window", "7d": "weekly" } satisfies Record<string, string>;
 
 const SYMBOL = { USD: "$", CNY: "¥", EUR: "€" } satisfies Record<string, string>;
 
-function money(v: number, currency?: string): string {
+// Shared with the Usage popover's prepaid drill-in lines.
+export function money(v: number, currency?: string): string {
   return `${dictGet(SYMBOL, currency ?? "USD") ?? "$"}${v.toFixed(1)}`;
 }
 

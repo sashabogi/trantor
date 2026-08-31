@@ -10,6 +10,7 @@ import { HubClient } from "../../shared/api/client";
 import { cleanTitle } from "../../shared/Avatar";
 import { ProposalsSection } from "../../shared/Proposals";
 import { Collisions } from "./Collisions";
+import { DutyStrip } from "./DutyStrip";
 import type { BalancesReport, Card, Economics, Handoff, Peer } from "../../shared/api/client";
 
 const LOCAL_HUB = "http://127.0.0.1:4477";
@@ -78,6 +79,9 @@ export function Home({ client, me, onOpenProject }: {
 
   return (
     <div className="tr-pane h-full overflow-y-auto px-10 py-8">
+      {/* #5688: while the hub flags the duty seat dark, Home wears the red strip — the fleet's
+          watcher being gone outranks every other number on this page. */}
+      <DutyStrip client={client} />
       <header className="mb-7">
         <h1 className="tr-page-title">Home</h1>
         <p className="tr-page-sub">Your fleet at a glance, {me.split("@")[0]}.</p>
