@@ -117,6 +117,8 @@ describe("relative time — the drill-in vocabulary", () => {
 describe("usageDensity — persisted across popover close/reopen", () => {
   it("defaults to detailed and round-trips compact through storage", () => {
     const store = new Map<string, string>();
+    // SAFETY: a test-scoped localStorage stub — the shape below implements every member the
+    // code under test touches, and the node test env has no real Storage to conflict with.
     (globalThis as { localStorage?: Storage }).localStorage = {
       getItem: (k: string) => store.get(k) ?? null,
       setItem: (k: string, v: string) => { store.set(k, v); },
@@ -132,6 +134,7 @@ describe("usageDensity — persisted across popover close/reopen", () => {
     expect(usageDensity()).toBe("detailed");
   });
   it("an unavailable storage still yields the default", () => {
+    // SAFETY: deliberately unsetting the stub — the code under test must survive no Storage at all.
     (globalThis as { localStorage?: Storage }).localStorage = undefined;
     expect(usageDensity()).toBe("detailed");
   });

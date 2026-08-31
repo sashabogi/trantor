@@ -81,14 +81,14 @@ export function rowState(e: BalanceRow, snapshotFresh: boolean): RosterRowState 
   return "empty";
 }
 
-export const ROSTER_COPY: Record<RosterRowState, string> = {
+export const ROSTER_COPY = {
   usage: "",
   loading: "waiting for a snapshot…",
   plan: "plan",
   unlimited: "unlimited — nothing to refill",
   error: "unreachable",
   empty: "no usage data",
-};
+} as const satisfies Record<RosterRowState, string>;
 
 // §4.3 "Updated {timeAgo}": "just now" under a minute, minutes under an hour, else hours.
 export function timeAgo(ms: number): string {

@@ -23,6 +23,8 @@ export async function fetchDutyHealth(base: string): Promise<DutyHealth | null> 
       base, method: "GET", path: "/health", body: null,
     });
     if (res.status !== 200) return null;
+    // SAFETY: body comes from our own hub's /health, and duty is optional-chained with a null
+    // fallback — a malformed payload degrades to "no reading", never a crash.
     const h = JSON.parse(res.body) as { duty?: DutyHealth };
     return h?.duty ?? null;
   } catch {

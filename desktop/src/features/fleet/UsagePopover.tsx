@@ -13,18 +13,21 @@ import { RefreshCw } from "lucide-react";
 import type { BalanceRow } from "./balanceChips";
 import { chipFrom, money, toneClass, WINDOW_LABEL } from "./balanceChips";
 import { BrandMark } from "./BrandMark";
+import { dictGet } from "../../shared/dict";
 import {
   metricsFor, resetLabel, rowState, ROSTER_COPY, setUsageDensity, timeAgo,
   usageDensity, usageTone, worstFirst, type UsageDensity, type UsageMetric,
 } from "./usageRoster";
 
-const stateTone: Record<string, string> = {
+// Deliberately PARTIAL: a "usage" row carries live numbers and gets no tone override, so
+// lookups go through dictGet and fall back to no class — never index a closed literal by union.
+const stateTone = {
   error: "text-[var(--color-tr-fail)]",
   loading: "text-[var(--color-tr-muted)]",
   plan: "text-[var(--color-tr-muted)]",
   empty: "text-[var(--color-tr-muted)]",
   unlimited: "text-[var(--color-tr-muted)]",
-};
+} as const;
 
 function MetricBar({ pct, wide }: { pct: number; wide?: boolean }) {
   const tone = usageTone(pct);
@@ -77,7 +80,7 @@ function ProviderDrill({ e, snapshotTs, now }: { e: BalanceRow; snapshotTs: numb
       )}
       {metricsFor(e).map(m => (
         <div key={m.label} className="flex flex-col gap-1">
-          <span className="text-[10.5px] text-[var(--color-tr-muted)]">{WINDOW_LABEL[m.label as keyof typeof WINDOW_LABEL] ?? m.label}</span>
+          <span className="text-[10.5px] text-[var(--color-tr-muted)]">{dictGet(WINDOW_LABEL, m.label) ?? m.label}</span>
           {m.pct != null ? (
             <>
               <MetricBar pct={m.pct} wide />
@@ -166,7 +169,7 @@ export function UsagePopover({ rows, snapshotTs, spinning, onRefresh, onClose }:
                   <BrandMark icon={id.icon} mono={id.mono} hue={id.hue} fg={id.fg} />
                   <span className="min-w-0 flex-1 truncate text-[11.5px]">{e.label ?? e.provider}</span>
                   {state !== "usage" && (
-                    <span className={`shrink-0 text-[10.5px] ${stateTone[state]}`}>{ROSTER_COPY[state]}</span>
+                    <span className={`shrink-0 text-[10.5px] ${dictGet(stateTone, state) ?? ""}`}>{ROSTER_COPY[state]}</span>
                   )}
                   {state === "usage" && density === "compact" && tightest && (
                     <span className="flex shrink-0 items-center gap-1.5">
