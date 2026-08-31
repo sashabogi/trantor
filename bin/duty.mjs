@@ -244,7 +244,12 @@ if (cmd === "up") {
   if (!(await ensureFleetIdentity(hub))) process.exit(1);
   const env = (() => {
     const e = { RELAY_URL: hub, RUNNER_RULES: RULES, CREW_KICKOFF: KICKOFF,
-                RUNNER_TITLE: "Trantor Duty Agent", RUNNER_ABOUT: ABOUT };
+                RUNNER_TITLE: "Trantor Duty Agent", RUNNER_ABOUT: ABOUT,
+                // launchd starts jobs with a MINIMAL Path — the resurrected seat could not find
+                // `claude` and every turn died exit 127 "missing-cli" (found live 2026-08-31,
+                // duty's own triage caught it). Bake the operator's PATH from `up` time into the
+                // launcher, exactly like every other value it carries.
+                PATH: process.env.PATH || "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin" };
     if (DUTY_MODEL !== "inherit") e.CREW_MODEL = DUTY_MODEL;
     return e;
   })();

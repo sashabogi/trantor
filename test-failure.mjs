@@ -166,6 +166,35 @@ async function drill(agent, script, opts = {}) {
   ok("no success ack across the streak", !r.sends.some(m => /✅/.test(m.text || "")));
 }
 
+// ---- #5684 drill A: a provider BACKEND error is not quota, and the foreman is woken ----
+// The specimen (#5683): codex's remote-compact 404 was labelled "exhausted" and the operator was
+// told to wait out a quota window that did not exist; and the DOWN notice was a broadcast, which
+// wakes nobody — the operator found the dead seat before the orchestrator did.
+{
+  const { sends } = await drill("codex",
+    '#!/bin/sh\necho "ERROR: Error running remote compact task: unexpected status 404 Not Found" >&2\nexit 1\n',
+    { env: { RELAY_HOST_ID: "drillhost" } });
+  const failMsg = sends.find((m) => /turn FAILED/i.test(m.text || ""));
+  ok("#5684: a provider 404 is classified backend-error, never exhausted",
+     !!failMsg && /backend-error/.test(failMsg.text) && !/exhausted/.test(failMsg.text));
+  ok("#5684: the advice says NOT quota — retry or swap provider", !!failMsg && /NOT quota/.test(failMsg.text));
+  ok("#5684: the same event also reaches the ORCHESTRATOR direct (direct = wake)",
+     sends.some((m) => m.to === "drillhost:tt-fail-codex" && /FAILED|DOWN/.test(m.text || "")));
+}
+
+// ---- #5684 drill B: the turn watchdog reports a silent long turn, and never kills it ----
+{
+  const { sends } = await drill("claude",
+    '#!/bin/sh\nsleep 6\necho done\nexit 0\n',
+    { env: { RELAY_HOST_ID: "drillhost", TRANTOR_TURN_WATCHDOG_MS: "1500" }, waitMs: 8000 });
+  const stalls = sends.filter((m) => /STALLED/.test(m.text || ""));
+  ok("#5684: a silent over-window turn earns a stall report", stalls.length >= 1);
+  ok("#5684: exactly ONE report per turn (episode, never a timer storm)", stalls.length === 1);
+  ok("#5684: the stall goes DIRECT to the orchestrator", stalls[0]?.to === "drillhost:tt-fail-claude");
+  ok("#5684: the turn was NOT killed — it finished clean, no failure reported",
+     !sends.some((m) => /turn FAILED/.test(m.text || "")));
+}
+
 hub.close();
 
 console.log(`\nfailure drills: ${pass} passed, ${fail} failed`);

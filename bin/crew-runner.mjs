@@ -8,11 +8,11 @@
 // over plain HTTP (zero tokens, doubles as a heartbeat), and when a message addressed to this
 // agent arrives it RESUMES the CLI session (native resume = full context kept) with that
 // message as the prompt. The model just works and ends its turn; the runner does the rest.
-import { execSync, spawnSync } from "node:child_process";
+import { execSync, spawnSync, spawn } from "node:child_process";
 import { readFileSync, writeFileSync, unlinkSync, existsSync, appendFileSync, mkdirSync } from "node:fs";
 import { join, basename } from "node:path";
 import { homedir } from "node:os";
-import { resolveProject, resolveHub, withEnvFiles } from "../lib/project.mjs";
+import { resolveProject, resolveHub, withEnvFiles, hostId } from "../lib/project.mjs";
 import { loadOrCreate } from "../lib/identity.mjs";
 import { signedHeaders } from "../lib/signed-fetch.mjs";
 import { ensureEnrolled } from "../lib/enroll.mjs";
@@ -314,6 +314,11 @@ const AUTH_MARKER_RE = /unauthor|401|403|forbidden|invalid[ _-]?api[ _-]?key|aut
 function classifyFailure(exit, errText) {
   const t = (errText || "").toLowerCase();
   if (exit === 127) return "missing-cli";
+  // #5684: a provider BACKEND failure is not quota — it wants retry/swap, not a window wait.
+  // The specimen (#5683): codex's "unexpected status 404 Not Found … /responses/compact" was
+  // labelled "exhausted" and the operator was advised to wait out a window that did not exist.
+  // 401/403/429 deliberately fall through to the auth/exhausted branches below.
+  if (/unexpected status (404|408|410|5\d\d)|internal server error|bad gateway|service unavailable|gateway time.?out|econnrefused|connection refused|socket hang ?up|network is unreachable/.test(t)) return "backend-error";
   // "reached your … limit" / "usage limit" catch the subscription CLIs (Claude's "You've reached
   // your Fable 5 limit"), which say nothing about quota or credits and would otherwise read as a crash.
   if (/quota|insufficient|credit|balance|payment required|402|429|too many requests|rate.?limit|exceeded your|reached your [^.\n]*limit|usage limit|out of (credit|quota)/.test(t)) return "exhausted";
@@ -329,6 +334,7 @@ async function reportFailure(exit, trigger, undelivered = 0) {
   await api("/register", { session: SESSION, project: PROJ, status, llm: AGENT, model: MODEL }).catch(() => {});
   const hint = reason === "exhausted" ? " — needs `trantor swap`"
     : reason === "auth" ? " — check credentials"
+    : reason === "backend-error" ? " — provider backend error (NOT quota): retry, or `trantor swap` to another provider"
     : reason === "missing-cli" ? " — CLI not on PATH" : "";
   // The count of messages this seat is HOLDING is the operator-actionable half of a failure: a
   // crashed pulse costs nothing, a crashed turn sitting on three escalations is someone waiting.
@@ -343,6 +349,12 @@ async function reportFailure(exit, trigger, undelivered = 0) {
   if (state !== announced) {
     announced = state;
     await api("/send", { from: SESSION, to: "all", text, project: PROJ }).catch(() => {});
+    // #5684: a broadcast does not wake anyone — the incident is the operator spotting dead seats
+    // before the foreman did, twice in one morning. The same state-change event now goes DIRECT
+    // to the project's orchestrator (direct = wake), gated identically so a standing outage says
+    // it once. A seat that IS the orchestrator's own runner has nobody above it to wake.
+    const orch = `${hostId()}:${PROJ}`;
+    if (orch !== SESSION) await api("/send", { from: SESSION, to: orch, text, project: PROJ }).catch(() => {});
   } else {
     log(`still ${state} (${consecFails} fails) — already announced, staying quiet`);
   }
@@ -420,6 +432,17 @@ function runTurn(prompt, isFirst, trigger = "kickoff") {
   // `tee /dev/stderr`; the rest now tee straight into ERRF. A real pipeline (not a process
   // substitution) so bash waits for tee to flush before we read the file back.
   const inner = cli.sid ? `${cmd} | tee /dev/stderr` : `${cmd} | tee -a ${ERRF}`;
+  // #5684: runTurn is spawnSync, so the runner cannot watch its own turn — a DETACHED watchdog
+  // does. Armed by a stamp file, disarmed when the turn ends (stamp removed below); a turn past
+  // the window with no ERRF growth earns ONE direct stall report to the foreman, never a kill.
+  const WD_MS = Number(process.env.TRANTOR_TURN_WATCHDOG_MS || 15 * 60 * 1000);
+  const STAMPF = join(homedir(), ".agent-bus", `turnstamp-${AGENT}-${PROJ}.json`);
+  try {
+    writeFileSync(STAMPF, JSON.stringify({ turn: TURN, startedAt: Date.now() }));
+    const wd = spawn(process.execPath, [join(import.meta.dirname, "turn-watchdog.mjs"), STAMPF, ERRF, String(WD_MS), SESSION, PROJ, HUB],
+      { detached: true, stdio: "ignore" });
+    wd.unref();
+  } catch {}
   const r = spawnSync("/bin/bash", ["-c", `set -o pipefail; { ${inner} ; } 2> >(tee -a ${ERRF} >&2)`], {
     cwd: TURN_DIR, encoding: "utf8", stdio: cli.sid ? ["ignore", "pipe", "inherit"] : "inherit",
     env: { ...process.env, RELAY_URL: HUB, RELAY_AGENT: AGENT, RELAY_PROJECT: PROJ,
@@ -436,6 +459,7 @@ function runTurn(prompt, isFirst, trigger = "kickoff") {
       TRANTOR_NO_HANDOFF_SPAWN: "1", TRANTOR_NO_BATON_SPAWN: "1" },
     maxBuffer: 16 * 1024 * 1024,
   });
+  try { unlinkSync(STAMPF); } catch {}   // turn over — disarm the watchdog
   try { lastErrText = readFileSync(ERRF, "utf8").slice(-4000); } catch { lastErrText = ""; }
   if (cli.sid && r.stdout) { const m = r.stdout.match(cli.sid); if (m) sid = m[1]; }
   const realExit = r.status;

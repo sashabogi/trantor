@@ -96,7 +96,9 @@ exit 0
     `${r.wakeTurns.filter(t => t.includes("REDELIVERY")).length} labelled`);
   ok("the undelivered batch is on disk while it is owed", r.sawPendingOnDisk);
   ok("the queue file is GONE once a turn finally exits 0", !r.pendingLeft);
-  const held = r.sends.filter(s => /undelivered message/.test(s.text || ""));
+  // Scoped to broadcasts: since #5684 the same state-change event ALSO goes direct to the
+  // project orchestrator (direct = wake), so an unscoped count doubles.
+  const held = r.sends.filter(s => s.to === "all" && /undelivered message/.test(s.text || ""));
   ok("the bus failure notice says how many messages the seat is holding",
     held.length === 2, `${held.length} notice(s): ${r.sends.map(s => s.text).join(" | ").slice(0, 220)}`);
   ok("recovery is announced once the batch finally lands",
