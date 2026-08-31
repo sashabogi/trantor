@@ -736,6 +736,30 @@ rmSync(projDir, { recursive: true, force: true });
   rmSync(bus, { recursive: true, force: true });
 }
 
+// ---- open resolves a NAMED project's checkout (2026-08-31: the app's Wake ran `trantor open
+// crebral-health` from the Tauri cwd and claude booted there — wrong-folder trust prompt, wrong
+// transcript slug, ACTIVE NOW blind) ----
+{
+  const root = join(tmpdir(), `tt-resolve-${process.pid}`);
+  mkdirSync(join(root, "devroot", "someproj"), { recursive: true });
+  mkdirSync(join(root, "elsewhere"), { recursive: true });
+  const fnSrc = execSync(`sed -n '/^_orch_resolve_dir()/,/^}$/p' bin/crew.sh`, { encoding: "utf8" });
+  const env = { ...process.env, TRANTOR_DEV_ROOT: join(root, "devroot") };
+  const runFn = (cwd, proj) => spawnSync("bash", ["-s"], {
+    input: `${fnSrc}\n_orch_resolve_dir '${cwd}' '${proj}'\n`, encoding: "utf8", env,
+  });
+  const r1 = runFn(join(root, "elsewhere"), "someproj");
+  ok("open: a named project opens in ITS checkout, not the caller's cwd",
+    r1.status === 0 && r1.stdout.trim() === join(root, "devroot", "someproj") && r1.stderr.includes("its checkout"));
+  const r2 = runFn(join(root, "elsewhere"), "");
+  ok("open: no project arg keeps the caller's cwd (the from-inside-the-checkout habit)",
+    r2.status === 0 && r2.stdout.trim() === join(root, "elsewhere"));
+  const r3 = runFn(join(root, "elsewhere"), "no-such-proj");
+  ok("open: an unknown name from an unrelated cwd refuses LOUDLY instead of opening somewhere silly",
+    r3.status !== 0 && r3.stderr.includes("no checkout"));
+  rmSync(root, { recursive: true, force: true });
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
 

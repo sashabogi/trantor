@@ -194,6 +194,24 @@ _herdr_close_pane() { [ "$DRY" = "1" ] && { echo "[dry] herdr pane close $1";   
 # So the project gets ONE claude session id, chosen by us and remembered. First open starts claude
 # under it; every later open resumes it. Discovering the id afterwards would be guesswork, and
 # `--continue` would grab whatever ran last in this directory, which may be a different window.
+# A NAMED project must open in ITS checkout, wherever the caller stands (2026-08-31: the app ran
+# `trantor open crebral-health` from the Tauri process cwd and claude booted THERE — a trust
+# prompt for a folder the operator never chose, transcripts under the wrong slug, no project
+# memory, ACTIVE NOW blind). Resolution mirrors the app's project_dir: $TRANTOR_DEV_ROOT
+# (default ~/development)/<name>. Unknown name from an unrelated cwd → refuse loudly rather
+# than open somewhere silly.
+_orch_resolve_dir() {   # $1=cwd $2=project-arg → dir to open in (stdout); fails when unresolvable
+  local herebase; herebase="$(basename "$(git -C "$1" rev-parse --show-toplevel 2>/dev/null || echo "$1")")"
+  if [ -z "$2" ] || [ "$2" = "$herebase" ]; then printf '%s' "$1"; return 0; fi
+  local devroot="${TRANTOR_DEV_ROOT:-$HOME/development}"
+  if [ -d "$devroot/$2" ]; then
+    echo "— opening $2 in its checkout: $devroot/$2 —" >&2
+    printf '%s' "$devroot/$2"; return 0
+  fi
+  echo "trantor open: '$2' has no checkout at $devroot/$2 and this is '$herebase' — cd into the project first" >&2
+  return 1
+}
+
 _orch_sid() {   # $1=project → the project's session uuid, minting one on first use
   local f="${STATE%/*}/orch-sessions.txt" p sid
   if [ -f "$f" ]; then
@@ -601,6 +619,7 @@ open_orchestrator() {
     --*) echo "trantor open: unknown flag '$a'"; usage_open; return 1 ;;
     *) PROJ="$a" ;;
   esac; done
+  DIR="$(_orch_resolve_dir "$DIR" "$PROJ")" || exit 1
   command -v herdr >/dev/null 2>&1 || { echo "trantor open needs herdr (the pane host) — install: curl -fsSL https://herdr.dev/install.sh | sh"; exit 1; }
   local wsid="" orch="" live_ids="" live_names="" pair="" line fresh=0
   local sid; sid="$(_orch_sid "$PROJ")" || { echo "trantor open: could not mint a session id (uuidgen missing?)" >&2; exit 1; }
@@ -635,6 +654,8 @@ open_orchestrator() {
     if _herdr pane rename "$orch" "orchestrator · $PROJ" >/dev/null 2>&1; then
       if _herdr_pane_has_agent "$orch"; then
         echo "herdr:${wsid:-?}/$orch"
+        # CONTRACT: the app's orchestrator_open (desktop terminal.rs) matches this exact phrase
+        # to SKIP its kickoff prompt — a reattach is a live conversation, never to be typed into.
         echo "— orchestrator already hosted: reattached to herdr:${wsid:-?}/$orch —" >&2
         return 0
       fi

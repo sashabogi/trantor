@@ -364,6 +364,11 @@ model-authored handoff instead of superseding it; the successor is injected a ca
 being spoken to; and a session hosted in a Workspace pane is replaced in place by a detached
 driver — the same chain the app's [Hand off now] button runs.
 
+Waking works the same way from the other end: hover a sleeping project in the app's sidebar and
+**Wake** hosts its session as an in-app pane — `trantor open` under the hood, opened in the
+project's own checkout wherever it is called from, handoff-beats-resume, and the same kickoff
+prompt so the woken session catches up (handoff, board, memory) and recaps on its own.
+
 Why crews never exhaust the orchestrator: bus messages are **by reference** (~70 tokens),
 work products stay in each agent's own context — the orchestrator burns at coordination
 rate, not work rate.

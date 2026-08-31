@@ -157,29 +157,68 @@ impl TerminalManager {
     }
 }
 
+/// The one boot prompt a WOKEN session gets. Same doctrine as handoff_now's KICKOFF_PROMPT —
+/// a session never runs a turn unprompted, so without this the wake delivered a silent pane
+/// (2026-08-31, crebral-health: no recap, operator waiting) — but wake must not assert a
+/// handoff exists, because a woken project may simply have been asleep.
+const WAKE_KICKOFF_PROMPT: &str = "You were just woken via Trantor. Catch up from your context \
+    — the handoff you were handed if one exists, otherwise the project board and memory — then \
+    recap where things stand in at most 3 sentences and wait.";
+
 #[tauri::command]
 pub fn orchestrator_open(project: String) -> Result<String, String> {
-    if project.trim().is_empty() {
+    let project = project.trim().to_string();
+    if project.is_empty() {
         return Err("project is required".into());
     }
+    // The 2026-08-31 crebral-health wake: `trantor open` inherits the caller's cwd (crew.sh's
+    // DIR="$(pwd)"), and the app's cwd is nowhere near the checkout — so claude booted in the
+    // wrong folder: a trust prompt for a directory the operator never chose, transcripts under
+    // the wrong slug, no project memory, and ACTIVE NOW blind (it maps sessions by cwd).
+    // handoff_now always resolved the dir before running the CLI; open now does the same.
+    let dir = crate::project_dir(&project)
+        .ok_or_else(|| format!("no local checkout for {project}"))?;
     let out = Command::new("trantor")
         .arg("open")
-        .arg(project)
+        .arg(&project)
+        .current_dir(&dir)
         .env("PATH", crate::terminal_path())
         .output()
         .map_err(|e| format!("trantor open: {e}"))?;
+    let stderr = String::from_utf8_lossy(&out.stderr).to_string();
     if !out.status.success() {
-        return Err(format!(
-            "trantor open failed: {}",
-            String::from_utf8_lossy(&out.stderr).trim()
-        ));
+        return Err(format!("trantor open failed: {}", stderr.trim()));
     }
     let target = String::from_utf8_lossy(&out.stdout).trim().to_string();
     if target.is_empty() {
-        Err("trantor open returned no herdr target".into())
-    } else {
-        Ok(target)
+        return Err("trantor open returned no herdr target".into());
     }
+    // KICKOFF-AFTER-WAKE: only when this open actually STARTED a conversation. A pure reattach
+    // ("already hosted: reattached" on stderr — the exact phrase crew.sh open_orchestrator
+    // prints, bound by comment there) is someone's live session and must not be typed into.
+    // The waiter is a plain thread: the fresh claude takes seconds to boot (and may sit at a
+    // dialog), and herdr::prompt refuses Blocked/NotReady/NoAgent BEFORE any bytes land, so
+    // retrying is safe. Stalled means bytes may have landed — never retry past it.
+    if !stderr.contains("already hosted: reattached") {
+        if let Some(pane) = target.rsplit('/').next().map(str::to_string) {
+            std::thread::spawn(move || {
+                let deadline = std::time::Instant::now() + std::time::Duration::from_secs(300);
+                loop {
+                    match crate::herdr::prompt(&pane, WAKE_KICKOFF_PROMPT) {
+                        Ok(crate::herdr::PromptOutcome::Delivered) => break,
+                        Ok(crate::herdr::PromptOutcome::Stalled) => break,
+                        Ok(_) | Err(_) => {
+                            if std::time::Instant::now() > deadline {
+                                break;
+                            }
+                            std::thread::sleep(std::time::Duration::from_secs(3));
+                        }
+                    }
+                }
+            });
+        }
+    }
+    Ok(target)
 }
 
 #[tauri::command]
