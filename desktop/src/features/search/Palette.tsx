@@ -11,6 +11,8 @@ import { searchFiles } from "../files/fileApi";
 import { paletteHits, type PaletteHit } from "./match";
 
 export type PaletteScope = { kind: "global" } | { kind: "project"; project: string };
+type LoadedProject = { project: string; cards: Card[]; events: HubEvent[] };
+type FileSearchProject = { project: string; paths: string[] };
 
 export function Palette({ scope, projects, searchProjects, onClose, onJumpProject, onOpenCard }: {
   scope: PaletteScope;
@@ -52,13 +54,16 @@ export function Palette({ scope, projects, searchProjects, onClose, onJumpProjec
             client.tasks(p),
             client.events({ project: p, limit: 500 }).then(r => r.events ?? []),
           ]);
-          return [p, taskRows, eventRows] as const;
-        } catch { return [p, [] as Card[], [] as HubEvent[]] as const; }
+          return { project: p, cards: taskRows, events: eventRows };
+        } catch {
+          const empty: LoadedProject = { project: p, cards: [], events: [] };
+          return empty;
+        }
       }));
       if (!alive) return;
-      setCards(Object.fromEntries(loaded.map(([p, rows]) => [p, rows])));
-      setEvents(Object.fromEntries(loaded.map(([p, _rows, evs]) => [p, evs])));
-      setMessages(Object.fromEntries(loaded.map(([p, _rows, evs]) => [p, evs.filter(e => e.type === "message")])));
+      setCards(Object.fromEntries(loaded.map(row => [row.project, row.cards])));
+      setEvents(Object.fromEntries(loaded.map(row => [row.project, row.events])));
+      setMessages(Object.fromEntries(loaded.map(row => [row.project, row.events.filter(e => e.type === "message")])));
       setLoading(false);
     })();
     return () => { alive = false; };
@@ -74,10 +79,13 @@ export function Palette({ scope, projects, searchProjects, onClose, onJumpProjec
     }
     void (async () => {
       const loaded = await Promise.all(targetProjects.map(async p => {
-        try { return [p, await searchFiles(p, q)] as const; }
-        catch { return [p, [] as string[]] as const; }
+        try { return { project: p, paths: await searchFiles(p, q) }; }
+        catch {
+          const empty: FileSearchProject = { project: p, paths: [] };
+          return empty;
+        }
       }));
-      if (alive) setFiles(Object.fromEntries(loaded));
+      if (alive) setFiles(Object.fromEntries(loaded.map(row => [row.project, row.paths])));
     })();
     return () => { alive = false; };
   }, [query, targetProjectKey]); // eslint-disable-line react-hooks/exhaustive-deps

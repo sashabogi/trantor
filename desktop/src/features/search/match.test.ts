@@ -5,9 +5,9 @@ import type { Card, HubEvent } from "../../shared/api/client";
 import { eventLabel, matchesCard, matchProjects, paletteHits } from "./match";
 
 const card = (id: number, title: string, assignee?: string): Card =>
-  ({ id, project: "p", title, status: "todo", assignee } as Card);
+  ({ id, project: "p", title, status: "todo", assignee });
 const event = (type: string, fields: Partial<HubEvent>): HubEvent =>
-  ({ type, ts: 10, project: "trantor", ...fields } as HubEvent);
+  ({ type, ts: 10, project: "trantor", ...fields });
 
 describe("matchesCard", () => {
   it("speaks the board's vocabulary", () => {

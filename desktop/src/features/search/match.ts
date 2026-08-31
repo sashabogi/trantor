@@ -41,12 +41,13 @@ type ExtraCorpus = {
 };
 
 const CARD_TYPES = new Set(["created", "moved", "updated"]);
+type SearchTextValue = string | number | boolean | null | undefined;
 
-function lc(s: unknown): string {
+function lc(s: SearchTextValue): string {
   return String(s ?? "").toLowerCase();
 }
 
-function haystack(parts: unknown[]): string {
+function haystack(parts: SearchTextValue[]): string {
   return parts.map(lc).filter(Boolean).join(" ");
 }
 
@@ -58,12 +59,8 @@ function textRank(text: string, q: string, base: number): number | null {
 }
 
 function firstCardRef(e: HubEvent): number | null {
-  if (typeof e.taskId === "number") return e.taskId;
-  const refs = (e as HubEvent & { refs?: unknown }).refs;
-  if (Array.isArray(refs)) {
-    const found = refs.find((r): r is number => typeof r === "number" && Number.isFinite(r));
-    if (found !== undefined) return found;
-  }
+  const taskId = e.taskId;
+  if (taskId !== undefined && Number.isFinite(taskId)) return taskId;
   const m = /#(\d+)(?![0-9])/.exec(e.text ?? "");
   return m ? Number(m[1]) : null;
 }
