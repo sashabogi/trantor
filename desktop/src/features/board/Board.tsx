@@ -153,7 +153,10 @@ function CardTile({ card, onOpen, onAdvance, presence, subagents, subagentsOpen 
     // explicit → button, here and in the drawer.
     <div
       onClick={() => onOpen(card)}
-      className={`tr-card tr-card-hover min-w-0 shrink-0 cursor-pointer overflow-hidden p-3.5 text-[13px] ${inMotion ? "tr-card-live" : ""} ${alarmed ? "tr-card-alarm" : ""}`}>
+      className={`tr-card tr-card-hover min-w-0 shrink-0 cursor-pointer overflow-hidden p-3.5 text-[13px] ${inMotion ? "tr-card-live" : ""} ${alarmed ? "tr-card-alarm" : ""}`}
+      // #5525: the card wears its status on its left edge — meaning, not decoration. Muted lanes
+      // (todo/stale) get the muted token, so quiet stays quiet and the scale stays one system.
+      style={{ borderLeft: `2px solid color-mix(in srgb, ${dictGet(LANE_COLOR, card.status) ?? "var(--color-tr-edge)"} 55%, transparent)` }}>
       <div className="leading-snug break-words [overflow-wrap:anywhere]">{card.summary || cleanTitle(card.title)}</div>
       {pace && (
         <div className="tr-mono mt-1.5 truncate text-[10px] text-[var(--color-tr-muted)]/80" title="when this card was last touched — driven vs parked">
@@ -323,7 +326,9 @@ export function Board({ client, project, lens, onLens, focusCard, onFocusConsume
           <section key={lane} className="tr-lane flex w-[290px] shrink-0 grow-0 flex-col rounded-xl bg-white/[0.025] p-2.5">
             <div className="mb-2.5 flex items-center gap-2 px-1.5 pt-1">
               <span className="tr-dot" style={{ background: LANE_COLOR[lane] }} />
-              <span className="tr-label">{lane}</span>
+              {/* #5525: the lane label speaks its own color — the lane IS a status, so this is
+                  meaning, not chrome. Muted lanes resolve to the muted token and stay quiet. */}
+              <span className="tr-label" style={{ color: LANE_COLOR[lane] }}>{lane}</span>
               <span className="tr-mono ml-auto text-[11px] text-[var(--color-tr-muted)]">
                 {work.length + subagents.length}
               </span>
