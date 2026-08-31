@@ -96,13 +96,17 @@ export function guardContextTokens(rows) {
 }
 
 // The transcript logs the model WITHOUT the [1m] marker, so we cannot tell a
-// 200k window from a 1M one. There is therefore no safe universal default — the
-// window must be declared (env RELAY_CONTEXT_WINDOW or config.contextWindow) for
-// the proactive early-warning to activate. Returns 0 when unknown (→ no warning).
+// 200k window from a 1M one in general. Fable is the known exception (#5503):
+// its window is 1M and the name is all the transcript ever gives us — the
+// undeclared window kept the early-warning off and the session hit the wall
+// silently. An explicit declaration (env RELAY_CONTEXT_WINDOW or
+// config.contextWindow) always wins over any name-based inference. Returns 0
+// when unknown (→ no warning).
 export function resolveWindow(model = "", conf = readConfig()) {
   const explicit = Number(process.env.RELAY_CONTEXT_WINDOW || conf.contextWindow || 0);
   if (explicit > 0) return explicit;
   if (/\[1m\]|-1m\b|:1m\b/i.test(model)) return 1_000_000; // honored if ever present
+  if (/fable/i.test(model)) return 1_000_000;              // #5503: fable is 1M by name
   return 0;
 }
 
