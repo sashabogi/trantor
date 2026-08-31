@@ -13,6 +13,11 @@ user-invocable: true
 Write a complete handoff capturing everything a NEW session needs to continue this work without
 re-deriving context, and save it so the next session in this project auto-loads it on start.
 
+Hosted in a Workspace pane? Since 0.18.18 `--baton` detects the pane and drives the in-place
+replacement itself (idle gate, graceful end, reopen, kickoff prompt) — no Terminal window opens,
+and the successor recaps unprompted. Nothing extra to do; the notes below about windows apply
+only to plain Terminal sessions.
+
 ## Instructions
 
 0. **Already written one this session?** Then do NOT write it again — pass the baton on it:

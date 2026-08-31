@@ -348,6 +348,14 @@ same project **takes over with a brand-new full context window**. Works manually
 agent via `relay_handoff`. Optional macOS auto-prompt (`autoHandoffPrompt` in
 `~/.agent-bus/config.json`) offers to open the fresh session for you, with a timeout.
 
+Since 0.18.18 the succession is a machine, not a ritual: at 90% context the running agent is
+told to finish or checkpoint and author the boundary handoff itself; the app's banner counts
+down ("handing off in 10s") when the dial allows; an automatic digest defers to a fresh
+model-authored handoff instead of superseding it; the successor is injected a capped ≤4KB recap
+(the verbatim tail stays on disk, one path away) and gets a kickoff prompt so it recaps without
+being spoken to; and a session hosted in a Workspace pane is replaced in place by a detached
+driver — the same chain the app's [Hand off now] button runs.
+
 Why crews never exhaust the orchestrator: bus messages are **by reference** (~70 tokens),
 work products stay in each agent's own context — the orchestrator burns at coordination
 rate, not work rate.
