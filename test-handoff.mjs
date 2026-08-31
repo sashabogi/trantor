@@ -644,6 +644,32 @@ rmSync(projDir, { recursive: true, force: true });
   rmSync(join(homedir(), ".agent-bus", `hb-kimi5645_${proj3}.stamp`), { force: true });
 }
 
+// ---- #5643: the baton's pane leg — routing and the row parser ----
+// All seams mocked, so nothing can spawn; the operator's guard envs are cleared for the call
+// (same doctrine as the ordering regression above) and restored whatever happens.
+{
+  const PANE_GUARDS = ["TRANTOR_NO_HANDOFF_SPAWN", "TRANTOR_NO_BATON_SPAWN"];
+  const saved = Object.fromEntries(PANE_GUARDS.map(k => [k, process.env[k]]));
+  const calls = [];
+  let r;
+  try {
+    for (const k of PANE_GUARDS) delete process.env[k];
+    r = spawnBaton({ projectDir: "/x/projP", handoffFile: "/x/h.json", conf: {},
+      _hasPane: (n) => { calls.push(`has:${n}`); return true; },
+      _spawnPane: (d, f) => { calls.push(`pane:${d}:${f}`); return true; },
+      _resolveWindow: () => { calls.push("resolve"); return { windowId: "W", tty: "" }; },
+      _spawnFresh: () => { calls.push("fresh"); return true; },
+      _armClose: () => { calls.push("arm"); return true; },
+    });
+  } finally { for (const k of PANE_GUARDS) { if (saved[k] === undefined) delete process.env[k]; else process.env[k] = saved[k]; } }
+  ok("#5643: a hosted pane routes the baton to the pane driver, never a window",
+    r?.pane === true && r?.spawned === true && calls.join(",") === "has:projP,pane:/x/projP:/x/h.json");
+  const { orchPane } = await import("./bin/baton-pane.mjs");
+  ok("#5643: orchPane picks the LAST orch row's pane (orch_pane_from_rows parity)",
+    orchPane("p\torch\t__orch__\tw1:p1\nq\torch\t__orch__\tw9:p9\np\torch\t__orch__\tw2:p2\n", "p") === "w2:p2"
+    && orchPane("x\therdr\ta\tw1:p1\n", "x") === null);
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
 

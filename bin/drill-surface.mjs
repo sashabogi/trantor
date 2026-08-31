@@ -16,7 +16,7 @@
 import { mkdirSync, rmSync, existsSync, readFileSync, writeFileSync, readdirSync, statSync } from "node:fs";
 import { join, basename } from "node:path";
 import { homedir, tmpdir } from "node:os";
-import { execFileSync, execSync } from "node:child_process";
+import { execFileSync, execSync, spawn } from "node:child_process";
 import { createConnection } from "node:net";
 
 const KEEP = process.argv.includes("--keep");
@@ -295,6 +295,72 @@ step("S4 · handoff machine: warn → arm → fire → WRITTEN → successor cla
 
 if (globalThis.__skew && fail > 0) {
   console.log(`  ${Y}NOTE${R}  S4 runs the INSTALLED plugin's hooks — with the skew above, ledger/recap failures are expected until the newer CLI is published and \`claude plugin update trantor@trantor\` runs.`);
+}
+
+// ---------- S4b · the --baton pane leg (#5643) ----------
+// The CLI-side replacement chain: a MANUAL handoff on disk, then bin/baton-pane.mjs (the detached
+// driver spawnBaton arms for hosted panes) replaces the pane's session in place — idle gate,
+// graceful end, reopen, kickoff — and the successor claims AND recaps with no human prompt.
+// The reopen is overridden to stay inside this drill's herdr world; the chain is otherwise the
+// production one. The routing itself (spawnBaton → driver, never a window) is drilled hermetically
+// in test-handoff.mjs.
+step("S4b · --baton pane leg: the driver replaces the session in place, kickoff recaps it");
+{
+  let st0 = null;
+  try { st0 = herdr(["agent", "get", pane]).result?.agent?.agent_status || null; } catch {}
+  if (!st0) {
+    SKIP("--baton pane leg", "no live agent in the pane (S4 did not leave a successor)");
+  } else {
+    let hf = null;
+    try {
+      const wh = execFileSync(process.execPath, [join(import.meta.dirname, "write-handoff.mjs")], {
+        input: "# handoff\nS4b: the pane leg drill — recap me.", encoding: "utf8", timeout: 30_000,
+        env: { ...process.env, CLAUDE_PROJECT_DIR: proj, AGENT_BUS_DIR: bus, TRANTOR_NO_HANDOFF_SPAWN: "1", TRANTOR_NO_BATON_SPAWN: "1" },
+      });
+      hf = /handoff saved: (\S+\.json)/.exec(wh)?.[1] || null;
+    } catch (e) { FAIL("S4b manual handoff written", String(e.message || e).slice(0, 120)); }
+    if (hf) {
+      PASS("manual handoff written for the pane to carry", basename(hf));
+      const child = spawn(process.execPath, [join(import.meta.dirname, "baton-pane.mjs"),
+        "--project", proj, "--handoff", hf, "--pane", pane], {
+        env: { ...process.env, AGENT_BUS_DIR: bus, TRANTOR_BATON_IDLE_DEADLINE_S: "90",
+          TRANTOR_BATON_REOPEN: `herdr agent start drill3 --kind claude --pane ${pane}` },
+        stdio: "ignore",
+      });
+      const exited = new Promise(res => child.on("exit", c => res(c)));
+      // Environment noise, not the leg: a fresh session may block on the trust dialog; answer it
+      // the way startClaude does so the kickoff has someone to land on.
+      const watcher = (async () => {
+        for (let i = 0; i < 40; i++) {
+          await sleep(3000);
+          try {
+            const g = herdr(["agent", "get", "drill3"]);
+            const st = g.result?.agent?.agent_status;
+            if (st === "blocked") herdr(["agent", "send-keys", "drill3", "enter"]);
+            if (st === "idle") break;
+          } catch {}
+        }
+      })();
+      const code = await Promise.race([exited, sleep(180_000).then(() => "timeout")]);
+      await watcher;
+      if (code === 0) PASS("driver ran the whole chain (idle gate → graceful end → reopen → kickoff)");
+      else FAIL("driver ran the whole chain", `exit ${code} — see ${join(bus, "logs")}/baton-pane-*.log`);
+      const rec = await waitFor("S4b claimed+recapped", () => {
+        try {
+          const r = JSON.parse(readFileSync(hf, "utf8"));
+          const s = (r.states || []).map(x => x.state);
+          return s.includes("claimed") && s.includes("recapped") ? r : null;
+        } catch { return null; }
+      }, { timeoutMs: 120_000, everyMs: 2_000 });
+      if (rec) PASS("successor claimed AND recapped — kicked off by the driver, no human prompt",
+        rec.states.map(s => s.state).join("→"));
+      else {
+        let states = "unreadable";
+        try { states = JSON.parse(readFileSync(hf, "utf8")).states?.map(s => s.state).join(",") || "none"; } catch {}
+        FAIL("successor claimed AND recapped without a human prompt", states);
+      }
+    }
+  }
 }
 
 // ---------- S5 · takeover ----------

@@ -443,12 +443,16 @@ export function Chat({ project, dock, onDock, onClose }: {
     }));
   }, []);
 
-  const startHandoff = useCallback((reason: "button" | "countdown" | "long-run") => {
+  // reason values are the CONTRACT with lib.rs HANDOFF_REASONS ("clicked"|"countdown"|
+  // "unattended") — the rust side REJECTS anything else, so a rename here is a broken banner,
+  // not a cosmetic choice. Caught live at integration: the seats shipped "button"/"long-run"
+  // and every hand-off would have errored at the seam.
+  const startHandoff = useCallback((reason: "clicked" | "countdown" | "unattended") => {
     if (handoffBusy) return;
     setHandoffBusy(true);
     setHandoffError(null);
     if (reason === "countdown") addDivider("handoff countdown expired - handing off now");
-    if (reason === "long-run") addDivider("long run reached the handoff threshold - handing off now");
+    if (reason === "unattended") addDivider("long run reached the handoff threshold - handing off now");
     invoke<string>("handoff_now", { project, reason })
       .catch(e => setHandoffError(String(e)))
       .finally(() => setHandoffBusy(false));
@@ -478,7 +482,7 @@ export function Chat({ project, dock, onDock, onClose }: {
     const key = `${project}:long-run:${chat.meta.context.frac ?? 0}`;
     if (autoHandoffKey.current === key) return;
     autoHandoffKey.current = key;
-    startHandoff("long-run");
+    startHandoff("unattended");
   }, [bannerOffered, chat.meta.context.frac, longRun, project, startHandoff]);
 
   // CSS custom properties have no key in React's CSSProperties, so the variable is declared as
@@ -516,6 +520,20 @@ export function Chat({ project, dock, onDock, onClose }: {
             to the composer bar (#5521), where the dials that fill the window live. */}
         {chat.meta.model && <span className="tr-chip shrink-0 text-[10.5px]">{chat.meta.model}</span>}
         <div className="flex shrink-0 items-center gap-1">
+          {/* #5643: the manual baton — same chain as the banner's [Hand off now] (reason
+              "clicked"), offered without waiting for the gauge. Busy/error surface through the
+              banner's shared state. */}
+          {target && (
+            <button
+              type="button"
+              onClick={() => startHandoff("clicked")}
+              disabled={handoffBusy}
+              title="Hand off now — write the handoff, restart the pane fresh, the successor recaps"
+              className="rounded-[7px] px-2 py-1.5 text-[11px] text-tr-muted hover:text-tr-text disabled:opacity-50"
+            >
+              hand off
+            </button>
+          )}
           {/* The dock toggle says what it is (#5521): an icon that reads as the target dock,
               not a mystery square. */}
           <button
@@ -648,7 +666,7 @@ export function Chat({ project, dock, onDock, onClose }: {
           busy={handoffBusy}
           error={handoffError}
           onKeepGoing={keepGoing}
-          onHandOffNow={() => startHandoff("button")}
+          onHandOffNow={() => startHandoff("clicked")}
         />
       )}
 

@@ -46,8 +46,9 @@ if (latest) {
     .find(p => { try { return JSON.parse(readFileSync(p, "utf8")).consumed === false; } catch { return false; } });
   if (!found) { console.error(`no unconsumed handoff for "${name}" in ${dir} — write one first (pipe it in), then baton it`); process.exit(1); }
   console.log(`baton on the existing handoff: ${found}`);
-  const { spawned, armed, windowId } = spawnBaton({ projectDir: project, handoffFile: found });
-  if (spawned) console.log(`baton: fresh session opening (self-recapping)${armed ? ` — this window (${windowId}) closes once it takes over` : ""}`);
+  const r = spawnBaton({ projectDir: project, handoffFile: found });
+  if (r.pane && r.spawned) console.log("baton: pane replacement armed (#5643) — this session ends at the turn boundary and the pane reopens fresh, self-recapping");
+  else if (r.spawned) console.log(`baton: fresh session opening (self-recapping)${r.armed ? ` — this window (${r.windowId}) closes once it takes over` : ""}`);
   else console.log("baton: could not spawn a fresh session (non-macOS or spawn disabled) — handoff is saved, open a new session manually");
   process.exit(0);
 }
@@ -61,7 +62,8 @@ writeFileSync(file, JSON.stringify(rec, null, 2));
 console.log(`handoff saved: ${file}`);
 
 if (baton) {
-  const { spawned, armed, windowId } = spawnBaton({ projectDir: project, handoffFile: file });
-  if (spawned) console.log(`baton: fresh session opening (self-recapping)${armed ? ` — this window (${windowId}) closes once it takes over` : " — original window left open (couldn't detect it)"}`);
+  const r = spawnBaton({ projectDir: project, handoffFile: file });
+  if (r.pane && r.spawned) console.log("baton: pane replacement armed (#5643) — this session ends at the turn boundary and the pane reopens fresh, self-recapping");
+  else if (r.spawned) console.log(`baton: fresh session opening (self-recapping)${r.armed ? ` — this window (${r.windowId}) closes once it takes over` : " — original window left open (couldn't detect it)"}`);
   else console.log(`baton: could not spawn a fresh session (non-macOS or spawn disabled) — handoff saved, open a new session manually`);
 }

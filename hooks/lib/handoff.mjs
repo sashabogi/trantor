@@ -615,14 +615,31 @@ export function resolveOriginalWindow() {
   return { windowId, tty };
 }
 
+// The pane leg of the baton (#5643): hand the replacement to a DETACHED driver (bin/baton-pane.mjs)
+// that survives this session's death — idle-gate → graceful end → trantor open → kickoff. The
+// window machinery (resolve/arm-close) is deliberately absent here: there is no window to close,
+// and the old path's answer ("spawn disabled — open manually") left the operator doing the
+// machine's job by hand.
+export function spawnPaneBaton(projectDir, handoffFile) {
+  try {
+    const script = join(HERE, "..", "..", "bin", "baton-pane.mjs");
+    if (!existsSync(script)) return false;
+    const child = spawn(process.execPath, [script, "--project", projectDir, "--handoff", handoffFile], { detached: true, stdio: "ignore" });
+    child.unref();
+    return true;
+  } catch { return false; }
+}
+
 // MANUAL one-command baton: spawn the fresh session (no dialog) + arm the close of THIS window once the
 // fresh one consumes the handoff. Returns { spawned, armed, windowId }.
 // ORDER IS LOAD-BEARING: resolve the original window BEFORE spawning. Reversing it is the
 // "successor closes ITSELF" bug — the just-opened window is frontmost, the front-window fallback
 // captures it, and baton-close then kills the FRESH session the moment it takes over. The seams
-// (_resolveWindow/_spawnFresh/_armClose) exist so the ordering can be regression-tested headlessly.
+// (_resolveWindow/_spawnFresh/_armClose/_hasPane/_spawnPane) exist so the ordering can be
+// regression-tested headlessly.
 export function spawnBaton({ projectDir, handoffFile, conf = readConfig(),
-  _resolveWindow = resolveOriginalWindow, _spawnFresh = spawnFresh, _armClose = armBatonClose }) {
+  _resolveWindow = resolveOriginalWindow, _spawnFresh = spawnFresh, _armClose = armBatonClose,
+  _hasPane = hasOrchPane, _spawnPane = spawnPaneBaton }) {
   // A DRILL MUST BE ABLE TO SAY NO. There was no such switch, so exercising the baton path in a
   // test opened real Terminal windows running real `claude` sessions in temp directories the test
   // then deleted, each parked on a "do you trust this folder?" prompt. Five of them were found by
@@ -630,6 +647,12 @@ export function spawnBaton({ projectDir, handoffFile, conf = readConfig(),
   // be tested honestly and someone will fake one that does not exist.
   if (spawnSuppressed() || conf.batonSpawn === false) {
     return { spawned: false, armed: false, windowId: "", suppressed: true };
+  }
+  // Hosted pane (#5643): the pane IS the successor surface — no window is resolved, spawned, or
+  // armed for closing. The detached driver replaces the session at the turn boundary.
+  if (_hasPane(basename(projectDir))) {
+    const spawned = _spawnPane(projectDir, handoffFile);
+    return { spawned, armed: false, windowId: "", pane: true };
   }
   const { windowId, tty } = _resolveWindow();   // original window FIRST, while it's still frontmost
   const spawned = _spawnFresh(projectDir);
