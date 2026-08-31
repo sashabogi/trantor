@@ -370,6 +370,7 @@ rate, not work rate.
 | `relay_project_brief(text)` | The project's what/why on the dashboard |
 | `relay_task_add(title, …, difficulty, model, deps, note?, project?)` | Cards with difficulty/model badges + DAG edges; `note` seeds the card's **permanent log**; `project` targets another board when you orchestrate from elsewhere |
 | `relay_task_move(id, status, note?)` | `todo → doing → testing → done` (the gate), `failed`, `blocked` — moves to testing/done should carry a `note`: what you did + the evidence, stored on the card forever |
+| `relay_task_check(id, index, done?)` | Tick one acceptance item on a card's checklist (seeded via `relay_task_add`'s `checklist`) — checked/total is the card's one honest progress denominator |
 | `relay_board` | The project's full board, as text |
 | `relay_scrooge(prompt, task?, difficulty?)` | Fractal cheap-model delegation, with the ledger receipt |
 | `relay_lesson(text, scope?)` | Record a failure lesson — auto-injected into all future crews |
