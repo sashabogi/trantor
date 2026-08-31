@@ -21,6 +21,7 @@ import { listen } from "@tauri-apps/api/event";
 import { ChevronDown, ChevronRight, PanelBottom, PanelBottomClose, PanelRight, PanelRightClose, Wrench } from "lucide-react";
 import { orchestratorOf } from "../workspace/herdr";
 import { DEFAULT_TERMINAL_DEPS, TerminalPane, type TerminalDeps } from "../workspace/TerminalPane";
+import { bannerCountdown, type HandoffCountdown } from "./banner";
 import { Composer, type Provenance } from "./Composer";
 import {
   clampPanel, fontScale, loadDismissedAt, loadFontStep, loadPanelSize, loadTrayOpen,
@@ -134,27 +135,25 @@ function Thinking({ text }: { text: string }) {
  *  handoff that failed silently is a trap set for the next wall. Success stays quiet: the
  *  session-changed flow already draws the "session continued" divider, and the composer's
  *  liveness gate covers the gap while the pane restarts. */
-function HandoffBanner({ project, frac, onKeepGoing }: { project: string; frac: number; onKeepGoing: () => void }) {
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+function HandoffBanner({ frac, countdown, busy, error, onKeepGoing, onHandOffNow }: {
+  frac: number;
+  countdown: HandoffCountdown;
+  busy: boolean;
+  error: string | null;
+  onKeepGoing: () => void;
+  onHandOffNow: () => void;
+}) {
   // The same rounding the gauge shows, so the banner and the bar can never name different numbers.
   const pct = Math.round(frac * 100);
-  const go = () => {
-    setBusy(true);
-    setError(null);
-    invoke<string>("handoff_now", { project })
-      .catch(e => setError(String(e)))
-      .finally(() => setBusy(false));
-  };
   return (
     <div className="mx-2 mb-1 rounded-lg border border-tr-fail/40 bg-tr-fail/10 px-2.5 py-1.5 text-[11.5px]">
       <div className="flex items-center gap-2">
         <span className="min-w-0 flex-1">
-          Context at <span className="tr-mono text-tr-fail">{pct}%</span> — hand off to a fresh session?
+          Context at <span className="tr-mono text-tr-fail">{pct}%</span> — handing off in <span className="tr-mono text-tr-fail">{countdown.remainingSec}s</span>
         </span>
         <button
           type="button"
-          onClick={go}
+          onClick={onHandOffNow}
           disabled={busy}
           title="Write the handoff, end this session, and open the next one in the same pane"
           className="shrink-0 rounded-[8px] bg-tr-panel px-2.5 py-1 text-[11.5px] font-medium disabled:opacity-40"
@@ -206,6 +205,11 @@ export function Chat({ project, dock, onDock, onClose }: {
   );
   const [fontStep, setFontStep] = useState<FontStep>(() => loadFontStep());
   const [trayOpen, setTrayOpen] = useState<boolean>(() => loadTrayOpen());
+  const [longRun, setLongRun] = useState(false);
+  const [handoffBusy, setHandoffBusy] = useState(false);
+  const [handoffError, setHandoffError] = useState<string | null>(null);
+  const [bannerArmedAt, setBannerArmedAt] = useState<number | null>(null);
+  const [bannerNow, setBannerNow] = useState(() => Date.now());
   // The handoff banner's episode marker (#5509 W1): the frac "keep going" was last said at, or
   // null when the offer owes nothing. Persisted so a restart does not re-ask an answered
   // question; cleared when the episode it belonged to is over.
@@ -229,6 +233,7 @@ export function Chat({ project, dock, onDock, onClose }: {
   // The project this panel mounted on (#5509 W1) — lets the [project] effect tell a real switch
   // (a new episode, dismissals cleared) from the mount it must leave alone.
   const prevProject = useRef(project);
+  const autoHandoffKey = useRef<string | null>(null);
 
   useEffect(() => {
     // A DIFFERENT project's session is a different episode (#5509 W1): a dismissal must not
@@ -237,6 +242,7 @@ export function Chat({ project, dock, onDock, onClose }: {
     const switched = prevProject.current !== project;
     prevProject.current = project;
     if (switched) { setDismissedAt(null); saveDismissedAt(null); }
+    setBannerArmedAt(null); setHandoffError(null); autoHandoffKey.current = null;
     setChat(emptyChat); seenRef.current = 0; setError(null); setStatus("unknown");
     orchestratorOf(project).then(o => setTarget(o?.surface ?? null)).catch(() => setTarget(null));
   }, [project]);
@@ -387,7 +393,54 @@ export function Chat({ project, dock, onDock, onClose }: {
     if (at === null) return;
     setDismissedAt(at);
     saveDismissedAt(at);
+    setBannerArmedAt(null);
+    autoHandoffKey.current = null;
   };
+
+  const addDivider = useCallback((text: string) => {
+    setChat(s => ({
+      ...s,
+      turns: [...s.turns, { role: "system", blocks: [{ kind: "divider", text }] }],
+    }));
+  }, []);
+
+  const startHandoff = useCallback((reason: "button" | "countdown" | "long-run") => {
+    if (handoffBusy) return;
+    setHandoffBusy(true);
+    setHandoffError(null);
+    if (reason === "countdown") addDivider("handoff countdown expired - handing off now");
+    if (reason === "long-run") addDivider("long run reached the handoff threshold - handing off now");
+    invoke<string>("handoff_now", { project, reason })
+      .catch(e => setHandoffError(String(e)))
+      .finally(() => setHandoffBusy(false));
+  }, [addDivider, handoffBusy, project]);
+
+  const bannerOffered = bannerVisible(chat.meta.context.frac, dismissedAt);
+  useEffect(() => {
+    if (!bannerOffered || longRun) { setBannerArmedAt(null); return; }
+    setBannerArmedAt(at => at ?? Date.now());
+  }, [bannerOffered, longRun]);
+  useEffect(() => {
+    if (!bannerOffered || longRun) return;
+    setBannerNow(Date.now());
+    const iv = setInterval(() => setBannerNow(Date.now()), 250);
+    return () => clearInterval(iv);
+  }, [bannerOffered, longRun]);
+  const countdown = bannerCountdown(chat.meta.context.frac, bannerArmedAt, bannerNow);
+  useEffect(() => {
+    if (!countdown.expired) return;
+    const key = `${project}:countdown:${bannerArmedAt ?? 0}`;
+    if (autoHandoffKey.current === key) return;
+    autoHandoffKey.current = key;
+    startHandoff("countdown");
+  }, [bannerArmedAt, countdown.expired, project, startHandoff]);
+  useEffect(() => {
+    if (!bannerOffered || !longRun) return;
+    const key = `${project}:long-run:${chat.meta.context.frac ?? 0}`;
+    if (autoHandoffKey.current === key) return;
+    autoHandoffKey.current = key;
+    startHandoff("long-run");
+  }, [bannerOffered, chat.meta.context.frac, longRun, project, startHandoff]);
 
   // CSS custom properties have no key in React's CSSProperties, so the variable is declared as
   // part of the object's own type — an intersection, not an assertion: every key is checked.
@@ -544,8 +597,15 @@ export function Chat({ project, dock, onDock, onClose }: {
       {/* The banner sits ABOVE the composer (#5509 W1): it is the last thing said before the
           words you are about to type, at the moment the window it types into is running out. The
           guard proves frac is known, so the ?? 0 below only satisfies the type. */}
-      {bannerVisible(chat.meta.context.frac, dismissedAt) && (
-        <HandoffBanner project={project} frac={chat.meta.context.frac ?? 0} onKeepGoing={keepGoing} />
+      {bannerOffered && !longRun && (
+        <HandoffBanner
+          frac={chat.meta.context.frac ?? 0}
+          countdown={countdown}
+          busy={handoffBusy}
+          error={handoffError}
+          onKeepGoing={keepGoing}
+          onHandOffNow={() => startHandoff("button")}
+        />
       )}
 
       <Composer
@@ -561,6 +621,7 @@ export function Chat({ project, dock, onDock, onClose }: {
         fontStep={fontStep}
         onFontStep={pickFont}
         onSent={sync}
+        onLongRunChange={setLongRun}
         onDispatch={(dial, value) => { if (dial === "model") { setPending(value); setModelSource("dispatched"); } }}
       />
     </div>
