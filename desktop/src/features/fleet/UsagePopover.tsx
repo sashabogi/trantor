@@ -9,9 +9,9 @@
 // dim, and an unreachable provider reads "unreachable", never "sign in" — this data plane
 // shells the local CLI and cannot know credential state.
 import { useEffect, useState } from "react";
-import { RefreshCw } from "lucide-react";
+import { ChevronRight, RefreshCw } from "lucide-react";
 import type { BalanceRow } from "./balanceChips";
-import { chipFrom, money, toneClass, WINDOW_LABEL } from "./balanceChips";
+import { chipFrom, epochMs, money, toneClass, WINDOW_LABEL } from "./balanceChips";
 import { BrandMark } from "./BrandMark";
 import { dictGet } from "../../shared/dict";
 import {
@@ -39,17 +39,31 @@ function MetricBar({ pct, wide }: { pct: number; wide?: boolean }) {
   );
 }
 
-function MetricChip({ label, pct, resetsAt, now }: { label: string; pct: number | null; resetsAt: number | string | null; now: number }) {
+// Orca's row chip verbatim (UsageRosterPanel.tsx UsageMetric): label · thin bar · bare percent.
+// No "used", no per-chip reset — the header line carries ONE soonest reset for the row, and the
+// flyout carries the rest. The wall of repeated words was the operator's round-2 complaint.
+function MetricChip({ label, pct, showBar = true }: { label: string; pct: number | null; showBar?: boolean }) {
+  if (pct == null) return null;
   return (
-    <span className="flex items-center gap-1.5 whitespace-nowrap">
-      <span className="text-[10.5px] text-[var(--color-tr-muted)]">{label}</span>
-      {pct != null && <MetricBar pct={pct} />}
-      {pct != null && <span className={`tr-mono text-[10.5px] ${toneClass(usageTone(pct))}`}>{Math.round(pct)}% used</span>}
-      {/* No percentage = nothing here — "no %" was fabricated noise (operator, round 1); prepaid
-          rows say their money in the row itself. */}
-      {(() => { const r = resetLabel(resetsAt, now); return r ? <span className="text-[10.5px] text-[var(--color-tr-muted)]">{r}</span> : null; })()}
+    <span className="flex shrink-0 items-center gap-1.5 whitespace-nowrap">
+      <span className="text-[10px] text-[var(--color-tr-muted)]">{label}</span>
+      {showBar && <MetricBar pct={pct} />}
+      <span className={`tr-mono text-[11px] ${toneClass(usageTone(pct))}`}>{Math.round(pct)}%</span>
     </span>
   );
+}
+
+// "7d" reads as "wk" in a chip (Orca's shortLabel); scoped model windows keep their name.
+const shortChip = (label: string) => (label === "7d" ? "wk" : label === "Quota" ? "Quota" : label);
+
+// The row header carries ONE reset — the soonest across the row's windows (Orca's soonestResetLabel).
+function soonestReset(ms: UsageMetric[], now: number): string | null {
+  let best: string | null = null; let bestMs = Infinity;
+  for (const m of ms) {
+    const t = epochMs(m.resetAt);   // the footer's own decoder — one boundary, one parse
+    if (t != null && t < bestMs) { bestMs = t; best = resetLabel(m.resetAt, now); }
+  }
+  return best;
 }
 
 // The drill-in: header with the freshness stamp, then one labeled bar per window with its
@@ -81,7 +95,8 @@ function ProviderDrill({ e, snapshotTs, now }: { e: BalanceRow; snapshotTs: numb
       )}
       {metricsFor(e).map(m => (
         <div key={m.label} className="flex flex-col gap-1">
-          <span className="text-[10.5px] text-[var(--color-tr-muted)]">{dictGet(WINDOW_LABEL, m.label) ?? m.label}</span>
+          {/* Orca's flyout section names: Session / Weekly / <model>. */}
+          <span className="text-[10.5px] text-[var(--color-tr-muted)]">{m.label === "5h" ? "Session" : m.label === "7d" ? "Weekly" : (dictGet(WINDOW_LABEL, m.label) ?? m.label)}</span>
           {m.pct != null ? (
             <>
               <MetricBar pct={m.pct} wide />
@@ -164,31 +179,35 @@ export function UsagePopover({ rows, snapshotTs, spinning, onRefresh, onClose }:
             // identity back off its output instead of duplicating the BRAND table here.
             const c = chipFrom(e);
             const id = { icon: c?.icon ?? null, mono: c?.mono ?? e.provider.slice(0, 2).toUpperCase(), hue: c?.hue ?? "#8A8A92", fg: c?.fg ?? "#1a1a1e" };
+            const reset = state === "usage" ? soonestReset(ms, now) : null;
+            // Orca's row anatomy, mirrored from UsageRosterPanel.tsx UsageRow: line one is
+            // icon · NAME · (soonest reset | status | money | tightest%), line two — detailed
+            // only — is the indented chip run. Names lead; the icon-only rows read as noise.
             return (
               <div key={e.provider}>
                 <button type="button" aria-expanded={open}
                   onClick={() => setOpenProvider(open ? null : e.provider)}
-                  className="flex w-full items-center gap-2 px-3 py-1.5 text-left hover:bg-[var(--color-tr-edge)]/40">
-                  <BrandMark icon={id.icon} mono={id.mono} hue={id.hue} fg={id.fg} />
-                  <span className="min-w-0 flex-1 truncate text-[11.5px]">{e.label ?? e.provider}</span>
-                  {state !== "usage" && (
-                    <span className={`shrink-0 text-[10.5px] ${dictGet(stateTone, state) ?? ""}`}>{ROSTER_COPY[state]}</span>
-                  )}
-                  {/* Prepaid rows say their MONEY — the one number they actually have — in both
-                      densities; a percent placeholder here was fabricated noise. */}
-                  {state === "usage" && e.kind === "prepaid" && e.remaining != null && (
-                    <span className="tr-mono shrink-0 text-[10.5px] text-[var(--color-tr-text)]">{money(e.remaining, e.currency)} left</span>
-                  )}
-                  {state === "usage" && e.kind !== "prepaid" && density === "compact" && tightest && (
-                    <span className="flex shrink-0 items-center gap-1.5">
-                      <span className={`tr-mono text-[10.5px] ${toneClass(usageTone(tightest.pct ?? 0))}`}>
-                        {Math.round(tightest.pct ?? 0)}%
-                      </span>
-                    </span>
-                  )}
-                  {state === "usage" && e.kind !== "prepaid" && density === "detailed" && (
-                    <span className="flex min-w-0 flex-wrap items-center justify-end gap-x-2 gap-y-1">
-                      {ms.map(m => <MetricChip key={m.label} label={m.label} pct={m.pct} resetsAt={m.resetAt} now={now} />)}
+                  className="flex w-full flex-col gap-1 px-3 py-2 text-left hover:bg-[var(--color-tr-edge)]/40">
+                  <span className="flex w-full items-center gap-2.5">
+                    <BrandMark icon={id.icon} mono={id.mono} hue={id.hue} fg={id.fg} />
+                    <span className="min-w-0 shrink truncate text-[12.5px] font-medium">{e.label ?? e.provider}</span>
+                    {state !== "usage" && (
+                      <span className={`min-w-0 truncate text-[10.5px] ${dictGet(stateTone, state) ?? "text-[var(--color-tr-muted)]"}`}>{ROSTER_COPY[state]}</span>
+                    )}
+                    {state === "usage" && e.kind === "prepaid" && e.remaining != null && (
+                      <span className="tr-mono ml-auto shrink-0 text-[11px] text-[var(--color-tr-text)]">{money(e.remaining, e.currency)} left</span>
+                    )}
+                    {state === "usage" && e.kind !== "prepaid" && density === "compact" && tightest && (
+                      <span className="ml-auto"><MetricChip label={shortChip(tightest.label)} pct={tightest.pct} showBar={false} /></span>
+                    )}
+                    {state === "usage" && e.kind !== "prepaid" && density === "detailed" && reset && (
+                      <span className="ml-auto shrink-0 text-[10.5px] text-[var(--color-tr-muted)]">{reset}</span>
+                    )}
+                    <ChevronRight size={11} strokeWidth={2} className={`shrink-0 text-[var(--color-tr-muted)] transition-transform ${open ? "rotate-90" : ""}`} />
+                  </span>
+                  {state === "usage" && e.kind !== "prepaid" && density === "detailed" && ms.length > 0 && (
+                    <span className="flex flex-wrap items-center gap-x-2.5 gap-y-1 pl-[30px]">
+                      {ms.map(m => <MetricChip key={m.label} label={shortChip(m.label)} pct={m.pct} />)}
                     </span>
                   )}
                 </button>

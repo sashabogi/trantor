@@ -93,7 +93,7 @@ export function money(v: number, currency?: string): string {
 // constructor is the boundary decoder for exactly that union — a number rides through as epoch
 // ms, a string gets parsed — so resetShort and untilLong decode HERE, once, then branch on the
 // plain number. Null means the row carries no usable reset (0 and NaN included).
-function epochMs(t: number | string | null | undefined): number | null {
+export function epochMs(t: number | string | null | undefined): number | null {
   if (t == null || t === "") return null;
   const ms = new Date(t).getTime();
   return !ms || Number.isNaN(ms) ? null : ms;
