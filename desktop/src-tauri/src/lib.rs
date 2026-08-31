@@ -1809,26 +1809,12 @@ fn autonomy_get(project: Option<String>) -> Result<String, String> {
 
 #[tauri::command]
 fn autonomy_set(project: Option<String>, dial: String, value: String) -> Result<String, String> {
-    // The dial name and value are the only things the front end may choose, and both are checked
-    // against a fixed list here as well as in the CLI: this command runs a subprocess, so an
-    // unvalidated string would be an argument-injection surface rather than a typo.
-    // No "seats" here on purpose: what a crew agent may do unattended is the overseer's level,
-    // per project, on the hub. This command must not offer a second way to set it.
-    const DIALS: &[&str] = &[
-        "harness",
-        "commit",
-        "push",
-        "deploy",
-        "swapDeadSeat",
-        "retryFailedTurn",
-    ];
-    const VALUES: &[&str] = &["on", "off", "prompt", "bypass"];
-    if !DIALS.contains(&dial.as_str()) {
-        return Err(format!("unknown dial '{dial}'"));
-    }
-    if !VALUES.contains(&value.as_str()) {
-        return Err(format!("unknown value '{value}'"));
-    }
+    // The CLI owns the json AND the validation: the dial/value whitelist lives in one place
+    // (bin/autonomy.mjs + lib/autonomy.mjs), and a parallel copy here would drift the first time
+    // either side changes — exactly what happened when the `baton` dial landed (the Rust list was
+    // stale for a week before this comment was written). An unknown dial or value makes the CLI
+    // exit non-zero with a specific message, which is surfaced verbatim; nothing unvalidated ever
+    // reaches the autonomy.json file because the CLI is the only writer of it.
     let mut cmd = std::process::Command::new("trantor");
     cmd.arg("autonomy").arg("set").arg(&dial).arg(&value);
     match project.as_deref() {
@@ -2478,8 +2464,17 @@ fn herdr_seats() -> Result<String, String> {
 
 const HANDOFF_EXIT_TIMEOUT: Duration = Duration::from_secs(5);
 
-fn trantor_handoff_args() -> [&'static str; 2] {
-    ["handoff", "--write-only"]
+/// The CLI args for a write-only handoff, plus the reason when one is known. The reason rides as
+/// `--reason <value>` so it can be persisted into the handoff record's trigger; a CLI that has not
+/// yet learned the flag ignores it (baton.mjs only inspects `--write-only`), so the call stays
+/// forward-compatible.
+fn trantor_handoff_args(reason: Option<&str>) -> Vec<&str> {
+    let mut args = vec!["handoff", "--write-only"];
+    if let Some(r) = reason {
+        args.push("--reason");
+        args.push(r);
+    }
+    args
 }
 
 fn trantor_reopen_args() -> [&'static str; 1] {
@@ -2592,17 +2587,35 @@ async fn end_process_gracefully(pid: u32) -> Result<(), String> {
     Ok(())
 }
 
+/// Why a handoff was fired. A fixed list on purpose: the reason lands in the handoff record's
+/// `trigger` field (via `trantor handoff --reason`), and the SUCCESSION wave's recap and
+/// messaging branch on it, so a free-form string would drift into places that parse it.
+const HANDOFF_REASONS: &[&str] = &["clicked", "countdown", "unattended"];
+
+/// The one boot prompt the successor gets after the pane reopens (card #5649, failure 2: the
+/// successor sat idle ~15min until the human typed). A session never runs a turn unprompted, so
+/// the recap waited for a human — this is the prompt that makes it recapitulate on its own.
+const KICKOFF_PROMPT: &str =
+    "You have just taken over via handoff. Recap now per your instructions.";
+
 #[tauri::command]
-async fn handoff_now(project: String) -> Result<String, String> {
+async fn handoff_now(project: String, reason: Option<String>) -> Result<String, String> {
     let project = project.trim().to_string();
     if project.is_empty() {
         return Err("project is required".into());
+    }
+    let reason = reason.unwrap_or_else(|| "clicked".to_string());
+    if !HANDOFF_REASONS.contains(&reason.as_str()) {
+        return Err(format!(
+            "unknown handoff reason '{reason}' — one of {}",
+            HANDOFF_REASONS.join("|")
+        ));
     }
     let dir = project_dir(&project).ok_or_else(|| format!("no local checkout for {project}"))?;
 
     let mut handoff = tokio::process::Command::new("trantor");
     handoff
-        .args(trantor_handoff_args())
+        .args(trantor_handoff_args(Some(&reason)))
         .current_dir(&dir)
         .env("PATH", terminal_path());
     let (_, handoff_stderr) = run_command_output(handoff, "trantor handoff --write-only").await?;
@@ -2632,7 +2645,31 @@ async fn handoff_now(project: String) -> Result<String, String> {
         .env("PATH", terminal_path());
     run_command_output(reopen, "trantor open").await?;
 
-    Ok("handoff written · session ended · pane reopened".into())
+    // KICKOFF-AFTER-REOPEN (card #5649, failure 2): ONE boot prompt over the herdr SOCKET so the
+    // successor recaps the handoff unprompted. Agent text never rides the CLI (socket only), and
+    // the outcome is surfaced rather than swallowed — a blocked or still-starting agent means the
+    // recap is still waiting on a human, which is exactly the failure this fixes.
+    match herdr::prompt(&pane, KICKOFF_PROMPT) {
+        Ok(outcome) => Ok(format!(
+            "handoff written · session ended · pane reopened · kickoff: {}",
+            kickoff_outcome_label(&outcome)
+        )),
+        Err(e) => Err(format!(
+            "handoff chain done, but the kickoff prompt failed (successor may sit idle): {e}"
+        )),
+    }
+}
+
+/// A short, operator-facing label for what became of the boot prompt. Pure + unit-tested so the
+/// kickoff path has a drill without needing a live herdr socket.
+fn kickoff_outcome_label(outcome: &herdr::PromptOutcome) -> &'static str {
+    match outcome {
+        herdr::PromptOutcome::Delivered => "prompt delivered — successor is recapping",
+        herdr::PromptOutcome::Blocked => "agent blocked at a dialog — answer it in the pane",
+        herdr::PromptOutcome::NotReady => "agent still starting — recap will wait",
+        herdr::PromptOutcome::Stalled => "no lifecycle change observed — recap may not land",
+        herdr::PromptOutcome::NoAgent => "no agent in the pane — reopen the session",
+    }
 }
 
 #[tauri::command]
@@ -3406,7 +3443,7 @@ mod herdr_tests {
 
     #[test]
     fn handoff_command_args_are_write_only_and_same_pane() {
-        assert_eq!(trantor_handoff_args(), ["handoff", "--write-only"]);
+        assert_eq!(trantor_handoff_args(None), ["handoff", "--write-only"]);
         assert_eq!(trantor_reopen_args(), ["open"]);
         assert_eq!(
             trantor_takeover_args("trantor"),
@@ -4208,5 +4245,70 @@ mod update_tests {
         assert!(
             err("https://github.com/x/y.dmg", "Trantor_../../x.dmg").contains("unexpected asset")
         );
+    }
+}
+
+#[cfg(test)]
+mod succession_tests {
+    use super::*;
+
+    // #5649 SUCCESSION rust: handoff_now(reason) · autonomy_set shells the CLI dial ·
+    // kickoff-after-reopen boot prompt via the herdr socket. These drills cover the pure parts of
+    // all three so the command wiring has a test bed without a live herdr/trantor to shell.
+
+    #[test]
+    fn handoff_reasons_are_exactly_the_three_declared_values() {
+        assert_eq!(HANDOFF_REASONS, &["clicked", "countdown", "unattended"]);
+    }
+
+    #[test]
+    fn handoff_args_carry_the_reason_when_present() {
+        assert_eq!(
+            trantor_handoff_args(Some("clicked")),
+            vec!["handoff", "--write-only", "--reason", "clicked"]
+        );
+        assert_eq!(
+            trantor_handoff_args(Some("countdown")),
+            vec!["handoff", "--write-only", "--reason", "countdown"]
+        );
+        assert_eq!(
+            trantor_handoff_args(Some("unattended")),
+            vec!["handoff", "--write-only", "--reason", "unattended"]
+        );
+    }
+
+    #[test]
+    fn handoff_args_stay_backward_compatible_without_a_reason() {
+        // The pre-#5649 call shape (frontend omitting reason) must still produce the old command.
+        assert_eq!(trantor_handoff_args(None), vec!["handoff", "--write-only"]);
+    }
+
+    #[test]
+    fn kickoff_prompt_is_the_fixed_recap_instruction() {
+        // The one line the successor sees after the pane reopens. If this changes, the recap the
+        // successor gives changes with it — so it is asserted, not assumed.
+        assert_eq!(
+            KICKOFF_PROMPT,
+            "You have just taken over via handoff. Recap now per your instructions."
+        );
+    }
+
+    #[test]
+    fn every_kickoff_outcome_has_a_human_label() {
+        use herdr::PromptOutcome as O;
+        for o in [
+            O::Delivered,
+            O::Blocked,
+            O::NotReady,
+            O::Stalled,
+            O::NoAgent,
+        ] {
+            let label = kickoff_outcome_label(&o);
+            assert!(!label.is_empty(), "outcome {o:?} needs a label");
+        }
+        assert!(kickoff_outcome_label(&O::Delivered).contains("delivered"));
+        assert!(kickoff_outcome_label(&O::Blocked).contains("blocked"));
+        assert!(kickoff_outcome_label(&O::NotReady).contains("starting"));
+        assert!(kickoff_outcome_label(&O::NoAgent).contains("no agent"));
     }
 }
