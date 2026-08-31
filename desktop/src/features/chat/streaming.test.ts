@@ -94,25 +94,52 @@ describe("applyBackfill", () => {
 });
 
 describe("applySessionChanged", () => {
-  it("clears the thread and results, restarts the cursor at 0, and raises the divider flag", () => {
-    const s: ChatState = {
-      turns: [t("old")], results: { t1: r("t1") }, receiptTexts: ["old"], seen: 40,
-      meta: meta({ model: "m", version: "1", branch: "main" }), continued: false,
-    };
-    const state = applySessionChanged(s);
-    expect(state.turns).toEqual([]);
-    expect(state.results).toEqual({});
-    expect(state.seen).toBe(0);
-    expect(state.meta).toEqual(emptyChat.meta);
-    expect(state.continued).toBe(true);
-  });
+   it("preserves the predecessor thread above a divider turn", () => {
+     const s: ChatState = {
+       turns: [t("old")], results: { t1: r("t1") }, receiptTexts: ["old"], seen: 40,
+       meta: meta({ model: "m", version: "1", branch: "main" }), continued: false,
+     };
+     const state = applySessionChanged(s);
+     expect(state.turns).toHaveLength(2);
+     expect(state.turns[0]).toEqual(t("old"));
+     expect(state.turns[1]).toEqual({ role: "system" as const, blocks: [{ kind: "divider" as const, text: "session continued" }] });
+     expect(state.results).toEqual({ t1: r("t1") });
+     expect(state.receiptTexts).toEqual(["old"]);
+     expect(state.seen).toBe(0);
+     expect(state.meta).toEqual(s.meta);
+     expect(state.continued).toBe(true);
+   });
 
-  it("lets the new session's rows apply from 0 afterwards", () => {
-    const state = applyRows(applySessionChanged({ ...emptyChat, seen: 40 }), rows(0, [t("fresh")]));
-    expect(state.resync).toBe(false);
-    expect(state.state.turns).toEqual([t("fresh")]);
-    expect(state.state.seen).toBe(1);
-  });
+   it("inserts a divider turn-list item the successor can detect via isDividerTurn", () => {
+     const s = { ...emptyChat, turns: [t("predecessor")] };
+     const state = applySessionChanged(s);
+     expect(isDividerTurn(state.turns[1])).toBe(true);
+   });
+
+   it("lets the new session's rows apply from 0 afterwards", () => {
+     const state = applyRows(applySessionChanged({ ...emptyChat, seen: 40 }), rows(0, [t("fresh")]));
+     expect(state.resync).toBe(false);
+      expect(state.state.turns).toEqual([{ role: "system" as const, blocks: [{ kind: "divider" as const, text: "session continued" }] }, t("fresh")]);
+     expect(state.state.seen).toBe(1);
+   });
+
+   it("retains the predecessor's results so the successor can pull its tail", () => {
+     const s: ChatState = {
+       turns: [t("old")], results: { t1: r("t1", true), t2: r("t2", false) },
+       receiptTexts: [], seen: 10, meta: meta(), continued: false,
+     };
+     const state = applySessionChanged(s);
+     expect(state.results.t1.ok).toBe(true);
+     expect(state.results.t2.ok).toBe(false);
+   });
+
+   it("clears only seen and resets the cursor — predecessor data is retained", () => {
+     const s = { ...emptyChat, seen: 40, receiptTexts: ["stale"], results: { t1: r("t1") } };
+     const state = applySessionChanged(s);
+     expect(state.seen).toBe(0);
+     expect(state.receiptTexts).toEqual(["stale"]);
+     expect(state.results.t1).toBeDefined();
+   });
 });
 
 describe("sessionLiveness (#5477)", () => {
@@ -442,8 +469,8 @@ describe("receipt channel", () => {
     expect(s.receiptTexts[79]).toBe("row 99");
   });
 
-  it("a session change clears the receipt window with everything else", () => {
-    const s = applySessionChanged({ ...emptyChat, receiptTexts: ["stale"] });
-    expect(s.receiptTexts).toEqual([]);
-  });
+it("a session change preserves the receipt window so the successor can pull the predecessor's tail", () => {
+     const s = applySessionChanged({ ...emptyChat, receiptTexts: ["stale"] });
+     expect(s.receiptTexts).toEqual(["stale"]);
+   });
 });
