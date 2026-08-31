@@ -366,6 +366,21 @@ export function Composer({ project, target, live, liveWhy, model, modelSource, w
     line(p.text).then(() => setPendings(ps => [...ps, { text: p.text, at: Date.now() }]));
   };
 
+  // ONE mechanical retry at the turn boundary (2026-08-31: an attachment sent MID-TURN was eaten
+  // by the streaming TUI and sat "lost" until a human clicked retry — the exact failure the
+  // receipt exists to catch, now answered by the machine once). A send lost AGAIN after its
+  // retry stays red for the human; retrying forever would spam a genuinely broken pane.
+  useEffect(() => {
+    if (working) return;
+    setPendings(ps => {
+      const now = Date.now();
+      const toRetry = ps.filter(p => !p.retried && receiptFor(p, userTexts, now) === "lost");
+      if (!toRetry.length) return ps;
+      for (const p of toRetry) void line(p.text);
+      return ps.map(p => (toRetry.includes(p) ? { text: p.text, at: now, retried: true } : p));
+    });
+  }, [working]);  // eslint-disable-line react-hooks/exhaustive-deps
+
   // Interrupting is a KEY, not a message. Escape is what stops a turn in the harness.
   const stop = () => { if (target) invoke("pane_keys", { target, keys: "Escape" }).catch(e => setError(String(e))); };
 

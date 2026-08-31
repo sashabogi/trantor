@@ -45,7 +45,8 @@ function MetricChip({ label, pct, resetsAt, now }: { label: string; pct: number 
       <span className="text-[10.5px] text-[var(--color-tr-muted)]">{label}</span>
       {pct != null && <MetricBar pct={pct} />}
       {pct != null && <span className={`tr-mono text-[10.5px] ${toneClass(usageTone(pct))}`}>{Math.round(pct)}% used</span>}
-      {pct == null && <span className="tr-mono text-[10.5px] text-[var(--color-tr-muted)]">no %</span>}
+      {/* No percentage = nothing here — "no %" was fabricated noise (operator, round 1); prepaid
+          rows say their money in the row itself. */}
       {(() => { const r = resetLabel(resetsAt, now); return r ? <span className="text-[10.5px] text-[var(--color-tr-muted)]">{r}</span> : null; })()}
     </span>
   );
@@ -124,7 +125,9 @@ export function UsagePopover({ rows, snapshotTs, spinning, onRefresh, onClose }:
   return (
     <>
       <div className="fixed inset-0 z-40" onClick={onClose} aria-hidden />
-      <div className="absolute bottom-9 right-2 z-50 w-96 rounded-md border border-[var(--color-tr-edge)] bg-[var(--color-tr-bg)] shadow-lg">
+      {/* LEFT-anchored above the strip (operator, round 1: right-anchored floated over the chat
+          composer and read as "the gauge got deleted"). Wider so detailed rows keep columns. */}
+      <div className="absolute bottom-9 left-2 z-50 w-[27rem] rounded-md border border-[var(--color-tr-edge)] bg-[var(--color-tr-bg)] shadow-lg">
         <div className="flex items-center gap-2 px-3 pt-3">
           <span className="text-[12px] font-semibold">Usage</span>
           <span className="text-[11px] text-[var(--color-tr-muted)]">all agents</span>
@@ -171,14 +174,19 @@ export function UsagePopover({ rows, snapshotTs, spinning, onRefresh, onClose }:
                   {state !== "usage" && (
                     <span className={`shrink-0 text-[10.5px] ${dictGet(stateTone, state) ?? ""}`}>{ROSTER_COPY[state]}</span>
                   )}
-                  {state === "usage" && density === "compact" && tightest && (
+                  {/* Prepaid rows say their MONEY — the one number they actually have — in both
+                      densities; a percent placeholder here was fabricated noise. */}
+                  {state === "usage" && e.kind === "prepaid" && e.remaining != null && (
+                    <span className="tr-mono shrink-0 text-[10.5px] text-[var(--color-tr-text)]">{money(e.remaining, e.currency)} left</span>
+                  )}
+                  {state === "usage" && e.kind !== "prepaid" && density === "compact" && tightest && (
                     <span className="flex shrink-0 items-center gap-1.5">
                       <span className={`tr-mono text-[10.5px] ${toneClass(usageTone(tightest.pct ?? 0))}`}>
                         {Math.round(tightest.pct ?? 0)}%
                       </span>
                     </span>
                   )}
-                  {state === "usage" && density === "detailed" && (
+                  {state === "usage" && e.kind !== "prepaid" && density === "detailed" && (
                     <span className="flex min-w-0 flex-wrap items-center justify-end gap-x-2 gap-y-1">
                       {ms.map(m => <MetricChip key={m.label} label={m.label} pct={m.pct} resetsAt={m.resetAt} now={now} />)}
                     </span>

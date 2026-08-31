@@ -165,8 +165,10 @@ export function sessionLiveness(status: string, target: string | null): Liveness
   return { live: true, why: "" };
 }
 
-/** A message the composer sent that the transcript has not yet echoed back (#5504). */
-export type PendingSend = { text: string; at: number };
+/** A message the composer sent that the transcript has not yet echoed back (#5504).
+ *  `retried` marks the one mechanical turn-boundary retry as spent — after that, staying
+ *  lost is the human's call. */
+export type PendingSend = { text: string; at: number; retried?: boolean };
 
 /** Silence past this window means the words never made it into the conversation. */
 export const LOST_AFTER_MS = 10_000;

@@ -545,7 +545,18 @@ fn orch_session_id(project: &str) -> Option<String> {
             }
         };
         if let Some(sid) = reported {
-            return Some(sid);
+            // A pane report can be POISONED by an ephemeral claude run in the same pane —
+            // `claude plugin update` (observed live 2026-08-31) registers a session-start with
+            // herdr, its sid has no transcript, and the app then reads a file that does not
+            // exist: empty chat, no meta, no context gauge, "history lost" on every restart.
+            // The report only wins when its transcript actually exists on disk; otherwise the
+            // durable map below is the truth.
+            let plausible = orchestrator_transcript_path(project, &sid)
+                .map(|p| p.exists())
+                .unwrap_or(false);
+            if plausible {
+                return Some(sid);
+            }
         }
     }
     let p = desktop_bus_dir().join("orch-sessions.txt");
