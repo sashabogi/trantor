@@ -36,6 +36,12 @@ export async function orchestratorOpen(project: string): Promise<string> {
   return invoke<string>("orchestrator_open", { project });
 }
 
+/** #5401 — projects whose orchestrator pane survived while the conversation inside died (the
+ *  reboot shape). Queried at app LAUNCH only; `orchestratorOpen` is the resume vehicle. */
+export async function orchRestorables(): Promise<string[]> {
+  return invoke<string[]>("orch_restorables");
+}
+
 export async function termAttach(target: string, onBytes: (bytes: TerminalBytes) => void): Promise<number> {
   const onBytesChannel = new Channel<TerminalBytes>(onBytes);
   return invoke<number>("term_attach", { target, onBytes: onBytesChannel });

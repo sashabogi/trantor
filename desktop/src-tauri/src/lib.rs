@@ -2710,6 +2710,57 @@ async fn takeover_now(project: String) -> Result<String, String> {
     }
 }
 
+/// #5401 — projects whose orchestrator PANE survived (a tracked orch row) while the
+/// conversation inside did not (no agent registered on that pane): the reboot shape. herdr's
+/// login agent restores panes, not the claude processes in them. The app offers/fires resume
+/// per the project's baton dial; `trantor open` is the resume vehicle — checkout resolution,
+/// handoff-beats-resume, and the wake kickoff all already live there. Queried at app LAUNCH
+/// only: a session the operator deliberately /exited also leaves an agent-less pane, and a
+/// continuous poll would nag about it forever (monitoring doctrine: never warn about what the
+/// operator declared).
+#[tauri::command]
+fn orch_restorables() -> Result<Vec<String>, String> {
+    let rows =
+        std::fs::read_to_string(desktop_bus_dir().join("crew-windows.txt")).unwrap_or_default();
+    let out = std::process::Command::new("herdr")
+        .args(["agent", "list"])
+        .env("PATH", terminal_path())
+        .output()
+        .map_err(|e| format!("herdr: {e}"))?;
+    let v: serde_json::Value = serde_json::from_str(String::from_utf8_lossy(&out.stdout).trim())
+        .unwrap_or(serde_json::Value::Null);
+    let live: std::collections::HashSet<String> = v
+        .get("result")
+        .and_then(|r| r.get("agents"))
+        .and_then(|a| a.as_array())
+        .map(|a| {
+            a.iter()
+                .filter_map(|x| x.get("pane_id").and_then(|p| p.as_str()).map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_default();
+    Ok(restorables_from(&rows, &live))
+}
+
+/// The pure half of orch_restorables: orch rows whose pane hosts no live agent. A ghost row
+/// (pane gone entirely) is still restorable — `trantor open` heals it and resumes from the
+/// transcript. Deduped per project; row order preserved.
+fn restorables_from(rows: &str, live_panes: &std::collections::HashSet<String>) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for line in rows.lines() {
+        let f: Vec<&str> = line.split('\t').collect();
+        if f.len() == 4
+            && f[1] == "orch"
+            && !f[0].is_empty()
+            && !live_panes.contains(f[3])
+            && !out.iter().any(|p| p == f[0])
+        {
+            out.push(f[0].to_string());
+        }
+    }
+    out
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 struct SeatDiffFile {
     path: String,
@@ -3284,6 +3335,7 @@ pub fn run() {
             orchestrator_status,
             handoff_now,
             takeover_now,
+            orch_restorables,
             write_file,
             autonomy_get,
             autonomy_set,
@@ -4321,5 +4373,27 @@ mod succession_tests {
         assert!(kickoff_outcome_label(&O::Blocked).contains("blocked"));
         assert!(kickoff_outcome_label(&O::NotReady).contains("starting"));
         assert!(kickoff_outcome_label(&O::NoAgent).contains("no agent"));
+    }
+
+    // #5401 — the restore detector's pure half. The reboot shape: orch rows survive in
+    // crew-windows.txt while herdr's agent list no longer knows their panes.
+    #[test]
+    fn restorables_are_orch_rows_without_a_live_agent() {
+        let rows = "proj-a\torch\t__orch__\tw1:p1\n\
+                    proj-a\therdrws\t__ws__\tw1\n\
+                    proj-b\torch\t__orch__\tw2:p1\n\
+                    proj-c\therdr\tkimi\tw3:p2\n\
+                    proj-b\torch\t__orch__\tw2:p9\n";
+        let live: std::collections::HashSet<String> = ["w1:p1".to_string()].into();
+        // proj-a's agent is alive → not restorable. proj-b's two orch rows dedupe to one entry.
+        // proj-c has only a SEAT row — seats belong to the crew, never to restore.
+        assert_eq!(restorables_from(rows, &live), vec!["proj-b".to_string()]);
+        // Nothing tracked, or every agent alive → nothing to restore.
+        assert!(restorables_from("", &live).is_empty());
+        let all_live: std::collections::HashSet<String> =
+            ["w1:p1".to_string(), "w2:p1".to_string(), "w2:p9".to_string()].into();
+        assert!(restorables_from(rows, &all_live).is_empty());
+        // A malformed row never panics and never restores.
+        assert!(restorables_from("garbage-no-tabs\n\torch\t\t\n", &live).is_empty());
     }
 }

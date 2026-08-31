@@ -18,7 +18,8 @@ import { countUnseen, onSeenChange } from "../shared/seen";
 import { usePendingProposals } from "../shared/Proposals";
 import { ProjectIcon } from "../shared/ProjectIcon";
 import type { Lens } from "../features/project/ProjectHeader";
-import { orchestratorOpen } from "../features/workspace/herdr";
+import { orchestratorOpen, orchRestorables } from "../features/workspace/herdr";
+import { invoke } from "@tauri-apps/api/core";
 
 const LOCAL_HUB = "http://127.0.0.1:4477";
 import { Home } from "../features/home/Home";
@@ -305,6 +306,7 @@ export function AppShell() {
       await orchestratorOpen(p);
       setActive(p);
       setPane({ kind: "project", lens: "workspace" });
+      setRestorables(rs => rs.filter(r => r !== p));
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       setWakeErrors(prev => new Map(prev).set(p, msg));
@@ -312,6 +314,43 @@ export function AppShell() {
       setWaking(null);
     }
   };
+
+  // #5401 — the reboot-restore offer. At LAUNCH (once, with one 30s retry for a herdr that is
+  // still coming up), find projects whose orchestrator pane outlived its conversation. Per the
+  // project's baton dial: "auto" resumes immediately (loudly — the wake lands you nothing, but
+  // the row lights and the pane recaps); "ask" (default) lists it in a strip with a Resume
+  // button — the same wakeProject the sidebar uses, so there is exactly ONE resume path.
+  // Launch-only on purpose: a deliberately /exited session leaves the same agent-less pane,
+  // and a continuous poll would nag about it forever.
+  const [restorables, setRestorables] = useState<string[]>([]);
+  const restoreRan = useRef(false);
+  useEffect(() => {
+    if (restoreRan.current) return;
+    restoreRan.current = true;
+    let alive = true;
+    const attempt = async (retriesLeft: number) => {
+      let found: string[];
+      try {
+        found = await orchRestorables();
+      } catch {
+        if (retriesLeft > 0) setTimeout(() => { if (alive) void attempt(retriesLeft - 1); }, 30_000);
+        return;
+      }
+      if (!alive || !found.length) return;
+      const ask: string[] = [];
+      for (const p of found) {
+        let baton = "ask";
+        try { baton = (JSON.parse(await invoke<string>("autonomy_get", { project: p })) as { baton?: string }).baton ?? "ask"; }
+        catch { /* unreadable dial = the safe default */ }
+        if (baton === "auto") { if (alive) await wakeProject(p); }
+        else ask.push(p);
+      }
+      if (alive && ask.length) setRestorables(ask);
+    };
+    void attempt(1);
+    return () => { alive = false; };
+    // wakeProject is stable enough for a run-once effect; re-running on its identity would defeat the launch-only design.
+  }, []);  // eslint-disable-line react-hooks/exhaustive-deps
 
   const NavItem = ({ label, Icon, on, onClick, badge, title }: {
     label: string;
@@ -417,6 +456,33 @@ export function AppShell() {
                      onClick={() => setPane({ kind } as Pane)} />
           ))}
         </div>
+
+        {/* #5401 — the restore strip: sessions the reboot took, offered back. One row per
+            project, launch-only, dismissable (a dismissal is a decision, not a snooze). */}
+        {restorables.length > 0 && (
+          <div className="mb-3 flex flex-col gap-1">
+            <SectionLabel count={restorables.length}>Interrupted</SectionLabel>
+            {restorables.map(p => (
+              <div key={p} className="flex items-center gap-2 rounded-lg bg-white/[0.03] px-3 py-1.5 text-[12px]">
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate text-[var(--color-tr-text)]/85">{p}</span>
+                  <span className="block text-[10px] text-[var(--color-tr-muted)]">session died with the machine</span>
+                </span>
+                <button type="button"
+                  onClick={() => void wakeProject(p)}
+                  disabled={waking !== null}
+                  className="shrink-0 rounded-[6px] bg-tr-ok/10 px-1.5 py-0.5 text-[10.5px] font-semibold text-tr-ok hover:bg-tr-ok/20 disabled:opacity-40">
+                  {waking === p ? "Resuming…" : "Resume"}
+                </button>
+                <button type="button" title="dismiss — it stays wakeable from its project row"
+                  onClick={() => setRestorables(rs => rs.filter(r => r !== p))}
+                  className="shrink-0 px-1 text-[12px] text-[var(--color-tr-muted)] hover:text-[var(--color-tr-text)]">
+                  ×
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
 
         <nav className="flex-1 overflow-y-auto">
           {/* Inside a project, FILES is one labeled row that toggles a second column next to the
