@@ -55,8 +55,19 @@ const win = contextUsage(transcript, { contextWindow: 1_000_000 });
 ok("window declared → frac computed", win && Math.abs(win.frac - 0.910) < 0.01);
 ok("resolveWindow honors config.contextWindow", resolveWindow("claude-opus-4-8", { contextWindow: 200000 }) === 200000);
 ok("resolveWindow honors a [1m] model marker", resolveWindow("claude-opus-4-8[1m]", {}) === 1_000_000);
+ok("#5503: resolveWindow knows fable is a 1M window by name", resolveWindow("fable", {}) === 1_000_000);
+ok("#5503: a fable variant name resolves 1M too", resolveWindow("fable-5-2026", {}) === 1_000_000);
+ok("#5503: an explicit declaration still wins over the fable heuristic", resolveWindow("fable", { contextWindow: 200000 }) === 200000);
 ok("warnFrac default 0.90 (baton pass fires at 90%)", warnFrac({}) === 0.90);
 ok("warnFrac config override", warnFrac({ contextWarnFrac: 0.9 }) === 0.9);
+
+// #5503 end to end: a fable transcript with NO declared window now computes frac —
+// the early-warning activates exactly where #5503 silently stayed off (the baton
+// never fired; the session hit the wall).
+const fableT = join(tmp, "fable.jsonl");
+writeFileSync(fableT, rows.map(r => JSON.stringify({ ...r, message: { ...r.message, model: "fable" } })).join("\n"));
+const fwin = contextUsage(fableT, {});
+ok("#5503: a fable transcript gets its window by NAME (frac computed, no config)", fwin && fwin.window === 1_000_000 && Math.abs(fwin.frac - 0.910) < 0.01);
 
 // --- per-session guard (shared by heartbeat + precompact) ---
 const sid = "guardtest-" + process.pid;
@@ -425,6 +436,15 @@ rmSync(projDir, { recursive: true, force: true });
     const got = guardContextTokens(c.rows);
     ok(`context guard: ${c.name} → ${c.expect}`, (got ?? null) === (c.expect ?? null));
   }
+  // #5572 drill extension: the aborted-turn STUB shape (7% shown at a real 88%) at
+  // every stub count. The manifest above is shared with the Rust twin, so these
+  // stub-count drills stay inline here rather than editing the shared spec file.
+  const REAL = 889929, STUB = 70000;
+  ok("guard drill: a single stub tail reads the real level", guardContextTokens([REAL, STUB]) === REAL);
+  ok("guard drill: 2 consecutive stubs still read the real level", guardContextTokens([884056, REAL, STUB, STUB]) === REAL);
+  ok("guard drill: 4 consecutive stubs still read the real level", guardContextTokens([884056, REAL, STUB, STUB, STUB, STUB]) === REAL);
+  ok("guard drill: 5 consecutive stubs are a sustained new level (re-baseline)", guardContextTokens([884056, REAL, STUB, STUB, STUB, STUB, STUB]) === STUB);
+  ok("guard drill: a drop to exactly the 40% floor is accepted as reality", guardContextTokens([1_000_000, 400_000]) === 400_000);
   // And end-to-end through contextUsage: a poisoned transcript tail reads as the real level.
   const dir = join(tmpdir(), `tt-ctx-${process.pid}`);
   mkdirSync(dir, { recursive: true });
