@@ -437,6 +437,26 @@ setTimeout(overseerTick, 2000).unref?.();
 let DUTY_SESSION = String(process.env.RELAY_DUTY_SESSION || state.dutySession || "");
 const DUTY_UNDELIVERED_MS = Number(process.env.RELAY_DUTY_UNDELIVERED_MS || 10 * 60 * 1000);
 const dutyEscalated = new Set();
+// #5686: the janitor died 08-27 and NOTHING noticed for 4 days — the hub kept escalating to a
+// corpse. Duty liveness is now a first-class state: dark = configured but no heartbeat inside
+// DUTY_DARK_MS. Episode semantics (one event per transition, a standing flag on /health), and
+// while dark, escalations go to the party owed the reply instead of the dead seat.
+const DUTY_DARK_MS = Number(process.env.RELAY_DUTY_DARK_MS || 10 * 60 * 1000);
+let dutyDarkSince = 0;
+// A freshly appointed seat has no heartbeat yet and is NOT a corpse: the dark clock starts at
+// appointment (boot or POST /overseer/duty), so a newborn gets one full window to first-poll.
+let dutySeenFloor = Date.now();
+function dutyLiveness() {
+  if (!DUTY_SESSION) return { configured: false, online: false, lastSeenMs: 0 };
+  const seen = Math.max(state.peers[DUTY_SESSION]?.lastSeen || 0, dutySeenFloor);
+  const lastSeenMs = now() - seen;
+  return { configured: true, online: lastSeenMs < DUTY_DARK_MS, lastSeenMs: Math.max(0, lastSeenMs) };
+}
+function dutyQueuedEscalations() {
+  if (!DUTY_SESSION) return 0;
+  const upTo = state.peers[DUTY_SESSION]?.deliveredUpTo || 0;
+  return state.messages.reduce((n, m) => n + (m.to === DUTY_SESSION && m.id > upTo ? 1 : 0), 0);
+}
 function hubSend(to, text, project) {
   const msg = { id: ++state.seq, ts: now(), from: "hub:duty", to, text: String(text).slice(0, 2000), project: String(project || "").slice(0, 80) };
   state.messages.push(msg); if (state.messages.length > 5000) state.messages.splice(0, 1000);
@@ -446,6 +466,15 @@ function hubSend(to, text, project) {
 }
 function dutyTick() {
   if (!DUTY_SESSION) return;
+  // #5686: track the dark episode BEFORE escalating, so this tick already routes around a corpse.
+  const live = dutyLiveness();
+  if (!live.online && !dutyDarkSince) {
+    dutyDarkSince = now();
+    appendEvent("duty-dark", "", "hub:duty", { text: `duty seat ${DUTY_SESSION} has no heartbeat — seat trouble is not being triaged (trantor duty up)` });
+  } else if (live.online && dutyDarkSince) {
+    appendEvent("duty-back", "", "hub:duty", { text: `duty seat ${DUTY_SESSION} is back after ${Math.round((now() - dutyDarkSince) / 60000)}m dark` });
+    dutyDarkSince = 0;
+  }
   const cutoff = now() - DUTY_UNDELIVERED_MS;
   const floor = now() - 24 * 3600 * 1000;                 // never escalate ancient history
   for (const m of state.messages) {
@@ -460,7 +489,10 @@ function dutyTick() {
     if (dutyEscalated.has(m.id)) continue;
     if ((state.peers[m.to]?.deliveredUpTo || 0) >= m.id) continue;
     dutyEscalated.add(m.id);
-    hubSend(DUTY_SESSION,
+    // #5686: a dark janitor must not eat escalations. Route to the SENDER — the party who
+    // believes they were heard and are owed the reply — with the duty outage named, so the
+    // failure is visible to someone who can act instead of queued on a corpse.
+    hubSend(dutyDarkSince ? m.from : DUTY_SESSION,
       `⚠️ UNDELIVERED for ${Math.round((now() - m.ts) / 60000)}m: #${m.id} ${m.from} -> ${m.to} — "${String(m.text).slice(0, 280)}" — the recipient has not been handed this (recipient last seen ${state.peers[m.to]?.lastSeen ? Math.round((now() - state.peers[m.to].lastSeen) / 60000) + "m ago" : "never"}). Triage: is the recipient's session idle, deaf (wrong hub / old hooks), or gone? Relay, wake, or note it on their board.`,
       m.project || "");
   }
@@ -1549,6 +1581,8 @@ const server = http.createServer(async (req, res) => {
       const session = String(b.session).slice(0, 120);
       DUTY_SESSION = session;
       state.dutySession = session;
+      dutySeenFloor = Date.now();   // #5686: appointment restarts the dark clock — a newborn is not a corpse
+      if (dutyDarkSince) { dutyDarkSince = 0; }   // fresh seat, fresh episode accounting
       dirty = true;
       return json(res, 200, { ok: true, dutySession: DUTY_SESSION });
     }
@@ -2646,7 +2680,9 @@ const server = http.createServer(async (req, res) => {
     if (req.method === "GET" && (P === "/" || P === "/ui")) {
       res.writeHead(200, { "content-type": "text/html; charset=utf-8" }); return res.end(UI || "<h1>trantor</h1><p>dashboard unavailable</p>");
     }
-    if (P === "/health") return json(res, 200, { ok: true, authMode: AUTH_MODE, peers: Object.keys(state.peers).length, messages: state.messages.length, streams: streams.length });
+    if (P === "/health") return json(res, 200, { ok: true, authMode: AUTH_MODE, peers: Object.keys(state.peers).length, messages: state.messages.length, streams: streams.length,
+      // #5686: duty liveness rides /health so the app's Home strip and doctor read one truth.
+      duty: { ...dutyLiveness(), darkSinceMs: dutyDarkSince ? now() - dutyDarkSince : 0, queuedEscalations: dutyQueuedEscalations() } });
     json(res, 404, { error: "not found" });
   } catch (e) { json(res, 500, { error: String(e?.message || e) }); }
 });
