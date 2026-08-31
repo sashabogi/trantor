@@ -67,8 +67,10 @@ function loadPendingHandoff(projectName, { claim = true, freshSession = null } =
           writeFileSync(p, JSON.stringify(rec, null, 2));
           if (freshSession?.session_id) {
             try {
+              // #5645: the mandate rides the stamp too, so prompt-focus's recap reminder pins
+              // the SAME rec.mode the injection below announces (attended=WAIT / unattended=RESUME).
               writeFileSync(join(dir, `recap-pending-${String(freshSession.session_id).replace(/[^A-Za-z0-9_.-]/g, "_")}.json`),
-                JSON.stringify({ handoffId: rec.id, ts: nowSec() }));
+                JSON.stringify({ handoffId: rec.id, ts: nowSec(), mode: rec.mode === "unattended" ? "unattended" : "attended" }));
             } catch {}
           }
         }
@@ -107,6 +109,26 @@ function sanitize(s) {
     out += bad ? " " : ch;
   }
   return out;
+}
+
+// #5645 injection cap: the handoff injection is a POINTER, not a payload. The 2026-08-30 failure:
+// a 22KB record (narrative + embedded verbatim tail) was injected and then re-read, costing ~9% of
+// the fresh window at boot. The writer contract (#5648, hooks/lib) caps rec.summary at ~4KB and
+// keeps the verbatim tail OUT of it; this reader enforces the same bound against older/oversized
+// records — strip any embedded verbatim block, hard-cap on a line boundary, point at the record
+// file + transcript for the rest.
+const HANDOFF_INJECT_CAP = 4096;
+function capHandoffSummary(handoff) {
+  let s = String(handoff?.summary || "");
+  const marker = s.indexOf("\n---\n## Verbatim recent exchange");
+  if (marker > 0) s = s.slice(0, marker);
+  if (s.length <= HANDOFF_INJECT_CAP) return s;
+  const cut = s.slice(0, HANDOFF_INJECT_CAP);
+  const nl = cut.lastIndexOf("\n");
+  s = (nl > HANDOFF_INJECT_CAP * 0.6 ? cut.slice(0, nl) : cut).trimEnd();
+  let ptr = `\n\n…(summary capped at ${HANDOFF_INJECT_CAP} chars — full record: ${join(handoffDir(), `${handoff.id}.json`)}`;
+  if (handoff.transcript_path) ptr += ` · full transcript: ${handoff.transcript_path}`;
+  return s + ptr + ")";
 }
 
 // Fail-silent wrapper for the optional #4214 resources detection lib (hooks/lib/resources.mjs).
@@ -454,8 +476,15 @@ try {
     if (claimed && stdinObj.session_id) {
       await jpost(`${url}/instance/supersede`, { name: session, exceptInstanceId: String(stdinObj.session_id) }, session).catch(() => {});
     }
-    additionalContext += `<trantor-handoff id="${sanitize(handoff.id)}" from="${sanitize(handoff.machine)}" trigger="${sanitize(handoff.trigger)}">\n`;
-    additionalContext += `🔄 **You are taking over from a prior session that hit its context limit.** This is a fresh full window. Resume the work below — the prior session's summary, git state, and a pointer to its full transcript (searchable; Foundation/Gaia has it ingested) follow. Continue from "OPEN THREADS & NEXT STEPS"; do not restart from scratch. Recap the task, state, and next step in at most 3 sentences, then wait. Keep replies short: no status tables, no headers, no walls of text unless the user explicitly asks for detail.\n\n`;
+    additionalContext += `<trantor-handoff id="${sanitize(handoff.id)}" from="${sanitize(handoff.machine)}" trigger="${sanitize(handoff.trigger)}" mode="${sanitize(handoff.mode === "unattended" ? "unattended" : "attended")}">\n`;
+    // #5645 mandate pinning: the successor's orders ride rec.mode (#5644's long-run switch flips it).
+    // attended (default) = recap-then-WAIT; unattended = recap-then-RESUME — the handoff's OPEN
+    // THREADS are the work order ("handoffs must never be a break").
+    if (handoff.mode === "unattended") {
+      additionalContext += `🔄 **You are taking over from a prior session that hit its context limit, in UNATTENDED (long-run) mode.** This is a fresh full window. Resume the work below — the prior session's summary, git state, and a pointer to its full transcript (searchable; Foundation/Gaia has it ingested) follow. Continue from "OPEN THREADS & NEXT STEPS"; do not restart from scratch. Recap the task, state, and next step in at most 3 sentences, then RESUME the open threads immediately — they are your work order. Do NOT wait for the user; keep building. Keep replies short: no status tables, no headers, no walls of text.\n\n`;
+    } else {
+      additionalContext += `🔄 **You are taking over from a prior session that hit its context limit.** This is a fresh full window. Resume the work below — the prior session's summary, git state, and a pointer to its full transcript (searchable; Foundation/Gaia has it ingested) follow. Continue from "OPEN THREADS & NEXT STEPS"; do not restart from scratch. Recap the task, state, and next step in at most 3 sentences, then wait. Keep replies short: no status tables, no headers, no walls of text unless the user explicitly asks for detail.\n\n`;
+    }
     // Verification gates FIRST — these are structured "must verify before shipping" claims the prior
     // session couldn't independently prove. They go above the summary on purpose: a safety-critical
     // check must not be skimmed past (the lesson of the lost "verify Gail coefficients" intent).
@@ -469,7 +498,7 @@ try {
       }
       additionalContext += `\n`;
     }
-    additionalContext += `## Handoff summary\n${sanitize(handoff.summary)}\n`;
+    additionalContext += `## Handoff summary\n${sanitize(capHandoffSummary(handoff))}\n`;
     if (handoff.gitStatus) additionalContext += `\n## Git working-tree at handoff\n\`\`\`\n${sanitize(handoff.gitStatus)}\n\`\`\`\n`;
     // Sub-agent manifest: LIVE-primary, snapshot-as-fallback. The prior session may have had
     // sub-agents (Agent/Task, Workflow) building things you can't see in its narrative — and a

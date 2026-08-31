@@ -22,6 +22,13 @@ const ok = (name, cond) => { console.log(`  ${cond ? "PASS" : "FAIL"}  ${name}`)
 const CLOSED = "http://127.0.0.1:1";
 console.log("# trantor handoff tests");
 
+// Hermetic env: a crew seat's runner exports RELAY_PROJECT/RELAY_AGENT, which the spawned hooks
+// below would inherit — resolving the CREW's project instead of each fixture's (2026-08-31: six
+// orch-baton failures on the kimi:trantor seat, all from the leaked RELAY_PROJECT). Strip them
+// once here; every block that needs a seat identity sets RELAY_SESSION explicitly.
+delete process.env.RELAY_PROJECT;
+delete process.env.RELAY_AGENT;
+
 const tmp = join(tmpdir(), "trantor-handoff-" + process.pid);
 mkdirSync(tmp, { recursive: true });
 const handoffDir = join(homedir(), ".agent-bus", "handoffs");
@@ -452,6 +459,80 @@ rmSync(projDir, { recursive: true, force: true });
   ok("recap net: after recap, prompts carry nothing", !pf2.stdout.includes("additionalContext"));
   rmSync(projDir, { recursive: true, force: true });
   rmSync(wfile, { force: true });   // like the earlier writeHandoff drill: never leak into the live handoffs dir
+}
+
+// ---- #5645 agent-aware succession: arm-time notice, injection cap, mandate pinning ----
+// Hermetic: temp AGENT_BUS_DIR (autonomy dial baton:"auto"), closed hub, no LLM, no windows.
+{
+  const bus = join(tmpdir(), `tt-succ-bus-${process.pid}`);
+  const projDir3 = join(tmpdir(), `tt-succ-proj-${process.pid}`);
+  const proj3 = projDir3.split("/").pop();
+  mkdirSync(join(bus, "handoffs"), { recursive: true });
+  mkdirSync(projDir3, { recursive: true });
+  writeFileSync(join(bus, "autonomy.json"), JSON.stringify({ defaults: { baton: "auto" } }));
+  const succEnv = { ...process.env, AGENT_BUS_DIR: bus, RELAY_URL: CLOSED, RELAY_CONTEXT_WINDOW: "1000000", RELAY_CONTEXT_WARN_FRAC: "0.9" };
+
+  // (1) the heartbeat ARMS at the warn line and tells the RUNNING agent — exactly once per arming.
+  // NB: the suite's shared `transcript` fixture is already cleaned up by this point — write our own
+  // (91% of the declared 1M window).
+  const hbTranscript = join(bus, "hb.jsonl");
+  writeFileSync(hbTranscript, JSON.stringify({ type: "assistant", message: { content: [{ type: "text", text: "working" }], model: "claude-opus-4-8", usage: { input_tokens: 5, cache_read_input_tokens: 909000, cache_creation_input_tokens: 1000 } } }) + "\n");
+  const hbSid = `hb5645-${process.pid}`;
+  const hbIn = JSON.stringify({ transcript_path: hbTranscript, session_id: hbSid, cwd: projDir3 });
+  const hbEnv = { ...succEnv, RELAY_SESSION: `kimi5645:${proj3}`, CLAUDE_PROJECT_DIR: projDir3, RELAY_HEARTBEAT_MS: "0" };
+  const hb1 = spawnSync(process.execPath, ["hooks/heartbeat.mjs"], { input: hbIn, encoding: "utf8", timeout: 15000, env: hbEnv });
+  const hbCtx1 = (() => { try { return JSON.parse(hb1.stdout).hookSpecificOutput?.additionalContext || ""; } catch { return ""; } })();
+  ok("arm: the heartbeat injects the succession notice AT arm time", hbCtx1.includes("SUCCESSION ARMED") && hbCtx1.includes("NEXT STOP"));
+  ok("arm: the notice makes the agent author its own boundary handoff", hbCtx1.includes("handoff skill") && hbCtx1.includes("relay_handoff"));
+  const hb2 = spawnSync(process.execPath, ["hooks/heartbeat.mjs"], { input: hbIn, encoding: "utf8", timeout: 15000, env: hbEnv });
+  ok("arm: already-armed ticks inject NOTHING (no per-tool-call spam)", hb2.stdout.trim() === "{}");
+
+  // sessionstart runner for this block (claims whatever handoff is pending for proj3)
+  const ssrun = (sid) => spawnSync(process.execPath, ["hooks/sessionstart.mjs"], {
+    input: JSON.stringify({ source: "startup", session_id: sid }), encoding: "utf8", timeout: 15000,
+    env: { ...succEnv, CLAUDE_PROJECT_DIR: projDir3, RELAY_SESSION: proj3 },
+  });
+  const ctxOf = (r) => { try { return JSON.parse(r.stdout).hookSpecificOutput?.additionalContext || ""; } catch { return ""; } };
+
+  // (2) injection cap: a 15KB record (narrative + embedded verbatim tail) injects ≤4KB + a pointer.
+  const big = "N".repeat(6000) + "\n---\n## Verbatim recent exchange (exact in-flight state — continue from here)\n" + "V".repeat(9000);
+  writeFileSync(join(bus, "handoffs", `${proj3}-1000000000.json`), JSON.stringify({
+    id: `${proj3}-1000000000`, project: projDir3, projectName: proj3, machine: "h", trigger: "context-warn",
+    summary: big, transcript_path: "/tmp/full-transcript.jsonl", stamp: 1000000000, gitStatus: "", consumed: false,
+  }, null, 2));
+  const capCtx = ctxOf(ssrun("CAP-SID"));
+  ok("cap: the embedded verbatim tail is NEVER injected inline", !capCtx.includes("V".repeat(100)));
+  ok("cap: the injected summary is hard-capped at 4KB", capCtx.includes("N".repeat(4096)) && !capCtx.includes("N".repeat(4100)));
+  ok("cap: the cap notice points at the full record + transcript", capCtx.includes("summary capped at 4096 chars") && capCtx.includes("full transcript: /tmp/full-transcript.jsonl"));
+  ok("cap: a capped record still claims + stamps the recap net (default attended)",
+    JSON.parse(readFileSync(join(bus, "handoffs", `${proj3}-1000000000.json`), "utf8")).consumed === true
+    && JSON.parse(readFileSync(join(bus, "handoffs", "recap-pending-CAP-SID.json"), "utf8")).mode === "attended");
+
+  // (3) mandate pinning by rec.mode.
+  ok("mandate: attended (default) pins recap-then-WAIT", capCtx.includes('mode="attended"') && capCtx.includes("then wait"));
+  const pfA = spawnSync(process.execPath, ["hooks/prompt-focus.mjs"], {
+    input: JSON.stringify({ session_id: "CAP-SID", prompt: "a queued message before the recap", cwd: projDir3 }),
+    encoding: "utf8", env: { ...succEnv, TRANTOR_NO_FOCUS: "" }, timeout: 15000 });
+  ok("mandate: the attended recap reminder pins WAIT", pfA.stdout.includes("WAIT for the user"));
+
+  writeFileSync(join(bus, "handoffs", `${proj3}-1000000100.json`), JSON.stringify({
+    id: `${proj3}-1000000100`, project: projDir3, projectName: proj3, machine: "h", trigger: "context-warn",
+    summary: "UNATTENDED_SUMMARY", stamp: 1000000100, mode: "unattended", gitStatus: "", consumed: false,
+  }, null, 2));
+  const uctx = ctxOf(ssrun("UNATT-SID"));
+  ok("mandate: unattended pins recap-then-RESUME (open threads are the work order)",
+    uctx.includes('mode="unattended"') && uctx.includes("RESUME") && uctx.includes("work order") && !uctx.includes("then wait"));
+  ok("mandate: the recap stamp carries mode=unattended",
+    JSON.parse(readFileSync(join(bus, "handoffs", "recap-pending-UNATT-SID.json"), "utf8")).mode === "unattended");
+  const pfU = spawnSync(process.execPath, ["hooks/prompt-focus.mjs"], {
+    input: JSON.stringify({ session_id: "UNATT-SID", prompt: "a queued message before the recap", cwd: projDir3 }),
+    encoding: "utf8", env: { ...succEnv, TRANTOR_NO_FOCUS: "" }, timeout: 15000 });
+  ok("mandate: the unattended recap reminder pins RESUME, not wait", pfU.stdout.includes("RESUME") && pfU.stdout.includes("do NOT wait"));
+
+  rmSync(bus, { recursive: true, force: true });
+  rmSync(projDir3, { recursive: true, force: true });
+  rmSync(join(homedir(), ".agent-bus", `handoff-armed-${hbSid}.json`), { force: true });
+  rmSync(join(homedir(), ".agent-bus", `hb-kimi5645_${proj3}.stamp`), { force: true });
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

@@ -29,6 +29,16 @@ const ARM_MAX_MS = Number(process.env.TRANTOR_BATON_ARM_MAX_MS || 15 * 60 * 1000
 const INFLIGHT_MS = 5 * 60 * 1000;
 const HERE = dirname(fileURLToPath(import.meta.url));
 
+// #5645 agent-aware succession: the moment the baton ARMS (warn frac, auto dial), the running agent
+// is TOLD — via this hook's PostToolUse additionalContext, the one sanctioned channel that reaches a
+// session mid-flow without driving its terminal. The agent then participates in its own succession:
+// it reaches a real task boundary and authors the model-written handoff from the FRESHEST state,
+// instead of the digest describing work 36 seconds stale (2026-08-24) or missing everything done
+// after an early handoff write. Injected ONCE per arming (the fresh-arm path only) — a per-tool-call
+// reminder would be context spam. Guards stay upstream: no arm mid-sub-agent build, no arm in 'ask'
+// dial mode, so neither produces the notice.
+let ARM_CTX = "";
+
 // The model this session is ACTUALLY running, read from the transcript tail — the harness does not
 // hand hooks a model field, but every assistant entry records one. Tail-read only (transcripts grow
 // to MBs); any failure returns "" and the peer simply keeps its last known model.
@@ -143,6 +153,11 @@ async function maybeEarlyWarn(stdinRaw, session) {
     // forever. It is marked where the baton actually fires: here on the backstop path, and in the
     // Stop hook on the normal path. Re-arming every tick is prevented by the age check above.
     armBaton(sessionId, { projectDir, transcript, reason: "context-warn", windowId, tty, tokens: usage.tokens });
+    // Tell the RUNNING agent (once, at arm time): wrap up and author the boundary handoff yourself.
+    ARM_CTX = `<system-reminder>TRANTOR SUCCESSION ARMED — this session is at ${Math.round(usage.frac * 100)}% of its context window, and the baton is armed: your NEXT STOP fires the handoff. You are now responsible for your own succession:\n`
+      + `1. Reach a real task boundary — finish, pause, or checkpoint your in-flight work NOW; do not start new work.\n`
+      + `2. Author (or refresh) the rich handoff from your CURRENT state — via the handoff skill or the relay_handoff MCP tool — so the successor gets the freshest picture, not a digest of a session 36 seconds stale. A fresh model-authored handoff supersedes the auto-digest.\n`
+      + `3. Then end your turn. The Stop hook fires the baton at that boundary.</system-reminder>`;
   } catch {}
 }
 
@@ -216,4 +231,14 @@ async function main(stdinRaw) {
 }
 
 // Never block or break the tool flow: swallow everything, always exit clean.
-readStdin().then(main).catch(() => {}).finally(() => process.exit(0));
+// stdout carries the arm-time succession notice (above) when — and only when — this tick armed
+// the baton; every other tick emits "{}", exactly as inbox-deliver.mjs does on a quiet poll.
+function emitAndExit() {
+  try {
+    process.stdout.write(ARM_CTX
+      ? JSON.stringify({ hookSpecificOutput: { hookEventName: "PostToolUse", additionalContext: ARM_CTX } })
+      : "{}");
+  } catch {}
+  process.exit(0);
+}
+readStdin().then(main).catch(() => {}).finally(emitAndExit);

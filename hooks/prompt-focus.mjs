@@ -43,7 +43,12 @@ function loadRecapCtx(sessionId) {
     const p = join(handoffDir(), `recap-pending-${String(sessionId).replace(/[^A-Za-z0-9_.-]/g, "_")}.json`);
     if (!_ex(p)) return "";
     const rec = JSON.parse(_rf(p, "utf8"));
-    return `<system-reminder>You took over via handoff ${rec.handoffId}. If you have not yet recapped it, your reply MUST begin with the ≤3-sentence recap (task, state, next step) before anything else — including before answering this message.</system-reminder>`;
+    // #5645 mandate pinning: the stamp carries rec.mode — the reminder enforces the SAME succession
+    // mandate the sessionstart injection announced, right up to the first Stop that records RECAPPED.
+    const mandate = rec.mode === "unattended"
+      ? " Then RESUME the handoff's OPEN THREADS immediately — they are your work order; this succession is unattended, do NOT wait for the user."
+      : " Then WAIT for the user.";
+    return `<system-reminder>You took over via handoff ${rec.handoffId}. If you have not yet recapped it, your reply MUST begin with the ≤3-sentence recap (task, state, next step) before anything else — including before answering this message.${mandate}</system-reminder>`;
   } catch { return ""; }
 }
 function emitAndExit() {
