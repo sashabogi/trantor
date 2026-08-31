@@ -128,12 +128,20 @@ export function applyBackfill(s: ChatState, b: Backfill, after: number): ChatSta
   return { ...absorb(s, fresh, rs, m, receipts ?? []), seen: Math.max(total, after) };
 }
 
-/** A session change: everything from the old session stops mattering. Clear the thread, restart
- *  the cursor at 0, and mark the restart so the view can say "session continued" instead of
- *  silently interleaving two sessions' rows. Takes the prior state and deliberately reads none
- *  of it — the shape keeps it a state transition like its siblings. */
-export function applySessionChanged(_s: ChatState): ChatState {
-  return { ...emptyChat, continued: true };
+/** A session change: the predecessor thread stays above a divider turn, the
+ *  cursor resets so the new session's rows append from 0, and the successor can
+ *  pull the predecessor's tail (results, receiptTexts, meta) on demand. */
+export function applySessionChanged(s: ChatState): ChatState {
+   const dividerTurn: Turn = {
+     role: "system",
+     blocks: [{ kind: "divider", text: "session continued" }],
+   };
+   return {
+     ...s,
+     turns: [...s.turns, dividerTurn],
+     seen: 0,
+     continued: true,
+   };
 }
 
 /** Can the operator talk to the orchestrator, and if not, why — for the composer's disabled
