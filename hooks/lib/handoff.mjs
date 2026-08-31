@@ -17,6 +17,7 @@ import { execSync, spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { deriveSubagentManifest } from "../../lib/subagent-manifest.mjs";
 import { signedPost } from "./api.mjs";
+import { loadAutonomy, resolveAutonomy } from "../../lib/autonomy.mjs";
 
 // Writer and reader MUST resolve the same directory — see lib/project.mjs busDir(). This used to
 // honour only RELAY_DATA_DIR while the reader honoured neither override.
@@ -307,6 +308,68 @@ export function verbatimRecentTail(transcript, chars = 7000) {
   try { return collectTurns(transcript).join("\n\n").slice(-chars); } catch { return ""; }
 }
 
+// ---- #5648: handoff writer discipline --------------------------------------
+// The inline summary is the RECAP, not the record: the successor reads it as a hook injection,
+// and an oversized injection gets persisted to a file the successor re-reads — paying twice for
+// the same context. Cap the composed digest at ~4KB. When it must cut, keep BOTH ends a successor
+// needs — the opening (task & goal framing) and the tail (current state) — cutting each on a
+// paragraph boundary, with an explicit elision marker so nobody mistakes the middle for missing.
+export function capSummary(text, cap = 4096) {
+  const s = String(text || "");
+  if (s.length <= cap) return s;
+  const elide = "\n\n[…]\n\n";
+  const headRaw = s.slice(0, Math.max(0, cap - elide.length - 2048));
+  const hCut = headRaw.lastIndexOf("\n\n");
+  const head = hCut > 200 ? headRaw.slice(0, hCut) : headRaw;
+  let tail = s.slice(s.length - (cap - head.length - elide.length));
+  const tCut = tail.indexOf("\n\n");
+  if (tCut > 0 && tCut < 2000) tail = tail.slice(tCut + 2);   // drop the partial opening line
+  return head + elide + tail;
+}
+
+// How fresh a model-authored handoff must be before an automatic digest DEFERS to it: 15 minutes.
+// Older than that, the state it describes has likely moved on — compose fresh.
+const FRESH_HANDOFF_SEC = 15 * 60;
+const MANUAL_TRIGGERS = ["manual-skill", "manual-baton"];
+
+// The newest unconsumed MODEL-authored handoff (the /trantor:handoff skill / manual baton path)
+// for this project, if it is still fresh. Incident (#5648): minutes after the operator hand-wrote
+// trantor-1788141357, an automatic digest recomposed and SUPERSEDED it — the successor then
+// loaded the machine's lossy summary instead of the author's exact words. The digest is the
+// fallback, never the replacement.
+export function freshAuthoredHandoff(projectName, nowS = nowSec() || Math.floor(Date.now() / 1000)) {
+  try {
+    if (!existsSync(HANDOFF_DIR)) return null;
+    const re = new RegExp("^" + String(projectName).replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "-(\\d+)\\.json$");
+    const cands = readdirSync(HANDOFF_DIR)
+      .map(f => { const m = re.exec(f); return m ? { f, stamp: Number(m[1]) } : null; })
+      .filter(Boolean)
+      .sort((a, b) => b.stamp - a.stamp)
+      .map(x => join(HANDOFF_DIR, x.f));
+    for (const p of cands) {
+      try {
+        const r = JSON.parse(readFileSync(p, "utf8"));
+        if (r.consumed !== false) continue;
+        if (!MANUAL_TRIGGERS.includes(r.trigger)) continue;
+        if (nowS - (Number(r.stamp) || 0) > FRESH_HANDOFF_SEC) continue;
+        return r;
+      } catch {}
+    }
+  } catch {}
+  return null;
+}
+
+// mode:"attended"|"unattended" on every handoff record (#5648) — WHO pulls the baton trigger.
+// Read from the resolved autonomy dials (the same JSON `trantor autonomy json` prints):
+// baton:"auto" means the arm-at-warn → fire-at-turn-boundary chain runs itself (unattended);
+// the default "ask" keeps the operator in the loop (attended). Fail closed to "attended".
+export function handoffMode(projectName) {
+  try {
+    const a = resolveAutonomy(projectName, loadAutonomy());
+    return a.baton === "auto" ? "unattended" : "attended";
+  } catch { return "attended"; }
+}
+
 // ---- write + announce + spawn ----------------------------------------------
 /** Append one §5 state transition to a handoff's own file — the machine's ledger rides the
  *  record it describes (SYSTEM-CONTRACT §5): every owner of a transition already holds this
@@ -338,11 +401,18 @@ export function writeHandoff({ projectDir, sessionId, transcript, trigger, summa
     } catch {}
   }
   if (!existsSync(HANDOFF_DIR)) mkdirSync(HANDOFF_DIR, { recursive: true });
+  // #5648: an automatic digest must never recompose+supersede a FRESH model-authored handoff.
+  // If one exists (<15min, unconsumed), point the baton at THAT and write nothing — the caller's
+  // spawn path proceeds on the authored handoff exactly as if it had just written it.
+  const fresh = freshAuthoredHandoff(projectName);
+  if (fresh) return { deferred: true, file: join(HANDOFF_DIR, `${fresh.id}.json`), record: fresh };
   const stamp = nowSec() || Date.now();
   let gitStatus = "";
   try { gitStatus = execSync("git -C " + JSON.stringify(projectDir) + " status --short 2>/dev/null | head -30", { encoding: "utf8" }).trim(); } catch {}
-  const narrative = summary ?? buildSummary(transcript);
-  const tail = verbatimRecentTail(transcript);
+  // Cap the composed narrative to the injection budget (~4KB). The verbatim tail is deliberately
+  // NOT embedded anymore: the record's transcript_path points at the full exchange, and embedding
+  // it here doubled the successor's read for state that was already one path away (#5648).
+  const narrative = capSummary(summary ?? buildSummary(transcript));
   // Sub-agent manifest SNAPSHOT (fallback). The successor should re-derive it LIVE via
   // `trantor agents <sid>` (catches files an agent finished that were clobbered AFTER this
   // snapshot — the kill that motivated this corrupted a completed 30KB lib post-handoff). This
@@ -363,8 +433,10 @@ export function writeHandoff({ projectDir, sessionId, transcript, trigger, summa
     project: projectDir, projectName, machine: hostname(),
     session_id: sessionId || "", trigger: trigger || "auto",
     transcript_path: transcript || "", stamp: Number(stamp) || 0,
-    // narrative + a verbatim recent-exchange block so exact in-flight state always survives
-    summary: narrative + (tail ? `\n\n---\n## Verbatim recent exchange (exact in-flight state — continue from here)\n${tail}` : ""),
+    // recap-sufficient inline summary, capped ~4KB — the full story lives at transcript_path
+    summary: narrative,
+    // attended|unattended — who pulls the baton trigger (resolved autonomy `baton` dial)
+    mode: handoffMode(projectName),
     gitStatus, subagents, verifyGates, consumed: false,
     // The §5 machine's ledger: every transition appends here via appendHandoffState.
     states: [{ state: "written", ts: Number(stamp) || 0, by: sessionId || "" }],
