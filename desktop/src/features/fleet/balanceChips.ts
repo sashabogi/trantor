@@ -21,6 +21,7 @@ export type BalanceWindow = {
   usedPct?: number | null;
   resetsAt?: number | string | null;
   locked?: string | boolean | null;
+  scoped?: boolean; // a model-scoped window ("Fable") shows its scope name, never a countdown
 };
 
 export type BalanceRow = Omit<BalanceEntry, "kind"> & {
@@ -61,7 +62,8 @@ const LOW_QUOTA_PCT = 15;                     // mirrors lib/balances.mjs DEFAUL
 // terracotta, OpenAI teal-ish for Codex, DeepSeek blue, GLM indigo, Kimi dark, OpenRouter violet.
 // Real brand marks (brands.ts, vendored) tinted in the brand hue; the monogram survives only
 // as the fallback for providers without a vendored glyph.
-const BRAND: Record<string, { mono: string; icon: string | null; hue: string; fg: string }> = {
+type BrandStyle = { mono: string; icon: string | null; hue: string; fg: string };
+const BRAND = {
   claude:     { mono: "Cl", icon: "claude",     hue: "#D97757", fg: "#1c110b" },
   anthropic:  { mono: "Cl", icon: "claude",     hue: "#D97757", fg: "#1c110b" },
   codex:      { mono: "Cx", icon: "codex",      hue: "#E4E4E7", fg: "#0a1a18" },
@@ -74,22 +76,31 @@ const BRAND: Record<string, { mono: string; icon: string | null; hue: string; fg
   moonshot:   { mono: "MS", icon: "kimi",       hue: "#C9C9CF", fg: "#f2f2f5" },
   gemini:     { mono: "Ge", icon: null,         hue: "#8A8A92", fg: "#1a1a1e" },
   openrouter: { mono: "OR", icon: "openrouter", hue: "#8B5CF6", fg: "#f1ecff" },
-};
+} satisfies Record<string, BrandStyle>;
 
-const WINDOW_LABEL: Record<string, string> = { "5h": "5-hour window", "7d": "weekly" };
+const WINDOW_LABEL = { "5h": "5-hour window", "7d": "weekly" } satisfies Record<string, string>;
 
-const SYMBOL: Record<string, string> = { USD: "$", CNY: "¥", EUR: "€" };
+const SYMBOL = { USD: "$", CNY: "¥", EUR: "€" } satisfies Record<string, string>;
 
 function money(v: number, currency?: string): string {
-  return `${SYMBOL[currency ?? "USD"] ?? "$"}${v.toFixed(1)}`;
+  return `${dictGet(SYMBOL, currency ?? "USD") ?? "$"}${v.toFixed(1)}`;
+}
+
+// Reset times arrive from the hub as epoch ms OR an ISO string (provider-dependent). The Date
+// constructor is the boundary decoder for exactly that union — a number rides through as epoch
+// ms, a string gets parsed — so resetShort and untilLong decode HERE, once, then branch on the
+// plain number. Null means the row carries no usable reset (0 and NaN included).
+function epochMs(t: number | string | null | undefined): number | null {
+  if (t == null || t === "") return null;
+  const ms = new Date(t).getTime();
+  return !ms || Number.isNaN(ms) ? null : ms;
 }
 
 // Reset-time short form, mirrored from lib/balances.mjs fmtReset so chip and CLI agree: under
 // 48h → "5h", beyond → "3d", already past → "soon". Null when the row has no reset.
 function resetShort(t: number | string | null | undefined): string | null {
-  if (t == null || t === "") return null;
-  const ms = typeof t === "number" ? t : Date.parse(t);
-  if (!ms || Number.isNaN(ms)) return null;
+  const ms = epochMs(t);
+  if (ms == null) return null;
   const hrs = (ms - Date.now()) / 3600e3;
   if (hrs < 0) return "soon";
   if (hrs < 48) return `${Math.round(hrs)}h`;
@@ -99,9 +110,8 @@ function resetShort(t: number | string | null | undefined): string | null {
 // The Orca-standard time-remaining: two units, largest first — "1h 45m", "5d 4h", "12m".
 // This is what sits beside "N% used" in the status bar, so it reads as a countdown, not a date.
 export function untilLong(t: number | string | null | undefined, now = Date.now()): string | null {
-  if (t == null || t === "") return null;
-  const ms = typeof t === "number" ? t : Date.parse(t);
-  if (!ms || Number.isNaN(ms)) return null;
+  const ms = epochMs(t);
+  if (ms == null) return null;
   let mins = Math.floor((ms - now) / 60000);
   if (mins <= 0) return "now";
   const d = Math.floor(mins / 1440); mins -= d * 1440;
@@ -123,20 +133,21 @@ function agoLabel(ms: number): string {
 // A windows row reads as Orca's footer does: one segment per window, "N% used <time-left>",
 // and a model-SCOPED window shows its scope's name instead of a countdown ("37% used Fable" —
 // the time matches the weekly anyway). Tone from LOW (remaining < LOW_QUOTA_PCT) or locked.
-function windowsInfo(e: BalanceRow, now: number): { value: string; barPct: number | null; tone: ChipTone; tooltip: string } {
+type WindowsInfo = { value: string; barPct: number | null; tone: ChipTone; tooltip: string };
+function windowsInfo(e: BalanceRow, now: number): WindowsInfo {
   const wins = (e.windows ?? []).filter(Boolean);
   const seg = (w: BalanceWindow) => {
     if (w.usedPct == null) return null;
     const used = `${Math.round(w.usedPct)}% used`;
-    if ((w as { scoped?: boolean }).scoped || !dictGet(WINDOW_LABEL, w.name)) return `${used} ${w.name}`;
+    if (w.scoped || !dictGet(WINDOW_LABEL, w.name)) return `${used} ${w.name}`;
     const t = untilLong(w.resetsAt, now);
     return t ? `${used} ${t}` : used;
   };
   const segs = wins.map(seg).filter((s): s is string => s != null);
   const value = segs.length ? segs.join(" · ") : "?";
-  const barPct = wins.length && wins[0].usedPct != null ? Math.round(wins[0].usedPct as number) : null;
+  const barPct = wins.length && wins[0].usedPct != null ? Math.round(wins[0].usedPct) : null;
   const locked = wins.some(w => w.locked);
-  const low = !locked && wins.some(w => w.usedPct != null && (100 - (w.usedPct as number)) < LOW_QUOTA_PCT);
+  const low = !locked && wins.some(w => w.usedPct != null && (100 - w.usedPct) < LOW_QUOTA_PCT);
   const tone: ChipTone = locked ? "fail" : low ? "warn" : "ok";
   const parts = wins.map(w => {
     const label = dictGet(WINDOW_LABEL, w.name) ?? `${w.name} window`;
@@ -172,10 +183,10 @@ export function toneClass(tone: ChipTone): string {
 }
 
 // Chip order: Claude (windows) first, then prepaid $ rows, then quota rows, then plan rows.
-const KIND_ORDER: Record<string, number> = { windows: 0, prepaid: 1, quota: 2, subscription: 3 };
+const KIND_ORDER = { windows: 0, prepaid: 1, quota: 2, subscription: 3 } satisfies Record<string, number>;
 
 export function sortRows(rows: BalanceRow[]): BalanceRow[] {
-  return [...rows].sort((a, b) => (KIND_ORDER[a.kind] ?? 4) - (KIND_ORDER[b.kind] ?? 4));
+  return [...rows].sort((a, b) => (dictGet(KIND_ORDER, a.kind) ?? 4) - (dictGet(KIND_ORDER, b.kind) ?? 4));
 }
 
 export function chipFrom(e: BalanceRow, opts: ChipOpts = {}): BalanceChip | null {

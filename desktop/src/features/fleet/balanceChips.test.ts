@@ -104,7 +104,7 @@ describe("windows rows (Claude)", () => {
     const c = chipFrom(row({
       provider: "claude", label: "Claude", kind: "windows",
       windows: [win("5h", 8, Date.now() + 5 * 3600e3), win("7d", 30, Date.now() + 3 * 24 * 3600e3),
-                { name: "Fable", usedPct: 37, resetsAt: Date.now() + 3 * 24 * 3600e3, locked: null, scoped: true } as never],
+                { name: "Fable", usedPct: 37, resetsAt: Date.now() + 3 * 24 * 3600e3, locked: null, scoped: true }],
     }))!;
     expect(c.value).toContain("37% used Fable");
     expect(c.value).not.toContain("Fable ·");
