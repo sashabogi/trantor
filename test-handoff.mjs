@@ -8,7 +8,7 @@
 import { writeFileSync, mkdirSync, existsSync, readFileSync, rmSync, utimesSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { homedir, tmpdir } from "node:os";
-import { spawnSync } from "node:child_process";
+import { spawnSync, execSync } from "node:child_process";
 import {
   contextUsage, resolveWindow, warnFrac,
   alreadyHandedOff, markHandedOff, buildSummary, verbatimRecentTail, writeHandoff, spawnBaton,
@@ -688,6 +688,52 @@ rmSync(projDir, { recursive: true, force: true });
   ok("#5643: orchPane picks the LAST orch row's pane (orch_pane_from_rows parity)",
     orchPane("p\torch\t__orch__\tw1:p1\nq\torch\t__orch__\tw9:p9\np\torch\t__orch__\tw2:p2\n", "p") === "w2:p2"
     && orchPane("x\therdr\ta\tw1:p1\n", "x") === null);
+}
+
+// ---- the resume-vs-handoff collision (2026-08-31: TWO handoffs written, ZERO fresh takeovers —
+// each "successor" was the old conversation resumed with the takeover banner injected on top,
+// so the recap read clean while the context never reset) ----
+{
+  const bus = join(tmpdir(), `tt-resume-${process.pid}`);
+  const projDir = join(bus, "proj");
+  mkdirSync(join(bus, "handoffs"), { recursive: true });
+  mkdirSync(projDir, { recursive: true });
+  const hf = join(bus, "handoffs", "proj-1000000200.json");
+  const baseRec = { id: "proj-1000000200", project: projDir, projectName: "proj", machine: "h", trigger: "manual-skill", stamp: 1000000200, summary: "REBOOT_HANDOFF", consumed: false, states: [{ state: "written", ts: 1, by: "pred" }] };
+  writeFileSync(hf, JSON.stringify(baseRec));
+  const env = { ...process.env, AGENT_BUS_DIR: bus, RELAY_URL: CLOSED, TRANTOR_NO_HANDOFF_SPAWN: "1", TRANTOR_NO_BATON_SPAWN: "1" };
+  delete env.TRANTOR_ORCH;
+
+  // 1) a RESUMED session must not claim — and must not wear the takeover banner
+  const r1 = spawnSync(process.execPath, ["hooks/sessionstart.mjs"], { input: JSON.stringify({ session_id: "resumed-1", source: "resume", cwd: projDir }), encoding: "utf8", env, timeout: 20000 });
+  const rec1 = JSON.parse(readFileSync(hf, "utf8"));
+  ok("resume guard: a resumed session does NOT claim the waiting handoff", rec1.consumed === false && !rec1.states.some(s => s.state === "claimed"));
+  ok("resume guard: no takeover banner into a resumed context", !r1.stdout.includes("You are taking over"));
+  ok("resume guard: the refusal is LOUD (unclaimed notice names trantor open)", r1.stdout.includes("trantor-handoff-unclaimed") && r1.stdout.includes("trantor open"));
+
+  // 2) a FRESH start still claims it, banner and all
+  const r2 = spawnSync(process.execPath, ["hooks/sessionstart.mjs"], { input: JSON.stringify({ session_id: "fresh-1", source: "startup", cwd: projDir }), encoding: "utf8", env, timeout: 20000 });
+  const rec2 = JSON.parse(readFileSync(hf, "utf8"));
+  ok("resume guard: a fresh start still claims (consumed + CLAIMED by the fresh sid)", rec2.consumed === true && rec2.states.some(s => s.state === "claimed" && s.by === "fresh-1"));
+  ok("resume guard: the fresh claimer gets the takeover banner", r2.stdout.includes("You are taking over"));
+
+  // 3) crew.sh `open`: ANY unconsumed handoff forces a FRESH sid — manual records carry no
+  //    session_id, which is exactly why the old written-by-this-sid predicate never fired.
+  writeFileSync(hf, JSON.stringify(baseRec));   // re-arm as unconsumed
+  // End at a LONE brace: /^}/ also matched the embedded node script's "}catch(e){}" line and
+  // truncated the function mid-body.
+  const fnSrc = execSync(`sed -n '/^_orch_takeover_sid()/,/^}$/p' bin/crew.sh`, { encoding: "utf8" });
+  // Via stdin (`bash -s`), never `bash -c "<double-quoted>"`: the outer shell would expand the
+  // function body's $(uuidgen), $1 and $& before bash ever saw them.
+  const runFn = () => {
+    const r = spawnSync("bash", ["-s"], { input: fnSrc + "\n_orch_takeover_sid proj recorded-sid\n", encoding: "utf8", env });
+    return (r.stdout || "").trim();
+  };
+  const out1 = runFn();
+  ok("open: an unconsumed handoff (no session_id field) forces a FRESH sid", out1 !== "recorded-sid" && out1.length >= 8);
+  writeFileSync(hf, JSON.stringify({ ...baseRec, consumed: true }));
+  ok("open: with nothing unclaimed, the recorded sid resumes as before", runFn() === "recorded-sid");
+  rmSync(bus, { recursive: true, force: true });
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

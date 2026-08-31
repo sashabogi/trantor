@@ -441,6 +441,11 @@ try {
   // The hold LAPSES (default 30m) so an unclaimed baton never strands every other session.
   // Any other handoff keeps first-fresh-session-wins.
   const isCompact = source === "compact";
+  // A RESUMED session must never claim a handoff (2026-08-31, twice in one afternoon): it
+  // already carries its whole history, so claiming injects the takeover banner into the same
+  // maxed-out context — the recap LOOKS right while the window never reset, which is worse
+  // than failing loudly. The successor is whatever fresh session `trantor open` starts.
+  const isResume = source === "resume";
   const orchEnv = process.env.TRANTOR_ORCH || "";
   const isOrchPane = !!orchEnv && (orchEnv === "1" || orchEnv === project);   // project-matched: a child claude in another dir must not inherit the badge
   const orchSid = readOrchSession(project);
@@ -450,12 +455,12 @@ try {
   const ageMs = peek ? Date.now() - (Number(peek.stamp) || 0) * 1000 : 0;
   const held = orchOrigin && !isOrchPane && !isCompact && ageMs < holdMs;
   const handoff = !peek ? null
-    : (isCompact || held) ? peek
+    : (isCompact || held || isResume) ? peek
     : loadPendingHandoff(basename(projectDir), {
         claim: true,
         freshSession: { session_id: stdinObj.session_id || "", transcript_path: stdinObj.transcript_path || "" },
       });
-  const claimed = !!handoff && !isCompact && !held;
+  const claimed = !!handoff && !isCompact && !held && !isResume;
   // Follow the thread: claiming the orchestrator's baton makes THIS session the orchestrator
   // thread, so the map `trantor open` resumes and the app's chat reads moves with it. The pane
   // also records itself on every fresh start — that keeps the map honest even if a future
@@ -468,6 +473,13 @@ try {
     additionalContext += `<trantor-handoff-held id="${sanitize(handoff.id)}" from="${sanitize(handoff.machine)}">\n`;
     additionalContext += `🔒 A handoff from this project's ORCHESTRATOR thread is pending, and it is being HELD for the Trantor orchestrator pane (\`trantor open\` claims it on start). This session did NOT claim it and does not have its content — do not act as the successor. If the user wants THIS session to take over instead: \`trantor adopt\`, then restart this session. Unclaimed, the hold lapses in ~${mins} minute(s) and the handoff becomes first-come.\n`;
     additionalContext += `</trantor-handoff-held>\n`;
+  } else if (handoff && isResume) {
+    // No takeover banner here — injecting it into a resumed session is exactly the failure this
+    // guard exists for: the recap reads like a clean handoff while the context never reset.
+    process.stderr.write(`[trantor] pending handoff ${handoff.id} NOT claimed — this session was RESUMED, not started fresh\n`);
+    additionalContext += `<trantor-handoff-unclaimed id="${sanitize(handoff.id)}" reason="resumed-session">\n`;
+    additionalContext += `⚠️ An unclaimed handoff (${sanitize(handoff.id)}) is waiting for this project, but THIS session was RESUMED (\`--resume\`) — it already carries its own history and is NOT the successor. Do not act on the handoff. Tell the user plainly: a fresh session must claim it — \`trantor open\` starts one. If they want THIS resumed session to continue instead, they can ignore the handoff or clear it.\n`;
+    additionalContext += `</trantor-handoff-unclaimed>\n`;
   } else if (handoff) {
     process.stderr.write(`[trantor] ${isCompact ? "showing (not claiming, compact)" : "loaded"} pending handoff ${handoff.id}\n`);
     // Baton claimed → supersede every OTHER instance of this durable identity (instance-keys

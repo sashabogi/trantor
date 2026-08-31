@@ -244,26 +244,31 @@ _orch_cmd() {   # $1=dir $2=sid
 }
 
 # A recorded thread that HANDED OFF has ended: resuming it replays a dead conversation while the
-# handoff waits for a successor (the 2026-08-27 seam — "Trantor resumes the wrong thread"). When the
-# newest unconsumed handoff for the project was written BY the recorded session, open must start a
-# FRESH id instead; the sessionstart hook then claims the baton and records the fresh id in
-# orch-sessions.txt (single writer for the map: the hook + adopt — this function writes nothing).
+# handoff waits for a successor (the 2026-08-27 seam — "Trantor resumes the wrong thread").
+# ANY unconsumed handoff for the project means a successor is OWED a fresh window — open must
+# start a FRESH id so the sessionstart hook claims the baton (it then records the fresh id in
+# orch-sessions.txt; single writer: the hook + adopt — this function writes nothing).
+# The old predicate required the handoff to be written BY the recorded session (session_id match)
+# — but MANUAL handoffs carry no session_id at all, so on 2026-08-31 the reboot flow resumed the
+# same maxed-out conversation TWICE while its handoff sat unclaimed, and the injected recap
+# banner made each resume LOOK like a clean takeover. Who wrote it doesn't matter; that it is
+# unclaimed does.
 _orch_takeover_sid() {   # $1=project $2=recorded-sid → prints the sid open should use
   local fresh
   if node -e '
 const fs=require("fs"),path=require("path"),os=require("os");
 const dir=path.join(process.env.AGENT_BUS_DIR||process.env.RELAY_DATA_DIR||path.join(os.homedir(),".agent-bus"),"handoffs");
-const [proj,sid]=process.argv.slice(1);
+const [proj]=process.argv.slice(1);
 try{
   const re=new RegExp("^"+proj.replace(/[.*+?^${}()|[\]\\]/g,"\\$&")+"-(\\d+)\\.json$");
   const files=fs.readdirSync(dir).map(f=>{const m=re.exec(f);return m?{f,s:Number(m[1])}:null}).filter(Boolean).sort((a,b)=>b.s-a.s);
   for(const {f} of files){
     const r=JSON.parse(fs.readFileSync(path.join(dir,f),"utf8"));
     if(r.consumed) continue;
-    process.exit(r.session_id&&r.session_id===sid?0:1);   // newest UNCONSUMED decides
+    process.exit(0);   // newest UNCONSUMED exists → a successor is owed a fresh window
   }
 }catch(e){}
-process.exit(1);' "$1" "$2" 2>/dev/null; then
+process.exit(1);' "$1" 2>/dev/null; then
     fresh="$(uuidgen 2>/dev/null | tr 'A-Z' 'a-z')"
     [ -n "$fresh" ] && { echo "— recorded session $2 handed off: starting fresh as $fresh to claim it —" >&2; printf '%s' "$fresh"; return 0; }
   fi
