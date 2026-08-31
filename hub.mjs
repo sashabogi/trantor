@@ -1642,6 +1642,29 @@ const server = http.createServer(async (req, res) => {
       if (ts >= (state.balances?.ts || 0)) { state.balances = { ts, by: String(b.by || "").slice(0, 120), entries }; dirty = true; }
       return json(res, 200, { ok: true });
     }
+    // USAGE v2: the Claude statusline sidechannel. Claude Code >=2.1.80 pipes rate_limits into
+    // the statusLine command on every turn; hooks/statusline.mjs forwards it here (floored 15s
+    // client-side). The live windows PATCH the cached balances snapshot — free usage between
+    // `trantor balances` runs, and the poller can skip Claude while liveTs is fresh (Orca's
+    // lesson, docs/RESEARCH-orca-usage.md §1.1: the OAuth endpoint 429s under polling).
+    if (req.method === "POST" && P === "/usage/claude") {
+      const b = await body(req);
+      const win = (w, name) => (w && (w.used_percentage ?? w.utilization) != null)
+        ? { name, usedPct: Math.round(Number(w.used_percentage ?? w.utilization)), resetsAt: w.resets_at ?? null } : null;
+      const wins = [["fiveHour", "5h"], ["sevenDay", "7d"], ["fable", "Fable"]]
+        .map(([k, n]) => win(b[k], n)).filter(Boolean);
+      if (!wins.length) return json(res, 400, { error: "no usable windows" });
+      state.balances ||= { ts: 0, by: "", entries: [] };
+      let e = state.balances.entries.find(x => x.provider === "claude");
+      if (!e) { e = { provider: "claude", label: "Claude", kind: "windows", ok: true, windows: [] }; state.balances.entries.push(e); }
+      // Same-value posts inside 30s are dropped (the statusline ticks ~3x/sec while streaming).
+      const sig = JSON.stringify(wins);
+      if (e._liveSig === sig && now() - (e.liveTs || 0) < 30_000) return json(res, 200, { ok: true, deduped: true });
+      for (const w of wins) { const cur = (e.windows ||= []).find(x => x.name === w.name); if (cur) Object.assign(cur, w); else e.windows.push(w); }
+      e.ok = true; e.liveTs = now(); e._liveSig = sig; e.liveSource = "statusline";
+      dirty = true;
+      return json(res, 200, { ok: true, windows: wins.length });
+    }
     if (req.method === "GET" && P === "/balances") {
       let cfg = {}; try { cfg = JSON.parse(readFileSync(join(homedir(), ".agent-bus", "config.json"), "utf8")); } catch {}
       const low = { USD: 5, CNY: 35, EUR: 5, ...(cfg.lowBalance || {}) };
