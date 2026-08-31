@@ -6,14 +6,20 @@
 //   trantor duty down                                  stop
 //   trantor duty status                                pid + last turns + presence
 //
+// Keepalive (the 4-day silent death, 2026-08-27→31): by default the seat runs HEADLESS under a
+// launchd service (label com.trantor.duty, KeepAlive=true) — launchd relaunches it after a crash
+// and at every login, so the watcher stops being one bad afternoon away from silently gone.
+// `--window` opts into the visible cmux/Terminal surface instead; a window CANNOT be kept alive
+// by launchd, so that mode says plainly that nothing will bring it back.
+//
 // Division of labor (the overseer doctrine, extended): DETECTION stays mechanical and hub-side —
 // RELAY_DUTY_SESSION makes the hub DM this seat when a direct message sits undelivered past
 // RELAY_DUTY_UNDELIVERED_MS or the overseer emits a warning. The SEAT only triages: relay, wake,
 // annotate, and only involves the human when a real decision is needed. It runs under the same
 // crew-runner that keeps crew seats alive (long-poll wake, turn telemetry, failure reporting) —
 // just with a triage doctrine instead of "work your card" (RUNNER_RULES / CREW_KICKOFF).
-import { spawn, execSync } from "node:child_process";
-import { readFileSync, writeFileSync, existsSync, mkdirSync, openSync, rmSync } from "node:fs";
+import { spawn, execSync, execFileSync } from "node:child_process";
+import { readFileSync, writeFileSync, existsSync, mkdirSync, openSync, rmSync, unlinkSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { homedir } from "node:os";
 import { fileURLToPath } from "node:url";
@@ -25,6 +31,9 @@ const BUS = process.env.AGENT_BUS_DIR || join(homedir(), ".agent-bus");
 const DIR = join(BUS, "trantor-duty");           // the seat's cwd, and therefore its bus id
 const PIDF = join(BUS, "duty.pid");
 const LOGF = join(BUS, "duty.log");
+const LAUNCHER = join(BUS, "duty-launch.sh");
+const DUTY_LABEL = "com.trantor.duty";
+const DUTY_PLIST = join(homedir(), "Library", "LaunchAgents", `${DUTY_LABEL}.plist`);
 
 const argv = process.argv.slice(2);
 const cmd = argv[0] || "status";
@@ -46,8 +55,12 @@ function fleetHub() {
 // a patrol script, send a templated nudge, post 280 chars. Nobody chose that; it was inherited.
 // Precedence: --model flag > CREW_MODEL env > sonnet. `--model inherit` restores the old behaviour.
 const DUTY_MODEL = val("model", "") || process.env.CREW_MODEL || "sonnet";
-// Visible by default; --headless keeps the old background behaviour for launchd and CI.
-const WINDOW = !argv.includes("--headless") && process.platform === "darwin";
+// Headless is the DEFAULT now, and it rides the launchd keepalive. The old default — a visible
+// window, headless only as a silent fallback — is exactly how the seat died quietly on
+// 2026-08-27: the osascript window-open failed, the fallback printed one line into a log nobody
+// reads, and the fleet had no watcher for four days. Headless+keepalive is the honest default;
+// `--window` is the explicit choice of a surface launchd cannot keep alive.
+const WINDOW = argv.includes("--window") && process.platform === "darwin";
 const AGENT = val("agent", "claude");
 // Named, not inherited. It used to be "claude:fleet" purely because the seat's directory was
 // called fleet and identity is derived from directory basename — the same identity-by-position
@@ -134,6 +147,71 @@ function cmuxBinary() {
   return "";
 }
 
+// launchd, invoked by NAME so a drill can stub it on PATH (seats.mjs hardcodes /bin/launchctl,
+// which is why its install has no drill). Every call swallows its error: on a machine without
+// launchd the keepalive path is simply unavailable and the caller says so.
+const bootoutDuty = () => { try { execFileSync("launchctl", ["bootout", `gui/${process.getuid()}/${DUTY_LABEL}`], { stdio: "ignore", timeout: 8000 }); return true; } catch { return false; } };
+const bootstrapDuty = () => { try { execFileSync("launchctl", ["bootstrap", `gui/${process.getuid()}`, DUTY_PLIST], { stdio: "ignore", timeout: 8000 }); return true; } catch { return false; } };
+const dutyLoaded = () => { try { return execFileSync("launchctl", ["list"], { encoding: "utf8", timeout: 8000 }).split("\n").some((l) => l.includes(DUTY_LABEL)); } catch { return false; } };
+
+// Same service shape as the hub (deploy/com.trantor.hub.plist): the long-running process is the
+// job, RunAtLoad + KeepAlive bring it back after a crash and at every login. One deliberate
+// addition, ThrottleInterval=30: a seat that exits because the hub is down must not hot-loop —
+// a KeepAlive job retrying every 10s forever is how this machine hit load 490 on 2026-08-21.
+function keepalivePlistBody() {
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- trantor duty seat as an always-on launchd service. \`trantor duty up\` rewrites this;
+     \`trantor duty down\` removes it. -->
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>${DUTY_LABEL}</string>
+  <key>ProgramArguments</key>
+  <array><string>/bin/bash</string><string>${LAUNCHER}</string></array>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+  <key>ThrottleInterval</key><integer>30</integer>
+  <key>StandardOutPath</key><string>${LOGF}</string>
+  <key>StandardErrorPath</key><string>${LOGF}</string>
+</dict>
+</plist>
+`;
+}
+
+// The rules are ~4KB of prose with backticks, quotes and $ in them, so they cannot ride a
+// command line or an AppleScript string. A launcher script carries them instead. The values ride
+// SINGLE QUOTES (apostrophes escaped as '"'"'): backticks, $( ), parens and newlines are then all
+// literal. The previous form — $(cat <<'EOF' … EOF) — silently broke under macOS bash 3.2 the
+// moment a value contained a backtick (the rules do): the export failed, the seat started without
+// its kickoff text, and the only symptom was a syntax-error line in a log nobody reads.
+function writeLauncher(env) {
+  const shquote = (v) => `'${String(v).replace(/'/g, `'\\''`)}'`;
+  const exports = Object.entries(env).map(([k, v]) => `export ${k}=${shquote(v)}`).join("\n");
+  writeFileSync(LAUNCHER, `#!/bin/bash\n# written by \`trantor duty up\` — safe to delete when the seat is down\n${exports}\nexec ${JSON.stringify(process.execPath)} ${JSON.stringify(join(ROOT, "bin", "crew-runner.mjs"))} ${AGENT} ${JSON.stringify(DIR)}\n`, { mode: 0o700 });
+}
+
+// The old headless start: a detached child of whoever ran `up`. No keepalive — it dies with a
+// reboot and nothing brings it back. Kept for non-darwin and as the loud last fallback.
+function startDetached(env) {
+  const out = openSync(LOGF, "a");
+  const child = spawn(process.execPath, [join(ROOT, "bin", "crew-runner.mjs"), AGENT, DIR], {
+    detached: true, stdio: ["ignore", out, out], env: { ...process.env, ...env },
+  });
+  child.unref();
+  return child.pid;
+}
+
+// Find the runner's pid once a surface (window or launchd) should have started it, and park it
+// in the pidfile `down`/`status` read. Terminal/launchd take a moment, so poll briefly.
+function pollRunnerPid(max = 25) {
+  let pid = 0;
+  for (let i = 0; i < max && !pid; i++) {
+    try { pid = Number(execSync(`pgrep -f "crew-runner.mjs ${AGENT} ${DIR}" | head -1`, { encoding: "utf8" }).trim()) || 0; } catch {}
+    if (!pid) execSync("sleep 0.2");
+  }
+  return pid;
+}
+
 /** Close every workspace this seat owns. No-op when cmux is absent or its socket is off. */
 function closeDutyWorkspace() {
   const bin = cmuxBinary();
@@ -171,72 +249,84 @@ if (cmd === "up") {
     return e;
   })();
 
-  let pid = 0;
-  if (WINDOW) {
-    // A WINDOW, by default. Headless was the old behaviour and it hid the thing: an always-on agent
-    // nobody can see is exactly what unsettles a person who finds the process, and the seat's own
-    // introduction (RUNNER_ABOUT) is worthless printed into a log file nobody opens. Crew seats have
-    // always opened windows; the duty seat now does too.
-    //
-    // The rules are ~4KB of prose with backticks, quotes and $ in them, so they cannot ride a
-    // command line or an AppleScript string. A launcher script carries them instead: a quoted
-    // heredoc means the shell expands nothing, and osascript only ever sees the path.
-    const launcher = join(BUS, "duty-launch.sh");
-    const exports = Object.entries(env).map(([k, v]) =>
-      `export ${k}=$(cat <<'TRANTOR_${k}_EOF'\n${v}\nTRANTOR_${k}_EOF\n)`).join("\n");
-    writeFileSync(launcher, `#!/bin/bash\n# written by \`trantor duty up\` — safe to delete when the seat is down\n${exports}\nexec ${JSON.stringify(process.execPath)} ${JSON.stringify(join(ROOT, "bin", "crew-runner.mjs"))} ${AGENT} ${JSON.stringify(DIR)}\n`, { mode: 0o700 });
-    // PREFER CMUX. Terminal.app was the only surface here, and a plain window is stacking by
-    // construction: every `duty up` opens another one and nothing closes the last, so restarts
-    // accumulate windows that all look like live duty agents. cmux gives the seat ONE named
-    // workspace that gets REPLACED on each up — the same "replace, never stack" rule bin/crew.sh
-    // already applies to crew seats, which is why they never pile up and this did.
-    //
-    // Terminal remains the fallback: no cmux, or its control socket off, and nothing changes.
-    const cmuxBin = cmuxBinary();
+  writeLauncher(env);
 
-    let openedInCmux = false;
+  let pid = 0;
+  let how = "";
+
+  if (WINDOW) {
+    // --window: the visible surface. cmux first (ONE named workspace, replaced on each up — the
+    // same "replace, never stack" rule bin/crew.sh applies to crew seats), Terminal as fallback.
+    // A window cannot be kept alive by launchd, so `how` says plainly that nothing will bring
+    // the seat back if it dies.
+    const cmuxBin = cmuxBinary();
+    let opened = false;
     if (cmuxBin) {
       try {
         // Replace, never stack: take the previous duty workspace away before opening this one.
         // Closing first is safe here (unlike a crew pane swap) — the seat is a single surface with
         // nothing to preserve.
         closeDutyWorkspace();
-        execSync(`${cmuxBin} new-workspace --name ${JSON.stringify(CMUX_WS_NAME)} --cwd ${JSON.stringify(DIR)} --command ${JSON.stringify(`bash ${launcher}`)} --focus false`,
+        execSync(`${cmuxBin} new-workspace --name ${JSON.stringify(CMUX_WS_NAME)} --cwd ${JSON.stringify(DIR)} --command ${JSON.stringify(`bash ${LAUNCHER}`)} --focus false`,
           { stdio: "ignore", timeout: 8000, env: { ...process.env, CMUX_QUIET: "1" } });
-        openedInCmux = true;
+        opened = true;
       } catch (e) {
         console.error(`cmux launch failed (${e?.message || e}) — falling back to a Terminal window`);
       }
     }
+    if (!opened) {
+      const osa = `tell application "Terminal"\n  do script ${JSON.stringify(`bash ${LAUNCHER}`)}\n  activate\nend tell\n`;
+      try { execSync(`osascript -e ${JSON.stringify(osa)}`, { stdio: "ignore", timeout: 8000 }); opened = true; }
+      catch (e) {
+        // The 2026-08-27 incident: this printed one quiet line, fell back headless, and the fleet
+        // had no watcher for four days. Now it is loud, and the keepalive path below takes over.
+        console.error(`  ⚠️  could not open a window (${e?.message || e}) — falling back to the headless launchd keepalive`);
+      }
+    }
+    if (opened) {
+      pid = pollRunnerPid();
+      writeFileSync(PIDF, String(pid));
+      how = "in a window (NO keepalive — if it dies or the Mac reboots, it stays down)";
+    }
+  }
 
-    if (!openedInCmux) {
-      const osa = `tell application "Terminal"\n  do script ${JSON.stringify(`bash ${launcher}`)}\n  activate\nend tell\n`;
-      try { execSync(`osascript -e ${JSON.stringify(osa)}`, { stdio: "ignore", timeout: 8000 }); }
-      catch (e) { console.error(`could not open a window (${e?.message || e}) — falling back to headless`); }
-    }
-    // The runner lives inside Terminal, so its pid is not ours to know: find it the same way `down`
-    // does. Poll briefly, since Terminal takes a moment to start the shell.
-    for (let i = 0; i < 25 && !pid; i++) {
-      try { pid = Number(execSync(`pgrep -f "crew-runner.mjs ${AGENT} ${DIR}" | head -1`, { encoding: "utf8" }).trim()) || 0; } catch {}
-      if (!pid) execSync("sleep 0.2");
+  if (!how) {
+    if (process.platform === "darwin") {
+      // The honest default: headless under launchd, so a crashed seat relaunches itself instead
+      // of dying silently (the seat sat dead 2026-08-27→31 before anyone noticed).
+      mkdirSync(dirname(DUTY_PLIST), { recursive: true });   // a fresh machine has no LaunchAgents dir yet
+      writeFileSync(DUTY_PLIST, keepalivePlistBody());
+      bootoutDuty();
+      if (bootstrapDuty()) {
+        pid = pollRunnerPid(15);
+        writeFileSync(PIDF, String(pid));
+        how = `headless under the launchd keepalive ${DUTY_LABEL} (relaunched after a crash or reboot)`;
+        if (!pid) console.error(`  ⚠️  keepalive installed but no runner seen after 3s — check: launchctl list | grep ${DUTY_LABEL}`);
+      } else {
+        console.error("  ⚠️  launchctl bootstrap failed — starting a plain headless seat with NO keepalive");
+        pid = startDetached(env);
+        writeFileSync(PIDF, String(pid));
+        how = "headless, NO keepalive (launchd refused the job)";
+      }
+    } else {
+      pid = startDetached(env);
+      writeFileSync(PIDF, String(pid));
+      how = `headless, NO keepalive (launchd is macOS-only; ${process.platform} gets a plain background seat)`;
     }
   }
-  if (!pid) {
-    const out = openSync(LOGF, "a");
-    const child = spawn(process.execPath, [join(ROOT, "bin", "crew-runner.mjs"), AGENT, DIR], {
-      detached: true, stdio: ["ignore", out, out], env: { ...process.env, ...env },
-    });
-    child.unref();
-    pid = child.pid;
-  }
-  writeFileSync(PIDF, String(pid));
-  console.log(`— duty agent up: ${SESSION} (pid ${pid})${WINDOW ? " in a window" : " headless"} on ${DUTY_MODEL === "inherit" ? "the CLI default model" : DUTY_MODEL} watching ${hub} — log: ${LOGF}`);
+
+  console.log(`— duty agent up: ${SESSION} (pid ${pid}) ${how} on ${DUTY_MODEL === "inherit" ? "the CLI default model" : DUTY_MODEL} watching ${hub} — log: ${LOGF}`);
   const fed = await registerDutySeat(hub, SESSION);
   if (fed) console.log(`  hub feeds it: undelivered DMs (>${Math.round(Number(process.env.RELAY_DUTY_UNDELIVERED_MS || 600000) / 60000)}m) + overseer warnings.`);
   process.exit(0);   // the seat IS up; a hub that won't feed it is a warning, not a failed start
 }
 
 if (cmd === "down") {
+  const hadKeepalive = existsSync(DUTY_PLIST);
+  // Unload the keepalive FIRST (bootout kills the job's process), then remove the plist so a
+  // reboot cannot resurrect the seat behind a `down`. `up` rewrites both.
+  bootoutDuty();
+  if (hadKeepalive) { try { unlinkSync(DUTY_PLIST); } catch {} }
   const pid = alivePid();
   if (pid) { try { process.kill(pid); } catch {} console.log(`— duty seat stopped (pid ${pid}) —`); }
   else console.log("no duty seat running");
@@ -249,6 +339,18 @@ if (cmd === "down") {
   // Clear the hub's pointer too — escalations aimed at a seat that no longer exists are messages
   // sent into a hole, and the hub has no other way to learn the seat went away.
   await registerDutySeat(fleetHub(), "");
+  // GOING LOUD. A quiet `down` is how the seat sat dead for four days (2026-08-27→31) while every
+  // other surface reported green: nothing errors when the watcher is gone, it just stops watching.
+  // Anyone turning the watcher off must see, in that moment, exactly what they are leaving dark.
+  if (pid || hadKeepalive) {
+    console.log(`
+────────────────────────────────────────────────────────────
+  ⚠️  DUTY IS DOWN. Nobody is watching the fleet now.
+  Undelivered mail and dead seats will go unnudged — last time
+  that silence lasted four days (Aug 27→31) before anyone noticed.
+  Bring it back:  trantor duty up
+────────────────────────────────────────────────────────────`);
+  }
   process.exit(0);
 }
 
@@ -263,6 +365,9 @@ if (cmd === "down") {
   console.log("  and never edits your project files.  Stop it with: trantor duty down");
   console.log("");
   console.log(pid ? `RUNNING (pid ${pid}) as ${SESSION}` : "NOT running");
+  console.log(existsSync(DUTY_PLIST)
+    ? `keepalive: installed (${DUTY_LABEL}${process.platform === "darwin" ? (dutyLoaded() ? ", loaded" : ", not loaded in this session") : ""}) — launchd relaunches the seat after a crash or reboot`
+    : "keepalive: NOT installed — a crash or reboot leaves the seat down (trantor duty up installs it)");
   // A running seat the hub isn't feeding looks identical to a working one from the outside — which
   // is the whole failure mode this command exists to make visible. So ask the hub, don't assume.
   const hub = fleetHub();
