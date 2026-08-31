@@ -16,6 +16,7 @@ import { resolveProject, resolveHub, withEnvFiles, hostId } from "../lib/project
 import { loadOrCreate } from "../lib/identity.mjs";
 import { signedHeaders } from "../lib/signed-fetch.mjs";
 import { ensureEnrolled } from "../lib/enroll.mjs";
+import { capWake, capBcast, pickLessons, composePrompt } from "./crew-payload.mjs";
 
 const AGENT = process.argv[2];
 const DIR = process.argv[3] || process.cwd();
@@ -483,12 +484,33 @@ function runTurn(prompt, isFirst, trigger = "kickoff") {
 const KICKOFF = process.env.CREW_KICKOFF ||
   `You just joined (your arrival was already announced on the bus). 1) relay_inbox — if a contract for you is already waiting, do it now per the Rules. 2) End your turn.\n\n${RULES}`;
 
-let LESSONS = "";
+let LESSONS_RAW = [];
 async function loadLessons() {
   try {
     const { lessons } = await api(`/lessons?agent=${encodeURIComponent(AGENT)}`);
-    if (lessons?.length) LESSONS = "\n\nLESSONS from previous crews (hard-won — follow them):\n" + lessons.map(l => `- [${l.scope}] ${l.text}`).join("\n");
+    if (lessons?.length) LESSONS_RAW = lessons;
   } catch {}
+}
+
+// card #5683: every section of a turn prompt is capped (bin/crew-payload.mjs) and the whole
+// payload has ONE hard total cap. Codex burned 306k tokens into a remote-compact 404 crash-loop
+// because a resumed session re-fed the full lessons block (22,298 of the 24,698 chars in its last
+// turn file — 90%) plus an unbounded broadcast backlog on EVERY turn, redelivery after redelivery.
+// Below the caps the composition is byte-identical to the old concatenation.
+function composedTurn({ base = "", wakeText = "", ctxText = "", againText = "", tailText = "", rulesText = "", lessons = null }) {
+  const built = composePrompt([
+    { name: "base", text: base },
+    { name: "wake", text: wakeText, trim: "truncate", order: 4 },
+    { name: "ctx", text: ctxText, trim: "drop", order: 1 },
+    { name: "again", text: againText },
+    { name: "tail", text: tailText },
+    { name: "rules", text: rulesText, trim: "drop", order: 3 },
+    { name: "lessons", text: lessons?.text || "", trim: "drop", order: 2 },
+  ]);
+  const parts = built.sections.filter(s => s.chars).map(s => `${s.name} ${s.chars.toLocaleString("en-US")}c`).join(" · ");
+  const lessonsNote = lessons && lessons.total ? ` (lessons ${lessons.kept}/${lessons.total})` : "";
+  log(`payload: ${parts}${lessonsNote} → ${built.prompt.length.toLocaleString("en-US")}c${built.truncated ? ` \x1b[33mTRUNCATED — ${built.dropped.join("; ")}\x1b[0m` : ""}`);
+  return built.prompt;
 }
 
 (async () => {
@@ -520,7 +542,7 @@ async function loadLessons() {
   let deliveryFails = 0;      // consecutive failed attempts at the SAME pending batch
   if (pendingWake.length) log(`\x1b[33m${pendingWake.length} message(s) survived from a previous run — redelivering\x1b[0m`);
 
-  const ec0 = runTurn(KICKOFF + LESSONS, true, "kickoff");
+  const ec0 = runTurn(composedTurn({ base: KICKOFF, lessons: pickLessons(LESSONS_RAW, "") }), true, "kickoff");
   if (ec0) await reportFailure(ec0, "kickoff", pendingWake.length);   // a failed kickoff = the "fired up, died, nobody knew" case
   let lastTurnAt = Date.now();
   if (PULSE_MS) log(`pulse armed — mission re-read every ${Math.round(PULSE_MS / 1000)}s (${MISSION_FILE})`);
@@ -530,7 +552,7 @@ async function loadLessons() {
     // pulse first: a due mission beat runs even on a silent bus. Measured from the END of the
     // last turn, so a long turn doesn't stack an immediate pulse on top of itself.
     if (PULSE_MS && Date.now() - lastTurnAt >= PULSE_MS) {
-      const ecp = runTurn(PULSE_PROMPT + "\n\n" + RULES + LESSONS, false, "pulse");
+      const ecp = runTurn(composedTurn({ base: PULSE_PROMPT + "\n\n", rulesText: RULES, lessons: pickLessons(LESSONS_RAW, PULSE_PROMPT) }), false, "pulse");
       if (ecp) await reportFailure(ecp, "pulse"); else await reportHealthy();
       lastTurnAt = Date.now();
       log("parked — waiting for the next message or pulse");
@@ -589,22 +611,33 @@ async function loadLessons() {
   // queued, on disk, with a backoff — which is the whole point of the change.
   async function deliverWake() {
     const wake = pendingWake;
-    const ctx = pendingBcast.length ? `\nFYI broadcasts since your last turn (context only):\n${pendingBcast.map(m => `[${m.from} -> all]: ${m.text}`).join("\n")}\n` : "";
-    const lines = wake.map(m => `[${m.from}${m.to === "all" ? " -> all (mentions you)" : ""}]: ${m.text}`).join("\n");
+    const wakeCapped = capWake(wake);
+    const bcastCapped = capBcast(pendingBcast);
+    const wakeText = wakeCapped.text
+      ? `NEW BUS MESSAGE${wake.length > 1 ? "S" : ""} for you:\n${wakeCapped.text}\n`
+      : "";
+    const ctxText = bcastCapped.text
+      ? `\nFYI broadcasts since your last turn (context only):\n${bcastCapped.text}\n`
+      : "";
     // Say plainly that this is a second look. Without it the model re-reads an old escalation as
     // brand new and can redo work it already half-did before the turn died.
-    const again = deliveryFails
+    const againText = deliveryFails
       ? `\n(REDELIVERY, attempt ${deliveryFails + 1} — an earlier turn failed before acting on ${wake.length > 1 ? "these" : "this"}. Check what you already did before repeating it.)\n`
       : "";
-    const prompt = `NEW BUS MESSAGE${wake.length > 1 ? "S" : ""} for you:\n${lines}\n${ctx}${again}\nAct on what's addressed to you, then end your turn.\n\n${RULES}`;
     await loadLessons();
+    const lessons = pickLessons(LESSONS_RAW, wakeCapped.text + " " + bcastCapped.text);
     const trigger = wake.some(m => m.to === SESSION) ? "direct message" : "@mention";
     // Who is owed an answer, captured BEFORE the turn: pendingWake is cleared on success.
     const assigners = [];
     for (const m of wake) if (m.from && !assigners.some(a => a.from === m.from)) assigners.push({ from: m.from, id: m.id });
     const asked = String(wake[0]?.text || "").replace(/\s+/g, " ").trim().slice(0, 90);
     const tStart = Date.now();
-    const ec = runTurn(prompt + LESSONS, false, deliveryFails ? `${trigger} (redelivery)` : trigger);
+    const prompt = composedTurn({
+      wakeText, ctxText, againText,
+      tailText: "\nAct on what's addressed to you, then end your turn.\n\n",
+      rulesText: RULES, lessons,
+    });
+    const ec = runTurn(prompt, false, deliveryFails ? `${trigger} (redelivery)` : trigger);
     const secs = Math.round((Date.now() - tStart) / 1000);
     if (ec) {
       deliveryFails++;
