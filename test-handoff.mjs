@@ -5,7 +5,7 @@
 // windows (TRANTOR_NO_HANDOFF_SPAWN=1). Regression coverage for the three gaps
 // that broke the promise: tail-only summary, compact eating its own handoff,
 // and the spawn never firing.
-import { writeFileSync, mkdirSync, existsSync, readFileSync, rmSync, utimesSync } from "node:fs";
+import { writeFileSync, mkdirSync, existsSync, readFileSync, rmSync, utimesSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { homedir, tmpdir } from "node:os";
 import { spawnSync } from "node:child_process";
@@ -69,7 +69,11 @@ ok("summary includes the SESSION END", summary.includes(LAST));
 // baton pass: the handoff record must carry a VERBATIM recent-exchange block (exact in-flight state)
 ok("verbatimRecentTail returns the exact recent text", verbatimRecentTail(transcript).includes(LAST));
 const { record: hrec, file: hfile } = writeHandoff({ projectDir: tmp, sessionId: "vt", transcript, trigger: "context-warn" });
-ok("writeHandoff embeds the verbatim in-flight block", /Verbatim recent exchange/.test(hrec.summary) && hrec.summary.includes(LAST));
+// #5648: the verbatim tail is NO LONGER embedded — the summary is the recap, capped ~4KB, and
+// transcript_path points at the full exchange. Embedding it made the successor pay for the same
+// context twice (injected summary + persisted overflow re-read).
+ok("writeHandoff does NOT embed the verbatim block (transcript_path points at it)",
+  !/Verbatim recent exchange/.test(hrec.summary) && hrec.transcript_path === transcript);
 // The operator's OWN spawn guards, if they exported them. The GOTCHAS tell every session to set
 // TRANTOR_NO_HANDOFF_SPAWN and TRANTOR_NO_BATON_SPAWN before running anything that can open a
 // window, so this suite must assume they are set — and must put them back exactly as it found them
@@ -271,7 +275,10 @@ seed();
     const r = spawnSync("node", ["hooks/sessionstart.mjs"], {
       input: JSON.stringify({ source: "startup", session_id: sid }),
       encoding: "utf8", timeout: 15000,
-      env: { ...process.env, CLAUDE_PROJECT_DIR: opDir, RELAY_SESSION: op, RELAY_URL: CLOSED, AGENT_BUS_DIR: bus, TRANTOR_ORCH: "", TRANTOR_ORCH_HOLD_MS: "", ...env },
+      // RELAY_PROJECT="" — a seat runner exports RELAY_PROJECT for ITS project, and
+      // resolveProject honours it BEFORE any path, so the subprocess would resolve the fixture
+      // dir to the seat's project and the orch map row would never match (#5648 drill fix).
+      env: { ...process.env, RELAY_PROJECT: "", CLAUDE_PROJECT_DIR: opDir, RELAY_SESSION: op, RELAY_URL: CLOSED, AGENT_BUS_DIR: bus, TRANTOR_ORCH: "", TRANTOR_ORCH_HOLD_MS: "", ...env },
     });
     try { return JSON.parse(r.stdout).hookSpecificOutput?.additionalContext || ""; } catch { return ""; }
   };
@@ -452,6 +459,108 @@ rmSync(projDir, { recursive: true, force: true });
   ok("recap net: after recap, prompts carry nothing", !pf2.stdout.includes("additionalContext"));
   rmSync(projDir, { recursive: true, force: true });
   rmSync(wfile, { force: true });   // like the earlier writeHandoff drill: never leak into the live handoffs dir
+}
+
+// ---- #5648: handoff writer discipline — capped recap, defer to fresh model-authored, mode ----
+{
+  const { capSummary, freshAuthoredHandoff, handoffMode } = await import("./hooks/lib/handoff.mjs");
+  const { setAutonomy } = await import("./lib/autonomy.mjs");
+
+  // cap: pure function — small text untouched, big text keeps BOTH ends on paragraph boundaries
+  const small = "tiny";
+  ok("capSummary: text under the cap is untouched", capSummary(small) === small);
+  const big = Array.from({ length: 400 }, (_, i) => `para ${i} ${String(i).repeat(30)}`).join("\n\n");
+  const capped = capSummary(big);
+  ok("capSummary: oversized text is cut to ~4KB", capped.length <= 4096 && capped.includes("[…]"));
+  ok("capSummary: the cut keeps the opening AND the tail", capped.startsWith(big.slice(0, 40)) && capped.endsWith(big.slice(-40)));
+
+  // end to end: the composed digest of a big transcript is recap-sufficient at <=~4KB,
+  // carries mode:"attended" by default, and seeds the §5 ledger. Own transcript: the shared
+  // `transcript` fixture is DELETED by the mid-file cleanup above, and a deleted input would
+  // silently summarize to the placeholder.
+  const cp = "cap-e2e-" + process.pid;
+  const cpDir = join(tmpdir(), cp);
+  mkdirSync(cpDir, { recursive: true });
+  const capT = join(cpDir, "t.jsonl");
+  writeFileSync(capT, rows.map(r => JSON.stringify(r)).join("\n"));
+  process.env.TRANTOR_NO_SCROOGE = "1";
+  const { record: crec, file: cfile } = writeHandoff({ projectDir: cpDir, sessionId: "cap-e2e", transcript: capT, trigger: "context-warn" });
+  delete process.env.TRANTOR_NO_SCROOGE;
+  ok("cap: the inline summary stays within the ~4KB injection budget", crec.summary.length <= 4200);
+  ok("cap: recap-sufficient — the SESSION START and END both survive the cut", crec.summary.includes(FIRST) && crec.summary.includes(LAST));
+  ok("mode: defaults to attended", crec.mode === "attended");
+  rmSync(cfile, { force: true });
+  rmSync(cpDir, { recursive: true, force: true });
+
+  // defer: a FRESH (<15min) unconsumed model-authored handoff is deferred TO — not recomposed,
+  // not superseded. The digest is the fallback, never the replacement (#5648 incident).
+  const fp = "defer-" + process.pid;
+  const fpDir = join(tmpdir(), fp);
+  mkdirSync(fpDir, { recursive: true });
+  const nowS = Math.floor(Date.now() / 1000);
+  const freshFile = join(handoffDir, `${fp}-${nowS}.json`);
+  writeFileSync(freshFile, JSON.stringify({ id: `${fp}-${nowS}`, project: fpDir, projectName: fp, machine: "h", trigger: "manual-skill", stamp: nowS, summary: "HAND_AUTHORED_WORDS", consumed: false }, null, 2));
+  ok("freshAuthoredHandoff: finds the fresh manual-skill record", freshAuthoredHandoff(fp)?.id === `${fp}-${nowS}`);
+  process.env.TRANTOR_NO_SCROOGE = "1";
+  const dres = writeHandoff({ projectDir: fpDir, sessionId: "def", transcript, trigger: "context-warn" });
+  delete process.env.TRANTOR_NO_SCROOGE;
+  ok("defer: writeHandoff defers to the fresh model-authored handoff", dres.deferred === true && dres.file === freshFile && dres.record.summary === "HAND_AUTHORED_WORDS");
+  ok("defer: the authored record stays unconsumed — nothing superseded it", JSON.parse(readFileSync(freshFile, "utf8")).consumed === false);
+  ok("defer: no new record was composed", readdirSync(handoffDir).filter(f => f.startsWith(fp + "-")).length === 1);
+
+  // a manual-baton trigger counts too; a stale (>15min) authored one does NOT defer — and a fresh
+  // digest then correctly retires it via supersede
+  rmSync(freshFile, { force: true });
+  const oldS = nowS - 1000;
+  const staleFile = join(handoffDir, `${fp}-${oldS}.json`);
+  writeFileSync(staleFile, JSON.stringify({ id: `${fp}-${oldS}`, project: fpDir, projectName: fp, machine: "h", trigger: "manual-baton", stamp: oldS, summary: "STALE_AUTHORED", consumed: false }, null, 2));
+  ok("freshAuthoredHandoff: a >15min authored handoff is NOT fresh", freshAuthoredHandoff(fp) === null);
+  process.env.TRANTOR_NO_SCROOGE = "1";
+  const sres = writeHandoff({ projectDir: fpDir, sessionId: "def2", transcript, trigger: "context-warn" });
+  delete process.env.TRANTOR_NO_SCROOGE;
+  ok("defer: a STALE authored handoff does not defer — compose fresh", sres.deferred === undefined && !!sres.record);
+  ok("defer: the stale authored record is retired by the fresh digest", JSON.parse(readFileSync(staleFile, "utf8")).consumed === true && JSON.parse(readFileSync(staleFile, "utf8")).superseded === true);
+  ok("defer: an AUTO trigger never defers (records above were the only ones)", sres.record.trigger === "context-warn");
+  rmSync(staleFile, { force: true });
+  rmSync(sres.file, { force: true });
+  rmSync(fpDir, { recursive: true, force: true });
+
+  // mode: unattended comes from the resolved autonomy baton dial (`trantor autonomy json`),
+  // read through an AGENT_BUS_DIR redirect so the drill never touches the operator's real dials
+  const mp = "mode-" + process.pid;
+  const mpDir = join(tmpdir(), mp);
+  const mbus = join(tmpdir(), "modebus-" + process.pid);
+  mkdirSync(mpDir, { recursive: true });
+  mkdirSync(mbus, { recursive: true });
+  const prevBusM = process.env.AGENT_BUS_DIR;
+  process.env.AGENT_BUS_DIR = mbus;
+  ok("mode: no autonomy file → attended", handoffMode(mp) === "attended");
+  setAutonomy(mp, { baton: "auto" });
+  ok("mode: baton:auto → unattended", handoffMode(mp) === "unattended");
+  ok("mode: another project stays attended (the dial is per-project)", handoffMode("other-" + process.pid) === "attended");
+  const mrec = (() => { try { return handoffMode("") === "attended"; } catch { return false; } })();
+  ok("mode: empty project name still answers attended", mrec);
+  if (prevBusM === undefined) delete process.env.AGENT_BUS_DIR; else process.env.AGENT_BUS_DIR = prevBusM;
+  rmSync(mbus, { recursive: true, force: true });
+  rmSync(mpDir, { recursive: true, force: true });
+}
+
+// ---- #5642/#5648: the MANUAL skill path opens the §5 ledger and carries the same interface ----
+{
+  const wp2 = "manual-skill-" + process.pid;
+  const wp2Dir = join(tmpdir(), wp2);
+  mkdirSync(wp2Dir, { recursive: true });
+  const r = spawnSync("node", [join(process.cwd(), "bin", "write-handoff.mjs")], {
+    cwd: wp2Dir, input: "# handoff\nMANUAL_SKILL_BODY", encoding: "utf8", timeout: 30000,
+    env: { ...process.env, CLAUDE_PROJECT_DIR: wp2Dir, RELAY_URL: CLOSED, TRANTOR_NO_HANDOFF_SPAWN: "1", TRANTOR_NO_BATON_SPAWN: "1" },
+  });
+  ok("manual write-handoff exits 0", r.status === 0);
+  const mf = /handoff saved: (\S+\.json)/.exec(r.stdout)?.[1];
+  const mrec = (() => { try { return JSON.parse(readFileSync(mf, "utf8")); } catch { return null; } })();
+  ok("manual record opens the §5 ledger with WRITTEN (#5642)", mrec?.states?.length === 1 && mrec.states[0].state === "written" && mrec.states[0].by === "manual-skill");
+  ok("manual record carries the kimi-consumed interface (mode + transcript_path)", mrec?.mode === "attended" && mrec?.transcript_path === "");
+  if (mf) rmSync(mf, { force: true });
+  rmSync(wp2Dir, { recursive: true, force: true });
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);
