@@ -103,7 +103,11 @@ export function BalanceStrip({ client }: { client: HubClient }) {
   return (
     <footer className="flex h-7 shrink-0 items-center gap-4 overflow-x-auto border-t border-[var(--color-tr-edge)] bg-[var(--color-tr-bg)] px-3"
       title={dimmed ? "Balances stale — last known values" : undefined}>
-      <div className={`flex min-w-0 flex-1 items-center gap-4 ${dimmed ? "opacity-45" : ""}`}>
+      {/* The chips' own scroll (operator, 2026-08-30: a segment "disappeared" at laptop width
+          — the row's shrink-0 children could overflow this min-w-0 box INVISIBLY, the exact
+          clip class the tab bar had). Overflow now scrolls; the refresh control never gets
+          painted over; the tooltip always carries the full text regardless. */}
+      <div className={`flex min-w-0 flex-1 items-center gap-4 overflow-x-auto ${dimmed ? "opacity-45" : ""}`}>
         {chips.map(c => (
           <span key={c.key} title={c.tooltip} className="flex shrink-0 items-center gap-1.5 text-[10.5px]">
             <BrandMark icon={c.icon} mono={c.mono} hue={c.hue} fg={c.fg} />
