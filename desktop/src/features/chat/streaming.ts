@@ -249,6 +249,28 @@ export function receiptFor(p: PendingSend, userTexts: string[], now: number): "s
 export const IMAGE_PATH_RE = /(?:\/|~\/)[^\n]*?\.(?:png|jpe?g|gif|webp|heic|pdf)/gi;
 export const hasImagePath = (s: string) => { IMAGE_PATH_RE.lastIndex = 0; return IMAGE_PATH_RE.test(s); };
 
+/** #5709 — CC's attachment conversion DROPS an image when several paths ride one message
+ *  inline (lab-reproduced 2026-08-31: two inline paths in one prompt → ONE image block in the
+ *  transcript; the other survived only as raw text the model never saw). One path per LINE
+ *  converts every image (2/2 and 3/3 in the same lab), so the composer normalizes at SEND
+ *  time: each path moves to its own leading line and a "(image N)" marker holds its place in
+ *  the prose, keeping sentences readable ("compare (image 1) with (image 2)"). Single-path
+ *  sends pass through byte-identical — they have never dropped, and the receipt drills pin
+ *  their exact shapes. */
+export function normalizeAttachments(text: string): string {
+  IMAGE_PATH_RE.lastIndex = 0;
+  const spans = text.match(IMAGE_PATH_RE) ?? [];
+  if (spans.length < 2) return text;
+  let prose = text;
+  spans.forEach((sp, i) => { prose = prose.replace(sp, `(image ${i + 1})`); });
+  // A marker only earns its keep INSIDE a sentence; a line that was nothing but paths needs no
+  // placeholder — dropping it is what makes an already one-per-line draft normalize to itself.
+  prose = prose.split("\n").map(l => l.replace(/[ \t]+/g, " ").trim())
+    .filter(l => l && l.replace(/\(image \d+\)/g, "").trim())
+    .join("\n");
+  return spans.map(sp => sp.trim()).join("\n") + (prose ? "\n" + prose : "");
+}
+
 /** #5608 — the live turn ticker's tool label: the most recent tool the agent touched, with a
  *  one-line whiff of its argument. Scans backward so the newest row wins; only rendered while
  *  the agent is working/blocked, so a finished turn's last tool never masquerades as "now". */

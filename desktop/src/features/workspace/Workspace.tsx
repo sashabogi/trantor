@@ -186,7 +186,8 @@ export function Workspace({ client, project, lens, onLens }: {
           <div className="flex items-center gap-1">
             {targets.length === 0 && (
               <div className="tr-card-ghost px-4 py-2 text-[12.5px]">
-                No seats on this project — fire some up with <span className="tr-mono">trantor up</span>
+                Nothing is live here — <span className="font-semibold text-tr-ok">Wake</span> the project
+                from the sidebar, or fire up seats with <span className="tr-mono">trantor up</span>
               </div>
             )}
             {targets.map(t => (

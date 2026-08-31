@@ -18,7 +18,7 @@ import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { ChevronDown, Paperclip, Square, ArrowUp } from "lucide-react";
 import { searchFiles } from "../files/fileApi";
 import { FONT_STEPS, type FontStep } from "./prefs";
-import { gaugeLabel, gaugeTone, gaugeUnknownWindow, composerSlot, hasImagePath, insertPaths, receiptFor, type ContextGauge, type PendingSend } from "./streaming";
+import { gaugeLabel, gaugeTone, gaugeUnknownWindow, composerSlot, hasImagePath, insertPaths, normalizeAttachments, receiptFor, type ContextGauge, type PendingSend } from "./streaming";
 import { projectSessions, takeoverAction, type ProjectSessions } from "./takeover";
 import { TakeoverStrip } from "./TakeoverStrip";
 
@@ -352,7 +352,10 @@ export function Composer({ project, target, live, liveWhy, model, modelSource, w
   const inFlight = pendings.length - lost.length;
 
   const send = () => {
-    const text = draft.trim();
+    // Multi-image sends are rewritten to one-path-per-line BEFORE delivery (#5709) — CC's
+    // converter drops an image when several paths ride one message inline. The pending holds
+    // the NORMALIZED text: receipts must judge what was actually typed into the pane.
+    const text = normalizeAttachments(draft.trim());
     if (!text || !target) return;
     setBusy(true);
     line(text).then(() => {

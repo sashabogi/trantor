@@ -18,6 +18,7 @@ import { countUnseen, onSeenChange } from "../shared/seen";
 import { usePendingProposals } from "../shared/Proposals";
 import { ProjectIcon } from "../shared/ProjectIcon";
 import type { Lens } from "../features/project/ProjectHeader";
+import { orchestratorOpen } from "../features/workspace/herdr";
 
 const LOCAL_HUB = "http://127.0.0.1:4477";
 import { Home } from "../features/home/Home";
@@ -289,6 +290,29 @@ export function AppShell() {
     setPane({ kind: "project", lens: "board" });
   };
 
+  // WAKE — the sidebar's way to make a sleeping project live without ever leaving the app
+  // (Sasha's ruling, 2026-08-31: "we want to stay away from firing up terminal sessions outside
+  // of Trantor"). One call to `trantor open` via the frozen herdr bridge: it reattaches rather
+  // than stacks, claims any waiting handoff with a FRESH session id, and records the pane —
+  // so the click is idempotent and lands you in the Workspace lens already attached.
+  const [waking, setWaking] = useState<string | null>(null);
+  const [wakeErrors, setWakeErrors] = useState<Map<string, string>>(new Map());
+  const wakeProject = async (p: string) => {
+    if (waking) return; // one wake at a time — a second click mid-open is a re-ask, not a queue
+    setWaking(p);
+    setWakeErrors(prev => { const m = new Map(prev); m.delete(p); return m; });
+    try {
+      await orchestratorOpen(p);
+      setActive(p);
+      setPane({ kind: "project", lens: "workspace" });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      setWakeErrors(prev => new Map(prev).set(p, msg));
+    } finally {
+      setWaking(null);
+    }
+  };
+
   const NavItem = ({ label, Icon, on, onClick, badge, title }: {
     label: string;
     Icon: React.ComponentType<{ size?: number; strokeWidth?: number; className?: string }>;
@@ -309,9 +333,15 @@ export function AppShell() {
   );
 
   // One project row, used by both groups so ACTIVE NOW and PROJECTS can never drift apart.
+  // A div-with-role rather than a <button>, because a sleeping row carries a real WAKE button
+  // inside it and interactive-inside-interactive is invalid — the row keeps its keyboard path
+  // through role/tabIndex/Enter instead.
   const ProjectRow = ({ p }: { p: string }) => {
     const act = activity.get(p);
     const on = p === active && pane.kind === "project";
+    const isWaking = waking === p;
+    const wakeError = wakeErrors.get(p);
+    const open = () => { setActive(p); setPane(cur => ({ kind: "project", lens: cur.kind === "project" ? cur.lens : "board" })); };
     // #5610 v1 — the happening-now line: a BUSY row says what is true beneath its name
     // ("mid-turn · 8s ago · fable"), from data the activity pull already holds. An open-idle
     // row stays a quiet dot; absence of the line is the idle state, never dead chrome.
@@ -320,10 +350,11 @@ export function AppShell() {
           .filter(Boolean).join(" · ")
       : null;
     return (
-      <button key={p}
-        onClick={() => { setActive(p); setPane(cur => ({ kind: "project", lens: cur.kind === "project" ? cur.lens : "board" })); }}
+      <div key={p} role="button" tabIndex={0}
+        onClick={open}
+        onKeyDown={e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); open(); } }}
         title={act?.kind === "busy" ? "a session here is mid-turn right now" : act?.kind === "open" ? "session open, idle" : undefined}
-        className={`flex w-full items-center gap-2.5 rounded-lg px-3 py-1.5 text-left text-[13px] ${
+        className={`group flex w-full cursor-pointer items-center gap-2.5 rounded-lg px-3 py-1.5 text-left text-[13px] ${
           on ? "bg-white/[0.07] font-medium text-[var(--color-tr-text)]"
              : act ? "text-[var(--color-tr-text)]/85 hover:bg-white/[0.04]"
                    : "text-[var(--color-tr-muted)] hover:bg-white/[0.04] hover:text-[var(--color-tr-text)]"}`}>
@@ -333,14 +364,33 @@ export function AppShell() {
           {busyLine && (
             <span className="tr-mono block truncate text-[10px] font-normal text-[var(--color-tr-muted)]">{busyLine}</span>
           )}
+          {wakeError && !isWaking && (
+            <span title={wakeError} className="block truncate text-[10px] font-normal text-tr-danger">
+              wake failed — click Wake to retry
+            </span>
+          )}
         </span>
+        {/* WAKE — only a SLEEPING row offers it (no live session anywhere on the project); a live
+            row's presence dot is the whole answer. Revealed on hover/focus so the sleeping list
+            stays calm; while opening it stays visible and says so. `trantor open` reattaches
+            rather than stacks, so the worst a stray click can do is land you in the same pane. */}
+        {!act && (
+          <button type="button"
+            onClick={e => { e.stopPropagation(); void wakeProject(p); }}
+            disabled={waking !== null && !isWaking}
+            title="host this project's session as a pane and start working (reads the latest handoff + memory)"
+            className={`shrink-0 rounded-[6px] bg-tr-ok/10 px-1.5 py-0.5 text-[10.5px] font-semibold text-tr-ok hover:bg-tr-ok/20 disabled:opacity-40
+              ${isWaking ? "opacity-100" : "opacity-0 focus:opacity-100 group-hover:opacity-100 group-focus-within:opacity-100"}`}>
+            {isWaking ? "Waking…" : "Wake"}
+          </button>
+        )}
         {/* the dot is BLUE for any open session and blinks ONLY when work is actually happening —
             a window sitting open earns presence, never motion */}
         {act && (
           <span className={`tr-dot shrink-0 ${act.kind === "busy" ? "tr-dot-pulse" : ""}`}
                 style={{ background: "var(--color-tr-doing)", width: 6, height: 6 }} />
         )}
-      </button>
+      </div>
     );
   };
 

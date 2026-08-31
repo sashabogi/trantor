@@ -106,7 +106,7 @@ describe("TerminalPane", () => {
     expect(empty.attached).toEqual(["opened-pane"]);
   });
 
-  // "Open session" starts the OPERATOR's session. Offering it on a seat meant clicking it under
+  // "Wake session" starts the OPERATOR's session. Offering it on a seat meant clicking it under
   // kimi opened your own session and rendered it under kimi's name.
   it("never offers to open a session on a SEAT that has no pane", async () => {
     const empty = makeTerminalDouble({ surface: null });

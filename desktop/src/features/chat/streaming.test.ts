@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   applyBackfill, applyRows, applySessionChanged, bannerVisible, composerSlot, emptyChat,
   gaugeLabel, gaugeTone, gaugeUnknownWindow, insertPaths, isDividerTurn,
-  sessionLiveness, receiptFor, LOST_AFTER_MS, HANDOFF_WARN_FRAC,
+  sessionLiveness, normalizeAttachments, receiptFor, LOST_AFTER_MS, HANDOFF_WARN_FRAC,
   elapsedShort, lastToolLabel, tickerText,
   type Backfill, type ChatState, type ContextGauge, type Meta, type RowsPayload, type Turn,
 } from "./streaming";
@@ -230,6 +230,32 @@ describe("receiptFor", () => {
 
   it("a prose line can never ride a placeholder — only paths may", () => {
     expect(receiptFor({ text: "words that never arrived", at }, ["[Image #1]"], at + LOST_AFTER_MS + 1)).toBe("lost");
+  });
+});
+
+// #5709 — CC drops an image when several paths ride one message INLINE (lab-reproduced: two
+// inline paths → one image block). One path per line converts all of them, so the composer
+// normalizes multi-image sends and leaves everything else byte-identical.
+describe("normalizeAttachments (#5709)", () => {
+  it("moves each of several inline paths to its own leading line, markers holding their place", () => {
+    expect(normalizeAttachments("compare /Users/x/a shot.png with /Users/x/b.jpg carefully"))
+      .toBe("/Users/x/a shot.png\n/Users/x/b.jpg\ncompare (image 1) with (image 2) carefully");
+  });
+  it("a single-path send passes through byte-identical — its delivery shapes are pinned elsewhere", () => {
+    const one = "look at /Users/x/only.png  now";
+    expect(normalizeAttachments(one)).toBe(one);
+  });
+  it("prose-free multi-image sends become just the path lines", () => {
+    expect(normalizeAttachments("/Users/x/a.png /Users/x/b.png")).toBe("/Users/x/a.png\n/Users/x/b.png");
+  });
+  it("an already one-per-line draft normalizes to itself — no dangling marker lines", () => {
+    const own = "/Users/x/a.png\n/Users/x/b.png\nsame or different?";
+    expect(normalizeAttachments(own)).toBe(own);
+    expect(normalizeAttachments(normalizeAttachments("see /Users/x/a.png vs /Users/x/b.png")))
+      .toBe(normalizeAttachments("see /Users/x/a.png vs /Users/x/b.png"));
+  });
+  it("plain prose is untouched", () => {
+    expect(normalizeAttachments("no images here at all")).toBe("no images here at all");
   });
 });
 

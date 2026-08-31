@@ -238,10 +238,12 @@ export function TerminalPane({
     return (
       <div className="flex flex-1 items-center justify-center">
         <div className="tr-card-ghost max-w-[460px] px-6 py-5 text-center text-[12.5px] leading-relaxed">
-          {/* "Open session" starts the ORCHESTRATOR, which is only the right verb on the
-              orchestrator's own pane. Offering it on a seat meant clicking it under kimi opened
-              your own session and rendered it under kimi's name. A seat is started by the crew,
-              not from here, so say that instead of offering the wrong action. */}
+          {/* "Wake" starts the ORCHESTRATOR, which is only the right verb on the orchestrator's
+              own pane — the same verb the sidebar's hover button carries, so the two doors into
+              one action can never read as two actions. Offering it on a seat meant clicking it
+              under kimi opened your own session and rendered it under kimi's name. A seat is
+              started by the crew, not from here, so say that instead of offering the wrong
+              action. */}
           {agent === "orchestrator" ? (
             <>
               <div>No session is hosted for this project yet.</div>
@@ -251,7 +253,7 @@ export function TerminalPane({
                 disabled={opening}
                 className="mt-3 rounded-[8px] bg-tr-ok px-3 py-1.5 text-[12px] font-semibold text-[#07130f] disabled:opacity-60"
               >
-                {opening ? "Opening..." : "Open session"}
+                {opening ? "Waking…" : "Wake session"}
               </button>
               {openError && <div className="mt-2 text-[11.5px] text-tr-danger">{openError}</div>}
             </>
