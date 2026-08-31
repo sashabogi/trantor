@@ -27,6 +27,10 @@ export type Meta = { model: string; version: string; branch: string; context: Co
 
 export type ChatState = {
   turns: Turn[];
+  /** RAW user-row texts, UNFILTERED, ring-capped — the receipt channel. Five delivery
+   *  false-alarms came from matching against display-filtered turns; bash-input records,
+   *  /compact rows and isMeta rows all vanish from display yet all PROVE a send arrived. */
+  receiptTexts: string[];
   /** Results merged by tool_use id — a result arrives lines after the call it answers, so it fills
    *  the card that has been on screen rather than rendering in place. */
   results: Record<string, ToolResult>;
@@ -39,7 +43,7 @@ export type ChatState = {
 };
 
 export const emptyChat: ChatState = {
-  turns: [], results: {}, seen: 0,
+  turns: [], results: {}, receiptTexts: [], seen: 0,
   meta: { model: "", version: "", branch: "", context: { tokens: null, window: 0, frac: null } },
   continued: false,
 };
@@ -49,16 +53,19 @@ export const emptyChat: ChatState = {
 export type RowsPayload = {
   project: string; sessionId: string; after: number;
   turns: Turn[]; results: ToolResult[]; meta: Meta; total?: number;
+  receiptTexts?: string[];
 };
 /** One `chat-session-changed` event: the watcher saw the mapped session id move (handoff/adopt)
  *  and is following the NEW transcript from line 0. */
 export type SessionPayload = { project: string; sessionId: string };
 /** What `orchestrator_chat` returns: [new turns, new results, total line count, meta]. */
-export type Backfill = [Turn[], ToolResult[], number, Meta];
+export type Backfill = [Turn[], ToolResult[], number, Meta, string[]?];
 
 /** Absorb one decoded batch into the state. Shared by the poll path and the event path so they
  *  cannot disagree about what an arrival means. */
-function absorb(s: ChatState, fresh: Turn[], rs: ToolResult[], m: Meta): ChatState {
+const RECEIPT_RING = 80;
+
+function absorb(s: ChatState, fresh: Turn[], rs: ToolResult[], m: Meta, receipts: string[] = []): ChatState {
   const results = { ...s.results };
   for (const r of rs) results[r.tool_id] = r;
   // Dequeue markers are consumed here, never rendered: each one clears the queued flag on the
@@ -89,6 +96,9 @@ function absorb(s: ChatState, fresh: Turn[], rs: ToolResult[], m: Meta): ChatSta
     ...s,
     turns: additions.length || settled !== s.turns ? [...settled, ...additions] : s.turns,
     results,
+    receiptTexts: receipts.length
+      ? [...s.receiptTexts, ...receipts].slice(-RECEIPT_RING)
+      : s.receiptTexts,
     // Spread semantics inherited from the poll this replaces: a field the batch carries wins, even
     // as an empty string. Identity comes from the LAST assistant entry, so a model switch
     // mid-session lands as soon as its row does.
@@ -106,16 +116,16 @@ export type RowsApplied = { state: ChatState; resync: boolean };
 export function applyRows(s: ChatState, p: RowsPayload): RowsApplied {
   if (p.after !== s.seen) return { state: s, resync: true };
   const cursor = p.total ?? p.after + p.turns.length;
-  return { state: { ...absorb(s, p.turns, p.results, p.meta), seen: cursor }, resync: false };
+  return { state: { ...absorb(s, p.turns, p.results, p.meta, p.receiptTexts ?? []), seen: cursor }, resync: false };
 }
 
 /** Apply one `orchestrator_chat` answer fetched at line `after`. The append only goes through when
  *  the state is still where the fetch started — a second answer that left after an earlier one
  *  landed is entirely subsumed by it, and appending again would duplicate every row. */
 export function applyBackfill(s: ChatState, b: Backfill, after: number): ChatState {
-  const [fresh, rs, total, m] = b;
+  const [fresh, rs, total, m, receipts] = b;
   if (s.seen !== after) return total > s.seen ? { ...s, seen: total } : s;
-  return { ...absorb(s, fresh, rs, m), seen: Math.max(total, after) };
+  return { ...absorb(s, fresh, rs, m, receipts ?? []), seen: Math.max(total, after) };
 }
 
 /** A session change: everything from the old session stops mattering. Clear the thread, restart
@@ -166,7 +176,11 @@ export function receiptFor(p: PendingSend, userTexts: string[], now: number): "s
   // path followed by "]", never by the draft's trailing space — so the untrimmed needle missed
   // and the receipt cried "not delivered" about a screenshot the session was actively answering
   // (2026-08-30, fourth member of the false-alarm family).
-  const sent = (p.text ?? "").trim();
+  let sent = (p.text ?? "").trim();
+  // A "!" command executes in the session and is recorded as a <bash-input> row WITHOUT the
+  // bang (gap five, 2026-08-30 — the operator ran the npm publish through the composer, it
+  // WORKED, and the receipt cried about it). Match on what the record can actually contain.
+  if (sent.startsWith("!")) sent = sent.slice(1).trim();
   if (sent) {
     if (userTexts.some(t => t.includes(sent))) return "delivered";
     // LINE-WISE fallback (gaps three AND four, 2026-08-30): the CLI transforms what the

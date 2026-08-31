@@ -96,7 +96,7 @@ describe("applyBackfill", () => {
 describe("applySessionChanged", () => {
   it("clears the thread and results, restarts the cursor at 0, and raises the divider flag", () => {
     const s: ChatState = {
-      turns: [t("old")], results: { t1: r("t1") }, seen: 40,
+      turns: [t("old")], results: { t1: r("t1") }, receiptTexts: ["old"], seen: 40,
       meta: meta({ model: "m", version: "1", branch: "main" }), continued: false,
     };
     const state = applySessionChanged(s);
@@ -415,5 +415,35 @@ describe("turn ticker", () => {
     expect(elapsedShort(8_000)).toBe("8s");
     expect(elapsedShort(252_000)).toBe("4m 12s");
     expect(elapsedShort(3_780_000)).toBe("1h 03m");
+  });
+});
+
+// Gap five + the receipt CHANNEL: raw record in, display filters out.
+describe("receipt channel", () => {
+  it("a bang command matches its bash-input record — the bang never survives recording", () => {
+    expect(receiptFor({ text: "! cd ~/development/trantor && npm publish", at: 1 },
+      ["<bash-input> cd ~/development/trantor && npm publish</bash-input>"], 100)).toBe("delivered");
+  });
+
+  it("applyRows folds receiptTexts into the ring; applyBackfill's fifth element too", () => {
+    const s1 = applyRows({ ...emptyChat, seen: 0 },
+      { project: "p", sessionId: "s", after: 0, turns: [], results: [], meta: emptyChat.meta,
+        receiptTexts: ["<bash-input> npm publish</bash-input>"] }).state;
+    expect(s1.receiptTexts).toEqual(["<bash-input> npm publish</bash-input>"]);
+    const s2 = applyBackfill({ ...emptyChat, seen: 0 }, [[], [], 3, emptyChat.meta, ["raw row"]], 0);
+    expect(s2.receiptTexts).toEqual(["raw row"]);
+  });
+
+  it("the ring caps at 80 — receipts are a window, not an archive", () => {
+    const many = Array.from({ length: 100 }, (_, i) => `row ${i}`);
+    const s = applyRows({ ...emptyChat, seen: 0 },
+      { project: "p", sessionId: "s", after: 0, turns: [], results: [], meta: emptyChat.meta, receiptTexts: many }).state;
+    expect(s.receiptTexts.length).toBe(80);
+    expect(s.receiptTexts[79]).toBe("row 99");
+  });
+
+  it("a session change clears the receipt window with everything else", () => {
+    const s = applySessionChanged({ ...emptyChat, receiptTexts: ["stale"] });
+    expect(s.receiptTexts).toEqual([]);
   });
 });

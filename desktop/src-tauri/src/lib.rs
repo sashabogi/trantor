@@ -836,6 +836,11 @@ struct ChatSnapshot {
     results: Vec<ChatToolResult>,
     total: usize,
     meta: ChatMeta,
+    /// RAW text of every user-role row, UNFILTERED (receipts read the record, not the display —
+    /// five delivery false-alarms came from matching against harness-filtered turns; a
+    /// bang-command's <bash-input> row, a /compact record, an isMeta row all vanish from
+    /// display but all PROVE arrival).
+    receipt_texts: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -848,6 +853,8 @@ struct ChatRowsPayload {
     turns: Vec<ChatTurn>,
     results: Vec<ChatToolResult>,
     meta: ChatMeta,
+    #[serde(rename = "receiptTexts")]
+    receipt_texts: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1044,6 +1051,7 @@ where
 {
     let mut turns: Vec<ChatTurn> = Vec::new();
     let mut results: Vec<ChatToolResult> = Vec::new();
+    let mut receipt_texts: Vec<String> = Vec::new();
     let mut meta = ChatMeta {
         context: chat_context(None, context_window),
         ..ChatMeta::default()
@@ -1054,6 +1062,26 @@ where
             Ok(v) => v,
             Err(_) => continue,
         };
+        // The receipt channel: RAW arrival truth, before display filtering. Plain user rows
+        // and queue enqueues both prove a send arrived, whatever the display decides to show.
+        match v.get("type").and_then(|t| t.as_str()) {
+            Some("user") => {
+                if let Some(c) = v.get("message").and_then(|m| m.get("content")) {
+                    let t = text_content(c);
+                    if !t.trim().is_empty() {
+                        receipt_texts.push(t);
+                    }
+                }
+            }
+            Some("queue-operation") => {
+                if let Some(t) = v.get("content").and_then(|c| c.as_str()) {
+                    if !t.trim().is_empty() {
+                        receipt_texts.push(t.to_string());
+                    }
+                }
+            }
+            _ => {}
+        }
         let role = match v.get("type").and_then(|t| t.as_str()) {
             Some("user") => "user",
             Some("assistant") => "assistant",
@@ -1246,6 +1274,7 @@ where
         results,
         total,
         meta,
+        receipt_texts,
     }
 }
 
@@ -1261,6 +1290,7 @@ fn read_chat_snapshot(project: &str, after: usize) -> Result<ChatSnapshot, Strin
                 results: Vec::new(),
                 total: 0,
                 meta: ChatMeta::default(),
+                receipt_texts: Vec::new(),
             })
         }
     };
@@ -1278,7 +1308,7 @@ fn read_chat_snapshot(project: &str, after: usize) -> Result<ChatSnapshot, Strin
 #[tauri::command]
 fn orchestrator_chat(project: String, after: usize) -> Result<String, String> {
     let snap = read_chat_snapshot(&project, after)?;
-    serde_json::to_string(&(snap.turns, snap.results, snap.total, snap.meta))
+    serde_json::to_string(&(snap.turns, snap.results, snap.total, snap.meta, snap.receipt_texts))
         .map_err(|e| e.to_string())
 }
 
@@ -1358,6 +1388,7 @@ fn spawn_chat_watcher(
                             turns: snap.turns,
                             results: snap.results,
                             meta: meta.clone(),
+                            receipt_texts: snap.receipt_texts,
                         };
                         if window.emit("chat-rows", payload).is_err() {
                             break;

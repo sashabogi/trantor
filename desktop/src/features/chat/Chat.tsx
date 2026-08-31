@@ -604,7 +604,15 @@ export function Chat({ project, dock, onDock, onClose }: {
         model={pending || chat.meta.model}
         modelSource={pending ? "dispatched" : modelSource}
         working={working}
-        userTexts={chat.turns.filter(t => t.role === "user").map(t => t.blocks.filter(b => b.kind === "text").map(b => b.text).join("\n"))}
+        userTexts={
+          // The RAW receipt channel (gap five): the record proves arrival, the display filters
+          // it — bash-input rows, /compact records and isMeta rows all vanish from turns yet
+          // all confirm a send. Display turns remain the fallback for an older backend that
+          // does not emit receiptTexts yet.
+          chat.receiptTexts.length
+            ? chat.receiptTexts
+            : chat.turns.filter(t => t.role === "user").map(t => t.blocks.filter(b => b.kind === "text").map(b => b.text).join("\n"))
+        }
         context={chat.meta.context}
         fontStep={fontStep}
         onFontStep={pickFont}
