@@ -230,6 +230,14 @@ project's workspace, so when you run several sessions each driving its own crew,
 can't nuke another's. `trantor down <agent>` drops a single seat; `trantor down --all --yes` tears down
 every project's crew.
 
+Since 0.18.20, **seat trouble wakes the foreman instead of hoping someone looks**: a failing or
+dead seat direct-messages the project's orchestrator (broadcasts wake nobody), a detached
+watchdog reports a turn running silent past 15 minutes — once, without killing it — and the
+failure classifier tells a provider backend error ("retry or swap") from real quota exhaustion
+("wait the window out"). The duty seat itself now runs under a launchd keepalive, so the fleet's
+janitor relaunches after a crash or reboot instead of dying silently, and the hub routes
+escalations back to their senders whenever the janitor goes dark.
+
 **One-time setup:**
 - Install cmux — `brew install --cask cmux` (or grab it from **[cmux.com](https://cmux.com)**).
 - Trantor drives cmux over its control socket, which is off to outside processes by default. Enable it in

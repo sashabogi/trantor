@@ -24,7 +24,7 @@ import { TakeoverStrip } from "./TakeoverStrip";
 
 export type Provenance = "reported" | "dispatched" | "unknown";
 type AutonomyJson = {
-  resolved?: { harness?: string; commit?: boolean; push?: boolean; deploy?: boolean };
+  resolved?: { harness?: string; baton?: string; commit?: boolean; push?: boolean; deploy?: boolean };
   overridden?: string[];
 };
 type LongRunState = {
@@ -230,17 +230,26 @@ export function Composer({ project, target, live, liveWhy, model, modelSource, w
   }, [project, live]);
   const action = live ? null : takeoverAction(inventory);
 
+  // Full auto (operator's ruling, #5644 round 2): ON means the build runs WITHOUT human input —
+  // permission prompts bypassed AND the 90% handoff fires itself. Both dials or it isn't full
+  // auto; a mixed state reads as off and the tooltip names the mix instead of pretending.
   const autonomyState = (raw: string, busyState = false): LongRunState => {
     const data: AutonomyJson = JSON.parse(raw);
     const resolved = data.resolved ?? {};
     const harness = resolved.harness ?? "unknown";
-    const on = harness === "bypass";
+    const baton = resolved.baton ?? "unknown";
+    const on = harness === "bypass" && baton === "auto";
+    const mixed = !on && (harness === "bypass" || baton === "auto");
     return {
       known: true,
       on,
       busy: busyState,
       error: null,
-      label: `harness ${harness} · countdown ${on ? "skipped" : "asks"}`,
+      label: on
+        ? "on — the build runs without asking: prompts bypassed, the 90% handoff fires itself"
+        : mixed
+          ? `partly on (harness ${harness}, handoff ${baton}) — toggle to set both`
+          : "off — the harness asks, and the handoff banner counts down",
     };
   };
 
@@ -259,8 +268,11 @@ export function Composer({ project, target, live, liveWhy, model, modelSource, w
 
   const toggleLongRun = () => {
     const next = !longRun.on;
-    setLongRun(s => ({ ...s, busy: true, error: null, label: next ? "setting harness bypass" : "setting harness prompt" }));
+    setLongRun(s => ({ ...s, busy: true, error: null, label: next ? "switching to full auto" : "switching back to ask" }));
+    // Both dials, harness then baton — full auto is one idea, set atomically enough that a
+    // failure between the two still lands on an honest "partly on" read from the second fetch.
     invoke<string>("autonomy_set", { project, dial: "harness", value: next ? "bypass" : "prompt" })
+      .then(() => invoke<string>("autonomy_set", { project, dial: "baton", value: next ? "auto" : "ask" }))
       .then(raw => setLongRun(autonomyState(raw)))
       .catch(e => setLongRun(s => ({ ...s, busy: false, error: String(e), label: "autonomy change failed" })));
   };
@@ -491,14 +503,16 @@ export function Composer({ project, target, live, liveWhy, model, modelSource, w
           aria-checked={longRun.known && longRun.on}
           onClick={toggleLongRun}
           disabled={longRun.busy}
-          title={longRun.error ?? `Long run changes: ${longRun.label}`}
-          className="flex items-center gap-1 rounded-[7px] px-2 py-1 text-[11px] text-tr-muted hover:text-tr-text disabled:opacity-40"
+          title={longRun.error ?? `Full auto — ${longRun.label}`}
+          className="flex shrink-0 items-center gap-1 rounded-[7px] px-2 py-1 text-[11px] text-tr-muted hover:text-tr-text disabled:opacity-40"
         >
-          <span className={`h-3 w-5 rounded-full border ${longRun.known && longRun.on ? "border-tr-ok bg-tr-ok/20" : "border-tr-edge bg-black/20"}`}>
-            <span className={`block h-2.5 w-2.5 rounded-full ${longRun.known && longRun.on ? "translate-x-2 bg-tr-ok" : "bg-tr-muted"}`} />
+          {/* ON wears warn amber on purpose: this is the switch that makes the machine stop
+              asking. The dial-speak caption is gone from the bar — it mangled the row and read
+              as noise (operator, round 2); the full explanation lives in the tooltip. */}
+          <span className={`h-3 w-5 rounded-full border ${longRun.known && longRun.on ? "border-tr-warn bg-tr-warn/20" : "border-tr-edge bg-black/20"}`}>
+            <span className={`block h-2.5 w-2.5 rounded-full ${longRun.known && longRun.on ? "translate-x-2 bg-tr-warn" : "bg-tr-muted"}`} />
           </span>
-          <span>long run</span>
-          <span className="tr-mono max-w-[120px] truncate text-[10.5px] opacity-70">{longRun.label}</span>
+          <span className={longRun.known && longRun.on ? "text-tr-warn" : ""}>full auto</span>
         </button>
         {/* The gauge sits beside the dials that fill the window (#5521) — the number is mono
             because it is a number being compared, and it is hidden until truth exists. */}

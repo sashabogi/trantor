@@ -452,7 +452,7 @@ export function Chat({ project, dock, onDock, onClose }: {
     setHandoffBusy(true);
     setHandoffError(null);
     if (reason === "countdown") addDivider("handoff countdown expired - handing off now");
-    if (reason === "unattended") addDivider("long run reached the handoff threshold - handing off now");
+    if (reason === "unattended") addDivider("full auto reached the handoff threshold - handing off now");
     invoke<string>("handoff_now", { project, reason })
       .catch(e => setHandoffError(String(e)))
       .finally(() => setHandoffBusy(false));
