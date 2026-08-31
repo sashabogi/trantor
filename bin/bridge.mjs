@@ -110,7 +110,10 @@ async function tick() {
     if (differs && (aMoved || bMoved)) {
       const aWins = aMoved && bMoved ? p.origin === "A" : aMoved;
       const [src, dstHub, dstId] = aWins ? [ta, TO, p.bId] : [tb, FROM, p.aId];
-      const r = await call(dstHub, "POST", "/task/update", { id: dstId, status: src.status, assignee: src.assignee || "", by: src.by || "bridge" });
+      // reassign:true — the bridge REPLICATES a hand-change that already happened on the source
+      // hub; without the explicit marker the #5406 assignee-immutability guard would 409 every
+      // cross-hub sync whose assignee moved (deepseek flagged this at review, 2026-08-31).
+      const r = await call(dstHub, "POST", "/task/update", { id: dstId, status: src.status, assignee: src.assignee || "", reassign: true, by: src.by || "bridge" });
       if (aWins) { p.lastA = ta.updated || 0; p.lastB = r.task.updated || 0; }
       else { p.lastB = tb.updated || 0; p.lastA = r.task.updated || 0; }
       synced++;

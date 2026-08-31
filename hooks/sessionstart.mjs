@@ -369,6 +369,23 @@ try {
     }
   } catch {}
 
+  // THE ORCHESTRATOR ROLE (2026-08-31 — the operator had to say it by hand, twice in one day:
+  // "your job is to oversee and be a project manager, not a coder"). A session opened by
+  // `trantor open` carries TRANTOR_ORCH=<project>; every such session gets the doctrine at
+  // boot, so the role survives wakes, handoffs and restarts without anyone restating it.
+  try {
+    if (project && (process.env.TRANTOR_ORCH || "") === project) {
+      additionalContext += `<trantor-orchestrator-role project="${sanitize(project)}">\n` +
+        `🎛️ **You are this project's ORCHESTRATOR — a project manager, not a coder** (operator ruling, 2026-08-31).\n` +
+        `- Building goes to the CREW: invoke the trantor:crew skill (Advisor → \`trantor up\` seats → contracts over the bus), or relay_scrooge for grunt one-shots.\n` +
+        `- Spend your own tokens on design, contracts, supervision, integration and VERIFICATION — run the seats' tests yourself; bounce hollow dones.\n` +
+        `- Write code yourself ONLY for small one-head seam work that needs this session's full context — and say so when you do.\n` +
+        `- Check relay_inbox and the board before asking the operator anything a peer may already have answered.\n` +
+        `</trantor-orchestrator-role>\n`;
+      process.stderr.write(`[trantor] injected orchestrator-role doctrine for ${project}\n`);
+    }
+  } catch {}
+
   // Update available? Surface it the way a terminal tool should — an in-terminal `systemMessage`
   // line the USER sees at session start (NOT a macOS desktop popup, which macOS misattributes to
   // Script Editor and which fires off-screen). It shows every session while an update is pending and

@@ -96,7 +96,15 @@ exit 0
     setTimeout(() => { try { kid.kill("SIGKILL"); } catch {} }, 25000).unref?.();
   });
   await sleep(4500);                                  // let the kickoff turn actually run
-  try { const pid = Number(readFileSync(join(BUS, "duty.pid"), "utf8")); process.kill(pid, "SIGKILL"); } catch {}
+  // Guard the pid: in --window mode the stubbed osascript never executes the launcher, so no
+  // runner starts and duty writes 0 to the pidfile. process.kill(0, …) means "every process in
+  // the CALLER's process group" (POSIX pid-0) — unguarded, this drill SIGKILLed its own group:
+  // standalone it died silently mid-run; under `npm test` npm, sh, the suite runner and this file
+  // all share one group, so the whole suite was killed at once and the invoking session sat
+  // waiting on the dead pipeline — the "harness hang" these window legs were guarded behind
+  // (2026-08-20 class suspicion was stdin; the mock-hub stdin paths are all stdio:"ignore" and
+  // were never the mechanism).
+  try { const pid = Number(readFileSync(join(BUS, "duty.pid"), "utf8")); if (Number.isInteger(pid) && pid > 0) process.kill(pid, "SIGKILL"); } catch {}
   // The seat dir is trantor-duty now (identity-by-name, not "fleet") — a pkill aimed at the old
   // path leaked one live runner per harness run, and the leaked pack wedged the mock hub by the
   // --window block. Sweep the whole throwaway bus, not one hardcoded child dir.
@@ -190,16 +198,12 @@ console.log("\nBy default the seat runs headless under a launchd keepalive:");
     `exit=${run.status} rulesChars=${rulesChars} titleLen=${title.length} stderrLen=${(run.stderr || "").length}`);
 }
 
-// The --window and --headless-alias legs HANG under the mock hub (harness bug, not product: the
-// standalone binary exits cleanly; carded). Guarded, not deleted — TRANTOR_DRILL_WINDOW=1 runs
-// them; the default prints a loud SKIP so the gap can never pass silently as coverage.
-if (process.env.TRANTOR_DRILL_WINDOW !== "1") {
-  console.log("\n  SKIP  --window + --headless-alias legs (harness hang under the mock hub — carded; TRANTOR_DRILL_WINDOW=1 to run)");
-  hub.close();
-  hub.closeAllConnections?.();
-  console.log(`\n${fail === 0 ? "✅" : "❌"} duty-seat: ${pass} passed, ${fail} failed (2 legs skipped)`);
-  process.exit(fail === 0 ? 0 : 1);
-}
+// The --window and --headless-alias legs below were guarded behind TRANTOR_DRILL_WINDOW=1 for
+// days as a "harness hang under the mock hub". Found 2026-08-31 while fixing #5694: there was no
+// hang — the drill was killing itself. dutyUp() read the pidfile and called process.kill(pid)
+// without guarding 0, and window mode legitimately has no runner (the stubbed osascript does not
+// execute the launcher), so pid was 0 = "my own process group". Unguarded now; the pid guard in
+// dutyUp() is the fix, and these legs always run.
 
 console.log("\n--window still gives you the visible surface, honestly labelled:");
 {

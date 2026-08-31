@@ -435,7 +435,12 @@ setTimeout(overseerTick, 2000).unref?.();
 // Env still wins at boot (an operator's declared config beats a seat's claim); otherwise the last
 // registered seat is restored from state, so a hub restart doesn't silently end the duty feed.
 let DUTY_SESSION = String(process.env.RELAY_DUTY_SESSION || state.dutySession || "");
-const DUTY_UNDELIVERED_MS = Number(process.env.RELAY_DUTY_UNDELIVERED_MS || 10 * 60 * 1000);
+// 2 MINUTES, not 10 (2026-08-31): scribe DMed the woken crebral-health session at 16:11 and the
+// operator hand-relayed at 16:21:58 — beating the old 10m escalation by seconds. Two agents
+// actively collaborating cannot wait ten minutes; with duty's direct-wake the full chain
+// (escalate → duty nudge → target's hooks poll) now lands in ~3m. Duty's own batch rules
+// (one nudge per recipient per batch, consumed on activity) keep the shorter window from nagging.
+const DUTY_UNDELIVERED_MS = Number(process.env.RELAY_DUTY_UNDELIVERED_MS || 2 * 60 * 1000);
 const dutyEscalated = new Set();
 // #5686: the janitor died 08-27 and NOTHING noticed for 4 days — the hub kept escalating to a
 // corpse. Duty liveness is now a first-class state: dark = configured but no heartbeat inside
@@ -1908,6 +1913,22 @@ const server = http.createServer(async (req, res) => {
     if (req.method === "POST" && P === "/task/update") {    // move/edit a card
       const b = await body(req); const t = state.tasks.find(x => x.id === Number(b.id));
       if (!t) return json(res, 404, { error: "no such task" });
+      // Board integrity (#5406): a card can never change hands silently. The assignee is frozen once
+      // set; a mutation is legitimate only as a HANDOFF (the current assignee reassigning to someone
+      // else) or an EXPLICIT reassign (reassign:true — e.g. the orchestrator re-routing work after a
+      // seat dies). A silent third-party overwrite 409s so the caller knows the board refused to move.
+      // Runs BEFORE any other field mutation so a refused steal cannot half-apply a status move.
+      if (b.assignee !== undefined) {
+        const want = String(b.assignee).slice(0, 60);
+        if (want !== t.assignee) {
+          const mover = String(auth?.identity?.name || b.by || "").slice(0, 120);
+          const isOwner = !!t.assignee && mover === t.assignee;
+          const explicit = b.reassign === true;
+          if (!isOwner && !explicit) {
+            return json(res, 409, { error: "assignee is immutable", id: t.id, assignee: t.assignee });
+          }
+        }
+      }
       let eventType = "updated", eventFrom = null, eventTo = null;
       if (b.status && ["todo","doing","testing","failed","done","blocked","stale"].includes(b.status) && b.status !== t.status) {
         eventType = "moved"; eventFrom = t.status; eventTo = b.status;
@@ -1925,7 +1946,13 @@ const server = http.createServer(async (req, res) => {
       if (b.difficulty && ["easy","medium","hard"].includes(b.difficulty)) t.difficulty = b.difficulty;
       if (b.model !== undefined) t.model = String(b.model).slice(0, 60);
       if (Array.isArray(b.deps)) t.deps = [...new Set(b.deps.map(Number).filter(n => Number.isInteger(n) && n > 0 && n !== t.id))].slice(0, 20);
-      if (b.assignee !== undefined) t.assignee = b.assignee;
+      if (b.assignee !== undefined && String(b.assignee).slice(0, 60) !== t.assignee) {
+        const prev = t.assignee || "(none)";
+        const mover = String(auth?.identity?.name || b.by || "").slice(0, 120);
+        t.assignee = String(b.assignee).slice(0, 60);
+        // the handover is part of the card's story, not a silent overwrite
+        appendTaskLog(t, mover, `reassigned ${prev} → ${t.assignee}${b.reassign === true ? " (explicit)" : " (handoff)"}`, now());
+      }
       if (b.title !== undefined) t.title = String(b.title).slice(0,200);
       // the narrative line a human reads on the board ("assigned — did"), written by the cheap
       // summarizer; rides the tasks.extra column, so it survives restarts everywhere
