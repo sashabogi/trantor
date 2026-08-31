@@ -122,7 +122,10 @@ export function UsagePopover({ rows, snapshotTs, spinning, onRefresh, onClose }:
   onClose: () => void;
 }) {
   const [density, setDensity] = useState<UsageDensity>(() => usageDensity());
-  const [openProvider, setOpenProvider] = useState<string | null>(null);
+  // Orca's interaction, not an accordion: HOVERING a row opens the detail panel floating to the
+  // RIGHT with the list intact (operator, round 3: "yours does nothing, I have to click").
+  // Hover follows the pointer; a click pins the panel so it survives the pointer leaving.
+  const [fly, setFly] = useState<{ provider: string; top: number; pinned: boolean } | null>(null);
   const [now, setNow] = useState(() => Date.now());
 
   // The countdowns and "Updated" stamps are relative — re-tick on one shared clock (Orca's
@@ -142,7 +145,8 @@ export function UsagePopover({ rows, snapshotTs, spinning, onRefresh, onClose }:
       <div className="fixed inset-0 z-40" onClick={onClose} aria-hidden />
       {/* LEFT-anchored above the strip (operator, round 1: right-anchored floated over the chat
           composer and read as "the gauge got deleted"). Wider so detailed rows keep columns. */}
-      <div className="absolute bottom-9 left-2 z-50 w-[27rem] rounded-md border border-[var(--color-tr-edge)] bg-[var(--color-tr-bg)] shadow-lg">
+      <div className="absolute bottom-9 left-2 z-50 w-[27rem] rounded-md border border-[var(--color-tr-edge)] bg-[var(--color-tr-bg)] shadow-lg"
+           onMouseLeave={() => setFly(f => (f?.pinned ? f : null))}>
         <div className="flex items-center gap-2 px-3 pt-3">
           <span className="text-[12px] font-semibold">Usage</span>
           <span className="text-[11px] text-[var(--color-tr-muted)]">all agents</span>
@@ -174,7 +178,7 @@ export function UsagePopover({ rows, snapshotTs, spinning, onRefresh, onClose }:
             const tightest: UsageMetric | null = density === "compact"
               ? ms.reduce<UsageMetric | null>((acc, m) => (m.pct != null && (acc?.pct == null || m.pct > acc.pct) ? m : acc), null)
               : null;
-            const open = openProvider === e.provider;
+            const open = fly?.provider === e.provider;
             // The chip formatter already resolved icon/mono/hue/fg once — read the brand
             // identity back off its output instead of duplicating the BRAND table here.
             const c = chipFrom(e);
@@ -186,7 +190,14 @@ export function UsagePopover({ rows, snapshotTs, spinning, onRefresh, onClose }:
             return (
               <div key={e.provider}>
                 <button type="button" aria-expanded={open}
-                  onClick={() => setOpenProvider(open ? null : e.provider)}
+                  onMouseEnter={ev => {
+                    const top = ev.currentTarget.offsetTop - (ev.currentTarget.parentElement?.parentElement?.scrollTop ?? 0);
+                    setFly(f => (f?.pinned ? f : { provider: e.provider, top, pinned: false }));
+                  }}
+                  onClick={ev => {
+                    const top = ev.currentTarget.offsetTop - (ev.currentTarget.parentElement?.parentElement?.scrollTop ?? 0);
+                    setFly(f => (f?.provider === e.provider && f.pinned ? null : { provider: e.provider, top, pinned: true }));
+                  }}
                   className="flex w-full flex-col gap-1 px-3 py-2 text-left hover:bg-[var(--color-tr-edge)]/40">
                   <span className="flex w-full items-center gap-2.5">
                     <BrandMark icon={id.icon} mono={id.mono} hue={id.hue} fg={id.fg} />
@@ -211,11 +222,24 @@ export function UsagePopover({ rows, snapshotTs, spinning, onRefresh, onClose }:
                     </span>
                   )}
                 </button>
-                {open && <ProviderDrill e={e} snapshotTs={snapshotTs} now={now} />}
+                {/* The drill lives in the floating side panel now — the accordion pushed the
+                    list apart, which is exactly what Orca's flyout avoids. */}
               </div>
             );
           })}
         </div>
+        {/* Orca's side panel: floats to the RIGHT of the roster at the hovered row's height,
+            list untouched. Hover opens it, leaving the popover closes it, a click pins it. */}
+        {fly && (() => {
+          const e = ordered.find(x => x.provider === fly.provider);
+          if (!e) return null;
+          return (
+            <div className="absolute z-50 w-72 overflow-hidden rounded-md border border-[var(--color-tr-edge)] bg-[var(--color-tr-bg)] shadow-lg"
+                 style={{ left: "calc(100% + 8px)", top: Math.max(4, fly.top - 8) }}>
+              <ProviderDrill e={e} snapshotTs={snapshotTs} now={now} />
+            </div>
+          );
+        })()}
       </div>
     </>
   );

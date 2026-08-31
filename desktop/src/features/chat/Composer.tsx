@@ -18,7 +18,7 @@ import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { ChevronDown, Paperclip, Square, ArrowUp } from "lucide-react";
 import { searchFiles } from "../files/fileApi";
 import { FONT_STEPS, type FontStep } from "./prefs";
-import { gaugeLabel, gaugeTone, gaugeUnknownWindow, composerSlot, insertPaths, receiptFor, type ContextGauge, type PendingSend } from "./streaming";
+import { gaugeLabel, gaugeTone, gaugeUnknownWindow, composerSlot, hasImagePath, insertPaths, receiptFor, type ContextGauge, type PendingSend } from "./streaming";
 import { projectSessions, takeoverAction, type ProjectSessions } from "./takeover";
 import { TakeoverStrip } from "./TakeoverStrip";
 
@@ -374,7 +374,10 @@ export function Composer({ project, target, live, liveWhy, model, modelSource, w
     if (working) return;
     setPendings(ps => {
       const now = Date.now();
-      const toRetry = ps.filter(p => !p.retried && receiptFor(p, userTexts, now) === "lost");
+      // Never auto-retry a send carrying image paths: a duplicated screenshot message is worse
+      // than a lost one, and attachment sends are exactly the receipt's false-alarm class
+      // (gap six). Those keep the manual retry button only.
+      const toRetry = ps.filter(p => !p.retried && !hasImagePath(p.text) && receiptFor(p, userTexts, now) === "lost");
       if (!toRetry.length) return ps;
       for (const p of toRetry) void line(p.text);
       return ps.map(p => (toRetry.includes(p) ? { text: p.text, at: now, retried: true } : p));

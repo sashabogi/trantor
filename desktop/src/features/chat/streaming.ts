@@ -214,9 +214,40 @@ export function receiptFor(p: PendingSend, userTexts: string[], now: number): "s
       });
       if (arrived) return "delivered";
     }
+    // Gap six (2026-08-31): images ATTACHED with their paths spliced INLINE defeat the
+    // line-wise budget — drag-drop inserts mid-line and CleanShot paths carry spaces, so no
+    // line is a bare path. Worse than the false alarm: the turn-boundary auto-retry trusted it
+    // and would have re-sent a DELIVERED message as a duplicate. Applies ONLY to the inline
+    // shape (a line mixing a path with prose or a second path) — own-line paths keep the strict
+    // budget above, which is what the honesty drills pin. Same budget here: every path span
+    // must arrive verbatim or consume one image marker, and the prose residue must arrive.
+    const spans = sent.match(IMAGE_PATH_RE) ?? [];
+    const inline = spans.length > 0 && sent.split("\n").some(l => {
+      const ls = l.match(IMAGE_PATH_RE) ?? [];
+      if (!ls.length) return false;
+      const stripped = ls.reduce((acc, sp) => acc.replace(sp, ""), l).trim();
+      return ls.length > 1 || stripped.length > 0;
+    });
+    if (inline) {
+      const all = userTexts.join("\n").replace(/\s+/g, " ");
+      let budget = (all.match(/\[Image(?: #\d+|: source:)/g) ?? []).length;
+      const covered = spans.every(sp => {
+        if (all.includes(sp.trim())) return true;
+        if (budget > 0) { budget--; return true; }
+        return false;
+      });
+      const residue = sent.replace(IMAGE_PATH_RE, " ").replace(/\s+/g, " ").trim();
+      if (covered && (residue ? all.includes(residue) : true)) return "delivered";
+    }
   }
   return now - p.at > LOST_AFTER_MS ? "lost" : "sending";
 }
+
+/** An absolute image/document path as the composer splices it (spaces allowed — CleanShot names
+ *  carry them), up to a known attachment extension. Shared by the receipt's gap-six judgment and
+ *  the composer's auto-retry fence. */
+export const IMAGE_PATH_RE = /(?:\/|~\/)[^\n]*?\.(?:png|jpe?g|gif|webp|heic|pdf)/gi;
+export const hasImagePath = (s: string) => { IMAGE_PATH_RE.lastIndex = 0; return IMAGE_PATH_RE.test(s); };
 
 /** #5608 — the live turn ticker's tool label: the most recent tool the agent touched, with a
  *  one-line whiff of its argument. Scans backward so the newest row wins; only rendered while
