@@ -68,6 +68,15 @@ exit 0
   chmodSync(join(fakebin, "launchctl"), 0o755);
   writeFileSync(join(BUS, "config.json"), JSON.stringify({ url: HUB, ownerIdentity: "admin" }));
 
+  // The drill tests duty's OWN model defaulting and launcher payload, so the invoking shell's
+  // seat-injection vars must never reach it: run from a crew seat, `crew-runner` exports
+  // CREW_MODEL (glm:trantor carries zai-coding-plan/glm-5.3-flash), and "…the default is a
+  // mid-tier model" / "--model inherit" flip to false failures with no product bug behind them.
+  // extraEnv below is the ONLY way these legitimately enter a leg (the CREW_MODEL escape-hatch
+  // drill relies on that). Found 2026-08-31 running the drill from a seat shell.
+  const baseEnv = { ...process.env };
+  for (const k of ["CREW_MODEL", "CREW_KICKOFF", "RUNNER_RULES", "RUNNER_TITLE", "RUNNER_ABOUT"]) delete baseEnv[k];
+
   // async spawn, never spawnSync: the mock hub lives in THIS process, so a synchronous child would
   // block the event loop that has to answer its requests, and duty would time out on its own probe.
   const r = await new Promise((resolve) => {
@@ -78,7 +87,7 @@ exit 0
       // cmux when one answers, so on a machine with cmux installed every one of those assertions
       // would test nothing and fail. CREW_MUX is the same override bin/crew.sh uses.
       // The cmux path has its own drill below.
-      env: { ...process.env, HOME: w, AGENT_BUS_DIR: BUS, PATH: `${fakebin}:${process.env.PATH}`,
+      env: { ...baseEnv, HOME: w, AGENT_BUS_DIR: BUS, PATH: `${fakebin}:${process.env.PATH}`,
              RELAY_URL: HUB, TRANTOR_NO_UPDATE_CHECK: "1", CREW_MUX: "terminal", ...extraEnv },
     });
     let so = "", se = "";
