@@ -120,9 +120,7 @@ export function cardPace(card: { updated?: number; ts?: number; log?: { ts: numb
   return `last activity ${agoTxt} ago${notes}`;
 }
 
-export function cardLiveness(status: string, presence?: PresenceState): {
-  inMotion: boolean; alarmed: boolean; stalled: boolean; awaitingVerdict: boolean;
-} {
+export function cardLiveness(status: string, presence?: PresenceState) {
   const activeLane = status === "doing" || status === "testing";
   return {
     inMotion: activeLane && presence === "busy",
@@ -174,6 +172,18 @@ function CardTile({ card, onOpen, onAdvance, presence, subagents, subagentsOpen 
         {(card.workedBy || card.assignee) && <AgentChip session={card.workedBy || card.assignee!} />}
         {card.difficulty && <span className="rounded bg-black/30 px-1.5 py-0.5">{card.difficulty[0].toUpperCase()}</span>}
         {card.model && <span className="tr-mono max-w-[150px] truncate rounded bg-black/30 px-1.5 py-0.5">{card.model}</span>}
+        {/* #5624: the acceptance denominator — rendered ONLY when a checklist exists; a card
+            without one shows nothing rather than a fabricated bar. */}
+        {card.checklist && card.checklist.length > 0 && (
+          <span className="flex shrink-0 items-center gap-1 rounded bg-black/30 px-1.5 py-0.5"
+                title={`${card.checklist.filter(c => c.done).length} of ${card.checklist.length} acceptance items met`}>
+            {card.checklist.filter(c => c.done).length}/{card.checklist.length}
+            <span className="h-[3px] w-8 overflow-hidden rounded-full bg-white/10">
+              <span className="block h-full rounded-full bg-[var(--color-tr-doing)]"
+                    style={{ width: `${(card.checklist.filter(c => c.done).length / card.checklist.length) * 100}%` }} />
+            </span>
+          </span>
+        )}
         {agedTodo && (
           <span className={`shrink-0 rounded bg-black/30 px-1.5 py-0.5 ${ageDays >= 14 ? "text-[var(--color-tr-warn)]" : "text-[var(--color-tr-muted)]"}`}
                 title={`todo, untouched for ${ageDays}d`}>{ageDays}d</span>

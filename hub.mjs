@@ -156,6 +156,16 @@ function appendTaskNote(t, b, ts = Date.now()) {
   if (!b || typeof b.note !== "string") return false;
   return appendTaskLog(t, b.by || "", b.note, ts);
 }
+// Card checklists (#5624): acceptance items are the one honest denominator for a progress bar.
+// Accepts plain strings (fresh items) or {text,done} (round-trips); caps 20 items x 200 chars.
+// Returns null for a non-array so callers can distinguish "not sent" from "sent empty".
+function cleanChecklist(v) {
+  if (!Array.isArray(v)) return null;
+  return v.slice(0, 20)
+    .map(it => typeof it === "string" ? { text: it.slice(0, 200), done: false }
+      : { text: String(it?.text ?? "").slice(0, 200), done: !!it?.done })
+    .filter(it => it.text);
+}
 function runTaskBootMigrations() {
   let changed = false;
   const bootNow = Date.now();
@@ -1826,6 +1836,7 @@ const server = http.createServer(async (req, res) => {
         deps: Array.isArray(b.deps) ? [...new Set(b.deps.map(Number).filter(n => Number.isInteger(n) && n > 0))].slice(0, 20) : [],
         by: b.by || "", ts: ts0, updated: ts0,
         history: [{ to: st0, by: b.by || "", ts: ts0 }] };
+      { const cl = cleanChecklist(b.checklist); if (cl?.length) t.checklist = cl; }   // #5624 — rides `extra`, survives restarts
       if (b.source === "cc-subagent") { t._fp = subFp(b.title); if (b.agentType) t._atype = String(b.agentType).slice(0, 40); if (b.agentId) t._aid = String(b.agentId).slice(0, 80); if (b.parent) t.parent = String(b.parent).slice(0, 120); t.count = 1; if (t.status === "doing") { t._everStarted = true; t._inflight = 1; } }
       appendTaskNote(t, b, ts0);
       state.tasks.push(t); if (state.tasks.length > 2000) state.tasks.splice(0, 500);
@@ -1862,9 +1873,27 @@ const server = http.createServer(async (req, res) => {
       // the narrative line a human reads on the board ("assigned — did"), written by the cheap
       // summarizer; rides the tasks.extra column, so it survives restarts everywhere
       if (b.summary !== undefined) t.summary = String(b.summary).slice(0, 220);
+      // #5624: full checklist replace (null clears). Item-level toggles ride /task/checklist-toggle.
+      if (b.checklist !== undefined) {
+        const cl = cleanChecklist(b.checklist);
+        if (cl) { if (cl.length) t.checklist = cl; else delete t.checklist; }
+        else if (b.checklist === null) delete t.checklist;
+      }
       appendTaskNote(t, b);
       if (b.delete) { eventType = "deleted"; eventFrom = null; eventTo = null; state.tasks = state.tasks.filter(x => x.id !== t.id); }
       appendCardEvent(eventType, t, b.by, eventFrom, eventTo);
+      t.updated = now(); dirty = true; return json(res, 200, { ok: true, task: t });
+    }
+    // #5624: toggle ONE acceptance item. Index-addressed against the card's current checklist —
+    // a stale index 400s instead of silently toggling the wrong item.
+    if (req.method === "POST" && P === "/task/checklist-toggle") {
+      const b = await body(req); const t = state.tasks.find(x => x.id === Number(b.id));
+      if (!t) return json(res, 404, { error: "no such task" });
+      const i = Number(b.index);
+      if (!Array.isArray(t.checklist) || !Number.isInteger(i) || i < 0 || i >= t.checklist.length) {
+        return json(res, 400, { error: "no such checklist item" });
+      }
+      t.checklist[i].done = !!b.done;
       t.updated = now(); dirty = true; return json(res, 200, { ok: true, task: t });
     }
     // Manual board sweep — the aggressive companion to the automatic reaper. The reaper only touches

@@ -38,6 +38,9 @@ export type Card = {
   log?: { ts: number; by: string; text: string }[];
   /** the narrative line ("assigned — did"), written by the cheap summarizer */
   summary?: string;
+  /** #5624: acceptance items — checked/total is the one honest denominator for a progress bar.
+   * Absent or empty = no checklist, and the UI renders nothing (never fabricate progress). */
+  checklist?: { text: string; done: boolean }[];
   /** Who POSTED the card — `${hostId()}:${project}`, the same shape a focus card's assignee has.
    * This, not `parent`, is what actually joins a sub-agent to the session that spawned it. */
   by?: string;
@@ -158,6 +161,13 @@ export class HubClient {
     return this.request<{ events: HubEvent[]; cursor?: number; latest?: number }>("GET", `/events${s ? "?" + s : ""}`);
   }
   moveCard(id: number, status: string) { return this.request("POST", "/task/update", { id, status }); }
+
+  /** #5624: tick one acceptance item; returns the updated card. Index-addressed — the hub 400s a
+   *  stale index instead of silently toggling the wrong item. */
+  checklistToggle(id: number, index: number, done: boolean) {
+    return this.request<{ ok: boolean; task: Card }, { id: number; index: number; done: boolean }>(
+      "POST", "/task/checklist-toggle", { id, index, done }).then(r => r.task);
+  }
 
   /**
    * One card's FULL story: the card, its status events, and the bus messages that reference it

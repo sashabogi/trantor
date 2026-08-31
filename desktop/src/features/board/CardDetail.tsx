@@ -156,6 +156,28 @@ export function CardDetail({ client, id, onClose, onMoved, onOpen }: {
             </button>
           )}
         </header>
+        {/* #5624: acceptance checklist — checked/total is the card's one honest denominator.
+            Toggle is index-addressed; the hub refuses a stale index, and any failure reloads
+            truth instead of leaving an optimistic lie on screen. */}
+        {task?.checklist && task.checklist.length > 0 && (
+          <div className="border-b border-[var(--color-tr-edge)] px-4 py-3">
+            <div className="tr-label mb-2">
+              acceptance · {task.checklist.filter(c => c.done).length}/{task.checklist.length}
+            </div>
+            <div className="mb-2 h-[3px] overflow-hidden rounded-full bg-white/10">
+              <div className="h-full rounded-full bg-[var(--color-tr-doing)]"
+                   style={{ width: `${(task.checklist.filter(c => c.done).length / task.checklist.length) * 100}%` }} />
+            </div>
+            {task.checklist.map((item, i) => (
+              <button key={i} type="button"
+                onClick={() => client.checklistToggle(task.id, i, !item.done).then(() => { void load(); onMoved?.(); }).catch(() => { void load(); })}
+                className="flex w-full items-start gap-2 rounded px-1 py-0.5 text-left text-[12px] hover:bg-white/[0.04]">
+                <span className={`mt-[1px] ${item.done ? "text-[var(--color-tr-doing)]" : "text-[var(--color-tr-muted)]"}`}>{item.done ? "☑" : "☐"}</span>
+                <span className={item.done ? "text-[var(--color-tr-muted)] line-through decoration-white/25" : ""}>{item.text}</span>
+              </button>
+            ))}
+          </div>
+        )}
         {code && code.dir && (code.files.length > 0 || code.commits.length > 0) && (
           <div className="border-b border-[var(--color-tr-edge)] px-4 py-3">
             <div className="tr-label mb-2">code · <span className="tr-mono normal-case tracking-normal">{code.dir.replace(/^\/Users\/[^/]+/, "~")}</span></div>
