@@ -16,6 +16,7 @@ import { fileStat, readFile, readFileAtHead, seatState, writeFile, type FileBody
 import { CodeView } from "./CodeView";
 import { DiffView } from "./DiffView";
 import { decideReload, type FileStat } from "./liveReload";
+import { seatDiff } from "../review/seatDiff";
 
 type Mode = "content" | "diff";
 
@@ -62,6 +63,25 @@ export function Files({ client, project, lens, onLens, path, seat, onSeat }: {
     () => peers.filter(p => p.session.endsWith(`:${project}`) && !p.session.toLowerCase().startsWith("macbook")),
     [peers, project],
   );
+
+  // Changed-file count per seat worktree, for the source-tab badges. Same seatDiff the Review
+  // lens reads — one truth about "what did this seat touch". Polled at the peers cadence; a
+  // failed read stays absent (clean and unknown must not look different in a scary way).
+  const [seatChanges, setSeatChanges] = useState<Record<string, number>>({});
+  useEffect(() => {
+    let alive = true;
+    const pull = () => {
+      for (const s of seats) {
+        const name = seatName(s.session);
+        seatDiff(project, name)
+          .then(d => { if (alive) setSeatChanges(prev => ({ ...prev, [name]: d.files.length })); })
+          .catch(() => {});
+      }
+    };
+    pull();
+    const iv = setInterval(pull, 15_000);
+    return () => { alive = false; clearInterval(iv); };
+  }, [seats, project]);
 
   // ONE owner for "is this seat writing right now". Deriving it a second way from bus status is how
   // the view and the writer end up disagreeing about whether an edit is safe.
@@ -160,9 +180,17 @@ export function Files({ client, project, lens, onLens, path, seat, onSeat }: {
               type="button"
               onClick={() => onSeat(seatName(s.session))}
               data-on={seat === seatName(s.session)}
-              className="rounded-[9px] px-3 py-[7px] text-[12.5px] font-medium text-tr-muted data-[on=true]:bg-tr-panel data-[on=true]:text-tr-text data-[on=true]:shadow-sm"
+              className="flex items-center gap-1.5 rounded-[9px] px-3 py-[7px] text-[12.5px] font-medium text-tr-muted data-[on=true]:bg-tr-panel data-[on=true]:text-tr-text data-[on=true]:shadow-sm"
             >
               {seatName(s.session)}
+              {/* the answer to "which files have been edited, and WHERE" (2026-09-01): each
+                  source tab carries its changed-file count, so an edited worktree announces
+                  itself before you click into it. Absent = clean, never a zero. */}
+              {(seatChanges[seatName(s.session)] ?? 0) > 0 && (
+                <span className="tr-mono rounded-full bg-tr-doing/20 px-1.5 text-[10px] text-tr-doing">
+                  {seatChanges[seatName(s.session)]}
+                </span>
+              )}
             </button>
           ))}
 

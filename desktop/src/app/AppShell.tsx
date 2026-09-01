@@ -553,6 +553,7 @@ export function AppShell() {
           <FileTree
             project={active}
             seat={fileSeat}
+            openPath={filePath}
             onOpen={p => { setFilePath(p); setPane({ kind: "project", lens: "files" }); }}
           />
         </div>

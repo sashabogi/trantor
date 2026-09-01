@@ -12,7 +12,7 @@ import { projectFiles, createFile, deleteFile, renameFile, safePath, statusColor
 
 const POLL_MS = 10_000;
 
-function Row({ entry, depth, project, seat, onOpen, onRefresh }: { entry: FileEntry; depth: number; project: string; seat: string | null; onOpen: (path: string) => void; onRefresh: () => void }) {
+function Row({ entry, depth, project, seat, onOpen, onRefresh, openPath }: { entry: FileEntry; depth: number; project: string; seat: string | null; onOpen: (path: string) => void; onRefresh: () => void; openPath?: string | null }) {
   const [open, setOpen] = useState(false);
   const [kids, setKids] = useState<FileEntry[] | null>(null);
   const [menuOpen, setMenuOpen] = useState(false);
@@ -92,7 +92,13 @@ function Row({ entry, depth, project, seat, onOpen, onRefresh }: { entry: FileEn
   return (
     <>
       <div
-        className="relative flex w-full items-center gap-1.5 rounded-md py-[3px] pr-2 text-left text-[12px] text-tr-muted hover:bg-white/[0.04]"
+        className={`relative flex w-full items-center gap-1.5 rounded-md py-[3px] pr-2 text-left text-[12px] hover:bg-white/[0.04] ${
+          /* the OPEN file's row says so (2026-09-01, operator: "the picker doesn't even know
+             you selected it") — same treatment the sidebar gives the active project */
+          !entry.dir && openPath === entry.path
+            ? "bg-white/[0.07] font-medium text-[var(--color-tr-text)]"
+            : "text-tr-muted"
+        }`}
         style={{ paddingLeft: 6 + depth * 11 }}
         onContextMenu={e => { e.preventDefault(); setMenuOpen(true); }}
       >
@@ -161,12 +167,12 @@ function Row({ entry, depth, project, seat, onOpen, onRefresh }: { entry: FileEn
         </div>
       )}
       {error && <div className="px-3 py-0.5 text-[11px] text-tr-danger" style={{ paddingLeft: 6 + depth * 11 + 24 }}>{error}</div>}
-      {open && kids?.map(k => <Row key={k.path} entry={k} depth={depth + 1} project={project} seat={seat} onOpen={onOpen} onRefresh={onRefresh} />)}
+      {open && kids?.map(k => <Row key={k.path} entry={k} depth={depth + 1} project={project} seat={seat} onOpen={onOpen} onRefresh={onRefresh} openPath={openPath} />)}
     </>
   );
 }
 
-export function FileTree({ project, seat, onOpen }: { project: string; seat: string | null; onOpen: (path: string) => void }) {
+export function FileTree({ project, seat, onOpen, openPath }: { project: string; seat: string | null; onOpen: (path: string) => void; openPath?: string | null }) {
   const [roots, setRoots] = useState<FileEntry[] | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -207,7 +213,7 @@ export function FileTree({ project, seat, onOpen }: { project: string; seat: str
           <Plus size={10} strokeWidth={1.5} /> New file
         </button>
       </div>
-      {roots.map(e => <Row key={e.path} entry={e} depth={0} project={project} seat={seat} onOpen={onOpen} onRefresh={refresh} />)}
+      {roots.map(e => <Row key={e.path} entry={e} depth={0} project={project} seat={seat} onOpen={onOpen} onRefresh={refresh} openPath={openPath} />)}
     </div>
   );
 }

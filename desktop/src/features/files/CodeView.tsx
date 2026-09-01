@@ -45,7 +45,9 @@ export function CodeView({ value, path, editable, onChange, onSave }: {
       readOnly: !editable,
       automaticLayout: true,
       ...fontOptions,
-      minimap: { enabled: false },
+      // Minimap ON (2026-09-01): with it off, monaco read as "nothing changed" to the operator —
+      // the minimap is half of the editor's VS Code identity, and identity was the point (#5790).
+      minimap: { enabled: true },
       scrollBeyondLastLine: false,
       stickyScroll: { enabled: false },
       renderLineHighlight: "line",

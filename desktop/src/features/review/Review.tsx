@@ -71,9 +71,11 @@ export function Review({ client, project, lens, onLens }: {
   const [note, setNote] = useState("");
   const [sending, setSending] = useState(false);
   const [sent, setSent] = useState<"ok" | "fail" | null>(null);
-  // the git rail (#5775): hidden by default — the diff is the lens's reason to exist — and a
-  // nonce the rail bumps after commit/push so the diff re-pulls instead of lying about landed work
-  const [gitOpen, setGitOpen] = useState(false);
+  // the git rail (#5775): OPEN by default (2026-09-01 — the operator found the seat diffs first,
+  // could act on nothing, and read the lens as broken: "you can't do anything in the review").
+  // The actionable panel is the front door; the seat diffs stay one tab away. A nonce the rail
+  // bumps after commit/push so the diff re-pulls instead of lying about landed work.
+  const [gitOpen, setGitOpen] = useState(true);
   const [diffNonce, setDiffNonce] = useState(0);
 
   useEffect(() => {
