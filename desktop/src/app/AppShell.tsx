@@ -134,6 +134,11 @@ export function AppShell() {
     return () => { alive = false; clearInterval(t); };
   }, []);
   useEffect(() => { if (active) hubForProject(active).then(setHub); }, [active]);
+  useEffect(() => {
+    if (!active) return;
+    void invoke("file_watch", { project: active });
+    return () => { void invoke("file_unwatch", { project: active }); };
+  }, [active]);
 
   const client = useMemo(() => (hub ? new HubClient(hub) : null), [hub]);
   // The balance strip reads the MACHINE-LOCAL hub (balances/profile are files on this machine).

@@ -2,6 +2,7 @@ mod herdr;
 pub mod identity;
 mod terminal;
 
+use notify::{RecursiveMode, Watcher};
 use serde::Serialize;
 use std::collections::BTreeMap;
 use std::io::{Read, Seek, SeekFrom};
@@ -1363,6 +1364,9 @@ fn orchestrator_chat(project: String, after: usize) -> Result<String, String> {
 static CHAT_WATCHERS: std::sync::Mutex<Option<std::collections::HashMap<String, Arc<AtomicBool>>>> =
     std::sync::Mutex::new(None);
 
+static FILE_WATCHERS: std::sync::Mutex<Option<std::collections::HashMap<String, Arc<AtomicBool>>>> =
+    std::sync::Mutex::new(None);
+
 fn seed_tail(path: &Path) -> (TranscriptTail, u64, ChatMeta) {
     let mut tail = TranscriptTail::default();
     let mut meta = ChatMeta {
@@ -1608,6 +1612,124 @@ fn chat_unwatch(project: String) {
     }
     let stop = {
         let mut g = CHAT_WATCHERS.lock().unwrap();
+        g.as_mut().and_then(|map| map.remove(project))
+    };
+    if let Some(stop) = stop {
+        stop.store(true, Ordering::SeqCst);
+    }
+}
+
+fn forget_file_watcher(project: &str, stop: &Arc<AtomicBool>) {
+    let mut g = FILE_WATCHERS.lock().unwrap();
+    if let Some(map) = g.as_mut() {
+        if let Some(existing) = map.get(project) {
+            if Arc::ptr_eq(existing, stop) {
+                map.remove(project);
+            }
+        }
+    }
+}
+
+fn is_ignored(path: &Path, ignore_list: &[&str]) -> bool {
+    path.components().any(|c| ignore_list.contains(&c.as_os_str().to_string_lossy().as_ref()))
+}
+
+#[tauri::command]
+fn file_watch(window: tauri::Window, project: String) -> Result<(), String> {
+    let project = project.trim().to_string();
+    if project.is_empty() {
+        return Err("project is required".into());
+    }
+    let root = project_dir(&project).ok_or_else(|| format!("no local checkout for {project}"))?;
+
+    {
+        let g = FILE_WATCHERS.lock().unwrap();
+        if let Some(map) = g.as_ref() {
+            if map.contains_key(&project) {
+                return Ok(());
+            }
+        }
+    }
+
+    let stop = Arc::new(AtomicBool::new(false));
+    let stop_clone = Arc::clone(&stop);
+
+    {
+        let mut g = FILE_WATCHERS.lock().unwrap();
+        let map = g.get_or_insert_with(std::collections::HashMap::new);
+        map.insert(project.clone(), Arc::clone(&stop));
+    }
+
+    let (tx, rx) = std::sync::mpsc::channel();
+
+    let mut watcher = notify::recommended_watcher(
+        move |res| {
+            if let Ok(event) = res {
+                let _ = tx.send(event);
+            }
+        },
+    )
+    .map_err(|e| format!("failed to create watcher: {e}"))?;
+
+    watcher
+        .watch(&root, notify::RecursiveMode::Recursive)
+        .map_err(|e| format!("failed to watch {project}: {e}"))?;
+
+    tauri::async_runtime::spawn(async move {
+        use tauri::Emitter;
+        let mut batch: Vec<String> = Vec::new();
+        let mut last_emit = Instant::now();
+        let ignore_list = TREE_SKIP;
+
+        loop {
+            if stop_clone.load(Ordering::SeqCst) {
+                break;
+            }
+
+            match rx.recv_timeout(Duration::from_millis(50)) {
+                Ok(event) => {
+                    for path in event.paths {
+                        let rel = path.strip_prefix(&root).unwrap_or(&path);
+                        let rel_str = rel.to_string_lossy().to_string();
+                        if !rel_str.is_empty() && !is_ignored(rel, ignore_list) {
+                            batch.push(rel_str);
+                        }
+                    }
+                }
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+                Err(_) => break,
+            }
+
+            if last_emit.elapsed() >= Duration::from_millis(200) && !batch.is_empty() {
+                let paths = std::mem::take(&mut batch);
+                last_emit = Instant::now();
+                let payload = serde_json::json!({ "project": project, "paths": paths });
+                if window.emit("file-changed", payload).is_err() {
+                    break;
+                }
+            }
+        }
+
+        if !batch.is_empty() {
+            let payload = serde_json::json!({ "project": project, "paths": batch });
+            let _ = window.emit("file-changed", payload);
+        }
+
+        stop_clone.store(true, Ordering::SeqCst);
+        forget_file_watcher(&project, &stop_clone);
+    });
+
+    Ok(())
+}
+
+#[tauri::command]
+fn file_unwatch(project: String) {
+    let project = project.trim();
+    if project.is_empty() {
+        return;
+    }
+    let stop = {
+        let mut g = FILE_WATCHERS.lock().unwrap();
         g.as_mut().and_then(|map| map.remove(project))
     };
     if let Some(stop) = stop {
@@ -4277,6 +4399,8 @@ pub fn run() {
             balances_refresh,
             chat_watch,
             chat_unwatch,
+            file_watch,
+            file_unwatch,
             pane_send,
             pane_keys,
             orchestrator_status,
