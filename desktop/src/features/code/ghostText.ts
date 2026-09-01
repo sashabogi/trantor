@@ -10,9 +10,11 @@ let debounceTimer: ReturnType<typeof setTimeout> | null = null;
 
 function getEnabled(): boolean {
   try {
-    return localStorage.getItem(STORAGE_KEY) !== "off";
+    // OFF until the operator turns it on: measured 2026-09-01, a scrooge CLI completion takes
+    // 16 to 36 seconds end to end, which is not ghost text. The fast path is its own card.
+    return localStorage.getItem(STORAGE_KEY) === "on";
   } catch {
-    return true;
+    return false;
   }
 }
 
@@ -32,7 +34,7 @@ export function toggleGhostText(): boolean {
   return next;
 }
 
-function extractContext(model: monaco.editor.ITextModel, position: monaco.Position): { prefix: string; suffix: string } {
+function extractContext(model: monaco.editor.ITextModel, position: monaco.Position) {
   const totalLines = model.getLineCount();
   const startLine = Math.max(1, position.lineNumber - LINES_BEFORE);
   const endLine = Math.min(totalLines, position.lineNumber + LINES_AFTER);
@@ -53,11 +55,12 @@ function extractContext(model: monaco.editor.ITextModel, position: monaco.Positi
 }
 
 export function registerGhostTextProvider(
-  model: monaco.editor.ITextModel,
+  _model: monaco.editor.ITextModel,
 ): monaco.IDisposable {
   const provider: monaco.languages.InlineCompletionsProvider = {
-    triggerCharacters: [],
-    provideInlineCompletions(model, position, context, token) {
+    // nothing to release per request: the completion is a plain string
+    disposeInlineCompletions() {},
+    provideInlineCompletions(model, position, _context, token) {
       if (!getEnabled()) return Promise.resolve({ items: [] });
       if (token.isCancellationRequested) return Promise.resolve({ items: [] });
 
@@ -73,18 +76,12 @@ export function registerGhostTextProvider(
                 resolve({ items: [] });
                 return;
               }
-              const textEdits: monaco.editor.ISingleEditOperation[] = [{
-                range: model.getFullModelRange(),
-                text: completion,
-                forceMoveMarkers: false,
-              }];
+              // Monaco's InlineCompletion is insertText + the range it replaces; the range is
+              // the caret, so the suggestion appends and Tab accepts it.
               resolve({
                 items: [{
                   insertText: completion,
-                  filterText: completion,
-                  sortText: completion,
-                  textEdits,
-                  details: "ghost text",
+                  range: new monaco.Range(position.lineNumber, position.column, position.lineNumber, position.column),
                 }],
               });
             })

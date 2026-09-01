@@ -83,7 +83,6 @@ export function CodeView({ value, path, editable, onChange, onSave, project, sea
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [path, editable, project, seat]);
 
-<<<<<<< HEAD
   // The language server starts async, after this editor is already up: when it comes (or goes)
   // live, flip suggestions for THIS instance so the first completion needs no remount.
   useEffect(() => {
@@ -99,8 +98,6 @@ export function CodeView({ value, path, editable, onChange, onSave, project, sea
   // A new document for the same path (saved, reloaded, switched source) replaces the text
   // without tearing the editor down. pushEditOperations keeps the undo stack, so a live reload
   // remains undoable — the silent-reload half of the liveReload rule.
-=======
->>>>>>> seat/openrouter
   useEffect(() => {
     const model = modelRef.current;
     if (!model || model.getValue() === value) return;
