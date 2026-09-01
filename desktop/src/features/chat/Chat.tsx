@@ -494,9 +494,11 @@ export function Chat({ project, dock, onDock, onClose }: {
   // CSS custom properties have no key in React's CSSProperties, so the variable is declared as
   // part of the object's own type — an intersection, not an assertion: every key is checked.
   const rootStyle: CSSProperties & Record<"--chat-scale", string> = {
-    ...(hosted ? {} : side ? { width: `${panel.width ?? 420}px` } : { height: `${panel.height ?? 340}px` }),
     "--chat-scale": String(fontScale(fontStep)),
   };
+  // hosted in the pane: the pane owns both dimensions, so neither is set here
+  if (!hosted && side) rootStyle.width = `${panel.width ?? 420}px`;
+  if (!hosted && !side) rootStyle.height = `${panel.height ?? 340}px`;
 
   return (
     <div

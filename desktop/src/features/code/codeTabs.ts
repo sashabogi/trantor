@@ -38,7 +38,7 @@ export function openInTabs(
   scope: string,
   path: string,
   view: "code" | "changes",
-): { tabs: CodeTab[]; activeKey: string } {
+) {
   const key = tabKey(scope, path);
   const existing = tabs.find(t => t.key === key);
   if (existing) {
@@ -81,7 +81,7 @@ export function closeTab(
   tabs: CodeTab[],
   activeKey: string | null,
   key: string,
-): { tabs: CodeTab[]; activeKey: string | null } {
+) {
   const idx = tabs.findIndex(t => t.key === key);
   const next = tabs.filter(t => t.key !== key);
   if (idx === -1 || key !== activeKey) return { tabs: next, activeKey };

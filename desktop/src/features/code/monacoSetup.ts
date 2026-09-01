@@ -23,6 +23,8 @@ import cssWorker from "monaco-editor/esm/vs/language/css/css.worker?worker";
 import htmlWorker from "monaco-editor/esm/vs/language/html/html.worker?worker";
 import tsWorker from "monaco-editor/esm/vs/language/typescript/ts.worker?worker";
 
+// SAFETY: MonacoEnvironment is monaco's documented global hook and globalThis carries no type
+// for it; the value assigned is a monaco.Environment, so the assertion only names the one key.
 (globalThis as { MonacoEnvironment?: monaco.Environment }).MonacoEnvironment = {
   getWorker(_workerId: string, label: string): Worker {
     switch (label) {
