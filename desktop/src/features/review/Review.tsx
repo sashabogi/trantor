@@ -12,6 +12,8 @@ import { ProjectHeader, type Lens } from "../project/ProjectHeader";
 import { parsePatch, type DiffFile } from "./diff";
 import { seatDiff, type SeatDiff } from "./seatDiff";
 import { GitPanel } from "./GitPanel";
+import { DiffView } from "../files/DiffView";
+import { readFile, readFileAtHead } from "../files/fileApi";
 
 // A seat = a crew peer of this project. The operator's own sessions are excluded outright: review
 // compares a seat's WORKTREE against its base, and the operator has no worktree, so listing them
@@ -71,12 +73,15 @@ export function Review({ client, project, lens, onLens }: {
   const [note, setNote] = useState("");
   const [sending, setSending] = useState(false);
   const [sent, setSent] = useState<"ok" | "fail" | null>(null);
-  // the git rail (#5775): OPEN by default (2026-09-01 — the operator found the seat diffs first,
-  // could act on nothing, and read the lens as broken: "you can't do anything in the review").
-  // The actionable panel is the front door; the seat diffs stay one tab away. A nonce the rail
-  // bumps after commit/push so the diff re-pulls instead of lying about landed work.
+  // the SCM panel (#5775 → #5791): OPEN by default (2026-09-01 — the operator found the seat
+  // diffs first, could act on nothing, and read the lens as broken: "you can't do anything in
+  // the review"). The actionable panel is the front door; the seat diffs stay one tab away.
+  // A nonce the panel bumps after commit/push so the diff re-pulls instead of lying about
+  // landed work. `gitFile` is the SCM file whose diff is open in the monaco editor.
   const [gitOpen, setGitOpen] = useState(true);
   const [diffNonce, setDiffNonce] = useState(0);
+  const [gitFile, setGitFile] = useState<string | null>(null);
+  const [gitDocs, setGitDocs] = useState<{ base: string; head: string } | null>(null);
 
   useEffect(() => {
     let alive = true;
@@ -112,6 +117,22 @@ export function Review({ client, project, lens, onLens }: {
     const iv = setInterval(pull, 15_000);
     return () => { alive = false; clearInterval(iv); };
   }, [project, selected, diffNonce]);
+
+  // The SCM file's two documents — HEAD on the left, the seat's working copy on the right — for
+  // the monaco diff. A file git has never seen has no HEAD (empty left side); a deleted file has
+  // no working copy (empty right side), and read_file errors for it are that, not a failure.
+  useEffect(() => {
+    if (!gitFile || !selected) { setGitDocs(null); return; }
+    let alive = true;
+    const agent = seatName(selected.session);
+    Promise.all([
+      readFileAtHead(project, gitFile, agent),
+      readFile(project, gitFile, agent).then(b => b.text).catch(() => ""),
+    ])
+      .then(([base, head]) => { if (alive) setGitDocs({ base, head }); })
+      .catch(() => { if (alive) setGitDocs(null); });
+    return () => { alive = false; };
+  }, [project, gitFile, selected]);
 
   // The seat's in-flight card, if it owns one — the composer refs it so the seat knows which
   // card the note is about. Same lookup the Workspace record rail does.
@@ -159,7 +180,7 @@ export function Review({ client, project, lens, onLens }: {
           {seats.map(s => (
             <button
               key={s.session}
-              onClick={() => { setSel(s.session); setSelFile(null); }}
+              onClick={() => { setSel(s.session); setSelFile(null); setGitFile(null); }}
               data-on={selected?.session === s.session}
               className="flex items-center gap-2 rounded-[9px] px-3 py-[7px] text-[12.5px] font-medium text-tr-muted data-[on=true]:bg-tr-panel data-[on=true]:text-tr-text data-[on=true]:shadow-sm"
             >
@@ -169,7 +190,7 @@ export function Review({ client, project, lens, onLens }: {
           ))}
           {seats.length > 0 && (
             <button
-              onClick={() => setGitOpen(o => !o)}
+              onClick={() => { if (gitOpen) setGitFile(null); setGitOpen(o => !o); }}
               data-on={gitOpen}
               title="git: stage, commit, push this seat's worktree"
               className="ml-auto rounded-[9px] px-3 py-[7px] text-[12.5px] font-medium text-tr-muted data-[on=true]:bg-tr-panel data-[on=true]:text-tr-text data-[on=true]:shadow-sm"
@@ -229,30 +250,51 @@ export function Review({ client, project, lens, onLens }: {
 
             {/* unified diff + composer */}
             <div className="flex min-w-0 flex-1 flex-col">
-              <div className="tr-card min-h-0 flex-1 overflow-y-auto">
-                {openFile ? (
-                  <>
-                    <div className="sticky top-0 flex items-center gap-2 border-b border-tr-edge bg-tr-panel px-3 py-2">
-                      <span className="tr-mono min-w-0 flex-1 truncate text-[12px]">{openFile.path}</span>
-                      {openFile.isNew && <span className="tr-chip">new</span>}
-                      {openFile.isDeleted && <span className="tr-chip">deleted</span>}
-                      <span className="tr-mono shrink-0 text-[11px]">
-                        <span className="text-tr-ok">+{openFile.adds}</span>{" "}
-                        <span className="text-tr-fail">−{openFile.dels}</span>
-                      </span>
-                    </div>
-                    <DiffBody file={openFile} />
-                  </>
-                ) : (
-                  <div className="flex h-full items-center justify-center">
-                    <div className="tr-card-ghost max-w-[380px] px-6 py-5 text-center text-[12.5px] leading-relaxed">
-                      {ok.diff.files.length === 0
-                        ? "The worktree is clean against its base — nothing to review yet."
-                        : "This file has no textual diff (untracked or binary) — open another file."}
-                    </div>
+              {gitFile ? (
+                <div className="tr-card min-h-0 flex-1 overflow-hidden">
+                  <div className="flex items-center gap-2 border-b border-tr-edge bg-tr-panel px-3 py-2">
+                    <span className="tr-mono min-w-0 flex-1 truncate text-[12px]">{gitFile}</span>
+                    <span className="tr-chip shrink-0">scm</span>
+                    <button
+                      type="button"
+                      onClick={() => setGitFile(null)}
+                      className="shrink-0 rounded px-2 py-0.5 text-[11.5px] text-tr-muted hover:text-tr-text"
+                    >
+                      close
+                    </button>
                   </div>
-                )}
-              </div>
+                  {gitDocs ? (
+                    <DiffView base={gitDocs.base} head={gitDocs.head} path={gitFile} />
+                  ) : (
+                    <div className="p-3 text-[12px] text-tr-muted">reading…</div>
+                  )}
+                </div>
+              ) : (
+                <div className="tr-card min-h-0 flex-1 overflow-y-auto">
+                  {openFile ? (
+                    <>
+                      <div className="sticky top-0 flex items-center gap-2 border-b border-tr-edge bg-tr-panel px-3 py-2">
+                        <span className="tr-mono min-w-0 flex-1 truncate text-[12px]">{openFile.path}</span>
+                        {openFile.isNew && <span className="tr-chip">new</span>}
+                        {openFile.isDeleted && <span className="tr-chip">deleted</span>}
+                        <span className="tr-mono shrink-0 text-[11px]">
+                          <span className="text-tr-ok">+{openFile.adds}</span>{" "}
+                          <span className="text-tr-fail">−{openFile.dels}</span>
+                        </span>
+                      </div>
+                      <DiffBody file={openFile} />
+                    </>
+                  ) : (
+                    <div className="flex h-full items-center justify-center">
+                      <div className="tr-card-ghost max-w-[380px] px-6 py-5 text-center text-[12.5px] leading-relaxed">
+                        {ok.diff.files.length === 0
+                          ? "The worktree is clean against its base — nothing to review yet."
+                          : "This file has no textual diff (untracked or binary) — open another file."}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
 
               {/* composer — REAL send over the bus; line-anchored comments are Phase 2.5 */}
               <div className="tr-card mt-2.5 flex items-end gap-2.5 px-3.5 py-2.5">
@@ -282,6 +324,7 @@ export function Review({ client, project, lens, onLens }: {
                   project={project}
                   seat={seatName(selected.session)}
                   onChanged={() => setDiffNonce(n => n + 1)}
+                  onOpenFile={setGitFile}
                 />
               </div>
             )}
