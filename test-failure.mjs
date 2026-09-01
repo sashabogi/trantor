@@ -51,7 +51,12 @@ const HUB = `http://127.0.0.1:${PORT}`;
 // CLI complains on — the distinction that hid a real outage (see the claude drills below).
 async function drill(agent, script, opts = {}) {
   registers.length = 0; sends.length = 0;
-  inboxQueue = (opts.inbox || []).map((text, i) => ({ id: i + 1, from: "host:drill", to: `${agent}:tt-fail-${agent}`, text, project: `tt-fail-${agent}` }));
+  // an inbox item is a plain string (sender host:drill) or {from, text} — #5760's legs need to
+  // speak as hub:duty to drill the overseer-FYI wake policy.
+  inboxQueue = (opts.inbox || []).map((m, i) => {
+    const o = typeof m === "string" ? { text: m } : m;
+    return { id: i + 1, from: o.from || "host:drill", to: `${agent}:tt-fail-${agent}`, text: o.text, project: `tt-fail-${agent}` };
+  });
   const work = mkdtempSync(join(tmpdir(), `tt-fail-${agent}-`));
   const fakebin = join(work, "bin");
   mkdirSync(fakebin, { recursive: true });
@@ -77,7 +82,7 @@ async function drill(agent, script, opts = {}) {
   const errText = (() => {
     try { return readFileSync(join(HOME, ".agent-bus", `err-${agent}-tt-fail-${agent}.txt`), "utf8"); } catch { return ""; }
   })();
-  return { registers: [...registers], sends: [...sends], errText };
+  return { registers: [...registers], sends: [...sends], errText, home: HOME };
 }
 
 // ---- drill 1: an exhausted account complaining on STDERR ------------------------------
@@ -228,6 +233,30 @@ async function drill(agent, script, opts = {}) {
      !!failMsg && /empty-output/.test(failMsg.text));
   ok("#5481: the message names the diffusion/reasoning budget trap verbatim",
      !!failMsg && /inception: raise max_tokens — diffusion burns budget on reasoning/.test(failMsg.text));
+}
+
+// ---- #5760 drills: the overseer's same-project FYI never costs a turn ----------------------
+// The night of 08-31: the hub's hourly "🤝 OVERSEER same-project-sessions" DM woke every seat
+// into a real CLI turn; three wedged for hours mid-chatter (one metered). The FYI batches as
+// context now; file-conflict warnings — actionable by the seat — still wake.
+{
+  const counter = '#!/bin/sh\necho ran >> "$HOME/runs.txt"\necho ok\nexit 0\n';
+  const fyi = { from: "hub:duty", text: "🤝 OVERSEER same-project-sessions: you and x:tt are working on overlapping ground. Coordinate directly. No human needs to relay this." };
+  const runsOf = (home) => { try { return readFileSync(join(home, "runs.txt"), "utf8").trim().split("\n").filter(Boolean).length; } catch { return 0; } };
+
+  const a = await drill("opencode", counter, { inbox: [fyi], waitMs: 4000, keepHome: true });
+  ok("#5760: a same-project overseer FYI alone never wakes a turn (kickoff only ran)",
+     runsOf(a.home) === 1);
+
+  const b = await drill("opencode", counter,
+    { inbox: [fyi, { text: "real contract: do the thing" }], waitMs: 4000, keepHome: true });
+  ok("#5760: a real direct still wakes, and exactly one extra turn runs", runsOf(b.home) === 2);
+  ok("#5760: the FYI rides that turn as CONTEXT, not as the wake",
+     (() => { try { return readFileSync(join(b.home, ".agent-bus", "turn-opencode-tt-fail-opencode.txt"), "utf8").includes("same-project-sessions"); } catch { return false; } })());
+
+  const c = await drill("opencode", counter,
+    { inbox: [{ from: "hub:duty", text: "🤝 OVERSEER file-conflict: you and x:tt are working on overlapping ground (src/a.ts)." }], waitMs: 4000, keepHome: true });
+  ok("#5760: a file-conflict warning STILL wakes — that one is actionable now", runsOf(c.home) === 2);
 }
 
 // ---- #5481 drill C: positive control — a turn WITH output still exits clean ---------------

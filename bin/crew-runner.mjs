@@ -609,9 +609,16 @@ function composedTurn({ base = "", wakeText = "", ctxText = "", againText = "", 
     // never wake on your own broadcasts: a claude seat's report contains "claude:" and matched the
     // @mention filter, buying one echo turn per report (seen live on the first pulsed orchestrator)
     msgs = msgs.filter(m => m.from !== SESSION);
-    const direct = msgs.filter(m => m.to === SESSION);
-    const mentions = msgs.filter(m => m.to === "all" && (m.text.includes(`@${AGENT}`) || m.text.toLowerCase().includes(`${AGENT}:`)));
-    const bcast = msgs.filter(m => m.to === "all" && !mentions.includes(m));
+    // #5760 (the night of 08-31): the hub's hourly "same-project-sessions" FYI woke every seat
+    // into a real CLI turn — three wedged for hours mid-chatter, one on the metered pool. That
+    // kind is pure coordination CONTEXT ("no human needs to relay this" — and no turn needs to
+    // burn on it either): batch it like a broadcast. file-conflict and linked-activity overseer
+    // warnings still wake — those are actionable by the seat right now.
+    const fyi = msgs.filter(m => m.from === "hub:duty" && String(m.text || "").startsWith("🤝 OVERSEER same-project-sessions"));
+    const rest = msgs.filter(m => !fyi.includes(m));
+    const direct = rest.filter(m => m.to === SESSION);
+    const mentions = rest.filter(m => m.to === "all" && (m.text.includes(`@${AGENT}`) || m.text.toLowerCase().includes(`${AGENT}:`)));
+    const bcast = [...rest.filter(m => m.to === "all" && !mentions.includes(m)), ...fyi];
     pendingBcast.push(...bcast);                      // wake-policy: plain broadcasts batch, they don't wake
     const wake = [...direct, ...mentions];
     if (!wake.length) { if (bcast.length) { savePending(pendingWake, pendingBcast); log(`${bcast.length} broadcast(s) batched (no wake) — ${pendingBcast.length} pending`); } continue; }
