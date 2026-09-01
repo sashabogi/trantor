@@ -1,8 +1,9 @@
 mod herdr;
 pub mod identity;
+mod sessions;
 mod terminal;
 
-use notify::{RecursiveMode, Watcher};
+use notify::Watcher;
 use serde::Serialize;
 use std::collections::BTreeMap;
 use std::io::{Read, Seek, SeekFrom};
@@ -1365,10 +1366,15 @@ where
     }
 }
 
-fn read_chat_snapshot(project: &str, after: usize) -> Result<ChatSnapshot, String> {
-    let sid = orch_session_id(project)
-        .ok_or_else(|| "no orchestrator session for this project yet".to_string())?;
-    let path = orchestrator_transcript_path(project, &sid)?;
+fn read_chat_snapshot(project: &str, after: usize, session_id: Option<&str>) -> Result<ChatSnapshot, String> {
+    let path = match session_id {
+        Some(id) => sessions::claude_transcript_path(project, id)?,
+        None => {
+            let sid = orch_session_id(project)
+                .ok_or_else(|| "no orchestrator session for this project yet".to_string())?;
+            orchestrator_transcript_path(project, &sid)?
+        }
+    };
     let raw = match std::fs::read_to_string(&path) {
         Ok(r) => r,
         Err(_) => {
@@ -1393,8 +1399,8 @@ fn read_chat_snapshot(project: &str, after: usize) -> Result<ChatSnapshot, Strin
 }
 
 #[tauri::command]
-fn orchestrator_chat(project: String, after: usize) -> Result<String, String> {
-    let snap = read_chat_snapshot(&project, after)?;
+fn orchestrator_chat(project: String, after: usize, session_id: Option<String>) -> Result<String, String> {
+    let snap = read_chat_snapshot(&project, after, session_id.as_deref())?;
     serde_json::to_string(&(
         snap.turns,
         snap.results,
@@ -1425,11 +1431,15 @@ fn seed_tail(path: &Path) -> (TranscriptTail, u64, ChatMeta) {
     (tail, total, meta)
 }
 
-fn forget_chat_watcher(project: &str, stop: &Arc<AtomicBool>) {
+fn chat_watcher_key(project: &str, session_id: Option<&str>) -> String {
+    format!("{project}:{}", session_id.unwrap_or("orchestrator"))
+}
+
+fn forget_chat_watcher(key: &str, stop: &Arc<AtomicBool>) {
     let mut g = CHAT_WATCHERS.lock().unwrap();
     if let Some(map) = g.as_mut() {
-        if map.get(project).is_some_and(|live| Arc::ptr_eq(live, stop)) {
-            map.remove(project);
+        if map.get(key).is_some_and(|live| Arc::ptr_eq(live, stop)) {
+            map.remove(key);
         }
     }
 }
@@ -1438,6 +1448,9 @@ fn spawn_chat_watcher(
     window: tauri::Window,
     project: String,
     initial_session_id: String,
+    initial_path: PathBuf,
+    pinned: bool,
+    watcher_key: String,
     mut tail: TranscriptTail,
     mut meta: ChatMeta,
     stop: Arc<AtomicBool>,
@@ -1446,27 +1459,29 @@ fn spawn_chat_watcher(
 
     tauri::async_runtime::spawn(async move {
         let mut session_id = initial_session_id;
-        let mut path = orchestrator_transcript_path(&project, &session_id).ok();
+        let mut path = Some(initial_path);
         loop {
             if stop.load(Ordering::SeqCst) {
                 break;
             }
 
-            if let Some(next_session_id) = orch_session_id(&project) {
-                if next_session_id != session_id {
-                    session_id = next_session_id;
-                    tail.reset();
-                    meta = ChatMeta {
-                        context: chat_context(None, read_context_window()),
-                        ..ChatMeta::default()
-                    };
-                    path = orchestrator_transcript_path(&project, &session_id).ok();
-                    let payload = ChatSessionChangedPayload {
-                        project: project.clone(),
-                        session_id: session_id.clone(),
-                    };
-                    if window.emit("chat-session-changed", payload).is_err() {
-                        break;
+            if !pinned {
+                if let Some(next_session_id) = orch_session_id(&project) {
+                    if next_session_id != session_id {
+                        session_id = next_session_id;
+                        tail.reset();
+                        meta = ChatMeta {
+                            context: chat_context(None, read_context_window()),
+                            ..ChatMeta::default()
+                        };
+                        path = orchestrator_transcript_path(&project, &session_id).ok();
+                        let payload = ChatSessionChangedPayload {
+                            project: project.clone(),
+                            session_id: session_id.clone(),
+                        };
+                        if window.emit("chat-session-changed", payload).is_err() {
+                            break;
+                        }
                     }
                 }
             }
@@ -1499,7 +1514,7 @@ fn spawn_chat_watcher(
             tokio::time::sleep(Duration::from_millis(300)).await;
         }
         stop.store(true, Ordering::SeqCst);
-        forget_chat_watcher(&project, &stop);
+        forget_chat_watcher(&watcher_key, &stop);
     });
 }
 
@@ -1541,7 +1556,7 @@ fn spawn_status_watcher(window: tauri::Window, project: String, stop: Arc<Atomic
     use tauri::Emitter;
     std::thread::spawn(move || {
         let mut last = String::new();
-        let mut emit = |status: &str, pane: &str, last: &mut String| -> bool {
+        let emit = |status: &str, pane: &str, last: &mut String| -> bool {
             if *last == status {
                 return true;
             }
@@ -1623,40 +1638,51 @@ fn spawn_status_watcher(window: tauri::Window, project: String, stop: Arc<Atomic
 }
 
 #[tauri::command]
-fn chat_watch(window: tauri::Window, project: String) -> Result<u64, String> {
+fn chat_watch(window: tauri::Window, project: String, session_id: Option<String>) -> Result<u64, String> {
     let project = project.trim().to_string();
     if project.is_empty() {
         return Err("project is required".into());
     }
-    let sid = orch_session_id(&project)
-        .ok_or_else(|| "no orchestrator session for this project yet".to_string())?;
-    let path = orchestrator_transcript_path(&project, &sid)?;
+    let pinned = session_id.is_some();
+    let sid = match session_id.as_deref() {
+        Some(id) => id.to_string(),
+        None => orch_session_id(&project)
+            .ok_or_else(|| "no orchestrator session for this project yet".to_string())?,
+    };
+    let path = match session_id.as_deref() {
+        Some(id) => sessions::claude_transcript_path(&project, id)?,
+        None => orchestrator_transcript_path(&project, &sid)?,
+    };
     let (tail, current, meta) = seed_tail(&path);
     let stop = Arc::new(AtomicBool::new(false));
+    let watcher_key = chat_watcher_key(&project, session_id.as_deref());
 
     {
         let mut g = CHAT_WATCHERS.lock().unwrap();
         let map = g.get_or_insert_with(std::collections::HashMap::new);
-        if map.contains_key(&project) {
+        if map.contains_key(&watcher_key) {
             return Ok(current);
         }
-        map.insert(project.clone(), Arc::clone(&stop));
+        map.insert(watcher_key.clone(), Arc::clone(&stop));
     }
 
-    spawn_status_watcher(window.clone(), project.clone(), Arc::clone(&stop));
-    spawn_chat_watcher(window, project, sid, tail, meta, stop);
+    if !pinned {
+        spawn_status_watcher(window.clone(), project.clone(), Arc::clone(&stop));
+    }
+    spawn_chat_watcher(window, project, sid, path, pinned, watcher_key, tail, meta, stop);
     Ok(current)
 }
 
 #[tauri::command]
-fn chat_unwatch(project: String) {
+fn chat_unwatch(project: String, session_id: Option<String>) {
     let project = project.trim();
     if project.is_empty() {
         return;
     }
+    let key = chat_watcher_key(project, session_id.as_deref());
     let stop = {
         let mut g = CHAT_WATCHERS.lock().unwrap();
-        g.as_mut().and_then(|map| map.remove(project))
+        g.as_mut().and_then(|map| map.remove(&key))
     };
     if let Some(stop) = stop {
         stop.store(true, Ordering::SeqCst);
@@ -4409,6 +4435,8 @@ pub fn run() {
             file_diff,
             read_file_at_head,
             seat_state,
+            sessions::sessions_list,
+            sessions::session_transcript,
             orchestrator_chat,
             balances_refresh,
             chat_watch,

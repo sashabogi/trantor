@@ -16,6 +16,8 @@ import { GitPanel } from "./GitPanel";
 import { Chat } from "../chat/Chat";
 import { gitPanel, lineCountFor, type GitPanelSnapshot } from "./gitApi";
 import { seatDiff } from "./seatDiff";
+import { SessionsMode } from "./SessionsMode";
+import type { SessionRow } from "./sessionsApi";
 
 type Mode = "files" | "git" | "sessions" | "chat";
 
@@ -47,6 +49,7 @@ export function ModePane({ client, project, seat, onSeat, onOpenFile }: {
   const [note, setNote] = useState("");
   const [sending, setSending] = useState(false);
   const [sent, setSent] = useState<"ok" | "fail" | null>(null);
+  const [selectedClaude, setSelectedClaude] = useState<SessionRow | null>(null);
 
   // The seats of this project — the footer's scope chips. Same peers poll every lens runs.
   const [peers, setPeers] = useState<Peer[]>([]);
@@ -147,7 +150,10 @@ export function ModePane({ client, project, seat, onSeat, onOpenFile }: {
   const modeBtn = (m: Mode, label: string, Icon: typeof FolderTree, dot?: boolean) => (
     <button
       type="button"
-      onClick={() => setMode(m)}
+      onClick={() => {
+        if (m === "chat") setSelectedClaude(null);
+        setMode(m);
+      }}
       data-on={mode === m}
       title={label}
       className="flex items-center gap-1.5 whitespace-nowrap"
@@ -285,21 +291,27 @@ export function ModePane({ client, project, seat, onSeat, onOpenFile }: {
         </>
       )}
 
-      {/* SESSIONS — an honest ghost: the per-seat live terminal pane is the next wave, and
-          nothing here pretends otherwise. */}
+      {/* SESSIONS — one history assembled from each harness's own on-disk store. */}
       {mode === "sessions" && (
-        <div className="flex min-h-0 flex-1 items-center justify-center px-4">
-          <div className="tr-card-ghost max-w-[240px] px-4 py-5 text-center text-[12px] leading-relaxed">
-            Sessions — each seat's live terminal, in this pane — is the next wave. Nothing is
-            faked here yet.
-          </div>
-        </div>
+        <SessionsMode project={project} onOpenClaude={session => {
+          setSelectedClaude(session);
+          setMode("chat");
+        }} />
       )}
 
       {/* CHAT — the orchestrator conversation, moved whole from the old dock. The editor
           narrows, never disappears (ChatFocused.dc.html). */}
       {mode === "chat" && (
-        <Chat project={project} dock="pane" onDock={() => {}} onClose={() => setMode("files")} />
+        <Chat
+          project={project}
+          sessionId={selectedClaude?.id}
+          dock="pane"
+          onDock={() => {}}
+          onClose={() => {
+            setMode(selectedClaude ? "sessions" : "files");
+            setSelectedClaude(null);
+          }}
+        />
       )}
 
       {/* seat scope selector — the bottom of the pane, one picker for tree, editor, and git */}
