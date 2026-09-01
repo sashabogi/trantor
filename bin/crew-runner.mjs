@@ -66,10 +66,35 @@ function ensureSeatWorktree(sourceDir) {
   }
 
   try { mkdirSync(join(homedir(), ".agent-bus", "worktrees", safePathSegment(PROJ)), { recursive: true }); } catch {}
-  const r = spawnSync("git", ["-C", root, "worktree", "add", "-B", branch, seatDir, "HEAD"], {
+
+  // Fast-forward the base branch before branching: the worktree should build
+  // against the latest main, not a stale checkout. (#5403)
+  const base = gitOut(["-C", root, "rev-parse", "--abbrev-ref", "HEAD"], root);
+  if (base) {
+    const remote = gitOut(["-C", root, "rev-parse", "--abbrev-ref", `${base}@{upstream}`], root);
+    if (remote) {
+      const ff = spawnSync("git", ["-C", root, "merge", "--ff-only", remote], { stdio: "ignore", timeout: 15000 });
+      if (ff && ff.status === 0) console.log(`\x1b[2m[runner]\x1b[0m ${base} fast-forwarded to ${remote}`);
+    }
+  }
+
+  const r = spawnSync("git", ["-C", root, "worktree", "add", "--no-track", "-B", branch, seatDir, "HEAD"], {
     encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], timeout: 30000,
   });
-  if (r.status === 0) return seatDir;
+  if (r.status === 0) {
+    // Persist the base branch so the Review lens can name the real base instead
+    // of guessing via merge-base. Stale metadata is unset, not trusted. (#5403)
+    if (base) {
+      spawnSync("git", ["-C", seatDir, "config", `branch.${branch}.base`, base], { stdio: "ignore", timeout: 5000 });
+    }
+    // Set push.autoSetupRemote so a plain git push creates and sets upstream on
+    // first push (git >= 2.37, older clients ignore it). (#5403)
+    const pushAuto = gitOut(["-C", seatDir, "config", "--get", "push.autoSetupRemote"], seatDir);
+    if (!pushAuto) {
+      spawnSync("git", ["-C", seatDir, "config", "push.autoSetupRemote", "true"], { stdio: "ignore", timeout: 5000 });
+    }
+    return seatDir;
+  }
   console.log(`\x1b[33m[runner]\x1b[0m could not create ${branch} worktree — using ${sourceDir}`);
   return sourceDir;
 }
