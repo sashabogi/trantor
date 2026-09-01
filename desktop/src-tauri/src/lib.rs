@@ -1885,22 +1885,20 @@ fn seat_state(agent: String) -> Result<String, String> {
     Ok("unknown".into())
 }
 
-/// Save an edit, and COMMIT it as the operator.
+/// Save an edit, PLAINLY.
 ///
-/// Committing on save is not a convenience. `trantor integrate` commits a seat's dirty worktree AS
-/// THAT SEAT, so a human tweak left sitting uncommitted in glm's worktree would be attributed to
-/// glm the next time integration ran, and the record would be permanently wrong about who wrote
-/// it. Committing here closes that window, and git blame stays the durable answer.
-///
-/// Refused outright while the seat is working: editing a file an agent is part way through writing
-/// loses one of the two edits with no undo.
+/// The v3 Code lens (#5809) follows Orca's save anatomy (RESEARCH-orca-renderer.md §6.2): a
+/// save is a file write and nothing else — no staging, no commit. Dirty work stays visible in
+/// the Changes view until an explicit stage/commit, so the record of who wrote what is made
+/// when the operator commits, not smuggled in by a keystroke. The seat-working guard stays: a
+/// file an agent is part way through writing must not take a concurrent human write.
 #[tauri::command]
-fn write_file(
+fn file_write_plain(
     project: String,
     path: String,
     seat: Option<String>,
     text: String,
-) -> Result<String, String> {
+) -> Result<(), String> {
     let root = source_root(&project, seat.as_deref())?;
     if path.contains("..") {
         return Err("path escapes the project".into());
@@ -1917,40 +1915,7 @@ fn write_file(
         return Err("that file does not exist".into());
     }
     std::fs::write(&full, text).map_err(|e| format!("cannot write {path}: {e}"))?;
-
-    // Authorship comes from the repo's own git config, which IS the human. Nothing is overridden
-    // here on purpose: a seat's commits set an author explicitly, so leaving this alone is exactly
-    // what keeps the two distinguishable.
-    let add = std::process::Command::new("git")
-        .args(["add", "--", &path])
-        .current_dir(&root)
-        .output()
-        .map_err(|e| format!("git add failed: {e}"))?;
-    if !add.status.success() {
-        return Err(String::from_utf8_lossy(&add.stderr).trim().to_string());
-    }
-    let msg = format!("edit {path} in the app");
-    let commit = std::process::Command::new("git")
-        .args(["commit", "-q", "-m", &msg, "--", &path])
-        .current_dir(&root)
-        .output()
-        .map_err(|e| format!("git commit failed: {e}"))?;
-    if !commit.status.success() {
-        let err = String::from_utf8_lossy(&commit.stdout).to_string()
-            + &String::from_utf8_lossy(&commit.stderr);
-        // "nothing to commit" means the text was identical — saving an unchanged file is not an
-        // error, it just did not need a commit.
-        if err.contains("nothing to commit") || err.contains("no changes added") {
-            return Ok(String::new());
-        }
-        return Err(err.trim().to_string());
-    }
-    let sha = std::process::Command::new("git")
-        .args(["rev-parse", "--short", "HEAD"])
-        .current_dir(&root)
-        .output()
-        .map_err(|e| format!("git rev-parse failed: {e}"))?;
-    Ok(String::from_utf8_lossy(&sha.stdout).trim().to_string())
+    Ok(())
 }
 
 /// Create a new file at `path` with the given `text`. Parent directories are
@@ -3577,7 +3542,7 @@ async fn merge_base_async(dir: &Path) -> Result<String, String> {
 }
 
 /// Mutating the git state of a worktree an agent is actively working in loses one of the two
-/// edits with no undo — the exact hazard write_file already guards, for the same reason. The
+/// edits with no undo — the exact hazard file_write_plain already guards, for the same reason. The
 /// panel is for landed or paused work; while the seat is mid-turn, every mutation is refused.
 async fn git_mutation_guard(agent: &str) -> Result<(), String> {
     // seat_state shells out to herdr synchronously; park that wait on a blocking thread so the
@@ -4408,7 +4373,7 @@ pub fn run() {
             takeover_now,
             orch_restorables,
             save_pasted_image,
-            write_file,
+            file_write_plain,
             create_file,
             delete_file,
             rename_file,

@@ -1,25 +1,30 @@
 // Reading and changing the code, in the app.
 //
-// Two rules shape this view:
+// The v3 editor core (#5809), shaped by Orca's renderer (RESEARCH-orca-renderer.md):
 //
-// 1. You read a seat's work AFTER it lands. A file an agent is part way through writing is not
-//    truth, and editing it loses one of the two writes with no undo. herdr owns that signal, asked
+// 1. A file opens EDITABLE, always. There is no edit button and no read/edit switch — an editor
+//    that needs a mode change before it accepts a keystroke is the invention the deletion map
+//    retired. The seat-working guard still holds server-side; herdr owns that signal, asked
 //    through Rust, because the runner reports it there at every turn boundary.
 //
-// 2. Saving COMMITS, authored to you. `trantor integrate` commits a seat's dirty worktree as that
-//    seat, so a tweak of yours left uncommitted would be attributed to the agent. Committing on
-//    save closes that window and leaves git blame as the durable answer.
+// 2. "Changes" is the open file wearing a diff: HEAD on the left, the LIVE editor on the right
+//    (Orca's ChangesModeView anatomy — ChangesModeView.tsx:12-16, 99). The same draft both views
+//    edit, so dirty tracking, save, and the conflict bar are one truth.
+//
+// 3. Saving is a PLAIN file write — no staging, no commit (file_write_plain). Dirty work stays
+//    visible in the Changes view until an explicit stage/commit; the authorship record is an
+//    honest act, not a keystroke's side effect.
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { HubClient, Peer } from "../../shared/api/client";
 import { ProjectHeader, type Lens } from "../project/ProjectHeader";
-import { fileStat, readFile, readFileAtHead, seatState, writeFile, type FileBody } from "./fileApi";
+import { fileStat, readFile, readFileAtHead, seatState, writePlain, type FileBody } from "./fileApi";
 import { CodeView } from "./CodeView";
-import { DiffView } from "./DiffView";
+import { ChangesView } from "./ChangesView";
 import { decideReload, type FileStat } from "./liveReload";
 import { seatDiff } from "../review/seatDiff";
 import { listen } from "@tauri-apps/api/event";
 
-type Mode = "content" | "diff";
+type ViewMode = "code" | "changes";
 
 const seatName = (session: string) => session.split(":")[0];
 
@@ -33,14 +38,13 @@ export function Files({ client, project, lens, onLens, path, seat, onSeat }: {
   onSeat: (s: string | null) => void;
 }) {
   const [peers, setPeers] = useState<Peer[]>([]);
-  const [mode, setMode] = useState<Mode>("content");
+  const [view, setView] = useState<ViewMode>("code");
   const [body, setBody] = useState<FileBody | null>(null);
   const [head, setHead] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState("");
   const [saving, setSaving] = useState(false);
-  const [saved, setSaved] = useState<string | null>(null);
+  const [saved, setSaved] = useState(false);
   const [busy, setBusy] = useState(false);
   const [conflict, setConflict] = useState(false);
 
@@ -48,9 +52,8 @@ export function Files({ client, project, lens, onLens, path, seat, onSeat }: {
   // so the poll reads the CURRENT values without tearing the interval down every render.
   const statRef = useRef<FileStat | null>(null);
   const dirtyRef = useRef(false);
-  // An open edit session is the dirty signal: once the operator has taken control, the disk must
-  // not silently move under the cursor, even before the first keystroke.
-  dirtyRef.current = editing;
+  // The editor is always live: unsaved work is simply "the draft differs from the disk".
+  dirtyRef.current = body !== null && draft !== body.text;
 
   useEffect(() => {
     let alive = true;
@@ -97,14 +100,17 @@ export function Files({ client, project, lens, onLens, path, seat, onSeat }: {
 
   const reload = () => {
     if (!path) return;
-    readFile(project, path, seat ?? undefined).then(setBody).catch(e => setError(e instanceof Error ? e.message : String(e)));
+    readFile(project, path, seat ?? undefined)
+      .then(b => { setBody(b); setDraft(b.text); })
+      .catch(e => setError(e instanceof Error ? e.message : String(e)));
     readFileAtHead(project, path, seat ?? undefined).then(setHead).catch(() => setHead(""));
   };
 
   useEffect(() => {
-    if (!path) { setBody(null); setHead(null); setError(null); return; }
-    setBody(null); setHead(null); setError(null); setEditing(false); setSaved(null);
+    if (!path) { setBody(null); setHead(null); setError(null); setDraft(""); setSaved(false); return; }
+    setBody(null); setHead(null); setError(null); setDraft(""); setSaved(false);
     setConflict(false);
+    setView("code");
     statRef.current = null;
     reload();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -141,15 +147,16 @@ export function Files({ client, project, lens, onLens, path, seat, onSeat }: {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [project, path, seat]);
 
-  const changed = head !== null && body !== null && head !== body.text;
+  // The Changes view compares HEAD against the LIVE draft — the same document the code view
+  // edits — so it stays truthful through every keystroke, not just at save time.
+  const changedFromHead = head !== null && head !== draft;
 
   const save = () => {
-    if (!path) return;
+    if (!path || busy) return;
     setSaving(true); setError(null);
-    writeFile(project, path, seat ?? undefined, draft)
-      .then(sha => {
-        setSaved(sha || "unchanged");
-        setEditing(false);
+    writePlain(project, path, seat ?? undefined, draft)
+      .then(() => {
+        setSaved(true);
         setConflict(false);
         // Our own save moved the disk; drop the baseline so the next poll re-baselines instead of
         // reading our own write as an external change.
@@ -160,6 +167,7 @@ export function Files({ client, project, lens, onLens, path, seat, onSeat }: {
       .finally(() => setSaving(false));
   };
 
+  const dirty = body !== null && draft !== body.text;
   const sub = path
     ? `${seat ? `seat/${seat}` : "project"} · ${path}${body ? ` · ${body.bytes.toLocaleString()} bytes` : ""}`
     : "pick a file in the sidebar";
@@ -199,44 +207,14 @@ export function Files({ client, project, lens, onLens, path, seat, onSeat }: {
           ))}
 
           <div className="ml-auto flex items-center gap-2">
-            {path && body && !editing && (
-              <button
-                type="button"
-                onClick={() => { setDraft(body.text); setEditing(true); setMode("content"); }}
-                disabled={busy}
-                title={busy ? `${seat} is writing here right now` : "edit this file"}
-                className="rounded-[9px] px-3 py-[7px] text-[12.5px] font-medium text-tr-muted hover:text-tr-text disabled:opacity-40"
-              >
-                edit
-              </button>
-            )}
-            {editing && (
-              <>
-                <button
-                  type="button"
-                  onClick={save}
-                  disabled={saving || draft === body?.text}
-                  className="rounded-[8px] bg-tr-ok px-3 py-1.5 text-[12px] font-semibold text-[#07130f] disabled:opacity-50"
-                >
-                  {saving ? "Saving…" : "Save"}
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setEditing(false)}
-                  className="rounded-[9px] px-2.5 py-[7px] text-[12.5px] text-tr-muted hover:text-tr-text"
-                >
-                  cancel
-                </button>
-              </>
-            )}
-            {path && changed && !editing && (
+            {path && body && changedFromHead && (
               <div className="flex items-center gap-1 rounded-[9px] bg-tr-panel/60 p-[3px]">
-                {(["content", "diff"] as const).map(m => (
+                {(["code", "changes"] as const).map(m => (
                   <button
                     key={m}
                     type="button"
-                    onClick={() => setMode(m)}
-                    data-on={mode === m}
+                    onClick={() => setView(m)}
+                    data-on={view === m}
                     className="rounded-[7px] px-2.5 py-[5px] text-[11.5px] font-medium text-tr-muted data-[on=true]:bg-tr-panel data-[on=true]:text-tr-text data-[on=true]:shadow-sm"
                   >
                     {m}
@@ -244,13 +222,22 @@ export function Files({ client, project, lens, onLens, path, seat, onSeat }: {
                 ))}
               </div>
             )}
+            <button
+              type="button"
+              onClick={save}
+              disabled={saving || busy || !path || !dirty}
+              title={busy && seat ? `${seat} is writing here right now` : "save this file"}
+              className="rounded-[8px] bg-tr-ok px-3 py-1.5 text-[12px] font-semibold text-[#07130f] disabled:opacity-50"
+            >
+              {saving ? "Saving…" : "Save"}
+            </button>
           </div>
         </div>
 
         {busy && (
           <div className="tr-card px-3.5 py-2 text-[12px] text-tr-warn">
-            {seat} is working in this worktree right now, so this file cannot be edited. Review it
-            once the seat lands.
+            {seat} is working in this worktree right now, so saving is refused. Review it once the
+            seat lands.
           </div>
         )}
         {conflict && (
@@ -259,7 +246,7 @@ export function Files({ client, project, lens, onLens, path, seat, onSeat }: {
             <div className="ml-auto flex items-center gap-2">
               <button
                 type="button"
-                onClick={() => { setEditing(false); setConflict(false); statRef.current = null; reload(); }}
+                onClick={() => { setConflict(false); statRef.current = null; reload(); }}
                 className="rounded-[8px] bg-tr-panel px-3 py-1.5 text-[12px] font-semibold text-tr-text"
               >
                 Reload from disk
@@ -274,34 +261,31 @@ export function Files({ client, project, lens, onLens, path, seat, onSeat }: {
             </div>
           </div>
         )}
-        {editing && (
-          <div className="px-1 text-[11.5px] text-tr-muted">
-            Saving commits this file as you, so your change stays yours and not {seat ?? "the project"}&rsquo;s.
-          </div>
-        )}
-        {saved && !editing && (
-          <div className="px-1 text-[11.5px] text-tr-ok">
-            {saved === "unchanged" ? "No change to save." : `Committed as you · ${saved}`}
-          </div>
+        {saved && !dirty && (
+          <div className="px-1 text-[11.5px] text-tr-ok">Saved.</div>
         )}
         {error && <div className="tr-mono px-1 text-[12px] text-tr-danger">{error}</div>}
 
         <div className="min-h-0 flex-1 overflow-hidden rounded-xl border border-tr-edge bg-[#101013] p-1.5">
-          {!path ? (
+          {!path || !body ? (
             <div className="flex h-full items-center justify-center">
               <div className="tr-card-ghost max-w-[440px] px-6 py-5 text-center text-[12.5px] leading-relaxed">
-                Pick a file in the Files column to read it. Switch the source above to see the same
-                path as a seat has it, rather than as the project checkout has it.
+                {path
+                  ? "reading…"
+                  : "Pick a file in the Files column to edit it. Switch the source above to work in a seat's worktree rather than the project checkout."}
               </div>
             </div>
-          ) : editing ? (
-            <CodeView value={draft} path={path} editable onChange={setDraft} onSave={save} />
-          ) : mode === "diff" && changed && head !== null && body ? (
-            <DiffView base={head} head={body.text} path={path} />
-          ) : body ? (
-            <CodeView value={body.text} path={path} editable={false} />
+          ) : view === "changes" && head !== null && changedFromHead ? (
+            <ChangesView
+              base={head}
+              value={draft}
+              path={path}
+              editable={!busy}
+              onChange={setDraft}
+              onSave={save}
+            />
           ) : (
-            <div className="p-3 text-[12px] text-tr-muted">reading…</div>
+            <CodeView value={draft} path={path} editable onChange={setDraft} onSave={save} />
           )}
         </div>
         {body?.truncated && (

@@ -3,7 +3,7 @@
 // as collapsible sections with counts and bulk actions — VS Code's source-control shape — plus
 // push and the recent log, all against the SELECTED seat's worktree through the git_* commands in
 // src-tauri. Every mutation is refused seat-side while the seat is working (the same guard
-// write_file applies) — the refusal comes back verbatim and lands in the status line, never a
+// file_write_plain applies) — the refusal comes back verbatim and lands in the status line, never a
 // dialog. There is deliberately NO discard here: deleting a seat's uncommitted work is not a
 // review action.
 import { useCallback, useEffect, useState } from "react";
