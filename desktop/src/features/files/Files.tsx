@@ -16,6 +16,7 @@ import { fileStat, readFile, readFileAtHead, seatState, writeFile, type FileBody
 import { CodeView } from "./CodeView";
 import { DiffView } from "./DiffView";
 import { decideReload, type FileStat } from "./liveReload";
+import { listen } from "@tauri-apps/api/event";
 
 type Mode = "content" | "diff";
 
@@ -89,12 +90,16 @@ export function Files({ client, project, lens, onLens, path, seat, onSeat }: {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [project, path, seat]);
 
-  // The open file follows the disk. Every tick we stat it; a clean editor reloads silently, an
-  // editor with unsaved work gets a conflict bar instead of having its edits clobbered.
+  // The open file follows the disk via fs watch events instead of polling.
+  // decideReload (7 legs, UNTOUCHED) decides reload vs conflict vs none.
   useEffect(() => {
     if (!path) return;
     let alive = true;
-    const poll = () => {
+
+    const unlisten = listen<{ project: string; paths: string[] }>("file-changed", ev => {
+      if (!alive || ev.payload.project !== project) return;
+      const changed = ev.payload.paths;
+      if (!changed.includes(path)) return;
       fileStat(project, path, seat ?? undefined)
         .then(st => {
           if (!alive) return;
@@ -110,10 +115,9 @@ export function Files({ client, project, lens, onLens, path, seat, onSeat }: {
           }
         })
         .catch(() => {});
-    };
-    poll();
-    const iv = setInterval(poll, 4_000);
-    return () => { alive = false; clearInterval(iv); };
+    });
+
+    return () => { alive = false; unlisten.then(u => u()).catch(() => {}); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [project, path, seat]);
 

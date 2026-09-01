@@ -9,6 +9,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { ChevronDown, ChevronRight, File as FileIcon, Folder, Plus, Trash2, Pencil } from "lucide-react";
 import { projectFiles, createFile, deleteFile, renameFile, safePath, statusColor, statusLabel, type FileEntry } from "./fileApi";
+import { listen } from "@tauri-apps/api/event";
 
 const POLL_MS = 10_000;
 
@@ -179,9 +180,13 @@ export function FileTree({ project, seat, onOpen }: { project: string; seat: str
   useEffect(() => {
     setRoots(null);
     refresh();
+    const unlisten = listen<{ project: string; paths: string[] }>("file-changed", ev => {
+      if (ev.payload.project !== project) return;
+      refresh();
+    });
     const iv = setInterval(refresh, POLL_MS);
-    return () => clearInterval(iv);
-  }, [refresh]);
+    return () => { clearInterval(iv); unlisten.then(u => u()).catch(() => {}); };
+  }, [refresh, project]);
 
   if (error) {
     return <div className="px-3 py-1.5 text-[11.5px] leading-relaxed text-tr-muted">{error}</div>;
