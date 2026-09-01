@@ -30,8 +30,13 @@ export function externalMutationOnLoad(args: {
   diskText: string;
 }): DiskVerdict {
   if (args.draft === null) return null;
+  // A draft with NO recorded base signature cannot be evidence of anything: it predates the
+  // first completed load (the 2026-09-01 regression — a tab switch stashed the still-empty
+  // draft before readFile resolved, and this function then called the file "moved", showing an
+  // empty editor under a false conflict bar). No base, no verdict — the disk text wins.
+  if (args.baseSignature === null) return null;
   if (args.draft === args.diskText) return null;
-  if (args.baseSignature !== null && diskSignature(args.diskText) === args.baseSignature) {
+  if (diskSignature(args.diskText) === args.baseSignature) {
     return null;
   }
   return "moved";

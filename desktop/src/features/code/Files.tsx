@@ -76,6 +76,9 @@ export function Files({ client, project, lens, onLens, path, seat, onSeat }: {
   const draftsRef = useRef(new Map<string, string>());
   const diskRef = useRef(new Map<string, string>());
   const sigRef = useRef(new Map<string, string>());
+  // Which tab's document has actually finished loading — the stash guard reads it, because a
+  // draft may only be kept for a tab whose content ever existed on screen.
+  const loadedKeyRef = useRef<string | null>(null);
   // The editor is always live: unsaved work is simply "the draft differs from the disk".
   dirtyRef.current = body !== null && draft !== body.text;
 
@@ -185,15 +188,22 @@ export function Files({ client, project, lens, onLens, path, seat, onSeat }: {
           sigRef.current.set(key, diskSignature(b.text));
           setTabs(ts => markDirty(ts, key, text !== b.text));
         }
+        loadedKeyRef.current = key;
       })
       .catch(e => setError(e instanceof Error ? e.message : String(e)));
     readFileAtHead(project, tab.path, tabSeat).then(setHead).catch(() => setHead(""));
   };
 
   // Open (or activate) a path, preview semantics live in codeTabs.openInTabs. Every activation
-  // passes through here so the outgoing tab's draft is stashed before the swap.
+  // passes through here so the outgoing tab's draft is stashed before the swap — but ONLY a
+  // draft whose document actually finished loading. Stashing before readFile resolved recorded
+  // the initial "" as the tab's kept work (the 2026-09-01 empty-editor regression); a draft
+  // without a completed load is not a draft, it is a loading screen.
+  const stashDraft = () => {
+    if (activeKey && loadedKeyRef.current === activeKey) draftsRef.current.set(activeKey, draft);
+  };
   const openPath = (scope: string, p: string, view: ViewMode) => {
-    draftsRef.current.set(activeKey ?? "", draft);
+    stashDraft();
     const { tabs: next, activeKey: nextKey } = openInTabs(tabs, activeKey, scope, p, view);
     setTabs(next);
     setActiveKey(nextKey);
@@ -201,7 +211,7 @@ export function Files({ client, project, lens, onLens, path, seat, onSeat }: {
 
   const activateTab = (key: string) => {
     if (key === activeKey) return;
-    draftsRef.current.set(activeKey ?? "", draft);
+    stashDraft();
     setActiveKey(key);
   };
 
@@ -214,7 +224,7 @@ export function Files({ client, project, lens, onLens, path, seat, onSeat }: {
 
   // Load the active tab's documents. body/head reset per tab; the draft survives via draftsRef.
   useEffect(() => {
-    if (!activeTab) { setBody(null); setHead(null); setError(null); setDraft(""); setSaved(false); return; }
+    if (!activeTab) { setBody(null); setHead(null); setError(null); setDraft(""); setSaved(false); loadedKeyRef.current = null; return; }
     setBody(null); setHead(null); setError(null); setSaved(false);
     setDraft(draftsRef.current.get(activeTab.key) ?? "");
     statRef.current = null;
