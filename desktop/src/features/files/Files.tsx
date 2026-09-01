@@ -14,19 +14,26 @@
 // 3. Saving is a PLAIN file write — no staging, no commit (file_write_plain). Dirty work stays
 //    visible in the Changes view until an explicit stage/commit; the authorship record is an
 //    honest act, not a keystroke's side effect.
+//
+// 4. Open files are TABS (#5813), the model in codeTabs.ts: identity is scope+path, a plain open
+//    is a PREVIEW the next open replaces, a pin makes it permanent, and the dirty dot follows the
+//    draft — per Orca's split-open.ts:26-29.
 import { useEffect, useMemo, useRef, useState } from "react";
+import { X, Pin } from "lucide-react";
 import type { HubClient, Peer } from "../../shared/api/client";
 import { ProjectHeader, type Lens } from "../project/ProjectHeader";
 import { fileStat, readFile, readFileAtHead, seatState, writePlain, type FileBody } from "./fileApi";
 import { CodeView } from "./CodeView";
 import { ChangesView } from "./ChangesView";
 import { decideReload, type FileStat } from "./liveReload";
+import { closeTab, markDirty, openInTabs, togglePin, type CodeTab } from "./codeTabs";
 import { seatDiff } from "../review/seatDiff";
 import { listen } from "@tauri-apps/api/event";
 
 type ViewMode = "code" | "changes";
 
 const seatName = (session: string) => session.split(":")[0];
+const baseName = (p: string) => p.split("/").pop() ?? p;
 
 export function Files({ client, project, lens, onLens, path, seat, onSeat }: {
   client: HubClient;
@@ -38,20 +45,30 @@ export function Files({ client, project, lens, onLens, path, seat, onSeat }: {
   onSeat: (s: string | null) => void;
 }) {
   const [peers, setPeers] = useState<Peer[]>([]);
-  const [view, setView] = useState<ViewMode>("code");
+  const [tabs, setTabs] = useState<CodeTab[]>([]);
+  const [activeKey, setActiveKey] = useState<string | null>(null);
   const [body, setBody] = useState<FileBody | null>(null);
   const [head, setHead] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [draft, setDraft] = useState("");
+  const [draft, setDraftState] = useState("");
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [busy, setBusy] = useState(false);
   const [conflict, setConflict] = useState(false);
 
+  const activeTab = tabs.find(t => t.key === activeKey) ?? null;
+  const activePath = activeTab?.path ?? null;
+  const activeScope = activeTab?.scope ?? "project";
+  const activeView = activeTab?.view ?? "code";
+
   // The disk stat we last acted on, and whether the editor holds unsaved work. Both live in refs
   // so the poll reads the CURRENT values without tearing the interval down every render.
   const statRef = useRef<FileStat | null>(null);
   const dirtyRef = useRef(false);
+  // Per-tab drafts and disk text, kept OUT of state: a keystroke updates one map entry and the
+  // active tab's dot, and a background tab keeps its unsaved work while it is not on screen.
+  const draftsRef = useRef(new Map<string, string>());
+  const diskRef = useRef(new Map<string, string>());
   // The editor is always live: unsaved work is simply "the draft differs from the disk".
   dirtyRef.current = body !== null && draft !== body.text;
 
@@ -98,42 +115,79 @@ export function Files({ client, project, lens, onLens, path, seat, onSeat }: {
     return () => { alive = false; clearInterval(iv); };
   }, [seat]);
 
-  const reload = () => {
-    if (!path) return;
-    readFile(project, path, seat ?? undefined)
-      .then(b => { setBody(b); setDraft(b.text); })
+  const reload = (key: string) => {
+    const tab = tabs.find(t => t.key === key);
+    if (!tab) return;
+    const tabSeat = tab.scope === "project" ? undefined : tab.scope;
+    readFile(project, tab.path, tabSeat)
+      .then(b => {
+        setBody(b);
+        diskRef.current.set(key, b.text);
+        // The draft survives a tab switch (stashed in draftsRef); a fresh open has none, so the
+        // disk text IS the draft until the first keystroke.
+        const kept = draftsRef.current.get(key);
+        const text = kept ?? b.text;
+        setDraft(text);
+        draftsRef.current.set(key, text);
+        setTabs(ts => markDirty(ts, key, text !== b.text));
+      })
       .catch(e => setError(e instanceof Error ? e.message : String(e)));
-    readFileAtHead(project, path, seat ?? undefined).then(setHead).catch(() => setHead(""));
+    readFileAtHead(project, tab.path, tabSeat).then(setHead).catch(() => setHead(""));
   };
 
+  // Open (or activate) a path, preview semantics live in codeTabs.openInTabs. Every activation
+  // passes through here so the outgoing tab's draft is stashed before the swap.
+  const openPath = (scope: string, p: string, view: ViewMode) => {
+    draftsRef.current.set(activeKey ?? "", draft);
+    const { tabs: next, activeKey: nextKey } = openInTabs(tabs, activeKey, scope, p, view);
+    setTabs(next);
+    setActiveKey(nextKey);
+  };
+
+  const activateTab = (key: string) => {
+    if (key === activeKey) return;
+    draftsRef.current.set(activeKey ?? "", draft);
+    setActiveKey(key);
+  };
+
+  // The Files column (AppShell) opens paths from the tree: a preview open under this scope.
   useEffect(() => {
-    if (!path) { setBody(null); setHead(null); setError(null); setDraft(""); setSaved(false); return; }
-    setBody(null); setHead(null); setError(null); setDraft(""); setSaved(false);
-    setConflict(false);
-    setView("code");
-    statRef.current = null;
-    reload();
+    if (!path) return;
+    openPath(seat ?? "project", path, "code");
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [project, path, seat]);
+  }, [path, seat]);
+
+  // Load the active tab's documents. body/head reset per tab; the draft survives via draftsRef.
+  useEffect(() => {
+    if (!activeTab) { setBody(null); setHead(null); setError(null); setDraft(""); setSaved(false); return; }
+    setBody(null); setHead(null); setError(null); setSaved(false);
+    setConflict(false);
+    setDraft(draftsRef.current.get(activeTab.key) ?? "");
+    statRef.current = null;
+    reload(activeTab.key);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [project, activeTab?.key]);
 
   // The open file follows the disk via fs watch events instead of polling.
   // decideReload (7 legs, UNTOUCHED) decides reload vs conflict vs none.
   useEffect(() => {
-    if (!path) return;
+    if (!activeTab) return;
     let alive = true;
+    const tabPath = activeTab.path;
+    const tabScope = activeTab.scope;
 
     const unlisten = listen<{ project: string; paths: string[] }>("file-changed", ev => {
       if (!alive || ev.payload.project !== project) return;
       const changed = ev.payload.paths;
-      if (!changed.includes(path)) return;
-      fileStat(project, path, seat ?? undefined)
+      if (!changed.includes(tabPath)) return;
+      fileStat(project, tabPath, tabScope === "project" ? undefined : tabScope)
         .then(st => {
           if (!alive) return;
           const decision = decideReload({ dirty: dirtyRef.current, lastStat: statRef.current, newStat: st });
           if (decision === "reload") {
             statRef.current = st;
             setConflict(false);
-            reload();
+            reload(activeTab.key);
           } else if (decision === "conflict") {
             setConflict(true);
           } else if (statRef.current === null) {
@@ -145,32 +199,44 @@ export function Files({ client, project, lens, onLens, path, seat, onSeat }: {
 
     return () => { alive = false; unlisten.then(u => u()).catch(() => {}); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [project, path, seat]);
+  }, [project, activeTab?.key]);
+
+  const setDraft = (v: string) => {
+    setDraftState(v);
+    if (activeKey) {
+      draftsRef.current.set(activeKey, v);
+      setTabs(ts => markDirty(ts, activeKey, v !== (body?.text ?? "")));
+    }
+  };
 
   // The Changes view compares HEAD against the LIVE draft — the same document the code view
   // edits — so it stays truthful through every keystroke, not just at save time.
   const changedFromHead = head !== null && head !== draft;
 
   const save = () => {
-    if (!path || busy) return;
+    if (!activeTab || busy) return;
     setSaving(true); setError(null);
-    writePlain(project, path, seat ?? undefined, draft)
+    const key = activeTab.key;
+    const tabSeat = activeTab.scope === "project" ? undefined : activeTab.scope;
+    writePlain(project, activeTab.path, tabSeat, draft)
       .then(() => {
         setSaved(true);
         setConflict(false);
         // Our own save moved the disk; drop the baseline so the next poll re-baselines instead of
         // reading our own write as an external change.
         statRef.current = null;
-        reload();
+        setTabs(ts => markDirty(ts, key, false));
+        reload(key);
       })
       .catch(e => setError(e instanceof Error ? e.message : String(e)))
       .finally(() => setSaving(false));
   };
 
   const dirty = body !== null && draft !== body.text;
-  const sub = path
-    ? `${seat ? `seat/${seat}` : "project"} · ${path}${body ? ` · ${body.bytes.toLocaleString()} bytes` : ""}`
+  const sub = activePath
+    ? `${activeScope === "project" ? "project" : `seat/${activeScope}`} · ${activePath}${body ? ` · ${body.bytes.toLocaleString()} bytes` : ""}`
     : "pick a file in the sidebar";
+  const visibleTabs = tabs.filter(t => t.scope === (seat ?? "project"));
 
   return (
     <div className="flex h-full min-h-0 flex-col">
@@ -207,14 +273,14 @@ export function Files({ client, project, lens, onLens, path, seat, onSeat }: {
           ))}
 
           <div className="ml-auto flex items-center gap-2">
-            {path && body && changedFromHead && (
+            {activePath && body && changedFromHead && (
               <div className="flex items-center gap-1 rounded-[9px] bg-tr-panel/60 p-[3px]">
                 {(["code", "changes"] as const).map(m => (
                   <button
                     key={m}
                     type="button"
-                    onClick={() => setView(m)}
-                    data-on={view === m}
+                    onClick={() => setTabs(ts => ts.map(t => (t.key === activeKey ? { ...t, view: m } : t)))}
+                    data-on={activeView === m}
                     className="rounded-[7px] px-2.5 py-[5px] text-[11.5px] font-medium text-tr-muted data-[on=true]:bg-tr-panel data-[on=true]:text-tr-text data-[on=true]:shadow-sm"
                   >
                     {m}
@@ -225,7 +291,7 @@ export function Files({ client, project, lens, onLens, path, seat, onSeat }: {
             <button
               type="button"
               onClick={save}
-              disabled={saving || busy || !path || !dirty}
+              disabled={saving || busy || !activePath || !dirty}
               title={busy && seat ? `${seat} is writing here right now` : "save this file"}
               className="rounded-[8px] bg-tr-ok px-3 py-1.5 text-[12px] font-semibold text-[#07130f] disabled:opacity-50"
             >
@@ -233,6 +299,50 @@ export function Files({ client, project, lens, onLens, path, seat, onSeat }: {
             </button>
           </div>
         </div>
+
+        {/* The tab strip (#5813): one set per source, dirty dot follows the draft, pin makes a
+            tab permanent, preview dies to the next open. */}
+        {visibleTabs.length > 0 && (
+          <div className="flex min-h-0 items-center gap-0.5 overflow-x-auto">
+            {visibleTabs.map(t => (
+              <div
+                key={t.key}
+                onClick={() => activateTab(t.key)}
+                onDoubleClick={() => setTabs(ts => togglePin(ts, t.key))}
+                data-on={t.key === activeKey}
+                title={`${t.scope}:${t.path}${t.pinned ? " · pinned" : ""}`}
+                className="group flex max-w-[220px] shrink-0 cursor-pointer items-center gap-1.5 rounded-t-[9px] border-b-2 px-2.5 py-[6px] text-[12px] text-tr-muted data-[on=true]:border-tr-doing data-[on=true]:bg-tr-panel/60 data-[on=true]:text-tr-text"
+              >
+                <span className={`h-[6px] w-[6px] shrink-0 rounded-full ${t.dirty ? "bg-tr-warn" : "bg-transparent"}`}
+                      data-testid={`dirty-${t.key}`} />
+                <span className="tr-mono min-w-0 flex-1 truncate">{baseName(t.path)}</span>
+                <button
+                  type="button"
+                  onClick={e => { e.stopPropagation(); setTabs(ts => togglePin(ts, t.key)); }}
+                  title={t.pinned ? "unpin (becomes the preview again)" : "pin this tab"}
+                  className={`shrink-0 rounded p-0.5 hover:text-tr-text ${t.pinned ? "text-tr-doing opacity-100" : "opacity-0 group-hover:opacity-60"}`}
+                >
+                  <Pin size={11} strokeWidth={2} />
+                </button>
+                <button
+                  type="button"
+                  onClick={e => {
+                    e.stopPropagation();
+                    const { tabs: next, activeKey: nextKey } = closeTab(tabs, activeKey, t.key);
+                    setTabs(next);
+                    setActiveKey(nextKey);
+                    draftsRef.current.delete(t.key);
+                    diskRef.current.delete(t.key);
+                  }}
+                  title="close tab"
+                  className="shrink-0 rounded p-0.5 opacity-0 hover:text-tr-text group-hover:opacity-60"
+                >
+                  <X size={11} strokeWidth={2} />
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
 
         {busy && (
           <div className="tr-card px-3.5 py-2 text-[12px] text-tr-warn">
@@ -246,7 +356,7 @@ export function Files({ client, project, lens, onLens, path, seat, onSeat }: {
             <div className="ml-auto flex items-center gap-2">
               <button
                 type="button"
-                onClick={() => { setConflict(false); statRef.current = null; reload(); }}
+                onClick={() => { setConflict(false); statRef.current = null; if (activeTab) reload(activeTab.key); }}
                 className="rounded-[8px] bg-tr-panel px-3 py-1.5 text-[12px] font-semibold text-tr-text"
               >
                 Reload from disk
@@ -267,25 +377,25 @@ export function Files({ client, project, lens, onLens, path, seat, onSeat }: {
         {error && <div className="tr-mono px-1 text-[12px] text-tr-danger">{error}</div>}
 
         <div className="min-h-0 flex-1 overflow-hidden rounded-xl border border-tr-edge bg-[#101013] p-1.5">
-          {!path || !body ? (
+          {!activePath || !body ? (
             <div className="flex h-full items-center justify-center">
               <div className="tr-card-ghost max-w-[440px] px-6 py-5 text-center text-[12.5px] leading-relaxed">
-                {path
+                {activePath
                   ? "reading…"
                   : "Pick a file in the Files column to edit it. Switch the source above to work in a seat's worktree rather than the project checkout."}
               </div>
             </div>
-          ) : view === "changes" && head !== null && changedFromHead ? (
+          ) : activeView === "changes" && head !== null && changedFromHead ? (
             <ChangesView
               base={head}
               value={draft}
-              path={path}
+              path={activePath}
               editable={!busy}
               onChange={setDraft}
               onSave={save}
             />
           ) : (
-            <CodeView value={draft} path={path} editable onChange={setDraft} onSave={save} />
+            <CodeView value={draft} path={activePath} editable onChange={setDraft} onSave={save} />
           )}
         </div>
         {body?.truncated && (
