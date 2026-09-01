@@ -154,10 +154,13 @@ export function Workspace({ client, project, lens, onLens }: {
     }));
     if (!orch) return rows;
     // Leads the row: it is the session the person actually drives, not a worker to supervise.
+    // The BRAND reads from the host session: brandFor's host-name rule resolves it to Claude
+    // (#5890 residual) — herdr names the orchestrator's pane "orchestrator", which is not a
+    // brand and monogrammed as "or". Reuse the host row; never hardcode a brand in SeatTab.
     return [{
       key: "__orchestrator__",
       label: "orchestrator",
-      agent: orch.agent,
+      agent: host?.session ?? orch.agent,
       session: host?.session ?? `${project} orchestrator`,
       online: host ? !!host.online : true,
       lastSeen: host?.lastSeen,
