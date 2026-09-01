@@ -613,13 +613,16 @@ usage: trantor open [<project>]
 EOF
 }
 open_orchestrator() {
-  local a
+  local a PROJ_ARG=""
   for a in "$@"; do case "$a" in
     --help|-h) usage_open; return 0 ;;
     --*) echo "trantor open: unknown flag '$a'"; usage_open; return 1 ;;
-    *) PROJ="$a" ;;
+    *) PROJ="$a"; PROJ_ARG="$a" ;;
   esac; done
-  DIR="$(_orch_resolve_dir "$DIR" "$PROJ")" || exit 1
+  # only an EXPLICIT name is resolved to its checkout; a project declared by RELAY_PROJECT from
+  # inside a differently named dir (the test harness, RELAY_PROJECT=<name> sessions) means "this
+  # cwd IS the project" — refusing it made `trantor open` impossible for exactly those sessions
+  DIR="$(_orch_resolve_dir "$DIR" "${PROJ_ARG:-}")" || exit 1
   command -v herdr >/dev/null 2>&1 || { echo "trantor open needs herdr (the pane host) — install: curl -fsSL https://herdr.dev/install.sh | sh"; exit 1; }
   local wsid="" orch="" live_ids="" live_names="" pair="" line fresh=0
   local sid; sid="$(_orch_sid "$PROJ")" || { echo "trantor open: could not mint a session id (uuidgen missing?)" >&2; exit 1; }
