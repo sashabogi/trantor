@@ -30,4 +30,11 @@ export default defineConfig(async () => ({
       ignored: ["**/src-tauri/**"],
     },
   },
+
+  // The language-server client (monaco-languageclient + @codingame/monaco-vscode-api) loads its
+  // worker with code-splitting, which the default `iife` worker format cannot emit — `es` is the
+  // worker format the vscode-api ships against. Local bundling only, nothing from a CDN (#5857).
+  worker: {
+    format: "es",
+  },
 }));
