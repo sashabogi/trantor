@@ -39,7 +39,9 @@ export function GitPanel({ project, seat, onChanged }: {
     return () => clearInterval(iv);
   }, [pull]);
 
-  const act = async (run: () => Promise<unknown>, okText: string) => {
+  // () => Promise<void>: callers' richer promise results are deliberately discarded here — the
+  // panel re-pulls the snapshot after every action, so the pull is the truth, not the return.
+  const act = async (run: () => Promise<void>, okText: string) => {
     if (busy) return;
     setBusy(true);
     setStatus(null);
@@ -147,9 +149,8 @@ export function GitPanel({ project, seat, onChanged }: {
                   const text = msg.trim();
                   if (!text) return;
                   void act(async () => {
-                    const sha = await gitCommit(project, seat, text);
+                    await gitCommit(project, seat, text);
                     setMsg("");
-                    return sha;
                   }, "committed");
                 }}
                 disabled={commitDisabled}
@@ -159,7 +160,7 @@ export function GitPanel({ project, seat, onChanged }: {
               </button>
             </div>
             <button
-              onClick={() => { void act(() => gitPush(project, seat), "pushed"); }}
+              onClick={() => { void act(async () => { await gitPush(project, seat); }, "pushed"); }}
               disabled={pushDisabled}
               title={!snap?.branch ? "detached HEAD" : snap.ahead === 0 ? "nothing to push" : `push ${snap.branch} to origin`}
               className="rounded-lg border border-tr-edge px-2.5 py-1.5 text-[11.5px] font-medium text-tr-text disabled:opacity-40"

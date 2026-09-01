@@ -35,7 +35,7 @@ function agoS(ts: number) {
 }
 
 function money(n: number | null | undefined) {
-  return typeof n === "number" && Number.isFinite(n) ? `$${n.toFixed(n < 1 ? 3 : 2)}` : "";
+  return n != null && Number.isFinite(n) ? `$${n.toFixed(n < 1 ? 3 : 2)}` : "";
 }
 
 function eventText(e: HubEvent) {

@@ -45,11 +45,12 @@ export async function gitPush(project: string, agent: string): Promise<string> {
  * means something is staged; Y !== " " means the worktree differs from the index. A path can be
  * in BOTH lists (staged, then edited again) — the panel shows it in each rather than picking one,
  * because collapsing the two is how a staged change gets committed stale. */
-export function bucketStatus(entries: GitStatusEntry[]): {
+export type StatusBuckets = {
   staged: GitStatusEntry[];
   unstaged: GitStatusEntry[];
   untracked: string[];
-} {
+};
+export function bucketStatus(entries: GitStatusEntry[]): StatusBuckets {
   const staged: GitStatusEntry[] = [];
   const unstaged: GitStatusEntry[] = [];
   const untracked: string[] = [];
