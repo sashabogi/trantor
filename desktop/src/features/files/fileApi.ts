@@ -71,6 +71,28 @@ export async function readFileAtHead(project: string, path: string, seat?: strin
   return invoke<string>("read_file_at_head", { project, path, seat: seat ?? null });
 }
 
+/** Create a new file at `path` with `text`. Parent directories are created
+ *  automatically. Returns the commit sha, or "" when unchanged. */
+export async function createFile(project: string, path: string, seat: string | undefined, text: string): Promise<string> {
+  return invoke<string>("create_file", { project, path, seat: seat ?? null, text });
+}
+
+/** Delete the file at `path`. Returns the commit sha, or "" when unchanged. */
+export async function deleteFile(project: string, path: string, seat: string | undefined): Promise<string> {
+  return invoke<string>("delete_file", { project, path, seat: seat ?? null });
+}
+
+/** Rename (move) a file from `oldPath` to `newPath`. Returns the commit sha, or "" when unchanged. */
+export async function renameFile(project: string, oldPath: string, newPath: string, seat: string | undefined): Promise<string> {
+  return invoke<string>("rename_file", { project, oldPath, newPath, seat: seat ?? null });
+}
+
+/** Guard a path so it cannot escape the project root. Returns true when the
+ *  path is safe (relative, no `..` traversal, no absolute path). */
+export function safePath(path: string): boolean {
+  return !path.includes("..") && !path.startsWith("/");
+}
+
 /** Paths matching a query, for the composer's @-reference menu. Bounded in Rust on depth and
  *  count, because this runs on every keystroke. */
 export async function searchFiles(project: string, query: string, seat?: string): Promise<string[]> {
