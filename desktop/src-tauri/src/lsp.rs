@@ -16,6 +16,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use serde::Serialize;
 use tauri::Emitter;
 
 use crate::{source_root, terminal_path};
@@ -101,6 +102,15 @@ fn parse_content_length(header: &[u8]) -> Option<usize> {
 struct Server {
     child: Child,
     stdin: ChildStdin,
+}
+
+/// What `lsp_start` hands back: the id the editor keys every later call by, plus the RESOLVED
+/// scope root — the same path the server's CWD is set to. The TS side builds the file's absolute
+/// URI and the `workspaceFolder` from this, so it never recomputes a path it cannot see.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct LspStarted {
+    id: u64,
+    root: String,
 }
 
 static SERVERS: Mutex<Option<HashMap<u64, Server>>> = Mutex::new(None);
@@ -272,7 +282,7 @@ pub fn lsp_start(
     project: String,
     scope: Option<String>,
     language: String,
-) -> Result<u64, String> {
+) -> Result<LspStarted, String> {
     let root = source_root(&project, scope.as_deref())?;
     let spec = server_spec(&language)?;
     let path = find_binary(spec.bin, spec.install)?;
@@ -281,7 +291,9 @@ pub fn lsp_start(
     let (child, stdin) = spawn_server(app, id, &path, spec.args, &root)?;
     let mut servers = SERVERS.lock().unwrap();
     servers.get_or_insert_with(HashMap::new).insert(id, Server { child, stdin });
-    Ok(id)
+    // Return the ROOT alongside the id: the TS side builds the file's absolute URI and the
+    // workspaceFolder from it, and must not recompute a path it cannot see (TRANTOR_DEV_ROOT).
+    Ok(LspStarted { id, root: root.display().to_string() })
 }
 
 #[tauri::command]

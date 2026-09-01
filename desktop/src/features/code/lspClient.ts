@@ -16,13 +16,23 @@ import {
 import { MonacoLanguageClient } from "monaco-languageclient";
 import { MonacoVscodeApiWrapper } from "monaco-languageclient/vscodeApiWrapper";
 import type { MessageTransports } from "vscode-languageclient/browser.js";
+import * as vscode from "vscode";
 import "./monacoSetup";
 
 // ── transport ────────────────────────────────────────────────────────────────────────────────
 
+/** The `$/progress` notification shape, narrowed to what we read. */
+type ProgressProbe = { method?: string; params?: { value?: { kind?: string } } };
+
+/** rust-analyzer reports its initial indexing as `$/progress` notifications; the first
+ *  `kind: "end"` is the moment "ready" stops being a lie. */
+function isProgressEnd(msg: ProgressProbe): boolean {
+  return msg.method === "$/progress" && msg.params?.value?.kind === "end";
+}
+
 /** reader: `lsp-message:<id>` events → JSON-RPC messages. */
 class TauriMessageReader extends AbstractMessageReader {
-  constructor(private readonly id: number) {
+  constructor(private readonly id: number, private readonly onProgressEnd?: () => void) {
     super();
   }
 
@@ -36,7 +46,9 @@ class TauriMessageReader extends AbstractMessageReader {
     };
     listen<string>(`lsp-message:${this.id}`, ev => {
       if (disposed) return;
-      const msg: Message = JSON.parse(ev.payload);
+      const raw = JSON.parse(ev.payload);
+      if (this.onProgressEnd && isProgressEnd(raw)) this.onProgressEnd();
+      const msg: Message = raw;
       callback(msg);
     }).then(fn => { if (disposed) fn(); else unlistens.push(fn); }).catch(() => {});
     // The server closing stdout is the one honest "no longer ready" signal; the payload is the
@@ -92,12 +104,14 @@ function ensureServices(): Promise<void> {
 }
 
 type ClientKey = string;
-const clients = new Map<ClientKey, { id: number; client: MonacoLanguageClient }>();
+type ClientEntry = { id: number; root: string; client: MonacoLanguageClient };
+const clients = new Map<ClientKey, ClientEntry>();
+const indexed = new Set<ClientKey>();
 
 const listeners = new Set<() => void>();
 const notify = () => { for (const fn of listeners) fn(); };
 
-/** Subscribe to client start/stop — the editor flips quickSuggestions on these edges. */
+/** Subscribe to client start/stop/indexing — the editor flips quickSuggestions on these edges. */
 export function onLspChange(fn: () => void): () => void {
   listeners.add(fn);
   return () => { listeners.delete(fn); };
@@ -111,38 +125,66 @@ export function isLspLive(language: string): boolean {
   return false;
 }
 
+/** Whether a live client for `language` has NOT yet sent its first `$/progress` end — the
+ *  "indexing…" half of the status line. */
+export function isLspIndexing(language: string): boolean {
+  for (const key of clients.keys()) {
+    if (key.endsWith(`\u0000${language}`) && !indexed.has(key)) return true;
+  }
+  return false;
+}
+
 const keyFor = (project: string, scope: string | null, language: string) =>
   `${project}\u0000${scope ?? ""}\u0000${language}`;
 
+/** The resolved scope root plus the id the editor keys later calls by. */
+export type LspStartResult = { id: number; root: string; indexing: boolean };
+
 /** Start (or return) the client for (project, scope, language). One per root+language, so tabs
  *  share it. Throws `not installed: <name>` when the server binary is missing. */
-export async function startLsp(project: string, scope: string | null, language: string): Promise<number> {
+export async function startLsp(
+  project: string,
+  scope: string | null,
+  language: string,
+): Promise<LspStartResult> {
   const key = keyFor(project, scope, language);
   const existing = clients.get(key);
-  if (existing) return existing.id;
+  if (existing) return { id: existing.id, root: existing.root, indexing: !indexed.has(key) };
 
   await ensureServices();
-  const id = await invoke<number>("lsp_start", { project, scope, language });
+  const started = await invoke<{ id: number; root: string }>("lsp_start", { project, scope, language });
+  const reader = new TauriMessageReader(started.id, () => {
+    if (!indexed.has(key)) {
+      indexed.add(key);
+      notify();
+    }
+  });
   const transports: MessageTransports = {
-    reader: new TauriMessageReader(id),
-    writer: new TauriMessageWriter(id),
+    reader,
+    writer: new TauriMessageWriter(started.id),
   };
   const client = new MonacoLanguageClient({
     name: `lsp:${language}`,
     id: key,
-    clientOptions: { documentSelector: [language] },
+    clientOptions: {
+      documentSelector: [language],
+      // rootUri must be the crate root, not null, or rust-analyzer loads no project — the same
+      // root lsp_start chose (and returned), never recomputed here.
+      workspaceFolder: { uri: vscode.Uri.file(started.root), name: project, index: 0 },
+    },
     messageTransports: transports,
   });
   await client.start();
-  clients.set(key, { id, client });
+  clients.set(key, { id: started.id, root: started.root, client });
   notify();
-  return id;
+  return { id: started.id, root: started.root, indexing: !indexed.has(key) };
 }
 
 /** Stop every client and its server — the Files unmount cleanup. */
 export async function stopAllLsp(): Promise<void> {
   const entries = [...clients.entries()];
   clients.clear();
+  indexed.clear();
   for (const [, { id, client }] of entries) {
     await client.stop().catch(() => {});
     await invoke("lsp_stop", { id }).catch(() => {});

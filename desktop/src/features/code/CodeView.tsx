@@ -17,9 +17,12 @@ const fontOptions = {
   lineHeight: 19,
 } as const;
 
-export function CodeView({ value, path, editable, onChange, onSave }: {
+export function CodeView({ value, path, root, editable, onChange, onSave }: {
   value: string;
   path: string;
+  /** The scope root the language server chose — the model's URI is `root/path` so didOpen names
+   *  a real file, not an inmemory:// URI rust-analyzer cannot map into the crate. */
+  root?: string | null;
   editable: boolean;
   onChange?: (v: string) => void;
   /** ⌘S. Every developer tries it within ten seconds of an editor appearing. */
@@ -37,10 +40,13 @@ export function CodeView({ value, path, editable, onChange, onSave }: {
 
   useEffect(() => {
     if (!host.current) return;
-    // No URI on purpose: monaco keys models by URI and throws on a duplicate, and a remount of
-    // the same file (StrictMode, tab flip) would collide. Language is passed explicitly.
     const lang = monacoLanguageFor(path);
-    const model = monaco.editor.createModel(value, lang);
+    // The model URI is the file's absolute path under the server root; monaco keys models by URI,
+    // so reuse an existing model for this URI rather than create a duplicate (createModel throws
+    // on a registered URI). No root → no URI, which is fine for a language with no server.
+    const uri: monaco.Uri | undefined = root ? monaco.Uri.file(`${root}/${path}`) : undefined;
+    const reused = uri ? monaco.editor.getModel(uri) : null;
+    const model = reused ?? monaco.editor.createModel(value, lang, uri);
     const ed = monaco.editor.create(host.current, {
       model,
       theme: "trantor-calm",
@@ -72,14 +78,16 @@ export function CodeView({ value, path, editable, onChange, onSave }: {
     return () => {
       sub.dispose();
       ed.dispose();
-      model.dispose();
+      // Dispose only the model WE created; a reused model belongs to whichever editor made it.
+      if (!reused) model.dispose();
       editorRef.current = null;
       modelRef.current = null;
     };
     // Deliberately NOT keyed on `value`: re-creating on every keystroke is how an editor loses
-    // the cursor. A caller changing the file changes `path`, which is the real identity here.
+    // the cursor. A caller changing the file changes `path` (or the server root lands), which is
+    // the real identity here.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [path, editable]);
+  }, [path, editable, root]);
 
   // The language server starts async, after this editor is already up: when it comes (or goes)
   // live, flip suggestions for THIS instance so the first completion needs no remount.
