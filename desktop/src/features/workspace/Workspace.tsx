@@ -8,6 +8,8 @@ import type { Card, HubClient, HubEvent, Peer } from "../../shared/api/client";
 import { ProjectHeader, type Lens } from "../project/ProjectHeader";
 import { TerminalPane } from "./TerminalPane";
 import { orchestratorOf, type HerdrSeat } from "./herdr";
+import { SeatTab } from "./SeatTab";
+import { BrandGlyph } from "../../shared/Avatar";
 import { PaneBoundary } from "./PaneBoundary";
 import { newestTerminal, projectSessions, takeoverAction, type ProjectSessions } from "../chat/takeover";
 import { TakeoverStrip } from "../chat/TakeoverStrip";
@@ -191,24 +193,20 @@ export function Workspace({ client, project, lens, onLens }: {
               </div>
             )}
             {targets.map(t => (
-              <button
+              <SeatTab
                 key={t.key}
-                // The orchestrator is not in the grid — it is the operator, not a seat to watch.
-                // Selecting it therefore has to leave grid, or the click silently does nothing and
-                // you have to work out that "focus" is the way back.
+                name={t.label}
+                brandName={t.agent}
+                status={t.status}
+                active={selected?.key === t.key}
                 onClick={() => { setSel(t.key); if (t.isOrchestrator) setViewPersisted("focus"); }}
-                data-on={selected?.key === t.key}
-                className="flex items-center gap-2 rounded-[9px] px-3 py-[7px] text-[12.5px] font-medium text-tr-muted data-[on=true]:bg-tr-panel data-[on=true]:text-tr-text data-[on=true]:shadow-sm"
-              >
-                <SeatDot online={t.online} />
-                {t.label}
-                {t.isOrchestrator && <span className="text-[11px] text-tr-muted/70">you</span>}
-              </button>
+                you={t.isOrchestrator}
+              />
             ))}
             {/* no hosted orchestrator pane yet: the host stays a quiet chip at the row's end */}
             {host && !orch && (
               <span className="ml-auto flex items-center gap-2 rounded-[9px] px-3 py-[7px] text-[12px] text-tr-muted">
-                <SeatDot online={!!host.online} />
+                <BrandGlyph name={host.session} size={12} />
                 you
               </span>
             )}
