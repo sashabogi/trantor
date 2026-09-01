@@ -784,7 +784,10 @@ fn is_harness_injection(t: &str) -> bool {
         "<command-name>",
         "[SYSTEM NOTIFICATION",
         "This session is being continued from a previous conversation",
-        "You just joined (your arrival was already announced on the bus).",
+        // The crew boot prompt (bin/crew-runner.mjs kicks every seat off with it). Matched as a
+        // SHORT PREFIX on purpose: transcript stores truncate it at various lengths, and the full
+        // sentence marker let the truncated tail leak into Sessions titles (#5842).
+        "You just joined (your arrival was",
         "NEW BUS MESSAGE for you:",
         "NEW BUS MESSAGES for you:",
     ];

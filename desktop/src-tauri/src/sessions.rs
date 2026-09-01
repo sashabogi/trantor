@@ -112,11 +112,18 @@ fn lines(path: &Path) -> Result<impl Iterator<Item = String>, String> {
     Ok(BufReader::new(file).lines().map_while(Result::ok))
 }
 
-fn row_title(first_user: String, fallback: &str) -> String {
-    if first_user.is_empty() {
-        fallback.to_string()
-    } else {
+/// The title's fallback ladder (#5842): first real user text, else first real assistant text,
+/// else the last real message, else "untitled". The session id is NEVER a title — a uuid row
+/// reads as a broken pane, and the operator said so.
+fn row_title(first_user: String, first_assistant: &str, last_message: &str) -> String {
+    if !first_user.is_empty() {
         first_user
+    } else if !first_assistant.is_empty() {
+        first_assistant.to_string()
+    } else if !last_message.is_empty() {
+        last_message.to_string()
+    } else {
+        "untitled".to_string()
     }
 }
 
@@ -127,6 +134,7 @@ fn decode_claude(path: &Path) -> Result<SessionRecord, String> {
         .unwrap_or_default()
         .to_string();
     let mut first_user = String::new();
+    let mut first_assistant = String::new();
     let mut last_message = String::new();
     let mut message_count = 0;
     let mut model = String::new();
@@ -157,6 +165,9 @@ fn decode_claude(path: &Path) -> Result<SessionRecord, String> {
             if role == "user" && first_user.is_empty() {
                 first_user = text.clone();
             }
+            if role == "assistant" && first_assistant.is_empty() {
+                first_assistant = text.clone();
+            }
             last_message = text;
         }
         if role == "assistant"
@@ -177,7 +188,7 @@ fn decode_claude(path: &Path) -> Result<SessionRecord, String> {
         row: SessionRow {
             id: id.clone(),
             harness: "claude".into(),
-            title: row_title(first_user, &id),
+            title: row_title(first_user, &first_assistant, &last_message),
             last_message,
             message_count,
             model,
@@ -197,6 +208,7 @@ fn decode_codex(path: &Path) -> Result<SessionRecord, String> {
         .to_string();
     let mut id = fallback_id.clone();
     let mut first_user = String::new();
+    let mut first_assistant = String::new();
     let mut last_message = String::new();
     let mut message_count = 0;
     let mut model = String::new();
@@ -248,6 +260,9 @@ fn decode_codex(path: &Path) -> Result<SessionRecord, String> {
                     if role == "user" && first_user.is_empty() {
                         first_user = text.clone();
                     }
+                    if role == "assistant" && first_assistant.is_empty() {
+                        first_assistant = text.clone();
+                    }
                     last_message = text;
                 }
             }
@@ -258,7 +273,7 @@ fn decode_codex(path: &Path) -> Result<SessionRecord, String> {
         row: SessionRow {
             id: id.clone(),
             harness: "codex".into(),
-            title: row_title(first_user, &id),
+            title: row_title(first_user, &first_assistant, &last_message),
             last_message,
             message_count,
             model,
@@ -290,6 +305,7 @@ fn decode_kimi(path: &Path, cwd: String) -> Result<SessionRecord, String> {
         .unwrap_or_default()
         .to_string();
     let mut first_user = String::new();
+    let mut first_assistant = String::new();
     let mut last_message = String::new();
     let mut message_count = 0;
     for line in lines(path)? {
@@ -309,6 +325,9 @@ fn decode_kimi(path: &Path, cwd: String) -> Result<SessionRecord, String> {
             if role == "user" && first_user.is_empty() {
                 first_user = text.clone();
             }
+            if role == "assistant" && first_assistant.is_empty() {
+                first_assistant = text.clone();
+            }
             last_message = text;
         }
     }
@@ -316,7 +335,7 @@ fn decode_kimi(path: &Path, cwd: String) -> Result<SessionRecord, String> {
         row: SessionRow {
             id: id.clone(),
             harness: "kimi".into(),
-            title: row_title(first_user, &id),
+            title: row_title(first_user, &first_assistant, &last_message),
             last_message,
             message_count,
             model: String::new(),
@@ -534,11 +553,18 @@ fn open_code_row(value: &Value) -> Option<SessionRecord> {
         let content = message.get("text").unwrap_or(&Value::Null);
         real_message_text(message, role, content)
     };
-    let first_user = messages.iter().find_map(|message| {
-        (message.get("role").and_then(Value::as_str) == Some("user"))
-            .then(|| display_text(message))
-            .flatten()
-    });
+    let mut first_user = String::new();
+    let mut first_assistant = String::new();
+    for message in messages.iter() {
+        let role = message.get("role").and_then(Value::as_str).unwrap_or_default();
+        if let Some(text) = display_text(message) {
+            if role == "user" && first_user.is_empty() {
+                first_user = text;
+            } else if role == "assistant" && first_assistant.is_empty() {
+                first_assistant = text;
+            }
+        }
+    }
     let last_message = messages
         .iter()
         .rev()
@@ -552,17 +578,25 @@ fn open_code_row(value: &Value) -> Option<SessionRecord> {
                 })
         })
         .unwrap_or_default();
-    let title = first_user
-        .or_else(|| {
-            value
-                .get("first_user")
-                .and_then(Value::as_str)
-                .and_then(|text| {
-                    real_message_text(&Value::Null, "user", &Value::String(text.into()))
-                })
-        })
-        .or_else(|| value.get("title").and_then(Value::as_str).map(one_line))
-        .unwrap_or_else(|| id.clone());
+    // The title ladder (#5842): real user text, then the store's own first-user field (still
+    // injection-filtered — the crew boot prompt pools there), then real assistant text, then the
+    // last real message, then "untitled". The session id is NEVER a title, and OpenCode's own
+    // `title` field is never trusted raw: it is exactly where the boot prompt pooled.
+    let stored_first_user = value
+        .get("first_user")
+        .and_then(Value::as_str)
+        .and_then(|text| real_message_text(&Value::Null, "user", &Value::String(text.into())));
+    let title = if !first_user.is_empty() {
+        first_user
+    } else if let Some(text) = stored_first_user {
+        text
+    } else if !first_assistant.is_empty() {
+        first_assistant
+    } else if !last_message.is_empty() {
+        last_message.clone()
+    } else {
+        "untitled".to_string()
+    };
     Some(SessionRecord {
         row: SessionRow {
             id,
@@ -914,6 +948,35 @@ mod tests {
         assert_eq!(record.row.model, "glm-5.3-flash");
         assert_eq!(record.row.branch, "seat/glm");
         assert_eq!(record.row.message_count, 7);
+    }
+
+    #[test]
+    fn opencode_boot_fixture_skips_the_crew_prompt_for_title_and_preview() {
+        // The crew boot prompt (bin/crew-runner.mjs) pools as a seat's first user row AND as
+        // OpenCode's own derived title; neither may surface (#5842).
+        let raw = fs::read_to_string(fixture("opencode-boot.jsonl")).unwrap();
+        let value: Value = serde_json::from_str(raw.trim()).unwrap();
+        let record = open_code_row(&value).unwrap();
+        assert_eq!(record.row.title, "Make the pane calmer");
+        assert_eq!(record.row.last_message, "Done — the dot is gone.");
+        assert!(!record.row.title.contains("You just joined"));
+        assert!(!record.row.last_message.contains("You just joined"));
+    }
+
+    #[test]
+    fn codex_fixture_without_user_text_falls_back_to_assistant_never_the_id() {
+        let record = decode_codex(&fixture("codex-no-user.jsonl")).unwrap();
+        assert_eq!(record.row.title, "Resumed the session and read the board.");
+        assert_ne!(record.row.title, record.row.id);
+        assert!(!record.row.title.contains("01a05eca"));
+        assert_eq!(record.row.last_message, "Standing by.");
+    }
+
+    #[test]
+    fn codex_fixture_with_no_messages_titles_untitled_never_the_id() {
+        let record = decode_codex(&fixture("codex-silent.jsonl")).unwrap();
+        assert_eq!(record.row.title, "untitled");
+        assert!(!record.row.title.contains("01a05eca"));
     }
 
     #[test]
