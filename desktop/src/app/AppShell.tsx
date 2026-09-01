@@ -340,8 +340,11 @@ export function AppShell() {
       const ask: string[] = [];
       for (const p of found) {
         let baton = "ask";
-        try { baton = (JSON.parse(await invoke<string>("autonomy_get", { project: p })) as { baton?: string }).baton ?? "ask"; }
-        catch { /* unreadable dial = the safe default */ }
+        try {
+          // SAFETY: autonomy_get returns lib/autonomy.mjs's resolved-dials JSON, whose `baton`
+          // is always "ask"|"auto"; any malformed shape throws into the catch, keeping "ask".
+          baton = (JSON.parse(await invoke<string>("autonomy_get", { project: p })) as { baton?: string }).baton ?? "ask";
+        } catch { /* unreadable dial = the safe default */ }
         if (baton === "auto") { if (alive) await wakeProject(p); }
         else ask.push(p);
       }

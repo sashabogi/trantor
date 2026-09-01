@@ -2710,6 +2710,43 @@ async fn takeover_now(project: String) -> Result<String, String> {
     }
 }
 
+/// Pasted-image attach (2026-09-01: the operator pasted a CleanShot screenshot into the chat
+/// twice and NOTHING happened — the textarea silently swallows image DATA; only file paths ever
+/// worked). The webview hands the clipboard image over as base64; this writes it to a real file
+/// under ~/.agent-bus/attachments/ and returns the path, which the composer splices into the
+/// draft exactly like a drop — one attach mechanism (paths), two doors (drop, paste).
+#[tauri::command]
+fn save_pasted_image(data_base64: String, kind: String) -> Result<String, String> {
+    use base64::Engine as _;
+    if data_base64.len() > 40 * 1024 * 1024 {
+        return Err("pasted image is too large (>30MB decoded)".into());
+    }
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(data_base64.trim())
+        .map_err(|e| format!("clipboard image did not decode: {e}"))?;
+    if bytes.is_empty() {
+        return Err("clipboard image was empty".into());
+    }
+    let ext = match kind.as_str() {
+        "image/jpeg" => "jpg",
+        "image/gif" => "gif",
+        "image/webp" => "webp",
+        _ => "png",
+    };
+    let dir = desktop_bus_dir().join("attachments");
+    std::fs::create_dir_all(&dir).map_err(|e| format!("attachments dir: {e}"))?;
+    let name = format!(
+        "pasted-{}.{ext}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis())
+            .unwrap_or(0)
+    );
+    let path = dir.join(name);
+    std::fs::write(&path, &bytes).map_err(|e| format!("write: {e}"))?;
+    Ok(path.to_string_lossy().to_string())
+}
+
 /// #5401 — projects whose orchestrator PANE survived (a tracked orch row) while the
 /// conversation inside did not (no agent registered on that pane): the reboot shape. herdr's
 /// login agent restores panes, not the claude processes in them. The app offers/fires resume
@@ -3336,6 +3373,7 @@ pub fn run() {
             handoff_now,
             takeover_now,
             orch_restorables,
+            save_pasted_image,
             write_file,
             autonomy_get,
             autonomy_set,

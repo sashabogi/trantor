@@ -331,6 +331,32 @@ export function Composer({ project, target, live, liveWhy, model, modelSource, w
   const line = (text: string) =>
     invoke("pane_send", { target, text }).catch(e => setError(String(e)));
 
+  // Paste-an-image (2026-09-01: the operator pasted a CleanShot screenshot twice and NOTHING
+  // happened — a textarea silently swallows image DATA, so "upload" looked broken with no error).
+  // The clipboard image is written to a real file (Rust, ~/.agent-bus/attachments/) and its PATH
+  // splices into the draft at the caret — the same one attach mechanism the drop uses. Plain
+  // text pastes are untouched. Failures surface in the composer's error line, never silently.
+  const onPaste = (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
+    const img = Array.from(e.clipboardData?.items ?? []).find(
+      i => i.kind === "file" && i.type.startsWith("image/"),
+    );
+    const file = img?.getAsFile();
+    if (!file) return;
+    e.preventDefault();
+    void file.arrayBuffer().then(buf => {
+      // chunked, because String.fromCharCode(...multi-MB-array) blows the argument limit
+      const u8 = new Uint8Array(buf);
+      let bin = "";
+      for (let i = 0; i < u8.length; i += 0x8000) bin += String.fromCharCode(...u8.subarray(i, i + 0x8000));
+      return invoke<string>("save_pasted_image", { dataBase64: btoa(bin), kind: file.type }).then(path => {
+        const cur = box.current?.selectionStart ?? null;
+        setDraft(d => insertPaths(d, cur ?? d.length, [path]));
+        setError(null);
+        box.current?.focus();
+      });
+    }).catch(err => setError(`pasted image failed: ${err instanceof Error ? err.message : String(err)}`));
+  };
+
   // Delivery receipts (#5504). Typed-into-a-terminal is not a delivery channel: the CLI's UI can
   // eat or fuse what arrives, so every send is held as PENDING until the transcript echoes it
   // back. While anything is pending, poll the transcript and re-judge; a send the transcript
@@ -452,6 +478,7 @@ export function Composer({ project, target, live, liveWhy, model, modelSource, w
           ref={box}
           value={draft}
           onChange={e => setDraft(e.target.value)}
+          onPaste={onPaste}
           onKeyDown={e => {
             // While the menu is up it owns the arrows and Enter, the way every editor does it.
             if (menu.length) {
