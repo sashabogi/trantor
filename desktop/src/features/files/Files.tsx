@@ -20,14 +20,15 @@
 //    draft — per Orca's split-open.ts:26-29.
 import { useEffect, useMemo, useRef, useState } from "react";
 import { X, Pin } from "lucide-react";
-import type { HubClient, Peer } from "../../shared/api/client";
+import type { Card, HubClient, Peer } from "../../shared/api/client";
 import { ProjectHeader, type Lens } from "../project/ProjectHeader";
 import { fileStat, readFile, readFileAtHead, seatState, writePlain, type FileBody } from "./fileApi";
 import { CodeView } from "./CodeView";
 import { ChangesView } from "./ChangesView";
 import { decideReload, type FileStat } from "./liveReload";
 import { closeTab, markDirty, openInTabs, togglePin, type CodeTab } from "./codeTabs";
-import { seatDiff } from "../review/seatDiff";
+import { seatDiff } from "./seatDiff";
+import { GitPanel } from "./GitPanel";
 import { listen } from "@tauri-apps/api/event";
 
 type ViewMode = "code" | "changes";
@@ -114,6 +115,40 @@ export function Files({ client, project, lens, onLens, path, seat, onSeat }: {
     const iv = setInterval(look, 5_000);
     return () => { alive = false; clearInterval(iv); };
   }, [seat]);
+
+  // The note composer refs the seat's in-flight card, so a note lands as "#id <note>" exactly
+  // like every other card reference the seat already reads. Same lookup the Review lens did.
+  const [tasks, setTasks] = useState<Card[]>([]);
+  useEffect(() => {
+    let alive = true;
+    const pull = () => { client.tasks(project).then(t => { if (alive) setTasks(t); }).catch(() => {}); };
+    pull();
+    const iv = setInterval(pull, 12_000);
+    return () => { alive = false; clearInterval(iv); };
+  }, [client, project]);
+
+  const [note, setNote] = useState("");
+  const [sending, setSending] = useState(false);
+  const [sent, setSent] = useState<"ok" | "fail" | null>(null);
+  const seatCard = useMemo(() => {
+    if (!seat) return undefined;
+    return tasks.find(t => (t.status === "doing" || t.status === "testing") && t.assignee === `${seat}:${project}`);
+  }, [tasks, seat, project]);
+
+  const sendNote = async () => {
+    const text = note.trim();
+    if (!seat || !text || sending) return;
+    setSending(true);
+    try {
+      await client.send(`${seat}:${project}`, (seatCard ? `#${seatCard.id} ` : "") + text, project);
+      setNote("");
+      setSent("ok");
+    } catch {
+      setSent("fail");
+    } finally {
+      setSending(false);
+    }
+  };
 
   const reload = (key: string) => {
     const tab = tabs.find(t => t.key === key);
@@ -241,8 +276,9 @@ export function Files({ client, project, lens, onLens, path, seat, onSeat }: {
   return (
     <div className="flex h-full min-h-0 flex-col">
       <ProjectHeader project={project} sub={sub} lens={lens} onLens={onLens} />
-      <div className="flex min-h-0 flex-1 flex-col gap-2.5 px-8 pb-6">
-        <div className="flex items-center gap-1">
+      <div className="flex min-h-0 flex-1 gap-3 px-8 pb-6">
+        <div className="flex min-h-0 flex-1 flex-col gap-2.5">
+          <div className="flex items-center gap-1">
           {/* WHICH COPY. The checkout and a seat's worktree are different files at one path. */}
           <button
             type="button"
@@ -400,6 +436,46 @@ export function Files({ client, project, lens, onLens, path, seat, onSeat }: {
         </div>
         {body?.truncated && (
           <div className="px-1 text-[11.5px] text-tr-warn">Cut at 512 KB — this is the head of the file, not all of it.</div>
+        )}
+        </div>
+
+        {/* The SCM rail (#5810): permanent for a seat scope — the ONLY changes list, commit box,
+            push, and log — with the note-to-seat composer beside it. A clicked file opens through
+            the SAME open call as the tree, which is what makes it the editable Changes view. */}
+        {seat && (
+          <div className="flex w-[300px] shrink-0 flex-col gap-2.5">
+            <div className="min-h-0 flex-1">
+              <GitPanel
+                project={project}
+                seat={seat}
+                onChanged={() => { if (activeTab) reload(activeTab.key); }}
+                onOpenFile={p => openPath(seat, p, "changes")}
+              />
+            </div>
+            <div className="tr-card flex shrink-0 flex-col gap-1.5 px-3 py-2.5">
+              <div className="flex items-center gap-2 px-0.5">
+                <span className="text-[11px] font-medium text-tr-muted">note to {seat}</span>
+                {seatCard && <span className="tr-mono text-[10px] text-tr-muted/70">#{seatCard.id}</span>}
+                {sent === "ok" && <span className="tr-chip ml-auto shrink-0">sent</span>}
+                {sent === "fail" && <span className="tr-chip ml-auto shrink-0" style={{ color: "var(--color-tr-fail)" }}>failed</span>}
+              </div>
+              <textarea
+                value={note}
+                onChange={e => { setNote(e.target.value); setSent(null); }}
+                rows={2}
+                placeholder={`Tell ${seat} what to change…`}
+                className="min-w-0 flex-1 resize-none bg-transparent text-[12.5px] outline-none placeholder:text-tr-muted/60"
+              />
+              <button
+                type="button"
+                onClick={() => { void sendNote(); }}
+                disabled={!note.trim() || sending}
+                className="self-end rounded-lg bg-tr-doing/20 px-3 py-1 text-[12px] font-medium text-tr-doing disabled:opacity-40"
+              >
+                {sending ? "Sending…" : "Send"}
+              </button>
+            </div>
+          </div>
         )}
       </div>
     </div>
