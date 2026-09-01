@@ -95,6 +95,39 @@ console.log("\nA git-backed seat runs from its own worktree:");
   ok("reuse does not replace the existing worktree", existsSync(join(seatDir, "reuse-marker.txt")));
 }
 
+console.log("\nWorktree creation carries Orca's memory (--no-track, push.autoSetupRemote, branch.<b>.base):");
+{
+  const home = join(root, "home-d");
+  const repo = makeRepo(root, "repo-d");
+  const project = "wt-memory";
+  const seatDir = join(home, ".agent-bus", "worktrees", project, "codex");
+  const branch = "seat/codex";
+
+  // Set up a remote tracking branch so the base ff has something to fast-forward to
+  const defaultBranch = git(["-C", repo, "rev-parse", "--abbrev-ref", "HEAD"], repo);
+  git(["-C", repo, "config", "user.email", "trantor@example.test"], repo);
+  git(["-C", repo, "config", "user.name", "Trantor Test"], repo);
+  writeFileSync(join(repo, "new-file.txt"), "new content\n");
+  git(["-C", repo, "add", "new-file.txt"], repo);
+  git(["-C", repo, "commit", "-q", "-m", "second commit"], repo);
+
+  const turns = await runRunner({ sourceDir: repo, project, home });
+  ok("the first turn ran", turns.length >= 1, `turns=${JSON.stringify(turns)}`);
+
+  // --no-track: the seat branch should have no upstream configured
+  let upstream;
+  try { upstream = git(["-C", seatDir, "rev-parse", "--abbrev-ref", `${branch}@{upstream}`], seatDir); } catch { upstream = ""; }
+  ok("--no-track: no upstream on the seat branch", upstream === "", `upstream=${upstream || "(none)"}`);
+
+  // push.autoSetupRemote should be set to true
+  const pushAuto = git(["-C", seatDir, "config", "--get", "push.autoSetupRemote"], seatDir);
+  ok("push.autoSetupRemote is set to true", pushAuto === "true", `push.autoSetupRemote=${pushAuto || "(unset)"}`);
+
+  // branch.<branch>.base should be persisted
+  const branchBase = git(["-C", seatDir, "config", "--get", `branch.${branch}.base`], seatDir);
+  ok("branch.<b>.base is persisted", branchBase === defaultBranch, `branch.base=${branchBase || "(unset)"}`);
+}
+
 console.log("\nNon-git and explicit opt-out seats are left alone:");
 {
   const home = join(root, "home-b");
