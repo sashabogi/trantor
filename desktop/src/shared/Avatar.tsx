@@ -19,6 +19,7 @@ import geminiSvg from "@lobehub/icons-static-svg/icons/gemini.svg?raw";
 import openrouterSvg from "@lobehub/icons-static-svg/icons/openrouter.svg?raw";
 import ollamaSvg from "@lobehub/icons-static-svg/icons/ollama.svg?raw";
 import codexSvg from "@lobehub/icons-static-svg/icons/codex.svg?raw";
+import opencodeSvg from "@lobehub/icons-static-svg/icons/opencode.svg?raw";
 import openaiSvg from "@lobehub/icons-static-svg/icons/openai.svg?raw";
 import zaiSvg from "@lobehub/icons-static-svg/icons/zai.svg?raw";
 import { dictGet } from "./dict";
@@ -29,6 +30,7 @@ const BRANDS = {
   claude:     { svg: claudeSvg, hex: "#D97757", label: "Claude" },
   anthropic:  { svg: claudeSvg, hex: "#D97757", label: "Claude" },
   codex:      { svg: codexSvg, hex: "#e8e8ee", label: "Codex" },
+  opencode:   { svg: opencodeSvg, hex: "#e8e8ee", label: "OpenCode" },
   openai:     { svg: openaiSvg, hex: "#e8e8ee", label: "OpenAI" },
   deepseek:   { svg: deepseekSvg, hex: "#5786FE", label: "DeepSeek" },
   kimi:       { svg: kimiSvg, hex: "#8b8bf5", label: "Kimi" },

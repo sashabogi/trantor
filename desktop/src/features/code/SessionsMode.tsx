@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { ArrowLeft, Search } from "lucide-react";
+import { BrandGlyph } from "../../shared/Avatar";
+import { modelLabel } from "../chat/modelLabel";
 import {
   harnessLabel,
   sessionAge,
@@ -134,31 +136,35 @@ export function SessionsMode({ project, onOpenClaude }: {
           <div className="px-2 py-3 text-[12px] text-tr-muted">No sessions match this scope and search.</div>
         )}
         <div className="flex flex-col gap-1.5">
-          {visible.map(session => (
-            <button key={`${session.harness}:${session.id}`} type="button"
-              onClick={() => session.harness === "claude" ? onOpenClaude(session) : setSelected(session)}
-              className="w-full rounded-[10px] border border-tr-edge bg-white/[0.025] px-3 py-2.5 text-left hover:bg-white/[0.05]"
-              style={{ contentVisibility: "auto", containIntrinsicSize: "0 62px" }}>
-              <div className="flex items-center gap-2">
-                <span className="min-w-0 flex-1 truncate text-[12.5px] font-medium">{session.title}</span>
-                <span className="tr-mono shrink-0 text-[10px] text-tr-muted">{sessionAge(session.updatedAt)}</span>
-              </div>
-              <div className="mt-1 flex items-center gap-2 tr-mono text-[10px]">
-                <span className="shrink-0 text-tr-text">{harnessLabel(session.harness)}</span>
-                <span className="min-w-0 flex-1 truncate text-tr-muted">
-                  {session.messageCount.toLocaleString()} msgs · {session.model || "model unavailable"}
-                </span>
-                {session.branch && (
-                  <span className="shrink-0 rounded-[6px] bg-tr-doing/10 px-1.5 py-0.5 text-tr-doing">
-                    {session.branch}
+          {visible.map(session => {
+            const model = modelLabel(session.model);
+            return (
+              <button key={`${session.harness}:${session.id}`} type="button"
+                onClick={() => session.harness === "claude" ? onOpenClaude(session) : setSelected(session)}
+                className="w-full rounded-[10px] border border-tr-edge bg-white/[0.025] px-3 py-2.5 text-left hover:bg-white/[0.05]"
+                style={{ contentVisibility: "auto", containIntrinsicSize: "0 62px" }}>
+                <div className="flex items-center gap-2">
+                  <span className="min-w-0 flex-1 truncate text-[12.5px] font-medium">{session.title}</span>
+                  <span className="tr-mono shrink-0 text-[10px] text-tr-muted">{sessionAge(session.updatedAt)}</span>
+                </div>
+                <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 tr-mono text-[10px] text-tr-muted">
+                  <BrandGlyph name={session.harness} size={12} />
+                  <span className="shrink-0">{session.messageCount.toLocaleString()} msgs</span>
+                  <span className="shrink-0" title={model.full || "Model unavailable"}>
+                    {model.short || "model unavailable"}
                   </span>
+                  {session.branch && (
+                    <span className="ml-auto shrink-0 rounded-[6px] bg-tr-doing/10 px-1.5 py-0.5 text-tr-doing">
+                      {session.branch}
+                    </span>
+                  )}
+                </div>
+                {session.lastMessage && session.lastMessage !== session.title && (
+                  <div className="mt-1 truncate text-[10.5px] text-tr-muted/75">{session.lastMessage}</div>
                 )}
-              </div>
-              {session.lastMessage && session.lastMessage !== session.title && (
-                <div className="mt-1 truncate text-[10.5px] text-tr-muted/75">{session.lastMessage}</div>
-              )}
-            </button>
-          ))}
+              </button>
+            );
+          })}
         </div>
       </div>
 

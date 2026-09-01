@@ -1,2 +1,6 @@
+{"type":"user","sessionId":"claude-fixture","cwd":"/Users/test/.agent-bus/worktrees/trantor/codex","gitBranch":"seat/codex","message":{"role":"user","content":"<local-command-caveat>Injected command context</local-command-caveat>"}}
+{"type":"user","sessionId":"claude-fixture","cwd":"/Users/test/.agent-bus/worktrees/trantor/codex","gitBranch":"seat/codex","message":{"role":"user","content":"<environment_context><cwd>/Users/test</cwd></environment_context>"}}
 {"type":"user","sessionId":"claude-fixture","cwd":"/Users/test/.agent-bus/worktrees/trantor/codex","gitBranch":"seat/codex","message":{"role":"user","content":"Review the session store"}}
 {"type":"assistant","sessionId":"claude-fixture","cwd":"/Users/test/.agent-bus/worktrees/trantor/codex","gitBranch":"seat/codex","message":{"role":"assistant","model":"claude-fable-5","usage":{"input_tokens":8},"content":[{"type":"text","text":"The store is mapped."}]}}
+{"type":"user","isMeta":true,"sessionId":"claude-fixture","cwd":"/Users/test/.agent-bus/worktrees/trantor/codex","gitBranch":"seat/codex","message":{"role":"user","content":"Injected metadata must not become the preview"}}
+{"type":"user","sessionId":"claude-fixture","cwd":"/Users/test/.agent-bus/worktrees/trantor/codex","gitBranch":"seat/codex","message":{"role":"user","content":"NEW BUS MESSAGE for you:\n[foreman]: synthetic wake"}}

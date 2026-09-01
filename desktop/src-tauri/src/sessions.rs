@@ -76,6 +76,19 @@ fn text_content(value: &Value) -> String {
     }
 }
 
+fn real_message_text(record: &Value, role: &str, content: &Value) -> Option<String> {
+    let text = text_content(content);
+    if text.is_empty()
+        || (role == "user"
+            && (super::bookkeeping_divider_text(record, content).is_some()
+                || super::is_harness_injection(&text)))
+    {
+        None
+    } else {
+        Some(text)
+    }
+}
+
 fn full_text_content(value: &Value) -> String {
     match value {
         Value::String(text) => text.trim().to_string(),
@@ -136,15 +149,14 @@ fn decode_claude(path: &Path) -> Result<SessionRecord, String> {
             continue;
         }
         message_count += 1;
-        let text = value
+        let content = value
             .get("message")
-            .and_then(|m| m.get("content"))
-            .map(text_content)
-            .unwrap_or_default();
-        if role == "user" && first_user.is_empty() && !text.is_empty() {
-            first_user = text.clone();
-        }
-        if !text.is_empty() {
+            .and_then(|message| message.get("content"))
+            .unwrap_or(&Value::Null);
+        if let Some(text) = real_message_text(&value, role, content) {
+            if role == "user" && first_user.is_empty() {
+                first_user = text.clone();
+            }
             last_message = text;
         }
         if role == "assistant"
@@ -231,11 +243,11 @@ fn decode_codex(path: &Path) -> Result<SessionRecord, String> {
                     continue;
                 }
                 message_count += 1;
-                let text = payload.get("content").map(text_content).unwrap_or_default();
-                if role == "user" && first_user.is_empty() && !text.is_empty() {
-                    first_user = text.clone();
-                }
-                if !text.is_empty() {
+                let content = payload.get("content").unwrap_or(&Value::Null);
+                if let Some(text) = real_message_text(payload, role, content) {
+                    if role == "user" && first_user.is_empty() {
+                        first_user = text.clone();
+                    }
                     last_message = text;
                 }
             }
@@ -292,11 +304,11 @@ fn decode_kimi(path: &Path, cwd: String) -> Result<SessionRecord, String> {
             continue;
         }
         message_count += 1;
-        let text = value.get("content").map(text_content).unwrap_or_default();
-        if role == "user" && first_user.is_empty() && !text.is_empty() {
-            first_user = text.clone();
-        }
-        if !text.is_empty() {
+        let content = value.get("content").unwrap_or(&Value::Null);
+        if let Some(text) = real_message_text(&value, role, content) {
+            if role == "user" && first_user.is_empty() {
+                first_user = text.clone();
+            }
             last_message = text;
         }
     }
@@ -509,22 +521,54 @@ fn open_code_row(value: &Value) -> Option<SessionRecord> {
         .and_then(Value::as_str)
         .unwrap_or_default()
         .to_string();
-    let title = value
-        .get("first_user")
-        .or_else(|| value.get("title"))
-        .and_then(Value::as_str)
-        .map(one_line)
+    let messages = value
+        .get("messages")
+        .and_then(|messages| match messages {
+            Value::Array(items) => Some(items.clone()),
+            Value::String(raw) => serde_json::from_str::<Vec<Value>>(raw).ok(),
+            _ => None,
+        })
+        .unwrap_or_default();
+    let display_text = |message: &Value| {
+        let role = message.get("role").and_then(Value::as_str)?;
+        let content = message.get("text").unwrap_or(&Value::Null);
+        real_message_text(message, role, content)
+    };
+    let first_user = messages.iter().find_map(|message| {
+        (message.get("role").and_then(Value::as_str) == Some("user"))
+            .then(|| display_text(message))
+            .flatten()
+    });
+    let last_message = messages
+        .iter()
+        .rev()
+        .find_map(display_text)
+        .or_else(|| {
+            value
+                .get("last_message")
+                .and_then(Value::as_str)
+                .and_then(|text| {
+                    real_message_text(&Value::Null, "assistant", &Value::String(text.into()))
+                })
+        })
+        .unwrap_or_default();
+    let title = first_user
+        .or_else(|| {
+            value
+                .get("first_user")
+                .and_then(Value::as_str)
+                .and_then(|text| {
+                    real_message_text(&Value::Null, "user", &Value::String(text.into()))
+                })
+        })
+        .or_else(|| value.get("title").and_then(Value::as_str).map(one_line))
         .unwrap_or_else(|| id.clone());
     Some(SessionRecord {
         row: SessionRow {
             id,
             harness: "opencode".into(),
             title,
-            last_message: value
-                .get("last_message")
-                .and_then(Value::as_str)
-                .map(one_line)
-                .unwrap_or_default(),
+            last_message,
             message_count: value
                 .get("message_count")
                 .and_then(Value::as_u64)
@@ -554,6 +598,18 @@ SELECT s.id,
        (SELECT COUNT(*) FROM message m
          WHERE m.session_id = s.id
            AND json_extract(m.data, '$.role') IN ('user', 'assistant')) AS message_count,
+       COALESCE((SELECT json_group_array(json_object(
+                            'role', rows.role,
+                            'text', rows.text,
+                            'isMeta', rows.is_meta))
+                   FROM (SELECT json_extract(m.data, '$.role') AS role,
+                                json_extract(p.data, '$.text') AS text,
+                                json_extract(m.data, '$.isMeta') AS is_meta
+                           FROM message m JOIN part p ON p.message_id = m.id
+                          WHERE m.session_id = s.id
+                            AND json_extract(m.data, '$.role') IN ('user', 'assistant')
+                            AND json_extract(p.data, '$.type') = 'text'
+                          ORDER BY m.time_created, p.time_created) AS rows), '[]') AS messages,
        COALESCE((SELECT json_extract(p.data, '$.text')
                    FROM message m JOIN part p ON p.message_id = m.id
                   WHERE m.session_id = s.id
@@ -816,13 +872,14 @@ mod tests {
     }
 
     #[test]
-    fn claude_fixture_decodes_user_row_and_reported_branch() {
+    fn claude_fixture_skips_injected_rows_for_title_and_preview() {
         let record = decode_claude(&fixture("claude.jsonl")).unwrap();
         assert_eq!(record.row.harness, "claude");
         assert_eq!(record.row.title, "Review the session store");
         assert_eq!(record.row.branch, "seat/codex");
         assert_eq!(record.row.model, "claude-fable-5");
-        assert_eq!(record.row.message_count, 2);
+        assert_eq!(record.row.last_message, "The store is mapped.");
+        assert_eq!(record.row.message_count, 6);
     }
 
     #[test]
