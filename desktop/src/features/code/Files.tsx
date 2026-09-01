@@ -28,6 +28,8 @@ import { ChangesView } from "./ChangesView";
 import { decideReload, type FileStat } from "./liveReload";
 import { closeTab, markDirty, markExternalMutation, openInTabs, togglePin, type CodeTab } from "./codeTabs";
 import { diskSignature, externalMutationOnLoad } from "./tabGuard";
+import { startLsp, stopAllLsp } from "./lspClient";
+import { lspLanguageFor, lspServerName } from "./lspLanguage";
 import { listen } from "@tauri-apps/api/event";
 
 type ViewMode = "code" | "changes";
@@ -52,6 +54,8 @@ export function Files({ project, lens, onLens, path, seat }: {
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [busy, setBusy] = useState(false);
+  // The language-server status line: "rust-analyzer ready" or the honest "not installed: <name>".
+  const [lspNote, setLspNote] = useState<string | null>(null);
 
   const activeTab = tabs.find(t => t.key === activeKey) ?? null;
   // The on-disk conflict rides the TAB (Orca open-file.ts:124-128, per-tab), not this component's
@@ -198,6 +202,24 @@ export function Files({ project, lens, onLens, path, seat }: {
     return () => { alive = false; unlisten.then(u => u()).catch(() => {}); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [project, activeTab?.key]);
+
+  // Language server: one client per (root, language), shared across tabs, started the first time
+  // a served file mounts. The honest status line is set here, never a fake "ready".
+  const activeLanguage = activePath ? lspLanguageFor(activePath) : null;
+  useEffect(() => {
+    if (!activeLanguage) { setLspNote(null); return; }
+    let alive = true;
+    const scope = activeScope === "project" ? null : activeScope;
+    setLspNote(null);
+    startLsp(project, scope, activeLanguage)
+      .then(() => { if (alive) setLspNote(`${lspServerName(activeLanguage)} ready`); })
+      .catch(e => { if (alive) setLspNote(String(e)); });
+    return () => { alive = false; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [project, activeLanguage, activeScope]);
+
+  // Every server this lens started dies with the lens — the Files unmount is the stop edge.
+  useEffect(() => () => { void stopAllLsp(); }, []);
 
   const setDraft = (v: string) => {
     setDraftState(v);
@@ -391,6 +413,9 @@ export function Files({ project, lens, onLens, path, seat }: {
         </div>
         {body?.truncated && (
           <div className="px-1 text-[11.5px] text-tr-warn">Cut at 512 KB — this is the head of the file, not all of it.</div>
+        )}
+        {lspNote && (
+          <div className="tr-mono px-1 text-[11px] text-tr-muted">{lspNote}</div>
         )}
       </div>
     </div>

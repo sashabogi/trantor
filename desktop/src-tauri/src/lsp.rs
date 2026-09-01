@@ -175,6 +175,9 @@ fn spawn_server(
                 }
             }
         }
+        // The server closed its stdout (it exited): tell the editor so it can stop claiming
+        // "ready" — an honest state, never a pretend one.
+        let _ = event_app.emit(&format!("lsp-closed:{id}"), ());
     });
 
     // Stderr drain: rust-analyzer and the TS/pyright servers log here; left unread, a chatty

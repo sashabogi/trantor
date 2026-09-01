@@ -8,6 +8,7 @@
 import { useEffect, useRef } from "react";
 import * as monaco from "monaco-editor";
 import { monacoLanguageFor } from "./editorLanguage";
+import { isLspLive, onLspChange } from "./lspClient";
 import "./monacoSetup";
 
 const fontOptions = {
@@ -38,7 +39,8 @@ export function CodeView({ value, path, editable, onChange, onSave }: {
     if (!host.current) return;
     // No URI on purpose: monaco keys models by URI and throws on a duplicate, and a remount of
     // the same file (StrictMode, tab flip) would collide. Language is passed explicitly.
-    const model = monaco.editor.createModel(value, monacoLanguageFor(path));
+    const lang = monacoLanguageFor(path);
+    const model = monaco.editor.createModel(value, lang);
     const ed = monaco.editor.create(host.current, {
       model,
       theme: "trantor-calm",
@@ -51,8 +53,10 @@ export function CodeView({ value, path, editable, onChange, onSave }: {
       scrollBeyondLastLine: false,
       stickyScroll: { enabled: false },
       renderLineHighlight: "line",
-      quickSuggestions: false,
-      suggestOnTriggerCharacters: false,
+      // Suggestions only when a language server is live for this language (#5857): the muted
+      // built-in TS service is not consulted, and an editor with no server keeps today's silence.
+      quickSuggestions: isLspLive(lang),
+      suggestOnTriggerCharacters: isLspLive(lang),
       occurrencesHighlight: "off",
       padding: { top: 6, bottom: 6 },
       scrollbar: { verticalScrollbarSize: 10, horizontalScrollbarSize: 10 },
@@ -76,6 +80,18 @@ export function CodeView({ value, path, editable, onChange, onSave }: {
     // the cursor. A caller changing the file changes `path`, which is the real identity here.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [path, editable]);
+
+  // The language server starts async, after this editor is already up: when it comes (or goes)
+  // live, flip suggestions for THIS instance so the first completion needs no remount.
+  useEffect(() => {
+    const lang = monacoLanguageFor(path);
+    return onLspChange(() => {
+      const ed = editorRef.current;
+      if (!ed) return;
+      const live = isLspLive(lang);
+      ed.updateOptions({ quickSuggestions: live, suggestOnTriggerCharacters: live });
+    });
+  }, [path]);
 
   // A new document for the same path (saved, reloaded, switched source) replaces the text
   // without tearing the editor down. pushEditOperations keeps the undo stack, so a live reload
