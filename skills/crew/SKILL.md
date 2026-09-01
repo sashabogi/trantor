@@ -32,6 +32,9 @@ PRD.md + TDD.md. The TDD MUST define one file-set per agent (no merge conflicts)
 explicit EVENT/INTERFACE CONTRACT — cross-agent bugs come from contract drift.
 
 ## Phase 1 — board setup
+0. No project yet? `trantor new <name> --brief <file>` stands one up (dir, git main, CLAUDE.md
+   from the brief, hooks, hub brief + first card) — it never spawns a session; firing the crew
+   is this phase's job.
 1. `relay_project_brief("<what + why + goal>")`
 2. One card per package: `relay_task_add(title, assignee, difficulty, model)` — set `model`
    to the advisor-routed model (or the CLI's default name); difficulty + model show as badges

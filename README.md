@@ -393,9 +393,15 @@ rate, not work rate.
 
 ```
 trantor setup | doctor | connect | profile | provider | models
-        | up <agents…> | swap <old> <new> | down | seat-why <agent> | ui | advise | hub | watch
+        | new <name> | up <agents…> | swap <old> <new> | down | seat-why <agent> | ui | advise | hub | watch
         | adopt <project> | reconcile | duty | orchestrate | patrol | app | backfill | init-hooks
 ```
+
+- **`trantor new <name>`** — project genesis in one command: makes the dir under your dev root
+  (`TRANTOR_DEV_ROOT` or `~/development`), git on main (or `--from <git-url>`, or `--adopt` an
+  existing folder), seeds CLAUDE.md from `--brief <file>`, installs the auto-card hook, posts
+  the brief to the hub, and opens the first card "genesis: <name>". `--json` for machines.
+  It never spawns a session — firing the crew stays your call.
 
 - **`trantor provider`** — `list` every crew seat (built-in + brought) with availability + tier ·
   `add <name> --key … [--plan api] [--base-url <url> --models a,b]` to bring any provider (custom
