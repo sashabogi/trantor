@@ -89,6 +89,7 @@ ownership gaps. Whack-a-mole was the symptom; missing ownership was the disease.
 | Provider balances | `lib/balances.mjs` → LOCAL hub snapshot (dual-push stays) | CLI + balance-check hook | header strip | app calling providers directly |
 | Crew-seat health (headless runners) | bus ledger + heartbeats (`seat-why` evidence) | crew-runner, hooks | board, app seat states | re-keying runner truth to herdr agent detection (§8) |
 | Fleet roster + routing | derived roster (`discoverSeats`) + scrooge capabilities | profile, opencode.json, `scrooge-capabilities` | advisor, `trantor up`, `trantor models` | hardcoded rosters; hard-tier routed to flash-class models |
+| Language intelligence in the editor (servers, lifecycle, framing) | Rust `lsp` module (docs/CONTRACT-editor-intelligence.md) | Rust only | Monaco via monaco-languageclient over Tauri events | TS spawning servers; servers outliving the lens; a fake "ready" |
 
 Two standing rules the table implies:
 - **If you are typing keystrokes at an agent, you are wrong.** The only keystroke paths are the
