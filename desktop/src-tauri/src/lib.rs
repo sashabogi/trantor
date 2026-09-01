@@ -1,5 +1,6 @@
 mod herdr;
 pub mod identity;
+mod lsp;
 mod terminal;
 
 use notify::{RecursiveMode, Watcher};
@@ -102,7 +103,7 @@ async fn start_stream(app: tauri::AppHandle, base: String) {
 /// Ask the user's login shell first (it knows about the install dirs we can't guess, e.g. kimi's
 /// ~/.kimi-code/bin), then union the usual roots, then whatever we inherited. Order is preserved and
 /// duplicates dropped, so the shell's own precedence wins.
-fn terminal_path() -> String {
+pub(crate) fn terminal_path() -> String {
     let home = std::env::var("HOME").unwrap_or_default();
     let mut parts: Vec<String> = Vec::new();
     let mut push = |raw: &str| {
@@ -298,7 +299,7 @@ fn parse_status_porcelain(raw: &str) -> std::collections::HashMap<String, String
 /// The tree and the viewer read from ONE of two places, and leaving that implicit is why "which
 /// files is the crew touching" had two different answers at once: the project checkout, or a
 /// seat's worktree. Callers name which they mean.
-fn source_root(project: &str, seat: Option<&str>) -> Result<std::path::PathBuf, String> {
+pub(crate) fn source_root(project: &str, seat: Option<&str>) -> Result<std::path::PathBuf, String> {
     if project.contains("..") || project.contains('/') {
         return Err("project is invalid".into());
     }
@@ -4426,6 +4427,9 @@ pub fn run() {
             create_file,
             delete_file,
             rename_file,
+            lsp::lsp_start,
+            lsp::lsp_send,
+            lsp::lsp_stop,
             autonomy_get,
             autonomy_set,
             duty_start,
@@ -4442,8 +4446,15 @@ pub fn run() {
             terminal::term_resize,
             terminal::term_detach
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|_app_handle, event| {
+            // Language servers are children of this process; an app exit must not leave one
+            // orphaned. stdin-EOF usually does it, but this is the explicit promise.
+            if let tauri::RunEvent::Exit = event {
+                lsp::stop_all();
+            }
+        });
 }
 
 #[cfg(test)]
