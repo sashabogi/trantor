@@ -13,7 +13,8 @@ use std::io::{BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use tauri::Emitter;
 
@@ -105,22 +106,44 @@ struct Server {
 static SERVERS: Mutex<Option<HashMap<u64, Server>>> = Mutex::new(None);
 static NEXT_ID: AtomicU64 = AtomicU64::new(1);
 
-/// The binary + args for a language id. Only the four the editor maps to are served; anything else
-/// is a name to refuse, not a guess to make.
-fn server_command(language: &str) -> Result<(String, Vec<String>), String> {
+/// The binary + args for a language id, plus the honest "how to fix it" lines. Only the four the
+/// editor maps to are served; anything else is a name to refuse, not a guess to make.
+struct ServerSpec {
+    bin: &'static str,
+    args: &'static [&'static str],
+    /// the "run this to fix it" line, appended to every not-installed error
+    install: &'static str,
+    /// why a binary that EXISTS but fails its `--version` probe is broken (the rustup-proxy case)
+    broken_proxy: &'static str,
+}
+
+fn server_spec(language: &str) -> Result<ServerSpec, String> {
     match language {
-        "rust" => Ok(("rust-analyzer".into(), vec![])),
-        "typescript" | "typescriptreact" | "javascript" => {
-            Ok(("typescript-language-server".into(), vec!["--stdio".into()]))
-        }
-        "python" => Ok(("pyright-langserver".into(), vec!["--stdio".into()])),
+        "rust" => Ok(ServerSpec {
+            bin: "rust-analyzer",
+            args: &[],
+            install: "run: rustup component add rust-analyzer",
+            broken_proxy: "rustup proxy without the component",
+        }),
+        "typescript" | "typescriptreact" | "javascript" => Ok(ServerSpec {
+            bin: "typescript-language-server",
+            args: &["--stdio"],
+            install: "run: npm install -g typescript-language-server",
+            broken_proxy: "the binary failed its startup check",
+        }),
+        "python" => Ok(ServerSpec {
+            bin: "pyright-langserver",
+            args: &["--stdio"],
+            install: "run: pip install pyright",
+            broken_proxy: "the binary failed its startup check",
+        }),
         other => Err(format!("no language server for {other}")),
     }
 }
 
 /// Resolve a binary on the terminal PATH — the PATH a terminal would have, not the bare one a
 /// Finder-launched app inherits. Missing → the honest "not installed" the editor shows as text.
-fn find_binary(name: &str) -> Result<PathBuf, String> {
+fn find_binary(name: &str, install: &str) -> Result<PathBuf, String> {
     for dir in terminal_path().split(':') {
         if dir.is_empty() {
             continue;
@@ -130,14 +153,49 @@ fn find_binary(name: &str) -> Result<PathBuf, String> {
             return Ok(candidate);
         }
     }
-    Err(format!("not installed: {name}"))
+    Err(format!("not installed: {name} — {install}"))
+}
+
+/// Prove a binary actually RUNS before we hand it a child. `is_file()` was not enough: a rustup
+/// PROXY is a real file that prints "error: Unknown binary …" and exits when its component is not
+/// installed. A `--version` probe with a 5s deadline catches that and any wedged binary, so the
+/// lens never opens on a pretend server.
+fn probe_binary(path: &Path, name: &str, install: &str, broken_proxy: &str) -> Result<(), String> {
+    let mut child = Command::new(path)
+        .arg("--version")
+        .env("PATH", terminal_path())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|_| format!("not installed: {name} — {install}"))?;
+
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let status = loop {
+        if let Some(s) = child.try_wait().unwrap_or(None) {
+            break s;
+        }
+        if Instant::now() >= deadline {
+            let _ = child.kill();
+            return Err(format!("not installed: {name} — {install}"));
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    };
+
+    let mut stderr = String::new();
+    if let Some(mut e) = child.stderr.take() {
+        let _ = e.read_to_string(&mut stderr);
+    }
+    if !status.success() || stderr.trim_start().starts_with("error:") {
+        return Err(format!("not installed: {name} — {broken_proxy}; {install}"));
+    }
+    Ok(())
 }
 
 fn spawn_server(
     app: tauri::AppHandle,
     id: u64,
     bin: &Path,
-    args: &[String],
+    args: &[&str],
     cwd: &Path,
 ) -> Result<(Child, ChildStdin), String> {
     let mut child = Command::new(bin)
@@ -158,8 +216,13 @@ fn spawn_server(
         .ok_or_else(|| format!("{}: no stdout pipe", bin.display()))?;
     let stderr = child.stderr.take();
 
+    // The first stderr line is the reason an early-exiting server gives for why; shared with the
+    // reader thread so `lsp-closed` can carry it instead of an empty payload.
+    let first_stderr: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
+
     // Reader: stdout → LSP frames → `lsp-message:<id>` events. Dies when the pipe closes.
     let event_app = app.clone();
+    let stderr_reason = first_stderr.clone();
     std::thread::spawn(move || {
         let mut decoder = LspDecoder::new();
         let mut reader = BufReader::new(stdout);
@@ -175,19 +238,24 @@ fn spawn_server(
                 }
             }
         }
-        // The server closed its stdout (it exited): tell the editor so it can stop claiming
-        // "ready" — an honest state, never a pretend one.
-        let _ = event_app.emit(&format!("lsp-closed:{id}"), ());
+        // The server closed stdout (it exited): carry the reason it printed, so the status line
+        // can say "error: Unknown binary …" instead of a bare "Unknown reason".
+        let reason = stderr_reason.lock().unwrap().clone();
+        let _ = event_app.emit(&format!("lsp-closed:{id}"), reason);
     });
 
-    // Stderr drain: rust-analyzer and the TS/pyright servers log here; left unread, a chatty
-    // server fills the pipe buffer and blocks on its next write. Discarded — the editor's truth is
-    // the JSON-RPC channel, not the server's log.
+    // Stderr drain: capture the FIRST line as the exit reason, then keep draining so a chatty
+    // server cannot fill the pipe buffer and block on its next write.
     if let Some(stderr) = stderr {
+        let first = first_stderr.clone();
         std::thread::spawn(move || {
             let mut r = BufReader::new(stderr);
             let mut line = String::new();
             while r.read_line(&mut line).map(|n| n > 0).unwrap_or(false) {
+                let mut guard = first.lock().unwrap();
+                if guard.is_none() {
+                    *guard = Some(line.trim().to_string());
+                }
                 line.clear();
             }
         });
@@ -206,10 +274,11 @@ pub fn lsp_start(
     language: String,
 ) -> Result<u64, String> {
     let root = source_root(&project, scope.as_deref())?;
-    let (bin, args) = server_command(&language)?;
-    let path = find_binary(&bin)?;
+    let spec = server_spec(&language)?;
+    let path = find_binary(spec.bin, spec.install)?;
+    probe_binary(&path, spec.bin, spec.install, spec.broken_proxy)?;
     let id = NEXT_ID.fetch_add(1, Ordering::SeqCst);
-    let (child, stdin) = spawn_server(app, id, &path, &args, &root)?;
+    let (child, stdin) = spawn_server(app, id, &path, spec.args, &root)?;
     let mut servers = SERVERS.lock().unwrap();
     servers.get_or_insert_with(HashMap::new).insert(id, Server { child, stdin });
     Ok(id)
@@ -315,12 +384,67 @@ mod tests {
     }
 
     #[test]
-    fn server_command_maps_languages_to_binaries_and_refuses_the_rest() {
-        assert_eq!(server_command("rust").unwrap().0, "rust-analyzer");
-        assert_eq!(server_command("typescriptreact").unwrap().0, "typescript-language-server");
-        assert_eq!(server_command("javascript").unwrap().0, "typescript-language-server");
-        assert_eq!(server_command("python").unwrap().0, "pyright-langserver");
-        assert!(server_command("markdown").is_err());
-        assert!(server_command("json").is_err());
+    fn server_spec_maps_languages_to_binaries_and_refuses_the_rest() {
+        assert_eq!(server_spec("rust").unwrap().bin, "rust-analyzer");
+        assert_eq!(server_spec("typescriptreact").unwrap().bin, "typescript-language-server");
+        assert_eq!(server_spec("javascript").unwrap().bin, "typescript-language-server");
+        assert_eq!(server_spec("python").unwrap().bin, "pyright-langserver");
+        assert!(server_spec("markdown").is_err());
+        assert!(server_spec("json").is_err());
+    }
+
+    #[test]
+    fn every_spec_names_an_install_line() {
+        for lang in ["rust", "typescript", "javascript", "python"] {
+            let spec = server_spec(lang).unwrap();
+            assert!(spec.install.starts_with("run: "), "{lang}: {}", spec.install);
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn probe_rejects_a_rustup_proxy_without_the_component() {
+        // A rustup proxy is a real, executable file that prints "error: Unknown binary …" to
+        // stderr and exits 1 when its component is absent — the exact case a PATH scan alone
+        // could not catch, and the reason lsp_start must prove the binary runs.
+        let dir = std::env::temp_dir().join("lsp-probe-test");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let script = dir.join("rust-analyzer");
+        std::fs::write(
+            &script,
+            "#!/bin/sh\necho \"error: Unknown binary 'rust-analyzer' in official toolchain\" >&2\nexit 1\n",
+        )
+        .unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        let err = probe_binary(
+            &script,
+            "rust-analyzer",
+            "run: rustup component add rust-analyzer",
+            "rustup proxy without the component",
+        )
+        .unwrap_err();
+        assert!(err.starts_with("not installed: rust-analyzer"), "{err}");
+        assert!(err.contains("rustup component add rust-analyzer"), "{err}");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn probe_accepts_a_binary_that_reports_a_version() {
+        let dir = std::env::temp_dir().join("lsp-probe-ok");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let script = dir.join("fake-server");
+        std::fs::write(&script, "#!/bin/sh\necho \"fake-server 1.0\"\n").unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        assert!(probe_binary(&script, "fake-server", "run: install", "broken").is_ok());
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

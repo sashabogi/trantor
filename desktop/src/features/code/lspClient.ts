@@ -39,9 +39,14 @@ class TauriMessageReader extends AbstractMessageReader {
       const msg: Message = JSON.parse(ev.payload);
       callback(msg);
     }).then(fn => { if (disposed) fn(); else unlistens.push(fn); }).catch(() => {});
-    // The server closing stdout is the one honest "no longer ready" signal.
-    listen(`lsp-closed:${this.id}`, () => {
-      if (!disposed) this.fireClose();
+    // The server closing stdout is the one honest "no longer ready" signal; the payload is the
+    // server's own first stderr line ("error: Unknown binary …") when it exited early, so the
+    // status line can name it instead of a bare "Unknown reason".
+    listen<string | null>(`lsp-closed:${this.id}`, ev => {
+      if (disposed) return;
+      const reason = ev.payload;
+      if (reason) this.fireError(new Error(reason));
+      this.fireClose();
     }).then(fn => { if (disposed) fn(); else unlistens.push(fn); }).catch(() => {});
     return { dispose: stop };
   }
