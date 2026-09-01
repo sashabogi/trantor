@@ -1,51 +1,51 @@
 // A diff you can read code in.
 //
-// The first pass rendered `git diff` output as coloured text. That is a description of a change,
-// not the change: no line numbers that match the file, no syntax, and every line prefixed with a
-// character that breaks indentation. Reviewing an agent's work in it is worse than reading the
-// file twice.
-//
-// This shows the two DOCUMENTS side by side — HEAD on the left, the working copy on the right —
-// which is what "decide if you like the code" actually needs.
+// Monaco replaces CodeMirror (#5790): the two DOCUMENTS side by side — HEAD on the left, the
+// working copy on the right — now in monaco's diff editor, the same surface VS Code's diff is.
+// Contract unchanged from the CodeMirror build: same props, both sides read-only, unchanged
+// regions collapsed. Judging the change happens here; editing belongs in the editor where
+// saving commits it as you.
 import { useEffect, useRef } from "react";
-import { MergeView } from "@codemirror/merge";
-import { EditorState } from "@codemirror/state";
-import { EditorView, lineNumbers, highlightActiveLineGutter } from "@codemirror/view";
-import { bracketMatching, syntaxHighlighting, defaultHighlightStyle } from "@codemirror/language";
-import { oneDark } from "@codemirror/theme-one-dark";
-import { languageFor } from "./CodeView";
+import * as monaco from "monaco-editor";
+import { monacoLanguageFor } from "./editorLanguage";
+import "./monacoSetup";
+
+const fontOptions = {
+  fontFamily: '"SF Mono", ui-monospace, Menlo, monospace',
+  fontSize: 12,
+  lineHeight: 19,
+} as const;
 
 export function DiffView({ base, head, path }: { base: string; head: string; path: string }) {
   const host = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     if (!host.current) return;
-    const shared = [
-      lineNumbers(),
-      highlightActiveLineGutter(),
-      bracketMatching(),
-      syntaxHighlighting(defaultHighlightStyle, { fallback: true }),
-      oneDark,
-      EditorView.editable.of(false),
-      EditorState.readOnly.of(true),
-      EditorView.theme({
-        "&": { fontSize: "12px" },
-        ".cm-scroller": { fontFamily: '"SF Mono", ui-monospace, Menlo, monospace', lineHeight: "1.6" },
-        "&.cm-focused": { outline: "none" },
-      }),
-      ...languageFor(path),
-    ];
-    const view = new MergeView({
-      parent: host.current,
-      // Read-only on both sides: this view is for judging the change, and editing belongs in the
-      // editor where saving commits it as you.
-      a: { doc: base, extensions: shared },
-      b: { doc: head, extensions: shared },
-      gutter: true,
-      highlightChanges: true,
-      collapseUnchanged: { margin: 3, minSize: 6 },
+    const lang = monacoLanguageFor(path);
+    const baseModel = monaco.editor.createModel(base, lang);
+    const headModel = monaco.editor.createModel(head, lang);
+    const ed = monaco.editor.createDiffEditor(host.current, {
+      theme: "trantor-calm",
+      automaticLayout: true,
+      ...fontOptions,
+      readOnly: true,
+      originalEditable: false,
+      renderSideBySide: true,
+      // The CodeMirror build collapsed unchanged regions with margin 3 / minSize 6; this is
+      // monaco's spelling of the same calm.
+      hideUnchangedRegions: { enabled: true, contextLineCount: 3, minimumLineCount: 6 },
+      renderOverviewRuler: false,
+      scrollBeyondLastLine: false,
+      stickyScroll: { enabled: false },
+      diffCodeLens: false,
+      scrollbar: { verticalScrollbarSize: 10, horizontalScrollbarSize: 10 },
     });
-    return () => view.destroy();
+    ed.setModel({ original: baseModel, modified: headModel });
+    return () => {
+      ed.dispose();
+      baseModel.dispose();
+      headModel.dispose();
+    };
   }, [base, head, path]);
 
   return <div ref={host} className="h-full min-h-0 overflow-auto rounded-lg" />;
