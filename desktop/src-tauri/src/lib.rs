@@ -3473,25 +3473,27 @@ async fn git_mutation_guard(agent: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// Pure porcelain v1 parser: "XY PATH" rows → entries. X is the index state, Y the worktree
-/// state ("?" in X means untracked); a rename reads "old -> new" and the NEW name is the one on
-/// disk; a quoted path loses its quotes. Rows too short to carry XY + a path are skipped, not
-/// guessed at. No I/O, no clock, no filesystem — cargo-tested below.
+/// Pure porcelain v1 parser, `-z` flavour: NUL-separated "XY PATH" records → entries. X is the
+/// index state, Y the worktree state ("?" in X means untracked). With `-z`, git emits paths raw —
+/// no quoting, no escaping — so a path containing spaces, quotes, or non-ASCII bytes is never
+/// corrupted by a split; and a rename/copy carries its ORIGIN path as a SECOND NUL-separated
+/// field, which we consume by skipping the next record instead of inventing a bogus entry. Records
+/// too short to carry XY + a path are skipped, never guessed at. No I/O — cargo-tested below.
 fn parse_porcelain_v1(raw: &str) -> Vec<GitStatusEntry> {
     let mut entries = Vec::new();
-    for line in raw.lines() {
-        if line.len() < 4 {
+    let mut records = raw.split('\0');
+    while let Some(rec) = records.next() {
+        if rec.len() < 4 {
             continue;
         }
-        let x = line[..1].to_string();
-        let y = line[1..2].to_string();
-        let path = line[3..].trim();
-        let path = path
-            .rsplit(" -> ")
-            .next()
-            .unwrap_or(path)
-            .trim_matches('"')
-            .to_string();
+        let x = rec[..1].to_string();
+        let y = rec[1..2].to_string();
+        let path = rec[3..].to_string();
+        // Rename (R) and copy (C): the origin path is the next field, consumed here so it is not
+        // misread as a record of its own.
+        if x == "R" || x == "C" {
+            records.next();
+        }
         entries.push(GitStatusEntry { path, x, y });
     }
     entries
@@ -3528,6 +3530,70 @@ fn parse_left_right(raw: &str) -> (Option<u64>, Option<u64>) {
     )
 }
 
+/// Where a branch stands relative to its upstream, with no-upstream as an explicit STATE rather
+/// than a null to special-case at every call site. A fresh seat branches with no remote, which is
+/// normal, not an error — `has_upstream` selects what `ahead` describes: the real remote when
+/// true, the merge base with main when false (and `behind` is then None because "behind main" is
+/// a claim a seat has not measured).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+struct UpstreamStatus {
+    has_upstream: bool,
+    ahead: Option<u64>,
+    behind: Option<u64>,
+}
+
+/// The narrow "no upstream" matcher. `rev-parse @{u}` is THE honest upstream probe and fails
+/// exactly when none is set; that failure is a state, not a fault, so it is the ONLY error class
+/// swallowed. Broad phrases like "no such branch" are deliberately NOT matched — those are real
+/// failures the panel should surface rather than misread as "no upstream".
+fn is_no_upstream_error(err: &str) -> bool {
+    err.contains("no upstream configured for branch")
+        || err.contains("HEAD does not point to a branch")
+}
+
+/// The upstream answer in one place, normalized to a state object. No upstream → `has_upstream:
+/// false` with ahead measured against the merge base with main; any other git failure surfaces.
+async fn upstream_state(worktree: &Path) -> Result<(Option<String>, UpstreamStatus), String> {
+    let out = tokio::process::Command::new("git")
+        .arg("-C")
+        .arg(worktree)
+        .args(["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"])
+        .output()
+        .await
+        .map_err(|e| format!("git could not start: {e}"))?;
+    if out.status.success() {
+        let name = String::from_utf8_lossy(&out.stdout).trim().to_string();
+        if !name.is_empty() {
+            // "behind<TAB>ahead" — left is the upstream-only count, right is HEAD-only.
+            let counts = run_git_text_io(
+                worktree,
+                &["rev-list", "--left-right", "--count", &format!("{name}...HEAD")],
+            )
+            .await?;
+            let (behind, ahead) = parse_left_right(&counts);
+            return Ok((
+                Some(name),
+                UpstreamStatus { has_upstream: true, ahead, behind },
+            ));
+        }
+        return Ok((None, UpstreamStatus { has_upstream: false, ahead: None, behind: None }));
+    }
+    let err = String::from_utf8_lossy(&out.stderr).to_string();
+    if !is_no_upstream_error(&err) {
+        return Err(format!("git rev-parse @{{u}} failed: {}", err.trim()));
+    }
+    let ahead = match merge_base_async(worktree).await {
+        Ok(base) => run_git_text_io(worktree, &["rev-list", "--count", &format!("{base}..HEAD")])
+            .await?
+            .trim()
+            .parse()
+            .ok(),
+        // No upstream AND no main to measure against: say nothing rather than guess.
+        Err(_) => None,
+    };
+    Ok((None, UpstreamStatus { has_upstream: false, ahead, behind: None }))
+}
+
 async fn git_panel_from_bus_dir(bus: &Path, project: &str, agent: &str) -> Result<GitPanel, String> {
     let worktree = seat_worktree(bus, project, agent)?;
 
@@ -3536,42 +3602,10 @@ async fn git_panel_from_bus_dir(bus: &Path, project: &str, agent: &str) -> Resul
         .trim()
         .to_string();
 
-    // @{u} is the only honest upstream answer; it fails exactly when none is set.
-    let upstream = run_git_text_io(
-        &worktree,
-        &["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"],
-    )
-    .await
-    .ok()
-    .map(|s| s.trim().to_string())
-    .filter(|s| !s.is_empty());
-
-    let (ahead, behind) = match upstream.clone() {
-        Some(up) => {
-            // "behind<TAB>ahead" — left is the upstream-only count, right is HEAD-only.
-            let counts = run_git_text_io(
-                &worktree,
-                &["rev-list", "--left-right", "--count", &format!("{up}...HEAD")],
-            )
-            .await?;
-            parse_left_right(&counts)
-        }
-        None => match merge_base_async(&worktree).await {
-            Ok(base) => (
-                run_git_text_io(&worktree, &["rev-list", "--count", &format!("{base}..HEAD")])
-                    .await?
-                    .trim()
-                    .parse()
-                    .ok(),
-                None,
-            ),
-            // No upstream AND no main to measure against: say nothing rather than guess.
-            Err(_) => (None, None),
-        },
-    };
+    let (upstream, upstream_status) = upstream_state(&worktree).await?;
 
     let status =
-        parse_porcelain_v1(&run_git_text_io(&worktree, &["status", "--porcelain=v1"]).await?);
+        parse_porcelain_v1(&run_git_text_io(&worktree, &["status", "--porcelain=v1", "-z"]).await?);
     let log = parse_log_pretty(
         &run_git_text_io(
             &worktree,
@@ -3583,8 +3617,8 @@ async fn git_panel_from_bus_dir(bus: &Path, project: &str, agent: &str) -> Resul
     Ok(GitPanel {
         branch,
         upstream,
-        ahead,
-        behind,
+        ahead: upstream_status.ahead,
+        behind: upstream_status.behind,
         status,
         log,
     })
@@ -3598,9 +3632,46 @@ async fn git_panel(project: String, agent: String) -> Result<String, String> {
     .map_err(|e| e.to_string())
 }
 
-/// Relative paths only, and never empty: git accepts absolute paths and pathspecs with "..", and
-/// the panel's inputs come from a UI listing, so anything odd is a bug to name, not to honor.
-fn clean_git_paths(paths: &[String]) -> Result<Vec<String>, String> {
+/// Prove `rel` stays inside `root`, symlinks and all — the shared path guard every git/fs handler
+/// passes through. A textual "no .., no absolute" check stops the obvious escapes but not a
+/// symlink: a worktree that links a directory out to somewhere else passes "no .." and then reads
+/// whatever the link points at. So this RESOLVES the path for real (canonicalize follows symlinks)
+/// and then checks the result is still a DESCENDANT of the canonical root — the one check a
+/// symlink cannot lie its way past. Rejects empty, NUL-containing, and absolute inputs before any
+/// I/O. A path whose final component does not exist (a staged-then-deleted file) is checked by its
+/// nearest existing ancestor, so unstage still works on a file already gone from disk.
+fn resolve_within(root: &Path, rel: &str) -> Result<(), String> {
+    if rel.is_empty() || rel.contains('\0') || Path::new(rel).is_absolute() {
+        return Err(format!("path is invalid: {rel}"));
+    }
+    // A ".." component, anywhere, is traversal — reject it before any resolution: a path whose
+    // final component does not exist yet would otherwise walk its ancestors back inside root and
+    // read as contained when it is not.
+    if rel.split('/').any(|c| c == "..") {
+        return Err(format!("path is invalid: {rel}"));
+    }
+    let root = std::fs::canonicalize(root).map_err(|e| format!("cannot resolve worktree: {e}"))?;
+    let full = root.join(rel);
+    let mut probe = full.as_path();
+    let resolved = loop {
+        match std::fs::canonicalize(probe) {
+            Ok(p) => break p,
+            Err(_) => match probe.parent() {
+                Some(parent) => probe = parent,
+                None => return Err(format!("path escapes the worktree: {rel}")),
+            },
+        }
+    };
+    if !resolved.starts_with(&root) {
+        return Err(format!("path escapes the worktree: {rel}"));
+    }
+    Ok(())
+}
+
+/// Relative paths only, each proven to stay inside `root` via `resolve_within`. Git accepts
+/// absolute paths and pathspecs with "..", and the panel's inputs come from a UI listing, so
+/// anything odd is a bug to name, not to honor.
+fn clean_git_paths(root: &Path, paths: &[String]) -> Result<Vec<String>, String> {
     if paths.is_empty() {
         return Err("no paths given".into());
     }
@@ -3608,9 +3679,7 @@ fn clean_git_paths(paths: &[String]) -> Result<Vec<String>, String> {
         .iter()
         .map(|p| {
             let p = p.trim();
-            if p.is_empty() || p.contains("..") || p.starts_with('/') {
-                return Err(format!("path is invalid: {p}"));
-            }
+            resolve_within(root, p)?;
             Ok(p.to_string())
         })
         .collect()
@@ -3625,9 +3694,11 @@ async fn git_stage(
 ) -> Result<(), String> {
     let worktree = seat_worktree(&desktop_bus_dir(), &project, &agent)?;
     git_mutation_guard(&agent).await?;
-    let paths = clean_git_paths(&paths)?;
+    let paths = clean_git_paths(&worktree, &paths)?;
     let mut args: Vec<&str> = if unstage {
-        vec!["reset", "-q", "HEAD", "--"]
+        // `restore --staged`, not `reset -q HEAD --`: the modern spelling, and it un-stages a
+        // file even before the first commit, which `reset HEAD` cannot do.
+        vec!["restore", "--staged", "--"]
     } else {
         vec!["add", "--"]
     };
@@ -3675,7 +3746,7 @@ mod git_panel_tests {
     #[test]
     fn porcelain_reads_staged_unstaged_and_untracked_rows() {
         let rows = parse_porcelain_v1(
-            "M  staged-only.ts\n M worktree-only.ts\nMM both.ts\n?? brand-new.ts\nA  staged-new.ts\n D gone.ts\n",
+            "M  staged-only.ts\0 M worktree-only.ts\0MM both.ts\0?? brand-new.ts\0A  staged-new.ts\0 D gone.ts\0",
         );
         assert_eq!(
             rows,
@@ -3691,8 +3762,10 @@ mod git_panel_tests {
     }
 
     #[test]
-    fn porcelain_takes_a_renames_new_name_and_unquotes() {
-        let rows = parse_porcelain_v1("R  old/name.rs -> \"new name.rs\"\n");
+    fn porcelain_takes_a_renames_new_name_unquoted() {
+        // -z emits the NEW path first, then the origin as a second NUL field — no " -> " and no
+        // quoting, which is exactly why a path with a space survives the round trip.
+        let rows = parse_porcelain_v1("R  new name.rs\0old/name.rs\0");
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].path, "new name.rs");
         assert_eq!(rows[0].x, "R");
@@ -3700,8 +3773,20 @@ mod git_panel_tests {
     }
 
     #[test]
+    fn porcelain_skips_a_renames_origin_field() {
+        // The origin path is a record's own NUL field; the parser must consume it, not emit it as a
+        // bogus entry, and still parse the record after it.
+        let rows = parse_porcelain_v1("R  new name.rs\0old/name.rs\0M  other.ts\0");
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].path, "new name.rs");
+        assert_eq!(rows[0].x, "R");
+        assert_eq!(rows[1].path, "other.ts");
+        assert_eq!(rows[1].x, "M");
+    }
+
+    #[test]
     fn porcelain_skips_rows_too_short_to_carry_a_path() {
-        assert!(parse_porcelain_v1("\nab\nabc\n").is_empty());
+        assert!(parse_porcelain_v1("\0ab\0abc\0").is_empty());
     }
 
     #[test]
@@ -3733,15 +3818,45 @@ mod git_panel_tests {
 
     #[test]
     fn clean_git_paths_rejects_traversal_absolute_and_empty() {
-        assert!(clean_git_paths(&["..".into()]).is_err());
-        assert!(clean_git_paths(&["a/../../b".into()]).is_err());
-        assert!(clean_git_paths(&["/etc/passwd".into()]).is_err());
-        assert!(clean_git_paths(&["  ".into()]).is_err());
-        assert!(clean_git_paths(&[]).is_err());
+        let root = std::env::temp_dir().join("git-guard-clean-test");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        assert!(clean_git_paths(&root, &["..".into()]).is_err());
+        assert!(clean_git_paths(&root, &["a/../../b".into()]).is_err());
+        assert!(clean_git_paths(&root, &["/etc/passwd".into()]).is_err());
+        assert!(clean_git_paths(&root, &["  ".into()]).is_err());
+        assert!(clean_git_paths(&root, &[]).is_err());
         assert_eq!(
-            clean_git_paths(&[" src/a.rs ".into()]).unwrap(),
+            clean_git_paths(&root, &[" src/a.rs ".into()]).unwrap(),
             vec!["src/a.rs".to_string()]
         );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn resolve_within_refuses_a_symlink_that_points_outside() {
+        // A symlink INSIDE the worktree that points out to a sibling directory is the escape a
+        // textual "no .." check cannot see: canonicalize follows the link and lands outside.
+        let root = std::env::temp_dir().join("git-guard-symlink-root");
+        let outside = std::env::temp_dir().join("git-guard-symlink-outside");
+        let _ = std::fs::remove_dir_all(&root);
+        let _ = std::fs::remove_dir_all(&outside);
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::create_dir_all(&outside).unwrap();
+        std::os::unix::fs::symlink(&outside, root.join("escape")).unwrap();
+        assert!(resolve_within(&root, "escape/secret.txt").is_err());
+        assert!(resolve_within(&root, "escape").is_err());
+        let _ = std::fs::remove_dir_all(&root);
+        let _ = std::fs::remove_dir_all(&outside);
+    }
+
+    #[test]
+    fn no_upstream_is_the_only_swallowed_upstream_error() {
+        assert!(is_no_upstream_error("fatal: no upstream configured for branch 'seat/glm'"));
+        assert!(is_no_upstream_error("fatal: HEAD does not point to a branch"));
+        assert!(!is_no_upstream_error("fatal: no such branch 'foo'"));
+        assert!(!is_no_upstream_error("fatal: not a git repository"));
     }
 
     #[test]
