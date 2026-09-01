@@ -28,7 +28,7 @@ import { ChangesView } from "./ChangesView";
 import { decideReload, type FileStat } from "./liveReload";
 import { closeTab, markDirty, markExternalMutation, openInTabs, togglePin, type CodeTab } from "./codeTabs";
 import { diskSignature, externalMutationOnLoad } from "./tabGuard";
-import { startLsp, stopAllLsp } from "./lspClient";
+import { isLspIndexing, isLspLive, onLspChange, startLsp, stopAllLsp } from "./lspClient";
 import { lspLanguageFor, lspServerName } from "./lspLanguage";
 import { listen } from "@tauri-apps/api/event";
 
@@ -56,6 +56,8 @@ export function Files({ project, lens, onLens, path, seat }: {
   const [busy, setBusy] = useState(false);
   // The language-server status line: "rust-analyzer ready" or the honest "not installed: <name>".
   const [lspNote, setLspNote] = useState<string | null>(null);
+  // The resolved scope root the language server chose — the editor's model URI is built from it.
+  const [lspRoot, setLspRoot] = useState<string | null>(null);
 
   const activeTab = tabs.find(t => t.key === activeKey) ?? null;
   // The on-disk conflict rides the TAB (Orca open-file.ts:124-128, per-tab), not this component's
@@ -207,16 +209,32 @@ export function Files({ project, lens, onLens, path, seat }: {
   // a served file mounts. The honest status line is set here, never a fake "ready".
   const activeLanguage = activePath ? lspLanguageFor(activePath) : null;
   useEffect(() => {
-    if (!activeLanguage) { setLspNote(null); return; }
+    if (!activeLanguage) { setLspNote(null); setLspRoot(null); return; }
     let alive = true;
     const scope = activeScope === "project" ? null : activeScope;
+    const name = lspServerName(activeLanguage);
     setLspNote(null);
+    setLspRoot(null);
     startLsp(project, scope, activeLanguage)
-      .then(() => { if (alive) setLspNote(`${lspServerName(activeLanguage)} ready`); })
+      .then(({ root, indexing }) => {
+        if (!alive) return;
+        setLspRoot(root);
+        setLspNote(indexing ? `${name} indexing…` : `${name} ready`);
+      })
       .catch(e => { if (alive) setLspNote(String(e)); });
     return () => { alive = false; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [project, activeLanguage, activeScope]);
+
+  // "ready" is the handshake; rust-analyzer is still indexing until its first $/progress end.
+  // When that arrives the client notifies, and this flips the status line to the honest "ready".
+  useEffect(() => {
+    if (!activeLanguage) return;
+    return onLspChange(() => {
+      if (!isLspLive(activeLanguage) || isLspIndexing(activeLanguage)) return;
+      setLspNote(`${lspServerName(activeLanguage)} ready`);
+    });
+  }, [activeLanguage]);
 
   // Every server this lens started dies with the lens — the Files unmount is the stop edge.
   useEffect(() => () => { void stopAllLsp(); }, []);
@@ -408,7 +426,7 @@ export function Files({ project, lens, onLens, path, seat }: {
               onSave={save}
             />
           ) : (
-            <CodeView value={draft} path={activePath} editable onChange={setDraft} onSave={save} project={project} seat={seat} />
+            <CodeView value={draft} path={activePath} root={lspRoot} editable onChange={setDraft} onSave={save} project={project} seat={seat} />
           )}
         </div>
         {body?.truncated && (
