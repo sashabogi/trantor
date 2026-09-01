@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // trantor policy — the autonomy ladder's admin surface (PRD §6): show levels + links,
 // set a project's level, declare that two projects are codependent.
-//   trantor policy show | set <project> <1-4> | link <a> <b> --reason "<why>"
+//   trantor policy show | set <project> <1-4> | link <a> <b> --reason "<why>" | unlink <a> <b>
 // Drafted by scrooge (deepseek-v4-flash), integrated by the orchestrator.
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -30,7 +30,7 @@ const post = async (hub, payload) => {
 
 const legend = { 1: "1 observe", 2: "2 warn", 3: "3 gate", 4: "4 auto" };
 function usage() {
-  console.log('usage: trantor policy show | set <project> <1-4> | link <a> <b> --reason "<why>"');
+  console.log('usage: trantor policy show | set <project> <1-4> | link <a> <b> --reason "<why>" | unlink <a> <b>');
   process.exit(1);
 }
 
@@ -66,6 +66,15 @@ if (cmd === "link") {
   if (!arg1 || !arg2 || !reason) usage();
   for (const hub of hubs) {
     try { await post(hub, { link: { projects: [arg1, arg2], reason } }); console.log(`✓ ${arg1} ↔ ${arg2} on ${hub}`); }
+    catch (err) { console.warn(`⚠ ${hub}: ${err.message}`); }
+  }
+  process.exit(0);
+}
+
+if (cmd === "unlink") {
+  if (!arg1 || !arg2) usage();
+  for (const hub of hubs) {
+    try { await post(hub, { unlink: { projects: [arg1, arg2] } }); console.log(`✓ ${arg1} ↮ ${arg2} on ${hub}`); }
     catch (err) { console.warn(`⚠ ${hub}: ${err.message}`); }
   }
   process.exit(0);

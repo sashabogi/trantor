@@ -1504,6 +1504,12 @@ const server = http.createServer(async (req, res) => {
             declaredBy: auth?.identity?.name || String(b.by || ""), ts: now() });
         }
       }
+      // Unlink is link's inverse (#5397 shipped the app's Unlink button before this existed —
+      // a declared codependency the operator can make, they must also be able to unmake).
+      if (b.unlink && Array.isArray(b.unlink.projects) && b.unlink.projects.length >= 2) {
+        const key = b.unlink.projects.slice(0, 4).map(x => canon(String(x).slice(0, 80))).sort().join(" ");
+        p.links = (p.links || []).filter(l => (l.projects || []).slice().sort().join(" ") !== key);
+      }
       state.orgPolicy = p; dirty = true;
       return json(res, 200, { ok: true, ...overseerPolicy() });
     }
