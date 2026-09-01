@@ -10,7 +10,7 @@
 // per-provider chips in the header, because "is a provider about to stall mid-build" is an
 // always-in-view question, not a "go look at Home" one. Chips only — the old text dump stays dead.
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ArrowDownToLine, Bot, Eye, FolderTree, GraduationCap, House, Inbox as InboxIcon, MessagesSquare, Search, Settings as SettingsIcon } from "lucide-react";
+import { ArrowDownToLine, Bot, Eye, GraduationCap, House, Inbox as InboxIcon, MessagesSquare, Search, Settings as SettingsIcon } from "lucide-react";
 import { appUpdateCheck, HubClient, hubForProject, knownProjects, localSessions, type AppUpdate, type Peer } from "../shared/api/client";
 import { ago, stateOf } from "../shared/presence";
 import { Palette, type PaletteScope } from "../features/search/Palette";
@@ -32,10 +32,8 @@ import { Messages } from "../features/messages/Messages";
 import { Learning } from "../features/learning/Learning";
 import { Overseer } from "../features/overseer/Overseer";
 import { Settings } from "../features/settings/Settings";
-import { FileTree } from "../features/code/FileTree";
 import { Files } from "../features/code/Files";
-import { filesColumnOpen, persistFilesColumn } from "../features/code/filesColumn";
-import { Chat, type Dock } from "../features/chat/Chat";
+import { ModePane } from "../features/code/ModePane";
 import { Conversation } from "../features/chat/Conversation";
 import { BalanceStrip } from "../features/fleet/BalanceStrip";
 import { notifyIfWorthIt } from "../shared/notify";
@@ -90,20 +88,11 @@ export function AppShell() {
   const [active, setActive] = useState<string>("");
   const [hub, setHub] = useState<string>("");
   const [pane, setPane] = useState<Pane>({ kind: "home" });
-  // Remembered, because whether you want the file tree open is a working preference, not a per-visit
-  // decision. Defaults OPEN: the tree is the reason the section exists.
-  const [filesOpen, setFilesOpen] = useState<boolean>(() => filesColumnOpen(localStorage));
-  useEffect(() => { persistFilesColumn(localStorage, filesOpen); }, [filesOpen]);
-  // Which file is open, and WHOSE copy of it. Both live here because the tree (sidebar) and the
-  // viewer (main pane) are two halves of one thing: clicking in one has to land in the other.
+  // Which file is open, and WHOSE copy of it. Both live here because the tree (the Code lens's
+  // mode pane) and the editor (the center surface) are two halves of one thing: clicking in one
+  // has to land in the other. The v4 mode pane owns the seat picker (#5841).
   const [filePath, setFilePath] = useState<string | null>(null);
   const [fileSeat, setFileSeat] = useState<string | null>(null);
-  // Where the orchestrator conversation sits, and whether it is showing. Remembered, because it is
-  // a working preference rather than a per-visit decision — and IDEs let you choose, so this does.
-  const [chatOpen, setChatOpen] = useState<boolean>(() => localStorage.getItem("trantor.chat.open") === "1");
-  const [chatDock, setChatDock] = useState<Dock>(() => (localStorage.getItem("trantor.chat.dock") === "bottom" ? "bottom" : "right"));
-  useEffect(() => { try { localStorage.setItem("trantor.chat.open", chatOpen ? "1" : "0"); } catch { /* private mode */ } }, [chatOpen]);
-  useEffect(() => { try { localStorage.setItem("trantor.chat.dock", chatDock); } catch { /* private mode */ } }, [chatDock]);
 
   // Pinned projects PLUS whatever lives on the machine-local hub. A brand-new project has no
   // routing pin yet — it falls back to the local hub BY DESIGN (TDD §12.1's default), and a
@@ -492,16 +481,8 @@ export function AppShell() {
         )}
 
         <nav className="flex-1 overflow-y-auto">
-          {/* Inside a project, FILES is one labeled row that toggles a second column next to the
-              sidebar — the tree has its own fixed-width scroll, so it no longer pushes ACTIVE NOW
-              and PROJECTS down to a sliver. */}
-          {pane.kind === "project" && active && (
-            <div className="mb-1">
-              <NavItem label="Files" Icon={FolderTree} on={filesOpen}
-                       title={filesOpen ? "hide the file tree" : "show the file tree"}
-                       onClick={() => setFilesOpen(o => !o)} />
-            </div>
-          )}
+          {/* The old FILES toggle row is gone (#5841): the tree lives in the Code lens's mode
+              pane now, not in a second column. */}
           {activeProjects.length > 0 && (
             <div className="mb-4">
               <SectionLabel count={activeProjects.length}>Active now</SectionLabel>
@@ -548,23 +529,8 @@ export function AppShell() {
         </div>
       </aside>
 
-      {/* The Files column: the project's tree, in a fixed-width scroll of its own, sitting between
-          the sidebar and the content instead of pushing the project list down. Rendered only for a
-          project, and only while the sidebar's Files row keeps it open. */}
-      {filesOpen && pane.kind === "project" && active && (
-        <div className="flex w-60 shrink-0 flex-col overflow-y-auto border-r border-white/[0.06] px-3 py-4">
-          <SectionLabel>{`Files · ${active}`}</SectionLabel>
-          <FileTree
-            project={active}
-            seat={fileSeat}
-            openPath={filePath}
-            onOpen={p => { setFilePath(p); setPane({ kind: "project", lens: "code" }); }}
-          />
-        </div>
-      )}
-
-      <div className={`relative my-2.5 mr-2.5 flex min-w-0 flex-1 ${chatDock === "right" ? "flex-row overflow-x-auto" : "flex-col overflow-hidden"}`}>
-      <main className={`tr-main flex min-h-0 flex-1 flex-col overflow-hidden ${chatDock === "right" ? "min-w-[560px]" : "min-w-0"}`}>
+      <div className="relative my-2.5 mr-2.5 flex min-w-0 flex-1 flex-col overflow-hidden">
+      <main className="tr-main flex min-h-0 flex-1 flex-col overflow-hidden min-w-0">
         {/* #5625 — the project's search, ON TOP and lens-independent (the operator's design:
             "as long as you're in the particular project, the search bar should just be on
             top"). A trigger, not an input: the palette owns focus, results and keys. */}
@@ -600,24 +566,20 @@ export function AppShell() {
            : <Feed client={client} project={active} lens={pane.lens} onLens={l => setPane({ kind: "project", lens: l })} />}
         </div>
       </main>
-      {/* The orchestrator conversation. Only inside a project, because it IS that project's
-          session — there is no fleet-wide orchestrator to talk to. */}
-      {pane.kind === "project" && active && chatOpen && (
-        <Chat project={active} dock={chatDock} onDock={setChatDock} onClose={() => setChatOpen(false)} />
-      )}
-      {/* When it is hidden there has to be a way back, or the panel is a setting rather than a
-          surface. Floating rather than in the lens bar so no lens has to know about it. */}
-      {pane.kind === "project" && active && !chatOpen && (
-        <button
-          type="button"
-          onClick={() => setChatOpen(true)}
-          title="talk to this project's orchestrator"
-          className="tr-card absolute bottom-5 right-5 rounded-full px-4 py-2 text-[12.5px] font-medium shadow-lg"
-        >
-          Orchestrator
-        </button>
-      )}
       </div>
+      {/* The mode pane (#5841): ONE right pane for the project — Files (CHANGED pinned above the
+          tree), Git (PR affordance, notes), Sessions (ghost), Chat (the orchestrator conversation,
+          moved whole from the old dock). It REPLACES the left tree column, the chat dock, and the
+          in-lens SCM rail by owning their pieces; the editor narrows, never disappears. */}
+      {pane.kind === "project" && active && client && (
+        <ModePane
+          client={client}
+          project={active}
+          seat={fileSeat}
+          onSeat={setFileSeat}
+          onOpenFile={p => { setFilePath(p); setPane({ kind: "project", lens: "code" }); }}
+        />
+      )}
     </div>
     {palette && (
       <Palette

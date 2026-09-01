@@ -18,26 +18,23 @@
 // 4. Open files are TABS (#5813), the model in codeTabs.ts: identity is scope+path, a plain open
 //    is a PREVIEW the next open replaces, a pin makes it permanent, and the dirty dot follows the
 //    draft — per Orca's split-open.ts:26-29.
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { X, Pin } from "lucide-react";
-import type { Card, HubClient, Peer } from "../../shared/api/client";
+import type { HubClient } from "../../shared/api/client";
 import { ProjectHeader, type Lens } from "../project/ProjectHeader";
 import { fileStat, readFile, readFileAtHead, seatState, writePlain, type FileBody } from "./fileApi";
 import { CodeView } from "./CodeView";
 import { ChangesView } from "./ChangesView";
 import { decideReload, type FileStat } from "./liveReload";
 import { closeTab, markDirty, markExternalMutation, openInTabs, togglePin, type CodeTab } from "./codeTabs";
-import { seatDiff } from "./seatDiff";
-import { GitPanel } from "./GitPanel";
 import { diskSignature, externalMutationOnLoad } from "./tabGuard";
 import { listen } from "@tauri-apps/api/event";
 
 type ViewMode = "code" | "changes";
 
-const seatName = (session: string) => session.split(":")[0];
 const baseName = (p: string) => p.split("/").pop() ?? p;
 
-export function Files({ client, project, lens, onLens, path, seat, onSeat }: {
+export function Files({ project, lens, onLens, path, seat }: {
   client: HubClient;
   project: string;
   lens: Lens;
@@ -46,7 +43,6 @@ export function Files({ client, project, lens, onLens, path, seat, onSeat }: {
   seat: string | null;
   onSeat: (s: string | null) => void;
 }) {
-  const [peers, setPeers] = useState<Peer[]>([]);
   const [tabs, setTabs] = useState<CodeTab[]>([]);
   const [activeKey, setActiveKey] = useState<string | null>(null);
   const [body, setBody] = useState<FileBody | null>(null);
@@ -82,38 +78,6 @@ export function Files({ client, project, lens, onLens, path, seat, onSeat }: {
   // The editor is always live: unsaved work is simply "the draft differs from the disk".
   dirtyRef.current = body !== null && draft !== body.text;
 
-  useEffect(() => {
-    let alive = true;
-    const load = () => { client.peers().then(p => { if (alive) setPeers(p); }).catch(() => {}); };
-    load();
-    const iv = setInterval(load, 12_000);
-    return () => { alive = false; clearInterval(iv); };
-  }, [client]);
-
-  const seats = useMemo(
-    () => peers.filter(p => p.session.endsWith(`:${project}`) && !p.session.toLowerCase().startsWith("macbook")),
-    [peers, project],
-  );
-
-  // Changed-file count per seat worktree, for the source-tab badges. Same seatDiff the Review
-  // lens reads — one truth about "what did this seat touch". Polled at the peers cadence; a
-  // failed read stays absent (clean and unknown must not look different in a scary way).
-  const [seatChanges, setSeatChanges] = useState<Record<string, number>>({});
-  useEffect(() => {
-    let alive = true;
-    const pull = () => {
-      for (const s of seats) {
-        const name = seatName(s.session);
-        seatDiff(project, name)
-          .then(d => { if (alive) setSeatChanges(prev => ({ ...prev, [name]: d.files.length })); })
-          .catch(() => {});
-      }
-    };
-    pull();
-    const iv = setInterval(pull, 15_000);
-    return () => { alive = false; clearInterval(iv); };
-  }, [seats, project]);
-
   // ONE owner for "is this seat writing right now". Deriving it a second way from bus status is how
   // the view and the writer end up disagreeing about whether an edit is safe.
   useEffect(() => {
@@ -124,40 +88,6 @@ export function Files({ client, project, lens, onLens, path, seat, onSeat }: {
     const iv = setInterval(look, 5_000);
     return () => { alive = false; clearInterval(iv); };
   }, [seat]);
-
-  // The note composer refs the seat's in-flight card, so a note lands as "#id <note>" exactly
-  // like every other card reference the seat already reads. Same lookup the Review lens did.
-  const [tasks, setTasks] = useState<Card[]>([]);
-  useEffect(() => {
-    let alive = true;
-    const pull = () => { client.tasks(project).then(t => { if (alive) setTasks(t); }).catch(() => {}); };
-    pull();
-    const iv = setInterval(pull, 12_000);
-    return () => { alive = false; clearInterval(iv); };
-  }, [client, project]);
-
-  const [note, setNote] = useState("");
-  const [sending, setSending] = useState(false);
-  const [sent, setSent] = useState<"ok" | "fail" | null>(null);
-  const seatCard = useMemo(() => {
-    if (!seat) return undefined;
-    return tasks.find(t => (t.status === "doing" || t.status === "testing") && t.assignee === `${seat}:${project}`);
-  }, [tasks, seat, project]);
-
-  const sendNote = async () => {
-    const text = note.trim();
-    if (!seat || !text || sending) return;
-    setSending(true);
-    try {
-      await client.send(`${seat}:${project}`, (seatCard ? `#${seatCard.id} ` : "") + text, project);
-      setNote("");
-      setSent("ok");
-    } catch {
-      setSent("fail");
-    } finally {
-      setSending(false);
-    }
-  };
 
   const reload = (key: string) => {
     const tab = tabs.find(t => t.key === key);
@@ -323,38 +253,10 @@ export function Files({ client, project, lens, onLens, path, seat, onSeat }: {
   return (
     <div className="flex h-full min-h-0 flex-col">
       <ProjectHeader project={project} sub={sub} lens={lens} onLens={onLens} />
-      <div className="flex min-h-0 flex-1 gap-3 px-8 pb-6">
-        <div className="flex min-h-0 flex-1 flex-col gap-2.5">
-          <div className="flex items-center gap-1">
-          {/* WHICH COPY. The checkout and a seat's worktree are different files at one path. */}
-          <button
-            type="button"
-            onClick={() => onSeat(null)}
-            data-on={seat === null}
-            className="rounded-[9px] px-3 py-[7px] text-[12.5px] font-medium text-tr-muted data-[on=true]:bg-tr-panel data-[on=true]:text-tr-text data-[on=true]:shadow-sm"
-          >
-            project
-          </button>
-          {seats.map(s => (
-            <button
-              key={s.session}
-              type="button"
-              onClick={() => onSeat(seatName(s.session))}
-              data-on={seat === seatName(s.session)}
-              className="flex items-center gap-1.5 rounded-[9px] px-3 py-[7px] text-[12.5px] font-medium text-tr-muted data-[on=true]:bg-tr-panel data-[on=true]:text-tr-text data-[on=true]:shadow-sm"
-            >
-              {seatName(s.session)}
-              {/* the answer to "which files have been edited, and WHERE" (2026-09-01): each
-                  source tab carries its changed-file count, so an edited worktree announces
-                  itself before you click into it. Absent = clean, never a zero. */}
-              {(seatChanges[seatName(s.session)] ?? 0) > 0 && (
-                <span className="tr-mono rounded-full bg-tr-doing/20 px-1.5 text-[10px] text-tr-doing">
-                  {seatChanges[seatName(s.session)]}
-                </span>
-              )}
-            </button>
-          ))}
-
+      <div className="flex min-h-0 flex-1 flex-col gap-2.5 px-8 pb-6">
+        <div className="flex items-center gap-1">
+          {/* WHICH COPY lives in the ModePane footer now (#5841) — one picker feeds tree, editor,
+              and git. This row keeps only the view toggle and Save. */}
           <div className="ml-auto flex items-center gap-2">
             {activePath && body && changedFromHead && (
               <div className="flex items-center gap-1 rounded-[9px] bg-tr-panel/60 p-[3px]">
@@ -485,46 +387,6 @@ export function Files({ client, project, lens, onLens, path, seat, onSeat }: {
         </div>
         {body?.truncated && (
           <div className="px-1 text-[11.5px] text-tr-warn">Cut at 512 KB — this is the head of the file, not all of it.</div>
-        )}
-        </div>
-
-        {/* The SCM rail (#5810): permanent for a seat scope — the ONLY changes list, commit box,
-            push, and log — with the note-to-seat composer beside it. A clicked file opens through
-            the SAME open call as the tree, which is what makes it the editable Changes view. */}
-        {seat && (
-          <div className="flex w-[300px] shrink-0 flex-col gap-2.5">
-            <div className="min-h-0 flex-1">
-              <GitPanel
-                project={project}
-                seat={seat}
-                onChanged={() => { if (activeTab) reload(activeTab.key); }}
-                onOpenFile={p => openPath(seat, p, "changes")}
-              />
-            </div>
-            <div className="tr-card flex shrink-0 flex-col gap-1.5 px-3 py-2.5">
-              <div className="flex items-center gap-2 px-0.5">
-                <span className="text-[11px] font-medium text-tr-muted">note to {seat}</span>
-                {seatCard && <span className="tr-mono text-[10px] text-tr-muted/70">#{seatCard.id}</span>}
-                {sent === "ok" && <span className="tr-chip ml-auto shrink-0">sent</span>}
-                {sent === "fail" && <span className="tr-chip ml-auto shrink-0" style={{ color: "var(--color-tr-fail)" }}>failed</span>}
-              </div>
-              <textarea
-                value={note}
-                onChange={e => { setNote(e.target.value); setSent(null); }}
-                rows={2}
-                placeholder={`Tell ${seat} what to change…`}
-                className="min-w-0 flex-1 resize-none bg-transparent text-[12.5px] outline-none placeholder:text-tr-muted/60"
-              />
-              <button
-                type="button"
-                onClick={() => { void sendNote(); }}
-                disabled={!note.trim() || sending}
-                className="self-end rounded-lg bg-tr-doing/20 px-3 py-1 text-[12px] font-medium text-tr-doing disabled:opacity-40"
-              >
-                {sending ? "Sending…" : "Send"}
-              </button>
-            </div>
-          </div>
         )}
       </div>
     </div>
