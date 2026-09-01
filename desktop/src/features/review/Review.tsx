@@ -11,6 +11,7 @@ import type { Card, HubClient, Peer } from "../../shared/api/client";
 import { ProjectHeader, type Lens } from "../project/ProjectHeader";
 import { parsePatch, type DiffFile } from "./diff";
 import { seatDiff, type SeatDiff } from "./seatDiff";
+import { GitPanel } from "./GitPanel";
 
 // A seat = a crew peer of this project. The operator's own sessions are excluded outright: review
 // compares a seat's WORKTREE against its base, and the operator has no worktree, so listing them
@@ -70,6 +71,10 @@ export function Review({ client, project, lens, onLens }: {
   const [note, setNote] = useState("");
   const [sending, setSending] = useState(false);
   const [sent, setSent] = useState<"ok" | "fail" | null>(null);
+  // the git rail (#5775): hidden by default — the diff is the lens's reason to exist — and a
+  // nonce the rail bumps after commit/push so the diff re-pulls instead of lying about landed work
+  const [gitOpen, setGitOpen] = useState(false);
+  const [diffNonce, setDiffNonce] = useState(0);
 
   useEffect(() => {
     let alive = true;
@@ -104,7 +109,7 @@ export function Review({ client, project, lens, onLens }: {
     pull();
     const iv = setInterval(pull, 15_000);
     return () => { alive = false; clearInterval(iv); };
-  }, [project, selected]);
+  }, [project, selected, diffNonce]);
 
   // The seat's in-flight card, if it owns one — the composer refs it so the seat knows which
   // card the note is about. Same lookup the Workspace record rail does.
@@ -160,6 +165,16 @@ export function Review({ client, project, lens, onLens }: {
               {seatName(s.session)}
             </button>
           ))}
+          {seats.length > 0 && (
+            <button
+              onClick={() => setGitOpen(o => !o)}
+              data-on={gitOpen}
+              title="git: stage, commit, push this seat's worktree"
+              className="ml-auto rounded-[9px] px-3 py-[7px] text-[12.5px] font-medium text-tr-muted data-[on=true]:bg-tr-panel data-[on=true]:text-tr-text data-[on=true]:shadow-sm"
+            >
+              git
+            </button>
+          )}
         </div>
 
         {load.kind === "empty" && (
@@ -257,6 +272,17 @@ export function Review({ client, project, lens, onLens }: {
                 </button>
               </div>
             </div>
+
+            {/* git rail (#5775) — stage/unstage, commit, push, log for the selected seat */}
+            {gitOpen && selected && (
+              <div className="w-[300px] shrink-0">
+                <GitPanel
+                  project={project}
+                  seat={seatName(selected.session)}
+                  onChanged={() => setDiffNonce(n => n + 1)}
+                />
+              </div>
+            )}
           </div>
         )}
       </div>

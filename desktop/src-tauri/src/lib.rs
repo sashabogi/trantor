@@ -2876,6 +2876,437 @@ fn seat_diff(project: String, agent: String) -> Result<String, String> {
     .map_err(|e| e.to_string())
 }
 
+// ── git panel (#5775) ──────────────────────────────────────────────────────────────────────────
+// The Review lens showed what a seat CHANGED but left every git ACTION to a terminal. These four
+// commands are the panel's whole surface: one read snapshot (branch, ahead/behind, raw porcelain
+// status, recent log) and three mutations (stage/unstage, commit, push) — all against the SEAT's
+// worktree, the tree review is already looking at. seat_diff above stays frozen; this is
+// additive on purpose and shares no mutable state with it.
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+struct GitStatusEntry {
+    path: String,
+    /// porcelain v1 X: the index state. "?" means the file is untracked.
+    x: String,
+    /// porcelain v1 Y: the worktree state relative to the index.
+    y: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+struct GitLogEntry {
+    sha: String,
+    author: String,
+    /// author date, relative ("2 hours ago") — git's own rendering, shown as-is
+    when: String,
+    subject: String,
+}
+
+#[derive(Debug, Serialize)]
+struct GitPanel {
+    branch: String,
+    upstream: Option<String>,
+    /// commits ahead of the upstream — or, with no upstream, ahead of the merge base with main
+    /// (the seat's unlanded work). behind only exists against an upstream; without one the seat
+    /// branched from main and "behind" is a claim we have not measured.
+    ahead: Option<u64>,
+    behind: Option<u64>,
+    /// raw `git status --porcelain=v1` rows; the frontend owns bucketing into
+    /// staged/unstaged/untracked because that split is presentation, not git knowledge.
+    status: Vec<GitStatusEntry>,
+    log: Vec<GitLogEntry>,
+}
+
+/// The seat's worktree, validated. The same guards seat_diff applies — project and agent name a
+/// path under the bus dir, so ".." or "/" in either is path traversal, not a name.
+fn seat_worktree(bus: &Path, project: &str, agent: &str) -> Result<std::path::PathBuf, String> {
+    if project.trim().is_empty()
+        || agent.trim().is_empty()
+        || project.contains("..")
+        || agent.contains("..")
+        || project.contains('/')
+        || agent.contains('/')
+    {
+        return Err("project or agent is invalid".into());
+    }
+    let worktree = bus.join("worktrees").join(project).join(agent);
+    if !worktree.is_dir() {
+        return Err("seat worktree does not exist".into());
+    }
+    Ok(worktree)
+}
+
+/// A mutating git command, run for real, off the caller's thread. Failure text is git's own —
+/// the panel surfaces it verbatim, because "error: Your branch has no upstream" beats any
+/// paraphrase we could write.
+async fn git_run(dir: &Path, args: &[&str]) -> Result<(), String> {
+    let out = tokio::process::Command::new("git")
+        .arg("-C")
+        .arg(dir)
+        .args(args)
+        .output()
+        .await
+        .map_err(|e| format!("git could not start: {e}"))?;
+    if out.status.success() {
+        return Ok(());
+    }
+    let err = String::from_utf8_lossy(if out.stderr.is_empty() {
+        &out.stdout
+    } else {
+        &out.stderr
+    })
+    .trim()
+    .to_string();
+    Err(if err.is_empty() {
+        format!("git {} failed", args.join(" "))
+    } else {
+        format!("git {} failed: {err}", args.join(" "))
+    })
+}
+
+/// The async twin of run_git_text — same failure text, but the subprocess wait happens on the
+/// async runtime instead of the caller. run_git_text stays sync because the frozen seat_diff
+/// path uses it; nothing here touches that path.
+async fn run_git_text_io(dir: &Path, args: &[&str]) -> Result<String, String> {
+    let out = tokio::process::Command::new("git")
+        .arg("-C")
+        .arg(dir)
+        .args(args)
+        .output()
+        .await
+        .map_err(|e| format!("git could not start: {e}"))?;
+    if out.status.success() {
+        return Ok(String::from_utf8_lossy(&out.stdout).to_string());
+    }
+    let err = String::from_utf8_lossy(if out.stderr.is_empty() {
+        &out.stdout
+    } else {
+        &out.stderr
+    })
+    .trim()
+    .to_string();
+    Err(if err.is_empty() {
+        format!("git {} failed", args.join(" "))
+    } else {
+        format!("git {} failed: {err}", args.join(" "))
+    })
+}
+
+const MERGE_BASE_BRANCHES: [&str; 4] = ["main", "master", "origin/main", "origin/master"];
+
+/// merge_base's async twin for the git panel — same branch ladder, same "main or master first"
+/// answer, without editing the sync one the frozen seat_diff path depends on.
+async fn merge_base_async(dir: &Path) -> Result<String, String> {
+    for branch in MERGE_BASE_BRANCHES {
+        if let Ok(base) = run_git_text_io(dir, &["merge-base", "HEAD", branch]).await {
+            let base = base.trim().to_string();
+            if !base.is_empty() {
+                return Ok(base);
+            }
+        }
+    }
+    Err("could not find a merge base with main or master".into())
+}
+
+/// Mutating the git state of a worktree an agent is actively working in loses one of the two
+/// edits with no undo — the exact hazard write_file already guards, for the same reason. The
+/// panel is for landed or paused work; while the seat is mid-turn, every mutation is refused.
+async fn git_mutation_guard(agent: &str) -> Result<(), String> {
+    // seat_state shells out to herdr synchronously; park that wait on a blocking thread so the
+    // async runtime stays free for everything else the app is doing.
+    let agent = agent.to_string();
+    let for_check = agent.clone();
+    let state = tauri::async_runtime::spawn_blocking(move || seat_state(for_check))
+        .await
+        .map_err(|e| format!("seat state check failed: {e}"))??;
+    if state == "working" {
+        return Err(format!(
+            "{agent} is working in this worktree right now — retry once the seat lands"
+        ));
+    }
+    Ok(())
+}
+
+/// Pure porcelain v1 parser: "XY PATH" rows → entries. X is the index state, Y the worktree
+/// state ("?" in X means untracked); a rename reads "old -> new" and the NEW name is the one on
+/// disk; a quoted path loses its quotes. Rows too short to carry XY + a path are skipped, not
+/// guessed at. No I/O, no clock, no filesystem — cargo-tested below.
+fn parse_porcelain_v1(raw: &str) -> Vec<GitStatusEntry> {
+    let mut entries = Vec::new();
+    for line in raw.lines() {
+        if line.len() < 4 {
+            continue;
+        }
+        let x = line[..1].to_string();
+        let y = line[1..2].to_string();
+        let path = line[3..].trim();
+        let path = path
+            .rsplit(" -> ")
+            .next()
+            .unwrap_or(path)
+            .trim_matches('"')
+            .to_string();
+        entries.push(GitStatusEntry { path, x, y });
+    }
+    entries
+}
+
+/// Pure parser for `git log --pretty=format:%h%x1f%an%x1f%ar%x1f%s`. Unit separators, not spaces
+/// or pipes: a commit subject can contain either of those, and a split on the wrong byte
+/// corrupts exactly the rows the operator is trying to read. Rows without all four fields are
+/// skipped. No I/O — cargo-tested below.
+fn parse_log_pretty(raw: &str) -> Vec<GitLogEntry> {
+    let mut log = Vec::new();
+    for line in raw.lines() {
+        let parts: Vec<&str> = line.split('\x1f').collect();
+        if parts.len() == 4 {
+            log.push(GitLogEntry {
+                sha: parts[0].to_string(),
+                author: parts[1].to_string(),
+                when: parts[2].to_string(),
+                subject: parts[3].to_string(),
+            });
+        }
+    }
+    log
+}
+
+/// Pure parser for `git rev-list --left-right --count <upstream>...HEAD`, which answers
+/// "behind<TAB>ahead". Anything unreadable becomes null — the panel renders an unknown as
+/// unknown, never as zero. No I/O — cargo-tested below.
+fn parse_left_right(raw: &str) -> (Option<u64>, Option<u64>) {
+    let mut it = raw.split('\t');
+    (
+        it.next().and_then(|s| s.trim().parse().ok()),
+        it.next().and_then(|s| s.trim().parse().ok()),
+    )
+}
+
+async fn git_panel_from_bus_dir(bus: &Path, project: &str, agent: &str) -> Result<GitPanel, String> {
+    let worktree = seat_worktree(bus, project, agent)?;
+
+    let branch = run_git_text_io(&worktree, &["branch", "--show-current"])
+        .await?
+        .trim()
+        .to_string();
+
+    // @{u} is the only honest upstream answer; it fails exactly when none is set.
+    let upstream = run_git_text_io(
+        &worktree,
+        &["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"],
+    )
+    .await
+    .ok()
+    .map(|s| s.trim().to_string())
+    .filter(|s| !s.is_empty());
+
+    let (ahead, behind) = match upstream.clone() {
+        Some(up) => {
+            // "behind<TAB>ahead" — left is the upstream-only count, right is HEAD-only.
+            let counts = run_git_text_io(
+                &worktree,
+                &["rev-list", "--left-right", "--count", &format!("{up}...HEAD")],
+            )
+            .await?;
+            parse_left_right(&counts)
+        }
+        None => match merge_base_async(&worktree).await {
+            Ok(base) => (
+                run_git_text_io(&worktree, &["rev-list", "--count", &format!("{base}..HEAD")])
+                    .await?
+                    .trim()
+                    .parse()
+                    .ok(),
+                None,
+            ),
+            // No upstream AND no main to measure against: say nothing rather than guess.
+            Err(_) => (None, None),
+        },
+    };
+
+    let status =
+        parse_porcelain_v1(&run_git_text_io(&worktree, &["status", "--porcelain=v1"]).await?);
+    let log = parse_log_pretty(
+        &run_git_text_io(
+            &worktree,
+            &["log", "--max-count=15", "--pretty=format:%h%x1f%an%x1f%ar%x1f%s"],
+        )
+        .await?,
+    );
+
+    Ok(GitPanel {
+        branch,
+        upstream,
+        ahead,
+        behind,
+        status,
+        log,
+    })
+}
+
+#[tauri::command]
+async fn git_panel(project: String, agent: String) -> Result<String, String> {
+    serde_json::to_string(
+        &git_panel_from_bus_dir(&desktop_bus_dir(), &project, &agent).await?,
+    )
+    .map_err(|e| e.to_string())
+}
+
+/// Relative paths only, and never empty: git accepts absolute paths and pathspecs with "..", and
+/// the panel's inputs come from a UI listing, so anything odd is a bug to name, not to honor.
+fn clean_git_paths(paths: &[String]) -> Result<Vec<String>, String> {
+    if paths.is_empty() {
+        return Err("no paths given".into());
+    }
+    paths
+        .iter()
+        .map(|p| {
+            let p = p.trim();
+            if p.is_empty() || p.contains("..") || p.starts_with('/') {
+                return Err(format!("path is invalid: {p}"));
+            }
+            Ok(p.to_string())
+        })
+        .collect()
+}
+
+#[tauri::command]
+async fn git_stage(
+    project: String,
+    agent: String,
+    paths: Vec<String>,
+    unstage: bool,
+) -> Result<(), String> {
+    let worktree = seat_worktree(&desktop_bus_dir(), &project, &agent)?;
+    git_mutation_guard(&agent).await?;
+    let paths = clean_git_paths(&paths)?;
+    let mut args: Vec<&str> = if unstage {
+        vec!["reset", "-q", "HEAD", "--"]
+    } else {
+        vec!["add", "--"]
+    };
+    args.extend(paths.iter().map(String::as_str));
+    git_run(&worktree, &args).await
+}
+
+#[tauri::command]
+async fn git_commit(project: String, agent: String, message: String) -> Result<String, String> {
+    let worktree = seat_worktree(&desktop_bus_dir(), &project, &agent)?;
+    git_mutation_guard(&agent).await?;
+    let msg = message.trim();
+    if msg.is_empty() {
+        return Err("commit message is empty".into());
+    }
+    // Commits what is STAGED, nothing more — the panel's staging list is the whole contract, and
+    // a surprise `git add -A` under a human's finger is how unrelated seat work gets swept in.
+    git_run(&worktree, &["commit", "-q", "-m", msg]).await?;
+    run_git_text_io(&worktree, &["rev-parse", "--short", "HEAD"])
+        .await
+        .map(|s| s.trim().to_string())
+}
+
+#[tauri::command]
+async fn git_push(project: String, agent: String) -> Result<String, String> {
+    let worktree = seat_worktree(&desktop_bus_dir(), &project, &agent)?;
+    git_mutation_guard(&agent).await?;
+    let branch = run_git_text_io(&worktree, &["branch", "--show-current"])
+        .await?
+        .trim()
+        .to_string();
+    if branch.is_empty() {
+        return Err("detached HEAD — there is no branch name to push".into());
+    }
+    // -u so the first push also SETS the upstream: every later panel read then measures
+    // ahead/behind against the real thing instead of falling back to the merge base.
+    git_run(&worktree, &["push", "-u", "origin", &branch]).await?;
+    Ok(branch)
+}
+
+#[cfg(test)]
+mod git_panel_tests {
+    use super::*;
+
+    #[test]
+    fn porcelain_reads_staged_unstaged_and_untracked_rows() {
+        let rows = parse_porcelain_v1(
+            "M  staged-only.ts\n M worktree-only.ts\nMM both.ts\n?? brand-new.ts\nA  staged-new.ts\n D gone.ts\n",
+        );
+        assert_eq!(
+            rows,
+            vec![
+                GitStatusEntry { path: "staged-only.ts".into(), x: "M".into(), y: " ".into() },
+                GitStatusEntry { path: "worktree-only.ts".into(), x: " ".into(), y: "M".into() },
+                GitStatusEntry { path: "both.ts".into(), x: "M".into(), y: "M".into() },
+                GitStatusEntry { path: "brand-new.ts".into(), x: "?".into(), y: "?".into() },
+                GitStatusEntry { path: "staged-new.ts".into(), x: "A".into(), y: " ".into() },
+                GitStatusEntry { path: "gone.ts".into(), x: " ".into(), y: "D".into() },
+            ]
+        );
+    }
+
+    #[test]
+    fn porcelain_takes_a_renames_new_name_and_unquotes() {
+        let rows = parse_porcelain_v1("R  old/name.rs -> \"new name.rs\"\n");
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].path, "new name.rs");
+        assert_eq!(rows[0].x, "R");
+        assert_eq!(rows[0].y, " ");
+    }
+
+    #[test]
+    fn porcelain_skips_rows_too_short_to_carry_a_path() {
+        assert!(parse_porcelain_v1("\nab\nabc\n").is_empty());
+    }
+
+    #[test]
+    fn log_pretty_reads_unit_separated_rows_and_skips_malformed_ones() {
+        let log = parse_log_pretty(
+            "abc1234\x1fAda\x1f2 hours ago\x1ffix: the thing\n\
+             short\x1fonly-three-fields\n\
+             \n\
+             1234567\x1fBob\x1f3 days ago\x1fsubject | with a pipe\x1ftrailing\n\
+             5678efg\x1fCara\x1fjust now\x1fadd: panel\n",
+        );
+        // the 3-field row and the 5-field row are skipped, never guessed at; the empty line too
+        assert_eq!(log.len(), 2);
+        assert_eq!(log[0].sha, "abc1234");
+        assert_eq!(log[0].author, "Ada");
+        assert_eq!(log[0].when, "2 hours ago");
+        assert_eq!(log[0].subject, "fix: the thing");
+        assert_eq!(log[1].sha, "5678efg");
+        assert_eq!(log[1].subject, "add: panel");
+    }
+
+    #[test]
+    fn left_right_counts_behind_tab_ahead_and_garbage_is_null() {
+        assert_eq!(parse_left_right("0\t3\n"), (Some(0), Some(3)));
+        assert_eq!(parse_left_right("2\t0"), (Some(2), Some(0)));
+        assert_eq!(parse_left_right("nonsense"), (None, None));
+        assert_eq!(parse_left_right(""), (None, None));
+    }
+
+    #[test]
+    fn clean_git_paths_rejects_traversal_absolute_and_empty() {
+        assert!(clean_git_paths(&["..".into()]).is_err());
+        assert!(clean_git_paths(&["a/../../b".into()]).is_err());
+        assert!(clean_git_paths(&["/etc/passwd".into()]).is_err());
+        assert!(clean_git_paths(&["  ".into()]).is_err());
+        assert!(clean_git_paths(&[]).is_err());
+        assert_eq!(
+            clean_git_paths(&[" src/a.rs ".into()]).unwrap(),
+            vec!["src/a.rs".to_string()]
+        );
+    }
+
+    #[test]
+    fn seat_worktree_rejects_traversal_and_missing_dirs() {
+        let bus = std::env::temp_dir().join("git-panel-tests-nonexistent");
+        assert!(seat_worktree(&bus, "..", "glm").is_err());
+        assert!(seat_worktree(&bus, "trantor", "a/b").is_err());
+        assert!(seat_worktree(&bus, "", "glm").is_err());
+        assert!(seat_worktree(&bus, "trantor", "glm").is_err());
+    }
+}
+
 // ── self-update ────────────────────────────────────────────────────────────────────────────────
 // The app used to have NO idea a newer release existed: the only update path was someone typing
 // `trantor app update` by hand, so a teammate's install stayed stale silently forever. These two
@@ -3269,6 +3700,10 @@ pub fn run() {
             herdr_pane_read,
             herdr_seats,
             seat_diff,
+            git_panel,
+            git_stage,
+            git_commit,
+            git_push,
             project_files,
             search_files,
             read_file,
