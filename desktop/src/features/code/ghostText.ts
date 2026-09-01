@@ -1,13 +1,12 @@
 import { invoke } from "@tauri-apps/api/core";
+import * as monaco from "monaco-editor";
 
 const DEBOUNCE_MS = 300;
 const LINES_BEFORE = 60;
 const LINES_AFTER = 20;
-const MAX_TOKENS = 64;
 const STORAGE_KEY = "code.ghostText";
 
 let debounceTimer: ReturnType<typeof setTimeout> | null = null;
-let activeProvider: monaco.languages.InlineCompletionsProvider | null = null;
 
 function getEnabled(): boolean {
   try {
@@ -54,9 +53,7 @@ function extractContext(model: monaco.editor.ITextModel, position: monaco.Positi
 }
 
 export function registerGhostTextProvider(
-  editor: monaco.editor.IStandaloneCodeEditor,
-  project: string,
-  seat: string | null,
+  model: monaco.editor.ITextModel,
 ): monaco.IDisposable {
   const provider: monaco.languages.InlineCompletionsProvider = {
     triggerCharacters: [],
@@ -99,7 +96,5 @@ export function registerGhostTextProvider(
     },
   };
 
-  const disp = monaco.languages.registerInlineCompletionsProvider("*", provider);
-  activeProvider = provider;
-  return disp;
+  return monaco.languages.registerInlineCompletionsProvider("*", provider);
 }

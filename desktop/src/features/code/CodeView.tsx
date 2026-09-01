@@ -9,6 +9,7 @@ import { useEffect, useRef } from "react";
 import * as monaco from "monaco-editor";
 import { monacoLanguageFor } from "./editorLanguage";
 import "./monacoSetup";
+import { registerGhostTextProvider, isGhostTextEnabled, toggleGhostText } from "./ghostText";
 
 const fontOptions = {
   fontFamily: '"SF Mono", ui-monospace, Menlo, monospace',
@@ -16,19 +17,19 @@ const fontOptions = {
   lineHeight: 19,
 } as const;
 
-export function CodeView({ value, path, editable, onChange, onSave }: {
+export function CodeView({ value, path, editable, onChange, onSave, project, seat }: {
   value: string;
   path: string;
   editable: boolean;
   onChange?: (v: string) => void;
-  /** ⌘S. Every developer tries it within ten seconds of an editor appearing. */
   onSave?: () => void;
+  project: string;
+  seat: string | null;
 }) {
   const host = useRef<HTMLDivElement | null>(null);
   const editorRef = useRef<monaco.editor.IStandaloneCodeEditor | null>(null);
   const modelRef = useRef<monaco.editor.ITextModel | null>(null);
-  // Kept in refs so changing the handler never rebuilds the editor — a rebuild would drop the
-  // cursor and the undo history mid-edit.
+  const ghostDispRef = useRef<monaco.IDisposable | null>(null);
   const cb = useRef(onChange);
   cb.current = onChange;
   const saveCb = useRef(onSave);
@@ -36,8 +37,6 @@ export function CodeView({ value, path, editable, onChange, onSave }: {
 
   useEffect(() => {
     if (!host.current) return;
-    // No URI on purpose: monaco keys models by URI and throws on a duplicate, and a remount of
-    // the same file (StrictMode, tab flip) would collide. Language is passed explicitly.
     const model = monaco.editor.createModel(value, monacoLanguageFor(path));
     const ed = monaco.editor.create(host.current, {
       model,
@@ -45,8 +44,6 @@ export function CodeView({ value, path, editable, onChange, onSave }: {
       readOnly: !editable,
       automaticLayout: true,
       ...fontOptions,
-      // Minimap ON (2026-09-01): with it off, monaco read as "nothing changed" to the operator —
-      // the minimap is half of the editor's VS Code identity, and identity was the point (#5790).
       minimap: { enabled: true },
       scrollBeyondLastLine: false,
       stickyScroll: { enabled: false },
@@ -63,28 +60,55 @@ export function CodeView({ value, path, editable, onChange, onSave }: {
     const sub = ed.onDidChangeModelContent(() => {
       cb.current?.(ed.getValue());
     });
+    if (editable && isGhostTextEnabled()) {
+      ghostDispRef.current = registerGhostTextProvider(model);
+    }
     editorRef.current = ed;
     modelRef.current = model;
     return () => {
       sub.dispose();
+      ghostDispRef.current?.dispose();
+      ghostDispRef.current = null;
       ed.dispose();
       model.dispose();
       editorRef.current = null;
       modelRef.current = null;
     };
-    // Deliberately NOT keyed on `value`: re-creating on every keystroke is how an editor loses
-    // the cursor. A caller changing the file changes `path`, which is the real identity here.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [path, editable]);
+  }, [path, editable, project, seat]);
 
-  // A new document for the same path (saved, reloaded, switched source) replaces the text
-  // without tearing the editor down. pushEditOperations keeps the undo stack, so a live reload
-  // remains undoable — the silent-reload half of the liveReload rule.
   useEffect(() => {
     const model = modelRef.current;
     if (!model || model.getValue() === value) return;
     model.pushEditOperations([], [{ range: model.getFullModelRange(), text: value }], () => null);
   }, [value]);
 
-  return <div ref={host} className="h-full min-h-0 overflow-hidden rounded-lg" />;
+  const ghostOn = isGhostTextEnabled();
+  const switchGhost = () => {
+    const next = toggleGhostText();
+    if (modelRef.current) {
+      ghostDispRef.current?.dispose();
+      ghostDispRef.current = null;
+      if (next && editable) {
+        ghostDispRef.current = registerGhostTextProvider(modelRef.current);
+      }
+    }
+  };
+
+  return (
+    <div className="h-full min-h-0 flex flex-col overflow-hidden rounded-lg">
+      <div className="flex items-center gap-2 px-2 py-1 border-b border-tr-edge bg-tr-panel/40">
+        <button
+          type="button"
+          onClick={switchGhost}
+          data-on={ghostOn}
+          className="rounded-[7px] px-2 py-0.5 text-[11px] font-medium text-tr-muted data-[on=true]:bg-tr-ok data-[on=true]:text-[#07130f] data-[on=true]:shadow-sm hover:bg-tr-panel hover:text-tr-text"
+          title="Predictive ghost text — Tab accepts, Esc dismisses"
+        >
+          ghost text
+        </button>
+      </div>
+      <div ref={host} className="flex-1 min-h-0 overflow-hidden" />
+    </div>
+  );
 }

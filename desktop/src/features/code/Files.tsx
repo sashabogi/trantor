@@ -386,7 +386,7 @@ export function Files({ project, lens, onLens, path, seat }: {
               onSave={save}
             />
           ) : (
-            <CodeView value={draft} path={activePath} editable onChange={setDraft} onSave={save} />
+            <CodeView value={draft} path={activePath} editable onChange={setDraft} onSave={save} project={project} seat={seat} />
           )}
         </div>
         {body?.truncated && (
