@@ -784,6 +784,9 @@ fn is_harness_injection(t: &str) -> bool {
         "<command-name>",
         "[SYSTEM NOTIFICATION",
         "This session is being continued from a previous conversation",
+        "You just joined (your arrival was already announced on the bus).",
+        "NEW BUS MESSAGE for you:",
+        "NEW BUS MESSAGES for you:",
     ];
     let t = t.trim_start();
     t.starts_with('<') || MARKERS.iter().any(|m| t.starts_with(m)) || t.contains("system-reminder")
@@ -4859,6 +4862,12 @@ mod herdr_tests {
         ));
         assert!(is_harness_injection(
             "This session is being continued from a previous conversation"
+        ));
+        assert!(is_harness_injection(
+            "You just joined (your arrival was already announced on the bus). 1) relay_inbox"
+        ));
+        assert!(is_harness_injection(
+            "NEW BUS MESSAGE for you:\n[foreman]: contract"
         ));
     }
 
