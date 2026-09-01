@@ -10,8 +10,11 @@
 // whack-a-mole lesson, structural.
 import type { ReactNode } from "react";
 
-const LENSES = ["workspace", "files", "board", "feed", "bus", "review"] as const;
+const LENSES = ["workspace", "code", "board", "feed", "bus"] as const;
 export type Lens = (typeof LENSES)[number];
+/** Lens values that may still arrive from a pane opened before the v3 rename (#5814). They are
+ *  not tabs — AppShell routes them to the Code surface; nothing here renders them. */
+export type LensCompat = Lens | "files" | "review";
 
 export function ProjectHeader({ project, sub, lens, onLens, children }: {
   project: string; sub: ReactNode; lens: Lens; onLens: (l: Lens) => void; children?: ReactNode;

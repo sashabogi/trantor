@@ -7,7 +7,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { FileText, MessageSquare, Search } from "lucide-react";
 import { HubClient, hubForProject, type Card, type HubEvent } from "../../shared/api/client";
-import { searchFiles } from "../files/fileApi";
+import { searchFiles } from "../code/fileApi";
 import { paletteHits, type PaletteHit } from "./match";
 
 export type PaletteScope = { kind: "global" } | { kind: "project"; project: string };

@@ -17,7 +17,7 @@ import { Palette, type PaletteScope } from "../features/search/Palette";
 import { countUnseen, onSeenChange } from "../shared/seen";
 import { usePendingProposals } from "../shared/Proposals";
 import { ProjectIcon } from "../shared/ProjectIcon";
-import type { Lens } from "../features/project/ProjectHeader";
+import type { LensCompat } from "../features/project/ProjectHeader";
 import { orchestratorOpen, orchRestorables } from "../features/workspace/herdr";
 import { invoke } from "@tauri-apps/api/core";
 
@@ -32,9 +32,9 @@ import { Messages } from "../features/messages/Messages";
 import { Learning } from "../features/learning/Learning";
 import { Overseer } from "../features/overseer/Overseer";
 import { Settings } from "../features/settings/Settings";
-import { FileTree } from "../features/files/FileTree";
-import { Files } from "../features/files/Files";
-import { filesColumnOpen, persistFilesColumn } from "../features/files/filesColumn";
+import { FileTree } from "../features/code/FileTree";
+import { Files } from "../features/code/Files";
+import { filesColumnOpen, persistFilesColumn } from "../features/code/filesColumn";
 import { Chat, type Dock } from "../features/chat/Chat";
 import { Conversation } from "../features/chat/Conversation";
 import { BalanceStrip } from "../features/fleet/BalanceStrip";
@@ -42,7 +42,7 @@ import { notifyIfWorthIt } from "../shared/notify";
 
 type Pane =
   | { kind: "home" }
-  | { kind: "project"; lens: Lens }
+  | { kind: "project"; lens: LensCompat }
   | { kind: "inbox" }
   | { kind: "messages"; focus?: string }
   | { kind: "agents" }
@@ -558,7 +558,7 @@ export function AppShell() {
             project={active}
             seat={fileSeat}
             openPath={filePath}
-            onOpen={p => { setFilePath(p); setPane({ kind: "project", lens: "files" }); }}
+            onOpen={p => { setFilePath(p); setPane({ kind: "project", lens: "code" }); }}
           />
         </div>
       )}
@@ -595,7 +595,7 @@ export function AppShell() {
           : pane.lens === "workspace" ? <Workspace client={client} project={active} lens={pane.lens} onLens={l => setPane({ kind: "project", lens: l })} />
           : pane.lens === "board" ? <Board client={client} project={active} lens={pane.lens} onLens={l => setPane({ kind: "project", lens: l })} focusCard={focusCard} onFocusConsumed={() => setFocusCard(null)} />
           : pane.lens === "bus" ? <Conversation client={client} project={active} me={ME} lens={pane.lens} onLens={l => setPane({ kind: "project", lens: l })} />
-          : pane.lens === "files" || pane.lens === "review" ? <Files client={client} project={active} lens={pane.lens} onLens={l => setPane({ kind: "project", lens: l })}
+          : pane.lens === "code" || pane.lens === "files" || pane.lens === "review" ? <Files client={client} project={active} lens="code" onLens={l => setPane({ kind: "project", lens: l })}
                                            path={filePath} seat={fileSeat} onSeat={setFileSeat} />
            : <Feed client={client} project={active} lens={pane.lens} onLens={l => setPane({ kind: "project", lens: l })} />}
         </div>

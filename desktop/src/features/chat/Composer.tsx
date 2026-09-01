@@ -16,7 +16,7 @@ import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { ChevronDown, Paperclip, Square, ArrowUp } from "lucide-react";
-import { searchFiles } from "../files/fileApi";
+import { searchFiles } from "../code/fileApi";
 import { FONT_STEPS, type FontStep } from "./prefs";
 import { gaugeLabel, gaugeTone, gaugeUnknownWindow, composerSlot, hasImagePath, insertPaths, normalizeAttachments, receiptFor, type ContextGauge, type PendingSend } from "./streaming";
 import { projectSessions, takeoverAction, type ProjectSessions } from "./takeover";
