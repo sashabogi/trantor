@@ -126,7 +126,9 @@ function Row({ entry, depth, project, seat, onOpen, onRefresh, openPath }: { ent
           type="button"
           onClick={() => (entry.dir ? setOpen(o => !o) : onOpen(entry.path))}
           title={entry.status ? `${entry.path} — ${statusLabel(entry.status)}` : entry.path}
-          className="flex flex-1 items-center gap-1.5 min-w-0"
+          // text-left: a native button centers its text, and the name span fills the row —
+          // in the 300px pane the names floated mid-row (0.3.92, seen on screen).
+          className="flex flex-1 items-center gap-1.5 min-w-0 text-left"
         >
           {entry.dir
             ? (open ? <ChevronDown size={12} strokeWidth={2} className="shrink-0" /> : <ChevronRight size={12} strokeWidth={2} className="shrink-0" />)

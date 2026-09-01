@@ -12,7 +12,7 @@
 // Every input is gated on LIVE, not on a pane row existing (#5477): a pane whose agent exited is
 // registered but dead, and typing into it would queue words nobody will ever read. `liveWhy`
 // names the reason on every locked control, because a control that explains itself is trusted.
-import { useEffect, useRef, useState } from "react";
+import { type ReactNode, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { ChevronDown, Paperclip, Square, ArrowUp } from "lucide-react";
@@ -34,6 +34,9 @@ type LongRunState = {
   error: string | null;
   label: string;
 };
+
+import { brandFor } from "../../shared/Avatar";
+import { modelLabel } from "./modelLabel";
 
 const MODELS = [
   { value: "opus", label: "opus" },
@@ -75,21 +78,39 @@ function ContextGauge({ ctx }: { ctx: ContextGauge }) {
   // the early return has already made unreachable.
   const frac = ctx.frac ?? 0;
   return (
-    <div className="flex shrink-0 items-center gap-1.5" title={gaugeLabel(ctx)}>
+    <div className="flex min-w-0 flex-1 items-center gap-1.5" title={gaugeLabel(ctx)}>
       {/* The bar says what it measures (#5556): a bare percentage next to two dials could be
-          anything, so the word rides with it and the tooltip keeps the exact tokens. */}
-      <span className="text-[10.5px] text-tr-muted">context</span>
-      <div className="h-1.5 w-20 shrink-0 overflow-hidden rounded-full bg-tr-edge">
+          anything, so the word rides with it and the tooltip keeps the exact tokens. The bar is
+          the ONE flexible part of the row (#5841, 440px pane): every dial is nowrap, and the
+          bar takes whatever width is left instead of the model name wrapping onto two lines. */}
+      <span className="shrink-0 text-[10.5px] text-tr-muted">context</span>
+      <div className="h-1.5 min-w-[24px] max-w-20 flex-1 overflow-hidden rounded-full bg-tr-edge">
         <div className="h-full rounded-full" style={{ width: `${Math.min(100, frac * 100)}%`, background: GAUGE_COLOUR[tone] }} />
       </div>
-      <span className="tr-mono w-[30px] text-right text-[10.5px]" style={{ color: GAUGE_COLOUR[tone] }}>
+      <span className="tr-mono w-[30px] shrink-0 text-right text-[10.5px]" style={{ color: GAUGE_COLOUR[tone] }}>
         {Math.round(frac * 100)}%
       </span>
     </div>
   );
 }
 
-function Picker({ label, value, source, options, onPick, disabled, why }: {
+/** The brand mark for the model dial — the same vendored SVG the avatars and the balance strip
+ *  use, at dial size. Null for a model no brand claims (the id shows as it came). */
+function modelMark(model: string): ReactNode {
+  const { brand } = modelLabel(model);
+  const b = brand ? brandFor(brand) : null;
+  if (!b) return null;
+  return (
+    <span
+      aria-hidden
+      className="inline-block h-[13px] w-[13px] shrink-0 [&>svg]:h-full [&>svg]:w-full"
+      style={{ color: b.hex }}
+      dangerouslySetInnerHTML={{ __html: b.svg }}
+    />
+  );
+}
+
+function Picker({ label, value, source, options, onPick, disabled, why, icon, display, detail }: {
   label: string;
   value: string;
   source: Provenance;
@@ -99,6 +120,11 @@ function Picker({ label, value, source, options, onPick, disabled, why }: {
   /** Why the control is locked, shown while disabled — a dead-looking control that explains
    *  itself is a control people trust (#5477). */
   why: string;
+  /** A mark and a shorter face for the value (the model dial: Claude mark + "5.1"); the full
+   *  value stays in the tooltip. */
+  icon?: ReactNode;
+  display?: string;
+  detail?: string;
 }) {
   const [open, setOpen] = useState(false);
   return (
@@ -109,13 +135,14 @@ function Picker({ label, value, source, options, onPick, disabled, why }: {
         disabled={disabled}
         title={
           disabled ? why
-            : source === "dispatched" ? `Sent to the agent — not confirmed`
-            : source === "reported" ? `${label} reported by the session`
+            : source === "dispatched" ? `Sent to the agent — not confirmed${detail ? ` · ${detail}` : ""}`
+            : source === "reported" ? `${detail ?? label} reported by the session`
             : `${label} unknown until the session says`
         }
-        className="flex items-center gap-1 rounded-[7px] px-2 py-1 text-[11px] text-tr-muted hover:text-tr-text disabled:opacity-40"
+        className="flex shrink-0 items-center gap-1 whitespace-nowrap rounded-[7px] px-2 py-1 text-[11px] text-tr-muted hover:text-tr-text disabled:opacity-40"
       >
-        <span className={source === "dispatched" ? "italic" : undefined}>{value || label}</span>
+        {icon}
+        <span className={source === "dispatched" ? "italic" : undefined}>{display ?? (value || label)}</span>
         {source === "dispatched" && <span className="text-tr-warn">·</span>}
         <ChevronDown size={10} strokeWidth={2.5} />
       </button>
@@ -535,6 +562,9 @@ export function Composer({ project, target, live, liveWhy, model, modelSource, w
           onPick={pickModel}
           disabled={!live}
           why={liveWhy}
+          icon={modelMark(model)}
+          display={model ? modelLabel(model).short : undefined}
+          detail={model ? modelLabel(model).full : undefined}
         />
         <Picker
           label="effort"
@@ -565,7 +595,7 @@ export function Composer({ project, target, live, liveWhy, model, modelSource, w
         {/* The gauge sits beside the dials that fill the window (#5521) — the number is mono
             because it is a number being compared, and it is hidden until truth exists. */}
         <ContextGauge ctx={context} />
-        <div className="ml-auto flex items-center gap-2">
+        <div className="ml-auto flex shrink-0 items-center gap-2">
           <FontMenu step={fontStep} onPick={onFontStep} />
         </div>
       </div>

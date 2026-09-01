@@ -9,6 +9,7 @@
 // selector lives at the BOTTOM of the pane (Main.dc.html:147-152) and feeds tree, editor, and
 // git alike — one picker, three consumers.
 import { useEffect, useMemo, useState } from "react";
+import { ChevronDown, FolderTree, GitBranch, History, MessageSquare } from "lucide-react";
 import type { Card, HubClient, Peer } from "../../shared/api/client";
 import { FileTree } from "./FileTree";
 import { GitPanel } from "./GitPanel";
@@ -38,6 +39,7 @@ export function ModePane({ client, project, seat, onSeat, onOpenFile }: {
   onOpenFile: (path: string) => void;
 }) {
   const [mode, setMode] = useState<Mode>("files");
+  const [scopeOpen, setScopeOpen] = useState(false);
   const [filter, setFilter] = useState("");
   const [changed, setChanged] = useState<GitPanelSnapshot | null>(null);
   const [seatCounts, setSeatCounts] = useState<Record<string, number>>({});
@@ -139,15 +141,20 @@ export function ModePane({ client, project, seat, onSeat, onOpenFile }: {
     return f ? rows.filter(r => r.path.toLowerCase().includes(f)) : rows;
   }, [changed, filter]);
 
-  const modeBtn = (m: Mode, label: string, dot?: boolean) => (
+  // The rail is the SAME object as the lens tabs (tr-seg + a raised active segment) with a
+  // Lucide icon per mode, so it reads as clickable by association with every other tab in the
+  // app — four words and a dot did not (operator, 0.3.92: "nothing denotes that you can click").
+  const modeBtn = (m: Mode, label: string, Icon: typeof FolderTree, dot?: boolean) => (
     <button
       type="button"
       onClick={() => setMode(m)}
       data-on={mode === m}
-      className={`flex items-center gap-1.5 rounded-[7px] px-2.5 py-[5px] text-[12px] font-medium text-tr-muted data-[on=true]:bg-white/[0.07] data-[on=true]:text-tr-text`}
+      title={label}
+      className="flex items-center gap-1.5 whitespace-nowrap"
     >
-      {dot && <span className="h-[6px] w-[6px] shrink-0 rounded-full bg-tr-doing" />}
+      <Icon size={12} strokeWidth={1.75} className="shrink-0" />
       {label}
+      {dot && <span className="ml-0.5 h-[6px] w-[6px] shrink-0 rounded-full bg-tr-doing" />}
     </button>
   );
 
@@ -157,12 +164,13 @@ export function ModePane({ client, project, seat, onSeat, onOpenFile }: {
       style={{ width: mode === "chat" ? 440 : 300, margin: 12 }}
     >
       {/* mode rail */}
-      <div className="flex shrink-0 items-center gap-1 border-b border-tr-edge px-3 py-2.5">
-        {modeBtn("files", "Files")}
-        {modeBtn("git", "Git")}
-        {modeBtn("sessions", "Sessions")}
-        <div className="flex-1" />
-        {modeBtn("chat", "Chat", true)}
+      <div className="flex shrink-0 items-center border-b border-tr-edge px-3 py-2.5">
+        <div className="tr-seg w-full gap-px [&>button]:flex-1 [&>button]:justify-center [&>button]:px-1 [&>button]:text-[11.5px]">
+          {modeBtn("files", "Files", FolderTree)}
+          {modeBtn("git", "Git", GitBranch)}
+          {modeBtn("sessions", "Sessions", History)}
+          {modeBtn("chat", "Chat", MessageSquare, true)}
+        </div>
       </div>
 
       {/* FILES — find box, CHANGED pinned first, ALL FILES tree, seat footer */}
@@ -291,35 +299,64 @@ export function ModePane({ client, project, seat, onSeat, onOpenFile }: {
       {/* CHAT — the orchestrator conversation, moved whole from the old dock. The editor
           narrows, never disappears (ChatFocused.dc.html). */}
       {mode === "chat" && (
-        <Chat project={project} dock="right" onDock={() => {}} onClose={() => setMode("files")} />
+        <Chat project={project} dock="pane" onDock={() => {}} onClose={() => setMode("files")} />
       )}
 
       {/* seat scope selector — the bottom of the pane, one picker for tree, editor, and git */}
-      <div className="flex shrink-0 flex-wrap gap-1 border-t border-tr-edge px-3 py-2.5">
-        <button
-          type="button"
-          onClick={() => onSeat(null)}
-          data-on={seat === null}
-          className="rounded-[7px] px-2.5 py-[3px] text-[11px] text-tr-muted data-[on=true]:bg-tr-panel data-[on=true]:text-tr-text data-[on=true]:shadow-sm"
-        >
-          project
-        </button>
-        {seats.map(s => {
-          const name = seatName(s.session);
-          return (
-            <button
-              key={s.session}
-              type="button"
-              onClick={() => onSeat(name)}
-              data-on={seat === name}
-              className="rounded-[7px] px-2.5 py-[3px] text-[11px] text-tr-muted data-[on=true]:bg-tr-panel data-[on=true]:text-tr-text data-[on=true]:shadow-sm"
-            >
-              {name}
-              {(seatCounts[name] ?? 0) > 0 && <span className="ml-1 text-tr-doing">{seatCounts[name]}</span>}
-            </button>
-          );
-        })}
-      </div>
+      {/* The scope picker — ONE dropdown, Files and Git only (2026-09-01: six wrapping chips in
+          a 300px footer read as broken, and a seat picker under the chat composer scoped nothing).
+          The raised face says which copy the tree, editor, and git are reading; the menu lists
+          the project checkout and every seat with its changed-file count. */}
+      {(mode === "files" || mode === "git") && (
+        <div className="relative shrink-0 border-t border-tr-edge px-3 py-2">
+          <button
+            type="button"
+            onClick={() => setScopeOpen(o => !o)}
+            title="Which checkout the tree, editor, and git read"
+            className="flex w-full items-center gap-2 rounded-[8px] border border-tr-edge bg-white/[0.03] px-2.5 py-[6px] text-[12px] text-tr-text hover:bg-white/[0.05]"
+          >
+            <span className="text-[10.5px] text-tr-muted">scope</span>
+            <span className="tr-mono min-w-0 flex-1 truncate text-left text-[11.5px]">
+              {seat ? `seat/${seat}` : "project"}
+            </span>
+            {seat && (seatCounts[seat] ?? 0) > 0 && (
+              <span className="tr-mono shrink-0 text-[10.5px] text-tr-doing">{seatCounts[seat]} changed</span>
+            )}
+            <ChevronDown size={11} strokeWidth={2.5} className="shrink-0 text-tr-muted" />
+          </button>
+          {scopeOpen && (
+            <div className="absolute bottom-full left-3 right-3 z-10 mb-1 overflow-hidden rounded-lg border border-tr-edge bg-tr-panel shadow-lg">
+              <button
+                type="button"
+                onClick={() => { onSeat(null); setScopeOpen(false); }}
+                data-on={seat === null}
+                className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-[12px] text-tr-muted hover:bg-white/[0.05] hover:text-tr-text data-[on=true]:text-tr-text"
+              >
+                <span className="tr-mono flex-1">project</span>
+                <span className="text-[10.5px] text-tr-muted/70">the checkout</span>
+              </button>
+              {seats.map(s => {
+                const name = seatName(s.session);
+                const n = seatCounts[name] ?? 0;
+                return (
+                  <button
+                    key={s.session}
+                    type="button"
+                    onClick={() => { onSeat(name); setScopeOpen(false); }}
+                    data-on={seat === name}
+                    className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-[12px] text-tr-muted hover:bg-white/[0.05] hover:text-tr-text data-[on=true]:text-tr-text"
+                  >
+                    <span className="tr-mono flex-1">seat/{name}</span>
+                    {n > 0
+                      ? <span className="tr-mono text-[10.5px] text-tr-doing">{n} changed</span>
+                      : <span className="text-[10.5px] text-tr-muted/70">clean</span>}
+                  </button>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }

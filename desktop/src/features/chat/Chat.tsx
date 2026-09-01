@@ -34,7 +34,12 @@ import {
   type SessionPayload, type ToolResult, type Turn,
 } from "./streaming";
 
-export type Dock = "right" | "bottom";
+/** "pane" = hosted inside the ModePane (#5841): the pane owns width, height, and the mode
+ *  rail, so the chat brings no column chrome of its own — no fixed width, no resize strip, no
+ *  dock/hide buttons. Rendering the dock chrome inside the pane made the chat taller than its
+ *  host (h-full + rail + footer) and wider than 440 (the saved dock width), so focusing the
+ *  composer scrolled the rail out of the clipped container: "no way to change it back". */
+export type Dock = "right" | "bottom" | "pane";
 
 /** Consecutive turns from the same speaker are ONE thing to a reader. The transcript splits them
  *  every time a tool runs, which is why the panel showed "ORCHESTRATOR" stacked above every card. */
@@ -394,6 +399,7 @@ export function Chat({ project, dock, onDock, onClose }: {
     lastToolLabel(chat.turns), chat.meta.context.tokens);
   const liveness = sessionLiveness(status, target);
   const side = dock === "right";
+  const hosted = dock === "pane";
 
   /** Resize by dragging the panel's inner edge (#5522). The panel is anchored to the window's
    *  far side (right of the content, or its bottom), so the dragged edge is the NEAR one and
@@ -488,7 +494,7 @@ export function Chat({ project, dock, onDock, onClose }: {
   // CSS custom properties have no key in React's CSSProperties, so the variable is declared as
   // part of the object's own type — an intersection, not an assertion: every key is checked.
   const rootStyle: CSSProperties & Record<"--chat-scale", string> = {
-    ...(side ? { width: `${panel.width ?? 420}px` } : { height: `${panel.height ?? 340}px` }),
+    ...(hosted ? {} : side ? { width: `${panel.width ?? 420}px` } : { height: `${panel.height ?? 340}px` }),
     "--chat-scale": String(fontScale(fontStep)),
   };
 
@@ -496,11 +502,11 @@ export function Chat({ project, dock, onDock, onClose }: {
     <div
       ref={root}
       style={rootStyle}
-      className={`relative flex min-h-0 flex-col border-tr-edge bg-tr-bg ${side ? "h-full shrink-0 border-l" : "shrink-0 border-t"}`}
+      className={`relative flex min-h-0 flex-col border-tr-edge bg-tr-bg ${hosted ? "flex-1" : side ? "h-full shrink-0 border-l" : "shrink-0 border-t"}`}
     >
       {/* The inner edge, as a grab strip (#5522): left when the panel is docked right, top when
           it is docked bottom. touch-none so a touch drag resizes instead of scrolling. */}
-      <div
+      {!hosted && <div
         role="separator"
         aria-orientation={side ? "vertical" : "horizontal"}
         aria-label={side ? "Resize chat width" : "Resize chat height"}
@@ -510,7 +516,7 @@ export function Chat({ project, dock, onDock, onClose }: {
         className={side
           ? "absolute inset-y-0 left-0 z-10 w-[5px] cursor-col-resize hover:bg-white/[0.06]"
           : "absolute inset-x-0 top-0 z-10 h-[5px] cursor-row-resize hover:bg-white/[0.06]"}
-      />
+      />}
       {/* One row that cannot wrap. Every part is shrink-0 except the project name, which truncates,
           because a header that reflows into three lines is what "mangled" looked like. */}
       <div className="flex shrink-0 items-center gap-2 overflow-hidden px-3 py-2">
@@ -535,18 +541,18 @@ export function Chat({ project, dock, onDock, onClose }: {
             </button>
           )}
           {/* The dock toggle says what it is (#5521): an icon that reads as the target dock,
-              not a mystery square. */}
-          <button
+              not a mystery square. Hosted in the pane, the mode rail IS the dock control. */}
+          {!hosted && <button
             type="button"
             onClick={() => onDock(side ? "bottom" : "right")}
             title={side ? "Dock chat to bottom" : "Dock chat to right"}
             className="rounded-[7px] p-1.5 text-tr-muted hover:text-tr-text"
           >
             {side ? <PanelBottom size={13} strokeWidth={1.75} /> : <PanelRight size={13} strokeWidth={1.75} />}
-          </button>
+          </button>}
           {/* No bare ✕ (#5521): hiding is a labeled action whose undo is named right here, so
               closing the chat never becomes a dismissal you need prior knowledge to reverse. */}
-          <button
+          {!hosted && <button
             type="button"
             onClick={onClose}
             title="Hide chat — the Orchestrator button in the corner brings it back"
@@ -554,7 +560,7 @@ export function Chat({ project, dock, onDock, onClose }: {
           >
             {side ? <PanelRightClose size={13} strokeWidth={1.75} /> : <PanelBottomClose size={13} strokeWidth={1.75} />}
             hide
-          </button>
+          </button>}
         </div>
       </div>
 

@@ -154,9 +154,13 @@ export function Files({ project, lens, onLens, path, seat }: {
 
   // Load the active tab's documents. body/head reset per tab; the draft survives via draftsRef.
   useEffect(() => {
-    if (!activeTab) { setBody(null); setHead(null); setError(null); setDraft(""); setSaved(false); loadedKeyRef.current = null; return; }
+    if (!activeTab) { setBody(null); setHead(null); setError(null); setDraftState(""); setSaved(false); loadedKeyRef.current = null; return; }
     setBody(null); setHead(null); setError(null); setSaved(false);
-    setDraft(draftsRef.current.get(activeTab.key) ?? "");
+    // setDraftState, NOT setDraft: the setter below also records the value as the tab's kept
+    // draft, and recording "" for a tab with nothing kept is what made reload() adopt "" over the
+    // disk text — the whole file rendered as one blank line, the changes view as all-deleted
+    // (0.3.91, seen on screen). The kept draft is read here, never written.
+    setDraftState(draftsRef.current.get(activeTab.key) ?? "");
     statRef.current = null;
     reload(activeTab.key);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -369,7 +373,7 @@ export function Files({ project, lens, onLens, path, seat }: {
               <div className="tr-card-ghost max-w-[440px] px-6 py-5 text-center text-[12.5px] leading-relaxed">
                 {activePath
                   ? "reading…"
-                  : "Pick a file in the Files column to edit it. Switch the source above to work in a seat's worktree rather than the project checkout."}
+                  : "Pick a file in the pane to edit it. The scope control at the bottom of the pane switches between the project checkout and a seat's worktree."}
               </div>
             </div>
           ) : activeView === "changes" && head !== null && changedFromHead ? (

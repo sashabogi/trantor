@@ -35,6 +35,21 @@ function LineCountChip({ counts, path }: { counts: GitPanelSnapshot["counts"]; p
   );
 }
 
+/** "Overseer.tsx  features/overseer" — the name leads and the directory follows dimmed, the way
+ *  the SourceControl artboard (and Orca) lay a changed row out. A path truncated from the right
+ *  in a 300px pane showed "desktop/src/feature…" for every row: the one part nobody needed. */
+function PathLabel({ path }: { path: string }) {
+  const cut = path.lastIndexOf("/");
+  const name = cut === -1 ? path : path.slice(cut + 1);
+  const dir = cut === -1 ? "" : path.slice(0, cut);
+  return (
+    <>
+      <span className="text-tr-text">{name}</span>
+      {dir && <span className="ml-1.5 text-[10.5px] text-tr-muted/60">{dir}</span>}
+    </>
+  );
+}
+
 export function GitPanel({ project, seat, onChanged, onOpenFile }: {
   project: string; seat: string; onChanged?: () => void; onOpenFile?: (path: string) => void;
 }) {
@@ -188,7 +203,7 @@ export function GitPanel({ project, seat, onChanged, onOpenFile }: {
                     onClick={() => onOpenFile?.(e.path)}
                     className="tr-mono min-w-0 flex-1 truncate text-left text-[11.5px]"
                     title={`${e.x}${e.y} ${e.path} — open diff`}
-                  >{e.path}</button>
+                  ><PathLabel path={e.path} /></button>
                   <LineCountChip counts={snap?.counts ?? []} path={e.path} />
                   {conflict && (
                     <span className="tr-chip shrink-0" title="unmerged — git needs a human before anything touches this path">conflict</span>
@@ -242,7 +257,7 @@ export function GitPanel({ project, seat, onChanged, onOpenFile }: {
                     onClick={() => onOpenFile?.(e.path)}
                     className="tr-mono min-w-0 flex-1 truncate text-left text-[11.5px]"
                     title={`${e.x}${e.y} ${e.path} — open diff`}
-                  >{e.path}</button>
+                  ><PathLabel path={e.path} /></button>
                   <LineCountChip counts={snap?.counts ?? []} path={e.path} />
                   {conflict && (
                     <span className="tr-chip shrink-0" title="unmerged — staging would erase git's conflict record before review">conflict</span>
@@ -266,7 +281,7 @@ export function GitPanel({ project, seat, onChanged, onOpenFile }: {
                   onClick={() => onOpenFile?.(p)}
                   className="tr-mono min-w-0 flex-1 truncate text-left text-[11.5px]"
                   title={`untracked ${p} — open diff`}
-                >{p}</button>
+                ><PathLabel path={p} /></button>
                 <span className="tr-chip shrink-0">new</span>
                 <button
                   type="button"
