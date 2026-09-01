@@ -10,6 +10,10 @@ export type FileEntry = {
   dir: boolean;
   /** git's porcelain code, trimmed. "" when unchanged. */
   status: string;
+  /** +N/−N vs HEAD (numstat) — the row's change-size chip. Absent for untracked and binary
+   *  files: git counts neither, and a fake zero would read as "known small" (#5811). */
+  plus?: number;
+  minus?: number;
 };
 
 /** `seat` picks WHICH copy: undefined = the project checkout, otherwise that seat's worktree.

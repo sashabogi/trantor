@@ -22,6 +22,12 @@
 
   --color-tr-main:    #19191d;   /* the floating main panel */
 
+  /* git decoration tokens (#5811) — the +N/−N chips on tree and SCM rows read THESE, never raw
+     hex, so one place retunes every row at once (Orca's diff-line-counts.tsx pattern). Values
+     are the status hues: additions = tr-ok, deletions = tr-fail. */
+  --git-decoration-added:   var(--color-tr-ok);
+  --git-decoration-deleted: var(--color-tr-fail);
+
   --font-ui:   "Avenir Next", "Avenir", "Helvetica Neue", ui-sans-serif, sans-serif;
   --font-mono: "SF Mono", ui-monospace, "Menlo", monospace;
 }

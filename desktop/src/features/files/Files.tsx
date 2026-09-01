@@ -26,9 +26,10 @@ import { fileStat, readFile, readFileAtHead, seatState, writePlain, type FileBod
 import { CodeView } from "./CodeView";
 import { ChangesView } from "./ChangesView";
 import { decideReload, type FileStat } from "./liveReload";
-import { closeTab, markDirty, openInTabs, togglePin, type CodeTab } from "./codeTabs";
+import { closeTab, markDirty, markExternalMutation, openInTabs, togglePin, type CodeTab } from "./codeTabs";
 import { seatDiff } from "./seatDiff";
 import { GitPanel } from "./GitPanel";
+import { diskSignature, externalMutationOnLoad } from "./tabGuard";
 import { listen } from "@tauri-apps/api/event";
 
 type ViewMode = "code" | "changes";
@@ -55,9 +56,11 @@ export function Files({ client, project, lens, onLens, path, seat, onSeat }: {
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [busy, setBusy] = useState(false);
-  const [conflict, setConflict] = useState(false);
 
   const activeTab = tabs.find(t => t.key === activeKey) ?? null;
+  // The on-disk conflict rides the TAB (Orca open-file.ts:124-128, per-tab), not this component's
+  // state: switching away and back must not forget that a file moved under unsaved work.
+  const conflict = activeTab?.externalMutation === "changed";
   const activePath = activeTab?.path ?? null;
   const activeScope = activeTab?.scope ?? "project";
   const activeView = activeTab?.view ?? "code";
@@ -66,10 +69,13 @@ export function Files({ client, project, lens, onLens, path, seat, onSeat }: {
   // so the poll reads the CURRENT values without tearing the interval down every render.
   const statRef = useRef<FileStat | null>(null);
   const dirtyRef = useRef(false);
-  // Per-tab drafts and disk text, kept OUT of state: a keystroke updates one map entry and the
-  // active tab's dot, and a background tab keeps its unsaved work while it is not on screen.
+  // Per-tab drafts, disk text, and the signature of the disk text each draft is based on
+  // (Orca's lastKnownDiskSignature, open-file.ts:126). Kept OUT of state: a keystroke updates
+  // one map entry and the active tab's dot, and a background tab keeps its unsaved work while
+  // it is not on screen.
   const draftsRef = useRef(new Map<string, string>());
   const diskRef = useRef(new Map<string, string>());
+  const sigRef = useRef(new Map<string, string>());
   // The editor is always live: unsaved work is simply "the draft differs from the disk".
   dirtyRef.current = body !== null && draft !== body.text;
 
@@ -158,13 +164,27 @@ export function Files({ client, project, lens, onLens, path, seat, onSeat }: {
       .then(b => {
         setBody(b);
         diskRef.current.set(key, b.text);
-        // The draft survives a tab switch (stashed in draftsRef); a fresh open has none, so the
-        // disk text IS the draft until the first keystroke.
         const kept = draftsRef.current.get(key);
-        const text = kept ?? b.text;
-        setDraft(text);
-        draftsRef.current.set(key, text);
-        setTabs(ts => markDirty(ts, key, text !== b.text));
+        const verdict = externalMutationOnLoad({
+          draft: kept ?? null,
+          baseSignature: sigRef.current.get(key) ?? null,
+          diskText: b.text,
+        });
+        setTabs(ts => markExternalMutation(ts, key, verdict === "moved" ? "changed" : undefined));
+        if (verdict === "moved") {
+          // The disk moved away from what the draft was based on: keep the draft, flag the tab,
+          // and let the bar offer reload-vs-keep. Saving stays gated until that choice.
+          const text = kept ?? "";
+          setDraft(text);
+          draftsRef.current.set(key, text);
+          setTabs(ts => markDirty(ts, key, text !== b.text));
+        } else {
+          const text = kept ?? b.text;
+          setDraft(text);
+          draftsRef.current.set(key, text);
+          sigRef.current.set(key, diskSignature(b.text));
+          setTabs(ts => markDirty(ts, key, text !== b.text));
+        }
       })
       .catch(e => setError(e instanceof Error ? e.message : String(e)));
     readFileAtHead(project, tab.path, tabSeat).then(setHead).catch(() => setHead(""));
@@ -196,7 +216,6 @@ export function Files({ client, project, lens, onLens, path, seat, onSeat }: {
   useEffect(() => {
     if (!activeTab) { setBody(null); setHead(null); setError(null); setDraft(""); setSaved(false); return; }
     setBody(null); setHead(null); setError(null); setSaved(false);
-    setConflict(false);
     setDraft(draftsRef.current.get(activeTab.key) ?? "");
     statRef.current = null;
     reload(activeTab.key);
@@ -221,10 +240,10 @@ export function Files({ client, project, lens, onLens, path, seat, onSeat }: {
           const decision = decideReload({ dirty: dirtyRef.current, lastStat: statRef.current, newStat: st });
           if (decision === "reload") {
             statRef.current = st;
-            setConflict(false);
             reload(activeTab.key);
           } else if (decision === "conflict") {
-            setConflict(true);
+            // The flag rides the tab, so the bar is still there after a switch away and back.
+            setTabs(ts => markExternalMutation(ts, activeTab.key, "changed"));
           } else if (statRef.current === null) {
             statRef.current = st;
           }
@@ -249,22 +268,40 @@ export function Files({ client, project, lens, onLens, path, seat, onSeat }: {
   const changedFromHead = head !== null && head !== draft;
 
   const save = () => {
-    if (!activeTab || busy) return;
+    // Gated on a live on-disk conflict: writing now would silently discard the newer file —
+    // the bar above is the way out (reload, or keep the draft and adopt the new baseline).
+    if (!activeTab || busy || conflict) return;
     setSaving(true); setError(null);
     const key = activeTab.key;
     const tabSeat = activeTab.scope === "project" ? undefined : activeTab.scope;
     writePlain(project, activeTab.path, tabSeat, draft)
       .then(() => {
         setSaved(true);
-        setConflict(false);
-        // Our own save moved the disk; drop the baseline so the next poll re-baselines instead of
-        // reading our own write as an external change.
+        // Our own save moved the disk: the draft is now the disk, and it is the new baseline.
         statRef.current = null;
+        sigRef.current.set(key, diskSignature(draft));
+        diskRef.current.set(key, draft);
+        setTabs(ts => markExternalMutation(ts, key, undefined));
         setTabs(ts => markDirty(ts, key, false));
         reload(key);
       })
       .catch(e => setError(e instanceof Error ? e.message : String(e)))
       .finally(() => setSaving(false));
+  };
+
+  // "Keep my changes" adopts the NEW disk text as the draft's baseline without touching the
+  // draft: the conflict clears, and the guard stays armed for the next external move.
+  const keepMyChanges = () => {
+    if (!activeTab) return;
+    const key = activeTab.key;
+    const tabSeat = activeTab.scope === "project" ? undefined : activeTab.scope;
+    readFile(project, activeTab.path, tabSeat)
+      .then(b => {
+        sigRef.current.set(key, diskSignature(b.text));
+        diskRef.current.set(key, b.text);
+        setTabs(ts => markExternalMutation(ts, key, undefined));
+      })
+      .catch(() => {});
   };
 
   const dirty = body !== null && draft !== body.text;
@@ -327,8 +364,10 @@ export function Files({ client, project, lens, onLens, path, seat, onSeat }: {
             <button
               type="button"
               onClick={save}
-              disabled={saving || busy || !activePath || !dirty}
-              title={busy && seat ? `${seat} is writing here right now` : "save this file"}
+              disabled={saving || busy || !activePath || !dirty || conflict}
+              title={conflict
+                ? "resolve the on-disk conflict first — saving now would discard the newer file"
+                : busy && seat ? `${seat} is writing here right now` : "save this file"}
               className="rounded-[8px] bg-tr-ok px-3 py-1.5 text-[12px] font-semibold text-[#07130f] disabled:opacity-50"
             >
               {saving ? "Saving…" : "Save"}
@@ -392,14 +431,14 @@ export function Files({ client, project, lens, onLens, path, seat, onSeat }: {
             <div className="ml-auto flex items-center gap-2">
               <button
                 type="button"
-                onClick={() => { setConflict(false); statRef.current = null; if (activeTab) reload(activeTab.key); }}
+                onClick={() => { statRef.current = null; if (activeTab) reload(activeTab.key); }}
                 className="rounded-[8px] bg-tr-panel px-3 py-1.5 text-[12px] font-semibold text-tr-text"
               >
                 Reload from disk
               </button>
               <button
                 type="button"
-                onClick={() => { setConflict(false); statRef.current = null; }}
+                onClick={() => { statRef.current = null; keepMyChanges(); }}
                 className="rounded-[8px] px-2.5 py-1.5 text-[12px] text-tr-muted hover:text-tr-text"
               >
                 Keep my changes

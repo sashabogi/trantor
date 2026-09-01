@@ -2,7 +2,7 @@
 // position label — so they carry the panel's whole test weight here. The Rust side owns the git
 // subprocesses; these tests pin the contract the panel renders against.
 import { describe, expect, it } from "vitest";
-import { aheadLabel, bucketStatus, scmSections } from "./gitApi";
+import { aheadLabel, bucketStatus, isUnmerged, lineCountFor, scmSections, stageableChanges } from "./gitApi";
 
 describe("bucketStatus", () => {
   it("splits staged, unstaged, and untracked from raw porcelain rows", () => {
@@ -21,7 +21,7 @@ describe("bucketStatus", () => {
 
   it("keeps the raw XY codes on entries so the UI can title them", () => {
     const { staged } = bucketStatus([{ path: "a.ts", x: "R", y: " " }]);
-    expect(staged[0]).toEqual({ path: "a.ts", x: "R", y: " " });
+    expect(staged[0]).toEqual({ path: "a.ts", x: "R", y: " " });;
   });
 
   it("shows a staged-then-edited file in BOTH lists rather than picking one", () => {
@@ -75,5 +75,41 @@ describe("scmSections", () => {
 
   it("returns empty sections for a clean worktree", () => {
     expect(scmSections([])).toEqual({ staged: [], changes: [] });
+  });
+});
+
+describe("conflict protection (#5811)", () => {
+  it("reads unmerged straight off the porcelain XY codes", () => {
+    expect(isUnmerged({ x: "U", y: "U" })).toBe(true);
+    expect(isUnmerged({ x: "A", y: "A" })).toBe(true);
+    expect(isUnmerged({ x: "D", y: "D" })).toBe(true);
+    expect(isUnmerged({ x: "U", y: "A" })).toBe(true);
+    expect(isUnmerged({ x: "M", y: " " })).toBe(false);
+    expect(isUnmerged({ x: "?", y: "?" })).toBe(false);
+  });
+
+  it("stageableChanges excludes conflicted rows from the bulk-stage batch", () => {
+    expect(stageableChanges([
+      { path: "clean-edit.ts", x: " ", y: "M" },
+      { path: "war.ts", x: "U", y: "U" },
+      { path: "fresh.ts", x: "?", y: "?" },
+    ])).toEqual(["clean-edit.ts", "fresh.ts"]);
+    expect(stageableChanges([{ path: "war.ts", x: "U", y: "U" }])).toEqual([]);
+  });
+});
+
+describe("lineCountFor (#5811)", () => {
+  const counts = [
+    { path: "a.ts", plus: 12, minus: 3 },
+    { path: "b.ts", plus: 0, minus: 7 },
+  ];
+
+  it("returns the counted values for a changed path", () => {
+    expect(lineCountFor(counts, "a.ts")).toEqual({ plus: 12, minus: 3 });
+  });
+
+  it("returns null — not a zero — for paths git counted nothing for", () => {
+    expect(lineCountFor(counts, "untracked.ts")).toBeNull();
+    expect(lineCountFor([], "a.ts")).toBeNull();
   });
 });

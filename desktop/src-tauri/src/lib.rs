@@ -203,6 +203,10 @@ struct FileEntry {
     dir: bool,
     /// "" when unchanged, else git's two-letter porcelain code trimmed ("M", "A", "??", "D")
     status: String,
+    /// +N/−N vs HEAD (numstat) — the tree row's change-size chip. null for untracked and
+    /// binary files: git has no count for either, and a fake zero would be a lie (#5811).
+    plus: Option<u64>,
+    minus: Option<u64>,
 }
 
 /// Directories that are output or vendored. Walking them is how a file tree turns into a hang: a
@@ -218,6 +222,39 @@ const TREE_SKIP: &[&str] = &[
     "__pycache__",
     ".venv",
 ];
+
+/// +N/−N per path vs HEAD, parsed once per call from `git diff --numstat HEAD` — the working
+/// tree against the last commit, which is what a tree row or an SCM row means by "changed".
+/// Untracked files produce no numstat row and binary files count as "- -"; both map to nothing,
+/// because a fake zero would read as "known small" (#5811). Read ONCE per tree/panel request,
+/// same one-subprocess discipline as git_status_map.
+fn git_numstat_vs_head(dir: &Path) -> std::collections::HashMap<String, (u64, u64)> {
+    let mut map = std::collections::HashMap::new();
+    let out = match std::process::Command::new("git")
+        .args(["diff", "--numstat", "HEAD"])
+        .current_dir(dir)
+        .output()
+    {
+        Ok(o) if o.status.success() => o,
+        // A repo with no commits yet has no HEAD to diff against; the tree still renders.
+        _ => return map,
+    };
+    for line in String::from_utf8_lossy(&out.stdout).lines() {
+        let mut it = line.split('\t');
+        let plus = it.next().unwrap_or("");
+        let minus = it.next().unwrap_or("");
+        let path = it.next().unwrap_or("");
+        if path.is_empty() || plus == "-" || minus == "-" {
+            continue;
+        }
+        if let (Ok(p), Ok(m)) = (plus.parse::<u64>(), minus.parse::<u64>()) {
+            // a rename reads "old -> new"; the new name is the one on disk
+            let path = path.rsplit(" -> ").next().unwrap_or(path).to_string();
+            map.insert(path, (p, m));
+        }
+    }
+    map
+}
 
 /// git status for the whole repo, as a map of relative path -> code. Read ONCE per tree request
 /// rather than per entry: `git status` on a large repo is the expensive part, and asking per file
@@ -493,6 +530,7 @@ fn project_files(
         root.join(&rel)
     };
     let status = git_status_map(&root);
+    let counts = git_numstat_vs_head(&root);
     let mut out: Vec<FileEntry> = Vec::new();
     for entry in
         std::fs::read_dir(&dir).map_err(|e| format!("cannot read {}: {e}", dir.display()))?
@@ -515,11 +553,17 @@ fn project_files(
             format!("{rel}/{name}")
         };
         let st = status.get(&path).cloned().unwrap_or_default();
+        let (plus, minus) = match counts.get(&path) {
+            Some(c) => (Some(c.0), Some(c.1)),
+            None => (None, None),
+        };
         out.push(FileEntry {
             name,
             path,
             dir: is_dir,
             status: st,
+            plus,
+            minus,
         });
     }
     // folders first, then alphabetical — the order every file explorer uses
@@ -3447,6 +3491,9 @@ struct GitPanel {
     /// raw `git status --porcelain=v1` rows; the frontend owns bucketing into
     /// staged/unstaged/untracked because that split is presentation, not git knowledge.
     status: Vec<GitStatusEntry>,
+    /// +N/−N per changed path vs HEAD (numstat) — the SCM row's change-size chip (#5811).
+    /// Untracked and binary paths are absent: git counts neither, and null beats a fake zero.
+    counts: Vec<SeatDiffFile>,
     log: Vec<GitLogEntry>,
 }
 
@@ -3693,6 +3740,7 @@ async fn git_panel_from_bus_dir(bus: &Path, project: &str, agent: &str) -> Resul
 
     let status =
         parse_porcelain_v1(&run_git_text_io(&worktree, &["status", "--porcelain=v1", "-z"]).await?);
+    let counts = parse_numstat(&run_git_text_io(&worktree, &["diff", "--numstat", "HEAD"]).await?);
     let log = parse_log_pretty(
         &run_git_text_io(
             &worktree,
@@ -3707,6 +3755,7 @@ async fn git_panel_from_bus_dir(bus: &Path, project: &str, agent: &str) -> Resul
         ahead: upstream_status.ahead,
         behind: upstream_status.behind,
         status,
+        counts,
         log,
     })
 }

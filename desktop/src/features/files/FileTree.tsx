@@ -138,6 +138,14 @@ function Row({ entry, depth, project, seat, onOpen, onRefresh, openPath }: { ent
           {entry.status && (
             <span className="shrink-0 text-[10px]" style={{ color }}>{statusLabel(entry.status)}</span>
           )}
+          {/* the change-size chip (#5811), colored from the same git decoration tokens the SCM
+              rows use. Absent for untracked/binary — no count, no chip, never a fake zero. */}
+          {typeof entry.plus === "number" && typeof entry.minus === "number" && (
+            <span className="tr-mono shrink-0 text-[9.5px] tabular-nums" title="lines changed vs HEAD">
+              <span style={{ color: "var(--git-decoration-added)" }}>+{entry.plus}</span>{" "}
+              <span style={{ color: "var(--git-decoration-deleted)" }}>−{entry.minus}</span>
+            </span>
+          )}
         </button>
       </div>
       {renaming && (

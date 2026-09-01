@@ -9,6 +9,10 @@ export type GitStatusEntry = { path: string; x: string; y: string };
 
 export type GitLogEntry = { sha: string; author: string; when: string; subject: string };
 
+/** +N/−N for one changed path vs HEAD. Untracked and binary paths are absent — git counts
+ *  neither, and a fake zero would read as "known small". */
+export type GitLineCount = { path: string; plus: number; minus: number };
+
 export type GitPanelSnapshot = {
   branch: string;
   upstream: string | null;
@@ -17,6 +21,7 @@ export type GitPanelSnapshot = {
   /** only measured against an upstream; null without one */
   behind: number | null;
   status: GitStatusEntry[];
+  counts: GitLineCount[];
   log: GitLogEntry[];
 };
 
@@ -90,4 +95,37 @@ export function scmSections(entries: GitStatusEntry[]): ScmSections {
     staged: staged.map(e => e.path),
     changes: [...unstaged.map(e => e.path), ...untracked],
   };
+}
+
+/** The porcelain XY pairs git uses for unmerged (conflicted) paths — both sides moved and git
+ *  needs a human. Receipt: `git status --porcelain=v1` short-format table, the "Unmerged" block. */
+const UNMERGED_CODES = new Set(["DD", "AU", "UD", "UA", "DU", "AA", "UU"]);
+
+export function isUnmerged(entry: Pick<GitStatusEntry, "x" | "y">): boolean {
+  return UNMERGED_CODES.has(`${entry.x}${entry.y}`);
+}
+
+/** The conflicted paths, for the SCM panel to protect: staging one erases git's conflict record
+ *  (the only live signal that a review is still owed), so bulk stage skips them and the row's
+ *  stage button refuses with that reason. Orca reaches the same rule from richer data
+ *  (uncommitted-entry-row.tsx:82-83); ours reads it straight off the porcelain code. */
+export function conflictPaths(entries: GitStatusEntry[]): string[] {
+  return entries.filter(isUnmerged).map(e => e.path);
+}
+
+/** Bulk-stage pathspecs minus the conflicted rows. The row-level refusal and this list share one
+ *  predicate, so the button and the batch can never disagree about what is protected. */
+export function stageableChanges(entries: GitStatusEntry[]): string[] {
+  const blocked = new Set(conflictPaths(entries));
+  return scmSections(entries).changes.filter(p => !blocked.has(p));
+}
+
+/** The +N/−N chip values for one path. null when git counted nothing (untracked, binary, or
+ *  unchanged) — the chip then renders nothing rather than a zero. */
+export function lineCountFor(
+  counts: GitLineCount[],
+  path: string,
+): { plus: number; minus: number } | null {
+  const hit = counts.find(c => c.path === path);
+  return hit ? { plus: hit.plus, minus: hit.minus } : null;
 }

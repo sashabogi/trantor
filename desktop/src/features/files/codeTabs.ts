@@ -14,6 +14,10 @@ export type CodeTab = {
   view: "code" | "changes";
   pinned: boolean;
   dirty: boolean;
+  /** Orca open-file.ts:124-128, per-tab: the file moved on disk under this tab's unsaved work.
+   *  The flag rides the TAB — switching away and back must not forget a live conflict — and
+   *  saving stays gated until the operator reloads or adopts (tabGuard.ts decides the verdict). */
+  externalMutation?: "changed";
 };
 
 export const tabKey = (scope: string, path: string): string => `${scope}:${path}`;
@@ -61,6 +65,15 @@ export function togglePin(tabs: CodeTab[], key: string): CodeTab[] {
 /** Set one tab's dirty dot. Nothing else moves. */
 export function markDirty(tabs: CodeTab[], key: string, dirty: boolean): CodeTab[] {
   return tabs.map(t => (t.key === key ? { ...t, dirty } : t));
+}
+
+/** Set or clear one tab's on-disk conflict flag. Nothing else moves. */
+export function markExternalMutation(
+  tabs: CodeTab[],
+  key: string,
+  externalMutation: "changed" | undefined,
+): CodeTab[] {
+  return tabs.map(t => (t.key === key ? { ...t, externalMutation } : t));
 }
 
 /** Close a tab; if it was active, activation moves to the nearest tab of the same scope. */

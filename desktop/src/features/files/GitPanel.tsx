@@ -10,13 +10,30 @@ import { useCallback, useEffect, useState } from "react";
 import {
   aheadLabel,
   bucketStatus,
+  isUnmerged,
+  lineCountFor,
   gitCommit,
   gitPanel,
   gitPush,
   gitStage,
   scmSections,
+  stageableChanges,
   type GitPanelSnapshot,
 } from "./gitApi";
+
+/** The +N/−N chip, colored from the git decoration tokens the tree rows share
+ *  (styles.css --git-decoration-*; Orca's diff-line-counts.tsx is the shape). Renders nothing
+ *  when git counted nothing — a zero would claim a measurement nobody made. */
+function LineCountChip({ counts, path }: { counts: GitPanelSnapshot["counts"]; path: string }) {
+  const n = lineCountFor(counts, path);
+  if (!n) return null;
+  return (
+    <span className="tr-mono shrink-0 text-[10px] tabular-nums">
+      <span style={{ color: "var(--git-decoration-added)" }}>+{n.plus}</span>{" "}
+      <span style={{ color: "var(--git-decoration-deleted)" }}>−{n.minus}</span>
+    </span>
+  );
+}
 
 export function GitPanel({ project, seat, onChanged, onOpenFile }: {
   project: string; seat: string; onChanged?: () => void; onOpenFile?: (path: string) => void;
@@ -69,17 +86,23 @@ export function GitPanel({ project, seat, onChanged, onOpenFile }: {
   const pushDisabled = busy || !snap || !snap.branch || snap.ahead === 0;
 
   // Bulk actions send every pathspec in ONE git call (batched against E2BIG per
-  // RESEARCH-orca-files §3), not one subprocess per file.
+  // RESEARCH-orca-files §3), not one subprocess per file. Conflicted paths are excluded from the
+  // batch with the same predicate the row button uses — staging one erases the conflict record.
   const stageAll = () => {
-    if (sections && sections.changes.length > 0) {
-      const n = sections.changes.length;
-      void act(() => gitStage(project, seat, sections.changes, false), `staged ${n} file${n === 1 ? "" : "s"}`);
+    if (snap && stageableChanges(snap.status).length > 0) {
+      const paths = stageableChanges(snap.status);
+      const n = paths.length;
+      void act(() => gitStage(project, seat, paths, false), `staged ${n} file${n === 1 ? "" : "s"}`);
     }
   };
   const unstageAll = () => {
-    if (sections && sections.staged.length > 0) {
-      const n = sections.staged.length;
-      void act(() => gitStage(project, seat, sections.staged, true), `unstaged ${n} file${n === 1 ? "" : "s"}`);
+    if (snap && buckets) {
+      // Conflicted rows ride the staged list too (X = U); resetting them would degrade git's
+      // conflict record the same way staging would. Same predicate as the row button.
+      const paths = buckets.staged.filter(e => !isUnmerged(e)).map(e => e.path);
+      if (paths.length === 0) return;
+      const n = paths.length;
+      void act(() => gitStage(project, seat, paths, true), `unstaged ${n} file${n === 1 ? "" : "s"}`);
     }
   };
 
@@ -156,23 +179,32 @@ export function GitPanel({ project, seat, onChanged, onOpenFile }: {
             {stagedOpen && buckets.staged.length === 0 && (
               <div className="px-1 py-0.5 text-[11.5px] text-tr-muted/70">Nothing staged.</div>
             )}
-            {stagedOpen && buckets.staged.map(e => (
-              <div key={`s-${e.path}`} className="group flex items-center gap-1.5 rounded-md px-1 py-[3px]">
-                <button
-                  type="button"
-                  onClick={() => onOpenFile?.(e.path)}
-                  className="tr-mono min-w-0 flex-1 truncate text-left text-[11.5px]"
-                  title={`${e.x}${e.y} ${e.path} — open diff`}
-                >{e.path}</button>
-                <button
-                  type="button"
-                  onClick={() => unstageOne(e.path)}
-                  disabled={busy}
-                  title="unstage"
-                  className="shrink-0 rounded px-1.5 text-[12px] text-tr-muted opacity-0 group-hover:opacity-100 hover:bg-white/[0.06] hover:text-tr-text disabled:opacity-40"
-                >−</button>
-              </div>
-            ))}
+            {stagedOpen && buckets.staged.map(e => {
+              const conflict = isUnmerged(e);
+              return (
+                <div key={`s-${e.path}`} className="group flex items-center gap-1.5 rounded-md px-1 py-[3px]">
+                  <button
+                    type="button"
+                    onClick={() => onOpenFile?.(e.path)}
+                    className="tr-mono min-w-0 flex-1 truncate text-left text-[11.5px]"
+                    title={`${e.x}${e.y} ${e.path} — open diff`}
+                  >{e.path}</button>
+                  <LineCountChip counts={snap?.counts ?? []} path={e.path} />
+                  {conflict && (
+                    <span className="tr-chip shrink-0" title="unmerged — git needs a human before anything touches this path">conflict</span>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => unstageOne(e.path)}
+                    disabled={busy || conflict}
+                    title={conflict
+                      ? "unavailable on a conflicted path — resolve the conflict first"
+                      : "unstage"}
+                    className="shrink-0 rounded px-1.5 text-[12px] text-tr-muted opacity-0 group-hover:opacity-100 hover:bg-white/[0.06] hover:text-tr-text disabled:opacity-40"
+                  >−</button>
+                </div>
+              );
+            })}
           </section>
 
           {/* CHANGES (unstaged + untracked) — collapsible, hover stage per file, stage-all on header */}
@@ -201,23 +233,32 @@ export function GitPanel({ project, seat, onChanged, onOpenFile }: {
             {changesOpen && buckets.unstaged.length === 0 && buckets.untracked.length === 0 && (
               <div className="px-1 py-0.5 text-[11.5px] text-tr-muted/70">No changes.</div>
             )}
-            {changesOpen && buckets.unstaged.map(e => (
-              <div key={`u-${e.path}`} className="group flex items-center gap-1.5 rounded-md px-1 py-[3px]">
-                <button
-                  type="button"
-                  onClick={() => onOpenFile?.(e.path)}
-                  className="tr-mono min-w-0 flex-1 truncate text-left text-[11.5px]"
-                  title={`${e.x}${e.y} ${e.path} — open diff`}
-                >{e.path}</button>
-                <button
-                  type="button"
-                  onClick={() => stageOne(e.path)}
-                  disabled={busy}
-                  title="stage"
-                  className="shrink-0 rounded px-1.5 text-[12px] text-tr-muted opacity-0 group-hover:opacity-100 hover:bg-white/[0.06] hover:text-tr-text disabled:opacity-40"
-                >+</button>
-              </div>
-            ))}
+            {changesOpen && buckets.unstaged.map(e => {
+              const conflict = isUnmerged(e);
+              return (
+                <div key={`u-${e.path}`} className="group flex items-center gap-1.5 rounded-md px-1 py-[3px]">
+                  <button
+                    type="button"
+                    onClick={() => onOpenFile?.(e.path)}
+                    className="tr-mono min-w-0 flex-1 truncate text-left text-[11.5px]"
+                    title={`${e.x}${e.y} ${e.path} — open diff`}
+                  >{e.path}</button>
+                  <LineCountChip counts={snap?.counts ?? []} path={e.path} />
+                  {conflict && (
+                    <span className="tr-chip shrink-0" title="unmerged — staging would erase git's conflict record before review">conflict</span>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => stageOne(e.path)}
+                    disabled={busy || conflict}
+                    title={conflict
+                      ? "staging would erase git's conflict record — resolve the conflict first"
+                      : "stage"}
+                    className="shrink-0 rounded px-1.5 text-[12px] text-tr-muted opacity-0 group-hover:opacity-100 hover:bg-white/[0.06] hover:text-tr-text disabled:opacity-40"
+                  >+</button>
+                </div>
+              );
+            })}
             {changesOpen && buckets.untracked.map(p => (
               <div key={`n-${p}`} className="group flex items-center gap-1.5 rounded-md px-1 py-[3px]">
                 <button
