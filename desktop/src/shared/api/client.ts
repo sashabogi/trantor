@@ -82,6 +82,8 @@ export type HubEvent = {
   scope?: string;
   /** verify.gate.opened */
   reason?: string;
+  /** overseer.warn / verify.gate.opened can carry the agents involved in the condition */
+  sessions?: string[];
 };
 
 export type Message = {
@@ -116,6 +118,23 @@ export type OverseerStatus = {
   links: { projects: string[]; reason: string }[];
   warnings: OverseerWarning[];
   standing: number;
+};
+
+export type DutyHealth = {
+  configured: boolean;
+  online: boolean;
+  lastSeenMs: number;
+  darkSinceMs: number;
+  queuedEscalations: number;
+};
+
+export type HubHealth = {
+  ok: boolean;
+  authMode: string;
+  peers: number;
+  messages: number;
+  streams: number;
+  duty?: DutyHealth;
 };
 
 export class HubClient {
@@ -154,6 +173,7 @@ export class HubClient {
     return this.request<{ tasks: Card[] }>("GET", `/tasks${q}`).then(r => r.tasks ?? []);
   }
   peers()   { return this.request<{ peers: Peer[] }>("GET", "/peers").then(r => r.peers ?? []); }
+  health() { return this.request<HubHealth>("GET", "/health"); }
   events(opts: { project?: string; type?: string; since?: number; limit?: number } = {}) {
     const q = new URLSearchParams();
     for (const [k, v] of Object.entries(opts)) if (v !== undefined) q.set(k, String(v));
@@ -300,6 +320,30 @@ export class HubClient {
     })();
     return () => { stopped = true; unlisten?.(); };
   }
+}
+
+export function dutyStart(): Promise<string> {
+  return invoke<string>("duty_start");
+}
+
+export function dutyStop(): Promise<string> {
+  return invoke<string>("duty_stop");
+}
+
+export function dutyLogPath(): Promise<string> {
+  return invoke<string>("duty_log_path");
+}
+
+export function policySet(project: string, level: number): Promise<string> {
+  return invoke<string>("policy_set_level", { project, level });
+}
+
+export function policyLink(projects: string[], reason: string): Promise<string> {
+  return invoke<string>("policy_link_projects", { projects, reason });
+}
+
+export function policyUnlink(projects: string[]): Promise<string> {
+  return invoke<string>("policy_unlink_projects", { projects });
 }
 
 export type EconWindow = {

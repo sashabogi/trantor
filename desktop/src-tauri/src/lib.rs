@@ -1319,8 +1319,14 @@ fn read_chat_snapshot(project: &str, after: usize) -> Result<ChatSnapshot, Strin
 #[tauri::command]
 fn orchestrator_chat(project: String, after: usize) -> Result<String, String> {
     let snap = read_chat_snapshot(&project, after)?;
-    serde_json::to_string(&(snap.turns, snap.results, snap.total, snap.meta, snap.receipt_texts))
-        .map_err(|e| e.to_string())
+    serde_json::to_string(&(
+        snap.turns,
+        snap.results,
+        snap.total,
+        snap.meta,
+        snap.receipt_texts,
+    ))
+    .map_err(|e| e.to_string())
 }
 
 static CHAT_WATCHERS: std::sync::Mutex<Option<std::collections::HashMap<String, Arc<AtomicBool>>>> =
@@ -1462,11 +1468,14 @@ fn spawn_status_watcher(window: tauri::Window, project: String, stop: Arc<Atomic
             }
             *last = status.to_string();
             window
-                .emit("orch-status", OrchStatusPayload {
-                    project: project.clone(),
-                    pane: pane.to_string(),
-                    status: status.to_string(),
-                })
+                .emit(
+                    "orch-status",
+                    OrchStatusPayload {
+                        project: project.clone(),
+                        pane: pane.to_string(),
+                        status: status.to_string(),
+                    },
+                )
                 .is_ok()
         };
         let orch_pane = |project: &str| -> Option<String> {
@@ -1845,6 +1854,131 @@ fn autonomy_set(project: Option<String>, dial: String, value: String) -> Result<
     }
     // Hand back the resolved state, because the dependencies may have refused what was just asked.
     autonomy_get(project)
+}
+
+fn policy_project_arg(project: &str) -> Result<String, String> {
+    let p = project.trim();
+    if p.is_empty() {
+        return Err("project is required".into());
+    }
+    if p.chars().any(|c| c.is_control()) {
+        return Err("project contains a control character".into());
+    }
+    Ok(p.to_string())
+}
+
+fn policy_projects_arg(projects: &[String]) -> Result<Vec<String>, String> {
+    let mut out = Vec::new();
+    for p in projects.iter().take(4) {
+        let p = policy_project_arg(p)?;
+        if !out.iter().any(|x| x == &p) {
+            out.push(p);
+        }
+    }
+    if out.len() < 2 {
+        return Err("at least two projects are required".into());
+    }
+    Ok(out)
+}
+
+fn trantor_policy_args(
+    cmd: &str,
+    projects: &[String],
+    level: Option<u8>,
+    reason: Option<&str>,
+) -> Result<Vec<String>, String> {
+    match cmd {
+        "set" => {
+            let p = projects
+                .first()
+                .ok_or_else(|| "project is required".to_string())?;
+            let level = level.ok_or_else(|| "level is required".to_string())?;
+            if !(1..=4).contains(&level) {
+                return Err("level must be 1-4".into());
+            }
+            Ok(vec![
+                "policy".into(),
+                "set".into(),
+                policy_project_arg(p)?,
+                level.to_string(),
+            ])
+        }
+        "link" => {
+            let ps = policy_projects_arg(projects)?;
+            let reason = reason.unwrap_or("").trim();
+            if reason.is_empty() {
+                return Err("reason is required".into());
+            }
+            let mut args = vec!["policy".into(), "link".into()];
+            args.extend(ps);
+            args.push("--reason".into());
+            args.push(reason.to_string());
+            Ok(args)
+        }
+        "unlink" => {
+            let ps = policy_projects_arg(projects)?;
+            let mut args = vec!["policy".into(), "unlink".into()];
+            args.extend(ps);
+            Ok(args)
+        }
+        _ => Err("unknown policy command".into()),
+    }
+}
+
+async fn trantor_cli(args: Vec<String>, label: &str) -> Result<String, String> {
+    let mut cmd = tokio::process::Command::new("trantor");
+    cmd.args(&args).env("PATH", terminal_path());
+    let (stdout, stderr) = run_command_output(cmd, label).await?;
+    if stdout.is_empty() {
+        Ok(stderr)
+    } else {
+        Ok(stdout)
+    }
+}
+
+#[tauri::command]
+async fn duty_start() -> Result<String, String> {
+    trantor_cli(vec!["duty".into(), "up".into()], "trantor duty up").await
+}
+
+#[tauri::command]
+async fn duty_stop() -> Result<String, String> {
+    trantor_cli(vec!["duty".into(), "down".into()], "trantor duty down").await
+}
+
+#[tauri::command]
+async fn duty_log_path() -> Result<String, String> {
+    Ok(desktop_bus_dir()
+        .join("duty.log")
+        .to_string_lossy()
+        .to_string())
+}
+
+#[tauri::command]
+async fn policy_set_level(project: String, level: u8) -> Result<String, String> {
+    trantor_cli(
+        trantor_policy_args("set", &[project], Some(level), None)?,
+        "trantor policy set",
+    )
+    .await
+}
+
+#[tauri::command]
+async fn policy_link_projects(projects: Vec<String>, reason: String) -> Result<String, String> {
+    trantor_cli(
+        trantor_policy_args("link", &projects, None, Some(&reason))?,
+        "trantor policy link",
+    )
+    .await
+}
+
+#[tauri::command]
+async fn policy_unlink_projects(projects: Vec<String>) -> Result<String, String> {
+    trantor_cli(
+        trantor_policy_args("unlink", &projects, None, None)?,
+        "trantor policy unlink",
+    )
+    .await
 }
 
 /// Candidate icon paths, best first. This is a FIXED list rather than a directory walk on purpose:
@@ -2772,7 +2906,11 @@ fn orch_restorables() -> Result<Vec<String>, String> {
         .and_then(|a| a.as_array())
         .map(|a| {
             a.iter()
-                .filter_map(|x| x.get("pane_id").and_then(|p| p.as_str()).map(str::to_string))
+                .filter_map(|x| {
+                    x.get("pane_id")
+                        .and_then(|p| p.as_str())
+                        .map(str::to_string)
+                })
                 .collect()
         })
         .unwrap_or_default();
@@ -3812,6 +3950,12 @@ pub fn run() {
             write_file,
             autonomy_get,
             autonomy_set,
+            duty_start,
+            duty_stop,
+            duty_log_path,
+            policy_set_level,
+            policy_link_projects,
+            policy_unlink_projects,
             app_update_check,
             app_update_install,
             terminal::orchestrator_open,
@@ -3843,7 +3987,10 @@ mod context_guard_tests {
             }
             let got = g.report();
             let expect = case["expect"].as_u64();
-            assert_eq!(got, expect, "case '{name}': got {got:?}, manifest says {expect:?}");
+            assert_eq!(
+                got, expect,
+                "case '{name}': got {got:?}, manifest says {expect:?}"
+            );
         }
     }
 
@@ -3871,7 +4018,11 @@ mod context_guard_tests {
         poison.guard.push(70_000);
         poison.context = chat_context(poison.guard.report(), window);
         merge_chat_meta(&mut meta, poison);
-        assert_eq!(meta.context.tokens, Some(889_929), "the gauge must not read 7% at a real 88%");
+        assert_eq!(
+            meta.context.tokens,
+            Some(889_929),
+            "the gauge must not read 7% at a real 88%"
+        );
     }
 }
 
@@ -4820,6 +4971,63 @@ mod succession_tests {
     }
 
     #[test]
+    fn policy_bridge_args_are_the_cli_contract() {
+        assert_eq!(
+            trantor_policy_args("set", &[String::from("trantor")], Some(3), None).unwrap(),
+            vec!["policy", "set", "trantor", "3"]
+        );
+        assert_eq!(
+            trantor_policy_args(
+                "link",
+                &[
+                    String::from("crebral-health"),
+                    String::from("crebral-scribe")
+                ],
+                None,
+                Some("shared schema")
+            )
+            .unwrap(),
+            vec![
+                "policy",
+                "link",
+                "crebral-health",
+                "crebral-scribe",
+                "--reason",
+                "shared schema"
+            ]
+        );
+        assert_eq!(
+            trantor_policy_args(
+                "unlink",
+                &[
+                    String::from("crebral-health"),
+                    String::from("crebral-scribe")
+                ],
+                None,
+                None
+            )
+            .unwrap(),
+            vec!["policy", "unlink", "crebral-health", "crebral-scribe"]
+        );
+    }
+
+    #[test]
+    fn policy_bridge_rejects_unsafe_or_incomplete_args() {
+        assert!(trantor_policy_args("set", &[String::from("trantor")], Some(5), None).is_err());
+        assert!(trantor_policy_args("link", &[String::from("trantor")], None, Some("x")).is_err());
+        assert!(trantor_policy_args(
+            "link",
+            &[String::from("trantor"), String::from("teams")],
+            None,
+            Some("")
+        )
+        .is_err());
+        assert!(
+            trantor_policy_args("set", &[String::from("bad\nproject")], Some(2), None).is_err()
+        );
+    }
+
+    #[test]
     fn kickoff_prompt_is_the_fixed_recap_instruction() {
         // The one line the successor sees after the pane reopens. If this changes, the recap the
         // successor gives changes with it — so it is asserted, not assumed.
@@ -4863,8 +5071,12 @@ mod succession_tests {
         assert_eq!(restorables_from(rows, &live), vec!["proj-b".to_string()]);
         // Nothing tracked, or every agent alive → nothing to restore.
         assert!(restorables_from("", &live).is_empty());
-        let all_live: std::collections::HashSet<String> =
-            ["w1:p1".to_string(), "w2:p1".to_string(), "w2:p9".to_string()].into();
+        let all_live: std::collections::HashSet<String> = [
+            "w1:p1".to_string(),
+            "w2:p1".to_string(),
+            "w2:p9".to_string(),
+        ]
+        .into();
         assert!(restorables_from(rows, &all_live).is_empty());
         // A malformed row never panics and never restores.
         assert!(restorables_from("garbage-no-tabs\n\torch\t\t\n", &live).is_empty());
