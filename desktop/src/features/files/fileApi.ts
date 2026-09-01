@@ -1,6 +1,7 @@
 // The project's files, one directory level at a time. Lazy on purpose: a repo the size of
 // crm-platform costs only what the operator actually expands.
 import { invoke } from "@tauri-apps/api/core";
+import type { FileStat } from "./liveReload";
 
 export type FileEntry = {
   name: string;
@@ -22,6 +23,13 @@ export type FileBody = { text: string; truncated: boolean; bytes: number };
 
 export async function readFile(project: string, path: string, seat?: string): Promise<FileBody> {
   return JSON.parse(await invoke<string>("read_file", { project, path, seat: seat ?? null }));
+}
+
+/** A file's stat on disk (modified time + size), for the live viewer's polling loop. Reading the
+ *  whole body every tick is how a file view turns into a re-download loop; a stat is the cheap
+ *  signal that says "this changed" before anyone pays for the bytes. */
+export async function fileStat(project: string, path: string, seat?: string): Promise<FileStat> {
+  return JSON.parse(await invoke<string>("file_stat", { project, path, seat: seat ?? null }));
 }
 
 /** What a porcelain code means to someone watching agents work. Untracked reads as "new" because

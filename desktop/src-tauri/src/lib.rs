@@ -295,6 +295,37 @@ struct FileBody {
 
 const FILE_VIEW_CAP: u64 = 512 * 1024;
 
+/// A file's stat on disk, for the live viewer's polling loop. Modified time + size are the cheap
+/// signal that a file changed under the operator: reading the whole body every tick is how a viewer
+/// turns into a re-download loop.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+struct FileStat {
+    /// modified time in milliseconds since the Unix epoch, 0 when the OS could not say
+    mtime_ms: u64,
+    bytes: u64,
+}
+
+#[tauri::command]
+fn file_stat(project: String, path: String, seat: Option<String>) -> Result<String, String> {
+    let root = source_root(&project, seat.as_deref())?;
+    if path.contains("..") {
+        return Err("path escapes the project".into());
+    }
+    let full = root.join(&path);
+    let meta = std::fs::metadata(&full).map_err(|e| format!("cannot stat {path}: {e}"))?;
+    let mtime_ms = meta
+        .modified()
+        .ok()
+        .and_then(|t| t.duration_since(SystemTime::UNIX_EPOCH).ok())
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0);
+    let stat = FileStat {
+        mtime_ms,
+        bytes: meta.len(),
+    };
+    serde_json::to_string(&stat).map_err(|e| e.to_string())
+}
+
 #[tauri::command]
 fn read_file(project: String, path: String, seat: Option<String>) -> Result<String, String> {
     let root = source_root(&project, seat.as_deref())?;
@@ -4123,6 +4154,7 @@ pub fn run() {
             project_files,
             search_files,
             read_file,
+            file_stat,
             file_diff,
             read_file_at_head,
             seat_state,

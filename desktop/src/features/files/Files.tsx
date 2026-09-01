@@ -9,12 +9,13 @@
 // 2. Saving COMMITS, authored to you. `trantor integrate` commits a seat's dirty worktree as that
 //    seat, so a tweak of yours left uncommitted would be attributed to the agent. Committing on
 //    save closes that window and leaves git blame as the durable answer.
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { HubClient, Peer } from "../../shared/api/client";
 import { ProjectHeader, type Lens } from "../project/ProjectHeader";
-import { readFile, readFileAtHead, seatState, writeFile, type FileBody } from "./fileApi";
+import { fileStat, readFile, readFileAtHead, seatState, writeFile, type FileBody } from "./fileApi";
 import { CodeView } from "./CodeView";
 import { DiffView } from "./DiffView";
+import { decideReload, type FileStat } from "./liveReload";
 
 type Mode = "content" | "diff";
 
@@ -39,6 +40,15 @@ export function Files({ client, project, lens, onLens, path, seat, onSeat }: {
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [conflict, setConflict] = useState(false);
+
+  // The disk stat we last acted on, and whether the editor holds unsaved work. Both live in refs
+  // so the poll reads the CURRENT values without tearing the interval down every render.
+  const statRef = useRef<FileStat | null>(null);
+  const dirtyRef = useRef(false);
+  // An open edit session is the dirty signal: once the operator has taken control, the disk must
+  // not silently move under the cursor, even before the first keystroke.
+  dirtyRef.current = editing;
 
   useEffect(() => {
     let alive = true;
@@ -73,7 +83,37 @@ export function Files({ client, project, lens, onLens, path, seat, onSeat }: {
   useEffect(() => {
     if (!path) { setBody(null); setHead(null); setError(null); return; }
     setBody(null); setHead(null); setError(null); setEditing(false); setSaved(null);
+    setConflict(false);
+    statRef.current = null;
     reload();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [project, path, seat]);
+
+  // The open file follows the disk. Every tick we stat it; a clean editor reloads silently, an
+  // editor with unsaved work gets a conflict bar instead of having its edits clobbered.
+  useEffect(() => {
+    if (!path) return;
+    let alive = true;
+    const poll = () => {
+      fileStat(project, path, seat ?? undefined)
+        .then(st => {
+          if (!alive) return;
+          const decision = decideReload({ dirty: dirtyRef.current, lastStat: statRef.current, newStat: st });
+          if (decision === "reload") {
+            statRef.current = st;
+            setConflict(false);
+            reload();
+          } else if (decision === "conflict") {
+            setConflict(true);
+          } else if (statRef.current === null) {
+            statRef.current = st;
+          }
+        })
+        .catch(() => {});
+    };
+    poll();
+    const iv = setInterval(poll, 4_000);
+    return () => { alive = false; clearInterval(iv); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [project, path, seat]);
 
@@ -83,7 +123,15 @@ export function Files({ client, project, lens, onLens, path, seat, onSeat }: {
     if (!path) return;
     setSaving(true); setError(null);
     writeFile(project, path, seat ?? undefined, draft)
-      .then(sha => { setSaved(sha || "unchanged"); setEditing(false); reload(); })
+      .then(sha => {
+        setSaved(sha || "unchanged");
+        setEditing(false);
+        setConflict(false);
+        // Our own save moved the disk; drop the baseline so the next poll re-baselines instead of
+        // reading our own write as an external change.
+        statRef.current = null;
+        reload();
+      })
       .catch(e => setError(e instanceof Error ? e.message : String(e)))
       .finally(() => setSaving(false));
   };
@@ -171,6 +219,27 @@ export function Files({ client, project, lens, onLens, path, seat, onSeat }: {
           <div className="tr-card px-3.5 py-2 text-[12px] text-tr-warn">
             {seat} is working in this worktree right now, so this file cannot be edited. Review it
             once the seat lands.
+          </div>
+        )}
+        {conflict && (
+          <div className="flex items-center gap-2 rounded-[9px] border border-tr-edge bg-tr-panel/60 px-3.5 py-2 text-[12px] text-tr-warn">
+            <span>This file changed on disk while you were editing it.</span>
+            <div className="ml-auto flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => { setEditing(false); setConflict(false); statRef.current = null; reload(); }}
+                className="rounded-[8px] bg-tr-panel px-3 py-1.5 text-[12px] font-semibold text-tr-text"
+              >
+                Reload from disk
+              </button>
+              <button
+                type="button"
+                onClick={() => { setConflict(false); statRef.current = null; }}
+                className="rounded-[8px] px-2.5 py-1.5 text-[12px] text-tr-muted hover:text-tr-text"
+              >
+                Keep my changes
+              </button>
+            </div>
           </div>
         )}
         {editing && (
