@@ -1,0 +1,2 @@
+{"type":"user","sessionId":"claude-fixture","cwd":"/Users/test/.agent-bus/worktrees/trantor/codex","gitBranch":"seat/codex","message":{"role":"user","content":"Review the session store"}}
+{"type":"assistant","sessionId":"claude-fixture","cwd":"/Users/test/.agent-bus/worktrees/trantor/codex","gitBranch":"seat/codex","message":{"role":"assistant","model":"claude-fable-5","usage":{"input_tokens":8},"content":[{"type":"text","text":"The store is mapped."}]}}

@@ -18,7 +18,7 @@
 import { useCallback, useEffect, useRef, useState, type CSSProperties, type PointerEvent as RPointerEvent } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { ChevronDown, ChevronRight, PanelBottom, PanelBottomClose, PanelRight, PanelRightClose, Wrench } from "lucide-react";
+import { ArrowLeft, ChevronDown, ChevronRight, PanelBottom, PanelBottomClose, PanelRight, PanelRightClose, Wrench } from "lucide-react";
 import { orchestratorOf } from "../workspace/herdr";
 import { DEFAULT_TERMINAL_DEPS, TerminalPane, type TerminalDeps } from "../workspace/TerminalPane";
 import { bannerCountdown, type HandoffCountdown } from "./banner";
@@ -196,11 +196,12 @@ function HandoffBanner({ frac, countdown, busy, error, onKeepGoing, onHandOffNow
 // construction rather than by a prop this file cannot add.
 const TRAY_DEPS: TerminalDeps = { ...DEFAULT_TERMINAL_DEPS, termWrite: () => Promise.resolve() };
 
-export function Chat({ project, dock, onDock, onClose }: {
-  project: string; dock: Dock; onDock: (d: Dock) => void; onClose: () => void;
+export function Chat({ project, sessionId, dock, onDock, onClose }: {
+  project: string; sessionId?: string; dock: Dock; onDock: (d: Dock) => void; onClose: () => void;
 }) {
+  const history = Boolean(sessionId);
   const [chat, setChat] = useState<ChatState>(emptyChat);
-  const [target, setTarget] = useState<string | null>(null);
+  const [target, setTarget] = useState<string | null>(() => history ? "history" : null);
   const [error, setError] = useState<string | null>(null);
   // Reading comfort (#5522): the size the last drag left the panel at (null = the designed
   // default), the transcript's S/M/L step, and the terminal tray's fold (#5523) — all persisted
@@ -249,26 +250,27 @@ export function Chat({ project, dock, onDock, onClose }: {
     if (switched) { setDismissedAt(null); saveDismissedAt(null); }
     setBannerArmedAt(null); setHandoffError(null); autoHandoffKey.current = null;
     setChat(emptyChat); seenRef.current = 0; setError(null); setStatus("unknown");
-    orchestratorOf(project).then(o => setTarget(o?.surface ?? null)).catch(() => setTarget(null));
-  }, [project]);
+    if (sessionId) setTarget("history");
+    else orchestratorOf(project).then(o => setTarget(o?.surface ?? null)).catch(() => setTarget(null));
+  }, [project, sessionId]);
 
   // A takeover hosts the pane AFTER this panel looked for one (#5495): while none is hosted,
   // keep looking, so the conversation — and the composer's liveness — arrive on their own the
   // moment `trantor open` lands, without a project switch to notice.
   useEffect(() => {
-    if (target !== null) return;
+    if (history || target !== null) return;
     let alive = true;
     const iv = setInterval(() => {
       orchestratorOf(project).then(o => { if (alive && o) setTarget(o.surface); }).catch(() => {});
     }, 5_000);
     return () => { alive = false; clearInterval(iv); };
-  }, [project, target]);
+  }, [history, project, target]);
 
   /** Fetch everything past the cursor and fold it in. This is the backfill, the mismatch repair
    *  and the post-send refresh — one path, so they cannot disagree. */
   const sync = useCallback(() => {
     const after = seenRef.current;
-    invoke<string>("orchestrator_chat", { project, after })
+    invoke<string>("orchestrator_chat", { project, after, sessionId: sessionId ?? null })
       .then(raw => {
         // JSON.parse's `any` flows into the tuple without a cast — Rust owns validation, the
         // same boundary herdr.ts documents for herdr_seats().
@@ -296,7 +298,7 @@ export function Chat({ project, dock, onDock, onClose }: {
         setError(null);
       })
       .catch(e => setError(String(e)));
-  }, [project]);
+  }, [project, sessionId]);
   syncRef.current = sync;
 
   useEffect(() => {
@@ -310,7 +312,7 @@ export function Chat({ project, dock, onDock, onClose }: {
     sync();
     void (async () => {
       try {
-        const count = await invoke<number>("chat_watch", { project });
+        const count = await invoke<number>("chat_watch", { project, sessionId: sessionId ?? null });
         if (!alive) return;
         // Rows that landed while the watcher was spinning up would otherwise sit between our
         // cursor and the first event's after — close the gap now.
@@ -320,6 +322,7 @@ export function Chat({ project, dock, onDock, onClose }: {
           try {
             const p: RowsPayload = JSON.parse(ev.payload);
             if (p.project !== project) return;
+            if (sessionId && p.sessionId !== sessionId) return;
             badFrames = 0;
             if (p.after !== seenRef.current) { syncRef.current(); return; }
             seenRef.current = p.total ?? p.after + p.turns.length;
@@ -335,6 +338,7 @@ export function Chat({ project, dock, onDock, onClose }: {
           try {
             const p: SessionPayload = JSON.parse(ev.payload);
             if (p.project !== project) return;
+            if (sessionId) return;
             seenRef.current = 0;
             setChat(s => applySessionChanged(s));
             setDismissedAt(null); saveDismissedAt(null);
@@ -349,9 +353,9 @@ export function Chat({ project, dock, onDock, onClose }: {
     return () => {
       alive = false;
       for (const off of offs) off();
-      invoke("chat_unwatch", { project }).catch(() => {});
+      invoke("chat_unwatch", { project, sessionId: sessionId ?? null }).catch(() => {});
     };
-  }, [project, target !== null, sync]);
+  }, [project, sessionId, target !== null, sync]);
 
   // The poll transport: runs until the watcher takes over, and again if it ever gives up.
   useEffect(() => {
@@ -365,6 +369,7 @@ export function Chat({ project, dock, onDock, onClose }: {
   // first state; after that, no polling — the 3-second `orchestrator_status` loop this
   // replaces spawned a subprocess per tick, forever.
   useEffect(() => {
+    if (history) { setStatus("ended"); return; }
     let alive = true;
     invoke<string>("orchestrator_status", { project }).then(st => { if (alive) setStatus(st); }).catch(() => {});
     const offs: Array<() => void> = [];
@@ -381,7 +386,7 @@ export function Chat({ project, dock, onDock, onClose }: {
       if (alive) offs.push(off); else off();
     })();
     return () => { alive = false; for (const off of offs) off(); };
-  }, [project]);
+  }, [history, project]);
   useEffect(() => { foot.current?.scrollIntoView({ behavior: "smooth" }); }, [chat.turns.length]);
 
   const working = status === "working";
@@ -464,7 +469,7 @@ export function Chat({ project, dock, onDock, onClose }: {
       .finally(() => setHandoffBusy(false));
   }, [addDivider, handoffBusy, project]);
 
-  const bannerOffered = bannerVisible(chat.meta.context.frac, dismissedAt);
+  const bannerOffered = !history && bannerVisible(chat.meta.context.frac, dismissedAt);
   useEffect(() => {
     if (!bannerOffered || longRun) { setBannerArmedAt(null); return; }
     setBannerArmedAt(at => at ?? Date.now());
@@ -522,8 +527,8 @@ export function Chat({ project, dock, onDock, onClose }: {
       {/* One row that cannot wrap. Every part is shrink-0 except the project name, which truncates,
           because a header that reflows into three lines is what "mangled" looked like. */}
       <div className="flex shrink-0 items-center gap-2 overflow-hidden px-3 py-2">
-        <span className="shrink-0 text-[12.5px] font-semibold">Orchestrator</span>
-        <span className="tr-mono min-w-0 flex-1 truncate text-[11px] text-tr-muted">{project}</span>
+        <span className="shrink-0 text-[12.5px] font-semibold">{history ? "Claude session" : "Orchestrator"}</span>
+        <span className="tr-mono min-w-0 flex-1 truncate text-[11px] text-tr-muted">{history ? sessionId : project}</span>
         {/* Reported by the session, never asserted. The context gauge moved out of this header
             to the composer bar (#5521), where the dials that fill the window live. */}
         {chat.meta.model && <span className="tr-chip shrink-0 text-[10.5px]">{chat.meta.model}</span>}
@@ -531,7 +536,7 @@ export function Chat({ project, dock, onDock, onClose }: {
           {/* #5643: the manual baton — same chain as the banner's [Hand off now] (reason
               "clicked"), offered without waiting for the gauge. Busy/error surface through the
               banner's shared state. */}
-          {target && (
+          {target && !history && (
             <button
               type="button"
               onClick={() => startHandoff("clicked")}
@@ -563,6 +568,13 @@ export function Chat({ project, dock, onDock, onClose }: {
             {side ? <PanelRightClose size={13} strokeWidth={1.75} /> : <PanelBottomClose size={13} strokeWidth={1.75} />}
             hide
           </button>}
+          {hosted && history && (
+            <button type="button" onClick={onClose} title="Back to session history"
+              className="flex items-center gap-1 rounded-[7px] px-2 py-1.5 text-[11px] text-tr-muted hover:text-tr-text">
+              <ArrowLeft size={13} strokeWidth={1.75} />
+              back
+            </button>
+          )}
         </div>
       </div>
 
@@ -589,8 +601,9 @@ export function Chat({ project, dock, onDock, onClose }: {
             draw the same line twice. */}
         {target && !chat.turns.length && !chat.continued && !error && (
           <div className="px-1 py-2 text-[length:calc(12px*var(--chat-scale,1))] leading-relaxed text-tr-muted">
-            Nothing said yet. Type below and it reaches the session exactly as if you had typed it in
-            the terminal.
+            {history
+              ? "Nothing renderable was written to this session transcript."
+              : "Nothing said yet. Type below and it reaches the session exactly as if you had typed it in the terminal."}
           </div>
         )}
         {group(chat.turns).map((t, i) =>
@@ -644,7 +657,7 @@ export function Chat({ project, dock, onDock, onClose }: {
       {/* The terminal tray (#5523): the orchestrator's live pane folded under the transcript,
           watching only. Collapsed by default; opening it takes the transcript's space, not the
           composer's — reading stays possible with the terminal up. */}
-      <div className="shrink-0 border-t border-tr-edge">
+      {!history && <div className="shrink-0 border-t border-tr-edge">
         <button
           type="button"
           onClick={toggleTray}
@@ -660,7 +673,7 @@ export function Chat({ project, dock, onDock, onClose }: {
             <TerminalPane project={project} agent="orchestrator" deps={TRAY_DEPS} />
           </div>
         )}
-      </div>
+      </div>}
 
       {error && <div className="tr-mono px-3 pb-1 text-[11px] text-tr-fail">{error}</div>}
 
@@ -678,7 +691,7 @@ export function Chat({ project, dock, onDock, onClose }: {
         />
       )}
 
-      <Composer
+      {!history && <Composer
         project={project}
         target={target}
         live={liveness.live}
@@ -701,7 +714,7 @@ export function Chat({ project, dock, onDock, onClose }: {
         onSent={sync}
         onLongRunChange={setLongRun}
         onDispatch={(dial, value) => { if (dial === "model") { setPending(value); setModelSource("dispatched"); } }}
-      />
+      />}
     </div>
   );
 }
