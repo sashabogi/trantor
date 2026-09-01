@@ -266,6 +266,10 @@ let consecFails = 0;
 // every live seat, so two working agents spent the evening reading the same sentence.
 let announced = "";
 let lastErrText = "";
+// #5481: the turn exited 0 with a NULL/empty transcript — the Inception/Mercury trap. The provider
+// burned its whole max_tokens budget on internal reasoning and returned a null completion; the
+// runner used to read that silence as a clean turn while nothing was produced.
+let lastEmptyOutput = false;
 const ERRF = join(homedir(), ".agent-bus", `err-${AGENT}-${PROJ}.txt`);
 
 // ---- undelivered wake messages (the runner owns delivery, not the hub) ----
@@ -312,7 +316,9 @@ function loadPending() {
 // classifyFailure's set (no bare /expired/) so a healthy transcript never trips it.
 const AUTH_MARKER_RE = /unauthor|401|403|forbidden|invalid[ _-]?api[ _-]?key|authentication? failed|token expired/i;
 
-function classifyFailure(exit, errText) {
+function classifyFailure(exit, errText, emptyOutput = false) {
+  // #5481: silence with a clean exit is a failure shape, not success — see lastEmptyOutput.
+  if (emptyOutput) return "empty-output";
   const t = (errText || "").toLowerCase();
   if (exit === 127) return "missing-cli";
   // #5684: a provider BACKEND failure is not quota — it wants retry/swap, not a window wait.
@@ -329,14 +335,20 @@ function classifyFailure(exit, errText) {
 
 async function reportFailure(exit, trigger, undelivered = 0) {
   consecFails++;
-  const reason = classifyFailure(exit, lastErrText);
+  const reason = classifyFailure(exit, lastErrText, lastEmptyOutput);
   const down = consecFails >= 2;
   const status = down ? `down: ${reason} · ${consecFails} fails` : `errored: ${reason}`;
   await api("/register", { session: SESSION, project: PROJ, status, llm: AGENT, model: MODEL }).catch(() => {});
   const hint = reason === "exhausted" ? " — needs `trantor swap`"
     : reason === "auth" ? " — check credentials"
     : reason === "backend-error" ? " — provider backend error (NOT quota): retry, or `trantor swap` to another provider"
-    : reason === "missing-cli" ? " — CLI not on PATH" : "";
+    : reason === "missing-cli" ? " — CLI not on PATH"
+    // #5481: name the suspected trap, not just the symptom — the dial lives in the provider's
+    // opencode model config (limit.output), not in the runner.
+    : reason === "empty-output" ? (AGENT === "inception"
+        ? " — inception: raise max_tokens — diffusion burns budget on reasoning"
+        : " — exit 0 with NULL output: raise the provider's max_tokens (reasoning may be eating the budget)")
+    : "";
   // The count of messages this seat is HOLDING is the operator-actionable half of a failure: a
   // crashed pulse costs nothing, a crashed turn sitting on three escalations is someone waiting.
   const held = undelivered ? ` · holding ${undelivered} undelivered message${undelivered > 1 ? "s" : ""} (will retry)` : "";
@@ -424,7 +436,8 @@ function runTurn(prompt, isFirst, trigger = "kickoff") {
   cmuxStatus("building", "#4a90d9", "hammer", { priority: 50 }); herdrAgent("working");
   // inherit stdio so the window shows the agent working live; also capture for sid-parsing.
   // Tee stderr to ERRF (still shown live in the window) so a failed turn can be classified.
-  try { appendFileSync(ERRF, "", { flag: "w" }); } catch {}
+  try { appendFileSync(ERRF, "", { flag: "w" }); } catch {}   // truncate
+  lastEmptyOutput = false;
   // pipefail: without it the sid-capture `| tee` makes a FAILED turn exit 0 (tee's status),
   // so the failure reporter never fires and a dead seat heartbeats green on the bus.
   // A CLI's own explanation for quitting often goes to STDOUT, not stderr — Claude's usage-limit
@@ -474,8 +487,20 @@ function runTurn(prompt, isFirst, trigger = "kickoff") {
     effExit = 1;
     log("\x1b[31mexit 0 but turn output shows an auth failure — treating as FAILED (auth)\x1b[0m");
   }
-  telemetry({ ts: Date.now(), agent: AGENT, project: PROJ, turn: TURN, trigger, model: MODEL || "default", duration_ms: Date.now() - t0, exit: realExit, effExit, authFailed: effExit !== realExit });
-  log(`turn ended (exit ${realExit}${effExit !== realExit ? ` → effective ${effExit} (auth)` : ""}, ${((Date.now() - t0) / 1000).toFixed(0)}s)`);
+  // #5481: the Inception/Mercury trap — exit 0 with a NULL completion. ERRF is the TOTAL output
+  // capture, not just stderr: every seat's stdout is tee'd into it (`| tee -a ERRF` for the
+  // opencode family, `| tee /dev/stderr` + the stderr tee for sid seats — line ~448). So an
+  // empty ERRF on a clean exit means the turn produced nothing on EITHER stream — and every
+  // real CLI prints something on success (drill C pins that), so silence is the trap, not a
+  // quiet victory. (Integration note: this was nearly "fixed" into stdout-only detection that
+  // never fired — the tee topology is the load-bearing fact; keep this comment with it.)
+  if (realExit === 0 && effExit === 0 && !lastErrText.trim()) {
+    effExit = 1;
+    lastEmptyOutput = true;
+    log("\x1b[31mexit 0 but the turn produced NO output — treating as FAILED (empty-output)\x1b[0m");
+  }
+  telemetry({ ts: Date.now(), agent: AGENT, project: PROJ, turn: TURN, trigger, model: MODEL || "default", duration_ms: Date.now() - t0, exit: realExit, effExit, authFailed: effExit !== realExit, emptyOutput: lastEmptyOutput });
+  log(`turn ended (exit ${realExit}${effExit !== realExit ? ` → effective ${effExit} (${lastEmptyOutput ? "empty-output" : "auth"})` : ""}, ${((Date.now() - t0) / 1000).toFixed(0)}s)`);
   if (realExit === 0 && effExit === 0) { cmuxStatus("idle", "#8a94a6", "robot"); herdrAgent("idle"); }   // finished this turn, waiting for the next
   return effExit;
 }

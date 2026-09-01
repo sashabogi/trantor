@@ -61,6 +61,9 @@ async function drill({ exitCode = 0, waitMs = 9000 } = {}) {
   writeFileSync(join(fakebin, "codex"), `#!/bin/sh
 P="$HOME/.agent-bus/turn-codex-${PROJ}.txt"
 { echo "===TURN==="; cat "$P"; } >> "${LOGF}"
+# #5481: a turn with NO output and exit 0 is now the Inception/Mercury failure shape — a real
+# CLI always prints something, so the fixture must too or its success reads as empty-output.
+echo "codex-drill: turn done"
 if grep -q "NEW BUS MESSAGE" "$P"; then exit ${exitCode}; fi
 exit 0
 `);

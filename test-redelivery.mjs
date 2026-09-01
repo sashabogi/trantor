@@ -59,18 +59,24 @@ if grep -q "NEW BUS MESSAGE" "$P"; then
   n=$(cat "${CNTF}" 2>/dev/null || echo 0); n=$((n+1)); echo "$n" > "${CNTF}"
   if [ "$n" -le ${failTurns} ]; then echo "API Error: 529 overloaded" >&2; exit 1; fi
 fi
+# #5481: a turn with NO output and exit 0 is now the Inception/Mercury failure shape — a real
+# CLI always prints something, so the fixture must too or its success reads as empty-output.
+echo "codex-drill: turn done"
 exit 0
 `);
   chmodSync(join(fakebin, "codex"), 0o755);
   const PENDF = join(BUS, `pending-codex-${PROJ}.json`);
   if (seedPending) writeFileSync(PENDF, JSON.stringify(seedPending));
 
+  // TRANTOR_RETRY_MS shortens the backoff ladder so a drill exercises a real retry in seconds;
+  // the noBackoffOverride case runs the production ladder instead.
+  const runnerEnv = { ...process.env, HOME, PATH: `${fakebin}:${process.env.PATH}`,
+    RELAY_URL: HUB, RELAY_AGENT: "codex", RELAY_PROJECT: PROJ,
+    CREW_KICKOFF: "say hi and end your turn" };
+  if (!noBackoffOverride) runnerEnv.TRANTOR_RETRY_MS = "1200";
   const runner = spawn("node", ["bin/crew-runner.mjs", "codex", work], {
     cwd: process.cwd(), stdio: "ignore",
-    env: { ...process.env, HOME, PATH: `${fakebin}:${process.env.PATH}`,
-      RELAY_URL: HUB, RELAY_AGENT: "codex", RELAY_PROJECT: PROJ,
-      CREW_KICKOFF: "say hi and end your turn",
-      ...(noBackoffOverride ? {} : { TRANTOR_RETRY_MS: "1200" }) },
+    env: runnerEnv,
   });
   // sample the pending file WHILE the batch is undelivered — it must exist between attempts
   let sawPendingOnDisk = false;

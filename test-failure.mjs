@@ -55,7 +55,9 @@ async function drill(agent, script, opts = {}) {
   const work = mkdtempSync(join(tmpdir(), `tt-fail-${agent}-`));
   const fakebin = join(work, "bin");
   mkdirSync(fakebin, { recursive: true });
-  const fake = join(fakebin, agent);
+  // opts.fakeName: the executable name the runner actually invokes, when it differs from the
+  // agent label (a BYOM seat like `inception` rides the opencode CLI fallback).
+  const fake = join(fakebin, opts.fakeName || agent);
   writeFileSync(fake, script);
   chmodSync(fake, 0o755);
 
@@ -193,6 +195,52 @@ async function drill(agent, script, opts = {}) {
   ok("#5684: the stall goes DIRECT to the orchestrator", stalls[0]?.to === "drillhost:tt-fail-claude");
   ok("#5684: the turn was NOT killed — it finished clean, no failure reported",
      !sends.some((m) => /turn FAILED/.test(m.text || "")));
+}
+
+// ---- #5481 drill A: NULL output with exit 0 is a FAILURE (the Inception/Mercury trap) -----
+// Observed live (card #5481): the inception seat took three turns, every one exit 0, produced
+// ZERO file changes on an explicit build contract — the completion came back JSON null because
+// reasoning ate the max_tokens budget. Silence used to read as success: the runner acked "✅
+// done" while nothing was produced. An empty transcript on a clean exit is a failure shape.
+{
+  const { sends, registers } = await drill("opencode", '#!/bin/sh\nexit 0\n',
+    { env: { RELAY_HOST_ID: "drillhost" } });
+  const failMsg = sends.find((m) => /turn FAILED/i.test(m.text || ""));
+  ok("#5481: an exit-0 turn with NULL output is reported FAILED, never clean", !!failMsg);
+  ok("#5481: it classifies as empty-output", !!failMsg && /empty-output/.test(failMsg.text));
+  ok("#5481: the message names the max_tokens suspicion", !!failMsg && /max_tokens/.test(failMsg.text));
+  ok("#5481: no success/recovery ack was posted for the silent turn",
+     !sends.some((m) => /✅/.test(m.text || "")));
+  const emptyReg = registers.find((x) => /errored: empty-output/.test(String(x.status || "")));
+  ok("#5481: presence flipped to 'errored: empty-output' (board shows it, not green)", !!emptyReg);
+  ok("#5481: the foreman is woken direct, not just broadcast at",
+     sends.some((m) => m.to === "drillhost:tt-fail-opencode" && /FAILED/.test(m.text || "")));
+}
+
+// ---- #5481 drill B: the inception seat's message names ITS trap ----------------------------
+// The dial lives in the provider's opencode model config (limit.output), not in the runner — so
+// the failure's one job is to point the operator at the right knob, by name, for this provider.
+{
+  const { sends } = await drill("inception", '#!/bin/sh\nexit 0\n',
+    { fakeName: "opencode", env: { RELAY_HOST_ID: "drillhost" } });
+  const failMsg = sends.find((m) => /turn FAILED/i.test(m.text || ""));
+  ok("#5481: the inception seat is classified empty-output too (BYOM opencode fallback)",
+     !!failMsg && /empty-output/.test(failMsg.text));
+  ok("#5481: the message names the diffusion/reasoning budget trap verbatim",
+     !!failMsg && /inception: raise max_tokens — diffusion burns budget on reasoning/.test(failMsg.text));
+}
+
+// ---- #5481 drill C: positive control — a turn WITH output still exits clean ---------------
+// Guards over-triggering: every real CLI prints something (opencode its response, codex its
+// transcript), so output on the streams must keep meaning success.
+{
+  // prime one wake so the success path runs deliverWake → the assigner gets its ✅
+  const { sends } = await drill("opencode", '#!/bin/sh\necho "did the thing"\nexit 0\n',
+    { inbox: ["do the thing"], waitMs: 4000 });
+  ok("#5481: a turn with output and exit 0 is still success (no failure posted)",
+     !sends.some((m) => /turn FAILED/.test(m.text || "")));
+  ok("#5481: ...and the completion ack still goes to the assigner",
+     sends.some((m) => /✅/.test(m.text || "")));
 }
 
 hub.close();
