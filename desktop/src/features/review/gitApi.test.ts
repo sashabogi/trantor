@@ -2,7 +2,7 @@
 // position label — so they carry the panel's whole test weight here. The Rust side owns the git
 // subprocesses; these tests pin the contract the panel renders against.
 import { describe, expect, it } from "vitest";
-import { aheadLabel, bucketStatus } from "./gitApi";
+import { aheadLabel, bucketStatus, scmSections } from "./gitApi";
 
 describe("bucketStatus", () => {
   it("splits staged, unstaged, and untracked from raw porcelain rows", () => {
@@ -52,5 +52,28 @@ describe("aheadLabel", () => {
   it("without an upstream, ahead means unlanded work and behind is never claimed", () => {
     expect(aheadLabel({ ahead: 5, behind: null, upstream: null })).toBe("5 unlanded");
     expect(aheadLabel({ ahead: 0, behind: null, upstream: null })).toBe("all landed");
+  });
+});
+
+describe("scmSections", () => {
+  it("splits staged from changes, and merges unstaged with untracked", () => {
+    const { staged, changes } = scmSections([
+      { path: "staged-only.ts", x: "M", y: " " },
+      { path: "unstaged-only.ts", x: " ", y: "M" },
+      { path: "brand-new.ts", x: "?", y: "?" },
+      { path: "gone.ts", x: " ", y: "D" },
+    ]);
+    expect(staged).toEqual(["staged-only.ts"]);
+    expect(changes).toEqual(["unstaged-only.ts", "gone.ts", "brand-new.ts"]);
+  });
+
+  it("keeps a staged-then-edited path in BOTH sections, the bulk actions' pathspecs", () => {
+    const { staged, changes } = scmSections([{ path: "both.ts", x: "M", y: "M" }]);
+    expect(staged).toEqual(["both.ts"]);
+    expect(changes).toEqual(["both.ts"]);
+  });
+
+  it("returns empty sections for a clean worktree", () => {
+    expect(scmSections([])).toEqual({ staged: [], changes: [] });
   });
 });

@@ -1,8 +1,11 @@
-// The Review lens's git rail (#5775). Review showed the seat's diff but left every git action to
-// a terminal; this panel is branch, stage/unstage, commit, push, and the recent log against the
-// SELECTED seat's worktree, through the git_* commands in src-tauri. Every mutation is refused
-// seat-side while the seat is working (the same guard write_file applies) — the refusal comes
-// back verbatim and lands in the status line, never a dialog.
+// The Review lens's git rail, now the SCM panel (#5791). Review showed the seat's diff but left
+// every git action to a terminal; this panel is branch, commit box on top, then STAGED / CHANGES
+// as collapsible sections with counts and bulk actions — VS Code's source-control shape — plus
+// push and the recent log, all against the SELECTED seat's worktree through the git_* commands in
+// src-tauri. Every mutation is refused seat-side while the seat is working (the same guard
+// write_file applies) — the refusal comes back verbatim and lands in the status line, never a
+// dialog. There is deliberately NO discard here: deleting a seat's uncommitted work is not a
+// review action.
 import { useCallback, useEffect, useState } from "react";
 import {
   aheadLabel,
@@ -11,17 +14,20 @@ import {
   gitPanel,
   gitPush,
   gitStage,
+  scmSections,
   type GitPanelSnapshot,
 } from "./gitApi";
 
-export function GitPanel({ project, seat, onChanged }: {
-  project: string; seat: string; onChanged?: () => void;
+export function GitPanel({ project, seat, onChanged, onOpenFile }: {
+  project: string; seat: string; onChanged?: () => void; onOpenFile?: (path: string) => void;
 }) {
   const [snap, setSnap] = useState<GitPanelSnapshot | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [msg, setMsg] = useState("");
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState<{ kind: "ok" | "fail"; text: string } | null>(null);
+  const [stagedOpen, setStagedOpen] = useState(true);
+  const [changesOpen, setChangesOpen] = useState(true);
 
   const pull = useCallback(() => {
     gitPanel(project, seat)
@@ -58,8 +64,27 @@ export function GitPanel({ project, seat, onChanged }: {
   };
 
   const buckets = snap ? bucketStatus(snap.status) : null;
-  const commitDisabled = busy || !buckets || buckets.staged.length === 0 || !msg.trim();
+  const sections = snap ? scmSections(snap.status) : null;
+  const commitDisabled = busy || !sections || sections.staged.length === 0 || !msg.trim();
   const pushDisabled = busy || !snap || !snap.branch || snap.ahead === 0;
+
+  // Bulk actions send every pathspec in ONE git call (batched against E2BIG per
+  // RESEARCH-orca-files §3), not one subprocess per file.
+  const stageAll = () => {
+    if (sections && sections.changes.length > 0) {
+      const n = sections.changes.length;
+      void act(() => gitStage(project, seat, sections.changes, false), `staged ${n} file${n === 1 ? "" : "s"}`);
+    }
+  };
+  const unstageAll = () => {
+    if (sections && sections.staged.length > 0) {
+      const n = sections.staged.length;
+      void act(() => gitStage(project, seat, sections.staged, true), `unstaged ${n} file${n === 1 ? "" : "s"}`);
+    }
+  };
+
+  const stageOne = (path: string) => { void act(() => gitStage(project, seat, [path]), `staged ${path}`); };
+  const unstageOne = (path: string) => { void act(() => gitStage(project, seat, [path], true), `unstaged ${path}`); };
 
   return (
     <div className="tr-card flex h-full min-h-0 flex-col px-3 py-2.5">
@@ -82,88 +107,144 @@ export function GitPanel({ project, seat, onChanged }: {
         </div>
       )}
 
-      {buckets && snap && (
+      {/* commit box — top, as VS Code does */}
+      {snap && !err && (
+        <div className="flex items-center gap-1.5 pb-2">
+          <input
+            value={msg}
+            onChange={e => setMsg(e.target.value)}
+            placeholder="Commit message…"
+            className="tr-mono min-w-0 flex-1 rounded-md border border-tr-edge bg-transparent px-2 py-1.5 text-[11.5px] outline-none placeholder:text-tr-muted/60 focus:border-tr-doing/50"
+          />
+          <button
+            onClick={() => {
+              const text = msg.trim();
+              if (!text) return;
+              void act(async () => { await gitCommit(project, seat, text); setMsg(""); }, "committed");
+            }}
+            disabled={commitDisabled}
+            className="shrink-0 rounded-lg bg-tr-doing/20 px-2.5 py-1.5 text-[11.5px] font-medium text-tr-doing disabled:opacity-40"
+          >
+            Commit
+          </button>
+        </div>
+      )}
+
+      {buckets && snap && !err && (
         <div className="flex min-h-0 flex-1 flex-col gap-2.5 overflow-y-auto">
-          {/* staged — each with an unstage button */}
+          {/* STAGED — collapsible, hover unstage per file, unstage-all on the header */}
           <section>
-            <div className="px-1 pb-1 text-[11px] font-medium text-tr-muted">Staged ({buckets.staged.length})</div>
-            {buckets.staged.length === 0 && (
+            <div className="flex items-center gap-1 px-1 py-1">
+              <button
+                type="button"
+                onClick={() => setStagedOpen(o => !o)}
+                className="flex min-w-0 flex-1 items-center gap-1.5 text-left"
+              >
+                <span className="w-3 shrink-0 text-[10px] text-tr-muted">{stagedOpen ? "▾" : "▸"}</span>
+                <span className="truncate text-[11px] font-medium text-tr-muted">Staged ({buckets.staged.length})</span>
+              </button>
+              {buckets.staged.length > 0 && (
+                <button
+                  type="button"
+                  onClick={unstageAll}
+                  disabled={busy}
+                  title={`unstage all ${buckets.staged.length} file${buckets.staged.length === 1 ? "" : "s"}`}
+                  className="shrink-0 rounded px-1.5 text-[12px] text-tr-muted hover:bg-white/[0.06] hover:text-tr-text disabled:opacity-40"
+                >−</button>
+              )}
+            </div>
+            {stagedOpen && buckets.staged.length === 0 && (
               <div className="px-1 py-0.5 text-[11.5px] text-tr-muted/70">Nothing staged.</div>
             )}
-            {buckets.staged.map(e => (
+            {stagedOpen && buckets.staged.map(e => (
               <div key={`s-${e.path}`} className="group flex items-center gap-1.5 rounded-md px-1 py-[3px]">
-                <span className="tr-mono min-w-0 flex-1 truncate text-[11.5px]" title={`${e.x}${e.y} ${e.path}`}>{e.path}</span>
                 <button
-                  onClick={() => { void act(() => gitStage(project, seat, [e.path], true), `unstaged ${e.path}`); }}
+                  type="button"
+                  onClick={() => onOpenFile?.(e.path)}
+                  className="tr-mono min-w-0 flex-1 truncate text-left text-[11.5px]"
+                  title={`${e.x}${e.y} ${e.path} — open diff`}
+                >{e.path}</button>
+                <button
+                  type="button"
+                  onClick={() => unstageOne(e.path)}
                   disabled={busy}
                   title="unstage"
-                  className="shrink-0 rounded px-1.5 text-[12px] text-tr-muted hover:bg-white/[0.06] hover:text-tr-text disabled:opacity-40"
+                  className="shrink-0 rounded px-1.5 text-[12px] text-tr-muted opacity-0 group-hover:opacity-100 hover:bg-white/[0.06] hover:text-tr-text disabled:opacity-40"
                 >−</button>
               </div>
             ))}
           </section>
 
-          {/* worktree changes + untracked — each stageable */}
-          {(buckets.unstaged.length > 0 || buckets.untracked.length > 0) && (
-            <section>
-              <div className="px-1 pb-1 text-[11px] font-medium text-tr-muted">
-                Changes ({buckets.unstaged.length + buckets.untracked.length})
-              </div>
-              {buckets.unstaged.map(e => (
-                <div key={`u-${e.path}`} className="flex items-center gap-1.5 rounded-md px-1 py-[3px]">
-                  <span className="tr-mono min-w-0 flex-1 truncate text-[11.5px]" title={`${e.x}${e.y} ${e.path}`}>{e.path}</span>
-                  <button
-                    onClick={() => { void act(() => gitStage(project, seat, [e.path]), `staged ${e.path}`); }}
-                    disabled={busy}
-                    title="stage"
-                    className="shrink-0 rounded px-1.5 text-[12px] text-tr-muted hover:bg-white/[0.06] hover:text-tr-text disabled:opacity-40"
-                  >+</button>
-                </div>
-              ))}
-              {buckets.untracked.map(p => (
-                <div key={`n-${p}`} className="flex items-center gap-1.5 rounded-md px-1 py-[3px]">
-                  <span className="tr-mono min-w-0 flex-1 truncate text-[11.5px] text-tr-muted">{p}</span>
-                  <span className="tr-chip shrink-0">new</span>
-                  <button
-                    onClick={() => { void act(() => gitStage(project, seat, [p]), `staged ${p}`); }}
-                    disabled={busy}
-                    title="stage"
-                    className="shrink-0 rounded px-1.5 text-[12px] text-tr-muted hover:bg-white/[0.06] hover:text-tr-text disabled:opacity-40"
-                  >+</button>
-                </div>
-              ))}
-            </section>
-          )}
-
-          {/* commit + push */}
-          <section className="flex flex-col gap-1.5">
-            <div className="flex items-center gap-1.5">
-              <input
-                value={msg}
-                onChange={e => setMsg(e.target.value)}
-                placeholder="Commit message…"
-                className="tr-mono min-w-0 flex-1 rounded-md border border-tr-edge bg-transparent px-2 py-1.5 text-[11.5px] outline-none placeholder:text-tr-muted/60 focus:border-tr-doing/50"
-              />
+          {/* CHANGES (unstaged + untracked) — collapsible, hover stage per file, stage-all on header */}
+          <section>
+            <div className="flex items-center gap-1 px-1 py-1">
               <button
-                onClick={() => {
-                  const text = msg.trim();
-                  if (!text) return;
-                  void act(async () => {
-                    await gitCommit(project, seat, text);
-                    setMsg("");
-                  }, "committed");
-                }}
-                disabled={commitDisabled}
-                className="shrink-0 rounded-lg bg-tr-doing/20 px-2.5 py-1.5 text-[11.5px] font-medium text-tr-doing disabled:opacity-40"
+                type="button"
+                onClick={() => setChangesOpen(o => !o)}
+                className="flex min-w-0 flex-1 items-center gap-1.5 text-left"
               >
-                Commit
+                <span className="w-3 shrink-0 text-[10px] text-tr-muted">{changesOpen ? "▾" : "▸"}</span>
+                <span className="truncate text-[11px] font-medium text-tr-muted">
+                  Changes ({buckets.unstaged.length + buckets.untracked.length})
+                </span>
               </button>
+              {(buckets.unstaged.length > 0 || buckets.untracked.length > 0) && (
+                <button
+                  type="button"
+                  onClick={stageAll}
+                  disabled={busy}
+                  title={`stage all ${sections?.changes.length ?? 0} file${(sections?.changes.length ?? 0) === 1 ? "" : "s"}`}
+                  className="shrink-0 rounded px-1.5 text-[12px] text-tr-muted hover:bg-white/[0.06] hover:text-tr-text disabled:opacity-40"
+                >+</button>
+              )}
             </div>
+            {changesOpen && buckets.unstaged.length === 0 && buckets.untracked.length === 0 && (
+              <div className="px-1 py-0.5 text-[11.5px] text-tr-muted/70">No changes.</div>
+            )}
+            {changesOpen && buckets.unstaged.map(e => (
+              <div key={`u-${e.path}`} className="group flex items-center gap-1.5 rounded-md px-1 py-[3px]">
+                <button
+                  type="button"
+                  onClick={() => onOpenFile?.(e.path)}
+                  className="tr-mono min-w-0 flex-1 truncate text-left text-[11.5px]"
+                  title={`${e.x}${e.y} ${e.path} — open diff`}
+                >{e.path}</button>
+                <button
+                  type="button"
+                  onClick={() => stageOne(e.path)}
+                  disabled={busy}
+                  title="stage"
+                  className="shrink-0 rounded px-1.5 text-[12px] text-tr-muted opacity-0 group-hover:opacity-100 hover:bg-white/[0.06] hover:text-tr-text disabled:opacity-40"
+                >+</button>
+              </div>
+            ))}
+            {changesOpen && buckets.untracked.map(p => (
+              <div key={`n-${p}`} className="group flex items-center gap-1.5 rounded-md px-1 py-[3px]">
+                <button
+                  type="button"
+                  onClick={() => onOpenFile?.(p)}
+                  className="tr-mono min-w-0 flex-1 truncate text-left text-[11.5px]"
+                  title={`untracked ${p} — open diff`}
+                >{p}</button>
+                <span className="tr-chip shrink-0">new</span>
+                <button
+                  type="button"
+                  onClick={() => stageOne(p)}
+                  disabled={busy}
+                  title="stage"
+                  className="shrink-0 rounded px-1.5 text-[12px] text-tr-muted opacity-0 group-hover:opacity-100 hover:bg-white/[0.06] hover:text-tr-text disabled:opacity-40"
+                >+</button>
+              </div>
+            ))}
+          </section>
+
+          {/* push */}
+          <section>
             <button
               onClick={() => { void act(async () => { await gitPush(project, seat); }, "pushed"); }}
               disabled={pushDisabled}
               title={!snap?.branch ? "detached HEAD" : snap.ahead === 0 ? "nothing to push" : `push ${snap.branch} to origin`}
-              className="rounded-lg border border-tr-edge px-2.5 py-1.5 text-[11.5px] font-medium text-tr-text disabled:opacity-40"
+              className="w-full rounded-lg border border-tr-edge px-2.5 py-1.5 text-[11.5px] font-medium text-tr-text disabled:opacity-40"
             >
               Push {snap?.branch ? snap.branch : ""} to origin
             </button>
