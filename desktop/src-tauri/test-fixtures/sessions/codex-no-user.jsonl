@@ -1,0 +1,3 @@
+{"type":"session_meta","payload":{"id":"01a05eca-18ea-4c0e-9f2a-codexquiet","cwd":"/Users/test/.agent-bus/worktrees/trantor/codex","git":{"branch":"seat/codex"}}}
+{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Resumed the session and read the board."}]}}
+{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Standing by."}]}}
