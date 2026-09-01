@@ -54,7 +54,13 @@ class TauriMessageWriter extends AbstractMessageWriter implements MessageWriter 
   }
 
   async write(msg: Message): Promise<void> {
-    await invoke("lsp_send", { id: this.id, message: JSON.stringify(msg) });
+    // A Tauri rejection is a plain string; vscode-jsonrpc reads `.message` off it and shows
+    // "Unknown reason" when there is none (0.3.96, seen on screen). Wrap so the real cause rides.
+    try {
+      await invoke("lsp_send", { id: this.id, message: JSON.stringify(msg) });
+    } catch (e) {
+      throw e instanceof Error ? e : new Error(String(e));
+    }
   }
 
   end(): void {
