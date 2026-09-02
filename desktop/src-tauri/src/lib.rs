@@ -4444,7 +4444,45 @@ async fn open_code(target: String, kind: String) -> Result<(), String> {
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
+/// Seconds since the epoch as text; the panic hook must not pull in a date crate or allocate much.
+fn chrono_free_now() -> String {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs().to_string())
+        .unwrap_or_else(|_| "0".to_string())
+}
+
 pub fn run() {
+    // A panic on the main thread inside AppKit's sendEvent cannot unwind and aborts the app; the
+    // crash report then shows only the abort, never the message (card #5917, twice on 2026-09-01).
+    // This hook writes the message and location to a file BEFORE the abort, so the next crash
+    // names itself. It changes nothing about how the panic proceeds.
+    let default_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        let path = desktop_bus_dir().join("app-panics.log");
+        let msg = info
+            .payload()
+            .downcast_ref::<&str>()
+            .map(|s| s.to_string())
+            .or_else(|| info.payload().downcast_ref::<String>().cloned())
+            .unwrap_or_else(|| "non-string panic payload".to_string());
+        let loc = info
+            .location()
+            .map(|l| format!("{}:{}", l.file(), l.line()))
+            .unwrap_or_else(|| "unknown location".to_string());
+        let line = format!(
+            "{} thread={:?} {} at {}\n",
+            chrono_free_now(),
+            std::thread::current().name().unwrap_or("?"),
+            msg,
+            loc
+        );
+        if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&path) {
+            use std::io::Write;
+            let _ = f.write_all(line.as_bytes());
+        }
+        default_hook(info);
+    }));
     tauri::Builder::default()
         .manage(terminal::TerminalManager::default())
         .plugin(tauri_plugin_opener::init())
