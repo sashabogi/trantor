@@ -3,7 +3,7 @@
 // clone --from, and --adopt — against a REAL throwaway hub, plus the guarded refusals (occupied
 // dir without --adopt, missing brief file). Asserts the DIRECTORY facts (git branch, CLAUDE.md
 // seeding, hook install), the HUB facts (brief posted, "genesis:" card on the new board), and
-// the --json contract ({name, dir, branch, hub, card}).
+// the --json contract ({name, parent, dir, branch, hub, card}).
 import { spawnSync, spawn } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -112,6 +112,20 @@ ok("refusal: the error names the directory and the way out", (r1.stderr || "").i
 const r2 = runNew(["genesis-d", "--brief", join(W, "no-such-brief.md")]);
 ok("refusal: missing brief file exits non-zero", r2.status !== 0);
 ok("refusal: nothing was created for the refused run", !existsSync(join(DEV, "genesis-d")));
+
+// ── the --dir contract: it is a PARENT, never the project directory itself ───────────────────────
+// #6050: `--dir P` must create P/<name>, not P, and never P/P.
+const ALT = join(W, "alt-dev");
+mkdirSync(ALT, { recursive: true });
+const d = runNew(["genesis-e", "--dir", ALT, "--json"]);
+ok("parent: exit 0", d.status === 0, `status ${d.status}: ${d.stderr.slice(-200)}`);
+let dJson = null;
+try { dJson = JSON.parse(d.stdout); } catch {}
+ok("parent: --dir P yields dir P/<name>, never P", !!dJson && dJson.dir === join(ALT, "genesis-e"), JSON.stringify(dJson));
+ok("parent: json carries the parent explicitly", !!dJson && dJson.parent === ALT, JSON.stringify(dJson));
+ok("parent: the project directory exists under the parent", !!dJson && existsSync(join(ALT, "genesis-e")));
+ok("parent: nothing was created AT the parent path itself", !existsSync(join(ALT, ".git")) && dJson?.dir !== ALT);
+ok("parent: CLAUDE.md seeded in the created dir", !!dJson && readFileSync(join(ALT, "genesis-e", "CLAUDE.md"), "utf8").includes("## Trantor conventions"));
 
 hub.kill();
 try { rmSync(W, { recursive: true, force: true }); } catch {}

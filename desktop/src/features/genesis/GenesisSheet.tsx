@@ -15,7 +15,7 @@ export function GenesisSheet({ devRoot, onClose, onMade, onWoken }: {
   onWoken: (project: string) => void;
 }) {
   const [nameInput, setNameInput] = useState("");
-  const [targetOverride, setTargetOverride] = useState<string | null>(null);
+  const [parentOverride, setParentOverride] = useState<string | null>(null);
   const [mode, setMode] = useState<StartMode>("empty");
   const [gitUrl, setGitUrl] = useState("");
   const [brief, setBrief] = useState("");
@@ -25,7 +25,10 @@ export function GenesisSheet({ devRoot, onClose, onMade, onWoken }: {
   const nameRef = useRef<HTMLInputElement>(null);
   const sheetRef = useRef<HTMLFormElement>(null);
   const slug = slugProjectName(nameInput);
-  const target = targetOverride ?? projectTarget(devRoot, slug);
+  // `trantor new --dir <parent>` treats its argument as the PARENT and always appends the name,
+  // so the user edits the parent directory and the resulting project path is derived from it.
+  const parent = (parentOverride ?? devRoot).replace(/\/+$/, "");
+  const target = projectTarget(parent, slug);
 
   useEffect(() => { nameRef.current?.focus(); }, []);
   useEffect(() => {
@@ -53,6 +56,7 @@ export function GenesisSheet({ devRoot, onClose, onMade, onWoken }: {
     event.preventDefault();
     if (!slug) { setError("Give the project a name."); return; }
     if (mode === "clone" && !gitUrl.trim()) { setError("Add the Git URL to clone."); return; }
+    if (!parent) { setError("Give a parent directory to create the project under."); return; }
     setNameInput(slug);
     setBusy(true);
     setError(null);
@@ -106,10 +110,17 @@ export function GenesisSheet({ devRoot, onClose, onMade, onWoken }: {
           <p className="tr-mono mt-1 text-[10.5px] text-[var(--color-tr-muted)]">
             slug · {slug || "name-your-project"}
           </p>
-          <label className="mt-3 block text-[11px] font-semibold uppercase tracking-[0.1em] text-[var(--color-tr-muted)]">Target directory</label>
-          <input className="tr-input tr-mono mt-1 w-full text-[11.5px]" value={target}
-                 onChange={event => setTargetOverride(event.target.value)} />
-          <p className="mt-1 text-[10.5px] text-[var(--color-tr-muted)]">Under your development root by default; edit it before creating if this project lives elsewhere.</p>
+          <label className="mt-3 block text-[11px] font-semibold uppercase tracking-[0.1em] text-[var(--color-tr-muted)]">Parent directory</label>
+          <input className="tr-input tr-mono mt-1 w-full text-[11.5px]" value={parent}
+                 onChange={event => setParentOverride(event.target.value)} aria-label="Parent directory"
+                 placeholder="/Users/you/development" />
+          {slug ? (
+            <p className="tr-mono mt-1 text-[10.5px] text-[var(--color-tr-muted)]">
+              will create <span className="text-[var(--color-tr-text)]">{target}</span>
+            </p>
+          ) : (
+            <p className="mt-1 text-[10.5px] text-[var(--color-tr-muted)]">The project folder {slug ? target : ""} is made inside this parent; the name is appended to it.</p>
+          )}
 
           <fieldset className="mt-4">
             <legend className="text-[11px] font-semibold uppercase tracking-[0.1em] text-[var(--color-tr-muted)]">Start from</legend>
@@ -151,7 +162,7 @@ export function GenesisSheet({ devRoot, onClose, onMade, onWoken }: {
         <div className="flex items-center justify-end gap-2 border-t border-[var(--color-tr-edge)] px-5 py-3">
           <button type="button" onClick={onClose} disabled={busy}
                   className="rounded-lg px-3 py-1.5 text-[12px] text-[var(--color-tr-muted)] hover:bg-white/[0.06] disabled:opacity-40">Cancel</button>
-          <button type="submit" disabled={busy || !slug || !target}
+          <button type="submit" disabled={busy || !slug || !parent}
                   className="rounded-lg bg-tr-doing/20 px-3 py-1.5 text-[12px] font-semibold text-tr-doing hover:bg-tr-doing/30 disabled:opacity-40">
             {busy ? "Starting…" : "Create & wake"}
           </button>
