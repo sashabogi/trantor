@@ -112,7 +112,7 @@ function enrolledPath(session) {
   const busDir = process.env.AGENT_BUS_DIR || join(homedir(), ".agent-bus");
   return join(busDir, "keys", `${String(session).replace(/[^A-Za-z0-9_.-]/g, "_")}.enrolled`);
 }
-export async function ensureEnrolled(session, identity, project) {
+export async function ensureEnrolled(session, identity, project, { kind = "agent" } = {}) {
   if (!identity?.pubkey) return;
   const hub = relayUrl(project);
   const stamp = enrolledPath(session);
@@ -126,7 +126,7 @@ export async function ensureEnrolled(session, identity, project) {
     // payload, sets content-type, and signs — so every hook signs identically with zero hand-rolling.
     const r = await sfetchJson(`${hub}/enroll`, {
       method: "POST",
-      payload: { pubkey: identity.pubkey, name: session, kind: "agent" },
+      payload: { pubkey: identity.pubkey, name: session, kind },
       identity,
       signal: AbortSignal.timeout(DEFAULT_TIMEOUT_MS),
     });

@@ -25,6 +25,15 @@ export type PaneTarget = {
 
 export const seatName = (session: string) => session.split(":")[0];
 
+// #6148: a bus session of the project is not automatically a seat. The CLI's genesis identity
+// (kind "genesis") exists to post the brief and must not render as a seat you could open a
+// terminal on. A peer with NO kind — an old hub that never sent the field — stays a seat:
+// absence of evidence must not evict real agents.
+export const isAgentPeer = (p: Peer): boolean => {
+  const kind = p.kind ?? "";
+  return kind === "" || kind === "agent";
+};
+
 export function paneTargets(seats: Peer[], orch: HerdrSeat | null, host: Peer | undefined, project: string): PaneTarget[] {
   const rows: PaneTarget[] = seats.map(s => ({
     key: s.session,

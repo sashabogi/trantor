@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { paneTargets } from "./paneTargets";
+import { isAgentPeer, paneTargets } from "./paneTargets";
 import type { Peer } from "../../shared/api/client";
 import type { HerdrSeat } from "./herdr";
 
@@ -32,5 +32,18 @@ describe("paneTargets", () => {
     const rows = paneTargets([codex], null, host, "trantor");
     expect(rows).toHaveLength(1);
     expect(rows[0]).toMatchObject({ key: "codex:trantor", agent: "codex", brand: "codex", isOrchestrator: false });
+  });
+
+  it("#6148: the genesis brief-poster is not a seat; a kindless peer (old hub) still is", () => {
+    const genesis: Peer = { session: "genesis:trantor", online: true, status: "idle", kind: "genesis" };
+    const agent: Peer = { session: "glm:trantor", online: true, status: "idle", kind: "agent" };
+    const oldHub: Peer = { session: "qwen:trantor", online: true, status: "idle" };
+    expect(isAgentPeer(genesis)).toBe(false);
+    expect(isAgentPeer(agent)).toBe(true);
+    expect(isAgentPeer(oldHub)).toBe(true);
+    // the strip: the genesis row never reaches paneTargets once seatsOf filters
+    const rows = paneTargets([genesis, agent, oldHub].filter(isAgentPeer), null, host, "trantor");
+    expect(rows).toHaveLength(2);
+    expect(rows.map(r => r.agent)).toEqual(["glm", "qwen"]);
   });
 });
