@@ -7,7 +7,7 @@
 // auth, #5683 codex compact-404, Claude's usage-limit notice).
 import { strict as assert } from "node:assert";
 import {
-  AUTH_MARKER_RE, OWN_OUTPUT_ANSWER_MIN, classifyFailure, looksLikeAuthDeath, stripPromptEcho,
+  AUTH_MARKER_RE, OWN_OUTPUT_ANSWER_MIN, classifyFailure, looksLikeAuthDeath, stripPromptEcho, verdictFor,
 } from "./lib/classify-failure.mjs";
 
 let fail = 0; const ok = (c, m) => { console.log((c ? "✓" : "✗ FAIL") + " " + m); if (!c) fail++; };
@@ -80,6 +80,40 @@ console.log("# classifyFailure — reasons and the matched evidence");
   same(classifyFailure(0, "", true), { reason: "empty-output", matched: "exit 0 with no output on either stream" }, "empty-output keeps its reason");
 }
 
+console.log("# the qwen specimen — contract echo the exact-match strip provably missed (#5868 turn 9)");
+{
+  // The REAL contract (the #6049 wake text) — ABOUT a hub 401, dense with auth vocabulary.
+  const QWEN_PROMPT = [
+    "Queued after the anti-slop card (finish and commit that first): card #6049, medium. Genesis drill on trantor 0.18.30: `trantor new genesis-drill-2 --brief … --dir … --json` printed \"hub unreachable or refusing (hub 401 on /project)\" and card:null — the project exists locally, hub pin set, but the brief and first card never reached the board.",
+    "The hub's 401 reasons (hub.mjs ~1015–1065, 1318, 1369): \"signature required\", \"unknown identity\" (a signed request from a not-yet-enrolled identity — see the comment at ~1020), \"bad signature\". Steps: (1) make the CLI's error carry the hub's error body (`hub 401 on /project: unknown identity`) — always; (2) reproduce INSIDE your worktree (the seat sandbox rejects writes outside it).",
+  ].join("\n");
+  // How the CLI actually echoed it: '>' framing, terminal-width wrapping, its own progress lines
+  // between — NO echoed line equals a prompt line, which is exactly why 9b28036's exact-match
+  // strip removed nothing and the raw text went on to match AUTH_MARKER_RE.
+  const QWEN_ERR = [
+    "\x1b[2mworktree\x1b[0m seat/qwen clean",
+    "> Queued after the anti-slop card (finish and commit that first): card #6049, medium. Genesis drill on trantor",
+    "> 0.18.30: `trantor new genesis-drill-2 --brief … --dir … --json` printed \"hub unreachable or refusing (hub 401",
+    "> on /project)\" and card:null — the project exists locally, hub pin set, but the brief and first card never",
+    "> reached the board. The hub's 401 reasons (hub.mjs ~1015–1065, 1318, 1369): \"signature required\", \"unknown",
+    "> identity\" (a signed request from a not-yet-enrolled identity — see the comment at ~1020), \"bad signature\".",
+    "\x1b[32m●\x1b[0m committed aa3c340 (test-new.mjs, bin/new.mjs)",
+  ].join("\n");
+  const norm = (l) => l.replace(/\x1b\[[0-9;]*[A-Za-z]/g, "").replace(/\s+/g, " ").trim();
+  const echoedLine = norm(QWEN_ERR.split("\n")[2]);
+  ok(!QWEN_PROMPT.split("\n").map(norm).includes(echoedLine),
+    "evidence: no echoed line is a verbatim prompt line — the old exact-match strip provably missed it");
+  ok(AUTH_MARKER_RE.test(QWEN_ERR) === true, "evidence: the raw echoed contract really did match AUTH_MARKER_RE ('401')");
+  const own = stripPromptEcho(QWEN_ERR, QWEN_PROMPT);
+  ok(!AUTH_MARKER_RE.test(own), "the new strip removes the framed/wrapped contract echo — no auth marker survives");
+  ok(own.includes("committed aa3c340"), "the CLI's own work lines survive the strip");
+  ok(looksLikeAuthDeath(own) === false, "stripped qwen output is NOT an auth death");
+  ok(looksLikeAuthDeath(QWEN_ERR, true) === false,
+    "belt and braces: a turn that shipped a commit is NEVER auth, even on the raw echo");
+  ok(looksLikeAuthDeath("401 Unauthorized", false) === true,
+    "a genuine short auth death with no real work still escalates (#5405 specimen)");
+}
+
 console.log("# the seat-log verdict line (contract c): every classification carries evidence");
 {
   for (const [exit, text, empty] of [[1, "quota ran out", false], [1, "401 unauthorized", false], [1, "unexpected status 502", false], [127, "", false], [0, "", true]]) {
@@ -88,6 +122,20 @@ console.log("# the seat-log verdict line (contract c): every classification carr
       `[runner] classified ${reason} because ${matched}`);
   }
 }
+
+console.log("# verdictFor — the verdict field that rides the seat's jsonl row (#5868)");
+{
+  ok(verdictFor(0, 0, false, "did the work") === "classified success because exit 0 with CLI output",
+    "clean turn → classified success");
+  ok(verdictFor(0, 1, true, "") === "classified empty-output because exit 0 with no output on either stream",
+    "#5481 escalation → empty-output verdict");
+  const authV = verdictFor(0, 1, false, "401 Unauthorized");
+  ok(authV === "classified auth because 401 in the CLI's own short output", `exit-0 escalation → ${authV}`);
+  ok(verdictFor(1, 1, false, "You've reached your usage limit.").startsWith("classified exhausted"),
+    "non-zero turn → the classifyFailure verdict verbatim");
+  ok(verdictFor(1, 1, false, "segfault").startsWith("classified crashed"), "unknown failure → crashed");
+}
+
 
 console.log(fail ? `\n${fail} FAILED` : "\nALL PASS");
 process.exit(fail ? 1 : 0);
