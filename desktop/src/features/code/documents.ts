@@ -102,3 +102,13 @@ export function keptDraft(project: string, key: string): { draft: string; baseSi
   if (!d || !d.loaded) return undefined;
   return { draft: d.draft, baseSignature: d.baseSignature };
 }
+
+/** Whether a lens may write its local draft back to the store as the tab's kept work (#5938).
+ *  Three things must be true: there is an active document, it finished loading (a draft without a
+ *  completed load is a loading screen), and the VIEW has hydrated its local draft from that very
+ *  document. The third leg is the 2026-09-02 empty-editor regression: on remount the effect that
+ *  opens the tree-selected path ran before the effect that hydrates the local draft, so the stash
+ *  wrote the initial "" over a 222,668-character kept draft, and reload then let "" win. */
+export function canStashDraft(args: { activeKey: string | null; loaded: boolean; hydratedKey: string | null }): boolean {
+  return !!args.activeKey && args.loaded && args.hydratedKey === args.activeKey;
+}

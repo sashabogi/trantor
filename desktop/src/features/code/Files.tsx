@@ -38,6 +38,7 @@ import {
   setDraft as storeSetDraft,
   setActiveKey as storeSetActiveKey,
   setTabs as storeSetTabs,
+  canStashDraft,
 } from "./documents";
 import { isLspIndexing, isLspLive, lspPhase, onLspChange, startLsp, stopLspProject } from "./lspClient";
 import { lspLanguageFor, lspServerName } from "./lspLanguage";
@@ -76,6 +77,9 @@ export function Files({ project, lens, onLens, path, seat }: {
   const [head, setHead] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [draft, setDraftState] = useState("");
+  // Which document the local `draft` state was hydrated from (#5938). A stash before hydration
+  // would write this component's initial "" over the store's kept draft.
+  const hydratedKeyRef = useRef<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -161,7 +165,14 @@ export function Files({ project, lens, onLens, path, seat }: {
   // the initial "" as the tab's kept work (the 2026-09-01 empty-editor regression); a draft
   // without a completed load is not a draft, it is a loading screen.
   const stashDraft = () => {
-    if (activeKey && docs.docs.get(activeKey)?.loaded) storeSetDraft(project, activeKey, draft);
+    if (!activeKey) return;
+    const ok = canStashDraft({
+      activeKey,
+      loaded: !!docs.docs.get(activeKey)?.loaded,
+      hydratedKey: hydratedKeyRef.current,
+    });
+    trace(`stashDraft ${activeKey} len=${draft.length} hydrated=${hydratedKeyRef.current === activeKey} written=${ok}`);
+    if (ok) storeSetDraft(project, activeKey, draft);
   };
   const openPath = (scope: string, p: string, view: ViewMode) => {
     stashDraft();
@@ -185,13 +196,14 @@ export function Files({ project, lens, onLens, path, seat }: {
 
   // Load the active tab's documents. body/head reset per tab; the draft survives in the store.
   useEffect(() => {
-    if (!activeTab) { setBody(null); setHead(null); setError(null); setDraftState(""); setSaved(false); return; }
+    if (!activeTab) { hydratedKeyRef.current = null; setBody(null); setHead(null); setError(null); setDraftState(""); setSaved(false); return; }
     setBody(null); setHead(null); setError(null); setSaved(false);
     // setDraftState, NOT setDraft: the setter below also records the value as the tab's kept
     // draft, and recording "" for a tab with nothing kept is what made reload() adopt "" over the
     // disk text — the whole file rendered as one blank line, the changes view as all-deleted
     // (0.3.91, seen on screen). The kept draft is read here, never written.
     setDraftState(docs.docs.get(activeTab.key)?.draft ?? "");
+    hydratedKeyRef.current = activeTab.key;
     statRef.current = null;
     reload(activeTab.key);
     // eslint-disable-next-line react-hooks/exhaustive-deps

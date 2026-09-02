@@ -12,6 +12,7 @@ import {
   setDraft,
   setActiveKey,
   setTabs,
+  canStashDraft,
 } from "./documents";
 import { markDirty, openInTabs, tabKey, togglePin } from "./codeTabs";
 
@@ -104,5 +105,20 @@ describe("keptDraft", () => {
     setDraft("p", "k1", "typed");
     markLoaded("p", "k1");
     expect(keptDraft("p", "k1")?.draft).toBe("typed");
+  });
+});
+
+describe("canStashDraft (#5938)", () => {
+  it("refuses a stash before the view hydrated its draft from the active document", () => {
+    // the remount order: openPath stashes before the load effect hydrates
+    expect(canStashDraft({ activeKey: "project:a.rs", loaded: true, hydratedKey: null })).toBe(false);
+    expect(canStashDraft({ activeKey: "project:a.rs", loaded: true, hydratedKey: "project:b.rs" })).toBe(false);
+  });
+  it("refuses a stash for a document that never finished loading", () => {
+    expect(canStashDraft({ activeKey: "project:a.rs", loaded: false, hydratedKey: "project:a.rs" })).toBe(false);
+  });
+  it("allows the stash once the active document is loaded and hydrated", () => {
+    expect(canStashDraft({ activeKey: "project:a.rs", loaded: true, hydratedKey: "project:a.rs" })).toBe(true);
+    expect(canStashDraft({ activeKey: null, loaded: true, hydratedKey: null })).toBe(false);
   });
 });
