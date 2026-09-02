@@ -253,18 +253,20 @@ function ChipThumb({ path }: { path: string }) {
   );
 }
 
-/** The chip row (#6070): a dropped, pasted or picked file wears a face BELOW the text area — an
- *  image shows its thumbnail, anything else its name and size — each removable without touching
- *  the words. Paths never enter the text, so dictation cannot split one (#5773). */
+/** The chip row (#6070, bounced): one horizontal ROW below the text area — an image wears its
+ *  thumbnail, anything else a file glyph, the size as a small caption, the × only on hover, and
+ *  NO file name. Several attachments sit inline and never stack vertically, so the composer does
+ *  not grow with them; the row scrolls sideways when it overflows. The full path stays in the
+ *  tooltip. */
 function AttachmentChips({ chips, onRemove }: { chips: AttachmentChip[]; onRemove: (id: string) => void }) {
   if (!chips.length) return null;
   return (
-    <div className="mt-1.5 flex flex-wrap gap-1.5">
+    <div className="mt-1.5 flex flex-nowrap items-center gap-1.5 overflow-x-auto">
       {chips.map(c => (
         <div
           key={c.id}
           title={c.path}
-          className="flex max-w-full items-center gap-1.5 rounded-[8px] border border-tr-edge bg-tr-panel py-1 pl-1.5 pr-1"
+          className="group flex shrink-0 items-center gap-1 rounded-[8px] border border-tr-edge bg-tr-panel p-1"
         >
           {c.kind === "image"
             ? <ChipThumb path={c.path} />
@@ -273,13 +275,14 @@ function AttachmentChips({ chips, onRemove }: { chips: AttachmentChip[]; onRemov
                 <FileText size={13} strokeWidth={1.75} />
               </span>
             )}
-          <span className="max-w-[150px] truncate text-[11px] text-tr-text">{c.name}</span>
-          {c.size !== null && <span className="tr-mono shrink-0 text-[10px] text-tr-muted">{formatBytes(c.size)}</span>}
+          {/* The size is the caption — the name never sits in the row (the bounce's one-line
+              rule); the tooltip above carries the path for anyone who needs the words. */}
+          {c.size !== null && <span className="tr-mono shrink-0 text-[10px] leading-none text-tr-muted">{formatBytes(c.size)}</span>}
           <button
             type="button"
             onClick={() => onRemove(c.id)}
-            title="remove this attachment"
-            className="shrink-0 rounded p-0.5 text-tr-muted hover:text-tr-text"
+            title={`remove ${c.name}`}
+            className="shrink-0 rounded p-0.5 text-tr-muted opacity-0 transition-opacity group-hover:opacity-100 hover:text-tr-text focus-visible:opacity-100"
           >
             <X size={11} strokeWidth={2.5} />
           </button>
@@ -384,37 +387,61 @@ export function Composer({ project, target, live, liveWhy, model, modelSource, w
     heightLoaded.current = true;
     setChosenPx(loadComposerHeight(minPx, maxPx));
   }, [minPx, maxPx]);
-  // The content's own height, measured whenever the draft changes: collapse to auto, read, and let
-  // the render re-apply the rule — a layout effect, so it never paints between the two.
+  // The content's own height, measured whenever the draft changes: collapse to auto and read the
+  // scroll height. The measured value is RESTORED afterwards, not blanked — React wrote that style
+  // at commit and does not rewrite an unchanged prop, so a blank would strand the textarea with
+  // whatever default the webview falls back to (that blank is what made the first build's box
+  // forget its height). A layout effect, so it never paints between the two writes.
   const [contentPx, setContentPx] = useState<number | null>(null);
   useLayoutEffect(() => {
     const el = box.current;
     if (!el) return;
+    const prev = el.style.height;
     el.style.height = "auto";
     const h = el.scrollHeight;
-    el.style.height = "";
+    el.style.height = prev;
     setContentPx(h);
   }, [draft]);
   const grown = growComposerPx(contentPx ?? minPx, minPx, maxPx);
   const heightPx = chosenPx === null ? grown : Math.min(chosenPx, maxPx);
   const dragRef = useRef<{ startY: number; startH: number } | null>(null);
+  // The drag rides WINDOW listeners, not the handle's own pointermove (#6070 bounce: the built
+  // app's handle was inert). Pointer capture does not reliably retarget moves back to the
+  // capturing element under WKWebView, so the moves never arrived there; window carries the drag
+  // wherever the pointer goes. Capture stays as an enhancement that cannot kill the drag when a
+  // window refuses it.
+  const dragCleanup = useRef<(() => void) | null>(null);
+  useEffect(() => () => { dragCleanup.current?.(); }, []);
   const handleDragStart = (e: React.PointerEvent<HTMLDivElement>) => {
     e.preventDefault();
-    e.currentTarget.setPointerCapture(e.pointerId);
+    try { e.currentTarget.setPointerCapture(e.pointerId); } catch { /* no capture here — the window listeners carry the drag anyway */ }
     dragRef.current = { startY: e.clientY, startH: heightPx };
-  };
-  const handleDragMove = (e: React.PointerEvent<HTMLDivElement>) => {
-    const d = dragRef.current;
-    if (!d) return;
-    setChosenPx(clampComposerPx(d.startH + (e.clientY - d.startY), minPx, maxPx));
-  };
-  const handleDragEnd = (e: React.PointerEvent<HTMLDivElement>) => {
-    const d = dragRef.current;
-    if (!d) return;
-    dragRef.current = null;
-    const next = clampComposerPx(d.startH + (e.clientY - d.startY), minPx, maxPx);
-    setChosenPx(next);
-    saveComposerHeight(next, minPx, maxPx);
+    const move = (ev: PointerEvent) => {
+      const d = dragRef.current;
+      if (!d) return;
+      setChosenPx(clampComposerPx(d.startH + (ev.clientY - d.startY), minPx, maxPx));
+    };
+    const drop = () => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+      window.removeEventListener("pointercancel", cancel);
+      dragCleanup.current = null;
+    };
+    const up = (ev: PointerEvent) => {
+      drop();
+      const d = dragRef.current;
+      dragRef.current = null;
+      if (!d) return;
+      const next = clampComposerPx(d.startH + (ev.clientY - d.startY), minPx, maxPx);
+      setChosenPx(next);
+      saveComposerHeight(next, minPx, maxPx);
+    };
+    const cancel = () => { drop(); dragRef.current = null; };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+    window.addEventListener("pointercancel", cancel);
+    // An unmount mid-drag must not strand window listeners behind a dead component.
+    dragCleanup.current = () => { drop(); dragRef.current = null; };
   };
 
   // The locked composer's one action (#5495), derived from the session inventory and polled
@@ -691,16 +718,18 @@ export function Composer({ project, target, live, liveWhy, model, modelSource, w
           bottom-right INSIDE it — one position, two states, the Claude-desktop pattern. The
           textarea keeps its padding on every side except the right, which widens so words never
           run under the button. The drag handle along its top edge resizes it (#6070): two lines
-          to about 60% of the pane, and the height is remembered. */}
-      <div className="relative rounded-lg bg-black/30">
+          to about 60% of the pane, and the height is remembered.
+
+          ONE visible border (#6070 bounce): the container's own. The textarea carries none — no
+          rounding of its own, and its focus outline explicitly off, because the global
+          `textarea:focus-visible` rule in styles.css outranks a bare `outline-none` class and
+          used to draw a stray inner frame every time the operator clicked in to type. */}
+      <div className="relative overflow-hidden rounded-lg border border-tr-edge bg-black/30">
         <div
           role="separator"
           aria-orientation="horizontal"
           title="Drag to resize — the height is remembered"
           onPointerDown={handleDragStart}
-          onPointerMove={handleDragMove}
-          onPointerUp={handleDragEnd}
-          onPointerCancel={() => { dragRef.current = null; }}
           className="flex h-2.5 w-full cursor-row-resize touch-none items-center justify-center"
         >
           <span className="h-[3px] w-9 rounded-full bg-tr-edge" />
@@ -723,7 +752,7 @@ export function Composer({ project, target, live, liveWhy, model, modelSource, w
           placeholder={live ? "Message the orchestrator…  (⇧⏎ for a new line)" : liveWhy}
           disabled={!live || busy}
           style={{ height: `${heightPx}px` }}
-          className="w-full resize-none overflow-y-auto rounded-lg bg-transparent p-2.5 pr-12 text-[12.5px] leading-relaxed outline-none placeholder:text-tr-muted disabled:opacity-50"
+          className="w-full resize-none overflow-y-auto bg-transparent p-2.5 pr-12 text-[12.5px] leading-relaxed outline-none focus-visible:outline-none focus:outline-none placeholder:text-tr-muted disabled:opacity-50"
         />
         {slot.kind === "stop" ? (
           <button
