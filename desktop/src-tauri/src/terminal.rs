@@ -16,6 +16,30 @@ const DEFAULT_COLS: u16 = 80;
 const DEFAULT_ROWS: u16 = 24;
 const DETACH_REAP_TIMEOUT: Duration = Duration::from_secs(2);
 
+/// The largest single write to the pty master, and the pause between writes. A paste can be many
+/// kilobytes; the pty's input queue is bounded, so one giant `write_all` either blocks the whole
+/// terminal thread or (on a non-blocking fd) returns EAGAIN and silently drops the rest. Chunked
+/// writes with a drain beat keep the queue from overrunning.
+const WRITE_CHUNK: usize = 512;
+const WRITE_DRAIN: Duration = Duration::from_millis(2);
+
+/// The bracketed-paste markers xterm wraps a paste in. Never split one across a chunk: a receiving
+/// app that sees half a marker treats the rest as literal keystrokes (the "two inputs" symptom).
+const BRACKETED_START: &[u8] = b"\x1b[200~";
+const BRACKETED_END: &[u8] = b"\x1b[201~";
+
+/// If `end` would cut a bracketed-paste marker in two, pull it back to the marker's start so the
+/// marker rides whole in the next chunk.
+fn avoid_splitting_marker(bytes: &[u8], end: usize) -> usize {
+    for start in end.saturating_sub(BRACKETED_START.len() - 1)..end {
+        let window = &bytes[start..];
+        if window.starts_with(BRACKETED_START) || window.starts_with(BRACKETED_END) {
+            return start;
+        }
+    }
+    end
+}
+
 type ByteSink = Arc<dyn Fn(Vec<u8>) + Send + Sync + 'static>;
 
 struct TerminalSession {
@@ -98,10 +122,23 @@ impl TerminalManager {
     fn write(&self, sub: u64, data: &str) -> Result<(), String> {
         let session = self.session(sub)?;
         let mut writer = session.writer.lock().unwrap();
-        writer
-            .write_all(data.as_bytes())
-            .and_then(|_| writer.flush())
-            .map_err(|e| format!("term write {sub}: {e}"))
+        let bytes = data.as_bytes();
+        let mut offset = 0;
+        while offset < bytes.len() {
+            let mut end = (offset + WRITE_CHUNK).min(bytes.len());
+            end = avoid_splitting_marker(bytes, end);
+            writer
+                .write_all(&bytes[offset..end])
+                .and_then(|_| writer.flush())
+                .map_err(|e| format!("term write {sub}: {e}"))?;
+            offset = end;
+            // Give the pty's bounded input queue a beat to drain into the child so a fast paste
+            // cannot outrun a slow reader.
+            if offset < bytes.len() {
+                thread::sleep(WRITE_DRAIN);
+            }
+        }
+        Ok(())
     }
 
     fn resize(&self, sub: u64, cols: u16, rows: u16) -> Result<(), String> {
@@ -362,6 +399,54 @@ mod tests {
     }
 
     #[test]
+    fn a_large_bracketed_paste_survives_byte_for_byte() {
+        let manager = TerminalManager::default();
+        let (tx, rx) = mpsc::channel::<Vec<u8>>();
+        let sub = manager
+            .attach_command(
+                // raw + no echo so the pty itself is transparent, then `cat` mirrors input to
+                // output byte-for-byte — a byte-counting echo child.
+                shell_command("stty raw -echo; printf 'READY'; exec cat"),
+                Arc::new(move |bytes| {
+                    tx.send(bytes).unwrap();
+                }),
+            )
+            .expect("attach");
+
+        // Wait for the child to put the pty in raw mode; a write before `stty raw` would sit in
+        // the canonical line buffer (MAX_CANON) and is a different bug than the one under test.
+        let mut pre = Vec::new();
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while Instant::now() < deadline && !String::from_utf8_lossy(&pre).contains("READY") {
+            if let Ok(chunk) = rx.recv_timeout(Duration::from_millis(50)) {
+                pre.extend(chunk);
+            }
+        }
+        assert!(
+            String::from_utf8_lossy(&pre).contains("READY"),
+            "child never reached raw mode: {:?}",
+            String::from_utf8_lossy(&pre)
+        );
+
+        let body = "x".repeat(4096);
+        let paste = format!("\x1b[200~{body}\x1b[201~");
+        manager.write(sub, &paste).expect("write");
+
+        let expected = paste.as_bytes().to_vec();
+        let mut got = Vec::new();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while Instant::now() < deadline && got.len() < expected.len() {
+            if let Ok(chunk) = rx.recv_timeout(Duration::from_millis(100)) {
+                got.extend(chunk);
+            }
+        }
+        assert_eq!(got.len(), expected.len(), "echoed {} of {} bytes", got.len(), expected.len());
+        assert_eq!(got, expected, "paste was altered in transit");
+
+        assert!(manager.detach(sub).expect("detach").reaped);
+    }
+
+    #[test]
     fn resize_survives_after_child_exit_until_detach() {
         let manager = TerminalManager::default();
         let sub = manager
@@ -371,5 +456,22 @@ mod tests {
 
         let _ = manager.resize(sub, 100, 30);
         assert!(manager.detach(sub).expect("detach").reaped);
+    }
+
+    #[test]
+    fn boundary_never_splits_a_bracketed_paste_marker() {
+        // A marker starting at 510 would be cut by a 512-byte chunk boundary; the boundary must
+        // pull back to 510 so the marker rides whole in the next chunk.
+        let mut data = vec![b'x'; 520];
+        data[510..516].copy_from_slice(BRACKETED_START);
+        assert_eq!(avoid_splitting_marker(&data, 512), 510);
+
+        // A marker that ends exactly on the boundary is whole — leave it.
+        let mut data2 = vec![b'x'; 520];
+        data2[506..512].copy_from_slice(BRACKETED_END);
+        assert_eq!(avoid_splitting_marker(&data2, 512), 512);
+
+        // No marker anywhere near the boundary: unchanged.
+        assert_eq!(avoid_splitting_marker(&vec![b'x'; 600], 512), 512);
     }
 }
