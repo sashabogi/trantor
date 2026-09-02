@@ -136,11 +136,24 @@ describe("TauriMessageReader/Writer over a real jsonrpc connection", () => {
 
   it("ready resolves once BOTH Tauri subscriptions are confirmed registered", async () => {
     // Tauri drops an event with no subscriber, so `initialize` must not go out before this
-    // resolves — startLsp gates client.start() on it (#5857).
-    const reader = new TauriMessageReader(13);
+    // resolves — startLsp gates client.start() on it (#5857). Once ready, both streams deliver.
+    const bus = makeBus();
+    const reader = new TauriMessageReader(13, undefined, bus);
     await expect(reader.ready).resolves.toBeUndefined();
-    expect(bus.handlers.get(`lsp-message:13`)).toHaveLength(1);
-    expect(bus.handlers.get(`lsp-closed:13`)).toHaveLength(1);
+    const writer = new TauriMessageWriter(13, bus);
+    const conn = createMessageConnection(reader, writer);
+    const seen: string[] = [];
+    const closed: boolean[] = [];
+    conn.onNotification("test/after-ready", () => { seen.push("after-ready"); });
+    conn.onClose(() => { closed.push(true); });
+    conn.listen();
+    bus.emit(`lsp-message:13`, JSON.stringify({ jsonrpc: "2.0", method: "test/after-ready", params: {} }));
+    await tick();
+    bus.emit(`lsp-closed:13`, null);
+    await tick();
+    expect(seen).toEqual(["after-ready"]);
+    expect(closed).toEqual([true]);
+    conn.dispose();
   });
 });
 
