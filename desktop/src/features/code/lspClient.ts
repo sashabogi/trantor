@@ -102,7 +102,7 @@ const notify = () => {
 function lspStartTimeout(key: ClientKey, id: number, stopServer: (id: number) => Promise<void>, ms: number): Promise<never> {
   return new Promise<never>((_, reject) => {
     setTimeout(() => {
-      trace(`startLsp ${key} client start TIMED OUT after ${ms}ms — stopping server id=${id}`);
+      trace(`startLsp ${traceKey(key)} client start TIMED OUT after ${ms}ms — stopping server id=${id}`);
       void stopServer(id).catch(() => {});
       reject(new Error(`lsp start timed out after ${ms}ms (${key})`));
     }, ms);
@@ -229,16 +229,25 @@ export async function startLsp(
     });
     // The subscription is an IPC of its own; the first write must not race it (#5857, 0.3.113).
     await reader.ready;
+    const startPromise = client.start();
+    // A losing client.start() (the timeout won the race below) must still be observed — otherwise
+    // its eventual rejection is an unhandled promise rejection. The race keeps the original promise.
+    startPromise.catch(() => {});
     try {
       // A hung start must not pin pendingStarts forever: a remount then awaits a promise that
       // never settles (app-trace.log: "awaiting an in-flight start" 44s after the first start).
       // On timeout, stop the server so the retry respawns a fresh process, and reject so the
       // remount can retry.
-      await Promise.race([client.start(), lspStartTimeout(key, started.id, (id) => d.stopServer(id), d.startTimeoutMs ?? 30_000)]);
+      await Promise.race([startPromise, lspStartTimeout(key, started.id, (id) => d.stopServer(id), d.startTimeoutMs ?? 30_000)]);
     } catch (e) {
       // A start that fails AFTER the wire handshake must say so — the 0.3.111 silence (initialize
       // answered, then nothing, #5857) had no line here, so a hung/failed start was invisible.
       trace(`startLsp ${traceKey(key)} client start FAILED: ${e instanceof Error ? e.message : String(e)}`);
+      // The abandoned client (timeout won the race, or start() itself failed) must be torn down —
+      // otherwise the reader's two Tauri subscriptions (lsp-message:<id>, lsp-closed:<id>, taken in
+      // TauriMessageReader's constructor) outlive it and leak.
+      await client.stop().catch(() => {});
+      reader.dispose();
       throw e;
     }
     trace(`startLsp ${traceKey(key)} client running`);
