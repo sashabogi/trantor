@@ -433,6 +433,17 @@ export async function projectIcon(project: string): Promise<string | null> {
   } catch { return null; }
 }
 
+export type AttachmentInfo = { bytes: number; thumb: string | null };
+
+/** An attached file's facts off the disk (#6070): its size, plus a `data:` URI thumbnail when it is
+ * an image the webview can paint and small enough to inline. null when the path is not a file —
+ * the chip then degrades to name-only rather than erroring. Never throws. */
+export async function attachmentInfo(path: string): Promise<AttachmentInfo | null> {
+  try {
+    return await invoke<AttachmentInfo | null>("attachment_info", { path });
+  } catch { return null; }
+}
+
 /** Projects with a live session PROCESS on this machine — interactive claude windows + crew
  * seats. This, not heartbeat freshness, is what "a terminal window is open" means; heartbeats
  * ride hook fires, so an idle-but-open session goes dark on the hub after 5 quiet minutes. */

@@ -12,13 +12,16 @@
 // Every input is gated on LIVE, not on a pane row existing (#5477): a pane whose agent exited is
 // registered but dead, and typing into it would queue words nobody will ever read. `liveWhy`
 // names the reason on every locked control, because a control that explains itself is trusted.
-import { type ReactNode, useEffect, useRef, useState } from "react";
+import { type ReactNode, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
-import { ChevronDown, Paperclip, Square, ArrowUp } from "lucide-react";
+import { ArrowUp, ChevronDown, FileText, Image as ImageIcon, Paperclip, Square, X } from "lucide-react";
 import { searchFiles } from "../code/fileApi";
+import { attachmentInfo } from "../../shared/api/client";
+import { addChips, formatBytes, makeChip, removeChip, serializeForSend, type AttachmentChip } from "./attachments";
+import { clampComposerPx, growComposerPx, loadComposerHeight, maxComposerPx, minComposerPx, saveComposerHeight } from "./composerHeight";
 import { FONT_STEPS, type FontStep } from "./prefs";
-import { gaugeLabel, gaugeTone, gaugeUnknownWindow, composerSlot, hasImagePath, insertPaths, normalizeAttachments, receiptFor, type ContextGauge, type PendingSend } from "./streaming";
+import { gaugeLabel, gaugeTone, gaugeUnknownWindow, composerSlot, hasImagePath, normalizeAttachments, receiptFor, type ContextGauge, type PendingSend } from "./streaming";
 import { projectSessions, takeoverAction, type ProjectSessions } from "./takeover";
 import { TakeoverStrip } from "./TakeoverStrip";
 
@@ -200,6 +203,92 @@ function FontMenu({ step, onPick }: { step: FontStep; onPick: (s: FontStep) => v
   );
 }
 
+// ---------------------------------------------------------------- attachments (#6070)
+
+/** An image chip's thumbnail: a `data:` URI read off the disk (attachment_info) and cached the way
+ *  ProjectIcon caches project marks — module-level, so a re-render never re-reads the file.
+ *  `undefined` = not asked yet (the glyph is the loading face); `null` = asked, and the disk said
+ *  no (too big, no decoder, gone) — the glyph is the FINAL face. */
+const THUMB_CACHE = new Map<string, string | null>();
+const THUMB_INFLIGHT = new Map<string, Promise<string | null>>();
+
+function loadThumb(path: string): Promise<string | null> {
+  const hit = THUMB_CACHE.get(path);
+  if (hit !== undefined) return Promise.resolve(hit);
+  const running = THUMB_INFLIGHT.get(path);
+  if (running) return running;
+  const p = attachmentInfo(path)
+    .then(info => { const v = info?.thumb ?? null; THUMB_CACHE.set(path, v); THUMB_INFLIGHT.delete(path); return v; })
+    .catch(() => { THUMB_CACHE.set(path, null); THUMB_INFLIGHT.delete(path); return null; });
+  THUMB_INFLIGHT.set(path, p);
+  return p;
+}
+
+function ChipThumb({ path }: { path: string }) {
+  const [src, setSrc] = useState<string | null | undefined>(() => THUMB_CACHE.get(path));
+  useEffect(() => {
+    const hit = THUMB_CACHE.get(path);
+    if (hit !== undefined) { setSrc(hit); return; }
+    let alive = true;
+    void loadThumb(path).then(v => { if (alive) setSrc(v); });
+    return () => { alive = false; };
+  }, [path]);
+  if (!src) {
+    return (
+      <span className="flex h-6 w-6 shrink-0 items-center justify-center text-tr-muted">
+        <ImageIcon size={13} strokeWidth={1.75} />
+      </span>
+    );
+  }
+  return (
+    <img
+      src={src}
+      alt=""
+      draggable={false}
+      // A thumb the webview cannot paint (an image that vanished since the drop) falls back to the
+      // glyph rather than leaving a torn-image mark on the chip.
+      onError={() => { THUMB_CACHE.set(path, null); setSrc(null); }}
+      className="h-6 w-6 shrink-0 rounded-[5px] object-cover"
+    />
+  );
+}
+
+/** The chip row (#6070): a dropped, pasted or picked file wears a face BELOW the text area — an
+ *  image shows its thumbnail, anything else its name and size — each removable without touching
+ *  the words. Paths never enter the text, so dictation cannot split one (#5773). */
+function AttachmentChips({ chips, onRemove }: { chips: AttachmentChip[]; onRemove: (id: string) => void }) {
+  if (!chips.length) return null;
+  return (
+    <div className="mt-1.5 flex flex-wrap gap-1.5">
+      {chips.map(c => (
+        <div
+          key={c.id}
+          title={c.path}
+          className="flex max-w-full items-center gap-1.5 rounded-[8px] border border-tr-edge bg-tr-panel py-1 pl-1.5 pr-1"
+        >
+          {c.kind === "image"
+            ? <ChipThumb path={c.path} />
+            : (
+              <span className="flex h-6 w-6 shrink-0 items-center justify-center text-tr-muted">
+                <FileText size={13} strokeWidth={1.75} />
+              </span>
+            )}
+          <span className="max-w-[150px] truncate text-[11px] text-tr-text">{c.name}</span>
+          {c.size !== null && <span className="tr-mono shrink-0 text-[10px] text-tr-muted">{formatBytes(c.size)}</span>}
+          <button
+            type="button"
+            onClick={() => onRemove(c.id)}
+            title="remove this attachment"
+            className="shrink-0 rounded p-0.5 text-tr-muted hover:text-tr-text"
+          >
+            <X size={11} strokeWidth={2.5} />
+          </button>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 export function Composer({ project, target, live, liveWhy, model, modelSource, working, userTexts, context, fontStep, onFontStep, onSent, onLongRunChange, onDispatch, onDraftChange, suggestion, onSuggestionHandled }: {
   project: string;
   target: string | null;
@@ -231,6 +320,25 @@ export function Composer({ project, target, live, liveWhy, model, modelSource, w
   onSuggestionHandled?: () => void;
 }) {
   const [draft, setDraft] = useState("");
+  // Attachments live as CHIPS below the text (#6070): the text area holds only words the operator
+  // typed — a path inside the text is exactly what dictation splits apart (#5773).
+  const [chips, setChips] = useState<AttachmentChip[]>([]);
+  const chipSeq = useRef(0);
+  /** The one door all three attaches walk through (#6070): drop, paste, picker. The size rides in
+   *  when the caller already holds it (a paste has its File); otherwise the disk answers later and
+   *  the chip shows its name alone until then. */
+  const attach = useCallback((paths: string[], size: number | null) => {
+    if (!paths.length) return;
+    const made = paths.map(p => makeChip(`chip-${chipSeq.current += 1}`, p, size));
+    setChips(cs => addChips(cs, made));
+    if (size !== null) return;
+    for (const p of paths) {
+      void attachmentInfo(p).then(info => {
+        if (!info) return;
+        setChips(cs => cs.map(c => (c.path === p && c.size === null ? { ...c, size: info.bytes } : c)));
+      });
+    }
+  }, []);
   const [effort, setEffortValue] = useState("");
   const [effortSource, setEffortSource] = useState<Provenance>("unknown");
   const [busy, setBusy] = useState(false);
@@ -247,6 +355,67 @@ export function Composer({ project, target, live, liveWhy, model, modelSource, w
   const [menu, setMenu] = useState<string[]>([]);
   const [pick, setPick] = useState(0);
   const box = useRef<HTMLTextAreaElement | null>(null);
+
+  // Freely resizable (#6070): two lines to about 60% of the pane. Content grows the box until the
+  // operator drags; a drag sets a height the box holds (taller content scrolls inside), and the
+  // choice survives restart. The pane's height rides a ResizeObserver on the parent — the panel
+  // root owns the vertical space the composer shares with the transcript.
+  const rootRef = useRef<HTMLDivElement | null>(null);
+  const [panePx, setPanePx] = useState(700);
+  useEffect(() => {
+    const el = rootRef.current?.parentElement ?? null;
+    // happy-dom (and old webviews) lack ResizeObserver; the membership probe is the pattern
+    // ModePane uses for the same absence — a runtime typeof narrows a representation, not a
+    // contract (the same probe paid its way into ModePane at #6044).
+    if (!el || !("ResizeObserver" in globalThis)) return;
+    const ro = new ResizeObserver(() => setPanePx(el.clientHeight));
+    ro.observe(el);
+    setPanePx(el.clientHeight);
+    return () => ro.disconnect();
+  }, []);
+  const minPx = minComposerPx();
+  const maxPx = maxComposerPx(panePx);
+  // The remembered height loads ONCE the pane is measured: the ceiling on read is the pane's own,
+  // so a stored height is clamped against the real bounds, not a guess.
+  const heightLoaded = useRef(false);
+  const [chosenPx, setChosenPx] = useState<number | null>(null);
+  useEffect(() => {
+    if (heightLoaded.current) return;
+    heightLoaded.current = true;
+    setChosenPx(loadComposerHeight(minPx, maxPx));
+  }, [minPx, maxPx]);
+  // The content's own height, measured whenever the draft changes: collapse to auto, read, and let
+  // the render re-apply the rule — a layout effect, so it never paints between the two.
+  const [contentPx, setContentPx] = useState<number | null>(null);
+  useLayoutEffect(() => {
+    const el = box.current;
+    if (!el) return;
+    el.style.height = "auto";
+    const h = el.scrollHeight;
+    el.style.height = "";
+    setContentPx(h);
+  }, [draft]);
+  const grown = growComposerPx(contentPx ?? minPx, minPx, maxPx);
+  const heightPx = chosenPx === null ? grown : Math.min(chosenPx, maxPx);
+  const dragRef = useRef<{ startY: number; startH: number } | null>(null);
+  const handleDragStart = (e: React.PointerEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    e.currentTarget.setPointerCapture(e.pointerId);
+    dragRef.current = { startY: e.clientY, startH: heightPx };
+  };
+  const handleDragMove = (e: React.PointerEvent<HTMLDivElement>) => {
+    const d = dragRef.current;
+    if (!d) return;
+    setChosenPx(clampComposerPx(d.startH + (e.clientY - d.startY), minPx, maxPx));
+  };
+  const handleDragEnd = (e: React.PointerEvent<HTMLDivElement>) => {
+    const d = dragRef.current;
+    if (!d) return;
+    dragRef.current = null;
+    const next = clampComposerPx(d.startH + (e.clientY - d.startY), minPx, maxPx);
+    setChosenPx(next);
+    saveComposerHeight(next, minPx, maxPx);
+  };
 
   // The locked composer's one action (#5495), derived from the session inventory and polled
   // ONLY while locked — the contract's gentle cadence, not a second heartbeat. A mid-turn
@@ -332,44 +501,41 @@ export function Composer({ project, target, live, liveWhy, model, modelSource, w
     const cur = box.current?.selectionStart ?? draft.length;
     const upto = draft.slice(0, cur);
     const at = upto.lastIndexOf("@");
-    setDraft(draft.slice(0, at) + path + " " + draft.slice(cur));
+    // A picked file becomes a CHIP (#6070): the @-fragment leaves the draft, the path rides below
+    // the text — never a splice dictation could split apart. Whatever surrounded the @ stays.
+    setDraft(draft.slice(0, at) + draft.slice(cur));
     setMenu([]);
+    attach([path], null);
   };
 
   // File drop (#5507). Tauri's webview intercepts native HTML5 drops by default, so
-  // onDragDropEvent is the only channel an ondrop handler would never fire on. A drop splices
-  // each absolute path plus a trailing space into the draft at the caret — the same splice the
-  // @-accept performs — and leaves the caret after the insertion.
+  // onDragDropEvent is the only channel an ondrop handler would never fire on. A drop lands each
+  // file as a CHIP below the text (#6070) — the path never enters the text area, so dictation
+  // cannot split it — and at SEND the chips serialize to exactly the bytes the old drop splice
+  // shipped, receipts and normalization untouched.
   useEffect(() => {
     let alive = true;
     let off: (() => void) | undefined;
     try {
       getCurrentWebview().onDragDropEvent(ev => {
         if (ev.payload.type !== "drop") return;
-        const paths = ev.payload.paths;
-        if (!paths.length) return;
-        const cur = box.current?.selectionStart ?? null;
-        setDraft(d => insertPaths(d, cur ?? d.length, paths));
-        if (cur !== null) {
-          const after = cur + paths.reduce((n, p) => n + p.length + 1, 0);
-          requestAnimationFrame(() => box.current?.setSelectionRange(after, after));
-        }
+        attach(ev.payload.paths, null);
       }).then(un => { if (alive) off = un; else un(); })
         .catch(() => { /* no webview under this window (tests) — drops are a no-op there */ });
     } catch {
       // getCurrentWebview throws outside a Tauri window; the composer still works, just undroppable.
     }
     return () => { alive = false; off?.(); };
-  }, []);
+  }, [attach]);
 
   const line = (text: string) =>
     invoke("pane_send", { target, text }).catch(e => setError(String(e)));
 
   // Paste-an-image (2026-09-01: the operator pasted a CleanShot screenshot twice and NOTHING
   // happened — a textarea silently swallows image DATA, so "upload" looked broken with no error).
-  // The clipboard image is written to a real file (Rust, ~/.agent-bus/attachments/) and its PATH
-  // splices into the draft at the caret — the same one attach mechanism the drop uses. Plain
-  // text pastes are untouched. Failures surface in the composer's error line, never silently.
+  // The clipboard image is written to a real file (Rust, ~/.agent-bus/attachments/) and lands as
+  // a CHIP (#6070) — the same one attach mechanism the drop uses. Plain text pastes are
+  // untouched. Failures surface in the composer's error line, never silently.
   const onPaste = (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
     const img = Array.from(e.clipboardData?.items ?? []).find(
       i => i.kind === "file" && i.type.startsWith("image/"),
@@ -383,8 +549,8 @@ export function Composer({ project, target, live, liveWhy, model, modelSource, w
       let bin = "";
       for (let i = 0; i < u8.length; i += 0x8000) bin += String.fromCharCode(...u8.subarray(i, i + 0x8000));
       return invoke<string>("save_pasted_image", { dataBase64: btoa(bin), kind: file.type }).then(path => {
-        const cur = box.current?.selectionStart ?? null;
-        setDraft(d => insertPaths(d, cur ?? d.length, [path]));
+        // The clipboard File is already stat'ed — its size rides in with no disk round-trip.
+        attach([path], file.size);
         setError(null);
         box.current?.focus();
       });
@@ -425,7 +591,12 @@ export function Composer({ project, target, live, liveWhy, model, modelSource, w
     return true;
   };
 
-  const send = () => { if (sendText(draft)) setDraft(""); };
+  const send = () => {
+    // Chips serialize AT SEND (#6070): the paths join the words in exactly the shape the delivery
+    // path knows (sendText then normalizes exactly as it always has), and both clear together on
+    // success. A suggested-reply click rides sendText WITHOUT the chips — it is its own turn.
+    if (sendText(serializeForSend(chips, draft))) { setDraft(""); setChips([]); }
+  };
 
   // A suggested reply IS a send (#5929): it rides sendText — the same delivery, the same
   // receipt — and the panel clears the suggestion so it cannot fire twice.
@@ -462,8 +633,10 @@ export function Composer({ project, target, live, liveWhy, model, modelSource, w
   const stop = () => { if (target) invoke("pane_keys", { target, keys: "Escape" }).catch(e => setError(String(e))); };
 
   // What the field's one slot shows (#5556): the pure rule lives in streaming.ts so it is
-  // drilled there; this is just its wiring.
-  const slot = composerSlot(working, live, draft, busy);
+  // drilled there; this is just its wiring. Chips count as payload too — an attachments-only send
+  // is a real send — so a " " stands in for the chips this component owns while the rule stays
+  // pure on the draft.
+  const slot = composerSlot(working, live, chips.length && !draft.trim() ? " " : draft, busy);
 
   // A slash command is typed exactly as a person would type it, then marked dispatched until the
   // transcript reports the new value back.
@@ -478,7 +651,7 @@ export function Composer({ project, target, live, liveWhy, model, modelSource, w
   };
 
   return (
-    <div className="border-t border-tr-edge p-2">
+    <div ref={rootRef} className="border-t border-tr-edge p-2">
       {menu.length > 0 && (
         <div className="mb-1 max-h-[190px] overflow-y-auto rounded-lg border border-tr-edge bg-tr-panel">
           {menu.map((f, i) => (
@@ -517,8 +690,21 @@ export function Composer({ project, target, live, liveWhy, model, modelSource, w
       {/* The field (#5556): the container is the input box now, and the action slot lives
           bottom-right INSIDE it — one position, two states, the Claude-desktop pattern. The
           textarea keeps its padding on every side except the right, which widens so words never
-          run under the button. */}
+          run under the button. The drag handle along its top edge resizes it (#6070): two lines
+          to about 60% of the pane, and the height is remembered. */}
       <div className="relative rounded-lg bg-black/30">
+        <div
+          role="separator"
+          aria-orientation="horizontal"
+          title="Drag to resize — the height is remembered"
+          onPointerDown={handleDragStart}
+          onPointerMove={handleDragMove}
+          onPointerUp={handleDragEnd}
+          onPointerCancel={() => { dragRef.current = null; }}
+          className="flex h-2.5 w-full cursor-row-resize touch-none items-center justify-center"
+        >
+          <span className="h-[3px] w-9 rounded-full bg-tr-edge" />
+        </div>
         <textarea
           ref={box}
           value={draft}
@@ -536,8 +722,8 @@ export function Composer({ project, target, live, liveWhy, model, modelSource, w
           }}
           placeholder={live ? "Message the orchestrator…  (⇧⏎ for a new line)" : liveWhy}
           disabled={!live || busy}
-          rows={2}
-          className="w-full resize-none rounded-lg bg-transparent p-2.5 pr-12 text-[12.5px] leading-relaxed outline-none placeholder:text-tr-muted disabled:opacity-50"
+          style={{ height: `${heightPx}px` }}
+          className="w-full resize-none overflow-y-auto rounded-lg bg-transparent p-2.5 pr-12 text-[12.5px] leading-relaxed outline-none placeholder:text-tr-muted disabled:opacity-50"
         />
         {slot.kind === "stop" ? (
           <button
@@ -560,6 +746,8 @@ export function Composer({ project, target, live, liveWhy, model, modelSource, w
           </button>
         )}
       </div>
+      {/* Attachments wear chips BELOW the text area (#6070): faces, not paths. */}
+      <AttachmentChips chips={chips} onRemove={id => setChips(cs => removeChip(cs, id))} />
       <div className="mt-1.5 flex items-center gap-1">
         {/* "Attach" for a local CLI agent is not an upload — the file is already on its disk. The
             honest action is to reference the path, which is also how you point it at a PRD. */}
