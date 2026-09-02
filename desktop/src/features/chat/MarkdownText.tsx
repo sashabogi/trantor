@@ -20,12 +20,19 @@ type InlineNode =
   | { t: "em"; c: InlineNode[] }
   | { t: "a"; href: string; c: InlineNode[] };
 
+// A pathological reply — dozens of unclosed `*`/`**`/`[` openers in a row — recurses once per
+// nesting level below (strong/em/link content each re-enter `inline`). Uncapped, that walks the
+// call stack as deep as the input is long; past this depth the remaining text renders as plain
+// text instead of recursing further (#6113).
+const INLINE_MAX_DEPTH = 16;
+
 /** Split one text run into inline tokens. `*`/`**` mark italic/bold; backticks are code; a
  *  `[label](http(s)://…)` link opens externally. A marker with no closer is left as text (streaming
  *  replies are frequently mid-token). SAFETY: the only atoms emitted are text/code/strong/em and
  *  http(s)-only links — an image or a javascript: URL can never become an element here.
  */
-function inline(text: string): InlineNode[] {
+function inline(text: string, depth = 0): InlineNode[] {
+  if (depth >= INLINE_MAX_DEPTH) return [{ t: "text", s: text }];
   const out: InlineNode[] = [];
   let i = 0;
   while (i < text.length) {
@@ -44,7 +51,7 @@ function inline(text: string): InlineNode[] {
           const label = rest.slice(1, close);
           const href = rest.slice(close + 2, paren);
           if (/^https?:\/\//i.test(href)) {
-            out.push({ t: "a", href, c: inline(label) });
+            out.push({ t: "a", href, c: inline(label, depth + 1) });
             i += paren + 1;
             continue;
           }
@@ -54,7 +61,7 @@ function inline(text: string): InlineNode[] {
     if (rest.startsWith("**")) {
       const close = rest.indexOf("**", 2);
       if (close > -1) {
-        out.push({ t: "strong", c: inline(rest.slice(2, close)) });
+        out.push({ t: "strong", c: inline(rest.slice(2, close), depth + 1) });
         i += close + 2;
         continue;
       }
@@ -62,7 +69,7 @@ function inline(text: string): InlineNode[] {
     if (rest.startsWith("*")) {
       const close = rest.indexOf("*", 1);
       if (close > -1 && rest[close + 1] !== "*") {
-        out.push({ t: "em", c: inline(rest.slice(1, close)) });
+        out.push({ t: "em", c: inline(rest.slice(1, close), depth + 1) });
         i += close + 1;
         continue;
       }

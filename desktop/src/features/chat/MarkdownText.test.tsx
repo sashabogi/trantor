@@ -101,6 +101,18 @@ describe("MarkdownText", () => {
     expect(text).not.toContain("pic");
   });
 
+  it("40 nested *, **, [ openers with no closers renders without throwing and keeps the text (#6113)", () => {
+    // The inline parser recurses once per nesting level (strong/em/link content each re-enter
+    // `inline`). A reply carrying dozens of unclosed openers in a row is exactly the pathological
+    // input a depth cap guards against — past the cap the remaining text renders as plain text
+    // instead of recursing further, so this must neither throw nor lose the payload.
+    const kinds = ["*", "**", "["];
+    const openers = Array.from({ length: 40 }, (_, i) => kinds[i % kinds.length]).join("");
+    const text = `${openers}PAYLOAD`;
+    expect(() => act(() => root.render(<MarkdownText text={text} />))).not.toThrow();
+    expect(host.textContent ?? "").toContain("PAYLOAD");
+  });
+
   it("a pipe table renders as one monospace block", () => {
     act(() => root.render(<MarkdownText text={"| step | state |\n| --- | --- |\n| 1 | done |\n| 2 | pending |"} />));
     const pre = host.querySelector("pre");

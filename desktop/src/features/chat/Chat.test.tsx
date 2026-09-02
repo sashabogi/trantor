@@ -33,8 +33,9 @@ function makeDeps() {
           { model: "", version: "", branch: "", context: { tokens: null, window: 0, frac: null } }, []]) as T);
       }
       if (cmd === "chat_watch") {
-        // SAFETY: Chat types this call Promise<number> (the row count the watcher started at).
-        return Promise.resolve(0 as T);
+        // SAFETY: Chat types this call Promise<ChatWatchResult> — the row count the watcher
+        // started at, plus the generation token #6113 added for chat_unwatch to echo back.
+        return Promise.resolve({ current: 0, generation: 1 } as T);
       }
       if (cmd === "orchestrator_status") {
         // SAFETY: Chat types this call Promise<string> and treats the value as herdr's status text.
