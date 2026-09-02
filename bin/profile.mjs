@@ -43,7 +43,12 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   if (cmd === "set") {
     for (const a of args) {
       const [prov, plan] = a.split("=");
-      if (!prov || !plan) { console.error(`bad arg '${a}' — use provider=plan`); process.exit(1); }
+      // A flag in the provider position (`set --help=api`) is a usage mistake, not a provider —
+      // die before the write, or profile.json grows a '--help' entry (#5998). 'help' likewise.
+      if (!prov || !plan || prov.startsWith("--") || prov === "help") {
+        console.error(`bad arg '${a}' — use provider=plan`);
+        process.exit(1);
+      }
       prof.providers[prov.toLowerCase()] = { plan: plan.toLowerCase(), tier: TIER(plan) };
     }
     prof.updated = new Date().toISOString().slice(0, 10);
