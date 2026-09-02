@@ -63,6 +63,18 @@ describe("TerminalPane", () => {
     expect(d.disposed).toBe(true);
   });
 
+  it("coalesces a printable multi-char burst into ONE bracketed paste", async () => {
+    await render(d);
+    await flush();
+
+    d.emitData("hello ");
+    d.emitData("world ");
+    d.emitData("again");
+    expect(d.written).toEqual([]); // buffered, nothing written mid-burst
+    await new Promise(resolve => setTimeout(resolve, 45));
+    expect(d.written).toEqual([{ sub: 42, data: "\x1b[200~hello world again\x1b[201~" }]);
+  });
+
   it("records keystroke-to-echo latency when streamed bytes return", async () => {
     await render(d);
     await flush();

@@ -202,10 +202,33 @@ export function TerminalPane({
     const session = deps.createSession(hostRef.current);
 
     let alive = true;
+    // Dictation and paste arrive as a DRIP of small onData fragments (traced 2026-09-02: dozens
+    // of ~12-byte writes), and each raw write became a separate input the TUI could split into
+    // two submissions. So: a lone keystroke goes straight through (no added latency), but a
+    // multi-char fragment buffers for one beat and flushes as ONE bracketed paste — the TUI then
+    // treats the whole block as a single atomic paste however it was fragmented on the way in.
+    let pasteBuf = "";
+    let pasteTimer: ReturnType<typeof setTimeout> | null = null;
+    const flushPaste = () => {
+      if (pasteTimer !== null) { clearTimeout(pasteTimer); pasteTimer = null; }
+      const buf = pasteBuf; pasteBuf = "";
+      const sub = subRef.current;
+      if (sub !== null && buf) writeSub(sub, `\x1b[200~${buf}\x1b[201~`);
+    };
     const onData = session.onData(data => {
       lastInputAtRef.current = performance.now();
       const sub = subRef.current;
-      if (sub !== null) writeSub(sub, data);
+      if (sub === null) return;
+      // A single keystroke, or ANY escape sequence (arrows, function keys, control codes all
+      // start with ESC), goes straight through — never buffered, never bracket-wrapped.
+      if (data.length === 1 || data.charCodeAt(0) === 0x1b) {
+        if (pasteBuf) flushPaste();     // preserve order if a burst was pending
+        writeSub(sub, data);
+        return;
+      }
+      pasteBuf += data;                 // printable multi-char: a paste/dictation fragment
+      if (pasteTimer !== null) clearTimeout(pasteTimer);
+      pasteTimer = setTimeout(flushPaste, 30);
     });
     const resize = () => {
       if (!hostRef.current) return;
@@ -252,6 +275,7 @@ export function TerminalPane({
       alive = false;
       ro.disconnect();
       onData.dispose();
+      flushPaste();
       const sub = subRef.current;
       subRef.current = null;
       if (sub !== null) void deps.termDetach(sub);
