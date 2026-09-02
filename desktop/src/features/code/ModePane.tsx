@@ -17,7 +17,7 @@ import { Chat } from "../chat/Chat";
 import { folderSeats, mergeChanges, mergedCountFor, projectChanges, type ProjectChangeRow } from "./gitApi";
 import { FileTree } from "./FileTree";
 import { SessionsMode } from "./SessionsMode";
-import { tabsMode } from "./tabStrip";
+import { tabsMode, type TabsMode } from "./tabStrip";
 import type { SessionRow } from "./sessionsApi";
 
 type Mode = "files" | "git" | "sessions" | "chat";
@@ -50,24 +50,44 @@ export function ModePane({ client, project, seat, onSeat, onOpenFile }: {
   const [sent, setSent] = useState<"ok" | "fail" | null>(null);
   const [selectedClaude, setSelectedClaude] = useState<SessionRow | null>(null);
 
-  // The tab strip's measured width (#6036): a tab word NEVER truncates, so below the width that
-  // fits all four labels the strip renders icon-only (label as tooltip, unread dot kept). The
-  // ResizeObserver reports the REAL rendered width — the pane can be squeezed below its designed
-  // 300/440 by the surrounding layout, and only a measurement knows. Unmeasured stays on labels.
+  // The tab strip's measured layout (#6036): a tab word NEVER truncates, so the strip compares
+  // the natural width of its four full labels (an offscreen twin at the strip's own font)
+  // against the width the strip really has, and renders icon-only only when the labels would
+  // not fit. The observers watch the elements whose width actually changes — the strip AND the
+  // pane root it fills — never the absolute twin, whose intrinsic width would lie. Unmeasured
+  // stays on labels: the designed default never degrades on a guess.
+  const paneRef = useRef<HTMLDivElement | null>(null);
   const stripRef = useRef<HTMLDivElement | null>(null);
-  const [stripWidth, setStripWidth] = useState<number | null>(null);
+  const measureRef = useRef<HTMLDivElement | null>(null);
+  const [dims, setDims] = useState<{ labels: number | null; strip: number | null }>({ labels: null, strip: null });
+  const [tabs, setTabs] = useState<TabsMode>("labels");
   useEffect(() => {
-    const el = stripRef.current;
-    // happy-dom (and old webviews) lack ResizeObserver; the measured-width rail then stays on the
-    // labels fallback rather than crashing. A membership probe, not a type narrowing.
-    if (!el || !("ResizeObserver" in globalThis)) return;
-    const ro = new ResizeObserver(entries => {
-      for (const e of entries) setStripWidth(e.contentRect.width);
+    const pane = paneRef.current;
+    const strip = stripRef.current;
+    const twin = measureRef.current;
+    if (!pane || !strip) return;
+    const measureNow = () => setDims({
+      labels: twin ? twin.getBoundingClientRect().width : null,
+      strip: Math.min(strip.clientWidth, pane.clientWidth),
     });
-    ro.observe(el);
-    return () => ro.disconnect();
+    measureNow();
+    if (!("ResizeObserver" in globalThis)) return;
+    const ro = new ResizeObserver(() => measureNow());
+    ro.observe(pane);
+    ro.observe(strip);
+    // Font loading and pane drags outside the flex layout change the labels' truth without a
+    // strip resize; re-measure on those too. happy-dom ignores both — tests drive measureNow
+    // through the resize event instead.
+    const onResize = () => measureNow();
+    window.addEventListener("resize", onResize);
+    document.fonts?.ready.then(onResize).catch(() => {});
+    return () => { ro.disconnect(); window.removeEventListener("resize", onResize); };
   }, []);
-  const compactTabs = tabsMode(stripWidth) === "icons";
+  useEffect(() => {
+    const next = tabsMode(dims.labels, dims.strip, tabs);
+    if (next !== tabs) setTabs(next);
+  }, [dims, tabs]);
+  const compactTabs = tabs === "icons";
 
   // The seats of this project — the footer's scope chips. Same peers poll every lens runs.
   const [peers, setPeers] = useState<Peer[]>([]);
@@ -164,9 +184,9 @@ export function ModePane({ client, project, seat, onSeat, onOpenFile }: {
   // The rail is the SAME object as the lens tabs (tr-seg + a raised active segment) with a
   // Lucide icon per mode, so it reads as clickable by association with every other tab in the
   // app. The four segments share the width EXACTLY (grid quarters, #5960): the Chat segment's
-  // live dot used to push the row past the 300px rail. A label never truncates (#6036): below
-  // the measured fit width the label steps aside entirely (icon-only, title carries the word);
-  // the truncate class below is the last-resort guard for the gap zone, not the design.
+  // live dot used to push the row past the 300px rail. A label never truncates (#6036): when
+  // the measured labels would not fit the strip steps down to icon-only (title carries the
+  // word); the truncate class below is the last-resort guard for the gap zone, not the design.
   const modeBtn = (m: Mode, label: string, Icon: typeof FolderTree, dot?: boolean) => (
     <button
       type="button"
@@ -185,18 +205,41 @@ export function ModePane({ client, project, seat, onSeat, onOpenFile }: {
     </button>
   );
 
+  // One truth for the real tabs and the offscreen twin alike — the twin measures what the four
+  // LABELED tabs need, so it must share their icon, label, dot, font, and padding verbatim.
+  const MODES: { m: Mode; label: string; Icon: typeof FolderTree; dot?: boolean }[] = [
+    { m: "files", label: "Files", Icon: FolderTree },
+    { m: "git", label: "Git", Icon: GitBranch },
+    { m: "sessions", label: "Sessions", Icon: History },
+    { m: "chat", label: "Chat", Icon: MessageSquare, dot: true },
+  ];
+
   return (
     <div
+      ref={paneRef}
       className="flex min-h-0 shrink-0 flex-col overflow-hidden rounded-[12px] border border-tr-edge bg-tr-main"
       style={{ width: mode === "chat" ? 440 : 300, margin: 12 }}
     >
       {/* mode rail — exact quarters at 300px and 440px alike (#5960); icon-only below the
-          label-fit width so a tab word never truncates (#6036) */}
-      <div ref={stripRef} className="tr-seg grid shrink-0 grid-cols-4 gap-px border-b border-tr-edge px-2 py-2">
-        {modeBtn("files", "Files", FolderTree)}
-        {modeBtn("git", "Git", GitBranch)}
-        {modeBtn("sessions", "Sessions", History)}
-        {modeBtn("chat", "Chat", MessageSquare, true)}
+          measured label-fit width so a tab word never truncates (#6036). The offscreen twin
+          renders the four LABELED tabs shrink-wrapped and invisible: its width is the truth of
+          what the labels need — the real grid quarters truncate, so they cannot be asked. */}
+      <div ref={stripRef} className="tr-seg relative grid shrink-0 grid-cols-4 gap-px border-b border-tr-edge px-2 py-2">
+        <div
+          ref={measureRef}
+          aria-hidden
+          className="pointer-events-none absolute flex gap-px whitespace-nowrap px-2"
+          style={{ visibility: "hidden" }}
+        >
+          {MODES.map(({ m, label, Icon, dot }) => (
+            <span key={m} className="flex items-center gap-1 whitespace-nowrap rounded-[7px] px-1 py-[5px] text-[11.5px]">
+              <Icon size={12} strokeWidth={1.75} className="shrink-0" />
+              <span className="whitespace-nowrap">{label}</span>
+              {dot && <span className="h-[6px] w-[6px] shrink-0 rounded-full bg-tr-doing" />}
+            </span>
+          ))}
+        </div>
+        {MODES.map(({ m, label, Icon, dot }) => modeBtn(m, label, Icon, dot))}
       </div>
 
       {/* FILES — find box, CHANGED pinned first, ALL FILES tree, seat footer */}
