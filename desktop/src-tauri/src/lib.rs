@@ -1,4 +1,5 @@
 mod herdr;
+mod genesis;
 pub mod identity;
 pub mod lsp;
 mod sessions;
@@ -4527,6 +4528,10 @@ pub fn run() {
             pane_send,
             pane_keys,
             orchestrator_status,
+            genesis::project_dev_root,
+            genesis::genesis_read_brief,
+            genesis::project_new,
+            genesis::project_wake,
             handoff_now,
             takeover_now,
             orch_restorables,
