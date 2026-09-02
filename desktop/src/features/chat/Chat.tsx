@@ -23,7 +23,8 @@ import { orchestratorOf } from "../workspace/herdr";
 import { DEFAULT_TERMINAL_DEPS, TerminalPane, type TerminalDeps } from "../workspace/TerminalPane";
 import { bannerCountdown, type HandoffCountdown } from "./banner";
 import { Composer, type Provenance } from "./Composer";
-import { suggestionsFromTurn } from "./suggestions";
+import { suggestionsFromTurns } from "./suggestions";
+import { SuggestionChips } from "./SuggestionChips";
 import {
   clampPanel, fontScale, loadDismissedAt, loadFontStep, loadPanelSize, loadTrayOpen,
   saveDismissedAt, saveFontStep, savePanelSize, saveTrayOpen, type FontStep,
@@ -392,27 +393,34 @@ export function Chat({ project, sessionId, dock, onDock, onClose }: {
 
   const working = status === "working";
 
-  // Suggested-reply chips (#5929): derived PURELY from the last orchestrator turn's closing
-  // sentences (suggestions.ts — nothing invented, no LLM call). They are live only while that
-  // turn is still the last thing said (answered → gone), the composer is empty (typing → gone),
-  // and Esc or the × dismisses them until the next orchestrator turn recomputes the row.
+  // Suggested-reply chips (#5929): asks collected from EVERY orchestrator turn since the
+  // operator's last user turn (walk back until a user turn — the real ask is routinely one turn
+  // back behind a hook-driven "Nothing to swap."), most recent ask first, capped at three.
+  // Purely derived (suggestions.ts — nothing invented, no LLM call). Live only while that ask
+  // turn is still the last thing said (answered → gone), composer empty (typing → gone), and
+  // Esc or the × dismisses until the next orchestrator turn recomputes the row.
   const [composerDraft, setComposerDraft] = useState("");
   const [chipsDismissed, setChipsDismissed] = useState(false);
   const [activeSuggestion, setActiveSuggestion] = useState<string | null>(null);
-  const lastOrchestratorText = useMemo(() => {
-    // The orchestrator IS the transcript's assistant role — "orchestrator" is only the label.
-    const orch = [...chat.turns].reverse().find(t => t.role === "assistant");
-    return orch ? orch.blocks.filter(b => b.kind === "text").map(b => b.text).join("\n") : "";
+  const orchestratorTexts = useMemo(() => {
+    const out: string[] = [];
+    for (const t of [...chat.turns].reverse()) {
+      if (t.role === "user") break;
+      if (t.role === "assistant") {
+        out.push(t.blocks.filter(b => b.kind === "text").map(b => b.text).join("\n"));
+      }
+    }
+    return out;
   }, [chat.turns]);
   const suggestions = useMemo(
-    () => (history || working ? [] : suggestionsFromTurn(lastOrchestratorText)),
-    [history, working, lastOrchestratorText],
+    () => (history || working ? [] : suggestionsFromTurns(orchestratorTexts)),
+    [history, working, orchestratorTexts],
   );
   const lastSpeechTurn = [...chat.turns].reverse().find(t => t.role === "user" || t.role === "assistant");
   const chipsVisible =
     !history && !!target && !working && suggestions.length > 0 &&
     lastSpeechTurn?.role === "assistant" && !composerDraft.trim() && !chipsDismissed;
-  useEffect(() => { setChipsDismissed(false); }, [lastOrchestratorText]);
+  useEffect(() => { setChipsDismissed(false); }, [orchestratorTexts]);
   useEffect(() => {
     if (!chipsVisible) return;
     const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") setChipsDismissed(true); };
@@ -720,31 +728,14 @@ export function Chat({ project, sessionId, dock, onDock, onClose }: {
         />
       )}
 
-      {/* Suggested replies (#5929): one-click answers read from the orchestrator's closing
-          sentences. A click sends the text as a NORMAL user turn — receipts intact. */}
+      {/* Suggested replies (#5929): one-click answers read from the orchestrator's recent turns.
+          A click sends the text as a NORMAL user turn — receipts intact. */}
       {chipsVisible && (
-        <div className="flex shrink-0 flex-wrap items-center gap-1.5 px-3 pb-1.5">
-          <span className="text-[10.5px] text-tr-muted/70">suggested</span>
-          {suggestions.map(s => (
-            <button
-              key={s.text}
-              type="button"
-              title={s.tooltip}
-              onClick={() => setActiveSuggestion(s.text)}
-              className="tr-chip hover:text-tr-text"
-            >
-              {s.text}
-            </button>
-          ))}
-          <button
-            type="button"
-            onClick={() => setChipsDismissed(true)}
-            title="hide suggestions (Esc)"
-            className="ml-1 text-[10.5px] text-tr-muted/70 hover:text-tr-muted"
-          >
-            ×
-          </button>
-        </div>
+        <SuggestionChips
+          suggestions={suggestions}
+          onPick={text => setActiveSuggestion(text)}
+          onDismiss={() => setChipsDismissed(true)}
+        />
       )}
 
       {!history && <Composer
