@@ -12,7 +12,7 @@ use std::collections::BTreeMap;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::sync::{
-    atomic::{AtomicBool, Ordering},
+    atomic::{AtomicBool, AtomicU64, Ordering},
     Arc,
 };
 use std::time::{Duration, Instant, SystemTime};
@@ -1446,8 +1446,14 @@ fn orchestrator_chat(project: String, after: usize, session_id: Option<String>) 
     .map_err(|e| e.to_string())
 }
 
-static CHAT_WATCHERS: std::sync::Mutex<Option<std::collections::HashMap<String, Arc<AtomicBool>>>> =
+// The status watcher thread (spawn_status_watcher) and the chat watcher task
+// (spawn_chat_watcher) share one Arc<AtomicBool> stop flag, keyed by `project:session`. A stale
+// chat_unwatch arriving after a fresh chat_watch for the same key must not kill the fresh
+// watcher (#6113) — so each entry also carries the generation it was created with, and unwatch
+// only fires when the caller's generation matches (or supplies none, for older callers).
+static CHAT_WATCHERS: std::sync::Mutex<Option<std::collections::HashMap<String, (u64, Arc<AtomicBool>)>>> =
     std::sync::Mutex::new(None);
+static CHAT_WATCH_GENERATION: AtomicU64 = AtomicU64::new(0);
 
 static FILE_WATCHERS: std::sync::Mutex<Option<std::collections::HashMap<String, Arc<AtomicBool>>>> =
     std::sync::Mutex::new(None);
@@ -1473,9 +1479,43 @@ fn chat_watcher_key(project: &str, session_id: Option<&str>) -> String {
 fn forget_chat_watcher(key: &str, stop: &Arc<AtomicBool>) {
     let mut g = CHAT_WATCHERS.lock().unwrap();
     if let Some(map) = g.as_mut() {
-        if map.get(key).is_some_and(|live| Arc::ptr_eq(live, stop)) {
+        if map.get(key).is_some_and(|(_, live)| Arc::ptr_eq(live, stop)) {
             map.remove(key);
         }
+    }
+}
+
+/// Look up (or create) the watcher entry for `key`. Returns the entry's generation, its stop
+/// flag, and whether this call just created it (false means a live watcher was already there —
+/// the caller should not spawn a second one).
+fn chat_watchers_watch(key: &str) -> (u64, Arc<AtomicBool>, bool) {
+    let mut g = CHAT_WATCHERS.lock().unwrap();
+    let map = g.get_or_insert_with(std::collections::HashMap::new);
+    if let Some((generation, stop)) = map.get(key) {
+        return (*generation, Arc::clone(stop), false);
+    }
+    let stop = Arc::new(AtomicBool::new(false));
+    let generation = CHAT_WATCH_GENERATION.fetch_add(1, Ordering::SeqCst) + 1;
+    map.insert(key.to_string(), (generation, Arc::clone(&stop)));
+    (generation, stop, true)
+}
+
+/// Stop and remove the watcher at `key`, but only when `generation` matches the entry currently
+/// there (or is `None`, which keeps the old unconditional behavior for callers that predate the
+/// generation token). A stale unwatch — one whose generation no longer matches because a fresh
+/// chat_watch already replaced the entry — is a no-op instead of silently killing the fresh
+/// watcher (#6113).
+fn chat_watchers_unwatch(key: &str, generation: Option<u64>) -> Option<Arc<AtomicBool>> {
+    let mut g = CHAT_WATCHERS.lock().unwrap();
+    let map = g.as_mut()?;
+    let matches = match generation {
+        Some(gen) => map.get(key).is_some_and(|(live_gen, _)| *live_gen == gen),
+        None => true,
+    };
+    if matches {
+        map.remove(key).map(|(_, stop)| stop)
+    } else {
+        None
     }
 }
 
@@ -1657,6 +1697,13 @@ fn spawn_status_watcher(window: tauri::Window, project: String, stop: Arc<Atomic
                     }
                     match stream.next_line() {
                         Ok(Some(line)) => {
+                            // The stop flag can flip while next_line() was blocked waiting on
+                            // the socket — an unwatched thread must never emit the frame it woke
+                            // up with (#6113: a stale orch-status after chat_unwatch already ran).
+                            if stop.load(Ordering::SeqCst) {
+                                trace(format!("status: watcher stopped (stop flag) pane={pane}"));
+                                return;
+                            }
                             let parsed = herdr::status_from_frame(&line, &pane);
                             let head: String = line.trim().chars().take(220).collect();
                             trace(format!("status: frame parsed={parsed:?} raw={head}"));
@@ -1711,8 +1758,16 @@ fn spawn_status_watcher(window: tauri::Window, project: String, stop: Arc<Atomic
     });
 }
 
+/// `current` keeps the old shape's meaning (the tail cursor at seed time); `generation` is the
+/// token chat_unwatch must echo back so a stale unwatch can't kill a fresher watcher (#6113).
+#[derive(Debug, Clone, Serialize)]
+struct ChatWatchResult {
+    current: u64,
+    generation: u64,
+}
+
 #[tauri::command]
-fn chat_watch(window: tauri::Window, project: String, session_id: Option<String>) -> Result<u64, String> {
+fn chat_watch(window: tauri::Window, project: String, session_id: Option<String>) -> Result<ChatWatchResult, String> {
     let project = project.trim().to_string();
     if project.is_empty() {
         return Err("project is required".into());
@@ -1728,41 +1783,101 @@ fn chat_watch(window: tauri::Window, project: String, session_id: Option<String>
         None => orchestrator_transcript_path(&project, &sid)?,
     };
     let (tail, current, meta) = seed_tail(&path);
-    let stop = Arc::new(AtomicBool::new(false));
     let watcher_key = chat_watcher_key(&project, session_id.as_deref());
 
-    {
-        let mut g = CHAT_WATCHERS.lock().unwrap();
-        let map = g.get_or_insert_with(std::collections::HashMap::new);
-        if map.contains_key(&watcher_key) {
-            trace(format!("chat_watch key={watcher_key} pinned={pinned} existing=true"));
-            return Ok(current);
-        }
-        map.insert(watcher_key.clone(), Arc::clone(&stop));
-        trace(format!("chat_watch key={watcher_key} pinned={pinned} existing=false"));
+    let (generation, stop, is_new) = chat_watchers_watch(&watcher_key);
+    if !is_new {
+        trace(format!("chat_watch key={watcher_key} pinned={pinned} existing=true generation={generation}"));
+        return Ok(ChatWatchResult { current, generation });
     }
+    trace(format!("chat_watch key={watcher_key} pinned={pinned} existing=false generation={generation}"));
 
     if !pinned {
         spawn_status_watcher(window.clone(), project.clone(), Arc::clone(&stop));
     }
     spawn_chat_watcher(window, project, sid, path, pinned, watcher_key, tail, meta, stop);
-    Ok(current)
+    Ok(ChatWatchResult { current, generation })
 }
 
 #[tauri::command]
-fn chat_unwatch(project: String, session_id: Option<String>) {
+fn chat_unwatch(project: String, session_id: Option<String>, generation: Option<u64>) {
     let project = project.trim();
     if project.is_empty() {
         return;
     }
     let key = chat_watcher_key(project, session_id.as_deref());
-    let stop = {
-        let mut g = CHAT_WATCHERS.lock().unwrap();
-        g.as_mut().and_then(|map| map.remove(&key))
-    };
-    trace(format!("chat_unwatch key={key} found={}", stop.is_some()));
+    let stop = chat_watchers_unwatch(&key, generation);
+    trace(format!(
+        "chat_unwatch key={key} found={} generation={generation:?}",
+        stop.is_some()
+    ));
     if let Some(stop) = stop {
         stop.store(true, Ordering::SeqCst);
+    }
+}
+
+#[cfg(test)]
+mod chat_watcher_tests {
+    use super::*;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    /// A key unique to this test run, so parallel `cargo test` threads sharing the global
+    /// CHAT_WATCHERS map never collide with each other.
+    fn unique_key(name: &str) -> String {
+        let nonce = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+        format!("chat-watcher-test-{name}-{nonce}")
+    }
+
+    #[test]
+    fn stale_unwatch_with_old_generation_does_not_stop_fresh_watcher() {
+        let key = unique_key("stale-vs-fresh");
+
+        // The old watcher: created, then its own task tears itself down the way
+        // spawn_chat_watcher's loop does on natural exit (forget_chat_watcher), leaving the
+        // stop flag alone — this mirrors a watcher that finished without ever being unwatched.
+        let (old_generation, old_stop, old_is_new) = chat_watchers_watch(&key);
+        assert!(old_is_new);
+        forget_chat_watcher(&key, &old_stop);
+
+        // A fresh chat_watch for the SAME key lands next, minting a new generation.
+        let (fresh_generation, fresh_stop, fresh_is_new) = chat_watchers_watch(&key);
+        assert!(fresh_is_new, "fresh watch must recreate the entry once the old one is gone");
+        assert_ne!(old_generation, fresh_generation, "each watch gets its own generation token");
+
+        // The stale unwatch — still carrying the OLD generation — arrives late and must be a
+        // no-op against the fresh entry.
+        let stopped = chat_watchers_unwatch(&key, Some(old_generation));
+        assert!(stopped.is_none(), "a stale generation must not match the fresh entry");
+        assert!(!fresh_stop.load(Ordering::SeqCst), "the fresh watcher's stop flag must be untouched");
+
+        // The fresh entry is still there, unharmed.
+        let (still_generation, _, still_is_new) = chat_watchers_watch(&key);
+        assert!(!still_is_new, "the fresh entry must still be registered");
+        assert_eq!(still_generation, fresh_generation);
+
+        // A matching-generation unwatch DOES stop it.
+        let stopped = chat_watchers_unwatch(&key, Some(fresh_generation));
+        assert!(stopped.is_some(), "the matching generation must be allowed to stop the watcher");
+        stopped.unwrap().store(true, Ordering::SeqCst);
+        assert!(fresh_stop.load(Ordering::SeqCst), "the shared stop flag must now be set");
+
+        // And the entry is gone from the map.
+        let (_, _, recreated_is_new) = chat_watchers_watch(&key);
+        assert!(recreated_is_new, "unwatch must have removed the entry");
+        forget_chat_watcher(&key, &fresh_stop); // cleanup: don't leak this test's key into CHAT_WATCHERS
+    }
+
+    #[test]
+    fn unwatch_with_no_generation_keeps_old_caller_behavior() {
+        let key = unique_key("no-generation");
+        let (_, stop, is_new) = chat_watchers_watch(&key);
+        assert!(is_new);
+
+        // An older caller that never learned about generations passes None — it should still
+        // unconditionally stop whatever is at the key, exactly like before this fix.
+        let stopped = chat_watchers_unwatch(&key, None);
+        assert!(stopped.is_some());
+        assert!(Arc::ptr_eq(&stopped.unwrap(), &stop));
     }
 }
 

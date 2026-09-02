@@ -44,6 +44,11 @@ import {
  *  composer scrolled the rail out of the clipped container: "no way to change it back". */
 export type Dock = "right" | "bottom" | "pane";
 
+/** chat_watch's return shape (#6113): `current` is the tail cursor at seed time, `generation` is
+ *  the token chat_unwatch must echo back so a stale unwatch can't stop a fresher watcher sharing
+ *  the same project:session key. */
+type ChatWatchResult = { current: number; generation: number };
+
 /** Consecutive turns from the same speaker are ONE thing to a reader. The transcript splits them
  *  every time a tool runs, which is why the panel showed "ORCHESTRATOR" stacked above every card. */
 /** Consecutive tool blocks become one array; everything else passes through. */
@@ -262,6 +267,11 @@ export function Chat({ project, sessionId, dock, onDock, onClose, deps = DEFAULT
   // The decision cursor: updated synchronously where the state is updated asynchronously, so two
   // arrivals in one tick still see the cursor the first one left.
   const seenRef = useRef(0);
+  // The generation chat_watch handed back for the watcher currently registered under this
+  // project:session key (#6113) — the cleanup below must echo it back to chat_unwatch so a
+  // stale unwatch (e.g. one still in flight from an earlier mount) can never stop a fresher
+  // watcher sitting at the same key. Undefined until the watch call resolves.
+  const watchGenerationRef = useRef<number | undefined>(undefined);
   const syncRef = useRef<() => void>(() => {});
   // The project this panel mounted on (#5509 W1) — lets the [project] effect tell a real switch
   // (a new episode, dismissals cleared) from the mount it must leave alone.
@@ -333,17 +343,21 @@ export function Chat({ project, sessionId, dock, onDock, onClose, deps = DEFAULT
     const offs: Array<() => void> = [];
     let badFrames = 0;
     setStreamed(false);
+    // A new mount owes nothing to whatever generation the last one saw — the cleanup below reads
+    // this ref, so a fresh run must not carry a stale value into that decision.
+    watchGenerationRef.current = undefined;
     // The contract keeps the initial whole-file read on orchestrator_chat; the watcher takes over
     // from there. Until it can (its command missing on an older build, or no session yet), the
     // poll below is the transport this view has always had.
     sync();
     void (async () => {
       try {
-        const count = await invokeFn<number>("chat_watch", { project, sessionId: sessionId ?? null });
+        const watch = await invokeFn<ChatWatchResult>("chat_watch", { project, sessionId: sessionId ?? null });
         if (!alive) return;
+        watchGenerationRef.current = watch.generation;
         // Rows that landed while the watcher was spinning up would otherwise sit between our
         // cursor and the first event's after — close the gap now.
-        if (count > seenRef.current) sync();
+        if (watch.current > seenRef.current) sync();
         offs.push(await listenFn<string>("chat-rows", ev => {
           if (!alive) return;
           try {
@@ -394,7 +408,10 @@ export function Chat({ project, sessionId, dock, onDock, onClose, deps = DEFAULT
     return () => {
       alive = false;
       for (const off of offs) off();
-      invokeFn("chat_unwatch", { project, sessionId: sessionId ?? null }).catch(() => {});
+      // Echo back the generation THIS mount's chat_watch received (#6113) — a missing value
+      // (chat_watch hadn't resolved yet) falls back to the unconditional-removal behavior older
+      // callers relied on, since there is no generation to be stale against.
+      invokeFn("chat_unwatch", { project, sessionId: sessionId ?? null, generation: watchGenerationRef.current ?? null }).catch(() => {});
     };
   }, [project, sessionId, target !== null, sync]);
 
