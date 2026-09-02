@@ -9,11 +9,39 @@
 import { useCallback, useEffect, useState } from "react";
 import { ChevronDown, ChevronRight, File as FileIcon, Folder, Plus, Trash2, Pencil } from "lucide-react";
 import { projectFiles, createFile, deleteFile, renameFile, safePath, statusColor, statusLabel, type FileEntry } from "./fileApi";
+import { mergedCountFor, type MergedChange } from "./gitApi";
+import { BrandGlyph } from "../../shared/Avatar";
 import { listen } from "@tauri-apps/api/event";
 
 const POLL_MS = 10_000;
 
-function Row({ entry, depth, project, seat, onOpen, onRefresh, openPath }: { entry: FileEntry; depth: number; project: string; seat: string | null; onOpen: (path: string) => void; onRefresh: () => void; openPath?: string | null }) {
+/** Marks derived from the project-wide change snapshot (#5959): per-path seat glyphs + summed
+ *  counts, and every ancestor folder wearing its subtree's seats. */
+export type TreeMarks = { entries: MergedChange[]; folders: Record<string, (string | null)[]> };
+
+function ChangeMarks({ path, marks }: { path: string; marks?: TreeMarks }) {
+  if (!marks) return null;
+  const glyphs = (path.includes("/") ? marks.folders[path] : undefined)
+    ?? marks.entries.find(e => e.path === path)?.seats
+    ?? [];
+  const visible = glyphs.filter((s): s is string => s !== null);
+  return (
+    <span className="flex shrink-0 items-center gap-0.5">
+      {visible.map(s => <BrandGlyph key={s} name={s} size={10} />)}
+      {(() => {
+        const n = mergedCountFor(marks.entries, path);
+        return n ? (
+          <span className="tr-mono text-[9.5px] tabular-nums">
+            <span style={{ color: "var(--git-decoration-added)" }}>+{n.plus}</span>
+            <span style={{ color: "var(--git-decoration-deleted)" }}>−{n.minus}</span>
+          </span>
+        ) : null;
+      })()}
+    </span>
+  );
+}
+
+function Row({ entry, depth, project, seat, onOpen, onRefresh, openPath, marks }: { entry: FileEntry; depth: number; project: string; seat: string | null; onOpen: (path: string) => void; onRefresh: () => void; openPath?: string | null; marks?: TreeMarks }) {
   const [open, setOpen] = useState(false);
   const [kids, setKids] = useState<FileEntry[] | null>(null);
   const [menuOpen, setMenuOpen] = useState(false);
@@ -140,6 +168,7 @@ function Row({ entry, depth, project, seat, onOpen, onRefresh, openPath }: { ent
           {entry.status && (
             <span className="shrink-0 text-[10px]" style={{ color }}>{statusLabel(entry.status)}</span>
           )}
+          <ChangeMarks path={entry.path} marks={marks} />
           {/* the change-size chip (#5811), colored from the same git decoration tokens the SCM
               rows use. Absent for untracked/binary — no count, no chip, never a fake zero. */}
           {entry.plus != null && entry.minus != null && (
@@ -178,12 +207,12 @@ function Row({ entry, depth, project, seat, onOpen, onRefresh, openPath }: { ent
         </div>
       )}
       {error && <div className="px-3 py-0.5 text-[11px] text-tr-danger" style={{ paddingLeft: 6 + depth * 11 + 24 }}>{error}</div>}
-      {open && kids?.map(k => <Row key={k.path} entry={k} depth={depth + 1} project={project} seat={seat} onOpen={onOpen} onRefresh={onRefresh} openPath={openPath} />)}
+      {open && kids?.map(k => <Row key={k.path} entry={k} depth={depth + 1} project={project} seat={seat} onOpen={onOpen} onRefresh={onRefresh} openPath={openPath} marks={marks} />)}
     </>
   );
 }
 
-export function FileTree({ project, seat, onOpen, openPath }: { project: string; seat: string | null; onOpen: (path: string) => void; openPath?: string | null }) {
+export function FileTree({ project, seat, onOpen, openPath, marks }: { project: string; seat: string | null; onOpen: (path: string) => void; openPath?: string | null; marks?: TreeMarks }) {
   const [roots, setRoots] = useState<FileEntry[] | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -228,7 +257,7 @@ export function FileTree({ project, seat, onOpen, openPath }: { project: string;
           <Plus size={10} strokeWidth={1.5} /> New file
         </button>
       </div>
-      {roots.map(e => <Row key={e.path} entry={e} depth={0} project={project} seat={seat} onOpen={onOpen} onRefresh={refresh} openPath={openPath} />)}
+      {roots.map(e => <Row key={e.path} entry={e} depth={0} project={project} seat={seat} onOpen={onOpen} onRefresh={refresh} openPath={openPath} marks={marks} />)}
     </div>
   );
 }
