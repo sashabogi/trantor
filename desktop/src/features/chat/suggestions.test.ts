@@ -1,7 +1,7 @@
 // The chip extractor's contract (#5929): chips come ONLY from explicit asks in the closing
 // sentences, capped at three, and silence when nothing matches. Nothing invented, nothing sent.
 import { describe, expect, it } from "vitest";
-import { suggestionsFromTurn } from "./suggestions";
+import { suggestionsFromTurn, suggestionsFromTurns } from "./suggestions";
 
 const texts = (s: ReturnType<typeof suggestionsFromTurn>) => s.map(c => c.text);
 
@@ -60,5 +60,31 @@ describe("suggestionsFromTurn", () => {
     // Earlier in the turn someone said "push?" but the closing sentence moved on.
     expect(suggestionsFromTurn("Earlier you asked: push? The answer was yes and it is merged now. All quiet."))
       .toEqual([]);
+  });
+});
+
+describe("suggestionsFromTurns — the bounce rule (#5929)", () => {
+  it("walks back through ask-less hook turns to the last real ask", () => {
+    // live case: the real ask ("Push?") is one turn back, behind a hook-driven "Nothing to swap."
+    const s = suggestionsFromTurns([
+      "Nothing to swap.",
+      "Both fixes verified. Push?",
+    ]);
+    expect(s.map(c => c.text)).toEqual(["push it"]);
+  });
+
+  it("the most recent ask leads, deduped, capped at three", () => {
+    const s = suggestionsFromTurns([
+      "Should I merge now?",            // newest: yes/no
+      "Say go when ready.",             // older: go
+      "Push?",                          // oldest: push it
+    ]);
+    expect(s.map(c => c.text)).toEqual(["yes", "no", "go"]);
+  });
+
+  it("stops at the operator's own words: no user turns in the input, so the caller does the cutting", () => {
+    // the caller (Chat) walks back only until a user turn; this function stays pure over the
+    // orchestrator texts it is handed
+    expect(suggestionsFromTurns([])).toEqual([]);
   });
 });

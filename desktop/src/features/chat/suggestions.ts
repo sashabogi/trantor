@@ -72,3 +72,18 @@ export function suggestionsFromTurn(text: string): Suggestion[] {
 
   return chips;
 }
+
+/** The bounce rule (#5929): the orchestrator's ask is routinely one turn back — hook-driven
+ *  turns like "Nothing to swap." follow the real ask and carry none. Collect from EVERY
+ *  orchestrator turn since the operator's last user turn, walking NEWEST first as given,
+ *  deduping and capping: the most recent ask leads the row. */
+export function suggestionsFromTurns(turnTextsNewestFirst: string[]): Suggestion[] {
+  const chips: Suggestion[] = [];
+  for (const text of turnTextsNewestFirst) {
+    for (const chip of suggestionsFromTurn(text)) {
+      if (chips.length >= 3) return chips;
+      if (!chips.some(c => c.text === chip.text)) chips.push(chip);
+    }
+  }
+  return chips;
+}
