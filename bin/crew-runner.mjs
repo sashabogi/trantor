@@ -400,6 +400,23 @@ async function reportFailure(exit, trigger, undelivered = 0) {
   log(`\x1b[31mreported failure to bus: ${reason} (exit ${exit})\x1b[0m`);
 }
 
+// ---- activity truth (#5965): the RUNNER is the source for this seat ----------------
+// The app pulses a seat from its hub peer status. The runner is what actually knows when a
+// turn starts and ends, so it reports the boundaries: `working · <trigger>` the moment a turn
+// begins and `idle` the instant it lands clean. herdr's screen detection cannot see a
+// runner-driven CLI mid-turn (it sets screen_detection_skipped for those panes), which is why
+// seats used to read as idle while genuinely working — the desktop's herdr row is unreliable
+// for runner seats, so it falls back to this hub status. Bounded 5s so a slow hub never delays
+// the very turn it is reporting; one HTTP call per transition, never a poll.
+async function registerStatus(status) {
+  const url = HUB + "/register";
+  const body = JSON.stringify({ session: SESSION, project: PROJ, status, llm: AGENT, model: MODEL });
+  try {
+    const opts = { method: "POST", headers: { "content-type": "application/json", connection: "close" }, body };
+    await fetch(url, { ...opts, headers: { ...opts.headers, ...signedHeaders(identity, url, opts) }, signal: AbortSignal.timeout(5000) });
+  } catch {}
+}
+
 // ---- telling the ASSIGNER, mechanically ------------------------------------
 // A seat used to finish its contract and say nothing. Completion lived only in the RULES prompt
 // ("report on the bus"), so a cheap model that did the work and ended its turn left the
@@ -438,9 +455,13 @@ async function reportHealthy() {
 }
 
 let sid = "";
-function runTurn(prompt, isFirst, trigger = "kickoff") {
+async function runTurn(prompt, isFirst, trigger = "kickoff") {
   TURN++; banner(trigger);
   const t0 = Date.now();
+  // #5965 — TURN START. The hub peer row is where the app reads activity from, and the runner is
+  // the only one who knows a turn is starting, so say so before the CLI spawn (awaited: the spawn
+  // below blocks the loop, an unawaited fetch would not leave the machine until the turn ended).
+  await registerStatus(`working · ${trigger}`);
   const pf = join(homedir(), ".agent-bus", `turn-${AGENT}-${PROJ}.txt`);
   appendFileSync(pf, "", { flag: "w" }); // truncate
   appendFileSync(pf, prompt);
@@ -527,6 +548,9 @@ function runTurn(prompt, isFirst, trigger = "kickoff") {
   telemetry({ ts: Date.now(), agent: AGENT, project: PROJ, turn: TURN, trigger, model: MODEL || "default", duration_ms: Date.now() - t0, exit: realExit, effExit, authFailed: effExit !== realExit, emptyOutput: lastEmptyOutput });
   log(`turn ended (exit ${realExit}${effExit !== realExit ? ` → effective ${effExit} (${lastEmptyOutput ? "empty-output" : "auth"})` : ""}, ${((Date.now() - t0) / 1000).toFixed(0)}s)`);
   if (realExit === 0 && effExit === 0) { cmuxStatus("idle", "#8a94a6", "robot"); herdrAgent("idle"); }   // finished this turn, waiting for the next
+  // #5965 — TURN END. A clean exit means the seat is idle again; say so right away so the app stops
+  // pulsing it even before the next /poll heartbeat. Failure keeps reportFailure's down/errored.
+  if (realExit === 0 && effExit === 0) await registerStatus("idle");
   return effExit;
 }
 
@@ -592,7 +616,7 @@ function composedTurn({ base = "", wakeText = "", ctxText = "", againText = "", 
   let deliveryFails = 0;      // consecutive failed attempts at the SAME pending batch
   if (pendingWake.length) log(`\x1b[33m${pendingWake.length} message(s) survived from a previous run — redelivering\x1b[0m`);
 
-  const ec0 = runTurn(composedTurn({ base: KICKOFF, lessons: pickLessons(LESSONS_RAW, "") }), true, "kickoff");
+  const ec0 = await runTurn(composedTurn({ base: KICKOFF, lessons: pickLessons(LESSONS_RAW, "") }), true, "kickoff");
   if (ec0) await reportFailure(ec0, "kickoff", pendingWake.length);   // a failed kickoff = the "fired up, died, nobody knew" case
   let lastTurnAt = Date.now();
   if (PULSE_MS) log(`pulse armed — mission re-read every ${Math.round(PULSE_MS / 1000)}s (${MISSION_FILE})`);
@@ -602,7 +626,7 @@ function composedTurn({ base = "", wakeText = "", ctxText = "", againText = "", 
     // pulse first: a due mission beat runs even on a silent bus. Measured from the END of the
     // last turn, so a long turn doesn't stack an immediate pulse on top of itself.
     if (PULSE_MS && Date.now() - lastTurnAt >= PULSE_MS) {
-      const ecp = runTurn(composedTurn({ base: PULSE_PROMPT + "\n\n", rulesText: RULES, lessons: pickLessons(LESSONS_RAW, PULSE_PROMPT) }), false, "pulse");
+      const ecp = await runTurn(composedTurn({ base: PULSE_PROMPT + "\n\n", rulesText: RULES, lessons: pickLessons(LESSONS_RAW, PULSE_PROMPT) }), false, "pulse");
       if (ecp) await reportFailure(ecp, "pulse"); else await reportHealthy();
       lastTurnAt = Date.now();
       log("parked — waiting for the next message or pulse");
@@ -694,7 +718,7 @@ function composedTurn({ base = "", wakeText = "", ctxText = "", againText = "", 
       tailText: "\nAct on what's addressed to you, then end your turn.\n\n",
       rulesText: RULES, lessons,
     });
-    const ec = runTurn(prompt, false, deliveryFails ? `${trigger} (redelivery)` : trigger);
+    const ec = await runTurn(prompt, false, deliveryFails ? `${trigger} (redelivery)` : trigger);
     const secs = Math.round((Date.now() - tStart) / 1000);
     if (ec) {
       deliveryFails++;

@@ -41,10 +41,10 @@ export function SeatTab({ name, brandName, status, active, onClick, you }: {
       title={v.title}
       className="flex items-center gap-2 rounded-[9px] px-3 py-[7px] text-[12.5px] font-medium text-tr-muted data-[on=true]:bg-tr-panel data-[on=true]:text-tr-text data-[on=true]:shadow-sm"
     >
-      <span className={`inline-flex shrink-0 items-center ${v.pulse ? "animate-pulse" : ""} ${v.amber ? "rounded-full ring-1 ring-tr-warn" : ""}`}>
+      <span className={`inline-flex shrink-0 items-center ${v.pulse ? "animate-pulse" : ""} ${v.amber ? "rounded-full ring-1 ring-tr-warn" : ""} ${v.down ? "rounded-full ring-1 ring-tr-fail" : ""}`}>
         <Mark brandName={brandName} />
       </span>
-      <span className={v.amber ? "text-tr-warn" : undefined}>{name}</span>
+      <span className={v.amber ? "text-tr-warn" : v.down ? "text-tr-fail" : undefined}>{name}</span>
       {you && <span className="text-[11px] text-tr-muted/70">you</span>}
     </button>
   );
