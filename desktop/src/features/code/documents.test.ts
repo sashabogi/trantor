@@ -95,3 +95,14 @@ describe("documents — editor state outlives the lens", () => {
     expect(projectDocuments(project).docs.get(key)?.loaded).toBe(false);
   });
 });
+
+describe("keptDraft", () => {
+  it("a document that never finished loading has no kept draft, even after a touch", async () => {
+    const { setDisk, keptDraft, markLoaded, setDraft } = await import("./documents");
+    setDisk("p", "k1", "disk text");
+    expect(keptDraft("p", "k1")).toBeUndefined();
+    setDraft("p", "k1", "typed");
+    markLoaded("p", "k1");
+    expect(keptDraft("p", "k1")?.draft).toBe("typed");
+  });
+});

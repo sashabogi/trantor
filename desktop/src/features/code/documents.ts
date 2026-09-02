@@ -84,3 +84,12 @@ export function clearLoaded(project: string, key: string): void {
 export function dropDocument(project: string, key: string): void {
   projectDocuments(project).docs.delete(key);
 }
+
+/** The draft a tab may RESUME from: only a document that finished loading has one. A fresh entry
+ *  is created by the first touch (setDisk, markLoaded) with draft "", and returning that "" as
+ *  a kept draft is how the editor opened lib.rs empty with a false conflict bar (0.3.105). */
+export function keptDraft(project: string, key: string): { draft: string; baseSignature: string } | undefined {
+  const d = projectDocuments(project).docs.get(key);
+  if (!d || !d.loaded) return undefined;
+  return { draft: d.draft, baseSignature: d.baseSignature };
+}

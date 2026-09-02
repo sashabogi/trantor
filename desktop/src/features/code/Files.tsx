@@ -30,6 +30,7 @@ import { closeTab, markDirty, markExternalMutation, openInTabs, togglePin, type 
 import { diskSignature, externalMutationOnLoad } from "./tabGuard";
 import {
   dropDocument,
+  keptDraft,
   markLoaded,
   projectDocuments,
   setBaseSignature,
@@ -116,10 +117,13 @@ export function Files({ project, lens, onLens, path, seat }: {
       .then(b => {
         setBody(b);
         setDisk(project, key, b.text);
-        const kept = docs.docs.get(key)?.draft;
+        // Only a LOADED document has a draft to resume; a fresh store entry says "" and that
+        // "" must never win over the disk text (the empty-editor regression, third time).
+        const resumed = keptDraft(project, key);
+        const kept = resumed?.draft;
         const verdict = externalMutationOnLoad({
           draft: kept ?? null,
-          baseSignature: docs.docs.get(key)?.baseSignature ?? null,
+          baseSignature: resumed?.baseSignature ?? null,
           diskText: b.text,
         });
         setTabs(ts => markExternalMutation(ts, key, verdict === "moved" ? "changed" : undefined));
