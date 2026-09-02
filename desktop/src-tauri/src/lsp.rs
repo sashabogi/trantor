@@ -159,7 +159,7 @@ fn server_spec(language: &str) -> Result<ServerSpec, String> {
 
 /// Resolve a binary on the terminal PATH — the PATH a terminal would have, not the bare one a
 /// Finder-launched app inherits. Missing → the honest "not installed" the editor shows as text.
-fn find_binary(name: &str, install: &str) -> Result<PathBuf, String> {
+pub fn find_binary(name: &str, install: &str) -> Result<PathBuf, String> {
     for dir in terminal_path().split(':') {
         if dir.is_empty() {
             continue;
@@ -194,7 +194,7 @@ fn ancestors(start: &Path, scope_root: &Path) -> Vec<PathBuf> {
 }
 
 /// The workspace root for an open file: the nearest manifest, bounded by the scope root.
-fn workspace_root(scope_root: &Path, language: &str, file_path: &str) -> PathBuf {
+pub fn workspace_root(scope_root: &Path, language: &str, file_path: &str) -> PathBuf {
     let file = scope_root.join(file_path);
     let start = file
         .parent()
@@ -297,6 +297,7 @@ fn spawn_server(
     bin: &Path,
     args: &[&str],
     cwd: &Path,
+    language: &str,
 ) -> Result<(Child, ChildStdin), String> {
     let mut child = Command::new(bin)
         .args(args)
@@ -344,17 +345,32 @@ fn spawn_server(
         let _ = event_app.emit(&format!("lsp-closed:{id}"), reason);
     });
 
-    // Stderr drain: capture the FIRST line as the exit reason, then keep draining so a chatty
-    // server cannot fill the pipe buffer and block on its next write.
+    // Stderr drain: capture the FIRST line as the exit reason, and APPEND every line to the
+    // per-server log so a server that dies has its reason on disk
+    // (~/.agent-bus/lsp/<language>-<id>.log) instead of being silently discarded.
     if let Some(stderr) = stderr {
         let first = first_stderr.clone();
+        let log_path = crate::desktop_bus_dir()
+            .join("lsp")
+            .join(format!("{language}-{id}.log"));
         std::thread::spawn(move || {
+            if let Some(dir) = log_path.parent() {
+                let _ = std::fs::create_dir_all(dir);
+            }
+            let mut log = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(&log_path)
+                .ok();
             let mut r = BufReader::new(stderr);
             let mut line = String::new();
             while r.read_line(&mut line).map(|n| n > 0).unwrap_or(false) {
                 let mut guard = first.lock().unwrap();
                 if guard.is_none() {
                     *guard = Some(line.trim().to_string());
+                }
+                if let Some(f) = log.as_mut() {
+                    let _ = f.write_all(line.as_bytes());
                 }
                 line.clear();
             }
@@ -396,7 +412,7 @@ pub fn lsp_start(
     let bin_path = find_binary(spec.bin, spec.install)?;
     probe_binary(&bin_path, spec.bin, spec.install, spec.broken_proxy)?;
     let id = NEXT_ID.fetch_add(1, Ordering::SeqCst);
-    let (child, stdin) = spawn_server(app, id, &bin_path, spec.args, &workspace_root)?;
+    let (child, stdin) = spawn_server(app, id, &bin_path, spec.args, &workspace_root, &language)?;
     {
         let mut servers = SERVERS.lock().unwrap();
         servers.get_or_insert_with(HashMap::new).insert(id, Server { child, stdin });

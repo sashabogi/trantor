@@ -24,15 +24,15 @@ import "./monacoSetup";
 /** The `$/progress` notification shape, narrowed to what we read. */
 type ProgressProbe = { method?: string; params?: { token?: string | number; value?: { kind?: string } } };
 
-/** rust-analyzer reports its initial indexing as `$/progress` with a token like
- *  "rustAnalyzer/Indexing"; that token's `end` is the honest "ready". The quicker "loading" pass
- *  also sends `$/progress`, so match the indexing token, never just any end. */
+/** rust-analyzer reports its analysis as `$/progress`; the "ready" end is the LAST phase. 1.94
+ *  names it "rustAnalyzer/cachePriming" (older versions had "rustAnalyzer/Indexing"), so match
+ *  either token, never just any end — the quicker Fetching/Roots Scanned phases end first. */
 function isIndexingEnd(msg: ProgressProbe): boolean {
   if (msg.method !== "$/progress") return false;
   const params = msg.params;
   if (!params || params.value?.kind !== "end") return false;
   const token = params.token == null ? "" : String(params.token);
-  return /index/i.test(token);
+  return /index|priming/i.test(token);
 }
 
 /** reader: `lsp-message:<id>` events → JSON-RPC messages. */
@@ -51,7 +51,15 @@ class TauriMessageReader extends AbstractMessageReader {
     };
     listen<string>(`lsp-message:${this.id}`, ev => {
       if (disposed) return;
-      const raw = JSON.parse(ev.payload);
+      // A non-JSON payload must not throw and swallow the message — the initialize response rides
+      // this path, and a dropped response leaves client.start() hanging forever. The connection
+      // reports its own error if the bytes are not valid JSON-RPC.
+      let raw: any;
+      try {
+        raw = JSON.parse(ev.payload);
+      } catch {
+        return;
+      }
       if (this.onProgressEnd && isIndexingEnd(raw)) this.onProgressEnd();
       const msg: Message = raw;
       callback(msg);

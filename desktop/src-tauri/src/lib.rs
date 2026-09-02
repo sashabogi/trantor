@@ -1,6 +1,6 @@
 mod herdr;
 pub mod identity;
-mod lsp;
+pub mod lsp;
 mod sessions;
 mod terminal;
 
@@ -2901,7 +2901,7 @@ fn project_sessions(project: String) -> String {
 
 // ── herdr bridge ───────────────────────────────────────────────────────────────────────────────
 
-fn desktop_bus_dir() -> PathBuf {
+pub(crate) fn desktop_bus_dir() -> PathBuf {
     std::env::var("AGENT_BUS_DIR")
         .map(PathBuf::from)
         .unwrap_or_else(|_| {
