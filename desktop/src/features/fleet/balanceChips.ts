@@ -76,6 +76,7 @@ const BRAND = {
   moonshot:   { mono: "MS", icon: "kimi",       hue: "#C9C9CF", fg: "#f2f2f5" },
   gemini:     { mono: "Ge", icon: null,         hue: "#8A8A92", fg: "#1a1a1e" },
   openrouter: { mono: "OR", icon: "openrouter", hue: "#8B5CF6", fg: "#f1ecff" },
+  qwen:       { mono: "Qw", icon: "qwen",       hue: "#6336E7", fg: "#eef0ff" },
 } satisfies Record<string, BrandStyle>;
 
 // Shared with the Usage popover (usageRoster.ts) so the chip and the drill-in can never
