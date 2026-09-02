@@ -6,7 +6,7 @@
 // private network, or add auth first. See "Always-on / remote hub" in the README (roadmap).
 import http from "node:http";
 import { readFileSync, writeFileSync, existsSync, mkdirSync, statSync, readdirSync } from "node:fs";
-import { homedir } from "node:os";
+import { homedir, hostname } from "node:os";
 import { join } from "node:path";
 import { timingSafeEqual, randomBytes } from "node:crypto";
 import { verifyRequest, verifyEndorsement, publicView } from "./lib/identity.mjs";
@@ -320,6 +320,14 @@ async function reloadFromStore() {
 // not spam the feed; at level >= 3 a file-conflict opens a verify gate (the go/no-go primitive).
 let _overseer = null;
 import("./lib/overseer.mjs").then(m => { _overseer = m; }).catch(() => {});
+// #5760: the same-project episode rule (lib/same-project.mjs, pure) — lazy like the detector, so
+// a hub booted before the module lands still runs (the same-project branch fails QUIET until it
+// arrives: a missing rule must never re-instate the hourly metronome).
+let _sameProject = null;
+import("./lib/same-project.mjs").then(m => { _sameProject = m; }).catch(() => {});
+// This hub runs on the operator's machine, so the machine's own sessions ("<host>:<project>") ARE
+// the orchestrator side of every declared crew.
+const HOST_NAME = hostname().split(".")[0];
 const OVERSEER_TICK_MS = Number(process.env.RELAY_OVERSEER_TICK_MS || 30 * 1000);
 // How long a condition must be ABSENT before we consider the episode over. This is NOT a re-warn
 // timer: see overseerTick.
@@ -353,6 +361,33 @@ function overseerInputs() {
     now: now(),
   };
 }
+
+// --- #5760: the same-project warning is an EPISODE keyed by the MEMBER SET -------------------
+// The night of 08-31 the same-project DM re-fired hourly for a membership that never changed and
+// woke every seat into metered chatter turns. The rule (lib/same-project.mjs, pure) decides
+// fire-or-not from (previous set, current set, declared crew, last-fired-at): a declared crew is
+// the NORMAL state of a project and is not a collision at all; a set that never changed re-warns
+// never. The warn itself rides the SAME episode machinery as every other kind (#5350: one warn at
+// open, newcomer-only intros while standing, a genuine clear ends it) — the record below only
+// feeds the pure rule the set it judged last, so "unchanged" is one hash comparison and the
+// record line reports DURATION ("same-project for 6h"), never a count of warnings.
+const sameProjectFired = new Map(); // project -> { hash, sessions, ts } — the set as of the last verdict
+
+// The declared crew: the seats `trantor up` spawned (crew-windows.txt rows are
+// project\tmux\tagent\tpane; __-prefixed markers are not sessions) plus the operator's own
+// orchestrator session on this machine ("<host>:<project>").
+function declaredCrewFor(project) {
+  const crew = new Set();
+  try {
+    for (const line of readFileSync(join(homedir(), ".agent-bus", "crew-windows.txt"), "utf8").split("\n")) {
+      const c = line.split("\t");
+      if (c.length >= 3 && c[0] === project && c[2] && !c[2].startsWith("__")) crew.add(`${c[2]}:${project}`);
+    }
+  } catch { /* no crew declaration recorded: only the operator's own session is exempt */ }
+  crew.add(`${HOST_NAME}:${project}`);
+  return [...crew];
+}
+
 function overseerTick() {
   if (!_overseer?.detectCollisions) return;
   let collisions = [];
@@ -365,8 +400,8 @@ function overseerTick() {
   // sessions to "coordinate over the bus" is useless if neither knows the other's id, and the
   // warning alone went only to the duty seat and the log — so coordination needed a human to carry
   // the ids across. Shared by the episode-start branch (all parties) and the standing branch
-  // (newcomers only): existing members never re-hear it, so a standing condition must not re-wake
-  // every party every tick.
+  // (newcomers only, same-project included): existing members never
+  // re-hear it, so a standing condition must not re-wake every party every tick.
   const intro = (c, me, others) => {
     const rest = others.filter(p => p !== me);
     if (rest.length === 0) return;
@@ -374,7 +409,58 @@ function overseerTick() {
       `🤝 OVERSEER ${c.kind}: you and ${rest.join(", ")} are working on overlapping ground${c.files?.length ? ` (${c.files.slice(0, 3).join(", ")})` : ""}. ${c.detail || ""} Coordinate directly — relay_send to ${rest[0]} — and split the work between you. No human needs to relay this.`,
       c.project);
   };
+  // #5760: same-project sets judged crew-only are dropped entirely — the normal state of a
+  // project, not a collision — so not even the context feed narrates them.
+  const kept = [];
   for (const c of collisions) {
+    // #5760: same-project gets the pure episode rule (lib/same-project.mjs) ON TOP of the shared
+    // episode machinery below: a crew-only set is not a collision at all (dropped — no warn, no
+    // context, no state); a standing set re-warns never (a liveness flap replays the SAME set —
+    // 08-31's metronome — and must stay silent, only genuine newcomers hear the intro once); and
+    // the record line reports DURATION. Without the rule module this branch is invisible and
+    // same-project rides the generic loop exactly as before — a missing rule must never
+    // re-instate the hourly metronome, so the fallback is the pre-#5760 behavior, never stricter.
+    if (c.kind === "same-project-sessions" && _sameProject?.sameProjectDecision) {
+      const prior = sameProjectFired.get(c.project) || null;
+      const d = _sameProject.sameProjectDecision({
+        previous: prior?.sessions ?? null,
+        current: c.sessions,
+        declaredCrew: declaredCrewFor(c.project),
+        lastFiredAt: prior?.ts ?? null,
+        now: t,
+      });
+      if (d.reason === "crew-only") continue;
+      const key = `${c.project} ${c.kind}`;
+      c.key = key;
+      seen.add(key);
+      kept.push(c);
+      const parties = [...new Set(c.sessions || [])].filter(s => s && s !== DUTY_SESSION);
+      const standing = overseerActive.get(key);
+      if (standing) {
+        // The episode HOLDS: no new warn, whoever was introed once is never re-heard.
+        standing.lastTick = t;
+        c.since = standing.since;
+        if (_sameProject.durationLabel) c.detail = `${c.detail || ""} (same-project for ${_sameProject.durationLabel(t - standing.since)})`.trim();
+        for (const me of parties) if (!standing.sessions.has(me)) intro(c, me, parties);
+        for (const me of parties) standing.sessions.add(me);
+        // The record tracks the live membership (ts stays at the last warn) so a later open
+        // judges the true previous set and can say how long the old one held.
+        if (d.fire && prior) sameProjectFired.set(c.project, { hash: _sameProject.memberSetHash(c.sessions), sessions: c.sessions, ts: prior.ts });
+        continue;
+      }
+      // The episode OPENS and the pure rule said fire — first sighting, or a membership change
+      // on a remembered set; the record line states how long the previous state held.
+      overseerActive.set(key, { since: t, lastTick: t, sessions: new Set(parties) });
+      c.since = t;
+      if (d.reason === "membership-changed") c.detail = `${c.detail || ""} (same-project for ${_sameProject.durationLabel(d.durationMs)})`.trim();
+      sameProjectFired.set(c.project, { hash: _sameProject.memberSetHash(c.sessions), sessions: c.sessions, ts: t });
+      appendEvent("overseer.warn", c.project, "overseer",
+        { kind: c.kind, sessions: c.sessions || [], files: c.files || [], detail: c.detail || "", narrated: false });
+      if (DUTY_SESSION) hubSend(DUTY_SESSION, `⚠️ OVERSEER ${c.kind} [${c.project}]: ${c.detail || ""} — if the parties are not already coordinating, message them.`, c.project);
+      if (parties.length > 1) for (const me of parties) intro(c, me, parties);
+      continue;
+    }
+    kept.push(c);
     // Episode identity is the CONDITION (project+kind+files), never the session list (#5350):
     // membership is volatile — a third seat bouncing in and out of a standing collision minted a
     // fresh key, so a fresh episode, so a fresh warn (+ duty wake + party intros) per permutation.
@@ -413,9 +499,14 @@ function overseerTick() {
   // Episode end: a condition gone for the whole clear window is over, so a LATER recurrence is a
   // new episode and warns again. Without this the map would grow forever and nothing could re-fire.
   for (const [k, v] of overseerActive) {
-    if (!seen.has(k) && t - v.lastTick > OVERSEER_CLEAR_MS) overseerActive.delete(k);
+    if (!seen.has(k) && t - v.lastTick > OVERSEER_CLEAR_MS) {
+      overseerActive.delete(k);
+      // #5760: the same-project verdict record dies WITH its episode — a set that returns after a
+      // genuine clear is a new episode (it warns again, first sighting), not the old one continuing.
+      if (k.endsWith(" same-project-sessions")) sameProjectFired.delete(k.slice(0, -" same-project-sessions".length));
+    }
   }
-  overseerLastCollisions = collisions;
+  overseerLastCollisions = kept;
 }
 setInterval(overseerTick, OVERSEER_TICK_MS).unref?.();
 // setInterval waits a FULL period before its first call, so for 30s after every restart the watcher
