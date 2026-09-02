@@ -453,6 +453,61 @@ mod tests {
         assert!(manager.detach(sub).expect("detach").reaped);
     }
 
+    /// The #5921 dictation case, measured (#12752): a multi-KB dictation arrives as ONE
+    /// term_write with no markers. This drives the real chunk-and-drain path with that payload
+    /// against a transparent echo child, asserts byte-for-byte survival, and prints the numbers
+    /// the per-write trace reports (bytes, chunks, ms) so tuning is decided on evidence.
+    #[test]
+    fn dictation_sized_single_write_survives_and_reports_its_shape() {
+        let manager = TerminalManager::default();
+        let (tx, rx) = mpsc::channel::<Vec<u8>>();
+        let sub = manager
+            .attach_command(
+                shell_command("stty raw -echo; printf 'READY'; exec cat"),
+                Arc::new(move |bytes| {
+                    tx.send(bytes).unwrap();
+                }),
+            )
+            .expect("attach");
+        let mut pre = Vec::new();
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while Instant::now() < deadline && !String::from_utf8_lossy(&pre).contains("READY") {
+            if let Ok(chunk) = rx.recv_timeout(Duration::from_millis(50)) {
+                pre.extend(chunk);
+            }
+        }
+        assert!(
+            String::from_utf8_lossy(&pre).contains("READY"),
+            "child never reached raw mode"
+        );
+
+        // A long spoken paragraph: ~8 KB of plain text, ONE write, no markers.
+        let body = format!("This is spoken dictation number {}. ", "word ").repeat(160);
+        let t0 = Instant::now();
+        let chunks = manager.write(sub, &body).expect("write");
+        let ms = t0.elapsed().as_millis();
+
+        let expected = body.as_bytes().to_vec();
+        let mut got = Vec::new();
+        let drain_deadline = Instant::now() + Duration::from_secs(10);
+        while Instant::now() < drain_deadline && got.len() < expected.len() {
+            if let Ok(chunk) = rx.recv_timeout(Duration::from_millis(100)) {
+                got.extend(chunk);
+            }
+        }
+        assert_eq!(got.len(), expected.len(), "echoed {} of {} bytes — LOSS", got.len(), expected.len());
+        assert_eq!(got, expected, "dictation was altered in transit");
+        println!(
+            "dictation trace: bytes={} chunks={} ms={}",
+            body.len(),
+            chunks,
+            ms
+        );
+        assert!(chunks >= body.len() / 512, "chunker never engaged");
+
+        assert!(manager.detach(sub).expect("detach").reaped);
+    }
+
     #[test]
     fn resize_survives_after_child_exit_until_detach() {
         let manager = TerminalManager::default();
