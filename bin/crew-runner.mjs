@@ -17,6 +17,10 @@ import { loadOrCreate } from "../lib/identity.mjs";
 import { signedHeaders } from "../lib/signed-fetch.mjs";
 import { ensureEnrolled } from "../lib/enroll.mjs";
 import { redactKeys } from "../lib/redact.mjs";
+import {
+  AUTH_MARKER_RE, classifyFailure, looksLikeAuthDeath,
+  readPromptText, stripPromptEcho,
+} from "../lib/classify-failure.mjs";
 import { capWake, capBcast, pickLessons, composePrompt } from "./crew-payload.mjs";
 
 const AGENT = process.argv[2];
@@ -338,30 +342,19 @@ function loadPending() {
 
 // Auth-failure markers in TURN OUTPUT. opencode prints its auth error ("401 Unauthorized" /
 // "Invalid API key") and STILL exits 0, so a bare 0 from the CLI is not proof the turn ran
-// (card #5405). This regex gates the exit-0 path in runTurn; kept tighter than
-// classifyFailure's set (no bare /expired/) so a healthy transcript never trips it.
-const AUTH_MARKER_RE = /unauthor|401|403|forbidden|invalid[ _-]?api[ _-]?key|authentication? failed|token expired/i;
-
-function classifyFailure(exit, errText, emptyOutput = false) {
-  // #5481: silence with a clean exit is a failure shape, not success — see lastEmptyOutput.
-  if (emptyOutput) return "empty-output";
-  const t = (errText || "").toLowerCase();
-  if (exit === 127) return "missing-cli";
-  // #5684: a provider BACKEND failure is not quota — it wants retry/swap, not a window wait.
-  // The specimen (#5683): codex's "unexpected status 404 Not Found … /responses/compact" was
-  // labelled "exhausted" and the operator was advised to wait out a window that did not exist.
-  // 401/403/429 deliberately fall through to the auth/exhausted branches below.
-  if (/unexpected status (404|408|410|5\d\d)|internal server error|bad gateway|service unavailable|gateway time.?out|econnrefused|connection refused|socket hang ?up|network is unreachable/.test(t)) return "backend-error";
-  // "reached your … limit" / "usage limit" catch the subscription CLIs (Claude's "You've reached
-  // your Fable 5 limit"), which say nothing about quota or credits and would otherwise read as a crash.
-  if (/quota|insufficient|credit|balance|payment required|402|429|too many requests|rate.?limit|exceeded your|reached your [^.\n]*limit|usage limit|out of (credit|quota)/.test(t)) return "exhausted";
-  if (/unauthor|401|invalid[ _-]?api[ _-]?key|forbidden|403|token expired|expired/.test(t)) return "auth";
-  return "crashed";
+// (card #5405). The rules live in lib/classify-failure.mjs (#5868) so they are testable against
+// the real specimens; classify() wraps them with the one-line verdict the seat log carries, and
+// runTurn judges only the CLI's OWN output (the prompt echo is replay, not speech — the rules
+// line "…deleting failing tests is forbidden." once classified healthy codex turns as auth).
+function classify(exit) {
+  const { reason, matched } = classifyFailure(exit, lastErrText, lastEmptyOutput);
+  log(`classified ${reason} because ${matched}`);
+  return reason;
 }
 
 async function reportFailure(exit, trigger, undelivered = 0) {
   consecFails++;
-  const reason = classifyFailure(exit, lastErrText, lastEmptyOutput);
+  const reason = classify(exit);
   const down = consecFails >= 2;
   const status = down ? `down: ${reason} · ${consecFails} fails` : `errored: ${reason}`;
   await api("/register", { session: SESSION, project: PROJ, status, llm: AGENT, model: MODEL }).catch(() => {});
@@ -512,18 +505,27 @@ function runTurn(prompt, isFirst, trigger = "kickoff") {
   // a process substitution bash does not wait for, so this pass also catches its tail — the
   // auth classifier and the empty-output check below must judge REDACTED text and a settled file.
   try { writeFileSync(ERRF, redactKeys(readFileSync(ERRF, "utf8"))); } catch {}
-  try { lastErrText = readFileSync(ERRF, "utf8").slice(-4000); } catch { lastErrText = ""; }
+  // #5868: classify only what the CLI itself said. The transcript replays the whole turn prompt
+  // (rules, lessons, the wake text) — and those lines once classified healthy codex turns as
+  // auth ("…is forbidden.") and exhausted ("retries burn quota"). Prompt lines are stripped
+  // before anything downstream looks at the text.
+  let ownOut = "";
+  try { ownOut = stripPromptEcho(readFileSync(ERRF, "utf8"), readPromptText(pf)); } catch { ownOut = ""; }
+  lastErrText = ownOut.slice(-4000);
   if (cli.sid && r.stdout) { const m = r.stdout.match(cli.sid); if (m) sid = m[1]; }
   const realExit = r.status;
   // A zero exit is NOT proof the turn ran: opencode prints "401 Unauthorized" / "Invalid API key"
   // and exits 0, so a bare 0 made the runner ack "✅ done", clear the pending queue and heartbeat
   // green through an auth outage (card #5405). Cross-check the turn output and treat an
-  // exit-0-with-auth turn as FAILED. Telemetry keeps the REAL exit; the returned code is the
-  // effective one every call site branches on (kickoff, pulse, deliverWake).
+  // exit-0-with-auth turn as FAILED — but ONLY when the CLI's own output is short enough to be
+  // just the error (#5868): a long output is a real answer, and a warning inside it must not
+  // fail the turn. Telemetry keeps the REAL exit; the returned code is the effective one every
+  // call site branches on (kickoff, pulse, deliverWake).
   let effExit = realExit;
-  if (realExit === 0 && AUTH_MARKER_RE.test(lastErrText)) {
+  if (realExit === 0 && looksLikeAuthDeath(ownOut)) {
     effExit = 1;
-    log("\x1b[31mexit 0 but turn output shows an auth failure — treating as FAILED (auth)\x1b[0m");
+    const hit = AUTH_MARKER_RE.exec(ownOut)[0];
+    log(`\x1b[31mexit 0 but the turn output IS an auth failure — treating as FAILED (auth, "${hit}")\x1b[0m`);
   }
   // #5481: the Inception/Mercury trap — exit 0 with a NULL completion. ERRF is the TOTAL output
   // capture, not just stderr: every seat's stdout is tee'd into it (`| tee -a ERRF` for the
@@ -532,6 +534,8 @@ function runTurn(prompt, isFirst, trigger = "kickoff") {
   // real CLI prints something on success (drill C pins that), so silence is the trap, not a
   // quiet victory. (Integration note: this was nearly "fixed" into stdout-only detection that
   // never fired — the tee topology is the load-bearing fact; keep this comment with it.)
+  // The judgment now runs on the ECHO-STRIPPED text (#5868): a CLI that replays the prompt but
+  // does no work has still produced nothing of its own.
   if (realExit === 0 && effExit === 0 && !lastErrText.trim()) {
     effExit = 1;
     lastEmptyOutput = true;
@@ -717,7 +721,7 @@ function composedTurn({ base = "", wakeText = "", ctxText = "", againText = "", 
       await reportFailure(ec, "message", pendingWake.length);
       // The room hears the broadcast above; the one who is actually blocked hears it directly.
       await notifyAssigners(assigners,
-        `⚠️ your contract FAILED on ${SESSION} (exit ${ec}, ${classifyFailure(ec, lastErrText)}) · retrying in ${Math.round(wait / 1000)}s · asked: "${asked}"`);
+        `⚠️ your contract FAILED on ${SESSION} (exit ${ec}, ${classify(ec)}) · retrying in ${Math.round(wait / 1000)}s · asked: "${asked}"`);
       log(`\x1b[31m${pendingWake.length} message(s) still UNDELIVERED — next attempt in ${Math.round(wait / 1000)}s\x1b[0m`);
     } else {
       pendingWake = []; pendingBcast = []; deliveryFails = 0; retryAt = 0;
