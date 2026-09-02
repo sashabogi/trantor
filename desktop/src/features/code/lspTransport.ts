@@ -33,6 +33,11 @@ export class TauriMessageReader extends AbstractMessageReader {
   private buffered: Message[] = [];
   private unlistens: UnlistenFn[] = [];
   private torn = false;
+  /** Resolves when BOTH Tauri subscriptions are confirmed registered. Tauri drops an event with
+   *  no subscriber, so no JS buffer can catch the initialize response Rust emits while the
+   *  registration IPC is still in flight — startLsp must await this before client.start() sends
+   *  `initialize`, or the reply is lost and the start hangs forever (#5857). */
+  readonly ready: Promise<void>;
 
   constructor(
     private readonly id: number,
@@ -43,15 +48,17 @@ export class TauriMessageReader extends AbstractMessageReader {
       if (this.torn) fn();
       else this.unlistens.push(fn);
     };
-    listen<string>(`lsp-message:${this.id}`, ev => this.onMessage(ev.payload)).then(keep).catch(() => {});
+    const messageReady = listen<string>(`lsp-message:${this.id}`, ev => this.onMessage(ev.payload))
+      .then(keep).catch(() => {});
     // The server closing stdout is the one honest "no longer ready" signal; the payload is the
     // server's own first stderr line ("error: Unknown binary …") when it exited early, so the
     // status line can name it instead of a bare "Unknown reason".
-    listen<string | null>(`lsp-closed:${this.id}`, ev => {
+    const closedReady = listen<string | null>(`lsp-closed:${this.id}`, ev => {
       if (this.torn) return;
       if (ev.payload) this.fireError(new Error(ev.payload));
       this.fireClose();
     }).then(keep).catch(() => {});
+    this.ready = Promise.all([messageReady, closedReady]).then(() => {});
   }
 
   private onMessage(payload: string): void {

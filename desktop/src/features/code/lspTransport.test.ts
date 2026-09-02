@@ -98,4 +98,13 @@ describe("TauriMessageReader/Writer over a real jsonrpc connection", () => {
     expect(closed).toEqual([true]);
     conn.dispose();
   });
+
+  it("ready resolves once BOTH Tauri subscriptions are confirmed registered", async () => {
+    // Tauri drops an event with no subscriber, so `initialize` must not go out before this
+    // resolves — startLsp gates client.start() on it (#5857).
+    const reader = new TauriMessageReader(13);
+    await expect(reader.ready).resolves.toBeUndefined();
+    expect(bus.handlers.get(`lsp-message:13`)).toHaveLength(1);
+    expect(bus.handlers.get(`lsp-closed:13`)).toHaveLength(1);
+  });
 });
