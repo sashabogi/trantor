@@ -11,6 +11,7 @@ import { monacoLanguageFor } from "./editorLanguage";
 import { storedDraft } from "./documents";
 import { isLspLive, onLspChange } from "./lspClient";
 import { attachOpenDocuments, lspCompletion, toMonacoSuggestions, trackDocument } from "./lspDocuments";
+import { trace } from "./lspTransport";
 import "./monacoSetup";
 import { registerGhostTextProvider, isGhostTextEnabled, toggleGhostText } from "./ghostText";
 
@@ -122,6 +123,13 @@ export function CodeView({ value, path, root, editable, onChange, onSave, projec
     }
     editorRef.current = ed;
     modelRef.current = model;
+    // Setup is over the moment the editor is up (#5938, the third face, 0.3.114): this effect
+    // re-runs when the server root lands and rebuilds the model, and nothing else cleared the
+    // guard when the value prop did not change afterwards — every keystroke was then muted, the
+    // store never saw the typed text, and the next remount resumed the disk text. The value
+    // effect still raises and lowers the guard around its own push.
+    setupRef.current = false;
+    trace(`codeview model path=${path} reused=${!!reused} resumed=${resumed !== null} len=${model.getValue().length}`);
     return () => {
       sub.dispose();
       ghostDispRef.current?.dispose();
