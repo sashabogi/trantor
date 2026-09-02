@@ -13,6 +13,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { ArrowDownToLine, Bot, Eye, GraduationCap, House, Inbox as InboxIcon, MessagesSquare, Plus, Search, Settings as SettingsIcon } from "lucide-react";
 import { appUpdateCheck, HubClient, hubForProject, knownProjects, localSessions, type AppUpdate, type Peer } from "../shared/api/client";
 import { ago, stateOf } from "../shared/presence";
+import { hubActivity } from "../features/workspace/seatActivity";
 import { Palette, type PaletteScope } from "../features/search/Palette";
 import { countUnseen, onSeenChange } from "../shared/seen";
 import { usePendingProposals } from "../shared/Proposals";
@@ -171,7 +172,14 @@ export function AppShell() {
       const m = new Map<string, Activity>();
       for (const p of open) m.set(p, { kind: "open" });
       for (const p of best.values()) {
-        if (!p.project || stateOf(p) !== "busy") continue;
+        if (!p.project) continue;
+        // #5965 — a runner-driven seat heartbeats only between turns (its turn is a spawnSync the
+        // runner cannot poll through), so heartbeat recency alone reads it idle mid-turn. Its HUB
+        // status — `working · <trigger>` at turn start, `idle` at turn end — is the source of truth
+        // (herdr skips screen detection for runner seats, so it cannot say either). A status that
+        // resolves to "working" counts as busy; the offline sweep still retires a truly gone peer.
+        const hubWorking = hubActivity(p.status) === "working" && p.online !== false;
+        if (stateOf(p) !== "busy" && !hubWorking) continue;
         const cur = m.get(p.project);
         if (cur?.kind === "busy" && (cur.lastSeen ?? 0) >= (p.lastSeen ?? 0)) continue;
         m.set(p.project, { kind: "busy", lastSeen: p.lastSeen, model: p.model || p.llm });
