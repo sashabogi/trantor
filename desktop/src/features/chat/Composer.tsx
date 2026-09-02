@@ -200,7 +200,7 @@ function FontMenu({ step, onPick }: { step: FontStep; onPick: (s: FontStep) => v
   );
 }
 
-export function Composer({ project, target, live, liveWhy, model, modelSource, working, userTexts, context, fontStep, onFontStep, onSent, onLongRunChange, onDispatch }: {
+export function Composer({ project, target, live, liveWhy, model, modelSource, working, userTexts, context, fontStep, onFontStep, onSent, onLongRunChange, onDispatch, onDraftChange, suggestion, onSuggestionHandled }: {
   project: string;
   target: string | null;
   /** Is there an agent behind the pane to talk to (#5477)? Drives every input, with `liveWhy`
@@ -222,6 +222,13 @@ export function Composer({ project, target, live, liveWhy, model, modelSource, w
   onSent: () => void;
   onLongRunChange: (on: boolean) => void;
   onDispatch: (dial: "model" | "effort", value: string) => void;
+  /** Typing report for the suggested-reply chips (#5929): the row hides the moment the operator
+   *  starts typing their own words. */
+  onDraftChange?: (text: string) => void;
+  /** A chip click arrives here and rides the EXISTING send path (receipts intact — it is a
+   *  normal user turn); the panel clears it via onSuggestionHandled. */
+  suggestion?: string | null;
+  onSuggestionHandled?: () => void;
 }) {
   const [draft, setDraft] = useState("");
   const [effort, setEffortValue] = useState("");
@@ -404,18 +411,29 @@ export function Composer({ project, target, live, liveWhy, model, modelSource, w
   const lost = pendings.filter(p => receiptFor(p, userTexts, Date.now()) === "lost");
   const inFlight = pendings.length - lost.length;
 
-  const send = () => {
+  const sendText = (raw: string): boolean => {
     // Multi-image sends are rewritten to one-path-per-line BEFORE delivery (#5709) — CC's
     // converter drops an image when several paths ride one message inline. The pending holds
     // the NORMALIZED text: receipts must judge what was actually typed into the pane.
-    const text = normalizeAttachments(draft.trim());
-    if (!text || !target) return;
+    const text = normalizeAttachments(raw.trim());
+    if (!text || !target) return false;
     setBusy(true);
     line(text).then(() => {
       setPendings(ps => [...ps, { text, at: Date.now() }]);
-      setDraft(""); setError(null); onSent();
+      setError(null); onSent();
     }).finally(() => setBusy(false));
+    return true;
   };
+
+  const send = () => { if (sendText(draft)) setDraft(""); };
+
+  // A suggested reply IS a send (#5929): it rides sendText — the same delivery, the same
+  // receipt — and the panel clears the suggestion so it cannot fire twice.
+  useEffect(() => {
+    if (!suggestion) return;
+    if (sendText(suggestion)) onSuggestionHandled?.();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [suggestion]);
 
   const retry = (p: PendingSend) => {
     setPendings(ps => ps.filter(x => x !== p));
@@ -504,7 +522,7 @@ export function Composer({ project, target, live, liveWhy, model, modelSource, w
         <textarea
           ref={box}
           value={draft}
-          onChange={e => setDraft(e.target.value)}
+          onChange={e => { setDraft(e.target.value); onDraftChange?.(e.target.value); }}
           onPaste={onPaste}
           onKeyDown={e => {
             // While the menu is up it owns the arrows and Enter, the way every editor does it.
