@@ -10,8 +10,36 @@ import * as monaco from "monaco-editor";
 import { monacoLanguageFor } from "./editorLanguage";
 import { storedDraft } from "./documents";
 import { isLspLive, onLspChange } from "./lspClient";
+import { attachOpenDocuments, lspCompletion, toMonacoSuggestions, trackDocument } from "./lspDocuments";
 import "./monacoSetup";
 import { registerGhostTextProvider, isGhostTextEnabled, toggleGhostText } from "./ghostText";
+
+// Server-backed completion (#5857): the model sync lives in lspDocuments.ts (the client's own
+// sync listens to the monaco-vscode-api registry, which our vanilla-monaco models are not in),
+// and this provider asks the owning client directly. Registered once for the served languages;
+// with no live client lspCompletion returns null and the editor keeps its no-server silence.
+monaco.languages.registerCompletionItemProvider(["rust", "typescript", "javascript", "python"], {
+  triggerCharacters: [":", ".", "'", "("],
+  async provideCompletionItems(model, position) {
+    const result = await lspCompletion(
+      String(model.uri), model.getLanguageId(), position.lineNumber, position.column,
+    );
+    if (!result) return { suggestions: [] };
+    const word = model.getWordUntilPosition(position);
+    const range = {
+      startLineNumber: position.lineNumber,
+      startColumn: word.startColumn,
+      endLineNumber: position.lineNumber,
+      endColumn: word.endColumn,
+    };
+    return {
+      suggestions: toMonacoSuggestions(result, range, {
+        ...monaco.languages.CompletionItemKind,
+        insertAsSnippetRule: monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet,
+      }),
+    };
+  },
+});
 
 const fontOptions = {
   fontFamily: '"SF Mono", ui-monospace, Menlo, monospace',
@@ -60,6 +88,10 @@ export function CodeView({ value, path, root, editable, onChange, onSave, projec
     const uri: monaco.Uri | undefined = root ? monaco.Uri.file(`${root}/${path}`) : undefined;
     const reused = uri ? monaco.editor.getModel(uri) : null;
     const model = reused ?? monaco.editor.createModel(initialText, lang, uri);
+    // LSP document sync (#5857): track the model so a live client gets didOpen/didChange/didClose.
+    // Idempotent per URI; didClose rides the model's disposal, not this editor's unmount.
+    trackDocument(model, lang);
+    attachOpenDocuments();
     const ed = monaco.editor.create(host.current, {
       model,
       theme: "trantor-calm",

@@ -4488,6 +4488,21 @@ pub fn run() {
         .manage(terminal::TerminalManager::default())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_notification::init())
+        .setup(|app| {
+            // #5857 acceptance drill: TRANTOR_LSP_DRILL=<project> makes the webview drive the
+            // real LSP path headlessly (src/features/code/lspDrill.ts) and leave the wire trace
+            // in ~/.agent-bus/lsp/. Inert in normal runs.
+            use tauri::{Emitter, Manager};
+            if let Ok(project) = std::env::var("TRANTOR_LSP_DRILL") {
+                if let Some(window) = app.get_webview_window("main") {
+                    std::thread::spawn(move || {
+                        std::thread::sleep(Duration::from_secs(5));
+                        let _ = window.emit("lsp-drill", project);
+                    });
+                }
+            }
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             greet,
             sign_request,
