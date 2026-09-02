@@ -41,6 +41,7 @@ import {
   canStashDraft,
 } from "./documents";
 import { isLspIndexing, isLspLive, lspPhase, onLspChange, startLsp, stopLspProject } from "./lspClient";
+import { completionActivityForPath, formatCompletionActivity, onCompletionChange } from "./completionActivity";
 import { lspLanguageFor, lspServerName } from "./lspLanguage";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
@@ -89,6 +90,7 @@ export function Files({ project, lens, onLens, path, seat }: {
   const [lspRoot, setLspRoot] = useState<string | null>(null);
   // The crate root the CLIENT keyed itself by — readiness is scoped to exactly this + language.
   const [lspWsRoot, setLspWsRoot] = useState<string | null>(null);
+  const [completionClock, setCompletionClock] = useState(() => Date.now());
 
   const activeTab = tabs.find(t => t.key === activeKey) ?? null;
   // The on-disk conflict rides the TAB (Orca open-file.ts:124-128, per-tab), not this component's
@@ -97,6 +99,9 @@ export function Files({ project, lens, onLens, path, seat }: {
   const activePath = activeTab?.path ?? null;
   const activeScope = activeTab?.scope ?? "project";
   const activeView = activeTab?.view ?? "code";
+  const completionActivity = completionActivityForPath(lspRoot, activePath);
+  const completionPending = completionActivity?.pending ?? false;
+  const completionAnsweredAt = completionActivity?.answeredAt ?? null;
 
   // The disk stat we last acted on, and whether the editor holds unsaved work. Both live in refs
   // so the poll reads the CURRENT values without tearing the interval down every render.
@@ -251,12 +256,14 @@ export function Files({ project, lens, onLens, path, seat }: {
   const lspName = activeLanguage ? lspServerName(activeLanguage) : "";
   const trace = (line: string) => { invoke("app_log", { line }).catch(() => {}); };
 
-  // Derive the status line from the shared client state; called after start and on every change.
-  const updateStatus = () => {
+  // Derive the status line from the shared client state. The explicit workspace root keeps the
+  // subscription honest after a lens remount; a closure over the pre-start null root would let a
+  // different Rust client answer for this document.
+  const updateStatus = (workspaceRoot: string | null) => {
     if (!activeLanguage) { setLspNote(null); return; }
-    if (!isLspLive(activeLanguage, lspWsRoot ?? undefined)) { setLspNote(null); return; }
-    if (isLspIndexing(activeLanguage, lspWsRoot ?? undefined)) {
-      const phase = lspPhase(activeLanguage, lspWsRoot ?? undefined);
+    if (!isLspLive(activeLanguage, workspaceRoot ?? undefined)) { setLspNote(null); return; }
+    if (isLspIndexing(activeLanguage, workspaceRoot ?? undefined)) {
+      const phase = lspPhase(activeLanguage, workspaceRoot ?? undefined);
       setLspNote(phase ? `${lspName}: ${phase}` : `${lspName}…`);
     } else {
       setLspNote(`${lspName} ready`);
@@ -276,19 +283,36 @@ export function Files({ project, lens, onLens, path, seat }: {
         setLspRoot(scopeRoot);
         setLspWsRoot(workspaceRoot);
         trace(`files lsp ${workspaceRoot}\u0000${activeLanguage} attached (path=${activePath})`);
-        updateStatus();
       })
       .catch(e => { if (alive) setLspNote(String(e)); });
     return () => { alive = false; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [project, activeLanguage, activeScope, activePath]);
 
-  // The phase flips (begin → "cachePriming", end → ready) notify the client; re-derive the status.
+  // The phase flips (begin → "cachePriming", end → ready) notify the client; re-derive the status
+  // for this exact document root. Re-run once when the async start supplies that root.
   useEffect(() => {
     if (!activeLanguage) return;
-    return onLspChange(updateStatus);
+    const refresh = () => updateStatus(lspWsRoot);
+    refresh();
+    return onLspChange(refresh);
+    // updateStatus is a local derivation over these primitive values.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeLanguage]);
+  }, [activeLanguage, lspName, lspWsRoot]);
+
+  // Completion requests are document-scoped in lspDocuments. A pending request says "asking…"
+  // immediately; an answer keeps its item count and a live age so a slow server never looks dead.
+  useEffect(() => onCompletionChange(() => setCompletionClock(Date.now())), []);
+  useEffect(() => {
+    if (completionPending || completionAnsweredAt === null) return;
+    const age = Math.max(0, Date.now() - completionAnsweredAt);
+    const delay = age < 10_000 ? 100 : age < 60_000 ? 1_000 : 60_000;
+    const timer = window.setTimeout(() => setCompletionClock(Date.now()), delay);
+    return () => window.clearTimeout(timer);
+  }, [completionPending, completionAnsweredAt, completionClock]);
+
+  const completionNote = formatCompletionActivity(completionActivity, completionClock);
+  const visibleLspNote = lspNote && completionNote ? `${lspNote} · ${completionNote}` : lspNote;
 
   // Servers OUTLIVE the lens: on unmount NOTHING is detached. The Monaco client stays in the
   // module map (the disposed editor models fire didClose on their own), so a remount re-attaches
@@ -506,8 +530,8 @@ export function Files({ project, lens, onLens, path, seat }: {
         {body?.truncated && (
           <div className="px-1 text-[11.5px] text-tr-warn">Cut at 512 KB — this is the head of the file, not all of it.</div>
         )}
-        {lspNote && (
-          <div className="tr-mono px-1 text-[11px] text-tr-muted">{lspNote}</div>
+        {visibleLspNote && (
+          <div className="tr-mono px-1 text-[11px] text-tr-muted">{visibleLspNote}</div>
         )}
       </div>
     </div>
