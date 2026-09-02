@@ -1,17 +1,19 @@
 import { invoke } from "@tauri-apps/api/core";
 import * as monaco from "monaco-editor";
+import { createGhostGate, type GhostRequest } from "./ghostGate";
 
-const DEBOUNCE_MS = 300;
+// #5897 fast path: the Rust side now answers a completion with ONE direct HTTP call to a fast
+// model (16-36s scrooge is gone), so the provider can stay live. Timing rules live in ghostGate.ts
+// (pure, tested): 250ms debounce, in-flight fetch cancelled on the next keystroke.
+const DEBOUNCE_MS = 250;
 const LINES_BEFORE = 60;
 const LINES_AFTER = 20;
 const STORAGE_KEY = "code.ghostText";
 
-let debounceTimer: ReturnType<typeof setTimeout> | null = null;
-
 function getEnabled(): boolean {
   try {
-    // OFF until the operator turns it on: measured 2026-09-01, a scrooge CLI completion takes
-    // 16 to 36 seconds end to end, which is not ghost text. The fast path is its own card.
+    // OFF until the operator turns it on — the toolbar switch remembers the choice in
+    // localStorage, so this is read on every keystroke and flip is instant.
     return localStorage.getItem(STORAGE_KEY) === "on";
   } catch {
     return false;
@@ -54,11 +56,25 @@ function extractContext(model: monaco.editor.ITextModel, position: monaco.Positi
   return { prefix, suffix };
 }
 
-export function registerGhostTextProvider(
-  _model: monaco.editor.ITextModel,
-): monaco.IDisposable {
+/** The completion, but only as far as the first line: Monaco paints an inline ghost on the cursor
+ *  row, and a multi-line insertText would render as a block that jumps the layout. Tab accepts the
+ *  first line; the model's reply is capped at 64 tokens and stops at a blank line anyway. */
+function firstLine(text: string): string {
+  const line = text.split("\n", 1)[0];
+  return line.trimEnd();
+}
+
+export function registerGhostTextProvider(_model: monaco.editor.ITextModel): monaco.IDisposable {
+  // One gate per registration: the old module-level timer made two editors share a debounce.
+  const gate = createGhostGate(DEBOUNCE_MS, (req: GhostRequest) => {
+    // Tauri's invoke has no AbortSignal (options only carry headers), so the abort is the GATE's
+    // epoch: a newer keystroke means this promise's answer is dropped before it is ever painted.
+    return invoke<string>("ghost_complete", { prefix: req.prefix, suffix: req.suffix, path: req.path })
+      .then((completion) => completion || null)
+      .catch(() => null);
+  });
+
   const provider: monaco.languages.InlineCompletionsProvider = {
-    // nothing to release per request: the completion is a plain string
     disposeInlineCompletions() {},
     provideInlineCompletions(model, position, _context, token) {
       if (!getEnabled()) return Promise.resolve({ items: [] });
@@ -67,28 +83,18 @@ export function registerGhostTextProvider(
       const { prefix, suffix } = extractContext(model, position);
       const path = model.uri.path;
 
-      return new Promise((resolve) => {
-        if (debounceTimer) clearTimeout(debounceTimer);
-        debounceTimer = setTimeout(() => {
-          invoke<string>("ghost_complete", { prefix, suffix, path })
-            .then((completion) => {
-              if (!completion || !completion.trim()) {
-                resolve({ items: [] });
-                return;
-              }
-              // Monaco's InlineCompletion is insertText + the range it replaces; the range is
-              // the caret, so the suggestion appends and Tab accepts it.
-              resolve({
-                items: [{
-                  insertText: completion,
-                  range: new monaco.Range(position.lineNumber, position.column, position.lineNumber, position.column),
-                }],
-              });
-            })
-            .catch(() => {
-              resolve({ items: [] });
-            });
-        }, DEBOUNCE_MS);
+      // The gate owns debounce + cancellation; Monaco's own token is the second abort path.
+      return gate.schedule({ prefix, suffix, path }).then((completion) => {
+        if (!completion || !completion.trim()) return { items: [] };
+        if (token.isCancellationRequested) return { items: [] };
+        const text = firstLine(completion);
+        if (!text) return { items: [] };
+        return {
+          items: [{
+            insertText: text,
+            range: new monaco.Range(position.lineNumber, position.column, position.lineNumber, position.column),
+          }],
+        };
       });
     },
   };
