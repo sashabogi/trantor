@@ -937,6 +937,11 @@ struct ChatSnapshot {
     /// bang-command's <bash-input> row, a /compact record, an isMeta row all vanish from
     /// display but all PROVE arrival).
     receipt_texts: Vec<String>,
+    /// The batch contained a turn-boundary system row (`turn_duration` / `stop_hook_summary`).
+    /// The status stream can freeze on `working` — a dead subscription never delivers the idle
+    /// frame (#5993, 40 minutes stuck) — so the transcript itself carries the belt: the batch
+    /// that SAYS the turn ended lets the frontend re-seed the status once, no polling.
+    turn_ended: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -951,6 +956,9 @@ struct ChatRowsPayload {
     meta: ChatMeta,
     #[serde(rename = "receiptTexts")]
     receipt_texts: Vec<String>,
+    /// True when this batch carried the turn-boundary system row (#5993) — the frontend's one
+    /// allowed moment to re-seed the pushed status without polling.
+    turn_ended: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1148,6 +1156,7 @@ where
     let mut turns: Vec<ChatTurn> = Vec::new();
     let mut results: Vec<ChatToolResult> = Vec::new();
     let mut receipt_texts: Vec<String> = Vec::new();
+    let mut turn_ended = false;
     let mut meta = ChatMeta {
         context: chat_context(None, context_window),
         ..ChatMeta::default()
@@ -1228,6 +1237,21 @@ where
                             });
                         }
                     }
+                }
+                continue;
+            }
+            // A turn's END is a fact the transcript states (#5993): the CLI records a `system`
+            // row with subtype `turn_duration`, and the stop hook writes `stop_hook_summary`,
+            // at the boundary. The pushed status stream can freeze on `working` — a dead
+            // subscription never delivers the idle frame — so the rows batch itself carries
+            // the truth and the frontend re-seeds the status ONCE per turn end. The row stays
+            // invisible: bookkeeping addressed to the machinery, never a bubble.
+            Some("system") => {
+                if matches!(
+                    v.get("subtype").and_then(|s| s.as_str()),
+                    Some("turn_duration") | Some("stop_hook_summary")
+                ) {
+                    turn_ended = true;
                 }
                 continue;
             }
@@ -1371,6 +1395,7 @@ where
         total,
         meta,
         receipt_texts,
+        turn_ended,
     }
 }
 
@@ -1392,6 +1417,7 @@ fn read_chat_snapshot(project: &str, after: usize, session_id: Option<&str>) -> 
                 total: 0,
                 meta: ChatMeta::default(),
                 receipt_texts: Vec::new(),
+                turn_ended: false,
             })
         }
     };
@@ -1508,6 +1534,7 @@ fn spawn_chat_watcher(
                             results: snap.results,
                             meta: meta.clone(),
                             receipt_texts: snap.receipt_texts,
+                            turn_ended: snap.turn_ended,
                         };
                         if window.emit("chat-rows", payload).is_err() {
                             break;
@@ -1614,6 +1641,11 @@ fn spawn_status_watcher(window: tauri::Window, project: String, stop: Arc<Atomic
             if !emit(&seeded, &pane, &mut last) {
                 return;
             }
+            // Consecutive quiet ticks whose socket query came back None. One is a doubt; three
+            // in a row is a dead subscription — the stream that froze on `working` for 40
+            // minutes (#5993) never errored, it just went silent. Break and resubscribe: the
+            // fresh pass re-seeds from one socket query on arrival.
+            let mut dead_ticks: u32 = 0;
             match herdr::subscribe_status(&pane, Duration::from_secs(15)) {
                 Ok(mut stream) => {
                   trace(format!("status: subscribed pane={pane}"));
@@ -1641,9 +1673,21 @@ fn spawn_status_watcher(window: tauri::Window, project: String, stop: Arc<Atomic
                             }
                             let st = herdr::agent_status(&pane);
                             trace(format!("status: quiet tick pane={pane} agent_status={st:?}"));
-                            if let Some(st) = st {
-                                if !emit(&st, &pane, &mut last) {
-                                    return;
+                            match st {
+                                Some(st) => {
+                                    dead_ticks = 0;
+                                    if !emit(&st, &pane, &mut last) {
+                                        return;
+                                    }
+                                }
+                                None => {
+                                    dead_ticks += 1;
+                                    if dead_ticks >= 3 {
+                                        app_trace(&format!(
+                                            "status: pane={pane} agent_status=None for {dead_ticks} quiet ticks — resubscribing"
+                                        ));
+                                        break;
+                                    }
                                 }
                             }
                         }
@@ -5129,6 +5173,41 @@ mod herdr_tests {
     }
 
     #[test]
+    fn turn_ended_flags_only_on_turn_boundary_system_rows() {
+        // The two boundary subtypes are the belt (#5993): the pushed status stream can freeze
+        // on `working`, so the batch that SAYS the turn ended must carry the flag to the
+        // frontend. The row itself stays invisible — bookkeeping, not a bubble.
+        for subtype in ["turn_duration", "stop_hook_summary"] {
+            let rows = [serde_json::json!({
+                "type": "system",
+                "subtype": subtype,
+            })
+            .to_string()];
+            let snap = decode_chat_lines_with_context_window(rows, 1, 0);
+            assert!(snap.turn_ended, "system/{subtype} must flag turn_ended");
+            assert!(snap.turns.is_empty(), "the boundary row must not render");
+        }
+
+        // Any other system row is NOT a boundary.
+        let rows = [serde_json::json!({
+            "type": "system",
+            "subtype": "compact_boundary",
+        })
+        .to_string()];
+        let snap = decode_chat_lines_with_context_window(rows, 1, 0);
+        assert!(!snap.turn_ended);
+
+        // An ordinary batch without a system row does not flag either.
+        let rows = [serde_json::json!({
+            "type": "assistant",
+            "message": { "content": [{ "type": "text", "text": "still mid-turn" }] }
+        })
+        .to_string()];
+        let snap = decode_chat_lines_with_context_window(rows, 1, 0);
+        assert!(!snap.turn_ended);
+    }
+
+    #[test]
     fn slash_command_gate_takes_commands_and_refuses_paths() {
         assert!(is_slash_command("/compact"));
         assert!(is_slash_command("/compact with trailing words"));
@@ -5875,26 +5954,39 @@ fn project_changes_sync(project: &str) -> Result<Vec<ChangeRow>, String> {
 
 /// Backend trace line into the same app-trace.log the frontend writes (#5993 status watcher).
 fn trace(line: String) {
-    let _ = app_log(line);
+    app_trace(&line);
+}
+
+/// The diagnostic trace the investigation greps (`~/.agent-bus/app-trace.log`), shared by the
+/// frontend's `app_log` command and Rust-side watchers (#5993): one line per state change,
+/// `{millis} {line}`. Fire-and-forget — a trace that cannot be written must never break the
+/// stream that noticed the problem.
+fn app_trace(line: &str) {
+    let dir = desktop_bus_dir();
+    if std::fs::create_dir_all(&dir).is_err() {
+        return;
+    }
+    let ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or_default();
+    let Ok(mut f) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(dir.join("app-trace.log"))
+    else {
+        return;
+    };
+    use std::io::Write;
+    let _ = writeln!(f, "{ms} {line}");
 }
 
 /// The frontend's diagnostic line, appended verbatim with a timestamp (#12752). Not a log for
 /// humans — a trace the investigation greps. Fire-and-forget from the caller's side.
 #[tauri::command]
 fn app_log(line: String) -> Result<(), String> {
-    let dir = desktop_bus_dir();
-    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-    let ms = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_millis())
-        .unwrap_or_default();
-    let mut f = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(dir.join("app-trace.log"))
-        .map_err(|e| e.to_string())?;
-    use std::io::Write;
-    writeln!(f, "{ms} {line}").map_err(|e| e.to_string())
+    app_trace(&line);
+    Ok(())
 }
 
 #[tauri::command]
