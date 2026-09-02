@@ -15,7 +15,7 @@
 // only the wiring — backfill once via orchestrator_chat, then chat_watch + the two events, with
 // the old poll kept as the transport when the watcher is not offered (older build, or no session
 // behind the pane yet).
-import { useCallback, useEffect, useRef, useState, type CSSProperties, type PointerEvent as RPointerEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent as RPointerEvent } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { ArrowLeft, ChevronDown, ChevronRight, PanelBottom, PanelBottomClose, PanelRight, PanelRightClose, Wrench } from "lucide-react";
@@ -23,6 +23,7 @@ import { orchestratorOf } from "../workspace/herdr";
 import { DEFAULT_TERMINAL_DEPS, TerminalPane, type TerminalDeps } from "../workspace/TerminalPane";
 import { bannerCountdown, type HandoffCountdown } from "./banner";
 import { Composer, type Provenance } from "./Composer";
+import { suggestionsFromTurn } from "./suggestions";
 import {
   clampPanel, fontScale, loadDismissedAt, loadFontStep, loadPanelSize, loadTrayOpen,
   saveDismissedAt, saveFontStep, savePanelSize, saveTrayOpen, type FontStep,
@@ -390,6 +391,34 @@ export function Chat({ project, sessionId, dock, onDock, onClose }: {
   useEffect(() => { foot.current?.scrollIntoView({ behavior: "smooth" }); }, [chat.turns.length]);
 
   const working = status === "working";
+
+  // Suggested-reply chips (#5929): derived PURELY from the last orchestrator turn's closing
+  // sentences (suggestions.ts — nothing invented, no LLM call). They are live only while that
+  // turn is still the last thing said (answered → gone), the composer is empty (typing → gone),
+  // and Esc or the × dismisses them until the next orchestrator turn recomputes the row.
+  const [composerDraft, setComposerDraft] = useState("");
+  const [chipsDismissed, setChipsDismissed] = useState(false);
+  const [activeSuggestion, setActiveSuggestion] = useState<string | null>(null);
+  const lastOrchestratorText = useMemo(() => {
+    // The orchestrator IS the transcript's assistant role — "orchestrator" is only the label.
+    const orch = [...chat.turns].reverse().find(t => t.role === "assistant");
+    return orch ? orch.blocks.filter(b => b.kind === "text").map(b => b.text).join("\n") : "";
+  }, [chat.turns]);
+  const suggestions = useMemo(
+    () => (history || working ? [] : suggestionsFromTurn(lastOrchestratorText)),
+    [history, working, lastOrchestratorText],
+  );
+  const lastSpeechTurn = [...chat.turns].reverse().find(t => t.role === "user" || t.role === "assistant");
+  const chipsVisible =
+    !history && !!target && !working && suggestions.length > 0 &&
+    lastSpeechTurn?.role === "assistant" && !composerDraft.trim() && !chipsDismissed;
+  useEffect(() => { setChipsDismissed(false); }, [lastOrchestratorText]);
+  useEffect(() => {
+    if (!chipsVisible) return;
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") setChipsDismissed(true); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [chipsVisible]);
   // #5608 — the turn's clock, started when this panel OBSERVES the flip into working. A panel
   // mounted mid-turn undercounts (elapsed-since-seen) rather than guessing a start it never saw.
   const [turnSeenAt, setTurnSeenAt] = useState<number | null>(null);
@@ -691,6 +720,33 @@ export function Chat({ project, sessionId, dock, onDock, onClose }: {
         />
       )}
 
+      {/* Suggested replies (#5929): one-click answers read from the orchestrator's closing
+          sentences. A click sends the text as a NORMAL user turn — receipts intact. */}
+      {chipsVisible && (
+        <div className="flex shrink-0 flex-wrap items-center gap-1.5 px-3 pb-1.5">
+          <span className="text-[10.5px] text-tr-muted/70">suggested</span>
+          {suggestions.map(s => (
+            <button
+              key={s.text}
+              type="button"
+              title={s.tooltip}
+              onClick={() => setActiveSuggestion(s.text)}
+              className="tr-chip hover:text-tr-text"
+            >
+              {s.text}
+            </button>
+          ))}
+          <button
+            type="button"
+            onClick={() => setChipsDismissed(true)}
+            title="hide suggestions (Esc)"
+            className="ml-1 text-[10.5px] text-tr-muted/70 hover:text-tr-muted"
+          >
+            ×
+          </button>
+        </div>
+      )}
+
       {!history && <Composer
         project={project}
         target={target}
@@ -714,6 +770,9 @@ export function Chat({ project, sessionId, dock, onDock, onClose }: {
         onSent={sync}
         onLongRunChange={setLongRun}
         onDispatch={(dial, value) => { if (dial === "model") { setPending(value); setModelSource("dispatched"); } }}
+        onDraftChange={setComposerDraft}
+        suggestion={activeSuggestion}
+        onSuggestionHandled={() => setActiveSuggestion(null)}
       />}
     </div>
   );
