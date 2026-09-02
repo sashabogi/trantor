@@ -67,7 +67,7 @@ export function mergeChanges(rows: ProjectChangeRow[]): MergedChange[] {
  *  touched anything under it — the tree's folders wear the marks of their subtree. */
 export function folderSeats(
   entries: MergedChange[],
-): Record<string, (string | null)[]> {
+) {
   const out: Record<string, (string | null)[]> = {};
   for (const e of entries) {
     const parts = e.path.split("/");
