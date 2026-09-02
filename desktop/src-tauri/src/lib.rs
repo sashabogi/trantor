@@ -4533,6 +4533,7 @@ pub fn run() {
             save_pasted_image,
             file_write_plain,
             project_changes,
+            app_log,
             create_file,
             delete_file,
             rename_file,
@@ -5841,6 +5842,25 @@ fn project_changes_sync(project: &str) -> Result<Vec<ChangeRow>, String> {
         }
     }
     Ok(rows)
+}
+
+/// The frontend's diagnostic line, appended verbatim with a timestamp (#12752). Not a log for
+/// humans — a trace the investigation greps. Fire-and-forget from the caller's side.
+#[tauri::command]
+fn app_log(line: String) -> Result<(), String> {
+    let dir = desktop_bus_dir();
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or_default();
+    let mut f = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(dir.join("app-trace.log"))
+        .map_err(|e| e.to_string())?;
+    use std::io::Write;
+    writeln!(f, "{ms} {line}").map_err(|e| e.to_string())
 }
 
 #[tauri::command]
