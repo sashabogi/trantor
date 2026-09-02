@@ -21,12 +21,12 @@
 //   * Only claim delivery once we have actually decided to surface it (peek first). Marking a message
 //     delivered and then letting the stop through would hide it from the waker too — a silent hole.
 //   * Any error, or a hub that is down -> allow the stop. Never trap a session because of us.
-import { readFileSync, writeFileSync, existsSync, unlinkSync } from "node:fs";
+import { readFileSync, writeFileSync, existsSync, unlinkSync, mkdirSync, renameSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { homedir } from "node:os";
-import { resolveProject, hostId, handoffDir } from "../lib/project.mjs";
+import { resolveProject, hostId, handoffDir, busDir } from "../lib/project.mjs";
 import { signedGet } from "./lib/api.mjs";   // signed: enforce hubs 401 unsigned reads — unsigned, T2 delivery is silently dead
 import { ledgerPaths, ensureStart, anchorCursor, writeCursor } from "./lib/inbox-ledger.mjs";
 import { readArm, clearArm, markHandedOff, appendHandoffState } from "./lib/handoff.mjs";
@@ -71,6 +71,32 @@ const OVERDUE_MS = (() => {
   return Number.isFinite(n) && n >= 0 ? n : 10 * 60 * 1000;
 })();
 
+function stalledSeenPath(session) {
+  const safe = String(session).replace(/[^A-Za-z0-9_.-]/g, "_");
+  return join(busDir(), `stop-stalled-seen-${safe}.json`);
+}
+
+function readStalledSeen(session) {
+  try {
+    const ids = JSON.parse(readFileSync(stalledSeenPath(session), "utf8"));
+    return new Set(Array.isArray(ids) ? ids.map(String) : []);
+  } catch { return new Set(); }
+}
+
+function writeStalledSeen(session, seen) {
+  const path = stalledSeenPath(session);
+  const tmp = `${path}.${process.pid}.tmp`;
+  try {
+    mkdirSync(dirname(path), { recursive: true });
+    writeFileSync(tmp, JSON.stringify([...seen]) + "\n");
+    renameSync(tmp, path);
+    return true;
+  } catch {
+    try { unlinkSync(tmp); } catch {}
+    return false;
+  }
+}
+
 async function stalledContractCheck({ session, project, instanceId }) {
   if (process.env.RELAY_STOP_CONTRACTS === "0") return allow();
   let contracts = [];
@@ -89,8 +115,19 @@ async function stalledContractCheck({ session, project, instanceId }) {
   const abandoned = contracts.filter(c => c.disposition === "abandoned");
   if (!stalled.length) return allow();
 
+  const seen = readStalledSeen(session);
+  const fresh = stalled.filter(c => !seen.has(String(c.id)));
+  if (!fresh.length) {
+    process.stderr.write(`[trantor] ${stalled.length} stalled contract(s) already surfaced for ${sanitize(session)}; allowing stop\n`);
+    return allow();
+  }
+  for (const contract of stalled) seen.add(String(contract.id));
+  // Persist before blocking: if the harness stops this process immediately after reading stdout,
+  // the next Stop must still know this exact stalled episode was already surfaced.
+  if (!writeStalledSeen(session, seen)) return allow();
+
   const mins = (ms) => (ms >= 60000 ? `${Math.round(ms / 60000)}m` : `${Math.round(ms / 1000)}s`);
-  const lines = stalled.slice(0, 6).map(c => {
+  const lines = fresh.slice(0, 6).map(c => {
     const health = c.assigneeOnline ? `online, status "${sanitize(c.assigneeStatus || "?")}"`
       : c.assigneeLastSeenMs == null ? "never seen on the bus"
       : `LAST SEEN ${mins(c.assigneeLastSeenMs)} ago`;
@@ -104,7 +141,7 @@ async function stalledContractCheck({ session, project, instanceId }) {
     : "";
 
   const reason =
-    `You dispatched ${stalled.length} contract(s) that have gone quiet, and you were about to go idle:\n` +
+    `You dispatched ${fresh.length} NEW contract(s) that have gone quiet, and you were about to go idle:\n` +
     lines + ghosts + `\n\n` +
     `Do not just wait, and do not ask the human to check. Use relay_contracts to see everything you are owed, ` +
     `relay_peers to see whether the seat is alive, and relay_send to ask it directly. If a seat is down, say so and ` +
