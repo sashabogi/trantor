@@ -2680,6 +2680,16 @@ fn b64(data: &[u8]) -> String {
 // goes dark after 5 quiet minutes and its project fell out of ACTIVE NOW while its window sat
 // right there. Same quiet≠dead trap the delivery fix hit; same cure: consult PROCESS truth.
 // Heartbeats keep the one job they are good at — "actually mid-turn right now" (the blink).
+//
+// #6163 — PROCESS truth (pgrep/lsof) only sees what runs on THIS machine, but herdr can host an
+// orchestrator pane headless on another box entirely (the netcup hub). A freshly-woken pane has
+// no heartbeat yet either — hooks fire on tool calls, and a pane that hasn't run one has none —
+// so the project rode in on the first heartbeat and vanished the moment that 90s window lapsed,
+// even though herdr's own crew-windows.txt row and its live agent.get answer both say the pane is
+// right there. So OPEN also asks herdr directly for every project with an orch row: a pane herdr
+// can still name (any agent_status, not just "working") counts as open, independent of whether
+// this machine can see its process. Each project appears once, herdr's status winning over bare
+// process truth when both are seen (herdr actually knows whether it's idle or mid-turn).
 
 /// Parse `lsof -Fn` field output (p<pid> / fcwd / n<path>) into cwd paths.
 fn lsof_cwds(out: &str) -> Vec<String> {
@@ -2700,10 +2710,57 @@ fn project_of_cwd(cwd: &str, root: &str) -> Option<String> {
     Some(first.to_string())
 }
 
-/// Projects with a live session process on THIS machine: interactive `claude` windows (cwd under
-/// the dev root) plus crew-runner seats (project dir is argv[2]; ~/.agent-bus/fleet → "fleet").
+/// A project a session is open for, plus herdr's lifecycle status when one was resolved from the
+/// orch pane ("working" | "idle" | "blocked" | "done" | "unknown"). `None` means this project's
+/// presence is process-truth only (no herdr pane answered) — the UI shows a plain open dot rather
+/// than a status word.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+struct LocalSessionRow {
+    project: String,
+    status: Option<String>,
+}
+
+/// Every project with an orch row in `crew-windows.txt`, mapped to its pane id. Last row wins per
+/// project (same rule as `orch_pane_from_rows`, which reads the SAME file for the one-project
+/// case) — a project can only ever have one live orch pane at a time.
+fn orch_projects_from_rows(raw: &str) -> Vec<(String, String)> {
+    let mut map: BTreeMap<String, String> = BTreeMap::new();
+    for l in raw.lines() {
+        let f: Vec<&str> = l.split('\t').collect();
+        if f.len() >= 4 && f[1] == "orch" && !f[3].trim().is_empty() {
+            map.insert(f[0].to_string(), f[3].trim().to_string());
+        }
+    }
+    map.into_iter().collect()
+}
+
+/// Pure merge, unit-tested: PROCESS-truth projects (no status) plus herdr-confirmed projects
+/// (status is whatever herdr's `agent.get` answered). herdr's status wins when a project has
+/// both, since it actually knows idle from mid-turn; a project process truth never saw at all
+/// still counts as open on herdr's word alone — that's the #6163 fix.
+fn merge_local_sessions(
+    process_projects: Vec<String>,
+    herdr_open: Vec<(String, String)>,
+) -> Vec<LocalSessionRow> {
+    let mut map: BTreeMap<String, Option<String>> = BTreeMap::new();
+    for p in process_projects {
+        map.entry(p).or_insert(None);
+    }
+    for (p, status) in herdr_open {
+        map.insert(p, Some(status));
+    }
+    map.into_iter()
+        .map(|(project, status)| LocalSessionRow { project, status })
+        .collect()
+}
+
+/// Projects with a live session on THIS machine or visible to herdr: interactive `claude` windows
+/// (cwd under the dev root), crew-runner seats (project dir is argv[2]; ~/.agent-bus/fleet →
+/// "fleet") — process truth, all local — PLUS any project whose orch pane herdr can still name an
+/// agent for, wherever that pane actually runs (see the module comment above for why process
+/// truth alone missed a freshly-woken, not-yet-local-heartbeat, possibly-remote pane).
 #[tauri::command]
-fn local_sessions() -> Vec<String> {
+fn local_sessions() -> Vec<LocalSessionRow> {
     let root = std::env::var("TRANTOR_DEV_ROOT")
         .unwrap_or_else(|_| format!("{}/development", std::env::var("HOME").unwrap_or_default()));
     let sh = |bin: &str, args: &[&str]| -> String {
@@ -2749,7 +2806,18 @@ fn local_sessions() -> Vec<String> {
 
     out.sort();
     out.dedup();
-    out
+
+    // herdr truth: every orch pane herdr can still resolve an agent for, regardless of where the
+    // pane's process actually lives.
+    let rows = std::fs::read_to_string(desktop_bus_dir().join("crew-windows.txt")).unwrap_or_default();
+    let mut herdr_open: Vec<(String, String)> = Vec::new();
+    for (project, pane) in orch_projects_from_rows(&rows) {
+        if let Some(status) = herdr::agent_status(&pane) {
+            herdr_open.push((project, status));
+        }
+    }
+
+    merge_local_sessions(out, herdr_open)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -5077,6 +5145,60 @@ mod herdr_tests {
         assert_eq!(
             orch_pane_from_rows(&rows, "trantor").as_deref(),
             Some("w2:new")
+        );
+    }
+
+    #[test]
+    fn orch_projects_from_rows_lists_every_project_with_an_orch_row() {
+        let rows = [
+            "pr-os\torch\t__orch__\twH:p1",
+            "pr-os\therdr\tcodex\twH:p2",
+            "trantor\torch\t__orch__\tw2:old",
+            "trantor\torch\t__orch__\tw2:new",
+        ]
+        .join("\n");
+        assert_eq!(
+            orch_projects_from_rows(&rows),
+            vec![
+                ("pr-os".to_string(), "wH:p1".to_string()),
+                // last row wins per project, same rule as orch_pane_from_rows
+                ("trantor".to_string(), "w2:new".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn local_sessions_merge_counts_a_herdr_only_pane_as_open() {
+        // #6163 — pr-os's orch pane never showed up in pgrep/lsof (a freshly-woken pane herdr
+        // still resolves an agent for, with no local process and no heartbeat yet), so process
+        // truth alone drops it entirely. herdr's own answer must still count it as open.
+        let rows = merge_local_sessions(vec![], vec![("pr-os".to_string(), "working".to_string())]);
+        assert_eq!(
+            rows,
+            vec![LocalSessionRow { project: "pr-os".to_string(), status: Some("working".to_string()) }]
+        );
+    }
+
+    #[test]
+    fn local_sessions_merge_prefers_herdr_status_over_bare_process_truth() {
+        let rows = merge_local_sessions(
+            vec!["pr-os".to_string()],
+            vec![("pr-os".to_string(), "idle".to_string())],
+        );
+        assert_eq!(
+            rows,
+            vec![LocalSessionRow { project: "pr-os".to_string(), status: Some("idle".to_string()) }]
+        );
+    }
+
+    #[test]
+    fn local_sessions_merge_keeps_a_process_only_project_with_no_status() {
+        // A project process truth sees but herdr never answered for (no orch row, or herdr
+        // unreachable) still counts as open — just without a status word to show.
+        let rows = merge_local_sessions(vec!["crebral-health".to_string()], vec![]);
+        assert_eq!(
+            rows,
+            vec![LocalSessionRow { project: "crebral-health".to_string(), status: None }]
         );
     }
 

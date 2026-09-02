@@ -444,11 +444,22 @@ export async function attachmentInfo(path: string): Promise<AttachmentInfo | nul
   } catch { return null; }
 }
 
-/** Projects with a live session PROCESS on this machine — interactive claude windows + crew
- * seats. This, not heartbeat freshness, is what "a terminal window is open" means; heartbeats
- * ride hook fires, so an idle-but-open session goes dark on the hub after 5 quiet minutes. */
-export async function localSessions(): Promise<string[]> {
-  try { return await invoke<string[]>("local_sessions"); } catch { return []; }
+/** A project with a live session, plus herdr's lifecycle status when its orch pane answered one
+ * ("working" | "idle" | "blocked" | "done" | "unknown"). `status` is null when this project's
+ * presence is process-truth only (interactive claude window or crew seat pgrep/lsof found, but
+ * no herdr pane confirmed a status for it). */
+export type LocalSession = { project: string; status: string | null };
+
+/** Projects with a live session — interactive claude windows + crew seats found by PROCESS
+ * truth on this machine, PLUS any project whose orch pane herdr can still name an agent for,
+ * wherever that pane's process actually runs (#6163: a freshly-woken pane herdr already sees
+ * has no local process to pgrep and no heartbeat yet — hooks fire on tool calls, and a pane that
+ * hasn't run one has none — so process truth alone dropped it the moment its one heartbeat aged
+ * out of the 90s work window). This, not heartbeat freshness, is what "a terminal window is
+ * open" means; heartbeats ride hook fires, so an idle-but-open session goes dark on the hub
+ * after 5 quiet minutes. */
+export async function localSessions(): Promise<LocalSession[]> {
+  try { return await invoke<LocalSession[]>("local_sessions"); } catch { return []; }
 }
 
 export type AppUpdate = {
