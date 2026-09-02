@@ -3451,6 +3451,112 @@ fn save_pasted_image(data_base64: String, kind: String) -> Result<String, String
     Ok(path.to_string_lossy().to_string())
 }
 
+/// #6104 — dirty drafts survive an app exit. The editor's store is in-memory and dies with the
+/// process, so the view persists every dirty draft here — one JSON file per document under
+/// ~/.agent-bus/drafts/<project>/ — and reads it back the next time the file is opened. Quitting
+/// is not a way to lose work.
+fn drafts_dir(project: &str) -> Result<std::path::PathBuf, String> {
+    // The project name comes from the hub; it must never walk the filesystem.
+    if project.is_empty() || project.contains('/') || project.contains('\\') || project.contains("..") {
+        return Err("unsafe project name".into());
+    }
+    Ok(desktop_bus_dir().join("drafts").join(project))
+}
+
+/// One file per document: the md5 of the tab KEY (scope:path — the same identity the editor's
+/// store uses) names it, and the JSON inside carries the path again so a read verifies itself.
+fn draft_file_name(seat: Option<&str>, path: &str) -> String {
+    let key = format!("{}:{path}", seat.unwrap_or("project"));
+    format!("{:x}.json", md5::compute(key.as_bytes()))
+}
+
+#[derive(Debug, Serialize, serde::Deserialize)]
+struct DraftEntry {
+    path: String,
+    seat: Option<String>,
+    text: String,
+    ts: u64,
+}
+
+#[tauri::command]
+fn draft_persist(project: String, path: String, seat: Option<String>, text: String) -> Result<(), String> {
+    let dir = drafts_dir(&project)?;
+    std::fs::create_dir_all(&dir).map_err(|e| format!("drafts dir: {e}"))?;
+    let ts = SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0);
+    let entry = DraftEntry { path, text, seat, ts };
+    let name = draft_file_name(entry.seat.as_deref(), &entry.path);
+    serde_json::to_string(&entry)
+        .map_err(|e| format!("draft entry: {e}"))
+        .and_then(|json| {
+            std::fs::write(dir.join(name), json).map_err(|e| format!("draft write: {e}"))
+        })
+}
+
+/// The draft persisted at the last exit, or "" when there is none. A stored entry whose path no
+/// longer matches (hash collision, hand-edited file) reads as none — the read verifies itself.
+#[tauri::command]
+fn draft_load(project: String, path: String, seat: Option<String>) -> Result<String, String> {
+    let file = drafts_dir(&project)?.join(draft_file_name(seat.as_deref(), &path));
+    let Ok(raw) = std::fs::read_to_string(file) else {
+        return Ok(String::new());
+    };
+    let Ok(entry) = serde_json::from_str::<DraftEntry>(&raw) else {
+        return Ok(String::new());
+    };
+    if entry.path != path || entry.seat.as_deref() != seat.as_deref() {
+        return Ok(String::new());
+    }
+    Ok(entry.text)
+}
+
+/// Saving (or undoing back to the disk) retires the persisted draft. Absent is not an error.
+#[tauri::command]
+fn draft_forget(project: String, path: String, seat: Option<String>) -> Result<(), String> {
+    let file = drafts_dir(&project)?.join(draft_file_name(seat.as_deref(), &path));
+    match std::fs::remove_file(file) {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(format!("draft forget: {e}")),
+    }
+}
+
+#[cfg(test)]
+mod draft_tests {
+    use super::{draft_file_name, drafts_dir};
+
+    #[test]
+    fn draft_names_are_stable_and_scope_aware() {
+        // The same (scope, path) always lands on the same file…
+        assert_eq!(
+            draft_file_name(None, "/repo/src/a.ts"),
+            draft_file_name(None, "/repo/src/a.ts")
+        );
+        // …and the same path under two scopes is two drafts — the editor's own key anatomy.
+        assert_ne!(
+            draft_file_name(None, "/repo/src/a.ts"),
+            draft_file_name(Some("qwen"), "/repo/src/a.ts")
+        );
+        assert_ne!(
+            draft_file_name(None, "/repo/src/a.ts"),
+            draft_file_name(None, "/repo/src/b.ts")
+        );
+    }
+
+    #[test]
+    fn drafts_dir_refuses_a_project_name_that_could_walk_the_filesystem() {
+        assert!(drafts_dir("").is_err());
+        assert!(drafts_dir("../escape").is_err());
+        assert!(drafts_dir("a/b").is_err());
+        assert!(drafts_dir("a\\b").is_err());
+        // A plain project name resolves under the drafts root.
+        let ok = drafts_dir("trantor").expect("plain name is safe");
+        assert!(ok.ends_with("drafts/trantor") || ok.to_string_lossy().ends_with("drafts\\trantor"));
+    }
+}
+
 /// The attachment chip's facts off the disk (#6070): the file's size — a chip always shows name +
 /// size — plus a `data:` URI thumbnail when the file is an image the webview can paint and small
 /// enough to inline. Same read-and-inline shape `project_icon` uses, and the CSP already allows
@@ -4748,6 +4854,9 @@ pub fn run() {
             orch_restorables,
             save_pasted_image,
             attachment_info,
+            draft_persist,
+            draft_load,
+            draft_forget,
             file_write_plain,
             project_changes,
             app_log,

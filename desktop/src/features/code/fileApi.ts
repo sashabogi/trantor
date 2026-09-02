@@ -111,3 +111,23 @@ export function safePath(path: string): boolean {
 export async function searchFiles(project: string, query: string, seat?: string): Promise<string[]> {
   return JSON.parse(await invoke<string>("search_files", { project, query, seat: seat ?? null }));
 }
+
+/** #6104 — a dirty draft, persisted under ~/.agent-bus/drafts/<project>/ so an app exit can never
+ *  lose it. The write is fire-and-forget in the view (a persistence failure must not break the
+ *  edit it records), so none of these ever throw into a render. */
+export async function draftPersist(project: string, path: string, seat: string | undefined, text: string): Promise<void> {
+  try { await invoke("draft_persist", { project, path, seat: seat ?? null, text }); } catch { /* the edit outlives a failed persist */ }
+}
+
+/** The draft the last exit left for this file, or null when there is none. */
+export async function draftLoad(project: string, path: string, seat: string | undefined): Promise<string | null> {
+  try {
+    const text = await invoke<string>("draft_load", { project, path, seat: seat ?? null });
+    return text === "" ? null : text;
+  } catch { return null; }
+}
+
+/** Retire a persisted draft once the work is saved (or undone back to the disk). */
+export async function draftForget(project: string, path: string, seat: string | undefined): Promise<void> {
+  try { await invoke("draft_forget", { project, path, seat: seat ?? null }); } catch { /* absent is the goal */ }
+}

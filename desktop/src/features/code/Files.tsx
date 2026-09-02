@@ -22,7 +22,7 @@ import { useEffect, useRef, useState } from "react";
 import { X, Pin } from "lucide-react";
 import type { HubClient } from "../../shared/api/client";
 import { ProjectHeader, type Lens } from "../project/ProjectHeader";
-import { fileStat, readFile, readFileAtHead, seatState, writePlain, type FileBody } from "./fileApi";
+import { draftForget, draftLoad, draftPersist, fileStat, readFile, readFileAtHead, seatState, writePlain, type FileBody } from "./fileApi";
 import { CodeView } from "./CodeView";
 import { ChangesView } from "./ChangesView";
 import { decideReload, type FileStat } from "./liveReload";
@@ -134,18 +134,48 @@ export function Files({ project, lens, onLens, path, seat }: {
     return () => { alive = false; clearInterval(iv); };
   }, [seat]);
 
+  // #6104 — a dirty draft persists AS IT IS TYPED (debounced), so an app exit never loses it;
+  // whatever is still pending flushes on unmount / project switch. The timers hold their own
+  // fire closures, so a flush is one loop, not a second copy of the payload.
+  const persistTimers = useRef(new Map<string, { id: number; fire: () => void }>());
+  const schedulePersist = (key: string, scope: string, path: string, text: string) => {
+    const timers = persistTimers.current;
+    const existing = timers.get(key);
+    if (existing) window.clearTimeout(existing.id);
+    const seat = scope === "project" ? undefined : scope;
+    const fire = () => { timers.delete(key); void draftPersist(project, path, seat, text); };
+    timers.set(key, { id: window.setTimeout(fire, 600), fire });
+  };
+  const dropPendingPersist = (key: string) => {
+    const existing = persistTimers.current.get(key);
+    if (existing) { window.clearTimeout(existing.id); persistTimers.current.delete(key); }
+  };
+  useEffect(() => () => {
+    for (const pending of persistTimers.current.values()) {
+      window.clearTimeout(pending.id);
+      pending.fire();
+    }
+  }, [project]);
+
   const reload = (key: string) => {
     const tab = tabs.find(t => t.key === key);
     if (!tab) return;
     const tabSeat = tab.scope === "project" ? undefined : tab.scope;
     readFile(project, tab.path, tabSeat)
-      .then(b => {
+      .then(async b => {
         setBody(b);
         setDisk(project, key, b.text);
         // Only a LOADED document has a draft to resume; a fresh store entry says "" and that
         // "" must never win over the disk text (the empty-editor regression, third time).
         const resumed = keptDraft(project, key);
-        const kept = resumed?.draft;
+        let kept: string | undefined = resumed?.draft;
+        // Nothing in memory = the app restarted. A draft the last exit PERSISTED for this file
+        // (#6104) wins over the disk text the way a kept draft does; it carries no baseline, so
+        // tabGuard raises no conflict over it — the disk signature becomes the new baseline below.
+        if (!resumed) {
+          const persisted = await draftLoad(project, tab.path, tabSeat);
+          if (persisted !== null) kept = persisted;
+        }
         const verdict = externalMutationOnLoad({
           draft: kept ?? null,
           baseSignature: resumed?.baseSignature ?? null,
@@ -334,6 +364,16 @@ export function Files({ project, lens, onLens, path, seat }: {
       storeSetDraft(project, activeKey, v);
       setTabs(ts => markDirty(ts, activeKey, v !== (body?.text ?? "")));
       trace(`setDraft ${activeKey} len=${v.length} caller=editor-onChange`);
+      // #6104: the draft rides to disk as it is typed. A draft typed back to EXACTLY the disk
+      // text is retired instead — persisting it would restore a no-op draft at the next start.
+      if (activeTab && activeTab.key === activeKey) {
+        if (v === (body?.text ?? "")) {
+          dropPendingPersist(activeKey);
+          void draftForget(project, activeTab.path, activeTab.scope === "project" ? undefined : activeTab.scope);
+        } else {
+          schedulePersist(activeKey, activeTab.scope, activeTab.path, v);
+        }
+      }
     }
   };
 
@@ -348,9 +388,13 @@ export function Files({ project, lens, onLens, path, seat }: {
     setSaving(true); setError(null);
     const key = activeTab.key;
     const tabSeat = activeTab.scope === "project" ? undefined : activeTab.scope;
+    // A save retires the persisted draft: drop any pending write-behind first so a debounce
+    // scheduled a moment ago cannot re-persist the very text this save commits.
+    dropPendingPersist(key);
     writePlain(project, activeTab.path, tabSeat, draft)
       .then(() => {
         setSaved(true);
+        void draftForget(project, activeTab.path, tabSeat);
         // Our own save moved the disk: the draft is now the disk, and it is the new baseline.
         statRef.current = null;
         setBaseSignature(project, key, diskSignature(draft));

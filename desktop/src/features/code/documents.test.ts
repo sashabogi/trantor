@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 import {
   clearLoaded,
   dropDocument,
+  keptDraft,
   markLoaded,
   projectDocuments,
   setBaseSignature,
@@ -12,6 +13,7 @@ import {
   setDraft,
   setActiveKey,
   setTabs,
+  storedDraft,
   canStashDraft,
 } from "./documents";
 import { markDirty, openInTabs, tabKey, togglePin } from "./codeTabs";
@@ -105,6 +107,48 @@ describe("keptDraft", () => {
     setDraft("p", "k1", "typed");
     markLoaded("p", "k1");
     expect(keptDraft("p", "k1")?.draft).toBe("typed");
+  });
+});
+
+describe("project switch (#6104)", () => {
+  it("work in one project survives a switch away and back; projects never see each other", () => {
+    // Project A: a pinned tab with a dirty draft — the operator's mid-edit state.
+    const A = "switch-a";
+    const aOpen = openInTabs([], null, "project", "src/a.ts", "code");
+    setTabs(A, togglePin(aOpen.tabs, tabKey("project", "src/a.ts")));
+    setActiveKey(A, tabKey("project", "src/a.ts"));
+    const aKey = tabKey("project", "src/a.ts");
+    setDisk(A, aKey, "const a = 1;");
+    setBaseSignature(A, aKey, "sig-a");
+    markLoaded(A, aKey);
+    setDraft(A, aKey, "const a = 2; // edited");
+    setTabs(A, markDirty(projectDocuments(A).tabs, aKey, true));
+
+    // The operator switches to project B and edits there too.
+    const B = "switch-b";
+    const bOpen = openInTabs([], null, "project", "src/b.ts", "code");
+    setTabs(B, bOpen.tabs);
+    setActiveKey(B, bOpen.activeKey);
+    const bKey = tabKey("project", "src/b.ts");
+    setDraft(B, bKey, "b's draft");
+
+    // Back to A: everything is exactly where it was left — tabs, activation, draft, dirty.
+    const docsA = projectDocuments(A);
+    expect(docsA.tabs.map(t => t.key)).toEqual([aKey]);
+    expect(docsA.tabs[0].pinned).toBe(true);
+    expect(docsA.tabs[0].dirty).toBe(true);
+    expect(docsA.activeKey).toBe(aKey);
+    expect(docsA.docs.get(aKey)?.draft).toBe("const a = 2; // edited");
+    expect(keptDraft(A, aKey)?.draft).toBe("const a = 2; // edited");
+    // …and B's state is its own.
+    const docsB = projectDocuments(B);
+    expect(docsB.docs.get(bKey)?.draft).toBe("b's draft");
+    expect(docsB.docs.has(aKey)).toBe(false);
+
+    // The switch never leaked in either direction: the same PATH in two projects is two
+    // documents — storedDraft answers per project.
+    expect(storedDraft(A, null, "src/b.ts")).toBeNull();
+    expect(storedDraft(B, null, "src/a.ts")).toBeNull();
   });
 });
 
