@@ -21,6 +21,11 @@ const W = mkdtempSync(join(tmpdir(), "trantor-new-"));
 const DEV = join(W, "dev");
 mkdirSync(DEV, { recursive: true });
 mkdirSync(join(W, ".agent-bus"), { recursive: true });
+writeFileSync(join(W, ".agent-bus", "autonomy.json"), JSON.stringify({
+  version: 1,
+  defaults: { harness: "bypass" },
+  projects: { inherited: { harness: "bypass" } },
+}));
 const PORT = 47877, HUB = `http://127.0.0.1:${PORT}`;
 
 const hub = spawn("node", [join(ROOT, "hub.mjs")], {
@@ -55,12 +60,15 @@ const a = runNew(["genesis-a", "--brief", briefFile, "--json"]);
 ok("init: exit 0", a.status === 0, `status ${a.status}: ${a.stderr.slice(-200)}`);
 let aJson = null;
 try { aJson = JSON.parse(a.stdout); } catch {}
-ok("init: --json shape", !!aJson && aJson.name === "genesis-a" && aJson.branch === "main" && aJson.dir === join(DEV, "genesis-a") && typeof aJson.card === "number", JSON.stringify(aJson));
+ok("init: --json shape", !!aJson && aJson.name === "genesis-a" && aJson.branch === "main" && aJson.dir === join(DEV, "genesis-a") && Number.isInteger(aJson.card), JSON.stringify(aJson));
 ok("init: hub in json is the test hub", !!aJson && aJson.hub === HUB);
 ok("init: CLAUDE.md carries the brief verbatim", existsSync(aJson.dir) && readFileSync(join(aJson.dir, "CLAUDE.md"), "utf8").includes(BRIEF));
 ok("init: CLAUDE.md carries the conventions block", readFileSync(join(aJson.dir, "CLAUDE.md"), "utf8").includes("## Trantor conventions"));
 ok("init: auto-card hook installed", readFileSync(join(aJson.dir, ".git", "hooks", "post-commit"), "utf8").includes("trantor auto-card"));
 ok("init: git branch is main", aJson?.branch === "main");
+const autonomy = JSON.parse(readFileSync(join(W, ".agent-bus", "autonomy.json"), "utf8"));
+ok("init: fresh project pins its harness dial to prompt", autonomy.projects?.["genesis-a"]?.harness === "prompt");
+ok("init: another project's bypass dial stays untouched", autonomy.projects?.inherited?.harness === "bypass");
 
 const tasksA = await (await fetch(`${HUB}/tasks?project=genesis-a`)).json();
 const cardA = (tasksA.tasks ?? []).find(t => t.title === "genesis: genesis-a");
