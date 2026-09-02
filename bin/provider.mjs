@@ -70,7 +70,14 @@ function listSeats() {
 }
 
 function addProvider(name, opts) {
-  if (!name) { console.error("usage: trantor provider add <name> [--key sk-…] [--plan api] [--label <bus-name>] [--base-url <url> [--models m1,m2]]"); process.exit(1); }
+  // A flag left in the name position (`provider add --help`) is a usage question, not a provider
+  // name (#5998): the old path minted a '--help' provider into profile.json and a __HELP_API_KEY
+  // line into .env, then announced "Seat ready." The literal 'help' is guarded too — it is never
+  // a provider name. Both die HERE, before .env, profile.json or opencode.json are touched.
+  if (!name || name.startsWith("--") || name === "help") {
+    console.error("usage: trantor provider add <name> [--key sk-…] [--plan api] [--label <bus-name>] [--base-url <url> [--models m1,m2]]");
+    process.exit(1);
+  }
   const provider = name.toLowerCase();
   const label = (opts.label || provider).toLowerCase().replace(/[^a-z0-9-]/g, "-");
   const plan = (opts.plan || "api").toLowerCase();
@@ -117,7 +124,11 @@ function addProvider(name, opts) {
 }
 
 function removeProvider(name) {
-  if (!name) { console.error("usage: trantor provider remove <name>"); process.exit(1); }
+  // Same guard as add (#5998): a flag-like name is a usage question, not a provider.
+  if (!name || name.startsWith("--") || name === "help") {
+    console.error("usage: trantor provider remove <name>");
+    process.exit(1);
+  }
   const FILE = join(H, ".agent-bus", "profile.json");
   const prof = read(FILE, { providers: {} });
   if (prof.providers && prof.providers[name.toLowerCase()]) {
