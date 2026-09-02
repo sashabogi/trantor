@@ -1,5 +1,4 @@
 export const PLAIN_WAKE_KICKOFF = "Recap from memory and the board, then continue the project.";
-export const GENESIS_RECAP_LINE = "Recap this brief and the board, then make a plan before starting work.";
 
 export function slugProjectName(raw: string): string {
   return raw
@@ -15,7 +14,13 @@ export function projectTarget(devRoot: string, name: string): string {
   return name ? `${root}/${name}` : root;
 }
 
-export function genesisKickoff(brief: string): string {
-  if (!brief) return GENESIS_RECAP_LINE;
-  return `${brief}${brief.endsWith("\n") ? "" : "\n"}${GENESIS_RECAP_LINE}`;
+export function genesisKickoff(brief: string, droppedFrom?: string | null): string {
+  const normalizedBrief = brief.replace(/\r\n?|\n/g, "\n");
+  const lineCount = normalizedBrief
+    ? normalizedBrief.split("\n").length - Number(normalizedBrief.endsWith("\n"))
+    : 0;
+  const filename = droppedFrom?.replace(/\s+/g, " ").trim().slice(0, 120);
+  const source = filename ? `dropped from ${filename}` : "entered in the Genesis sheet";
+  const lines = lineCount === 1 ? "1 line" : `${lineCount} lines`;
+  return `Your brief is in CLAUDE.md (${lines}, ${source}). Read it, recap it in three sentences, and propose a plan.`;
 }
