@@ -5,16 +5,67 @@
 // turns its own quickSuggestions on. Documents are synced explicitly by lspDocuments.ts (#5857):
 // the editor's models are VANILLA monaco, a different registry than the monaco-vscode-api the
 // client's own sync listens to, so didOpen/didChange/completion ride this module's rows.
-import { MonacoLanguageClient } from "monaco-languageclient";
-import { MonacoVscodeApiWrapper } from "monaco-languageclient/vscodeApiWrapper";
+//
+// The monaco/vscode/tauri boundaries are INJECTED through `setLspClientDeps` (the same service-
+// seam pattern setDocClientRows uses) so lspClient.test.ts drives startLsp over a faithful
+// in-memory bus instead of module-mocking @tauri or monaco. Production never calls the setter:
+// the DEFAULT deps lazy-load the real browser runtime (lspRuntime.ts, which imports monaco) only
+// when a client actually starts — so this file imports cleanly in a node test that never boots
+// monaco.
 import type { MessageTransports } from "vscode-languageclient/browser.js";
-import { invoke } from "@tauri-apps/api/core";
-import * as vscode from "vscode";
 import { isReadyToken } from "./lspProtocol";
 import { decideLspStart } from "./lspStart";
-import { TauriMessageReader, TauriMessageWriter, trace, traceKey } from "./lspTransport";
-import { attachOpenDocuments, setDocClientRows, type DocClientRow } from "./lspDocuments";
-import "./monacoSetup";
+import { TauriMessageReader, TauriMessageWriter, trace, traceKey, type LspBus } from "./lspTransport";
+import { attachOpenDocuments, setDocClientRows, type DocClientRow, type DocNotifyParams, type CompletionRequest, type LspCompletionResponse } from "./lspDocuments";
+
+// ── injected seams ─────────────────────────────────────────────────────────────────────────────
+
+/** The started-server report lsp_start resolves to. */
+export type LspStarted = { id: number; scopeRoot: string; workspaceRoot: string; initialized: boolean };
+
+/** The slice of a monaco language client this module drives (start/stop + the doc sync's wire
+ *  methods). MonacoLanguageClient satisfies it structurally; tests supply a faithful fake. */
+export type LspClientLike = {
+  start(): Promise<void>;
+  stop(): Promise<void>;
+  sendNotification(method: string, params: DocNotifyParams): Promise<void>;
+  sendRequest(method: string, params: CompletionRequest): Promise<LspCompletionResponse>;
+};
+
+/** Every external thing startLsp reaches. The default deps load the real browser runtime lazily;
+ *  tests replace them with an in-memory bus + fake monaco through setLspClientDeps. */
+export type LspClientDeps = {
+  startServer(args: { project: string; scope: string | null; language: string; path: string }): Promise<LspStarted>;
+  stopServer(id: number): Promise<void>;
+  stopProjectServer(project: string): Promise<void>;
+  /** The transport's wire bus (lsp_send + subscriptions); omit to use the transport's real tauri
+   *  bus — a test that injects monaco fakes but no bus still drives a REAL wire. */
+  bus?: LspBus;
+  /** vscode.Uri.file — a { toString() } uri is all the clientOptions need. */
+  fileUri(path: string): { toString(): string };
+  /** Start the monaco-vscode-api once (ensureServices). */
+  ensureServices(): Promise<void>;
+  /** Build the language client over the message transports. */
+  makeClient(opts: { name: string; id: string; workspaceRoot: string; project: string; transports: MessageTransports }): LspClientLike;
+  /** How long a client.start() may take before the server is stopped and start rejects. The
+   *  DEFAULT is 30s (real hub); a test shrinks it so a hung start is exercised in milliseconds. */
+  startTimeoutMs?: number;
+};
+
+let injectedDeps: LspClientDeps | null = null;
+let realDepsPromise: Promise<LspClientDeps> | null = null;
+
+/** Test seam only — production keeps the lazy real runtime. Same pattern as setDocClientRows. */
+export function setLspClientDeps(next: LspClientDeps | null): void {
+  injectedDeps = next;
+  realDepsPromise = null;
+}
+
+async function loadDeps(): Promise<LspClientDeps> {
+  if (injectedDeps) return injectedDeps;
+  if (!realDepsPromise) realDepsPromise = import("./lspRuntime").then((m) => m.realLspDeps());
+  return realDepsPromise;
+}
 
 // ── services + client registry ───────────────────────────────────────────────────────────────
 
@@ -22,20 +73,12 @@ import "./monacoSetup";
 let servicesPromise: Promise<void> | null = null;
 
 function ensureServices(): Promise<void> {
-  if (!servicesPromise) {
-    servicesPromise = (async () => {
-      const apiWrapper = new MonacoVscodeApiWrapper({
-        $type: "classic",
-        viewsConfig: { $type: "EditorService" },
-      });
-      await apiWrapper.start();
-    })();
-  }
+  if (!servicesPromise) servicesPromise = loadDeps().then((d) => d.ensureServices());
   return servicesPromise;
 }
 
 type ClientKey = string;
-type ClientEntry = { id: number; scopeRoot: string; workspaceRoot: string; client: MonacoLanguageClient };
+type ClientEntry = { id: number; scopeRoot: string; workspaceRoot: string; client: LspClientLike };
 const clients = new Map<ClientKey, ClientEntry>();
 // Starts already in flight, by key (#5857 bounce): a remount that races a pending client.start()
 // used to build a SECOND client for the same live server and re-initialize it — the map only
@@ -53,16 +96,16 @@ const notify = () => {
   attachOpenDocuments();
 };
 
-/** Rejects after 30s so a hung client.start() cannot pin pendingStarts forever (#5857). Stops
- *  the server first: its handshake state is unrecoverable once the client gave up, and the
- *  respawn rule in lspStart.ts only fires for an initialized:true report. */
-function lspStartTimeout(key: ClientKey, id: number): Promise<never> {
+/** Rejects after the start window (default 30s) so a hung client.start() cannot pin pendingStarts
+ *  forever (#5857). Stops the server first: its handshake state is unrecoverable once the client
+ *  gave up, and the respawn rule in lspStart.ts only fires for an initialized:true report. */
+function lspStartTimeout(key: ClientKey, id: number, stopServer: (id: number) => Promise<void>, ms: number): Promise<never> {
   return new Promise<never>((_, reject) => {
     setTimeout(() => {
-      trace(`startLsp ${key} client start TIMED OUT after 30s — stopping server id=${id}`);
-      invoke("lsp_stop", { id }).catch(() => {});
-      reject(new Error(`lsp start timed out after 30s (${key})`));
-    }, 30_000);
+      trace(`startLsp ${key} client start TIMED OUT after ${ms}ms — stopping server id=${id}`);
+      void stopServer(id).catch(() => {});
+      reject(new Error(`lsp start timed out after ${ms}ms (${key})`));
+    }, ms);
   });
 }
 
@@ -128,10 +171,8 @@ export async function startLsp(
   language: string,
   path: string,
 ): Promise<LspStartResult> {
-  let started = await invoke<{ id: number; scopeRoot: string; workspaceRoot: string; initialized: boolean }>(
-    "lsp_start",
-    { project, scope, language, path },
-  );
+  const d = await loadDeps();
+  let started = await d.startServer({ project, scope, language, path });
   const key = `${started.workspaceRoot}\u0000${language}`;
   const existing = clients.get(key);
   if (existing) {
@@ -155,16 +196,13 @@ export async function startLsp(
     const decision = decideLspStart(started, clients.has(key));
     if (decision.action === "respawn") {
       trace(`startLsp ${traceKey(key)} respawn: initialized server had no client — stopping ${decision.stopId}`);
-      await invoke("lsp_stop", { id: decision.stopId }).catch(() => {});
+      await d.stopServer(decision.stopId).catch(() => {});
       indexed.delete(key);
       phases.delete(key);
-      started = await invoke<{ id: number; scopeRoot: string; workspaceRoot: string; initialized: boolean }>(
-        "lsp_start",
-        { project, scope, language, path },
-      );
+      started = await d.startServer({ project, scope, language, path });
       trace(`startLsp ${traceKey(key)} respawned as id=${started.id}`);
     }
-    const reader = new TauriMessageReader(started.id, e => {
+    const reader = new TauriMessageReader(started.id, (e) => {
       if (e.kind === "begin" && e.title) {
         phases.set(key, e.title);
         trace(`lsp ${traceKey(key)} phase begin: ${e.title}`);
@@ -177,21 +215,17 @@ export async function startLsp(
         }
         phases.delete(key);
       }
-    });
+    }, d.bus);
     const transports: MessageTransports = {
       reader,
-      writer: new TauriMessageWriter(started.id),
+      writer: new TauriMessageWriter(started.id, d.bus),
     };
-    const client = new MonacoLanguageClient({
+    const client = d.makeClient({
       name: `lsp:${language}`,
       id: key,
-      clientOptions: {
-        documentSelector: [language],
-        // rootUri must be the CRATE root (the nearest manifest), not the scope root or null, or
-        // rust-analyzer loads no project — lsp_start resolved it, never recomputed here.
-        workspaceFolder: { uri: vscode.Uri.file(started.workspaceRoot), name: project, index: 0 },
-      },
-      messageTransports: transports,
+      workspaceRoot: started.workspaceRoot,
+      project,
+      transports,
     });
     // The subscription is an IPC of its own; the first write must not race it (#5857, 0.3.113).
     await reader.ready;
@@ -200,7 +234,7 @@ export async function startLsp(
       // never settles (app-trace.log: "awaiting an in-flight start" 44s after the first start).
       // On timeout, stop the server so the retry respawns a fresh process, and reject so the
       // remount can retry.
-      await Promise.race([client.start(), lspStartTimeout(key, started.id)]);
+      await Promise.race([client.start(), lspStartTimeout(key, started.id, (id) => d.stopServer(id), d.startTimeoutMs ?? 30_000)]);
     } catch (e) {
       // A start that fails AFTER the wire handshake must say so — the 0.3.111 silence (initialize
       // answered, then nothing, #5857) had no line here, so a hung/failed start was invisible.
@@ -227,8 +261,9 @@ export async function startLsp(
 
 /** Stop every server for a project — the editor calls this on project switch. */
 export async function stopLspProject(project: string): Promise<void> {
+  const d = await loadDeps();
   await detachLspClients();
-  await invoke("lsp_stop_project", { project }).catch(() => {});
+  await d.stopProjectServer(project).catch(() => {});
   indexed.clear();
   phases.clear();
   notify();

@@ -1,86 +1,96 @@
 // startLsp's side of the #5857 handshake race: the client's first write (initialize) must not
 // reach `lsp_send` before the reader's Tauri subscriptions are confirmed registered — Tauri
 // drops an event with no subscriber, so a reply Rust emits in that window is lost and the start
-// hangs forever (rust-1.trace: initialize out, result in 7ms, then silence). The listen mock
-// holds the registration gate open until the test releases it; the fake MonacoLanguageClient
-// drives the real transport like the real one does (attach jsonrpc's callback, write initialize).
-import { beforeEach, describe, expect, it, vi } from "vitest";
+// hangs forever (rust-1.trace: initialize out, result in 7ms, then silence). lspClient reaches
+// tauri/monaco ONLY through its injected deps (setLspClientDeps — the same seam setDocClientRows
+// uses), so the test drives the real startLsp over a faithful in-memory bus and fake client:
+// no module mocking, and no monaco import (which cannot load under node).
+import { beforeEach, describe, expect, it } from "vitest";
+import type { RequestMessage } from "vscode-jsonrpc";
+import { setLspClientDeps, startLsp, type LspClientDeps, type LspClientLike } from "./lspClient";
+import type { LspBus } from "./lspTransport";
+type Handler = (ev: { payload: string | null }) => void;
 
-const bus = vi.hoisted(() => {
-  const handlers = new Map<string, Array<(ev: { payload: unknown }) => void>>();
-  return {
-    handlers,
-    written: [] as Array<Record<string, unknown>>,
-    stopped: [] as number[],
-    gate: null as Promise<void> | null,
-    wsRoot: "/proj/crate",
-    emit(event: string, payload: unknown) {
-      for (const fn of handlers.get(event) ?? []) fn({ payload });
+function makeDeps() {
+  const handlers = new Map<string, Handler[]>();
+  const written: Array<{ method?: string; id?: number | string }> = [];
+  const stopped: number[] = [];
+  let gate: Promise<void> | null = null;
+  let wsRoot = "/proj/crate";
+  let hangStart = false;
+  const bus: LspBus = {
+    async invoke<T>(cmd: "lsp_send", args: { id: number; message: string }): Promise<T> {
+      if (cmd === "lsp_send" && args?.message) {
+        // SAFETY: the writer serializes jsonrpc Message envelopes; parsing yields method/id-bearing
+        // records — the wire format asserted below, never an arbitrary shape.
+        written.push(JSON.parse(args.message) as { method?: string; id?: number | string });
+      }
+      // SAFETY: the bus contract types invoke<T>; the fake resolves to undefined for every command
+      // the writer sends — asserting the generic return is the seam's own contract, nothing more.
+      return undefined as T;
     },
-    reset() {
-      this.handlers.clear();
-      this.written.length = 0;
-      this.stopped.length = 0;
-      this.gate = null;
-      this.wsRoot = "/proj/crate";
+    async listen<T extends string | null>(event: `lsp-message:${number}` | `lsp-closed:${number}`, handler: (ev: { payload: T }) => void) {
+      // SAFETY: the transport subscribes with payload types string (messages) and string|null
+      // (closed); the map stores handlers under that container and fires them with it.
+      handlers.set(event, [...(handlers.get(event) ?? []), handler as Handler]);
+      if (gate) await gate;
+      return () => {};
     },
   };
-});
-
-vi.mock("@tauri-apps/api/event", () => ({
-  listen: (event: string, handler: (ev: { payload: unknown }) => void) => {
-    const list = bus.handlers.get(event) ?? [];
-    list.push(handler);
-    bus.handlers.set(event, list);
-    const registered = Promise.resolve(() => {});
-    // A slow registration IPC: the backend must not treat the listener as live until this resolves.
-    return bus.gate ? bus.gate.then(() => registered) : registered;
-  },
-}));
-
-vi.mock("@tauri-apps/api/core", () => ({
-  invoke: (cmd: string, args?: Record<string, unknown>) => {
-    if (cmd === "lsp_start") {
-      return Promise.resolve({ id: 1, scopeRoot: "/proj", workspaceRoot: bus.wsRoot, initialized: false });
-    }
-    if (cmd === "lsp_send" && typeof args?.message === "string") bus.written.push(JSON.parse(args.message));
-    if (cmd === "lsp_stop") bus.stopped.push(args?.id as number);
-    return Promise.resolve();
-  },
-}));
-
-type FakeTransports = {
-  reader: { listen(cb: (msg: unknown) => void): { dispose(): void } };
-  writer: { write(msg: unknown): Promise<void> };
-};
-
-vi.mock("monaco-languageclient", () => ({
-  MonacoLanguageClient: class {
-    constructor(private readonly opts: { messageTransports: FakeTransports }) {}
-    async start() {
-      this.opts.messageTransports.reader.listen(() => {});
-      await this.opts.messageTransports.writer.write({ jsonrpc: "2.0", id: 1, method: "initialize", params: {} });
-    }
-    async stop() {}
-  },
-}));
-vi.mock("monaco-languageclient/vscodeApiWrapper", () => ({
-  MonacoVscodeApiWrapper: class { async start() {} },
-}));
-vi.mock("vscode", () => ({ Uri: { file: (p: string) => ({ toString: () => p }) } }));
-vi.mock("./monacoSetup", () => ({}));
-vi.mock("./lspDocuments", () => ({ attachOpenDocuments: () => {}, setDocClientRows: () => {} }));
-
-import { startLsp } from "./lspClient";
+  const makeClient = (opts: Parameters<LspClientDeps["makeClient"]>[0]): LspClientLike => {
+    // Mirrors what the REAL MonacoLanguageClient does on start: attach the jsonrpc callback to
+    // the reader, then send initialize through the writer — the exact race under test.
+    return {
+      async start() {
+        if (hangStart) return new Promise<void>(() => {});   // the hang the timeout breaks
+        opts.transports.reader.listen(() => {});
+        // SAFETY: initialize is the standard jsonrpc RequestMessage shape the real client sends —
+        // jsonrpc/id/method/params — and the writer serializes whatever it receives verbatim.
+        const initialize: RequestMessage = { jsonrpc: "2.0", id: 1, method: "initialize", params: {} };
+        await opts.transports.writer.write(initialize);
+      },
+      async stop() {},
+      async sendNotification() {},
+      async sendRequest() {
+        return { items: [] };
+      },
+    };
+  };
+  const deps: LspClientDeps = {
+    async startServer() {
+      return { id: 1, scopeRoot: "/proj", workspaceRoot: wsRoot, initialized: false };
+    },
+    async stopServer(id: number) {
+      stopped.push(id);
+    },
+    async stopProjectServer() {},
+    bus,
+    fileUri: (path) => ({ toString: () => path }),
+    async ensureServices() {},
+    makeClient,
+  };
+  return {
+    deps,
+    bus,
+    handlers,
+    written,
+    stopped,
+    setGate: (g: Promise<void> | null) => { gate = g; },
+    setWsRoot: (w: string) => { wsRoot = w; },
+    setHangStart: (h: boolean) => { hangStart = h; },
+  };
+}
 
 const tick = () => new Promise(r => setTimeout(r, 0));
 
 describe("startLsp (#5857)", () => {
-  beforeEach(() => bus.reset());
+  beforeEach(() => setLspClientDeps(null));   // reset to the real (lazy) runtime between tests
 
   it("holds the first write until the reader's Tauri subscriptions are registered", async () => {
+    const bus = makeDeps();
     let release!: () => void;
-    bus.gate = new Promise<void>(r => { release = r; });
+    bus.setGate(new Promise<void>(r => { release = r; }));
+    setLspClientDeps(bus.deps);
 
     const started = startLsp("proj", null, "rust", "/proj/crate/src/main.rs");
     await tick();
@@ -95,9 +105,24 @@ describe("startLsp (#5857)", () => {
   });
 
   it("sends initialize immediately once the subscriptions are registered", async () => {
-    bus.wsRoot = "/proj/crate2"; // a fresh (workspaceRoot, language) key — no client reuse
+    const bus = makeDeps();
+    bus.setWsRoot("/proj/crate2");   // a fresh (workspaceRoot, language) key — no client reuse
+    setLspClientDeps(bus.deps);
+
     const result = await startLsp("proj", null, "rust", "/proj/crate2/src/main.rs");
     expect(result.id).toBe(1);
     expect(bus.written[0]?.method).toBe("initialize");
+  });
+
+  it("stops the server and rejects when client.start() hangs past the start window", async () => {
+    const bus = makeDeps();
+    bus.setWsRoot("/proj/crate3");   // fresh key — the previous clients stay cached
+    bus.setHangStart(true);          // the fake client's start() never resolves
+    bus.deps.startTimeoutMs = 20;
+    setLspClientDeps(bus.deps);
+
+    await expect(startLsp("proj", null, "rust", "/proj/crate3/src/main.rs"))
+      .rejects.toThrow(/timed out after 20ms/);
+    expect(bus.stopped).toEqual([1]);   // the hung server was stopped for a fresh respawn
   });
 });
