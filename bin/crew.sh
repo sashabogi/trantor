@@ -733,7 +733,8 @@ echo "[crew] hub for $PROJ: $HUB_URL (baked into every seat; CREW_HUB=<url> over
 SCROOGE="$BUS_DIR/engine/bin/scrooge"
 [ -f "$SCROOGE" ] || SCROOGE="$(command -v scrooge 2>/dev/null || echo scrooge)"
 
-# resolve_model <agent> <provider> <task> <diff> -> echoes a runner-ready model id, or empty (→ CLI default).
+# resolve_model <agent> <provider> <task> <diff> -> echoes a provider-qualified model id.
+# A provider seat must never fall through to opencode's unrelated global default.
 resolve_model() {
   local agent="$1" provider="$2" task="$3" diff="$4" cands="" out=""
   cands="$(opencode models "$provider" 2>/dev/null | tr '\n' ' ')"
@@ -742,10 +743,16 @@ resolve_model() {
   else
     out="$(python3 "$SCROOGE" route --provider "$provider" -t "$task" -d "$diff" --json 2>/dev/null)"
   fi
-  [ -n "$out" ] || { echo "[crew] live model selection failed for $agent:$provider — CLI default" >&2; return 0; }
-  printf '%s' "$out" | python3 -c 'import json,sys
+  [ -n "$out" ] || { echo "[crew] live model selection failed for $agent:$provider — refusing opencode global default" >&2; return 1; }
+  out="$(printf '%s' "$out" | python3 -c 'import json,sys
 try: print(json.load(sys.stdin).get("qualified") or "")
-except Exception: pass' 2>/dev/null
+except Exception: pass' 2>/dev/null)"
+  [ -n "$out" ] || { echo "[crew] router returned no model for $agent:$provider — refusing opencode global default" >&2; return 1; }
+  [ "${out%%/*}" = "$provider" ] || {
+    echo "[crew] router selected $out outside $provider — refusing cross-provider fallback" >&2
+    return 1
+  }
+  printf '%s' "$out"
 }
 
 epoch_ms() { python3 -c 'import time;print(int(time.time()*1000))'; }
@@ -760,13 +767,21 @@ resolve_spec() {
   # into the launcher string. AGENT is set above and DIR is fixed, so this is the earliest safe point.
   reap_seat
   FIELD=""; [ "$SPEC" != "$AGENT" ] && FIELD="${SPEC#*:}"
-  [ "$AGENT" = "openrouter" ] && [ -z "$FIELD" ] && FIELD="openrouter"
+  # Bare native seats use their own CLI defaults. Bare opencode-hosted seats MUST name their
+  # provider implicitly: glm is the one non-obvious alias; every discovered/BYOM seat's label is
+  # its provider id. Leaving FIELD empty is what handed qwen/glm to opencode's global DeepSeek.
+  if [ -z "$FIELD" ]; then
+    case "$AGENT" in
+      codex|kimi|claude|gemini|dsh|opencode) ;;
+      glm) FIELD="zai-coding-plan" ;;
+      *) FIELD="$AGENT" ;;
+    esac
+  fi
   if [ -n "$FIELD" ]; then
     case "$FIELD" in
       */*) MODEL="$FIELD" ;;
-      *)   MODEL="$(resolve_model "$AGENT" "$FIELD" "$TASK" "$DIFF")"
-           if [ -n "$MODEL" ]; then echo "  → $AGENT: live model $MODEL ($FIELD · $TASK/$DIFF)"
-           else echo "  → $AGENT: '$FIELD' live selection unavailable — CLI default"; fi ;;
+      *)   MODEL="$(resolve_model "$AGENT" "$FIELD" "$TASK" "$DIFF")" || exit 1
+           echo "  → $AGENT: live model $MODEL ($FIELD · $TASK/$DIFF)" ;;
     esac
   fi
 }

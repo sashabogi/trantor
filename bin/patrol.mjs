@@ -43,6 +43,11 @@ function rowMatchesRunner(row, runner) {
   return !rp || rp === runnerProject(runner);
 }
 
+function seatProvider(agent) {
+  if (["codex", "kimi", "claude", "gemini", "dsh", "opencode"].includes(agent)) return null;
+  return agent === "glm" ? "zai-coding-plan" : agent;
+}
+
 function sortedProjects(projects) {
   return [...projects].sort((a, b) => displayProject(a).localeCompare(displayProject(b)));
 }
@@ -76,6 +81,7 @@ export function buildPatrolReport(rawInventory = {}, reaped = [], { bus = busDir
   const workspaceIds = new Set(workspaces.map(w => String(w?.id || "")).filter(Boolean));
   const orphans = [];
   const ambiguous = [];
+  const warnings = [];
 
   for (const runner of runners) {
     if (isBusInternalRunner(runner, bus)) continue;
@@ -84,6 +90,18 @@ export function buildPatrolReport(rawInventory = {}, reaped = [], { bus = busDir
       ambiguous.push({ type: "runner-without-project", pid: runner.pid, agent: runner.agent, dir: runner.dir });
     } else if (!rows.some(row => rowMatchesRunner(row, runner))) {
       orphans.push({ type: "live-runner-without-row", project: p, agent: runner.agent, pid: runner.pid, dir: runner.dir });
+    }
+    const expectedProvider = seatProvider(String(runner?.agent || ""));
+    const actualProvider = String(runner?.model || "").split("/")[0];
+    if (expectedProvider && actualProvider && actualProvider !== expectedProvider) {
+      warnings.push({
+        type: "seat-model-provider-mismatch",
+        project: p,
+        agent: runner.agent,
+        model: runner.model,
+        expectedProvider,
+        pid: runner.pid,
+      });
     }
   }
 
@@ -124,7 +142,7 @@ export function buildPatrolReport(rawInventory = {}, reaped = [], { bus = busDir
     };
   }
 
-  return { projects: out, orphans, ambiguous, reaped };
+  return { projects: out, orphans, ambiguous, warnings, reaped };
 }
 
 function oldEnough(path, now, maxAgeMs) {
@@ -196,6 +214,10 @@ export function formatHuman(report) {
   for (const item of report.orphans) lines.push(`  - ${item.type}: ${displayProject(item.project)} ${item.agent || item.title || item.handle || item.id || ""}`.trimEnd());
   lines.push(`ambiguous: ${report.ambiguous.length}`);
   for (const item of report.ambiguous) lines.push(`  - ${item.type}: ${item.agent || item.title || item.dir || item.id || ""}`.trimEnd());
+  lines.push(`warnings: ${report.warnings?.length || 0}`);
+  for (const item of report.warnings || []) {
+    lines.push(`  - ${item.type}: ${displayProject(item.project)} ${item.agent} runs ${item.model}; expected ${item.expectedProvider}/*`);
+  }
   lines.push(`reaped: ${report.reaped.length}`);
   for (const item of report.reaped) lines.push(`  - ${item.type}: ${item.path || item.output || ""}`.trimEnd());
   return `${lines.join("\n")}\n`;
