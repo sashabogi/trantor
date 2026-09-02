@@ -16,6 +16,7 @@ import { resolveProject, resolveHub, withEnvFiles, hostId } from "../lib/project
 import { loadOrCreate } from "../lib/identity.mjs";
 import { signedHeaders } from "../lib/signed-fetch.mjs";
 import { ensureEnrolled } from "../lib/enroll.mjs";
+import { redactKeys } from "../lib/redact.mjs";
 import { capWake, capBcast, pickLessons, composePrompt } from "./crew-payload.mjs";
 
 const AGENT = process.argv[2];
@@ -127,7 +128,7 @@ if (!enrolment.ok && enrolment.reason !== "hub-unreachable") {
 }
 process.on("uncaughtException", (e) => { console.log(`\x1b[31m[runner] UNCAUGHT: ${e?.stack || e}\x1b[0m`); });
 process.on("unhandledRejection", (e) => { console.log(`\x1b[31m[runner] UNHANDLED REJECTION: ${e?.stack || e}\x1b[0m`); });
-const log = (s) => console.log(`\x1b[38;5;43m[runner]\x1b[0m ${s}`);
+const log = (s) => console.log(`\x1b[38;5;43m[runner]\x1b[0m ${redactKeys(String(s))}`);
 const LOGDIR = join(homedir(), ".agent-bus", "logs");
 try { mkdirSync(LOGDIR, { recursive: true }); } catch {}
 let TURN = 0;
@@ -377,9 +378,10 @@ async function reportFailure(exit, trigger, undelivered = 0) {
   // The count of messages this seat is HOLDING is the operator-actionable half of a failure: a
   // crashed pulse costs nothing, a crashed turn sitting on three escalations is someone waiting.
   const held = undelivered ? ` · holding ${undelivered} undelivered message${undelivered > 1 ? "s" : ""} (will retry)` : "";
-  const text = down
+  // #5869: the broadcast quotes failure context; keys never ride the bus.
+  const text = redactKeys(down
     ? `🛑 ${SESSION} DOWN — ${consecFails} consecutive failures (${reason}, exit ${exit})${hint}${held}`
-    : `⚠️ ${SESSION} turn FAILED (${trigger}, exit ${exit} · ${reason})${hint}${held}`;
+    : `⚠️ ${SESSION} turn FAILED (${trigger}, exit ${exit} · ${reason})${hint}${held}`);
   // Announce a CHANGE of state, never the continuation of one. The registered status above already
   // carries "down: exhausted · N fails" for anyone who looks, which is state and costs nobody a
   // turn; the broadcast is the event, and an unchanged state is not an event.
@@ -410,6 +412,7 @@ async function reportFailure(exit, trigger, undelivered = 0) {
 // So: whoever sent the message that woke this seat gets told DIRECTLY what became of it. Direct
 // messages wake; that is the whole difference. Kept short, like every other bus line.
 async function notifyAssigners(pairs, text) {
+  text = redactKeys(text);   // #5869: the "asked" excerpt quotes the wake message — keys stay off the bus
   const seen = new Set();
   for (const { from: f, id } of pairs) {
     // `hub:*` senders are the hub's own pseudo-ids (hub:duty, the overseer), not sessions: nothing
@@ -470,7 +473,13 @@ function runTurn(prompt, isFirst, trigger = "kickoff") {
   // `crashed` and nobody knew to swap it. sid seats already fold stdout into the ERRF stream via
   // `tee /dev/stderr`; the rest now tee straight into ERRF. A real pipeline (not a process
   // substitution) so bash waits for tee to flush before we read the file back.
-  const inner = cli.sid ? `${cmd} | tee /dev/stderr` : `${cmd} | tee -a ${ERRF}`;
+  // #5869: redaction rides IN the pipeline — lib/redact.mjs is a tee replacement that echoes
+  // stdin verbatim to the live window and appends only REDACTED bytes to ERRF, so a CLI that
+  // echoes its environment never parks a provider key in a file every seat can read. The tee
+  // topology is load-bearing (#5481): stdout+stderr must still BOTH land in ERRF, and the sid
+  // path still folds stdout in via /dev/stderr → the --tee2 hop below.
+  const SCRUB = `node ${join(import.meta.dirname, "..", "lib", "redact.mjs")}`;
+  const inner = cli.sid ? `${cmd} | tee /dev/stderr` : `${cmd} | ${SCRUB} --tee ${ERRF}`;
   // #5684: runTurn is spawnSync, so the runner cannot watch its own turn — a DETACHED watchdog
   // does. Armed by a stamp file, disarmed when the turn ends (stamp removed below); a turn past
   // the window with no ERRF growth earns ONE direct stall report to the foreman, never a kill.
@@ -482,7 +491,7 @@ function runTurn(prompt, isFirst, trigger = "kickoff") {
       { detached: true, stdio: "ignore" });
     wd.unref();
   } catch {}
-  const r = spawnSync("/bin/bash", ["-c", `set -o pipefail; { ${inner} ; } 2> >(tee -a ${ERRF} >&2)`], {
+  const r = spawnSync("/bin/bash", ["-c", `set -o pipefail; { ${inner} ; } 2> >(${SCRUB} --tee2 ${ERRF})`], {
     cwd: TURN_DIR, encoding: "utf8", stdio: cli.sid ? ["ignore", "pipe", "inherit"] : "inherit",
     env: { ...process.env, RELAY_URL: HUB, RELAY_AGENT: AGENT, RELAY_PROJECT: PROJ,
       // A RUNNER-MANAGED SEAT MUST NEVER HAND ITSELF A BATON.
@@ -499,6 +508,10 @@ function runTurn(prompt, isFirst, trigger = "kickoff") {
     maxBuffer: 16 * 1024 * 1024,
   });
   try { unlinkSync(STAMPF); } catch {}   // turn over — disarm the watchdog
+  // #5869: scrub AT REST, synchronously, before anything reads the file back. The stderr hop is
+  // a process substitution bash does not wait for, so this pass also catches its tail — the
+  // auth classifier and the empty-output check below must judge REDACTED text and a settled file.
+  try { writeFileSync(ERRF, redactKeys(readFileSync(ERRF, "utf8"))); } catch {}
   try { lastErrText = readFileSync(ERRF, "utf8").slice(-4000); } catch { lastErrText = ""; }
   if (cli.sid && r.stdout) { const m = r.stdout.match(cli.sid); if (m) sid = m[1]; }
   const realExit = r.status;
