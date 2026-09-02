@@ -22,22 +22,38 @@ import "./monacoSetup";
 // ── transport ────────────────────────────────────────────────────────────────────────────────
 
 /** The `$/progress` notification shape, narrowed to what we read. */
-type ProgressProbe = { method?: string; params?: { token?: string | number; value?: { kind?: string } } };
+type ProgressProbe = {
+  method?: string;
+  params?: { token?: string | number; value?: { kind?: string; title?: string } };
+};
 
-/** rust-analyzer reports its analysis as `$/progress`; the "ready" end is the LAST phase. 1.94
- *  names it "rustAnalyzer/cachePriming" (older versions had "rustAnalyzer/Indexing"), so match
- *  either token, never just any end — the quicker Fetching/Roots Scanned phases end first. */
-function isIndexingEnd(msg: ProgressProbe): boolean {
-  if (msg.method !== "$/progress") return false;
+type ProgressEvent = { kind: string; title: string | null; token: string };
+
+/** The "ready" token: rust-analyzer 1.94 ends with "rustAnalyzer/cachePriming" (older versions
+ *  had "rustAnalyzer/Indexing"). Fetching/Roots Scanned/proc-macros end first and are NOT ready. */
+function isReadyToken(token: string | number | undefined): boolean {
+  const t = token == null ? "" : String(token);
+  return /index|priming/i.test(t);
+}
+
+/** Extract the progress event if this is a `$/progress` notification, else null. */
+function progressEvent(msg: ProgressProbe): ProgressEvent | null {
+  if (msg.method !== "$/progress") return null;
   const params = msg.params;
-  if (!params || params.value?.kind !== "end") return false;
-  const token = params.token == null ? "" : String(params.token);
-  return /index|priming/i.test(token);
+  if (!params) return null;
+  return {
+    kind: params.value?.kind ?? "",
+    title: params.value?.title ?? null,
+    token: params.token == null ? "" : String(params.token),
+  };
 }
 
 /** reader: `lsp-message:<id>` events → JSON-RPC messages. */
 class TauriMessageReader extends AbstractMessageReader {
-  constructor(private readonly id: number, private readonly onProgressEnd?: () => void) {
+  constructor(
+    private readonly id: number,
+    private readonly onProgress?: (e: ProgressEvent) => void,
+  ) {
     super();
   }
 
@@ -60,7 +76,10 @@ class TauriMessageReader extends AbstractMessageReader {
       } catch {
         return;
       }
-      if (this.onProgressEnd && isIndexingEnd(raw)) this.onProgressEnd();
+      if (this.onProgress) {
+        const e = progressEvent(raw);
+        if (e) this.onProgress(e);
+      }
       const msg: Message = raw;
       callback(msg);
     }).then(fn => { if (disposed) fn(); else unlistens.push(fn); }).catch(() => {});
@@ -119,12 +138,15 @@ function ensureServices(): Promise<void> {
 type ClientKey = string;
 type ClientEntry = { id: number; scopeRoot: string; client: MonacoLanguageClient };
 const clients = new Map<ClientKey, ClientEntry>();
+// Both survive a lens unmount: the Rust server outlives the lens, so its indexed/phase state does
+// too — a remount re-attaches to the same server and reads the same "ready".
 const indexed = new Set<ClientKey>();
+const phases = new Map<ClientKey, string>();
 
 const listeners = new Set<() => void>();
 const notify = () => { for (const fn of listeners) fn(); };
 
-/** Subscribe to client start/stop/indexing — the editor flips quickSuggestions on these edges. */
+/** Subscribe to client start/stop/indexing/phase — the editor flips quickSuggestions on these. */
 export function onLspChange(fn: () => void): () => void {
   listeners.add(fn);
   return () => { listeners.delete(fn); };
@@ -138,9 +160,16 @@ export function isLspLive(language: string): boolean {
   return false;
 }
 
-/** Whether a live client for `language` has NOT yet sent its indexing `$/progress` end — the
- *  "indexing…" half of the status line. Only rust has that phase; other servers are "ready" once
- *  the handshake returns. */
+/** The current analysis phase title (e.g. "cachePriming"), or null once ready. */
+export function lspPhase(language: string): string | null {
+  for (const [key, phase] of phases) {
+    if (key.endsWith(`\u0000${language}`)) return phase;
+  }
+  return null;
+}
+
+/** Whether a live client for `language` has NOT yet sent its ready `$/progress` end. Only rust
+ *  has the long load phase; other servers are "ready" once the handshake returns. */
 export function isLspIndexing(language: string): boolean {
   if (language !== "rust") return false;
   for (const key of clients.keys()) {
@@ -170,10 +199,16 @@ export async function startLsp(
   if (existing) return { id: existing.id, scopeRoot: existing.scopeRoot, indexing: isLspIndexing(language) };
 
   await ensureServices();
-  const reader = new TauriMessageReader(started.id, () => {
-    if (!indexed.has(key)) {
-      indexed.add(key);
+  const reader = new TauriMessageReader(started.id, e => {
+    if (e.kind === "begin" && e.title) {
+      phases.set(key, e.title);
       notify();
+    } else if (e.kind === "end" && isReadyToken(e.token)) {
+      if (!indexed.has(key)) {
+        indexed.add(key);
+        notify();
+      }
+      phases.delete(key);
     }
   });
   const transports: MessageTransports = {
@@ -197,14 +232,22 @@ export async function startLsp(
   return { id: started.id, scopeRoot: started.scopeRoot, indexing: isLspIndexing(language) };
 }
 
-/** Stop every client and its server — the Files unmount cleanup. */
-export async function stopAllLsp(): Promise<void> {
+/** Detach the Monaco clients on lens unmount. The Rust servers OUTLIVE the lens, so this stops the
+ *  clients only — a remount re-attaches to the SAME server id instead of cold-spawning. */
+export async function detachLspClients(): Promise<void> {
   const entries = [...clients.entries()];
   clients.clear();
-  indexed.clear();
-  for (const [, { id, client }] of entries) {
+  for (const [, { client }] of entries) {
     await client.stop().catch(() => {});
-    await invoke("lsp_stop", { id }).catch(() => {});
   }
+  notify();
+}
+
+/** Stop every server for a project — the editor calls this on project switch. */
+export async function stopLspProject(project: string): Promise<void> {
+  await detachLspClients();
+  await invoke("lsp_stop_project", { project }).catch(() => {});
+  indexed.clear();
+  phases.clear();
   notify();
 }

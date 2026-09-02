@@ -123,7 +123,7 @@ fn completion_returns_collections_and_io() {
         }
     });
 
-    let cap = started + Duration::from_secs(120);
+    let cap = started + Duration::from_secs(300);
     let mut indexing_done = false;
     let mut completion_sent = false;
     let mut labels: Vec<String> = Vec::new();

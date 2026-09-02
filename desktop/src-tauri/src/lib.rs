@@ -4500,6 +4500,7 @@ pub fn run() {
             lsp::lsp_start,
             lsp::lsp_send,
             lsp::lsp_stop,
+            lsp::lsp_stop_project,
             autonomy_get,
             autonomy_set,
             duty_start,

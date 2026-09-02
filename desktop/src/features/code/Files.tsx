@@ -28,7 +28,7 @@ import { ChangesView } from "./ChangesView";
 import { decideReload, type FileStat } from "./liveReload";
 import { closeTab, markDirty, markExternalMutation, openInTabs, togglePin, type CodeTab } from "./codeTabs";
 import { diskSignature, externalMutationOnLoad } from "./tabGuard";
-import { isLspIndexing, isLspLive, onLspChange, startLsp, stopAllLsp } from "./lspClient";
+import { detachLspClients, isLspIndexing, isLspLive, lspPhase, onLspChange, startLsp, stopLspProject } from "./lspClient";
 import { lspLanguageFor, lspServerName } from "./lspLanguage";
 import { listen } from "@tauri-apps/api/event";
 
@@ -206,38 +206,60 @@ export function Files({ project, lens, onLens, path, seat }: {
   }, [project, activeTab?.key]);
 
   // Language server: one client per (workspace root, language), shared across tabs, started the
-  // first time a served file mounts. The honest status line is set here, never a fake "ready".
+  // first time a served file mounts. The honest status line names the running phase, never a fake
+  // "ready". Servers OUTLIVE this lens — they are stopped on project switch / idle / app exit.
   const activeLanguage = activePath ? lspLanguageFor(activePath) : null;
+  const lspName = activeLanguage ? lspServerName(activeLanguage) : "";
+
+  // Derive the status line from the shared client state; called after start and on every change.
+  const updateStatus = () => {
+    if (!activeLanguage) { setLspNote(null); return; }
+    if (!isLspLive(activeLanguage)) { setLspNote(null); return; }
+    if (isLspIndexing(activeLanguage)) {
+      const phase = lspPhase(activeLanguage);
+      setLspNote(phase ? `${lspName}: ${phase}` : `${lspName}…`);
+    } else {
+      setLspNote(`${lspName} ready`);
+    }
+  };
+
   useEffect(() => {
     if (!activeLanguage || !activePath) { setLspNote(null); setLspRoot(null); return; }
     let alive = true;
     const scope = activeScope === "project" ? null : activeScope;
-    const name = lspServerName(activeLanguage);
     setLspNote(null);
     setLspRoot(null);
     startLsp(project, scope, activeLanguage, activePath)
-      .then(({ scopeRoot, indexing }) => {
+      .then(({ scopeRoot }) => {
         if (!alive) return;
         setLspRoot(scopeRoot);
-        setLspNote(indexing ? `${name} indexing…` : `${name} ready`);
+        updateStatus();
       })
       .catch(e => { if (alive) setLspNote(String(e)); });
     return () => { alive = false; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [project, activeLanguage, activeScope, activePath]);
 
-  // "ready" is the handshake; rust-analyzer is still indexing until its indexing $/progress end.
-  // When that arrives the client notifies, and this flips the status line to the honest "ready".
+  // The phase flips (begin → "cachePriming", end → ready) notify the client; re-derive the status.
   useEffect(() => {
     if (!activeLanguage) return;
-    return onLspChange(() => {
-      if (!isLspLive(activeLanguage) || isLspIndexing(activeLanguage)) return;
-      setLspNote(`${lspServerName(activeLanguage)} ready`);
-    });
+    return onLspChange(updateStatus);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeLanguage]);
 
-  // Every server this lens started dies with the lens — the Files unmount is the stop edge.
-  useEffect(() => () => { void stopAllLsp(); }, []);
+  // Servers OUTLIVE the lens: on unmount only DETACH the Monaco clients. The Rust server stays so
+  // a remount re-attaches to the same id instead of cold-spawning (the 0.3.101 broken-pipe bug).
+  useEffect(() => () => { void detachLspClients(); }, []);
+
+  // Project switch stops the OLD project's servers.
+  const prevProjectRef = useRef<string | null>(null);
+  useEffect(() => {
+    const prev = prevProjectRef.current;
+    if (prev && prev !== project) {
+      void stopLspProject(prev);
+    }
+    prevProjectRef.current = project;
+  }, [project]);
 
   const setDraft = (v: string) => {
     setDraftState(v);
