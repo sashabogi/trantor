@@ -12,6 +12,8 @@ use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, Command, Stdio};
+use serde_json::Value;
+use std::time::UNIX_EPOCH;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -342,6 +344,8 @@ fn spawn_server(
 
     // Reader: stdout → LSP frames → `lsp-message:<id>` events. Dies when the pipe closes.
     let event_app = app.clone();
+    let language = language.to_string();
+    let log_language = language.clone();
     let stderr_reason = first_stderr.clone();
     std::thread::spawn(move || {
         let mut decoder = LspDecoder::new();
@@ -353,6 +357,7 @@ fn spawn_server(
                 Ok(n) => {
                     for body in decoder.push(&chunk[..n]) {
                         let text = String::from_utf8_lossy(&body).to_string();
+                        trace_wire(id, &language, "in", &text);
                         let _ = event_app.emit(&format!("lsp-message:{id}"), text);
                     }
                 }
@@ -371,7 +376,7 @@ fn spawn_server(
         let first = first_stderr.clone();
         let log_path = crate::desktop_bus_dir()
             .join("lsp")
-            .join(format!("{language}-{id}.log"));
+            .join(format!("{log_language}-{id}.log"));
         std::thread::spawn(move || {
             if let Some(dir) = log_path.parent() {
                 let _ = std::fs::create_dir_all(dir);
@@ -507,6 +512,7 @@ pub fn lsp_send(id: u64, message: String) -> Result<(), String> {
             }
         }
     }
+    trace_wire(id, &server.language, "out", &message);
     server
         .stdin
         .write_all(&frame(message.as_bytes()))
@@ -941,5 +947,35 @@ mod initialized_tests {
         assert_eq!(started.id, id);
         assert!(!started.initialized);
         stop_server(id, "fresh test end");
+    }
+}
+
+/// Append one wire-trace line for a server: direction, method/id tag, first 300 chars. The
+/// diagnostic record for the re-initialize investigation (#12752): every JSON-RPC message both
+/// ways, one file per server — ~/.agent-bus/lsp/<language>-<id>.trace.
+fn trace_wire(id: u64, language: &str, direction: &str, text: &str) {
+    let (kind, tag) = match serde_json::from_str::<serde_json::Value>(text) {
+        Ok(v) => {
+            let method = v.get("method").and_then(Value::as_str).unwrap_or("?").to_string();
+            match v.get("id") {
+                Some(i) => ("req".to_string(), format!("{method}#{i}")),
+                None => ("notif".to_string(), method),
+            }
+        }
+        Err(_) => ("raw".to_string(), String::new()),
+    };
+    let first: String = text.chars().take(300).collect();
+    let ms = std::time::SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or_default();
+    let dir = crate::desktop_bus_dir().join("lsp");
+    let _ = std::fs::create_dir_all(&dir);
+    if let Ok(mut f) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(dir.join(format!("{language}-{id}.trace")))
+    {
+        let _ = writeln!(f, "{ms} {direction} {kind} {tag} {first}");
     }
 }

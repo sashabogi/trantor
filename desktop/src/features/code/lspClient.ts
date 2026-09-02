@@ -5,6 +5,11 @@
 // diagnostics and suggestions, and the editor turns its own quickSuggestions on.
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
+
+/** The diagnostic firehose (#12752): one line per state change, appended app-side. */
+function trace(line: string): void {
+  invoke("app_log", { line }).catch(() => {});
+}
 import {
   AbstractMessageReader,
   AbstractMessageWriter,
@@ -111,7 +116,7 @@ function ensureServices(): Promise<void> {
 }
 
 type ClientKey = string;
-type ClientEntry = { id: number; scopeRoot: string; client: MonacoLanguageClient };
+type ClientEntry = { id: number; scopeRoot: string; workspaceRoot: string; client: MonacoLanguageClient };
 const clients = new Map<ClientKey, ClientEntry>();
 // Starts already in flight, by key (#5857 bounce): a remount that races a pending client.start()
 // used to build a SECOND client for the same live server and re-initialize it — the map only
@@ -131,34 +136,42 @@ export function onLspChange(fn: () => void): () => void {
   return () => { listeners.delete(fn); };
 }
 
-/** Whether a client is currently live for a language (any root). */
-export function isLspLive(language: string): boolean {
+/** Whether a client is currently live for a language. With a workspaceRoot, keyed EXACTLY by
+ *  (workspaceRoot, language) (#12752): the project server's "ready" must not answer for the
+ *  seat-worktree server of the same language, which is a different process still loading. */
+export function isLspLive(language: string, workspaceRoot?: string): boolean {
   for (const key of clients.keys()) {
-    if (key.endsWith(`\u0000${language}`)) return true;
+    if (keyMatches(key, language, workspaceRoot)) return true;
   }
   return false;
 }
 
-/** The current analysis phase title (e.g. "cachePriming"), or null once ready. */
-export function lspPhase(language: string): string | null {
+/** The current analysis phase title (e.g. "cachePriming"), or null once ready. Scoped exactly
+ *  like isLspLive when a workspaceRoot is given. */
+export function lspPhase(language: string, workspaceRoot?: string): string | null {
   for (const [key, phase] of phases) {
-    if (key.endsWith(`\u0000${language}`)) return phase;
+    if (keyMatches(key, language, workspaceRoot)) return phase;
   }
   return null;
 }
 
-/** Whether a live client for `language` has NOT yet sent its ready `$/progress` end. Only rust
- *  has the long load phase; other servers are "ready" once the handshake returns. */
-export function isLspIndexing(language: string): boolean {
+/** Whether a live client for the scoped key has NOT yet sent its ready `$/progress` end. Only
+ *  rust has the long load phase; other servers are "ready" once the handshake returns. */
+export function isLspIndexing(language: string, workspaceRoot?: string): boolean {
   if (language !== "rust") return false;
   for (const key of clients.keys()) {
-    if (key.endsWith(`\u0000rust`) && !indexed.has(key)) return true;
+    if (keyMatches(key, language, workspaceRoot) && !indexed.has(key)) return true;
   }
   return false;
 }
 
-/** The resolved scope root (for the model URI) plus the id the editor keys later calls by. */
-export type LspStartResult = { id: number; scopeRoot: string; indexing: boolean };
+function keyMatches(key: ClientKey, language: string, workspaceRoot?: string): boolean {
+  return workspaceRoot ? key === `${workspaceRoot}\u0000${language}` : key.endsWith(`\u0000${language}`);
+}
+
+/** The resolved scope root (for the model URI), the crate root the client keys by, plus the id
+ *  the editor keys later calls by. */
+export type LspStartResult = { id: number; scopeRoot: string; workspaceRoot: string; indexing: boolean };
 
 /** Start (or return) the client for (project, scope, language, path). One per (workspace root,
  *  language) — rust-analyzer keys its project on the crate, so two crates in one checkout get two
@@ -175,19 +188,27 @@ export async function startLsp(
   );
   const key = `${started.workspaceRoot}\u0000${language}`;
   const existing = clients.get(key);
-  if (existing) return { id: existing.id, scopeRoot: existing.scopeRoot, indexing: isLspIndexing(language) };
+  if (existing) {
+    trace(`startLsp ${key} reuse id=${existing.id} (client already registered)`);
+    return { id: existing.id, scopeRoot: existing.scopeRoot, workspaceRoot: started.workspaceRoot, indexing: isLspIndexing(language, started.workspaceRoot) };
+  }
 
   // A start already in flight for this key IS the client about to exist (#5857 bounce) — await
   // it instead of building a second one against the same live server.
   const pending = pendingStarts.get(key);
-  if (pending) return pending;
+  if (pending) {
+    trace(`startLsp ${key} awaiting an in-flight start`);
+    return pending;
+  }
 
+  trace(`startLsp ${key} id=${started.id} wsRoot=${started.workspaceRoot} initialized=${started.initialized}`);
   const attempt = (async () => {
     await ensureServices();
     // The reuse rule (#5857 bounce, lspStart.ts): a live server already through its handshake
     // must never see a second `initialize` — respawn a fresh process instead.
     const decision = decideLspStart(started, clients.has(key));
     if (decision.action === "respawn") {
+      trace(`startLsp ${key} respawn: initialized server had no client — stopping ${decision.stopId}`);
       await invoke("lsp_stop", { id: decision.stopId }).catch(() => {});
       indexed.delete(key);
       phases.delete(key);
@@ -195,14 +216,17 @@ export async function startLsp(
         "lsp_start",
         { project, scope, language, path },
       );
+      trace(`startLsp ${key} respawned as id=${started.id}`);
     }
     const reader = new TauriMessageReader(started.id, e => {
       if (e.kind === "begin" && e.title) {
         phases.set(key, e.title);
+        trace(`lsp ${key} phase begin: ${e.title}`);
         notify();
       } else if (e.kind === "end" && isReadyToken(e.token)) {
         if (!indexed.has(key)) {
           indexed.add(key);
+          trace(`lsp ${key} ready`);
           notify();
         }
         phases.delete(key);
@@ -224,9 +248,14 @@ export async function startLsp(
       messageTransports: transports,
     });
     await client.start();
-    clients.set(key, { id: started.id, scopeRoot: started.scopeRoot, client });
+    clients.set(key, { id: started.id, scopeRoot: started.scopeRoot, workspaceRoot: started.workspaceRoot, client });
     notify();
-    return { id: started.id, scopeRoot: started.scopeRoot, indexing: isLspIndexing(language) };
+    return {
+      id: started.id,
+      scopeRoot: started.scopeRoot,
+      workspaceRoot: started.workspaceRoot,
+      indexing: isLspIndexing(language, started.workspaceRoot),
+    };
   })();
   pendingStarts.set(key, attempt);
   try {

@@ -41,6 +41,7 @@ import {
 } from "./documents";
 import { isLspIndexing, isLspLive, lspPhase, onLspChange, startLsp, stopLspProject } from "./lspClient";
 import { lspLanguageFor, lspServerName } from "./lspLanguage";
+import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 
 type ViewMode = "code" | "changes";
@@ -82,6 +83,8 @@ export function Files({ project, lens, onLens, path, seat }: {
   const [lspNote, setLspNote] = useState<string | null>(null);
   // The resolved scope root the language server chose — the editor's model URI is built from it.
   const [lspRoot, setLspRoot] = useState<string | null>(null);
+  // The crate root the CLIENT keyed itself by — readiness is scoped to exactly this + language.
+  const [lspWsRoot, setLspWsRoot] = useState<string | null>(null);
 
   const activeTab = tabs.find(t => t.key === activeKey) ?? null;
   // The on-disk conflict rides the TAB (Orca open-file.ts:124-128, per-tab), not this component's
@@ -97,6 +100,19 @@ export function Files({ project, lens, onLens, path, seat }: {
   const dirtyRef = useRef(false);
   // The editor is always live: unsaved work is simply "the draft differs from the disk".
   dirtyRef.current = body !== null && draft !== body.text;
+
+  // The trace pair (#12752): mount and unmount record the lens's view of the store, so a
+  // Workspace ↔ Code switch shows exactly what survived.
+  useEffect(() => {
+    const snapshot = () => {
+      const d = projectDocuments(project);
+      const rec = d.activeKey ? d.docs.get(d.activeKey) : undefined;
+      return `project=${project} activeKey=${d.activeKey ?? "none"} draftLen=${rec?.draft.length ?? 0} loaded=${rec?.loaded ?? false}`;
+    };
+    trace(`files mount ${snapshot()}`);
+    return () => trace(`files unmount ${snapshot()}`);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [project]);
 
   // ONE owner for "is this seat writing right now". Deriving it a second way from bus status is how
   // the view and the writer end up disagreeing about whether an edit is safe.
@@ -133,6 +149,7 @@ export function Files({ project, lens, onLens, path, seat }: {
         setDraftState(text);
         setTabs(ts => markDirty(ts, key, text !== b.text));
         markLoaded(project, key);
+        trace(`reload ${key} keptLen=${kept?.length ?? 0} verdict=${verdict ?? "none"} textLen=${text.length}`);
       })
       .catch(e => setError(e instanceof Error ? e.message : String(e)));
     readFileAtHead(project, tab.path, tabSeat).then(setHead).catch(() => setHead(""));
@@ -215,16 +232,19 @@ export function Files({ project, lens, onLens, path, seat }: {
 
   // Language server: one client per (workspace root, language), shared across tabs, started the
   // first time a served file mounts. The honest status line names the running phase, never a fake
-  // "ready". Servers OUTLIVE this lens — they are stopped on project switch / idle / app exit.
+  // "ready". Readiness is keyed by THE OPEN FILE'S (workspaceRoot, language) — the project
+  // server's ready must not answer for the seat-worktree server of the same language (#12752).
+  // Servers OUTLIVE this lens — they are stopped on project switch / idle / app exit.
   const activeLanguage = activePath ? lspLanguageFor(activePath) : null;
   const lspName = activeLanguage ? lspServerName(activeLanguage) : "";
+  const trace = (line: string) => { invoke("app_log", { line }).catch(() => {}); };
 
   // Derive the status line from the shared client state; called after start and on every change.
   const updateStatus = () => {
     if (!activeLanguage) { setLspNote(null); return; }
-    if (!isLspLive(activeLanguage)) { setLspNote(null); return; }
-    if (isLspIndexing(activeLanguage)) {
-      const phase = lspPhase(activeLanguage);
+    if (!isLspLive(activeLanguage, lspWsRoot ?? undefined)) { setLspNote(null); return; }
+    if (isLspIndexing(activeLanguage, lspWsRoot ?? undefined)) {
+      const phase = lspPhase(activeLanguage, lspWsRoot ?? undefined);
       setLspNote(phase ? `${lspName}: ${phase}` : `${lspName}…`);
     } else {
       setLspNote(`${lspName} ready`);
@@ -232,15 +252,18 @@ export function Files({ project, lens, onLens, path, seat }: {
   };
 
   useEffect(() => {
-    if (!activeLanguage || !activePath) { setLspNote(null); setLspRoot(null); return; }
+    if (!activeLanguage || !activePath) { setLspNote(null); setLspRoot(null); setLspWsRoot(null); return; }
     let alive = true;
     const scope = activeScope === "project" ? null : activeScope;
     setLspNote(null);
     setLspRoot(null);
+    setLspWsRoot(null);
     startLsp(project, scope, activeLanguage, activePath)
-      .then(({ scopeRoot }) => {
+      .then(({ scopeRoot, workspaceRoot }) => {
         if (!alive) return;
         setLspRoot(scopeRoot);
+        setLspWsRoot(workspaceRoot);
+        trace(`files lsp ${workspaceRoot}\u0000${activeLanguage} attached (path=${activePath})`);
         updateStatus();
       })
       .catch(e => { if (alive) setLspNote(String(e)); });
@@ -274,6 +297,7 @@ export function Files({ project, lens, onLens, path, seat }: {
     if (activeKey) {
       storeSetDraft(project, activeKey, v);
       setTabs(ts => markDirty(ts, activeKey, v !== (body?.text ?? "")));
+      trace(`setDraft ${activeKey} len=${v.length} caller=editor-onChange`);
     }
   };
 
@@ -401,6 +425,15 @@ export function Files({ project, lens, onLens, path, seat }: {
                 </button>
               </div>
             ))}
+          </div>
+        )}
+
+        {/* The readiness line (#12752): names the phase while a server works, goes quiet on
+            ready. Scoped to the OPEN FILE's (workspaceRoot, language) — the project server's
+            ready never answers for the seat-worktree server of the same language. */}
+        {lspNote && isLspIndexing(activeLanguage ?? "", lspWsRoot ?? undefined) && (
+          <div className="tr-mono shrink-0 px-1 text-[11px] text-tr-doing">
+            {activePath} · {lspNote}
           </div>
         )}
 
