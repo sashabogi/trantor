@@ -22,6 +22,7 @@ import codexSvg from "@lobehub/icons-static-svg/icons/codex.svg?raw";
 import opencodeSvg from "@lobehub/icons-static-svg/icons/opencode.svg?raw";
 import openaiSvg from "@lobehub/icons-static-svg/icons/openai.svg?raw";
 import zaiSvg from "@lobehub/icons-static-svg/icons/zai.svg?raw";
+import qwenSvg from "@lobehub/icons-static-svg/icons/qwen.svg?raw";
 import { dictGet } from "./dict";
 
 type Brand = { svg: string; hex: string; label: string };
@@ -40,6 +41,7 @@ const BRANDS = {
   gemini:     { svg: geminiSvg, hex: "#8E75B2", label: "Gemini" },
   openrouter: { svg: openrouterSvg, hex: "#94A3B8", label: "OpenRouter" },
   ollama:     { svg: ollamaSvg, hex: "#c8c8d0", label: "Ollama" },
+  qwen:       { svg: qwenSvg, hex: "#6336E7", label: "Qwen" },
 } as const satisfies Record<string, Brand>;
 
 const HOSTISH = /^(macbook|imac|mac[-.]|.*\.local$)|@/i;
