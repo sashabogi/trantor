@@ -1,5 +1,6 @@
 mod herdr;
 mod genesis;
+mod ghost;
 pub mod identity;
 pub mod lsp;
 mod sessions;
@@ -1881,41 +1882,6 @@ fn file_unwatch(project: String) {
     if let Some(stop) = stop {
         stop.store(true, Ordering::SeqCst);
     }
-}
-
-#[tauri::command]
-fn ghost_complete(prefix: String, suffix: String, path: String) -> Result<String, String> {
-    let prompt = format!(
-        "Complete the following code snippet. Return ONLY the completion text, nothing else.\n\nPrefix:\n{}\n\nSuffix:\n{}\n\nFile: {}",
-        prefix, suffix, path
-    );
-
-    let scrooge = std::env::var("SCROOGE_BIN")
-        .unwrap_or_else(|_| "scrooge".to_string());
-
-    let output = std::process::Command::new(&scrooge)
-        .args(["-t", "code", "--difficulty", "easy", "--json", "--max-tokens", "64"])
-        .stdin(std::process::Stdio::piped())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .output()
-        .map_err(|e| format!("scrooge failed to start: {e}"))?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(format!("scrooge exited {}: {stderr}", output.status));
-    }
-
-    let stdout = String::from_utf8(output.stdout).map_err(|e| format!("scrooge output not utf8: {e}"))?;
-    let result: serde_json::Value = serde_json::from_str(&stdout)
-        .map_err(|e| format!("scrooge output not json: {e}"))?;
-
-    let completion = result.get("result")
-        .or_else(|| result.get("completion"))
-        .and_then(|v| v.as_str())
-        .unwrap_or("");
-
-    Ok(completion.to_string())
 }
 
 fn orch_pane_from_rows(raw: &str, project: &str) -> Option<String> {
@@ -4607,7 +4573,7 @@ pub fn run() {
             chat_unwatch,
             file_watch,
             file_unwatch,
-            ghost_complete,
+            ghost::ghost_complete,
             pane_send,
             pane_keys,
             orchestrator_status,
