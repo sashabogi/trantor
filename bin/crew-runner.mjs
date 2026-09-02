@@ -382,13 +382,13 @@ async function reportFailure(exit, trigger, undelivered = 0) {
   const state = `${down ? "down" : "error"}:${reason}`;
   if (state !== announced) {
     announced = state;
-    await api("/send", { from: SESSION, to: "all", text, project: PROJ }).catch(() => {});
+    await api("/send", { from: SESSION, to: "all", text, project: PROJ, kind: "status" }).catch(() => {});
     // #5684: a broadcast does not wake anyone — the incident is the operator spotting dead seats
     // before the foreman did, twice in one morning. The same state-change event now goes DIRECT
     // to the project's orchestrator (direct = wake), gated identically so a standing outage says
     // it once. A seat that IS the orchestrator's own runner has nobody above it to wake.
     const orch = `${hostId()}:${PROJ}`;
-    if (orch !== SESSION) await api("/send", { from: SESSION, to: orch, text, project: PROJ }).catch(() => {});
+    if (orch !== SESSION) await api("/send", { from: SESSION, to: orch, text, project: PROJ, kind: "alert" }).catch(() => {});
   } else {
     log(`still ${state} (${consecFails} fails) — already announced, staying quiet`);
   }
@@ -434,7 +434,7 @@ async function notifyAssigners(pairs, text) {
     seen.add(f);
     // `re` threads this outcome to the exact contract it answers, so the sender's ledger closes the
     // right one instead of guessing from timing.
-    const payload = { from: SESSION, to: f, text: text.slice(0, 280), project: PROJ };
+    const payload = { from: SESSION, to: f, text: text.slice(0, 280), project: PROJ, kind: "receipt" };
     if (id) payload.re = id;
     await api("/send", payload).catch(() => {});
   }
@@ -447,7 +447,7 @@ async function reportHealthy() {
   // Recovery is a change too, so the next failure is news again.
   announced = "";
   await api("/register", { session: SESSION, project: PROJ, status: `active in ${PROJ}`, llm: AGENT, model: MODEL }).catch(() => {});
-  await api("/send", { from: SESSION, to: "all", text: `✅ ${SESSION} recovered`, project: PROJ }).catch(() => {});
+  await api("/send", { from: SESSION, to: "all", text: `✅ ${SESSION} recovered`, project: PROJ, kind: "status" }).catch(() => {});
   cmuxStatus("ok", "#14b8a6", "check"); herdrAgent("idle");
 }
 
@@ -617,6 +617,57 @@ function composedTurn({ base = "", wakeText = "", ctxText = "", againText = "", 
   return built.prompt;
 }
 
+const RECEIPT_MARKER = "✅ done on";
+const CARD_REF_RE = /#\d{1,7}(?!\d)/;
+
+// Runner-authored metadata is bus state, not work. Typed messages are authoritative; `re` and the
+// stable text marker keep a mixed-version crew safe while older runners are still on the bus.
+function isReceipt(message) {
+  const text = String(message?.text || "").trimStart();
+  return message?.kind === "receipt" || Number(message?.re) > 0 || text.startsWith(RECEIPT_MARKER);
+}
+
+function isStatusBroadcast(message) {
+  if (message?.to !== "all") return false;
+  if (message?.kind === "status") return true;
+  const text = String(message?.text || "").trim();
+  return /^[A-Za-z0-9_.-]+ reporting — ready for a contract\b/.test(text)
+    || /^[✅⚠️🛑]\s+\S+\s+(?:recovered|turn FAILED|DOWN)\b/.test(text);
+}
+
+function isContract(message) {
+  const text = String(message?.text || "");
+  return message?.kind === "contract" || /^\s*contract\s*:/i.test(text) || CARD_REF_RE.test(text);
+}
+
+function isRunnerSession(session) {
+  const suffix = `:${PROJ}`;
+  const name = String(session || "");
+  if (!name.endsWith(suffix)) return false;
+  const label = name.slice(0, -suffix.length);
+  // Crew labels are CLI/provider slugs. Host sessions keep their machine-style identity and remain
+  // valid direct assigners; runner-to-runner prose needs `contract:` or a card reference.
+  return /^[a-z0-9_.-]+$/.test(label) && !label.startsWith("hub:");
+}
+
+function shouldWake(message) {
+  if (isReceipt(message) || isStatusBroadcast(message)) return false;
+  if (message?.to === SESSION) {
+    if (message?.kind === "status") return false;
+    return !isRunnerSession(message?.from) || isContract(message);
+  }
+  return message?.to === "all"
+    && isContract(message)
+    && (message.text.includes(`@${AGENT}`) || message.text.toLowerCase().includes(`${AGENT}:`));
+}
+
+function askedExcerpt(message) {
+  let text = String(message?.text || "").replace(/\s+/g, " ").trim();
+  const nested = text.search(/\s+[·|]\s*asked\s*:/i);
+  if (nested >= 0) text = text.slice(0, nested).trim();
+  return text.slice(0, 120);
+}
+
 (async () => {
   await loadLessons();
   // start cursor at the CURRENT tip so we don't replay history
@@ -631,7 +682,7 @@ function composedTurn({ base = "", wakeText = "", ctxText = "", againText = "", 
     const { loadOrCreate } = await import("../lib/identity.mjs");
     await sfetchJson(`${HUB}/send`, {
       identity: loadOrCreate(SESSION, "agent"),
-      payload: { from: SESSION, to: "all", project: PROJ, text: `${AGENT} reporting — ready for a contract${MODEL ? ` (${MODEL})` : ""}` },
+      payload: { from: SESSION, to: "all", project: PROJ, kind: "status", text: `${AGENT} reporting — ready for a contract${MODEL ? ` (${MODEL})` : ""}` },
       signal: AbortSignal.timeout(2500),
     });
   } catch {}
@@ -640,8 +691,8 @@ function composedTurn({ base = "", wakeText = "", ctxText = "", againText = "", 
   // broadcasts batched behind them. Restored from disk first: a runner that was killed mid-turn
   // (or a machine that rebooted) still owes those messages, and the hub will never send them again.
   const restored = loadPending();
-  let pendingWake = restored.wake;
-  let pendingBcast = restored.bcast;
+  let pendingWake = restored.wake.filter(shouldWake);
+  let pendingBcast = restored.bcast.filter(m => !isReceipt(m) && !isStatusBroadcast(m));
   let retryAt = 0;            // 0 = deliver at the next opportunity
   let deliveryFails = 0;      // consecutive failed attempts at the SAME pending batch
   if (pendingWake.length) log(`\x1b[33m${pendingWake.length} message(s) survived from a previous run — redelivering\x1b[0m`);
@@ -688,6 +739,10 @@ function composedTurn({ base = "", wakeText = "", ctxText = "", againText = "", 
     // never wake on your own broadcasts: a claude seat's report contains "claude:" and matched the
     // @mention filter, buying one echo turn per report (seen live on the first pulsed orchestrator)
     msgs = msgs.filter(m => m.from !== SESSION);
+    // A receipt is the terminal state of a contract, never a new contract. Consume typed receipts,
+    // reply-linked outcomes, and the old stable marker before direct-address logic sees them. Status
+    // broadcasts are presence chatter and are dropped rather than saved as future prompt context.
+    msgs = msgs.filter(m => !isReceipt(m) && !isStatusBroadcast(m));
     // #5760 (the night of 08-31): the hub's hourly "same-project-sessions" FYI woke every seat
     // into a real CLI turn — three wedged for hours mid-chatter, one on the metered pool. That
     // kind is pure coordination CONTEXT ("no human needs to relay this" — and no turn needs to
@@ -695,8 +750,8 @@ function composedTurn({ base = "", wakeText = "", ctxText = "", againText = "", 
     // warnings still wake — those are actionable by the seat right now.
     const fyi = msgs.filter(m => m.from === "hub:duty" && String(m.text || "").startsWith("🤝 OVERSEER same-project-sessions"));
     const rest = msgs.filter(m => !fyi.includes(m));
-    const direct = rest.filter(m => m.to === SESSION);
-    const mentions = rest.filter(m => m.to === "all" && (m.text.includes(`@${AGENT}`) || m.text.toLowerCase().includes(`${AGENT}:`)));
+    const direct = rest.filter(m => m.to === SESSION && shouldWake(m));
+    const mentions = rest.filter(m => m.to === "all" && shouldWake(m));
     const bcast = [...rest.filter(m => m.to === "all" && !mentions.includes(m)), ...fyi];
     pendingBcast.push(...bcast);                      // wake-policy: plain broadcasts batch, they don't wake
     const wake = [...direct, ...mentions];
@@ -708,7 +763,7 @@ function composedTurn({ base = "", wakeText = "", ctxText = "", againText = "", 
       const dropped = pendingWake.splice(0, pendingWake.length - PENDING_MAX);
       log(`\x1b[31mundelivered queue overflowed — dropped ${dropped.length} oldest message(s)\x1b[0m`);
       await api("/send", { from: SESSION, to: "all", project: PROJ,
-        text: `⚠️ ${SESSION} dropped ${dropped.length} undelivered message(s) — queue hit its ${PENDING_MAX} cap during a failure streak` }).catch(() => {});
+        kind: "status", text: `⚠️ ${SESSION} dropped ${dropped.length} undelivered message(s) — queue hit its ${PENDING_MAX} cap during a failure streak` }).catch(() => {});
     }
     savePending(pendingWake, pendingBcast);
     // Respect an active backoff: a new message during an outage joins the batch, it does not
@@ -741,7 +796,7 @@ function composedTurn({ base = "", wakeText = "", ctxText = "", againText = "", 
     // Who is owed an answer, captured BEFORE the turn: pendingWake is cleared on success.
     const assigners = [];
     for (const m of wake) if (m.from && !assigners.some(a => a.from === m.from)) assigners.push({ from: m.from, id: m.id });
-    const asked = String(wake[0]?.text || "").replace(/\s+/g, " ").trim().slice(0, 90);
+    const asked = askedExcerpt(wake[0]);
     const tStart = Date.now();
     const prompt = composedTurn({
       wakeText, ctxText, againText,
