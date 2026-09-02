@@ -352,7 +352,7 @@ spawn_herdr() {   # $@ = specs
   local surfs=()
   [ -n "$REUSE_WS" ] && wsid="$REUSE_WS"
   for SPEC in "$@"; do
-    resolve_spec "$SPEC"
+    resolve_spec "$SPEC" || continue
     local cmd; cmd="$(RUN_CMD)"
     if [ -n "$REUSE_WS" ]; then
       # replace-in-place: split the fresh pane FIRST (targeting the agent's old pane when tracked),
@@ -758,7 +758,11 @@ except Exception: pass' 2>/dev/null)"
 epoch_ms() { python3 -c 'import time;print(int(time.time()*1000))'; }
 
 # resolve_spec <spec> -> sets AGENT + MODEL globals (live-selects a provider-only spec).
-AGENT=""; MODEL=""
+# On failure, returns 1 (AGENT is still set; MODEL is empty) instead of exiting the whole script —
+# callers are responsible for skipping that one seat and continuing the batch. SKIPPED_SEATS
+# accumulates "agent: reason" entries across every spawn path so `up` can report + exit non-zero
+# at the end without killing seats that already launched earlier in the loop.
+AGENT=""; MODEL=""; SKIPPED_SEATS=()
 resolve_spec() {
   local SPEC="$1" FIELD
   AGENT="${SPEC%%:*}"; MODEL=""
@@ -780,10 +784,25 @@ resolve_spec() {
   if [ -n "$FIELD" ]; then
     case "$FIELD" in
       */*) MODEL="$FIELD" ;;
-      *)   MODEL="$(resolve_model "$AGENT" "$FIELD" "$TASK" "$DIFF")" || exit 1
+      *)   MODEL="$(resolve_model "$AGENT" "$FIELD" "$TASK" "$DIFF")" || {
+             echo "[crew] ✗ skipping seat '$AGENT' — model resolution failed for $FIELD ($TASK/$DIFF); remaining seats still launch" >&2
+             SKIPPED_SEATS+=("$AGENT: model resolution failed for $FIELD ($TASK/$DIFF)")
+             return 1
+           }
            echo "  → $AGENT: live model $MODEL ($FIELD · $TASK/$DIFF)" ;;
     esac
   fi
+}
+# report_skipped_seats: prints a summary of every seat resolve_spec skipped this run (if any) and
+# returns 1 so callers can propagate a non-zero exit — the whole point is that a batch with some
+# skips still launched the rest of the crew, so this is a REPORT, not an abort.
+report_skipped_seats() {
+  [ "${#SKIPPED_SEATS[@]}" -gt 0 ] || return 0
+  echo ""
+  echo "✗✗ ${#SKIPPED_SEATS[@]} seat(s) skipped (model resolution failed) — the rest of the crew still launched:"
+  local s
+  for s in "${SKIPPED_SEATS[@]}"; do echo "   - $s"; done
+  return 1
 }
 # Kill any runner ALREADY serving this exact agent+project before starting another.
 #
@@ -816,7 +835,7 @@ spawn_tmux() {   # $@ = specs
   # a pre-existing session for THIS project = the crew is already up; add missing seats as new panes.
   tmux has-session -t "$TMUX_SESS" 2>/dev/null && first=0
   for SPEC in "$@"; do
-    resolve_spec "$SPEC"
+    resolve_spec "$SPEC" || continue
     local cmd; cmd="$(RUN_CMD)"
     local pane=""
     if [ "$first" = "1" ]; then
@@ -867,7 +886,7 @@ spawn_grid() {   # $@ = specs
   local ROWS=$(( (N + COLS - 1) / COLS ))
   local CW=$(( GW / COLS )) CH=$(( GH / ROWS )) i=0 SPEC
   for SPEC in "$@"; do
-    resolve_spec "$SPEC"
+    resolve_spec "$SPEC" || continue
     local cmd; cmd="$(RUN_CMD)"
     local C=$(( i % COLS )) R=$(( i / COLS )) X1 Y1 WID=""
     X1=$(( GX + C * CW )); Y1=$(( GY + R * CH ))
@@ -952,7 +971,7 @@ spawn_cmux() {   # $@ = specs
   local surfs=()
   [ -n "$REUSE_WS" ] && wsid="$REUSE_WS"
   for SPEC in "$@"; do
-    resolve_spec "$SPEC"
+    resolve_spec "$SPEC" || continue
     local cmd launcher; cmd="$(RUN_CMD)"; launcher="$(_seat_launcher "$AGENT" "$cmd")"
     if [ -n "$REUSE_WS" ]; then
       # replace-in-place: split the fresh pane FIRST (targeting the agent's old pane when tracked),
@@ -1054,7 +1073,7 @@ OSA
   fi
   [ -n "$REUSE_TAB" ] && { tabid="$REUSE_TAB"; echo "  → reusing existing crew workspace for $PROJ ($tabid)"; }
   for SPEC in "$@"; do
-    resolve_spec "$SPEC"
+    resolve_spec "$SPEC" || continue
     local cmd launcher; cmd="$(RUN_CMD)"; launcher="$(_seat_launcher "$AGENT" "$cmd")"
     # In REUSE mode, replace-in-place: split off the agent's old terminal when tracked, close it after.
     local OLD_SURF=""
@@ -1175,7 +1194,11 @@ echo "— bringing up crew for $PROJ ($CREW_UI) —"
 SPAWN_EPOCH=$(epoch_ms)
 spawn_crew "$@"
 
-if [ "$DRY" = "1" ]; then echo "— dry run: no bus verify —"; exit 0; fi
+if [ "$DRY" = "1" ]; then
+  echo "— dry run: no bus verify —"
+  report_skipped_seats
+  exit $?
+fi
 echo "— verifying on the bus (the spawn is not the truth; the bus is) —"
 AGENTS_ONLY=$(for a in "$@"; do printf "%s " "${a%%:*}"; done)
 VER=$(node "$BUS_DIR/bin/crew-verify.mjs" "$PROJ" $AGENTS_ONLY --since "$SPAWN_EPOCH" --timeout 30)
@@ -1196,3 +1219,5 @@ if [ -n "${RETRY// }" ]; then
   fi
 fi
 echo "— crew verified on the bus. Send contracts with relay_send; runners keep agents alive for free. Teardown (this project only): trantor down —"
+report_skipped_seats
+exit $?
