@@ -106,8 +106,8 @@ export function CodeView({ value, path, root, editable, onChange, onSave, projec
       renderLineHighlight: "line",
       // Suggestions only when a language server is live for this language (#5857): the muted
       // built-in TS service is not consulted, and an editor with no server keeps today's silence.
-      quickSuggestions: isLspLive(lang),
-      suggestOnTriggerCharacters: isLspLive(lang),
+      quickSuggestions: isLspLive(lang, root ?? undefined),
+      suggestOnTriggerCharacters: isLspLive(lang, root ?? undefined),
       occurrencesHighlight: "off",
       padding: { top: 6, bottom: 6 },
       scrollbar: { verticalScrollbarSize: 10, horizontalScrollbarSize: 10 },
@@ -154,10 +154,10 @@ export function CodeView({ value, path, root, editable, onChange, onSave, projec
     return onLspChange(() => {
       const ed = editorRef.current;
       if (!ed) return;
-      const live = isLspLive(lang);
+      const live = isLspLive(lang, root ?? undefined);
       ed.updateOptions({ quickSuggestions: live, suggestOnTriggerCharacters: live });
     });
-  }, [path]);
+  }, [path, root]);
 
   // A new document for the same path (saved, reloaded, switched source) replaces the text
   // without tearing the editor down. pushEditOperations keeps the undo stack, so a live reload

@@ -29,7 +29,9 @@ const MAX_TOKENS: u64 = 64;
 const STOP_BLANK_LINE: [&str; 1] = ["\n\n"];
 const TIMEOUT: Duration = Duration::from_secs(2);
 
-#[derive(Debug, PartialEq)]
+// No Debug derive: `key` is the provider's live API key, and a Debug impl is exactly what a
+// stray `{:?}` in a log line would reach for — never give it something to redact.
+#[derive(PartialEq)]
 pub struct Provider {
     pub base: &'static str,
     pub model: &'static str,
@@ -176,7 +178,10 @@ pub async fn ghost_complete(prefix: String, suffix: String, path: String) -> Res
         trace(t0.elapsed().as_millis(), provider.model, 0);
         return Err(format!("ghost: http {status}: {}", text.chars().take(200).collect::<String>()));
     }
-    let completion = parse_completion(&text)?;
+    let completion = parse_completion(&text).map_err(|e| {
+        trace(t0.elapsed().as_millis(), provider.model, 0);
+        e
+    })?;
     trace(t0.elapsed().as_millis(), provider.model, completion.chars().count());
     Ok(completion)
 }

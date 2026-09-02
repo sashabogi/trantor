@@ -15,6 +15,8 @@ function makeDeps() {
   const handlers = new Map<string, Handler[]>();
   const written: Array<{ method?: string; id?: number | string }> = [];
   const stopped: number[] = [];
+  const unsubscribed: string[] = [];
+  let clientStopCount = 0;
   let gate: Promise<void> | null = null;
   let wsRoot = "/proj/crate";
   let hangStart = false;
@@ -34,22 +36,32 @@ function makeDeps() {
       // (closed); the map stores handlers under that container and fires them with it.
       handlers.set(event, [...(handlers.get(event) ?? []), handler as Handler]);
       if (gate) await gate;
-      return () => {};
+      // Records the event unsubscribing, mirroring the real Tauri unlisten fn — lets the timeout
+      // test assert the reader's two subscriptions actually tore down, not just that stop() ran.
+      return () => { unsubscribed.push(event); };
     },
   };
+  // Set when the fake client's start() attaches the jsonrpc callback (real MonacoLanguageClient
+  // does this as soon as the connection is created, before the handshake reply — the exact point
+  // the hung-start scenario freezes at). stop() disposes it, mirroring the real client's teardown
+  // of its connection, which is what actually unsubscribes the reader's Tauri listeners.
+  let readerDisposable: { dispose(): void } | null = null;
   const makeClient = (opts: Parameters<LspClientDeps["makeClient"]>[0]): LspClientLike => {
     // Mirrors what the REAL MonacoLanguageClient does on start: attach the jsonrpc callback to
     // the reader, then send initialize through the writer — the exact race under test.
     return {
       async start() {
+        readerDisposable = opts.transports.reader.listen(() => {});
         if (hangStart) return new Promise<void>(() => {});   // the hang the timeout breaks
-        opts.transports.reader.listen(() => {});
         // SAFETY: initialize is the standard jsonrpc RequestMessage shape the real client sends —
         // jsonrpc/id/method/params — and the writer serializes whatever it receives verbatim.
         const initialize: RequestMessage = { jsonrpc: "2.0", id: 1, method: "initialize", params: {} };
         await opts.transports.writer.write(initialize);
       },
-      async stop() {},
+      async stop() {
+        clientStopCount++;
+        readerDisposable?.dispose();
+      },
       async sendNotification() {},
       async sendRequest() {
         return { items: [] };
@@ -75,6 +87,8 @@ function makeDeps() {
     handlers,
     written,
     stopped,
+    unsubscribed,
+    clientStopped: () => clientStopCount > 0,
     setGate: (g: Promise<void> | null) => { gate = g; },
     setWsRoot: (w: string) => { wsRoot = w; },
     setHangStart: (h: boolean) => { hangStart = h; },
@@ -124,5 +138,9 @@ describe("startLsp (#5857)", () => {
     await expect(startLsp("proj", null, "rust", "/proj/crate3/src/main.rs"))
       .rejects.toThrow(/timed out after 20ms/);
     expect(bus.stopped).toEqual([1]);   // the hung server was stopped for a fresh respawn
+    // The abandoned client itself must be torn down too — otherwise the reader's two Tauri
+    // subscriptions (lsp-message:<id>, lsp-closed:<id>) outlive the failed start and leak.
+    expect(bus.clientStopped()).toBe(true);
+    expect(bus.unsubscribed.sort()).toEqual(["lsp-closed:1", "lsp-message:1"]);
   });
 });
