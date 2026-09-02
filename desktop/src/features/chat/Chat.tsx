@@ -36,6 +36,10 @@ import {
   type Backfill, type Block, type ChatState, type RowsPayload,
   type SessionPayload, type ToolResult, type Turn,
 } from "./streaming";
+import {
+  apply as applyStatus, initialArbiterState, needsReseed, RESEED_DELAYS_MS,
+  type ArbiterState, type StatusSource,
+} from "./statusArbiter";
 
 /** "pane" = hosted inside the ModePane (#5841): the pane owns width, height, and the mode
  *  rail, so the chat brings no column chrome of its own — no fixed width, no resize strip, no
@@ -258,6 +262,26 @@ export function Chat({ project, sessionId, dock, onDock, onClose, deps = DEFAULT
   // decides whether the composer is worth typing into (#5477) — a registered pane whose agent
   // exited must not look like a conversation.
   const [status, setStatus] = useState("unknown");
+  // #6146 — status has two sources racing (a one-shot seed and a stream of pushes), and a late
+  // seed stomping a fresher push is exactly the bug: pr-os's pane pushed "working" while the
+  // composer stayed disabled on a seed that resolved to "none" after the fact. arbiterRef mirrors
+  // `status` but additionally remembers the seq of whichever event produced it, so a late arrival
+  // can be told apart from a genuinely newer one (statusArbiter.ts). seqRef mints that seq: a
+  // seed's is assigned at DISPATCH (before its promise settles), a push's at ARRIVAL — never at
+  // resolution — so ordering reflects when the truth was actually known, not when React heard back.
+  const arbiterRef = useRef<ArbiterState>(initialArbiterState);
+  const seqRef = useRef(0);
+  const nextSeq = useCallback(() => seqRef.current++, []);
+  // Apply one candidate status and log it — every commit, applied or dropped, so a genesis drill
+  // can read the ordering straight out of app-trace.log instead of guessing at it again.
+  const commitStatus = useCallback((source: StatusSource, seq: number, value: string) => {
+    const next = applyStatus(arbiterRef.current, { source, seq, value });
+    const applied = next !== arbiterRef.current;
+    if (applied) { arbiterRef.current = next; setStatus(next.value); }
+    invokeFn("app_log", {
+      line: `chat status ${project}: ${source}=${value} (seq ${seq})${applied ? "" : ` dropped stale, effective=${arbiterRef.current.value}`}`,
+    }).catch(() => {});
+  }, [project, invokeFn]);
   // True once the watcher is feeding us events; false means the 2s poll IS the transport.
   const [streamed, setStreamed] = useState(false);
   // What the session REPORTED, versus what we sent and have not seen confirmed.
@@ -286,7 +310,13 @@ export function Chat({ project, sessionId, dock, onDock, onClose, deps = DEFAULT
     prevProject.current = project;
     if (switched) { setDismissedAt(null); saveDismissedAt(null); }
     setBannerArmedAt(null); setHandoffError(null); autoHandoffKey.current = null;
-    setChat(emptyChat); seenRef.current = 0; setError(null); setStatus("unknown");
+    setChat(emptyChat); seenRef.current = 0; setError(null);
+    // A new mount/switch owes nothing to the last episode's seq clock (#6146) — reset the
+    // arbiter before the first commit of this episode so an in-flight commit from the PREVIOUS
+    // project can never be mistaken for a newer one here.
+    arbiterRef.current = initialArbiterState;
+    seqRef.current = 0;
+    commitStatus("seed", nextSeq(), "unknown");
     if (sessionId) setTarget("history");
     else paneOf(project).then(o => setTarget(o?.surface ?? null)).catch(() => setTarget(null));
   }, [project, sessionId]);
@@ -352,6 +382,24 @@ export function Chat({ project, sessionId, dock, onDock, onClose, deps = DEFAULT
     sync();
     void (async () => {
       try {
+        // #6146 — the "orch-status" listener is registered, and its registration AWAITED, BEFORE
+        // chat_watch is invoked below. chat_watch is what spawns the Rust status watcher thread
+        // (spawn_status_watcher, lib.rs), and that thread emits its first frame within
+        // microseconds of chat_watch returning — the same event-registration race fixed for the
+        // LSP transport (lspTransport.ts's TauriMessageReader). A listener wired up AFTER the
+        // invoke can miss that very first push outright; the bounded re-seed schedule below is
+        // the belt for whatever this ordering fix still lets slip through.
+        if (!history) {
+          offs.push(await listenFn<string>("orch-status", ev => {
+            if (!alive) return;
+            try {
+              // SAFETY: payload comes from our own Rust emitter (orch-status), and both fields
+              // are re-checked before use — a malformed payload falls through the guard or catch.
+              const p = JSON.parse(ev.payload) as { project: string; status: string };
+              if (p.project === project && p.status) commitStatus("push", nextSeq(), p.status);
+            } catch {}
+          }));
+        }
         const watch = await invokeFn<ChatWatchResult>("chat_watch", { project, sessionId: sessionId ?? null });
         if (!alive) return;
         watchGenerationRef.current = watch.generation;
@@ -369,8 +417,9 @@ export function Chat({ project, sessionId, dock, onDock, onClose, deps = DEFAULT
             // outlive the batch that proves the turn is over. Fires even when the batch misses
             // the cursor — the resync heals rows, not the gate. History views keep "ended".
             if (p.turn_ended && !sessionId) {
+              const seq = nextSeq();
               invokeFn<string>("orchestrator_status", { project })
-                .then(st => { if (alive && st) setStatus(st); })
+                .then(st => { if (alive && st) commitStatus("seed", seq, st); })
                 .catch(() => {});
             }
             badFrames = 0;
@@ -395,8 +444,9 @@ export function Chat({ project, sessionId, dock, onDock, onClose, deps = DEFAULT
             syncRef.current();
             // #5993 — a handoff may have restarted the pane; the pushed stream may never have
             // covered the successor. One seed here, so the gate starts honest — no loop.
+            const seq = nextSeq();
             invokeFn<string>("orchestrator_status", { project })
-              .then(st => { if (alive && st) setStatus(st); })
+              .then(st => { if (alive && st) commitStatus("seed", seq, st); })
               .catch(() => {});
           } catch { if (++badFrames >= 3) setStreamed(false); }
         }));
@@ -413,7 +463,7 @@ export function Chat({ project, sessionId, dock, onDock, onClose, deps = DEFAULT
       // callers relied on, since there is no generation to be stale against.
       invokeFn("chat_unwatch", { project, sessionId: sessionId ?? null, generation: watchGenerationRef.current ?? null }).catch(() => {});
     };
-  }, [project, sessionId, target !== null, sync]);
+  }, [project, sessionId, target !== null, sync, history, commitStatus, nextSeq]);
 
   // The poll transport: runs until the watcher takes over, and again if it ever gives up.
   useEffect(() => {
@@ -423,28 +473,28 @@ export function Chat({ project, sessionId, dock, onDock, onClose, deps = DEFAULT
   }, [streamed, sync]);
 
   // Status is PUSHED (Phase 3): the backend holds a per-pane herdr subscription (spawned with
-  // chat_watch) and emits "orch-status" on every lifecycle change. One seed call paints the
-  // first state; after that, no polling — the 3-second `orchestrator_status` loop this
-  // replaces spawned a subprocess per tick, forever.
+  // chat_watch, whose "orch-status" listener is wired in the effect above — registered before the
+  // invoke, #6146) and emits on every lifecycle change. This effect owns only the SEED side: one
+  // dispatch at mount paints the first state, and — recovering the exact pr-os failure, where the
+  // seed resolved to "none" after a push had already landed "working" — a bounded re-seed at
+  // RESEED_DELAYS_MS offsets fires only while the effective status is still closed ("none" /
+  // "unknown"). Finite and self-cancelling, never a polling loop: a real status (from either
+  // source) disarms every remaining timer's own check, and all timers clear on unmount/switch.
   useEffect(() => {
-    if (history) { setStatus("ended"); return; }
+    if (history) { commitStatus("seed", nextSeq(), "ended"); return; }
     let alive = true;
-    invokeFn<string>("orchestrator_status", { project }).then(st => { if (alive) setStatus(st); }).catch(() => {});
-    const offs: Array<() => void> = [];
-    void (async () => {
-      const off = await listenFn<string>("orch-status", ev => {
-        if (!alive) return;
-        try {
-          // SAFETY: payload comes from our own Rust emitter (orch-status), and both fields are
-          // re-checked before use — a malformed payload falls through the guard or the catch.
-          const p = JSON.parse(ev.payload) as { project: string; status: string };
-          if (p.project === project && p.status) setStatus(p.status);
-        } catch {}
-      });
-      if (alive) offs.push(off); else off();
-    })();
-    return () => { alive = false; for (const off of offs) off(); };
-  }, [history, project]);
+    const dispatch = () => {
+      const seq = nextSeq();
+      invokeFn<string>("orchestrator_status", { project })
+        .then(st => { if (alive && st) commitStatus("seed", seq, st); })
+        .catch(() => {});
+    };
+    dispatch();
+    const timers = RESEED_DELAYS_MS.map(ms => setTimeout(() => {
+      if (alive && needsReseed(arbiterRef.current.value)) dispatch();
+    }, ms));
+    return () => { alive = false; for (const t of timers) clearTimeout(t); };
+  }, [history, project, commitStatus, nextSeq]);
   useEffect(() => { foot.current?.scrollIntoView({ behavior: "smooth" }); }, [chat.turns.length]);
 
   const working = status === "working";
