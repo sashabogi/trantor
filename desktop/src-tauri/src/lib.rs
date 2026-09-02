@@ -3249,14 +3249,104 @@ async fn handoff_now(project: String, reason: Option<String>) -> Result<String, 
     // successor recaps the handoff unprompted. Agent text never rides the CLI (socket only), and
     // the outcome is surfaced rather than swallowed — a blocked or still-starting agent means the
     // recap is still waiting on a human, which is exactly the failure this fixes.
-    match herdr::prompt(&pane, KICKOFF_PROMPT) {
-        Ok(outcome) => Ok(format!(
-            "handoff written · session ended · pane reopened · kickoff: {}",
-            kickoff_outcome_label(&outcome)
+    // #6184: the successor is BOOTING after the reopen, and a prompt fired straight at it landed
+    // on nobody (NotReady/NoAgent were the common outcomes — the herdr-log trace on the card).
+    // Mirror of bin/baton-pane.mjs step 4: wait for the agent to read idle before the first
+    // prompt, then retry the transient outcomes on a 3s cadence until it lands, is blocked (a
+    // human must answer the dialog — retrying hammers it), or the deadline passes. Every herdr
+    // call rides spawn_blocking (a blocking UnixStream underneath); the sleeps are tokio's, so
+    // the async runtime never blocks.
+    let kickoff_started = Instant::now();
+
+    let idle_deadline = tokio::time::Instant::now() + KICKOFF_DEADLINE;
+    loop {
+        let status = {
+            let pane = pane.clone();
+            tokio::task::spawn_blocking(move || herdr::agent_status(&pane))
+                .await
+                .unwrap_or(None)
+        };
+        if status.as_deref() == Some("idle") {
+            break;
+        }
+        if tokio::time::Instant::now() + KICKOFF_CADENCE > idle_deadline {
+            break;
+        }
+        tokio::time::sleep(KICKOFF_CADENCE).await;
+    }
+
+    let prompt_deadline = tokio::time::Instant::now() + KICKOFF_DEADLINE;
+    let mut attempts = 0u32;
+    let mut stalled_retries = 0u32;
+    let mut last: Option<Result<herdr::PromptOutcome, String>> = None;
+    loop {
+        if tokio::time::Instant::now() >= prompt_deadline {
+            break;
+        }
+        attempts += 1;
+        let pane_for_prompt = pane.clone();
+        let prompt = KICKOFF_PROMPT;
+        let r = tokio::task::spawn_blocking(move || herdr::prompt(&pane_for_prompt, prompt))
+            .await
+            .unwrap_or_else(|e| Err(format!("kickoff task join error: {e}")));
+        let decision = boot_prompt_decision(&r, stalled_retries);
+        if matches!(r, Ok(herdr::PromptOutcome::Stalled)) {
+            stalled_retries += 1;
+        }
+        let done = decision == BootPromptDecision::Stop;
+        last = Some(r);
+        if done {
+            break;
+        }
+        if tokio::time::Instant::now() + KICKOFF_CADENCE > prompt_deadline {
+            break;
+        }
+        tokio::time::sleep(KICKOFF_CADENCE).await;
+    }
+
+    let elapsed = kickoff_started.elapsed().as_secs();
+    match last {
+        Some(Ok(outcome)) => Ok(kickoff_label(&outcome, attempts, elapsed)),
+        Some(Err(e)) => Err(format!(
+            "handoff chain done, but the kickoff prompt failed after {attempts} attempt(s), {elapsed}s (successor may sit idle): {e}"
         )),
-        Err(e) => Err(format!(
-            "handoff chain done, but the kickoff prompt failed (successor may sit idle): {e}"
-        )),
+        None => Err("handoff chain done, but the kickoff never ran".into()),
+    }
+}
+
+/// The cadence and the budget for the post-reopen kickoff (#6184): poll/retry every 3s, give up
+/// at 90s per phase (idle gate, then the prompt ladder).
+const KICKOFF_CADENCE: Duration = Duration::from_secs(3);
+const KICKOFF_DEADLINE: Duration = Duration::from_secs(90);
+
+/// The retry decision for one boot-prompt attempt, pure so the ladder drills without a herdr
+/// socket (#6184). Delivered and Blocked stop — blocked means a human must answer a dialog in
+/// the pane, and retrying just hammers it. NotReady and NoAgent are the successor still booting
+/// — retry. Stalled gets exactly ONE retry (herdr's stall rule means the send did not register;
+/// a second look is fair, a third is noise) — the count lives with the caller. Err (herdr
+/// unreachable / unreadable) is transient by definition — retry until the deadline.
+#[derive(Debug, PartialEq, Eq)]
+enum BootPromptDecision {
+    Retry,
+    Stop,
+}
+fn boot_prompt_decision(
+    outcome: &Result<herdr::PromptOutcome, String>,
+    stalled_retries: u32,
+) -> BootPromptDecision {
+    match outcome {
+        Ok(o) => match o {
+            herdr::PromptOutcome::Delivered | herdr::PromptOutcome::Blocked => BootPromptDecision::Stop,
+            herdr::PromptOutcome::NotReady | herdr::PromptOutcome::NoAgent => BootPromptDecision::Retry,
+            herdr::PromptOutcome::Stalled => {
+                if stalled_retries < 1 {
+                    BootPromptDecision::Retry
+                } else {
+                    BootPromptDecision::Stop
+                }
+            }
+        },
+        Err(_) => BootPromptDecision::Retry,
     }
 }
 
@@ -3270,6 +3360,15 @@ fn kickoff_outcome_label(outcome: &herdr::PromptOutcome) -> &'static str {
         herdr::PromptOutcome::Stalled => "no lifecycle change observed — recap may not land",
         herdr::PromptOutcome::NoAgent => "no agent in the pane — reopen the session",
     }
+}
+
+/// The full kickoff line: what became of the prompt, plus the tries it took and how long the
+/// whole kickoff section ran — idle gate included (#6184). Pure so it drills without a socket.
+fn kickoff_label(outcome: &herdr::PromptOutcome, attempts: u32, elapsed_secs: u64) -> String {
+    format!(
+        "handoff written · session ended · pane reopened · kickoff: {} · {attempts} attempt(s), {elapsed_secs}s",
+        kickoff_outcome_label(outcome)
+    )
 }
 
 #[tauri::command]
@@ -5749,6 +5848,35 @@ mod succession_tests {
         assert!(kickoff_outcome_label(&O::Blocked).contains("blocked"));
         assert!(kickoff_outcome_label(&O::NotReady).contains("starting"));
         assert!(kickoff_outcome_label(&O::NoAgent).contains("no agent"));
+    }
+
+    // #6184 — the boot prompt's retry ladder, all six cases (five outcomes + Err). Pure, so the
+    // whole ladder drills without a herdr socket.
+    #[test]
+    fn boot_prompt_retry_decisions() {
+        use herdr::PromptOutcome as O;
+        // Landed, or parked at a dialog a human must answer: stop trying.
+        assert_eq!(boot_prompt_decision(&Ok(O::Delivered), 0), BootPromptDecision::Stop);
+        assert_eq!(boot_prompt_decision(&Ok(O::Blocked), 0), BootPromptDecision::Stop);
+        // The successor is still booting: keep trying.
+        assert_eq!(boot_prompt_decision(&Ok(O::NotReady), 0), BootPromptDecision::Retry);
+        assert_eq!(boot_prompt_decision(&Ok(O::NoAgent), 0), BootPromptDecision::Retry);
+        // Stalled retries ONCE — the second stall is the answer, not a reason to try again.
+        assert_eq!(boot_prompt_decision(&Ok(O::Stalled), 0), BootPromptDecision::Retry);
+        assert_eq!(boot_prompt_decision(&Ok(O::Stalled), 1), BootPromptDecision::Stop);
+        // herdr unreachable / unreadable is transient by definition: retry until the deadline.
+        let err: Result<O, String> = Err("herdr is not reachable".into());
+        assert_eq!(boot_prompt_decision(&err, 0), BootPromptDecision::Retry);
+    }
+
+    // #6184 — the returned label carries the tries and the elapsed time, not just the outcome.
+    #[test]
+    fn kickoff_label_names_attempts_and_elapsed() {
+        use herdr::PromptOutcome as O;
+        let label = kickoff_label(&O::Delivered, 3, 12);
+        assert!(label.contains("prompt delivered"), "{label}");
+        assert!(label.contains("3 attempt(s)"), "{label}");
+        assert!(label.contains("12s"), "{label}");
     }
 
     // #5401 — the restore detector's pure half. The reboot shape: orch rows survive in
