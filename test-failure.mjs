@@ -3,6 +3,12 @@
 // in real time (the orchestrator was previously blind: the runner swallowed the exit code).
 // Hermetic: a mock recording hub (never touches the real ~/.agent-bus/bus.json) + a fake CLI
 // that fails like an exhausted account. Exercises the REAL bin/crew-runner.mjs.
+// Shares NO state with sibling suites (#6084 audit): the mock hub listens on an EPHEMERAL
+// port (listen(0), never a fixed one) and every drill works in its own mkdtempSync directory,
+// so test-crew-completion / test-contracts running before it cannot collide with it.
+// NOTE on `npm test`: it chains suites with &&, so the first red suite hides every later one —
+// a failure in THIS file means the suites before it were green, and a failure BEFORE it means
+// this file never ran in that invocation.
 import http from "node:http";
 import { spawn } from "node:child_process";
 import { mkdtempSync, writeFileSync, chmodSync, mkdirSync, readFileSync } from "node:fs";
@@ -75,8 +81,21 @@ async function drill(agent, script, opts = {}) {
            CREW_KICKOFF: "say hi and end your turn", ...(opts.env || {}) },
     stdio: "ignore",
   });
-  // kickoff turn runs synchronously inside the runner; give it a moment to fail + report
-  await sleep(opts.waitMs ?? 2500);
+  // kickoff turn runs synchronously inside the runner; give it a moment to fail + report.
+  // #6084: a drill may instead wait for a CONDITION with a deadline. A fixed sleep measures
+  // the machine's load, not the behaviour — under load the streak had not finished when the
+  // kill landed and the DOWN count came back 0. `until` waits for the event itself;
+  // `settleUntil` then waits for proof the streak CONTINUED past it, so an "exactly once"
+  // assertion tests the dedup, not a race the drill happened to win.
+  const waitStart = Date.now();
+  if (opts.until) {
+    while (!opts.until(sends) && Date.now() - waitStart < (opts.deadlineMs ?? 30000)) await sleep(100);
+  } else {
+    await sleep(opts.waitMs ?? 2500);
+  }
+  if (opts.settleUntil) {
+    while (!opts.settleUntil(sends, registers) && Date.now() - waitStart < (opts.settleDeadlineMs ?? 30000)) await sleep(100);
+  }
   runner.kill("SIGKILL");
   await sleep(150);
   const errText = (() => {
@@ -163,13 +182,30 @@ async function drill(agent, script, opts = {}) {
 }
 
 // ---- drill 6: an exit-0 auth STREAK flips the seat DOWN like any other failure ------------
+// #6084: deterministic under load. The old body slept a fixed 9s and hoped the runner had got
+// through the streak by then — under machine load the kill sometimes landed before the second
+// consecutive failure, and the DOWN count came back 0. Now the drill waits for the DOWN
+// broadcast itself (deadline 30s), then for the NEXT consecutive failure's registration
+// ("down: auth · 3 fails"). The third failure needs the redelivery ladder shortened
+// (TRANTOR_RETRY_MS, the lever the redelivery drill uses) — at the production 30s backoff a
+// failed turn holds its wake, so a 3rd failure simply never happens inside any test window.
 {
+  const isDownBcast = (m) => /DOWN/.test(m.text || "") && m.to === "all";
   const r = await drill("opencode",
     '#!/bin/sh\necho "Invalid API key" >&2\nexit 0\n',
-    { inbox: ["again", "and again"], waitMs: 9000 });
-  const downs = r.sends.filter(m => /DOWN/.test(m.text || "") && m.to === "all");
-  ok("an exit-0 auth streak still flips the seat DOWN", downs.length === 1, `${downs.length} DOWN broadcasts`);
-  ok("...labelled auth, so the operator checks credentials", downs.some(m => /auth/i.test(m.text || "")));
+    { inbox: ["again", "and again"], env: { TRANTOR_RETRY_MS: "1500" },
+      until: (s) => s.some(isDownBcast),
+      settleUntil: (s, regs) => regs.some((x) => /down: auth · 3 fails/.test(String(x.status || ""))) });
+  const downs = r.sends.filter(isDownBcast);
+  ok("an exit-0 auth streak still flips the seat DOWN", downs.length >= 1, `${downs.length} DOWN broadcasts`);
+  ok("…exactly once, however many times it retries (retries keep failing every ~1.5s after it)",
+     downs.length === 1, `${downs.length} DOWN broadcasts`);
+  const down = downs[0];
+  ok("…the broadcast is the seat-down notice: to 'all', labelled auth, streak + exit named",
+     !!down && /auth/i.test(down.text || "") && /consecutive failures/.test(down.text || "") && /exit \d/.test(down.text || ""),
+     down && String(down.text).slice(0, 140));
+  ok("…and the later failures stay registered state, never re-broadcast",
+     r.registers.some((x) => /down: auth · 3 fails/.test(String(x.status || ""))));
   ok("no success ack across the streak", !r.sends.some(m => /✅/.test(m.text || "")));
 }
 
