@@ -200,6 +200,17 @@ function FontMenu({ step, onPick }: { step: FontStep; onPick: (s: FontStep) => v
   );
 }
 
+// #6147: the webview's drop event is WINDOW-global — the composer and the genesis sheet both
+// hear every drop, so a PRD dropped on the sheet's brief also became an attachment chip in the
+// chat behind it. A drop is the composer's only when the topmost element at the drop point is
+// inside the composer, and never while a modal sheet is open: while the sheet is up its root
+// carries data-modal-sheet-open and it owns every drop, wherever it lands.
+export function composerTakesDrop(hit: Element | null, root: Element | null): boolean {
+  if (!hit || !root) return false;
+  if (document.querySelector("[data-modal-sheet-open]")) return false;
+  return root.contains(hit);
+}
+
 export function Composer({ project, target, live, liveWhy, model, modelSource, working, userTexts, context, fontStep, onFontStep, onSent, onLongRunChange, onDispatch, onDraftChange, suggestion, onSuggestionHandled }: {
   project: string;
   target: string | null;
@@ -247,6 +258,7 @@ export function Composer({ project, target, live, liveWhy, model, modelSource, w
   const [menu, setMenu] = useState<string[]>([]);
   const [pick, setPick] = useState(0);
   const box = useRef<HTMLTextAreaElement | null>(null);
+  const rootRef = useRef<HTMLDivElement | null>(null);
 
   // The locked composer's one action (#5495), derived from the session inventory and polled
   // ONLY while locked — the contract's gentle cadence, not a second heartbeat. A mid-turn
@@ -348,6 +360,12 @@ export function Composer({ project, target, live, liveWhy, model, modelSource, w
         if (ev.payload.type !== "drop") return;
         const paths = ev.payload.paths;
         if (!paths.length) return;
+        // #6147: the drop point resolves to the TOPMOST element (physical px → CSS px, the same
+        // resolution the genesis sheet uses for its own zone) — a drop that landed on a sheet,
+        // the file tree or the terminal is theirs, never an attachment chip here.
+        const dpr = window.devicePixelRatio || 1;
+        const hit = document.elementFromPoint(ev.payload.position.x / dpr, ev.payload.position.y / dpr);
+        if (!composerTakesDrop(hit, rootRef.current)) return;
         const cur = box.current?.selectionStart ?? null;
         setDraft(d => insertPaths(d, cur ?? d.length, paths));
         if (cur !== null) {
@@ -478,7 +496,7 @@ export function Composer({ project, target, live, liveWhy, model, modelSource, w
   };
 
   return (
-    <div className="border-t border-tr-edge p-2">
+    <div ref={rootRef} className="border-t border-tr-edge p-2">
       {menu.length > 0 && (
         <div className="mb-1 max-h-[190px] overflow-y-auto rounded-lg border border-tr-edge bg-tr-panel">
           {menu.map((f, i) => (
