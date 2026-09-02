@@ -1,18 +1,24 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useReducer, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { FileText, FolderGit2, Sparkles, X } from "lucide-react";
 import { BrandGlyph } from "../../shared/Avatar";
+import { notifyOnce } from "../../shared/notify";
 import { genesisKickoff, projectTarget, slugProjectName } from "./genesis";
+import { GENESIS_IDLE, genesisReducer, isExistsNotEmptyError, toastForTransition } from "./genesisFlow";
 
 type StartMode = "empty" | "clone" | "adopt";
 type ProjectNewResult = { name: string; dir: string; branch: string; hub: string; card: number | null };
 
-export function GenesisSheet({ devRoot, onClose, onMade, onWoken }: {
+export function GenesisSheet({ devRoot, onClose, onMade, onCreated }: {
   devRoot: string;
   onClose: () => void;
+  /** The project now exists on disk and is posted to the hub — add it to the sidebar's list. */
   onMade: (project: string) => void;
-  onWoken: (project: string) => void;
+  /** `trantor new` succeeded: close the sheet NOW, select the project, and focus its Workspace
+   *  lens. The wake that follows is a detached step (toast only) — see genesisFlow.ts's header
+   *  for why this can no longer wait on it. */
+  onCreated: (project: string) => void;
 }) {
   const [nameInput, setNameInput] = useState("");
   const [parentOverride, setParentOverride] = useState<string | null>(null);
@@ -20,8 +26,8 @@ export function GenesisSheet({ devRoot, onClose, onMade, onWoken }: {
   const [gitUrl, setGitUrl] = useState("");
   const [brief, setBrief] = useState("");
   const [dropName, setDropName] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [flow, dispatch] = useReducer(genesisReducer, GENESIS_IDLE);
+  const busy = flow.status === "creating";
   const nameRef = useRef<HTMLInputElement>(null);
   const sheetRef = useRef<HTMLFormElement>(null);
   const slug = slugProjectName(nameInput);
@@ -29,6 +35,10 @@ export function GenesisSheet({ devRoot, onClose, onMade, onWoken }: {
   // so the user edits the parent directory and the resulting project path is derived from it.
   const parent = (parentOverride ?? devRoot).replace(/\/+$/, "");
   const target = projectTarget(parent, slug);
+  // Drag-drop brief loading is its own failure mode, orthogonal to the create/wake flow below —
+  // it can fail while the sheet is otherwise idle, which the flow's states don't model.
+  const [dropError, setDropError] = useState<string | null>(null);
+  const bannerError = flow.status === "error" ? flow.message : dropError;
 
   useEffect(() => { nameRef.current?.focus(); }, []);
   useEffect(() => {
@@ -45,21 +55,30 @@ export function GenesisSheet({ devRoot, onClose, onMade, onWoken }: {
           if (!alive) return;
           setBrief(text);
           setDropName(path.split("/").pop() ?? path);
-          setError(null);
+          setDropError(null);
         })
-        .catch(reason => { if (alive) setError(String(reason)); });
+        .catch(reason => { if (alive) setDropError(String(reason)); });
     }).then(stop => { if (alive) unlisten = stop; else stop(); });
     return () => { alive = false; unlisten?.(); };
   }, []);
 
+  // The exists offer pre-fills the adopt UI with the exact parent/name that just conflicted, and
+  // switches the mode toggle to it — the operator no longer has to notice and click it themselves.
+  useEffect(() => {
+    if (flow.status !== "exists") return;
+    setMode("adopt");
+    setParentOverride(flow.parent);
+    setNameInput(flow.name);
+  }, [flow]);
+
   const create = async (event: React.FormEvent) => {
     event.preventDefault();
-    if (!slug) { setError("Give the project a name."); return; }
-    if (mode === "clone" && !gitUrl.trim()) { setError("Add the Git URL to clone."); return; }
-    if (!parent) { setError("Give a parent directory to create the project under."); return; }
+    dispatch({ type: "submit" });
+    if (!slug) { dispatch({ type: "createError", message: "Give the project a name." }); return; }
+    if (mode === "clone" && !gitUrl.trim()) { dispatch({ type: "createError", message: "Add the Git URL to clone." }); return; }
+    if (!parent) { dispatch({ type: "createError", message: "Give a parent directory to create the project under." }); return; }
     setNameInput(slug);
-    setBusy(true);
-    setError(null);
+    setDropError(null);
     try {
       const raw = await invoke<string>("project_new", {
         args: {
@@ -72,16 +91,31 @@ export function GenesisSheet({ devRoot, onClose, onMade, onWoken }: {
       });
       // SAFETY: Rust rejects non-JSON stdout, and `trantor new --json` owns this stable result shape.
       const made = JSON.parse(raw) as ProjectNewResult;
+      const waking = { status: "waking" as const, project: made.name };
+      dispatch({ type: "createOk", project: made.name });
+      // The dialog closes HERE — right after the directory and hub record are real — instead of
+      // after the wake below. That wait is what left the sheet open with a disabled Cancel (#6161).
       onMade(made.name);
-      await invoke<string>("project_wake", {
+      onCreated(made.name);
+      const toast = toastForTransition({ status: "creating" }, waking);
+      if (toast) void notifyOnce(toast);
+      // Fire-and-forget: the sheet is already gone, so its own state has nothing left to show a
+      // wake failure in. A toast is the only UI a background step like this can still raise.
+      void invoke<string>("project_wake", {
         project: made.name,
         kickoff: genesisKickoff(brief, dropName),
+      }).catch(reason => {
+        const message = reason instanceof Error ? reason.message : String(reason);
+        const errorToast = toastForTransition(waking, { status: "error", message });
+        if (errorToast) void notifyOnce(errorToast);
       });
-      onWoken(made.name);
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : String(reason));
-    } finally {
-      setBusy(false);
+      const message = reason instanceof Error ? reason.message : String(reason);
+      if (isExistsNotEmptyError(message)) {
+        dispatch({ type: "createExists", parent, name: slug, message });
+      } else {
+        dispatch({ type: "createError", message });
+      }
     }
   };
 
@@ -142,6 +176,11 @@ export function GenesisSheet({ devRoot, onClose, onMade, onWoken }: {
               <FolderGit2 size={12} /> The target directory must already be a Git repository.
             </p>
           )}
+          {flow.status === "exists" && (
+            <p className="mt-1.5 flex items-center gap-1.5 text-[11px] text-tr-doing">
+              <FolderGit2 size={12} /> That folder already exists and has files in it — adopt it to continue.
+            </p>
+          )}
 
           <label className="mt-4 block text-[11px] font-semibold uppercase tracking-[0.1em] text-[var(--color-tr-muted)]">Brief</label>
           <textarea className="tr-input mt-1 min-h-32 w-full resize-y leading-relaxed" value={brief}
@@ -156,7 +195,7 @@ export function GenesisSheet({ devRoot, onClose, onMade, onWoken }: {
             <span className="min-w-0 flex-1 text-[12px]"><span className="font-medium">Claude</span><span className="text-[var(--color-tr-muted)]"> · orchestrator</span></span>
             <span className="tr-mono text-[10px] text-[var(--color-tr-muted)]">recap → plan</span>
           </div>
-          {error && <div role="alert" className="mt-3 rounded-lg bg-tr-danger/10 px-3 py-2 text-[11.5px] text-tr-danger">{error}</div>}
+          {bannerError && <div role="alert" className="mt-3 rounded-lg bg-tr-danger/10 px-3 py-2 text-[11.5px] text-tr-danger">{bannerError}</div>}
         </div>
 
         <div className="flex items-center justify-end gap-2 border-t border-[var(--color-tr-edge)] px-5 py-3">
@@ -164,7 +203,7 @@ export function GenesisSheet({ devRoot, onClose, onMade, onWoken }: {
                   className="rounded-lg px-3 py-1.5 text-[12px] text-[var(--color-tr-muted)] hover:bg-white/[0.06] disabled:opacity-40">Cancel</button>
           <button type="submit" disabled={busy || !slug || !parent}
                   className="rounded-lg bg-tr-doing/20 px-3 py-1.5 text-[12px] font-semibold text-tr-doing hover:bg-tr-doing/30 disabled:opacity-40">
-            {busy ? "Starting…" : "Create & wake"}
+            {busy ? "Starting…" : flow.status === "exists" ? "Adopt this folder" : "Create & wake"}
           </button>
         </div>
       </form>

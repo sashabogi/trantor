@@ -610,9 +610,10 @@ export function AppShell() {
         onClose={() => setGenesisRoot(null)}
         onMade={project => {
           setProjects(prev => [...new Set([...prev, project])].sort());
-          setActive(project);
         }}
-        onWoken={project => {
+        onCreated={project => {
+          // `trantor new` is done — close the sheet and land on the project NOW. The wake it
+          // kicks off next is a detached step the sheet reports with a toast, not a wait (#6161).
           setActive(project);
           setPane({ kind: "project", lens: "workspace" });
           setGenesisRoot(null);
