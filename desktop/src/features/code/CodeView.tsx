@@ -10,7 +10,8 @@ import * as monaco from "monaco-editor";
 import { monacoLanguageFor } from "./editorLanguage";
 import { storedDraft } from "./documents";
 import { isLspLive, onLspChange } from "./lspClient";
-import { attachOpenDocuments, lspCompletion, toMonacoSuggestions, trackDocument } from "./lspDocuments";
+import { attachOpenDocuments, toMonacoSuggestions, trackDocument } from "./lspDocuments";
+import { trackedLspCompletion } from "./completionActivity";
 import { trace } from "./lspTransport";
 import "./monacoSetup";
 import { registerGhostTextProvider, isGhostTextEnabled, toggleGhostText } from "./ghostText";
@@ -22,7 +23,7 @@ import { registerGhostTextProvider, isGhostTextEnabled, toggleGhostText } from "
 monaco.languages.registerCompletionItemProvider(["rust", "typescript", "javascript", "python"], {
   triggerCharacters: [":", ".", "'", "("],
   async provideCompletionItems(model, position) {
-    const result = await lspCompletion(
+    const result = await trackedLspCompletion(
       String(model.uri), model.getLanguageId(), position.lineNumber, position.column,
     );
     if (!result) return { suggestions: [] };
