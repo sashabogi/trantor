@@ -743,11 +743,19 @@ resolve_model() {
   else
     out="$(python3 "$SCROOGE" route --provider "$provider" -t "$task" -d "$diff" --json 2>/dev/null)"
   fi
-  [ -n "$out" ] || { echo "[crew] live model selection failed for $agent:$provider — refusing opencode global default" >&2; return 1; }
-  out="$(printf '%s' "$out" | python3 -c 'import json,sys
+  if [ -n "$out" ]; then
+    out="$(printf '%s' "$out" | python3 -c 'import json,sys
 try: print(json.load(sys.stdin).get("qualified") or "")
 except Exception: pass' 2>/dev/null)"
-  [ -n "$out" ] || { echo "[crew] router returned no model for $agent:$provider — refusing opencode global default" >&2; return 1; }
+  fi
+  # The router can be absent (a fresh machine, a dry run, scrooge without its registry). That must
+  # never hand the seat to opencode's GLOBAL default (#6068, the DeepSeek bill) and must not drop
+  # the seat either (#6110): fall back INSIDE the provider — the head of its own catalog — and say so.
+  if [ -z "$out" ] && [ -n "$cands" ]; then
+    out="$provider/${cands%% *}"
+    echo "[crew] router unavailable for $agent:$provider — using the provider's own catalog head ($out)" >&2
+  fi
+  [ -n "$out" ] || { echo "[crew] live model selection failed for $agent:$provider — no router and no catalog; refusing opencode global default" >&2; return 1; }
   [ "${out%%/*}" = "$provider" ] || {
     echo "[crew] router selected $out outside $provider — refusing cross-provider fallback" >&2
     return 1
