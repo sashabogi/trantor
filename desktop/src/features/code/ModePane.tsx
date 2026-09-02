@@ -58,7 +58,9 @@ export function ModePane({ client, project, seat, onSeat, onOpenFile }: {
   const [stripWidth, setStripWidth] = useState<number | null>(null);
   useEffect(() => {
     const el = stripRef.current;
-    if (!el || typeof ResizeObserver === "undefined") return;
+    // happy-dom (and old webviews) lack ResizeObserver; the measured-width rail then stays on the
+    // labels fallback rather than crashing. A membership probe, not a type narrowing.
+    if (!el || !("ResizeObserver" in globalThis)) return;
     const ro = new ResizeObserver(entries => {
       for (const e of entries) setStripWidth(e.contentRect.width);
     });

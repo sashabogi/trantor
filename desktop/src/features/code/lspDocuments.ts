@@ -8,10 +8,21 @@
 // through CodeView's provider registration. Everything here is monaco-free (structural types
 // only) so the mapping is unit-testable without booting the editor.
 
-/** The slice of the language client the sync needs (MonacoLanguageClient satisfies it). */
+/** The notification payloads this sync sends: the LSP didOpen/didChange/didClose params. */
+export type DocNotifyParams =
+  | ReturnType<typeof didOpenParams>
+  | ReturnType<typeof didChangeParams>
+  | ReturnType<typeof didCloseParams>;
+
+/** The request payload this sync sends: LSP textDocument/completion params. */
+export type CompletionRequest = ReturnType<typeof completionParams>;
+
+/** The slice of the language client the sync needs (MonacoLanguageClient satisfies it — its
+ *  sendNotification/sendRequest accept `any` params and generic returns, so the narrower shapes
+ *  here are assignable). Params/returns are the NAMED wire types above, never `unknown`. */
 export type DocClient = {
-  sendNotification(method: string, params: unknown): Promise<unknown>;
-  sendRequest(method: string, params: unknown): Promise<unknown>;
+  sendNotification(method: string, params: DocNotifyParams): Promise<void>;
+  sendRequest(method: string, params: CompletionRequest): Promise<LspCompletionResponse>;
 };
 
 /** One live client as the picker sees it — plain data, so pickClient stays pure. */
@@ -95,13 +106,19 @@ export function pickClient(rows: DocClientRow[], uri: string, languageId: string
 export type CompletionKinds = Record<string, number> & { insertAsSnippetRule: number };
 
 /** LSP CompletionItemKind → monaco's CompletionItemKind, by name (the numeric spaces differ). */
-const KIND_NAMES: Record<number, string> = {
+const KIND_NAMES = {
   1: "Text", 2: "Method", 3: "Function", 4: "Constructor", 5: "Field", 6: "Variable",
   7: "Class", 8: "Interface", 9: "Module", 10: "Property", 11: "Unit", 12: "Value",
   13: "Enum", 14: "Keyword", 15: "Snippet", 16: "Color", 17: "File", 18: "Reference",
   19: "Folder", 20: "EnumMember", 21: "Constant", 22: "Struct", 23: "Event",
   24: "Operator", 25: "TypeParameter",
-};
+} as const;
+
+function kindNameOf(kind: number | undefined): string {
+  // SAFETY: kind is an LSP CompletionItemKind enum number; KIND_NAMES covers the spec's 1..25 and
+  // out-of-range values fall back to Text (the LSP default), never crash.
+  return KIND_NAMES[(kind ?? 1) as keyof typeof KIND_NAMES] ?? "Text";
+}
 
 /** The range an LSP TextEdit points at, converted to monaco's 1-based shape. */
 function toMonacoRange(range: {
@@ -116,7 +133,8 @@ function toMonacoRange(range: {
   };
 }
 
-type LspCompletionItem = {
+/** One item of an LSP textDocument/completion response, narrowed to the fields monaco reads. */
+export type LspCompletionItem = {
   label?: string;
   kind?: number;
   detail?: string;
@@ -127,6 +145,9 @@ type LspCompletionItem = {
   insertTextFormat?: number;
   textEdit?: { newText?: string; range?: Parameters<typeof toMonacoRange>[0] };
 };
+
+/** The LSP completion response: a bare item array, or a CompletionList carrying { items }. */
+export type LspCompletionResponse = LspCompletionItem[] | { items?: LspCompletionItem[] };
 
 /** One mapped suggestion, in monaco's CompletionItem shape (a plain literal is all it takes). */
 export type Suggestion = {
@@ -144,17 +165,15 @@ export type Suggestion = {
 /** Map an LSP completion response (an array, or { items }) to monaco suggestions. `range` is the
  *  fallback for items without a textEdit — the word range at the cursor. */
 export function toMonacoSuggestions(
-  result: unknown,
+  result: LspCompletionResponse,
   range: ReturnType<typeof toMonacoRange>,
   kinds: CompletionKinds,
 ): Suggestion[] {
-  const items: LspCompletionItem[] = Array.isArray(result)
-    ? result
-    : ((result as { items?: LspCompletionItem[] } | null)?.items ?? []);
+  const items = Array.isArray(result) ? result : (result.items ?? []);
   const out: Suggestion[] = [];
   for (const item of items) {
-    if (!item || typeof item.label !== "string") continue;
-    const kindName = KIND_NAMES[item.kind ?? 1] ?? "Text";
+    if (!item.label) continue;
+    const kindName = kindNameOf(item.kind);
     const suggestion: Suggestion = {
       label: item.label,
       kind: kinds[kindName] ?? kinds.Text,
@@ -162,7 +181,9 @@ export function toMonacoSuggestions(
       range: item.textEdit?.range ? toMonacoRange(item.textEdit.range) : range,
     };
     if (item.detail) suggestion.detail = item.detail;
-    const doc = typeof item.documentation === "string" ? item.documentation : item.documentation?.value;
+    // LSP documentation is a string OR a MarkupContent object { value }; monaco wants the text.
+    // SAFETY: a plain string is a primitive, never `instanceof Object`; a MarkupContent always is.
+    const doc = item.documentation instanceof Object ? item.documentation.value : item.documentation;
     if (doc) suggestion.documentation = doc;
     suggestion.sortText = item.sortText ?? item.label;
     if (item.filterText) suggestion.filterText = item.filterText;
@@ -192,7 +213,7 @@ export function setDocClientRows(fn: () => DocClientRow[]): void {
   rowsSource = fn;
 }
 
-function send(client: DocClient, method: string, params: unknown): void {
+function send(client: DocClient, method: string, params: DocNotifyParams): void {
   // Notifications are fire-and-forget; a dead server's rejection is already surfaced by the
   // reader's lsp-closed path, and an unhandled rejection here would be pure noise.
   void client.sendNotification(method, params).catch(() => {});
@@ -247,14 +268,19 @@ export function attachOpenDocuments(): void {
 }
 
 /** Ask the owning client for completions at a 1-based position. No client → null (the provider
- *  returns an empty list, exactly the no-server silence the editor had). */
+ *  returns an empty list, exactly the no-server silence the editor had). The raw response is
+ *  declared as the LspCompletionResponse domain shape — jsonrpc parses it at the socket boundary. */
 export async function lspCompletion(
   uri: string,
   languageId: string,
   lineNumber: number,
   column: number,
-): Promise<unknown> {
+): Promise<LspCompletionResponse | null> {
   const client = pickClient(rowsSource(), uri, languageId);
   if (!client) return null;
-  return client.sendRequest("textDocument/completion", completionParams(uri, lineNumber, column)).catch(() => null);
+  // The client's sendRequest is declared to resolve to LspCompletionResponse in DocClient, so the
+  // await below is that named type — jsonrpc already parsed the wire at the socket boundary.
+  return client
+    .sendRequest("textDocument/completion", completionParams(uri, lineNumber, column))
+    .catch(() => null);
 }

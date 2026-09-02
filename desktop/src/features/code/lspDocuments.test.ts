@@ -15,16 +15,28 @@ import {
   trackDocument,
   type DocClient,
   type DocClientRow,
+  type DocNotifyParams,
+  type CompletionRequest,
+  type LspCompletionResponse,
+  type ModelChange,
   type SyncModel,
 } from "./lspDocuments";
 
-function fakeClient(): DocClient & { notes: Array<{ method: string; params: any }> } {
+type Note =
+  | { method: "textDocument/didOpen"; params: ReturnType<typeof didOpenParams> }
+  | { method: "textDocument/didChange"; params: ReturnType<typeof didChangeParams> }
+  | { method: "textDocument/didClose"; params: ReturnType<typeof didCloseParams> }
+  | { method: string; params: DocNotifyParams };
+
+function fakeClient(): DocClient & { notes: Note[] } {
   return {
     notes: [],
-    async sendNotification(method: string, params: unknown) {
-      (this as any).notes.push({ method, params });
+    async sendNotification(method: string, params: DocNotifyParams) {
+      // SAFETY: the sync only ever sends the three did* methods with the exact params builders
+      // above, so recording method+params here is a faithful in-memory bus for the assertions.
+      this.notes.push({ method, params } as Note);
     },
-    async sendRequest(_method: string, _params: unknown) {
+    async sendRequest(_method: string, _params: CompletionRequest): Promise<LspCompletionResponse> {
       return { items: [] };
     },
   };
@@ -32,21 +44,24 @@ function fakeClient(): DocClient & { notes: Array<{ method: string; params: any 
 
 /** A SyncModel stand-in with real event wiring. */
 function fakeModel(uri: string, text: string) {
-  const changeCbs: Array<(e: { changes: any[] }) => void> = [];
+  const changeCbs: Array<(e: { changes: ModelChange[] }) => void> = [];
   const disposeCbs: Array<() => void> = [];
+  // SAFETY: the object below IS a SyncModel by construction (same method surface) with the two
+  // extra fields the fake's edit()/assertions read; the assertion only widens it by those.
+  const model = {
+    uri,
+    value: text,
+    version: 1,
+    getValue() { return this.value; },
+    getVersionId() { return this.version; },
+    onDidChangeContent(cb: (e: { changes: ModelChange[] }) => void) {
+      changeCbs.push(cb);
+      return { dispose() {} };
+    },
+    onWillDispose(cb: () => void) { disposeCbs.push(cb); },
+  } as SyncModel & { value: string; version: number };
   return {
-    model: {
-      uri,
-      value: text,
-      version: 1,
-      getValue() { return this.value; },
-      getVersionId() { return this.version; },
-      onDidChangeContent(cb: (e: { changes: any[] }) => void) {
-        changeCbs.push(cb);
-        return { dispose() {} };
-      },
-      onWillDispose(cb: () => void) { disposeCbs.push(cb); },
-    } as SyncModel & { value: string; version: number },
+    model,
     edit(text: string) {
       this.model.version += 1;
       this.model.value += text;
@@ -127,7 +142,7 @@ describe("completion mapping", () => {
   const word = { startLineNumber: 3, startColumn: 8, endLineNumber: 3, endColumn: 12 };
 
   it("maps an { items } response, applying the word range when the item has no textEdit", () => {
-    const out = toMonacoSuggestions({ items: [{ label: "collections", kind: 9, detail: "std::collections" }] }, word, kinds as any);
+    const out = toMonacoSuggestions({ items: [{ label: "collections", kind: 9, detail: "std::collections" }] }, word, kinds);
     expect(out).toHaveLength(1);
     expect(out[0].label).toBe("collections");
     expect(out[0].insertText).toBe("collections");
@@ -139,20 +154,20 @@ describe("completion mapping", () => {
     const out = toMonacoSuggestions([{
       label: "io",
       textEdit: { newText: "std::io", range: { start: { line: 2, character: 4 }, end: { line: 2, character: 8 } } },
-    }], word, kinds as any);
+    }], word, kinds);
     expect(out[0].insertText).toBe("std::io");
     expect(out[0].range).toEqual({ startLineNumber: 3, startColumn: 5, endLineNumber: 3, endColumn: 9 });
   });
 
   it("maps kinds by name and marks snippets", () => {
-    const out = toMonacoSuggestions([{ label: "fn", kind: 14, insertTextFormat: 2 }], word, kinds as any);
+    const out = toMonacoSuggestions([{ label: "fn", kind: 14, insertTextFormat: 2 }], word, kinds);
     expect(out[0].kind).toBe(17);
     expect(out[0].insertTextRules).toBe(4);
   });
 
   it("an empty/absent response maps to no suggestions", () => {
-    expect(toMonacoSuggestions(null, word, kinds as any)).toEqual([]);
-    expect(toMonacoSuggestions({}, word, kinds as any)).toEqual([]);
+    expect(toMonacoSuggestions([], word, kinds)).toEqual([]);
+    expect(toMonacoSuggestions({ items: undefined }, word, kinds)).toEqual([]);
   });
 });
 
@@ -168,11 +183,17 @@ describe("document sync lifecycle", () => {
     setDocClientRows(() => [{ workspaceRoot: "/repo/crate", language: "rust", client }]);
     attachOpenDocuments();
     expect(client.notes.map(n => n.method)).toEqual(["textDocument/didOpen"]);
-    expect(client.notes[0].params.textDocument.text).toBe("fn main() {}\n");
+    // SAFETY: notes[0].method was just asserted "textDocument/didOpen", so this narrowing to the
+    // didOpen params shape is exact — the assertion above is the guard.
+    const open = client.notes[0] as { method: "textDocument/didOpen"; params: ReturnType<typeof didOpenParams> };
+    expect(open.params.textDocument.text).toBe("fn main() {}\n");
 
     doc.edit("use std::io;\n");
     expect(client.notes.map(n => n.method)).toEqual(["textDocument/didOpen", "textDocument/didChange"]);
-    expect(client.notes[1].params.textDocument.version).toBe(2);
+    // SAFETY: notes[1].method was just asserted "textDocument/didChange", so the narrowing to the
+    // didChange params shape is exact — the assertion above is the guard.
+    const change = client.notes[1] as { method: "textDocument/didChange"; params: ReturnType<typeof didChangeParams> };
+    expect(change.params.textDocument.version).toBe(2);
 
     doc.dispose();
     expect(client.notes.map(n => n.method)).toEqual([
