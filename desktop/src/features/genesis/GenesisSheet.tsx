@@ -122,7 +122,12 @@ export function GenesisSheet({ devRoot, onClose, onMade, onCreated }: {
   return (
     <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/45 pt-[7vh]"
          onMouseDown={event => { if (event.target === event.currentTarget && !busy) onClose(); }}>
+      {/* #6147: while a modal sheet is open it owns every drop — this marker is what the chat
+          composer's drop gate reads so a PRD dropped on the brief never becomes a chip behind
+          the sheet. The sheet's own zone stays scoped by the sheetRef.contains(hit) check in
+          the onDragDropEvent handler above (the Tauri channel has no event propagation). */}
       <form ref={sheetRef} onSubmit={create} role="dialog" aria-modal="true" aria-labelledby="genesis-title"
+            data-modal-sheet-open="true"
             className="tr-card flex max-h-[86vh] w-[590px] max-w-[calc(100vw-48px)] flex-col overflow-hidden p-0 shadow-2xl">
         <div className="flex items-start gap-3 border-b border-[var(--color-tr-edge)] px-5 py-4">
           <span className="rounded-lg bg-tr-doing/10 p-2 text-tr-doing"><Sparkles size={17} /></span>

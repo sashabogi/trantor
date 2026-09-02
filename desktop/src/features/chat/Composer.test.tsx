@@ -9,7 +9,7 @@
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { Composer } from "./Composer";
+import { Composer, composerTakesDrop } from "./Composer";
 import { clampComposerPx, maxComposerPx, minComposerPx } from "./composerHeight";
 
 // SAFETY: React's act() reads this flag off globalThis; the cast adds the one key TS does not know
@@ -149,5 +149,37 @@ describe("the composer's drag handle (#6070 bounce)", () => {
     drag(handle, 500, -20_000);
     expect(ta.style.height).toBe(`${max}px`);
     expect(store.get("trantor.chat.composerHeight")).toBe(String(max));
+  });
+});
+
+// #6147 — the webview's drop event is WINDOW-global: the composer and the genesis sheet both hear
+// every drop. The gate is pure: a drop is the composer's only when the topmost element at the drop
+// point is inside the composer root and no modal sheet is open.
+describe("composerTakesDrop (#6147)", () => {
+  it("refuses a null hit or a null root, and takes a hit inside the root", () => {
+    const root = document.createElement("div");
+    const inner = document.createElement("span");
+    root.appendChild(inner);
+    document.body.appendChild(root);
+    const outside = document.createElement("div");
+    document.body.appendChild(outside);
+    expect(composerTakesDrop(null, root)).toBe(false);
+    expect(composerTakesDrop(inner, null)).toBe(false);
+    expect(composerTakesDrop(inner, root)).toBe(true);
+    expect(composerTakesDrop(outside, root)).toBe(false);
+    root.remove(); outside.remove();
+  });
+  it("stands down while a modal sheet is open, even for a hit inside the root", () => {
+    const root = document.createElement("div");
+    const inner = document.createElement("span");
+    root.appendChild(inner);
+    document.body.appendChild(root);
+    const sheet = document.createElement("div");
+    sheet.setAttribute("data-modal-sheet-open", "");
+    document.body.appendChild(sheet);
+    expect(composerTakesDrop(inner, root)).toBe(false);
+    sheet.remove();
+    expect(composerTakesDrop(inner, root)).toBe(true);
+    root.remove();
   });
 });
