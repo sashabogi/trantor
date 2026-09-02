@@ -8,7 +8,7 @@ language server behind it and predictive completion. Two cards, two seats, one M
 
 | Concern | Single owner | Writers | Consumers | Never |
 |---|---|---|---|---|
-| Language intelligence (servers, their lifecycle, JSON-RPC framing) | Rust `lsp` module in src-tauri | Rust only | Monaco through monaco-languageclient over Tauri invoke/listen | TS spawning servers; a server outliving the lens; a fake "ready" when no server is installed |
+| Language intelligence (servers, their lifecycle, JSON-RPC framing) | Rust `lsp` module in src-tauri | Rust only | Monaco through monaco-languageclient over Tauri invoke/listen | TS spawning servers; a server killed by a lens switch; a fake "ready" when no server is installed |
 | Predictive completion (ghost text) | one Monaco inline-completions provider module + Rust `ghost_complete` | the provider only | CodeView | a second completion path; spend that does not reach the ledger |
 
 ## Card #5857 — language servers (deepseek)
@@ -20,8 +20,15 @@ Rust side, `src-tauri/src/lsp.rs`:
 - `lsp_send(id, message)` writes one JSON-RPC message with `Content-Length` framing.
   Server output is framed back and emitted as Tauri event `lsp-message:<id>` (payload: the JSON
   text). Framing has unit tests (split reads, two messages in one chunk, CRLF headers).
-- `lsp_stop(id)`; all servers for a project stop when the lens unmounts (the TS side calls it in
-  the effect cleanup) and on app exit.
+- `lsp_stop(id)`. LIFETIME (amended 2026-09-01 after the first live run): a server OUTLIVES the
+  lens. One per (workspace root, language); it stops on project switch, after 15 minutes with no
+  open file of its language, or on app exit — never when Files unmounts. The operator switches
+  lens constantly, and a cold rust-analyzer load takes minutes (Fetching → Building CrateGraph →
+  Roots Scanned → compile-time-deps → proc-macros → cachePriming), so a lens-scoped server never
+  reached ready and the old Monaco client wrote to a dead pipe. A remount re-attaches to the
+  live server id instead of spawning.
+- "ready" is the END of the `rustAnalyzer/cachePriming` progress (the last load phase); no
+  rust-analyzer token contains "index". Until then the status line names the running phase.
 - Servers, by language id: `rust` -> `rust-analyzer`; `typescript`/`typescriptreact`/
   `javascript` -> `typescript-language-server --stdio`; `python` -> `pyright-langserver --stdio`.
   Detection is `which` on the terminal PATH (`terminal_path()`); a missing binary returns
