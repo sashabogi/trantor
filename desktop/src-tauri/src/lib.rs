@@ -1566,10 +1566,11 @@ fn spawn_status_watcher(window: tauri::Window, project: String, stop: Arc<Atomic
         let mut last = String::new();
         let emit = |status: &str, pane: &str, last: &mut String| -> bool {
             if *last == status {
+                trace(format!("status: emit skipped (unchanged) pane={pane} st={status}"));
                 return true;
             }
             *last = status.to_string();
-            window
+            let ok = window
                 .emit(
                     "orch-status",
                     OrchStatusPayload {
@@ -1578,7 +1579,9 @@ fn spawn_status_watcher(window: tauri::Window, project: String, stop: Arc<Atomic
                         status: status.to_string(),
                     },
                 )
-                .is_ok()
+                .is_ok();
+            trace(format!("status: emit pane={pane} st={status} ok={ok}"));
+            ok
         };
         let orch_pane = |project: &str| -> Option<String> {
             let rows = std::fs::read_to_string(desktop_bus_dir().join("crew-windows.txt"))
@@ -1594,8 +1597,10 @@ fn spawn_status_watcher(window: tauri::Window, project: String, stop: Arc<Atomic
             }
             true
         };
+        trace(format!("status: watcher start project={project}"));
         while !stop.load(Ordering::SeqCst) {
             let Some(pane) = orch_pane(&project) else {
+                trace(format!("status: no orch pane for project={project}"));
                 if !emit("none", "", &mut last) {
                     return;
                 }
@@ -1605,17 +1610,24 @@ fn spawn_status_watcher(window: tauri::Window, project: String, stop: Arc<Atomic
                 continue;
             };
             let seeded = herdr::agent_status(&pane).unwrap_or_else(|| "unknown".to_string());
+            trace(format!("status: seed pane={pane} st={seeded}"));
             if !emit(&seeded, &pane, &mut last) {
                 return;
             }
             match herdr::subscribe_status(&pane, Duration::from_secs(15)) {
-                Ok(mut stream) => loop {
+                Ok(mut stream) => {
+                  trace(format!("status: subscribed pane={pane}"));
+                  loop {
                     if stop.load(Ordering::SeqCst) {
+                        trace(format!("status: watcher stopped (stop flag) pane={pane}"));
                         return;
                     }
                     match stream.next_line() {
                         Ok(Some(line)) => {
-                            if let Some(st) = herdr::status_from_frame(&line, &pane) {
+                            let parsed = herdr::status_from_frame(&line, &pane);
+                            let head: String = line.trim().chars().take(220).collect();
+                            trace(format!("status: frame parsed={parsed:?} raw={head}"));
+                            if let Some(st) = parsed {
                                 if !emit(&st, &pane, &mut last) {
                                     return;
                                 }
@@ -1624,24 +1636,33 @@ fn spawn_status_watcher(window: tauri::Window, project: String, stop: Arc<Atomic
                         Ok(None) => {
                             // Quiet tick: is this still the orch pane, and did we miss a frame?
                             if orch_pane(&project).as_deref() != Some(pane.as_str()) {
+                                trace(format!("status: orch pane moved away from {pane}, resubscribing"));
                                 break;
                             }
-                            if let Some(st) = herdr::agent_status(&pane) {
+                            let st = herdr::agent_status(&pane);
+                            trace(format!("status: quiet tick pane={pane} agent_status={st:?}"));
+                            if let Some(st) = st {
                                 if !emit(&st, &pane, &mut last) {
                                     return;
                                 }
                             }
                         }
-                        Err(_) => break,
+                        Err(e) => {
+                            trace(format!("status: stream error pane={pane} err={e}"));
+                            break;
+                        }
                     }
-                },
-                Err(_) => {
+                  }
+                }
+                Err(e) => {
+                    trace(format!("status: subscribe failed pane={pane} err={e}"));
                     if !nap(&stop, 6) {
                         return;
                     }
                 }
             }
         }
+        trace(format!("status: watcher exit project={project}"));
     });
 }
 
@@ -1669,9 +1690,11 @@ fn chat_watch(window: tauri::Window, project: String, session_id: Option<String>
         let mut g = CHAT_WATCHERS.lock().unwrap();
         let map = g.get_or_insert_with(std::collections::HashMap::new);
         if map.contains_key(&watcher_key) {
+            trace(format!("chat_watch key={watcher_key} pinned={pinned} existing=true"));
             return Ok(current);
         }
         map.insert(watcher_key.clone(), Arc::clone(&stop));
+        trace(format!("chat_watch key={watcher_key} pinned={pinned} existing=false"));
     }
 
     if !pinned {
@@ -1692,6 +1715,7 @@ fn chat_unwatch(project: String, session_id: Option<String>) {
         let mut g = CHAT_WATCHERS.lock().unwrap();
         g.as_mut().and_then(|map| map.remove(&key))
     };
+    trace(format!("chat_unwatch key={key} found={}", stop.is_some()));
     if let Some(stop) = stop {
         stop.store(true, Ordering::SeqCst);
     }
@@ -5847,6 +5871,11 @@ fn project_changes_sync(project: &str) -> Result<Vec<ChangeRow>, String> {
         }
     }
     Ok(rows)
+}
+
+/// Backend trace line into the same app-trace.log the frontend writes (#5993 status watcher).
+fn trace(line: String) {
+    let _ = app_log(line);
 }
 
 /// The frontend's diagnostic line, appended verbatim with a timestamp (#12752). Not a log for
