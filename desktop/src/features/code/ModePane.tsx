@@ -8,7 +8,7 @@
 // Mode widths follow the artboards: 300 for Files/Git/Sessions, 440 for Chat. The seat scope
 // selector lives at the BOTTOM of the pane (Main.dc.html:147-152) and feeds tree, editor, and
 // git alike — one picker, three consumers.
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { ChevronDown, FolderTree, GitBranch, History, MessageSquare } from "lucide-react";
 import type { Card, HubClient, Peer } from "../../shared/api/client";
 import { BrandGlyph } from "../../shared/Avatar";
@@ -17,6 +17,7 @@ import { Chat } from "../chat/Chat";
 import { folderSeats, mergeChanges, mergedCountFor, projectChanges, type ProjectChangeRow } from "./gitApi";
 import { FileTree } from "./FileTree";
 import { SessionsMode } from "./SessionsMode";
+import { tabsMode } from "./tabStrip";
 import type { SessionRow } from "./sessionsApi";
 
 type Mode = "files" | "git" | "sessions" | "chat";
@@ -48,6 +49,23 @@ export function ModePane({ client, project, seat, onSeat, onOpenFile }: {
   const [sending, setSending] = useState(false);
   const [sent, setSent] = useState<"ok" | "fail" | null>(null);
   const [selectedClaude, setSelectedClaude] = useState<SessionRow | null>(null);
+
+  // The tab strip's measured width (#6036): a tab word NEVER truncates, so below the width that
+  // fits all four labels the strip renders icon-only (label as tooltip, unread dot kept). The
+  // ResizeObserver reports the REAL rendered width — the pane can be squeezed below its designed
+  // 300/440 by the surrounding layout, and only a measurement knows. Unmeasured stays on labels.
+  const stripRef = useRef<HTMLDivElement | null>(null);
+  const [stripWidth, setStripWidth] = useState<number | null>(null);
+  useEffect(() => {
+    const el = stripRef.current;
+    if (!el || typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver(entries => {
+      for (const e of entries) setStripWidth(e.contentRect.width);
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+  const compactTabs = tabsMode(stripWidth) === "icons";
 
   // The seats of this project — the footer's scope chips. Same peers poll every lens runs.
   const [peers, setPeers] = useState<Peer[]>([]);
@@ -144,8 +162,9 @@ export function ModePane({ client, project, seat, onSeat, onOpenFile }: {
   // The rail is the SAME object as the lens tabs (tr-seg + a raised active segment) with a
   // Lucide icon per mode, so it reads as clickable by association with every other tab in the
   // app. The four segments share the width EXACTLY (grid quarters, #5960): the Chat segment's
-  // live dot used to push the row past the 300px rail. The dot rides INSIDE its segment, and a
-  // label truncates before anything overflows.
+  // live dot used to push the row past the 300px rail. A label never truncates (#6036): below
+  // the measured fit width the label steps aside entirely (icon-only, title carries the word);
+  // the truncate class below is the last-resort guard for the gap zone, not the design.
   const modeBtn = (m: Mode, label: string, Icon: typeof FolderTree, dot?: boolean) => (
     <button
       type="button"
@@ -155,10 +174,11 @@ export function ModePane({ client, project, seat, onSeat, onOpenFile }: {
       }}
       data-on={mode === m}
       title={label}
+      aria-label={label}
       className="flex w-full min-w-0 items-center justify-center gap-1 rounded-[7px] px-1 py-[5px] text-[11.5px] text-tr-muted data-[on=true]:bg-white/[0.07] data-[on=true]:font-medium data-[on=true]:text-tr-text"
     >
       <Icon size={12} strokeWidth={1.75} className="shrink-0" />
-      <span className="min-w-0 truncate">{label}</span>
+      {!compactTabs && <span className="min-w-0 truncate">{label}</span>}
       {dot && <span className="h-[6px] w-[6px] shrink-0 rounded-full bg-tr-doing" />}
     </button>
   );
@@ -168,8 +188,9 @@ export function ModePane({ client, project, seat, onSeat, onOpenFile }: {
       className="flex min-h-0 shrink-0 flex-col overflow-hidden rounded-[12px] border border-tr-edge bg-tr-main"
       style={{ width: mode === "chat" ? 440 : 300, margin: 12 }}
     >
-      {/* mode rail — exact quarters at 300px and 440px alike (#5960) */}
-      <div className="tr-seg grid shrink-0 grid-cols-4 gap-px border-b border-tr-edge px-2 py-2">
+      {/* mode rail — exact quarters at 300px and 440px alike (#5960); icon-only below the
+          label-fit width so a tab word never truncates (#6036) */}
+      <div ref={stripRef} className="tr-seg grid shrink-0 grid-cols-4 gap-px border-b border-tr-edge px-2 py-2">
         {modeBtn("files", "Files", FolderTree)}
         {modeBtn("git", "Git", GitBranch)}
         {modeBtn("sessions", "Sessions", History)}
