@@ -19,7 +19,7 @@ import { dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { ensureEnrolled, loadIdentity, signedPost } from "../hooks/lib/api.mjs";
 import { setAutonomy } from "../lib/autonomy.mjs";
-import { resolveHub } from "../lib/project.mjs";
+import { resolveHub, setProjectHub } from "../lib/project.mjs";
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 
@@ -109,8 +109,12 @@ if (hook.status !== 0) die(`hook install failed: ${(hook.stderr || "").trim()}`)
 // is bypass, so opening it can never inherit another project's permission choice.
 setAutonomy(name, { harness: "prompt" });
 
-// ── the hub: brief + first card, signed like every other client ─────────────────────────────────
+// ── the hub: pin + brief + first card, signed like every other client ──────────────────────────
 const hub = resolveHub(name);
+// Pin the new project to the hub it posts to (#5862 residual): without the pin, the first
+// session in the dir falls back to the global default and wears the "not pinned to a hub"
+// warning even though genesis chose this hub deliberately. Same persistence as `trantor hub set`.
+setProjectHub(name, hub);
 const session = process.env.RELAY_SESSION || `genesis:${name}`;
 const identity = loadIdentity(session);
 let card = null;
