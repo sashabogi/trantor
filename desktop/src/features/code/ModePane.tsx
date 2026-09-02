@@ -11,11 +11,11 @@
 import { useEffect, useMemo, useState } from "react";
 import { ChevronDown, FolderTree, GitBranch, History, MessageSquare } from "lucide-react";
 import type { Card, HubClient, Peer } from "../../shared/api/client";
-import { FileTree } from "./FileTree";
+import { BrandGlyph } from "../../shared/Avatar";
 import { GitPanel } from "./GitPanel";
 import { Chat } from "../chat/Chat";
-import { gitPanel, lineCountFor, type GitPanelSnapshot } from "./gitApi";
-import { seatDiff } from "./seatDiff";
+import { folderSeats, mergeChanges, mergedCountFor, projectChanges, type ProjectChangeRow } from "./gitApi";
+import { FileTree } from "./FileTree";
 import { SessionsMode } from "./SessionsMode";
 import type { SessionRow } from "./sessionsApi";
 
@@ -43,8 +43,6 @@ export function ModePane({ client, project, seat, onSeat, onOpenFile }: {
   const [mode, setMode] = useState<Mode>("files");
   const [scopeOpen, setScopeOpen] = useState(false);
   const [filter, setFilter] = useState("");
-  const [changed, setChanged] = useState<GitPanelSnapshot | null>(null);
-  const [seatCounts, setSeatCounts] = useState<Record<string, number>>({});
   const [tasks, setTasks] = useState<Card[]>([]);
   const [note, setNote] = useState("");
   const [sending, setSending] = useState(false);
@@ -61,18 +59,23 @@ export function ModePane({ client, project, seat, onSeat, onOpenFile }: {
     return () => { alive = false; clearInterval(iv); };
   }, [client]);
 
-  // CHANGED (Files mode) and the git panel read the same snapshot; polled at the SCM cadence.
-  // A failed read stays absent — clean and unknown must not look different in a scary way.
+  // The PROJECT-WIDE change snapshot (#5959): one command covers the checkout and every seat
+  // worktree, replacing the per-seat seatDiff fan-out. Polled at the SCM cadence; a failed read
+  // stays absent — clean and unknown must not look different in a scary way.
+  const [changeRows, setChangeRows] = useState<ProjectChangeRow[]>([]);
   useEffect(() => {
-    if (!seat) { setChanged(null); return; }
     let alive = true;
-    const pull = () => gitPanel(project, seat)
-      .then(s => { if (alive) setChanged(s); })
-      .catch(() => { if (alive) setChanged(null); });
+    const pull = () => projectChanges(project)
+      .then(rows => { if (alive) setChangeRows(rows); })
+      .catch(() => { if (alive) setChangeRows([]); });
     pull();
     const iv = setInterval(pull, 12_000);
     return () => { alive = false; clearInterval(iv); };
-  }, [client, project, seat]);
+  }, [project]);
+
+  // The union the CHANGED section and the tree render from.
+  const merged = useMemo(() => mergeChanges(changeRows), [changeRows]);
+  const folderMarks = useMemo(() => folderSeats(merged), [merged]);
 
   // Changed-file count per seat, for the footer chips: the one-click answer to "which worktree
   // has edits" (2026-09-01). Absent = clean, never a zero.
@@ -80,20 +83,7 @@ export function ModePane({ client, project, seat, onSeat, onOpenFile }: {
     () => peers.filter(p => p.session.endsWith(`:${project}`) && !p.session.toLowerCase().startsWith("macbook")),
     [peers, project],
   );
-  useEffect(() => {
-    let alive = true;
-    const pull = () => {
-      for (const s of seats) {
-        const name = seatName(s.session);
-        seatDiff(project, name)
-          .then(d => { if (alive) setSeatCounts(prev => ({ ...prev, [name]: d.files.length })); })
-          .catch(() => {});
-      }
-    };
-    pull();
-    const iv = setInterval(pull, 15_000);
-    return () => { alive = false; clearInterval(iv); };
-  }, [seats, project]);
+  const seatCount = (name: string) => changeRows.filter(r => r.seat === name).length;
 
   // The note composer refs the seat's in-flight card, so a note lands as "#id <note>" exactly
   // like every other card reference the seat already reads. Moved from the SCM rail (#5810).
@@ -124,25 +114,32 @@ export function ModePane({ client, project, seat, onSeat, onOpenFile }: {
     }
   };
 
-  // CHANGED rows: every changed path, counts where git measured them, "new" where it could not.
+  // CHANGED rows: the UNION across the checkout and every seat (#5959), each row carrying the
+  // seats that touched it. A row with exactly one writer opens that copy directly; a contested
+  // path first asks whose copy — the chooser lives in the row until picked.
   const changedRows = useMemo(() => {
-    if (!changed) return [];
-    const { staged, unstaged, untracked } = {
-      staged: changed.status.filter(e => e.x !== " " && e.x !== "?"),
-      unstaged: changed.status.filter(e => e.y !== " " && e.y !== "?" && e.x !== "?"),
-      untracked: changed.status.filter(e => e.x === "?").map(e => e.path),
-    };
-    const seen = new Set<string>();
-    const rows: { path: string; fresh: boolean }[] = [];
-    for (const e of [...staged, ...unstaged]) {
-      if (!seen.has(e.path)) { seen.add(e.path); rows.push({ path: e.path, fresh: false }); }
-    }
-    for (const p of untracked) {
-      if (!seen.has(p)) { seen.add(p); rows.push({ path: p, fresh: true }); }
-    }
     const f = filter.toLowerCase();
-    return f ? rows.filter(r => r.path.toLowerCase().includes(f)) : rows;
-  }, [changed, filter]);
+    const rows = f ? merged.filter(e => e.path.toLowerCase().includes(f)) : merged;
+    return rows;
+  }, [merged, filter]);
+  const [chooserFor, setChooserFor] = useState<string | null>(null);
+  const openChanged = (path: string, seats: (string | null)[]) => {
+    const writers = seats.filter((s): s is string => s !== null);
+    if (writers.length === 1) {
+      onSeat(writers[0]);
+      onOpenFile(path);
+      setChooserFor(null);
+      return;
+    }
+    if (writers.length === 0) {
+      onSeat(null);
+      onOpenFile(path);
+      setChooserFor(null);
+      return;
+    }
+    // contested: flip the row's inline chooser instead of guessing
+    setChooserFor(current => (current === path ? null : path));
+  };
 
   // The rail is the SAME object as the lens tabs (tr-seg + a raised active segment) with a
   // Lucide icon per mode, so it reads as clickable by association with every other tab in the
@@ -191,38 +188,53 @@ export function ModePane({ client, project, seat, onSeat, onOpenFile }: {
             />
           </div>
           <div className="px-3 pt-1 pb-0.5 text-[9px] font-semibold tracking-[0.13em] text-tr-muted/60">
-            CHANGED · {seat ? `seat/${seat}` : "project"}
+            CHANGED · all sources
           </div>
-          <div className="max-h-[190px] shrink-0 overflow-y-auto px-1.5">
-            {!seat && (
-              <div className="px-2 py-1 text-[11.5px] text-tr-muted/70">Pick a seat below — the project checkout has no per-seat change list.</div>
+          <div className="max-h-[220px] shrink-0 overflow-y-auto px-1.5">
+            {changedRows.length === 0 && (
+              <div className="px-2 py-1 text-[11.5px] text-tr-muted/70">
+                {changeRows.length === 0 || merged.length === 0 ? "Clean — no changes anywhere." : "reading…"}
+              </div>
             )}
-            {seat && changedRows.length === 0 && (
-              <div className="px-2 py-1 text-[11.5px] text-tr-muted/70">{changed ? "Clean — no changes." : "reading…"}</div>
-            )}
-            {seat && changedRows.map(r => (
-              <button
-                key={r.path}
-                type="button"
-                onClick={() => onOpenFile(r.path)}
-                title={`${r.path} — open the editable diff`}
-                className="flex w-full items-center gap-2 rounded-[7px] px-2 py-1 text-left hover:bg-white/[0.05]"
-              >
-                <span className="tr-mono min-w-0 flex-1 truncate text-[11.5px] text-tr-muted">{tailPath(r.path)}</span>
-                {r.fresh ? (
-                  <span className="tr-mono shrink-0 text-[10px] text-tr-warn">new</span>
-                ) : (
-                  (() => {
-                    const n = lineCountFor(changed?.counts ?? [], r.path);
+            {changedRows.map(e => (
+              <div key={e.path} className="mb-0.5">
+                <button
+                  type="button"
+                  onClick={() => openChanged(e.path, e.seats)}
+                  title={`${e.path} — open the editable diff in its writer's worktree`}
+                  className="flex w-full items-center gap-2 rounded-[7px] px-2 py-1 text-left hover:bg-white/[0.05]"
+                >
+                  <span className="tr-mono min-w-0 flex-1 truncate text-[11.5px] text-tr-muted">{tailPath(e.path)}</span>
+                  {e.status === "??" && <span className="tr-mono shrink-0 text-[10px] text-tr-warn">new</span>}
+                  {(() => {
+                    const n = mergedCountFor(merged, e.path);
                     return n ? (
                       <span className="tr-mono shrink-0 text-[10px] tabular-nums">
                         <span style={{ color: "var(--git-decoration-added)" }}>+{n.plus}</span>
                         <span style={{ color: "var(--git-decoration-deleted)" }}>−{n.minus}</span>
                       </span>
                     ) : null;
-                  })()
+                  })()}
+                  {e.seats.filter((s): s is string => s !== null).map(s => (
+                    <BrandGlyph key={s} name={s} size={11} />
+                  ))}
+                </button>
+                {chooserFor === e.path && e.seats.filter((s): s is string => s !== null).length > 1 && (
+                  <div className="ml-4 flex flex-wrap gap-1 rounded-[7px] border border-tr-edge bg-tr-panel/60 px-2 py-1">
+                    <span className="py-0.5 text-[10.5px] text-tr-muted/70">whose copy?</span>
+                    {e.seats.filter((s): s is string => s !== null).map(s => (
+                      <button
+                        key={s}
+                        type="button"
+                        onClick={() => { onSeat(s); onOpenFile(e.path); setChooserFor(null); }}
+                        className="tr-chip hover:text-tr-text"
+                      >
+                        {s}
+                      </button>
+                    ))}
+                  </div>
                 )}
-              </button>
+              </div>
             ))}
           </div>
           <div className="px-3 pb-0.5 pt-3 text-[9px] font-semibold tracking-[0.13em] text-tr-muted/60">ALL FILES</div>
@@ -232,6 +244,7 @@ export function ModePane({ client, project, seat, onSeat, onOpenFile }: {
               seat={seat}
               openPath={null}
               onOpen={p => onOpenFile(p)}
+              marks={{ entries: merged, folders: folderMarks }}
             />
           </div>
         </>
@@ -331,8 +344,8 @@ export function ModePane({ client, project, seat, onSeat, onOpenFile }: {
             <span className="tr-mono min-w-0 flex-1 truncate text-left text-[11.5px]">
               {seat ? `seat/${seat}` : "project"}
             </span>
-            {seat && (seatCounts[seat] ?? 0) > 0 && (
-              <span className="tr-mono shrink-0 text-[10.5px] text-tr-doing">{seatCounts[seat]} changed</span>
+            {seat && seatCount(seat) > 0 && (
+              <span className="tr-mono shrink-0 text-[10.5px] text-tr-doing">{seatCount(seat)} changed</span>
             )}
             <ChevronDown size={11} strokeWidth={2.5} className="shrink-0 text-tr-muted" />
           </button>
@@ -349,7 +362,7 @@ export function ModePane({ client, project, seat, onSeat, onOpenFile }: {
               </button>
               {seats.map(s => {
                 const name = seatName(s.session);
-                const n = seatCounts[name] ?? 0;
+                const n = seatCount(name);
                 return (
                   <button
                     key={s.session}

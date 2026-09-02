@@ -13,6 +13,85 @@ export type GitLogEntry = { sha: string; author: string; when: string; subject: 
  *  neither, and a fake zero would read as "known small". */
 export type GitLineCount = { path: string; plus: number; minus: number };
 
+/** One (seat, path) change row from `project_changes` (#5959). seat null = the project checkout. */
+export type ProjectChangeRow = {
+  seat: string | null;
+  path: string;
+  status: string;
+  plus: number | null;
+  minus: number | null;
+};
+
+/** The union entry the CHANGED list and the tree render from: one path, every seat that touched
+ *  it, summed counts (null stays null — no count was ever measured), and the rawest status. */
+export type MergedChange = {
+  path: string;
+  seats: (string | null)[];
+  status: string;
+  plus: number | null;
+  minus: number | null;
+};
+
+export async function projectChanges(project: string): Promise<ProjectChangeRow[]> {
+  return JSON.parse(await invoke<string>("project_changes", { project }));
+}
+
+/** Union the per-seat rows by path (#5959). Order: most recently… rows arrive per seat; the merge
+ *  preserves first-seen path order and dedupes seats. Counts SUM across seats only when every
+ *  contributor measured them — mixing a sum with a null would claim a measurement nobody made. */
+export function mergeChanges(rows: ProjectChangeRow[]): MergedChange[] {
+  const byPath = new Map<string, MergedChange>();
+  for (const r of rows) {
+    const hit = byPath.get(r.path);
+    if (!hit) {
+      byPath.set(r.path, {
+        path: r.path,
+        seats: [r.seat],
+        status: r.status,
+        plus: r.plus,
+        minus: r.minus,
+      });
+      continue;
+    }
+    if (!hit.seats.includes(r.seat)) hit.seats.push(r.seat);
+    if (hit.plus !== null && r.plus !== null) hit.plus += r.plus;
+    else hit.plus = null;
+    if (hit.minus !== null && r.minus !== null) hit.minus += r.minus;
+    else hit.minus = null;
+    if (r.status !== " ") hit.status = hit.status === r.status ? hit.status : hit.status;
+  }
+  return [...byPath.values()];
+}
+
+/** Folder roll-up (#5959): every ancestor directory of a changed path inherits the seats that
+ *  touched anything under it — the tree's folders wear the marks of their subtree. */
+export function folderSeats(
+  entries: MergedChange[],
+): Record<string, (string | null)[]> {
+  const out: Record<string, (string | null)[]> = {};
+  for (const e of entries) {
+    const parts = e.path.split("/");
+    parts.pop(); // the file row shows its own marks; folders are the ancestors
+    let dir = "";
+    for (const part of parts) {
+      dir = dir ? `${dir}/${part}` : part;
+      const seats = (out[dir] ??= []);
+      for (const s of e.seats) if (!seats.includes(s)) seats.push(s);
+    }
+  }
+  return out;
+}
+
+/** The +N/−N chip values for a path across ALL seats. Same null rule as lineCountFor. */
+export function mergedCountFor(
+  entries: MergedChange[],
+  path: string,
+): { plus: number; minus: number } | null {
+  const hit = entries.find(e => e.path === path);
+  if (!hit || hit.plus === null || hit.minus === null) return null;
+  return { plus: hit.plus, minus: hit.minus };
+}
+
 export type GitPanelSnapshot = {
   branch: string;
   upstream: string | null;
