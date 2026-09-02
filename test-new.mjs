@@ -67,6 +67,9 @@ const cardA = (tasksA.tasks ?? []).find(t => t.title === "genesis: genesis-a");
 ok("init: genesis card on the new board", !!cardA, JSON.stringify(tasksA).slice(0, 200));
 const projectsA = await (await fetch(`${HUB}/projects`)).json();
 ok("init: brief posted to the hub", JSON.stringify(projectsA).includes("Genesis drill project"));
+// the pin (#5862 residual): the first session must not wear the "not pinned to a hub" warning
+const cfg = JSON.parse(readFileSync(join(W, ".agent-bus", "config.json"), "utf8"));
+ok("init: project pinned to the hub it posted to", cfg.hubs?.["genesis-a"] === HUB, JSON.stringify(cfg.hubs ?? {}));
 
 // ── mode 2: clone --from ────────────────────────────────────────────────────────────────────────
 const src = join(W, "src-repo");
