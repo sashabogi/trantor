@@ -9,7 +9,9 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { FitAddon } from "@xterm/addon-fit";
 import { WebglAddon } from "@xterm/addon-webgl";
 import { Terminal } from "@xterm/xterm";
+import { getCurrentWebview } from "@tauri-apps/api/webview";
 import "@xterm/xterm/css/xterm.css";
+import { quotePaths } from "./quotePaths";
 import {
   orchestratorOpen,
   surfaceFor,
@@ -22,6 +24,14 @@ import {
 } from "./herdr";
 
 const SEATS_POLL_MS = 12_000;
+
+/** The slice of Tauri's DragDropEvent the pane reacts to. HTML5 drop never fires under Tauri —
+ *  onDragDropEvent is the only channel (same receipt as the composer's drop, #5507). */
+export type PaneDragDropEvent =
+  | { type: "enter"; paths: string[]; position: { x: number; y: number } }
+  | { type: "over"; position: { x: number; y: number } }
+  | { type: "drop"; paths: string[]; position: { x: number; y: number } }
+  | { type: "leave" };
 
 // The design tokens the card names (#5367): the pane container's #101013, the app's text
 // #ececf0, SF Mono at 12px — matching the record rail's mono rows, not a terminal-product look.
@@ -56,6 +66,9 @@ export type TerminalDeps = {
   termWrite(sub: number, data: string): Promise<void>;
   termResize(sub: number, cols: number, rows: number): Promise<void>;
   termDetach(sub: number): Promise<void>;
+  /** Webview-level drag-drop subscription (#5949); returns the unsubscribe. Injectable so the
+   *  drop path is driven by a real object in tests, like every other dep here. */
+  subscribeDragDrop(handler: (event: PaneDragDropEvent) => void): () => void;
 };
 
 // The real xterm wiring lives here and nowhere else, so its concrete types line up naturally
@@ -112,6 +125,18 @@ export const DEFAULT_TERMINAL_DEPS: TerminalDeps = {
   termWrite,
   termResize,
   termDetach,
+  subscribeDragDrop: handler => {
+    let off: (() => void) | undefined;
+    try {
+      getCurrentWebview()
+        .onDragDropEvent(ev => handler(ev.payload))
+        .then(un => { off = un; })
+        .catch(() => { /* no webview under this window (tests) — drops are a no-op there */ });
+    } catch {
+      // getCurrentWebview throws outside a Tauri window; the pane still works, just undroppable.
+    }
+    return () => { try { off?.(); } catch { /* already gone */ } };
+  },
 };
 
 export function TerminalPane({
@@ -127,6 +152,8 @@ export function TerminalPane({
   const [openError, setOpenError] = useState<string | null>(null);
   const [latencyMs, setLatencyMs] = useState<number | null>(null);
   const [attachError, setAttachError] = useState<string | null>(null);
+  // A file is being dragged over THIS pane (#5949) — the composer's calm ring, borrowed.
+  const [dragOver, setDragOver] = useState(false);
 
   // Resolve (and re-resolve) the seat's herdr surface. Surfaces change when the crew restarts,
   // so this keeps polling at the hub-data cadence; terminal bytes stream over the pty once attached.
@@ -222,6 +249,40 @@ export function TerminalPane({
     };
   }, [surface, deps]);
 
+  // Dropped files (#5949): the paths are written into the seat's terminal shell-quoted and
+  // space-separated, through the same term_write path keystrokes use — it IS the human typing
+  // path, so a drop is exactly a human typing a filename (with a trailing space to separate the
+  // next word). Grid mode has several panes per window and the event is webview-level, so every
+  // event is hit-tested against THIS pane's rectangle; the calm ring shows only while the drag
+  // is actually over here.
+  useEffect(() => {
+    if (!surface) return;
+    const overThisPane = (position: { x: number; y: number } | undefined): boolean => {
+      const el = hostRef.current;
+      if (!el || !position) return true;
+      const r = el.getBoundingClientRect();
+      if (r.width === 0 && r.height === 0) return true; // unlaid out — accept
+      const dpr = window.devicePixelRatio || 1;
+      const x = position.x / dpr;
+      const y = position.y / dpr;
+      return x >= r.left && x <= r.right && y >= r.top && y <= r.bottom;
+    };
+    return deps.subscribeDragDrop(ev => {
+      if (ev.type === "leave") { setDragOver(false); return; }
+      if (!overThisPane(ev.position)) { setDragOver(false); return; }
+      if (ev.type === "drop") {
+        setDragOver(false);
+        const sub = subRef.current;
+        if (sub === null || !ev.paths.length) return;
+        const text = quotePaths(ev.paths);
+        lastInputAtRef.current = performance.now();
+        void deps.termWrite(sub, `${text} `);
+        return;
+      }
+      setDragOver(true); // enter / over
+    });
+  }, [surface, deps]);
+
   if (attachError === "notAnAgent") {
     return (
       <div className="flex flex-1 items-center justify-center">
@@ -271,7 +332,11 @@ export function TerminalPane({
     );
   }
   return (
-    <div className="relative min-h-0 flex-1" data-pane={surface}>
+    <div
+      className={`relative min-h-0 flex-1 rounded-lg transition-shadow ${dragOver ? "ring-1 ring-tr-doing/50" : ""}`}
+      data-pane={surface}
+      data-drag-over={dragOver}
+    >
       <div ref={hostRef} className="h-full min-h-0" />
       {latencyMs !== null && (
         <div className="tr-mono absolute right-2 top-2 rounded-[7px] bg-black/50 px-2 py-1 text-[11px] text-tr-muted">
