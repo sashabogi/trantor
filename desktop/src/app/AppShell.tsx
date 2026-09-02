@@ -12,8 +12,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ArrowDownToLine, Bot, Eye, GraduationCap, House, Inbox as InboxIcon, MessagesSquare, Plus, Search, Settings as SettingsIcon } from "lucide-react";
 import { appUpdateCheck, HubClient, hubForProject, knownProjects, localSessions, type AppUpdate, type Peer } from "../shared/api/client";
-import { ago, stateOf } from "../shared/presence";
-import { hubActivity } from "../features/workspace/seatActivity";
+import { ago } from "../shared/presence";
+import { computeProjectActivity, activityRank, isWorkingStatus, type ProjectActivity } from "./projectActivity";
 import { Palette, type PaletteScope } from "../features/search/Palette";
 import { countUnseen, onSeenChange } from "../shared/seen";
 import { usePendingProposals } from "../shared/Proposals";
@@ -143,18 +143,23 @@ export function AppShell() {
   // registered", and the dot BLINKS only for actual activity, never for merely sitting open.
   // Two independent truths feed it:
   //   • OPEN — a live session process on this machine (local_sessions: claude windows + crew
-  //     seats). Process truth, so an idle-but-open window stays active; heartbeats ride hook
-  //     fires and go dark after 5 quiet minutes, which is how crebral-health vanished from
-  //     ACTIVE NOW while its window sat right there (quiet ≠ dead).
+  //     seats), OR a herdr-visible orch pane wherever it actually runs. Process truth so an
+  //     idle-but-open window stays active; heartbeats ride hook fires and go dark after 5 quiet
+  //     minutes, which is how crebral-health vanished from ACTIVE NOW while its window sat right
+  //     there (quiet ≠ dead). #6163 — a freshly-woken orch pane has no heartbeat yet either (hooks
+  //     fire on tool calls, and a pane that hasn't run one has none) and may not even be a local
+  //     process (herdr can host it headless on another box), so process truth alone dropped it the
+  //     instant its one heartbeat aged out of the busy window — local_sessions now also asks herdr
+  //     directly for every project it can still name an agent for, carrying that status along.
   //   • BUSY — a hub heartbeat inside the 90s work window (mid-turn NOW). Blink. Also counts as
   //     open on its own, so a busy session on ANOTHER machine (teams) still lights its row.
   // Peers still aggregate from BOTH the active hub and the machine-local hub, freshest wins.
   // #5610 v1 — Active Now carries the WHAT, not just a dot: each live row keeps the freshest
   // peer's lastSeen + model so the sidebar can say "mid-turn · 8s ago · fable" from data this
   // pull already fetched. Zero new requests; crew seats heartbeat as peers, so herdr's busy
-  // panes are already counted through presence.
-  type Activity = { kind: "busy" | "open"; lastSeen?: number; model?: string };
-  const [activity, setActivity] = useState<Map<string, Activity>>(new Map());
+  // panes are already counted through presence. The merge itself lives in projectActivity.ts —
+  // pure, so the herdr-open-no-heartbeat-yet case is unit-tested without mounting this component.
+  const [activity, setActivity] = useState<Map<string, ProjectActivity>>(new Map());
   useEffect(() => {
     let alive = true;
     const pull = async () => {
@@ -164,27 +169,7 @@ export function AppShell() {
         ...urls.map(u => new HubClient(u).peers().catch((): Peer[] => [])),
       ]);
       if (!alive) return;
-      const best = new Map<string, Peer>();
-      for (const ps of lists) for (const p of ps) {
-        const cur = best.get(p.session);
-        if (!cur || (p.lastSeen ?? 0) > (cur.lastSeen ?? 0)) best.set(p.session, p);
-      }
-      const m = new Map<string, Activity>();
-      for (const p of open) m.set(p, { kind: "open" });
-      for (const p of best.values()) {
-        if (!p.project) continue;
-        // #5965 — a runner-driven seat heartbeats only between turns (its turn is a spawnSync the
-        // runner cannot poll through), so heartbeat recency alone reads it idle mid-turn. Its HUB
-        // status — `working · <trigger>` at turn start, `idle` at turn end — is the source of truth
-        // (herdr skips screen detection for runner seats, so it cannot say either). A status that
-        // resolves to "working" counts as busy; the offline sweep still retires a truly gone peer.
-        const hubWorking = hubActivity(p.status) === "working" && p.online !== false;
-        if (stateOf(p) !== "busy" && !hubWorking) continue;
-        const cur = m.get(p.project);
-        if (cur?.kind === "busy" && (cur.lastSeen ?? 0) >= (p.lastSeen ?? 0)) continue;
-        m.set(p.project, { kind: "busy", lastSeen: p.lastSeen, model: p.model || p.llm });
-      }
-      setActivity(m);
+      setActivity(computeProjectActivity(open, lists.flat()));
     };
     void pull();
     const t = setInterval(pull, 15_000);
@@ -195,14 +180,12 @@ export function AppShell() {
   // projects are": the handful you are actually working in rise to the top, and everything else
   // stays alphabetical below so it is still a predictable place to look.
   //
-  // Sorted busy-before-idle inside the active group, and the group only EXISTS when something is
-  // live — an empty "Active now" header on a quiet machine would be chrome that says nothing.
+  // Sorted mid-turn-before-idle inside the active group (activityRank), and the group only
+  // EXISTS when something is live — an empty "Active now" header on a quiet machine would be
+  // chrome that says nothing.
   const [activeProjects, restProjects] = useMemo(() => {
     const live = projects.filter(p => activity.has(p))
-      .sort((a, b) => {
-        const rank = (p: string) => (activity.get(p)?.kind === "busy" ? 0 : 1);
-        return rank(a) - rank(b) || a.localeCompare(b);
-      });
+      .sort((a, b) => activityRank(activity.get(a)) - activityRank(activity.get(b)) || a.localeCompare(b));
     return [live, projects.filter(p => !activity.has(p))] as const;
   }, [projects, activity]);
 
@@ -392,15 +375,23 @@ export function AppShell() {
     // #5610 v1 — the happening-now line: a BUSY row says what is true beneath its name
     // ("mid-turn · 8s ago · fable"), from data the activity pull already holds. An open-idle
     // row stays a quiet dot; absence of the line is the idle state, never dead chrome.
-    const busyLine = act?.kind === "busy"
+    // #6163 — an OPEN row can also carry a herdr status now (local_sessions asks herdr directly
+    // for panes with no hub heartbeat yet): "working" reads the same as busy — mid-turn — since
+    // that is a live pane genuinely mid-turn, just before its first heartbeat; any other known
+    // status ("idle", "blocked", "done", "unknown") shows as "open · <status>" instead of a bare
+    // dot, so the row says what herdr actually knows rather than nothing.
+    const blinking = act?.kind === "busy" || (act?.kind === "open" && isWorkingStatus(act.status));
+    const statusLine = act?.kind === "busy"
       ? ["mid-turn", act.lastSeen ? `${ago(act.lastSeen)} ago` : null, act.model || null]
           .filter(Boolean).join(" · ")
-      : null;
+      : act?.kind === "open"
+        ? (isWorkingStatus(act.status) ? "mid-turn" : act.status ? `open · ${act.status}` : null)
+        : null;
     return (
       <div key={p} role="button" tabIndex={0}
         onClick={open}
         onKeyDown={e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); open(); } }}
-        title={act?.kind === "busy" ? "a session here is mid-turn right now" : act?.kind === "open" ? "session open, idle" : undefined}
+        title={blinking ? "a session here is mid-turn right now" : act?.kind === "open" ? "session open, idle" : undefined}
         className={`group flex w-full cursor-pointer items-center gap-2.5 rounded-lg px-3 py-1.5 text-left text-[13px] ${
           on ? "bg-white/[0.07] font-medium text-[var(--color-tr-text)]"
              : act ? "text-[var(--color-tr-text)]/85 hover:bg-white/[0.04]"
@@ -408,8 +399,8 @@ export function AppShell() {
         <ProjectIcon project={p} size={20} />
         <span className="min-w-0 flex-1">
           <span className="block truncate">{p}</span>
-          {busyLine && (
-            <span className="tr-mono block truncate text-[10px] font-normal text-[var(--color-tr-muted)]">{busyLine}</span>
+          {statusLine && (
+            <span className="tr-mono block truncate text-[10px] font-normal text-[var(--color-tr-muted)]">{statusLine}</span>
           )}
           {wakeError && !isWaking && (
             <span title={wakeError} className="block truncate text-[10px] font-normal text-tr-danger">
@@ -430,7 +421,7 @@ export function AppShell() {
         {/* the dot is BLUE for any open session and blinks ONLY when work is actually happening —
             a window sitting open earns presence, never motion */}
         {act && (
-          <span className={`tr-dot shrink-0 ${act.kind === "busy" ? "tr-dot-pulse" : ""}`}
+          <span className={`tr-dot shrink-0 ${blinking ? "tr-dot-pulse" : ""}`}
                 style={{ background: "var(--color-tr-doing)", width: 6, height: 6 }} />
         )}
       </div>
