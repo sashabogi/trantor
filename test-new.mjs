@@ -6,6 +6,7 @@
 // the --json contract ({name, dir, branch, hub, card}).
 import { spawnSync, spawn } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { generateKeyPairSync } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -112,6 +113,116 @@ ok("refusal: the error names the directory and the way out", (r1.stderr || "").i
 const r2 = runNew(["genesis-d", "--brief", join(W, "no-such-brief.md")]);
 ok("refusal: missing brief file exits non-zero", r2.status !== 0);
 ok("refusal: nothing was created for the refused run", !existsSync(join(DEV, "genesis-d")));
+
+// ── #6049: genesis on an ENFORCE hub enrolls via an owner invite, and signs its posts ───────────
+// Regression for the drill that shipped nothing: `trantor new` enrolled the brand-new genesis
+// identity by TOFU only, which a remote enforce hub refuses ("tofu enrollment refused") — so the
+// identity stayed UNKNOWN and the signed /project POST 401'd with a swallowed reason. The fix
+// enrolls like a crew seat (owner key mints a project-scoped write invite; the genesis identity
+// spends it). This fake hub plays enforce (/peer 401 for the unknown genesis identity, /invite +
+// /enroll succeed) and records every signed request so the test asserts the enrollment call AND
+// the signature headers on the brief/card posts.
+{
+  const FW = mkdtempSync(join(tmpdir(), "trantor-new-enforce-"));
+  const bus = join(FW, ".agent-bus");
+  mkdirSync(bus, { recursive: true });
+  const keys = join(bus, "keys");
+  mkdirSync(keys, { recursive: true });
+  // A fake OWNER identity the genesis CLI can mint invites with (same shape loadIdentity reads).
+  const { publicKey, privateKey } = generateKeyPairSync("ed25519");
+  const hex = (k) => Buffer.from(k.export({ format: "jwk" }).d || k.export({ format: "jwk" }).x, "base64url").toString("hex");
+  writeFileSync(join(keys, "drill-owner.json"), JSON.stringify({
+    name: "drill-owner", kind: "agent",
+    pubkey: hex(publicKey), privkey: hex(privateKey), createdAt: Date.now(),
+  }));
+  writeFileSync(join(bus, "config.json"), JSON.stringify({ ownerIdentity: "drill-owner" }));
+  writeFileSync(join(bus, "autonomy.json"), JSON.stringify({ version: 1, defaults: { harness: "bypass" }, projects: {} }));
+
+  const recorded = [];
+  let inviteToken = "invite-token";
+  const FPORT = 47878;
+  const recFile = join(FW, "records.jsonl");
+  const fakeHub = spawn("node", ["-e", `
+    const http = require("http");
+    const fs = require("fs");
+    const rec = r => fs.appendFileSync(${JSON.stringify(recFile)}, JSON.stringify(r) + "\\n");
+    http.createServer((req, res) => {
+      let body = "";
+      req.on("data", c => body += c);
+      req.on("end", () => {
+        const u = new URL(req.url, "http://x");
+        rec({ method: req.method, path: u.pathname,
+          headers: { pubkey: req.headers["x-trantor-pubkey"] || "", sig: req.headers["x-trantor-sig"] || "", ts: req.headers["x-trantor-ts"] || "", nonce: req.headers["x-trantor-nonce"] || "" } });
+        const send = (code, obj) => { res.writeHead(code, { "content-type": "application/json" }); res.end(JSON.stringify(obj)); };
+        // /peer is the "do I exist already?" probe — the genesis identity is UNKNOWN (enforce).
+        if (req.method === "GET" && u.pathname === "/peer") return send(401, { error: "unknown identity" });
+        if (req.method === "POST" && u.pathname === "/invite") return send(200, { token: ${JSON.stringify(inviteToken)}, scopes: [{ project: "genesis-e", role: "write" }], expiresAt: Date.now() + 60000 });
+        if (req.method === "POST" && u.pathname === "/enroll") return send(200, { ok: true, identity: { name: "genesis-e" }, scopes: [{ project: "genesis-e", role: "write" }] });
+        if (req.method === "POST" && u.pathname === "/project") return send(200, { ok: true, project: "genesis-e", brief: "drill" });
+        if (req.method === "POST" && u.pathname === "/task") return send(200, { ok: true, task: { id: 7001, project: "genesis-e", title: "genesis: genesis-e", status: "todo" } });
+        send(404, { error: "not found" });
+      });
+    }).listen(${FPORT});
+  `], { stdio: "ignore" });
+  let fakeUp = false;
+  for (let i = 0; i < 50; i++) { try { await fetch(`http://127.0.0.1:${FPORT}/ping`, { signal: AbortSignal.timeout(300) }); fakeUp = true; break; } catch { await sleep(50); } }
+  ok("fake enforce hub is up", fakeUp);
+
+  const fhub = `http://127.0.0.1:${FPORT}`;
+  const fenv = { ...process.env, HOME: FW, AGENT_BUS_DIR: bus, RELAY_URL: fhub,
+    TRANTOR_DEV_ROOT: join(FW, "dev"), TRANTOR_NO_UPDATE_CHECK: "1" };
+  mkdirSync(join(FW, "dev"), { recursive: true });
+  const e = spawnSync("node", [join(ROOT, "bin", "new.mjs"), "genesis-e", "--json"], { encoding: "utf8", cwd: FW, env: fenv });
+  let eJson = null; try { eJson = JSON.parse(e.stdout); } catch {}
+  await sleep(150);   // let the fake hub's file writes drain before we read them back
+  try { for (const l of readFileSync(recFile, "utf8").trim().split("\n").filter(Boolean)) recorded.push(JSON.parse(l)); } catch {}
+  ok("#6049: genesis on an enforce hub succeeds via owner invite", eJson?.card === 7001, `status ${e.status} ${(e.stderr || e.stdout).slice(-200)}`);
+  const invited = recorded.filter(r => r.method === "POST" && r.path === "/invite");
+  ok("#6049: the owner INVITE was minted (enrollment, not tofu)", invited.length === 1);
+  const enrolled = recorded.filter(r => r.method === "POST" && r.path === "/enroll");
+  ok("#6049: the genesis identity ENROLLED with the invite", enrolled.length >= 1);
+  for (const p of ["/project", "/task"]) {
+    const rec = recorded.find(r => r.method === "POST" && r.path === p);
+    ok(`#6049: ${p} was signed (pubkey+sig+ts+nonce headers)`, !!rec && !!rec.headers.pubkey && !!rec.headers.sig && !!rec.headers.ts && !!rec.headers.nonce, JSON.stringify(rec));
+  }
+  fakeHub.kill();
+  try { rmSync(FW, { recursive: true, force: true }); } catch {}
+}
+
+// ── #6049: the refusal reason is surfaced, not swallowed ────────────────────────────────────────
+// The drill's original failure printed only "hub 401 on /project" with card:null. A hub that
+// refuses a signed write must name WHY (the enforce "unknown identity") so the operator can act.
+{
+  const FW = mkdtempSync(join(tmpdir(), "trantor-new-refuse-"));
+  const bus = join(FW, ".agent-bus");
+  mkdirSync(bus, { recursive: true });
+  writeFileSync(join(bus, "autonomy.json"), JSON.stringify({ version: 1, defaults: { harness: "bypass" }, projects: {} }));
+  const RPORT = 47879;
+  const refuseHub = spawn("node", ["-e", `
+    const http = require("http");
+    http.createServer((req, res) => {
+      req.resume();
+      req.on("end", () => {
+        const send = (code, obj) => { res.writeHead(code, { "content-type": "application/json" }); res.end(JSON.stringify(obj)); };
+        if (req.method === "POST" && req.url === "/project") return send(401, { error: "unknown identity" });
+        if (req.method === "POST" && req.url === "/task") return send(200, { ok: true, task: { id: 8001 } });
+        send(200, { ok: true });
+      });
+    }).listen(${RPORT});
+  `], { stdio: "ignore" });
+  let refuseUp = false;
+  for (let i = 0; i < 50; i++) { try { await fetch(`http://127.0.0.1:${RPORT}/x`); refuseUp = true; break; } catch { await sleep(50); } }
+  ok("refusal fake hub is up", refuseUp);
+  const rj = spawnSync("node", [join(ROOT, "bin", "new.mjs"), "genesis-f", "--json"], {
+    encoding: "utf8", cwd: FW,
+    env: { ...process.env, HOME: FW, AGENT_BUS_DIR: bus, RELAY_URL: `http://127.0.0.1:${RPORT}`,
+      TRANTOR_DEV_ROOT: join(FW, "dev"), TRANTOR_NO_UPDATE_CHECK: "1" },
+  });
+  const refuseOut = (rj.stdout || "") + (rj.stderr || "");
+  ok("#6049: the 401 reason is carried in the CLI output (not a bare 'hub 401')", refuseOut.includes("unknown identity"), refuseOut.slice(-300));
+  refuseHub.kill();
+  try { rmSync(FW, { recursive: true, force: true }); } catch {}
+}
 
 hub.kill();
 try { rmSync(W, { recursive: true, force: true }); } catch {}
