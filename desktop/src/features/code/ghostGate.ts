@@ -17,6 +17,27 @@ export type GhostRequest = {
   path: string;
 };
 
+// The only part of the before-cursor context that changes on every keystroke. Streaming prompts
+// (#6160) send these lines LAST — behind the stable file header + context block — so the leading
+// bytes are identical across keystrokes and can hit the provider's cached-input tier.
+export const NEAR_LINES = 8;
+
+/** The before-cursor context split at the cache boundary: `head` is the stable part (identical
+ *  across keystrokes), `near` is the volatile tail right above the cursor. */
+export type GhostPrefixSplit = { head: string; near: string };
+
+/** Split before-cursor context into the stable `head` and the volatile last `NEAR_LINES` lines
+ *  (`near`). Files shorter than NEAR_LINES put everything in `near` (nothing is stable yet). */
+export function splitPrefix(prefix: string): GhostPrefixSplit {
+  const lines = prefix.split("\n");
+  const nearCount = Math.min(NEAR_LINES, lines.length);
+  const cut = lines.length - nearCount;
+  return {
+    head: lines.slice(0, cut).join("\n"),
+    near: lines.slice(cut).join("\n"),
+  };
+}
+
 export type GhostFetcher = (req: GhostRequest, signal: AbortSignal) => Promise<string | null>;
 
 export type GhostGate = {
