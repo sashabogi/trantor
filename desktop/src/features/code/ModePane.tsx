@@ -18,6 +18,7 @@ import { folderSeats, mergeChanges, mergedCountFor, projectChanges, type Project
 import { FileTree } from "./FileTree";
 import { SessionsMode } from "./SessionsMode";
 import { tabsMode, type TabsMode } from "./tabStrip";
+import { clampPaneWidth, loadPaneWidth, PANE_DEFAULT, PANE_STEP, savePaneWidth, clearPaneWidth } from "./paneWidth";
 import type { SessionRow } from "./sessionsApi";
 
 type Mode = "files" | "git" | "sessions" | "chat";
@@ -88,6 +89,59 @@ export function ModePane({ client, project, seat, onSeat, onOpenFile }: {
     if (next !== tabs) setTabs(next);
   }, [dims, tabs]);
   const compactTabs = tabs === "icons";
+
+  // The pane's drag-resizable width (#6086): one override per mode, remembered across sessions.
+  // Null is not a special state — it IS the designed width, and a double-click reset returns
+  // here. The width lands on the root below; the #6036 observers watch that same root, so a
+  // live drag re-measures the strip and the tabs re-fit while you drag, with no extra wiring.
+  const [widthOverride, setWidthOverride] = useState<number | null>(() => loadPaneWidth("files"));
+  const [dragging, setDragging] = useState(false);
+  // The drag's truth lives in a ref, not the closure: pointerup persists the width the LAST
+  // move computed, so a fast move+up pair can never save a stale render's number.
+  const dragRef = useRef<{ startX: number; startW: number; last: number } | null>(null);
+  const paneWidth = widthOverride ?? PANE_DEFAULT[mode];
+
+  const switchMode = (m: Mode) => {
+    if (m === "chat") setSelectedClaude(null);
+    setMode(m);
+    setWidthOverride(loadPaneWidth(m));
+  };
+
+  const onResizeStart = (e: React.PointerEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    e.currentTarget.setPointerCapture(e.pointerId);
+    dragRef.current = { startX: e.clientX, startW: paneWidth, last: paneWidth };
+    setDragging(true);
+  };
+  const onResizeMove = (e: React.PointerEvent<HTMLDivElement>) => {
+    const drag = dragRef.current;
+    if (!drag) return;
+    // the pane's LEFT edge follows the pointer: pointer left = pane wider
+    const next = clampPaneWidth(drag.startW + (drag.startX - e.clientX), window.innerWidth);
+    drag.last = next;
+    setWidthOverride(next);
+  };
+  const onResizeEnd = (e: React.PointerEvent<HTMLDivElement>) => {
+    const drag = dragRef.current;
+    if (!drag) return;
+    dragRef.current = null;
+    setDragging(false);
+    if (e.currentTarget.hasPointerCapture(e.pointerId)) e.currentTarget.releasePointerCapture(e.pointerId);
+    savePaneWidth(mode, drag.last);
+  };
+  const onResizeKey = (e: React.KeyboardEvent<HTMLDivElement>) => {
+    // Arrows move the boundary: Left = edge left = wider, Right = narrower. Each step is clamped
+    // and KEPT immediately — keyboard users get the persistence a drag's pointerup gives.
+    if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
+    e.preventDefault();
+    const next = clampPaneWidth(paneWidth + (e.key === "ArrowLeft" ? PANE_STEP : -PANE_STEP), window.innerWidth);
+    setWidthOverride(next);
+    savePaneWidth(mode, next);
+  };
+  const onResizeReset = () => {
+    clearPaneWidth(mode);
+    setWidthOverride(null);
+  };
 
   // The seats of this project — the footer's scope chips. Same peers poll every lens runs.
   const [peers, setPeers] = useState<Peer[]>([]);
@@ -190,10 +244,7 @@ export function ModePane({ client, project, seat, onSeat, onOpenFile }: {
   const modeBtn = (m: Mode, label: string, Icon: typeof FolderTree, dot?: boolean) => (
     <button
       type="button"
-      onClick={() => {
-        if (m === "chat") setSelectedClaude(null);
-        setMode(m);
-      }}
+      onClick={() => switchMode(m)}
       data-on={mode === m}
       title={label}
       aria-label={label}
@@ -217,9 +268,29 @@ export function ModePane({ client, project, seat, onSeat, onOpenFile }: {
   return (
     <div
       ref={paneRef}
-      className="flex min-h-0 shrink-0 flex-col overflow-hidden rounded-[12px] border border-tr-edge bg-tr-main"
-      style={{ width: mode === "chat" ? 440 : 300, margin: 12 }}
+      className="relative flex min-h-0 shrink-0 flex-col overflow-hidden rounded-[12px] border border-tr-edge bg-tr-main"
+      style={{ width: paneWidth, margin: 12 }}
     >
+      {/* The splitter (#6086): the pane's left edge IS the handle — 6px of col-resize grab on the
+          boundary between the main column and this pane, a calm line only while hovered or
+          dragged. Double-click returns the mode to its designed width; the focused handle takes
+          arrow keys a step at a time. */}
+      <div
+        role="separator"
+        aria-orientation="vertical"
+        aria-label={`Resize the ${mode} pane`}
+        tabIndex={0}
+        onPointerDown={onResizeStart}
+        onPointerMove={onResizeMove}
+        onPointerUp={onResizeEnd}
+        onPointerCancel={onResizeEnd}
+        onDoubleClick={onResizeReset}
+        onKeyDown={onResizeKey}
+        title="Drag to resize · double-click to reset"
+        className={`absolute top-0 bottom-0 left-0 z-10 w-[6px] cursor-col-resize touch-none transition-colors focus-visible:bg-white/[0.16] ${
+          dragging ? "bg-tr-doing/50" : "hover:bg-white/[0.09]"
+        }`}
+      />
       {/* mode rail — exact quarters at 300px and 440px alike (#5960); icon-only below the
           measured label-fit width so a tab word never truncates (#6036). The offscreen twin
           renders the four LABELED tabs shrink-wrapped and invisible: its width is the truth of
