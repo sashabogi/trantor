@@ -28,6 +28,16 @@ import { ChangesView } from "./ChangesView";
 import { decideReload, type FileStat } from "./liveReload";
 import { closeTab, markDirty, markExternalMutation, openInTabs, togglePin, type CodeTab } from "./codeTabs";
 import { diskSignature, externalMutationOnLoad } from "./tabGuard";
+import {
+  dropDocument,
+  markLoaded,
+  projectDocuments,
+  setBaseSignature,
+  setDisk,
+  setDraft as storeSetDraft,
+  setActiveKey as storeSetActiveKey,
+  setTabs as storeSetTabs,
+} from "./documents";
 import { isLspIndexing, isLspLive, lspPhase, onLspChange, startLsp, stopLspProject } from "./lspClient";
 import { lspLanguageFor, lspServerName } from "./lspLanguage";
 import { listen } from "@tauri-apps/api/event";
@@ -45,8 +55,21 @@ export function Files({ project, lens, onLens, path, seat }: {
   seat: string | null;
   onSeat: (s: string | null) => void;
 }) {
-  const [tabs, setTabs] = useState<CodeTab[]>([]);
-  const [activeKey, setActiveKey] = useState<string | null>(null);
+  // Tabs, activeKey, drafts, disk text, base signatures, and loaded flags live in the
+  // module-level document store (#5938) — they OUTLIVE this lens. This component is a VIEW over
+  // it: read on mount, write on every change, nothing on unmount. The version counter just
+  // tells React that a store mutation happened.
+  const docs = projectDocuments(project);
+  const [, setDocsVersion] = useState(0);
+  const sync = () => setDocsVersion(v => v + 1);
+  const tabs = docs.tabs;
+  const activeKey = docs.activeKey;
+  const setTabs = (next: CodeTab[] | ((current: CodeTab[]) => CodeTab[])) => {
+    // an updater or a value, the way React's setState accepts both; the array IS the value case
+    storeSetTabs(project, Array.isArray(next) ? next : next(docs.tabs));
+    sync();
+  };
+  const setActiveKey = (key: string | null) => { storeSetActiveKey(project, key); sync(); };
   const [body, setBody] = useState<FileBody | null>(null);
   const [head, setHead] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -71,16 +94,6 @@ export function Files({ project, lens, onLens, path, seat }: {
   // so the poll reads the CURRENT values without tearing the interval down every render.
   const statRef = useRef<FileStat | null>(null);
   const dirtyRef = useRef(false);
-  // Per-tab drafts, disk text, and the signature of the disk text each draft is based on
-  // (Orca's lastKnownDiskSignature, open-file.ts:126). Kept OUT of state: a keystroke updates
-  // one map entry and the active tab's dot, and a background tab keeps its unsaved work while
-  // it is not on screen.
-  const draftsRef = useRef(new Map<string, string>());
-  const diskRef = useRef(new Map<string, string>());
-  const sigRef = useRef(new Map<string, string>());
-  // Which tab's document has actually finished loading — the stash guard reads it, because a
-  // draft may only be kept for a tab whose content ever existed on screen.
-  const loadedKeyRef = useRef<string | null>(null);
   // The editor is always live: unsaved work is simply "the draft differs from the disk".
   dirtyRef.current = body !== null && draft !== body.text;
 
@@ -102,29 +115,20 @@ export function Files({ project, lens, onLens, path, seat }: {
     readFile(project, tab.path, tabSeat)
       .then(b => {
         setBody(b);
-        diskRef.current.set(key, b.text);
-        const kept = draftsRef.current.get(key);
+        setDisk(project, key, b.text);
+        const kept = docs.docs.get(key)?.draft;
         const verdict = externalMutationOnLoad({
           draft: kept ?? null,
-          baseSignature: sigRef.current.get(key) ?? null,
+          baseSignature: docs.docs.get(key)?.baseSignature ?? null,
           diskText: b.text,
         });
         setTabs(ts => markExternalMutation(ts, key, verdict === "moved" ? "changed" : undefined));
-        if (verdict === "moved") {
-          // The disk moved away from what the draft was based on: keep the draft, flag the tab,
-          // and let the bar offer reload-vs-keep. Saving stays gated until that choice.
-          const text = kept ?? "";
-          setDraft(text);
-          draftsRef.current.set(key, text);
-          setTabs(ts => markDirty(ts, key, text !== b.text));
-        } else {
-          const text = kept ?? b.text;
-          setDraft(text);
-          draftsRef.current.set(key, text);
-          sigRef.current.set(key, diskSignature(b.text));
-          setTabs(ts => markDirty(ts, key, text !== b.text));
-        }
-        loadedKeyRef.current = key;
+        const text = verdict === "moved" ? (kept ?? "") : (kept ?? b.text);
+        if (verdict !== "moved") setBaseSignature(project, key, diskSignature(b.text));
+        storeSetDraft(project, key, text);
+        setDraftState(text);
+        setTabs(ts => markDirty(ts, key, text !== b.text));
+        markLoaded(project, key);
       })
       .catch(e => setError(e instanceof Error ? e.message : String(e)));
     readFileAtHead(project, tab.path, tabSeat).then(setHead).catch(() => setHead(""));
@@ -136,7 +140,7 @@ export function Files({ project, lens, onLens, path, seat }: {
   // the initial "" as the tab's kept work (the 2026-09-01 empty-editor regression); a draft
   // without a completed load is not a draft, it is a loading screen.
   const stashDraft = () => {
-    if (activeKey && loadedKeyRef.current === activeKey) draftsRef.current.set(activeKey, draft);
+    if (activeKey && docs.docs.get(activeKey)?.loaded) storeSetDraft(project, activeKey, draft);
   };
   const openPath = (scope: string, p: string, view: ViewMode) => {
     stashDraft();
@@ -158,15 +162,15 @@ export function Files({ project, lens, onLens, path, seat }: {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [path, seat]);
 
-  // Load the active tab's documents. body/head reset per tab; the draft survives via draftsRef.
+  // Load the active tab's documents. body/head reset per tab; the draft survives in the store.
   useEffect(() => {
-    if (!activeTab) { setBody(null); setHead(null); setError(null); setDraftState(""); setSaved(false); loadedKeyRef.current = null; return; }
+    if (!activeTab) { setBody(null); setHead(null); setError(null); setDraftState(""); setSaved(false); return; }
     setBody(null); setHead(null); setError(null); setSaved(false);
     // setDraftState, NOT setDraft: the setter below also records the value as the tab's kept
     // draft, and recording "" for a tab with nothing kept is what made reload() adopt "" over the
     // disk text — the whole file rendered as one blank line, the changes view as all-deleted
     // (0.3.91, seen on screen). The kept draft is read here, never written.
-    setDraftState(draftsRef.current.get(activeTab.key) ?? "");
+    setDraftState(docs.docs.get(activeTab.key)?.draft ?? "");
     statRef.current = null;
     reload(activeTab.key);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -264,7 +268,7 @@ export function Files({ project, lens, onLens, path, seat }: {
   const setDraft = (v: string) => {
     setDraftState(v);
     if (activeKey) {
-      draftsRef.current.set(activeKey, v);
+      storeSetDraft(project, activeKey, v);
       setTabs(ts => markDirty(ts, activeKey, v !== (body?.text ?? "")));
     }
   };
@@ -285,8 +289,8 @@ export function Files({ project, lens, onLens, path, seat }: {
         setSaved(true);
         // Our own save moved the disk: the draft is now the disk, and it is the new baseline.
         statRef.current = null;
-        sigRef.current.set(key, diskSignature(draft));
-        diskRef.current.set(key, draft);
+        setBaseSignature(project, key, diskSignature(draft));
+        setDisk(project, key, draft);
         setTabs(ts => markExternalMutation(ts, key, undefined));
         setTabs(ts => markDirty(ts, key, false));
         reload(key);
@@ -303,8 +307,8 @@ export function Files({ project, lens, onLens, path, seat }: {
     const tabSeat = activeTab.scope === "project" ? undefined : activeTab.scope;
     readFile(project, activeTab.path, tabSeat)
       .then(b => {
-        sigRef.current.set(key, diskSignature(b.text));
-        diskRef.current.set(key, b.text);
+        setBaseSignature(project, key, diskSignature(b.text));
+        setDisk(project, key, b.text);
         setTabs(ts => markExternalMutation(ts, key, undefined));
       })
       .catch(() => {});
@@ -384,8 +388,7 @@ export function Files({ project, lens, onLens, path, seat }: {
                     const { tabs: next, activeKey: nextKey } = closeTab(tabs, activeKey, t.key);
                     setTabs(next);
                     setActiveKey(nextKey);
-                    draftsRef.current.delete(t.key);
-                    diskRef.current.delete(t.key);
+                    dropDocument(project, t.key);
                   }}
                   title="close tab"
                   className="shrink-0 rounded p-0.5 opacity-0 hover:text-tr-text group-hover:opacity-60"
