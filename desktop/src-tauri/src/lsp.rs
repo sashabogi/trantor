@@ -408,16 +408,19 @@ pub fn lsp_start(
     let spec = server_spec(&language)?;
     let workspace_root = workspace_root(&scope_root, &language, &path);
 
-    // One server per (workspace root, language): a reopened file in the same crate reuses the
-    // running server; a second crate in the same checkout gets its own.
+    // One server per (workspace root, language). Reuse a LIVE server; a dead one is reaped and
+    // respawned — never re-attach to an id whose process is gone (the 0.3.103 broken-pipe bug).
     let dedup_key = (workspace_root.display().to_string(), language.clone());
-    {
+    let dedup_id: Option<u64> = {
         let workspaces = WORKSPACES.lock().unwrap();
-        if let Some(map) = workspaces.as_ref() {
-            if let Some(id) = map.get(&dedup_key) {
-                return Ok(started(*id, &scope_root, &workspace_root));
-            }
+        workspaces.as_ref().and_then(|m| m.get(&dedup_key).copied())
+    };
+    if let Some(id) = dedup_id {
+        if server_alive(id) {
+            return Ok(started(id, &scope_root, &workspace_root));
         }
+        // The child has exited: drop the stale entry (logged for the audit trail) and respawn.
+        stop_server(id, "respawn dead server");
     }
 
     let bin_path = find_binary(spec.bin, spec.install)?;
@@ -482,6 +485,16 @@ fn log_stop(workspace_root: &str, language: &str, reason: &str) {
         .ok();
     if let Some(f) = f.as_mut() {
         let _ = writeln!(f, "{language} {workspace_root}: {reason}");
+    }
+}
+
+/// Whether the server's child is still running. `try_wait` reaps it if it has already exited, so a
+/// dead server is detected (and later removed) here rather than re-attached.
+fn server_alive(id: u64) -> bool {
+    let mut servers = SERVERS.lock().unwrap();
+    match servers.as_mut().and_then(|m| m.get_mut(&id)) {
+        Some(server) => server.child.try_wait().map(|r| r.is_none()).unwrap_or(false),
+        None => false,
     }
 }
 
@@ -758,5 +771,37 @@ mod tests {
         assert_eq!(root, dir.join("app"));
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_server_survives_without_client_writes() {
+        // A server is not torn down on lens unmount (there is no detach kill), so with zero
+        // writes it must still be alive well below the 15-minute idle timeout.
+        let mut child = Command::new("sleep")
+            .arg("60")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("spawn sleep");
+        let stdin = child.stdin.take().expect("stdin");
+        let id = NEXT_ID.fetch_add(1, Ordering::SeqCst);
+        {
+            let mut servers = SERVERS.lock().unwrap();
+            servers.get_or_insert_with(HashMap::new).insert(
+                id,
+                Server {
+                    child,
+                    stdin,
+                    project: "test".into(),
+                    workspace_root: "/tmp".into(),
+                    language: "rust".into(),
+                    last_activity: Instant::now(),
+                },
+            );
+        }
+        std::thread::sleep(Duration::from_secs(1));
+        assert!(server_alive(id), "server must survive with no client writes");
+        assert!(stop_server(id, "test cleanup"));
     }
 }
