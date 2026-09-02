@@ -96,6 +96,21 @@ async function drill(agent, script, opts = {}) {
   if (opts.settleUntil) {
     while (!opts.settleUntil(sends, registers) && Date.now() - waitStart < (opts.settleDeadlineMs ?? 30000)) await sleep(100);
   }
+  // #6084: under machine load even the fixed waits can end mid-turn — every drill asserts on
+  // bus TRAFFIC, so extend the wait until that traffic goes quiet (no new sends or
+  // registrations for 800ms), bounded so a hung runner still ends the drill. A drill whose own
+  // subject keeps the bus busy (drill 6's 1.5s retry ladder) opts out: quietDeadlineMs: 0.
+  const quietCap = opts.quietDeadlineMs ?? 8000;
+  if (quietCap > 0) {
+    const quietStart = Date.now();
+    let last = -1, quietSince = quietStart;
+    while (Date.now() - quietStart < quietCap) {
+      const n = sends.length + registers.length;
+      if (n !== last) { last = n; quietSince = Date.now(); }
+      if (Date.now() - quietSince >= 800) break;
+      await sleep(100);
+    }
+  }
   runner.kill("SIGKILL");
   await sleep(150);
   const errText = (() => {
@@ -193,7 +208,7 @@ async function drill(agent, script, opts = {}) {
   const isDownBcast = (m) => /DOWN/.test(m.text || "") && m.to === "all";
   const r = await drill("opencode",
     '#!/bin/sh\necho "Invalid API key" >&2\nexit 0\n',
-    { inbox: ["again", "and again"], env: { TRANTOR_RETRY_MS: "1500" },
+    { inbox: ["again", "and again"], env: { TRANTOR_RETRY_MS: "1500" }, quietDeadlineMs: 0,
       until: (s) => s.some(isDownBcast),
       settleUntil: (s, regs) => regs.some((x) => /down: auth · 3 fails/.test(String(x.status || ""))) });
   const downs = r.sends.filter(isDownBcast);
