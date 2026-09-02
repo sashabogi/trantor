@@ -11,6 +11,7 @@ import { WebglAddon } from "@xterm/addon-webgl";
 import { Terminal } from "@xterm/xterm";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import "@xterm/xterm/css/xterm.css";
+import { invoke } from "@tauri-apps/api/core";
 import { quotePaths } from "./quotePaths";
 import {
   orchestratorOpen,
@@ -28,9 +29,9 @@ const SEATS_POLL_MS = 12_000;
 /** The slice of Tauri's DragDropEvent the pane reacts to. HTML5 drop never fires under Tauri —
  *  onDragDropEvent is the only channel (same receipt as the composer's drop, #5507). */
 export type PaneDragDropEvent =
-  | { type: "enter"; paths: string[]; position: { x: number; y: number } }
-  | { type: "over"; position: { x: number; y: number } }
-  | { type: "drop"; paths: string[]; position: { x: number; y: number } }
+  | { type: "enter"; paths: string[]; position?: { x: number; y: number } }
+  | { type: "over"; position?: { x: number; y: number } }
+  | { type: "drop"; paths: string[]; position?: { x: number; y: number } }
   | { type: "leave" };
 
 // The design tokens the card names (#5367): the pane container's #101013, the app's text
@@ -63,7 +64,7 @@ export type TerminalDeps = {
   surfaceFor(project: string, agent: string): Promise<string | null>;
   orchestratorOpen(project: string): Promise<string>;
   termAttach(target: string, onBytes: (bytes: TerminalBytes) => void): Promise<number>;
-  termWrite(sub: number, data: string): Promise<void>;
+  termWrite(sub: number, data: string): Promise<string>;
   termResize(sub: number, cols: number, rows: number): Promise<void>;
   termDetach(sub: number): Promise<void>;
   /** Webview-level drag-drop subscription (#5949); returns the unsubscribe. Injectable so the
@@ -184,6 +185,15 @@ export function TerminalPane({
     }
   }, [project, deps]);
 
+  const writeSub = (sub: number, data: string) => {
+    const t0 = performance.now();
+    void deps.termWrite(sub, data).then(chunks => {
+      invoke("app_log", {
+        line: `term_write sub=${sub} bytes=${data.length} chunks=${chunks} ms=${Math.max(0, Math.round(performance.now() - t0))}`,
+      }).catch(() => {});
+    }).catch(() => {});
+  };
+
   // Open xterm, attach to the Rust pty, and keep resize/input lifecycles tied to this component.
   // Frequent terminal bytes stay inside refs and xterm; React only sees the low-rate latency chip.
   useEffect(() => {
@@ -195,7 +205,7 @@ export function TerminalPane({
     const onData = session.onData(data => {
       lastInputAtRef.current = performance.now();
       const sub = subRef.current;
-      if (sub !== null) void deps.termWrite(sub, data);
+      if (sub !== null) writeSub(sub, data);
     });
     const resize = () => {
       if (!hostRef.current) return;
@@ -249,23 +259,23 @@ export function TerminalPane({
     };
   }, [surface, deps]);
 
-  // Dropped files (#5949): the paths are written into the seat's terminal shell-quoted and
-  // space-separated, through the same term_write path keystrokes use — it IS the human typing
-  // path, so a drop is exactly a human typing a filename (with a trailing space to separate the
-  // next word). Grid mode has several panes per window and the event is webview-level, so every
-  // event is hit-tested against THIS pane's rectangle; the calm ring shows only while the drag
-  // is actually over here.
+  // Dropped files (#5949, leak fixed #5949-bounce): the paths are written into the seat's
+  // terminal shell-quoted and space-separated, through the same term_write path keystrokes use.
+  // The event is webview-level, so "over this pane" is decided by the TOPMOST element under the
+  // cursor — a rectangle test alone passes whenever a floating sheet covers the pane's rect,
+  // which typed a dropped path into the orchestrator's terminal (the operator's bounce). No
+  // position = not ours, never a drop. Every write is traced: sub, bytes, chunks, ms (#5921).
   useEffect(() => {
     if (!surface) return;
     const overThisPane = (position: { x: number; y: number } | undefined): boolean => {
       const el = hostRef.current;
-      if (!el || !position) return true;
-      const r = el.getBoundingClientRect();
-      if (r.width === 0 && r.height === 0) return true; // unlaid out — accept
+      // No position = not ours, never a drop. And the TOPMOST element under the cursor decides:
+      // a rectangle test passes whenever a floating sheet covers the pane's rect, which typed a
+      // dropped path into the orchestrator's terminal (the operator's bounce, 0.3.110).
+      if (!el || !position) return false;
       const dpr = window.devicePixelRatio || 1;
-      const x = position.x / dpr;
-      const y = position.y / dpr;
-      return x >= r.left && x <= r.right && y >= r.top && y <= r.bottom;
+      const top = document.elementFromPoint(position.x / dpr, position.y / dpr);
+      return !!top && el.contains(top);
     };
     return deps.subscribeDragDrop(ev => {
       if (ev.type === "leave") { setDragOver(false); return; }
@@ -276,7 +286,7 @@ export function TerminalPane({
         if (sub === null || !ev.paths.length) return;
         const text = quotePaths(ev.paths);
         lastInputAtRef.current = performance.now();
-        void deps.termWrite(sub, `${text} `);
+        writeSub(sub, `${text} `);
         return;
       }
       setDragOver(true); // enter / over

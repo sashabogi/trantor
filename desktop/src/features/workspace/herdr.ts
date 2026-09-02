@@ -47,8 +47,10 @@ export async function termAttach(target: string, onBytes: (bytes: TerminalBytes)
   return invoke<number>("term_attach", { target, onBytes: onBytesChannel });
 }
 
-export async function termWrite(sub: number, data: string): Promise<void> {
-  await invoke("term_write", { sub, data });
+/** Writes keystrokes/drops into the pty. Returns how many chunks Rust split the payload into —
+ *  the paste-split trace reads it (#5921). */
+export async function termWrite(sub: number, data: string): Promise<string> {
+  return invoke<string>("term_write", { sub, data });
 }
 
 export async function termResize(sub: number, cols: number, rows: number): Promise<void> {

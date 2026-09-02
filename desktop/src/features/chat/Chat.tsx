@@ -196,7 +196,7 @@ function HandoffBanner({ frac, countdown, busy, error, onKeepGoing, onHandOffNow
 // this tree's to edit, so the keyboard is severed at the deps seam it already exposes:
 // termWrite goes nowhere while bytes keep streaming in — the same live view, read-only by
 // construction rather than by a prop this file cannot add.
-const TRAY_DEPS: TerminalDeps = { ...DEFAULT_TERMINAL_DEPS, termWrite: () => Promise.resolve() };
+const TRAY_DEPS: TerminalDeps = { ...DEFAULT_TERMINAL_DEPS, termWrite: async () => "" };
 
 export function Chat({ project, sessionId, dock, onDock, onClose }: {
   project: string; sessionId?: string; dock: Dock; onDock: (d: Dock) => void; onClose: () => void;
