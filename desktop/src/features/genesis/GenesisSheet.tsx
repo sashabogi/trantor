@@ -14,9 +14,8 @@ export function GenesisSheet({ devRoot, onClose, onMade, onWoken }: {
   onMade: (project: string) => void;
   onWoken: (project: string) => void;
 }) {
-  const [name, setName] = useState("");
-  const [target, setTarget] = useState(devRoot);
-  const [targetEdited, setTargetEdited] = useState(false);
+  const [nameInput, setNameInput] = useState("");
+  const [targetOverride, setTargetOverride] = useState<string | null>(null);
   const [mode, setMode] = useState<StartMode>("empty");
   const [gitUrl, setGitUrl] = useState("");
   const [brief, setBrief] = useState("");
@@ -24,6 +23,9 @@ export function GenesisSheet({ devRoot, onClose, onMade, onWoken }: {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const nameRef = useRef<HTMLInputElement>(null);
+  const sheetRef = useRef<HTMLFormElement>(null);
+  const slug = slugProjectName(nameInput);
+  const target = targetOverride ?? projectTarget(devRoot, slug);
 
   useEffect(() => { nameRef.current?.focus(); }, []);
   useEffect(() => {
@@ -31,6 +33,9 @@ export function GenesisSheet({ devRoot, onClose, onMade, onWoken }: {
     let unlisten: (() => void) | undefined;
     getCurrentWebview().onDragDropEvent(event => {
       if (!alive || event.payload.type !== "drop" || !event.payload.paths[0]) return;
+      const dpr = window.devicePixelRatio || 1;
+      const hit = document.elementFromPoint(event.payload.position.x / dpr, event.payload.position.y / dpr);
+      if (!hit || !sheetRef.current?.contains(hit)) return;
       const path = event.payload.paths[0];
       void invoke<string>("genesis_read_brief", { path })
         .then(text => {
@@ -44,22 +49,17 @@ export function GenesisSheet({ devRoot, onClose, onMade, onWoken }: {
     return () => { alive = false; unlisten?.(); };
   }, []);
 
-  const changeName = (raw: string) => {
-    const slug = slugProjectName(raw);
-    setName(slug);
-    if (!targetEdited) setTarget(projectTarget(devRoot, slug));
-  };
-
   const create = async (event: React.FormEvent) => {
     event.preventDefault();
-    if (!name) { setError("Give the project a name."); return; }
+    if (!slug) { setError("Give the project a name."); return; }
     if (mode === "clone" && !gitUrl.trim()) { setError("Add the Git URL to clone."); return; }
+    setNameInput(slug);
     setBusy(true);
     setError(null);
     try {
       const raw = await invoke<string>("project_new", {
         args: {
-          name,
+          name: slug,
           target,
           source: mode === "clone" ? gitUrl.trim() : null,
           adopt: mode === "adopt",
@@ -71,7 +71,7 @@ export function GenesisSheet({ devRoot, onClose, onMade, onWoken }: {
       onMade(made.name);
       await invoke<string>("project_wake", {
         project: made.name,
-        kickoff: genesisKickoff(brief),
+        kickoff: genesisKickoff(brief, dropName),
       });
       onWoken(made.name);
     } catch (reason) {
@@ -84,7 +84,7 @@ export function GenesisSheet({ devRoot, onClose, onMade, onWoken }: {
   return (
     <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/45 pt-[7vh]"
          onMouseDown={event => { if (event.target === event.currentTarget && !busy) onClose(); }}>
-      <form onSubmit={create} role="dialog" aria-modal="true" aria-labelledby="genesis-title"
+      <form ref={sheetRef} onSubmit={create} role="dialog" aria-modal="true" aria-labelledby="genesis-title"
             className="tr-card flex max-h-[86vh] w-[590px] max-w-[calc(100vw-48px)] flex-col overflow-hidden p-0 shadow-2xl">
         <div className="flex items-start gap-3 border-b border-[var(--color-tr-edge)] px-5 py-4">
           <span className="rounded-lg bg-tr-doing/10 p-2 text-tr-doing"><Sparkles size={17} /></span>
@@ -100,11 +100,15 @@ export function GenesisSheet({ devRoot, onClose, onMade, onWoken }: {
 
         <div className="min-h-0 overflow-y-auto px-5 py-4">
           <label className="block text-[11px] font-semibold uppercase tracking-[0.1em] text-[var(--color-tr-muted)]">Name</label>
-          <input ref={nameRef} className="tr-input mt-1 w-full" value={name}
-                 onChange={event => changeName(event.target.value)} placeholder="new-client-portal" />
+          <input ref={nameRef} className="tr-input mt-1 w-full" value={nameInput}
+                 onChange={event => setNameInput(event.target.value)} onBlur={() => setNameInput(slug)}
+                 placeholder="New Client Portal" />
+          <p className="tr-mono mt-1 text-[10.5px] text-[var(--color-tr-muted)]">
+            slug · {slug || "name-your-project"}
+          </p>
           <label className="mt-3 block text-[11px] font-semibold uppercase tracking-[0.1em] text-[var(--color-tr-muted)]">Target directory</label>
           <input className="tr-input tr-mono mt-1 w-full text-[11.5px]" value={target}
-                 onChange={event => { setTargetEdited(true); setTarget(event.target.value); }} />
+                 onChange={event => setTargetOverride(event.target.value)} />
           <p className="mt-1 text-[10.5px] text-[var(--color-tr-muted)]">Under your development root by default; edit it before creating if this project lives elsewhere.</p>
 
           <fieldset className="mt-4">
@@ -147,7 +151,7 @@ export function GenesisSheet({ devRoot, onClose, onMade, onWoken }: {
         <div className="flex items-center justify-end gap-2 border-t border-[var(--color-tr-edge)] px-5 py-3">
           <button type="button" onClick={onClose} disabled={busy}
                   className="rounded-lg px-3 py-1.5 text-[12px] text-[var(--color-tr-muted)] hover:bg-white/[0.06] disabled:opacity-40">Cancel</button>
-          <button type="submit" disabled={busy || !name || !target}
+          <button type="submit" disabled={busy || !slug || !target}
                   className="rounded-lg bg-tr-doing/20 px-3 py-1.5 text-[12px] font-semibold text-tr-doing hover:bg-tr-doing/30 disabled:opacity-40">
             {busy ? "Starting…" : "Create & wake"}
           </button>
