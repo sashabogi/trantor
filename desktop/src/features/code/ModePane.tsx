@@ -146,7 +146,9 @@ export function ModePane({ client, project, seat, onSeat, onOpenFile }: {
 
   // The rail is the SAME object as the lens tabs (tr-seg + a raised active segment) with a
   // Lucide icon per mode, so it reads as clickable by association with every other tab in the
-  // app — four words and a dot did not (operator, 0.3.92: "nothing denotes that you can click").
+  // app. The four segments share the width EXACTLY (grid quarters, #5960): the Chat segment's
+  // live dot used to push the row past the 300px rail. The dot rides INSIDE its segment, and a
+  // label truncates before anything overflows.
   const modeBtn = (m: Mode, label: string, Icon: typeof FolderTree, dot?: boolean) => (
     <button
       type="button"
@@ -156,11 +158,11 @@ export function ModePane({ client, project, seat, onSeat, onOpenFile }: {
       }}
       data-on={mode === m}
       title={label}
-      className="flex items-center gap-1.5 whitespace-nowrap"
+      className="flex w-full min-w-0 items-center justify-center gap-1 rounded-[7px] px-1 py-[5px] text-[11.5px] text-tr-muted data-[on=true]:bg-white/[0.07] data-[on=true]:font-medium data-[on=true]:text-tr-text"
     >
       <Icon size={12} strokeWidth={1.75} className="shrink-0" />
-      {label}
-      {dot && <span className="ml-0.5 h-[6px] w-[6px] shrink-0 rounded-full bg-tr-doing" />}
+      <span className="min-w-0 truncate">{label}</span>
+      {dot && <span className="h-[6px] w-[6px] shrink-0 rounded-full bg-tr-doing" />}
     </button>
   );
 
@@ -169,14 +171,12 @@ export function ModePane({ client, project, seat, onSeat, onOpenFile }: {
       className="flex min-h-0 shrink-0 flex-col overflow-hidden rounded-[12px] border border-tr-edge bg-tr-main"
       style={{ width: mode === "chat" ? 440 : 300, margin: 12 }}
     >
-      {/* mode rail */}
-      <div className="flex shrink-0 items-center border-b border-tr-edge px-3 py-2.5">
-        <div className="tr-seg w-full gap-px [&>button]:flex-1 [&>button]:justify-center [&>button]:px-1 [&>button]:text-[11.5px]">
-          {modeBtn("files", "Files", FolderTree)}
-          {modeBtn("git", "Git", GitBranch)}
-          {modeBtn("sessions", "Sessions", History)}
-          {modeBtn("chat", "Chat", MessageSquare, true)}
-        </div>
+      {/* mode rail — exact quarters at 300px and 440px alike (#5960) */}
+      <div className="tr-seg grid shrink-0 grid-cols-4 gap-px border-b border-tr-edge px-2 py-2">
+        {modeBtn("files", "Files", FolderTree)}
+        {modeBtn("git", "Git", GitBranch)}
+        {modeBtn("sessions", "Sessions", History)}
+        {modeBtn("chat", "Chat", MessageSquare, true)}
       </div>
 
       {/* FILES — find box, CHANGED pinned first, ALL FILES tree, seat footer */}
