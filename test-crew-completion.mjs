@@ -28,6 +28,7 @@ console.log("# trantor crew-completion drill");
 
 const ORCH = "MacBook-Pro-M1:crebral-health";   // the session that assigns the work
 let servedFrom = ORCH;                          // who the waking message claims to be from
+let servedText = "Take the cardiology formulary file and land the first 40 rules.";
 const sends = [];
 let served = 0;
 const hub = http.createServer((req, res) => {
@@ -40,7 +41,7 @@ const hub = http.createServer((req, res) => {
     if (P === "/lessons") return reply({ lessons: [] });
     if (P === "/poll") {
       if (served++ === 0) return reply({ messages: [{ id: 11, from: servedFrom, to: u.searchParams.get("session"),
-        text: "Take the cardiology formulary file and land the first 40 rules.", ts: Date.now() }], cursor: 1 });
+        text: servedText, ts: Date.now() }], cursor: 1 });
       return setTimeout(() => reply({ messages: [], cursor: 1 }), 250);
     }
     return reply({ ok: true });
@@ -82,7 +83,10 @@ exit 0
 
 console.log("\nA seat that finishes its contract reports back, without being asked:");
 {
+  const previousText = servedText;
+  servedText = `contract: #6079 ${"x".repeat(170)} · asked: "an older nested receipt"`;
   const r = await drill({ exitCode: 0 });
+  servedText = previousText;
   ok("the seat actually ran the contract", r.wakeTurns.length === 1, `${r.wakeTurns.length} wake turn(s)`);
   const done = r.sends.filter(s => s.to === ORCH);
   ok("the ORCHESTRATOR gets a message when the work finishes",
@@ -93,6 +97,9 @@ console.log("\nA seat that finishes its contract reports back, without being ask
     done.map(s => s.text).join(" | ").slice(0, 160));
   ok("…carrying the outcome, so the orchestrator need not guess",
     done.some(s => /exit 0|✅/.test(s.text || "")), done.map(s => s.text).join(" | ").slice(0, 160));
+  ok("…tagged as a machine-readable receipt", done.length >= 1 && done.every(s => s.kind === "receipt"));
+  const asked = /asked: "([^"]*)"/.exec(done[0]?.text || "")?.[1] || "";
+  ok("…quotes at most one 120-character asked level", asked.length === 120 && !asked.includes("older nested"), asked);
   console.log(`     ↳ what the orchestrator receives: ${JSON.stringify(done[0]?.text || "")}`);
 }
 
@@ -121,6 +128,83 @@ console.log("\nAn outcome is never acked back to a hub pseudo-id (that loops):")
   ok("but nothing is addressed back to hub:duty",
     !r.sends.some(s => s.to === "hub:duty"),
     JSON.stringify(r.sends.map(s => ({ to: s.to, text: (s.text || "").slice(0, 40) }))));
+}
+
+console.log("\nTwo runners consume receipts and status chatter without starting an echo turn:");
+{
+  const messages = [];
+  let seq = 0;
+  const echoHub = http.createServer((req, res) => {
+    let buf = ""; req.on("data", c => (buf += c));
+    req.on("end", () => {
+      const u = new URL(req.url, "http://x"), P = u.pathname;
+      const reply = (o) => { res.writeHead(200, { "content-type": "application/json" }); res.end(JSON.stringify(o)); };
+      if (req.method === "POST" && P === "/send") {
+        let body = {}; try { body = JSON.parse(buf); } catch {}
+        messages.push({ ...body, id: ++seq, ts: Date.now() });
+        return reply({ ok: true, id: seq });
+      }
+      if (P === "/lessons") return reply({ lessons: [] });
+      if (P === "/inbox" || P === "/poll") {
+        const since = Number(u.searchParams.get("since") || 0);
+        const session = u.searchParams.get("session");
+        const found = messages.filter(m => m.id > since && m.from !== session && (m.to === session || m.to === "all"));
+        const cursor = found.length ? found.at(-1).id : since;
+        return setTimeout(() => reply({ messages: found, cursor }), P === "/poll" && !found.length ? 80 : 0);
+      }
+      return reply({ ok: true });
+    });
+  });
+  await new Promise(r => echoHub.listen(0, "127.0.0.1", r));
+  const echoUrl = `http://127.0.0.1:${echoHub.address().port}`;
+  const project = "tt-echo";
+  const startRunner = (session) => {
+    const work = mkdtempSync(join(tmpdir(), `tt-echo-${session.replaceAll(":", "-")}-`));
+    const home = join(work, "home"); mkdirSync(join(home, ".agent-bus"), { recursive: true });
+    const fakebin = join(work, "bin"); mkdirSync(fakebin, { recursive: true });
+    const logFile = join(work, "turns.log");
+    writeFileSync(join(fakebin, "codex"), `#!/bin/sh
+P="$HOME/.agent-bus/turn-codex-${project}.txt"
+{ echo "===TURN==="; cat "$P"; } >> "${logFile}"
+echo "codex-drill: turn done"
+exit 0
+`);
+    chmodSync(join(fakebin, "codex"), 0o755);
+    const runner = spawn("node", ["bin/crew-runner.mjs", "codex", work], {
+      cwd: process.cwd(), stdio: "ignore",
+      env: { ...process.env, HOME: home, PATH: `${fakebin}:${process.env.PATH}`,
+        RELAY_URL: echoUrl, RELAY_AGENT: "codex", RELAY_PROJECT: project,
+        RUNNER_SESSION: session, CREW_KICKOFF: "say hi and end your turn" },
+    });
+    return { runner, logFile };
+  };
+  const a = startRunner(`runner-a:${project}`);
+  const b = startRunner(`runner-b:${project}`);
+  await sleep(800);
+  messages.push(
+    { id: ++seq, ts: Date.now(), from: `runner-a:${project}`, to: `runner-b:${project}`, kind: "receipt", re: 4,
+      text: `✅ done on runner-a:${project} (exit 0, 1s) · asked: "old contract"` },
+    { id: ++seq, ts: Date.now(), from: `runner-b:${project}`, to: `runner-a:${project}`,
+      text: `✅ done on runner-b:${project} (exit 0, 1s) · asked: "older untyped contract"` },
+    { id: ++seq, ts: Date.now(), from: `runner-a:${project}`, to: "all", kind: "status",
+      text: "runner-a reporting — ready for a contract" },
+    { id: ++seq, ts: Date.now(), from: `runner-a:${project}`, to: `runner-b:${project}`,
+      text: "thanks, acknowledged" },
+  );
+  await sleep(900);
+  const wakeCount = (file) => read(file).split("===TURN===").filter(t => t.includes("NEW BUS MESSAGE")).length;
+  ok("exchanged typed and legacy receipts produce zero turns", wakeCount(a.logFile) === 0 && wakeCount(b.logFile) === 0,
+    `runner-a=${wakeCount(a.logFile)}, runner-b=${wakeCount(b.logFile)}`);
+  messages.push({ id: ++seq, ts: Date.now(), from: `runner-a:${project}`, to: `runner-b:${project}`,
+    kind: "contract", text: "contract: implement card #6079" });
+  await sleep(1400);
+  ok("a real card contract still wakes exactly one runner", wakeCount(a.logFile) === 0 && wakeCount(b.logFile) === 1,
+    `runner-a=${wakeCount(a.logFile)}, runner-b=${wakeCount(b.logFile)}`);
+  ok("the resulting receipt is typed and does not wake the sender",
+    messages.some(m => m.from === `runner-b:${project}` && m.to === `runner-a:${project}` && m.kind === "receipt")
+      && wakeCount(a.logFile) === 0);
+  a.runner.kill("SIGKILL"); b.runner.kill("SIGKILL"); await sleep(150);
+  echoHub.close();
 }
 
 console.log("\nAnd the orchestrator actually SEES it, without polling for it:");

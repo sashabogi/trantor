@@ -2627,7 +2627,8 @@ const server = http.createServer(async (req, res) => {
       // is guesswork: a seat still working and a seat that died look identical from the sender's
       // side, which is how an orchestrator ends up waiting forever on a dead peer.
       const re = Number.isFinite(Number(b.re)) && Number(b.re) > 0 ? Number(b.re) : 0;
-      const msg = { id: ++state.seq, ts: now(), from: b.from || "anon", to: b.to || "all", text, project: String(b.project || fromProj || "").slice(0, 80), ...(re ? { re } : {}) };
+      const kind = String(b.kind || "").slice(0, 40);
+      const msg = { id: ++state.seq, ts: now(), from: b.from || "anon", to: b.to || "all", text, project: String(b.project || fromProj || "").slice(0, 80), ...(re ? { re } : {}), ...(kind ? { kind } : {}) };
       state.messages.push(msg); if (state.messages.length > 5000) state.messages.splice(0, 1000);
       dirty = true; pushToStreams(msg);               // <-- instant push to live watchers
       // Mirror onto the unified log. `refs` = the card ids this message cites (#3701), which is what
