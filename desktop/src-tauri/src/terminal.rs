@@ -119,11 +119,12 @@ impl TerminalManager {
         Ok(sub)
     }
 
-    fn write(&self, sub: u64, data: &str) -> Result<(), String> {
+    fn write(&self, sub: u64, data: &str) -> Result<usize, String> {
         let session = self.session(sub)?;
         let mut writer = session.writer.lock().unwrap();
         let bytes = data.as_bytes();
         let mut offset = 0;
+        let mut chunks = 0usize;
         while offset < bytes.len() {
             let mut end = (offset + WRITE_CHUNK).min(bytes.len());
             end = avoid_splitting_marker(bytes, end);
@@ -132,13 +133,17 @@ impl TerminalManager {
                 .and_then(|_| writer.flush())
                 .map_err(|e| format!("term write {sub}: {e}"))?;
             offset = end;
+            chunks += 1;
             // Give the pty's bounded input queue a beat to drain into the child so a fast paste
             // cannot outrun a slow reader.
             if offset < bytes.len() {
                 thread::sleep(WRITE_DRAIN);
             }
         }
-        Ok(())
+        if chunks == 0 {
+            chunks = 1; // an empty payload is one (no-op) write, reported honestly
+        }
+        Ok(chunks)
     }
 
     fn resize(&self, sub: u64, cols: u16, rows: u16) -> Result<(), String> {
@@ -282,8 +287,10 @@ pub fn term_write(
     sub: u64,
     data: String,
     terminals: State<'_, TerminalManager>,
-) -> Result<(), String> {
-    terminals.write(sub, &data)
+) -> Result<String, String> {
+    // The chunk count rides back to the frontend: the paste-split trace (#5921) logs it per call.
+    let chunks = terminals.write(sub, &data)?;
+    Ok(chunks.to_string())
 }
 
 #[tauri::command]

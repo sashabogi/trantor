@@ -101,7 +101,10 @@ export function makeTerminalDouble(opts: {
         onBytesCb = onBytes;
         return sub;
       },
-      termWrite: async (s, data) => { d.written.push({ sub: s, data }); },
+      termWrite: async (s, data) => {
+        d.written.push({ sub: s, data });
+        return "1"; // the chunk count the trace reports; a double never chunks
+      },
       termResize: async (s, c, r) => { d.resized.push({ sub: s, cols: c, rows: r }); },
       termDetach: async s => { d.detached.push(s); },
       subscribeDragDrop(handler) {
