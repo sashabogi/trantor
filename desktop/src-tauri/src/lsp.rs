@@ -109,6 +109,9 @@ struct Server {
     workspace_root: String,
     language: String,
     last_activity: Instant,
+    /// Set when the client's `initialized` notification crosses the wire (lsp_send peeks at the
+    /// method). From then on, another `initialize` on this process is fatal to the server.
+    initialized: bool,
 }
 
 /// A server nobody has written to for this long is idle and is stopped.
@@ -124,6 +127,11 @@ pub struct LspStarted {
     id: u64,
     scope_root: String,
     workspace_root: String,
+    /// Whether THIS live server has already been through the LSP handshake. When true, a NEW
+    /// monaco client must not `start()` against it — that re-sends `initialize` and rust-analyzer
+    /// exits on the spot (rust-1.log: "expected initialized notification, got: Request
+    /// initialize", #5857). The frontend respawns a fresh process instead.
+    initialized: bool,
 }
 
 static SERVERS: Mutex<Option<HashMap<u64, Server>>> = Mutex::new(None);
@@ -393,6 +401,34 @@ fn spawn_server(
 
 // ── commands ─────────────────────────────────────────────────────────────────────────────────
 
+/// The reuse half of `lsp_start`, free of the AppHandle so tests can drive it: a LIVE server for
+/// this (workspace root, language) is reused WITH its handshake flag; a dead one is reaped and
+/// None comes back so the caller spawns fresh.
+fn reuse_live_server(
+    dedup_key: &(String, String),
+    scope_root: &Path,
+    workspace_root: &Path,
+) -> Option<LspStarted> {
+    let id = {
+        let workspaces = WORKSPACES.lock().unwrap();
+        workspaces.as_ref().and_then(|m| m.get(dedup_key).copied())
+    }?;
+    if !server_alive(id) {
+        // The child has exited: drop the stale entry (logged for the audit trail) and respawn.
+        stop_server(id, "respawn dead server");
+        return None;
+    }
+    let initialized = {
+        let servers = SERVERS.lock().unwrap();
+        servers
+            .as_ref()
+            .and_then(|m| m.get(&id))
+            .map(|s| s.initialized)
+            .unwrap_or(false)
+    };
+    Some(started(id, scope_root, workspace_root, initialized))
+}
+
 #[tauri::command]
 pub fn lsp_start(
     app: tauri::AppHandle,
@@ -411,16 +447,8 @@ pub fn lsp_start(
     // One server per (workspace root, language). Reuse a LIVE server; a dead one is reaped and
     // respawned — never re-attach to an id whose process is gone (the 0.3.103 broken-pipe bug).
     let dedup_key = (workspace_root.display().to_string(), language.clone());
-    let dedup_id: Option<u64> = {
-        let workspaces = WORKSPACES.lock().unwrap();
-        workspaces.as_ref().and_then(|m| m.get(&dedup_key).copied())
-    };
-    if let Some(id) = dedup_id {
-        if server_alive(id) {
-            return Ok(started(id, &scope_root, &workspace_root));
-        }
-        // The child has exited: drop the stale entry (logged for the audit trail) and respawn.
-        stop_server(id, "respawn dead server");
+    if let Some(reused) = reuse_live_server(&dedup_key, &scope_root, &workspace_root) {
+        return Ok(reused);
     }
 
     let bin_path = find_binary(spec.bin, spec.install)?;
@@ -438,6 +466,7 @@ pub fn lsp_start(
                 workspace_root: workspace_root.display().to_string(),
                 language: language.clone(),
                 last_activity: Instant::now(),
+                initialized: false,
             },
         );
     }
@@ -446,14 +475,15 @@ pub fn lsp_start(
         workspaces.get_or_insert_with(HashMap::new).insert(dedup_key, id);
     }
     start_reaper();
-    Ok(started(id, &scope_root, &workspace_root))
+    Ok(started(id, &scope_root, &workspace_root, false))
 }
 
-fn started(id: u64, scope_root: &Path, workspace_root: &Path) -> LspStarted {
+fn started(id: u64, scope_root: &Path, workspace_root: &Path, initialized: bool) -> LspStarted {
     LspStarted {
         id,
         scope_root: scope_root.display().to_string(),
         workspace_root: workspace_root.display().to_string(),
+        initialized,
     }
 }
 
@@ -467,6 +497,16 @@ pub fn lsp_send(id: u64, message: String) -> Result<(), String> {
         return Err(format!("no such language server {id}"));
     };
     server.last_activity = Instant::now();
+    // Peek at the method: the client's `initialized` NOTIFICATION is the handshake's last step.
+    // After it crosses the wire this process is initialized for life, and a second `initialize`
+    // kills it — lsp_start reports the flag so the frontend respawns instead (#5857).
+    if !server.initialized {
+        if let Ok(v) = serde_json::from_str::<serde_json::Value>(&message) {
+            if v.get("method").and_then(serde_json::Value::as_str) == Some("initialized") {
+                server.initialized = true;
+            }
+        }
+    }
     server
         .stdin
         .write_all(&frame(message.as_bytes()))
@@ -797,11 +837,109 @@ mod tests {
                     workspace_root: "/tmp".into(),
                     language: "rust".into(),
                     last_activity: Instant::now(),
+                    initialized: false,
                 },
             );
         }
         std::thread::sleep(Duration::from_secs(1));
         assert!(server_alive(id), "server must survive with no client writes");
         assert!(stop_server(id, "test cleanup"));
+    }
+}
+
+#[cfg(test)]
+mod initialized_tests {
+    use super::*;
+
+    /// A second `lsp_start` for a live server that has already completed the handshake reports
+    /// `initialized: true` — the signal the frontend uses to RESPAWN a fresh process instead of
+    /// letting a new client send a fatal second `initialize` (#5857, rust-1.log).
+    #[test]
+    fn second_start_of_an_initialized_server_reports_initialized() {
+        // `cat` as a stand-in server: it never exits and accepts everything on stdin, so
+        // lsp_send's real write path runs exactly as it does against rust-analyzer.
+        let mut child = Command::new("cat")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .spawn()
+            .expect("spawn cat");
+        let stdin = child.stdin.take().expect("cat stdin");
+        let id = NEXT_ID.fetch_add(1, Ordering::SeqCst);
+        {
+            let mut servers = SERVERS.lock().unwrap();
+            servers.get_or_insert_with(HashMap::new).insert(
+                id,
+                Server {
+                    child,
+                    stdin,
+                    project: "test".into(),
+                    workspace_root: "/test".into(),
+                    language: "rust".into(),
+                    last_activity: Instant::now(),
+                    initialized: false,
+                },
+            );
+        }
+        WORKSPACES
+            .lock()
+            .unwrap()
+            .get_or_insert_with(HashMap::new)
+            .insert(("/test".into(), "rust".into()), id);
+
+        // The handshake's last step crosses the wire: `initialized` flips the flag.
+        lsp_send(id, r#"{"jsonrpc":"2.0","method":"initialized","params":{}}"#.to_string()).unwrap();
+        let initialized = {
+            let servers = SERVERS.lock().unwrap();
+            servers.as_ref().and_then(|m| m.get(&id)).map(|s| s.initialized)
+        };
+        assert_eq!(initialized, Some(true));
+
+        // A second start REUSES the live server and reports the flag — it must never claim a
+        // fresh server here, or the frontend would re-initialize a live process.
+        let file = Path::new("/test").join("x.rs");
+        let started =
+            reuse_live_server(&("/test".into(), "rust".into()), Path::new("/test"), &file).unwrap();
+        assert_eq!(started.id, id);
+        assert!(started.initialized);
+
+        stop_server(id, "initialized test end");
+    }
+
+    /// A fresh spawn reports `initialized: false` — a new process OWES the handshake its new
+    /// client is about to send.
+    #[test]
+    fn fresh_spawn_reports_not_initialized() {
+        let id = NEXT_ID.fetch_add(1, Ordering::SeqCst);
+        let mut child = Command::new("cat")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .spawn()
+            .expect("spawn cat");
+        let stdin = child.stdin.take().expect("cat stdin");
+        SERVERS.lock().unwrap().get_or_insert_with(HashMap::new).insert(
+            id,
+            Server {
+                child,
+                stdin,
+                project: "test".into(),
+                workspace_root: "/test-fresh".into(),
+                language: "rust".into(),
+                last_activity: Instant::now(),
+                initialized: false,
+            },
+        );
+        let scope_root = PathBuf::from("/test-fresh");
+        let file = scope_root.join("x.rs");
+        let ws = workspace_root(&scope_root, "rust", &file.to_string_lossy());
+        WORKSPACES
+            .lock()
+            .unwrap()
+            .get_or_insert_with(HashMap::new)
+            .insert((ws.display().to_string(), "rust".into()), id);
+        let started =
+            reuse_live_server(&(ws.display().to_string(), "rust".into()), &scope_root, &ws).unwrap();
+        assert_eq!(started.id, id);
+        assert!(!started.initialized);
+        stop_server(id, "fresh test end");
     }
 }

@@ -18,6 +18,7 @@ import { MonacoVscodeApiWrapper } from "monaco-languageclient/vscodeApiWrapper";
 import type { MessageTransports } from "vscode-languageclient/browser.js";
 import * as vscode from "vscode";
 import { isReadyToken, progressEvent, type ProgressEvent } from "./lspProtocol";
+import { decideLspStart } from "./lspStart";
 import "./monacoSetup";
 
 // ── transport ────────────────────────────────────────────────────────────────────────────────
@@ -112,6 +113,10 @@ function ensureServices(): Promise<void> {
 type ClientKey = string;
 type ClientEntry = { id: number; scopeRoot: string; client: MonacoLanguageClient };
 const clients = new Map<ClientKey, ClientEntry>();
+// Starts already in flight, by key (#5857 bounce): a remount that races a pending client.start()
+// used to build a SECOND client for the same live server and re-initialize it — the map only
+// fills AFTER start() resolves, so "no client yet" said nothing about a start being underway.
+const pendingStarts = new Map<ClientKey, Promise<LspStartResult>>();
 // Both survive a lens unmount: the Rust server outlives the lens, so its indexed/phase state does
 // too — a remount re-attaches to the same server and reads the same "ready".
 const indexed = new Set<ClientKey>();
@@ -164,7 +169,7 @@ export async function startLsp(
   language: string,
   path: string,
 ): Promise<LspStartResult> {
-  const started = await invoke<{ id: number; scopeRoot: string; workspaceRoot: string }>(
+  let started = await invoke<{ id: number; scopeRoot: string; workspaceRoot: string; initialized: boolean }>(
     "lsp_start",
     { project, scope, language, path },
   );
@@ -172,38 +177,63 @@ export async function startLsp(
   const existing = clients.get(key);
   if (existing) return { id: existing.id, scopeRoot: existing.scopeRoot, indexing: isLspIndexing(language) };
 
-  await ensureServices();
-  const reader = new TauriMessageReader(started.id, e => {
-    if (e.kind === "begin" && e.title) {
-      phases.set(key, e.title);
-      notify();
-    } else if (e.kind === "end" && isReadyToken(e.token)) {
-      if (!indexed.has(key)) {
-        indexed.add(key);
-        notify();
-      }
+  // A start already in flight for this key IS the client about to exist (#5857 bounce) — await
+  // it instead of building a second one against the same live server.
+  const pending = pendingStarts.get(key);
+  if (pending) return pending;
+
+  const attempt = (async () => {
+    await ensureServices();
+    // The reuse rule (#5857 bounce, lspStart.ts): a live server already through its handshake
+    // must never see a second `initialize` — respawn a fresh process instead.
+    const decision = decideLspStart(started, clients.has(key));
+    if (decision.action === "respawn") {
+      await invoke("lsp_stop", { id: decision.stopId }).catch(() => {});
+      indexed.delete(key);
       phases.delete(key);
+      started = await invoke<{ id: number; scopeRoot: string; workspaceRoot: string; initialized: boolean }>(
+        "lsp_start",
+        { project, scope, language, path },
+      );
     }
-  });
-  const transports: MessageTransports = {
-    reader,
-    writer: new TauriMessageWriter(started.id),
-  };
-  const client = new MonacoLanguageClient({
-    name: `lsp:${language}`,
-    id: key,
-    clientOptions: {
-      documentSelector: [language],
-      // rootUri must be the CRATE root (the nearest manifest), not the scope root or null, or
-      // rust-analyzer loads no project — lsp_start resolved it, never recomputed here.
-      workspaceFolder: { uri: vscode.Uri.file(started.workspaceRoot), name: project, index: 0 },
-    },
-    messageTransports: transports,
-  });
-  await client.start();
-  clients.set(key, { id: started.id, scopeRoot: started.scopeRoot, client });
-  notify();
-  return { id: started.id, scopeRoot: started.scopeRoot, indexing: isLspIndexing(language) };
+    const reader = new TauriMessageReader(started.id, e => {
+      if (e.kind === "begin" && e.title) {
+        phases.set(key, e.title);
+        notify();
+      } else if (e.kind === "end" && isReadyToken(e.token)) {
+        if (!indexed.has(key)) {
+          indexed.add(key);
+          notify();
+        }
+        phases.delete(key);
+      }
+    });
+    const transports: MessageTransports = {
+      reader,
+      writer: new TauriMessageWriter(started.id),
+    };
+    const client = new MonacoLanguageClient({
+      name: `lsp:${language}`,
+      id: key,
+      clientOptions: {
+        documentSelector: [language],
+        // rootUri must be the CRATE root (the nearest manifest), not the scope root or null, or
+        // rust-analyzer loads no project — lsp_start resolved it, never recomputed here.
+        workspaceFolder: { uri: vscode.Uri.file(started.workspaceRoot), name: project, index: 0 },
+      },
+      messageTransports: transports,
+    });
+    await client.start();
+    clients.set(key, { id: started.id, scopeRoot: started.scopeRoot, client });
+    notify();
+    return { id: started.id, scopeRoot: started.scopeRoot, indexing: isLspIndexing(language) };
+  })();
+  pendingStarts.set(key, attempt);
+  try {
+    return await attempt;
+  } finally {
+    pendingStarts.delete(key);
+  }
 }
 
 /** Stop every server for a project — the editor calls this on project switch. */

@@ -85,6 +85,15 @@ export function dropDocument(project: string, key: string): void {
   projectDocuments(project).docs.delete(key);
 }
 
+/** The resumed draft for a file, by its scope+path — what an editor must create its model FROM,
+ *  so a remount never builds a model from a lagging empty prop (#5857 bounce). Null when this
+ *  tab has never been opened. */
+export function storedDraft(project: string, seat: string | null | undefined, path: string): string | null {
+  const key = `${seat ?? "project"}:${path}`;
+  const draft = projectDocuments(project).docs.get(key)?.draft;
+  return draft === undefined ? null : draft;
+}
+
 /** The draft a tab may RESUME from: only a document that finished loading has one. A fresh entry
  *  is created by the first touch (setDisk, markLoaded) with draft "", and returning that "" as
  *  a kept draft is how the editor opened lib.rs empty with a false conflict bar (0.3.105). */
