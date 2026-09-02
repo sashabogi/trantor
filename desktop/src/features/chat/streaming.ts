@@ -54,6 +54,11 @@ export type RowsPayload = {
   project: string; sessionId: string; after: number;
   turns: Turn[]; results: ToolResult[]; meta: Meta; total?: number;
   receiptTexts?: string[];
+  /** #5993 — the batch carried a turn-boundary system row (`turn_duration` /
+   *  `stop_hook_summary`): the transcript says the turn ended. The pushed status stream can
+   *  freeze on `working`, so this is the one moment the chat re-seeds the status — one invoke,
+   *  never a polling loop. */
+  turn_ended?: boolean;
 };
 /** One `chat-session-changed` event: the watcher saw the mapped session id move (handoff/adopt)
  *  and is following the NEW transcript from line 0. */

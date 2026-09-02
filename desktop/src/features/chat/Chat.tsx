@@ -325,6 +325,15 @@ export function Chat({ project, sessionId, dock, onDock, onClose }: {
             const p: RowsPayload = JSON.parse(ev.payload);
             if (p.project !== project) return;
             if (sessionId && p.sessionId !== sessionId) return;
+            // #5993 — the transcript says a turn ended. Re-seed the pushed status ONCE (never a
+            // polling loop): the stream can freeze on `working`, and a frozen gate must not
+            // outlive the batch that proves the turn is over. Fires even when the batch misses
+            // the cursor — the resync heals rows, not the gate. History views keep "ended".
+            if (p.turn_ended && !sessionId) {
+              invoke<string>("orchestrator_status", { project })
+                .then(st => { if (alive && st) setStatus(st); })
+                .catch(() => {});
+            }
             badFrames = 0;
             if (p.after !== seenRef.current) { syncRef.current(); return; }
             seenRef.current = p.total ?? p.after + p.turns.length;
@@ -345,6 +354,11 @@ export function Chat({ project, sessionId, dock, onDock, onClose }: {
             setChat(s => applySessionChanged(s));
             setDismissedAt(null); saveDismissedAt(null);
             syncRef.current();
+            // #5993 — a handoff may have restarted the pane; the pushed stream may never have
+            // covered the successor. One seed here, so the gate starts honest — no loop.
+            invoke<string>("orchestrator_status", { project })
+              .then(st => { if (alive && st) setStatus(st); })
+              .catch(() => {});
           } catch { if (++badFrames >= 3) setStreamed(false); }
         }));
         if (alive) setStreamed(true);
