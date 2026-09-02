@@ -19,7 +19,8 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync, append
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { ensureEnrolled, loadIdentity, signedPost } from "../hooks/lib/api.mjs";
+import { ensureEnrolled as enrollTofu, loadIdentity, signedPost } from "../hooks/lib/api.mjs";
+import { ensureEnrolled as enrollViaOwnerInvite } from "../lib/enroll.mjs";
 import { setAutonomy } from "../lib/autonomy.mjs";
 import { resolveHub, setProjectHub } from "../lib/project.mjs";
 
@@ -122,10 +123,17 @@ const identity = loadIdentity(session);
 let card = null;
 let hubError = null;
 try {
-  await ensureEnrolled(session, identity, name);
+  // The genesis identity is BRAND NEW — it cannot write to a project on an enforce hub until the
+  // hub knows it. TOFU /enroll only works on a local loopback hub; a remote enforce hub refuses it
+  // (403 "tofu enrollment refused") and the genesis silently records nothing (#6049). So enroll the
+  // way crew seats do: the operator's owner key mints a project-scoped write invite and the genesis
+  // identity spends it. Only when NO owner key is configured (a loopback hub with no owner identity)
+  // do we fall back to the plain TOFU enroll.
+  const viaOwner = await enrollViaOwnerInvite(hub, identity, name, { timeoutMs: 8000 });
+  if (!viaOwner.ok && viaOwner.reason === "no-owner-key") await enrollTofu(session, identity, name);
   const briefForHub = (brief || `Genesis of ${name} — created by trantor new.`).slice(0, 600);
   const r1 = await signedPost("/project", { project: name, brief: briefForHub, by: session }, { session, project: name, timeoutMs: 8000 });
-  if (!r1.ok) throw new Error(`hub ${r1.status} on /project`);
+  if (!r1.ok) throw new Error(`hub ${r1.status} on /project${r1.json?.error ? `: ${r1.json.error}` : ""}`);
   const r2 = await signedPost("/task", {
     project: name,
     title: `genesis: ${name}`,
@@ -133,7 +141,7 @@ try {
     by: session,
     note: "project genesis — created by trantor new",
   }, { session, project: name, timeoutMs: 8000 });
-  if (!r2.ok) throw new Error(`hub ${r2.status} on /task`);
+  if (!r2.ok) throw new Error(`hub ${r2.status} on /task${r2.json?.error ? `: ${r2.json.error}` : ""}`);
   card = r2.json?.task?.id ?? null;
 } catch (e) {
   hubError = e instanceof Error ? e.message : String(e);
