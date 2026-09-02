@@ -9,8 +9,10 @@ export function slugProjectName(raw: string): string {
     .replace(/^[^a-z0-9]+|[^a-z0-9]+$/g, "");
 }
 
-export function projectTarget(devRoot: string, name: string): string {
-  const root = devRoot.replace(/\/+$/, "");
+/** The full project path under a PARENT root: `--dir <parent>` in `trantor new` means the name is
+ *  ALWAYS appended, so the resulting project is `<root>/<name>` — never the parent itself. */
+export function projectTarget(parentRoot: string, name: string): string {
+  const root = parentRoot.replace(/\/+$/, "");
   return name ? `${root}/${name}` : root;
 }
 

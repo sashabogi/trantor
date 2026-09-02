@@ -1,10 +1,12 @@
 #!/usr/bin/env node
 // trantor new — project genesis, the CLI half (#5862). One command stands a project up:
 //
-//   trantor new <name> [--from <git-url>] [--brief <file>] [--dir <path>] [--adopt] [--json]
+//   trantor new <name> [--from <git-url>] [--brief <file>] [--dir <parent>] [--adopt] [--json]
 //
-// It makes the directory under the dev root (TRANTOR_DEV_ROOT or ~/development), starts git on
-// main (or clones --from, or adopts an existing folder with --adopt), seeds CLAUDE.md from the
+// It makes the project directory at <parent>/<name> — --dir names the PARENT, never the project
+// directory itself (default parent: TRANTOR_DEV_ROOT or ~/development). The name is always
+// appended under it, so `--dir P` with name N creates P/N. Starts git on main (or clones --from,
+// or adopts an existing folder with --adopt), seeds CLAUDE.md from the
 // brief (verbatim brief + the trantor conventions block), installs the same auto-card hook as
 // `trantor init-hooks`, posts the brief as the hub project brief (POST /project — the same call
 // relay_project_brief makes), and opens the first card "genesis: <name>" on the new board.
@@ -52,7 +54,7 @@ const flag = (n) => { const i = args.indexOf("--" + n); return i >= 0 ? args[i +
 const has = (n) => args.includes("--" + n);
 const json = has("json");
 const name = args.find(a => !a.startsWith("--"));
-if (!name) die("usage: trantor new <name> [--from <git-url>] [--brief <file>] [--dir <path>] [--adopt] [--json]");
+if (!name) die("usage: trantor new <name> [--from <git-url>] [--brief <file>] [--dir <parent>] [--adopt] [--json] — project lands at <parent>/<name>");
 if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(name)) die(`invalid project name "${name}" — letters, digits, dot, dash, underscore`);
 const from = flag("from");
 const briefFile = flag("brief");
@@ -139,8 +141,10 @@ try {
 }
 
 // ── report ──────────────────────────────────────────────────────────────────────────────────────
+// dir is the created project directory <parent>/<name>; parent is the --dir (or default) root the
+// name was appended under — the two together state the parent contract explicitly.
 if (json) {
-  console.log(JSON.stringify({ name, dir, branch, hub, card }));
+  console.log(JSON.stringify({ name, parent: devRoot, dir, branch, hub, card }));
 } else {
   console.log(`✓ ${dir} (${branch}${from ? ", cloned" : adopt ? ", adopted" : ""})`);
   console.log(`✓ CLAUDE.md seeded${brief ? " from the brief" : " (no brief — add the project's what/why/goal)"}`);
