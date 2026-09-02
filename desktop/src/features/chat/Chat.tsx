@@ -23,6 +23,7 @@ import { orchestratorOf } from "../workspace/herdr";
 import { DEFAULT_TERMINAL_DEPS, TerminalPane, type TerminalDeps } from "../workspace/TerminalPane";
 import { bannerCountdown, type HandoffCountdown } from "./banner";
 import { Composer, type Provenance } from "./Composer";
+import { MarkdownText } from "./MarkdownText";
 import { suggestionsFromTurns } from "./suggestions";
 import { SuggestionChips } from "./SuggestionChips";
 import {
@@ -677,11 +678,18 @@ export function Chat({ project, sessionId, dock, onDock, onClose }: {
                 ) : (
                   <div
                     key={j}
-                    className={`whitespace-pre-wrap break-words rounded-lg px-3 py-2 text-[length:calc(12.5px*var(--chat-scale,1))] leading-relaxed ${
-                      t.role === "user" ? "bg-tr-panel" : "bg-black/25"
+                    className={`rounded-lg px-3 py-2 text-[length:calc(12.5px*var(--chat-scale,1))] leading-relaxed ${
+                      t.role === "user"
+                        ? "whitespace-pre-wrap break-words bg-tr-panel"
+                        : "break-words bg-black/25"
                     }`}
                   >
-                    {b.text}
+                    {/* #6005: the operator reads the terminal because assistant replies showed
+                        literal markdown. Assistant text renders as markdown; user turns are exactly
+                        what was typed, so they keep the pre-wrap bubble. */}
+                    {t.role === "user"
+                      ? b.text
+                      : <MarkdownText text={b.text} />}
                   </div>
                 ),
               )}
