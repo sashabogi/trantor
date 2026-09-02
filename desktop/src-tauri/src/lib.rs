@@ -4910,6 +4910,8 @@ pub fn run() {
             file_watch,
             file_unwatch,
             ghost::ghost_complete,
+            ghost::ghost_complete_stream,
+            ghost::ghost_cancel,
             pane_send,
             pane_keys,
             orchestrator_status,

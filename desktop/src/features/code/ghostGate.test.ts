@@ -2,7 +2,7 @@
 // keystrokes coalesces into ONE fetch; cancel means a keystroke that lands while a fetch is in
 // flight invalidates that fetch (its answer must never paint a stale ghost).
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createGhostGate, type GhostFetcher, type GhostRequest } from "./ghostGate";
+import { createGhostGate, splitPrefix, type GhostFetcher, type GhostRequest } from "./ghostGate";
 
 const REQ: GhostRequest = { prefix: "fn", suffix: "}", path: "a.ts" };
 
@@ -72,5 +72,37 @@ describe("createGhostGate", () => {
     const p = gate.schedule(REQ);
     await advance(300);
     await expect(p).resolves.toBeNull();
+  });
+});
+
+describe("splitPrefix (#6160 cached-input tier)", () => {
+  it("puts the last 8 lines in near and everything above in head", () => {
+    const lines = Array.from({ length: 12 }, (_, i) => `line${i}`);
+    const { head, near } = splitPrefix(lines.join("\n"));
+    expect(head).toBe("line0\nline1\nline2\nline3");
+    expect(near).toBe("line4\nline5\nline6\nline7\nline8\nline9\nline10\nline11");
+  });
+
+  it("a short prefix is ALL near — nothing is stable yet", () => {
+    const prefix = "a\nb\nc";
+    const { head, near } = splitPrefix(prefix);
+    expect(head).toBe("");
+    expect(near).toBe(prefix);
+  });
+
+  it("an exactly-8-line prefix is all near with an empty head", () => {
+    const lines = Array.from({ length: 8 }, (_, i) => `l${i}`);
+    const prefix = lines.join("\n");
+    const { head, near } = splitPrefix(prefix);
+    expect(head).toBe("");
+    expect(near).toBe(prefix);
+  });
+
+  it("head + near reassemble byte-identical to the original prefix", () => {
+    const lines = Array.from({ length: 30 }, (_, i) => `const r${i} = ${i};`);
+    const prefix = lines.join("\n");
+    const { head, near } = splitPrefix(prefix);
+    expect(head).not.toBe("");
+    expect(`${head}\n${near}`).toBe(prefix);
   });
 });

@@ -18,9 +18,13 @@
 //! Purity split: everything that SHAPES the request (env parse, provider pick, prompt, request
 //! body, completion parse) is a plain function with a unit test; only the network round-trip lives
 //! in `ghost_complete`.
+use futures_util::StreamExt;
 use serde_json::{json, Value};
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use tauri::ipc::Channel;
 
 const QWEN_BASE: &str = "https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1";
 const QWEN_MODEL: &str = "qwen3.8-flash";
@@ -194,6 +198,287 @@ fn read_env_file() -> HashMap<String, String> {
     parse_env(&raw)
 }
 
+// ── Streaming ghost (#6160) ────────────────────────────────────────────────────────────────────
+// The non-streaming path above measures ~1.4 s of network+server floor before the WHOLE body lands
+// (see ghost_latency_matrix). Streaming flips the target to TIME-TO-FIRST-LINE: we read the SSE
+// byte stream as it arrives, forward each delta to the webview on a request-keyed channel, and stop
+// the moment the first line is complete (or ~32 tokens), aborting the HTTP stream so we never pay
+// for the rest. The same 2 s budget now applies to first-line arrival, not to the whole response.
+
+/// One streaming event, pushed to the webview on the channel keyed by request id. `Delta` fires as
+/// each token chunk lands; `Done` fires when the first line is complete (or the stream is capped),
+/// carrying the time-to-first-line so the editor can trace it.
+#[derive(Clone, serde::Serialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum GhostEvent {
+    Delta { id: String, text: String },
+    Done { id: String, text: String, ttl_ms: u64, reason: String },
+}
+
+/// The payload of one SSE `data:` line, or None for keep-alives, blanks and the `[DONE]` sentinel.
+pub fn sse_data(line: &str) -> Option<String> {
+    let rest = line.trim().strip_prefix("data:")?.trim();
+    if rest.is_empty() || rest == "[DONE]" {
+        return None;
+    }
+    Some(rest.to_string())
+}
+
+/// The delta content carried by one chat.completion.chunk payload. Chunks that only carry a role or
+/// finish_reason (or that are not JSON) yield None. May be Some("") for an empty content delta.
+pub fn parse_stream_delta(payload: &str) -> Option<String> {
+    let v: Value = serde_json::from_str(payload).ok()?;
+    let content = v
+        .get("choices")?
+        .as_array()?
+        .first()?
+        .get("delta")?
+        .get("content")?
+        .as_str()?;
+    Some(content.to_string())
+}
+
+/// The accumulated streamed completion, and the rules for when it is "enough to show".
+#[derive(Default)]
+pub struct GhostAcc {
+    pub content: String,
+}
+
+impl GhostAcc {
+    pub fn push(&mut self, delta: &str) {
+        self.content.push_str(delta);
+    }
+    /// The first line is complete the moment a newline lands — that is the moment the ghost paints.
+    pub fn first_line_done(&self) -> bool {
+        self.content.contains('\n')
+    }
+    /// The ghost text: everything up to the first newline (or the whole stream when the model ended
+    /// without one), trailing whitespace trimmed so Monaco does not paint trailing spaces.
+    pub fn ghost(&self) -> String {
+        match self.content.split_once('\n') {
+            Some((first, _)) => first.trim_end().to_string(),
+            None => self.content.trim_end().to_string(),
+        }
+    }
+    /// A whitespace-word stand-in for tokens, used to honour the ~32-token cap when the model never
+    /// sends a newline. Deliberately coarse: the provider also enforces `max_tokens`, this is only a
+    /// belt-and-braces so a run-on line cannot stream forever.
+    pub fn token_estimate(&self) -> usize {
+        self.content.split_whitespace().count()
+    }
+}
+
+/// The streaming FIM prompt, ordered for the provider's cached-input tier: the STABLE bytes go
+/// first (instructions, the FILE header, then the context block above the cursor minus its last
+/// few lines), and the only part that changes per keystroke — the last few lines right before the
+/// cursor — rides LAST inside the before-cursor block. Keystroke N and N+1 therefore share an
+/// identical leading prefix, so prefill can hit the cache.
+pub fn build_stream_prompt(head: &str, near: &str, suffix: &str, path: &str) -> String {
+    format!(
+        "You are an inline code-completion model in an editor.\n\
+         Complete the code exactly where the cursor is. Do NOT repeat what is before or after it.\n\
+         Return ONLY the code that fills the gap — no commentary, no markdown fences.\n\n\
+         FILE: {path}\n\n\
+         <code before the cursor>\n{head}\n{near}\n</code before the cursor>\n\n\
+         <code after the cursor>\n{suffix}\n</code after the cursor>\n\n\
+         Completion:"
+    )
+}
+
+/// The streaming request body. Identical knobs to the batch path (small max_tokens, stop at a blank
+/// line, temperature 0) but `stream: true` so the first line can land well before the whole body.
+pub fn build_stream_request_body(provider: &Provider, head: &str, near: &str, suffix: &str, path: &str) -> Value {
+    let mut body = json!({
+        "model": provider.model,
+        "messages": [{ "role": "user", "content": build_stream_prompt(head, near, suffix, path) }],
+        "max_tokens": MAX_TOKENS,
+        "stop": STOP_BLANK_LINE,
+        "temperature": 0,
+        "stream": true,
+    });
+    if provider.thinking_off {
+        body["enable_thinking"] = Value::Bool(false);
+    }
+    body
+}
+
+// Cancel registry: each streaming request registers an AtomicBool under its id; ghost_cancel flips
+// it, and the stream loop checks it between chunks. Keyed by request id (the webview owns the id),
+// so a keystroke cancels exactly its own in-flight completion and nothing else.
+fn cancel_registry() -> &'static Mutex<HashMap<String, Arc<AtomicBool>>> {
+    static REG: OnceLock<Mutex<HashMap<String, Arc<AtomicBool>>>> = OnceLock::new();
+    REG.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn register_cancel(id: &str) -> Arc<AtomicBool> {
+    let flag = Arc::new(AtomicBool::new(false));
+    cancel_registry().lock().unwrap().insert(id.to_string(), flag.clone());
+    flag
+}
+
+fn unregister_cancel(id: &str) {
+    cancel_registry().lock().unwrap().remove(id);
+}
+
+/// Ask an in-flight streaming ghost to stop. Idempotent; a completed/unknown id is a no-op.
+#[tauri::command]
+pub fn ghost_cancel(id: String) -> Result<(), String> {
+    if let Some(flag) = cancel_registry().lock().unwrap().get(&id) {
+        flag.store(true, Ordering::Relaxed);
+    }
+    Ok(())
+}
+
+fn trace_stream(ms: u128, ttl_ms: u64, model: &str, chars: usize, reason: &str) {
+    let dir = crate::desktop_bus_dir();
+    let _ = std::fs::create_dir_all(&dir);
+    let ts = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis()).unwrap_or_default();
+    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(dir.join("app-trace.log")) {
+        use std::io::Write;
+        let _ = writeln!(f, "{ts} ghost-stream: ms={ms} ttl={ttl_ms} model={model} chars={chars} reason={reason}");
+    }
+}
+
+/// One streaming inline-completion call. Reads provider config at runtime, opens a `stream: true`
+/// request, and reads the SSE byte stream as it arrives — forwarding each delta on `on_event` and
+/// resolving to the first-line ghost the moment the first line is complete (or at ~32 tokens),
+/// aborting the rest of the HTTP stream. The 2 s budget is TIME-TO-FIRST-LINE: if no first line has
+/// landed by then, the request is dropped and an error is returned (the editor shows no ghost).
+#[tauri::command]
+pub async fn ghost_complete_stream(
+    id: String,
+    head: String,
+    near: String,
+    suffix: String,
+    path: String,
+    on_event: Channel<GhostEvent>,
+) -> Result<String, String> {
+    let t0 = Instant::now();
+    let env_file = read_env_file();
+    let provider = pick_provider(&env_file)
+        .ok_or_else(|| "ghost: no QWEN_API_KEY or DEEPSEEK_API_KEY in ~/.agent-bus/.env".to_string())?;
+    let body = build_stream_request_body(&provider, &head, &near, &suffix, &path).to_string();
+
+    let cancel = register_cancel(&id);
+    let outcome = run_stream(&id, &provider, body, &cancel, &on_event, t0).await;
+    unregister_cancel(&id);
+    outcome
+}
+
+async fn run_stream(
+    id: &str,
+    provider: &Provider,
+    body: String,
+    cancel: &Arc<AtomicBool>,
+    on_event: &Channel<GhostEvent>,
+    t0: Instant,
+) -> Result<String, String> {
+    // No request-level `.timeout()` here: that clock runs to the END of the body, which we abort
+    // early by design. The deadline below bounds time-to-first-line instead.
+    let client = reqwest::Client::builder()
+        .connect_timeout(TIMEOUT)
+        .build()
+        .map_err(|e| format!("ghost: client: {e}"))?;
+    let url = format!("{}/chat/completions", provider.base.trim_end_matches('/'));
+
+    // Bound the connect + header wait to the budget; a stall before any token is a TTL miss.
+    let send = client
+        .post(&url)
+        .bearer_auth(&provider.key)
+        .header("content-type", "application/json")
+        .header("accept", "text/event-stream")
+        .body(body)
+        .send();
+    let res = match tokio::time::timeout(TIMEOUT, send).await {
+        Err(_) => {
+            trace_stream(t0.elapsed().as_millis(), 0, provider.model, 0, "timeout-headers");
+            return Err("ghost: time-to-first-line exceeded before headers".to_string());
+        }
+        Ok(Err(e)) => {
+            trace_stream(t0.elapsed().as_millis(), 0, provider.model, 0, "connect");
+            return Err(format!("ghost: request failed: {e}"));
+        }
+        Ok(Ok(res)) => res,
+    };
+
+    let status = res.status();
+    if !status.is_success() {
+        let text = res.text().await.unwrap_or_default();
+        trace_stream(t0.elapsed().as_millis(), 0, provider.model, 0, "http");
+        return Err(format!("ghost: http {status}: {}", text.chars().take(200).collect::<String>()));
+    }
+
+    let deadline = t0 + TIMEOUT; // the 2 s time-to-first-line budget, measured from t0
+    let mut stream = res.bytes_stream();
+    let mut buf = String::new();
+    let mut acc = GhostAcc::default();
+    let mut ttl_ms: Option<u64> = None;
+
+    loop {
+        if cancel.load(Ordering::Relaxed) {
+            // Dropping `stream` aborts the HTTP stream; we never read the rest.
+            trace_stream(t0.elapsed().as_millis(), 0, provider.model, 0, "cancelled");
+            return Err("ghost: cancelled".to_string());
+        }
+        let now = Instant::now();
+        if now >= deadline {
+            trace_stream(t0.elapsed().as_millis(), 0, provider.model, acc.ghost().chars().count(), "timeout");
+            return Err("ghost: time-to-first-line exceeded".to_string());
+        }
+        match tokio::time::timeout(deadline - now, stream.next()).await {
+            Err(_) => {
+                trace_stream(t0.elapsed().as_millis(), 0, provider.model, acc.ghost().chars().count(), "timeout");
+                return Err("ghost: time-to-first-line exceeded".to_string());
+            }
+            Ok(None) => break, // stream ended before a newline; show what we have
+            Ok(Some(Err(e))) => {
+                trace_stream(t0.elapsed().as_millis(), 0, provider.model, 0, "stream");
+                return Err(format!("ghost: stream: {e}"));
+            }
+            Ok(Some(Ok(bytes))) => {
+                buf.push_str(&String::from_utf8_lossy(&bytes));
+                let mut stop = false;
+                while let Some(pos) = buf.find('\n') {
+                    // split_off leaves the line (through the '\n') in `buf`; swap the remainder back.
+                    let rest = buf.split_off(pos + 1);
+                    let line = std::mem::replace(&mut buf, rest);
+                    let line = line.trim_end_matches(['\n', '\r']);
+                    let Some(payload) = sse_data(&line) else { continue };
+                    let Some(delta) = parse_stream_delta(&payload).filter(|d| !d.is_empty()) else { continue };
+                    acc.push(&delta);
+                    let _ = on_event.send(GhostEvent::Delta { id: id.to_string(), text: delta });
+                    if acc.first_line_done() || acc.token_estimate() >= MAX_TOKENS as usize {
+                        if acc.first_line_done() {
+                            ttl_ms = Some(t0.elapsed().as_millis() as u64);
+                        }
+                        stop = true;
+                        break;
+                    }
+                }
+                if stop {
+                    break;
+                }
+            }
+        }
+    }
+
+    let ghost = acc.ghost();
+    if ghost.trim().is_empty() {
+        trace_stream(t0.elapsed().as_millis(), 0, provider.model, 0, "empty");
+        return Err("ghost: empty stream".to_string());
+    }
+    let ttl = ttl_ms.unwrap_or_else(|| t0.elapsed().as_millis() as u64);
+    let reason = if ttl_ms.is_some() { "newline" } else if acc.token_estimate() >= MAX_TOKENS as usize { "tokens" } else { "eof" };
+    let _ = on_event.send(GhostEvent::Done {
+        id: id.to_string(),
+        text: ghost.clone(),
+        ttl_ms: ttl,
+        reason: reason.to_string(),
+    });
+    trace_stream(t0.elapsed().as_millis(), ttl, provider.model, ghost.chars().count(), reason);
+    Ok(ghost)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -265,6 +550,88 @@ mod tests {
         assert!(parse_completion("not json").is_err());
     }
 
+    // ── #6160 streaming shapes ────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn sse_data_extracts_payloads_and_skips_sentinels() {
+        assert_eq!(sse_data("data: {\"a\":1}").as_deref(), Some("{\"a\":1}"));
+        assert!(sse_data("data:[DONE]").is_none());
+        assert!(sse_data("data: [DONE]").is_none());
+        assert!(sse_data(": keep-alive").is_none());
+        assert!(sse_data("").is_none());
+        assert!(sse_data("event: ping").is_none());
+    }
+
+    #[test]
+    fn parse_stream_delta_reads_chunk_content_and_ignores_metadata_chunks() {
+        let with = r#"{"choices":[{"delta":{"content":"  return x;"}}]}"#;
+        assert_eq!(parse_stream_delta(with).as_deref(), Some("  return x;"));
+        let empty = r#"{"choices":[{"delta":{"content":""}}]}"#;
+        assert_eq!(parse_stream_delta(empty).as_deref(), Some(""));
+        let role_only = r#"{"choices":[{"delta":{"role":"assistant"}}]}"#;
+        assert!(parse_stream_delta(role_only).is_none());
+        let finish = r#"{"choices":[{"delta":{},"finish_reason":"stop"}]}"#;
+        assert!(parse_stream_delta(finish).is_none());
+        assert!(parse_stream_delta("not json").is_none());
+    }
+
+    #[test]
+    fn ghost_acc_stops_at_first_line_and_estimates_tokens() {
+        let mut acc = GhostAcc::default();
+        assert!(!acc.first_line_done());
+        acc.push("let a = ");
+        assert!(!acc.first_line_done());
+        assert_eq!(acc.ghost(), "let a =");
+        acc.push("1;\nlet b = 2;");
+        assert!(acc.first_line_done());
+        assert_eq!(acc.ghost(), "let a = 1;");
+        assert_eq!(acc.token_estimate(), 8);
+    }
+
+    #[test]
+    fn ghost_acc_without_newline_returns_the_whole_stream_trimmed() {
+        let mut acc = GhostAcc::default();
+        acc.push("return done();  ");
+        assert!(!acc.first_line_done());
+        assert_eq!(acc.ghost(), "return done();");
+    }
+
+    #[test]
+    fn stream_prompt_orders_stable_prefix_before_the_volatile_near_lines() {
+        let prompt = build_stream_prompt("HEADLINE", "NEARLINE", "SUFFIXLINE", "src/a.ts");
+        let file = prompt.find("FILE: src/a.ts").expect("file header present");
+        let head = prompt.find("HEADLINE").expect("head present");
+        let near = prompt.find("NEARLINE").expect("near present");
+        let suffix = prompt.find("SUFFIXLINE").expect("suffix present");
+        // The cached-input tier needs the STABLE bytes to lead: header and the context block above
+        // the cursor first, the per-keystroke near lines after, and the suffix after those.
+        assert!(file < head);
+        assert!(head < near);
+        assert!(near < suffix);
+    }
+
+    #[test]
+    fn stream_request_body_streams_and_keeps_the_small_knobs() {
+        let p = Provider { base: QWEN_BASE, model: QWEN_MODEL, key: "k".into(), thinking_off: true };
+        let body = build_stream_request_body(&p, "head", "near", "suffix", "f.ts");
+        assert_eq!(body["stream"], true);
+        assert_eq!(body["max_tokens"], 32);
+        assert_eq!(body["enable_thinking"], false);
+        assert_eq!(body["stop"], json!(["\n\n"]));
+        let content = body["messages"][0]["content"].as_str().unwrap();
+        assert!(content.contains("head\nnear"));
+    }
+
+    #[test]
+    fn cancel_registry_flips_only_the_named_request() {
+        let flag = register_cancel("req-6160");
+        assert!(!flag.load(Ordering::Relaxed));
+        ghost_cancel("req-6160".to_string()).expect("cancel by id");
+        assert!(flag.load(Ordering::Relaxed));
+        ghost_cancel("never-existed".to_string()).expect("unknown id is a no-op");
+        unregister_cancel("req-6160");
+    }
+
     // ── #5897 latency probe ─────────────────────────────────────────────────────────────────────
     // NOT part of `cargo test`: it makes 80 REAL calls against the live token-plan endpoint and
     // spends the provider key. Run it on purpose:
@@ -276,6 +643,9 @@ mod tests {
     // returns a useful first line can become the default.
     const RUNS: usize = 20;
     const PROBE_SUFFIX: &str = "}\n";
+    /// The TS side splits the before-cursor context so the last ~8 lines (the only part that
+    /// changes on every keystroke) ride LAST in the prompt; the probe reproduces that same split.
+    const NEAR_LINES: usize = 8;
 
     fn probe_prefix(lines: usize) -> String {
         let mut s = String::from(
@@ -388,6 +758,135 @@ mod tests {
                     eprintln!("probe[{name}] sample{i}: {line}");
                 }
             }
+            }
+        });
+    }
+
+    // ── #6160 streaming probe ───────────────────────────────────────────────────────────────────
+    // The acceptance item for #6160: p50 TIME-TO-FIRST-LINE under 600 ms on qwen3.8-flash. This is
+    // the same 20-run harness as ghost_latency_matrix, but it streams: it measures t0 -> the instant
+    // the first '\n' of completion content lands (the moment the ghost would paint), NOT the whole
+    // response. Run it on purpose (it spends the provider key on 20 REAL streaming calls):
+    //   cargo test ghost_stream_latency -- --ignored --nocapture
+    // The ceiling is 15 s per call so a slow one is RECORDED (production censors it at 2 s); the
+    // numbers decide whether the streaming target is met.
+    async fn stream_first_line_ms(provider: &Provider, head: &str, near: &str) -> Result<(u64, String), String> {
+        let t0 = Instant::now();
+        let body = build_stream_request_body(provider, head, near, PROBE_SUFFIX, "src/features/code/documents.ts");
+        let client = reqwest::Client::builder()
+            .connect_timeout(Duration::from_secs(10))
+            .build()
+            .map_err(|e| format!("client: {e}"))?;
+        let res = client
+            .post(format!("{}/chat/completions", provider.base.trim_end_matches('/')))
+            .bearer_auth(&provider.key)
+            .header("content-type", "application/json")
+            .header("accept", "text/event-stream")
+            .body(body.to_string())
+            .send()
+            .await
+            .map_err(|e| format!("send: {e}"))?;
+        let status = res.status();
+        if !status.is_success() {
+            let text = res.text().await.unwrap_or_default();
+            return Err(format!("http {status}: {}", text.chars().take(120).collect::<String>()));
+        }
+        let mut stream = res.bytes_stream();
+        let mut buf = String::new();
+        let mut acc = GhostAcc::default();
+        let ceiling = t0 + Duration::from_secs(15);
+        loop {
+            match tokio::time::timeout(ceiling.saturating_duration_since(Instant::now()), stream.next()).await {
+                Err(_) => return Err("15s ceiling hit before first line".to_string()),
+                Ok(None) => break,
+                Ok(Some(Err(e))) => return Err(format!("stream: {e}")),
+                Ok(Some(Ok(bytes))) => {
+                    buf.push_str(&String::from_utf8_lossy(&bytes));
+                    let mut done = false;
+                    while let Some(pos) = buf.find('\n') {
+                        let rest = buf.split_off(pos + 1);
+                        let line = std::mem::replace(&mut buf, rest);
+                        let line = line.trim_end_matches(['\n', '\r']);
+                        let Some(payload) = sse_data(&line) else { continue };
+                        let Some(delta) = parse_stream_delta(&payload).filter(|d| !d.is_empty()) else { continue };
+                        acc.push(&delta);
+                        if acc.first_line_done() {
+                            done = true;
+                            break;
+                        }
+                    }
+                    if done {
+                        return Ok((t0.elapsed().as_millis() as u64, acc.ghost()));
+                    }
+                }
+            }
+        }
+        // The model ended without a newline — the whole reply IS the first line.
+        if acc.content.trim().is_empty() {
+            return Err("empty stream".to_string());
+        }
+        Ok((t0.elapsed().as_millis() as u64, acc.ghost()))
+    }
+
+    #[test]
+    #[ignore]
+    fn ghost_stream_latency() {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("tokio runtime");
+        rt.block_on(async {
+            let env_file = read_env_file();
+            let mut providers: Vec<Provider> = Vec::new();
+            if let Some(key) = env_value(&env_file, "QWEN_API_KEY") {
+                providers.push(Provider { base: QWEN_BASE, model: QWEN_MODEL, key, thinking_off: true });
+            }
+            if let Some(key) = env_value(&env_file, "DEEPSEEK_API_KEY") {
+                providers.push(Provider { base: DEEPSEEK_BASE, model: DEEPSEEK_MODEL, key, thinking_off: false });
+            }
+            if providers.is_empty() {
+                eprintln!("stream-probe: no QWEN_API_KEY or DEEPSEEK_API_KEY in ~/.agent-bus/.env — nothing to measure");
+                return;
+            }
+            // The production prompt shape: 30 lines of context, split the way ghostText.ts does it —
+            // a stable head and the volatile last NEAR_LINES right before the cursor.
+            let full = probe_prefix(30);
+            let lines: Vec<&str> = full.lines().collect();
+            let split = lines.len().saturating_sub(NEAR_LINES);
+            let head = lines[..split].join("\n");
+            let near = lines[split..].join("\n");
+            for provider in &providers {
+                eprintln!("stream-probe: model={} head={} near={}", provider.model, head.lines().count(), near.lines().count());
+                let mut ttl: Vec<u128> = Vec::with_capacity(RUNS);
+                let mut errors = 0usize;
+                let mut samples: Vec<String> = Vec::new();
+                for run in 0..RUNS {
+                    match stream_first_line_ms(provider, &head, &near).await {
+                        Ok((ms, line)) => {
+                            ttl.push(ms as u128);
+                            if samples.len() < 3 {
+                                samples.push(line.chars().take(70).collect());
+                            }
+                            eprintln!("stream-probe run{run}: ttl={ms}ms");
+                        }
+                        Err(e) => {
+                            errors += 1;
+                            eprintln!("stream-probe run{run} error: {e}");
+                        }
+                    }
+                }
+                ttl.sort_unstable();
+                if ttl.is_empty() {
+                    eprintln!("stream-probe ALL {errors} calls failed");
+                    continue;
+                }
+                eprintln!(
+                    "stream-probe n={} errors={} ttl p50={}ms p95={}ms min={}ms max={}ms",
+                    ttl.len(), errors, percentile(&ttl, 0.50), percentile(&ttl, 0.95), ttl[0], ttl[ttl.len() - 1],
+                );
+                for (i, s) in samples.iter().enumerate() {
+                    eprintln!("stream-probe sample{i}: {s}");
+                }
             }
         });
     }
