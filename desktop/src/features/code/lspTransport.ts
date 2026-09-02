@@ -33,6 +33,12 @@ export class TauriMessageReader extends AbstractMessageReader {
   private buffered: Message[] = [];
   private unlistens: UnlistenFn[] = [];
   private torn = false;
+  /** Resolves once BOTH Tauri subscriptions are registered on the Rust side. The buffer above only
+   *  covers the gap between Tauri delivering a message and jsonrpc attaching its callback; the
+   *  registration itself is an IPC round trip, and an event Rust emits before it completes is not
+   *  delivered at all. The operator's 11:43 attempt (0.3.113): initialize out, the reply in 7ms,
+   *  nothing after — the listener did not exist yet. The client awaits this before its first write. */
+  readonly ready: Promise<void>;
 
   constructor(
     private readonly id: number,
@@ -43,15 +49,21 @@ export class TauriMessageReader extends AbstractMessageReader {
       if (this.torn) fn();
       else this.unlistens.push(fn);
     };
-    listen<string>(`lsp-message:${this.id}`, ev => this.onMessage(ev.payload)).then(keep).catch(() => {});
+    const messages = listen<string>(`lsp-message:${this.id}`, ev => this.onMessage(ev.payload)).then(keep);
     // The server closing stdout is the one honest "no longer ready" signal; the payload is the
     // server's own first stderr line ("error: Unknown binary …") when it exited early, so the
     // status line can name it instead of a bare "Unknown reason".
-    listen<string | null>(`lsp-closed:${this.id}`, ev => {
+    const closed = listen<string | null>(`lsp-closed:${this.id}`, ev => {
       if (this.torn) return;
       if (ev.payload) this.fireError(new Error(ev.payload));
       this.fireClose();
-    }).then(keep).catch(() => {});
+    }).then(keep);
+    // A registration that fails still resolves `ready` (after tracing it) so a start never hangs
+    // on it — the connection then reports the missing stream on its own.
+    this.ready = Promise.all([messages, closed]).then(
+      () => { trace(`lsp reader ${this.id}: subscribed`); },
+      e => { trace(`lsp reader ${this.id}: subscribe failed: ${e instanceof Error ? e.message : String(e)}`); },
+    );
   }
 
   private onMessage(payload: string): void {

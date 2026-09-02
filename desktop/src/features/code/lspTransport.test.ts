@@ -11,6 +11,10 @@ const bus = vi.hoisted(() => {
   return {
     handlers,
     written: [] as Array<Record<string, unknown>>,
+    /** When set, listen() registrations stay pending until the test releases them — the real
+     *  IPC round trip made slow, so `ready` ordering is observable. */
+    holdListens: false,
+    pendingListens: [] as Array<() => void>,
     emit(event: string, payload: unknown) {
       for (const fn of handlers.get(event) ?? []) fn({ payload });
     },
@@ -23,6 +27,7 @@ vi.mock("@tauri-apps/api/event", () => ({
     list.push(handler);
     bus.handlers.set(event, list);
     // Resolves asynchronously, like the real IPC round trip — delivery must not depend on it.
+    if (bus.holdListens) return new Promise<() => void>(res => bus.pendingListens.push(() => res(() => {})));
     return Promise.resolve(() => {});
   },
 }));
@@ -97,5 +102,25 @@ describe("TauriMessageReader/Writer over a real jsonrpc connection", () => {
     await tick();
     expect(closed).toEqual([true]);
     conn.dispose();
+  });
+});
+
+describe("TauriMessageReader.ready (#5857, the 0.3.113 miss)", () => {
+  it("does not resolve until both Tauri registrations completed, so the client's first write cannot race them", async () => {
+    bus.holdListens = true;
+    try {
+      const reader = new TauriMessageReader(9);
+      let settled = false;
+      void reader.ready.then(() => { settled = true; });
+      await tick();
+      await tick();
+      expect(settled).toBe(false);
+      expect(bus.pendingListens.length).toBe(2);
+      for (const release of bus.pendingListens.splice(0)) release();
+      await reader.ready;
+      expect(settled).toBe(true);
+    } finally {
+      bus.holdListens = false;
+    }
   });
 });

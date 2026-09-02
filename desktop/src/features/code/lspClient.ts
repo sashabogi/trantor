@@ -180,6 +180,8 @@ export async function startLsp(
       },
       messageTransports: transports,
     });
+    // The subscription is an IPC of its own; the first write must not race it (#5857, 0.3.113).
+    await reader.ready;
     try {
       await client.start();
     } catch (e) {
