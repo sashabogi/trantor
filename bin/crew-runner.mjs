@@ -512,7 +512,7 @@ async function runTurn(prompt, isFirst, trigger = "kickoff") {
   } catch {}
   const r = spawnSync("/bin/bash", ["-c", `set -o pipefail; { ${inner} ; } 2> >(${SCRUB} --tee2 ${ERRF})`], {
     cwd: TURN_DIR, encoding: "utf8", stdio: cli.sid ? ["ignore", "pipe", "inherit"] : "inherit",
-    env: { ...process.env, RELAY_URL: HUB, RELAY_AGENT: AGENT, RELAY_PROJECT: PROJ,
+    env: { ...process.env, RELAY_URL: HUB, RELAY_AGENT: AGENT, RELAY_SESSION: SESSION, RELAY_PROJECT: PROJ,
       // A RUNNER-MANAGED SEAT MUST NEVER HAND ITSELF A BATON.
       //
       // The handoff machinery exists for an INTERACTIVE session: near its context limit it writes a

@@ -68,10 +68,12 @@ const PROJECT = resolveProject(process.env.CLAUDE_PROJECT_DIR || process.cwd());
 // global `url` → local default. A project lives on exactly one hub; codependent projects
 // must share one, so both are pinned to the same hub via `trantor hub set`.
 const URL_BASE = resolveHub(PROJECT);   // boot-time snapshot: startup log only — every api() call re-resolves
-// Identity: RELAY_SESSION wins; else RELAY_AGENT ("codex", "kimi", …) brands the session per-project
-// (set it once in the CLI's global MCP config — works in every project); else hostname:project.
+// Identity: the runner's exact RELAY_SESSION wins, then its RELAY_AGENT. A multi-seat host such as
+// OpenCode contributes only RELAY_AGENT_FALLBACK in its global MCP config, so qwen/glm/deepseek do
+// not get rebranded "opencode" when that config is overlaid on the runner environment.
+const SESSION_AGENT = process.env.RELAY_AGENT || process.env.RELAY_AGENT_FALLBACK;
 const SESSION = process.env.RELAY_SESSION
-  || (process.env.RELAY_AGENT ? `${process.env.RELAY_AGENT}:${PROJECT}` : `${hostId()}:${PROJECT}`);
+  || (SESSION_AGENT ? `${SESSION_AGENT}:${PROJECT}` : `${hostId()}:${PROJECT}`);
 let cursor = 0;
 // First-call guard: a brand-new MCP process must NOT replay the entire historical backlog (observed:
 // 2,379 msgs / 520KB back to an old asteroids project) the instant relay_inbox/relay_wait is called.

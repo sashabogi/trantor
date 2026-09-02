@@ -40,6 +40,10 @@ function patchJson(path, mutate) {
 // while its runner sat on the pinned one — the residual split-brain mechanism (2026-08-20).
 // mcp.mjs resolves the hub from the session's project pin; that resolution must stay in charge.
 const relayEnv = (agent) => ({ RELAY_AGENT: agent });
+// OpenCode hosts several differently-named seats. Its global MCP environment must not stamp all
+// of them "opencode": ambient runner identity wins, while this fallback names a normal interactive
+// OpenCode session that has no RELAY_AGENT/RELAY_SESSION of its own.
+const hostedRelayEnv = (agent) => ({ RELAY_AGENT_FALLBACK: agent });
 
 // ---- Claude Code: plugin handles it; verify only ----
 if (has("claude")) {
@@ -87,7 +91,13 @@ if (has("opencode")) {
   report("opencode", patchJson(p, d => {
     d.$schema ||= "https://opencode.ai/config.json";
     d.mcp ||= {};
-    d.mcp.relay ||= { type: "local", command: ["node", MCP], enabled: true, environment: relayEnv("opencode") };
+    d.mcp.relay ||= { type: "local", command: ["node", MCP], enabled: true };
+    d.mcp.relay.environment ||= {};
+    // Migrate the old generated pin too: `||=` alone left RELAY_AGENT=opencode in every existing
+    // config forever, where OpenCode overlaid it on the qwen/glm/deepseek runner environment.
+    delete d.mcp.relay.environment.RELAY_AGENT;
+    delete d.mcp.relay.environment.RELAY_SESSION;
+    Object.assign(d.mcp.relay.environment, hostedRelayEnv("opencode"));
   }), p);
 }
 
