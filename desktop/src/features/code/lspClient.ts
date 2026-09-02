@@ -17,36 +17,10 @@ import { MonacoLanguageClient } from "monaco-languageclient";
 import { MonacoVscodeApiWrapper } from "monaco-languageclient/vscodeApiWrapper";
 import type { MessageTransports } from "vscode-languageclient/browser.js";
 import * as vscode from "vscode";
+import { isReadyToken, progressEvent, type ProgressEvent } from "./lspProtocol";
 import "./monacoSetup";
 
 // ── transport ────────────────────────────────────────────────────────────────────────────────
-
-/** The `$/progress` notification shape, narrowed to what we read. */
-type ProgressProbe = {
-  method?: string;
-  params?: { token?: string | number; value?: { kind?: string; title?: string } };
-};
-
-type ProgressEvent = { kind: string; title: string | null; token: string };
-
-/** The "ready" token: rust-analyzer 1.94 ends with "rustAnalyzer/cachePriming" (older versions
- *  had "rustAnalyzer/Indexing"). Fetching/Roots Scanned/proc-macros end first and are NOT ready. */
-function isReadyToken(token: string | number | undefined): boolean {
-  const t = token == null ? "" : String(token);
-  return /index|priming/i.test(t);
-}
-
-/** Extract the progress event if this is a `$/progress` notification, else null. */
-function progressEvent(msg: ProgressProbe): ProgressEvent | null {
-  if (msg.method !== "$/progress") return null;
-  const params = msg.params;
-  if (!params) return null;
-  return {
-    kind: params.value?.kind ?? "",
-    title: params.value?.title ?? null,
-    token: params.token == null ? "" : String(params.token),
-  };
-}
 
 /** reader: `lsp-message:<id>` events → JSON-RPC messages. */
 class TauriMessageReader extends AbstractMessageReader {
@@ -232,22 +206,27 @@ export async function startLsp(
   return { id: started.id, scopeRoot: started.scopeRoot, indexing: isLspIndexing(language) };
 }
 
-/** Detach the Monaco clients on lens unmount. The Rust servers OUTLIVE the lens, so this stops the
- *  clients only — a remount re-attaches to the SAME server id instead of cold-spawning. */
-export async function detachLspClients(): Promise<void> {
-  const entries = [...clients.entries()];
-  clients.clear();
-  for (const [, { client }] of entries) {
-    await client.stop().catch(() => {});
-  }
-  notify();
-}
-
 /** Stop every server for a project — the editor calls this on project switch. */
 export async function stopLspProject(project: string): Promise<void> {
   await detachLspClients();
   await invoke("lsp_stop_project", { project }).catch(() => {});
   indexed.clear();
   phases.clear();
+  notify();
+}
+
+// A lens unmount detaches NOTHING: the MonacoLanguageClient stays in this module map, so a remount
+// re-attaches to the same live client and server. Monaco fires didClose for the disposed model on
+// its own; the client keeps running. (The 0.3.103 bug was client.stop() sending shutdown/exit and
+// killing the server on every lens flip.)
+
+/** Stop the clients for a project switch. `client.stop()` here is a REAL teardown — the Rust
+ *  server is stopped right after via `lsp_stop_project`, so nothing re-attaches to a dead id. */
+async function detachLspClients(): Promise<void> {
+  const entries = [...clients.entries()];
+  clients.clear();
+  for (const [, { client }] of entries) {
+    await client.stop().catch(() => {});
+  }
   notify();
 }

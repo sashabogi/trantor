@@ -28,7 +28,7 @@ import { ChangesView } from "./ChangesView";
 import { decideReload, type FileStat } from "./liveReload";
 import { closeTab, markDirty, markExternalMutation, openInTabs, togglePin, type CodeTab } from "./codeTabs";
 import { diskSignature, externalMutationOnLoad } from "./tabGuard";
-import { detachLspClients, isLspIndexing, isLspLive, lspPhase, onLspChange, startLsp, stopLspProject } from "./lspClient";
+import { isLspIndexing, isLspLive, lspPhase, onLspChange, startLsp, stopLspProject } from "./lspClient";
 import { lspLanguageFor, lspServerName } from "./lspLanguage";
 import { listen } from "@tauri-apps/api/event";
 
@@ -247,9 +247,9 @@ export function Files({ project, lens, onLens, path, seat }: {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeLanguage]);
 
-  // Servers OUTLIVE the lens: on unmount only DETACH the Monaco clients. The Rust server stays so
-  // a remount re-attaches to the same id instead of cold-spawning (the 0.3.101 broken-pipe bug).
-  useEffect(() => () => { void detachLspClients(); }, []);
+  // Servers OUTLIVE the lens: on unmount NOTHING is detached. The Monaco client stays in the
+  // module map (the disposed editor models fire didClose on their own), so a remount re-attaches
+  // to the same live client and server instead of cold-spawning (the 0.3.103 broken-pipe bug).
 
   // Project switch stops the OLD project's servers.
   const prevProjectRef = useRef<string | null>(null);
