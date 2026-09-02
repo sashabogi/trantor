@@ -11,7 +11,7 @@ import { orchestratorOf, type HerdrSeat } from "./herdr";
 import { SeatTab } from "./SeatTab";
 import { BrandGlyph } from "../../shared/Avatar";
 import { PaneBoundary } from "./PaneBoundary";
-import { paneTargets, seatName, type PaneTarget } from "./paneTargets";
+import { paneTargets, seatName, isAgentPeer, type PaneTarget } from "./paneTargets";
 import { newestTerminal, projectSessions, takeoverAction, type ProjectSessions } from "../chat/takeover";
 import { TakeoverStrip } from "../chat/TakeoverStrip";
 import { when } from "../../shared/time";
@@ -25,7 +25,9 @@ import { loadRailOpen, saveRailOpen } from "./prefs";
 function seatsOf(peers: Peer[], project: string): Peer[] {
   return peers
     .filter(p => p.session.endsWith(`:${project}`))
-    .filter(p => !p.session.toLowerCase().startsWith("macbook"));
+    .filter(p => !p.session.toLowerCase().startsWith("macbook"))
+    // #6148: the genesis brief-poster is a bus session, not a seat — non-agent kinds leave the strip.
+    .filter(isAgentPeer);
 }
 
 function hostOf(peers: Peer[], project: string): Peer | undefined {

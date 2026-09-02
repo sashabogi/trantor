@@ -76,6 +76,12 @@ const cardA = (tasksA.tasks ?? []).find(t => t.title === "genesis: genesis-a");
 ok("init: genesis card on the new board", !!cardA, JSON.stringify(tasksA).slice(0, 200));
 const projectsA = await (await fetch(`${HUB}/projects`)).json();
 ok("init: brief posted to the hub", JSON.stringify(projectsA).includes("Genesis drill project"));
+// #6148: the genesis session is a brief-poster, not an agent — its peer row must say kind
+// "genesis" so the app's seat strip skips it instead of rendering a "start it with trantor up"
+// ghost seat.
+const peersA = await (await fetch(`${HUB}/peers`)).json();
+const genesisRow = (peersA.peers ?? []).find(p => p.project === "genesis-a");
+ok("init: the brief-poster's peer row wears kind genesis, not an agent seat", !!genesisRow && genesisRow.kind === "genesis", JSON.stringify(peersA).slice(0, 200));
 // the pin (#5862 residual): the first session must not wear the "not pinned to a hub" warning
 const cfg = JSON.parse(readFileSync(join(W, ".agent-bus", "config.json"), "utf8"));
 ok("init: project pinned to the hub it posted to", cfg.hubs?.["genesis-a"] === HUB, JSON.stringify(cfg.hubs ?? {}));

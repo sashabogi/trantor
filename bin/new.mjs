@@ -129,8 +129,13 @@ try {
   // way crew seats do: the operator's owner key mints a project-scoped write invite and the genesis
   // identity spends it. Only when NO owner key is configured (a loopback hub with no owner identity)
   // do we fall back to the plain TOFU enroll.
-  const viaOwner = await enrollViaOwnerInvite(hub, identity, name, { timeoutMs: 8000 });
-  if (!viaOwner.ok && viaOwner.reason === "no-owner-key") await enrollTofu(session, identity, name);
+  const viaOwner = await enrollViaOwnerInvite(hub, identity, name, { timeoutMs: 8000, kind: "genesis" });
+  if (!viaOwner.ok && viaOwner.reason === "no-owner-key") await enrollTofu(session, identity, name, { kind: "genesis" });
+  // #6148: say WHAT this session is. The genesis identity exists to post the brief — without a
+  // kind on its peer row the app's seat strip renders it as a seat ("no terminal pane — start it
+  // with trantor up genesis"). /register is presence, not speech: no message rides it, nobody
+  // wakes. The hub stamps kind on the session row and /peers returns it to the app.
+  await signedPost("/register", { session, kind: "genesis" }, { session, project: name, timeoutMs: 8000 }).catch(() => {});
   const briefForHub = (brief || `Genesis of ${name} — created by trantor new.`).slice(0, 600);
   const r1 = await signedPost("/project", { project: name, brief: briefForHub, by: session }, { session, project: name, timeoutMs: 8000 });
   if (!r1.ok) throw new Error(`hub ${r1.status} on /project${r1.json?.error ? `: ${r1.json.error}` : ""}`);
