@@ -205,28 +205,28 @@ export function Files({ project, lens, onLens, path, seat }: {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [project, activeTab?.key]);
 
-  // Language server: one client per (root, language), shared across tabs, started the first time
-  // a served file mounts. The honest status line is set here, never a fake "ready".
+  // Language server: one client per (workspace root, language), shared across tabs, started the
+  // first time a served file mounts. The honest status line is set here, never a fake "ready".
   const activeLanguage = activePath ? lspLanguageFor(activePath) : null;
   useEffect(() => {
-    if (!activeLanguage) { setLspNote(null); setLspRoot(null); return; }
+    if (!activeLanguage || !activePath) { setLspNote(null); setLspRoot(null); return; }
     let alive = true;
     const scope = activeScope === "project" ? null : activeScope;
     const name = lspServerName(activeLanguage);
     setLspNote(null);
     setLspRoot(null);
-    startLsp(project, scope, activeLanguage)
-      .then(({ root, indexing }) => {
+    startLsp(project, scope, activeLanguage, activePath)
+      .then(({ scopeRoot, indexing }) => {
         if (!alive) return;
-        setLspRoot(root);
+        setLspRoot(scopeRoot);
         setLspNote(indexing ? `${name} indexing…` : `${name} ready`);
       })
       .catch(e => { if (alive) setLspNote(String(e)); });
     return () => { alive = false; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [project, activeLanguage, activeScope]);
+  }, [project, activeLanguage, activeScope, activePath]);
 
-  // "ready" is the handshake; rust-analyzer is still indexing until its first $/progress end.
+  // "ready" is the handshake; rust-analyzer is still indexing until its indexing $/progress end.
   // When that arrives the client notifies, and this flips the status line to the honest "ready".
   useEffect(() => {
     if (!activeLanguage) return;
