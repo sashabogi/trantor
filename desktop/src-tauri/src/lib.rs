@@ -3336,6 +3336,53 @@ fn save_pasted_image(data_base64: String, kind: String) -> Result<String, String
     Ok(path.to_string_lossy().to_string())
 }
 
+/// The attachment chip's facts off the disk (#6070): the file's size — a chip always shows name +
+/// size — plus a `data:` URI thumbnail when the file is an image the webview can paint and small
+/// enough to inline. Same read-and-inline shape `project_icon` uses, and the CSP already allows
+/// `img-src data:`. Returns None (not an error) when the path is not a file: a chip degrades to
+/// name-only, it does not fail.
+#[derive(Debug, Clone, Serialize)]
+struct AttachmentInfo {
+    bytes: u64,
+    thumb: Option<String>,
+}
+
+/// Extensions the webview can actually decode. heic and friends stay out on purpose — a data URI
+/// it cannot paint is worse than the icon fallback the chip then shows.
+fn thumb_mime(path: &std::path::Path) -> Option<&'static str> {
+    match path.extension()?.to_str()?.to_ascii_lowercase().as_str() {
+        "png" => Some("image/png"),
+        "jpg" | "jpeg" => Some("image/jpeg"),
+        "gif" => Some("image/gif"),
+        "webp" => Some("image/webp"),
+        _ => None,
+    }
+}
+
+/// The inline ceiling: a chip is a small face and base64 adds a third — a four-megabyte screenshot
+/// earns the icon fallback instead of four megabytes of DOM string.
+const THUMB_CAP: u64 = 2 * 1024 * 1024;
+
+#[tauri::command]
+fn attachment_info(path: String) -> Option<AttachmentInfo> {
+    let p = std::path::Path::new(&path);
+    if !p.is_absolute() || !p.is_file() {
+        return None;
+    }
+    let Ok(meta) = std::fs::metadata(p) else {
+        return None;
+    };
+    let bytes = meta.len();
+    let thumb = thumb_mime(p)
+        .filter(|_| bytes > 0 && bytes <= THUMB_CAP)
+        .and_then(|mime| {
+            std::fs::read(p)
+                .ok()
+                .map(|raw| format!("data:{mime};base64,{}", b64(&raw)))
+        });
+    Some(AttachmentInfo { bytes, thumb })
+}
+
 /// #5401 — projects whose orchestrator PANE survived (a tracked orch row) while the
 /// conversation inside did not (no agent registered on that pane): the reboot shape. herdr's
 /// login agent restores panes, not the claude processes in them. The app offers/fires resume
@@ -4585,6 +4632,7 @@ pub fn run() {
             takeover_now,
             orch_restorables,
             save_pasted_image,
+            attachment_info,
             file_write_plain,
             project_changes,
             app_log,
