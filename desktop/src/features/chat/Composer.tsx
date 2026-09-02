@@ -416,10 +416,13 @@ export function Composer({ project, target, live, liveWhy, model, modelSource, w
     e.preventDefault();
     try { e.currentTarget.setPointerCapture(e.pointerId); } catch { /* no capture here — the window listeners carry the drag anyway */ }
     dragRef.current = { startY: e.clientY, startH: heightPx };
+    // The handle sits on the field's TOP edge over a bottom-anchored box, so dragging UP grows it:
+    // the height gains what clientY LOSES (the first bounce shipped this sign inverted — the code
+    // review of 9961b74 caught it, the box shrinking into its floor on every upward drag).
     const move = (ev: PointerEvent) => {
       const d = dragRef.current;
       if (!d) return;
-      setChosenPx(clampComposerPx(d.startH + (ev.clientY - d.startY), minPx, maxPx));
+      setChosenPx(clampComposerPx(d.startH - (ev.clientY - d.startY), minPx, maxPx));
     };
     const drop = () => {
       window.removeEventListener("pointermove", move);
@@ -432,7 +435,7 @@ export function Composer({ project, target, live, liveWhy, model, modelSource, w
       const d = dragRef.current;
       dragRef.current = null;
       if (!d) return;
-      const next = clampComposerPx(d.startH + (ev.clientY - d.startY), minPx, maxPx);
+      const next = clampComposerPx(d.startH - (ev.clientY - d.startY), minPx, maxPx);
       setChosenPx(next);
       saveComposerHeight(next, minPx, maxPx);
     };
