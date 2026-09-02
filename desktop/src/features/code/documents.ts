@@ -1,0 +1,86 @@
+// The editor's document store (#5938): the state that must OUTLIVE the lens, held at module
+// level and keyed by project. AppShell unmounts the Code surface on every lens switch, and until
+// this store existed the operator's tabs, drafts, and dirty flags died with it. Files becomes a
+// VIEW over this store — it reads on mount, writes on every change, and does nothing on unmount.
+//
+// Composition, not duplication: tab-list operations still go through the PURE helpers in
+// codeTabs.ts (openInTabs/pin/close/markDirty/markExternalMutation), and the disk-conflict
+// decision stays in tabGuard.ts. This file only OWNS the maps — tabs, activeKey, and per-tab
+// { draft, disk, baseSignature, loaded } — exactly the refs Files used to hold (draftsRef,
+// diskRef, sigRef, loadedKeyRef) plus the tabs state.
+import type { CodeTab } from "./codeTabs";
+
+export type DocumentState = {
+  /** The live editor content — unsaved work lives here. */
+  draft: string;
+  /** The disk text the document was last loaded from / saved as. */
+  disk: string;
+  /** Orca's lastKnownDiskSignature (open-file.ts:126): the fingerprint of `disk`, for the
+   *  tabGuard decision when the file is re-read. */
+  baseSignature: string;
+  /** Has this tab's document ever finished loading on screen? A draft may only be stashed for a
+   *  loaded document — a draft without a completed load is a loading screen, not work. */
+  loaded: boolean;
+};
+
+export type ProjectDocuments = {
+  tabs: CodeTab[];
+  activeKey: string | null;
+  docs: Map<string, DocumentState>;
+};
+
+const store = new Map<string, ProjectDocuments>();
+
+export function projectDocuments(project: string): ProjectDocuments {
+  let docs = store.get(project);
+  if (!docs) {
+    docs = { tabs: [], activeKey: null, docs: new Map() };
+    store.set(project, docs);
+  }
+  return docs;
+}
+
+function documentOf(project: string, key: string): DocumentState {
+  const docs = projectDocuments(project);
+  let d = docs.docs.get(key);
+  if (!d) {
+    d = { draft: "", disk: "", baseSignature: "", loaded: false };
+    docs.docs.set(key, d);
+  }
+  return d;
+}
+
+/** Replace the tab list wholesale — composed from the pure codeTabs helpers by the caller. */
+export function setTabs(project: string, tabs: CodeTab[]): void {
+  projectDocuments(project).tabs = tabs;
+}
+
+export function setActiveKey(project: string, key: string | null): void {
+  projectDocuments(project).activeKey = key;
+}
+
+export function setDraft(project: string, key: string, draft: string): void {
+  documentOf(project, key).draft = draft;
+}
+
+export function setDisk(project: string, key: string, disk: string): void {
+  documentOf(project, key).disk = disk;
+}
+
+export function setBaseSignature(project: string, key: string, signature: string): void {
+  documentOf(project, key).baseSignature = signature;
+}
+
+export function markLoaded(project: string, key: string): void {
+  documentOf(project, key).loaded = true;
+}
+
+export function clearLoaded(project: string, key: string): void {
+  documentOf(project, key).loaded = false;
+}
+
+/** Closing a tab drops its document — the one deliberate destruction (the tab is the work's
+ *  address; with the tab gone the draft has no door). */
+export function dropDocument(project: string, key: string): void {
+  projectDocuments(project).docs.delete(key);
+}
