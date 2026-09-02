@@ -104,16 +104,22 @@ struct Server {
     stdin: ChildStdin,
 }
 
-/// What `lsp_start` hands back: the id the editor keys every later call by, plus the RESOLVED
-/// scope root — the same path the server's CWD is set to. The TS side builds the file's absolute
-/// URI and the `workspaceFolder` from this, so it never recomputes a path it cannot see.
+/// What `lsp_start` hands back: the id the editor keys every later call by, plus TWO roots.
+/// `scope_root` is the project dir or seat worktree — the model's absolute URI is
+/// `<scope_root>/<path>`. `workspace_root` is the nearest manifest walking up from the file (the
+/// crate), which is what the `workspaceFolder`/`rootUri` must name or rust-analyzer loads nothing.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct LspStarted {
     id: u64,
-    root: String,
+    scope_root: String,
+    workspace_root: String,
 }
 
 static SERVERS: Mutex<Option<HashMap<u64, Server>>> = Mutex::new(None);
+/// (workspace root, language) → server id: one server per crate, so two crates in one repo get two
+/// servers and a reopened file in the same crate reuses the one already running.
+static WORKSPACES: Mutex<Option<HashMap<(String, String), u64>>> = Mutex::new(None);
 static NEXT_ID: AtomicU64 = AtomicU64::new(1);
 
 /// The binary + args for a language id, plus the honest "how to fix it" lines. Only the four the
@@ -166,6 +172,90 @@ fn find_binary(name: &str, install: &str) -> Result<PathBuf, String> {
     Err(format!("not installed: {name} — {install}"))
 }
 
+// ── workspace-root resolution ────────────────────────────────────────────────────────────────
+//
+// A language server is keyed by the WORKSPACE it loads, not the checkout: ~/development/trantor
+// has no Cargo.toml, the crate does (desktop/src-tauri). rootUri must be that crate, so walk UP
+// from the open file to the nearest manifest, bounded by the scope root.
+
+/// Every directory from the file's parent up to (and including) the scope root, nearest first.
+fn ancestors(start: &Path, scope_root: &Path) -> Vec<PathBuf> {
+    let mut dirs = Vec::new();
+    let mut dir = start.to_path_buf();
+    loop {
+        dirs.push(dir.clone());
+        if dir == scope_root {
+            break;
+        }
+        let Some(parent) = dir.parent() else { break };
+        dir = parent.to_path_buf();
+    }
+    dirs
+}
+
+/// The workspace root for an open file: the nearest manifest, bounded by the scope root.
+fn workspace_root(scope_root: &Path, language: &str, file_path: &str) -> PathBuf {
+    let file = scope_root.join(file_path);
+    let start = file
+        .parent()
+        .map(|p| p.to_path_buf())
+        .unwrap_or_else(|| scope_root.to_path_buf());
+    match language {
+        "rust" => rust_root(&start, scope_root),
+        "typescript" | "typescriptreact" | "javascript" => ts_root(&start, scope_root),
+        "python" => py_root(&start, scope_root),
+        _ => scope_root.to_path_buf(),
+    }
+}
+
+/// rust: the nearest Cargo.toml — but prefer a `[workspace]` manifest found higher up, else the
+/// nearest package. A file under `repo/crate/src/` with a `repo/Cargo.toml [workspace]` loads the
+/// workspace, not the crate, so two crates answer against the same index.
+fn rust_root(start: &Path, scope_root: &Path) -> PathBuf {
+    let mut manifests: Vec<(PathBuf, bool)> = Vec::new();
+    for dir in ancestors(start, scope_root) {
+        let cargo = dir.join("Cargo.toml");
+        if cargo.is_file() {
+            let is_ws = std::fs::read_to_string(&cargo)
+                .map(|s| s.contains("[workspace]"))
+                .unwrap_or(false);
+            manifests.push((dir, is_ws));
+        }
+    }
+    if let Some(i) = manifests.iter().rposition(|(_, ws)| *ws) {
+        return manifests[i].0.clone();
+    }
+    manifests
+        .into_iter()
+        .next()
+        .map(|(d, _)| d)
+        .unwrap_or_else(|| scope_root.to_path_buf())
+}
+
+/// typescript/javascript: the nearest tsconfig.json, else the nearest package.json.
+fn ts_root(start: &Path, scope_root: &Path) -> PathBuf {
+    for dir in ancestors(start, scope_root) {
+        if dir.join("tsconfig.json").is_file() {
+            return dir;
+        }
+    }
+    for dir in ancestors(start, scope_root) {
+        if dir.join("package.json").is_file() {
+            return dir;
+        }
+    }
+    scope_root.to_path_buf()
+}
+
+/// python: the nearest pyproject.toml or setup.py.
+fn py_root(start: &Path, scope_root: &Path) -> PathBuf {
+    for dir in ancestors(start, scope_root) {
+        if dir.join("pyproject.toml").is_file() || dir.join("setup.py").is_file() {
+            return dir;
+        }
+    }
+    scope_root.to_path_buf()
+}
 /// Prove a binary actually RUNS before we hand it a child. `is_file()` was not enough: a rustup
 /// PROXY is a real file that prints "error: Unknown binary …" and exits when its component is not
 /// installed. A `--version` probe with a 5s deadline catches that and any wedged binary, so the
@@ -282,18 +372,48 @@ pub fn lsp_start(
     project: String,
     scope: Option<String>,
     language: String,
+    path: String,
 ) -> Result<LspStarted, String> {
-    let root = source_root(&project, scope.as_deref())?;
+    if path.contains("..") {
+        return Err("path escapes the project".into());
+    }
+    let scope_root = source_root(&project, scope.as_deref())?;
     let spec = server_spec(&language)?;
-    let path = find_binary(spec.bin, spec.install)?;
-    probe_binary(&path, spec.bin, spec.install, spec.broken_proxy)?;
+    let workspace_root = workspace_root(&scope_root, &language, &path);
+
+    // One server per (workspace root, language): a reopened file in the same crate reuses the
+    // running server; a second crate in the same checkout gets its own.
+    let dedup_key = (workspace_root.display().to_string(), language.clone());
+    {
+        let workspaces = WORKSPACES.lock().unwrap();
+        if let Some(map) = workspaces.as_ref() {
+            if let Some(id) = map.get(&dedup_key) {
+                return Ok(started(*id, &scope_root, &workspace_root));
+            }
+        }
+    }
+
+    let bin_path = find_binary(spec.bin, spec.install)?;
+    probe_binary(&bin_path, spec.bin, spec.install, spec.broken_proxy)?;
     let id = NEXT_ID.fetch_add(1, Ordering::SeqCst);
-    let (child, stdin) = spawn_server(app, id, &path, spec.args, &root)?;
-    let mut servers = SERVERS.lock().unwrap();
-    servers.get_or_insert_with(HashMap::new).insert(id, Server { child, stdin });
-    // Return the ROOT alongside the id: the TS side builds the file's absolute URI and the
-    // workspaceFolder from it, and must not recompute a path it cannot see (TRANTOR_DEV_ROOT).
-    Ok(LspStarted { id, root: root.display().to_string() })
+    let (child, stdin) = spawn_server(app, id, &bin_path, spec.args, &workspace_root)?;
+    {
+        let mut servers = SERVERS.lock().unwrap();
+        servers.get_or_insert_with(HashMap::new).insert(id, Server { child, stdin });
+    }
+    {
+        let mut workspaces = WORKSPACES.lock().unwrap();
+        workspaces.get_or_insert_with(HashMap::new).insert(dedup_key, id);
+    }
+    Ok(started(id, &scope_root, &workspace_root))
+}
+
+fn started(id: u64, scope_root: &Path, workspace_root: &Path) -> LspStarted {
+    LspStarted {
+        id,
+        scope_root: scope_root.display().to_string(),
+        workspace_root: workspace_root.display().to_string(),
+    }
 }
 
 #[tauri::command]
@@ -314,22 +434,38 @@ pub fn lsp_send(id: u64, message: String) -> Result<(), String> {
 
 #[tauri::command]
 pub fn lsp_stop(id: u64) -> Result<(), String> {
-    let mut servers = SERVERS.lock().unwrap();
-    let Some(map) = servers.as_mut() else {
-        return Ok(());
+    let removed = {
+        let mut servers = SERVERS.lock().unwrap();
+        match servers.as_mut().and_then(|m| m.remove(&id)) {
+            Some(mut server) => {
+                let _ = server.child.kill();
+                true
+            }
+            None => false,
+        }
     };
-    if let Some(mut server) = map.remove(&id) {
-        let _ = server.child.kill();
+    if removed {
+        let mut workspaces = WORKSPACES.lock().unwrap();
+        if let Some(map) = workspaces.as_mut() {
+            map.retain(|_, v| *v != id);
+        }
     }
     Ok(())
 }
 
 /// Stop every live server — the app-exit hook and the belt to the lens-unmount suspenders.
 pub fn stop_all() {
-    let mut servers = SERVERS.lock().unwrap();
-    if let Some(map) = servers.as_mut() {
-        for (_, mut server) in map.drain() {
-            let _ = server.child.kill();
+    {
+        let mut servers = SERVERS.lock().unwrap();
+        if let Some(map) = servers.as_mut() {
+            for (_, mut server) in map.drain() {
+                let _ = server.child.kill();
+            }
+        }
+    }
+    if let Ok(mut workspaces) = WORKSPACES.lock() {
+        if let Some(map) = workspaces.as_mut() {
+            map.clear();
         }
     }
 }
@@ -456,6 +592,63 @@ mod tests {
         std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
 
         assert!(probe_binary(&script, "fake-server", "run: install", "broken").is_ok());
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn workspace_root_finds_the_nearest_cargo_manifest() {
+        let dir = std::env::temp_dir().join("lsp-ws-root-nearest");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("desktop/src-tauri/src")).unwrap();
+        std::fs::write(dir.join("desktop/src-tauri/Cargo.toml"), "[package]\nname = \"desktop\"\n").unwrap();
+        std::fs::write(dir.join("desktop/src-tauri/src/lib.rs"), "").unwrap();
+
+        let root = workspace_root(&dir, "rust", "desktop/src-tauri/src/lib.rs");
+        assert_eq!(root, dir.join("desktop/src-tauri"));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn workspace_root_prefers_a_workspace_manifest_higher_up() {
+        let dir = std::env::temp_dir().join("lsp-ws-root-workspace");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("crate/src")).unwrap();
+        std::fs::write(dir.join("Cargo.toml"), "[workspace]\nmembers = [\"crate\"]\n").unwrap();
+        std::fs::write(dir.join("crate/Cargo.toml"), "[package]\nname = \"crate\"\n").unwrap();
+        std::fs::write(dir.join("crate/src/lib.rs"), "").unwrap();
+
+        let root = workspace_root(&dir, "rust", "crate/src/lib.rs");
+        assert_eq!(root, dir);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn workspace_root_falls_back_to_the_scope_root_without_any_manifest() {
+        let dir = std::env::temp_dir().join("lsp-ws-root-fallback");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("scripts")).unwrap();
+        std::fs::write(dir.join("scripts/x.sh"), "").unwrap();
+
+        let root = workspace_root(&dir, "rust", "scripts/x.sh");
+        assert_eq!(root, dir);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn workspace_root_finds_tsconfig_before_package_json() {
+        let dir = std::env::temp_dir().join("lsp-ws-root-ts");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("app")).unwrap();
+        std::fs::write(dir.join("package.json"), "{}").unwrap();
+        std::fs::write(dir.join("app/tsconfig.json"), "{}").unwrap();
+        std::fs::write(dir.join("app/main.ts"), "").unwrap();
+
+        let root = workspace_root(&dir, "typescript", "app/main.ts");
+        assert_eq!(root, dir.join("app"));
 
         let _ = std::fs::remove_dir_all(&dir);
     }
