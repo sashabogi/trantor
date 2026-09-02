@@ -1,101 +1,20 @@
 // The language-server bridge. Rust owns the servers and frames their JSON-RPC (src-tauri/src/
-// lsp.rs); this module adapts that byte channel into the MessageTransports monaco-languageclient
-// speaks, and keeps ONE client per (root, language) shared across tabs. monacoSetup.ts's TS mute
-// stays as the no-client fallback: when a client is live for a language, the server owns
-// diagnostics and suggestions, and the editor turns its own quickSuggestions on.
-import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-import { invoke } from "@tauri-apps/api/core";
-
-/** The diagnostic firehose (#12752): one line per state change, appended app-side. */
-function trace(line: string): void {
-  invoke("app_log", { line }).catch(() => {});
-}
-import {
-  AbstractMessageReader,
-  AbstractMessageWriter,
-  type DataCallback,
-  type Disposable,
-  type Message,
-  type MessageWriter,
-} from "vscode-jsonrpc";
+// lsp.rs); this module keeps ONE client per (root, language) shared across tabs, on the Tauri
+// transport from lspTransport.ts. monacoSetup.ts's TS mute stays as the no-client fallback: when
+// a client is live for a language, the server owns diagnostics and suggestions, and the editor
+// turns its own quickSuggestions on. Documents are synced explicitly by lspDocuments.ts (#5857):
+// the editor's models are VANILLA monaco, a different registry than the monaco-vscode-api the
+// client's own sync listens to, so didOpen/didChange/completion ride this module's rows.
 import { MonacoLanguageClient } from "monaco-languageclient";
 import { MonacoVscodeApiWrapper } from "monaco-languageclient/vscodeApiWrapper";
 import type { MessageTransports } from "vscode-languageclient/browser.js";
+import { invoke } from "@tauri-apps/api/core";
 import * as vscode from "vscode";
-import { isReadyToken, progressEvent, type ProgressEvent } from "./lspProtocol";
+import { isReadyToken } from "./lspProtocol";
 import { decideLspStart } from "./lspStart";
+import { TauriMessageReader, TauriMessageWriter, trace } from "./lspTransport";
+import { attachOpenDocuments, setDocClientRows, type DocClientRow } from "./lspDocuments";
 import "./monacoSetup";
-
-// ── transport ────────────────────────────────────────────────────────────────────────────────
-
-/** reader: `lsp-message:<id>` events → JSON-RPC messages. */
-class TauriMessageReader extends AbstractMessageReader {
-  constructor(
-    private readonly id: number,
-    private readonly onProgress?: (e: ProgressEvent) => void,
-  ) {
-    super();
-  }
-
-  listen(callback: DataCallback): Disposable {
-    let disposed = false;
-    const unlistens: UnlistenFn[] = [];
-    const stop = () => {
-      disposed = true;
-      for (const fn of unlistens) fn();
-      unlistens.length = 0;
-    };
-    listen<string>(`lsp-message:${this.id}`, ev => {
-      if (disposed) return;
-      // A non-JSON payload must not throw and swallow the message — the initialize response rides
-      // this path, and a dropped response leaves client.start() hanging forever. The connection
-      // reports its own error if the bytes are not valid JSON-RPC.
-      let raw: any;
-      try {
-        raw = JSON.parse(ev.payload);
-      } catch {
-        return;
-      }
-      if (this.onProgress) {
-        const e = progressEvent(raw);
-        if (e) this.onProgress(e);
-      }
-      const msg: Message = raw;
-      callback(msg);
-    }).then(fn => { if (disposed) fn(); else unlistens.push(fn); }).catch(() => {});
-    // The server closing stdout is the one honest "no longer ready" signal; the payload is the
-    // server's own first stderr line ("error: Unknown binary …") when it exited early, so the
-    // status line can name it instead of a bare "Unknown reason".
-    listen<string | null>(`lsp-closed:${this.id}`, ev => {
-      if (disposed) return;
-      const reason = ev.payload;
-      if (reason) this.fireError(new Error(reason));
-      this.fireClose();
-    }).then(fn => { if (disposed) fn(); else unlistens.push(fn); }).catch(() => {});
-    return { dispose: stop };
-  }
-}
-
-/** writer: JSON-RPC messages → `lsp_send`. */
-class TauriMessageWriter extends AbstractMessageWriter implements MessageWriter {
-  constructor(private readonly id: number) {
-    super();
-  }
-
-  async write(msg: Message): Promise<void> {
-    // A Tauri rejection is a plain string; vscode-jsonrpc reads `.message` off it and shows
-    // "Unknown reason" when there is none (0.3.96, seen on screen). Wrap so the real cause rides.
-    try {
-      await invoke("lsp_send", { id: this.id, message: JSON.stringify(msg) });
-    } catch (e) {
-      throw e instanceof Error ? e : new Error(String(e));
-    }
-  }
-
-  end(): void {
-    // The connection ends when the lens stops the server; nothing to flush on the wire.
-  }
-}
 
 // ── services + client registry ───────────────────────────────────────────────────────────────
 
@@ -128,7 +47,21 @@ const indexed = new Set<ClientKey>();
 const phases = new Map<ClientKey, string>();
 
 const listeners = new Set<() => void>();
-const notify = () => { for (const fn of listeners) fn(); };
+const notify = () => {
+  for (const fn of listeners) fn();
+  // The document sync re-points open models at live clients on every start/stop (#5857).
+  attachOpenDocuments();
+};
+
+/** Live clients as plain rows for the document sync (lspDocuments.ts picks by crate prefix). */
+export function lspClientRows(): DocClientRow[] {
+  const rows: DocClientRow[] = [];
+  for (const [key, entry] of clients) {
+    rows.push({ workspaceRoot: entry.workspaceRoot, language: key.slice(key.indexOf("\u0000") + 1), client: entry.client });
+  }
+  return rows;
+}
+setDocClientRows(lspClientRows);
 
 /** Subscribe to client start/stop/indexing/phase — the editor flips quickSuggestions on these. */
 export function onLspChange(fn: () => void): () => void {
@@ -247,7 +180,15 @@ export async function startLsp(
       },
       messageTransports: transports,
     });
-    await client.start();
+    try {
+      await client.start();
+    } catch (e) {
+      // A start that fails AFTER the wire handshake must say so — the 0.3.111 silence (initialize
+      // answered, then nothing, #5857) had no line here, so a hung/failed start was invisible.
+      trace(`startLsp ${key} client start FAILED: ${e instanceof Error ? e.message : String(e)}`);
+      throw e;
+    }
+    trace(`startLsp ${key} client running`);
     clients.set(key, { id: started.id, scopeRoot: started.scopeRoot, workspaceRoot: started.workspaceRoot, client });
     notify();
     return {
