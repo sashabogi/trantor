@@ -19,6 +19,7 @@ import { ensureEnrolled } from "../lib/enroll.mjs";
 import { redactKeys } from "../lib/redact.mjs";
 import {
   AUTH_MARKER_RE, classifyFailure, looksLikeAuthDeath,
+  verdictFor,
   readPromptText, stripPromptEcho,
 } from "../lib/classify-failure.mjs";
 import { capWake, capBcast, pickLessons, composePrompt } from "./crew-payload.mjs";
@@ -461,6 +462,10 @@ async function runTurn(prompt, isFirst, trigger = "kickoff") {
   const pf = join(homedir(), ".agent-bus", `turn-${AGENT}-${PROJ}.txt`);
   appendFileSync(pf, "", { flag: "w" }); // truncate
   appendFileSync(pf, prompt);
+  // #5868: where HEAD stood when the turn began. A turn that moved it shipped real work, and an
+  // exit-0 turn with real output must never be re-labelled "auth" by the #5405 escalation — the
+  // qwen specimen committed aa3c340 while its captured stream still tripped the auth regex.
+  const headBefore = gitOut(["rev-parse", "HEAD"], TURN_DIR);
   let cmd = (isFirst || (cli.sid && !sid)) ? cli.first : cli.next;
   const mfrag = MODEL && cli.mflag ? `${cli.mflag}${MODEL}` : "";
   cmd = cmd.replaceAll("{M}", mfrag).replaceAll("{P}", pf).replaceAll("{SID}", sid);
@@ -543,10 +548,15 @@ async function runTurn(prompt, isFirst, trigger = "kickoff") {
   // fail the turn. Telemetry keeps the REAL exit; the returned code is the effective one every
   // call site branches on (kickoff, pulse, deliverWake).
   let effExit = realExit;
-  if (realExit === 0 && looksLikeAuthDeath(ownOut)) {
+  let authHit = "";
+  // #5868: a NEW commit since turn start is real work, and an exit-0 turn with real output is
+  // never re-labelled auth — the qwen specimen exited 0 with a shipped commit (aa3c340) while a
+  // short capture of echoed contract text tripped the regex.
+  const newCommit = !!headBefore && gitOut(["rev-parse", "HEAD"], TURN_DIR) !== headBefore;
+  if (realExit === 0 && looksLikeAuthDeath(ownOut, newCommit)) {
     effExit = 1;
-    const hit = AUTH_MARKER_RE.exec(ownOut)[0];
-    log(`\x1b[31mexit 0 but the turn output IS an auth failure — treating as FAILED (auth, "${hit}")\x1b[0m`);
+    authHit = AUTH_MARKER_RE.exec(ownOut)[0];
+    log(`\x1b[31mexit 0 but the turn output IS an auth failure — treating as FAILED (auth, "${authHit}")\x1b[0m`);
   }
   // #5481: the Inception/Mercury trap — exit 0 with a NULL completion. ERRF is the TOTAL output
   // capture, not just stderr: every seat's stdout is tee'd into it (`| tee -a ERRF` for the
@@ -562,7 +572,10 @@ async function runTurn(prompt, isFirst, trigger = "kickoff") {
     lastEmptyOutput = true;
     log("\x1b[31mexit 0 but the turn produced NO output — treating as FAILED (empty-output)\x1b[0m");
   }
-  telemetry({ ts: Date.now(), agent: AGENT, project: PROJ, turn: TURN, trigger, model: MODEL || "cli-default", duration_ms: Date.now() - t0, exit: realExit, effExit, authFailed: effExit !== realExit, emptyOutput: lastEmptyOutput });
+  // #5868: the verdict rides the telemetry row so a classification survives the pane scrolling
+  // away — the same "classified X because Y" shape the runner logs, in the seat's jsonl forever.
+  const verdict = verdictFor(realExit, effExit, lastEmptyOutput, ownOut);
+  telemetry({ ts: Date.now(), agent: AGENT, project: PROJ, turn: TURN, trigger, model: MODEL || "cli-default", duration_ms: Date.now() - t0, exit: realExit, effExit, authFailed: effExit !== realExit, emptyOutput: lastEmptyOutput, verdict });
   log(`turn ended (exit ${realExit}${effExit !== realExit ? ` → effective ${effExit} (${lastEmptyOutput ? "empty-output" : "auth"})` : ""}, ${((Date.now() - t0) / 1000).toFixed(0)}s)`);
   if (realExit === 0 && effExit === 0) { cmuxStatus("idle", "#8a94a6", "robot"); herdrAgent("idle"); }   // finished this turn, waiting for the next
   // #5965 — TURN END. A clean exit means the seat is idle again; say so right away so the app stops
