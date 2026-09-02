@@ -18,6 +18,7 @@ import { homedir } from "node:os";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { ensureEnrolled, loadIdentity, signedPost } from "../hooks/lib/api.mjs";
+import { setAutonomy } from "../lib/autonomy.mjs";
 import { resolveHub } from "../lib/project.mjs";
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
@@ -103,6 +104,10 @@ if (existsSync(claude)) {
 // ── hooks — the SAME install trantor init-hooks performs, in the new repo ───────────────────────
 const hook = spawnSync(process.execPath, [join(ROOT, "bin", "init-hooks.mjs")], { cwd: dir, encoding: "utf8" });
 if (hook.status !== 0) die(`hook install failed: ${(hook.stderr || "").trim()}`);
+
+// A new project is a new trust boundary. Pin its harness dial even when the machine-wide default
+// is bypass, so opening it can never inherit another project's permission choice.
+setAutonomy(name, { harness: "prompt" });
 
 // ── the hub: brief + first card, signed like every other client ─────────────────────────────────
 const hub = resolveHub(name);

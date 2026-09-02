@@ -4,7 +4,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use super::{
     desktop_bus_dir, herdr, kickoff_outcome_label, orch_pane_from_rows, project_dir,
-    run_command_output, terminal_path, trantor_reopen_args,
+    run_command_output, terminal_path,
 };
 
 #[derive(Deserialize)]
@@ -76,6 +76,12 @@ fn agent_list_has_pane(raw: &str, pane: &str) -> bool {
                 .iter()
                 .any(|agent| agent.get("pane_id").and_then(|id| id.as_str()) == Some(pane))
         })
+}
+
+fn project_wake_reopen_args(project: &str) -> [&str; 2] {
+    // An explicit project beats an inherited RELAY_PROJECT inside crew.sh. Its open path then
+    // resolves `autonomy get harness --project "$PROJ"`; prompt/missing dials add no bypass flag.
+    ["open", project]
 }
 
 #[tauri::command]
@@ -163,7 +169,7 @@ pub(crate) async fn project_wake(project: String, kickoff: String) -> Result<Str
 
     let mut reopen = tokio::process::Command::new("trantor");
     reopen
-        .args(trantor_reopen_args())
+        .args(project_wake_reopen_args(&project))
         .current_dir(&dir)
         .env("PATH", terminal_path());
     run_command_output(reopen, "trantor open").await?;
@@ -223,6 +229,13 @@ mod tests {
         assert!(project_new_cli_args(&input, None)
             .unwrap_err()
             .contains("must end in /new-client-portal"));
+    }
+
+    #[test]
+    fn prompt_project_wake_names_the_target_without_a_bypass_flag() {
+        let cli = project_wake_reopen_args("pros");
+        assert_eq!(cli, ["open", "pros"]);
+        assert!(!cli.contains(&"--dangerously-skip-permissions"));
     }
 
     #[test]
