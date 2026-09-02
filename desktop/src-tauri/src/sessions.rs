@@ -76,12 +76,22 @@ fn text_content(value: &Value) -> String {
     }
 }
 
+/// A stored candidate may arrive WRAPPED — whitespace, or the surrounding quotes/backticks
+/// OpenCode keeps around a stored prompt (#5842 residual: `"You just joined (your arrival…` —
+/// the leading double quote defeated the prefix match). Trim, peel one layer of wrapping
+/// quotes/backticks, trim again; the injection markers then match on the normalized text.
+fn normalize_candidate(raw: &str) -> &str {
+    let t = raw.trim();
+    let t = t.trim_start_matches(['"', '\'', '`']).trim_start();
+    t.trim_end_matches(['"', '\'', '`']).trim_end()
+}
+
 fn real_message_text(record: &Value, role: &str, content: &Value) -> Option<String> {
     let text = text_content(content);
     if text.is_empty()
         || (role == "user"
             && (super::bookkeeping_divider_text(record, content).is_some()
-                || super::is_harness_injection(&text)))
+                || super::is_harness_injection(normalize_candidate(&text))))
     {
         None
     } else {
@@ -565,6 +575,13 @@ fn open_code_row(value: &Value) -> Option<SessionRecord> {
             }
         }
     }
+    // The store-field fallback carries the LAST ROW'S REAL ROLE (#5842 residual): the runner's
+    // message envelope lands as a user row, and attributing it "assistant" silently skipped the
+    // injection check that filters it from lastMessage.
+    let last_role = value
+        .get("last_role")
+        .and_then(Value::as_str)
+        .unwrap_or("assistant");
     let last_message = messages
         .iter()
         .rev()
@@ -574,7 +591,7 @@ fn open_code_row(value: &Value) -> Option<SessionRecord> {
                 .get("last_message")
                 .and_then(Value::as_str)
                 .and_then(|text| {
-                    real_message_text(&Value::Null, "assistant", &Value::String(text.into()))
+                    real_message_text(&Value::Null, last_role, &Value::String(text.into()))
                 })
         })
         .unwrap_or_default();
@@ -651,11 +668,17 @@ SELECT s.id,
                     AND json_extract(p.data, '$.type') = 'text'
                   ORDER BY m.time_created, p.time_created LIMIT 1), s.title) AS first_user,
        COALESCE((SELECT json_extract(p.data, '$.text')
-                   FROM message m JOIN part p ON p.message_id = m.id
-                  WHERE m.session_id = s.id
-                    AND json_extract(m.data, '$.role') IN ('user', 'assistant')
-                    AND json_extract(p.data, '$.type') = 'text'
-                  ORDER BY m.time_created DESC, p.time_created DESC LIMIT 1), '') AS last_message
+                    FROM message m JOIN part p ON p.message_id = m.id
+                   WHERE m.session_id = s.id
+                     AND json_extract(m.data, '$.role') IN ('user', 'assistant')
+                     AND json_extract(p.data, '$.type') = 'text'
+                   ORDER BY m.time_created DESC, p.time_created DESC LIMIT 1), '') AS last_message,
+       COALESCE((SELECT json_extract(m.data, '$.role')
+                    FROM message m JOIN part p ON p.message_id = m.id
+                   WHERE m.session_id = s.id
+                     AND json_extract(m.data, '$.role') IN ('user', 'assistant')
+                     AND json_extract(p.data, '$.type') = 'text'
+                   ORDER BY m.time_created DESC, p.time_created DESC LIMIT 1), 'assistant') AS last_role
   FROM session s
  ORDER BY s.time_updated DESC;
 "#;
@@ -953,7 +976,9 @@ mod tests {
     #[test]
     fn opencode_boot_fixture_skips_the_crew_prompt_for_title_and_preview() {
         // The crew boot prompt (bin/crew-runner.mjs) pools as a seat's first user row AND as
-        // OpenCode's own derived title; neither may surface (#5842).
+        // OpenCode's own derived title; neither may surface (#5842). The stored forms are
+        // QUOTED — normalization must peel the wrapping quotes before the prefix match — and
+        // the runner's message envelope ("NEW BUS MESSAGE for you: …") is not speech either.
         let raw = fs::read_to_string(fixture("opencode-boot.jsonl")).unwrap();
         let value: Value = serde_json::from_str(raw.trim()).unwrap();
         let record = open_code_row(&value).unwrap();
@@ -961,6 +986,20 @@ mod tests {
         assert_eq!(record.row.last_message, "Done — the dot is gone.");
         assert!(!record.row.title.contains("You just joined"));
         assert!(!record.row.last_message.contains("You just joined"));
+        assert!(!record.row.last_message.contains("NEW BUS MESSAGE"));
+    }
+
+    #[test]
+    fn opencode_store_field_fallback_is_role_aware_and_normalized() {
+        // No messages array: title and preview come from the store fields, and the preview's
+        // injection check runs with the LAST ROW'S REAL ROLE, on the normalized text.
+        let value: Value = serde_json::from_str(
+            r#"{"id":"ses_store","directory":"/tmp","title":"x","first_user":"\"You just joined (your arrival was already announced on the bus). 1) relay_inbox\"","last_message":"\"NEW BUS MESSAGE for you: [MacBook-Pro-M1:trantor] — hold.\"","last_role":"user","message_count":2,"model":"","updated_at":1}"#,
+        )
+        .unwrap();
+        let record = open_code_row(&value).unwrap();
+        assert_eq!(record.row.title, "untitled");
+        assert_eq!(record.row.last_message, "");
     }
 
     #[test]
