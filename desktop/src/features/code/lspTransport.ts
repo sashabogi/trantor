@@ -14,6 +14,26 @@ import {
 } from "vscode-jsonrpc";
 import { progressEvent, type ProgressEvent } from "./lspProtocol";
 
+/** The Tauri seam the reader/writer talk through, injected so tests use a faithful in-memory bus
+ *  (lspTransport.test.ts) instead of mocking the @tauri modules. Production passes the real fns.
+ *  The shapes are NARROWED to exactly what this transport uses — one lsp_send invoke with the
+ *  serialized message, and two listen subscriptions carrying string-or-null payloads. */
+export type LspBus = {
+  invoke<T>(cmd: "lsp_send", args: { id: number; message: string }): Promise<T>;
+  listen<T extends string | null>(
+    event: `lsp-message:${number}` | `lsp-closed:${number}`,
+    handler: (ev: { payload: T }) => void,
+  ): Promise<() => void>;
+};
+
+const realBus: LspBus = {
+  invoke: (cmd, args) => invoke(cmd, args),
+  // SAFETY: the narrowed LspBus event/handler signatures are exactly the calls this transport
+  // makes against tauri's listen (same event strings, payload container shape); widening to the
+  // real generic signature loses nothing this module relies on.
+  listen: ((event, handler) => listen(event, handler)) as LspBus["listen"],
+};
+
 /** The diagnostic firehose (#12752): one line per state change, appended app-side. */
 export function trace(line: string): void {
   invoke("app_log", { line }).catch(() => {});
@@ -50,17 +70,18 @@ export class TauriMessageReader extends AbstractMessageReader {
   constructor(
     private readonly id: number,
     private readonly onProgress?: (e: ProgressEvent) => void,
+    private readonly bus: LspBus = realBus,
   ) {
     super();
     const keep = (fn: UnlistenFn) => {
       if (this.torn) fn();
       else this.unlistens.push(fn);
     };
-    const messages = listen<string>(`lsp-message:${this.id}`, ev => this.onMessage(ev.payload)).then(keep);
+    const messages = this.bus.listen<string>(`lsp-message:${this.id}`, ev => this.onMessage(ev.payload)).then(keep);
     // The server closing stdout is the one honest "no longer ready" signal; the payload is the
     // server's own first stderr line ("error: Unknown binary …") when it exited early, so the
     // status line can name it instead of a bare "Unknown reason".
-    const closed = listen<string | null>(`lsp-closed:${this.id}`, ev => {
+    const closed = this.bus.listen<string | null>(`lsp-closed:${this.id}`, ev => {
       if (this.torn) return;
       if (ev.payload) this.fireError(new Error(ev.payload));
       this.fireClose();
@@ -85,9 +106,15 @@ export class TauriMessageReader extends AbstractMessageReader {
       return;
     }
     if (this.onProgress) {
+      // SAFETY: raw is the JSON.parse result of the lsp-message payload, which is OUR Rust emitter's
+      // JSON-RPC envelope; progressEvent structurally probes method/params and returns null for
+      // anything that is not the $/progress shape, so a malformed frame is dropped, not cast through.
       const e = progressEvent(raw as Parameters<typeof progressEvent>[0]);
       if (e) this.onProgress(e);
     }
+    // SAFETY: raw parses above; the reader delivers only JSON-RPC messages, whose union shape
+    // (Message) is exactly what the connection's callback consumes. A non-JSON payload returned
+    // early, so this assertion is over the parsed envelope only.
     const msg = raw as Message;
     if (this.callback) {
       this.callback(msg);
@@ -116,7 +143,10 @@ export class TauriMessageReader extends AbstractMessageReader {
 
 /** writer: JSON-RPC messages → `lsp_send`. */
 export class TauriMessageWriter extends AbstractMessageWriter implements MessageWriter {
-  constructor(private readonly id: number) {
+  constructor(
+    private readonly id: number,
+    private readonly bus: LspBus = realBus,
+  ) {
     super();
   }
 
@@ -124,7 +154,7 @@ export class TauriMessageWriter extends AbstractMessageWriter implements Message
     // A Tauri rejection is a plain string; vscode-jsonrpc reads `.message` off it and shows
     // "Unknown reason" when there is none (0.3.96, seen on screen). Wrap so the real cause rides.
     try {
-      await invoke("lsp_send", { id: this.id, message: JSON.stringify(msg) });
+      await this.bus.invoke("lsp_send", { id: this.id, message: JSON.stringify(msg) });
     } catch (e) {
       throw e instanceof Error ? e : new Error(String(e));
     }

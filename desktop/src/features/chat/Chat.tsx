@@ -16,10 +16,10 @@
 // the old poll kept as the transport when the watcher is not offered (older build, or no session
 // behind the pane yet).
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent as RPointerEvent } from "react";
-import { invoke } from "@tauri-apps/api/core";
+import { invoke, type InvokeArgs } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { ArrowLeft, ChevronDown, ChevronRight, PanelBottom, PanelBottomClose, PanelRight, PanelRightClose, Wrench } from "lucide-react";
-import { orchestratorOf } from "../workspace/herdr";
+import { orchestratorOf, type HerdrSeat } from "../workspace/herdr";
 import { DEFAULT_TERMINAL_DEPS, TerminalPane, type TerminalDeps } from "../workspace/TerminalPane";
 import { bannerCountdown, type HandoffCountdown } from "./banner";
 import { Composer, type Provenance } from "./Composer";
@@ -199,9 +199,33 @@ function HandoffBanner({ frac, countdown, busy, error, onKeepGoing, onHandOffNow
 // construction rather than by a prop this file cannot add.
 const TRAY_DEPS: TerminalDeps = { ...DEFAULT_TERMINAL_DEPS, termWrite: async () => "" };
 
-export function Chat({ project, sessionId, dock, onDock, onClose }: {
+/** The seams Chat crosses, injected so a test supplies a faithful in-memory stand-in instead of
+ *  mocking @tauri/herdr modules (TerminalPane's `deps` is the same idea). Production default. */
+export type ChatDeps = {
+  invoke: <T>(cmd: string, args?: InvokeArgs) => Promise<T>;
+  listen: <T>(event: string, cb: (ev: { payload: T }) => void) => Promise<() => void>;
+  orchestratorOf: (project: string) => Promise<HerdrSeat | null>;
+  /** Heavy neighbours Chat mounts; the chat tests replace them with null renderers. */
+  Composer: React.ComponentType<React.ComponentProps<typeof Composer>>;
+  TerminalPane: React.ComponentType<React.ComponentProps<typeof TerminalPane>>;
+};
+
+export const DEFAULT_CHAT_DEPS: ChatDeps = {
+  // The seam's args are the object literals Chat actually passes; tauri's InvokeArgs accepts them
+  // (Record is one arm of the union), so no cast is needed to hand them to the real invoke.
+  invoke: <T,>(cmd: string, args?: InvokeArgs) => invoke<T>(cmd, args),
+  listen: (event, cb) => listen(event, cb),
+  orchestratorOf,
+  Composer,
+  TerminalPane,
+};
+
+export function Chat({ project, sessionId, dock, onDock, onClose, deps = DEFAULT_CHAT_DEPS }: {
   project: string; sessionId?: string; dock: Dock; onDock: (d: Dock) => void; onClose: () => void;
+  /** Test seam — production callers omit it and get the real modules. */
+  deps?: ChatDeps;
 }) {
+  const { invoke: invokeFn, listen: listenFn, orchestratorOf: paneOf, Composer: ComposerView, TerminalPane: TermView } = deps;
   const history = Boolean(sessionId);
   const [chat, setChat] = useState<ChatState>(emptyChat);
   const [target, setTarget] = useState<string | null>(() => history ? "history" : null);
@@ -254,7 +278,7 @@ export function Chat({ project, sessionId, dock, onDock, onClose }: {
     setBannerArmedAt(null); setHandoffError(null); autoHandoffKey.current = null;
     setChat(emptyChat); seenRef.current = 0; setError(null); setStatus("unknown");
     if (sessionId) setTarget("history");
-    else orchestratorOf(project).then(o => setTarget(o?.surface ?? null)).catch(() => setTarget(null));
+    else paneOf(project).then(o => setTarget(o?.surface ?? null)).catch(() => setTarget(null));
   }, [project, sessionId]);
 
   // A takeover hosts the pane AFTER this panel looked for one (#5495): while none is hosted,
@@ -264,7 +288,7 @@ export function Chat({ project, sessionId, dock, onDock, onClose }: {
     if (history || target !== null) return;
     let alive = true;
     const iv = setInterval(() => {
-      orchestratorOf(project).then(o => { if (alive && o) setTarget(o.surface); }).catch(() => {});
+      paneOf(project).then(o => { if (alive && o) setTarget(o.surface); }).catch(() => {});
     }, 5_000);
     return () => { alive = false; clearInterval(iv); };
   }, [history, project, target]);
@@ -273,7 +297,7 @@ export function Chat({ project, sessionId, dock, onDock, onClose }: {
    *  and the post-send refresh — one path, so they cannot disagree. */
   const sync = useCallback(() => {
     const after = seenRef.current;
-    invoke<string>("orchestrator_chat", { project, after, sessionId: sessionId ?? null })
+    invokeFn<string>("orchestrator_chat", { project, after, sessionId: sessionId ?? null })
       .then(raw => {
         // JSON.parse's `any` flows into the tuple without a cast — Rust owns validation, the
         // same boundary herdr.ts documents for herdr_seats().
@@ -315,12 +339,12 @@ export function Chat({ project, sessionId, dock, onDock, onClose }: {
     sync();
     void (async () => {
       try {
-        const count = await invoke<number>("chat_watch", { project, sessionId: sessionId ?? null });
+        const count = await invokeFn<number>("chat_watch", { project, sessionId: sessionId ?? null });
         if (!alive) return;
         // Rows that landed while the watcher was spinning up would otherwise sit between our
         // cursor and the first event's after — close the gap now.
         if (count > seenRef.current) sync();
-        offs.push(await listen<string>("chat-rows", ev => {
+        offs.push(await listenFn<string>("chat-rows", ev => {
           if (!alive) return;
           try {
             const p: RowsPayload = JSON.parse(ev.payload);
@@ -331,7 +355,7 @@ export function Chat({ project, sessionId, dock, onDock, onClose }: {
             // outlive the batch that proves the turn is over. Fires even when the batch misses
             // the cursor — the resync heals rows, not the gate. History views keep "ended".
             if (p.turn_ended && !sessionId) {
-              invoke<string>("orchestrator_status", { project })
+              invokeFn<string>("orchestrator_status", { project })
                 .then(st => { if (alive && st) setStatus(st); })
                 .catch(() => {});
             }
@@ -345,7 +369,7 @@ export function Chat({ project, sessionId, dock, onDock, onClose }: {
             if (++badFrames >= 3) setStreamed(false);
           }
         }));
-        offs.push(await listen<string>("chat-session-changed", ev => {
+        offs.push(await listenFn<string>("chat-session-changed", ev => {
           if (!alive) return;
           try {
             const p: SessionPayload = JSON.parse(ev.payload);
@@ -357,7 +381,7 @@ export function Chat({ project, sessionId, dock, onDock, onClose }: {
             syncRef.current();
             // #5993 — a handoff may have restarted the pane; the pushed stream may never have
             // covered the successor. One seed here, so the gate starts honest — no loop.
-            invoke<string>("orchestrator_status", { project })
+            invokeFn<string>("orchestrator_status", { project })
               .then(st => { if (alive && st) setStatus(st); })
               .catch(() => {});
           } catch { if (++badFrames >= 3) setStreamed(false); }
@@ -370,7 +394,7 @@ export function Chat({ project, sessionId, dock, onDock, onClose }: {
     return () => {
       alive = false;
       for (const off of offs) off();
-      invoke("chat_unwatch", { project, sessionId: sessionId ?? null }).catch(() => {});
+      invokeFn("chat_unwatch", { project, sessionId: sessionId ?? null }).catch(() => {});
     };
   }, [project, sessionId, target !== null, sync]);
 
@@ -388,10 +412,10 @@ export function Chat({ project, sessionId, dock, onDock, onClose }: {
   useEffect(() => {
     if (history) { setStatus("ended"); return; }
     let alive = true;
-    invoke<string>("orchestrator_status", { project }).then(st => { if (alive) setStatus(st); }).catch(() => {});
+    invokeFn<string>("orchestrator_status", { project }).then(st => { if (alive) setStatus(st); }).catch(() => {});
     const offs: Array<() => void> = [];
     void (async () => {
-      const off = await listen<string>("orch-status", ev => {
+      const off = await listenFn<string>("orch-status", ev => {
         if (!alive) return;
         try {
           // SAFETY: payload comes from our own Rust emitter (orch-status), and both fields are
@@ -516,7 +540,7 @@ export function Chat({ project, sessionId, dock, onDock, onClose }: {
     setHandoffError(null);
     if (reason === "countdown") addDivider("handoff countdown expired - handing off now");
     if (reason === "unattended") addDivider("full auto reached the handoff threshold - handing off now");
-    invoke<string>("handoff_now", { project, reason })
+    invokeFn<string>("handoff_now", { project, reason })
       .catch(e => setHandoffError(String(e)))
       .finally(() => setHandoffBusy(false));
   }, [addDivider, handoffBusy, project]);
@@ -729,7 +753,7 @@ export function Chat({ project, sessionId, dock, onDock, onClose }: {
         </button>
         {trayOpen && (
           <div className="flex h-[220px] min-h-0 flex-col overflow-hidden bg-black/20">
-            <TerminalPane project={project} agent="orchestrator" deps={TRAY_DEPS} />
+            <TermView project={project} agent="orchestrator" deps={TRAY_DEPS} />
           </div>
         )}
       </div>}
@@ -760,7 +784,7 @@ export function Chat({ project, sessionId, dock, onDock, onClose }: {
         />
       )}
 
-      {!history && <Composer
+      {!history && <ComposerView
         project={project}
         target={target}
         live={liveness.live}

@@ -53,8 +53,9 @@ export async function runLspDrill(project: string, path = "desktop/src-tauri/src
     const line = lastLine + 1;
     const col = "fn lsp_drill() { let _ = std::".length + 1; // just past the second `:`
     const result = await lspCompletion(String(model.uri), "rust", line, col);
-    const items = Array.isArray(result) ? result : ((result as { items?: unknown[] } | null)?.items ?? []);
-    const labels = items.slice(0, 8).map(i => (i as { label?: string }).label ?? "?");
+    // The completion payload is either a bare array or { items }; decode both to an item list.
+    const items = Array.isArray(result) ? result : (result?.items ?? []);
+    const labels = items.slice(0, 8).map(i => i.label ?? "?");
     log(`completion items=${items.length} first=[${labels.join(", ")}]`);
     model.dispose();
     log("done");

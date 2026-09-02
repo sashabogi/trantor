@@ -127,6 +127,9 @@ type Block =
   | { kind: "list"; ordered: boolean; items: ListItem[] };
 type ListItem = { text: string; children: Block[] };
 
+/** A parse cursor: the blocks consumed so far plus the next unconsumed line index. */
+type BlockCursor = { blocks: Block[]; next: number };
+
 const FENCE_RE = /^\s*(`{3,}|~{3,})/;
 const LIST_RE = /^(\s*)([-*+]|\d+[.)])\s+(.*)$/;
 const HEADING_RE = /^\s*#{1,6}\s+(.*)$/;
@@ -141,7 +144,7 @@ function isListLine(l: string): boolean {
  *  indent, plus the consumed line count. Handles fences, headings, tables, lists and paragraphs;
  *  a blank line or a dedent terminates whatever is being parsed.
  */
-function parseAt(lines: string[], start: number, indent = 0): { blocks: Block[]; next: number } {
+function parseAt(lines: string[], start: number, indent = 0): BlockCursor {
   const blocks: Block[] = [];
   let i = start;
   while (i < lines.length) {
@@ -229,7 +232,7 @@ function parseAt(lines: string[], start: number, indent = 0): { blocks: Block[];
 }
 
 /** Parse the deeper-indented content that hangs under one list item. */
-function parseNested(lines: string[], start: number, parentIndent: number): { blocks: Block[]; next: number } {
+function parseNested(lines: string[], start: number, parentIndent: number): BlockCursor {
   const blocks: Block[] = [];
   let i = start;
   // Skip a blank line that may separate the item from its children.
