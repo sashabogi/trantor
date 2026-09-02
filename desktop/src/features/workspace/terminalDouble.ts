@@ -7,7 +7,7 @@
 //
 // It also records what the pane did, and exposes the two things only the outside world can
 // trigger: bytes arriving from the pty, and the user typing.
-import type { PaneSession, TerminalDeps } from "./TerminalPane";
+import type { PaneSession, PaneDragDropEvent, TerminalDeps } from "./TerminalPane";
 import type { TerminalBytes } from "./herdr";
 
 export type TerminalDouble = {
@@ -23,12 +23,16 @@ export type TerminalDouble = {
   detached: number[];
   fits: number;
   disposed: boolean;
+  /** the pane's drag-over ring is showing (#5949) */
+  dragOver: boolean;
   /** drive the pty: bytes arrive from Rust */
   emitBytes(bytes: TerminalBytes): void;
   /** drive the user: a keystroke reaches xterm's onData */
   emitData(data: string): void;
   /** drive the container: the ResizeObserver fires */
   fireResize(): void;
+  /** drive a webview drag-drop event into the pane (#5949) */
+  emitDragDrop(event: PaneDragDropEvent): void;
 };
 
 type ResizeCallback = () => void;
@@ -71,8 +75,9 @@ export function makeTerminalDouble(opts: {
 
   let onDataCb: ((data: string) => void) | null = null;
   let onBytesCb: ((bytes: TerminalBytes) => void) | null = null;
-
+  let dragCb: ((event: PaneDragDropEvent) => void) | null = null;
   const d: TerminalDouble = {
+    dragOver: false,
     deps: {
       createSession(): PaneSession {
         const session: PaneSession = {
@@ -99,6 +104,10 @@ export function makeTerminalDouble(opts: {
       termWrite: async (s, data) => { d.written.push({ sub: s, data }); },
       termResize: async (s, c, r) => { d.resized.push({ sub: s, cols: c, rows: r }); },
       termDetach: async s => { d.detached.push(s); },
+      subscribeDragDrop(handler) {
+        dragCb = handler;
+        return () => { dragCb = null; };
+      },
     },
     writes: [],
     lines: [],
@@ -112,6 +121,10 @@ export function makeTerminalDouble(opts: {
     emitBytes(bytes) { onBytesCb?.(bytes); },
     emitData(data) { onDataCb?.(data); },
     fireResize() { for (const cb of [...resizeCallbacks]) cb(); },
+    emitDragDrop(event) {
+      dragCb?.(event);
+      d.dragOver = event.type === "enter" || event.type === "over";
+    },
   };
   return d;
 }

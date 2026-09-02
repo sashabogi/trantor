@@ -118,3 +118,52 @@ describe("TerminalPane", () => {
     expect(empty.opened).toEqual([]);
   });
 });
+
+describe("TerminalPane drag-drop (#5949)", () => {
+  let host: HTMLDivElement;
+  let root: Root;
+  let d: TerminalDouble;
+
+  const render = () =>
+    act(async () => root.render(<TerminalPane project="trantor" agent="codex" deps={d.deps} />));
+
+  beforeEach(() => {
+    d = makeTerminalDouble();
+    host = document.createElement("div");
+    document.body.appendChild(host);
+    root = createRoot(host);
+  });
+
+  afterEach(() => {
+    act(() => root.unmount());
+    host.remove();
+  });
+
+  it("a dropped file is written shell-quoted with a trailing space, like typed input", async () => {
+    await render();
+    await act(async () => { await Promise.resolve(); }); // attach resolves
+    const writesBefore = d.written.length;
+    d.emitDragDrop({ type: "enter", paths: [], position: { x: 10, y: 10 } });
+    expect(d.dragOver).toBe(true);
+    d.emitDragDrop({ type: "drop", paths: ["/Users/me/My Shot.png"], position: { x: 10, y: 10 } });
+    expect(d.dragOver).toBe(false);
+    const dropped = d.written.slice(writesBefore);
+    expect(dropped).toHaveLength(1);
+    expect(dropped[0].sub).toBe(42);
+    expect(dropped[0].data).toBe("'/Users/me/My Shot.png' ");
+  });
+
+  it("several dropped paths arrive space-separated, quotes spelled the POSIX way", async () => {
+    await render();
+    await act(async () => { await Promise.resolve(); });
+    d.emitDragDrop({ type: "drop", paths: ["/a b.png", "/c's d.md"], position: { x: 1, y: 1 } });
+    expect(d.written[d.written.length - 1]?.data).toBe("'/a b.png' '/c'\\''s d.md' ");
+  });
+
+  it("unicode paths survive byte-for-byte", async () => {
+    await render();
+    await act(async () => { await Promise.resolve(); });
+    d.emitDragDrop({ type: "drop", paths: ["/Users/me/照片.md"], position: { x: 1, y: 1 } });
+    expect(d.written[d.written.length - 1]?.data).toBe("'/Users/me/照片.md' ");
+  });
+});
