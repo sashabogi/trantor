@@ -11,6 +11,7 @@ import { orchestratorOf, type HerdrSeat } from "./herdr";
 import { SeatTab } from "./SeatTab";
 import { BrandGlyph } from "../../shared/Avatar";
 import { PaneBoundary } from "./PaneBoundary";
+import { paneTargets, seatName, type PaneTarget } from "./paneTargets";
 import { newestTerminal, projectSessions, takeoverAction, type ProjectSessions } from "../chat/takeover";
 import { TakeoverStrip } from "../chat/TakeoverStrip";
 import { when } from "../../shared/time";
@@ -30,8 +31,6 @@ function seatsOf(peers: Peer[], project: string): Peer[] {
 function hostOf(peers: Peer[], project: string): Peer | undefined {
   return peers.find(p => p.session.endsWith(`:${project}`) && p.session.toLowerCase().startsWith("macbook"));
 }
-
-const seatName = (session: string) => session.split(":")[0];
 
 function SeatDot({ online }: { online: boolean }) {
   return <span className={`tr-dot ${online ? "bg-tr-doing" : "bg-tr-muted/50"}`} />;
@@ -89,17 +88,6 @@ function PaneEmptyState({ project }: { project: string }) {
   );
 }
 
-type PaneTarget = {
-  key: string;
-  label: string;
-  agent: string;
-  session: string;
-  online: boolean;
-  lastSeen?: number;
-  status?: string;
-  isOrchestrator: boolean;
-};
-
 export function Workspace({ client, project, lens, onLens }: {
   client: HubClient; project: string; lens: Lens; onLens: (l: Lens) => void;
 }) {
@@ -141,33 +129,8 @@ export function Workspace({ client, project, lens, onLens }: {
     return () => { alive = false; clearInterval(iv); };
   }, [project]);
 
-  const targets = useMemo<PaneTarget[]>(() => {
-    const rows: PaneTarget[] = seats.map(s => ({
-      key: s.session,
-      label: seatName(s.session),
-      agent: seatName(s.session),
-      session: s.session,
-      online: !!s.online,
-      lastSeen: s.lastSeen,
-      status: s.status,
-      isOrchestrator: false,
-    }));
-    if (!orch) return rows;
-    // Leads the row: it is the session the person actually drives, not a worker to supervise.
-    // The BRAND reads from the host session: brandFor's host-name rule resolves it to Claude
-    // (#5890 residual) — herdr names the orchestrator's pane "orchestrator", which is not a
-    // brand and monogrammed as "or". Reuse the host row; never hardcode a brand in SeatTab.
-    return [{
-      key: "__orchestrator__",
-      label: "orchestrator",
-      agent: host?.session ?? orch.agent,
-      session: host?.session ?? `${project} orchestrator`,
-      online: host ? !!host.online : true,
-      lastSeen: host?.lastSeen,
-      status: host?.status,
-      isOrchestrator: true,
-    }, ...rows];
-  }, [seats, orch, host, project]);
+  // The row as data lives in paneTargets.ts: pane name (terminal key) and brand are two fields.
+  const targets = useMemo<PaneTarget[]>(() => paneTargets(seats, orch, host, project), [seats, orch, host, project]);
 
   const selected = targets.find(t => t.key === sel) ?? targets[0];
   const inFlight = useMemo(
@@ -199,7 +162,7 @@ export function Workspace({ client, project, lens, onLens }: {
               <SeatTab
                 key={t.key}
                 name={t.label}
-                brandName={t.agent}
+                brandName={t.brand}
                 status={t.status}
                 active={selected?.key === t.key}
                 onClick={() => { setSel(t.key); if (t.isOrchestrator) setViewPersisted("focus"); }}
