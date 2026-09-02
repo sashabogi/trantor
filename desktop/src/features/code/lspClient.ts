@@ -53,6 +53,19 @@ const notify = () => {
   attachOpenDocuments();
 };
 
+/** Rejects after 30s so a hung client.start() cannot pin pendingStarts forever (#5857). Stops
+ *  the server first: its handshake state is unrecoverable once the client gave up, and the
+ *  respawn rule in lspStart.ts only fires for an initialized:true report. */
+function lspStartTimeout(key: ClientKey, id: number): Promise<never> {
+  return new Promise<never>((_, reject) => {
+    setTimeout(() => {
+      trace(`startLsp ${key} client start TIMED OUT after 30s — stopping server id=${id}`);
+      invoke("lsp_stop", { id }).catch(() => {});
+      reject(new Error(`lsp start timed out after 30s (${key})`));
+    }, 30_000);
+  });
+}
+
 /** Live clients as plain rows for the document sync (lspDocuments.ts picks by crate prefix). */
 export function lspClientRows(): DocClientRow[] {
   const rows: DocClientRow[] = [];
@@ -183,7 +196,11 @@ export async function startLsp(
     // The subscription is an IPC of its own; the first write must not race it (#5857, 0.3.113).
     await reader.ready;
     try {
-      await client.start();
+      // A hung start must not pin pendingStarts forever: a remount then awaits a promise that
+      // never settles (app-trace.log: "awaiting an in-flight start" 44s after the first start).
+      // On timeout, stop the server so the retry respawns a fresh process, and reject so the
+      // remount can retry.
+      await Promise.race([client.start(), lspStartTimeout(key, started.id)]);
     } catch (e) {
       // A start that fails AFTER the wire handshake must say so — the 0.3.111 silence (initialize
       // answered, then nothing, #5857) had no line here, so a hung/failed start was invisible.
