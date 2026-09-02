@@ -8,6 +8,7 @@
 import { useEffect, useRef } from "react";
 import * as monaco from "monaco-editor";
 import { monacoLanguageFor } from "./editorLanguage";
+import { storedDraft } from "./documents";
 import { isLspLive, onLspChange } from "./lspClient";
 import "./monacoSetup";
 import { registerGhostTextProvider, isGhostTextEnabled, toggleGhostText } from "./ghostText";
@@ -34,6 +35,10 @@ export function CodeView({ value, path, root, editable, onChange, onSave, projec
   const editorRef = useRef<monaco.editor.IStandaloneCodeEditor | null>(null);
   const modelRef = useRef<monaco.editor.ITextModel | null>(null);
   const ghostDispRef = useRef<monaco.IDisposable | null>(null);
+  // Setup guard (#5857 bounce): while the model is being created/re-created and the resumed
+  // text applied, onDidChangeModelContent must NOT reach onChange — a setup event carrying ""
+  // would overwrite the store's resumed draft (the empty-editor regression, seen live 0.3.103).
+  const setupRef = useRef(true);
   const cb = useRef(onChange);
   cb.current = onChange;
   const saveCb = useRef(onSave);
@@ -41,13 +46,20 @@ export function CodeView({ value, path, root, editable, onChange, onSave, projec
 
   useEffect(() => {
     if (!host.current) return;
+    setupRef.current = true;
     const lang = monacoLanguageFor(path);
+    // The model is created from the STORE's resumed draft when one exists — the `value` prop can
+    // still be "" on this very render (the document loads after mount), and a model born empty
+    // is what let a setup change write "" over the draft. The caller's value effect applies the
+    // prop the moment it is real; until then the model simply holds the resumed text.
+    const resumed = storedDraft(project, seat, path);
+    const initialText = resumed ?? value;
     // The model URI is the file's absolute path under the server root; monaco keys models by URI,
     // so reuse an existing model for this URI rather than create a duplicate (createModel throws
     // on a registered URI). No root → no URI, which is fine for a language with no server.
     const uri: monaco.Uri | undefined = root ? monaco.Uri.file(`${root}/${path}`) : undefined;
     const reused = uri ? monaco.editor.getModel(uri) : null;
-    const model = reused ?? monaco.editor.createModel(value, lang, uri);
+    const model = reused ?? monaco.editor.createModel(initialText, lang, uri);
     const ed = monaco.editor.create(host.current, {
       model,
       theme: "trantor-calm",
@@ -70,6 +82,7 @@ export function CodeView({ value, path, root, editable, onChange, onSave, projec
       saveCb.current?.();
     });
     const sub = ed.onDidChangeModelContent(() => {
+      if (setupRef.current) return; // setup events never write the document (#5857 bounce)
       cb.current?.(ed.getValue());
     });
     if (editable && isGhostTextEnabled()) {
@@ -107,11 +120,19 @@ export function CodeView({ value, path, root, editable, onChange, onSave, projec
 
   // A new document for the same path (saved, reloaded, switched source) replaces the text
   // without tearing the editor down. pushEditOperations keeps the undo stack, so a live reload
-  // remains undoable — the silent-reload half of the liveReload rule.
+  // remains undoable — the silent-reload half of the liveReload rule. One skip (#5857 bounce):
+  // while a resumed tab is still loading, the prop is "" and the model holds the STORE's resumed
+  // draft — pushing "" here would erase it. That artifact never applies; setup stays on.
   useEffect(() => {
     const model = modelRef.current;
-    if (!model || model.getValue() === value) return;
+    if (!model) return;
+    if (model.getValue() === value) { setupRef.current = false; return; }
+    const resumed = storedDraft(project, seat, path);
+    if (value === "" && resumed !== null && resumed !== "" && model.getValue() !== "") return;
+    setupRef.current = true;
     model.pushEditOperations([], [{ range: model.getFullModelRange(), text: value }], () => null);
+    setupRef.current = false;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [value]);
 
   const ghostOn = isGhostTextEnabled();
