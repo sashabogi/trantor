@@ -22,6 +22,16 @@ const TIMEOUT = 2000;                                            // contract: ev
 
 const busDir = () => process.env.RELAY_DATA_DIR || join(homedir(), ".agent-bus");
 
+function opencodeDefaultModel() {
+  try {
+    const home = process.env.HOME || homedir();
+    const configDir = process.env.XDG_CONFIG_HOME || join(home, ".config");
+    const config = JSON.parse(readFileSync(join(configDir, "opencode", "opencode.json"), "utf8"));
+    const model = config?.model;
+    return /^[^\s/]+\/[^\s/]+$/.test(model) ? String(model) : "";
+  } catch { return ""; }
+}
+
 // Run a subprocess, return stdout; "" on ANY failure (missing binary, nonzero exit, timeout).
 function run(cmd, args, env = {}) {
   try {
@@ -75,7 +85,7 @@ function psTable() {
   return rows;
 }
 
-// Live crew-runner processes → [{pid,agent,dir}]. Runner argv (crew.sh RUN_CMD) is
+// Live crew-runner processes → [{pid,agent,dir,model}]. Runner argv (crew.sh RUN_CMD) is
 // `node …/crew-runner.mjs <agent> <dir>` — dir is the LAST argument, so the regex is anchored
 // on end-of-string. project=null → all runners; project given → only runners whose dir resolves
 // to that project. Resolution is the lib/project.mjs walk (git-root basename, else dir basename)
@@ -84,6 +94,7 @@ function psTable() {
 export function liveRunners(project = null) {
   try {
     const out = [];
+    const globalModel = opencodeDefaultModel();
     for (const { pid, cmd } of psTable()) {
       const m = cmd.match(/crew-runner\.mjs\s+(\S+)\s+(\S+)\s*$/);
       if (!m) continue;
@@ -92,7 +103,13 @@ export function liveRunners(project = null) {
         const name = basename(gitRoot(dir) || dir);
         if (name !== project) continue;
       }
-      out.push({ pid, agent, dir });
+      // CREW_MODEL is fixed for the runner lifetime. Read only that named environment field —
+      // never return the rest of `ps eww`, which can contain provider credentials.
+      const envLine = run("ps", ["eww", "-p", String(pid), "-o", "command="]);
+      const pinnedModel = (envLine.match(/(?:^|\s)CREW_MODEL=([^\s]*)/) || [])[1] || "";
+      const model = pinnedModel || globalModel;
+      const modelSource = pinnedModel ? "crew" : (globalModel ? "opencode-global" : "");
+      out.push({ pid, agent, dir, model, modelSource });
     }
     return out;
   } catch { return []; }

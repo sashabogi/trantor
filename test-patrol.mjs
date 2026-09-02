@@ -23,8 +23,9 @@ const inv = {
     { project: "", kind: "win", agent: "legacy", handle: "11" },
   ],
   runners: [
-    { pid: 101, agent: "codex", dir: "/work/alpha" },
-    { pid: 202, agent: "deepseek", dir: "/work/alpha" },
+    { pid: 101, agent: "codex", dir: "/work/alpha", model: "cli-default" },
+    { pid: 202, agent: "deepseek", dir: "/work/alpha", model: "deepseek/deepseek-v4-pro" },
+    { pid: 203, agent: "qwen", dir: "/work/alpha", model: "deepseek/deepseek-v4-flash" },
     { pid: 303, agent: "legacy", dir: "/work/legacyproj" },
     { pid: 404, agent: "mystery", dir: "" },
   ],
@@ -41,6 +42,8 @@ ok("live runner without tracking row is an orphan", report.orphans.some(o => o.t
 ok("workspace without a live runner is an orphan", report.orphans.some(o => o.type === "workspace-without-live-runner" && o.project === "gamma"));
 ok("dead tracking row is an orphan", report.orphans.some(o => o.type === "dead-tracking-row" && o.project === "alpha" && o.agent === "kimi"));
 ok("legacy rows and unparseable runners are ambiguous", report.ambiguous.some(a => a.type === "legacy-tracking-row") && report.ambiguous.some(a => a.type === "runner-without-project"));
+ok("a live provider seat on another provider's model raises a warning", report.warnings.some(w => w.type === "seat-model-provider-mismatch" && w.agent === "qwen" && w.expectedProvider === "qwen"));
+ok("a provider seat on its own provider does not warn", !report.warnings.some(w => w.agent === "deepseek"));
 ok("json shape is stable", report.projects.alpha.counts.rows === 2 && Array.isArray(report.orphans) && Array.isArray(report.ambiguous) && Array.isArray(report.reaped));
 
 const internalBus = join(tmpdir(), "trantor-patrol-bus", ".agent-bus");

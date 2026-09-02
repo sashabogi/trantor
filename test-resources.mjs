@@ -33,6 +33,13 @@ delete process.env.CREW_DRY_RUN;
 // ── stub executables (separate processes, never in-process) ───────────────────
 const stubs = {
   ps: `#!/bin/bash
+if [ "\${1:-}" = "eww" ]; then
+  case "\${3:-}" in
+    101) echo 'CREW_MODEL=cli-default node /x/trantor/bin/crew-runner.mjs codex ${PROJ}' ;;
+    102) echo 'node /x/trantor/bin/crew-runner.mjs glm ${PROJ2}' ;;
+  esac
+  exit 0
+fi
 cat <<'PSOUT'
     1 launchd
   101 node /x/trantor/bin/crew-runner.mjs codex ${PROJ}
@@ -102,6 +109,9 @@ writeFileSync(join(BUS, "crew-windows.txt"), [
   "",
 ].join("\n"));
 
+mkdirSync(join(HOME_DIR, ".config", "opencode"), { recursive: true });
+writeFileSync(join(HOME_DIR, ".config", "opencode", "opencode.json"), JSON.stringify({ model: "deepseek/deepseek-v4-flash" }));
+
 // Seeded crew-windows.txt for cleanDead (crew.sh reads $HOME/.agent-bus). cmux kinds only, so the
 // prune path is driven entirely by the stub (no real osascript/Terminal probe).
 writeFileSync(join(HOME_BUS, "crew-windows.txt"), [
@@ -142,11 +152,11 @@ await test("listCrewRows returns [] when the state file is missing", () => {
   finally { process.env.RELAY_DATA_DIR = keep; }
 });
 
-await test("liveRunners(null) parses pid/agent/dir and ignores decoys", () => {
+await test("liveRunners(null) reports pinned or effective global models and ignores decoys", () => {
   const rs = R.liveRunners(null);
   assert.equal(rs.length, 2);
-  assert.deepEqual(rs[0], { pid: 101, agent: "codex", dir: PROJ });
-  assert.deepEqual(rs[1], { pid: 102, agent: "glm", dir: PROJ2 });
+  assert.deepEqual(rs[0], { pid: 101, agent: "codex", dir: PROJ, model: "cli-default", modelSource: "crew" });
+  assert.deepEqual(rs[1], { pid: 102, agent: "glm", dir: PROJ2, model: "deepseek/deepseek-v4-flash", modelSource: "opencode-global" });
 });
 
 await test("liveRunners(project) is anchored — projA never matches projA2", () => {

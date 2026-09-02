@@ -41,8 +41,29 @@ case "\$1" in ping) exit 0 ;; esac
 exit 0
 EOF
 chmod +x "$TMP/fakebin/cmux"
+# Provider-seat launches resolve a concrete model before opening any pane. Keep the launcher tests
+# hermetic: these stubs model the provider catalogs and router without touching user config/network.
+cat > "$TMP/fakebin/opencode" <<'EOF'
+#!/bin/bash
+case "$2" in
+  zai-coding-plan) echo zai-coding-plan/glm-test ;;
+  deepseek) echo deepseek/deepseek-test ;;
+  qwen) echo qwen/qwen-test ;;
+esac
+EOF
+cat > "$TMP/fakebin/python3" <<'EOF'
+#!/bin/bash
+case "$*" in
+  *"zai-coding-plan/glm-test"*) echo '{"qualified":"zai-coding-plan/glm-test"}' ;;
+  *"deepseek/deepseek-test"*) echo '{"qualified":"deepseek/deepseek-test"}' ;;
+  *"qwen/qwen-test"*) echo '{"qualified":"qwen/qwen-test"}' ;;
+  *) exec /usr/bin/python3 "$@" ;;
+esac
+EOF
+chmod +x "$TMP/fakebin/opencode" "$TMP/fakebin/python3"
 # a second stub dir WITHOUT tmux, to exercise the Terminal-window fallback path
-mkdir -p "$TMP/fakebin_notmux"; cp "$TMP/fakebin/osascript" "$TMP/fakebin_notmux/osascript"
+mkdir -p "$TMP/fakebin_notmux"
+cp "$TMP/fakebin/osascript" "$TMP/fakebin/opencode" "$TMP/fakebin/python3" "$TMP/fakebin_notmux/"
 STATE="$TMP/.agent-bus/crew-windows.txt"
 seed(){ printf '%b' "$1" > "$STATE"; }
 rows(){ [ -f "$STATE" ] && wc -l < "$STATE" | tr -d ' ' || echo 0; }
