@@ -12,7 +12,7 @@ import { invoke } from "@tauri-apps/api/core";
 import * as vscode from "vscode";
 import { isReadyToken } from "./lspProtocol";
 import { decideLspStart } from "./lspStart";
-import { TauriMessageReader, TauriMessageWriter, trace } from "./lspTransport";
+import { TauriMessageReader, TauriMessageWriter, trace, traceKey } from "./lspTransport";
 import { attachOpenDocuments, setDocClientRows, type DocClientRow } from "./lspDocuments";
 import "./monacoSetup";
 
@@ -122,7 +122,7 @@ export async function startLsp(
   const key = `${started.workspaceRoot}\u0000${language}`;
   const existing = clients.get(key);
   if (existing) {
-    trace(`startLsp ${key} reuse id=${existing.id} (client already registered)`);
+    trace(`startLsp ${traceKey(key)} reuse id=${existing.id} (client already registered)`);
     return { id: existing.id, scopeRoot: existing.scopeRoot, workspaceRoot: started.workspaceRoot, indexing: isLspIndexing(language, started.workspaceRoot) };
   }
 
@@ -130,18 +130,18 @@ export async function startLsp(
   // it instead of building a second one against the same live server.
   const pending = pendingStarts.get(key);
   if (pending) {
-    trace(`startLsp ${key} awaiting an in-flight start`);
+    trace(`startLsp ${traceKey(key)} awaiting an in-flight start`);
     return pending;
   }
 
-  trace(`startLsp ${key} id=${started.id} wsRoot=${started.workspaceRoot} initialized=${started.initialized}`);
+  trace(`startLsp ${traceKey(key)} id=${started.id} wsRoot=${started.workspaceRoot} initialized=${started.initialized}`);
   const attempt = (async () => {
     await ensureServices();
     // The reuse rule (#5857 bounce, lspStart.ts): a live server already through its handshake
     // must never see a second `initialize` — respawn a fresh process instead.
     const decision = decideLspStart(started, clients.has(key));
     if (decision.action === "respawn") {
-      trace(`startLsp ${key} respawn: initialized server had no client — stopping ${decision.stopId}`);
+      trace(`startLsp ${traceKey(key)} respawn: initialized server had no client — stopping ${decision.stopId}`);
       await invoke("lsp_stop", { id: decision.stopId }).catch(() => {});
       indexed.delete(key);
       phases.delete(key);
@@ -149,17 +149,17 @@ export async function startLsp(
         "lsp_start",
         { project, scope, language, path },
       );
-      trace(`startLsp ${key} respawned as id=${started.id}`);
+      trace(`startLsp ${traceKey(key)} respawned as id=${started.id}`);
     }
     const reader = new TauriMessageReader(started.id, e => {
       if (e.kind === "begin" && e.title) {
         phases.set(key, e.title);
-        trace(`lsp ${key} phase begin: ${e.title}`);
+        trace(`lsp ${traceKey(key)} phase begin: ${e.title}`);
         notify();
       } else if (e.kind === "end" && isReadyToken(e.token)) {
         if (!indexed.has(key)) {
           indexed.add(key);
-          trace(`lsp ${key} ready`);
+          trace(`lsp ${traceKey(key)} ready`);
           notify();
         }
         phases.delete(key);
@@ -187,10 +187,10 @@ export async function startLsp(
     } catch (e) {
       // A start that fails AFTER the wire handshake must say so — the 0.3.111 silence (initialize
       // answered, then nothing, #5857) had no line here, so a hung/failed start was invisible.
-      trace(`startLsp ${key} client start FAILED: ${e instanceof Error ? e.message : String(e)}`);
+      trace(`startLsp ${traceKey(key)} client start FAILED: ${e instanceof Error ? e.message : String(e)}`);
       throw e;
     }
-    trace(`startLsp ${key} client running`);
+    trace(`startLsp ${traceKey(key)} client running`);
     clients.set(key, { id: started.id, scopeRoot: started.scopeRoot, workspaceRoot: started.workspaceRoot, client });
     notify();
     return {

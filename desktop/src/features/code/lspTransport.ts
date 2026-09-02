@@ -19,6 +19,13 @@ export function trace(line: string): void {
   invoke("app_log", { line }).catch(() => {});
 }
 
+/** Render a client/document key for a trace line. Runtime keys join `${workspaceRoot}\u0000${language}`,
+ *  and that NUL byte truncates BSD cut/grep reads of app-trace.log right after the path — so trace
+ *  lines show the separator as " · " instead. The runtime key is untouched; only the log text changes. */
+export function traceKey(key: string): string {
+  return key.split("\u0000").join(" · ");
+}
+
 /** reader: `lsp-message:<id>` events → JSON-RPC messages.
  *
  *  The Tauri subscription is taken in the CONSTRUCTOR — before client.start() ever sends
