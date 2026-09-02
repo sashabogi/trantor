@@ -32,6 +32,17 @@ exit 0
 EOF
 # stub herdr: logs every call; create/split print counter-unique JSON ids (the real CLI's
 # capture-don't-predict contract); `workspace list` replays \$HERDR_LIVE_WS for the prune drills.
+# A dry run of a real provider seat still needs that provider catalog: resolve_model falls back
+# to the catalog head when no router answers (#6110) and refuses the opencode global default (#6068).
+cat > "$TMP/fakebin/opencode" <<EOF
+case "\$1 \$2" in
+  "models zai-coding-plan") echo zai-coding-plan/glm-5.3-flash ;;
+  "models qwen") echo qwen/qwen3.8-max ;;
+  "models "*) echo "\$2/catalog-head" ;;
+esac
+exit 0
+EOF
+chmod +x "$TMP/fakebin/opencode"
 cat > "$TMP/fakebin/herdr" <<EOF
 #!/bin/bash
 echo "herdr \$*" >> "$TMP/herdr.log"
