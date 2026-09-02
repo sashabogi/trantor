@@ -84,6 +84,16 @@ export async function notifyDutyDark(d: { lastSeenMs: number; queuedEscalations?
   } catch { return false; }
 }
 
+// A single calm, one-line notification for a fire-and-forget action that has no dialog of its
+// own left to report into — Genesis's "<name> created · orchestrator waking" and its wake-failure
+// counterpart (#6161) are the first callers. Same permission gate and on/off toggle as every other
+// notification here; no new dependency.
+export async function notifyOnce(n: { title: string; body: string }): Promise<boolean> {
+  if (!notificationsEnabled()) return false;
+  if (!(await ensurePermission())) return false;
+  try { sendNotification(n); return true; } catch { return false; }
+}
+
 // The user's off-switch, persisted locally. Read at fire time so the Settings toggle takes
 // effect immediately — no restart, no plumbing.
 export function notificationsEnabled(): boolean {
