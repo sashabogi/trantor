@@ -43,9 +43,18 @@ vi.mock("@tauri-apps/api/core", () => ({
 // installs one (RAL is a shared singleton) and never touches the network for this test.
 import "vscode-jsonrpc/node";
 import { createMessageConnection } from "vscode-jsonrpc";
-import { TauriMessageReader, TauriMessageWriter } from "./lspTransport";
+import { TauriMessageReader, TauriMessageWriter, traceKey } from "./lspTransport";
 
 const tick = () => new Promise(r => setTimeout(r, 0));
+
+describe("traceKey", () => {
+  it("renders the key separator as ' · ', never a NUL byte", () => {
+    const key = "/Users/sasha/proj\u0000rust";
+    const rendered = traceKey(key);
+    expect(rendered).not.toContain("\u0000");
+    expect(rendered).toBe("/Users/sasha/proj · rust");
+  });
+});
 
 describe("TauriMessageReader/Writer over a real jsonrpc connection", () => {
   it("runs the full handshake and keeps the pump alive after the first response", async () => {
