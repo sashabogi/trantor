@@ -10,7 +10,7 @@
 // per-provider chips in the header, because "is a provider about to stall mid-build" is an
 // always-in-view question, not a "go look at Home" one. Chips only — the old text dump stays dead.
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ArrowDownToLine, Bot, Eye, GraduationCap, House, Inbox as InboxIcon, MessagesSquare, Search, Settings as SettingsIcon } from "lucide-react";
+import { ArrowDownToLine, Bot, Eye, GraduationCap, House, Inbox as InboxIcon, MessagesSquare, Plus, Search, Settings as SettingsIcon } from "lucide-react";
 import { appUpdateCheck, HubClient, hubForProject, knownProjects, localSessions, type AppUpdate, type Peer } from "../shared/api/client";
 import { ago, stateOf } from "../shared/presence";
 import { Palette, type PaletteScope } from "../features/search/Palette";
@@ -18,8 +18,10 @@ import { countUnseen, onSeenChange } from "../shared/seen";
 import { usePendingProposals } from "../shared/Proposals";
 import { ProjectIcon } from "../shared/ProjectIcon";
 import type { LensCompat } from "../features/project/ProjectHeader";
-import { orchestratorOpen, orchRestorables } from "../features/workspace/herdr";
+import { orchRestorables } from "../features/workspace/herdr";
 import { invoke } from "@tauri-apps/api/core";
+import { GenesisSheet } from "../features/genesis/GenesisSheet";
+import { PLAIN_WAKE_KICKOFF } from "../features/genesis/genesis";
 
 const LOCAL_HUB = "http://127.0.0.1:4477";
 import { Home } from "../features/home/Home";
@@ -70,7 +72,7 @@ const FLEET_NAV = [
 // Sidebar sections announce themselves. Previously the FLEET block had NO header at all, so
 // "Home" and "crebral-health" were the same object rendered twice — which is why the sidebar read
 // as one undifferentiated list that "just keeps going".
-function SectionLabel({ children, count }: { children: React.ReactNode; count?: number }) {
+function SectionLabel({ children, count, action }: { children: React.ReactNode; count?: number; action?: React.ReactNode }) {
   return (
     <div className="flex items-center gap-2 px-3 pt-1 pb-1.5">
       <span className="text-[10px] font-semibold uppercase tracking-[0.13em] text-[var(--color-tr-muted)]/60">
@@ -79,6 +81,7 @@ function SectionLabel({ children, count }: { children: React.ReactNode; count?: 
       {count !== undefined && count > 0 && (
         <span className="tr-mono text-[10px] text-[var(--color-tr-muted)]/40">{count}</span>
       )}
+      {action && <span className="ml-auto">{action}</span>}
     </div>
   );
 }
@@ -93,6 +96,7 @@ export function AppShell() {
   // has to land in the other. The v4 mode pane owns the seat picker (#5841).
   const [filePath, setFilePath] = useState<string | null>(null);
   const [fileSeat, setFileSeat] = useState<string | null>(null);
+  const [genesisRoot, setGenesisRoot] = useState<string | null>(null);
 
   // Pinned projects PLUS whatever lives on the machine-local hub. A brand-new project has no
   // routing pin yet — it falls back to the local hub BY DESIGN (TDD §12.1's default), and a
@@ -296,7 +300,7 @@ export function AppShell() {
     setWaking(p);
     setWakeErrors(prev => { const m = new Map(prev); m.delete(p); return m; });
     try {
-      await orchestratorOpen(p);
+      await invoke<string>("project_wake", { project: p, kickoff: PLAIN_WAKE_KICKOFF });
       setActive(p);
       setPane({ kind: "project", lens: "workspace" });
       setRestorables(rs => rs.filter(r => r !== p));
@@ -405,20 +409,16 @@ export function AppShell() {
             </span>
           )}
         </span>
-        {/* WAKE — only a SLEEPING row offers it (no live session anywhere on the project); a live
-            row's presence dot is the whole answer. Revealed on hover/focus so the sleeping list
-            stays calm; while opening it stays visible and says so. `trantor open` reattaches
-            rather than stacks, so the worst a stray click can do is land you in the same pane. */}
-        {!act && (
-          <button type="button"
-            onClick={e => { e.stopPropagation(); void wakeProject(p); }}
-            disabled={waking !== null && !isWaking}
-            title="host this project's session as a pane and start working (reads the latest handoff + memory)"
-            className={`shrink-0 rounded-[6px] bg-tr-ok/10 px-1.5 py-0.5 text-[10.5px] font-semibold text-tr-ok hover:bg-tr-ok/20 disabled:opacity-40
-              ${isWaking ? "opacity-100" : "opacity-0 focus:opacity-100 group-hover:opacity-100 group-focus-within:opacity-100"}`}>
-            {isWaking ? "Waking…" : "Wake"}
-          </button>
-        )}
+        {/* Every project has the same Wake affordance. Rust owns the process-truth guard and names
+            the live orchestrator pane when waking would stack a second one. */}
+        <button type="button"
+          onClick={e => { e.stopPropagation(); void wakeProject(p); }}
+          disabled={waking !== null && !isWaking}
+          title="host this project's session as a pane and recap from memory and the board"
+          className={`shrink-0 rounded-[6px] bg-tr-ok/10 px-1.5 py-0.5 text-[10.5px] font-semibold text-tr-ok hover:bg-tr-ok/20 disabled:opacity-40
+            ${isWaking ? "opacity-100" : "opacity-0 focus:opacity-100 group-hover:opacity-100 group-focus-within:opacity-100"}`}>
+          {isWaking ? "Waking…" : "Wake"}
+        </button>
         {/* the dot is BLUE for any open session and blinks ONLY when work is actually happening —
             a window sitting open earns presence, never motion */}
         {act && (
@@ -491,14 +491,18 @@ export function AppShell() {
               </div>
             </div>
           )}
-          {restProjects.length > 0 && (
-            <div className="mb-4">
-              <SectionLabel count={restProjects.length}>Projects</SectionLabel>
+          <div className="mb-4">
+              <SectionLabel count={restProjects.length} action={(
+                <button type="button" aria-label="Start a project" title="Start a project"
+                        onClick={() => { void invoke<string>("project_dev_root").then(setGenesisRoot); }}
+                        className="rounded p-0.5 text-[var(--color-tr-muted)]/70 hover:bg-white/[0.06] hover:text-[var(--color-tr-text)]">
+                  <Plus size={13} strokeWidth={1.8} />
+                </button>
+              )}>Projects</SectionLabel>
               <div className="flex flex-col gap-0.5">
                 {restProjects.map(p => <ProjectRow key={p} p={p} />)}
               </div>
-            </div>
-          )}
+          </div>
         </nav>
 
         {/* APP — identity + settings live together */}
@@ -590,6 +594,21 @@ export function AppShell() {
         onClose={() => setPalette(null)}
         onJumpProject={p => { setActive(p); setPane({ kind: "project", lens: "board" }); }}
         onOpenCard={(p, id) => { setActive(p); setPane({ kind: "project", lens: "board" }); setFocusCard(id); }}
+      />
+    )}
+    {genesisRoot !== null && (
+      <GenesisSheet
+        devRoot={genesisRoot}
+        onClose={() => setGenesisRoot(null)}
+        onMade={project => {
+          setProjects(prev => [...new Set([...prev, project])].sort());
+          setActive(project);
+        }}
+        onWoken={project => {
+          setActive(project);
+          setPane({ kind: "project", lens: "workspace" });
+          setGenesisRoot(null);
+        }}
       />
     )}
     {/* The fleet status bar: the app's footer, to the Orca standard (#5570) — full window
