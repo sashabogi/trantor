@@ -99,10 +99,20 @@ fn parse_content_length(header: &[u8]) -> Option<usize> {
 
 // ── server registry ──────────────────────────────────────────────────────────────────────────
 
+/// A language server OUTLIVES the editor lens (SYSTEM-CONTRACT §4): it lives until the project
+/// switches, it sits idle past the timeout, or the app exits — a lens flip must NOT cold-restart
+/// it. `last_activity` is bumped on every `lsp_send` and drives the idle reaper.
 struct Server {
     child: Child,
     stdin: ChildStdin,
+    project: String,
+    workspace_root: String,
+    language: String,
+    last_activity: Instant,
 }
+
+/// A server nobody has written to for this long is idle and is stopped.
+const IDLE_TIMEOUT: Duration = Duration::from_secs(15 * 60);
 
 /// What `lsp_start` hands back: the id the editor keys every later call by, plus TWO roots.
 /// `scope_root` is the project dir or seat worktree — the model's absolute URI is
@@ -121,6 +131,7 @@ static SERVERS: Mutex<Option<HashMap<u64, Server>>> = Mutex::new(None);
 /// servers and a reopened file in the same crate reuses the one already running.
 static WORKSPACES: Mutex<Option<HashMap<(String, String), u64>>> = Mutex::new(None);
 static NEXT_ID: AtomicU64 = AtomicU64::new(1);
+static REAPER: std::sync::Once = std::sync::Once::new();
 
 /// The binary + args for a language id, plus the honest "how to fix it" lines. Only the four the
 /// editor maps to are served; anything else is a name to refuse, not a guess to make.
@@ -415,12 +426,23 @@ pub fn lsp_start(
     let (child, stdin) = spawn_server(app, id, &bin_path, spec.args, &workspace_root, &language)?;
     {
         let mut servers = SERVERS.lock().unwrap();
-        servers.get_or_insert_with(HashMap::new).insert(id, Server { child, stdin });
+        servers.get_or_insert_with(HashMap::new).insert(
+            id,
+            Server {
+                child,
+                stdin,
+                project: project.clone(),
+                workspace_root: workspace_root.display().to_string(),
+                language: language.clone(),
+                last_activity: Instant::now(),
+            },
+        );
     }
     {
         let mut workspaces = WORKSPACES.lock().unwrap();
         workspaces.get_or_insert_with(HashMap::new).insert(dedup_key, id);
     }
+    start_reaper();
     Ok(started(id, &scope_root, &workspace_root))
 }
 
@@ -441,6 +463,7 @@ pub fn lsp_send(id: u64, message: String) -> Result<(), String> {
     let Some(server) = map.get_mut(&id) else {
         return Err(format!("no such language server {id}"));
     };
+    server.last_activity = Instant::now();
     server
         .stdin
         .write_all(&frame(message.as_bytes()))
@@ -448,41 +471,109 @@ pub fn lsp_send(id: u64, message: String) -> Result<(), String> {
         .map_err(|e| format!("write to language server {id} failed: {e}"))
 }
 
-#[tauri::command]
-pub fn lsp_stop(id: u64) -> Result<(), String> {
+/// Append a stop reason to ~/.agent-bus/lsp/stops.log, so every server death has an audit line.
+fn log_stop(workspace_root: &str, language: &str, reason: &str) {
+    let dir = crate::desktop_bus_dir().join("lsp");
+    let _ = std::fs::create_dir_all(&dir);
+    let mut f = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(dir.join("stops.log"))
+        .ok();
+    if let Some(f) = f.as_mut() {
+        let _ = writeln!(f, "{language} {workspace_root}: {reason}");
+    }
+}
+
+/// Kill and remove one server, logging why. Returns whether a server was actually stopped.
+fn stop_server(id: u64, reason: &str) -> bool {
     let removed = {
         let mut servers = SERVERS.lock().unwrap();
         match servers.as_mut().and_then(|m| m.remove(&id)) {
             Some(mut server) => {
                 let _ = server.child.kill();
-                true
+                Some((server.workspace_root.clone(), server.language.clone()))
             }
-            None => false,
+            None => None,
         }
     };
-    if removed {
-        let mut workspaces = WORKSPACES.lock().unwrap();
+    let Some((workspace_root, language)) = removed else {
+        return false;
+    };
+    log_stop(&workspace_root, &language, reason);
+    if let Ok(mut workspaces) = WORKSPACES.lock() {
         if let Some(map) = workspaces.as_mut() {
             map.retain(|_, v| *v != id);
         }
     }
-    Ok(())
+    true
 }
 
-/// Stop every live server — the app-exit hook and the belt to the lens-unmount suspenders.
-pub fn stop_all() {
+/// The idle reaper: every minute, stop any server no one has written to in 15 minutes.
+fn start_reaper() {
+    REAPER.call_once(|| {
+        std::thread::spawn(|| loop {
+            std::thread::sleep(Duration::from_secs(60));
+            reap_idle();
+        });
+    });
+}
+
+fn reap_idle() {
+    let now = Instant::now();
+    let mut idle = Vec::new();
     {
-        let mut servers = SERVERS.lock().unwrap();
-        if let Some(map) = servers.as_mut() {
-            for (_, mut server) in map.drain() {
-                let _ = server.child.kill();
+        let servers = SERVERS.lock().unwrap();
+        if let Some(map) = servers.as_ref() {
+            for (id, server) in map {
+                if now.duration_since(server.last_activity) > IDLE_TIMEOUT {
+                    idle.push(*id);
+                }
             }
         }
     }
-    if let Ok(mut workspaces) = WORKSPACES.lock() {
-        if let Some(map) = workspaces.as_mut() {
-            map.clear();
+    for id in idle {
+        stop_server(id, "idle timeout");
+    }
+}
+
+#[tauri::command]
+pub fn lsp_stop(id: u64) -> Result<(), String> {
+    stop_server(id, "lsp_stop");
+    Ok(())
+}
+
+/// Stop every server for a project — the editor calls this when the operator switches projects.
+#[tauri::command]
+pub fn lsp_stop_project(project: String) -> Result<(), String> {
+    let ids: Vec<u64> = {
+        let servers = SERVERS.lock().unwrap();
+        match servers.as_ref() {
+            Some(map) => map
+                .iter()
+                .filter(|(_, s)| s.project == project)
+                .map(|(id, _)| *id)
+                .collect(),
+            None => Vec::new(),
         }
+    };
+    for id in ids {
+        stop_server(id, "project switch");
+    }
+    Ok(())
+}
+
+/// Stop every live server — the app-exit hook.
+pub fn stop_all() {
+    let ids: Vec<u64> = {
+        let servers = SERVERS.lock().unwrap();
+        match servers.as_ref() {
+            Some(map) => map.keys().copied().collect(),
+            None => Vec::new(),
+        }
+    };
+    for id in ids {
+        stop_server(id, "app exit");
     }
 }
 
