@@ -88,7 +88,22 @@ describe("the composer's drag handle (#6070 bounce)", () => {
     expect(ta?.style.height).toBe(`${minComposerPx()}px`);
   });
 
-  it("pointerdown on the handle + window move/up drives the textarea's height, and the choice persists", () => {
+  // One full drag: pointerdown on the rendered handle, moves and release on the window, all in
+  // act so the state lands before the assertion. The box is bottom-anchored with the handle on
+  // its TOP edge — an UPWARD drag (clientY decreasing) GROWS it, a downward one shrinks it.
+  const drag = (handle: HTMLElement, fromY: number, toY: number) => {
+    act(() => {
+      handle.dispatchEvent(new PointerEvent("pointerdown", { clientY: fromY, pointerId: 1, bubbles: true, cancelable: true }));
+    });
+    act(() => {
+      window.dispatchEvent(new PointerEvent("pointermove", { clientY: toY, pointerId: 1, bubbles: true }));
+    });
+    act(() => {
+      window.dispatchEvent(new PointerEvent("pointerup", { clientY: toY, pointerId: 1, bubbles: true }));
+    });
+  };
+
+  it("an UPWARD drag GROWS the box — the code review's exact specimen (y=300 → y=200 grows ~100px)", () => {
     renderComposer();
     const ta = host.querySelector("textarea");
     const handle = host.querySelector<HTMLDivElement>("[role='separator']");
@@ -98,27 +113,19 @@ describe("the composer's drag handle (#6070 bounce)", () => {
 
     const min = minComposerPx();
     const max = maxComposerPx(800);
-    const dragBy = 120;
 
-    act(() => {
-      handle.dispatchEvent(new PointerEvent("pointerdown", { clientY: 500, pointerId: 1, bubbles: true, cancelable: true }));
-    });
-    act(() => {
-      window.dispatchEvent(new PointerEvent("pointermove", { clientY: 500 + dragBy, pointerId: 1, bubbles: true }));
-    });
-    act(() => {
-      window.dispatchEvent(new PointerEvent("pointerup", { clientY: 500 + dragBy, pointerId: 1, bubbles: true }));
-    });
+    drag(handle, 300, 200);
 
-    const expected = clampComposerPx(min + dragBy, min, max);
-    // The height REACHED the style — the exact leg the operator's bounce said to prove.
-    expect(expected).toBe(min + dragBy);
+    const expected = clampComposerPx(min + 100, min, max);
+    // The height REACHED the style — the exact leg the operator's bounce said to prove — and the
+    // direction is right: 100px of upward travel adds 100px, it does not shrink into the floor.
     expect(ta.style.height).toBe(`${expected}px`);
+    expect(expected).toBe(min + 100);
     // …and the choice is remembered.
     expect(store.get("trantor.chat.composerHeight")).toBe(String(expected));
   });
 
-  it("a drag cannot push the box past the pane's ceiling", () => {
+  it("a DOWNWARD drag shrinks it, and the clamp holds both ends", () => {
     renderComposer();
     const ta = host.querySelector("textarea");
     const handle = host.querySelector<HTMLDivElement>("[role='separator']");
@@ -126,18 +133,20 @@ describe("the composer's drag handle (#6070 bounce)", () => {
     expect(handle).toBeTruthy();
     if (!ta || !handle) return;
 
+    const min = minComposerPx();
     const max = maxComposerPx(800);
 
-    act(() => {
-      handle.dispatchEvent(new PointerEvent("pointerdown", { clientY: 500, pointerId: 1, bubbles: true, cancelable: true }));
-    });
-    act(() => {
-      window.dispatchEvent(new PointerEvent("pointermove", { clientY: 500 + 10_000, pointerId: 1, bubbles: true }));
-    });
-    act(() => {
-      window.dispatchEvent(new PointerEvent("pointerup", { clientY: 500 + 10_000, pointerId: 1, bubbles: true }));
-    });
-
+    // Grow 200 first so there IS room to shrink…
+    drag(handle, 300, 100);
+    expect(ta.style.height).toBe(`${min + 200}px`);
+    // …then shrink 80 of it back.
+    drag(handle, 200, 280);
+    expect(ta.style.height).toBe(`${min + 120}px`);
+    // A violent downward drag parks exactly on the floor, never under it.
+    drag(handle, 200, 20_000);
+    expect(ta.style.height).toBe(`${min}px`);
+    // A violent upward drag parks exactly on the ceiling, never over it.
+    drag(handle, 500, -20_000);
     expect(ta.style.height).toBe(`${max}px`);
     expect(store.get("trantor.chat.composerHeight")).toBe(String(max));
   });
