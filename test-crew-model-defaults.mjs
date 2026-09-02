@@ -34,6 +34,7 @@ case "$*" in
     else echo '{"qualified":"qwen/qwen3-coder-plus"}'; fi ;;
   *zai-coding-plan/glm-5.3-flash*) echo '{"qualified":"zai-coding-plan/glm-5.3-flash"}' ;;
   *deepseek/deepseek-v4-pro*) echo '{"qualified":"deepseek/deepseek-v4-pro"}' ;;
+  "*--provider badmid*") ;;
   *) exec /usr/bin/python3 "$@" ;;
 esac
 `);
@@ -76,6 +77,29 @@ esac
   const badOutput = `${badRoute.stdout}${badRoute.stderr}`;
   check("cross-provider router output aborts launch", badRoute.status !== 0, badOutput);
   check("cross-provider fallback is explained", badOutput.includes("refusing cross-provider fallback"), badOutput);
+
+  // A middle seat's model resolution can fail while the seats around it are perfectly launchable —
+  // that must SKIP the one bad seat, not exit crew.sh from inside the loop and strand the seats that
+  // already spawned earlier. #6110.
+  const midFail = spawnSync("bash", [join(root, "bin/crew.sh"), "up", "qwen", "badmid", "glm"], {
+    cwd: root,
+    encoding: "utf8",
+    env: {
+      ...process.env,
+      HOME: home,
+      PATH: `${fakebin}:${process.env.PATH}`,
+      CREW_DRY_RUN: "1",
+      CREW_MUX: "tmux",
+      RELAY_PROJECT: "model-default-test",
+    },
+  });
+  const midOutput = `${midFail.stdout}${midFail.stderr}`;
+  console.log("# middle-seat resolution failure in a three-seat batch");
+  check("first seat (qwen) still launches", midOutput.includes("qwen: live model qwen/qwen3-coder-plus") && midOutput.includes("qwen pane in"), midOutput);
+  check("third seat (glm) still launches", midOutput.includes("glm: live model zai-coding-plan/glm-5.3-flash") && midOutput.includes("glm pane in"), midOutput);
+  check("middle seat produced no pane / no model", !midOutput.includes("badmid pane in") && !midOutput.includes("CREW_MODEL=badmid"), midOutput);
+  check("exit code is non-zero because a seat was skipped", midFail.status !== 0, midOutput);
+  check("report names the skipped seat", /skip/i.test(midOutput) && midOutput.includes("badmid"), midOutput);
 } finally {
   rmSync(home, { recursive: true, force: true });
 }

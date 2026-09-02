@@ -131,6 +131,7 @@ try {
   // do we fall back to the plain TOFU enroll.
   const viaOwner = await enrollViaOwnerInvite(hub, identity, name, { timeoutMs: 8000 });
   if (!viaOwner.ok && viaOwner.reason === "no-owner-key") await enrollTofu(session, identity, name);
+  else if (!viaOwner.ok) console.error(`genesis: enrollment via owner invite failed: ${viaOwner.reason}`);
   const briefForHub = (brief || `Genesis of ${name} — created by trantor new.`).slice(0, 600);
   const r1 = await signedPost("/project", { project: name, brief: briefForHub, by: session }, { session, project: name, timeoutMs: 8000 });
   if (!r1.ok) throw new Error(`hub ${r1.status} on /project${r1.json?.error ? `: ${r1.json.error}` : ""}`);

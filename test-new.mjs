@@ -203,6 +203,59 @@ ok("parent: CLAUDE.md seeded in the created dir", !!dJson && readFileSync(join(A
   try { rmSync(FW, { recursive: true, force: true }); } catch {}
 }
 
+// ── #6110: an owner-invite failure OTHER than "no-owner-key" is logged, not swallowed ───────────
+// Before this fix, when enrollViaOwnerInvite() failed for any reason besides a missing owner key
+// (e.g. the hub's /invite endpoint itself refused or errored), `trantor new` silently fell through
+// to the plain /project POST with no enrollment and no explanation — the operator only ever saw
+// the downstream "hub 401 on /project" with no hint that the OWNER-INVITE step was what broke.
+// This drill makes an owner key present (so the "no-owner-key" branch is NOT taken) but has the
+// fake hub's /invite endpoint fail, forcing enrollViaOwnerInvite() to return
+// { ok:false, reason:"invite-500" } — and asserts that exact reason lands on stderr.
+{
+  const FW = mkdtempSync(join(tmpdir(), "trantor-new-invite-fail-"));
+  const bus = join(FW, ".agent-bus");
+  mkdirSync(bus, { recursive: true });
+  const keys = join(bus, "keys");
+  mkdirSync(keys, { recursive: true });
+  const { publicKey, privateKey } = generateKeyPairSync("ed25519");
+  const hex = (k) => Buffer.from(k.export({ format: "jwk" }).d || k.export({ format: "jwk" }).x, "base64url").toString("hex");
+  writeFileSync(join(keys, "drill-owner2.json"), JSON.stringify({
+    name: "drill-owner2", kind: "agent",
+    pubkey: hex(publicKey), privkey: hex(privateKey), createdAt: Date.now(),
+  }));
+  writeFileSync(join(bus, "config.json"), JSON.stringify({ ownerIdentity: "drill-owner2" }));
+  writeFileSync(join(bus, "autonomy.json"), JSON.stringify({ version: 1, defaults: { harness: "bypass" }, projects: {} }));
+
+  const IPORT = 47880;
+  const inviteFailHub = spawn("node", ["-e", `
+    const http = require("http");
+    http.createServer((req, res) => {
+      req.resume();
+      req.on("end", () => {
+        const send = (code, obj) => { res.writeHead(code, { "content-type": "application/json" }); res.end(JSON.stringify(obj)); };
+        // /peer: unknown identity (enforce) → forces the owner-invite path.
+        if (req.method === "GET" && req.url.startsWith("/peer")) return send(401, { error: "unknown identity" });
+        // /invite: the owner-invite mint itself fails — NOT a no-owner-key case.
+        if (req.method === "POST" && req.url === "/invite") return send(500, { error: "invite minting broke" });
+        if (req.method === "POST" && req.url === "/project") return send(401, { error: "unknown identity" });
+        send(200, { ok: true });
+      });
+    }).listen(${IPORT});
+  `], { stdio: "ignore" });
+  let inviteFailUp = false;
+  for (let i = 0; i < 50; i++) { try { await fetch(`http://127.0.0.1:${IPORT}/x`); inviteFailUp = true; break; } catch { await sleep(50); } }
+  ok("invite-fail fake hub is up", inviteFailUp);
+  const ij = spawnSync("node", [join(ROOT, "bin", "new.mjs"), "genesis-g", "--json"], {
+    encoding: "utf8", cwd: FW,
+    env: { ...process.env, HOME: FW, AGENT_BUS_DIR: bus, RELAY_URL: `http://127.0.0.1:${IPORT}`,
+      TRANTOR_DEV_ROOT: join(FW, "dev"), TRANTOR_NO_UPDATE_CHECK: "1" },
+  });
+  ok("#6110: an owner-invite failure (not no-owner-key) is logged to stderr with its reason",
+    (ij.stderr || "").includes("genesis: enrollment via owner invite failed: invite-500"), (ij.stderr || "").slice(-400));
+  inviteFailHub.kill();
+  try { rmSync(FW, { recursive: true, force: true }); } catch {}
+}
+
 // ── #6049: the refusal reason is surfaced, not swallowed ────────────────────────────────────────
 // The drill's original failure printed only "hub 401 on /project" with card:null. A hub that
 // refuses a signed write must name WHY (the enforce "unknown identity") so the operator can act.

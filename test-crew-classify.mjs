@@ -114,6 +114,32 @@ console.log("# the qwen specimen — contract echo the exact-match strip provabl
     "a genuine short auth death with no real work still escalates (#5405 specimen)");
 }
 
+console.log("# stripPromptEcho — short-line VERBATIM echoes (#6110): under-40-char lines were never");
+console.log("# matched against the prompt at all, so a short echoed wake fragment carrying '401'/'403'/");
+console.log("# 'auth' survived and, with exit 0 and no new commit, tripped looksLikeAuthDeath on a turn");
+console.log("# that never touched auth.");
+{
+  // (a) the prompt CONTAINS a short auth-shaped phrase; the CLI's own output is exactly that phrase
+  // (an echoed wake fragment) plus a real one-word answer. The echo must be stripped so the auth
+  // marker doesn't survive into the classifier — leaving "done", which is not an auth death.
+  const shortPrompt = "Before you start: check the 401 on the hub, then continue with the migration.";
+  const echoedShort = "check the 401 on the hub\ndone";
+  const strippedShort = stripPromptEcho(echoedShort, shortPrompt);
+  ok(!strippedShort.includes("401"), "a short echoed wake fragment ('check the 401 on the hub') is stripped");
+  ok(strippedShort.includes("done"), "the CLI's own one-word answer survives the strip");
+  ok(looksLikeAuthDeath(strippedShort) === false,
+    "exit 0, no new commit, short output that was JUST a prompt echo → not auth (#6110 a)");
+
+  // (b) the prompt never mentions 401 at all; the CLI's own short output genuinely IS "401
+  // Unauthorized". Nothing to strip (it's not in the prompt), so it must still escalate.
+  const noAuthPrompt = "Ship the migration and update the changelog when it lands.";
+  const genuineShort = "401 Unauthorized";
+  const strippedGenuine = stripPromptEcho(genuineShort, noAuthPrompt);
+  ok(strippedGenuine === genuineShort, "a genuine short CLI error absent from the prompt is untouched by the strip");
+  ok(looksLikeAuthDeath(strippedGenuine) === true,
+    "exit 0, short output, genuine 401 not present in the prompt → still auth (#6110 b)");
+}
+
 console.log("# the seat-log verdict line (contract c): every classification carries evidence");
 {
   for (const [exit, text, empty] of [[1, "quota ran out", false], [1, "401 unauthorized", false], [1, "unexpected status 502", false], [127, "", false], [0, "", true]]) {
