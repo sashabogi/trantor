@@ -25,6 +25,7 @@ console.log("# trantor crew failure-visibility drill");
 // ---- mock hub: record /register + /send, answer the runner's polls -------------------
 const registers = [], sends = [];
 let inboxQueue = [];
+let stallReleaseFile = "";
 const hub = http.createServer((req, res) => {
   let buf = "";
   req.on("data", (c) => (buf += c));
@@ -33,7 +34,14 @@ const hub = http.createServer((req, res) => {
     const P = u.pathname;
     const reply = (o) => { res.writeHead(200, { "content-type": "application/json" }); res.end(JSON.stringify(o)); };
     if (req.method === "POST" && P === "/register") { try { registers.push(JSON.parse(buf)); } catch {} return reply({ ok: true, session: "x", peers: [] }); }
-    if (req.method === "POST" && P === "/send") { try { sends.push(JSON.parse(buf)); } catch {} return reply({ ok: true, id: sends.length }); }
+    if (req.method === "POST" && P === "/send") {
+      try {
+        const message = JSON.parse(buf);
+        sends.push(message);
+        if (stallReleaseFile && /STALLED/.test(message.text || "")) writeFileSync(stallReleaseFile, "reported\n");
+      } catch {}
+      return reply({ ok: true, id: sends.length });
+    }
     // A drill can PRIME the inbox so the seat takes more than one turn. Without this the runner
     // only ever runs its kickoff, which is why repeated-failure behaviour was untestable.
     if (P === "/inbox") return reply({ messages: [], cursor: 0 });
@@ -58,13 +66,12 @@ const HUB = `http://127.0.0.1:${PORT}`;
 // CLI complains on — the distinction that hid a real outage (see the claude drills below).
 async function drill(agent, script, opts = {}) {
   registers.length = 0; sends.length = 0;
-  // an inbox item is a plain string (sender host:drill) or {from, text} — #5760's legs need to
-  // speak as hub:duty to drill the overseer-FYI wake policy.
+  // Inbox fixtures are explicit records; #5760's legs set `from` to speak as hub:duty.
   inboxQueue = (opts.inbox || []).map((m, i) => {
-    const o = typeof m === "string" ? { text: m } : m;
-    return { id: i + 1, from: o.from || "host:drill", to: `${agent}:tt-fail-${agent}`, text: o.text, project: `tt-fail-${agent}` };
+    return { id: i + 1, from: m.from || "host:drill", to: `${agent}:tt-fail-${agent}`, text: m.text, project: `tt-fail-${agent}` };
   });
   const work = mkdtempSync(join(tmpdir(), `tt-fail-${agent}-`));
+  stallReleaseFile = opts.releaseOnStall ? join(work, "stall-reported") : "";
   const fakebin = join(work, "bin");
   mkdirSync(fakebin, { recursive: true });
   // opts.fakeName: the executable name the runner actually invokes, when it differs from the
@@ -79,7 +86,9 @@ async function drill(agent, script, opts = {}) {
     cwd: process.cwd(),
     env: { ...drillEnv(), HOME, PATH: `${fakebin}:${process.env.PATH}`,
            RELAY_URL: HUB, RELAY_AGENT: agent, RELAY_PROJECT: `tt-fail-${agent}`,
-           CREW_KICKOFF: "say hi and end your turn", ...(opts.env || {}) },
+           CREW_KICKOFF: "say hi and end your turn",
+           TRANTOR_TEST_STALL_RELEASE_FILE: stallReleaseFile,
+           ...(opts.env || {}) },
     stdio: "ignore",
   });
   // kickoff turn runs synchronously inside the runner; give it a moment to fail + report.
@@ -114,6 +123,7 @@ async function drill(agent, script, opts = {}) {
   }
   runner.kill("SIGKILL");
   await sleep(150);
+  stallReleaseFile = "";
   const errText = (() => {
     try { return readFileSync(join(HOME, ".agent-bus", `err-${agent}-tt-fail-${agent}.txt`), "utf8"); } catch { return ""; }
   })();
@@ -167,7 +177,7 @@ async function drill(agent, script, opts = {}) {
     '#!/bin/sh\necho "Error: you exceeded your current quota" >&2\nexit 1\n',
     // retry fast so several turns fail inside the drill's window
     // three wake-ups after the kickoff, so the seat fails four times in a row
-    { inbox: ["again", "and again", "and again"], waitMs: 9000 });
+    { inbox: [{ text: "again" }, { text: "and again" }, { text: "and again" }], waitMs: 9000 });
   const downs = sends.filter(m => /DOWN/.test(m.text || "") && m.to === "all");
   const fails = sends.filter(m => /turn FAILED/i.test(m.text || "") && m.to === "all");
   ok("the room is told the seat went down", downs.length >= 1, `${downs.length} DOWN broadcasts`);
@@ -209,7 +219,7 @@ async function drill(agent, script, opts = {}) {
   const isDownBcast = (m) => /DOWN/.test(m.text || "") && m.to === "all";
   const r = await drill("opencode",
     '#!/bin/sh\necho "Invalid API key" >&2\nexit 0\n',
-    { inbox: ["again", "and again"], env: { TRANTOR_RETRY_MS: "1500" }, quietDeadlineMs: 0,
+    { inbox: [{ text: "again" }, { text: "and again" }], env: { TRANTOR_RETRY_MS: "1500" }, quietDeadlineMs: 0,
       until: (s) => s.some(isDownBcast),
       settleUntil: (s, regs) => regs.some((x) => /down: auth · 3 fails/.test(String(x.status || ""))) });
   const downs = r.sends.filter(isDownBcast);
@@ -232,7 +242,9 @@ async function drill(agent, script, opts = {}) {
 {
   const { sends } = await drill("codex",
     '#!/bin/sh\necho "ERROR: Error running remote compact task: unexpected status 404 Not Found" >&2\nexit 1\n',
-    { env: { RELAY_HOST_ID: "drillhost" } });
+    { env: { RELAY_HOST_ID: "drillhost" }, quietDeadlineMs: 0,
+      until: (messages) => messages.some((m) => m.to === "all" && /backend-error/.test(m.text || ""))
+        && messages.some((m) => m.to === "drillhost:tt-fail-codex" && /FAILED|DOWN/.test(m.text || "")) });
   const failMsg = sends.find((m) => /turn FAILED/i.test(m.text || ""));
   ok("#5684: a provider 404 is classified backend-error, never exhausted",
      !!failMsg && /backend-error/.test(failMsg.text) && !/exhausted/.test(failMsg.text));
@@ -244,8 +256,11 @@ async function drill(agent, script, opts = {}) {
 // ---- #5684 drill B: the turn watchdog reports a silent long turn, and never kills it ----
 {
   const { sends } = await drill("claude",
-    '#!/bin/sh\nsleep 6\necho done\nexit 0\n',
-    { env: { RELAY_HOST_ID: "drillhost", TRANTOR_TURN_WATCHDOG_MS: "1500" }, waitMs: 8000 });
+    '#!/bin/sh\nuntil [ -f "$TRANTOR_TEST_STALL_RELEASE_FILE" ]; do sleep 0.01; done\necho done\nexit 0\n',
+    { env: { RELAY_HOST_ID: "drillhost", TRANTOR_TURN_WATCHDOG_MS: "10" },
+      releaseOnStall: true, quietDeadlineMs: 0,
+      until: (messages) => messages.some((m) => /STALLED/.test(m.text || "")),
+      settleUntil: (_messages, rows) => rows.some((r) => r.status === "idle") });
   const stalls = sends.filter((m) => /STALLED/.test(m.text || ""));
   ok("#5684: a silent over-window turn earns a stall report", stalls.length >= 1);
   ok("#5684: exactly ONE report per turn (episode, never a timer storm)", stalls.length === 1);
@@ -317,7 +332,7 @@ async function drill(agent, script, opts = {}) {
 {
   // prime one wake so the success path runs deliverWake → the assigner gets its ✅
   const { sends } = await drill("opencode", '#!/bin/sh\necho "did the thing"\nexit 0\n',
-    { inbox: ["do the thing"], waitMs: 4000 });
+    { inbox: [{ text: "do the thing" }], waitMs: 4000 });
   ok("#5481: a turn with output and exit 0 is still success (no failure posted)",
      !sends.some((m) => /turn FAILED/.test(m.text || "")));
   ok("#5481: ...and the completion ack still goes to the assigner",
