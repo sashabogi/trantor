@@ -1101,6 +1101,61 @@ function projectFromRequest(P, q, b) {
   }
   return canon(String(b?.project || q?.project || "").slice(0, 80));
 }
+// --- Cross-project guard (#6228) -----------------------------------------------------------
+// scopeAllows/canRead answer "can this identity touch project P at all" — and most identities
+// are minted project:"*" role:"owner" by defaultScopesFor (any non-agent kind: an orchestrator,
+// genesis, a human). That is not a project fence; it is exactly the loophole the pr-os
+// orchestrator walked through to register seats and post contracts into crebral-com from its
+// own session, nothing it was ever working. This is the fence: does the CALLER's own project
+// (its identity name's "kind:project" suffix, the same convention defaultScopesFor reads) match
+// the project the request ACTS on. Only a declared `trantor policy link` (state.orgPolicy.links,
+// the same store /policy reads and writes — POST /policy is itself OWNER_ENDPOINTS-gated) or the
+// operator's own identity (kind "human", the key /instance/supersede already treats as owner)
+// opens the door. Applies to the five endpoints that reach across sessions or mint access:
+// /send, /task, /task/update, /register, /invite.
+const CROSS_PROJECT_ENDPOINTS = new Set(["/send", "/task", "/task/update", "/register", "/invite"]);
+function projectsLinked(a, b) {
+  if (!a || !b || a === b) return true;
+  return overseerPolicy().links.some(l => {
+    const ps = (l.projects || []).map(p => canon(p));
+    return ps.includes(a) && ps.includes(b);
+  });
+}
+// The caller's home project, by the SAME "name suffix after the colon" rule defaultScopesFor
+// uses to mint a fresh identity's default scope. An identity with no colon in its name (a bare
+// human alias, or a tool identity never given a project) has no home to fence — nothing to check.
+function callerProject(auth) {
+  const name = String(auth?.identity?.name || "");
+  return name.includes(":") ? canon(name.slice(name.lastIndexOf(":") + 1)) : "";
+}
+function crossProjectTarget(P, b) {
+  if (P === "/send") {
+    if (!b?.to || b.to === "all") return "";   // broadcast: existing hub-wide behavior, untouched
+    const to = String(b.to);
+    return canon(state.peers[to]?.project || (to.includes(":") ? to.slice(to.lastIndexOf(":") + 1) : ""));
+  }
+  if (P === "/task" || P === "/register") return canon(String(b?.project || "").slice(0, 80));
+  if (P === "/task/update") {
+    const t = state.tasks.find(x => x.id === Number(b?.id));
+    return t?.project || "";
+  }
+  if (P === "/invite") {
+    // an invite MINTS access into whatever project(s) its scopes name — a wildcard scope names none.
+    const scopes = Array.isArray(b?.scopes) ? b.scopes : [];
+    return scopes.map(s => canon(String(s?.project || ""))).find(p => p && p !== "*") || "";
+  }
+  return "";
+}
+function crossProjectGuard(auth, P, b) {
+  if (!CROSS_PROJECT_ENDPOINTS.has(P) || AUTH_MODE === "off" || !auth?.identity) return { ok: true };
+  if (auth.identity.kind === "human") return { ok: true };   // the operator's own key
+  const home = callerProject(auth);
+  if (!home) return { ok: true };
+  const target = crossProjectTarget(P, b);
+  if (!target || target === home || projectsLinked(home, target)) return { ok: true };
+  return { ok: false, code: 403,
+    error: `cross-project: ${home} may not act on ${target} — cross-project action is a breach unless the operator linked the projects. Run: trantor policy link ${home} ${target} --reason "<why>"` };
+}
 // Is a stored baton claim still worth honouring? The claim names the instance it spared
 // (`exceptInstanceId`), so we defer to THAT instance only while it is still being seen. A claimant
 // that died stops muzzling its twins; one that comes back starts again. Records claimed before
@@ -1516,6 +1571,8 @@ const server = http.createServer(async (req, res) => {
       }
       const scopes = (Array.isArray(bi.scopes) ? bi.scopes : []).map(cleanScope).filter(Boolean).slice(0, 20);
       if (!scopes.length) return json(res, 400, { error: "scopes required" });
+      const cpg = crossProjectGuard(auth, P, { scopes });
+      if (!cpg.ok) return json(res, cpg.code, { error: cpg.error });
       // Honour the requested TTL. A 60s FLOOR here silently inflated `ttlSec: 1` to a minute, so a
       // token the caller asked to expire in a second stayed valid — and an expired-token test passed
       // a live token straight through /enroll. Cap the ceiling, never the floor.
@@ -1530,7 +1587,10 @@ const server = http.createServer(async (req, res) => {
     const authz = authorize(auth, req.method, P, projectFromRequest(P, q, b0));
     if (!authz.ok) return json(res, authz.code || 403, { error: authz.error || "forbidden" });
     if (req.method === "POST" && P === "/register") {
-      const b = await body(req); touch(b.session, b.status, b.project, b.hookVersion, auth);
+      const b = await body(req);
+      const cpg = crossProjectGuard(auth, P, b);
+      if (!cpg.ok) return json(res, cpg.code, { error: cpg.error });
+      touch(b.session, b.status, b.project, b.hookVersion, auth);
       // WHO is this, really: the LLM brand + the exact model currently loaded. In-memory like the
       // rest of presence — the next heartbeat re-supplies it after a restart.
       const pr = state.peers[b.session];
@@ -1932,7 +1992,10 @@ const server = http.createServer(async (req, res) => {
     }
     // --- Kanban tasks ---
     if (req.method === "POST" && P === "/task") {           // create a card
-      const b = await body(req); touch(b.by, undefined, b.project, undefined, auth);
+      const b = await body(req);
+      const cpg = crossProjectGuard(auth, P, b);
+      if (!cpg.ok) return json(res, cpg.code, { error: cpg.error });
+      touch(b.by, undefined, b.project, undefined, auth);
       if (b.title !== undefined) b.title = stripNulText(b.title);
       if (b.note !== undefined) b.note = stripNulText(b.note);
       const st0 = ["todo","doing","testing","failed","done","blocked"].includes(b.status) ? b.status : "todo";
@@ -2088,6 +2151,8 @@ const server = http.createServer(async (req, res) => {
     if (req.method === "POST" && P === "/task/update") {    // move/edit a card
       const b = await body(req); const t = state.tasks.find(x => x.id === Number(b.id));
       if (!t) return json(res, 404, { error: "no such task" });
+      const cpg = crossProjectGuard(auth, P, b);
+      if (!cpg.ok) return json(res, cpg.code, { error: cpg.error });
       if (b.title !== undefined) b.title = stripNulText(b.title);
       if (b.note !== undefined) b.note = stripNulText(b.note);
       // Board integrity (#5406): a card can never change hands silently. The assignee is frozen once
@@ -2790,6 +2855,8 @@ const server = http.createServer(async (req, res) => {
       const secretCheck = assertNoSecrets(text);
       if (!secretCheck.ok) return json(res, 400, { error: "secret detected", kinds: secretCheck.kinds || [] });
       if (auth?.identity && String(b.from) !== String(auth.identity.name || "")) return json(res, 403, { error: "from must match signer" });
+      const cpg = crossProjectGuard(auth, P, b);
+      if (!cpg.ok) return json(res, cpg.code, { error: cpg.error });
       touch(b.from, undefined, undefined, undefined, auth);
       // attribute the message to a project so the dashboard can show it in that project's lane.
       // explicit b.project wins; else the sender's known project; else parsed from a "host:project" id.

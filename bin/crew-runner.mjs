@@ -25,6 +25,7 @@ import {
 import { capWake, capBcast, pickLessons, composePrompt } from "./crew-payload.mjs";
 import {
   cardRef, carriesWork, parseTurnTokens, parseResetAt, reasonWithBalances, quotaResetAt, PARKING_REASONS,
+  senderProjectOf, isLinkedProject,
 } from "../lib/turn-policy.mjs";
 
 const AGENT = process.argv[2];
@@ -304,7 +305,7 @@ if (!CLI[AGENT]) log(`'${AGENT}' is not a built-in seat — running it as an ope
 
 // RUNNER_RULES / RUNNER_KICKOFF env overrides: the runner is also the substrate for non-crew
 // always-on seats (the fleet DUTY agent, bin/duty.mjs) whose doctrine is not "work your card".
-const RULES = process.env.RUNNER_RULES || `Rules: you are ${SESSION} on the trantor crew. Before starting a card, read YOUR card: relay_board with card:<id> (the card, its deps, its notes, and the last five done cards whose title shares a word); never the whole board. Work your assigned file(s), report on the bus (relay_send, <280 chars), move your Kanban card as you go with a NOTE saying what you did (doing -> testing -> done; in 'testing' run YOUR OWN test file — never the full npm test, suites collide across seats — plus \`node bin/slop-gate.mjs\` when the repo has one: it lints ONLY your changed files against the anti-slop rules, and a card must not reach done with slop-gate failing; use 'failed' + a report if anything breaks). If you need something from another session, message THAT SESSION (relay_peers to find its id, relay_send to reach it) — never ask the human to pass it along; carrying messages between agents is the job this bus exists to remove. When your work for THIS message is finished, END YOUR TURN — do NOT park, do NOT loop relay_wait; the runner waits for you and will wake you with the next message. Path discipline: build/test from your worktree root ${TURN_DIR} with absolute paths or --manifest-path/--prefix instead of cd-ing into subdirs, and put anything that must land outside the repo under ${TURN_DIR}/.agent-bus-out/ (gitignored) — never ~/.agent-bus.`;
+const RULES = process.env.RUNNER_RULES || `Rules: you are ${SESSION} on the trantor crew. Before starting a card, read YOUR card: relay_board with card:<id> (the card, its deps, its notes, and the last five done cards whose title shares a word); never the whole board. Work your assigned file(s), report on the bus (relay_send, <280 chars), move your Kanban card as you go with a NOTE saying what you did (doing -> testing -> done; in 'testing' run YOUR OWN test file — never the full npm test, suites collide across seats — plus \`node bin/slop-gate.mjs\` when the repo has one: it lints ONLY your changed files against the anti-slop rules, and a card must not reach done with slop-gate failing; use 'failed' + a report if anything breaks). If you need something from another session, message THAT SESSION (relay_peers to find its id, relay_send to reach it) — never ask the human to pass it along; carrying messages between agents is the job this bus exists to remove. When your work for THIS message is finished, END YOUR TURN — do NOT park, do NOT loop relay_wait; the runner waits for you and will wake you with the next message. Path discipline: build/test from your worktree root ${TURN_DIR} with absolute paths or --manifest-path/--prefix instead of cd-ing into subdirs, and put anything that must land outside the repo under ${TURN_DIR}/.agent-bus-out/ (gitignored) — never ~/.agent-bus. Cross-project action is a breach: never \`trantor up\` a crew, register a seat, or send a card/contract into a project other than ${PROJ} unless the operator ran \`trantor policy link ${PROJ} <other> --reason "<why>"\` first — the hub, the CLI and this runner all refuse it mechanically, so ask the operator to link the projects instead of routing around the refusal.`;
 
 // ---- the pulse (Scape's Lloyd/Argus loop, Trantor-shaped) --------------------
 // A message-driven seat is DEAF between messages. An orchestrator seat with a mission needs a
@@ -646,6 +647,12 @@ exit $turn_exit`;
     detached: true,
     cwd: TURN_DIR, encoding: "utf8", stdio: cli.sid ? ["ignore", "pipe", "inherit"] : ["ignore", "inherit", "inherit"],
     env: { ...process.env, RELAY_URL: HUB, RELAY_AGENT: AGENT, RELAY_SESSION: SESSION, RELAY_PROJECT: PROJ,
+      // #6228: badges this seat's env as belonging to PROJ, distinctly from a one-off RELAY_PROJECT
+      // override (bin/crew.sh's own tests, and any deliberate `RELAY_PROJECT=x trantor up` from a
+      // plain shell, set RELAY_PROJECT alone and must keep working — only THIS marker means "the
+      // env I'm running in already has a project home"). crew.sh's `up` guard refuses to bring up a
+      // DIFFERENT project's crew from a shell carrying this badge, same as it refuses TRANTOR_ORCH.
+      TRANTOR_SEAT: PROJ,
       // A RUNNER-MANAGED SEAT MUST NEVER HAND ITSELF A BATON.
       //
       // The handoff machinery exists for an INTERACTIVE session: near its context limit it writes a
@@ -837,6 +844,20 @@ function shouldWake(message) {
     && (message.text.includes(`@${AGENT}`) || message.text.toLowerCase().includes(`${AGENT}:`));
 }
 
+// #6228: the operator's declared project links, cached briefly so a burst of wakes doesn't hit
+// /policy per message. Fails CLOSED on an unreachable hub (keeps whatever was last known, empty
+// on a cold start) — the mechanical fence the hub enforces at write time must not go soft just
+// because the read-side cache call happened to miss.
+let linksCache = { at: 0, links: [] };
+async function currentLinks() {
+  if (Date.now() - linksCache.at < 60000) return linksCache.links;
+  try {
+    const r = await api("/policy");
+    linksCache = { at: Date.now(), links: Array.isArray(r?.links) ? r.links : [] };
+  } catch {}
+  return linksCache.links;
+}
+
 function askedExcerpt(message) {
   let text = String(message?.text || "").replace(/\s+/g, " ").trim();
   const nested = text.search(/\s+[·|]\s*asked\s*:/i);
@@ -942,7 +963,19 @@ function askedExcerpt(message) {
     // deafness problem: the seat would never learn what it was told (#6134).
     const bcast = [...rest.filter(m => !direct.includes(m) && !mentions.includes(m)), ...fyi];
     pendingBcast.push(...bcast);                      // wake-policy: plain broadcasts batch, they don't wake
-    const wake = [...direct, ...mentions];
+    const wakeCandidates = [...direct, ...mentions];
+    // #6228: a wake naming another project (its sender's home project, not this seat's, and the
+    // two are not `trantor policy link`ed) is dropped without acting — never queued, never folded
+    // into context. One report goes back to the sender so it does not just look like silence.
+    const links = wakeCandidates.length ? await currentLinks() : [];
+    const crossProject = wakeCandidates.filter(m => !isLinkedProject(senderProjectOf(m.from), PROJ, links));
+    for (const m of crossProject) {
+      const sp = senderProjectOf(m.from) || "?";
+      log(`\x1b[33mcross-project wake dropped\x1b[0m — ${m.from} (${sp}) is not ${PROJ}'s project and the two are not linked`);
+      api("/send", { from: SESSION, to: m.from, project: sp, kind: "status",
+        text: `⛔ cross-project: ${SESSION} is ${PROJ}'s seat, not ${sp}'s — dropped without acting. Link them first: trantor policy link ${PROJ} ${sp} --reason "<why>"` }).catch(() => {});
+    }
+    const wake = wakeCandidates.filter(m => !crossProject.includes(m));
     if (!wake.length) { if (bcast.length) { savePending(pendingWake, pendingBcast); log(`${bcast.length} broadcast(s) batched (no wake) — ${pendingBcast.length} pending`); } continue; }
     // Queue BEFORE running the turn, and persist immediately. Everything between here and a clean
     // exit 0 — the CLI dying, the machine losing power — now leaves a record of what this seat owes.

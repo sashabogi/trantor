@@ -149,6 +149,14 @@ The PRD card is done. Now one author writes the design and the same reviewers re
 
 The confirmed TDD is the gate. Do not ask the operator again merely to open its build cards.
 
+**But confirm the TARGET PROJECT before dispatching, always.** An ambiguous instruction ("build it
+where the answers are stored") is not a project name — it does not license bringing up seats in, or
+sending contracts into, a DIFFERENT project than the one you are reviewing. Name the project and ask
+the operator once if the brief points anywhere but here. Cross-project action is a breach unless the
+operator linked the projects (`trantor policy link <a> <b> --reason "<why>"`), and the hub, the
+`trantor up` CLI, and every seat's runner all refuse it mechanically — belt and braces, not a
+substitute for getting the target right in the first place.
+
 1. Move the TDD card through `testing` to `done` with the tally and the decision.
 2. `relay_advise` with the work breakdown's packages, then one `relay_task_add` per package:
    phase `build`, the advisor's assignee and `model`, its `difficulty`, `deps` on the packages it

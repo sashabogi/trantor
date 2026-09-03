@@ -259,6 +259,27 @@ OUT19C="$(CREW_MUX=tmux CREW_DRY_RUN=1 HOME="$TMP" RELAY_URL=http://127.0.0.1:22
 ok "no pin -> inherited RELAY_URL still honored (test harness contract)" 'echo "$OUT19C" | grep -q "RELAY_URL=http://127.0.0.1:2222"'
 rm -f "$TMP/.agent-bus/config.json"
 
+# 20. cross-project CLI guard (#6228): `up` from a shell badged (TRANTOR_ORCH or TRANTOR_SEAT) for a
+# DIFFERENT project than the target refuses, naming the badge, the target, and the link command — the
+# CLI belt to the hub's own 403. CREW_TEST_POLICY_LINKS is a hermetic stand-in for a real `trantor
+# policy link` (comma-separated a:b pairs) so the "already linked -> proceeds" case never depends on a
+# reachable hub. An unbadged shell, or a badge that already matches the target, is not cross-project
+# and must keep working — that's the operator's own bare `RELAY_PROJECT=x trantor up`.
+OUT20A="$(TRANTOR_ORCH=pr-os CREW_TEST_POLICY_LINKS="" HOME="$TMP" PATH="$TMP/fakebin:$PATH" RELAY_PROJECT=crebral-com bash "$ROOT/bin/crew.sh" up codex </dev/null 2>&1)"; RC20A=$?
+ok "badged shell into a DIFFERENT unlinked project refuses" '[ "$RC20A" != "0" ]'
+ok "refusal names the badge and the target" 'echo "$OUT20A" | grep -q "badged for .pr-os., not .crebral-com."'
+ok "refusal prints the link command" 'echo "$OUT20A" | grep -q "trantor policy link pr-os crebral-com"'
+
+OUT20B="$(TRANTOR_ORCH=pr-os CREW_TEST_POLICY_LINKS=pr-os:crebral-com CREW_DRY_RUN=1 HOME="$TMP" PATH="$TMP/fakebin:$PATH" RELAY_PROJECT=crebral-com bash "$ROOT/bin/crew.sh" up codex </dev/null 2>&1)"; RC20B=$?
+ok "badged shell into a LINKED project proceeds" '[ "$RC20B" = "0" ]'
+ok "linked proceed announces the link, not a refusal" 'echo "$OUT20B" | grep -q "policy-linked — proceeding"'
+
+OUT20C="$(CREW_DRY_RUN=1 HOME="$TMP" PATH="$TMP/fakebin:$PATH" RELAY_PROJECT=crebral-com bash "$ROOT/bin/crew.sh" up codex </dev/null 2>&1)"; RC20C=$?
+ok "unbadged shell (no TRANTOR_ORCH/TRANTOR_SEAT) proceeds" '[ "$RC20C" = "0" ]'
+
+OUT20D="$(TRANTOR_ORCH=crebral-com CREW_DRY_RUN=1 HOME="$TMP" PATH="$TMP/fakebin:$PATH" RELAY_PROJECT=crebral-com bash "$ROOT/bin/crew.sh" up codex </dev/null 2>&1)"; RC20D=$?
+ok "badge matching the target project is not cross-project" '[ "$RC20D" = "0" ]'
+
 echo ""
 if [ "$FAIL" = "0" ]; then echo "ALL PASS ($PASS)"; else echo "$FAIL FAILED"; fi
 exit $([ "$FAIL" = "0" ] && echo 0 || echo 1)

@@ -380,7 +380,7 @@ server.tool("relay_peers", "Find who you can talk to: the live agent sessions on
   return { content: [{ type: "text", text: lines.join("\n") || "no peers yet" }] };
 });
 
-server.tool("relay_send", "Send a live message to another agent session (or 'all' to broadcast). Reach the other agent YOURSELF: if you are about to ask the human to pass something along, tell the session directly instead — asking a person to carry a message between two agents is a failure, not politeness. Don't know the id? relay_peers lists them, linked projects included. Cross-project sends are allowed.",
+server.tool("relay_send", "Send a live message to another agent session (or 'all' to broadcast). Reach the other agent YOURSELF: if you are about to ask the human to pass something along, tell the session directly instead — asking a person to carry a message between two agents is a failure, not politeness. Don't know the id? relay_peers lists them, linked projects included. Cross-project action is a breach unless the operator linked the projects (`trantor policy link <a> <b> --reason \"<why>\"`) — the hub answers 403 for a send into an unlinked project.",
   { to: z.string().describe("target session id, or 'all'"), text: z.string().describe("message body"),
     wake: z.boolean().optional().describe("false = context, not a contract: the message batches into the target's next turn instead of buying it a whole CLI session. Use it for acks, FYIs and queue notes; leave it unset for anything you expect worked on.") },
   async ({ to, text, wake }) => {
