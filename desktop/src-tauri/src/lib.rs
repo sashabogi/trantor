@@ -659,9 +659,12 @@ fn orch_session_id(project: &str) -> Option<String> {
 ///   assistant::text · assistant::thinking · assistant::tool_use
 ///   user::text · user::tool_result · user::image
 ///
-/// Note what is NOT there: permission prompts and the agent's questions live in the TUI and never
-/// reach the transcript, so this cannot render approval cards. Building one would mean inventing a
-/// signal we do not have.
+/// A raw TUI y/n permission prompt never reaches the transcript, so this cannot render an approval
+/// card for one of those — no signal exists to build it from. AskUserQuestion is different: it is
+/// an ordinary tool_use (name "AskUserQuestion", `input.questions[{question, header, multiSelect,
+/// options[{label, description}]}]`), confirmed 2026-09-03 against a real transcript row
+/// (~/.claude/projects/.../918e0f72-*.jsonl) — the signal was always here, `ask` below just keeps
+/// it instead of discarding it into a flattened text summary (#6094).
 #[derive(Debug, Clone, Serialize)]
 struct ChatBlock {
     /// "text" | "thinking" | "tool" | "image"
@@ -670,6 +673,58 @@ struct ChatBlock {
     /// tool blocks only
     tool: Option<String>,
     tool_id: Option<String>,
+    /// Set only when `tool == "AskUserQuestion"` and `input.questions` parses — the structured
+    /// data the question card renders. None (never an empty vec) on a shape mismatch, so a
+    /// surprise input falls back to the plain tool row rather than a broken card.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    ask: Option<Vec<AskQuestion>>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct AskOption {
+    label: String,
+    description: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AskQuestion {
+    header: String,
+    question: String,
+    multi_select: bool,
+    options: Vec<AskOption>,
+}
+
+/// Parse an AskUserQuestion tool_use's `input.questions[]` into the question card's data. `?`
+/// throughout: any missing/mistyped field means the shape does not match, and the caller falls
+/// back to the plain tool row — a card built from a guess would show a person the wrong choices.
+fn parse_ask_questions(input: &serde_json::Value) -> Option<Vec<AskQuestion>> {
+    let arr = input.get("questions")?.as_array()?;
+    let qs: Vec<AskQuestion> = arr
+        .iter()
+        .filter_map(|q| {
+            let question = q.get("question")?.as_str()?.to_string();
+            let header = q.get("header").and_then(|h| h.as_str()).unwrap_or("").to_string();
+            let multi_select = q.get("multiSelect").and_then(|m| m.as_bool()).unwrap_or(false);
+            let options = q
+                .get("options")?
+                .as_array()?
+                .iter()
+                .filter_map(|o| {
+                    Some(AskOption {
+                        label: o.get("label")?.as_str()?.to_string(),
+                        description: o
+                            .get("description")
+                            .and_then(|d| d.as_str())
+                            .unwrap_or("")
+                            .to_string(),
+                    })
+                })
+                .collect();
+            Some(AskQuestion { header, question, multi_select, options })
+        })
+        .collect();
+    if qs.is_empty() { None } else { Some(qs) }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1102,6 +1157,17 @@ fn tool_summary(name: &str, input: &serde_json::Value) -> String {
         }
         "WebFetch" => pick("url"),
         "Task" | "Agent" => pick("description"),
+        // `input`'s only field is a `questions` ARRAY, so the generic first-string-field
+        // fallback below finds nothing and used to render this row with an empty summary —
+        // the first symptom the operator saw of #6094.
+        "AskUserQuestion" => input
+            .get("questions")
+            .and_then(|q| q.as_array())
+            .and_then(|a| a.first())
+            .and_then(|q| q.get("question"))
+            .and_then(|q| q.as_str())
+            .unwrap_or("")
+            .to_string(),
         _ => {
             // An unknown tool gets its first string field rather than a guess at which key matters.
             input
@@ -1212,6 +1278,7 @@ where
                                     text: text.to_string(),
                                     tool: None,
                                     tool_id: None,
+                                    ask: None,
                                 }],
                                 queued: None,
                             });
@@ -1233,6 +1300,7 @@ where
                                     text: text.to_string(),
                                     tool: None,
                                     tool_id: None,
+                                    ask: None,
                                 }],
                                 queued: Some(true),
                             });
@@ -1294,6 +1362,7 @@ where
                         text,
                         tool: None,
                         tool_id: None,
+                        ask: None,
                     }],
                     queued: None,
                 });
@@ -1310,6 +1379,7 @@ where
                     text: s.trim().to_string(),
                     tool: None,
                     tool_id: None,
+                    ask: None,
                 })
             }
             serde_json::Value::Array(items) => {
@@ -1327,6 +1397,7 @@ where
                                 text: t.to_string(),
                                 tool: None,
                                 tool_id: None,
+                                ask: None,
                             });
                         }
                         Some("thinking") => {
@@ -1343,6 +1414,7 @@ where
                                 text: t.to_string(),
                                 tool: None,
                                 tool_id: None,
+                                ask: None,
                             });
                         }
                         Some("tool_use") => {
@@ -1354,6 +1426,7 @@ where
                                 text: tool_summary(name, input),
                                 tool: Some(name.to_string()),
                                 tool_id: b.get("id").and_then(|i| i.as_str()).map(String::from),
+                                ask: if name == "AskUserQuestion" { parse_ask_questions(input) } else { None },
                             });
                         }
                         Some("tool_result") => {
@@ -1374,6 +1447,7 @@ where
                             text: "image".into(),
                             tool: None,
                             tool_id: None,
+                            ask: None,
                         }),
                         _ => {}
                     }
@@ -6127,6 +6201,74 @@ mod herdr_tests {
         );
         assert!(out.chars().count() <= 161, "{}", out.chars().count());
         assert!(out.ends_with('…'));
+    }
+
+    #[test]
+    fn tool_summary_reads_askuserquestion_past_its_array_field() {
+        // input's only field is `questions`, an ARRAY — the generic first-string-field fallback
+        // finds nothing in it, so without the dedicated arm this rendered as "" (#6094's first
+        // symptom: a collapsed tool row with no summary at all).
+        let input = serde_json::json!({ "questions": [{ "question": "Stripe or Clover?", "header": "Rails", "multiSelect": false, "options": [] }] });
+        assert_eq!(tool_summary("AskUserQuestion", &input), "Stripe or Clover?");
+    }
+
+    #[test]
+    fn parse_ask_questions_reads_the_real_transcript_shape() {
+        // Exact shape confirmed 2026-09-03 against a real tool_use row
+        // (~/.claude/projects/.../918e0f72-*.jsonl) — not invented.
+        let input = serde_json::json!({
+            "questions": [{
+                "question": "Go with the hybrid plan?",
+                "header": "Crew plan",
+                "multiSelect": false,
+                "options": [
+                    { "label": "Go (Recommended)", "description": "Fire up all 5 seats." },
+                    { "label": "Hold", "description": "Discuss first." }
+                ]
+            }]
+        });
+        let qs = parse_ask_questions(&input).expect("valid shape parses");
+        assert_eq!(qs.len(), 1);
+        assert_eq!(qs[0].header, "Crew plan");
+        assert_eq!(qs[0].question, "Go with the hybrid plan?");
+        assert!(!qs[0].multi_select);
+        assert_eq!(qs[0].options.len(), 2);
+        assert_eq!(qs[0].options[0].label, "Go (Recommended)");
+        assert_eq!(qs[0].options[1].description, "Discuss first.");
+    }
+
+    #[test]
+    fn parse_ask_questions_falls_back_to_none_on_a_shape_mismatch() {
+        // A card built from a guess would show the wrong choices — a malformed input must yield
+        // no card, not a broken one.
+        assert!(parse_ask_questions(&serde_json::json!({})).is_none());
+        assert!(parse_ask_questions(&serde_json::json!({ "questions": "not an array" })).is_none());
+        assert!(parse_ask_questions(&serde_json::json!({ "questions": [{ "header": "no question field" }] })).is_none());
+    }
+
+    #[test]
+    fn decode_chat_lines_keeps_the_ask_field_only_on_askuserquestion() {
+        let row = serde_json::json!({
+            "type": "assistant",
+            "message": { "role": "assistant", "content": [{
+                "type": "tool_use", "id": "toolu_1", "name": "AskUserQuestion",
+                "input": { "questions": [{ "question": "Ship it?", "header": "Ship", "multiSelect": false, "options": [{ "label": "Yes", "description": "" }] }] }
+            }] }
+        });
+        let snap = decode_chat_lines(vec![row.to_string()], 1);
+        let block = &snap.turns[0].blocks[0];
+        assert_eq!(block.tool.as_deref(), Some("AskUserQuestion"));
+        let ask = block.ask.as_ref().expect("ask data present for AskUserQuestion");
+        assert_eq!(ask[0].question, "Ship it?");
+
+        let bash_row = serde_json::json!({
+            "type": "assistant",
+            "message": { "role": "assistant", "content": [{
+                "type": "tool_use", "id": "toolu_2", "name": "Bash", "input": { "command": "ls" }
+            }] }
+        });
+        let snap2 = decode_chat_lines(vec![bash_row.to_string()], 1);
+        assert!(snap2.turns[0].blocks[0].ask.is_none(), "a non-question tool never carries ask data");
     }
 
     #[test]

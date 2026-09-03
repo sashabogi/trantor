@@ -1,10 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
-  applyBackfill, applyRows, applySessionChanged, bannerVisible, composerSlot, emptyChat,
-  gaugeLabel, gaugeTone, gaugeUnknownWindow, insertPaths, isDividerTurn,
+  answerKeystrokes, applyBackfill, applyRows, applySessionChanged, bannerVisible, composerSlot, emptyChat,
+  gaugeLabel, gaugeTone, gaugeUnknownWindow, insertPaths, isDividerTurn, openQuestion,
   sessionLiveness, normalizeAttachments, receiptFor, LOST_AFTER_MS, HANDOFF_WARN_FRAC,
   elapsedShort, lastToolLabel, tickerText,
-  type Backfill, type ChatState, type ContextGauge, type Meta, type RowsPayload, type Turn,
+  type AskQuestion, type Backfill, type ChatState, type ContextGauge, type Meta, type RowsPayload, type Turn,
 } from "./streaming";
 
 const t = (text: string) => ({ role: "user" as const, blocks: [{ kind: "text" as const, text }] });
@@ -468,6 +468,68 @@ describe("turn ticker", () => {
     expect(elapsedShort(8_000)).toBe("8s");
     expect(elapsedShort(252_000)).toBe("4m 12s");
     expect(elapsedShort(3_780_000)).toBe("1h 03m");
+  });
+});
+
+describe("openQuestion (#6094)", () => {
+  const askBlock = (tool_id: string, q: AskQuestion) =>
+    ({ kind: "tool" as const, text: q.question, tool: "AskUserQuestion", tool_id, ask: [q] });
+  const Q: AskQuestion = {
+    header: "Ship", question: "Ship it?", multiSelect: false,
+    options: [{ label: "Yes", description: "" }, { label: "No", description: "" }],
+  };
+
+  it("surfaces an AskUserQuestion call with no matching result", () => {
+    const turns: Turn[] = [{ role: "assistant", blocks: [askBlock("t1", Q)] }];
+    expect(openQuestion(turns, {})).toEqual({ tool_id: "t1", questions: [Q] });
+  });
+
+  it("is null once the tool_result lands", () => {
+    const turns: Turn[] = [{ role: "assistant", blocks: [askBlock("t1", Q)] }];
+    expect(openQuestion(turns, { t1: { tool_id: "t1", ok: true, preview: "answered" } })).toBe(null);
+  });
+
+  it("is null with no AskUserQuestion in the transcript at all", () => {
+    const turns: Turn[] = [{ role: "assistant", blocks: [{ kind: "text", text: "hi" }] }];
+    expect(openQuestion(turns, {})).toBe(null);
+  });
+
+  it("only the LATEST ask can be open — an answered one earlier never resurrects", () => {
+    const turns: Turn[] = [
+      { role: "assistant", blocks: [askBlock("old", Q)] },
+      { role: "user", blocks: [{ kind: "text", text: "Yes" }] },
+      { role: "assistant", blocks: [askBlock("new", Q)] },
+    ];
+    // "old" is answered, "new" is not — the open one is the newest, not a stale earlier one.
+    expect(openQuestion(turns, { old: { tool_id: "old", ok: true, preview: "answered" } }))
+      .toEqual({ tool_id: "new", questions: [Q] });
+  });
+
+  it("a tool block with no ask data (any other tool) is skipped", () => {
+    const turns: Turn[] = [
+      { role: "assistant", blocks: [{ kind: "tool", text: "ls", tool: "Bash", tool_id: "b1" }] },
+    ];
+    expect(openQuestion(turns, {})).toBe(null);
+  });
+});
+
+describe("answerKeystrokes (#6094)", () => {
+  const Q: AskQuestion = {
+    header: "Ship", question: "Ship it?", multiSelect: false,
+    options: [{ label: "Yes", description: "" }, { label: "No", description: "" }, { label: "Maybe", description: "" }],
+  };
+
+  it("a single choice is its 1-based digit, then Enter", () => {
+    expect(answerKeystrokes(Q, [0])).toBe("1\r");
+    expect(answerKeystrokes(Q, [2])).toBe("3\r");
+  });
+
+  it("multi-select sends each chosen digit in order, then one Enter", () => {
+    expect(answerKeystrokes({ ...Q, multiSelect: true }, [0, 2])).toBe("13\r");
+  });
+
+  it("an out-of-range index is dropped rather than sending a stray digit", () => {
+    expect(answerKeystrokes(Q, [0, 99, -1])).toBe("1\r");
   });
 });
 

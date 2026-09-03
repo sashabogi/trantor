@@ -21,7 +21,7 @@ import { attachmentInfo } from "../../shared/api/client";
 import { addChips, formatBytes, makeChip, removeChip, serializeForSend, type AttachmentChip } from "./attachments";
 import { clampComposerPx, growComposerPx, loadComposerHeight, maxComposerPx, minComposerPx, saveComposerHeight } from "./composerHeight";
 import { FONT_STEPS, type FontStep } from "./prefs";
-import { gaugeLabel, gaugeTone, gaugeUnknownWindow, composerSlot, hasImagePath, normalizeAttachments, receiptFor, type ContextGauge, type PendingSend } from "./streaming";
+import { gaugeLabel, gaugeTone, gaugeUnknownWindow, composerSlot, hasImagePath, normalizeAttachments, receiptFor, type ContextGauge, type OpenQuestion, type PendingSend } from "./streaming";
 import { projectSessions, takeoverAction, type ProjectSessions } from "./takeover";
 import { TakeoverStrip } from "./TakeoverStrip";
 
@@ -303,7 +303,7 @@ export function composerTakesDrop(hit: Element | null, root: Element | null): bo
   return root.contains(hit);
 }
 
-export function Composer({ project, target, live, liveWhy, model, modelSource, working, userTexts, context, fontStep, onFontStep, onSent, onLongRunChange, onDispatch, onDraftChange, suggestion, onSuggestionHandled }: {
+export function Composer({ project, target, live, liveWhy, blockedAsk, model, modelSource, working, userTexts, context, fontStep, onFontStep, onSent, onLongRunChange, onDispatch, onDraftChange, suggestion, onSuggestionHandled }: {
   project: string;
   target: string | null;
   /** Is there an agent behind the pane to talk to (#5477)? Drives every input, with `liveWhy`
@@ -311,6 +311,11 @@ export function Composer({ project, target, live, liveWhy, model, modelSource, w
    *  dead surface this exists to catch. */
   live: boolean;
   liveWhy: string;
+  /** #6094 — non-null while the pane is blocked on an AskUserQuestion the transcript can name.
+   *  `pane_send`'s own error ("answer it there (Terminal tray)") predates the question card and
+   *  points at the wrong place now that the card sits right above the composer — a send attempted
+   *  while this is set reports the specific ask instead. */
+  blockedAsk?: OpenQuestion | null;
   model: string;
   modelSource: Provenance;
   working: boolean;
@@ -578,7 +583,11 @@ export function Composer({ project, target, live, liveWhy, model, modelSource, w
   }, [attach]);
 
   const line = (text: string) =>
-    invoke("pane_send", { target, text }).catch(e => setError(String(e)));
+    invoke("pane_send", { target, text }).catch(e => setError(
+      // #6094 — pane_send's own "answer it there (Terminal tray)" predates the question card and
+      // now points at the wrong place: the ask is rendered right above this composer.
+      blockedAsk ? `The agent is asking a question above — answer it there: "${blockedAsk.questions[0]?.question ?? ""}"` : String(e),
+    ));
 
   // Paste-an-image (2026-09-01: the operator pasted a CleanShot screenshot twice and NOTHING
   // happened — a textarea silently swallows image DATA, so "upload" looked broken with no error).

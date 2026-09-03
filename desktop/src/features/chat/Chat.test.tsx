@@ -56,6 +56,7 @@ function makeDeps() {
       // exactly what Chat treats as "not hosted".
       return null as HerdrSeat | null;
     },
+    answerAtPane: async () => {},
     Composer: () => null,
     TerminalPane: () => null,
   };
