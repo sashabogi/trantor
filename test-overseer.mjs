@@ -312,5 +312,44 @@ try {
 } catch (e) { fail++; console.log(`  ✗ crew: ${e.message}`); }
 finally { hubI.kill(); rmSync(dirI, { recursive: true, force: true }); }
 
+// ── #6170: a hub restart must not forget who is crew ──────────────────────────────────────────
+// The bug, twice on 09-03 (08:05 and 08:20): peer kinds lived only in hub memory, so a restart
+// came back with every seat kindless, declaredCrewFor() found no crew, and the overseer warned the
+// operator about their own seats. Two separate losses had to be fixed — the peers table had no
+// kind column, AND normalizeState() rebuilds every peer from an explicit field list that dropped
+// it on load. This drill covers the second, on the JSON store, so it needs no Postgres: the
+// normalizer runs on that path too, and it is the one that survived the first fix.
+console.log("\n#6170: peer kinds survive a hub restart");
+{
+  const PK = 47945;
+  const dirK = mkdtempSync(join(tmpdir(), "trantor-overseer-kind-"));
+  let hubK = spawnHub(PK, {}, dirK);
+  await sleep(900);
+  try {
+    const K = mk(`http://127.0.0.1:${PK}`);
+    await K.post("/register", { session: "claude:kk", project: "kk", status: "active", kind: "agent" });
+    await K.post("/register", { session: "mac:kk", project: "kk", status: "orchestrating", kind: "orch" });
+    await K.post("/register", { session: "sasha@mac", project: "kk", status: "watching" });
+    // the beat that carries no kind — the one that used to demote the orchestrator
+    await K.post("/register", { session: "mac:kk", project: "kk" });
+
+    const kindOf = (peers, sid) => (peers.find(p => p.session === sid) || {}).kind || "";
+    const before = (await K.get("/peers")).peers;
+    ok(kindOf(before, "claude:kk") === "agent" && kindOf(before, "mac:kk") === "orch",
+       "kinds are set before the restart (positive control)");
+
+    await sleep(1200);                       // let the persist tick write
+    hubK.kill(); await sleep(500);
+    hubK = spawnHub(PK, {}, dirK);           // SAME data dir: this is a restart, not a new hub
+    await sleep(1200);
+
+    const after = (await mk(`http://127.0.0.1:${PK}`).get("/peers")).peers;
+    ok(kindOf(after, "claude:kk") === "agent", "#6170: a crew seat is still 'agent' after the restart");
+    ok(kindOf(after, "mac:kk") === "orch", "#6170: the orchestrator is still 'orch' after the restart");
+    ok(kindOf(after, "sasha@mac") === "", "#6170: a peer that never declared a kind is not given one");
+  } catch (e) { fail++; console.log(`  ✗ #6170 restart: ${e.message}`); }
+  finally { hubK.kill(); rmSync(dirK, { recursive: true, force: true }); }
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

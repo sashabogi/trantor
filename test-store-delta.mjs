@@ -228,6 +228,44 @@ console.log("saveDelta: peers + messages diff by natural key");
   ok(msgInserts.length === 1 && msgInserts[0].vals[0] === 2, "appends only the new message");
 }
 
+console.log("#6170: a peer's kind is written, and a kindless beat never demotes it");
+{
+  const { log, pool } = mockPool();
+  const store = new PgStore({ pool });
+  await store.touchPeer("local", "claude:p", { project: "p", status: "active", kind: "agent" });
+  await store.touchPeer("local", "claude:p", { project: "p", status: "active" });   // a plain heartbeat
+  const upserts = log.filter(l => l.sql.includes("INSERT INTO peers"));
+  ok(upserts.length === 2 && upserts[0].sql.includes("kind"), "touchPeer writes the kind column");
+  ok(upserts[0].vals[9] === "agent", "the declared kind reaches the row");
+  ok(upserts[1].vals[9] === "", "a kindless heartbeat sends no kind");
+  // The clause is the whole fix: without COALESCE/NULLIF the second beat above blanks the row,
+  // which is exactly how the orchestrator kept demoting itself between registrations.
+  ok(/kind=COALESCE\(NULLIF\(EXCLUDED\.kind,''\), peers\.kind\)/.test(upserts[1].sql),
+     "the upsert keeps the stored kind when the beat carries none");
+
+  // saveDelta is the path a RUNNING hub persists through — the persist tick, not touchPeer. The
+  // first live restart of this fix still came back with empty kinds because only the other two
+  // writers had the column, so this leg exists to fail loudly if that regresses.
+  const { log: dlog, pool: dpool } = mockPool();
+  const deltaStore = new PgStore({ pool: dpool });
+  await deltaStore.saveDelta("local",
+    baseState({ peers: { "mac:p": { lastSeen: 1, project: "p", kind: "orch" } } }),
+    baseState({ peers: { "mac:p": { lastSeen: 2, project: "p", kind: "orch" } } }),
+    { src: "test-hub" });
+  const deltaUpsert = dlog.filter(l => l.sql.includes("INSERT INTO peers"))[0];
+  ok(!!deltaUpsert && deltaUpsert.vals[9] === "orch", "saveDelta — the hub's real persist tick — carries the kind");
+  ok(!!deltaUpsert && /kind=COALESCE\(NULLIF\(EXCLUDED\.kind,''\), peers\.kind\)/.test(deltaUpsert.sql),
+     "…and is non-demoting on that path too");
+
+  const { log: slog, pool: spool } = mockPool();
+  const snapStore = new PgStore({ pool: spool });
+  await snapStore.saveSnapshot("local", baseState({ peers: { "claude:p": { lastSeen: 1, project: "p", kind: "agent" } } }));
+  const snapUpsert = slog.filter(l => l.sql.includes("INSERT INTO peers"))[0];
+  ok(!!snapUpsert && snapUpsert.vals[9] === "agent", "the snapshot path writes the kind too");
+  ok(!!snapUpsert && /kind=COALESCE\(NULLIF\(EXCLUDED\.kind,''\), peers\.kind\)/.test(snapUpsert.sql),
+     "…and is non-demoting as well: a snapshot written from memory that has forgotten the kind must not erase it");
+}
+
 // --- Section 2: live Postgres integration (opt-in) ----------------------------------------------
 const PG_URL = process.env.RELAY_TEST_PG_URL || "";
 if (!PG_URL) {
@@ -264,6 +302,64 @@ if (!PG_URL) {
   await new Promise(r => setTimeout(r, 300));   // NOTIFY delivery
   ok(notes.some(p => p.src === "writer-B"), "hub RECEIVES the second writer's NOTIFY");
   ok(notes.some(p => p.src === "hub-A"), "hub's own saveDelta also NOTIFYs (for other hub instances)");
+
+  // #6170: the actual bug. Peer kinds lived only in hub memory, so every restart forgot who was
+  // crew and who was the orchestrator, and the overseer warned about its own crew (08:05 and
+  // 08:20 on 09-03). This is register -> snapshot -> reload, against real Postgres.
+  await A.touchPeer(orgId, "claude:p6170", { project: "p6170", status: "active", kind: "agent" });
+  await A.touchPeer(orgId, "mac:p6170", { project: "p6170", status: "orchestrating", kind: "orch" });
+  await A.touchPeer(orgId, "sasha@mac", { project: "p6170", status: "watching" });   // genuinely kindless
+
+  // the heartbeats that used to erase it: same peers, no kind on the beat
+  await A.touchPeer(orgId, "claude:p6170", { project: "p6170" });
+  await A.touchPeer(orgId, "mac:p6170", { project: "p6170" });
+
+  // And through saveDelta, the way the live hub writes: state in memory -> persist tick -> reload.
+  const beforeTick = baseState({ peers: {} });
+  const afterTick = baseState({ peers: {
+    "delta:p6170": { lastSeen: 7, project: "p6170", status: "active", kind: "agent" },
+  } });
+  await A.saveDelta(orgId, beforeTick, afterTick, { src: "hub-A" });
+
+  const reloaded = await A.loadSnapshot(orgId);
+  ok(reloaded.peers["delta:p6170"]?.kind === "agent",
+     "#6170: a kind persisted by the hub's own delta tick survives the reload");
+  ok(reloaded.peers["claude:p6170"]?.kind === "agent", "#6170: a crew seat is still 'agent' after a reload");
+  ok(reloaded.peers["mac:p6170"]?.kind === "orch", "#6170: the orchestrator is still 'orch' — not demoted by its own beat");
+  ok(!reloaded.peers["sasha@mac"]?.kind, "#6170: a peer that never declared a kind stays blank, not invented");
+
+  // And the exemption that consumes it: same predicate the hub's declaredCrewFor uses.
+  const crew = Object.entries(reloaded.peers)
+    .filter(([, peer]) => (peer.project || "") === "p6170" && (peer.kind === "agent" || peer.kind === "orch"))
+    .map(([sid]) => sid).sort();
+  ok(JSON.stringify(crew) === JSON.stringify(["claude:p6170", "delta:p6170", "mac:p6170"]),
+     "#6170: the declared crew survives a restart, so the overseer stops warning about its own seats");
+
+  // The migration itself, which is what actually runs on the netcup hub: its peers table predates
+  // the column. Rebuild the OLD shape with a row in it, boot a store over the top, and check the
+  // ALTER is additive — column present, existing row untouched, and writable afterwards.
+  {
+    await A.pool.query("DROP TABLE IF EXISTS peers");
+    await A.pool.query(`CREATE TABLE peers (
+      session TEXT NOT NULL, org_id TEXT NOT NULL, pubkey TEXT, project TEXT, status TEXT,
+      hook_version TEXT, last_seen BIGINT, online BOOLEAN DEFAULT FALSE, delivered_up_to BIGINT DEFAULT 0,
+      PRIMARY KEY (org_id, session))`);
+    await A.pool.query("INSERT INTO peers(session, org_id, project, status, last_seen) VALUES($1,$2,$3,$4,$5)",
+      ["old:p6170", orgId, "p6170", "here before the migration", 42]);
+
+    const C = new PgStore({ url: PG_URL });
+    await C.init();                                   // boots SCHEMA_SQL over the old table
+    const cols = await C.pool.query("SELECT column_name FROM information_schema.columns WHERE table_name='peers'");
+    ok(cols.rows.some(r => r.column_name === "kind"), "#6170: booting over an OLD peers table adds the kind column");
+    const kept = await C.readPeer(orgId, "old:p6170");
+    ok(kept?.status === "here before the migration" && kept?.kind === "",
+       "#6170: the pre-migration row survives, with an empty kind rather than a guess");
+    await C.touchPeer(orgId, "old:p6170", { project: "p6170", kind: "agent" });
+    ok((await C.readPeer(orgId, "old:p6170"))?.kind === "agent", "#6170: and the migrated row takes a kind");
+    await C.init();                                   // idempotent: a second boot must not throw
+    ok(true, "#6170: the ALTER is idempotent — a second boot is a no-op");
+    await C.close();
+  }
 
   await A.close(); await B.close();
 }

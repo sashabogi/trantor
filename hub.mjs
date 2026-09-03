@@ -220,7 +220,12 @@ function normalizeState(loaded = {}) {
     // migrate old numeric form
     s.peers[session] = typeof v === "number"
       ? { lastSeen: v, status: "", project: "" }
-      : { lastSeen: v.lastSeen || 0, status: v.status || "", project: v.project || "", pubkey: v.pubkey || "", identity: v.identity || null, authWarning: v.authWarning || "", hookVersion: v.hookVersion || "", deliveredUpTo: v.deliveredUpTo || v.delivered_up_to || 0, _on: v._on === true || v.online === true };
+      // #6170: `kind` must be carried across the load. This normalizer rebuilds every peer from an
+      // explicit field list, so a field missing here is dropped no matter how faithfully the store
+      // returned it — which is exactly what happened: the column was added, Postgres held the right
+      // values, and the kinds still came back empty on the first live restart. llm/model stay
+      // out on purpose: those ARE in-memory presence, re-supplied by the next heartbeat.
+      : { lastSeen: v.lastSeen || 0, status: v.status || "", project: v.project || "", pubkey: v.pubkey || "", identity: v.identity || null, authWarning: v.authWarning || "", hookVersion: v.hookVersion || "", kind: v.kind || "", deliveredUpTo: v.deliveredUpTo || v.delivered_up_to || 0, _on: v._on === true || v.online === true };
   }
   return s;
 }
