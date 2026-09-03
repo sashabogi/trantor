@@ -2,6 +2,7 @@ use portable_pty::{native_pty_system, ChildKiller, CommandBuilder, MasterPty, Pt
 use std::{
     collections::HashMap,
     io::{Read, Write},
+    path::Path,
     process::Command,
     sync::{
         atomic::{AtomicBool, AtomicU64, Ordering},
@@ -207,6 +208,36 @@ const WAKE_KICKOFF_PROMPT: &str = "You were just woken via Trantor. Catch up fro
     — the handoff you were handed if one exists, otherwise the project board and memory — then \
     recap where things stand in at most 3 sentences and wait.";
 
+fn kickoff_from_cli(success: bool, stdout: &str, fallback: &str) -> String {
+    let prompt = stdout.trim();
+    if success
+        && !prompt.is_empty()
+        && prompt.len() <= 500
+        && !prompt.contains('\n')
+        && !prompt.contains('\r')
+    {
+        prompt.to_string()
+    } else {
+        fallback.to_string()
+    }
+}
+
+pub(crate) fn wake_kickoff_prompt(project: &str, dir: &Path, fallback: &str) -> String {
+    match Command::new("trantor")
+        .args(["genesis-kickoff", project])
+        .current_dir(dir)
+        .env("PATH", crate::terminal_path())
+        .output()
+    {
+        Ok(output) => kickoff_from_cli(
+            output.status.success(),
+            &String::from_utf8_lossy(&output.stdout),
+            fallback,
+        ),
+        Err(_) => fallback.to_string(),
+    }
+}
+
 #[tauri::command]
 pub fn orchestrator_open(project: String) -> Result<String, String> {
     let project = project.trim().to_string();
@@ -243,10 +274,11 @@ pub fn orchestrator_open(project: String) -> Result<String, String> {
     // retrying is safe. Stalled means bytes may have landed — never retry past it.
     if !stderr.contains("already hosted: reattached") {
         if let Some(pane) = target.rsplit('/').next().map(str::to_string) {
+            let kickoff = wake_kickoff_prompt(&project, &dir, WAKE_KICKOFF_PROMPT);
             std::thread::spawn(move || {
                 let deadline = std::time::Instant::now() + std::time::Duration::from_secs(300);
                 loop {
-                    match crate::herdr::prompt(&pane, WAKE_KICKOFF_PROMPT) {
+                    match crate::herdr::prompt(&pane, &kickoff) {
                         Ok(crate::herdr::PromptOutcome::Delivered) => break,
                         Ok(crate::herdr::PromptOutcome::Stalled) => break,
                         Ok(_) | Err(_) => {
@@ -535,5 +567,14 @@ mod tests {
 
         // No marker anywhere near the boundary: unchanged.
         assert_eq!(avoid_splitting_marker(&vec![b'x'; 600], 512), 512);
+    }
+
+    #[test]
+    fn cli_kickoff_selection_is_relayed_and_failure_falls_back() {
+        let selected = "docs/PRD.md is the brief; run /trantor:prd-review";
+        assert_eq!(kickoff_from_cli(true, selected, "plain"), selected);
+        assert_eq!(kickoff_from_cli(false, selected, "plain"), "plain");
+        assert_eq!(kickoff_from_cli(true, "", "plain"), "plain");
+        assert_eq!(kickoff_from_cli(true, "first\nsecond", "plain"), "plain");
     }
 }

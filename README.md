@@ -399,9 +399,15 @@ trantor setup | doctor | connect | profile | provider | models
 
 - **`trantor new <name>`** — project genesis in one command: makes the dir under your dev root
   (`TRANTOR_DEV_ROOT` or `~/development`), git on main (or `--from <git-url>`, or `--adopt` an
-  existing folder), seeds CLAUDE.md from `--brief <file>`, installs the auto-card hook, posts
-  the brief to the hub, and opens the first card "genesis: <name>". `--json` for machines.
-  It never spawns a session — firing the crew stays your call.
+  existing folder), installs the auto-card hook, posts the brief to the hub, and opens the first
+  card "genesis: <name>". `--json` for machines. It never spawns a session — firing the crew
+  stays your call. Two paths in: **blank** (no brief) wakes the orchestrator plainly and you work
+  with it iteratively; **from a brief** (`--brief <file>`, or a PRD dropped on the app's Genesis
+  sheet) stores it in `docs/PRD.md` with a small CLAUDE.md pointer, and the wake runs
+  **`/trantor:prd-review`**: every live crew seat plus two Scrooge readers review the PRD
+  independently against one rubric, the orchestrator synthesizes the consensus and asks you,
+  the TDD gets the same review, and only then do the build cards open. A parked project with
+  `docs/PRD.md` and no build cards takes the same path on its next Wake.
 
 - **`trantor provider`** — `list` every crew seat (built-in + brought) with availability + tier ·
   `add <name> --key … [--plan api] [--base-url <url> --models a,b]` to bring any provider (custom

@@ -95,13 +95,11 @@ if (from) {
 }
 
 // ── durable brief + small CLAUDE.md pointer ─────────────────────────────────────────────────────
-const docs = join(dir, "docs");
-mkdirSync(docs, { recursive: true });
-const prd = join(docs, "PRD.md");
-const prdBody = brief
-  ? `${brief}\n`
-  : `# ${name}\n\n(Genesis — no brief was given. Add this project's what/why/goal here.)\n`;
-writeFileSync(prd, prdBody);
+if (brief) {
+  const docs = join(dir, "docs");
+  mkdirSync(docs, { recursive: true });
+  writeFileSync(join(docs, "PRD.md"), `${brief}\n`);
+}
 
 const claude = join(dir, "CLAUDE.md");
 if (existsSync(claude)) {
@@ -109,7 +107,9 @@ if (existsSync(claude)) {
   if (!current.includes("## Trantor conventions")) appendFileSync(claude, `\n${CONVENTIONS}\n`);
 } else {
   const importedFrom = briefFile ? ` (imported from \`${basename(briefFile)}\`)` : "";
-  const head = `# ${name}\n\nThe project brief is stored at \`docs/PRD.md\`${importedFrom}. Read and maintain it there.\n`;
+  const head = brief
+    ? `# ${name}\n\nThe project brief is stored at \`docs/PRD.md\`${importedFrom}. Read and maintain it there.\n`
+    : `# ${name}\n\nNo project brief was supplied. Begin with the operator's first instruction.\n`;
   writeFileSync(claude, `${head}${CONVENTIONS}`);
 }
 
@@ -170,7 +170,9 @@ if (json) {
   console.log(JSON.stringify({ name, parent: devRoot, dir, branch, hub, card }));
 } else {
   console.log(`✓ ${dir} (${branch}${from ? ", cloned" : adopt ? ", adopted" : ""})`);
-  console.log(`✓ docs/PRD.md seeded${brief ? " from the brief" : " (no brief — add the project's what/why/goal)"}; CLAUDE.md kept small`);
+  console.log(brief
+    ? "✓ docs/PRD.md seeded from the brief; CLAUDE.md kept small"
+    : "✓ blank project seeded; CLAUDE.md kept small");
   console.log(`✓ auto-card hook installed (trantor init-hooks)`);
   if (card !== null) console.log(`✓ hub ${hub}: brief posted, card #${card} ("genesis: ${name}")`);
   else if (hubError) console.log(`! hub ${hub}: brief/card not posted (${hubError})`);

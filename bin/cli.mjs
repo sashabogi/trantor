@@ -70,6 +70,7 @@ switch (cmd) {
   case "reconcile": run("bin/reconcile.mjs"); break;
   case "init-hooks": run("bin/init-hooks.mjs"); break;
   case "new": run("bin/new.mjs"); break;
+  case "genesis-kickoff": run("bin/genesis-kickoff.mjs"); break;
   case "balances": case "balance": case "credits": run("bin/balances.mjs"); break;
   case "recost": run("bin/recost.mjs"); break;
   case "handoff": run("bin/baton.mjs"); break;
@@ -209,7 +210,8 @@ switch (cmd) {
   trantor gates       verification gates: "must verify before shipping" claims that survive handoffs — [--all] [--json]
   trantor backfill    card past GIT work onto the board (solo commits that were never carded) — [--since "14 days ago"] [--dry-run]
   trantor init-hooks  install a git post-commit hook so EVERY commit auto-cards on the board (reliable solo-work backstop) — [--uninstall]
-  trantor new         project genesis: new <name> [--from <git-url>] [--brief <file>] [--dir <parent>] [--adopt] [--json] — creates <parent>/<name>, git main, CLAUDE.md from the brief, hooks, hub brief + first card (never spawns a session)
+  trantor new         project genesis: new <name> [--from <git-url>] [--brief <file>] [--dir <parent>] [--adopt] [--json] — creates <parent>/<name>, git main, docs/PRD.md + small CLAUDE.md, hooks, hub brief + first card (never spawns a session)
+  trantor genesis-kickoff  internal wake prompt selector from the checkout + signed project board
   trantor balances    how much credit is left on each CONFIGURED provider (from your profile) — refill before you stall — [--json]
   trantor recost      recompute sub-agent notional cost from on-disk transcripts + reseed the board (repair after upgrade) — [--dry-run]
   trantor handoff     finish this session NOW: write a handoff, open a fresh session that takes over, and close this one (manual baton)
