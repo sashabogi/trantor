@@ -24,7 +24,8 @@ import {
 } from "../lib/classify-failure.mjs";
 import { capWake, capBcast, pickLessons, composePrompt } from "./crew-payload.mjs";
 import {
-  cardRef, carriesWork, parseTurnTokens, parseResetAt, reasonWithBalances, PARKING_REASONS,
+  cardRef, carriesWork, parseTurnTokens, parseResetAt, reasonWithBalances, quotaResetAt, PARKING_REASONS,
+  senderProjectOf, isLinkedProject,
 } from "../lib/turn-policy.mjs";
 
 const AGENT = process.argv[2];
@@ -304,7 +305,7 @@ if (!CLI[AGENT]) log(`'${AGENT}' is not a built-in seat — running it as an ope
 
 // RUNNER_RULES / RUNNER_KICKOFF env overrides: the runner is also the substrate for non-crew
 // always-on seats (the fleet DUTY agent, bin/duty.mjs) whose doctrine is not "work your card".
-const RULES = process.env.RUNNER_RULES || `Rules: you are ${SESSION} on the trantor crew. Before starting a card, read YOUR card: relay_board with card:<id> (the card, its deps, its notes, and the last five done cards whose title shares a word); never the whole board. Work your assigned file(s), report on the bus (relay_send, <280 chars), move your Kanban card as you go with a NOTE saying what you did (doing -> testing -> done; in 'testing' run YOUR OWN test file — never the full npm test, suites collide across seats — plus \`node bin/slop-gate.mjs\` when the repo has one: it lints ONLY your changed files against the anti-slop rules, and a card must not reach done with slop-gate failing; use 'failed' + a report if anything breaks). If you need something from another session, message THAT SESSION (relay_peers to find its id, relay_send to reach it) — never ask the human to pass it along; carrying messages between agents is the job this bus exists to remove. When your work for THIS message is finished, END YOUR TURN — do NOT park, do NOT loop relay_wait; the runner waits for you and will wake you with the next message. Path discipline: build/test from your worktree root ${TURN_DIR} with absolute paths or --manifest-path/--prefix instead of cd-ing into subdirs, and put anything that must land outside the repo under ${TURN_DIR}/.agent-bus-out/ (gitignored) — never ~/.agent-bus.`;
+const RULES = process.env.RUNNER_RULES || `Rules: you are ${SESSION} on the trantor crew. Before starting a card, read YOUR card: relay_board with card:<id> (the card, its deps, its notes, and the last five done cards whose title shares a word); never the whole board. Work your assigned file(s), report on the bus (relay_send, <280 chars), move your Kanban card as you go with a NOTE saying what you did (doing -> testing -> done; in 'testing' run YOUR OWN test file — never the full npm test, suites collide across seats — plus \`node bin/slop-gate.mjs\` when the repo has one: it lints ONLY your changed files against the anti-slop rules, and a card must not reach done with slop-gate failing; use 'failed' + a report if anything breaks). If you need something from another session, message THAT SESSION (relay_peers to find its id, relay_send to reach it) — never ask the human to pass it along; carrying messages between agents is the job this bus exists to remove. When your work for THIS message is finished, END YOUR TURN — do NOT park, do NOT loop relay_wait; the runner waits for you and will wake you with the next message. Path discipline: build/test from your worktree root ${TURN_DIR} with absolute paths or --manifest-path/--prefix instead of cd-ing into subdirs, and put anything that must land outside the repo under ${TURN_DIR}/.agent-bus-out/ (gitignored) — never ~/.agent-bus. Cross-project action is a breach: never \`trantor up\` a crew, register a seat, or send a card/contract into a project other than ${PROJ} unless the operator ran \`trantor policy link ${PROJ} <other> --reason "<why>"\` first — the hub, the CLI and this runner all refuse it mechanically, so ask the operator to link the projects instead of routing around the refusal.`;
 
 // ---- the pulse (Scape's Lloyd/Argus loop, Trantor-shaped) --------------------
 // A message-driven seat is DEAF between messages. An orchestrator seat with a mission needs a
@@ -435,8 +436,10 @@ async function reportFailure(exit, trigger, undelivered = 0, reasonOverride = ""
 // redelivered to. So those two reasons PARK — the queue is kept, the ladder stops, and the room is
 // told once, with the reset time when the CLI printed one. `trantor up` (a restart) resumes.
 let parkAnnounced = false;
-async function parkSeat(reason, undelivered) {
-  const resetAt = parseResetAt(lastErrText);
+async function parkSeat(reason, undelivered, resetHint = 0) {
+  // A seat that went QUIET printed no wall message to parse (#6131), so its own balance row is the
+  // only place the reset time exists. Output first when there is any: it is this turn's evidence.
+  const resetAt = parseResetAt(lastErrText) || resetHint;
   const when = resetAt ? new Date(resetAt).toLocaleString() : "";
   if (!parkAnnounced) {
     parkAnnounced = true;
@@ -456,8 +459,12 @@ async function parkSeat(reason, undelivered) {
 async function balanceRows() {
   try {
     const { fetchBalances } = await import("../lib/balances.mjs");
+    // Same key sources the crew itself uses: QWEN_API_KEY (and most others) live in
+    // ~/.agent-bus/.env, not in the runner's inherited environment — reading bare process.env
+    // here would report "no key" and quietly leave every silent turn classified as a crash.
+    const { resolveKeys } = await import("../lib/provider-keys.mjs");
     return await Promise.race([
-      fetchBalances(process.env, { only: [AGENT] }),
+      fetchBalances(resolveKeys(process.env), { only: [AGENT] }),
       new Promise((r) => setTimeout(() => r([]), 4000)),
     ]);
   } catch { return []; }
@@ -630,7 +637,7 @@ wait $job; turn_exit=$?
 [ -n "$boxpid" ] && kill $boxpid 2>/dev/null
 wait
 exit $turn_exit`;
-  const r = spawnSync("/bin/bash", ["-c", shell], {
+  const spawnOpts = {
     // detached: bash leads its OWN process group, so the time box can kill the CLI and everything
     // it spawned with one signal instead of orphaning the model process behind a dead shell.
     // stdin is /dev/null for every seat (it already was for codex/kimi/dsh via `< /dev/null`):
@@ -638,12 +645,14 @@ exit $turn_exit`;
     // takes SIGTTIN and stops forever. Nothing here runs interactively — every CLI is in -p /
     // exec / run mode — so closing stdin is what makes the group safe.
     detached: true,
-    // A BACKSTOP only, deliberately later than the shell's own box: if bash itself wedges, node
-    // still ends the turn. When the in-shell box works — the normal path — this never fires, which
-    // is the point: the shell kills while the tree is still walkable, node cannot.
-    ...(TURN_MAX_MS ? { timeout: TURN_MAX_MS + 30000, killSignal: "SIGKILL" } : {}),
     cwd: TURN_DIR, encoding: "utf8", stdio: cli.sid ? ["ignore", "pipe", "inherit"] : ["ignore", "inherit", "inherit"],
     env: { ...process.env, RELAY_URL: HUB, RELAY_AGENT: AGENT, RELAY_SESSION: SESSION, RELAY_PROJECT: PROJ,
+      // #6228: badges this seat's env as belonging to PROJ, distinctly from a one-off RELAY_PROJECT
+      // override (bin/crew.sh's own tests, and any deliberate `RELAY_PROJECT=x trantor up` from a
+      // plain shell, set RELAY_PROJECT alone and must keep working — only THIS marker means "the
+      // env I'm running in already has a project home"). crew.sh's `up` guard refuses to bring up a
+      // DIFFERENT project's crew from a shell carrying this badge, same as it refuses TRANTOR_ORCH.
+      TRANTOR_SEAT: PROJ,
       // A RUNNER-MANAGED SEAT MUST NEVER HAND ITSELF A BATON.
       //
       // The handoff machinery exists for an INTERACTIVE session: near its context limit it writes a
@@ -656,7 +665,12 @@ exit $turn_exit`;
       // sitting there days later. To the operator that reads as "why are there two duty agents".
       TRANTOR_NO_HANDOFF_SPAWN: "1", TRANTOR_NO_BATON_SPAWN: "1" },
     maxBuffer: 16 * 1024 * 1024,
-  });
+  };
+  // A BACKSTOP only, deliberately later than the shell's own box: if bash itself wedges, node
+  // still ends the turn. When the in-shell box works — the normal path — this never fires, which
+  // is the point: the shell kills while the tree is still walkable, node cannot.
+  if (TURN_MAX_MS) { spawnOpts.timeout = TURN_MAX_MS + 30000; spawnOpts.killSignal = "SIGKILL"; }
+  const r = spawnSync("/bin/bash", ["-c", shell], spawnOpts);
   try { unlinkSync(STAMPF); } catch {}   // turn over — disarm the watchdog
   // The shell's box leaves the marker; the backstop leaves an ETIMEDOUT. Either way the turn was
   // cut, not merely failed.
@@ -722,7 +736,10 @@ exit $turn_exit`;
   // #6134: what the turn COST, from the CLI's own usage line. Zero means this CLI printed none —
   // never that the turn was free. `trantor seat-why` totals these into today's spend per seat.
   const tokens = parseTurnTokens(ownOut);
-  telemetry({ ts: Date.now(), agent: AGENT, project: PROJ, turn: TURN, trigger, model: MODEL || "cli-default", duration_ms: Date.now() - t0, exit: realExit, effExit, authFailed: effExit !== realExit, emptyOutput: lastEmptyOutput, verdict, ...(tokens ? { tokens } : {}), ...(cut ? { cut: true } : {}) });
+  const telemetryRow = { ts: Date.now(), agent: AGENT, project: PROJ, turn: TURN, trigger, model: MODEL || "cli-default", duration_ms: Date.now() - t0, exit: realExit, effExit, authFailed: effExit !== realExit, emptyOutput: lastEmptyOutput, verdict };
+  if (tokens) telemetryRow.tokens = tokens;
+  if (cut) telemetryRow.cut = true;
+  telemetry(telemetryRow);
   log(`turn ended (exit ${realExit}${effExit !== realExit ? ` → effective ${effExit} (${lastEmptyOutput ? "empty-output" : "auth"})` : ""}, ${((Date.now() - t0) / 1000).toFixed(0)}s)`);
   if (realExit === 0 && effExit === 0) { cmuxStatus("idle", "#8a94a6", "robot"); herdrAgent("idle"); }   // finished this turn, waiting for the next
   // #5965 — TURN END. A clean exit means the seat is idle again; say so right away so the app stops
@@ -825,6 +842,20 @@ function shouldWake(message) {
   return message?.to === "all"
     && isContract(message)
     && (message.text.includes(`@${AGENT}`) || message.text.toLowerCase().includes(`${AGENT}:`));
+}
+
+// #6228: the operator's declared project links, cached briefly so a burst of wakes doesn't hit
+// /policy per message. Fails CLOSED on an unreachable hub (keeps whatever was last known, empty
+// on a cold start) — the mechanical fence the hub enforces at write time must not go soft just
+// because the read-side cache call happened to miss.
+let linksCache = { at: 0, links: [] };
+async function currentLinks() {
+  if (Date.now() - linksCache.at < 60000) return linksCache.links;
+  try {
+    const r = await api("/policy");
+    linksCache = { at: Date.now(), links: Array.isArray(r?.links) ? r.links : [] };
+  } catch {}
+  return linksCache.links;
 }
 
 function askedExcerpt(message) {
@@ -932,7 +963,19 @@ function askedExcerpt(message) {
     // deafness problem: the seat would never learn what it was told (#6134).
     const bcast = [...rest.filter(m => !direct.includes(m) && !mentions.includes(m)), ...fyi];
     pendingBcast.push(...bcast);                      // wake-policy: plain broadcasts batch, they don't wake
-    const wake = [...direct, ...mentions];
+    const wakeCandidates = [...direct, ...mentions];
+    // #6228: a wake naming another project (its sender's home project, not this seat's, and the
+    // two are not `trantor policy link`ed) is dropped without acting — never queued, never folded
+    // into context. One report goes back to the sender so it does not just look like silence.
+    const links = wakeCandidates.length ? await currentLinks() : [];
+    const crossProject = wakeCandidates.filter(m => !isLinkedProject(senderProjectOf(m.from), PROJ, links));
+    for (const m of crossProject) {
+      const sp = senderProjectOf(m.from) || "?";
+      log(`\x1b[33mcross-project wake dropped\x1b[0m — ${m.from} (${sp}) is not ${PROJ}'s project and the two are not linked`);
+      api("/send", { from: SESSION, to: m.from, project: sp, kind: "status",
+        text: `⛔ cross-project: ${SESSION} is ${PROJ}'s seat, not ${sp}'s — dropped without acting. Link them first: trantor policy link ${PROJ} ${sp} --reason "<why>"` }).catch(() => {});
+    }
+    const wake = wakeCandidates.filter(m => !crossProject.includes(m));
     if (!wake.length) { if (bcast.length) { savePending(pendingWake, pendingBcast); log(`${bcast.length} broadcast(s) batched (no wake) — ${pendingBcast.length} pending`); } continue; }
     // Queue BEFORE running the turn, and persist immediately. Everything between here and a clean
     // exit 0 — the CLI dying, the machine losing power — now leaves a record of what this seat owes.
@@ -998,11 +1041,18 @@ function askedExcerpt(message) {
       // #6131: a silent turn on a seat whose plan reads spent is exhaustion wearing a crash's
       // clothes. Only that one reason is ever re-read, and only from the seat's own balance rows.
       let reason = classify(ec);
-      if (reason === "empty-output") reason = reasonWithBalances(reason, await balanceRows());
+      let quotaReset = 0;
+      if (reason === "empty-output") {
+        const rows = await balanceRows();
+        reason = reasonWithBalances(reason, rows);
+        // The rows that just proved the plan is spent also carry when it lifts — a park that names
+        // the reset is a wait, a park that cannot is a seat the operator has to remember by hand.
+        if (reason === "exhausted") quotaReset = quotaResetAt(rows);
+      }
       savePending(pendingWake, pendingBcast);
       await reportFailure(ec, "message", pendingWake.length, reason);
       if (PARKING_REASONS.has(reason)) {
-        retryAt = await parkSeat(reason, pendingWake.length);
+        retryAt = await parkSeat(reason, pendingWake.length, quotaReset);
         await notifyAssigners(assigners,
           `⛔ your contract is PARKED on ${SESSION} (${reason}) — not retrying · asked: "${asked}"`);
         lastTurnAt = Date.now();

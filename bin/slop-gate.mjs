@@ -43,6 +43,21 @@ if (SURFACE) {
 // excluded legacy files (hub.mjs, mcp.mjs) stay excluded here too.
 const r = spawnSync("npx", ["oxlint", ...args], { encoding: "utf8", maxBuffer: 16 * 1024 * 1024 });
 const out = (r.stdout || "") + (r.stderr || "");
+// A gate that cannot run must not read as clean. Witnessed 2026-09-03: a seat worktree with no
+// node_modules made `npx oxlint` die with an npm error, the empty output had zero hits, and
+// "slop-gate clean" rode into main on 23 real anti-slop errors. the exit contract below is the
+// only proof it ran; without it, exit 2 and say so.
+// oxlint prints no run summary here (diagnostics only), so "it ran" is read from its exit
+// contract: 0 = clean, 1 = diagnostics printed. An npm error, a launch error, an exit code oxlint
+// never uses, a 1 with no diagnostic line, or "No files found" is not a verdict.
+const diag = /:\d+:\d+: (error|warning)\b/.test(out);
+const ran = !r.error && !/^npm (error|ERR!)/m.test(out) && !/No files found to lint/.test(out)
+  && (r.status === 0 || (r.status === 1 && diag));
+if (!ran) {
+  console.error(out.trim().split("\n").slice(-6).join("\n"));
+  console.error("\nslop-gate: could not run oxlint, so there is no verdict and this is NOT clean. Install deps in this checkout (pnpm install) and rerun.");
+  process.exit(2);
+}
 const hits = out.split("\n").filter(l => /error\s+anti-slop\(/.test(l));
 
 if (hits.length) {

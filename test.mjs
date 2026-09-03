@@ -174,5 +174,14 @@ ok("RELAY_SESSION opts a home-dir session back in", rh2.status === 0 && !rh2.std
 }
 
 rmSync(hfFile, { force: true });
+// slop-gate must never report clean when oxlint itself could not run (2026-09-03: a worktree
+// without node_modules made npx fail and the empty output read as zero hits).
+{
+  const rg = spawnSync(process.execPath, [join(process.cwd(), "bin/slop-gate.mjs"), "--surface", "bin/slop-gate.mjs"],
+    { encoding: "utf8", timeout: 30000, env: { ...process.env, PATH: "/nonexistent-bin" } });
+  ok("slop-gate exits non-zero when oxlint cannot run", rg.status !== 0);
+  ok("slop-gate says it could not run, not clean", /could not run oxlint/.test(rg.stderr) && !/clean/.test(rg.stdout));
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
