@@ -21,9 +21,11 @@ import { ProjectIcon } from "../shared/ProjectIcon";
 import type { LensCompat } from "../features/project/ProjectHeader";
 import { orchRestorables } from "../features/workspace/herdr";
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { GenesisSheet } from "../features/genesis/GenesisSheet";
 import { PLAIN_WAKE_KICKOFF } from "../features/genesis/genesis";
 import { classifyWakeOutcome, wakeOutcomeIsTransient, wakeRowLine, WAKE_OUTCOME_MS, type WakeRowState } from "../features/genesis/wakeRow";
+import { applyWakeProgress, wakeInProgress, wakeProgressRowState, WAKE_PROGRESS_EVENT, type WakeProgress } from "../features/genesis/wakeProgress";
 
 const LOCAL_HUB = "http://127.0.0.1:4477";
 import { Home } from "../features/home/Home";
@@ -87,6 +89,10 @@ function SectionLabel({ children, count, action }: { children: React.ReactNode; 
     </div>
   );
 }
+
+// #6201 — "underway" is the click's own in-flight state PLUS the kickoff section the
+// wake-progress events refine: a wake inside its idle gate is one wake, not a finished one.
+const wakeUnderway = (s?: WakeRowState) => s?.phase === "running" || s?.phase === "kickoff";
 
 export function AppShell() {
   const [projects, setProjects] = useState<string[]>([]);
@@ -295,13 +301,22 @@ export function AppShell() {
   const setWakeState = (p: string, state: WakeRowState) => {
     setWakeStates(prev => new Map(prev).set(p, state));
   };
+  /** The outcome's few seconds (WAKE_OUTCOME_MS), then the line goes. Armed at most once per
+   *  project — a second arming clears the first, so an early timer can never delete a fresh
+   *  outcome ahead of its time. The fade checks what it deletes: a line that moved on (a new
+   *  wake began) is not its business. */
+  const armOutcomeFade = (p: string) => {
+    const prior = wakeTimers.current.get(p);
+    if (prior) clearTimeout(prior);
+    wakeTimers.current.set(p, setTimeout(() => {
+      wakeTimers.current.delete(p);
+      setWakeStates(prev => { const m = new Map(prev); if (m.get(p)?.phase === "outcome") m.delete(p); return m; });
+    }, WAKE_OUTCOME_MS));
+  };
   const showOutcome = (p: string, outcome: WakeRowState) => {
     setWakeState(p, outcome);
     if (!wakeOutcomeIsTransient(outcome)) return; // errors stay until the next click
-    wakeTimers.current.set(p, setTimeout(() => {
-      wakeTimers.current.delete(p);
-      setWakeStates(prev => { const m = new Map(prev); m.delete(p); return m; });
-    }, WAKE_OUTCOME_MS));
+    armOutcomeFade(p);
   };
   const wakeProject = async (p: string) => {
     if (wakingRef.current) return;
@@ -322,6 +337,31 @@ export function AppShell() {
       wakingRef.current = false;
     }
   };
+
+  // #6201 — the wake says where it is while it runs. The mount query covers a window opened
+  // mid-wake (an event alone would never tell it anything until the next phase), and the
+  // wake-progress events keep the rows current: "kickoff pending" through the idle gate, the
+  // send, then the outcome for the usual few seconds. Genesis's detached wake (#6161) and a
+  // wake from another window both show up here — no row goes quiet mid-chain again.
+  useEffect(() => {
+    let alive = true;
+    wakeInProgress().then(ps => {
+      if (!alive) return;
+      setWakeStates(prev => {
+        const m = new Map(prev);
+        for (const p of ps) if (!m.has(p)) m.set(p, { phase: "kickoff", step: "pending" });
+        return m;
+      });
+    }).catch(() => {});
+    const un = listen<WakeProgress>(WAKE_PROGRESS_EVENT, e => {
+      if (!alive) return;
+      const next = wakeProgressRowState(e.payload.phase, e.payload.detail);
+      setWakeStates(prev => applyWakeProgress(prev, e.payload));
+      if (next?.phase === "outcome" && wakeOutcomeIsTransient(next)) armOutcomeFade(e.payload.project);
+    });
+    return () => { alive = false; void un.then(f => f()); };
+    // runs once at mount; the fold helpers are stable component-body closures
+  }, []);  // eslint-disable-line react-hooks/exhaustive-deps
 
   // #5401 — the reboot-restore offer. At LAUNCH (once, with one 30s retry for a herdr that is
   // still coming up), find projects whose orchestrator pane outlived its conversation. Per the
@@ -389,8 +429,11 @@ export function AppShell() {
   const ProjectRow = ({ p }: { p: string }) => {
     const act = activity.get(p);
     const on = p === active && pane.kind === "project";
-    const isWaking = wakeStates.get(p)?.phase === "running";
-    const wakeLine = wakeRowLine(wakeStates.get(p));
+    // #6201 — the click's own state plus the chain's kickoff section, per the module helper.
+    const wakeState = wakeStates.get(p);
+    const isWaking = wakeState?.phase === "running";
+    const wakeLine = wakeRowLine(wakeState);
+    const underway = wakeUnderway(wakeState);
     const open = () => { setActive(p); setPane(cur => ({ kind: "project", lens: cur.kind === "project" ? cur.lens : "board" })); };
     // #5610 v1 — the happening-now line: a BUSY row says what is true beneath its name
     // ("mid-turn · 8s ago · fable"), from data the activity pull already holds. An open-idle
@@ -436,11 +479,11 @@ export function AppShell() {
             pane answers busy with its pane id, an agent-less pane reopens. */}
         <button type="button"
           onClick={e => { e.stopPropagation(); void wakeProject(p); }}
-          disabled={isWaking}
+          disabled={underway}
           title="host this project's session as a pane and recap from memory and the board"
           className={`shrink-0 rounded-[6px] bg-tr-ok/10 px-1.5 py-0.5 text-[10.5px] font-semibold text-tr-ok hover:bg-tr-ok/20 disabled:opacity-40
-            ${isWaking ? "opacity-100" : "opacity-0 focus:opacity-100 group-hover:opacity-100 group-focus-within:opacity-100"}`}>
-          {isWaking ? "Waking…" : "Wake"}
+            ${underway ? "opacity-100" : "opacity-0 focus:opacity-100 group-hover:opacity-100 group-focus-within:opacity-100"}`}>
+          {underway ? "Waking…" : "Wake"}
         </button>
         {/* the dot is BLUE for any open session and blinks ONLY when work is actually happening —
             a window sitting open earns presence, never motion */}
@@ -489,9 +532,9 @@ export function AppShell() {
                 </span>
                 <button type="button"
                   onClick={() => void wakeProject(p)}
-                  disabled={wakeStates.get(p)?.phase === "running"}
+                  disabled={wakeUnderway(wakeStates.get(p))}
                   className="shrink-0 rounded-[6px] bg-tr-ok/10 px-1.5 py-0.5 text-[10.5px] font-semibold text-tr-ok hover:bg-tr-ok/20 disabled:opacity-40">
-                  {wakeStates.get(p)?.phase === "running" ? "Resuming…" : "Resume"}
+                  {wakeUnderway(wakeStates.get(p)) ? "Resuming…" : "Resume"}
                 </button>
                 <button type="button" title="dismiss — it stays wakeable from its project row"
                   onClick={() => setRestorables(rs => rs.filter(r => r !== p))}

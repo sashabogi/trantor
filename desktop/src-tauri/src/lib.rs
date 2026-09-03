@@ -3561,7 +3561,7 @@ async fn handoff_now(
         outcome,
         attempts,
         elapsed_secs: elapsed,
-    } = kickoff_after_reopen(&pane, KICKOFF_PROMPT.to_string()).await;
+    } = kickoff_after_reopen(&pane, KICKOFF_PROMPT.to_string(), |_, _| {}).await;
     match outcome {
         Ok(outcome) => Ok(handoff_label(&gate_outcome, gate_secs, &outcome, attempts, elapsed)),
         Err(e) => Err(format!(
@@ -3590,7 +3590,11 @@ pub(crate) struct KickoffReport {
 /// outcomes on the kickoff cadence until it lands, is blocked, or the deadline passes. Both the
 /// handoff chain and the Wake button ride this one ladder; every herdr call sits on
 /// spawn_blocking so the async runtime never blocks.
-pub(crate) async fn kickoff_after_reopen(pane: &str, prompt: String) -> KickoffReport {
+pub(crate) async fn kickoff_after_reopen(
+    pane: &str,
+    prompt: String,
+    progress: impl Fn(KickoffPhase, Option<String>),
+) -> KickoffReport {
     let status_pane = pane.to_string();
     let prompt_pane = pane.to_string();
     kickoff_ladder(
@@ -3613,28 +3617,56 @@ pub(crate) async fn kickoff_after_reopen(pane: &str, prompt: String) -> KickoffR
         },
         KICKOFF_CADENCE,
         KICKOFF_DEADLINE,
+        progress,
     )
     .await
+}
+
+/// Where the ladder is, told to the caller's reporter (#6201). The wake chain's wake-progress
+/// event carries these verbatim (the frontend contract); the handoff chain reports nothing and
+/// passes a no-op — it has its own handoff-progress label.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum KickoffPhase {
+    /// The ladder is polling for the session to read idle (the gate that ran 88s on tiny-timer).
+    WaitingIdle,
+    /// The prompt is going out — including the transient-outcome retries.
+    KickoffSent,
+    /// The chain reached its end; the detail names the outcome in the operator's words.
+    Landed,
+}
+
+impl KickoffPhase {
+    pub(crate) fn as_str(&self) -> &'static str {
+        match self {
+            KickoffPhase::WaitingIdle => "waiting_idle",
+            KickoffPhase::KickoffSent => "kickoff_sent",
+            KickoffPhase::Landed => "kickoff_landed",
+        }
+    }
 }
 
 /// The ladder itself, over a status poll and a prompt send so it drills without a herdr socket:
 /// phase one waits for `status` to read idle (bounded by `deadline`); phase two sends `prompt`
 /// and retries per boot_prompt_decision on `cadence` (bounded by its own `deadline`). The first
-/// send always happens, so the report always carries a real last outcome.
-async fn kickoff_ladder<S, SF, P, PF>(
+/// send always happens, so the report always carries a real last outcome. `progress` hears where
+/// the ladder is — the wake chain forwards it to the frontend as wake-progress (#6201).
+async fn kickoff_ladder<S, SF, P, PF, C>(
     status: S,
     prompt: P,
     cadence: Duration,
     deadline: Duration,
+    mut progress: C,
 ) -> KickoffReport
 where
     S: Fn() -> SF,
     SF: std::future::Future<Output = Option<String>>,
     P: Fn() -> PF,
     PF: std::future::Future<Output = Result<herdr::PromptOutcome, String>>,
+    C: FnMut(KickoffPhase, Option<String>),
 {
     let started = Instant::now();
 
+    progress(KickoffPhase::WaitingIdle, None);
     let idle_deadline = tokio::time::Instant::now() + deadline;
     loop {
         if status().await.as_deref() == Some("idle") {
@@ -3646,6 +3678,7 @@ where
         tokio::time::sleep(cadence).await;
     }
 
+    progress(KickoffPhase::KickoffSent, None);
     let prompt_deadline = tokio::time::Instant::now() + deadline;
     let mut attempts = 0u32;
     let mut stalled_retries = 0u32;
@@ -3658,16 +3691,44 @@ where
         if matches!(r, Ok(herdr::PromptOutcome::Stalled)) {
             stalled_retries += 1;
         }
+        // #6201 — the double-kickoff guard. herdr's Stalled means "no lifecycle change
+        // OBSERVED in the window", not "the send did not happen": tiny-timer's kickoff
+        // registered on the first send (the transcript shows it landing), herdr still answered
+        // Stalled, and this ladder re-typed the prompt 16s later (13:23:50 + 13:24:06) into a
+        // session already chewing on it. Before any retry, ask the pane: an agent that now
+        // reads working/blocked is mid-turn ON OUR PROMPT — a Delivered outcome must not be
+        // retried, and neither may a delivery herdr misreported.
+        if !prompt_retry_safe(status().await.as_deref()) {
+            break r;
+        }
         if tokio::time::Instant::now() + cadence > prompt_deadline {
             break r;
         }
         tokio::time::sleep(cadence).await;
     };
+    progress(KickoffPhase::Landed, Some(kickoff_landed_detail(&outcome)));
 
     KickoffReport {
         outcome,
         attempts,
         elapsed_secs: started.elapsed().as_secs(),
+    }
+}
+
+/// Whether a prompt retry may proceed given the pane's current reading (#6201). A mid-turn
+/// agent — working, or blocked at a dialog — is chewing on the send we are about to repeat:
+/// re-sending would fire the kickoff twice. Every other reading (idle again, done, no agent,
+/// herdr unreachable) leaves the decision to boot_prompt_decision.
+fn prompt_retry_safe(status: Option<&str>) -> bool {
+    !matches!(status, Some("working") | Some("blocked"))
+}
+
+/// The one-line outcome a finished ladder reports (#6201): the human label for a prompt
+/// outcome, or the herdr error verbatim. Pure so it drills without a socket.
+fn kickoff_landed_detail(outcome: &Result<herdr::PromptOutcome, String>) -> String {
+    match outcome {
+        Ok(o) => kickoff_outcome_label(o).to_string(),
+        Err(e) => e.clone(),
     }
 }
 
@@ -5220,6 +5281,7 @@ pub fn run() {
     tauri::Builder::default()
         .manage(terminal::TerminalManager::default())
         .manage(HandoffChains::default())
+        .manage(genesis::WakeChains::default())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_notification::init())
         .setup(|app| {
@@ -5289,6 +5351,7 @@ pub fn run() {
             genesis::genesis_read_brief,
             genesis::project_new,
             genesis::project_wake,
+            genesis::wake_in_progress,
             handoff_now,
             handoff_in_progress,
             takeover_now,
@@ -6641,8 +6704,11 @@ mod succession_tests {
             },
             Duration::ZERO,
             Duration::from_secs(5),
+            |_, _| {},
         ));
-        assert_eq!(polls.get(), 3);
+        // 3 gate polls + one retry-guard read before EACH of the two retries (#6201): the guard
+        // re-asks the pane before re-sending, and both reads say idle here.
+        assert_eq!(polls.get(), 5);
         assert_eq!(report.attempts, 3);
         assert!(matches!(report.outcome, Ok(O::Delivered)));
 
@@ -6653,6 +6719,7 @@ mod succession_tests {
             || async { Ok(O::NotReady) },
             Duration::ZERO,
             Duration::from_millis(20),
+            |_, _| {},
         ));
         assert!(report.attempts >= 1);
         assert!(matches!(report.outcome, Ok(O::NotReady)));
@@ -6663,9 +6730,132 @@ mod succession_tests {
             || async { Ok(O::Blocked) },
             Duration::ZERO,
             Duration::from_secs(5),
+            |_, _| {},
         ));
         assert_eq!(report.attempts, 1);
         assert!(matches!(report.outcome, Ok(O::Blocked)));
+    }
+
+    // #6201 — the phase sequence the wake chain forwards to the frontend: waiting for idle,
+    // kickoff sent, kickoff landed — in that order, exactly once each, and the landed detail
+    // names the outcome in the operator's words.
+    #[test]
+    fn kickoff_ladder_reports_the_phase_sequence() {
+        use herdr::PromptOutcome as O;
+        use std::cell::RefCell;
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_time()
+            .build()
+            .unwrap();
+        let phases: RefCell<Vec<(&'static str, Option<String>)>> = RefCell::new(Vec::new());
+        let report = rt.block_on(kickoff_ladder(
+            || async { Some("idle".to_string()) },
+            || async { Ok(O::Delivered) },
+            Duration::ZERO,
+            Duration::from_secs(5),
+            |phase, detail| phases.borrow_mut().push((phase.as_str(), detail)),
+        ));
+        assert!(matches!(report.outcome, Ok(O::Delivered)));
+        let phases = phases.borrow();
+        let names: Vec<&str> = phases.iter().map(|(p, _)| *p).collect();
+        assert_eq!(names, ["waiting_idle", "kickoff_sent", "kickoff_landed"]);
+        let (_, landed) = phases.last().unwrap();
+        assert!(
+            landed.as_deref().unwrap_or_default().contains("delivered"),
+            "the landed detail must name the outcome, got {landed:?}"
+        );
+    }
+
+    // #6201 — the ladder's own error end also lands, with the herdr error verbatim, so the
+    // frontend's pending label can always clear.
+    #[test]
+    fn a_ladder_ended_on_a_herdr_error_lands_with_the_error_verbatim() {
+        use std::cell::RefCell;
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_time()
+            .build()
+            .unwrap();
+        let landed: RefCell<Option<String>> = RefCell::new(None);
+        rt.block_on(kickoff_ladder(
+            || async { Some("idle".to_string()) },
+            || async { Err("herdr is not reachable".into()) },
+            Duration::ZERO,
+            Duration::from_secs(5),
+            |phase, detail| {
+                if phase == KickoffPhase::Landed {
+                    *landed.borrow_mut() = detail;
+                }
+            },
+        ));
+        assert_eq!(landed.borrow().as_deref(), Some("herdr is not reachable"));
+    }
+
+    // #6201 — the double-kickoff guard: tiny-timer's kickoff landed on the first send but herdr
+    // answered Stalled (no lifecycle change OBSERVED in its window), and the ladder re-typed the
+    // prompt 16s later into a session already chewing on it. A Stalled send with the pane now
+    // reading mid-turn must NOT be retried.
+    #[test]
+    fn a_stalled_send_with_the_agent_already_working_is_not_retried() {
+        use herdr::PromptOutcome as O;
+        use std::cell::Cell;
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_time()
+            .build()
+            .unwrap();
+        let sent = Cell::new(false);
+        let report = rt.block_on(kickoff_ladder(
+            // The gate reads idle (the send goes out), then the agent starts OUR prompt.
+            || {
+                let working = sent.get();
+                async move { Some(if working { "working" } else { "idle" }.to_string()) }
+            },
+            || {
+                sent.set(true);
+                async { Ok(O::Stalled) }
+            },
+            Duration::ZERO,
+            Duration::from_secs(5),
+            |_, _| {},
+        ));
+        assert!(matches!(report.outcome, Ok(O::Stalled)));
+        assert_eq!(report.attempts, 1, "the landed-but-misreported prompt must not be re-sent");
+    }
+
+    // #6201 — the guard must not over-block: a Stalled send with the pane still idle IS a send
+    // that did not register, and the retry that lands it is the ladder working as designed.
+    #[test]
+    fn a_stalled_send_with_an_idle_agent_still_retries() {
+        use herdr::PromptOutcome as O;
+        use std::cell::{Cell, RefCell};
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_time()
+            .build()
+            .unwrap();
+        let sends = RefCell::new(vec![Ok(O::Stalled), Ok(O::Delivered)]);
+        let count = Cell::new(0u32);
+        let report = rt.block_on(kickoff_ladder(
+            || async { Some("idle".to_string()) },
+            || {
+                count.set(count.get() + 1);
+                let r = sends.borrow_mut().remove(0);
+                async move { r }
+            },
+            Duration::ZERO,
+            Duration::from_secs(5),
+            |_, _| {},
+        ));
+        assert_eq!(count.get(), 2);
+        assert!(matches!(report.outcome, Ok(O::Delivered)));
+    }
+
+    // #6201 — the retry guard's whole reading table.
+    #[test]
+    fn prompt_retry_safe_holds_only_off_a_mid_turn_agent() {
+        assert!(!prompt_retry_safe(Some("working")));
+        assert!(!prompt_retry_safe(Some("blocked")));
+        for reading in [Some("idle"), Some("done"), Some("unknown"), None] {
+            assert!(prompt_retry_safe(reading), "reading {reading:?} must not block a retry");
+        }
     }
 
     // #6184 — the returned label carries the tries and the elapsed time, not just the outcome.

@@ -40,6 +40,8 @@ import {
   apply as applyStatus, initialArbiterState, needsReseed, RESEED_DELAYS_MS,
   type ArbiterState, type StatusSource,
 } from "./statusArbiter";
+import { WAKE_PENDING_LINE, WAKE_OUTCOME_MS } from "../genesis/wakeRow";
+import { wakeProgressText, WAKE_PROGRESS_EVENT, type WakeProgress } from "../genesis/wakeProgress";
 
 /** "pane" = hosted inside the ModePane (#5841): the pane owns width, height, and the mode
  *  rail, so the chat brings no column chrome of its own — no fixed width, no resize strip, no
@@ -499,6 +501,37 @@ export function Chat({ project, sessionId, dock, onDock, onClose, deps = DEFAULT
 
   const working = status === "working";
 
+  // #6201 — the wake chain's line in this header. During the idle gate the session's own startup
+  // makes status read "working" (tiny-timer: "working · 44s" across an 88s silent gate), which
+  // is exactly how a woken session read as idle-with-nothing-to-do. So while a wake runs, its
+  // truth REPLACES the ticker; when the chain lands, the outcome shows for the same few seconds
+  // the sidebar row gives it, then the ticker returns.
+  const [wakeNote, setWakeNote] = useState<{ kind: "pending" | "outcome"; text: string } | null>(null);
+  useEffect(() => {
+    if (history) return;
+    let alive = true;
+    let fade: ReturnType<typeof setTimeout> | undefined;
+    const armFade = () => {
+      if (fade) clearTimeout(fade);
+      fade = setTimeout(() => { fade = undefined; if (alive) setWakeNote(null); }, WAKE_OUTCOME_MS);
+    };
+    const drop = () => { if (fade) { clearTimeout(fade); fade = undefined; } };
+    setWakeNote(null);
+    drop();
+    // A window opened mid-wake reads the mount-time mark; events keep it current afterwards.
+    invokeFn<string[]>("wake_in_progress").then(ps => {
+      if (alive && (ps ?? []).includes(project)) setWakeNote({ kind: "pending", text: WAKE_PENDING_LINE });
+    }).catch(() => {});
+    const un = listenFn<WakeProgress>(WAKE_PROGRESS_EVENT, e => {
+      if (!alive || e.payload.project !== project) return;
+      const note = wakeProgressText(e.payload.phase, e.payload.detail);
+      setWakeNote(note);
+      if (note?.kind === "outcome") armFade();
+      else drop();
+    });
+    return () => { alive = false; drop(); void un.then(f => f()); };
+  }, [history, project, invokeFn, listenFn]);
+
   // Suggested-reply chips (#5929): asks collected from EVERY orchestrator turn since the
   // operator's last user turn (walk back until a user turn — the real ask is routinely one turn
   // back behind a hook-driven "Nothing to swap."), most recent ask first, capped at three.
@@ -721,10 +754,16 @@ export function Chat({ project, sessionId, dock, onDock, onClose, deps = DEFAULT
         </div>
       </div>
 
-      {/* #5608 — the live turn ticker: a working turn visibly chews (elapsed · current tool ·
-          context eaten), all from rows already streaming. Absent when idle: the missing line
-          IS the idle state, never dead chrome. The changing text is the motion — no animation. */}
-      {ticker && (
+      {/* #6201 — a running wake's line outranks the session's own startup ticker: during the
+          idle gate "working · 44s" is precisely the lie this card exists to correct. The
+          outcome keeps the row for its few seconds, then the ticker returns. */}
+      {wakeNote ? (
+        <div className="flex shrink-0 items-center gap-1.5 px-3 pb-1.5">
+          <span className="tr-dot shrink-0"
+            style={{ background: wakeNote.kind === "outcome" ? "var(--color-tr-ok)" : "var(--color-tr-doing)", width: 6, height: 6 }} />
+          <span className="tr-mono min-w-0 truncate text-[10.5px] text-tr-muted">{wakeNote.text}</span>
+        </div>
+      ) : ticker && (
         <div className="flex shrink-0 items-center gap-1.5 px-3 pb-1.5">
           <span className="tr-dot shrink-0"
             style={{ background: status === "blocked" ? "var(--color-tr-warn)" : "var(--color-tr-doing)", width: 6, height: 6 }} />

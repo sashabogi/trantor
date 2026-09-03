@@ -1,11 +1,94 @@
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::path::Path;
+use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use super::{
     desktop_bus_dir, herdr, kickoff_after_reopen, kickoff_outcome_label, orch_pane_from_rows,
-    project_dir, run_command_output, terminal_path, KickoffReport,
+    project_dir, run_command_output, terminal_path, KickoffPhase, KickoffReport,
 };
+
+/// The wake chain's progress event (#6201) — the mirror of lib.rs's handoff-progress (#6081).
+/// The wake used to go quiet for the whole idle gate (88s on tiny-timer this morning) while the
+/// session's own startup made the chat header read "working", so the operator read a woken
+/// session as idle with nothing to do. project_wake now says where the chain is, every step.
+const WAKE_PROGRESS_EVENT: &str = "wake-progress";
+
+#[derive(Serialize, Clone)]
+struct WakeProgress {
+    project: String,
+    phase: String,
+    detail: Option<String>,
+}
+
+/// The phases wake-progress carries. The ladder's KickoffPhase supplies waiting for idle,
+/// kickoff sent, and kickoff landed (detail names the outcome); this module adds the two ends:
+/// opened (the pane is known and live) and ended (the wake gave up before any chain ran — busy
+/// pane, no checkout — the frontend's cue to clear its pending label).
+mod wake_phase {
+    pub(super) const OPENED: &str = "opened";
+    pub(super) const ENDED: &str = "ended";
+}
+
+fn emit_wake_progress(app: &tauri::AppHandle, project: &str, phase: &str, detail: Option<String>) {
+    use tauri::Emitter;
+    let _ = app.emit(
+        WAKE_PROGRESS_EVENT,
+        WakeProgress {
+            project: project.to_string(),
+            phase: phase.to_string(),
+            detail,
+        },
+    );
+}
+
+/// Which projects have a wake in flight right now (#6201) — the mount-time truth for the sidebar
+/// row and the chat header, the mirror of lib.rs's HandoffChains. Queried on mount as well — an
+/// event alone would race a window opened mid-wake.
+#[derive(Default)]
+pub(crate) struct WakeChains(pub(crate) Mutex<Vec<String>>);
+
+/// The projects whose wake chain is in flight right now (#6201).
+#[tauri::command]
+pub(crate) fn wake_in_progress(chains: tauri::State<'_, WakeChains>) -> Vec<String> {
+    chains.0.lock().unwrap().clone()
+}
+
+/// Marks a project's wake from the first step to the last (#6201). Drop runs on EVERY exit
+/// path — the early error returns included — so a refused wake cannot strand a pending label
+/// in the row or the header, and it says "ended" on the way out.
+struct WakeChainGuard {
+    app: tauri::AppHandle,
+    project: String,
+}
+
+impl WakeChainGuard {
+    fn begin(app: tauri::AppHandle, project: &str) -> Self {
+        use tauri::Manager;
+        {
+            let chains = app.state::<WakeChains>();
+            let mut v = chains.0.lock().unwrap();
+            if !v.iter().any(|p| p == project) {
+                v.push(project.to_string());
+            }
+        }
+        Self {
+            app,
+            project: project.to_string(),
+        }
+    }
+}
+
+impl Drop for WakeChainGuard {
+    fn drop(&mut self) {
+        use tauri::{Emitter, Manager};
+        {
+            let chains = self.app.state::<WakeChains>();
+            chains.0.lock().unwrap().retain(|p| p != &self.project);
+        }
+        emit_wake_progress(&self.app, &self.project, wake_phase::ENDED, None);
+    }
+}
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -162,7 +245,11 @@ pub(crate) async fn project_new(args: ProjectNewArgs) -> Result<String, String> 
 }
 
 #[tauri::command]
-pub(crate) async fn project_wake(project: String, kickoff: String) -> Result<String, String> {
+pub(crate) async fn project_wake(
+    app: tauri::AppHandle,
+    project: String,
+    kickoff: String,
+) -> Result<String, String> {
     let project = project.trim().to_string();
     if !valid_project_name(&project) {
         return Err("project is required and must be a project name, not a path".into());
@@ -171,6 +258,18 @@ pub(crate) async fn project_wake(project: String, kickoff: String) -> Result<Str
         return Err("kickoff prompt is required".into());
     }
     let dir = project_dir(&project).ok_or_else(|| format!("no local checkout for {project}"))?;
+    // Mark the chain for the whole wake (#6201): the row and the chat header read the mark on
+    // mount and the wake-progress events keep it current, so the idle gate never reads as
+    // "idle, nothing to do". Drop unmarks on every exit path, errors included.
+    let _wake = WakeChainGuard::begin(app.clone(), &project);
+    // The ladder's phases go to the frontend verbatim (#6201).
+    let progress = {
+        let app = app.clone();
+        let project = project.clone();
+        move |phase: KickoffPhase, detail: Option<String>| {
+            emit_wake_progress(&app, &project, phase.as_str(), detail);
+        }
+    };
     let rows =
         std::fs::read_to_string(desktop_bus_dir().join("crew-windows.txt")).unwrap_or_default();
     if let Some(pane) = orch_pane_from_rows(&rows, &project) {
@@ -182,9 +281,10 @@ pub(crate) async fn project_wake(project: String, kickoff: String) -> Result<Str
             // stacking, no "already has a live orchestrator" refusal the operator cannot see
             // past (#6138). The idle wait inside kickoff_after_reopen is already satisfied.
             PaneAgentState::Idle => {
+                emit_wake_progress(&app, &project, wake_phase::OPENED, None);
                 let kickoff = cli_decided_kickoff(&project, &dir, kickoff).await;
                 let KickoffReport { outcome, attempts, elapsed_secs } =
-                    kickoff_after_reopen(&pane, kickoff).await;
+                    kickoff_after_reopen(&pane, kickoff, progress).await;
                 return match outcome {
                     Ok(outcome) => Ok(format!(
                         "kickoff sent into idle pane {pane} · kickoff: {} · {attempts} attempt(s), {elapsed_secs}s",
@@ -216,6 +316,8 @@ pub(crate) async fn project_wake(project: String, kickoff: String) -> Result<Str
         std::fs::read_to_string(desktop_bus_dir().join("crew-windows.txt")).unwrap_or_default();
     let pane = orch_pane_from_rows(&rows, &project)
         .ok_or_else(|| format!("trantor open did not record an orchestrator pane for {project}"))?;
+    // The pane is live and booting — say so before the (possibly long) kickoff selection.
+    emit_wake_progress(&app, &project, wake_phase::OPENED, None);
     // The CLI decides the kickoff (#6112): it alone holds the checkout's docs/PRD.md AND the
     // signed board, so a brief wakes into the crew's PRD review and a blank project wakes
     // plainly. The app's own `kickoff` is the fallback for a CLI that cannot answer. The
@@ -225,12 +327,13 @@ pub(crate) async fn project_wake(project: String, kickoff: String) -> Result<Str
     // returned was logged by herdr 90 ms after the claude process appeared, reported as
     // agent_prompted, and never reached the session (four wakes in a row, no kickoff in the
     // transcript). Ride the handoff chain's ladder: wait for idle, send, retry the transient
-    // outcomes, and say how it went.
+    // outcomes, and say how it went. The progress callback rides along so the row and the
+    // header can follow the gate (#6201).
     let KickoffReport {
         outcome,
         attempts,
         elapsed_secs,
-    } = kickoff_after_reopen(&pane, kickoff).await;
+    } = kickoff_after_reopen(&pane, kickoff, progress).await;
     match outcome {
         Ok(outcome) => Ok(wake_label(&pane, &outcome, attempts, elapsed_secs)),
         Err(error) => Err(format!(
@@ -352,22 +455,23 @@ mod tests {
         assert!(matches!(pane_agent_state(rows, "pane-other"), PaneAgentState::NoAgent));
     }
 
-    /// #6138 real path, run by hand against a REAL idle orchestrator pane:
-    ///   1. `trantor new` a throwaway + `trantor open <name>` (a claude session boots in a pane)
-    ///   2. wait for `herdr agent list` to read idle on that pane
-    ///   3. `cargo test --manifest-path <Cargo.toml> wake_delivers -- --ignored --test-threads=1`
-    /// The command under test is the exact handler the sidebar's Wake button invokes.
-    /// #[tokio::test] needs the macros+rt features, which only the dev profile's tests pull in
-    /// via the dev-dependency below — the runtime itself only needs rt-multi-thread/time/process.
-    #[cfg(test)]
-    #[tokio::test]
-    #[ignore = "real path: needs an idle orchestrator pane (see the steps in this comment)"]
-    async fn wake_delivers_kickoff_into_an_idle_pane() {
-        let project = std::env::var("WAKE_REAL_PROJECT").expect("set WAKE_REAL_PROJECT=<throwaway project with an idle pane>");
-        let result = project_wake(project, "The project is empty; say what you see and ask what to build.".into())
-            .await
-            .expect("wake with an idle pane must deliver the kickoff, not refuse");
-        assert!(result.starts_with("kickoff sent into idle pane"), "{result}");
-        assert!(result.contains("prompt delivered"), "{result}");
+    // #6138/#6201 real path, run by hand against a REAL idle orchestrator pane (from the app
+    // running, since the handler now takes the AppHandle to emit wake-progress):
+    //   1. `trantor new` a throwaway + `trantor open <name>` (a claude session boots in a pane)
+    //   2. wait for `herdr agent list` to read idle on that pane
+    //   3. press Wake on the project's sidebar row
+    //   4. watch the row say "kickoff pending" during the gate, then the outcome for a few
+    //      seconds (the chat header follows the same wake-progress event)
+    //   5. expect the row to land on "kickoff sent" and herdr's log to show exactly ONE
+    //      agent.prompt (the #6201 double-send guard: a Stalled send with the pane reading
+    //      working must never be re-typed)
+
+    // #6201 — the phase names are the frontend contract (wakeProgress.ts's WakePhase union);
+    // a rename here breaks the row and the header, so it is asserted, not assumed.
+    #[test]
+    fn kickoff_phase_names_are_the_frontend_contract() {
+        assert_eq!(KickoffPhase::WaitingIdle.as_str(), "waiting_idle");
+        assert_eq!(KickoffPhase::KickoffSent.as_str(), "kickoff_sent");
+        assert_eq!(KickoffPhase::Landed.as_str(), "kickoff_landed");
     }
 }

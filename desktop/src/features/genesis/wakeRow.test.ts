@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { classifyWakeOutcome, wakeOutcomeIsTransient, wakeRowLine, WAKE_OUTCOME_MS, type WakeRowState } from "./wakeRow";
+import { classifyWakeOutcome, wakeOutcomeIsTransient, wakeRowLine, WAKE_OUTCOME_MS, WAKE_PENDING_LINE, WAKE_SENT_LINE, type WakeRowState } from "./wakeRow";
 
 describe("wakeRow states (#6138)", () => {
   it("reads the idle-pane path as kickoff sent, the reopen path as woken", () => {
@@ -30,6 +30,8 @@ describe("wakeRow states (#6138)", () => {
 
   it("the row line names each state in the operator's words", () => {
     expect(wakeRowLine({ phase: "running" })).toEqual({ text: "waking…", tone: "muted" });
+    expect(wakeRowLine({ phase: "kickoff", step: "pending" })).toEqual({ text: WAKE_PENDING_LINE, tone: "muted" });
+    expect(wakeRowLine({ phase: "kickoff", step: "sent" })).toEqual({ text: WAKE_SENT_LINE, tone: "muted" });
     expect(wakeRowLine({ phase: "outcome", kind: "sent", text: "kickoff sent into idle pane wJ:p1" })?.text).toBe("kickoff sent");
     expect(wakeRowLine({ phase: "outcome", kind: "woken", text: "project awake in pane p" })?.text).toBe("woken");
     expect(wakeRowLine({ phase: "outcome", kind: "busy", text: "busy in pane p" })?.tone).toBe("muted");
