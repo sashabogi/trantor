@@ -18,6 +18,7 @@ import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
+import { scrubIdentityEnv } from "./drill-env.mjs";
 
 const ROOT = dirname(fileURLToPath(import.meta.url));
 let pass = 0, fail = 0;
@@ -34,9 +35,7 @@ const w = mkdtempSync(join(tmpdir(), "tt-surface-"));
 const BUS = join(w, ".agent-bus");
 delete process.env.TRANTOR_NO_HANDOFF_SPAWN;
 delete process.env.TRANTOR_NO_BATON_SPAWN;
-delete process.env.RELAY_PROJECT;   // the runner's own badge would answer every fallback probe
-delete process.env.HERDR_PANE_ID;   // same: a seat living in a pane must not lend it to the drill
-delete process.env.TRANTOR_ORCH;
+scrubIdentityEnv();   // #6108: the runner's own badge must not answer any probe below (the deletes this replaces are named in drill-env.mjs)
 delete process.env.TRANTOR_PROJECT;
 process.env.AGENT_BUS_DIR = BUS;
 process.env.RELAY_DATA_DIR = BUS;
@@ -48,15 +47,41 @@ console.log("\nThe session's own env decides the surface:");
 ok("no HERDR_PANE_ID → window surface", paneSurfaceEnv({}) === "" && paneSurfaceEnv({ HERDR_PANE_ID: "  " }) === "");
 ok("HERDR_PANE_ID set → pane id verbatim", paneSurfaceEnv({ HERDR_PANE_ID: "pane-9" }) === "pane-9");
 
-// ── 2. project resolution: registration before cwd ──────────────────────────
-console.log("\nThe project comes from the registration before the cwd:");
+// ── 2. project resolution: registration before cwd — the badge only where it is TRUE ──
+console.log("\nThe project comes from the registration before the cwd — and a foreign badge never relabels it (#6218):");
 const projDir = join(w, "crebral-scribe"); const subDir = join(projDir, "ios"); mkdirSync(subDir, { recursive: true });
 mkdirSync(BUS, { recursive: true });
 // NO git init on purpose: resolveProject falls through to basename, so "ios" is exactly what the
 // cwd alone would answer — any other answer below came from the registration.
 writeFileSync(join(BUS, "orch-sessions.txt"), `gamma\tsid-gamma-123\n`);
-ok("TRANTOR_ORCH badge names the project", resolveHandoffSurface({ projectDir: subDir, env: { TRANTOR_ORCH: "alpha" } }).project === "alpha");
-ok("…and outranks RELAY_PROJECT", resolveHandoffSurface({ projectDir: subDir, env: { TRANTOR_ORCH: "alpha", RELAY_PROJECT: "beta" } }).project === "alpha");
+ok("TRANTOR_ORCH badge names the project when the cwd is inside it (#6074 subfolder holds)",
+   resolveHandoffSurface({ projectDir: subDir, env: { TRANTOR_ORCH: "crebral-scribe" } }).project === "crebral-scribe");
+ok("…and outranks RELAY_PROJECT",
+   resolveHandoffSurface({ projectDir: subDir, env: { TRANTOR_ORCH: "crebral-scribe", RELAY_PROJECT: "beta" } }).project === "crebral-scribe");
+{
+  // #6218 — the witnessed shape: a trantor-badged shell sitting in tiny-timer. The badge is
+  // FOREIGN here: rejected, the whole registration chain distrusted with it, and the record
+  // goes to the cwd's project. One warning line names both. The valid calls around it stay
+  // silent — a warning is a discrepancy report, not decoration.
+  const foreignDir = join(w, "tiny-timer");
+  const errs = [];
+  const origErr = console.error; console.error = (m) => errs.push(String(m));
+  let r, rWt, rOtherWt;
+  try {
+    r = resolveHandoffSurface({ projectDir: foreignDir, env: { TRANTOR_ORCH: "crebral-scribe", RELAY_PROJECT: "crebral-scribe" } });
+    rWt = resolveHandoffSurface({ projectDir: join(BUS, "worktrees", "alpha", "seat"), env: { TRANTOR_ORCH: "alpha" } });
+    rOtherWt = resolveHandoffSurface({ projectDir: join(BUS, "worktrees", "other", "seat"), env: { TRANTOR_ORCH: "alpha" } });
+  } finally { console.error = origErr; }
+  ok("a badged shell in a FOREIGN project dir resolves from the cwd (badge + RELAY_PROJECT distrusted)",
+     r.project === "tiny-timer", JSON.stringify(r));
+  ok("exactly ONE warning line names both the badge and the resolved project",
+     errs[0].includes("TRANTOR_ORCH=crebral-scribe") && errs[0].includes("tiny-timer"), JSON.stringify(errs));
+  ok("a valid badge inside its agent-bus worktree still wins",
+     rWt.project === "alpha", JSON.stringify(rWt));
+  ok("a badged shell in ANOTHER project's worktrees is foreign too — the cwd answers (and warns)",
+     rOtherWt.project === "seat" && errs.length === 2 && errs[1].includes("TRANTOR_ORCH=alpha") && errs[1].includes("seat"),
+     JSON.stringify({ r: rOtherWt, errs }));
+}
 ok("a nameless badge (\"1\") falls through to RELAY_PROJECT", resolveHandoffSurface({ projectDir: subDir, env: { TRANTOR_ORCH: "1", RELAY_PROJECT: "beta" } }).project === "beta");
 ok("orch-sessions.txt answers by session id", resolveHandoffSurface({ projectDir: subDir, sessionId: "sid-gamma-123", env: {} }).project === "gamma");
 ok("…and outranks the cwd", resolveHandoffSurface({ projectDir: subDir, sessionId: "sid-gamma-123", env: {} }).project !== "ios");
@@ -189,6 +214,28 @@ seed(decoy); seed(real);
   const r = run("baton.mjs", [], { cwdDir: subDir, env: { ...NO_SPAWN, RELAY_PROJECT: "crebral-scribe" }, stdio: ["ignore", "pipe", "pipe"] });
   ok("plain `trantor handoff` (stdin not a pipe) keeps the AUTO path", r.status === 0 && /handoff saved for crebral-scribe/.test(r.out), `exit ${r.status}: ${r.out.slice(0, 200)}`);
   ok("the auto path also names the REGISTERED project (deferring to the fresh seed is fine — #5648)", /handoff saved for crebral-scribe: .*(crebral-scribe|ios)-\d+\.json/.test(r.out) && !/saved for .*ios-\d+/.test(r.out), r.out.slice(0, 200));
+}
+{
+  // #6218 end to end — the witnessed shape: badge A (crebral-scribe) + cwd B (tiny-timer).
+  // The record is B's, the transcript inside it is B's, and ONE warning line names both.
+  // HOME is the drill's own, so the transcript lookup can only have found the seeded dir —
+  // findTranscript follows the RESOLVED session dir, never a mismatched badge or cwd.
+  const bDir = join(w, "tiny-timer"); mkdirSync(bDir, { recursive: true });
+  const dashedB = bDir.replace(/\//g, "-");
+  const claudeDir = join(w, ".claude", "projects", dashedB); mkdirSync(claudeDir, { recursive: true });
+  writeFileSync(join(claudeDir, "b-session-123.jsonl"), JSON.stringify({ type: "user", message: { role: "user", content: "tiny-timer work in flight" } }) + "\n");
+  const before = handoffs();
+  const r = run("baton.mjs", [], { cwdDir: bDir, env: { ...NO_SPAWN, TRANTOR_ORCH: "crebral-scribe" }, stdio: ["ignore", "pipe", "pipe"] });
+  const written = handoffs().filter(f => !before.includes(f));
+  ok("#6218: a badged shell in a foreign cwd saves the handoff for the CWD's project",
+     r.status === 0 && written.length === 1 && written[0].startsWith("tiny-timer-") && /handoff saved for tiny-timer/.test(r.out),
+     `exit ${r.status}: ${r.out.slice(0, 200)} wrote ${written}`);
+  ok("#6218: exactly ONE warning line names the badge and the resolved project",
+     (r.out.match(/TRANTOR_ORCH=crebral-scribe/g) || []).length === 1 && r.out.includes("tiny-timer"), r.out.slice(0, 300));
+  const rec = JSON.parse(readFileSync(join(BUS, "handoffs", written[0]), "utf8"));
+  ok("#6218: the record carries the RESOLVED project's transcript",
+     rec.projectName === "tiny-timer" && rec.transcript_path.includes(dashedB) && rec.transcript_path.endsWith("b-session-123.jsonl"),
+     JSON.stringify({ projectName: rec.projectName, transcript_path: rec.transcript_path }));
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

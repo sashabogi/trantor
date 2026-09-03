@@ -11,7 +11,7 @@
 // wall when we know the window size. Both paths share a per-session guard so we
 // never write/spawn twice for the same context window.
 import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync, statSync, openSync, readSync, fstatSync, closeSync, rmSync } from "node:fs";
-import { join, basename, dirname } from "node:path";
+import { join, basename, dirname, sep } from "node:path";
 import { homedir, hostname } from "node:os";
 import { execSync, spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
@@ -621,18 +621,52 @@ export function orchProjectForSession(sid) {
   return "";
 }
 
+// Does the cwd actually lie inside THIS project's ground (#6218)? Two true homes: a directory
+// named for the project (the project root or anything below it — the #6074 subfolder case), and
+// the project's agent-bus worktrees (<bus>/worktrees/<project>/<seat>). Pure + exported so the
+// drill can pin both without touching the operator's disk layout.
+export function cwdInsideProject(projectName, dir, bus = process.env.AGENT_BUS_DIR || process.env.RELAY_DATA_DIR || join(homedir(), ".agent-bus")) {
+  if (!projectName || !dir) return false;
+  const wt = join(bus, "worktrees", projectName);
+  if (dir === wt || dir.startsWith(wt + sep)) return true;
+  let cur = dir;
+  for (;;) {
+    if (basename(cur) === projectName) return true;
+    const parent = dirname(cur);
+    if (parent === cur) return false;
+    cur = parent;
+  }
+}
+
 // The one resolver. Returns { project, projectDir, pane, surface }:
 //   pane    — the session's own pane id ("" when it is not a hosted pane)
 //   surface — "pane" (the baton MUST take the pane leg) or "window" (today's behavior)
 //   project — the REGISTERED project name; a subfolder cwd never renames it
+// #6218 — the badge wins only where it is TRUE. Witnessed 2026-09-03: a run from a
+// trantor-badged shell in ~/development/tiny-timer wrote "handoff saved for trantor" with
+// tiny-timer's transcript inside. #6074's registration-before-cwd rule was written for a
+// subfolder cwd of the SAME project; a FOREIGN project dir is a different case and must not be
+// silently relabeled. So the badge (and the rest of the registration chain behind it) claims
+// this handoff only when the cwd lies inside the named project's directory or one of its
+// worktrees; a badged shell sitting elsewhere resolves from the cwd, and ONE warning line names
+// both — the badge that lied and the project the record actually went to.
 export function resolveHandoffSurface({ projectDir, sessionId, env = process.env } = {}) {
   const dir = projectDir || env.CLAUDE_PROJECT_DIR || process.cwd();
   const badge = String(env.TRANTOR_ORCH || "").trim();
   let project = "";
-  if (badge && badge !== "1") project = badge;                       // `trantor open` badge carries the name
-  if (!project && env.RELAY_PROJECT) project = String(env.RELAY_PROJECT).trim();
-  if (!project) project = orchProjectForSession(sessionId);
-  if (!project) project = resolveProject(dir);                       // last resort: cwd (git-root aware)
+  let foreignBadge = "";
+  if (badge && badge !== "1") {                                      // `trantor open` badge carries the name
+    if (cwdInsideProject(badge, dir)) project = badge;
+    else foreignBadge = badge;                                       // the badge lies about this cwd
+  }
+  if (!project && !foreignBadge && env.RELAY_PROJECT) project = String(env.RELAY_PROJECT).trim();
+  if (!project && !foreignBadge) project = orchProjectForSession(sessionId);
+  // Last resort: the cwd (git-root aware). With a foreign badge, the shell's own RELAY_PROJECT
+  // is scrubbed from the fallback's env — it is the same registration that just lied (#6218).
+  if (!project) project = resolveProject(dir, foreignBadge ? { ...env, RELAY_PROJECT: "" } : env);
+  if (foreignBadge) {
+    console.error(`trantor handoff: TRANTOR_ORCH=${foreignBadge} but the working directory (${dir}) is not inside ${foreignBadge}'s project or its worktrees — saving the handoff for ${project} (resolved from the cwd)`);
+  }
   return { project, projectDir: dir, pane: paneSurfaceEnv(env), surface: paneSurfaceEnv(env) ? "pane" : "window" };
 }
 
