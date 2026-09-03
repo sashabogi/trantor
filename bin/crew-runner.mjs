@@ -510,7 +510,11 @@ async function runTurn(prompt, isFirst, trigger = "kickoff") {
       { detached: true, stdio: "ignore" });
     wd.unref();
   } catch {}
-  const r = spawnSync("/bin/bash", ["-c", `set -o pipefail; { ${inner} ; } 2> >(${SCRUB} --tee2 ${ERRF})`], {
+  // Preserve the CLI's exit before waiting for the stderr process substitution. Without the
+  // explicit wait, a short failing CLI can return while its error is still in the scrub pipe;
+  // under load the classifier then reads an empty ERRF and reports the wrong failure reason.
+  const shell = `set -o pipefail; { ${inner} ; } 2> >(${SCRUB} --tee2 ${ERRF}); turn_exit=$?; wait; exit $turn_exit`;
+  const r = spawnSync("/bin/bash", ["-c", shell], {
     cwd: TURN_DIR, encoding: "utf8", stdio: cli.sid ? ["ignore", "pipe", "inherit"] : "inherit",
     env: { ...process.env, RELAY_URL: HUB, RELAY_AGENT: AGENT, RELAY_SESSION: SESSION, RELAY_PROJECT: PROJ,
       // A RUNNER-MANAGED SEAT MUST NEVER HAND ITSELF A BATON.
@@ -527,9 +531,8 @@ async function runTurn(prompt, isFirst, trigger = "kickoff") {
     maxBuffer: 16 * 1024 * 1024,
   });
   try { unlinkSync(STAMPF); } catch {}   // turn over — disarm the watchdog
-  // #5869: scrub AT REST, synchronously, before anything reads the file back. The stderr hop is
-  // a process substitution bash does not wait for, so this pass also catches its tail — the
-  // auth classifier and the empty-output check below must judge REDACTED text and a settled file.
+  // #5869: scrub AT REST, synchronously, before anything reads the file back. The explicit shell
+  // wait above drains the live stderr scrubber first; this pass is defense in depth for redaction.
   try { writeFileSync(ERRF, redactKeys(readFileSync(ERRF, "utf8"))); } catch {}
   // #5868: classify only what the CLI itself said. The transcript replays the whole turn prompt
   // (rules, lessons, the wake text) — and those lines once classified healthy codex turns as
