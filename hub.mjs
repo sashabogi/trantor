@@ -373,18 +373,22 @@ function overseerInputs() {
 // record line reports DURATION ("same-project for 6h"), never a count of warnings.
 const sameProjectFired = new Map(); // project -> { hash, sessions, ts } — the set as of the last verdict
 
-// The declared crew: the seats `trantor up` spawned (crew-windows.txt rows are
-// project\tmux\tagent\tpane; __-prefixed markers are not sessions) plus the operator's own
-// orchestrator session on this machine ("<host>:<project>").
+// The declared crew: HUB state, never a file on the operator's machine (#6075). The production
+// hub runs on netcup, where ~/.agent-bus/crew-windows.txt does not exist — the file describes the
+// OPERATOR'S machine (it is written by `trantor up` there), so on the remote hub the old reader
+// found nothing and every same-project set looked like intruders: the crew-only exemption simply
+// never held remotely. What the hub itself knows is the peer row's `kind` (#6148): "agent" is a
+// crew seat — crew-runner stamps it on every /register its seats make — and "orch" is the
+// project's orchestrator pane (sessionstart stamps it when TRANTOR_ORCH names this project).
+// The HOST_NAME exemption is gone with the file: the hub's hostname is the hub machine's
+// (netcup), never the operator's, so `<HOST_NAME>:<project>` exempted a session that cannot
+// exist. Genesis is deliberately NOT crew (#6068: a bookkeeping identity, not a seat).
 function declaredCrewFor(project) {
   const crew = new Set();
-  try {
-    for (const line of readFileSync(join(homedir(), ".agent-bus", "crew-windows.txt"), "utf8").split("\n")) {
-      const c = line.split("\t");
-      if (c.length >= 3 && c[0] === project && c[2] && !c[2].startsWith("__")) crew.add(`${c[2]}:${project}`);
-    }
-  } catch { /* no crew declaration recorded: only the operator's own session is exempt */ }
-  crew.add(`${HOST_NAME}:${project}`);
+  for (const [sid, p] of Object.entries(state.peers)) {
+    if ((p.project || "") !== project) continue;
+    if (p.kind === "agent" || p.kind === "orch") crew.add(sid);
+  }
   return [...crew];
 }
 

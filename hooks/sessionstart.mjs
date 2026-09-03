@@ -221,8 +221,15 @@ try {
   // instead of silently routing to the default.
   const { url, via: hubVia } = resolveHubInfo(project);
 
-  // register self + post an initial presence status (no LLM turn — instant for others to read)
-  await jpost(`${url}/register`, { session, project, status: `active in ${project}` }, session).catch(() => {});
+  // register self + post an initial presence status (no LLM turn — instant for others to read).
+  // kind "orch" when `trantor open` badged THIS session as the project's orchestrator pane
+  // (#6075): the peer row's kind is the hub's own record of what a session is — the overseer's
+  // declared-crew exemption reads it, and on the remote hub there is no local crew-windows.txt.
+  // Strict match (badge === project), same rule the doctrine gate below uses; a badge of "1"
+  // carries no name, so it stamps nothing. Absent kind is preserved by /register, so the MCP's
+  // kindless heartbeats never erase this.
+  const orchBadge = process.env.TRANTOR_ORCH || "";
+  await jpost(`${url}/register`, { session, project, status: `active in ${project}`, ...(orchBadge === project ? { kind: "orch" } : {}) }, session).catch(() => {});
 
   // fetch roster of OTHER online sessions
   let peers = [], hubAnswered = false;
