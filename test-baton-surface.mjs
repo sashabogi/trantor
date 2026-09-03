@@ -35,6 +35,9 @@ const BUS = join(w, ".agent-bus");
 delete process.env.TRANTOR_NO_HANDOFF_SPAWN;
 delete process.env.TRANTOR_NO_BATON_SPAWN;
 delete process.env.RELAY_PROJECT;   // the runner's own badge would answer every fallback probe
+delete process.env.HERDR_PANE_ID;   // same: a seat living in a pane must not lend it to the drill
+delete process.env.TRANTOR_ORCH;
+delete process.env.TRANTOR_PROJECT;
 process.env.AGENT_BUS_DIR = BUS;
 process.env.RELAY_DATA_DIR = BUS;
 
@@ -135,9 +138,21 @@ function seed(id) {
   writeFileSync(join(BUS, "handoffs", `${id}.json`), JSON.stringify({ id, project: projDir, projectName: id.replace(/-\d+$/, ""), machine: "h", trigger: "manual-baton", stamp: Number(id.split("-").pop()), summary: "SEEDED", gitStatus: "", consumed: false }, null, 2));
 }
 function run(cli, args, { cwdDir, env = {}, stdin = "", stdio } = {}) {
+  // NO process.env passthrough (#6074 bounce): the gate runner — or any seat — may itself live in
+  // a herdr pane and export exactly the identity this drill varies (HERDR_PANE_ID, TRANTOR_ORCH,
+  // RELAY_PROJECT). Every var the CLIs read is set or blanked here; each case overrides
+  // deliberately through `env`. Only the mechanical vars (PATH, TMPDIR) are inherited.
   const r = spawnSync(process.execPath, [join(ROOT, "bin", cli), ...args], {
     input: stdin, encoding: "utf8", timeout: 20000, cwd: cwdDir,
-    env: { ...process.env, HOME: w, AGENT_BUS_DIR: BUS, RELAY_DATA_DIR: BUS, CLAUDE_PROJECT_DIR: cwdDir, TRANTOR_NO_SCROOGE: "1", ...env },
+    env: {
+      PATH: process.env.PATH || "/usr/bin:/bin:/usr/sbin:/sbin",
+      HOME: w, TMPDIR: process.env.TMPDIR || "/tmp",
+      AGENT_BUS_DIR: BUS, RELAY_DATA_DIR: BUS, CLAUDE_PROJECT_DIR: cwdDir,
+      TRANTOR_NO_SCROOGE: "1",
+      HERDR_ENV: "", HERDR_PANE_ID: "", TRANTOR_ORCH: "",
+      RELAY_PROJECT: "", TRANTOR_PROJECT: "", RELAY_SESSION: "", RELAY_AGENT: "",
+      ...env,
+    },
     ...(stdio ? { stdio } : {}),
   });
   return { out: (r.stdout || "") + (r.stderr || ""), status: r.status };
