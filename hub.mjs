@@ -1284,6 +1284,22 @@ function markDelivered(session, upTo) {
 function pushToStreams(msg) {
   for (const s of streams) if (deliverable(msg, s.session)) { try { s.res.write(`data: ${JSON.stringify(msg)}\n\n`); } catch {} }
 }
+// A live runner can outlast the durable snapshot it was polling. If its cursor is now beyond the
+// message high-water mark, echoing that impossible value leaves it deaf forever. Clamp it to the
+// current tip and say explicitly that time moved backwards so clients can adopt the lower cursor.
+function inboxWindow(value) {
+  const parsed = Number(value || 0);
+  const requested = Number.isFinite(parsed) ? Math.max(0, parsed) : 0;
+  const tip = Math.max(Number(state.seq || 0), Number(state.messages[state.messages.length - 1]?.id || 0));
+  const rewound = requested > tip;
+  return { since: rewound ? tip : requested, tip, rewound };
+}
+function inboxResponse(auth, messages, cursor, rewound = false) {
+  const response = { messages, cursor };
+  if (rewound) response.rewound = true;
+  if (auth?.superseded) response.superseded = true;
+  return response;
+}
 // Live push for the FEED. Sent ONLY to streams that opted in with /stream?events=1, and as a NAMED
 // SSE event ("event: ev") so an existing consumer's default onmessage handler — which expects a bus
 // message and nothing else — can never see it. Backwards-safe by construction.
@@ -2810,7 +2826,8 @@ const server = http.createServer(async (req, res) => {
 
     if (req.method === "GET" && P === "/inbox") {
       if (!canUseInboxSession(auth, q.session)) return json(res, 403, { error: "forbidden" });
-      touch(q.session, undefined, undefined, undefined, auth); const since = Number(q.since || 0);
+      touch(q.session, undefined, undefined, undefined, auth); const window = inboxWindow(q.since);
+      const { since, rewound } = window;
       const msgs = state.messages.filter(m => m.id > since && deliverable(m, q.session) && inboxReadable(auth, m, q.session));
       const cursor = msgs.length ? msgs[msgs.length - 1].id : since;
       // peek=1 -> LOOK without claiming delivery. The Stop hook has to ask "is anything waiting?" before
@@ -2820,16 +2837,21 @@ const server = http.createServer(async (req, res) => {
       if (q.peek !== "1") markDelivered(q.session, cursor);
       // superseded (instance-keys contract): a baton twin that lost the claim learns it HERE, via
       // its own read — its hooks turn this into a stand-down note for the model. Never a block.
-      return json(res, 200, auth?.superseded ? { messages: msgs, cursor, superseded: true } : { messages: msgs, cursor });
+      return json(res, 200, inboxResponse(auth, msgs, cursor, rewound));
     }
     if (req.method === "GET" && P === "/poll") {
       if (!canUseInboxSession(auth, q.session)) return json(res, 403, { error: "forbidden" });
-      touch(q.session, undefined, undefined, undefined, auth); const since = Number(q.since || 0);
+      touch(q.session, undefined, undefined, undefined, auth); const window = inboxWindow(q.since);
+      const { since, rewound } = window;
+      if (rewound) {
+        markDelivered(q.session, window.tip);
+        return json(res, 200, inboxResponse(auth, [], window.tip, true));
+      }
       const waitMs = Math.min(Number(q.wait || 25), 290) * 1000;   // allow long idle-park
       const deadline = now() + waitMs;
       const tick = () => {
         const msgs = state.messages.filter(m => m.id > since && deliverable(m, q.session) && inboxReadable(auth, m, q.session));
-        if (msgs.length || now() >= deadline) { touch(q.session, undefined, undefined, undefined, auth); const cursor = msgs.length ? msgs[msgs.length - 1].id : since; markDelivered(q.session, cursor); return json(res, 200, auth?.superseded ? { messages: msgs, cursor, superseded: true } : { messages: msgs, cursor }); }
+        if (msgs.length || now() >= deadline) { touch(q.session, undefined, undefined, undefined, auth); const cursor = msgs.length ? msgs[msgs.length - 1].id : since; markDelivered(q.session, cursor); return json(res, 200, inboxResponse(auth, msgs, cursor)); }
         setTimeout(tick, 300);
       };
       return tick();
