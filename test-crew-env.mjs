@@ -14,6 +14,7 @@ import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { withEnvFiles } from "./lib/project.mjs";
+import { drillEnv } from "./drill-env.mjs";
 
 let pass = 0, fail = 0;
 const ok = (n, c, e = "") => { if (c) { pass++; console.log(`  ✓ ${n}`); } else { fail++; console.log(`  ✗ ${n}${e ? " — " + e : ""}`); } };
@@ -21,7 +22,12 @@ const dir = mkdtempSync(join(tmpdir(), "trantor-crewenv-"));
 const crew = join(dir, "crew.env"), scrooge = join(dir, "scrooge.env");
 writeFileSync(crew, "DEEPSEEK_API_KEY=CREW_KEY\nCREW_ONLY=yes\n");
 writeFileSync(scrooge, "DEEPSEEK_API_KEY=SCROOGE_KEY\nSCROOGE_ONLY=yes\n");
-const runFor = (v, files) => execSync(withEnvFiles(`printf '%s' "$${v}"`, files), { shell: "/bin/bash", encoding: "utf8" }).trim();
+// The child env is pinned (#6108): a seat shell (and the runner itself) exports DEEPSEEK_API_KEY,
+// and the "no files" case asserts the variable is UNSET — inheriting the host's key made the
+// assertion test the runner instead of the sourcing order. The drill varies these names itself.
+const childEnv = drillEnv();
+for (const k of ["DEEPSEEK_API_KEY", "CREW_ONLY", "SCROOGE_ONLY"]) delete childEnv[k];
+const runFor = (v, files) => execSync(withEnvFiles(`printf '%s' "$${v}"`, files), { shell: "/bin/bash", encoding: "utf8", env: childEnv }).trim();
 
 console.log("# crew seat env precedence");
 
