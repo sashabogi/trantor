@@ -7,6 +7,7 @@ import { mkdtempSync, rmSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
+import { drillEnv } from "./drill-env.mjs";
 
 const ROOT = dirname(fileURLToPath(import.meta.url));
 let pass = 0, fail = 0;
@@ -25,7 +26,7 @@ writeFileSync(join(W, ".agent-bus", "profile.json"), JSON.stringify({ providers:
 const PORT = 47881, BASE = `http://127.0.0.1:${PORT}`;
 const hub = spawn("node", [join(ROOT, "hub.mjs")], {
   cwd: ROOT,
-  env: { ...process.env, HOME: W, RELAY_DATA_DIR: W, RELAY_PORT: String(PORT), PORT: String(PORT), TRANTOR_NO_UPDATE_CHECK: "1" },
+  env: { ...drillEnv(), HOME: W, RELAY_DATA_DIR: W, RELAY_PORT: String(PORT), PORT: String(PORT), TRANTOR_NO_UPDATE_CHECK: "1" },
   stdio: ["ignore", "ignore", "pipe"],
 });
 let er = ""; hub.stderr.on("data", d => { er += d; });

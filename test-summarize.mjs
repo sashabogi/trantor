@@ -7,6 +7,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, chmodSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
+import { drillEnv } from "./drill-env.mjs";
 
 const ROOT = dirname(fileURLToPath(import.meta.url));
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
@@ -34,7 +35,7 @@ chmodSync(stub, 0o755);
 
 function spawnHub() {
   return spawn("node", [join(ROOT, "hub.mjs")], {
-    env: { ...process.env, RELAY_DATA_DIR: dir, HOME: dir, RELAY_PORT: String(P), PORT: String(P), TRANTOR_NO_UPDATE_CHECK: "1", RELAY_AUTH: "off" },
+    env: { ...drillEnv(), RELAY_DATA_DIR: dir, HOME: dir, RELAY_PORT: String(P), PORT: String(P), TRANTOR_NO_UPDATE_CHECK: "1", RELAY_AUTH: "off" },
     stdio: ["ignore", "ignore", "pipe"],
   });
 }
@@ -55,7 +56,7 @@ try {
   await api.post("/send", { from: "codex:p", to: "all", project: "p", text: `#${a.task.id} done — tests green` });
 
   const run = (extra = []) => spawnSync("node", [join(ROOT, "bin/summarize.mjs"), ...extra], {
-    env: { ...process.env, HOME: dir, AGENT_BUS_DIR: join(dir, ".agent-bus"), SCROOGE_BIN: stub },
+    env: { ...drillEnv(), HOME: dir, AGENT_BUS_DIR: join(dir, ".agent-bus"), SCROOGE_BIN: stub },
     encoding: "utf8", timeout: 30000,
   });
 

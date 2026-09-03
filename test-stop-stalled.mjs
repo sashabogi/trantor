@@ -7,6 +7,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from "nod
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { drillEnv } from "./drill-env.mjs";
 
 const ROOT = fileURLToPath(new URL(".", import.meta.url));
 const work = mkdtempSync(join(tmpdir(), "trantor-stop-stalled-"));
@@ -52,7 +53,7 @@ function runStop() {
     const child = spawn(process.execPath, [join(ROOT, "hooks", "stop-inbox.mjs")], {
       cwd: ROOT,
       env: {
-        ...process.env,
+        ...drillEnv(),
         AGENT_BUS_DIR: bus,
         CLAUDE_PROJECT_DIR: repo,
         RELAY_URL: relayUrl,

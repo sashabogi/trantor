@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { buildPatrolReport, reapStaleArtifacts, runPatrol } from "./bin/patrol.mjs";
+import { drillEnv } from "./drill-env.mjs";
 
 const ROOT = dirname(fileURLToPath(import.meta.url));
 let pass = 0, fail = 0;
@@ -85,7 +86,7 @@ try {
   ok("human report names project sections and counts", /project alpha/.test(human) && /orphans:/.test(human) && /ambiguous:/.test(human));
 
   const cli = spawnSync(process.execPath, [join(ROOT, "bin/patrol.mjs"), "--json"], {
-    env: { ...process.env, HOME: dir, AGENT_BUS_DIR: bus },
+    env: { ...drillEnv(), HOME: dir, AGENT_BUS_DIR: bus },
     encoding: "utf8",
   });
   ok("CLI exits 0 even when the resources module is absent or empty", cli.status === 0, cli.stderr || cli.stdout);

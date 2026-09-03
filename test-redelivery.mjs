@@ -11,6 +11,7 @@ import { spawn } from "node:child_process";
 import { mkdtempSync, writeFileSync, readFileSync, chmodSync, mkdirSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
+import { drillEnv } from "./drill-env.mjs";
 
 let pass = 0, fail = 0;
 const ok = (name, cond, extra) => { console.log(`  ${cond ? "PASS" : "FAIL"}  ${name}${cond || !extra ? "" : `\n          ${extra}`}`); cond ? pass++ : fail++; };
@@ -70,7 +71,7 @@ exit 0
 
   // TRANTOR_RETRY_MS shortens the backoff ladder so a drill exercises a real retry in seconds;
   // the noBackoffOverride case runs the production ladder instead.
-  const runnerEnv = { ...process.env, HOME, PATH: `${fakebin}:${process.env.PATH}`,
+  const runnerEnv = { ...drillEnv(), HOME, PATH: `${fakebin}:${process.env.PATH}`,
     RELAY_URL: HUB, RELAY_AGENT: "codex", RELAY_PROJECT: PROJ,
     CREW_KICKOFF: "say hi and end your turn" };
   if (!noBackoffOverride) runnerEnv.TRANTOR_RETRY_MS = "1200";

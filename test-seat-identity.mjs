@@ -21,8 +21,13 @@ import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from "nod
 import { tmpdir, homedir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
+import { drillEnv, scrubIdentityEnv } from "./drill-env.mjs";
 
 const ROOT = process.env.TRANTOR_ROOT || dirname(fileURLToPath(import.meta.url));
+// Pin the drill's OWN env (#6108): section 5 asserts nonSeatReason() as a pure unit, but the
+// function defaults env=process.env — a runner exporting RELAY_PROJECT/RELAY_SESSION would flip
+// "home is a non-seat" into a seat. The host's identity env is the runner's, never the drill's.
+scrubIdentityEnv();
 let pass = 0, fail = 0;
 const ok = (n, c, x = "") => { if (c) { pass++; console.log(`  ✓ ${n}`); } else { fail++; console.log(`  ✗ ${n}${x ? " — " + x : ""}`); } };
 
@@ -71,7 +76,7 @@ function runHook(cwd) {
   hits.pinned.length = 0; hits.fallback.length = 0;
   return new Promise((resolve) => {
     const kid = spawn(process.execPath, [join(ROOT, "hooks", "sessionstart.mjs")], {
-      env: { ...process.env, AGENT_BUS_DIR: BUS, TRANTOR_NO_UPDATE_CHECK: "1", TRANTOR_NO_BALANCE_CHECK: "1",
+      env: { ...drillEnv(), AGENT_BUS_DIR: BUS, TRANTOR_NO_UPDATE_CHECK: "1", TRANTOR_NO_BALANCE_CHECK: "1",
              RELAY_SESSION: "", RELAY_PROJECT: "", RELAY_URL: "", CLAUDE_PROJECT_DIR: cwd },
       stdio: ["pipe", "pipe", "pipe"],
     });

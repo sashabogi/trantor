@@ -16,6 +16,7 @@ import {
 } from "./hooks/lib/handoff.mjs";
 import { orchWriterSid } from "./lib/project.mjs";
 import { freshEngaged, originalStillWorking } from "./bin/baton-close.mjs";
+import { drillEnv } from "./drill-env.mjs";
 
 let pass = 0, fail = 0;
 const ok = (name, cond) => { console.log(`  ${cond ? "PASS" : "FAIL"}  ${name}`); cond ? pass++ : fail++; };
@@ -145,7 +146,7 @@ const projDir = join(tmpdir(), proj);
 mkdirSync(projDir, { recursive: true });
 const hf = join(handoffDir, `${proj}-9999999999.json`);
 const seed = () => writeFileSync(hf, JSON.stringify({ id: `${proj}-9999999999`, project: projDir, projectName: proj, machine: "h", trigger: "auto", summary: "S", gitStatus: "", consumed: false }, null, 2));
-const ss = (source) => spawnSync("node", ["hooks/sessionstart.mjs"], { input: JSON.stringify({ source, session_id: "x" }), encoding: "utf8", timeout: 15000, env: { ...process.env, CLAUDE_PROJECT_DIR: projDir, RELAY_SESSION: proj, RELAY_URL: CLOSED } });
+const ss = (source) => spawnSync("node", ["hooks/sessionstart.mjs"], { input: JSON.stringify({ source, session_id: "x" }), encoding: "utf8", timeout: 15000, env: { ...drillEnv(), CLAUDE_PROJECT_DIR: projDir, RELAY_SESSION: proj, RELAY_URL: CLOSED } });
 const consumed = () => JSON.parse(readFileSync(hf, "utf8")).consumed;
 
 seed();
@@ -214,7 +215,7 @@ seed();
   const r = spawnSync("node", ["hooks/sessionstart.mjs"], {
     input: JSON.stringify({ source: "startup", session_id: "FRESH-SID", transcript_path: freshTranscript }),
     encoding: "utf8", timeout: 15000,
-    env: { ...process.env, CLAUDE_PROJECT_DIR: cpDir, RELAY_SESSION: cp, RELAY_URL: CLOSED },
+    env: { ...drillEnv(), CLAUDE_PROJECT_DIR: cpDir, RELAY_SESSION: cp, RELAY_URL: CLOSED },
   });
   const claimed = JSON.parse(readFileSync(chf, "utf8"));
   ok("consumedBy: claim records the fresh session id + transcript path", claimed.consumed === true && claimed.consumedBy?.session_id === "FRESH-SID" && claimed.consumedBy?.transcript_path === freshTranscript);
@@ -296,7 +297,7 @@ seed();
       // RELAY_PROJECT="" — a seat runner exports RELAY_PROJECT for ITS project, and
       // resolveProject honours it BEFORE any path, so the subprocess would resolve the fixture
       // dir to the seat's project and the orch map row would never match (#5648 drill fix).
-      env: { ...process.env, RELAY_PROJECT: "", CLAUDE_PROJECT_DIR: opDir, RELAY_SESSION: op, RELAY_URL: CLOSED, AGENT_BUS_DIR: bus, TRANTOR_ORCH: "", TRANTOR_ORCH_HOLD_MS: "", ...env },
+      env: { ...drillEnv(), RELAY_PROJECT: "", CLAUDE_PROJECT_DIR: opDir, RELAY_SESSION: op, RELAY_URL: CLOSED, AGENT_BUS_DIR: bus, TRANTOR_ORCH: "", TRANTOR_ORCH_HOLD_MS: "", ...env },
     });
     try { return JSON.parse(r.stdout).hookSpecificOutput?.additionalContext || ""; } catch { return ""; }
   };
@@ -376,7 +377,7 @@ seed(); rmSync(hf, { force: true });
 const pc = spawnSync("node", ["hooks/precompact.mjs"], {
   input: JSON.stringify({ transcript_path: transcript, session_id: "pctest-" + process.pid, trigger: "auto" }),
   encoding: "utf8", timeout: 30000,
-  env: { ...process.env, CLAUDE_PROJECT_DIR: projDir, RELAY_URL: CLOSED, TRANTOR_NO_SCROOGE: "1", TRANTOR_NO_HANDOFF_SPAWN: "1" },
+  env: { ...drillEnv(), CLAUDE_PROJECT_DIR: projDir, RELAY_URL: CLOSED, TRANTOR_NO_SCROOGE: "1", TRANTOR_NO_HANDOFF_SPAWN: "1" },
 });
 ok("precompact exits 0", pc.status === 0);
 ok("precompact emits valid JSON", (() => { try { JSON.parse(pc.stdout); return true; } catch { return false; } })());
@@ -481,7 +482,7 @@ rmSync(projDir, { recursive: true, force: true });
   // The recap net, end to end through the REAL hooks as subprocesses.
   const sid = "succ-net-1";
   writeFileSync(join(handoffDir(), `recap-pending-${sid}.json`), JSON.stringify({ handoffId: w.id, ts: 1 }));
-  const hookEnv = { ...process.env, RELAY_URL: CLOSED, TRANTOR_NO_FOCUS: "" };
+  const hookEnv = { ...drillEnv(), RELAY_URL: CLOSED, TRANTOR_NO_FOCUS: "" };
   const pf = spawnSync(process.execPath, ["hooks/prompt-focus.mjs"], { input: JSON.stringify({ session_id: sid, prompt: "a stale queued message that must still carry the reminder", cwd: projDir }), encoding: "utf8", env: hookEnv, timeout: 15000 });
   ok("recap net: every pre-recap prompt carries the reminder", pf.stdout.includes("additionalContext") && pf.stdout.includes(w.id));
   const si = spawnSync(process.execPath, ["hooks/stop-inbox.mjs"], { input: JSON.stringify({ session_id: sid, cwd: projDir }), encoding: "utf8", env: { ...hookEnv, RELAY_STOP_TIMEOUT_MS: "200" }, timeout: 15000 });
@@ -613,7 +614,7 @@ rmSync(projDir, { recursive: true, force: true });
   mkdirSync(join(bus, "handoffs"), { recursive: true });
   mkdirSync(projDir3, { recursive: true });
   writeFileSync(join(bus, "autonomy.json"), JSON.stringify({ defaults: { baton: "auto" } }));
-  const succEnv = { ...process.env, AGENT_BUS_DIR: bus, RELAY_URL: CLOSED, RELAY_CONTEXT_WINDOW: "1000000", RELAY_CONTEXT_WARN_FRAC: "0.9" };
+  const succEnv = { ...drillEnv(), AGENT_BUS_DIR: bus, RELAY_URL: CLOSED, RELAY_CONTEXT_WINDOW: "1000000", RELAY_CONTEXT_WARN_FRAC: "0.9" };
 
   // (1) the heartbeat ARMS at the warn line and tells the RUNNING agent — exactly once per arming.
   // NB: the suite's shared `transcript` fixture is already cleaned up by this point — write our own
@@ -715,7 +716,7 @@ rmSync(projDir, { recursive: true, force: true });
   const hf = join(bus, "handoffs", "proj-1000000200.json");
   const baseRec = { id: "proj-1000000200", project: projDir, projectName: "proj", machine: "h", trigger: "manual-skill", stamp: 1000000200, summary: "REBOOT_HANDOFF", consumed: false, states: [{ state: "written", ts: 1, by: "pred" }] };
   writeFileSync(hf, JSON.stringify(baseRec));
-  const env = { ...process.env, AGENT_BUS_DIR: bus, RELAY_URL: CLOSED, TRANTOR_NO_HANDOFF_SPAWN: "1", TRANTOR_NO_BATON_SPAWN: "1" };
+  const env = { ...drillEnv(), AGENT_BUS_DIR: bus, RELAY_URL: CLOSED, TRANTOR_NO_HANDOFF_SPAWN: "1", TRANTOR_NO_BATON_SPAWN: "1" };
   delete env.TRANTOR_ORCH;
 
   // 1) a RESUMED session must not claim — and must not wear the takeover banner
@@ -758,7 +759,7 @@ rmSync(projDir, { recursive: true, force: true });
   mkdirSync(join(root, "devroot", "someproj"), { recursive: true });
   mkdirSync(join(root, "elsewhere"), { recursive: true });
   const fnSrc = execSync(`sed -n '/^_orch_resolve_dir()/,/^}$/p' bin/crew.sh`, { encoding: "utf8" });
-  const env = { ...process.env, TRANTOR_DEV_ROOT: join(root, "devroot") };
+  const env = { ...drillEnv(), TRANTOR_DEV_ROOT: join(root, "devroot") };
   const runFn = (cwd, proj) => spawnSync("bash", ["-s"], {
     input: `${fnSrc}\n_orch_resolve_dir '${cwd}' '${proj}'\n`, encoding: "utf8", env,
   });

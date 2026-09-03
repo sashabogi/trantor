@@ -17,6 +17,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, readdirSync, existsSync } from "
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
+import { drillEnv } from "./drill-env.mjs";
 
 const ROOT = dirname(fileURLToPath(import.meta.url));
 let pass = 0, fail = 0;
@@ -44,7 +45,7 @@ function makeWorld() {
 }
 
 const env = (W) => ({
-  ...process.env,
+  ...drillEnv(),
   HOME: W.w, AGENT_BUS_DIR: W.BUS, RELAY_DATA_DIR: W.BUS,
   CLAUDE_PROJECT_DIR: W.proj,
   RELAY_CONTEXT_WINDOW: "200000",       // 190k of 200k → ~95%, over the 90% warn line

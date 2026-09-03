@@ -4,12 +4,13 @@ import { spawn } from "node:child_process";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { drillEnv } from "./drill-env.mjs";
 
 let fail = 0; const ok = (c, m) => { console.log((c ? "✓" : "✗ FAIL") + " " + m); if (!c) fail++; };
 
 const dir = mkdtempSync(join(tmpdir(), "trantor-hg-"));
 const PORT = 47757;
-const hub = spawn("node", ["hub.mjs"], { env: { ...process.env, RELAY_DATA_DIR: dir, RELAY_PORT: String(PORT), PORT: String(PORT) }, stdio: ["ignore", "ignore", "pipe"] });
+const hub = spawn("node", ["hub.mjs"], { env: { ...drillEnv(), RELAY_DATA_DIR: dir, RELAY_PORT: String(PORT), PORT: String(PORT) }, stdio: ["ignore", "ignore", "pipe"] });
 await new Promise(r => setTimeout(r, 800));
 const base = `http://127.0.0.1:${PORT}`;
 const post = (p, b) => fetch(base + p, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(b) }).then(r => r.json());

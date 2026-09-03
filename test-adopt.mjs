@@ -15,6 +15,7 @@ import { mkdtempSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
+import { drillEnv } from "./drill-env.mjs";
 
 const ROOT = dirname(fileURLToPath(import.meta.url));
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
@@ -25,7 +26,7 @@ function spawnHub(port) {
   const dir = mkdtempSync(join(tmpdir(), "trantor-adopt-"));
   mkdirSync(join(dir, ".agent-bus"), { recursive: true });
   const hub = spawn("node", [join(ROOT, "hub.mjs")], {
-    env: { ...process.env, RELAY_DATA_DIR: dir, HOME: dir, RELAY_PORT: String(port), PORT: String(port), TRANTOR_NO_UPDATE_CHECK: "1", RELAY_AUTH: "off" },
+    env: { ...drillEnv(), RELAY_DATA_DIR: dir, HOME: dir, RELAY_PORT: String(port), PORT: String(port), TRANTOR_NO_UPDATE_CHECK: "1", RELAY_AUTH: "off" },
     stdio: ["ignore", "ignore", "pipe"],
   });
   return hub;
@@ -115,7 +116,7 @@ try {
   const dir2 = mkdtempSync(join(tmpdir(), "trantor-warn-"));
   mkdirSync(join(dir2, ".agent-bus"), { recursive: true });
   const hub2 = spawn("node", [join(ROOT, "hub.mjs")], {
-    env: { ...process.env, RELAY_DATA_DIR: dir2, HOME: dir2, RELAY_PORT: String(PW), PORT: String(PW), TRANTOR_NO_UPDATE_CHECK: "1", RELAY_AUTH: "warn" },
+    env: { ...drillEnv(), RELAY_DATA_DIR: dir2, HOME: dir2, RELAY_PORT: String(PW), PORT: String(PW), TRANTOR_NO_UPDATE_CHECK: "1", RELAY_AUTH: "warn" },
     stdio: ["ignore", "ignore", "pipe"],
   });
   await sleep(800);

@@ -16,6 +16,7 @@ import { mkdtempSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
+import { drillEnv } from "./drill-env.mjs";
 
 const ROOT = dirname(fileURLToPath(import.meta.url));
 let pass = 0, fail = 0;
@@ -28,7 +29,7 @@ const PORT = 47931;
 const dir = mkdtempSync(join(tmpdir(), "trantor-contracts-"));
 mkdirSync(join(dir, ".agent-bus"), { recursive: true });
 const hub = spawn("node", [join(ROOT, "hub.mjs")], {
-  env: { ...process.env, RELAY_DATA_DIR: dir, HOME: dir, RELAY_PORT: String(PORT), PORT: String(PORT), TRANTOR_NO_UPDATE_CHECK: "1" },
+  env: { ...drillEnv(), RELAY_DATA_DIR: dir, HOME: dir, RELAY_PORT: String(PORT), PORT: String(PORT), TRANTOR_NO_UPDATE_CHECK: "1" },
   stdio: ["ignore", "ignore", "pipe"],
 });
 await sleep(900);
@@ -91,7 +92,7 @@ console.log("\nA session does not park while a dispatched contract is stalled:")
   const out = await new Promise((resolve) => {
     const kid = spawn(process.execPath, [join(ROOT, "hooks", "stop-inbox.mjs")], {
       cwd: ROOT, stdio: ["pipe", "pipe", "pipe"],
-      env: { ...process.env, AGENT_BUS_DIR: BUS, CLAUDE_PROJECT_DIR: repo, RELAY_HOST_ID: "host",
+      env: { ...drillEnv(), AGENT_BUS_DIR: BUS, CLAUDE_PROJECT_DIR: repo, RELAY_HOST_ID: "host",
              RELAY_SESSION: "", RELAY_PROJECT: "", RELAY_URL: "",
              TRANTOR_CONTRACT_OVERDUE_MS: "0" },   // everything open counts as overdue, for the drill
     });
@@ -110,7 +111,7 @@ console.log("\nA session does not park while a dispatched contract is stalled:")
   const out2 = await new Promise((resolve) => {
     const kid = spawn(process.execPath, [join(ROOT, "hooks", "stop-inbox.mjs")], {
       cwd: ROOT, stdio: ["pipe", "pipe", "pipe"],
-      env: { ...process.env, AGENT_BUS_DIR: BUS, CLAUDE_PROJECT_DIR: repo, RELAY_HOST_ID: "host",
+      env: { ...drillEnv(), AGENT_BUS_DIR: BUS, CLAUDE_PROJECT_DIR: repo, RELAY_HOST_ID: "host",
              RELAY_SESSION: "", RELAY_PROJECT: "", RELAY_URL: "", TRANTOR_CONTRACT_OVERDUE_MS: "0" },
     });
     let so = ""; kid.stdout.on("data", d => (so += d));
@@ -152,7 +153,7 @@ const life = {
   RELAY_CONTRACT_ABANDON_MS: "2500",       // abandoned after 2.5s quiet
   RELAY_REAP_INTERVAL_MS: "300",           // sweep fast
 };
-let hub2 = spawn("node", [join(ROOT, "hub.mjs")], { env: { ...process.env, ...life }, stdio: ["ignore", "ignore", "pipe"] });
+let hub2 = spawn("node", [join(ROOT, "hub.mjs")], { env: { ...drillEnv(), ...life }, stdio: ["ignore", "ignore", "pipe"] });
 await sleep(900);
 const BASE2 = `http://127.0.0.1:${PORT2}`;
 const post2 = (p, b) => fetch(BASE2 + p, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(b) }).then(r => r.json()).catch(e => ({ error: String(e) }));
@@ -249,7 +250,7 @@ await post2("/send", { from: DEAD, to: O, project: PROJ2, text: "✅ ortho done 
   const abandonedBefore = reapedIn(before);
   hub2.kill("SIGKILL");
   await sleep(400);
-  hub2 = spawn("node", [join(ROOT, "hub.mjs")], { env: { ...process.env, ...life }, stdio: ["ignore", "ignore", "pipe"] });
+  hub2 = spawn("node", [join(ROOT, "hub.mjs")], { env: { ...drillEnv(), ...life }, stdio: ["ignore", "ignore", "pipe"] });
   await sleep(1200);
   const after = await ctr2(O);
   const abandonedAfter = reapedIn(after);
@@ -279,7 +280,7 @@ await post2("/send", { from: DEAD, to: O, project: PROJ2, text: "✅ ortho done 
   const runStop = (active) => new Promise((resolve) => {
     const kid = spawn(process.execPath, [join(ROOT, "hooks", "stop-inbox.mjs")], {
       cwd: ROOT, stdio: ["pipe", "pipe", "pipe"],
-      env: { ...process.env, AGENT_BUS_DIR: BUS, CLAUDE_PROJECT_DIR: repo, RELAY_HOST_ID: "host",
+      env: { ...drillEnv(), AGENT_BUS_DIR: BUS, CLAUDE_PROJECT_DIR: repo, RELAY_HOST_ID: "host",
              RELAY_SESSION: GHOST, RELAY_PROJECT: PROJ2, RELAY_URL: BASE2,
              TRANTOR_CONTRACT_OVERDUE_MS: "0" },
     });
@@ -337,7 +338,7 @@ console.log("\nA row an alive seat has moved on from is settled, not nagged fore
   const so = await new Promise((resolve) => {
     const kid = spawn(process.execPath, [join(ROOT, "hooks", "stop-inbox.mjs")], {
       cwd: ROOT, stdio: ["pipe", "pipe", "pipe"],
-      env: { ...process.env, AGENT_BUS_DIR: BUS3, CLAUDE_PROJECT_DIR: repo3, RELAY_HOST_ID: "host",
+      env: { ...drillEnv(), AGENT_BUS_DIR: BUS3, CLAUDE_PROJECT_DIR: repo3, RELAY_HOST_ID: "host",
              RELAY_SESSION: O, RELAY_PROJECT: PROJ2, RELAY_URL: BASE2,
              TRANTOR_CONTRACT_OVERDUE_MS: "0" },
     });

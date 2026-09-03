@@ -18,6 +18,7 @@ import { spawn } from "node:child_process";
 import { mkdtempSync, writeFileSync, readFileSync, chmodSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
+import { drillEnv } from "./drill-env.mjs";
 
 let pass = 0, fail = 0;
 const ok = (name, cond, extra) => { console.log(`  ${cond ? "PASS" : "FAIL"}  ${name}${cond || !extra ? "" : `\n          ${extra}`}`); cond ? pass++ : fail++; };
@@ -71,7 +72,7 @@ exit 0
   chmodSync(join(fakebin, "codex"), 0o755);
   const runner = spawn("node", ["bin/crew-runner.mjs", "codex", work], {
     cwd: process.cwd(), stdio: "ignore",
-    env: { ...process.env, HOME, PATH: `${fakebin}:${process.env.PATH}`,
+    env: { ...drillEnv(), HOME, PATH: `${fakebin}:${process.env.PATH}`,
       RELAY_URL: HUB, RELAY_AGENT: "codex", RELAY_PROJECT: PROJ,
       CREW_KICKOFF: "say hi and end your turn", TRANTOR_RETRY_MS: "1200" },
   });
@@ -172,7 +173,7 @@ exit 0
     chmodSync(join(fakebin, "codex"), 0o755);
     const runner = spawn("node", ["bin/crew-runner.mjs", "codex", work], {
       cwd: process.cwd(), stdio: "ignore",
-      env: { ...process.env, HOME: home, PATH: `${fakebin}:${process.env.PATH}`,
+      env: { ...drillEnv(), HOME: home, PATH: `${fakebin}:${process.env.PATH}`,
         RELAY_URL: echoUrl, RELAY_AGENT: "codex", RELAY_PROJECT: project,
         RUNNER_SESSION: session, CREW_KICKOFF: "say hi and end your turn" },
     });
@@ -238,7 +239,7 @@ console.log("\nAnd the orchestrator actually SEES it, without polling for it:");
   const out = await new Promise((resolve) => {
     const kid = sp(process.execPath, ["hooks/inbox-deliver.mjs"], {
       cwd: process.cwd(), stdio: ["pipe", "pipe", "pipe"],
-      env: { ...process.env, AGENT_BUS_DIR: BUS, CLAUDE_PROJECT_DIR: repo,
+      env: { ...drillEnv(), AGENT_BUS_DIR: BUS, CLAUDE_PROJECT_DIR: repo,
              RELAY_SESSION: "", RELAY_PROJECT: "", RELAY_URL: "" },
     });
     let so = ""; kid.stdout.on("data", d => (so += d));

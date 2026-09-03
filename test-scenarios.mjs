@@ -7,6 +7,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
+import { drillEnv } from "./drill-env.mjs";
 
 const ROOT = dirname(fileURLToPath(import.meta.url));
 const PORT = 4951;
@@ -22,7 +23,7 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 try { await fetch(`${HUB}/health`, { signal: AbortSignal.timeout(700) }); console.error(`✗ something is already listening on :${PORT} — kill it first (lsof -ti :${PORT} | xargs kill)`); process.exit(2); } catch {}
 
 // isolated hub: fake HOME (own bus.json), test port, 2s online cutoff so death is observable fast
-const hub = spawn("node", [join(ROOT, "hub.mjs")], { env: { ...process.env, HOME: FAKE_HOME, RELAY_PORT: String(PORT), RELAY_HOST: "127.0.0.1", RELAY_ONLINE_MS: "2000", RELAY_PEER_TTL_MS: "4000" }, stdio: "ignore" });
+const hub = spawn("node", [join(ROOT, "hub.mjs")], { env: { ...drillEnv(), HOME: FAKE_HOME, RELAY_PORT: String(PORT), RELAY_HOST: "127.0.0.1", RELAY_ONLINE_MS: "2000", RELAY_PEER_TTL_MS: "4000" }, stdio: "ignore" });
 await sleep(900);
 
 try {
@@ -44,7 +45,7 @@ try {
   await hb;
 
   console.log("scenario: spawn verification catches a no-show (the take-1 killer)");
-  const ver = spawn("node", [join(ROOT, "bin/crew-verify.mjs"), "proj", "codex", "kimi", "--timeout", "4"], { env: { ...process.env, RELAY_URL: HUB }, stdio: ["ignore", "pipe", "ignore"] });
+  const ver = spawn("node", [join(ROOT, "bin/crew-verify.mjs"), "proj", "codex", "kimi", "--timeout", "4"], { env: { ...drillEnv(), RELAY_URL: HUB }, stdio: ["ignore", "pipe", "ignore"] });
   let vout = ""; ver.stdout.on("data", d => (vout += d));
   await sleep(600);
   await api("/register", { session: "codex:proj", project: "proj" });   // codex comes up DURING verify; kimi never does
@@ -230,7 +231,7 @@ try {
   await api("/project/delete", { project: "zombieproj" });   // re-forget; leave state clean for later drills
 
   console.log("scenario: virgin-user doctor (sandbox HOME)");
-  const doc = spawn("node", [join(ROOT, "bin/doctor.mjs")], { env: { ...process.env, HOME: FAKE_HOME, RELAY_URL: HUB }, stdio: ["ignore", "pipe", "pipe"] });
+  const doc = spawn("node", [join(ROOT, "bin/doctor.mjs")], { env: { ...drillEnv(), HOME: FAKE_HOME, RELAY_URL: HUB }, stdio: ["ignore", "pipe", "pipe"] });
   let dout = ""; doc.stdout.on("data", d => (dout += d));
   const dcode = await new Promise(r => doc.on("exit", r));
   ok("doctor exits non-zero on a virgin machine", dcode === 1);
@@ -267,7 +268,7 @@ try {
         history: [{ to: "todo", by: "arch", ts: 1000 }, { from: "todo", to: "doing", by: "kimi:legacy", ts: 2000 }, { from: "doing", to: "done", by: "kimi:legacy", ts: 3000 }] }] };
     writeFileSync(join(BHOME, "bus.json"), JSON.stringify(seeded));
     const BPORT = 4952;
-    const bh = spawn("node", [join(ROOT, "hub.mjs")], { env: { ...process.env, HOME: BHOME, RELAY_DATA_DIR: BHOME, RELAY_PORT: String(BPORT), RELAY_HOST: "127.0.0.1" }, stdio: "ignore" });
+    const bh = spawn("node", [join(ROOT, "hub.mjs")], { env: { ...drillEnv(), HOME: BHOME, RELAY_DATA_DIR: BHOME, RELAY_PORT: String(BPORT), RELAY_HOST: "127.0.0.1" }, stdio: "ignore" });
     await sleep(900);
     const bev = (await (await fetch(`http://127.0.0.1:${BPORT}/history?project=legacy`)).json()).events;
     ok("backfill reconstructed all 3 legacy history entries", bev.length === 3);

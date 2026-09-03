@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
+import { drillEnv } from "./drill-env.mjs";
 
 const root = dirname(fileURLToPath(import.meta.url));
 const home = mkdtempSync(join(tmpdir(), "trantor-crew-models-"));
@@ -44,7 +45,7 @@ esac
     cwd: root,
     encoding: "utf8",
     env: {
-      ...process.env,
+      ...drillEnv(),
       HOME: home,
       PATH: `${fakebin}:${process.env.PATH}`,
       CREW_DRY_RUN: "1",
@@ -65,7 +66,7 @@ esac
     cwd: root,
     encoding: "utf8",
     env: {
-      ...process.env,
+      ...drillEnv(),
       HOME: home,
       PATH: `${fakebin}:${process.env.PATH}`,
       CREW_DRY_RUN: "1",
@@ -85,7 +86,7 @@ esac
     cwd: root,
     encoding: "utf8",
     env: {
-      ...process.env,
+      ...drillEnv(),
       HOME: home,
       PATH: `${fakebin}:${process.env.PATH}`,
       CREW_DRY_RUN: "1",

@@ -6,13 +6,14 @@ import { writeFileSync, mkdirSync, existsSync, readFileSync, rmSync, realpathSyn
 import { join } from "node:path";
 import { homedir, tmpdir } from "node:os";
 import { spawnSync } from "node:child_process";
+import { drillEnv } from "./drill-env.mjs";
 
 let pass = 0, fail = 0;
 const ok = (name, cond) => { console.log(`  ${cond ? "PASS" : "FAIL"}  ${name}`); cond ? pass++ : fail++; };
 const CLOSED = "http://127.0.0.1:1"; // refuses fast -> no network dependency
 const runHook = (projDir, sess) => spawnSync("node", ["hooks/sessionstart.mjs"], {
   input: '{"source":"startup"}', encoding: "utf8", timeout: 15000,
-  env: { ...process.env, CLAUDE_PROJECT_DIR: projDir, RELAY_SESSION: sess, RELAY_URL: CLOSED },
+  env: { ...drillEnv(), CLAUDE_PROJECT_DIR: projDir, RELAY_SESSION: sess, RELAY_URL: CLOSED },
 });
 
 const proj = "relay-selftest-" + process.pid;
@@ -52,7 +53,9 @@ ok("consumed handoff is NOT re-injected on next start", !ctx2.includes("trantor-
 
 // home-directory guard: a session opened in ~ itself must NOT register (it would
 // spawn a phantom "<username>" project board) — unless RELAY_SESSION opts it in.
-const envSansOptIn = Object.fromEntries(Object.entries(process.env).filter(([k]) => k !== "RELAY_SESSION" && k !== "RELAY_PROJECT"));
+// drillEnv, not a two-name filter (#6108): a runner in a herdr pane also exports
+// HERDR_PANE_ID/TRANTOR_ORCH, and the home child must see NONE of that identity.
+const envSansOptIn = drillEnv();
 const rh = spawnSync("node", ["hooks/sessionstart.mjs"], {
   input: '{"source":"startup"}', encoding: "utf8", timeout: 15000,
   env: { ...envSansOptIn, CLAUDE_PROJECT_DIR: homedir(), RELAY_URL: CLOSED },
@@ -115,7 +118,7 @@ ok("RELAY_SESSION opts a home-dir session back in", rh2.status === 0 && !rh2.std
     writeFileSync(dst, readFileSync(join(process.cwd(), "bin", f), "utf8"));
     // advise reads stdin; profile prints its table. Both must reach their main block & emit output.
     const r = spawnSync("node", [dst, f === "advise.mjs" ? "--demo" : "show"], {
-      encoding: "utf8", timeout: 15000, env: { ...process.env, HOME: join(spBase, "home") },
+      encoding: "utf8", timeout: 15000, env: { ...drillEnv(), HOME: join(spBase, "home") },
     });
     const ran = r.status === 0 && (r.stdout || "").trim().length > 0;
     ok(`${f} main block runs from a space-containing path (is-main guard encoded)`, ran);
@@ -138,7 +141,7 @@ ok("RELAY_SESSION opts a home-dir session back in", rh2.status === 0 && !rh2.std
   const PORT = 47911;
   const hubDir = join(realpathSync(tmpdir()), `trantor-ss-live-${process.pid}`);
   mkdirSync(hubDir, { recursive: true });
-  const hub = spawn("node", ["hub.mjs"], { env: { ...process.env, RELAY_PORT: String(PORT), RELAY_DATA_DIR: hubDir, RELAY_HOST: "127.0.0.1" }, stdio: "ignore" });
+  const hub = spawn("node", ["hub.mjs"], { env: { ...drillEnv(), RELAY_PORT: String(PORT), RELAY_DATA_DIR: hubDir, RELAY_HOST: "127.0.0.1" }, stdio: "ignore" });
   try {
     await new Promise(r => setTimeout(r, 900));
     const sess = `livetest:${proj}`;
@@ -148,7 +151,7 @@ ok("RELAY_SESSION opts a home-dir session back in", rh2.status === 0 && !rh2.std
       body: JSON.stringify({ session: `other:${proj}`, project: proj }) });
     const r2 = spawnSync("node", ["hooks/sessionstart.mjs"], {
       input: '{"source":"startup"}', encoding: "utf8", timeout: 15000,
-      env: { ...process.env, CLAUDE_PROJECT_DIR: projDir, RELAY_SESSION: sess, RELAY_URL: `http://127.0.0.1:${PORT}` },
+      env: { ...drillEnv(), CLAUDE_PROJECT_DIR: projDir, RELAY_SESSION: sess, RELAY_URL: `http://127.0.0.1:${PORT}` },
     });
     let ctx = "";
     try { ctx = JSON.parse(r2.stdout)?.hookSpecificOutput?.additionalContext || ""; } catch {}
@@ -162,7 +165,7 @@ ok("RELAY_SESSION opts a home-dir session back in", rh2.status === 0 && !rh2.std
       body: JSON.stringify({ id: fp.proposal.id, status: "approved", by: "owner@test" }) });
     const r3 = spawnSync("node", ["hooks/sessionstart.mjs"], {
       input: '{"source":"startup"}', encoding: "utf8", timeout: 15000,
-      env: { ...process.env, CLAUDE_PROJECT_DIR: projDir, RELAY_SESSION: sess, RELAY_URL: `http://127.0.0.1:${PORT}` },
+      env: { ...drillEnv(), CLAUDE_PROJECT_DIR: projDir, RELAY_SESSION: sess, RELAY_URL: `http://127.0.0.1:${PORT}` },
     });
     let ctx3 = "";
     try { ctx3 = JSON.parse(r3.stdout)?.hookSpecificOutput?.additionalContext || ""; } catch {}

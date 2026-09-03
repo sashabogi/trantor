@@ -9,6 +9,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { setTimeout as sleep } from "node:timers/promises";
 import { randomBytes } from "node:crypto";
+import { drillEnv } from "./drill-env.mjs";
 
 const HERE = fileURLToPath(new URL(".", import.meta.url)).replace(/\/[^/]+$/, "");
 let pass = 0, fail = 0;
@@ -21,7 +22,7 @@ async function startHub(extraEnv = {}) {
   mkdirSync(join(dir, ".agent-bus"), { recursive: true });
   const port = 5000 + Math.floor(Math.random() * 20000);
   const env = {
-    ...process.env, HOME: dir, AGENT_BUS_DIR: join(dir, ".agent-bus"), RELAY_DATA_DIR: dir,
+    ...drillEnv(), HOME: dir, AGENT_BUS_DIR: join(dir, ".agent-bus"), RELAY_DATA_DIR: dir,
     RELAY_PORT: String(port), RELAY_HOST: "127.0.0.1", RELAY_ONLINE_MS: "1500", ...extraEnv,
   };
   delete env.RELAY_URL;

@@ -15,6 +15,7 @@ import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
+import { drillEnv } from "./drill-env.mjs";
 
 const ROOT = dirname(fileURLToPath(import.meta.url));
 let pass = 0, fail = 0;
@@ -36,7 +37,7 @@ function run(args, { seed = null, stdin = "" } = {}) {
     // RELAY_PROJECT/TRANTOR_ORCH are pinned too (#6074): the resolver reads the session's
     // registration FIRST, and a drill that inherits a crew runner's RELAY_PROJECT would have
     // every handoff file named after THAT runner's project instead of the seeded one.
-    env: { ...process.env, HOME: w, AGENT_BUS_DIR: BUS, RELAY_DATA_DIR: BUS,
+    env: { ...drillEnv(), HOME: w, AGENT_BUS_DIR: BUS, RELAY_DATA_DIR: BUS,
            CLAUDE_PROJECT_DIR: proj, TRANTOR_NO_BATON_SPAWN: "1",
            RELAY_PROJECT: "", TRANTOR_ORCH: "" },
   });

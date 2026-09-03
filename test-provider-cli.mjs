@@ -9,13 +9,14 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { drillEnv } from "./drill-env.mjs";
 
 const ROOT = fileURLToPath(new URL(".", import.meta.url));
 let fail = 0; const ok = (c, m) => { console.log((c ? "✓" : "✗ FAIL") + " " + m); if (!c) fail++; };
 
 const run = (bin, args, home) => spawnSync(process.execPath, [join(ROOT, "bin", bin), ...args], {
   encoding: "utf8",
-  env: { ...process.env, HOME: home },
+  env: { ...drillEnv(), HOME: home },
 });
 
 // --- provider add/remove: flags and 'help' in the name position die before any write ---
