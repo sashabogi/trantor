@@ -178,6 +178,18 @@ pub(crate) async fn project_wake(project: String, kickoff: String) -> Result<Str
         std::fs::read_to_string(desktop_bus_dir().join("crew-windows.txt")).unwrap_or_default();
     let pane = orch_pane_from_rows(&rows, &project)
         .ok_or_else(|| format!("trantor open did not record an orchestrator pane for {project}"))?;
+    // The CLI decides the kickoff (#6112): it alone holds the checkout's docs/PRD.md AND the
+    // signed board, so a brief wakes into the crew's PRD review and a blank project wakes
+    // plainly. The app's own `kickoff` is the fallback for a CLI that cannot answer. The
+    // selector blocks on a signed hub read, so it runs off the async runtime's threads.
+    let kickoff = {
+        let (project, dir, fallback) = (project.clone(), dir.clone(), kickoff.clone());
+        tokio::task::spawn_blocking(move || {
+            crate::terminal::wake_kickoff_prompt(&project, &dir, &fallback)
+        })
+        .await
+        .unwrap_or_else(|_| kickoff.clone())
+    };
     match herdr::prompt(&pane, &kickoff) {
         Ok(outcome) => Ok(format!(
             "project awake in pane {pane} · kickoff: {}",

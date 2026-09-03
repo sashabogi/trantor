@@ -1,4 +1,5 @@
 export const PLAIN_WAKE_KICKOFF = "Recap from memory and the board, then continue the project.";
+export const PRD_REVIEW_KICKOFF = "docs/PRD.md is the brief; run /trantor:prd-review";
 
 export function slugProjectName(raw: string): string {
   return raw
@@ -16,13 +17,12 @@ export function projectTarget(parentRoot: string, name: string): string {
   return name ? `${root}/${name}` : root;
 }
 
-export function genesisKickoff(brief: string, droppedFrom?: string | null): string {
-  const normalizedBrief = brief.replace(/\r\n?|\n/g, "\n");
-  const lineCount = normalizedBrief
-    ? normalizedBrief.split("\n").length - Number(normalizedBrief.endsWith("\n"))
-    : 0;
-  const filename = droppedFrom?.replace(/\s+/g, " ").trim().slice(0, 120);
-  const source = filename ? `dropped from ${filename}` : "entered in the Genesis sheet";
-  const lines = lineCount === 1 ? "1 line" : `${lineCount} lines`;
-  return `Your brief is in docs/PRD.md (${lines}, ${source}). Read docs/PRD.md and wait for the review contract.`;
+/** The sheet's FALLBACK kickoff only (#6112). `trantor genesis-kickoff` decides the real one from
+ *  the checkout's docs/PRD.md plus the signed board, and project_wake relays its line; this is
+ *  what the pane gets when that CLI cannot answer. A brief means path B (the crew's PRD review),
+ *  no brief means path A (the plain wake). The brief itself never rides the prompt: a 291k-char
+ *  PRD typed into a pane is the failure this replaces. The second argument stays for the sheet's
+ *  call site, which #6120 reshapes separately. */
+export function genesisKickoff(brief: string, _droppedFrom?: string | null): string {
+  return brief.trim() ? PRD_REVIEW_KICKOFF : PLAIN_WAKE_KICKOFF;
 }
