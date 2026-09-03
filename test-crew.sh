@@ -11,6 +11,16 @@ ROOT="$(cd "$(dirname "$0")" && pwd)"
 PASS=0; FAIL=0
 ok(){ if eval "$2"; then PASS=$((PASS+1)); echo "  ✓ $1"; else FAIL=$((FAIL+1)); echo "  ✗ $1  [$2]"; fi; }
 
+# #6228 bounce (2026-09-03): this suite must not depend on the RUNNER'S OWN identity env. A herdr
+# pane hosting a crew seat exports TRANTOR_ORCH/TRANTOR_SEAT persistently (and HERDR_PANE_ID,
+# RELAY_PROJECT, ...); every `bash crew.sh` invocation below that does not override one of these
+# inherits the RUNNER's badge instead — so from inside a TRANTOR_ORCH=trantor pane, every dry-run
+# spawn for testproj/crebral-health/etc. got refused by the cross-project guard (#6228) as if IT
+# were the badge mismatch, 23 drills failed. Same fix drill-env.mjs's scrubIdentityEnv() applies to
+# node drills (#6074 bounce): scrub before ANY test runs; §20's guard tests re-set TRANTOR_ORCH
+# deliberately per case, which wins over this scrub because it runs after.
+unset TRANTOR_ORCH TRANTOR_SEAT HERDR_ENV HERDR_PANE_ID RELAY_PROJECT RELAY_SESSION RELAY_AGENT TRANTOR_PROJECT
+
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 mkdir -p "$TMP/.agent-bus" "$TMP/fakebin"
