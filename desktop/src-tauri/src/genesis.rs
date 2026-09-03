@@ -351,4 +351,23 @@ mod tests {
         assert!(matches!(pane_agent_state(rows, "pane-live"), PaneAgentState::Idle));
         assert!(matches!(pane_agent_state(rows, "pane-other"), PaneAgentState::NoAgent));
     }
+
+    /// #6138 real path, run by hand against a REAL idle orchestrator pane:
+    ///   1. `trantor new` a throwaway + `trantor open <name>` (a claude session boots in a pane)
+    ///   2. wait for `herdr agent list` to read idle on that pane
+    ///   3. `cargo test --manifest-path <Cargo.toml> wake_delivers -- --ignored --test-threads=1`
+    /// The command under test is the exact handler the sidebar's Wake button invokes.
+    /// #[tokio::test] needs the macros+rt features, which only the dev profile's tests pull in
+    /// via the dev-dependency below — the runtime itself only needs rt-multi-thread/time/process.
+    #[cfg(test)]
+    #[tokio::test]
+    #[ignore = "real path: needs an idle orchestrator pane (see the steps in this comment)"]
+    async fn wake_delivers_kickoff_into_an_idle_pane() {
+        let project = std::env::var("WAKE_REAL_PROJECT").expect("set WAKE_REAL_PROJECT=<throwaway project with an idle pane>");
+        let result = project_wake(project, "The project is empty; say what you see and ask what to build.".into())
+            .await
+            .expect("wake with an idle pane must deliver the kickoff, not refuse");
+        assert!(result.starts_with("kickoff sent into idle pane"), "{result}");
+        assert!(result.contains("prompt delivered"), "{result}");
+    }
 }
