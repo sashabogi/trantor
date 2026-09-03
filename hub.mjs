@@ -12,6 +12,7 @@ import { timingSafeEqual, randomBytes } from "node:crypto";
 import { verifyRequest, verifyEndorsement, publicView } from "./lib/identity.mjs";
 import { DEFAULT_ORG } from "./lib/store-contract.mjs";
 import { assertNoSecrets } from "./lib/scrub.mjs";
+import { createPersistHealth } from "./lib/persist-health.mjs";
 
 const PORT = Number(process.env.RELAY_PORT || 4477);
 const HOST = process.env.RELAY_HOST || "127.0.0.1";
@@ -125,6 +126,7 @@ function emptyState() {
 const CARD_LOG_MAX = 40;
 const CARD_LOG_TEXT_MAX = 2000;
 const CARD_LOG_BY_MAX = 120;
+const stripNulText = (value) => String(value ?? "").replace(/\u0000/g, "");
 function normalizeTaskLog(t) {
   if (!Array.isArray(t.log)) { if (t.log !== undefined) delete t.log; return false; }
   const before = JSON.stringify(t.log);
@@ -133,7 +135,7 @@ function normalizeTaskLog(t) {
     .map(e => ({
       ts: Number.isFinite(Number(e.ts)) && Number(e.ts) > 0 ? Math.floor(Number(e.ts)) : Date.now(),
       by: String(e.by || "").slice(0, CARD_LOG_BY_MAX),
-      text: String(e.text || "").slice(0, CARD_LOG_TEXT_MAX),
+      text: stripNulText(e.text).slice(0, CARD_LOG_TEXT_MAX),
     }))
     .slice(-CARD_LOG_MAX);
   if (!t.log.length) delete t.log;
@@ -144,7 +146,7 @@ function appendTaskLog(t, by, text, ts = Date.now()) {
   const entry = {
     ts: Number.isFinite(Number(ts)) && Number(ts) > 0 ? Math.floor(Number(ts)) : Date.now(),
     by: String(by || "").slice(0, CARD_LOG_BY_MAX),
-    text: String(text).slice(0, CARD_LOG_TEXT_MAX),
+    text: stripNulText(text).slice(0, CARD_LOG_TEXT_MAX),
   };
   const log = Array.isArray(t.log) ? t.log : [];
   log.push(entry);
@@ -251,6 +253,11 @@ let dirty = false;
 // `cardEvents` key — so downgrading to a pre-0.17.54 hub still boots with its full TIMELINE
 // instead of a silently empty history. Cheap insurance on a live hub; drop the mirror later.
 let persisting = false;
+const persistHealth = createPersistHealth({
+  baseMs: process.env.RELAY_PERSIST_RETRY_BASE_MS,
+  maxMs: process.env.RELAY_PERSIST_RETRY_MAX_MS,
+  logIntervalMs: process.env.RELAY_PERSIST_LOG_INTERVAL_MS,
+});
 const snapshotState = () => JSON.parse(JSON.stringify({ ...state, cardEvents: state.events.filter(e => ["created", "moved", "updated"].includes(e?.type)) }));
 // This hub's writer id: saveDelta stamps it into every NOTIFY so we can tell our own change
 // notifications apart from a second writer's (importer, admin psql, another hub instance).
@@ -260,25 +267,38 @@ const HUB_SRC = `hub-${process.pid}-${randomBytes(4).toString("hex")}`;
 // survive our persist ticks (the old saveSnapshot wholesale delete+rewrite destroyed them).
 let lastPersisted = durableStore ? snapshotState() : null;
 if (runTaskBootMigrations()) dirty = true;
+const recordPersistFailure = (kind, error) => {
+  dirty = true;
+  const failure = persistHealth.failed(error);
+  if (failure.shouldLog) {
+    process.stderr.write(`[trantor] ${kind} persist failing: ${failure.health.retries} retries over ${failure.health.failingSinceMs}ms; last error: ${failure.health.lastError}\n`);
+  }
+};
 const persist = () => {
-  if (!dirty || persisting) return;
+  if (!dirty || persisting || !persistHealth.canAttempt()) return;
   if (durableStore) {
     const snapshot = snapshotState();
     dirty = false; persisting = true;
     durableStore.saveDelta(ORG_ID, lastPersisted, snapshot, { src: HUB_SRC }).then(() => {
       lastPersisted = snapshot;
+      persistHealth.succeeded();
     }).catch(e => {
-      dirty = true;
-      process.stderr.write(`[trantor] Postgres persist failed: ${e.message || e}\n`);
+      recordPersistFailure("Postgres", e);
     }).finally(() => {
       persisting = false;
-      if (dirty) persist();
     });
     return;
   }
-  try { writeFileSync(DATA, JSON.stringify(snapshotState())); dirty = false; } catch {}
+  try {
+    writeFileSync(DATA, JSON.stringify(snapshotState()));
+    dirty = false;
+    persistHealth.succeeded();
+  } catch (e) {
+    recordPersistFailure("JSON", e);
+  }
 };
-setInterval(persist, 1000).unref?.();
+const persistTickMs = Math.min(1000, Math.max(10, Number(process.env.RELAY_PERSIST_RETRY_BASE_MS) || 1000));
+setInterval(persist, persistTickMs).unref?.();
 
 // --- reload on external change (the boot-cache fix) -------------------------------------------
 // A NOTIFY from any writer that isn't us means Postgres has rows our in-memory projection has
@@ -1859,6 +1879,8 @@ const server = http.createServer(async (req, res) => {
     // --- Kanban tasks ---
     if (req.method === "POST" && P === "/task") {           // create a card
       const b = await body(req); touch(b.by, undefined, b.project, undefined, auth);
+      if (b.title !== undefined) b.title = stripNulText(b.title);
+      if (b.note !== undefined) b.note = stripNulText(b.note);
       const st0 = ["todo","doing","testing","failed","done","blocked"].includes(b.status) ? b.status : "todo";
       // optional historical ts (backfill from git/import) — accept a past epoch-ms; else now().
       const ts0 = (Number.isFinite(b.ts) && b.ts > 0 && b.ts <= now() + 864e5) ? Math.floor(b.ts) : now();
@@ -2012,6 +2034,8 @@ const server = http.createServer(async (req, res) => {
     if (req.method === "POST" && P === "/task/update") {    // move/edit a card
       const b = await body(req); const t = state.tasks.find(x => x.id === Number(b.id));
       if (!t) return json(res, 404, { error: "no such task" });
+      if (b.title !== undefined) b.title = stripNulText(b.title);
+      if (b.note !== undefined) b.note = stripNulText(b.note);
       // Board integrity (#5406): a card can never change hands silently. The assignee is frozen once
       // set; a mutation is legitimate only as a HANDOFF (the current assignee reassigning to someone
       // else) or an EXPLICIT reassign (reassign:true — e.g. the orchestrator re-routing work after a
@@ -2372,7 +2396,7 @@ const server = http.createServer(async (req, res) => {
     // --- lessons: cross-agent learning from failures. scope = "global" or an agent brand ("kimi") ---
     if (req.method === "POST" && P === "/lesson") {
       const b = await body(req);
-      const text = String(b.text || "").trim().slice(0, 400);
+      const text = stripNulText(b.text).trim().slice(0, 400);
       const scope = String(b.scope || "global").toLowerCase().slice(0, 40);
       if (!text) return json(res, 400, { error: "text required" });
       if (state.lessons.some(l => l.scope === scope && l.text === text)) return json(res, 200, { ok: true, dedup: true });
@@ -2707,7 +2731,7 @@ const server = http.createServer(async (req, res) => {
     }
     if (req.method === "POST" && P === "/send") {
       const b = await body(req);
-      const text = String(b.text ?? "");
+      const text = stripNulText(b.text);
       if (!b.from || !text.trim()) return json(res, 400, { error: "from and non-empty text required" });
       const secretCheck = assertNoSecrets(text);
       if (!secretCheck.ok) return json(res, 400, { error: "secret detected", kinds: secretCheck.kinds || [] });
@@ -2831,6 +2855,7 @@ const server = http.createServer(async (req, res) => {
       res.writeHead(200, { "content-type": "text/html; charset=utf-8" }); return res.end(UI || "<h1>trantor</h1><p>dashboard unavailable</p>");
     }
     if (P === "/health") return json(res, 200, { ok: true, authMode: AUTH_MODE, peers: Object.keys(state.peers).length, messages: state.messages.length, streams: streams.length,
+      persist: persistHealth.view(),
       // #5686: duty liveness rides /health so the app's Home strip and doctor read one truth.
       duty: { ...dutyLiveness(), darkSinceMs: dutyDarkSince ? now() - dutyDarkSince : 0, queuedEscalations: dutyQueuedEscalations() } });
     json(res, 404, { error: "not found" });
