@@ -11,7 +11,7 @@
 // this file never ran in that invocation.
 import http from "node:http";
 import { spawn } from "node:child_process";
-import { mkdtempSync, writeFileSync, chmodSync, mkdirSync, readFileSync } from "node:fs";
+import { mkdtempSync, writeFileSync, chmodSync, mkdirSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { drillEnv } from "./drill-env.mjs";
@@ -274,6 +274,63 @@ async function drill(agent, script, opts = {}) {
   ok("#5684: the stall goes DIRECT to the orchestrator", stalls[0]?.to === "drillhost:tt-fail-claude");
   ok("#5684: the turn was NOT killed — it finished clean, no failure reported",
      !sends.some((m) => /turn FAILED/.test(m.text || "")));
+}
+
+// ---- #6206 drill C: a TRANSCRIPT-advancing turn with silent stdout is NEVER a stall ------
+// The 09:47 false alarm: claude -p prints nothing until the turn ends, and the seat was
+// reported STALLED while it was editing five files. The transcript (the CLI's session file)
+// moving is liveness; stdout silence alone never counts.
+{
+  const { sends, home } = await drill("claude",
+    '#!/bin/sh\nmkdir -p "$TRANTOR_TRANSCRIPT_DIR"\ni=0\nwhile [ $i -lt 15 ]; do\n  echo "{\\"role\\":\\"assistant\\"}" >> "$TRANTOR_TRANSCRIPT_DIR/session.jsonl"\n  sleep 0.1\n  i=$((i+1))\ndone\necho done\nexit 0\n',
+    { env: { RELAY_HOST_ID: "drillhost", TRANTOR_TURN_WATCHDOG_MS: "400" }, quietDeadlineMs: 0,
+      until: (messages) => messages.some((m) => /✅/.test(m.text || "")) });
+  ok("#6206: a turn whose transcript advances is never reported STALLED, however silent its stdout",
+     !sends.some((m) => /STALLED/.test(m.text || "")));
+  ok("#6206: the chatty turn finished clean", sends.some((m) => /✅/.test(m.text || "")));
+  // The liveness signal must be the one the REAL claude emits: a growing session file under the
+  // project transcript dir. If this file is missing the drill proved nothing — the watchdog
+  // would have stayed quiet for the wrong reason (no signal to watch at all).
+  const transcriptSeen = (() => {
+    try {
+      for (const d of readdirSync(join(home, ".claude", "projects"))) {
+        if (statSync(join(home, ".claude", "projects", d, "session.jsonl")).size > 0) return true;
+      }
+    } catch {}
+    return false;
+  })();
+  ok("#6206: the fake transcript was really written where the watchdog watches", transcriptSeen);
+}
+
+// ---- #6206 drill D: a truly silent over-window turn is reported EXACTLY ONCE, then the turn ends ----
+// Drill B holds the turn open on a release file; this one ends on its own, so the report must
+// land mid-turn, exactly once, and the turn still finishes healthy afterwards.
+{
+  const { sends } = await drill("claude",
+    '#!/bin/sh\nsleep 1.2\necho done\nexit 0\n',
+    { env: { RELAY_HOST_ID: "drillhost", TRANTOR_TURN_WATCHDOG_MS: "400" }, quietDeadlineMs: 0,
+      until: (messages) => messages.some((m) => /STALLED/.test(m.text || "")),
+      settleUntil: (messages) => messages.some((m) => /✅/.test(m.text || "")) });
+  const stalls = sends.filter((m) => /STALLED/.test(m.text || ""));
+  const doneIdx = sends.findIndex((m) => /✅/.test(m.text || ""));
+  ok("#6206: a turn silent on every channel is reported STALLED exactly once", stalls.length === 1);
+  ok("#6206: the report names what was last observed (stderr silent, nothing newer)",
+     stalls.length === 1 && /last seen:/.test(stalls[0].text || ""));
+  ok("#6206: the report lands DURING the turn, before the healthy ack",
+     stalls.length === 1 && doneIdx > -1 && sends.indexOf(stalls[0]) < doneIdx);
+}
+
+// ---- #6206 drill E: a turn that ends early leaves NO live timer behind -------------------
+// The orphan failure mode: a watchdog that outlives its turn and reports into the next one. A
+// fast silent turn must produce no stall report ever — not at the window, not after the turn.
+{
+  const { sends } = await drill("claude",
+    '#!/bin/sh\necho done\nexit 0\n',
+    { env: { RELAY_HOST_ID: "drillhost", TRANTOR_TURN_WATCHDOG_MS: "400" }, quietDeadlineMs: 0,
+      until: (messages) => messages.some((m) => /✅/.test(m.text || "")) });
+  ok("#6206: a fast turn earns no stall report at all", !sends.some((m) => /STALLED/.test(m.text || "")));
+  ok("#6206: no late report after the turn ended either (the quiet wait outlasts the window)",
+     sends.some((m) => /✅/.test(m.text || "")));
 }
 
 // ---- #5481 drill A: NULL output with exit 0 is a FAILURE (the Inception/Mercury trap) -----

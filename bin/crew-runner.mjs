@@ -539,6 +539,15 @@ let inFollowUp = false;
 let sessionCard = 0;
 
 let sid = "";
+// #6206: the watchdog is DETACHED, so a runner that dies without ending it leaves an orphan
+// sleeping toward a false alarm against whatever runner comes next (22 found on 2026-09-03).
+// Every exit path therefore kills it, and the stamp carries this runner's instance id so any
+// survivor that outlives the kill still refuses to speak for a runner it never belonged to.
+const RUNNER_ID = `${process.pid}.${Date.now()}`;
+let WD_CHILD = null;
+function killWatchdog() { if (WD_CHILD) { try { WD_CHILD.kill("SIGTERM"); } catch {} WD_CHILD = null; } }
+process.on("exit", killWatchdog);
+
 async function runTurn(prompt, isFirst, trigger = "kickoff") {
   TURN++; banner(trigger);
   const t0 = Date.now();
@@ -593,17 +602,25 @@ async function runTurn(prompt, isFirst, trigger = "kickoff") {
   const inner = cli.sid ? `${cmd} | tee /dev/stderr` : `${cmd} | ${SCRUB} --tee ${ERRF}`;
   // #5684: runTurn is spawnSync, so the runner cannot watch its own turn — a DETACHED watchdog
   // does. Armed by a stamp file, disarmed when the turn ends (stamp removed below); a turn past
-  // the window with no ERRF growth earns ONE direct stall report to the foreman, never a kill.
-  const WD_MS = Number(process.env.TRANTOR_TURN_WATCHDOG_MS || 15 * 60 * 1000);
+  // the window with no activity (transcript, worktree, or stderr — #6206: stdout silence alone
+  // is never a stall) earns ONE direct stall report to the foreman, never a kill.
+  // #6206: the window's floor is 10 minutes and is never derived from TRANTOR_TURN_MAX_MS —
+  // a 1-minute alarm is a false alarm by construction. The env override exists for drills.
+  const WD_MS = Number(process.env.TRANTOR_TURN_WATCHDOG_MS) || 10 * 60 * 1000;
   const STAMPF = join(homedir(), ".agent-bus", `turnstamp-${AGENT}-${PROJ}.json`);
+  // #6206: where the CLI appends its session transcript (claude's project dir; other CLIs may
+  // not have one — the watchdog treats a missing dir as a quiet channel). Also exported to the
+  // CLI's env so a drill's fake CLI can write transcript lines the watchdog will see.
+  const TRANSCRIPT_DIR = join(homedir(), ".claude", "projects", TURN_DIR.replace(/[^a-zA-Z0-9]/g, "-"));
   // Written by the shell's own time box (below) and read back here — the only honest signal that
   // the turn was CUT rather than that the CLI failed on its own. Cleared before every turn.
   const CUTF = join(homedir(), ".agent-bus", `turncut-${AGENT}-${PROJ}`);
   try { unlinkSync(CUTF); } catch {}
   try {
-    writeFileSync(STAMPF, JSON.stringify({ turn: TURN, startedAt: Date.now() }));
-    const wd = spawn(process.execPath, [join(import.meta.dirname, "turn-watchdog.mjs"), STAMPF, ERRF, String(WD_MS), SESSION, PROJ, HUB],
+    writeFileSync(STAMPF, JSON.stringify({ turn: TURN, startedAt: Date.now(), runner: RUNNER_ID }));
+    const wd = spawn(process.execPath, [join(import.meta.dirname, "turn-watchdog.mjs"), STAMPF, ERRF, String(WD_MS), SESSION, PROJ, HUB, TRANSCRIPT_DIR, TURN_DIR],
       { detached: true, stdio: "ignore" });
+    WD_CHILD = wd;
     wd.unref();
   } catch {}
   // Preserve the CLI's exit before waiting for the stderr process substitution. Without the
@@ -663,7 +680,10 @@ exit $turn_exit`;
       // Observed on the duty seat: handoff records at 17:24 and 18:59 on 2026-08-24, and two stray
       // `claude` processes in ~/.agent-bus/trantor-duty started at 17:24:57 and 18:59:50, still
       // sitting there days later. To the operator that reads as "why are there two duty agents".
-      TRANTOR_NO_HANDOFF_SPAWN: "1", TRANTOR_NO_BATON_SPAWN: "1" },
+      TRANTOR_NO_HANDOFF_SPAWN: "1", TRANTOR_NO_BATON_SPAWN: "1",
+      // #6206: the seat's transcript dir — a real CLI ignores it, a drill's fake CLI writes
+      // its transcript lines there so the watchdog sees the liveness a real claude shows.
+      TRANTOR_TRANSCRIPT_DIR: TRANSCRIPT_DIR },
     maxBuffer: 16 * 1024 * 1024,
   };
   // A BACKSTOP only, deliberately later than the shell's own box: if bash itself wedges, node
@@ -671,7 +691,8 @@ exit $turn_exit`;
   // is the point: the shell kills while the tree is still walkable, node cannot.
   if (TURN_MAX_MS) { spawnOpts.timeout = TURN_MAX_MS + 30000; spawnOpts.killSignal = "SIGKILL"; }
   const r = spawnSync("/bin/bash", ["-c", shell], spawnOpts);
-  try { unlinkSync(STAMPF); } catch {}   // turn over — disarm the watchdog
+  killWatchdog();                        // #6206: turn over — the watchdog dies NOW, it does not sleep on
+  try { unlinkSync(STAMPF); } catch {}   // disarm any survivor: the stamp is gone
   // The shell's box leaves the marker; the backstop leaves an ETIMEDOUT. Either way the turn was
   // cut, not merely failed.
   const boxed = existsSync(CUTF);
