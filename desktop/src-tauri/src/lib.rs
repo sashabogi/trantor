@@ -3544,62 +3544,17 @@ async fn handoff_now(
     // prompt, then retry the transient outcomes on a 3s cadence until it lands, is blocked (a
     // human must answer the dialog — retrying hammers it), or the deadline passes. Every herdr
     // call rides spawn_blocking (a blocking UnixStream underneath); the sleeps are tokio's, so
-    // the async runtime never blocks.
-    let kickoff_started = Instant::now();
-
-    let idle_deadline = tokio::time::Instant::now() + KICKOFF_DEADLINE;
-    loop {
-        let status = {
-            let pane = pane.clone();
-            tokio::task::spawn_blocking(move || herdr::agent_status(&pane))
-                .await
-                .unwrap_or(None)
-        };
-        if status.as_deref() == Some("idle") {
-            break;
-        }
-        if tokio::time::Instant::now() + KICKOFF_CADENCE > idle_deadline {
-            break;
-        }
-        tokio::time::sleep(KICKOFF_CADENCE).await;
-    }
-
-    let prompt_deadline = tokio::time::Instant::now() + KICKOFF_DEADLINE;
-    let mut attempts = 0u32;
-    let mut stalled_retries = 0u32;
-    let mut last: Option<Result<herdr::PromptOutcome, String>> = None;
-    loop {
-        if tokio::time::Instant::now() >= prompt_deadline {
-            break;
-        }
-        attempts += 1;
-        let pane_for_prompt = pane.clone();
-        let prompt = KICKOFF_PROMPT;
-        let r = tokio::task::spawn_blocking(move || herdr::prompt(&pane_for_prompt, prompt))
-            .await
-            .unwrap_or_else(|e| Err(format!("kickoff task join error: {e}")));
-        let decision = boot_prompt_decision(&r, stalled_retries);
-        if matches!(r, Ok(herdr::PromptOutcome::Stalled)) {
-            stalled_retries += 1;
-        }
-        let done = decision == BootPromptDecision::Stop;
-        last = Some(r);
-        if done {
-            break;
-        }
-        if tokio::time::Instant::now() + KICKOFF_CADENCE > prompt_deadline {
-            break;
-        }
-        tokio::time::sleep(KICKOFF_CADENCE).await;
-    }
-
-    let elapsed = kickoff_started.elapsed().as_secs();
-    match last {
-        Some(Ok(outcome)) => Ok(handoff_label(&gate_outcome, gate_secs, &outcome, attempts, elapsed)),
-        Some(Err(e)) => Err(format!(
+    // the async runtime never blocks. #6139: the same ladder serves project_wake — one helper.
+    let KickoffReport {
+        outcome,
+        attempts,
+        elapsed_secs: elapsed,
+    } = kickoff_after_reopen(&pane, KICKOFF_PROMPT.to_string()).await;
+    match outcome {
+        Ok(outcome) => Ok(handoff_label(&gate_outcome, gate_secs, &outcome, attempts, elapsed)),
+        Err(e) => Err(format!(
             "handoff chain done, but the kickoff prompt failed after {attempts} attempt(s), {elapsed}s (successor may sit idle): {e}"
         )),
-        None => Err("handoff chain done, but the kickoff never ran".into()),
     }
 }
 
@@ -3607,6 +3562,102 @@ async fn handoff_now(
 /// at 90s per phase (idle gate, then the prompt ladder).
 const KICKOFF_CADENCE: Duration = Duration::from_secs(3);
 const KICKOFF_DEADLINE: Duration = Duration::from_secs(90);
+
+/// What became of a post-reopen kickoff: the last prompt outcome (or the last herdr error), the
+/// tries it took, and the seconds the whole section ran, idle wait included.
+pub(crate) struct KickoffReport {
+    pub(crate) outcome: Result<herdr::PromptOutcome, String>,
+    pub(crate) attempts: u32,
+    pub(crate) elapsed_secs: u64,
+}
+
+/// The boot prompt for a session that was JUST reopened in `pane` (#6184, #6139). A prompt fired
+/// straight after `trantor open` returns lands on nobody: tonight's wake trace had herdr log the
+/// prompt 90 ms after the claude process appeared, say agent_prompted, and the session never saw
+/// it, four times in a row. So: wait for the agent to read idle, then send, retrying the transient
+/// outcomes on the kickoff cadence until it lands, is blocked, or the deadline passes. Both the
+/// handoff chain and the Wake button ride this one ladder; every herdr call sits on
+/// spawn_blocking so the async runtime never blocks.
+pub(crate) async fn kickoff_after_reopen(pane: &str, prompt: String) -> KickoffReport {
+    let status_pane = pane.to_string();
+    let prompt_pane = pane.to_string();
+    kickoff_ladder(
+        move || {
+            let pane = status_pane.clone();
+            async move {
+                tokio::task::spawn_blocking(move || herdr::agent_status(&pane))
+                    .await
+                    .unwrap_or(None)
+            }
+        },
+        move || {
+            let pane = prompt_pane.clone();
+            let text = prompt.clone();
+            async move {
+                tokio::task::spawn_blocking(move || herdr::prompt(&pane, &text))
+                    .await
+                    .unwrap_or_else(|e| Err(format!("kickoff task join error: {e}")))
+            }
+        },
+        KICKOFF_CADENCE,
+        KICKOFF_DEADLINE,
+    )
+    .await
+}
+
+/// The ladder itself, over a status poll and a prompt send so it drills without a herdr socket:
+/// phase one waits for `status` to read idle (bounded by `deadline`); phase two sends `prompt`
+/// and retries per boot_prompt_decision on `cadence` (bounded by its own `deadline`). The first
+/// send always happens, so the report always carries a real last outcome.
+async fn kickoff_ladder<S, SF, P, PF>(
+    status: S,
+    prompt: P,
+    cadence: Duration,
+    deadline: Duration,
+) -> KickoffReport
+where
+    S: Fn() -> SF,
+    SF: std::future::Future<Output = Option<String>>,
+    P: Fn() -> PF,
+    PF: std::future::Future<Output = Result<herdr::PromptOutcome, String>>,
+{
+    let started = Instant::now();
+
+    let idle_deadline = tokio::time::Instant::now() + deadline;
+    loop {
+        if status().await.as_deref() == Some("idle") {
+            break;
+        }
+        if tokio::time::Instant::now() + cadence > idle_deadline {
+            break;
+        }
+        tokio::time::sleep(cadence).await;
+    }
+
+    let prompt_deadline = tokio::time::Instant::now() + deadline;
+    let mut attempts = 0u32;
+    let mut stalled_retries = 0u32;
+    let outcome = loop {
+        attempts += 1;
+        let r = prompt().await;
+        if boot_prompt_decision(&r, stalled_retries) == BootPromptDecision::Stop {
+            break r;
+        }
+        if matches!(r, Ok(herdr::PromptOutcome::Stalled)) {
+            stalled_retries += 1;
+        }
+        if tokio::time::Instant::now() + cadence > prompt_deadline {
+            break r;
+        }
+        tokio::time::sleep(cadence).await;
+    };
+
+    KickoffReport {
+        outcome,
+        attempts,
+        elapsed_secs: started.elapsed().as_secs(),
+    }
+}
 
 /// The budget for the PRE-kill idle gate (#6081). The baton-pane helper waits up to 600s
 /// detached; here an operator is watching the chain, and a typical turn finishes inside two
@@ -6541,6 +6592,68 @@ mod succession_tests {
         // herdr unreachable / unreadable is transient by definition: retry until the deadline.
         let err: Result<O, String> = Err("herdr is not reachable".into());
         assert_eq!(boot_prompt_decision(&err, 0), BootPromptDecision::Retry);
+    }
+
+    // #6139 — the ladder both handoff_now and project_wake ride: no prompt goes out before the
+    // agent reads idle, transient outcomes retry, and the report carries the tries. Driven with
+    // fake status/prompt closures and a zero cadence, so it runs in milliseconds without herdr.
+    #[test]
+    fn kickoff_ladder_waits_for_idle_then_retries_until_delivered() {
+        use herdr::PromptOutcome as O;
+        use std::cell::{Cell, RefCell};
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_time()
+            .build()
+            .unwrap();
+        // The successor boots: two polls say "working", the third says idle. The first two sends
+        // find it not ready; the third lands. The prompt must not go out while it is booting.
+        let polls = Cell::new(0u32);
+        let idle_seen_before_send = Cell::new(false);
+        let sends = RefCell::new(vec![Ok(O::NotReady), Ok(O::NotReady), Ok(O::Delivered)]);
+        let report = rt.block_on(kickoff_ladder(
+            || {
+                polls.set(polls.get() + 1);
+                let s = if polls.get() < 3 { "working" } else { "idle" };
+                if s == "idle" {
+                    idle_seen_before_send.set(true);
+                }
+                async move { Some(s.to_string()) }
+            },
+            || {
+                assert!(
+                    idle_seen_before_send.get(),
+                    "prompt sent before the agent was idle"
+                );
+                let r = sends.borrow_mut().remove(0);
+                async move { r }
+            },
+            Duration::ZERO,
+            Duration::from_secs(5),
+        ));
+        assert_eq!(polls.get(), 3);
+        assert_eq!(report.attempts, 3);
+        assert!(matches!(report.outcome, Ok(O::Delivered)));
+
+        // No agent ever reads idle and every send is NotReady: both phases run out their budget,
+        // the last outcome is reported honestly, and at least one send was attempted.
+        let report = rt.block_on(kickoff_ladder(
+            || async { None },
+            || async { Ok(O::NotReady) },
+            Duration::ZERO,
+            Duration::from_millis(20),
+        ));
+        assert!(report.attempts >= 1);
+        assert!(matches!(report.outcome, Ok(O::NotReady)));
+
+        // Blocked stops at once: a dialog needs a human, retrying would hammer it.
+        let report = rt.block_on(kickoff_ladder(
+            || async { Some("idle".to_string()) },
+            || async { Ok(O::Blocked) },
+            Duration::ZERO,
+            Duration::from_secs(5),
+        ));
+        assert_eq!(report.attempts, 1);
+        assert!(matches!(report.outcome, Ok(O::Blocked)));
     }
 
     // #6184 — the returned label carries the tries and the elapsed time, not just the outcome.

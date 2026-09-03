@@ -3,8 +3,8 @@ use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use super::{
-    desktop_bus_dir, herdr, kickoff_outcome_label, orch_pane_from_rows, project_dir,
-    run_command_output, terminal_path,
+    desktop_bus_dir, herdr, kickoff_after_reopen, kickoff_outcome_label, orch_pane_from_rows,
+    project_dir, run_command_output, terminal_path, KickoffReport,
 };
 
 #[derive(Deserialize)]
@@ -190,15 +190,36 @@ pub(crate) async fn project_wake(project: String, kickoff: String) -> Result<Str
         .await
         .unwrap_or_else(|_| kickoff.clone())
     };
-    match herdr::prompt(&pane, &kickoff) {
-        Ok(outcome) => Ok(format!(
-            "project awake in pane {pane} · kickoff: {}",
-            kickoff_outcome_label(&outcome)
-        )),
+    // #6139: the reopened session is BOOTING. A prompt fired straight after `trantor open`
+    // returned was logged by herdr 90 ms after the claude process appeared, reported as
+    // agent_prompted, and never reached the session (four wakes in a row, no kickoff in the
+    // transcript). Ride the handoff chain's ladder: wait for idle, send, retry the transient
+    // outcomes, and say how it went.
+    let KickoffReport {
+        outcome,
+        attempts,
+        elapsed_secs,
+    } = kickoff_after_reopen(&pane, kickoff).await;
+    match outcome {
+        Ok(outcome) => Ok(wake_label(&pane, &outcome, attempts, elapsed_secs)),
         Err(error) => Err(format!(
-            "project opened in pane {pane}, but the kickoff prompt failed: {error}"
+            "project opened in pane {pane}, but the kickoff prompt failed after {attempts} attempt(s), {elapsed_secs}s: {error}"
         )),
     }
+}
+
+/// The line project_wake returns: where the session lives and what became of its boot prompt,
+/// with the tries and the seconds it took (#6139) — the same shape the handoff chain reports.
+fn wake_label(
+    pane: &str,
+    outcome: &herdr::PromptOutcome,
+    attempts: u32,
+    elapsed_secs: u64,
+) -> String {
+    format!(
+        "project awake in pane {pane} · kickoff: {} · {attempts} attempt(s), {elapsed_secs}s",
+        kickoff_outcome_label(outcome)
+    )
 }
 
 #[cfg(test)]
@@ -248,6 +269,15 @@ mod tests {
         let cli = project_wake_reopen_args("pros");
         assert_eq!(cli, ["open", "pros"]);
         assert!(!cli.contains(&"--dangerously-skip-permissions"));
+    }
+
+    // #6139 — the wake's line carries the kickoff outcome, the tries and the seconds, like the
+    // handoff's, so a wake that landed on the third try reads differently from one that stalled.
+    #[test]
+    fn wake_line_carries_kickoff_outcome_attempts_and_elapsed() {
+        let line = wake_label("pane-7", &herdr::PromptOutcome::Delivered, 3, 12);
+        assert!(line.starts_with("project awake in pane pane-7 · kickoff: prompt delivered"));
+        assert!(line.ends_with("· 3 attempt(s), 12s"), "{line}");
     }
 
     #[test]
