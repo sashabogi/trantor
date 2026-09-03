@@ -19,7 +19,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, 
 import { invoke, type InvokeArgs } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { ArrowLeft, ChevronDown, ChevronRight, PanelBottom, PanelBottomClose, PanelRight, PanelRightClose, Wrench } from "lucide-react";
-import { orchestratorOf, type HerdrSeat } from "../workspace/herdr";
+import { answerAtPane, orchestratorOf, type HerdrSeat } from "../workspace/herdr";
 import { DEFAULT_TERMINAL_DEPS, TerminalPane, type TerminalDeps } from "../workspace/TerminalPane";
 import { bannerCountdown, type HandoffCountdown } from "./banner";
 import { Composer, type Provenance } from "./Composer";
@@ -31,9 +31,9 @@ import {
   saveDismissedAt, saveFontStep, savePanelSize, saveTrayOpen, type FontStep,
 } from "./prefs";
 import {
-  applyBackfill, applyRows, applySessionChanged, bannerVisible, emptyChat, isDividerTurn,
-  lastToolLabel, sessionLiveness, tickerText,
-  type Backfill, type Block, type ChatState, type RowsPayload,
+  answerKeystrokes, applyBackfill, applyRows, applySessionChanged, bannerVisible, DOWN_ARROW, emptyChat, isDividerTurn,
+  lastToolLabel, openQuestion, sessionLiveness, tickerText,
+  type AskQuestion, type Backfill, type Block, type ChatState, type OpenQuestion, type RowsPayload,
   type SessionPayload, type ToolResult, type Turn,
 } from "./streaming";
 import {
@@ -85,11 +85,16 @@ function group(turns: Turn[]): Turn[] {
 /** A run of consecutive tool calls is ONE act to a reader — "checked nine things" — not nine
  *  stacked cards around a single sentence. Failures stay visible while collapsed, because a run
  *  that went wrong is exactly the one you want to open. */
-function ToolRun({ blocks, results }: { blocks: Block[]; results: Record<string, ToolResult> }) {
+function ToolRun({ blocks, results, target, onAnswer }: {
+  blocks: Block[]; results: Record<string, ToolResult>;
+  target: string | null; onAnswer: (toolId: string, data: string) => Promise<void>;
+}) {
   const [open, setOpen] = useState(false);
   const failed = blocks.filter(b => b.tool_id && results[b.tool_id] && !results[b.tool_id].ok).length;
   const running = blocks.filter(b => !b.tool_id || !results[b.tool_id]).length;
-  if (blocks.length === 1) return <ToolCard block={blocks[0]} result={blocks[0].tool_id ? results[blocks[0].tool_id] : undefined} />;
+  if (blocks.length === 1) {
+    return <ToolCard block={blocks[0]} result={blocks[0].tool_id ? results[blocks[0].tool_id] : undefined} target={target} onAnswer={onAnswer} />;
+  }
   return (
     <div className="mt-1.5">
       <button type="button" onClick={() => setOpen(o => !o)} className="flex w-full items-center gap-1.5 rounded-lg border border-tr-edge bg-black/20 px-2.5 py-1.5 text-left">
@@ -102,13 +107,19 @@ function ToolRun({ blocks, results }: { blocks: Block[]; results: Record<string,
         {failed > 0 && <span className="shrink-0 text-[length:calc(10.5px*var(--chat-scale,1))] text-tr-fail">{failed} failed</span>}
         {failed === 0 && running > 0 && <span className="shrink-0 text-[length:calc(10.5px*var(--chat-scale,1))] text-tr-doing">running</span>}
       </button>
-      {open && blocks.map((b, i) => <ToolCard key={i} block={b} result={b.tool_id ? results[b.tool_id] : undefined} />)}
+      {open && blocks.map((b, i) => <ToolCard key={i} block={b} result={b.tool_id ? results[b.tool_id] : undefined} target={target} onAnswer={onAnswer} />)}
     </div>
   );
 }
 
-function ToolCard({ block, result }: { block: Block; result?: ToolResult }) {
+function ToolCard({ block, result, target, onAnswer }: {
+  block: Block; result?: ToolResult;
+  target: string | null; onAnswer: (toolId: string, data: string) => Promise<void>;
+}) {
   const [open, setOpen] = useState(false);
+  if (block.tool === "AskUserQuestion" && block.ask && block.tool_id) {
+    return <AskCard tool_id={block.tool_id} questions={block.ask} result={result} target={target} onAnswer={onAnswer} />;
+  }
   // Running until its answer arrives. Saying so beats an empty card that looks finished.
   const state = result ? (result.ok ? "ok" : "failed") : "running";
   const colour = state === "failed" ? "var(--color-tr-fail)" : state === "ok" ? "var(--color-tr-muted)" : "var(--color-tr-doing)";
@@ -131,6 +142,133 @@ function ToolCard({ block, result }: { block: Block; result?: ToolResult }) {
           )}
         </div>
       )}
+    </div>
+  );
+}
+
+/** The question card (#6094): an AskUserQuestion tool_use rendered as something the operator can
+ *  actually answer, instead of a collapsed "AskUserQuestion running" row. Answered (once the
+ *  transcript's tool_result lands — never asserted locally) shows the recorded choice, same as
+ *  ToolCard shows any other finished call; open shows buttons per option, a multi-select tray
+ *  when the question asks for one, and an Other free-text row. A click writes keystrokes into
+ *  the pane (answerAtPane) rather than claiming success itself — the card only ever reflects
+ *  what the transcript says happened. */
+function AskCard({ tool_id, questions, result, target, onAnswer }: {
+  tool_id: string; questions: AskQuestion[]; result?: ToolResult;
+  target: string | null; onAnswer: (toolId: string, data: string) => Promise<void>;
+}) {
+  const [picked, setPicked] = useState<Set<number>>(new Set());
+  const [otherText, setOtherText] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  // One question per AskUserQuestion call is the overwhelming case; render every one the tool
+  // actually sent rather than assuming there is exactly one.
+  const q = questions[0];
+  if (!q) return null;
+
+  if (result) {
+    return (
+      <div className="mt-1.5 rounded-lg border border-tr-edge bg-black/20 px-2.5 py-2">
+        <div className="mb-1 flex items-center gap-1.5 text-[length:calc(11.5px*var(--chat-scale,1))] font-medium">
+          <span>{q.header || "Question"}</span>
+          <span className="shrink-0 text-[10.5px] font-normal text-tr-muted">answered</span>
+        </div>
+        <div className="text-[length:calc(11.5px*var(--chat-scale,1))] text-tr-muted">{result.preview || q.question}</div>
+      </div>
+    );
+  }
+
+  const send = async (data: string) => {
+    if (!target || busy) return;
+    setBusy(true); setError(null);
+    try {
+      await onAnswer(tool_id, data);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const pickSingle = (i: number) => { void send(answerKeystrokes(q, [i])); };
+  const toggleMulti = (i: number) => {
+    setPicked(s => { const n = new Set(s); n.has(i) ? n.delete(i) : n.add(i); return n; });
+  };
+  const submitMulti = () => { void send(answerKeystrokes(q, [...picked])); };
+  const submitOther = () => {
+    if (!otherText.trim()) return;
+    // "Type something" is the picker's own always-appended free-text option, one row past the
+    // model's own list — walk Down to it the same way answerKeystrokes reaches any other row,
+    // Enter opens its text input, then the text and its own Enter (#6094; see answerKeystrokes'
+    // doc comment for the evidence behind the arrow-navigation contract).
+    void send(`${DOWN_ARROW.repeat(q.options.length)}\r${otherText}\r`);
+  };
+
+  return (
+    <div className="mt-1.5 rounded-lg border border-tr-warn/40 bg-tr-warn/5 px-2.5 py-2">
+      <div className="mb-1 flex items-center gap-1.5 text-[length:calc(11.5px*var(--chat-scale,1))] font-medium">
+        <span className="tr-dot shrink-0" style={{ background: "var(--color-tr-warn)", width: 6, height: 6 }} />
+        <span>{q.header || "Question"}</span>
+        {q.multiSelect && <span className="shrink-0 text-[10.5px] font-normal text-tr-muted">pick any</span>}
+      </div>
+      <div className="mb-2 text-[length:calc(12px*var(--chat-scale,1))] leading-relaxed">{q.question}</div>
+      <div className="flex flex-col gap-1">
+        {q.options.map((opt, i) => (
+          <button
+            key={i}
+            type="button"
+            disabled={!target || busy}
+            onClick={() => q.multiSelect ? toggleMulti(i) : pickSingle(i)}
+            className="flex items-start gap-1.5 rounded-lg border border-tr-edge bg-black/20 px-2.5 py-1.5 text-left disabled:opacity-50"
+          >
+            {q.multiSelect && (
+              <span
+                className="mt-0.5 h-3 w-3 shrink-0 rounded-[3px] border border-tr-edge"
+                style={{ background: picked.has(i) ? "var(--color-tr-warn)" : "transparent" }}
+              />
+            )}
+            <span className="min-w-0 flex-1">
+              <div className="text-[length:calc(11.5px*var(--chat-scale,1))] font-medium">{opt.label}</div>
+              {opt.description && (
+                <div className="text-[length:calc(11px*var(--chat-scale,1))] text-tr-muted">{opt.description}</div>
+              )}
+            </span>
+          </button>
+        ))}
+      </div>
+      {q.multiSelect && (
+        <button
+          type="button"
+          disabled={!target || busy || picked.size === 0}
+          onClick={submitMulti}
+          className="mt-1.5 rounded-[8px] bg-tr-panel px-2.5 py-1 text-[11.5px] font-medium disabled:opacity-40"
+        >
+          Submit {picked.size || ""}
+        </button>
+      )}
+      <div className="mt-1.5 flex items-center gap-1.5">
+        <input
+          type="text"
+          value={otherText}
+          onChange={e => setOtherText(e.target.value)}
+          onKeyDown={e => { if (e.key === "Enter") submitOther(); }}
+          disabled={!target || busy}
+          placeholder="Other — type an answer"
+          className="min-w-0 flex-1 rounded-[8px] border border-tr-edge bg-black/20 px-2 py-1 text-[11.5px] disabled:opacity-50"
+        />
+        <button
+          type="button"
+          disabled={!target || busy || !otherText.trim()}
+          onClick={submitOther}
+          className="shrink-0 rounded-[8px] bg-tr-panel px-2.5 py-1 text-[11.5px] font-medium disabled:opacity-40"
+        >
+          Send
+        </button>
+      </div>
+      {!target && (
+        <div className="mt-1.5 text-[10.5px] text-tr-muted">No live pane to answer into — answer it in the terminal.</div>
+      )}
+      {error && <div className="tr-mono mt-1.5 text-[10.5px] text-tr-fail">{error}</div>}
     </div>
   );
 }
@@ -216,6 +354,10 @@ export type ChatDeps = {
   invoke: <T>(cmd: string, args?: InvokeArgs) => Promise<T>;
   listen: <T>(event: string, cb: (ev: { payload: T }) => void) => Promise<() => void>;
   orchestratorOf: (project: string) => Promise<HerdrSeat | null>;
+  /** Answers an AskUserQuestion card by writing its keystrokes into the pane (#6094) — the same
+   *  path the live terminal's keyboard uses, not the prompt path (`pane_send` refuses while
+   *  blocked). Its own seam so a test can assert what a click sent without a real pty. */
+  answerAtPane: (target: string, data: string) => Promise<void>;
   /** Heavy neighbours Chat mounts; the chat tests replace them with null renderers. */
   Composer: React.ComponentType<React.ComponentProps<typeof Composer>>;
   TerminalPane: React.ComponentType<React.ComponentProps<typeof TerminalPane>>;
@@ -227,6 +369,7 @@ export const DEFAULT_CHAT_DEPS: ChatDeps = {
   invoke: <T,>(cmd: string, args?: InvokeArgs) => invoke<T>(cmd, args),
   listen: (event, cb) => listen(event, cb),
   orchestratorOf,
+  answerAtPane,
   Composer,
   TerminalPane,
 };
@@ -579,6 +722,16 @@ export function Chat({ project, sessionId, dock, onDock, onClose, deps = DEFAULT
   const ticker = tickerText(status, turnSeenAt != null ? Date.now() - turnSeenAt : null,
     lastToolLabel(chat.turns), chat.meta.context.tokens);
   const liveness = sessionLiveness(status, target);
+  // #6094 — the open ask, if any: gated on `blocked` (not merely "no result yet"), because a
+  // result-less AskUserQuestion while the pane is working/idle is a race between the tool_use and
+  // tool_result rows landing, not a question actually waiting on the operator.
+  const openAsk: OpenQuestion | null = status === "blocked" ? openQuestion(chat.turns, chat.results) : null;
+  const answerAsk = useCallback(async (toolId: string, data: string) => {
+    if (!target) throw new Error("no live pane");
+    await deps.answerAtPane(target, data);
+    invokeFn("app_log", { line: `ask answered tool_id=${toolId} project=${project}` }).catch(() => {});
+    sync();
+  }, [target, deps, invokeFn, project, sync]);
   const side = dock === "right";
   const hosted = dock === "pane";
 
@@ -814,7 +967,7 @@ export function Chat({ project, sessionId, dock, onDock, onClose, deps = DEFAULT
               </div>
               {batch(t.blocks).map((b, j) =>
                 Array.isArray(b) ? (
-                  <ToolRun key={j} blocks={b} results={chat.results} />
+                  <ToolRun key={j} blocks={b} results={chat.results} target={target} onAnswer={answerAsk} />
                 ) : b.kind === "thinking" ? (
                   <Thinking key={j} text={b.text} />
                 ) : b.kind === "image" ? (
@@ -895,6 +1048,7 @@ export function Chat({ project, sessionId, dock, onDock, onClose, deps = DEFAULT
         target={target}
         live={liveness.live}
         liveWhy={liveness.why}
+        blockedAsk={openAsk}
         model={pending || chat.meta.model}
         modelSource={pending ? "dispatched" : modelSource}
         working={working}

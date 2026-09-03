@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { activityRank, computeProjectActivity, isWorkingStatus } from "./projectActivity";
+import { activityRank, computeProjectActivity, isWorkingStatus, needsYou } from "./projectActivity";
 import type { LocalSession, Peer } from "../shared/api/client";
 
 describe("computeProjectActivity", () => {
@@ -70,6 +70,19 @@ describe("isWorkingStatus", () => {
     expect(isWorkingStatus("idle")).toBe(false);
     expect(isWorkingStatus(null)).toBe(false);
     expect(isWorkingStatus(undefined)).toBe(false);
+  });
+});
+
+describe("needsYou (#6094)", () => {
+  it("is true only for 'blocked', case-insensitively", () => {
+    expect(needsYou("blocked")).toBe(true);
+    expect(needsYou("BLOCKED")).toBe(true);
+    expect(needsYou(" blocked ")).toBe(true);
+    expect(needsYou("working")).toBe(false);
+    expect(needsYou("idle")).toBe(false);
+    expect(needsYou("done")).toBe(false);
+    expect(needsYou(null)).toBe(false);
+    expect(needsYou(undefined)).toBe(false);
   });
 });
 

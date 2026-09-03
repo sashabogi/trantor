@@ -61,6 +61,21 @@ export async function termDetach(sub: number): Promise<void> {
   await invoke("term_detach", { sub });
 }
 
+/** Answer a picker (AskUserQuestion, a permission prompt, any TUI choice) the same way the live
+ *  terminal does (#6094): `pane_send` refuses outright while the pane is blocked — the picker
+ *  needs raw keystrokes, not a prompt — so this opens its OWN throwaway attach (herdr allows
+ *  multiple clients on one surface; a live Workspace tab watching the same pane keeps working
+ *  unaffected), writes `data`, and detaches. Bytes are never read here — the chat is not
+ *  rendering a terminal, only answering one. */
+export async function answerAtPane(target: string, data: string): Promise<void> {
+  const sub = await termAttach(target, () => {});
+  try {
+    await termWrite(sub, data);
+  } finally {
+    await termDetach(sub);
+  }
+}
+
 export function terminalBytes(bytes: TerminalBytes): Uint8Array {
   if (bytes instanceof Uint8Array) return bytes;
   if (bytes instanceof ArrayBuffer) return new Uint8Array(bytes);

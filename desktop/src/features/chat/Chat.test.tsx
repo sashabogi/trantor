@@ -9,6 +9,7 @@
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { InvokeArgs } from "@tauri-apps/api/core";
 import { Chat, type ChatDeps } from "./Chat";
 import type { HerdrSeat } from "../workspace/herdr";
 import { WAKE_OUTCOME_MS } from "../genesis/wakeRow";
@@ -65,6 +66,7 @@ function makeDeps(wakeProjects: string[] = []) {
       // exactly what Chat treats as "not hosted".
       return null as HerdrSeat | null;
     },
+    answerAtPane: async () => {},
     Composer: () => null,
     TerminalPane: () => null,
   };
@@ -264,5 +266,107 @@ describe("Chat wake chain note (#6201)", () => {
     await fireProgress({ project: "p", phase: "ended", detail: null });
     await flush();
     expect(host.textContent).not.toContain("kickoff pending");
+  });
+});
+
+// #6094 — the question card: a blocked AskUserQuestion tool_use renders as something the
+// operator can answer from Chat, a click writes the picker's real keystrokes into the live pane
+// (never a claim of its own), and the card only flips to answered once the transcript's own
+// tool_result lands for that call.
+describe("AskCard question card (#6094)", () => {
+  let host: HTMLDivElement;
+  let root: Root;
+
+  beforeEach(() => {
+    host = document.createElement("div");
+    document.body.appendChild(host);
+    root = createRoot(host);
+  });
+
+  afterEach(() => {
+    act(() => root.unmount());
+    host.remove();
+  });
+
+  const askBlock = {
+    kind: "tool", text: "Ship it?", tool: "AskUserQuestion", tool_id: "ask1",
+    ask: [{
+      header: "Ship", question: "Ship it?", multiSelect: false,
+      options: [{ label: "Yes", description: "" }, { label: "No", description: "" }],
+    }],
+  };
+  const askTurn = { role: "assistant", blocks: [askBlock] };
+
+  /** A live pane (orchestratorOf resolves a surface) with one blocked AskUserQuestion already in
+   *  the backfilled transcript — the render() every test in this block starts from. */
+  function makeBlockedDeps() {
+    const answered: Array<{ target: string; data: string }> = [];
+    const deps: ChatDeps = {
+      // The real backend answers `after` — a second fetch past line 0 gets nothing new, never
+      // the same turn again. A mock that ignored `after` doubled the ask (2 tool blocks batched
+      // into one collapsed "2 tools" row) the instant `target` resolved and re-ran the effect.
+      invoke: <T,>(cmd: string, args?: InvokeArgs): Promise<T> => {
+        if (cmd === "orchestrator_chat") {
+          // SAFETY: Chat always calls orchestrator_chat with a plain `{ after: number }` object —
+          // never the array/buffer arms of InvokeArgs — so this narrow read is exactly what
+          // arrives here.
+          const after = (args as { after: number } | undefined)?.after ?? 0;
+          const backfill = after === 0 ? [[askTurn], [], 1, META, []] : [[], [], after, META, []];
+          // SAFETY: Chat types this call Promise<string> and parses the JSON; the envelope is
+          // exactly the Backfill shape this test built above.
+          return Promise.resolve(JSON.stringify(backfill) as T);
+        }
+        if (cmd === "chat_watch") {
+          // SAFETY: Chat types this call Promise<ChatWatchResult> — current=1 matches the one
+          // turn the backfill above already seeded, so the post-mount watch never re-fetches it.
+          return Promise.resolve({ current: 1, generation: 1 } as T);
+        }
+        if (cmd === "orchestrator_status") {
+          // SAFETY: Chat types this call Promise<string> and treats the value as herdr's status
+          // text; "blocked" is the one status that surfaces the open ask under test.
+          return Promise.resolve("blocked" as T);
+        }
+        // SAFETY: unknown commands resolve to null, matching the real seam's unhandled default.
+        return Promise.resolve(null as T);
+      },
+      listen: () => Promise.resolve(() => {}),
+      orchestratorOf: async () => ({ project: "p", agent: "orch", surface: "surf1", kind: "orch" }),
+      answerAtPane: async (target: string, data: string) => { answered.push({ target, data }); },
+      Composer: () => null,
+      TerminalPane: () => null,
+    };
+    return { deps, answered };
+  }
+
+  it("renders the open question as buttons, not a collapsed tool row", async () => {
+    const { deps } = makeBlockedDeps();
+    act(() => { root.render(<Chat project="p" dock="right" onDock={() => {}} onClose={() => {}} deps={deps} />); });
+    await flush();
+    await flush();
+    expect(host.textContent).toContain("Ship it?");
+    const buttons = [...host.querySelectorAll("button")].map(b => b.textContent ?? "");
+    expect(buttons.some(t => t.includes("Yes"))).toBe(true);
+    expect(buttons.some(t => t.includes("No"))).toBe(true);
+  });
+
+  it("picking an option writes answerKeystrokes' arrow-navigation sequence into the pane", async () => {
+    const { deps, answered } = makeBlockedDeps();
+    act(() => { root.render(<Chat project="p" dock="right" onDock={() => {}} onClose={() => {}} deps={deps} />); });
+    await flush();
+    await flush();
+    const noButton = [...host.querySelectorAll("button")].find(b => (b.textContent ?? "").includes("No"))!;
+    await act(async () => { noButton.dispatchEvent(new MouseEvent("click", { bubbles: true })); });
+    await flush();
+    // "No" is index 1: one Down arrow to reach it, then Enter — never a typed digit.
+    expect(answered).toEqual([{ target: "surf1", data: "\x1b[B\r" }]);
+  });
+
+  it("stays a question card (not answered) until the transcript's own tool_result lands", async () => {
+    const { deps } = makeBlockedDeps();
+    act(() => { root.render(<Chat project="p" dock="right" onDock={() => {}} onClose={() => {}} deps={deps} />); });
+    await flush();
+    await flush();
+    expect(host.textContent).not.toContain("answered");
+    expect(host.textContent).toContain("Yes");
   });
 });

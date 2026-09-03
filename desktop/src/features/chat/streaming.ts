@@ -11,7 +11,12 @@
 // `after + turns.length` is a lower bound, not the truth. The mismatch path heals the drift —
 // a wrong guess costs one refetch, never a gap and never a duplicate. When the watcher offers
 // the post-batch line count as `total`, the guess becomes exact and the heals stop.
-export type Block = { kind: "text" | "thinking" | "tool" | "image" | "divider" | "dequeue"; text: string; tool?: string; tool_id?: string };
+/** One AskUserQuestion option, straight off the tool's own `input.questions[].options[]`. */
+export type AskOption = { label: string; description: string };
+/** One AskUserQuestion question. `ask` on a Block carries an array because the tool CAN ask
+ *  several at once, though a single question is the common case. */
+export type AskQuestion = { header: string; question: string; multiSelect: boolean; options: AskOption[] };
+export type Block = { kind: "text" | "thinking" | "tool" | "image" | "divider" | "dequeue"; text: string; tool?: string; tool_id?: string; ask?: AskQuestion[] };
 /** `queued`: sent while the agent was mid-turn and NOT yet seen by the session — the middle of
  *  the three delivery states (sent, queued, seen). Cleared when the dequeue marker (the queue's
  *  `remove` row) arrives. */
@@ -277,6 +282,59 @@ export function normalizeAttachments(text: string): string {
     .filter(l => l && l.replace(/\(image \d+\)/g, "").trim())
     .join("\n");
   return spans.map(sp => sp.trim()).join("\n") + (prose ? "\n" + prose : "");
+}
+
+/** An AskUserQuestion tool_use still waiting on an answer (#6094). */
+export type OpenQuestion = { tool_id: string; questions: AskQuestion[] };
+
+/** The most recent AskUserQuestion whose tool_result has not landed yet. Scans backward so only
+ *  the LATEST call can surface — an earlier one is either answered (its result exists) or was
+ *  superseded by whatever the agent asked next, and a stale card resurrecting would let the
+ *  operator answer a question the session has moved past. Pure and status-agnostic; the caller
+ *  gates rendering on `status === "blocked"` (a result-less ask while the pane is NOT blocked is
+ *  a race between the tool_use and tool_result rows landing, not an open question). */
+export function openQuestion(turns: Turn[], results: Record<string, ToolResult>): OpenQuestion | null {
+  for (let i = turns.length - 1; i >= 0; i--) {
+    const t = turns[i];
+    if (t.role !== "assistant") continue;
+    for (let j = t.blocks.length - 1; j >= 0; j--) {
+      const b = t.blocks[j];
+      if (b.kind === "tool" && b.tool === "AskUserQuestion" && b.ask && b.tool_id) {
+        return results[b.tool_id] ? null : { tool_id: b.tool_id, questions: b.ask };
+      }
+    }
+  }
+  return null;
+}
+
+/** Down arrow — ANSI, the same byte sequence a terminal keyboard sends. Shared by the answer
+ *  path and the "Other" free-text path (#6094), both of which walk the same option list. */
+export const DOWN_ARROW = "\x1b[B";
+
+/** The keystrokes that answer one AskUserQuestion question the same way a person at the keyboard
+ *  would (#6094): the picker's own footer names its controls — "Tab/Arrow keys to navigate" —
+ *  the only keybinding hint the compiled CLI's UI strings carry anywhere near this component; a
+ *  digit shortcut exists as a DIFFERENT component's contract (the permission-ask dialog's "single
+ *  stray keystroke" approve, its own string right by "takes no digit shortcut" for the
+ *  defaultToNo case) and does not apply here. So a choice is reached by walking Down from the row
+ *  the picker opens on (assumed row 0 — "initialValue" sits beside `multiSelect` in the same
+ *  string cluster) to the target index, then Enter/Return to confirm. Multi-select toggles each
+ *  picked row with Space while passing it, in one downward sweep so no row is revisited, then
+ *  Enter submits — Space-to-toggle is the Ink convention this assumes, not confirmed by the same
+ *  string evidence as the navigation keys, so treat the multi-select path as the weaker half of
+ *  this contract until a live picker confirms it. `indices` are 0-based into `q.options`;
+ *  out-of-range indices are dropped rather than walking toward a row the picker never offered. */
+export function answerKeystrokes(q: AskQuestion, indices: number[]): string {
+  const valid = [...new Set(indices.filter(i => i >= 0 && i < q.options.length))].sort((a, b) => a - b);
+  if (valid.length === 0) return "";
+  if (!q.multiSelect) return DOWN_ARROW.repeat(valid[0]) + "\r";
+  let keys = "";
+  let at = 0;
+  for (const i of valid) {
+    keys += DOWN_ARROW.repeat(i - at) + " ";
+    at = i;
+  }
+  return keys + "\r";
 }
 
 /** #5608 — the live turn ticker's tool label: the most recent tool the agent touched, with a
