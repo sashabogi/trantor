@@ -17,6 +17,10 @@ import { writeHandoff, spawnBaton, resolveHandoffSurface } from "../hooks/lib/ha
 const cwd = process.cwd();
 const resolved = resolveHandoffSurface({ projectDir: process.env.CLAUDE_PROJECT_DIR || cwd, sessionId: process.env.CLAUDE_SESSION_ID || "" });
 const project = resolved.project;
+// #6218 — the transcript is found under the RESOLVED session directory (CLAUDE_PROJECT_DIR, the
+// dir the session was launched in — how Claude itself names ~/.claude/projects), never a shell
+// cwd that cd'd somewhere else: a handoff record must carry the transcript it was written from.
+const sessionDir = resolved.projectDir;
 
 // Model-authored handoffs ride THIS binary too (`trantor handoff` — always the global install's
 // CURRENT code, never the plugin-cache copy a session booted with, the stale-0.18.20 bug). A piped
@@ -38,10 +42,10 @@ if (stdinIsPipe() || process.argv.includes("--latest")) {
   autoBaton();
 }
 
-// The active session's transcript = newest *.jsonl directly in this project's Claude dir
-// (~/.claude/projects/<cwd-with-slashes-as-dashes>/), excluding the subagents/ subtree.
+// The active session's transcript = newest *.jsonl directly in the session dir's Claude dir
+// (~/.claude/projects/<sessionDir-with-slashes-as-dashes>/), excluding the subagents/ subtree.
 function findTranscript() {
-  const dashed = cwd.replace(/\//g, "-");
+  const dashed = sessionDir.replace(/\//g, "-");
   const base = join(homedir(), ".claude", "projects");
   let best = "", bestM = 0;
   let dirs = []; try { dirs = readdirSync(base).filter(d => d === dashed || d.endsWith(dashed)); } catch {}
