@@ -15,8 +15,9 @@ import { resolveProject, hostId, resolveHubInfo, knownProjects, nonSeatReason, h
 import { formatSubagentManifest } from "../lib/subagent-manifest.mjs";
 import { updateAvailable, maybeNotifyDesktop, readConfig } from "./lib/update-check.mjs";
 import { maybeCheckBalances } from "./lib/balance-check.mjs";
-import { getJSON, signedGet, signedPost } from "./lib/api.mjs";
+import { getJSON, signedGet, signedPost, loadIdentity } from "./lib/api.mjs";
 import { ledgerPaths, ensureStart, anchorCursor, writeCursor } from "./lib/inbox-ledger.mjs";
+import { ensureEnrolled } from "../lib/enroll.mjs";
 
 // Load the most recent UNCONSUMED handoff for this project (written by precompact.mjs
 // / the heartbeat early-warning). `claim` marks it consumed so exactly one session
@@ -221,6 +222,33 @@ try {
   // instead of silently routing to the default.
   const { url, via: hubVia } = resolveHubInfo(project);
 
+  // Self-enrol on an enforce hub BEFORE the first read/write, the way bin/crew-runner.mjs does for
+  // crew seats (#6270). A session started via `trantor open` (or any Claude session not spawned by
+  // the runner) never went through that path: hooks/lib/api.mjs's own ensureEnrolled POSTs /enroll
+  // with no invite token, which a non-loopback enforce hub refuses — and refuses SILENTLY, because
+  // that helper is fail-open by design. The identity then sits registered-looking (whoami works,
+  // it has a keypair) but unknown to the hub, and every read 401s for as long as nobody notices
+  // (crebral-com sat like this for 20 minutes). lib/enroll.mjs's ensureEnrolled is the real fix: it
+  // mints a one-shot invite with the OPERATOR's owner key and spends it as this identity, exactly
+  // like a crew seat enrols itself. Never silent on failure — the reason lands in both the user
+  // banner and the model's context, not just a stderr line nobody reads.
+  const orchIdentity = loadIdentity(session);
+  const enrolment = orchIdentity
+    ? await ensureEnrolled(url, orchIdentity, project).catch((e) => ({ ok: false, reason: "error:" + String(e?.message || e).slice(0, 40) }))
+    : { ok: false, reason: "no-identity" };
+  if (!enrolment.ok && enrolment.reason !== "hub-unreachable") {
+    const O = "\x1b[1;38;5;208m", R = "\x1b[0m";
+    const line = `🟠 ${O}Not enrolled on ${url}${R} (${enrolment.reason}) — reads/writes may 401. `
+      + `Fix: set an owner key (RELAY_OWNER_IDENTITY or ~/.agent-bus/config.json ownerIdentity) that can mint invites on this hub.`;
+    userBanner = userBanner ? `${userBanner}\n${line}` : line;
+    additionalContext += `<trantor-not-enrolled hub="${sanitize(url)}" reason="${sanitize(enrolment.reason)}">\n`;
+    additionalContext += `⚠️ **This session's identity (\`${sanitize(session)}\`) is NOT enrolled on \`${sanitize(url)}\`** (reason: ${sanitize(enrolment.reason)}). `;
+    additionalContext += `On an enforce hub this means board reads/writes will 401 until enrolment succeeds. This is not "the hub is down" — the hub is answering, it just does not recognize this identity yet. `;
+    additionalContext += `Tell the user: the operator's owner key needs to be able to mint invites on this hub (RELAY_OWNER_IDENTITY env or \`ownerIdentity\` in ~/.agent-bus/config.json), then restart this session.\n`;
+    additionalContext += `</trantor-not-enrolled>\n`;
+    process.stderr.write(`[trantor] WARNING: ${session} not enrolled on ${url} (${enrolment.reason})\n`);
+  }
+
   // register self + post an initial presence status (no LLM turn — instant for others to read).
   // kind "orch" when `trantor open` badged THIS session as the project's orchestrator pane
   // (#6075): the peer row's kind is the hub's own record of what a session is — the overseer's
@@ -229,7 +257,9 @@ try {
   // carries no name, so it stamps nothing. Absent kind is preserved by /register, so the MCP's
   // kindless heartbeats never erase this.
   const orchBadge = process.env.TRANTOR_ORCH || "";
-  await jpost(`${url}/register`, { session, project, status: `active in ${project}`, ...(orchBadge === project ? { kind: "orch" } : {}) }, session).catch(() => {});
+  const registerBody = { session, project, status: `active in ${project}` };
+  if (orchBadge === project) registerBody.kind = "orch";
+  await jpost(`${url}/register`, registerBody, session).catch(() => {});
 
   // fetch roster of OTHER online sessions
   let peers = [], hubAnswered = false;
