@@ -1,16 +1,18 @@
 // @vitest-environment happy-dom
 //
-// The mode rail's width→layout contract (#6036): a tab word NEVER truncates. The bounce taught
-// the real rule — the strip MEASURES both sides (the labels' natural width offscreen vs the
-// width the strip really has) instead of trusting a hardcoded constant, and switches to
-// icon-only only when the labels would not fit, with a few px of hysteresis so a strip at the
-// boundary cannot flicker. Pinned here around equality, around the hysteresis band, on the
-// unmeasured default, and — mounted in happy-dom — at a 270px strip like the operator's.
+// The mode rail's width→layout contract (#6036): a tab word NEVER truncates. The bounces taught
+// the real rules — the strip MEASURES both sides (the labels' natural width vs the width the
+// strip really has) instead of trusting a hardcoded constant, and the measuring twins must live
+// under the SAME cascade as the real tabs (direct children of the strip), because unlayered
+// `.tr-seg > button` CSS beats every utility class and a twin styled elsewhere lies. Pinned
+// here: around equality, around the hysteresis band, the unmeasured default, the twin-sum
+// arithmetic, and — mounted in happy-dom — at a 270px strip like the operator's.
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { TABS_HYSTERESIS_PX, tabsMode } from "./tabStrip";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { stripLabelsNeed, TABS_HYSTERESIS_PX, tabsMode } from "./tabStrip";
 import { ModePane } from "./ModePane";
+import { PANE_MIN, PANE_ROW_RESERVED } from "./paneWidth";
 import { HubClient } from "../../shared/api/client";
 
 // SAFETY: React's act() reads this flag off globalThis; the cast adds the one key TS does not know
@@ -42,6 +44,37 @@ describe("tabsMode", () => {
   });
 });
 
+describe("stripLabelsNeed", () => {
+  it("sums the twin rects with the strip's computed gap and side padding", () => {
+    const strip = document.createElement("div");
+    for (const w of [10, 20, 30]) {
+      const b = document.createElement("button");
+      b.setAttribute("data-twin", "true");
+      Object.defineProperty(b, "getBoundingClientRect", { value: () => ({ width: w }), configurable: true });
+      strip.appendChild(b);
+    }
+    // happy-dom resolves no cascade, so the computed truth is stubbed the way the real browser
+    // reports it — gap 2px, padding 3px/5px on the strip (the .tr-seg values in styles.css).
+    const real = window.getComputedStyle.bind(window);
+    const spy = vi.spyOn(window, "getComputedStyle").mockImplementation(el => {
+      if (el === strip) {
+        return { columnGap: "2px", paddingLeft: "3px", paddingRight: "5px" } as unknown as CSSStyleDeclaration;
+      }
+      return real(el);
+    });
+    try {
+      expect(stripLabelsNeed(strip)).toBe(8 + 2 + 2 + 60);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("a strip with no twins measures as null — the caller stays on labels", () => {
+    expect(stripLabelsNeed(document.createElement("div"))).toBeNull();
+    expect(stripLabelsNeed(null)).toBeNull();
+  });
+});
+
 describe("ModePane tab strip (happy-dom)", () => {
   let host: HTMLDivElement;
   let root: Root;
@@ -68,27 +101,36 @@ describe("ModePane tab strip (happy-dom)", () => {
     Object.defineProperty(el, prop, { value, configurable: true });
   };
 
-  it("at a 270px strip whose labels need more room, the tabs render icon-only", () => {
+  // The twins sit inside the strip, so a test pins the labels' need by giving each twin a rect.
+  const stubTwins = (strip: Element, width: number) => {
+    strip.querySelectorAll<HTMLButtonElement>("button[data-twin='true']").forEach(b => {
+      Object.defineProperty(b, "getBoundingClientRect", {
+        value: () => ({ width }), configurable: true,
+      });
+    });
+  };
+
+  it("at a 270px strip whose labels need more room, the tabs render icon-only — word in the tooltip, dot and active state kept", () => {
     act(() => root.render(
       <ModePane client={stubClient} project="p" seat={null} onSeat={() => {}} onOpenFile={() => {}} />
     ));
     const strip = host.querySelector<HTMLElement>(".tr-seg");
     const pane = host.querySelector<HTMLElement>(":scope > *");
     if (!pane) throw new Error("ModePane rendered nothing");
-    const twin = strip?.querySelector<HTMLElement>("[aria-hidden='true']");
-    expect(strip).toBeTruthy();
-    expect(twin).toBeTruthy();
+    expect(strip?.querySelectorAll("button[data-twin='true']").length).toBe(4);
+    // four twins at 70px need 280px — the 270px strip cannot fit the labels
+    stubTwins(strip!, 70);
     setWidth(strip!, "clientWidth", 270);
     setWidth(pane, "clientWidth", 270);
-    Object.defineProperty(twin!, "getBoundingClientRect", {
-      value: () => ({ width: 292 }), configurable: true,
-    });
     act(() => { window.dispatchEvent(new Event("resize")); });
     const chat = host.querySelector<HTMLElement>("button[aria-label='Chat']");
     expect(chat).toBeTruthy();
     // icon-only: the word is gone from the face, kept in the tooltip
     expect(chat!.getAttribute("title")).toBe("Chat");
     expect(chat!.textContent).not.toContain("Chat");
+    // the unread dot and the raised active segment survive the collapse
+    expect(chat!.querySelector(".rounded-full")).toBeTruthy();
+    expect(host.querySelector("button[data-on='true']")).toBeTruthy();
   });
 
   it("and steps back to full labels once the labels fit with hysteresis to spare", () => {
@@ -98,20 +140,24 @@ describe("ModePane tab strip (happy-dom)", () => {
     const strip = host.querySelector<HTMLElement>(".tr-seg");
     const pane = host.querySelector<HTMLElement>(":scope > *");
     if (!pane) throw new Error("ModePane rendered nothing");
-    const twin = strip?.querySelector<HTMLElement>("[aria-hidden='true']");
+    stubTwins(strip!, 70);
     setWidth(strip!, "clientWidth", 270);
     setWidth(pane, "clientWidth", 270);
-    Object.defineProperty(twin!, "getBoundingClientRect", {
-      value: () => ({ width: 292 }), configurable: true,
-    });
     act(() => { window.dispatchEvent(new Event("resize")); });
     expect(host.querySelector("button[aria-label='Chat']")!.textContent).not.toContain("Chat");
     // the labels now fit with slack: same strip, words return
-    Object.defineProperty(twin!, "getBoundingClientRect", {
-      value: () => ({ width: 260 }), configurable: true,
-    });
+    stubTwins(strip!, 60);
     act(() => { window.dispatchEvent(new Event("resize")); });
     const chat = host.querySelector<HTMLElement>("button[aria-label='Chat']");
     expect(chat!.textContent).toContain("Chat");
+  });
+
+  it("the pane never outgrows the row: its width is clamped to the window so narrowing the window narrows the strip instead of clipping it", () => {
+    act(() => root.render(
+      <ModePane client={stubClient} project="p" seat={null} onSeat={() => {}} onOpenFile={() => {}} />
+    ));
+    const pane = host.querySelector<HTMLElement>(":scope > *");
+    if (!pane) throw new Error("ModePane rendered nothing");
+    expect(pane.style.maxWidth).toBe(`max(${PANE_MIN}px, calc(100vw - ${PANE_ROW_RESERVED}px))`);
   });
 });

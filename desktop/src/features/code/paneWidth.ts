@@ -22,6 +22,12 @@ export const PANE_MAX_FRAC = 0.6;
 /** One arrow press on the focused splitter moves the edge this many px. */
 export const PANE_STEP = 16;
 
+/** What the row around the pane needs besides the pane itself (#6036 drill): the 240px nav
+ *  aside + the pane's 12px margins both sides + its 2px border. A pane wider than
+ *  window − this never overflows the row, so the strip genuinely narrows with the window and
+ *  the tab observers see the resize — the window edge must never clip the pane instead. */
+export const PANE_ROW_RESERVED = 266;
+
 export function paneMax(windowWidth: number): number {
   return Math.floor(windowWidth * PANE_MAX_FRAC);
 }
