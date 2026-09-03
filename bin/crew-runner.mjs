@@ -358,7 +358,7 @@ async function reportFailure(exit, trigger, undelivered = 0) {
   const reason = classify(exit);
   const down = consecFails >= 2;
   const status = down ? `down: ${reason} · ${consecFails} fails` : `errored: ${reason}`;
-  await api("/register", { session: SESSION, project: PROJ, status, llm: AGENT, model: MODEL }).catch(() => {});
+  await api("/register", { session: SESSION, project: PROJ, status, llm: AGENT, model: MODEL, kind: "agent" }).catch(() => {});
   const hint = reason === "exhausted" ? " — needs `trantor swap`"
     : reason === "auth" ? " — check credentials"
     : reason === "backend-error" ? " — provider backend error (NOT quota): retry, or `trantor swap` to another provider"
@@ -446,7 +446,7 @@ async function reportHealthy() {
   consecFails = 0;
   // Recovery is a change too, so the next failure is news again.
   announced = "";
-  await api("/register", { session: SESSION, project: PROJ, status: `active in ${PROJ}`, llm: AGENT, model: MODEL }).catch(() => {});
+  await api("/register", { session: SESSION, project: PROJ, status: `active in ${PROJ}`, llm: AGENT, model: MODEL, kind: "agent" }).catch(() => {});
   await api("/send", { from: SESSION, to: "all", text: `✅ ${SESSION} recovered`, project: PROJ, kind: "status" }).catch(() => {});
   cmuxStatus("ok", "#14b8a6", "check"); herdrAgent("idle");
 }
@@ -673,7 +673,11 @@ function askedExcerpt(message) {
   // start cursor at the CURRENT tip so we don't replay history
   let cursor = 0;
   try { const r = await api(`/inbox?session=${encodeURIComponent(SESSION)}&since=0`); cursor = r.cursor || 0; } catch {}
-  await api("/register", { session: SESSION, project: PROJ, status: "crew member booting", llm: AGENT, model: MODEL }).catch(() => {});
+  // kind "agent" on every beat (#6075): the peer row's kind is the hub's OWN record of what a
+  // session is — the overseer's declared-crew exemption reads it, and on the remote hub there is
+  // no crew-windows.txt to fall back to. /register preserves absent fields, so a seat running an
+  // older runner never loses a kind an updated one stamped.
+  await api("/register", { session: SESSION, project: PROJ, status: "crew member booting", llm: AGENT, model: MODEL, kind: "agent" }).catch(() => {});
   // Announce runner-side, signed as THIS seat. Asking the seat to announce itself sent glm's hello
   // out under deepseek's identity whenever opencode seats shared one MCP daemon (lesson on the bus,
   // 2026-07-29): the runner process is per-seat by construction, so its signature cannot be borrowed.

@@ -257,28 +257,31 @@ finally { hubH.kill(); }
 // ── #5760: a DECLARED CREW is the normal state, not a collision ────────────────────────────────
 // The seats `trantor up` spawned plus the operator's orchestrator are how every project normally
 // looks — a crew-only same-project set must not warn, not DM, and not even reach the context
-// feed. Only a session OUTSIDE the declared crew is a collision. The crew declaration is read
-// from ~/.agent-bus/crew-windows.txt (the hub resolves it against its own HOME, which spawnHub
-// points at the fixture dir), and the operator's own host session is crew by definition.
+// feed. Only a session OUTSIDE the declared crew is a collision. The crew declaration is HUB
+// state now (#6075): peer rows carry kind — "agent" for seats announced by `trantor up`
+// (crew-runner stamps every /register), "orch" for the project's orchestrator pane. NO local
+// crew-windows.txt is written here: this hub's HOME is a fixture dir on purpose, the same way
+// the production netcup hub has no operator-machine files to read.
 const PI = 47939;
 const dirI = mkdtempSync(join(tmpdir(), "trantor-overseer-crew-"));
 mkdirSync(join(dirI, ".agent-bus"), { recursive: true });
-writeFileSync(join(dirI, ".agent-bus", "crew-windows.txt"),
-  "alpha\therdr\tcodex\tpane-1\nalpha\therdr\tkimi\tpane-2\n");
 const hubI = spawnHub(PI, {}, dirI);
 await sleep(1500);
 try {
   const I = mk(`http://127.0.0.1:${PI}`);
   await I.post("/policy", { autonomy: { alpha: 2 } });
-  // The declared crew, live and beating: codex + kimi are rows in crew-windows.txt.
+  // The declared crew, live and beating: three seats (kind "agent") plus the project's
+  // orchestrator (kind "orch") — all of it HUB state, nothing on disk.
   const beatCrew = setInterval(() => {
-    I.post("/register", { session: "codex:alpha", project: "alpha" }).catch(() => {});
-    I.post("/register", { session: "kimi:alpha", project: "alpha" }).catch(() => {});
+    I.post("/register", { session: "codex:alpha", project: "alpha", kind: "agent" }).catch(() => {});
+    I.post("/register", { session: "kimi:alpha", project: "alpha", kind: "agent" }).catch(() => {});
+    I.post("/register", { session: "glm:alpha", project: "alpha", kind: "agent" }).catch(() => {});
+    I.post("/register", { session: "MacBook-Pro-M1:alpha", project: "alpha", kind: "orch" }).catch(() => {});
   }, 150);
   await sleep(2500);
   let ev = await I.get("/events?type=overseer.&limit=100");
   ok((ev.events ?? []).filter(e => e.type === "overseer.warn" && e.kind === "same-project-sessions").length === 0,
-     "a live declared crew alone never warns");
+     "a live declared crew (3 seats + orch, by peer kind) alone never warns");
   let ctx = await I.get("/overseer/context?project=alpha");
   ok(!(ctx.warnings ?? []).some(w => w.kind === "same-project-sessions"),
      "a crew-only set is not a collision: absent from /overseer/context too");
