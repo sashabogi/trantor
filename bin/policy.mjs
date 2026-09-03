@@ -2,7 +2,10 @@
 // trantor policy — the autonomy ladder's admin surface (PRD §6): show levels + links,
 // set a project's level, declare that two projects are codependent.
 //   trantor policy show | set <project> <1-4> | link <a> <b> --reason "<why>" | unlink <a> <b>
+//   trantor policy check <a> <b>   — exit 0 (prints "yes") if linked or identical, else exit 1 ("no")
 // Drafted by scrooge (deepseek-v4-flash), integrated by the orchestrator.
+// `check` is what bin/crew.sh's cross-project guard (#6228) shells out to: the CLI belt needs to
+// know whether the operator already linked the two projects before it refuses `trantor up`.
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
@@ -30,7 +33,7 @@ const post = async (hub, payload) => {
 
 const legend = { 1: "1 observe", 2: "2 warn", 3: "3 gate", 4: "4 auto" };
 function usage() {
-  console.log('usage: trantor policy show | set <project> <1-4> | link <a> <b> --reason "<why>" | unlink <a> <b>');
+  console.log('usage: trantor policy show | set <project> <1-4> | link <a> <b> --reason "<why>" | unlink <a> <b> | check <a> <b>');
   process.exit(1);
 }
 
@@ -78,6 +81,23 @@ if (cmd === "unlink") {
     catch (err) { console.warn(`⚠ ${hub}: ${err.message}`); }
   }
   process.exit(0);
+}
+
+if (cmd === "check") {
+  if (!arg1 || !arg2) usage();
+  if (arg1 === arg2) { console.log("yes"); process.exit(0); }
+  let linked = false;
+  for (const hub of hubs) {
+    try {
+      const data = await get(hub);
+      if ((data.links || []).some((l) => {
+        const ps = (l.projects || []).map((p) => String(p).toLowerCase());
+        return ps.includes(arg1.toLowerCase()) && ps.includes(arg2.toLowerCase());
+      })) { linked = true; break; }
+    } catch { /* unreachable hub: fails closed, not linked */ }
+  }
+  console.log(linked ? "yes" : "no");
+  process.exit(linked ? 0 : 1);
 }
 
 usage();
