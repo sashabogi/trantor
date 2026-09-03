@@ -200,11 +200,21 @@ _herdr_ws_create() {   # $1=cwd $2=label → "workspace_id<TAB>root_pane_id"
 let d="";process.stdin.on("data",c=>d+=c).on("end",()=>{try{const r=(JSON.parse(d.slice(d.search(/[\[{]/))).result)||{};
 process.stdout.write((((r.workspace||{}).workspace_id)||"")+"\t"+(((r.root_pane||{}).pane_id)||""))}catch(e){}})'
 }
-_herdr_split() {   # $1=pane id ("" = UI-focused pane)  $2=right|down → new pane id
-  local a=(pane split); [ -n "$1" ] && a+=("$1"); a+=(--direction "$2" --no-focus)
+_herdr_split() {   # $1=pane id ("" = UI-focused pane)  $2=right|down  $3=cwd (optional) → new pane id
+  local a=(pane split); [ -n "$1" ] && a+=("$1"); a+=(--direction "$2" --no-focus); [ -n "$3" ] && a+=(--cwd "$3")
   _herdr "${a[@]}" 2>/dev/null | node -e '
 let d="";process.stdin.on("data",c=>d+=c).on("end",()=>{try{const r=(JSON.parse(d.slice(d.search(/[\[{]/))).result)||{};
 process.stdout.write(((r.pane||{}).pane_id)||"")}catch(e){}})'
+}
+# Any live pane INSIDE a workspace (the one whose cwd is $2 first). The orchestrator pane must be
+# hosted off a pane of ITS OWN workspace: splitting the UI-focused pane put crebral-com's
+# orchestrator in the trantor window, in a trantor shell, twice on 2026-09-03 (the operator was
+# looking at trantor when Wake ran) — twin bus identity, wrong checkout, crossed wires.
+_herdr_ws_pane() {   # $1=workspace id  $2=preferred cwd → pane id ("" if none)
+  _herdr pane list 2>/dev/null | WS="$1" CWD="$2" node -e '
+let d="";process.stdin.on("data",c=>d+=c).on("end",()=>{try{const o=JSON.parse(d.slice(d.search(/[\[{]/)));
+const a=(Array.isArray(o)?o:(o.panes||((o.result||{}).panes)||[])).filter(p=>(p.workspace_id||p.workspace||"")===process.env.WS);
+const m=a.find(p=>(p.cwd||"")===process.env.CWD)||a[0];process.stdout.write(m?(m.pane_id||m.id||""):"")}catch(e){}})'
 }
 _herdr_ws_live() {   # workspace list → "ids<TABnewline>names" (names \x01-wrapped+joined, like cmux)
   _herdr workspace list 2>/dev/null | node -e '
@@ -731,12 +741,19 @@ open_orchestrator() {
   # Host the pane: a JUST-created workspace's root pane IS the orchestrator pane (claude rides it);
   # an existing workspace gets a split — the crew's seats tile off it on the next `up`, never
   # replacing it (spawn_herdr's REUSE mode splits seats off their own old pane / the previous one).
+  # An EXISTING workspace hosts the split off one of ITS panes, in the project's checkout — never off
+  # the UI-focused pane, which is whatever the operator happens to be looking at (2026-09-03).
   if [ "$DRY" = "1" ]; then
     orch="%DRYORCH"
+    [ "$fresh" = "1" ] || echo "[dry] herdr: pane split %DRYHOST($wsid) --direction right --cwd $DIR" >&2
     echo "[dry] herdr: ${fresh:+root pane + }pane rename $orch 'orchestrator · $PROJ' + run '$(_orch_cmd "$DIR" "$sid")'" >&2
   else
     if [ "$fresh" = "1" ]; then orch="${pair##*$'\t'}"
-    else orch="$(_herdr_split "" right)"; fi
+    else
+      local host; host="$(_herdr_ws_pane "$wsid" "$DIR")"
+      [ -n "$host" ] || { echo "trantor open: workspace $wsid has no live pane to host the orchestrator" >&2; exit 1; }
+      orch="$(_herdr_split "$host" right "$DIR")"
+    fi
     [ -n "$orch" ] || { echo "trantor open: could not create the orchestrator pane" >&2; exit 1; }
     _herdr pane rename "$orch" "orchestrator · $PROJ" >/dev/null 2>&1
     _herdr pane run "$orch" "$(_orch_cmd "$DIR" "$sid")" >/dev/null 2>&1

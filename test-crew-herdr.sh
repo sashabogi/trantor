@@ -6,6 +6,9 @@
 # The osascript stub CATS STDIN — every crew.sh invocation here carries </dev/null (hung-suite
 # lesson, 2026-08-20).
 set -u
+# Same as test-crew.sh (#6228 bounce, 8c82e8e): the suite must not inherit the RUNNER's own identity
+# badge, or every dry spawn for testproj is refused by the cross-project guard as a badge mismatch.
+unset TRANTOR_ORCH TRANTOR_SEAT HERDR_ENV HERDR_PANE_ID RELAY_PROJECT RELAY_SESSION RELAY_AGENT TRANTOR_PROJECT
 ROOT="$(cd "$(dirname "$0")" && pwd)"
 PASS=0; FAIL=0
 ok(){ if eval "$2"; then PASS=$((PASS+1)); echo "  ✓ $1"; else FAIL=$((FAIL+1)); echo "  ✗ $1  [$2]"; fi; }
@@ -57,6 +60,7 @@ case "\$1" in
     split) N=\$(( \$(cat "$TMP/herdr.n" 2>/dev/null || echo 0) + 1 )); echo "\$N" > "$TMP/herdr.n"
            printf '{"result":{"pane":{"pane_id":"P-%s"}}}\n' "\$N" ;;
     rename) case "\$3" in P-DEAD) exit 1 ;; esac ;;   # a pane id that answers rename = alive (open's probe)
+    list)   printf '{"result":{"panes":[%s]}}' "\${HERDR_LIVE_PANES:-}" ;;   # replays \$HERDR_LIVE_PANES (open's host pick)
     report-agent) echo "\$3" >> "$TMP/herdr.agents" ;;   # a pane herdr now considers an agent
   esac ;;
   # Only panes that were REPORTED are agents. That is the real asymmetry: a pane can answer rename
@@ -235,10 +239,21 @@ ok "still exactly one orch row" '[ "$(grep -c "	orch	" "$STATE")" = "1" ]'
 # 17. reattach heals a STALE orch row: the tracked pane no longer answers rename → new pane, new row
 echo 0 > "$TMP/herdr.n"; rm -f "$TMP/herdr.log"
 seed "testproj	herdrws	__ws__	WS-9\ntestproj	orch	__orch__	P-DEAD\n"
-OUT17="$(cd "$TMP/proj" && HOME="$TMP" PATH="$TMP/fakebin:$PATH" RELAY_PROJECT=testproj HERDR_LIVE_WS='{"workspace_id":"WS-9","label":"trantor:testproj"}' CREW_NO_PROC_KILL=1 bash "$ROOT/bin/crew.sh" open </dev/null 2>/dev/null)"
+# The host of that split is a pane INSIDE WS-9 (the project's own workspace), in the project dir —
+# never the UI-focused pane, which lives wherever the operator is looking (2026-09-03: crebral-com's
+# orchestrator opened in the trantor window twice, as a trantor twin). The focused pane here is foreign.
+PANES17='{"pane_id":"P-FOCUS","workspace_id":"WS-OTHER","cwd":"/elsewhere","focused":true},{"pane_id":"P-HOST","workspace_id":"WS-9","cwd":"'"$TMP/proj"'"}'
+OUT17="$(cd "$TMP/proj" && HOME="$TMP" PATH="$TMP/fakebin:$PATH" RELAY_PROJECT=testproj HERDR_LIVE_WS='{"workspace_id":"WS-9","label":"trantor:testproj"}' HERDR_LIVE_PANES="$PANES17" CREW_NO_PROC_KILL=1 bash "$ROOT/bin/crew.sh" open </dev/null 2>/dev/null)"
 ok "stale orch pane is healed onto a fresh split (no re-stack of the dead one)" '[ "$OUT17" = "herdr:WS-9/P-1" ]'
 ok "the healed pane runs claude" 'grep -qE "herdr pane run P-1 env .* claude" "$TMP/herdr.log"'
+ok "the split is hosted off a pane of the PROJECT workspace, in the project dir" 'grep -q "herdr pane split P-HOST --direction right --no-focus --cwd $TMP/proj" "$TMP/herdr.log"'
+ok "the split never targets the UI-focused pane of another workspace" '! grep -qE "herdr pane split (P-FOCUS|--direction)" "$TMP/herdr.log"'
 ok "the stale orch row is replaced, not duplicated" 'has_row "testproj	orch	__orch__	P-1" && ! has_row "P-DEAD"'
+# ...and with NO live pane in the workspace, open refuses rather than guessing a host
+echo 0 > "$TMP/herdr.n"; rm -f "$TMP/herdr.log"
+seed "testproj	herdrws	__ws__	WS-9\ntestproj	orch	__orch__	P-DEAD\n"
+OUT17b="$(cd "$TMP/proj" && HOME="$TMP" PATH="$TMP/fakebin:$PATH" RELAY_PROJECT=testproj HERDR_LIVE_WS='{"workspace_id":"WS-9","label":"trantor:testproj"}' HERDR_LIVE_PANES='{"pane_id":"P-FOCUS","workspace_id":"WS-OTHER","cwd":"/elsewhere","focused":true}' CREW_NO_PROC_KILL=1 bash "$ROOT/bin/crew.sh" open </dev/null 2>&1)"; rc17b=$?
+ok "a workspace with no live pane is a hard error, not a split off a foreign pane" '[ "$rc17b" = "1" ] && echo "$OUT17b" | grep -q "no live pane to host"'
 ok "the live tracked workspace was reused, not recreated" '! grep -q "workspace create" "$TMP/herdr.log"'
 
 # 18. down SPARES the orch row: whole-project teardown closes seat panes only — the workspace (and
