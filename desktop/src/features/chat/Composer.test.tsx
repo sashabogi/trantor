@@ -8,9 +8,10 @@
 // boundary (window.__TAURI_INTERNALS__) — the component's own try/catches do the rest.
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Composer, composerTakesDrop } from "./Composer";
 import { clampComposerPx, maxComposerPx, minComposerPx } from "./composerHeight";
+import { LOST_AFTER_MS } from "./streaming";
 
 // SAFETY: React's act() reads this flag off globalThis; the cast adds the one key TS does not know
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -181,5 +182,146 @@ describe("composerTakesDrop (#6147)", () => {
     sheet.remove();
     expect(composerTakesDrop(inner, root)).toBe(true);
     root.remove();
+  });
+});
+
+// #6250 — a pending send belongs to the project and pane it was DELIVERED to, never to the
+// selection the composer shows now. The trace this drills: a message sent to trantor, the
+// operator switched to hive-digital, and the turn boundary there judged the trantor pending
+// against hive-digital's transcript, read it lost, and typed it into hive-digital's pane
+// eleven seconds later. Every drill below crosses that exact switch at the REAL IPC boundary
+// (the stub records pane_send's args) with the clock pushed past LOST_AFTER_MS, because a
+// pending within its grace window can never look lost and so never drills the bug.
+describe("a pending send keeps its own project and pane (#6250)", () => {
+  // The recorded IPC surface — pane_send's target is the assertion the whole card hangs on.
+  const sent: Array<{ cmd: string; args: Record<string, unknown> }> = [];
+  const paneSends = () => sent.filter(s => s.cmd === "pane_send");
+  const installIpc = () => {
+    sent.length = 0;
+    w.__TAURI_INTERNALS__ = {
+      invoke: (cmd: string, args?: Record<string, unknown>) => {
+        sent.push({ cmd, args: args ?? {} });
+        return Promise.resolve("{}");
+      },
+    };
+  };
+
+  // Fake ONLY the clock (the lost-window judgment reads Date.now at render): faking the timers
+  // themselves would strand React's act flushing on a faked microtask queue.
+  beforeEach(() => {
+    installIpc();
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(0);
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    w.__TAURI_INTERNALS__ = { invoke: () => Promise.resolve("{}") };
+  });
+
+  // Re-render the SAME root — a project switch is a prop change on one live instance, which is
+  // precisely why the pendings survived the switch and were re-judged against the new pane.
+  const view = (project: string, target: string, userTexts: string[], working = false) => {
+    act(() => root.render(
+      <Composer
+        project={project}
+        target={target}
+        live
+        liveWhy=""
+        model="opus"
+        modelSource="reported"
+        working={working}
+        userTexts={userTexts}
+        context={{ tokens: null, window: 200000, frac: null }}
+        fontStep="m"
+        onFontStep={() => {}}
+        onSent={() => {}}
+        onLongRunChange={() => {}}
+        onDispatch={() => {}}
+      />,
+    ));
+  };
+
+  // SAFETY: React dedupes a direct .value write; the prototype setter plus a bubbling input
+  // event is the one write the controlled textarea always sees (GenesisSheet.test's pattern).
+  const typeInto = async (el: HTMLTextAreaElement, text: string) => {
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(el, text);
+      el.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+  };
+
+  const sendDraft = async (text: string) => {
+    const ta = host.querySelector("textarea");
+    if (!ta) throw new Error("no textarea");
+    await typeInto(ta, text);
+    await act(async () => {
+      ta.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
+    });
+    // The pending is recorded in the send promise's .then — flush the microtask chain.
+    await act(async () => {});
+  };
+
+  it("a send to project A, a switch to B, B's turn boundary: B's pane receives nothing, and A's receipt still clears it", async () => {
+    view("alpha", "pane-alpha", []);
+    await sendDraft("where are the drills");
+    expect(paneSends()).toEqual([{ cmd: "pane_send", args: { target: "pane-alpha", text: "where are the drills" } }]);
+    expect(host.textContent).toContain("delivering");
+
+    // The switch, then the clock past the lost window, then B's turn boundary (working flips
+    // true → false). The old code judged the alpha pending against B's empty transcript here
+    // and re-sent it into pane-beta.
+    vi.setSystemTime(LOST_AFTER_MS + 1_000);
+    view("beta", "pane-beta", []);
+    view("beta", "pane-beta", [], true);
+    view("beta", "pane-beta", [], false);
+    await act(async () => {});
+
+    expect(paneSends()).toHaveLength(1); // nothing new, least of all to B's pane
+    expect(paneSends().every(s => s.args.target === "pane-alpha")).toBe(true);
+    expect(host.textContent).not.toContain("not delivered");
+    expect(host.textContent).not.toContain("delivering"); // foreign pendings don't render in B
+
+    // Back to A: its transcript (backfilled on the switch) echoes the text and the receipt
+    // clears the pending it always belonged to.
+    view("alpha", "pane-alpha", ["where are the drills"]);
+    await act(async () => {});
+    expect(host.textContent).not.toContain("delivering");
+    expect(paneSends()).toHaveLength(1);
+  });
+
+  it("the selected project's transcript never clears another project's pending — identical text in B is not a receipt", async () => {
+    view("alpha", "pane-alpha", []);
+    await sendDraft("where are the drills");
+    // B's transcript contains the very same words (the same message sent to both projects):
+    // the false-delivered shape. The pending must NOT read them as its own receipt.
+    view("beta", "pane-beta", ["where are the drills"]);
+    await act(async () => {});
+    // Back on A with nothing arrived yet — within the grace window the pending is still held.
+    view("alpha", "pane-alpha", []);
+    expect(host.textContent).toContain("delivering");
+    expect(paneSends()).toHaveLength(1);
+    // And A's real receipt clears it.
+    view("alpha", "pane-alpha", ["where are the drills"]);
+    await act(async () => {});
+    expect(host.textContent).not.toContain("delivering");
+  });
+
+  it("the manual retry sends to the pending's own pane, not the selection", async () => {
+    view("alpha", "pane-alpha", []);
+    await sendDraft("where are the drills");
+    vi.setSystemTime(LOST_AFTER_MS + 1_000);
+    // No working transition ever fires, so the auto-retry stays out of this drill: the lost
+    // banner is judged at render, in the pending's own project.
+    view("alpha", "pane-alpha", ["some unrelated turn"]);
+    expect(host.textContent).toContain("not delivered");
+    const retry = [...host.querySelectorAll("button")].find(b => b.textContent === "retry");
+    if (!retry) throw new Error("no retry button");
+    await act(async () => { retry.click(); });
+    await act(async () => {});
+    const sends = paneSends();
+    expect(sends).toHaveLength(2);
+    expect(sends[1].args).toEqual({ target: "pane-alpha", text: "where are the drills" });
+    // The retried send is pending again — held, within its fresh grace window.
+    expect(host.textContent).toContain("delivering");
   });
 });

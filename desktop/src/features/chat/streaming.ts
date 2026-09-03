@@ -172,8 +172,11 @@ export function sessionLiveness(status: string, target: string | null): Liveness
 
 /** A message the composer sent that the transcript has not yet echoed back (#5504).
  *  `retried` marks the one mechanical turn-boundary retry as spent — after that, staying
- *  lost is the human's call. */
-export type PendingSend = { text: string; at: number; retried?: boolean };
+ *  lost is the human's call. `project` and `target` are where the send WENT (#6250): the
+ *  receipt is judged against that project's transcript and every retry lands on that pane,
+ *  never on whatever project the composer happens to show now — a send that outlives a
+ *  project switch keeps its own address. */
+export type PendingSend = { text: string; at: number; project: string; target: string; retried?: boolean };
 
 /** Silence past this window means the words never made it into the conversation. */
 export const LOST_AFTER_MS = 10_000;
@@ -185,7 +188,7 @@ export const LOST_AFTER_MS = 10_000;
  *  staged "/compact"). The transcript is the only truth about arrival, so the composer holds each
  *  send as pending until a user turn CONTAINS it — containment, not equality, because a fused row
  *  is still delivered, just dirty. "lost" only after the window: silence before that is transit. */
-export function receiptFor(p: PendingSend, userTexts: string[], now: number): "sending" | "delivered" | "lost" {
+export function receiptFor(p: Pick<PendingSend, "text" | "at">, userTexts: string[], now: number): "sending" | "delivered" | "lost" {
   // TRIMMED containment. The drop-insert appends a trailing space to each path by design
   // (#5507), but CC records a dropped image as its own "[Image: source: <path>]" text block —
   // path followed by "]", never by the draft's trailing space — so the untrimmed needle missed

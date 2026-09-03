@@ -577,8 +577,11 @@ export function Composer({ project, target, live, liveWhy, model, modelSource, w
     return () => { alive = false; off?.(); };
   }, [attach]);
 
-  const line = (text: string) =>
-    invoke("pane_send", { target, text }).catch(e => setError(String(e)));
+  // #6250: `to` defaults to the selection, but a RESEND must name the pending's own pane — the
+  // pending, not the selection, owns where its words go. Slash commands and fresh sends have no
+  // pending and take the default.
+  const line = (text: string, to: string | null = target) =>
+    invoke("pane_send", { target: to, text }).catch(e => setError(String(e)));
 
   // Paste-an-image (2026-09-01: the operator pasted a CleanShot screenshot twice and NOTHING
   // happened — a textarea silently swallows image DATA, so "upload" looked broken with no error).
@@ -610,21 +613,28 @@ export function Composer({ project, target, live, liveWhy, model, modelSource, w
   // eat or fuse what arrives, so every send is held as PENDING until the transcript echoes it
   // back. While anything is pending, poll the transcript and re-judge; a send the transcript
   // never echoes is declared LOST, visibly, with its words intact for retry — never silently.
+  //
+  // A pending is judged ONLY against its own project's transcript (#6250): this morning a send
+  // to trantor was judged against hive-digital's transcript the moment the operator switched,
+  // read as lost, and mechanically retried into hive-digital's pane. So a pending whose project
+  // is not the selection is neither judged, retried, nor shown — it just waits, holding the
+  // address it was sent to, until its own project is back.
   const [pendings, setPendings] = useState<PendingSend[]>([]);
   const [, setTick] = useState(0);
   useEffect(() => {
-    if (!pendings.length) return;
+    if (!pendings.some(p => p.project === project)) return;
     const t = setInterval(() => { onSent(); setTick(n => n + 1); }, 2000);
     return () => clearInterval(t);
-  }, [pendings.length, onSent]);
+  }, [pendings, project, onSent]);
   useEffect(() => {
     setPendings(ps => {
-      const kept = ps.filter(p => receiptFor(p, userTexts, Date.now()) !== "delivered");
+      const kept = ps.filter(p => p.project !== project || receiptFor(p, userTexts, Date.now()) !== "delivered");
       return kept.length === ps.length ? ps : kept;
     });
-  }, [userTexts]);
-  const lost = pendings.filter(p => receiptFor(p, userTexts, Date.now()) === "lost");
-  const inFlight = pendings.length - lost.length;
+  }, [userTexts, project]);
+  const ownPendings = pendings.filter(p => p.project === project);
+  const lost = ownPendings.filter(p => receiptFor(p, userTexts, Date.now()) === "lost");
+  const inFlight = ownPendings.length - lost.length;
 
   const sendText = (raw: string): boolean => {
     // Multi-image sends are rewritten to one-path-per-line BEFORE delivery (#5709) — CC's
@@ -634,7 +644,7 @@ export function Composer({ project, target, live, liveWhy, model, modelSource, w
     if (!text || !target) return false;
     setBusy(true);
     line(text).then(() => {
-      setPendings(ps => [...ps, { text, at: Date.now() }]);
+      setPendings(ps => [...ps, { text, at: Date.now(), project, target }]);
       setError(null); onSent();
     }).finally(() => setBusy(false));
     return true;
@@ -657,13 +667,16 @@ export function Composer({ project, target, live, liveWhy, model, modelSource, w
 
   const retry = (p: PendingSend) => {
     setPendings(ps => ps.filter(x => x !== p));
-    line(p.text).then(() => setPendings(ps => [...ps, { text: p.text, at: Date.now() }]));
+    line(p.text, p.target).then(() => setPendings(ps => [...ps, { text: p.text, at: Date.now(), project: p.project, target: p.target }]));
   };
 
   // ONE mechanical retry at the turn boundary (2026-08-31: an attachment sent MID-TURN was eaten
   // by the streaming TUI and sat "lost" until a human clicked retry — the exact failure the
   // receipt exists to catch, now answered by the machine once). A send lost AGAIN after its
   // retry stays red for the human; retrying forever would spam a genuinely broken pane.
+  // Only THIS project's pendings are in evidence here (#6250): the transcript and the turn
+  // boundary are the selection's, so a foreign pending is neither judged lost by them nor
+  // re-sent into the selected pane — the trace that put trantor's words in hive-digital.
   useEffect(() => {
     if (working) return;
     setPendings(ps => {
@@ -671,10 +684,10 @@ export function Composer({ project, target, live, liveWhy, model, modelSource, w
       // Never auto-retry a send carrying image paths: a duplicated screenshot message is worse
       // than a lost one, and attachment sends are exactly the receipt's false-alarm class
       // (gap six). Those keep the manual retry button only.
-      const toRetry = ps.filter(p => !p.retried && !hasImagePath(p.text) && receiptFor(p, userTexts, now) === "lost");
+      const toRetry = ps.filter(p => p.project === project && !p.retried && !hasImagePath(p.text) && receiptFor(p, userTexts, now) === "lost");
       if (!toRetry.length) return ps;
-      for (const p of toRetry) void line(p.text);
-      return ps.map(p => (toRetry.includes(p) ? { text: p.text, at: now, retried: true } : p));
+      for (const p of toRetry) void line(p.text, p.target);
+      return ps.map(p => (toRetry.includes(p) ? { text: p.text, at: now, project: p.project, target: p.target, retried: true } : p));
     });
   }, [working]);  // eslint-disable-line react-hooks/exhaustive-deps
 
