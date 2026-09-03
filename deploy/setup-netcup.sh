@@ -72,10 +72,15 @@ echo "  schema applied"
 # systemd unit
 cp deploy/trantor-hub.service /etc/systemd/system/trantor-hub.service
 systemctl daemon-reload
-systemctl enable --now trantor-hub
+systemctl enable trantor-hub
+if systemctl is-active --quiet trantor-hub; then
+  bash deploy/restart-hub.sh
+else
+  systemctl start trantor-hub
+fi
 
 # crons: daily backup + nightly retention
-chmod +x deploy/backup.sh deploy/retention.sh deploy/restore.sh
+chmod +x deploy/backup.sh deploy/retention.sh deploy/restore.sh deploy/restart-hub.sh
 echo "0 2 * * * root /opt/trantor/deploy/backup.sh" > /etc/cron.d/trantor
 echo "0 3 * * * root /opt/trantor/deploy/retention.sh" >> /etc/cron.d/trantor
 
