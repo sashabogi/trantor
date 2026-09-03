@@ -4,7 +4,7 @@
 // Real Ed25519 sigs via lib/identity.mjs (frozen contract). No stubs to bypass.
 // Package: test-identity.mjs (owned by #3920 only).
 import { spawn, execFileSync } from "node:child_process";
-import { mkdtempSync, rmSync, statSync, mkdirSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -64,6 +64,14 @@ async function startHubExpectFail(extraEnv = {}) {
 }
 function stopOne(h) { try { h.child.kill(); } catch {} try { rmSync(h.dir, { recursive: true, force: true }); } catch {} HUBS = HUBS.filter(x => x !== h); }
 function stopAll() { for (const h of HUBS) { try { h.child.kill(); } catch {} try { rmSync(h.dir, { recursive: true, force: true }); } catch {} } HUBS = []; }
+async function waitFor(check, timeoutMs = 5000) {
+  const until = Date.now() + timeoutMs;
+  while (Date.now() < until) {
+    try { const value = await check(); if (value) return value; } catch {}
+    await sleep(30);
+  }
+  return null;
+}
 
 const { generate, loadOrCreate, keyPath, signRequest, HDR, SKEW_MS, bodyHash, canonicalString } = await import("./lib/identity.mjs");
 
@@ -75,8 +83,7 @@ function privKO(id) {
   });
 }
 function signHdr(id, method, path, body) {
-  const b = body === undefined ? undefined : (typeof body === "string" ? body : JSON.stringify(body));
-  return signRequest({ pubkey: id.pubkey, privkey: id.privkey }, { method, path, body: b });
+  return signRequest({ pubkey: id.pubkey, privkey: id.privkey }, { method, path, body });
 }
 async function sFetch(base, id, method, path, bodyObj) {
   const body = bodyObj === undefined ? undefined : JSON.stringify(bodyObj);
@@ -207,8 +214,8 @@ try {
       ok("scope binds (pending)", true);
     } else {
       ok("invite issued 2xx", inv.status < 400, `status ${inv.status}`);
-      const token = inv.json.token || "";
-      ok("token >=16", typeof token === "string" && token.length >= 16, `len ${token.length}`);
+      const token = String(inv.json.token || "");
+      ok("token >=16", token.length >= 16, `len ${token.length}`);
       if (token) {
         const invitee = generate();
         const use1 = await sFetch(hub.base, invitee, "POST", "/enroll", { token, name: "invitee", kind: "human" });
@@ -230,6 +237,31 @@ try {
         ok("scoped blocked projB 403", readB.status === 403, `got ${readB.status}`);
       }
     }
+    stopOne(hub);
+  }
+
+  console.log("\n[6b] unknown identity kinds fail before persistence:");
+  {
+    const hub = await startHub({ RELAY_AUTH: "enforce", RELAY_ENROLL: "tofu" });
+    const rejected = generate();
+    const enroll = await sFetch(hub.base, rejected, "POST", "/enroll", { name: "bad-kind", kind: "zzz" });
+    ok("unknown enroll kind -> 400 with allowed kinds", enroll.status === 400 &&
+      ["human", "agent", "tool"].every(kind => enroll.json.allowedKinds?.includes(kind)), `status ${enroll.status} ${enroll.text}`);
+
+    const owner = generate();
+    await sFetch(hub.base, owner, "POST", "/enroll", { name: "owner", kind: "human", scopes: [{ project: "*", role: "owner" }] });
+    const invite = await sFetch(hub.base, owner, "POST", "/invite", { kind: "zzz", scopes: [{ project: "projA", role: "write" }] });
+    ok("unknown owner-invite kind -> 400 with allowed kinds", invite.status === 400 &&
+      ["human", "agent", "tool"].every(kind => invite.json.allowedKinds?.includes(kind)), `status ${invite.status} ${invite.text}`);
+
+    const persisted = await waitFor(() => {
+      const path = join(hub.dir, "bus.json");
+      if (!existsSync(path)) return null;
+      return JSON.parse(readFileSync(path, "utf8"));
+    });
+    ok("unknown kind creates no identity row", !persisted?.identities?.[rejected.pubkey]);
+    const health = await fetch(hub.base + "/health").then(response => response.json());
+    ok("rejected kind leaves persistence healthy", health.persist?.ok === true, JSON.stringify(health.persist));
     stopOne(hub);
   }
 

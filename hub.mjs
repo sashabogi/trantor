@@ -10,7 +10,7 @@ import { homedir, hostname } from "node:os";
 import { join } from "node:path";
 import { timingSafeEqual, randomBytes } from "node:crypto";
 import { verifyRequest, verifyEndorsement, publicView } from "./lib/identity.mjs";
-import { DEFAULT_ORG } from "./lib/store-contract.mjs";
+import { DEFAULT_ORG, IDENTITY_KINDS } from "./lib/store-contract.mjs";
 import { assertNoSecrets } from "./lib/scrub.mjs";
 import { createPersistHealth } from "./lib/persist-health.mjs";
 
@@ -1447,6 +1447,10 @@ const server = http.createServer(async (req, res) => {
       const raw = req._rawBody || "";
       const verified = verifyRequest({ headers: req.headers, method: req.method, path: authPath(u), body: raw });
       if (!verified.ok) return json(res, 401, { error: verified.reason || "bad signature" });
+      const requestedKind = String(b0.kind || "agent").slice(0, 40);
+      if (!IDENTITY_KINDS.includes(requestedKind)) {
+        return json(res, 400, { error: `kind must be one of: ${IDENTITY_KINDS.join(", ")}`, allowedKinds: IDENTITY_KINDS });
+      }
       const existing = findIdentity(verified.pubkey);
       if (existing) return json(res, 200, { ok: true, identity: publicView(existing), scopes: existing.scopes || [] });
       let enrolledBy = "";
@@ -1482,7 +1486,7 @@ const server = http.createServer(async (req, res) => {
       }
       const identity = {
         name: String(b0.name || "").slice(0, 120) || verified.pubkey.slice(0, 16),
-        kind: String(b0.kind || "agent").slice(0, 40),
+        kind: requestedKind,
         pubkey: verified.pubkey,
         createdAt: now(),
         enrolledBy,
@@ -1501,6 +1505,10 @@ const server = http.createServer(async (req, res) => {
       const az = authorize(auth, req.method, P, "*");
       if (!az.ok) return json(res, az.code || 403, { error: az.error || "forbidden" });
       const bi = await body(req);
+      const invitedKind = String(bi.kind || "agent").slice(0, 40);
+      if (!IDENTITY_KINDS.includes(invitedKind)) {
+        return json(res, 400, { error: `kind must be one of: ${IDENTITY_KINDS.join(", ")}`, allowedKinds: IDENTITY_KINDS });
+      }
       const scopes = (Array.isArray(bi.scopes) ? bi.scopes : []).map(cleanScope).filter(Boolean).slice(0, 20);
       if (!scopes.length) return json(res, 400, { error: "scopes required" });
       // Honour the requested TTL. A 60s FLOOR here silently inflated `ttlSec: 1` to a minute, so a
@@ -1508,7 +1516,7 @@ const server = http.createServer(async (req, res) => {
       // a live token straight through /enroll. Cap the ceiling, never the floor.
       const ttlSec = Math.min(Math.max(Number(bi.ttlSec) || 86400, 1), 30 * 86400);
       const token = randomBytes(24).toString("hex");
-      state.inviteTokens[token] = { scopes, expiresAt: now() + ttlSec * 1000, used: false,
+      state.inviteTokens[token] = { scopes, kind: invitedKind, expiresAt: now() + ttlSec * 1000, used: false,
         createdBy: auth.identity?.pubkey || "", createdAt: now() };
       dirty = true;
       return json(res, 200, { ok: true, token, scopes, expiresAt: state.inviteTokens[token].expiresAt });
