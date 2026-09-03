@@ -4,7 +4,7 @@
 import { mkdtempSync, writeFileSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { seatWhy } from "./lib/seat-why.mjs";
+import { seatWhy, todaySpend, fmtSpend } from "./lib/seat-why.mjs";
 
 let pass = 0, fail = 0;
 const ok = (name, cond, extra) => { console.log(`  ${cond ? "PASS" : "FAIL"}  ${name}${cond || !extra ? "" : `\n          ${extra}`}`); cond ? pass++ : fail++; };
@@ -87,6 +87,35 @@ console.log("\nNever-run seat:");
 {
   const r = seatWhy("zzz-proj", "zzz-never-an-agent", { dir: mkdtempSync(join(tmpdir(), "tt-why-scan-")) });
   ok("default pid scan on a never-run seat = no-runner (no false live)", r.state === "no-runner", JSON.stringify(r));
+}
+
+// ---- #6134: what the seat SPENT today ---------------------------------------------------------
+// The number the operator actually needs when the bill jumps 10x: turns, minutes and tokens for
+// this seat since midnight. Turns from the runner's telemetry; tokens only from the turns whose
+// CLI printed a usage line, and the count of those is reported so a partial total never reads as
+// the whole truth.
+console.log("\nToday's spend (#6134):");
+{
+  const t = (ts, extra = {}) => ({ ts, turn: 1, duration_ms: 60000, exit: 0, ...extra });
+  const yesterday = now - 36 * 3600 * 1000;
+  const s = todaySpend([
+    { ts: now - 1000, boot: true },                 // boots are not turns
+    t(now - 5000, { tokens: 12000 }),
+    t(now - 4000, { tokens: 8000, cut: true }),
+    t(now - 3000),                                   // this CLI printed no usage line
+    t(yesterday, { tokens: 999999 }),                // yesterday is not today
+  ]);
+  ok("only today's turns are counted", s.turns === 3, `turns=${s.turns}`);
+  ok("minutes come from the turns' real durations", s.minutes === 3, `minutes=${s.minutes}`);
+  ok("tokens total only the turns that reported any", s.tokens === 20000, `tokens=${s.tokens}`);
+  ok("…and the drill says how many of the turns those were", s.reported === 2, `reported=${s.reported}`);
+  ok("cut turns are counted separately", s.cut === 1, `cut=${s.cut}`);
+  ok("the line names turns, minutes and tokens",
+    /3 turns/.test(fmtSpend(s)) && /3m/.test(fmtSpend(s)) && /20,000 tokens/.test(fmtSpend(s)), fmtSpend(s));
+  ok("a CLI that reports no usage says so instead of claiming 0 tokens",
+    /not reported/.test(fmtSpend(todaySpend([t(now - 1000)]))), fmtSpend(todaySpend([t(now - 1000)])));
+  ok("seatWhy carries today's spend for the CLI to print",
+    !!seatWhy("ttwhy", "codex", { dir: env().dir, pidCheck: noPids }).today);
 }
 
 console.log(`\nseat-why drills: ${pass} passed, ${fail} failed`);

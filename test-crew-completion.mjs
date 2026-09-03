@@ -29,7 +29,9 @@ console.log("# trantor crew-completion drill");
 
 const ORCH = "MacBook-Pro-M1:crebral-health";   // the session that assigns the work
 let servedFrom = ORCH;                          // who the waking message claims to be from
-let servedText = "Take the cardiology formulary file and land the first 40 rules.";
+// Cites a card because it IS a contract: since #6134 a direct message with no card ref and no
+// imperative batches into the seat's next turn instead of buying it a CLI session.
+let servedText = "contract: #4411 — take the cardiology formulary file and land the first 40 rules.";
 const sends = [];
 let served = 0;
 const hub = http.createServer((req, res) => {

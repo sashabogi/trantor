@@ -177,7 +177,7 @@ async function drill(agent, script, opts = {}) {
     '#!/bin/sh\necho "Error: you exceeded your current quota" >&2\nexit 1\n',
     // retry fast so several turns fail inside the drill's window
     // three wake-ups after the kickoff, so the seat fails four times in a row
-    { inbox: [{ text: "again" }, { text: "and again" }, { text: "and again" }], waitMs: 9000 });
+    { inbox: [{ text: "contract: card #8001 again" }, { text: "contract: card #8002 and again" }, { text: "contract: card #8003 and again" }], waitMs: 9000 });
   const downs = sends.filter(m => /DOWN/.test(m.text || "") && m.to === "all");
   const fails = sends.filter(m => /turn FAILED/i.test(m.text || "") && m.to === "all");
   ok("the room is told the seat went down", downs.length >= 1, `${downs.length} DOWN broadcasts`);
@@ -219,9 +219,11 @@ async function drill(agent, script, opts = {}) {
   const isDownBcast = (m) => /DOWN/.test(m.text || "") && m.to === "all";
   const r = await drill("opencode",
     '#!/bin/sh\necho "Invalid API key" >&2\nexit 0\n',
-    { inbox: [{ text: "again" }, { text: "and again" }], env: { TRANTOR_RETRY_MS: "1500" }, quietDeadlineMs: 0,
+    { inbox: [{ text: "contract: card #8010 again" }, { text: "contract: card #8011 and again" }], env: { TRANTOR_RETRY_MS: "1500" }, quietDeadlineMs: 0,
       until: (s) => s.some(isDownBcast),
-      settleUntil: (s, regs) => regs.some((x) => /down: auth · 3 fails/.test(String(x.status || ""))) });
+      // #6134: the streak now ENDS at the park — auth will not fix itself on a timer, so there is
+      // no third failure to wait for. Settle on the park notice instead.
+      settleUntil: (s) => s.some((m) => /PARKED/.test(m.text || "")) });
   const downs = r.sends.filter(isDownBcast);
   ok("an exit-0 auth streak still flips the seat DOWN", downs.length >= 1, `${downs.length} DOWN broadcasts`);
   ok("…exactly once, however many times it retries (retries keep failing every ~1.5s after it)",
@@ -230,8 +232,13 @@ async function drill(agent, script, opts = {}) {
   ok("…the broadcast is the seat-down notice: to 'all', labelled auth, streak + exit named",
      !!down && /auth/i.test(down.text || "") && /consecutive failures/.test(down.text || "") && /exit \d/.test(down.text || ""),
      down && String(down.text).slice(0, 140));
-  ok("…and the later failures stay registered state, never re-broadcast",
-     r.registers.some((x) => /down: auth · 3 fails/.test(String(x.status || ""))));
+  // Was: "the later failures stay registered state" — it waited for a THIRD consecutive failure
+  // on a 1.5s ladder. Since #6134 a rejected key parks instead of retrying, so the honest
+  // assertion is that the seat is down on the board and the ladder has stopped.
+  ok("…the down state lives on the board, where it costs nobody a turn",
+     r.registers.some((x) => /^down: auth/.test(String(x.status || ""))));
+  ok("#6134: …and a rejected key PARKS rather than retrying every 1.5s",
+     r.sends.some((m) => /PARKED/.test(m.text || "")) && !r.sends.some((m) => /retrying in/.test(m.text || "")));
   ok("no success ack across the streak", !r.sends.some(m => /✅/.test(m.text || "")));
 }
 
@@ -332,11 +339,70 @@ async function drill(agent, script, opts = {}) {
 {
   // prime one wake so the success path runs deliverWake → the assigner gets its ✅
   const { sends } = await drill("opencode", '#!/bin/sh\necho "did the thing"\nexit 0\n',
-    { inbox: [{ text: "do the thing" }], waitMs: 4000 });
+    { inbox: [{ text: "contract: do the thing on card #8020" }], waitMs: 4000 });
   ok("#5481: a turn with output and exit 0 is still success (no failure posted)",
      !sends.some((m) => /turn FAILED/.test(m.text || "")));
   ok("#5481: ...and the completion ack still goes to the assigner",
      sends.some((m) => /✅/.test(m.text || "")));
+}
+
+// ---- #6134: the time box ends a runaway turn and salvages it -------------------------
+// A turn with no ceiling is how a seat spends an afternoon on one card. At the box the runner
+// ends the CLI's whole process group and runs ONE follow-up turn in the SAME session, so the
+// work gets committed and the card moved instead of being thrown away with the process.
+{
+  const { sends, home } = await drill("codex",
+    // Hangs on the CONTRACT turn and nowhere else: the kickoff must not be cut (it would use up
+    // the one follow-up before the drill starts), and the follow-up must be able to land — that
+    // is the behaviour under test, a cut turn whose work still gets committed.
+    `#!/bin/sh
+P="$HOME/.agent-bus/turn-codex-tt-fail-codex.txt"
+if grep -q "cut at the time box" "$P"; then echo "committed and reported"; exit 0; fi
+if grep -q "NEW BUS MESSAGE" "$P"; then echo "working..."; sleep 600; fi
+echo "codex-drill: turn done"
+exit 0
+`,
+    { inbox: [{ text: "contract: card #8030, build the thing" }],
+      env: { TRANTOR_TURN_MAX_MS: "2000" }, waitMs: 12000 });
+  const rows = (() => {
+    try {
+      return readFileSync(join(home, ".agent-bus", "logs", "codex-tt-fail-codex.jsonl"), "utf8")
+        .split("\n").filter(Boolean).map((l) => { try { return JSON.parse(l); } catch { return {}; } });
+    } catch { return []; }
+  })();
+  const cut = rows.filter((r) => r.cut);
+  ok("#6134: a turn past TRANTOR_TURN_MAX_MS is cut, and the jsonl row says cut:true", cut.length >= 1);
+  ok("#6134: the cut turn did not run for anything like its full sleep (the box held)",
+     cut.length >= 1 && cut[0].duration_ms < 8000);
+  ok("#6134: exactly ONE follow-up turn runs after the cut, in the same session",
+     rows.filter((r) => r.trigger === "time-box follow-up").length === 1,
+     `${rows.filter((r) => r.trigger === "time-box follow-up").length} follow-up turn(s)`);
+  ok("#6134: the follow-up is not itself cut (boxing a boxed turn would never end)",
+     !rows.some((r) => r.trigger === "time-box follow-up" && r.cut));
+  ok("#6134: a cut turn is not silently reported as a clean success",
+     !sends.some((m) => /✅ done/.test(m.text || "") && /8030/.test(m.text || "")) || cut.length >= 1);
+}
+
+// ---- #6134: an exhausted seat PARKS — it is not redelivered to ------------------------
+// The ladder assumes the next attempt might work. Against a spent plan it never will: codex took
+// 60 redelivery turns on 09-02 doing nothing but being woken to fail. Now the seat says so ONCE,
+// with the reset time the CLI printed, and stops until that time or a restart.
+{
+  const { sends } = await drill("codex",
+    '#!/bin/sh\necho "You\'ve hit your usage limit. Try again at Sep 3rd, 2099 3:34 AM" >&2\nexit 1\n',
+    { inbox: [{ text: "contract: card #8040, build the thing" }],
+      env: { TRANTOR_RETRY_MS: "800" }, waitMs: 9000, quietDeadlineMs: 0 });
+  const parks = sends.filter((m) => /PARKED/.test(m.text || "") && m.to === "all");
+  ok("#6134: an exhausted seat announces that it is PARKED", parks.length >= 1);
+  ok("#6134: …exactly once, not once per retry", parks.length === 1, `${parks.length} park broadcasts`);
+  ok("#6134: the park names the reset time the CLI printed",
+     parks.length >= 1 && /2099/.test(parks[0].text));
+  ok("#6134: the assigner is told directly that the contract is parked, not retrying",
+     sends.some((m) => /PARKED/.test(m.text || "") && m.to === "host:drill"));
+  // The whole point: with an 800ms ladder a 9s window would otherwise show many attempts.
+  ok("#6134: the redelivery ladder STOPS — no retry notices after the park",
+     !sends.some((m) => /retrying in/.test(m.text || "")),
+     sends.filter((m) => /retrying in/.test(m.text || "")).length + " retry notice(s)");
 }
 
 hub.close();

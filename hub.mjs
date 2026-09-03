@@ -2786,7 +2786,11 @@ const server = http.createServer(async (req, res) => {
       // side, which is how an orchestrator ends up waiting forever on a dead peer.
       const re = Number.isFinite(Number(b.re)) && Number(b.re) > 0 ? Number(b.re) : 0;
       const kind = String(b.kind || "").slice(0, 40);
-      const msg = { id: ++state.seq, ts: now(), from: b.from || "anon", to: b.to || "all", text, project: String(b.project || fromProj || "").slice(0, 80), ...(re ? { re } : {}), ...(kind ? { kind } : {}) };
+      // `wake:false` is the SENDER saying this message is context, not a contract: the receiving
+      // runner batches it into that seat's next turn instead of spending a whole CLI session on
+      // it (#6134). Stored only when false — absent means wake, so every older client is unchanged.
+      const wake = b.wake === false ? { wake: false } : {};
+      const msg = { id: ++state.seq, ts: now(), from: b.from || "anon", to: b.to || "all", text, project: String(b.project || fromProj || "").slice(0, 80), ...(re ? { re } : {}), ...(kind ? { kind } : {}), ...wake };
       state.messages.push(msg); if (state.messages.length > 5000) state.messages.splice(0, 1000);
       dirty = true; pushToStreams(msg);               // <-- instant push to live watchers
       // Mirror onto the unified log. `refs` = the card ids this message cites (#3701), which is what
