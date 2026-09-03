@@ -22,7 +22,7 @@ import type { LensCompat } from "../features/project/ProjectHeader";
 import { orchRestorables } from "../features/workspace/herdr";
 import { invoke } from "@tauri-apps/api/core";
 import { GenesisSheet } from "../features/genesis/GenesisSheet";
-import { PLAIN_WAKE_KICKOFF } from "../features/genesis/genesis";
+import { hasBuildCards, wakeKickoffFor } from "../features/genesis/wakeKickoff";
 
 const LOCAL_HUB = "http://127.0.0.1:4477";
 import { Home } from "../features/home/Home";
@@ -291,7 +291,15 @@ export function AppShell() {
     setWaking(p);
     setWakeErrors(prev => { const m = new Map(prev); m.delete(p); return m; });
     try {
-      await invoke<string>("project_wake", { project: p, kickoff: PLAIN_WAKE_KICKOFF });
+      // #6120 — the wake picks its kickoff: a repo with docs/PRD.md whose board has no open build
+      // cards convenes the PRD review instead of the plain recap. Any probe failure (offline hub,
+      // no local checkout) falls toward the plain wake: never block a wake on a decision aid.
+      const [prd, cards] = await Promise.all([
+        invoke<unknown>("file_stat", { project: p, path: "docs/PRD.md" }).then(() => true, () => false),
+        (client ?? fleetClient).tasks(p).catch(() => []),
+      ]);
+      const kickoff = wakeKickoffFor({ prd, buildCards: hasBuildCards(cards) });
+      await invoke<string>("project_wake", { project: p, kickoff });
       setActive(p);
       setPane({ kind: "project", lens: "workspace" });
       setRestorables(rs => rs.filter(r => r !== p));
