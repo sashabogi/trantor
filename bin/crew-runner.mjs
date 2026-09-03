@@ -726,7 +726,12 @@ function askedExcerpt(message) {
     let msgs = [];
     try {
       const r = await api(`/poll?session=${encodeURIComponent(SESSION)}&since=${cursor}&wait=${holdS}`);
-      msgs = r.messages || []; cursor = r.cursor ?? cursor;
+      msgs = r.messages || [];
+      if (r.cursor !== undefined && r.cursor !== null && Number.isFinite(Number(r.cursor))) {
+        const reportedCursor = Number(r.cursor);
+        if (reportedCursor < cursor) log(`cursor rewound by hub ${cursor} -> ${reportedCursor}`);
+        cursor = reportedCursor;
+      }
     } catch (e) {
       // Deadline-abort on the LONG-POLL is not an outage — it means the hold expired with no hub
       // response (stalled event loop, napped machine, dead socket). Reconnect immediately and say
