@@ -12,3 +12,5 @@ config.json
 *.key
 id_rsa*
 .scratch/
+# per-seat artefacts that must leave the repo but never ~/.agent-bus (#6154)
+.agent-bus-out/

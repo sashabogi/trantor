@@ -9,7 +9,7 @@
 // agent arrives it RESUMES the CLI session (native resume = full context kept) with that
 // message as the prompt. The model just works and ends its turn; the runner does the rest.
 import { execSync, spawnSync, spawn } from "node:child_process";
-import { readFileSync, writeFileSync, unlinkSync, existsSync, appendFileSync, mkdirSync } from "node:fs";
+import { readFileSync, writeFileSync, unlinkSync, existsSync, appendFileSync, mkdirSync, realpathSync } from "node:fs";
 import { join, basename } from "node:path";
 import { homedir } from "node:os";
 import { resolveProject, resolveHub, withEnvFiles, hostId } from "../lib/project.mjs";
@@ -109,6 +109,26 @@ function ensureSeatWorktree(sourceDir) {
 }
 
 const TURN_DIR = ensureSeatWorktree(DIR);
+
+// #6154: opencode prints no session id on stdout, but it records every session in its own sqlite
+// DB with the directory the session was created in. The newest row for OUR worktree is the only
+// session a resume may pin — anything else in that DB belongs to another project on this machine,
+// which is exactly what `run -c` used to hand us. Read-only, fail-open: no DB or no row means the
+// next turn starts fresh, which is always safe, instead of resuming a stranger, which never is.
+const OC_DB = join(process.env.XDG_DATA_HOME || join(homedir(), ".local", "share"), "opencode", "opencode.db");
+function ocSid(dir) {
+  try {
+    // opencode stores the directory as IT sees its cwd, which on macOS can be the /private/var
+    // realpath of the /var/... path the runner holds — query both spellings.
+    const dirs = [dir];
+    try { const real = realpathSync(dir); if (real !== dir) dirs.push(real); } catch {}
+    const list = dirs.map((d) => `'${d.replaceAll("'", "''")}'`).join(", ");
+    const q = `SELECT id FROM session WHERE directory IN (${list}) ORDER BY time_updated DESC LIMIT 1;`;
+    const r = spawnSync("sqlite3", ["-readonly", OC_DB, q], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: 5000 });
+    const id = String(r.stdout || "").trim();
+    return /^ses_[A-Za-z0-9]+$/.test(id) ? id : "";
+  } catch { return ""; }
+}
 // RUNNER_SESSION override: an orchestrator seat (bin/orchestrate.mjs) runs the same CLI as a crew
 // seat but must live on the bus under its own name (claude-orch:proj), or it would collide with a
 // plain claude crew seat on the same project.
@@ -244,16 +264,25 @@ const CLI = {
   // --yolo in prompt mode (prompt mode auto-approves tools), and emits session_-prefixed ids.
   kimi:     { first: `kimi{M} -p "$(cat {P})" < /dev/null`,
               next:  `kimi{M} -r {SID} -p "$(cat {P})" < /dev/null`, mflag: " --model ", sid: /To resume this session: kimi -r (\S+)/ },
-  deepseek: { first: `opencode run{M} "$(cat {P})"`,
-              next:  `opencode run -c{M} "$(cat {P})"`, mflag: " -m ", env: join(homedir(), ".token-scrooge", ".env") },
-  opencode: { first: `opencode run{M} "$(cat {P})"`,
-              next:  `opencode run -c{M} "$(cat {P})"`, mflag: " -m ", env: join(homedir(), ".token-scrooge", ".env") },
+  // #6154: the opencode family never resumes blind. `run -c` continues the GLOBALLY last session
+  // on this machine — any project's (opencode.db showed a pr-os session interleaved between two
+  // trantor ones) — and the resumed session's stored directory becomes the Location every relative
+  // path resolves against. A seat then `cd desktop/src-tauri` inside its own worktree while
+  // opencode resolves it against a stranger's root, the bash tool reads it as external_directory
+  // and auto-rejects, and the turn dies mid-work with everything uncommitted. So: every spawn
+  // pins --dir to the seat worktree, and a resume pins -s to the session id looked up from
+  // opencode's own DB by directory — the session CREATED here (ocSid below). A missed lookup
+  // degrades to a fresh session, never to a foreign one.
+  deepseek: { first: `opencode run --dir {DIR}{M} "$(cat {P})"`,
+              next:  `opencode run --dir {DIR} -s {SID}{M} "$(cat {P})"`, mflag: " -m ", pinned: true, env: join(homedir(), ".token-scrooge", ".env") },
+  opencode: { first: `opencode run --dir {DIR}{M} "$(cat {P})"`,
+              next:  `opencode run --dir {DIR} -s {SID}{M} "$(cat {P})"`, mflag: " -m ", pinned: true, env: join(homedir(), ".token-scrooge", ".env") },
   // OpenRouter rides the opencode CLI exactly like deepseek/glm, but under its OWN agent label so
   // its bus identity is `openrouter:<project>` (RELAY_AGENT is set per-spawn) — never colliding with
   // the glm `opencode` seat. Model ids come pre-qualified (`openrouter/<vendor>/<model>`). Sources
   // the token-scrooge .env so an existing OPENROUTER_API_KEY authenticates with no extra wiring.
-  openrouter: { first: `opencode run{M} "$(cat {P})"`,
-              next:  `opencode run -c{M} "$(cat {P})"`, mflag: " -m ", env: join(homedir(), ".token-scrooge", ".env") },
+  openrouter: { first: `opencode run --dir {DIR}{M} "$(cat {P})"`,
+              next:  `opencode run --dir {DIR} -s {SID}{M} "$(cat {P})"`, mflag: " -m ", pinned: true, env: join(homedir(), ".token-scrooge", ".env") },
   claude:   { first: `claude{M} -p "$(cat {P})" --dangerously-skip-permissions`,
               next:  `claude -c{M} -p "$(cat {P})" --dangerously-skip-permissions`, mflag: " --model " },
   // DeepSeek Harness. Every turn is a FRESH session — headless has no resume yet — so the seat
@@ -275,7 +304,7 @@ if (!CLI[AGENT]) log(`'${AGENT}' is not a built-in seat — running it as an ope
 
 // RUNNER_RULES / RUNNER_KICKOFF env overrides: the runner is also the substrate for non-crew
 // always-on seats (the fleet DUTY agent, bin/duty.mjs) whose doctrine is not "work your card".
-const RULES = process.env.RUNNER_RULES || `Rules: you are ${SESSION} on the trantor crew. Before starting a card, read YOUR card: relay_board with card:<id> (the card, its deps, its notes, and the last five done cards whose title shares a word); never the whole board. Work your assigned file(s), report on the bus (relay_send, <280 chars), move your Kanban card as you go with a NOTE saying what you did (doing -> testing -> done; in 'testing' run YOUR OWN test file — never the full npm test, suites collide across seats — plus \`node bin/slop-gate.mjs\` when the repo has one: it lints ONLY your changed files against the anti-slop rules, and a card must not reach done with slop-gate failing; use 'failed' + a report if anything breaks). If you need something from another session, message THAT SESSION (relay_peers to find its id, relay_send to reach it) — never ask the human to pass it along; carrying messages between agents is the job this bus exists to remove. When your work for THIS message is finished, END YOUR TURN — do NOT park, do NOT loop relay_wait; the runner waits for you and will wake you with the next message.`;
+const RULES = process.env.RUNNER_RULES || `Rules: you are ${SESSION} on the trantor crew. Before starting a card, read YOUR card: relay_board with card:<id> (the card, its deps, its notes, and the last five done cards whose title shares a word); never the whole board. Work your assigned file(s), report on the bus (relay_send, <280 chars), move your Kanban card as you go with a NOTE saying what you did (doing -> testing -> done; in 'testing' run YOUR OWN test file — never the full npm test, suites collide across seats — plus \`node bin/slop-gate.mjs\` when the repo has one: it lints ONLY your changed files against the anti-slop rules, and a card must not reach done with slop-gate failing; use 'failed' + a report if anything breaks). If you need something from another session, message THAT SESSION (relay_peers to find its id, relay_send to reach it) — never ask the human to pass it along; carrying messages between agents is the job this bus exists to remove. When your work for THIS message is finished, END YOUR TURN — do NOT park, do NOT loop relay_wait; the runner waits for you and will wake you with the next message. Path discipline: build/test from your worktree root ${TURN_DIR} with absolute paths or --manifest-path/--prefix instead of cd-ing into subdirs, and put anything that must land outside the repo under ${TURN_DIR}/.agent-bus-out/ (gitignored) — never ~/.agent-bus.`;
 
 // ---- the pulse (Scape's Lloyd/Argus loop, Trantor-shaped) --------------------
 // A message-driven seat is DEAF between messages. An orchestrator seat with a mission needs a
@@ -520,9 +549,11 @@ async function runTurn(prompt, isFirst, trigger = "kickoff") {
   // exit-0 turn with real output must never be re-labelled "auth" by the #5405 escalation — the
   // qwen specimen committed aa3c340 while its captured stream still tripped the auth regex.
   const headBefore = gitOut(["rev-parse", "HEAD"], TURN_DIR);
-  let cmd = (isFirst || (cli.sid && !sid)) ? cli.first : cli.next;
+  // #6154: a pinned seat with no sid yet resumes as FRESH — the guard below fails open, because
+  // a resume without an id must fall back to a new session, never to `next`'s bare resume shape.
+  let cmd = (isFirst || ((cli.sid || cli.pinned) && !sid)) ? cli.first : cli.next;
   const mfrag = MODEL && cli.mflag ? `${cli.mflag}${MODEL}` : "";
-  cmd = cmd.replaceAll("{M}", mfrag).replaceAll("{P}", pf).replaceAll("{SID}", sid);
+  cmd = cmd.replaceAll("{M}", mfrag).replaceAll("{P}", pf).replaceAll("{SID}", sid).replaceAll("{DIR}", TURN_DIR);
   // PRECEDENCE, and it is easy to get backwards — this is the second time.
   // Each file is PREPENDED, so the one prepended LAST runs FIRST, and in shell the file that runs
   // LAST wins. To make ~/.agent-bus/.env (the CREW layer) win it must be prepended FIRST, i.e.
@@ -648,6 +679,10 @@ exit $turn_exit`;
   try { ownOut = stripPromptEcho(readFileSync(ERRF, "utf8"), readPromptText(pf)); } catch { ownOut = ""; }
   lastErrText = ownOut.slice(-4000);
   if (cli.sid && r.stdout) { const m = r.stdout.match(cli.sid); if (m) sid = m[1]; }
+  // #6154: the opencode family prints no sid on stdout — the id comes from opencode's own DB,
+  // keyed by the worktree the session was created in. Fail-open: nothing found leaves sid empty,
+  // and the next turn starts fresh rather than resuming whatever other project ran last.
+  if (cli.pinned) { const found = ocSid(TURN_DIR); if (found) sid = found; }
   const realExit = r.status;
   // A zero exit is NOT proof the turn ran: opencode prints "401 Unauthorized" / "Invalid API key"
   // and exits 0, so a bare 0 made the runner ack "✅ done", clear the pending queue and heartbeat
