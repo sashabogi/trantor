@@ -792,12 +792,16 @@ resolve_spec() {
   if [ -n "$FIELD" ]; then
     case "$FIELD" in
       */*) MODEL="$FIELD" ;;
-      *)   MODEL="$(resolve_model "$AGENT" "$FIELD" "$TASK" "$DIFF")" || {
+      # A NATIVE CLI takes its model id verbatim: `claude:opus`, `codex:o3`, `kimi:k2`. The router
+      # only knows opencode providers, so it refused `claude:opus` outright (2026-09-03) and the
+      # seat silently ran the CLI default, which for claude was the most expensive model on the plan.
+      *)   if [[ "$AGENT" =~ ^(claude|codex|kimi|gemini)$ ]]; then MODEL="$FIELD"; echo "  → $AGENT: model $MODEL (native pin)"; else
+           MODEL="$(resolve_model "$AGENT" "$FIELD" "$TASK" "$DIFF")" || {
              echo "[crew] ✗ skipping seat '$AGENT' — model resolution failed for $FIELD ($TASK/$DIFF); remaining seats still launch" >&2
              SKIPPED_SEATS+=("$AGENT: model resolution failed for $FIELD ($TASK/$DIFF)")
              return 1
            }
-           echo "  → $AGENT: live model $MODEL ($FIELD · $TASK/$DIFF)" ;;
+           echo "  → $AGENT: live model $MODEL ($FIELD · $TASK/$DIFF)"; fi ;;
     esac
   fi
 }
