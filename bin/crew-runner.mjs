@@ -23,6 +23,9 @@ import {
   readPromptText, stripPromptEcho,
 } from "../lib/classify-failure.mjs";
 import { capWake, capBcast, pickLessons, composePrompt } from "./crew-payload.mjs";
+import {
+  cardRef, carriesWork, parseTurnTokens, parseResetAt, reasonWithBalances, PARKING_REASONS,
+} from "../lib/turn-policy.mjs";
 
 const AGENT = process.argv[2];
 const DIR = process.argv[3] || process.cwd();
@@ -272,7 +275,7 @@ if (!CLI[AGENT]) log(`'${AGENT}' is not a built-in seat — running it as an ope
 
 // RUNNER_RULES / RUNNER_KICKOFF env overrides: the runner is also the substrate for non-crew
 // always-on seats (the fleet DUTY agent, bin/duty.mjs) whose doctrine is not "work your card".
-const RULES = process.env.RUNNER_RULES || `Rules: you are ${SESSION} on the trantor crew. Before starting a card, query the board for related PAST cards and lessons (relay_board — 1900+ cards of tribal knowledge; prior work may already answer half of it). Work your assigned file(s), report on the bus (relay_send, <280 chars), move your Kanban card as you go with a NOTE saying what you did (doing -> testing -> done; in 'testing' run YOUR OWN test file — never the full npm test, suites collide across seats — plus \`node bin/slop-gate.mjs\` when the repo has one: it lints ONLY your changed files against the anti-slop rules, and a card must not reach done with slop-gate failing; use 'failed' + a report if anything breaks). If you need something from another session, message THAT SESSION (relay_peers to find its id, relay_send to reach it) — never ask the human to pass it along; carrying messages between agents is the job this bus exists to remove. When your work for THIS message is finished, END YOUR TURN — do NOT park, do NOT loop relay_wait; the runner waits for you and will wake you with the next message.`;
+const RULES = process.env.RUNNER_RULES || `Rules: you are ${SESSION} on the trantor crew. Before starting a card, read YOUR card: relay_board with card:<id> (the card, its deps, its notes, and the last five done cards whose title shares a word); never the whole board. Work your assigned file(s), report on the bus (relay_send, <280 chars), move your Kanban card as you go with a NOTE saying what you did (doing -> testing -> done; in 'testing' run YOUR OWN test file — never the full npm test, suites collide across seats — plus \`node bin/slop-gate.mjs\` when the repo has one: it lints ONLY your changed files against the anti-slop rules, and a card must not reach done with slop-gate failing; use 'failed' + a report if anything breaks). If you need something from another session, message THAT SESSION (relay_peers to find its id, relay_send to reach it) — never ask the human to pass it along; carrying messages between agents is the job this bus exists to remove. When your work for THIS message is finished, END YOUR TURN — do NOT park, do NOT loop relay_wait; the runner waits for you and will wake you with the next message.`;
 
 // ---- the pulse (Scape's Lloyd/Argus loop, Trantor-shaped) --------------------
 // A message-driven seat is DEAF between messages. An orchestrator seat with a mission needs a
@@ -353,9 +356,9 @@ function classify(exit) {
   return reason;
 }
 
-async function reportFailure(exit, trigger, undelivered = 0) {
+async function reportFailure(exit, trigger, undelivered = 0, reasonOverride = "") {
   consecFails++;
-  const reason = classify(exit);
+  const reason = reasonOverride || classify(exit);
   const down = consecFails >= 2;
   const status = down ? `down: ${reason} · ${consecFails} fails` : `errored: ${reason}`;
   await api("/register", { session: SESSION, project: PROJ, status, llm: AGENT, model: MODEL, kind: "agent" }).catch(() => {});
@@ -394,6 +397,41 @@ async function reportFailure(exit, trigger, undelivered = 0) {
   }
   cmuxStatus(down ? "down" : "error", "#ef6a6a", "alert", { alert: true, priority: 90 }); herdrAgent("blocked"); cmuxLog(`turn failed: ${reason} (exit ${exit})`, "error");
   log(`\x1b[31mreported failure to bus: ${reason} (exit ${exit})\x1b[0m`);
+  return reason;
+}
+
+// ---- a dead seat is not retried (#6134) -------------------------------------------------------
+// The redelivery ladder assumes the next attempt might work. Against a spent plan or a rejected
+// key it never will, and the cost is real: codex burned 60 turns on 09-02 doing nothing but being
+// redelivered to. So those two reasons PARK — the queue is kept, the ladder stops, and the room is
+// told once, with the reset time when the CLI printed one. `trantor up` (a restart) resumes.
+let parkAnnounced = false;
+async function parkSeat(reason, undelivered) {
+  const resetAt = parseResetAt(lastErrText);
+  const when = resetAt ? new Date(resetAt).toLocaleString() : "";
+  if (!parkAnnounced) {
+    parkAnnounced = true;
+    const text = redactKeys(`⛔ ${SESSION} PARKED (${reason}) — holding ${undelivered} message(s), redelivery stopped ${when ? `until ${when}` : `until \`trantor up ${AGENT}\``}`);
+    await api("/send", { from: SESSION, to: "all", text, project: PROJ, kind: "status" }).catch(() => {});
+    const orch = `${hostId()}:${PROJ}`;
+    if (orch !== SESSION) await api("/send", { from: SESSION, to: orch, text, project: PROJ, kind: "alert" }).catch(() => {});
+  }
+  log(`\x1b[31mparked (${reason})${when ? ` — retrying after ${when}` : " — no reset time in the output; waiting for a restart"}\x1b[0m`);
+  // No reset time means no timer can clear it: hold until the operator restarts the seat.
+  return resetAt || Number.MAX_SAFE_INTEGER;
+}
+
+// The seat's own balance rows, for the #6131 read: a stalled turn that printed nothing on a seat
+// whose plan is spent is exhaustion, not a crash. Bounded and best-effort — a slow provider API
+// must never hold up the failure path, and an unreachable one just leaves the reason as it was.
+async function balanceRows() {
+  try {
+    const { fetchBalances } = await import("../lib/balances.mjs");
+    return await Promise.race([
+      fetchBalances(process.env, { only: [AGENT] }),
+      new Promise((r) => setTimeout(() => r([]), 4000)),
+    ]);
+  } catch { return []; }
 }
 
 // ---- activity truth (#5965): the RUNNER is the source for this seat ----------------
@@ -444,17 +482,33 @@ async function notifyAssigners(pairs, text) {
 async function reportHealthy() {
   if (consecFails === 0) return;        // already healthy — don't spam
   consecFails = 0;
-  // Recovery is a change too, so the next failure is news again.
+  // Recovery is a change too, so the next failure is news again — a park included.
   announced = "";
+  parkAnnounced = false;
   await api("/register", { session: SESSION, project: PROJ, status: `active in ${PROJ}`, llm: AGENT, model: MODEL, kind: "agent" }).catch(() => {});
   await api("/send", { from: SESSION, to: "all", text: `✅ ${SESSION} recovered`, project: PROJ, kind: "status" }).catch(() => {});
   cmuxStatus("ok", "#14b8a6", "check"); herdrAgent("idle");
 }
 
+// ---- the time box (#6134) --------------------------------------------------------------------
+// A turn with no ceiling is how a seat spends an afternoon on one card: the 09-02 baseline was 151
+// turns and ~16 agentic hours across the fleet. TRANTOR_TURN_MAX_MS ends the CLI's process group
+// at the box and runs ONE follow-up turn in the SAME session — "commit what is done, move the
+// card, report in one line" — so a cut turn lands its work instead of losing it.
+const TURN_MAX_MS = Math.max(0, Number(process.env.TRANTOR_TURN_MAX_MS || 20 * 60 * 1000));
+const TIME_BOX_PROMPT = "your previous turn was cut at the time box; commit what is done, move the card with a note, report in one line";
+let inFollowUp = false;
+// The card the CURRENT CLI session belongs to (#6134). 0 = the kickoff session, which belongs to
+// no card, so the first contract that names one starts a session of its own.
+let sessionCard = 0;
+
 let sid = "";
 async function runTurn(prompt, isFirst, trigger = "kickoff") {
   TURN++; banner(trigger);
   const t0 = Date.now();
+  // A fresh session must not resume the old one's id: `first` is chosen by isFirst OR a missing
+  // sid, so a stale sid would quietly resume the session this turn exists to leave behind.
+  if (isFirst) sid = "";
   // #5965 — TURN START. The hub peer row is where the app reads activity from, and the runner is
   // the only one who knows a turn is starting, so say so before the CLI spawn (awaited: the spawn
   // below blocks the loop, an unawaited fetch would not leave the machine until the turn ended).
@@ -515,7 +569,15 @@ async function runTurn(prompt, isFirst, trigger = "kickoff") {
   // under load the classifier then reads an empty ERRF and reports the wrong failure reason.
   const shell = `set -o pipefail; { ${inner} ; } 2> >(${SCRUB} --tee2 ${ERRF}); turn_exit=$?; wait; exit $turn_exit`;
   const r = spawnSync("/bin/bash", ["-c", shell], {
-    cwd: TURN_DIR, encoding: "utf8", stdio: cli.sid ? ["ignore", "pipe", "inherit"] : "inherit",
+    // detached: bash leads its OWN process group, so the time box can kill the CLI and everything
+    // it spawned with one signal instead of orphaning the model process behind a dead shell.
+    // stdin is /dev/null for every seat (it already was for codex/kimi/dsh via `< /dev/null`):
+    // a detached group is a BACKGROUND group, and a background process that reads the terminal
+    // takes SIGTTIN and stops forever. Nothing here runs interactively — every CLI is in -p /
+    // exec / run mode — so closing stdin is what makes the group safe.
+    detached: true,
+    ...(TURN_MAX_MS ? { timeout: TURN_MAX_MS, killSignal: "SIGKILL" } : {}),
+    cwd: TURN_DIR, encoding: "utf8", stdio: cli.sid ? ["ignore", "pipe", "inherit"] : ["ignore", "inherit", "inherit"],
     env: { ...process.env, RELAY_URL: HUB, RELAY_AGENT: AGENT, RELAY_SESSION: SESSION, RELAY_PROJECT: PROJ,
       // A RUNNER-MANAGED SEAT MUST NEVER HAND ITSELF A BATON.
       //
@@ -531,6 +593,14 @@ async function runTurn(prompt, isFirst, trigger = "kickoff") {
     maxBuffer: 16 * 1024 * 1024,
   });
   try { unlinkSync(STAMPF); } catch {}   // turn over — disarm the watchdog
+  // #6134: node's timeout signals only the shell it spawned. The CLI and its children share the
+  // detached group, so sweep the whole group — otherwise a boxed turn leaves a model still running
+  // (and still billing) against a runner that has moved on.
+  const cut = !!TURN_MAX_MS && (r.error?.code === "ETIMEDOUT" || (r.signal === "SIGKILL" && Date.now() - t0 >= TURN_MAX_MS));
+  if (cut && r.pid) {
+    try { process.kill(-r.pid, "SIGKILL"); } catch {}
+    log(`\x1b[33mturn cut at the ${Math.round(TURN_MAX_MS / 1000)}s time box — CLI process group ended\x1b[0m`);
+  }
   // #5869: scrub AT REST, synchronously, before anything reads the file back. The explicit shell
   // wait above drains the live stderr scrubber first; this pass is defense in depth for redaction.
   try { writeFileSync(ERRF, redactKeys(readFileSync(ERRF, "utf8"))); } catch {}
@@ -578,12 +648,23 @@ async function runTurn(prompt, isFirst, trigger = "kickoff") {
   // #5868: the verdict rides the telemetry row so a classification survives the pane scrolling
   // away — the same "classified X because Y" shape the runner logs, in the seat's jsonl forever.
   const verdict = verdictFor(realExit, effExit, lastEmptyOutput, ownOut);
-  telemetry({ ts: Date.now(), agent: AGENT, project: PROJ, turn: TURN, trigger, model: MODEL || "cli-default", duration_ms: Date.now() - t0, exit: realExit, effExit, authFailed: effExit !== realExit, emptyOutput: lastEmptyOutput, verdict });
+  // #6134: what the turn COST, from the CLI's own usage line. Zero means this CLI printed none —
+  // never that the turn was free. `trantor seat-why` totals these into today's spend per seat.
+  const tokens = parseTurnTokens(ownOut);
+  telemetry({ ts: Date.now(), agent: AGENT, project: PROJ, turn: TURN, trigger, model: MODEL || "cli-default", duration_ms: Date.now() - t0, exit: realExit, effExit, authFailed: effExit !== realExit, emptyOutput: lastEmptyOutput, verdict, ...(tokens ? { tokens } : {}), ...(cut ? { cut: true } : {}) });
   log(`turn ended (exit ${realExit}${effExit !== realExit ? ` → effective ${effExit} (${lastEmptyOutput ? "empty-output" : "auth"})` : ""}, ${((Date.now() - t0) / 1000).toFixed(0)}s)`);
   if (realExit === 0 && effExit === 0) { cmuxStatus("idle", "#8a94a6", "robot"); herdrAgent("idle"); }   // finished this turn, waiting for the next
   // #5965 — TURN END. A clean exit means the seat is idle again; say so right away so the app stops
   // pulsing it even before the next /poll heartbeat. Failure keeps reportFailure's down/errored.
   if (realExit === 0 && effExit === 0) await registerStatus("idle");
+  // The follow-up rides the SAME session, so the model still has the turn it was cut out of and
+  // only has to land it. Exactly one — a follow-up that runs long is itself boxed, and boxing a
+  // boxed turn forever is the loop this card exists to end.
+  if (cut && !inFollowUp) {
+    inFollowUp = true;
+    try { return await runTurn(TIME_BOX_PROMPT, false, "time-box follow-up"); }
+    finally { inFollowUp = false; }
+  }
   return effExit;
 }
 
@@ -655,8 +736,19 @@ function isRunnerSession(session) {
 
 function shouldWake(message) {
   if (isReceipt(message) || isStatusBroadcast(message)) return false;
+  // #6134: the SENDER decides. `wake:false` says "this is context, not a contract" — it batches
+  // into the next turn's prompt like a broadcast and never buys a CLI session of its own.
+  if (message?.wake === false) return false;
   if (message?.to === SESSION) {
     if (message?.kind === "status") return false;
+    // The safety net for every sender that never set the flag: a direct message carrying no card
+    // and no instruction is an ack, an FYI or a queue note. Those made up most of the 09-02 burn.
+    // Two exemptions, both because the shape net reads WORDS and these carry their meaning in
+    // their type: a typed alert (a failure escalation, a bounce), and an OVERSEER warning that got
+    // this far — the one chatty overseer kind is already batched by name upstream, so anything
+    // still here is file-conflict or linked-activity, which #5760 deliberately kept waking.
+    const typed = message?.kind === "alert" || /^🤝 OVERSEER /.test(String(message?.text || ""));
+    if (!typed && !isContract(message) && !carriesWork(message?.text)) return false;
     return !isRunnerSession(message?.from) || isContract(message);
   }
   return message?.to === "all"
@@ -764,7 +856,10 @@ function askedExcerpt(message) {
     const rest = msgs.filter(m => !fyi.includes(m));
     const direct = rest.filter(m => m.to === SESSION && shouldWake(m));
     const mentions = rest.filter(m => m.to === "all" && shouldWake(m));
-    const bcast = [...rest.filter(m => m.to === "all" && !mentions.includes(m)), ...fyi];
+    // Everything that did not earn a turn still becomes CONTEXT — including a DIRECT message that
+    // batched (wake:false, or an ack by shape). Dropping those would trade a token problem for a
+    // deafness problem: the seat would never learn what it was told (#6134).
+    const bcast = [...rest.filter(m => !direct.includes(m) && !mentions.includes(m)), ...fyi];
     pendingBcast.push(...bcast);                      // wake-policy: plain broadcasts batch, they don't wake
     const wake = [...direct, ...mentions];
     if (!wake.length) { if (bcast.length) { savePending(pendingWake, pendingBcast); log(`${bcast.length} broadcast(s) batched (no wake) — ${pendingBcast.length} pending`); } continue; }
@@ -810,22 +905,43 @@ function askedExcerpt(message) {
     for (const m of wake) if (m.from && !assigners.some(a => a.from === m.from)) assigners.push({ from: m.from, id: m.id });
     const asked = askedExcerpt(wake[0]);
     const tStart = Date.now();
+    // #6134: ONE SESSION PER CARD. A seat that resumes forever carries every card it ever worked
+    // into every later turn — qwen's 85.7M tokens were 96.7% cached, i.e. replayed history. The
+    // card that moved this wake decides: a different one starts a fresh CLI session, and the seat
+    // is told so, because a fresh session remembers nothing and must be sent to its card.
+    const card = wake.map(m => cardRef(m.text)).find(Boolean) || 0;
+    const fresh = card > 0 && card !== sessionCard;
+    if (card) sessionCard = card;
+    const freshText = fresh
+      ? `\n(FRESH SESSION for card #${card} — you are not the session that worked earlier cards and you remember none of them. Read your card first: relay_board with card:${card}.)\n`
+      : "";
     const prompt = composedTurn({
-      wakeText, ctxText, againText,
+      wakeText, ctxText, againText: againText + freshText,
       tailText: "\nAct on what's addressed to you, then end your turn.\n\n",
       rulesText: RULES, lessons,
     });
-    const ec = await runTurn(prompt, false, deliveryFails ? `${trigger} (redelivery)` : trigger);
+    const ec = await runTurn(prompt, fresh, deliveryFails ? `${trigger} (redelivery)` : trigger);
     const secs = Math.round((Date.now() - tStart) / 1000);
     if (ec) {
       deliveryFails++;
+      // #6131: a silent turn on a seat whose plan reads spent is exhaustion wearing a crash's
+      // clothes. Only that one reason is ever re-read, and only from the seat's own balance rows.
+      let reason = classify(ec);
+      if (reason === "empty-output") reason = reasonWithBalances(reason, await balanceRows());
+      savePending(pendingWake, pendingBcast);
+      await reportFailure(ec, "message", pendingWake.length, reason);
+      if (PARKING_REASONS.has(reason)) {
+        retryAt = await parkSeat(reason, pendingWake.length);
+        await notifyAssigners(assigners,
+          `⛔ your contract is PARKED on ${SESSION} (${reason}) — not retrying · asked: "${asked}"`);
+        lastTurnAt = Date.now();
+        return;
+      }
       const wait = RETRY_MS[Math.min(deliveryFails - 1, RETRY_MS.length - 1)];
       retryAt = Date.now() + wait;
-      savePending(pendingWake, pendingBcast);
-      await reportFailure(ec, "message", pendingWake.length);
       // The room hears the broadcast above; the one who is actually blocked hears it directly.
       await notifyAssigners(assigners,
-        `⚠️ your contract FAILED on ${SESSION} (exit ${ec}, ${classify(ec)}) · retrying in ${Math.round(wait / 1000)}s · asked: "${asked}"`);
+        `⚠️ your contract FAILED on ${SESSION} (exit ${ec}, ${reason}) · retrying in ${Math.round(wait / 1000)}s · asked: "${asked}"`);
       log(`\x1b[31m${pendingWake.length} message(s) still UNDELIVERED — next attempt in ${Math.round(wait / 1000)}s\x1b[0m`);
     } else {
       pendingWake = []; pendingBcast = []; deliveryFails = 0; retryAt = 0;

@@ -23,7 +23,10 @@ console.log("# trantor wake-message redelivery drill");
 // ---- mock hub: hand out ONE direct message, then stay silent forever ------------------
 const sends = [];
 let served = 0, serveMsg = true;
-const MSG = { id: 7, from: "sasha@mac", to: "", text: "ESCALATION: prod is down, look at it now", ts: Date.now() };
+// The fixture cites a card and gives an instruction ON PURPOSE: since #6134 a direct message
+// with neither batches into the next turn's context instead of waking the seat, which is
+// exactly right for an ack and exactly wrong for the escalation this drill is about.
+const MSG = { id: 7, from: "sasha@mac", to: "", text: "ESCALATION #4242: prod is down, fix it now", ts: Date.now() };
 const hub = http.createServer((req, res) => {
   let buf = ""; req.on("data", c => (buf += c));
   req.on("end", () => {
@@ -96,7 +99,7 @@ exit 0
   ok("the wake message is delivered 3 times (2 crashes + 1 success), not once",
     r.wakeTurns.length === 3, `got ${r.wakeTurns.length} wake turn(s)`);
   ok("every redelivery still carries the ORIGINAL message text",
-    r.wakeTurns.length >= 3 && r.wakeTurns.every(t => t.includes("prod is down, look at it now")));
+    r.wakeTurns.length >= 3 && r.wakeTurns.every(t => t.includes("prod is down, fix it now")));
   ok("the hub only ever handed the message out ONCE (nothing re-fired it)", served >= 2 && r.wakeTurns.length > 1);
   ok("attempt 2+ is labelled a REDELIVERY so the model doesn't redo finished work",
     r.wakeTurns.filter(t => t.includes("REDELIVERY")).length === 2,
@@ -127,11 +130,11 @@ exit 0
 {
   const r = await drill({ failTurns: 0, noMsg: true, waitMs: 6000,
     seedPending: { agent: "codex", project: "tt-redeliver", ts: Date.now(),
-      wake: [{ from: "sasha@mac", to: "codex:tt-redeliver", text: "ESCALATION: prod is down, look at it now" }], bcast: [] } });
+      wake: [{ from: "sasha@mac", to: "codex:tt-redeliver", text: "ESCALATION #4242: prod is down, fix it now" }], bcast: [] } });
   ok("a message left over from a killed runner is redelivered on the next boot",
     r.wakeTurns.length === 1, `got ${r.wakeTurns.length}`);
   ok("the restored message is the one that was owed",
-    r.wakeTurns.some(t => t.includes("prod is down, look at it now")));
+    r.wakeTurns.some(t => t.includes("prod is down, fix it now")));
   ok("and it is cleared from disk once worked", !r.pendingLeft);
 }
 

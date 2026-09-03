@@ -314,12 +314,55 @@ server.tool("relay_withdraw_proposal", "Withdraw one of THIS session's PENDING p
     return { content: [{ type: "text", text: `proposal #${id} withdrawn — one queue slot free` }] };
   });
 
+// ONE card, not the board (#6134). A seat used to be told to "query the board for related PAST
+// cards and lessons — 1900+ cards of tribal knowledge", and it did: the whole board, every turn,
+// almost all of it other people's work. This is the same intent at a thousandth of the tokens —
+// the card, what it waits on, its own notes, and the handful of done cards that actually rhyme
+// with it. Client-side on /tasks, so no hub change and it works against any hub version.
+const STOPWORDS = new Set(["the","a","an","and","or","of","to","in","on","for","with","is","it","its","that","this","not","but","by","at","as","from","into","out","up","down","when","then","than","so","no","new","one","two","every","all","any"]);
+function titleWords(title) {
+  return new Set(String(title || "").toLowerCase().match(/[a-z][a-z0-9_-]{2,}/g)?.filter(w => !STOPWORDS.has(w)) || []);
+}
+function cardView(tasks, id, proj) {
+  const card = tasks.find(t => t.id === id);
+  if (!card) return `${proj}: no card #${id}`;
+  const out = [`#${card.id} ${card.title}`,
+    `status: ${card.status}${card.assignee ? ` · @${card.assignee}` : ""}${card.difficulty ? ` · ${card.difficulty}` : ""}${card.model ? ` · ${card.model}` : ""}`];
+
+  const deps = (Array.isArray(card.deps) ? card.deps : []).map(d => {
+    const t = tasks.find(x => x.id === d);
+    return t ? `#${t.id} ${t.title} [${t.status}]` : `#${d} (not on this board)`;
+  });
+  if (deps.length) out.push(`depends on:\n  ${deps.join("\n  ")}`);
+
+  if (Array.isArray(card.checklist) && card.checklist.length) {
+    out.push(`checklist:\n  ${card.checklist.map((c, i) => `[${c.done ? "x" : " "}] ${i}. ${c.text || c}`).join("\n  ")}`);
+  }
+
+  const log = Array.isArray(card.log) ? card.log : [];
+  if (log.length) out.push(`notes (${log.length}):\n  ${log.map(e => `${e.by || "?"}: ${String(e.text || "").replace(/\s+/g, " ")}`).join("\n  ")}`);
+
+  // The prior art that is actually prior art: done cards whose title shares a real word with this
+  // one. Five, newest first — enough to catch "we already did this", short enough to stay cheap.
+  const mine = titleWords(card.title);
+  const kin = tasks
+    .filter(t => t.status === "done" && t.id !== card.id && [...titleWords(t.title)].some(w => mine.has(w)))
+    .sort((a, b) => (b.updated || b.ts || 0) - (a.updated || a.ts || 0))
+    .slice(0, 5)
+    .map(t => `#${t.id} ${t.title}${t.log?.length ? ` ·${t.log.length}` : ""}`);
+  if (kin.length) out.push(`related done cards:\n  ${kin.join("\n  ")}`);
+
+  return out.join("\n");
+}
+
 server.tool("relay_board", "Show a project's Kanban board (all cards + their status + assignee). Defaults to THIS project; pass `project` to read a crew board you orchestrate from elsewhere. Cards carrying log notes show a ·N count (the card's note-log size).",
-  { project: z.string().optional().describe("board to show (default: this session's project)") },
-  async ({ project }) => {
+  { project: z.string().optional().describe("board to show (default: this session's project)"),
+    card: z.number().optional().describe("read ONE card instead of the board: the card itself, its notes, and the last five done cards whose title shares a word with it. This is what a seat starting a card should call — the whole board is 1900+ cards of someone else's work.") },
+  async ({ project, card }) => {
   const proj = project || PROJECT;
   const { tasks } = await api("GET", `/tasks?project=${encodeURIComponent(proj)}`);
   if (!tasks.length) return { content: [{ type: "text", text: `${proj}: no cards yet` }] };
+  if (card) return { content: [{ type: "text", text: cardView(tasks, card, proj) }] };
   const by = { todo: [], doing: [], testing: [], failed: [], done: [], blocked: [] };
   for (const t of tasks) (by[t.status] || by.todo).push(`#${t.id} ${t.title}${t.assignee ? ` (@${t.assignee})` : ""}${t.log?.length ? ` ·${t.log.length}` : ""}`);
   const cols = Object.entries(by).filter(([, v]) => v.length).map(([k, v]) => `${k.toUpperCase()}:\n  ${v.join("\n  ")}`);
@@ -338,16 +381,17 @@ server.tool("relay_peers", "Find who you can talk to: the live agent sessions on
 });
 
 server.tool("relay_send", "Send a live message to another agent session (or 'all' to broadcast). Reach the other agent YOURSELF: if you are about to ask the human to pass something along, tell the session directly instead — asking a person to carry a message between two agents is a failure, not politeness. Don't know the id? relay_peers lists them, linked projects included. Cross-project sends are allowed.",
-  { to: z.string().describe("target session id, or 'all'"), text: z.string().describe("message body") },
-  async ({ to, text }) => {
+  { to: z.string().describe("target session id, or 'all'"), text: z.string().describe("message body"),
+    wake: z.boolean().optional().describe("false = context, not a contract: the message batches into the target's next turn instead of buying it a whole CLI session. Use it for acks, FYIs and queue notes; leave it unset for anything you expect worked on.") },
+  async ({ to, text, wake }) => {
     // The event log is append-only — a secret in it is unrecoverable, so refuse BEFORE
     // anything reaches the hub. Returns the offending kinds so the caller can fix it.
     const scrub = assertNoSecrets(text);
     if (!scrub.ok) {
       return { content: [{ type: "text", text: `REFUSED — not sent. Credential-shaped string(s) detected: ${scrub.kinds.join(", ")}. Remove them and resend.` }], isError: true };
     }
-    const { id } = await api("POST", "/send", { from: SESSION, to, text });
-    return { content: [{ type: "text", text: `sent #${id} to ${to}` }] };
+    const { id } = await api("POST", "/send", { from: SESSION, to, text, ...(wake === false ? { wake: false } : {}) });
+    return { content: [{ type: "text", text: `sent #${id} to ${to}${wake === false ? " (batched — no turn)" : ""}` }] };
   });
 
 server.tool("relay_status", "Set this session's one-line status on the presence board (what you're working on / idle). Cheap — other sessions read it instantly via relay_peers without messaging you.",

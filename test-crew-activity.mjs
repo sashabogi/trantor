@@ -86,7 +86,7 @@ async function drill(agent, script, opts = {}) {
 // ---- drill 2: a message-driven turn carries ITS trigger, then returns to idle -----------
 {
   const st = await drill("codex", '#!/bin/sh\necho "worked the contract"\nexit 0\n',
-    { inbox: ["do the thing"], waitMs: 5000 });
+    { inbox: ["contract: do the thing on card #4412"], waitMs: 5000 });   // cites a card: since #6134 prose alone batches
   ok("a direct-message turn registers 'working · direct message'",
      st.some((s) => s === "working · direct message"), st.join(" | "));
   ok("the seat returns to 'idle' after the wake turn", st.some((s) => s === "idle"), st.join(" | "));

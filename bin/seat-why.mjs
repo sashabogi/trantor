@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // trantor seat-why <agent> [--json] — explain why a crew seat is (not) working, straight from
 // local ~/.agent-bus evidence. No hub needed; works even when the whole fleet is down.
-import { seatWhy } from "../lib/seat-why.mjs";
+import { seatWhy, fmtSpend } from "../lib/seat-why.mjs";
 import { resolveProject } from "../lib/project.mjs";
 
 const args = process.argv.slice(2);
@@ -23,5 +23,6 @@ if (asJson) {
 } else {
   console.log(`seat ${agent}:${project} -> ${out.state}`);
   console.log(`why:    ${out.why}`);
+  console.log(`today:  ${fmtSpend(out.today)}`);
   console.log(`advice: ${out.advice}`);
 }
