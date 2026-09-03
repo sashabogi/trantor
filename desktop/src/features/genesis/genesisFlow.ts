@@ -29,6 +29,12 @@ export type GenesisEvent =
 
 export const GENESIS_IDLE: GenesisState = { status: "idle" };
 
+/** #6120 Blank path kickoff. The contract: it says the project is empty and asks what to build.
+ *  Never recap wording (that is the wake's job, PLAIN_WAKE_KICKOFF) and never review wording
+ *  (#6112, genesis.ts's genesisKickoff) — those belong to the other two entries into a project. */
+export const BLANK_KICKOFF =
+  "This project is empty, nothing is built yet. Ask the operator what to build first.";
+
 /** idle → creating → waking → done | exists | error (exists/error can also loop back to
  *  creating on retry via a fresh "submit"). Transitions from the wrong state are dropped rather
  *  than thrown — a stale async result racing a user reset must never corrupt the sheet's state. */

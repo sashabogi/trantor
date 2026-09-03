@@ -5,9 +5,14 @@ import { FileText, FolderGit2, Sparkles, X } from "lucide-react";
 import { BrandGlyph } from "../../shared/Avatar";
 import { notifyOnce } from "../../shared/notify";
 import { genesisKickoff, projectTarget, slugProjectName } from "./genesis";
-import { GENESIS_IDLE, genesisReducer, isExistsNotEmptyError, toastForTransition } from "./genesisFlow";
+import { GENESIS_IDLE, BLANK_KICKOFF, genesisReducer, isExistsNotEmptyError, toastForTransition } from "./genesisFlow";
 
 type StartMode = "empty" | "clone" | "adopt";
+/** #6120 — the operator's two entries into a project. Blank: name + directory, wake, iterative
+ *  work (kickoff says the project is empty). From a brief: a dropped or pasted PRD becomes
+ *  docs/PRD.md (via `trantor new --brief`, #6113) and the kickoff convenes the crew review
+ *  (#6112 wording, genesis.ts). A drop or a paste selects From a brief on its own. */
+type GenesisPath = "blank" | "brief";
 type ProjectNewResult = { name: string; dir: string; branch: string; hub: string; card: number | null };
 
 export function GenesisSheet({ devRoot, onClose, onMade, onCreated }: {
@@ -23,6 +28,7 @@ export function GenesisSheet({ devRoot, onClose, onMade, onCreated }: {
   const [nameInput, setNameInput] = useState("");
   const [parentOverride, setParentOverride] = useState<string | null>(null);
   const [mode, setMode] = useState<StartMode>("empty");
+  const [path, setPath] = useState<GenesisPath>("blank");
   const [gitUrl, setGitUrl] = useState("");
   const [brief, setBrief] = useState("");
   const [dropName, setDropName] = useState<string | null>(null);
@@ -49,12 +55,13 @@ export function GenesisSheet({ devRoot, onClose, onMade, onCreated }: {
       const dpr = window.devicePixelRatio || 1;
       const hit = document.elementFromPoint(event.payload.position.x / dpr, event.payload.position.y / dpr);
       if (!hit || !sheetRef.current?.contains(hit)) return;
-      const path = event.payload.paths[0];
-      void invoke<string>("genesis_read_brief", { path })
+      const dropped = event.payload.paths[0];
+      void invoke<string>("genesis_read_brief", { path: dropped })
         .then(text => {
           if (!alive) return;
+          setPath("brief");
           setBrief(text);
-          setDropName(path.split("/").pop() ?? path);
+          setDropName(dropped.split("/").pop() ?? dropped);
           setDropError(null);
         })
         .catch(reason => { if (alive) setDropError(String(reason)); });
@@ -71,12 +78,34 @@ export function GenesisSheet({ devRoot, onClose, onMade, onCreated }: {
     setNameInput(flow.name);
   }, [flow]);
 
+  // A paste anywhere on the sheet that is not one of the plain text inputs IS a brief (#6120):
+  // it selects From a brief and fills it. Only reachable while Blank is selected — From a brief
+  // has its own textarea whose onChange already owns pastes there.
+  const onSheetPaste = (event: React.ClipboardEvent<HTMLFormElement>) => {
+    if (path !== "brief" && !busy) {
+      const target = event.target as HTMLElement;
+      const text = event.clipboardData?.getData("text") ?? "";
+      if (target.tagName !== "INPUT" && text) {
+        event.preventDefault();
+        setPath("brief");
+        setBrief(text);
+        setDropName(null);
+        setDropError(null);
+      }
+    }
+  };
+
   const create = async (event: React.FormEvent) => {
     event.preventDefault();
     dispatch({ type: "submit" });
     if (!slug) { dispatch({ type: "createError", message: "Give the project a name." }); return; }
-    if (mode === "clone" && !gitUrl.trim()) { dispatch({ type: "createError", message: "Add the Git URL to clone." }); return; }
+    if (path === "blank" && mode === "clone" && !gitUrl.trim()) { dispatch({ type: "createError", message: "Add the Git URL to clone." }); return; }
     if (!parent) { dispatch({ type: "createError", message: "Give a parent directory to create the project under." }); return; }
+    // Blank means NO brief: not an empty string that trips --brief's staging, nothing written.
+    // The PRD and its kickoff wording only exist on the From-a-brief path (#6113, #6112).
+    // Snap the choice now: the wake below is detached, the sheet may already be closing.
+    const chosenPath = path;
+    const briefText = chosenPath === "brief" ? brief : "";
     setNameInput(slug);
     setDropError(null);
     try {
@@ -84,9 +113,9 @@ export function GenesisSheet({ devRoot, onClose, onMade, onCreated }: {
         args: {
           name: slug,
           target,
-          source: mode === "clone" ? gitUrl.trim() : null,
+          source: chosenPath === "blank" && mode === "clone" ? gitUrl.trim() : null,
           adopt: mode === "adopt",
-          brief,
+          brief: briefText,
         },
       });
       // SAFETY: Rust rejects non-JSON stdout, and `trantor new --json` owns this stable result shape.
@@ -103,7 +132,7 @@ export function GenesisSheet({ devRoot, onClose, onMade, onCreated }: {
       // wake failure in. A toast is the only UI a background step like this can still raise.
       void invoke<string>("project_wake", {
         project: made.name,
-        kickoff: genesisKickoff(brief, dropName),
+        kickoff: chosenPath === "brief" ? genesisKickoff(briefText, dropName) : BLANK_KICKOFF,
       }).catch(reason => {
         const message = reason instanceof Error ? reason.message : String(reason);
         const errorToast = toastForTransition(waking, { status: "error", message });
@@ -126,7 +155,7 @@ export function GenesisSheet({ devRoot, onClose, onMade, onCreated }: {
           composer's drop gate reads so a PRD dropped on the brief never becomes a chip behind
           the sheet. The sheet's own zone stays scoped by the sheetRef.contains(hit) check in
           the onDragDropEvent handler above (the Tauri channel has no event propagation). */}
-      <form ref={sheetRef} onSubmit={create} role="dialog" aria-modal="true" aria-labelledby="genesis-title"
+      <form ref={sheetRef} onSubmit={create} onPaste={onSheetPaste} role="dialog" aria-modal="true" aria-labelledby="genesis-title"
             data-modal-sheet-open="true"
             className="tr-card flex max-h-[86vh] w-[590px] max-w-[calc(100vw-48px)] flex-col overflow-hidden p-0 shadow-2xl">
         <div className="flex items-start gap-3 border-b border-[var(--color-tr-edge)] px-5 py-4">
@@ -142,7 +171,24 @@ export function GenesisSheet({ devRoot, onClose, onMade, onCreated }: {
         </div>
 
         <div className="min-h-0 overflow-y-auto px-5 py-4">
-          <label className="block text-[11px] font-semibold uppercase tracking-[0.1em] text-[var(--color-tr-muted)]">Name</label>
+          <fieldset>
+            <legend className="text-[11px] font-semibold uppercase tracking-[0.1em] text-[var(--color-tr-muted)]">Start a</legend>
+            <div className="tr-seg mt-1 grid grid-cols-2 gap-px">
+              {(["blank", "brief"] as const).map(choice => (
+                <button key={choice} type="button" aria-pressed={path === choice} data-on={path === choice}
+                        onClick={() => setPath(choice)}>
+                  {choice === "blank" ? "Blank" : "From a brief"}
+                </button>
+              ))}
+            </div>
+            <p className="mt-1.5 text-[10.5px] text-[var(--color-tr-muted)]">
+              {path === "blank"
+                ? "An empty project. Name it, wake the orchestrator, and tell it what to build."
+                : "Drop or paste a PRD. It becomes docs/PRD.md and the crew review convenes on wake."}
+            </p>
+          </fieldset>
+
+          <label className="mt-4 block text-[11px] font-semibold uppercase tracking-[0.1em] text-[var(--color-tr-muted)]">Name</label>
           <input ref={nameRef} className="tr-input mt-1 w-full" value={nameInput}
                  onChange={event => setNameInput(event.target.value)} onBlur={() => setNameInput(slug)}
                  placeholder="New Client Portal" />
@@ -161,17 +207,19 @@ export function GenesisSheet({ devRoot, onClose, onMade, onCreated }: {
             <p className="mt-1 text-[10.5px] text-[var(--color-tr-muted)]">The project folder {slug ? target : ""} is made inside this parent; the name is appended to it.</p>
           )}
 
-          <fieldset className="mt-4">
-            <legend className="text-[11px] font-semibold uppercase tracking-[0.1em] text-[var(--color-tr-muted)]">Start from</legend>
-            <div className="tr-seg mt-1 grid grid-cols-3 gap-px">
-              {(["empty", "clone", "adopt"] as const).map(choice => (
-                <button key={choice} type="button" aria-pressed={mode === choice} data-on={mode === choice}
-                        onClick={() => setMode(choice)}>
-                  {choice === "empty" ? "Empty repo" : choice === "clone" ? "Git URL" : "Existing folder"}
-                </button>
-              ))}
-            </div>
-          </fieldset>
+          {path === "blank" && (
+            <fieldset className="mt-4">
+              <legend className="text-[11px] font-semibold uppercase tracking-[0.1em] text-[var(--color-tr-muted)]">Start from</legend>
+              <div className="tr-seg mt-1 grid grid-cols-3 gap-px">
+                {(["empty", "clone", "adopt"] as const).map(choice => (
+                  <button key={choice} type="button" aria-pressed={mode === choice} data-on={mode === choice}
+                          onClick={() => setMode(choice)}>
+                    {choice === "empty" ? "Empty repo" : choice === "clone" ? "Git URL" : "Existing folder"}
+                  </button>
+                ))}
+              </div>
+            </fieldset>
+          )}
           {mode === "clone" && (
             <input className="tr-input mt-2 w-full" value={gitUrl} onChange={event => setGitUrl(event.target.value)}
                    placeholder="https://github.com/org/repo.git" aria-label="Git URL" />
@@ -187,18 +235,24 @@ export function GenesisSheet({ devRoot, onClose, onMade, onCreated }: {
             </p>
           )}
 
-          <label className="mt-4 block text-[11px] font-semibold uppercase tracking-[0.1em] text-[var(--color-tr-muted)]">Brief</label>
-          <textarea className="tr-input mt-1 min-h-32 w-full resize-y leading-relaxed" value={brief}
-                    onChange={event => { setBrief(event.target.value); setDropName(null); }}
-                    placeholder="What should this project become? Drop a PRD anywhere on this sheet to fill the brief." />
-          <p className="mt-1 flex items-center gap-1.5 text-[10.5px] text-[var(--color-tr-muted)]">
-            <FileText size={11} /> {dropName ? `Loaded ${dropName}` : "Drop a text or Markdown PRD to use its contents verbatim."}
-          </p>
+          {path === "brief" && (
+            <>
+              <label className="mt-4 block text-[11px] font-semibold uppercase tracking-[0.1em] text-[var(--color-tr-muted)]">Brief</label>
+              <textarea className="tr-input mt-1 min-h-32 w-full resize-y leading-relaxed" value={brief}
+                        onChange={event => { setBrief(event.target.value); setDropName(null); }}
+                        placeholder="What should this project become? Drop a PRD anywhere on this sheet to fill the brief." />
+              <p className="mt-1 flex items-center gap-1.5 text-[10.5px] text-[var(--color-tr-muted)]">
+                <FileText size={11} /> {dropName ? `Loaded ${dropName}` : "Drop a text or Markdown PRD to use its contents verbatim."}
+              </p>
+            </>
+          )}
 
           <div className="tr-card-ghost mt-4 flex items-center gap-2.5 px-3 py-2.5">
             <BrandGlyph name="claude" size={15} />
             <span className="min-w-0 flex-1 text-[12px]"><span className="font-medium">Claude</span><span className="text-[var(--color-tr-muted)]"> · orchestrator</span></span>
-            <span className="tr-mono text-[10px] text-[var(--color-tr-muted)]">recap → plan</span>
+            <span className="tr-mono text-[10px] text-[var(--color-tr-muted)]">
+              {path === "brief" ? "review → build" : "empty · asks what to build"}
+            </span>
           </div>
           {bannerError && <div role="alert" className="mt-3 rounded-lg bg-tr-danger/10 px-3 py-2 text-[11.5px] text-tr-danger">{bannerError}</div>}
         </div>
