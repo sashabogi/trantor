@@ -480,8 +480,15 @@ const projectDir = process.env.CLAUDE_PROJECT_DIR || process.cwd();
 const nonProjectReason = nonSeatReason(projectDir);
 const isHomeDirSession = !!nonProjectReason;
 
+// #6170: WHAT this session is, when it can know. sessionstart stamps kind "orch" on the
+// orchestrator pane, but that runs once — every MCP beat afterwards was kindless, and the hub's
+// crew exemption reads the peer row's kind, so the orchestrator kept being demoted by its own
+// heartbeat and then warned about as an intruder on its own project. Same test sessionstart uses:
+// TRANTOR_ORCH names the project this pane orchestrates.
+const KIND = process.env.TRANTOR_ORCH && process.env.TRANTOR_ORCH === PROJECT ? { kind: "orch" } : {};
+
 if (!isHomeDirSession) {
-  await api("POST", "/register", { session: SESSION, project: PROJECT, status: `active in ${PROJECT}`, hookVersion: MCP_VERSION })
+  await api("POST", "/register", { session: SESSION, project: PROJECT, status: `active in ${PROJECT}`, hookVersion: MCP_VERSION, ...KIND })
     .catch((err) => { process.stderr.write(`[trantor-mcp] initial register failed: ${err?.message || err}\n`); });
 
   // Heartbeat — keep this session's presence fresh for as long as the MCP process lives.
@@ -493,7 +500,7 @@ if (!isHomeDirSession) {
   // hub refreshes lastSeen but preserves the session's meaningful status. setInterval pauses during
   // sleep and fires on wake, so presence self-heals within one interval; .unref() lets the process
   // still exit cleanly when the agent closes the stdio transport (no phantom peers).
-  setInterval(() => { api("POST", "/register", { session: SESSION, project: PROJECT, hookVersion: MCP_VERSION }).catch(() => {}); }, HEARTBEAT_MS).unref?.();
+  setInterval(() => { api("POST", "/register", { session: SESSION, project: PROJECT, hookVersion: MCP_VERSION, ...KIND }).catch(() => {}); }, HEARTBEAT_MS).unref?.();
 } else {
   process.stderr.write(`[trantor-mcp] ${nonProjectReason} — not auto-registering on the bus (set RELAY_SESSION or RELAY_PROJECT to opt in)\n`);
 }
