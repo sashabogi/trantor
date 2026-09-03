@@ -351,19 +351,43 @@ async function drill(agent, script, opts = {}) {
 // ends the CLI's whole process group and runs ONE follow-up turn in the SAME session, so the
 // work gets committed and the card moved instead of being thrown away with the process.
 {
+  // Where the escaped grandchild records its pid, so the drill can ask the OS whether the sweep
+  // actually reached it. A zero-length check would prove nothing: the positive control is that
+  // this pid IS alive while the turn runs (asserted below) before it is asserted dead.
+  const ESCAPEEF = join(mkdtempSync(join(tmpdir(), "tt-escapee-")), "pid");
+  const escapeePid = () => { try { return Number(readFileSync(ESCAPEEF, "utf8").trim()) || 0; } catch { return 0; } };
+  const alive = (pid) => { if (!pid) return false; try { process.kill(pid, 0); return true; } catch { return false; } };
+  let sawEscapeeAlive = false;
   const { sends, home } = await drill("codex",
     // Hangs on the CONTRACT turn and nowhere else: the kickoff must not be cut (it would use up
     // the one follow-up before the drill starts), and the follow-up must be able to land — that
     // is the behaviour under test, a cut turn whose work still gets committed.
+    //
+    // The hung turn also spawns a grandchild that calls setsid, which is what codex does with its
+    // own commands: the child leaves the turn's process GROUP entirely, so a group signal cannot
+    // reach it. It stays a descendant, which is why the sweep walks `pgrep -P` instead. Perl
+    // rather than setsid(1): macOS ships /usr/bin/perl but no setsid binary.
     `#!/bin/sh
 P="$HOME/.agent-bus/turn-codex-tt-fail-codex.txt"
 if grep -q "cut at the time box" "$P"; then echo "committed and reported"; exit 0; fi
-if grep -q "NEW BUS MESSAGE" "$P"; then echo "working..."; sleep 600; fi
+if grep -q "NEW BUS MESSAGE" "$P"; then
+  echo "working..."
+  /usr/bin/perl -e 'use POSIX; POSIX::setsid(); exec("sleep", "600")' &
+  echo $! > "${ESCAPEEF}"
+  sleep 600
+fi
 echo "codex-drill: turn done"
 exit 0
 `,
     { inbox: [{ text: "contract: card #8030, build the thing" }],
-      env: { TRANTOR_TURN_MAX_MS: "2000" }, waitMs: 12000 });
+      env: { TRANTOR_TURN_MAX_MS: "2000" },
+      // Wait on EMITTED EVIDENCE, not the clock. First the positive control: hold until the
+      // grandchild has actually been SEEN alive, so "it is dead now" cannot pass because it never
+      // started. Then hold until the sweep has killed it.
+      until: () => { const pid = escapeePid(); if (pid && alive(pid)) sawEscapeeAlive = true; return sawEscapeeAlive; },
+      deadlineMs: 20000,
+      settleUntil: () => !alive(escapeePid()),
+      settleDeadlineMs: 25000 });
   const rows = (() => {
     try {
       return readFileSync(join(home, ".agent-bus", "logs", "codex-tt-fail-codex.jsonl"), "utf8")
@@ -381,6 +405,13 @@ exit 0
      !rows.some((r) => r.trigger === "time-box follow-up" && r.cut));
   ok("#6134: a cut turn is not silently reported as a clean success",
      !sends.some((m) => /✅ done/.test(m.text || "") && /8030/.test(m.text || "")) || cut.length >= 1);
+  // #6134-followup: the residual from the real-path drill. `sleep 400` spawned by codex's shell
+  // survived process.kill(-pid), because codex setsids its commands into their own group. setsid
+  // does not change the PARENT, so the sweep walks pgrep -P and reaches it.
+  ok("#6134-followup: the escaped grandchild was alive during the turn (positive control)",
+     sawEscapeeAlive);
+  ok("#6134-followup: …and a setsid grandchild does NOT survive the cut",
+     escapeePid() > 0 && !alive(escapeePid()));
 }
 
 // ---- #6134: an exhausted seat PARKS — it is not redelivered to ------------------------
@@ -388,10 +419,20 @@ exit 0
 // 60 redelivery turns on 09-02 doing nothing but being woken to fail. Now the seat says so ONCE,
 // with the reset time the CLI printed, and stops until that time or a restart.
 {
+  let parkedAt = 0;
   const { sends } = await drill("codex",
     '#!/bin/sh\necho "You\'ve hit your usage limit. Try again at Sep 3rd, 2099 3:34 AM" >&2\nexit 1\n',
     { inbox: [{ text: "contract: card #8040, build the thing" }],
-      env: { TRANTOR_RETRY_MS: "800" }, waitMs: 9000, quietDeadlineMs: 0 });
+      // #6134-followup, the #4854 lesson: this failed 1 run in 2 on a loaded machine because a
+      // fixed 9s sleep measures the LOAD, not the behaviour. Anchor on emitted evidence instead —
+      // hold until the park notice is actually on the bus, then hold a window measured from THAT
+      // moment which provably spans five missed retry slots at the 800ms ladder. The negative
+      // assertion below is then about a window the runner really had the chance to fill.
+      env: { TRANTOR_RETRY_MS: "800" }, quietDeadlineMs: 0,
+      until: (sent) => { if (!parkedAt && sent.some((m) => /PARKED/.test(m.text || ""))) parkedAt = Date.now(); return !!parkedAt; },
+      deadlineMs: 30000,
+      settleUntil: () => parkedAt > 0 && Date.now() - parkedAt > 4000,
+      settleDeadlineMs: 30000 });
   const parks = sends.filter((m) => /PARKED/.test(m.text || "") && m.to === "all");
   ok("#6134: an exhausted seat announces that it is PARKED", parks.length >= 1);
   ok("#6134: …exactly once, not once per retry", parks.length === 1, `${parks.length} park broadcasts`);
