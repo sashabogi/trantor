@@ -23,6 +23,7 @@ import { orchRestorables } from "../features/workspace/herdr";
 import { invoke } from "@tauri-apps/api/core";
 import { GenesisSheet } from "../features/genesis/GenesisSheet";
 import { PLAIN_WAKE_KICKOFF } from "../features/genesis/genesis";
+import { classifyWakeOutcome, wakeOutcomeIsTransient, wakeRowLine, WAKE_OUTCOME_MS, type WakeRowState } from "../features/genesis/wakeRow";
 
 const LOCAL_HUB = "http://127.0.0.1:4477";
 import { Home } from "../features/home/Home";
@@ -284,22 +285,41 @@ export function AppShell() {
   // of Trantor"). One call to `trantor open` via the frozen herdr bridge: it reattaches rather
   // than stacks, claims any waiting handoff with a FRESH session id, and records the pane —
   // so the click is idempotent and lands you in the Workspace lens already attached.
-  const [waking, setWaking] = useState<string | null>(null);
-  const [wakeErrors, setWakeErrors] = useState<Map<string, string>>(new Map());
+  // (#6138) Per-row wake states: only the clicked row shows the in-flight state, then the
+  // outcome (woken / kickoff sent / busy / the error) for a few seconds. Other rows keep their
+  // look — a run elsewhere never greys them. One wake at a time still holds: a second click
+  // mid-open is a re-ask, not a queue.
+  const [wakeStates, setWakeStates] = useState<Map<string, WakeRowState>>(new Map());
+  const wakingRef = useRef(false);
+  const wakeTimers = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
+  const setWakeState = (p: string, state: WakeRowState) => {
+    setWakeStates(prev => new Map(prev).set(p, state));
+  };
+  const showOutcome = (p: string, outcome: WakeRowState) => {
+    setWakeState(p, outcome);
+    if (!wakeOutcomeIsTransient(outcome)) return; // errors stay until the next click
+    wakeTimers.current.set(p, setTimeout(() => {
+      wakeTimers.current.delete(p);
+      setWakeStates(prev => { const m = new Map(prev); m.delete(p); return m; });
+    }, WAKE_OUTCOME_MS));
+  };
   const wakeProject = async (p: string) => {
-    if (waking) return; // one wake at a time — a second click mid-open is a re-ask, not a queue
-    setWaking(p);
-    setWakeErrors(prev => { const m = new Map(prev); m.delete(p); return m; });
+    if (wakingRef.current) return;
+    wakingRef.current = true;
+    const pending = wakeTimers.current.get(p);
+    if (pending) clearTimeout(pending);
+    setWakeState(p, { phase: "running" });
     try {
-      await invoke<string>("project_wake", { project: p, kickoff: PLAIN_WAKE_KICKOFF });
+      const result = await invoke<string>("project_wake", { project: p, kickoff: PLAIN_WAKE_KICKOFF });
+      showOutcome(p, classifyWakeOutcome(result, null));
       setActive(p);
       setPane({ kind: "project", lens: "workspace" });
       setRestorables(rs => rs.filter(r => r !== p));
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      setWakeErrors(prev => new Map(prev).set(p, msg));
+      showOutcome(p, classifyWakeOutcome(null, msg));
     } finally {
-      setWaking(null);
+      wakingRef.current = false;
     }
   };
 
@@ -369,8 +389,8 @@ export function AppShell() {
   const ProjectRow = ({ p }: { p: string }) => {
     const act = activity.get(p);
     const on = p === active && pane.kind === "project";
-    const isWaking = waking === p;
-    const wakeError = wakeErrors.get(p);
+    const isWaking = wakeStates.get(p)?.phase === "running";
+    const wakeLine = wakeRowLine(wakeStates.get(p));
     const open = () => { setActive(p); setPane(cur => ({ kind: "project", lens: cur.kind === "project" ? cur.lens : "board" })); };
     // #5610 v1 — the happening-now line: a BUSY row says what is true beneath its name
     // ("mid-turn · 8s ago · fable"), from data the activity pull already holds. An open-idle
@@ -402,17 +422,21 @@ export function AppShell() {
           {statusLine && (
             <span className="tr-mono block truncate text-[10px] font-normal text-[var(--color-tr-muted)]">{statusLine}</span>
           )}
-          {wakeError && !isWaking && (
-            <span title={wakeError} className="block truncate text-[10px] font-normal text-tr-danger">
-              wake failed — click Wake to retry
+          {wakeLine && !isWaking && (
+            <span title={wakeLine.title}
+                  className={`block truncate text-[10px] font-normal ${
+                    wakeLine.tone === "ok" ? "text-tr-ok" : wakeLine.tone === "danger" ? "text-tr-danger" : "text-[var(--color-tr-muted)]"
+                  }`}>
+              {wakeLine.text}
             </span>
           )}
         </span>
-        {/* Every project has the same Wake affordance. Rust owns the process-truth guard and names
-            the live orchestrator pane when waking would stack a second one. */}
+        {/* Every project has the same Wake affordance, and a wake elsewhere never touches this
+            row's (#6138). Rust owns the process truth: an idle pane gets the kickoff, a working
+            pane answers busy with its pane id, an agent-less pane reopens. */}
         <button type="button"
           onClick={e => { e.stopPropagation(); void wakeProject(p); }}
-          disabled={waking !== null && !isWaking}
+          disabled={isWaking}
           title="host this project's session as a pane and recap from memory and the board"
           className={`shrink-0 rounded-[6px] bg-tr-ok/10 px-1.5 py-0.5 text-[10.5px] font-semibold text-tr-ok hover:bg-tr-ok/20 disabled:opacity-40
             ${isWaking ? "opacity-100" : "opacity-0 focus:opacity-100 group-hover:opacity-100 group-focus-within:opacity-100"}`}>
@@ -465,9 +489,9 @@ export function AppShell() {
                 </span>
                 <button type="button"
                   onClick={() => void wakeProject(p)}
-                  disabled={waking !== null}
+                  disabled={wakeStates.get(p)?.phase === "running"}
                   className="shrink-0 rounded-[6px] bg-tr-ok/10 px-1.5 py-0.5 text-[10.5px] font-semibold text-tr-ok hover:bg-tr-ok/20 disabled:opacity-40">
-                  {waking === p ? "Resuming…" : "Resume"}
+                  {wakeStates.get(p)?.phase === "running" ? "Resuming…" : "Resume"}
                 </button>
                 <button type="button" title="dismiss — it stays wakeable from its project row"
                   onClick={() => setRestorables(rs => rs.filter(r => r !== p))}
