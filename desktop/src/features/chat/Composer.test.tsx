@@ -9,6 +9,7 @@
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { InvokeArgs } from "@tauri-apps/api/core";
 import { Composer, composerTakesDrop } from "./Composer";
 import { clampComposerPx, maxComposerPx, minComposerPx } from "./composerHeight";
 import { LOST_AFTER_MS } from "./streaming";
@@ -194,12 +195,13 @@ describe("composerTakesDrop (#6147)", () => {
 // pending within its grace window can never look lost and so never drills the bug.
 describe("a pending send keeps its own project and pane (#6250)", () => {
   // The recorded IPC surface — pane_send's target is the assertion the whole card hangs on.
-  const sent: Array<{ cmd: string; args: Record<string, unknown> }> = [];
+  // The args ride tauri's own InvokeArgs, the real seam's type, never a raw unknown dictionary.
+  const sent: Array<{ cmd: string; args: InvokeArgs }> = [];
   const paneSends = () => sent.filter(s => s.cmd === "pane_send");
   const installIpc = () => {
     sent.length = 0;
     w.__TAURI_INTERNALS__ = {
-      invoke: (cmd: string, args?: Record<string, unknown>) => {
+      invoke: (cmd: string, args?: InvokeArgs) => {
         sent.push({ cmd, args: args ?? {} });
         return Promise.resolve("{}");
       },
@@ -267,17 +269,16 @@ describe("a pending send keeps its own project and pane (#6250)", () => {
     expect(paneSends()).toEqual([{ cmd: "pane_send", args: { target: "pane-alpha", text: "where are the drills" } }]);
     expect(host.textContent).toContain("delivering");
 
-    // The switch, then the clock past the lost window, then B's turn boundary (working flips
-    // true → false). The old code judged the alpha pending against B's empty transcript here
-    // and re-sent it into pane-beta.
+    // The old code judged the alpha pending against B's empty transcript here and re-sent it
+    // into pane-beta; the full-shape match proves exactly one send exists and its target is
+    // still A's pane.
     vi.setSystemTime(LOST_AFTER_MS + 1_000);
     view("beta", "pane-beta", []);
     view("beta", "pane-beta", [], true);
     view("beta", "pane-beta", [], false);
     await act(async () => {});
 
-    expect(paneSends()).toHaveLength(1); // nothing new, least of all to B's pane
-    expect(paneSends().every(s => s.args.target === "pane-alpha")).toBe(true);
+    expect(paneSends()).toEqual([{ cmd: "pane_send", args: { target: "pane-alpha", text: "where are the drills" } }]);
     expect(host.textContent).not.toContain("not delivered");
     expect(host.textContent).not.toContain("delivering"); // foreign pendings don't render in B
 

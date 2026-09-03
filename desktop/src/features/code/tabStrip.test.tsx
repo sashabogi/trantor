@@ -53,12 +53,18 @@ describe("stripLabelsNeed", () => {
       Object.defineProperty(b, "getBoundingClientRect", { value: () => ({ width: w }), configurable: true });
       strip.appendChild(b);
     }
-    // happy-dom resolves no cascade, so the computed truth is stubbed the way the real browser
-    // reports it — gap 2px, padding 3px/5px on the strip (the .tr-seg values in styles.css).
+    // happy-dom resolves no cascade, and its COMPUTED declaration is read-only, so the drill
+    // answers with an inline declaration — the same real CSSStyleDeclaration class — carrying
+    // exactly the three properties stripLabelsNeed reads, set to the .tr-seg values in
+    // styles.css (gap 2px, padding 3px/5px). The precise type is kept, never a laundered literal.
     const real = window.getComputedStyle.bind(window);
     const spy = vi.spyOn(window, "getComputedStyle").mockImplementation(el => {
       if (el === strip) {
-        return { columnGap: "2px", paddingLeft: "3px", paddingRight: "5px" } as unknown as CSSStyleDeclaration;
+        const style = document.createElement("div").style;
+        style.columnGap = "2px";
+        style.paddingLeft = "3px";
+        style.paddingRight = "5px";
+        return style;
       }
       return real(el);
     });
