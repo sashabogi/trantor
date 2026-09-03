@@ -6,8 +6,8 @@
 // It makes the project directory at <parent>/<name> — --dir names the PARENT, never the project
 // directory itself (default parent: TRANTOR_DEV_ROOT or ~/development). The name is always
 // appended under it, so `--dir P` with name N creates P/N. Starts git on main (or clones --from,
-// or adopts an existing folder with --adopt), seeds CLAUDE.md from the
-// brief (verbatim brief + the trantor conventions block), installs the same auto-card hook as
+// or adopts an existing folder with --adopt), stores the brief in docs/PRD.md and seeds a small
+// CLAUDE.md pointer plus the trantor conventions block, installs the same auto-card hook as
 // `trantor init-hooks`, posts the brief as the hub project brief (POST /project — the same call
 // relay_project_brief makes), and opens the first card "genesis: <name>" on the new board.
 //
@@ -17,7 +17,7 @@
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync, appendFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, isAbsolute, join, resolve } from "node:path";
+import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { ensureEnrolled as enrollTofu, loadIdentity, signedPost } from "../hooks/lib/api.mjs";
 import { ensureEnrolled as enrollViaOwnerInvite } from "../lib/enroll.mjs";
@@ -28,7 +28,7 @@ const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 
 // The trantor conventions block — what every trantor-wired project's CLAUDE.md carries so the
 // first session knows the board, the crew, and the gates exist. Kept SHORT and factual; the
-// brief above it is the project's own voice.
+// project brief stays in docs/PRD.md so a large PRD cannot exceed the harness instruction limit.
 const CONVENTIONS = [
   "",
   "## Trantor conventions",
@@ -94,13 +94,22 @@ if (from) {
   branch = git(["branch", "--show-current"]).stdout.trim() || "main";
 }
 
-// ── CLAUDE.md — verbatim brief + the conventions block ──────────────────────────────────────────
+// ── durable brief + small CLAUDE.md pointer ─────────────────────────────────────────────────────
+const docs = join(dir, "docs");
+mkdirSync(docs, { recursive: true });
+const prd = join(docs, "PRD.md");
+const prdBody = brief
+  ? `${brief}\n`
+  : `# ${name}\n\n(Genesis — no brief was given. Add this project's what/why/goal here.)\n`;
+writeFileSync(prd, prdBody);
+
 const claude = join(dir, "CLAUDE.md");
 if (existsSync(claude)) {
   const current = readFileSync(claude, "utf8");
   if (!current.includes("## Trantor conventions")) appendFileSync(claude, `\n${CONVENTIONS}\n`);
 } else {
-  const head = brief ? `${brief}\n` : `# ${name}\n\n(Genesis — no brief was given. Add this project's what/why/goal here.)\n`;
+  const importedFrom = briefFile ? ` (imported from \`${basename(briefFile)}\`)` : "";
+  const head = `# ${name}\n\nThe project brief is stored at \`docs/PRD.md\`${importedFrom}. Read and maintain it there.\n`;
   writeFileSync(claude, `${head}${CONVENTIONS}`);
 }
 
@@ -161,7 +170,7 @@ if (json) {
   console.log(JSON.stringify({ name, parent: devRoot, dir, branch, hub, card }));
 } else {
   console.log(`✓ ${dir} (${branch}${from ? ", cloned" : adopt ? ", adopted" : ""})`);
-  console.log(`✓ CLAUDE.md seeded${brief ? " from the brief" : " (no brief — add the project's what/why/goal)"}`);
+  console.log(`✓ docs/PRD.md seeded${brief ? " from the brief" : " (no brief — add the project's what/why/goal)"}; CLAUDE.md kept small`);
   console.log(`✓ auto-card hook installed (trantor init-hooks)`);
   if (card !== null) console.log(`✓ hub ${hub}: brief posted, card #${card} ("genesis: ${name}")`);
   else if (hubError) console.log(`! hub ${hub}: brief/card not posted (${hubError})`);
