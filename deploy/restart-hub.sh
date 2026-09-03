@@ -12,7 +12,14 @@ if [ "$#" -ne 0 ]; then
   exit 2
 fi
 
-HUB_URL="${RELAY_HUB_URL:-http://127.0.0.1:4477}"
+# The hub binds RELAY_HOST (the tailnet IP on netcup, where 127.0.0.1 refuses), so the guard reads the
+# same env the service does; RELAY_HUB_URL still overrides.
+ENV_FILE="${RELAY_ENV_FILE:-$(dirname "$0")/hub.env}"
+if [ -f "$ENV_FILE" ]; then
+  # shellcheck disable=SC1090
+  set -a; . "$ENV_FILE"; set +a
+fi
+HUB_URL="${RELAY_HUB_URL:-http://${RELAY_HOST:-127.0.0.1}:${RELAY_PORT:-4477}}"
 HEALTH=""
 if HEALTH="$(curl --fail --silent --show-error --max-time 5 "$HUB_URL/health")"; then
   REFUSAL="$(node --input-type=module -e '
