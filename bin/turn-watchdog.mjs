@@ -60,35 +60,33 @@ const runnerAlive = () => {
 };
 
 // One observation of every liveness channel: stderr growth, transcript mtime, worktree mtime.
-const probe = () => ({
-  err: errSize(),
-  tr: transcriptDir ? newestMtime(transcriptDir) : 0,
-  wk: workDir ? newestMtime(workDir) : 0,
-});
-const ago = (t) => (t ? `${Math.max(1, Math.round((Date.now() - t) / 60000))}m ago` : "never");
+const ago = (t) => (t > 0 ? `${Math.max(1, Math.round((Date.now() - t) / 60000))}m ago` : "never");
 const describeLast = (b) => {
   const parts = [];
   if (b.wk) parts.push(`worktree ${ago(b.wk)}`);
   if (b.tr) parts.push(`transcript ${ago(b.tr)}`);
-  parts.push(b.err > 0 ? `stderr ${b.err}B` : "stderr silent");
-  return parts.join(", ");
+  return parts.length ? parts.join(", ") : "nothing";
 };
-let base = probe();
+let baseErr = errSize();
+const armedAt = armed.startedAt || Date.now();
+const SLACK = 2000;   // timestamp granularity + scheduler drift under load
 
 for (;;) {
   await sleep(windowMs);
   const s = readStamp();
   if (!s || s.turn !== armed.turn || (armed.runner && s.runner !== armed.runner)) process.exit(0); // turn ended, or a NEWER runner owns the stamp now
   if (!runnerAlive()) process.exit(0);                       // our runner is gone — never speak for it
-  const now = probe();
-  // 300ms slack on mtimes absorbs filesystem timestamp granularity (well under any real
-  // activity gap — claude appends continuously); stderr keeps its old 200B slack.
-  if (now.err > base.err + 200 || now.tr > base.tr + 300 || now.wk > base.wk + 300) {
-    base = now; continue;                                    // producing work: alive, re-arm
-  }
-  const mins = Math.round((Date.now() - (s.startedAt || Date.now())) / 60000);
+  // Activity that counts: anything changed DURING the turn (after arm) and within the window —
+  // the checklist semantics verbatim: "no new activity for the window". Pre-turn files never
+  // count (they predate arm), and absolute freshness cannot drift the way a probe-to-probe
+  // delta does when the seat writes coarsely or the machine loads (the +1130ms false alarm).
+  const freshCut = Math.max(armedAt, Date.now() - windowMs - SLACK);
+  const tr = transcriptDir ? newestMtime(transcriptDir) : 0;
+  const wk = workDir ? newestMtime(workDir) : 0;
+  if (errSize() > baseErr + 200 || tr > freshCut || wk > freshCut) continue;   // producing work: alive, re-arm
+  const mins = Math.round((Date.now() - armedAt) / 60000);
   const orch = `${hostId()}:${project}`;
-  const text = `⏱ ${session} turn STALLED — running ${mins}m with no activity (turn ${s.turn}; last seen: ${describeLast(base)}). Not killed; check its pane, or \`trantor swap\`.`;
+  const text = `⏱ ${session} turn STALLED — running ${mins}m with no activity (turn ${s.turn}; last seen: ${describeLast({ tr, wk })}, stderr ${baseErr > 0 ? `${baseErr}B` : "silent"}). Not killed; check its pane, or \`trantor swap\`.`;
   // Direct = wake. The foreman first; if this seat IS the foreman's own runner, say it to all.
   const to = orch === session ? "all" : orch;
   try { await signedPost(`${hub}/send`, { from: session, to, text, project }, { session }); } catch {}
