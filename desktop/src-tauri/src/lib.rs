@@ -3381,8 +3381,88 @@ const HANDOFF_REASONS: &[&str] = &["clicked", "countdown", "unattended"];
 const KICKOFF_PROMPT: &str =
     "You have just taken over via handoff. Recap now per your instructions.";
 
+/// The pane-level warning while a handoff chain runs (#6081). The 21:46 drill: write-only
+/// stamped 21:46:01 and the pane stayed typeable the whole chain — the operator typed at :07,
+/// the doomed session ran tool calls until the kill landed at :50, and its answer never
+/// existed. The chain now marks its project from the first step to the last, and the Workspace
+/// pane tab reads the mark, so the session visibly goes away before anyone types into it.
+const HANDOFF_PROGRESS_EVENT: &str = "handoff-progress";
+
+#[derive(Serialize, Clone)]
+struct HandoffProgress {
+    project: String,
+    active: bool,
+}
+
+/// Which projects have a handoff chain in flight right now. Two projects can hand off at once;
+/// the frontend busy-gates its click per project, so one project never runs two chains. Queried
+/// on lens mount as well — an event alone would race a lens switch mid-chain.
+#[derive(Default)]
+struct HandoffChains(std::sync::Mutex<Vec<String>>);
+
+/// Emits the marker active on begin and inactive on drop, so EVERY exit path — early error
+/// returns included — unmarks the pane. Drop also runs on unwind, so a panic inside the chain
+/// cannot strand the "handing off" label.
+struct HandoffChainGuard {
+    app: tauri::AppHandle,
+    project: String,
+}
+
+impl HandoffChainGuard {
+    fn begin(app: tauri::AppHandle, project: &str) -> Self {
+        use tauri::{Emitter, Manager};
+        {
+            let chains = app.state::<HandoffChains>();
+            let mut v = chains.0.lock().unwrap();
+            if !v.iter().any(|p| p == project) {
+                v.push(project.to_string());
+            }
+        }
+        let _ = app.emit(
+            HANDOFF_PROGRESS_EVENT,
+            HandoffProgress {
+                project: project.to_string(),
+                active: true,
+            },
+        );
+        Self {
+            app,
+            project: project.to_string(),
+        }
+    }
+}
+
+impl Drop for HandoffChainGuard {
+    fn drop(&mut self) {
+        use tauri::{Emitter, Manager};
+        {
+            let chains = self.app.state::<HandoffChains>();
+            let mut v = chains.0.lock().unwrap();
+            v.retain(|p| p != &self.project);
+        }
+        let _ = self.app.emit(
+            HANDOFF_PROGRESS_EVENT,
+            HandoffProgress {
+                project: self.project.clone(),
+                active: false,
+            },
+        );
+    }
+}
+
+/// The projects whose handoff chain is in flight right now (#6081) — the mount-time truth for
+/// the pane label; the event stream keeps it current afterwards.
 #[tauri::command]
-async fn handoff_now(project: String, reason: Option<String>) -> Result<String, String> {
+fn handoff_in_progress(chains: tauri::State<'_, HandoffChains>) -> Vec<String> {
+    chains.0.lock().unwrap().clone()
+}
+
+#[tauri::command]
+async fn handoff_now(
+    app: tauri::AppHandle,
+    project: String,
+    reason: Option<String>,
+) -> Result<String, String> {
     let project = project.trim().to_string();
     if project.is_empty() {
         return Err("project is required".into());
@@ -3395,6 +3475,10 @@ async fn handoff_now(project: String, reason: Option<String>) -> Result<String, 
         ));
     }
     let dir = project_dir(&project).ok_or_else(|| format!("no local checkout for {project}"))?;
+
+    // Mark the pane for the whole chain — summarize (~50s), idle gate, kill, reopen, kickoff —
+    // so the Workspace tab says the session is doomed before anyone types into it (#6081).
+    let _chain = HandoffChainGuard::begin(app, &project);
 
     let mut handoff = tokio::process::Command::new("trantor");
     handoff
@@ -3412,6 +3496,28 @@ async fn handoff_now(project: String, reason: Option<String>) -> Result<String, 
         std::fs::read_to_string(desktop_bus_dir().join("crew-windows.txt")).unwrap_or_default();
     let pane = orch_pane_from_rows(&rows, &project)
         .ok_or_else(|| format!("no orchestrator pane recorded for {project}"))?;
+
+    // THE IDLE GATE BEFORE THE KILL (#6081): the 21:46 drill ended a predecessor mid-turn —
+    // handoff stamped at :01, the operator's :07 prompt started a turn, tool calls ran at
+    // :17/:39/:42, and the kill landed at :50. baton-pane.mjs has always waited for the turn
+    // boundary before ending the session; the app chain only mirrored its post-reopen step.
+    // Same shape as the kickoff's idle wait below: poll on KICKOFF_CADENCE, bounded by
+    // HANDOFF_IDLE_DEADLINE. A deadline pass still ends the session — the chain must stay
+    // bounded — and the returned label names which side of the gate the kill happened on.
+    let gate_started = Instant::now();
+    let gate_outcome = loop {
+        let status = {
+            let pane = pane.clone();
+            tokio::task::spawn_blocking(move || herdr::agent_status(&pane))
+                .await
+                .unwrap_or(None)
+        };
+        match idle_gate_step(status.as_deref(), gate_started.elapsed(), HANDOFF_IDLE_DEADLINE) {
+            IdleGateStep::Pass(outcome) => break outcome,
+            IdleGateStep::Wait => tokio::time::sleep(KICKOFF_CADENCE).await,
+        }
+    };
+    let gate_secs = gate_started.elapsed().as_secs();
 
     let mut info = tokio::process::Command::new("herdr");
     info.args(["pane", "process-info", "--pane", &pane])
@@ -3489,7 +3595,7 @@ async fn handoff_now(project: String, reason: Option<String>) -> Result<String, 
 
     let elapsed = kickoff_started.elapsed().as_secs();
     match last {
-        Some(Ok(outcome)) => Ok(kickoff_label(&outcome, attempts, elapsed)),
+        Some(Ok(outcome)) => Ok(handoff_label(&gate_outcome, gate_secs, &outcome, attempts, elapsed)),
         Some(Err(e)) => Err(format!(
             "handoff chain done, but the kickoff prompt failed after {attempts} attempt(s), {elapsed}s (successor may sit idle): {e}"
         )),
@@ -3501,6 +3607,61 @@ async fn handoff_now(project: String, reason: Option<String>) -> Result<String, 
 /// at 90s per phase (idle gate, then the prompt ladder).
 const KICKOFF_CADENCE: Duration = Duration::from_secs(3);
 const KICKOFF_DEADLINE: Duration = Duration::from_secs(90);
+
+/// The budget for the PRE-kill idle gate (#6081). The baton-pane helper waits up to 600s
+/// detached; here an operator is watching the chain, and a typical turn finishes inside two
+/// minutes — so the gate polls on the kickoff cadence with its own bounded deadline, then the
+/// chain proceeds and reports the outcome honestly instead of hanging.
+const HANDOFF_IDLE_DEADLINE: Duration = Duration::from_secs(120);
+
+/// What the idle gate saw before the kill (#6081). Idle = the predecessor reached a turn
+/// boundary; Deadline = the budget ran out mid-turn and the chain ended it anyway.
+#[derive(Debug, PartialEq, Eq)]
+enum IdleGateOutcome {
+    Idle,
+    Deadline,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum IdleGateStep {
+    Wait,
+    Pass(IdleGateOutcome),
+}
+
+/// One polling step of the pre-kill idle gate (#6081), pure so the ladder drills without a
+/// herdr socket. Only an in-flight turn holds the gate — "working" (and "busy", the same pair
+/// the Workspace tab reads as a live turn); every other state, including no agent at all,
+/// means nothing live gets ended. baton-pane.mjs gates on the same rule. Once the budget
+/// passes, the gate lets the chain proceed and the outcome says so — a handoff that never
+/// finishes is worse than one that reports it ended a turn short.
+fn idle_gate_step(
+    status: Option<&str>,
+    elapsed: Duration,
+    deadline: Duration,
+) -> IdleGateStep {
+    match status {
+        Some("working") | Some("busy") => {
+            if elapsed >= deadline {
+                IdleGateStep::Pass(IdleGateOutcome::Deadline)
+            } else {
+                IdleGateStep::Wait
+            }
+        }
+        _ => IdleGateStep::Pass(IdleGateOutcome::Idle),
+    }
+}
+
+/// The gate segment of the handoff's returned line — which side of the boundary the kill
+/// happened on, and how long the wait was (#6081 checklist: the outcome rides next to the
+/// kickoff's, never buried).
+fn idle_gate_label(outcome: &IdleGateOutcome, elapsed_secs: u64) -> String {
+    match outcome {
+        IdleGateOutcome::Idle => format!("idle gate passed in {elapsed_secs}s"),
+        IdleGateOutcome::Deadline => {
+            format!("idle gate deadline after {elapsed_secs}s — ended mid-turn")
+        }
+    }
+}
 
 /// The retry decision for one boot-prompt attempt, pure so the ladder drills without a herdr
 /// socket (#6184). Delivered and Blocked stop — blocked means a human must answer a dialog in
@@ -3551,6 +3712,22 @@ fn kickoff_label(outcome: &herdr::PromptOutcome, attempts: u32, elapsed_secs: u6
     format!(
         "handoff written · session ended · pane reopened · kickoff: {} · {attempts} attempt(s), {elapsed_secs}s",
         kickoff_outcome_label(outcome)
+    )
+}
+
+/// #6081: the line handoff_now returns — the pre-kill idle gate's outcome riding NEXT TO the
+/// kickoff line (#6184), so one read says how the kill happened and how the boot prompt landed.
+fn handoff_label(
+    gate: &IdleGateOutcome,
+    gate_secs: u64,
+    outcome: &herdr::PromptOutcome,
+    attempts: u32,
+    elapsed_secs: u64,
+) -> String {
+    format!(
+        "{} · {}",
+        idle_gate_label(gate, gate_secs),
+        kickoff_label(outcome, attempts, elapsed_secs)
     )
 }
 
@@ -4979,6 +5156,7 @@ pub fn run() {
     }));
     tauri::Builder::default()
         .manage(terminal::TerminalManager::default())
+        .manage(HandoffChains::default())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_notification::init())
         .setup(|app| {
@@ -5049,6 +5227,7 @@ pub fn run() {
             genesis::project_new,
             genesis::project_wake,
             handoff_now,
+            handoff_in_progress,
             takeover_now,
             orch_restorables,
             save_pasted_image,
@@ -6372,6 +6551,67 @@ mod succession_tests {
         assert!(label.contains("prompt delivered"), "{label}");
         assert!(label.contains("3 attempt(s)"), "{label}");
         assert!(label.contains("12s"), "{label}");
+    }
+
+    // #6081 — the pre-kill idle gate holds ONLY for an in-flight turn. Every other state —
+    // idle, blocked at a dialog, done, unknown, no agent at all — passes at once: nothing live
+    // gets ended, and a dead pane must not stall the chain.
+    #[test]
+    fn idle_gate_waits_only_on_in_flight_turns() {
+        let budget = Duration::from_secs(120);
+        let at = Duration::from_secs(5);
+        assert_eq!(idle_gate_step(Some("working"), at, budget), IdleGateStep::Wait);
+        assert_eq!(idle_gate_step(Some("busy"), at, budget), IdleGateStep::Wait);
+        for status in [Some("idle"), Some("blocked"), Some("done"), Some("unknown"), None] {
+            assert_eq!(
+                idle_gate_step(status, at, budget),
+                IdleGateStep::Pass(IdleGateOutcome::Idle),
+                "status {status:?} must pass the gate"
+            );
+        }
+    }
+
+    // #6081 — the gate is BOUNDED: a turn still running when the budget passes lets the chain
+    // proceed, and the outcome says so. A status that passes beats the clock even at the wall.
+    #[test]
+    fn idle_gate_deadline_ends_the_wait_mid_turn() {
+        let budget = Duration::from_secs(120);
+        assert_eq!(
+            idle_gate_step(Some("working"), budget, budget),
+            IdleGateStep::Pass(IdleGateOutcome::Deadline)
+        );
+        assert_eq!(
+            idle_gate_step(Some("working"), budget + Duration::from_secs(30), budget),
+            IdleGateStep::Pass(IdleGateOutcome::Deadline)
+        );
+        assert_eq!(
+            idle_gate_step(Some("idle"), budget, budget),
+            IdleGateStep::Pass(IdleGateOutcome::Idle)
+        );
+    }
+
+    // #6081 — both gate outcomes carry a label, and the deadline one names the honest residual.
+    #[test]
+    fn idle_gate_labels_name_both_outcomes() {
+        let passed = idle_gate_label(&IdleGateOutcome::Idle, 4);
+        assert!(passed.contains("passed"), "{passed}");
+        assert!(passed.contains("4s"), "{passed}");
+        let late = idle_gate_label(&IdleGateOutcome::Deadline, 120);
+        assert!(late.contains("deadline"), "{late}");
+        assert!(late.contains("mid-turn"), "{late}");
+    }
+
+    // #6081 — the returned line carries the gate outcome NEXT TO the kickoff's: one read says
+    // how the kill happened and how the boot prompt landed.
+    #[test]
+    fn handoff_label_carries_gate_and_kickoff() {
+        use herdr::PromptOutcome as O;
+        let label = handoff_label(&IdleGateOutcome::Idle, 4, &O::Delivered, 1, 6);
+        assert!(label.contains("idle gate passed in 4s"), "{label}");
+        assert!(label.contains("prompt delivered"), "{label}");
+        let forced = handoff_label(&IdleGateOutcome::Deadline, 120, &O::NotReady, 30, 90);
+        assert!(forced.contains("idle gate deadline after 120s"), "{forced}");
+        assert!(forced.contains("still starting"), "{forced}");
     }
 
     // #5401 — the restore detector's pure half. The reboot shape: orch rows survive in

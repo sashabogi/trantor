@@ -12,6 +12,8 @@ import { SeatTab } from "./SeatTab";
 import { BrandGlyph } from "../../shared/Avatar";
 import { PaneBoundary } from "./PaneBoundary";
 import { paneTargets, seatName, isAgentPeer, type PaneTarget } from "./paneTargets";
+import { handoffInProgress, HANDOFF_PROGRESS_EVENT, type HandoffProgress } from "./handoffProgress";
+import { listen } from "@tauri-apps/api/event";
 import { newestTerminal, projectSessions, takeoverAction, type ProjectSessions } from "../chat/takeover";
 import { TakeoverStrip } from "../chat/TakeoverStrip";
 import { when } from "../../shared/time";
@@ -131,8 +133,21 @@ export function Workspace({ client, project, lens, onLens }: {
     return () => { alive = false; clearInterval(iv); };
   }, [project]);
 
+  // #6081: while a handoff chain runs, the orchestrator tab reads "handing off" — the session
+  // is doomed and typing into it loses the input (the 21:46 drill). The mount-time query covers
+  // a lens switch mid-chain; the event keeps it live afterwards.
+  const [handingOff, setHandingOff] = useState(false);
+  useEffect(() => {
+    let alive = true;
+    handoffInProgress().then(ps => { if (alive) setHandingOff(ps.includes(project)); }).catch(() => {});
+    const un = listen<HandoffProgress>(HANDOFF_PROGRESS_EVENT, e => {
+      if (alive && e.payload.project === project) setHandingOff(e.payload.active);
+    });
+    return () => { alive = false; void un.then(f => f()); };
+  }, [project]);
+
   // The row as data lives in paneTargets.ts: pane name (terminal key) and brand are two fields.
-  const targets = useMemo<PaneTarget[]>(() => paneTargets(seats, orch, host, project), [seats, orch, host, project]);
+  const targets = useMemo<PaneTarget[]>(() => paneTargets(seats, orch, host, project, handingOff), [seats, orch, host, project, handingOff]);
 
   const selected = targets.find(t => t.key === sel) ?? targets[0];
   const inFlight = useMemo(

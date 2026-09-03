@@ -34,7 +34,7 @@ export const isAgentPeer = (p: Peer): boolean => {
   return kind === "" || kind === "agent";
 };
 
-export function paneTargets(seats: Peer[], orch: HerdrSeat | null, host: Peer | undefined, project: string): PaneTarget[] {
+export function paneTargets(seats: Peer[], orch: HerdrSeat | null, host: Peer | undefined, project: string, handingOff = false): PaneTarget[] {
   const rows: PaneTarget[] = seats.map(s => ({
     key: s.session,
     label: seatName(s.session),
@@ -50,7 +50,10 @@ export function paneTargets(seats: Peer[], orch: HerdrSeat | null, host: Peer | 
   // Leads the row: it is the session the person actually drives, not a worker to supervise.
   return [{
     key: "__orchestrator__",
-    label: "orchestrator",
+    // #6081: while a handoff chain runs (idle gate -> kill -> reopen -> kickoff), the label
+    // says the session is doomed, so nobody types into it like the 21:46 drill did. The seat
+    // rows are untouched — a handoff only ends the orchestrator.
+    label: handingOff ? "handing off" : "orchestrator",
     agent: orch.agent,
     brand: host?.session ?? orch.agent,
     session: host?.session ?? `${project} orchestrator`,

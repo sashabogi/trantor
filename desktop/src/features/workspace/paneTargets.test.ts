@@ -46,4 +46,24 @@ describe("paneTargets", () => {
     expect(rows).toHaveLength(2);
     expect(rows.map(r => r.agent)).toEqual(["glm", "qwen"]);
   });
+
+  it("#6081: while a handoff chain runs the orchestrator tab reads 'handing off'; seats are untouched", () => {
+    const rows = paneTargets([codex], orch, host, "trantor", true);
+    const [lead, seat] = rows;
+    expect(lead.isOrchestrator).toBe(true);
+    expect(lead.label).toBe("handing off");
+    // the terminal lookup key and the identity NEVER change mid-chain — only the label does
+    expect(lead.agent).toBe("orchestrator");
+    expect(lead.brand).toBe("MacBook-Pro-M1:trantor");
+    expect(lead.key).toBe("__orchestrator__");
+    expect(seat.isOrchestrator).toBe(false);
+    expect(seat.label).toBe("codex");
+  });
+
+  it("#6081: no chain means the orchestrator tab keeps its own name", () => {
+    const [lead] = paneTargets([codex], orch, host, "trantor", false);
+    expect(lead.label).toBe("orchestrator");
+    const [leadDefault] = paneTargets([codex], orch, host, "trantor");
+    expect(leadDefault.label).toBe("orchestrator");
+  });
 });
