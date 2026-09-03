@@ -1630,6 +1630,24 @@ struct OrchStatusPayload {
 /// when herdr drops the stream — documented behavior across server replacement.
 fn spawn_status_watcher(window: tauri::Window, project: String, stop: Arc<AtomicBool>) {
     use tauri::Emitter;
+    // #5993 regression (traced on card #5993, 2026-09-03): this watcher used to call
+    // `window.emit()` directly from this raw `std::thread::spawn` thread. Rust's own log showed
+    // it succeeding — `status: emit ... ok=true` — but the frontend's "orch-status" listener
+    // never once fired: 0 of 225 chat-status commits logged across 7 projects over 23h were
+    // source=push. spawn_chat_watcher (chat-rows/chat-session-changed), whose events DO reach
+    // the frontend, emits from `tauri::async_runtime::spawn` instead of a raw OS thread — that
+    // was the only structural difference. This thread now sends the payload over a channel to
+    // an async task that owns the actual `window.emit()` call, matching the working pattern.
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<OrchStatusPayload>();
+    tauri::async_runtime::spawn(async move {
+        while let Some(payload) = rx.recv().await {
+            let ok = window.emit("orch-status", payload.clone()).is_ok();
+            trace(format!(
+                "status: emit pane={} st={} ok={ok}",
+                payload.pane, payload.status
+            ));
+        }
+    });
     std::thread::spawn(move || {
         let mut last = String::new();
         let emit = |status: &str, pane: &str, last: &mut String| -> bool {
@@ -1638,18 +1656,12 @@ fn spawn_status_watcher(window: tauri::Window, project: String, stop: Arc<Atomic
                 return true;
             }
             *last = status.to_string();
-            let ok = window
-                .emit(
-                    "orch-status",
-                    OrchStatusPayload {
-                        project: project.clone(),
-                        pane: pane.to_string(),
-                        status: status.to_string(),
-                    },
-                )
-                .is_ok();
-            trace(format!("status: emit pane={pane} st={status} ok={ok}"));
-            ok
+            tx.send(OrchStatusPayload {
+                project: project.clone(),
+                pane: pane.to_string(),
+                status: status.to_string(),
+            })
+            .is_ok()
         };
         let orch_pane = |project: &str| -> Option<String> {
             let rows = std::fs::read_to_string(desktop_bus_dir().join("crew-windows.txt"))
