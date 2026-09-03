@@ -13,7 +13,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { ArrowDownToLine, Bot, Eye, GraduationCap, House, Inbox as InboxIcon, MessagesSquare, Plus, Search, Settings as SettingsIcon } from "lucide-react";
 import { appUpdateCheck, HubClient, hubForProject, knownProjects, localSessions, type AppUpdate, type Peer } from "../shared/api/client";
 import { ago } from "../shared/presence";
-import { computeProjectActivity, activityRank, isWorkingStatus, type ProjectActivity } from "./projectActivity";
+import { computeProjectActivity, activityRank, isWorkingStatus, needsYou, type ProjectActivity } from "./projectActivity";
 import { Palette, type PaletteScope } from "../features/search/Palette";
 import { countUnseen, onSeenChange } from "../shared/seen";
 import { usePendingProposals } from "../shared/Proposals";
@@ -189,6 +189,16 @@ export function AppShell() {
       .sort((a, b) => activityRank(activity.get(a)) - activityRank(activity.get(b)) || a.localeCompare(b));
     return [live, projects.filter(p => !activity.has(p))] as const;
   }, [projects, activity]);
+
+  // #6094 — how many open sessions are BLOCKED right now: an approval or an AskUserQuestion the
+  // pane is sitting on, waiting on the operator. Folded into the Inbox badge below, because that
+  // badge already answers "is anything waiting on ME?" (Inbox.tsx's own framing) and a blocked
+  // pane is exactly that question, not a different one.
+  const needsYouCount = useMemo(() => {
+    let n = 0;
+    for (const a of activity.values()) if (a.kind === "open" && needsYou(a.status)) n++;
+    return n;
+  }, [activity]);
 
   // Newer app release out? Checked at launch and every 6h — the release cadence here is days, not
   // minutes, and unauthenticated GitHub API calls are rate-limited. The chip this feeds is the
@@ -400,18 +410,23 @@ export function AppShell() {
     // that is a live pane genuinely mid-turn, just before its first heartbeat; any other known
     // status ("idle", "blocked", "done", "unknown") shows as "open · <status>" instead of a bare
     // dot, so the row says what herdr actually knows rather than nothing.
+    // #6094 — "blocked" is not just another status word: it means the session is sitting on an
+    // approval or an AskUserQuestion, waiting on the operator specifically. That reads as "needs
+    // you", amber, never blinking — attention without noise, the same contract seatTabVisual.ts
+    // already gives the Workspace tab for the identical state.
+    const blocked = act?.kind === "open" && needsYou(act.status);
     const blinking = act?.kind === "busy" || (act?.kind === "open" && isWorkingStatus(act.status));
     const statusLine = act?.kind === "busy"
       ? ["mid-turn", act.lastSeen ? `${ago(act.lastSeen)} ago` : null, act.model || null]
           .filter(Boolean).join(" · ")
       : act?.kind === "open"
-        ? (isWorkingStatus(act.status) ? "mid-turn" : act.status ? `open · ${act.status}` : null)
+        ? (blocked ? "needs you" : isWorkingStatus(act.status) ? "mid-turn" : act.status ? `open · ${act.status}` : null)
         : null;
     return (
       <div key={p} role="button" tabIndex={0}
         onClick={open}
         onKeyDown={e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); open(); } }}
-        title={blinking ? "a session here is mid-turn right now" : act?.kind === "open" ? "session open, idle" : undefined}
+        title={blocked ? "blocked, waiting on you" : blinking ? "a session here is mid-turn right now" : act?.kind === "open" ? "session open, idle" : undefined}
         className={`group flex w-full cursor-pointer items-center gap-2.5 rounded-lg px-3 py-1.5 text-left text-[13px] ${
           on ? "bg-white/[0.07] font-medium text-[var(--color-tr-text)]"
              : act ? "text-[var(--color-tr-text)]/85 hover:bg-white/[0.04]"
@@ -420,7 +435,7 @@ export function AppShell() {
         <span className="min-w-0 flex-1">
           <span className="block truncate">{p}</span>
           {statusLine && (
-            <span className="tr-mono block truncate text-[10px] font-normal text-[var(--color-tr-muted)]">{statusLine}</span>
+            <span className={`tr-mono block truncate text-[10px] font-normal ${blocked ? "text-tr-warn" : "text-[var(--color-tr-muted)]"}`}>{statusLine}</span>
           )}
           {wakeLine && !isWaking && (
             <span title={wakeLine.title}
@@ -467,7 +482,7 @@ export function AppShell() {
           <SectionLabel>Fleet</SectionLabel>
           {FLEET_NAV.map(({ kind, label, Icon }) => (
             <NavItem key={kind} label={label} Icon={Icon}
-                     badge={kind === "inbox" ? unread : kind === "home" ? pendingProposals : undefined}
+                     badge={kind === "inbox" ? unread + needsYouCount : kind === "home" ? pendingProposals : undefined}
                      on={pane.kind === kind}
                      // SAFETY: every FLEET_NAV entry's `kind` is one of Pane's no-argument
                      // variants (home/inbox/messages/agents/overseer/learning) — none of them

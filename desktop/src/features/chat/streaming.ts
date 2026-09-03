@@ -304,19 +304,34 @@ export function openQuestion(turns: Turn[], results: Record<string, ToolResult>)
   return null;
 }
 
+/** Down arrow — ANSI, the same byte sequence a terminal keyboard sends. Shared by the answer
+ *  path and the "Other" free-text path (#6094), both of which walk the same option list. */
+export const DOWN_ARROW = "\x1b[B";
+
 /** The keystrokes that answer one AskUserQuestion question the same way a person at the keyboard
- *  would (#6094): press each chosen option's 1-based digit (multi-select toggles one per digit),
- *  then Enter to confirm — sourced from the operator's own observation of the picker (card #6094
- *  note), not re-verified against a live picker in this build; treat as the best evidence
- *  available rather than a proven contract until a real-app pass confirms it. `indices` are
- *  0-based into `q.options`; out-of-range indices are dropped rather than sending a stray digit
- *  the picker was never offered. */
+ *  would (#6094): the picker's own footer names its controls — "Tab/Arrow keys to navigate" —
+ *  the only keybinding hint the compiled CLI's UI strings carry anywhere near this component; a
+ *  digit shortcut exists as a DIFFERENT component's contract (the permission-ask dialog's "single
+ *  stray keystroke" approve, its own string right by "takes no digit shortcut" for the
+ *  defaultToNo case) and does not apply here. So a choice is reached by walking Down from the row
+ *  the picker opens on (assumed row 0 — "initialValue" sits beside `multiSelect` in the same
+ *  string cluster) to the target index, then Enter/Return to confirm. Multi-select toggles each
+ *  picked row with Space while passing it, in one downward sweep so no row is revisited, then
+ *  Enter submits — Space-to-toggle is the Ink convention this assumes, not confirmed by the same
+ *  string evidence as the navigation keys, so treat the multi-select path as the weaker half of
+ *  this contract until a live picker confirms it. `indices` are 0-based into `q.options`;
+ *  out-of-range indices are dropped rather than walking toward a row the picker never offered. */
 export function answerKeystrokes(q: AskQuestion, indices: number[]): string {
-  const digits = indices
-    .filter(i => i >= 0 && i < q.options.length)
-    .map(i => String(i + 1))
-    .join("");
-  return `${digits}\r`;
+  const valid = [...new Set(indices.filter(i => i >= 0 && i < q.options.length))].sort((a, b) => a - b);
+  if (valid.length === 0) return "";
+  if (!q.multiSelect) return DOWN_ARROW.repeat(valid[0]) + "\r";
+  let keys = "";
+  let at = 0;
+  for (const i of valid) {
+    keys += DOWN_ARROW.repeat(i - at) + " ";
+    at = i;
+  }
+  return keys + "\r";
 }
 
 /** #5608 — the live turn ticker's tool label: the most recent tool the agent touched, with a

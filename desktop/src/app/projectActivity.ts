@@ -19,6 +19,14 @@ export function isWorkingStatus(status: string | null | undefined): boolean {
   return (status ?? "").trim().toLowerCase() === "working";
 }
 
+/** #6094 — only "blocked" reads as the operator being asked for something (an approval or an
+ *  AskUserQuestion the pane is sitting on): the one status among idle/blocked/done/unknown that
+ *  is not just "here, not moving" but "here, and waiting on you". Case/whitespace-tolerant like
+ *  `isWorkingStatus`, so the same raw string serves both checks. */
+export function needsYou(status: string | null | undefined): boolean {
+  return (status ?? "").trim().toLowerCase() === "blocked";
+}
+
 /** project → activity, merging local_sessions (OPEN, may already carry a herdr status) with the
  * freshest hub peer per session (BUSY, mid-turn right now). BUSY overrides OPEN for the same
  * project except when the OPEN row is already fresher — mirrors the prior inline logic exactly,

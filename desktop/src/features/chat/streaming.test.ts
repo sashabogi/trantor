@@ -518,18 +518,30 @@ describe("answerKeystrokes (#6094)", () => {
     header: "Ship", question: "Ship it?", multiSelect: false,
     options: [{ label: "Yes", description: "" }, { label: "No", description: "" }, { label: "Maybe", description: "" }],
   };
+  const DOWN = "\x1b[B";
 
-  it("a single choice is its 1-based digit, then Enter", () => {
-    expect(answerKeystrokes(Q, [0])).toBe("1\r");
-    expect(answerKeystrokes(Q, [2])).toBe("3\r");
+  it("a single choice at row 0 needs no navigation, just Enter", () => {
+    expect(answerKeystrokes(Q, [0])).toBe("\r");
   });
 
-  it("multi-select sends each chosen digit in order, then one Enter", () => {
-    expect(answerKeystrokes({ ...Q, multiSelect: true }, [0, 2])).toBe("13\r");
+  it("a single choice walks Down to its row, then Enter", () => {
+    expect(answerKeystrokes(Q, [2])).toBe(`${DOWN}${DOWN}\r`);
   });
 
-  it("an out-of-range index is dropped rather than sending a stray digit", () => {
-    expect(answerKeystrokes(Q, [0, 99, -1])).toBe("1\r");
+  it("multi-select toggles each chosen row with Space in one downward sweep, then Enter", () => {
+    expect(answerKeystrokes({ ...Q, multiSelect: true }, [0, 2])).toBe(` ${DOWN}${DOWN} \r`);
+  });
+
+  it("multi-select sorts unordered indices so the sweep never reverses", () => {
+    expect(answerKeystrokes({ ...Q, multiSelect: true }, [2, 0])).toBe(` ${DOWN}${DOWN} \r`);
+  });
+
+  it("an out-of-range index is dropped rather than walking toward a row that was never offered", () => {
+    expect(answerKeystrokes(Q, [0, 99, -1])).toBe("\r");
+  });
+
+  it("no valid indices sends nothing", () => {
+    expect(answerKeystrokes(Q, [99, -1])).toBe("");
   });
 });
 

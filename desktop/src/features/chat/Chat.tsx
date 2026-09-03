@@ -31,7 +31,7 @@ import {
   saveDismissedAt, saveFontStep, savePanelSize, saveTrayOpen, type FontStep,
 } from "./prefs";
 import {
-  answerKeystrokes, applyBackfill, applyRows, applySessionChanged, bannerVisible, emptyChat, isDividerTurn,
+  answerKeystrokes, applyBackfill, applyRows, applySessionChanged, bannerVisible, DOWN_ARROW, emptyChat, isDividerTurn,
   lastToolLabel, openQuestion, sessionLiveness, tickerText,
   type AskQuestion, type Backfill, type Block, type ChatState, type OpenQuestion, type RowsPayload,
   type SessionPayload, type ToolResult, type Turn,
@@ -195,10 +195,11 @@ function AskCard({ tool_id, questions, result, target, onAnswer }: {
   const submitMulti = () => { void send(answerKeystrokes(q, [...picked])); };
   const submitOther = () => {
     if (!otherText.trim()) return;
-    // "Type something" is the picker's own always-appended free-text option, one past the
-    // model's own list — select it, then the text, each its own Enter (#6094; see
-    // answerKeystrokes' doc comment on how confident this contract is).
-    void send(`${q.options.length + 1}\r${otherText}\r`);
+    // "Type something" is the picker's own always-appended free-text option, one row past the
+    // model's own list — walk Down to it the same way answerKeystrokes reaches any other row,
+    // Enter opens its text input, then the text and its own Enter (#6094; see answerKeystrokes'
+    // doc comment for the evidence behind the arrow-navigation contract).
+    void send(`${DOWN_ARROW.repeat(q.options.length)}\r${otherText}\r`);
   };
 
   return (
