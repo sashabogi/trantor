@@ -124,7 +124,7 @@ delete process.env.TRANTOR_NO_SCROOGE;
   clearGuards();
   try {
     b2 = spawnBaton({
-      projectDir: tmp, handoffFile: "/tmp/x.json",
+      projectDir: tmp, handoffFile: "/tmp/x.json", _env: {},   // pin the env: a drill (or crew seat) may ITSELF live in a herdr pane — HERDR_PANE_ID must not preempt these mocks (#6074)
       _resolveWindow: () => { order.push("detect"); return { windowId: "W-ORIGINAL", tty: "/dev/ttysORIG" }; },
       _spawnFresh: () => { order.push("spawn"); return true; },
       _armClose: (hf, id) => { order.push(`arm:${id}`); return true; },
@@ -674,7 +674,7 @@ rmSync(projDir, { recursive: true, force: true });
   let r;
   try {
     for (const k of PANE_GUARDS) delete process.env[k];
-    r = spawnBaton({ projectDir: "/x/projP", handoffFile: "/x/h.json", conf: {},
+    r = spawnBaton({ projectDir: "/x/projP", handoffFile: "/x/h.json", conf: {}, _env: {},
       _hasPane: (n) => { calls.push(`has:${n}`); return true; },
       _spawnPane: (d, f) => { calls.push(`pane:${d}:${f}`); return true; },
       _resolveWindow: () => { calls.push("resolve"); return { windowId: "W", tty: "" }; },

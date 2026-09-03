@@ -33,8 +33,12 @@ function run(args, { seed = null, stdin = "" } = {}) {
     // TRANTOR_NO_BATON_SPAWN is a REAL guard in hooks/lib/handoff.mjs. The first version of this
     // drill passed TRANTOR_NO_SPAWN, which does not exist, so every run opened live Terminal
     // windows running `claude` in these temp dirs and left them parked on a trust prompt.
+    // RELAY_PROJECT/TRANTOR_ORCH are pinned too (#6074): the resolver reads the session's
+    // registration FIRST, and a drill that inherits a crew runner's RELAY_PROJECT would have
+    // every handoff file named after THAT runner's project instead of the seeded one.
     env: { ...process.env, HOME: w, AGENT_BUS_DIR: BUS, RELAY_DATA_DIR: BUS,
-           CLAUDE_PROJECT_DIR: proj, TRANTOR_NO_BATON_SPAWN: "1" },
+           CLAUDE_PROJECT_DIR: proj, TRANTOR_NO_BATON_SPAWN: "1",
+           RELAY_PROJECT: "", TRANTOR_ORCH: "" },
   });
   const files = readdirSync(join(BUS, "handoffs"));
   return { out: (r.stdout || "") + (r.stderr || ""), status: r.status, files, BUS };

@@ -20,8 +20,19 @@ only to plain Terminal sessions.
 
 ## Instructions
 
+PREFER THE GLOBAL `trantor` BINARY when it is on PATH (`command -v trantor`): it runs the
+INSTALLED version's code, while `${CLAUDE_PLUGIN_ROOT}` is the plugin-cache copy pinned when this
+session booted — a session opened before an update runs stale logic (witnessed 2026-09-02: a
+0.18.20 cache copy mis-resolved the project from a subfolder cwd and closed a Terminal window that
+was not its own). Use `trantor handoff …` for both commands below; fall back to the
+`node "${CLAUDE_PLUGIN_ROOT}/bin/write-handoff.mjs" …` form only when `trantor` is absent.
+`trantor handoff` takes piped markdown (a heredoc) and `--latest` exactly like the helper, because
+it forwards to the same package's `write-handoff.mjs`.
+
 0. **Already written one this session?** Then do NOT write it again — pass the baton on it:
    ```bash
+   trantor handoff --latest
+   # or, without the global binary:
    node "${CLAUDE_PLUGIN_ROOT}/bin/write-handoff.mjs" --baton --latest
    ```
    That picks this project's newest unconsumed handoff and hands it over untouched, and exits
@@ -39,10 +50,12 @@ only to plain Terminal sessions.
 
 2. Save it AND pass the baton in one shot — pipe the markdown to the helper with `--baton`:
    ```bash
-   cat << 'HANDOFF' | node "${CLAUDE_PLUGIN_ROOT}/bin/write-handoff.mjs" --baton
+   trantor handoff --baton << 'HANDOFF'
    <your handoff markdown>
    HANDOFF
    ```
+   (or `cat << 'HANDOFF' | node "${CLAUDE_PLUGIN_ROOT}/bin/write-handoff.mjs" --baton` without the
+   global binary.)
    `--baton` writes the handoff, opens a FRESH session that takes over (it auto-recaps the handoff
    on open), and closes THIS Terminal window once the fresh session has consumed it — a true baton
    pass, one session at a time. (Omit `--baton` to only write the handoff without spawning/closing.)
