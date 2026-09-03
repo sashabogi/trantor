@@ -24,5 +24,5 @@ export function genesisKickoff(brief: string, droppedFrom?: string | null): stri
   const filename = droppedFrom?.replace(/\s+/g, " ").trim().slice(0, 120);
   const source = filename ? `dropped from ${filename}` : "entered in the Genesis sheet";
   const lines = lineCount === 1 ? "1 line" : `${lineCount} lines`;
-  return `Your brief is in CLAUDE.md (${lines}, ${source}). Read it, recap it in three sentences, and propose a plan.`;
+  return `Your brief is in docs/PRD.md (${lines}, ${source}). Read docs/PRD.md and wait for the review contract.`;
 }

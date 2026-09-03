@@ -2,8 +2,8 @@
 // Project genesis drill (#5862): `trantor new` in all three start-from modes — plain init,
 // clone --from, and --adopt — against a REAL throwaway hub, plus the guarded refusals (occupied
 // dir without --adopt, missing brief file). Asserts the DIRECTORY facts (git branch, CLAUDE.md
-// seeding, hook install), the HUB facts (brief posted, "genesis:" card on the new board), and
-// the --json contract ({name, parent, dir, branch, hub, card}).
+// pointer + durable PRD seeding, hook install), the HUB facts (brief posted, "genesis:" card on
+// the new board), and the --json contract ({name, parent, dir, branch, hub, card}).
 import { spawnSync, spawn } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { generateKeyPairSync } from "node:crypto";
@@ -52,8 +52,9 @@ const runNew = (args, env = {}) => spawnSync("node", [join(ROOT, "bin", "new.mjs
   encoding: "utf8", cwd: W, env: childEnv(env),
 });
 
-const BRIEF = "Genesis drill project: prove `trantor new` stands a project up in one command.";
-const briefFile = join(W, "brief.md");
+const BRIEF_HEAD = "Genesis drill project: prove `trantor new` stands a project up in one command.";
+const BRIEF = `${BRIEF_HEAD}\n${"Full PRD requirement.\n".repeat(15_000)}`.trimEnd();
+const briefFile = join(W, "client-platform-prd.md");
 writeFileSync(briefFile, BRIEF);
 
 // ── mode 1: plain init ──────────────────────────────────────────────────────────────────────────
@@ -63,8 +64,12 @@ let aJson = null;
 try { aJson = JSON.parse(a.stdout); } catch {}
 ok("init: --json shape", !!aJson && aJson.name === "genesis-a" && aJson.branch === "main" && aJson.dir === join(DEV, "genesis-a") && Number.isInteger(aJson.card), JSON.stringify(aJson));
 ok("init: hub in json is the test hub", !!aJson && aJson.hub === HUB);
-ok("init: CLAUDE.md carries the brief verbatim", existsSync(aJson.dir) && readFileSync(join(aJson.dir, "CLAUDE.md"), "utf8").includes(BRIEF));
-ok("init: CLAUDE.md carries the conventions block", readFileSync(join(aJson.dir, "CLAUDE.md"), "utf8").includes("## Trantor conventions"));
+const aClaude = readFileSync(join(aJson.dir, "CLAUDE.md"), "utf8");
+ok("init: 300k brief is complete in docs/PRD.md", existsSync(aJson.dir) && readFileSync(join(aJson.dir, "docs", "PRD.md"), "utf8") === `${BRIEF}\n`);
+ok("init: CLAUDE.md points to docs/PRD.md and names the imported file", aClaude.includes("docs/PRD.md") && aClaude.includes("client-platform-prd.md"));
+ok("init: CLAUDE.md never carries the brief body", !aClaude.includes(BRIEF_HEAD));
+ok("init: CLAUDE.md stays below 4k for a 300k brief", BRIEF.length >= 300_000 && aClaude.length < 4_000, `brief ${BRIEF.length}, CLAUDE.md ${aClaude.length}`);
+ok("init: CLAUDE.md carries the conventions block", aClaude.includes("## Trantor conventions"));
 ok("init: auto-card hook installed", readFileSync(join(aJson.dir, ".git", "hooks", "post-commit"), "utf8").includes("trantor auto-card"));
 ok("init: git branch is main", aJson?.branch === "main");
 const autonomy = JSON.parse(readFileSync(join(W, ".agent-bus", "autonomy.json"), "utf8"));
@@ -106,10 +111,18 @@ ok("clone: hook + CLAUDE.md still land", !!bJson && readFileSync(join(bJson.dir,
 const adoptDir = join(DEV, "genesis-c");
 mkdirSync(adoptDir, { recursive: true });
 writeFileSync(join(adoptDir, "existing.txt"), "operator work\n");
-const c = runNew(["genesis-c", "--adopt", "--json"]);
+const existingClaude = "# Existing operator instructions\n\nKeep this paragraph.\n";
+const adoptBrief = "Adopted project brief stays out of the existing CLAUDE.md.";
+const adoptBriefFile = join(W, "adopted-prd.md");
+writeFileSync(join(adoptDir, "CLAUDE.md"), existingClaude);
+writeFileSync(adoptBriefFile, adoptBrief);
+const c = runNew(["genesis-c", "--adopt", "--brief", adoptBriefFile, "--json"]);
 ok("adopt: exit 0", c.status === 0, `status ${c.status}: ${c.stderr.slice(-200)}`);
 ok("adopt: operator file untouched", existsSync(join(adoptDir, "existing.txt")));
-ok("adopt: conventions appended, existing CLAUDE.md respected", existsSync(join(adoptDir, "CLAUDE.md")) === false || readFileSync(join(adoptDir, "CLAUDE.md"), "utf8").includes("## Trantor conventions"));
+const adoptedClaude = readFileSync(join(adoptDir, "CLAUDE.md"), "utf8");
+ok("adopt: conventions appended to the existing CLAUDE.md", adoptedClaude.startsWith(existingClaude) && adoptedClaude.includes("## Trantor conventions"));
+ok("adopt: existing CLAUDE.md receives no brief or generated pointer", !adoptedClaude.includes(adoptBrief) && !adoptedClaude.includes("docs/PRD.md"));
+ok("adopt: brief is complete in docs/PRD.md", readFileSync(join(adoptDir, "docs", "PRD.md"), "utf8") === `${adoptBrief}\n`);
 
 // ── refusals ────────────────────────────────────────────────────────────────────────────────────
 const r1 = runNew(["genesis-c"]);

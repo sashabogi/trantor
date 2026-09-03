@@ -14,7 +14,7 @@ describe("genesis project helpers", () => {
     const brief = `${Array.from({ length: 400 }, (_, index) => `PRD line ${index + 1}`).join("\n")}\n`;
     const kickoff = genesisKickoff(brief, "client portal PRD.md");
     expect(kickoff).toBe(
-      "Your brief is in CLAUDE.md (400 lines, dropped from client portal PRD.md). Read it, recap it in three sentences, and propose a plan.",
+      "Your brief is in docs/PRD.md (400 lines, dropped from client portal PRD.md). Read docs/PRD.md and wait for the review contract.",
     );
     expect(kickoff.length).toBeLessThan(400);
     expect(kickoff).not.toContain("PRD line 1");
@@ -22,7 +22,7 @@ describe("genesis project helpers", () => {
 
   it("describes a typed brief without inventing a dropped filename", () => {
     expect(genesisKickoff("One line")).toBe(
-      "Your brief is in CLAUDE.md (1 line, entered in the Genesis sheet). Read it, recap it in three sentences, and propose a plan.",
+      "Your brief is in docs/PRD.md (1 line, entered in the Genesis sheet). Read docs/PRD.md and wait for the review contract.",
     );
   });
 });
