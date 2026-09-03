@@ -16,7 +16,7 @@ import { mkdtempSync, writeFileSync, readFileSync, chmodSync, mkdirSync } from "
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { drillEnv } from "./drill-env.mjs";
-import { cardRef, carriesWork, parseTurnTokens, parseResetAt, quotaSpent, reasonWithBalances } from "./lib/turn-policy.mjs";
+import { cardRef, carriesWork, parseTurnTokens, parseResetAt, quotaSpent, reasonWithBalances, quotaResetAt } from "./lib/turn-policy.mjs";
 
 let pass = 0, fail = 0;
 const ok = (name, cond, extra) => { console.log(`  ${cond ? "PASS" : "FAIL"}  ${name}${cond || !extra ? "" : `\n          ${extra}`}`); cond ? pass++ : fail++; };
@@ -55,6 +55,24 @@ console.log("\n## the rules");
     reasonWithBalances("empty-output", [{ ok: true, kind: "quota", remainingPct: 80 }]) === "empty-output");
   ok("a backend error is never re-read as exhaustion",
     reasonWithBalances("backend-error", [{ ok: true, kind: "quota", remainingPct: 0 }]) === "backend-error");
+
+  // #6131: quotaResetAt — the wake message never named a time, so the balance row is the only place
+  // the seat's own reset instant lives. This is exactly the qwen shape: a fake 0% balances response.
+  const soon = Date.now() + 6 * 86400e3;
+  ok("quotaResetAt: a spent quota row's own resetTime wins",
+    quotaResetAt([{ ok: true, kind: "quota", remainingPct: 0, resetTime: soon }]) === soon);
+  ok("quotaResetAt: a healthy row names nothing — the seat isn't the one that's spent",
+    quotaResetAt([{ ok: true, kind: "quota", remainingPct: 40, resetTime: soon }]) === 0);
+  ok("quotaResetAt: spent but no reset time known → 0, never invented",
+    quotaResetAt([{ ok: true, kind: "quota", remainingPct: 0, resetTime: null }]) === 0);
+  const laterWin = Date.now() + 9 * 86400e3;
+  ok("quotaResetAt: multiple locked windows → the EARLIEST reset wins (usable the moment the first wall lifts)",
+    quotaResetAt([
+      { ok: true, kind: "windows", windows: [{ usedPct: 100, resetsAt: laterWin }, { usedPct: 100, resetsAt: soon }] },
+    ]) === soon);
+  ok("quotaResetAt: an errored row is not evidence, even if it claims 0%",
+    quotaResetAt([{ ok: false, kind: "quota", remainingPct: 0, resetTime: soon }]) === 0);
+  ok("quotaResetAt: no rows → 0", quotaResetAt([]) === 0);
 }
 
 // ---- the runner, against a mock hub -----------------------------------------------------------
