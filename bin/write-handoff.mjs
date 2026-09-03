@@ -6,7 +6,7 @@ import { writeFileSync, readFileSync, existsSync, mkdirSync, readdirSync } from 
 import { join, basename } from "node:path";
 import { homedir, hostname } from "node:os";
 import { execSync } from "node:child_process";
-import { spawnBaton, handoffMode } from "../hooks/lib/handoff.mjs";
+import { spawnBaton, handoffMode, resolveHandoffSurface } from "../hooks/lib/handoff.mjs";
 import { handoffDir } from "../lib/project.mjs";
 
 const baton = process.argv.includes("--baton");
@@ -14,8 +14,14 @@ const baton = process.argv.includes("--baton");
 // fresh one on stdin", so a session that had just written a 5KB handoff had to write it again to
 // hand it over — 2m28s of regenerated prose on a live scribe session, 2026-08-24.
 const latest = process.argv.includes("--latest");
-const project = process.env.CLAUDE_PROJECT_DIR || process.cwd();
-const name = basename(project);
+// #6074: ONE resolver for which project this is and where the session lives — shared with
+// bin/baton.mjs (the `trantor handoff` CLI path) so the two cannot diverge. The name comes from
+// the session's registration (TRANTOR_ORCH / RELAY_PROJECT / orch-sessions.txt) before the cwd;
+// the witnessed crebral-scribe/ios handoff recorded project "ios" from a subfolder cwd and never
+// found its pane.
+const resolved = resolveHandoffSurface({ sessionId: process.env.CLAUDE_SESSION_ID || "" });
+const project = resolved.projectDir;
+const name = resolved.project;
 let summary = "";
 if (!latest) {
   process.stdin.setEncoding("utf8");

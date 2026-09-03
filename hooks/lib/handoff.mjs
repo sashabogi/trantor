@@ -18,6 +18,7 @@ import { fileURLToPath } from "node:url";
 import { deriveSubagentManifest } from "../../lib/subagent-manifest.mjs";
 import { signedPost } from "./api.mjs";
 import { loadAutonomy, resolveAutonomy } from "../../lib/autonomy.mjs";
+import { resolveProject, orchSessionsPath } from "../../lib/project.mjs";
 
 // Writer and reader MUST resolve the same directory — see lib/project.mjs busDir(). This used to
 // honour only RELAY_DATA_DIR while the reader honoured neither override.
@@ -389,8 +390,10 @@ export function appendHandoffState(id, state, by = "") {
   } catch { return false; }
 }
 
-export function writeHandoff({ projectDir, sessionId, transcript, trigger, summary, force = false }) {
-  const projectName = basename(projectDir);
+export function writeHandoff({ projectDir, sessionId, transcript, trigger, summary, force = false, projectName: projectNameArg }) {
+  // #6074: the NAME may come from the session's registration (resolveHandoffSurface), not from
+  // this directory's basename — a subfolder cwd must not rename the project on the record.
+  const projectName = projectNameArg || basename(projectDir);
   // Server-side storm guard: a session running OLD hooks (before the local markHandedOff guard) re-fires
   // context-warn handoffs every few minutes — the crebral-cortex storm (9 in 49 min, each spawning a
   // window). Ask the hub for clearance (rate-limit per project+session); a non-forced handoff inside the
@@ -541,6 +544,12 @@ export function maybeSpawn(projectDir, conf = readConfig()) {
   try {
     if (process.platform !== "darwin") return false;
     if (process.env.TRANTOR_NO_HANDOFF_SPAWN === "1") return false;
+    // #6074: a session in a hosted pane never gets a Terminal window — the pane is the successor
+    // surface, and the pane claims the handoff (trantor open) on its own.
+    if (paneSurfaceEnv()) {
+      process.stderr.write(`[trantor] session lives in herdr pane ${paneSurfaceEnv()} — no Terminal window; the pane claims the handoff\n`);
+      return false;
+    }
     if (conf.autoHandoffPrompt === false) return false;
     if (hasOrchPane(basename(projectDir))) {
       process.stderr.write(`[trantor] orch pane hosts ${basename(projectDir)} — no Terminal window; the pane claims the handoff on its next open\n`);
@@ -585,9 +594,52 @@ export function hasOrchPane(projectName) {
   } catch { return false; }
 }
 
+// ---- #6074: WHERE the session lives, and WHICH project it is ----------------
+// Witnessed 2026-09-02 (crebral-scribe/ios): a pane session ran the handoff skill with its shell
+// cwd in a subfolder. The project name came from basename(cwd) = "ios", the pane lookup found no
+// "ios" row, and the baton fell to the window leg — whose front-Terminal-window fallback picked a
+// window the pane session never owned, spawned a stray Terminal session, and armed a close on a
+// stranger's window. Two facts the code ignored: a session's OWN env knows where it lives
+// (HERDR_PANE_ID — herdr sets it in every pane), and the project's REGISTRATION knows its name
+// (the `trantor open` badge, RELAY_PROJECT, the orch-sessions map) long before cwd is worth
+// consulting. One resolver, shared by write-handoff.mjs --baton AND bin/baton.mjs, so the skill
+// path and the CLI path cannot diverge.
+export function paneSurfaceEnv(env = process.env) {
+  return String(env.HERDR_PANE_ID || "").trim();
+}
+
+// Reverse orch-sessions.txt lookup: which project recorded THIS session id as its orchestrator
+// thread. One row per project, "<project>\t<sid>" — written by `trantor open` / adopt / claim.
+export function orchProjectForSession(sid) {
+  try {
+    if (!sid) return "";
+    for (const line of readFileSync(orchSessionsPath(), "utf8").split("\n")) {
+      const [p, s] = line.split("\t");
+      if (p && s && s.trim() === String(sid).trim()) return p.trim();
+    }
+  } catch {}
+  return "";
+}
+
+// The one resolver. Returns { project, projectDir, pane, surface }:
+//   pane    — the session's own pane id ("" when it is not a hosted pane)
+//   surface — "pane" (the baton MUST take the pane leg) or "window" (today's behavior)
+//   project — the REGISTERED project name; a subfolder cwd never renames it
+export function resolveHandoffSurface({ projectDir, sessionId, env = process.env } = {}) {
+  const dir = projectDir || env.CLAUDE_PROJECT_DIR || process.cwd();
+  const badge = String(env.TRANTOR_ORCH || "").trim();
+  let project = "";
+  if (badge && badge !== "1") project = badge;                       // `trantor open` badge carries the name
+  if (!project && env.RELAY_PROJECT) project = String(env.RELAY_PROJECT).trim();
+  if (!project) project = orchProjectForSession(sessionId);
+  if (!project) project = resolveProject(dir);                       // last resort: cwd (git-root aware)
+  return { project, projectDir: dir, pane: paneSurfaceEnv(env), surface: paneSurfaceEnv(env) ? "pane" : "window" };
+}
+
 export function spawnFresh(projectDir) {
   try {
     if (process.platform !== "darwin" || spawnSuppressed()) return false;
+    if (paneSurfaceEnv()) return false;                    // #6074: pane sessions never open windows
     if (hasOrchPane(basename(projectDir))) return false;   // the pane is the successor surface (#5509)
     const script = join(HERE, "..", "..", "bin", "open-session.sh");
     if (!existsSync(script)) return false;
@@ -624,11 +676,15 @@ export function resolveOriginalWindow() {
 // window machinery (resolve/arm-close) is deliberately absent here: there is no window to close,
 // and the old path's answer ("spawn disabled — open manually") left the operator doing the
 // machine's job by hand.
-export function spawnPaneBaton(projectDir, handoffFile) {
+export function spawnPaneBaton(projectDir, handoffFile, paneId = "") {
   try {
     const script = join(HERE, "..", "..", "bin", "baton-pane.mjs");
     if (!existsSync(script)) return false;
-    const child = spawn(process.execPath, [script, "--project", projectDir, "--handoff", handoffFile], { detached: true, stdio: "ignore" });
+    // #6074: when the dying session KNOWS its pane (HERDR_PANE_ID), pass it — the driver must
+    // replace THAT pane, not guess one from a crew-windows row keyed by a cwd-derived name.
+    const args = [script, "--project", projectDir, "--handoff", handoffFile];
+    if (paneId) args.push("--pane", paneId);
+    const child = spawn(process.execPath, args, { detached: true, stdio: "ignore" });
     child.unref();
     return true;
   } catch { return false; }
@@ -643,14 +699,29 @@ export function spawnPaneBaton(projectDir, handoffFile) {
 // regression-tested headlessly.
 export function spawnBaton({ projectDir, handoffFile, conf = readConfig(),
   _resolveWindow = resolveOriginalWindow, _spawnFresh = spawnFresh, _armClose = armBatonClose,
-  _hasPane = hasOrchPane, _spawnPane = spawnPaneBaton }) {
+  _hasPane = hasOrchPane, _spawnPane = spawnPaneBaton, _env = process.env }) {
   // A DRILL MUST BE ABLE TO SAY NO. There was no such switch, so exercising the baton path in a
   // test opened real Terminal windows running real `claude` sessions in temp directories the test
   // then deleted, each parked on a "do you trust this folder?" prompt. Five of them were found by
   // the operator on 2026-08-24. A code path that spawns windows needs an off switch, or it cannot
-  // be tested honestly and someone will fake one that does not exist.
-  if (spawnSuppressed() || conf.batonSpawn === false) {
+  // be tested honestly and someone will fake one that does not exist. The check reads the REAL env
+  // (spawnSuppressed) AND the injected one (_env) — a crew runner exports TRANTOR_NO_*_SPAWN for
+  // its seats, and a drill that inherits that must still be able to exercise each branch by
+  // passing its own env, not by mutating the runner's.
+  const suppressed = spawnSuppressed()
+    || String(_env.TRANTOR_NO_HANDOFF_SPAWN || "") === "1" || String(_env.TRANTOR_NO_BATON_SPAWN || "") === "1";
+  if (suppressed || conf.batonSpawn === false) {
     return { spawned: false, armed: false, windowId: "", suppressed: true };
+  }
+  // #6074, checked FIRST: the session's OWN env is the truth about where it lives. HERDR_PANE_ID
+  // set means the pane leg, keyed by THAT pane id — regardless of cwd or project name — and the
+  // whole window machinery (resolve + spawn + arm-close) is forbidden here: a pane session has no
+  // Terminal window, so the front-window fallback can only ever pick a stranger's (the witnessed
+  // crebral-scribe/ios incident armed a close on a window this session never owned).
+  const paneId = paneSurfaceEnv(_env);
+  if (paneId) {
+    const spawned = _spawnPane(projectDir, handoffFile, paneId);
+    return { spawned, armed: false, windowId: "", pane: true, paneId };
   }
   // Hosted pane (#5643): the pane IS the successor surface — no window is resolved, spawned, or
   // armed for closing. The detached driver replaces the session at the turn boundary.

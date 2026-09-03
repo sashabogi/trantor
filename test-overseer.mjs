@@ -13,7 +13,7 @@
 //   6. POST /overseer/narrate marks an event narrated
 //   7. all endpoints survive missing _overseer module (hub runs without it)
 import { spawn } from "node:child_process";
-import { mkdtempSync, mkdirSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -23,8 +23,7 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 let pass = 0, fail = 0;
 const ok = (c, name) => { c ? pass++ : fail++; console.log(`  ${c ? "✓" : "✗"} ${name}`); };
 
-function spawnHub(port, extraEnv = {}) {
-  const dir = mkdtempSync(join(tmpdir(), "trantor-overseer-"));
+function spawnHub(port, extraEnv = {}, dir = mkdtempSync(join(tmpdir(), "trantor-overseer-"))) {
   mkdirSync(join(dir, ".agent-bus"), { recursive: true });
   const hub = spawn("node", [join(ROOT, "hub.mjs")], {
     env: { ...process.env, RELAY_DATA_DIR: dir, HOME: dir, RELAY_PORT: String(port), PORT: String(port),
@@ -254,6 +253,60 @@ try {
   ok(warns2.length === 2, `recurrence after a genuine clear still re-warns (got ${warns2.length})`);
 } catch (e) { fail++; console.log(`  ✗ churn: ${e.message}`); }
 finally { hubH.kill(); }
+
+// ── #5760: a DECLARED CREW is the normal state, not a collision ────────────────────────────────
+// The seats `trantor up` spawned plus the operator's orchestrator are how every project normally
+// looks — a crew-only same-project set must not warn, not DM, and not even reach the context
+// feed. Only a session OUTSIDE the declared crew is a collision. The crew declaration is read
+// from ~/.agent-bus/crew-windows.txt (the hub resolves it against its own HOME, which spawnHub
+// points at the fixture dir), and the operator's own host session is crew by definition.
+const PI = 47939;
+const dirI = mkdtempSync(join(tmpdir(), "trantor-overseer-crew-"));
+mkdirSync(join(dirI, ".agent-bus"), { recursive: true });
+writeFileSync(join(dirI, ".agent-bus", "crew-windows.txt"),
+  "alpha\therdr\tcodex\tpane-1\nalpha\therdr\tkimi\tpane-2\n");
+const hubI = spawnHub(PI, {}, dirI);
+await sleep(1500);
+try {
+  const I = mk(`http://127.0.0.1:${PI}`);
+  await I.post("/policy", { autonomy: { alpha: 2 } });
+  // The declared crew, live and beating: codex + kimi are rows in crew-windows.txt.
+  const beatCrew = setInterval(() => {
+    I.post("/register", { session: "codex:alpha", project: "alpha" }).catch(() => {});
+    I.post("/register", { session: "kimi:alpha", project: "alpha" }).catch(() => {});
+  }, 150);
+  await sleep(2500);
+  let ev = await I.get("/events?type=overseer.&limit=100");
+  ok((ev.events ?? []).filter(e => e.type === "overseer.warn" && e.kind === "same-project-sessions").length === 0,
+     "a live declared crew alone never warns");
+  let ctx = await I.get("/overseer/context?project=alpha");
+  ok(!(ctx.warnings ?? []).some(w => w.kind === "same-project-sessions"),
+     "a crew-only set is not a collision: absent from /overseer/context too");
+  // A stranger joins — outside the declaration. ONE warn, naming it; the crew is not re-heard.
+  const beatAll = setInterval(() => {
+    I.post("/register", { session: "stranger:alpha", project: "alpha" }).catch(() => {});
+  }, 150);
+  await sleep(2500);
+  clearInterval(beatCrew); clearInterval(beatAll);
+  ev = await I.get("/events?type=overseer.&limit=100");
+  const crewWarns = (ev.events ?? []).filter(e => e.type === "overseer.warn" && e.kind === "same-project-sessions");
+  ok(crewWarns.length === 1, `an intruder alongside the crew warns exactly ONCE (got ${crewWarns.length})`);
+  ok(crewWarns.length === 1 && (crewWarns[0].sessions ?? []).includes("stranger:alpha"),
+     "the warn names the intruder's session id");
+  ctx = await I.get("/overseer/context?project=alpha");
+  const standing = (ctx.warnings ?? []).find(w => w.kind === "same-project-sessions");
+  ok(Boolean(standing), "the standing episode is visible in /overseer/context");
+  ok(/same-project for/.test(standing?.detail || ""), "the record line reports DURATION, not repetition");
+  ok(Number(standing?.since) > 0, "the record line carries since");
+  const msgEv = await I.get("/events?type=message&limit=200");
+  const intros = (msgEv.events ?? []).filter(e => /🤝 OVERSEER/.test(e.text || ""));
+  const bySession = {};
+  for (const m of intros) bySession[m.toSession] = (bySession[m.toSession] || 0) + 1;
+  ok(bySession["stranger:alpha"] === 1, `the intruder gets exactly one intro (got ${bySession["stranger:alpha"]})`);
+  ok((bySession["codex:alpha"] || 0) <= 1 && (bySession["kimi:alpha"] || 0) <= 1,
+     `crew members are introed at most once across the episode (got ${JSON.stringify(bySession)})`);
+} catch (e) { fail++; console.log(`  ✗ crew: ${e.message}`); }
+finally { hubI.kill(); rmSync(dirI, { recursive: true, force: true }); }
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

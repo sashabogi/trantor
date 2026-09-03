@@ -1687,8 +1687,29 @@ const server = http.createServer(async (req, res) => {
       const inflight = [...fileClaims.values()].filter(c => c.project === proj)
         .map(c => ({ file: c.file, session: c.session, agoSec: Math.round((now() - c.ts) / 1000) }));
       let warnings = [];
-      try { warnings = (_overseer?.detectCollisions ? _overseer.detectCollisions(overseerInputs()) : [])
-        .filter(c => c.project === proj || linked.has(c.project)); } catch {}
+      try {
+        warnings = (_overseer?.detectCollisions ? _overseer.detectCollisions(overseerInputs()) : [])
+          .filter(c => c.project === proj || linked.has(c.project));
+        // #5760: a declared crew is the NORMAL state of a project, not a collision — the tick
+        // loop drops crew-only sets before they ever become episodes, and this live view must
+        // agree with it: the SessionStart hook narrates exactly these lines, so a crew-only leak
+        // here would re-wake every booting seat into a metered turn for no membership change.
+        warnings = warnings.filter(c => !(c.kind === "same-project-sessions" && _sameProject?.sameProjectDecision &&
+          _sameProject.sameProjectDecision({
+            current: c.sessions,
+            declaredCrew: declaredCrewFor(c.project),
+            now: now(),
+          }).reason === "crew-only"));
+        // The record line reports DURATION ("same-project for 6h"), never a count of warnings.
+        for (const c of warnings) {
+          if (c.kind !== "same-project-sessions") continue;
+          const ep = overseerActive.get(`${c.project} same-project-sessions`);
+          if (ep) {
+            c.since = ep.since;
+            if (_sameProject?.durationLabel) c.detail = `${c.detail || ""} (same-project for ${_sameProject.durationLabel(now() - ep.since)})`.trim();
+          }
+        }
+      } catch {}
       return json(res, 200, { level, links: links.map(l => ({ projects: l.projects, reason: l.reason })), peers: peersOut, inflight, warnings });
     }
     // Supersession (docs/INSTANCE-KEYS-CONTRACT.md): EXPLICIT, never automatic — the baton-claim

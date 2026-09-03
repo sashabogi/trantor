@@ -124,7 +124,7 @@ delete process.env.TRANTOR_NO_SCROOGE;
   clearGuards();
   try {
     b2 = spawnBaton({
-      projectDir: tmp, handoffFile: "/tmp/x.json",
+      projectDir: tmp, handoffFile: "/tmp/x.json", _env: {},   // pin the env: a drill (or crew seat) may ITSELF live in a herdr pane — HERDR_PANE_ID must not preempt these mocks (#6074)
       _resolveWindow: () => { order.push("detect"); return { windowId: "W-ORIGINAL", tty: "/dev/ttysORIG" }; },
       _spawnFresh: () => { order.push("spawn"); return true; },
       _armClose: (hf, id) => { order.push(`arm:${id}`); return true; },
@@ -417,7 +417,13 @@ rmSync(projDir, { recursive: true, force: true });
   mkdirSync(projDir2, { recursive: true });
   const r = spawnSync("node", [join(process.cwd(), "bin", "baton.mjs"), "--write-only"], {
     cwd: projDir2, encoding: "utf8", timeout: 30000,
-    env: { ...process.env, AGENT_BUS_DIR: bus, TRANTOR_NO_SCROOGE: "1", TRANTOR_NO_HANDOFF_SPAWN: "1", RELAY_URL: CLOSED },
+    // Explicit env, no process.env passthrough (#6074) — same identity-var reason as above.
+    env: {
+      PATH: process.env.PATH, HOME: process.env.HOME, TMPDIR: process.env.TMPDIR,
+      AGENT_BUS_DIR: bus, TRANTOR_NO_SCROOGE: "1", TRANTOR_NO_HANDOFF_SPAWN: "1", RELAY_URL: CLOSED,
+      HERDR_ENV: "", HERDR_PANE_ID: "", TRANTOR_ORCH: "",
+      RELAY_PROJECT: "", TRANTOR_PROJECT: "", RELAY_SESSION: "", RELAY_AGENT: "",
+    },
   });
   const wrote = (await import("node:fs")).readdirSync(join(bus, "handoffs")).length;
   ok("write-only exits 0", r.status === 0);
@@ -579,7 +585,15 @@ rmSync(projDir, { recursive: true, force: true });
   mkdirSync(wp2Dir, { recursive: true });
   const r = spawnSync("node", [join(process.cwd(), "bin", "write-handoff.mjs")], {
     cwd: wp2Dir, input: "# handoff\nMANUAL_SKILL_BODY", encoding: "utf8", timeout: 30000,
-    env: { ...process.env, CLAUDE_PROJECT_DIR: wp2Dir, RELAY_URL: CLOSED, TRANTOR_NO_HANDOFF_SPAWN: "1", TRANTOR_NO_BATON_SPAWN: "1" },
+    // Explicit env, no process.env passthrough (#6074): a gate runner inside a herdr pane exports
+    // HERDR_PANE_ID/TRANTOR_ORCH — the resolver reads that registration FIRST, so the record would
+    // be named (and autonomy-keyed) after the RUNNER's project instead of this temp one.
+    env: {
+      PATH: process.env.PATH, HOME: process.env.HOME, TMPDIR: process.env.TMPDIR,
+      CLAUDE_PROJECT_DIR: wp2Dir, RELAY_URL: CLOSED, TRANTOR_NO_HANDOFF_SPAWN: "1", TRANTOR_NO_BATON_SPAWN: "1",
+      HERDR_ENV: "", HERDR_PANE_ID: "", TRANTOR_ORCH: "",
+      RELAY_PROJECT: "", TRANTOR_PROJECT: "", RELAY_SESSION: "", RELAY_AGENT: "",
+    },
   });
   ok("manual write-handoff exits 0", r.status === 0);
   const mf = /handoff saved: (\S+\.json)/.exec(r.stdout)?.[1];
@@ -674,7 +688,7 @@ rmSync(projDir, { recursive: true, force: true });
   let r;
   try {
     for (const k of PANE_GUARDS) delete process.env[k];
-    r = spawnBaton({ projectDir: "/x/projP", handoffFile: "/x/h.json", conf: {},
+    r = spawnBaton({ projectDir: "/x/projP", handoffFile: "/x/h.json", conf: {}, _env: {},
       _hasPane: (n) => { calls.push(`has:${n}`); return true; },
       _spawnPane: (d, f) => { calls.push(`pane:${d}:${f}`); return true; },
       _resolveWindow: () => { calls.push("resolve"); return { windowId: "W", tty: "" }; },
