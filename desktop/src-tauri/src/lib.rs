@@ -4922,35 +4922,59 @@ fn chrono_free_now() -> String {
         .unwrap_or_else(|_| "0".to_string())
 }
 
+/// The message inside a panic payload: `panic!("...")` arrives as `&str`, `panic!(String)` as
+/// `String`, and everything else still gets a named line rather than vanishing (#5917).
+fn panic_payload_message(payload: &(dyn std::any::Any + Send)) -> String {
+    payload
+        .downcast_ref::<&str>()
+        .map(|s| (*s).to_string())
+        .or_else(|| payload.downcast_ref::<String>().cloned())
+        .unwrap_or_else(|| "non-string panic payload".to_string())
+}
+
+/// One app-panics.log record. The 2026-09-01 .ips reports of #5917 showed ONLY the abort
+/// (`panic_cannot_unwind` inside tao's extern "C" sendEvent override), so the record carries
+/// everything the crash report never can: the message, the thread, the location, the backtrace.
+fn panic_log_line(now: &str, thread: &str, msg: &str, loc: &str, backtrace: &str) -> String {
+    if backtrace.is_empty() {
+        format!("{now} thread={thread} {msg} at {loc}\n")
+    } else {
+        format!("{now} thread={thread} {msg} at {loc}\n{backtrace}\n")
+    }
+}
+
+/// Append one panic record to ~/.agent-bus/app-panics.log. Fail-open by construction: a logging
+/// error is dropped, never allowed to become a second panic inside the panic path.
+fn append_panic_log(msg: &str, loc: &str, backtrace: &str) {
+    let line = panic_log_line(
+        &chrono_free_now(),
+        std::thread::current().name().unwrap_or("?"),
+        msg,
+        loc,
+        backtrace,
+    );
+    let path = desktop_bus_dir().join("app-panics.log");
+    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&path) {
+        use std::io::Write;
+        let _ = f.write_all(line.as_bytes());
+    }
+}
+
 pub fn run() {
-    // A panic on the main thread inside AppKit's sendEvent cannot unwind and aborts the app; the
-    // crash report then shows only the abort, never the message (card #5917, twice on 2026-09-01).
-    // This hook writes the message and location to a file BEFORE the abort, so the next crash
-    // names itself. It changes nothing about how the panic proceeds.
+    // #5917: a panic on the main thread inside AppKit's sendEvent cannot unwind — the process
+    // aborts with SIGABRT and the crash report shows only the abort, never the message (twice on
+    // 2026-09-01: typing in the editor, pasting into the composer). This hook writes the message,
+    // location, thread and backtrace to a file BEFORE the abort, so the next crash names itself.
+    // It changes nothing about how the panic proceeds.
     let default_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
-        let path = desktop_bus_dir().join("app-panics.log");
-        let msg = info
-            .payload()
-            .downcast_ref::<&str>()
-            .map(|s| s.to_string())
-            .or_else(|| info.payload().downcast_ref::<String>().cloned())
-            .unwrap_or_else(|| "non-string panic payload".to_string());
+        let msg = panic_payload_message(info.payload());
         let loc = info
             .location()
             .map(|l| format!("{}:{}", l.file(), l.line()))
             .unwrap_or_else(|| "unknown location".to_string());
-        let line = format!(
-            "{} thread={:?} {} at {}\n",
-            chrono_free_now(),
-            std::thread::current().name().unwrap_or("?"),
-            msg,
-            loc
-        );
-        if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&path) {
-            use std::io::Write;
-            let _ = f.write_all(line.as_bytes());
-        }
+        let backtrace = std::backtrace::Backtrace::force_capture().to_string();
+        append_panic_log(&msg, &loc, &backtrace);
         default_hook(info);
     }));
     tauri::Builder::default()
@@ -4972,7 +4996,13 @@ pub fn run() {
             }
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![
+        .invoke_handler(|invoke: tauri::ipc::Invoke<tauri::Wry>| {
+            // #5917 guard: tauri 2.11.5 has NO catch_unwind anywhere in its src (verified), so a
+            // panic in any command would unwind out through the AppKit/WebKit extern "C" callback
+            // that delivered the invoke — panic_cannot_unwind, SIGABRT — exactly the shape of the
+            // 2026-09-01 crashes. Catch instead: the panic is logged, the invoke goes unhandled,
+            // and the app lives.
+            let handler: fn(tauri::ipc::Invoke<tauri::Wry>) -> bool = tauri::generate_handler![
             greet,
             sign_request,
             identity_name,
@@ -5051,16 +5081,85 @@ pub fn run() {
             terminal::term_write,
             terminal::term_resize,
             terminal::term_detach
-        ])
+            ];
+            match std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || handler(invoke))) {
+                Ok(handled) => handled,
+                Err(payload) => {
+                    // Log and report the invoke as unhandled; JS sees a rejected command instead
+                    // of the process it was talking to dying mid-keystroke.
+                    append_panic_log(
+                        &format!("invoke handler: {}", panic_payload_message(&*payload)),
+                        "desktop_lib invoke_handler guard",
+                        "",
+                    );
+                    false
+                }
+            }
+        })
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
         .run(|_app_handle, event| {
-            // Language servers are children of this process; an app exit must not leave one
-            // orphaned. stdin-EOF usually does it, but this is the explicit promise.
-            if let tauri::RunEvent::Exit = event {
-                lsp::stop_all();
+            // #5917 guard, part two: tao's run loop calls this closure on the main thread for
+            // every event, and a panic here would unwind out through the same extern "C" boundary
+            // and abort — so catch and log it the way the invoke guard does.
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
+                // Language servers are children of this process; an app exit must not leave one
+                // orphaned. stdin-EOF usually does it, but this is the explicit promise.
+                if let tauri::RunEvent::Exit = event {
+                    lsp::stop_all();
+                }
+            }));
+            if let Err(payload) = result {
+                append_panic_log(
+                    &format!("RunEvent handler: {}", panic_payload_message(&*payload)),
+                    "desktop_lib RunEvent guard",
+                    "",
+                );
             }
         });
+}
+
+#[cfg(test)]
+mod panic_guard_tests {
+    use super::*;
+
+    #[test]
+    fn payload_message_reads_both_string_shapes_and_survives_anything_else() {
+        let borrowed: &(dyn std::any::Any + Send) = &"borrowed boom";
+        assert_eq!(panic_payload_message(borrowed), "borrowed boom");
+        let owned: &(dyn std::any::Any + Send) = &String::from("owned boom");
+        assert_eq!(panic_payload_message(owned), "owned boom");
+        let other: &(dyn std::any::Any + Send) = &7u32;
+        assert_eq!(panic_payload_message(other), "non-string panic payload");
+    }
+
+    #[test]
+    fn panic_log_line_carries_everything_the_ips_reports_never_had() {
+        // The 2026-09-01 .ips stacks of #5917 showed ONLY the abort frames, so the log line must
+        // name the message, the thread, the location and the backtrace.
+        let line = panic_log_line("1788374793", "main", "called `Option::unwrap()` on a `None` value", "view.rs:546", "0: tao::send_event");
+        assert!(line.contains("1788374793 thread=main"));
+        assert!(line.contains("called `Option::unwrap()` on a `None` value"));
+        assert!(line.contains("at view.rs:546"));
+        assert!(line.contains("0: tao::send_event"));
+        // A guard-caught panic has no backtrace to add; the line still stands alone.
+        let bare = panic_log_line("1788374793", "main", "boom", "guard", "");
+        assert_eq!(bare, "1788374793 thread=main boom at guard\n");
+    }
+
+    #[test]
+    fn the_catch_unwind_guard_traps_a_panicking_body_and_keeps_its_message() {
+        // The same pattern run() puts around the invoke and RunEvent handlers: a panic inside the
+        // body is caught instead of unwinding into the extern "C" event boundary, and the payload
+        // message survives for the log.
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            panic!("simulated main-thread panic");
+        }));
+        let err = outcome.expect_err("the panicking body must be caught");
+        assert_eq!(panic_payload_message(&*err), "simulated main-thread panic");
+        let ok = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| true));
+        assert_eq!(ok.expect("a clean body passes through"), true);
+    }
 }
 
 #[cfg(test)]
