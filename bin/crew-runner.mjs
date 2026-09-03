@@ -558,6 +558,10 @@ async function runTurn(prompt, isFirst, trigger = "kickoff") {
   // the window with no ERRF growth earns ONE direct stall report to the foreman, never a kill.
   const WD_MS = Number(process.env.TRANTOR_TURN_WATCHDOG_MS || 15 * 60 * 1000);
   const STAMPF = join(homedir(), ".agent-bus", `turnstamp-${AGENT}-${PROJ}.json`);
+  // Written by the shell's own time box (below) and read back here — the only honest signal that
+  // the turn was CUT rather than that the CLI failed on its own. Cleared before every turn.
+  const CUTF = join(homedir(), ".agent-bus", `turncut-${AGENT}-${PROJ}`);
+  try { unlinkSync(CUTF); } catch {}
   try {
     writeFileSync(STAMPF, JSON.stringify({ turn: TURN, startedAt: Date.now() }));
     const wd = spawn(process.execPath, [join(import.meta.dirname, "turn-watchdog.mjs"), STAMPF, ERRF, String(WD_MS), SESSION, PROJ, HUB],
@@ -567,7 +571,34 @@ async function runTurn(prompt, isFirst, trigger = "kickoff") {
   // Preserve the CLI's exit before waiting for the stderr process substitution. Without the
   // explicit wait, a short failing CLI can return while its error is still in the scrub pipe;
   // under load the classifier then reads an empty ERRF and reports the wrong failure reason.
-  const shell = `set -o pipefail; { ${inner} ; } 2> >(${SCRUB} --tee2 ${ERRF}); turn_exit=$?; wait; exit $turn_exit`;
+  // #6134-followup: the time box has to fire from INSIDE the shell, while the process tree is
+  // still standing. Killing the turn's process group from node missed a grandchild — codex runs
+  // its own commands via setsid, so `sleep 400` sat in a different group and survived
+  // process.kill(-pid). Worse, by the time node's timeout has killed bash the survivors have been
+  // reparented to init, so there is no tree left to walk and nothing to sweep.
+  //
+  // So bash boxes itself: at the deadline it walks its own descendants and kills them bottom-up.
+  // setsid changes a process's group and session but NEVER its parent, so `pgrep -P` recursion
+  // reaches exactly the children that a group signal cannot. Children first, then the parent, so
+  // nothing gets reparented mid-sweep and escapes the walk.
+  //
+  // The marker file is how node learns the turn was cut rather than merely failing: an exit status
+  // alone cannot tell "killed at the box" from "the CLI died on its own".
+  const sweep = `sweep() { local p; for p in $(pgrep -P $1 2>/dev/null); do sweep $p; done; kill -KILL $1 2>/dev/null; }`;
+  const box = TURN_MAX_MS ? `
+${sweep}
+( sleep ${Math.ceil(TURN_MAX_MS / 1000)}
+  kill -0 $job 2>/dev/null || exit 0
+  : > ${CUTF}
+  sweep $job
+) & boxpid=$!` : "boxpid=";
+  const shell = `set -o pipefail
+{ ${inner} ; } 2> >(${SCRUB} --tee2 ${ERRF}) &
+job=$!${box}
+wait $job; turn_exit=$?
+[ -n "$boxpid" ] && kill $boxpid 2>/dev/null
+wait
+exit $turn_exit`;
   const r = spawnSync("/bin/bash", ["-c", shell], {
     // detached: bash leads its OWN process group, so the time box can kill the CLI and everything
     // it spawned with one signal instead of orphaning the model process behind a dead shell.
@@ -576,7 +607,10 @@ async function runTurn(prompt, isFirst, trigger = "kickoff") {
     // takes SIGTTIN and stops forever. Nothing here runs interactively — every CLI is in -p /
     // exec / run mode — so closing stdin is what makes the group safe.
     detached: true,
-    ...(TURN_MAX_MS ? { timeout: TURN_MAX_MS, killSignal: "SIGKILL" } : {}),
+    // A BACKSTOP only, deliberately later than the shell's own box: if bash itself wedges, node
+    // still ends the turn. When the in-shell box works — the normal path — this never fires, which
+    // is the point: the shell kills while the tree is still walkable, node cannot.
+    ...(TURN_MAX_MS ? { timeout: TURN_MAX_MS + 30000, killSignal: "SIGKILL" } : {}),
     cwd: TURN_DIR, encoding: "utf8", stdio: cli.sid ? ["ignore", "pipe", "inherit"] : ["ignore", "inherit", "inherit"],
     env: { ...process.env, RELAY_URL: HUB, RELAY_AGENT: AGENT, RELAY_SESSION: SESSION, RELAY_PROJECT: PROJ,
       // A RUNNER-MANAGED SEAT MUST NEVER HAND ITSELF A BATON.
@@ -593,13 +627,15 @@ async function runTurn(prompt, isFirst, trigger = "kickoff") {
     maxBuffer: 16 * 1024 * 1024,
   });
   try { unlinkSync(STAMPF); } catch {}   // turn over — disarm the watchdog
-  // #6134: node's timeout signals only the shell it spawned. The CLI and its children share the
-  // detached group, so sweep the whole group — otherwise a boxed turn leaves a model still running
-  // (and still billing) against a runner that has moved on.
-  const cut = !!TURN_MAX_MS && (r.error?.code === "ETIMEDOUT" || (r.signal === "SIGKILL" && Date.now() - t0 >= TURN_MAX_MS));
-  if (cut && r.pid) {
-    try { process.kill(-r.pid, "SIGKILL"); } catch {}
-    log(`\x1b[33mturn cut at the ${Math.round(TURN_MAX_MS / 1000)}s time box — CLI process group ended\x1b[0m`);
+  // The shell's box leaves the marker; the backstop leaves an ETIMEDOUT. Either way the turn was
+  // cut, not merely failed.
+  const boxed = existsSync(CUTF);
+  const cut = !!TURN_MAX_MS && (boxed || r.error?.code === "ETIMEDOUT");
+  if (cut) {
+    // Belt and braces after the shell's descendant sweep: anything still sharing the turn's group.
+    if (r.pid) { try { process.kill(-r.pid, "SIGKILL"); } catch {} }
+    try { unlinkSync(CUTF); } catch {}
+    log(`\x1b[33mturn cut at the ${Math.round(TURN_MAX_MS / 1000)}s time box — CLI and every descendant ended${boxed ? "" : " (node backstop: bash itself was wedged)"}\x1b[0m`);
   }
   // #5869: scrub AT REST, synchronously, before anything reads the file back. The explicit shell
   // wait above drains the live stderr scrubber first; this pass is defense in depth for redaction.
