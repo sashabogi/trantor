@@ -67,15 +67,32 @@ fn project_new_cli_args(
     Ok(cli)
 }
 
-fn agent_list_has_pane(raw: &str, pane: &str) -> bool {
+/// What lives in the project's orchestrator pane, read off `herdr agent list` (#6138). Only idle
+/// and working are live agents a wake can act on: idle takes the kickoff, working is busy. Every
+/// other reading (done, no status row, unparsable output) is NO live agent — that is the reopen
+/// path's job, exactly as before.
+enum PaneAgentState {
+    Idle,
+    Working,
+    NoAgent,
+}
+
+fn pane_agent_state(raw: &str, pane: &str) -> PaneAgentState {
     serde_json::from_str::<serde_json::Value>(raw)
         .ok()
         .and_then(|value| value.get("result")?.get("agents")?.as_array().cloned())
-        .is_some_and(|agents| {
+        .and_then(|agents| {
             agents
                 .iter()
-                .any(|agent| agent.get("pane_id").and_then(|id| id.as_str()) == Some(pane))
+                .find(|agent| agent.get("pane_id").and_then(|id| id.as_str()) == Some(pane))
+                .and_then(|agent| agent.get("agent_status").and_then(|s| s.as_str()).map(str::to_string))
         })
+        .map(|status| match status.as_str() {
+            "idle" => PaneAgentState::Idle,
+            "working" => PaneAgentState::Working,
+            _ => PaneAgentState::NoAgent,
+        })
+        .unwrap_or(PaneAgentState::NoAgent)
 }
 
 fn project_wake_reopen_args(project: &str) -> [&str; 2] {
@@ -160,10 +177,31 @@ pub(crate) async fn project_wake(project: String, kickoff: String) -> Result<Str
         let mut list = tokio::process::Command::new("herdr");
         list.args(["agent", "list"]).env("PATH", terminal_path());
         let (agents, _) = run_command_output(list, "herdr agent list").await?;
-        if agent_list_has_pane(&agents, &pane) {
-            return Err(format!(
-                "{project} already has a live orchestrator in pane {pane}"
-            ));
+        match pane_agent_state(&agents, &pane) {
+            // A LIVE idle orchestrator: deliver the kickoff straight into it — no reopen, no
+            // stacking, no "already has a live orchestrator" refusal the operator cannot see
+            // past (#6138). The idle wait inside kickoff_after_reopen is already satisfied.
+            PaneAgentState::Idle => {
+                let kickoff = cli_decided_kickoff(&project, &dir, kickoff).await;
+                let KickoffReport { outcome, attempts, elapsed_secs } =
+                    kickoff_after_reopen(&pane, kickoff).await;
+                return match outcome {
+                    Ok(outcome) => Ok(format!(
+                        "kickoff sent into idle pane {pane} · kickoff: {} · {attempts} attempt(s), {elapsed_secs}s",
+                        kickoff_outcome_label(&outcome)
+                    )),
+                    Err(error) => Err(format!(
+                        "kickoff into idle pane {pane} failed after {attempts} attempt(s), {elapsed_secs}s: {error}"
+                    )),
+                };
+            }
+            // A LIVE working orchestrator: a second prompt would interrupt mid-turn. Name the
+            // pane so the operator knows where to look; the row shows it until dismissed.
+            PaneAgentState::Working => {
+                return Err(format!("{project} is busy in pane {pane} — the orchestrator is mid-turn"));
+            }
+            // done / no agent row: nothing live to talk to — today's reopen path handles it.
+            PaneAgentState::NoAgent => {}
         }
     }
 
@@ -182,14 +220,7 @@ pub(crate) async fn project_wake(project: String, kickoff: String) -> Result<Str
     // signed board, so a brief wakes into the crew's PRD review and a blank project wakes
     // plainly. The app's own `kickoff` is the fallback for a CLI that cannot answer. The
     // selector blocks on a signed hub read, so it runs off the async runtime's threads.
-    let kickoff = {
-        let (project, dir, fallback) = (project.clone(), dir.clone(), kickoff.clone());
-        tokio::task::spawn_blocking(move || {
-            crate::terminal::wake_kickoff_prompt(&project, &dir, &fallback)
-        })
-        .await
-        .unwrap_or_else(|_| kickoff.clone())
-    };
+    let kickoff = cli_decided_kickoff(&project, &dir, kickoff).await;
     // #6139: the reopened session is BOOTING. A prompt fired straight after `trantor open`
     // returned was logged by herdr 90 ms after the claude process appeared, reported as
     // agent_prompted, and never reached the session (four wakes in a row, no kickoff in the
@@ -206,6 +237,19 @@ pub(crate) async fn project_wake(project: String, kickoff: String) -> Result<Str
             "project opened in pane {pane}, but the kickoff prompt failed after {attempts} attempt(s), {elapsed_secs}s: {error}"
         )),
     }
+}
+
+/// The CLI decides the kickoff (#6112): it alone holds the checkout's docs/PRD.md AND the signed
+/// board. The app's own fallback answers for a CLI that cannot. The selector blocks on a signed
+/// hub read, so it runs off the async runtime's threads. Shared by both wake paths (#6138): the
+/// reopen path and the idle-pane path.
+async fn cli_decided_kickoff(project: &str, dir: &Path, fallback: String) -> String {
+    let (project, dir, for_selection) = (project.to_string(), dir.to_path_buf(), fallback.clone());
+    tokio::task::spawn_blocking(move || {
+        crate::terminal::wake_kickoff_prompt(&project, &dir, &for_selection)
+    })
+    .await
+    .unwrap_or_else(|_| fallback)
 }
 
 /// The line project_wake returns: where the session lives and what became of its boot prompt,
@@ -234,6 +278,25 @@ mod tests {
             adopt: false,
             brief: "Build the portal.".into(),
         }
+    }
+
+    #[test]
+    fn the_pane_agent_state_reads_idle_working_and_no_agent_off_herdr_list_output() {
+        // Shape copied from a real `herdr agent list` (2026-09-03): result.agents[] with pane_id
+        // and agent_status; a pane can be idle, working, done (process gone), or absent.
+        let raw = r#"{"id":"cli:agent:list","result":{"agents":[
+            {"agent":"claude","agent_status":"idle","pane_id":"wJ:p1","cwd":"/tmp/pr-os"},
+            {"agent":"claude","agent_status":"working","pane_id":"w2:p3H","cwd":"/tmp/busy"},
+            {"agent":"claude","agent_status":"done","pane_id":"w9:p1","cwd":"/tmp/finished"}
+        ],"type":"agent_list"}}"#;
+        assert!(matches!(pane_agent_state(raw, "wJ:p1"), PaneAgentState::Idle));
+        assert!(matches!(pane_agent_state(raw, "w2:p3H"), PaneAgentState::Working));
+        // done is NOT a live agent: the reopen path owns it, a prompt would hit nobody.
+        assert!(matches!(pane_agent_state(raw, "w9:p1"), PaneAgentState::NoAgent));
+        assert!(matches!(pane_agent_state(raw, "w4:p9"), PaneAgentState::NoAgent));
+        // garbage in, no agent out — the wake must fall toward the reopen path, never panic
+        assert!(matches!(pane_agent_state("not json", "wJ:p1"), PaneAgentState::NoAgent));
+        assert!(matches!(pane_agent_state("{\"result\":{}}", "wJ:p1"), PaneAgentState::NoAgent));
     }
 
     #[test]
@@ -283,7 +346,28 @@ mod tests {
     #[test]
     fn live_orchestrator_detection_is_pane_exact() {
         let rows = r#"{"result":{"agents":[{"pane_id":"pane-live","agent_status":"idle"}]}}"#;
-        assert!(agent_list_has_pane(rows, "pane-live"));
-        assert!(!agent_list_has_pane(rows, "pane-other"));
+        // #6138: the live reading is the state, not just presence — idle and working are live
+        // agents a wake acts on; done or absent is nobody.
+        assert!(matches!(pane_agent_state(rows, "pane-live"), PaneAgentState::Idle));
+        assert!(matches!(pane_agent_state(rows, "pane-other"), PaneAgentState::NoAgent));
+    }
+
+    /// #6138 real path, run by hand against a REAL idle orchestrator pane:
+    ///   1. `trantor new` a throwaway + `trantor open <name>` (a claude session boots in a pane)
+    ///   2. wait for `herdr agent list` to read idle on that pane
+    ///   3. `cargo test --manifest-path <Cargo.toml> wake_delivers -- --ignored --test-threads=1`
+    /// The command under test is the exact handler the sidebar's Wake button invokes.
+    /// #[tokio::test] needs the macros+rt features, which only the dev profile's tests pull in
+    /// via the dev-dependency below — the runtime itself only needs rt-multi-thread/time/process.
+    #[cfg(test)]
+    #[tokio::test]
+    #[ignore = "real path: needs an idle orchestrator pane (see the steps in this comment)"]
+    async fn wake_delivers_kickoff_into_an_idle_pane() {
+        let project = std::env::var("WAKE_REAL_PROJECT").expect("set WAKE_REAL_PROJECT=<throwaway project with an idle pane>");
+        let result = project_wake(project, "The project is empty; say what you see and ask what to build.".into())
+            .await
+            .expect("wake with an idle pane must deliver the kickoff, not refuse");
+        assert!(result.starts_with("kickoff sent into idle pane"), "{result}");
+        assert!(result.contains("prompt delivered"), "{result}");
     }
 }
