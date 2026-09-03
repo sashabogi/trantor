@@ -1,6 +1,7 @@
 import { useEffect, useReducer, useRef, useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
-import { getCurrentWebview } from "@tauri-apps/api/webview";
+import { invoke, type InvokeArgs } from "@tauri-apps/api/core";
+import { getCurrentWebview, type DragDropEvent } from "@tauri-apps/api/webview";
+import type { Event } from "@tauri-apps/api/event";
 import { FileText, FolderGit2, Sparkles, X } from "lucide-react";
 import { BrandGlyph } from "../../shared/Avatar";
 import { notifyOnce } from "../../shared/notify";
@@ -15,7 +16,22 @@ type StartMode = "empty" | "clone" | "adopt";
 type GenesisPath = "blank" | "brief";
 type ProjectNewResult = { name: string; dir: string; branch: string; hub: string; card: number | null };
 
-export function GenesisSheet({ devRoot, onClose, onMade, onCreated }: {
+/** The seams the sheet crosses, injected so a drill supplies a faithful in-memory stand-in
+ *  instead of mocking the tauri modules (#6253) — the pattern ChatDeps and TerminalPane's deps
+ *  already set. Production callers omit it and get the real modules. */
+export type GenesisSheetDeps = {
+  invoke: <T>(cmd: string, args?: InvokeArgs) => Promise<T>;
+  /** The webview's drag-drop channel; resolves to the unlisten function. The handler sees the
+   *  same Event envelope the real channel delivers (payload carries the drop). */
+  listenDrops: (handler: (event: Event<DragDropEvent>) => void) => Promise<() => void>;
+};
+
+export const DEFAULT_GENESIS_DEPS: GenesisSheetDeps = {
+  invoke: <T,>(cmd: string, args?: InvokeArgs) => invoke<T>(cmd, args),
+  listenDrops: handler => getCurrentWebview().onDragDropEvent(handler),
+};
+
+export function GenesisSheet({ devRoot, onClose, onMade, onCreated, deps = DEFAULT_GENESIS_DEPS }: {
   devRoot: string;
   onClose: () => void;
   /** The project now exists on disk and is posted to the hub — add it to the sidebar's list. */
@@ -24,7 +40,10 @@ export function GenesisSheet({ devRoot, onClose, onMade, onCreated }: {
    *  lens. The wake that follows is a detached step (toast only) — see genesisFlow.ts's header
    *  for why this can no longer wait on it. */
   onCreated: (project: string) => void;
+  /** Test seam — production callers omit it and get the real modules. */
+  deps?: GenesisSheetDeps;
 }) {
+  const { invoke: invokeFn, listenDrops } = deps;
   const [nameInput, setNameInput] = useState("");
   const [parentOverride, setParentOverride] = useState<string | null>(null);
   const [mode, setMode] = useState<StartMode>("empty");
@@ -50,13 +69,13 @@ export function GenesisSheet({ devRoot, onClose, onMade, onCreated }: {
   useEffect(() => {
     let alive = true;
     let unlisten: (() => void) | undefined;
-    getCurrentWebview().onDragDropEvent(event => {
+    listenDrops(event => {
       if (!alive || event.payload.type !== "drop" || !event.payload.paths[0]) return;
       const dpr = window.devicePixelRatio || 1;
       const hit = document.elementFromPoint(event.payload.position.x / dpr, event.payload.position.y / dpr);
       if (!hit || !sheetRef.current?.contains(hit)) return;
       const dropped = event.payload.paths[0];
-      void invoke<string>("genesis_read_brief", { path: dropped })
+      void invokeFn<string>("genesis_read_brief", { path: dropped })
         .then(text => {
           if (!alive) return;
           setPath("brief");
@@ -83,6 +102,8 @@ export function GenesisSheet({ devRoot, onClose, onMade, onCreated }: {
   // has its own textarea whose onChange already owns pastes there.
   const onSheetPaste = (event: React.ClipboardEvent<HTMLFormElement>) => {
     if (path !== "brief" && !busy) {
+      // SAFETY: a clipboard paste always targets the focused element inside the form, and tagName
+      // is the only thing read off it — the cast names that element, never a guess.
       const target = event.target as HTMLElement;
       const text = event.clipboardData?.getData("text") ?? "";
       if (target.tagName !== "INPUT" && text) {
@@ -109,7 +130,7 @@ export function GenesisSheet({ devRoot, onClose, onMade, onCreated }: {
     setNameInput(slug);
     setDropError(null);
     try {
-      const raw = await invoke<string>("project_new", {
+      const raw = await invokeFn<string>("project_new", {
         args: {
           name: slug,
           target,
@@ -130,7 +151,7 @@ export function GenesisSheet({ devRoot, onClose, onMade, onCreated }: {
       if (toast) void notifyOnce(toast);
       // Fire-and-forget: the sheet is already gone, so its own state has nothing left to show a
       // wake failure in. A toast is the only UI a background step like this can still raise.
-      void invoke<string>("project_wake", {
+      void invokeFn<string>("project_wake", {
         project: made.name,
         kickoff: chosenPath === "brief" ? genesisKickoff(briefText, dropName) : BLANK_KICKOFF,
       }).catch(reason => {

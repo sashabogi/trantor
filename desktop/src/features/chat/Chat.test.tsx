@@ -18,7 +18,10 @@ import type { WakeProgress } from "../genesis/wakeProgress";
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 type Invoked = { cmd: string };
-type Handler = (ev: { payload: string }) => void;
+// The container holds handlers for BOTH payload shapes the chat listens to: chat-rows /
+// chat-session-changed / orch-status arrive as JSON strings, wake-progress as a structured
+// object. `unknown` is the honest payload type — the fires narrow it, never a cast.
+type Handler = (ev: { payload: unknown }) => void;
 
 /** A faithful in-memory ChatDeps: invoke answers the chat's commands, listen records handlers,
  *  orchestratorOf finds no pane, and the heavy children render nothing. */
@@ -51,9 +54,9 @@ function makeDeps(wakeProjects: string[] = []) {
       return Promise.resolve(null as T);
     },
     listen: <T,>(event: string, cb: (ev: { payload: T }) => void): Promise<() => void> => {
-      // SAFETY: Chat listens for chat-rows / chat-session-changed / orch-status, all string-payload
-      // events; the handler is stored under that container and fired with it, so T is string here.
-      const boxed = cb as (ev: { payload: string }) => void;
+      // SAFETY: the handler is stored under the unknown-payload container (Handler, above) and
+      // fired with exactly what listen delivered — the container erases nothing the fires need.
+      const boxed = cb as Handler;
       handlers.set(event, [...(handlers.get(event) ?? []), boxed]);
       return Promise.resolve(() => {});
     },
@@ -182,11 +185,9 @@ describe("Chat wake chain note (#6201)", () => {
 
   const fireProgress = (payload: WakeProgress) =>
     act(async () => {
-      for (const cb of handlers.get("wake-progress") ?? []) {
-        // SAFETY: wake-progress payloads are structured objects; the stored handler boxes to
-        // string payloads for the chat's own events, so the cast widens it back for this one.
-        (cb as unknown as (ev: { payload: WakeProgress }) => void)({ payload });
-      }
+      // The Handler container's payload is unknown — the structured wake object rides in
+      // directly, no cast.
+      for (const cb of handlers.get("wake-progress") ?? []) cb({ payload });
     });
 
   const render = (wakeProjects: string[] = []) => {

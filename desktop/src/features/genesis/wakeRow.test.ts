@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { classifyWakeOutcome, wakeOutcomeIsTransient, wakeRowLine, WAKE_OUTCOME_MS, WAKE_PENDING_LINE, WAKE_SENT_LINE, type WakeRowState } from "./wakeRow";
+import { classifyWakeOutcome, wakeOutcomeIsTransient, wakeRowLine, WAKE_OUTCOME_MS, WAKE_PENDING_LINE, WAKE_SENT_LINE } from "./wakeRow";
 
 describe("wakeRow states (#6138)", () => {
   it("reads the idle-pane path as kickoff sent, the reopen path as woken", () => {
@@ -16,12 +16,17 @@ describe("wakeRow states (#6138)", () => {
     expect(busy.text).toContain("busy in pane wJ:p1");
     const failed = classifyWakeOutcome(null, "no local checkout for ghost");
     expect(failed.kind).toBe("error");
-    expect(classifyWakeOutcome(null, undefined as unknown as string).kind).toBe("error");
+    const missingErr: unknown = undefined;
+    // SAFETY: a wake answer decoded from the IPC boundary can miss the error field entirely — at
+    // runtime that is undefined, a value the string|null parameter cannot name. The hole feeds
+    // exactly that shape; the classifier must answer the error outcome, never throw on it.
+    expect(classifyWakeOutcome(null, missingErr as string | null).kind).toBe("error");
   });
 
   it("errors stay on the row; woken, kickoff sent and busy fade after the few seconds", () => {
     expect(WAKE_OUTCOME_MS).toBeGreaterThanOrEqual(3000);
-    const error = classifyWakeOutcome(null, "hub down") as Extract<WakeRowState, { phase: "outcome" }>;
+    // classifyWakeOutcome's return type IS WakeOutcome — no narrowing to buy here.
+    const error = classifyWakeOutcome(null, "hub down");
     expect(wakeOutcomeIsTransient(error)).toBe(false);
     for (const kind of ["sent", "woken", "busy"] as const) {
       expect(wakeOutcomeIsTransient({ phase: "outcome", kind, text: "x" })).toBe(true);
