@@ -76,6 +76,25 @@ SEATDIR="$HOME/.agent-bus/seats"; mkdir -p "$SEATDIR"
 DRY="${CREW_DRY_RUN:-0}"
 run() { if [ "$DRY" = "1" ]; then echo "[dry] $*"; else eval "$*"; fi; }
 
+# ── cross-project guard (#6228) ────────────────────────────────────────────────────────────────────
+# The pr-os incident: an orchestrator pane badged TRANTOR_ORCH=pr-os ran `trantor up` while cd'd into
+# the crebral-com worktree and brought up seats there under its OWN session. TRANTOR_ORCH (set once by
+# `trantor open`, never per-invocation) and TRANTOR_SEAT (set once by crew-runner.mjs on every seat it
+# spawns, see bin/crew-runner.mjs) are both STABLE badges of "this shell already has a project home" —
+# unlike RELAY_PROJECT alone, which this same script's own tests legitimately override per-invocation
+# to name a target explicitly (a bare `RELAY_PROJECT=x trantor up` from an unbadged shell is the
+# operator, not a breach, and must keep working). A badged shell whose badge disagrees with the `up`
+# target refuses mechanically — the CLI belt to the hub's own 403 (hub.mjs crossProjectGuard).
+if [ "$CMD" = "up" ]; then
+  BADGE="${TRANTOR_ORCH:-${TRANTOR_SEAT:-}}"
+  if [ -n "$BADGE" ] && [ "$BADGE" != "$PROJ" ]; then
+    echo "trantor: refused — this shell is badged for '$BADGE', not '$PROJ'." >&2
+    echo "  Cross-project action is a breach unless the operator linked the projects." >&2
+    echo "  Run: trantor policy link $BADGE $PROJ --reason \"<why>\"" >&2
+    exit 1
+  fi
+fi
+
 # ── STATE helpers ──────────────────────────────────────────────────────────────────────────────────
 # Row schema (TSV): PROJECT <TAB> KIND <TAB> AGENT <TAB> HANDLE
 #   KIND=win    HANDLE=Terminal window id           (one row per agent)

@@ -8,6 +8,7 @@ import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { drillEnv } from "./drill-env.mjs";
+import { generate, signRequest } from "./lib/identity.mjs";
 
 const ROOT = dirname(fileURLToPath(import.meta.url));
 const PORT = 4951;
@@ -17,6 +18,17 @@ let pass = 0, fail = 0;
 const ok = (name, cond, detail = "") => { if (cond) { pass++; console.log(`  ✓ ${name}`); } else { fail++; console.log(`  ✗ ${name} ${detail}`); } };
 const api = async (path, body) => (await fetch(HUB + path, body ? { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) } : {})).json();
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+// SIGNED calls — /register etc. above deliberately go through unsigned `api()` (warn-mode, protocol
+// scenarios unrelated to identity). The cross-project guard (#6228) only fences a request that
+// resolved to a real identity, so exercising it needs a real signature, not a bare fetch.
+async function sApi(id, method, path, bodyObj) {
+  const body = bodyObj === undefined ? undefined : JSON.stringify(bodyObj);
+  const hdrs = signRequest({ pubkey: id.pubkey, privkey: id.privkey }, { method, path, body });
+  const r = await fetch(HUB + path, { method, headers: { "content-type": "application/json", ...hdrs }, body });
+  const txt = await r.text();
+  let j; try { j = JSON.parse(txt); } catch { j = { _raw: txt.slice(0, 400) }; }
+  return { status: r.status, json: j };
+}
 
 // refuse to run against a squatter: an orphaned hub on the test port would silently
 // serve STALE code (spawn's EADDRINUSE dies into stdio:ignore) and poison every drill
@@ -394,6 +406,54 @@ try {
   ok("/economics rolls up subagent-notional cost across cards", life && Math.abs(life.usd - 1.7345) < 1e-6 && life.count === 2);
   ok("/economics scopes notional per project", eco.notionalByProject && Math.abs(eco.notionalByProject["ccproj"] - 1.7345) < 1e-6);
   ok("notional rollup is its OWN bucket, not folded into scrooge real-spend", !("subagent-notional" in (eco.scrooge?.by_model || {})));
+
+  console.log("scenario: cross-project guard (#6228) — the pr-os/crebral-com incident, mechanized");
+  {
+    // TOFU-enrolled with the SAME "kind:project" name convention every crew seat gets (no explicit
+    // scopes) — home project is derived from the name, exactly like crossProjectGuard's own reading.
+    const orch = generate();
+    ok("orchestrator identity enrolls", (await sApi(orch, "POST", "/enroll", { name: "claude:pros", kind: "agent" })).status < 400);
+    const other = generate();
+    ok("target-project identity enrolls", (await sApi(other, "POST", "/enroll", { name: "codex:crebral", kind: "agent" })).status < 400);
+    await sApi(other, "POST", "/register", { session: "codex:crebral", project: "crebral", status: "seat" });
+    // A globally-scoped identity (project:"*") whose OWN NAME still says "pros" — the exact loophole
+    // the guard closes: defaultScopesFor mints project:"*" for any non-agent kind (an orchestrator, a
+    // human) by DEFAULT, so scopeAllows alone waves a cross-project write through. Self-declare the
+    // scope via TOFU (defaultScopesFor honors explicit `scopes` in the enroll body) to prove the new
+    // fence catches what the pre-existing scope check does not.
+    const globalOrch = generate();
+    ok("globally-scoped orchestrator identity enrolls", (await sApi(globalOrch, "POST", "/enroll", { name: "claude:pros", kind: "agent", scopes: [{ project: "*", role: "owner" }] })).status < 400);
+
+    const sendCross = await sApi(orch, "POST", "/send", { from: "claude:pros", to: "codex:crebral", text: "contract: build it now" });
+    ok("cross-project /send is refused, naming the rule", sendCross.status === 403 && /cross-project/.test(sendCross.json.error || ""), JSON.stringify(sendCross));
+    const sendSame = await sApi(orch, "POST", "/send", { from: "claude:pros", to: "all", text: "status update, my own project" });
+    ok("same-project /send still works", sendSame.status === 200, JSON.stringify(sendSame));
+
+    const taskCross = await sApi(globalOrch, "POST", "/task", { project: "crebral", title: "build the thing", by: "claude:pros" });
+    ok("cross-project /task create is refused even with a global scope", taskCross.status === 403 && /cross-project/.test(taskCross.json.error || ""), JSON.stringify(taskCross));
+    const taskSame = await sApi(orch, "POST", "/task", { project: "pros", title: "build the thing", by: "claude:pros" });
+    ok("same-project /task create still works", taskSame.status === 200 && taskSame.json.task?.id > 0, JSON.stringify(taskSame));
+
+    const regCross = await sApi(globalOrch, "POST", "/register", { session: "claude:crebral", project: "crebral", status: "seat booting" });
+    ok("cross-project /register is refused (the actual incident)", regCross.status === 403 && /cross-project/.test(regCross.json.error || ""), JSON.stringify(regCross));
+
+    const theirs = await sApi(other, "POST", "/task", { project: "crebral", title: "their own card", by: "codex:crebral" });
+    const updCross = await sApi(globalOrch, "POST", "/task/update", { id: theirs.json.task.id, status: "doing" });
+    ok("cross-project /task/update is refused", updCross.status === 403 && /cross-project/.test(updCross.json.error || ""), JSON.stringify(updCross));
+
+    const inviteCross = await sApi(globalOrch, "POST", "/invite", { kind: "agent", scopes: [{ project: "crebral", role: "write" }] });
+    ok("cross-project /invite (minting access) is refused even with a global scope", inviteCross.status === 403 && /cross-project/.test(inviteCross.json.error || ""), JSON.stringify(inviteCross));
+
+    const owner = generate();
+    await sApi(owner, "POST", "/enroll", { name: "admin", kind: "human" });
+    const ownerCross = await sApi(owner, "POST", "/task", { project: "crebral", title: "operator override", by: "admin" });
+    ok("the operator's own (kind:human) identity is exempt from the guard", ownerCross.status === 200, JSON.stringify(ownerCross));
+
+    const linked = await sApi(owner, "POST", "/policy", { link: { projects: ["pros", "crebral"], reason: "test link #6228" } });
+    ok("the owner can declare the projects linked", linked.status === 200, JSON.stringify(linked));
+    const sendLinked = await sApi(orch, "POST", "/send", { from: "claude:pros", to: "codex:crebral", text: "contract: now linked" });
+    ok("a declared trantor policy link opens the door", sendLinked.status === 200, JSON.stringify(sendLinked));
+  }
 
 } finally {
   hub.kill("SIGKILL");

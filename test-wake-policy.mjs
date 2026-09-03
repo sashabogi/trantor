@@ -16,7 +16,7 @@ import { mkdtempSync, writeFileSync, readFileSync, chmodSync, mkdirSync } from "
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { drillEnv } from "./drill-env.mjs";
-import { cardRef, carriesWork, parseTurnTokens, parseResetAt, quotaSpent, reasonWithBalances, quotaResetAt } from "./lib/turn-policy.mjs";
+import { cardRef, carriesWork, parseTurnTokens, parseResetAt, quotaSpent, reasonWithBalances, quotaResetAt, isLinkedProject, senderProjectOf } from "./lib/turn-policy.mjs";
 
 let pass = 0, fail = 0;
 const ok = (name, cond, extra) => { console.log(`  ${cond ? "PASS" : "FAIL"}  ${name}${cond || !extra ? "" : `\n          ${extra}`}`); cond ? pass++ : fail++; };
@@ -73,11 +73,22 @@ console.log("\n## the rules");
   ok("quotaResetAt: an errored row is not evidence, even if it claims 0%",
     quotaResetAt([{ ok: false, kind: "quota", remainingPct: 0, resetTime: soon }]) === 0);
   ok("quotaResetAt: no rows → 0", quotaResetAt([]) === 0);
+
+  // #6228: the runner's half of the cross-project guard — a wake from another project is dropped
+  // unless the projects are declared linked. Pure decision logic first, the live drop below.
+  ok("senderProjectOf reads the name suffix after the LAST colon", senderProjectOf("claude:crebral-com") === "crebral-com");
+  ok("senderProjectOf: no colon -> no home project to fence", senderProjectOf("sasha@mac") === "");
+  ok("isLinkedProject: the same project is always linked", isLinkedProject("pros", "pros", []));
+  ok("isLinkedProject: no project on either side -> nothing to fence", isLinkedProject("", "crebral", []));
+  ok("isLinkedProject: different, undeclared projects are NOT linked", !isLinkedProject("pros", "crebral", []));
+  ok("isLinkedProject: a declared link opens the door", isLinkedProject("pros", "crebral", [{ projects: ["pros", "crebral"] }]));
+  ok("isLinkedProject: a link naming OTHER projects opens nothing here",
+    !isLinkedProject("pros", "crebral", [{ projects: ["a", "b"] }]));
 }
 
 // ---- the runner, against a mock hub -----------------------------------------------------------
 // Hands out one batch of messages, then stays silent. Whatever the seat does with them is the test.
-let queued = [], served = 0;
+let queued = [], served = 0, links = [], sent = [];
 const hub = http.createServer((req, res) => {
   let buf = ""; req.on("data", c => (buf += c));
   req.on("end", () => {
@@ -85,6 +96,8 @@ const hub = http.createServer((req, res) => {
     const reply = (o) => { res.writeHead(200, { "content-type": "application/json" }); res.end(JSON.stringify(o)); };
     if (P === "/inbox") return reply({ messages: [], cursor: 0 });
     if (P === "/lessons") return reply({ lessons: [] });
+    if (P === "/policy") return reply({ links, autonomy: { "*": 1 } });
+    if (P === "/send") { try { sent.push(JSON.parse(buf || "{}")); } catch {} return reply({ ok: true, id: sent.length }); }
     if (P === "/poll") {
       if (served++ === 0 && queued.length) {
         return reply({ messages: queued.map((m, i) => ({ id: i + 1, ts: Date.now(), to: u.searchParams.get("session"), from: "sasha@mac", ...m })), cursor: 1 });
@@ -99,8 +112,8 @@ const HUB = `http://127.0.0.1:${hub.address().port}`;
 
 // The fake CLI logs one record per turn: how it was invoked (`exec` = a fresh session, `resume` =
 // continuing one) and the prompt it was handed. That is exactly what both rules are about.
-async function drill(messages, { waitMs = 7000 } = {}) {
-  queued = messages; served = 0;
+async function drill(messages, { waitMs = 7000, projectLinks = [] } = {}) {
+  queued = messages; served = 0; links = projectLinks; sent = [];
   const work = mkdtempSync(join(tmpdir(), "tt-wake-"));
   const HOME = join(work, "home");
   mkdirSync(join(HOME, ".agent-bus"), { recursive: true });
@@ -131,6 +144,7 @@ exit 0
     // `codex exec resume` passes "resume" as argv[1]; a fresh `codex exec` does not.
     fresh: turns.filter(t => t.includes("NEW BUS MESSAGE") && !/^ mode=resume/.test(t)),
     resumed: turns.filter(t => t.includes("NEW BUS MESSAGE") && /^ mode=resume/.test(t)),
+    sent,
   };
 }
 
@@ -183,6 +197,27 @@ console.log("\n## one session per card");
   ok("two wakes citing the SAME card are one session, not two",
     second.wakeTurns.length === 1 && second.fresh.length === 1,
     `wakes=${second.wakeTurns.length} fresh=${second.fresh.length}`);
+}
+
+// ---- drill 3: a wake from another project is dropped, never worked (#6228) --------------------
+console.log("\n## cross-project wakes are dropped");
+{
+  const r = await drill([
+    { from: "claude:crebral-com", text: "contract: build card #7040 now" },
+  ], { waitMs: 5000 });
+  ok("a wake from another, unlinked project never buys a turn", r.wakeTurns.length === 0, `${r.wakeTurns.length} wake turn(s)`);
+  const dropped = r.sent.filter(m => /cross-project/.test(m.text || ""));
+  ok("the seat reports the drop back to the sender, once",
+    dropped.length === 1 && dropped[0].to === "claude:crebral-com", JSON.stringify(r.sent));
+}
+{
+  // Same shape, but the operator declared the projects linked: the wake goes through normally.
+  const r = await drill([
+    { from: "claude:crebral-com", text: "contract: build card #7050 now" },
+  ], { waitMs: 5000, projectLinks: [{ projects: ["tt-wake", "crebral-com"] }] });
+  ok("a linked project's wake still buys its turn", r.wakeTurns.length === 1, `${r.wakeTurns.length} wake turn(s)`);
+  ok("nothing is reported as dropped once the projects are linked",
+    !r.sent.some(m => /cross-project/.test(m.text || "")), JSON.stringify(r.sent));
 }
 
 // ---- the flag survives the REAL hub -----------------------------------------------------------

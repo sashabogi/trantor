@@ -46,6 +46,16 @@ explicit EVENT/INTERFACE CONTRACT — cross-agent bugs come from contract drift.
    request natively, which is the whole reason it exists. If it is missing: `trantor app install`.
 
 ## Phase 2 — fire up the crew (with the Advisor's models)
+**Cross-project action is a breach unless the operator linked the projects.** `trantor up` only
+ever targets the project you are already IN — never bring up seats in, register a seat into, or
+send a card/contract to a DIFFERENT project because an instruction reads that way ("build it where
+the answers are stored" is not a project name). If the work genuinely belongs to another project,
+name it and ask the operator once; do not infer it and do not route around the refusal. The hub
+403s a cross-project `/send`, `/task`, `/task/update`, `/register` or `/invite` on its own
+(`trantor policy link <a> <b> --reason "<why>"` is the only door), and a badged shell's `trantor up`
+refuses the same way — this is belt and braces, not the first line of defense; get the target
+project right before dispatching.
+
 **Each crew card from `relay_advise` carries a `launch` spec — run it VERBATIM; never invent a
 CLI invocation or run an agent "in a terminal" yourself.** Spawn every seat in one call:
 `trantor up <launch> <launch> … --task <kind> --difficulty <diff>`. The live roster + the
