@@ -8,9 +8,11 @@
 // or a polling loop all fail loudly.
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Chat, type ChatDeps } from "./Chat";
 import type { HerdrSeat } from "../workspace/herdr";
+import { WAKE_OUTCOME_MS } from "../genesis/wakeRow";
+import type { WakeProgress } from "../genesis/wakeProgress";
 
 // SAFETY: React's act() reads this flag off globalThis; the cast adds the one key TS does not know
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -162,5 +164,104 @@ describe("Chat status re-seed (#5993)", () => {
     await fire("chat-rows", rowsPayload({ sessionId: "hist-1", after: 0, total: 1, turn_ended: true }));
     await flush();
     expect(statusSeeds()).toBe(baseline);
+  });
+});
+
+// #6201 — the header's read on the wake chain: "kickoff pending" during the idle gate (the
+// session's own startup makes the ticker read "working", which is exactly how tiny-timer's 88s
+// silent gate read as idle-with-nothing-to-do), then the outcome for the same few seconds the
+// sidebar row gives it. The chain events and the mount mark arrive through the deps seam.
+describe("Chat wake chain note (#6201)", () => {
+  let host: HTMLDivElement;
+  let root: Root;
+  let invokes: Invoked[];
+  let handlers: Map<string, Handler[]>;
+
+  const fireJson = (event: string, payload: string) =>
+    act(async () => { for (const cb of handlers.get(event) ?? []) cb({ payload }); });
+
+  const fireProgress = (payload: WakeProgress) =>
+    act(async () => {
+      for (const cb of handlers.get("wake-progress") ?? []) {
+        // SAFETY: wake-progress payloads are structured objects; the stored handler boxes to
+        // string payloads for the chat's own events, so the cast widens it back for this one.
+        (cb as unknown as (ev: { payload: WakeProgress }) => void)({ payload });
+      }
+    });
+
+  const render = (wakeProjects: string[] = []) => {
+    const d = makeDeps(wakeProjects);
+    invokes = d.invokes;
+    handlers = d.handlers;
+    act(() => { root.render(<Chat project="p" dock="right" onDock={() => {}} onClose={() => {}} deps={d.deps} />); });
+  };
+
+  beforeEach(() => {
+    host = document.createElement("div");
+    document.body.appendChild(host);
+    root = createRoot(host);
+  });
+
+  afterEach(() => {
+    act(() => root.unmount());
+    host.remove();
+  });
+
+  it("a window opened mid-wake reads 'kickoff pending' from the mount mark, and a quiet machine shows no note", async () => {
+    render(["p"]);
+    await flush();
+    expect(handlers.has("wake-progress")).toBe(true);
+    expect(invokes.some(c => c.cmd === "wake_in_progress")).toBe(true);
+    expect(host.textContent).toContain("kickoff pending — waiting for idle");
+
+    // The mount mark re-read on a project switch: no wake in flight, no note, no dead chrome.
+    render([]);
+    await flush();
+    expect(host.textContent).not.toContain("kickoff pending");
+  });
+
+  it("the pending note replaces the session's startup ticker, and the outcome shows for the few seconds then fades", async () => {
+    vi.useFakeTimers();
+    try {
+      render();
+      await flush();
+      // The exact lie tiny-timer told: the session's own startup reads "working" in the ticker.
+      await fireJson("orch-status", JSON.stringify({ project: "p", status: "working" }));
+      await flush();
+      expect(host.textContent).toContain("working");
+
+      // The gate opens: the wake's truth outranks the startup ticker.
+      await fireProgress({ project: "p", phase: "waiting_idle", detail: null });
+      await flush();
+      expect(host.textContent).toContain("kickoff pending — waiting for idle");
+      expect(host.textContent).not.toContain("working");
+
+      // Landed: the outcome in Rust's own words, then gone after WAKE_OUTCOME_MS — the ticker's
+      // silence returns (nothing replaces it: idle shows no line, absence IS the idle state).
+      await fireProgress({ project: "p", phase: "kickoff_landed", detail: "prompt delivered — successor is recapping" });
+      await flush();
+      expect(host.textContent).toContain("prompt delivered — successor is recapping");
+      await act(async () => { vi.advanceTimersByTime(WAKE_OUTCOME_MS + 1); });
+      expect(host.textContent).not.toContain("prompt delivered");
+      expect(host.textContent).not.toContain("kickoff pending");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("another project's chain never shows here; ended clears the note", async () => {
+    render();
+    await flush();
+    await fireProgress({ project: "other", phase: "waiting_idle", detail: null });
+    await flush();
+    expect(host.textContent).not.toContain("kickoff pending");
+
+    await fireProgress({ project: "p", phase: "waiting_idle", detail: null });
+    await flush();
+    expect(host.textContent).toContain("kickoff pending — waiting for idle");
+
+    await fireProgress({ project: "p", phase: "ended", detail: null });
+    await flush();
+    expect(host.textContent).not.toContain("kickoff pending");
   });
 });
