@@ -14,6 +14,7 @@ import { spawn } from "node:child_process";
 import { mkdtempSync, writeFileSync, chmodSync, mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
+import { drillEnv } from "./drill-env.mjs";
 
 let pass = 0, fail = 0;
 const ok = (name, cond) => { console.log(`  ${cond ? "PASS" : "FAIL"}  ${name}`); cond ? pass++ : fail++; };
@@ -83,7 +84,7 @@ async function drill(agent, script, opts = {}) {
   mkdirSync(join(HOME, ".agent-bus"), { recursive: true });
   const runner = spawn("node", ["bin/crew-runner.mjs", agent, work], {
     cwd: process.cwd(),
-    env: { ...process.env, HOME, PATH: `${fakebin}:${process.env.PATH}`,
+    env: { ...drillEnv(), HOME, PATH: `${fakebin}:${process.env.PATH}`,
            RELAY_URL: HUB, RELAY_AGENT: agent, RELAY_PROJECT: `tt-fail-${agent}`,
            CREW_KICKOFF: "say hi and end your turn",
            TRANTOR_TEST_STALL_RELEASE_FILE: stallReleaseFile,

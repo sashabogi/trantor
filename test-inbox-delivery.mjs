@@ -10,6 +10,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
+import { drillEnv } from "./drill-env.mjs";
 
 const HERE = fileURLToPath(new URL(".", import.meta.url));
 const PORT = Number(process.env.WAKE_TEST_PORT || 4491);
@@ -28,7 +29,7 @@ async function get(path) { const r = await fetch(URL_BASE + path); return { stat
 
 async function startHub() {
   hub = spawn(process.execPath, [join(HERE, "hub.mjs")], {
-    env: { ...process.env, RELAY_PORT: String(PORT), RELAY_HOST: "127.0.0.1", RELAY_STATE: join(dir, "bus.json"), AGENT_BUS_DIR: dir },
+    env: { ...drillEnv(), RELAY_PORT: String(PORT), RELAY_HOST: "127.0.0.1", RELAY_STATE: join(dir, "bus.json"), AGENT_BUS_DIR: dir },
     stdio: "ignore",
   });
   for (let i = 0; i < 60; i++) {
@@ -89,7 +90,7 @@ async function testStopHook() {
   const runStop = (stopHookActive = false) => {
     const out = execFileSync(process.execPath, [join(HERE, "hooks", "stop-inbox.mjs")], {
       input: JSON.stringify({ stop_hook_active: stopHookActive, cwd: HERE }),
-      env: { ...process.env, RELAY_URL: URL_BASE, RELAY_SESSION: S, RELAY_PROJECT: "stoptest", HOME: dir },
+      env: { ...drillEnv(), RELAY_URL: URL_BASE, RELAY_SESSION: S, RELAY_PROJECT: "stoptest", HOME: dir },
       timeout: 15000, encoding: "utf8",
     });
     try { return JSON.parse(out || "{}"); } catch { return { _unparseable: out }; }
@@ -122,7 +123,7 @@ async function testStopHook() {
   await post("/send", { from: "h:beta", to: S, text: "disabled path" });
   const off = execFileSync(process.execPath, [join(HERE, "hooks", "stop-inbox.mjs")], {
     input: JSON.stringify({ stop_hook_active: false, cwd: HERE }),
-    env: { ...process.env, RELAY_URL: URL_BASE, RELAY_SESSION: S, RELAY_PROJECT: "stoptest", HOME: dir, RELAY_STOP_INBOX: "0" },
+    env: { ...drillEnv(), RELAY_URL: URL_BASE, RELAY_SESSION: S, RELAY_PROJECT: "stoptest", HOME: dir, RELAY_STOP_INBOX: "0" },
     timeout: 15000, encoding: "utf8",
   });
   ok("RELAY_STOP_INBOX=0 disables it", !JSON.parse(off || "{}").decision);
@@ -132,14 +133,14 @@ async function testStopHook() {
   await post("/send", { from: "h:beta", to: noCursor, text: "old backlog message" });
   const fresh = execFileSync(process.execPath, [join(HERE, "hooks", "stop-inbox.mjs")], {
     input: JSON.stringify({ stop_hook_active: false, cwd: HERE }),
-    env: { ...process.env, RELAY_URL: URL_BASE, RELAY_SESSION: noCursor, RELAY_PROJECT: "nocursor", HOME: dir },
+    env: { ...drillEnv(), RELAY_URL: URL_BASE, RELAY_SESSION: noCursor, RELAY_PROJECT: "nocursor", HOME: dir },
     timeout: 15000, encoding: "utf8",
   });
   ok("a session with no cursor yet is not blocked by the backlog", !JSON.parse(fresh || "{}").decision);
 
   const down = execFileSync(process.execPath, [join(HERE, "hooks", "stop-inbox.mjs")], {
     input: JSON.stringify({ stop_hook_active: false, cwd: HERE }),
-    env: { ...process.env, RELAY_URL: "http://127.0.0.1:4599", RELAY_SESSION: S, RELAY_PROJECT: "stoptest", HOME: dir },
+    env: { ...drillEnv(), RELAY_URL: "http://127.0.0.1:4599", RELAY_SESSION: S, RELAY_PROJECT: "stoptest", HOME: dir },
     timeout: 15000, encoding: "utf8",
   });
   ok("a DOWN hub allows the stop (never traps a session)", !JSON.parse(down || "{}").decision);
@@ -169,7 +170,7 @@ async function testStartAnchor() {
   const runDeliver = () => {
     const out = execFileSync(process.execPath, [join(HERE, "hooks", "inbox-deliver.mjs")], {
       input: JSON.stringify({ session_id: INST, cwd: HERE, tool_name: "Bash" }),
-      env: { ...process.env, RELAY_URL: URL_BASE, RELAY_SESSION: S, RELAY_PROJECT: "anchortest", HOME: dir, RELAY_INBOX_POLL_MS: "0" },
+      env: { ...drillEnv(), RELAY_URL: URL_BASE, RELAY_SESSION: S, RELAY_PROJECT: "anchortest", HOME: dir, RELAY_INBOX_POLL_MS: "0" },
       timeout: 15000, encoding: "utf8",
     });
     try { return JSON.parse(out || "{}"); } catch { return { _unparseable: out }; }
@@ -206,7 +207,7 @@ async function testStartAnchor() {
   await post("/send", { from: "h:sender", to: S2, text: "S2 you there" });
   const stop = execFileSync(process.execPath, [join(HERE, "hooks", "stop-inbox.mjs")], {
     input: JSON.stringify({ stop_hook_active: false, cwd: HERE, session_id: INST2 }),
-    env: { ...process.env, RELAY_URL: URL_BASE, RELAY_SESSION: S2, RELAY_PROJECT: "anchortest", HOME: dir },
+    env: { ...drillEnv(), RELAY_URL: URL_BASE, RELAY_SESSION: S2, RELAY_PROJECT: "anchortest", HOME: dir },
     timeout: 15000, encoding: "utf8",
   });
   let stopOut = {}; try { stopOut = JSON.parse(stop || "{}"); } catch { stopOut = { _unparseable: stop }; }

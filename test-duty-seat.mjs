@@ -16,6 +16,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, chmodSync, existsS
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
+import { drillEnv } from "./drill-env.mjs";
 
 const ROOT = dirname(fileURLToPath(import.meta.url));
 let pass = 0, fail = 0;
@@ -74,7 +75,7 @@ exit 0
   // mid-tier model" / "--model inherit" flip to false failures with no product bug behind them.
   // extraEnv below is the ONLY way these legitimately enter a leg (the CREW_MODEL escape-hatch
   // drill relies on that). Found 2026-08-31 running the drill from a seat shell.
-  const baseEnv = { ...process.env };
+  const baseEnv = { ...drillEnv() };
   for (const k of ["CREW_MODEL", "CREW_KICKOFF", "RUNNER_RULES", "RUNNER_TITLE", "RUNNER_ABOUT"]) delete baseEnv[k];
 
   // async spawn, never spawnSync: the mock hub lives in THIS process, so a synchronous child would

@@ -21,6 +21,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
+import { drillEnv } from "./drill-env.mjs";
 
 const ROOT = dirname(fileURLToPath(import.meta.url));
 let pass = 0, fail = 0;
@@ -49,7 +50,7 @@ const busDir = mkdtempSync(join(tmpdir(), "trantor-owarnbus-"));
 const runHook = (relayUrl, input = JSON.stringify({ hook_event_name: "SessionStart", cwd: work })) =>
   new Promise((resolve) => {
     const c = spawn("node", [join(ROOT, "hooks/overseer-warn.mjs")], {
-      env: { ...process.env, RELAY_URL: relayUrl, RELAY_SESSION: "kimi:owarn", RELAY_PROJECT: "owarn", AGENT_BUS_DIR: busDir, HOME: busDir },
+      env: { ...drillEnv(), RELAY_URL: relayUrl, RELAY_SESSION: "kimi:owarn", RELAY_PROJECT: "owarn", AGENT_BUS_DIR: busDir, HOME: busDir },
       stdio: ["pipe", "pipe", "pipe"],
     });
     let stdout = "", stderr = "";

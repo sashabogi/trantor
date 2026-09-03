@@ -7,6 +7,7 @@ import { spawn } from "node:child_process";
 import { chmodSync, existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { drillEnv } from "./drill-env.mjs";
 
 let pass = 0;
 let fail = 0;
@@ -50,7 +51,7 @@ try {
   }));
   let hub = spawn(process.execPath, ["hub.mjs"], {
     cwd: process.cwd(),
-    env: { ...process.env, HOME: scratch, RELAY_PORT: String(port), RELAY_HOST: "127.0.0.1", RELAY_AUTH: "off", RELAY_STORE: "json", RELAY_DATA_DIR: scratch, RELAY_STATE: statePath },
+    env: { ...drillEnv(), HOME: scratch, RELAY_PORT: String(port), RELAY_HOST: "127.0.0.1", RELAY_AUTH: "off", RELAY_STORE: "json", RELAY_DATA_DIR: scratch, RELAY_STATE: statePath },
     stdio: "ignore",
   });
   children.add(hub); hub.once("exit", () => children.delete(hub));
@@ -106,7 +107,7 @@ try {
   let runnerOutput = "";
   const runner = spawn(process.execPath, ["bin/crew-runner.mjs", "codex", work], {
     cwd: process.cwd(),
-    env: { ...process.env, HOME: home, PATH: `${fakeBin}:${process.env.PATH}`, RELAY_URL: `http://127.0.0.1:${mockHub.address().port}`, RELAY_AGENT: "codex", RELAY_PROJECT: runnerProject, TRANTOR_NO_WORKTREE: "1", CREW_KICKOFF: "finish kickoff" },
+    env: { ...drillEnv(), HOME: home, PATH: `${fakeBin}:${process.env.PATH}`, RELAY_URL: `http://127.0.0.1:${mockHub.address().port}`, RELAY_AGENT: "codex", RELAY_PROJECT: runnerProject, TRANTOR_NO_WORKTREE: "1", CREW_KICKOFF: "finish kickoff" },
     stdio: ["ignore", "pipe", "pipe"],
   });
   children.add(runner); runner.once("exit", () => children.delete(runner));

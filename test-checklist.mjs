@@ -6,6 +6,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
+import { drillEnv } from "./drill-env.mjs";
 
 const ROOT = dirname(fileURLToPath(import.meta.url));
 let pass = 0, fail = 0;
@@ -18,7 +19,7 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 function spawnHub(port, dir) {
   const hub = spawn("node", [join(ROOT, "hub.mjs")], {
     cwd: ROOT,
-    env: { ...process.env, HOME: dir, RELAY_DATA_DIR: dir, RELAY_PORT: String(port), PORT: String(port), TRANTOR_NO_UPDATE_CHECK: "1" },
+    env: { ...drillEnv(), HOME: dir, RELAY_DATA_DIR: dir, RELAY_PORT: String(port), PORT: String(port), TRANTOR_NO_UPDATE_CHECK: "1" },
     stdio: ["ignore", "ignore", "pipe"],
   });
   hub._stderr = "";

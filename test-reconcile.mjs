@@ -10,6 +10,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync, chmodSync } from "node:f
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
+import { drillEnv } from "./drill-env.mjs";
 
 const ROOT = dirname(fileURLToPath(import.meta.url));
 let pass = 0, fail = 0;
@@ -21,7 +22,7 @@ function spawnHub(port) {
   const dir = mkdtempSync(join(tmpdir(), "trantor-recon-"));
   mkdirSync(join(dir, ".agent-bus"), { recursive: true });
   const hub = spawn("node", [join(ROOT, "hub.mjs")], {
-    env: { ...process.env, RELAY_DATA_DIR: dir, HOME: dir, RELAY_PORT: String(port), PORT: String(port), TRANTOR_NO_UPDATE_CHECK: "1", RELAY_REAP_INTERVAL_MS: "999999" },
+    env: { ...drillEnv(), RELAY_DATA_DIR: dir, HOME: dir, RELAY_PORT: String(port), PORT: String(port), TRANTOR_NO_UPDATE_CHECK: "1", RELAY_REAP_INTERVAL_MS: "999999" },
     stdio: ["ignore", "ignore", "pipe"],
   });
   hub._dir = dir;
@@ -42,7 +43,7 @@ function reconcile(stubVerdicts, extraArgs = []) {
   return new Promise((res) => {
     const p = spawn("node", [join(ROOT, "bin/reconcile.mjs"), ...extraArgs], {
       cwd: sdir,   // non-git temp dir → empty gitlog/memory; the stub ignores them anyway
-      env: { ...process.env, RELAY_URL: base, RELAY_PROJECT: PROJ, SCROOGE_BIN: stub },
+      env: { ...drillEnv(), RELAY_URL: base, RELAY_PROJECT: PROJ, SCROOGE_BIN: stub },
       encoding: "utf8",
     });
     let out = ""; p.stdout.on("data", d => out += d); p.stderr.on("data", d => out += d);
@@ -94,7 +95,7 @@ try {
   // 5. scrooge missing → safe no-op (doesn't fabricate verdicts)
   const p = await new Promise((res) => {
     const cp = spawn("node", [join(ROOT, "bin/reconcile.mjs"), "--older", "0"], {
-      cwd: hub._dir, env: { ...process.env, RELAY_URL: base, RELAY_PROJECT: PROJ, SCROOGE_BIN: "/nonexistent/scrooge" },
+      cwd: hub._dir, env: { ...drillEnv(), RELAY_URL: base, RELAY_PROJECT: PROJ, SCROOGE_BIN: "/nonexistent/scrooge" },
     });
     let o = ""; cp.stdout.on("data", d => o += d); cp.stderr.on("data", d => o += d); cp.on("close", () => res(o));
   });

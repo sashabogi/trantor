@@ -9,6 +9,7 @@ import { spawn, spawnSync } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
+import { drillEnv } from "./drill-env.mjs";
 
 let pass = 0, fail = 0;
 const ok = (name, cond, extra = "") => {
@@ -62,7 +63,7 @@ async function runRunner({ sourceDir, project, home, noWorktree = false }) {
   writeFileSync(join(fakebin, "codex"), `#!/bin/sh\npwd >> ${JSON.stringify(log)}\nexit 0\n`);
   chmodSync(join(fakebin, "codex"), 0o755);
 
-  const env = { ...process.env, HOME: home, PATH: `${fakebin}:${process.env.PATH}`,
+  const env = { ...drillEnv(), HOME: home, PATH: `${fakebin}:${process.env.PATH}`,
     RELAY_URL: HUB, RELAY_PROJECT: project, CREW_KICKOFF: "record cwd and stop" };
   if (noWorktree) env.TRANTOR_NO_WORKTREE = "1";
   const runner = spawn(process.execPath, ["bin/crew-runner.mjs", "codex", sourceDir], {

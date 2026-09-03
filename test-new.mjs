@@ -10,6 +10,7 @@ import { generateKeyPairSync } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
+import { drillEnv } from "./drill-env.mjs";
 
 const ROOT = dirname(fileURLToPath(import.meta.url));
 let pass = 0, fail = 0;
@@ -30,7 +31,7 @@ writeFileSync(join(W, ".agent-bus", "autonomy.json"), JSON.stringify({
 const PORT = 47877, HUB = `http://127.0.0.1:${PORT}`;
 
 const hub = spawn("node", [join(ROOT, "hub.mjs")], {
-  env: { ...process.env, RELAY_DATA_DIR: W, HOME: W, RELAY_PORT: String(PORT), PORT: String(PORT), TRANTOR_NO_UPDATE_CHECK: "1" },
+  env: { ...drillEnv(), RELAY_DATA_DIR: W, HOME: W, RELAY_PORT: String(PORT), PORT: String(PORT), TRANTOR_NO_UPDATE_CHECK: "1" },
   stdio: ["ignore", "ignore", "pipe"],
 });
 hub._stderr = "";
@@ -44,7 +45,7 @@ for (let i = 0; i < 50; i++) {
 ok("throwaway hub is up", hubUp);
 
 const childEnv = (extra = {}) => ({
-  ...process.env, HOME: W, AGENT_BUS_DIR: join(W, ".agent-bus"),
+  ...drillEnv(), HOME: W, AGENT_BUS_DIR: join(W, ".agent-bus"),
   RELAY_URL: HUB, TRANTOR_DEV_ROOT: DEV, RELAY_SESSION: "genesis-test",
   TRANTOR_NO_UPDATE_CHECK: "1", ...extra,
 });
@@ -206,7 +207,7 @@ ok("parent: CLAUDE.md seeded in the created dir", !!dJson && readFileSync(join(A
   ok("fake enforce hub is up", fakeUp);
 
   const fhub = `http://127.0.0.1:${FPORT}`;
-  const fenv = { ...process.env, HOME: FW, AGENT_BUS_DIR: bus, RELAY_URL: fhub,
+  const fenv = { ...drillEnv(), HOME: FW, AGENT_BUS_DIR: bus, RELAY_URL: fhub,
     TRANTOR_DEV_ROOT: join(FW, "dev"), TRANTOR_NO_UPDATE_CHECK: "1" };
   mkdirSync(join(FW, "dev"), { recursive: true });
   const e = spawnSync("node", [join(ROOT, "bin", "new.mjs"), "genesis-e", "--json"], { encoding: "utf8", cwd: FW, env: fenv });
@@ -273,7 +274,7 @@ ok("parent: CLAUDE.md seeded in the created dir", !!dJson && readFileSync(join(A
   ok("invite-fail fake hub is up", inviteFailUp);
   const ij = spawnSync("node", [join(ROOT, "bin", "new.mjs"), "genesis-g", "--json"], {
     encoding: "utf8", cwd: FW,
-    env: { ...process.env, HOME: FW, AGENT_BUS_DIR: bus, RELAY_URL: `http://127.0.0.1:${IPORT}`,
+    env: { ...drillEnv(), HOME: FW, AGENT_BUS_DIR: bus, RELAY_URL: `http://127.0.0.1:${IPORT}`,
       TRANTOR_DEV_ROOT: join(FW, "dev"), TRANTOR_NO_UPDATE_CHECK: "1" },
   });
   ok("#6110: an owner-invite failure (not no-owner-key) is logged to stderr with its reason",
@@ -308,7 +309,7 @@ ok("parent: CLAUDE.md seeded in the created dir", !!dJson && readFileSync(join(A
   ok("refusal fake hub is up", refuseUp);
   const rj = spawnSync("node", [join(ROOT, "bin", "new.mjs"), "genesis-f", "--json"], {
     encoding: "utf8", cwd: FW,
-    env: { ...process.env, HOME: FW, AGENT_BUS_DIR: bus, RELAY_URL: `http://127.0.0.1:${RPORT}`,
+    env: { ...drillEnv(), HOME: FW, AGENT_BUS_DIR: bus, RELAY_URL: `http://127.0.0.1:${RPORT}`,
       TRANTOR_DEV_ROOT: join(FW, "dev"), TRANTOR_NO_UPDATE_CHECK: "1" },
   });
   const refuseOut = (rj.stdout || "") + (rj.stderr || "");

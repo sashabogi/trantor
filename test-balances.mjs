@@ -6,6 +6,7 @@ import { mkdtempSync, writeFileSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { isLow, fmtBalance, fetchBalances, DEFAULT_LOW } from "./lib/balances.mjs";
+import { drillEnv } from "./drill-env.mjs";
 
 let fail = 0; const ok = (c, m) => { console.log((c ? "✓" : "✗ FAIL") + " " + m); if (!c) fail++; };
 
@@ -66,7 +67,7 @@ writeFileSync(join(dir, ".agent-bus", "profile.json"), JSON.stringify({ provider
   openrouter: { plan: "api", tier: "api" }, deepseek: { plan: "api", tier: "api" }, zai: { plan: "coding-plan", tier: "capped-sub" },
 } }));
 const PORT = 47713;
-const hub = spawn("node", ["hub.mjs"], { env: { ...process.env, RELAY_DATA_DIR: dir, HOME: dir, RELAY_PORT: String(PORT), PORT: String(PORT) }, stdio: ["ignore", "ignore", "pipe"] });
+const hub = spawn("node", ["hub.mjs"], { env: { ...drillEnv(), RELAY_DATA_DIR: dir, HOME: dir, RELAY_PORT: String(PORT), PORT: String(PORT) }, stdio: ["ignore", "ignore", "pipe"] });
 let err = ""; hub.stderr.on("data", d => err += d);
 await new Promise(r => setTimeout(r, 800));
 const base = `http://127.0.0.1:${PORT}`;

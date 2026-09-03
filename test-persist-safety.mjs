@@ -9,6 +9,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { PgStore } from "./lib/store-pg.mjs";
 import { createPersistHealth } from "./lib/persist-health.mjs";
+import { drillEnv } from "./drill-env.mjs";
 
 const ROOT = dirname(fileURLToPath(import.meta.url));
 let pass = 0;
@@ -123,7 +124,7 @@ const children = new Set();
 function startHub(port, dataDir, statePath, extraEnv = {}) {
   const child = spawn(process.execPath, [join(ROOT, "hub.mjs")], {
     cwd: ROOT,
-    env: { ...process.env, HOME: dataDir, RELAY_PORT: String(port), RELAY_HOST: "127.0.0.1", RELAY_AUTH: "off", RELAY_STORE: "json", RELAY_DATA_DIR: dataDir, RELAY_STATE: statePath, ...extraEnv },
+    env: { ...drillEnv(), HOME: dataDir, RELAY_PORT: String(port), RELAY_HOST: "127.0.0.1", RELAY_AUTH: "off", RELAY_STORE: "json", RELAY_DATA_DIR: dataDir, RELAY_STATE: statePath, ...extraEnv },
     stdio: ["ignore", "ignore", "pipe"],
   });
   child.stderr.setEncoding("utf8");
@@ -205,7 +206,7 @@ try {
   writeFileSync(join(mockBin, "systemctl"), "#!/bin/bash\nprintf '%s\\n' \"$*\" >> \"$SYSTEMCTL_LOG\"\n");
   chmodSync(join(mockBin, "curl"), 0o755);
   chmodSync(join(mockBin, "systemctl"), 0o755);
-  const guardEnv = { ...process.env, PATH: `${mockBin}:${process.env.PATH}`, SYSTEMCTL_LOG: serviceLog, MOCK_HEALTH: JSON.stringify({ ok: true, persist: { ok: false, failingSinceMs: 65000, lastError: "db rejected row", retries: 7 } }) };
+  const guardEnv = { ...drillEnv(), PATH: `${mockBin}:${process.env.PATH}`, SYSTEMCTL_LOG: serviceLog, MOCK_HEALTH: JSON.stringify({ ok: true, persist: { ok: false, failingSinceMs: 65000, lastError: "db rejected row", retries: 7 } }) };
   const refused = spawnSync("bash", [join(ROOT, "deploy/restart-hub.sh")], { cwd: ROOT, env: guardEnv, encoding: "utf8" });
   ok(refused.status === 1 && /failed for 1m 5s/.test(refused.stderr) && /losing every state change/.test(refused.stderr), "restart refusal names duration and state at risk", refused.stderr.trim());
   ok(!existsSync(serviceLog), "refused restart never invokes systemctl");

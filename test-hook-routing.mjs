@@ -16,6 +16,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
+import { drillEnv } from "./drill-env.mjs";
 
 const ROOT = dirname(fileURLToPath(import.meta.url));
 let pass = 0, fail = 0;
@@ -48,7 +49,7 @@ for (const d of [repo, elsewhere]) {
   mkdirSync(d, { recursive: true });
   spawnSync("git", ["init", "-q", "."], { cwd: d });
   spawnSync("git", ["commit", "-q", "--allow-empty", "-m", "i"], { cwd: d,
-    env: { ...process.env, GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@t", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@t" } });
+    env: { ...drillEnv(), GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@t", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@t" } });
 }
 // global default = LOCAL; only `pinnedproj` is pinned to REMOTE. Exactly the real shape.
 writeFileSync(join(W, "bus", "config.json"), JSON.stringify({ url: LOCAL, hubs: { pinnedproj: REMOTE } }));
@@ -62,7 +63,7 @@ const stdinFor = (cwd, event) => JSON.stringify({
 // open, making a broken routing test look like a passing one.
 function runHook(hook, cwd, event, procCwd) {
   hits.local.length = 0; hits.remote.length = 0;
-  const env = { ...process.env, HOME: W, AGENT_BUS_DIR: join(W, "bus"), TRANTOR_NO_SCROOGE_TITLES: "1", CLAUDE_PROJECT_DIR: procCwd };
+  const env = { ...drillEnv(), HOME: W, AGENT_BUS_DIR: join(W, "bus"), TRANTOR_NO_SCROOGE_TITLES: "1", CLAUDE_PROJECT_DIR: procCwd };
   for (const k of ["RELAY_URL", "RELAY_SESSION", "RELAY_AGENT", "RELAY_PROJECT"]) delete env[k];
   return new Promise(resolve => {
     const p = spawn("node", [join(ROOT, hook)], { cwd: procCwd, env, stdio: ["pipe", "pipe", "pipe"] });

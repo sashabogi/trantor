@@ -17,6 +17,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
+import { drillEnv } from "./drill-env.mjs";
 
 const ROOT = dirname(fileURLToPath(import.meta.url));
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
@@ -26,7 +27,7 @@ const ok = (c, name) => { c ? pass++ : fail++; console.log(`  ${c ? "✓" : "✗
 function spawnHub(port, extraEnv = {}, dir = mkdtempSync(join(tmpdir(), "trantor-overseer-"))) {
   mkdirSync(join(dir, ".agent-bus"), { recursive: true });
   const hub = spawn("node", [join(ROOT, "hub.mjs")], {
-    env: { ...process.env, RELAY_DATA_DIR: dir, HOME: dir, RELAY_PORT: String(port), PORT: String(port),
+    env: { ...drillEnv(), RELAY_DATA_DIR: dir, HOME: dir, RELAY_PORT: String(port), PORT: String(port),
            TRANTOR_NO_UPDATE_CHECK: "1", RELAY_AUTH: "off", RELAY_OVERSEER_TICK_MS: "1000", ...extraEnv },
     stdio: ["ignore", "ignore", "pipe"],
   });

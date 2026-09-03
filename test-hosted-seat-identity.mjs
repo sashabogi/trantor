@@ -7,6 +7,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, chmodS
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { drillEnv } from "./drill-env.mjs";
 
 const ROOT = fileURLToPath(new URL(".", import.meta.url));
 const work = mkdtempSync(join(tmpdir(), "trantor-hosted-identity-"));
@@ -85,7 +86,7 @@ try {
 
   const connected = spawnSync(process.execPath, [join(ROOT, "bin", "connect.mjs")], {
     cwd: ROOT,
-    env: { ...process.env, HOME: home, PATH: `${fakebin}:/usr/bin:/bin` },
+    env: { ...drillEnv(), HOME: home, PATH: `${fakebin}:/usr/bin:/bin` },
     encoding: "utf8",
   });
   ok("connect migrates the existing OpenCode relay entry", connected.status === 0 && /opencode\s+wired/.test(connected.stdout || ""), connected.stderr || connected.stdout);
@@ -97,7 +98,7 @@ try {
     configuredEnv.RELAY_AGENT_FALLBACK === "opencode" && configuredEnv.EXTRA_SENTINEL === "kept", JSON.stringify(configuredEnv));
 
   const mcpEnv = {
-    ...process.env,
+    ...drillEnv(),
     HOME: home,
     AGENT_BUS_DIR: bus,
     RELAY_URL: relayUrl,
@@ -163,7 +164,7 @@ try {
   runner = spawn(process.execPath, [join(ROOT, "bin", "crew-runner.mjs"), "qwen", repo], {
     cwd: ROOT,
     env: {
-      ...process.env,
+      ...drillEnv(),
       HOME: home,
       AGENT_BUS_DIR: bus,
       PATH: `${fakebin}:/usr/bin:/bin`,

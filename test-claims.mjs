@@ -17,6 +17,7 @@ import { mkdtempSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
+import { drillEnv } from "./drill-env.mjs";
 
 const ROOT = dirname(fileURLToPath(import.meta.url));
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
@@ -27,7 +28,7 @@ function spawnHub(port, extraEnv = {}) {
   const dir = mkdtempSync(join(tmpdir(), "trantor-claims-"));
   mkdirSync(join(dir, ".agent-bus"), { recursive: true });
   const hub = spawn("node", [join(ROOT, "hub.mjs")], {
-    env: { ...process.env, RELAY_DATA_DIR: dir, HOME: dir, RELAY_PORT: String(port), PORT: String(port), TRANTOR_NO_UPDATE_CHECK: "1", RELAY_AUTH: "off", ...extraEnv },
+    env: { ...drillEnv(), RELAY_DATA_DIR: dir, HOME: dir, RELAY_PORT: String(port), PORT: String(port), TRANTOR_NO_UPDATE_CHECK: "1", RELAY_AUTH: "off", ...extraEnv },
     stdio: ["ignore", "ignore", "pipe"],
   });
   hub._dir = dir;
@@ -99,7 +100,7 @@ try {
 
   const runHook = (session, file) => spawnSync("node", [join(ROOT, "hooks/file-claim.mjs")], {
     input: JSON.stringify({ tool_name: "Edit", tool_input: { file_path: join(work, file) }, cwd: work }),
-    env: { ...process.env, RELAY_URL: `http://127.0.0.1:${PC}`, RELAY_SESSION: session, AGENT_BUS_DIR: busDir, HOME: busDir },
+    env: { ...drillEnv(), RELAY_URL: `http://127.0.0.1:${PC}`, RELAY_SESSION: session, AGENT_BUS_DIR: busDir, HOME: busDir },
     encoding: "utf8", timeout: 10000,
   });
 
@@ -133,7 +134,7 @@ try {
   // hub unreachable -> fail open, instantly
   const dead = spawnSync("node", [join(ROOT, "hooks/file-claim.mjs")], {
     input: JSON.stringify({ tool_name: "Write", tool_input: { file_path: join(work, "x.ts") }, cwd: work }),
-    env: { ...process.env, RELAY_URL: "http://127.0.0.1:1", RELAY_SESSION: "host:claimhook", AGENT_BUS_DIR: busDir, HOME: busDir },
+    env: { ...drillEnv(), RELAY_URL: "http://127.0.0.1:1", RELAY_SESSION: "host:claimhook", AGENT_BUS_DIR: busDir, HOME: busDir },
     encoding: "utf8", timeout: 10000,
   });
   ok(dead.status === 0 && dead.stdout.trim() === "{}", "hook: hub down -> allow, never trap the session");

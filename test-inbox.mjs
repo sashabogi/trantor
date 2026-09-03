@@ -18,6 +18,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
 import { createServer } from "node:http";
+import { drillEnv } from "./drill-env.mjs";
 
 const pexec = promisify(execFile);
 
@@ -62,7 +63,7 @@ const hook = join(HERE, "hooks", "inbox-deliver.mjs");
 // deadlock. Returns parsed stdout JSON.
 const run = async () => {
   const child = pexec("node", [hook], {
-    env: { ...process.env, HOME: home, RELAY_URL: url, RELAY_SESSION: SESSION, RELAY_INBOX_POLL_MS: "0" },
+    env: { ...drillEnv(), HOME: home, RELAY_URL: url, RELAY_SESSION: SESSION, RELAY_INBOX_POLL_MS: "0" },
     encoding: "utf8",
   });
   child.child.stdin.end(JSON.stringify({ tool_name: "Bash", tool_input: { command: "x" } }));

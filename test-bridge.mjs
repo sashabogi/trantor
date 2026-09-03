@@ -8,6 +8,7 @@ import { mkdtempSync, rmSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
+import { drillEnv } from "./drill-env.mjs";
 
 const ROOT = dirname(fileURLToPath(import.meta.url));
 let pass = 0, fail = 0;
@@ -17,7 +18,7 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 const HOME = mkdtempSync(join(tmpdir(), "trantor-bridge-"));
 const PA = 47961, PB = 47962;
 const hubs = [PA, PB].map(port => spawn("node", [join(ROOT, "hub.mjs")], {
-  env: { ...process.env, RELAY_DATA_DIR: join(HOME, `hub${port}`), HOME, RELAY_PORT: String(port), TRANTOR_NO_UPDATE_CHECK: "1" },
+  env: { ...drillEnv(), RELAY_DATA_DIR: join(HOME, `hub${port}`), HOME, RELAY_PORT: String(port), TRANTOR_NO_UPDATE_CHECK: "1" },
   stdio: ["ignore", "ignore", "pipe"],
 }));
 let errs = ""; for (const h of hubs) h.stderr.on("data", d => errs += d);
@@ -31,7 +32,7 @@ const api = (base) => ({
 const a = api(A), b = api(B);
 // One tick = one bridge run. HOME is our temp dir, so the owner identity + map file live there.
 const runBridge = () => spawnSync("node", [join(ROOT, "bin", "bridge.mjs"), "brtest", "--from", A, "--to", B, "--once", "--map", join(HOME, "map.json")],
-  { encoding: "utf8", timeout: 20000, env: { ...process.env, HOME, AGENT_BUS_DIR: join(HOME, ".agent-bus") } });
+  { encoding: "utf8", timeout: 20000, env: { ...drillEnv(), HOME, AGENT_BUS_DIR: join(HOME, ".agent-bus") } });
 
 console.log("# trantor bridge tests");
 try {
@@ -85,7 +86,7 @@ try {
   const cutoff = Date.now() + 60000;                      // everything so far is older than this
   const r7 = spawnSync("node", [join(ROOT, "bin", "bridge.mjs"), "brtest", "--from", A, "--to", B, "--once",
     "--since", String(cutoff), "--map", join(HOME, "map2.json")],
-    { encoding: "utf8", timeout: 20000, env: { ...process.env, HOME, AGENT_BUS_DIR: join(HOME, ".agent-bus") } });
+    { encoding: "utf8", timeout: 20000, env: { ...drillEnv(), HOME, AGENT_BUS_DIR: join(HOME, ".agent-bus") } });
   ok("--since respected (fresh map, nothing older mirrored)", r7.status === 0 && !(await b.get("/tasks?project=brtest")).tasks.some(t => t.title === "old history card"), r7.stderr);
 
   ok("map file persisted", readFileSync(join(HOME, "map.json"), "utf8").includes("aId"));
@@ -105,7 +106,7 @@ try {
   await a.post("/task/update", { id: s2a.id, status: "doing", by: "glm:brseed" });
   const r8 = spawnSync("node", [join(ROOT, "bin", "bridge.mjs"), seedProj, "--from", A, "--to", B, "--once",
     "--since", String(cutoff8), "--map", join(HOME, "map3.json")],
-    { encoding: "utf8", timeout: 20000, env: { ...process.env, HOME, AGENT_BUS_DIR: join(HOME, ".agent-bus") } });
+    { encoding: "utf8", timeout: 20000, env: { ...drillEnv(), HOME, AGENT_BUS_DIR: join(HOME, ".agent-bus") } });
   ok("seed tick exits 0", r8.status === 0, r8.stderr);
   const bSeed = (await b.get(`/tasks?project=${seedProj}`)).tasks;
   ok("shared twins are paired, not duplicated", bSeed.filter(t => t.title === "old shared card").length === 1
@@ -120,7 +121,7 @@ try {
   const r9 = spawnSync("node", [join(ROOT, "bin", "bridge.mjs"), seedProj, "--from", A, "--to", B, "--once",
     "--since", String(cutoff8), "--reverse-window", "0.00001",   // ~36ms window: everything is too old
     "--map", join(HOME, "map3.json")],
-    { encoding: "utf8", timeout: 20000, env: { ...process.env, HOME, AGENT_BUS_DIR: join(HOME, ".agent-bus") } });
+    { encoding: "utf8", timeout: 20000, env: { ...drillEnv(), HOME, AGENT_BUS_DIR: join(HOME, ".agent-bus") } });
   ok("reverse window respected (old open card not mirrored)", r9.status === 0
     && !(await a.get(`/tasks?project=${seedProj}`)).tasks.some(t => t.title === "months-old open backlog"), r9.stderr);
   void oldOpen;

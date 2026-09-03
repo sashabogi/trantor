@@ -9,6 +9,7 @@ import { mkdtempSync, mkdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
+import { drillEnv } from "./drill-env.mjs";
 
 const ROOT = dirname(fileURLToPath(import.meta.url));
 let pass = 0, fail = 0;
@@ -22,7 +23,7 @@ mkdirSync(join(W, ".agent-bus"), { recursive: true });
 const PORT = 47862, HUB = `http://127.0.0.1:${PORT}`;
 const SESSION = "noter:noteproj";
 const hub = spawn("node", [join(ROOT, "hub.mjs")], {
-  env: { ...process.env, RELAY_DATA_DIR: W, HOME: W, RELAY_PORT: String(PORT), PORT: String(PORT), TRANTOR_NO_UPDATE_CHECK: "1" },
+  env: { ...drillEnv(), RELAY_DATA_DIR: W, HOME: W, RELAY_PORT: String(PORT), PORT: String(PORT), TRANTOR_NO_UPDATE_CHECK: "1" },
   stdio: ["ignore", "ignore", "pipe"],
 });
 hub._stderr = "";
@@ -36,7 +37,7 @@ for (let i = 0; i < 50; i++) {
 // the REAL MCP server, as a stdio JSON-RPC peer
 const mcp = spawn("node", [join(ROOT, "mcp.mjs")], {
   cwd: W,
-  env: { ...process.env, HOME: W, AGENT_BUS_DIR: join(W, ".agent-bus"), RELAY_URL: HUB,
+  env: { ...drillEnv(), HOME: W, AGENT_BUS_DIR: join(W, ".agent-bus"), RELAY_URL: HUB,
     RELAY_SESSION: SESSION, RELAY_PROJECT: "noteproj", RELAY_HEARTBEAT_MS: "600000" },
   stdio: ["pipe", "pipe", "pipe"],
 });

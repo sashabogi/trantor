@@ -10,6 +10,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { setTimeout as sleep } from "node:timers/promises";
 import { randomBytes, sign as cryptoSign, createPrivateKey } from "node:crypto";
+import { drillEnv } from "./drill-env.mjs";
 
 const HERE = fileURLToPath(new URL(".", import.meta.url)).replace(/\/[^/]+$/, "");
 let pass = 0, fail = 0;
@@ -23,7 +24,7 @@ async function startHub(extraEnv = {}) {
   mkdirSync(join(dir, ".agent-bus"), { recursive: true });
   const port = 5000 + Math.floor(Math.random() * 20000);
   const env = {
-    ...process.env,
+    ...drillEnv(),
     HOME: dir,
     AGENT_BUS_DIR: join(dir, ".agent-bus"),
     RELAY_DATA_DIR: dir,
@@ -52,7 +53,7 @@ async function startHub(extraEnv = {}) {
 async function startHubExpectFail(extraEnv = {}) {
   const dir = mDir();
   const port = 5000 + Math.floor(Math.random() * 20000);
-  const env = { ...process.env, HOME: dir, AGENT_BUS_DIR: join(dir, ".agent-bus"), RELAY_DATA_DIR: dir, RELAY_PORT: String(port), ...extraEnv };
+  const env = { ...drillEnv(), HOME: dir, AGENT_BUS_DIR: join(dir, ".agent-bus"), RELAY_DATA_DIR: dir, RELAY_PORT: String(port), ...extraEnv };
   const child = spawn(process.execPath, [join(HERE, "hub.mjs")], { env, stdio: ["ignore", "pipe", "pipe"] });
   let er = ""; child.stderr.on("data", d => { er += d; });
   await sleep(1300);
@@ -310,7 +311,7 @@ try {
       try {
         execFileSync(process.execPath, [join(HERE, h)], {
           input: JSON.stringify({ source: "startup", tool_name: "Bash", cwd: HERE }),
-          env: { ...process.env, RELAY_URL: `http://127.0.0.1:${9000 + Math.floor(Math.random() * 2000)}`, RELAY_SESSION: "test:proj", HOME: mDir() },
+          env: { ...drillEnv(), RELAY_URL: `http://127.0.0.1:${9000 + Math.floor(Math.random() * 2000)}`, RELAY_SESSION: "test:proj", HOME: mDir() },
           timeout: 4000,
           encoding: "utf8",
         });

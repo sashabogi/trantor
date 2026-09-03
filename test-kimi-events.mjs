@@ -17,6 +17,7 @@ import { join, basename, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { setTimeout as sleep } from "node:timers/promises";
 import { randomBytes } from "node:crypto";
+import { drillEnv } from "./drill-env.mjs";
 
 const ROOT = dirname(fileURLToPath(import.meta.url));
 const BRIDGE = process.env.KIMI_TEST_BRIDGE || join(ROOT, "kimi", "bridge.mjs");
@@ -34,7 +35,7 @@ async function startHub() {
   // ephemeral port, announced on stderr ("[trantor] hub on http://127.0.0.1:<port>"), which
   // we parse below. Collision-free by construction.
   const env = {
-    ...process.env,
+    ...drillEnv(),
     HOME: dir, AGENT_BUS_DIR: join(dir, ".agent-bus"), RELAY_DATA_DIR: dir,
     RELAY_PORT: "0", RELAY_HOST: "127.0.0.1",
     RELAY_AUTH: "enforce", RELAY_ENROLL: "tofu",
@@ -105,7 +106,7 @@ writeFileSync(join(BUS, "narrate.stamp"), String(Date.now()));
 
 function bridgeEnv() {
   const env = {
-    ...process.env,
+    ...drillEnv(),
     HOME: SEAT, AGENT_BUS_DIR: BUS,
     RELAY_URL: HUB.base, RELAY_AGENT: AGENT,
     TRANTOR_NO_UPDATE_CHECK: "1", TRANTOR_NO_BALANCE_CHECK: "1",

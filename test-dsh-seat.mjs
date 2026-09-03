@@ -11,6 +11,7 @@ import { spawn } from "node:child_process";
 import { mkdtempSync, writeFileSync, readFileSync, chmodSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
+import { drillEnv } from "./drill-env.mjs";
 
 let pass = 0, fail = 0;
 const ok = (n, c, x = "") => { console.log(`  ${c ? "PASS" : "FAIL"}  ${n}${c || !x ? "" : `\n          ${x}`}`); c ? pass++ : fail++;};
@@ -43,7 +44,7 @@ async function drill(script) {
   const HOME = join(work, "home"); mkdirSync(join(HOME, ".agent-bus"), { recursive: true });
   const runner = spawn("node", ["bin/crew-runner.mjs", "dsh", work], {
     cwd: process.cwd(), stdio: "ignore",
-    env: { ...process.env, HOME, PATH: `${bin}:${process.env.PATH}`,
+    env: { ...drillEnv(), HOME, PATH: `${bin}:${process.env.PATH}`,
       RELAY_URL: HUB, RELAY_AGENT: "dsh", RELAY_PROJECT: "tt-dsh",
       CREW_KICKOFF: "kickoff: introduce yourself and end your turn" },
   });

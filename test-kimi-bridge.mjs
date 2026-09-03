@@ -4,6 +4,7 @@ import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileS
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
+import { drillEnv } from "./drill-env.mjs";
 
 const ROOT = dirname(fileURLToPath(import.meta.url));
 const HOME = mkdtempSync(join(tmpdir(), "trantor-kimi-bridge-"));
@@ -23,7 +24,7 @@ function run(event, hook, payload, extraEnv = {}) {
     encoding: "utf8",
     timeout: 8000,
     env: {
-      ...process.env,
+      ...drillEnv(),
       HOME,
       AGENT_BUS_DIR: BUS,
       RELAY_DATA_DIR: BUS,

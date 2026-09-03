@@ -16,6 +16,7 @@ import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import http from "node:http";
+import { drillEnv } from "./drill-env.mjs";
 
 const ROOT = dirname(fileURLToPath(import.meta.url));
 let pass = 0, fail = 0;
@@ -44,7 +45,7 @@ function runHook(cwd, startProject, sessionId = "drift-1") {
   return new Promise((resolve) => {
     const kid = spawn(process.execPath, [join(ROOT, "hooks", "inbox-deliver.mjs")], {
       cwd: ROOT, stdio: ["pipe", "pipe", "pipe"],
-      env: { ...process.env, AGENT_BUS_DIR: BUS, RELAY_HOST_ID: "host",
+      env: { ...drillEnv(), AGENT_BUS_DIR: BUS, RELAY_HOST_ID: "host",
              RELAY_SESSION: "", RELAY_PROJECT: "", RELAY_URL: "",
              ...(startProject ? { CLAUDE_PROJECT_DIR: join(w, startProject) } : {}) },
     });

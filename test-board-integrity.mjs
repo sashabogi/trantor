@@ -11,6 +11,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
+import { drillEnv } from "./drill-env.mjs";
 
 const ROOT = dirname(fileURLToPath(import.meta.url));
 let pass = 0, fail = 0;
@@ -24,7 +25,7 @@ function spawnHub(port, dir) {
   const hub = spawn("node", [join(ROOT, "hub.mjs")], {
     cwd: ROOT,
     env: {
-      ...process.env,
+      ...drillEnv(),
       HOME: dir,
       RELAY_DATA_DIR: dir,
       RELAY_PORT: String(port),

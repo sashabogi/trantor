@@ -17,6 +17,7 @@ import { mkdtempSync, mkdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
+import { drillEnv } from "./drill-env.mjs";
 
 const ROOT = dirname(fileURLToPath(import.meta.url));
 const PORT = 47821;
@@ -43,7 +44,7 @@ console.log("# trantor in-flight sub-agent card tests");
 // refuse to run against a squatter on the test port (would serve stale code)
 try { await fetch(`${base}/health`, { signal: AbortSignal.timeout(700) }); console.error(`✗ something already listening on :${PORT} — kill it first`); process.exit(2); } catch {}
 
-const hub = spawn("node", [join(ROOT, "hub.mjs")], { env: { ...process.env, RELAY_DATA_DIR: dir, HOME: dir, RELAY_PORT: String(PORT), PORT: String(PORT) }, stdio: ["ignore", "ignore", "pipe"] });
+const hub = spawn("node", [join(ROOT, "hub.mjs")], { env: { ...drillEnv(), RELAY_DATA_DIR: dir, HOME: dir, RELAY_PORT: String(PORT), PORT: String(PORT) }, stdio: ["ignore", "ignore", "pipe"] });
 let herr = ""; hub.stderr.on("data", d => herr += d);
 await sleep(800);
 
