@@ -20,12 +20,16 @@ type Handler = (ev: { payload: string }) => void;
 
 /** A faithful in-memory ChatDeps: invoke answers the chat's commands, listen records handlers,
  *  orchestratorOf finds no pane, and the heavy children render nothing. */
-function makeDeps() {
+function makeDeps(wakeProjects: string[] = []) {
   const invokes: Invoked[] = [];
   const handlers = new Map<string, Handler[]>();
   const deps: ChatDeps = {
     invoke: <T,>(cmd: string): Promise<T> => {
       invokes.push({ cmd });
+      if (cmd === "wake_in_progress") {
+        // SAFETY: Chat types this call Promise<string[]> — the projects holding a wake chain.
+        return Promise.resolve(wakeProjects as T);
+      }
       if (cmd === "orchestrator_chat") {
         // SAFETY: Chat types this call Promise<string> and parses the JSON; the envelope is exactly
         // the Backfill shape (empty turns, cursor 0), so the parse yields an empty thread.

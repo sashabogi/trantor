@@ -7,9 +7,18 @@
 
 export type WakeRowState =
   | { phase: "running" }
+  // #6201 — the chain's kickoff section, refined by wake-progress events while the wake command
+  // is still in flight: the idle gate that used to read as "waking…/working" silence, then the
+  // send (retries included) until the chain lands.
+  | { phase: "kickoff"; step: "pending" | "sent" }
   | { phase: "outcome"; kind: "woken" | "sent" | "busy" | "error"; text: string };
 
 export type WakeOutcome = Extract<WakeRowState, { phase: "outcome" }>;
+
+// The kickoff section's two in-flight lines (#6201), shared with the chat header so the row and
+// the header cannot drift apart mid-chain.
+export const WAKE_PENDING_LINE = "kickoff pending — waiting for idle";
+export const WAKE_SENT_LINE = "kickoff sent — waiting on the session";
 
 /** How long a woken / kickoff-sent / busy outcome stays on the row before it fades. The error
  *  stays until the next click — a failure is read at leisure, not on a timer. */
@@ -35,6 +44,11 @@ export function classifyWakeOutcome(ok: string | null, err: string | null): Wake
 export function wakeRowLine(state: WakeRowState | undefined): { text: string; tone: "ok" | "muted" | "danger"; title?: string } | null {
   if (!state) return null;
   if (state.phase === "running") return { text: "waking…", tone: "muted" };
+  if (state.phase === "kickoff") {
+    return state.step === "pending"
+      ? { text: WAKE_PENDING_LINE, tone: "muted" }
+      : { text: WAKE_SENT_LINE, tone: "muted" };
+  }
   switch (state.kind) {
     case "sent": return { text: "kickoff sent", tone: "ok", title: state.text };
     case "woken": return { text: "woken", tone: "ok", title: state.text };
