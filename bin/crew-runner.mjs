@@ -24,7 +24,7 @@ import {
 } from "../lib/classify-failure.mjs";
 import { capWake, capBcast, pickLessons, composePrompt } from "./crew-payload.mjs";
 import {
-  cardRef, carriesWork, parseTurnTokens, parseResetAt, reasonWithBalances, PARKING_REASONS,
+  cardRef, carriesWork, parseTurnTokens, parseResetAt, reasonWithBalances, quotaResetAt, PARKING_REASONS,
 } from "../lib/turn-policy.mjs";
 
 const AGENT = process.argv[2];
@@ -435,8 +435,10 @@ async function reportFailure(exit, trigger, undelivered = 0, reasonOverride = ""
 // redelivered to. So those two reasons PARK — the queue is kept, the ladder stops, and the room is
 // told once, with the reset time when the CLI printed one. `trantor up` (a restart) resumes.
 let parkAnnounced = false;
-async function parkSeat(reason, undelivered) {
-  const resetAt = parseResetAt(lastErrText);
+async function parkSeat(reason, undelivered, resetHint = 0) {
+  // A seat that went QUIET printed no wall message to parse (#6131), so its own balance row is the
+  // only place the reset time exists. Output first when there is any: it is this turn's evidence.
+  const resetAt = parseResetAt(lastErrText) || resetHint;
   const when = resetAt ? new Date(resetAt).toLocaleString() : "";
   if (!parkAnnounced) {
     parkAnnounced = true;
@@ -456,8 +458,12 @@ async function parkSeat(reason, undelivered) {
 async function balanceRows() {
   try {
     const { fetchBalances } = await import("../lib/balances.mjs");
+    // Same key sources the crew itself uses: QWEN_API_KEY (and most others) live in
+    // ~/.agent-bus/.env, not in the runner's inherited environment — reading bare process.env
+    // here would report "no key" and quietly leave every silent turn classified as a crash.
+    const { resolveKeys } = await import("../lib/provider-keys.mjs");
     return await Promise.race([
-      fetchBalances(process.env, { only: [AGENT] }),
+      fetchBalances(resolveKeys(process.env), { only: [AGENT] }),
       new Promise((r) => setTimeout(() => r([]), 4000)),
     ]);
   } catch { return []; }
@@ -630,7 +636,7 @@ wait $job; turn_exit=$?
 [ -n "$boxpid" ] && kill $boxpid 2>/dev/null
 wait
 exit $turn_exit`;
-  const r = spawnSync("/bin/bash", ["-c", shell], {
+  const spawnOpts = {
     // detached: bash leads its OWN process group, so the time box can kill the CLI and everything
     // it spawned with one signal instead of orphaning the model process behind a dead shell.
     // stdin is /dev/null for every seat (it already was for codex/kimi/dsh via `< /dev/null`):
@@ -638,10 +644,6 @@ exit $turn_exit`;
     // takes SIGTTIN and stops forever. Nothing here runs interactively — every CLI is in -p /
     // exec / run mode — so closing stdin is what makes the group safe.
     detached: true,
-    // A BACKSTOP only, deliberately later than the shell's own box: if bash itself wedges, node
-    // still ends the turn. When the in-shell box works — the normal path — this never fires, which
-    // is the point: the shell kills while the tree is still walkable, node cannot.
-    ...(TURN_MAX_MS ? { timeout: TURN_MAX_MS + 30000, killSignal: "SIGKILL" } : {}),
     cwd: TURN_DIR, encoding: "utf8", stdio: cli.sid ? ["ignore", "pipe", "inherit"] : ["ignore", "inherit", "inherit"],
     env: { ...process.env, RELAY_URL: HUB, RELAY_AGENT: AGENT, RELAY_SESSION: SESSION, RELAY_PROJECT: PROJ,
       // A RUNNER-MANAGED SEAT MUST NEVER HAND ITSELF A BATON.
@@ -656,7 +658,12 @@ exit $turn_exit`;
       // sitting there days later. To the operator that reads as "why are there two duty agents".
       TRANTOR_NO_HANDOFF_SPAWN: "1", TRANTOR_NO_BATON_SPAWN: "1" },
     maxBuffer: 16 * 1024 * 1024,
-  });
+  };
+  // A BACKSTOP only, deliberately later than the shell's own box: if bash itself wedges, node
+  // still ends the turn. When the in-shell box works — the normal path — this never fires, which
+  // is the point: the shell kills while the tree is still walkable, node cannot.
+  if (TURN_MAX_MS) { spawnOpts.timeout = TURN_MAX_MS + 30000; spawnOpts.killSignal = "SIGKILL"; }
+  const r = spawnSync("/bin/bash", ["-c", shell], spawnOpts);
   try { unlinkSync(STAMPF); } catch {}   // turn over — disarm the watchdog
   // The shell's box leaves the marker; the backstop leaves an ETIMEDOUT. Either way the turn was
   // cut, not merely failed.
@@ -722,7 +729,10 @@ exit $turn_exit`;
   // #6134: what the turn COST, from the CLI's own usage line. Zero means this CLI printed none —
   // never that the turn was free. `trantor seat-why` totals these into today's spend per seat.
   const tokens = parseTurnTokens(ownOut);
-  telemetry({ ts: Date.now(), agent: AGENT, project: PROJ, turn: TURN, trigger, model: MODEL || "cli-default", duration_ms: Date.now() - t0, exit: realExit, effExit, authFailed: effExit !== realExit, emptyOutput: lastEmptyOutput, verdict, ...(tokens ? { tokens } : {}), ...(cut ? { cut: true } : {}) });
+  const telemetryRow = { ts: Date.now(), agent: AGENT, project: PROJ, turn: TURN, trigger, model: MODEL || "cli-default", duration_ms: Date.now() - t0, exit: realExit, effExit, authFailed: effExit !== realExit, emptyOutput: lastEmptyOutput, verdict };
+  if (tokens) telemetryRow.tokens = tokens;
+  if (cut) telemetryRow.cut = true;
+  telemetry(telemetryRow);
   log(`turn ended (exit ${realExit}${effExit !== realExit ? ` → effective ${effExit} (${lastEmptyOutput ? "empty-output" : "auth"})` : ""}, ${((Date.now() - t0) / 1000).toFixed(0)}s)`);
   if (realExit === 0 && effExit === 0) { cmuxStatus("idle", "#8a94a6", "robot"); herdrAgent("idle"); }   // finished this turn, waiting for the next
   // #5965 — TURN END. A clean exit means the seat is idle again; say so right away so the app stops
@@ -998,11 +1008,18 @@ function askedExcerpt(message) {
       // #6131: a silent turn on a seat whose plan reads spent is exhaustion wearing a crash's
       // clothes. Only that one reason is ever re-read, and only from the seat's own balance rows.
       let reason = classify(ec);
-      if (reason === "empty-output") reason = reasonWithBalances(reason, await balanceRows());
+      let quotaReset = 0;
+      if (reason === "empty-output") {
+        const rows = await balanceRows();
+        reason = reasonWithBalances(reason, rows);
+        // The rows that just proved the plan is spent also carry when it lifts — a park that names
+        // the reset is a wait, a park that cannot is a seat the operator has to remember by hand.
+        if (reason === "exhausted") quotaReset = quotaResetAt(rows);
+      }
       savePending(pendingWake, pendingBcast);
       await reportFailure(ec, "message", pendingWake.length, reason);
       if (PARKING_REASONS.has(reason)) {
-        retryAt = await parkSeat(reason, pendingWake.length);
+        retryAt = await parkSeat(reason, pendingWake.length, quotaReset);
         await notifyAssigners(assigners,
           `⛔ your contract is PARKED on ${SESSION} (${reason}) — not retrying · asked: "${asked}"`);
         lastTurnAt = Date.now();

@@ -5,7 +5,8 @@ import { spawn } from "node:child_process";
 import { mkdtempSync, writeFileSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { isLow, fmtBalance, fetchBalances, DEFAULT_LOW } from "./lib/balances.mjs";
+import http from "node:http";
+import { isLow, fmtBalance, fetchBalances, qwenResetFromMessage, DEFAULT_LOW } from "./lib/balances.mjs";
 import { drillEnv } from "./drill-env.mjs";
 
 let fail = 0; const ok = (c, m) => { console.log((c ? "✓" : "✗ FAIL") + " " + m); if (!c) fail++; };
@@ -26,6 +27,59 @@ ok(isLow({ ok: true, kind: "quota", remainingPct: 99 }) === false, "isLow: quota
 ok(isLow({ ok: true, kind: "quota", remainingPct: 40 }, DEFAULT_LOW, 50) === true, "isLow: quota respects custom pct (40<50)");
 ok(isLow({ ok: true, kind: "quota", remainingPct: null }) === false, "isLow: quota unknown% → never low");
 ok(fmtBalance({ ok: true, kind: "quota", label: "Kimi Code", plan: "intermediate", remainingPct: 99 }).includes("99% left"), "fmtBalance: quota shows % left + plan");
+
+// --- #6131: Qwen token-plan probe — the reset-time parser, then the adapter live against a mock
+// gateway (its own base URL is overridable via env.QWEN_BASE_URL, no real network) ---
+{
+  const now = Date.parse("2026-09-03T00:00:00Z");
+  ok(qwenResetFromMessage("The quota will reset at 09-09 14:32:00 UTC.", now) === Date.UTC(2026, 8, 9, 14, 32, 0),
+    "qwenResetFromMessage: MM-DD HH:MM:SS UTC parsed with the current year assumed");
+  const rolled = qwenResetFromMessage("reset at 01-01 00:00 UTC", now);
+  ok(rolled === Date.UTC(2027, 0, 1, 0, 0, 0), "qwenResetFromMessage: a date already past this year rolls to next year");
+  ok(qwenResetFromMessage("no reset time in here") === null, "qwenResetFromMessage: no match → null, never a guess");
+
+  // mock gateway: /models answers auth, /chat/completions answers the quota gate
+  let mode = "exhausted";
+  const gw = http.createServer((req, res) => {
+    if (req.url.startsWith("/models")) {
+      if (req.headers.authorization !== "Bearer good-key") { res.writeHead(401); return res.end(JSON.stringify({ error: { code: "invalid_api_key" } })); }
+      res.writeHead(200, { "content-type": "application/json" });
+      return res.end(JSON.stringify({ data: [{ id: "qwen-max" }] }));
+    }
+    if (req.url.startsWith("/chat/completions")) {
+      if (mode === "exhausted") {
+        res.writeHead(429, { "content-type": "application/json", "retry-after": "3600" });
+        return res.end(JSON.stringify({ error: { code: "insufficient_quota", message: "reset at 09-09 10:32:00 UTC" } }));
+      }
+      res.writeHead(200, { "content-type": "application/json" });
+      return res.end(JSON.stringify({ choices: [] }));
+    }
+    res.writeHead(404); res.end();
+  });
+  await new Promise((r) => gw.listen(0, "127.0.0.1", r));
+  const QWEN_BASE_URL = `http://127.0.0.1:${gw.address().port}`;
+
+  mode = "exhausted";
+  const spent = await fetchBalances({ QWEN_API_KEY: "good-key", QWEN_BASE_URL }, { only: ["qwen"] });
+  const qRow = spent.find((r) => r.provider === "qwen");
+  ok(qRow?.ok === true && qRow.remainingPct === 0, `fetchBalances: qwen 429 insufficient_quota → remainingPct 0 (got ${JSON.stringify(qRow)})`);
+  ok(qRow?.resetTime > Date.now(), "fetchBalances: qwen exhausted row carries a future resetTime (from retry-after)");
+  ok(isLow(qRow) === true, "isLow: qwen row at 0% → low, same as Kimi Code's quota shape");
+  ok(fmtBalance(qRow).includes("Qwen") && fmtBalance(qRow).includes("0% left"), "fmtBalance: qwen row reads like Kimi Code's");
+
+  mode = "active";
+  const active = await fetchBalances({ QWEN_API_KEY: "good-key", QWEN_BASE_URL }, { only: ["qwen"] });
+  const aRow = active.find((r) => r.provider === "qwen");
+  ok(aRow?.ok === true && aRow.remainingPct === null, "fetchBalances: qwen gate passed → remainingPct unknown (console-only), not a guess");
+  ok(isLow(aRow) === false, "isLow: unknown qwen % → never low");
+
+  const bad = await fetchBalances({ QWEN_API_KEY: "wrong-key", QWEN_BASE_URL }, { only: ["qwen"] });
+  const bRow = bad.find((r) => r.provider === "qwen");
+  // The /models auth check runs first and fails soft the same as any adapter's HTTP error — never a crash.
+  ok(bRow?.ok === false && /401/.test(bRow.error), `fetchBalances: qwen bad key → errored row, not a crash (got ${JSON.stringify(bRow)})`);
+
+  gw.close();
+}
 
 // --- windows rows (#5570: Claude scoped limits + Codex real windows, Orca parity) ---
 // Shapes captured LIVE 2026-08-30: oauth/usage limits[] weekly_scoped → a named scoped window;
