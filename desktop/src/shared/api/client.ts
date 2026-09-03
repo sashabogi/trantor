@@ -95,7 +95,7 @@ export type Peer = {
   session: string; project?: string; status?: string;
   lastSeen?: number; online?: boolean; hookVersion?: string;
   llm?: string; model?: string;
-  /** What the session IS (#6148): "agent" for a crew seat, "genesis" for the CLI's brief-poster.
+  /** What the session IS (#6068): "agent" for a crew seat, "tool" for the CLI's brief-poster.
    *  Empty/absent on old hubs — absence must never evict a real seat. */
   kind?: string;
 };

@@ -34,8 +34,8 @@ describe("paneTargets", () => {
     expect(rows[0]).toMatchObject({ key: "codex:trantor", agent: "codex", brand: "codex", isOrchestrator: false });
   });
 
-  it("#6148: the genesis brief-poster is not a seat; a kindless peer (old hub) still is", () => {
-    const genesis: Peer = { session: "genesis:trantor", online: true, status: "idle", kind: "genesis" };
+  it("#6068: the genesis tool is not a seat; a kindless peer (old hub) still is", () => {
+    const genesis: Peer = { session: "genesis:trantor", online: true, status: "idle", kind: "tool" };
     const agent: Peer = { session: "glm:trantor", online: true, status: "idle", kind: "agent" };
     const oldHub: Peer = { session: "qwen:trantor", online: true, status: "idle" };
     expect(isAgentPeer(genesis)).toBe(false);

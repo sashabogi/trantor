@@ -76,12 +76,12 @@ const cardA = (tasksA.tasks ?? []).find(t => t.title === "genesis: genesis-a");
 ok("init: genesis card on the new board", !!cardA, JSON.stringify(tasksA).slice(0, 200));
 const projectsA = await (await fetch(`${HUB}/projects`)).json();
 ok("init: brief posted to the hub", JSON.stringify(projectsA).includes("Genesis drill project"));
-// #6148: the genesis session is a brief-poster, not an agent — its peer row must say kind
-// "genesis" so the app's seat strip skips it instead of rendering a "start it with trantor up"
+// #6068: the genesis session is a brief-poster, not an agent — its peer row must say kind
+// "tool" so the app's seat strip skips it instead of rendering a "start it with trantor up"
 // ghost seat.
 const peersA = await (await fetch(`${HUB}/peers`)).json();
 const genesisRow = (peersA.peers ?? []).find(p => p.project === "genesis-a");
-ok("init: the brief-poster's peer row wears kind genesis, not an agent seat", !!genesisRow && genesisRow.kind === "genesis", JSON.stringify(peersA).slice(0, 200));
+ok("init: the brief-poster's peer row wears kind tool, not an agent seat", !!genesisRow && genesisRow.kind === "tool", JSON.stringify(peersA).slice(0, 200));
 // the pin (#5862 residual): the first session must not wear the "not pinned to a hub" warning
 const cfg = JSON.parse(readFileSync(join(W, ".agent-bus", "config.json"), "utf8"));
 ok("init: project pinned to the hub it posted to", cfg.hubs?.["genesis-a"] === HUB, JSON.stringify(cfg.hubs ?? {}));
@@ -171,13 +171,17 @@ ok("parent: CLAUDE.md seeded in the created dir", !!dJson && readFileSync(join(A
       req.on("data", c => body += c);
       req.on("end", () => {
         const u = new URL(req.url, "http://x");
+        let parsedBody = null;
+        try { parsedBody = JSON.parse(body); } catch {}
         rec({ method: req.method, path: u.pathname,
+          body: parsedBody,
           headers: { pubkey: req.headers["x-trantor-pubkey"] || "", sig: req.headers["x-trantor-sig"] || "", ts: req.headers["x-trantor-ts"] || "", nonce: req.headers["x-trantor-nonce"] || "" } });
         const send = (code, obj) => { res.writeHead(code, { "content-type": "application/json" }); res.end(JSON.stringify(obj)); };
         // /peer is the "do I exist already?" probe — the genesis identity is UNKNOWN (enforce).
         if (req.method === "GET" && u.pathname === "/peer") return send(401, { error: "unknown identity" });
         if (req.method === "POST" && u.pathname === "/invite") return send(200, { token: ${JSON.stringify(inviteToken)}, scopes: [{ project: "genesis-e", role: "write" }], expiresAt: Date.now() + 60000 });
         if (req.method === "POST" && u.pathname === "/enroll") return send(200, { ok: true, identity: { name: "genesis-e" }, scopes: [{ project: "genesis-e", role: "write" }] });
+        if (req.method === "POST" && u.pathname === "/register") return send(200, { ok: true, session: "genesis:genesis-e" });
         if (req.method === "POST" && u.pathname === "/project") return send(200, { ok: true, project: "genesis-e", brief: "drill" });
         if (req.method === "POST" && u.pathname === "/task") return send(200, { ok: true, task: { id: 7001, project: "genesis-e", title: "genesis: genesis-e", status: "todo" } });
         send(404, { error: "not found" });
@@ -201,6 +205,9 @@ ok("parent: CLAUDE.md seeded in the created dir", !!dJson && readFileSync(join(A
   ok("#6049: the owner INVITE was minted (enrollment, not tofu)", invited.length === 1);
   const enrolled = recorded.filter(r => r.method === "POST" && r.path === "/enroll");
   ok("#6049: the genesis identity ENROLLED with the invite", enrolled.length >= 1);
+  ok("#6068: the genesis identity enrolls as a tool", enrolled[0]?.body?.kind === "tool", JSON.stringify(enrolled[0]));
+  const registered = recorded.filter(r => r.method === "POST" && r.path === "/register");
+  ok("#6068: the genesis peer registers as a tool", registered[0]?.body?.kind === "tool", JSON.stringify(registered[0]));
   for (const p of ["/project", "/task"]) {
     const rec = recorded.find(r => r.method === "POST" && r.path === p);
     ok(`#6049: ${p} was signed (pubkey+sig+ts+nonce headers)`, !!rec && !!rec.headers.pubkey && !!rec.headers.sig && !!rec.headers.ts && !!rec.headers.nonce, JSON.stringify(rec));
