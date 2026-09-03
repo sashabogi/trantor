@@ -103,7 +103,7 @@ describe("GenesisSheet two paths (#6120)", () => {
     const wake = calls.find(c => c.cmd === "project_wake");
     const kickoff = wake!.args.kickoff as string;
     expect(kickoff).toMatch(/docs\/PRD\.md/);
-    expect(kickoff).toMatch(/review contract/);
+    expect(kickoff).toMatch(/prd-review/);
   });
 
   it("a paste INTO the name input still types a name — it never selects the brief path", async () => {
