@@ -40,11 +40,10 @@ import {
   setTabs as storeSetTabs,
   canStashDraft,
 } from "./documents";
-import { isLspIndexing, isLspLive, lspPhase, onLspChange, startLsp, stopLspProject } from "./lspClient";
-import { completionActivityForPath, formatCompletionActivity, onCompletionChange } from "./completionActivity";
-import { lspLanguageFor, lspServerName } from "./lspLanguage";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+
+const trace = (line: string) => { invoke("app_log", { line }).catch(() => {}); };
 
 type ViewMode = "code" | "changes";
 
@@ -84,13 +83,6 @@ export function Files({ project, lens, onLens, path, seat }: {
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [busy, setBusy] = useState(false);
-  // The language-server status line: "rust-analyzer ready" or the honest "not installed: <name>".
-  const [lspNote, setLspNote] = useState<string | null>(null);
-  // The resolved scope root the language server chose — the editor's model URI is built from it.
-  const [lspRoot, setLspRoot] = useState<string | null>(null);
-  // The crate root the CLIENT keyed itself by — readiness is scoped to exactly this + language.
-  const [lspWsRoot, setLspWsRoot] = useState<string | null>(null);
-  const [completionClock, setCompletionClock] = useState(() => Date.now());
 
   const activeTab = tabs.find(t => t.key === activeKey) ?? null;
   // The on-disk conflict rides the TAB (Orca open-file.ts:124-128, per-tab), not this component's
@@ -99,9 +91,6 @@ export function Files({ project, lens, onLens, path, seat }: {
   const activePath = activeTab?.path ?? null;
   const activeScope = activeTab?.scope ?? "project";
   const activeView = activeTab?.view ?? "code";
-  const completionActivity = completionActivityForPath(lspRoot, activePath);
-  const completionPending = completionActivity?.pending ?? false;
-  const completionAnsweredAt = completionActivity?.answeredAt ?? null;
 
   // The disk stat we last acted on, and whether the editor holds unsaved work. Both live in refs
   // so the poll reads the CURRENT values without tearing the interval down every render.
@@ -277,87 +266,6 @@ export function Files({ project, lens, onLens, path, seat }: {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [project, activeTab?.key]);
 
-  // Language server: one client per (workspace root, language), shared across tabs, started the
-  // first time a served file mounts. The honest status line names the running phase, never a fake
-  // "ready". Readiness is keyed by THE OPEN FILE'S (workspaceRoot, language) — the project
-  // server's ready must not answer for the seat-worktree server of the same language (#12752).
-  // Servers OUTLIVE this lens — they are stopped on project switch / idle / app exit.
-  const activeLanguage = activePath ? lspLanguageFor(activePath) : null;
-  const lspName = activeLanguage ? lspServerName(activeLanguage) : "";
-  const trace = (line: string) => { invoke("app_log", { line }).catch(() => {}); };
-
-  // Derive the status line from the shared client state. The explicit workspace root keeps the
-  // subscription honest after a lens remount; a closure over the pre-start null root would let a
-  // different Rust client answer for this document.
-  const updateStatus = (workspaceRoot: string | null) => {
-    if (!activeLanguage) { setLspNote(null); return; }
-    if (!isLspLive(activeLanguage, workspaceRoot ?? undefined)) { setLspNote(null); return; }
-    if (isLspIndexing(activeLanguage, workspaceRoot ?? undefined)) {
-      const phase = lspPhase(activeLanguage, workspaceRoot ?? undefined);
-      setLspNote(phase ? `${lspName}: ${phase}` : `${lspName}…`);
-    } else {
-      setLspNote(`${lspName} ready`);
-    }
-  };
-
-  useEffect(() => {
-    if (!activeLanguage || !activePath) { setLspNote(null); setLspRoot(null); setLspWsRoot(null); return; }
-    let alive = true;
-    const scope = activeScope === "project" ? null : activeScope;
-    setLspNote(null);
-    setLspRoot(null);
-    setLspWsRoot(null);
-    startLsp(project, scope, activeLanguage, activePath)
-      .then(({ scopeRoot, workspaceRoot }) => {
-        if (!alive) return;
-        setLspRoot(scopeRoot);
-        setLspWsRoot(workspaceRoot);
-        trace(`files lsp ${workspaceRoot}\u0000${activeLanguage} attached (path=${activePath})`);
-      })
-      .catch(e => { if (alive) setLspNote(String(e)); });
-    return () => { alive = false; };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [project, activeLanguage, activeScope, activePath]);
-
-  // The phase flips (begin → "cachePriming", end → ready) notify the client; re-derive the status
-  // for this exact document root. Re-run once when the async start supplies that root.
-  useEffect(() => {
-    if (!activeLanguage) return;
-    const refresh = () => updateStatus(lspWsRoot);
-    refresh();
-    return onLspChange(refresh);
-    // updateStatus is a local derivation over these primitive values.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeLanguage, lspName, lspWsRoot]);
-
-  // Completion requests are document-scoped in lspDocuments. A pending request says "asking…"
-  // immediately; an answer keeps its item count and a live age so a slow server never looks dead.
-  useEffect(() => onCompletionChange(() => setCompletionClock(Date.now())), []);
-  useEffect(() => {
-    if (completionPending || completionAnsweredAt === null) return;
-    const age = Math.max(0, Date.now() - completionAnsweredAt);
-    const delay = age < 10_000 ? 100 : age < 60_000 ? 1_000 : 60_000;
-    const timer = window.setTimeout(() => setCompletionClock(Date.now()), delay);
-    return () => window.clearTimeout(timer);
-  }, [completionPending, completionAnsweredAt, completionClock]);
-
-  const completionNote = formatCompletionActivity(completionActivity, completionClock);
-  const visibleLspNote = lspNote && completionNote ? `${lspNote} · ${completionNote}` : lspNote;
-
-  // Servers OUTLIVE the lens: on unmount NOTHING is detached. The Monaco client stays in the
-  // module map (the disposed editor models fire didClose on their own), so a remount re-attaches
-  // to the same live client and server instead of cold-spawning (the 0.3.103 broken-pipe bug).
-
-  // Project switch stops the OLD project's servers.
-  const prevProjectRef = useRef<string | null>(null);
-  useEffect(() => {
-    const prev = prevProjectRef.current;
-    if (prev && prev !== project) {
-      void stopLspProject(prev);
-    }
-    prevProjectRef.current = project;
-  }, [project]);
-
   const setDraft = (v: string) => {
     setDraftState(v);
     if (activeKey) {
@@ -508,15 +416,6 @@ export function Files({ project, lens, onLens, path, seat }: {
           </div>
         )}
 
-        {/* The readiness line (#12752): names the phase while a server works, goes quiet on
-            ready. Scoped to the OPEN FILE's (workspaceRoot, language) — the project server's
-            ready never answers for the seat-worktree server of the same language. */}
-        {lspNote && isLspIndexing(activeLanguage ?? "", lspWsRoot ?? undefined) && (
-          <div className="tr-mono shrink-0 px-1 text-[11px] text-tr-doing">
-            {activePath} · {lspNote}
-          </div>
-        )}
-
         {busy && (
           <div className="tr-card px-3.5 py-2 text-[12px] text-tr-warn">
             {seat} is working in this worktree right now, so saving is refused. Review it once the
@@ -568,14 +467,11 @@ export function Files({ project, lens, onLens, path, seat }: {
               onSave={save}
             />
           ) : (
-            <CodeView value={draft} path={activePath} root={lspRoot} editable onChange={setDraft} onSave={save} project={project} seat={seat} />
+            <CodeView value={draft} path={activePath} editable onChange={setDraft} onSave={save} project={project} seat={seat} />
           )}
         </div>
         {body?.truncated && (
           <div className="px-1 text-[11.5px] text-tr-warn">Cut at 512 KB — this is the head of the file, not all of it.</div>
-        )}
-        {visibleLspNote && (
-          <div className="tr-mono px-1 text-[11px] text-tr-muted">{visibleLspNote}</div>
         )}
       </div>
     </div>

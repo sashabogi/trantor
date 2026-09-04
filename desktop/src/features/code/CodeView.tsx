@@ -5,43 +5,18 @@
 // lives in monacoSetup.ts). The component contract is unchanged from the CodeMirror build:
 // same props, path is the editor's identity (a rebuild keeps the cursor out of trouble), a
 // new value for the same path replaces the text in place, ⌘S saves.
+//
+// No language server (#6437, following Orca's own shape): a month of custom LSP glue (start
+// caps, client reuse, root-key matching) produced a steady stream of #5857-class failures and
+// the operator still had no completions. Suggestions are Monaco's own built-ins — quick
+// suggestions, trigger characters, word-based — same as any file with no semantic service.
+// Ghost text (registerGhostTextProvider) is unrelated and unchanged.
 import { useEffect, useRef } from "react";
 import * as monaco from "monaco-editor";
 import { monacoLanguageFor } from "./editorLanguage";
 import { storedDraft } from "./documents";
-import { isLspLive, onLspChange } from "./lspClient";
-import { attachOpenDocuments, toMonacoSuggestions, trackDocument } from "./lspDocuments";
-import { trackedLspCompletion } from "./completionActivity";
-import { trace } from "./lspTransport";
 import "./monacoSetup";
 import { registerGhostTextProvider, isGhostTextEnabled, toggleGhostText } from "./ghostText";
-
-// Server-backed completion (#5857): the model sync lives in lspDocuments.ts (the client's own
-// sync listens to the monaco-vscode-api registry, which our vanilla-monaco models are not in),
-// and this provider asks the owning client directly. Registered once for the served languages;
-// with no live client lspCompletion returns null and the editor keeps its no-server silence.
-monaco.languages.registerCompletionItemProvider(["rust", "typescript", "javascript", "python"], {
-  triggerCharacters: [":", ".", "'", "("],
-  async provideCompletionItems(model, position) {
-    const result = await trackedLspCompletion(
-      String(model.uri), model.getLanguageId(), position.lineNumber, position.column,
-    );
-    if (!result) return { suggestions: [] };
-    const word = model.getWordUntilPosition(position);
-    const range = {
-      startLineNumber: position.lineNumber,
-      startColumn: word.startColumn,
-      endLineNumber: position.lineNumber,
-      endColumn: word.endColumn,
-    };
-    return {
-      suggestions: toMonacoSuggestions(result, range, {
-        ...monaco.languages.CompletionItemKind,
-        insertAsSnippetRule: monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet,
-      }),
-    };
-  },
-});
 
 const fontOptions = {
   fontFamily: '"SF Mono", ui-monospace, Menlo, monospace',
@@ -49,12 +24,9 @@ const fontOptions = {
   lineHeight: 19,
 } as const;
 
-export function CodeView({ value, path, root, editable, onChange, onSave, project, seat }: {
+export function CodeView({ value, path, editable, onChange, onSave, project, seat }: {
   value: string;
   path: string;
-  /** The scope root the language server chose — the model's URI is `root/path` so didOpen names
-   *  a real file, not an inmemory:// URI rust-analyzer cannot map into the crate. */
-  root?: string | null;
   editable: boolean;
   onChange?: (v: string) => void;
   onSave?: () => void;
@@ -84,16 +56,7 @@ export function CodeView({ value, path, root, editable, onChange, onSave, projec
     // prop the moment it is real; until then the model simply holds the resumed text.
     const resumed = storedDraft(project, seat, path);
     const initialText = resumed ?? value;
-    // The model URI is the file's absolute path under the server root; monaco keys models by URI,
-    // so reuse an existing model for this URI rather than create a duplicate (createModel throws
-    // on a registered URI). No root → no URI, which is fine for a language with no server.
-    const uri: monaco.Uri | undefined = root ? monaco.Uri.file(`${root}/${path}`) : undefined;
-    const reused = uri ? monaco.editor.getModel(uri) : null;
-    const model = reused ?? monaco.editor.createModel(initialText, lang, uri);
-    // LSP document sync (#5857): track the model so a live client gets didOpen/didChange/didClose.
-    // Idempotent per URI; didClose rides the model's disposal, not this editor's unmount.
-    trackDocument(model, lang);
-    attachOpenDocuments();
+    const model = monaco.editor.createModel(initialText, lang);
     const ed = monaco.editor.create(host.current, {
       model,
       theme: "trantor-calm",
@@ -104,10 +67,11 @@ export function CodeView({ value, path, root, editable, onChange, onSave, projec
       scrollBeyondLastLine: false,
       stickyScroll: { enabled: false },
       renderLineHighlight: "line",
-      // Suggestions only when a language server is live for this language (#5857): the muted
-      // built-in TS service is not consulted, and an editor with no server keeps today's silence.
-      quickSuggestions: isLspLive(lang, root ?? undefined),
-      suggestOnTriggerCharacters: isLspLive(lang, root ?? undefined),
+      // No language server (#6437): Monaco's own built-ins, same as any file with no semantic
+      // service — quick suggestions, trigger characters, and a word-based fallback.
+      quickSuggestions: true,
+      suggestOnTriggerCharacters: true,
+      wordBasedSuggestions: "currentDocument",
       occurrencesHighlight: "off",
       padding: { top: 6, bottom: 6 },
       scrollbar: { verticalScrollbarSize: 10, horizontalScrollbarSize: 10 },
@@ -125,39 +89,25 @@ export function CodeView({ value, path, root, editable, onChange, onSave, projec
     editorRef.current = ed;
     modelRef.current = model;
     // Setup is over the moment the editor is up (#5938, the third face, 0.3.114): this effect
-    // re-runs when the server root lands and rebuilds the model, and nothing else cleared the
-    // guard when the value prop did not change afterwards — every keystroke was then muted, the
-    // store never saw the typed text, and the next remount resumed the disk text. The value
-    // effect still raises and lowers the guard around its own push.
+    // re-runs when `path` changes, and nothing else cleared the guard when the value prop did
+    // not change afterwards — every keystroke was then muted, the store never saw the typed
+    // text, and the next remount resumed the disk text. The value effect still raises and lowers
+    // the guard around its own push.
     setupRef.current = false;
-    trace(`codeview model path=${path} reused=${!!reused} resumed=${resumed !== null} len=${model.getValue().length}`);
     return () => {
       sub.dispose();
       ghostDispRef.current?.dispose();
       ghostDispRef.current = null;
       ed.dispose();
-      // Dispose only the model WE created; a reused model belongs to whichever editor made it.
-      if (!reused) model.dispose();
+      model.dispose();
       editorRef.current = null;
       modelRef.current = null;
     };
     // Deliberately NOT keyed on `value`: re-creating on every keystroke is how an editor loses
-    // the cursor. A caller changing the file changes `path` (or the server root lands), which is
-    // the real identity here. project/seat scope the ghost-text calls.
+    // the cursor. A caller changing the file changes `path`, which is the real identity here.
+    // project/seat scope the ghost-text calls.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [path, editable, root, project, seat]);
-
-  // The language server starts async, after this editor is already up: when it comes (or goes)
-  // live, flip suggestions for THIS instance so the first completion needs no remount.
-  useEffect(() => {
-    const lang = monacoLanguageFor(path);
-    return onLspChange(() => {
-      const ed = editorRef.current;
-      if (!ed) return;
-      const live = isLspLive(lang, root ?? undefined);
-      ed.updateOptions({ quickSuggestions: live, suggestOnTriggerCharacters: live });
-    });
-  }, [path, root]);
+  }, [path, editable, project, seat]);
 
   // A new document for the same path (saved, reloaded, switched source) replaces the text
   // without tearing the editor down. pushEditOperations keeps the undo stack, so a live reload
