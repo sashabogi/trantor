@@ -7,7 +7,7 @@
 // no module mocking, and no monaco import (which cannot load under node).
 import { beforeEach, describe, expect, it } from "vitest";
 import type { RequestMessage } from "vscode-jsonrpc";
-import { setLspClientDeps, startLsp, stopLspProject, lspClientRows, type LspClientDeps, type LspClientLike } from "./lspClient";
+import { setLspClientDeps, startLsp, stopLspProject, lspClientRows, onLspChange, type LspClientDeps, type LspClientLike } from "./lspClient";
 import type { LspBus } from "./lspTransport";
 type Handler = (ev: { payload: string | null }) => void;
 
@@ -218,5 +218,28 @@ describe("startLsp (#5857)", () => {
     await new Promise(r => setTimeout(r, 60));   // past the cap window — the 0.3.134 leak fired here
     expect(bus.stopped).toEqual([]);             // the switch-back server survived the cap
     expect(lspClientRows()).toHaveLength(1);     // and its client is live for completions
+  });
+
+  // ---- #6311 (bounced): a client already live when an editor asks for it again — a remount, or
+  // a second tab on the same crate — must still tell every isLspLive listener it exists. The
+  // reuse branch used to return silently: an editor whose onLspChange subscription raced the
+  // registration (or a status line re-deriving readiness) never heard the client was there. ----
+
+  it("startLsp's reuse path notifies onLspChange listeners, not just a fresh start", async () => {
+    const bus = makeDeps();
+    bus.setWsRoot("/proj/reuse-notify");   // a fresh key
+    setLspClientDeps(bus.deps);
+
+    await startLsp("proj", null, "rust", "/proj/reuse-notify/src/main.rs");
+
+    let calls = 0;
+    const unsub = onLspChange(() => { calls++; });
+    // Same (workspaceRoot, language) key — the map already has a client, so this hits the reuse
+    // branch (lines around "reuse id=... client already registered"), not a fresh start.
+    const result = await startLsp("proj", null, "rust", "/proj/reuse-notify/src/main.rs");
+    unsub();
+
+    expect(result.id).toBe(1);
+    expect(calls).toBeGreaterThan(0);   // the reuse path must notify — a silent reuse is the bug
   });
 });
