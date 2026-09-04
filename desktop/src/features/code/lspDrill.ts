@@ -98,6 +98,64 @@ async function fireCompletion(model: monaco.editor.ITextModel, language: string,
   log(`${tag}: completion items=${items.length} first=[${labels.join(", ")}]`);
 }
 
+/** #6311 (bounced): the operator's editor never showed a suggestion while TYPING — only an
+ *  explicit editor.action.triggerSuggest worked, because CodeView keyed quickSuggestions /
+ *  suggestOnTriggerCharacters off the scope root instead of the client registry's workspace root
+ *  (a nested crate's workspaceRoot differs from the project's scope root). This leg reproduces the
+ *  REAL typing path — monaco's `type` command, the same one a keystroke drives — with NO call to
+ *  triggerSuggest, using the exact key (started.workspaceRoot) CodeView now checks. It must show
+ *  the widget on its own; before the CodeView fix this leg failed identically to the operator. */
+async function typeAndExpectSuggest(project: string, path: string, tag: string): Promise<void> {
+  const language = lspLanguageFor(path);
+  if (!language) throw new Error(`no server for ${path}`);
+  const started = await startLsp(project, null, language, path);
+  if (!isLspLive(language, started.workspaceRoot)) {
+    throw new Error(`${tag}: no live client for wsRoot=${started.workspaceRoot} — cannot type-drill`);
+  }
+  const body = await readFile(project, path);
+  const uri = monaco.Uri.file(`${started.scopeRoot}/${path}`);
+  const model = monaco.editor.getModel(uri) ?? monaco.editor.createModel(body.text, language, uri);
+  trackDocument(model, language);
+  attachOpenDocuments();
+
+  const host = document.createElement("div");
+  host.dataset.lspDrill = "type";
+  Object.assign(host.style, { position: "fixed", inset: "48px", zIndex: "2147483647", background: "#101013" });
+  document.body.append(host);
+  // The exact options CodeView.tsx computes at editor creation (#6311 fix): keyed by workspaceRoot.
+  const live = isLspLive(language, started.workspaceRoot);
+  const editor = monaco.editor.create(host, {
+    model,
+    automaticLayout: true,
+    quickSuggestions: live,
+    suggestOnTriggerCharacters: live,
+  });
+  try {
+    const lastLine = model.getLineCount();
+    const stub = "\nlet lsp_drill_type_target = std\n";
+    model.applyEdits([{
+      range: { startLineNumber: lastLine, startColumn: model.getLineMaxColumn(lastLine), endLineNumber: lastLine, endColumn: model.getLineMaxColumn(lastLine) },
+      text: stub,
+    }]);
+    const typeLine = model.getLineCount() - 1;
+    editor.setPosition({ lineNumber: typeLine, column: model.getLineMaxColumn(typeLine) });
+    editor.focus();
+    log(`${tag}: before-type ${suggestState(editor, host)}`);
+    // The same command a real keystroke drives — NOT editor.action.triggerSuggest. Two colons is
+    // rust-analyzer's own trigger character; CodeView registers ":" as a completion trigger too.
+    editor.trigger("lsp-drill-type", "type", { text: ":" });
+    editor.trigger("lsp-drill-type", "type", { text: ":" });
+    const after = await waitForSuggest(editor, host);
+    log(`${tag}: after-type ${after}`);
+    if (!after.includes("visible=true")) {
+      throw new Error(`${tag}: typing showed no suggest widget with no explicit trigger (${after})`);
+    }
+  } finally {
+    editor.dispose();
+    host.remove();
+  }
+}
+
 export async function runLspDrill(spec: string, path = "desktop/src-tauri/src/lib.rs"): Promise<void> {
   const legs = spec.split(">").map((leg) => {
     const i = leg.indexOf(":");
@@ -107,11 +165,13 @@ export async function runLspDrill(spec: string, path = "desktop/src-tauri/src/li
     const legT0 = Date.now();
     await startAndComplete(legs[0].project, legs[0].path, "leg1");
     await drillRemount(legs[0].project, legs[0].path);
+    await typeAndExpectSuggest(legs[0].project, legs[0].path, "leg1");
 
     for (let n = 1; n < legs.length; n++) {
       log(`switch: stopping ${legs[n - 1].project} servers, switching to ${legs[n].project}`);
       await stopLspProject(legs[n - 1].project);
       await startAndComplete(legs[n].project, legs[n].path, `leg${n + 1}`);
+      await typeAndExpectSuggest(legs[n].project, legs[n].path, `leg${n + 1}`);
     }
 
     if (legs.length > 1) {
