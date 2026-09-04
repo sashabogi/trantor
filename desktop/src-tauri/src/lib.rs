@@ -1,6 +1,7 @@
 mod herdr;
 mod genesis;
 mod ghost;
+mod provider_accounts;
 pub mod identity;
 pub mod lsp;
 mod sessions;
@@ -5456,6 +5457,10 @@ pub fn run() {
             app_update_check,
             app_update_install,
             terminal::orchestrator_open,
+            provider_accounts::provider_login,
+            provider_accounts::provider_verify_key,
+            provider_accounts::provider_save_key,
+            provider_accounts::provider_remove,
             terminal::term_attach,
             terminal::term_write,
             terminal::term_resize,
