@@ -5335,12 +5335,13 @@ fn append_panic_log(msg: &str, loc: &str, backtrace: &str) {
     }
 }
 
-pub fn run() {
-    // #5917: a panic on the main thread inside AppKit's sendEvent cannot unwind — the process
-    // aborts with SIGABRT and the crash report shows only the abort, never the message (twice on
-    // 2026-09-01: typing in the editor, pasting into the composer). This hook writes the message,
-    // location, thread and backtrace to a file BEFORE the abort, so the next crash names itself.
-    // It changes nothing about how the panic proceeds.
+/// #5917/#6317: a panic on the main thread inside AppKit's sendEvent cannot unwind — the process
+/// aborts with SIGABRT and the crash report shows only the abort, never the original message
+/// (10:08 and 21:48 on 2026-09-03: pressing Up in the composer, and once before that pasting into
+/// the editor). This hook writes the message, location, thread and backtrace to a file BEFORE the
+/// abort, so the crash names itself. It changes nothing about how the panic proceeds — the default
+/// hook (which prints the crash-reporter-visible summary) still runs after.
+fn install_panic_hook() {
     let default_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
         let msg = panic_payload_message(info.payload());
@@ -5352,6 +5353,34 @@ pub fn run() {
         append_panic_log(&msg, &loc, &backtrace);
         default_hook(info);
     }));
+}
+
+/// #6317 acceptance drill: TRANTOR_PANIC_DRILL=1 reproduces the exact shape of the tao crash —
+/// a panic that starts inside an ordinary Rust call and tries to unwind out through a plain
+/// `extern "C" fn` boundary (tao's `send_event` is exactly this: registered as an Objective-C
+/// method via `extern "C" fn send_event(...)`, no `C-unwind` ABI) — without needing a live
+/// AppKit event loop. Runs headless, before tauri::Builder, then aborts (matching production).
+/// Proves whether the hook sees the ORIGINAL panic (message below) as well as the synthetic
+/// "panic in a function that cannot unwind" the compiler inserts at the ABI boundary.
+fn run_panic_drill() -> ! {
+    fn panics_directly(arg: u32) -> u32 {
+        if arg == std::hint::black_box(arg) {
+            panic!("panic-drill: original panic message (#6317)");
+        }
+        arg
+    }
+    extern "C" fn nounwind_boundary(arg: u32) -> u32 {
+        panics_directly(arg)
+    }
+    std::hint::black_box(nounwind_boundary(std::hint::black_box(1)));
+    unreachable!("nounwind_boundary should have aborted the process");
+}
+
+pub fn run() {
+    install_panic_hook();
+    if std::env::var("TRANTOR_PANIC_DRILL").is_ok() {
+        run_panic_drill();
+    }
     tauri::Builder::default()
         .manage(terminal::TerminalManager::default())
         .manage(HandoffChains::default())
