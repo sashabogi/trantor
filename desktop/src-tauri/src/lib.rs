@@ -5376,7 +5376,28 @@ fn run_panic_drill() -> ! {
     unreachable!("nounwind_boundary should have aborted the process");
 }
 
+/// #6317: launching via `open -a` (as the operator does) points the process's stderr at
+/// `/dev/null` — the default panic hook's own crash summary, and anything AppKit itself
+/// prints about the abort, has nowhere to land. Reopen fd 2 onto a real file before anything
+/// can write to it. Fail-open: if the file can't be opened, stderr just stays wherever it was.
+fn redirect_stderr_to_log() {
+    let path = desktop_bus_dir().join("app-stderr.log");
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    if let Ok(file) = std::fs::OpenOptions::new().create(true).append(true).open(&path) {
+        use std::os::unix::io::AsRawFd;
+        let fd = file.as_raw_fd();
+        unsafe {
+            libc::dup2(fd, libc::STDERR_FILENO);
+        }
+        // dup2'd fd 2 now owns the underlying file description; drop our copy of the handle.
+        drop(file);
+    }
+}
+
 pub fn run() {
+    redirect_stderr_to_log();
     install_panic_hook();
     if std::env::var("TRANTOR_PANIC_DRILL").is_ok() {
         run_panic_drill();
