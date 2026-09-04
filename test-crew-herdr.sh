@@ -195,6 +195,21 @@ HOME="$TMP" PATH="$TMP/fakebin_noherdr:/usr/bin:/bin" RELAY_PROJECT=protest bash
 ok "herdr-less prune keeps herdr rows" 'has_row "protest	herdr	glm	SURF-A" && has_row "protest	herdrws	__ws__	WS-LIVE"'
 ok "herdr-less prune never invokes herdr" 'nolog'
 
+# 12b. the split helper's optional cwd (0.18.38) must not blow up the TWO-argument seat path under
+#      `set -u` — 0.18.39 shipped `[ -n "$3" ]`, and the first real `trantor up` died with
+#      "line 204: $3: unbound variable" and took both runners down (2026-09-03 21:12).
+#      The helper is sourced alone (its own stderr is dropped inside, so the stub logs to a file).
+sed -n '/^_herdr_split()/,/^}/p' "$ROOT/bin/crew.sh" > "$TMP/split-fn.sh"
+split_drill() {   # $1..: args for _herdr_split → stdout = new pane id; herdr call logged to $TMP/split.log
+  rm -f "$TMP/split.log"
+  bash -u -c 'source "$1"; shift; _herdr() { echo "herdr $*" >> "$LOG"; printf "{\"result\":{\"pane\":{\"pane_id\":\"P-SPLIT\"}}}"; }; _herdr_split "$@"' _ "$TMP/split-fn.sh" "$@"
+}
+OUT12b="$(LOG="$TMP/split.log" split_drill P-1 right 2>&1)"; rc12b=$?
+ok "a two-argument split (seat spawn) survives set -u" '[ "$rc12b" = "0" ] && [ "$OUT12b" = "P-SPLIT" ]'
+ok "…and asks herdr for a plain split, no --cwd" 'grep -q "^herdr pane split P-1 --direction right --no-focus$" "$TMP/split.log"'
+OUT12c="$(LOG="$TMP/split.log" split_drill P-1 right /some/dir 2>&1)"
+ok "a three-argument split carries --cwd" '[ "$OUT12c" = "P-SPLIT" ] && grep -q -- "--direction right --no-focus --cwd /some/dir$" "$TMP/split.log"'
+
 # 13. `trantor open` (card #5396, W3-A): hosts the OPERATOR's claude as the `orchestrator · <project>`
 #     pane in the crew workspace and prints its TARGET on stdout as ONE line. Dry mode: [dry] lines
 #     + %DRY ids, exactly like the dry spawn drills.

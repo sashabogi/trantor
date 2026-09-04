@@ -201,7 +201,7 @@ let d="";process.stdin.on("data",c=>d+=c).on("end",()=>{try{const r=(JSON.parse(
 process.stdout.write((((r.workspace||{}).workspace_id)||"")+"\t"+(((r.root_pane||{}).pane_id)||""))}catch(e){}})'
 }
 _herdr_split() {   # $1=pane id ("" = UI-focused pane)  $2=right|down  $3=cwd (optional) → new pane id
-  local a=(pane split); [ -n "$1" ] && a+=("$1"); a+=(--direction "$2" --no-focus); [ -n "$3" ] && a+=(--cwd "$3")
+  local a=(pane split); [ -n "$1" ] && a+=("$1"); a+=(--direction "$2" --no-focus); [ -n "${3:-}" ] && a+=(--cwd "$3")
   _herdr "${a[@]}" 2>/dev/null | node -e '
 let d="";process.stdin.on("data",c=>d+=c).on("end",()=>{try{const r=(JSON.parse(d.slice(d.search(/[\[{]/))).result)||{};
 process.stdout.write(((r.pane||{}).pane_id)||"")}catch(e){}})'
