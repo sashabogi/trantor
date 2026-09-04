@@ -7,7 +7,7 @@
 // no module mocking, and no monaco import (which cannot load under node).
 import { beforeEach, describe, expect, it } from "vitest";
 import type { RequestMessage } from "vscode-jsonrpc";
-import { setLspClientDeps, startLsp, type LspClientDeps, type LspClientLike } from "./lspClient";
+import { setLspClientDeps, startLsp, stopLspProject, lspClientRows, type LspClientDeps, type LspClientLike } from "./lspClient";
 import type { LspBus } from "./lspTransport";
 type Handler = (ev: { payload: string | null }) => void;
 
@@ -142,5 +142,81 @@ describe("startLsp (#5857)", () => {
     // subscriptions (lsp-message:<id>, lsp-closed:<id>) outlive the failed start and leak.
     expect(bus.clientStopped()).toBe(true);
     expect(bus.unsubscribed.sort()).toEqual(["lsp-closed:1", "lsp-message:1"]);
+  });
+
+  // ---- #6311: the 0.3.134 leak — the cap's timer could not be cancelled, so it fired at +30s
+  // on a start that had ALREADY settled and stopped the healthy server (app-trace.log: "TIMED
+  // OUT ... stopping server id=2" while rust-2.trace showed didOpen + diagnostics flowing). ----
+
+  it("a start that settles BEFORE the cap never stops the server (0.3.134 leak)", async () => {
+    const bus = makeDeps();
+    bus.setWsRoot("/proj/leak");   // fresh key — the previous clients stay cached
+    bus.deps.startTimeoutMs = 20;  // the cap fires 20ms in — long after start() has won the race
+    setLspClientDeps(bus.deps);
+
+    await startLsp("proj", null, "rust", "/proj/leak/src/main.rs");
+    await new Promise(r => setTimeout(r, 60));   // well past the cap window
+    expect(bus.stopped).toEqual([]);             // the healthy server was never stopped
+    // The module's client map is shared across tests — scope the liveness check to this key.
+    expect(lspClientRows().filter(r => r.workspaceRoot === "/proj/leak")).toHaveLength(1);
+  });
+
+  it("a start that lags the cap on a TALKING wire is never stopped; silence still fires it", async () => {
+    const bus = makeDeps();
+    bus.setWsRoot("/proj/talk");
+    bus.deps.startTimeoutMs = 40;
+    bus.setHangStart(true);          // start() never settles — the cap is the only way out
+    setLspClientDeps(bus.deps);
+
+    const started = startLsp("proj", null, "rust", "/proj/talk/src/main.rs");
+    // rust-analyzer streams $/progress while it loads; every inbound frame re-arms the cap.
+    const frame = JSON.stringify({ jsonrpc: "2.0", method: "$/progress", params: {} });
+    const pump = setInterval(() => {
+      for (const h of bus.handlers.get("lsp-message:1") ?? []) h({ payload: frame });
+    }, 5);
+    await new Promise(r => setTimeout(r, 120));   // three cap windows of pure talk
+    expect(bus.stopped).toEqual([]);              // a server that answered initialize lives
+    clearInterval(pump);                          // the wire goes silent
+    await expect(started).rejects.toThrow(/wire silence/);
+    expect(bus.stopped).toEqual([1]);             // only NOW does the cap stop the server
+  });
+
+  it("a project switch abandons an in-flight start — no zombie client registers against the stopped server", async () => {
+    const bus = makeDeps();
+    bus.setWsRoot("/proj/zombie");   // a key no earlier test registered — the reuse path must not answer
+    let release!: () => void;
+    bus.setGate(new Promise<void>(r => { release = r; }));   // hold the reader's registration
+    setLspClientDeps(bus.deps);
+
+    const inFlight = startLsp("projA", null, "rust", "/projA/crate/src/main.rs");
+    await tick();
+    await tick();
+    // The switch completes FIRST (in production stopLspProject is called the moment the project
+    // changes; the in-flight start may still be anywhere in its handshake) — then the stalled
+    // registration lands and the start tries to finish. It must refuse.
+    const switched = stopLspProject("projA");
+    await switched;
+    release();
+    await expect(inFlight).rejects.toThrow(/superseded by a project switch/);
+    expect(lspClientRows()).toEqual([]);        // nothing registered against the stopped server
+  });
+
+  it("switch A→B→A: the switch-back start settles and the cap never kills its server", async () => {
+    const bus = makeDeps();
+    bus.deps.startTimeoutMs = 20;
+    setLspClientDeps(bus.deps);
+
+    bus.setWsRoot("/A/crate");
+    await startLsp("projA", null, "rust", "/A/crate/src/main.rs");
+    await stopLspProject("projA");
+    bus.setWsRoot("/B/crate");
+    await startLsp("projB", null, "typescript", "/B/src/app.ts");
+    await stopLspProject("projB");
+
+    bus.setWsRoot("/A/crate");
+    await startLsp("projA", null, "rust", "/A/crate/src/main.rs");   // the switch-back start
+    await new Promise(r => setTimeout(r, 60));   // past the cap window — the 0.3.134 leak fired here
+    expect(bus.stopped).toEqual([]);             // the switch-back server survived the cap
+    expect(lspClientRows()).toHaveLength(1);     // and its client is live for completions
   });
 });

@@ -71,6 +71,7 @@ export class TauriMessageReader extends AbstractMessageReader {
     private readonly id: number,
     private readonly onProgress?: (e: ProgressEvent) => void,
     private readonly bus: LspBus = realBus,
+    private readonly onFrame?: () => void,
   ) {
     super();
     const keep = (fn: UnlistenFn) => {
@@ -112,6 +113,9 @@ export class TauriMessageReader extends AbstractMessageReader {
       const e = progressEvent(raw as Parameters<typeof progressEvent>[0]);
       if (e) this.onProgress(e);
     }
+    // Any inbound frame is proof the wire is alive: the start cap (#6311) re-arms on this, so a
+    // server that answered initialize — or is streaming progress — is never stopped by the cap.
+    this.onFrame?.();
     // SAFETY: raw parses above; the reader delivers only JSON-RPC messages, whose union shape
     // (Message) is exactly what the connection's callback consumes. A non-JSON payload returned
     // early, so this assertion is over the parsed envelope only.
