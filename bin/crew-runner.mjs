@@ -996,8 +996,13 @@ function askedExcerpt(message) {
     // #6228: a wake naming another project (its sender's home project, not this seat's, and the
     // two are not `trantor policy link`ed) is dropped without acting — never queued, never folded
     // into context. One report goes back to the sender so it does not just look like silence.
+    // The hub's OWN agents (`hub:duty` et al.) are exempt: they speak for this hub's projects,
+    // not a foreign one, and fencing them made every seat deaf to #5760's actionable
+    // file-conflict warnings — the same class of pseudo-id notifyAssigners already treats
+    // specially. Found by test-failure.mjs (#6301): the fence refused the drill's duty-agent
+    // wake exactly as it refused real cross-project traffic.
     const links = wakeCandidates.length ? await currentLinks() : [];
-    const crossProject = wakeCandidates.filter(m => !isLinkedProject(senderProjectOf(m.from), PROJ, links));
+    const crossProject = wakeCandidates.filter(m => !String(m.from || "").startsWith("hub:") && !isLinkedProject(senderProjectOf(m.from), PROJ, links));
     for (const m of crossProject) {
       const sp = senderProjectOf(m.from) || "?";
       log(`\x1b[33mcross-project wake dropped\x1b[0m — ${m.from} (${sp}) is not ${PROJ}'s project and the two are not linked`);

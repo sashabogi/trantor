@@ -1,6 +1,12 @@
 #!/usr/bin/env node
 // trantor crew failure-visibility drill — proves a failed crew turn is surfaced to the bus
 // in real time (the orchestrator was previously blind: the runner swallowed the exit code).
+// THE SEAT-DOWN CONTRACT these drills assert (stated in bin/crew-runner.mjs's failure-visibility
+// and #6134/#6289 park blocks): a failing turn is announced to the room as a CHANGE of state
+// exactly once (the broadcast is the event); duration lives in the /register status
+// ("down: <reason> · N fails"), which costs nobody a turn; and a reason that cannot fix itself
+// (exhausted, auth) PARKS on the contract's second consecutive failure instead of riding the
+// redelivery ladder — one park line, queue held, resumed by `trantor up`.
 // Hermetic: a mock recording hub (never touches the real ~/.agent-bus/bus.json) + a fake CLI
 // that fails like an exhausted account. Exercises the REAL bin/crew-runner.mjs.
 // Shares NO state with sibling suites (#6084 audit): the mock hub listens on an EPHEMERAL
@@ -66,9 +72,13 @@ const HUB = `http://127.0.0.1:${PORT}`;
 // CLI complains on — the distinction that hid a real outage (see the claude drills below).
 async function drill(agent, script, opts = {}) {
   registers.length = 0; sends.length = 0;
-  // Inbox fixtures are explicit records; #5760's legs set `from` to speak as hub:duty.
+  // Inbox fixtures are explicit records; #5760's legs set `from` to speak as hub:duty. The
+  // DEFAULT sender is project-true (`host:tt-fail-<agent>`, home project === the seat's) — the
+  // old default `host:drill` implied a foreign project, and since the #6228 fence the runner
+  // correctly dropped every synthetic wake before it reached a turn (#6301: 0 DOWN broadcasts,
+  // registers stuck at errored — the contract's second failing turn never existed).
   inboxQueue = (opts.inbox || []).map((m, i) => {
-    return { id: i + 1, from: m.from || "host:drill", to: `${agent}:tt-fail-${agent}`, text: m.text, project: `tt-fail-${agent}` };
+    return { id: i + 1, from: m.from || `host:tt-fail-${agent}`, to: `${agent}:tt-fail-${agent}`, text: m.text, project: `tt-fail-${agent}` };
   });
   const work = mkdtempSync(join(tmpdir(), `tt-fail-${agent}-`));
   stallReleaseFile = opts.releaseOnStall ? join(work, "stall-reported") : "";
@@ -382,7 +392,11 @@ async function drill(agent, script, opts = {}) {
      runsOf(a.home) === 1);
 
   const b = await drill("opencode", counter,
-    { inbox: [fyi, { text: "real contract: do the thing" }], waitMs: 4000, keepHome: true });
+    // The contract shape matters twice over: a runner-shaped sender ("host:tt-fail-…") wakes this
+    // seat only on `contract:`-shaped text (shouldWake line 869), and the #6228 fence drops
+    // foreign-project senders. "real contract:" used to fail BOTH — its sender predate the fence
+    // and its text predates the shape net — so the wake batched and no second turn ever ran.
+    { inbox: [fyi, { text: "contract: do the thing" }], waitMs: 4000, keepHome: true });
   ok("#5760: a real direct still wakes, and exactly one extra turn runs", runsOf(b.home) === 2);
   ok("#5760: the FYI rides that turn as CONTEXT, not as the wake",
      (() => { try { return readFileSync(join(b.home, ".agent-bus", "turn-opencode-tt-fail-opencode.txt"), "utf8").includes("same-project-sessions"); } catch { return false; } })());
@@ -498,7 +512,7 @@ exit 0
   ok("#6134: the park names the reset time the CLI printed",
      parks.length >= 1 && /2099/.test(parks[0].text));
   ok("#6134: the assigner is told directly that the contract is parked, not retrying",
-     sends.some((m) => /PARKED/.test(m.text || "") && m.to === "host:drill"));
+     sends.some((m) => /PARKED/.test(m.text || "") && m.to === `host:tt-fail-codex`));
   // The whole point: with an 800ms ladder a 9s window would otherwise show many attempts.
   ok("#6134: the redelivery ladder STOPS — no retry notices after the park",
      !sends.some((m) => /retrying in/.test(m.text || "")),
@@ -513,7 +527,10 @@ exit 0
 {
   const { sends, home } = await drill("claude",
     `#!/bin/sh
-echo "$@" >> "$HOME/claude-argv.log"
+# ONE LINE per invocation: the prompt is multi-line, so a raw echo "$@" would append the
+# contract's embedded newlines as extra lines and the count below would measure line-wraps,
+# not CLI calls (#6301: the runner was right — 3 calls, one -c resume — the stub was wrong).
+printf '%s ' "$@" | tr '\\n' ' ' >> "$HOME/claude-argv.log"; printf '\\n' >> "$HOME/claude-argv.log"
 P="$HOME/.agent-bus/turn-claude-tt-fail-claude.txt"
 if grep -q "NEW BUS MESSAGE" "$P"; then
   if grep -q "cut at the time box" "$P"; then echo "landed the cut work"; exit 0; fi
