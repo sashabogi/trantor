@@ -41,6 +41,9 @@ switch (cmd) {
         const cfg = readConfig();
         const here = resolveProject();
         console.log(`global default: ${cfg.url || DEFAULT_HUB_URL}${cfg.url ? "" : " (built-in)"}`);
+        // SAFETY: cfg.hubs is the config.json hubs map decoded by JSON.parse; the check separates
+        // "a pin map" (any object, even field-less) from primitives/null (no pins to list).
+        // oxlint-disable-next-line anti-slop/no-runtime-typeof
         const hubs = cfg.hubs && typeof cfg.hubs === "object" ? Object.entries(cfg.hubs) : [];
         if (!hubs.length) console.log("no per-project pins — every project uses the global default");
         for (const [p, u] of hubs) console.log(`${p === here ? "*" : " "} ${p} → ${u}`);
@@ -192,7 +195,7 @@ switch (cmd) {
   trantor doctor      where do I stand? hub/plugin/CLIs/auth/keys/profile, with copy-paste fixes
   trantor connect     (re)wire every installed AI CLI to the bus
   trantor profile     declare your plans:  trantor profile set claude=max codex=plus deepseek=api
-  trantor provider    bring ANY model (BYOM): list seats · add <name> --key … · remove <name>
+  trantor provider    bring ANY model (BYOM): list · status [--json] · verify <name> --key … · add <name> --key … · remove <name>
   trantor models      browse live models behind each seat + the router's pick per difficulty
   trantor up …        spawn a crew here:   trantor up codex kimi deepseek:deepseek glm:zai-coding-plan
   trantor open        host THIS session as the project's orchestrator pane (trantor down spares it)

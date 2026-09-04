@@ -37,7 +37,10 @@ try {
   if (!ctx.project) silent();
 
   const r = await signedGet(`${relayUrl(ctx.project)}/overseer/context?project=${encodeURIComponent(ctx.project)}`, { session: ctx.session });
-  if (!r.ok || !r.json || typeof r.json !== "object") silent();
+  // The response envelope is decoded by the field guards below: any truthy shape that is not the
+  // expected object falls out at `level < 2` (or the nothing-to-say check) and lands in silent()
+  // exactly like this guard used to — malformed payloads narrate nothing.
+  if (!r.ok || !r.json) silent();
   const c = r.json;
 
   const level = Number(c.level || 1);

@@ -19,6 +19,10 @@ async function main() {
   for await (const c of process.stdin) raw += c;
   const j = JSON.parse(raw);
   const rl = j.rate_limits;
+  // SAFETY: rate_limits is the Claude statusline envelope decoded by JSON.parse above; the check
+  // separates "tick carries a rate_limits envelope" (any object, even field-less — it refreshes
+  // the stamp below) from "no envelope" (primitives/null — a free exit).
+  // oxlint-disable-next-line anti-slop/no-runtime-typeof
   if (!rl || typeof rl !== "object") return;               // most ticks carry none — free exit
   const sid = String(j.session_id || j.sessionId || "nosession").replace(/[^A-Za-z0-9_.-]/g, "_").slice(0, 80);
   const dir = join(homedir(), ".agent-bus");

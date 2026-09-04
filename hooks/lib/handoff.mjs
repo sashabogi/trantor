@@ -203,6 +203,10 @@ function collectTurns(transcriptPath) {
     if (!(r.type === "user" || r.type === "assistant") || !r.message) continue;
     const c = r.message.content;
     let text = "";
+    // SAFETY: this IS the transcript I/O boundary — the jsonl row was JSON.parse'd above and
+    // Claude message content is documented as a string or an array of typed blocks; the two
+    // branches decode exactly those shapes, anything else stays "".
+    // oxlint-disable-next-line anti-slop/no-runtime-typeof
     if (typeof c === "string") text = c;
     else if (Array.isArray(c)) text = c.filter(b => b?.type === "text").map(b => b.text).join("\n");
     text = (text || "").trim();
