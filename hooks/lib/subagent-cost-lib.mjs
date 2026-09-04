@@ -15,5 +15,7 @@ export function isSubagentTranscript(p) {
 export const SUSPECT_CACHE_READ = 50e6;
 export const SUSPECT_USD = 50;
 export function isImplausibleCost({ usd = null, cacheRead = 0 } = {}) {
-  return (cacheRead || 0) > SUSPECT_CACHE_READ || (typeof usd === "number" && usd > SUSPECT_USD);
+  // usd's contract is number|null (computed token cost); the null check keeps the absent case
+  // from comparing, and non-numbers outside that contract never fire the suspicion either way.
+  return (cacheRead || 0) > SUSPECT_CACHE_READ || (usd !== null && usd > SUSPECT_USD);
 }

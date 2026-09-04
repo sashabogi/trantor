@@ -63,7 +63,9 @@ function projectFromQuery(pathOrUrl) {
 }
 function projectOf(explicit, payload, pathOrUrl) {
   if (explicit) return explicit;
-  if (payload && typeof payload === "object" && payload.project) return String(payload.project);
+  // Only the payload's own project field is read; a truthy non-object payload has no such field
+  // and falls through to the query string exactly as the old object guard made it do.
+  if (payload && payload.project) return String(payload.project);
   return projectFromQuery(pathOrUrl);
 }
 // The signing identity for a request about `project`. An explicit RELAY_SESSION/RELAY_AGENT still

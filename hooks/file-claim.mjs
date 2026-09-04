@@ -36,7 +36,9 @@ function readStdin() {
 }
 
 function fileOf(toolName, input) {
-  if (!input || typeof input !== "object") return "";
+  // Only the tool input's own path fields are read; a truthy non-object input has neither, and
+  // String(undefined || "") is "" exactly like the old object guard returned.
+  if (!input) return "";
   if (toolName === "NotebookEdit") return String(input.notebook_path || "");
   return String(input.file_path || "");
 }

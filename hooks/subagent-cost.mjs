@@ -58,6 +58,10 @@ function usageRows(file) {
       let r; try { r = JSON.parse(line); } catch { continue; }
       if (!firstUserText && r.type === "user" && r.message) {
         const c = r.message.content;
+        // SAFETY: this IS the transcript I/O boundary — the Claude messages.jsonl line was
+        // JSON.parse'd above, and message content is documented as a string or an array of
+        // typed blocks; the two branches decode exactly those shapes, anything else is "".
+        // oxlint-disable-next-line anti-slop/no-runtime-typeof
         firstUserText = (typeof c === "string" ? c : Array.isArray(c) ? c.filter(b => b?.type === "text").map(b => b.text).join(" ") : "").trim();
       }
       const u = r?.message?.usage;

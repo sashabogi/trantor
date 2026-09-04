@@ -16,7 +16,9 @@ const CAP_MS = 4000;
 
 function thresholds() {
   let t = DEFAULT_LOW, q = DEFAULT_LOW_QUOTA_PCT;
-  try { const c = JSON.parse(readFileSync(join(homedir(), ".agent-bus", "config.json"), "utf8")); if (c.lowBalance) t = { ...DEFAULT_LOW, ...c.lowBalance }; if (typeof c.lowQuotaPct === "number") q = c.lowQuotaPct; } catch {}
+  // JSON.parse is the boundary: config.json can hold any JSON number but never NaN/Infinity,
+  // so Number.isFinite accepts exactly the numeric lowQuotaPct values the old typeof did.
+  try { const c = JSON.parse(readFileSync(join(homedir(), ".agent-bus", "config.json"), "utf8")); if (c.lowBalance) t = { ...DEFAULT_LOW, ...c.lowBalance }; if (Number.isFinite(c.lowQuotaPct)) q = c.lowQuotaPct; } catch {}
   return { t, q };
 }
 
