@@ -2,7 +2,9 @@
 // trantor provider — bring ANY model to the crew (BYOM). opencode is a universal adapter, so a
 // provider you configure there (or declare here) becomes a crew seat with no code change.
 //
-//   trantor provider                 # list seats: built-in + discovered, with availability + tier
+//   trantor provider                 # seats (built-in + discovered) + the provider status board
+//   trantor provider status [--json] # the registry: state + reason per provider (#6390)
+//   trantor provider verify <name> --key sk-… [--json]   # probe a CANDIDATE key, write nothing
 //   trantor provider add <name> [--key sk-…] [--plan api|coding-plan|max] [--label <bus-name>]
 //                       [--base-url <url> [--models m1,m2]]   # wire a CUSTOM OpenAI-compatible endpoint
 //   trantor provider remove <name>   # drop it from your profile (leaves the key in place)
@@ -18,6 +20,7 @@ import { homedir } from "node:os";
 import { execSync } from "node:child_process";
 import { pathToFileURL } from "node:url";
 import { buildRoster, loadWorld } from "./advise.mjs";
+import { providerStatus, providerVerify } from "../lib/providers.mjs";
 
 const H = homedir();
 const ENV = join(H, ".agent-bus", ".env");
@@ -67,6 +70,55 @@ function listSeats() {
   }
   console.log(`\n${C.dim}add one:${C.off} trantor provider add <name> --key sk-… --plan api`);
   console.log(`${C.dim}browse models:${C.off} trantor models [<provider>]`);
+}
+
+// The status board (#6390) — the human face of lib/providers.mjs. Same rows the --json contract
+// and the desktop pane render; every row carries a state AND a reason, so nothing can show blank.
+const STATE_MARK = {
+  connected:      (c) => `${C.grn}●${c.off}`,
+  over_quota:     (c) => `${C.red}✗${c.off}`,
+  expired:        (c) => `${C.red}✗${c.off}`,
+  not_installed:  (c) => `${C.dim}○${c.off}`,
+  not_logged_in:  (c) => `${C.dim}○${c.off}`,
+  unknown:        (c) => `${C.yel}?${c.off}`,
+};
+
+function printStatusRows(rows) {
+  console.log("PROVIDERS — state + reason per provider (detail: trantor provider status --json)\n");
+  for (const r of rows) {
+    const mark = (STATE_MARK[r.state] || STATE_MARK.unknown)(C);
+    console.log(`  ${mark} ${r.provider.padEnd(12)} ${r.state.padEnd(14)} ${C.dim}${r.reason}${C.off}`);
+  }
+}
+
+async function statusCmd(opts) {
+  const rows = await providerStatus();
+  if (opts.json) { console.log(JSON.stringify(rows, null, 2)); return; }
+  printStatusRows(rows);
+  const fixable = rows.filter((r) => r.actions.includes("login") || r.actions.includes("paste-key"));
+  if (fixable.length) {
+    console.log(`\n${C.dim}fix one:${C.off} ${fixable.map((r) => r.provider).join(", ")}`);
+    console.log(`${C.dim}probe a key before saving it:${C.off} trantor provider verify <name> --key sk-…`);
+  }
+}
+
+// The pre-save verify seam (#6391's ask): probe a CANDIDATE key through the SAME registry probe
+// the status board uses, and write nothing anywhere — .env, profile.json and opencode.json are
+// only touched later, by `provider add`, once the key is known live.
+async function verifyCmd(name, opts) {
+  if (!name || name.startsWith("--") || name === "help" || !opts.key) {
+    console.error("usage: trantor provider verify <name> --key sk-… [--json]");
+    process.exit(1);
+  }
+  let r;
+  try { r = await providerVerify(name, opts.key); }
+  catch (e) { console.error(String(e?.message || e)); process.exit(1); }
+  if (opts.json) { console.log(JSON.stringify(r, null, 2)); return; }
+  const mark = (STATE_MARK[r.state] || STATE_MARK.unknown)(C);
+  console.log(`  ${mark} ${r.provider.padEnd(12)} ${r.state.padEnd(14)} ${C.dim}${r.reason}${C.off}`);
+  console.log(r.state === "connected"
+    ? `\n${C.grn}Key is live.${C.off} Nothing was written — commit it: trantor provider add ${r.provider} --key …`
+    : `\n${C.dim}Nothing was written.${C.off} Fix the state above, then: trantor provider add ${r.provider} --key …`);
 }
 
 function addProvider(name, opts) {
@@ -149,10 +201,20 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     else if (rest[i] === "--label") opts.label = rest[++i];
     else if (rest[i] === "--base-url" || rest[i] === "--baseurl") opts.baseUrl = rest[++i];
     else if (rest[i] === "--models") opts.models = rest[++i];
+    else if (rest[i] === "--json") opts.json = true;
     else pos.push(rest[i]);
   }
-  if (!sub || sub === "list") listSeats();
+  // The default list leads with the seats roster and closes with the provider status board —
+  // one command answers both "what can I launch" and "what is actually alive" (#6390).
+  const defaultList = async () => {
+    listSeats();
+    console.log("");
+    printStatusRows(await providerStatus());
+  };
+  if (!sub || sub === "list") await defaultList();
+  else if (sub === "status") await statusCmd(opts);
+  else if (sub === "verify") await verifyCmd(pos[0], opts);
   else if (sub === "add") addProvider(pos[0], opts);
   else if (sub === "remove" || sub === "rm") removeProvider(pos[0]);
-  else { console.error(`unknown subcommand '${sub}' — use: list | add | remove`); process.exit(1); }
+  else { console.error(`unknown subcommand '${sub}' — use: list | status | verify | add | remove`); process.exit(1); }
 }

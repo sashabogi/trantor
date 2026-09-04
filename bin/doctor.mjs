@@ -189,6 +189,24 @@ for (const c of CLIS) {
 }
 if (!installed) warn("no crew CLIs found", "install at least one of: codex, gemini, kimi, opencode — Trantor orchestrates whatever you have");
 
+// ── providers: READY, not merely installed (#6390) ──────────────────────────────────────────
+// The crew-CLI rows above say installed/wired. lib/providers.mjs says READY: one live usage call
+// per provider (the SAME probes lib/balances.mjs serves the bar — no second detector), each
+// answering with a state + reason, so "authenticated" never quietly means "expired" or "dry".
+section("providers");
+{
+  const { providerStatus } = await import("../lib/providers.mjs");
+  let rows = [];
+  try { rows = await providerStatus(); }
+  catch (e) { note(`provider registry could not run (${e?.message || e})`); }
+  for (const r of rows) {
+    const line = `${r.provider}: ${r.state} — ${r.reason}`;
+    if (r.state === "connected") ok(line);
+    else if (r.state === "unknown") note(line);
+    else warn(line, r.actions.includes("paste-key") ? `probe the key first: trantor provider verify ${r.provider} --key sk-…` : null);
+  }
+}
+
 // ---- key attribution: WHICH key does each surface actually spend on? ------------------------
 // Provider keys resolve through a LAYERED lookup and nothing ever showed which layer won. On
 // 2026-08-25 a $14 DeepSeek day could not be explained: ~/.token-scrooge/.env held the only
@@ -226,6 +244,9 @@ const crewUsesVar = (v) => {
   const provider = SEAT_ENV_VARS[v];
   if (!provider) return false;
   const configured = OPENCODE_CFG?.provider?.[provider]?.options?.apiKey;
+  // SAFETY: configured is the opencode.json apiKey field decoded by JSON.parse; the check
+  // separates "a {env:VAR} template string" from any other shape (literal key / absent).
+  // oxlint-disable-next-line anti-slop/no-runtime-typeof
   if (typeof configured === "string" && configured.includes("{env:")) return true;   // resolves from env at run time
   return !configured;                                                                 // a LITERAL key bypasses the env layer
 };

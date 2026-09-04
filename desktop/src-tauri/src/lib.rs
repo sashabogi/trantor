@@ -148,38 +148,67 @@ pub(crate) fn terminal_path() -> String {
     parts.join(":")
 }
 
-/// Run the EXISTING doctor engine and hand back its JSON. Deliberately shelling out rather than
-/// re-implementing detection in Rust: two detectors would drift, and then the CLI and the app would
-/// disagree about whether a seat is wired with no way to tell which is right.
-#[tauri::command]
-async fn doctor() -> Result<String, String> {
-    let root = std::env::var("TRANTOR_ROOT").unwrap_or_else(|_| {
+/// The node binary, probing the usual install locations before PATH: a Finder-launched app gets
+/// the bare system PATH (no /opt/homebrew/bin), so "node" alone fails outside a terminal.
+fn cli_node() -> String {
+    ["/opt/homebrew/bin/node", "/usr/local/bin/node", "/usr/bin/node"]
+        .iter()
+        .find(|p| std::path::Path::new(p).exists())
+        .map(|p| p.to_string())
+        .unwrap_or_else(|| "node".to_string())
+}
+
+/// Where the trantor repo lives on THIS machine — the CLI the app shells into (TRANTOR_ROOT to
+/// relocate, ~/development/trantor by convention).
+fn trantor_root() -> String {
+    std::env::var("TRANTOR_ROOT").unwrap_or_else(|_| {
         let home = std::env::var("HOME").unwrap_or_default();
         format!("{home}/development/trantor")
-    });
-    // Finder-launched apps get the bare system PATH (no /opt/homebrew/bin), so "node" alone
-    // fails outside a terminal. Probe the usual install locations before falling back to PATH.
-    let node = [
-        "/opt/homebrew/bin/node",
-        "/usr/local/bin/node",
-        "/usr/bin/node",
-    ]
-    .iter()
-    .find(|p| std::path::Path::new(p).exists())
-    .map(|p| p.to_string())
-    .unwrap_or_else(|| "node".to_string());
-    let out = tokio::process::Command::new(node)
-        .arg(format!("{root}/bin/doctor.mjs"))
-        .arg("--json")
-        .env("PATH", terminal_path())
+    })
+}
+
+/// Run a trantor CLI script that prints JSON and hand back its stdout. Deliberately shelling out
+/// rather than re-implementing detection in Rust: two detectors would drift, and then the CLI and
+/// the app would disagree about whether a seat is wired with no way to tell which is right.
+async fn run_cli_json(args: &[&str]) -> Result<String, String> {
+    let mut cmd = tokio::process::Command::new(cli_node());
+    cmd.arg(format!("{}/bin/{}", trantor_root(), args[0]));
+    for a in &args[1..] {
+        cmd.arg(a);
+    }
+    cmd.env("PATH", terminal_path());
+    let out = cmd
         .output()
         .await
-        .map_err(|e| format!("doctor: {e}"))?;
+        .map_err(|e| format!("{}: {e}", args.join(" ")))?;
     let text = String::from_utf8_lossy(&out.stdout).trim().to_string();
     if text.is_empty() {
         return Err(String::from_utf8_lossy(&out.stderr).to_string());
     }
     Ok(text)
+}
+
+/// Run the EXISTING doctor engine and hand back its JSON.
+#[tauri::command]
+async fn doctor() -> Result<String, String> {
+    run_cli_json(&["doctor.mjs", "--json"]).await
+}
+
+/// #6390 — the provider registry's frozen status contract (lib/providers.mjs →
+/// `trantor provider status --json`): state + reason per provider, "connected" = a LIVE usage
+/// call succeeded, never "file exists". The Accounts pane renders exactly this JSON; the CLI is
+/// its only renderer, same rule as doctor above.
+#[tauri::command]
+async fn provider_status() -> Result<String, String> {
+    run_cli_json(&["provider.mjs", "status", "--json"]).await
+}
+
+/// #6390 — the pre-save verify seam #6391 asked for: run the registry's own probe against a
+/// CANDIDATE key and return the row, writing NOTHING anywhere. The pane can tell the operator a
+/// key is live BEFORE `provider add --key` commits it to ~/.agent-bus/.env.
+#[tauri::command]
+async fn provider_verify(name: String, key: String) -> Result<String, String> {
+    run_cli_json(&["provider.mjs", "verify", &name, "--key", &key, "--json"]).await
 }
 
 /// Where a project's code lives on THIS machine. Convention first (~/development/<project>),
@@ -5411,6 +5440,8 @@ pub fn run() {
             sessions::session_transcript,
             orchestrator_chat,
             balances_refresh,
+            provider_status,
+            provider_verify,
             chat_watch,
             chat_unwatch,
             file_watch,
