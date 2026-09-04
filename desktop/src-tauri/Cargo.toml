@@ -1,3 +1,9 @@
+[workspace]
+# #6317: lets `cargo test -p tao` run the vendored crate's own regression tests
+# (vendor/tao-0.35.3/src/platform_impl/macos/view.rs::window_teardown_tests) directly —
+# a patched dependency's tests don't otherwise run as part of this crate's `cargo test`.
+members = [".", "vendor/tao-0.35.3"]
+
 [package]
 name = "desktop"
 version = "0.1.0"
@@ -38,3 +44,13 @@ futures-util = "0.3"
 portable-pty = "0.9"
 notify = "6"
 md5 = "0.7"
+libc = "0.2"
+
+[patch.crates-io]
+# #6317: tao 0.35.3's macOS NSView key/IME handlers `.unwrap()` a weak `ns_window` ref that is
+# already gone once AppKit starts tearing the window down while the view still gets late events
+# (e.g. an IME/key event settling after a composer send) — panicking inside an `extern "C"`
+# callback with no unwind ABI, so the process aborts (SIGABRT, panic_cannot_unwind). No upstream
+# fix is released (tauri-apps/tao#1171 is open), so vendor/tao-0.35.3 carries a patched copy:
+# same version, so it still satisfies tauri-runtime-wry's `tao = "0.35.0"` requirement.
+tao = { path = "vendor/tao-0.35.3" }
