@@ -3,7 +3,6 @@ mod genesis;
 mod ghost;
 mod provider_accounts;
 pub mod identity;
-pub mod lsp;
 mod sessions;
 mod terminal;
 
@@ -5438,21 +5437,6 @@ pub fn run() {
         .manage(genesis::WakeChains::default())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_notification::init())
-        .setup(|app| {
-            // #5857 acceptance drill: TRANTOR_LSP_DRILL=<project> makes the webview drive the
-            // real LSP path headlessly (src/features/code/lspDrill.ts) and leave the wire trace
-            // in ~/.agent-bus/lsp/. Inert in normal runs.
-            use tauri::{Emitter, Manager};
-            if let Ok(project) = std::env::var("TRANTOR_LSP_DRILL") {
-                if let Some(window) = app.get_webview_window("main") {
-                    std::thread::spawn(move || {
-                        std::thread::sleep(Duration::from_secs(5));
-                        let _ = window.emit("lsp-drill", project);
-                    });
-                }
-            }
-            Ok(())
-        })
         .invoke_handler(|invoke: tauri::ipc::Invoke<tauri::Wry>| {
             // #5917 guard: tauri 2.11.5 has NO catch_unwind anywhere in its src (verified), so a
             // panic in any command would unwind out through the AppKit/WebKit extern "C" callback
@@ -5523,10 +5507,6 @@ pub fn run() {
             create_file,
             delete_file,
             rename_file,
-            lsp::lsp_start,
-            lsp::lsp_send,
-            lsp::lsp_stop,
-            lsp::lsp_stop_project,
             autonomy_get,
             autonomy_set,
             duty_start,
@@ -5568,11 +5548,7 @@ pub fn run() {
             // every event, and a panic here would unwind out through the same extern "C" boundary
             // and abort — so catch and log it the way the invoke guard does.
             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
-                // Language servers are children of this process; an app exit must not leave one
-                // orphaned. stdin-EOF usually does it, but this is the explicit promise.
-                if let tauri::RunEvent::Exit = event {
-                    lsp::stop_all();
-                }
+                let _ = event;
             }));
             if let Err(payload) = result {
                 append_panic_log(
