@@ -6,8 +6,8 @@
 // crashed, a session that died — orphaned its card in whatever lane it was in FOREVER. prunePeers only
 // ever closed the ONE focus card, and only after a 6h peer TTL. hub.mjs now runs reapStaleCards():
 //   (a) a focus card closes to "done" once its session is OFFLINE past FOCUS_OFFLINE_MS (not 6h);
-//   (b) a doing/testing work card whose OWNER is OFFLINE past REAP_GRACE_MS moves to "stale" (a distinct
-//       terminal lane you triage by hand) — never a card whose owner is still online (live long tasks safe);
+//   (b) a doing work card whose OWNER is OFFLINE past REAP_GRACE_MS moves to "stale" with a card-log
+//       explanation — never a testing card (that is waiting for the operator) or an online owner's card;
 //   plus POST /sweep: the explicit "live seat forgot its card" path (preview-first, owner-liveness-agnostic).
 // These spin up the REAL hub.mjs with tiny time windows and assert the durable contract.
 import { spawn } from "node:child_process";
@@ -54,6 +54,11 @@ try {
   ok("work card starts doing", c?.task?.status === "doing", `(got "${c?.task?.status}")`);
   const wid = c?.task?.id;
 
+  // testing is a declared wait for the operator; even an offline owner cannot make it stale
+  const t = await A.post("/task", { project: PROJ, title: "waiting for operator drill", status: "testing", assignee: "glm:reapA", by: "glm:reapA" });
+  ok("operator drill starts testing", t?.task?.status === "testing", `(got "${t?.task?.status}")`);
+  const tid = t?.task?.id;
+
   // a focus card for a session that will go offline
   await A.post("/focus", { session: "host:reapA", project: PROJ, title: "focus work that ends", by: "host:reapA" });
   let f = (await tasksFor()).filter(t => t.source === "session");
@@ -65,6 +70,12 @@ try {
   const work = after.find(t => t.id === wid);
   ok("offline-owner doing card → stale", work?.status === "stale", `(got "${work?.status}")`);
   ok("reaped card records the move in history", (work?.history || []).some(h => h.to === "stale" && h.by === "reaper"));
+  const reaperLog = (work?.log || []).find(l => l.by === "reaper");
+  ok("reaped card log names the reason", reaperLog?.text.includes("owner offline → stale"), `(got "${reaperLog?.text}")`);
+  ok("reaped card log records owner last seen", reaperLog?.text.includes("owner last seen"), `(got "${reaperLog?.text}")`);
+  const testing = after.find(t => t.id === tid);
+  ok("offline-owner testing card stays in testing", testing?.status === "testing", `(got "${testing?.status}")`);
+  ok("testing card has no reaper stale log", !(testing?.log || []).some(l => l.by === "reaper"));
   f = after.filter(t => t.source === "session");
   ok("focus card auto-closed to done by the reaper (no /peers read)", f[0]?.status === "done", `(got "${f[0]?.status}")`);
 } catch (e) { fail++; console.log("  ✗ hubA threw:", e?.message || e, errA ? `\n  stderr: ${errA}` : ""); }

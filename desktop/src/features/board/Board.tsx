@@ -285,6 +285,7 @@ export function Board({ client, project, lens, onLens, focusCard, onFocusConsume
   if (!cards) return <div className="p-6 text-sm text-[var(--color-tr-muted)]">Loading {project}…</div>;
 
   const done = cards.filter(c => c.status === "done").length;
+  const stale = cards.filter(c => c.status === "stale").length;
   const filtered = query.trim() !== "" || assignee !== "";
   const shown = byLane.reduce((n, [, lane]) => n + lane.cards.length + lane.subagents.length, 0);
 
@@ -293,6 +294,10 @@ export function Board({ client, project, lens, onLens, focusCard, onFocusConsume
       <ProjectHeader project={project} lens={lens} onLens={onLens}
         sub={<span className="flex items-center gap-x-2">
           <span>{done}/{cards.length} done · {Math.round((done / Math.max(cards.length, 1)) * 100)}%{filtered && <> · showing {shown}</>}</span>
+          <span className="tr-chip shrink-0" aria-label={`${stale} stale cards`}
+                title="cards moved to stale remain visible here even when their lane is off-screen">
+            {stale} stale
+          </span>
           {liveHere.length > 0 && <span className="flex items-center gap-1.5">
             <span className="opacity-60">·</span>
             {liveHere.slice(0, 8).map(p => {

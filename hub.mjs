@@ -32,9 +32,9 @@ const PEER_TTL_MS = Math.max(Number.isFinite(_peerTtlRaw) ? _peerTtlRaw : PEER_T
 // git post-commit, SubagentStart/Stop, focus hook); the instant a channel breaks — a crew seat torn down
 // mid-flight, a fork that crashed, a session that died uncleanly — the card is orphaned in whatever lane it
 // was in and NOTHING ever swept it (prunePeers only ever closed the ONE focus card, and only after 6h).
-// The reaper is the general safety net: a doing/testing card whose OWNER is OFFLINE past this grace window
-// moves to "stale" (a distinct terminal lane you triage by hand). Only fires on an OFFLINE owner, so a live
-// long-running task is never touched — the owner-alive-but-idle case is handled by the manual /sweep path.
+// The reaper is the general safety net: a doing card whose OWNER is OFFLINE past this grace window moves to
+// "stale" (a distinct terminal lane you triage by hand). Testing is the operator's queue, so owner presence
+// is irrelevant there and the reaper never touches it. The owner-alive-but-idle case stays with manual /sweep.
 const REAP_GRACE_MS = Number(process.env.RELAY_REAP_GRACE_MS || 15 * 60 * 1000);    // 15m offline + untouched
 // Supersession lapse. The baton claim was documented "never unset", which is right while the claimant
 // lives and wrong the moment it dies: a session that consumed a handoff, went quiet and was killed left
@@ -778,9 +778,22 @@ function cardOwnerOnline(t, cutoff) {
   }
   return false;
 }
+function cardOwnerLastSeen(t) {
+  let latest = 0;
+  for (const k of new Set([t.assignee, t.parent, t.by].filter(Boolean))) {
+    latest = Math.max(latest, state.peers[k]?.lastSeen || 0);
+  }
+  return latest;
+}
+function appendReaperStaleLog(t, reason, ts) {
+  const seen = cardOwnerLastSeen(t);
+  const lastSeen = seen ? `${humanMs(ts - seen)} ago` : "never";
+  appendTaskLog(t, "reaper", `${reason}; owner last seen ${lastSeen}`, ts);
+}
 // The general stale-card reaper prunePeers never was. Every 60s:
 //  (a) close a focus card once its session has been OFFLINE past FOCUS_OFFLINE_MS (not the old 6h peer TTL).
-//  (b) move an OFFLINE-owner doing/testing card to "stale" once it's untouched past REAP_GRACE_MS.
+//  (b) move an OFFLINE-owner doing card to "stale" once it's untouched past REAP_GRACE_MS.
+// Testing is waiting for the operator's verdict and is therefore outside the reaper's authority.
 // It NEVER touches a card whose owner is still online, so a live long task is safe; the owner-alive-but-idle
 // "forgot its card" case is left to the explicit /sweep path (preview + confirm).
 function reapStaleCards() {
@@ -791,15 +804,17 @@ function reapStaleCards() {
   let changed = false;
   for (const t of state.tasks) {
     if (t.status === "done" || t.status === "stale") continue;
+    if (t.status === "testing") continue;
     if (t.status === "todo" && (t.updated || t.ts || 0) < now() - TODO_STALE_MS) {
       const from = t.status;
       const untouchedAt = t.updated || t.ts || 0;
       const agedDays = Math.floor((now() - untouchedAt) / 86400000);
-      (t.history ||= []).push({ from, to: "stale", by: "reaper", ts: now() });
+      const reapedAt = now();
+      (t.history ||= []).push({ from, to: "stale", by: "reaper", ts: reapedAt });
       if (t.history.length > 60) t.history.splice(0, 20);
-      appendTaskLog(t, "reaper", `todo aged out after ${agedDays}d untouched`);
+      appendReaperStaleLog(t, `todo aged out after ${agedDays}d untouched`, reapedAt);
       appendCardEvent("moved", t, "reaper", from, "stale");
-      t.status = "stale"; t.updated = now(); t._reaped = true; changed = true;
+      t.status = "stale"; t.updated = reapedAt; t._reaped = true; changed = true;
       continue;
     }
     if (t.source === "session") {                                  // (a) focus cards → done when session offline
@@ -811,13 +826,15 @@ function reapStaleCards() {
       if (peerGone || longIdle) { if (closeFocusCard(t, peerGone ? t.assignee : "reaper")) changed = true; }
       continue;
     }
-    if ((t.status === "doing" || t.status === "testing")           // (b) offline-owner work cards → stale
+    if (t.status === "doing"                                      // (b) offline-owner work cards → stale
         && (t.updated || t.ts || 0) < graceCut
         && !cardOwnerOnline(t, onCut)) {
-      (t.history ||= []).push({ from: t.status, to: "stale", by: "reaper", ts: now() });
+      const reapedAt = now();
+      (t.history ||= []).push({ from: t.status, to: "stale", by: "reaper", ts: reapedAt });
       if (t.history.length > 60) t.history.splice(0, 20);
+      appendReaperStaleLog(t, "owner offline → stale", reapedAt);
       appendCardEvent("moved", t, "reaper", t.status, "stale");
-      t.status = "stale"; t.updated = now(); t._reaped = true; changed = true;
+      t.status = "stale"; t.updated = reapedAt; t._reaped = true; changed = true;
     }
   }
   if (changed) dirty = true;
