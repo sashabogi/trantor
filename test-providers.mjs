@@ -10,6 +10,7 @@ import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { drillEnv } from "./drill-env.mjs";
+import { parseEnvFile } from "./lib/provider-keys.mjs";
 import { PROVIDERS, STATES, ACTIONS, providerStatus, providerVerify, balancesProbeForDrills } from "./lib/providers.mjs";
 
 const ROOT = fileURLToPath(new URL(".", import.meta.url));
@@ -220,7 +221,9 @@ const one = async (provider, table, opts = {}) => (await statusOf(table, opts)).
   const fake = mkHome();
   const childEnv = drillEnv({ HOME: fake, PATH: "/usr/bin:/bin", TMPDIR: tmpdir(), TRANTOR_NO_KEYCHAIN: "1" });
   for (const k of Object.keys(childEnv)) if (/_(API_KEY|TOKEN)$/.test(k)) delete childEnv[k];   // no real key may reach the drill
-  const run = (args) => spawnSync(process.execPath, [join(ROOT, "bin", "provider.mjs"), ...args], { encoding: "utf8", env: childEnv, timeout: 60000 });
+  const kimiStub = mkBin("kimi");   // a stubbed kimi for the login-spawn path (no real CLI involved)
+  const run = (args, pathOverride) => spawnSync(process.execPath, [join(ROOT, "bin", "provider.mjs"), ...args],
+    { encoding: "utf8", env: { ...childEnv, PATH: pathOverride || "/usr/bin:/bin" }, timeout: 60000 });
   const st = run(["status", "--json"]);
   ok("status --json exits 0", st.status === 0, st.stderr);
   let rows = [];
@@ -237,6 +240,22 @@ const one = async (provider, table, opts = {}) => (await statusOf(table, opts)).
     human.status === 0 && human.stdout.includes("PROVIDERS") && (human.stdout.match(/not_installed|not_logged_in|connected|expired|over_quota|unknown/g) || []).length >= PROVIDERS.length, human.stdout.slice(0, 120));
   const noKey = run(["verify", "deepseek"]);
   ok("verify without --key prints usage and exits 1", noKey.status === 1 && /usage:/.test(noKey.stderr));
+  // The pane's "login" action (#6391): api-key providers get the paste-key hint, cli-login ones
+  // run their OWN login command (a stubbed `kimi` proves the spawn path without any real CLI).
+  const lgKey = run(["login", "deepseek"]);
+  ok("login on an api-key provider prints the paste-key path, exits 0",
+    lgKey.status === 0 && /provider add deepseek --key/.test(lgKey.stdout), lgKey.stdout.slice(0, 120));
+  const lgBad = run(["login", "nope"]);
+  ok("login of an unknown provider dies loudly", lgBad.status === 1 && /unknown provider/.test(lgBad.stderr));
+  const lgRun = run(["login", "kimi"], kimiStub);
+  ok("login on a cli-login provider runs the CLI's own login command", lgRun.status === 0 && /kimi login/.test(lgRun.stdout), lgRun.stdout.slice(0, 120));
+  // The pane's "remove" affordance passes --credentials: the key line leaves the crew .env too.
+  mkdirSync(join(fake, ".agent-bus"), { recursive: true });
+  writeFileSync(join(fake, ".agent-bus", ".env"), "# zzz-lab — brought via 'trantor provider add'\nZZZ_LAB_API_KEY=sk-zzz-keepme\n");
+  const rmCred = run(["remove", "zzz-lab", "--credentials"]);
+  const envAfter = parseEnvFile(join(fake, ".agent-bus", ".env"));
+  ok("remove --credentials exits 0 and says what it removed", rmCred.status === 0 && /removed ZZZ_LAB_API_KEY/.test(rmCred.stdout), rmCred.stdout);
+  ok("remove --credentials stripped the key from .env", envAfter.ZZZ_LAB_API_KEY === undefined, JSON.stringify(envAfter));
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);
