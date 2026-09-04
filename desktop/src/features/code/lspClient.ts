@@ -213,6 +213,10 @@ export async function startLsp(
   const existing = clients.get(key);
   if (existing) {
     trace(`startLsp ${traceKey(key)} reuse id=${existing.id} (client already registered)`);
+    // An editor that mounted before this reuse (or against a stale root) waits on onLspChange to
+    // flip its suggestions on — the reuse path used to return silently, so a live server's client
+    // never told anyone it was there (#6311).
+    notify();
     return { id: existing.id, scopeRoot: existing.scopeRoot, workspaceRoot: started.workspaceRoot, indexing: isLspIndexing(language, started.workspaceRoot) };
   }
 
