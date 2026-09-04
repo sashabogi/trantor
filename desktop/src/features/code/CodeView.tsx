@@ -49,12 +49,16 @@ const fontOptions = {
   lineHeight: 19,
 } as const;
 
-export function CodeView({ value, path, root, editable, onChange, onSave, project, seat }: {
+export function CodeView({ value, path, root, workspaceRoot, editable, onChange, onSave, project, seat }: {
   value: string;
   path: string;
   /** The scope root the language server chose — the model's URI is `root/path` so didOpen names
    *  a real file, not an inmemory:// URI rust-analyzer cannot map into the crate. */
   root?: string | null;
+  /** The client registry's key root (#6311): rust-analyzer keys its client on the crate root, which
+   *  is NOT `root` (the project/seat scope root) for a nested crate — isLspLive/onLspChange must
+   *  match by this exact value or a live client for the crate never flips quickSuggestions on. */
+  workspaceRoot?: string | null;
   editable: boolean;
   onChange?: (v: string) => void;
   onSave?: () => void;
@@ -106,8 +110,10 @@ export function CodeView({ value, path, root, editable, onChange, onSave, projec
       renderLineHighlight: "line",
       // Suggestions only when a language server is live for this language (#5857): the muted
       // built-in TS service is not consulted, and an editor with no server keeps today's silence.
-      quickSuggestions: isLspLive(lang, root ?? undefined),
-      suggestOnTriggerCharacters: isLspLive(lang, root ?? undefined),
+      // Keyed by workspaceRoot, NOT root (#6311) — root is the project/seat scope, isLspLive keys
+      // clients by the crate/workspace root, and the two differ for a nested crate.
+      quickSuggestions: isLspLive(lang, workspaceRoot ?? undefined),
+      suggestOnTriggerCharacters: isLspLive(lang, workspaceRoot ?? undefined),
       occurrencesHighlight: "off",
       padding: { top: 6, bottom: 6 },
       scrollbar: { verticalScrollbarSize: 10, horizontalScrollbarSize: 10 },
@@ -143,21 +149,27 @@ export function CodeView({ value, path, root, editable, onChange, onSave, projec
     };
     // Deliberately NOT keyed on `value`: re-creating on every keystroke is how an editor loses
     // the cursor. A caller changing the file changes `path` (or the server root lands), which is
-    // the real identity here. project/seat scope the ghost-text calls.
+    // the real identity here. project/seat scope the ghost-text calls. workspaceRoot lands async
+    // right after root (#6311): once it arrives quickSuggestions must be recomputed against it.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [path, editable, root, project, seat]);
+  }, [path, editable, root, workspaceRoot, project, seat]);
 
   // The language server starts async, after this editor is already up: when it comes (or goes)
   // live, flip suggestions for THIS instance so the first completion needs no remount.
   useEffect(() => {
     const lang = monacoLanguageFor(path);
-    return onLspChange(() => {
+    const flip = () => {
       const ed = editorRef.current;
       if (!ed) return;
-      const live = isLspLive(lang, root ?? undefined);
+      const live = isLspLive(lang, workspaceRoot ?? undefined);
       ed.updateOptions({ quickSuggestions: live, suggestOnTriggerCharacters: live });
-    });
-  }, [path, root]);
+    };
+    // Once after mount (#6311): the client can already be live by the time this subscribes (a
+    // reused client, or one that started between the create effect and this one) — onLspChange
+    // only fires on the NEXT transition, so a flip already missed needs this one catch-up call.
+    flip();
+    return onLspChange(flip);
+  }, [path, workspaceRoot]);
 
   // A new document for the same path (saved, reloaded, switched source) replaces the text
   // without tearing the editor down. pushEditOperations keeps the undo stack, so a live reload

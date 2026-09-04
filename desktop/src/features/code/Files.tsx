@@ -568,7 +568,7 @@ export function Files({ project, lens, onLens, path, seat }: {
               onSave={save}
             />
           ) : (
-            <CodeView value={draft} path={activePath} root={lspRoot} editable onChange={setDraft} onSave={save} project={project} seat={seat} />
+            <CodeView value={draft} path={activePath} root={lspRoot} workspaceRoot={lspWsRoot} editable onChange={setDraft} onSave={save} project={project} seat={seat} />
           )}
         </div>
         {body?.truncated && (
