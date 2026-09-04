@@ -523,8 +523,8 @@ fi
 echo "claude-drill: turn done"
 exit 0
 `,
-    { inbox: [{ text: "contract: card #8050, build the thing" }],
-      env: { TRANTOR_TURN_MAX_MS: "1500" },
+    { inbox: [{ from: "host:tt-fail-claude", text: "contract: card #8050, build the thing" }],
+      env: { TRANTOR_TURN_MAX_MS: "1500", CREW_MODEL: "" },
       until: (s) => s.some((m) => /✅ done/.test(m.text || "")),
       deadlineMs: 25000 });
   const argvs = (() => { try { return readFileSync(join(home, "claude-argv.log"), "utf8").trim().split("\n"); } catch { return []; } })();
@@ -561,8 +561,8 @@ exit 0
 { echo "===TURN==="; cat "$HOME/.agent-bus/turn-claude-tt-fail-claude.txt"; } >> "$HOME/turns.log"
 sleep 30
 `,
-    { inbox: [{ text: "contract: card #8060, build the thing" }],
-      env: { TRANTOR_TURN_MAX_MS: "1200", TRANTOR_RETRY_MS: "800" }, quietDeadlineMs: 0,
+    { inbox: [{ from: "host:tt-fail-claude", text: "contract: card #8060, build the thing" }],
+      env: { TRANTOR_TURN_MAX_MS: "1200", TRANTOR_RETRY_MS: "800", CREW_MODEL: "" }, quietDeadlineMs: 0,
       until: (s) => { if (!parkedAt && s.some((m) => /PARKED/.test(m.text || ""))) parkedAt = Date.now(); return !!parkedAt; },
       deadlineMs: 30000,
       settleUntil: () => parkedAt > 0 && Date.now() - parkedAt > 4500,
@@ -577,7 +577,7 @@ sleep 30
   ok("#6289: the park names the reason (time-box)",
     parks.length === 1 && /time-box/.test(parks[0].text || ""), parks[0] && String(parks[0].text).slice(0, 140));
   ok("#6289: the assigner is told the contract is parked, once, directly",
-    sends.filter((m) => /PARKED/.test(m.text || "") && m.to === "host:drill").length === 1);
+    sends.filter((m) => /PARKED/.test(m.text || "") && m.to === "host:tt-fail-claude").length === 1);
   ok("#6289: the queue survives the park (a restart resumes it)",
     existsSync(join(home, ".agent-bus", "pending-claude-tt-fail-claude.json")));
   const rows = (() => {
