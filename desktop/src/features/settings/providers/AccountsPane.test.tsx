@@ -3,7 +3,7 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AccountsPane } from "./AccountsPane";
-import { PROVIDER_STATES, type ProviderAccountsApi, type ProviderState, type ProviderStatus } from "./providerStatus";
+import { providerVerify, PROVIDER_STATES, type ProviderAccountsApi, type ProviderState, type ProviderStatus } from "./providerStatus";
 import { stateLabel } from "./ProviderRow";
 
 // SAFETY: React's act() reads this flag off globalThis; the cast adds the one key TS does not know.
@@ -25,7 +25,7 @@ const row = (state: ProviderState, index = 0): ProviderStatus => ({
 const apiFor = (providers: ProviderStatus[]) => ({
   status: vi.fn(async () => providers),
   login: vi.fn(async () => {}),
-  verifyKey: vi.fn(async () => {}),
+  verifyKey: vi.fn(async (provider: string) => providers.find(row => row.provider === provider) ?? providers[0]),
   saveKey: vi.fn(async () => {}),
   remove: vi.fn(async () => {}),
 }) satisfies ProviderAccountsApi;
@@ -107,7 +107,7 @@ describe("Settings Accounts pane", () => {
     const status = { ...row("not_logged_in", 2), provider: "zai", label: "GLM" };
     const api = apiFor([status]);
     const order: string[] = [];
-    api.verifyKey.mockImplementation(async () => { order.push("verify"); });
+    api.verifyKey.mockImplementation(async () => { order.push("verify"); return status; });
     api.saveKey.mockImplementation(async () => { order.push("save"); });
     await mount(api);
     await click(button("Paste key"));
@@ -122,6 +122,14 @@ describe("Settings Accounts pane", () => {
     expect(api.verifyKey).toHaveBeenCalledWith("zai", "candidate-key");
     expect(api.saveKey).toHaveBeenCalledWith("zai", "candidate-key");
     expect(host.querySelector('[role="dialog"]')).toBeNull();
+  });
+
+  it("uses the frozen pre-save provider_verify seam and decodes its status row", async () => {
+    const status = { ...row("connected"), provider: "zai", label: "GLM" };
+    const run = vi.fn(async () => JSON.stringify(status));
+
+    await expect(providerVerify("zai", "candidate-key", run)).resolves.toEqual(status);
+    expect(run).toHaveBeenCalledWith("provider_verify", { name: "zai", key: "candidate-key" });
   });
 
   it("Paste key refuses to save when the live verification fails", async () => {

@@ -27,7 +27,9 @@ export function stateLabel(state: ProviderState): string {
 }
 
 function installCommand(status: ProviderStatus): string {
-  return dictGet(INSTALL_COMMANDS, status.provider) ?? `brew install ${status.binary.name}`;
+  const known = dictGet(INSTALL_COMMANDS, status.provider);
+  if (known) return known;
+  return status.binary.name ? `brew install ${status.binary.name}` : `See ${status.label} installation guide`;
 }
 
 export function ProviderRow({ status, expanded, busy, onExpand, onLogin, onPasteKey, onRecheck, onRemove }: {
@@ -92,7 +94,7 @@ export function ProviderRow({ status, expanded, busy, onExpand, onLogin, onPaste
             <span>System account</span><span>One login on this machine</span>
             <span>Why</span><span className="text-[var(--color-tr-text)]">{status.reason}</span>
             <span>Credential</span><span className="tr-mono truncate">{status.auth.artifact ?? "No credential artifact"}</span>
-            <span>Binary</span><span className="tr-mono truncate">{status.binary.path ?? `${status.binary.name} is not on PATH`}</span>
+            <span>Binary</span><span className="tr-mono truncate">{status.binary.path ?? (status.binary.name ? `${status.binary.name} is not on PATH` : "No CLI required")}</span>
             {usage ? <><span>Usage</span><span title={usage.tooltip}>{usage.tooltip}</span></> : null}
           </div>
           {status.state === "not_installed" ? (
