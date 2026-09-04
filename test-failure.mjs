@@ -11,7 +11,7 @@
 // this file never ran in that invocation.
 import http from "node:http";
 import { spawn } from "node:child_process";
-import { mkdtempSync, writeFileSync, chmodSync, mkdirSync, readFileSync, readdirSync, statSync } from "node:fs";
+import { mkdtempSync, writeFileSync, chmodSync, mkdirSync, readFileSync, readdirSync, statSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { drillEnv } from "./drill-env.mjs";
@@ -503,6 +503,95 @@ exit 0
   ok("#6134: the redelivery ladder STOPS — no retry notices after the park",
      !sends.some((m) => /retrying in/.test(m.text || "")),
      sends.filter((m) => /retrying in/.test(m.text || "")).length + " retry notice(s)");
+}
+
+// ---- #6289 drill A: a cut turn's follow-up RESUMES the same CLI session, never a fresh -p ----
+// The second half of the 4.7h burn: a time-box cut re-ran as a FULL fresh turn, so the seat
+// re-read everything and re-did the work. The follow-up must ride the CLI's resume shape — for
+// claude that is argv `-c` (continue the session it was cut out of). Also pins #6289's ledger
+// rule: every row carries outcome (cut | api-error | completed) and tokens.
+{
+  const { sends, home } = await drill("claude",
+    `#!/bin/sh
+echo "$@" >> "$HOME/claude-argv.log"
+P="$HOME/.agent-bus/turn-claude-tt-fail-claude.txt"
+if grep -q "NEW BUS MESSAGE" "$P"; then
+  if grep -q "cut at the time box" "$P"; then echo "landed the cut work"; exit 0; fi
+  echo "tokens used: 4,321"
+  sleep 30
+fi
+echo "claude-drill: turn done"
+exit 0
+`,
+    { inbox: [{ text: "contract: card #8050, build the thing" }],
+      env: { TRANTOR_TURN_MAX_MS: "1500" },
+      until: (s) => s.some((m) => /✅ done/.test(m.text || "")),
+      deadlineMs: 25000 });
+  const argvs = (() => { try { return readFileSync(join(home, "claude-argv.log"), "utf8").trim().split("\n"); } catch { return []; } })();
+  const resumes = argvs.filter((a) => a.startsWith("-c "));
+  ok("#6289: a cut turn is followed by exactly ONE resume turn (kickoff + contract + resume = 3 CLI calls)",
+    argvs.length === 3 && resumes.length === 1, `argv lines: ${argvs.length}, resumes: ${resumes.length}`);
+  ok("#6289: the time-box follow-up carries the CLI's RESUME shape (-c), never a fresh -p",
+    resumes.length === 1 && resumes[0].includes("cut at the time box"),
+    resumes[0] && resumes[0].slice(0, 120));
+  const rows = (() => {
+    try {
+      return readFileSync(join(home, ".agent-bus", "logs", "claude-tt-fail-claude.jsonl"), "utf8")
+        .split("\n").filter(Boolean).map((l) => { try { return JSON.parse(l); } catch { return {}; } });
+    } catch { return []; }
+  })();
+  const turnRows = rows.filter((r) => r.trigger);
+  ok("#6289: the cut turn's ledger row carries outcome:'cut'",
+    turnRows.some((r) => r.cut === true && r.outcome === "cut"));
+  ok("#6289: the follow-up's ledger row carries outcome:'completed'",
+    turnRows.some((r) => r.trigger === "time-box follow-up" && r.outcome === "completed"));
+  ok("#6289: EVERY ledger row names its outcome (cut | api-error | completed) and its tokens",
+    turnRows.length > 0 && turnRows.every((r) => ["cut", "api-error", "completed"].includes(r.outcome) && Number.isFinite(r.tokens)),
+    JSON.stringify(turnRows.map((r) => ({ t: r.trigger, o: r.outcome, k: r.tokens }))));
+}
+
+// ---- #6289 drill B: a twice-cut contract PARKS the seat as time-box — no third attempt -------
+// Rule 1's time-box flavor: the contract attempt is cut, its follow-up is cut too (the chain
+// fails), the ladder retries ONCE, and the second failed chain parks with reason time-box and
+// one line on the board — never a third attempt, never N retry notices.
+{
+  let parkedAt = 0;
+  const { sends, home } = await drill("claude",
+    `#!/bin/sh
+{ echo "===TURN==="; cat "$HOME/.agent-bus/turn-claude-tt-fail-claude.txt"; } >> "$HOME/turns.log"
+sleep 30
+`,
+    { inbox: [{ text: "contract: card #8060, build the thing" }],
+      env: { TRANTOR_TURN_MAX_MS: "1200", TRANTOR_RETRY_MS: "800" }, quietDeadlineMs: 0,
+      until: (s) => { if (!parkedAt && s.some((m) => /PARKED/.test(m.text || ""))) parkedAt = Date.now(); return !!parkedAt; },
+      deadlineMs: 30000,
+      settleUntil: () => parkedAt > 0 && Date.now() - parkedAt > 4500,
+      settleDeadlineMs: 30000 });
+  const turns = (() => { try { return readFileSync(join(home, "turns.log"), "utf8").split("===TURN===").filter(t => t.trim()); } catch { return []; } })();
+  const attempts = turns.filter((t) => t.includes("NEW BUS MESSAGE"));
+  ok("#6289: a twice-cut contract is attempted exactly TWICE — the park replaces the third attempt",
+    attempts.length === 2, `got ${attempts.length} contract attempt(s)`);
+  const parks = sends.filter((m) => /PARKED/.test(m.text || "") && m.to === "all");
+  ok("#6289: the park is ONE line on the board, not a notice per retry",
+    parks.length === 1, `${parks.length} park broadcast(s)`);
+  ok("#6289: the park names the reason (time-box)",
+    parks.length === 1 && /time-box/.test(parks[0].text || ""), parks[0] && String(parks[0].text).slice(0, 140));
+  ok("#6289: the assigner is told the contract is parked, once, directly",
+    sends.filter((m) => /PARKED/.test(m.text || "") && m.to === "host:drill").length === 1);
+  ok("#6289: the queue survives the park (a restart resumes it)",
+    existsSync(join(home, ".agent-bus", "pending-claude-tt-fail-claude.json")));
+  const rows = (() => {
+    try {
+      return readFileSync(join(home, ".agent-bus", "logs", "claude-tt-fail-claude.jsonl"), "utf8")
+        .split("\n").filter(Boolean).map((l) => { try { return JSON.parse(l); } catch { return {}; } });
+    } catch { return []; }
+  })();
+  const cutRows = rows.filter((r) => r.outcome === "cut");
+  // The kickoff chain is cut too (every invocation hangs): 3 chains × 2 turns = 6 cut rows.
+  ok("#6289: every cut turn in every chain is ledgered as outcome:'cut' (3 chains × 2 turns)",
+    cutRows.length === 6, `${cutRows.length} cut row(s)`);
+  ok("#6289: each chain ran its ONE follow-up in the same session",
+    rows.filter((r) => r.trigger === "time-box follow-up").length === 3);
 }
 
 hub.close();

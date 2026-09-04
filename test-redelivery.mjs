@@ -93,16 +93,18 @@ exit 0
     sends: [...sends], sawPendingOnDisk, pendingLeft: existsSync(PENDF), PENDF };
 }
 
-// ---- drill 1: two failed turns, then a good one. The message must survive both --------
+// ---- drill 1: one failed turn, then a good one. The message must survive the crash --------
+// (#6289: was failTurns 2 — two consecutive exit-1s now PARK the seat, see drill 3, so the
+// redelivery mechanics are proven with a single crash followed by a success.)
 {
-  const r = await drill({ failTurns: 2 });
-  ok("the wake message is delivered 3 times (2 crashes + 1 success), not once",
-    r.wakeTurns.length === 3, `got ${r.wakeTurns.length} wake turn(s)`);
-  ok("every redelivery still carries the ORIGINAL message text",
-    r.wakeTurns.length >= 3 && r.wakeTurns.every(t => t.includes("prod is down, fix it now")));
+  const r = await drill({ failTurns: 1 });
+  ok("the wake message is delivered twice (1 crash + 1 success), not once",
+    r.wakeTurns.length === 2, `got ${r.wakeTurns.length} wake turn(s)`);
+  ok("the redelivery still carries the ORIGINAL message text",
+    r.wakeTurns.every(t => t.includes("prod is down, fix it now")));
   ok("the hub only ever handed the message out ONCE (nothing re-fired it)", served >= 2 && r.wakeTurns.length > 1);
-  ok("attempt 2+ is labelled a REDELIVERY so the model doesn't redo finished work",
-    r.wakeTurns.filter(t => t.includes("REDELIVERY")).length === 2,
+  ok("attempt 2 is labelled a REDELIVERY so the model doesn't redo finished work",
+    r.wakeTurns.filter(t => t.includes("REDELIVERY")).length === 1,
     `${r.wakeTurns.filter(t => t.includes("REDELIVERY")).length} labelled`);
   ok("the undelivered batch is on disk while it is owed", r.sawPendingOnDisk);
   ok("the queue file is GONE once a turn finally exits 0", !r.pendingLeft);
@@ -110,7 +112,7 @@ exit 0
   // project orchestrator (direct = wake), so an unscoped count doubles.
   const held = r.sends.filter(s => s.to === "all" && /undelivered message/.test(s.text || ""));
   ok("the bus failure notice says how many messages the seat is holding",
-    held.length === 2, `${held.length} notice(s): ${r.sends.map(s => s.text).join(" | ").slice(0, 220)}`);
+    held.length === 1, `${held.length} notice(s): ${r.sends.map(s => s.text).join(" | ").slice(0, 220)}`);
   ok("recovery is announced once the batch finally lands",
     r.sends.some(s => /recovered/.test(s.text || "")));
 }
@@ -136,6 +138,28 @@ exit 0
   ok("the restored message is the one that was owed",
     r.wakeTurns.some(t => t.includes("prod is down, fix it now")));
   ok("and it is cleared from disk once worked", !r.pendingLeft);
+}
+
+// ---- #6289 drill 3: two consecutive exit-1 turns PARK the seat — no third attempt ---------
+// The 4.7h burn (claude seat, card #6270, 2026-09-03): an exit-1 turn rode the redelivery ladder
+// forever — every rung re-sent the SAME contract as a full turn, the seat re-read and re-did the
+// work, then died to the same error again. Two strikes and the ladder stops: the seat parks with
+// a reason, the queue is kept, and `trantor up` (a restart) is the way back in.
+{
+  const r = await drill({ failTurns: 99, waitMs: 9000 });
+  ok("#6289: an exit-1 contract is attempted exactly TWICE — no third attempt",
+    r.wakeTurns.length === 2, `got ${r.wakeTurns.length} attempt(s)`);
+  const parks = r.sends.filter(s => /PARKED/.test(s.text || "") && s.to === "all");
+  ok("#6289: the second consecutive exit-1 PARKS the seat, announced once",
+    parks.length === 1, `${parks.length} park broadcast(s)`);
+  ok("#6289: the park names the reason (api-error)",
+    parks.length === 1 && /api-error/.test(parks[0].text || ""), parks[0] && String(parks[0].text).slice(0, 140));
+  ok("#6289: the queue survives the park (a restart resumes it)", r.pendingLeft);
+  ok("#6289: the assigner hears PARKED once, not a retry notice per attempt",
+    r.sends.filter(s => /PARKED/.test(s.text || "") && s.to === "sasha@mac").length === 1);
+  const retryNotices = r.sends.filter(s => /retrying in/.test(s.text || ""));
+  ok("#6289: only the FIRST failure schedules a retry — the second parks instead",
+    retryNotices.length === 1, `${retryNotices.length} retry notice(s)`);
 }
 
 hub.close();

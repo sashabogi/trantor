@@ -534,6 +534,10 @@ async function reportHealthy() {
 const TURN_MAX_MS = Math.max(0, Number(process.env.TRANTOR_TURN_MAX_MS || 20 * 60 * 1000));
 const TIME_BOX_PROMPT = "your previous turn was cut at the time box; commit what is done, move the card with a note, report in one line";
 let inFollowUp = false;
+// #6289: whether the turn that just ended was CUT at the time box. The follow-up recursion
+// overwrites it with its own state, so a caller reading it after the chain sees the state of the
+// LAST turn — which is what decides whether a failed chain died to the box or to the API.
+let lastTurnCut = false;
 // The card the CURRENT CLI session belongs to (#6134). 0 = the kickoff session, which belongs to
 // no card, so the first contract that names one starts a session of its own.
 let sessionCard = 0;
@@ -703,6 +707,7 @@ exit $turn_exit`;
     try { unlinkSync(CUTF); } catch {}
     log(`\x1b[33mturn cut at the ${Math.round(TURN_MAX_MS / 1000)}s time box — CLI and every descendant ended${boxed ? "" : " (node backstop: bash itself was wedged)"}\x1b[0m`);
   }
+  lastTurnCut = cut;
   // #5869: scrub AT REST, synchronously, before anything reads the file back. The explicit shell
   // wait above drains the live stderr scrubber first; this pass is defense in depth for redaction.
   try { writeFileSync(ERRF, redactKeys(readFileSync(ERRF, "utf8"))); } catch {}
@@ -757,8 +762,11 @@ exit $turn_exit`;
   // #6134: what the turn COST, from the CLI's own usage line. Zero means this CLI printed none —
   // never that the turn was free. `trantor seat-why` totals these into today's spend per seat.
   const tokens = parseTurnTokens(ownOut);
-  const telemetryRow = { ts: Date.now(), agent: AGENT, project: PROJ, turn: TURN, trigger, model: MODEL || "cli-default", duration_ms: Date.now() - t0, exit: realExit, effExit, authFailed: effExit !== realExit, emptyOutput: lastEmptyOutput, verdict };
-  if (tokens) telemetryRow.tokens = tokens;
+  // #6289: every ledger row names in ONE field what happened to the turn — cut (the box ended it),
+  // api-error (the CLI failed), completed — and what it cost in tokens, even when this CLI printed
+  // no usage line (0 means "not reported", never "free"). `cut` stays too: the drills read it.
+  const outcome = cut ? "cut" : (effExit !== 0 ? "api-error" : "completed");
+  const telemetryRow = { ts: Date.now(), agent: AGENT, project: PROJ, turn: TURN, trigger, model: MODEL || "cli-default", duration_ms: Date.now() - t0, exit: realExit, effExit, authFailed: effExit !== realExit, emptyOutput: lastEmptyOutput, verdict, outcome, tokens };
   if (cut) telemetryRow.cut = true;
   telemetry(telemetryRow);
   log(`turn ended (exit ${realExit}${effExit !== realExit ? ` → effective ${effExit} (${lastEmptyOutput ? "empty-output" : "auth"})` : ""}, ${((Date.now() - t0) / 1000).toFixed(0)}s)`);
@@ -1072,10 +1080,18 @@ function askedExcerpt(message) {
       }
       savePending(pendingWake, pendingBcast);
       await reportFailure(ec, "message", pendingWake.length, reason);
-      if (PARKING_REASONS.has(reason)) {
-        retryAt = await parkSeat(reason, pendingWake.length, quotaReset);
+      // #6289: TWO consecutive exit-1 turns on one contract PARK the seat — no third attempt.
+      // The burn this stops (card #6270, 2026-09-03): an exit-1 turn rode the redelivery ladder,
+      // and every rung re-sent the SAME contract as a fresh full turn — the seat re-read and
+      // re-did finished work, then died to the same API error or the box again; five cycles,
+      // 4.7h, for a 34-line change. The first failure still retries; the second parks with a
+      // reason (time-box when the chain died to box cuts, api-error otherwise), holds the queue,
+      // and is woken again only by `trantor up` (a restart).
+      const parkReason = PARKING_REASONS.has(reason) ? reason : (lastTurnCut ? "time-box" : "api-error");
+      if (PARKING_REASONS.has(reason) || deliveryFails >= 2) {
+        retryAt = await parkSeat(parkReason, pendingWake.length, quotaReset);
         await notifyAssigners(assigners,
-          `⛔ your contract is PARKED on ${SESSION} (${reason}) — not retrying · asked: "${asked}"`);
+          `⛔ your contract is PARKED on ${SESSION} (${parkReason}) — not retrying · asked: "${asked}"`);
         lastTurnAt = Date.now();
         return;
       }
