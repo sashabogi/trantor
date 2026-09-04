@@ -7,7 +7,7 @@
 // no module mocking, and no monaco import (which cannot load under node).
 import { beforeEach, describe, expect, it } from "vitest";
 import type { RequestMessage } from "vscode-jsonrpc";
-import { setLspClientDeps, startLsp, stopLspProject, lspClientRows, onLspChange, type LspClientDeps, type LspClientLike } from "./lspClient";
+import { setLspClientDeps, startLsp, stopLspProject, lspClientRows, onLspChange, isLspLive, type LspClientDeps, type LspClientLike } from "./lspClient";
 import type { LspBus } from "./lspTransport";
 type Handler = (ev: { payload: string | null }) => void;
 
@@ -241,5 +241,26 @@ describe("startLsp (#5857)", () => {
 
     expect(result.id).toBe(1);
     expect(calls).toBeGreaterThan(0);   // the reuse path must notify — a silent reuse is the bug
+  });
+
+  // The headless equivalent of the real-app typing drill (#6311, bounced from testing): the
+  // operator's editor keeps its suggestions off because CodeView checked isLspLive keyed by the
+  // project's SCOPE root, not the WORKSPACE root the client registry actually keys by — the two
+  // differ for a nested crate (desktop/src-tauri inside the desktop project, exactly like
+  // /proj/nested-crate below vs /proj). This is what CodeView's quickSuggestions computation now
+  // must key on; the real drill (lspDrill.ts's typeAndExpectSuggest) proves the widget itself in
+  // the live webview, which vitest cannot render.
+  it("a client's key is the workspace root, not the scope root CodeView used to check (#6311)", async () => {
+    const bus = makeDeps();
+    bus.setWsRoot("/proj/nested-crate");
+    setLspClientDeps(bus.deps);
+
+    const result = await startLsp("proj", null, "rust", "/proj/nested-crate/src/main.rs");
+    expect(result.scopeRoot).toBe("/proj");
+    expect(result.workspaceRoot).toBe("/proj/nested-crate");
+    // before (the bug): CodeView passed scopeRoot to isLspLive and saw no live client.
+    expect(isLspLive("rust", result.scopeRoot)).toBe(false);
+    // after (the fix): CodeView passes workspaceRoot and sees the live client.
+    expect(isLspLive("rust", result.workspaceRoot)).toBe(true);
   });
 });
