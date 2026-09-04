@@ -2,10 +2,13 @@
 // trantor provider — bring ANY model to the crew (BYOM). opencode is a universal adapter, so a
 // provider you configure there (or declare here) becomes a crew seat with no code change.
 //
-//   trantor provider                 # list seats: built-in + discovered, with availability + tier
+//   trantor provider                 # seats (built-in + discovered) + the provider status board
+//   trantor provider status [--json] # the registry: state + reason per provider (#6390)
+//   trantor provider login <name>    # run the CLI's own login command (the pane's "login" action)
+//   trantor provider verify <name> --key sk-… [--json]   # probe a CANDIDATE key, write nothing
 //   trantor provider add <name> [--key sk-…] [--plan api|coding-plan|max] [--label <bus-name>]
 //                       [--base-url <url> [--models m1,m2]]   # wire a CUSTOM OpenAI-compatible endpoint
-//   trantor provider remove <name>   # drop it from your profile (leaves the key in place)
+//   trantor provider remove <name> [--credentials]   # drop it from your profile (--credentials: also the key)
 //
 // `add` writes <NAME>_API_KEY to ~/.agent-bus/.env (if --key given), declares the plan in your
 // quota profile, verifies opencode can see the provider's models, and prints the seat spec. For a
@@ -15,9 +18,10 @@
 import { readFileSync, writeFileSync, existsSync, mkdirSync, chmodSync, appendFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { homedir } from "node:os";
-import { execSync } from "node:child_process";
+import { execSync, spawnSync } from "node:child_process";
 import { pathToFileURL } from "node:url";
 import { buildRoster, loadWorld } from "./advise.mjs";
+import { providerStatus, providerVerify, PROVIDERS } from "../lib/providers.mjs";
 
 const H = homedir();
 const ENV = join(H, ".agent-bus", ".env");
@@ -67,6 +71,55 @@ function listSeats() {
   }
   console.log(`\n${C.dim}add one:${C.off} trantor provider add <name> --key sk-… --plan api`);
   console.log(`${C.dim}browse models:${C.off} trantor models [<provider>]`);
+}
+
+// The status board (#6390) — the human face of lib/providers.mjs. Same rows the --json contract
+// and the desktop pane render; every row carries a state AND a reason, so nothing can show blank.
+const STATE_MARK = {
+  connected:      (c) => `${C.grn}●${c.off}`,
+  over_quota:     (c) => `${C.red}✗${c.off}`,
+  expired:        (c) => `${C.red}✗${c.off}`,
+  not_installed:  (c) => `${C.dim}○${c.off}`,
+  not_logged_in:  (c) => `${C.dim}○${c.off}`,
+  unknown:        (c) => `${C.yel}?${c.off}`,
+};
+
+function printStatusRows(rows) {
+  console.log("PROVIDERS — state + reason per provider (detail: trantor provider status --json)\n");
+  for (const r of rows) {
+    const mark = (STATE_MARK[r.state] || STATE_MARK.unknown)(C);
+    console.log(`  ${mark} ${r.provider.padEnd(12)} ${r.state.padEnd(14)} ${C.dim}${r.reason}${C.off}`);
+  }
+}
+
+async function statusCmd(opts) {
+  const rows = await providerStatus();
+  if (opts.json) { console.log(JSON.stringify(rows, null, 2)); return; }
+  printStatusRows(rows);
+  const fixable = rows.filter((r) => r.actions.includes("login") || r.actions.includes("paste-key"));
+  if (fixable.length) {
+    console.log(`\n${C.dim}fix one:${C.off} ${fixable.map((r) => r.provider).join(", ")}`);
+    console.log(`${C.dim}probe a key before saving it:${C.off} trantor provider verify <name> --key sk-…`);
+  }
+}
+
+// The pre-save verify seam (#6391's ask): probe a CANDIDATE key through the SAME registry probe
+// the status board uses, and write nothing anywhere — .env, profile.json and opencode.json are
+// only touched later, by `provider add`, once the key is known live.
+async function verifyCmd(name, opts) {
+  if (!name || name.startsWith("--") || name === "help" || !opts.key) {
+    console.error("usage: trantor provider verify <name> --key sk-… [--json]");
+    process.exit(1);
+  }
+  let r;
+  try { r = await providerVerify(name, opts.key); }
+  catch (e) { console.error(String(e?.message || e)); process.exit(1); }
+  if (opts.json) { console.log(JSON.stringify(r, null, 2)); return; }
+  const mark = (STATE_MARK[r.state] || STATE_MARK.unknown)(C);
+  console.log(`  ${mark} ${r.provider.padEnd(12)} ${r.state.padEnd(14)} ${C.dim}${r.reason}${C.off}`);
+  console.log(r.state === "connected"
+    ? `\n${C.grn}Key is live.${C.off} Nothing was written — commit it: trantor provider add ${r.provider} --key …`
+    : `\n${C.dim}Nothing was written.${C.off} Fix the state above, then: trantor provider add ${r.provider} --key …`);
 }
 
 function addProvider(name, opts) {
@@ -123,10 +176,10 @@ function addProvider(name, opts) {
   console.log(`${C.dim}For difficulty-aware routing across its catalog, score it once (weekly):${C.off} scrooge-capabilities`);
 }
 
-function removeProvider(name) {
+function removeProvider(name, opts = {}) {
   // Same guard as add (#5998): a flag-like name is a usage question, not a provider.
   if (!name || name.startsWith("--") || name === "help") {
-    console.error("usage: trantor provider remove <name>");
+    console.error("usage: trantor provider remove <name> [--credentials]");
     process.exit(1);
   }
   const FILE = join(H, ".agent-bus", "profile.json");
@@ -138,6 +191,49 @@ function removeProvider(name) {
   } else {
     console.log(`'${name}' is not in your profile.`);
   }
+  // The Accounts pane's "remove" affordance (#6391) passes --credentials: drop the key line too,
+  // so removing a provider from the UI doesn't leave a live secret in the crew's .env.
+  if (opts.credentials) {
+    const k = envKeyName(name);
+    if (existsSync(ENV)) {
+      const cur = readFileSync(ENV, "utf8");
+      const next = cur.split("\n").filter((l) => !l.startsWith(`${k}=`)).join("\n");
+      if (next !== cur) {
+        writeFileSync(ENV, next);
+        try { chmodSync(ENV, 0o600); } catch {}
+        console.log(`${C.grn}✓${C.off} removed ${k} from ~/.agent-bus/.env`);
+      } else {
+        console.log(`${C.dim}${k} was not in ~/.agent-bus/.env${C.off}`);
+      }
+    }
+  }
+}
+
+// `provider login <name>` — the pane's "login" action (#6391): run the CLI's OWN login command
+// in the foreground (stdio inherited — OAuth flows print QR codes/URLs and need real stdin),
+// then point at the status board for the live re-check. api-key providers have no login to run;
+// the hint is the paste-key path.
+function loginProvider(name) {
+  if (!name || name.startsWith("--") || name === "help") {
+    console.error("usage: trantor provider login <name>");
+    process.exit(1);
+  }
+  const p = PROVIDERS.find((x) => x.provider === name.toLowerCase());
+  if (!p) { console.error(`unknown provider '${name}' — one of: ${PROVIDERS.map((x) => x.provider).join(", ")}`); process.exit(1); }
+  if (!p.loginRun) {
+    console.log(`${p.label} authenticates by API key — no login flow to run.`);
+    console.log(`${C.dim}probe a candidate key first, then commit it:${C.off}`);
+    console.log(`  trantor provider verify ${p.provider} --key sk-…`);
+    console.log(`  trantor provider add ${p.provider} --key sk-…`);
+    return;
+  }
+  console.log(`${C.dim}running:${C.off} ${p.loginRun.join(" ")}  ${C.dim}(the CLI's own login — sign in there)${C.off}`);
+  const r = spawnSync(p.loginRun[0], p.loginRun.slice(1), { stdio: "inherit" });
+  if (r.error || (r.status !== 0 && r.status !== null)) {
+    console.error(`\n${p.loginRun[0]} exited ${r.status ?? "?"} — install it first, then re-run: trantor provider login ${p.provider}`);
+    process.exit(1);
+  }
+  console.log(`\n${C.dim}re-check it live:${C.off} trantor provider status`);
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
@@ -149,10 +245,22 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     else if (rest[i] === "--label") opts.label = rest[++i];
     else if (rest[i] === "--base-url" || rest[i] === "--baseurl") opts.baseUrl = rest[++i];
     else if (rest[i] === "--models") opts.models = rest[++i];
+    else if (rest[i] === "--json") opts.json = true;
+    else if (rest[i] === "--credentials") opts.credentials = true;
     else pos.push(rest[i]);
   }
-  if (!sub || sub === "list") listSeats();
+  // The default list leads with the seats roster and closes with the provider status board —
+  // one command answers both "what can I launch" and "what is actually alive" (#6390).
+  const defaultList = async () => {
+    listSeats();
+    console.log("");
+    printStatusRows(await providerStatus());
+  };
+  if (!sub || sub === "list") await defaultList();
+  else if (sub === "status") await statusCmd(opts);
+  else if (sub === "verify") await verifyCmd(pos[0], opts);
+  else if (sub === "login") loginProvider(pos[0]);
   else if (sub === "add") addProvider(pos[0], opts);
-  else if (sub === "remove" || sub === "rm") removeProvider(pos[0]);
-  else { console.error(`unknown subcommand '${sub}' — use: list | add | remove`); process.exit(1); }
+  else if (sub === "remove" || sub === "rm") removeProvider(pos[0], opts);
+  else { console.error(`unknown subcommand '${sub}' — use: list | status | verify | login | add | remove`); process.exit(1); }
 }
