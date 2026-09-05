@@ -348,6 +348,15 @@ function HandoffBanner({ frac, countdown, busy, error, onKeepGoing, onHandOffNow
 // construction rather than by a prop this file cannot add.
 const TRAY_DEPS: TerminalDeps = { ...DEFAULT_TERMINAL_DEPS, termWrite: async () => "" };
 
+/** #6094 — the blocked-with-no-open-ask retry's two-phase cadence (0.3.145's real-path failure:
+ *  herdr's blocked frame can land a moment before the CLI finishes writing the tool_use row).
+ *  Aggressive while the gap is most likely still closing, eased off for a further stretch, then
+ *  the retry stops outright — the passive chat-rows push still arrives eventually. */
+export const FAST_RETRY_MS = 300;
+export const FAST_RETRY_WINDOW_MS = 3_000;
+export const SLOW_RETRY_MS = 1_000;
+export const SLOW_RETRY_WINDOW_MS = 5_000;
+
 /** The seams Chat crosses, injected so a test supplies a faithful in-memory stand-in instead of
  *  mocking @tauri/herdr modules (TerminalPane's `deps` is the same idea). Production default. */
 export type ChatDeps = {
@@ -726,7 +735,31 @@ export function Chat({ project, sessionId, dock, onDock, onClose, deps = DEFAULT
       }).catch(() => {});
     }
     blockedNoAskRef.current = blockedNoAsk;
-  }, [status, openAsk, project, chat.turns.length, invokeFn]);
+    if (!blockedNoAsk) return;
+    // #6094 — herdr's blocked frame can land a MOMENT before the CLI finishes writing the
+    // AskUserQuestion tool_use row (confirmed 2026-09-05, 0.3.145: at the instant Chat looked,
+    // its transcript cursor sat 3 lines behind the ask). A single look-and-give-up misses a race
+    // that closes within a second or two, so re-sync aggressively (FAST_RETRY_MS) while the gap
+    // is most likely still closing, ease off (SLOW_RETRY_MS) for a further stretch, then stop —
+    // the passive chat-rows push still arrives eventually (spawn_chat_watcher's own 300ms file
+    // tail), just later, so giving up here is never the last chance to see the ask.
+    let alive = true;
+    let tries = 0;
+    const startedAt = Date.now();
+    const tick = () => {
+      if (!alive) return;
+      tries += 1;
+      const elapsed = Date.now() - startedAt;
+      invokeFn("app_log", {
+        line: `chat blocked-no-ask retry ${tries}: project=${project} elapsed=${elapsed}ms`,
+      }).catch(() => {});
+      sync();
+      if (elapsed < FAST_RETRY_WINDOW_MS) setTimeout(tick, FAST_RETRY_MS);
+      else if (elapsed < FAST_RETRY_WINDOW_MS + SLOW_RETRY_WINDOW_MS) setTimeout(tick, SLOW_RETRY_MS);
+    };
+    const t = setTimeout(tick, FAST_RETRY_MS);
+    return () => { alive = false; clearTimeout(t); };
+  }, [status, openAsk, project, chat.turns.length, invokeFn, sync]);
   // Suggested-reply chips (#5929): asks collected from EVERY orchestrator turn since the
   // operator's last user turn (walk back until a user turn — the real ask is routinely one turn
   // back behind a hook-driven "Nothing to swap."), most recent ask first, capped at three.

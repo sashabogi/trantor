@@ -10,7 +10,7 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { InvokeArgs } from "@tauri-apps/api/core";
-import { Chat, type ChatDeps } from "./Chat";
+import { Chat, type ChatDeps, FAST_RETRY_MS, FAST_RETRY_WINDOW_MS } from "./Chat";
 import type { HerdrSeat } from "../workspace/herdr";
 import { WAKE_OUTCOME_MS } from "../genesis/wakeRow";
 import type { WakeProgress } from "../genesis/wakeProgress";
@@ -868,5 +868,170 @@ describe("chat_unwatch never sends a stale generation-less unwatch (#6094 real-p
     // The bug: this used to be `{ generation: null }` — a fallback that removes whatever watcher
     // is CURRENTLY live for the key, which by now is generation 2's, not generation 1's own.
     expect(unwatches[0].args).toMatchObject({ generation: 1 });
+  });
+});
+
+// #6094 REAL-PATH REGRESSION, third round (0.3.145, 09-05 19:27): the watcher fix (4c3b0db) held
+// — generations were correct — and the card STILL did not render. app-trace named the mechanism
+// exactly: "chat blocked with no open ask: ... turns=724 seen=8096" fired at the SAME moment
+// herdr's blocked frame arrived, but the AskUserQuestion tool_use was three transcript lines
+// AHEAD of Chat's cursor — the CLI writes the tool_use row a moment AFTER herdr reports blocked,
+// so a single look-and-give-up at the blocked instant finds nothing and never looks again. This
+// mounts Chat idle (no ask anywhere in the transcript yet), pushes blocked, and only THEN makes
+// the transcript's next backfill answer carry the ask — proving Chat re-syncs on its own instead
+// of waiting for a push that, in this exact race, never arrives in time.
+describe("blocked-with-no-open-ask retries the backfill instead of giving up once (#6094, 2026-09-05)", () => {
+  let host: HTMLDivElement;
+  let root: Root;
+
+  beforeEach(() => {
+    host = document.createElement("div");
+    document.body.appendChild(host);
+    root = createRoot(host);
+  });
+
+  afterEach(() => {
+    act(() => root.unmount());
+    host.remove();
+  });
+
+  it("the ask card appears within the retry window even though the ask post-dates the blocked push", async () => {
+    vi.useFakeTimers();
+    try {
+      const handlers = new Map<string, Handler[]>();
+      let askWritten = false;
+      const deps: ChatDeps = {
+        invoke: <T,>(cmd: string, args?: InvokeArgs): Promise<T> => {
+          if (cmd === "orchestrator_chat") {
+            // SAFETY: Chat always calls orchestrator_chat with a plain `{ after: number }` object.
+            const after = (args as { after: number } | undefined)?.after ?? 0;
+            // Before the CLI "writes" the ask: line 0 carries an ordinary user turn, cursor at 1.
+            // After: a second backfill from the same cursor carries the ask, cursor at 2 — the
+            // CLI having appended exactly the one row app-trace showed Chat was behind on.
+            const backfill = after === 0
+              ? [[{ role: "user", blocks: [{ kind: "text", text: "check", tool: null, tool_id: null }] }], [], 1, REAL_ASK_META, ["check"]]
+              : askWritten
+                ? [[askTurn], [], 2, REAL_ASK_META, []]
+                : [[], [], after, REAL_ASK_META, []];
+            // SAFETY: Chat types this call Promise<string> and parses the JSON; the envelope is
+            // exactly the Backfill shape built above.
+            return Promise.resolve(JSON.stringify(backfill) as T);
+          }
+          if (cmd === "chat_watch") {
+            // SAFETY: Chat types this call Promise<ChatWatchResult> — current=1 matches the
+            // pre-ask backfill's own total.
+            return Promise.resolve({ current: 1, generation: 1 } as T);
+          }
+          if (cmd === "orchestrator_status") {
+            // SAFETY: Chat types this call Promise<string>; the pane starts "working" — blocked
+            // arrives later via the orch-status push under test.
+            return Promise.resolve("working" as T);
+          }
+          // SAFETY: unknown commands (app_log included) resolve to null, matching the real
+          // seam's unhandled default — this test asserts on DOM state, not trace content.
+          return Promise.resolve(null as T);
+        },
+        listen: <T,>(event: string, cb: (ev: { payload: T }) => void): Promise<() => void> => {
+          // SAFETY: the handler is stored under the unknown-payload container (Handler, above)
+          // and fired with exactly what listen delivered — this test only fires "orch-status".
+          const boxed = cb as Handler;
+          handlers.set(event, [...(handlers.get(event) ?? []), boxed]);
+          return Promise.resolve(() => {});
+        },
+        orchestratorOf: async () => ({ project: "p", agent: "orch", surface: "surf1", kind: "orch" }),
+        answerAtPane: async () => {},
+        Composer: () => null,
+        TerminalPane: () => null,
+      };
+
+      act(() => { root.render(<Chat project="p" dock="right" onDock={() => {}} onClose={() => {}} deps={deps} />); });
+      await act(async () => { await Promise.resolve(); await Promise.resolve(); await Promise.resolve(); });
+
+      // herdr reports blocked BEFORE the tool_use row exists in the transcript — exactly the
+      // observed real-path ordering.
+      await act(async () => {
+        for (const cb of handlers.get("orch-status") ?? []) cb({ payload: JSON.stringify({ project: "p", status: "blocked" }) });
+        await Promise.resolve();
+      });
+      expect(host.querySelector('[data-testid="ask-card"]')).toBeNull();
+
+      // The CLI finishes writing the ask a moment later.
+      askWritten = true;
+
+      // Advance past the first fast-retry tick and let its sync() settle.
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(FAST_RETRY_MS + 50);
+      });
+
+      expect(host.querySelector('[data-testid="ask-card"]')).not.toBeNull();
+      expect(host.textContent).toContain("Ship it?");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("gives up after the retry window — proves the retry is bounded, not a permanent poll", async () => {
+    vi.useFakeTimers();
+    try {
+      const handlers = new Map<string, Handler[]>();
+      const chatWatchCalls: unknown[] = [];
+      const deps: ChatDeps = {
+        invoke: <T,>(cmd: string, args?: InvokeArgs): Promise<T> => {
+          if (cmd === "orchestrator_chat") {
+            // SAFETY: Chat always calls orchestrator_chat with a plain `{ after: number }` object.
+            const after = (args as { after: number } | undefined)?.after ?? 0;
+            chatWatchCalls.push(after);
+            // The ask never arrives in this scenario — a genuinely different, non-ask block.
+            // SAFETY: Chat types this call Promise<string> and parses the JSON; the envelope is
+            // an empty Backfill advancing only the cursor.
+            return Promise.resolve(JSON.stringify([[], [], after, REAL_ASK_META, []]) as T);
+          }
+          if (cmd === "chat_watch") {
+            // SAFETY: Chat types this call Promise<ChatWatchResult>; the exact values are never
+            // asserted on here, only that chat_watch succeeds so the retry effect can run.
+            return Promise.resolve({ current: 0, generation: 1 } as T);
+          }
+          if (cmd === "orchestrator_status") {
+            // SAFETY: Chat types this call Promise<string>; the pane starts "working" — blocked
+            // arrives later via the orch-status push under test.
+            return Promise.resolve("working" as T);
+          }
+          // SAFETY: unknown commands resolve to null, matching the real seam's unhandled default.
+          return Promise.resolve(null as T);
+        },
+        listen: <T,>(event: string, cb: (ev: { payload: T }) => void): Promise<() => void> => {
+          // SAFETY: the handler is stored under the unknown-payload container (Handler, above)
+          // and fired with exactly what listen delivered — this test only fires "orch-status".
+          const boxed = cb as Handler;
+          handlers.set(event, [...(handlers.get(event) ?? []), boxed]);
+          return Promise.resolve(() => {});
+        },
+        orchestratorOf: async () => ({ project: "p", agent: "orch", surface: "surf1", kind: "orch" }),
+        answerAtPane: async () => {},
+        Composer: () => null,
+        TerminalPane: () => null,
+      };
+
+      act(() => { root.render(<Chat project="p" dock="right" onDock={() => {}} onClose={() => {}} deps={deps} />); });
+      await act(async () => { await Promise.resolve(); await Promise.resolve(); await Promise.resolve(); });
+      await act(async () => {
+        for (const cb of handlers.get("orch-status") ?? []) cb({ payload: JSON.stringify({ project: "p", status: "blocked" }) });
+        await Promise.resolve();
+      });
+
+      const callsSoFar = chatWatchCalls.length;
+      // Past the fast window, then the slow window, then well beyond both.
+      await act(async () => { await vi.advanceTimersByTimeAsync(FAST_RETRY_WINDOW_MS + 6_000 + 5_000); });
+      const callsAfter = chatWatchCalls.length;
+      expect(callsAfter).toBeGreaterThan(callsSoFar);
+
+      // Silence past the retry window: no ask ever appeared, and the retries stopped.
+      const settledCalls = chatWatchCalls.length;
+      await act(async () => { await vi.advanceTimersByTimeAsync(5_000); });
+      expect(chatWatchCalls.length).toBe(settledCalls);
+      expect(host.querySelector('[data-testid="ask-card"]')).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
