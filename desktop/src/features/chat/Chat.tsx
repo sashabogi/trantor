@@ -24,7 +24,7 @@ import { DEFAULT_TERMINAL_DEPS, TerminalPane, type TerminalDeps } from "../works
 import { bannerCountdown, type HandoffCountdown } from "./banner";
 import { Composer, type Provenance } from "./Composer";
 import { MarkdownText } from "./MarkdownText";
-import { suggestionsFromTurns } from "./suggestions";
+import { suggestionsFromAskOptions, suggestionsFromTurns } from "./suggestions";
 import { SuggestionChips } from "./SuggestionChips";
 import {
   clampPanel, fontScale, loadDismissedAt, loadFontStep, loadPanelSize, loadTrayOpen,
@@ -675,12 +675,25 @@ export function Chat({ project, sessionId, dock, onDock, onClose, deps = DEFAULT
     return () => { alive = false; drop(); void un.then(f => f()); };
   }, [history, project, invokeFn, listenFn]);
 
+  // #6094 — the open ask, if any: gated on `blocked` (not merely "no result yet"), because a
+  // result-less AskUserQuestion while the pane is working/idle is a race between the tool_use and
+  // tool_result rows landing, not a question actually waiting on the operator. Computed here (not
+  // just below, by the ask card) because the suggestion chips read it too — see next block.
+  const openAsk: OpenQuestion | null = status === "blocked" ? openQuestion(chat.turns, chat.results) : null;
   // Suggested-reply chips (#5929): asks collected from EVERY orchestrator turn since the
   // operator's last user turn (walk back until a user turn — the real ask is routinely one turn
   // back behind a hook-driven "Nothing to swap."), most recent ask first, capped at three.
   // Purely derived (suggestions.ts — nothing invented, no LLM call). Live only while that ask
   // turn is still the last thing said (answered → gone), composer empty (typing → gone), and
   // Esc or the × dismisses until the next orchestrator turn recomputes the row.
+  //
+  // An open AskUserQuestion (#6094) wins over prose: its tool_use block carries the actual
+  // question as structured options, not a sentence — the text extractor below only reads
+  // `kind === "text"` blocks, so a turn that ends in the ask TOOL rather than typed prose (the
+  // orchestrator's other and increasingly common way to ask "push?"/pick-one) fed it an empty
+  // string and produced zero chips. That was the #5993 regression: not the status gate (already
+  // fixed, #6215/#6201), but this extractor never having read the one place the question text
+  // actually lives on a tool-shaped ask.
   const [composerDraft, setComposerDraft] = useState("");
   const [chipsDismissed, setChipsDismissed] = useState(false);
   const [activeSuggestion, setActiveSuggestion] = useState<string | null>(null);
@@ -694,10 +707,12 @@ export function Chat({ project, sessionId, dock, onDock, onClose, deps = DEFAULT
     }
     return out;
   }, [chat.turns]);
-  const suggestions = useMemo(
-    () => (history || working ? [] : suggestionsFromTurns(orchestratorTexts)),
-    [history, working, orchestratorTexts],
-  );
+  const askQuestion = openAsk?.questions[0] ?? null;
+  const suggestions = useMemo(() => {
+    if (history || working) return [];
+    if (askQuestion) return suggestionsFromAskOptions(askQuestion.options);
+    return suggestionsFromTurns(orchestratorTexts);
+  }, [history, working, askQuestion, orchestratorTexts]);
   const lastSpeechTurn = [...chat.turns].reverse().find(t => t.role === "user" || t.role === "assistant");
   const chipsVisible =
     !history && !!target && !working && suggestions.length > 0 &&
@@ -722,10 +737,6 @@ export function Chat({ project, sessionId, dock, onDock, onClose, deps = DEFAULT
   const ticker = tickerText(status, turnSeenAt != null ? Date.now() - turnSeenAt : null,
     lastToolLabel(chat.turns), chat.meta.context.tokens);
   const liveness = sessionLiveness(status, target);
-  // #6094 — the open ask, if any: gated on `blocked` (not merely "no result yet"), because a
-  // result-less AskUserQuestion while the pane is working/idle is a race between the tool_use and
-  // tool_result rows landing, not a question actually waiting on the operator.
-  const openAsk: OpenQuestion | null = status === "blocked" ? openQuestion(chat.turns, chat.results) : null;
   const answerAsk = useCallback(async (toolId: string, data: string) => {
     if (!target) throw new Error("no live pane");
     await deps.answerAtPane(target, data);
@@ -1034,11 +1045,19 @@ export function Chat({ project, sessionId, dock, onDock, onClose, deps = DEFAULT
       )}
 
       {/* Suggested replies (#5929): one-click answers read from the orchestrator's recent turns.
-          A click sends the text as a NORMAL user turn — receipts intact. */}
+          A prose ask sends the text as a NORMAL user turn — receipts intact. An open AskUserQuestion
+          (#6094) is a blocking terminal picker, not a chat prompt: its chip answers the SAME way the
+          ask card's own option click does, by keystrokes into the pane, not a composer send. */}
       {chipsVisible && (
         <SuggestionChips
           suggestions={suggestions}
-          onPick={text => setActiveSuggestion(text)}
+          onPick={text => {
+            if (openAsk && askQuestion) {
+              const idx = askQuestion.options.findIndex(o => o.label === text);
+              if (idx >= 0) { void answerAsk(openAsk.tool_id, answerKeystrokes(askQuestion, [idx])); return; }
+            }
+            setActiveSuggestion(text);
+          }}
           onDismiss={() => setChipsDismissed(true)}
         />
       )}

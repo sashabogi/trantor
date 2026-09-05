@@ -87,3 +87,12 @@ export function suggestionsFromTurns(turnTextsNewestFirst: string[]): Suggestion
   }
   return chips;
 }
+
+/** An AskUserQuestion tool call carries its own closing question as structured options rather
+ *  than a sentence to parse — the same "nothing invented" rule applies, so its options ARE the
+ *  chips, verbatim, capped at three the same way. Takes the option shape structurally (label +
+ *  description) rather than importing streaming.ts's AskQuestion type, so this stays the pure,
+ *  transcript-agnostic extractor its neighbors are. */
+export function suggestionsFromAskOptions(options: { label: string; description: string }[]): Suggestion[] {
+  return options.slice(0, 3).map(o => ({ text: o.label, tooltip: o.description || undefined }));
+}

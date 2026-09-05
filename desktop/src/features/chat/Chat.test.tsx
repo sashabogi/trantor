@@ -269,6 +269,56 @@ describe("Chat wake chain note (#6201)", () => {
   });
 });
 
+const askBlock = {
+  kind: "tool", text: "Ship it?", tool: "AskUserQuestion", tool_id: "ask1",
+  ask: [{
+    header: "Ship", question: "Ship it?", multiSelect: false,
+    options: [{ label: "Yes", description: "" }, { label: "No", description: "" }],
+  }],
+};
+const askTurn = { role: "assistant", blocks: [askBlock] };
+
+/** A live pane (orchestratorOf resolves a surface) with one blocked AskUserQuestion already in
+ *  the backfilled transcript — the render() every test using it starts from. */
+function makeBlockedDeps() {
+  const answered: Array<{ target: string; data: string }> = [];
+  const deps: ChatDeps = {
+    // The real backend answers `after` — a second fetch past line 0 gets nothing new, never
+    // the same turn again. A mock that ignored `after` doubled the ask (2 tool blocks batched
+    // into one collapsed "2 tools" row) the instant `target` resolved and re-ran the effect.
+    invoke: <T,>(cmd: string, args?: InvokeArgs): Promise<T> => {
+      if (cmd === "orchestrator_chat") {
+        // SAFETY: Chat always calls orchestrator_chat with a plain `{ after: number }` object —
+        // never the array/buffer arms of InvokeArgs — so this narrow read is exactly what
+        // arrives here.
+        const after = (args as { after: number } | undefined)?.after ?? 0;
+        const backfill = after === 0 ? [[askTurn], [], 1, META, []] : [[], [], after, META, []];
+        // SAFETY: Chat types this call Promise<string> and parses the JSON; the envelope is
+        // exactly the Backfill shape this test built above.
+        return Promise.resolve(JSON.stringify(backfill) as T);
+      }
+      if (cmd === "chat_watch") {
+        // SAFETY: Chat types this call Promise<ChatWatchResult> — current=1 matches the one
+        // turn the backfill above already seeded, so the post-mount watch never re-fetches it.
+        return Promise.resolve({ current: 1, generation: 1 } as T);
+      }
+      if (cmd === "orchestrator_status") {
+        // SAFETY: Chat types this call Promise<string> and treats the value as herdr's status
+        // text; "blocked" is the one status that surfaces the open ask under test.
+        return Promise.resolve("blocked" as T);
+      }
+      // SAFETY: unknown commands resolve to null, matching the real seam's unhandled default.
+      return Promise.resolve(null as T);
+    },
+    listen: () => Promise.resolve(() => {}),
+    orchestratorOf: async () => ({ project: "p", agent: "orch", surface: "surf1", kind: "orch" }),
+    answerAtPane: async (target: string, data: string) => { answered.push({ target, data }); },
+    Composer: () => null,
+    TerminalPane: () => null,
+  };
+  return { deps, answered };
+}
+
 // #6094 — the question card: a blocked AskUserQuestion tool_use renders as something the
 // operator can answer from Chat, a click writes the picker's real keystrokes into the live pane
 // (never a claim of its own), and the card only flips to answered once the transcript's own
@@ -287,56 +337,6 @@ describe("AskCard question card (#6094)", () => {
     act(() => root.unmount());
     host.remove();
   });
-
-  const askBlock = {
-    kind: "tool", text: "Ship it?", tool: "AskUserQuestion", tool_id: "ask1",
-    ask: [{
-      header: "Ship", question: "Ship it?", multiSelect: false,
-      options: [{ label: "Yes", description: "" }, { label: "No", description: "" }],
-    }],
-  };
-  const askTurn = { role: "assistant", blocks: [askBlock] };
-
-  /** A live pane (orchestratorOf resolves a surface) with one blocked AskUserQuestion already in
-   *  the backfilled transcript — the render() every test in this block starts from. */
-  function makeBlockedDeps() {
-    const answered: Array<{ target: string; data: string }> = [];
-    const deps: ChatDeps = {
-      // The real backend answers `after` — a second fetch past line 0 gets nothing new, never
-      // the same turn again. A mock that ignored `after` doubled the ask (2 tool blocks batched
-      // into one collapsed "2 tools" row) the instant `target` resolved and re-ran the effect.
-      invoke: <T,>(cmd: string, args?: InvokeArgs): Promise<T> => {
-        if (cmd === "orchestrator_chat") {
-          // SAFETY: Chat always calls orchestrator_chat with a plain `{ after: number }` object —
-          // never the array/buffer arms of InvokeArgs — so this narrow read is exactly what
-          // arrives here.
-          const after = (args as { after: number } | undefined)?.after ?? 0;
-          const backfill = after === 0 ? [[askTurn], [], 1, META, []] : [[], [], after, META, []];
-          // SAFETY: Chat types this call Promise<string> and parses the JSON; the envelope is
-          // exactly the Backfill shape this test built above.
-          return Promise.resolve(JSON.stringify(backfill) as T);
-        }
-        if (cmd === "chat_watch") {
-          // SAFETY: Chat types this call Promise<ChatWatchResult> — current=1 matches the one
-          // turn the backfill above already seeded, so the post-mount watch never re-fetches it.
-          return Promise.resolve({ current: 1, generation: 1 } as T);
-        }
-        if (cmd === "orchestrator_status") {
-          // SAFETY: Chat types this call Promise<string> and treats the value as herdr's status
-          // text; "blocked" is the one status that surfaces the open ask under test.
-          return Promise.resolve("blocked" as T);
-        }
-        // SAFETY: unknown commands resolve to null, matching the real seam's unhandled default.
-        return Promise.resolve(null as T);
-      },
-      listen: () => Promise.resolve(() => {}),
-      orchestratorOf: async () => ({ project: "p", agent: "orch", surface: "surf1", kind: "orch" }),
-      answerAtPane: async (target: string, data: string) => { answered.push({ target, data }); },
-      Composer: () => null,
-      TerminalPane: () => null,
-    };
-    return { deps, answered };
-  }
 
   it("renders the open question as buttons, not a collapsed tool row", async () => {
     const { deps } = makeBlockedDeps();
@@ -368,5 +368,54 @@ describe("AskCard question card (#6094)", () => {
     await flush();
     expect(host.textContent).not.toContain("answered");
     expect(host.textContent).toContain("Yes");
+  });
+});
+
+// #5993 — the regression: an open AskUserQuestion's tool_use block carries the question as
+// structured options, not a sentence, so the prose extractor (which only reads `kind === "text"`
+// blocks) saw an empty string and produced zero chips for the ask shape the orchestrator now
+// asks with most often. This mounts Chat with a REAL blocked-ask transcript (the same fixture
+// #6094's card renders from, above) and expects the suggestion row, not just the card, to show
+// the options — and a chip click to answer the SAME way the card's own button does: keystrokes
+// into the live pane, never a composer send.
+describe("suggestion chips from an open AskUserQuestion (#5993)", () => {
+  let host: HTMLDivElement;
+  let root: Root;
+
+  beforeEach(() => {
+    host = document.createElement("div");
+    document.body.appendChild(host);
+    root = createRoot(host);
+  });
+
+  afterEach(() => {
+    act(() => root.unmount());
+    host.remove();
+  });
+
+  it("shows a chip per option above the composer for a real blocked-ask transcript", async () => {
+    const { deps } = makeBlockedDeps();
+    act(() => { root.render(<Chat project="p" dock="right" onDock={() => {}} onClose={() => {}} deps={deps} />); });
+    await flush();
+    await flush();
+    const chips = host.querySelector('[data-testid="suggestion-chips"]');
+    expect(chips).not.toBeNull();
+    const chipLabels = [...chips!.querySelectorAll("button")].map(b => b.textContent ?? "");
+    expect(chipLabels).toContain("Yes");
+    expect(chipLabels).toContain("No");
+  });
+
+  it("clicking a chip answers via keystrokes into the live pane, not a composer send", async () => {
+    const { deps, answered } = makeBlockedDeps();
+    act(() => { root.render(<Chat project="p" dock="right" onDock={() => {}} onClose={() => {}} deps={deps} />); });
+    await flush();
+    await flush();
+    const chips = host.querySelector('[data-testid="suggestion-chips"]')!;
+    const noChip = [...chips.querySelectorAll("button")].find(b => (b.textContent ?? "") === "No")!;
+    await act(async () => { noChip.dispatchEvent(new MouseEvent("click", { bubbles: true })); });
+    await flush();
+    // "No" is index 1: one Down arrow to reach it, then Enter — the exact bytes the ask card's
+    // own button sends (#6094), proving the chip took the keystroke path, not the composer's.
+    expect(answered).toEqual([{ target: "surf1", data: "\x1b[B\r" }]);
   });
 });
