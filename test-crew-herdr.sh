@@ -78,8 +78,11 @@ esac
 exit 0
 EOF
 chmod +x "$TMP/fakebin/"*
-# a PATH with NO herdr at all (opt-in-without-binary drill)
-mkdir -p "$TMP/fakebin_noherdr"; cp "$TMP/fakebin/osascript" "$TMP/fakebin/tmux" "$TMP/fakebin_noherdr/"
+# a PATH with NO herdr at all (opt-in-without-binary + cmux-default drills). The cmux stub is
+# deliberate: have.cmux also checks /Applications/cmux.app (core.mjs), which exists on a dev Mac
+# but not on the CI runner — without the stub the default dispatch lands on the tmux stub there
+# and the "old cmux default" drill goes red runner-only (run 33992833649).
+mkdir -p "$TMP/fakebin_noherdr"; cp "$TMP/fakebin/osascript" "$TMP/fakebin/tmux" "$TMP/fakebin/cmux" "$TMP/fakebin_noherdr/"
 STATE="$TMP/.agent-bus/crew-windows.txt"
 seed(){ printf '%b' "$1" > "$STATE"; }
 rows(){ [ -f "$STATE" ] && wc -l < "$STATE" | tr -d ' ' || echo 0; }
@@ -106,9 +109,9 @@ OUT2b="$(cd "$TMP/proj" && CREW_MUX=cmux CREW_DRY_RUN=1 HOME="$TMP" PATH="$TMP/f
 ok "CREW_MUX=cmux still forces the old dispatch" 'echo "$OUT2b" | grep -q "seats tiled + sidebar status"'
 OUT2c="$(cd "$TMP/proj" && CREW_DRY_RUN=1 HOME="$TMP" PATH="$TMP/fakebin_noherdr:/usr/bin:/bin" RELAY_PROJECT=testproj RELAY_URL=http://127.0.0.1:1111 "${CREW[@]}" up codex </dev/null 2>&1)"
 # Assert only that we landed on the cmux path without erroring. Which cmux integration answers is
-# not this drill's business: with no cmux binary on PATH the AppleScript fallback runs and prints
-# "seats tiled. Teardown:", while socket-control prints "seats tiled + sidebar status". Pinning the
-# socket-control wording made this red on main regardless of the herdr work.
+# not this drill's business: the stub answers ping, so the socket-control path prints "seats tiled
+# + sidebar status"; a machine without the stub's answer would print the AppleScript wording. Both
+# carry "grouped in cmux" + "seats tiled" — pinning either wording made this red on main.
 ok "no herdr on PATH -> the old cmux default, no error" 'echo "$OUT2c" | grep -q "grouped in cmux" && echo "$OUT2c" | grep -q "seats tiled"'
 
 # 3. the tmux path is untouched by herdr's presence

@@ -58,8 +58,11 @@ describe("prepaid rows", () => {
 
 describe("quota rows", () => {
   it("reads as USED counting up, Orca-style, with the time-left beside it (#5570)", () => {
-    const c = chipFrom(row({ kind: "quota", remainingPct: 89, resetTime: Date.now() + 3600e3 }))!;
-    expect(c.value).toBe("11% used 1h");
+    // 75m30s, not a round hour: untilLong floors to minutes, so a fixture sitting exactly on the
+    // hour rendered "1h" only when fixture and render landed in the same millisecond — "59m"
+    // under CI load (red on the runner, run 33992833649). Mid-bucket keeps ±30s of drift green.
+    const c = chipFrom(row({ kind: "quota", remainingPct: 89, resetTime: Date.now() + 75 * 60000 + 30000 }))!;
+    expect(c.value).toBe("11% used 1h 15m");
     expect(c.barPct).toBe(11);
     expect(c.tooltip).toContain("89% left");
     expect(c.tooltip).toContain("resets in 1h");
