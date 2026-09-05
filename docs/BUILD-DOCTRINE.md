@@ -98,7 +98,19 @@ The monitoring doctrine applies: state, not event; episodes, not timers; never w
 the operator declared; report duration, not repetition; quiet is not dead; every wake costs a
 turn.
 
-## 12. Audit
+## 12. Seats never touch the operator's live surfaces
+
+- A seat never launches, quits, installs or replaces the installed app; never drives the running
+  app's UI; never logs the operator into or out of any provider; never runs `trantor up`, `down`
+  or `open` for any seat, its own included. These are the operator's surfaces and the
+  orchestrator's hands.
+- A seat's real-path evidence ends at: tests green, a build that exits 0 from its own worktree,
+  and a note naming the drill. The orchestrator runs the drill, with the operator when it touches
+  a live account.
+- A seat dispatches no sessions of its own outside its worktree. Work that leaves the worktree
+  does not exist.
+
+## 13. Audit
 
 A project is audited against this document before its next wave: file shape, test tree and CI,
 owners, real-path drills, dependency pins, comment policy. The audit produces a scorecard and a
