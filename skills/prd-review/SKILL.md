@@ -152,7 +152,11 @@ The confirmed TDD is the gate. Do not ask the operator again merely to open its 
 **But confirm the TARGET PROJECT before dispatching, always.** An ambiguous instruction ("build it
 where the answers are stored") is not a project name — it does not license bringing up seats in, or
 sending contracts into, a DIFFERENT project than the one you are reviewing. Name the project and ask
-the operator once if the brief points anywhere but here. Cross-project action is a breach unless the
+the operator once if the brief points anywhere but here. Mechanically: the target project is
+confirmed from the session's badge and cwd before any `relay_send`, `relay_task_add` or `trantor up`
+— never inferred from the instruction. The same discipline guards attention: a session that is
+asking the operator a question never triggers a wake — its messages batch until the answer arrives.
+Cross-project action is a breach unless the
 operator linked the projects (`trantor policy link <a> <b> --reason "<why>"`), and the hub, the
 `trantor up` CLI, and every seat's runner all refuse it mechanically — belt and braces, not a
 substitute for getting the target right in the first place.

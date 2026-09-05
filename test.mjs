@@ -173,6 +173,21 @@ ok("RELAY_SESSION opts a home-dir session back in", rh2.status === 0 && !rh2.std
   } finally { hub.kill(); rmSync(hubDir, { recursive: true, force: true }); }
 }
 
+// #6226: the orchestrator-role doctrine must carry the target-project dispatch rule — an
+// orchestrator once followed an ambiguous instruction ("build it where the answers are stored")
+// into another project and inundated a session that was waiting on its operator. The block is
+// badge-gated, so run the hook WITH TRANTOR_ORCH set and assert the rule text lands in context.
+{
+  const rOrch = spawnSync("node", ["hooks/sessionstart.mjs"], {
+    input: '{"source":"startup"}', encoding: "utf8", timeout: 15000,
+    env: { ...drillEnv(), CLAUDE_PROJECT_DIR: projDir, RELAY_SESSION: proj, RELAY_URL: CLOSED, TRANTOR_ORCH: proj },
+  });
+  let octx = "";
+  try { octx = JSON.parse(rOrch.stdout || "{}")?.hookSpecificOutput?.additionalContext || ""; } catch {}
+  ok("orchestrator-role context carries the dispatch rule (badge+cwd confirmed before relay_send/task_add/trantor up; a session asking the operator a question never triggers a wake)",
+    octx.includes("<trantor-orchestrator-role") && octx.includes("badge and cwd") && octx.includes("never triggers a wake"));
+}
+
 rmSync(hfFile, { force: true });
 // slop-gate must never report clean when oxlint itself could not run (2026-09-03: a worktree
 // without node_modules made npx fail and the empty output read as zero hits).

@@ -410,6 +410,10 @@ try {
   // "your job is to oversee and be a project manager, not a coder"). A session opened by
   // `trantor open` carries TRANTOR_ORCH=<project>; every such session gets the doctrine at
   // boot, so the role survives wakes, handoffs and restarts without anyone restating it.
+  // #6226: the doctrine also carries the target-project dispatch rule (the pr-os incident —
+  // an orchestrator followed "build it where the answers are stored" into another project):
+  // confirm the target from badge + cwd before any dispatch, and never wake a session that
+  // is asking the operator a question.
   try {
     if (project && (process.env.TRANTOR_ORCH || "") === project) {
       additionalContext += `<trantor-orchestrator-role project="${sanitize(project)}">\n` +
@@ -418,6 +422,7 @@ try {
         `- Spend your own tokens on design, contracts, supervision, integration and VERIFICATION — run the seats' tests yourself; bounce hollow dones.\n` +
         `- Write code yourself ONLY for small one-head seam work that needs this session's full context — and say so when you do.\n` +
         `- Check relay_inbox and the board before asking the operator anything a peer may already have answered.\n` +
+        `- Dispatch rule: the target project is confirmed from the session's badge and cwd before any relay_send, relay_task_add or \`trantor up\` — an ambiguous instruction is not a project name; and a session asking the operator a question never triggers a wake (its messages batch until the answer).\n` +
         `</trantor-orchestrator-role>\n`;
       process.stderr.write(`[trantor] injected orchestrator-role doctrine for ${project}\n`);
     }

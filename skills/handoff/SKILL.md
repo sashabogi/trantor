@@ -13,6 +13,12 @@ user-invocable: true
 Write a complete handoff capturing everything a NEW session needs to continue this work without
 re-deriving context, and save it so the next session in this project auto-loads it on start.
 
+The dispatch rule that guards the crew skills applies to a baton too: the target project is
+confirmed from the session's badge and cwd before any dispatch (`relay_send`, `relay_task_add`,
+`trantor up`) — a baton belongs to THIS project, never to a project an ambiguous instruction names.
+And a session that is asking the operator a question never triggers a wake: if the operator has an
+open question from you, resolve it or record it in the handoff before passing the baton.
+
 Hosted in a Workspace pane? Since 0.18.18 `--baton` detects the pane and drives the in-place
 replacement itself (idle gate, graceful end, reopen, kickoff prompt) — no Terminal window opens,
 and the successor recaps unprompted. Nothing extra to do; the notes below about windows apply
