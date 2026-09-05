@@ -38,9 +38,14 @@ export const AUTONOMY_DEFAULTS = {
   baton: "ask",
 } as const;
 
-export function isAutonomyStepSatisfied(resolved: Record<string, unknown>): boolean {
-  return (Object.keys(AUTONOMY_DEFAULTS) as Array<keyof typeof AUTONOMY_DEFAULTS>)
-    .some(key => resolved[key] !== AUTONOMY_DEFAULTS[key]);
+/** The shape of autonomy_get's `resolved` field — every dial AUTONOMY_DEFAULTS knows about. */
+export type AutonomyResolved = { [K in keyof typeof AUTONOMY_DEFAULTS]: string | boolean };
+
+export function isAutonomyStepSatisfied(resolved: AutonomyResolved): boolean {
+  // SAFETY: Object.keys is typed string[] because TS cannot tie it to the object literal's own
+  // key set; AUTONOMY_DEFAULTS and AutonomyResolved are defined with the exact same keys above.
+  const dials = Object.keys(AUTONOMY_DEFAULTS) as (keyof AutonomyResolved)[];
+  return dials.some(key => resolved[key] !== AUTONOMY_DEFAULTS[key]);
 }
 
 export function isProjectStepSatisfied(projectCount: number): boolean {

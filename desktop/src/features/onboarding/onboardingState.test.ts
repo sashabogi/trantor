@@ -49,8 +49,8 @@ describe("isAutonomyStepSatisfied", () => {
     expect(isAutonomyStepSatisfied({ ...AUTONOMY_DEFAULTS, commit: true })).toBe(true);
     expect(isAutonomyStepSatisfied({ ...AUTONOMY_DEFAULTS, harness: "bypass" })).toBe(true);
   });
-  it("ignores fields it does not know about", () => {
-    expect(isAutonomyStepSatisfied({ ...AUTONOMY_DEFAULTS, someFutureDial: true })).toBe(false);
+  it("compares every dial, not just the ones a step's own UI happens to render", () => {
+    expect(isAutonomyStepSatisfied({ ...AUTONOMY_DEFAULTS, baton: "auto" })).toBe(true);
   });
 });
 

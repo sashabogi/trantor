@@ -7,11 +7,13 @@ import { invoke } from "@tauri-apps/api/core";
 import { CheckCircle2, ChevronRight, Sparkles } from "lucide-react";
 import { onboardingApi, type OnboardingApi } from "./onboardingApi";
 import {
+  AUTONOMY_DEFAULTS,
   ONBOARDING_STEPS,
   isAutonomyStepSatisfied,
   isIdentityStepSatisfied,
   isProjectStepSatisfied,
   isProvidersStepSatisfied,
+  type AutonomyResolved,
   type OnboardingStep,
 } from "./onboardingState";
 import { AccountsPane } from "../settings/providers/AccountsPane";
@@ -23,7 +25,7 @@ export type OnboardingFlowDeps = {
   api: OnboardingApi;
   providerApi: ProviderAccountsApi;
   knownProjects: () => Promise<string[]>;
-  autonomyResolved: (project: string | null) => Promise<Record<string, unknown>>;
+  autonomyResolved: (project: string | null) => Promise<AutonomyResolved>;
   devRoot: () => Promise<string>;
 };
 
@@ -31,21 +33,20 @@ export const DEFAULT_ONBOARDING_DEPS: OnboardingFlowDeps = {
   api: onboardingApi,
   providerApi: providerAccountsApi,
   knownProjects: () => invoke<string[]>("known_projects"),
-  autonomyResolved: project =>
-    invoke<string>("autonomy_get", { project }).then(
-      raw => (JSON.parse(raw) as { resolved: Record<string, unknown> }).resolved,
-    ),
+  autonomyResolved: async project => {
+    const raw = await invoke<string>("autonomy_get", { project });
+    const parsed: { resolved: AutonomyResolved } = JSON.parse(raw);
+    return parsed.resolved;
+  },
   devRoot: () => invoke<string>("project_dev_root"),
 };
 
-const STEP_COPY: Record<OnboardingStep, { title: string; sub: string }> = {
+const STEP_COPY = {
   providers: { title: "Connect a provider", sub: "One system login per provider — this is what your sessions and crews will run on." },
   identity: { title: "Identity and hub", sub: "Who this app signs as, and where its projects live." },
   autonomy: { title: "Autonomy", sub: "How much Trantor does without asking, on this machine." },
   project: { title: "Start a project", sub: "Create a repo or open one you already have." },
-};
-
-type Satisfied = Record<OnboardingStep, boolean>;
+} satisfies Record<OnboardingStep, { title: string; sub: string }>;
 
 export function OnboardingFlow({ me, project, onClose, deps = DEFAULT_ONBOARDING_DEPS }: {
   me: string;
@@ -70,19 +71,19 @@ export function OnboardingFlow({ me, project, onClose, deps = DEFAULT_ONBOARDING
       const [providerList, pinned, resolved, projectList] = await Promise.all([
         providerApi.status().catch((): ProviderStatus[] => []),
         api.hasHubPin().catch(() => false),
-        autonomyResolved(null).catch((): Record<string, unknown> => ({})),
+        autonomyResolved(null).catch((): AutonomyResolved => ({ ...AUTONOMY_DEFAULTS })),
         knownProjects().catch((): string[] => []),
       ]);
       if (!alive) return;
       setProviders(providerList);
       setHasHubPin(pinned);
       setProjects(projectList);
-      const satisfied: Satisfied = {
+      const satisfied = {
         providers: isProvidersStepSatisfied(providerList),
         identity: isIdentityStepSatisfied(pinned),
         autonomy: isAutonomyStepSatisfied(resolved),
         project: isProjectStepSatisfied(projectList.length),
-      };
+      } satisfies Record<OnboardingStep, boolean>;
       const steps = ONBOARDING_STEPS.filter(s => !satisfied[s]);
       if (steps.length === 0) {
         await api.close().catch(() => {});

@@ -1,4 +1,4 @@
-import { invoke } from "@tauri-apps/api/core";
+import { invoke, type InvokeArgs } from "@tauri-apps/api/core";
 import type { OnboardingState } from "./onboardingState";
 
 export type OnboardingApi = {
@@ -9,7 +9,7 @@ export type OnboardingApi = {
   reopen: () => Promise<OnboardingState>;
 };
 
-async function invokeState(cmd: string, args?: Record<string, unknown>): Promise<OnboardingState> {
+async function invokeState(cmd: string, args?: InvokeArgs): Promise<OnboardingState> {
   return JSON.parse(await invoke<string>(cmd, args));
 }
 

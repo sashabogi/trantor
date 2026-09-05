@@ -3,7 +3,7 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { OnboardingFlow, type OnboardingFlowDeps } from "./OnboardingFlow";
-import { AUTONOMY_DEFAULTS } from "./onboardingState";
+import { AUTONOMY_DEFAULTS, type AutonomyResolved } from "./onboardingState";
 import type { OnboardingApi } from "./onboardingApi";
 import type { ProviderAccountsApi, ProviderStatus } from "../settings/providers/providerStatus";
 
@@ -36,7 +36,7 @@ const fakeOnboardingApi = (): OnboardingApi => ({
 type Scenario = {
   providers?: ProviderStatus[];
   hasHubPin?: boolean;
-  autonomy?: Record<string, unknown>;
+  autonomy?: AutonomyResolved;
   projects?: string[];
 };
 
