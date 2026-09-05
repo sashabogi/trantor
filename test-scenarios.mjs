@@ -3,7 +3,7 @@
 // deterministic, seconds). These encode the failure modes that broke the 2026-06-09 live run,
 // so they can never silently regress. Run: node test-scenarios.mjs   (part of npm test)
 import { spawn } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -243,7 +243,13 @@ try {
   await api("/project/delete", { project: "zombieproj" });   // re-forget; leave state clean for later drills
 
   console.log("scenario: virgin-user doctor (sandbox HOME)");
-  const doc = spawn("node", [join(ROOT, "bin/doctor.mjs")], { env: { ...drillEnv(), HOME: FAKE_HOME, RELAY_URL: HUB }, stdio: ["ignore", "pipe", "pipe"] });
+  // doctor only reaches "plugin not installed" when the claude CLI itself exists (`has("claude")`
+  // gates the row), so the drill stubs the binary in PATH the way test-crew.sh stubs osascript/tmux —
+  // otherwise this drill silently depends on the operator's Mac and reds on a runner without Claude Code.
+  const DOCBIN = join(FAKE_HOME, "fakebin");
+  mkdirSync(DOCBIN, { recursive: true });
+  writeFileSync(join(DOCBIN, "claude"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+  const doc = spawn("node", [join(ROOT, "bin/doctor.mjs")], { env: { ...drillEnv(), HOME: FAKE_HOME, PATH: `${DOCBIN}:${process.env.PATH}`, RELAY_URL: HUB }, stdio: ["ignore", "pipe", "pipe"] });
   let dout = ""; doc.stdout.on("data", d => (dout += d));
   const dcode = await new Promise(r => doc.on("exit", r));
   ok("doctor exits non-zero on a virgin machine", dcode === 1);

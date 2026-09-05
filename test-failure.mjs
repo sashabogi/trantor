@@ -23,7 +23,7 @@ import { tmpdir } from "node:os";
 import { drillEnv } from "./drill-env.mjs";
 
 let pass = 0, fail = 0;
-const ok = (name, cond) => { console.log(`  ${cond ? "PASS" : "FAIL"}  ${name}`); cond ? pass++ : fail++; };
+const ok = (name, cond, detail = "") => { console.log(`  ${cond ? "PASS" : "FAIL"}  ${name}${!cond && detail ? ` — ${detail}` : ""}`); cond ? pass++ : fail++; };
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 console.log("# trantor crew failure-visibility drill");

@@ -620,6 +620,10 @@ async function runTurn(prompt, isFirst, trigger = "kickoff") {
   // the turn was CUT rather than that the CLI failed on its own. Cleared before every turn.
   const CUTF = join(homedir(), ".agent-bus", `turncut-${AGENT}-${PROJ}`);
   try { unlinkSync(CUTF); } catch {}
+  // Touched by the stderr scrubber as its LAST act (the shell below); node waits for it after
+  // spawnSync before reading ERRF — see the drain note at the spawnSync call.
+  const DRAINF = join(homedir(), ".agent-bus", `turndrain-${AGENT}-${PROJ}`);
+  try { unlinkSync(DRAINF); } catch {}
   try {
     writeFileSync(STAMPF, JSON.stringify({ turn: TURN, startedAt: Date.now(), runner: RUNNER_ID }));
     const wd = spawn(process.execPath, [join(import.meta.dirname, "turn-watchdog.mjs"), STAMPF, ERRF, String(WD_MS), SESSION, PROJ, HUB, TRANSCRIPT_DIR, TURN_DIR],
@@ -652,7 +656,7 @@ ${sweep}
   sweep $job
 ) & boxpid=$!` : "boxpid=";
   const shell = `set -o pipefail
-{ ${inner} ; } 2> >(${SCRUB} --tee2 ${ERRF}) &
+{ ${inner} ; } 2> >(${SCRUB} --tee2 ${ERRF}; : >> "${DRAINF}") &
 job=$!${box}
 wait $job; turn_exit=$?
 [ -n "$boxpid" ] && kill $boxpid 2>/dev/null
@@ -695,12 +699,25 @@ exit $turn_exit`;
   // is the point: the shell kills while the tree is still walkable, node cannot.
   if (TURN_MAX_MS) { spawnOpts.timeout = TURN_MAX_MS + 30000; spawnOpts.killSignal = "SIGKILL"; }
   const r = spawnSync("/bin/bash", ["-c", shell], spawnOpts);
-  killWatchdog();                        // #6206: turn over — the watchdog dies NOW, it does not sleep on
-  try { unlinkSync(STAMPF); } catch {}   // disarm any survivor: the stamp is gone
   // The shell's box leaves the marker; the backstop leaves an ETIMEDOUT. Either way the turn was
   // cut, not merely failed.
   const boxed = existsSync(CUTF);
   const cut = !!TURN_MAX_MS && (boxed || r.error?.code === "ETIMEDOUT");
+  // DRAIN before classifying — but never on a CUT turn: the box's sweep killed the scrubber
+  // mid-flight, so its marker can never appear and waiting is pure stall. bash 3.2 (macOS's
+  // /bin/bash) `wait` does NOT wait for process substitutions — verified 2026-09-05 — so when
+  // spawnSync returns on a LIVE turn, the stderr scrubber can still be draining, and an auth
+  // line still in the pipe reads as an EMPTY ERRF: the turn is then mislabelled "empty-output",
+  // which breaks the seat-down contract (wrong DOWN label, retry ladder instead of a park) and
+  // cost run 33940247163 three CI-only drill-6 failures. The scrubber touches DRAINF as its
+  // last act; wait for it, bounded.
+  if (!cut) {
+    const drainStart = Date.now();
+    while (!existsSync(DRAINF) && Date.now() - drainStart < 3000) await new Promise(s => setTimeout(s, 50));
+  }
+  try { unlinkSync(DRAINF); } catch {}
+  killWatchdog();                        // #6206: turn over — the watchdog dies NOW, it does not sleep on
+  try { unlinkSync(STAMPF); } catch {}   // disarm any survivor: the stamp is gone
   if (cut) {
     // Belt and braces after the shell's descendant sweep: anything still sharing the turn's group.
     if (r.pid) { try { process.kill(-r.pid, "SIGKILL"); } catch {} }
