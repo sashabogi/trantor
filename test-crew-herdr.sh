@@ -395,6 +395,34 @@ OUT22b="$(cd "$TMP/neutral" && HOME="$TMP" TRANTOR_DEV_ROOT="$TMP" TRANTOR_ORCH=
 ok "open A from a pane badged B is a hard refusal" '[ "$rc22b" = "1" ] && echo "$OUT22b" | grep -q "badged for .project-b., not .project-a."'
 ok "the badge refusal names the safe next action" 'echo "$OUT22b" | grep -q "target project.s shell"'
 
+# 23. seat up uses a host inside the PROJECT workspace, even when every tracked seat and the
+#     UI-focused pane live in another workspace. Each replacement inherits the project cwd, and
+#     the foreign panes are closed rather than reused as split hosts (#6481).
+echo ""
+echo "Seat panes stay inside their project's workspace:"
+echo 0 > "$TMP/herdr.n"; rm -f "$TMP/herdr.log" "$TMP/herdr.agents"
+seed "testproj\therdrws\t__ws__\tWS-PROJECT\ntestproj\therdr\tcodex\tP-FOREIGN-1\ntestproj\therdr\tglm\tP-FOREIGN-2\ntestproj\therdr\tdeepseek\tP-FOREIGN-3\ntestproj\therdr\tkimi\tP-FOREIGN-4\n"
+PANES23='{"pane_id":"P-FOCUS","workspace_id":"WS-OTHER","cwd":"/elsewhere","focused":true},{"pane_id":"P-HOST","workspace_id":"WS-PROJECT","cwd":"'"$TMP/proj"'"}'
+HERDR_LIVE_WS='{"workspace_id":"WS-PROJECT","label":"trantor:testproj"}' HERDR_LIVE_PANES="$PANES23" \
+HOME="$TMP" PATH="$TMP/fakebin:$PATH" SPAWN_STATE="$STATE" SPAWN_DIR="$TMP/proj" \
+"${CREW[0]}" --input-type=module -e '
+  import { pathToFileURL } from "node:url";
+  const { spawnHerdr } = await import(pathToFileURL(process.argv[1]));
+  const ctx = {
+    dry: false,
+    project: "testproj",
+    dir: process.env.SPAWN_DIR,
+    statePath: process.env.SPAWN_STATE,
+    have: { herdr: true },
+    env: process.env,
+  };
+  spawnHerdr(ctx, ["codex", "glm", "deepseek", "kimi"], agent => ({ agent, model: "" }), () => {});
+' "$ROOT/bin/crew/herdr.mjs" >/dev/null 2>&1
+ok "focused-elsewhere drill creates all four replacement seats" '[ "$(grep -c "herdr pane split" "$TMP/herdr.log")" = "4" ]'
+ok "the first seat splits from a pane in the project workspace" 'grep -q "herdr pane split P-HOST --direction right --no-focus --cwd $TMP/proj" "$TMP/herdr.log"'
+ok "later seats split from the new project-local panes, never a foreign pane" 'grep -q "herdr pane split P-1 --direction right --no-focus --cwd $TMP/proj" "$TMP/herdr.log" && grep -q "herdr pane split P-2 --direction right --no-focus --cwd $TMP/proj" "$TMP/herdr.log" && grep -q "herdr pane split P-3 --direction right --no-focus --cwd $TMP/proj" "$TMP/herdr.log" && ! grep -qE "herdr pane split (P-FOCUS|P-FOREIGN)" "$TMP/herdr.log"'
+ok "every foreign tracked seat is replaced and its state row removed" '[ "$(grep -c "herdr pane close P-FOREIGN" "$TMP/herdr.log")" = "4" ] && ! grep -q "P-FOREIGN" "$STATE"'
+
 echo ""
 if [ "$FAIL" = "0" ]; then echo "ALL PASS ($PASS)"; else echo "$FAIL FAILED"; fi
 exit $([ "$FAIL" = "0" ] && echo 0 || echo 1)

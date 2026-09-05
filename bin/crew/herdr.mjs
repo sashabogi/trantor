@@ -100,17 +100,16 @@ function prepareWorkspace(ctx, prune) {
   return reuse;
 }
 
-function replacementPane(ctx, workspace, spec, previousPane, resolve) {
+function replacementPane(ctx, workspace, spec, hostPane, resolve) {
   const seat = resolve(spec);
   if (!seat) return null;
   const old = readRows(ctx).filter(row => row.project === ctx.project && row.kind === "herdr" && row.agent === seat.agent).at(-1)?.handle || "";
-  const target = old || previousPane;
   let pane;
   if (ctx.dry) {
     console.log(`[dry] herdr: reuse workspace ${workspace} — pane split for ${seat.agent}${old ? ` (replacing ${old})` : ""}`);
     pane = `%DRYT${spec.index}`;
   } else {
-    pane = splitPane(ctx, target, "right");
+    pane = splitPane(ctx, hostPane, "right", ctx.dir);
     runSeat(ctx, pane, seat.agent, runnerCommand(ctx, seat.agent, seat.model));
   }
   if (old) {
@@ -123,12 +122,17 @@ function replacementPane(ctx, workspace, spec, previousPane, resolve) {
 export function spawnHerdr(ctx, specs, resolve, prune) {
   const reuse = prepareWorkspace(ctx, prune);
   let workspace = reuse;
+  let hostPane = "";
+  if (reuse) {
+    hostPane = ctx.dry ? `%DRYHOST(${reuse})` : workspacePane(ctx, reuse, ctx.dir);
+    if (!hostPane) throw new Error(`trantor up: workspace ${reuse} has no live pane to host crew seats`);
+  }
   const panes = [];
   const columns = gridColumns(specs.length);
   for (let index = 0; index < specs.length; index += 1) {
     const spec = { value: specs[index], index };
     let seat;
-    if (reuse) seat = replacementPane(ctx, workspace, spec, panes[index - 1] || "", value => resolve(value.value));
+    if (reuse) seat = replacementPane(ctx, workspace, spec, panes.at(-1) || hostPane, value => resolve(value.value));
     else seat = freshPane(ctx, workspace, spec, panes, columns, resolve);
     if (!seat) continue;
     workspace = seat.workspace || workspace;
@@ -159,7 +163,7 @@ function freshPane(ctx, workspace, spec, panes, columns, resolve) {
     if (ctx.dry) {
       console.log(`[dry] herdr: pane split ${target || "<focused>"} --direction ${direction} + run '${command}'`);
       pane = `%DRYT${spec.index}`;
-    } else pane = splitPane(ctx, target, direction);
+    } else pane = splitPane(ctx, target, direction, ctx.dir);
   }
   runSeat(ctx, pane, seat.agent, command);
   return { ...seat, pane, workspace };
