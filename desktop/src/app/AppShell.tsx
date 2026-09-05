@@ -23,6 +23,9 @@ import { orchRestorables } from "../features/workspace/herdr";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { GenesisSheet } from "../features/genesis/GenesisSheet";
+import { OnboardingFlow } from "../features/onboarding/OnboardingFlow";
+import { onboardingApi } from "../features/onboarding/onboardingApi";
+import { shouldShowOnboarding, type OnboardingState } from "../features/onboarding/onboardingState";
 import { PLAIN_WAKE_KICKOFF } from "../features/genesis/genesis";
 import { classifyWakeOutcome, wakeOutcomeIsTransient, wakeRowLine, WAKE_OUTCOME_MS, type WakeRowState } from "../features/genesis/wakeRow";
 import { applyWakeProgress, wakeInProgress, wakeProgressRowState, WAKE_PROGRESS_EVENT, type WakeProgress } from "../features/genesis/wakeProgress";
@@ -105,6 +108,11 @@ export function AppShell() {
   const [filePath, setFilePath] = useState<string | null>(null);
   const [fileSeat, setFileSeat] = useState<string | null>(null);
   const [genesisRoot, setGenesisRoot] = useState<string | null>(null);
+
+  // The first-run wizard. Read once at launch — `closedAt: null` is the only thing that shows
+  // it, so a state left `null` (still loading) must never be mistaken for "show it".
+  const [onboarding, setOnboarding] = useState<OnboardingState | null>(null);
+  useEffect(() => { onboardingApi.get().then(setOnboarding).catch(() => {}); }, []);
 
   // Pinned projects PLUS whatever lives on the machine-local hub. A brand-new project has no
   // routing pin yet — it falls back to the local hub BY DESIGN (TDD §12.1's default), and a
@@ -642,7 +650,8 @@ export function AppShell() {
           : pane.kind === "agents" ? <Agents client={client} project={active} />
           : pane.kind === "learning" ? <Learning client={client} />
           : pane.kind === "overseer" ? <Overseer client={client} />
-          : pane.kind === "settings" ? <Settings me={ME} update={update} projects={[...activeProjects, ...restProjects]} project={active} />
+          : pane.kind === "settings" ? <Settings me={ME} update={update} projects={[...activeProjects, ...restProjects]} project={active}
+              onReopenOnboarding={() => onboardingApi.get().then(setOnboarding)} />
           : pane.lens === "workspace" ? <Workspace client={client} project={active} lens={pane.lens} onLens={l => setPane({ kind: "project", lens: l })} />
           : pane.lens === "board" ? <Board client={client} project={active} lens={pane.lens} onLens={l => setPane({ kind: "project", lens: l })} focusCard={focusCard} onFocusConsumed={() => setFocusCard(null)} />
           : pane.lens === "bus" ? <Conversation client={client} project={active} me={ME} lens={pane.lens} onLens={l => setPane({ kind: "project", lens: l })} />
@@ -692,6 +701,9 @@ export function AppShell() {
           setGenesisRoot(null);
         }}
       />
+    )}
+    {shouldShowOnboarding(onboarding) && (
+      <OnboardingFlow me={ME} project={active || projects[0] || ""} onClose={() => setOnboarding(cur => cur && { ...cur, closedAt: Date.now() })} />
     )}
     {/* The fleet status bar: the app's footer, to the Orca standard (#5570) — full window
         width, under everything including the sidebar. Renders null until the local hub has a

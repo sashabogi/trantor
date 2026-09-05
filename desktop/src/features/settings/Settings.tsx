@@ -15,6 +15,7 @@ import type { AppUpdate, EditorPref } from "../../shared/api/client";
 import { Avatar } from "../../shared/Avatar";
 import { notificationsEnabled, setNotificationsEnabled } from "../../shared/notify";
 import { AccountsPane } from "./providers/AccountsPane";
+import { onboardingApi } from "../onboarding/onboardingApi";
 
 function Toggle({ on, onChange }: { on: boolean; onChange: (v: boolean) => void }) {
   return (
@@ -31,9 +32,14 @@ type HubRow = { url: string; projects: string[]; ok: boolean | null };
 
 import { Autonomy as AutonomyLocal } from "./Autonomy";
 
-export function Settings({ me, update: updateFromShell, projects = [], project = "" }: {
-  me: string; update?: AppUpdate | null; projects?: string[]; project?: string;
+export function Settings({ me, update: updateFromShell, projects = [], project = "", onReopenOnboarding }: {
+  me: string; update?: AppUpdate | null; projects?: string[]; project?: string; onReopenOnboarding?: () => void;
 }) {
+  const [reopening, setReopening] = useState(false);
+  const reopenOnboarding = async () => {
+    setReopening(true);
+    try { await onboardingApi.reopen(); onReopenOnboarding?.(); } finally { setReopening(false); }
+  };
   const [pane, setPane] = useState<"general" | "accounts">("general");
   const [hubs, setHubs] = useState<HubRow[]>([]);
   const [notify, setNotify] = useState(notificationsEnabled());
@@ -257,6 +263,18 @@ export function Settings({ me, update: updateFromShell, projects = [], project =
                 {checking ? "Checking…" : "Check now"}
               </button>
             )}
+          </div>
+          <div className="tr-card mt-3 flex items-center gap-4 p-4">
+            <div className="min-w-0 flex-1">
+              <div className="text-[13px] font-medium">Onboarding</div>
+              <div className="mt-0.5 text-[12px] text-[var(--color-tr-muted)]">
+                Walk through providers, identity, autonomy and starting a project again.
+              </div>
+            </div>
+            <button onClick={() => void reopenOnboarding()} disabled={reopening}
+              className="tr-input shrink-0 disabled:opacity-60">
+              {reopening ? "Opening…" : "Show onboarding again"}
+            </button>
           </div>
         </section>
         </>}
