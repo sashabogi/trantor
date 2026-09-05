@@ -4,7 +4,7 @@
 // session uses) against that project's live orchestrator pane. It does not click anything and
 // does not touch the visible window: the host is off-screen, and it never calls `trantor up`.
 //
-// Two things get proved, both narrated into app-trace.log via app_log (never asserted only in
+// Three things get proved, all narrated into app-trace.log via app_log (never asserted only in
 // process memory the operator can't see):
 //   1. whatever the live transcript's CURRENT ask state is, the real backfill/chat_watch path
 //      (Chat's own mount effects — no drill-side shortcut) renders it as a card if one is open;
@@ -12,12 +12,17 @@
 //      listener parses — proven by Chat.test.tsx's mocks, which fire this event this exact way)
 //      reaches Chat's listener and either surfaces a card or fires the #6094 blocked-no-ask
 //      trace line — so THIS drill's own app-trace output proves whether that trace line is live
-//      in the built app, not just in vitest.
+//      in the built app, not just in vitest;
+//   3. if no ask was open when blocked was pushed, Chat's own retry (FAST_RETRY_MS/WINDOW,
+//      SLOW_RETRY_MS/WINDOW — 0.3.145's fix: herdr's blocked frame can land a moment before the
+//      CLI finishes writing the tool_use row) keeps re-syncing on its own for
+//      FAST_RETRY_WINDOW_MS + SLOW_RETRY_WINDOW_MS — the drill waits past that whole span before
+//      concluding nothing arrived, so a real ask written moments after blocked still gets caught.
 import { createRoot } from "react-dom/client";
 import { invoke } from "@tauri-apps/api/core";
 import { emit } from "@tauri-apps/api/event";
 import { createElement } from "react";
-import { Chat } from "./Chat";
+import { Chat, FAST_RETRY_WINDOW_MS, SLOW_RETRY_WINDOW_MS } from "./Chat";
 
 function log(line: string): void {
   invoke("app_log", { line: `ask-drill ${line}` }).catch(() => {});
@@ -86,11 +91,15 @@ export async function runAskDrill(project: string): Promise<void> {
     log(`emitting synthetic orch-status: ${payload}`);
     await emit("orch-status", payload);
 
-    const reacted = await waitFor(() => host.querySelectorAll(ASK_CARD_SELECTOR).length > beforeSynthetic, 5_000);
-    log(`after synthetic blocked push: card-count-increased=${reacted} ${snapshot(host)}`);
+    // Wait past Chat's OWN retry span (#6094, 0.3.145): a real ask can be written a moment after
+    // herdr reports blocked, and Chat keeps re-syncing on its own for this whole window before
+    // giving up — cutting the wait shorter than this would call a retry-in-progress a failure.
+    const retryWindowMs = FAST_RETRY_WINDOW_MS + SLOW_RETRY_WINDOW_MS + 1_000;
+    const reacted = await waitFor(() => host.querySelectorAll(ASK_CARD_SELECTOR).length > beforeSynthetic, retryWindowMs);
+    log(`after synthetic blocked push (waited up to ${retryWindowMs}ms for the retry to run its course): card-count-increased=${reacted} ${snapshot(host)}`);
 
     if (!reacted && beforeSynthetic === 0) {
-      log("no ask card appeared after the synthetic blocked push — if the live transcript truly has no open ask, this is CORRECT and the #6094 blocked-no-ask trace line above (search for 'chat blocked with no open ask') should have fired; its absence means Chat never reacted to the push at all");
+      log("no ask card appeared after the synthetic blocked push, even past the retry window — if the live transcript truly has no open ask, this is CORRECT and the #6094 blocked-no-ask trace line above (search for 'chat blocked with no open ask') should have fired, followed by 'chat blocked-no-ask retry N' lines; their absence means Chat never reacted to the push at all");
     }
     log("done");
   } catch (e) {
