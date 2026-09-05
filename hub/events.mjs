@@ -1,3 +1,4 @@
+/* oxlint-disable anti-slop/no-runtime-typeof -- SAFETY: Event payloads preserve the established card wire contract, including numeric cost fields from legacy durable rows. */
 import { publicView } from "../lib/identity.mjs";
 
 export function createEventRuntime({ state, markDirty, AUTH_MODE, ONLINE_MS, canon }) {

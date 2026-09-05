@@ -2,7 +2,7 @@
 export async function routeCards({ req, res, q, P, auth, ctx }) {
   const {
     state, body, json, crossProjectGuard, touch, canon, filterReadable,
-    appendEvent, appendCardEvent, EVENT_CAP, now, markDirty, stripNulText,
+    appendEvent, appendCardEvent, now, markDirty, stripNulText,
     appendTaskLog, appendTaskNote, cleanChecklist, linkCommitToFocus,
     derivePhases, PROPOSAL_CAP, propFp, healthOf, REAP_GRACE_MS, subFp,
     prunePeers, canRead, HUB_VERSION, cmpSemver, isCardEvent, fmtAge, hubSend,
