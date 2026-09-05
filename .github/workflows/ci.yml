@@ -1,0 +1,60 @@
+# BUILD-DOCTRINE.md rule 2 ("red blocks merge"): the whole suite runs on every push and PR.
+# The failure suite sat red on main for three days (#6446) because nothing ran it on push.
+name: ci
+
+on:
+  push:
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  ci:
+    runs-on: macos-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      # Pin the operator's pnpm (11.18.0): the desktop lockfile is written by it, and a
+      # different major can drift the lockfile under --frozen-lockfile.
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.18.0
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: desktop/src-tauri
+
+      - name: Install root deps
+        run: npm install --no-audit --no-fund
+
+      - name: Install desktop deps (pnpm, frozen)
+        run: pnpm -C desktop install --frozen-lockfile
+
+      # Badge-free env: the drills must never see a runner identity (drill-env.mjs's
+      # DRILL_IDENTITY_VARS), so scrub before the suite — unset and run in ONE shell,
+      # because each step gets a fresh one.
+      - name: Whole suite (npm test)
+        run: |
+          unset HERDR_ENV HERDR_PANE_ID TRANTOR_ORCH TRANTOR_SEAT RELAY_PROJECT TRANTOR_PROJECT RELAY_SESSION RELAY_AGENT
+          npm test
+
+      # tsc + vite build: typecheck gate AND the dist/ that tauri's generate_context!
+      # embeds at compile time — cargo test cannot build without it.
+      - name: Desktop typecheck + build
+        run: pnpm -C desktop run build
+
+      - name: Cargo test (desktop/src-tauri)
+        run: cargo test --locked --manifest-path desktop/src-tauri/Cargo.toml

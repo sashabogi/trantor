@@ -1,0 +1,29 @@
+#!/bin/bash
+# #6446 (BUILD-DOCTRINE.md rule 2, "red blocks merge"): branch protection gates PR merges, but
+# the orchestrator's merges are LOCAL pushes to main, which a required check cannot gate. This
+# pre-push hook runs the fast subset (slop-gate + test.mjs) and refuses the push on red. The full
+# suite still runs in CI on every push. Deliberate bypass: git push --no-verify.
+set -u
+ROOT="$(git rev-parse --show-toplevel)" || exit 1
+cd "$ROOT" || exit 1
+
+if [ ! -d node_modules ]; then
+  echo "trantor pre-push: no node_modules here — run npm install in $(pwd), or push with --no-verify." >&2
+  exit 1
+fi
+
+while read -r _ local_ref _ _; do
+  # A ref deletion pushes nothing; nothing to test.
+  [ "$local_ref" = "0000000000000000000000000000000000000000" ] && continue
+
+  echo "trantor pre-push: fast subset on $(git rev-parse --short HEAD)"
+  if ! node bin/slop-gate.mjs; then
+    echo "trantor pre-push: slop-gate RED — push refused. Fix it, or bypass with --no-verify (CI still gates the PR)." >&2
+    exit 1
+  fi
+  if ! node test.mjs; then
+    echo "trantor pre-push: test.mjs RED — push refused. Fix it, or bypass with --no-verify (CI still gates the PR)." >&2
+    exit 1
+  fi
+done
+exit 0
