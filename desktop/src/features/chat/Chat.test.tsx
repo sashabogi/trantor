@@ -763,3 +763,110 @@ describe("concurrent backfill data loss (#6094 root cause, 2026-09-05)", () => {
     expect(host.textContent).toContain("On 0.3.142, did the card click");
   });
 });
+
+// #6094 REAL-PATH REGRESSION (2026-09-05, ask drill on 0.3.144): the ask drill proved the card
+// path works once the surface is resolved and a blocked push arrives afterward — so the deeper
+// bug is in the mount/unmount plumbing itself. In every real failure, app-trace showed: chat_watch
+// generation 1, chat_unwatch, chat_watch generation 2 (an IMMEDIATE re-mount — target resolves
+// from null to a live pane, #5495 — normal and expected), then herdr's blocked emit, then
+// NOTHING from Chat. Root cause: the effect's cleanup used to read `watchGenerationRef.current`
+// SYNCHRONOUSLY at cleanup time. If `target` resolves fast enough that generation 1's OWN
+// chat_watch call has not resolved YET when its cleanup runs, that ref is still undefined, so
+// cleanup sent chat_unwatch the generation-LESS fallback — which the Rust side (chat_watchers_unwatch,
+// lib.rs) treats as "remove unconditionally, whatever is there", not "remove only if it's still
+// generation 1". If generation 2's chat_watch had by then already installed its OWN watcher under
+// the same key, this stale unconditional unwatch kills generation 2's Rust-side watcher too —
+// leaving generation 2's "orch-status" listener registered but with no thread left to ever push
+// it a frame: exactly the silence app-trace showed.
+describe("chat_unwatch never sends a stale generation-less unwatch (#6094 real-path, 2026-09-05)", () => {
+  let host: HTMLDivElement;
+  let root: Root;
+
+  beforeEach(() => {
+    host = document.createElement("div");
+    document.body.appendChild(host);
+    root = createRoot(host);
+  });
+
+  afterEach(() => {
+    act(() => root.unmount());
+    host.remove();
+  });
+
+  it("waits for generation 1's own chat_watch answer before unwatching, instead of guessing null", async () => {
+    type Invoked = { cmd: string; args: unknown };
+    const invokes: Invoked[] = [];
+    const watchResolvers: Array<(r: { current: number; generation: number }) => void> = [];
+    let resolvePane: (() => void) | null = null;
+
+    const deps: ChatDeps = {
+      invoke: <T,>(cmd: string, args?: InvokeArgs): Promise<T> => {
+        invokes.push({ cmd, args });
+        if (cmd === "chat_watch") {
+          // SAFETY: Chat types this call Promise<ChatWatchResult>; the test controls resolution
+          // order explicitly below via watchResolvers, typed to exactly that shape.
+          return new Promise<{ current: number; generation: number }>(resolve => {
+            watchResolvers.push(resolve);
+          }) as Promise<T>;
+        }
+        if (cmd === "chat_unwatch") {
+          // SAFETY: Chat types chat_unwatch's return as void.
+          return Promise.resolve(undefined as T);
+        }
+        if (cmd === "orchestrator_chat") {
+          // SAFETY: Chat types this call Promise<string> and parses the JSON; an empty Backfill
+          // keeps this test focused on the watch/unwatch plumbing, not the transcript contents.
+          return Promise.resolve(JSON.stringify([[], [], 0, REAL_ASK_META, []]) as T);
+        }
+        if (cmd === "orchestrator_status") {
+          // SAFETY: Chat types this call Promise<string>; the exact status is irrelevant here.
+          return Promise.resolve("working" as T);
+        }
+        // SAFETY: unknown commands resolve to null, matching the real seam's unhandled default.
+        return Promise.resolve(null as T);
+      },
+      listen: () => Promise.resolve(() => {}),
+      // Resolves on the SECOND call — mirrors #5495's "keep looking" poll finding the pane after
+      // the mount effect already ran once with target=null, forcing the chat_watch effect to
+      // tear down and re-run while generation 1's chat_watch is still unresolved.
+      orchestratorOf: async () => {
+        if (!resolvePane) {
+          await new Promise<void>(r => { resolvePane = r; });
+        }
+        return { project: "p", agent: "orch", surface: "surf1", kind: "orch" };
+      },
+      answerAtPane: async () => {},
+      Composer: () => null,
+      TerminalPane: () => null,
+    };
+
+    act(() => { root.render(<Chat project="p" dock="right" onDock={() => {}} onClose={() => {}} deps={deps} />); });
+    await flush();
+    // Force the remount: target flips null -> "surf1", tearing generation 1's effect down before
+    // its own chat_watch has resolved.
+    act(() => { resolvePane?.(); });
+    await flush();
+    await flush();
+
+    expect(watchResolvers.length).toBe(2);
+    // Cleanup must NOT have fired chat_unwatch yet — generation 1's own answer is still pending,
+    // so there is nothing honest to send.
+    expect(invokes.filter(i => i.cmd === "chat_unwatch")).toEqual([]);
+
+    // Generation 2 (the live one) answers first, exactly as app-trace showed in the real failure.
+    act(() => { watchResolvers[1]({ current: 0, generation: 2 }); });
+    await flush();
+    expect(invokes.filter(i => i.cmd === "chat_unwatch")).toEqual([]);
+
+    // NOW generation 1 answers. Cleanup was waiting on exactly this.
+    act(() => { watchResolvers[0]({ current: 0, generation: 1 }); });
+    await flush();
+    await flush();
+
+    const unwatches = invokes.filter(i => i.cmd === "chat_unwatch");
+    expect(unwatches).toHaveLength(1);
+    // The bug: this used to be `{ generation: null }` — a fallback that removes whatever watcher
+    // is CURRENTLY live for the key, which by now is generation 2's, not generation 1's own.
+    expect(unwatches[0].args).toMatchObject({ generation: 1 });
+  });
+});
