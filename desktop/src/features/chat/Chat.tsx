@@ -505,6 +505,21 @@ export function Chat({ project, sessionId, dock, onDock, onClose, deps = DEFAULT
           syncRef.current();
           return;
         }
+        // #6094 — a second sync() can dispatch before this one resolves: the chat_watch effect
+        // tears down and re-runs the instant `target` moves from null to a live pane (#5495), and
+        // its own unconditional sync() at the top races whatever this call already had in
+        // flight, both captured with the SAME stale `after`. Landing this call while the OTHER
+        // one already moved the cursor forward is not automatically "subsumed" — applyBackfill's
+        // own mismatch guard only bumps the cursor and drops `fresh` untouched, which is correct
+        // when this call saw nothing past what already landed, but silently discards live rows
+        // (an AskUserQuestion, 2026-09-05 — status went blocked, nothing rendered, ever, because
+        // the cursor jumped past the ask and no future sync() ever asks for it again) when this
+        // call actually reached further than the other one did. Re-sync from wherever the cursor
+        // NOW sits instead of guessing how to merge two overlapping reads.
+        if (seenRef.current !== after) {
+          if (b[2] > seenRef.current) syncRef.current();
+          return;
+        }
         seenRef.current = b[2];
         setChat(s => applyBackfill(s, b, after));
         setError(null);
@@ -680,6 +695,21 @@ export function Chat({ project, sessionId, dock, onDock, onClose, deps = DEFAULT
   // tool_result rows landing, not a question actually waiting on the operator. Computed here (not
   // just below, by the ask card) because the suggestion chips read it too — see next block.
   const openAsk: OpenQuestion | null = status === "blocked" ? openQuestion(chat.turns, chat.results) : null;
+  // #6094 — herdr can report blocked while the transcript names no open ask: a genuinely
+  // different approval prompt, or — the 2026-09-05 regression — an AskUserQuestion whose rows
+  // never made it into `chat.turns` (a stale concurrent backfill silently dropped them, see
+  // sync() above). Traced once per transition into this state, never every render, so app-trace
+  // names the exact moment instead of the click-only tracing herdr.ts already has.
+  const blockedNoAskRef = useRef(false);
+  useEffect(() => {
+    const blockedNoAsk = status === "blocked" && openAsk === null;
+    if (blockedNoAsk && !blockedNoAskRef.current) {
+      invokeFn("app_log", {
+        line: `chat blocked with no open ask: project=${project} turns=${chat.turns.length} seen=${seenRef.current}`,
+      }).catch(() => {});
+    }
+    blockedNoAskRef.current = blockedNoAsk;
+  }, [status, openAsk, project, chat.turns.length, invokeFn]);
   // Suggested-reply chips (#5929): asks collected from EVERY orchestrator turn since the
   // operator's last user turn (walk back until a user turn — the real ask is routinely one turn
   // back behind a hook-driven "Nothing to swap."), most recent ask first, capped at three.

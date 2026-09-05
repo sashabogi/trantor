@@ -419,3 +419,347 @@ describe("suggestion chips from an open AskUserQuestion (#5993)", () => {
     expect(answered).toEqual([{ target: "surf1", data: "\x1b[B\r" }]);
   });
 });
+
+// #6094 REGRESSION (2026-09-05, 0.3.142): a real AskUserQuestion asked twice by the live
+// orchestrator rendered NOTHING in Chat — no card, no chips — though status correctly went
+// "blocked" (app-trace: "status: frame parsed=Some(\"blocked\")" for both asks). The hand-written
+// stub above (`askTurn`, a single turn holding exactly one block) never exercised the shape a
+// REAL transcript actually produces: Claude Code writes one JSONL row per content block (a
+// `thinking` row, then a separate `tool_use` row, sharing one message id), and decode_chat_lines
+// (lib.rs) turns each row into its OWN Turn — so a real backfill arrives as several consecutive
+// single-block assistant turns, not one turn with several blocks. This fixture is exactly that
+// shape: decoded (via the app's own decode_chat_lines_with_context_window) from the operator's
+// own transcript lines 7280-7313 of
+// ~/.claude/projects/-Users-sashabogojevic-development-trantor/2e1e3b96-ccf2-43a7-9ec5-4e5fe3f86acf.jsonl
+// (an earlier Bash call, a thinking block, then the AskUserQuestion tool_use — the drill the
+// operator ran to test 0.3.142 itself), truncated before the tool_result so the ask is still open.
+const REAL_ASK_TURNS = [
+  { role: "user", blocks: [{ kind: "text", text: "check", tool: null, tool_id: null }] },
+  {
+    role: "assistant",
+    blocks: [{
+      kind: "tool",
+      text: "cd /Users/sashabogojevic/development/trantor; date '+now %H:%M' ...",
+      tool: "Bash",
+      tool_id: "toolu_01DuwZ2wGQ6Lx65R5PfKVVZw",
+    }],
+  },
+  {
+    role: "assistant",
+    blocks: [{
+      kind: "thinking",
+      text: "Version 0.3.142 is confirmed running. This test covers two behaviors at once: the question should appear as a card in Chat, and since it's the end of my turn, chips should also show above the composer — feel free to click either.",
+      tool: null,
+      tool_id: null,
+    }],
+  },
+  {
+    role: "assistant",
+    blocks: [{
+      kind: "tool",
+      text: "On 0.3.142, did the card click (or a chip) answer this question?",
+      tool: "AskUserQuestion",
+      tool_id: "toolu_015iF3HWfSUDymVCyin3jdjG",
+      ask: [{
+        header: "Drill",
+        question: "On 0.3.142, did the card click (or a chip) answer this question?",
+        multiSelect: false,
+        options: [
+          { label: "Yes, it answered", description: "Clicking an option on the card or a chip moved the terminal menu and answered" },
+          { label: "No, nothing happened", description: "The card or chips showed but clicking did nothing" },
+          { label: "No card or chips", description: "The question did not render as a card, or no chips appeared" },
+        ],
+      }],
+    }],
+  },
+];
+const REAL_ASK_RESULTS = [{
+  tool_id: "toolu_01DuwZ2wGQ6Lx65R5PfKVVZw", ok: true,
+  preview: "now 17:26\nVALID\ninstalled: 0.3.142\nrunning pid 3570",
+}];
+const REAL_ASK_META = {
+  model: "claude-fable-5-1", version: "2.1.257", branch: "main",
+  context: { tokens: 712270, window: 1000000, frac: 0.71227 },
+};
+
+function makeRealTranscriptDeps() {
+  const answered: Array<{ target: string; data: string }> = [];
+  const traced: string[] = [];
+  const deps: ChatDeps = {
+    invoke: <T,>(cmd: string, args?: InvokeArgs): Promise<T> => {
+      if (cmd === "app_log") {
+        // SAFETY: Chat/herdr trace calls always pass { line: string }.
+        traced.push((args as { line: string } | undefined)?.line ?? "");
+        // SAFETY: Chat types app_log's return as void; the seam ignores whatever comes back.
+        return Promise.resolve(undefined as T);
+      }
+      if (cmd === "orchestrator_chat") {
+        // SAFETY: Chat always calls orchestrator_chat with a plain `{ after: number }` object.
+        const after = (args as { after: number } | undefined)?.after ?? 0;
+        const backfill = after === 0
+          ? [REAL_ASK_TURNS, REAL_ASK_RESULTS, 33, REAL_ASK_META, ["check"]]
+          : [[], [], after, REAL_ASK_META, []];
+        // SAFETY: Chat types this call Promise<string> and parses the JSON; the envelope is
+        // exactly the Backfill shape this test built above.
+        return Promise.resolve(JSON.stringify(backfill) as T);
+      }
+      if (cmd === "chat_watch") {
+        // SAFETY: Chat types this call Promise<ChatWatchResult>; current=33 matches the fixture's
+        // own total, so the post-mount watch never re-fetches what the backfill already seeded.
+        return Promise.resolve({ current: 33, generation: 1 } as T);
+      }
+      if (cmd === "orchestrator_status") {
+        // SAFETY: Chat types this call Promise<string>; "blocked" is the one status that surfaces
+        // the open ask under test.
+        return Promise.resolve("blocked" as T);
+      }
+      // SAFETY: unknown commands resolve to null, matching the real seam's unhandled default.
+      return Promise.resolve(null as T);
+    },
+    listen: () => Promise.resolve(() => {}),
+    orchestratorOf: async () => ({ project: "p", agent: "orch", surface: "surf1", kind: "orch" }),
+    answerAtPane: async (target: string, data: string) => { answered.push({ target, data }); },
+    Composer: () => null,
+    TerminalPane: () => null,
+  };
+  return { deps, answered, traced };
+}
+
+describe("real transcript regression: an ask decoded the way the app actually decodes it (#6094 2026-09-05)", () => {
+  let host: HTMLDivElement;
+  let root: Root;
+
+  beforeEach(() => {
+    host = document.createElement("div");
+    document.body.appendChild(host);
+    root = createRoot(host);
+  });
+
+  afterEach(() => {
+    act(() => root.unmount());
+    host.remove();
+  });
+
+  it("renders the question card from a real multi-row backfill (thinking + tool_use as separate turns)", async () => {
+    const { deps } = makeRealTranscriptDeps();
+    act(() => { root.render(<Chat project="p" dock="right" onDock={() => {}} onClose={() => {}} deps={deps} />); });
+    await flush();
+    await flush();
+    expect(host.textContent).toContain("On 0.3.142, did the card click");
+    const buttons = [...host.querySelectorAll("button")].map(b => b.textContent ?? "");
+    expect(buttons.some(t => t.includes("Yes, it answered"))).toBe(true);
+  });
+
+  it("shows chips for the same open ask", async () => {
+    const { deps } = makeRealTranscriptDeps();
+    act(() => { root.render(<Chat project="p" dock="right" onDock={() => {}} onClose={() => {}} deps={deps} />); });
+    await flush();
+    await flush();
+    const chips = host.querySelector('[data-testid="suggestion-chips"]');
+    expect(chips).not.toBeNull();
+  });
+});
+
+// Same real-shape data, but delivered the way the LIVE app actually delivers it: Chat already
+// mounted and idle (empty initial backfill), then the ask's rows arrive via "chat-rows" PUSH
+// events (spawn_chat_watcher's 300ms file tail) in two batches — [Bash, thinking] then
+// [AskUserQuestion] — followed by an "orch-status" push flipping status to blocked, exactly the
+// order app-trace showed live (rows land before the status push, since the transcript write
+// precedes herdr's own status flip). If the card only ever worked through the INITIAL backfill
+// path (applyBackfill) and not the PUSH path (applyRows), this is where it would show.
+describe("real transcript regression via the PUSH path (chat-rows then orch-status)", () => {
+  let host: HTMLDivElement;
+  let root: Root;
+
+  beforeEach(() => {
+    host = document.createElement("div");
+    document.body.appendChild(host);
+    root = createRoot(host);
+  });
+
+  afterEach(() => {
+    act(() => root.unmount());
+    host.remove();
+  });
+
+  it("renders the ask card once its rows arrive via chat-rows, then status flips blocked via orch-status", async () => {
+    const handlers = new Map<string, Handler[]>();
+    const deps: ChatDeps = {
+      invoke: <T,>(cmd: string): Promise<T> => {
+        if (cmd === "orchestrator_chat") {
+          // SAFETY: Chat types this call Promise<string> and parses the JSON; the envelope is an
+          // empty Backfill — this test starts Chat idle and delivers the ask via chat-rows below.
+          return Promise.resolve(JSON.stringify([[], [], 0, REAL_ASK_META, []]) as T);
+        }
+        if (cmd === "chat_watch") {
+          // SAFETY: Chat types this call Promise<ChatWatchResult> — current=0 matches the empty
+          // backfill above.
+          return Promise.resolve({ current: 0, generation: 1 } as T);
+        }
+        if (cmd === "orchestrator_status") {
+          // SAFETY: Chat types this call Promise<string>; the pane starts "working" — blocked
+          // arrives later via the orch-status push under test.
+          return Promise.resolve("working" as T);
+        }
+        // SAFETY: unknown commands resolve to null, matching the real seam's unhandled default.
+        return Promise.resolve(null as T);
+      },
+      listen: <T,>(event: string, cb: (ev: { payload: T }) => void): Promise<() => void> => {
+        // SAFETY: the handler is stored under the unknown-payload container (Handler, above) and
+        // fired with exactly what listen delivered — this test only fires "chat-rows" and
+        // "orch-status", both string payloads.
+        const boxed = cb as Handler;
+        handlers.set(event, [...(handlers.get(event) ?? []), boxed]);
+        return Promise.resolve(() => {});
+      },
+      orchestratorOf: async () => ({ project: "p", agent: "orch", surface: "surf1", kind: "orch" }),
+      answerAtPane: async () => {},
+      Composer: () => null,
+      TerminalPane: () => null,
+    };
+    const fire = (event: string, payload: string) =>
+      act(async () => { for (const cb of handlers.get(event) ?? []) cb({ payload }); });
+
+    act(() => { root.render(<Chat project="p" dock="right" onDock={() => {}} onClose={() => {}} deps={deps} />); });
+    await flush();
+    await flush();
+    expect(handlers.has("chat-rows")).toBe(true);
+
+    // Batch 1: the Bash call + its thinking block land first.
+    await fire("chat-rows", JSON.stringify({
+      project: "p", sessionId: "s1", after: 0, total: 3,
+      turns: [REAL_ASK_TURNS[1], REAL_ASK_TURNS[2]],
+      results: REAL_ASK_RESULTS, meta: REAL_ASK_META, receiptTexts: [],
+    }));
+    await flush();
+
+    // Batch 2: the AskUserQuestion tool_use itself.
+    await fire("chat-rows", JSON.stringify({
+      project: "p", sessionId: "s1", after: 3, total: 4,
+      turns: [REAL_ASK_TURNS[3]],
+      results: [], meta: REAL_ASK_META, receiptTexts: [],
+    }));
+    await flush();
+
+    // herdr flips the pane to blocked once the tool_use lands.
+    await fire("orch-status", JSON.stringify({ project: "p", status: "blocked" }));
+    await flush();
+    await flush();
+
+    expect(host.textContent).toContain("On 0.3.142, did the card click");
+    const buttons = [...host.querySelectorAll("button")].map(b => b.textContent ?? "");
+    expect(buttons.some(t => t.includes("Yes, it answered"))).toBe(true);
+    const chips = host.querySelector('[data-testid="suggestion-chips"]');
+    expect(chips).not.toBeNull();
+  });
+});
+
+// #6094 REGRESSION, root cause: two concurrent orchestrator_chat backfills. Chat's mount effect
+// (line ~516) unconditionally calls sync() at the top and its OWN cleanup+re-run fires again the
+// instant `target` resolves from null to a real pane surface (normal: the panel looks for a pane
+// AFTER mounting, #5495) — so two sync() calls can be IN FLIGHT at once, BOTH dispatched while
+// seenRef.current is still 0 (the second fires before the first's promise has resolved and moved
+// the cursor). applyBackfill's own comment says a second answer "left after an earlier one landed
+// is entirely subsumed by it" — true only if the second call was DISPATCHED after the first
+// resolved. Here it was dispatched CONCURRENTLY with a stale after=0, and it happens to carry
+// MORE rows (the orchestrator kept writing while both fetches were in flight) — exactly the
+// live timeline: the ask was written seconds into the mount, while a second concurrent backfill
+// was still settling. When that later-resolving, stale-`after` call finally lands, `s.seen`
+// (already 29 from the first call) no longer matches its own captured `after` (0), so it takes
+// the "heal the cursor" branch and BUMPS `seen` straight to the newer total — discarding the
+// batch's `turns` entirely. The cursor now sits PAST the ask, so no future sync() ever re-fetches
+// it: the ask is gone for good, exactly matching "nothing rendered, ever" (not a transient race).
+describe("concurrent backfill data loss (#6094 root cause, 2026-09-05)", () => {
+  let host: HTMLDivElement;
+  let root: Root;
+
+  beforeEach(() => {
+    host = document.createElement("div");
+    document.body.appendChild(host);
+    root = createRoot(host);
+  });
+
+  afterEach(() => {
+    act(() => root.unmount());
+    host.remove();
+  });
+
+  it("does not lose the ask when a second concurrent backfill resolves after the first", async () => {
+    type Resolver = (raw: string) => void;
+    // The first two calls are held open so the test can resolve them out of order (the race under
+    // test); any call AFTER that is the fix's own recovery re-sync — auto-answered immediately,
+    // from wherever its `after` says the cursor actually sits, the way the real backend would.
+    const manual: Resolver[] = [];
+    let resolvePane: (() => void) | null = null;
+
+    const deps: ChatDeps = {
+      invoke: <T,>(cmd: string, args?: InvokeArgs): Promise<T> => {
+        if (cmd === "orchestrator_chat") {
+          // SAFETY: Chat always calls orchestrator_chat with a plain `{ after: number }` object.
+          const after = (args as { after: number } | undefined)?.after ?? 0;
+          if (manual.length < 2) {
+            // Both raced calls dispatch with the SAME stale after=0 — neither has seen the
+            // other's answer yet.
+            // SAFETY: Chat types this call Promise<string>; the manual resolvers below always
+            // hand it a JSON-stringified Backfill.
+            return new Promise<string>(resolve => { manual.push(resolve); }) as Promise<T>;
+          }
+          // The recovery re-sync: answers from the real cursor (after=1, past "check"), carrying
+          // everything from there through the ask.
+          expect(after).toBe(1);
+          const backfill = [REAL_ASK_TURNS.slice(1), REAL_ASK_RESULTS, 33, REAL_ASK_META, []];
+          // SAFETY: Chat types this call Promise<string> and parses the JSON; the envelope is
+          // exactly the Backfill shape built above.
+          return Promise.resolve(JSON.stringify(backfill) as T);
+        }
+        if (cmd === "chat_watch") {
+          // SAFETY: Chat types this call Promise<ChatWatchResult>; the exact generation value is
+          // never asserted on, only that a watcher exists.
+          return Promise.resolve({ current: 0, generation: manual.length } as T);
+        }
+        if (cmd === "orchestrator_status") {
+          // SAFETY: Chat types this call Promise<string>; "blocked" is the one status that
+          // surfaces the open ask under test.
+          return Promise.resolve("blocked" as T);
+        }
+        // SAFETY: unknown commands resolve to null, matching the real seam's unhandled default.
+        return Promise.resolve(null as T);
+      },
+      listen: () => Promise.resolve(() => {}),
+      // Resolves on the SECOND call (mirrors #5495's "keep looking" poll finding the pane after
+      // the mount effect has already run once with target=null) — never on the first, so the
+      // chat_watch effect is guaranteed to tear down and re-run at least once.
+      orchestratorOf: async () => {
+        if (!resolvePane) {
+          await new Promise<void>(r => { resolvePane = r; });
+        }
+        return { project: "p", agent: "orch", surface: "surf1", kind: "orch" };
+      },
+      answerAtPane: async () => {},
+      Composer: () => null,
+      TerminalPane: () => null,
+    };
+
+    act(() => { root.render(<Chat project="p" dock="right" onDock={() => {}} onClose={() => {}} deps={deps} />); });
+    await flush();
+    // Let the pane resolve now, forcing the chat_watch effect to tear down and re-run — a second
+    // concurrent orchestrator_chat call fires while the first is still unresolved.
+    act(() => { resolvePane?.(); });
+    await flush();
+    await flush();
+
+    expect(manual.length).toBe(2);
+    // First call resolves: a small backfill, no ask yet.
+    act(() => { manual[0](JSON.stringify([[REAL_ASK_TURNS[0]], [], 1, REAL_ASK_META, ["check"]])); });
+    await flush();
+    // Second (concurrent) call resolves LATER, but the orchestrator kept writing in the
+    // meantime: its answer carries every row INCLUDING the ask, from line 0.
+    act(() => {
+      manual[1](JSON.stringify([REAL_ASK_TURNS, REAL_ASK_RESULTS, 33, REAL_ASK_META, ["check"]]));
+    });
+    await flush();
+    await flush();
+
+    expect(host.textContent).toContain("On 0.3.142, did the card click");
+  });
+});
