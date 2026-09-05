@@ -22,7 +22,7 @@ export type ProviderStatus = {
   kind: ProviderKind;
   connect: ProviderConnect;
   binary: { name: string | null; installed: boolean; path: string | null };
-  auth: { artifact: string | null; present: boolean; mode: string | null };
+  auth: { artifact: string | null; present: boolean; mode: string | null; email?: string | null };
   state: ProviderState;
   reason: string;
   usage: BalanceRow | null;

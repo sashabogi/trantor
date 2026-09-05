@@ -81,7 +81,10 @@ function markDelivered(session, upTo) {
   if (n > (p.deliveredUpTo || 0)) { p.deliveredUpTo = n; markDirty(); }
 }
 function pushToStreams(msg) {
-  for (const s of streams) if (deliverable(msg, s.session)) { try { s.res.write(`data: ${JSON.stringify(msg)}\n\n`); } catch {} }
+  for (const s of streams) {
+    if (!deliverable(msg, s.session) || s.res.writableEnded || s.res.destroyed) continue;
+    try { s.res.write(`data: ${JSON.stringify(msg)}\n\n`); } catch {}
+  }
 }
 // A live runner can outlast the durable snapshot it was polling. If its cursor is now beyond the
 // message high-water mark, echoing that impossible value leaves it deaf forever. Clamp it to the
@@ -103,7 +106,10 @@ function inboxResponse(auth, messages, cursor, rewound = false) {
 // SSE event ("event: ev") so an existing consumer's default onmessage handler — which expects a bus
 // message and nothing else — can never see it. Backwards-safe by construction.
 function pushEventToStreams(ev) {
-  for (const s of streams) if (s.events) { try { s.res.write(`event: ev\ndata: ${JSON.stringify(ev)}\n\n`); } catch {} }
+  for (const s of streams) {
+    if (!s.events || s.res.writableEnded || s.res.destroyed) continue;
+    try { s.res.write(`event: ev\ndata: ${JSON.stringify(ev)}\n\n`); } catch {}
+  }
 }
 // --- the unified event log ---------------------------------------------------------------
 // One append-only stream for everything that happens in a project. Two families share it:

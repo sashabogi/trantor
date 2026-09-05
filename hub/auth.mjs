@@ -17,7 +17,12 @@ async function body(req) {
   try { req._jsonBody = d ? JSON.parse(d) : {}; } catch { req._jsonBody = {}; }
   return req._jsonBody;
 }
-function json(res, code, obj) { res.writeHead(code, { "content-type": "application/json", "access-control-allow-origin": "*" }); res.end(JSON.stringify(obj)); return true; }
+function json(res, code, obj) {
+  if (res.headersSent || res.writableEnded || res.destroyed) return false;
+  res.writeHead(code, { "content-type": "application/json", "access-control-allow-origin": "*" });
+  res.end(JSON.stringify(obj));
+  return true;
+}
 // Canonical project name: follow the alias chain so historically-divergent keys
 // (e.g. "builtbetter" → "builtbetter.ai") fold into one lane on every read AND
 // write. Cycle-guarded. Empty/"all" pass through untouched.
