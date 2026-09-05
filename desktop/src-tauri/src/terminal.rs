@@ -539,6 +539,67 @@ mod tests {
         assert!(manager.detach(sub).expect("detach").reaped);
     }
 
+    /// The headless half of #6094's 09-05 real-path bounce: an AskUserQuestion click answered
+    /// nothing in the built app, with no trace of why. This writes the EXACT byte sequences
+    /// answerKeystrokes()/submitOther() (desktop/src/features/chat/streaming.ts, Chat.tsx) build
+    /// for a single pick, a multi-select, and the "Other" free-text row, through the SAME
+    /// `TerminalManager::write()` the real `answerAtPane` IPC command calls, into a real pty
+    /// running a transparent echo child — a stand-in for "attach to a pane running cat -v and
+    /// assert the bytes arrive" that needs no live herdr session (spinning one up from an agent
+    /// turn is exactly the contamination risk a prior attempt on this card hit and aborted from).
+    /// If these come back mangled, the bug is this crate's write/chunk path; if the built app
+    /// still answers nothing with these passing, the bug is external, in herdr's own multi-client
+    /// attach relay — the one piece only a live herdr pane (or the operator) can still verify.
+    #[test]
+    fn ask_answer_keystrokes_survive_byte_for_byte_through_a_real_pty() {
+        let manager = TerminalManager::default();
+        let (tx, rx) = mpsc::channel::<Vec<u8>>();
+        let sub = manager
+            .attach_command(
+                shell_command("stty raw -echo; printf 'READY'; exec cat"),
+                Arc::new(move |bytes| {
+                    tx.send(bytes).unwrap();
+                }),
+            )
+            .expect("attach");
+
+        let mut pre = Vec::new();
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while Instant::now() < deadline && !String::from_utf8_lossy(&pre).contains("READY") {
+            if let Ok(chunk) = rx.recv_timeout(Duration::from_millis(50)) {
+                pre.extend(chunk);
+            }
+        }
+        assert!(
+            String::from_utf8_lossy(&pre).contains("READY"),
+            "child never reached raw mode"
+        );
+
+        // DOWN_ARROW, streaming.ts's own constant — the picker's footer names arrow-key
+        // navigation, never a digit shortcut (#6094's answerKeystrokes doc comment).
+        const DOWN: &str = "\x1b[B";
+        let cases: [(&str, String); 3] = [
+            ("single pick — option index 1", format!("{DOWN}\r")),
+            ("multi-select — option indices 0 and 2", format!(" {DOWN}{DOWN} \r")),
+            ("Other free text after 2 options", format!("{DOWN}{DOWN}\rShip via Stripe\r")),
+        ];
+
+        for (label, data) in cases {
+            manager.write(sub, &data).expect("write");
+            let expected = data.as_bytes().to_vec();
+            let mut got = Vec::new();
+            let read_deadline = Instant::now() + Duration::from_secs(3);
+            while Instant::now() < read_deadline && got.len() < expected.len() {
+                if let Ok(chunk) = rx.recv_timeout(Duration::from_millis(100)) {
+                    got.extend(chunk);
+                }
+            }
+            assert_eq!(got, expected, "{label}: keystrokes arrived mangled");
+        }
+
+        assert!(manager.detach(sub).expect("detach").reaped);
+    }
+
     #[test]
     fn resize_survives_after_child_exit_until_detach() {
         let manager = TerminalManager::default();

@@ -71,13 +71,38 @@ export async function termDetach(sub: number): Promise<void> {
  *  needs raw keystrokes, not a prompt — so this opens its OWN throwaway attach (herdr allows
  *  multiple clients on one surface; a live Workspace tab watching the same pane keeps working
  *  unaffected), writes `data`, and detaches. Bytes are never read here — the chat is not
- *  rendering a terminal, only answering one. */
+ *  rendering a terminal, only answering one.
+ *
+ *  Every step is traced into app-trace.log (#6094 real-path bounce, 09-05): a click that answered
+ *  nothing left NO evidence at all — this path's only log line fired AFTER a full success, so
+ *  attach/write/detach were equally invisible whether they ran, failed, or never fired. The
+ *  interactive terminal (TerminalPane.tsx) already traces every term_write it makes; this path had
+ *  none. A detach failure is caught and traced on its own — it never masks a write failure, so the
+ *  caller (and the ask card's error banner) still see whichever step actually broke. */
 export async function answerAtPane(target: string, data: string): Promise<void> {
-  const sub = await termAttach(target, () => {});
+  const trace = (line: string) => { void invoke("app_log", { line: `ask answer: ${line}` }).catch(() => {}); };
+  let sub: number;
   try {
-    await termWrite(sub, data);
+    sub = await termAttach(target, () => {});
+  } catch (e) {
+    trace(`attach FAILED target=${target}: ${e instanceof Error ? e.message : String(e)}`);
+    throw e;
+  }
+  trace(`attach sub=${sub} target=${target}`);
+  try {
+    const t0 = performance.now();
+    const chunks = await termWrite(sub, data);
+    trace(`term_write sub=${sub} bytes=${data.length} chunks=${chunks} ms=${Math.max(0, Math.round(performance.now() - t0))}`);
+  } catch (e) {
+    trace(`term_write FAILED sub=${sub} bytes=${data.length}: ${e instanceof Error ? e.message : String(e)}`);
+    throw e;
   } finally {
-    await termDetach(sub);
+    try {
+      await termDetach(sub);
+      trace(`detach sub=${sub}`);
+    } catch (e) {
+      trace(`detach FAILED sub=${sub}: ${e instanceof Error ? e.message : String(e)}`);
+    }
   }
 }
 
