@@ -61,9 +61,14 @@ const authRuntime = createAuthRuntime({
 const events = createEventRuntime({ state: store.state, markDirty: store.markDirty, AUTH_MODE, ONLINE_MS, canon: authRuntime.canon });
 runStoreMigrations({ ...store, subFp: authRuntime.subFp });
 if (process.argv.includes("--smoke")) {
+  // The smoke exists to refuse a restart that would boot into a broken store: a configured pg
+  // store that did not come up is a failure, not a fallback.
+  const storeFailed = STORE_KIND === "pg" && !store.durableStore;
   await store.durableStore?.close?.();
-  process.stderr.write(`[trantor] hub smoke ok (store: ${STORE_KIND})\n`);
-  process.exit(0);
+  process.stderr.write(storeFailed
+    ? `[trantor] hub smoke FAILED: store ${STORE_KIND} did not initialise\n`
+    : `[trantor] hub smoke ok (store: ${STORE_KIND})\n`);
+  process.exit(storeFailed ? 1 : 0);
 }
 const reaper = createReaper({
   state: store.state, markDirty: store.markDirty, canon: authRuntime.canon,

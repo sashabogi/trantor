@@ -34,7 +34,14 @@ while IFS= read -r -d '' MODULE; do
 done < <(find "$REPO_ROOT/hub" -type f -name '*.mjs' -print0)
 echo "hub module imports resolved"
 
-RELAY_STORE=pg node "$REPO_ROOT/hub.mjs" --smoke
+# Boot the hub once with the SERVICE's own environment (never a store the unit does not use) and
+# refuse the restart if it cannot come up: a green unit-test suite booted a crash loop on 09-04.
+UNIT_ENV="$(systemctl show trantor-hub -p Environment --value 2>/dev/null || true)"
+# shellcheck disable=SC2086
+if ! env $UNIT_ENV node "$REPO_ROOT/hub.mjs" --smoke; then
+  echo "REFUSED: the hub does not boot with the service's environment (see the smoke output above); nothing was restarted." >&2
+  exit 1
+fi
 
 HUB_URL="${RELAY_HUB_URL:-http://${RELAY_HOST:-127.0.0.1}:${RELAY_PORT:-4477}}"
 HEALTH=""

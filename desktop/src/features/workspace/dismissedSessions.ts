@@ -1,7 +1,7 @@
-import { invoke } from "@tauri-apps/api/core";
+import { invoke, type InvokeArgs } from "@tauri-apps/api/core";
 import type { DismissedSession } from "./restorables";
 
-async function invokeList(cmd: string, args?: Record<string, unknown>): Promise<DismissedSession[]> {
+async function invokeList(cmd: string, args?: InvokeArgs): Promise<DismissedSession[]> {
   return JSON.parse(await invoke<string>(cmd, args));
 }
 
