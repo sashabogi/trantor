@@ -168,7 +168,7 @@ function AskCard({ tool_id, questions, result, target, onAnswer }: {
 
   if (result) {
     return (
-      <div className="mt-1.5 rounded-lg border border-tr-edge bg-black/20 px-2.5 py-2">
+      <div data-testid="ask-card" className="mt-1.5 rounded-lg border border-tr-edge bg-black/20 px-2.5 py-2">
         <div className="mb-1 flex items-center gap-1.5 text-[length:calc(11.5px*var(--chat-scale,1))] font-medium">
           <span>{q.header || "Question"}</span>
           <span className="shrink-0 text-[10.5px] font-normal text-tr-muted">answered</span>
@@ -205,7 +205,7 @@ function AskCard({ tool_id, questions, result, target, onAnswer }: {
   };
 
   return (
-    <div className="mt-1.5 rounded-lg border border-tr-warn/40 bg-tr-warn/5 px-2.5 py-2">
+    <div data-testid="ask-card" className="mt-1.5 rounded-lg border border-tr-warn/40 bg-tr-warn/5 px-2.5 py-2">
       <div className="mb-1 flex items-center gap-1.5 text-[length:calc(11.5px*var(--chat-scale,1))] font-medium">
         <span className="tr-dot shrink-0" style={{ background: "var(--color-tr-warn)", width: 6, height: 6 }} />
         <span>{q.header || "Question"}</span>

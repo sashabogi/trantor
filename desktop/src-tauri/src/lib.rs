@@ -5613,6 +5613,22 @@ pub fn run() {
         .manage(genesis::WakeChains::default())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_notification::init())
+        .setup(|app| {
+            // #6094 acceptance drill: TRANTOR_ASK_DRILL=<project> makes the webview mount Chat on
+            // that project's orchestrator pane headlessly and drive the real backfill/blocked
+            // path (src/features/chat/askDrill.ts), narrating every step into app-trace.log.
+            // Inert in normal runs. Same pattern the removed #5857 lsp-drill used (c3553bb).
+            use tauri::{Emitter, Manager};
+            if let Ok(project) = std::env::var("TRANTOR_ASK_DRILL") {
+                if let Some(window) = app.get_webview_window("main") {
+                    std::thread::spawn(move || {
+                        std::thread::sleep(Duration::from_secs(5));
+                        let _ = window.emit("ask-drill", project);
+                    });
+                }
+            }
+            Ok(())
+        })
         .invoke_handler(|invoke: tauri::ipc::Invoke<tauri::Wry>| {
             // #5917 guard: tauri 2.11.5 has NO catch_unwind anywhere in its src (verified), so a
             // panic in any command would unwind out through the AppKit/WebKit extern "C" callback
