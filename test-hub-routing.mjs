@@ -5,9 +5,13 @@
 // resolves the hub as: RELAY_URL env → config.json hubs[project] → legacy global `url` → the
 // built-in local default. These tests pin every step of that chain — plus fail-open on a
 // corrupt/missing config (hooks run inside the user's tool loop and must NEVER throw).
+import { spawn } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { drillEnv } from "./drill-env.mjs";
 
 const dir = mkdtempSync(join(tmpdir(), "trantor-hubrt-"));
 process.env.AGENT_BUS_DIR = dir;                 // must be set BEFORE importing the module
@@ -18,6 +22,15 @@ const { relayUrl } = await import("./hooks/lib/api.mjs");
 
 let pass = 0, fail = 0;
 const ok = (name, cond, extra = "") => { if (cond) { pass++; console.log(`  ✓ ${name}`); } else { fail++; console.log(`  ✗ ${name}${extra ? " — " + extra : ""}`); } };
+const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+const freePort = () => new Promise((resolve, reject) => {
+  const server = createServer();
+  server.once("error", reject);
+  server.listen(0, "127.0.0.1", () => {
+    const address = server.address();
+    server.close(error => error ? reject(error) : resolve(address.port));
+  });
+});
 
 console.log("\nResolution chain (no config):");
 ok("falls back to the built-in local default", resolveHub("crebral") === DEFAULT_HUB_URL, resolveHub("crebral"));
@@ -70,5 +83,37 @@ rmSync(join(dir, "config.json"), { force: true });
 ok("relayUrl fail-opens to the default with no config", relayUrl() === DEFAULT_HUB_URL);
 
 rmSync(dir, { recursive: true, force: true });
+
+console.log("\nSplit hub long-poll owns and settles its response once:");
+const pollDir = mkdtempSync(join(tmpdir(), "trantor-hubpoll-"));
+const pollPort = await freePort();
+const pollHub = spawn(process.execPath, [fileURLToPath(new URL("./hub.mjs", import.meta.url))], {
+  env: {
+    ...drillEnv(), HOME: pollDir, RELAY_DATA_DIR: pollDir, RELAY_STORE: "json",
+    RELAY_AUTH: "off", RELAY_HOST: "127.0.0.1", RELAY_PORT: String(pollPort),
+  },
+  stdio: ["ignore", "ignore", "pipe"],
+});
+let pollHubError = "";
+pollHub.stderr.on("data", chunk => { pollHubError += chunk; });
+try {
+  const pollBase = `http://127.0.0.1:${pollPort}`;
+  for (let attempt = 0; attempt < 30; attempt++) {
+    try { if ((await fetch(`${pollBase}/health`)).ok) break; } catch {}
+    await sleep(50);
+  }
+  const response = await fetch(`${pollBase}/poll?session=drill:routing&since=0&wait=0.001`);
+  const payload = await response.json();
+  await sleep(400);
+  const health = await fetch(`${pollBase}/health`);
+  ok("long-poll timer returns one 200 response", response.status === 200 && Array.isArray(payload.messages), `${response.status} ${JSON.stringify(payload)}`);
+  ok("timer cannot answer again or crash the hub", health.status === 200 && pollHub.exitCode === null, pollHubError.trim());
+} catch (error) {
+  ok("long-poll drill completes without a second-response throw", false, `${error.message}; ${pollHubError.trim()}`);
+} finally {
+  pollHub.kill();
+  rmSync(pollDir, { recursive: true, force: true });
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

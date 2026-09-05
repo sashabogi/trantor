@@ -119,12 +119,18 @@ export async function routeMessages({ req, res, q, P, auth, ctx }) {
       }
       const waitMs = Math.min(Number(q.wait || 25), 290) * 1000;   // allow long idle-park
       const deadline = now() + waitMs;
+      let settled = false;
       const tick = () => {
+        if (settled || res.headersSent || res.writableEnded || res.destroyed) {
+          settled = true;
+          return;
+        }
         const msgs = state.messages.filter(m => m.id > since && deliverable(m, q.session) && inboxReadable(auth, m, q.session));
-        if (msgs.length || now() >= deadline) { touch(q.session, undefined, undefined, undefined, auth); const cursor = msgs.length ? msgs[msgs.length - 1].id : since; markDelivered(q.session, cursor); return json(res, 200, inboxResponse(auth, msgs, cursor)); }
+        if (msgs.length || now() >= deadline) { settled = true; touch(q.session, undefined, undefined, undefined, auth); const cursor = msgs.length ? msgs[msgs.length - 1].id : since; markDelivered(q.session, cursor); return json(res, 200, inboxResponse(auth, msgs, cursor)); }
         setTimeout(tick, 300);
       };
-      return tick();
+      tick();
+      return true;
     }
     if (req.method === "GET" && P === "/stream") {                 // SSE — true push, no polling
       const session = q.session || "all";
@@ -135,7 +141,10 @@ export async function routeMessages({ req, res, q, P, auth, ctx }) {
       // Existing consumers omit it and keep receiving bus messages on the default channel only.
       const entry = { session, res, events: q.events === "1" };
       streams.push(entry);
-      const ka = setInterval(() => { try { res.write(": ka\n\n"); touch(session, undefined, undefined, undefined, auth); } catch {} }, 20000);
+      const ka = setInterval(() => {
+        if (res.writableEnded || res.destroyed) return;
+        try { res.write(": ka\n\n"); touch(session, undefined, undefined, undefined, auth); } catch {}
+      }, 20000);
       req.on("close", () => { clearInterval(ka); const i = streams.indexOf(entry); if (i >= 0) streams.splice(i, 1); });
       return true;
     }
