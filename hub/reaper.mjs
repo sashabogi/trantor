@@ -1,5 +1,5 @@
 export function createReaper({
-  state, now, canon, appendCardEvent, appendEvent, markDirty,
+  state, now, canon, appendCardEvent, appendEvent, appendTaskLog, markDirty, sweepPresence,
   ONLINE_MS, PEER_TTL_MS, FOCUS_OFFLINE_MS, FOCUS_IDLE_MS,
   REAP_GRACE_MS, TODO_STALE_MS, REAP_INTERVAL_MS,
   CONTRACT_ABANDON_MS, CONTRACT_WINDOW_MS,
