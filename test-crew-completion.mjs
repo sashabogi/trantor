@@ -42,6 +42,12 @@ const hub = http.createServer((req, res) => {
     if (req.method === "POST" && P === "/send") { try { sends.push(JSON.parse(buf)); } catch {} return reply({ ok: true }); }
     if (P === "/inbox") return reply({ messages: [], cursor: 0 });
     if (P === "/lessons") return reply({ lessons: [] });
+    // #6228: the runner drops a wake from an unlinked project's sender, so the mock hub declares
+    // the link the drill's fixture implies (an orchestrator of crebral-health lawfully dispatching
+    // this tt-complete seat). Without it the fence refused the wake (#6446: red since 3e18faf,
+    // same class #6301 fixed in test-failure.mjs) and every receipt assertion failed on the drop
+    // note instead of the completion notice.
+    if (P === "/policy") return reply({ links: [{ projects: ["crebral-health", "tt-complete"] }] });
     if (P === "/poll") {
       if (served++ === 0) return reply({ messages: [{ id: 11, from: servedFrom, to: u.searchParams.get("session"),
         text: servedText, ts: Date.now() }], cursor: 1 });
