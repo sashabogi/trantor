@@ -1,7 +1,11 @@
+/* oxlint-disable anti-slop/no-runtime-typeof -- SAFETY: Auth normalizes untrusted request and persisted identity shapes at their established hub boundary; this split preserves those guards unchanged. */
 import { verifyRequest, verifyEndorsement } from "../lib/identity.mjs";
 import { readFileSync } from "node:fs";
+import { timingSafeEqual, randomBytes } from "node:crypto";
+import { publicView } from "../lib/identity.mjs";
+import { IDENTITY_KINDS } from "../lib/store-contract.mjs";
 
-export function createAuthRuntime({ state, markDirty, AUTH_MODE, SUPERSEDE_GRACE_MS }) {
+export function createAuthRuntime({ state, markDirty, AUTH_MODE, SUPERSEDE_GRACE_MS, LOOPBACK_BIND, ENROLL_MODE }) {
 const now = () => Date.now();
 function rawBody(req) {
   if (req._rawBody !== undefined) return Promise.resolve(req._rawBody);
@@ -280,11 +284,72 @@ function canUseInboxSession(auth, session) {
 }
 const seenNonces = new Map();
 
+  function handleEnrollment({ req, res, P, u, b0 }) {
+    if (req.method !== "POST" || P !== "/enroll") return false;
+    const raw = req._rawBody || "";
+    const verified = verifyRequest({ headers: req.headers, method: req.method, path: authPath(u), body: raw });
+    if (!verified.ok) return json(res, 401, { error: verified.reason || "bad signature" });
+    const requestedKind = String(b0.kind || "agent").slice(0, 40);
+    if (!IDENTITY_KINDS.includes(requestedKind)) {
+      return json(res, 400, { error: `kind must be one of: ${IDENTITY_KINDS.join(", ")}`, allowedKinds: IDENTITY_KINDS });
+    }
+    const existing = findIdentity(verified.pubkey);
+    if (existing) return json(res, 200, { ok: true, identity: publicView(existing), scopes: existing.scopes || [] });
+    let enrolledBy = "";
+    let scopes = [];
+    const token = String(b0.token || "");
+    const bootstrap = String(process.env.RELAY_BOOTSTRAP_TOKEN || "");
+    const noIdentitiesYet = Object.keys(state.identities || {}).length === 0;
+    const tokenMatchesBootstrap = !!bootstrap && !!token && token.length === bootstrap.length &&
+      timingSafeEqual(Buffer.from(token), Buffer.from(bootstrap));
+    if (bootstrap && noIdentitiesYet && tokenMatchesBootstrap) {
+      scopes = [cleanScope({ project: "*", role: "owner" })].filter(Boolean);
+      enrolledBy = "bootstrap";
+    } else if (token) {
+      const invite = state.inviteTokens?.[token];
+      if (!invite || invite.used || (invite.expiresAt && invite.expiresAt < now())) return json(res, 403, { error: "invalid invite" });
+      scopes = Array.isArray(invite.scopes) ? invite.scopes.map(cleanScope).filter(Boolean) : [];
+      invite.used = true; invite.usedAt = now(); invite.pubkey = verified.pubkey; enrolledBy = "invite";
+    } else {
+      if (!LOOPBACK_BIND || ENROLL_MODE !== "tofu") return json(res, 403, { error: "tofu enrollment refused" });
+      enrolledBy = "tofu";
+    }
+    const identity = {
+      name: String(b0.name || "").slice(0, 120) || verified.pubkey.slice(0, 16),
+      kind: requestedKind, pubkey: verified.pubkey, createdAt: now(), enrolledBy, scopes,
+    };
+    identity.scopes = scopes.length ? scopes : defaultScopesFor(identity, b0);
+    state.identities[verified.pubkey] = identity;
+    markDirty();
+    return json(res, 200, { ok: true, identity: publicView(identity), scopes: identity.scopes });
+  }
+
+  function handleInvite({ req, res, P, auth, b0 }) {
+    if (req.method !== "POST" || P !== "/invite") return false;
+    if (!auth.ok) return json(res, auth.code || 401, { error: auth.error || "unauthorized" });
+    const az = authorize(auth, req.method, P, "*");
+    if (!az.ok) return json(res, az.code || 403, { error: az.error || "forbidden" });
+    const invitedKind = String(b0.kind || "agent").slice(0, 40);
+    if (!IDENTITY_KINDS.includes(invitedKind)) {
+      return json(res, 400, { error: `kind must be one of: ${IDENTITY_KINDS.join(", ")}`, allowedKinds: IDENTITY_KINDS });
+    }
+    const scopes = (Array.isArray(b0.scopes) ? b0.scopes : []).map(cleanScope).filter(Boolean).slice(0, 20);
+    if (!scopes.length) return json(res, 400, { error: "scopes required" });
+    const guard = crossProjectGuard(auth, P, { scopes });
+    if (!guard.ok) return json(res, guard.code, { error: guard.error });
+    const ttlSec = Math.min(Math.max(Number(b0.ttlSec) || 86400, 1), 30 * 86400);
+    const token = randomBytes(24).toString("hex");
+    state.inviteTokens[token] = { scopes, kind: invitedKind, expiresAt: now() + ttlSec * 1000, used: false,
+      createdBy: auth.identity?.pubkey || "", createdAt: now() };
+    markDirty();
+    return json(res, 200, { ok: true, token, scopes, expiresAt: state.inviteTokens[token].expiresAt });
+  }
+
   return {
     PUBLIC_ENDPOINTS, authPath, authenticate, authorize, body, rawBody, json,
     canon, cleanScope, defaultScopesFor, findIdentity, scopeAllows, canRead,
     projectFromRequest, crossProjectGuard, filterReadable, filterDiscoverable,
     inboxReadable, canUseInboxSession, overseerPolicy, subFp, PROPOSAL_CAP,
-    propFp, HUB_VERSION, cmpSemver,
+    propFp, HUB_VERSION, cmpSemver, handleEnrollment, handleInvite,
   };
 }
