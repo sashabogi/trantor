@@ -25,6 +25,17 @@ if [ -f "$ENV_FILE" ]; then
   # shellcheck disable=SC1090
   set -a; . "$ENV_FILE"; set +a
 fi
+
+while IFS= read -r -d '' MODULE; do
+  node --input-type=module -e '
+    import { pathToFileURL } from "node:url";
+    await import(pathToFileURL(process.argv[1]).href);
+  ' "$MODULE"
+done < <(find "$REPO_ROOT/hub" -type f -name '*.mjs' -print0)
+echo "hub module imports resolved"
+
+RELAY_STORE=pg node "$REPO_ROOT/hub.mjs" --smoke
+
 HUB_URL="${RELAY_HUB_URL:-http://${RELAY_HOST:-127.0.0.1}:${RELAY_PORT:-4477}}"
 HEALTH=""
 if HEALTH="$(curl --fail --silent --show-error --max-time 5 "$HUB_URL/health")"; then

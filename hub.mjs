@@ -60,6 +60,11 @@ const authRuntime = createAuthRuntime({
 });
 const events = createEventRuntime({ state: store.state, markDirty: store.markDirty, AUTH_MODE, ONLINE_MS, canon: authRuntime.canon });
 runStoreMigrations({ ...store, subFp: authRuntime.subFp });
+if (process.argv.includes("--smoke")) {
+  await store.durableStore?.close?.();
+  process.stderr.write(`[trantor] hub smoke ok (store: ${STORE_KIND})\n`);
+  process.exit(0);
+}
 const reaper = createReaper({
   state: store.state, markDirty: store.markDirty, canon: authRuntime.canon,
   now: events.now, appendCardEvent: events.appendCardEvent, appendEvent: events.appendEvent,
