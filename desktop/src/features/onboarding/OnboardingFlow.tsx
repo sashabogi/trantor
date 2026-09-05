@@ -69,7 +69,7 @@ export function OnboardingFlow({ me, project, onClose, deps = DEFAULT_ONBOARDING
     let alive = true;
     void (async () => {
       const [providerList, pinned, resolved, projectList] = await Promise.all([
-        providerApi.status().catch((): ProviderStatus[] => []),
+        providerApi.status().then(r => (r.available ? r.providers : [])).catch((): ProviderStatus[] => []),
         api.hasHubPin().catch(() => false),
         autonomyResolved(null).catch((): AutonomyResolved => ({ ...AUTONOMY_DEFAULTS })),
         knownProjects().catch((): string[] => []),
@@ -102,7 +102,7 @@ export function OnboardingFlow({ me, project, onClose, deps = DEFAULT_ONBOARDING
   // for its own live provider/hub reads.
   useEffect(() => {
     if (!visible || visible[index] !== "providers") return;
-    const t = setInterval(() => { void providerApi.status().then(setProviders).catch(() => {}); }, 4000);
+    const t = setInterval(() => { void providerApi.status().then(r => { if (r.available) setProviders(r.providers); }).catch(() => {}); }, 4000);
     return () => clearInterval(t);
   }, [visible, index, providerApi]);
 
