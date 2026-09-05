@@ -131,12 +131,32 @@ function overseerPolicy() {
   const policy = state.orgPolicy && typeof state.orgPolicy === "object" ? state.orgPolicy : {};
   return { autonomy: { "*": 1, ...(policy.autonomy || {}) }, links: Array.isArray(policy.links) ? policy.links : [] };
 }
+// "projPair-a" is an INSTANCE of "projPair", not a different project: the shorter name is a prefix
+// of the longer and the remainder starts with a separator, not another project's first letter.
+function instanceOfProject(a, b) {
+  const [lo, hi] = a.length <= b.length ? [a, b] : [b, a];
+  return hi.length > lo.length && hi.startsWith(lo) && !/[a-z0-9]/i.test(hi[lo.length]);
+}
 // The caller's home project, by the SAME "name suffix after the colon" rule defaultScopesFor
 // uses to mint a fresh identity's default scope. An identity with no colon in its name (a bare
 // human alias, or a tool identity never given a project) has no home to fence — nothing to check.
+//
+// The suffix is a CONVENTION, not a fact: session ids routinely carry an instance marker after the
+// project — "agent:projPair-a" is session -a OF projPair, the same shape as the fleet's per-seat
+// session ids — and reading that whole suffix as a home project fenced a session against its OWN
+// project's register/send (#6446, red since 3e18faf). So when the identity's own scopes name
+// exactly one concrete project (what /enroll bound at enrollment, and what /invite granted), that
+// enrolled project is the home — unless the suffix names a DIFFERENT project, in which case the
+// stricter suffix wins. Wildcard-scope identities (the fence's original target: a "*" owner like
+// an orchestrator or genesis) keep the pure suffix rule unchanged.
 function callerProject(auth) {
   const name = String(auth?.identity?.name || "");
-  return name.includes(":") ? canon(name.slice(name.lastIndexOf(":") + 1)) : "";
+  const suffix = name.includes(":") ? canon(name.slice(name.lastIndexOf(":") + 1)) : "";
+  const scoped = [...new Set((auth?.identity?.scopes || [])
+    .map(s => canon(String(s?.project || "")))
+    .filter(p => p && p !== "*"))];
+  if (scoped.length === 1 && (!suffix || suffix === scoped[0] || instanceOfProject(suffix, scoped[0]))) return scoped[0];
+  return suffix;
 }
 function crossProjectTarget(P, b) {
   if (P === "/send") {
