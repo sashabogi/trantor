@@ -7,7 +7,7 @@
 // the missing half of "it survives restarts" (card #5401).
 //
 // This is only the SERVER's lifetime. The conversation inside a pane is a separate problem, solved
-// in crew.sh: the project keeps one claude session id and `open` resumes it.
+// in crew.mjs: the project keeps one claude session id and `open` resumes it.
 import { existsSync, writeFileSync, unlinkSync, mkdirSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { homedir } from "node:os";

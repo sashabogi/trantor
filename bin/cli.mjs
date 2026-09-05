@@ -12,6 +12,10 @@ const run = (file, runner = process.execPath) => {
   const child = spawn(runner, [join(ROOT, file), ...args], { stdio: "inherit", cwd: process.cwd() });
   child.on("exit", (c) => process.exit(c ?? 0));
 };
+const runCrew = () => {
+  spawn(process.execPath, [join(ROOT, "bin/crew.mjs"), cmd, ...args], { stdio: "inherit", cwd: process.cwd() })
+    .on("exit", c => process.exit(c ?? 0));
+};
 
 switch (cmd) {
   case "setup":   run("deploy/setup.sh", "/bin/bash"); break;
@@ -22,15 +26,15 @@ switch (cmd) {
   case "models": run("bin/models.mjs"); break;
   case "advise":  run("bin/advise.mjs"); break;
   case "verify":  run("bin/crew-verify.mjs"); break;
-  case "up":      process.argv.splice(2, 1); spawn("/bin/bash", [join(ROOT, "bin/crew.sh"), "up", ...args], { stdio: "inherit", cwd: process.cwd() }).on("exit", c => process.exit(c ?? 0)); break;
-  case "open":    spawn("/bin/bash", [join(ROOT, "bin/crew.sh"), "open", ...args], { stdio: "inherit", cwd: process.cwd() }).on("exit", c => process.exit(c ?? 0)); break;
+  case "up":      runCrew(); break;
+  case "open":    runCrew(); break;
   case "herdr":   spawn(process.execPath, [join(ROOT, "bin/herdr-agent.mjs"), ...args], { stdio: "inherit", cwd: process.cwd() }).on("exit", c => process.exit(c ?? 0)); break;
   case "autonomy": spawn(process.execPath, [join(ROOT, "bin/autonomy.mjs"), ...args], { stdio: "inherit", cwd: process.cwd() }).on("exit", c => process.exit(c ?? 0)); break;
   case "adopt":   spawn(process.execPath, [join(ROOT, "bin/adopt.mjs"), ...args], { stdio: "inherit", cwd: process.cwd() }).on("exit", c => process.exit(c ?? 0)); break;
   case "integrate": spawn(process.execPath, [join(ROOT, "bin/integrate.mjs"), ...args], { stdio: "inherit", cwd: process.cwd() }).on("exit", c => process.exit(c ?? 0)); break;
-  case "down":    spawn("/bin/bash", [join(ROOT, "bin/crew.sh"), "down", ...args], { stdio: "inherit", cwd: process.cwd() }).on("exit", c => process.exit(c ?? 0)); break;
-  case "swap":    spawn("/bin/bash", [join(ROOT, "bin/crew.sh"), "swap", ...args], { stdio: "inherit", cwd: process.cwd() }).on("exit", c => process.exit(c ?? 0)); break;
-  case "prune":   spawn("/bin/bash", [join(ROOT, "bin/crew.sh"), "prune", ...args], { stdio: "inherit", cwd: process.cwd() }).on("exit", c => process.exit(c ?? 0)); break;
+  case "down":    runCrew(); break;
+  case "swap":    runCrew(); break;
+  case "prune":   runCrew(); break;
   case "hub": {
     const sub = args[0];
     // Per-project hub routing (TDD §12.1): a project lives on exactly ONE hub; codependent

@@ -123,7 +123,7 @@ if (process.argv[1] && _bn(process.argv[1]) === "takeover.mjs") {
     say(`adopted ${d.sid} as ${project}'s orchestrator thread`);
   }
 
-  const open = spawnSync("bash", [join(HERE, "crew.sh"), "open", project], { cwd: dir, encoding: "utf8", timeout: 120000 });
+  const open = spawnSync(process.execPath, [join(HERE, "crew.mjs"), "open", project], { cwd: dir, encoding: "utf8", timeout: 120000 });
   if (open.status !== 0) {
     say(`open failed: ${(open.stderr || "").trim().slice(0, 200)}`);
     if (d.sid) say(`the conversation is safe on disk — recover by hand: claude --resume ${d.sid}`);

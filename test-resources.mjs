@@ -13,7 +13,7 @@ import { join } from "node:path";
 const TMP = mkdtempSync(join(tmpdir(), "trantor-resources-"));
 const HOME_DIR = join(TMP, "home");
 const BUS = join(TMP, "bus");                       // RELAY_DATA_DIR
-const HOME_BUS = join(HOME_DIR, ".agent-bus");      // where crew.sh looks ($HOME/.agent-bus)
+const HOME_BUS = join(HOME_DIR, ".agent-bus");      // where crew.mjs looks ($HOME/.agent-bus)
 const BIN = join(TMP, "bin");                       // stub executables
 const PROJ = join(TMP, "projA");
 const PROJ2 = join(TMP, "projA2");                  // prefix-sibling: anchoring bait
@@ -112,7 +112,7 @@ writeFileSync(join(BUS, "crew-windows.txt"), [
 mkdirSync(join(HOME_DIR, ".config", "opencode"), { recursive: true });
 writeFileSync(join(HOME_DIR, ".config", "opencode", "opencode.json"), JSON.stringify({ model: "deepseek/deepseek-v4-flash" }));
 
-// Seeded crew-windows.txt for cleanDead (crew.sh reads $HOME/.agent-bus). cmux kinds only, so the
+// Seeded crew-windows.txt for cleanDead (crew.mjs reads $HOME/.agent-bus). cmux kinds only, so the
 // prune path is driven entirely by the stub (no real osascript/Terminal probe).
 writeFileSync(join(HOME_BUS, "crew-windows.txt"), [
   "projA\tcmux\tcodex\tWS-1",     // live per stub → kept
@@ -215,7 +215,7 @@ await test("inventory(null) is machine-wide and leaves devServers empty", () => 
   assert.equal(inv.workspaces.length, 2);
 });
 
-await test("cleanDead prunes only provably-dead tracking rows (crew.sh prune)", () => {
+await test("cleanDead prunes only provably-dead tracking rows (crew.mjs prune)", () => {
   const out = R.cleanDead("projA");
   assert.match(out, /pruned/);
   const state = readFileSync(join(HOME_BUS, "crew-windows.txt"), "utf8");

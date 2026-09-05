@@ -30,7 +30,7 @@ export function devServers(dir)         // → [{pid,cmd}] dev-ish processes (ne
 export function inventory(project)      // → {rows, runners, workspaces, devServers} — composes the
                                         //   above; project=null → machine-wide (devServers only
                                         //   when project dir known → else []).
-export function cleanDead(project)      // → string output of `bash <pkgroot>/bin/crew.sh prune`
+export function cleanDead(project)      // → string output of `node <pkgroot>/bin/crew.mjs prune`
                                         //   (RELAY_PROJECT env set when project given). This is the
                                         //   ONLY mutation and it only drops dead tracking rows.
 ```

@@ -86,7 +86,7 @@ exit 0
       // Pin the surface to Terminal. These drills assert on the WINDOW the seat opens — its title,
       // what it says about itself — by stubbing osascript on PATH. Since 0.18.7 the seat prefers
       // cmux when one answers, so on a machine with cmux installed every one of those assertions
-      // would test nothing and fail. CREW_MUX is the same override bin/crew.sh uses.
+      // would test nothing and fail. CREW_MUX is the same override bin/crew.mjs uses.
       // The cmux path has its own drill below.
       env: { ...baseEnv, HOME: w, AGENT_BUS_DIR: BUS, PATH: `${fakebin}:${process.env.PATH}`,
              RELAY_URL: HUB, TRANTOR_NO_UPDATE_CHECK: "1", CREW_MUX: "terminal", ...extraEnv },

@@ -1,19 +1,21 @@
 #!/bin/bash
 # trantor crew teardown-scoping tests (2026-07-20).
 #
-# The bug: crew.sh v2 tracked ALL crew windows in one global ~/.agent-bus/crew-windows.txt as bare
+# The bug: crew.mjs v2 tracked ALL crew windows in one global ~/.agent-bus/crew-windows.txt as bare
 # `AGENT<TAB>WID` rows (no project), so `trantor down` from ANY session killed EVERY crew on the machine.
 # v3 rows are `PROJECT<TAB>KIND<TAB>AGENT<TAB>HANDLE` and `down` is PROJECT-SCOPED. These tests run the REAL
 # down() against a temp HOME with STUBBED osascript/tmux (no windows spawned, no tmux needed) and assert
 # which STATE rows survive. This is the safety fix — one session's teardown must never touch another's crew.
 set -u
 ROOT="$(cd "$(dirname "$0")" && pwd)"
+NODE="$(command -v node)"
+CREW=("$NODE" "$ROOT/bin/crew.mjs")
 PASS=0; FAIL=0
 ok(){ if eval "$2"; then PASS=$((PASS+1)); echo "  ✓ $1"; else FAIL=$((FAIL+1)); echo "  ✗ $1  [$2]"; fi; }
 
 # #6228 bounce (2026-09-03): this suite must not depend on the RUNNER'S OWN identity env. A herdr
 # pane hosting a crew seat exports TRANTOR_ORCH/TRANTOR_SEAT persistently (and HERDR_PANE_ID,
-# RELAY_PROJECT, ...); every `bash crew.sh` invocation below that does not override one of these
+# RELAY_PROJECT, ...); every `bash crew.mjs` invocation below that does not override one of these
 # inherits the RUNNER's badge instead — so from inside a TRANTOR_ORCH=trantor pane, every dry-run
 # spawn for testproj/crebral-health/etc. got refused by the cross-project guard (#6228) as if IT
 # were the badge mismatch, 23 drills failed. Same fix drill-env.mjs's scrubIdentityEnv() applies to
@@ -26,9 +28,9 @@ trap 'rm -rf "$TMP"' EXIT
 mkdir -p "$TMP/.agent-bus" "$TMP/fakebin"
 # stub osascript: log any AppleScript (stdin heredoc, e.g. cmux close-tab) so we can assert on it; a query
 # for a window id returns nothing (no tty, nothing killed); everything succeeds.
-# ⚠ the stub CATS STDIN — so every crew.sh invocation in this file must carry </dev/null, or the stub
+# ⚠ the stub CATS STDIN — so every crew.mjs invocation in this file must carry </dev/null, or the stub
 # inherits the test runner's open stdin and blocks forever (hung npm test twice on 2026-08-20: the
-# terminal-fallback drill reaches crew.sh's Finder-bounds osascript with npm's stdin attached).
+# terminal-fallback drill reaches crew.mjs's Finder-bounds osascript with npm's stdin attached).
 cat > "$TMP/fakebin/osascript" <<EOF
 #!/bin/bash
 cat >> "$TMP/osa.log" 2>/dev/null </dev/stdin
@@ -80,7 +82,7 @@ rows(){ [ -f "$STATE" ] && wc -l < "$STATE" | tr -d ' ' || echo 0; }
 has_row(){ [ -f "$STATE" ] && grep -qF "$1" "$STATE"; }
 # CREW_NO_PROC_KILL: these tests seed REAL project names (crebral-health) — without the guard, the
 # per-seat proc-kill sweep would pgrep live crew runners on the host machine during `npm test`.
-downcmd(){ HOME="$TMP" PATH="$TMP/fakebin:$PATH" RELAY_PROJECT="$1" CREW_NO_PROC_KILL=1 bash "$ROOT/bin/crew.sh" down "${@:2}" </dev/null; }
+downcmd(){ HOME="$TMP" PATH="$TMP/fakebin:$PATH" RELAY_PROJECT="$1" CREW_NO_PROC_KILL=1 "${CREW[@]}" down "${@:2}" </dev/null; }
 
 echo "# trantor crew teardown-scoping tests"
 
@@ -131,12 +133,12 @@ ok "the other project's tmux row survives STATE rewrite" 'has_row "builtbetter	t
 
 # 7. unknown flag → usage + nonzero exit
 seed "$SEED"
-if HOME="$TMP" PATH="$TMP/fakebin:$PATH" RELAY_PROJECT=crebral-health bash "$ROOT/bin/crew.sh" down --bogus >/dev/null 2>&1; then rc=0; else rc=1; fi
+if HOME="$TMP" PATH="$TMP/fakebin:$PATH" RELAY_PROJECT=crebral-health "${CREW[@]}" down --bogus >/dev/null 2>&1; then rc=0; else rc=1; fi
 ok "unknown flag is rejected (nonzero exit)" '[ "$rc" = "1" ]'
 ok "unknown flag changes nothing" '[ "$(rows)" = "4" ]'
 
 # 8. spawn dry-run forced to tmux → one grouped session, a named pane per seat, an attached window
-OUT8="$(CREW_MUX=tmux CREW_DRY_RUN=1 HOME="$TMP" PATH="$TMP/fakebin:$PATH" RELAY_PROJECT=testproj bash "$ROOT/bin/crew.sh" up codex glm </dev/null 2>&1)"
+OUT8="$(CREW_MUX=tmux CREW_DRY_RUN=1 HOME="$TMP" PATH="$TMP/fakebin:$PATH" RELAY_PROJECT=testproj "${CREW[@]}" up codex glm </dev/null 2>&1)"
 ok "tmux spawn creates the project session" 'echo "$OUT8" | grep -q "tmux new-session -d -s .trantor:testproj"'
 ok "tmux spawn adds a pane for the 2nd seat" 'echo "$OUT8" | grep -q "tmux split-window"'
 ok "tmux spawn names panes by seat" 'echo "$OUT8" | grep -qi "select-pane .* -T"'
@@ -144,7 +146,7 @@ ok "tmux spawn attaches ONE Terminal window" 'echo "$OUT8" | grep -qi "would att
 ok "tmux spawn does no bus verify in dry mode" 'echo "$OUT8" | grep -q "dry run: no bus verify"'
 
 # 9. spawn dry-run forced to Terminal fallback → per-agent windows + the hint
-OUT9="$(CREW_MUX=terminal CREW_DRY_RUN=1 HOME="$TMP" PATH="$TMP/fakebin_notmux:/usr/bin:/bin" RELAY_PROJECT=testproj bash "$ROOT/bin/crew.sh" up codex glm </dev/null 2>&1)"
+OUT9="$(CREW_MUX=terminal CREW_DRY_RUN=1 HOME="$TMP" PATH="$TMP/fakebin_notmux:/usr/bin:/bin" RELAY_PROJECT=testproj "${CREW[@]}" up codex glm </dev/null 2>&1)"
 ok "terminal fallback hints a multiplexer (cmux/tmux)" 'echo "$OUT9" | grep -qiE "install cmux|brew install tmux"'
 ok "terminal fallback spawns per-agent windows" 'echo "$OUT9" | grep -qi "Terminal window for"'
 
@@ -166,14 +168,14 @@ ok "cmux per-seat down does NOT close the whole workspace" '! grep -q "close-wor
 ok "cmux per-seat down keeps the sibling seat + workspace" 'has_row "crebral-health	cmux	glm	TERM-2" && has_row "crebral-health	cmuxws	__ws__	TAB-CH"'
 
 # 12. cmux SOCKET spawn dry-run → one workspace (new-workspace) + a split per extra seat
-OUT12="$(CREW_MUX=cmux CREW_DRY_RUN=1 HOME="$TMP" PATH="$TMP/fakebin:$PATH" RELAY_PROJECT=testproj bash "$ROOT/bin/crew.sh" up codex glm deepseek </dev/null 2>&1)"
+OUT12="$(CREW_MUX=cmux CREW_DRY_RUN=1 HOME="$TMP" PATH="$TMP/fakebin:$PATH" RELAY_PROJECT=testproj "${CREW[@]}" up codex glm deepseek </dev/null 2>&1)"
 ok "cmux spawn creates ONE workspace via new-workspace" 'echo "$OUT12" | grep -q "cmux: new-workspace (cwd"'
 ok "cmux spawn tiles extra seats via new-split" '[ "$(echo "$OUT12" | grep -c "cmux: new-split")" = "2" ]'
 ok "cmux spawn reports the grouped workspace + sidebar status" 'echo "$OUT12" | grep -q "seats tiled + sidebar status"'
 
 # 13. cmux GRID tiling: 4 seats = 2×2 — row 0 splits RIGHT off the previous column, row 1 splits DOWN
 # from the pane directly above (surface-targeted, never focus-dependent; the old staircase regression)
-OUT13="$(CREW_MUX=cmux CREW_DRY_RUN=1 HOME="$TMP" PATH="$TMP/fakebin:$PATH" RELAY_PROJECT=testproj bash "$ROOT/bin/crew.sh" up codex glm deepseek kimi </dev/null 2>&1)"
+OUT13="$(CREW_MUX=cmux CREW_DRY_RUN=1 HOME="$TMP" PATH="$TMP/fakebin:$PATH" RELAY_PROJECT=testproj "${CREW[@]}" up codex glm deepseek kimi </dev/null 2>&1)"
 ok "cmux 4-seat grid: seat 2 splits RIGHT from seat 1" 'echo "$OUT13" | grep -q "new-split right --surface %DRYT0"'
 ok "cmux 4-seat grid: seat 3 splits DOWN from seat 1" 'echo "$OUT13" | grep -q "new-split down --surface %DRYT0"'
 ok "cmux 4-seat grid: seat 4 splits DOWN from seat 2" 'echo "$OUT13" | grep -q "new-split down --surface %DRYT1"'
@@ -193,7 +195,7 @@ node "$TMP/crew-runner.mjs" codex "$TMP/proj"  & DECOY_SAME=$!
 node "$TMP/crew-runner.mjs" glm   "$TMP/proj"  & DECOY_AGENT=$!
 node "$TMP/crew-runner.mjs" codex "$TMP/proj2" & DECOY_PREFIX=$!
 sleep 0.5
-OUT14="$(cd "$TMP/proj" && CREW_MUX=cmux CREW_DRY_RUN=1 HOME="$TMP" PATH="$TMP/fakebin:$PATH" RELAY_PROJECT=testproj bash "$ROOT/bin/crew.sh" up codex </dev/null 2>&1)"
+OUT14="$(cd "$TMP/proj" && CREW_MUX=cmux CREW_DRY_RUN=1 HOME="$TMP" PATH="$TMP/fakebin:$PATH" RELAY_PROJECT=testproj "${CREW[@]}" up codex </dev/null 2>&1)"
 ok "up reaps the live runner for the SAME agent+project" 'echo "$OUT14" | grep -q "^\[dry\] kill -9 $DECOY_SAME "'
 ok "the reap is not swallowed into the launcher string" '! echo "$OUT14" | grep -v "^\[dry\] kill -9" | grep -q "kill -9 $DECOY_SAME"'
 ok "up does NOT reap a different agent on the same project" '! echo "$OUT14" | grep -q "kill -9 $DECOY_AGENT"'
@@ -205,7 +207,7 @@ wait 2>/dev/null || true
 # a new one; older stacked workspaces (the 6-deep crebral-health pileup) are closed. Dry mode reads
 # STATE (read-only) so we can seed the board.
 seed "testproj\tcmuxws\t__ws__\tTAB-OLD\ntestproj\tcmuxws\t__ws__\tTAB-NEW\n"
-OUT15="$(CREW_MUX=cmux CREW_DRY_RUN=1 HOME="$TMP" PATH="$TMP/fakebin:$PATH" RELAY_PROJECT=testproj bash "$ROOT/bin/crew.sh" up codex glm </dev/null 2>&1)"
+OUT15="$(CREW_MUX=cmux CREW_DRY_RUN=1 HOME="$TMP" PATH="$TMP/fakebin:$PATH" RELAY_PROJECT=testproj "${CREW[@]}" up codex glm </dev/null 2>&1)"
 ok "up on a tracked crew does NOT create a new workspace" '! echo "$OUT15" | grep -q "cmux: new-workspace"'
 ok "up reuses the NEWEST tracked workspace" '[ "$(echo "$OUT15" | grep -c "reuse workspace TAB-NEW")" = "2" ]'
 ok "up closes the older stacked workspace" 'echo "$OUT15" | grep -q "close-workspace TAB-OLD"'
@@ -214,7 +216,7 @@ ok "up does not close the workspace it reuses" '! echo "$OUT15" | grep -q "close
 # 16. replace-in-place: re-upping a seat that already has a pane replaces THAT pane (split off it,
 # then close it) instead of adding a duplicate.
 seed "testproj\tcmuxws\t__ws__\tTAB-NEW\ntestproj\tcmux\tcodex\tTERM-1\n"
-OUT16="$(CREW_MUX=cmux CREW_DRY_RUN=1 HOME="$TMP" PATH="$TMP/fakebin:$PATH" RELAY_PROJECT=testproj bash "$ROOT/bin/crew.sh" up codex </dev/null 2>&1)"
+OUT16="$(CREW_MUX=cmux CREW_DRY_RUN=1 HOME="$TMP" PATH="$TMP/fakebin:$PATH" RELAY_PROJECT=testproj "${CREW[@]}" up codex </dev/null 2>&1)"
 ok "re-up of a live seat splits replacing its old pane" 'echo "$OUT16" | grep -q "new-split for codex (replacing TERM-1)"'
 ok "re-up closes the seat's old pane" 'echo "$OUT16" | grep -q "close-surface TERM-1"'
 
@@ -235,7 +237,7 @@ exit 0
 EOF
 chmod +x "$TMP/fakebin_cmuxlive/cmux"
 seed "protest\tcmuxws\t__ws__\tWS-LIVE\nprotest\tcmuxws\t__ws__\tWS-DEAD\nprotest\tcmux\tglm\tSURF-A\nprotest\tcmux\tcodex\tSURF-B\nghostproj\tcmux\tkimi\tSURF-C\n"
-CREW_MUX=cmux HOME="$TMP" PATH="$TMP/fakebin_cmuxlive:$PATH" RELAY_PROJECT=protest bash "$ROOT/bin/crew.sh" prune >/dev/null 2>&1
+CREW_MUX=cmux HOME="$TMP" PATH="$TMP/fakebin_cmuxlive:$PATH" RELAY_PROJECT=protest "${CREW[@]}" prune >/dev/null 2>&1
 ok "prune keeps the live cmux workspace row" 'has_row "protest	cmuxws	__ws__	WS-LIVE"'
 ok "prune drops the dead cmux workspace row" '! has_row "WS-DEAD"'
 ok "prune keeps EVERY seat row of a live-workspace project (split seats too)" 'has_row "protest	cmux	glm	SURF-A" && has_row "protest	cmux	codex	SURF-B"'
@@ -248,10 +250,10 @@ node "$TMP/crew-runner.mjs" codex "$TMP/prj-x"  & DECOY_SEAT=$!
 node "$TMP/crew-runner.mjs" codex "$TMP/prj-xy" & DECOY_OTHER=$!
 sleep 0.5
 seed "prj-x\tcmuxws\t__ws__\tTAB-P\nprj-x\tcmux\tcodex\tTERM-P\n"
-OUT18="$(CREW_DRY_RUN=1 HOME="$TMP" PATH="$TMP/fakebin:$PATH" RELAY_PROJECT=prj-x bash "$ROOT/bin/crew.sh" down codex 2>&1)"
+OUT18="$(CREW_DRY_RUN=1 HOME="$TMP" PATH="$TMP/fakebin:$PATH" RELAY_PROJECT=prj-x "${CREW[@]}" down codex 2>&1)"
 ok "per-seat down kills the seat's runner process" 'echo "$OUT18" | grep -q "^\[dry\] kill -9 $DECOY_SEAT "'
 ok "per-seat down does NOT kill a prefix-named sibling project's runner" '! echo "$OUT18" | grep -q "kill -9 $DECOY_OTHER"'
-ok "CREW_NO_PROC_KILL suppresses the proc sweep (test-suite guard)" '! CREW_DRY_RUN=1 HOME="$TMP" PATH="$TMP/fakebin:$PATH" RELAY_PROJECT=prj-x CREW_NO_PROC_KILL=1 bash "$ROOT/bin/crew.sh" down codex 2>&1 | grep -q "kill -9 $DECOY_SEAT"'
+ok "CREW_NO_PROC_KILL suppresses the proc sweep (test-suite guard)" '! CREW_DRY_RUN=1 HOME="$TMP" PATH="$TMP/fakebin:$PATH" RELAY_PROJECT=prj-x CREW_NO_PROC_KILL=1 "${CREW[@]}" down codex 2>&1 | grep -q "kill -9 $DECOY_SEAT"'
 kill -9 "$DECOY_SEAT" "$DECOY_OTHER" 2>/dev/null
 wait 2>/dev/null || true
 
@@ -259,13 +261,13 @@ wait 2>/dev/null || true
 # split-brain: a crew launched from a local-hub seat inherited its RELAY_URL and recorded a
 # whole build onto a board nobody was looking at). CREW_HUB stays the explicit override.
 printf '{"url":"http://127.0.0.1:4477","hubs":{"testproj":"http://10.9.9.9:4477"}}' > "$TMP/.agent-bus/config.json"
-OUT19="$(CREW_MUX=tmux CREW_DRY_RUN=1 HOME="$TMP" RELAY_URL=http://127.0.0.1:1111 PATH="$TMP/fakebin:$PATH" RELAY_PROJECT=testproj bash "$ROOT/bin/crew.sh" up codex </dev/null 2>&1)"
+OUT19="$(CREW_MUX=tmux CREW_DRY_RUN=1 HOME="$TMP" RELAY_URL=http://127.0.0.1:1111 PATH="$TMP/fakebin:$PATH" RELAY_PROJECT=testproj "${CREW[@]}" up codex </dev/null 2>&1)"
 ok "seat command bakes the PINNED hub (inherited RELAY_URL loses)" 'echo "$OUT19" | grep -q "RELAY_URL=http://10.9.9.9:4477"'
 ok "the stale inherited hub never reaches a seat" '! echo "$OUT19" | grep -q "RELAY_URL=http://127.0.0.1:1111"'
 ok "the binding is announced at launch" 'echo "$OUT19" | grep -q "hub for testproj: http://10.9.9.9:4477"'
-OUT19B="$(CREW_MUX=tmux CREW_DRY_RUN=1 HOME="$TMP" CREW_HUB=http://10.8.8.8:4477 RELAY_URL=http://127.0.0.1:1111 PATH="$TMP/fakebin:$PATH" RELAY_PROJECT=testproj bash "$ROOT/bin/crew.sh" up codex </dev/null 2>&1)"
+OUT19B="$(CREW_MUX=tmux CREW_DRY_RUN=1 HOME="$TMP" CREW_HUB=http://10.8.8.8:4477 RELAY_URL=http://127.0.0.1:1111 PATH="$TMP/fakebin:$PATH" RELAY_PROJECT=testproj "${CREW[@]}" up codex </dev/null 2>&1)"
 ok "CREW_HUB override wins over the pin" 'echo "$OUT19B" | grep -q "RELAY_URL=http://10.8.8.8:4477"'
-OUT19C="$(CREW_MUX=tmux CREW_DRY_RUN=1 HOME="$TMP" RELAY_URL=http://127.0.0.1:2222 PATH="$TMP/fakebin:$PATH" RELAY_PROJECT=unpinnedproj bash "$ROOT/bin/crew.sh" up codex </dev/null 2>&1)"
+OUT19C="$(CREW_MUX=tmux CREW_DRY_RUN=1 HOME="$TMP" RELAY_URL=http://127.0.0.1:2222 PATH="$TMP/fakebin:$PATH" RELAY_PROJECT=unpinnedproj "${CREW[@]}" up codex </dev/null 2>&1)"
 ok "no pin -> inherited RELAY_URL still honored (test harness contract)" 'echo "$OUT19C" | grep -q "RELAY_URL=http://127.0.0.1:2222"'
 rm -f "$TMP/.agent-bus/config.json"
 
@@ -275,19 +277,19 @@ rm -f "$TMP/.agent-bus/config.json"
 # policy link` (comma-separated a:b pairs) so the "already linked -> proceeds" case never depends on a
 # reachable hub. An unbadged shell, or a badge that already matches the target, is not cross-project
 # and must keep working — that's the operator's own bare `RELAY_PROJECT=x trantor up`.
-OUT20A="$(TRANTOR_ORCH=pr-os CREW_TEST_POLICY_LINKS="" HOME="$TMP" PATH="$TMP/fakebin:$PATH" RELAY_PROJECT=crebral-com bash "$ROOT/bin/crew.sh" up codex </dev/null 2>&1)"; RC20A=$?
+OUT20A="$(TRANTOR_ORCH=pr-os CREW_TEST_POLICY_LINKS="" HOME="$TMP" PATH="$TMP/fakebin:$PATH" RELAY_PROJECT=crebral-com "${CREW[@]}" up codex </dev/null 2>&1)"; RC20A=$?
 ok "badged shell into a DIFFERENT unlinked project refuses" '[ "$RC20A" != "0" ]'
 ok "refusal names the badge and the target" 'echo "$OUT20A" | grep -q "badged for .pr-os., not .crebral-com."'
 ok "refusal prints the link command" 'echo "$OUT20A" | grep -q "trantor policy link pr-os crebral-com"'
 
-OUT20B="$(TRANTOR_ORCH=pr-os CREW_TEST_POLICY_LINKS=pr-os:crebral-com CREW_DRY_RUN=1 HOME="$TMP" PATH="$TMP/fakebin:$PATH" RELAY_PROJECT=crebral-com bash "$ROOT/bin/crew.sh" up codex </dev/null 2>&1)"; RC20B=$?
+OUT20B="$(TRANTOR_ORCH=pr-os CREW_TEST_POLICY_LINKS=pr-os:crebral-com CREW_DRY_RUN=1 HOME="$TMP" PATH="$TMP/fakebin:$PATH" RELAY_PROJECT=crebral-com "${CREW[@]}" up codex </dev/null 2>&1)"; RC20B=$?
 ok "badged shell into a LINKED project proceeds" '[ "$RC20B" = "0" ]'
 ok "linked proceed announces the link, not a refusal" 'echo "$OUT20B" | grep -q "policy-linked — proceeding"'
 
-OUT20C="$(CREW_DRY_RUN=1 HOME="$TMP" PATH="$TMP/fakebin:$PATH" RELAY_PROJECT=crebral-com bash "$ROOT/bin/crew.sh" up codex </dev/null 2>&1)"; RC20C=$?
+OUT20C="$(CREW_DRY_RUN=1 HOME="$TMP" PATH="$TMP/fakebin:$PATH" RELAY_PROJECT=crebral-com "${CREW[@]}" up codex </dev/null 2>&1)"; RC20C=$?
 ok "unbadged shell (no TRANTOR_ORCH/TRANTOR_SEAT) proceeds" '[ "$RC20C" = "0" ]'
 
-OUT20D="$(TRANTOR_ORCH=crebral-com CREW_DRY_RUN=1 HOME="$TMP" PATH="$TMP/fakebin:$PATH" RELAY_PROJECT=crebral-com bash "$ROOT/bin/crew.sh" up codex </dev/null 2>&1)"; RC20D=$?
+OUT20D="$(TRANTOR_ORCH=crebral-com CREW_DRY_RUN=1 HOME="$TMP" PATH="$TMP/fakebin:$PATH" RELAY_PROJECT=crebral-com "${CREW[@]}" up codex </dev/null 2>&1)"; RC20D=$?
 ok "badge matching the target project is not cross-project" '[ "$RC20D" = "0" ]'
 
 echo ""

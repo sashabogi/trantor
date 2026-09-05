@@ -72,7 +72,7 @@ bus. Its replacement seat is **GLM via `glm:zai-coding-plan`**. (Gemini still se
 Scrooge cheap-model via `GEMINI_API_KEY` — that's a separate, working path, not a crew seat.)
 Only a holder of a paid Gemini enterprise key should ever `trantor up gemini`.
 
-(If `trantor` isn't on PATH, the same launcher is `bash "${KIMI_SKILL_DIR}/../../../bin/crew.sh" up …`.)
+(If `trantor` isn't on PATH, the same launcher is `node "${KIMI_SKILL_DIR}/../../../bin/crew.mjs" up …`.)
 The launcher auto-wires configs, spawns serialized runner windows, then **VERIFIES each agent
 on the bus with one retry**. READ ITS OUTPUT: it ends "crew verified" or "✗✗ CREW INCOMPLETE"
 naming no-shows. **Never assign work to an unverified agent.** The bus is the truth. If a seat

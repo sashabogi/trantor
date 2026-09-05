@@ -4,7 +4,7 @@
 //   trantor policy show | set <project> <1-4> | link <a> <b> --reason "<why>" | unlink <a> <b>
 //   trantor policy check <a> <b>   — exit 0 (prints "yes") if linked or identical, else exit 1 ("no")
 // Drafted by scrooge (deepseek-v4-flash), integrated by the orchestrator.
-// `check` is what bin/crew.sh's cross-project guard (#6228) shells out to: the CLI belt needs to
+// `check` is what bin/crew.mjs's cross-project guard (#6228) shells out to: the CLI belt needs to
 // know whether the operator already linked the two projects before it refuses `trantor up`.
 import { readFileSync } from "node:fs";
 import { join } from "node:path";

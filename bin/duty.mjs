@@ -133,7 +133,7 @@ function alivePid() {
 // `down` can take the surface away with the process.
 const CMUX_WS_NAME = "trantor-duty";
 
-// Surface override, same variable and same values bin/crew.sh already uses for crew seats:
+// Surface override, same variable and same values bin/crew.mjs already uses for crew seats:
 //   CREW_MUX=terminal  force a Terminal window (what the window-content drills assert on)
 //   CREW_MUX=cmux      require cmux
 //   unset / anything else = auto: cmux when it answers, Terminal otherwise.
@@ -261,7 +261,7 @@ if (cmd === "up") {
 
   if (WINDOW) {
     // --window: the visible surface. cmux first (ONE named workspace, replaced on each up — the
-    // same "replace, never stack" rule bin/crew.sh applies to crew seats), Terminal as fallback.
+    // same "replace, never stack" rule bin/crew.mjs applies to crew seats), Terminal as fallback.
     // A window cannot be kept alive by launchd, so `how` says plainly that nothing will bring
     // the seat back if it dies.
     const cmuxBin = cmuxBinary();

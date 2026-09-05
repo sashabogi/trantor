@@ -6,7 +6,7 @@
 // deleted, and per-case overrides win — set or deleted ON PURPOSE, never by accident of who ran
 // the drill (pattern proven in test-baton-surface.mjs, #6074 bounce).
 export const DRILL_IDENTITY_VARS = [
-  "HERDR_ENV", "HERDR_PANE_ID", "TRANTOR_ORCH",
+  "HERDR_ENV", "HERDR_PANE_ID", "TRANTOR_ORCH", "TRANTOR_SEAT",
   "RELAY_PROJECT", "TRANTOR_PROJECT", "RELAY_SESSION", "RELAY_AGENT",
 ];
 

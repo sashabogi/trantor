@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // trantor crew worktree drill — every seat should do its edits in an isolated git worktree.
 //
-// The runner owns this, not crew.sh: the bus identity and project are resolved from the
+// The runner owns this, not crew.mjs: the bus identity and project are resolved from the
 // orchestrator's source dir, while each CLI turn runs from ~/.agent-bus/worktrees/<project>/<agent>.
 // This drill drives the REAL runner with a fake hub and fake codex binary.
 import http from "node:http";

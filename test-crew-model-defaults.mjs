@@ -41,7 +41,7 @@ esac
 `);
   chmodSync(python, 0o755);
 
-  const run = spawnSync("bash", [join(root, "bin/crew.sh"), "up", "qwen", "glm"], {
+  const run = spawnSync(process.execPath, [join(root, "bin/crew.mjs"), "up", "qwen", "glm"], {
     cwd: root,
     encoding: "utf8",
     env: {
@@ -62,7 +62,7 @@ esac
   check("glm runner receives the resolved model", output.includes("CREW_MODEL=zai-coding-plan/glm-5.3-flash"));
   check("neither seat falls through to DeepSeek", !output.includes("CREW_MODEL=deepseek/"));
 
-  const badRoute = spawnSync("bash", [join(root, "bin/crew.sh"), "up", "qwen"], {
+  const badRoute = spawnSync(process.execPath, [join(root, "bin/crew.mjs"), "up", "qwen"], {
     cwd: root,
     encoding: "utf8",
     env: {
@@ -80,9 +80,9 @@ esac
   check("cross-provider fallback is explained", badOutput.includes("refusing cross-provider fallback"), badOutput);
 
   // A middle seat's model resolution can fail while the seats around it are perfectly launchable —
-  // that must SKIP the one bad seat, not exit crew.sh from inside the loop and strand the seats that
+  // that must SKIP the one bad seat, not exit crew.mjs from inside the loop and strand the seats that
   // already spawned earlier. #6110.
-  const midFail = spawnSync("bash", [join(root, "bin/crew.sh"), "up", "qwen", "badmid", "glm"], {
+  const midFail = spawnSync(process.execPath, [join(root, "bin/crew.mjs"), "up", "qwen", "badmid", "glm"], {
     cwd: root,
     encoding: "utf8",
     env: {

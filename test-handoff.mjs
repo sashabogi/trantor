@@ -6,9 +6,9 @@
 // that broke the promise: tail-only summary, compact eating its own handoff,
 // and the spawn never firing.
 import { writeFileSync, mkdirSync, existsSync, readFileSync, rmSync, utimesSync, readdirSync } from "node:fs";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { homedir, tmpdir } from "node:os";
-import { spawnSync, execSync } from "node:child_process";
+import { spawnSync } from "node:child_process";
 import {
   contextUsage, resolveWindow, warnFrac,
   alreadyHandedOff, markHandedOff, buildSummary, verbatimRecentTail, writeHandoff, spawnBaton,
@@ -16,6 +16,8 @@ import {
 } from "./hooks/lib/handoff.mjs";
 import { orchWriterSid } from "./lib/project.mjs";
 import { freshEngaged, originalStillWorking } from "./bin/baton-close.mjs";
+import { takeoverSessionId } from "./bin/crew/open.mjs";
+import { resolveOrchestratorDir } from "./bin/crew/worktrees.mjs";
 import { drillEnv } from "./drill-env.mjs";
 
 let pass = 0, fail = 0;
@@ -732,18 +734,10 @@ rmSync(projDir, { recursive: true, force: true });
   ok("resume guard: a fresh start still claims (consumed + CLAIMED by the fresh sid)", rec2.consumed === true && rec2.states.some(s => s.state === "claimed" && s.by === "fresh-1"));
   ok("resume guard: the fresh claimer gets the takeover banner", r2.stdout.includes("You are taking over"));
 
-  // 3) crew.sh `open`: ANY unconsumed handoff forces a FRESH sid — manual records carry no
+  // 3) crew.mjs `open`: ANY unconsumed handoff forces a FRESH sid — manual records carry no
   //    session_id, which is exactly why the old written-by-this-sid predicate never fired.
   writeFileSync(hf, JSON.stringify(baseRec));   // re-arm as unconsumed
-  // End at a LONE brace: /^}/ also matched the embedded node script's "}catch(e){}" line and
-  // truncated the function mid-body.
-  const fnSrc = execSync(`sed -n '/^_orch_takeover_sid()/,/^}$/p' bin/crew.sh`, { encoding: "utf8" });
-  // Via stdin (`bash -s`), never `bash -c "<double-quoted>"`: the outer shell would expand the
-  // function body's $(uuidgen), $1 and $& before bash ever saw them.
-  const runFn = () => {
-    const r = spawnSync("bash", ["-s"], { input: fnSrc + "\n_orch_takeover_sid proj recorded-sid\n", encoding: "utf8", env });
-    return (r.stdout || "").trim();
-  };
+  const runFn = () => takeoverSessionId({ env, home: bus, project: "proj" }, "recorded-sid");
   const out1 = runFn();
   ok("open: an unconsumed handoff (no session_id field) forces a FRESH sid", out1 !== "recorded-sid" && out1.length >= 8);
   writeFileSync(hf, JSON.stringify({ ...baseRec, consumed: true }));
@@ -758,11 +752,13 @@ rmSync(projDir, { recursive: true, force: true });
   const root = join(tmpdir(), `tt-resolve-${process.pid}`);
   mkdirSync(join(root, "devroot", "someproj"), { recursive: true });
   mkdirSync(join(root, "elsewhere"), { recursive: true });
-  const fnSrc = execSync(`sed -n '/^_orch_resolve_dir()/,/^}$/p' bin/crew.sh`, { encoding: "utf8" });
   const env = { ...drillEnv(), TRANTOR_DEV_ROOT: join(root, "devroot") };
-  const runFn = (cwd, proj) => spawnSync("bash", ["-s"], {
-    input: `${fnSrc}\n_orch_resolve_dir '${cwd}' '${proj}'\n`, encoding: "utf8", env,
-  });
+  const runFn = (cwd, proj) => {
+    try {
+      const value = resolveOrchestratorDir({ env, dir: cwd, home: root, project: basename(cwd) }, proj);
+      return { status: 0, stdout: value.dir, stderr: value.dir === cwd ? "" : "its checkout" };
+    } catch (error) { return { status: 1, stdout: "", stderr: error.message }; }
+  };
   const r1 = runFn(join(root, "elsewhere"), "someproj");
   ok("open: a named project opens in ITS checkout, not the caller's cwd",
     r1.status === 0 && r1.stdout.trim() === join(root, "devroot", "someproj") && r1.stderr.includes("its checkout"));
@@ -777,4 +773,3 @@ rmSync(projDir, { recursive: true, force: true });
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
-

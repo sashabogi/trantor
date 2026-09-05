@@ -31,7 +31,7 @@ import {
 const AGENT = process.argv[2];
 const DIR = process.argv[3] || process.cwd();
 // Crew agents MUST share the orchestrator's project key (one repo = one lane).
-// RELAY_PROJECT is inherited from crew.sh (the host's resolved key); else fall
+// RELAY_PROJECT is inherited from crew.mjs (the host's resolved key); else fall
 // back to the git-repo-root basename — never a loose dir basename that could
 // fork the host's "builtbetter.ai" into a separate "builtbetter" lane.
 const PROJ = process.env.RELAY_PROJECT || resolveProject(DIR);
@@ -669,9 +669,9 @@ exit $turn_exit`;
     cwd: TURN_DIR, encoding: "utf8", stdio: cli.sid ? ["ignore", "pipe", "inherit"] : ["ignore", "inherit", "inherit"],
     env: { ...process.env, RELAY_URL: HUB, RELAY_AGENT: AGENT, RELAY_SESSION: SESSION, RELAY_PROJECT: PROJ,
       // #6228: badges this seat's env as belonging to PROJ, distinctly from a one-off RELAY_PROJECT
-      // override (bin/crew.sh's own tests, and any deliberate `RELAY_PROJECT=x trantor up` from a
+      // override (bin/crew.mjs's own tests, and any deliberate `RELAY_PROJECT=x trantor up` from a
       // plain shell, set RELAY_PROJECT alone and must keep working — only THIS marker means "the
-      // env I'm running in already has a project home"). crew.sh's `up` guard refuses to bring up a
+      // env I'm running in already has a project home"). crew.mjs's `up` guard refuses to bring up a
       // DIFFERENT project's crew from a shell carrying this badge, same as it refuses TRANTOR_ORCH.
       TRANTOR_SEAT: PROJ,
       // A RUNNER-MANAGED SEAT MUST NEVER HAND ITSELF A BATON.

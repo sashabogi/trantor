@@ -3,7 +3,7 @@
 // which dev servers run under a directory. Sessions ADOPT live crews; boots clean the provably
 // dead. Provably dead = no live process AND no bus heartbeat AND no owning session — one signal
 // is never proof, and NOTHING here ever kills a process. The only mutation is cleanDead(), which
-// shells `crew.sh prune` (drops dead TRACKING ROWS, never processes).
+// runs `crew.mjs prune` (drops dead TRACKING ROWS, never processes).
 //
 // Hard rules (contract-frozen): every export is fail-silent ([] / "" on any error, never throws)
 // and every subprocess has a ≤2s timeout. Hooks run inside the user's tool loop — a throw or a
@@ -56,7 +56,7 @@ function runMaybeMissing(cmd, args, env = {}) {
   } catch (e) { return { out: "", missing: e && e.code === "ENOENT" }; }
 }
 
-// ~/.agent-bus/crew-windows.txt → [{project,kind,agent,handle}]. Row schema (crew.sh v3):
+// ~/.agent-bus/crew-windows.txt → [{project,kind,agent,handle}]. Row schema (crew.mjs v3):
 // PROJECT<TAB>KIND<TAB>AGENT<TAB>HANDLE, KIND ∈ win|attach|tmux|cmux|cmuxws. Legacy v2 rows are
 // bare AGENT<TAB>WID (2 fields, no project) → {project:"",kind:"win"}. Anything else is skipped.
 export function listCrewRows() {
@@ -85,7 +85,7 @@ function psTable() {
   return rows;
 }
 
-// Live crew-runner processes → [{pid,agent,dir,model}]. Runner argv (crew.sh RUN_CMD) is
+// Live crew-runner processes → [{pid,agent,dir,model}]. Runner argv (crew.mjs RUN_CMD) is
 // `node …/crew-runner.mjs <agent> <dir>` — dir is the LAST argument, so the regex is anchored
 // on end-of-string. project=null → all runners; project given → only runners whose dir resolves
 // to that project. Resolution is the lib/project.mjs walk (git-root basename, else dir basename)
@@ -117,7 +117,7 @@ export function liveRunners(project = null) {
 
 // Open cmux workspaces → [{id,title}] via `cmux workspace list --json` (CMUX_QUIET=1). The socket
 // may be off or cmux uninstalled — both are []. The CLI can print notice chatter before the JSON,
-// so parse from the first [ or { (same trick as crew.sh).
+// so parse from the first [ or { (same trick as crew.mjs).
 export function cmuxWorkspaces() {
   try {
     let r = runMaybeMissing("cmux", ["workspace", "list", "--json"], { CMUX_QUIET: "1" });
@@ -175,10 +175,10 @@ export function inventory(project = null) {
   } catch { return { rows: [], runners: [], workspaces: [], devServers: [] }; }
 }
 
-// The ONLY mutation: `bash <pkgroot>/bin/crew.sh prune` — drops crew-windows.txt rows whose
+// The ONLY mutation: `node <pkgroot>/bin/crew.mjs prune` — drops crew-windows.txt rows whose
 // handles are provably dead (never touches a process). RELAY_PROJECT is set when a project is
 // given. Returns the command's stdout; "" on any failure.
 export function cleanDead(project = null) {
-  return run("bash", [join(PKGROOT, "bin", "crew.sh"), "prune"],
+  return run(process.execPath, [join(PKGROOT, "bin", "crew.mjs"), "prune"],
     project ? { RELAY_PROJECT: String(project) } : {});
 }

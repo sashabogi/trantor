@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // `trantor autonomy` — read and set the three dials from the CLI.
 //
-// The app will grow a settings pane for this, but the CLI has to work on its own: crew.sh asks
+// The app will grow a settings pane for this, but the CLI has to work on its own: crew.mjs asks
 // this for the harness dial every time it starts your session, and a headless machine has no app.
 import { resolveAutonomy, setAutonomy, loadAutonomy, AUTONOMY_PATH } from "../lib/autonomy.mjs";
 import { resolveProject } from "../lib/project.mjs";
@@ -21,7 +21,7 @@ const BOOLS = ["commit", "push", "deploy", "swapDeadSeat", "retryFailedTurn"];
 const ENUMS = { harness: ["prompt", "bypass"], baton: ["ask", "auto"] };
 
 if (cmd === "get") {
-  // Machine-readable, one value, no decoration — crew.sh reads this.
+  // Machine-readable, one value, no decoration — crew.mjs reads this.
   const key = args[1];
   const a = resolveAutonomy(projectFlag() || "");
   if (!(key in a)) { console.error(`unknown dial '${key}'`); process.exit(1); }

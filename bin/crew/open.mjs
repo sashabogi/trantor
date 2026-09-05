@@ -41,7 +41,7 @@ function sessionId(ctx) {
   return id;
 }
 
-function hasPendingHandoff(ctx) {
+export function hasPendingHandoff(ctx) {
   const dir = join(ctx.env.AGENT_BUS_DIR || ctx.env.RELAY_DATA_DIR || join(ctx.home, ".agent-bus"), "handoffs");
   if (!existsSync(dir)) return false;
   const prefix = `${ctx.project}-`;
@@ -50,6 +50,10 @@ function hasPendingHandoff(ctx) {
     catch {}
   }
   return false;
+}
+
+export function takeoverSessionId(ctx, id) {
+  return hasPendingHandoff(ctx) ? randomUUID() : id;
 }
 
 function harnessFlag(ctx) {
@@ -142,7 +146,7 @@ export function openOrchestrator(ctx, args) {
     if (!ctx.have.herdr) throw new Error("trantor open needs herdr (the pane host) — install: curl -fsSL https://herdr.dev/install.sh | sh");
     let id = sessionId(ctx);
     if (hasPendingHandoff(ctx)) {
-      const fresh = randomUUID();
+      const fresh = takeoverSessionId(ctx, id);
       console.error(`— recorded session ${id} handed off: starting fresh as ${fresh} to claim it —`);
       id = fresh;
     }
