@@ -436,11 +436,6 @@ export function Chat({ project, sessionId, dock, onDock, onClose, deps = DEFAULT
   // The decision cursor: updated synchronously where the state is updated asynchronously, so two
   // arrivals in one tick still see the cursor the first one left.
   const seenRef = useRef(0);
-  // The generation chat_watch handed back for the watcher currently registered under this
-  // project:session key (#6113) — the cleanup below must echo it back to chat_unwatch so a
-  // stale unwatch (e.g. one still in flight from an earlier mount) can never stop a fresher
-  // watcher sitting at the same key. Undefined until the watch call resolves.
-  const watchGenerationRef = useRef<number | undefined>(undefined);
   const syncRef = useRef<() => void>(() => {});
   // The project this panel mounted on (#5509 W1) — lets the [project] effect tell a real switch
   // (a new episode, dismissals cleared) from the mount it must leave alone.
@@ -533,9 +528,21 @@ export function Chat({ project, sessionId, dock, onDock, onClose, deps = DEFAULT
     const offs: Array<() => void> = [];
     let badFrames = 0;
     setStreamed(false);
-    // A new mount owes nothing to whatever generation the last one saw — the cleanup below reads
-    // this ref, so a fresh run must not carry a stale value into that decision.
-    watchGenerationRef.current = undefined;
+    // #6094 — the cleanup below must echo THIS instance's OWN generation back to chat_unwatch,
+    // never a snapshot taken too early: if `target` resolves (null -> a live pane, #5495) fast
+    // enough that this effect tears down before its OWN chat_watch call has resolved, reading a
+    // ref synchronously at cleanup time finds it still undefined even though a Rust-side watcher
+    // for THIS instance may already exist — sending chat_unwatch the generation-less fallback,
+    // which removes WHATEVER entry is live for the key unconditionally (#6113's own
+    // "unconditional-removal" description). If the next mount's chat_watch has by then already
+    // installed ITS watcher under the same key, this stale unconditional unwatch kills it too —
+    // leaving a live "orch-status" listener with no Rust thread left to ever push it a frame
+    // again (silent from then on: no backfill call, no trace, nothing — the 09-05 18:37 real-path
+    // failure). `generation` resolves to this instance's own chat_watch answer (or undefined if
+    // it never got one), and cleanup AWAITS it — so the unwatch it sends is always this
+    // instance's true identity, never a guess.
+    let resolveGeneration: (g: number | undefined) => void = () => {};
+    const generationPromise = new Promise<number | undefined>(resolve => { resolveGeneration = resolve; });
     // The contract keeps the initial whole-file read on orchestrator_chat; the watcher takes over
     // from there. Until it can (its command missing on an older build, or no session yet), the
     // poll below is the transport this view has always had.
@@ -561,8 +568,10 @@ export function Chat({ project, sessionId, dock, onDock, onClose, deps = DEFAULT
           }));
         }
         const watch = await invokeFn<ChatWatchResult>("chat_watch", { project, sessionId: sessionId ?? null });
+        // Resolved unconditionally, even if `alive` already flipped false: cleanup may be
+        // waiting on exactly this promise to learn what to unwatch.
+        resolveGeneration(watch.generation);
         if (!alive) return;
-        watchGenerationRef.current = watch.generation;
         // Rows that landed while the watcher was spinning up would otherwise sit between our
         // cursor and the first event's after — close the gap now.
         if (watch.current > seenRef.current) sync();
@@ -612,16 +621,24 @@ export function Chat({ project, sessionId, dock, onDock, onClose, deps = DEFAULT
         }));
         if (alive) setStreamed(true);
       } catch {
-        // No watcher to be had — the poll fallback carries the view.
+        // No watcher to be had — the poll fallback carries the view. chat_watch may have failed
+        // before resolving at all (or never got called): nothing to unwatch, so the fallback
+        // below sends the generation-less form, correctly a no-op-if-nothing-matches on the
+        // Rust side rather than a false "unconditional remove".
+        resolveGeneration(undefined);
       }
     })();
     return () => {
       alive = false;
       for (const off of offs) off();
-      // Echo back the generation THIS mount's chat_watch received (#6113) — a missing value
-      // (chat_watch hadn't resolved yet) falls back to the unconditional-removal behavior older
-      // callers relied on, since there is no generation to be stale against.
-      invokeFn("chat_unwatch", { project, sessionId: sessionId ?? null, generation: watchGenerationRef.current ?? null }).catch(() => {});
+      // Echo back the generation THIS instance's OWN chat_watch resolved to (#6113, #6094) —
+      // awaited, never read from the ref synchronously: a mount torn down before its chat_watch
+      // answered must still learn its true generation before unwatching, or it sends the
+      // generation-less fallback and can kill a DIFFERENT (later) mount's live watcher instead of
+      // its own (see the comment above generationPromise's declaration).
+      void generationPromise.then(generation => {
+        invokeFn("chat_unwatch", { project, sessionId: sessionId ?? null, generation: generation ?? null }).catch(() => {});
+      });
     };
   }, [project, sessionId, target !== null, sync, history, commitStatus, nextSeq]);
 
