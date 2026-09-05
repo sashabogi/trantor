@@ -182,6 +182,19 @@ function removeProvider(name, opts = {}) {
     console.error("usage: trantor provider remove <name> [--credentials]");
     process.exit(1);
   }
+  const provider = PROVIDERS.find((candidate) => candidate.provider === name.toLowerCase());
+  if (opts.credentials && provider?.logoutRun) {
+    const logout = spawnSync(provider.logoutRun[0], provider.logoutRun.slice(1), {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    if (logout.error || (logout.status !== 0 && logout.status !== null)) {
+      const detail = String(logout.stderr || logout.error?.message || "").trim();
+      console.error(`${provider.logoutRun.join(" ")} exited ${logout.status ?? "?"}${detail ? ` — ${detail}` : ""}`);
+      process.exit(1);
+    }
+    console.log(`${C.grn}✓${C.off} signed out of the ${provider.label} system login`);
+  }
   const FILE = join(H, ".agent-bus", "profile.json");
   const prof = read(FILE, { providers: {} });
   if (prof.providers && prof.providers[name.toLowerCase()]) {

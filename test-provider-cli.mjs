@@ -5,7 +5,7 @@
 // Same guard on `provider remove` and `profile set`. Hermetic: a fake $HOME per block, so the
 // writes (and the refusal to write) land in a temp dir.
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -14,9 +14,9 @@ import { drillEnv } from "./drill-env.mjs";
 const ROOT = fileURLToPath(new URL(".", import.meta.url));
 let fail = 0; const ok = (c, m) => { console.log((c ? "✓" : "✗ FAIL") + " " + m); if (!c) fail++; };
 
-const run = (bin, args, home) => spawnSync(process.execPath, [join(ROOT, "bin", bin), ...args], {
+const run = (bin, args, home, env = {}) => spawnSync(process.execPath, [join(ROOT, "bin", bin), ...args], {
   encoding: "utf8",
-  env: { ...drillEnv(), HOME: home },
+  env: { ...drillEnv(), HOME: home, ...env },
 });
 
 // --- provider add/remove: flags and 'help' in the name position die before any write ---
@@ -71,6 +71,19 @@ const rm = run("provider.mjs", ["remove", "zzz-lab"], H4);
 ok(rm.status === 0, `provider remove zzz-lab: exit 0 (got ${rm.status})`);
 const prof4 = JSON.parse(readFileSync(join(H4, ".agent-bus", "profile.json"), "utf8"));
 ok(!prof4.providers["zzz-lab"], "provider remove zzz-lab: dropped from profile");
+
+// The Accounts pane promises that Remove clears native system credentials too. A fake Codex CLI
+// proves the exact logout invocation without touching the operator's real ~/.codex/auth.json.
+const H5 = mkdtempSync(join(tmpdir(), "trantor-prov-logout-"));
+const fakeBin = join(H5, "bin");
+const logoutLog = join(H5, "codex.log");
+mkdirSync(fakeBin, { recursive: true });
+writeFileSync(join(fakeBin, "codex"), `#!/bin/sh\nprintf '%s\\n' "$*" >> "${logoutLog}"\n`);
+chmodSync(join(fakeBin, "codex"), 0o755);
+const nativeRemove = run("provider.mjs", ["remove", "codex", "--credentials"], H5, { PATH: `${fakeBin}:/usr/bin:/bin` });
+ok(nativeRemove.status === 0, `provider remove codex --credentials: exit 0 (got ${nativeRemove.status})`);
+ok(readFileSync(logoutLog, "utf8").trim() === "logout", "provider remove codex --credentials: invokes codex logout");
+ok(nativeRemove.stdout.includes("signed out of the Codex system login"), "provider remove codex --credentials: reports native logout");
 
 console.log(fail ? `\n${fail} FAILED` : "\nALL PASS");
 process.exit(fail ? 1 : 0);
