@@ -70,9 +70,9 @@ describe("OnboardingFlow", () => {
     vi.useRealTimers();
   });
 
-  const mount = async (deps: OnboardingFlowDeps, onClose = vi.fn()) => {
+  const mount = async (deps: OnboardingFlowDeps, onClose = vi.fn(), forced = false) => {
     await act(async () => {
-      root.render(<OnboardingFlow me="sasha@mac" project="trantor" onClose={onClose} deps={deps} />);
+      root.render(<OnboardingFlow me="sasha@mac" project="trantor" onClose={onClose} forced={forced} deps={deps} />);
       await Promise.resolve();
       await Promise.resolve();
     });
@@ -140,5 +140,41 @@ describe("OnboardingFlow", () => {
     expect(host.textContent).toContain("Connect a provider");
     const continueBtn = () => [...host.querySelectorAll("button")].find(b => b.textContent?.includes("Continue") || b.textContent?.includes("Done"));
     expect(continueBtn()?.hasAttribute("disabled")).toBe(true);
+  });
+
+  it("an explicit reopen with everything satisfied shows all four steps, marked done, instead of closing", async () => {
+    const { deps, api } = depsFor({
+      providers: [providerRow("connected")],
+      hasHubPin: true,
+      autonomy: { ...AUTONOMY_DEFAULTS, commit: true },
+      projects: ["trantor"],
+    });
+    const onClose = await mount(deps, vi.fn(), true);
+    expect(api.close).not.toHaveBeenCalled();
+    expect(onClose).not.toHaveBeenCalled();
+    expect(host.textContent).toContain("1 / 4");
+    expect(host.textContent).toContain("Connect a provider");
+    expect(host.textContent).toContain("ready to continue");
+
+    const continueBtn = () => [...host.querySelectorAll("button")].find(b => b.textContent?.includes("Continue") || b.textContent?.includes("Done"));
+    await act(async () => { continueBtn()?.dispatchEvent(new MouseEvent("click", { bubbles: true })); await Promise.resolve(); await Promise.resolve(); });
+    expect(host.textContent).toContain("Identity and hub");
+    expect(host.textContent).toContain("Already set");
+  });
+
+  it("a forced reopen still lets Continue walk through every step to close", async () => {
+    const { deps, api } = depsFor({
+      providers: [providerRow("connected")],
+      hasHubPin: true,
+      autonomy: { ...AUTONOMY_DEFAULTS, commit: true },
+      projects: ["trantor"],
+    });
+    const onClose = await mount(deps, vi.fn(), true);
+    const continueBtn = () => [...host.querySelectorAll("button")].find(b => b.textContent?.includes("Continue") || b.textContent?.includes("Done"));
+    for (let i = 0; i < 4; i++) {
+      await act(async () => { continueBtn()?.dispatchEvent(new MouseEvent("click", { bubbles: true })); await Promise.resolve(); await Promise.resolve(); });
+    }
+    expect(api.close).toHaveBeenCalledTimes(1);
+    expect(onClose).toHaveBeenCalledTimes(1);
   });
 });

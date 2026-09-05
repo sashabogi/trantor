@@ -41,6 +41,14 @@ export const DEFAULT_ONBOARDING_DEPS: OnboardingFlowDeps = {
   devRoot: () => invoke<string>("project_dev_root"),
 };
 
+function DoneBanner({ children }: { children: string }) {
+  return (
+    <div className="tr-card mt-3 flex items-center gap-2 px-4 py-3 text-[12.5px] text-tr-ok">
+      <CheckCircle2 size={15} /> {children}
+    </div>
+  );
+}
+
 const STEP_COPY = {
   providers: { title: "Connect a provider", sub: "One system login per provider — this is what your sessions and crews will run on." },
   identity: { title: "Identity and hub", sub: "Who this app signs as, and where its projects live." },
@@ -48,14 +56,18 @@ const STEP_COPY = {
   project: { title: "Start a project", sub: "Create a repo or open one you already have." },
 } satisfies Record<OnboardingStep, { title: string; sub: string }>;
 
-export function OnboardingFlow({ me, project, onClose, deps = DEFAULT_ONBOARDING_DEPS }: {
+export function OnboardingFlow({ me, project, onClose, forced = false, deps = DEFAULT_ONBOARDING_DEPS }: {
   me: string;
   project: string;
   onClose: () => void;
+  /** True only for an explicit "Show onboarding again" — shows every step, satisfied ones marked
+   * done, instead of the automatic first-run path's silent skip-and-close. */
+  forced?: boolean;
   deps?: OnboardingFlowDeps;
 }) {
   const { api, providerApi, knownProjects, autonomyResolved, devRoot } = deps;
   const [visible, setVisible] = useState<OnboardingStep[] | null>(null);
+  const [satisfiedAtMount, setSatisfiedAtMount] = useState<Record<OnboardingStep, boolean> | null>(null);
   const [index, setIndex] = useState(0);
   const [providers, setProviders] = useState<ProviderStatus[]>([]);
   const [hasHubPin, setHasHubPin] = useState(false);
@@ -84,6 +96,15 @@ export function OnboardingFlow({ me, project, onClose, deps = DEFAULT_ONBOARDING
         autonomy: isAutonomyStepSatisfied(resolved),
         project: isProjectStepSatisfied(projectList.length),
       } satisfies Record<OnboardingStep, boolean>;
+      setSatisfiedAtMount(satisfied);
+      // An explicit reopen shows every step, satisfied or not — Orca's behavior, and the only
+      // way "Show onboarding again" ever shows anything on a machine that has already done it
+      // all. The automatic first-run path is the one that skips satisfied steps and, if that
+      // leaves nothing, closes itself with no UI.
+      if (forced) {
+        setVisible([...ONBOARDING_STEPS]);
+        return;
+      }
       const steps = ONBOARDING_STEPS.filter(s => !satisfied[s]);
       if (steps.length === 0) {
         await api.close().catch(() => {});
@@ -93,7 +114,7 @@ export function OnboardingFlow({ me, project, onClose, deps = DEFAULT_ONBOARDING
       setVisible(steps);
     })();
     return () => { alive = false; };
-    // deps identity is stable across the wizard's lifetime; re-running on it would restart the flow.
+    // deps/forced identity is stable across the wizard's lifetime; re-running would restart the flow.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -154,9 +175,15 @@ export function OnboardingFlow({ me, project, onClose, deps = DEFAULT_ONBOARDING
                 {!hasHubPin && <code>trantor hub set &lt;project&gt; &lt;url&gt;</code>}
                 {!hasHubPin && "."} You can change either later in Settings.
               </div>
+              {satisfiedAtMount?.identity && <DoneBanner>Already set — nothing needed here.</DoneBanner>}
             </div>
           )}
-          {step === "autonomy" && <Autonomy projects={projects} />}
+          {step === "autonomy" && (
+            <>
+              <Autonomy projects={projects} />
+              {satisfiedAtMount?.autonomy && <DoneBanner>Already chosen — nothing needed here.</DoneBanner>}
+            </>
+          )}
           {step === "project" && (
             <div className="tr-card-ghost flex flex-col items-center gap-3 p-8 text-center">
               <div className="text-[13px] text-[var(--color-tr-muted)]">
@@ -169,6 +196,7 @@ export function OnboardingFlow({ me, project, onClose, deps = DEFAULT_ONBOARDING
                   Start a project
                 </button>
               )}
+              {satisfiedAtMount?.project && <DoneBanner>Already done — nothing needed here.</DoneBanner>}
             </div>
           )}
         </div>
