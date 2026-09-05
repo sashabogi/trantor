@@ -15,6 +15,7 @@ import type { AppUpdate, EditorPref } from "../../shared/api/client";
 import { Avatar } from "../../shared/Avatar";
 import { notificationsEnabled, setNotificationsEnabled } from "../../shared/notify";
 import { AccountsPane } from "./providers/AccountsPane";
+import { AgentsPane } from "./agents/AgentsPane";
 import { SettingsBoundary } from "./SettingsBoundary";
 import { onboardingApi } from "../onboarding/onboardingApi";
 
@@ -51,7 +52,7 @@ function SettingsContent({ me, update: updateFromShell, projects = [], project =
     setReopening(true);
     try { await onboardingApi.reopen(); onReopenOnboarding?.(); } finally { setReopening(false); }
   };
-  const [pane, setPane] = useState<"general" | "accounts">("general");
+  const [pane, setPane] = useState<"general" | "accounts" | "agents">("general");
   const [hubs, setHubs] = useState<HubRow[]>([]);
   const [notify, setNotify] = useState(notificationsEnabled());
   const [editor, setEditor] = useState<EditorPref>(editorPref());
@@ -111,14 +112,15 @@ function SettingsContent({ me, update: updateFromShell, projects = [], project =
     <div className="tr-pane flex h-full flex-col">
       <header className="px-10 pt-8 pb-5">
         <h1 className="tr-page-title">Settings</h1>
-        <p className="tr-page-sub">{pane === "accounts" ? "Provider logins, keys and live connection state." : "Identity, hubs and app behavior."}</p>
+        <p className="tr-page-sub">{pane === "accounts" ? "Provider logins, keys and live connection state." : pane === "agents" ? "Installed agents, defaults and availability." : "Identity, hubs and app behavior."}</p>
         <div className="tr-seg mt-4">
           <button type="button" data-on={pane === "general"} onClick={() => setPane("general")}>General</button>
-          <button type="button" data-on={pane === "accounts"} onClick={() => setPane("accounts")}>Accounts</button>
+          <button type="button" data-on={pane === "accounts"} onClick={() => setPane("accounts")}>AI Provider Accounts</button>
+          <button type="button" data-on={pane === "agents"} onClick={() => setPane("agents")}>Agents</button>
         </div>
       </header>
-      <div className="max-w-3xl flex-1 overflow-y-auto px-10 pb-8">
-        {pane === "accounts" ? <AccountsPane project={project || projects[0] || ""} /> : <>
+      <div className={`${pane === "general" ? "max-w-3xl" : "max-w-5xl"} flex-1 overflow-y-auto px-10 pb-8`}>
+        {pane === "accounts" ? <AccountsPane project={project || projects[0] || ""} /> : pane === "agents" ? <AgentsPane /> : <>
         <section className="mb-8">
           <h2 className="tr-sec-title">Identity</h2>
           <p className="tr-sec-sub">Every request this app makes is signed as you.</p>

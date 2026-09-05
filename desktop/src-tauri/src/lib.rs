@@ -297,6 +297,34 @@ async fn provider_verify(name: String, key: String) -> Result<String, String> {
     run_cli_json(&["provider.mjs", "verify", &name, "--key", &key, "--json"]).await
 }
 
+#[tauri::command]
+async fn agent_settings_status() -> Result<String, String> {
+    run_cli_json(&["agent-settings.mjs", "status", "--json"]).await
+}
+
+#[tauri::command]
+async fn agent_settings_set_enabled(id: String, enabled: bool) -> Result<String, String> {
+    run_cli_json(&[
+        "agent-settings.mjs",
+        "set-enabled",
+        &id,
+        if enabled { "true" } else { "false" },
+        "--json",
+    ])
+    .await
+}
+
+#[tauri::command]
+async fn agent_settings_set_default(id: Option<String>) -> Result<String, String> {
+    run_cli_json(&[
+        "agent-settings.mjs",
+        "set-default",
+        id.as_deref().unwrap_or("auto"),
+        "--json",
+    ])
+    .await
+}
+
 /// Where a project's code lives on THIS machine. Convention first (~/development/<project>),
 /// TRANTOR_DEV_ROOT to relocate. Returns None when the repo simply isn't here — a card can
 /// reference code on another operator's machine and the UI degrades to text.
@@ -5597,6 +5625,9 @@ pub fn run() {
             trantor_cli_compatibility,
             provider_status,
             provider_verify,
+            agent_settings_status,
+            agent_settings_set_enabled,
+            agent_settings_set_default,
             chat_watch,
             chat_unwatch,
             file_watch,

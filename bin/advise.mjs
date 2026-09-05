@@ -15,6 +15,7 @@ import { join } from "node:path";
 import { homedir } from "node:os";
 import { execSync } from "node:child_process";
 import { pathToFileURL } from "node:url";
+import { busDir, readConfig } from "../lib/project.mjs";
 
 const H = homedir();
 const read = (p, fb) => { try { return JSON.parse(readFileSync(p, "utf8")); } catch { return fb; } };
@@ -64,8 +65,14 @@ export function buildRoster(profile, ocConfig) {
   return { ...BUILTIN_ROSTER, ...discoverSeats(profile, ocConfig) };
 }
 
+export function filterEnabledAgents(agentIds, config = {}) {
+  const disabled = new Set(Array.isArray(config?.agents?.disabled) ? config.agents.disabled : []);
+  return agentIds.filter(agent => !disabled.has(agent));
+}
+
 export function loadWorld() {
-  const profile = read(join(H, ".agent-bus", "profile.json"), { providers: {} });
+  const config = readConfig();
+  const profile = read(join(busDir(), "profile.json"), { providers: {} });
   const registry = read(join(H, ".token-scrooge", "registry.json"), { models: {}, tasks: {} });
   const caps = read(join(H, ".token-scrooge", "capabilities.json"), {});
   const ocConfig = read(join(H, ".config", "opencode", "opencode.json"), {});
@@ -84,8 +91,8 @@ export function loadWorld() {
     const envKey = `${String(s.providerOc).toUpperCase().replace(/[^A-Z0-9]/g, "_")}_API_KEY`;
     return opencodeKey(s.providerOc) || envHasKey(envKey) || !!profile?.providers?.[s.provider];
   };
-  const agents = Object.keys(roster).filter(hasSeat);
-  return { profile, registry, caps, roster, agents, scrooge: has("scrooge") };
+  const agents = filterEnabledAgents(Object.keys(roster).filter(hasSeat), config);
+  return { profile, registry, caps, ocConfig, roster, agents, scrooge: has("scrooge") };
 }
 
 const tierOf = (profile, prov) => profile?.providers?.[prov]?.tier || "api";

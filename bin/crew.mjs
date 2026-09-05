@@ -9,6 +9,8 @@ import { down, prune } from "./crew/state.mjs";
 import { spawnTerminal, spawnTmux } from "./crew/tmux.mjs";
 import { epochMs, failedAgents, verifyCrew } from "./crew/verify.mjs";
 import { guardCrossProjectUp } from "./crew/worktrees.mjs";
+import { resolveAgentLaunchSpecs } from "../lib/agent-preferences.mjs";
+import { readConfig } from "../lib/project.mjs";
 
 const [command = "up", ...rawArgs] = process.argv.slice(2);
 let ctx;
@@ -51,8 +53,14 @@ function connect() {
 
 function runUp(args, verify = true) {
   const options = parseUpArgs(args);
+  const requested = resolveAgentLaunchSpecs(options.specs, readConfig());
+  options.specs = requested.specs;
   if (!options.specs.length) {
-    console.log("usage: crew.mjs up [--task K --difficulty D] codex glm kimi deepseek (agent:provider picks a live model; agent:provider/model pins one)");
+    console.log("usage: crew.mjs up [--task K --difficulty D] codex glm kimi deepseek (or set a default in Settings → Agents)");
+    return 1;
+  }
+  if (requested.disabled.length) {
+    console.error(`[crew] ✗ ${requested.disabled.join(", ")} ${requested.disabled.length === 1 ? "is" : "are"} disabled in ~/.agent-bus/config.json — enable the seat in Settings → Agents`);
     return 1;
   }
   prune(ctx, adapters);
