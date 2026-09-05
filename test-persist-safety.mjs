@@ -206,12 +206,21 @@ try {
   writeFileSync(join(mockBin, "systemctl"), "#!/bin/bash\nprintf '%s\\n' \"$*\" >> \"$SYSTEMCTL_LOG\"\n");
   chmodSync(join(mockBin, "curl"), 0o755);
   chmodSync(join(mockBin, "systemctl"), 0o755);
-  const guardEnv = { ...drillEnv(), PATH: `${mockBin}:${process.env.PATH}`, SYSTEMCTL_LOG: serviceLog, MOCK_HEALTH: JSON.stringify({ ok: true, persist: { ok: false, failingSinceMs: 65000, lastError: "db rejected row", retries: 7 } }) };
+  // #6476's smoke boots the real hub with the env file the wrapper sources, and the tracked
+  // deploy/hub.env points RELAY_DATA_DIR at netcup's /var/lib/trantor/data — unwritable on a
+  // Mac/CI, so the smoke refused before the guard ever reached the health check (#6446). Point
+  // RELAY_ENV_FILE at a drill-local env file with a store the machine can actually write.
+  const drillEnvFile = join(scratch, "hub.env");
+  writeFileSync(drillEnvFile, `RELAY_DATA_DIR=${join(scratch, "data")}\nRELAY_HOST=127.0.0.1\n`);
+  const guardEnv = { ...drillEnv(), PATH: `${mockBin}:${process.env.PATH}`, SYSTEMCTL_LOG: serviceLog, MOCK_HEALTH: JSON.stringify({ ok: true, persist: { ok: false, failingSinceMs: 65000, lastError: "db rejected row", retries: 7 } }), RELAY_ENV_FILE: drillEnvFile };
   const refused = spawnSync("bash", [join(ROOT, "deploy/restart-hub.sh")], { cwd: ROOT, env: guardEnv, encoding: "utf8" });
   ok(refused.status === 1 && /failed for 1m 5s/.test(refused.stderr) && /losing every state change/.test(refused.stderr), "restart refusal names duration and state at risk", refused.stderr.trim());
-  ok(!existsSync(serviceLog), "refused restart never invokes systemctl");
+  // The wrapper itself reads `systemctl show` for the unit env (a call the drill's stub logs),
+  // so the honest guard is that a REFUSED restart never says "restart".
+  const stubLog = () => { try { return readFileSync(serviceLog, "utf8"); } catch { return ""; } };
+  ok(!/restart/.test(stubLog()), "refused restart never restarts the service (the unit-env read is fine)", stubLog());
   const forced = spawnSync("bash", [join(ROOT, "deploy/restart-hub.sh"), "--force"], { cwd: ROOT, env: guardEnv, encoding: "utf8" });
-  ok(forced.status === 0 && readFileSync(serviceLog, "utf8").trim() === "restart trantor-hub", "--force explicitly permits the restart");
+  ok(forced.status === 0 && stubLog().includes("restart trantor-hub"), "--force explicitly permits the restart", forced.stderr.trim());
 } finally {
   for (const child of children) child.kill("SIGTERM");
   rmSync(scratch, { recursive: true, force: true });

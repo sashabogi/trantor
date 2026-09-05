@@ -86,23 +86,26 @@ try {
   ok("a cross-project DM is accepted", dm.status < 400, `status ${dm.status}`);
 
   // 5. The overseer INTRODUCES colliding parties to each other, not only the duty seat.
-  //    Two live sessions in one project is the simplest condition that fires.
-  const a = await mkAgent("agent:projPair-a", "projPair");
-  const b = await mkAgent("agent:projPair-b", "projPair");
+  //    Two live sessions in one project is the simplest condition that fires. Session ids follow
+  //    the "<brand>:<project>" convention — #6228's guard reads the SUFFIX as the sender's home
+  //    project, so a session named "agent:projPair-a" would have its registers 403'd as
+  //    cross-project (#6446: red since 3e18faf) and the overseer would never see the pair.
+  const a = await mkAgent("codex:projPair", "projPair");
+  const b = await mkAgent("kimi:projPair", "projPair");
   await sFetch(owner, "POST", "/policy", { autonomy: { projPair: 2 } });
-  await sFetch(a, "POST", "/register", { session: "agent:projPair-a", project: "projPair", status: "working" });
-  await sFetch(b, "POST", "/register", { session: "agent:projPair-b", project: "projPair", status: "working" });
+  await sFetch(a, "POST", "/register", { session: "codex:projPair", project: "projPair", status: "working" });
+  await sFetch(b, "POST", "/register", { session: "kimi:projPair", project: "projPair", status: "working" });
   await sleep(1600);
   const inboxOf = async (id, s) => (await sFetch(id, "GET", `/inbox?session=${encodeURIComponent(s)}&since=0&peek=1`)).json.messages || [];
-  const toA = (await inboxOf(a, "agent:projPair-a")).filter(m => m.from === "hub:duty" && /🤝/.test(m.text));
-  const toB = (await inboxOf(b, "agent:projPair-b")).filter(m => m.from === "hub:duty" && /🤝/.test(m.text));
+  const toA = (await inboxOf(a, "codex:projPair")).filter(m => m.from === "hub:duty" && /🤝/.test(m.text));
+  const toB = (await inboxOf(b, "kimi:projPair")).filter(m => m.from === "hub:duty" && /🤝/.test(m.text));
   ok("each colliding party is introduced", toA.length >= 1 && toB.length >= 1, `a=${toA.length} b=${toB.length}`);
-  ok("the introduction names the OTHER party's session id", toA.length > 0 && /agent:projPair-b/.test(toA[0].text) && !/you and agent:projPair-a/.test(toA[0].text), toA[0]?.text?.slice(0, 120));
+  ok("the introduction names the OTHER party's session id", toA.length > 0 && /kimi:projPair/.test(toA[0].text) && !/you and codex:projPair/.test(toA[0].text), toA[0]?.text?.slice(0, 120));
   ok("it tells them to coordinate directly rather than via a human", toA.length > 0 && /relay_send/.test(toA[0].text) && /No human/i.test(toA[0].text));
 
   // 6. A standing condition must not re-introduce every tick — that would wake both seats forever.
   await sleep(1500);
-  const again = (await inboxOf(a, "agent:projPair-a")).filter(m => m.from === "hub:duty" && /🤝/.test(m.text));
+  const again = (await inboxOf(a, "codex:projPair")).filter(m => m.from === "hub:duty" && /🤝/.test(m.text));
   ok("a standing collision introduces ONCE per episode", toA.length >= 1 && again.length === toA.length, `${toA.length} -> ${again.length}`);
 } finally {
   try { hub.kill(); } catch {}
