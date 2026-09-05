@@ -18,7 +18,7 @@ const providerRow = (state: ProviderStatus["state"]): ProviderStatus => ({
 });
 
 const fakeProviderApi = (providers: ProviderStatus[]): ProviderAccountsApi => ({
-  status: vi.fn(async () => providers),
+  status: vi.fn(async () => ({ available: true as const, providers })),
   login: vi.fn(async () => {}),
   verifyKey: vi.fn(async () => providers[0]),
   saveKey: vi.fn(async () => {}),
