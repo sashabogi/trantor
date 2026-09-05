@@ -26,9 +26,9 @@ export function RemoveProviderSheet({ provider, api, onClose, onRemoved }: {
         <div className="flex items-start gap-3">
           <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-[color-mix(in_srgb,var(--color-tr-fail)_12%,transparent)] text-[var(--color-tr-fail)]"><Trash2 size={16} /></span>
           <div>
-            <h2 id="remove-provider-title" className="text-[15px] font-semibold">Remove {provider.label}?</h2>
+            <h2 id="remove-provider-title" className="text-[15px] font-semibold">Remove {provider.label} login?</h2>
             <p className="mt-1 text-[12px] leading-relaxed text-[var(--color-tr-muted)]">
-              One login is shared by every {provider.label} session on this machine. Removing it clears the saved credential or Trantor provider configuration, and existing sessions may need to restart.
+              Remove clears the saved {provider.label} credential or Trantor provider configuration on this machine. The provider row stays here so you can log in or paste a key again. Existing sessions may need to restart.
             </p>
           </div>
         </div>
@@ -38,7 +38,7 @@ export function RemoveProviderSheet({ provider, api, onClose, onRemoved }: {
           <button type="button" onClick={() => void remove()} disabled={removing}
                   className="flex items-center gap-1.5 rounded-lg bg-[var(--color-tr-fail)] px-3.5 py-1.5 text-[13px] font-medium text-white disabled:opacity-50">
             {removing ? <Loader2 size={12} className="animate-spin" /> : null}
-            Remove
+            Remove credential
           </button>
         </div>
       </section>

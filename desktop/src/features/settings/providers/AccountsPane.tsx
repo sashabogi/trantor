@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { ProviderRow } from "./ProviderRow";
-import { PasteKeySheet } from "./PasteKeySheet";
+import { ProviderAccountSection } from "./ProviderAccountSection";
 import { RemoveProviderSheet } from "./RemoveProviderSheet";
 import { providerAccountsApi, type ProviderAccountsApi, type ProviderStatus } from "./providerStatus";
 import { SettingsBoundary } from "../SettingsBoundary";
@@ -8,7 +7,6 @@ import { SettingsBoundary } from "../SettingsBoundary";
 type AccountsPaneProps = {
   project: string;
   api?: ProviderAccountsApi;
-  RowComponent?: typeof ProviderRow;
 };
 
 export function AccountsPane(props: AccountsPaneProps) {
@@ -19,11 +17,9 @@ export function AccountsPane(props: AccountsPaneProps) {
   );
 }
 
-function AccountsPaneContent({ project, api = providerAccountsApi, RowComponent = ProviderRow }: AccountsPaneProps) {
+function AccountsPaneContent({ project, api = providerAccountsApi }: AccountsPaneProps) {
   const [providers, setProviders] = useState<ProviderStatus[] | null>(null);
-  const [expanded, setExpanded] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
-  const [paste, setPaste] = useState<ProviderStatus | null>(null);
   const [remove, setRemove] = useState<ProviderStatus | null>(null);
   const [error, setError] = useState("");
 
@@ -44,29 +40,14 @@ function AccountsPaneContent({ project, api = providerAccountsApi, RowComponent 
 
   useEffect(() => { void load(); }, [load]);
 
-  const login = async (provider: ProviderStatus) => {
-    setBusy(provider.provider); setError("");
-    try {
-      await api.login(provider.provider, project);
-      await load();
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-    } finally {
-      setBusy(null);
-    }
-  };
-
-  const recheck = async (provider: ProviderStatus) => {
-    setBusy(provider.provider);
-    await load();
-    setBusy(null);
-  };
-
   return (
     <div className="relative">
-      <div className="mb-5">
-        <h2 className="tr-sec-title">Provider accounts</h2>
-        <p className="tr-sec-sub">One system login per provider. Live probes decide whether each account is ready.</p>
+      <div className="mb-7 border-b border-[var(--color-tr-edge)] pb-5">
+        <div className="flex items-center gap-2">
+          <h2 className="text-[20px] font-semibold">AI Provider Accounts</h2>
+          <span className="tr-chip uppercase tracking-wider">Optional</span>
+        </div>
+        <p className="mt-1 text-[12.5px] leading-relaxed text-[var(--color-tr-muted)]">Optional. Trantor works with your existing provider logins; add accounts only if you want Trantor to help connect or switch them.</p>
       </div>
       {error ? (
         <div role="alert" className="tr-card mb-3 border-[color-mix(in_srgb,var(--color-tr-fail)_45%,var(--color-tr-edge))] px-4 py-3 text-[12px] text-[var(--color-tr-fail)]">
@@ -76,16 +57,13 @@ function AccountsPaneContent({ project, api = providerAccountsApi, RowComponent 
       ) : null}
       {providers === null && !error ? <div className="tr-card-ghost p-6 text-center text-[13px]">Checking provider accounts…</div> : null}
       {providers?.length === 0 ? <div className="tr-card-ghost p-6 text-center text-[13px]">No providers reported. Re-check after installing a supported CLI.</div> : null}
-      <div className="flex flex-col gap-2">
+      <div className="flex flex-col gap-6 divide-y divide-[var(--color-tr-edge)]">
         {providers?.map(provider => (
-          <RowComponent key={provider.provider} status={provider} expanded={expanded === provider.provider}
-            busy={busy === provider.provider}
-            onExpand={() => setExpanded(cur => cur === provider.provider ? null : provider.provider)}
-            onLogin={() => void login(provider)} onPasteKey={() => setPaste(provider)}
-            onRecheck={() => void recheck(provider)} onRemove={() => setRemove(provider)} />
+          <ProviderAccountSection key={provider.provider} status={provider} api={api} project={project}
+            busy={busy === provider.provider} onBusy={value => setBusy(value ? provider.provider : null)}
+            onChanged={load} onRemove={() => setRemove(provider)} />
         ))}
       </div>
-      {paste ? <PasteKeySheet provider={paste} api={api} onClose={() => setPaste(null)} onSaved={() => { setPaste(null); void load(); }} /> : null}
       {remove ? <RemoveProviderSheet provider={remove} api={api} onClose={() => setRemove(null)} onRemoved={() => { setRemove(null); void load(); }} /> : null}
     </div>
   );

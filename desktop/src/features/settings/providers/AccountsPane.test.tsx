@@ -4,7 +4,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AccountsPane } from "./AccountsPane";
 import { providerStatus, providerVerify, PROVIDER_STATES, type ProviderAccountsApi, type ProviderState, type ProviderStatus } from "./providerStatus";
-import { ProviderRow, stateLabel } from "./ProviderRow";
+import { stateLabel } from "./ProviderRow";
 
 // SAFETY: React's act() reads this flag off globalThis; the cast adds the one key TS does not know.
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -57,9 +57,9 @@ describe("Settings Accounts pane", () => {
     host.remove();
   });
 
-  const mount = async (api: ProviderAccountsApi, RowComponent?: typeof ProviderRow) => {
+  const mount = async (api: ProviderAccountsApi) => {
     await act(async () => {
-      root.render(<AccountsPane project="drills" api={api} RowComponent={RowComponent} />);
+      root.render(<AccountsPane project="drills" api={api} />);
       await Promise.resolve();
     });
   };
@@ -143,31 +143,23 @@ describe("Settings Accounts pane", () => {
     expect(run).not.toHaveBeenCalled();
   });
 
-  it("contains a throwing provider row and retries without blanking Settings", async () => {
-    const status = row("connected");
-    let shouldThrow = true;
-    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
-    const ThrowingRow = (props: Parameters<typeof ProviderRow>[0]) => {
-      if (shouldThrow) throw new Error("provider row exploded");
-      return <ProviderRow {...props} />;
-    };
-    await mount(apiFor([status]), ThrowingRow);
+  it("mirrors the Orca pane heading and provider section hierarchy", async () => {
+    const providers = [row("connected"), { ...row("not_logged_in", 1), provider: "zai", label: "Z.ai (GLM)" }];
+    await mount(apiFor(providers));
 
-    const alert = host.querySelector('[role="alert"]');
-    expect(alert?.textContent).toContain("Provider accounts failed to render");
-    expect(alert?.textContent).toContain("provider row exploded");
-    shouldThrow = false;
-    await click(button("Retry"));
-    expect(host.querySelector('[data-provider="codex"]')).toBeTruthy();
-    consoleError.mockRestore();
+    expect(host.textContent).toContain("AI Provider Accounts");
+    expect(host.textContent).toContain("Optional");
+    expect(host.querySelectorAll("section[data-provider]")).toHaveLength(2);
+    expect(host.querySelector('[data-provider="codex"]')?.textContent).toContain("System default");
+    expect(host.querySelector('[data-provider="zai"]')?.textContent).toContain("API key");
   });
 
-  it("expands install guidance without turning the compact row into a wall of text", async () => {
-    const status = row("not_installed", 1);
+  it("shows the next step and documentation inside every provider section", async () => {
+    const status = { ...row("not_installed", 1), provider: "codex", label: "Codex" };
     await mount(apiFor([status]));
-    await click(host.querySelector(`[aria-label="Show ${status.label} account details"]`));
-    expect(host.textContent).toContain(`brew install ${status.binary.name}`);
-    expect(host.querySelector(`[aria-label="Copy install command for ${status.label}"]`)).toBeTruthy();
+    const section = host.querySelector(`[data-provider="${status.provider}"]`);
+    expect(section?.textContent).toContain(status.reason);
+    expect(section?.querySelector(`a[aria-label="${status.label} documentation"]`)).toBeTruthy();
   });
 
   it("re-probes only after the provider login pane exits", async () => {
@@ -176,32 +168,31 @@ describe("Settings Accounts pane", () => {
     let finishLogin: (() => void) | undefined;
     api.login.mockImplementation(() => new Promise(resolve => { finishLogin = resolve; }));
     await mount(api);
-    await click(button("Log in"));
+    await click(button("Add Account"));
     expect(api.login).toHaveBeenCalledWith("codex", "drills");
     expect(api.status).toHaveBeenCalledTimes(1);
     await act(async () => { finishLogin?.(); await Promise.resolve(); });
     expect(api.status).toHaveBeenCalledTimes(2);
   });
 
-  it("Paste key shows provider steps and verifies before saving", async () => {
+  it("inline key section shows provider steps and verifies before saving", async () => {
     const status = { ...row("not_logged_in", 2), provider: "zai", label: "GLM" };
     const api = apiFor([status]);
     const order: string[] = [];
     api.verifyKey.mockImplementation(async () => { order.push("verify"); return status; });
     api.saveKey.mockImplementation(async () => { order.push("save"); });
     await mount(api);
-    await click(button("Paste key"));
-    const dialog = host.querySelector('[role="dialog"]');
-    expect(dialog?.textContent).toContain("Get the key from Z.ai console");
-    expect(dialog?.querySelectorAll("ol li")).toHaveLength(3);
-    const input = dialog?.querySelector<HTMLInputElement>('input[type="password"]');
+    const section = host.querySelector('[data-provider="zai"]');
+    expect(section?.textContent).toContain("Get the key from Z.ai console");
+    expect(section?.querySelectorAll("ol li")).toHaveLength(3);
+    const input = section?.querySelector<HTMLInputElement>('input[type="password"]');
     if (!input) throw new Error("key input missing");
     await typeInto(input, "candidate-key");
     await click(button("Verify and save"));
     expect(order).toEqual(["verify", "save"]);
     expect(api.verifyKey).toHaveBeenCalledWith("zai", "candidate-key");
     expect(api.saveKey).toHaveBeenCalledWith("zai", "candidate-key");
-    expect(host.querySelector('[role="dialog"]')).toBeNull();
+    expect(host.querySelector<HTMLInputElement>('input[type="password"]')?.value).toBe("");
   });
 
   it("uses the frozen pre-save provider_verify seam and decodes its status row", async () => {
@@ -217,7 +208,6 @@ describe("Settings Accounts pane", () => {
     const api = apiFor([status]);
     api.verifyKey.mockRejectedValue(new Error("provider rejected the key"));
     await mount(api);
-    await click(button("Paste key"));
     const input = host.querySelector<HTMLInputElement>('input[type="password"]');
     if (!input) throw new Error("key input missing");
     await typeInto(input, "bad-key");
@@ -232,9 +222,9 @@ describe("Settings Accounts pane", () => {
     await mount(api);
     await click(host.querySelector(`[aria-label="Remove ${status.label}"]`));
     const dialog = host.querySelector('[role="dialog"]');
-    expect(dialog?.textContent).toContain("One login");
+    expect(dialog?.textContent).toContain("The provider row stays here");
     expect(api.remove).not.toHaveBeenCalled();
-    await click(button("Remove"));
+    await click(button("Remove credential"));
     expect(api.remove).toHaveBeenCalledWith("codex");
     expect(host.querySelector('[role="dialog"]')).toBeNull();
   });
