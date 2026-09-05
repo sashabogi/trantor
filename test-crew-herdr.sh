@@ -1,17 +1,16 @@
 #!/bin/bash
 # herdr mux tests (card #5345, P0-B): CREW_MUX=herdr is an EXPLICIT opt-in — herdr is never
 # auto-detected, and every other mux path (cmux/tmux/terminal) stays untouched. herdr is not
-# installed on this machine, so every drill runs the REAL crew.mjs against a temp HOME with a STUB
+# installed on this machine, so every drill runs the REAL crew.sh against a temp HOME with a STUB
 # herdr (counter-unique JSON ids, exactly the capture-don't-predict contract of the real CLI).
-# The osascript stub CATS STDIN — every crew.mjs invocation here carries </dev/null (hung-suite
+# The osascript stub CATS STDIN — every crew.sh invocation here carries </dev/null (hung-suite
 # lesson, 2026-08-20).
 set -u
-# Same as test-crew.mjs (#6228 bounce, 8c82e8e): the suite must not inherit the RUNNER's own identity
+# Same as test-crew.sh (#6228 bounce, 8c82e8e): the suite must not inherit the RUNNER's own identity
 # badge, or every dry spawn for testproj is refused by the cross-project guard as a badge mismatch.
 unset TRANTOR_ORCH TRANTOR_SEAT HERDR_ENV HERDR_PANE_ID RELAY_PROJECT RELAY_SESSION RELAY_AGENT TRANTOR_PROJECT
 ROOT="$(cd "$(dirname "$0")" && pwd)"
-NODE="$(command -v node)"
-CREW=("$NODE" "$ROOT/bin/crew.mjs")
+CREW=("$(command -v node)" "$ROOT/bin/crew.mjs")
 PASS=0; FAIL=0
 ok(){ if eval "$2"; then PASS=$((PASS+1)); echo "  ✓ $1"; else FAIL=$((FAIL+1)); echo "  ✗ $1  [$2]"; fi; }
 
@@ -200,8 +199,8 @@ ok "herdr-less prune never invokes herdr" 'nolog'
 # 12b. the split helper's optional cwd stays optional on the Node path. Import the helper directly;
 #      the existing herdr stub records the exact argv and returns the same parsed pane id.
 split_drill() {
-  rm -f "$TMP/herdr.log"
-  SPLIT_LOG="$TMP/herdr.log" "$NODE" --input-type=module -e '
+  rm -f "$TMP/split.log"
+  SPLIT_LOG="$TMP/split.log" "${CREW[0]}" --input-type=module -e '
     import { appendFileSync } from "node:fs";
     import { pathToFileURL } from "node:url";
     const mod = await import(pathToFileURL(process.argv[1]));
@@ -213,11 +212,11 @@ split_drill() {
     process.stdout.write(mod.splitPane({ env: process.env }, pane, direction, cwd, invoke));
   ' "$ROOT/bin/crew/herdr.mjs" "$@"
 }
-OUT12b="$(split_drill P-1 right 2>&1)"; rc12b=$?
+OUT12b="$(LOG="$TMP/split.log" split_drill P-1 right 2>&1)"; rc12b=$?
 ok "a two-argument split (seat spawn) survives set -u" '[ "$rc12b" = "0" ] && [ "$OUT12b" = "P-SPLIT" ]'
-ok "…and asks herdr for a plain split, no --cwd" 'grep -q "^herdr pane split P-1 --direction right --no-focus$" "$TMP/herdr.log"'
-OUT12c="$(split_drill P-1 right /some/dir 2>&1)"
-ok "a three-argument split carries --cwd" '[ "$OUT12c" = "P-SPLIT" ] && grep -q -- "--direction right --no-focus --cwd /some/dir$" "$TMP/herdr.log"'
+ok "…and asks herdr for a plain split, no --cwd" 'grep -q "^herdr pane split P-1 --direction right --no-focus$" "$TMP/split.log"'
+OUT12c="$(LOG="$TMP/split.log" split_drill P-1 right /some/dir 2>&1)"
+ok "a three-argument split carries --cwd" '[ "$OUT12c" = "P-SPLIT" ] && grep -q -- "--direction right --no-focus --cwd /some/dir$" "$TMP/split.log"'
 
 # 13. `trantor open` (card #5396, W3-A): hosts the OPERATOR's claude as the `orchestrator · <project>`
 #     pane in the crew workspace and prints its TARGET on stdout as ONE line. Dry mode: [dry] lines

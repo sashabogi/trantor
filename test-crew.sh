@@ -1,21 +1,20 @@
 #!/bin/bash
 # trantor crew teardown-scoping tests (2026-07-20).
 #
-# The bug: crew.mjs v2 tracked ALL crew windows in one global ~/.agent-bus/crew-windows.txt as bare
+# The bug: crew.sh v2 tracked ALL crew windows in one global ~/.agent-bus/crew-windows.txt as bare
 # `AGENT<TAB>WID` rows (no project), so `trantor down` from ANY session killed EVERY crew on the machine.
 # v3 rows are `PROJECT<TAB>KIND<TAB>AGENT<TAB>HANDLE` and `down` is PROJECT-SCOPED. These tests run the REAL
 # down() against a temp HOME with STUBBED osascript/tmux (no windows spawned, no tmux needed) and assert
 # which STATE rows survive. This is the safety fix — one session's teardown must never touch another's crew.
 set -u
 ROOT="$(cd "$(dirname "$0")" && pwd)"
-NODE="$(command -v node)"
-CREW=("$NODE" "$ROOT/bin/crew.mjs")
+CREW=("$(command -v node)" "$ROOT/bin/crew.mjs")
 PASS=0; FAIL=0
 ok(){ if eval "$2"; then PASS=$((PASS+1)); echo "  ✓ $1"; else FAIL=$((FAIL+1)); echo "  ✗ $1  [$2]"; fi; }
 
 # #6228 bounce (2026-09-03): this suite must not depend on the RUNNER'S OWN identity env. A herdr
 # pane hosting a crew seat exports TRANTOR_ORCH/TRANTOR_SEAT persistently (and HERDR_PANE_ID,
-# RELAY_PROJECT, ...); every `bash crew.mjs` invocation below that does not override one of these
+# RELAY_PROJECT, ...); every `bash crew.sh` invocation below that does not override one of these
 # inherits the RUNNER's badge instead — so from inside a TRANTOR_ORCH=trantor pane, every dry-run
 # spawn for testproj/crebral-health/etc. got refused by the cross-project guard (#6228) as if IT
 # were the badge mismatch, 23 drills failed. Same fix drill-env.mjs's scrubIdentityEnv() applies to
@@ -28,9 +27,9 @@ trap 'rm -rf "$TMP"' EXIT
 mkdir -p "$TMP/.agent-bus" "$TMP/fakebin"
 # stub osascript: log any AppleScript (stdin heredoc, e.g. cmux close-tab) so we can assert on it; a query
 # for a window id returns nothing (no tty, nothing killed); everything succeeds.
-# ⚠ the stub CATS STDIN — so every crew.mjs invocation in this file must carry </dev/null, or the stub
+# ⚠ the stub CATS STDIN — so every crew.sh invocation in this file must carry </dev/null, or the stub
 # inherits the test runner's open stdin and blocks forever (hung npm test twice on 2026-08-20: the
-# terminal-fallback drill reaches crew.mjs's Finder-bounds osascript with npm's stdin attached).
+# terminal-fallback drill reaches crew.sh's Finder-bounds osascript with npm's stdin attached).
 cat > "$TMP/fakebin/osascript" <<EOF
 #!/bin/bash
 cat >> "$TMP/osa.log" 2>/dev/null </dev/stdin
