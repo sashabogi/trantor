@@ -54,7 +54,9 @@ name it and ask the operator once; do not infer it and do not route around the r
 403s a cross-project `/send`, `/task`, `/task/update`, `/register` or `/invite` on its own
 (`trantor policy link <a> <b> --reason "<why>"` is the only door), and a badged shell's `trantor up`
 refuses the same way — this is belt and braces, not the first line of defense; get the target
-project right before dispatching.
+project right before dispatching. Concretely: the target project is confirmed from the session's
+badge and cwd before any `relay_send`, `relay_task_add` or `trantor up` — an ambiguous
+instruction is not a project name.
 
 **Each crew card from `relay_advise` carries a `launch` spec — run it VERBATIM; never invent a
 CLI invocation or run an agent "in a terminal" yourself.** Spawn every seat in one call:
@@ -98,7 +100,9 @@ fails to verify, run `trantor doctor` — it shows each CLI's wired/auth state a
 Build the shared foundation yourself first, then `relay_send` each agent its contract
 (<280 chars): file(s) owned, the interface contract verbatim, the spec. NOTE the wake-policy:
 plain broadcasts do NOT wake crew members (they batch as context) — to wake one, send a
-direct message or @mention it (`@codex …`) in a broadcast.
+direct message or @mention it (`@codex …`) in a broadcast. The inverse rule holds too: a
+session that is asking the operator a question never triggers a wake — its messages batch
+until the answer arrives.
 
 ## Phase 4 — SUPERVISE ACTIVELY (never wait passively)
 Loop until the board is done — you are a foreman, not a mailbox:

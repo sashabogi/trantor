@@ -38,6 +38,10 @@ read-and-extract to a cheap model instead of reading it yourself:
 `scrooge -t summarize -d easy "<extract the claims + numbers + date relevant to: …>" < source.md`
 (or `relay_scrooge` from inside the crew). Many independent small reads → add `--spread N`. The point:
 frontier tokens go to judgment, cheap tokens go to reading. Announce it (`scrooge watch` shows the feed).
+If the research feeds a build, the dispatch rule holds: the target project is confirmed from the
+session's badge and cwd before any `relay_send`, `relay_task_add` or `trantor up` — a research
+answer ("where the answers are stored") is not a project name — and a session that is asking the
+operator a question never triggers a wake; its messages batch until the answer arrives.
 
 ## 4. Verify before you trust
 Cross-check any load-bearing claim against a second independent source. Flag what's a single-source
