@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import type { BalanceRow } from "../../fleet/balanceChips";
+import { trantorCliCompatibility, type TrantorCliCompatibility } from "../../../shared/api/client";
 
 export const PROVIDER_STATES = [
   "connected",
@@ -28,16 +29,61 @@ export type ProviderStatus = {
   actions: ProviderAction[];
 };
 
+export type ProviderStatusResult =
+  | { available: true; providers: ProviderStatus[] }
+  | { available: false; reason: string };
+
 export type ProviderAccountsApi = {
-  status: () => Promise<ProviderStatus[]>;
+  status: () => Promise<ProviderStatusResult>;
   login: (provider: string, project: string) => Promise<void>;
   verifyKey: (provider: string, key: string) => Promise<ProviderStatus>;
   saveKey: (provider: string, key: string) => Promise<void>;
   remove: (provider: string) => Promise<void>;
 };
 
-async function providerStatus(): Promise<ProviderStatus[]> {
-  return JSON.parse(await invoke<string>("provider_status"));
+type StatusCommand = (command: "provider_status") => Promise<string>;
+const runStatusCommand: StatusCommand = command => invoke<string>(command);
+type StatusCommands = {
+  compatibility: () => Promise<TrantorCliCompatibility>;
+  status: StatusCommand;
+};
+const statusCommands: StatusCommands = {
+  compatibility: trantorCliCompatibility,
+  status: runStatusCommand,
+};
+
+export async function providerStatus(commands: StatusCommands = statusCommands): Promise<ProviderStatusResult> {
+  let compatibility: TrantorCliCompatibility;
+  try {
+    compatibility = await commands.compatibility();
+  } catch (error) {
+    return {
+      available: false,
+      reason: error instanceof Error && error.message ? error.message : String(error),
+    };
+  }
+  if (!compatibility.compatible) {
+    return { available: false, reason: compatibility.reason ?? `trantor CLI ${compatibility.installed ?? "unknown"} is incompatible` };
+  }
+  let raw: string;
+  try {
+    raw = await commands.status("provider_status");
+  } catch (error) {
+    return {
+      available: false,
+      reason: error instanceof Error && error.message ? error.message : String(error),
+    };
+  }
+  try {
+    const decoded = JSON.parse(raw);
+    if (!Array.isArray(decoded)) {
+      return { available: false, reason: "provider status returned a non-list response" };
+    }
+    return { available: true, providers: decoded };
+  } catch {
+    const detail = raw.trim().slice(0, 160) || "empty response";
+    return { available: false, reason: `provider status returned invalid JSON: ${detail}` };
+  }
 }
 
 type VerifyCommand = (command: "provider_verify", args: { name: string; key: string }) => Promise<string>;

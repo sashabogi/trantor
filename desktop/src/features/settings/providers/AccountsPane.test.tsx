@@ -3,8 +3,8 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AccountsPane } from "./AccountsPane";
-import { providerVerify, PROVIDER_STATES, type ProviderAccountsApi, type ProviderState, type ProviderStatus } from "./providerStatus";
-import { stateLabel } from "./ProviderRow";
+import { providerStatus, providerVerify, PROVIDER_STATES, type ProviderAccountsApi, type ProviderState, type ProviderStatus } from "./providerStatus";
+import { ProviderRow, stateLabel } from "./ProviderRow";
 
 // SAFETY: React's act() reads this flag off globalThis; the cast adds the one key TS does not know.
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -23,12 +23,24 @@ const row = (state: ProviderState, index = 0): ProviderStatus => ({
 });
 
 const apiFor = (providers: ProviderStatus[]) => ({
-  status: vi.fn(async () => providers),
+  status: vi.fn(async () => ({ available: true as const, providers })),
   login: vi.fn(async () => {}),
   verifyKey: vi.fn(async (provider: string) => providers.find(row => row.provider === provider) ?? providers[0]),
   saveKey: vi.fn(async () => {}),
   remove: vi.fn(async () => {}),
 }) satisfies ProviderAccountsApi;
+
+const compatibleCli = {
+  installed: "0.18.41",
+  minimum: "0.18.41",
+  compatible: true,
+  reason: null,
+};
+
+const statusCommands = (status: (command: "provider_status") => Promise<string>) => ({
+  compatibility: async () => compatibleCli,
+  status,
+});
 
 describe("Settings Accounts pane", () => {
   let host: HTMLDivElement;
@@ -45,9 +57,9 @@ describe("Settings Accounts pane", () => {
     host.remove();
   });
 
-  const mount = async (api: ProviderAccountsApi) => {
+  const mount = async (api: ProviderAccountsApi, RowComponent?: typeof ProviderRow) => {
     await act(async () => {
-      root.render(<AccountsPane project="drills" api={api} />);
+      root.render(<AccountsPane project="drills" api={api} RowComponent={RowComponent} />);
       await Promise.resolve();
     });
   };
@@ -80,6 +92,74 @@ describe("Settings Accounts pane", () => {
       expect(rendered?.querySelector(`[aria-label="Remove ${status.label}"]`)).toBeTruthy();
     }
     expect(host.querySelector('[data-state="connected"]')?.textContent).toContain("plan");
+  });
+
+  it("renders an unavailable state and recovers when the provider invoke rejects", async () => {
+    const status = row("connected");
+    let unavailable = true;
+    const run = vi.fn(async () => {
+      if (unavailable) throw new Error("installed CLI has no provider command");
+      return JSON.stringify([status]);
+    });
+    const api = { ...apiFor([]), status: () => providerStatus(statusCommands(run)) };
+    await mount(api);
+
+    expect(host.querySelector('[role="alert"]')?.textContent).toContain("Status unavailable: installed CLI has no provider command");
+    unavailable = false;
+    await click(button("Re-check"));
+    expect(run).toHaveBeenCalledTimes(2);
+    expect(host.querySelector('[data-provider="codex"]')).toBeTruthy();
+  });
+
+  it("renders an unavailable state when provider status returns non-JSON output", async () => {
+    const run = vi.fn(async () => "unknown command: provider status");
+    const api = { ...apiFor([]), status: () => providerStatus(statusCommands(run)) };
+    await mount(api);
+
+    const alert = host.querySelector('[role="alert"]');
+    expect(alert?.textContent).toContain("Status unavailable: provider status returned invalid JSON");
+    expect(alert?.textContent).toContain("unknown command: provider status");
+    expect(button("Re-check")).toBeTruthy();
+  });
+
+  it("renders the Rust minimum-version reason before invoking unsupported provider status", async () => {
+    const run = vi.fn(async () => JSON.stringify([row("connected")]));
+    const api = {
+      ...apiFor([]),
+      status: () => providerStatus({
+        compatibility: async () => ({
+          installed: "0.18.40",
+          minimum: "0.18.41",
+          compatible: false,
+          reason: "trantor CLI 0.18.40 is older than this app needs (0.18.41); run: npm i -g trantor@0.18.41",
+        }),
+        status: run,
+      }),
+    };
+    await mount(api);
+
+    expect(host.querySelector('[role="alert"]')?.textContent).toContain("trantor CLI 0.18.40 is older than this app needs (0.18.41)");
+    expect(host.textContent).toContain("npm i -g trantor@0.18.41");
+    expect(run).not.toHaveBeenCalled();
+  });
+
+  it("contains a throwing provider row and retries without blanking Settings", async () => {
+    const status = row("connected");
+    let shouldThrow = true;
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+    const ThrowingRow = (props: Parameters<typeof ProviderRow>[0]) => {
+      if (shouldThrow) throw new Error("provider row exploded");
+      return <ProviderRow {...props} />;
+    };
+    await mount(apiFor([status]), ThrowingRow);
+
+    const alert = host.querySelector('[role="alert"]');
+    expect(alert?.textContent).toContain("Provider accounts failed to render");
+    expect(alert?.textContent).toContain("provider row exploded");
+    shouldThrow = false;
+    await click(button("Retry"));
+    expect(host.querySelector('[data-provider="codex"]')).toBeTruthy();
+    consoleError.mockRestore();
   });
 
   it("expands install guidance without turning the compact row into a wall of text", async () => {
