@@ -1,4 +1,5 @@
 mod herdr;
+mod dismissals;
 mod genesis;
 mod ghost;
 mod identity_env;
@@ -2627,6 +2628,24 @@ fn onboarding_reopen() -> Result<String, String> {
     serde_json::to_string(&onboarding::reopen()?).map_err(|e| e.to_string())
 }
 
+/// #6476 — durable Interrupted-session dismissals. See dismissals.rs: keyed on (project,
+/// sessionId) so a dismissal never hides a NEW dead session for the same project.
+#[tauri::command]
+fn dismissed_sessions_list() -> Result<String, String> {
+    serde_json::to_string(&dismissals::list()?).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn dismissed_sessions_dismiss(project: String, session_id: String) -> Result<String, String> {
+    serde_json::to_string(&dismissals::dismiss(project, session_id)?).map_err(|e| e.to_string())
+}
+
+/// A real Wake on `project` — clears every dismissal recorded against it.
+#[tauri::command]
+fn dismissed_sessions_clear(project: String) -> Result<String, String> {
+    serde_json::to_string(&dismissals::clear_project(project)?).map_err(|e| e.to_string())
+}
+
 /// The autonomy dials, read and written through the CLI rather than by parsing autonomy.json here.
 ///
 /// The dependency rules between dials (push implies commit, deploy implies push) live in
@@ -4325,8 +4344,18 @@ fn attachment_info(path: String) -> Option<AttachmentInfo> {
 /// only: a session the operator deliberately /exited also leaves an agent-less pane, and a
 /// continuous poll would nag about it forever (monitoring doctrine: never warn about what the
 /// operator declared).
+/// #6476 — the pane handle (crew-windows.txt's HANDLE column) doubles as a stable session id: a
+/// dismissal is keyed against it so a NEW dead session for the same project (a fresh handle after
+/// a real resume) is never confused with the one that got dismissed.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RestorableSession {
+    project: String,
+    session_id: String,
+}
+
 #[tauri::command]
-fn orch_restorables() -> Result<Vec<String>, String> {
+fn orch_restorables() -> Result<Vec<RestorableSession>, String> {
     let rows =
         std::fs::read_to_string(desktop_bus_dir().join("crew-windows.txt")).unwrap_or_default();
     let out = identity_env::command("herdr")
@@ -4355,18 +4384,18 @@ fn orch_restorables() -> Result<Vec<String>, String> {
 
 /// The pure half of orch_restorables: orch rows whose pane hosts no live agent. A ghost row
 /// (pane gone entirely) is still restorable — `trantor open` heals it and resumes from the
-/// transcript. Deduped per project; row order preserved.
-fn restorables_from(rows: &str, live_panes: &std::collections::HashSet<String>) -> Vec<String> {
-    let mut out: Vec<String> = Vec::new();
+/// transcript. Deduped per project (first row wins); row order preserved.
+fn restorables_from(rows: &str, live_panes: &std::collections::HashSet<String>) -> Vec<RestorableSession> {
+    let mut out: Vec<RestorableSession> = Vec::new();
     for line in rows.lines() {
         let f: Vec<&str> = line.split('\t').collect();
         if f.len() == 4
             && f[1] == "orch"
             && !f[0].is_empty()
             && !live_panes.contains(f[3])
-            && !out.iter().any(|p| p == f[0])
+            && !out.iter().any(|r| r.project == f[0])
         {
-            out.push(f[0].to_string());
+            out.push(RestorableSession { project: f[0].to_string(), session_id: f[3].to_string() });
         }
     }
     out
@@ -5647,6 +5676,9 @@ pub fn run() {
             handoff_in_progress,
             takeover_now,
             orch_restorables,
+            dismissed_sessions_list,
+            dismissed_sessions_dismiss,
+            dismissed_sessions_clear,
             save_pasted_image,
             attachment_info,
             draft_persist,
@@ -7299,9 +7331,13 @@ mod succession_tests {
                     proj-c\therdr\tkimi\tw3:p2\n\
                     proj-b\torch\t__orch__\tw2:p9\n";
         let live: std::collections::HashSet<String> = ["w1:p1".to_string()].into();
-        // proj-a's agent is alive → not restorable. proj-b's two orch rows dedupe to one entry.
-        // proj-c has only a SEAT row — seats belong to the crew, never to restore.
-        assert_eq!(restorables_from(rows, &live), vec!["proj-b".to_string()]);
+        // proj-a's agent is alive → not restorable. proj-b's two orch rows dedupe to one entry,
+        // keeping its first handle as the session id. proj-c has only a SEAT row — seats belong
+        // to the crew, never to restore.
+        assert_eq!(
+            restorables_from(rows, &live),
+            vec![RestorableSession { project: "proj-b".to_string(), session_id: "w2:p1".to_string() }]
+        );
         // Nothing tracked, or every agent alive → nothing to restore.
         assert!(restorables_from("", &live).is_empty());
         let all_live: std::collections::HashSet<String> = [

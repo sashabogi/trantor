@@ -36,10 +36,15 @@ export async function orchestratorOpen(project: string): Promise<string> {
   return invoke<string>("orchestrator_open", { project });
 }
 
+/** A restorable orch pane: the project it belongs to, and a stable id for THIS dead session (the
+ *  pane handle) — #6476 keys durable dismissals on this pair so a new dead session for the same
+ *  project is never confused with one already dismissed. */
+export type RestorableSession = { project: string; sessionId: string };
+
 /** #5401 — projects whose orchestrator pane survived while the conversation inside died (the
  *  reboot shape). Queried at app LAUNCH only; `orchestratorOpen` is the resume vehicle. */
-export async function orchRestorables(): Promise<string[]> {
-  return invoke<string[]>("orch_restorables");
+export async function orchRestorables(): Promise<RestorableSession[]> {
+  return invoke<RestorableSession[]>("orch_restorables");
 }
 
 export async function termAttach(target: string, onBytes: (bytes: TerminalBytes) => void): Promise<number> {

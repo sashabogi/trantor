@@ -19,7 +19,9 @@ import { countUnseen, onSeenChange } from "../shared/seen";
 import { usePendingProposals } from "../shared/Proposals";
 import { ProjectIcon } from "../shared/ProjectIcon";
 import type { LensCompat } from "../features/project/ProjectHeader";
-import { orchRestorables } from "../features/workspace/herdr";
+import { orchRestorables, type RestorableSession } from "../features/workspace/herdr";
+import { visibleRestorables } from "../features/workspace/restorables";
+import { dismissedSessionsApi } from "../features/workspace/dismissedSessions";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { GenesisSheet } from "../features/genesis/GenesisSheet";
@@ -356,7 +358,11 @@ export function AppShell() {
       showOutcome(p, classifyWakeOutcome(result, null));
       setActive(p);
       setPane({ kind: "project", lens: "workspace" });
-      setRestorables(rs => rs.filter(r => r !== p));
+      setRestorables(rs => rs.filter(r => r.project !== p));
+      // #6476 — a real Wake means the project is live again: any dismissal recorded against it
+      // (whichever dead session it was against) is now stale. Fire-and-forget — the UI has
+      // already moved on to the woken project either way.
+      void dismissedSessionsApi.clear(p).catch(() => {});
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       showOutcome(p, classifyWakeOutcome(null, msg));
@@ -397,14 +403,14 @@ export function AppShell() {
   // button — the same wakeProject the sidebar uses, so there is exactly ONE resume path.
   // Launch-only on purpose: a deliberately /exited session leaves the same agent-less pane,
   // and a continuous poll would nag about it forever.
-  const [restorables, setRestorables] = useState<string[]>([]);
+  const [restorables, setRestorables] = useState<RestorableSession[]>([]);
   const restoreRan = useRef(false);
   useEffect(() => {
     if (restoreRan.current) return;
     restoreRan.current = true;
     let alive = true;
     const attempt = async (retriesLeft: number) => {
-      let found: string[];
+      let found: RestorableSession[];
       try {
         found = await orchRestorables();
       } catch {
@@ -412,18 +418,24 @@ export function AppShell() {
         return;
       }
       if (!alive || !found.length) return;
-      const ask: string[] = [];
-      for (const p of found) {
+      const ask: RestorableSession[] = [];
+      for (const r of found) {
         let baton = "ask";
         try {
           // SAFETY: autonomy_get returns lib/autonomy.mjs's resolved-dials JSON, whose `baton`
           // is always "ask"|"auto"; any malformed shape throws into the catch, keeping "ask".
-          baton = (JSON.parse(await invoke<string>("autonomy_get", { project: p })) as { baton?: string }).baton ?? "ask";
+          baton = (JSON.parse(await invoke<string>("autonomy_get", { project: r.project })) as { baton?: string }).baton ?? "ask";
         } catch { /* unreadable dial = the safe default */ }
-        if (baton === "auto") { if (alive) await wakeProject(p); }
-        else ask.push(p);
+        if (baton === "auto") { if (alive) await wakeProject(r.project); }
+        else ask.push(r);
       }
-      if (alive && ask.length) setRestorables(ask);
+      if (!alive || !ask.length) return;
+      // #6476 — a dismissal is a decision, not a snooze: it must survive this very relaunch.
+      // Keyed on (project, sessionId), so a NEW dead session for a project dismissed last time
+      // still makes the cut.
+      const dismissed = await dismissedSessionsApi.list().catch(() => []);
+      const visible = visibleRestorables(ask, dismissed);
+      if (alive && visible.length) setRestorables(visible);
     };
     void attempt(1);
     return () => { alive = false; };
@@ -561,20 +573,25 @@ export function AppShell() {
         {restorables.length > 0 && (
           <div className="mb-3 flex flex-col gap-1">
             <SectionLabel count={restorables.length}>Interrupted</SectionLabel>
-            {restorables.map(p => (
-              <div key={p} className="flex items-center gap-2 rounded-lg bg-white/[0.03] px-3 py-1.5 text-[12px]">
+            {restorables.map(r => (
+              <div key={r.project} className="flex items-center gap-2 rounded-lg bg-white/[0.03] px-3 py-1.5 text-[12px]">
                 <span className="min-w-0 flex-1">
-                  <span className="block truncate text-[var(--color-tr-text)]/85">{p}</span>
+                  <span className="block truncate text-[var(--color-tr-text)]/85">{r.project}</span>
                   <span className="block text-[10px] text-[var(--color-tr-muted)]">session died with the machine</span>
                 </span>
                 <button type="button"
-                  onClick={() => void wakeProject(p)}
-                  disabled={wakeUnderway(wakeStates.get(p))}
+                  onClick={() => void wakeProject(r.project)}
+                  disabled={wakeUnderway(wakeStates.get(r.project))}
                   className="shrink-0 rounded-[6px] bg-tr-ok/10 px-1.5 py-0.5 text-[10.5px] font-semibold text-tr-ok hover:bg-tr-ok/20 disabled:opacity-40">
-                  {wakeUnderway(wakeStates.get(p)) ? "Resuming…" : "Resume"}
+                  {wakeUnderway(wakeStates.get(r.project)) ? "Resuming…" : "Resume"}
                 </button>
                 <button type="button" title="dismiss — it stays wakeable from its project row"
-                  onClick={() => setRestorables(rs => rs.filter(r => r !== p))}
+                  onClick={() => {
+                    setRestorables(rs => rs.filter(x => x.project !== r.project));
+                    // #6476 — a dismissal is a decision, not a snooze: persist it so it survives
+                    // a restart. Fire-and-forget — the strip has already updated optimistically.
+                    void dismissedSessionsApi.dismiss(r.project, r.sessionId).catch(() => {});
+                  }}
                   className="shrink-0 px-1 text-[12px] text-[var(--color-tr-muted)] hover:text-[var(--color-tr-text)]">
                   ×
                 </button>
