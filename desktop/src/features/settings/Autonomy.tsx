@@ -10,7 +10,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 
-type Resolved = {
+export type Resolved = {
   harness: "prompt" | "bypass";
   commit: boolean;
   push: boolean;

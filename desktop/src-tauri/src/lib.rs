@@ -2,6 +2,7 @@ mod herdr;
 mod genesis;
 mod ghost;
 mod identity_env;
+mod onboarding;
 mod provider_accounts;
 pub mod identity;
 mod sessions;
@@ -2568,6 +2569,34 @@ fn rename_file(
         .output()
         .map_err(|e| format!("git rev-parse failed: {e}"))?;
     Ok(String::from_utf8_lossy(&sha.stdout).trim().to_string())
+}
+
+/// The first-run wizard's state. See onboarding.rs for the migration rule (a pre-existing hub pin
+/// means "already set up", never show the wizard) and what each write does.
+#[tauri::command]
+fn onboarding_get() -> Result<String, String> {
+    serde_json::to_string(&onboarding::get()?).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn onboarding_has_hub_pin() -> bool {
+    onboarding::on_disk_has_hub_pin()
+}
+
+#[tauri::command]
+fn onboarding_set_step(step: String) -> Result<String, String> {
+    serde_json::to_string(&onboarding::set_step(step)?).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn onboarding_close() -> Result<String, String> {
+    serde_json::to_string(&onboarding::close()?).map_err(|e| e.to_string())
+}
+
+/// "Show onboarding again" in Settings.
+#[tauri::command]
+fn onboarding_reopen() -> Result<String, String> {
+    serde_json::to_string(&onboarding::reopen()?).map_err(|e| e.to_string())
 }
 
 /// The autonomy dials, read and written through the CLI rather than by parsing autonomy.json here.
@@ -5600,6 +5629,11 @@ pub fn run() {
             rename_file,
             autonomy_get,
             autonomy_set,
+            onboarding_get,
+            onboarding_has_hub_pin,
+            onboarding_set_step,
+            onboarding_close,
+            onboarding_reopen,
             duty_start,
             duty_stop,
             duty_log_path,
