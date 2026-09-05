@@ -2,6 +2,12 @@
 # Guarded production restart: an unhealthy durable writer means RAM contains the only current copy.
 set -euo pipefail
 
+REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+if [ ! -d "$REPO_ROOT/hub" ]; then
+  echo "REFUSED: $REPO_ROOT/hub is missing; deploy hub.mjs and hub/ together before restarting." >&2
+  exit 1
+fi
+
 FORCE=0
 if [ "${1:-}" = "--force" ]; then
   FORCE=1
@@ -14,7 +20,7 @@ fi
 
 # The hub binds RELAY_HOST (the tailnet IP on netcup, where 127.0.0.1 refuses), so the guard reads the
 # same env the service does; RELAY_HUB_URL still overrides.
-ENV_FILE="${RELAY_ENV_FILE:-$(dirname "$0")/hub.env}"
+ENV_FILE="${RELAY_ENV_FILE:-$REPO_ROOT/deploy/hub.env}"
 if [ -f "$ENV_FILE" ]; then
   # shellcheck disable=SC1090
   set -a; . "$ENV_FILE"; set +a

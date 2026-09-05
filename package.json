@@ -16,6 +16,7 @@
   "description": "The hub-world for AI agent crews — orchestrate Claude Code, Codex, GLM, Kimi, DeepSeek & any OpenRouter model as live crews with a plan-aware Advisor, a Kanban/flow command center, a testing gate, and an economics brain (Scrooge).",
   "files": [
     "hub.mjs",
+    "hub/",
     "mcp.mjs",
     "ui.html",
     "bin/",
