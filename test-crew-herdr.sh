@@ -368,6 +368,22 @@ OUT21b="$(cd "$TMP/proj" && HOME="$TMP" PATH="$TMP/fakebin:$PATH" RELAY_PROJECT=
 ok "a CONSUMED handoff does not block resuming" 'grep -q "claude --resume DEAD-SID" "$TMP/herdr.log"'
 rm -f "$TMP/.agent-bus/handoffs/testproj-1700000000.json"
 
+# 22. `open A` from project B must not silently relocate and host A while the launching shell still
+#     belongs to B. The 09-03 incident produced two orchestrators on one main this way: the explicit
+#     argument and the inherited cwd/badge disagreed, and open trusted the argument alone.
+echo ""
+echo "A crossed cwd or pane badge cannot host another project's orchestrator:"
+mkdir -p "$TMP/project-a" "$TMP/project-b" "$TMP/neutral"
+git init -q "$TMP/project-a"
+git init -q "$TMP/project-b"
+rm -f "$TMP/herdr.log"; seed ""
+OUT22="$(cd "$TMP/project-b" && HOME="$TMP" TRANTOR_DEV_ROOT="$TMP" PATH="$TMP/fakebin:$PATH" bash "$ROOT/bin/crew.sh" open project-a </dev/null 2>&1)"; rc22=$?
+ok "open A from project B's cwd is a hard refusal" '[ "$rc22" = "1" ] && echo "$OUT22" | grep -q "cwd belongs to project .project-b., not .project-a."'
+ok "the cwd refusal happens before herdr can host anything" 'nolog && [ "$(rows)" = "0" ]'
+OUT22b="$(cd "$TMP/neutral" && HOME="$TMP" TRANTOR_DEV_ROOT="$TMP" TRANTOR_ORCH=project-b PATH="$TMP/fakebin:$PATH" bash "$ROOT/bin/crew.sh" open project-a </dev/null 2>&1)"; rc22b=$?
+ok "open A from a pane badged B is a hard refusal" '[ "$rc22b" = "1" ] && echo "$OUT22b" | grep -q "badged for .project-b., not .project-a."'
+ok "the badge refusal names the safe next action" 'echo "$OUT22b" | grep -q "target project.s shell"'
+
 echo ""
 if [ "$FAIL" = "0" ]; then echo "ALL PASS ($PASS)"; else echo "$FAIL FAILED"; fi
 exit $([ "$FAIL" = "0" ] && echo 0 || echo 1)

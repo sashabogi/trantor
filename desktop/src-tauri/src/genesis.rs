@@ -81,7 +81,7 @@ impl WakeChainGuard {
 
 impl Drop for WakeChainGuard {
     fn drop(&mut self) {
-        use tauri::{Emitter, Manager};
+        use tauri::Manager;
         {
             let chains = self.app.state::<WakeChains>();
             chains.0.lock().unwrap().retain(|p| p != &self.project);
@@ -178,6 +178,49 @@ fn pane_agent_state(raw: &str, pane: &str) -> PaneAgentState {
         .unwrap_or(PaneAgentState::NoAgent)
 }
 
+fn pane_project_dir(raw: &str, pane: &str, expected: &Path) -> Result<(), String> {
+    let value: serde_json::Value = serde_json::from_str(raw)
+        .map_err(|error| format!("herdr pane list returned invalid JSON: {error}"))?;
+    let panes = value
+        .as_array()
+        .or_else(|| value.get("panes").and_then(serde_json::Value::as_array))
+        .or_else(|| {
+            value
+                .get("result")
+                .and_then(|result| result.get("panes"))
+                .and_then(serde_json::Value::as_array)
+        });
+    let Some(found) = panes.and_then(|panes| {
+        panes.iter().find(|row| {
+            row.get("pane_id")
+                .or_else(|| row.get("id"))
+                .and_then(serde_json::Value::as_str)
+                == Some(pane)
+        })
+    }) else {
+        // A stale tracked pane is healed by `trantor open`; there is no process to resume.
+        return Ok(());
+    };
+    let actual = found
+        .get("cwd")
+        .and_then(serde_json::Value::as_str)
+        .filter(|cwd| !cwd.trim().is_empty())
+        .ok_or_else(|| format!("refused to wake: orchestrator pane {pane} reported no cwd"))?;
+    let actual_path = Path::new(actual);
+    let matches = match (actual_path.canonicalize(), expected.canonicalize()) {
+        (Ok(actual), Ok(expected)) => actual == expected,
+        _ => actual_path == expected,
+    };
+    if matches {
+        Ok(())
+    } else {
+        Err(format!(
+            "refused to wake: orchestrator pane {pane} is in {actual}, not {}",
+            expected.display()
+        ))
+    }
+}
+
 fn project_wake_reopen_args(project: &str) -> [&str; 2] {
     // An explicit project beats an inherited RELAY_PROJECT inside crew.sh. Its open path then
     // resolves `autonomy get harness --project "$PROJ"`; prompt/missing dials add no bypass flag.
@@ -227,7 +270,7 @@ pub(crate) async fn project_new(args: ProjectNewArgs) -> Result<String, String> 
     let cli = project_new_cli_args(&args, brief_path.as_deref());
     let result = match cli {
         Ok(cli) => {
-            let mut command = tokio::process::Command::new("trantor");
+            let mut command = crate::identity_env::async_command("trantor");
             command.args(cli).env("PATH", terminal_path());
             run_command_output(command, "trantor new")
                 .await
@@ -273,7 +316,12 @@ pub(crate) async fn project_wake(
     let rows =
         std::fs::read_to_string(desktop_bus_dir().join("crew-windows.txt")).unwrap_or_default();
     if let Some(pane) = orch_pane_from_rows(&rows, &project) {
-        let mut list = tokio::process::Command::new("herdr");
+        let mut panes = crate::identity_env::async_command("herdr");
+        panes.args(["pane", "list"]).env("PATH", terminal_path());
+        let (pane_rows, _) = run_command_output(panes, "herdr pane list").await?;
+        pane_project_dir(&pane_rows, &pane, &dir)?;
+
+        let mut list = crate::identity_env::async_command("herdr");
         list.args(["agent", "list"]).env("PATH", terminal_path());
         let (agents, _) = run_command_output(list, "herdr agent list").await?;
         match pane_agent_state(&agents, &pane) {
@@ -305,7 +353,7 @@ pub(crate) async fn project_wake(
         }
     }
 
-    let mut reopen = tokio::process::Command::new("trantor");
+    let mut reopen = crate::identity_env::async_command("trantor");
     reopen
         .args(project_wake_reopen_args(&project))
         .current_dir(&dir)
@@ -453,6 +501,21 @@ mod tests {
         // agents a wake acts on; done or absent is nobody.
         assert!(matches!(pane_agent_state(rows, "pane-live"), PaneAgentState::Idle));
         assert!(matches!(pane_agent_state(rows, "pane-other"), PaneAgentState::NoAgent));
+    }
+
+    #[test]
+    fn wake_refuses_a_tracked_pane_in_another_project_directory() {
+        let rows = r#"{"result":{"panes":[
+            {"pane_id":"pane-target","cwd":"/tmp/project-b"},
+            {"pane_id":"pane-other","cwd":"/tmp/project-a"}
+        ]}}"#;
+        let error = pane_project_dir(rows, "pane-target", Path::new("/tmp/project-a")).unwrap_err();
+        assert!(error.contains("refused to wake"), "{error}");
+        assert!(error.contains("/tmp/project-b"), "{error}");
+        assert!(error.contains("/tmp/project-a"), "{error}");
+        assert!(pane_project_dir(rows, "pane-other", Path::new("/tmp/project-a")).is_ok());
+        // A dead/stale tracked pane has no session to resume; the normal reopen path may heal it.
+        assert!(pane_project_dir(rows, "pane-stale", Path::new("/tmp/project-a")).is_ok());
     }
 
     // #6138/#6201 real path, run by hand against a REAL idle orchestrator pane (from the app

@@ -1,6 +1,6 @@
 use serde_json::Value;
 use std::path::Path;
-use std::process::{Command, Output};
+use std::process::Output;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 fn checked_slug(value: &str, field: &str) -> Result<String, String> {
@@ -16,7 +16,7 @@ fn checked_slug(value: &str, field: &str) -> Result<String, String> {
 }
 
 fn command(program: &str, args: &[&str], cwd: Option<&Path>) -> Result<Output, String> {
-    let mut cmd = Command::new(program);
+    let mut cmd = crate::identity_env::command(program);
     cmd.args(args).env("PATH", crate::terminal_path());
     if let Some(dir) = cwd {
         cmd.current_dir(dir);
