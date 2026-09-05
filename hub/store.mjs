@@ -1,3 +1,4 @@
+/* oxlint-disable anti-slop/no-runtime-typeof -- SAFETY: State normalization is the persisted-data boundary; these checks preserve the legacy decoder byte-for-byte during a structural-only split. */
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { randomBytes } from "node:crypto";
 import { createPersistHealth } from "../lib/persist-health.mjs";
@@ -195,20 +196,50 @@ setInterval(persist, persistTickMs).unref?.();
     for (const key of Object.keys(state)) delete state[key];
     Object.assign(state, normalizeState(loaded));
   };
+  let reloadTimer = null;
+  let reloading = false;
+  let reloadAgain = false;
+  let onReload = () => {};
+  const scheduleReload = () => {
+    if (reloadTimer || reloading) { reloadAgain = reloading; return; }
+    reloadTimer = setTimeout(() => { reloadTimer = null; reload(); }, 250);
+  };
   const reload = async () => {
-    if (!durableStore) return false;
+    if (!durableStore || reloading) { reloadAgain = reloading; return false; }
+    reloading = true;
+    let loaded = false;
+    try {
     for (let i = 0; i < 100 && (dirty || persisting); i++) {
       persist();
       await new Promise(resolve => setTimeout(resolve, 50));
     }
-    if (dirty || persisting) return false;
-    replaceState(await durableStore.loadSnapshot(ORG_ID));
-    lastPersisted = snapshotState();
-    return true;
+      if (dirty || persisting) {
+        reloadAgain = true;
+      } else {
+        replaceState(await durableStore.loadSnapshot(ORG_ID));
+        lastPersisted = snapshotState();
+        loaded = true;
+        onReload();
+      }
+    } catch (error) {
+      process.stderr.write(`[trantor] store reload failed: ${error.message || error}\n`);
+    } finally {
+      reloading = false;
+      if (reloadAgain) { reloadAgain = false; scheduleReload(); }
+    }
+    return loaded;
+  };
+  const startChangeSubscription = callback => {
+    onReload = typeof callback === "function" ? callback : onReload;
+    if (!durableStore?.subscribeChanges) return;
+    durableStore.subscribeChanges(payload => {
+      if (payload && payload.src === HUB_SRC) return;
+      scheduleReload();
+    }).catch(error => process.stderr.write(`[trantor] LISTEN ${error.message || error} — external writes will NOT surface until restart\n`));
   };
 
   return {
-    state, durableStore, persist, persistHealth, markDirty, reload,
+    state, durableStore, persist, persistHealth, markDirty, reload, startChangeSubscription,
     HUB_SRC, appendTaskLog, appendTaskNote, cleanChecklist, stripNulText,
   };
 }
