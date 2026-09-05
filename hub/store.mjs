@@ -120,7 +120,7 @@ let durableStore = null;
 let state = emptyState();
 if (STORE_KIND === "pg" || STORE_KIND === "postgres") {
   try {
-    const { createPgStore } = await import("./lib/store-pg.mjs");
+    const { createPgStore } = await import("../lib/store-pg.mjs");
     durableStore = createPgStore({ url: PG_URL });
     // An event insert that hits ON CONFLICT DO NOTHING is a LOST append, not a no-op. Silence here
     // hid a dead log for 18 days. Never let it be quiet again.
