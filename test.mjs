@@ -2,7 +2,7 @@
 // trantor tests — hermetic (no network: RELAY_URL points at a closed port).
 // Focus: the hook must ALWAYS emit valid JSON, even when injected handoff content
 // contains control chars / U+2028 / quotes (the non-deterministic bug we hit).
-import { writeFileSync, mkdirSync, existsSync, readFileSync, rmSync, realpathSync } from "node:fs";
+import { writeFileSync, mkdirSync, existsSync, readFileSync, rmSync, realpathSync, cpSync } from "node:fs";
 import { join } from "node:path";
 import { homedir, tmpdir } from "node:os";
 import { spawnSync } from "node:child_process";
@@ -113,6 +113,9 @@ ok("RELAY_SESSION opts a home-dir session back in", rh2.status === 0 && !rh2.std
   const spBase = join(realpathSync(tmpdir()), `trantor sp ${process.pid}`); // NOTE: space in the path
   const spDir = join(spBase, "bin");
   mkdirSync(spDir, { recursive: true });
+  // bin/ modules import ../lib (advise.mjs reads the config through lib/project.mjs since #6477);
+  // the space-path copy carries lib/ too, or the import fails for a reason unrelated to the space.
+  cpSync(join(process.cwd(), "lib"), join(spBase, "lib"), { recursive: true });
   for (const f of ["profile.mjs", "advise.mjs"]) {
     const dst = join(spDir, f);
     writeFileSync(dst, readFileSync(join(process.cwd(), "bin", f), "utf8"));
