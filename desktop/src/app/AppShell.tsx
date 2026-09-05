@@ -11,7 +11,7 @@
 // always-in-view question, not a "go look at Home" one. Chips only — the old text dump stays dead.
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ArrowDownToLine, Bot, Eye, GraduationCap, House, Inbox as InboxIcon, MessagesSquare, Plus, Search, Settings as SettingsIcon } from "lucide-react";
-import { appUpdateCheck, HubClient, hubForProject, knownProjects, localSessions, type AppUpdate, type Peer } from "../shared/api/client";
+import { appUpdateCheck, HubClient, hubForProject, knownProjects, localSessions, trantorCliCompatibility, type AppUpdate, type Peer, type TrantorCliCompatibility } from "../shared/api/client";
 import { ago } from "../shared/presence";
 import { computeProjectActivity, activityRank, isWorkingStatus, needsYou, type ProjectActivity } from "./projectActivity";
 import { Palette, type PaletteScope } from "../features/search/Palette";
@@ -105,6 +105,15 @@ export function AppShell() {
   const [filePath, setFilePath] = useState<string | null>(null);
   const [fileSeat, setFileSeat] = useState<string | null>(null);
   const [genesisRoot, setGenesisRoot] = useState<string | null>(null);
+  const [cliCompatibility, setCliCompatibility] = useState<TrantorCliCompatibility | null>(null);
+
+  useEffect(() => {
+    let alive = true;
+    void trantorCliCompatibility()
+      .then(result => { if (alive) setCliCompatibility(result); })
+      .catch(() => {});
+    return () => { alive = false; };
+  }, []);
 
   // Pinned projects PLUS whatever lives on the machine-local hub. A brand-new project has no
   // routing pin yet — it falls back to the local hub BY DESIGN (TDD §12.1's default), and a
@@ -512,6 +521,11 @@ export function AppShell() {
 
   return (
     <div className="flex h-full flex-col bg-[var(--color-tr-bg)]">
+    {cliCompatibility && !cliCompatibility.compatible ? (
+      <div role="alert" className="shrink-0 border-b border-[var(--color-tr-edge)] bg-[color-mix(in_srgb,var(--color-tr-warn)_10%,var(--color-tr-bg))] px-4 py-2 text-center text-[12px] text-[var(--color-tr-warn)]">
+        {cliCompatibility.reason}
+      </div>
+    ) : null}
     <div className="flex min-h-0 flex-1 gap-0">
       <aside className="flex w-60 shrink-0 flex-col px-3 py-4">
         <div className="mb-5 flex items-center gap-2.5 px-3">

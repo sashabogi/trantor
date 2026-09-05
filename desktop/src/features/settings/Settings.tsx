@@ -15,6 +15,7 @@ import type { AppUpdate, EditorPref } from "../../shared/api/client";
 import { Avatar } from "../../shared/Avatar";
 import { notificationsEnabled, setNotificationsEnabled } from "../../shared/notify";
 import { AccountsPane } from "./providers/AccountsPane";
+import { SettingsBoundary } from "./SettingsBoundary";
 
 function Toggle({ on, onChange }: { on: boolean; onChange: (v: boolean) => void }) {
   return (
@@ -31,9 +32,19 @@ type HubRow = { url: string; projects: string[]; ok: boolean | null };
 
 import { Autonomy as AutonomyLocal } from "./Autonomy";
 
-export function Settings({ me, update: updateFromShell, projects = [], project = "" }: {
+type SettingsProps = {
   me: string; update?: AppUpdate | null; projects?: string[]; project?: string;
-}) {
+};
+
+export function Settings(props: SettingsProps) {
+  return (
+    <SettingsBoundary area="Settings">
+      <SettingsContent {...props} />
+    </SettingsBoundary>
+  );
+}
+
+function SettingsContent({ me, update: updateFromShell, projects = [], project = "" }: SettingsProps) {
   const [pane, setPane] = useState<"general" | "accounts">("general");
   const [hubs, setHubs] = useState<HubRow[]>([]);
   const [notify, setNotify] = useState(notificationsEnabled());

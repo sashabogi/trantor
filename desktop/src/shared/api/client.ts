@@ -409,6 +409,17 @@ export async function doctor(): Promise<DoctorReport> {
   return JSON.parse(await invoke<string>("doctor"));
 }
 
+export type TrantorCliCompatibility = {
+  installed: string | null;
+  minimum: string;
+  compatible: boolean;
+  reason: string | null;
+};
+
+export async function trantorCliCompatibility(): Promise<TrantorCliCompatibility> {
+  return invoke<TrantorCliCompatibility>("trantor_cli_compatibility");
+}
+
 export async function knownProjects(): Promise<string[]> {
   return invoke<string[]>("known_projects");
 }
