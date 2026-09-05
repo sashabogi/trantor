@@ -1,4 +1,5 @@
 import type { ProviderStatus } from "./providerStatus";
+import { dictGet } from "../../../shared/dict";
 
 export type ProviderPresentation = {
   mode: "system" | "key" | "readonly";
@@ -14,7 +15,7 @@ const KEY_STEPS = [
   "Copy the complete key and paste it here.",
 ];
 
-const PRESENTATIONS: Record<string, ProviderPresentation> = {
+const PRESENTATIONS = {
   claude: {
     mode: "system",
     description: "Optional. Trantor can use your normal Claude login; add an account only when you need to sign in or switch the system login.",
@@ -79,10 +80,10 @@ const PRESENTATIONS: Record<string, ProviderPresentation> = {
     description: "Shows sign-in readiness detected from the Antigravity CLI on this machine.",
     homepage: "https://antigravity.google/",
   },
-};
+} satisfies Record<string, ProviderPresentation>;
 
 export function providerPresentation(status: ProviderStatus): ProviderPresentation {
-  const known = PRESENTATIONS[status.provider];
+  const known = dictGet(PRESENTATIONS, status.provider);
   if (known) return known;
   return {
     mode: status.connect === "api-key" ? "key" : "readonly",
