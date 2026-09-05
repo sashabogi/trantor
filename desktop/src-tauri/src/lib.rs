@@ -1,6 +1,7 @@
 mod herdr;
 mod genesis;
 mod ghost;
+mod identity_env;
 mod provider_accounts;
 pub mod identity;
 mod sessions;
@@ -171,7 +172,7 @@ fn trantor_root() -> String {
 /// rather than re-implementing detection in Rust: two detectors would drift, and then the CLI and
 /// the app would disagree about whether a seat is wired with no way to tell which is right.
 async fn run_cli_json(args: &[&str]) -> Result<String, String> {
-    let mut cmd = tokio::process::Command::new(cli_node());
+    let mut cmd = identity_env::async_command(cli_node());
     cmd.arg(format!("{}/bin/{}", trantor_root(), args[0]));
     for a in &args[1..] {
         cmd.arg(a);
@@ -1704,7 +1705,7 @@ fn spawn_chat_watcher(
 /// sat at a real 44% while the bar said 38% ("unless it's live or semi-live, it's useless").
 #[tauri::command]
 fn balances_refresh() -> Result<(), String> {
-    let out = std::process::Command::new("trantor")
+    let out = identity_env::command("trantor")
         .args(["balances", "--json"])
         .env("PATH", terminal_path())
         .output()
@@ -2137,7 +2138,7 @@ fn orchestrator_status(project: String) -> Result<String, String> {
         Some(p) => p,
         None => return Ok("none".into()),
     };
-    let out = std::process::Command::new("herdr")
+    let out = identity_env::command("herdr")
         .args(["agent", "list"])
         .env("PATH", terminal_path())
         .output()
@@ -2175,7 +2176,7 @@ fn pane_keys(target: String, keys: String) -> Result<(), String> {
     if target.trim().is_empty() {
         return Err("no pane".into());
     }
-    let out = std::process::Command::new("herdr")
+    let out = identity_env::command("herdr")
         .args(["pane", "send-keys", &target, &keys])
         .env("PATH", terminal_path())
         .output()
@@ -2234,7 +2235,7 @@ fn seat_state(agent: String) -> Result<String, String> {
     if agent.trim().is_empty() {
         return Ok("unknown".into());
     }
-    let out = std::process::Command::new("herdr")
+    let out = identity_env::command("herdr")
         .args(["agent", "list"])
         .env("PATH", terminal_path())
         .output()
@@ -2492,7 +2493,7 @@ fn rename_file(
 /// side changed, and the thing that drifts would be the one deciding whether we push to a remote.
 #[tauri::command]
 fn autonomy_get(project: Option<String>) -> Result<String, String> {
-    let mut cmd = std::process::Command::new("trantor");
+    let mut cmd = identity_env::command("trantor");
     cmd.arg("autonomy").arg("json");
     match project.as_deref() {
         Some(p) if !p.trim().is_empty() => {
@@ -2520,7 +2521,7 @@ fn autonomy_set(project: Option<String>, dial: String, value: String) -> Result<
     // stale for a week before this comment was written). An unknown dial or value makes the CLI
     // exit non-zero with a specific message, which is surfaced verbatim; nothing unvalidated ever
     // reaches the autonomy.json file because the CLI is the only writer of it.
-    let mut cmd = std::process::Command::new("trantor");
+    let mut cmd = identity_env::command("trantor");
     cmd.arg("autonomy").arg("set").arg(&dial).arg(&value);
     match project.as_deref() {
         Some(p) if !p.trim().is_empty() => {
@@ -2611,7 +2612,7 @@ fn trantor_policy_args(
 }
 
 async fn trantor_cli(args: Vec<String>, label: &str) -> Result<String, String> {
-    let mut cmd = tokio::process::Command::new("trantor");
+    let mut cmd = identity_env::async_command("trantor");
     cmd.args(&args).env("PATH", terminal_path());
     let (stdout, stderr) = run_command_output(cmd, label).await?;
     if stdout.is_empty() {
@@ -3595,7 +3596,7 @@ async fn handoff_now(
     // so the Workspace tab says the session is doomed before anyone types into it (#6081).
     let _chain = HandoffChainGuard::begin(app, &project);
 
-    let mut handoff = tokio::process::Command::new("trantor");
+    let mut handoff = identity_env::async_command("trantor");
     handoff
         .args(trantor_handoff_args(Some(&reason)))
         .current_dir(&dir)
@@ -3634,7 +3635,7 @@ async fn handoff_now(
     };
     let gate_secs = gate_started.elapsed().as_secs();
 
-    let mut info = tokio::process::Command::new("herdr");
+    let mut info = identity_env::async_command("herdr");
     info.args(["pane", "process-info", "--pane", &pane])
         .env("PATH", terminal_path());
     let (process_info, _) = run_command_output(info, "herdr pane process-info").await?;
@@ -3642,7 +3643,7 @@ async fn handoff_now(
         .ok_or_else(|| format!("no foreground process for orchestrator pane {pane}"))?;
     end_process_gracefully(pid).await?;
 
-    let mut reopen = tokio::process::Command::new("trantor");
+    let mut reopen = identity_env::async_command("trantor");
     reopen
         .args(trantor_reopen_args())
         .current_dir(&dir)
@@ -3965,7 +3966,7 @@ async fn takeover_now(project: String) -> Result<String, String> {
         return Err("project is required".into());
     }
     let dir = project_dir(&project).ok_or_else(|| format!("no local checkout for {project}"))?;
-    let out = tokio::process::Command::new("trantor")
+    let out = identity_env::async_command("trantor")
         .args(trantor_takeover_args(&project))
         .current_dir(&dir)
         .env("PATH", terminal_path())
@@ -4187,7 +4188,7 @@ fn attachment_info(path: String) -> Option<AttachmentInfo> {
 fn orch_restorables() -> Result<Vec<String>, String> {
     let rows =
         std::fs::read_to_string(desktop_bus_dir().join("crew-windows.txt")).unwrap_or_default();
-    let out = std::process::Command::new("herdr")
+    let out = identity_env::command("herdr")
         .args(["agent", "list"])
         .env("PATH", terminal_path())
         .output()
@@ -5426,6 +5427,11 @@ fn redirect_stderr_to_log() {
 }
 
 pub fn run() {
+    identity_env::scrub_launch_identity();
+    if std::env::var_os("TRANTOR_ENV_SCRUB_DRILL").is_some() {
+        identity_env::run_scrub_drill().unwrap();
+        return;
+    }
     redirect_stderr_to_log();
     install_panic_hook();
     if std::env::var("TRANTOR_PANIC_DRILL").is_ok() {
