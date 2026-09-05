@@ -198,9 +198,12 @@ export function chipFrom(e: BalanceRow, opts: ChipOpts = {}): BalanceChip | null
   const snap = opts.snapshotTs ?? 0;
   if (isZombie(e, snap, now)) return null;
 
-  const brand = dictGet(BRAND, e.provider)
-    ?? { mono: (e.label ?? e.provider).slice(0, 2).toUpperCase(), icon: null, hue: "#8A8A92", fg: "#1a1a1e" };
-  const full = e.label ?? e.provider;
+  // A usage row may arrive without a label or provider (the provider registry's rows carry the
+  // name one level up, #6391); a chip never throws over a missing name.
+  const name = e.label ?? e.provider ?? "?";
+  const brand = dictGet(BRAND, e.provider ?? "")
+    ?? { mono: name.slice(0, 2).toUpperCase(), icon: null, hue: "#8A8A92", fg: "#1a1a1e" };
+  const full = name;
   let value = "?";
   let barPct: number | null = null;
   let tone: ChipTone = "ok";
