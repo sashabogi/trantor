@@ -1,24 +1,33 @@
 // The #6094 real-path acceptance drill, run in the REAL webview: `TRANTOR_ASK_DRILL=<project>`
-// makes the Rust shell emit `ask-drill` after boot (src-tauri/src/lib.rs `run()`), and this mounts
-// the REAL Chat component (no mocked deps — the same invoke/listen/orchestratorOf the operator's
-// session uses) against that project's live orchestrator pane. It does not click anything and
-// does not touch the visible window: the host is off-screen, and it never calls `trantor up`.
+// makes the Rust shell emit `ask-drill` after boot (src-tauri/src/lib.rs `run()`).
+//
+// 0.3.148/0.3.149's lesson: an EARLIER version of this drill mounted its OWN off-screen Chat
+// instance. That instance's gen-2 watcher DID receive a push fired through the real
+// channel-to-async-task emit mechanism (`ask_drill_fire_status`) — proving the emit mechanism
+// itself works — while the OPERATOR's real failure was on the AppShell's ACTUAL Chat panel
+// (ModePane.tsx), a SEPARATE React tree the drill's own mount never touched. This version drives
+// THAT real panel instead: it finds the real "Chat" tab button (ModePane's own
+// `aria-label="Chat"`) and clicks it — the exact same user action switching tabs performs, no
+// parallel mount — so whatever is different about the real panel's watcher lifecycle is exactly
+// what this drill now exercises.
+//
+// It never touches anything else: it does not call `trantor up`, does not answer a real
+// question (a click only SWITCHES TABS, no option is ever picked), and if the Chat tab was
+// already selected when the drill started, it is left exactly as found.
 //
 // Four things get proved, all narrated into app-trace.log via app_log (never asserted only in
 // process memory the operator can't see):
 //   1. whatever the live transcript's CURRENT ask state is, the real backfill/chat_watch path
-//      (Chat's own mount effects — no drill-side shortcut) renders it as a card if one is open;
+//      (the real panel's own mount effects — no drill-side shortcut) renders it as a card if one
+//      is open;
 //   2. a push through the REAL emit mechanism (`ask_drill_fire_status`, 0.3.149 — the SAME
 //      channel-to-async-task pattern spawn_status_watcher's background thread uses, the #5993
-//      fix that made a raw std::thread's window.emit() actually reach the frontend) reaches
-//      Chat's listener and either surfaces a card or fires the #6094 blocked-no-ask trace line.
-//      An EARLIER version of this drill used the JS-side `emit()` from `@tauri-apps/api/event`
-//      instead — proven (0.3.148 real-path bounce) to exercise a DIFFERENT channel from the real
-//      one: a Chat mounted well before the push, on its settled gen-2 watcher, never received a
-//      REAL blocked emit, while the JS-side synthetic push always reached it regardless. This
-//      version waits a realistic span after mount (matching the ~20s gap the real bounce showed
-//      between mount and the live blocked frame) before firing through the real mechanism, so it
-//      catches whatever timing-dependent gap the old synthetic push could never see;
+//      fix that made a raw std::thread's window.emit() actually reach the frontend) reaches the
+//      real panel's listener and either surfaces a card or fires the #6094 blocked-no-ask trace
+//      line. Fired only after SETTLE_BEFORE_REAL_EMIT_MS has passed since the tab was selected —
+//      the 0.3.148 bounce's own gap (~20s) between mount and the live blocked frame — so it
+//      exercises "does a listener alive N seconds receive an async-task emit" the way the real
+//      failure did, not an emit fired within the same tick as mount;
 //   3. if no ask was open when blocked was pushed, Chat's own retry (FAST_RETRY_MS/WINDOW,
 //      SLOW_RETRY_MS/WINDOW — 0.3.145's fix: herdr's blocked frame can land a moment before the
 //      CLI finishes writing the tool_use row) keeps re-syncing on its own for
@@ -29,49 +38,34 @@
 //      through the SAME code the ask card's own click uses, against that pane and NEVER the real
 //      orchestrator — the operator sets it up themselves (a throwaway `herdr workspace create`
 //      pane running `cat -v`) and reads it back to confirm the exact bytes arrived.
-import { createRoot } from "react-dom/client";
 import { invoke } from "@tauri-apps/api/core";
-import { createElement } from "react";
-import { Chat, FAST_RETRY_WINDOW_MS, SLOW_RETRY_WINDOW_MS } from "./Chat";
+import { FAST_RETRY_WINDOW_MS, SLOW_RETRY_WINDOW_MS } from "./Chat";
 import { answerAtPane } from "../workspace/herdr";
 import { answerKeystrokes } from "./streaming";
 
-/** How long the 0.3.148 real bounce showed elapsing between Chat settling on its gen-2 watcher
- *  and the real blocked frame arriving — the drill waits at least this long before firing
- *  through the real emit mechanism, so it exercises the SAME "listener alive N seconds" shape
- *  the real failure did, not an emit fired within the same tick as mount. */
+/** How long the 0.3.148 real bounce showed elapsing between the real panel settling on its
+ *  gen-2 watcher and the real blocked frame arriving — the drill waits at least this long after
+ *  selecting the Chat tab before firing through the real emit mechanism. */
 const SETTLE_BEFORE_REAL_EMIT_MS = 20_000;
+
+/** ModePane's own tab button (`aria-label={label}`, features/code/ModePane.tsx `modeBtn`) — the
+ *  drill clicks the REAL one an operator would, rather than reaching into React state. */
+const CHAT_TAB_SELECTOR = 'button[aria-label="Chat"]';
 
 function log(line: string): void {
   invoke("app_log", { line: `ask-drill ${line}` }).catch(() => {});
 }
 
-/** Off-screen, never visible, never in the tab order — the drill mounts a real Chat instance
- *  without disturbing whatever the operator has open. */
-function makeHost(): HTMLDivElement {
-  const host = document.createElement("div");
-  host.dataset.askDrill = "host";
-  Object.assign(host.style, {
-    position: "fixed",
-    top: "-9999px",
-    left: "-9999px",
-    width: "480px",
-    height: "800px",
-    pointerEvents: "none",
-  });
-  document.body.append(host);
-  return host;
-}
-
 const ASK_CARD_SELECTOR = '[data-testid="ask-card"]';
 
-function snapshot(host: HTMLDivElement): string {
-  const cards = host.querySelectorAll(ASK_CARD_SELECTOR).length;
-  const text = (host.textContent ?? "").replace(/\s+/g, " ").trim();
-  return `cards=${cards} text="${text.slice(0, 160)}${text.length > 160 ? "…" : ""}"`;
+function snapshot(): string {
+  const cards = document.querySelectorAll(ASK_CARD_SELECTOR).length;
+  const tab = document.querySelector(CHAT_TAB_SELECTOR);
+  const selected = tab?.getAttribute("data-on") === "true";
+  return `cards=${cards} chatTabSelected=${selected}`;
 }
 
-/** Poll until either an ask card shows or the deadline passes — never a fixed sleep, since the
+/** Poll until either the predicate is true or the deadline passes — never a fixed sleep, since
  *  real backfill/chat_watch settle time varies with transcript size. */
 async function waitFor(predicate: () => boolean, deadlineMs: number): Promise<boolean> {
   const deadline = Date.now() + deadlineMs;
@@ -113,32 +107,40 @@ export async function runAskDrill(rawPayload: string): Promise<void> {
   if (writeTarget) {
     await runWriteProbe(writeTarget);
   }
-  const host = makeHost();
-  const root = createRoot(host);
+
   try {
-    // Real deps (Chat's own DEFAULT_CHAT_DEPS) — the drill drives the exact path the operator's
-    // window runs: orchestrator_chat backfill, chat_watch, the "orch-status"/"chat-rows" listeners.
-    root.render(createElement(Chat, { project, dock: "pane", onDock: () => {}, onClose: () => {} }));
-
-    const settled = await waitFor(() => host.textContent !== null && host.textContent.length > 0, 10_000);
-    log(`mounted, initial render settled=${settled} ${snapshot(host)}`);
-
-    const beforeReal = host.querySelectorAll(ASK_CARD_SELECTOR).length;
-    if (beforeReal > 0) {
-      log(`REAL open ask already rendered from the live transcript — the backfill/render path works right now: ${snapshot(host)}`);
+    const tab = document.querySelector<HTMLButtonElement>(CHAT_TAB_SELECTOR);
+    if (!tab) {
+      log("FAILED: no Chat tab button found in the real DOM (button[aria-label=\"Chat\"]) — is a project window open and focused?");
+      return;
+    }
+    const alreadyOnChat = tab.getAttribute("data-on") === "true";
+    if (alreadyOnChat) {
+      log("Chat tab already selected — driving the panel as found, no click needed");
     } else {
-      log(`no ask card from the real backfill alone (transcript may have nothing open) — ${snapshot(host)}`);
+      log("clicking the real Chat tab (no separate mount)");
+      tab.click();
     }
 
-    // Let Chat settle on its gen-2 watcher (target null -> a live pane, #5495) the same way a
-    // real session does — the 0.3.148 bounce's gap was ~20s between mount and the live blocked
-    // frame, and a push fired within the same tick as mount never exercised that gap at all.
+    const settled = await waitFor(() => document.querySelector(CHAT_TAB_SELECTOR)?.getAttribute("data-on") === "true", 5_000);
+    log(`tab selected=${settled} ${snapshot()}`);
+
+    const beforeReal = document.querySelectorAll(ASK_CARD_SELECTOR).length;
+    if (beforeReal > 0) {
+      log(`REAL open ask already rendered from the live transcript — the backfill/render path works right now: ${snapshot()}`);
+    } else {
+      log(`no ask card from the real backfill alone (transcript may have nothing open) — ${snapshot()}`);
+    }
+
+    // Let the real panel settle on its gen-2 watcher (target null -> a live pane, #5495) the
+    // same way a real session does — the 0.3.148 bounce's gap was ~20s between the tab settling
+    // and the live blocked frame, and a push fired within the same tick never exercised that gap.
     log(`waiting ${SETTLE_BEFORE_REAL_EMIT_MS}ms for the gen-2 watcher to settle before firing the real emit path`);
     await new Promise(r => setTimeout(r, SETTLE_BEFORE_REAL_EMIT_MS));
 
     // The REAL emit path (#6094, 0.3.149): the same channel-to-async-task mechanism
     // spawn_status_watcher's background thread uses, invoked on the drill's own schedule so it
-    // can fire well after mount instead of within the same tick.
+    // can fire well after the tab settled instead of within the same tick.
     log(`firing the real emit path: project=${project} status=blocked`);
     await invoke("ask_drill_fire_status", { project, status: "blocked" });
 
@@ -146,17 +148,14 @@ export async function runAskDrill(rawPayload: string): Promise<void> {
     // herdr reports blocked, and Chat keeps re-syncing on its own for this whole window before
     // giving up — cutting the wait shorter than this would call a retry-in-progress a failure.
     const retryWindowMs = FAST_RETRY_WINDOW_MS + SLOW_RETRY_WINDOW_MS + 1_000;
-    const reacted = await waitFor(() => host.querySelectorAll(ASK_CARD_SELECTOR).length > beforeReal, retryWindowMs);
-    log(`after the real blocked push (waited up to ${retryWindowMs}ms for the retry to run its course): card-count-increased=${reacted} ${snapshot(host)}`);
+    const reacted = await waitFor(() => document.querySelectorAll(ASK_CARD_SELECTOR).length > beforeReal, retryWindowMs);
+    log(`after the real blocked push (waited up to ${retryWindowMs}ms for the retry to run its course): card-count-increased=${reacted} ${snapshot()}`);
 
     if (!reacted && beforeReal === 0) {
-      log("no ask card appeared after the real blocked push, even past the retry window — if the live transcript truly has no open ask, this is CORRECT and the #6094 blocked-no-ask trace line above (search for 'chat blocked with no open ask') should have fired, followed by 'chat blocked-no-ask retry N' lines; their absence means Chat never reacted to the real push at all — check whether 'chat status ...: push=blocked' ever appears after the 'ask-drill: fired the real emit path' line above");
+      log("no ask card appeared after the real blocked push, even past the retry window — if the live transcript truly has no open ask, this is CORRECT and the #6094 blocked-no-ask trace line above (search for 'chat blocked with no open ask') should have fired, followed by 'chat blocked-no-ask retry N' lines; their absence means the real panel never reacted to the push at all — check whether 'chat status ...: push=blocked' ever appears after the 'ask-drill: fired the real emit path' line above, and whether the SAME chat_watch generation's 'status: watcher start'/'status: seed' pair is in app-trace at all");
     }
     log("done");
   } catch (e) {
     log(`FAILED: ${e instanceof Error ? e.message : String(e)}`);
-  } finally {
-    root.unmount();
-    host.remove();
   }
 }
