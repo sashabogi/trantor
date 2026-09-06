@@ -1,4 +1,5 @@
 mod herdr;
+mod asks;
 mod dismissals;
 mod genesis;
 mod ghost;
@@ -5739,6 +5740,12 @@ pub fn run() {
             pane_send,
             pane_keys,
             ask_answer,
+            asks::ask_watch,
+            asks::ask_target,
+            asks::ask_answer_session,
+            asks::ask_drill_start,
+            asks::ask_drill_probe,
+            asks::ask_drill_close,
             ask_drill_fire_status,
             orchestrator_status,
             genesis::project_dev_root,
