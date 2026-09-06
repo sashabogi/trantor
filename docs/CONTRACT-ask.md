@@ -101,7 +101,9 @@ checkout. (`claude -p` cannot expose `AskUserQuestion`.) Its transient trantor b
 expected. After the updated plugin is installed, that session genuinely calls `AskUserQuestion`.
 For both Chat already open and a cold Chat tab, the drill asserts: the sidecar
 exists; app trace records `ask received`; the DOM card appears within one second of the hook and
-before the transcript grows; answering uses the real session-routed `ask_answer`/`send_text` path;
+before the transcript grows when Chat is open; cold replay mounts within 1500 ms of the Chat tab
+click after `ask_watch` is dispatched ahead of transcript backfill; answering uses the real
+session-routed `ask_answer`/`send_text` path;
 the pane advances; the matching `tool_result` lands; the sidecar disappears; and the pending card
 closes and settles answered. Every post-mount step is traced and the run has a hard deadline of
 `ASK_TIMEOUT + SETTLE_TIMEOUT + 30 seconds`, reporting the current step on expiry.

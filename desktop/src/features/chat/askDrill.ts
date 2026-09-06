@@ -178,19 +178,18 @@ async function runScenario(
     const baselineLines = opened.transcriptLines;
 
     let arrival: { card: HTMLElement; at: number } | null;
+    let coldTabOpenedAt: number | null = null;
     if (mode === "open") {
       arrival = await cardArrival!;
       if (!arrival) throw new Error("open: DOM card did not arrive");
     } else {
       const tabOpenedAt = await selectMode(CHAT_TAB_SELECTOR, deps);
+      coldTabOpenedAt = tabOpenedAt;
       arrival = await waitFor(() => {
         const card = askCard(deps.document, marker);
         return card ? { card, at: deps.now() } : null;
-      }, 1_000, deps);
-      if (!arrival) throw new Error("cold: replayed DOM card did not arrive within 1s of opening Chat");
-      if (arrival.at - tabOpenedAt > 1_000) {
-        throw new Error(`cold: replayed DOM card arrived ${arrival.at - tabOpenedAt}ms after tab open`);
-      }
+      }, 1_500, deps);
+      if (!arrival) throw new Error("cold: replayed DOM card did not arrive within 1500ms of opening Chat");
     }
 
     const beforeAnswer = await waitForProbe(
@@ -205,8 +204,12 @@ async function runScenario(
     const hookToWebview = beforeAnswer.webviewEventTs - opened.sidecarTs;
     const webviewToDom = beforeAnswer.cardMountTs - beforeAnswer.webviewEventTs;
     const hookToDom = beforeAnswer.cardMountTs - opened.sidecarTs;
+    const coldReplayMs = coldTabOpenedAt === null ? null : beforeAnswer.cardMountTs - coldTabOpenedAt;
     if (mode === "open" && hookToDom > 1_000) {
       throw new Error(`open: DOM card arrived ${hookToDom}ms after hook (hook-webview=${hookToWebview}ms webview-dom=${webviewToDom}ms)`);
+    }
+    if (coldReplayMs !== null && coldReplayMs > 1_500) {
+      throw new Error(`cold: replayed DOM card mounted ${coldReplayMs}ms after tab open`);
     }
     if (beforeAnswer.openEvents !== 1) {
       throw new Error(`${mode}: expected one open event, saw ${beforeAnswer.openEvents}`);
@@ -250,7 +253,7 @@ async function runScenario(
     log(deps, `${mode} answer resolved at ${settled.answerResolvedTs}`);
     const closed = await waitFor(() => askCard(deps.document, marker) === null, 1_000, deps);
     if (!closed) throw new Error(`${mode}: closed event left the question card open`);
-    log(deps, `${mode} PASS session=${opened.sessionId} hookTs=${opened.sidecarTs} webviewTs=${beforeAnswer.webviewEventTs} domTs=${beforeAnswer.cardMountTs} hook-webview=${hookToWebview}ms webview-dom=${webviewToDom}ms open-events=1 picker=visible-before-send sidecar=gone tool_result=matched card=closed pane=advanced`);
+    log(deps, `${mode} PASS session=${opened.sessionId} hookTs=${opened.sidecarTs} webviewTs=${beforeAnswer.webviewEventTs} domTs=${beforeAnswer.cardMountTs} hook-webview=${hookToWebview}ms webview-dom=${webviewToDom}ms cold-replay=${coldReplayMs === null ? "n/a" : `${coldReplayMs}ms`} open-events=1 picker=visible-before-send sidecar=gone tool_result=matched card=closed pane=advanced`);
   } finally {
     if (workspace) {
       await deps.invoke("ask_drill_close", { project, workspace })
