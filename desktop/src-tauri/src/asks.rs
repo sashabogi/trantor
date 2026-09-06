@@ -63,29 +63,20 @@ fn cwd_project(cwd: &str, bus_dir: &Path, dev_root: &str) -> Option<String> {
 
 fn resolve_project_with(
     ask: &AskSidecar,
-    projects: &[String],
-    session_for: impl Fn(&str) -> Option<String>,
+    session_rows: &str,
     bus_dir: &Path,
     dev_root: &str,
 ) -> Option<String> {
-    projects
-        .iter()
-        .find(|project| session_for(project).as_deref() == Some(ask.session_id.as_str()))
-        .cloned()
+    session_rows
+        .lines()
+        .filter_map(|line| {
+            let mut fields = line.split('\t');
+            let project = fields.next()?.trim();
+            let session_id = fields.next()?.trim();
+            (!project.is_empty() && session_id == ask.session_id).then(|| project.to_string())
+        })
+        .next_back()
         .or_else(|| cwd_project(&ask.cwd, bus_dir, dev_root))
-}
-
-fn resolve_project(ask: &AskSidecar) -> Option<String> {
-    let projects = crate::identity::known_projects();
-    let dev_root = std::env::var("TRANTOR_DEV_ROOT")
-        .unwrap_or_else(|_| format!("{}/development", std::env::var("HOME").unwrap_or_default()));
-    resolve_project_with(
-        ask,
-        &projects,
-        crate::orch_session_id,
-        &crate::desktop_bus_dir(),
-        &dev_root,
-    )
 }
 
 fn read_sidecar(
@@ -134,7 +125,16 @@ fn scan_with(
 }
 
 fn scan(dir: &Path) -> Result<AskMap, String> {
-    scan_with(dir, resolve_project, |line| crate::app_trace(&line))
+    let bus_dir = crate::desktop_bus_dir();
+    let session_rows =
+        std::fs::read_to_string(bus_dir.join("orch-sessions.txt")).unwrap_or_default();
+    let dev_root = std::env::var("TRANTOR_DEV_ROOT")
+        .unwrap_or_else(|_| format!("{}/development", std::env::var("HOME").unwrap_or_default()));
+    scan_with(
+        dir,
+        |ask| resolve_project_with(ask, &session_rows, &bus_dir, &dev_root),
+        |line| crate::app_trace(&line),
+    )
 }
 
 fn reconcile(previous: &AskMap, current: &AskMap) -> Vec<OrchAsk> {
@@ -196,7 +196,7 @@ pub fn ask_watch(window: tauri::Window) -> Result<(), String> {
             error.to_string()
         })?;
 
-    tauri::async_runtime::spawn(async move {
+    std::thread::spawn(move || {
         let mut known = replay;
         while rx.recv().is_ok() {
             std::thread::sleep(Duration::from_millis(20));
@@ -342,12 +342,10 @@ mod tests {
             questions: Vec::new(),
             ts: 0,
         };
-        let projects = vec!["trantor".to_string(), "other".to_string()];
         assert_eq!(
             resolve_project_with(
                 &ask,
-                &projects,
-                |project| (project == "trantor").then(|| "mapped-session".to_string()),
+                "other\tother-session\ntrantor\tmapped-session\n",
                 Path::new("/bus"),
                 "/dev",
             )
@@ -359,14 +357,12 @@ mod tests {
         checkout.session_id = "unmapped".into();
         checkout.cwd = "/dev/trantor/apps/desktop".into();
         assert_eq!(
-            resolve_project_with(&checkout, &projects, |_| None, Path::new("/bus"), "/dev")
-                .as_deref(),
+            resolve_project_with(&checkout, "", Path::new("/bus"), "/dev").as_deref(),
             Some("trantor"),
         );
         checkout.cwd = "/bus/worktrees/trantor/codex".into();
         assert_eq!(
-            resolve_project_with(&checkout, &projects, |_| None, Path::new("/bus"), "/dev")
-                .as_deref(),
+            resolve_project_with(&checkout, "", Path::new("/bus"), "/dev").as_deref(),
             Some("trantor"),
         );
     }
