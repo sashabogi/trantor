@@ -463,10 +463,12 @@ describe("orch-ask is the pending-card source (#6533)", () => {
     const handlers = new Map<string, Handler[]>();
     const answers: Array<{ sessionId: string; data: string }> = [];
     const traces: string[] = [];
+    const commands: string[] = [];
     let answered = false;
     let answerTarget: string | null = "w2:p19";
     const deps: ChatDeps = {
       invoke: <T,>(cmd: string, args?: InvokeArgs): Promise<T> => {
+        commands.push(cmd);
         if (cmd === "app_log") {
           // SAFETY: Chat sends app_log the documented object containing a string line.
           const fields = args as { line?: unknown } | undefined;
@@ -516,6 +518,8 @@ describe("orch-ask is the pending-card source (#6533)", () => {
 
     act(() => { root.render(<Chat project="p" dock="right" onDock={() => {}} onClose={() => {}} deps={deps} />); });
     await flush(); await flush();
+    expect(commands.indexOf("ask_watch")).toBeLessThan(commands.indexOf("orchestrator_chat"));
+    expect(commands.indexOf("ask_watch")).toBeLessThan(commands.indexOf("chat_watch"));
     await fire("orch-ask", nullIdAsk);
     expect(host.textContent).toContain("Ship it?");
     expect(traces.some(line => line.includes("ask event in webview session=drill-session"))).toBe(true);

@@ -470,6 +470,7 @@ export function Chat({ project, sessionId, dock, onDock, onClose, deps = DEFAULT
   const history = Boolean(sessionId);
   const [chat, setChat] = useState<ChatState>(emptyChat);
   const [liveAsks, setLiveAsks] = useState<Record<string, LiveAsk>>({});
+  const [askReadyProject, setAskReadyProject] = useState<string | null>(() => history ? project : null);
   const chatRef = useRef(chat);
   chatRef.current = chat;
   const [target, setTarget] = useState<string | null>(() => history ? "history" : null);
@@ -626,7 +627,9 @@ export function Chat({ project, sessionId, dock, onDock, onClose, deps = DEFAULT
     listener.then(unlisten => {
       if (!alive) { unlisten(); return; }
       off = unlisten;
-      invokeFn("ask_watch").catch(error => setError(String(error)));
+      const watch = invokeFn("ask_watch");
+      setAskReadyProject(project);
+      watch.catch(error => setError(String(error)));
     }).catch(error => setError(String(error)));
     return () => {
       alive = false;
@@ -711,6 +714,7 @@ export function Chat({ project, sessionId, dock, onDock, onClose, deps = DEFAULT
   syncRef.current = sync;
 
   useEffect(() => {
+    if (!history && askReadyProject !== project) return;
     let alive = true;
     const offs: Array<() => void> = [];
     let badFrames = 0;
@@ -851,7 +855,7 @@ export function Chat({ project, sessionId, dock, onDock, onClose, deps = DEFAULT
         invokeFn("chat_unwatch", { project, sessionId: sessionId ?? null, generation: generation ?? null }).catch(() => {});
       });
     };
-  }, [project, sessionId, target !== null, sync, history, commitStatus, nextSeq]);
+  }, [project, sessionId, target !== null, sync, history, askReadyProject, commitStatus, nextSeq]);
 
   // The poll transport: runs until the watcher takes over, and again if it ever gives up.
   useEffect(() => {
