@@ -6601,6 +6601,39 @@ mod herdr_tests {
     }
 
     #[test]
+    fn decode_chat_lines_returns_a_trailing_open_ask_with_no_closing_user_line() {
+        // #6094, 0.3.146 real-path failure: the CLI writes one JSONL row PER content block, so an
+        // in-progress assistant turn streams as several separate, individually newline-terminated
+        // rows (thinking, thinking, tool_use) with no `user` row after it yet — the tool_result
+        // only lands once the operator answers. Confirmed on the real transcript: the
+        // AskUserQuestion tool_use at line 8274 sat on disk 31+ real seconds, with two more
+        // `attachment` rows written after it (8275-8276) and still no `user` row, while Chat
+        // retried 15 times over 8s and never found the ask. This mirrors read_chat_snapshot's own
+        // shape: raw multi-line text through complete_lines, then decode_chat_lines with the
+        // `after` cursor sitting right before the block, exactly the transcript's real shape —
+        // not a hand-built single-turn stub.
+        let filler = "{\"type\":\"attachment\"}\n".repeat(5);
+        let block = concat!(
+            "{\"type\":\"attachment\"}\n",
+            "{\"type\":\"assistant\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"thinking\",\"thinking\":\"t1\"}]}}\n",
+            "{\"type\":\"assistant\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"thinking\",\"thinking\":\"t2\"}]}}\n",
+            "{\"type\":\"assistant\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"tool_use\",\"id\":\"toolu_ask\",\"name\":\"AskUserQuestion\",\"input\":{\"questions\":[{\"question\":\"Ship it?\",\"header\":\"Ship\",\"multiSelect\":false,\"options\":[{\"label\":\"Yes\",\"description\":\"\"}]}]}}]}}\n",
+            "{\"type\":\"attachment\"}\n",
+            "{\"type\":\"attachment\"}\n",
+        );
+        let raw = format!("{filler}{block}");
+        let lines = complete_lines(&raw);
+        let total = lines.len();
+        let after = 5; // everything before the block was already "seen"
+        let snap = decode_chat_lines(lines.into_iter().skip(after), total);
+        let ask_turn = snap.turns.iter().find(|t| t.blocks.iter().any(|b| b.ask.is_some()));
+        assert!(
+            ask_turn.is_some(),
+            "the trailing AskUserQuestion turn must be returned even with no closing user line, snap.turns={snap:?}",
+        );
+    }
+
+    #[test]
     fn tool_result_preview_handles_both_shapes_git_actually_writes() {
         assert_eq!(preview_of(&serde_json::json!("done")), "done");
         let blocks = serde_json::json!([{ "type": "text", "text": "line one" }, { "type": "text", "text": "line two" }]);

@@ -686,9 +686,13 @@ describe("concurrent backfill data loss (#6094 root cause, 2026-09-05)", () => {
 
   it("does not lose the ask when a second concurrent backfill resolves after the first", async () => {
     type Resolver = (raw: string) => void;
-    // The first two calls are held open so the test can resolve them out of order (the race under
-    // test); any call AFTER that is the fix's own recovery re-sync — auto-answered immediately,
-    // from wherever its `after` says the cursor actually sits, the way the real backend would.
+    // sync()'s own busy-guard (added alongside the retry work) now collapses what used to be a
+    // second genuinely concurrent dispatch into a deferred "pending" catch-up: the mount effect's
+    // re-run (target null -> live pane, #5495) calls sync() again while the first call is still
+    // in flight, but the guard just marks the want and returns immediately rather than reaching
+    // the backend a second time. So only ONE call is ever manually held open; the catch-up that
+    // fires once it resolves is the fix's own recovery re-sync — auto-answered immediately, from
+    // wherever its `after` says the cursor actually sits, the way the real backend would.
     const manual: Resolver[] = [];
     let resolvePane: (() => void) | null = null;
 
@@ -697,11 +701,9 @@ describe("concurrent backfill data loss (#6094 root cause, 2026-09-05)", () => {
         if (cmd === "orchestrator_chat") {
           // SAFETY: Chat always calls orchestrator_chat with a plain `{ after: number }` object.
           const after = (args as { after: number } | undefined)?.after ?? 0;
-          if (manual.length < 2) {
-            // Both raced calls dispatch with the SAME stale after=0 — neither has seen the
-            // other's answer yet.
-            // SAFETY: Chat types this call Promise<string>; the manual resolvers below always
-            // hand it a JSON-stringified Backfill.
+          if (manual.length < 1) {
+            // SAFETY: Chat types this call Promise<string>; the manual resolver below always
+            // hands it a JSON-stringified Backfill.
             return new Promise<string>(resolve => { manual.push(resolve); }) as Promise<T>;
           }
           // The recovery re-sync: answers from the real cursor (after=1, past "check"), carrying
@@ -748,15 +750,11 @@ describe("concurrent backfill data loss (#6094 root cause, 2026-09-05)", () => {
     await flush();
     await flush();
 
-    expect(manual.length).toBe(2);
-    // First call resolves: a small backfill, no ask yet.
+    expect(manual.length).toBe(1);
+    // The one held-open call resolves: a small backfill, no ask yet. Its OWN completion is what
+    // fires the deferred catch-up (the mount re-run's sync() call that the busy-guard put on
+    // hold) — that catch-up's mocked answer (above) carries the ask, from the real cursor.
     act(() => { manual[0](JSON.stringify([[REAL_ASK_TURNS[0]], [], 1, REAL_ASK_META, ["check"]])); });
-    await flush();
-    // Second (concurrent) call resolves LATER, but the orchestrator kept writing in the
-    // meantime: its answer carries every row INCLUDING the ask, from line 0.
-    act(() => {
-      manual[1](JSON.stringify([REAL_ASK_TURNS, REAL_ASK_RESULTS, 33, REAL_ASK_META, ["check"]]));
-    });
     await flush();
     await flush();
 
@@ -1030,6 +1028,131 @@ describe("blocked-with-no-open-ask retries the backfill instead of giving up onc
       await act(async () => { await vi.advanceTimersByTimeAsync(5_000); });
       expect(chatWatchCalls.length).toBe(settledCalls);
       expect(host.querySelector('[data-testid="ask-card"]')).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+// #6094 REAL-PATH REGRESSION, fourth round (0.3.146, 09-05 19:41): retries ran 15 times over 8s
+// and NEVER found an ask that had been on disk for 31+ real seconds. A Rust test proved the
+// decode path itself returns a trailing open ask correctly even with no closing user line (this
+// PASSES on main — the withholding theory was wrong), so the actual defect had to be in the
+// retry loop itself: it called sync() and scheduled the NEXT retry via a bare setTimeout WITHOUT
+// awaiting sync()'s own promise. A real transcript that size takes read_chat_snapshot longer than
+// FAST_RETRY_MS to decode (it walks the whole file twice — once for meta, once for the actual
+// snapshot), so the next retry dispatched before the previous one resolved, both captured with
+// the same stale cursor — the exact concurrent-backfill race sync() itself guards against
+// (1c6e75f), self-inflicted by the retry loop this time: every reply lands looking "stale"
+// against whatever dispatched after it and just re-triggers ANOTHER sync(), forever, without
+// ever reaching the success path that absorbs a batch. This proves retries never overlap even
+// when the backend is slower than the retry interval.
+describe("blocked-no-ask retries never overlap, even when the backfill answers slower than the retry interval (#6094, 2026-09-05)", () => {
+  let host: HTMLDivElement;
+  let root: Root;
+
+  beforeEach(() => {
+    host = document.createElement("div");
+    document.body.appendChild(host);
+    root = createRoot(host);
+  });
+
+  afterEach(() => {
+    act(() => root.unmount());
+    host.remove();
+  });
+
+  it("never dispatches a second orchestrator_chat call before the first resolves, and still finds the ask once it lands", async () => {
+    vi.useFakeTimers();
+    try {
+      const handlers = new Map<string, Handler[]>();
+      let inFlight = 0;
+      let maxInFlight = 0;
+      let askWritten = false;
+      // Slower than FAST_RETRY_MS (300ms) — a real transcript large enough to matter.
+      const BACKEND_LATENCY_MS = 500;
+
+      const deps: ChatDeps = {
+        invoke: <T,>(cmd: string, args?: InvokeArgs): Promise<T> => {
+          if (cmd === "orchestrator_chat") {
+            // SAFETY: Chat always calls orchestrator_chat with a plain `{ after: number }` object.
+            const after = (args as { after: number } | undefined)?.after ?? 0;
+            inFlight += 1;
+            maxInFlight = Math.max(maxInFlight, inFlight);
+            // The ask is new data exactly once (the first call to see after===1 with askWritten
+            // true) — every OTHER call, including any later catch-up dispatched by sync()'s own
+            // pending-flag mechanism, must answer "nothing new past your own cursor" or it
+            // re-absorbs the same ask turn repeatedly: `absorb()` appends `fresh` turns
+            // unconditionally, so a backend that repeats a row it already reported piles up
+            // duplicate assistant turns that `group()`/`batch()` then collapse into a "N tools"
+            // summary row instead of the single-block card — a real backend never repeats a line.
+            const backfill = after === 0
+              ? [[{ role: "user", blocks: [{ kind: "text", text: "check", tool: null, tool_id: null }] }], [], 1, REAL_ASK_META, ["check"]]
+              : after === 1 && askWritten
+                ? [[askTurn], [], 2, REAL_ASK_META, []]
+                : [[], [], Math.max(after, askWritten ? 2 : after), REAL_ASK_META, []];
+            // SAFETY: Chat types this call Promise<string> and parses the JSON; the envelope is
+            // exactly the Backfill shape built above.
+            return new Promise<string>(resolve => {
+              setTimeout(() => { inFlight -= 1; resolve(JSON.stringify(backfill)); }, BACKEND_LATENCY_MS);
+            }) as Promise<T>;
+          }
+          if (cmd === "chat_watch") {
+            // SAFETY: Chat types this call Promise<ChatWatchResult> — current=1 matches the
+            // pre-ask backfill's own total.
+            return Promise.resolve({ current: 1, generation: 1 } as T);
+          }
+          if (cmd === "orchestrator_status") {
+            // SAFETY: Chat types this call Promise<string>; the pane starts "working" — blocked
+            // arrives later via the orch-status push under test.
+            return Promise.resolve("working" as T);
+          }
+          // SAFETY: unknown commands (app_log included) resolve to null, matching the real
+          // seam's unhandled default.
+          return Promise.resolve(null as T);
+        },
+        listen: <T,>(event: string, cb: (ev: { payload: T }) => void): Promise<() => void> => {
+          // SAFETY: the handler is stored under the unknown-payload container (Handler, above)
+          // and fired with exactly what listen delivered — this test only fires "orch-status".
+          const boxed = cb as Handler;
+          handlers.set(event, [...(handlers.get(event) ?? []), boxed]);
+          return Promise.resolve(() => {});
+        },
+        orchestratorOf: async () => ({ project: "p", agent: "orch", surface: "surf1", kind: "orch" }),
+        answerAtPane: async () => {},
+        Composer: () => null,
+        TerminalPane: () => null,
+      };
+
+      // Set from the start: this test is purely about CONCURRENCY (never two calls in flight at
+      // once, whatever the source), not about the ask arriving late — that race is the OTHER
+      // test's job. Flipping this mid-test would race the mount-time dispatch's own capture of
+      // it against real (fake-clock) time, which is a test-harness timing accident, not the
+      // production behavior under test here.
+      askWritten = true;
+
+      act(() => { root.render(<Chat project="p" dock="right" onDock={() => {}} onClose={() => {}} deps={deps} />); });
+      // Let mount settle fully first: the mount effect's OWN unconditional sync() and its
+      // "watch.current > seenRef.current" gap-check can each dispatch once around t=0 — a
+      // harmless, pre-existing duplicate the 1c6e75f mismatch guard already resolves without
+      // consequence, PLUS sync()'s own busy-guard now collapses genuine overlaps into a deferred
+      // catch-up instead of a second real dispatch. Only the RETRY LOOP's own overlap behavior is
+      // under test here, so maxInFlight starts counting fresh once mount-time activity is done.
+      await act(async () => { await vi.advanceTimersByTimeAsync(BACKEND_LATENCY_MS + 50); });
+      maxInFlight = 0;
+
+      await act(async () => {
+        for (const cb of handlers.get("orch-status") ?? []) cb({ payload: JSON.stringify({ project: "p", status: "blocked" }) });
+        await Promise.resolve();
+      });
+
+      // Run several retry ticks' worth of fake time — under the bug, this alone piles up
+      // overlapping dispatches since each tick used to fire every FAST_RETRY_MS regardless of
+      // whether the previous call had resolved.
+      await act(async () => { await vi.advanceTimersByTimeAsync(FAST_RETRY_MS * 6); });
+
+      expect(maxInFlight).toBe(1);
+      expect(host.querySelector('[data-testid="ask-card"]')).not.toBeNull();
     } finally {
       vi.useRealTimers();
     }
