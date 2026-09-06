@@ -182,8 +182,14 @@ describe("Chat wake chain note (#6201)", () => {
   let invokes: Invoked[];
   let handlers: Map<string, Handler[]>;
 
+  // The emitter delivers an OBJECT; the harness parses the JSON it is handed so the listener sees
+  // the wire shape, not a string (#6094: every live frame failed to parse while string tests passed).
   const fireJson = (event: string, payload: string) =>
-    act(async () => { for (const cb of handlers.get(event) ?? []) cb({ payload }); });
+    act(async () => {
+      // SAFETY: the harness hands the listener exactly what the emitter would, the parsed object.
+      const wire = JSON.parse(payload) as unknown;
+      for (const cb of handlers.get(event) ?? []) cb({ payload: wire });
+    });
 
   const fireProgress = (payload: WakeProgress) =>
     act(async () => {

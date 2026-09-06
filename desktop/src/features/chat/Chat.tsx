@@ -384,12 +384,18 @@ export const DEFAULT_CHAT_DEPS: ChatDeps = {
 };
 
 /** An orch-status payload arrives as the emitter's object; a string is the test harness's shape. */
-function decodeOrchStatus(payload: unknown): { project: string; status: string } {
-  // SAFETY: the payload comes from our own Rust emitter (OrchStatusPayload) or from the test
-  // harness; both fields are re-checked by the caller before use, and a wrong shape falls through
-  // the caller's guard rather than being trusted.
-  const raw = (payload as { project?: unknown; status?: unknown } | string);
-  const obj = raw !== null && typeof raw === "object" ? raw : (JSON.parse(String(raw)) as { project?: unknown; status?: unknown });
+/** The emitter's own payload (OrchStatusPayload) arrives as an object; older tests sent its JSON. */
+type OrchStatusObject = { project?: unknown; status?: unknown };
+type OrchStatusWire = string | OrchStatusObject;
+type OrchStatus = { project: string; status: string };
+function decodeOrchStatus(payload: OrchStatusWire): OrchStatus {
+  // SAFETY: an object that carries `project` IS the emitter's shape; anything else is treated as
+  // the JSON text and parsed, and a malformed value throws into the caller's catch, never past it.
+  const candidate = payload as OrchStatusObject;
+  if (candidate.project !== undefined) return { project: String(candidate.project), status: String(candidate.status ?? "") };
+  // SAFETY: the only other shape ever delivered is the JSON text of that same object; a malformed
+  // value throws here into the caller's catch, which traces it.
+  const obj = JSON.parse(String(payload)) as OrchStatusObject;
   return { project: String(obj.project ?? ""), status: String(obj.status ?? "") };
 }
 
@@ -601,7 +607,7 @@ export function Chat({ project, sessionId, dock, onDock, onClose, deps = DEFAULT
         // invoke can miss that very first push outright; the bounded re-seed schedule below is
         // the belt for whatever this ordering fix still lets slip through.
         if (!history) {
-          offs.push(await listenFn<unknown>("orch-status", ev => {
+          offs.push(await listenFn<OrchStatusWire>("orch-status", ev => {
             // #6094, 0.3.148/149 — the LIVE push emitted "ok=true" on the Rust side (confirmed
             // via app-trace) with NOT ONE "chat status ...: push=..." line following it — meaning
             // commitStatus was never even called, and this listener's own silent `catch {}` and
