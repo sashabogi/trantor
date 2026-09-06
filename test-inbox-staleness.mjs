@@ -6,10 +6,10 @@
 // stale and have no meaning whatsoever."
 //
 // The risk in a feature that dims and bulk-dismisses is dismissing something that DID matter, so
-// the rules are tested against the real module rather than a description of it: esbuild compiles
-// the shipped TypeScript and the assertions run against that.
-import { execFileSync } from "node:child_process";
-import { mkdtempSync, readFileSync } from "node:fs";
+// the rules are tested against the real module rather than a description of it: esbuild (driven
+// through vite, see below) compiles the shipped TypeScript and the assertions run against that.
+import { createRequire } from "node:module";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -21,9 +21,16 @@ const ok = (n, c, x = "") => { if (c) { pass++; console.log(`  ✓ ${n}`); } els
 console.log("# trantor inbox-staleness drill");
 
 const out = join(mkdtempSync(join(tmpdir(), "tt-stale-")), "staleness.mjs");
-execFileSync(join(ROOT, "desktop/node_modules/.bin/esbuild"),
-  [join(ROOT, "desktop/src/features/inbox/staleness.ts"), "--format=esm", "--bundle", `--outfile=${out}`],
-  { stdio: "ignore" });
+// Reached through node RESOLUTION, not desktop/node_modules/.bin/esbuild: esbuild is not a DIRECT
+// desktop dependency, and pnpm's strict layout links only direct deps — the .bin entry exists
+// where npm's flat hoisting happens to drop it (dev Macs) and ENOENTs on the CI runner (run
+// 33994388659). vite IS direct, and transformWithEsbuild is the same engine. The module's only
+// import is type-only, so a transform (no bundling) yields runnable ESM.
+const vite = createRequire(join(ROOT, "desktop/package.json"))("vite");
+const { code } = await vite.transformWithEsbuild(
+  readFileSync(join(ROOT, "desktop/src/features/inbox/staleness.ts"), "utf8"),
+  "staleness.ts", { loader: "ts", format: "esm" });
+writeFileSync(out, code);
 const { stalenessOf } = await import(out);
 
 const NOW = 1_800_000_000_000;
