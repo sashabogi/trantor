@@ -342,7 +342,7 @@ function makeBlockedDeps() {
       return Promise.resolve(() => {});
     },
     orchestratorOf: async () => ({ project: "p", agent: "orch", surface: "surf1", kind: "orch" }),
-    answerAtSession: async (target: string, data: string) => { answered.push({ target, data }); },
+    answerAtSession: async (target: string, _question: string, data: string) => { answered.push({ target, data }); },
     Composer: () => null,
     TerminalPane: () => null,
   };
@@ -460,7 +460,7 @@ describe("orch-ask is the pending-card source (#6533)", () => {
     const host = document.createElement("div"); document.body.appendChild(host);
     const root = createRoot(host);
     const handlers = new Map<string, Handler[]>();
-    const answers: Array<{ sessionId: string; data: string }> = [];
+    const answers: Array<{ sessionId: string; question: string; data: string }> = [];
     let answered = false;
     let answerTarget: string | null = "w2:p19";
     const deps: ChatDeps = {
@@ -493,7 +493,7 @@ describe("orch-ask is the pending-card source (#6533)", () => {
         return Promise.resolve(() => {});
       },
       orchestratorOf: async () => ({ project: "p", agent: "orch", surface: "w2:p8", kind: "orch" }),
-      answerAtSession: async (sessionId, data) => { answers.push({ sessionId, data }); },
+      answerAtSession: async (sessionId, question, data) => { answers.push({ sessionId, question, data }); },
       Composer: () => null,
       TerminalPane: () => null,
     };
@@ -514,7 +514,7 @@ describe("orch-ask is the pending-card source (#6533)", () => {
     const no = [...host.querySelectorAll("button")].find(button => button.textContent?.includes("No"));
     await act(async () => { no?.dispatchEvent(new MouseEvent("click", { bubbles: true })); });
     await flush();
-    expect(answers).toEqual([{ sessionId: "drill-session", data: "\x1b[B\r" }]);
+    expect(answers).toEqual([{ sessionId: "drill-session", question: "Ship it?", data: "\x1b[B\r" }]);
 
     await fire("orch-ask", { ...nullIdAsk, open: false });
     expect(host.querySelector('[data-testid="ask-card"]')).toBeNull();
@@ -685,7 +685,7 @@ function makeRealTranscriptDeps() {
     },
     listen: () => Promise.resolve(() => {}),
     orchestratorOf: async () => ({ project: "p", agent: "orch", surface: "surf1", kind: "orch" }),
-    answerAtSession: async (target: string, data: string) => { answered.push({ target, data }); },
+    answerAtSession: async (target: string, _question: string, data: string) => { answered.push({ target, data }); },
     Composer: () => null,
     TerminalPane: () => null,
   };

@@ -18,6 +18,7 @@ type DrillProbe = {
   sidecarTs: number | null;
   transcriptLines: number;
   traceSeen: boolean;
+  pickerVisible: boolean;
   toolResultMatches: boolean;
   paneAdvanced: boolean;
 };
@@ -192,14 +193,14 @@ async function runScenario(
 
     const settled = await waitForProbe(
       () => probe(project, marker, opened.sessionId, deps),
-      state => !state.sidecarExists && state.toolResultMatches && state.paneAdvanced,
+      state => !state.sidecarExists && state.pickerVisible && state.toolResultMatches && state.paneAdvanced,
       SETTLE_TIMEOUT_MS,
       deps,
     );
     if (!settled) throw new Error(`${mode}: answer did not settle sidecar, tool_result, and pane advance`);
     const closed = await waitFor(() => askCard(deps.document, marker) === null, 1_000, deps);
     if (!closed) throw new Error(`${mode}: closed event left the question card open`);
-    log(deps, `${mode} PASS session=${opened.sessionId} sidecar=gone tool_result=matched card=closed pane=advanced`);
+    log(deps, `${mode} PASS session=${opened.sessionId} picker=visible-before-send sidecar=gone tool_result=matched card=closed pane=advanced`);
   } finally {
     if (workspace) {
       await deps.invoke("ask_drill_close", { project, workspace })

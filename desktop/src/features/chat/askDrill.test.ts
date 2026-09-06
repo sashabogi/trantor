@@ -92,6 +92,7 @@ describe("real AskUserQuestion drill (#6533)", () => {
           sidecarTs: active?.ts ?? null,
           transcriptLines: active?.answered ? 3 : 1,
           traceSeen: Boolean(active),
+          pickerVisible: active?.answered ?? false,
           toolResultMatches: active?.answered ?? false,
           paneAdvanced: active?.advanced ?? false,
         } as T;
