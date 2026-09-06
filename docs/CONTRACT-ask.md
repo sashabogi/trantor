@@ -105,8 +105,9 @@ before the transcript grows when Chat is open; cold replay mounts within 1500 ms
 click after `ask_watch` is dispatched ahead of transcript backfill; answering uses the real
 session-routed `ask_answer`/`send_text` path;
 the pane advances; the matching `tool_result` lands; the sidecar disappears; and the pending card
-closes and settles answered. Every post-mount step is traced and the run has a hard deadline of
-`ASK_TIMEOUT + SETTLE_TIMEOUT + 30 seconds`, reporting the current step on expiry.
+closes and settles answered. Setup, probe transitions, cold-tab selection, replay, and every
+post-mount step are traced. Each open/cold scenario has its own hard deadline of `ASK_TIMEOUT +
+SETTLE_TIMEOUT + 30 seconds`, which logs the current step directly on expiry.
 
 The seat writes tests and drill code but never builds or installs the app. The orchestrator builds
 and runs this gate, then performs the operator-visible real-path check.
