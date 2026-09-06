@@ -11,6 +11,7 @@ use tauri::Emitter;
 static WATCHING: AtomicBool = AtomicBool::new(false);
 static DRILL_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 static DRILL_WORKSPACES: OnceLock<Mutex<BTreeSet<String>>> = OnceLock::new();
+const STALE_AFTER_MS: u64 = 30_000;
 
 #[derive(Clone, Debug, Deserialize)]
 struct AskSidecar {
@@ -49,6 +50,8 @@ pub struct OrchAsk {
     tool_use_id: Option<String>,
     open: bool,
     questions: Vec<AskQuestion>,
+    #[serde(skip_serializing)]
+    ts: u64,
 }
 
 type AskMap = BTreeMap<PathBuf, OrchAsk>;
@@ -102,6 +105,7 @@ fn read_sidecar(
         tool_use_id: ask.tool_use_id,
         open: true,
         questions: ask.questions,
+        ts: ask.ts,
     })
 }
 
@@ -133,11 +137,56 @@ fn scan(dir: &Path) -> Result<AskMap, String> {
         std::fs::read_to_string(bus_dir.join("orch-sessions.txt")).unwrap_or_default();
     let dev_root = std::env::var("TRANTOR_DEV_ROOT")
         .unwrap_or_else(|_| format!("{}/development", std::env::var("HOME").unwrap_or_default()));
-    scan_with(
+    let found = scan_with(
         dir,
         |ask| resolve_project_with(ask, &session_rows, &bus_dir, &dev_root),
         |line| crate::app_trace(&line),
-    )
+    )?;
+    Ok(prune_stale_with(
+        found,
+        epoch_millis(),
+        live_pane_for_session,
+        |line| crate::app_trace(&line),
+    ))
+}
+
+fn epoch_millis() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_millis() as u64)
+        .unwrap_or(0)
+}
+
+fn prune_stale_with(
+    mut found: AskMap,
+    now_ms: u64,
+    pane_for: impl Fn(&str) -> Option<String>,
+    log: impl Fn(String),
+) -> AskMap {
+    found.retain(|path, ask| {
+        if now_ms.saturating_sub(ask.ts) <= STALE_AFTER_MS || pane_for(&ask.session_id).is_some() {
+            return true;
+        }
+        match std::fs::remove_file(path) {
+            Ok(()) => {
+                log(format!(
+                    "ask stale removed session={} path={}",
+                    ask.session_id,
+                    path.display(),
+                ));
+                false
+            }
+            Err(error) => {
+                log(format!(
+                    "ask stale remove failed session={} path={} error={error}",
+                    ask.session_id,
+                    path.display(),
+                ));
+                true
+            }
+        }
+    });
+    found
 }
 
 fn reconcile(previous: &AskMap, current: &AskMap) -> Vec<OrchAsk> {
@@ -201,9 +250,15 @@ pub fn ask_watch(window: tauri::Window) -> Result<(), String> {
 
     std::thread::spawn(move || {
         let mut known = replay;
-        while rx.recv().is_ok() {
-            std::thread::sleep(Duration::from_millis(20));
-            while rx.try_recv().is_ok() {}
+        loop {
+            match rx.recv_timeout(Duration::from_secs(1)) {
+                Ok(()) => {
+                    std::thread::sleep(Duration::from_millis(20));
+                    while rx.try_recv().is_ok() {}
+                }
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
+            }
             let Ok(current) = scan(&dir) else { continue };
             let changes = reconcile(&known, &current);
             known = current;
@@ -255,11 +310,88 @@ pub fn ask_target(session_id: String) -> Option<String> {
     live_pane_for_session(session_id.trim())
 }
 
-#[tauri::command]
-pub fn ask_answer_session(session_id: String, data: String) -> Result<(), String> {
-    let pane = live_pane_for_session(session_id.trim())
+fn wait_for_picker(pane: &str, question: &str) -> Result<(), String> {
+    let output = crate::identity_env::command("herdr")
+        .args([
+            "pane",
+            "wait-output",
+            pane,
+            "--match",
+            question,
+            "--source",
+            "recent-unwrapped",
+            "--timeout",
+            "10000",
+        ])
+        .env("PATH", crate::terminal_path())
+        .output()
+        .map_err(|error| format!("Could not inspect the question picker: {error}"))?;
+    if output.status.success() {
+        return Ok(());
+    }
+    let detail = String::from_utf8_lossy(if output.stderr.is_empty() {
+        &output.stdout
+    } else {
+        &output.stderr
+    });
+    Err(format!(
+        "Question picker did not become visible within 10 seconds — answer it in its terminal. {}",
+        detail.trim()
+    ))
+}
+
+fn answer_when_picker_visible_with(
+    session_id: &str,
+    question: &str,
+    data: &str,
+    pane_for: impl Fn(&str) -> Option<String>,
+    wait: impl Fn(&str, &str) -> Result<(), String>,
+    send: impl Fn(&str, &str) -> Result<(), String>,
+    trace: impl Fn(String),
+) -> Result<(), String> {
+    let pane = pane_for(session_id)
         .ok_or_else(|| "No pane hosts this session — answer it in its terminal.".to_string())?;
-    crate::ask_answer(pane, data)
+    if question.trim().is_empty() {
+        return Err("Question text is missing — answer it in its terminal.".into());
+    }
+    let started = std::time::Instant::now();
+    wait(&pane, question)?;
+    trace(format!(
+        "picker visible after {} ms session={} pane={}",
+        started.elapsed().as_millis(),
+        session_id,
+        pane,
+    ));
+    send(&pane, data)
+}
+
+fn answer_session_blocking(
+    session_id: String,
+    question: String,
+    data: String,
+) -> Result<(), String> {
+    answer_when_picker_visible_with(
+        session_id.trim(),
+        &question,
+        &data,
+        live_pane_for_session,
+        wait_for_picker,
+        |pane, text| crate::ask_answer(pane.to_string(), text.to_string()),
+        |line| crate::app_trace(&line),
+    )
+}
+
+#[tauri::command]
+pub async fn ask_answer_session(
+    session_id: String,
+    question: String,
+    data: String,
+) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        answer_session_blocking(session_id, question, data)
+    })
+    .await
+    .map_err(|error| format!("question answer task failed: {error}"))?
 }
 
 #[derive(Debug, Serialize)]
@@ -278,6 +410,8 @@ pub struct AskDrillProbe {
     sidecar_ts: Option<u64>,
     transcript_lines: usize,
     trace_seen: bool,
+    open_events: usize,
+    picker_visible: bool,
     tool_result_matches: bool,
     pane_advanced: bool,
 }
@@ -516,12 +650,26 @@ pub fn ask_drill_probe(
     let trace_seen = resolved_session.as_deref().is_some_and(|sid| {
         trace.contains(&format!("ask received: project={project} session={sid}"))
     });
+    let open_events = resolved_session.as_deref().map_or(0, |sid| {
+        trace
+            .lines()
+            .filter(|line| {
+                line.contains(&format!("ask received: project={project} session={sid}"))
+                    && line.contains("open=true")
+            })
+            .count()
+    });
+    let picker_visible = resolved_session.as_deref().is_some_and(|sid| {
+        trace.contains("picker visible after") && trace.contains(&format!("session={sid}"))
+    });
     Ok(AskDrillProbe {
         session_id: resolved_session,
         sidecar_exists,
         sidecar_ts,
         transcript_lines: transcript.lines().count(),
         trace_seen,
+        open_events,
+        picker_visible,
         tool_result_matches,
         pane_advanced,
     })
@@ -618,6 +766,30 @@ mod tests {
     }
 
     #[test]
+    fn stale_dead_session_is_deleted_and_reconciles_closed() {
+        let dir = temp_dir();
+        let stale_path = write_ask(&dir, "stale-session", None, "/tmp/trantor");
+        let live_path = write_ask(&dir, "live-session", None, "/tmp/trantor");
+        let previous = scan_with(&dir, |_| Some("trantor".to_string()), |_| {}).unwrap();
+        let logs = std::cell::RefCell::new(Vec::new());
+        let current = prune_stale_with(
+            previous.clone(),
+            STALE_AFTER_MS + 2,
+            |session| (session == "live-session").then(|| "w2:p19".to_string()),
+            |line| logs.borrow_mut().push(line),
+        );
+        assert!(!stale_path.exists());
+        assert!(live_path.exists());
+        assert_eq!(current.len(), 1);
+        let closed = reconcile(&previous, &current);
+        assert_eq!(closed.len(), 1);
+        assert_eq!(closed[0].session_id, "stale-session");
+        assert!(!closed[0].open);
+        assert!(logs.into_inner()[0].contains("ask stale removed"));
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
     fn session_map_wins_then_cwd_falls_back_for_checkout_and_worktree() {
         let ask = AskSidecar {
             session_id: "mapped-session".into(),
@@ -660,6 +832,37 @@ mod tests {
         ]}}"#;
         assert_eq!(pane_for_session(raw, "drill").as_deref(), Some("w2:p19"));
         assert_eq!(pane_for_session(raw, "missing"), None);
+    }
+
+    #[test]
+    fn answer_waits_for_visible_picker_before_sending() {
+        let steps = std::cell::RefCell::new(Vec::new());
+        answer_when_picker_visible_with(
+            "session-one",
+            "Ship it?",
+            "\r",
+            |_| {
+                steps.borrow_mut().push("resolve".to_string());
+                Some("w2:p19".to_string())
+            },
+            |pane, question| {
+                steps
+                    .borrow_mut()
+                    .push(format!("visible:{pane}:{question}"));
+                Ok(())
+            },
+            |pane, _| {
+                steps.borrow_mut().push(format!("send:{pane}"));
+                Ok(())
+            },
+            |line| steps.borrow_mut().push(line),
+        )
+        .unwrap();
+        let steps = steps.into_inner();
+        assert_eq!(steps[0], "resolve");
+        assert_eq!(steps[1], "visible:w2:p19:Ship it?");
+        assert!(steps[2].starts_with("picker visible after "));
+        assert_eq!(steps[3], "send:w2:p19");
     }
 
     #[test]

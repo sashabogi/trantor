@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { spawnSync } from "node:child_process";
 import {
-  existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync,
+  existsSync, mkdirSync, mkdtempSync, readFileSync, statSync, utimesSync, writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -72,6 +72,17 @@ ok(requested.status === 0 && requested.stdout === "{}" && withoutId.tool_use_id 
    "PermissionRequest may open with a null tool id and returns no decision");
 run({ ...open, hook_event_name: "PostToolUse", tool_use_id: "toolu_DIFFERENT" });
 ok(!existsSync(sidecar), "any close clears a stored null id because one ask can be live");
+
+run(open);
+const beforePermission = readFileSync(sidecar, "utf8");
+const oldTime = new Date(1_000_000);
+utimesSync(sidecar, oldTime, oldTime);
+run(permission);
+const afterPermission = JSON.parse(readFileSync(sidecar, "utf8"));
+ok(afterPermission.tool_use_id === open.tool_use_id,
+   "PermissionRequest preserves the non-null id written by PreToolUse");
+ok(readFileSync(sidecar, "utf8") === beforePermission && statSync(sidecar).mtimeMs === oldTime.getTime(),
+   "identical PreToolUse then PermissionRequest content does not rewrite the sidecar");
 
 run(open);
 run({ hook_event_name: "Stop", session_id: sid, cwd });

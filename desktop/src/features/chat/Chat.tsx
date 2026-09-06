@@ -396,7 +396,7 @@ export type ChatDeps = {
   /** Answers an AskUserQuestion card by writing its keystrokes into the pane (#6094) — the same
    *  path the live terminal's keyboard uses, not the prompt path (`pane_send` refuses while
    *  blocked). Its own seam so a test can assert what a click sent without a real pty. */
-  answerAtSession: (sessionId: string, data: string) => Promise<void>;
+  answerAtSession: (sessionId: string, question: string, data: string) => Promise<void>;
   /** Heavy neighbours Chat mounts; the chat tests replace them with null renderers. */
   Composer: React.ComponentType<React.ComponentProps<typeof Composer>>;
   TerminalPane: React.ComponentType<React.ComponentProps<typeof TerminalPane>>;
@@ -408,7 +408,7 @@ export const DEFAULT_CHAT_DEPS: ChatDeps = {
   invoke: <T,>(cmd: string, args?: InvokeArgs) => invoke<T>(cmd, args),
   listen: (event, cb) => listen(event, cb),
   orchestratorOf,
-  answerAtSession: (sessionId, data) => invoke("ask_answer_session", { sessionId, data }),
+  answerAtSession: (sessionId, question, data) => invoke("ask_answer_session", { sessionId, question, data }),
   Composer,
   TerminalPane,
 };
@@ -926,7 +926,7 @@ export function Chat({ project, sessionId, dock, onDock, onClose, deps = DEFAULT
   const liveness = sessionLiveness(status, target);
   const answerAsk = useCallback(async (ask: LiveAsk, data: string) => {
     if (!ask.target) throw new Error("No pane hosts this session — answer it in its terminal.");
-    await deps.answerAtSession(ask.session_id, data);
+    await deps.answerAtSession(ask.session_id, ask.questions[0]?.question ?? "", data);
     invokeFn("app_log", {
       line: `ask answered tool_id=${ask.tool_use_id ?? "null"} session=${ask.session_id} project=${project}`,
     }).catch(() => {});
