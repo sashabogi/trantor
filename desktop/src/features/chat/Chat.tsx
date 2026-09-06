@@ -67,6 +67,24 @@ type LiveAsk = OrchAsk & { target: string | null };
 const askKey = (ask: Pick<OrchAsk, "session_id" | "tool_use_id">) =>
   `${ask.session_id}\u0000${ask.tool_use_id ?? ""}`;
 
+function sameAskQuestions(left: AskQuestion[], right: AskQuestion[]): boolean {
+  return left.length === right.length && left.every((question, index) => {
+    const other = right[index];
+    return Boolean(other) && question.header === other.header && question.question === other.question &&
+      question.multiSelect === other.multiSelect && question.options.length === other.options.length &&
+      question.options.every((option, optionIndex) => option.label === other.options[optionIndex]?.label &&
+        option.description === other.options[optionIndex]?.description);
+  });
+}
+
+function transcriptAnswered(ask: OrchAsk, chat: ChatState): boolean {
+  if (ask.tool_use_id) return Boolean(chat.results[ask.tool_use_id]);
+  return chat.turns.some(turn => turn.blocks.some(block =>
+    block.tool === "AskUserQuestion" && Boolean(block.tool_id && chat.results[block.tool_id]) &&
+    Boolean(block.ask && sameAskQuestions(block.ask, ask.questions)),
+  ));
+}
+
 /** Consecutive turns from the same speaker are ONE thing to a reader. The transcript splits them
  *  every time a tool runs, which is why the panel showed "ORCHESTRATOR" stacked above every card. */
 /** Consecutive tool blocks become one array; everything else passes through. An AskUserQuestion
@@ -366,15 +384,6 @@ function HandoffBanner({ frac, countdown, busy, error, onKeepGoing, onHandOffNow
 // construction rather than by a prop this file cannot add.
 const TRAY_DEPS: TerminalDeps = { ...DEFAULT_TERMINAL_DEPS, termWrite: async () => "" };
 
-/** #6094 — the blocked-with-no-open-ask retry's two-phase cadence (0.3.145's real-path failure:
- *  herdr's blocked frame can land a moment before the CLI finishes writing the tool_use row).
- *  Aggressive while the gap is most likely still closing, eased off for a further stretch, then
- *  the retry stops outright — the passive chat-rows push still arrives eventually. */
-export const FAST_RETRY_MS = 300;
-export const FAST_RETRY_WINDOW_MS = 3_000;
-export const SLOW_RETRY_MS = 1_000;
-export const SLOW_RETRY_WINDOW_MS = 5_000;
-
 /** The seams Chat crosses, injected so a test supplies a faithful in-memory stand-in instead of
  *  mocking @tauri/herdr modules (TerminalPane's `deps` is the same idea). Production default. */
 export type ChatDeps = {
@@ -424,8 +433,8 @@ export function Chat({ project, sessionId, dock, onDock, onClose, deps = DEFAULT
   const history = Boolean(sessionId);
   const [chat, setChat] = useState<ChatState>(emptyChat);
   const [liveAsks, setLiveAsks] = useState<Record<string, LiveAsk>>({});
-  const resultsRef = useRef(chat.results);
-  resultsRef.current = chat.results;
+  const chatRef = useRef(chat);
+  chatRef.current = chat;
   const [target, setTarget] = useState<string | null>(() => history ? "history" : null);
   const [error, setError] = useState<string | null>(null);
   // Reading comfort (#5522): the size the last drag left the panel at (null = the designed
@@ -537,7 +546,7 @@ export function Chat({ project, sessionId, dock, onDock, onClose, deps = DEFAULT
         });
         return;
       }
-      if (ask.tool_use_id && resultsRef.current[ask.tool_use_id]) return;
+      if (transcriptAnswered(ask, chatRef.current)) return;
       setLiveAsks(current => ({ ...current, [key]: { ...ask, target: null } }));
       invokeFn<string | null>("ask_target", { sessionId: ask.session_id }).then(answerTarget => {
         if (!alive) return;
@@ -844,7 +853,7 @@ export function Chat({ project, sessionId, dock, onDock, onClose, deps = DEFAULT
       let changed = false;
       const next: Record<string, LiveAsk> = {};
       for (const [key, ask] of Object.entries(current)) {
-        if (ask.tool_use_id && chat.results[ask.tool_use_id]) changed = true;
+        if (transcriptAnswered(ask, chat)) changed = true;
         else next[key] = ask;
       }
       return changed ? next : current;

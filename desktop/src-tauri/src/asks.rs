@@ -1,13 +1,16 @@
 //! Live AskUserQuestion state exported by the Claude hook (docs/CONTRACT-ask.md).
 use notify::Watcher;
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 use tauri::Emitter;
 
 static WATCHING: AtomicBool = AtomicBool::new(false);
+static DRILL_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+static DRILL_WORKSPACES: OnceLock<Mutex<BTreeSet<String>>> = OnceLock::new();
 
 #[derive(Clone, Debug, Deserialize)]
 struct AskSidecar {
@@ -259,6 +262,288 @@ pub fn ask_answer_session(session_id: String, data: String) -> Result<(), String
     crate::ask_answer(pane, data)
 }
 
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AskDrillSession {
+    workspace: String,
+    pane: String,
+    agent: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AskDrillProbe {
+    session_id: Option<String>,
+    sidecar_exists: bool,
+    sidecar_ts: Option<u64>,
+    transcript_lines: usize,
+    trace_seen: bool,
+    tool_result_matches: bool,
+    pane_advanced: bool,
+}
+
+fn drill_enabled(project: &str) -> Result<(), String> {
+    match std::env::var("TRANTOR_ASK_DRILL") {
+        Ok(expected) if expected.trim() == project => Ok(()),
+        _ => Err("ask drill is disabled for this project".into()),
+    }
+}
+
+fn herdr_output(args: &[&str], cwd: &Path) -> Result<serde_json::Value, String> {
+    let output = crate::identity_env::command("herdr")
+        .args(args)
+        .current_dir(cwd)
+        .env("PATH", crate::terminal_path())
+        .output()
+        .map_err(|error| format!("herdr {}: {error}", args.join(" ")))?;
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("herdr {}: {}", args.join(" "), stderr.trim()));
+    }
+    serde_json::from_str(stdout.trim())
+        .map_err(|error| format!("herdr {} returned invalid JSON: {error}", args.join(" ")))
+}
+
+fn workspace_ids(value: &serde_json::Value) -> Option<(String, String)> {
+    let result = value.get("result")?;
+    let workspace = result
+        .get("workspace")?
+        .get("workspace_id")?
+        .as_str()?
+        .to_string();
+    let pane = result
+        .get("root_pane")?
+        .get("pane_id")?
+        .as_str()?
+        .to_string();
+    Some((workspace, pane))
+}
+
+fn close_workspace(workspace: &str, cwd: &Path) {
+    let _ = herdr_output(&["workspace", "close", workspace], cwd);
+}
+
+fn ask_drill_start_blocking(project: String, marker: String) -> Result<AskDrillSession, String> {
+    let project = project.trim();
+    drill_enabled(project)?;
+    if marker.is_empty()
+        || marker.len() > 80
+        || !marker
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+    {
+        return Err("ask drill marker is invalid".into());
+    }
+    let cwd =
+        crate::project_dir(project).ok_or_else(|| format!("no local checkout for {project}"))?;
+    let label = format!("trantor:ask-drill:{marker}");
+    let created = herdr_output(
+        &[
+            "workspace",
+            "create",
+            "--cwd",
+            cwd.to_string_lossy().as_ref(),
+            "--label",
+            &label,
+            "--no-focus",
+        ],
+        &cwd,
+    )?;
+    let (workspace, pane) = workspace_ids(&created)
+        .ok_or_else(|| "herdr workspace create returned no workspace or root pane".to_string())?;
+    let sequence = DRILL_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+    let agent = format!("askdrill{}{}", std::process::id(), sequence);
+    let question = format!("TRANTOR ASK DRILL {marker}: continue?");
+    let advanced = format!("ASK-DRILL-ADVANCED {marker} Continue");
+    let prompt = format!(
+        "Call AskUserQuestion exactly once now. Ask the exact question '{question}' with header 'Drill' and two options: 'Continue' (description 'Advance the drill') and 'Stop' (description 'Stop the drill'). Print nothing before the tool call. After the operator answers, print exactly '{advanced}' and no other text."
+    );
+    let started = herdr_output(
+        &[
+            "agent",
+            "start",
+            &agent,
+            "--kind",
+            "claude",
+            "--pane",
+            &pane,
+            "--timeout",
+            "60000",
+            "--",
+            "--model",
+            "haiku",
+        ],
+        &cwd,
+    );
+    if let Err(error) = started {
+        close_workspace(&workspace, &cwd);
+        return Err(error);
+    }
+    if let Err(error) = herdr_output(&["agent", "prompt", &agent, &prompt], &cwd) {
+        close_workspace(&workspace, &cwd);
+        return Err(error);
+    }
+    DRILL_WORKSPACES
+        .get_or_init(|| Mutex::new(BTreeSet::new()))
+        .lock()
+        .map_err(|_| "ask drill workspace registry is poisoned".to_string())?
+        .insert(workspace.clone());
+    Ok(AskDrillSession {
+        workspace,
+        pane,
+        agent,
+    })
+}
+
+#[tauri::command]
+pub async fn ask_drill_start(project: String, marker: String) -> Result<AskDrillSession, String> {
+    tauri::async_runtime::spawn_blocking(move || ask_drill_start_blocking(project, marker))
+        .await
+        .map_err(|error| format!("ask drill start task failed: {error}"))?
+}
+
+fn value_contains(value: &serde_json::Value, needle: &str) -> bool {
+    match value {
+        serde_json::Value::String(text) => text.contains(needle),
+        serde_json::Value::Array(items) => items.iter().any(|item| value_contains(item, needle)),
+        serde_json::Value::Object(fields) => {
+            fields.values().any(|item| value_contains(item, needle))
+        }
+        _ => false,
+    }
+}
+
+fn transcript_facts(raw: &str, marker: &str) -> (bool, bool) {
+    let mut ask_id = None;
+    let mut answered = false;
+    let advanced = format!("ASK-DRILL-ADVANCED {marker} Continue");
+    for value in raw
+        .lines()
+        .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+    {
+        let content = value
+            .get("message")
+            .and_then(|message| message.get("content"))
+            .and_then(|content| content.as_array());
+        for item in content.into_iter().flatten() {
+            if item.get("type").and_then(|kind| kind.as_str()) == Some("tool_use")
+                && item.get("name").and_then(|name| name.as_str()) == Some("AskUserQuestion")
+                && value_contains(
+                    item.get("input").unwrap_or(&serde_json::Value::Null),
+                    marker,
+                )
+            {
+                ask_id = item
+                    .get("id")
+                    .and_then(|id| id.as_str())
+                    .map(str::to_string);
+            }
+            if item.get("type").and_then(|kind| kind.as_str()) == Some("tool_result")
+                && item.get("tool_use_id").and_then(|id| id.as_str()) == ask_id.as_deref()
+                && value_contains(item, "Continue")
+            {
+                answered = true;
+            }
+        }
+    }
+    (answered, raw.contains(&advanced))
+}
+
+fn claude_transcript(cwd: &Path, session_id: &str) -> PathBuf {
+    let slug: String = cwd
+        .to_string_lossy()
+        .chars()
+        .map(|character| {
+            if character == '/' || character == '.' {
+                '-'
+            } else {
+                character
+            }
+        })
+        .collect();
+    Path::new(&std::env::var("HOME").unwrap_or_default())
+        .join(".claude/projects")
+        .join(slug)
+        .join(format!("{session_id}.jsonl"))
+}
+
+fn find_sidecar(marker: &str) -> Option<(PathBuf, AskSidecar)> {
+    let dir = crate::desktop_bus_dir().join("asks");
+    std::fs::read_dir(dir)
+        .ok()?
+        .flatten()
+        .filter_map(|entry| {
+            let path = entry.path();
+            let raw = std::fs::read_to_string(&path).ok()?;
+            let ask = serde_json::from_str::<AskSidecar>(&raw).ok()?;
+            ask.questions
+                .iter()
+                .any(|question| question.question.contains(marker))
+                .then_some((path, ask))
+        })
+        .next()
+}
+
+#[tauri::command]
+pub fn ask_drill_probe(
+    project: String,
+    marker: String,
+    session_id: Option<String>,
+) -> Result<AskDrillProbe, String> {
+    let project = project.trim();
+    drill_enabled(project)?;
+    let found = find_sidecar(&marker);
+    let resolved_session = session_id
+        .filter(|value| !value.trim().is_empty())
+        .or_else(|| found.as_ref().map(|(_, ask)| ask.session_id.clone()));
+    let sidecar_ts = found.as_ref().map(|(_, ask)| ask.ts);
+    let sidecar_exists = resolved_session.as_ref().is_some_and(|sid| {
+        crate::desktop_bus_dir()
+            .join("asks")
+            .join(format!("{sid}.json"))
+            .is_file()
+    });
+    let cwd =
+        crate::project_dir(project).ok_or_else(|| format!("no local checkout for {project}"))?;
+    let transcript = resolved_session
+        .as_deref()
+        .and_then(|sid| std::fs::read_to_string(claude_transcript(&cwd, sid)).ok())
+        .unwrap_or_default();
+    let (tool_result_matches, pane_advanced) = transcript_facts(&transcript, &marker);
+    let trace =
+        std::fs::read_to_string(crate::desktop_bus_dir().join("app-trace.log")).unwrap_or_default();
+    let trace_seen = resolved_session.as_deref().is_some_and(|sid| {
+        trace.contains(&format!("ask received: project={project} session={sid}"))
+    });
+    Ok(AskDrillProbe {
+        session_id: resolved_session,
+        sidecar_exists,
+        sidecar_ts,
+        transcript_lines: transcript.lines().count(),
+        trace_seen,
+        tool_result_matches,
+        pane_advanced,
+    })
+}
+
+#[tauri::command]
+pub fn ask_drill_close(project: String, workspace: String) -> Result<(), String> {
+    let project = project.trim();
+    drill_enabled(project)?;
+    let removed = DRILL_WORKSPACES
+        .get_or_init(|| Mutex::new(BTreeSet::new()))
+        .lock()
+        .map_err(|_| "ask drill workspace registry is poisoned".to_string())?
+        .remove(workspace.trim());
+    if !removed {
+        return Err("refusing to close a workspace this drill did not create".into());
+    }
+    let cwd =
+        crate::project_dir(project).ok_or_else(|| format!("no local checkout for {project}"))?;
+    herdr_output(&["workspace", "close", workspace.trim()], &cwd).map(|_| ())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -375,5 +660,30 @@ mod tests {
         ]}}"#;
         assert_eq!(pane_for_session(raw, "drill").as_deref(), Some("w2:p19"));
         assert_eq!(pane_for_session(raw, "missing"), None);
+    }
+
+    #[test]
+    fn drill_reads_real_herdr_workspace_shape() {
+        let value = serde_json::json!({
+            "result": {
+                "workspace": { "workspace_id": "w9" },
+                "root_pane": { "pane_id": "w9:p1" }
+            }
+        });
+        assert_eq!(workspace_ids(&value), Some(("w9".into(), "w9:p1".into())));
+    }
+
+    #[test]
+    fn drill_matches_the_ask_result_and_post_answer_advance() {
+        let raw = concat!(
+            r#"{"type":"assistant","message":{"content":[{"type":"tool_use","id":"toolu_drill","name":"AskUserQuestion","input":{"questions":[{"question":"TRANTOR ASK DRILL warm-1: continue?"}]}}]}}"#,
+            "\n",
+            r#"{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_drill","content":"Continue"}]}}"#,
+            "\n",
+            r#"{"type":"assistant","message":{"content":[{"type":"text","text":"ASK-DRILL-ADVANCED warm-1 Continue"}]}}"#,
+            "\n",
+        );
+        assert_eq!(transcript_facts(raw, "warm-1"), (true, true));
+        assert_eq!(transcript_facts(raw, "cold-1"), (false, false));
     }
 }

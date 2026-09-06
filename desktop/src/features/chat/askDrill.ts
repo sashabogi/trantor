@@ -1,201 +1,228 @@
-// The #6094 real-path acceptance drill, run in the REAL webview: `TRANTOR_ASK_DRILL=<project>`
-// makes the Rust shell emit `ask-drill` after boot (src-tauri/src/lib.rs `run()`).
-//
-// 0.3.148/0.3.149's lesson: an EARLIER version of this drill mounted its OWN off-screen Chat
-// instance. That instance's gen-2 watcher DID receive a push fired through the real
-// channel-to-async-task emit mechanism (`ask_drill_fire_status`) — proving the emit mechanism
-// itself works — while the OPERATOR's real failure was on the AppShell's ACTUAL Chat panel
-// (ModePane.tsx), a SEPARATE React tree the drill's own mount never touched. This version drives
-// THAT real panel instead: it finds the real "Chat" tab button (ModePane's own
-// `aria-label="Chat"`) and clicks it — the exact same user action switching tabs performs, no
-// parallel mount — so whatever is different about the real panel's watcher lifecycle is exactly
-// what this drill now exercises.
-//
-// It never touches anything else: it does not call `trantor up`, does not answer a real
-// question (a click only SWITCHES TABS, no option is ever picked), and if the Chat tab was
-// already selected when the drill started, it is left exactly as found.
-//
-// The app can boot on Home with no project open (the drill's first real-panel attempt found no
-// Chat tab at all for exactly this reason) — this version opens the project first, by clicking
-// its real sidebar row (AppShell.tsx's ProjectRow; there is no external "open project" API to
-// call instead, `openProject`/`setActive` are internal React state), before ever looking for the
-// mode pane's Chat tab.
-//
-// Four things get proved, all narrated into app-trace.log via app_log (never asserted only in
-// process memory the operator can't see):
-//   1. whatever the live transcript's CURRENT ask state is, the real backfill/chat_watch path
-//      (the real panel's own mount effects — no drill-side shortcut) renders it as a card if one
-//      is open;
-//   2. a push through the REAL emit mechanism (`ask_drill_fire_status`, 0.3.149 — the SAME
-//      channel-to-async-task pattern spawn_status_watcher's background thread uses, the #5993
-//      fix that made a raw std::thread's window.emit() actually reach the frontend) reaches the
-//      real panel's listener and either surfaces a card or fires the #6094 blocked-no-ask trace
-//      line. Fired only after SETTLE_BEFORE_REAL_EMIT_MS has passed since the tab was selected —
-//      the 0.3.148 bounce's own gap (~20s) between mount and the live blocked frame — so it
-//      exercises "does a listener alive N seconds receive an async-task emit" the way the real
-//      failure did, not an emit fired within the same tick as mount;
-//   3. if no ask was open when blocked was pushed, Chat's own retry (FAST_RETRY_MS/WINDOW,
-//      SLOW_RETRY_MS/WINDOW — 0.3.145's fix: herdr's blocked frame can land a moment before the
-//      CLI finishes writing the tool_use row) keeps re-syncing on its own for
-//      FAST_RETRY_WINDOW_MS + SLOW_RETRY_WINDOW_MS — the drill waits past that whole span before
-//      concluding nothing arrived, so a real ask written moments after blocked still gets caught;
-//   4. (0.3.147's EIO bounce — the click path attached to a read-only watch client) if
-//      TRANTOR_ASK_DRILL_WRITE_TARGET names a pane, answerAtPane's real `ask_answer` write goes
-//      through the SAME code the ask card's own click uses, against that pane and NEVER the real
-//      orchestrator — the operator sets it up themselves (a throwaway `herdr workspace create`
-//      pane running `cat -v`) and reads it back to confirm the exact bytes arrived.
-import { invoke } from "@tauri-apps/api/core";
-import { FAST_RETRY_WINDOW_MS, SLOW_RETRY_WINDOW_MS } from "./Chat";
-import { answerAtPane } from "../workspace/herdr";
-import { answerKeystrokes } from "./streaming";
+// #6533's built-app acceptance drill. TRANTOR_ASK_DRILL=<project> makes Rust emit `ask-drill`
+// after boot; this drives the real ModePane and the real herdr/Claude/hook/Chat/answer path.
+// The seat writes this drill but never launches it. The orchestrator builds and runs it.
+import { invoke, type InvokeArgs } from "@tauri-apps/api/core";
 
-/** How long the 0.3.148 real bounce showed elapsing between the real panel settling on its
- *  gen-2 watcher and the real blocked frame arriving — the drill waits at least this long after
- *  selecting the Chat tab before firing through the real emit mechanism. */
-const SETTLE_BEFORE_REAL_EMIT_MS = 20_000;
-
-/** ModePane's own tab button (`aria-label={label}`, features/code/ModePane.tsx `modeBtn`) — the
- *  drill clicks the REAL one an operator would, rather than reaching into React state. */
 const CHAT_TAB_SELECTOR = 'button[aria-label="Chat"]';
+const FILES_TAB_SELECTOR = 'button[aria-label="Files"]';
+const ASK_CARD_SELECTOR = '[data-testid="ask-card"]';
+const POLL_MS = 50;
+const ASK_TIMEOUT_MS = 90_000;
+const SETTLE_TIMEOUT_MS = 60_000;
 
-/** AppShell's sidebar ProjectRow (app/AppShell.tsx): a `role="button"` div (not a <button> — a
- *  sleeping row nests a real Wake <button>, so the row itself can't be one) whose FIRST
- *  `.block.truncate` span is the project's own name, verbatim. There is no external "open this
- *  project" API (`openProject`/`setActive` are internal AppShell state) — clicking the real row
- *  is the only way in from outside the React tree, the same one a person uses. */
-function findProjectRow(project: string): HTMLElement | null {
-  const rows = document.querySelectorAll<HTMLElement>('div[role="button"]');
-  for (const row of rows) {
-    const name = row.querySelector("span.block.truncate")?.textContent?.trim();
-    if (name === project) return row;
+type DrillSession = { workspace: string; pane: string; agent: string };
+type DrillPayload = { project?: unknown };
+type DrillProbe = {
+  sessionId: string | null;
+  sidecarExists: boolean;
+  sidecarTs: number | null;
+  transcriptLines: number;
+  traceSeen: boolean;
+  toolResultMatches: boolean;
+  paneAdvanced: boolean;
+};
+
+export type AskDrillDeps = {
+  invoke: <T>(cmd: string, args?: InvokeArgs) => Promise<T>;
+  document: Document;
+  now: () => number;
+  sleep: (ms: number) => Promise<void>;
+};
+
+const DEFAULT_DEPS: AskDrillDeps = {
+  invoke: <T,>(cmd: string, args?: InvokeArgs) => invoke<T>(cmd, args),
+  document,
+  now: Date.now,
+  sleep: ms => new Promise(resolve => setTimeout(resolve, ms)),
+};
+
+function findProjectRow(doc: Document, project: string): HTMLElement | null {
+  for (const row of doc.querySelectorAll<HTMLElement>('div[role="button"]')) {
+    if (row.querySelector("span.block.truncate")?.textContent?.trim() === project) return row;
   }
   return null;
 }
 
-function log(line: string): void {
-  invoke("app_log", { line: `ask-drill ${line}` }).catch(() => {});
-}
-
-const ASK_CARD_SELECTOR = '[data-testid="ask-card"]';
-
-function snapshot(): string {
-  const cards = document.querySelectorAll(ASK_CARD_SELECTOR).length;
-  const tab = document.querySelector(CHAT_TAB_SELECTOR);
-  const selected = tab?.getAttribute("data-on") === "true";
-  return `cards=${cards} chatTabSelected=${selected}`;
-}
-
-/** Poll until either the predicate is true or the deadline passes — never a fixed sleep, since
- *  real backfill/chat_watch settle time varies with transcript size. */
-async function waitFor(predicate: () => boolean, deadlineMs: number): Promise<boolean> {
-  const deadline = Date.now() + deadlineMs;
-  while (Date.now() < deadline) {
-    if (predicate()) return true;
-    await new Promise(r => setTimeout(r, 200));
+function askCard(doc: Document, marker: string): HTMLElement | null {
+  for (const card of doc.querySelectorAll<HTMLElement>(ASK_CARD_SELECTOR)) {
+    if (card.textContent?.includes(marker)) return card;
   }
-  return predicate();
+  return null;
 }
 
-/** #6094, 0.3.147 — proves the WRITE path (answerAtPane -> ask_answer -> herdr's pane.send_text)
- *  against a pane the operator controls, never the real orchestrator. Sends the exact byte
- *  sequence answerKeystrokes() builds for picking option 0 of a representative two-option,
- *  single-select question — the same call the ask card's own click makes. The operator reads
- *  the pane back (a `cat -v` pane echoes control bytes visibly, e.g. `^[[B` then `\r`) to
- *  confirm the bytes arrived; this function only proves the CALL succeeded (no exception, no
- *  EIO), not what appeared on screen — it has no read path into the target pane. */
-async function runWriteProbe(writeTarget: string): Promise<void> {
-  log(`write-probe start target=${writeTarget}`);
-  const probeQuestion = {
-    header: "drill", question: "probe", multiSelect: false,
-    options: [{ label: "a", description: "" }, { label: "b", description: "" }],
-  };
-  const data = answerKeystrokes(probeQuestion, [0]);
+async function waitFor<T>(
+  read: () => T | null | undefined | false,
+  timeoutMs: number,
+  deps: AskDrillDeps,
+): Promise<T | null> {
+  const deadline = deps.now() + timeoutMs;
+  while (deps.now() < deadline) {
+    const value = read();
+    if (value) return value;
+    await deps.sleep(POLL_MS);
+  }
+  return read() || null;
+}
+
+async function selectProject(project: string, deps: AskDrillDeps): Promise<void> {
+  if (deps.document.querySelector(CHAT_TAB_SELECTOR)) return;
+  const row = findProjectRow(deps.document, project);
+  if (!row) throw new Error(`no sidebar row for project=${project}`);
+  row.click();
+  const opened = await waitFor(
+    () => deps.document.querySelector<HTMLElement>(CHAT_TAB_SELECTOR),
+    5_000,
+    deps,
+  );
+  if (!opened) throw new Error(`project=${project} did not open a mode pane`);
+}
+
+async function selectMode(selector: string, deps: AskDrillDeps): Promise<number> {
+  const tab = deps.document.querySelector<HTMLButtonElement>(selector);
+  if (!tab) throw new Error(`mode tab missing: ${selector}`);
+  const clickedAt = deps.now();
+  if (tab.getAttribute("data-on") !== "true") tab.click();
+  const selected = await waitFor(
+    () => deps.document.querySelector(selector)?.getAttribute("data-on") === "true",
+    5_000,
+    deps,
+  );
+  if (!selected) throw new Error(`mode tab did not select: ${selector}`);
+  return clickedAt;
+}
+
+function log(deps: AskDrillDeps, line: string): void {
+  void deps.invoke("app_log", { line: `ask-drill ${line}` }).catch(() => {});
+}
+
+async function probe(
+  project: string,
+  marker: string,
+  sessionId: string | null,
+  deps: AskDrillDeps,
+): Promise<DrillProbe> {
+  return deps.invoke<DrillProbe>("ask_drill_probe", { project, marker, sessionId });
+}
+
+async function waitForProbe(
+  read: () => Promise<DrillProbe>,
+  accept: (probe: DrillProbe) => boolean,
+  timeoutMs: number,
+  deps: AskDrillDeps,
+): Promise<DrillProbe | null> {
+  const deadline = deps.now() + timeoutMs;
+  while (deps.now() < deadline) {
+    const state = await read();
+    if (accept(state)) return state;
+    await deps.sleep(POLL_MS);
+  }
+  return null;
+}
+
+async function runScenario(
+  project: string,
+  mode: "open" | "cold",
+  marker: string,
+  deps: AskDrillDeps,
+): Promise<void> {
+  if (mode === "open") await selectMode(CHAT_TAB_SELECTOR, deps);
+  else await selectMode(FILES_TAB_SELECTOR, deps);
+
+  let workspace: string | null = null;
   try {
-    await answerAtPane(writeTarget, data);
-    log(`write-probe sent target=${writeTarget} bytes=${JSON.stringify(data)} — read the pane back to confirm the bytes arrived`);
-  } catch (e) {
-    log(`write-probe FAILED target=${writeTarget}: ${e instanceof Error ? e.message : String(e)}`);
+    log(deps, `${mode} start marker=${marker}`);
+    const cardArrival = mode === "open"
+      ? waitFor(() => {
+          const card = askCard(deps.document, marker);
+          return card ? { card, at: deps.now() } : null;
+        }, ASK_TIMEOUT_MS, deps)
+      : null;
+    const session = await deps.invoke<DrillSession>("ask_drill_start", { project, marker });
+    workspace = session.workspace;
+    log(deps, `${mode} herdr workspace=${session.workspace} pane=${session.pane} agent=${session.agent}`);
+
+    const opened = await waitForProbe(
+      () => probe(project, marker, null, deps),
+      state => state.sidecarExists && Boolean(state.sessionId),
+      ASK_TIMEOUT_MS,
+      deps,
+    );
+    if (!opened?.sessionId || opened.sidecarTs === null) {
+      throw new Error(`${mode}: sidecar did not appear`);
+    }
+    const traced = opened.traceSeen ? opened : await waitForProbe(
+      () => probe(project, marker, opened.sessionId, deps),
+      state => state.traceSeen,
+      1_000,
+      deps,
+    );
+    if (!traced) throw new Error(`${mode}: app trace has no ask received line`);
+    const baselineLines = opened.transcriptLines;
+
+    let arrival: { card: HTMLElement; at: number } | null;
+    if (mode === "open") {
+      arrival = await cardArrival!;
+      if (!arrival) throw new Error("open: DOM card did not arrive");
+      if (arrival.at - opened.sidecarTs > 1_000) {
+        throw new Error(`open: DOM card arrived ${arrival.at - opened.sidecarTs}ms after hook`);
+      }
+    } else {
+      const tabOpenedAt = await selectMode(CHAT_TAB_SELECTOR, deps);
+      arrival = await waitFor(() => {
+        const card = askCard(deps.document, marker);
+        return card ? { card, at: deps.now() } : null;
+      }, 1_000, deps);
+      if (!arrival) throw new Error("cold: replayed DOM card did not arrive within 1s of opening Chat");
+      if (arrival.at - tabOpenedAt > 1_000) {
+        throw new Error(`cold: replayed DOM card arrived ${arrival.at - tabOpenedAt}ms after tab open`);
+      }
+    }
+
+    const beforeAnswer = await probe(project, marker, opened.sessionId, deps);
+    if (beforeAnswer.transcriptLines !== baselineLines) {
+      throw new Error(`${mode}: transcript grew before the DOM card (${baselineLines} -> ${beforeAnswer.transcriptLines})`);
+    }
+    const option = await waitFor(() => {
+      const card = askCard(deps.document, marker);
+      return [...(card?.querySelectorAll<HTMLButtonElement>("button") ?? [])]
+        .find(button => button.textContent?.includes("Continue") && !button.disabled) ?? null;
+    }, 5_000, deps);
+    if (!option) throw new Error(`${mode}: session-routed answer button stayed read-only`);
+    option.click();
+
+    const settled = await waitForProbe(
+      () => probe(project, marker, opened.sessionId, deps),
+      state => !state.sidecarExists && state.toolResultMatches && state.paneAdvanced,
+      SETTLE_TIMEOUT_MS,
+      deps,
+    );
+    if (!settled) throw new Error(`${mode}: answer did not settle sidecar, tool_result, and pane advance`);
+    const closed = await waitFor(() => askCard(deps.document, marker) === null, 1_000, deps);
+    if (!closed) throw new Error(`${mode}: closed event left the question card open`);
+    log(deps, `${mode} PASS session=${opened.sessionId} sidecar=gone tool_result=matched card=closed pane=advanced`);
+  } finally {
+    if (workspace) {
+      await deps.invoke("ask_drill_close", { project, workspace })
+        .catch(error => log(deps, `${mode} cleanup FAILED workspace=${workspace}: ${String(error)}`));
+    }
   }
 }
 
-export async function runAskDrill(rawPayload: string): Promise<void> {
-  // SAFETY: this drill's own Rust setup (`run()` above) is the only emitter of "ask-drill" and
-  // always sends `JSON.stringify({ project, writeTarget })` — the same same-origin trust Chat.tsx
-  // extends to Rust's own `orchestrator_chat` envelope.
-  const { project, writeTarget } = JSON.parse(rawPayload) as { project: string; writeTarget: string | null };
-  log(`start project=${project} writeTarget=${writeTarget ?? "(none)"}`);
-  if (writeTarget) {
-    await runWriteProbe(writeTarget);
+export async function runAskDrill(rawPayload: string, deps: AskDrillDeps = DEFAULT_DEPS): Promise<void> {
+  // SAFETY: project is normalized to a string below; every other JSON field is ignored.
+  const payload = JSON.parse(rawPayload) as DrillPayload;
+  const project = String(payload.project ?? "").trim();
+  if (!project) {
+    log(deps, "FAILED: payload has no project");
+    return;
   }
-
   try {
-    // The app can boot on Home with no project open (0.3.148/149 bounce: the drill's first
-    // real-panel attempt found no Chat tab at all for exactly this reason) — navigate to the
-    // project first, the same click a person makes from the sidebar, before ever looking for
-    // the mode pane's Chat tab.
-    if (!document.querySelector(CHAT_TAB_SELECTOR)) {
-      const row = findProjectRow(project);
-      if (!row) {
-        log(`FAILED: no sidebar row found for project=${project} (div[role="button"] whose name span reads "${project}") — is the app running with this project visible in the sidebar?`);
-        return;
-      }
-      log(`clicking the sidebar row for project=${project} (app booted without it open)`);
-      row.click();
-      const opened = await waitFor(() => document.querySelector(CHAT_TAB_SELECTOR) !== null, 5_000);
-      log(`project pane opened=${opened}`);
-      if (!opened) {
-        log("FAILED: the mode pane's tab strip never appeared after opening the project");
-        return;
-      }
-    }
-
-    const tab = document.querySelector<HTMLButtonElement>(CHAT_TAB_SELECTOR);
-    if (!tab) {
-      log("FAILED: no Chat tab button found in the real DOM (button[aria-label=\"Chat\"]) even after opening the project");
-      return;
-    }
-    const alreadyOnChat = tab.getAttribute("data-on") === "true";
-    if (alreadyOnChat) {
-      log("Chat tab already selected — driving the panel as found, no click needed");
-    } else {
-      log("clicking the real Chat tab (no separate mount)");
-      tab.click();
-    }
-
-    const settled = await waitFor(() => document.querySelector(CHAT_TAB_SELECTOR)?.getAttribute("data-on") === "true", 5_000);
-    log(`tab selected=${settled} ${snapshot()}`);
-
-    const beforeReal = document.querySelectorAll(ASK_CARD_SELECTOR).length;
-    if (beforeReal > 0) {
-      log(`REAL open ask already rendered from the live transcript — the backfill/render path works right now: ${snapshot()}`);
-    } else {
-      log(`no ask card from the real backfill alone (transcript may have nothing open) — ${snapshot()}`);
-    }
-
-    // Let the real panel settle on its gen-2 watcher (target null -> a live pane, #5495) the
-    // same way a real session does — the 0.3.148 bounce's gap was ~20s between the tab settling
-    // and the live blocked frame, and a push fired within the same tick never exercised that gap.
-    log(`waiting ${SETTLE_BEFORE_REAL_EMIT_MS}ms for the gen-2 watcher to settle before firing the real emit path`);
-    await new Promise(r => setTimeout(r, SETTLE_BEFORE_REAL_EMIT_MS));
-
-    // The REAL emit path (#6094, 0.3.149): the same channel-to-async-task mechanism
-    // spawn_status_watcher's background thread uses, invoked on the drill's own schedule so it
-    // can fire well after the tab settled instead of within the same tick.
-    log(`firing the real emit path: project=${project} status=blocked`);
-    await invoke("ask_drill_fire_status", { project, status: "blocked" });
-
-    // Wait past Chat's OWN retry span (#6094, 0.3.145): a real ask can be written a moment after
-    // herdr reports blocked, and Chat keeps re-syncing on its own for this whole window before
-    // giving up — cutting the wait shorter than this would call a retry-in-progress a failure.
-    const retryWindowMs = FAST_RETRY_WINDOW_MS + SLOW_RETRY_WINDOW_MS + 1_000;
-    const reacted = await waitFor(() => document.querySelectorAll(ASK_CARD_SELECTOR).length > beforeReal, retryWindowMs);
-    log(`after the real blocked push (waited up to ${retryWindowMs}ms for the retry to run its course): card-count-increased=${reacted} ${snapshot()}`);
-
-    if (!reacted && beforeReal === 0) {
-      log("no ask card appeared after the real blocked push, even past the retry window — if the live transcript truly has no open ask, this is CORRECT and the #6094 blocked-no-ask trace line above (search for 'chat blocked with no open ask') should have fired, followed by 'chat blocked-no-ask retry N' lines; their absence means the real panel never reacted to the push at all — check whether 'chat status ...: push=blocked' ever appears after the 'ask-drill: fired the real emit path' line above, and whether the SAME chat_watch generation's 'status: watcher start'/'status: seed' pair is in app-trace at all");
-    }
-    log("done");
-  } catch (e) {
-    log(`FAILED: ${e instanceof Error ? e.message : String(e)}`);
+    await selectProject(project, deps);
+    const nonce = `${deps.now()}-${Math.floor(Math.random() * 1_000_000)}`;
+    await runScenario(project, "open", `open-${nonce}`, deps);
+    await runScenario(project, "cold", `cold-${nonce}`, deps);
+    log(deps, "PASS: real AskUserQuestion sidecar/card/answer path passed with Chat open and cold");
+  } catch (error) {
+    log(deps, `FAILED: ${error instanceof Error ? error.message : String(error)}`);
   }
 }

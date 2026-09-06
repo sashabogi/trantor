@@ -501,6 +501,7 @@ describe("orch-ask is the pending-card source (#6533)", () => {
       project: "p", session_id: "drill-session", tool_use_id: "ask1", open: true,
       questions: askBlock.ask,
     };
+    const nullIdAsk = { ...ask, tool_use_id: null };
     const fire = async (event: string, payload: string | AskEventPayload) => {
       await act(async () => { for (const cb of handlers.get(event) ?? []) cb({ payload }); });
       await flush();
@@ -508,14 +509,14 @@ describe("orch-ask is the pending-card source (#6533)", () => {
 
     act(() => { root.render(<Chat project="p" dock="right" onDock={() => {}} onClose={() => {}} deps={deps} />); });
     await flush(); await flush();
-    await fire("orch-ask", ask);
+    await fire("orch-ask", nullIdAsk);
     expect(host.textContent).toContain("Ship it?");
     const no = [...host.querySelectorAll("button")].find(button => button.textContent?.includes("No"));
     await act(async () => { no?.dispatchEvent(new MouseEvent("click", { bubbles: true })); });
     await flush();
     expect(answers).toEqual([{ sessionId: "drill-session", data: "\x1b[B\r" }]);
 
-    await fire("orch-ask", { ...ask, open: false });
+    await fire("orch-ask", { ...nullIdAsk, open: false });
     expect(host.querySelector('[data-testid="ask-card"]')).toBeNull();
 
     answerTarget = null;
@@ -524,12 +525,12 @@ describe("orch-ask is the pending-card source (#6533)", () => {
     await fire("orch-ask", { ...ask, session_id: "terminal-only", tool_use_id: "ask2", open: false });
     answerTarget = "w2:p19";
 
-    await fire("orch-ask", ask);
+    await fire("orch-ask", nullIdAsk);
     answered = true;
     await fire("chat-session-changed", JSON.stringify({ project: "p", sessionId: "s1" }));
     expect(host.querySelectorAll('[data-testid="ask-card"]')).toHaveLength(1);
     expect(host.textContent).toContain("answered");
-    await fire("orch-ask", ask);
+    await fire("orch-ask", nullIdAsk);
     expect(host.querySelectorAll('[data-testid="ask-card"]')).toHaveLength(1);
 
     act(() => root.unmount());
