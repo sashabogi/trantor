@@ -133,16 +133,31 @@ async function waitForProbe(
   return null;
 }
 
-async function runScenario(
+function probeSummary(state: DrillProbe): string {
+  return `session=${state.sessionId ?? "null"} sidecar=${state.sidecarExists} trace=${state.traceSeen} open=${state.openEvents} webview=${state.webviewEventTs ?? "null"} card=${state.cardMountTs ?? "null"} visible=${state.pickerVisible} answered=${state.toolResultMatches} advanced=${state.paneAdvanced}`;
+}
+
+async function runScenarioBody(
   project: string,
   mode: "open" | "cold",
   marker: string,
   deps: AskDrillDeps,
   setStep: (step: string) => void,
 ): Promise<void> {
+  let lastProbeSummary = "";
+  const readProbe = async (sessionId: string | null): Promise<DrillProbe> => {
+    const state = await probe(project, marker, sessionId, deps);
+    const summary = probeSummary(state);
+    if (summary !== lastProbeSummary) {
+      lastProbeSummary = summary;
+      log(deps, `${mode} probe result ${summary}`);
+    }
+    return state;
+  };
   setStep(`${mode}: select mode`);
   if (mode === "open") await selectMode(CHAT_TAB_SELECTOR, deps);
   else await selectMode(FILES_TAB_SELECTOR, deps);
+  log(deps, `${mode} setup mode selected`);
 
   let workspace: string | null = null;
   try {
@@ -159,8 +174,9 @@ async function runScenario(
     log(deps, `${mode} herdr workspace=${session.workspace} pane=${session.pane} agent=${session.agent}`);
 
     setStep(`${mode}: wait for sidecar`);
+    log(deps, `${mode} probe sidecar begin`);
     const opened = await waitForProbe(
-      () => probe(project, marker, null, deps),
+      () => readProbe(null),
       state => state.sidecarExists && Boolean(state.sessionId),
       ASK_TIMEOUT_MS,
       deps,
@@ -168,8 +184,10 @@ async function runScenario(
     if (!opened?.sessionId || opened.sidecarTs === null) {
       throw new Error(`${mode}: sidecar did not appear`);
     }
+    log(deps, `${mode} sidecar observed session=${opened.sessionId} ts=${opened.sidecarTs}`);
+    if (!opened.traceSeen) log(deps, `${mode} probe ask-received trace begin`);
     const traced = opened.traceSeen ? opened : await waitForProbe(
-      () => probe(project, marker, opened.sessionId, deps),
+      () => readProbe(opened.sessionId),
       state => state.traceSeen,
       1_000,
       deps,
@@ -183,17 +201,25 @@ async function runScenario(
       arrival = await cardArrival!;
       if (!arrival) throw new Error("open: DOM card did not arrive");
     } else {
+      setStep("cold: select Chat tab");
+      log(deps, "cold tab click");
       const tabOpenedAt = await selectMode(CHAT_TAB_SELECTOR, deps);
       coldTabOpenedAt = tabOpenedAt;
+      log(deps, `cold tab opened at ${tabOpenedAt}`);
+      setStep("cold: wait for replayed card");
+      log(deps, "cold replay wait begin");
       arrival = await waitFor(() => {
         const card = askCard(deps.document, marker);
         return card ? { card, at: deps.now() } : null;
       }, 1_500, deps);
       if (!arrival) throw new Error("cold: replayed DOM card did not arrive within 1500ms of opening Chat");
+      log(deps, `cold replayed card observed at ${arrival.at}`);
     }
 
+    setStep(`${mode}: read card timing probe`);
+    log(deps, `${mode} probe card timing begin`);
     const beforeAnswer = await waitForProbe(
-      () => probe(project, marker, opened.sessionId, deps),
+      () => readProbe(opened.sessionId),
       state => state.webviewEventTs !== null && state.cardMountTs !== null,
       1_000,
       deps,
@@ -219,8 +245,9 @@ async function runScenario(
     }
     log(deps, `${mode} card mounted hookTs=${opened.sidecarTs} webviewTs=${beforeAnswer.webviewEventTs} domTs=${beforeAnswer.cardMountTs}`);
     setStep(`${mode}: wait for visible answer buttons`);
+    log(deps, `${mode} probe visibility begin`);
     const visible = await waitForProbe(
-      () => probe(project, marker, opened.sessionId, deps),
+      () => readProbe(opened.sessionId),
       state => state.pickerVisible && state.buttonsEnabledTs !== null,
       5_000,
       deps,
@@ -239,15 +266,16 @@ async function runScenario(
     log(deps, `${mode} clicked at ${clickedAt}`);
 
     setStep(`${mode}: wait for answer settlement`);
+    log(deps, `${mode} probe settlement begin`);
     const settled = await waitForProbe(
-      () => probe(project, marker, opened.sessionId, deps),
+      () => readProbe(opened.sessionId),
       state => state.openEvents === 1 && !state.sidecarExists && state.pickerVisible &&
         state.answerResolvedTs !== null && state.toolResultMatches && state.paneAdvanced,
       SETTLE_TIMEOUT_MS,
       deps,
     );
     if (!settled) {
-      const last = await probe(project, marker, opened.sessionId, deps);
+      const last = await readProbe(opened.sessionId);
       throw new Error(last.answerRejected ?? `${mode}: answer did not settle sidecar, tool_result, and pane advance`);
     }
     log(deps, `${mode} answer resolved at ${settled.answerResolvedTs}`);
@@ -262,6 +290,31 @@ async function runScenario(
   }
 }
 
+async function runScenario(
+  project: string,
+  mode: "open" | "cold",
+  marker: string,
+  deps: AskDrillDeps,
+): Promise<void> {
+  let step = `${mode}: enter`;
+  let cancelDeadline = () => {};
+  const deadline = new Promise<never>((_, reject) => {
+    cancelDeadline = deps.armDeadline(DEADLINE_MS, () => {
+      const error = new Error(`deadline at step ${step}`);
+      log(deps, `FAILED: ${error.message}`);
+      reject(error);
+    });
+  });
+  try {
+    await Promise.race([
+      runScenarioBody(project, mode, marker, deps, next => { step = next; }),
+      deadline,
+    ]);
+  } finally {
+    cancelDeadline();
+  }
+}
+
 export async function runAskDrill(rawPayload: string, deps: AskDrillDeps = DEFAULT_DEPS): Promise<void> {
   // SAFETY: project is normalized to a string below; every other JSON field is ignored.
   const payload = JSON.parse(rawPayload) as DrillPayload;
@@ -270,23 +323,13 @@ export async function runAskDrill(rawPayload: string, deps: AskDrillDeps = DEFAU
     log(deps, "FAILED: payload has no project");
     return;
   }
-  let step = "select project";
-  let cancelDeadline = () => {};
-  const deadline = new Promise<never>((_, reject) => {
-    cancelDeadline = deps.armDeadline(DEADLINE_MS, () => reject(new Error(`deadline at step ${step}`)));
-  });
-  const run = async () => {
+  try {
     await selectProject(project, deps);
     const nonce = `${deps.now()}-${Math.floor(Math.random() * 1_000_000)}`;
-    await runScenario(project, "open", `open-${nonce}`, deps, next => { step = next; });
-    await runScenario(project, "cold", `cold-${nonce}`, deps, next => { step = next; });
+    await runScenario(project, "open", `open-${nonce}`, deps);
+    await runScenario(project, "cold", `cold-${nonce}`, deps);
     log(deps, "PASS: real AskUserQuestion sidecar/card/answer path passed with Chat open and cold");
-  };
-  try {
-    await Promise.race([run(), deadline]);
   } catch (error) {
     log(deps, `FAILED: ${error instanceof Error ? error.message : String(error)}`);
-  } finally {
-    cancelDeadline();
   }
 }

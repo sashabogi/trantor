@@ -27,6 +27,8 @@ describe("real AskUserQuestion drill (#6533)", () => {
     let active: Active | null = null;
     let starts = 0;
     let closes = 0;
+    let deadlineArms = 0;
+    let deadlineCancels = 0;
     const logs: string[] = [];
     const files = document.querySelector<HTMLButtonElement>('button[aria-label="Files"]')!;
     const chat = document.querySelector<HTMLButtonElement>('button[aria-label="Chat"]')!;
@@ -121,15 +123,24 @@ describe("real AskUserQuestion drill (#6533)", () => {
       document,
       now: () => clock,
       sleep: async ms => { clock += ms; },
-      armDeadline: () => () => {},
+      armDeadline: () => {
+        deadlineArms++;
+        return () => { deadlineCancels++; };
+      },
     };
 
     await runAskDrill(JSON.stringify({ project: "trantor" }), deps);
 
     expect(starts).toBe(2);
     expect(closes).toBe(2);
+    expect(deadlineArms).toBe(2);
+    expect(deadlineCancels).toBe(2);
     expect(logs.some(line => line.includes("open PASS"))).toBe(true);
     expect(logs.some(line => line.includes("cold PASS"))).toBe(true);
+    expect(logs.some(line => line.includes("cold probe sidecar begin"))).toBe(true);
+    expect(logs.some(line => line.includes("cold probe result session=session-2"))).toBe(true);
+    expect(logs.some(line => line.includes("cold tab click"))).toBe(true);
+    expect(logs.some(line => line.includes("cold replayed card observed"))).toBe(true);
     expect(logs[logs.length - 1]).toContain("real AskUserQuestion sidecar/card/answer path passed");
     expect(logs.some(line => line.includes("FAILED"))).toBe(false);
   });
