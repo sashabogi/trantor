@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { spawnSync } from "node:child_process";
 import {
-  existsSync, mkdirSync, mkdtempSync, readFileSync, statSync, utimesSync, writeFileSync,
+  existsSync, mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -58,6 +58,8 @@ ok(created.session_id === sid && created.project === "trantor" && created.cwd ==
 ok(created.tool_use_id === open.tool_use_id && JSON.stringify(created.questions) === JSON.stringify(questions),
    "open sidecar preserves tool id and questions");
 ok(Number.isFinite(created.ts), "open sidecar carries an epoch timestamp");
+ok(created.event === "PreToolUse" && created.visible_ts === null,
+   "PreToolUse records an ask that is not visible yet");
 
 run({ ...open, hook_event_name: "PostToolUse", tool_use_id: "toolu_OTHER" });
 ok(existsSync(sidecar), "a stale close cannot erase a newer identified ask");
@@ -74,15 +76,17 @@ run({ ...open, hook_event_name: "PostToolUse", tool_use_id: "toolu_DIFFERENT" })
 ok(!existsSync(sidecar), "any close clears a stored null id because one ask can be live");
 
 run(open);
-const beforePermission = readFileSync(sidecar, "utf8");
-const oldTime = new Date(1_000_000);
-utimesSync(sidecar, oldTime, oldTime);
 run(permission);
 const afterPermission = JSON.parse(readFileSync(sidecar, "utf8"));
 ok(afterPermission.tool_use_id === open.tool_use_id,
    "PermissionRequest preserves the non-null id written by PreToolUse");
-ok(readFileSync(sidecar, "utf8") === beforePermission && statSync(sidecar).mtimeMs === oldTime.getTime(),
-   "identical PreToolUse then PermissionRequest content does not rewrite the sidecar");
+ok(afterPermission.event === "PermissionRequest" && Number.isFinite(afterPermission.visible_ts),
+   "PermissionRequest marks the existing ask visible without re-keying it");
+const visibleContent = readFileSync(sidecar, "utf8");
+const visibleMtime = statSync(sidecar).mtimeMs;
+run(permission);
+ok(readFileSync(sidecar, "utf8") === visibleContent && statSync(sidecar).mtimeMs === visibleMtime,
+   "an identical repeated PermissionRequest does not rewrite the sidecar");
 
 run(open);
 run({ hook_event_name: "Stop", session_id: sid, cwd });

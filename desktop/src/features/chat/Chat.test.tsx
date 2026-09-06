@@ -25,7 +25,8 @@ type Invoked = { cmd: string };
 // object. `unknown` is the honest payload type — the fires narrow it, never a cast.
 type Handler = (ev: { payload: unknown }) => void;
 type AskEventPayload = {
-  project: string; session_id: string; tool_use_id: string | null; open: boolean; questions: AskQuestion[];
+  project: string; session_id: string; tool_use_id: string | null; open: boolean;
+  visible: boolean; questions: AskQuestion[];
 };
 
 /** A faithful in-memory ChatDeps: invoke answers the chat's commands, listen records handlers,
@@ -342,7 +343,7 @@ function makeBlockedDeps() {
       return Promise.resolve(() => {});
     },
     orchestratorOf: async () => ({ project: "p", agent: "orch", surface: "surf1", kind: "orch" }),
-    answerAtSession: async (target: string, _question: string, data: string) => { answered.push({ target, data }); },
+    answerAtSession: async (target: string, data: string) => { answered.push({ target, data }); },
     Composer: () => null,
     TerminalPane: () => null,
   };
@@ -460,7 +461,7 @@ describe("orch-ask is the pending-card source (#6533)", () => {
     const host = document.createElement("div"); document.body.appendChild(host);
     const root = createRoot(host);
     const handlers = new Map<string, Handler[]>();
-    const answers: Array<{ sessionId: string; question: string; data: string }> = [];
+    const answers: Array<{ sessionId: string; data: string }> = [];
     const traces: string[] = [];
     let answered = false;
     let answerTarget: string | null = "w2:p19";
@@ -499,12 +500,12 @@ describe("orch-ask is the pending-card source (#6533)", () => {
         return Promise.resolve(() => {});
       },
       orchestratorOf: async () => ({ project: "p", agent: "orch", surface: "w2:p8", kind: "orch" }),
-      answerAtSession: async (sessionId, question, data) => { answers.push({ sessionId, question, data }); },
+      answerAtSession: async (sessionId, data) => { answers.push({ sessionId, data }); },
       Composer: () => null,
       TerminalPane: () => null,
     };
     const ask = {
-      project: "p", session_id: "drill-session", tool_use_id: "ask1", open: true,
+      project: "p", session_id: "drill-session", tool_use_id: "ask1", open: true, visible: false,
       questions: askBlock.ask,
     };
     const nullIdAsk = { ...ask, tool_use_id: null };
@@ -519,10 +520,15 @@ describe("orch-ask is the pending-card source (#6533)", () => {
     expect(host.textContent).toContain("Ship it?");
     expect(traces.some(line => line.includes("ask event in webview session=drill-session"))).toBe(true);
     expect(traces.some(line => line.includes("ask card mounted session=drill-session"))).toBe(true);
-    const no = [...host.querySelectorAll("button")].find(button => button.textContent?.includes("No"));
+    let no = [...host.querySelectorAll("button")].find(button => button.textContent?.includes("No"));
+    expect(no?.disabled).toBe(true);
+    await fire("orch-ask", { ...nullIdAsk, visible: true });
+    no = [...host.querySelectorAll("button")].find(button => button.textContent?.includes("No"));
+    expect(no?.disabled).toBe(false);
+    expect(traces.some(line => line.includes("ask visible session=drill-session via=permission-request"))).toBe(true);
     await act(async () => { no?.dispatchEvent(new MouseEvent("click", { bubbles: true })); });
     await flush();
-    expect(answers).toEqual([{ sessionId: "drill-session", question: "Ship it?", data: "\x1b[B\r" }]);
+    expect(answers).toEqual([{ sessionId: "drill-session", data: "\x1b[B\r" }]);
 
     await fire("orch-ask", { ...nullIdAsk, open: false });
     expect(host.querySelector('[data-testid="ask-card"]')).toBeNull();
@@ -532,6 +538,17 @@ describe("orch-ask is the pending-card source (#6533)", () => {
     expect(host.textContent).toContain("answer it in its terminal");
     await fire("orch-ask", { ...ask, session_id: "terminal-only", tool_use_id: "ask2", open: false });
     answerTarget = "w2:p19";
+
+    const fallbackAsk = { ...ask, session_id: "fallback-session", tool_use_id: "ask3", visible: false };
+    await fire("orch-ask", fallbackAsk);
+    let fallbackNo = [...host.querySelectorAll("button")].find(button => button.textContent?.includes("No"));
+    expect(fallbackNo?.disabled).toBe(true);
+    await act(async () => { await new Promise(resolve => setTimeout(resolve, 1_550)); });
+    await flush();
+    fallbackNo = [...host.querySelectorAll("button")].find(button => button.textContent?.includes("No"));
+    expect(fallbackNo?.disabled).toBe(false);
+    expect(traces.some(line => line.includes("ask visible session=fallback-session via=fallback"))).toBe(true);
+    await fire("orch-ask", { ...fallbackAsk, open: false });
 
     await fire("orch-ask", nullIdAsk);
     answered = true;
@@ -693,7 +710,7 @@ function makeRealTranscriptDeps() {
     },
     listen: () => Promise.resolve(() => {}),
     orchestratorOf: async () => ({ project: "p", agent: "orch", surface: "surf1", kind: "orch" }),
-    answerAtSession: async (target: string, _question: string, data: string) => { answered.push({ target, data }); },
+    answerAtSession: async (target: string, data: string) => { answered.push({ target, data }); },
     Composer: () => null,
     TerminalPane: () => null,
   };
@@ -825,7 +842,7 @@ describe("real transcript regression via the PUSH path (chat-rows then orch-stat
     await flush();
 
     await fire("orch-ask", {
-      project: "p", session_id: "s1", tool_use_id: "toolu_real_ask", open: true,
+      project: "p", session_id: "s1", tool_use_id: "toolu_real_ask", open: true, visible: true,
       questions: "ask" in REAL_ASK_TURNS[3].blocks[0] ? REAL_ASK_TURNS[3].blocks[0].ask : [],
     });
     await flush();

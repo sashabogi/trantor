@@ -9,6 +9,7 @@ const ASK_CARD_SELECTOR = '[data-testid="ask-card"]';
 const POLL_MS = 50;
 const ASK_TIMEOUT_MS = 90_000;
 const SETTLE_TIMEOUT_MS = 60_000;
+const DEADLINE_MS = ASK_TIMEOUT_MS + SETTLE_TIMEOUT_MS + 30_000;
 
 type DrillSession = { workspace: string; pane: string; agent: string };
 type DrillPayload = { project?: unknown };
@@ -22,6 +23,10 @@ type DrillProbe = {
   webviewEventTs: number | null;
   cardMountTs: number | null;
   pickerVisible: boolean;
+  buttonsEnabledTs: number | null;
+  answerClickedTs: number | null;
+  answerResolvedTs: number | null;
+  answerRejected: string | null;
   toolResultMatches: boolean;
   paneAdvanced: boolean;
 };
@@ -31,6 +36,7 @@ export type AskDrillDeps = {
   document: Document;
   now: () => number;
   sleep: (ms: number) => Promise<void>;
+  armDeadline: (ms: number, expire: () => void) => () => void;
 };
 
 const DEFAULT_DEPS: AskDrillDeps = {
@@ -38,6 +44,10 @@ const DEFAULT_DEPS: AskDrillDeps = {
   document,
   now: Date.now,
   sleep: ms => new Promise(resolve => setTimeout(resolve, ms)),
+  armDeadline: (ms, expire) => {
+    const timer = setTimeout(expire, ms);
+    return () => clearTimeout(timer);
+  },
 };
 
 function findProjectRow(doc: Document, project: string): HTMLElement | null {
@@ -128,13 +138,16 @@ async function runScenario(
   mode: "open" | "cold",
   marker: string,
   deps: AskDrillDeps,
+  setStep: (step: string) => void,
 ): Promise<void> {
+  setStep(`${mode}: select mode`);
   if (mode === "open") await selectMode(CHAT_TAB_SELECTOR, deps);
   else await selectMode(FILES_TAB_SELECTOR, deps);
 
   let workspace: string | null = null;
   try {
     log(deps, `${mode} start marker=${marker}`);
+    setStep(`${mode}: start interactive session`);
     const cardArrival = mode === "open"
       ? waitFor(() => {
           const card = askCard(deps.document, marker);
@@ -145,6 +158,7 @@ async function runScenario(
     workspace = session.workspace;
     log(deps, `${mode} herdr workspace=${session.workspace} pane=${session.pane} agent=${session.agent}`);
 
+    setStep(`${mode}: wait for sidecar`);
     const opened = await waitForProbe(
       () => probe(project, marker, null, deps),
       state => state.sidecarExists && Boolean(state.sessionId),
@@ -200,22 +214,40 @@ async function runScenario(
     if (beforeAnswer.transcriptLines !== baselineLines) {
       throw new Error(`${mode}: transcript grew before the DOM card (${baselineLines} -> ${beforeAnswer.transcriptLines})`);
     }
+    log(deps, `${mode} card mounted hookTs=${opened.sidecarTs} webviewTs=${beforeAnswer.webviewEventTs} domTs=${beforeAnswer.cardMountTs}`);
+    setStep(`${mode}: wait for visible answer buttons`);
+    const visible = await waitForProbe(
+      () => probe(project, marker, opened.sessionId, deps),
+      state => state.pickerVisible && state.buttonsEnabledTs !== null,
+      5_000,
+      deps,
+    );
+    if (!visible?.buttonsEnabledTs) throw new Error(`${mode}: answer buttons did not become visible`);
     const option = await waitFor(() => {
       const card = askCard(deps.document, marker);
       return [...(card?.querySelectorAll<HTMLButtonElement>("button") ?? [])]
         .find(button => button.textContent?.includes("Continue") && !button.disabled) ?? null;
     }, 5_000, deps);
     if (!option) throw new Error(`${mode}: session-routed answer button stayed read-only`);
+    log(deps, `${mode} buttons enabled at ${visible.buttonsEnabledTs}`);
+    setStep(`${mode}: click answer`);
+    const clickedAt = deps.now();
     option.click();
+    log(deps, `${mode} clicked at ${clickedAt}`);
 
+    setStep(`${mode}: wait for answer settlement`);
     const settled = await waitForProbe(
       () => probe(project, marker, opened.sessionId, deps),
       state => state.openEvents === 1 && !state.sidecarExists && state.pickerVisible &&
-        state.toolResultMatches && state.paneAdvanced,
+        state.answerResolvedTs !== null && state.toolResultMatches && state.paneAdvanced,
       SETTLE_TIMEOUT_MS,
       deps,
     );
-    if (!settled) throw new Error(`${mode}: answer did not settle sidecar, tool_result, and pane advance`);
+    if (!settled) {
+      const last = await probe(project, marker, opened.sessionId, deps);
+      throw new Error(last.answerRejected ?? `${mode}: answer did not settle sidecar, tool_result, and pane advance`);
+    }
+    log(deps, `${mode} answer resolved at ${settled.answerResolvedTs}`);
     const closed = await waitFor(() => askCard(deps.document, marker) === null, 1_000, deps);
     if (!closed) throw new Error(`${mode}: closed event left the question card open`);
     log(deps, `${mode} PASS session=${opened.sessionId} hookTs=${opened.sidecarTs} webviewTs=${beforeAnswer.webviewEventTs} domTs=${beforeAnswer.cardMountTs} hook-webview=${hookToWebview}ms webview-dom=${webviewToDom}ms open-events=1 picker=visible-before-send sidecar=gone tool_result=matched card=closed pane=advanced`);
@@ -235,13 +267,23 @@ export async function runAskDrill(rawPayload: string, deps: AskDrillDeps = DEFAU
     log(deps, "FAILED: payload has no project");
     return;
   }
-  try {
+  let step = "select project";
+  let cancelDeadline = () => {};
+  const deadline = new Promise<never>((_, reject) => {
+    cancelDeadline = deps.armDeadline(DEADLINE_MS, () => reject(new Error(`deadline at step ${step}`)));
+  });
+  const run = async () => {
     await selectProject(project, deps);
     const nonce = `${deps.now()}-${Math.floor(Math.random() * 1_000_000)}`;
-    await runScenario(project, "open", `open-${nonce}`, deps);
-    await runScenario(project, "cold", `cold-${nonce}`, deps);
+    await runScenario(project, "open", `open-${nonce}`, deps, next => { step = next; });
+    await runScenario(project, "cold", `cold-${nonce}`, deps, next => { step = next; });
     log(deps, "PASS: real AskUserQuestion sidecar/card/answer path passed with Chat open and cold");
+  };
+  try {
+    await Promise.race([run(), deadline]);
   } catch (error) {
     log(deps, `FAILED: ${error instanceof Error ? error.message : String(error)}`);
+  } finally {
+    cancelDeadline();
   }
 }

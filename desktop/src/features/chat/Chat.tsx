@@ -60,6 +60,7 @@ type OrchAsk = {
   session_id: string;
   tool_use_id: string | null;
   open: boolean;
+  visible: boolean;
   questions: AskQuestion[];
 };
 type LiveAsk = OrchAsk & { target: string | null };
@@ -189,9 +190,10 @@ function ToolCard({ block, result }: { block: Block; result?: ToolResult }) {
  *  when the question asks for one, and an Other free-text row. A click writes keystrokes into
  *  the pane hosting that event's session rather than claiming success itself — the card reflects
  *  what the transcript says happened. */
-function AskCard({ tool_id, questions, result, target, onAnswer }: {
+function AskCard({ tool_id, questions, result, target, visible = true, onAnswer }: {
   tool_id: string | null; questions: AskQuestion[]; result?: ToolResult;
-  target: string | null; onAnswer: (toolId: string | null, data: string) => Promise<void>;
+  target: string | null; visible?: boolean;
+  onAnswer: (toolId: string | null, data: string) => Promise<void>;
 }) {
   const [picked, setPicked] = useState<Set<number>>(new Set());
   const [otherText, setOtherText] = useState("");
@@ -215,7 +217,7 @@ function AskCard({ tool_id, questions, result, target, onAnswer }: {
   }
 
   const send = async (data: string) => {
-    if (!target || busy) return;
+    if (!target || !visible || busy) return;
     setBusy(true); setError(null);
     try {
       await onAnswer(tool_id, data);
@@ -253,7 +255,7 @@ function AskCard({ tool_id, questions, result, target, onAnswer }: {
           <button
             key={i}
             type="button"
-            disabled={!target || busy}
+            disabled={!target || !visible || busy}
             onClick={() => q.multiSelect ? toggleMulti(i) : pickSingle(i)}
             className="flex items-start gap-1.5 rounded-lg border border-tr-edge bg-black/20 px-2.5 py-1.5 text-left disabled:opacity-50"
           >
@@ -275,7 +277,7 @@ function AskCard({ tool_id, questions, result, target, onAnswer }: {
       {q.multiSelect && (
         <button
           type="button"
-          disabled={!target || busy || picked.size === 0}
+          disabled={!target || !visible || busy || picked.size === 0}
           onClick={submitMulti}
           className="mt-1.5 rounded-[8px] bg-tr-panel px-2.5 py-1 text-[11.5px] font-medium disabled:opacity-40"
         >
@@ -288,13 +290,13 @@ function AskCard({ tool_id, questions, result, target, onAnswer }: {
           value={otherText}
           onChange={e => setOtherText(e.target.value)}
           onKeyDown={e => { if (e.key === "Enter") submitOther(); }}
-          disabled={!target || busy}
+          disabled={!target || !visible || busy}
           placeholder="Other — type an answer"
           className="min-w-0 flex-1 rounded-[8px] border border-tr-edge bg-black/20 px-2 py-1 text-[11.5px] disabled:opacity-50"
         />
         <button
           type="button"
-          disabled={!target || busy || !otherText.trim()}
+          disabled={!target || !visible || busy || !otherText.trim()}
           onClick={submitOther}
           className="shrink-0 rounded-[8px] bg-tr-panel px-2.5 py-1 text-[11.5px] font-medium disabled:opacity-40"
         >
@@ -303,6 +305,9 @@ function AskCard({ tool_id, questions, result, target, onAnswer }: {
       </div>
       {!target && (
         <div className="mt-1.5 text-[10.5px] text-tr-muted">No pane hosts this session — answer it in its terminal.</div>
+      )}
+      {target && !visible && (
+        <div className="mt-1.5 text-[10.5px] text-tr-muted">Waiting for the terminal question picker…</div>
       )}
       {error && <div className="tr-mono mt-1.5 text-[10.5px] text-tr-fail">{error}</div>}
     </div>
@@ -320,11 +325,19 @@ function LiveAskCard({ ask, onAnswer, invokeFn }: {
       line: `ask card mounted session=${ask.session_id} tool=${ask.tool_use_id ?? "null"} ts=${ts}`,
     }).catch(() => {});
   }, [ask.session_id, ask.tool_use_id, invokeFn]);
+  useEffect(() => {
+    if (!ask.visible) return;
+    const ts = Date.now();
+    void invokeFn("app_log", {
+      line: `ask buttons enabled session=${ask.session_id} tool=${ask.tool_use_id ?? "null"} ts=${ts}`,
+    }).catch(() => {});
+  }, [ask.visible, ask.session_id, ask.tool_use_id, invokeFn]);
   return (
     <AskCard
       tool_id={ask.tool_use_id}
       questions={ask.questions}
       target={ask.target}
+      visible={ask.visible}
       onAnswer={(_toolId, data) => onAnswer(ask, data)}
     />
   );
@@ -417,7 +430,7 @@ export type ChatDeps = {
   /** Answers an AskUserQuestion card by writing its keystrokes into the pane (#6094) — the same
    *  path the live terminal's keyboard uses, not the prompt path (`pane_send` refuses while
    *  blocked). Its own seam so a test can assert what a click sent without a real pty. */
-  answerAtSession: (sessionId: string, question: string, data: string) => Promise<void>;
+  answerAtSession: (sessionId: string, data: string) => Promise<void>;
   /** Heavy neighbours Chat mounts; the chat tests replace them with null renderers. */
   Composer: React.ComponentType<React.ComponentProps<typeof Composer>>;
   TerminalPane: React.ComponentType<React.ComponentProps<typeof TerminalPane>>;
@@ -429,7 +442,7 @@ export const DEFAULT_CHAT_DEPS: ChatDeps = {
   invoke: <T,>(cmd: string, args?: InvokeArgs) => invoke<T>(cmd, args),
   listen: (event, cb) => listen(event, cb),
   orchestratorOf,
-  answerAtSession: (sessionId, question, data) => invoke("ask_answer_session", { sessionId, question, data }),
+  answerAtSession: (sessionId, data) => invoke("ask_answer_session", { sessionId, data }),
   Composer,
   TerminalPane,
 };
@@ -557,15 +570,19 @@ export function Chat({ project, sessionId, dock, onDock, onClose, deps = DEFAULT
     if (history) return;
     let alive = true;
     let off: (() => void) | null = null;
+    const visibilityTimers = new Map<string, ReturnType<typeof setTimeout>>();
     const listener = listenFn<OrchAsk>("orch-ask", event => {
       const ask = event.payload;
       const ts = Date.now();
       void invokeFn("app_log", {
-        line: `ask event in webview session=${ask.session_id} open=${ask.open} tool=${ask.tool_use_id ?? "null"} ts=${ts}`,
+        line: `ask event in webview session=${ask.session_id} open=${ask.open} visible=${ask.visible} tool=${ask.tool_use_id ?? "null"} ts=${ts}`,
       }).catch(() => {});
       if (!alive || ask.project !== project) return;
       const key = askKey(ask);
       if (!ask.open) {
+        const timer = visibilityTimers.get(key);
+        if (timer) clearTimeout(timer);
+        visibilityTimers.delete(key);
         setLiveAsks(current => {
           if (!current[key]) return current;
           const next = { ...current };
@@ -575,7 +592,30 @@ export function Chat({ project, sessionId, dock, onDock, onClose, deps = DEFAULT
         return;
       }
       if (transcriptAnswered(ask, chatRef.current)) return;
-      setLiveAsks(current => ({ ...current, [key]: { ...ask, target: null } }));
+      if (ask.visible) {
+        const timer = visibilityTimers.get(key);
+        if (timer) clearTimeout(timer);
+        visibilityTimers.delete(key);
+        void invokeFn("app_log", {
+          line: `ask visible session=${ask.session_id} via=permission-request ts=${ts}`,
+        }).catch(() => {});
+      } else if (!visibilityTimers.has(key)) {
+        visibilityTimers.set(key, setTimeout(() => {
+          visibilityTimers.delete(key);
+          if (!alive) return;
+          const fallbackTs = Date.now();
+          setLiveAsks(current => current[key]
+            ? { ...current, [key]: { ...current[key], visible: true } }
+            : current);
+          void invokeFn("app_log", {
+            line: `ask visible session=${ask.session_id} via=fallback ts=${fallbackTs}`,
+          }).catch(() => {});
+        }, 1_500));
+      }
+      setLiveAsks(current => {
+        const existing = current[key];
+        return { ...current, [key]: { ...ask, target: existing?.target ?? null } };
+      });
       invokeFn<string | null>("ask_target", { sessionId: ask.session_id }).then(answerTarget => {
         if (!alive) return;
         setLiveAsks(current => current[key]
@@ -588,7 +628,11 @@ export function Chat({ project, sessionId, dock, onDock, onClose, deps = DEFAULT
       off = unlisten;
       invokeFn("ask_watch").catch(error => setError(String(error)));
     }).catch(error => setError(String(error)));
-    return () => { alive = false; off?.(); };
+    return () => {
+      alive = false;
+      off?.();
+      for (const timer of visibilityTimers.values()) clearTimeout(timer);
+    };
   }, [history, project, invokeFn, listenFn]);
 
   // #6094, 0.3.146 — sync() can be asked for concurrently from several INDEPENDENT sources: the
@@ -951,11 +995,24 @@ export function Chat({ project, sessionId, dock, onDock, onClose, deps = DEFAULT
   const liveness = sessionLiveness(status, target);
   const answerAsk = useCallback(async (ask: LiveAsk, data: string) => {
     if (!ask.target) throw new Error("No pane hosts this session — answer it in its terminal.");
-    await deps.answerAtSession(ask.session_id, ask.questions[0]?.question ?? "", data);
-    invokeFn("app_log", {
-      line: `ask answered tool_id=${ask.tool_use_id ?? "null"} session=${ask.session_id} project=${project}`,
+    const clickedAt = Date.now();
+    void invokeFn("app_log", {
+      line: `ask answer clicked session=${ask.session_id} tool=${ask.tool_use_id ?? "null"} ts=${clickedAt}`,
     }).catch(() => {});
-    sync();
+    try {
+      await deps.answerAtSession(ask.session_id, data);
+      const resolvedAt = Date.now();
+      void invokeFn("app_log", {
+        line: `ask answer resolved session=${ask.session_id} tool=${ask.tool_use_id ?? "null"} ts=${resolvedAt}`,
+      }).catch(() => {});
+      sync();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      void invokeFn("app_log", {
+        line: `ask answer rejected session=${ask.session_id} tool=${ask.tool_use_id ?? "null"} ts=${Date.now()} error=${message}`,
+      }).catch(() => {});
+      throw error;
+    }
   }, [deps, invokeFn, project, sync]);
   const side = dock === "right";
   const hosted = dock === "pane";

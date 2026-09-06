@@ -34,11 +34,15 @@ The JSON shape is exact:
     "question": "Ship it?", "header": "Ship", "multiSelect": false,
     "options": [{ "label": "Yes", "description": "Proceed" }]
   }],
+  "event": "PreToolUse",
+  "visible_ts": null,
   "ts": 0
 }
 ```
 
-`ts` is Unix epoch milliseconds. The hook reuses `file-claim.mjs`'s bounded stdin reader and
+`ts` is the first hook's Unix epoch milliseconds. `PermissionRequest` changes `event` and sets
+`visible_ts` without changing the ask's identity; a repeated identical event does not rewrite the
+file. The hook reuses `file-claim.mjs`'s bounded stdin reader and
 `sessionContext(input.cwd)` project resolution. Missing/malformed input or filesystem failure is
 fail-open. Every path returns `{}` with exit 0: this hook never emits `permissionDecision`,
 `additionalContext`, or any other decision and never answers the question.
@@ -63,7 +67,7 @@ Rust caches the last valid payload by session so deletion can emit a close with 
 and questions. Create/replay emits on the app window:
 
 ```text
-orch-ask { project, session_id, tool_use_id, open: true, questions }
+orch-ask { project, session_id, tool_use_id, open: true, visible, questions }
 ```
 
 Deletion emits the same payload with `open: false`. Duplicate observations of the same state are
@@ -74,14 +78,16 @@ delete/close, malformed input, and session-map-first plus cwd-fallback routing.
 
 Chat keeps live ask state keyed by `(project, session_id, tool_use_id)` from `orch-ask` alone.
 `open: true` renders the existing question card immediately, independent of herdr status and
-transcript timing. `open: false` closes its pending affordance. A matching transcript
+transcript timing. Its answers enable when `visible` arrives from `PermissionRequest`, with a
+1500 ms fallback after the initial open event. `open: false` closes its pending affordance. A matching transcript
 `tool_result` also closes a still-open event card when a closing hook was omitted, then remains the
 history authority: the rendered historical card flips to answered and shows the recorded answer.
 
 The answer path remains `0738c31`: option/free-text selection calls `ask_answer`, which uses herdr
 `send_text`. Its target is resolved by `session_id`: the pane whose herdr `reported_session`
 matches the sidecar session, never the project's orchestrator pane. When no pane hosts that
-session, the card is read-only and says “answer it in its terminal.” The hook never participates
+session, the card is read-only and says “answer it in its terminal.” Once enabled, sending is
+immediate; pane screen scraping is not a valid signal for Claude's TUI. The hook never participates
 in answering. Remove the blocked-with-no-ask retry loop and its trace spam. Remove transcript
 `openQuestion(...)` as the source of a pending card; transcript parsing remains only for
 history/result correlation. A focused Vitest must fail on main and prove that `orch-ask` alone
@@ -97,7 +103,8 @@ For both Chat already open and a cold Chat tab, the drill asserts: the sidecar
 exists; app trace records `ask received`; the DOM card appears within one second of the hook and
 before the transcript grows; answering uses the real session-routed `ask_answer`/`send_text` path;
 the pane advances; the matching `tool_result` lands; the sidecar disappears; and the pending card
-closes and settles answered.
+closes and settles answered. Every post-mount step is traced and the run has a hard deadline of
+`ASK_TIMEOUT + SETTLE_TIMEOUT + 30 seconds`, reporting the current step on expiry.
 
 The seat writes tests and drill code but never builds or installs the app. The orchestrator builds
 and runs this gate, then performs the operator-visible real-path check.
