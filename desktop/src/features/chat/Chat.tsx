@@ -445,7 +445,7 @@ export function Chat({ project, sessionId, dock, onDock, onClose, deps = DEFAULT
   // The decision cursor: updated synchronously where the state is updated asynchronously, so two
   // arrivals in one tick still see the cursor the first one left.
   const seenRef = useRef(0);
-  const syncRef = useRef<() => void>(() => {});
+  const syncRef = useRef<() => Promise<void>>(() => Promise.resolve());
   // The project this panel mounted on (#5509 W1) — lets the [project] effect tell a real switch
   // (a new episode, dismissals cleared) from the mount it must leave alone.
   const prevProject = useRef(project);
@@ -482,11 +482,29 @@ export function Chat({ project, sessionId, dock, onDock, onClose, deps = DEFAULT
     return () => { alive = false; clearInterval(iv); };
   }, [history, project, target]);
 
+  // #6094, 0.3.146 — sync() can be asked for concurrently from several INDEPENDENT sources: the
+  // chat_watch effect's own unconditional call at mount, its "watch.current > seenRef.current"
+  // gap-check, the blocked-no-ask retry loop, a chat-rows cursor-mismatch resync, and a plain
+  // handoff-backward restart. None of them know about each other. A large real transcript's
+  // decode round trip (read_chat_snapshot walks the whole file twice) can outlast a 300ms retry
+  // interval, so two independently-dispatched calls both capture the same stale cursor and each
+  // looks "stale" to the other once it resolves — re-triggering forever without ever reaching
+  // the success path that absorbs a batch (observed on the real transcript: 15 retries over 8s,
+  // never found an ask that had been on disk the whole time). One fetch in flight at a time,
+  // globally: a request that arrives mid-flight marks `pending` and returns immediately; the
+  // in-flight call's own completion picks it up.
+  const syncBusyRef = useRef(false);
+  const syncPendingRef = useRef(false);
   /** Fetch everything past the cursor and fold it in. This is the backfill, the mismatch repair
    *  and the post-send refresh — one path, so they cannot disagree. */
-  const sync = useCallback(() => {
+  const sync = useCallback((): Promise<void> => {
+    if (syncBusyRef.current) {
+      syncPendingRef.current = true;
+      return Promise.resolve();
+    }
+    syncBusyRef.current = true;
     const after = seenRef.current;
-    invokeFn<string>("orchestrator_chat", { project, after, sessionId: sessionId ?? null })
+    return invokeFn<string>("orchestrator_chat", { project, after, sessionId: sessionId ?? null })
       .then(raw => {
         // JSON.parse's `any` flows into the tuple without a cast — Rust owns validation, the
         // same boundary herdr.ts documents for herdr_seats().
@@ -528,7 +546,14 @@ export function Chat({ project, sessionId, dock, onDock, onClose, deps = DEFAULT
         setChat(s => applyBackfill(s, b, after));
         setError(null);
       })
-      .catch(e => setError(String(e)));
+      .catch(e => setError(String(e)))
+      .finally(() => {
+        syncBusyRef.current = false;
+        if (syncPendingRef.current) {
+          syncPendingRef.current = false;
+          void sync();
+        }
+      });
   }, [project, sessionId]);
   syncRef.current = sync;
 
@@ -746,19 +771,24 @@ export function Chat({ project, sessionId, dock, onDock, onClose, deps = DEFAULT
     let alive = true;
     let tries = 0;
     const startedAt = Date.now();
-    const tick = () => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const tick = async () => {
       if (!alive) return;
       tries += 1;
       const elapsed = Date.now() - startedAt;
       invokeFn("app_log", {
         line: `chat blocked-no-ask retry ${tries}: project=${project} elapsed=${elapsed}ms`,
       }).catch(() => {});
-      sync();
-      if (elapsed < FAST_RETRY_WINDOW_MS) setTimeout(tick, FAST_RETRY_MS);
-      else if (elapsed < FAST_RETRY_WINDOW_MS + SLOW_RETRY_WINDOW_MS) setTimeout(tick, SLOW_RETRY_MS);
+      // Awaited, never fire-and-forget: pacing the next retry off actual completion (sync()'s own
+      // busy-guard above already makes overlap harmless, but there's no point scheduling more
+      // ticks than the backend can answer).
+      await sync();
+      if (!alive) return;
+      if (elapsed < FAST_RETRY_WINDOW_MS) timer = setTimeout(tick, FAST_RETRY_MS);
+      else if (elapsed < FAST_RETRY_WINDOW_MS + SLOW_RETRY_WINDOW_MS) timer = setTimeout(tick, SLOW_RETRY_MS);
     };
-    const t = setTimeout(tick, FAST_RETRY_MS);
-    return () => { alive = false; clearTimeout(t); };
+    timer = setTimeout(tick, FAST_RETRY_MS);
+    return () => { alive = false; if (timer) clearTimeout(timer); };
   }, [status, openAsk, project, chat.turns.length, invokeFn, sync]);
   // Suggested-reply chips (#5929): asks collected from EVERY orchestrator turn since the
   // operator's last user turn (walk back until a user turn — the real ask is routinely one turn
