@@ -12,6 +12,8 @@ static WATCHING: AtomicBool = AtomicBool::new(false);
 static DRILL_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 static DRILL_WORKSPACES: OnceLock<Mutex<BTreeSet<String>>> = OnceLock::new();
 const STALE_AFTER_MS: u64 = 30_000;
+const DRILL_PANE_RETRY_MS: u64 = 500;
+const DRILL_PANE_RETRIES: usize = 30;
 
 #[derive(Clone, Debug, Deserialize)]
 struct AskSidecar {
@@ -441,6 +443,30 @@ fn close_workspace(workspace: &str, cwd: &Path) {
     let _ = herdr_output(&["workspace", "close", workspace], cwd);
 }
 
+fn start_agent_when_pane_ready<T>(
+    mut start: impl FnMut() -> Result<T, String>,
+    mut sleep: impl FnMut(Duration),
+    trace: impl Fn(String),
+) -> Result<T, String> {
+    let started = std::time::Instant::now();
+    for attempt in 0..=DRILL_PANE_RETRIES {
+        match start() {
+            Ok(value) => {
+                trace(format!(
+                    "drill pane ready after {} ms",
+                    started.elapsed().as_millis()
+                ));
+                return Ok(value);
+            }
+            Err(error) if error.contains("agent_pane_busy") && attempt < DRILL_PANE_RETRIES => {
+                sleep(Duration::from_millis(DRILL_PANE_RETRY_MS));
+            }
+            Err(error) => return Err(error),
+        }
+    }
+    unreachable!("bounded retry loop always returns")
+}
+
 fn ask_drill_start_blocking(project: String, marker: String) -> Result<AskDrillSession, String> {
     let project = project.trim();
     drill_enabled(project)?;
@@ -476,22 +502,28 @@ fn ask_drill_start_blocking(project: String, marker: String) -> Result<AskDrillS
     let prompt = format!(
         "Call AskUserQuestion exactly once now. Ask the exact question '{question}' with header 'Drill' and two options: 'Continue' (description 'Advance the drill') and 'Stop' (description 'Stop the drill'). Print nothing before the tool call. After the operator answers, print exactly '{advanced}' and no other text."
     );
-    let started = herdr_output(
-        &[
-            "agent",
-            "start",
-            &agent,
-            "--kind",
-            "claude",
-            "--pane",
-            &pane,
-            "--timeout",
-            "60000",
-            "--",
-            "--model",
-            "haiku",
-        ],
-        &cwd,
+    let started = start_agent_when_pane_ready(
+        || {
+            herdr_output(
+                &[
+                    "agent",
+                    "start",
+                    &agent,
+                    "--kind",
+                    "claude",
+                    "--pane",
+                    &pane,
+                    "--timeout",
+                    "60000",
+                    "--",
+                    "--model",
+                    "haiku",
+                ],
+                &cwd,
+            )
+        },
+        std::thread::sleep,
+        |line| crate::app_trace(&line),
     );
     if let Err(error) = started {
         close_workspace(&workspace, &cwd);
@@ -908,6 +940,44 @@ mod tests {
             }
         });
         assert_eq!(workspace_ids(&value), Some(("w9".into(), "w9:p1".into())));
+    }
+
+    #[test]
+    fn drill_retries_only_the_transient_agent_pane_busy_error() {
+        let attempts = std::cell::Cell::new(0);
+        let sleeps = std::cell::Cell::new(0);
+        let traces = std::cell::RefCell::new(Vec::new());
+        let started = start_agent_when_pane_ready(
+            || {
+                let attempt = attempts.get();
+                attempts.set(attempt + 1);
+                if attempt < 2 {
+                    Err("agent_pane_busy: target is not an available shell".to_string())
+                } else {
+                    Ok("started")
+                }
+            },
+            |_| sleeps.set(sleeps.get() + 1),
+            |line| traces.borrow_mut().push(line),
+        )
+        .unwrap();
+        assert_eq!(started, "started");
+        assert_eq!(attempts.get(), 3);
+        assert_eq!(sleeps.get(), 2);
+        assert!(traces.borrow()[0].starts_with("drill pane ready after "));
+
+        let fatal_attempts = std::cell::Cell::new(0);
+        let error = start_agent_when_pane_ready(
+            || {
+                fatal_attempts.set(fatal_attempts.get() + 1);
+                Err::<(), _>("agent_start_failed: bad model".to_string())
+            },
+            |_| panic!("a non-busy error must not sleep"),
+            |_| {},
+        )
+        .unwrap_err();
+        assert_eq!(error, "agent_start_failed: bad model");
+        assert_eq!(fatal_attempts.get(), 1);
     }
 
     #[test]
