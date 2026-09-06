@@ -6828,14 +6828,17 @@ mod herdr_tests {
         // is the operator's own 9291-line, 16.7MB session file (copied to .agent-bus-out/ —
         // gitignored, never committed) — the only way to catch a bug a synthetic shape can't
         // reproduce.
-        let raw = std::fs::read_to_string(concat!(
+        // The fixture is gitignored (16.7MB of the operator's session), so a clean checkout (CI,
+        // a seat worktree) does not have it: skip there rather than fail a suite over a file that
+        // was never meant to be committed. Locally, with the file present, the assertions run.
+        let fixture = concat!(
             env!("CARGO_MANIFEST_DIR"),
             "/../../.agent-bus-out/6094-ask-open-fixture.jsonl"
-        ))
-        .expect(
-            "fixture missing: .agent-bus-out/6094-ask-open-fixture.jsonl (copied from the \
-             operator's own transcript for this #6094 investigation, gitignored)",
         );
+        let Ok(raw) = std::fs::read_to_string(fixture) else {
+            eprintln!("skipped: fixture {fixture} is not on this checkout (gitignored)");
+            return;
+        };
         let lines = complete_lines(&raw);
         let total = lines.len();
         assert_eq!(
