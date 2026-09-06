@@ -309,6 +309,27 @@ function AskCard({ tool_id, questions, result, target, onAnswer }: {
   );
 }
 
+function LiveAskCard({ ask, onAnswer, invokeFn }: {
+  ask: LiveAsk;
+  onAnswer: (ask: LiveAsk, data: string) => Promise<void>;
+  invokeFn: ChatDeps["invoke"];
+}) {
+  useEffect(() => {
+    const ts = Date.now();
+    void invokeFn("app_log", {
+      line: `ask card mounted session=${ask.session_id} tool=${ask.tool_use_id ?? "null"} ts=${ts}`,
+    }).catch(() => {});
+  }, [ask.session_id, ask.tool_use_id, invokeFn]);
+  return (
+    <AskCard
+      tool_id={ask.tool_use_id}
+      questions={ask.questions}
+      target={ask.target}
+      onAnswer={(_toolId, data) => onAnswer(ask, data)}
+    />
+  );
+}
+
 function Thinking({ text }: { text: string }) {
   const [open, setOpen] = useState(false);
   return (
@@ -538,6 +559,10 @@ export function Chat({ project, sessionId, dock, onDock, onClose, deps = DEFAULT
     let off: (() => void) | null = null;
     const listener = listenFn<OrchAsk>("orch-ask", event => {
       const ask = event.payload;
+      const ts = Date.now();
+      void invokeFn("app_log", {
+        line: `ask event in webview session=${ask.session_id} open=${ask.open} tool=${ask.tool_use_id ?? "null"} ts=${ts}`,
+      }).catch(() => {});
       if (!alive || ask.project !== project) return;
       const key = askKey(ask);
       if (!ask.open) {
@@ -1198,12 +1223,7 @@ export function Chat({ project, sessionId, dock, onDock, onClose, deps = DEFAULT
             <div className="mb-1 text-[length:calc(10.5px*var(--chat-scale,1))] uppercase tracking-wider text-tr-muted">
               session · {ask.session_id.slice(0, 8)}
             </div>
-            <AskCard
-              tool_id={ask.tool_use_id}
-              questions={ask.questions}
-              target={ask.target}
-              onAnswer={(_toolId, data) => answerAsk(ask, data)}
-            />
+            <LiveAskCard ask={ask} onAnswer={answerAsk} invokeFn={invokeFn} />
           </div>
         ))}
         <div ref={foot} />

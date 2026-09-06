@@ -19,6 +19,8 @@ type DrillProbe = {
   transcriptLines: number;
   traceSeen: boolean;
   openEvents: number;
+  webviewEventTs: number | null;
+  cardMountTs: number | null;
   pickerVisible: boolean;
   toolResultMatches: boolean;
   paneAdvanced: boolean;
@@ -165,9 +167,6 @@ async function runScenario(
     if (mode === "open") {
       arrival = await cardArrival!;
       if (!arrival) throw new Error("open: DOM card did not arrive");
-      if (arrival.at - opened.sidecarTs > 1_000) {
-        throw new Error(`open: DOM card arrived ${arrival.at - opened.sidecarTs}ms after hook`);
-      }
     } else {
       const tabOpenedAt = await selectMode(CHAT_TAB_SELECTOR, deps);
       arrival = await waitFor(() => {
@@ -180,7 +179,21 @@ async function runScenario(
       }
     }
 
-    const beforeAnswer = await probe(project, marker, opened.sessionId, deps);
+    const beforeAnswer = await waitForProbe(
+      () => probe(project, marker, opened.sessionId, deps),
+      state => state.webviewEventTs !== null && state.cardMountTs !== null,
+      1_000,
+      deps,
+    );
+    if (!beforeAnswer?.webviewEventTs || !beforeAnswer.cardMountTs) {
+      throw new Error(`${mode}: webview/card timing traces did not land`);
+    }
+    const hookToWebview = beforeAnswer.webviewEventTs - opened.sidecarTs;
+    const webviewToDom = beforeAnswer.cardMountTs - beforeAnswer.webviewEventTs;
+    const hookToDom = beforeAnswer.cardMountTs - opened.sidecarTs;
+    if (mode === "open" && hookToDom > 1_000) {
+      throw new Error(`open: DOM card arrived ${hookToDom}ms after hook (hook-webview=${hookToWebview}ms webview-dom=${webviewToDom}ms)`);
+    }
     if (beforeAnswer.openEvents !== 1) {
       throw new Error(`${mode}: expected one open event, saw ${beforeAnswer.openEvents}`);
     }
@@ -205,7 +218,7 @@ async function runScenario(
     if (!settled) throw new Error(`${mode}: answer did not settle sidecar, tool_result, and pane advance`);
     const closed = await waitFor(() => askCard(deps.document, marker) === null, 1_000, deps);
     if (!closed) throw new Error(`${mode}: closed event left the question card open`);
-    log(deps, `${mode} PASS session=${opened.sessionId} open-events=1 picker=visible-before-send sidecar=gone tool_result=matched card=closed pane=advanced`);
+    log(deps, `${mode} PASS session=${opened.sessionId} hookTs=${opened.sidecarTs} webviewTs=${beforeAnswer.webviewEventTs} domTs=${beforeAnswer.cardMountTs} hook-webview=${hookToWebview}ms webview-dom=${webviewToDom}ms open-events=1 picker=visible-before-send sidecar=gone tool_result=matched card=closed pane=advanced`);
   } finally {
     if (workspace) {
       await deps.invoke("ask_drill_close", { project, workspace })
