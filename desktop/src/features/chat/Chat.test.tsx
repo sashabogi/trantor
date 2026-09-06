@@ -1325,3 +1325,87 @@ describe("orch-status listener traces every arrival, never silently (#6094, 2026
     expect(appLogLines.some(l => l.includes("did not match") || l.includes("FAILED to parse"))).toBe(false);
   });
 });
+
+// #6094 root cause (2026-09-05, 0.3.149 real-panel drill): decodeOrchStatus (edc9558) fixed the
+// listener, so a live blocked push now commits status and openQuestion() DOES find the ask in
+// chat.turns — no "blocked with no open ask" trace fires, exactly what the operator saw. Yet no
+// card appeared. batch() (line ~61) groups every CONSECUTIVE `kind: "tool"` block into one array,
+// and ToolRun collapses any array longer than 1 behind a closed-by-default "N tools" toggle. The
+// REAL_ASK_TURNS fixture above never hit this: a `thinking` block sits between the Bash call and
+// the AskUserQuestion, breaking the run into two singletons. A turn where a tool call is followed
+// DIRECTLY by an AskUserQuestion — no thinking, no text in between, the shape an orchestrator
+// produces when it checks something and then asks in the same breath — batches them into ONE
+// array of length 2, and the ask (the one thing in the transcript the operator must act on) hides
+// behind a collapsed bar reading "2 tools" until someone thinks to click it open.
+const ADJACENT_ASK_TURNS = [
+  { role: "user" as const, blocks: [{ kind: "text" as const, text: "check", tool: undefined, tool_id: undefined }] },
+  {
+    role: "assistant" as const,
+    blocks: [
+      { kind: "tool" as const, text: "git status", tool: "Bash", tool_id: "toolu_bash1" },
+      {
+        kind: "tool" as const,
+        text: "Push now?",
+        tool: "AskUserQuestion",
+        tool_id: "toolu_ask1",
+        ask: [{
+          header: "Drill", question: "Push now?", multiSelect: false,
+          options: [{ label: "Yes", description: "" }, { label: "No", description: "" }],
+        }],
+      },
+    ],
+  },
+];
+const ADJACENT_ASK_RESULTS = [{ tool_id: "toolu_bash1", ok: true, preview: "nothing to commit" }];
+
+describe("an ask adjacent to another tool call in the same turn (#6094, 2026-09-05)", () => {
+  let host: HTMLDivElement;
+  let root: Root;
+
+  beforeEach(() => {
+    host = document.createElement("div");
+    document.body.appendChild(host);
+    root = createRoot(host);
+  });
+
+  afterEach(() => {
+    act(() => root.unmount());
+    host.remove();
+  });
+
+  it("still renders the ask card, not a collapsed \"2 tools\" toggle", async () => {
+    const deps: ChatDeps = {
+      invoke: <T,>(cmd: string): Promise<T> => {
+        if (cmd === "orchestrator_chat") {
+          // SAFETY: T is inferred as `string` at orchestrator_chat's call site; this envelope is
+          // the Backfill shape [turns, results, total, meta, receiptTexts].
+          return Promise.resolve(JSON.stringify([ADJACENT_ASK_TURNS, ADJACENT_ASK_RESULTS, 2, REAL_ASK_META, []]) as T);
+        }
+        if (cmd === "chat_watch") {
+          // SAFETY: T is inferred as ChatWatchResult; current=2 matches this fixture's own total.
+          return Promise.resolve({ current: 2, generation: 1 } as T);
+        }
+        if (cmd === "orchestrator_status") {
+          // SAFETY: T is inferred as `string`; "blocked" is what surfaces the open ask under test.
+          return Promise.resolve("blocked" as T);
+        }
+        // SAFETY: every other command this fixture's Chat mount invokes ignores its resolved value.
+        return Promise.resolve(null as T);
+      },
+      listen: () => Promise.resolve(() => {}),
+      orchestratorOf: async () => ({ project: "p", agent: "orch", surface: "surf1", kind: "orch" }),
+      answerAtPane: async () => {},
+      Composer: () => null,
+      TerminalPane: () => null,
+    };
+
+    act(() => { root.render(<Chat project="p" dock="right" onDock={() => {}} onClose={() => {}} deps={deps} />); });
+    await flush();
+    await flush();
+
+    expect(host.querySelector('[data-testid="ask-card"]')).not.toBeNull();
+    expect(host.textContent).toContain("Push now?");
+    const buttons = [...host.querySelectorAll("button")].map(b => b.textContent ?? "");
+    expect(buttons.some(t => t.includes("Yes"))).toBe(true);
+  });
+});
