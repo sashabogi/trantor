@@ -1158,3 +1158,110 @@ describe("blocked-no-ask retries never overlap, even when the backfill answers s
     }
   });
 });
+
+// #6094, 0.3.148/0.3.149 real-path bounce: the live push emitted "ok=true" on the Rust side
+// (confirmed via app-trace), with NOT ONE "chat status ...: push=..." line following it — the
+// listener's own silent `catch {}` and silent "project didn't match" fall-through were both
+// indistinguishable from "the event never arrived at all", leaving zero evidence for the one
+// push that mattered. This proves every arrival now traces itself, naming which of the outcomes
+// happened instead of vanishing silently.
+describe("orch-status listener traces every arrival, never silently (#6094, 2026-09-05)", () => {
+  let host: HTMLDivElement;
+  let root: Root;
+
+  beforeEach(() => {
+    host = document.createElement("div");
+    document.body.appendChild(host);
+    root = createRoot(host);
+  });
+
+  afterEach(() => {
+    act(() => root.unmount());
+    host.remove();
+  });
+
+  function makeTracingDeps() {
+    const handlers = new Map<string, Handler[]>();
+    const appLogLines: string[] = [];
+    const deps: ChatDeps = {
+      invoke: <T,>(cmd: string, args?: InvokeArgs): Promise<T> => {
+        if (cmd === "app_log") {
+          // SAFETY: every app_log call in Chat.tsx passes a plain `{ line: string }` object.
+          appLogLines.push((args as { line: string } | undefined)?.line ?? "");
+          // SAFETY: this stub's only caller awaits void app_log calls, never reads the resolved value.
+          return Promise.resolve(undefined as T);
+        }
+        if (cmd === "orchestrator_chat") {
+          // SAFETY: T is inferred as `string` at every orchestrator_chat call site in Chat.tsx.
+          return Promise.resolve(JSON.stringify([[], [], 0, REAL_ASK_META, []]) as T);
+        }
+        if (cmd === "chat_watch") {
+          // SAFETY: T is inferred as `{ current: number; generation: number }` at chat_watch's call site.
+          return Promise.resolve({ current: 0, generation: 1 } as T);
+        }
+        if (cmd === "orchestrator_status") {
+          // SAFETY: T is inferred as `string` at orchestrator_status's call site.
+          return Promise.resolve("working" as T);
+        }
+        // SAFETY: every other command Chat.tsx invokes ignores its resolved value (fire-and-forget).
+        return Promise.resolve(null as T);
+      },
+      listen: <T,>(event: string, cb: (ev: { payload: T }) => void): Promise<() => void> => {
+        // SAFETY: this fake listener only ever forwards the payload untouched to the caller's own
+        // typed callback — the cast just widens it to the shared Handler bag's storage type.
+        const boxed = cb as Handler;
+        handlers.set(event, [...(handlers.get(event) ?? []), boxed]);
+        return Promise.resolve(() => {});
+      },
+      orchestratorOf: async () => ({ project: "p", agent: "orch", surface: "surf1", kind: "orch" }),
+      answerAtPane: async () => {},
+      Composer: () => null,
+      TerminalPane: () => null,
+    };
+    return { deps, handlers, appLogLines };
+  }
+
+  it("traces a project mismatch instead of silently dropping it", async () => {
+    const { deps, handlers, appLogLines } = makeTracingDeps();
+    act(() => { root.render(<Chat project="p" dock="right" onDock={() => {}} onClose={() => {}} deps={deps} />); });
+    await flush();
+
+    await act(async () => {
+      for (const cb of handlers.get("orch-status") ?? []) {
+        cb({ payload: JSON.stringify({ project: "some-other-project", status: "blocked" }) });
+      }
+      await Promise.resolve();
+    });
+
+    expect(appLogLines.some(l => l.includes("did not match") && l.includes("some-other-project"))).toBe(true);
+  });
+
+  it("traces a parse failure instead of silently swallowing it", async () => {
+    const { deps, handlers, appLogLines } = makeTracingDeps();
+    act(() => { root.render(<Chat project="p" dock="right" onDock={() => {}} onClose={() => {}} deps={deps} />); });
+    await flush();
+
+    await act(async () => {
+      for (const cb of handlers.get("orch-status") ?? []) cb({ payload: "not valid json" });
+      await Promise.resolve();
+    });
+
+    expect(appLogLines.some(l => l.includes("FAILED to parse") && l.includes("not valid json"))).toBe(true);
+  });
+
+  it("still commits a genuine match — tracing never blocks the real path", async () => {
+    const { deps, handlers, appLogLines } = makeTracingDeps();
+    act(() => { root.render(<Chat project="p" dock="right" onDock={() => {}} onClose={() => {}} deps={deps} />); });
+    await flush();
+
+    await act(async () => {
+      for (const cb of handlers.get("orch-status") ?? []) {
+        cb({ payload: JSON.stringify({ project: "p", status: "blocked" }) });
+      }
+      await Promise.resolve();
+    });
+
+    expect(appLogLines.some(l => l.includes("chat status p: push=blocked"))).toBe(true);
+    expect(appLogLines.some(l => l.includes("did not match") || l.includes("FAILED to parse"))).toBe(false);
+  });
+});

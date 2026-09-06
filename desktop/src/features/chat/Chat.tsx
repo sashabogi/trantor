@@ -592,13 +592,34 @@ export function Chat({ project, sessionId, dock, onDock, onClose, deps = DEFAULT
         // the belt for whatever this ordering fix still lets slip through.
         if (!history) {
           offs.push(await listenFn<string>("orch-status", ev => {
-            if (!alive) return;
+            // #6094, 0.3.148/149 — the LIVE push emitted "ok=true" on the Rust side (confirmed
+            // via app-trace) with NOT ONE "chat status ...: push=..." line following it — meaning
+            // commitStatus was never even called, and this listener's own silent `catch {}` and
+            // silent "project didn't match" fall-through were both indistinguishable from "the
+            // event never arrived at all". Every arrival now traces itself, so the next real
+            // bounce names exactly which of the four outcomes (dead listener / not-alive /
+            // parse failure / project mismatch) actually happened instead of leaving zero
+            // evidence for the one push that matters most (the one Chat never acted on).
+            if (!alive) {
+              void invokeFn("app_log", { line: `chat orch-status received but listener not alive: project=${project} raw=${ev.payload}` }).catch(() => {});
+              return;
+            }
             try {
               // SAFETY: payload comes from our own Rust emitter (orch-status), and both fields
               // are re-checked before use — a malformed payload falls through the guard or catch.
               const p = JSON.parse(ev.payload) as { project: string; status: string };
-              if (p.project === project && p.status) commitStatus("push", nextSeq(), p.status);
-            } catch {}
+              if (p.project === project && p.status) {
+                commitStatus("push", nextSeq(), p.status);
+              } else {
+                void invokeFn("app_log", {
+                  line: `chat orch-status received but did not match: expected project=${project}, got project=${p.project} status=${p.status}`,
+                }).catch(() => {});
+              }
+            } catch (e) {
+              void invokeFn("app_log", {
+                line: `chat orch-status FAILED to parse: project=${project} raw=${ev.payload} error=${e instanceof Error ? e.message : String(e)}`,
+              }).catch(() => {});
+            }
           }));
         }
         const watch = await invokeFn<ChatWatchResult>("chat_watch", { project, sessionId: sessionId ?? null });

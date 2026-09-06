@@ -15,6 +15,12 @@
 // question (a click only SWITCHES TABS, no option is ever picked), and if the Chat tab was
 // already selected when the drill started, it is left exactly as found.
 //
+// The app can boot on Home with no project open (the drill's first real-panel attempt found no
+// Chat tab at all for exactly this reason) — this version opens the project first, by clicking
+// its real sidebar row (AppShell.tsx's ProjectRow; there is no external "open project" API to
+// call instead, `openProject`/`setActive` are internal React state), before ever looking for the
+// mode pane's Chat tab.
+//
 // Four things get proved, all narrated into app-trace.log via app_log (never asserted only in
 // process memory the operator can't see):
 //   1. whatever the live transcript's CURRENT ask state is, the real backfill/chat_watch path
@@ -51,6 +57,20 @@ const SETTLE_BEFORE_REAL_EMIT_MS = 20_000;
 /** ModePane's own tab button (`aria-label={label}`, features/code/ModePane.tsx `modeBtn`) — the
  *  drill clicks the REAL one an operator would, rather than reaching into React state. */
 const CHAT_TAB_SELECTOR = 'button[aria-label="Chat"]';
+
+/** AppShell's sidebar ProjectRow (app/AppShell.tsx): a `role="button"` div (not a <button> — a
+ *  sleeping row nests a real Wake <button>, so the row itself can't be one) whose FIRST
+ *  `.block.truncate` span is the project's own name, verbatim. There is no external "open this
+ *  project" API (`openProject`/`setActive` are internal AppShell state) — clicking the real row
+ *  is the only way in from outside the React tree, the same one a person uses. */
+function findProjectRow(project: string): HTMLElement | null {
+  const rows = document.querySelectorAll<HTMLElement>('div[role="button"]');
+  for (const row of rows) {
+    const name = row.querySelector("span.block.truncate")?.textContent?.trim();
+    if (name === project) return row;
+  }
+  return null;
+}
 
 function log(line: string): void {
   invoke("app_log", { line: `ask-drill ${line}` }).catch(() => {});
@@ -109,9 +129,29 @@ export async function runAskDrill(rawPayload: string): Promise<void> {
   }
 
   try {
+    // The app can boot on Home with no project open (0.3.148/149 bounce: the drill's first
+    // real-panel attempt found no Chat tab at all for exactly this reason) — navigate to the
+    // project first, the same click a person makes from the sidebar, before ever looking for
+    // the mode pane's Chat tab.
+    if (!document.querySelector(CHAT_TAB_SELECTOR)) {
+      const row = findProjectRow(project);
+      if (!row) {
+        log(`FAILED: no sidebar row found for project=${project} (div[role="button"] whose name span reads "${project}") — is the app running with this project visible in the sidebar?`);
+        return;
+      }
+      log(`clicking the sidebar row for project=${project} (app booted without it open)`);
+      row.click();
+      const opened = await waitFor(() => document.querySelector(CHAT_TAB_SELECTOR) !== null, 5_000);
+      log(`project pane opened=${opened}`);
+      if (!opened) {
+        log("FAILED: the mode pane's tab strip never appeared after opening the project");
+        return;
+      }
+    }
+
     const tab = document.querySelector<HTMLButtonElement>(CHAT_TAB_SELECTOR);
     if (!tab) {
-      log("FAILED: no Chat tab button found in the real DOM (button[aria-label=\"Chat\"]) — is a project window open and focused?");
+      log("FAILED: no Chat tab button found in the real DOM (button[aria-label=\"Chat\"]) even after opening the project");
       return;
     }
     const alreadyOnChat = tab.getAttribute("data-on") === "true";
