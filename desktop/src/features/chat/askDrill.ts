@@ -8,11 +8,17 @@
 // process memory the operator can't see):
 //   1. whatever the live transcript's CURRENT ask state is, the real backfill/chat_watch path
 //      (Chat's own mount effects — no drill-side shortcut) renders it as a card if one is open;
-//   2. a synthetic "orch-status" push (status=blocked, the same string-encoded shape Chat's own
-//      listener parses — proven by Chat.test.tsx's mocks, which fire this event this exact way)
-//      reaches Chat's listener and either surfaces a card or fires the #6094 blocked-no-ask
-//      trace line — so THIS drill's own app-trace output proves whether that trace line is live
-//      in the built app, not just in vitest;
+//   2. a push through the REAL emit mechanism (`ask_drill_fire_status`, 0.3.149 — the SAME
+//      channel-to-async-task pattern spawn_status_watcher's background thread uses, the #5993
+//      fix that made a raw std::thread's window.emit() actually reach the frontend) reaches
+//      Chat's listener and either surfaces a card or fires the #6094 blocked-no-ask trace line.
+//      An EARLIER version of this drill used the JS-side `emit()` from `@tauri-apps/api/event`
+//      instead — proven (0.3.148 real-path bounce) to exercise a DIFFERENT channel from the real
+//      one: a Chat mounted well before the push, on its settled gen-2 watcher, never received a
+//      REAL blocked emit, while the JS-side synthetic push always reached it regardless. This
+//      version waits a realistic span after mount (matching the ~20s gap the real bounce showed
+//      between mount and the live blocked frame) before firing through the real mechanism, so it
+//      catches whatever timing-dependent gap the old synthetic push could never see;
 //   3. if no ask was open when blocked was pushed, Chat's own retry (FAST_RETRY_MS/WINDOW,
 //      SLOW_RETRY_MS/WINDOW — 0.3.145's fix: herdr's blocked frame can land a moment before the
 //      CLI finishes writing the tool_use row) keeps re-syncing on its own for
@@ -25,11 +31,16 @@
 //      pane running `cat -v`) and reads it back to confirm the exact bytes arrived.
 import { createRoot } from "react-dom/client";
 import { invoke } from "@tauri-apps/api/core";
-import { emit } from "@tauri-apps/api/event";
 import { createElement } from "react";
 import { Chat, FAST_RETRY_WINDOW_MS, SLOW_RETRY_WINDOW_MS } from "./Chat";
 import { answerAtPane } from "../workspace/herdr";
 import { answerKeystrokes } from "./streaming";
+
+/** How long the 0.3.148 real bounce showed elapsing between Chat settling on its gen-2 watcher
+ *  and the real blocked frame arriving — the drill waits at least this long before firing
+ *  through the real emit mechanism, so it exercises the SAME "listener alive N seconds" shape
+ *  the real failure did, not an emit fired within the same tick as mount. */
+const SETTLE_BEFORE_REAL_EMIT_MS = 20_000;
 
 function log(line: string): void {
   invoke("app_log", { line: `ask-drill ${line}` }).catch(() => {});
@@ -112,30 +123,34 @@ export async function runAskDrill(rawPayload: string): Promise<void> {
     const settled = await waitFor(() => host.textContent !== null && host.textContent.length > 0, 10_000);
     log(`mounted, initial render settled=${settled} ${snapshot(host)}`);
 
-    const beforeSynthetic = host.querySelectorAll(ASK_CARD_SELECTOR).length;
-    if (beforeSynthetic > 0) {
+    const beforeReal = host.querySelectorAll(ASK_CARD_SELECTOR).length;
+    if (beforeReal > 0) {
       log(`REAL open ask already rendered from the live transcript — the backfill/render path works right now: ${snapshot(host)}`);
     } else {
       log(`no ask card from the real backfill alone (transcript may have nothing open) — ${snapshot(host)}`);
     }
 
-    // The synthetic push: exactly the string-encoded shape Chat.test.tsx's mocks fire this event
-    // with (proven to be what Chat's listener parses) — payload is the STRING itself, so however
-    // Tauri's own emit() serializes a plain object argument cannot change what a STRING argument
-    // survives as: a string round-trips through JSON encode/decode identically.
-    const payload = JSON.stringify({ project, pane: "ask-drill", status: "blocked" });
-    log(`emitting synthetic orch-status: ${payload}`);
-    await emit("orch-status", payload);
+    // Let Chat settle on its gen-2 watcher (target null -> a live pane, #5495) the same way a
+    // real session does — the 0.3.148 bounce's gap was ~20s between mount and the live blocked
+    // frame, and a push fired within the same tick as mount never exercised that gap at all.
+    log(`waiting ${SETTLE_BEFORE_REAL_EMIT_MS}ms for the gen-2 watcher to settle before firing the real emit path`);
+    await new Promise(r => setTimeout(r, SETTLE_BEFORE_REAL_EMIT_MS));
+
+    // The REAL emit path (#6094, 0.3.149): the same channel-to-async-task mechanism
+    // spawn_status_watcher's background thread uses, invoked on the drill's own schedule so it
+    // can fire well after mount instead of within the same tick.
+    log(`firing the real emit path: project=${project} status=blocked`);
+    await invoke("ask_drill_fire_status", { project, status: "blocked" });
 
     // Wait past Chat's OWN retry span (#6094, 0.3.145): a real ask can be written a moment after
     // herdr reports blocked, and Chat keeps re-syncing on its own for this whole window before
     // giving up — cutting the wait shorter than this would call a retry-in-progress a failure.
     const retryWindowMs = FAST_RETRY_WINDOW_MS + SLOW_RETRY_WINDOW_MS + 1_000;
-    const reacted = await waitFor(() => host.querySelectorAll(ASK_CARD_SELECTOR).length > beforeSynthetic, retryWindowMs);
-    log(`after synthetic blocked push (waited up to ${retryWindowMs}ms for the retry to run its course): card-count-increased=${reacted} ${snapshot(host)}`);
+    const reacted = await waitFor(() => host.querySelectorAll(ASK_CARD_SELECTOR).length > beforeReal, retryWindowMs);
+    log(`after the real blocked push (waited up to ${retryWindowMs}ms for the retry to run its course): card-count-increased=${reacted} ${snapshot(host)}`);
 
-    if (!reacted && beforeSynthetic === 0) {
-      log("no ask card appeared after the synthetic blocked push, even past the retry window — if the live transcript truly has no open ask, this is CORRECT and the #6094 blocked-no-ask trace line above (search for 'chat blocked with no open ask') should have fired, followed by 'chat blocked-no-ask retry N' lines; their absence means Chat never reacted to the push at all");
+    if (!reacted && beforeReal === 0) {
+      log("no ask card appeared after the real blocked push, even past the retry window — if the live transcript truly has no open ask, this is CORRECT and the #6094 blocked-no-ask trace line above (search for 'chat blocked with no open ask') should have fired, followed by 'chat blocked-no-ask retry N' lines; their absence means Chat never reacted to the real push at all — check whether 'chat status ...: push=blocked' ever appears after the 'ask-drill: fired the real emit path' line above");
     }
     log("done");
   } catch (e) {

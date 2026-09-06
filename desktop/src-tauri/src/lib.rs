@@ -1988,6 +1988,31 @@ fn spawn_status_watcher(window: tauri::Window, project: String, stop: Arc<Atomic
     });
 }
 
+/// #6094 acceptance drill: fires the SAME emit mechanism spawn_status_watcher's background
+/// thread uses (a payload handed to `tauri::async_runtime::spawn`, which owns the actual
+/// `window.emit()` call — the #5993 fix: emitting from a raw `std::thread` never reached the
+/// frontend, only an async task does) — but on the drill script's own schedule, so it can be
+/// invoked well after Chat has settled on its gen-2 watcher, matching the real timing the
+/// 0.3.148 bounce showed (blocked arrived ~20s after mount, not within the same tick). Gated on
+/// TRANTOR_ASK_DRILL so this "fire an arbitrary status event" capability never exists in a
+/// normal run.
+#[tauri::command]
+fn ask_drill_fire_status(window: tauri::Window, project: String, status: String) -> Result<(), String> {
+    if std::env::var("TRANTOR_ASK_DRILL").is_err() {
+        return Err("ask_drill_fire_status is drill-only (TRANTOR_ASK_DRILL not set)".into());
+    }
+    use tauri::Emitter;
+    let payload = OrchStatusPayload { project, pane: "ask-drill-real-emit".into(), status };
+    tauri::async_runtime::spawn(async move {
+        let ok = window.emit("orch-status", payload.clone()).is_ok();
+        trace(format!(
+            "ask-drill: fired the real emit path pane={} st={} ok={ok}",
+            payload.pane, payload.status
+        ));
+    });
+    Ok(())
+}
+
 /// `current` keeps the old shape's meaning (the tail cursor at seed time); `generation` is the
 /// token chat_unwatch must echo back so a stale unwatch can't kill a fresher watcher (#6113).
 #[derive(Debug, Clone, Serialize)]
@@ -5714,6 +5739,7 @@ pub fn run() {
             pane_send,
             pane_keys,
             ask_answer,
+            ask_drill_fire_status,
             orchestrator_status,
             genesis::project_dev_root,
             genesis::genesis_read_brief,
