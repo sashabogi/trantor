@@ -328,9 +328,9 @@ function Thinking({ text }: { text: string }) {
  *  handoff that failed silently is a trap set for the next wall. Success stays quiet: the
  *  session-changed flow already draws the "session continued" divider, and the composer's
  *  liveness gate covers the gap while the pane restarts. */
-function HandoffBanner({ frac, countdown, busy, error, onKeepGoing, onHandOffNow }: {
+function HandoffBanner({ frac, busy, error, onKeepGoing, onHandOffNow }: {
   frac: number;
-  countdown: HandoffCountdown;
+  countdown: HandoffCountdown;   // still passed by the caller (drives the expiry auto-fire upstream); the banner no longer shows a clock (#6528)
   busy: boolean;
   error: string | null;
   onKeepGoing: () => void;
@@ -341,8 +341,11 @@ function HandoffBanner({ frac, countdown, busy, error, onKeepGoing, onHandOffNow
   return (
     <div className="mx-2 mb-1 rounded-lg border border-tr-fail/40 bg-tr-fail/10 px-2.5 py-1.5 text-[11.5px]">
       <div className="flex items-center gap-2">
+        {/* #6528: the promise is the BOUNDARY, not the clock. The fire goes through the
+            session's turn-boundary gate now, so a countdown ("handing off in Ns") could lie —
+            it would promise a mid-turn yank exactly like the one this gate exists to prevent. */}
         <span className="min-w-0 flex-1">
-          Context at <span className="tr-mono text-tr-fail">{pct}%</span> — handing off in <span className="tr-mono text-tr-fail">{countdown.remainingSec}s</span>
+          Context at <span className="tr-mono text-tr-fail">{pct}%</span> — handing off when this turn finishes
         </span>
         <button
           type="button"

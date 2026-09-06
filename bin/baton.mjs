@@ -8,7 +8,7 @@ import { join, basename, dirname } from "node:path";
 import { homedir } from "node:os";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { writeHandoff, spawnBaton, resolveHandoffSurface } from "../hooks/lib/handoff.mjs";
+import { writeHandoff, spawnBaton, resolveHandoffSurface, armBaton, contextUsage, controllingTty, turnInFlight, armMaxMs } from "../hooks/lib/handoff.mjs";
 
 // #6074: the skill path (write-handoff.mjs) and this CLI path must share ONE resolution of which
 // project this is and where the session lives. Both call resolveHandoffSurface; the name comes
@@ -64,7 +64,34 @@ function autoBaton() {
   // The transcript's filename IS the writing session's id — record it, or an orchestrator-thread
   // handoff carries no writer and the baton-hold + map-follow logic in sessionstart.mjs can't fire.
   const sessionId = transcript ? basename(transcript, ".jsonl") : "";
-  const { file } = writeHandoff({ projectDir: cwd, sessionId, transcript, trigger: "manual-cli", force: true, projectName: project });   // manual = intentional, bypass the storm guard
+  // #6528: WHO pulled the trigger. A TTY stdin means a human typed `trantor handoff` at a prompt;
+  // the app chain (lib.rs handoff_now) and hooks spawn this binary with piped stdio. The operator's
+  // own typed command keeps the storm-guard bypass (force:true — "manual = intentional"); every
+  // invoked path goes through the boundary gate and the hub's storm guard like any auto handoff.
+  // --reason rides through from the app (`--reason clicked|countdown|unattended`) so the RECORD
+  // finally names the real trigger instead of laundering every banner fire into "manual-cli".
+  const reasonArg = (() => {
+    const i = process.argv.indexOf("--reason");
+    const v = i >= 0 ? String(process.argv[i + 1] || "").trim() : "";
+    return v && !v.startsWith("--") ? v : "";
+  })();
+  const operatorTyped = !!process.stdin.isTTY;
+  const trigger = reasonArg || "manual-cli";
+  // --force: the hard-cap leg (#6528). The app's boundary wait timed out (or an operator typed it
+  // mid-turn on purpose) — write NOW, gate or no gate, and say that is what happened. Without it,
+  // a turn still in flight ARMS instead of writing: no record, no spawn, and the session's own
+  // Stop hook fires the baton at the boundary, where the summary describes finished work.
+  const force = process.argv.includes("--force");
+  if (!force && turnInFlight(transcript)) {
+    armBaton(sessionId, {
+      projectDir: cwd,
+      transcript, reason: trigger, windowId: "", tty: controllingTty(),
+      tokens: contextUsage(transcript)?.tokens || 0,
+    });
+    console.log(`⏸ handoff armed — it fires when this turn finishes (hard cap ${Math.round(armMaxMs() / 60000)}m: the next tool boundary fires it). No record written yet.`);
+    process.exit(0);
+  }
+  const { file } = writeHandoff({ projectDir: cwd, sessionId, transcript, trigger, force, projectName: project });   // operator-typed = intentional, bypass the storm guard
   console.log(`📋 handoff saved for ${project}: ${file}`);
   // --write-only: the in-app flow (#5509). The app ends the pane's session itself and reopens it
   // through `trantor open`, which claims this handoff — a Terminal window here would be exactly the

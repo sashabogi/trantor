@@ -3803,17 +3803,53 @@ async fn handoff_now(
     // Mark the pane for the whole chain — summarize (~50s), idle gate, kill, reopen, kickoff —
     // so the Workspace tab says the session is doomed before anyone types into it (#6081).
     let _chain = HandoffChainGuard::begin(app, &project);
+    // #6528: the chain is now traceable. Tonight's fire left app-trace.log empty because this
+    // command never traced a single step — an undiagnosable incident is its own bug.
+    app_trace(&format!("handoff[{project}]: chain started (reason {reason})"));
 
     let mut handoff = identity_env::async_command("trantor");
     handoff
         .args(trantor_handoff_args(Some(&reason)))
         .current_dir(&dir)
         .env("PATH", terminal_path());
-    let (_, handoff_stderr) = run_command_output(handoff, "trantor handoff --write-only").await?;
+    let (handoff_stdout, handoff_stderr) = run_command_output(handoff, "trantor handoff --write-only").await?;
     if write_only_flag_rejected(&handoff_stderr) {
         return Err(format!(
             "trantor handoff --write-only rejected by CLI: {handoff_stderr}"
         ));
+    }
+
+    // #6528: the CLI's boundary gate may have ARMED the baton instead of writing a record —
+    // the session was mid-turn, and the record must describe a FINISHED turn. The session's own
+    // Stop hook fires the baton at the boundary; wait (bounded) for that record before the
+    // kill. Killing now is the #6528 failure shape: a successor claiming a pane with nothing
+    // to claim, while the predecessor is still working.
+    let chain_start = unix_secs();
+    if handoff_armed(&handoff_stdout) {
+        app_trace(&format!("handoff[{project}]: armed mid-turn — chain waits for the turn boundary (deadline {}s)", HANDOFF_BOUNDARY_DEADLINE.as_secs()));
+        let boundary_started = Instant::now();
+        loop {
+            let newest = newest_unconsumed_stamp(&desktop_bus_dir().join("handoffs"), &project);
+            match boundary_wait_step(newest, chain_start, boundary_started.elapsed(), HANDOFF_BOUNDARY_DEADLINE) {
+                BoundaryStep::Pass => {
+                    app_trace(&format!("handoff[{project}]: boundary reached — the armed baton fired (record stamp {newest})"));
+                    break;
+                }
+                BoundaryStep::Deadline => {
+                    app_trace(&format!("handoff[{project}]: boundary deadline after {}s — firing past the gate (--force)", boundary_started.elapsed().as_secs()));
+                    let mut force_cmd = identity_env::async_command("trantor");
+                    force_cmd
+                        .args(trantor_handoff_force_args(Some(&reason)))
+                        .current_dir(&dir)
+                        .env("PATH", terminal_path());
+                    run_command_output(force_cmd, "trantor handoff --write-only --force").await?;
+                    break;
+                }
+                BoundaryStep::Wait => tokio::time::sleep(KICKOFF_CADENCE).await,
+            }
+        }
+    } else {
+        app_trace(&format!("handoff[{project}]: record written immediately (session was idle)"));
     }
 
     let rows =
@@ -3842,6 +3878,7 @@ async fn handoff_now(
         }
     };
     let gate_secs = gate_started.elapsed().as_secs();
+    app_trace(&format!("handoff[{project}]: idle gate {} after {gate_secs}s", match gate_outcome { IdleGateOutcome::Idle => "passed", IdleGateOutcome::Deadline => "deadline" }));
 
     let mut info = identity_env::async_command("herdr");
     info.args(["pane", "process-info", "--pane", &pane])
@@ -3849,6 +3886,7 @@ async fn handoff_now(
     let (process_info, _) = run_command_output(info, "herdr pane process-info").await?;
     let pid = foreground_pid_from_process_info(&process_info)
         .ok_or_else(|| format!("no foreground process for orchestrator pane {pane}"))?;
+    app_trace(&format!("handoff[{project}]: ending foreground pid {pid} in pane {pane}"));
     end_process_gracefully(pid).await?;
 
     let mut reopen = identity_env::async_command("trantor");
@@ -4097,6 +4135,87 @@ fn idle_gate_label(outcome: &IdleGateOutcome, elapsed_secs: u64) -> String {
             format!("idle gate deadline after {elapsed_secs}s — ended mid-turn")
         }
     }
+}
+
+/// #6528: how long the chain may wait for an ARMED baton to fire at the turn boundary. The
+/// hook-side hard cap (TRANTOR_BATON_ARM_MAX_MS, 15 min) fires it at the session's next tool
+/// boundary past that age, so the chain's bound is the cap plus slack for the turn's final
+/// no-tool stretch. A bounded chain must end in a record either way.
+const HANDOFF_BOUNDARY_DEADLINE: Duration = Duration::from_secs(17 * 60);
+
+/// The marker bin/baton.mjs prints when the boundary gate ARMED the baton instead of writing
+/// the record (#6528). Matched on stdout because at that moment the record does not exist —
+/// there is nothing else to observe, and tonight's failure was exactly a chain that assumed
+/// "the CLI ran" meant "the record exists".
+fn handoff_armed(stdout: &str) -> bool {
+    stdout.contains("handoff armed")
+}
+
+/// The chain's deadline leg (#6528): the same write-only command plus --force, so the CLI
+/// writes past the boundary gate. Only reached when the boundary wait timed out — a bounded
+/// chain must still produce a record before the kill, or the successor claims nothing.
+fn trantor_handoff_force_args(reason: Option<&str>) -> Vec<&str> {
+    let mut args = trantor_handoff_args(reason);
+    args.push("--force");
+    args
+}
+
+/// Newest stamp among THIS project's still-unconsumed handoff records (`<project>-<stamp>.json`
+/// with `consumed: false`), or 0 when none. The boundary wait polls this: the Stop hook firing
+/// the armed baton is observed as a record newer than the chain's start.
+fn newest_unconsumed_stamp(dir: &std::path::Path, project: &str) -> u64 {
+    let mut best = 0u64;
+    let Ok(entries) = std::fs::read_dir(dir) else { return 0 };
+    let prefix = format!("{project}-");
+    for entry in entries.flatten() {
+        let name = entry.file_name().to_string_lossy().to_string();
+        let Some(rest) = name.strip_prefix(&prefix) else { continue };
+        let Some(stamp) = rest.strip_suffix(".json") else { continue };
+        let Ok(stamp) = stamp.parse::<u64>() else { continue };
+        if stamp <= best {
+            continue;
+        }
+        let consumed_false = std::fs::read_to_string(entry.path())
+            .ok()
+            .and_then(|raw| serde_json::from_str::<serde_json::Value>(&raw).ok())
+            .and_then(|v| v.get("consumed").and_then(|c| c.as_bool()))
+            == Some(false);
+        if consumed_false {
+            best = stamp;
+        }
+    }
+    best
+}
+
+/// One poll step of the boundary wait (#6528), pure so it drills without a disk. Pass = a NEW
+/// unconsumed record exists (the Stop hook fired the armed baton); Deadline = the budget ran
+/// out and the chain proceeds on the --force leg; anything else keeps waiting.
+enum BoundaryStep {
+    Wait,
+    Pass,
+    Deadline,
+}
+
+fn boundary_wait_step(
+    newest: u64,
+    chain_start: u64,
+    elapsed: Duration,
+    deadline: Duration,
+) -> BoundaryStep {
+    if newest > chain_start {
+        return BoundaryStep::Pass;
+    }
+    if elapsed >= deadline {
+        return BoundaryStep::Deadline;
+    }
+    BoundaryStep::Wait
+}
+
+fn unix_secs() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or_default()
 }
 
 /// The retry decision for one boot-prompt attempt, pure so the ladder drills without a herdr
@@ -7122,6 +7241,61 @@ mod succession_tests {
     fn handoff_args_stay_backward_compatible_without_a_reason() {
         // The pre-#5649 call shape (frontend omitting reason) must still produce the old command.
         assert_eq!(trantor_handoff_args(None), vec!["handoff", "--write-only"]);
+    }
+
+    #[test]
+    fn handoff_force_args_extend_the_write_only_command() {
+        // #6528: the boundary-deadline leg — same command the chain already runs, plus --force
+        // so the CLI writes past the boundary gate.
+        assert_eq!(
+            trantor_handoff_force_args(Some("unattended")),
+            vec!["handoff", "--write-only", "--reason", "unattended", "--force"]
+        );
+    }
+
+    #[test]
+    fn armed_marker_matches_only_the_armed_line() {
+        // #6528: "handoff saved" (the gate passed, record written) must NOT read as armed.
+        assert!(handoff_armed("⏸ handoff armed — it fires when this turn finishes"));
+        assert!(!handoff_armed("📋 handoff saved for trantor: /tmp/x.json"));
+        assert!(!handoff_armed(""));
+    }
+
+    #[test]
+    fn boundary_wait_passes_only_on_a_newer_record() {
+        // #6528: the wait's whole job — hold until the Stop hook's record lands, then pass;
+        // a record from BEFORE the chain started (a stale sibling) must not pass it.
+        let deadline = Duration::from_secs(100);
+        assert!(matches!(
+            boundary_wait_step(0, 500, Duration::from_secs(1), deadline),
+            BoundaryStep::Wait
+        ));
+        assert!(matches!(
+            boundary_wait_step(500, 500, Duration::from_secs(1), deadline),
+            BoundaryStep::Wait // same stamp = not new
+        ));
+        assert!(matches!(
+            boundary_wait_step(501, 500, Duration::from_secs(1), deadline),
+            BoundaryStep::Pass
+        ));
+        assert!(matches!(
+            boundary_wait_step(0, 500, Duration::from_secs(100), deadline),
+            BoundaryStep::Deadline
+        ));
+    }
+
+    #[test]
+    fn newest_unconsumed_stamp_reads_project_records() {
+        let dir = std::env::temp_dir().join(format!("trantor-boundary-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("trantor-100.json"), r#"{"consumed":true}"#).unwrap();
+        std::fs::write(dir.join("trantor-200.json"), r#"{"consumed":false}"#).unwrap();
+        std::fs::write(dir.join("other-900.json"), r#"{"consumed":false}"#).unwrap();
+        std::fs::write(dir.join("trantor-notstamp.json"), "{}").unwrap();
+        assert_eq!(newest_unconsumed_stamp(&dir, "trantor"), 200);
+        assert_eq!(newest_unconsumed_stamp(&dir, "missing"), 0);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

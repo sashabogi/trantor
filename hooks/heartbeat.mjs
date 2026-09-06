@@ -18,14 +18,14 @@ import { join, basename, dirname } from "node:path";
 import { homedir, hostname } from "node:os";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { armBaton, readArm, clearArm, readConfig, contextUsage, warnFrac, alreadyHandedOff, markHandedOff, controllingTty, terminalWindowForTty, subagentsActive } from "./lib/handoff.mjs";
+import { armBaton, readArm, clearArm, readConfig, contextUsage, warnFrac, alreadyHandedOff, markHandedOff, controllingTty, terminalWindowForTty, subagentsActive, armMaxMs } from "./lib/handoff.mjs";
 import { resolveProject, hostId } from "../lib/project.mjs";
 import { installedVersion } from "./lib/update-check.mjs";   // report our hook version so the hub can flag stale sessions
 import { signedPost } from "./lib/api.mjs";
 
 const HEARTBEAT_MS = Number(process.env.RELAY_HEARTBEAT_MS || 60 * 1000);
 const FETCH_TIMEOUT_MS = Number(process.env.RELAY_HEARTBEAT_TIMEOUT_MS || 1500);
-const ARM_MAX_MS = Number(process.env.TRANTOR_BATON_ARM_MAX_MS || 15 * 60 * 1000);
+const ARM_MAX_MS = armMaxMs();   // #6528: one source for the hard cap (shared with bin/baton.mjs's printed promise)
 const INFLIGHT_MS = 5 * 60 * 1000;
 const HERE = dirname(fileURLToPath(import.meta.url));
 

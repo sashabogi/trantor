@@ -163,8 +163,25 @@ export function armPath(sessionId) {
   const safe = String(sessionId || "s").replace(/[^A-Za-z0-9_.-]/g, "_");
   return join(process.env.AGENT_BUS_DIR || process.env.RELAY_DATA_DIR || join(homedir(), ".agent-bus"), `handoff-armed-${safe}.json`);
 }
+// The hard cap on an arm (#6528): a session that never reaches a Stop must still hand off —
+// the heartbeat fires at the next tool boundary once the arm is this old. One source for the
+// number, because the CLI (bin/baton.mjs) prints it in its armed message and the heartbeat
+// enforces it; two copies would drift and the printed promise would be a lie.
+export function armMaxMs() {
+  const n = Number(process.env.TRANTOR_BATON_ARM_MAX_MS);
+  return Number.isFinite(n) && n > 0 ? n : 15 * 60 * 1000;
+}
 export function armBaton(sessionId, payload) {
-  try { writeFileSync(armPath(sessionId), JSON.stringify({ ts: Date.now(), ...payload })); return true; } catch { return false; }
+  try {
+    // Re-arming must NOT refresh the timestamp (#6528): the banner can re-fire the request
+    // every few seconds, and a slid-forward ts would starve the hard cap forever — an arm
+    // that is always brand-new never ages into the heartbeat's fire-anyway backstop. The
+    // FIRST arm's ts is the arm's age; later writes only refresh the payload.
+    const prior = readArm(sessionId);
+    const ts = prior?.ts || Date.now();
+    writeFileSync(armPath(sessionId), JSON.stringify({ ts, ...payload }));
+    return true;
+  } catch { return false; }
 }
 export function readArm(sessionId) {
   try { const p = armPath(sessionId); if (!existsSync(p)) return null; return JSON.parse(readFileSync(p, "utf8")); } catch { return null; }
@@ -192,6 +209,57 @@ export function subagentsActive(transcriptPath, withinMs = 90_000) {
     }
     return false;
   } catch { return false; }
+}
+
+// ---- #6528: THE ONE GATE — is this session's turn still in flight? --------------------------
+// Two signals, both read from artifacts the session itself already writes:
+//   1. subagentsActive() — a spawned sub-agent wrote its transcript recently. The 90s mtime
+//      window is a false-idle risk (a sub-agent in a long model stretch writes nothing for
+//      minutes — that is exactly how orca-onboarding-map went unseen on #6528), but widening
+//      it only ever DEFERS a handoff, never fires one early — the safe direction.
+//   2. the transcript TAIL — the last real row tells where the turn stands. A user row
+//      carrying tool_result means the model is about to continue (mid-turn). An assistant
+//      row carrying tool_use means a result is still owed (mid-turn). Only an assistant row
+//      that is plain text (the turn's closing words) reads as idle — the same state the Stop
+//      hook fires on.
+// Every path that can WRITE+SPAWN a handoff (heartbeat backstop, Stop hook, `trantor handoff`)
+// asks this before firing; only an operator's own typed command or the explicit hard-cap leg
+// (--force) may bypass it.
+const TAIL_BYTES = 262_144;
+function transcriptTailRows(transcriptPath) {
+  const fd = openSync(transcriptPath, "r");
+  try {
+    const size = fstatSync(fd).size;
+    const want = Math.min(size, TAIL_BYTES);
+    const b = Buffer.alloc(want);
+    readSync(fd, b, 0, want, size - want);
+    // Drop the first (possibly partial) line, then parse what follows.
+    return b.toString("utf8").split("\n").slice(1).filter(Boolean);
+  } finally { closeSync(fd); }
+}
+export function lastRowMidTurn(transcriptPath) {
+  try {
+    if (!transcriptPath || !existsSync(transcriptPath)) return false;
+    const rows = transcriptTailRows(transcriptPath);
+    for (let i = rows.length - 1; i >= 0; i--) {
+      let r; try { r = JSON.parse(rows[i]); } catch { continue; }
+      if (r?.type !== "assistant" && r?.type !== "user") continue;   // metadata rows say nothing
+      const c = r?.message?.content;
+      if (r.type === "assistant") {
+        const blocks = Array.isArray(c) ? c : [];
+        if (blocks.some(b => b?.type === "tool_use")) return true;   // a result is still owed
+        return false;                                                // text-only → turn said its piece
+      }
+      // user row: tool_result blocks = the model is mid-cycle, about to continue
+      const blocks = Array.isArray(c) ? c : [];
+      if (blocks.some(b => b?.type === "tool_result")) return true;
+      return false;                                                  // a real user prompt = between turns
+    }
+    return false;
+  } catch { return false; }
+}
+export function turnInFlight(transcriptPath) {
+  return subagentsActive(transcriptPath) || lastRowMidTurn(transcriptPath);
 }
 
 // ---- whole-session summary --------------------------------------------------
@@ -275,7 +343,7 @@ export function buildSummary(transcriptPath) {
   let convo = "";
   try { convo = digest(collectTurns(transcriptPath)); } catch { convo = ""; }
   if (!convo) return "*(transcript unreadable)*";
-  const sys = "You are writing a SESSION HANDOFF so a fresh Claude Code session can take over without losing context. The text spans an entire (possibly multi-hour) session: opening turns, an even sample of the middle, and the recent tail. Produce a concise but COMPLETE markdown handoff with these sections: TASK (what we're doing + the goal), STATE (done / in-progress), KEY DECISIONS, OPEN THREADS & NEXT STEPS (concrete actions), KEY FILES & locations (exact paths). Be specific. Cover the whole arc, not just the end. Do not pad.";
+  const sys = "You are writing a SESSION HANDOFF so a fresh Claude Code session can take over without losing context. The text spans an entire (possibly multi-hour) session: opening turns, an even sample of the middle, and the recent tail. Produce a concise but COMPLETE markdown handoff with these sections: TASK (what we're doing + the goal), STATE (done / in-progress), KEY DECISIONS, OPEN THREADS & NEXT STEPS (concrete actions), KEY FILES & locations (exact paths). Be specific. Cover the whole arc, not just the end. The finished handoff must fit ~3500 characters — anything longer is capped with an elision marker and the elided middle (usually STATE) is exactly what the successor needed (#6528), so compress the arc, never drop a section. Do not pad.";
   // Cut the raw tail on a TURN boundary. A blind slice(-12000) opens mid-sentence, which is how the
   // 2026-08-24 handoff began, and a successor cannot tell a truncated thought from a complete one.
   const tail = (n) => {

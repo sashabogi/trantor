@@ -29,7 +29,7 @@ import { homedir } from "node:os";
 import { resolveProject, hostId, handoffDir, busDir } from "../lib/project.mjs";
 import { signedGet } from "./lib/api.mjs";   // signed: enforce hubs 401 unsigned reads — unsigned, T2 delivery is silently dead
 import { ledgerPaths, ensureStart, anchorCursor, writeCursor } from "./lib/inbox-ledger.mjs";
-import { readArm, clearArm, markHandedOff, appendHandoffState } from "./lib/handoff.mjs";
+import { readArm, clearArm, markHandedOff, appendHandoffState, subagentsActive } from "./lib/handoff.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 
@@ -169,9 +169,16 @@ async function main() {
   // finished work rather than a session thirty seconds from its own conclusions. Fired detached and
   // never awaited, and the arming is cleared FIRST so a crash in the worker cannot re-fire it on
   // every subsequent Stop.
+  // #6528: a boundary is only a boundary when NOTHING is still running. CC's Stop fires while a
+  // backgrounded sub-agent (fork, teammate, workflow leg) can still be mid-flight — firing then
+  // hands the baton to a successor that yanks the work's parent out from under it. The arm STAYS:
+  // the next Stop fires it, and the heartbeat's hard cap (armMaxMs, next tool boundary) keeps a
+  // never-idle session from being armed forever.
   try {
     const armed = readArm(input.session_id || "");
-    if (armed) {
+    if (armed && armed.transcript && subagentsActive(armed.transcript)) {
+      process.stderr.write("[trantor] turn boundary reached but sub-agents are still active — the armed baton stays armed for the next boundary\n");
+    } else if (armed) {
       clearArm(input.session_id || "");
       const kid = spawn(process.execPath, [join(HERE, "handoff-now.mjs"),
         armed.projectDir || projectDir, String(input.session_id || ""), armed.transcript || "",
