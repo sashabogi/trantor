@@ -518,6 +518,14 @@ export function Chat({ project, sessionId, dock, onDock, onClose, deps = DEFAULT
   // in-flight call's own completion picks it up.
   const syncBusyRef = useRef(false);
   const syncPendingRef = useRef(false);
+  // #6094, 2026-09-05, 0.3.150 — the blocked-no-ask retry loop ran 13 times over 6.4s on the
+  // REAL transcript and never found an ask that a standalone decode of the exact same file DOES
+  // return (proven: decode_chat_lines_finds_the_open_ask_in_the_real_9291_line_transcript, Rust
+  // side). The miss is somewhere between "what `after` this view sends" and "what turn count
+  // comes back" — session/path resolution or the live tail watcher, not the decoder — but there
+  // was no evidence connecting the two. Every landed sync() now records what it asked for and
+  // what it got, so the retry loop below can log both instead of guessing blind next time.
+  const lastSyncRef = useRef<{ after: number; total: number; turns: number } | null>(null);
   /** Fetch everything past the cursor and fold it in. This is the backfill, the mismatch repair
    *  and the post-send refresh — one path, so they cannot disagree. */
   const sync = useCallback((): Promise<void> => {
@@ -566,6 +574,7 @@ export function Chat({ project, sessionId, dock, onDock, onClose, deps = DEFAULT
           return;
         }
         seenRef.current = b[2];
+        lastSyncRef.current = { after, total: b[2], turns: b[0].length };
         setChat(s => applyBackfill(s, b, after));
         setError(null);
       })
@@ -823,14 +832,25 @@ export function Chat({ project, sessionId, dock, onDock, onClose, deps = DEFAULT
       if (!alive) return;
       tries += 1;
       const elapsed = Date.now() - startedAt;
+      const sentAfter = seenRef.current;
       invokeFn("app_log", {
-        line: `chat blocked-no-ask retry ${tries}: project=${project} elapsed=${elapsed}ms`,
+        line: `chat blocked-no-ask retry ${tries}: project=${project} elapsed=${elapsed}ms sending after=${sentAfter}`,
       }).catch(() => {});
       // Awaited, never fire-and-forget: pacing the next retry off actual completion (sync()'s own
       // busy-guard above already makes overlap harmless, but there's no point scheduling more
       // ticks than the backend can answer).
       await sync();
       if (!alive) return;
+      // #6094, 2026-09-05 — logs what THIS retry actually got back, so a live failure names
+      // whether the miss is upstream (a stale `after`/wrong session never reaching the ask's
+      // line) or downstream (the right lines came back but still no ask in them) instead of
+      // leaving only "still nothing" with no way to tell those apart.
+      const got = lastSyncRef.current;
+      invokeFn("app_log", {
+        line: got && got.after === sentAfter
+          ? `chat blocked-no-ask retry ${tries} result: after=${sentAfter} received total=${got.total} turns=${got.turns}`
+          : `chat blocked-no-ask retry ${tries} result: after=${sentAfter} sync() landed nothing new for this after (stale/superseded/errored)`,
+      }).catch(() => {});
       if (elapsed < FAST_RETRY_WINDOW_MS) timer = setTimeout(tick, FAST_RETRY_MS);
       else if (elapsed < FAST_RETRY_WINDOW_MS + SLOW_RETRY_WINDOW_MS) timer = setTimeout(tick, SLOW_RETRY_MS);
     };

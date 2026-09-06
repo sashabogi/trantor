@@ -6692,6 +6692,60 @@ mod herdr_tests {
     }
 
     #[test]
+    fn decode_chat_lines_finds_the_open_ask_in_the_real_9291_line_transcript() {
+        // #6094, 2026-09-05, 0.3.150 real-panel drill: the singleton-run batch() fix and the
+        // orch-status object decoder both landed, yet the blocked-no-ask retry loop ran 13 times
+        // over 6.4s and never found the ask, while the AskUserQuestion tool_use sat at transcript
+        // line 9289 the whole time (no tool_result, two `attachment` rows written after it, no
+        // `user` row — exactly this fixture's shape). Every decode test above uses a hand-built
+        // transcript a dozen lines long; that shape passed while the real one keeps failing. This
+        // is the operator's own 9291-line, 16.7MB session file (copied to .agent-bus-out/ —
+        // gitignored, never committed) — the only way to catch a bug a synthetic shape can't
+        // reproduce.
+        let raw = std::fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../.agent-bus-out/6094-ask-open-fixture.jsonl"
+        ))
+        .expect(
+            "fixture missing: .agent-bus-out/6094-ask-open-fixture.jsonl (copied from the \
+             operator's own transcript for this #6094 investigation, gitignored)",
+        );
+        let lines = complete_lines(&raw);
+        let total = lines.len();
+        assert_eq!(
+            total, 9291,
+            "the fixture's own line count — a mismatch means a different file was copied in"
+        );
+
+        fn has_open_ask(snap: &ChatSnapshot) -> bool {
+            snap.turns.iter().any(|t| {
+                t.role == "assistant"
+                    && t.blocks.iter().any(|b| {
+                        b.tool.as_deref() == Some("AskUserQuestion")
+                            && b.ask.is_some()
+                            && b.tool_id.as_deref().is_some_and(|id| {
+                                !snap.results.iter().any(|r| r.tool_id == id)
+                            })
+                    })
+            })
+        }
+
+        // (1) The full read from scratch — after=0, exactly what Chat's mount-time backfill sends.
+        let full = decode_chat_lines(lines.iter().copied(), total);
+        assert!(has_open_ask(&full), "after=0 must surface the open ask from the real file");
+
+        // (2) A delta read starting right at the trailing block — after=9288 (0-indexed skip),
+        // the shape a re-sync takes once everything before the ask was already seen, which is
+        // exactly the blocked-no-ask retry loop's own path.
+        let after = 9288;
+        let delta = decode_chat_lines(lines.iter().copied().skip(after), total);
+        assert!(
+            has_open_ask(&delta),
+            "after=9288 (the trailing block alone) must also surface the open ask"
+        );
+    }
+
+    #[test]
     fn tool_result_preview_handles_both_shapes_git_actually_writes() {
         assert_eq!(preview_of(&serde_json::json!("done")), "done");
         let blocks = serde_json::json!([{ "type": "text", "text": "line one" }, { "type": "text", "text": "line two" }]);
