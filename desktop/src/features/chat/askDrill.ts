@@ -4,7 +4,7 @@
 // session uses) against that project's live orchestrator pane. It does not click anything and
 // does not touch the visible window: the host is off-screen, and it never calls `trantor up`.
 //
-// Three things get proved, all narrated into app-trace.log via app_log (never asserted only in
+// Four things get proved, all narrated into app-trace.log via app_log (never asserted only in
 // process memory the operator can't see):
 //   1. whatever the live transcript's CURRENT ask state is, the real backfill/chat_watch path
 //      (Chat's own mount effects — no drill-side shortcut) renders it as a card if one is open;
@@ -17,12 +17,19 @@
 //      SLOW_RETRY_MS/WINDOW — 0.3.145's fix: herdr's blocked frame can land a moment before the
 //      CLI finishes writing the tool_use row) keeps re-syncing on its own for
 //      FAST_RETRY_WINDOW_MS + SLOW_RETRY_WINDOW_MS — the drill waits past that whole span before
-//      concluding nothing arrived, so a real ask written moments after blocked still gets caught.
+//      concluding nothing arrived, so a real ask written moments after blocked still gets caught;
+//   4. (0.3.147's EIO bounce — the click path attached to a read-only watch client) if
+//      TRANTOR_ASK_DRILL_WRITE_TARGET names a pane, answerAtPane's real `ask_answer` write goes
+//      through the SAME code the ask card's own click uses, against that pane and NEVER the real
+//      orchestrator — the operator sets it up themselves (a throwaway `herdr workspace create`
+//      pane running `cat -v`) and reads it back to confirm the exact bytes arrived.
 import { createRoot } from "react-dom/client";
 import { invoke } from "@tauri-apps/api/core";
 import { emit } from "@tauri-apps/api/event";
 import { createElement } from "react";
 import { Chat, FAST_RETRY_WINDOW_MS, SLOW_RETRY_WINDOW_MS } from "./Chat";
+import { answerAtPane } from "../workspace/herdr";
+import { answerKeystrokes } from "./streaming";
 
 function log(line: string): void {
   invoke("app_log", { line: `ask-drill ${line}` }).catch(() => {});
@@ -64,8 +71,37 @@ async function waitFor(predicate: () => boolean, deadlineMs: number): Promise<bo
   return predicate();
 }
 
-export async function runAskDrill(project: string): Promise<void> {
-  log(`start project=${project}`);
+/** #6094, 0.3.147 — proves the WRITE path (answerAtPane -> ask_answer -> herdr's pane.send_text)
+ *  against a pane the operator controls, never the real orchestrator. Sends the exact byte
+ *  sequence answerKeystrokes() builds for picking option 0 of a representative two-option,
+ *  single-select question — the same call the ask card's own click makes. The operator reads
+ *  the pane back (a `cat -v` pane echoes control bytes visibly, e.g. `^[[B` then `\r`) to
+ *  confirm the bytes arrived; this function only proves the CALL succeeded (no exception, no
+ *  EIO), not what appeared on screen — it has no read path into the target pane. */
+async function runWriteProbe(writeTarget: string): Promise<void> {
+  log(`write-probe start target=${writeTarget}`);
+  const probeQuestion = {
+    header: "drill", question: "probe", multiSelect: false,
+    options: [{ label: "a", description: "" }, { label: "b", description: "" }],
+  };
+  const data = answerKeystrokes(probeQuestion, [0]);
+  try {
+    await answerAtPane(writeTarget, data);
+    log(`write-probe sent target=${writeTarget} bytes=${JSON.stringify(data)} — read the pane back to confirm the bytes arrived`);
+  } catch (e) {
+    log(`write-probe FAILED target=${writeTarget}: ${e instanceof Error ? e.message : String(e)}`);
+  }
+}
+
+export async function runAskDrill(rawPayload: string): Promise<void> {
+  // SAFETY: this drill's own Rust setup (`run()` above) is the only emitter of "ask-drill" and
+  // always sends `JSON.stringify({ project, writeTarget })` — the same same-origin trust Chat.tsx
+  // extends to Rust's own `orchestrator_chat` envelope.
+  const { project, writeTarget } = JSON.parse(rawPayload) as { project: string; writeTarget: string | null };
+  log(`start project=${project} writeTarget=${writeTarget ?? "(none)"}`);
+  if (writeTarget) {
+    await runWriteProbe(writeTarget);
+  }
   const host = makeHost();
   const root = createRoot(host);
   try {

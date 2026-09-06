@@ -2302,6 +2302,28 @@ fn pane_keys(target: String, keys: String) -> Result<(), String> {
     }
 }
 
+/// Answer a picker (AskUserQuestion, a permission prompt, any TUI choice) with raw keystrokes
+/// (#6094) — `pane_send`'s own `agent.prompt` refuses outright while the pane is blocked, since a
+/// blocked agent is exactly the case a normal prompt delivery must not run into, but the picker
+/// IS that blocked state and needs bytes written anyway. `herdr::send_text` is the pane-level
+/// primitive underneath `agent.prompt`, with none of its agent-lifecycle gating (verified live
+/// 2026-09-05: an escape sequence arrived byte-for-byte in a throwaway pane, and the same call
+/// succeeds against a pane with no recognized agent at all).
+///
+/// Replaces the OLD path (a JS-side term_attach/term_write/term_detach dance spawning a local
+/// `herdr agent attach` subprocess): `attach` opens a STREAMING watch client, read-only by
+/// design without an explicit takeover (a second observer must never be able to inject into a
+/// pane someone else is typing in) — writing into it returned EIO ("term write 3: Input/output
+/// error", 0.3.147's real-path bounce). One fire-and-forget socket call has no client lifecycle
+/// to get wrong.
+#[tauri::command]
+fn ask_answer(target: String, data: String) -> Result<(), String> {
+    if target.trim().is_empty() {
+        return Err("no pane".into());
+    }
+    herdr::send_text(&target, &data)
+}
+
 /// Deliver the operator's message to the agent in a pane — through herdr's agent surface,
 /// never as keystrokes.
 ///
@@ -5618,12 +5640,21 @@ pub fn run() {
             // that project's orchestrator pane headlessly and drive the real backfill/blocked
             // path (src/features/chat/askDrill.ts), narrating every step into app-trace.log.
             // Inert in normal runs. Same pattern the removed #5857 lsp-drill used (c3553bb).
+            //
+            // TRANTOR_ASK_DRILL_WRITE_TARGET=<pane-id> (0.3.148, #6094's EIO bounce) additionally
+            // proves the WRITE path against a pane the operator sets up themselves (e.g. a
+            // throwaway `herdr workspace create` pane running `cat -v`) — never the real
+            // orchestrator, so the drill can never answer a live question on the operator's
+            // behalf. The probe bytes are the same shape answerKeystrokes() sends for a real
+            // pick; the operator reads the pane back (`herdr pane read <target>`) to confirm.
             use tauri::{Emitter, Manager};
             if let Ok(project) = std::env::var("TRANTOR_ASK_DRILL") {
+                let write_target = std::env::var("TRANTOR_ASK_DRILL_WRITE_TARGET").ok();
                 if let Some(window) = app.get_webview_window("main") {
                     std::thread::spawn(move || {
                         std::thread::sleep(Duration::from_secs(5));
-                        let _ = window.emit("ask-drill", project);
+                        let payload = serde_json::json!({ "project": project, "writeTarget": write_target });
+                        let _ = window.emit("ask-drill", payload.to_string());
                     });
                 }
             }
@@ -5682,6 +5713,7 @@ pub fn run() {
             ghost::ghost_cancel,
             pane_send,
             pane_keys,
+            ask_answer,
             orchestrator_status,
             genesis::project_dev_root,
             genesis::genesis_read_brief,

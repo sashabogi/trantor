@@ -6,7 +6,7 @@
 // are TAB-separated `PROJECT\tKIND\tAGENT\tHANDLE`, KIND=="herdr" only, last row per
 // (project, agent) wins). The terminal functions attach a client pty to that surface and stream
 // raw bytes; there is no pane-read polling path anymore.
-import { Channel, invoke } from "@tauri-apps/api/core";
+import { Channel, invoke, type InvokeArgs } from "@tauri-apps/api/core";
 
 export type HerdrSeat = {
   project: string;
@@ -67,42 +67,39 @@ export async function termDetach(sub: number): Promise<void> {
 }
 
 /** Answer a picker (AskUserQuestion, a permission prompt, any TUI choice) the same way the live
- *  terminal does (#6094): `pane_send` refuses outright while the pane is blocked — the picker
- *  needs raw keystrokes, not a prompt — so this opens its OWN throwaway attach (herdr allows
- *  multiple clients on one surface; a live Workspace tab watching the same pane keeps working
- *  unaffected), writes `data`, and detaches. Bytes are never read here — the chat is not
- *  rendering a terminal, only answering one.
+ *  terminal does (#6094): `pane_send`'s `agent.prompt` refuses outright while the pane is
+ *  blocked — the picker needs raw keystrokes, not a prompt — so this writes `data` through
+ *  herdr's `pane.send_text` (the Rust command `ask_answer`), the pane-level primitive underneath
+ *  `agent.prompt` with none of its agent-lifecycle gating.
  *
- *  Every step is traced into app-trace.log (#6094 real-path bounce, 09-05): a click that answered
- *  nothing left NO evidence at all — this path's only log line fired AFTER a full success, so
- *  attach/write/detach were equally invisible whether they ran, failed, or never fired. The
- *  interactive terminal (TerminalPane.tsx) already traces every term_write it makes; this path had
- *  none. A detach failure is caught and traced on its own — it never masks a write failure, so the
- *  caller (and the ask card's error banner) still see whichever step actually broke. */
-export async function answerAtPane(target: string, data: string): Promise<void> {
-  const trace = (line: string) => { void invoke("app_log", { line: `ask answer: ${line}` }).catch(() => {}); };
-  let sub: number;
-  try {
-    sub = await termAttach(target, () => {});
-  } catch (e) {
-    trace(`attach FAILED target=${target}: ${e instanceof Error ? e.message : String(e)}`);
-    throw e;
-  }
-  trace(`attach sub=${sub} target=${target}`);
+ *  0.3.147's real-path bounce (09-05, EIO "Input/output error"): the FIRST version of this
+ *  function opened its own throwaway `term_attach` (spawning a local `herdr agent attach`
+ *  subprocess) and wrote into that. `attach` opens a STREAMING watch client — read-only by
+ *  design without an explicit takeover, since a second observer must never be able to inject
+ *  into a pane someone else is typing in — so the write always failed. `pane.send_text` is a
+ *  single fire-and-forget socket call with no client lifecycle to get wrong: verified live
+ *  against a throwaway pane, an escape sequence arrived byte-for-byte.
+ *
+ *  Traced into app-trace.log (the 0.3.147 bounce's own lesson: a click that answered nothing
+ *  left no evidence at all beyond a success-only log line) so a future failure still names
+ *  itself, even though there is only one step now.
+ *
+ *  `invokeFn` is the same seam Chat's own `ChatDeps` uses (never a mocked module) — a test
+ *  supplies a faithful in-memory `invoke` and asserts on exactly which command name and args
+ *  this function called, proving the writable path without touching Tauri's real IPC. */
+export async function answerAtPane(
+  target: string,
+  data: string,
+  invokeFn: <T>(cmd: string, args?: InvokeArgs) => Promise<T> = invoke,
+): Promise<void> {
+  const trace = (line: string) => { void invokeFn("app_log", { line: `ask answer: ${line}` }).catch(() => {}); };
   try {
     const t0 = performance.now();
-    const chunks = await termWrite(sub, data);
-    trace(`term_write sub=${sub} bytes=${data.length} chunks=${chunks} ms=${Math.max(0, Math.round(performance.now() - t0))}`);
+    await invokeFn("ask_answer", { target, data });
+    trace(`sent target=${target} bytes=${data.length} ms=${Math.max(0, Math.round(performance.now() - t0))}`);
   } catch (e) {
-    trace(`term_write FAILED sub=${sub} bytes=${data.length}: ${e instanceof Error ? e.message : String(e)}`);
+    trace(`FAILED target=${target} bytes=${data.length}: ${e instanceof Error ? e.message : String(e)}`);
     throw e;
-  } finally {
-    try {
-      await termDetach(sub);
-      trace(`detach sub=${sub}`);
-    } catch (e) {
-      trace(`detach FAILED sub=${sub}: ${e instanceof Error ? e.message : String(e)}`);
-    }
   }
 }
 

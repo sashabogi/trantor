@@ -77,6 +77,47 @@ pub fn prompt(target: &str, text: &str) -> Result<PromptOutcome, String> {
     map_prompt_response(&request(&req)?)
 }
 
+/// Write raw bytes into `target`'s pty (#6094): the AskUserQuestion/permission-prompt answer
+/// path, where `agent.prompt`'s own blocked-refusal is exactly the wrong behavior — the picker
+/// IS the blocked state, and answering it needs keystrokes to land anyway, not a prompt delivery.
+/// `pane.send_text` is the pane-level primitive underneath `agent.prompt`, with none of its
+/// agent-lifecycle gating: verified live against a throwaway `cat -v` pane, an escape sequence
+/// (`\x1b[B`) arrived byte-for-byte (echoed as `^[[B`), and the same call against a pane with no
+/// recognized agent at all (`agent_status: "unknown"`) still succeeded — this operates on the
+/// terminal, never the agent classification. This is also why the OLD path (term_attach spawning
+/// a local `herdr agent attach` subprocess) broke: `attach` opens a STREAMING watch client, and
+/// without an explicit takeover it is read-only by design (a second observer must never be able
+/// to inject into a pane someone else is typing in) — writing into it returned EIO. `send_text`
+/// is a single fire-and-forget socket call with no client lifecycle to get wrong.
+pub fn send_text(target: &str, text: &str) -> Result<(), String> {
+    let req = serde_json::json!({
+        "id": "trantor:pane.send_text",
+        "method": "pane.send_text",
+        "params": { "pane_id": target, "text": text },
+    });
+    map_ok_response(&request(&req)?)
+}
+
+/// Pure response mapping for the fire-and-forget pane mutations (`{"result":{"type":"ok"}}` on
+/// success, the same `{code, message}` error envelope `agent.prompt` uses on failure) — verified
+/// live over the real socket against `pane.send_text`.
+fn map_ok_response(raw: &str) -> Result<(), String> {
+    let v: serde_json::Value = serde_json::from_str(raw.trim())
+        .map_err(|_| format!("herdr sent an unreadable response: {}", raw.trim()))?;
+    if let Some(err) = v.get("error") {
+        let code = err.get("code").and_then(|c| c.as_str()).unwrap_or("");
+        return Err(err
+            .get("message")
+            .and_then(|m| m.as_str())
+            .unwrap_or(if code.is_empty() { "herdr error" } else { code })
+            .to_string());
+    }
+    if v.get("result").and_then(|r| r.get("type")).and_then(|t| t.as_str()) == Some("ok") {
+        return Ok(());
+    }
+    Err(format!("herdr sent an unexpected response: {}", raw.trim()))
+}
+
 /// The session id the agent occupying `target` reported through its official herdr
 /// integration (`agent_session`, source e.g. "herdr:claude"). This is the RUNTIME identity
 /// authority (SYSTEM-CONTRACT §4): the pane itself says which conversation lives in it,
@@ -239,6 +280,28 @@ mod tests {
         assert!(matches!(map_prompt_response(NOT_FOUND), Ok(PromptOutcome::NoAgent)));
         assert!(matches!(map_prompt_response(NOT_READY), Ok(PromptOutcome::NotReady)));
         assert!(matches!(map_prompt_response(STALLED), Ok(PromptOutcome::Stalled)));
+    }
+
+    // Captured live 2026-09-05: `pane.send_text` called over the real socket against a
+    // throwaway `herdr workspace create` pane (closed immediately after), both the success shape
+    // and a `pane_not_found` error against a nonexistent pane id — the same error envelope
+    // `agent.prompt` uses, confirming `map_ok_response` can share its shape-checking with
+    // `map_prompt_response`'s error arm.
+    const SEND_TEXT_OK: &str = r#"{"id":"probe:send_text","result":{"type":"ok"}}"#;
+    const SEND_TEXT_PANE_NOT_FOUND: &str =
+        r#"{"error":{"code":"pane_not_found","message":"pane nonexistent-pane not found"},"id":"cli:request"}"#;
+
+    #[test]
+    fn map_ok_response_reads_the_real_send_text_shapes() {
+        assert!(map_ok_response(SEND_TEXT_OK).is_ok());
+        let err = map_ok_response(SEND_TEXT_PANE_NOT_FOUND).unwrap_err();
+        assert_eq!(err, "pane nonexistent-pane not found");
+    }
+
+    #[test]
+    fn map_ok_response_rejects_garbage_and_unrecognized_shapes() {
+        assert!(map_ok_response("not json").is_err());
+        assert!(map_ok_response(r#"{"id":"x","result":{"type":"something_else"}}"#).is_err());
     }
 
     // Captured live 2026-08-30: the p2drill measurement (docs/CHECKLIST-reassembly.md Phase 2)
