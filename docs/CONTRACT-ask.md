@@ -11,13 +11,16 @@ The complete implementation surface is `hooks/hooks.json`, `hooks/ask-sidecar.mj
 
 ## Producer: plugin hook
 
-`hooks/ask-sidecar.mjs` is registered in `hooks/hooks.json` for `AskUserQuestion` on all four
-lifecycle events:
+`hooks/ask-sidecar.mjs` is registered in `hooks/hooks.json` for `AskUserQuestion` on its tool
+lifecycle and for every session's `Stop`:
 
 - `PreToolUse` and `PermissionRequest` write
   `~/.agent-bus/asks/<session_id>.json` atomically.
-- `PostToolUse` and `PostToolUseFailure` delete that file. A close may delete only the file whose
-  stored `tool_use_id` matches the closing payload, so a stale close cannot erase a newer ask.
+- `PostToolUse` and `PostToolUseFailure` delete that file when ids are equal or the stored id is
+  null (a session can have only one live ask). `PermissionRequest` may omit `tool_use_id`, so the
+  sidecar field is nullable.
+- `Stop` deletes any sidecar for that `session_id`: the turn ended, so no question can remain
+  open even when Claude omitted its closing tool hook.
 
 The JSON shape is exact:
 
@@ -26,7 +29,7 @@ The JSON shape is exact:
   "session_id": "<Claude session id>",
   "project": "<project resolved from cwd>",
   "cwd": "<hook payload cwd>",
-  "tool_use_id": "<AskUserQuestion tool-use id>",
+  "tool_use_id": "<AskUserQuestion tool-use id, or null>",
   "questions": [{
     "question": "Ship it?", "header": "Ship", "multiSelect": false,
     "options": [{ "label": "Yes", "description": "Proceed" }]
@@ -72,23 +75,28 @@ delete/close, malformed input, and session-map-first plus cwd-fallback routing.
 Chat keeps live ask state keyed by `(project, session_id, tool_use_id)` from `orch-ask` alone.
 `open: true` renders the existing question card immediately, independent of herdr status and
 transcript timing. `open: false` closes its pending affordance. A matching transcript
-`tool_result` remains the history authority: when it arrives, the rendered historical card flips
-to answered and shows the recorded answer.
+`tool_result` also closes a still-open event card when a closing hook was omitted, then remains the
+history authority: the rendered historical card flips to answered and shows the recorded answer.
 
-The answer path is unchanged from `0738c31`: option/free-text selection calls `ask_answer`, which
-uses herdr `send_text`. The hook never participates in answering. Remove the blocked-with-no-ask
-retry loop and its trace spam. Remove transcript `openQuestion(...)` as the source of a pending
-card; transcript parsing remains only for history/result correlation. A focused Vitest must fail
-on main and prove that `orch-ask` alone opens, closes, and later marks the card answered.
+The answer path remains `0738c31`: option/free-text selection calls `ask_answer`, which uses herdr
+`send_text`. Its target is resolved by `session_id`: the pane whose herdr `reported_session`
+matches the sidecar session, never the project's orchestrator pane. When no pane hosts that
+session, the card is read-only and says “answer it in its terminal.” The hook never participates
+in answering. Remove the blocked-with-no-ask retry loop and its trace spam. Remove transcript
+`openQuestion(...)` as the source of a pending card; transcript parsing remains only for
+history/result correlation. A focused Vitest must fail on main and prove that `orch-ask` alone
+opens, closes, and later marks the card answered.
 
 ## Real-path gate
 
-`TRANTOR_ASK_DRILL` is rewritten to start a fresh scripted Claude session in a herdr pane after
-the updated plugin is installed. That session genuinely calls `AskUserQuestion`. For both Chat
-already open and a cold Chat tab, the drill asserts: the sidecar exists; app trace records
-`ask received`; the DOM card appears within one second of the hook and before the transcript grows;
-answering uses the real `ask_answer`/`send_text` path; the pane advances; the matching
-`tool_result` lands; the sidecar disappears; and the pending card closes/settles answered.
+`TRANTOR_ASK_DRILL` is rewritten to start a fresh scripted `claude -p` session, using the cheapest
+model and a narrow prompt, in a herdr pane whose cwd is the trantor checkout. Its transient trantor
+bus registration is expected. After the updated plugin is installed, that session genuinely calls
+`AskUserQuestion`. For both Chat already open and a cold Chat tab, the drill asserts: the sidecar
+exists; app trace records `ask received`; the DOM card appears within one second of the hook and
+before the transcript grows; answering uses the real session-routed `ask_answer`/`send_text` path;
+the pane advances; the matching `tool_result` lands; the sidecar disappears; and the pending card
+closes and settles answered.
 
 The seat writes tests and drill code but never builds or installs the app. The orchestrator builds
 and runs this gate, then performs the operator-visible real-path check.
