@@ -57,13 +57,22 @@ type ChatWatchResult = { current: number; generation: number };
 
 /** Consecutive turns from the same speaker are ONE thing to a reader. The transcript splits them
  *  every time a tool runs, which is why the panel showed "ORCHESTRATOR" stacked above every card. */
-/** Consecutive tool blocks become one array; everything else passes through. */
+/** Consecutive tool blocks become one array; everything else passes through. An AskUserQuestion
+ *  never joins (or absorbs) a neighbour (#6094, 2026-09-05): ToolRun collapses any array longer
+ *  than 1 behind a closed-by-default "N tools" toggle, and an orchestrator that checks something
+ *  then asks in the same breath — no thinking/text block between the two tool calls — used to
+ *  batch its ask right into that collapsed run, hiding the one card the operator must act on
+ *  behind a bar that read "2 tools". Keeping every ask its own singleton routes it through
+ *  ToolRun's `blocks.length === 1` path straight to AskCard, regardless of what tool call sits
+ *  next to it. */
 function batch(blocks: Block[]): Array<Block | Block[]> {
   const out: Array<Block | Block[]> = [];
+  const isAsk = (b: Block) => b.kind === "tool" && b.tool === "AskUserQuestion";
   for (const b of blocks) {
+    if (isAsk(b)) { out.push([b]); continue; }
     const last = out[out.length - 1];
     if (b.kind === "tool") {
-      if (Array.isArray(last)) last.push(b);
+      if (Array.isArray(last) && !(last.length === 1 && isAsk(last[0]))) last.push(b);
       else out.push([b]);
     } else out.push(b);
   }
@@ -383,13 +392,17 @@ export const DEFAULT_CHAT_DEPS: ChatDeps = {
   TerminalPane,
 };
 
-/** An orch-status payload arrives as the emitter's object; a string is the test harness's shape. */
-function decodeOrchStatus(payload: unknown): { project: string; status: string } {
-  // SAFETY: the payload comes from our own Rust emitter (OrchStatusPayload) or from the test
-  // harness; both fields are re-checked by the caller before use, and a wrong shape falls through
-  // the caller's guard rather than being trusted.
-  const raw = (payload as { project?: unknown; status?: unknown } | string);
-  const obj = raw !== null && typeof raw === "object" ? raw : (JSON.parse(String(raw)) as { project?: unknown; status?: unknown });
+/** An orch-status payload arrives as the emitter's OrchStatusPayload object; a string is the test
+ *  harness's shape (Chat's `deps.listen` fake, unlike Tauri's real one, hands events through as
+ *  whatever `JSON.stringify` the test wrote — never a live object). */
+type OrchStatusFields = { project?: unknown; status?: unknown };
+type OrchStatusRaw = string | OrchStatusFields;
+type OrchStatusDecoded = { project: string; status: string };
+function decodeOrchStatus(payload: OrchStatusRaw): OrchStatusDecoded {
+  // SAFETY: a string payload is always this same {project,status} shape JSON-encoded (the test
+  // harness's fake `listen`); both fields are re-checked below before use, and a wrong shape falls
+  // through to the empty-string default rather than being trusted.
+  const obj: OrchStatusFields = payload instanceof Object ? payload : (JSON.parse(payload) as OrchStatusFields);
   return { project: String(obj.project ?? ""), status: String(obj.status ?? "") };
 }
 
@@ -601,7 +614,7 @@ export function Chat({ project, sessionId, dock, onDock, onClose, deps = DEFAULT
         // invoke can miss that very first push outright; the bounded re-seed schedule below is
         // the belt for whatever this ordering fix still lets slip through.
         if (!history) {
-          offs.push(await listenFn<unknown>("orch-status", ev => {
+          offs.push(await listenFn<OrchStatusRaw>("orch-status", ev => {
             // #6094, 0.3.148/149 — the LIVE push emitted "ok=true" on the Rust side (confirmed
             // via app-trace) with NOT ONE "chat status ...: push=..." line following it — meaning
             // commitStatus was never even called, and this listener's own silent `catch {}` and
