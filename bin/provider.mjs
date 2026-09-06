@@ -19,7 +19,7 @@ import { readFileSync, writeFileSync, existsSync, mkdirSync, chmodSync, appendFi
 import { join, dirname } from "node:path";
 import { homedir } from "node:os";
 import { execSync, spawnSync } from "node:child_process";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { buildRoster, loadWorld } from "./advise.mjs";
 import { providerStatus, providerVerify, PROVIDERS } from "../lib/providers.mjs";
 
@@ -31,6 +31,7 @@ const C = { dim: "\x1b[2m", grn: "\x1b[32m", red: "\x1b[31m", yel: "\x1b[33m", g
 const envKeyName = (p) => `${String(p).toUpperCase().replace(/[^A-Z0-9]/g, "_")}_API_KEY`;
 
 const OC_CONFIG = join(H, ".config", "opencode", "opencode.json");
+const PROFILE_BIN = join(dirname(fileURLToPath(import.meta.url)), "profile.mjs");
 // Wire a CUSTOM OpenAI-compatible provider into opencode.json (matching opencode's schema +
 // the existing providers' `options.apiKey` style). Merges, never clobbers other providers.
 // `configPath` is injectable so it can be unit-tested against a temp file.
@@ -152,7 +153,8 @@ function addProvider(name, opts) {
 
   // 2) declare the plan in the quota profile (drives the Advisor's tier/cost reasoning)
   try {
-    execSync(`node ${join(dirname(new URL(import.meta.url).pathname), "profile.mjs")} set ${provider}=${plan}`, { stdio: "ignore" });
+    const declared = spawnSync(process.execPath, [PROFILE_BIN, "set", `${provider}=${plan}`], { stdio: "ignore" });
+    if (declared.error || declared.status !== 0) throw declared.error || new Error(`profile exited ${declared.status}`);
     console.log(`${C.grn}✓${C.off} profile: ${provider}=${plan}`);
   } catch (e) { console.log(`${C.yel}⚠${C.off} could not set profile (run: trantor profile set ${provider}=${plan})`); }
 
@@ -242,10 +244,22 @@ function loginProvider(name) {
   }
   console.log(`${C.dim}running:${C.off} ${p.loginRun.join(" ")}  ${C.dim}(the CLI's own login — sign in there)${C.off}`);
   const r = spawnSync(p.loginRun[0], p.loginRun.slice(1), { stdio: "inherit" });
-  if (r.error || (r.status !== 0 && r.status !== null)) {
+  if (r.error || r.status !== 0) {
     console.error(`\n${p.loginRun[0]} exited ${r.status ?? "?"} — install it first, then re-run: trantor provider login ${p.provider}`);
     process.exit(1);
   }
+  const profile = read(join(H, ".agent-bus", "profile.json"), { providers: {} });
+  const plan = profile.providers?.[p.provider]?.plan || "subscription";
+  const declared = spawnSync(process.execPath, [PROFILE_BIN, "set", `${p.provider}=${plan}`], {
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  if (declared.error || declared.status !== 0) {
+    const detail = String(declared.stderr || declared.error?.message || "").trim();
+    console.error(`\nlogin succeeded, but ${p.provider} could not be restored to the quota profile${detail ? ` — ${detail}` : ""}`);
+    process.exit(1);
+  }
+  console.log(`${C.grn}✓${C.off} profile: ${p.provider}=${plan}`);
   console.log(`\n${C.dim}re-check it live:${C.off} trantor provider status`);
 }
 

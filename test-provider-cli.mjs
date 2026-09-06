@@ -85,5 +85,27 @@ ok(nativeRemove.status === 0, `provider remove codex --credentials: exit 0 (got 
 ok(readFileSync(logoutLog, "utf8").trim() === "logout", "provider remove codex --credentials: invokes codex logout");
 ok(nativeRemove.stdout.includes("signed out of the Codex system login"), "provider remove codex --credentials: reports native logout");
 
+// A successful native login restores the quota declaration that Accounts → Remove deletes. The
+// fake CLI keeps this hermetic: no operator login or credential is touched.
+const H6 = mkdtempSync(join(tmpdir(), "trantor-prov-login-"));
+const loginBin = join(H6, "bin");
+mkdirSync(loginBin, { recursive: true });
+writeFileSync(join(loginBin, "codex"), "#!/bin/sh\nexit 0\n");
+chmodSync(join(loginBin, "codex"), 0o755);
+const nativeLogin = run("provider.mjs", ["login", "codex"], H6, { PATH: `${loginBin}:/usr/bin:/bin` });
+ok(nativeLogin.status === 0, `provider login codex: exit 0 (got ${nativeLogin.status})`);
+const prof6 = JSON.parse(readFileSync(join(H6, ".agent-bus", "profile.json"), "utf8"));
+ok(prof6.providers.codex?.plan === "subscription" && prof6.providers.codex?.tier === "capped-sub",
+  "provider login codex: successful login re-declares codex in the quota profile");
+
+const H7 = mkdtempSync(join(tmpdir(), "trantor-prov-login-fail-"));
+const failingBin = join(H7, "bin");
+mkdirSync(failingBin, { recursive: true });
+writeFileSync(join(failingBin, "codex"), "#!/bin/sh\nexit 23\n");
+chmodSync(join(failingBin, "codex"), 0o755);
+const failedLogin = run("provider.mjs", ["login", "codex"], H7, { PATH: `${failingBin}:/usr/bin:/bin` });
+ok(failedLogin.status === 1, `provider login codex: failed native login exits 1 (got ${failedLogin.status})`);
+ok(!existsSync(join(H7, ".agent-bus", "profile.json")), "provider login codex: failed login does not declare a profile entry");
+
 console.log(fail ? `\n${fail} FAILED` : "\nALL PASS");
 process.exit(fail ? 1 : 0);

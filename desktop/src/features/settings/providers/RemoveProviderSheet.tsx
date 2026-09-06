@@ -28,7 +28,7 @@ export function RemoveProviderSheet({ provider, api, onClose, onRemoved }: {
           <div>
             <h2 id="remove-provider-title" className="text-[15px] font-semibold">Remove {provider.label} login?</h2>
             <p className="mt-1 text-[12px] leading-relaxed text-[var(--color-tr-muted)]">
-              Remove clears the saved {provider.label} credential or Trantor provider configuration on this machine. The provider row stays here so you can log in or paste a key again. Existing sessions may need to restart.
+              Remove deletes {provider.label} from your quota profile and logs the CLI out on this machine. Log in restores both. The provider row stays here so you can reconnect it.
             </p>
           </div>
         </div>

@@ -2,11 +2,12 @@
 // round-trip with low-flagging and profile→subscription merge. Hermetic: temp data dir, no network
 // for the hub tests (adapters are verified live separately).
 import { spawn } from "node:child_process";
-import { mkdtempSync, writeFileSync, mkdirSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, writeFileSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import http from "node:http";
 import { isLow, fmtBalance, fetchBalances, qwenResetFromMessage, DEFAULT_LOW } from "./lib/balances.mjs";
+import { detectedCliBalanceRows } from "./lib/providers.mjs";
 import { drillEnv } from "./drill-env.mjs";
 
 let fail = 0; const ok = (c, m) => { console.log((c ? "✓" : "✗ FAIL") + " " + m); if (!c) fail++; };
@@ -111,11 +112,32 @@ ok(!notConfigured.find(e => e.provider === "deepseek"), "fetchBalances: deepseek
 const noKey = await fetchBalances({}, { only: ["deepseek"] });
 ok(noKey.length === 0, "fetchBalances: provider configured but no key in env → skipped (no network)");
 
+// Claude/Codex are registry-detected machine logins, independent of the optional quota profile.
+// Fake binary + auth + probe prove all three gates without touching the operator or the network.
+const detectedHome = mkdtempSync(join(tmpdir(), "trantor-bal-detected-"));
+const detectedBin = join(detectedHome, "bin");
+mkdirSync(join(detectedHome, ".codex"), { recursive: true });
+mkdirSync(detectedBin, { recursive: true });
+writeFileSync(join(detectedBin, "codex"), "#!/bin/sh\nexit 0\n");
+chmodSync(join(detectedBin, "codex"), 0o755);
+writeFileSync(join(detectedHome, ".codex", "auth.json"), JSON.stringify({ tokens: { access_token: "fake-token" } }));
+const detectedRows = await detectedCliBalanceRows({
+  home: detectedHome,
+  path: `${detectedBin}:/usr/bin:/bin`,
+  env: {},
+  probe: async (provider) => provider === "codex"
+    ? { provider: "codex", label: "Codex", kind: "windows", ok: true, windows: [{ name: "5h", usedPct: 12 }] }
+    : null,
+});
+ok(!existsSync(join(detectedHome, ".agent-bus", "profile.json")), "registry balance detection: fixture has no quota profile entry");
+ok(detectedRows.some((entry) => entry.provider === "codex" && entry.ok),
+  "registry balance detection: logged-in Codex produces a row without a profile entry");
+
 // --- hub POST/GET /balances round-trip ---
 const dir = mkdtempSync(join(tmpdir(), "trantor-bal-"));
 mkdirSync(join(dir, ".agent-bus"), { recursive: true });
-// seed a profile: providers under test must be here (the hub filters /balances to the profile), plus a
-// pure-subscription (claude) to exercise the subscription merge.
+// Seed a profile: API providers under test must be here. Claude is deliberately declared but has no
+// snapshot row, proving a profile entry alone cannot manufacture a CLI-login balance row.
 writeFileSync(join(dir, ".agent-bus", "profile.json"), JSON.stringify({ providers: {
   claude: { plan: "max", tier: "capped-sub" }, kimi: { plan: "coding-plan", tier: "capped-sub" },
   openrouter: { plan: "api", tier: "api" }, deepseek: { plan: "api", tier: "api" }, zai: { plan: "coding-plan", tier: "capped-sub" },
@@ -133,6 +155,7 @@ await post("/balances", { ts: 2000, by: "new:trantor", balances: [
   { provider: "openrouter", label: "OpenRouter", kind: "prepaid", ok: true, remaining: 11.68, currency: "USD" },
   { provider: "deepseek", label: "DeepSeek", kind: "prepaid", ok: true, remaining: 2.10, currency: "USD" },
   { provider: "zai", label: "Z.ai (GLM)", kind: "quota", ok: true, remainingPct: 6, plan: "GLM Coding Max" },
+  { provider: "codex", label: "Codex", kind: "windows", ok: true, windows: [{ name: "5h", usedPct: 12 }] },
   { provider: "moonshot", label: "Kimi (Moonshot)", kind: "prepaid", ok: false, error: "HTTP 401" },
   { provider: "xai", label: "xAI", kind: "prepaid", ok: true, remaining: 99, currency: "USD" },   // NOT in profile
 ] });
@@ -149,7 +172,9 @@ ok(g.lowCount === 2, `hub: lowCount=2 (DeepSeek + Z.ai) (got ${g.lowCount})`);
 const kimi = g.entries.find(e => e.provider === "moonshot");
 ok(kimi && kimi.kind === "subscription", "hub: errored Kimi reconciled to subscription (profile kimi=coding-plan)");
 const claude = g.entries.find(e => e.provider === "claude");
-ok(claude && claude.kind === "subscription", "hub: claude (max) listed as subscription from profile");
+ok(!claude, "hub: Claude profile entry alone does not manufacture a CLI-login row");
+const codex = g.entries.find(e => e.provider === "codex");
+ok(codex?.kind === "windows", "hub: detected Codex row survives without a quota profile entry");
 ok(g.entries.filter(e => e.provider === "moonshot" || e.provider === "kimi").length === 1, "hub: no duplicate Kimi/Moonshot entry");
 
 // older snapshot must not clobber newer

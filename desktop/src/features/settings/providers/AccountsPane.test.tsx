@@ -222,6 +222,9 @@ describe("Settings Accounts pane", () => {
     await mount(api);
     await click(host.querySelector(`[aria-label="Remove ${status.label}"]`));
     const dialog = host.querySelector('[role="dialog"]');
+    expect(dialog?.textContent).toContain("quota profile");
+    expect(dialog?.textContent).toContain("logs the CLI out");
+    expect(dialog?.textContent).toContain("Log in restores both");
     expect(dialog?.textContent).toContain("The provider row stays here");
     expect(api.remove).not.toHaveBeenCalled();
     await click(button("Remove credential"));

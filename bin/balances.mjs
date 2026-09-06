@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+/* oxlint-disable anti-slop/no-runtime-typeof -- SAFETY: config.json is user-editable external input; thresholds validates its optional number/object fields at that I/O boundary. */
 // trantor balances — show how much credit is left on each prepaid provider (DeepSeek, Kimi, OpenRouter…)
 // so you can refill BEFORE a build stalls. Reads keys from the environment, queries each provider's
 // balance API, prints them, and pushes the snapshot to the hub so the dashboard + other sessions see it.
@@ -8,6 +9,7 @@ import { readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
 import { fetchBalances, isLow, fmtBalance, DEFAULT_LOW, DEFAULT_LOW_QUOTA_PCT } from "../lib/balances.mjs";
+import { detectedCliBalanceRows } from "../lib/providers.mjs";
 import { loadProfile } from "./profile.mjs";
 import { resolveKeys } from "../lib/provider-keys.mjs";
 
@@ -15,7 +17,8 @@ const args = process.argv.slice(2);
 const asJson = args.includes("--json");
 const noPush = args.includes("--no-push");
 
-// Only check providers the user configured in `trantor profile` — never stray keys in the ambient env.
+// API-key providers stay profile-scoped so ambient keys are never scraped. Claude and Codex are
+// machine CLI logins: the registry admits them from binary + credential + live-probe detection.
 const configured = Object.keys(loadProfile().providers || {});
 
 // Signed via the shared client (2026-07-31, agent-UX audit): unsigned POST rejected under enforce.
@@ -26,7 +29,10 @@ function thresholds() {
   return DEFAULT_LOW;
 }
 
-const balances = await fetchBalances(resolveKeys(process.env), { only: configured });
+const env = resolveKeys(process.env);
+const detected = await detectedCliBalanceRows({ env });
+const profileScoped = await fetchBalances(env, { only: configured.filter((provider) => provider !== "claude" && provider !== "codex") });
+const balances = [...detected, ...profileScoped];
 const low = thresholds();
 
 // push the snapshot to the hub (best-effort) so the dashboard + warning line can use it.

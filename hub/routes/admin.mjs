@@ -335,23 +335,23 @@ export async function routeAdmin({ req, res, q, P, auth, ctx }) {
       const canonP = p => ALIAS[p] || p;
       let prof = {}; try { prof = JSON.parse(readFileSync(join(homedir(), ".agent-bus", "profile.json"), "utf8")).providers || {}; } catch {}
       const profByCanon = {}; for (const [p, v] of Object.entries(prof)) profByCanon[canonP(p)] = v;
-      // Server-side profile scoping (defense in depth): only surface providers the user CONFIGURED in
-      // their profile — never a stray key a client scraped from the ambient env (a dev's .env may hold
-      // OpenRouter/OpenAI/etc. keys for unrelated projects). Filters even a stale/old-client snapshot.
-      // If no profile is set, show nothing (better empty than wrong).
+      const detectedCli = new Set(["claude", "codex"]);
+      // API-key rows remain profile-scoped so a stray ambient key never appears. Claude and Codex
+      // instead arrive only after the client registry detects their binary, auth artifact and probe;
+      // a missing quota declaration must not hide those machine-login rows from the bottom bar.
       // a prepaid entry that ERRORED but whose provider is a subscription per profile is really a
       // subscription (some plan keys have no balance endpoint → the 401 is expected, not a problem).
       const isSub = (t) => !!t && t !== "api";   // capped-sub / high-sub → a subscription (nothing to refill)
-      const entries = (state.balances?.entries || []).filter(e => profByCanon[canonP(e.provider)]).map(e => {
+      const entries = (state.balances?.entries || []).filter(e => detectedCli.has(e.provider) || profByCanon[canonP(e.provider)]).map(e => {
         const pv = profByCanon[canonP(e.provider)];
         if (!e.ok && isSub(pv?.tier)) return { provider: e.provider, label: e.label, kind: "subscription", plan: pv.plan, ok: true, remaining: null, low: false };
         return { ...e, low: lowOf(e) };
       });
-      // list EVERY configured subscription provider not already fetched (claude/codex/gemini etc.) so the
-      // dashboard shows the full configured crew, not just the ones with a queryable balance/quota.
+      // List configured non-CLI subscriptions not already fetched. Claude/Codex may only come from
+      // live registry detection above; a stale profile declaration cannot manufacture either row.
       const known = new Set(entries.map(e => canonP(e.provider)));
       const subs = Object.entries(prof)
-        .filter(([p, v]) => isSub(v?.tier) && !known.has(canonP(p)))
+        .filter(([p, v]) => !detectedCli.has(p) && isSub(v?.tier) && !known.has(canonP(p)))
         .map(([p, v]) => ({ provider: p, label: p, kind: "subscription", plan: v.plan, ok: true, remaining: null, low: false }));
       return json(res, 200, { ts: state.balances?.ts || 0, by: state.balances?.by || "", thresholds: low,
         entries: [...entries, ...subs], lowCount: entries.filter(e => e.low).length, stale: (now() - (state.balances?.ts || 0)) > 6 * 3600e3 });
