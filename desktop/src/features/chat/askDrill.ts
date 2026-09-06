@@ -18,6 +18,7 @@ type DrillProbe = {
   sidecarTs: number | null;
   transcriptLines: number;
   traceSeen: boolean;
+  openEvents: number;
   pickerVisible: boolean;
   toolResultMatches: boolean;
   paneAdvanced: boolean;
@@ -180,6 +181,9 @@ async function runScenario(
     }
 
     const beforeAnswer = await probe(project, marker, opened.sessionId, deps);
+    if (beforeAnswer.openEvents !== 1) {
+      throw new Error(`${mode}: expected one open event, saw ${beforeAnswer.openEvents}`);
+    }
     if (beforeAnswer.transcriptLines !== baselineLines) {
       throw new Error(`${mode}: transcript grew before the DOM card (${baselineLines} -> ${beforeAnswer.transcriptLines})`);
     }
@@ -193,14 +197,15 @@ async function runScenario(
 
     const settled = await waitForProbe(
       () => probe(project, marker, opened.sessionId, deps),
-      state => !state.sidecarExists && state.pickerVisible && state.toolResultMatches && state.paneAdvanced,
+      state => state.openEvents === 1 && !state.sidecarExists && state.pickerVisible &&
+        state.toolResultMatches && state.paneAdvanced,
       SETTLE_TIMEOUT_MS,
       deps,
     );
     if (!settled) throw new Error(`${mode}: answer did not settle sidecar, tool_result, and pane advance`);
     const closed = await waitFor(() => askCard(deps.document, marker) === null, 1_000, deps);
     if (!closed) throw new Error(`${mode}: closed event left the question card open`);
-    log(deps, `${mode} PASS session=${opened.sessionId} picker=visible-before-send sidecar=gone tool_result=matched card=closed pane=advanced`);
+    log(deps, `${mode} PASS session=${opened.sessionId} open-events=1 picker=visible-before-send sidecar=gone tool_result=matched card=closed pane=advanced`);
   } finally {
     if (workspace) {
       await deps.invoke("ask_drill_close", { project, workspace })
