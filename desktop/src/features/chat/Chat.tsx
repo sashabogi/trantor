@@ -19,7 +19,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, 
 import { invoke, type InvokeArgs } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { ArrowLeft, ChevronDown, ChevronRight, PanelBottom, PanelBottomClose, PanelRight, PanelRightClose, Wrench } from "lucide-react";
-import { answerAtPane, orchestratorOf, type HerdrSeat } from "../workspace/herdr";
+import { orchestratorOf, type HerdrSeat } from "../workspace/herdr";
 import { DEFAULT_TERMINAL_DEPS, TerminalPane, type TerminalDeps } from "../workspace/TerminalPane";
 import { bannerCountdown, type HandoffCountdown } from "./banner";
 import { Composer, type Provenance } from "./Composer";
@@ -32,7 +32,7 @@ import {
 } from "./prefs";
 import {
   answerKeystrokes, applyBackfill, applyRows, applySessionChanged, bannerVisible, DOWN_ARROW, emptyChat, isDividerTurn,
-  lastToolLabel, openQuestion, sessionLiveness, tickerText,
+  lastToolLabel, sessionLiveness, tickerText,
   type AskQuestion, type Backfill, type Block, type ChatState, type OpenQuestion, type RowsPayload,
   type SessionPayload, type ToolResult, type Turn,
 } from "./streaming";
@@ -54,6 +54,18 @@ export type Dock = "right" | "bottom" | "pane";
  *  the token chat_unwatch must echo back so a stale unwatch can't stop a fresher watcher sharing
  *  the same project:session key. */
 type ChatWatchResult = { current: number; generation: number };
+
+type OrchAsk = {
+  project: string;
+  session_id: string;
+  tool_use_id: string | null;
+  open: boolean;
+  questions: AskQuestion[];
+};
+type LiveAsk = OrchAsk & { target: string | null };
+
+const askKey = (ask: Pick<OrchAsk, "session_id" | "tool_use_id">) =>
+  `${ask.session_id}\u0000${ask.tool_use_id ?? ""}`;
 
 /** Consecutive turns from the same speaker are ONE thing to a reader. The transcript splits them
  *  every time a tool runs, which is why the panel showed "ORCHESTRATOR" stacked above every card. */
@@ -94,15 +106,14 @@ function group(turns: Turn[]): Turn[] {
 /** A run of consecutive tool calls is ONE act to a reader — "checked nine things" — not nine
  *  stacked cards around a single sentence. Failures stay visible while collapsed, because a run
  *  that went wrong is exactly the one you want to open. */
-function ToolRun({ blocks, results, target, onAnswer }: {
+function ToolRun({ blocks, results }: {
   blocks: Block[]; results: Record<string, ToolResult>;
-  target: string | null; onAnswer: (toolId: string, data: string) => Promise<void>;
 }) {
   const [open, setOpen] = useState(false);
   const failed = blocks.filter(b => b.tool_id && results[b.tool_id] && !results[b.tool_id].ok).length;
   const running = blocks.filter(b => !b.tool_id || !results[b.tool_id]).length;
   if (blocks.length === 1) {
-    return <ToolCard block={blocks[0]} result={blocks[0].tool_id ? results[blocks[0].tool_id] : undefined} target={target} onAnswer={onAnswer} />;
+    return <ToolCard block={blocks[0]} result={blocks[0].tool_id ? results[blocks[0].tool_id] : undefined} />;
   }
   return (
     <div className="mt-1.5">
@@ -116,19 +127,17 @@ function ToolRun({ blocks, results, target, onAnswer }: {
         {failed > 0 && <span className="shrink-0 text-[length:calc(10.5px*var(--chat-scale,1))] text-tr-fail">{failed} failed</span>}
         {failed === 0 && running > 0 && <span className="shrink-0 text-[length:calc(10.5px*var(--chat-scale,1))] text-tr-doing">running</span>}
       </button>
-      {open && blocks.map((b, i) => <ToolCard key={i} block={b} result={b.tool_id ? results[b.tool_id] : undefined} target={target} onAnswer={onAnswer} />)}
+      {open && blocks.map((b, i) => <ToolCard key={i} block={b} result={b.tool_id ? results[b.tool_id] : undefined} />)}
     </div>
   );
 }
 
-function ToolCard({ block, result, target, onAnswer }: {
-  block: Block; result?: ToolResult;
-  target: string | null; onAnswer: (toolId: string, data: string) => Promise<void>;
-}) {
+function ToolCard({ block, result }: { block: Block; result?: ToolResult }) {
   const [open, setOpen] = useState(false);
-  if (block.tool === "AskUserQuestion" && block.ask && block.tool_id) {
-    return <AskCard tool_id={block.tool_id} questions={block.ask} result={result} target={target} onAnswer={onAnswer} />;
+  if (block.tool === "AskUserQuestion" && block.ask && block.tool_id && result) {
+    return <AskCard tool_id={block.tool_id} questions={block.ask} result={result} target={null} onAnswer={async () => {}} />;
   }
+  if (block.tool === "AskUserQuestion") return null;
   // Running until its answer arrives. Saying so beats an empty card that looks finished.
   const state = result ? (result.ok ? "ok" : "failed") : "running";
   const colour = state === "failed" ? "var(--color-tr-fail)" : state === "ok" ? "var(--color-tr-muted)" : "var(--color-tr-doing)";
@@ -160,11 +169,11 @@ function ToolCard({ block, result, target, onAnswer }: {
  *  transcript's tool_result lands — never asserted locally) shows the recorded choice, same as
  *  ToolCard shows any other finished call; open shows buttons per option, a multi-select tray
  *  when the question asks for one, and an Other free-text row. A click writes keystrokes into
- *  the pane (answerAtPane) rather than claiming success itself — the card only ever reflects
+ *  the pane hosting that event's session rather than claiming success itself — the card reflects
  *  what the transcript says happened. */
 function AskCard({ tool_id, questions, result, target, onAnswer }: {
-  tool_id: string; questions: AskQuestion[]; result?: ToolResult;
-  target: string | null; onAnswer: (toolId: string, data: string) => Promise<void>;
+  tool_id: string | null; questions: AskQuestion[]; result?: ToolResult;
+  target: string | null; onAnswer: (toolId: string | null, data: string) => Promise<void>;
 }) {
   const [picked, setPicked] = useState<Set<number>>(new Set());
   const [otherText, setOtherText] = useState("");
@@ -275,7 +284,7 @@ function AskCard({ tool_id, questions, result, target, onAnswer }: {
         </button>
       </div>
       {!target && (
-        <div className="mt-1.5 text-[10.5px] text-tr-muted">No live pane to answer into — answer it in the terminal.</div>
+        <div className="mt-1.5 text-[10.5px] text-tr-muted">No pane hosts this session — answer it in its terminal.</div>
       )}
       {error && <div className="tr-mono mt-1.5 text-[10.5px] text-tr-fail">{error}</div>}
     </div>
@@ -375,7 +384,7 @@ export type ChatDeps = {
   /** Answers an AskUserQuestion card by writing its keystrokes into the pane (#6094) — the same
    *  path the live terminal's keyboard uses, not the prompt path (`pane_send` refuses while
    *  blocked). Its own seam so a test can assert what a click sent without a real pty. */
-  answerAtPane: (target: string, data: string) => Promise<void>;
+  answerAtSession: (sessionId: string, data: string) => Promise<void>;
   /** Heavy neighbours Chat mounts; the chat tests replace them with null renderers. */
   Composer: React.ComponentType<React.ComponentProps<typeof Composer>>;
   TerminalPane: React.ComponentType<React.ComponentProps<typeof TerminalPane>>;
@@ -387,7 +396,7 @@ export const DEFAULT_CHAT_DEPS: ChatDeps = {
   invoke: <T,>(cmd: string, args?: InvokeArgs) => invoke<T>(cmd, args),
   listen: (event, cb) => listen(event, cb),
   orchestratorOf,
-  answerAtPane,
+  answerAtSession: (sessionId, data) => invoke("ask_answer_session", { sessionId, data }),
   Composer,
   TerminalPane,
 };
@@ -414,6 +423,9 @@ export function Chat({ project, sessionId, dock, onDock, onClose, deps = DEFAULT
   const { invoke: invokeFn, listen: listenFn, orchestratorOf: paneOf, Composer: ComposerView, TerminalPane: TermView } = deps;
   const history = Boolean(sessionId);
   const [chat, setChat] = useState<ChatState>(emptyChat);
+  const [liveAsks, setLiveAsks] = useState<Record<string, LiveAsk>>({});
+  const resultsRef = useRef(chat.results);
+  resultsRef.current = chat.results;
   const [target, setTarget] = useState<string | null>(() => history ? "history" : null);
   const [error, setError] = useState<string | null>(null);
   // Reading comfort (#5522): the size the last drag left the panel at (null = the designed
@@ -482,7 +494,7 @@ export function Chat({ project, sessionId, dock, onDock, onClose, deps = DEFAULT
     prevProject.current = project;
     if (switched) { setDismissedAt(null); saveDismissedAt(null); }
     setBannerArmedAt(null); setHandoffError(null); autoHandoffKey.current = null;
-    setChat(emptyChat); seenRef.current = 0; setError(null);
+    setChat(emptyChat); setLiveAsks({}); seenRef.current = 0; setError(null);
     // A new mount/switch owes nothing to the last episode's seq clock (#6146) — reset the
     // arbiter before the first commit of this episode so an in-flight commit from the PREVIOUS
     // project can never be mistaken for a newer one here.
@@ -505,10 +517,47 @@ export function Chat({ project, sessionId, dock, onDock, onClose, deps = DEFAULT
     return () => { alive = false; clearInterval(iv); };
   }, [history, project, target]);
 
+  // The hook sidecar is the live authority for a pending question (#6533). Subscribe BEFORE
+  // asking Rust to watch: ask_watch replays files already present, which is how a cold Chat tab
+  // receives an ask that opened while another lens was visible.
+  useEffect(() => {
+    if (history) return;
+    let alive = true;
+    let off: (() => void) | null = null;
+    const listener = listenFn<OrchAsk>("orch-ask", event => {
+      const ask = event.payload;
+      if (!alive || ask.project !== project) return;
+      const key = askKey(ask);
+      if (!ask.open) {
+        setLiveAsks(current => {
+          if (!current[key]) return current;
+          const next = { ...current };
+          delete next[key];
+          return next;
+        });
+        return;
+      }
+      if (ask.tool_use_id && resultsRef.current[ask.tool_use_id]) return;
+      setLiveAsks(current => ({ ...current, [key]: { ...ask, target: null } }));
+      invokeFn<string | null>("ask_target", { sessionId: ask.session_id }).then(answerTarget => {
+        if (!alive) return;
+        setLiveAsks(current => current[key]
+          ? { ...current, [key]: { ...current[key], target: answerTarget } }
+          : current);
+      }).catch(() => {});
+    });
+    listener.then(unlisten => {
+      if (!alive) { unlisten(); return; }
+      off = unlisten;
+      invokeFn("ask_watch").catch(error => setError(String(error)));
+    }).catch(error => setError(String(error)));
+    return () => { alive = false; off?.(); };
+  }, [history, project, invokeFn, listenFn]);
+
   // #6094, 0.3.146 — sync() can be asked for concurrently from several INDEPENDENT sources: the
   // chat_watch effect's own unconditional call at mount, its "watch.current > seenRef.current"
-  // gap-check, the blocked-no-ask retry loop, a chat-rows cursor-mismatch resync, and a plain
-  // handoff-backward restart. None of them know about each other. A large real transcript's
+  // gap-check, a chat-rows cursor-mismatch resync, and a plain handoff-backward restart. None of
+  // them know about each other. A large real transcript's
   // decode round trip (read_chat_snapshot walks the whole file twice) can outlast a 300ms retry
   // interval, so two independently-dispatched calls both capture the same stale cursor and each
   // looks "stale" to the other once it resolves — re-triggering forever without ever reaching
@@ -518,14 +567,6 @@ export function Chat({ project, sessionId, dock, onDock, onClose, deps = DEFAULT
   // in-flight call's own completion picks it up.
   const syncBusyRef = useRef(false);
   const syncPendingRef = useRef(false);
-  // #6094, 2026-09-05, 0.3.150 — the blocked-no-ask retry loop ran 13 times over 6.4s on the
-  // REAL transcript and never found an ask that a standalone decode of the exact same file DOES
-  // return (proven: decode_chat_lines_finds_the_open_ask_in_the_real_9291_line_transcript, Rust
-  // side). The miss is somewhere between "what `after` this view sends" and "what turn count
-  // comes back" — session/path resolution or the live tail watcher, not the decoder — but there
-  // was no evidence connecting the two. Every landed sync() now records what it asked for and
-  // what it got, so the retry loop below can log both instead of guessing blind next time.
-  const lastSyncRef = useRef<{ after: number; total: number; turns: number } | null>(null);
   /** Fetch everything past the cursor and fold it in. This is the backfill, the mismatch repair
    *  and the post-send refresh — one path, so they cannot disagree. */
   const sync = useCallback((): Promise<void> => {
@@ -574,7 +615,6 @@ export function Chat({ project, sessionId, dock, onDock, onClose, deps = DEFAULT
           return;
         }
         seenRef.current = b[2];
-        lastSyncRef.current = { after, total: b[2], turns: b[0].length };
         setChat(s => applyBackfill(s, b, after));
         setError(null);
       })
@@ -797,66 +837,24 @@ export function Chat({ project, sessionId, dock, onDock, onClose, deps = DEFAULT
     return () => { alive = false; drop(); void un.then(f => f()); };
   }, [history, project, invokeFn, listenFn]);
 
-  // #6094 — the open ask, if any: gated on `blocked` (not merely "no result yet"), because a
-  // result-less AskUserQuestion while the pane is working/idle is a race between the tool_use and
-  // tool_result rows landing, not a question actually waiting on the operator. Computed here (not
-  // just below, by the ask card) because the suggestion chips read it too — see next block.
-  const openAsk: OpenQuestion | null = status === "blocked" ? openQuestion(chat.turns, chat.results) : null;
-  // #6094 — herdr can report blocked while the transcript names no open ask: a genuinely
-  // different approval prompt, or — the 2026-09-05 regression — an AskUserQuestion whose rows
-  // never made it into `chat.turns` (a stale concurrent backfill silently dropped them, see
-  // sync() above). Traced once per transition into this state, never every render, so app-trace
-  // names the exact moment instead of the click-only tracing herdr.ts already has.
-  const blockedNoAskRef = useRef(false);
+  // A transcript result is also a close signal: Claude can omit the closing hook, but a card must
+  // never remain answerable after the answer is recorded (#6533 stale-open protection).
   useEffect(() => {
-    const blockedNoAsk = status === "blocked" && openAsk === null;
-    if (blockedNoAsk && !blockedNoAskRef.current) {
-      invokeFn("app_log", {
-        line: `chat blocked with no open ask: project=${project} turns=${chat.turns.length} seen=${seenRef.current}`,
-      }).catch(() => {});
-    }
-    blockedNoAskRef.current = blockedNoAsk;
-    if (!blockedNoAsk) return;
-    // #6094 — herdr's blocked frame can land a MOMENT before the CLI finishes writing the
-    // AskUserQuestion tool_use row (confirmed 2026-09-05, 0.3.145: at the instant Chat looked,
-    // its transcript cursor sat 3 lines behind the ask). A single look-and-give-up misses a race
-    // that closes within a second or two, so re-sync aggressively (FAST_RETRY_MS) while the gap
-    // is most likely still closing, ease off (SLOW_RETRY_MS) for a further stretch, then stop —
-    // the passive chat-rows push still arrives eventually (spawn_chat_watcher's own 300ms file
-    // tail), just later, so giving up here is never the last chance to see the ask.
-    let alive = true;
-    let tries = 0;
-    const startedAt = Date.now();
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const tick = async () => {
-      if (!alive) return;
-      tries += 1;
-      const elapsed = Date.now() - startedAt;
-      const sentAfter = seenRef.current;
-      invokeFn("app_log", {
-        line: `chat blocked-no-ask retry ${tries}: project=${project} elapsed=${elapsed}ms sending after=${sentAfter}`,
-      }).catch(() => {});
-      // Awaited, never fire-and-forget: pacing the next retry off actual completion (sync()'s own
-      // busy-guard above already makes overlap harmless, but there's no point scheduling more
-      // ticks than the backend can answer).
-      await sync();
-      if (!alive) return;
-      // #6094, 2026-09-05 — logs what THIS retry actually got back, so a live failure names
-      // whether the miss is upstream (a stale `after`/wrong session never reaching the ask's
-      // line) or downstream (the right lines came back but still no ask in them) instead of
-      // leaving only "still nothing" with no way to tell those apart.
-      const got = lastSyncRef.current;
-      invokeFn("app_log", {
-        line: got && got.after === sentAfter
-          ? `chat blocked-no-ask retry ${tries} result: after=${sentAfter} received total=${got.total} turns=${got.turns}`
-          : `chat blocked-no-ask retry ${tries} result: after=${sentAfter} sync() landed nothing new for this after (stale/superseded/errored)`,
-      }).catch(() => {});
-      if (elapsed < FAST_RETRY_WINDOW_MS) timer = setTimeout(tick, FAST_RETRY_MS);
-      else if (elapsed < FAST_RETRY_WINDOW_MS + SLOW_RETRY_WINDOW_MS) timer = setTimeout(tick, SLOW_RETRY_MS);
-    };
-    timer = setTimeout(tick, FAST_RETRY_MS);
-    return () => { alive = false; if (timer) clearTimeout(timer); };
-  }, [status, openAsk, project, chat.turns.length, invokeFn, sync]);
+    setLiveAsks(current => {
+      let changed = false;
+      const next: Record<string, LiveAsk> = {};
+      for (const [key, ask] of Object.entries(current)) {
+        if (ask.tool_use_id && chat.results[ask.tool_use_id]) changed = true;
+        else next[key] = ask;
+      }
+      return changed ? next : current;
+    });
+  }, [chat.results]);
+  const liveAskList = Object.values(liveAsks).filter(ask => ask.project === project);
+  const activeLiveAsk = liveAskList[liveAskList.length - 1] ?? null;
+  const openAsk: OpenQuestion | null = activeLiveAsk
+    ? { tool_id: activeLiveAsk.tool_use_id ?? askKey(activeLiveAsk), questions: activeLiveAsk.questions }
+    : null;
   // Suggested-reply chips (#5929): asks collected from EVERY orchestrator turn since the
   // operator's last user turn (walk back until a user turn — the real ask is routinely one turn
   // back behind a hook-driven "Nothing to swap."), most recent ask first, capped at three.
@@ -892,7 +890,7 @@ export function Chat({ project, sessionId, dock, onDock, onClose, deps = DEFAULT
   }, [history, working, askQuestion, orchestratorTexts]);
   const lastSpeechTurn = [...chat.turns].reverse().find(t => t.role === "user" || t.role === "assistant");
   const chipsVisible =
-    !history && !!target && !working && suggestions.length > 0 &&
+    !history && !!(activeLiveAsk?.target ?? target) && !working && suggestions.length > 0 &&
     lastSpeechTurn?.role === "assistant" && !composerDraft.trim() && !chipsDismissed;
   useEffect(() => { setChipsDismissed(false); }, [orchestratorTexts]);
   useEffect(() => {
@@ -914,12 +912,14 @@ export function Chat({ project, sessionId, dock, onDock, onClose, deps = DEFAULT
   const ticker = tickerText(status, turnSeenAt != null ? Date.now() - turnSeenAt : null,
     lastToolLabel(chat.turns), chat.meta.context.tokens);
   const liveness = sessionLiveness(status, target);
-  const answerAsk = useCallback(async (toolId: string, data: string) => {
-    if (!target) throw new Error("no live pane");
-    await deps.answerAtPane(target, data);
-    invokeFn("app_log", { line: `ask answered tool_id=${toolId} project=${project}` }).catch(() => {});
+  const answerAsk = useCallback(async (ask: LiveAsk, data: string) => {
+    if (!ask.target) throw new Error("No pane hosts this session — answer it in its terminal.");
+    await deps.answerAtSession(ask.session_id, data);
+    invokeFn("app_log", {
+      line: `ask answered tool_id=${ask.tool_use_id ?? "null"} session=${ask.session_id} project=${project}`,
+    }).catch(() => {});
     sync();
-  }, [target, deps, invokeFn, project, sync]);
+  }, [deps, invokeFn, project, sync]);
   const side = dock === "right";
   const hosted = dock === "pane";
 
@@ -1122,7 +1122,7 @@ export function Chat({ project, sessionId, dock, onDock, onClose, deps = DEFAULT
         {/* The "session continued" divider is a TURN now (#5646): applySessionChanged keeps the
             predecessor thread and appends a divider item, so a second panel-level rule here would
             draw the same line twice. */}
-        {target && !chat.turns.length && !chat.continued && !error && (
+        {target && !chat.turns.length && !liveAskList.length && !chat.continued && !error && (
           <div className="px-1 py-2 text-[length:calc(12px*var(--chat-scale,1))] leading-relaxed text-tr-muted">
             {history
               ? "Nothing renderable was written to this session transcript."
@@ -1155,7 +1155,7 @@ export function Chat({ project, sessionId, dock, onDock, onClose, deps = DEFAULT
               </div>
               {batch(t.blocks).map((b, j) =>
                 Array.isArray(b) ? (
-                  <ToolRun key={j} blocks={b} results={chat.results} target={target} onAnswer={answerAsk} />
+                  <ToolRun key={j} blocks={b} results={chat.results} />
                 ) : b.kind === "thinking" ? (
                   <Thinking key={j} text={b.text} />
                 ) : b.kind === "image" ? (
@@ -1181,6 +1181,19 @@ export function Chat({ project, sessionId, dock, onDock, onClose, deps = DEFAULT
             </div>
           ),
         )}
+        {liveAskList.map(ask => (
+          <div key={askKey(ask)} className="mb-3">
+            <div className="mb-1 text-[length:calc(10.5px*var(--chat-scale,1))] uppercase tracking-wider text-tr-muted">
+              session · {ask.session_id.slice(0, 8)}
+            </div>
+            <AskCard
+              tool_id={ask.tool_use_id}
+              questions={ask.questions}
+              target={ask.target}
+              onAnswer={(_toolId, data) => answerAsk(ask, data)}
+            />
+          </div>
+        ))}
         <div ref={foot} />
       </div>
 
@@ -1229,9 +1242,9 @@ export function Chat({ project, sessionId, dock, onDock, onClose, deps = DEFAULT
         <SuggestionChips
           suggestions={suggestions}
           onPick={text => {
-            if (openAsk && askQuestion) {
+            if (activeLiveAsk && askQuestion) {
               const idx = askQuestion.options.findIndex(o => o.label === text);
-              if (idx >= 0) { void answerAsk(openAsk.tool_id, answerKeystrokes(askQuestion, [idx])); return; }
+              if (idx >= 0) { void answerAsk(activeLiveAsk, answerKeystrokes(askQuestion, [idx])); return; }
             }
             setActiveSuggestion(text);
           }}

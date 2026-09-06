@@ -10,10 +10,11 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { InvokeArgs } from "@tauri-apps/api/core";
-import { Chat, type ChatDeps, FAST_RETRY_MS, FAST_RETRY_WINDOW_MS } from "./Chat";
+import { Chat, type ChatDeps } from "./Chat";
 import type { HerdrSeat } from "../workspace/herdr";
 import { WAKE_OUTCOME_MS } from "../genesis/wakeRow";
 import type { WakeProgress } from "../genesis/wakeProgress";
+import type { AskQuestion } from "./streaming";
 
 // SAFETY: React's act() reads this flag off globalThis; the cast adds the one key TS does not know
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -23,6 +24,9 @@ type Invoked = { cmd: string };
 // chat-session-changed / orch-status arrive as JSON strings, wake-progress as a structured
 // object. `unknown` is the honest payload type — the fires narrow it, never a cast.
 type Handler = (ev: { payload: unknown }) => void;
+type AskEventPayload = {
+  project: string; session_id: string; tool_use_id: string | null; open: boolean; questions: AskQuestion[];
+};
 
 /** A faithful in-memory ChatDeps: invoke answers the chat's commands, listen records handlers,
  *  orchestratorOf finds no pane, and the heavy children render nothing. */
@@ -66,7 +70,7 @@ function makeDeps(wakeProjects: string[] = []) {
       // exactly what Chat treats as "not hosted".
       return null as HerdrSeat | null;
     },
-    answerAtPane: async () => {},
+    answerAtSession: async () => {},
     Composer: () => null,
     TerminalPane: () => null,
   };
@@ -288,6 +292,7 @@ const askTurn = { role: "assistant", blocks: [askBlock] };
  *  the backfilled transcript — the render() every test using it starts from. */
 function makeBlockedDeps() {
   const answered: Array<{ target: string; data: string }> = [];
+  const handlers = new Map<string, Handler[]>();
   const deps: ChatDeps = {
     // The real backend answers `after` — a second fetch past line 0 gets nothing new, never
     // the same turn again. A mock that ignored `after` doubled the ask (2 tool blocks batched
@@ -313,12 +318,31 @@ function makeBlockedDeps() {
         // text; "blocked" is the one status that surfaces the open ask under test.
         return Promise.resolve("blocked" as T);
       }
+      if (cmd === "ask_target") {
+        // SAFETY: Chat requests ask_target as string|null; this fixture hosts the ask session.
+        return Promise.resolve("surf1" as T);
+      }
+      if (cmd === "ask_watch") {
+        queueMicrotask(() => {
+          const payload = {
+            project: "p", session_id: "ask-session", tool_use_id: "ask1", open: true,
+            questions: askBlock.ask,
+          };
+          for (const cb of handlers.get("orch-ask") ?? []) cb({ payload });
+        });
+        // SAFETY: Chat ignores ask_watch's resolved value; the queued event is the result.
+        return Promise.resolve(null as T);
+      }
       // SAFETY: unknown commands resolve to null, matching the real seam's unhandled default.
       return Promise.resolve(null as T);
     },
-    listen: () => Promise.resolve(() => {}),
+    listen: <T,>(event: string, cb: (ev: { payload: T }) => void): Promise<() => void> => {
+      // SAFETY: the fake stores the callback unchanged and fires it with its event's own payload.
+      handlers.set(event, [...(handlers.get(event) ?? []), cb as Handler]);
+      return Promise.resolve(() => {});
+    },
     orchestratorOf: async () => ({ project: "p", agent: "orch", surface: "surf1", kind: "orch" }),
-    answerAtPane: async (target: string, data: string) => { answered.push({ target, data }); },
+    answerAtSession: async (target: string, data: string) => { answered.push({ target, data }); },
     Composer: () => null,
     TerminalPane: () => null,
   };
@@ -368,7 +392,7 @@ describe("orch-status as the Rust emitter sends it (#6094)", () => {
         return Promise.resolve(() => {});
       },
       orchestratorOf: async () => ({ project: "p", agent: "orch", surface: "surf1", kind: "orch" }),
-      answerAtPane: async () => {},
+      answerAtSession: async () => {},
       Composer: () => null,
       TerminalPane: () => null,
     };
@@ -418,7 +442,7 @@ describe("AskCard question card (#6094)", () => {
     await act(async () => { noButton.dispatchEvent(new MouseEvent("click", { bubbles: true })); });
     await flush();
     // "No" is index 1: one Down arrow to reach it, then Enter — never a typed digit.
-    expect(answered).toEqual([{ target: "surf1", data: "\x1b[B\r" }]);
+    expect(answered).toEqual([{ target: "ask-session", data: "\x1b[B\r" }]);
   });
 
   it("stays a question card (not answered) until the transcript's own tool_result lands", async () => {
@@ -428,6 +452,88 @@ describe("AskCard question card (#6094)", () => {
     await flush();
     expect(host.textContent).not.toContain("answered");
     expect(host.textContent).toContain("Yes");
+  });
+});
+
+describe("orch-ask is the pending-card source (#6533)", () => {
+  it("opens from the event alone, routes by session, closes, and settles from tool_result", async () => {
+    const host = document.createElement("div"); document.body.appendChild(host);
+    const root = createRoot(host);
+    const handlers = new Map<string, Handler[]>();
+    const answers: Array<{ sessionId: string; data: string }> = [];
+    let answered = false;
+    let answerTarget: string | null = "w2:p19";
+    const deps: ChatDeps = {
+      invoke: <T,>(cmd: string): Promise<T> => {
+        if (cmd === "orchestrator_chat") {
+          const backfill = answered
+            ? [[askTurn], [{ tool_id: "ask1", ok: true, preview: "No" }], 1, META, []]
+            : [[], [], 0, META, []];
+          // SAFETY: Chat requests orchestrator_chat as a JSON string; this is its Backfill shape.
+          return Promise.resolve(JSON.stringify(backfill) as T);
+        }
+        if (cmd === "chat_watch") {
+          // SAFETY: Chat assigns this command the exact ChatWatchResult type returned here.
+          return Promise.resolve({ current: 0, generation: 1 } as T);
+        }
+        if (cmd === "orchestrator_status") {
+          // SAFETY: orchestrator_status is requested as a status string.
+          return Promise.resolve("idle" as T);
+        }
+        if (cmd === "ask_target") {
+          // SAFETY: ask_target is requested as string|null; the drill session lives in w2:p19.
+          return Promise.resolve(answerTarget as T);
+        }
+        // SAFETY: Chat ignores every other command's resolved value in this fixture.
+        return Promise.resolve(null as T);
+      },
+      listen: <T,>(event: string, cb: (ev: { payload: T }) => void): Promise<() => void> => {
+        // SAFETY: the fake stores the callback unchanged and fires it with its event's payload.
+        handlers.set(event, [...(handlers.get(event) ?? []), cb as Handler]);
+        return Promise.resolve(() => {});
+      },
+      orchestratorOf: async () => ({ project: "p", agent: "orch", surface: "w2:p8", kind: "orch" }),
+      answerAtSession: async (sessionId, data) => { answers.push({ sessionId, data }); },
+      Composer: () => null,
+      TerminalPane: () => null,
+    };
+    const ask = {
+      project: "p", session_id: "drill-session", tool_use_id: "ask1", open: true,
+      questions: askBlock.ask,
+    };
+    const fire = async (event: string, payload: string | AskEventPayload) => {
+      await act(async () => { for (const cb of handlers.get(event) ?? []) cb({ payload }); });
+      await flush();
+    };
+
+    act(() => { root.render(<Chat project="p" dock="right" onDock={() => {}} onClose={() => {}} deps={deps} />); });
+    await flush(); await flush();
+    await fire("orch-ask", ask);
+    expect(host.textContent).toContain("Ship it?");
+    const no = [...host.querySelectorAll("button")].find(button => button.textContent?.includes("No"));
+    await act(async () => { no?.dispatchEvent(new MouseEvent("click", { bubbles: true })); });
+    await flush();
+    expect(answers).toEqual([{ sessionId: "drill-session", data: "\x1b[B\r" }]);
+
+    await fire("orch-ask", { ...ask, open: false });
+    expect(host.querySelector('[data-testid="ask-card"]')).toBeNull();
+
+    answerTarget = null;
+    await fire("orch-ask", { ...ask, session_id: "terminal-only", tool_use_id: "ask2" });
+    expect(host.textContent).toContain("answer it in its terminal");
+    await fire("orch-ask", { ...ask, session_id: "terminal-only", tool_use_id: "ask2", open: false });
+    answerTarget = "w2:p19";
+
+    await fire("orch-ask", ask);
+    answered = true;
+    await fire("chat-session-changed", JSON.stringify({ project: "p", sessionId: "s1" }));
+    expect(host.querySelectorAll('[data-testid="ask-card"]')).toHaveLength(1);
+    expect(host.textContent).toContain("answered");
+    await fire("orch-ask", ask);
+    expect(host.querySelectorAll('[data-testid="ask-card"]')).toHaveLength(1);
+
+    act(() => root.unmount());
+    host.remove();
   });
 });
 
@@ -476,7 +582,7 @@ describe("suggestion chips from an open AskUserQuestion (#5993)", () => {
     await flush();
     // "No" is index 1: one Down arrow to reach it, then Enter — the exact bytes the ask card's
     // own button sends (#6094), proving the chip took the keystroke path, not the composer's.
-    expect(answered).toEqual([{ target: "surf1", data: "\x1b[B\r" }]);
+    expect(answered).toEqual([{ target: "ask-session", data: "\x1b[B\r" }]);
   });
 });
 
@@ -578,14 +684,14 @@ function makeRealTranscriptDeps() {
     },
     listen: () => Promise.resolve(() => {}),
     orchestratorOf: async () => ({ project: "p", agent: "orch", surface: "surf1", kind: "orch" }),
-    answerAtPane: async (target: string, data: string) => { answered.push({ target, data }); },
+    answerAtSession: async (target: string, data: string) => { answered.push({ target, data }); },
     Composer: () => null,
     TerminalPane: () => null,
   };
   return { deps, answered, traced };
 }
 
-describe("real transcript regression: an ask decoded the way the app actually decodes it (#6094 2026-09-05)", () => {
+describe("the transcript is history, not the pending-ask source (#6533)", () => {
   let host: HTMLDivElement;
   let root: Root;
 
@@ -600,23 +706,22 @@ describe("real transcript regression: an ask decoded the way the app actually de
     host.remove();
   });
 
-  it("renders the question card from a real multi-row backfill (thinking + tool_use as separate turns)", async () => {
+  it("does not open a card from a result-less transcript tool_use", async () => {
     const { deps } = makeRealTranscriptDeps();
     act(() => { root.render(<Chat project="p" dock="right" onDock={() => {}} onClose={() => {}} deps={deps} />); });
     await flush();
     await flush();
-    expect(host.textContent).toContain("On 0.3.142, did the card click");
-    const buttons = [...host.querySelectorAll("button")].map(b => b.textContent ?? "");
-    expect(buttons.some(t => t.includes("Yes, it answered"))).toBe(true);
+    expect(host.querySelector('[data-testid="ask-card"]')).toBeNull();
+    expect(host.textContent).not.toContain("On 0.3.142, did the card click");
   });
 
-  it("shows chips for the same open ask", async () => {
+  it("does not derive pending chips from the transcript", async () => {
     const { deps } = makeRealTranscriptDeps();
     act(() => { root.render(<Chat project="p" dock="right" onDock={() => {}} onClose={() => {}} deps={deps} />); });
     await flush();
     await flush();
     const chips = host.querySelector('[data-testid="suggestion-chips"]');
-    expect(chips).not.toBeNull();
+    expect(chips).toBeNull();
   });
 });
 
@@ -661,6 +766,10 @@ describe("real transcript regression via the PUSH path (chat-rows then orch-stat
           // arrives later via the orch-status push under test.
           return Promise.resolve("working" as T);
         }
+        if (cmd === "ask_target") {
+          // SAFETY: Chat requests ask_target as string|null; this fixture hosts the ask session.
+          return Promise.resolve("surf1" as T);
+        }
         // SAFETY: unknown commands resolve to null, matching the real seam's unhandled default.
         return Promise.resolve(null as T);
       },
@@ -673,11 +782,11 @@ describe("real transcript regression via the PUSH path (chat-rows then orch-stat
         return Promise.resolve(() => {});
       },
       orchestratorOf: async () => ({ project: "p", agent: "orch", surface: "surf1", kind: "orch" }),
-      answerAtPane: async () => {},
+      answerAtSession: async () => {},
       Composer: () => null,
       TerminalPane: () => null,
     };
-    const fire = (event: string, payload: string) =>
+    const fire = (event: string, payload: string | AskEventPayload) =>
       act(async () => { for (const cb of handlers.get(event) ?? []) cb({ payload }); });
 
     act(() => { root.render(<Chat project="p" dock="right" onDock={() => {}} onClose={() => {}} deps={deps} />); });
@@ -704,6 +813,12 @@ describe("real transcript regression via the PUSH path (chat-rows then orch-stat
     // herdr flips the pane to blocked once the tool_use lands.
     await fire("orch-status", JSON.stringify({ project: "p", status: "blocked" }));
     await flush();
+    await flush();
+
+    await fire("orch-ask", {
+      project: "p", session_id: "s1", tool_use_id: "toolu_real_ask", open: true,
+      questions: "ask" in REAL_ASK_TURNS[3].blocks[0] ? REAL_ASK_TURNS[3].blocks[0].ask : [],
+    });
     await flush();
 
     expect(host.textContent).toContain("On 0.3.142, did the card click");
@@ -797,7 +912,7 @@ describe("concurrent backfill data loss (#6094 root cause, 2026-09-05)", () => {
         }
         return { project: "p", agent: "orch", surface: "surf1", kind: "orch" };
       },
-      answerAtPane: async () => {},
+      answerAtSession: async () => {},
       Composer: () => null,
       TerminalPane: () => null,
     };
@@ -818,7 +933,8 @@ describe("concurrent backfill data loss (#6094 root cause, 2026-09-05)", () => {
     await flush();
     await flush();
 
-    expect(host.textContent).toContain("On 0.3.142, did the card click");
+    expect(host.textContent).toContain("thinking");
+    expect(host.querySelector('[data-testid="ask-card"]')).toBeNull();
   });
 });
 
@@ -893,7 +1009,7 @@ describe("chat_unwatch never sends a stale generation-less unwatch (#6094 real-p
         }
         return { project: "p", agent: "orch", surface: "surf1", kind: "orch" };
       },
-      answerAtPane: async () => {},
+      answerAtSession: async () => {},
       Composer: () => null,
       TerminalPane: () => null,
     };
@@ -911,11 +1027,6 @@ describe("chat_unwatch never sends a stale generation-less unwatch (#6094 real-p
     // so there is nothing honest to send.
     expect(invokes.filter(i => i.cmd === "chat_unwatch")).toEqual([]);
 
-    // Generation 2 (the live one) answers first, exactly as app-trace showed in the real failure.
-    act(() => { watchResolvers[1]({ current: 0, generation: 2 }); });
-    await flush();
-    expect(invokes.filter(i => i.cmd === "chat_unwatch")).toEqual([]);
-
     // NOW generation 1 answers. Cleanup was waiting on exactly this.
     act(() => { watchResolvers[0]({ current: 0, generation: 1 }); });
     await flush();
@@ -928,297 +1039,6 @@ describe("chat_unwatch never sends a stale generation-less unwatch (#6094 real-p
     expect(unwatches[0].args).toMatchObject({ generation: 1 });
   });
 });
-
-// #6094 REAL-PATH REGRESSION, third round (0.3.145, 09-05 19:27): the watcher fix (4c3b0db) held
-// — generations were correct — and the card STILL did not render. app-trace named the mechanism
-// exactly: "chat blocked with no open ask: ... turns=724 seen=8096" fired at the SAME moment
-// herdr's blocked frame arrived, but the AskUserQuestion tool_use was three transcript lines
-// AHEAD of Chat's cursor — the CLI writes the tool_use row a moment AFTER herdr reports blocked,
-// so a single look-and-give-up at the blocked instant finds nothing and never looks again. This
-// mounts Chat idle (no ask anywhere in the transcript yet), pushes blocked, and only THEN makes
-// the transcript's next backfill answer carry the ask — proving Chat re-syncs on its own instead
-// of waiting for a push that, in this exact race, never arrives in time.
-describe("blocked-with-no-open-ask retries the backfill instead of giving up once (#6094, 2026-09-05)", () => {
-  let host: HTMLDivElement;
-  let root: Root;
-
-  beforeEach(() => {
-    host = document.createElement("div");
-    document.body.appendChild(host);
-    root = createRoot(host);
-  });
-
-  afterEach(() => {
-    act(() => root.unmount());
-    host.remove();
-  });
-
-  it("the ask card appears within the retry window even though the ask post-dates the blocked push", async () => {
-    vi.useFakeTimers();
-    try {
-      const handlers = new Map<string, Handler[]>();
-      let askWritten = false;
-      const deps: ChatDeps = {
-        invoke: <T,>(cmd: string, args?: InvokeArgs): Promise<T> => {
-          if (cmd === "orchestrator_chat") {
-            // SAFETY: Chat always calls orchestrator_chat with a plain `{ after: number }` object.
-            const after = (args as { after: number } | undefined)?.after ?? 0;
-            // Before the CLI "writes" the ask: line 0 carries an ordinary user turn, cursor at 1.
-            // After: a second backfill from the same cursor carries the ask, cursor at 2 — the
-            // CLI having appended exactly the one row app-trace showed Chat was behind on.
-            const backfill = after === 0
-              ? [[{ role: "user", blocks: [{ kind: "text", text: "check", tool: null, tool_id: null }] }], [], 1, REAL_ASK_META, ["check"]]
-              : askWritten
-                ? [[askTurn], [], 2, REAL_ASK_META, []]
-                : [[], [], after, REAL_ASK_META, []];
-            // SAFETY: Chat types this call Promise<string> and parses the JSON; the envelope is
-            // exactly the Backfill shape built above.
-            return Promise.resolve(JSON.stringify(backfill) as T);
-          }
-          if (cmd === "chat_watch") {
-            // SAFETY: Chat types this call Promise<ChatWatchResult> — current=1 matches the
-            // pre-ask backfill's own total.
-            return Promise.resolve({ current: 1, generation: 1 } as T);
-          }
-          if (cmd === "orchestrator_status") {
-            // SAFETY: Chat types this call Promise<string>; the pane starts "working" — blocked
-            // arrives later via the orch-status push under test.
-            return Promise.resolve("working" as T);
-          }
-          // SAFETY: unknown commands (app_log included) resolve to null, matching the real
-          // seam's unhandled default — this test asserts on DOM state, not trace content.
-          return Promise.resolve(null as T);
-        },
-        listen: <T,>(event: string, cb: (ev: { payload: T }) => void): Promise<() => void> => {
-          // SAFETY: the handler is stored under the unknown-payload container (Handler, above)
-          // and fired with exactly what listen delivered — this test only fires "orch-status".
-          const boxed = cb as Handler;
-          handlers.set(event, [...(handlers.get(event) ?? []), boxed]);
-          return Promise.resolve(() => {});
-        },
-        orchestratorOf: async () => ({ project: "p", agent: "orch", surface: "surf1", kind: "orch" }),
-        answerAtPane: async () => {},
-        Composer: () => null,
-        TerminalPane: () => null,
-      };
-
-      act(() => { root.render(<Chat project="p" dock="right" onDock={() => {}} onClose={() => {}} deps={deps} />); });
-      await act(async () => { await Promise.resolve(); await Promise.resolve(); await Promise.resolve(); });
-
-      // herdr reports blocked BEFORE the tool_use row exists in the transcript — exactly the
-      // observed real-path ordering.
-      await act(async () => {
-        for (const cb of handlers.get("orch-status") ?? []) cb({ payload: JSON.stringify({ project: "p", status: "blocked" }) });
-        await Promise.resolve();
-      });
-      expect(host.querySelector('[data-testid="ask-card"]')).toBeNull();
-
-      // The CLI finishes writing the ask a moment later.
-      askWritten = true;
-
-      // Advance past the first fast-retry tick and let its sync() settle.
-      await act(async () => {
-        await vi.advanceTimersByTimeAsync(FAST_RETRY_MS + 50);
-      });
-
-      expect(host.querySelector('[data-testid="ask-card"]')).not.toBeNull();
-      expect(host.textContent).toContain("Ship it?");
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it("gives up after the retry window — proves the retry is bounded, not a permanent poll", async () => {
-    vi.useFakeTimers();
-    try {
-      const handlers = new Map<string, Handler[]>();
-      const chatWatchCalls: unknown[] = [];
-      const deps: ChatDeps = {
-        invoke: <T,>(cmd: string, args?: InvokeArgs): Promise<T> => {
-          if (cmd === "orchestrator_chat") {
-            // SAFETY: Chat always calls orchestrator_chat with a plain `{ after: number }` object.
-            const after = (args as { after: number } | undefined)?.after ?? 0;
-            chatWatchCalls.push(after);
-            // The ask never arrives in this scenario — a genuinely different, non-ask block.
-            // SAFETY: Chat types this call Promise<string> and parses the JSON; the envelope is
-            // an empty Backfill advancing only the cursor.
-            return Promise.resolve(JSON.stringify([[], [], after, REAL_ASK_META, []]) as T);
-          }
-          if (cmd === "chat_watch") {
-            // SAFETY: Chat types this call Promise<ChatWatchResult>; the exact values are never
-            // asserted on here, only that chat_watch succeeds so the retry effect can run.
-            return Promise.resolve({ current: 0, generation: 1 } as T);
-          }
-          if (cmd === "orchestrator_status") {
-            // SAFETY: Chat types this call Promise<string>; the pane starts "working" — blocked
-            // arrives later via the orch-status push under test.
-            return Promise.resolve("working" as T);
-          }
-          // SAFETY: unknown commands resolve to null, matching the real seam's unhandled default.
-          return Promise.resolve(null as T);
-        },
-        listen: <T,>(event: string, cb: (ev: { payload: T }) => void): Promise<() => void> => {
-          // SAFETY: the handler is stored under the unknown-payload container (Handler, above)
-          // and fired with exactly what listen delivered — this test only fires "orch-status".
-          const boxed = cb as Handler;
-          handlers.set(event, [...(handlers.get(event) ?? []), boxed]);
-          return Promise.resolve(() => {});
-        },
-        orchestratorOf: async () => ({ project: "p", agent: "orch", surface: "surf1", kind: "orch" }),
-        answerAtPane: async () => {},
-        Composer: () => null,
-        TerminalPane: () => null,
-      };
-
-      act(() => { root.render(<Chat project="p" dock="right" onDock={() => {}} onClose={() => {}} deps={deps} />); });
-      await act(async () => { await Promise.resolve(); await Promise.resolve(); await Promise.resolve(); });
-      await act(async () => {
-        for (const cb of handlers.get("orch-status") ?? []) cb({ payload: JSON.stringify({ project: "p", status: "blocked" }) });
-        await Promise.resolve();
-      });
-
-      const callsSoFar = chatWatchCalls.length;
-      // Past the fast window, then the slow window, then well beyond both.
-      await act(async () => { await vi.advanceTimersByTimeAsync(FAST_RETRY_WINDOW_MS + 6_000 + 5_000); });
-      const callsAfter = chatWatchCalls.length;
-      expect(callsAfter).toBeGreaterThan(callsSoFar);
-
-      // Silence past the retry window: no ask ever appeared, and the retries stopped.
-      const settledCalls = chatWatchCalls.length;
-      await act(async () => { await vi.advanceTimersByTimeAsync(5_000); });
-      expect(chatWatchCalls.length).toBe(settledCalls);
-      expect(host.querySelector('[data-testid="ask-card"]')).toBeNull();
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-});
-
-// #6094 REAL-PATH REGRESSION, fourth round (0.3.146, 09-05 19:41): retries ran 15 times over 8s
-// and NEVER found an ask that had been on disk for 31+ real seconds. A Rust test proved the
-// decode path itself returns a trailing open ask correctly even with no closing user line (this
-// PASSES on main — the withholding theory was wrong), so the actual defect had to be in the
-// retry loop itself: it called sync() and scheduled the NEXT retry via a bare setTimeout WITHOUT
-// awaiting sync()'s own promise. A real transcript that size takes read_chat_snapshot longer than
-// FAST_RETRY_MS to decode (it walks the whole file twice — once for meta, once for the actual
-// snapshot), so the next retry dispatched before the previous one resolved, both captured with
-// the same stale cursor — the exact concurrent-backfill race sync() itself guards against
-// (1c6e75f), self-inflicted by the retry loop this time: every reply lands looking "stale"
-// against whatever dispatched after it and just re-triggers ANOTHER sync(), forever, without
-// ever reaching the success path that absorbs a batch. This proves retries never overlap even
-// when the backend is slower than the retry interval.
-describe("blocked-no-ask retries never overlap, even when the backfill answers slower than the retry interval (#6094, 2026-09-05)", () => {
-  let host: HTMLDivElement;
-  let root: Root;
-
-  beforeEach(() => {
-    host = document.createElement("div");
-    document.body.appendChild(host);
-    root = createRoot(host);
-  });
-
-  afterEach(() => {
-    act(() => root.unmount());
-    host.remove();
-  });
-
-  it("never dispatches a second orchestrator_chat call before the first resolves, and still finds the ask once it lands", async () => {
-    vi.useFakeTimers();
-    try {
-      const handlers = new Map<string, Handler[]>();
-      let inFlight = 0;
-      let maxInFlight = 0;
-      let askWritten = false;
-      // Slower than FAST_RETRY_MS (300ms) — a real transcript large enough to matter.
-      const BACKEND_LATENCY_MS = 500;
-
-      const deps: ChatDeps = {
-        invoke: <T,>(cmd: string, args?: InvokeArgs): Promise<T> => {
-          if (cmd === "orchestrator_chat") {
-            // SAFETY: Chat always calls orchestrator_chat with a plain `{ after: number }` object.
-            const after = (args as { after: number } | undefined)?.after ?? 0;
-            inFlight += 1;
-            maxInFlight = Math.max(maxInFlight, inFlight);
-            // The ask is new data exactly once (the first call to see after===1 with askWritten
-            // true) — every OTHER call, including any later catch-up dispatched by sync()'s own
-            // pending-flag mechanism, must answer "nothing new past your own cursor" or it
-            // re-absorbs the same ask turn repeatedly: `absorb()` appends `fresh` turns
-            // unconditionally, so a backend that repeats a row it already reported piles up
-            // duplicate assistant turns that `group()`/`batch()` then collapse into a "N tools"
-            // summary row instead of the single-block card — a real backend never repeats a line.
-            const backfill = after === 0
-              ? [[{ role: "user", blocks: [{ kind: "text", text: "check", tool: null, tool_id: null }] }], [], 1, REAL_ASK_META, ["check"]]
-              : after === 1 && askWritten
-                ? [[askTurn], [], 2, REAL_ASK_META, []]
-                : [[], [], Math.max(after, askWritten ? 2 : after), REAL_ASK_META, []];
-            // SAFETY: Chat types this call Promise<string> and parses the JSON; the envelope is
-            // exactly the Backfill shape built above.
-            return new Promise<string>(resolve => {
-              setTimeout(() => { inFlight -= 1; resolve(JSON.stringify(backfill)); }, BACKEND_LATENCY_MS);
-            }) as Promise<T>;
-          }
-          if (cmd === "chat_watch") {
-            // SAFETY: Chat types this call Promise<ChatWatchResult> — current=1 matches the
-            // pre-ask backfill's own total.
-            return Promise.resolve({ current: 1, generation: 1 } as T);
-          }
-          if (cmd === "orchestrator_status") {
-            // SAFETY: Chat types this call Promise<string>; the pane starts "working" — blocked
-            // arrives later via the orch-status push under test.
-            return Promise.resolve("working" as T);
-          }
-          // SAFETY: unknown commands (app_log included) resolve to null, matching the real
-          // seam's unhandled default.
-          return Promise.resolve(null as T);
-        },
-        listen: <T,>(event: string, cb: (ev: { payload: T }) => void): Promise<() => void> => {
-          // SAFETY: the handler is stored under the unknown-payload container (Handler, above)
-          // and fired with exactly what listen delivered — this test only fires "orch-status".
-          const boxed = cb as Handler;
-          handlers.set(event, [...(handlers.get(event) ?? []), boxed]);
-          return Promise.resolve(() => {});
-        },
-        orchestratorOf: async () => ({ project: "p", agent: "orch", surface: "surf1", kind: "orch" }),
-        answerAtPane: async () => {},
-        Composer: () => null,
-        TerminalPane: () => null,
-      };
-
-      // Set from the start: this test is purely about CONCURRENCY (never two calls in flight at
-      // once, whatever the source), not about the ask arriving late — that race is the OTHER
-      // test's job. Flipping this mid-test would race the mount-time dispatch's own capture of
-      // it against real (fake-clock) time, which is a test-harness timing accident, not the
-      // production behavior under test here.
-      askWritten = true;
-
-      act(() => { root.render(<Chat project="p" dock="right" onDock={() => {}} onClose={() => {}} deps={deps} />); });
-      // Let mount settle fully first: the mount effect's OWN unconditional sync() and its
-      // "watch.current > seenRef.current" gap-check can each dispatch once around t=0 — a
-      // harmless, pre-existing duplicate the 1c6e75f mismatch guard already resolves without
-      // consequence, PLUS sync()'s own busy-guard now collapses genuine overlaps into a deferred
-      // catch-up instead of a second real dispatch. Only the RETRY LOOP's own overlap behavior is
-      // under test here, so maxInFlight starts counting fresh once mount-time activity is done.
-      await act(async () => { await vi.advanceTimersByTimeAsync(BACKEND_LATENCY_MS + 50); });
-      maxInFlight = 0;
-
-      await act(async () => {
-        for (const cb of handlers.get("orch-status") ?? []) cb({ payload: JSON.stringify({ project: "p", status: "blocked" }) });
-        await Promise.resolve();
-      });
-
-      // Run several retry ticks' worth of fake time — under the bug, this alone piles up
-      // overlapping dispatches since each tick used to fire every FAST_RETRY_MS regardless of
-      // whether the previous call had resolved.
-      await act(async () => { await vi.advanceTimersByTimeAsync(FAST_RETRY_MS * 6); });
-
-      expect(maxInFlight).toBe(1);
-      expect(host.querySelector('[data-testid="ask-card"]')).not.toBeNull();
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-});
-
 // #6094, 0.3.148/0.3.149 real-path bounce: the live push emitted "ok=true" on the Rust side
 // (confirmed via app-trace), with NOT ONE "chat status ...: push=..." line following it — the
 // listener's own silent `catch {}` and silent "project didn't match" fall-through were both
@@ -1274,7 +1094,7 @@ describe("orch-status listener traces every arrival, never silently (#6094, 2026
         return Promise.resolve(() => {});
       },
       orchestratorOf: async () => ({ project: "p", agent: "orch", surface: "surf1", kind: "orch" }),
-      answerAtPane: async () => {},
+      answerAtSession: async () => {},
       Composer: () => null,
       TerminalPane: () => null,
     };
@@ -1325,7 +1145,6 @@ describe("orch-status listener traces every arrival, never silently (#6094, 2026
     expect(appLogLines.some(l => l.includes("did not match") || l.includes("FAILED to parse"))).toBe(false);
   });
 });
-
 // #6094 root cause (2026-09-05, 0.3.149 real-panel drill): decodeOrchStatus (edc9558) fixed the
 // listener, so a live blocked push now commits status and openQuestion() DOES find the ask in
 // chat.turns — no "blocked with no open ask" trace fires, exactly what the operator saw. Yet no
@@ -1356,7 +1175,10 @@ const ADJACENT_ASK_TURNS = [
     ],
   },
 ];
-const ADJACENT_ASK_RESULTS = [{ tool_id: "toolu_bash1", ok: true, preview: "nothing to commit" }];
+const ADJACENT_ASK_RESULTS = [
+  { tool_id: "toolu_bash1", ok: true, preview: "nothing to commit" },
+  { tool_id: "toolu_ask1", ok: true, preview: "Yes" },
+];
 
 describe("an ask adjacent to another tool call in the same turn (#6094, 2026-09-05)", () => {
   let host: HTMLDivElement;
@@ -1373,7 +1195,7 @@ describe("an ask adjacent to another tool call in the same turn (#6094, 2026-09-
     host.remove();
   });
 
-  it("still renders the ask card, not a collapsed \"2 tools\" toggle", async () => {
+  it("still renders an answered historical ask, not a collapsed \"2 tools\" toggle", async () => {
     const deps: ChatDeps = {
       invoke: <T,>(cmd: string): Promise<T> => {
         if (cmd === "orchestrator_chat") {
@@ -1394,7 +1216,7 @@ describe("an ask adjacent to another tool call in the same turn (#6094, 2026-09-
       },
       listen: () => Promise.resolve(() => {}),
       orchestratorOf: async () => ({ project: "p", agent: "orch", surface: "surf1", kind: "orch" }),
-      answerAtPane: async () => {},
+      answerAtSession: async () => {},
       Composer: () => null,
       TerminalPane: () => null,
     };
@@ -1404,8 +1226,7 @@ describe("an ask adjacent to another tool call in the same turn (#6094, 2026-09-
     await flush();
 
     expect(host.querySelector('[data-testid="ask-card"]')).not.toBeNull();
-    expect(host.textContent).toContain("Push now?");
-    const buttons = [...host.querySelectorAll("button")].map(b => b.textContent ?? "");
-    expect(buttons.some(t => t.includes("Yes"))).toBe(true);
+    expect(host.textContent).toContain("Yes");
+    expect(host.textContent).toContain("answered");
   });
 });
