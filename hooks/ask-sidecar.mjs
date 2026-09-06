@@ -29,20 +29,38 @@ function toolUseId(input) {
   return id === undefined || id === null || String(id).trim() === "" ? null : String(id);
 }
 
+function existingOpen(path, sessionId) {
+  try {
+    const stored = JSON.parse(readFileSync(path, "utf8"));
+    return String(stored.session_id ?? "") === String(sessionId) ? stored : null;
+  } catch {
+    return null;
+  }
+}
+
+function sameOpen(left, right) {
+  return left.session_id === right.session_id && left.project === right.project &&
+    left.cwd === right.cwd && (left.tool_use_id ?? null) === right.tool_use_id &&
+    JSON.stringify(left.questions) === JSON.stringify(right.questions);
+}
+
 function writeOpen(input, path) {
   if (String(input.tool_name ?? "") !== "AskUserQuestion") return;
   const questions = input.tool_input?.questions;
   if (!Array.isArray(questions)) return;
   const cwd = String(input.cwd ?? "");
   const ctx = sessionContext(cwd);
+  const stored = existingOpen(path, input.session_id);
+  const incomingId = toolUseId(input);
   const payload = {
     session_id: String(input.session_id),
     project: ctx.project,
     cwd,
-    tool_use_id: toolUseId(input),
+    tool_use_id: incomingId ?? stored?.tool_use_id ?? null,
     questions,
     ts: Date.now(),
   };
+  if (stored && sameOpen(stored, payload)) return;
   const dir = join(busDir(), "asks");
   mkdirSync(dir, { recursive: true });
   const tmp = join(dir, `.${String(input.session_id)}.${process.pid}.${Date.now()}.tmp`);
