@@ -9,6 +9,7 @@ type Active = {
   sidecar: boolean;
   answered: boolean;
   advanced: boolean;
+  visible: boolean;
   ts: number;
 };
 
@@ -40,6 +41,7 @@ describe("real AskUserQuestion drill (#6533)", () => {
       card.textContent = `TRANTOR ASK DRILL ${active.marker}: continue?`;
       const answer = document.createElement("button");
       answer.textContent = "Continue";
+      answer.disabled = !active.visible;
       answer.onclick = () => {
         if (!active) return;
         active.sidecar = false;
@@ -78,6 +80,7 @@ describe("real AskUserQuestion drill (#6533)", () => {
           sidecar: true,
           answered: false,
           advanced: false,
+          visible: true,
           ts: clock,
         };
         renderCard();
@@ -95,7 +98,11 @@ describe("real AskUserQuestion drill (#6533)", () => {
           openEvents: active ? 1 : 0,
           webviewEventTs: active ? active.ts + 100 : null,
           cardMountTs: active ? active.ts + 200 : null,
-          pickerVisible: active?.answered ?? false,
+          pickerVisible: active?.visible ?? false,
+          buttonsEnabledTs: active?.visible ? active.ts + 250 : null,
+          answerClickedTs: active?.answered ? active.ts + 300 : null,
+          answerResolvedTs: active?.answered ? active.ts + 350 : null,
+          answerRejected: null,
           toolResultMatches: active?.answered ?? false,
           paneAdvanced: active?.advanced ?? false,
         } as T;
@@ -114,6 +121,7 @@ describe("real AskUserQuestion drill (#6533)", () => {
       document,
       now: () => clock,
       sleep: async ms => { clock += ms; },
+      armDeadline: () => () => {},
     };
 
     await runAskDrill(JSON.stringify({ project: "trantor" }), deps);
@@ -124,5 +132,32 @@ describe("real AskUserQuestion drill (#6533)", () => {
     expect(logs.some(line => line.includes("cold PASS"))).toBe(true);
     expect(logs[logs.length - 1]).toContain("real AskUserQuestion sidecar/card/answer path passed");
     expect(logs.some(line => line.includes("FAILED"))).toBe(false);
+  });
+
+  it("logs the current step when the hard deadline expires", async () => {
+    const logs: string[] = [];
+    const deps: AskDrillDeps = {
+      invoke: <T,>(cmd: string, args?: InvokeArgs): Promise<T> => {
+        if (cmd === "app_log") {
+          // SAFETY: this fake receives only the app_log object emitted by runAskDrill.
+          const fields = args as { line?: unknown } | undefined;
+          logs.push(String(fields?.line ?? ""));
+          // SAFETY: runAskDrill does not read app_log's resolved value.
+          return Promise.resolve(undefined as T);
+        }
+        return new Promise<T>(() => {});
+      },
+      document,
+      now: () => 1,
+      sleep: () => new Promise(() => {}),
+      armDeadline: (_ms, expire) => {
+        queueMicrotask(expire);
+        return () => {};
+      },
+    };
+
+    await runAskDrill(JSON.stringify({ project: "trantor" }), deps);
+
+    expect(logs.some(line => line.includes("FAILED: deadline at step"))).toBe(true);
   });
 });

@@ -21,6 +21,10 @@ struct AskSidecar {
     cwd: String,
     tool_use_id: Option<String>,
     questions: Vec<AskQuestion>,
+    #[serde(default)]
+    event: String,
+    #[serde(default)]
+    visible_ts: Option<u64>,
     #[allow(dead_code)]
     ts: u64,
 }
@@ -49,9 +53,12 @@ pub struct OrchAsk {
     session_id: String,
     tool_use_id: Option<String>,
     open: bool,
+    visible: bool,
     questions: Vec<AskQuestion>,
     #[serde(skip_serializing)]
     ts: u64,
+    #[serde(skip_serializing)]
+    visible_ts: Option<u64>,
 }
 
 type AskMap = BTreeMap<PathBuf, OrchAsk>;
@@ -104,8 +111,10 @@ fn read_sidecar(
         session_id: ask.session_id,
         tool_use_id: ask.tool_use_id,
         open: true,
+        visible: ask.visible_ts.is_some() || ask.event == "PermissionRequest",
         questions: ask.questions,
         ts: ask.ts,
+        visible_ts: ask.visible_ts,
     })
 }
 
@@ -192,7 +201,11 @@ fn prune_stale_with(
 fn reconcile(previous: &AskMap, current: &AskMap) -> Vec<OrchAsk> {
     let mut events = Vec::new();
     for (path, old) in previous {
-        if current.get(path) != Some(old) {
+        if current.get(path) != Some(old)
+            && current.get(path).is_none_or(|ask| {
+                ask.session_id != old.session_id || ask.tool_use_id != old.tool_use_id
+            })
+        {
             let mut closed = old.clone();
             closed.open = false;
             events.push(closed);
@@ -208,12 +221,20 @@ fn reconcile(previous: &AskMap, current: &AskMap) -> Vec<OrchAsk> {
 
 fn emit(window: &tauri::Window, ask: OrchAsk) -> bool {
     crate::app_trace(&format!(
-        "ask received: project={} session={} tool={} open={}",
+        "ask received: project={} session={} tool={} open={} visible={}",
         ask.project,
         ask.session_id,
         ask.tool_use_id.as_deref().unwrap_or("null"),
         ask.open,
+        ask.visible,
     ));
+    if ask.open && ask.visible {
+        crate::app_trace(&format!(
+            "ask visible session={} via=permission-request ts={}",
+            ask.session_id,
+            ask.visible_ts.unwrap_or_else(epoch_millis),
+        ));
+    }
     window.emit("orch-ask", ask).is_ok()
 }
 
@@ -323,88 +344,31 @@ pub fn ask_target(session_id: String) -> Option<String> {
     live_pane_for_session(session_id.trim())
 }
 
-fn wait_for_picker(pane: &str, question: &str) -> Result<(), String> {
-    let output = crate::identity_env::command("herdr")
-        .args([
-            "pane",
-            "wait-output",
-            pane,
-            "--match",
-            question,
-            "--source",
-            "recent-unwrapped",
-            "--timeout",
-            "10000",
-        ])
-        .env("PATH", crate::terminal_path())
-        .output()
-        .map_err(|error| format!("Could not inspect the question picker: {error}"))?;
-    if output.status.success() {
-        return Ok(());
-    }
-    let detail = String::from_utf8_lossy(if output.stderr.is_empty() {
-        &output.stdout
-    } else {
-        &output.stderr
-    });
-    Err(format!(
-        "Question picker did not become visible within 10 seconds — answer it in its terminal. {}",
-        detail.trim()
-    ))
-}
-
-fn answer_when_picker_visible_with(
+fn answer_session_with(
     session_id: &str,
-    question: &str,
     data: &str,
     pane_for: impl Fn(&str) -> Option<String>,
-    wait: impl Fn(&str, &str) -> Result<(), String>,
     send: impl Fn(&str, &str) -> Result<(), String>,
-    trace: impl Fn(String),
 ) -> Result<(), String> {
     let pane = pane_for(session_id)
         .ok_or_else(|| "No pane hosts this session — answer it in its terminal.".to_string())?;
-    if question.trim().is_empty() {
-        return Err("Question text is missing — answer it in its terminal.".into());
-    }
-    let started = std::time::Instant::now();
-    wait(&pane, question)?;
-    trace(format!(
-        "picker visible after {} ms session={} pane={}",
-        started.elapsed().as_millis(),
-        session_id,
-        pane,
-    ));
     send(&pane, data)
 }
 
-fn answer_session_blocking(
-    session_id: String,
-    question: String,
-    data: String,
-) -> Result<(), String> {
-    answer_when_picker_visible_with(
+fn answer_session_blocking(session_id: String, data: String) -> Result<(), String> {
+    answer_session_with(
         session_id.trim(),
-        &question,
         &data,
         live_pane_for_session,
-        wait_for_picker,
         |pane, text| crate::ask_answer(pane.to_string(), text.to_string()),
-        |line| crate::app_trace(&line),
     )
 }
 
 #[tauri::command]
-pub async fn ask_answer_session(
-    session_id: String,
-    question: String,
-    data: String,
-) -> Result<(), String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        answer_session_blocking(session_id, question, data)
-    })
-    .await
-    .map_err(|error| format!("question answer task failed: {error}"))?
+pub async fn ask_answer_session(session_id: String, data: String) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || answer_session_blocking(session_id, data))
+        .await
+        .map_err(|error| format!("question answer task failed: {error}"))?
 }
 
 #[derive(Debug, Serialize)]
@@ -427,6 +391,10 @@ pub struct AskDrillProbe {
     webview_event_ts: Option<u64>,
     card_mount_ts: Option<u64>,
     picker_visible: bool,
+    buttons_enabled_ts: Option<u64>,
+    answer_clicked_ts: Option<u64>,
+    answer_resolved_ts: Option<u64>,
+    answer_rejected: Option<String>,
     tool_result_matches: bool,
     pane_advanced: bool,
 }
@@ -684,6 +652,7 @@ pub fn ask_drill_probe(
             .filter(|line| {
                 line.contains(&format!("ask received: project={project} session={sid}"))
                     && line.contains("open=true")
+                    && line.contains("visible=false")
             })
             .count()
     });
@@ -694,7 +663,27 @@ pub fn ask_drill_probe(
         .as_deref()
         .and_then(|sid| trace_timestamp(&trace, "ask card mounted", sid));
     let picker_visible = resolved_session.as_deref().is_some_and(|sid| {
-        trace.contains("picker visible after") && trace.contains(&format!("session={sid}"))
+        trace
+            .lines()
+            .any(|line| line.contains("ask visible") && line.contains(&format!("session={sid}")))
+    });
+    let buttons_enabled_ts = resolved_session
+        .as_deref()
+        .and_then(|sid| trace_timestamp(&trace, "ask buttons enabled", sid));
+    let answer_clicked_ts = resolved_session
+        .as_deref()
+        .and_then(|sid| trace_timestamp(&trace, "ask answer clicked", sid));
+    let answer_resolved_ts = resolved_session
+        .as_deref()
+        .and_then(|sid| trace_timestamp(&trace, "ask answer resolved", sid));
+    let answer_rejected = resolved_session.as_deref().and_then(|sid| {
+        trace
+            .lines()
+            .rev()
+            .find(|line| {
+                line.contains("ask answer rejected") && line.contains(&format!("session={sid}"))
+            })
+            .map(str::to_string)
     });
     Ok(AskDrillProbe {
         session_id: resolved_session,
@@ -706,6 +695,10 @@ pub fn ask_drill_probe(
         webview_event_ts,
         card_mount_ts,
         picker_visible,
+        buttons_enabled_ts,
+        answer_clicked_ts,
+        answer_resolved_ts,
+        answer_rejected,
         tool_result_matches,
         pane_advanced,
     })
@@ -755,6 +748,8 @@ mod tests {
                 "question": "Ship it?", "header": "Ship", "multiSelect": false,
                 "options": [{ "label": "Yes", "description": "Proceed" }]
             }],
+            "event": "PreToolUse",
+            "visible_ts": null,
             "ts": 1,
         });
         fs::write(&path, value.to_string()).unwrap();
@@ -772,9 +767,20 @@ mod tests {
         assert_eq!(opened.len(), 1);
         assert!(opened[0].open);
 
+        let mut visible_value: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        visible_value["event"] = serde_json::json!("PermissionRequest");
+        visible_value["visible_ts"] = serde_json::json!(2);
+        fs::write(&path, visible_value.to_string()).unwrap();
+        let visible = scan_with(&dir, project_for, |_| {}).unwrap();
+        let visibility_update = reconcile(&first, &visible);
+        assert_eq!(visibility_update.len(), 1);
+        assert!(visibility_update[0].open);
+        assert!(visibility_update[0].visible);
+
         write_ask(&dir, "sid-one", Some("tool-two"), "/tmp/trantor");
         let replaced = scan_with(&dir, project_for, |_| {}).unwrap();
-        let replacement = reconcile(&first, &replaced);
+        let replacement = reconcile(&visible, &replaced);
         assert_eq!(replacement.len(), 2);
         assert!(!replacement[0].open);
         assert!(replacement[1].open);
@@ -833,6 +839,8 @@ mod tests {
             cwd: "/dev/other/deep/path".into(),
             tool_use_id: None,
             questions: Vec::new(),
+            event: "PreToolUse".into(),
+            visible_ts: None,
             ts: 0,
         };
         assert_eq!(
@@ -871,34 +879,24 @@ mod tests {
     }
 
     #[test]
-    fn answer_waits_for_visible_picker_before_sending() {
+    fn answer_routes_by_session_and_sends_immediately() {
         let steps = std::cell::RefCell::new(Vec::new());
-        answer_when_picker_visible_with(
+        answer_session_with(
             "session-one",
-            "Ship it?",
             "\r",
             |_| {
                 steps.borrow_mut().push("resolve".to_string());
                 Some("w2:p19".to_string())
             },
-            |pane, question| {
-                steps
-                    .borrow_mut()
-                    .push(format!("visible:{pane}:{question}"));
-                Ok(())
-            },
             |pane, _| {
                 steps.borrow_mut().push(format!("send:{pane}"));
                 Ok(())
             },
-            |line| steps.borrow_mut().push(line),
         )
         .unwrap();
         let steps = steps.into_inner();
         assert_eq!(steps[0], "resolve");
-        assert_eq!(steps[1], "visible:w2:p19:Ship it?");
-        assert!(steps[2].starts_with("picker visible after "));
-        assert_eq!(steps[3], "send:w2:p19");
+        assert_eq!(steps[1], "send:w2:p19");
     }
 
     #[test]

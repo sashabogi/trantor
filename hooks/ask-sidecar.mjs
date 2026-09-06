@@ -41,6 +41,7 @@ function existingOpen(path, sessionId) {
 function sameOpen(left, right) {
   return left.session_id === right.session_id && left.project === right.project &&
     left.cwd === right.cwd && (left.tool_use_id ?? null) === right.tool_use_id &&
+    left.event === right.event && (left.visible_ts ?? null) === right.visible_ts &&
     JSON.stringify(left.questions) === JSON.stringify(right.questions);
 }
 
@@ -52,13 +53,18 @@ function writeOpen(input, path) {
   const ctx = sessionContext(cwd);
   const stored = existingOpen(path, input.session_id);
   const incomingId = toolUseId(input);
+  const now = Date.now();
+  const permissionVisible = String(input.hook_event_name ?? "") === "PermissionRequest";
+  const visibleTs = stored?.visible_ts ?? (permissionVisible ? now : null);
   const payload = {
     session_id: String(input.session_id),
     project: ctx.project,
     cwd,
     tool_use_id: incomingId ?? stored?.tool_use_id ?? null,
     questions,
-    ts: Date.now(),
+    event: visibleTs === null ? "PreToolUse" : "PermissionRequest",
+    visible_ts: visibleTs,
+    ts: stored?.ts ?? now,
   };
   if (stored && sameOpen(stored, payload)) return;
   const dir = join(busDir(), "asks");
