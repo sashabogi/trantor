@@ -45,6 +45,26 @@
             "command": "node ${CLAUDE_PLUGIN_ROOT}/hooks/file-claim.mjs"
           }
         ]
+      },
+      {
+        "matcher": "AskUserQuestion",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node ${CLAUDE_PLUGIN_ROOT}/hooks/ask-sidecar.mjs"
+          }
+        ]
+      }
+    ],
+    "PermissionRequest": [
+      {
+        "matcher": "AskUserQuestion",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node ${CLAUDE_PLUGIN_ROOT}/hooks/ask-sidecar.mjs"
+          }
+        ]
       }
     ],
     "SubagentStart": [
@@ -85,6 +105,26 @@
             "command": "node ${CLAUDE_PLUGIN_ROOT}/hooks/todo-sync.mjs"
           }
         ]
+      },
+      {
+        "matcher": "AskUserQuestion",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node ${CLAUDE_PLUGIN_ROOT}/hooks/ask-sidecar.mjs"
+          }
+        ]
+      }
+    ],
+    "PostToolUseFailure": [
+      {
+        "matcher": "AskUserQuestion",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node ${CLAUDE_PLUGIN_ROOT}/hooks/ask-sidecar.mjs"
+          }
+        ]
       }
     ],
     "PreCompact": [
@@ -121,6 +161,15 @@
       }
     ],
     "Stop": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node ${CLAUDE_PLUGIN_ROOT}/hooks/ask-sidecar.mjs"
+          }
+        ]
+      },
       {
         "matcher": "",
         "hooks": [
