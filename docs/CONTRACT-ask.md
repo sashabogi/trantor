@@ -89,10 +89,11 @@ opens, closes, and later marks the card answered.
 
 ## Real-path gate
 
-`TRANTOR_ASK_DRILL` is rewritten to start a fresh scripted `claude -p` session, using the cheapest
-model and a narrow prompt, in a herdr pane whose cwd is the trantor checkout. Its transient trantor
-bus registration is expected. After the updated plugin is installed, that session genuinely calls
-`AskUserQuestion`. For both Chat already open and a cold Chat tab, the drill asserts: the sidecar
+`TRANTOR_ASK_DRILL` is rewritten to start a fresh interactive `claude --model haiku` session with
+a narrow prompt that calls `AskUserQuestion` once, in a herdr pane whose cwd is the trantor
+checkout. (`claude -p` cannot expose `AskUserQuestion`.) Its transient trantor bus registration is
+expected. After the updated plugin is installed, that session genuinely calls `AskUserQuestion`.
+For both Chat already open and a cold Chat tab, the drill asserts: the sidecar
 exists; app trace records `ask received`; the DOM card appears within one second of the hook and
 before the transcript grows; answering uses the real session-routed `ask_answer`/`send_text` path;
 the pane advances; the matching `tool_result` lands; the sidecar disappears; and the pending card
