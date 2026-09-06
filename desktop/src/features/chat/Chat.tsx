@@ -383,6 +383,16 @@ export const DEFAULT_CHAT_DEPS: ChatDeps = {
   TerminalPane,
 };
 
+/** An orch-status payload arrives as the emitter's object; a string is the test harness's shape. */
+function decodeOrchStatus(payload: unknown): { project: string; status: string } {
+  // SAFETY: the payload comes from our own Rust emitter (OrchStatusPayload) or from the test
+  // harness; both fields are re-checked by the caller before use, and a wrong shape falls through
+  // the caller's guard rather than being trusted.
+  const raw = (payload as { project?: unknown; status?: unknown } | string);
+  const obj = raw !== null && typeof raw === "object" ? raw : (JSON.parse(String(raw)) as { project?: unknown; status?: unknown });
+  return { project: String(obj.project ?? ""), status: String(obj.status ?? "") };
+}
+
 export function Chat({ project, sessionId, dock, onDock, onClose, deps = DEFAULT_CHAT_DEPS }: {
   project: string; sessionId?: string; dock: Dock; onDock: (d: Dock) => void; onClose: () => void;
   /** Test seam — production callers omit it and get the real modules. */
@@ -591,7 +601,7 @@ export function Chat({ project, sessionId, dock, onDock, onClose, deps = DEFAULT
         // invoke can miss that very first push outright; the bounded re-seed schedule below is
         // the belt for whatever this ordering fix still lets slip through.
         if (!history) {
-          offs.push(await listenFn<string>("orch-status", ev => {
+          offs.push(await listenFn<unknown>("orch-status", ev => {
             // #6094, 0.3.148/149 — the LIVE push emitted "ok=true" on the Rust side (confirmed
             // via app-trace) with NOT ONE "chat status ...: push=..." line following it — meaning
             // commitStatus was never even called, and this listener's own silent `catch {}` and
@@ -607,7 +617,10 @@ export function Chat({ project, sessionId, dock, onDock, onClose, deps = DEFAULT
             try {
               // SAFETY: payload comes from our own Rust emitter (orch-status), and both fields
               // are re-checked before use — a malformed payload falls through the guard or catch.
-              const p = JSON.parse(ev.payload) as { project: string; status: string };
+              // The Rust emitter sends a serialized struct, which Tauri hands the listener as an
+              // OBJECT; only the tests ever sent a string. Parsing an object threw on every live
+              // frame (#6094, the 0.3.148 trace: "FAILED to parse ... raw=[object Object]").
+              const p = decodeOrchStatus(ev.payload);
               if (p.project === project && p.status) {
                 commitStatus("push", nextSeq(), p.status);
               } else {

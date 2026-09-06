@@ -323,6 +323,60 @@ function makeBlockedDeps() {
 // operator can answer from Chat, a click writes the picker's real keystrokes into the live pane
 // (never a claim of its own), and the card only flips to answered once the transcript's own
 // tool_result lands for that call.
+describe("orch-status as the Rust emitter sends it (#6094)", () => {
+  // The emitter hands the listener an OBJECT; the older tests only ever sent JSON strings, so the
+  // live path threw "Unexpected identifier object" on every real frame and the status never moved.
+  it("an object payload commits the status instead of failing to parse", async () => {
+    const host = document.createElement("div"); document.body.appendChild(host);
+    const root = createRoot(host);
+    const handlers = new Map<string, Handler[]>();
+    const logged: string[] = [];
+    const deps: ChatDeps = {
+      invoke: <T,>(cmd: string, args?: InvokeArgs): Promise<T> => {
+        if (cmd === "app_log") {
+          // SAFETY: Chat calls app_log with a plain { line } object; the test only records the line.
+          const a = args as { line?: unknown } | undefined;
+          logged.push(String(a?.line ?? ""));
+          // SAFETY: app_log resolves to nothing Chat reads.
+          return Promise.resolve(null as T);
+        }
+        if (cmd === "orchestrator_chat") {
+          // SAFETY: Chat types orchestrator_chat as Promise<string> and parses the JSON envelope.
+          return Promise.resolve(JSON.stringify([[], [], 0, META, []]) as T);
+        }
+        if (cmd === "chat_watch") {
+          // SAFETY: Chat types chat_watch as Promise<ChatWatchResult>.
+          return Promise.resolve({ current: 0, generation: 1 } as T);
+        }
+        if (cmd === "orchestrator_status") {
+          // SAFETY: Chat types orchestrator_status as Promise<string>.
+          return Promise.resolve("working" as T);
+        }
+        // SAFETY: unknown commands resolve to null, matching the real seam's unhandled default.
+        return Promise.resolve(null as T);
+      },
+      listen: <T,>(event: string, cb: (ev: { payload: T }) => void): Promise<() => void> => {
+        // SAFETY: the handler is stored under the unknown-payload container and fired with exactly
+        // what listen delivered, the same way the harness above does.
+        handlers.set(event, [...(handlers.get(event) ?? []), cb as Handler]);
+        return Promise.resolve(() => {});
+      },
+      orchestratorOf: async () => ({ project: "p", agent: "orch", surface: "surf1", kind: "orch" }),
+      answerAtPane: async () => {},
+      Composer: () => null,
+      TerminalPane: () => null,
+    };
+    act(() => { root.render(<Chat project="p" dock="right" onDock={() => {}} onClose={() => {}} deps={deps} />); });
+    await flush(); await flush();
+    expect(host.textContent).toContain("working");
+    await act(async () => { for (const cb of handlers.get("orch-status") ?? []) cb({ payload: { project: "p", status: "blocked" } }); });
+    await flush(); await flush();
+    expect(logged.some(l => l.includes("FAILED to parse"))).toBe(false);
+    expect(host.textContent).not.toContain("working");
+    act(() => { root.unmount(); });
+  });
+});
+
 describe("AskCard question card (#6094)", () => {
   let host: HTMLDivElement;
   let root: Root;
