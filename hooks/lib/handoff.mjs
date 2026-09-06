@@ -250,10 +250,12 @@ export function lastRowMidTurn(transcriptPath) {
         if (blocks.some(b => b?.type === "tool_use")) return true;   // a result is still owed
         return false;                                                // text-only → turn said its piece
       }
-      // user row: tool_result blocks = the model is mid-cycle, about to continue
-      const blocks = Array.isArray(c) ? c : [];
-      if (blocks.some(b => b?.type === "tool_result")) return true;
-      return false;                                                  // a real user prompt = between turns
+      // user row: #6528 follow-up — a trailing user row of ANY kind means in flight. A
+      // tool_result is the model mid-cycle, and a PLAIN prompt is the model WORKING on that
+      // prompt: Claude Code does not flush the assistant turn until it ends, so the assistant
+      // row's absence is not idle evidence. The only idle evidence is the text-only assistant
+      // row above, or the Stop hook itself.
+      return true;
     }
     return false;
   } catch { return false; }

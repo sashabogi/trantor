@@ -32,7 +32,7 @@ console.log("# trantor handoff boundary-gate drill (#6528)");
 
 // A world whose session is MID-TURN: the transcript's last row is a tool_result (the model is
 // about to continue) and a sub-agent transcript was written seconds ago.
-function makeWorld({ midTurn = true, subagent = true } = {}) {
+function makeWorld({ midTurn = true, subagent = true, promptTail = false } = {}) {
   const w = mkdtempSync(join(tmpdir(), "tt-baton-gate-"));
   const BUS = join(w, ".agent-bus"); mkdirSync(join(BUS, "handoffs"), { recursive: true });
   const proj = join(w, "proj"); mkdirSync(proj, { recursive: true });
@@ -47,6 +47,7 @@ function makeWorld({ midTurn = true, subagent = true } = {}) {
     JSON.stringify({ type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: "tu1", content: "ok" }] } }),
   ];
   if (!midTurn) rows.push(JSON.stringify({ type: "assistant", message: { role: "assistant", content: [{ type: "text", text: "done — turn complete" }] } }));
+  if (promptTail) rows.push(JSON.stringify({ type: "user", message: { role: "user", content: "ok, next: map the onboarding flow" } }));
   writeFileSync(transcript, rows.join("\n") + "\n");
   if (subagent) {
     const sub = join(tdir, "t", "subagents");
@@ -154,6 +155,18 @@ console.log("\n7. lastRowMidTurn reads the tail the way the gate consumes it:");
   const W7b = makeWorld({ midTurn: false, subagent: false });
   ok("closing text last → idle", lastRowMidTurn(W7b.transcript) === false);
   ok("missing transcript → not mid-turn", lastRowMidTurn(join(W7.w, "nope.jsonl")) === false);
+}
+
+console.log("\n8. A trailing PLAIN user prompt is mid-turn, not idle (gate review 2026-09-06):");
+{
+  // Claude Code does not flush the assistant turn until it ENDS — a trailing user prompt with
+  // no assistant row after it is the model WORKING on that prompt. Reading it as idle armed a
+  // mid-turn fire at exactly the moment the user's next turn began. A trailing user row of ANY
+  // kind means in flight; the only idle evidence is a text-only assistant row (or the Stop hook).
+  const W8 = makeWorld({ promptTail: true, subagent: false });
+  ok("plain user prompt last → mid-turn", lastRowMidTurn(W8.transcript) === true);
+  const r = await runScript("bin/baton.mjs", W8, ["--write-only", "--reason", "unattended"]);
+  ok("the CLI arms on it, writes no record", handoffs(W8).length === 0 && !!readArm(W8), `${handoffs(W8).join(", ")} / ${r.so.slice(0, 120)}`);
 }
 
 console.log(`\n${fail === 0 ? "✅" : "❌"} handoff-boundary-gate: ${pass} passed, ${fail} failed`);
