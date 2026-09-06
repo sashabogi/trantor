@@ -461,10 +461,16 @@ describe("orch-ask is the pending-card source (#6533)", () => {
     const root = createRoot(host);
     const handlers = new Map<string, Handler[]>();
     const answers: Array<{ sessionId: string; question: string; data: string }> = [];
+    const traces: string[] = [];
     let answered = false;
     let answerTarget: string | null = "w2:p19";
     const deps: ChatDeps = {
-      invoke: <T,>(cmd: string): Promise<T> => {
+      invoke: <T,>(cmd: string, args?: InvokeArgs): Promise<T> => {
+        if (cmd === "app_log") {
+          // SAFETY: Chat sends app_log the documented object containing a string line.
+          const fields = args as { line?: unknown } | undefined;
+          traces.push(String(fields?.line ?? ""));
+        }
         if (cmd === "orchestrator_chat") {
           const backfill = answered
             ? [[askTurn], [{ tool_id: "ask1", ok: true, preview: "No" }], 1, META, []]
@@ -511,6 +517,8 @@ describe("orch-ask is the pending-card source (#6533)", () => {
     await flush(); await flush();
     await fire("orch-ask", nullIdAsk);
     expect(host.textContent).toContain("Ship it?");
+    expect(traces.some(line => line.includes("ask event in webview session=drill-session"))).toBe(true);
+    expect(traces.some(line => line.includes("ask card mounted session=drill-session"))).toBe(true);
     const no = [...host.querySelectorAll("button")].find(button => button.textContent?.includes("No"));
     await act(async () => { no?.dispatchEvent(new MouseEvent("click", { bubbles: true })); });
     await flush();

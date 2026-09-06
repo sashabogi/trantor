@@ -217,13 +217,26 @@ fn emit(window: &tauri::Window, ask: OrchAsk) -> bool {
     window.emit("orch-ask", ask).is_ok()
 }
 
+fn ask_emitter(window: tauri::Window) -> tokio::sync::mpsc::UnboundedSender<OrchAsk> {
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<OrchAsk>();
+    tauri::async_runtime::spawn(async move {
+        while let Some(ask) = rx.recv().await {
+            if !emit(&window, ask) {
+                crate::app_trace("ask emit failed");
+            }
+        }
+    });
+    tx
+}
+
 #[tauri::command]
 pub fn ask_watch(window: tauri::Window) -> Result<(), String> {
     let dir = crate::desktop_bus_dir().join("asks");
     std::fs::create_dir_all(&dir).map_err(|error| error.to_string())?;
     let replay = scan(&dir)?;
+    let emit_tx = ask_emitter(window);
     for ask in replay.values().cloned() {
-        if !emit(&window, ask) {
+        if emit_tx.send(ask).is_err() {
             return Err("failed to emit orch-ask replay".into());
         }
     }
@@ -262,7 +275,7 @@ pub fn ask_watch(window: tauri::Window) -> Result<(), String> {
             let Ok(current) = scan(&dir) else { continue };
             let changes = reconcile(&known, &current);
             known = current;
-            if changes.into_iter().any(|ask| !emit(&window, ask)) {
+            if changes.into_iter().any(|ask| emit_tx.send(ask).is_err()) {
                 break;
             }
         }
@@ -411,6 +424,8 @@ pub struct AskDrillProbe {
     transcript_lines: usize,
     trace_seen: bool,
     open_events: usize,
+    webview_event_ts: Option<u64>,
+    card_mount_ts: Option<u64>,
     picker_visible: bool,
     tool_result_matches: bool,
     pane_advanced: bool,
@@ -619,6 +634,19 @@ fn find_sidecar(marker: &str) -> Option<(PathBuf, AskSidecar)> {
         .next()
 }
 
+fn trace_timestamp(trace: &str, prefix: &str, session_id: &str) -> Option<u64> {
+    trace
+        .lines()
+        .filter(|line| line.contains(prefix) && line.contains(&format!("session={session_id}")))
+        .filter_map(|line| {
+            line.split_whitespace()
+                .find_map(|part| part.strip_prefix("ts="))?
+                .parse::<u64>()
+                .ok()
+        })
+        .min()
+}
+
 #[tauri::command]
 pub fn ask_drill_probe(
     project: String,
@@ -659,6 +687,12 @@ pub fn ask_drill_probe(
             })
             .count()
     });
+    let webview_event_ts = resolved_session
+        .as_deref()
+        .and_then(|sid| trace_timestamp(&trace, "ask event in webview", sid));
+    let card_mount_ts = resolved_session
+        .as_deref()
+        .and_then(|sid| trace_timestamp(&trace, "ask card mounted", sid));
     let picker_visible = resolved_session.as_deref().is_some_and(|sid| {
         trace.contains("picker visible after") && trace.contains(&format!("session={sid}"))
     });
@@ -669,6 +703,8 @@ pub fn ask_drill_probe(
         transcript_lines: transcript.lines().count(),
         trace_seen,
         open_events,
+        webview_event_ts,
+        card_mount_ts,
         picker_visible,
         tool_result_matches,
         pane_advanced,
@@ -874,6 +910,19 @@ mod tests {
             }
         });
         assert_eq!(workspace_ids(&value), Some(("w9".into(), "w9:p1".into())));
+    }
+
+    #[test]
+    fn drill_reads_webview_and_mount_timestamps_from_trace() {
+        let trace = concat!(
+            "x ask event in webview session=s1 open=true ts=110\n",
+            "x ask card mounted session=s1 tool=t1 ts=125\n",
+        );
+        assert_eq!(
+            trace_timestamp(trace, "ask event in webview", "s1"),
+            Some(110)
+        );
+        assert_eq!(trace_timestamp(trace, "ask card mounted", "s1"), Some(125));
     }
 
     #[test]

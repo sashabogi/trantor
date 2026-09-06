@@ -93,6 +93,8 @@ describe("real AskUserQuestion drill (#6533)", () => {
           transcriptLines: active?.answered ? 3 : 1,
           traceSeen: Boolean(active),
           openEvents: active ? 1 : 0,
+          webviewEventTs: active ? active.ts + 100 : null,
+          cardMountTs: active ? active.ts + 200 : null,
           pickerVisible: active?.answered ?? false,
           toolResultMatches: active?.answered ?? false,
           paneAdvanced: active?.advanced ?? false,
