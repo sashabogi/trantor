@@ -28,7 +28,7 @@ import {
   senderProjectOf, isLinkedProject,
 } from "../lib/turn-policy.mjs";
 import {
-  auditDutyNudges, dutyNudgeDirective, observedDutyNudgeIds, planDutyNudges,
+  auditDutyNudges, claudeTranscriptDir, dutyNudgeDirective, observedDutyNudgeIds, planDutyNudges,
 } from "../lib/duty-nudges.mjs";
 
 const AGENT = process.argv[2];
@@ -341,7 +341,19 @@ const ERRF = join(homedir(), ".agent-bus", `err-${AGENT}-${PROJ}.txt`);
 const DUTY_NUDGES = process.env.RUNNER_DUTY_NUDGES === "1";
 const DUTY_NUDGE_STATE = process.env.RUNNER_DUTY_NUDGE_STATE
   || join(homedir(), ".agent-bus", "duty-nudged.json");
-const TRANSCRIPT_DIR = join(homedir(), ".claude", "projects", TURN_DIR.replace(/[^a-zA-Z0-9]/g, "-"));
+const TRANSCRIPT_DIR = claudeTranscriptDir(TURN_DIR, homedir());
+
+function startDutyNudgeWatcher(plan, sinceMs) {
+  if (!DUTY_NUDGES || !plan.items.length) return () => {};
+  const stopPath = join(homedir(), ".agent-bus", `duty-nudge-watch-${process.pid}-${TURN + 1}.stop`);
+  try { unlinkSync(stopPath); } catch {}
+  const child = spawn(process.execPath, [
+    join(import.meta.dirname, "duty-nudge-watch.mjs"), TRANSCRIPT_DIR, DUTY_NUDGE_STATE,
+    String(sinceMs), JSON.stringify(plan), stopPath,
+  ], { detached: true, stdio: "ignore" });
+  child.unref();
+  return () => { try { writeFileSync(stopPath, ""); } catch {} };
+}
 
 // ---- undelivered wake messages (the runner owns delivery, not the hub) ----
 // The hub hands a message out exactly ONCE: the poll cursor advances the instant we read it, and
@@ -1094,7 +1106,10 @@ function askedExcerpt(message) {
       tailText: "\nAct on what's addressed to you, then end your turn.\n\n",
       rulesText: RULES, lessons,
     });
-    const ec = await runTurn(prompt, fresh, deliveryFails ? `${trigger} (redelivery)` : trigger);
+    const stopDutyNudgeWatcher = startDutyNudgeWatcher(dutyPlan, tStart);
+    let ec;
+    try { ec = await runTurn(prompt, fresh, deliveryFails ? `${trigger} (redelivery)` : trigger); }
+    finally { stopDutyNudgeWatcher(); }
     const secs = Math.round((Date.now() - tStart) / 1000);
     let skippedNudges = [];
     if (!ec && dutyPlan.items.length) {
