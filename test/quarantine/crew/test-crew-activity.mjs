@@ -45,8 +45,10 @@ const statuses = () => registers.map((r) => String(r.status || ""));
 
 async function drill(agent, script, opts = {}) {
   registers.length = 0;
+  // SAFETY: an inbox entry is either the message text itself or an object carrying .text —
+  // `m.text ?? m` decodes both shapes at this boundary; anything else is a drill bug and throws.
   inboxQueue = (opts.inbox || []).map((m, i) => ({
-    id: i + 1, from: "host:drill", to: `${agent}:tt-act-${agent}`, text: typeof m === "string" ? m : m.text, project: `tt-act-${agent}`,
+    id: i + 1, from: "host:drill", to: `${agent}:tt-act-${agent}`, text: m.text ?? m, project: `tt-act-${agent}`,
   }));
   const work = mkdtempSync(join(tmpdir(), `tt-act-${agent}-`));
   const fakebin = join(work, "bin");

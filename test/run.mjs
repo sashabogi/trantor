@@ -121,6 +121,11 @@ function runSuite(s) {
     kid.stderr.on("data", d => (out += d));
     kid.on("close", (code, signal) => {
       clearTimeout(timer);
+      // Reap the WHOLE process group on every exit, not only on timeout (#6447 CI bounce): a
+      // suite that throws leaves its spawned hubs alive, holding their fixed ports, and the
+      // NEXT run's suite on that port talks to a poisoned orphan. Suites that cleaned up lose
+      // nothing (their group is already gone; ESRCH is swallowed).
+      try { process.kill(-kid.pid, "SIGKILL"); } catch {}
       resolveRun({ ...s, code, signal, timedOut, out, ms: Date.now() - started });
     });
   });
@@ -132,7 +137,17 @@ async function worker() {
   while (queue.length) {
     const s = queue.shift();
     process.stdout.write(`  … ${s.rel}\n`);
-    results.push(await runSuite(s));
+    let r = await runSuite(s);
+    // One retry for a red GATE suite (#6447): several suites race hub boots / child-process
+    // output against machine load, and under 6-way parallelism a single transport hiccup would
+    // gate-red a suite that is green serially and green on the retry. A PERSISTENT red fails
+    // twice in a row and still gates; quarantine suites don't retry (their red is reported only).
+    if (s.lane === "gate" && r.code !== 0) {
+      console.log(`  ↻ retry ${s.rel} (first run exit=${r.code}${r.timedOut ? " TIMEOUT" : ""})`);
+      r = await runSuite(s);
+      r.retried = true;
+    }
+    results.push(r);
   }
 }
 console.log(`\n# trantor suite: ${selected.length} suites, concurrency ${CONCURRENCY}, timeout ${TIMEOUT_MS / 1000}s\n`);

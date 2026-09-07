@@ -12,7 +12,7 @@
 // Plus: deciding is owner-gated under enforce (never auto, never agent-side), decisions DM the
 // proposer, and everything lands in the ONE event log so the app streams it.
 import { spawn } from "node:child_process";
-import { mkdtempSync, mkdirSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, rmSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -118,11 +118,31 @@ try {
   ok("session filter", (mine.proposals || []).every(p => p.session === S) && (mine.proposals || []).length === 4, `got ${mine.proposals?.length}`);
 
   console.log("\n[8] the denial memory survives a hub restart (JSON store):");
-  await sleep(1500);                                  // let the 1s persist tick flush
-  hubA.kill(); await sleep(300);
+  // #6447: the fixed 1.5s "let the 1s persist tick flush" raced the tick under runner load — the
+  // kill landed before the flush and the restart came back with 1 proposal. Wait for the CONDITION
+  // (bus.json holds all four), never for the clock.
+  {
+    const statePath = join(dirA, "bus.json");
+    const flushStart = Date.now();
+    for (;;) {
+      let flushed = false;
+      try { flushed = (JSON.parse(readFileSync(statePath, "utf8")).proposals || []).length >= 4; } catch {}
+      if (flushed) break;
+      if (Date.now() - flushStart > 15000) throw new Error("hub persist tick did not flush 4 proposals in 15s");
+      await sleep(50);
+    }
+  }
+  hubA.kill();
+  for (let i = 0; hubA.exitCode === null && i < 100; i++) await sleep(50);   // gone before respawn
   hubA = spawnHub(PA, { dir: dirA });
   hubA.stderr.on("data", d => errA += d);
-  await sleep(800);
+  {
+    const bootStart = Date.now();                                            // wait for accept, not 800ms
+    for (;;) {
+      try { await fetch(`http://127.0.0.1:${PA}/proposals`); break; }
+      catch { if (Date.now() - bootStart > 15000) throw new Error("restarted hub did not come up in 15s"); await sleep(50); }
+    }
+  }
   const re2 = await A.post("/propose", { session: S, project: "govtest", ...BOUND(1) });
   ok("denied memory survives restart -> 409", re2.status === 409 && re2.note === "main is protected; use PRs", JSON.stringify(re2));
   const afterRestart = await A.get("/proposals?project=govtest");

@@ -3,7 +3,7 @@
 // these tests prove the PIPELINE — candidate selection, one batched call, summaries landing on the
 // hub and surviving as card fields — not the cheap model's prose.
 import { spawn, spawnSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, writeFileSync, chmodSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, chmodSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -39,21 +39,40 @@ function spawnHub() {
     stdio: ["ignore", "ignore", "pipe"],
   });
 }
+// #6447: under the parallel runner a single in-flight request can be refused while the box is
+// saturated (the hub is up — the boot gate below proved it). Retry the TRANSPORT a bounded 3×,
+// 250ms apart; a hub that is actually dead fails every retry and the suite still goes red.
+async function fetchJson(url, opts) {
+  let last;
+  for (let i = 0; i < 3; i++) {
+    try {
+      const r = await fetch(url, opts);
+      return await r.json();
+    } catch (e) { last = e; await sleep(250); }
+  }
+  throw last;
+}
 const api = {
-  post: (p, b) => fetch(`http://127.0.0.1:${P}${p}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(b) }).then(r => r.json()),
-  get: (p) => fetch(`http://127.0.0.1:${P}${p}`).then(r => r.json()),
+  post: (p, b) => fetchJson(`http://127.0.0.1:${P}${p}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(b) }),
+  get: (p) => fetchJson(`http://127.0.0.1:${P}${p}`),
 };
 
 console.log("# trantor narrative-cards tests");
 const hub = spawnHub();
 // #6447: the parallel runner exposed the fixed 800ms boot sleep — under load the hub was not
-// listening yet and the first fetch died with "fetch failed". Wait for the hub to ACCEPT, not
-// for the clock (#6084 doctrine); a fixed sleep measures the machine's load, not the behaviour.
+// listening yet and the first fetch died with "fetch failed". And waiting for the PORT alone is
+// still a race: the `run()` children resolve the hub from HOME/.agent-bus/config.json (there is
+// no env override), and until the hub writes it they fall back to 127.0.0.1:4477 — the operator's
+// LIVE hub. Wait for the config to name THIS hub (#6084 doctrine: wait for the condition).
 {
   const bootStart = Date.now();
+  const cfgPath = join(dir, ".agent-bus", "config.json");
   for (;;) {
-    try { await fetch(`http://127.0.0.1:${P}/health`); break; }
-    catch { if (Date.now() - bootStart > 15000) throw new Error("hub did not come up in 15s"); await sleep(100); }
+    let ready = false;
+    try { ready = JSON.parse(readFileSync(cfgPath, "utf8")).url === `http://127.0.0.1:${P}`; } catch {}
+    if (ready) break;
+    if (Date.now() - bootStart > 15000) throw new Error("hub config did not name the drill hub in 15s");
+    await sleep(50);
   }
 }
 try {

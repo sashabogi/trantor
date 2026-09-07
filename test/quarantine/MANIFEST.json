@@ -14,6 +14,20 @@
       "reason": "The slow-hook drill spawns a hook whose body is a real 5s setTimeout and asserts the hook runner times it out (child timeout fails open) — a race between two real clocks under load.",
       "quarantined": "2026-09-06",
       "expires": "2026-09-13"
+    },
+    {
+      "suite": "quarantine/crew/test-crew-activity.mjs",
+      "card": 6588,
+      "reason": "Asserts the crew-runner's status SEQUENCE (crew member booting | working · kickoff | idle) through a real spawned runner turn — the ordering races real process scheduling and goes red on CI runners and loaded machines, green elsewhere. Never in the old &&-chain; the #6447 runner surfaced it.",
+      "quarantined": "2026-09-07",
+      "expires": "2026-09-14"
+    },
+    {
+      "suite": "quarantine/crew/test-spawn-root.mjs",
+      "card": 6588,
+      "reason": "Spawns the REAL opencode CLI and asserts its recorded argv pins --dir to the seat worktree; where opencode is absent or shaped differently (CI runner) the spawn list differs and the drill crashes on a missing argv element. Never in the old &&-chain; surfaced by the #6447 runner.",
+      "quarantined": "2026-09-07",
+      "expires": "2026-09-14"
     }
   ]
 }
