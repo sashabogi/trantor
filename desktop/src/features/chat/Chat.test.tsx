@@ -1514,3 +1514,95 @@ describe("prose chips read with their question (#6702)", () => {
     expect(buttons.map(b => b.title)).toEqual([ask, ask]);
   });
 });
+
+// #5993, third reopen (app 0.3.162) — every reopen was diagnosed in code while the built app
+// showed nothing, so the app now says WHY the row is hidden: one app_log line naming the first
+// gate input that failed, deduped, and never a line while the chips are showing. The extractor
+// case carries the turn's tail, which is the idiom the extractor missed.
+describe("chip trace: the app names the input that hid the chips (#5993)", () => {
+  let host: HTMLDivElement;
+  let root: Root;
+
+  beforeEach(() => {
+    host = document.createElement("div");
+    document.body.appendChild(host);
+    root = createRoot(host);
+  });
+
+  afterEach(() => {
+    act(() => root.unmount());
+    host.remove();
+  });
+
+  function tracingDeps(hosted = true) {
+    const d = makeDeps();
+    const lines: string[] = [];
+    const deps: ChatDeps = {
+      ...d.deps,
+      invoke: <T,>(cmd: string, args?: InvokeArgs): Promise<T> => {
+        if (cmd === "app_log") {
+          // SAFETY: every app_log call in Chat.tsx passes a plain `{ line: string }` object.
+          lines.push((args as { line: string } | undefined)?.line ?? "");
+        }
+        return d.deps.invoke<T>(cmd, args);
+      },
+      orchestratorOf: async () => hosted ? { project: "p", agent: "orch", surface: "surf1", kind: "orch" } : null,
+    };
+    return { deps, handlers: d.handlers, lines };
+  }
+
+  const chipLines = (lines: string[]) => lines.filter(l => l.startsWith("chat chips p:"));
+
+  async function land(handlers: Map<string, Handler[]>, text: string) {
+    await act(async () => {
+      for (const cb of handlers.get("chat-rows") ?? []) cb({ payload: JSON.stringify({
+        project: "p", sessionId: "s1", after: 0, total: 1, results: [], meta: META,
+        turns: [{ role: "assistant", blocks: [{ kind: "text", text }] }],
+      }) });
+    });
+    await flush();
+  }
+
+  it("an idle ask-less turn traces the extractor gap once, with the turn's tail", async () => {
+    const { deps, handlers, lines } = tracingDeps();
+    act(() => { root.render(<Chat project="p" dock="right" onDock={() => {}} onClose={() => {}} deps={deps} />); });
+    await flush();
+    await flush();
+    await land(handlers, "Landed on the seat.\n\nNothing to swap.");
+    await flush();
+    expect(host.querySelector('[data-testid="suggestion-chips"]')).toBeNull();
+    expect(chipLines(lines)).toEqual([
+      'chat chips p: hidden by suggestions.length===0 (last turn ends: "Landed on the seat. Nothing to swap.")',
+    ]);
+  });
+
+  it("a working orchestrator traces 'working', and the pushed idle flips the row on with no further line", async () => {
+    const { deps, handlers, lines } = tracingDeps();
+    act(() => { root.render(<Chat project="p" dock="right" onDock={() => {}} onClose={() => {}} deps={deps} />); });
+    await flush();
+    await flush();
+    await act(async () => {
+      for (const cb of handlers.get("orch-status") ?? []) cb({ payload: JSON.stringify({ project: "p", status: "working" }) });
+    });
+    await land(handlers, "Staged on the seat. Say the word and it goes in.");
+    expect(host.querySelector('[data-testid="suggestion-chips"]')).toBeNull();
+    expect(chipLines(lines)).toEqual(["chat chips p: hidden by working"]);
+    await act(async () => {
+      for (const cb of handlers.get("orch-status") ?? []) cb({ payload: JSON.stringify({ project: "p", status: "idle" }) });
+    });
+    await flush();
+    const chips = host.querySelector('[data-testid="suggestion-chips"]');
+    expect(chips).not.toBeNull();
+    expect([...chips!.querySelectorAll("button")].filter(b => b.textContent !== "×").map(b => b.textContent)).toEqual(["yes"]);
+    expect(chipLines(lines)).toEqual(["chat chips p: hidden by working"]);
+  });
+
+  it("no hosted pane traces 'no target'", async () => {
+    const { deps, handlers, lines } = tracingDeps(false);
+    act(() => { root.render(<Chat project="p" dock="right" onDock={() => {}} onClose={() => {}} deps={deps} />); });
+    await flush();
+    await flush();
+    await land(handlers, "Just say the word and I'll ship it.");
+    expect(chipLines(lines)).toEqual(["chat chips p: hidden by no target"]);
+  });
+});

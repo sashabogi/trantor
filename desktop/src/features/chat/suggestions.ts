@@ -14,10 +14,16 @@ const YES_NO_OPENER =
   /^(should|shall|want|do you want|can|could|may|is|are|would|did|does|have|has)\b/i;
 
 // Rule 2's vocabulary: the words an orchestrator asks to hear back verbatim. "say X or Y" with
-// words outside this set is rule 4's either/or; "say the word" matches nothing here on purpose.
+// words outside this set is rule 4's either/or; "say the word" is rule 2b's imperative confirm.
 const SAY_WORD = /\bsay\s+["'`]?(go|yes|ok|okay|ship|approve|proceed|merge)\b/i;
 const WAITS_ON_YOUR_WORD = /\bwaits?\s+(?:on|for)\s+your\s+["'`]?(go|yes|ok|okay)\b/i;
 const AFFIRMATIONS = new Set(["yes", "ok", "okay", "approve"]);
+// Rule 2b (#5993, app 0.3.162): the imperative confirm names no word to say back — "say the
+// word and it goes in", "just say the word and I'll ship it", "let me know" — yet it is the
+// orchestrator's most common idle ask now, and it went unchipped. "let me know what/which/how…"
+// is an open question and stays silent.
+const IMPERATIVE_CONFIRM =
+  /\b(?:say the word|give me the (?:go|nod|word)|let me know(?!\s+(?:what|which|where|how|why|who)\b))\b/i;
 
 /** The closing sentences are where an ask lives; a paragraph of context above it is noise. */
 function closingSentences(text: string): string[] {
@@ -63,6 +69,14 @@ export function suggestionsFromTurn(text: string): Suggestion[] {
   if (!pushAsk && last.endsWith("?") && YES_NO_OPENER.test(last)) {
     push({ text: "yes", tooltip: last, ask: last });
     push({ text: "no", tooltip: last, ask: last });
+  }
+
+  // 2b. The imperative confirm, when nothing more specific asked: "say the word" names no word,
+  //     so the answer is the affirmation itself. Nearest closing sentence wins. No "no" chip:
+  //     the way to decline "say the word" is to not say it.
+  if (chips.length === 0) {
+    const sentence = [...closing].reverse().find(s => IMPERATIVE_CONFIRM.test(s));
+    if (sentence) push({ text: "yes", tooltip: sentence, ask: sentence });
   }
 
   // 4. "say crashed or survived" — either/or, both words verbatim.
