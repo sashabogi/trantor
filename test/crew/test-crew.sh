@@ -7,7 +7,7 @@
 # down() against a temp HOME with STUBBED osascript/tmux (no windows spawned, no tmux needed) and assert
 # which STATE rows survive. This is the safety fix — one session's teardown must never touch another's crew.
 set -u
-ROOT="$(cd "$(dirname "$0")" && pwd)"
+ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 CREW=("$(command -v node)" "$ROOT/bin/crew.mjs")
 PASS=0; FAIL=0
 ok(){ if eval "$2"; then PASS=$((PASS+1)); echo "  ✓ $1"; else FAIL=$((FAIL+1)); echo "  ✗ $1  [$2]"; fi; }

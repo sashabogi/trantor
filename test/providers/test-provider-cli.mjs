@@ -11,7 +11,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { drillEnv } from "../drill-env.mjs";
 
-const ROOT = fileURLToPath(new URL("../../..", import.meta.url));
+const ROOT = fileURLToPath(new URL("../..", import.meta.url));
 let fail = 0; const ok = (c, m) => { console.log((c ? "✓" : "✗ FAIL") + " " + m); if (!c) fail++; };
 
 const run = (bin, args, home, env = {}) => spawnSync(process.execPath, [join(ROOT, "bin", bin), ...args], {

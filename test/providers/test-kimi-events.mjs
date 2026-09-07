@@ -19,7 +19,7 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { randomBytes } from "node:crypto";
 import { drillEnv } from "../drill-env.mjs";
 
-const ROOT = dirname(fileURLToPath(new URL("../../..", import.meta.url)));
+const ROOT = fileURLToPath(new URL("../..", import.meta.url)).replace(/\/$/, "");
 const BRIDGE = process.env.KIMI_TEST_BRIDGE || join(ROOT, "kimi", "bridge.mjs");
 let pass = 0, fail = 0;
 const ok = (n, c, e = "") => { if (c) { pass++; console.log(`  ✓ ${n}`); } else { fail++; console.log(`  ✗ ${n}${e ? ` — ${e}` : ""}`); } };

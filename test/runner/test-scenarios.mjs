@@ -10,7 +10,7 @@ import { fileURLToPath } from "node:url";
 import { drillEnv } from "../drill-env.mjs";
 import { generate, signRequest } from "../../lib/identity.mjs";
 
-const ROOT = dirname(fileURLToPath(new URL("../../..", import.meta.url)));
+const ROOT = fileURLToPath(new URL("../..", import.meta.url)).replace(/\/$/, "");
 const PORT = 4951;
 const HUB = `http://127.0.0.1:${PORT}`;
 const FAKE_HOME = mkdtempSync(join(tmpdir(), "ab-scn-"));

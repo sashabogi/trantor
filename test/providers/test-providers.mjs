@@ -13,7 +13,7 @@ import { drillEnv } from "../drill-env.mjs";
 import { parseEnvFile } from "../../lib/provider-keys.mjs";
 import { PROVIDERS, STATES, ACTIONS, providerStatus, providerVerify, balancesProbeForDrills } from "../../lib/providers.mjs";
 
-const ROOT = fileURLToPath(new URL("../../..", import.meta.url));
+const ROOT = fileURLToPath(new URL("../..", import.meta.url));
 let pass = 0, fail = 0;
 const ok = (name, cond, extra = "") => { const line = `${cond ? "✓" : "✗ FAIL"} ${name}${cond || !extra ? "" : " — " + extra}`; console.log(line); cond ? pass++ : fail++; };
 

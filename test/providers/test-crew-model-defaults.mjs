@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
 import { drillEnv } from "../drill-env.mjs";
 
-const root = dirname(fileURLToPath(new URL("../../..", import.meta.url)));
+const root = fileURLToPath(new URL("../..", import.meta.url)).replace(/\/$/, "");
 const home = mkdtempSync(join(tmpdir(), "trantor-crew-models-"));
 const fakebin = join(home, "fakebin");
 let passed = 0;

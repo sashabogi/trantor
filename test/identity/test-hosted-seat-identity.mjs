@@ -9,7 +9,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { drillEnv } from "../drill-env.mjs";
 
-const ROOT = fileURLToPath(new URL("../../..", import.meta.url));
+const ROOT = fileURLToPath(new URL("../..", import.meta.url));
 const work = mkdtempSync(join(tmpdir(), "trantor-hosted-identity-"));
 const home = join(work, "home");
 const bus = join(home, ".agent-bus");
