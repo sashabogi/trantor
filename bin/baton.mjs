@@ -91,7 +91,7 @@ function autoBaton() {
     console.log(`⏸ handoff armed — it fires when this turn finishes (hard cap ${Math.round(armMaxMs() / 60000)}m: the next tool boundary fires it). No record written yet.`);
     process.exit(0);
   }
-  const { file } = writeHandoff({ projectDir: cwd, sessionId, transcript, trigger, force, projectName: project });   // operator-typed = intentional, bypass the storm guard
+  const { file } = writeHandoff({ projectDir: cwd, sessionId, transcript, trigger, force: true, projectName: project });   // the command itself is the operator's intent: it bypasses the storm guard; --force only skips the turn-boundary gate above (#6528)   // operator-typed = intentional, bypass the storm guard
   console.log(`📋 handoff saved for ${project}: ${file}`);
   // --write-only: the in-app flow (#5509). The app ends the pane's session itself and reopens it
   // through `trantor open`, which claims this handoff — a Terminal window here would be exactly the
