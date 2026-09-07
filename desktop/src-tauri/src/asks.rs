@@ -757,14 +757,21 @@ pub fn ask_drill_close(project: String, workspace: String) -> Result<(), String>
 mod tests {
     use super::*;
     use std::fs;
+    use std::sync::atomic::{AtomicU64, Ordering};
     use std::time::{SystemTime, UNIX_EPOCH};
+
+    static NEXT_TEMP_DIR_ID: AtomicU64 = AtomicU64::new(0);
 
     fn temp_dir() -> PathBuf {
         let nonce = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
             .unwrap_or(0);
-        let dir = std::env::temp_dir().join(format!("trantor-asks-{}-{nonce}", std::process::id()));
+        let sequence = NEXT_TEMP_DIR_ID.fetch_add(1, Ordering::Relaxed);
+        let dir = std::env::temp_dir().join(format!(
+            "trantor-asks-{}-{nonce}-{sequence}",
+            std::process::id()
+        ));
         fs::create_dir_all(&dir).unwrap();
         dir
     }
