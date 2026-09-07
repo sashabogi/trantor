@@ -155,14 +155,16 @@ mod tests {
     /// with a FRESH read (simulating the app relaunching and re-parsing config.json from
     /// scratch) — both stay dismissed. Clearing one project's dismissal removes only that row. A
     /// new session id for the same project is a separate row the clear never touched.
+    /// right_panel.rs and onboarding.rs each have an equivalent real-path test that also
+    /// repoints AGENT_BUS_DIR — crate::BUS_DIR_TEST_LOCK serializes all three so their
+    /// concurrent set_var/remove_var calls never race the shared process environ block.
     #[test]
     fn the_real_path_two_dismissed_sessions_survive_a_simulated_relaunch() {
+        let _guard = crate::BUS_DIR_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let prior = std::env::var("AGENT_BUS_DIR").ok();
         let base = std::env::temp_dir().join(format!("trantor-dismissals-test-{}", std::process::id()));
         let _ = fs::remove_dir_all(&base);
         fs::create_dir_all(&base).unwrap();
-        // SAFETY: this is the crate's only test touching AGENT_BUS_DIR for dismissals (grepped
-        // alongside onboarding.rs's equivalent test before adding it) — no other test in this
-        // module observes or races this process-wide mutation.
         unsafe { std::env::set_var("AGENT_BUS_DIR", &base) };
 
         assert!(list().unwrap().is_empty(), "a fresh install has nothing dismissed");
@@ -187,7 +189,10 @@ mod tests {
         assert!(final_list.iter().any(|d| d.project == "tiny-timer" && d.session_id == "wM:p9"));
         assert!(!final_list.iter().any(|d| d.project == "tiny-timer" && d.session_id == "wM:p1"), "the cleared session must not reappear");
 
-        unsafe { std::env::remove_var("AGENT_BUS_DIR") };
+        match prior {
+            Some(v) => unsafe { std::env::set_var("AGENT_BUS_DIR", v) },
+            None => unsafe { std::env::remove_var("AGENT_BUS_DIR") },
+        }
         let _ = fs::remove_dir_all(&base);
     }
 }

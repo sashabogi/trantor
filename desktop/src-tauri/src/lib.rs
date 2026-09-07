@@ -3406,6 +3406,18 @@ pub(crate) fn desktop_bus_dir() -> PathBuf {
         })
 }
 
+/// Serializes every test that repoints the process-wide `AGENT_BUS_DIR` env var at a scratch
+/// dir to prove its config.json module survives a simulated relaunch (right_panel.rs,
+/// onboarding.rs, dismissals.rs each have one). `set_var`/`remove_var` mutate the single
+/// process-wide environ block non-atomically — two of these tests running concurrently under
+/// `cargo test`'s default thread pool could each read the other's scratch dir, or race any other
+/// thread's unrelated `getenv` against the mutation. Each test that touches AGENT_BUS_DIR must
+/// hold this for its ENTIRE body (acquire before the first set_var, release only after the env is
+/// restored), and restore the PRIOR value rather than a bare remove_var, so a test that happens
+/// to run right after another real AGENT_BUS_DIR consumer never wipes a value that consumer set.
+#[cfg(test)]
+pub(crate) static BUS_DIR_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 fn find_herdr_binary() -> Option<PathBuf> {
     let home = std::env::var("HOME").unwrap_or_default();
     let local = PathBuf::from(&home).join(".local/bin/herdr");

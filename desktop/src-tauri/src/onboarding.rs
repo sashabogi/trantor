@@ -171,15 +171,16 @@ mod tests {
     /// The real path end to end, against actual disk: a fresh bus dir shows the wizard, a
     /// pre-existing one (a hub pin already on disk) is migrated straight past it, and the public
     /// get/set_step/close/reopen commands round-trip through the same config.json file a real
-    /// launch would use. The only test in this crate that touches AGENT_BUS_DIR — safe to run
-    /// alongside the rest of the suite because nothing else reads or sets it.
+    /// launch would use. right_panel.rs and dismissals.rs each have an equivalent real-path test
+    /// that also repoints AGENT_BUS_DIR — crate::BUS_DIR_TEST_LOCK serializes all three so their
+    /// concurrent set_var/remove_var calls never race the shared process environ block.
     #[test]
     fn the_real_path_a_fresh_dir_then_an_existing_one() {
+        let _guard = crate::BUS_DIR_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let prior = std::env::var("AGENT_BUS_DIR").ok();
         let base = std::env::temp_dir().join(format!("trantor-onboarding-test-{}", std::process::id()));
         let _ = fs::remove_dir_all(&base);
         fs::create_dir_all(&base).unwrap();
-        // SAFETY: this is the crate's only test touching AGENT_BUS_DIR (grepped before adding
-        // it), so no other test can observe or race this process-wide mutation.
         unsafe { std::env::set_var("AGENT_BUS_DIR", &base) };
 
         // Fresh install: no config.json at all yet.
@@ -209,7 +210,10 @@ mod tests {
         let migrated = get().unwrap();
         assert!(migrated.closed_at.is_some(), "a pre-existing hub pin must never see the wizard");
 
-        unsafe { std::env::remove_var("AGENT_BUS_DIR") };
+        match prior {
+            Some(v) => unsafe { std::env::set_var("AGENT_BUS_DIR", v) },
+            None => unsafe { std::env::remove_var("AGENT_BUS_DIR") },
+        }
         let _ = fs::remove_dir_all(&base);
     }
 }

@@ -113,12 +113,14 @@ mod tests {
     /// other's.
     #[test]
     fn the_real_path_two_projects_survive_a_simulated_relaunch() {
+        // Held for the WHOLE body: right_panel, onboarding and dismissals each repoint
+        // AGENT_BUS_DIR for their own real-path test, and set_var/remove_var on the shared
+        // process environ block is not safe to run concurrently across them (crate::BUS_DIR_TEST_LOCK).
+        let _guard = crate::BUS_DIR_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let prior = std::env::var("AGENT_BUS_DIR").ok();
         let base = std::env::temp_dir().join(format!("trantor-rightpanel-test-{}", std::process::id()));
         let _ = fs::remove_dir_all(&base);
         fs::create_dir_all(&base).unwrap();
-        // SAFETY: this is the crate's only test touching AGENT_BUS_DIR for right_panel (grepped
-        // alongside dismissals.rs's equivalent test before adding it) — no other test in this
-        // module observes or races this process-wide mutation.
         unsafe { std::env::set_var("AGENT_BUS_DIR", &base) };
 
         assert!(get("trantor".into()).unwrap().is_none(), "a fresh install has nothing stored");
@@ -137,7 +139,10 @@ mod tests {
         assert_eq!(get("trantor".into()).unwrap().unwrap().tab, "files");
         assert_eq!(get("crebral-health".into()).unwrap().unwrap().tab, "git");
 
-        unsafe { std::env::remove_var("AGENT_BUS_DIR") };
+        match prior {
+            Some(v) => unsafe { std::env::set_var("AGENT_BUS_DIR", v) },
+            None => unsafe { std::env::remove_var("AGENT_BUS_DIR") },
+        }
         let _ = fs::remove_dir_all(&base);
     }
 }
