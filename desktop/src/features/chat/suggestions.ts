@@ -4,7 +4,11 @@
 // closing sentences into at most three chip labels, or none. The transcript does not record the
 // suggestion text itself — only `promptSource: "suggestion_accepted"` when one is taken — so
 // adoption is evaluated later by counting those turns against chip clicks, not here.
-export type Suggestion = { text: string; tooltip?: string };
+// #6702 — a chip alone is a reinvented yes/no; the terminal shows what you're saying yes TO. So
+// a prose chip carries the closing sentence it was read from: `tooltip` is what the button shows
+// on hover, `ask` is what the chip row's lead-in echoes (the two differ for a numbered pick, where
+// the tooltip is the option and the ask is the sentence that asked to pick).
+export type Suggestion = { text: string; tooltip?: string; ask?: string };
 
 const YES_NO_OPENER =
   /^(should|shall|want|do you want|can|could|may|is|are|would|did|does|have|has)\b/i;
@@ -37,7 +41,7 @@ export function suggestionsFromTurn(text: string): Suggestion[] {
   // 1. A trailing push ask — the most common end-of-turn in this codebase's life. It consumes
   //    the final sentence: "should I push?" is a push question, not ALSO a yes/no question.
   const pushAsk = /\bpush\b\s*\?/i.test(last);
-  if (pushAsk) push({ text: "push it" });
+  if (pushAsk) push({ text: "push it", tooltip: last, ask: last });
 
   // 2. "say <word>", the operator's own idiom for "answer with exactly this word". "Say go."
   //    was the original; the orchestrator now confirms in prose too ("Say yes and I ship it.",
@@ -48,8 +52,8 @@ export function suggestionsFromTurn(text: string): Suggestion[] {
     const m = sentence.match(SAY_WORD) ?? sentence.match(WAITS_ON_YOUR_WORD);
     if (!m) continue;
     const word = m[1].toLowerCase();
-    push({ text: word });
-    if (AFFIRMATIONS.has(word)) push({ text: "no" });
+    push({ text: word, tooltip: sentence, ask: sentence });
+    if (AFFIRMATIONS.has(word)) push({ text: "no", tooltip: sentence, ask: sentence });
     break;
   }
 
@@ -57,24 +61,27 @@ export function suggestionsFromTurn(text: string): Suggestion[] {
   //    open question — "what next?" — is NOT yes/no; inventing chips would put words in the
   //    operator's mouth.)
   if (!pushAsk && last.endsWith("?") && YES_NO_OPENER.test(last)) {
-    push({ text: "yes" });
-    push({ text: "no" });
+    push({ text: "yes", tooltip: last, ask: last });
+    push({ text: "no", tooltip: last, ask: last });
   }
 
   // 4. "say crashed or survived" — either/or, both words verbatim.
   for (const sentence of closing) {
     const m = sentence.match(/\bsay\s+["'`]?([A-Za-z][\w-]*)["'`]?\s+or\s+["'`]?([A-Za-z][\w-]*)["'`]?\s*[?.!]?$/i);
     if (m) {
-      push({ text: m[1].toLowerCase() === "go" ? "go" : m[1] });
-      push({ text: m[2].toLowerCase() === "go" ? "go" : m[2] });
+      push({ text: m[1].toLowerCase() === "go" ? "go" : m[1], tooltip: sentence, ask: sentence });
+      push({ text: m[2].toLowerCase() === "go" ? "go" : m[2], tooltip: sentence, ask: sentence });
       break;
     }
   }
 
   // 5. A numbered list the message asks to pick from — chips "1", "2"… with the option's first
   //    words as the tooltip (the label stays short; the meaning rides the hover).
-  const asksPick = closing.some(s => /\b(pick|choose|which)\b/i.test(s));
-  if (asksPick) {
+  //    The sentence splitter runs "1." lines together with the cue, so the ask is the cue's own
+  //    LINE ("Which one?"), not the chunk it landed in.
+  const pickSentence = closing.find(s => /\b(pick|choose|which)\b/i.test(s));
+  const pickAsk = pickSentence?.split("\n").map(l => l.trim()).filter(l => /\b(pick|choose|which)\b/i.test(l)).pop() ?? pickSentence;
+  if (pickAsk) {
     const options: string[] = [];
     for (const line of text.split("\n")) {
       const m = line.match(/^\s*(\d+)[.)]\s+(.*)$/);
@@ -83,7 +90,7 @@ export function suggestionsFromTurn(text: string): Suggestion[] {
     for (let i = 1; i < options.length && chips.length < 3; i++) {
       const body = options[i];
       if (!body) continue;
-      push({ text: String(i), tooltip: body.length > 60 ? `${body.slice(0, 59)}…` : body });
+      push({ text: String(i), tooltip: body.length > 60 ? `${body.slice(0, 59)}…` : body, ask: pickAsk });
     }
   }
 
@@ -112,4 +119,25 @@ export function suggestionsFromTurns(turnTextsNewestFirst: string[]): Suggestion
  *  transcript-agnostic extractor its neighbors are. */
 export function suggestionsFromAskOptions(options: { label: string; description: string }[]): Suggestion[] {
   return options.slice(0, 3).map(o => ({ text: o.label, tooltip: o.description || undefined }));
+}
+
+/** The chip row's lead-in (#6702): the ask itself, trimmed, in place of the bare word
+ *  "suggested" — so "yes" reads as yes to THIS. Whitespace collapses, and a long sentence is cut
+ *  at a word boundary with an ellipsis; the full sentence stays on each chip's hover. */
+export const LEAD_IN_MAX = 72;
+
+export function trimAsk(ask: string, max = LEAD_IN_MAX): string {
+  const flat = ask.replace(/\s+/g, " ").trim();
+  if (flat.length <= max) return flat;
+  const cut = flat.slice(0, max - 1);
+  const atWord = cut.lastIndexOf(" ");
+  return `${(atWord > max / 2 ? cut.slice(0, atWord) : cut).trimEnd()}…`;
+}
+
+/** The lead-in for a chip row: the first chip's ask, trimmed — null when no chip carries one
+ *  (the caller then falls back to "suggested"). Prose chips all carry the same ask, so the first
+ *  is the row's. */
+export function askLeadIn(suggestions: Suggestion[]): string | null {
+  const ask = suggestions.find(s => s.ask)?.ask;
+  return ask ? trimAsk(ask) : null;
 }

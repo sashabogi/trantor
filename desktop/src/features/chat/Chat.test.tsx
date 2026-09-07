@@ -1382,3 +1382,135 @@ describe("the handoff offer needs a live agent in the pane (#6668)", () => {
     expect(handoffs(invokes)).toEqual(["unattended"]);
   });
 });
+
+describe("the transcript stays put while you read (#6697)", () => {
+  let host: HTMLDivElement;
+  let root: Root;
+  let handlers: Map<string, Handler[]>;
+  let scrolls: ReturnType<typeof vi.spyOn>;
+
+  const fire = (event: string, payload: string) =>
+    act(async () => { for (const cb of handlers.get(event) ?? []) cb({ payload }); });
+  const turnRows = (after: number) => JSON.stringify({
+    project: "p", sessionId: "s1", after, total: after + 1, results: [], meta: META,
+    turns: [{ role: "assistant", blocks: [{ kind: "text", text: `line ${after}` }] }],
+  });
+  const transcript = () => {
+    const el = host.querySelector<HTMLDivElement>(".overflow-y-auto");
+    if (!el) throw new Error("transcript container missing");
+    return el;
+  };
+  const jump = () => host.querySelector<HTMLButtonElement>('button[aria-label^="Jump to latest"]');
+  /** Fake a tall transcript in a short viewport and park the scroll position. */
+  const scrollTo = (top: number) => {
+    const el = transcript();
+    Object.defineProperty(el, "scrollHeight", { value: 1000, configurable: true });
+    Object.defineProperty(el, "clientHeight", { value: 300, configurable: true });
+    el.scrollTop = top;
+    act(() => { el.dispatchEvent(new Event("scroll")); });
+  };
+
+  beforeEach(async () => {
+    scrolls = vi.spyOn(HTMLElement.prototype, "scrollIntoView").mockImplementation(() => {});
+    host = document.createElement("div");
+    document.body.appendChild(host);
+    root = createRoot(host);
+    const d = makeDeps();
+    handlers = d.handlers;
+    act(() => { root.render(<Chat project="p" dock="right" onDock={() => {}} onClose={() => {}} deps={d.deps} />); });
+    await flush();
+    await flush();
+  });
+
+  afterEach(() => {
+    act(() => root.unmount());
+    host.remove();
+    scrolls.mockRestore();
+  });
+
+  it("pinned at the foot: a new turn follows to the bottom and no jump button shows", async () => {
+    const before = scrolls.mock.calls.length;
+    await fire("chat-rows", turnRows(0));
+    await flush();
+    expect(scrolls.mock.calls.length).toBe(before + 1);
+    expect(jump()).toBeNull();
+  });
+
+  it("scrolled up: a new turn leaves the viewport where it is, and the arrow shows with a new-below dot", async () => {
+    scrollTo(100);
+    const btn = jump();
+    expect(btn).not.toBeNull();
+    expect(host.querySelector('[data-testid="chat-unseen"]')).toBeNull();
+
+    const before = scrolls.mock.calls.length;
+    await fire("chat-rows", turnRows(0));
+    await flush();
+    expect(scrolls.mock.calls.length).toBe(before);
+    expect(transcript().scrollTop).toBe(100);
+    expect(host.querySelector('[data-testid="chat-unseen"]')).not.toBeNull();
+    expect(jump()?.getAttribute("aria-label")).toContain("new messages below");
+  });
+
+  it("clicking the arrow returns to the latest and hides itself", async () => {
+    scrollTo(100);
+    await fire("chat-rows", turnRows(0));
+    await flush();
+    const before = scrolls.mock.calls.length;
+    const btn = jump();
+    expect(btn).not.toBeNull();
+    act(() => { btn?.click(); });
+    expect(scrolls.mock.calls.length).toBe(before + 1);
+    expect(jump()).toBeNull();
+
+    // Re-pinned: the next turn follows again.
+    await fire("chat-rows", turnRows(1));
+    await flush();
+    expect(scrolls.mock.calls.length).toBe(before + 2);
+  });
+
+  it("scrolling back within the threshold re-pins without the button", () => {
+    scrollTo(100);
+    expect(jump()).not.toBeNull();
+    scrollTo(680); // 1000 - 680 - 300 = 20px from the foot, inside PIN_THRESHOLD_PX
+    expect(jump()).toBeNull();
+  });
+});
+
+describe("prose chips read with their question (#6702)", () => {
+  let host: HTMLDivElement;
+  let root: Root;
+
+  beforeEach(() => {
+    host = document.createElement("div");
+    document.body.appendChild(host);
+    root = createRoot(host);
+  });
+
+  afterEach(() => {
+    act(() => root.unmount());
+    host.remove();
+  });
+
+  it("a prose yes/no ask chips yes/no with the question as lead-in and tooltip", async () => {
+    const d = makeDeps();
+    // A hosted pane so the chips have a target; the ask arrives the live way, via chat-rows.
+    const deps: ChatDeps = { ...d.deps, orchestratorOf: async () => ({ project: "p", agent: "orch", surface: "surf1", kind: "orch" }) };
+    act(() => { root.render(<Chat project="p" dock="right" onDock={() => {}} onClose={() => {}} deps={deps} />); });
+    await flush();
+    await flush();
+    const ask = "Want me to verify those handoff cards?";
+    await act(async () => {
+      for (const cb of d.handlers.get("chat-rows") ?? []) cb({ payload: JSON.stringify({
+        project: "p", sessionId: "s1", after: 0, total: 1, results: [], meta: META,
+        turns: [{ role: "assistant", blocks: [{ kind: "text", text: `Both are parked in testing. ${ask}` }] }],
+      }) });
+    });
+    await flush();
+    const chips = host.querySelector('[data-testid="suggestion-chips"]');
+    expect(chips).not.toBeNull();
+    expect(chips!.querySelector('[data-testid="suggestion-lead-in"]')!.textContent).toBe(ask);
+    const buttons = [...chips!.querySelectorAll("button")].filter(b => b.textContent !== "×");
+    expect(buttons.map(b => b.textContent)).toEqual(["yes", "no"]);
+    expect(buttons.map(b => b.title)).toEqual([ask, ask]);
+  });
+});

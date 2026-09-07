@@ -40,6 +40,23 @@ describe("SuggestionChips", () => {
     expect(buttons[1].title).toBe("Land the tab strip first");
   });
 
+  it("the lead-in echoes the ask when given, and says 'suggested' otherwise (#6702)", () => {
+    act(() => root.render(
+      <SuggestionChips
+        suggestions={[{ text: "yes", tooltip: "Want me to verify those handoff cards?", ask: "Want me to verify those handoff cards?" }]}
+        leadIn="Want me to verify those handoff cards?"
+        onPick={() => {}}
+        onDismiss={() => {}}
+      />,
+    ));
+    const lead = host.querySelector('[data-testid="suggestion-lead-in"]')!;
+    expect(lead.textContent).toBe("Want me to verify those handoff cards?");
+    expect(host.querySelector("button")!.title).toBe("Want me to verify those handoff cards?");
+
+    act(() => root.render(<SuggestionChips suggestions={[{ text: "push it" }]} onPick={() => {}} onDismiss={() => {}} />));
+    expect(host.querySelector('[data-testid="suggestion-lead-in"]')!.textContent).toBe("suggested");
+  });
+
   it("a chip click reports exactly its text; dismiss reports dismissal", () => {
     const onPick = vi.fn();
     const onDismiss = vi.fn();
