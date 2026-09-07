@@ -326,3 +326,71 @@ describe("a pending send keeps its own project and pane (#6250)", () => {
     expect(host.textContent).toContain("delivering");
   });
 });
+
+// #6701 — at a narrow pane the context gauge must never shove the Aa font-size control off
+// the pane: the gauge is status and collapses, the menu is a control and stays. A flex row
+// pushes its LATER children out only when an EARLIER child cannot shrink, so the guarantee
+// is structural: the gauge (the item before the menu) must be shrinkable to zero width and
+// clip its own overflow, its pieces must retire by the gauge's own width in the ordered
+// ladder (the bar flexes away first, then the word, then the number), and the menu's wrapper
+// must be shrink-0 and sit AFTER the gauge. happy-dom lays nothing out, so the narrow-width
+// case is asserted the way the drag drills assert height — against the structure that
+// determines it, not a measured pixel.
+describe("the dial row keeps the Aa font menu reachable at any width (#6701)", () => {
+  const viewGauge = () => {
+    act(() => root.render(
+      <Composer
+        project="p"
+        target="orch"
+        live
+        liveWhy=""
+        model="opus"
+        modelSource="reported"
+        working={false}
+        userTexts={[]}
+        context={{ tokens: 74_000, window: 200_000, frac: 0.37 }}
+        fontStep="m"
+        onFontStep={() => {}}
+        onSent={() => {}}
+        onLongRunChange={() => {}}
+        onDispatch={() => {}}
+      />,
+    ));
+  };
+
+  it("the gauge collapses (bar, then word, then number) and Aa is anchored shrink-0 after it", () => {
+    viewGauge();
+    const menu = [...host.querySelectorAll("button")].find(b => b.title === "Chat text size");
+    expect(menu).toBeTruthy();
+    // The control's wrapper never shrinks and never moves: shrink-0 anchored right.
+    const wrapper = menu!.closest("div.ml-auto");
+    expect(wrapper).toBeTruthy();
+    expect(wrapper!.className).toContain("shrink-0");
+    // The gauge renders, and it is the collapsible region: flexbox may take it to zero and
+    // it clips what would otherwise spill onto its neighbors — it can displace nothing.
+    const gauge = host.querySelector<HTMLDivElement>("div[title='74k / 200k (37%)']");
+    expect(gauge).toBeTruthy();
+    expect(gauge!.className).toContain("min-w-0");
+    expect(gauge!.className).toContain("overflow-hidden");
+    // The ladder inside the gauge, by the gauge's OWN width: the bar is the flexible piece
+    // (shrinks to nothing first)…
+    const bar = gauge!.querySelector("div.min-w-0");
+    expect(bar).toBeTruthy();
+    // …then the word steps out below 76px, and the number below 32px — the number outlives
+    // the word, so the percentage is the last face standing before the gauge is empty.
+    // SAFETY: the gauge's children are exactly the word span, the bar div and the number span,
+    // so the word find is always present; undefined would fail the className assertion below,
+    // and the cast only names the element type, never asserting a value away.
+    const word = [...gauge!.children].find(c => c.textContent === "context") as HTMLElement | undefined;
+    // SAFETY: same children shape — the number span is the only child ending in "%", so the
+    // find is always present; the cast names the element type for the className assertion.
+    const number = [...gauge!.children].find(c => /%$/.test(c.textContent ?? "")) as HTMLElement | undefined;
+    expect(word?.className).toContain("@max-[76px]:hidden");
+    expect(number?.className).toContain("@max-[32px]:hidden");
+    // And the control sits AFTER the gauge in the row: later children are only evicted by
+    // un-shrinkable earlier ones, and the one flexible earlier item is the gauge itself.
+    const row = wrapper!.parentElement!;
+    const order = [...row.children];
+    expect(order.indexOf(wrapper!)).toBeGreaterThan(order.indexOf(gauge!));
+  });
+});

@@ -68,11 +68,11 @@ function ContextGauge({ ctx }: { ctx: ContextGauge }) {
   if (tone === "hidden" && gaugeUnknownWindow(ctx)) {
     return (
       <div
-        className="flex shrink-0 items-center gap-1.5"
+        className="@container flex min-w-0 flex-1 items-center gap-1.5 overflow-hidden"
         title={`${Math.round((ctx.tokens ?? 0) / 1000)}k used · context window unknown for this model — auto-handoff is disarmed (set contextWindow)`}
       >
-        <span className="@max-md:hidden text-[10.5px] text-tr-muted">context</span>
-        <span className="tr-mono text-[10.5px] text-tr-muted">?</span>
+        <span className="@max-[76px]:hidden text-[10.5px] text-tr-muted">context</span>
+        <span className="tr-mono text-[10.5px] text-tr-muted @max-[14px]:hidden">?</span>
       </div>
     );
   }
@@ -81,22 +81,23 @@ function ContextGauge({ ctx }: { ctx: ContextGauge }) {
   // the early return has already made unreachable.
   const frac = ctx.frac ?? 0;
   return (
-    // No min-w-0 here on purpose (#6701): the gauge never shrinks below what its number needs,
-    // so the percentage can never be squeezed out of the gauge and under the font menu — the
-    // pieces that give are the ones INSIDE, in order, as the row narrows:
-    // the bar flexes to nothing first, then the word steps out (@max-md) and its width joins
-    // the bar's, and below that only the wordless [bar] NN% face remains.
-    <div className="flex flex-1 items-center gap-1.5" title={gaugeLabel(ctx)}>
+    // #6701 round 2 — the gauge is the dial row's ONLY give. min-w-0 plus overflow-hidden mean
+    // flexbox may take its width all the way to zero and clip whatever is still painted, so the
+    // gauge can displace nothing: the Aa menu at its right stays on the pane at every width.
+    // The pieces retire by the gauge's OWN width (the root is the @container), in order: the
+    // bar flexes away first, the word steps out below 76px, the number below 32px, and past
+    // that the gauge is an invisible sliver. Status yields; the control does not.
+    <div className="@container flex min-w-0 flex-1 items-center gap-1.5 overflow-hidden" title={gaugeLabel(ctx)}>
       {/* The bar says what it measures (#5556): a bare percentage next to two dials could be
           anything, so the word rides with it and the tooltip keeps the exact tokens. Every dial
           is nowrap, and the bar takes whatever width is left instead of the model name wrapping
           onto two lines (#5841) — shrinking to zero before anything else on the row gives way
-          (#6701), never holding a floor width the number then has to collide its way out of. */}
-      <span className="@max-md:hidden shrink-0 text-[10.5px] text-tr-muted">context</span>
+          (#6701), never holding a floor width. */}
+      <span className="@max-[76px]:hidden shrink-0 text-[10.5px] text-tr-muted">context</span>
       <div className="h-1.5 min-w-0 max-w-20 flex-1 overflow-hidden rounded-full bg-tr-edge">
         <div className="h-full rounded-full" style={{ width: `${Math.min(100, frac * 100)}%`, background: GAUGE_COLOUR[tone] }} />
       </div>
-      <span className="tr-mono w-[30px] shrink-0 text-right text-[10.5px]" style={{ color: GAUGE_COLOUR[tone] }}>
+      <span className="tr-mono w-[30px] shrink-0 text-right text-[10.5px] @max-[32px]:hidden" style={{ color: GAUGE_COLOUR[tone] }}>
         {Math.round(frac * 100)}%
       </span>
     </div>
@@ -827,10 +828,7 @@ export function Composer({ project, target, live, liveWhy, blockedAsk, model, mo
       </div>
       {/* Attachments wear chips BELOW the text area (#6070): faces, not paths. */}
       <AttachmentChips chips={chips} onRemove={id => setChips(cs => removeChip(cs, id))} />
-      {/* @container: the gauge reads THIS row's width, not the window's (#6701) — a pane can be
-          narrow while the window is wide, which is exactly how the percentage ended up inside
-          the font menu. */}
-      <div className="@container mt-1.5 flex items-center gap-1">
+      <div className="mt-1.5 flex items-center gap-1">
         {/* "Attach" for a local CLI agent is not an upload — the file is already on its disk. The
             honest action is to reference the path, which is also how you point it at a PRD. */}
         <button
@@ -881,11 +879,12 @@ export function Composer({ project, target, live, liveWhy, blockedAsk, model, mo
           <span className={longRun.known && longRun.on ? "text-tr-warn" : ""}>full auto</span>
         </button>
         {/* The gauge sits beside the dials that fill the window (#5521) — the number is mono
-            because it is a number being compared, and it is hidden until truth exists. */}
+            because it is a number being compared, and it is hidden until truth exists. It is
+            also the row's one collapsible region (#6701): everything left of it holds its
+            width, and the menu right of it is a CONTROL that never leaves the pane. */}
         <ContextGauge ctx={context} />
-        {/* pl-2 is the real clearance (#6701): margins the row can redistribute come and go,
-            but padding on this box is 8px of floor between 'Aa' and whatever sits before it —
-            the percentage at any width, even one where the row has nothing left to give. */}
+        {/* shrink-0 anchors Aa to the right edge at every width; pl-2 is the floor clearance
+            between it and the collapsing gauge (#6701). */}
         <div className="ml-auto flex shrink-0 items-center gap-2 pl-2">
           <FontMenu step={fontStep} onPick={onFontStep} />
         </div>
