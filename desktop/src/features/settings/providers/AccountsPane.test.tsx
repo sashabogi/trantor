@@ -31,8 +31,8 @@ const apiFor = (providers: ProviderStatus[]) => ({
 }) satisfies ProviderAccountsApi;
 
 const compatibleCli = {
-  installed: "0.18.46",
-  minimum: "0.18.46",
+  installed: "0.18.47",
+  minimum: "0.18.47",
   compatible: true,
   reason: null,
 };
@@ -129,25 +129,25 @@ describe("Settings Accounts pane", () => {
       status: () => providerStatus({
         compatibility: async () => ({
           installed: "0.18.40",
-          minimum: "0.18.46",
+          minimum: "0.18.47",
           compatible: false,
-          reason: "trantor CLI 0.18.40 is older than this app needs (0.18.46); run: npm i -g trantor@0.18.46",
+          reason: "trantor CLI 0.18.40 is older than this app needs (0.18.47); run: npm i -g trantor@0.18.47",
         }),
         status: run,
       }),
     };
     await mount(api);
 
-    expect(host.querySelector('[role="alert"]')?.textContent).toContain("trantor CLI 0.18.40 is older than this app needs (0.18.46)");
-    expect(host.textContent).toContain("npm i -g trantor@0.18.46");
+    expect(host.querySelector('[role="alert"]')?.textContent).toContain("trantor CLI 0.18.40 is older than this app needs (0.18.47)");
+    expect(host.textContent).toContain("npm i -g trantor@0.18.47");
     expect(run).not.toHaveBeenCalled();
   });
 
   it("checks the declared minimum again before every Accounts action", async () => {
-    const reason = "trantor CLI 0.18.43 is older than this app needs (0.18.46); run: npm i -g trantor@0.18.46";
+    const reason = "trantor CLI 0.18.46 is older than this app needs (0.18.47); run: npm i -g trantor@0.18.47";
     const compatibility = vi.fn(async () => ({
-      installed: "0.18.43",
-      minimum: "0.18.46",
+      installed: "0.18.46",
+      minimum: "0.18.47",
       compatible: false,
       reason,
     }));
@@ -169,12 +169,12 @@ describe("Settings Accounts pane", () => {
 
   it("renders an action-time compatibility rejection in the existing banner", async () => {
     const api = apiFor([row("connected")]);
-    api.login.mockRejectedValue(new Error("trantor CLI 0.18.43 is older than this app needs (0.18.46)"));
+    api.login.mockRejectedValue(new Error("trantor CLI 0.18.46 is older than this app needs (0.18.47)"));
     await mount(api);
 
     await click(button("Add Account"));
 
-    expect(host.querySelector('[role="alert"]')?.textContent).toContain("trantor CLI 0.18.43 is older than this app needs (0.18.46)");
+    expect(host.querySelector('[role="alert"]')?.textContent).toContain("trantor CLI 0.18.46 is older than this app needs (0.18.47)");
   });
 
   it("mirrors the Orca pane heading and provider section hierarchy", async () => {

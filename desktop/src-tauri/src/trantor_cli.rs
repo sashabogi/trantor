@@ -1,7 +1,7 @@
 use std::ffi::{OsStr, OsString};
 use std::path::Path;
 
-pub(crate) const MIN_VERSION: &str = "0.18.46";
+pub(crate) const MIN_VERSION: &str = "0.18.47";
 
 #[derive(Debug, Eq, PartialEq)]
 struct Invocation {
@@ -182,12 +182,12 @@ mod tests {
 
     #[test]
     fn declared_minimum_rejects_the_pre_remove_cli() {
-        assert_eq!(MIN_VERSION, "0.18.46");
-        assert!(!version_is_compatible("0.18.43"));
-        assert!(version_is_compatible("0.18.46"));
+        assert_eq!(MIN_VERSION, "0.18.47");
+        assert!(!version_is_compatible("0.18.46"));
+        assert!(version_is_compatible("0.18.47"));
         assert!(version_is_compatible("0.19.0"));
-        let reason = incompatibility_reason(Some("0.18.43")).unwrap();
-        assert!(reason.contains("trantor CLI 0.18.43 is older"), "{reason}");
-        assert!(reason.contains("npm i -g trantor@0.18.46"), "{reason}");
+        let reason = incompatibility_reason(Some("0.18.46")).unwrap();
+        assert!(reason.contains("trantor CLI 0.18.46 is older"), "{reason}");
+        assert!(reason.contains("npm i -g trantor@0.18.47"), "{reason}");
     }
 }

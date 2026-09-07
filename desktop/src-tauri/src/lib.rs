@@ -210,13 +210,13 @@ mod cli_compatibility_tests {
 
     #[test]
     fn installed_version_is_checked_against_the_rust_owned_minimum() {
-        let old = cli_compatibility(Some("0.18.43"));
+        let old = cli_compatibility(Some("0.18.46"));
         assert!(!old.compatible);
-        assert_eq!(old.minimum, "0.18.46");
+        assert_eq!(old.minimum, "0.18.47");
         let reason = old.reason.unwrap();
-        assert!(reason.contains("trantor CLI 0.18.43 is older"), "{reason}");
-        assert!(reason.contains("npm i -g trantor@0.18.46"), "{reason}");
-        assert!(cli_compatibility(Some("0.18.46")).compatible);
+        assert!(reason.contains("trantor CLI 0.18.46 is older"), "{reason}");
+        assert!(reason.contains("npm i -g trantor@0.18.47"), "{reason}");
+        assert!(cli_compatibility(Some("0.18.47")).compatible);
         assert!(cli_compatibility(Some("0.19.0")).compatible);
     }
 }
@@ -242,11 +242,13 @@ async fn provider_verify(name: String, key: String) -> Result<String, String> {
 
 #[tauri::command]
 async fn agent_settings_status() -> Result<String, String> {
+    trantor_cli::require_compatible().await?;
     run_cli_json(&["agent-settings", "status", "--json"]).await
 }
 
 #[tauri::command]
 async fn agent_settings_set_enabled(id: String, enabled: bool) -> Result<String, String> {
+    trantor_cli::require_compatible().await?;
     run_cli_json(&[
         "agent-settings",
         "set-enabled",
@@ -259,6 +261,7 @@ async fn agent_settings_set_enabled(id: String, enabled: bool) -> Result<String,
 
 #[tauri::command]
 async fn agent_settings_set_default(id: Option<String>) -> Result<String, String> {
+    trantor_cli::require_compatible().await?;
     run_cli_json(&[
         "agent-settings",
         "set-default",
