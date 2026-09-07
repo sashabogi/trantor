@@ -1,0 +1,19 @@
+{
+  "contract": "Timing drills whose red is REPORTED but does not fail the gate (#6447). Each entry carries the card tracking its fix and a one-week expiry: an expired entry un-quarantines — its red gates again, and green gets flagged for promotion back into the gate.",
+  "entries": [
+    {
+      "suite": "quarantine/handoff/test-baton-turn-boundary.mjs",
+      "card": 6568,
+      "reason": "Asserts a wall-clock arm-aging boundary: sleeps 1.6s (let the arm age past the bound) then 2.5s and asserts the heartbeat fires anyway — under runner load the arm ages differently and the drill goes red.",
+      "quarantined": "2026-09-06",
+      "expires": "2026-09-13"
+    },
+    {
+      "suite": "quarantine/providers/test-kimi-bridge.mjs",
+      "card": 6569,
+      "reason": "The slow-hook drill spawns a hook whose body is a real 5s setTimeout and asserts the hook runner times it out (child timeout fails open) — a race between two real clocks under load.",
+      "quarantined": "2026-09-06",
+      "expires": "2026-09-13"
+    }
+  ]
+}
