@@ -144,6 +144,13 @@ export async function routeAdmin({ req, res, q, P, auth, ctx }) {
       state.orgPolicy = p; markDirty();
       return json(res, 200, { ok: true, ...overseerPolicy() });
     }
+    if (req.method === "POST" && P === "/duty/failure") {
+      const b = await body(req);
+      if (!ctx.isDutyIdentity(auth)) return json(res, 403, { error: "only the configured duty seat may report duty failures" });
+      if (!["relay-403", "skipped-nudge"].includes(b.kind)) return json(res, 400, { error: "kind must be relay-403 or skipped-nudge" });
+      const result = duty.recordFailure({ project: b.project, recipient: b.recipient, kind: b.kind, detail: b.detail });
+      return json(res, result.ok ? 200 : 400, result);
+    }
     // What a session arriving on <project> needs to know: its autonomy level, who else is live,
     // which files are in flight, which projects are declared codependent, current collisions.
     if (req.method === "GET" && P === "/overseer/status") {
@@ -160,6 +167,7 @@ export async function routeAdmin({ req, res, q, P, auth, ctx }) {
         tickMs: overseer.OVERSEER_TICK_MS,
         clearMs: overseer.OVERSEER_CLEAR_MS,
         dutySession: duty.session || "",
+        dutyFailures: duty.dutyFailures(),
         watching: {
           sessions: livePeers.length,
           projects: new Set(livePeers.map(([, v]) => v.project).filter(Boolean)).size,

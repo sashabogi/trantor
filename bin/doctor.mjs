@@ -118,6 +118,10 @@ section("duty seat (the fleet watcher)");
     const beat = dutySession ? (peers?.sessions || []).find((p) => p.session === dutySession)?.lastSeen || 0 : 0;
     const ageMin = beat ? Math.floor((Date.now() - beat) / 60000) : null;
     const age = ageMin == null ? "no beat yet" : ageMin < 1 ? "beat just now" : ageMin < 60 ? `last beat ${ageMin}m ago` : `last beat ${Math.floor(ageMin / 60)}h ago`;
+    for (const failure of (Array.isArray(st?.dutyFailures) ? st.dutyFailures : []).slice(0, 10)) {
+      warn(failure.text || `duty seat cannot reach project ${failure.project || "unknown"}`,
+        failure.focusCard ? `open focus card #${failure.focusCard} in ${failure.project}` : `open the ${failure.project || "target"} project board; no active focus card was found`);
+    }
     if (!st || !peers) {
       // The core section already flags a dead hub; here we only refuse to guess.
       note(`duty seat: hub feed UNKNOWN — ${fleet} did not answer the duty read${cfg.ownerIdentity ? "" : " (no owner identity to sign with)"}`);

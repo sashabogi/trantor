@@ -1,4 +1,4 @@
-export function createDuty({ state, now, appendEvent, markDirty, pushToStreams, OVERSEER_TICK_MS }) {
+export function createDuty({ state, now, appendEvent, appendTaskLog, canon, markDirty, pushToStreams, OVERSEER_TICK_MS }) {
 let DUTY_SESSION = String(process.env.RELAY_DUTY_SESSION || state.dutySession || "");
 // 2 MINUTES, not 10 (2026-08-31): scribe DMed the woken crebral-health session at 16:11 and the
 // operator hand-relayed at 16:21:58 — beating the old 10m escalation by seconds. Two agents
@@ -26,6 +26,33 @@ function dutyQueuedEscalations() {
   if (!DUTY_SESSION) return 0;
   const upTo = state.peers[DUTY_SESSION]?.deliveredUpTo || 0;
   return state.messages.reduce((n, m) => n + (m.to === DUTY_SESSION && m.id > upTo ? 1 : 0), 0);
+}
+// Duty failures must surface in the target lane, not on the trantor-duty board that the affected
+// orchestrator never reads. Keep the latest failure in project metadata for `trantor doctor`, and
+// attach the durable narrative to the recipient's open session-focus card when one exists.
+function recordFailure({ project, recipient, kind, detail }) {
+  const target = canon(String(project || state.peers[recipient]?.project || "").slice(0, 80));
+  if (!target) return { ok: false, error: "target project required" };
+  const failureKind = kind === "relay-403" ? "relay 403" : "skipped socket nudge";
+  const suffix = String(detail || "").replace(/\u0000/g, "").trim().slice(0, 500);
+  const text = `duty seat cannot reach project ${target}: ${failureKind}${suffix ? ` — ${suffix}` : ""}`;
+  const focus = state.tasks
+    .filter(t => t.project === target && t.source === "session" && t.status !== "done" && (!recipient || t.assignee === recipient))
+    .sort((a, b) => (b.updated || b.ts || 0) - (a.updated || a.ts || 0))[0] || null;
+  const ts = now();
+  if (focus) {
+    appendTaskLog(focus, DUTY_SESSION || "hub:duty", text, ts);
+    focus.updated = ts;
+  }
+  const meta = state.projectMeta[target] || {};
+  meta.dutyFailure = { ts, project: target, recipient: String(recipient || "").slice(0, 120), kind: String(kind || "skipped-nudge"), text, focusCard: focus?.id || null };
+  state.projectMeta[target] = meta;
+  markDirty();
+  appendEvent("duty-failure", target, DUTY_SESSION || "hub:duty", { text, taskId: focus?.id || null, recipient: String(recipient || "").slice(0, 120), kind: meta.dutyFailure.kind });
+  return { ok: true, failure: meta.dutyFailure };
+}
+function dutyFailures() {
+  return Object.values(state.projectMeta || {}).map(meta => meta?.dutyFailure).filter(Boolean).sort((a, b) => (b.ts || 0) - (a.ts || 0));
 }
 function hubSend(to, text, project) {
   const msg = { id: ++state.seq, ts: now(), from: "hub:duty", to, text: String(text).slice(0, 2000), project: String(project || "").slice(0, 80) };
@@ -71,7 +98,7 @@ function dutyTick() {
 setInterval(dutyTick, OVERSEER_TICK_MS).unref?.();
 
   return {
-    hubSend, dutyTick, dutyLiveness, dutyQueuedEscalations,
+    hubSend, dutyTick, dutyLiveness, dutyQueuedEscalations, recordFailure, dutyFailures,
     get session() { return DUTY_SESSION; },
     get darkSince() { return dutyDarkSince; },
     setSession(session) {

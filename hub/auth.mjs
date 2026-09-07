@@ -87,7 +87,17 @@ function scopeAllows(identity, project, minRole) {
   }
   return false;
 }
-const canRead = (auth, project) => AUTH_MODE !== "enforce" && !auth?.identity ? true : scopeAllows(auth?.identity, project, "read");
+// The configured duty seat is a hub-level service identity, not a project participant. It must
+// inspect every project this hub serves and deliver escalations into those projects; requiring a
+// pairwise policy link turns every newly-added project into a silent wake-chain outage. The exact
+// configured session is authoritative. `hub:duty` is the hub's own pseudo-identity.
+function isDutyIdentity(auth) {
+  const name = String(auth?.identity?.name || "");
+  return !!name && (name === "hub:duty" || name === String(state.dutySession || ""));
+}
+const canRead = (auth, project) => AUTH_MODE !== "enforce" && !auth?.identity
+  ? true
+  : isDutyIdentity(auth) || scopeAllows(auth?.identity, project, "read");
 function projectFromRequest(P, q, b) {
   if (P === "/task/update" || P === "/card") {
     const t = state.tasks.find(x => x.id === Number(b?.id ?? q?.id));
@@ -179,6 +189,7 @@ function crossProjectTarget(P, b) {
 function crossProjectGuard(auth, P, b) {
   if (!CROSS_PROJECT_ENDPOINTS.has(P) || AUTH_MODE === "off" || !auth?.identity) return { ok: true };
   if (auth.identity.kind === "human") return { ok: true };   // the operator's own key
+  if (P === "/send" && isDutyIdentity(auth)) return { ok: true }; // fleet escalation delivery
   const home = callerProject(auth);
   if (!home) return { ok: true };
   const target = crossProjectTarget(P, b);
@@ -269,6 +280,7 @@ function authorize(auth, method, P, project) {
   if (auth?.warning && AUTH_MODE === "warn") return { ok: true };
   if (!auth?.identity) return { ok: false, code: 401, error: "signature required" };
   const need = OWNER_ENDPOINTS.has(P) ? "owner" : (method === "POST" ? "write" : (READ_ENDPOINTS.has(P) ? "read" : "read"));
+  if (isDutyIdentity(auth) && (need === "read" || P === "/send" || P === "/duty/failure")) return { ok: true };
   return scopeAllows(auth.identity, project, need) ? { ok: true } : { ok: false, code: 403, error: "forbidden" };
 }
 function filterReadable(auth, rows, projectOf) {
@@ -372,7 +384,7 @@ const seenNonces = new Map();
 
   return {
     PUBLIC_ENDPOINTS, authPath, authenticate, authorize, body, rawBody, json,
-    canon, cleanScope, defaultScopesFor, findIdentity, scopeAllows, canRead,
+    canon, cleanScope, defaultScopesFor, findIdentity, scopeAllows, canRead, isDutyIdentity,
     projectFromRequest, crossProjectGuard, filterReadable, filterDiscoverable,
     inboxReadable, canUseInboxSession, overseerPolicy, subFp, PROPOSAL_CAP,
     propFp, HUB_VERSION, cmpSemver, handleEnrollment, handleInvite,

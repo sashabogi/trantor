@@ -79,6 +79,7 @@ const reaper = createReaper({
 });
 const duty = createDuty({
   state: store.state, now: events.now, appendEvent: events.appendEvent,
+  appendTaskLog: store.appendTaskLog, canon: authRuntime.canon,
   markDirty: store.markDirty, pushToStreams: events.pushToStreams, OVERSEER_TICK_MS,
 });
 const overseer = createOverseer({

@@ -109,7 +109,12 @@ async function api(method, path, payload, { timeoutMs } = {}) {
   const r = method.toUpperCase() === "GET"
     ? await signedGet(path, { session: SESSION, instance: INSTANCE_ID, project: PROJECT, timeoutMs })
     : await signedPost(path, payload, { session: SESSION, instance: INSTANCE_ID, project: PROJECT, timeoutMs });
-  if (!r.ok) throw new Error(`hub ${r.status} on ${path}`);
+  if (!r.ok) {
+    const error = new Error(`hub ${r.status} on ${path}${r.json?.error ? `: ${r.json.error}` : ""}`);
+    error.status = r.status;
+    error.hubError = r.json?.error || "";
+    throw error;
+  }
   return r.json;
 }
 const fmt = (m) => `#${m.id} [${m.from} -> ${m.to}] ${new Date(m.ts).toLocaleTimeString()}: ${m.text}`;
@@ -390,8 +395,27 @@ server.tool("relay_send", "Send a live message to another agent session (or 'all
     if (!scrub.ok) {
       return { content: [{ type: "text", text: `REFUSED — not sent. Credential-shaped string(s) detected: ${scrub.kinds.join(", ")}. Remove them and resend.` }], isError: true };
     }
-    const { id } = await api("POST", "/send", { from: SESSION, to, text, ...(wake === false ? { wake: false } : {}) });
+    let sent;
+    try {
+      sent = await api("POST", "/send", { from: SESSION, to, text, ...(wake === false ? { wake: false } : {}) });
+    } catch (error) {
+      // A duty relay refusal is itself a fleet incident. Record it on the target lane before the
+      // tool returns the 403; the model must not interpret a failed report as permission to skip
+      // the independent cross-session socket nudge.
+      if (error?.status === 403 && SESSION.endsWith("-duty")) {
+        await api("POST", "/duty/failure", { recipient: to, kind: "relay-403", detail: error.hubError || error.message }).catch(() => {});
+      }
+      throw error;
+    }
+    const { id } = sent;
     return { content: [{ type: "text", text: `sent #${id} to ${to}${wake === false ? " (batched — no turn)" : ""}` }] };
+  });
+
+server.tool("relay_duty_failure", "Duty-seat only: record that a required cross-session socket nudge was skipped or that a relay send returned 403. The hub appends the failure to the target project's active focus card and exposes it in trantor doctor.",
+  { recipient: z.string().describe("recipient session whose project is affected"), project: z.string().optional().describe("target project; normally inferred from the recipient"), kind: z.enum(["relay-403", "skipped-nudge"]), detail: z.string().max(500).optional() },
+  async ({ recipient, project, kind, detail }) => {
+    const { failure } = await api("POST", "/duty/failure", { recipient, project, kind, detail });
+    return { content: [{ type: "text", text: `recorded: ${failure.text}${failure.focusCard ? ` (focus card #${failure.focusCard})` : " (no active focus card)"}` }] };
   });
 
 server.tool("relay_status", "Set this session's one-line status on the presence board (what you're working on / idle). Cheap — other sessions read it instantly via relay_peers without messaging you.",
