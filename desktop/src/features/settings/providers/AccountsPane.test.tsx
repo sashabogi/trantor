@@ -3,7 +3,7 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AccountsPane } from "./AccountsPane";
-import { providerStatus, providerVerify, PROVIDER_STATES, type ProviderAccountsApi, type ProviderState, type ProviderStatus } from "./providerStatus";
+import { createProviderAccountsApi, providerStatus, providerVerify, PROVIDER_STATES, type ProviderAccountsApi, type ProviderState, type ProviderStatus } from "./providerStatus";
 import { stateLabel } from "./ProviderRow";
 
 // SAFETY: React's act() reads this flag off globalThis; the cast adds the one key TS does not know.
@@ -31,8 +31,8 @@ const apiFor = (providers: ProviderStatus[]) => ({
 }) satisfies ProviderAccountsApi;
 
 const compatibleCli = {
-  installed: "0.18.41",
-  minimum: "0.18.41",
+  installed: "0.18.47",
+  minimum: "0.18.47",
   compatible: true,
   reason: null,
 };
@@ -129,18 +129,52 @@ describe("Settings Accounts pane", () => {
       status: () => providerStatus({
         compatibility: async () => ({
           installed: "0.18.40",
-          minimum: "0.18.41",
+          minimum: "0.18.47",
           compatible: false,
-          reason: "trantor CLI 0.18.40 is older than this app needs (0.18.41); run: npm i -g trantor@0.18.41",
+          reason: "trantor CLI 0.18.40 is older than this app needs (0.18.47); run: npm i -g trantor@0.18.47",
         }),
         status: run,
       }),
     };
     await mount(api);
 
-    expect(host.querySelector('[role="alert"]')?.textContent).toContain("trantor CLI 0.18.40 is older than this app needs (0.18.41)");
-    expect(host.textContent).toContain("npm i -g trantor@0.18.41");
+    expect(host.querySelector('[role="alert"]')?.textContent).toContain("trantor CLI 0.18.40 is older than this app needs (0.18.47)");
+    expect(host.textContent).toContain("npm i -g trantor@0.18.47");
     expect(run).not.toHaveBeenCalled();
+  });
+
+  it("checks the declared minimum again before every Accounts action", async () => {
+    const reason = "trantor CLI 0.18.46 is older than this app needs (0.18.47); run: npm i -g trantor@0.18.47";
+    const compatibility = vi.fn(async () => ({
+      installed: "0.18.46",
+      minimum: "0.18.47",
+      compatible: false,
+      reason,
+    }));
+    const invoked = vi.fn();
+    const run = <T,>(command: string): Promise<T> => {
+      invoked(command);
+      return Promise.reject(new Error("version gate allowed an invoke"));
+    };
+    const api = createProviderAccountsApi(compatibility, run);
+
+    await expect(api.login("codex", "drills")).rejects.toThrow(reason);
+    await expect(api.verifyKey("zai", "candidate-key")).rejects.toThrow(reason);
+    await expect(api.saveKey("zai", "candidate-key")).rejects.toThrow(reason);
+    await expect(api.remove("codex")).rejects.toThrow(reason);
+
+    expect(compatibility).toHaveBeenCalledTimes(4);
+    expect(invoked).not.toHaveBeenCalled();
+  });
+
+  it("renders an action-time compatibility rejection in the existing banner", async () => {
+    const api = apiFor([row("connected")]);
+    api.login.mockRejectedValue(new Error("trantor CLI 0.18.46 is older than this app needs (0.18.47)"));
+    await mount(api);
+
+    await click(button("Add Account"));
+
+    expect(host.querySelector('[role="alert"]')?.textContent).toContain("trantor CLI 0.18.46 is older than this app needs (0.18.47)");
   });
 
   it("mirrors the Orca pane heading and provider section hierarchy", async () => {
@@ -213,7 +247,7 @@ describe("Settings Accounts pane", () => {
     await typeInto(input, "bad-key");
     await click(button("Verify and save"));
     expect(api.saveKey).not.toHaveBeenCalled();
-    expect(host.querySelector('[role="alert"]')?.textContent).toContain("Nothing was saved");
+    expect(host.textContent).toContain("Nothing was saved");
   });
 
   it("Remove requires confirmation before changing the system provider", async () => {

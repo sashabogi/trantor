@@ -22,6 +22,7 @@ function AccountsPaneContent({ project, api = providerAccountsApi }: AccountsPan
   const [busy, setBusy] = useState<string | null>(null);
   const [remove, setRemove] = useState<ProviderStatus | null>(null);
   const [error, setError] = useState("");
+  const showError = (message: string) => { setError(message); };
 
   const load = useCallback(async () => {
     setProviders(null);
@@ -61,10 +62,10 @@ function AccountsPaneContent({ project, api = providerAccountsApi }: AccountsPan
         {providers?.map(provider => (
           <ProviderAccountSection key={provider.provider} status={provider} api={api} project={project}
             busy={busy === provider.provider} onBusy={value => setBusy(value ? provider.provider : null)}
-            onChanged={load} onRemove={() => setRemove(provider)} />
+            onChanged={load} onRemove={() => setRemove(provider)} onError={showError} />
         ))}
       </div>
-      {remove ? <RemoveProviderSheet provider={remove} api={api} onClose={() => setRemove(null)} onRemoved={() => { setRemove(null); void load(); }} /> : null}
+      {remove ? <RemoveProviderSheet provider={remove} api={api} onClose={() => setRemove(null)} onError={showError} onRemoved={() => { setRemove(null); void load(); }} /> : null}
     </div>
   );
 }

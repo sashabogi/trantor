@@ -3,7 +3,7 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AgentsPane } from "./AgentsPane";
-import type { AgentSettingsApi, AgentSettingsStatus, AgentStatus } from "./agentSettings";
+import { createAgentSettingsApi, type AgentSettingsApi, type AgentSettingsStatus, type AgentStatus } from "./agentSettings";
 
 // SAFETY: React's act() reads this flag off globalThis; the cast adds the one key TS does not know.
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -105,6 +105,41 @@ describe("Settings Agents pane", () => {
     expect(api.setEnabled).toHaveBeenCalledWith("codex", false);
     expect(host.textContent).not.toContain("CodexDefault");
     expect(host.querySelector('button[aria-pressed="true"]')?.textContent?.trim()).toBe("Auto");
+  });
+
+  it("checks the declared minimum before status and every Agents action", async () => {
+    const reason = "trantor CLI 0.18.46 is older than this app needs (0.18.47); run: npm i -g trantor@0.18.47";
+    const compatibility = vi.fn(async () => ({
+      installed: "0.18.46",
+      minimum: "0.18.47",
+      compatible: false,
+      reason,
+    }));
+    const invoked = vi.fn();
+    const run = <T,>(command: string): Promise<T> => {
+      invoked(command);
+      return Promise.reject(new Error("version gate allowed an invoke"));
+    };
+    const api = createAgentSettingsApi(compatibility, run);
+
+    await expect(api.status()).rejects.toThrow(reason);
+    await expect(api.setEnabled("codex", false)).rejects.toThrow(reason);
+    await expect(api.setDefault("codex")).rejects.toThrow(reason);
+
+    expect(compatibility).toHaveBeenCalledTimes(3);
+    expect(invoked).not.toHaveBeenCalled();
+  });
+
+  it("renders an action-time compatibility rejection in the Agents banner", async () => {
+    const api = apiFor({ default: null, agents: [agent("codex", true)] });
+    api.setDefault = vi.fn(async () => {
+      throw new Error("trantor CLI 0.18.46 is older than this app needs (0.18.47)");
+    });
+    await mount(api);
+
+    await click("Codex", host.querySelector("section") ?? host);
+
+    expect(host.querySelector('[role="alert"]')?.textContent).toContain("trantor CLI 0.18.46 is older than this app needs (0.18.47)");
   });
 
   it("expands an installed agent to its command details", async () => {

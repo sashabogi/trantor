@@ -222,10 +222,9 @@ fn kickoff_from_cli(success: bool, stdout: &str, fallback: &str) -> String {
 }
 
 pub(crate) fn wake_kickoff_prompt(project: &str, dir: &Path, fallback: &str) -> String {
-    match crate::identity_env::command("trantor")
+    match crate::trantor_cli::command()
         .args(["genesis-kickoff", project])
         .current_dir(dir)
-        .env("PATH", crate::terminal_path())
         .output()
     {
         Ok(output) => kickoff_from_cli(
@@ -250,11 +249,10 @@ pub fn orchestrator_open(project: String) -> Result<String, String> {
     // handoff_now always resolved the dir before running the CLI; open now does the same.
     let dir = crate::project_dir(&project)
         .ok_or_else(|| format!("no local checkout for {project}"))?;
-    let out = crate::identity_env::command("trantor")
+    let out = crate::trantor_cli::command()
         .arg("open")
         .arg(&project)
         .current_dir(&dir)
-        .env("PATH", crate::terminal_path())
         .output()
         .map_err(|e| format!("trantor open: {e}"))?;
     let stderr = String::from_utf8_lossy(&out.stderr).to_string();

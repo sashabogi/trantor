@@ -30,6 +30,7 @@ switch (cmd) {
   case "open":    runCrew(); break;
   case "herdr":   spawn(process.execPath, [join(ROOT, "bin/herdr-agent.mjs"), ...args], { stdio: "inherit", cwd: process.cwd() }).on("exit", c => process.exit(c ?? 0)); break;
   case "autonomy": spawn(process.execPath, [join(ROOT, "bin/autonomy.mjs"), ...args], { stdio: "inherit", cwd: process.cwd() }).on("exit", c => process.exit(c ?? 0)); break;
+  case "agent-settings": run("bin/agent-settings.mjs"); break;
   case "adopt":   spawn(process.execPath, [join(ROOT, "bin/adopt.mjs"), ...args], { stdio: "inherit", cwd: process.cwd() }).on("exit", c => process.exit(c ?? 0)); break;
   case "integrate": spawn(process.execPath, [join(ROOT, "bin/integrate.mjs"), ...args], { stdio: "inherit", cwd: process.cwd() }).on("exit", c => process.exit(c ?? 0)); break;
   case "down":    runCrew(); break;

@@ -10,6 +10,7 @@ mod provider_accounts;
 pub mod identity;
 mod sessions;
 mod terminal;
+mod trantor_cli;
 
 use notify::Watcher;
 use serde::Serialize;
@@ -153,35 +154,11 @@ pub(crate) fn terminal_path() -> String {
     parts.join(":")
 }
 
-/// The node binary, probing the usual install locations before PATH: a Finder-launched app gets
-/// the bare system PATH (no /opt/homebrew/bin), so "node" alone fails outside a terminal.
-fn cli_node() -> String {
-    ["/opt/homebrew/bin/node", "/usr/local/bin/node", "/usr/bin/node"]
-        .iter()
-        .find(|p| std::path::Path::new(p).exists())
-        .map(|p| p.to_string())
-        .unwrap_or_else(|| "node".to_string())
-}
-
-/// Where the trantor repo lives on THIS machine — the CLI the app shells into (TRANTOR_ROOT to
-/// relocate, ~/development/trantor by convention).
-fn trantor_root() -> String {
-    std::env::var("TRANTOR_ROOT").unwrap_or_else(|_| {
-        let home = std::env::var("HOME").unwrap_or_default();
-        format!("{home}/development/trantor")
-    })
-}
-
-/// Run a trantor CLI script that prints JSON and hand back its stdout. Deliberately shelling out
-/// rather than re-implementing detection in Rust: two detectors would drift, and then the CLI and
-/// the app would disagree about whether a seat is wired with no way to tell which is right.
+/// Run the installed Trantor CLI and hand back its JSON stdout. TRANTOR_ROOT deliberately changes
+/// this same resolver for every app-spawned Trantor command; no command chooses its own checkout.
 async fn run_cli_json(args: &[&str]) -> Result<String, String> {
-    let mut cmd = identity_env::async_command(cli_node());
-    cmd.arg(format!("{}/bin/{}", trantor_root(), args[0]));
-    for a in &args[1..] {
-        cmd.arg(a);
-    }
-    cmd.env("PATH", terminal_path());
+    let mut cmd = trantor_cli::async_command();
+    cmd.args(args);
     let out = cmd
         .output()
         .await
@@ -196,13 +173,11 @@ async fn run_cli_json(args: &[&str]) -> Result<String, String> {
 /// Run the EXISTING doctor engine and hand back its JSON.
 #[tauri::command]
 async fn doctor() -> Result<String, String> {
-    run_cli_json(&["doctor.mjs", "--json"]).await
+    run_cli_json(&["doctor", "--json"]).await
 }
 
 /// Bump this whenever a desktop Tauri command starts depending on a newer installed CLI surface.
 /// The app probes it at launch and Accounts probes it again before using provider commands.
-const MIN_TRANTOR_CLI_VERSION: &str = "0.18.41";
-
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 struct TrantorCliCompatibility {
@@ -212,38 +187,13 @@ struct TrantorCliCompatibility {
     reason: Option<String>,
 }
 
-fn release_version_parts(version: &str) -> Option<Vec<u64>> {
-    let parts: Option<Vec<u64>> = version
-        .trim()
-        .trim_start_matches('v')
-        .split('.')
-        .map(|part| part.parse::<u64>().ok())
-        .collect();
-    parts.filter(|parts| parts.len() >= 3)
-}
-
 fn cli_compatibility(installed: Option<&str>) -> TrantorCliCompatibility {
-    let installed_parts = installed.and_then(release_version_parts);
-    let minimum_parts = release_version_parts(MIN_TRANTOR_CLI_VERSION).unwrap();
-    let compatible = installed_parts
-        .as_ref()
-        .is_some_and(|parts| parts >= &minimum_parts);
+    let reason = trantor_cli::incompatibility_reason(installed);
+    let compatible = reason.is_none();
     let installed = installed.map(str::to_string);
-    let reason = if compatible {
-        None
-    } else {
-        Some(match installed.as_deref() {
-            Some(version) => format!(
-                "trantor CLI {version} is older than this app needs ({MIN_TRANTOR_CLI_VERSION}); run: npm i -g trantor@{MIN_TRANTOR_CLI_VERSION}"
-            ),
-            None => format!(
-                "trantor CLI is unavailable; this app needs {MIN_TRANTOR_CLI_VERSION}; run: npm i -g trantor@{MIN_TRANTOR_CLI_VERSION}"
-            ),
-        })
-    };
     TrantorCliCompatibility {
         installed,
-        minimum: MIN_TRANTOR_CLI_VERSION,
+        minimum: trantor_cli::MIN_VERSION,
         compatible,
         reason,
     }
@@ -251,18 +201,7 @@ fn cli_compatibility(installed: Option<&str>) -> TrantorCliCompatibility {
 
 #[tauri::command]
 async fn trantor_cli_compatibility() -> TrantorCliCompatibility {
-    let output = identity_env::async_command("trantor")
-        .arg("--version")
-        .env("PATH", terminal_path())
-        .output()
-        .await;
-    let installed = output.ok().and_then(|output| {
-        if !output.status.success() {
-            return None;
-        }
-        let version = String::from_utf8_lossy(&output.stdout).trim().to_string();
-        (!version.is_empty()).then_some(version)
-    });
+    let installed = trantor_cli::version().await;
     cli_compatibility(installed.as_deref())
 }
 
@@ -272,13 +211,13 @@ mod cli_compatibility_tests {
 
     #[test]
     fn installed_version_is_checked_against_the_rust_owned_minimum() {
-        let old = cli_compatibility(Some("0.18.40"));
+        let old = cli_compatibility(Some("0.18.46"));
         assert!(!old.compatible);
-        assert_eq!(old.minimum, "0.18.41");
+        assert_eq!(old.minimum, "0.18.47");
         let reason = old.reason.unwrap();
-        assert!(reason.contains("trantor CLI 0.18.40 is older"), "{reason}");
-        assert!(reason.contains("npm i -g trantor@0.18.41"), "{reason}");
-        assert!(cli_compatibility(Some("0.18.41")).compatible);
+        assert!(reason.contains("trantor CLI 0.18.46 is older"), "{reason}");
+        assert!(reason.contains("npm i -g trantor@0.18.47"), "{reason}");
+        assert!(cli_compatibility(Some("0.18.47")).compatible);
         assert!(cli_compatibility(Some("0.19.0")).compatible);
     }
 }
@@ -289,7 +228,8 @@ mod cli_compatibility_tests {
 /// its only renderer, same rule as doctor above.
 #[tauri::command]
 async fn provider_status() -> Result<String, String> {
-    run_cli_json(&["provider.mjs", "status", "--json"]).await
+    trantor_cli::require_compatible().await?;
+    run_cli_json(&["provider", "status", "--json"]).await
 }
 
 /// #6390 — the pre-save verify seam #6391 asked for: run the registry's own probe against a
@@ -297,18 +237,21 @@ async fn provider_status() -> Result<String, String> {
 /// key is live BEFORE `provider add --key` commits it to ~/.agent-bus/.env.
 #[tauri::command]
 async fn provider_verify(name: String, key: String) -> Result<String, String> {
-    run_cli_json(&["provider.mjs", "verify", &name, "--key", &key, "--json"]).await
+    trantor_cli::require_compatible().await?;
+    run_cli_json(&["provider", "verify", &name, "--key", &key, "--json"]).await
 }
 
 #[tauri::command]
 async fn agent_settings_status() -> Result<String, String> {
-    run_cli_json(&["agent-settings.mjs", "status", "--json"]).await
+    trantor_cli::require_compatible().await?;
+    run_cli_json(&["agent-settings", "status", "--json"]).await
 }
 
 #[tauri::command]
 async fn agent_settings_set_enabled(id: String, enabled: bool) -> Result<String, String> {
+    trantor_cli::require_compatible().await?;
     run_cli_json(&[
-        "agent-settings.mjs",
+        "agent-settings",
         "set-enabled",
         &id,
         if enabled { "true" } else { "false" },
@@ -319,8 +262,9 @@ async fn agent_settings_set_enabled(id: String, enabled: bool) -> Result<String,
 
 #[tauri::command]
 async fn agent_settings_set_default(id: Option<String>) -> Result<String, String> {
+    trantor_cli::require_compatible().await?;
     run_cli_json(&[
-        "agent-settings.mjs",
+        "agent-settings",
         "set-default",
         id.as_deref().unwrap_or("auto"),
         "--json",
@@ -1821,9 +1765,8 @@ fn spawn_chat_watcher(
 /// sat at a real 44% while the bar said 38% ("unless it's live or semi-live, it's useless").
 #[tauri::command]
 fn balances_refresh() -> Result<(), String> {
-    let out = identity_env::command("trantor")
+    let out = trantor_cli::command()
         .args(["balances", "--json"])
-        .env("PATH", terminal_path())
         .output()
         .map_err(|e| format!("trantor balances: {e}"))?;
     if out.status.success() {
@@ -2714,7 +2657,7 @@ fn right_panel_set(project: String, tab: String, dock: String) -> Result<String,
 /// side changed, and the thing that drifts would be the one deciding whether we push to a remote.
 #[tauri::command]
 fn autonomy_get(project: Option<String>) -> Result<String, String> {
-    let mut cmd = identity_env::command("trantor");
+    let mut cmd = trantor_cli::command();
     cmd.arg("autonomy").arg("json");
     match project.as_deref() {
         Some(p) if !p.trim().is_empty() => {
@@ -2725,7 +2668,6 @@ fn autonomy_get(project: Option<String>) -> Result<String, String> {
         }
     }
     let out = cmd
-        .env("PATH", terminal_path())
         .output()
         .map_err(|e| format!("trantor autonomy: {e}"))?;
     if !out.status.success() {
@@ -2742,7 +2684,7 @@ fn autonomy_set(project: Option<String>, dial: String, value: String) -> Result<
     // stale for a week before this comment was written). An unknown dial or value makes the CLI
     // exit non-zero with a specific message, which is surfaced verbatim; nothing unvalidated ever
     // reaches the autonomy.json file because the CLI is the only writer of it.
-    let mut cmd = identity_env::command("trantor");
+    let mut cmd = trantor_cli::command();
     cmd.arg("autonomy").arg("set").arg(&dial).arg(&value);
     match project.as_deref() {
         Some(p) if !p.trim().is_empty() => {
@@ -2753,7 +2695,6 @@ fn autonomy_set(project: Option<String>, dial: String, value: String) -> Result<
         }
     }
     let out = cmd
-        .env("PATH", terminal_path())
         .output()
         .map_err(|e| format!("trantor autonomy set: {e}"))?;
     if !out.status.success() {
@@ -2833,8 +2774,8 @@ fn trantor_policy_args(
 }
 
 async fn trantor_cli(args: Vec<String>, label: &str) -> Result<String, String> {
-    let mut cmd = identity_env::async_command("trantor");
-    cmd.args(&args).env("PATH", terminal_path());
+    let mut cmd = trantor_cli::async_command();
+    cmd.args(&args);
     let (stdout, stderr) = run_command_output(cmd, label).await?;
     if stdout.is_empty() {
         Ok(stderr)
@@ -3820,11 +3761,10 @@ async fn handoff_now(
     // command never traced a single step — an undiagnosable incident is its own bug.
     app_trace(&format!("handoff[{project}]: chain started (reason {reason})"));
 
-    let mut handoff = identity_env::async_command("trantor");
+    let mut handoff = trantor_cli::async_command();
     handoff
         .args(trantor_handoff_args(Some(&reason)))
-        .current_dir(&dir)
-        .env("PATH", terminal_path());
+        .current_dir(&dir);
     let (handoff_stdout, handoff_stderr) = run_command_output(handoff, "trantor handoff --write-only").await?;
     if write_only_flag_rejected(&handoff_stderr) {
         return Err(format!(
@@ -3850,11 +3790,10 @@ async fn handoff_now(
                 }
                 BoundaryStep::Deadline => {
                     app_trace(&format!("handoff[{project}]: boundary deadline after {}s — firing past the gate (--force)", boundary_started.elapsed().as_secs()));
-                    let mut force_cmd = identity_env::async_command("trantor");
+                    let mut force_cmd = trantor_cli::async_command();
                     force_cmd
                         .args(trantor_handoff_force_args(Some(&reason)))
-                        .current_dir(&dir)
-                        .env("PATH", terminal_path());
+                        .current_dir(&dir);
                     run_command_output(force_cmd, "trantor handoff --write-only --force").await?;
                     break;
                 }
@@ -3902,11 +3841,10 @@ async fn handoff_now(
     app_trace(&format!("handoff[{project}]: ending foreground pid {pid} in pane {pane}"));
     end_process_gracefully(pid).await?;
 
-    let mut reopen = identity_env::async_command("trantor");
+    let mut reopen = trantor_cli::async_command();
     reopen
         .args(trantor_reopen_args())
-        .current_dir(&dir)
-        .env("PATH", terminal_path());
+        .current_dir(&dir);
     run_command_output(reopen, "trantor open").await?;
 
     // KICKOFF-AFTER-REOPEN (card #5649, failure 2): ONE boot prompt over the herdr SOCKET so the
@@ -4306,10 +4244,9 @@ async fn takeover_now(project: String) -> Result<String, String> {
         return Err("project is required".into());
     }
     let dir = project_dir(&project).ok_or_else(|| format!("no local checkout for {project}"))?;
-    let out = identity_env::async_command("trantor")
+    let out = trantor_cli::async_command()
         .args(trantor_takeover_args(&project))
         .current_dir(&dir)
-        .env("PATH", terminal_path())
         .output()
         .await
         .map_err(|e| format!("trantor takeover could not start: {e}"))?;
