@@ -11,7 +11,7 @@ import { PgStore } from "../../lib/store-pg.mjs";
 import { createPersistHealth } from "../../lib/persist-health.mjs";
 import { drillEnv } from "../drill-env.mjs";
 
-const ROOT = dirname(fileURLToPath(new URL("../../..", import.meta.url)));
+const ROOT = fileURLToPath(new URL("../..", import.meta.url)).replace(/\/$/, "");
 let pass = 0;
 let fail = 0;
 const ok = (condition, name, detail = "") => {

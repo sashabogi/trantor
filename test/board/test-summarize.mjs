@@ -9,7 +9,7 @@ import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { drillEnv } from "../drill-env.mjs";
 
-const ROOT = dirname(fileURLToPath(new URL("../../..", import.meta.url)));
+const ROOT = fileURLToPath(new URL("../..", import.meta.url)).replace(/\/$/, "");
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 let pass = 0, fail = 0;
 const ok = (c, name) => { c ? pass++ : fail++; console.log(`  ${c ? "✓" : "✗"} ${name}`); };
@@ -46,7 +46,16 @@ const api = {
 
 console.log("# trantor narrative-cards tests");
 const hub = spawnHub();
-await sleep(800);
+// #6447: the parallel runner exposed the fixed 800ms boot sleep — under load the hub was not
+// listening yet and the first fetch died with "fetch failed". Wait for the hub to ACCEPT, not
+// for the clock (#6084 doctrine); a fixed sleep measures the machine's load, not the behaviour.
+{
+  const bootStart = Date.now();
+  for (;;) {
+    try { await fetch(`http://127.0.0.1:${P}/health`); break; }
+    catch { if (Date.now() - bootStart > 15000) throw new Error("hub did not come up in 15s"); await sleep(100); }
+  }
+}
 try {
   // one machine-titled card (candidate), one human-titled (must be skipped), one already summarized
   const a = await api.post("/task", { project: "p", title: "subagent: You are grounding a concrete BUILD: instrumenting <task-notification> noise", by: "host:p" });

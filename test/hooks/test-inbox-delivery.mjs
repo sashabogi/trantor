@@ -12,7 +12,7 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import { drillEnv } from "../drill-env.mjs";
 
-const HERE = fileURLToPath(new URL("../../..", import.meta.url));
+const HERE = fileURLToPath(new URL("../..", import.meta.url));
 const PORT = Number(process.env.WAKE_TEST_PORT || 4491);
 const URL_BASE = `http://127.0.0.1:${PORT}`;
 let pass = 0, fail = 0;

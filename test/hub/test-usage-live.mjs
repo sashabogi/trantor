@@ -9,7 +9,7 @@ import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { drillEnv } from "../drill-env.mjs";
 
-const ROOT = dirname(fileURLToPath(new URL("../../..", import.meta.url)));
+const ROOT = fileURLToPath(new URL("../..", import.meta.url)).replace(/\/$/, "");
 let pass = 0, fail = 0;
 const ok = (name, cond, detail = "") => {
   if (cond) { pass++; console.log(`  PASS  ${name}`); }

@@ -8,7 +8,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { drillEnv } from "../drill-env.mjs";
 
-const ROOT = dirname(fileURLToPath(new URL("../../..", import.meta.url)));
+const ROOT = fileURLToPath(new URL("../..", import.meta.url)).replace(/\/$/, "");
 const bus = mkdtempSync(join(tmpdir(), "trantor-ask-sidecar-"));
 const cwd = mkdtempSync(join(tmpdir(), "trantor-ask-project-"));
 const sid = "8ccf328e-ecf9-4322-903d-ca44546e6212";

@@ -65,7 +65,7 @@ ok("notify: did NOT overwrite the stamp on a no-fire path", JSON.parse(readFileS
 // --- SessionStart hook surfaces the update as a USER-facing `systemMessage` (in-terminal),
 //     NOT a desktop notification. Spawn the real hook hermetically (temp data dir + unreachable
 //     hub so registration/catchup fail-silently and never touch a live hub). ---
-const here = fileURLToPath(new URL("../../..", import.meta.url));
+const here = fileURLToPath(new URL("../..", import.meta.url));
 const hookPath = join(here, "hooks", "sessionstart.mjs");
 const runHook = () => {
   const stdin = JSON.stringify({ session_id: "test", transcript_path: "/tmp/x", source: "startup", cwd: here });

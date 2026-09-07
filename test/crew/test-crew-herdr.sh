@@ -9,7 +9,7 @@ set -u
 # Same as test-crew.sh (#6228 bounce, 8c82e8e): the suite must not inherit the RUNNER's own identity
 # badge, or every dry spawn for testproj is refused by the cross-project guard as a badge mismatch.
 unset TRANTOR_ORCH TRANTOR_SEAT HERDR_ENV HERDR_PANE_ID RELAY_PROJECT RELAY_SESSION RELAY_AGENT TRANTOR_PROJECT
-ROOT="$(cd "$(dirname "$0")" && pwd)"
+ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 CREW=("$(command -v node)" "$ROOT/bin/crew.mjs")
 PASS=0; FAIL=0
 ok(){ if eval "$2"; then PASS=$((PASS+1)); echo "  ✓ $1"; else FAIL=$((FAIL+1)); echo "  ✗ $1  [$2]"; fi; }

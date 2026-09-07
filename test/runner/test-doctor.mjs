@@ -8,7 +8,7 @@ import { join, dirname } from "node:path";
 import { homedir } from "node:os";
 import { fileURLToPath } from "node:url";
 
-const HERE = dirname(fileURLToPath(new URL("../../..", import.meta.url)));
+const HERE = fileURLToPath(new URL("../..", import.meta.url)).replace(/\/$/, "");
 let pass = 0, fail = 0;
 const ok = (n, c, e = "") => { if (c) { pass++; console.log(`  ✓ ${n}`); } else { fail++; console.log(`  ✗ ${n}${e ? " — " + e : ""}`); } };
 

@@ -23,7 +23,7 @@ import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { drillEnv, scrubIdentityEnv } from "../drill-env.mjs";
 
-const ROOT = process.env.TRANTOR_ROOT || dirname(fileURLToPath(new URL("../../..", import.meta.url)));
+const ROOT = process.env.TRANTOR_ROOT || fileURLToPath(new URL("../..", import.meta.url)).replace(/\/$/, "");
 // Pin the drill's OWN env (#6108): section 5 asserts nonSeatReason() as a pure unit, but the
 // function defaults env=process.env — a runner exporting RELAY_PROJECT/RELAY_SESSION would flip
 // "home is a non-seat" into a seat. The host's identity env is the runner's, never the drill's.

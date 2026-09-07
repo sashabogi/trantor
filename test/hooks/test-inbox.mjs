@@ -22,7 +22,7 @@ import { drillEnv } from "../drill-env.mjs";
 
 const pexec = promisify(execFile);
 
-const HERE = dirname(fileURLToPath(new URL("../../..", import.meta.url)));
+const HERE = fileURLToPath(new URL("../..", import.meta.url)).replace(/\/$/, "");
 let pass = 0, fail = 0;
 const ok = (name, cond) => { console.log(`  ${cond ? "PASS" : "FAIL"}  ${name}`); cond ? pass++ : fail++; };
 console.log("# trantor inbox-delivery tests");

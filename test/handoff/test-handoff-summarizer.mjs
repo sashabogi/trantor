@@ -16,7 +16,7 @@ import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const ROOT = dirname(fileURLToPath(new URL("../../..", import.meta.url)));
+const ROOT = fileURLToPath(new URL("../..", import.meta.url)).replace(/\/$/, "");
 let pass = 0, fail = 0;
 const ok = (n, c, x = "") => { if (c) { pass++; console.log(`  ✓ ${n}`); } else { fail++; console.log(`  ✗ ${n}${x ? " — " + x : ""}`); } };
 

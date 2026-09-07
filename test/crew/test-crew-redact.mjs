@@ -12,7 +12,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { redactKeys } from "../../lib/redact.mjs";
 
-const ROOT = fileURLToPath(new URL("../../..", import.meta.url));
+const ROOT = fileURLToPath(new URL("../..", import.meta.url));
 const SCRUB = join(ROOT, "lib", "redact.mjs");
 let fail = 0; const ok = (c, m) => { console.log((c ? "✓" : "✗ FAIL") + " " + m); if (!c) fail++; };
 

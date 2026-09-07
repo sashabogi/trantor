@@ -19,7 +19,7 @@ import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { drillEnv } from "../drill-env.mjs";
 
-const ROOT = dirname(fileURLToPath(new URL("../../..", import.meta.url)));
+const ROOT = fileURLToPath(new URL("../..", import.meta.url)).replace(/\/$/, "");
 const PORT = 47821;
 const base = `http://127.0.0.1:${PORT}`;
 const dir = mkdtempSync(join(tmpdir(), "trantor-inflight-"));
