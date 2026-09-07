@@ -27,10 +27,32 @@ describe("suggestionsFromTurn", () => {
     expect(texts(suggestionsFromTurn("The merge is queued and waits for your go."))).toEqual(["go"]);
   });
 
-  it("'say' without an answer word invents nothing", () => {
-    expect(suggestionsFromTurn("Say the word and I start.")).toEqual([]);
+  it("'say' that is not an ask invents nothing", () => {
     expect(suggestionsFromTurn("Say more about what you saw.")).toEqual([]);
     expect(suggestionsFromTurn("I would say the seeder is fine.")).toEqual([]);
+  });
+
+  // #5993 reopen on app 0.3.162: the orchestrator's idle asks read "say the word and it goes in"
+  // and "whenever you're at a break, say the word" — no answer word to echo, so rule 2 stayed
+  // silent and the operator saw no chips. The imperative confirm chips a lone "yes" that carries
+  // its sentence.
+  it("a trailing imperative confirm ('say the word', 'let me know') chips yes with the ask", () => {
+    expect(suggestionsFromTurn("The patch is staged on the seat. Say the word and it goes in."))
+      .toEqual([{ text: "yes", tooltip: "Say the word and it goes in.", ask: "Say the word and it goes in." }]);
+    expect(texts(suggestionsFromTurn("Nothing else is owed. Whenever you're at a break, say the word."))).toEqual(["yes"]);
+    expect(texts(suggestionsFromTurn("Just say the word and I'll ship it."))).toEqual(["yes"]);
+    expect(texts(suggestionsFromTurn("Say the word and I start."))).toEqual(["yes"]);
+    expect(texts(suggestionsFromTurn("Both are in testing. Let me know."))).toEqual(["yes"]);
+    expect(texts(suggestionsFromTurn("Let me know if you want the drill rerun."))).toEqual(["yes"]);
+    expect(texts(suggestionsFromTurn("Give me the go and I merge."))).toEqual(["yes"]);
+  });
+
+  it("the imperative confirm yields to a more specific ask and to open questions", () => {
+    expect(texts(suggestionsFromTurn("Say the word and I push. Push?"))).toEqual(["push it"]);
+    expect(texts(suggestionsFromTurn("Say the word. Should I merge now?"))).toEqual(["yes", "no"]);
+    expect(texts(suggestionsFromTurn("Say go when ready, or just say the word."))).toEqual(["go"]);
+    expect(suggestionsFromTurn("Let me know what you saw in the drill.")).toEqual([]);
+    expect(suggestionsFromTurn("Let me know which one you want.")).toEqual([]);
   });
 
   it("a yes/no question offers yes and no", () => {

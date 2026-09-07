@@ -1007,11 +1007,32 @@ export function Chat({ project, sessionId, dock, onDock, onClose, deps = DEFAULT
     () => askQuestion ? trimAsk(askQuestion.question) : askLeadIn(suggestions),
     [askQuestion, suggestions],
   );
-  const lastSpeechTurn = [...chat.turns].reverse().find(t => t.role === "user" || t.role === "assistant");
+  const lastSpeechRole = [...chat.turns].reverse().find(t => t.role === "user" || t.role === "assistant")?.role ?? null;
   const chipsVisible =
     !history && !!(activeLiveAsk?.target ?? target) && !working && suggestions.length > 0 &&
-    lastSpeechTurn?.role === "assistant" && !composerDraft.trim() && !chipsDismissed;
+    lastSpeechRole === "assistant" && !composerDraft.trim() && !chipsDismissed;
   useEffect(() => { setChipsDismissed(false); }, [orchestratorTexts]);
+  // #5993, third reopen — the built app names the input that hid the chips, so the next "chips
+  // are gone" report reads the reason out of app-trace.log instead of a code walk. Whenever the
+  // orchestrator holds the floor and the row is hidden, one line names the first gate input
+  // (in gate order) that failed; the extractor case carries the turn's tail, since that tail
+  // IS the idiom the extractor missed. Deduped on the reason (plus the tail), so a working
+  // stretch logs once, not once per streamed row.
+  const chipTraceRef = useRef("");
+  const chipTarget = activeLiveAsk?.target ?? target;
+  const chipTail = (orchestratorTexts[0] ?? "").replace(/\s+/g, " ").trim().slice(-80);
+  useEffect(() => {
+    if (history || chipsVisible || lastSpeechRole !== "assistant") return;
+    const blocker =
+      !chipTarget ? "no target" :
+      working ? "working" :
+      suggestions.length === 0 ? "suggestions.length===0" :
+      composerDraft.trim() ? "composerDraft non-empty" : "chipsDismissed";
+    const line = `chat chips ${project}: hidden by ${blocker}${blocker === "suggestions.length===0" ? ` (last turn ends: "${chipTail}")` : ""}`;
+    if (chipTraceRef.current === line) return;
+    chipTraceRef.current = line;
+    invokeFn("app_log", { line }).catch(() => {});
+  }, [history, chipsVisible, lastSpeechRole, chipTarget, working, suggestions, composerDraft, chipTail, project, invokeFn]);
   useEffect(() => {
     if (!chipsVisible) return;
     const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") setChipsDismissed(true); };
