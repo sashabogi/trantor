@@ -142,3 +142,56 @@ describe("suggestionsFromTurns — the bounce rule (#5929)", () => {
     expect(suggestionsFromTurns([])).toEqual([]);
   });
 });
+
+// #6702 — a prose chip carries the sentence it answers, so hovering "yes" explains what it
+// confirms, and the row's lead-in echoes that ask (trimmed) instead of the bare word "suggested".
+import { askLeadIn, LEAD_IN_MAX, trimAsk } from "./suggestions";
+
+describe("prose chips carry their ask (#6702)", () => {
+  it("a yes/no question rides on both chips as tooltip and ask", () => {
+    const s = suggestionsFromTurn("Both handoff cards are parked in testing. Want me to verify those handoff cards?");
+    expect(s).toEqual([
+      { text: "yes", tooltip: "Want me to verify those handoff cards?", ask: "Want me to verify those handoff cards?" },
+      { text: "no", tooltip: "Want me to verify those handoff cards?", ask: "Want me to verify those handoff cards?" },
+    ]);
+  });
+
+  it("a push ask, a 'say <word>' and an either/or each carry their own sentence", () => {
+    expect(suggestionsFromTurn("Landed on the seat. Should I push?")[0])
+      .toEqual({ text: "push it", tooltip: "Should I push?", ask: "Should I push?" });
+    expect(suggestionsFromTurn("Say yes and I ship it."))
+      .toEqual([{ text: "yes", tooltip: "Say yes and I ship it.", ask: "Say yes and I ship it." },
+        { text: "no", tooltip: "Say yes and I ship it.", ask: "Say yes and I ship it." }]);
+    expect(suggestionsFromTurn("Run the drill. Say crashed or survived.").map(c => c.tooltip))
+      .toEqual(["Say crashed or survived.", "Say crashed or survived."]);
+  });
+
+  it("a numbered pick keeps the option as tooltip and the pick sentence as ask", () => {
+    const s = suggestionsFromTurn("Two ways forward:\n1. Land the tab strip first\n2. Ship the dock as is\nWhich one?");
+    expect(s[0]).toEqual({ text: "1", tooltip: "Land the tab strip first", ask: "Which one?" });
+    expect(s[1].ask).toBe("Which one?");
+  });
+
+  it("the bounce rule preserves the ask through suggestionsFromTurns", () => {
+    const s = suggestionsFromTurns(["Nothing to swap.", "The gate is green. Should I merge now?"]);
+    expect(s.map(c => c.tooltip)).toEqual(["Should I merge now?", "Should I merge now?"]);
+  });
+});
+
+describe("the lead-in (#6702)", () => {
+  it("is the first chip's ask, and null when no chip carries one", () => {
+    expect(askLeadIn(suggestionsFromTurn("Want me to verify those handoff cards?"))).toBe("Want me to verify those handoff cards?");
+    expect(askLeadIn([])).toBeNull();
+    expect(askLeadIn([{ text: "Yes", tooltip: "Ship it" }])).toBeNull();
+  });
+
+  it("collapses whitespace and cuts a long ask at a word boundary with an ellipsis", () => {
+    expect(trimAsk("Should   I\n merge now?")).toBe("Should I merge now?");
+    const long = "Should I merge the handoff chain, the ask sidecar and the chip regression into one release tonight?";
+    const t = trimAsk(long);
+    expect(t.length).toBeLessThanOrEqual(LEAD_IN_MAX);
+    expect(t.endsWith("…")).toBe(true);
+    expect(long.startsWith(t.slice(0, -1))).toBe(true);
+    expect(t.slice(0, -1).endsWith(" ")).toBe(false);
+  });
+});

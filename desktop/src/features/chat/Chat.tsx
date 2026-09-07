@@ -24,7 +24,7 @@ import { DEFAULT_TERMINAL_DEPS, TerminalPane, type TerminalDeps } from "../works
 import { bannerCountdown, type HandoffCountdown } from "./banner";
 import { Composer, type Provenance } from "./Composer";
 import { MarkdownText } from "./MarkdownText";
-import { suggestionsFromAskOptions, suggestionsFromTurns } from "./suggestions";
+import { askLeadIn, suggestionsFromAskOptions, suggestionsFromTurns, trimAsk } from "./suggestions";
 import { SuggestionChips } from "./SuggestionChips";
 import { isPinned } from "./scrollPin";
 import {
@@ -1001,6 +1001,12 @@ export function Chat({ project, sessionId, dock, onDock, onClose, deps = DEFAULT
     if (askQuestion) return suggestionsFromAskOptions(askQuestion.options);
     return suggestionsFromTurns(orchestratorTexts);
   }, [history, working, askQuestion, orchestratorTexts]);
+  // #6702 — the row reads with its question: the AskUserQuestion's own, or the prose ask the
+  // chips were read from.
+  const chipLeadIn = useMemo(
+    () => askQuestion ? trimAsk(askQuestion.question) : askLeadIn(suggestions),
+    [askQuestion, suggestions],
+  );
   const lastSpeechTurn = [...chat.turns].reverse().find(t => t.role === "user" || t.role === "assistant");
   const chipsVisible =
     !history && !!(activeLiveAsk?.target ?? target) && !working && suggestions.length > 0 &&
@@ -1396,6 +1402,7 @@ export function Chat({ project, sessionId, dock, onDock, onClose, deps = DEFAULT
       {chipsVisible && (
         <SuggestionChips
           suggestions={suggestions}
+          leadIn={chipLeadIn}
           onPick={text => {
             if (activeLiveAsk && askQuestion) {
               const idx = askQuestion.options.findIndex(o => o.label === text);

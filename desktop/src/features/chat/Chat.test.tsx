@@ -1475,3 +1475,42 @@ describe("the transcript stays put while you read (#6697)", () => {
     expect(jump()).toBeNull();
   });
 });
+
+describe("prose chips read with their question (#6702)", () => {
+  let host: HTMLDivElement;
+  let root: Root;
+
+  beforeEach(() => {
+    host = document.createElement("div");
+    document.body.appendChild(host);
+    root = createRoot(host);
+  });
+
+  afterEach(() => {
+    act(() => root.unmount());
+    host.remove();
+  });
+
+  it("a prose yes/no ask chips yes/no with the question as lead-in and tooltip", async () => {
+    const d = makeDeps();
+    // A hosted pane so the chips have a target; the ask arrives the live way, via chat-rows.
+    const deps: ChatDeps = { ...d.deps, orchestratorOf: async () => ({ project: "p", agent: "orch", surface: "surf1", kind: "orch" }) };
+    act(() => { root.render(<Chat project="p" dock="right" onDock={() => {}} onClose={() => {}} deps={deps} />); });
+    await flush();
+    await flush();
+    const ask = "Want me to verify those handoff cards?";
+    await act(async () => {
+      for (const cb of d.handlers.get("chat-rows") ?? []) cb({ payload: JSON.stringify({
+        project: "p", sessionId: "s1", after: 0, total: 1, results: [], meta: META,
+        turns: [{ role: "assistant", blocks: [{ kind: "text", text: `Both are parked in testing. ${ask}` }] }],
+      }) });
+    });
+    await flush();
+    const chips = host.querySelector('[data-testid="suggestion-chips"]');
+    expect(chips).not.toBeNull();
+    expect(chips!.querySelector('[data-testid="suggestion-lead-in"]')!.textContent).toBe(ask);
+    const buttons = [...chips!.querySelectorAll("button")].filter(b => b.textContent !== "×");
+    expect(buttons.map(b => b.textContent)).toEqual(["yes", "no"]);
+    expect(buttons.map(b => b.title)).toEqual([ask, ask]);
+  });
+});

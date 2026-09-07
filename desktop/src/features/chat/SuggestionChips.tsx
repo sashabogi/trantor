@@ -3,14 +3,16 @@
 // plain tr-chips, no new colors, a quiet "suggested" lead-in and an × that dismisses.
 import type { Suggestion } from "./suggestions";
 
-export function SuggestionChips({ suggestions, onPick, onDismiss }: {
+export function SuggestionChips({ suggestions, leadIn, onPick, onDismiss }: {
   suggestions: Suggestion[];
+  /** #6702 — the trimmed ask the chips answer; absent, the row says "suggested". */
+  leadIn?: string | null;
   onPick: (text: string) => void;
   onDismiss: () => void;
 }) {
   return (
     <div className="flex shrink-0 flex-wrap items-center gap-1.5 px-3 pb-1.5" data-testid="suggestion-chips">
-      <span className="text-[10.5px] text-tr-muted/70">suggested</span>
+      <span className="min-w-0 truncate text-[10.5px] text-tr-muted/70" data-testid="suggestion-lead-in">{leadIn || "suggested"}</span>
       {suggestions.map(s => (
         <button
           key={s.text}
