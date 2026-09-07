@@ -5,6 +5,7 @@ mod genesis;
 mod right_panel;
 mod ghost;
 mod identity_env;
+mod key_drill;
 mod onboarding;
 mod provider_accounts;
 pub mod identity;
@@ -5733,6 +5734,8 @@ pub fn run() {
     }
     redirect_stderr_to_log();
     install_panic_hook();
+    key_drill::install_objc_exception_reporter();
+    key_drill::prepare();
     if std::env::var("TRANTOR_PANIC_DRILL").is_ok() {
         run_panic_drill();
     }
@@ -5755,6 +5758,9 @@ pub fn run() {
             // behalf. The probe bytes are the same shape answerKeystrokes() sends for a real
             // pick; the operator reads the pane back (`herdr pane read <target>`) to confirm.
             use tauri::{Emitter, Manager};
+            // #6317 acceptance drill: TRANTOR_KEY_DRILL=post|throw posts a real right-arrow key
+            // event through AppKit once the webview is live (src/key_drill.rs). Inert otherwise.
+            key_drill::arm(app.handle());
             if let Ok(project) = std::env::var("TRANTOR_ASK_DRILL") {
                 let write_target = std::env::var("TRANTOR_ASK_DRILL_WRITE_TARGET").ok();
                 if let Some(window) = app.get_webview_window("main") {
@@ -5826,6 +5832,8 @@ pub fn run() {
             asks::ask_answer_session,
             asks::ask_drill_start,
             asks::ask_drill_probe,
+            key_drill::key_drill_post,
+            key_drill::key_drill_finish,
             asks::ask_drill_close,
             ask_drill_fire_status,
             orchestrator_status,

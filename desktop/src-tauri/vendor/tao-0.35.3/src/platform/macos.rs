@@ -16,6 +16,11 @@ use crate::{
   window::{Window, WindowBuilder},
 };
 
+/// #6317: the Objective-C exception boundary around tao's AppKit method overrides. Install a
+/// reporter to be told (name, reason, Objective-C call stack) whenever `sendEvent:` or an NSView
+/// key/IME override caught an exception that would otherwise have aborted the process.
+pub use crate::platform_impl::{set_objc_exception_reporter, ObjcExceptionReport};
+
 /// Additional methods on `Window` that are specific to MacOS.
 pub trait WindowExtMacOS {
   /// Returns a pointer to the cocoa `NSWindow` that is used by this window.

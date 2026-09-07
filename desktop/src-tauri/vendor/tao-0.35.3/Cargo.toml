@@ -253,6 +253,8 @@ version = "0.6"
 
 [target.'cfg(any(target_os = "ios", target_os = "macos"))'.dependencies.objc2]
 version = "0.6"
+# #6317: `objc2::exception::catch` at the extern "C" method boundaries (platform_impl/macos/objc_exception.rs).
+features = ["exception"]
 
 [target.'cfg(any(target_os = "linux", target_os = "dragonfly", target_os = "freebsd", target_os = "openbsd", target_os = "netbsd"))'.dependencies.dbus]
 version = "0.9"
@@ -349,6 +351,7 @@ features = [
     "NSDate",
     "NSDictionary",
     "NSEnumerator",
+    "NSException",
     "NSGeometry",
     "NSObjCRuntime",
     "NSRange",

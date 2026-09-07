@@ -8,7 +8,7 @@ use objc2::runtime::{AnyClass as Class, ClassBuilder as ClassDecl, Sel};
 use objc2_app_kit::{self as appkit, NSApplication, NSEvent, NSEventType};
 use once_cell::sync::Lazy;
 
-use super::{app_state::AppState, event::EventWrapper, util, DEVICE_ID};
+use super::{app_state::AppState, event::EventWrapper, objc_exception, util, DEVICE_ID};
 use crate::event::{DeviceEvent, ElementState, Event};
 
 pub struct AppClass(pub *const Class);
@@ -28,26 +28,39 @@ pub static APP_CLASS: Lazy<AppClass> = Lazy::new(|| unsafe {
 // Normally, holding Cmd + any key never sends us a `keyUp` event for that key.
 // Overriding `sendEvent:` like this fixes that. (https://stackoverflow.com/a/15294196)
 // Fun fact: Firefox still has this bug! (https://bugzilla.mozilla.org/show_bug.cgi?id=1299553)
+//
+// #6317: this is a plain `extern "C"` frame, so an Objective-C exception thrown anywhere under
+// `[super sendEvent:]` (AppKit key dispatch, WebKit, the text input context) used to hit Rust's
+// `panic_cannot_unwind` landing pad here and abort the process — three arrow-key crashes on
+// macOS 26 with no Rust panic to show for them. The guard catches the exception at this boundary,
+// reports it and returns to AppKit, which is what AppKit's own run loop would have done with it.
 extern "C" fn send_event(this: &NSApplication, _sel: Sel, event: &NSEvent) {
-  unsafe {
-    // For posterity, there are some undocumented event types
-    // (https://github.com/servo/cocoa-rs/issues/155)
-    // but that doesn't really matter here.
-    let event_type = event.r#type();
-    let modifier_flags = event.modifierFlags();
-    if event_type == appkit::NSKeyUp
-      && util::has_flag(modifier_flags, appkit::NSEventModifierFlags::Command)
-    {
-      if let Some(key_window) = this.keyWindow() {
-        key_window.sendEvent(event);
-      } else {
-        log::debug!("skip sending CMD keyEvent - app has no keyWindow");
-      }
+  objc_exception::guard("NSApplication sendEvent:", || unsafe {
+    dispatch_event(this, event)
+  });
+}
+
+unsafe fn dispatch_event(this: &NSApplication, event: &NSEvent) {
+  // For posterity, there are some undocumented event types
+  // (https://github.com/servo/cocoa-rs/issues/155)
+  // but that doesn't really matter here.
+  let event_type = event.r#type();
+  let modifier_flags = event.modifierFlags();
+  if event_type == appkit::NSKeyUp
+    && util::has_flag(modifier_flags, appkit::NSEventModifierFlags::Command)
+  {
+    if let Some(key_window) = this.keyWindow() {
+      key_window.sendEvent(event);
     } else {
-      maybe_dispatch_device_event(event);
-      let superclass = util::superclass(this);
-      let _: () = msg_send![super(this, superclass), sendEvent: event];
+      log::debug!("skip sending CMD keyEvent - app has no keyWindow");
     }
+  } else {
+    maybe_dispatch_device_event(event);
+    let superclass = util::superclass(this);
+    let _: () = msg_send![super(this, superclass), sendEvent: event];
+  }
+  if objc_exception::drill_matches(event) {
+    objc_exception::drill_throw("NSApplication sendEvent:");
   }
 }
 
