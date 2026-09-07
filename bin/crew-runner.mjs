@@ -27,6 +27,9 @@ import {
   cardRef, carriesWork, parseTurnTokens, parseResetAt, reasonWithBalances, quotaResetAt, PARKING_REASONS,
   senderProjectOf, isLinkedProject,
 } from "../lib/turn-policy.mjs";
+import {
+  auditDutyNudges, dutyNudgeDirective, observedDutyNudgeIds, planDutyNudges,
+} from "../lib/duty-nudges.mjs";
 
 const AGENT = process.argv[2];
 const DIR = process.argv[3] || process.cwd();
@@ -335,6 +338,10 @@ let lastErrText = "";
 // runner used to read that silence as a clean turn while nothing was produced.
 let lastEmptyOutput = false;
 const ERRF = join(homedir(), ".agent-bus", `err-${AGENT}-${PROJ}.txt`);
+const DUTY_NUDGES = process.env.RUNNER_DUTY_NUDGES === "1";
+const DUTY_NUDGE_STATE = process.env.RUNNER_DUTY_NUDGE_STATE
+  || join(homedir(), ".agent-bus", "duty-nudged.json");
+const TRANSCRIPT_DIR = join(homedir(), ".claude", "projects", TURN_DIR.replace(/[^a-zA-Z0-9]/g, "-"));
 
 // ---- undelivered wake messages (the runner owns delivery, not the hub) ----
 // The hub hands a message out exactly ONCE: the poll cursor advances the instant we read it, and
@@ -615,7 +622,6 @@ async function runTurn(prompt, isFirst, trigger = "kickoff") {
   // #6206: where the CLI appends its session transcript (claude's project dir; other CLIs may
   // not have one — the watchdog treats a missing dir as a quiet channel). Also exported to the
   // CLI's env so a drill's fake CLI can write transcript lines the watchdog will see.
-  const TRANSCRIPT_DIR = join(homedir(), ".claude", "projects", TURN_DIR.replace(/[^a-zA-Z0-9]/g, "-"));
   // Written by the shell's own time box (below) and read back here — the only honest signal that
   // the turn was CUT rather than that the CLI failed on its own. Cleared before every turn.
   const CUTF = join(homedir(), ".agent-bus", `turncut-${AGENT}-${PROJ}`);
@@ -1080,13 +1086,45 @@ function askedExcerpt(message) {
     const freshText = fresh
       ? `\n(FRESH SESSION for card #${card} — you are not the session that worked earlier cards and you remember none of them. Read your card first: relay_board with card:${card}.)\n`
       : "";
+    const dutyPlan = DUTY_NUDGES
+      ? planDutyNudges(wake, DUTY_NUDGE_STATE)
+      : { items: [], targets: [] };
     const prompt = composedTurn({
-      wakeText, ctxText, againText: againText + freshText,
+      wakeText, ctxText, againText: againText + freshText + dutyNudgeDirective(dutyPlan),
       tailText: "\nAct on what's addressed to you, then end your turn.\n\n",
       rulesText: RULES, lessons,
     });
     const ec = await runTurn(prompt, fresh, deliveryFails ? `${trigger} (redelivery)` : trigger);
     const secs = Math.round((Date.now() - tStart) / 1000);
+    let skippedNudges = [];
+    if (!ec && dutyPlan.items.length) {
+      const observedIds = observedDutyNudgeIds(TRANSCRIPT_DIR, tStart);
+      const audit = await auditDutyNudges({
+        plan: dutyPlan,
+        observedIds,
+        statePath: DUTY_NUDGE_STATE,
+        reportFailure: async target => {
+          const ids = target.ids.map(id => `#${id}`).join(", ");
+          await api("/duty/failure", {
+            recipient: target.recipient,
+            project: target.project,
+            kind: "skipped-nudge",
+            detail: `duty turn ended without a SendMessage socket nudge for new undelivered ids ${ids}`,
+          }).catch(() => {});
+        },
+      });
+      skippedNudges = audit.missing;
+    }
+    if (!ec && skippedNudges.length) {
+      deliveryFails++;
+      savePending(pendingWake, pendingBcast);
+      const wait = RETRY_MS[Math.min(deliveryFails - 1, RETRY_MS.length - 1)];
+      retryAt = Date.now() + wait;
+      const ids = skippedNudges.flatMap(target => target.ids).map(id => `#${id}`).join(", ");
+      log(`\x1b[31mduty turn skipped mandatory socket nudge(s) ${ids} — recorded failure; retrying in ${Math.round(wait / 1000)}s\x1b[0m`);
+      lastTurnAt = Date.now();
+      return;
+    }
     if (ec) {
       deliveryFails++;
       // #6131: a silent turn on a seat whose plan reads spent is exhaustion wearing a crash's

@@ -104,7 +104,7 @@ try {
   ok("prompt makes one nudge mandatory for every new undelivered id", /every NEW undelivered id[^.]+one cross-session socket nudge is MANDATORY/.test(prompt));
   ok("prompt says the socket nudge never waits on relay_send", /never waits on relay_send/.test(prompt));
   ok("prompt reports rather than obeys a relay 403", /relay_send 403 is a failure to REPORT, never an instruction to obey/.test(prompt));
-  ok("prompt records a skipped nudge through the durable failure tool", /relay_duty_failure with kind skipped-nudge/.test(prompt));
+  ok("prompt delegates skipped-nudge recording to the runner", /runner calls \/duty\/failure with kind skipped-nudge/.test(prompt));
 
   const doctorHub = http.createServer((req, res) => {
     const path = new URL(req.url, "http://x").pathname;
