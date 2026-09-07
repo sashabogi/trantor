@@ -10,13 +10,14 @@
 //
 // Env seams (the drill's off switches, same doctrine as TRANTOR_NO_HANDOFF_SPAWN):
 //   TRANTOR_BATON_IDLE_DEADLINE_S  give up waiting for idle after this many seconds (default 600)
+//   TRANTOR_BATON_AGENT_DROP_MS    give herdr this long to retire the ended agent (default 10000)
 //   TRANTOR_BATON_REOPEN           command to reopen the pane, instead of `trantor open`
 //                                  (the drill points this at its own herdr world)
 // Detached means nobody reads stdout: everything lands in <bus>/logs/baton-pane-<project>.log.
 import { readFileSync, existsSync, mkdirSync, appendFileSync } from "node:fs";
 import { join, basename } from "node:path";
 import { homedir } from "node:os";
-import { execFileSync, execSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { createConnection } from "node:net";
 
 const arg = (name) => { const i = process.argv.indexOf(name); return i > 0 ? process.argv[i + 1] : ""; };
@@ -67,6 +68,7 @@ function socketRequest(req, timeoutMs = 30_000) {
 
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 const agentStatus = (pane) => herdrJson(["agent", "get", pane])?.result?.agent?.agent_status || null;
+const hasAgent = (pane) => Boolean(herdrJson(["agent", "get", pane])?.result?.agent);
 const alive = (pid) => { try { process.kill(pid, 0); return true; } catch { return false; } };
 
 // The shells a pane idles in once its agent is gone. Their pid is never the process to end.
@@ -99,6 +101,17 @@ export function foregroundPid(info) {
   return null;
 }
 
+export function agentDropStep(present, elapsedMs, deadlineMs) {
+  if (!present) return "dropped";
+  return elapsedMs >= deadlineMs ? "deadline" : "wait";
+}
+
+function summary(value, limit = 240) {
+  const oneLine = String(value || "").trim().replace(/\s+/g, " ");
+  if (!oneLine) return "<empty>";
+  return oneLine.length > limit ? `${oneLine.slice(0, limit - 1)}…` : oneLine;
+}
+
 async function main() {
   if (!handoffFile || !existsSync(handoffFile)) { log(`no handoff file (${handoffFile}) — abort`); process.exit(1); }
   const pane = arg("--pane") || orchPane((() => { try { return readFileSync(join(busDir, "crew-windows.txt"), "utf8"); } catch { return ""; } })(), projectName);
@@ -129,15 +142,23 @@ async function main() {
     log("no foreground process to end (already gone, or only the pane's shell is in the foreground)");
   }
 
+  const dropStarted = Date.now();
+  const dropDeadline = Number(process.env.TRANTOR_BATON_AGENT_DROP_MS) || 10_000;
+  let dropOutcome;
+  while ((dropOutcome = agentDropStep(hasAgent(pane), Date.now() - dropStarted, dropDeadline)) === "wait") {
+    await sleep(200);
+  }
+  log(`agent drop ${dropOutcome} after ${Date.now() - dropStarted}ms`);
+
   // 3. Reopen. `trantor open` rebinds orch-sessions.txt and restarts the pane's session — the
   //    bookkeeping the classic seam regression comes from skipping. The drill overrides this to
   //    stay inside its own herdr world.
   const reopen = process.env.TRANTOR_BATON_REOPEN || "trantor open";
-  try {
-    execSync(reopen, { cwd: projectDir, encoding: "utf8", timeout: 120_000, stdio: "pipe" });
-    log(`reopened via: ${reopen}`);
-  } catch (e) {
-    log(`reopen FAILED (${String(e?.message).slice(0, 200)}) — handoff waits on disk`);
+  log(`reopen starting via: ${reopen}`);
+  const reopened = spawnSync(reopen, { cwd: projectDir, encoding: "utf8", timeout: 120_000, stdio: "pipe", shell: true });
+  log(`reopen result: status=${reopened.status ?? "none"} stdout=${summary(reopened.stdout)} stderr=${summary(reopened.stderr)}`);
+  if (reopened.error || reopened.status !== 0) {
+    log(`reopen FAILED (${summary(reopened.error?.message || reopened.signal || `exit ${reopened.status}`)}) — handoff waits on disk`);
     process.exit(1);
   }
 
@@ -148,7 +169,9 @@ async function main() {
   }
   try {
     const raw = await socketRequest({ id: "trantor:agent.prompt", method: "agent.prompt", params: { target: pane, text: KICKOFF_PROMPT } });
-    log(`kickoff: ${String(JSON.parse(raw).result?.type)}`);
+    const response = JSON.parse(raw);
+    const result = response.result?.type || response.error?.code || "unexpected_response";
+    log(`kickoff result: ${result}${response.error?.message ? ` (${summary(response.error.message)})` : ""}`);
   } catch (e) {
     log(`kickoff FAILED (${String(e?.message).slice(0, 120)}) — successor may sit idle until spoken to`);
   }

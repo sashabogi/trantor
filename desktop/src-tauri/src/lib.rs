@@ -3665,6 +3665,20 @@ async fn run_command_output(
     }
 }
 
+fn trace_summary(raw: &str) -> String {
+    let one_line = raw.split_whitespace().collect::<Vec<_>>().join(" ");
+    if one_line.is_empty() {
+        return "<empty>".to_string();
+    }
+    let mut chars = one_line.chars();
+    let head = chars.by_ref().take(239).collect::<String>();
+    if chars.next().is_some() {
+        format!("{head}…")
+    } else {
+        head
+    }
+}
+
 fn signal_process(pid: u32, signal: &str) -> Result<(), String> {
     let status = std::process::Command::new("/bin/kill")
         .arg(format!("-{signal}"))
@@ -3911,36 +3925,106 @@ async fn handoff_now(
     let pid = foreground_pid_from_process_info(&process_info)
         .ok_or_else(|| format!("no foreground process for orchestrator pane {pane}"))?;
     app_trace(&format!("handoff[{project}]: ending foreground pid {pid} in pane {pane}"));
-    end_process_gracefully(pid).await?;
+    let post_kill = async {
+        end_process_gracefully(pid).await?;
+        app_trace(&format!("handoff[{project}]: foreground pid {pid} ended"));
 
-    let mut reopen = trantor_cli::async_command();
-    reopen
-        .args(trantor_reopen_args())
-        .current_dir(&dir);
-    run_command_output(reopen, "trantor open").await?;
+        // herdr retires an ended agent asynchronously. Reopening while its registry still names
+        // the predecessor makes `trantor open` reattach to nobody, so hold this seam until the
+        // pane has no agent (bounded: a stale registry must not hang the handoff forever).
+        let drop_started = Instant::now();
+        let drop_outcome = loop {
+            let present = {
+                let pane = pane.clone();
+                tokio::task::spawn_blocking(move || herdr::agent_status(&pane).is_some())
+                    .await
+                    .unwrap_or(true)
+            };
+            match agent_drop_step(
+                present,
+                drop_started.elapsed(),
+                HANDOFF_AGENT_DROP_DEADLINE,
+            ) {
+                AgentDropStep::Wait => tokio::time::sleep(HANDOFF_AGENT_DROP_CADENCE).await,
+                outcome => break outcome,
+            }
+        };
+        app_trace(&format!(
+            "handoff[{project}]: agent drop {} after {}ms",
+            drop_outcome.as_str(),
+            drop_started.elapsed().as_millis()
+        ));
 
-    // KICKOFF-AFTER-REOPEN (card #5649, failure 2): ONE boot prompt over the herdr SOCKET so the
-    // successor recaps the handoff unprompted. Agent text never rides the CLI (socket only), and
-    // the outcome is surfaced rather than swallowed — a blocked or still-starting agent means the
-    // recap is still waiting on a human, which is exactly the failure this fixes.
-    // #6184: the successor is BOOTING after the reopen, and a prompt fired straight at it landed
-    // on nobody (NotReady/NoAgent were the common outcomes — the herdr-log trace on the card).
-    // Mirror of bin/baton-pane.mjs step 4: wait for the agent to read idle before the first
-    // prompt, then retry the transient outcomes on a 3s cadence until it lands, is blocked (a
-    // human must answer the dialog — retrying hammers it), or the deadline passes. Every herdr
-    // call rides spawn_blocking (a blocking UnixStream underneath); the sleeps are tokio's, so
-    // the async runtime never blocks. #6139: the same ladder serves project_wake — one helper.
-    let KickoffReport {
-        outcome,
-        attempts,
-        elapsed_secs: elapsed,
-    } = kickoff_after_reopen(&pane, KICKOFF_PROMPT.to_string(), |_, _| {}).await;
-    match outcome {
-        Ok(outcome) => Ok(handoff_label(&gate_outcome, gate_secs, &outcome, attempts, elapsed)),
-        Err(e) => Err(format!(
-            "handoff chain done, but the kickoff prompt failed after {attempts} attempt(s), {elapsed}s (successor may sit idle): {e}"
+        let mut reopen = trantor_cli::async_command();
+        reopen.args(trantor_reopen_args()).current_dir(&dir);
+        app_trace(&format!("handoff[{project}]: trantor open starting"));
+        let reopened = reopen
+            .output()
+            .await
+            .map_err(|e| format!("trantor open could not start: {e}"))?;
+        let reopen_stdout = String::from_utf8_lossy(&reopened.stdout).trim().to_string();
+        let reopen_stderr = String::from_utf8_lossy(&reopened.stderr).trim().to_string();
+        app_trace(&format!(
+            "handoff[{project}]: trantor open status={} stdout={} stderr={}",
+            reopened
+                .status
+                .code()
+                .map_or_else(|| "signal".to_string(), |code| code.to_string()),
+            trace_summary(&reopen_stdout),
+            trace_summary(&reopen_stderr)
+        ));
+        if !reopened.status.success() {
+            let detail = if reopen_stderr.is_empty() {
+                &reopen_stdout
+            } else {
+                &reopen_stderr
+            };
+            return Err(if detail.is_empty() {
+                "trantor open failed".to_string()
+            } else {
+                format!("trantor open failed: {detail}")
+            });
+        }
+
+        // KICKOFF-AFTER-REOPEN (card #5649, failure 2): ONE boot prompt over the herdr SOCKET so the
+        // successor recaps the handoff unprompted. Agent text never rides the CLI (socket only), and
+        // the outcome is surfaced rather than swallowed — a blocked or still-starting agent means the
+        // recap is still waiting on a human, which is exactly the failure this fixes.
+        // #6184: the successor is BOOTING after the reopen, and a prompt fired straight at it landed
+        // on nobody (NotReady/NoAgent were the common outcomes — the herdr-log trace on the card).
+        // Mirror of bin/baton-pane.mjs step 4: wait for the agent to read idle before the first
+        // prompt, then retry the transient outcomes on a 3s cadence until it lands, is blocked (a
+        // human must answer the dialog — retrying hammers it), or the deadline passes. Every herdr
+        // call rides spawn_blocking (a blocking UnixStream underneath); the sleeps are tokio's, so
+        // the async runtime never blocks. #6139: the same ladder serves project_wake — one helper.
+        let KickoffReport {
+            outcome,
+            attempts,
+            elapsed_secs: elapsed,
+        } = kickoff_after_reopen(&pane, KICKOFF_PROMPT.to_string(), |_, _| {}).await;
+        app_trace(&format!(
+            "handoff[{project}]: kickoff outcome={} attempts={attempts} elapsed={elapsed}s",
+            trace_summary(&kickoff_landed_detail(&outcome))
+        ));
+        match outcome {
+            Ok(outcome) => Ok(handoff_label(&gate_outcome, gate_secs, &outcome, attempts, elapsed)),
+            Err(e) => Err(format!(
+                "handoff chain done, but the kickoff prompt failed after {attempts} attempt(s), {elapsed}s (successor may sit idle): {e}"
+            )),
+        }
+    }
+    .await;
+    match &post_kill {
+        Ok(label) => app_trace(&format!(
+            "handoff[{project}]: returned success: {}",
+            trace_summary(label)
+        )),
+        Err(error) => app_trace(&format!(
+            "handoff[{project}]: returned error: {}",
+            trace_summary(error)
         )),
     }
+    post_kill
 }
 
 /// The cadence and the budget for the post-reopen kickoff (#6184): poll/retry every 3s, give up
@@ -4117,6 +4201,37 @@ fn kickoff_landed_detail(outcome: &Result<herdr::PromptOutcome, String>) -> Stri
 /// relay_wait tail is a boundary to hooks/lib/handoff.mjs lastRowMidTurn). The returned label
 /// says which side of the gate the kill happened on; "deadline" on a parked session is expected.
 const HANDOFF_IDLE_DEADLINE: Duration = Duration::from_secs(120);
+
+const HANDOFF_AGENT_DROP_CADENCE: Duration = Duration::from_millis(200);
+const HANDOFF_AGENT_DROP_DEADLINE: Duration = Duration::from_secs(10);
+
+#[derive(Debug, PartialEq, Eq)]
+enum AgentDropStep {
+    Wait,
+    Dropped,
+    Deadline,
+}
+
+impl AgentDropStep {
+    fn as_str(&self) -> &'static str {
+        match self {
+            Self::Wait => "waiting",
+            Self::Dropped => "confirmed",
+            Self::Deadline => "deadline",
+        }
+    }
+}
+
+fn agent_drop_step(present: bool, elapsed: Duration, deadline: Duration) -> AgentDropStep {
+    if !present {
+        return AgentDropStep::Dropped;
+    }
+    if elapsed >= deadline {
+        AgentDropStep::Deadline
+    } else {
+        AgentDropStep::Wait
+    }
+}
 
 /// What the idle gate saw before the kill (#6081). Idle = the predecessor reached a turn
 /// boundary; Deadline = the budget ran out mid-turn and the chain ended it anyway.
@@ -7788,6 +7903,32 @@ mod succession_tests {
         let late = idle_gate_label(&IdleGateOutcome::Deadline, 120);
         assert!(late.contains("deadline"), "{late}");
         assert!(late.contains("mid-turn"), "{late}");
+    }
+
+    #[test]
+    fn agent_drop_wait_passes_only_when_herdr_retires_the_agent_and_is_bounded() {
+        let deadline = Duration::from_secs(10);
+        assert_eq!(
+            agent_drop_step(true, Duration::from_millis(9999), deadline),
+            AgentDropStep::Wait
+        );
+        assert_eq!(
+            agent_drop_step(false, Duration::from_secs(1), deadline),
+            AgentDropStep::Dropped
+        );
+        assert_eq!(
+            agent_drop_step(true, deadline, deadline),
+            AgentDropStep::Deadline
+        );
+    }
+
+    #[test]
+    fn trace_summaries_are_one_line_bounded_and_name_empty_streams() {
+        assert_eq!(trace_summary(""), "<empty>");
+        assert_eq!(trace_summary("first\n second\tthird"), "first second third");
+        let long = trace_summary(&"x".repeat(300));
+        assert_eq!(long.chars().count(), 240);
+        assert!(long.ends_with('…'));
     }
 
     // #6081 — the returned line carries the gate outcome NEXT TO the kickoff's: one read says
