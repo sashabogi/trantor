@@ -9,6 +9,12 @@ export type Suggestion = { text: string; tooltip?: string };
 const YES_NO_OPENER =
   /^(should|shall|want|do you want|can|could|may|is|are|would|did|does|have|has)\b/i;
 
+// Rule 2's vocabulary: the words an orchestrator asks to hear back verbatim. "say X or Y" with
+// words outside this set is rule 4's either/or; "say the word" matches nothing here on purpose.
+const SAY_WORD = /\bsay\s+["'`]?(go|yes|ok|okay|ship|approve|proceed|merge)\b/i;
+const WAITS_ON_YOUR_WORD = /\bwaits?\s+(?:on|for)\s+your\s+["'`]?(go|yes|ok|okay)\b/i;
+const AFFIRMATIONS = new Set(["yes", "ok", "okay", "approve"]);
+
 /** The closing sentences are where an ask lives; a paragraph of context above it is noise. */
 function closingSentences(text: string): string[] {
   return text
@@ -33,8 +39,19 @@ export function suggestionsFromTurn(text: string): Suggestion[] {
   const pushAsk = /\bpush\b\s*\?/i.test(last);
   if (pushAsk) push({ text: "push it" });
 
-  // 2. "say go" — the operator's own idiom for "answer with exactly this word".
-  if (/\bsay\s+go\b/i.test(last)) push({ text: "go" });
+  // 2. "say <word>", the operator's own idiom for "answer with exactly this word". "Say go."
+  //    was the original; the orchestrator now confirms in prose too ("Say yes and I ship it.",
+  //    "...waits on your yes.", #5993), so the cue reads any closing sentence, and only words
+  //    that ARE answers count: "say the word" / "say more" stay silent. A plain affirmation
+  //    carries its refusal with it: yes without no would put a thumb on the scale.
+  for (const sentence of [...closing].reverse()) {
+    const m = sentence.match(SAY_WORD) ?? sentence.match(WAITS_ON_YOUR_WORD);
+    if (!m) continue;
+    const word = m[1].toLowerCase();
+    push({ text: word });
+    if (AFFIRMATIONS.has(word)) push({ text: "no" });
+    break;
+  }
 
   // 3. A yes/no question: the final sentence asks one, and it is not already a push ask. (An
   //    open question — "what next?" — is NOT yes/no; inventing chips would put words in the
