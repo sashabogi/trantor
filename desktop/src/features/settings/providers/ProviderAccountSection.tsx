@@ -14,6 +14,7 @@ type ProviderAccountSectionProps = {
   onBusy: (busy: boolean) => void;
   onChanged: () => Promise<void>;
   onRemove: () => void;
+  onError: (message: string) => void;
 };
 
 function StatusLine({ status }: { status: ProviderStatus }) {
@@ -45,12 +46,14 @@ function SectionHeader({ status }: { status: ProviderStatus }) {
 }
 
 function SystemAccountSection(props: ProviderAccountSectionProps) {
-  const { status, project, api, busy, onBusy, onChanged, onRemove } = props;
+  const { status, project, api, busy, onBusy, onChanged, onRemove, onError } = props;
   const login = async () => {
     onBusy(true);
     try {
       await api.login(status.provider, project);
       await onChanged();
+    } catch (error) {
+      onError(error instanceof Error ? error.message : String(error));
     } finally {
       onBusy(false);
     }
@@ -90,7 +93,7 @@ function SystemAccountSection(props: ProviderAccountSectionProps) {
 }
 
 function KeyAccountSection(props: ProviderAccountSectionProps) {
-  const { status, api, busy, onBusy, onChanged, onRemove } = props;
+  const { status, api, busy, onBusy, onChanged, onRemove, onError } = props;
   const presentation = providerPresentation(status);
   const [key, setKey] = useState("");
   const [phase, setPhase] = useState<"idle" | "verifying" | "saving">("idle");
@@ -108,7 +111,9 @@ function KeyAccountSection(props: ProviderAccountSectionProps) {
       setKey("");
       await onChanged();
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : String(caught));
+      const message = caught instanceof Error ? caught.message : String(caught);
+      setError(message);
+      onError(message);
     } finally {
       setPhase("idle");
       onBusy(false);

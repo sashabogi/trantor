@@ -1,4 +1,4 @@
-import { invoke } from "@tauri-apps/api/core";
+import { invoke, type InvokeArgs } from "@tauri-apps/api/core";
 import type { BalanceRow } from "../../fleet/balanceChips";
 import { trantorCliCompatibility, type TrantorCliCompatibility } from "../../../shared/api/client";
 
@@ -93,10 +93,34 @@ export async function providerVerify(name: string, key: string, run: VerifyComma
   return JSON.parse(await run("provider_verify", { name, key }));
 }
 
-export const providerAccountsApi: ProviderAccountsApi = {
-  status: providerStatus,
-  login: (provider, project) => invoke<void>("provider_login", { provider, project }),
-  verifyKey: providerVerify,
-  saveKey: (provider, key) => invoke<void>("provider_save_key", { provider, key }),
-  remove: provider => invoke<void>("provider_remove", { provider }),
-};
+type CompatibilityCommand = () => Promise<TrantorCliCompatibility>;
+type AccountInvoke = <T>(command: string, args?: InvokeArgs) => Promise<T>;
+
+async function requireCompatibleCli(compatibility: CompatibilityCommand): Promise<void> {
+  const result = await compatibility();
+  if (!result.compatible) {
+    throw new Error(result.reason ?? `trantor CLI ${result.installed ?? "unknown"} is incompatible`);
+  }
+}
+
+export function createProviderAccountsApi(
+  compatibility: CompatibilityCommand = trantorCliCompatibility,
+  run: AccountInvoke = <T,>(command: string, args?: InvokeArgs) => invoke<T>(command, args),
+): ProviderAccountsApi {
+  const action = async <T,>(command: string, args?: InvokeArgs): Promise<T> => {
+    await requireCompatibleCli(compatibility);
+    return run<T>(command, args);
+  };
+  return {
+    status: () => providerStatus({
+      compatibility,
+      status: command => run<string>(command),
+    }),
+    login: (provider, project) => action<void>("provider_login", { provider, project }),
+    verifyKey: async (provider, key) => JSON.parse(await action<string>("provider_verify", { name: provider, key })),
+    saveKey: (provider, key) => action<void>("provider_save_key", { provider, key }),
+    remove: provider => action<void>("provider_remove", { provider }),
+  };
+}
+
+export const providerAccountsApi = createProviderAccountsApi();

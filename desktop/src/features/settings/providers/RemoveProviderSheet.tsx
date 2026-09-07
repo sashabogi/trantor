@@ -2,11 +2,12 @@ import { useState } from "react";
 import { Loader2, Trash2 } from "lucide-react";
 import type { ProviderAccountsApi, ProviderStatus } from "./providerStatus";
 
-export function RemoveProviderSheet({ provider, api, onClose, onRemoved }: {
+export function RemoveProviderSheet({ provider, api, onClose, onRemoved, onError }: {
   provider: ProviderStatus;
   api: ProviderAccountsApi;
   onClose: () => void;
   onRemoved: () => void;
+  onError: (message: string) => void;
 }) {
   const [removing, setRemoving] = useState(false);
   const [error, setError] = useState("");
@@ -16,7 +17,9 @@ export function RemoveProviderSheet({ provider, api, onClose, onRemoved }: {
       await api.remove(provider.provider);
       onRemoved();
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      const message = e instanceof Error ? e.message : String(e);
+      setError(message);
+      onError(message);
       setRemoving(false);
     }
   };

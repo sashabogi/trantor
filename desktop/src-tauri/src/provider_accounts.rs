@@ -116,6 +116,7 @@ fn created_pane(raw: &str) -> Result<String, String> {
 }
 
 fn login_blocking(provider: String, project: String) -> Result<(), String> {
+    crate::trantor_cli::require_compatible_blocking()?;
     let provider = checked_slug(&provider, "provider")?;
     let project = checked_slug(&project, "project")?;
     let dir =
@@ -168,8 +169,8 @@ fn login_blocking(provider: String, project: String) -> Result<(), String> {
         .unwrap_or_default()
         .as_nanos();
     let marker = format!("__TRANTOR_PROVIDER_LOGIN_{nonce}__");
-    let login =
-        format!("trantor provider login {provider}; rc=$?; printf '\\n{marker}:%s\\n' \"$rc\"");
+    let provider_login = crate::trantor_cli::shell_command(&["provider", "login", &provider]);
+    let login = format!("{provider_login}; rc=$?; printf '\\n{marker}:%s\\n' \"$rc\"");
     successful("herdr", &["pane", "run", &pane, &login], None)?;
     successful(
         "herdr",
@@ -197,7 +198,22 @@ pub async fn provider_login(provider: String, project: String) -> Result<(), Str
 }
 
 fn trantor_provider(args: &[&str]) -> Result<(), String> {
-    successful("trantor", args, None).map(|_| ())
+    crate::trantor_cli::require_compatible_blocking()?;
+    let mut command = crate::trantor_cli::command();
+    command.args(args);
+    let output = command
+        .output()
+        .map_err(|error| format!("could not run trantor: {error}"))?;
+    if output.status.success() {
+        Ok(())
+    } else {
+        let detail = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        Err(if detail.is_empty() {
+            format!("trantor exited {}", output.status)
+        } else {
+            detail
+        })
+    }
 }
 
 #[tauri::command]

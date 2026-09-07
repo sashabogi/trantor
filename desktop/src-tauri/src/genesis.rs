@@ -270,8 +270,8 @@ pub(crate) async fn project_new(args: ProjectNewArgs) -> Result<String, String> 
     let cli = project_new_cli_args(&args, brief_path.as_deref());
     let result = match cli {
         Ok(cli) => {
-            let mut command = crate::identity_env::async_command("trantor");
-            command.args(cli).env("PATH", terminal_path());
+            let mut command = crate::trantor_cli::async_command();
+            command.args(cli);
             run_command_output(command, "trantor new")
                 .await
                 .map(|(stdout, _)| stdout)
@@ -353,11 +353,10 @@ pub(crate) async fn project_wake(
         }
     }
 
-    let mut reopen = crate::identity_env::async_command("trantor");
+    let mut reopen = crate::trantor_cli::async_command();
     reopen
         .args(project_wake_reopen_args(&project))
-        .current_dir(&dir)
-        .env("PATH", terminal_path());
+        .current_dir(&dir);
     run_command_output(reopen, "trantor open").await?;
 
     let rows =
