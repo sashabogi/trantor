@@ -54,14 +54,14 @@ for (const d of [repo, elsewhere]) {
 // global default = LOCAL; only `pinnedproj` is pinned to REMOTE. Exactly the real shape.
 writeFileSync(join(W, "bus", "config.json"), JSON.stringify({ url: LOCAL, hubs: { pinnedproj: REMOTE } }));
 
-const stdinFor = (cwd, event) => JSON.stringify({
-  prompt: "a substantive prompt, long enough that the focus hook treats it as a real change of focus",
+const stdinFor = (cwd, event, prompt) => JSON.stringify({
+  prompt: prompt || "a substantive prompt, long enough that the focus hook treats it as a real change of focus",
   cwd, session_id: "drill-uuid", hook_event_name: event,
 });
 // ASYNC on purpose. The recorder hubs live in THIS process, so a synchronous spawn would block
 // the event loop that has to answer them: every request would time out and the hook would fail
 // open, making a broken routing test look like a passing one.
-function runHook(hook, cwd, event, procCwd) {
+function runHook(hook, cwd, event, procCwd, prompt) {
   hits.local.length = 0; hits.remote.length = 0;
   const env = { ...drillEnv(), HOME: W, AGENT_BUS_DIR: join(W, "bus"), TRANTOR_NO_SCROOGE_TITLES: "1", CLAUDE_PROJECT_DIR: procCwd };
   for (const k of ["RELAY_URL", "RELAY_SESSION", "RELAY_AGENT", "RELAY_PROJECT"]) delete env[k];
@@ -73,7 +73,7 @@ function runHook(hook, cwd, event, procCwd) {
       if (process.env.DRILL_DEBUG) console.log(`     [${hook}] status=${status} stderr=${err.trim().slice(0, 300)}`);
       resolve({ local: [...hits.local], remote: [...hits.remote], err });
     }, 150));
-    p.stdin.end(stdinFor(cwd, event));
+    p.stdin.end(stdinFor(cwd, event, prompt));
   });
 }
 
@@ -96,6 +96,15 @@ function runHook(hook, cwd, event, procCwd) {
     onRemote?.project === "pinnedproj", String(onRemote?.project));
   ok("...and signs as that project's session, not the cwd's",
     /:pinnedproj$/.test(onRemote?.session || ""), String(onRemote?.session));
+}
+
+// ---- app-driven ask drills are harness traffic, not operator focus ----------------------
+{
+  const prompt = "Call AskUserQuestion exactly once now. Ask the exact question 'TRANTOR ASK DRILL open-1: continue?' with header 'Drill'.";
+  const r = await runHook("hooks/prompt-focus.mjs", repo, "UserPromptSubmit", repo, prompt);
+  ok("a TRANTOR ASK DRILL prompt posts no focus card",
+    r.remote.length === 0 && r.local.length === 0,
+    `remote=${JSON.stringify(r.remote.map(h => h.path))} local=${JSON.stringify(r.local.map(h => h.path))}`);
 }
 
 // ---- sessionstart builds absolute URLs; they must be the pinned hub's too ---------------

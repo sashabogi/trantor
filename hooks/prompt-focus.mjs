@@ -69,6 +69,9 @@ try {
   const trimmed = prompt.replace(/\s+/g, " ").trim();
   // skip empties, tiny continuations, and pure acks — they're not a new focus
   if (!trimmed || trimmed.length < 12 || ACK.test(trimmed)) { emitAndExit(); }
+  // The Accounts ask drill launches a real Claude session, so its scripted prompt traverses this
+  // hook just like operator work. It is harness traffic, though, and must never become a focus card.
+  if (/\bTRANTOR ASK DRILL\b/.test(trimmed)) { emitAndExit(); }
   // HARNESS-INJECTED prompts are not a human's focus. Task notifications, hook system-reminders and
   // protocol frames arrive through the same UserPromptSubmit channel, and carding one titled a board
   // card "<task-notification> <task-id>bavlqfmzq</task-id>…" — pure noise a human cannot read.
