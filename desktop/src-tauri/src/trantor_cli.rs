@@ -2,6 +2,7 @@ use std::ffi::{OsStr, OsString};
 use std::path::Path;
 
 pub(crate) const MIN_VERSION: &str = "0.18.47";
+const MIN_VERSION_PARTS: [u64; 3] = [0, 18, 47];
 
 #[derive(Debug, Eq, PartialEq)]
 struct Invocation {
@@ -17,8 +18,7 @@ fn node_binary() -> OsString {
     ]
     .iter()
     .find(|path| Path::new(path).exists())
-    .map(OsString::from)
-    .unwrap_or_else(|| OsString::from("node"))
+    .map_or_else(|| OsString::from("node"), OsString::from)
 }
 
 /// Resolve the app's one Trantor CLI. Production always uses the installed `trantor` on PATH.
@@ -86,8 +86,8 @@ pub(crate) fn release_version_parts(version: &str) -> Option<Vec<u64>> {
 }
 
 pub(crate) fn version_is_compatible(installed: &str) -> bool {
-    let minimum = release_version_parts(MIN_VERSION).expect("declared minimum is semver");
-    release_version_parts(installed).is_some_and(|parts| parts >= minimum)
+    release_version_parts(installed)
+        .is_some_and(|parts| parts.as_slice() >= MIN_VERSION_PARTS.as_slice())
 }
 
 fn installed_version(output: std::process::Output) -> Option<String> {
@@ -183,10 +183,16 @@ mod tests {
     #[test]
     fn declared_minimum_rejects_the_pre_remove_cli() {
         assert_eq!(MIN_VERSION, "0.18.47");
+        assert_eq!(
+            release_version_parts(MIN_VERSION).as_deref(),
+            Some(MIN_VERSION_PARTS.as_slice())
+        );
         assert!(!version_is_compatible("0.18.46"));
         assert!(version_is_compatible("0.18.47"));
         assert!(version_is_compatible("0.19.0"));
-        let reason = incompatibility_reason(Some("0.18.46")).unwrap();
+        let Some(reason) = incompatibility_reason(Some("0.18.46")) else {
+            panic!("0.18.46 must be rejected")
+        };
         assert!(reason.contains("trantor CLI 0.18.46 is older"), "{reason}");
         assert!(reason.contains("npm i -g trantor@0.18.47"), "{reason}");
     }
