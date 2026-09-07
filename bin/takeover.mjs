@@ -30,12 +30,6 @@ const out = (ok, extra = {}) => {
   process.exit(ok ? 0 : 2);
 };
 
-const project = args.find(a => !a.startsWith("--") && args[args.indexOf(a) - 1] !== "--session")
-  || resolveProject(process.cwd());
-const devRoot = process.env.TRANTOR_DEV_ROOT || join(homedir(), "development");
-const dir = join(devRoot, project);
-if (!existsSync(dir)) { say(`no local checkout for ${project} (looked in ${devRoot})`); out(false, { reason: "no-checkout" }); }
-
 // The idle gate: a transcript written this recently means the session is MID-TURN, and ending it
 // would eat in-flight work. Overridable for drills and deliberate --force.
 export const IDLE_GATE_SEC = Number(process.env.TRANTOR_TAKEOVER_IDLE_SEC || 15);
@@ -60,7 +54,7 @@ export function decide({ terminalPids, candidates, sessionFlag, force, idleGateS
 }
 
 // ---- inventory (process + filesystem truth only) ----------------------------------------------
-function paneForegroundPgid() {
+function paneForegroundPgid(project) {
   try {
     const rows = execFileSync("cat", [join(process.env.AGENT_BUS_DIR || join(homedir(), ".agent-bus"), "crew-windows.txt")], { encoding: "utf8" });
     const pane = rows.split("\n").map(l => l.split("\t")).find(f => f[0] === project && f[1] === "orch")?.[3];
@@ -70,10 +64,10 @@ function paneForegroundPgid() {
   } catch { return 0; }
 }
 
-function terminalClaudePids() {
+function terminalClaudePids(dir, project) {
   let pids = [];
   try { pids = execFileSync("/usr/bin/pgrep", ["-x", "claude"], { encoding: "utf8" }).split("\n").filter(Boolean); } catch { return []; }
-  const panePgid = paneForegroundPgid();
+  const panePgid = paneForegroundPgid(project);
   const mine = [];
   for (const pid of pids) {
     if (Number(pid) === panePgid) continue;   // the pane's own claude is not a "terminal session"
@@ -86,7 +80,7 @@ function terminalClaudePids() {
   return mine;
 }
 
-function recentCandidates() {
+function recentCandidates(dir) {
   const slug = dir.replace(/[/.]/g, "-");
   const tdir = join(process.env.TRANTOR_CLAUDE_DIR || join(homedir(), ".claude", "projects"), slug);
   if (!existsSync(tdir)) return [];
@@ -101,9 +95,17 @@ function recentCandidates() {
 // Run the chain ONLY when this file is the entrypoint. The first cut used
 // argv[1].endsWith("takeover.mjs"), which is also true for test-takeover.mjs — importing the
 // decision table from the drill file executed a real (luckily idempotent) pane open.
+// #6447: the project/devRoot resolution and the no-checkout exit used to run at MODULE top
+// level, so importing the drill on a machine without ~/development/<project> exit(2)'d the
+// import itself. They are part of the chain — inside the guard with everything else.
 import { basename as _bn } from "node:path";
 if (process.argv[1] && _bn(process.argv[1]) === "takeover.mjs") {
-  const d = decide({ terminalPids: terminalClaudePids(), candidates: recentCandidates(), sessionFlag: opt("--session"), force: flag("--force") });
+  const project = args.find(a => !a.startsWith("--") && args[args.indexOf(a) - 1] !== "--session")
+    || resolveProject(process.cwd());
+  const devRoot = process.env.TRANTOR_DEV_ROOT || join(homedir(), "development");
+  const dir = join(devRoot, project);
+  if (!existsSync(dir)) { say(`no local checkout for ${project} (looked in ${devRoot})`); out(false, { reason: "no-checkout" }); }
+  const d = decide({ terminalPids: terminalClaudePids(dir, project), candidates: recentCandidates(dir), sessionFlag: opt("--session"), force: flag("--force") });
   if (flag("--dry-run")) { say(`dry-run: ${d.action}${d.reason ? ` — ${d.reason}` : ""}${d.sid ? ` (sid ${d.sid}, pid ${d.pid})` : ""}`); out(true, { decision: d }); }
   if (d.action === "refuse") { say(d.reason); out(false, { reason: d.reason }); }
 

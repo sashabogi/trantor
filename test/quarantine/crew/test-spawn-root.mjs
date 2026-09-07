@@ -82,13 +82,15 @@ async function drill(agent, inboxMsgs, opts = {}) {
   const OC_LOG = join(work, "cwds.txt"), OC_ARGS = join(work, "argvs.txt"), OC_CNT = join(work, "count.txt");
   writeFileSync(OC_LOG, ""); writeFileSync(OC_ARGS, "");
 
+  const env = { ...drillEnv(), HOME, PATH: `${fakebin}:${process.env.PATH}`,
+                RELAY_URL: HUB, RELAY_AGENT: agent, RELAY_PROJECT: PROJ,
+                OC_LOG, OC_ARGS, OC_CNT,
+                CREW_KICKOFF: "say hi and end your turn" };
+  if (opts.noDb) env.OC_NODB = "1";
+
   const runner = spawn("node", ["bin/crew-runner.mjs", agent, work], {
     cwd: process.cwd(),
-    env: { ...drillEnv(), HOME, PATH: `${fakebin}:${process.env.PATH}`,
-           RELAY_URL: HUB, RELAY_AGENT: agent, RELAY_PROJECT: PROJ,
-           OC_LOG, OC_ARGS, OC_CNT,
-           ...(opts.noDb ? { OC_NODB: "1" } : {}),
-           CREW_KICKOFF: "say hi and end your turn" },
+    env,
     stdio: "ignore",
   });
 
