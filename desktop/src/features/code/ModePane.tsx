@@ -11,6 +11,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ChevronDown, FolderTree, GitBranch, History, MessageSquare } from "lucide-react";
 import type { Card, HubClient, Peer } from "../../shared/api/client";
+import { localSessions } from "../../shared/api/client";
 import { BrandGlyph } from "../../shared/Avatar";
 import { GitPanel } from "./GitPanel";
 import { Chat } from "../chat/Chat";
@@ -20,6 +21,8 @@ import { SessionsMode } from "./SessionsMode";
 import { stripLabelsNeed, tabsMode, type TabsMode } from "./tabStrip";
 import { clampPaneWidth, loadPaneWidth, PANE_DEFAULT, PANE_MIN, PANE_ROW_RESERVED, PANE_STEP, savePaneWidth, clearPaneWidth } from "./paneWidth";
 import type { SessionRow } from "./sessionsApi";
+import { chatTabNeedsYou, initialTab, rightPanelApi } from "./rightPanelState";
+import { orchestratorOf } from "../workspace/herdr";
 
 type Mode = "files" | "git" | "sessions" | "chat";
 
@@ -43,6 +46,41 @@ export function ModePane({ client, project, seat, onSeat, onOpenFile }: {
   onOpenFile: (path: string) => void;
 }) {
   const [mode, setMode] = useState<Mode>("files");
+  // #6499 — the panel remembers its tab per project (config.json, via rightPanelState.ts) and
+  // restores it on launch; a project nobody has ever touched here defaults to Chat while its
+  // orchestrator is live (a question may already be waiting), Files otherwise. One resolve per
+  // project, not a poll — once the operator switches tabs the stored value wins from then on, so
+  // a live orchestrator can never yank the panel back to Chat out from under a deliberate choice.
+  useEffect(() => {
+    let alive = true;
+    void (async () => {
+      const [stored, orch] = await Promise.all([
+        rightPanelApi.get(project).catch(() => null),
+        orchestratorOf(project).catch(() => null),
+      ]);
+      if (!alive) return;
+      setMode(initialTab(stored?.tab ?? null, orch !== null));
+    })();
+    return () => { alive = false; };
+  }, [project]);
+  const persistTab = (m: Mode) => { void rightPanelApi.set(project, m); };
+
+  // #6499 item 2 — the Chat tab's "needs you" badge: mirrors the sidebar's identical "blocked"
+  // read on this project's live session status, so a question landing while the panel sits on
+  // Files/Git/Sessions is never invisible.
+  const [chatNeedsYou, setChatNeedsYou] = useState(false);
+  useEffect(() => {
+    let alive = true;
+    const poll = () => localSessions().then(sessions => {
+      if (!alive) return;
+      const mine = sessions.find(s => s.project === project);
+      setChatNeedsYou(chatTabNeedsYou(mine?.status ?? null));
+    }).catch(() => {});
+    poll();
+    const iv = setInterval(poll, 12_000);
+    return () => { alive = false; clearInterval(iv); };
+  }, [project]);
+
   const [scopeOpen, setScopeOpen] = useState(false);
   const [filter, setFilter] = useState("");
   const [tasks, setTasks] = useState<Card[]>([]);
@@ -105,6 +143,7 @@ export function ModePane({ client, project, seat, onSeat, onOpenFile }: {
     if (m === "chat") setSelectedClaude(null);
     setMode(m);
     setWidthOverride(loadPaneWidth(m));
+    persistTab(m);
   };
 
   const onResizeStart = (e: React.PointerEvent<HTMLDivElement>) => {
@@ -242,30 +281,33 @@ export function ModePane({ client, project, seat, onSeat, onOpenFile }: {
   // (#6036): when the measured labels would not fit the strip steps down to icon-only (title
   // carries the word); the truncate class below is the last-resort guard for the gap zone,
   // not the design.
-  const modeBtn = (m: Mode, label: string, Icon: typeof FolderTree, dot?: boolean) => (
+  const modeBtn = (m: Mode, label: string, Icon: typeof FolderTree, dot?: boolean, needsYou?: boolean) => (
     <button
       type="button"
       onClick={() => switchMode(m)}
       data-on={mode === m}
-      title={label}
-      aria-label={label}
+      title={needsYou ? `${label} — needs you` : label}
+      aria-label={needsYou ? `${label} — needs you` : label}
       className="flex w-full min-w-0 items-center justify-center gap-1 rounded-[7px] px-1 py-[5px] text-[11.5px] text-tr-muted data-[on=true]:bg-white/[0.07] data-[on=true]:font-medium data-[on=true]:text-tr-text"
     >
       <Icon size={12} strokeWidth={1.75} className="shrink-0" />
       {!compactTabs && <span className="min-w-0 truncate">{label}</span>}
       {dot && <span className="h-[6px] w-[6px] shrink-0 rounded-full bg-tr-doing" />}
+      {needsYou && <span className="h-[6px] w-[6px] shrink-0 rounded-full bg-tr-warn" />}
     </button>
   );
 
   // One truth for the real tabs and the twins alike — the twins measure what the four
   // LABELED tabs need, so they share the real tabs' parent (same cascade), icon, label,
-  // dot, and internal gap verbatim.
-  const MODES: { m: Mode; label: string; Icon: typeof FolderTree; dot?: boolean }[] = [
+  // dot, and internal gap verbatim. #6499 — the Chat tab's needs-you badge rides the same dot
+  // slot as its always-on live dot, so BOTH tabs (real and twin) measure the same width whether
+  // or not an ask is open.
+  const MODES: { m: Mode; label: string; Icon: typeof FolderTree; dot?: boolean; needsYou?: boolean }[] = useMemo(() => [
     { m: "files", label: "Files", Icon: FolderTree },
     { m: "git", label: "Git", Icon: GitBranch },
     { m: "sessions", label: "Sessions", Icon: History },
-    { m: "chat", label: "Chat", Icon: MessageSquare, dot: true },
-  ];
+    { m: "chat", label: "Chat", Icon: MessageSquare, dot: true, needsYou: chatNeedsYou },
+  ], [chatNeedsYou]);
 
   return (
     <div
@@ -299,7 +341,7 @@ export function ModePane({ client, project, seat, onSeat, onOpenFile }: {
           unlayered `.tr-seg > button` styles hit both alike and the twin's shrink-wrapped
           width is the truth of what the labels need (stripLabelsNeed reads it, invisible). */}
       <div ref={stripRef} className="tr-seg relative grid shrink-0 grid-cols-4 gap-px border-b border-tr-edge px-2 py-2">
-        {MODES.map(({ m, label, Icon, dot }) => (
+        {MODES.map(({ m, label, Icon, dot, needsYou }) => (
           <button
             key={`twin-${m}`}
             type="button"
@@ -311,9 +353,10 @@ export function ModePane({ client, project, seat, onSeat, onOpenFile }: {
             <Icon size={12} strokeWidth={1.75} className="shrink-0" />
             <span className="whitespace-nowrap">{label}</span>
             {dot && <span className="h-[6px] w-[6px] shrink-0 rounded-full bg-tr-doing" />}
+            {needsYou && <span className="h-[6px] w-[6px] shrink-0 rounded-full bg-tr-warn" />}
           </button>
         ))}
-        {MODES.map(({ m, label, Icon, dot }) => modeBtn(m, label, Icon, dot))}
+        {MODES.map(({ m, label, Icon, dot, needsYou }) => modeBtn(m, label, Icon, dot, needsYou))}
       </div>
 
       {/* FILES — find box, CHANGED pinned first, ALL FILES tree, seat footer */}
@@ -449,6 +492,7 @@ export function ModePane({ client, project, seat, onSeat, onOpenFile }: {
         <SessionsMode project={project} onOpenClaude={session => {
           setSelectedClaude(session);
           setMode("chat");
+          persistTab("chat");
         }} />
       )}
 
@@ -461,8 +505,10 @@ export function ModePane({ client, project, seat, onSeat, onOpenFile }: {
           dock="pane"
           onDock={() => {}}
           onClose={() => {
-            setMode(selectedClaude ? "sessions" : "files");
+            const next = selectedClaude ? "sessions" : "files";
+            setMode(next);
             setSelectedClaude(null);
+            persistTab(next);
           }}
         />
       )}

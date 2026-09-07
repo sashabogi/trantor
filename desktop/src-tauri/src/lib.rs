@@ -2,6 +2,7 @@ mod herdr;
 mod asks;
 mod dismissals;
 mod genesis;
+mod right_panel;
 mod ghost;
 mod identity_env;
 mod onboarding;
@@ -2692,6 +2693,18 @@ fn dismissed_sessions_dismiss(project: String, session_id: String) -> Result<Str
 #[tauri::command]
 fn dismissed_sessions_clear(project: String) -> Result<String, String> {
     serde_json::to_string(&dismissals::clear_project(project)?).map_err(|e| e.to_string())
+}
+
+/// #6499 — the right mode pane's tab (Files/Git/Sessions/Chat) and dock, durable per project so
+/// a restart restores where the operator left it. See right_panel.rs.
+#[tauri::command]
+fn right_panel_get(project: String) -> Result<String, String> {
+    serde_json::to_string(&right_panel::get(project)?).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn right_panel_set(project: String, tab: String, dock: String) -> Result<String, String> {
+    serde_json::to_string(&right_panel::set(project, tab, dock)?).map_err(|e| e.to_string())
 }
 
 /// The autonomy dials, read and written through the CLI rather than by parsing autonomy.json here.
@@ -5879,6 +5892,8 @@ pub fn run() {
             dismissed_sessions_list,
             dismissed_sessions_dismiss,
             dismissed_sessions_clear,
+            right_panel_get,
+            right_panel_set,
             save_pasted_image,
             attachment_info,
             draft_persist,
