@@ -4,6 +4,7 @@ mod dismissals;
 mod genesis;
 mod right_panel;
 mod ghost;
+mod handoff_drill;
 mod identity_env;
 mod key_drill;
 mod onboarding;
@@ -3563,22 +3564,50 @@ fn write_only_flag_rejected(stderr: &str) -> bool {
     stderr.contains("--write-only")
 }
 
-fn foreground_pid_from_process_info(raw: &str) -> Option<u32> {
-    let v: serde_json::Value = serde_json::from_str(raw).ok()?;
-    let info = v.get("result")?.get("process_info")?;
-    if let Some(pid) = info
-        .get("foreground_process_group_id")
+/// The shells a pane idles in once its agent is gone. Their pid is never the process to end.
+const SHELL_NAMES: &[&str] = &[
+    "zsh", "bash", "sh", "fish", "dash", "ksh", "tcsh", "csh", "nu", "login",
+];
+
+fn is_shell_process(p: &serde_json::Value) -> bool {
+    let raw = p
+        .get("name")
+        .and_then(|s| s.as_str())
+        .filter(|s| !s.trim().is_empty())
+        .or_else(|| p.get("argv0").and_then(|s| s.as_str()))
+        .unwrap_or("")
+        .trim();
+    // login shells spell themselves "-zsh"; a path spells itself /bin/zsh
+    let name = raw.trim_start_matches('-').rsplit('/').next().unwrap_or("");
+    SHELL_NAMES.contains(&name)
+}
+
+fn pid_field(v: &serde_json::Value, key: &str) -> Option<u32> {
+    v.get(key)
         .and_then(|p| p.as_u64())
         .and_then(|p| u32::try_from(p).ok())
         .filter(|p| *p > 0)
-    {
-        return Some(pid);
-    }
+}
+
+/// The pid the graceful end targets, from herdr's `pane process-info` reply. Parity with
+/// bin/baton-pane.mjs foregroundPid. #6668: the 09-07 12:35 chain would have TERMed 80368, the
+/// pane's bare zsh, because `foreground_process_group_id` was taken as-is. The shell
+/// (`shell_pid`, or any foreground entry named like one) is never a candidate: with only the
+/// shell in the foreground there is nothing to end, and the answer is None.
+fn foreground_pid_from_process_info(raw: &str) -> Option<u32> {
+    let v: serde_json::Value = serde_json::from_str(raw).ok()?;
+    let info = v.get("result")?.get("process_info")?;
     let procs = info
         .get("foreground_processes")
         .and_then(|p| p.as_array())
         .cloned()
         .unwrap_or_default();
+    let shell_pid = pid_field(info, "shell_pid");
+    let by_pid = |pid: u32| procs.iter().find(|p| pid_field(p, "pid") == Some(pid));
+    let usable = |pid: u32| Some(pid) != shell_pid && !by_pid(pid).is_some_and(is_shell_process);
+    if let Some(pid) = pid_field(info, "foreground_process_group_id").filter(|p| usable(*p)) {
+        return Some(pid);
+    }
     for p in &procs {
         let hay = [
             p.get("name").and_then(|s| s.as_str()).unwrap_or(""),
@@ -3587,21 +3616,31 @@ fn foreground_pid_from_process_info(raw: &str) -> Option<u32> {
         ]
         .join(" ")
         .to_lowercase();
-        if hay.contains("claude") {
-            if let Some(pid) = p
-                .get("pid")
-                .and_then(|p| p.as_u64())
-                .and_then(|p| u32::try_from(p).ok())
-            {
+        if hay.contains("claude") && !is_shell_process(p) {
+            if let Some(pid) = pid_field(p, "pid").filter(|p| Some(*p) != shell_pid) {
                 return Some(pid);
             }
         }
     }
     procs
-        .last()
-        .and_then(|p| p.get("pid"))
-        .and_then(|p| p.as_u64())
-        .and_then(|p| u32::try_from(p).ok())
+        .iter()
+        .rev()
+        .filter_map(|p| pid_field(p, "pid"))
+        .find(|p| usable(*p))
+}
+
+/// #6668: why `handoff_now` will not start a chain on this pane, or None when it may. herdr's
+/// `agent get` answers with a status word for a pane running an agent and nothing (None) for
+/// a pane holding a bare shell — the 12:35 chain's pane, whose claude had exited 19 minutes
+/// earlier. A chain on such a pane summarizes a dead transcript, passes the idle gate at once,
+/// and ends whatever IS in the foreground: the shell. Nothing to hand off means no chain.
+fn handoff_refusal(pane: &str, agent_status: Option<&str>) -> Option<String> {
+    match agent_status.map(str::trim) {
+        Some(s) if !s.is_empty() && s != "none" => None,
+        _ => Some(format!(
+            "no live agent in orchestrator pane {pane} (herdr reports none) — nothing to hand off; open a session from the Workspace lens first"
+        )),
+    }
 }
 
 async fn run_command_output(
@@ -3767,6 +3806,31 @@ async fn handoff_now(
     }
     let dir = project_dir(&project).ok_or_else(|| format!("no local checkout for {project}"))?;
 
+    // THE ENTRY GUARD (#6668): before a single step runs, the orch pane must exist AND hold a
+    // live agent. 09-07 12:35: the crebral-health Chat opened onto a pane whose claude had died
+    // at 12:16, the gauge read the dead transcript at 92%, and the chain started — its boundary
+    // wait would have expired at 12:52 and TERMed the pane's zsh. herdr answering nothing for
+    // the pane is the whole evidence; the refusal is traced so the next incident reads itself.
+    let rows =
+        std::fs::read_to_string(desktop_bus_dir().join("crew-windows.txt")).unwrap_or_default();
+    let pane = match orch_pane_from_rows(&rows, &project) {
+        Some(p) => p,
+        None => {
+            app_trace(&format!("handoff[{project}]: refused (reason {reason}) — no orchestrator pane recorded"));
+            return Err(format!("no orchestrator pane recorded for {project}"));
+        }
+    };
+    let entry_status = {
+        let pane = pane.clone();
+        tokio::task::spawn_blocking(move || herdr::agent_status(&pane))
+            .await
+            .unwrap_or(None)
+    };
+    if let Some(why) = handoff_refusal(&pane, entry_status.as_deref()) {
+        app_trace(&format!("handoff[{project}]: refused (reason {reason}) — {why}"));
+        return Err(why);
+    }
+
     // Mark the pane for the whole chain — summarize (~50s), idle gate, kill, reopen, kickoff —
     // so the Workspace tab says the session is doomed before anyone types into it (#6081).
     let _chain = HandoffChainGuard::begin(app, &project);
@@ -3816,11 +3880,6 @@ async fn handoff_now(
     } else {
         app_trace(&format!("handoff[{project}]: record written immediately (session was idle)"));
     }
-
-    let rows =
-        std::fs::read_to_string(desktop_bus_dir().join("crew-windows.txt")).unwrap_or_default();
-    let pane = orch_pane_from_rows(&rows, &project)
-        .ok_or_else(|| format!("no orchestrator pane recorded for {project}"))?;
 
     // THE IDLE GATE BEFORE THE KILL (#6081): the 21:46 drill ended a predecessor mid-turn —
     // handoff stamped at :01, the operator's :07 prompt started a turn, tool calls ran at
@@ -4050,6 +4109,13 @@ fn kickoff_landed_detail(outcome: &Result<herdr::PromptOutcome, String>) -> Stri
 /// detached; here an operator is watching the chain, and a typical turn finishes inside two
 /// minutes — so the gate polls on the kickoff cadence with its own bounded deadline, then the
 /// chain proceeds and reports the outcome honestly instead of hanging.
+///
+/// #6668, the relay_wait question: an orchestrator parked in `relay_wait` reads "working" to
+/// herdr for as long as the bus stays quiet, so for that session THIS DEADLINE IS THE GATE —
+/// the normal path, not a failure. It is safe because the wait is not work: everything the
+/// turn did is on disk, and the CLI's boundary gate already wrote the record (a lone
+/// relay_wait tail is a boundary to hooks/lib/handoff.mjs lastRowMidTurn). The returned label
+/// says which side of the gate the kill happened on; "deadline" on a parked session is expected.
 const HANDOFF_IDLE_DEADLINE: Duration = Duration::from_secs(120);
 
 /// What the idle gate saw before the kill (#6081). Idle = the predecessor reached a turn
@@ -5761,6 +5827,9 @@ pub fn run() {
             // #6317 acceptance drill: TRANTOR_KEY_DRILL=post|throw posts a real right-arrow key
             // event through AppKit once the webview is live (src/key_drill.rs). Inert otherwise.
             key_drill::arm(app.handle());
+            // #6668 acceptance drill: TRANTOR_HANDOFF_DRILL=<project> opens that project's Chat
+            // on a pane holding a bare shell and proves no chain starts (src/handoff_drill.rs).
+            handoff_drill::arm(app.handle());
             if let Ok(project) = std::env::var("TRANTOR_ASK_DRILL") {
                 let write_target = std::env::var("TRANTOR_ASK_DRILL_WRITE_TARGET").ok();
                 if let Some(window) = app.get_webview_window("main") {
@@ -5834,6 +5903,8 @@ pub fn run() {
             asks::ask_drill_probe,
             key_drill::key_drill_post,
             key_drill::key_drill_finish,
+            handoff_drill::handoff_drill_probe,
+            handoff_drill::handoff_drill_finish,
             asks::ask_drill_close,
             ask_drill_fire_status,
             orchestrator_status,
@@ -6218,6 +6289,100 @@ mod herdr_tests {
         })
         .to_string();
         assert_eq!(foreground_pid_from_process_info(&raw), Some(23311));
+    }
+
+    // #6668 — the 09-07 12:35 shape: the pane's claude had exited, the foreground process group
+    // WAS the pane's zsh (80368), and the chain would have TERMed it. The shell is never the
+    // process to end, by shell_pid or by name, and a shell-only foreground answers None.
+    #[test]
+    fn process_info_never_returns_the_panes_shell() {
+        let bare_shell = serde_json::json!({
+            "result": {
+                "process_info": {
+                    "foreground_process_group_id": 80368,
+                    "foreground_processes": [
+                        { "name": "zsh", "argv0": "-zsh", "pid": 80368 }
+                    ],
+                    "shell_pid": 80368
+                }
+            }
+        })
+        .to_string();
+        assert_eq!(foreground_pid_from_process_info(&bare_shell), None);
+
+        // shell_pid names it even when the entry carries no name
+        let by_shell_pid = serde_json::json!({
+            "result": {
+                "process_info": {
+                    "foreground_process_group_id": 80368,
+                    "foreground_processes": [{ "pid": 80368 }],
+                    "shell_pid": 80368
+                }
+            }
+        })
+        .to_string();
+        assert_eq!(foreground_pid_from_process_info(&by_shell_pid), None);
+
+        // the name names it even when shell_pid is absent (an older herdr)
+        let by_name = serde_json::json!({
+            "result": {
+                "process_info": {
+                    "foreground_process_group_id": 4242,
+                    "foreground_processes": [{ "name": "bash", "pid": 4242 }]
+                }
+            }
+        })
+        .to_string();
+        assert_eq!(foreground_pid_from_process_info(&by_name), None);
+
+        // the last-entry fallback skips the shell too
+        let shell_last = serde_json::json!({
+            "result": {
+                "process_info": {
+                    "foreground_processes": [
+                        { "name": "node", "pid": 10 },
+                        { "name": "/bin/zsh", "pid": 11 }
+                    ],
+                    "shell_pid": 11
+                }
+            }
+        })
+        .to_string();
+        assert_eq!(foreground_pid_from_process_info(&shell_last), Some(10));
+    }
+
+    #[test]
+    fn process_info_with_a_live_agent_still_ends_the_agent() {
+        // The live shape (captured 2026-09-07 from herdr pane process-info on w2:p8): the group
+        // id is claude's pid, MCP children follow it, and shell_pid is the pane's zsh.
+        let live = serde_json::json!({
+            "result": {
+                "process_info": {
+                    "foreground_process_group_id": 87044,
+                    "foreground_processes": [
+                        { "name": "node", "argv0": "node", "pid": 87076 },
+                        { "name": "claude.exe", "argv0": "claude", "pid": 87044 }
+                    ],
+                    "shell_pid": 2309
+                }
+            }
+        })
+        .to_string();
+        assert_eq!(foreground_pid_from_process_info(&live), Some(87044));
+    }
+
+    #[test]
+    fn handoff_refuses_a_pane_without_an_agent() {
+        // herdr answers nothing for a pane holding a bare shell — the 12:35 pane.
+        let why = handoff_refusal("w9:p1", None).expect("refused");
+        assert!(why.contains("no live agent"), "{why}");
+        assert!(why.contains("w9:p1"), "{why}");
+        assert!(handoff_refusal("w9:p1", Some("")).is_some());
+        assert!(handoff_refusal("w9:p1", Some("none")).is_some());
+        // any real status word — the agent is there; the idle gate decides WHEN, not whether
+        for st in ["working", "idle", "blocked", "busy", "done"] {
+            assert_eq!(handoff_refusal("w9:p1", Some(st)), None, "{st}");
+        }
     }
 
     #[test]

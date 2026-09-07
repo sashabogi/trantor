@@ -69,6 +69,36 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 const agentStatus = (pane) => herdrJson(["agent", "get", pane])?.result?.agent?.agent_status || null;
 const alive = (pid) => { try { process.kill(pid, 0); return true; } catch { return false; } };
 
+// The shells a pane idles in once its agent is gone. Their pid is never the process to end.
+const SHELL_NAMES = new Set(["zsh", "bash", "sh", "fish", "dash", "ksh", "tcsh", "csh", "nu", "login"]);
+function isShellProcess(p) {
+  const raw = String(p?.name || p?.argv0 || "").trim();
+  const name = basename(raw.replace(/^-/, ""));   // login shells spell themselves "-zsh"
+  return SHELL_NAMES.has(name);
+}
+
+/** The pid the graceful end targets, from herdr's `pane process-info` result.process_info —
+ *  parity with lib.rs foreground_pid_from_process_info. #6668: the 09-07 12:35 chain would have
+ *  TERMed 80368, the pane's bare zsh, because foreground_process_group_id was taken as-is. The
+ *  shell (process_info.shell_pid, or any entry named like one) is never a candidate: with only
+ *  the shell in the foreground there is nothing to end, and the answer is null. */
+export function foregroundPid(info) {
+  if (!info) return null;
+  const procs = Array.isArray(info.foreground_processes) ? info.foreground_processes : [];
+  const shellPid = Number(info.shell_pid) || 0;
+  const byPid = (pid) => procs.find(p => Number(p?.pid) === pid);
+  const usable = (pid) => pid > 0 && pid !== shellPid && !isShellProcess(byPid(pid));
+  const group = Number(info.foreground_process_group_id) || 0;
+  if (usable(group)) return group;
+  const claude = procs.find(p => /claude/i.test([p?.name, p?.argv0, p?.cmdline].map(s => String(s || "")).join(" ")) && !isShellProcess(p));
+  if (claude && Number(claude.pid) > 0 && Number(claude.pid) !== shellPid) return Number(claude.pid);
+  for (let i = procs.length - 1; i >= 0; i--) {
+    const pid = Number(procs[i]?.pid) || 0;
+    if (usable(pid)) return pid;
+  }
+  return null;
+}
+
 async function main() {
   if (!handoffFile || !existsSync(handoffFile)) { log(`no handoff file (${handoffFile}) — abort`); process.exit(1); }
   const pane = arg("--pane") || orchPane((() => { try { return readFileSync(join(busDir, "crew-windows.txt"), "utf8"); } catch { return ""; } })(), projectName);
@@ -88,7 +118,7 @@ async function main() {
 
   // 2. Graceful end, mirroring end_process_gracefully: TERM, short wait, KILL.
   const info = herdrJson(["pane", "process-info", "--pane", pane])?.result?.process_info;
-  const pid = Number(info?.foreground_process_group_id) || Number(info?.foreground_processes?.[0]?.pid) || 0;
+  const pid = foregroundPid(info) || 0;
   if (pid > 0 && alive(pid)) {
     try { process.kill(pid, "SIGTERM"); } catch {}
     const killAt = Date.now() + 10_000;
@@ -96,7 +126,7 @@ async function main() {
     if (alive(pid)) { try { process.kill(pid, "SIGKILL"); } catch {} }
     log(`ended pid ${pid}`);
   } else {
-    log("no foreground process to end (already gone)");
+    log("no foreground process to end (already gone, or only the pane's shell is in the foreground)");
   }
 
   // 3. Reopen. `trantor open` rebinds orch-sessions.txt and restarts the pane's session — the
