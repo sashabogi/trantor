@@ -247,7 +247,13 @@ export function lastRowMidTurn(transcriptPath) {
       const c = r?.message?.content;
       if (r.type === "assistant") {
         const blocks = Array.isArray(c) ? c : [];
-        if (blocks.some(b => b?.type === "tool_use")) return true;   // a result is still owed
+        const calls = blocks.filter(b => b?.type === "tool_use");
+        // #6668: a session parked in a LONE relay_wait is at its boundary. The wait is not work
+        // in flight — everything the turn did is already on disk, and the tool returns only when
+        // the bus speaks. Reading it as mid-turn armed the baton for the 17-minute boundary wait
+        // on a turn that never ends on its own; the pre-kill idle gate's deadline is what ends it.
+        if (calls.length && calls.every(isRelayWaitCall)) return false;
+        if (calls.length) return true;                               // a result is still owed
         return false;                                                // text-only → turn said its piece
       }
       // user row: #6528 follow-up — a trailing user row of ANY kind means in flight. A
@@ -262,6 +268,42 @@ export function lastRowMidTurn(transcriptPath) {
 }
 export function turnInFlight(transcriptPath) {
   return subagentsActive(transcriptPath) || lastRowMidTurn(transcriptPath);
+}
+// The relay MCP's wait tool, by any server prefix (mcp__plugin_trantor_relay__relay_wait,
+// mcp__trantor__relay_wait, a bare relay_wait in a fixture).
+function isRelayWaitCall(block) {
+  return /(^|__)relay_wait$/.test(String(block?.name || ""));
+}
+
+// ---- does the transcript's session still have a process? (#6668) ------------------------------
+// Claude Code registers every live session in ~/.claude/sessions/<pid>.json ({pid, sessionId,
+// cwd, ...}) and removes the file at exit. The 09-07 12:35 chain armed on a transcript whose
+// session had exited at 12:16: the transcript's last row was a tool_result ("Connection closed"),
+// so the boundary gate read it as mid-turn and waited on a turn that no process would ever end.
+// A session with no live process IS at its boundary — its record can be written now.
+//   "live"    an entry names this session and its pid answers kill -0
+//   "dead"    the registry is in use (some other session is live) and none of its live entries
+//             name this session
+//   "unknown" no registry, or nothing in it is alive — say nothing, the boundary gate decides
+// The "dead" verdict needs another LIVE entry on purpose: a Claude Code too old to keep the
+// registry must not turn every mid-turn handoff into an immediate write.
+export function sessionProcessState(sessionId, { home = homedir() } = {}) {
+  if (!sessionId) return "unknown";
+  let files;
+  try { files = readdirSync(join(home, ".claude", "sessions")).filter(f => f.endsWith(".json")); } catch { return "unknown"; }
+  let anyLive = false;
+  for (const f of files) {
+    let entry;
+    try { entry = JSON.parse(readFileSync(join(home, ".claude", "sessions", f), "utf8")); } catch { continue; }
+    const pid = Number(entry?.pid) || Number(basename(f, ".json")) || 0;
+    if (!(pid > 0) || !pidAlive(pid)) continue;
+    anyLive = true;
+    if (String(entry?.sessionId || "") === sessionId) return "live";
+  }
+  return anyLive ? "dead" : "unknown";
+}
+function pidAlive(pid) {
+  try { process.kill(pid, 0); return true; } catch (e) { return e?.code === "EPERM"; }
 }
 
 // ---- whole-session summary --------------------------------------------------

@@ -6,7 +6,7 @@
 // INJECTED through the ChatDeps prop (real interface — the same pattern TerminalPane's `deps`
 // uses), and the assertions count `orchestrator_status` invokes, so a missing seed, a duplicate,
 // or a polling loop all fail loudly.
-import { act } from "react";
+import { act, useEffect } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { InvokeArgs } from "@tauri-apps/api/core";
@@ -15,6 +15,7 @@ import type { HerdrSeat } from "../workspace/herdr";
 import { WAKE_OUTCOME_MS } from "../genesis/wakeRow";
 import type { WakeProgress } from "../genesis/wakeProgress";
 import type { AskQuestion } from "./streaming";
+import { HANDOFF_COUNTDOWN_MS } from "./banner";
 
 // SAFETY: React's act() reads this flag off globalThis; the cast adds the one key TS does not know
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -1258,5 +1259,126 @@ describe("an ask adjacent to another tool call in the same turn (#6094, 2026-09-
     expect(host.querySelector('[data-testid="ask-card"]')).not.toBeNull();
     expect(host.textContent).toContain("Yes");
     expect(host.textContent).toContain("answered");
+  });
+});
+
+// #6668 — the handoff offer needs a LIVE agent in the pane. 2026-09-07 12:35: the crebral-health
+// Chat opened onto a pane whose claude had died at 12:16; the gauge read the dead session's
+// transcript at 92% and the unattended path fired a chain that would have TERMed the pane's zsh.
+// Banner, countdown and auto-fire all hang off `bannerOffered`; these drills pin it to liveness.
+describe("the handoff offer needs a live agent in the pane (#6668)", () => {
+  const OVER_META = {
+    model: "claude-fable-5-1", version: "2.1.257", branch: "main",
+    context: { tokens: 920_000, window: 1_000_000, frac: 0.92 },
+  };
+  let host: HTMLDivElement;
+  let root: Root;
+
+  /** A pane is hosted (target non-null) and its status seed answers `status`; the transcript
+   *  gauge reads 92%. `longRun` makes the injected Composer report full-auto on mount, the
+   *  exact input the unattended auto-fire keys on. */
+  function makeOverDeps(status: string, longRun = false) {
+    const invokes: Array<{ cmd: string; args?: InvokeArgs }> = [];
+    const traced: string[] = [];
+    const deps: ChatDeps = {
+      invoke: <T,>(cmd: string, args?: InvokeArgs): Promise<T> => {
+        invokes.push({ cmd, args });
+        if (cmd === "app_log") {
+          // SAFETY: Chat's trace calls always pass { line: string }.
+          traced.push((args as { line: string } | undefined)?.line ?? "");
+          // SAFETY: Chat types app_log's return as void; the seam ignores whatever comes back.
+          return Promise.resolve(undefined as T);
+        }
+        if (cmd === "orchestrator_chat") {
+          // SAFETY: Chat types this call Promise<string> and parses the JSON; the envelope is the
+          // Backfill shape with a gauge over HANDOFF_WARN_FRAC.
+          return Promise.resolve(JSON.stringify([[], [], 0, OVER_META, []]) as T);
+        }
+        if (cmd === "chat_watch") {
+          // SAFETY: Chat types this call Promise<ChatWatchResult>.
+          return Promise.resolve({ current: 0, generation: 1 } as T);
+        }
+        if (cmd === "orchestrator_status") {
+          // SAFETY: Chat types this call Promise<string> — herdr's status word for the pane.
+          return Promise.resolve(status as T);
+        }
+        if (cmd === "handoff_now") {
+          // SAFETY: Chat types this call Promise<string> — the chain's returned line.
+          return Promise.resolve("handoff drilled" as T);
+        }
+        // SAFETY: unknown commands resolve to null, matching the real seam's unhandled default.
+        return Promise.resolve(null as T);
+      },
+      listen: () => Promise.resolve(() => {}),
+      orchestratorOf: async () => ({ project: "p", agent: "orch", surface: "w9:p1", kind: "orch" }),
+      answerAtSession: async () => {},
+      Composer: ({ onLongRunChange }) => {
+        useEffect(() => { onLongRunChange(longRun); }, [onLongRunChange]);
+        return null;
+      },
+      TerminalPane: () => null,
+    };
+    return { deps, invokes, traced };
+  }
+  const handoffs = (invokes: Array<{ cmd: string; args?: InvokeArgs }>) =>
+    // SAFETY: Chat always invokes handoff_now with { project, reason } (startHandoff, Chat.tsx).
+    invokes.filter(c => c.cmd === "handoff_now").map(c => (c.args as { reason: string } | undefined)?.reason);
+  const bannerButton = () =>
+    Array.from(host.querySelectorAll("button")).find(b => b.textContent?.trim() === "Hand off now") ?? null;
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    host = document.createElement("div");
+    document.body.appendChild(host);
+    root = createRoot(host);
+  });
+  afterEach(() => {
+    act(() => root.unmount());
+    host.remove();
+    vi.useRealTimers();
+  });
+
+  it("a registered pane with no agent (status unknown) at 92% shows no banner and never fires", async () => {
+    const { deps, invokes, traced } = makeOverDeps("unknown", true);
+    act(() => { root.render(<Chat project="p" dock="right" onDock={() => {}} onClose={() => {}} deps={deps} />); });
+    await flush(); await flush();
+    expect(bannerButton()).toBeNull();
+    // The countdown clock and the auto-fire both get their full chance.
+    await act(async () => { vi.advanceTimersByTime(HANDOFF_COUNTDOWN_MS + 2_000); });
+    await flush();
+    expect(handoffs(invokes)).toEqual([]);
+    expect(bannerButton()).toBeNull();
+    const withheld = traced.filter(l => l.startsWith("chat handoff gauge p:") && l.includes("withheld"));
+    expect(withheld).toHaveLength(1);
+    expect(withheld[0]).toContain("status=unknown");
+    expect(withheld[0]).toContain("frac=0.92");
+  });
+
+  it("no pane recorded at all (status none) is the same silence", async () => {
+    const { deps, invokes } = makeOverDeps("none", true);
+    act(() => { root.render(<Chat project="p" dock="right" onDock={() => {}} onClose={() => {}} deps={deps} />); });
+    await flush(); await flush();
+    await act(async () => { vi.advanceTimersByTime(HANDOFF_COUNTDOWN_MS + 2_000); });
+    await flush();
+    expect(handoffs(invokes)).toEqual([]);
+    expect(bannerButton()).toBeNull();
+  });
+
+  it("a live agent at 92% still gets the banner, and the countdown still fires", async () => {
+    const { deps, invokes, traced } = makeOverDeps("idle");
+    act(() => { root.render(<Chat project="p" dock="right" onDock={() => {}} onClose={() => {}} deps={deps} />); });
+    await flush(); await flush();
+    expect(bannerButton()).not.toBeNull();
+    expect(traced.some(l => l.includes("banner withheld"))).toBe(false);
+    await act(async () => { vi.advanceTimersByTime(HANDOFF_COUNTDOWN_MS + 500); });
+    await flush();
+    expect(handoffs(invokes)).toEqual(["countdown"]);
+  });
+
+  it("a live agent in full auto fires the unattended handoff exactly as before", async () => {
+    const { deps, invokes } = makeOverDeps("working", true);
+    act(() => { root.render(<Chat project="p" dock="right" onDock={() => {}} onClose={() => {}} deps={deps} />); });
+    await flush(); await flush(); await flush();
+    expect(handoffs(invokes)).toEqual(["unattended"]);
   });
 });

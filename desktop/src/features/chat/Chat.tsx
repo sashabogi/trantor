@@ -1084,7 +1084,24 @@ export function Chat({ project, sessionId, dock, onDock, onClose, deps = DEFAULT
       .finally(() => setHandoffBusy(false));
   }, [addDivider, handoffBusy, project]);
 
-  const bannerOffered = !history && bannerVisible(chat.meta.context.frac, dismissedAt);
+  // #6668: the offer — banner, countdown and the unattended auto-fire alike — needs a LIVE
+  // agent in the pane, the same liveness the composer gates on. 09-07 12:35: the crebral-health
+  // Chat opened onto a pane whose claude had died at 12:16, the gauge read the DEAD session's
+  // transcript at 92%, and the unattended path fired a chain that would have ended the pane's
+  // shell. A gauge is a property of a transcript; a handoff is an act on a session. No session,
+  // no offer — and the withheld gauge is traced once per status so the incident reads itself.
+  const gaugeOver = !history && bannerVisible(chat.meta.context.frac, dismissedAt);
+  const bannerOffered = gaugeOver && liveness.live;
+  const withheldKey = useRef<string | null>(null);
+  useEffect(() => {
+    if (!gaugeOver || liveness.live) { withheldKey.current = null; return; }
+    const key = `${project}:${status}`;
+    if (withheldKey.current === key) return;
+    withheldKey.current = key;
+    invokeFn("app_log", {
+      line: `chat handoff gauge ${project}: frac=${(chat.meta.context.frac ?? 0).toFixed(2)} past the threshold but no live agent in the pane (status=${status}) — banner withheld, no chain`,
+    }).catch(() => {});
+  }, [gaugeOver, liveness.live, project, status, chat.meta.context.frac, invokeFn]);
   useEffect(() => {
     if (!bannerOffered || longRun) { setBannerArmedAt(null); return; }
     setBannerArmedAt(at => at ?? Date.now());

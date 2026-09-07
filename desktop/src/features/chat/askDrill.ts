@@ -3,7 +3,7 @@
 // The seat writes this drill but never launches it. The orchestrator builds and runs it.
 import { invoke, type InvokeArgs } from "@tauri-apps/api/core";
 
-const CHAT_TAB_SELECTOR = 'button[aria-label="Chat"]';
+export const CHAT_TAB_SELECTOR = 'button[aria-label="Chat"]';
 const FILES_TAB_SELECTOR = 'button[aria-label="Files"]';
 const ASK_CARD_SELECTOR = '[data-testid="ask-card"]';
 const POLL_MS = 50;
@@ -78,7 +78,8 @@ async function waitFor<T>(
   return read() || null;
 }
 
-async function selectProject(project: string, deps: AskDrillDeps): Promise<void> {
+/** Shared with handoffDrill.ts (#6668): the same sidebar row click and mode-pane wait. */
+export async function selectProject(project: string, deps: AskDrillDeps): Promise<void> {
   if (deps.document.querySelector(CHAT_TAB_SELECTOR)) return;
   const row = findProjectRow(deps.document, project);
   if (!row) throw new Error(`no sidebar row for project=${project}`);
@@ -91,7 +92,7 @@ async function selectProject(project: string, deps: AskDrillDeps): Promise<void>
   if (!opened) throw new Error(`project=${project} did not open a mode pane`);
 }
 
-async function selectMode(selector: string, deps: AskDrillDeps): Promise<number> {
+export async function selectMode(selector: string, deps: AskDrillDeps): Promise<number> {
   const tab = deps.document.querySelector<HTMLButtonElement>(selector);
   if (!tab) throw new Error(`mode tab missing: ${selector}`);
   const clickedAt = deps.now();

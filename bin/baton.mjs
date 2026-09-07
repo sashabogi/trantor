@@ -8,7 +8,7 @@ import { join, basename, dirname } from "node:path";
 import { homedir } from "node:os";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { writeHandoff, spawnBaton, resolveHandoffSurface, armBaton, contextUsage, controllingTty, turnInFlight, armMaxMs } from "../hooks/lib/handoff.mjs";
+import { writeHandoff, spawnBaton, resolveHandoffSurface, armBaton, contextUsage, controllingTty, turnInFlight, armMaxMs, sessionProcessState } from "../hooks/lib/handoff.mjs";
 
 // #6074: the skill path (write-handoff.mjs) and this CLI path must share ONE resolution of which
 // project this is and where the session lives. Both call resolveHandoffSurface; the name comes
@@ -82,7 +82,13 @@ function autoBaton() {
   // a turn still in flight ARMS instead of writing: no record, no spawn, and the session's own
   // Stop hook fires the baton at the boundary, where the summary describes finished work.
   const force = process.argv.includes("--force");
-  if (!force && turnInFlight(transcript)) {
+  // #6668: a transcript whose session has NO live process is at its boundary, whatever its last
+  // row says. The 09-07 12:35 chain armed on a session that had exited at 12:16 (its tail was a
+  // tool_result "Connection closed"), then sat in the 17-minute boundary wait for a Stop hook no
+  // process would ever run. Write now; the record describes a session that is over.
+  const processState = sessionProcessState(sessionId);
+  if (processState === "dead") console.log(`session ${sessionId} has no live process — at its boundary, writing now`);
+  if (!force && processState !== "dead" && turnInFlight(transcript)) {
     armBaton(sessionId, {
       projectDir: cwd,
       transcript, reason: trigger, windowId: "", tty: controllingTty(),
