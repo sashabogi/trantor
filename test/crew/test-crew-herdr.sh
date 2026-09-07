@@ -61,7 +61,13 @@ case "\$1" in
     split) N=\$(( \$(cat "$TMP/herdr.n" 2>/dev/null || echo 0) + 1 )); echo "\$N" > "$TMP/herdr.n"
            printf '{"result":{"pane":{"pane_id":"P-%s"}}}\n' "\$N" ;;
     rename) case "\$3" in P-DEAD) exit 1 ;; esac ;;   # a pane id that answers rename = alive (open's probe)
+    run)    [ "\${HERDR_PANE_RUN_FAIL:-}" = "1" ] && exit 1 ;;
     list)   printf '{"result":{"panes":[%s]}}' "\${HERDR_LIVE_PANES:-}" ;;   # replays \$HERDR_LIVE_PANES (open's host pick)
+    process-info)
+            if [ -n "\${HERDR_PROCESS_INFO:-}" ]; then printf '%s' "\$HERDR_PROCESS_INFO"
+            elif [ -f "$TMP/herdr.agents" ] && grep -qx "\$4" "$TMP/herdr.agents"; then
+              printf '{"result":{"process_info":{"foreground_processes":[{"name":"claude","pid":123}]}}}'
+            else printf '{"result":{"process_info":{"foreground_processes":[{"name":"zsh","pid":456}]}}}'; fi ;;
     report-agent) echo "\$3" >> "$TMP/herdr.agents" ;;   # a pane herdr now considers an agent
   esac ;;
   # Only panes that were REPORTED are agents. That is the real asymmetry: a pane can answer rename
@@ -328,7 +334,7 @@ ok "the id is recorded against the project" 'grep -q "^testproj	" "$TMP/.agent-b
 SID19="$(cut -f2 < "$TMP/.agent-bus/orch-sessions.txt" 2>/dev/null | head -1)"
 ok "the recorded id is the one claude was given" 'grep -q "claude --session-id $SID19" "$TMP/herdr.log"'
 
-# the pane outlives its claude: herdr still answers rename, but nothing is running in it
+# the pane outlives its claude: herdr still answers rename, but process-info shows only its shell
 rm -f "$TMP/herdr.log" "$TMP/herdr.agents"
 SLUG19="$(printf '%s' "$TMP/proj" | tr '/.' '--')"
 mkdir -p "$TMP/.claude/projects/$SLUG19"; : > "$TMP/.claude/projects/$SLUG19/$SID19.jsonl"
@@ -338,6 +344,20 @@ ok "…in the same pane, with no second workspace" '! grep -q "workspace create"
 ok "…and the project still has exactly one orch row" '[ "$(grep -c "	orch	" "$STATE")" = "1" ]'
 ok "…and it mints no second session id" '[ "$(wc -l < "$TMP/.agent-bus/orch-sessions.txt")" -eq 1 ]'
 ok "the reattach still prints the same target" '[ "$OUT19b" = "$OUT19" ]'
+
+# The agent registry retires a dead process asynchronously. During that gap it still lists the
+# pane, but process-info is already authoritative: a shell-only pane must be restarted.
+rm -f "$TMP/herdr.log"; echo "P-1" > "$TMP/herdr.agents"
+OUT19lag="$(cd "$TMP/proj" && HOME="$TMP" PATH="$TMP/fakebin:$PATH" RELAY_PROJECT=testproj HERDR_PROCESS_INFO='{"result":{"process_info":{"foreground_processes":[{"name":"zsh","pid":456}]}}}' CREW_NO_PROC_KILL=1 "${CREW[@]}" open </dev/null 2>/dev/null)"
+ok "a lagging agent-list entry cannot hide a dead foreground process" 'grep -q "herdr pane process-info --pane P-1" "$TMP/herdr.log" && grep -qE "herdr pane run P-1 env .* claude --resume $SID19" "$TMP/herdr.log"'
+ok "open never consults the lagging agent list during reattach" '! grep -q "herdr agent list" "$TMP/herdr.log"'
+
+# A failed pane run is not a successful reattach: it must leave a loud nonzero result, and must
+# not report a claude agent that never started.
+rm -f "$TMP/herdr.log" "$TMP/herdr.agents"
+OUT19fail="$(cd "$TMP/proj" && HOME="$TMP" PATH="$TMP/fakebin:$PATH" RELAY_PROJECT=testproj HERDR_PANE_RUN_FAIL=1 CREW_NO_PROC_KILL=1 "${CREW[@]}" open </dev/null 2>&1)"; rc19fail=$?
+ok "reattach fails loud when pane run fails" '[ "$rc19fail" = "1" ] && echo "$OUT19fail" | grep -q "could not start the orchestrator"'
+ok "a failed pane run is never reported as a live agent" '! grep -q "pane report-agent" "$TMP/herdr.log"'
 
 # a pane that IS running claude must be left strictly alone
 rm -f "$TMP/herdr.log"; echo "P-1" > "$TMP/herdr.agents"

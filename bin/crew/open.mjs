@@ -1,8 +1,8 @@
 import { randomUUID } from "node:crypto";
 import { existsSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { call } from "./core.mjs";
-import { createWorkspace, herdrCall, paneHasAgent, reportAgent, splitPane, workspaceList, workspacePane } from "./herdr.mjs";
+import { call, parseJsonOutput } from "./core.mjs";
+import { createWorkspace, herdrCall, reportAgent, splitPane, workspaceList, workspacePane } from "./herdr.mjs";
 import { dropState, readRows, recordState } from "./state.mjs";
 import { resolveOrchestratorDir } from "./worktrees.mjs";
 
@@ -72,6 +72,19 @@ function orchestratorCommand(ctx, id) {
   return `${env} claude${harnessFlag(ctx)} ${action}`;
 }
 
+export function paneHasAgent(ctx, pane) {
+  const result = herdrCall(ctx, ["pane", "process-info", "--pane", pane]);
+  const info = parseJsonOutput(result.stdout)?.result?.process_info;
+  if (!result.ok || !info) return false;
+  const processes = Array.isArray(info.foreground_processes) ? info.foreground_processes : [];
+  return processes.some(process => {
+    const command = [process.name, process.argv0, process.cmdline, ...(Array.isArray(process.argv) ? process.argv : [])]
+      .filter(Boolean)
+      .join(" ");
+    return /(^|[/\s])claude(?:\.exe)?(?:$|\s)/i.test(command);
+  });
+}
+
 function tracked(ctx, live) {
   let workspace = "";
   let pane = "";
@@ -91,7 +104,8 @@ function reattach(ctx, workspace, pane, id) {
   const renamed = herdrCall(ctx, ["pane", "rename", pane, `orchestrator · ${ctx.project}`]);
   if (!renamed.ok) { dropState(ctx, ctx.project, "orch"); return false; }
   if (!paneHasAgent(ctx, pane)) {
-    herdrCall(ctx, ["pane", "run", pane, orchestratorCommand(ctx, id)]);
+    const started = herdrCall(ctx, ["pane", "run", pane, orchestratorCommand(ctx, id)]);
+    if (!started.ok) throw new Error(`trantor open: could not start the orchestrator in pane ${pane}`);
     reportAgent(ctx, pane, "claude");
     console.error(`— orchestrator pane was empty: resumed session ${id} in herdr:${workspace || "?"}/${pane} —`);
   } else console.error(`— orchestrator already hosted: reattached to herdr:${workspace || "?"}/${pane} —`);
