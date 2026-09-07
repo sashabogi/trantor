@@ -40,6 +40,7 @@ use crate::{
     app_state::AppState,
     event::{code_to_key, create_key_event, event_mods, get_scancode, EventWrapper},
     ffi::*,
+    objc_exception,
     util::{self},
     window::get_window_id,
     DEVICE_ID,
@@ -451,7 +452,14 @@ extern "C" fn set_marked_text(
   _replacement_range: NSRange,
 ) {
   trace!("Triggered `setMarkedText`");
-  unsafe {
+  objc_exception::guard("NSView setMarkedText:", || unsafe {
+    set_marked_text_inner(this, string)
+  });
+  trace!("Completed `setMarkedText`");
+}
+
+unsafe fn set_marked_text_inner(this: &mut Object, string: id) {
+  {
     let has_attr: bool = msg_send![string, isKindOfClass: class!(NSAttributedString)];
     let marked_text = if has_attr {
       NSMutableAttributedString::initWithAttributedString(
@@ -473,7 +481,6 @@ extern "C" fn set_marked_text(
     state.in_ime_preedit = true;
     state.key_triggered_ime = true;
   }
-  trace!("Completed `setMarkedText`");
 }
 
 extern "C" fn unmark_text(this: &mut Object, _sel: Sel) {
@@ -545,7 +552,14 @@ extern "C" fn insert_text(
   _replacement_range: NSRange,
 ) {
   trace!("Triggered `insertText`");
-  unsafe {
+  objc_exception::guard("NSView insertText:", || unsafe {
+    insert_text_inner(this, string)
+  });
+  trace!("Completed `insertText`");
+}
+
+unsafe fn insert_text_inner(this: &Object, string: &NSString) {
+  {
     let state_ptr: *mut c_void = *this.get_ivar("taoState");
     let state = &mut *(state_ptr as *mut ViewState);
     let Some(window_id) = live_window_id(state) else {
@@ -581,7 +595,6 @@ extern "C" fn insert_text(
       state.key_triggered_ime = true;
     }
   }
-  trace!("Completed `insertText`");
 }
 
 extern "C" fn do_command_by_selector(_this: &Object, _sel: Sel, _command: Sel) {
@@ -697,9 +710,17 @@ fn update_potentially_stale_modifiers(state: &mut ViewState, event: &NSEvent) {
   }
 }
 
+// #6317: `interpretKeyEvents:` hands the event to AppKit's text input system, which can throw an
+// Objective-C exception back through this `extern "C"` frame; caught at the boundary, see
+// `objc_exception`. The same guard wraps `insertText` and `setMarkedText` below.
 extern "C" fn key_down(this: &mut Object, _sel: Sel, event: &NSEvent) {
   trace!("Triggered `keyDown`");
-  unsafe {
+  objc_exception::guard("NSView keyDown:", || unsafe { key_down_inner(this, event) });
+  trace!("Completed `keyDown`");
+}
+
+unsafe fn key_down_inner(this: &mut Object, event: &NSEvent) {
+  {
     let state_ptr: *mut c_void = *this.get_ivar("taoState");
     let state = &mut *(state_ptr as *mut ViewState);
     let Some(window_id) = live_window_id(state) else {
@@ -758,7 +779,6 @@ extern "C" fn key_down(this: &mut Object, _sel: Sel, event: &NSEvent) {
     };
     AppState::queue_event(EventWrapper::StaticEvent(window_event));
   }
-  trace!("Completed `keyDown`");
 }
 
 extern "C" fn key_up(this: &Object, _sel: Sel, event: &NSEvent) {

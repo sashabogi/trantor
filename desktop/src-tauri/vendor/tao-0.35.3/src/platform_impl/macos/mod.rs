@@ -13,6 +13,7 @@ mod ffi;
 mod icon;
 mod keycode;
 mod monitor;
+mod objc_exception;
 mod observer;
 mod progress_bar;
 mod util;
@@ -29,6 +30,7 @@ pub use self::{
   event_loop::{EventLoop, EventLoopWindowTarget, Proxy as EventLoopProxy},
   keycode::{keycode_from_scancode, keycode_to_scancode},
   monitor::{MonitorHandle, VideoMode},
+  objc_exception::{set_objc_exception_reporter, ObjcExceptionReport},
   progress_bar::set_progress_indicator,
   window::{Id as WindowId, Parent, PlatformSpecificWindowBuilderAttributes, UnownedWindow},
 };
