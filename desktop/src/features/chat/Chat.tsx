@@ -26,6 +26,7 @@ import { Composer, type Provenance } from "./Composer";
 import { MarkdownText } from "./MarkdownText";
 import { suggestionsFromAskOptions, suggestionsFromTurns } from "./suggestions";
 import { SuggestionChips } from "./SuggestionChips";
+import { isPinned } from "./scrollPin";
 import {
   clampPanel, fontScale, loadDismissedAt, loadFontStep, loadPanelSize, loadTrayOpen,
   saveDismissedAt, saveFontStep, savePanelSize, saveTrayOpen, type FontStep,
@@ -524,6 +525,26 @@ export function Chat({ project, sessionId, dock, onDock, onClose, deps = DEFAULT
   const [modelSource, setModelSource] = useState<Provenance>("unknown");
   const [pending, setPending] = useState<string>("");
   const foot = useRef<HTMLDivElement | null>(null);
+  // #6697 — stick-to-bottom. `pinned` mirrors the transcript's own scroll position (onScroll
+  // below); the effect that follows new turns reads the REF so a pin flip never re-runs it, and
+  // `unseen` marks that turns landed while the operator was reading further up.
+  const transcript = useRef<HTMLDivElement | null>(null);
+  const pinnedRef = useRef(true);
+  const [pinned, setPinned] = useState(true);
+  const [unseen, setUnseen] = useState(false);
+  const rePin = useCallback(() => { pinnedRef.current = true; setPinned(true); setUnseen(false); }, []);
+  const onTranscriptScroll = useCallback(() => {
+    const el = transcript.current;
+    if (!el) return;
+    const now = isPinned(el);
+    if (now === pinnedRef.current) return;
+    if (now) rePin();
+    else { pinnedRef.current = false; setPinned(false); }
+  }, [rePin]);
+  const jumpToLatest = useCallback(() => {
+    foot.current?.scrollIntoView({ behavior: "smooth" });
+    rePin();
+  }, [rePin]);
   // The decision cursor: updated synchronously where the state is updated asynchronously, so two
   // arrivals in one tick still see the cursor the first one left.
   const seenRef = useRef(0);
@@ -887,7 +908,14 @@ export function Chat({ project, sessionId, dock, onDock, onClose, deps = DEFAULT
     }, ms));
     return () => { alive = false; for (const t of timers) clearTimeout(t); };
   }, [history, project, commitStatus, nextSeq]);
-  useEffect(() => { foot.current?.scrollIntoView({ behavior: "smooth" }); }, [chat.turns.length]);
+  // #6697 — new turns pull the view down ONLY while it already sits at the foot; scrolled up, the
+  // operator keeps reading where they are and the jump button lights its "more below" dot.
+  useEffect(() => {
+    if (pinnedRef.current) foot.current?.scrollIntoView({ behavior: "smooth" });
+    else if (chat.turns.length) setUnseen(true);
+  }, [chat.turns.length]);
+  // A different session or project starts at its foot.
+  useEffect(() => { rePin(); }, [project, history, rePin]);
 
   const working = status === "working";
 
@@ -1227,7 +1255,8 @@ export function Chat({ project, sessionId, dock, onDock, onClose, deps = DEFAULT
         </div>
       )}
 
-      <div className="min-h-0 flex-1 overflow-y-auto px-3 pb-2">
+      <div className="relative min-h-0 flex-1">
+      <div ref={transcript} onScroll={onTranscriptScroll} className="h-full overflow-y-auto px-3 pb-2">
         {!target && (
           <div className="tr-card-ghost px-4 py-3 text-[length:calc(12px*var(--chat-scale,1))] leading-relaxed">
             No orchestrator session is hosted for this project yet. Open one from the Workspace lens
@@ -1305,6 +1334,22 @@ export function Chat({ project, sessionId, dock, onDock, onClose, deps = DEFAULT
           </div>
         ))}
         <div ref={foot} />
+      </div>
+      {!pinned && (
+        <button
+          type="button"
+          onClick={jumpToLatest}
+          aria-label={unseen ? "Jump to latest — new messages below" : "Jump to latest"}
+          title={unseen ? "New messages below — jump to the latest" : "Jump to the latest"}
+          className="absolute bottom-3 right-4 flex h-7 w-7 items-center justify-center rounded-full border border-tr-edge bg-tr-panel text-tr-muted shadow-md hover:text-tr-text focus-visible:outline focus-visible:outline-1 focus-visible:outline-tr-doing"
+        >
+          <ChevronDown size={14} />
+          {unseen && (
+            <span data-testid="chat-unseen" className="tr-dot absolute -right-0.5 -top-0.5"
+              style={{ background: "var(--color-tr-doing)", width: 7, height: 7 }} />
+          )}
+        </button>
+      )}
       </div>
 
       {/* The terminal tray (#5523): the orchestrator's live pane folded under the transcript,
