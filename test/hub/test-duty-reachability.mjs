@@ -84,6 +84,14 @@ try {
   });
   ok("configured duty identity sends into an unlinked project", dutySend.status === 200, JSON.stringify(dutySend.json));
 
+  const receiptProbe = await request(owner, "POST", "/send", {
+    from: "owner", to: "MacBook-Pro-M1:projTarget", project: "projTarget", text: "receipt probe",
+  });
+  const inbox = await request(target, "GET", `/inbox?session=${encodeURIComponent("MacBook-Pro-M1:projTarget")}&since=${receiptProbe.json.id - 1}`);
+  const peer = await request(target, "GET", `/peer?session=${encodeURIComponent("MacBook-Pro-M1:projTarget")}`);
+  ok("a signed relay_inbox-style read returns the target message", inbox.json.messages?.some(message => message.id === receiptProbe.json.id), JSON.stringify(inbox.json));
+  ok("that non-peek inbox read advances deliveredUpTo", peer.json.deliveredUpTo >= receiptProbe.json.id, JSON.stringify(peer.json));
+
   const failure = await request(duty, "POST", "/duty/failure", {
     recipient: "MacBook-Pro-M1:projTarget", kind: "skipped-nudge", detail: "ListAgents target was unavailable",
   });

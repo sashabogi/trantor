@@ -28,7 +28,8 @@ import {
   senderProjectOf, isLinkedProject,
 } from "../lib/turn-policy.mjs";
 import {
-  auditDutyNudges, claudeTranscriptDir, dutyNudgeDirective, observedDutyNudgeIds, planDutyNudges,
+  auditDutyNudges, claimDutyNudges, claudeTranscriptDir, dutyEscalations, dutyNudgeDirective,
+  observedDutyNudgeIds,
 } from "../lib/duty-nudges.mjs";
 
 const AGENT = process.argv[2];
@@ -1067,10 +1068,30 @@ function askedExcerpt(message) {
   // queued, on disk, with a backoff — which is the whole point of the change.
   async function deliverWake() {
     const wake = pendingWake;
-    const wakeCapped = capWake(wake);
+    const dutyPlan = DUTY_NUDGES
+      ? await claimDutyNudges({
+        messages: wake,
+        statePath: DUTY_NUDGE_STATE,
+        owner: `${RUNNER_ID}:${TURN + 1}`,
+      })
+      : { items: [], targets: [], owner: "" };
+    const claimedIds = new Set(dutyPlan.items.map(item => item.id));
+    const wakeForTurn = DUTY_NUDGES
+      ? wake.filter(message => {
+        const escalation = dutyEscalations([message])[0];
+        return !escalation || claimedIds.has(escalation.id);
+      })
+      : wake;
+    if (!wakeForTurn.length) {
+      pendingWake = [];
+      savePending([], pendingBcast);
+      log("duty escalation already nudged or reserved by another turn — consumed without a duplicate model wake");
+      return;
+    }
+    const wakeCapped = capWake(wakeForTurn);
     const bcastCapped = capBcast(pendingBcast);
     const wakeText = wakeCapped.text
-      ? `NEW BUS MESSAGE${wake.length > 1 ? "S" : ""} for you:\n${wakeCapped.text}\n`
+      ? `NEW BUS MESSAGE${wakeForTurn.length > 1 ? "S" : ""} for you:\n${wakeCapped.text}\n`
       : "";
     const ctxText = bcastCapped.text
       ? `\nFYI broadcasts since your last turn (context only):\n${bcastCapped.text}\n`
@@ -1078,29 +1099,26 @@ function askedExcerpt(message) {
     // Say plainly that this is a second look. Without it the model re-reads an old escalation as
     // brand new and can redo work it already half-did before the turn died.
     const againText = deliveryFails
-      ? `\n(REDELIVERY, attempt ${deliveryFails + 1} — an earlier turn failed before acting on ${wake.length > 1 ? "these" : "this"}. Check what you already did before repeating it.)\n`
+      ? `\n(REDELIVERY, attempt ${deliveryFails + 1} — an earlier turn failed before acting on ${wakeForTurn.length > 1 ? "these" : "this"}. Check what you already did before repeating it.)\n`
       : "";
     await loadLessons();
     const lessons = pickLessons(LESSONS_RAW, wakeCapped.text + " " + bcastCapped.text);
-    const trigger = wake.some(m => m.to === SESSION) ? "direct message" : "@mention";
+    const trigger = wakeForTurn.some(m => m.to === SESSION) ? "direct message" : "@mention";
     // Who is owed an answer, captured BEFORE the turn: pendingWake is cleared on success.
     const assigners = [];
-    for (const m of wake) if (m.from && !assigners.some(a => a.from === m.from)) assigners.push({ from: m.from, id: m.id });
-    const asked = askedExcerpt(wake[0]);
+    for (const m of wakeForTurn) if (m.from && !assigners.some(a => a.from === m.from)) assigners.push({ from: m.from, id: m.id });
+    const asked = askedExcerpt(wakeForTurn[0]);
     const tStart = Date.now();
     // #6134: ONE SESSION PER CARD. A seat that resumes forever carries every card it ever worked
     // into every later turn — qwen's 85.7M tokens were 96.7% cached, i.e. replayed history. The
     // card that moved this wake decides: a different one starts a fresh CLI session, and the seat
     // is told so, because a fresh session remembers nothing and must be sent to its card.
-    const card = wake.map(m => cardRef(m.text)).find(Boolean) || 0;
+    const card = wakeForTurn.map(m => cardRef(m.text)).find(Boolean) || 0;
     const fresh = card > 0 && card !== sessionCard;
     if (card) sessionCard = card;
     const freshText = fresh
       ? `\n(FRESH SESSION for card #${card} — you are not the session that worked earlier cards and you remember none of them. Read your card first: relay_board with card:${card}.)\n`
       : "";
-    const dutyPlan = DUTY_NUDGES
-      ? planDutyNudges(wake, DUTY_NUDGE_STATE)
-      : { items: [], targets: [] };
     const prompt = composedTurn({
       wakeText, ctxText, againText: againText + freshText + dutyNudgeDirective(dutyPlan),
       tailText: "\nAct on what's addressed to you, then end your turn.\n\n",

@@ -5,7 +5,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
-  auditDutyNudges, claudeTranscriptDir, dutyNudgeDirective, observedDutyNudgeIds, planDutyNudges,
+  auditDutyNudges, claimDutyNudges, claudeTranscriptDir, dutyNudgeDirective,
+  observedDutyNudgeIds, planDutyNudges,
 } from "../../lib/duty-nudges.mjs";
 
 const work = mkdtempSync(join(tmpdir(), "trantor-duty-nudges-"));
@@ -28,8 +29,11 @@ try {
   ok("duty cwd maps to Claude's real transcript slug",
     claudeTranscriptDir("/Users/example/.agent-bus/trantor-duty", "/Users/example")
       === "/Users/example/.claude/projects/-Users-example--agent-bus-trantor-duty");
-  const first = planDutyNudges(feed(["A"]), statePath);
+  const first = await claimDutyNudges({ messages: feed(["A"]), statePath, owner: "turn-1" });
   ok("first feed plans A", first.targets.length === 1 && first.targets[0].ids.join() === "A");
+  ok("A is reserved at plan time", JSON.parse(readFileSync(statePath, "utf8")).planned.A?.owner === "turn-1");
+  const overlapping = await claimDutyNudges({ messages: feed(["A"]), statePath, owner: "turn-2" });
+  ok("an overlapping turn cannot re-plan reserved A", overlapping.items.length === 0);
   const firstPrompt = dutyNudgeDirective(first);
   ok("prompt names the exact required id", firstPrompt.includes("MacBook-Pro-M1:proj: #A"));
   ok("prompt limits metronome suppression to the same id", firstPrompt.includes("metronome rule applies only to the SAME id"));
@@ -47,7 +51,7 @@ try {
       {
         type: "tool_use",
         name: "SendMessage",
-        input: { message: "Trantor delivery nudge from the duty seat: unread id #A" },
+        input: { message: "Trantor delivery nudge from the duty seat: unread id #A. This nudge carries no message content; the signed bus messages are the source of truth." },
       },
       {
         type: "tool_use",
@@ -62,6 +66,7 @@ try {
   }
   ok("watcher persists A before the duty turn ends",
     JSON.parse(readFileSync(statePath, "utf8")).nudged.A?.recipient === "MacBook-Pro-M1:proj");
+  ok("watcher finalizes A by removing its planned mark", !JSON.parse(readFileSync(statePath, "utf8")).planned.A);
   ok("a concurrent second wake with A plans nothing", planDutyNudges(feed(["A"]), statePath).items.length === 0);
   writeFileSync(stopPath, "");
   await new Promise(resolve => watcher.on("close", resolve));
@@ -77,7 +82,7 @@ try {
   const persisted = JSON.parse(readFileSync(statePath, "utf8"));
   ok("verified A is persisted", persisted.nudged.A?.recipient === "MacBook-Pro-M1:proj");
 
-  const second = planDutyNudges(feed(["A", "B"]), statePath);
+  const second = await claimDutyNudges({ messages: feed(["A", "B"]), statePath, owner: "turn-3" });
   ok("second feed suppresses only already-nudged A", second.items.length === 1 && second.items[0].id === "B");
   ok("second prompt requires B exactly", dutyNudgeDirective(second).includes("MacBook-Pro-M1:proj: #B"));
   const skippedFailures = [];
@@ -89,7 +94,8 @@ try {
   ok("skipping B records one target failure", skippedFailures.length === 1 && skippedFailures[0].ids.join() === "B");
   const afterSkip = JSON.parse(readFileSync(statePath, "utf8"));
   ok("skipped B is not marked nudged", !afterSkip.nudged.B);
-  const retry = planDutyNudges(feed(["A", "B"]), statePath);
+  ok("skipped B releases its planned mark", !afterSkip.planned.B);
+  const retry = await claimDutyNudges({ messages: feed(["A", "B"]), statePath, owner: "turn-4" });
   ok("an un-nudged B remains mandatory next turn", retry.items.length === 1 && retry.items[0].id === "B");
 } finally {
   rmSync(work, { recursive: true, force: true });
