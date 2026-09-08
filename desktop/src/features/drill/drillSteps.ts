@@ -14,7 +14,18 @@ export type AutoCheckKind =
   | "jump-arrow-mounted"
   | "composer-no-overlap"
   | "wake-header-pending"
-  | "cli-banner-shown";
+  | "cli-banner-shown"
+  | "ask-answered";
+
+/** A step the panel can drive itself on the operator's press (drillApi.ts): post the #6317
+ *  right-arrow into the focused pane, or seed the #6533 ask in the stage. The headless runners
+ *  cannot stage either (no Workspace, no live pane, no orchestrator mid-ask); the real app can. */
+export type DriveKind = "post-key" | "seed-ask";
+
+export const DRIVE_LABELS = {
+  "post-key": "Press the key for me",
+  "seed-ask": "Seed the ask",
+} as const satisfies Record<DriveKind, string>;
 
 export type DrillStep = {
   card: number;
@@ -24,6 +35,7 @@ export type DrillStep = {
   /** What they should see when the card's fix is real. */
   expected: string;
   autoCheck: AutoCheckKind | null;
+  drive: DriveKind | null;
 };
 
 /** The step order follows the drill's own life: create the stage, wake it, then the chat surface
@@ -35,6 +47,7 @@ export const DRILL_STEPS: readonly DrillStep[] = [
     action: "Click Start a project (sidebar +). Drag a .md file from Finder onto the sheet.",
     expected: "The sheet switches to From a brief on its own and shows the dropped file's name. The window does not navigate away.",
     autoCheck: null,
+    drive: null,
   },
   {
     card: 6070,
@@ -42,6 +55,7 @@ export const DRILL_STEPS: readonly DrillStep[] = [
     action: "In the sheet, name the project with the drill- prefix (it stays disposable) and click Create.",
     expected: "The sheet closes at once, the app lands on the new project's workspace, and the wake reports as a toast, not a wait.",
     autoCheck: null,
+    drive: null,
   },
   {
     card: 6201,
@@ -49,6 +63,15 @@ export const DRILL_STEPS: readonly DrillStep[] = [
     action: "With the drill project's session idle, press Wake on its sidebar row, then open its Chat tab.",
     expected: "The chat header reads 'kickoff pending — waiting for idle' during the gate, then the outcome for a few seconds. Exactly one prompt is sent.",
     autoCheck: "wake-header-pending",
+    drive: null,
+  },
+  {
+    card: 6317,
+    title: "A key in a live terminal pane does not abort the app",
+    action: "Open the drill project's Workspace lens and click into its terminal pane. Press the right arrow yourself, or press the button below: it posts one through AppKit into the focused pane.",
+    expected: "The app stays up. app-panics.log gains nothing, or names a caught Objective-C exception instead of a crash; the auto-check quotes what it wrote.",
+    autoCheck: null,
+    drive: "post-key",
   },
   {
     card: 5993,
@@ -56,6 +79,7 @@ export const DRILL_STEPS: readonly DrillStep[] = [
     action: "In the drill project's Chat, ask the orchestrator something that ends in a yes/no question back to you (e.g. 'ask me whether to proceed, then say the word').",
     expected: "When the turn goes idle on that ask, a chip row appears above the composer with yes / no chips. If it does not, app-trace.log names the reason.",
     autoCheck: "chips-mounted",
+    drive: null,
   },
   {
     card: 6702,
@@ -63,6 +87,15 @@ export const DRILL_STEPS: readonly DrillStep[] = [
     action: "Hover the yes chip from the previous step.",
     expected: "The tooltip shows the question you are confirming, and the row leads with the trimmed question instead of the word 'suggested'.",
     autoCheck: "chips-lead-in",
+    drive: null,
+  },
+  {
+    card: 6533,
+    title: "A real AskUserQuestion answers from the Chat card",
+    action: "Press Seed the ask below (a haiku session in the drill project calls AskUserQuestion). In the drill project's Chat, wait for the Drill card and click Continue, then Check now.",
+    expected: "The card renders Continue and Stop as buttons. Clicking Continue types the answer into the session's pane: the card turns to answered and the session prints ASK-DRILL-ADVANCED.",
+    autoCheck: "ask-answered",
+    drive: "seed-ask",
   },
   {
     card: 6697,
@@ -70,6 +103,7 @@ export const DRILL_STEPS: readonly DrillStep[] = [
     action: "Ask the orchestrator for a long reply. While it streams, scroll up into the transcript and stay there.",
     expected: "The view does not yank to the bottom on new lines. A jump-to-latest arrow appears, with a dot once more has landed below.",
     autoCheck: "jump-arrow-mounted",
+    drive: null,
   },
   {
     card: 6701,
@@ -77,6 +111,7 @@ export const DRILL_STEPS: readonly DrillStep[] = [
     action: "In Chat, narrow the right pane to its minimum width and look at the composer's bottom row.",
     expected: "The context percentage and the Aa text-size control sit apart; neither draws over the other.",
     autoCheck: "composer-no-overlap",
+    drive: null,
   },
   {
     card: 6499,
@@ -84,6 +119,7 @@ export const DRILL_STEPS: readonly DrillStep[] = [
     action: "Switch the right panel to Chat. Quit the app, relaunch it, and open the same project.",
     expected: "The panel opens on Chat, not Files.",
     autoCheck: null,
+    drive: null,
   },
   {
     card: 6483,
@@ -91,6 +127,7 @@ export const DRILL_STEPS: readonly DrillStep[] = [
     action: "In a terminal: npm i -g trantor@0.18.46. Open Settings, Accounts, and press Log in or Remove on a provider. Then npm i -g trantor@0.18.47 and reopen Settings.",
     expected: "With 0.18.46 installed a banner reads that the trantor CLI is older than this app needs, and no action silently does nothing. With 0.18.47 back the banner is gone and Log in and Remove work.",
     autoCheck: "cli-banner-shown",
+    drive: null,
   },
   {
     card: 6487,
@@ -98,6 +135,7 @@ export const DRILL_STEPS: readonly DrillStep[] = [
     action: "Settings → Accounts. Remove a provider you can log back into, confirm the sheet, then Log in again.",
     expected: "The row stays after Remove (state not logged in), the sheet closes, and Log in brings the row back to connected.",
     autoCheck: null,
+    drive: null,
   },
   {
     card: 6392,
@@ -105,12 +143,13 @@ export const DRILL_STEPS: readonly DrillStep[] = [
     action: "Settings → Show onboarding again. Walk it with Continue.",
     expected: "All four steps show, satisfied ones marked done, and Done closes the wizard without changing anything.",
     autoCheck: null,
+    drive: null,
   },
 ];
 
 /** The cards this drill must cover (the contract's list) — asserted by the test, so a step that
  *  falls out of the catalogue by accident fails loudly. */
-export const REQUIRED_CARDS: readonly number[] = [5993, 6702, 6697, 6701, 6392, 6487, 6483, 6499, 6201, 6067, 6070];
+export const REQUIRED_CARDS: readonly number[] = [5993, 6702, 6697, 6701, 6392, 6487, 6483, 6499, 6201, 6067, 6070, 6317, 6533];
 
 export type AutoCheckResult = { ok: boolean; why: string };
 

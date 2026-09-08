@@ -8,7 +8,7 @@
 import { invoke, type InvokeArgs } from "@tauri-apps/api/core";
 import { selectProject, type AskDrillDeps } from "../chat/askDrill";
 
-const TERMINAL_INPUT_SELECTOR = ".xterm-helper-textarea";
+export const TERMINAL_INPUT_SELECTOR = ".xterm-helper-textarea";
 const OTHER_TEXTAREA_SELECTOR = `textarea:not(${TERMINAL_INPUT_SELECTOR})`;
 /** The ProjectHeader lens segment carries no aria-label; its button reads the lens name. */
 const WORKSPACE_LENS_TEXT = "Workspace";
@@ -92,8 +92,9 @@ function log(deps: KeyDrillDeps, line: string): void {
 }
 
 /** Open the project from the sidebar and land on its Workspace lens, where the first live pane
- *  target is selected on mount and its terminal renders. Throws when a step has nothing to click. */
-async function stage(project: string, deps: KeyDrillDeps): Promise<void> {
+ *  target is selected on mount and its terminal renders. Throws when a step has nothing to click.
+ *  Drill Mode's key step (#6800, drillApi.ts) stages the same way before it posts. */
+export async function stageWorkspaceLens(project: string, deps: KeyDrillDeps): Promise<void> {
   await selectProject(project, deps);
   const lens = await waitFor(() => findLensButton(deps.document, WORKSPACE_LENS_TEXT), 5_000, deps);
   if (!lens) throw new Error(`project=${project} shows no ${WORKSPACE_LENS_TEXT} lens button`);
@@ -134,7 +135,7 @@ export async function runKeyDrill(payload: KeyDrillPayload, deps: KeyDrillDeps =
       // A staging failure is reported, not fatal: the passes still run and pass 2 says what it
       // could not find, so the trace names the gap instead of hiding the whole run behind it.
       try {
-        await stage(project, deps);
+        await stageWorkspaceLens(project, deps);
       } catch (err) {
         log(deps, `staging failed: ${err instanceof Error ? err.message : String(err)}`);
       }

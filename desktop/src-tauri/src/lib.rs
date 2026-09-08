@@ -5915,6 +5915,8 @@ pub fn run() {
             genesis::project_wake,
             genesis::wake_in_progress,
             drill_mode::drill_screenshot,
+            drill_mode::drill_key_post,
+            drill_mode::drill_panics_since,
             handoff_now,
             handoff_in_progress,
             takeover_now,

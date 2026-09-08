@@ -401,7 +401,16 @@ pub struct AskDrillProbe {
     pane_advanced: bool,
 }
 
+/// Drill Mode (#6800) stages its guided pass on a disposable `drill-*` project; the same prefix
+/// rule the frontend refuses everything else by (drillSteps.ts).
+const DRILL_MODE_PROJECT_PREFIX: &str = "drill-";
+
+/// The headless drill runs only for the project TRANTOR_ASK_DRILL names; Drill Mode may seed an
+/// ask on a disposable stage without the variable. A real project never gets a drill session.
 fn drill_enabled(project: &str) -> Result<(), String> {
+    if project.len() > DRILL_MODE_PROJECT_PREFIX.len() && project.starts_with(DRILL_MODE_PROJECT_PREFIX) {
+        return Ok(());
+    }
     match std::env::var("TRANTOR_ASK_DRILL") {
         Ok(expected) if expected.trim() == project => Ok(()),
         _ => Err("ask drill is disabled for this project".into()),
@@ -758,6 +767,14 @@ mod tests {
     use super::*;
     use std::fs;
     use std::sync::atomic::{AtomicU64, Ordering};
+
+    #[test]
+    fn drill_mode_stage_is_allowed_without_the_env_and_real_projects_are_not() {
+        assert!(drill_enabled("drill-20260907-2104").is_ok());
+        assert!(drill_enabled("drill-").is_err(), "the bare prefix is not a stage");
+        assert!(drill_enabled("trantor").is_err());
+        assert!(drill_enabled("crebral-health").is_err());
+    }
 
     static NEXT_TEMP_DIR_ID: AtomicU64 = AtomicU64::new(0);
 
