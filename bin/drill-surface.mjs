@@ -7,9 +7,9 @@
 // handoff machine — and asserts on evidence (transcript rows, herdr state, ledger files),
 // never on exit codes alone.
 //
-// It is the ship gate for desktop/chat/handoff/crew changes: run it before every such release;
-// a red drill does not ship. (There is no scripted release path to wire it into — the release
-// dance is manual — so the gate is this command plus the contract that mandates it.)
+// This gate covers automated seams, including the installed app's dead-pane guard. Live
+// key/ask/Accounts checks belong to in-app Drill Mode; duty needs a live probe. Those checks
+// report SKIP with recipes and never auto-close. A failed seam or signed close exits nonzero.
 //
 // Flags: --keep leaves the scratch world AND workspace for inspection.
 // Failed runs retain disk evidence after closing their workspace. No app build/install.
@@ -31,13 +31,13 @@ import { shellQuote } from "./crew/core.mjs";
 // One ownership map. Shared steps must finish before ANY card they cover can close.
 export const CARD_STEPS = {
   6799: { steps: ["S0", "S1", "S2", "S3", "S4", "S5"], autoClose: false },
-  6533: { steps: ["S6-ask"], autoClose: true },
+  6533: { steps: ["S6-ask"], autoClose: false, recipe: "covered by in-app Drill Mode: open a live orchestrator mid-ask, answer from Chat, and confirm the terminal advances and the card closes" },
   6668: { steps: ["S6-handoff"], autoClose: true },
-  6317: { steps: ["S6-key-post", "S6-key-throw"], autoClose: true },
+  6317: { steps: ["S6-key-post", "S6-key-throw"], autoClose: false, recipe: "covered by in-app Drill Mode: open a real Workspace with a live terminal pane and exercise key dispatch in the terminal and composer" },
   6667: { steps: ["S4b", "S7"], autoClose: true },
   6587: { steps: ["S8"], autoClose: false, recipe: "needs live duty probe: operator removes the trantor/trantor-duty link, DMs the idle orchestrator, and checks for a socket nudge within 3 minutes" },
   6481: { steps: ["S9"], autoClose: true },
-  6483: { steps: ["S10"], autoClose: false, recipe: "covered by Drill Mode (#6800): operator checks Accounts with the CLI below the app minimum, then restores the CLI" },
+  6483: { steps: ["S10"], autoClose: false, recipe: "covered by in-app Drill Mode (#6800): operator checks Accounts with the CLI below the app minimum, then restores the CLI" },
 };
 
 export function findHandoff(dir, project) {
@@ -239,7 +239,8 @@ try {
   // The P0b trap, prevented at the source: a pane inheriting CLAUDE_CODE_CHILD_SESSION runs
   // Claude with transcript saving OFF — an invisible session. Every spawn path must clear it.
   herdr(["pane", "run", pane,
-    `unset CLAUDECODE CLAUDE_CODE_CHILD_SESSION RELAY_SESSION RELAY_AGENT TRANTOR_ORCH TRANTOR_SEAT; export RELAY_PROJECT=${projectName} AGENT_BUS_DIR=${bus} RELAY_URL=http://127.0.0.1:1 ` +
+    // Heartbeat throttling is keyed by relay identity; never share the live orchestrator's stamp.
+    `unset CLAUDECODE CLAUDE_CODE_CHILD_SESSION RELAY_AGENT TRANTOR_ORCH TRANTOR_SEAT; export RELAY_SESSION=drill-${process.pid}:${projectName} RELAY_PROJECT=${projectName} AGENT_BUS_DIR=${bus} RELAY_URL=http://127.0.0.1:1 ` +
     `TRANTOR_NO_SCROOGE=1 TRANTOR_NO_HANDOFF_SPAWN=1 TRANTOR_NO_BALANCE_CHECK=1 ` +
     `RELAY_CONTEXT_WARN_FRAC=0.000001 RELAY_STOP_TIMEOUT_MS=300 RELAY_CONTEXT_WINDOW=1000000; echo ENV-READY`], { json: false });
   await sleep(1500);
@@ -433,7 +434,13 @@ const run = async (name, fn) => {
   step(name);
   try { PASS(name, await fn()); } catch (error) { FAIL(name, error.message); }
 };
-await runAppDrills({ world, proj, bus, project: projectName, pane, workspace: ws?.workspace_id, run });
+step("S6-ask · app AskUserQuestion");
+SKIP("app AskUserQuestion", CARD_STEPS[6533].recipe);
+await runAppDrills({ world, proj, project: projectName, run });
+for (const mode of ["post", "throw"]) {
+  step(`S6-key-${mode} · app key dispatch`);
+  SKIP("app key dispatch", CARD_STEPS[6317].recipe);
+}
 await run("S7 · reopen-race", async () => {
   // S4b records the production driver log plus successor claim. A rerun cannot reuse an old log.
   const logs = readdirSync(join(bus, "logs")).filter(name => name.startsWith("baton-pane-"));
@@ -459,8 +466,8 @@ console.log(`\nresult: ${output}`);
 console.log(JSON.stringify(report.results(), null, 2));
 cleanup();
 // ---------- verdict ----------
-console.log(`\n${fail === 0 ? G + "DRILL GREEN" : Rd + "DRILL RED"}${R} — ${pass} passed, ${fail} failed, ${skip} skipped`);
-process.exitCode = fail === 0 ? 0 : 1;
+process.exitCode = fail === 0 ? report.exitCode() : 1;
+console.log(`\n${process.exitCode === 0 ? G + "DRILL GREEN" : Rd + "DRILL RED"}${R} — ${pass} passed, ${fail} failed, ${skip} skipped`);
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {

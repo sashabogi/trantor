@@ -76,6 +76,7 @@ test("signed closer on an enforce hub: complete evidence closes, partial/failure
     missing.complete("step");
     assert.equal(await missing.closePassed(), false);
     assert.match(missing.results()[999999].closure, /failed: hub 404/);
+    assert.equal(missing.exitCode(), 1);
     const fresh = new DrillReport({ [id]: { steps: ["one"], autoClose: true } }, path, { project, session });
     assert.equal(fresh.results()[id].status, "fail", "a rerun cannot inherit old PASS evidence");
   } finally {
@@ -102,13 +103,23 @@ test("manual probes remain SKIP even when the runner stops before reaching them"
   const world = mkdtempSync(join(import.meta.dirname, "..", ".agent-bus-out", "skip-"));
   try {
     const report = new DrillReport(CARD_STEPS, join(world, "result.json"), { project: "trantor", session: "drill:trantor" });
-    assert.deepEqual(Object.keys(CARD_STEPS).filter(id => CARD_STEPS[id].autoClose), ["6317", "6481", "6533", "6667", "6668"]);
-    for (const id of [6587, 6483]) {
+    assert.deepEqual(Object.keys(CARD_STEPS).filter(id => CARD_STEPS[id].autoClose), ["6481", "6667", "6668"]);
+    for (const id of [6317, 6533, 6587, 6483]) {
       assert.equal(report.results()[id].status, "skip");
       assert.equal(report.results()[id].closure, "not attempted");
-      assert.match(report.results()[id].evidence.join(" "), id === 6587 ? /needs live duty probe/ : /covered by Drill Mode/);
+      assert.match(report.results()[id].evidence.join(" "), id === 6587 ? /live duty probe/ : /covered by in-app Drill Mode/);
     }
-    assert.equal(report.results()[6533].status, "fail");
+    assert.equal(report.exitCode(), 1, "unrun seams still fail");
+    for (const { steps, recipe } of Object.values(CARD_STEPS)) {
+      if (recipe) continue;
+      for (const step of steps) {
+        report.record(step, step === "S5" ? "skip" : "pass", step === "S5" ? "interactive Terminal takeover probe" : "seam proof");
+        report.complete(step);
+      }
+    }
+    assert.equal(report.exitCode(), 0, "passing seams plus manual SKIPs exit zero");
+    report.record("S4", "fail", "ledger missing");
+    assert.equal(report.exitCode(), 1, "a real seam failure remains fatal");
   } finally { rmSync(world, { recursive: true, force: true }); }
 });
 

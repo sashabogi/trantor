@@ -58,6 +58,11 @@ export class DrillReport {
     renameSync(temp, this.path);
   }
 
+  exitCode() {
+    // Manual recipes stay visible as SKIP; only missing/failed proof or a refused close is red.
+    return Object.values(this.results()).some(result => result.status === "fail" || result.closure.startsWith("failed:")) ? 1 : 0;
+  }
+
   async closePassed() {
     for (const [id, result] of Object.entries(this.results())) {
       if (!this.map[id].autoClose || result.status !== "pass" || this.closures[id]) continue;

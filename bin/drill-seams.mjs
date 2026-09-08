@@ -111,7 +111,6 @@ export async function runAppDrills({ world, proj, project, run }) {
     await fetch(`${hub.url}/project`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ project, brief: "Throwaway drill project" }) });
     writeFileSync(join(bus, "config.json"), JSON.stringify({ url: hub.url, hubs: { [project]: hub.url }, contextWindow: 200000 }));
     const env = { ...hub.env, TRANTOR_DEV_ROOT: dirname(proj), TRANTOR_ROOT: ROOT };
-    await run("S6-ask · app AskUserQuestion", () => launchApp("ask", { ...env, TRANTOR_ASK_DRILL: project }, bus));
     const created = herdr(["workspace", "create", "--cwd", proj, "--label", `tt-dead-drill-${process.pid}`, "--no-focus"]);
     const workspace = created.result.workspace.workspace_id;
     const pane = created.result.root_pane.pane_id;
@@ -129,15 +128,9 @@ export async function runAppDrills({ world, proj, project, run }) {
         if (!before || before !== after) throw new Error("dead-pane shell did not survive");
         return `${evidence}; shell ${after} survived`;
       });
-      // Key dispatch needs this real pane mounted; closing it after handoff left a stale tab.
-      for (const mode of ["post", "throw"]) {
-        await run(`S6-key-${mode} · app key dispatch`, () => launchApp(`key-${mode}`, {
-          ...env, TRANTOR_KEY_DRILL: mode, TRANTOR_KEY_DRILL_PROJECT: project,
-        }, bus));
-      }
     } finally { herdr(["workspace", "close", workspace]); }
   } catch (error) {
-    for (const name of ["S6-ask", "S6-handoff", "S6-key-post", "S6-key-throw"]) await run(`${name} · app setup`, () => { throw error; });
+    await run("S6-handoff · app setup", () => { throw error; });
   } finally { if (hub) await stopChild(hub.child); }
 }
 
