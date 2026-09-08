@@ -4,6 +4,13 @@
 //! reader of the board can open the exact frame the operator pressed Pass on.
 //!
 //! The label is the card id the frontend passes; it is sanitized here, never trusted as a path.
+//!
+//! Two more commands serve the steps the headless runners cannot stage. `drill_key_post` posts
+//! the #6317 right-arrow through AppKit's event queue into whatever the operator (or the panel)
+//! focused, and `drill_panics_since` reads what app-panics.log gained after a byte mark, so the
+//! step can say the app is still here and name any Objective-C exception the boundary caught.
+//! Both are reachable only from the running app's own webview; neither injects anything on its
+//! own.
 
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -72,9 +79,49 @@ pub(crate) fn drill_screenshot(window: tauri::Window, label: String) -> Result<S
     Ok(path.to_string_lossy().to_string())
 }
 
+/// What app-panics.log wrote after `from`: the new length (the next mark) and the text between.
+/// A mark past the end (the log was truncated) reads from the start, so nothing is hidden.
+pub(crate) fn panics_since(log: &str, from: usize) -> (usize, String) {
+    let start = if from > log.len() { 0 } else { from };
+    (log.len(), log[start..].to_string())
+}
+
+#[derive(serde::Serialize)]
+pub(crate) struct PanicsSince {
+    len: usize,
+    text: String,
+}
+
+#[tauri::command]
+pub(crate) fn drill_panics_since(from: usize) -> Result<PanicsSince, String> {
+    let path = crate::desktop_bus_dir().join("app-panics.log");
+    let log = std::fs::read_to_string(&path).unwrap_or_default();
+    let (len, text) = panics_since(&log, from);
+    Ok(PanicsSince { len, text })
+}
+
+/// Drill Mode's #6317 step: one real right-arrow keyDown/keyUp through AppKit into the key
+/// window, the same post the headless key drill makes, on the operator's press.
+#[tauri::command]
+pub(crate) fn drill_key_post(app: tauri::AppHandle, target: String) -> Result<(), String> {
+    crate::app_trace(&format!("drill-mode key posting right-arrow focus={target}"));
+    app.run_on_main_thread(|| crate::key_drill::post_right_arrow(0))
+        .map_err(|err| err.to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn panics_since_returns_only_what_landed_after_the_mark() {
+        let log = "1 first\n2 second\n";
+        assert_eq!(panics_since(log, 0), (log.len(), log.to_string()));
+        assert_eq!(panics_since(log, 8), (log.len(), "2 second\n".to_string()));
+        assert_eq!(panics_since(log, log.len()), (log.len(), String::new()));
+        assert_eq!(panics_since(log, 999), (log.len(), log.to_string()), "a truncated log reads from the start");
+        assert_eq!(panics_since("", 0), (0, String::new()));
+    }
 
     #[test]
     fn label_is_sanitized_never_a_path() {

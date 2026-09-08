@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   DRILL_STEPS,
+  DRIVE_LABELS,
   REQUIRED_CARDS,
   disposableProjectName,
   isDisposableProject,
@@ -29,8 +30,23 @@ describe("drillSteps — the catalogue", () => {
     expect(auto[6701]).toBe("composer-no-overlap");
     expect(auto[6201]).toBe("wake-header-pending");
     expect(auto[6483]).toBe("cli-banner-shown");
-    // restart, credentials, drag-drop and the wizard need a human; nothing pre-fills them
-    for (const id of [6499, 6487, 6392, 6067, 6070]) expect(auto[id]).toBeNull();
+    expect(auto[6533]).toBe("ask-answered");
+    // restart, credentials, drag-drop, the wizard and the key post need a human; nothing pre-fills them
+    for (const id of [6499, 6487, 6392, 6067, 6070, 6317]) expect(auto[id]).toBeNull();
+  });
+
+  it("only the key and ask steps carry a driver: the headless runners cannot stage them, the real app can", () => {
+    const drive = Object.fromEntries(DRILL_STEPS.map(s => [s.card, s.drive]));
+    expect(drive[6317]).toBe("post-key");
+    expect(drive[6533]).toBe("seed-ask");
+    for (const s of DRILL_STEPS) if (s.card !== 6317 && s.card !== 6533) expect(s.drive).toBeNull();
+    for (const kind of ["post-key", "seed-ask"] as const) expect(DRIVE_LABELS[kind].length).toBeGreaterThan(5);
+  });
+
+  it("the key step follows the wake (a live pane exists) and the ask step follows the chips (Chat is open)", () => {
+    const cards = DRILL_STEPS.map(s => s.card);
+    expect(cards.indexOf(6317)).toBe(cards.indexOf(6201) + 1);
+    expect(cards.indexOf(6533)).toBe(cards.indexOf(6702) + 1);
   });
 });
 

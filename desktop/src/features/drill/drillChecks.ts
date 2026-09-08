@@ -10,6 +10,18 @@ const CHIPS = '[data-testid="suggestion-chips"]';
 const CHIPS_LEAD_IN = '[data-testid="suggestion-lead-in"]';
 const JUMP_ARROW = 'button[aria-label^="Jump to latest"]';
 const FONT_MENU = 'button[title="Chat text size"]';
+const ASK_CARD = '[data-testid="ask-card"]';
+/** The question asks.rs makes the drill session ask, and the header it gives it. */
+const ASK_DRILL_QUESTION = "TRANTOR ASK DRILL";
+const ASK_DRILL_HEADER = "Drill";
+
+function isDrillAskCard(card: Element): boolean {
+  if (card.textContent?.includes(ASK_DRILL_QUESTION)) return true;
+  for (const span of card.querySelectorAll("span")) {
+    if (span.textContent?.trim() === ASK_DRILL_HEADER) return true;
+  }
+  return false;
+}
 
 /** The gauge has no test id of its own (Composer.tsx is another seat's file this week); it is
  *  the element whose leading label reads "context". */
@@ -67,6 +79,18 @@ export function runAutoCheck(kind: AutoCheckKind, doc: Document): AutoCheckResul
       return seen
         ? { ok: true, why: "the CLI minimum-version banner is on screen" }
         : { ok: false, why: "no minimum-version banner on screen (open Settings, Accounts with the CLI downgraded)" };
+    }
+    case "ask-answered": {
+      // Chat's AskCard (#6094): open shows the options as buttons, answered shows the recorded
+      // choice under the word "answered". The newest drill card is the one this step seeded.
+      const cards = [...doc.querySelectorAll(ASK_CARD)].filter(isDrillAskCard);
+      const card = cards[cards.length - 1];
+      if (!card) return { ok: false, why: "no drill ask card in Chat (seed the ask, then open the drill project's Chat)" };
+      if (card.textContent?.includes("answered")) return { ok: true, why: "the drill ask card reads answered" };
+      const enabled = [...card.querySelectorAll("button")].filter(b => !b.disabled).length;
+      return enabled > 0
+        ? { ok: false, why: `the drill ask card is open with ${enabled} enabled button(s); click Continue` }
+        : { ok: false, why: "the drill ask card is open but its buttons are disabled (no pane target yet)" };
     }
     case "wake-header-pending": {
       const seen = (doc.body.textContent ?? "").includes(WAKE_PENDING_LINE);

@@ -7,11 +7,12 @@
 // screen), but per the stabilize doctrine the operator's press is what moves the card.
 import { useEffect, useState } from "react";
 import { flushSync } from "react-dom";
-import { CheckCircle2, ChevronRight, ClipboardCheck, X, XCircle } from "lucide-react";
+import { CheckCircle2, ChevronRight, ClipboardCheck, Play, X, XCircle } from "lucide-react";
 import { WizardFrame } from "../onboarding/WizardFrame";
 import { drillApi, type DrillApi } from "./drillApi";
 import {
   DRILL_STEPS,
+  DRIVE_LABELS,
   isDisposableProject,
   noteFor,
   statusFor,
@@ -38,6 +39,7 @@ export function DrillMode({ me, onClose, deps = drillApi }: {
   const [auto, setAuto] = useState<AutoCheckResult | null>(null);
   const [operatorNote, setOperatorNote] = useState("");
   const [busy, setBusy] = useState(false);
+  const [driving, setDriving] = useState(false);
   const [capturing, setCapturing] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -82,7 +84,29 @@ export function DrillMode({ me, onClose, deps = drillApi }: {
 
   const recheck = () => { if (step.autoCheck) setAuto(deps.autoCheck(step.autoCheck)); };
 
+  // The driver's result pre-fills the verdict exactly like a probe; it never moves the card.
+  const drive = async () => {
+    if (phase.kind !== "running" || !step.drive || busy || driving) return;
+    setDriving(true);
+    setError(null);
+    try {
+      setAuto(await deps.drive(step.drive, phase.project));
+    } catch (e) {
+      const message = e instanceof Error ? e.message : String(e);
+      deps.trace(`#${step.card} drive failed: ${message}`);
+      setError(`Drive failed — ${message}`);
+    } finally {
+      setDriving(false);
+    }
+  };
+
+  // Leaving a driven step tears down what the driver left behind (the ask's herdr workspace).
+  const leave = (project: string) => {
+    if (step.drive) void deps.endDrive(step.drive, project).catch(() => {});
+  };
+
   const advance = (project: string) => {
+    leave(project);
     if (last) { setPhase({ kind: "finished", project }); return; }
     setIndex(i => i + 1);
   };
@@ -125,6 +149,7 @@ export function DrillMode({ me, onClose, deps = drillApi }: {
   };
 
   const close = () => {
+    if (phase.kind === "running") leave(phase.project);
     deps.trace(`closed ${summarize(outcomes, total)}`);
     onClose();
   };
@@ -203,18 +228,24 @@ export function DrillMode({ me, onClose, deps = drillApi }: {
         <div>
           <div className="text-[10.5px] font-semibold uppercase tracking-wide text-[var(--color-tr-muted)]">Do this</div>
           <div className="mt-1" data-testid="drill-action">{step.action}</div>
+          {step.drive && (
+            <button type="button" onClick={() => void drive()} disabled={busy || driving} data-testid="drill-drive"
+              className="tr-input mt-2 flex items-center gap-1.5 disabled:opacity-40">
+              <Play size={12} /> {driving ? "Driving…" : DRIVE_LABELS[step.drive]}
+            </button>
+          )}
         </div>
         <div>
           <div className="text-[10.5px] font-semibold uppercase tracking-wide text-[var(--color-tr-muted)]">You should see</div>
           <div className="mt-1" data-testid="drill-expected">{step.expected}</div>
         </div>
-        {step.autoCheck && (
+        {(step.autoCheck || step.drive) && (
           <div className={`tr-card flex items-center gap-2 px-3 py-2 ${auto?.ok ? "text-tr-ok" : "text-[var(--color-tr-muted)]"}`} data-testid="drill-auto-check">
             {auto?.ok ? <CheckCircle2 size={14} /> : <XCircle size={14} />}
             <span className="min-w-0 flex-1">
-              {auto?.ok ? "Auto-check says pass — confirm with your own eyes." : `Auto-check: ${auto?.why ?? "not run"}`}
+              {auto?.ok ? `Auto-check says pass (${auto.why}) — confirm with your own eyes.` : `Auto-check: ${auto?.why ?? "not run"}`}
             </span>
-            <button type="button" onClick={recheck} className="tr-input shrink-0 text-[11px]">Check now</button>
+            {step.autoCheck && <button type="button" onClick={recheck} className="tr-input shrink-0 text-[11px]">Check now</button>}
           </div>
         )}
         <label className="flex flex-col gap-1">

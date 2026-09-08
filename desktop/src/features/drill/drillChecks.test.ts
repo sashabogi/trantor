@@ -55,6 +55,21 @@ describe("drillChecks — DOM probes pre-fill, never decide", () => {
     expect(runAutoCheck("cli-banner-shown", document)).toEqual({ ok: true, why: "the CLI minimum-version banner is on screen" });
   });
 
+  it("ask-answered follows the drill's own AskCard from open to answered and ignores other asks", () => {
+    expect(runAutoCheck("ask-answered", document).ok).toBe(false);
+    document.body.innerHTML = '<div data-testid="ask-card"><span>Deploy</span><div>Ship it?</div><button>Yes</button></div>';
+    expect(runAutoCheck("ask-answered", document).why).toContain("no drill ask card");
+    document.body.innerHTML =
+      '<div data-testid="ask-card"><span>Drill</span><div>TRANTOR ASK DRILL drill-1: continue?</div><button disabled>Continue</button><button disabled>Stop</button></div>';
+    expect(runAutoCheck("ask-answered", document)).toEqual({ ok: false, why: "the drill ask card is open but its buttons are disabled (no pane target yet)" });
+    document.body.innerHTML =
+      '<div data-testid="ask-card"><span>Drill</span><div>TRANTOR ASK DRILL drill-1: continue?</div><button>Continue</button><button>Stop</button></div>';
+    expect(runAutoCheck("ask-answered", document)).toEqual({ ok: false, why: "the drill ask card is open with 2 enabled button(s); click Continue" });
+    document.body.innerHTML =
+      '<div data-testid="ask-card"><span>Drill</span><span>answered</span><div>User answered "Continue"</div></div>';
+    expect(runAutoCheck("ask-answered", document)).toEqual({ ok: true, why: "the drill ask card reads answered" });
+  });
+
   it("rectsOverlap treats touching edges and empty rects as not overlapping", () => {
     expect(rectsOverlap({ left: 0, right: 10, top: 0, bottom: 10 }, { left: 10, right: 20, top: 0, bottom: 10 })).toBe(false);
     expect(rectsOverlap({ left: 0, right: 10, top: 0, bottom: 10 }, { left: 5, right: 20, top: 5, bottom: 20 })).toBe(true);

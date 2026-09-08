@@ -16,6 +16,8 @@ function fakeApi(over: Partial<DrillApi> = {}) {
     screenshot: vi.fn(async (label: string) => `/tmp/drills/1-${label}.png`),
     autoCheck: vi.fn(() => ({ ok: false, why: "nothing mounted" })),
     settle: vi.fn(async () => {}),
+    drive: vi.fn(async () => ({ ok: true, why: "right-arrow posted into textarea.xterm-helper-textarea; the app is still here; app-panics.log wrote nothing new" })),
+    endDrive: vi.fn(async () => {}),
     trace: vi.fn(),
     ...over,
   };
@@ -125,6 +127,43 @@ describe("DrillMode", () => {
     await click("Pass");
     expect(api.moveCard).toHaveBeenCalledTimes(1);
     expect(api.moveCard).toHaveBeenCalledWith(5993, "done", expect.stringContaining("auto-check ok: chip row mounted with 2 chip(s)"));
+  });
+
+  it("a driven step posts the key on the operator's press, pre-fills from what it saw, and moves the card only on Pass", async () => {
+    const api = fakeApi();
+    await mount(api);
+    const keyIndex = DRILL_STEPS.findIndex(s => s.drive === "post-key");
+    for (let i = 0; i < keyIndex; i++) await click("Skip");
+    expect(host.textContent).toContain("#6317");
+    expect(api.drive).not.toHaveBeenCalled();
+    expect(host.querySelector('[data-testid="drill-auto-check"]')?.textContent).toContain("Auto-check: not run");
+    await click("Press the key for me");
+    expect(api.drive).toHaveBeenCalledWith("post-key", "drill-20260907-2104");
+    expect(host.querySelector('[data-testid="drill-auto-check"]')?.textContent).toContain("app-panics.log wrote nothing new");
+    expect(api.moveCard).not.toHaveBeenCalled();
+    await click("Pass");
+    expect(api.moveCard).toHaveBeenCalledWith(6317, "done", expect.stringContaining("auto-check ok: right-arrow posted into textarea.xterm-helper-textarea"));
+    expect(api.endDrive).toHaveBeenCalledWith("post-key", "drill-20260907-2104");
+  });
+
+  it("leaving the ask step by Skip or Stop tears the seeded ask down, and a failed drive stays on the step", async () => {
+    const api = fakeApi({ drive: vi.fn(async () => { throw new Error("herdr workspace create: no herdr"); }) });
+    const onClose = await mount(api);
+    const askIndex = DRILL_STEPS.findIndex(s => s.drive === "seed-ask");
+    for (let i = 0; i < askIndex; i++) await click("Skip");
+    expect(host.textContent).toContain("#6533");
+    await click("Seed the ask");
+    expect(host.querySelector('[role="alert"]')?.textContent).toContain("Drive failed — herdr workspace create: no herdr");
+    expect(host.textContent).toContain("#6533");
+    // skipping past the key step already tore that one down; the ask's teardown waits for its leave
+    expect(api.endDrive).toHaveBeenCalledTimes(1);
+    expect(api.endDrive).not.toHaveBeenCalledWith("seed-ask", expect.anything());
+    await click("Skip");
+    expect(api.endDrive).toHaveBeenCalledWith("seed-ask", "drill-20260907-2104");
+    // Stop on the next step (no driver) tears nothing further down
+    await click("Stop");
+    expect(onClose).toHaveBeenCalledTimes(1);
+    expect(api.endDrive).toHaveBeenCalledTimes(2);
   });
 
   it("a hub refusal keeps the step on screen with the error instead of advancing", async () => {

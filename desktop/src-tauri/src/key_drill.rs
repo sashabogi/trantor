@@ -164,8 +164,9 @@ pub fn key_drill_post(
         .map_err(|err| err.to_string())
 }
 
+/// Also Drill Mode's key step (#6800, drill_mode.rs): the same post, driven by the operator.
 #[cfg(target_os = "macos")]
-fn post_right_arrow(pass: u32) {
+pub(crate) fn post_right_arrow(pass: u32) {
     use objc2_app_kit::{NSApplication, NSEvent, NSEventModifierFlags, NSEventType};
     use objc2_foundation::{MainThreadMarker, NSPoint, NSProcessInfo, NSString};
 
@@ -213,7 +214,7 @@ fn post_right_arrow(pass: u32) {
 }
 
 #[cfg(not(target_os = "macos"))]
-fn post_right_arrow(pass: u32) {
+pub(crate) fn post_right_arrow(pass: u32) {
     crate::app_trace(&format!("key-drill pass={pass} ERROR only implemented on macOS"));
 }
 
