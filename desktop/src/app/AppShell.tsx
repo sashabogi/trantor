@@ -26,6 +26,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { GenesisSheet } from "../features/genesis/GenesisSheet";
 import { OnboardingFlow } from "../features/onboarding/OnboardingFlow";
+import { DrillMode } from "../features/drill/DrillMode";
 import { onboardingApi } from "../features/onboarding/onboardingApi";
 import { shouldShowOnboarding, type OnboardingState } from "../features/onboarding/onboardingState";
 import { PLAIN_WAKE_KICKOFF } from "../features/genesis/genesis";
@@ -128,6 +129,8 @@ export function AppShell() {
   // install and a just-reopened one look identical on disk), so this is the one bit that tells
   // the wizard "show every step" instead of "skip what's already satisfied and maybe close".
   const [forcedOnboarding, setForcedOnboarding] = useState(false);
+  // #6800 — Drill Mode is opened from Settings only; it docks in a corner so the app stays usable.
+  const [drill, setDrill] = useState(false);
 
   // Pinned projects PLUS whatever lives on the machine-local hub. A brand-new project has no
   // routing pin yet — it falls back to the local hub BY DESIGN (TDD §12.1's default), and a
@@ -686,7 +689,8 @@ export function AppShell() {
           : pane.kind === "learning" ? <Learning client={client} />
           : pane.kind === "overseer" ? <Overseer client={client} />
           : pane.kind === "settings" ? <Settings me={ME} update={update} projects={[...activeProjects, ...restProjects]} project={active}
-              onReopenOnboarding={() => onboardingApi.get().then(state => { setOnboarding(state); setForcedOnboarding(true); })} />
+              onReopenOnboarding={() => onboardingApi.get().then(state => { setOnboarding(state); setForcedOnboarding(true); })}
+              onStartDrill={() => setDrill(true)} />
           : pane.lens === "workspace" ? <Workspace client={client} project={active} lens={pane.lens} onLens={l => setPane({ kind: "project", lens: l })} />
           : pane.lens === "board" ? <Board client={client} project={active} lens={pane.lens} onLens={l => setPane({ kind: "project", lens: l })} focusCard={focusCard} onFocusConsumed={() => setFocusCard(null)} />
           : pane.lens === "bus" ? <Conversation client={client} project={active} me={ME} lens={pane.lens} onLens={l => setPane({ kind: "project", lens: l })} />
@@ -737,6 +741,7 @@ export function AppShell() {
         }}
       />
     )}
+    {drill && <DrillMode me={ME} onClose={() => setDrill(false)} />}
     {shouldShowOnboarding(onboarding) && (
       <OnboardingFlow me={ME} project={active || projects[0] || ""} forced={forcedOnboarding}
         onClose={() => { setOnboarding(cur => cur && { ...cur, closedAt: Date.now() }); setForcedOnboarding(false); }} />

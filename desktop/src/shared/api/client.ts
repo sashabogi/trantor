@@ -183,7 +183,11 @@ export class HubClient {
     const s = q.toString();
     return this.request<{ events: HubEvent[]; cursor?: number; latest?: number }>("GET", `/events${s ? "?" + s : ""}`);
   }
-  moveCard(id: number, status: string) { return this.request("POST", "/task/update", { id, status }); }
+  /** A move may carry a card-log note (the hub appends it, capped at 40 per card) — Drill Mode
+   *  (#6800) cites its screenshot there; the board's own drag/drop moves stay silent. */
+  moveCard(id: number, status: string, note?: string) {
+    return this.request("POST", "/task/update", note === undefined ? { id, status } : { id, status, note });
+  }
 
   /** #5624: tick one acceptance item; returns the updated card. Index-addressed — the hub 400s a
    *  stale index instead of silently toggling the wrong item. */

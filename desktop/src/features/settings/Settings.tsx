@@ -36,6 +36,8 @@ import { Autonomy as AutonomyLocal } from "./Autonomy";
 
 type SettingsProps = {
   me: string; update?: AppUpdate | null; projects?: string[]; project?: string; onReopenOnboarding?: () => void;
+  /** #6800 — opens Drill Mode, the guided pass over the visual testing cards on a drill-* project. */
+  onStartDrill?: () => void;
 };
 
 export function Settings(props: SettingsProps) {
@@ -46,7 +48,7 @@ export function Settings(props: SettingsProps) {
   );
 }
 
-function SettingsContent({ me, update: updateFromShell, projects = [], project = "", onReopenOnboarding }: SettingsProps) {
+function SettingsContent({ me, update: updateFromShell, projects = [], project = "", onReopenOnboarding, onStartDrill }: SettingsProps) {
   const [reopening, setReopening] = useState(false);
   const reopenOnboarding = async () => {
     setReopening(true);
@@ -289,6 +291,17 @@ function SettingsContent({ me, update: updateFromShell, projects = [], project =
               {reopening ? "Opening…" : "Show onboarding again"}
             </button>
           </div>
+          {onStartDrill && (
+            <div className="tr-card mt-3 flex items-center gap-4 p-4">
+              <div className="min-w-0 flex-1">
+                <div className="text-[13px] font-medium">Drill Mode</div>
+                <div className="mt-0.5 text-[12px] text-[var(--color-tr-muted)]">
+                  Walk the visual testing cards one by one on a disposable drill-* project. Pass takes a screenshot and closes the card; Fail sends it back with your note.
+                </div>
+              </div>
+              <button onClick={onStartDrill} className="tr-input shrink-0">Start drill</button>
+            </div>
+          )}
         </section>
         </>}
       </div>

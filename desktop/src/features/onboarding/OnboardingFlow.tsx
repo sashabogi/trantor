@@ -20,6 +20,7 @@ import { AccountsPane } from "../settings/providers/AccountsPane";
 import { providerAccountsApi, type ProviderAccountsApi, type ProviderStatus } from "../settings/providers/providerStatus";
 import { Autonomy } from "../settings/Autonomy";
 import { GenesisSheet } from "../genesis/GenesisSheet";
+import { WizardFrame } from "./WizardFrame";
 
 export type OnboardingFlowDeps = {
   api: OnboardingApi;
@@ -144,18 +145,19 @@ export function OnboardingFlow({ me, project, onClose, forced = false, deps = DE
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-[var(--color-tr-bg)]">
-      <div className="tr-card flex max-h-[86vh] w-[640px] max-w-[calc(100vw-48px)] flex-col overflow-hidden p-0 shadow-2xl">
-        <div className="flex items-center gap-3 border-b border-[var(--color-tr-edge)] px-6 py-4">
-          <span className="rounded-lg bg-tr-doing/10 p-2 text-tr-doing"><Sparkles size={17} /></span>
-          <div className="min-w-0 flex-1">
-            <div className="text-[14px] font-semibold">{STEP_COPY[step].title}</div>
-            <div className="mt-0.5 text-[11.5px] text-[var(--color-tr-muted)]">{STEP_COPY[step].sub}</div>
-          </div>
-          <div className="tr-mono shrink-0 text-[11px] text-[var(--color-tr-muted)]">{index + 1} / {visible.length}</div>
-        </div>
-
-        <div className="min-h-0 flex-1 overflow-y-auto px-6 py-5">
+    <>
+      <WizardFrame
+        icon={<Sparkles size={17} />}
+        title={STEP_COPY[step].title}
+        sub={STEP_COPY[step].sub}
+        index={index}
+        total={visible.length}
+        footer={
+          <button type="button" onClick={() => void advance()} disabled={!canContinue}
+            className="flex items-center gap-1 rounded-lg bg-tr-doing/20 px-4 py-1.5 text-[12.5px] font-semibold text-tr-doing hover:bg-tr-doing/30 disabled:opacity-40">
+            {last ? "Done" : "Continue"} <ChevronRight size={14} />
+          </button>
+        }>
           {step === "providers" && (
             <>
               <AccountsPane project={project} api={providerApi} />
@@ -199,15 +201,7 @@ export function OnboardingFlow({ me, project, onClose, forced = false, deps = DE
               {satisfiedAtMount?.project && <DoneBanner>Already done — nothing needed here.</DoneBanner>}
             </div>
           )}
-        </div>
-
-        <div className="flex items-center justify-end gap-2 border-t border-[var(--color-tr-edge)] px-6 py-3">
-          <button type="button" onClick={() => void advance()} disabled={!canContinue}
-            className="flex items-center gap-1 rounded-lg bg-tr-doing/20 px-4 py-1.5 text-[12.5px] font-semibold text-tr-doing hover:bg-tr-doing/30 disabled:opacity-40">
-            {last ? "Done" : "Continue"} <ChevronRight size={14} />
-          </button>
-        </div>
-      </div>
+      </WizardFrame>
 
       {genesisRoot !== null && (
         <GenesisSheet
@@ -220,6 +214,6 @@ export function OnboardingFlow({ me, project, onClose, forced = false, deps = DE
           }}
         />
       )}
-    </div>
+    </>
   );
 }
