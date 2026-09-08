@@ -11,21 +11,51 @@
 // a red drill does not ship. (There is no scripted release path to wire it into — the release
 // dance is manual — so the gate is this command plus the contract that mandates it.)
 //
-// Flags: --keep  leave the scratch world in place for inspection (prints paths).
+// Flags: --keep leaves the scratch world AND workspace for inspection.
+// Failed runs retain disk evidence after closing their workspace. No app build/install.
+// TRANTOR_DRILL_RESULT overrides ~/.agent-bus/drill-result.json (crew seats use .agent-bus-out).
+// TRANTOR_DRILL_APP selects an existing app executable; TRANTOR_DRILL_WORLD selects scratch cwd.
 
-import { mkdirSync, rmSync, existsSync, readFileSync, writeFileSync, readdirSync, statSync } from "node:fs";
-import { join, basename } from "node:path";
-import { homedir, tmpdir } from "node:os";
+import { mkdirSync, rmSync, existsSync, readFileSync, writeFileSync, readdirSync, statSync, symlinkSync } from "node:fs";
+import { join, basename, resolve } from "node:path";
+import { homedir } from "node:os";
 import { execFileSync, execSync, spawn } from "node:child_process";
 import { createConnection } from "node:net";
 
+import { pathToFileURL } from "node:url";
+import { DrillReport } from "./drill-report.mjs";
+import { sessionContext } from "../hooks/lib/api.mjs";
+import { runAppDrills, crewWorkspaceDrill } from "./drill-seams.mjs";
+import { shellQuote } from "./crew/core.mjs";
+
+// One ownership map. Shared steps must finish before ANY card they cover can close.
+export const CARD_STEPS = {
+  6799: { steps: ["S0", "S1", "S2", "S3", "S4", "S5"], autoClose: false },
+  6533: { steps: ["S6-ask"], autoClose: true },
+  6668: { steps: ["S6-handoff"], autoClose: true },
+  6317: { steps: ["S6-key-post", "S6-key-throw"], autoClose: true },
+  6667: { steps: ["S4b", "S7"], autoClose: true },
+  6587: { steps: ["S8"], autoClose: false, recipe: "needs live duty probe: operator removes the trantor/trantor-duty link, DMs the idle orchestrator, and checks for a socket nudge within 3 minutes" },
+  6481: { steps: ["S9"], autoClose: true },
+  6483: { steps: ["S10"], autoClose: false, recipe: "covered by Drill Mode (#6800): operator checks Accounts with the CLI below the app minimum, then restores the CLI" },
+};
+
+export async function main() {
 const KEEP = process.argv.includes("--keep");
 const G = "\x1b[32m", Rd = "\x1b[31m", Y = "\x1b[33m", D = "\x1b[2m", R = "\x1b[0m";
 let pass = 0, fail = 0, skip = 0;
-const PASS = (s, ev = "") => { pass++; console.log(`  ${G}PASS${R}  ${s}${ev ? `  ${D}${ev}${R}` : ""}`); };
-const FAIL = (s, ev = "") => { fail++; console.log(`  ${Rd}FAIL${R}  ${s}${ev ? `  ${D}${ev}${R}` : ""}`); };
-const SKIP = (s, why) => { skip++; console.log(`  ${Y}SKIP${R}  ${s}  ${D}${why}${R}`); };
-const step = (n) => console.log(`\n${n}`);
+const context = sessionContext();
+const output = resolve(process.env.TRANTOR_DRILL_RESULT || join(process.env.AGENT_BUS_DIR || join(homedir(), ".agent-bus"), "drill-result.json"));
+const report = new DrillReport(CARD_STEPS, output, context);
+let currentStep = null;
+const PASS = (s, ev = "") => { pass++; report.record(currentStep, "pass", s, ev); console.log(`  ${G}PASS${R}  ${s} [${report.cardsFor(currentStep).map(id => `#${id}`).join(", ")}]${ev ? `  ${D}${ev}${R}` : ""}`); };
+const FAIL = (s, ev = "") => { fail++; report.record(currentStep, "fail", s, ev); console.log(`  ${Rd}FAIL${R}  ${s} [${report.cardsFor(currentStep).map(id => `#${id}`).join(", ")}]${ev ? `  ${D}${ev}${R}` : ""}`); };
+const SKIP = (s, why) => { skip++; report.record(currentStep, "skip", s, why); console.log(`  ${Y}SKIP${R}  ${s}  ${D}${why}${R}`); };
+const step = (n) => {
+  if (currentStep) report.complete(currentStep);
+  currentStep = n.split(" ")[0];
+  console.log(`\n${n}`);
+};
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
 function herdr(args, { json = true } = {}) {
@@ -77,7 +107,9 @@ function userTurnsContaining(file, needle) {
     let r; try { r = JSON.parse(line); } catch { continue; }
     if (r?.type !== "user") continue;
     const c = r.message?.content;
+    // oxlint-disable-next-line anti-slop/no-runtime-typeof -- SAFETY: JSONL content is a wire union of text or content blocks; this is its decode boundary.
     const t = typeof c === "string" ? c
+      // oxlint-disable-next-line anti-slop/no-runtime-typeof -- SAFETY: Untrusted JSONL blocks must be objects with type=text before reading their text field.
       : Array.isArray(c) ? c.map(b => (b && typeof b === "object" && b.type === "text") ? b.text : "").join(" ") : "";
     if (t.includes(needle)) hits.push(t);
   }
@@ -99,25 +131,23 @@ function assistantSaid(file, needle) {
 /** Start a Claude agent in a pane, answering the folder-trust dialog if it blocks startup
  *  (the P0b recovery: agent_not_ready keeps the name live; one enter accepts the fresh dir). */
 async function startClaude(name, paneId) {
-  let blocked = false;
-  try {
-    const r = herdr(["agent", "start", name, "--kind", "claude", "--pane", paneId]);
-    if (r.result?.agent?.agent_status === "idle") return "idle";
-    blocked = true;
-  } catch { blocked = true; }
-  if (blocked) {
-    await sleep(1500);
-    try { herdr(["agent", "send-keys", name, "enter"]); } catch {}
-    const settled = await waitFor("startup dialog answered", () => {
-      try {
-        const g = herdr(["agent", "get", name]);
-        const st = g.result?.agent?.agent_status;
-        return st === "idle" ? st : null;
-      } catch { return null; }
-    }, { timeoutMs: 45_000, everyMs: 2_000 });
-    return settled || "not-ready";
-  }
-  return "not-ready";
+  // Run in the pane shell: herdr agent start restores the server's child-session flag.
+  herdr(["pane", "run", paneId, "env -u CLAUDECODE -u CLAUDE_CODE_CHILD_SESSION claude"], { json: false });
+  let trusted = false;
+  const settled = await waitFor("startup", () => {
+    const screen = herdr(["pane", "read", paneId], { json: false });
+    if (!trusted && screen.includes("Yes, I trust this")) {
+      // New Claude versions default to No. Answer ONLY this drill-owned folder dialog.
+      const keys = /❯\s*No, exit/.test(screen) ? ["down", "enter"] : ["enter"];
+      herdr(["pane", "send-keys", paneId, ...keys], { json: false });
+      trusted = true;
+    }
+    try {
+      const status = herdr(["agent", "get", paneId]).result?.agent?.agent_status;
+      return status === "idle" ? status : null;
+    } catch { return null; }
+  }, { timeoutMs: 45000, everyMs: 1500 });
+  return settled || "not-ready";
 }
 
 // ---------- S0 · version skew ----------
@@ -136,9 +166,9 @@ step("S0 · version skew (hooks vs CLI vs app)");
   try { app = execSync('plutil -extract CFBundleShortVersionString raw "/Applications/Trantor.app/Contents/Info.plist"', { encoding: "utf8" }).trim(); } catch {}
   console.log(`  ${D}cli ${cli} · plugin ${plugin} · app ${app}${R}`);
   if (plugin === "?") {
-    console.log(`  ${Y}WARN${R}  plugin hook version unreadable — cannot rule out skew`);
+    SKIP("hook/CLI version skew", "plugin hook version unreadable");
   } else if (plugin !== cli) {
-    console.log(`  ${Y}WARN${R}  installed plugin hooks (${plugin}) differ from this tree (${cli}) — running sessions use the PLUGIN's hooks`);
+    FAIL("hook/CLI version skew", `plugin ${plugin} vs CLI ${cli}`);
   } else {
     PASS("no hook/CLI version skew", `${cli}`);
   }
@@ -148,11 +178,13 @@ step("S0 · version skew (hooks vs CLI vs app)");
 // ---------- world ----------
 // NOT tmpdir(): macOS tmp is a /var symlink and Claude records the /private/var realpath,
 // so the transcript-slug lookup would miss. A dot-dir under $HOME has no such alias.
-const world = join(homedir(), `.tt-drill-${process.pid}`);
-const proj = join(world, "drill-proj");
-const bus = join(world, "bus");
+const world = resolve(process.env.TRANTOR_DRILL_WORLD || join(process.cwd(), ".agent-bus-out", `drill-${process.pid}`));
+const proj = join(world, context.project);
+const bus = join(world, ".agent-bus");
 mkdirSync(proj, { recursive: true });
 mkdirSync(join(bus, "handoffs"), { recursive: true });
+mkdirSync(join(world, ".config", "herdr"), { recursive: true });
+symlinkSync(join(homedir(), ".config", "herdr", "herdr.sock"), join(world, ".config", "herdr", "herdr.sock"));
 execFileSync("git", ["init", "-q"], { cwd: proj });
 // The drill's handoff phase exercises the AUTO chain deliberately; the shipped default is ask.
 writeFileSync(join(bus, "autonomy.json"), JSON.stringify({ version: 1, defaults: { baton: "auto" }, projects: {} }));
@@ -160,25 +192,36 @@ const projectName = basename(proj);
 const tDir = transcriptDirFor(proj);
 
 let ws = null, pane = null;
+let cleaned = false;
 const cleanup = () => {
+  if (cleaned) return;
+  cleaned = true;
   if (KEEP) { console.log(`\n${D}--keep: world at ${world} · workspace ${ws?.workspace_id || "?"} left open${R}`); return; }
   try { if (pane) herdr(["agent", "prompt", pane, "/exit"], { json: true }); } catch {}
   try { if (ws) herdr(["workspace", "close", ws.workspace_id], { json: true }); } catch {}
+  if (fail > 0) { console.log(`failed-run evidence retained at ${world}`); return; }
   try { rmSync(world, { recursive: true, force: true }); } catch {}
 };
 process.on("exit", cleanup);
+for (const signal of ["SIGINT", "SIGTERM"]) process.once(signal, () => {
+  if (currentStep) FAIL("drill interrupted", signal);
+  cleanup();
+  process.exit(signal === "SIGINT" ? 130 : 143);
+});
 
+try {
 // ---------- S1 · cold start ----------
 step("S1 · cold start: workspace, clean env, agent, transcript EXISTS");
 try {
   const created = herdr(["workspace", "create", "--cwd", proj, "--label", "tt-drill"]);
   ws = { workspace_id: created.result.workspace.workspace_id };
   pane = created.result.root_pane.pane_id;
+  writeFileSync(join(bus, "crew-windows.txt"), `${projectName}\therdrws\t__ws__\t${ws.workspace_id}\n${projectName}\torch\torchestrator\t${pane}\n`);
   PASS("throwaway herdr workspace", `${ws.workspace_id} pane ${pane}`);
   // The P0b trap, prevented at the source: a pane inheriting CLAUDE_CODE_CHILD_SESSION runs
   // Claude with transcript saving OFF — an invisible session. Every spawn path must clear it.
   herdr(["pane", "run", pane,
-    `unset CLAUDE_CODE_CHILD_SESSION; export AGENT_BUS_DIR=${bus} RELAY_URL=http://127.0.0.1:1 ` +
+    `unset CLAUDECODE CLAUDE_CODE_CHILD_SESSION RELAY_SESSION RELAY_AGENT TRANTOR_ORCH TRANTOR_SEAT; export RELAY_PROJECT=${projectName} AGENT_BUS_DIR=${bus} RELAY_URL=http://127.0.0.1:1 ` +
     `TRANTOR_NO_SCROOGE=1 TRANTOR_NO_HANDOFF_SPAWN=1 TRANTOR_NO_BALANCE_CHECK=1 ` +
     `RELAY_CONTEXT_WARN_FRAC=0.000001 RELAY_STOP_TIMEOUT_MS=300 RELAY_CONTEXT_WINDOW=1000000; echo ENV-READY`], { json: false });
   await sleep(1500);
@@ -188,7 +231,7 @@ try {
 } catch (e) {
   FAIL("S1 world setup", String(e.message || e).slice(0, 160));
   console.log(`\n${Rd}cannot continue without S1${R}`);
-  process.exit(1);
+  throw e;
 }
 
 // ---------- S2 · transport ----------
@@ -220,7 +263,7 @@ const MARK = `drill-${Date.now() % 100000}`;
 step("S3 · identity: the pane itself names the session (Phase 2)");
 let predecessorSid = null;
 {
-  const got = herdr(["agent", "get", "drill"]);
+  const got = herdr(["agent", "get", pane]);
   const as = got.result?.agent?.agent_session;
   const tfile = newestJsonl(tDir);
   predecessorSid = as?.kind === "id" ? as.value : null;
@@ -260,7 +303,7 @@ step("S4 · handoff machine: warn → arm → fire → WRITTEN → successor cla
     else FAIL("§5 ledger opens with WRITTEN", states.join(","));
 
     // Successor: end the predecessor, start fresh in the SAME pane — the claim is sessionstart's.
-    try { herdr(["agent", "prompt", "drill", "/exit"]); } catch {}
+    try { herdr(["agent", "prompt", pane, "/exit"]); } catch {}
     await sleep(4000);
     const st2 = await startClaude("drill2", pane);
     if (st2 !== "idle") FAIL("successor claude starts", String(st2));
@@ -315,7 +358,7 @@ step("S4b · --baton pane leg: the driver replaces the session in place, kickoff
     try {
       const wh = execFileSync(process.execPath, [join(import.meta.dirname, "write-handoff.mjs")], {
         input: "# handoff\nS4b: the pane leg drill — recap me.", encoding: "utf8", timeout: 30_000,
-        env: { ...process.env, CLAUDE_PROJECT_DIR: proj, AGENT_BUS_DIR: bus, TRANTOR_NO_HANDOFF_SPAWN: "1", TRANTOR_NO_BATON_SPAWN: "1" },
+        env: { ...process.env, RELAY_PROJECT: projectName, RELAY_SESSION: "", RELAY_AGENT: "", TRANTOR_ORCH: "", RELAY_URL: "http://127.0.0.1:1", CLAUDE_PROJECT_DIR: proj, AGENT_BUS_DIR: bus, TRANTOR_NO_HANDOFF_SPAWN: "1", TRANTOR_NO_BATON_SPAWN: "1" },
       });
       hf = /handoff saved: (\S+\.json)/.exec(wh)?.[1] || null;
     } catch (e) { FAIL("S4b manual handoff written", String(e.message || e).slice(0, 120)); }
@@ -323,8 +366,8 @@ step("S4b · --baton pane leg: the driver replaces the session in place, kickoff
       PASS("manual handoff written for the pane to carry", basename(hf));
       const child = spawn(process.execPath, [join(import.meta.dirname, "baton-pane.mjs"),
         "--project", proj, "--handoff", hf, "--pane", pane], {
-        env: { ...process.env, AGENT_BUS_DIR: bus, TRANTOR_BATON_IDLE_DEADLINE_S: "90",
-          TRANTOR_BATON_REOPEN: `herdr agent start drill3 --kind claude --pane ${pane}` },
+        env: { ...process.env, HOME: world, TRANTOR_DEV_ROOT: world, RELAY_PROJECT: projectName, RELAY_SESSION: "", RELAY_AGENT: "", TRANTOR_ORCH: "", RELAY_URL: "http://127.0.0.1:1", AGENT_BUS_DIR: bus, TRANTOR_BATON_IDLE_DEADLINE_S: "90",
+          TRANTOR_BATON_REOPEN: `${shellQuote(process.execPath)} ${shellQuote(join(import.meta.dirname, "cli.mjs"))} open ${shellQuote(projectName)}` },
         stdio: "ignore",
       });
       const exited = new Promise(res => child.on("exit", c => res(c)));
@@ -334,14 +377,17 @@ step("S4b · --baton pane leg: the driver replaces the session in place, kickoff
         for (let i = 0; i < 40; i++) {
           await sleep(3000);
           try {
-            const g = herdr(["agent", "get", "drill3"]);
+            const g = herdr(["agent", "get", pane]);
             const st = g.result?.agent?.agent_status;
-            if (st === "blocked") herdr(["agent", "send-keys", "drill3", "enter"]);
+            if (st === "blocked") herdr(["agent", "send-keys", pane, "enter"]);
             if (st === "idle") break;
           } catch {}
         }
       })();
-      const code = await Promise.race([exited, sleep(180_000).then(() => "timeout")]);
+      let timer;
+      const code = await Promise.race([exited, new Promise(resolve => { timer = setTimeout(() => resolve("timeout"), 180_000); })]);
+      clearTimeout(timer);
+      if (code === "timeout") child.kill("SIGTERM");
       await watcher;
       if (code === 0) PASS("driver ran the whole chain (idle gate → graceful end → reopen → kickoff)");
       else FAIL("driver ran the whole chain", `exit ${code} — see ${join(bus, "logs")}/baton-pane-*.log`);
@@ -367,6 +413,44 @@ step("S4b · --baton pane leg: the driver replaces the session in place, kickoff
 step("S5 · takeover from a Terminal session");
 SKIP("takeover chain", "needs an interactive Terminal-window session; proven live 2026-08-28 (0.18.13 drill) — automate in drill v2");
 
+} catch (error) {
+  FAIL("seam interrupted", error.message);
+}
+
+const run = async (name, fn) => {
+  step(name);
+  try { PASS(name, await fn()); } catch (error) { FAIL(name, error.message); }
+};
+await runAppDrills({ world, proj, bus, project: projectName, pane, workspace: ws?.workspace_id, run });
+await run("S7 · reopen-race", async () => {
+  // S4b records the production driver log plus successor claim. A rerun cannot reuse an old log.
+  const logs = readdirSync(join(bus, "logs")).filter(name => name.startsWith("baton-pane-"));
+  const trace = logs.map(name => readFileSync(join(bus, "logs", name), "utf8")).join("\n");
+  const handoff = /armed: .*handoff=(\S+)/.exec(trace)?.[1];
+  const record = handoff && JSON.parse(readFileSync(join(bus, "handoffs", handoff), "utf8"));
+  const ended = /^(\S+) ended pid /m.exec(trace)?.[1];
+  const reopened = /^(\S+) reopen starting via:/m.exec(trace)?.[1];
+  const elapsed = Date.parse(reopened) - Date.parse(ended);
+  if (!record?.states?.some(row => row.state === "claimed") || !trace.includes("reopen result: status=0")
+      || !trace.includes("agent drop dropped") || !Number.isFinite(elapsed) || elapsed < 0 || elapsed > 1000)
+    throw new Error(`no complete sub-second end/drop/reopen/claim proof; elapsed=${elapsed}; ${trace.trim().slice(-700)}`);
+  return `${handoff} claimed; reopen after ${elapsed}ms; ${trace.trim().split("\n").join("; ")}`;
+});
+step("S8 · duty wake-chain");
+SKIP("duty wake-chain", CARD_STEPS[6587].recipe);
+await run("S9 · crew workspace ownership", () => crewWorkspaceDrill({ proj, workspace: ws?.workspace_id }));
+step("S10 · provider CLI source");
+SKIP("provider CLI source", CARD_STEPS[6483].recipe);
+if (currentStep) report.complete(currentStep);
+if (!await report.closePassed()) fail++;
+console.log(`\nresult: ${output}`);
+console.log(JSON.stringify(report.results(), null, 2));
+cleanup();
 // ---------- verdict ----------
 console.log(`\n${fail === 0 ? G + "DRILL GREEN" : Rd + "DRILL RED"}${R} — ${pass} passed, ${fail} failed, ${skip} skipped`);
-process.exit(fail === 0 ? 0 : 1);
+process.exitCode = fail === 0 ? 0 : 1;
+}
+
+if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
+  await main();
+}
