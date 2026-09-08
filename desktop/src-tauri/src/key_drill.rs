@@ -17,11 +17,19 @@
 //! the app survived (and, in throw mode, app-panics.log names the drill's exception), 3
 //! otherwise. Inert unless the variable is set. The seat writes this drill; the orchestrator
 //! builds and runs it.
+//!
+//! `TRANTOR_KEY_DRILL_PROJECT=<project name>`: the 09-07 run on 0.3.159 posted into "no key
+//! window" (the drill instance launched behind the operator's app) and skipped passes 2 and 3
+//! (no project open, so no terminal pane in the DOM). `arm` now makes the main window key before
+//! it emits, and the payload names the project the frontend opens on its Workspace lens so the
+//! terminal pane mounts. The value is the sidebar's project name, the same one TRANTOR_ASK_DRILL
+//! takes.
 
 use std::sync::OnceLock;
 use std::time::Duration;
 
 pub const ENV: &str = "TRANTOR_KEY_DRILL";
+pub const PROJECT_ENV: &str = "TRANTOR_KEY_DRILL_PROJECT";
 const TAO_DRILL_ENV: &str = "TAO_OBJC_EXCEPTION_DRILL";
 const RIGHT_ARROW_KEY_CODE: u16 = 124;
 /// NSRightArrowFunctionKey: the `characters` AppKit puts on a right-arrow key event.
@@ -58,6 +66,21 @@ pub fn parse_mode(value: Option<&str>) -> Option<Mode> {
 fn mode_from_env() -> Option<Mode> {
     let value = std::env::var(ENV).ok()?;
     parse_mode(Some(&value))
+}
+
+fn project_from_env() -> Option<String> {
+    let value = std::env::var(PROJECT_ENV).ok()?;
+    let value = value.trim();
+    if value.is_empty() {
+        None
+    } else {
+        Some(value.to_string())
+    }
+}
+
+/// The `key-drill` event payload: the validated mode plus the project to stage, or null.
+pub fn payload(mode: Mode, project: Option<&str>) -> String {
+    serde_json::json!({ "mode": mode.as_str(), "project": project }).to_string()
 }
 
 /// Route every Objective-C exception the vendored tao catches into app-panics.log (name, reason,
@@ -102,10 +125,23 @@ pub fn arm(app: &tauri::AppHandle) {
         crate::app_trace("key-drill ERROR no main window to drive");
         return;
     };
-    crate::app_trace(&format!("key-drill armed mode={}", mode.as_str()));
+    let project = project_from_env();
+    crate::app_trace(&format!(
+        "key-drill armed mode={} project={}",
+        mode.as_str(),
+        project.as_deref().unwrap_or("-")
+    ));
+    let payload = payload(mode, project.as_deref());
     std::thread::spawn(move || {
         std::thread::sleep(Duration::from_secs(5));
-        let _ = window.emit("key-drill", mode.as_str());
+        // Make this window key before the first post: on macOS tao's set_focus is
+        // makeKeyAndOrderFront + activateIgnoringOtherApps, so a drill instance launched behind
+        // the operator's app no longer posts into "no key window".
+        match window.set_focus() {
+            Ok(()) => crate::app_trace("key-drill made the main window key"),
+            Err(err) => crate::app_trace(&format!("key-drill ERROR set_focus: {err}")),
+        }
+        let _ = window.emit("key-drill", payload);
     });
 }
 
@@ -138,10 +174,15 @@ fn post_right_arrow(pass: u32) {
         return;
     };
     let app = NSApplication::sharedApplication(mtm);
-    let Some(window) = app.keyWindow().or_else(|| app.mainWindow()) else {
+    let key = app.keyWindow();
+    let is_key = key.is_some();
+    let Some(window) = key.or_else(|| app.mainWindow()) else {
         crate::app_trace(&format!("key-drill pass={pass} ERROR no key window"));
         return;
     };
+    if !is_key {
+        crate::app_trace(&format!("key-drill pass={pass} main window is not key; posting to it anyway"));
+    }
     let window_number = window.windowNumber();
     let flags = NSEventModifierFlags::NumericPad | NSEventModifierFlags::Function;
     let chars = NSString::from_str(RIGHT_ARROW_CHARS);
@@ -232,6 +273,15 @@ mod tests {
         assert_eq!(parse_mode(Some("post")), Some(Mode::Post));
         assert_eq!(parse_mode(Some("1")), Some(Mode::Post));
         assert_eq!(parse_mode(Some(" throw ")), Some(Mode::Throw));
+    }
+
+    #[test]
+    fn payload_carries_the_mode_and_the_project_or_null() {
+        assert_eq!(payload(Mode::Post, None), r#"{"mode":"post","project":null}"#);
+        assert_eq!(
+            payload(Mode::Throw, Some("drill-key")),
+            r#"{"mode":"throw","project":"drill-key"}"#
+        );
     }
 
     #[test]

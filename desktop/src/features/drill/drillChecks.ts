@@ -61,6 +61,13 @@ export function runAutoCheck(kind: AutoCheckKind, doc: Document): AutoCheckResul
         ? { ok: false, why: "the context gauge and the Aa control overlap" }
         : { ok: true, why: "gauge and Aa rects are disjoint" };
     }
+    case "cli-banner-shown": {
+      // AccountsPane's minimum-version banner (#6483): "trantor CLI X is older than this app needs (Y)".
+      const seen = (doc.body.textContent ?? "").includes("is older than this app needs");
+      return seen
+        ? { ok: true, why: "the CLI minimum-version banner is on screen" }
+        : { ok: false, why: "no minimum-version banner on screen (open Settings, Accounts with the CLI downgraded)" };
+    }
     case "wake-header-pending": {
       const seen = (doc.body.textContent ?? "").includes(WAKE_PENDING_LINE);
       return seen

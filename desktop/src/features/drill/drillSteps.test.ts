@@ -28,6 +28,7 @@ describe("drillSteps — the catalogue", () => {
     expect(auto[6697]).toBe("jump-arrow-mounted");
     expect(auto[6701]).toBe("composer-no-overlap");
     expect(auto[6201]).toBe("wake-header-pending");
+    expect(auto[6483]).toBe("cli-banner-shown");
     // restart, credentials, drag-drop and the wizard need a human; nothing pre-fills them
     for (const id of [6499, 6487, 6392, 6067, 6070]) expect(auto[id]).toBeNull();
   });
@@ -62,8 +63,13 @@ describe("drillSteps — verdicts and notes", () => {
   });
 
   it("summarizes passed, failed and skipped against the catalogue size", () => {
-    expect(summarize([{ card: 1, verdict: "pass", screenshot: "a" }, { card: 2, verdict: "fail", screenshot: null }], 10))
-      .toBe("1 passed · 1 failed · 8 skipped of 10");
+    expect(summarize([{ card: 1, verdict: "pass", screenshot: "a" }, { card: 2, verdict: "fail", screenshot: null }], 11))
+      .toBe("1 passed · 1 failed · 9 skipped of 11");
+  });
+
+  it("the downgraded-CLI step (#6483) sits right before the remove-and-restore step it sets up", () => {
+    const cards = DRILL_STEPS.map(s => s.card);
+    expect(cards.indexOf(6483)).toBe(cards.indexOf(6487) - 1);
   });
 });
 

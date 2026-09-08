@@ -49,6 +49,12 @@ describe("drillChecks — DOM probes pre-fill, never decide", () => {
     expect(runAutoCheck("wake-header-pending", document).ok).toBe(true);
   });
 
+  it("cli-banner-shown looks for AccountsPane's minimum-version banner text", () => {
+    expect(runAutoCheck("cli-banner-shown", document).ok).toBe(false);
+    document.body.innerHTML = '<div role="alert">trantor CLI 0.18.46 is older than this app needs (0.18.47) — npm i -g trantor@0.18.47</div>';
+    expect(runAutoCheck("cli-banner-shown", document)).toEqual({ ok: true, why: "the CLI minimum-version banner is on screen" });
+  });
+
   it("rectsOverlap treats touching edges and empty rects as not overlapping", () => {
     expect(rectsOverlap({ left: 0, right: 10, top: 0, bottom: 10 }, { left: 10, right: 20, top: 0, bottom: 10 })).toBe(false);
     expect(rectsOverlap({ left: 0, right: 10, top: 0, bottom: 10 }, { left: 5, right: 20, top: 5, bottom: 20 })).toBe(true);
