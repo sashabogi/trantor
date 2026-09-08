@@ -1,6 +1,7 @@
 mod herdr;
 mod asks;
 mod dismissals;
+mod drill_mode;
 mod genesis;
 mod right_panel;
 mod ghost;
@@ -6028,6 +6029,7 @@ pub fn run() {
             genesis::project_new,
             genesis::project_wake,
             genesis::wake_in_progress,
+            drill_mode::drill_screenshot,
             handoff_now,
             handoff_in_progress,
             takeover_now,
