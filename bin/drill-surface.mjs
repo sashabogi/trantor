@@ -16,7 +16,7 @@
 // TRANTOR_DRILL_RESULT overrides ~/.agent-bus/drill-result.json (crew seats use .agent-bus-out).
 // TRANTOR_DRILL_APP selects an existing app executable; TRANTOR_DRILL_WORLD selects scratch cwd.
 
-import { mkdirSync, rmSync, existsSync, readFileSync, writeFileSync, readdirSync, statSync, symlinkSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, existsSync, readFileSync, writeFileSync, readdirSync, statSync, symlinkSync } from "node:fs";
 import { join, basename, resolve } from "node:path";
 import { homedir } from "node:os";
 import { execFileSync, execSync, spawn } from "node:child_process";
@@ -25,7 +25,7 @@ import { createConnection } from "node:net";
 import { pathToFileURL } from "node:url";
 import { DrillReport } from "./drill-report.mjs";
 import { sessionContext } from "../hooks/lib/api.mjs";
-import { runAppDrills, crewWorkspaceDrill } from "./drill-seams.mjs";
+import { runAppDrills, crewWorkspaceDrill, checkSocketHome } from "./drill-seams.mjs";
 import { shellQuote } from "./crew/core.mjs";
 
 // One ownership map. Shared steps must finish before ANY card they cover can close.
@@ -178,7 +178,11 @@ step("S0 · version skew (hooks vs CLI vs app)");
 // ---------- world ----------
 // NOT tmpdir(): macOS tmp is a /var symlink and Claude records the /private/var realpath,
 // so the transcript-slug lookup would miss. A dot-dir under $HOME has no such alias.
-const world = resolve(process.env.TRANTOR_DRILL_WORLD || join(process.cwd(), ".agent-bus-out", `drill-${process.pid}`));
+const scratch = join(process.cwd(), ".agent-bus-out");
+mkdirSync(scratch, { recursive: true });
+const world = process.env.TRANTOR_DRILL_WORLD
+  ? resolve(process.env.TRANTOR_DRILL_WORLD) : mkdtempSync(`${scratch}/`);
+checkSocketHome(world);
 const proj = join(world, context.project);
 const bus = join(world, ".agent-bus");
 mkdirSync(proj, { recursive: true });

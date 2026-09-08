@@ -11,6 +11,12 @@ export class DrillReport {
     this.session = session;
     this.steps = {};
     this.closures = {};
+    for (const { steps, autoClose, recipe } of Object.values(map)) {
+      if (autoClose || !recipe) continue;
+      for (const step of steps) this.steps[step] = {
+        complete: true, checks: [{ status: "skip", assertion: recipe, evidence: "" }],
+      };
+    }
     this.write();
   }
 

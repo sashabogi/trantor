@@ -1,10 +1,11 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync } from "node:fs";
 import { join } from "node:path";
+import { createServer, createConnection } from "node:net";
 import { DrillReport } from "./drill-report.mjs";
 import { CARD_STEPS } from "./drill-surface.mjs";
-import { appVerdict, startDrillHub, stopChild } from "./drill-seams.mjs";
+import { appVerdict, startDrillHub, stopChild, checkSocketHome } from "./drill-seams.mjs";
 import { signedGet, signedPost } from "../hooks/lib/api.mjs";
 
 test("signed closer on an enforce hub: complete evidence closes, partial/failure/skip never does", async () => {
@@ -78,4 +79,40 @@ test("app proof requires every leg and rejects skipped key targets", () => {
   assert.equal(appVerdict("key-throw", key), false);
   assert.equal(appVerdict("key-throw", key, "TaoObjcExceptionDrill"), true);
   assert.equal(appVerdict("handoff", "handoff-drill PASS:\nhandoff-drill verdict exit=3"), false);
+});
+
+test("manual probes remain SKIP even when the runner stops before reaching them", () => {
+  const world = mkdtempSync(join(import.meta.dirname, "..", ".agent-bus-out", "skip-"));
+  try {
+    const report = new DrillReport(CARD_STEPS, join(world, "result.json"), { project: "trantor", session: "drill:trantor" });
+    assert.deepEqual(Object.keys(CARD_STEPS).filter(id => CARD_STEPS[id].autoClose), ["6317", "6481", "6533", "6667", "6668"]);
+    for (const id of [6587, 6483]) {
+      assert.equal(report.results()[id].status, "skip");
+      assert.equal(report.results()[id].closure, "not attempted");
+      assert.match(report.results()[id].evidence.join(" "), id === 6587 ? /needs live duty probe/ : /covered by Drill Mode/);
+    }
+    assert.equal(report.results()[6533].status, "fail");
+  } finally { rmSync(world, { recursive: true, force: true }); }
+});
+
+test("short drill HOME connects through the native socket symlink; old staging is rejected", async () => {
+  const world = mkdtempSync(`${join(import.meta.dirname, "..", ".agent-bus-out")}/`);
+  const server = createServer(socket => socket.end("connected"));
+  try {
+    const path = checkSocketHome(world);
+    assert.throws(() => checkSocketHome(join(world, "x".repeat(108))), /too long/);
+    mkdirSync(join(world, ".config", "herdr"), { recursive: true });
+    const target = join(world, "s");
+    await new Promise((resolve, reject) => { server.once("error", reject); server.listen(target, resolve); });
+    symlinkSync(target, path);
+    const proof = await new Promise((resolve, reject) => {
+      const socket = createConnection(path);
+      socket.once("error", reject);
+      socket.once("data", data => resolve(data.toString()));
+    });
+    assert.equal(proof, "connected");
+  } finally {
+    await new Promise(resolve => server.close(resolve));
+    rmSync(world, { recursive: true, force: true });
+  }
 });

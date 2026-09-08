@@ -10,6 +10,14 @@ const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 const herdr = args => JSON.parse(execFileSync("herdr", args, { encoding: "utf8", timeout: 30000 }));
 const read = path => existsSync(path) ? readFileSync(path, "utf8") : "";
 
+export function checkSocketHome(home) {
+  const socket = join(home, ".config", "herdr", "herdr.sock");
+  if (Buffer.byteLength(socket) >= (process.platform === "darwin" ? 104 : 108)) {
+    throw new Error(`drill HOME socket path is too long: ${socket}; use a shorter TRANTOR_DRILL_WORLD inside .agent-bus-out`);
+  }
+  return socket;
+}
+
 export function isolatedEnv(home, bus, overrides = {}) {
   const env = { ...process.env };
   for (const key of Object.keys(env)) {
@@ -64,10 +72,10 @@ async function launchApp(kind, env, bus) {
   const panicPath = join(bus, "app-panics.log");
   const offset = read(tracePath).length;
   const panicOffset = read(panicPath).length;
-  const child = spawn(binary, [], { env, stdio: "ignore" });
+  const child = spawn(binary, [], { env, stdio: "ignore", timeout: 180000, killSignal: "SIGKILL" });
   let spawnError = null;
   child.once("error", error => { spawnError = error; });
-  const deadline = Date.now() + (kind === "ask" ? 390000 : 90000);
+  const deadline = Date.now() + 180000;
   let trace = "";
   try {
     await sleep(1000);
@@ -91,10 +99,11 @@ async function launchApp(kind, env, bus) {
 }
 
 export async function runAppDrills({ world, proj, project, run }) {
-  const home = join(world, "app-home");
-  const bus = join(home, ".agent-bus");
+  // The HOME socket pathname must fit sockaddr_un even when it is a symlink.
+  const home = world;
+  const bus = join(home, "app-bus");
   mkdirSync(join(home, ".config", "herdr"), { recursive: true });
-  const socket = join(home, ".config", "herdr", "herdr.sock");
+  const socket = checkSocketHome(home);
   if (!existsSync(socket)) symlinkSync(join(homedir(), ".config", "herdr", "herdr.sock"), socket);
   let hub;
   try {
@@ -103,27 +112,30 @@ export async function runAppDrills({ world, proj, project, run }) {
     writeFileSync(join(bus, "config.json"), JSON.stringify({ url: hub.url, hubs: { [project]: hub.url }, contextWindow: 200000 }));
     const env = { ...hub.env, TRANTOR_DEV_ROOT: dirname(proj), TRANTOR_ROOT: ROOT };
     await run("S6-ask · app AskUserQuestion", () => launchApp("ask", { ...env, TRANTOR_ASK_DRILL: project }, bus));
-    await run("S6-handoff · app dead-pane guard", async () => {
-      const created = herdr(["workspace", "create", "--cwd", proj, "--label", `tt-dead-drill-${process.pid}`, "--no-focus"]);
-      const workspace = created.result.workspace.workspace_id;
-      const pane = created.result.root_pane.pane_id;
-      try {
-        const sid = "00000000-0000-4000-8000-000000000092";
-        const transcripts = join(home, ".claude", "projects", proj.replace(/[/.]/g, "-"));
-        mkdirSync(transcripts, { recursive: true });
-        writeFileSync(join(transcripts, `${sid}.jsonl`), JSON.stringify({ type: "assistant", sessionId: sid, cwd: proj, timestamp: new Date().toISOString(), message: { model: "claude-sonnet-4-5", role: "assistant", usage: { input_tokens: 184000, output_tokens: 1, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 }, content: [{ type: "text", text: "dead drill session" }] } }) + "\n");
-        writeFileSync(join(bus, "crew-windows.txt"), `${project}\therdrws\t__ws__\t${workspace}\n${project}\torch\torchestrator\t${pane}\n`);
-        writeFileSync(join(bus, "orch-sessions.txt"), `${project}\t${sid}\n`);
+    const created = herdr(["workspace", "create", "--cwd", proj, "--label", `tt-dead-drill-${process.pid}`, "--no-focus"]);
+    const workspace = created.result.workspace.workspace_id;
+    const pane = created.result.root_pane.pane_id;
+    try {
+      const sid = "00000000-0000-4000-8000-000000000092";
+      const transcripts = join(home, ".claude", "projects", proj.replace(/[/.]/g, "-"));
+      mkdirSync(transcripts, { recursive: true });
+      writeFileSync(join(transcripts, `${sid}.jsonl`), JSON.stringify({ type: "assistant", sessionId: sid, cwd: proj, timestamp: new Date().toISOString(), message: { model: "claude-sonnet-4-5", role: "assistant", usage: { input_tokens: 184000, output_tokens: 1, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 }, content: [{ type: "text", text: "dead drill session" }] } }) + "\n");
+      writeFileSync(join(bus, "crew-windows.txt"), `${project}\therdrws\t__ws__\t${workspace}\n${project}\torch\torchestrator\t${pane}\n`);
+      writeFileSync(join(bus, "orch-sessions.txt"), `${project}\t${sid}\n`);
+      await run("S6-handoff · app dead-pane guard", async () => {
         const before = herdr(["pane", "process-info", "--pane", pane]).result.process_info.shell_pid;
         const evidence = await launchApp("handoff", { ...env, TRANTOR_HANDOFF_DRILL: project }, bus);
         const after = herdr(["pane", "process-info", "--pane", pane]).result.process_info.shell_pid;
         if (!before || before !== after) throw new Error("dead-pane shell did not survive");
         return `${evidence}; shell ${after} survived`;
-      } finally { herdr(["workspace", "close", workspace]); }
-    });
-    for (const mode of ["post", "throw"]) {
-      await run(`S6-key-${mode} · app key dispatch`, () => launchApp(`key-${mode}`, { ...env, TRANTOR_KEY_DRILL: mode }, bus));
-    }
+      });
+      // Key dispatch needs this real pane mounted; closing it after handoff left a stale tab.
+      for (const mode of ["post", "throw"]) {
+        await run(`S6-key-${mode} · app key dispatch`, () => launchApp(`key-${mode}`, {
+          ...env, TRANTOR_KEY_DRILL: mode, TRANTOR_KEY_DRILL_PROJECT: project,
+        }, bus));
+      }
+    } finally { herdr(["workspace", "close", workspace]); }
   } catch (error) {
     for (const name of ["S6-ask", "S6-handoff", "S6-key-post", "S6-key-throw"]) await run(`${name} · app setup`, () => { throw error; });
   } finally { if (hub) await stopChild(hub.child); }
