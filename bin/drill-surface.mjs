@@ -40,6 +40,20 @@ export const CARD_STEPS = {
   6483: { steps: ["S10"], autoClose: false, recipe: "covered by Drill Mode (#6800): operator checks Accounts with the CLI below the app minimum, then restores the CLI" },
 };
 
+export function findHandoff(dir, project) {
+  if (!existsSync(dir)) return null;
+  for (const name of readdirSync(dir)) {
+    if (!name.startsWith(`${project}-`) || !name.endsWith(".json")) continue;
+    const file = join(dir, name);
+    try {
+      const record = JSON.parse(readFileSync(file, "utf8"));
+      // relay_handoff can arrive before the hook ledger. Keep polling until states exist.
+      if (Array.isArray(record?.states) && record.states.length) return file;
+    } catch { /* A hook may still be writing this record; try it on the next poll. */ }
+  }
+  return null;
+}
+
 export async function main() {
 const KEEP = process.argv.includes("--keep");
 const G = "\x1b[32m", Rd = "\x1b[31m", Y = "\x1b[33m", D = "\x1b[2m", R = "\x1b[0m";
@@ -284,18 +298,12 @@ step("S4 · handoff machine: warn → arm → fire → WRITTEN → successor cla
   // The heartbeat is PostToolUse: only a REAL tool call can arm the baton. Models sometimes
   // answer without the tool (observed: run 2 of 3 on 2026-08-30 — 1-in-3 prompt fragility,
   // not a seam), so ask, verify tool use in the transcript, and re-ask up to twice.
-  const findHandoff = () => {
-    try {
-      const f = readdirSync(join(bus, "handoffs")).find(x => x.startsWith(`${projectName}-`) && x.endsWith(".json"));
-      return f ? join(bus, "handoffs", f) : null;
-    } catch { return null; }
-  };
   let handoffFile = null;
   for (let attempt = 1; attempt <= 3 && !handoffFile; attempt++) {
     const raw = await socketRequest({ id: "trantor:agent.prompt", method: "agent.prompt", params: {
       target: pane, text: `You MUST call the Bash tool now and run exactly: pwd — do not answer without calling it. Then reply with just DONE-S4-${attempt}.` } });
     if (JSON.parse(raw).result?.type !== "agent_prompted") { FAIL("S4 prompt accepted", raw.slice(0, 100)); break; }
-    handoffFile = await waitFor("handoff written", findHandoff, { timeoutMs: 120_000, everyMs: 2_000 });
+    handoffFile = await waitFor("handoff written", () => findHandoff(join(bus, "handoffs"), projectName), { timeoutMs: 120_000, everyMs: 2_000 });
     if (!handoffFile) console.log(`  ${D}attempt ${attempt}: no handoff yet — re-asking with the tool requirement${R}`);
   }
   if (!handoffFile) {

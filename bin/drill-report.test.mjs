@@ -1,12 +1,29 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { createServer, createConnection } from "node:net";
 import { DrillReport } from "./drill-report.mjs";
-import { CARD_STEPS } from "./drill-surface.mjs";
+import { CARD_STEPS, findHandoff } from "./drill-surface.mjs";
 import { appVerdict, startDrillHub, stopChild, checkSocketHome } from "./drill-seams.mjs";
 import { signedGet, signedPost } from "../hooks/lib/api.mjs";
+
+test("S4 waits for the hook ledger when relay_handoff arrives first", () => {
+  const world = mkdtempSync(join(import.meta.dirname, "..", ".agent-bus-out", "ledger-"));
+  try {
+    assert.equal(findHandoff(join(world, "missing"), "trantor"), null);
+    writeFileSync(join(world, "trantor-100.json"), JSON.stringify({ summary: "tool handoff" }));
+    writeFileSync(join(world, "trantor-101.json"), "{");
+    writeFileSync(join(world, "trantor-102.json"), JSON.stringify({ states: [] }));
+    writeFileSync(join(world, "other-100.json"), JSON.stringify({ states: [{ state: "written" }] }));
+    assert.equal(findHandoff(world, "trantor"), null);
+    const ledger = join(world, "trantor-103.json");
+    writeFileSync(ledger, JSON.stringify({ states: [{ state: "written" }] }));
+    assert.equal(findHandoff(world, "trantor"), ledger);
+    writeFileSync(ledger, JSON.stringify({ states: [{ state: "written" }, { state: "claimed" }, { state: "recapped" }] }));
+    assert.equal(findHandoff(world, "trantor"), ledger);
+  } finally { rmSync(world, { recursive: true, force: true }); }
+});
 
 test("signed closer on an enforce hub: complete evidence closes, partial/failure/skip never does", async () => {
   const out = join(import.meta.dirname, "..", ".agent-bus-out");
