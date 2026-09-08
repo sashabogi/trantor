@@ -13,7 +13,8 @@ export type AutoCheckKind =
   | "chips-lead-in"
   | "jump-arrow-mounted"
   | "composer-no-overlap"
-  | "wake-header-pending";
+  | "wake-header-pending"
+  | "cli-banner-shown";
 
 export type DrillStep = {
   card: number;
@@ -85,6 +86,13 @@ export const DRILL_STEPS: readonly DrillStep[] = [
     autoCheck: null,
   },
   {
+    card: 6483,
+    title: "Accounts under a downgraded CLI shows the banner",
+    action: "In a terminal: npm i -g trantor@0.18.46. Open Settings, Accounts, and press Log in or Remove on a provider. Then npm i -g trantor@0.18.47 and reopen Settings.",
+    expected: "With 0.18.46 installed a banner reads that the trantor CLI is older than this app needs, and no action silently does nothing. With 0.18.47 back the banner is gone and Log in and Remove work.",
+    autoCheck: "cli-banner-shown",
+  },
+  {
     card: 6487,
     title: "Accounts: remove and restore a provider",
     action: "Settings → Accounts. Remove a provider you can log back into, confirm the sheet, then Log in again.",
@@ -102,7 +110,7 @@ export const DRILL_STEPS: readonly DrillStep[] = [
 
 /** The cards this drill must cover (the contract's list) — asserted by the test, so a step that
  *  falls out of the catalogue by accident fails loudly. */
-export const REQUIRED_CARDS: readonly number[] = [5993, 6702, 6697, 6701, 6392, 6487, 6499, 6201, 6067, 6070];
+export const REQUIRED_CARDS: readonly number[] = [5993, 6702, 6697, 6701, 6392, 6487, 6483, 6499, 6201, 6067, 6070];
 
 export type AutoCheckResult = { ok: boolean; why: string };
 
