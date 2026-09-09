@@ -90,6 +90,7 @@ ownership gaps. Whack-a-mole was the symptom; missing ownership was the disease.
 | Crew-seat health (headless runners) | bus ledger + heartbeats (`seat-why` evidence) | crew-runner, hooks | board, app seat states | re-keying runner truth to herdr agent detection (§8) |
 | Fleet roster + routing | derived roster (`discoverSeats`) + scrooge capabilities | profile, opencode.json, `scrooge-capabilities` | advisor, `trantor up`, `trantor models` | hardcoded rosters; hard-tier routed to flash-class models |
 | Language intelligence in the editor (servers, lifecycle, framing) | Rust `lsp` module (docs/CONTRACT-editor-intelligence.md) | Rust only | Monaco via monaco-languageclient over Tauri events | TS spawning servers; a server killed by a lens switch (they outlive the lens: project switch, 15m idle, or exit); a fake "ready" |
+| Seat execution state (`WorkingState`, docs/TDD-trantor-state.md) | `lib/state/store.mjs` | the turn owner only — crew-runner (Phase 2a), Stop hook (Phase 1), `trantor state` CLI (repair) | assembler, handoff writer, board promoter, `trantor state show` | the model writing the file directly; a second process applying a patch; the app or the hub writing it |
 
 Two standing rules the table implies:
 - **If you are typing keystrokes at an agent, you are wrong.** The only keystroke paths are the
