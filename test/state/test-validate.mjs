@@ -137,6 +137,40 @@ ok("the message names the command that failed", redGate.message.includes("node t
 ok("so the driver's one retry terminates: the second call cannot return NEEDS_GATE",
   redGate.code !== ERR.NEEDS_GATE);
 
+// #6969 — THE CURE HAS TO ACTUALLY CURE, and for a long time it could not.
+//
+// The two assertions above are the ones that existed, and they are why this hole survived two
+// review rounds, five reviewers and 264 Phase-0 assertions: they cover a bare call and a RED gate.
+// Nothing anywhere fed a GREEN ctx to a done-move — the one path the whole evidence pipeline runs
+// on — so `hasEvidence` reading `state` alone went unnoticed. On the second call the gate's facts
+// are still only in `ctx` (apply.mjs stage 5 has not run, because validate rejects first), which
+// made a green gate indistinguishable from a red one and produced the self-contradicting
+// "the gate ran and did not pass (suite, exit 0)". §4.8's cure could never succeed on the live
+// path. Found by P6 when the wiring was finally built, which is the argument for building it last.
+//
+// The pair below is one rule read from both ends: a green ctx accepts, a red ctx rejects with the
+// tail. Reverting hasEvidence to read state alone reddens the first half.
+console.log("\n   …and the cure cures: a GREEN ctx on the second call is ACCEPTED (#6969)");
+const greenCtx = {
+  gate_attempted: { cmd: "node test/run.mjs --only state", exit: 0, tail: "" },
+  verify: { tested: true, cmd: "node test/run.mjs --only state", exit: 0 },
+  files: { "lib/x.mjs": { touched: true, verified: true, hash: "sha-NEW" } },
+};
+const cured = validateTurn(bare, moveDone, greenCtx);
+ok("route (a) from ctx: a green gate this turn accepts the move", cured.ok === true, JSON.stringify(cured));
+ok("route (b) from ctx: the gate's credit alone is enough, with no verify at all",
+  validateTurn(bare, moveDone, { gate_attempted: { cmd: "c", exit: 0, tail: "" }, files: greenCtx.files }).ok === true);
+ok("hasEvidence reads ctx over state, wholesale for verify",
+  hasEvidence(bare, bare.in_flight[0], { verify: { tested: true, exit: 0 } }) === true);
+ok("and merges ctx.files over state.files per path",
+  hasEvidence(bare, bare.in_flight[0], { files: { "lib/x.mjs": { verified: true } } }) === true);
+ok("a ctx that credits the WRONG path does not accept",
+  validateTurn(bare, moveDone, { gate_attempted: { cmd: "c", exit: 0, tail: "" }, files: { "lib/other.mjs": { verified: true } } }).code === ERR.UNVERIFIED_DONE);
+ok("an EMPTY ctx.verify does not resurrect last turn's green — it is taken wholesale, not merged",
+  hasEvidence({ ...bare, verify: { tested: true, exit: 0 } }, bare.in_flight[0], { verify: {} }) === false);
+ok("and the red half still rejects with its tail, so the pair is one rule",
+  redGate.code === ERR.UNVERIFIED_DONE && redGate.gate?.tail === "1 FAILED");
+
 console.log("\nR12 — a credit expires with the bytes it describes");
 // The negative case IS the test: without the expiry this move is accepted, which is the bug.
 const green = applyTurn(bare, turn([]), {

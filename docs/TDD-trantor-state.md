@@ -714,9 +714,18 @@ listed separately and are edited by exactly one package each, in phase order.
 | **P4 handoff** | `lib/state/derive.mjs` · `test/state/test-handoff-state.mjs`, `test-derive.mjs` | `hooks/lib/handoff.mjs`, `hooks/sessionstart.mjs`, `bin/write-handoff.mjs` |
 | **P5 assemble** | `lib/state/assemble.mjs`, `lib/state/cost.mjs` · `test/state/test-assemble.mjs`, `test-cost.mjs` | — |
 | **P5.5 gate** | `lib/state/gate.mjs` · `test/state/test-gate.mjs` | — |
-| **P6 runner** | — | `bin/crew-runner.mjs` (the `claude.next` row + turn-boundary apply) |
+| **P6 runner** | `lib/state/driver.mjs` · `test/state/test-runner-state.mjs` | `bin/crew-runner.mjs` (the flagged `claude.next` row + turn-boundary apply) |
 | **P7 baseline/bench** | `bin/state-bench.mjs` · `test/state/test-bench.mjs` | — |
 | **P9 drill** | — | `bin/drill-surface.mjs` (one new `step()`) |
+
+**Why P6 owns a `lib/` file when the row above once said it owned nothing.** `bin/crew-runner.mjs`
+is not importable — it reads `process.argv` and awaits enrolment at module scope — so anything
+living inside it can only be exercised end to end against a live hub. That is fatal for the one
+property this phase exists to make real: §4.8 tier 1's re-hash-and-expire. A credit that silently
+goes monotonic-true in production while every unit test stays green is R7 wearing a new hat, and it
+cannot be mutation-tested through a file that cannot be imported. So the step logic lives in
+`lib/state/driver.mjs` and the runner keeps the wiring and the I/O. The precedent is this repo's
+own: `lib/classify-failure.mjs` was lifted out of the same file for the same reason (#5868).
 
 Rules that make this safe, from the crew's own lessons: no package edits another's owned files; a
 package that needs a change in a file it does not own asks that owner over the bus; every package
