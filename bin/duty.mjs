@@ -360,6 +360,31 @@ if (cmd === "down") {
   process.exit(0);
 }
 
+/**
+ * Is duty actually moving mail? Read from the runner's own on-disk queue rather than trusting the
+ * process table. `pending-<agent>-<project>.json` is written on every failed delivery and deleted
+ * when the queue drains, so its existence means messages are held and its oldest entry says for how
+ * long. STALL_HOURS is deliberately well past the runner's own 15-minute retry ceiling: anything
+ * older than that is not a retry in progress, it is a parked seat nobody restarted.
+ */
+const STALL_HOURS = 1;
+function dutyHealth() {
+  const f = join(BUS, `pending-${AGENT}-trantor-duty.json`);
+  try {
+    const j = JSON.parse(readFileSync(f, "utf8"));
+    const wake = Array.isArray(j.wake) ? j.wake : [];
+    const bcast = Array.isArray(j.bcast) ? j.bcast : [];
+    const held = wake.length + bcast.length;
+    if (!held) return { held: 0, stalled: false, oldestHours: "0.0" };
+    const stamps = [...wake, ...bcast].map(m => m?.ts).filter(Number.isFinite);
+    const oldest = stamps.length ? Math.min(...stamps) : j.ts;
+    const hours = (Date.now() - oldest) / 3.6e6;
+    return { held, stalled: hours >= STALL_HOURS, oldestHours: hours.toFixed(1) };
+  } catch {
+    return { held: 0, stalled: false, oldestHours: "0.0" };   // no queue file = nothing held
+  }
+}
+
 // status
 {
   const pid = alivePid();
@@ -370,7 +395,41 @@ if (cmd === "down") {
   console.log("  whether a seat is still alive, and clears away dead runners. It never writes code");
   console.log("  and never edits your project files.  Stop it with: trantor duty down");
   console.log("");
-  console.log(pid ? `RUNNING (pid ${pid}) as ${SESSION}` : "NOT running");
+  // A pid is not health. This line used to read `pid ? "RUNNING" : "NOT running"`, and on 2026-09-09
+  // it said RUNNING for a seat whose last successful turn was 21.8 hours earlier and which was
+  // holding 48 undelivered messages, the oldest 21.9 hours old — the runner had parked itself
+  // waiting on a quota reset and only `trantor up` un-parks it. Nothing noticed, because the one
+  // command whose job is to answer "is duty working" was answering "does a process exist".
+  //
+  // The irony worth keeping: ten lines below, this same function already refuses to assume the hub
+  // feed is wired, on the grounds that "a running seat the hub isn't feeding looks identical to a
+  // working one from the outside". That rigour was applied to the hub and not to the seat itself.
+  //
+  // The queue is the honest signal because it survives the process: the runner persists it to
+  // pending-<agent>-<project>.json on every failed delivery, so a backlog with an old head means
+  // messages are not moving no matter what the process table says.
+  const health = dutyHealth();
+  if (!pid) {
+    console.log("NOT running");
+    // A backlog matters MORE when the seat is down, not less: those messages have nobody to deliver
+    // them and no retry ladder running. Reporting it only in the pid branch was the first version
+    // of this fix, and it hid exactly the case that needs saying out loud.
+    if (health.held) {
+      console.log(`  \x1b[31mand ${health.held} undelivered message(s) are held on disk, oldest ${health.oldestHours}h old\x1b[0m`);
+      console.log(`  → nothing will deliver them until the seat is back: trantor duty up`);
+    } else {
+      console.log("  queue empty — nothing is waiting");
+    }
+  }
+  else if (health.stalled) {
+    console.log(`\x1b[31mSTALLED\x1b[0m (pid ${pid}) as ${SESSION} — the process is up but mail is not moving`);
+    console.log(`  holding ${health.held} undelivered message(s), oldest ${health.oldestHours}h old`);
+    console.log(`  → the runner parks on quota/api failure and only a restart un-parks it: trantor duty up`);
+  } else if (health.held) {
+    console.log(`RUNNING (pid ${pid}) as ${SESSION} — draining ${health.held} queued message(s), oldest ${health.oldestHours}h old`);
+  } else {
+    console.log(`RUNNING (pid ${pid}) as ${SESSION} — queue empty`);
+  }
   console.log(existsSync(DUTY_PLIST)
     ? `keepalive: installed (${DUTY_LABEL}${process.platform === "darwin" ? (dutyLoaded() ? ", loaded" : ", not loaded in this session") : ""}) — launchd relaunches the seat after a crash or reboot`
     : "keepalive: NOT installed — a crash or reboot leaves the seat down (trantor duty up installs it)");
