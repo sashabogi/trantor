@@ -14,12 +14,13 @@
 // with stub gate commands — no real suites, no ports, no collision with sibling seats.
 import { spawnSync } from "node:child_process";
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { ERR, emptyState } from "../../lib/state/schema.mjs";
 import { validateTurn, hasEvidence } from "../../lib/state/validate.mjs";
 import { applyTurn } from "../../lib/state/apply.mjs";
-import { runGate, resolveGateCommand, resolveBuildCommand, TIMED_OUT_EXIT } from "../../lib/state/gate.mjs";
+import { runGate, resolveGateCommand, resolveBuildCommand, touchedPaths, TIMED_OUT_EXIT } from "../../lib/state/gate.mjs";
 import { harness, turn } from "./_helpers.mjs";
 
 const { ok, done } = harness();
@@ -220,3 +221,26 @@ console.log("\nsafety — the scratch index never touches the seat's real index"
 }
 
 done();
+
+// --- regression: porcelain quoting (found by claude:trantor reviewing glm's gate, 09-09) ---------
+// `git status --porcelain` WITHOUT -z C-quotes any path carrying a non-ASCII byte, a quote or a
+// backslash, so `café.mjs` arrives as `"caf\303\251.mjs"`. Stripping the outer quotes leaves a
+// path that does not exist, the credit a seat names never matches its file, and route (b) silently
+// never grants evidence for it. Fails CLOSED, so only a deliberate test finds it.
+{
+  const dir = mkdtempSync(join(tmpdir(), "gate-quoting-"));
+  const g = (...a) => spawnSync("git", a, { cwd: dir, encoding: "utf8" });
+  g("init", "-q", ".");
+  g("config", "user.email", "t@t"); g("config", "user.name", "t");
+  writeFileSync(join(dir, "base.mjs"), "x\n");
+  g("add", "-A"); g("commit", "-qm", "base");
+  writeFileSync(join(dir, "café.mjs"), "x\n");          // non-ASCII: the one git quotes
+  writeFileSync(join(dir, "with space.mjs"), "x\n");    // space: must survive too
+  const touched = touchedPaths(dir);
+  ok("a non-ASCII path comes back literal, not C-quoted",
+    touched.includes("café.mjs"), JSON.stringify(touched));
+  ok("no path arrives still carrying an escape sequence",
+    !touched.some(p => /\\[0-9]{3}/.test(p)), JSON.stringify(touched));
+  ok("a path with a space survives", touched.includes("with space.mjs"), JSON.stringify(touched));
+  rmSync(dir, { recursive: true, force: true });
+}
