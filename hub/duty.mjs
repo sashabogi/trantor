@@ -16,11 +16,45 @@ let dutyDarkSince = 0;
 // A freshly appointed seat has no heartbeat yet and is NOT a corpse: the dark clock starts at
 // appointment (boot or POST /overseer/duty), so a newborn gets one full window to first-poll.
 let dutySeenFloor = Date.now();
+// How many escalations duty may sit on, and for how long, before it counts as dark no matter how
+// healthily it is heartbeating.
+const DUTY_STUCK_MAX = Number(process.env.RELAY_DUTY_STUCK_MAX || 10);
+const DUTY_STUCK_MS = Number(process.env.RELAY_DUTY_STUCK_MS || 30 * 60 * 1000);
 function dutyLiveness() {
   if (!DUTY_SESSION) return { configured: false, online: false, lastSeenMs: 0 };
   const seen = Math.max(state.peers[DUTY_SESSION]?.lastSeen || 0, dutySeenFloor);
   const lastSeenMs = now() - seen;
-  return { configured: true, online: lastSeenMs < DUTY_DARK_MS, lastSeenMs: Math.max(0, lastSeenMs) };
+  const beating = lastSeenMs < DUTY_DARK_MS;
+  // A heartbeat is not work. This used to be `online: beating`, and on 2026-09-09 that let a duty
+  // seat look healthy to the hub for 21.9 hours while it held 48 escalations it could not touch:
+  // the runner's heartbeat IS its long-poll, and the long-poll keeps running while the seat is
+  // parked on a quota failure. So the #5686 dark-duty path — route escalations to the SENDER
+  // rather than queue them on a corpse — never armed, and every alert kept going to the corpse.
+  //
+  // dutyQueuedEscalations() below already computes the honest signal and nothing consulted it.
+  // A seat that is not CONSUMING is dark whatever its heartbeat says: `deliveredUpTo` stops
+  // advancing the moment it stops working, so a backlog that is both large and old is proof.
+  const stuck = dutyQueuedEscalations();
+  const oldestStuckMs = stuck ? now() - oldestUnconsumedTs() : 0;
+  const consuming = !(stuck >= DUTY_STUCK_MAX && oldestStuckMs >= DUTY_STUCK_MS);
+  return {
+    configured: true,
+    online: beating && consuming,
+    beating,
+    consuming,
+    stuck,
+    lastSeenMs: Math.max(0, lastSeenMs),
+  };
+}
+/** Timestamp of the oldest escalation duty has not consumed, or now() when there is none. */
+function oldestUnconsumedTs() {
+  const upTo = state.peers[DUTY_SESSION]?.deliveredUpTo || 0;
+  let oldest = 0;
+  for (const m of state.messages) {
+    if (m.to !== DUTY_SESSION || m.id <= upTo) continue;
+    if (!oldest || m.ts < oldest) oldest = m.ts;
+  }
+  return oldest || now();
 }
 function dutyQueuedEscalations() {
   if (!DUTY_SESSION) return 0;
@@ -67,7 +101,14 @@ function dutyTick() {
   const live = dutyLiveness();
   if (!live.online && !dutyDarkSince) {
     dutyDarkSince = now();
-    appendEvent("duty-dark", "", "hub:duty", { text: `duty seat ${DUTY_SESSION} has no heartbeat — seat trouble is not being triaged (trantor duty up)` });
+    // Name WHICH kind of dark. "No heartbeat" and "heartbeating but not consuming" need different
+    // fixes and look nothing alike to an operator reading the event log: the first is a process
+    // that died, the second is a process that is up and stuck, which is the one that hid for 21.9h.
+    appendEvent("duty-dark", "", "hub:duty", {
+      text: live.beating
+        ? `duty seat ${DUTY_SESSION} is heartbeating but NOT CONSUMING — ${live.stuck} escalation(s) unread and stale; it is up and stuck, not crashed (trantor duty up restarts it)`
+        : `duty seat ${DUTY_SESSION} has no heartbeat — seat trouble is not being triaged (trantor duty up)`,
+    });
   } else if (live.online && dutyDarkSince) {
     appendEvent("duty-back", "", "hub:duty", { text: `duty seat ${DUTY_SESSION} is back after ${Math.round((now() - dutyDarkSince) / 60000)}m dark` });
     dutyDarkSince = 0;
