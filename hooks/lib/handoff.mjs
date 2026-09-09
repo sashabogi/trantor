@@ -16,7 +16,9 @@ import { homedir, hostname } from "node:os";
 import { execSync, spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { deriveSubagentManifest } from "../../lib/subagent-manifest.mjs";
-import { signedPost } from "./api.mjs";
+import { signedPost, loadIdentity } from "./api.mjs";
+// #7037: signedHeaders is SYNCHRONOUS, which is why this path can sign at all — see hubCallSync.
+import { signedHeaders } from "../../lib/signed-fetch.mjs";
 import { loadAutonomy, resolveAutonomy } from "../../lib/autonomy.mjs";
 import { resolveProject, orchSessionsPath, hostId } from "../../lib/project.mjs";
 // Trantor State (TDD §4.5). Dark behind TRANTOR_STATE_HANDOFF: these are imported unconditionally
@@ -473,23 +475,89 @@ export function resolveSeat(projectName, env = process.env) {
   return env.RELAY_SESSION || (env.RELAY_AGENT ? `${env.RELAY_AGENT}:${projectName}` : `${hostId()}:${projectName}`);
 }
 
+// ── #7037: one SIGNED, synchronous hub call, and an error that cannot be mistaken for data ──────
+//
+// Three reads on this path curl'd the hub UNSIGNED and read the refusal as an answer. The hub
+// replies 401 {"error":"signature required"}; a 401 body is VALID JSON, so `JSON.parse(out).tasks
+// || []` parses fine, finds no `tasks` key, and hands back an empty list. The catch never fires
+// because nothing threw. Silently, on every handoff: the card id resolved to 0, the verify-gate
+// list to [], and the storm guard — which exists because an old-hook session once fired 9 handoffs
+// in 49 minutes — read a refusal as "allowed" and stopped guarding.
+//
+// So the shape matters more than the signature: this returns { ok, status, json, reason } and NEVER
+// a bare list. A caller has to look at `ok` before it can reach the data, which is the property the
+// old code lacked. An auth failure must not be spellable as an empty result.
+//
+// Synchronous on purpose — this whole path is (see the state imports above), so api.mjs's async
+// signedGet is unavailable. signedHeaders IS synchronous, so only the transport differs.
+function hubCallSync(path, { project, session, method = "GET", body, timeoutMs = 2500 } = {}) {
+  const url = relayUrl(project) + path;
+  let headers = {};
+  try {
+    headers = signedHeaders(loadIdentity(session || resolveSeat(project || "")), url, { method, body });
+  } catch { /* unsigned is still worth attempting — the hub decides, not us */ }
+  const args = Object.entries(headers).map(([k, v]) => `-H ${JSON.stringify(`${k}: ${v}`)}`);
+  if (method !== "GET") args.push("-X", method);
+  if (body !== undefined) args.push("-H 'content-type: application/json'", "-d", JSON.stringify(body));
+  try {
+    // maxBuffer is NOT decoration: /tasks on this project is 1.6MB across 941 cards, and execSync's
+    // 1MB default turns that into ENOBUFS — which the old catch would have swallowed straight back
+    // into the same silent 0. A fix that only signed the request would still have failed here.
+    const out = execSync(
+      `curl -s --max-time ${Math.ceil(timeoutMs / 1000)} ${args.join(" ")} -w '\\n%{http_code}' ${JSON.stringify(url)}`,
+      { encoding: "utf8", timeout: timeoutMs + 500, maxBuffer: 32 * 1024 * 1024 });
+    const cut = out.lastIndexOf("\n");
+    const status = Number(out.slice(cut + 1).trim()) || 0;
+    const text = cut >= 0 ? out.slice(0, cut) : out;
+    let json = null; try { json = text ? JSON.parse(text) : null; } catch {}
+    if (status < 200 || status >= 300) {
+      return { ok: false, status, json, reason: json?.error ? `HTTP ${status}: ${json.error}` : `HTTP ${status}` };
+    }
+    return { ok: true, status, json, reason: "" };
+  } catch (e) {
+    return { ok: false, status: 0, json: null, reason: e?.message || "unreachable" };
+  }
+}
+
+// A refusal is worth exactly one line on stderr, and it must name the endpoint and the reason — the
+// whole cost of this bug was that it made no sound at all. Never throws into the handoff path: a
+// session losing its baton over a warning is a worse failure than the one being reported.
+function warnHubRead(what, r) {
+  try { process.stderr.write(`[trantor] handoff: ${what} unavailable — ${r.reason || "unknown"}; continuing without it\n`); } catch {}
+}
+
 /**
  * Which card this handoff belongs to. `TRANTOR_CARD` wins — the crew runner knows the answer for
  * certain and a lookup cannot beat being told. Otherwise ask the hub for this seat's newest open
  * card, on the same 2s best-effort budget as the verify-gates fetch: a hub that is down costs the
  * handoff a card number, never the handoff.
+ *
+ * #7037: reads /catchup, not /tasks. /tasks is the whole board with every card's full log — 1.6MB
+ * here, 625-961ms typical, and it already blew a 1500ms budget once today (#6983). /catchup answers
+ * the question actually being asked in a few hundred bytes. Its buckets are capped at 8, so "my
+ * card is not in the list" and "the list was truncated before it got to me" are different answers,
+ * and the second is reported as UNKNOWN rather than quietly resolving to 0 — which is the same
+ * defect this card exists to remove, one layer up.
  */
 export function resolveHandoffCard({ projectName, seat, env = process.env } = {}) {
   const told = Number(env.TRANTOR_CARD);
   if (Number.isInteger(told) && told > 0) return told;
-  try {
-    const out = execSync(`curl -s --max-time 2 ${JSON.stringify(relayUrl() + "/tasks?project=" + encodeURIComponent(projectName))}`, { encoding: "utf8", timeout: 2500 });
-    const tasks = JSON.parse(out).tasks || [];
-    const mine = tasks
-      .filter(t => t && Number.isInteger(t.id) && t.assignee === seat && ["doing", "testing"].includes(t.status))
-      .sort((a, b) => (a.status === b.status ? (b.updated || b.ts || 0) - (a.updated || a.ts || 0) : a.status === "doing" ? -1 : 1));
-    return mine.length ? mine[0].id : 0;
-  } catch { return 0; }
+  const r = hubCallSync(`/catchup?project=${encodeURIComponent(projectName)}`, { project: projectName, session: seat });
+  if (!r.ok) { warnHubRead(`card lookup for ${projectName}`, r); return 0; }
+  const CAP = 8;                       // hub-side pick() limit; keep in step with /catchup
+  for (const status of ["doing", "testing"]) {
+    const bucket = Array.isArray(r.json?.[status]) ? r.json[status] : [];
+    const mine = bucket
+      .filter(t => t && Number.isInteger(t.id) && t.assignee === seat)
+      .sort((a, b) => (b.updated || 0) - (a.updated || 0));
+    if (mine.length) return mine[0].id;
+    if (bucket.length >= CAP) {
+      warnHubRead(`card lookup for ${projectName}`,
+        { reason: `/catchup ${status} list truncated at ${CAP} — this seat's card may exist but was not returned` });
+      return 0;
+    }
+  }
+  return 0;
 }
 
 /**
@@ -625,12 +693,16 @@ export function writeHandoff({ projectDir, sessionId, transcript, trigger, summa
   // cooldown is SKIPPED — no file, no spawn. Manual (/trantor:handoff) + at-wall (precompact) handoffs
   // force through. Fail-OPEN if the hub is unreachable, so a legit handoff is never blocked.
   if (!force) {
-    try {
-      const body = JSON.stringify({ project: projectName, session: sessionId || "", trigger: trigger || "auto" });
-      const out = execSync(`curl -s --max-time 2 -X POST -H 'content-type: application/json' -d ${JSON.stringify(body)} ${JSON.stringify(relayUrl() + "/handoff")}`, { encoding: "utf8", timeout: 2500 });
-      const r = JSON.parse(out);
-      if (r && r.allow === false) return { skipped: true, reason: r.reason || "storm-guard", sinceSec: r.sinceSec };
-    } catch {}
+    // #7037: this is the costliest of the three unsigned reads. A 401 body parses, `r.allow` comes
+    // back undefined, `undefined === false` is false — so the guard said "go" on every handoff and
+    // the storm it exists to stop had nothing standing in its way. Signed now, and a REFUSAL is
+    // distinguished from a DENIAL: only a hub that answered gets to allow or deny.
+    const r = hubCallSync("/handoff", {
+      project: projectName, session: sessionId || "", method: "POST",
+      body: { project: projectName, session: sessionId || "", trigger: trigger || "auto" },
+    });
+    if (!r.ok) warnHubRead("storm guard", r);   // fail-OPEN, but never silently
+    else if (r.json && r.json.allow === false) return { skipped: true, reason: r.json.reason || "storm-guard", sinceSec: r.json.sinceSec };
   }
   if (!existsSync(HANDOFF_DIR)) mkdirSync(HANDOFF_DIR, { recursive: true });
   // #5648: an automatic digest must never recompose+supersede a FRESH model-authored handoff.
@@ -655,11 +727,14 @@ export function writeHandoff({ projectDir, sessionId, transcript, trigger, summa
   // MUST survive the handoff (a narrative line gets skimmed past; this is what the v0.17.31 incident
   // taught — the "verify Gail coefficients" intent vanished into prose). Fetched synchronously from
   // the local hub; best-effort, never blocks the handoff.
+  // #7037: signed, and an unreadable list is reported rather than rendered as "no open gates" —
+  // a record that silently claims zero gates is worse than one that admits it could not ask.
   let verifyGates = [];
-  try {
-    const out = execSync(`curl -s --max-time 2 ${JSON.stringify(relayUrl() + "/verify-gates?project=" + encodeURIComponent(projectName))}`, { encoding: "utf8", timeout: 2500 });
-    verifyGates = JSON.parse(out).gates || [];
-  } catch {}
+  {
+    const r = hubCallSync(`/verify-gates?project=${encodeURIComponent(projectName)}`, { project: projectName, session: sessionId || "" });
+    if (r.ok) verifyGates = Array.isArray(r.json?.gates) ? r.json.gates : [];
+    else warnHubRead(`verify gates for ${projectName}`, r);
+  }
   const record = {
     id: `${projectName}-${stamp}`,
     project: projectDir, projectName, machine: hostname(),
