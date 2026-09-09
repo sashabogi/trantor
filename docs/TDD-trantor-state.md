@@ -117,7 +117,8 @@ Two consequences worth stating out loud, because they are the design:
 
 ```js
 /** @typedef {{ id: string, text: string, paths?: string[] }} Item   // id <= CAPS.ID, text <= CAPS.ITEM */
-/** @typedef {{ touched: boolean, verified: boolean, blast_radius?: number }} FileFact  // all three harness-written */
+/** @typedef {{ touched: boolean, verified: boolean, hash?: string, blast_radius?: number }} FileFact
+ *  // every field harness-written; `hash` = the path's blob sha when the gate credited it (§4.2) */
 
 /** @typedef {{
  *   schema_version: 3,
@@ -165,7 +166,8 @@ export const CAPS = {
   ITEM_PATHS: 8,    // evidence paths per item
   PATH: 400,        // chars per files key
   NOTES: 2048,      // bytes of the notes tail
-  LIST: 40,         // items per list; overflow compacts into <list>_count
+  LIST: 40,         // items per list; `done` overflow compacts into done_count, the
+                    // working lists reject instead — see below
   FILES: 200,       // paths; overflow compacts into files_count
   EXT_KEYS: 8, EXT_BYTES: 4096,
   TAIL_TOKENS: 2000, OBS_TOKENS: 4000,
@@ -175,6 +177,16 @@ export const CAPS = {
 
 Every cap is enforced in `validate.mjs` and asserted in `test/state/test-caps.mjs`. There is no
 second copy of any number anywhere in the tree; a driver that wants a cap imports `CAPS`.
+
+**Overflow is not uniform across the lists, and the schema says which is which.** Only `done` and
+`files` have a `_count` companion, because only they are append-only history: their overflow is
+*compaction*, oldest entries folded into a number that keeps the total honest. `in_flight`, `next`
+and `blockers` have no `_count` field and are not getting one — they are working lists, so an `add`
+that would take one past `CAPS.LIST` is a **`CAP` rejection naming the list**, not a silent drop.
+The asymmetry is deliberate: silently dropping the oldest blocker is the single worst thing this
+state object could do, and a seat holding 40 in-flight items has a problem no cap can fix, so the
+rejection is the useful signal. An earlier draft said all list overflow compacts into
+`<list>_count`, which named three fields that do not exist.
 
 `ID` is in that table for the same reason as the rest, and it was missing from an earlier draft:
 `Item.id` is state content — it renders into every prompt and keys every array op — so an
@@ -237,7 +249,7 @@ runner/hook                        core                            store
     │  assemble(preamble, state, tail, observation)  ──▶ prompt
     │  run the CLI ────────────────────────────────────────────────────────────────▶
     │ ◀──────────── TurnResult { patch, action } + cost envelope
-    │  git status ──▶ ctx.files[*].touched            (§4.8 tier 1, every turn)
+    │  git status + re-hash credits ──▶ ctx.files[*]  (§4.8 tier 1: sets touched, expires stale verified)
     │  applyTurn(state, patch, ctx) ──▶ validate → apply → compact → promote-plan
     │ ◀── ApplyResult
     │  commit(state', rev N) ───────────────────────────────────────▶ CAS write + journal append
@@ -279,14 +291,46 @@ gate and re-entering `applyTurn` with the evidence (§4.8) — still before any 
 4. **Apply, in order, on a structural clone.** Any stage-3 failure aborts the whole patch; there is
    no partial application. All-or-nothing is what makes "no valid patch corrupts state" testable.
 5. **Runtime pass** (not model-visible): `cursor` bump, `rev+1`, compaction of overflow lists into
-   `done_count`/`files_count`, `ctx` facts written into `verify`/`files[*].verified`, cap
-   enforcement on content, and the promotion plan for §4.7.
+   `done_count`/`files_count`, `ctx` facts written into `verify`/`files[*].touched`/
+   `files[*].verified`/`files[*].hash` (`verify` **rewritten wholesale**, credits set or expired,
+   never merged), the `ext._gate` memo record (§4.8), cap enforcement on content, and the promotion
+   plan for §4.7.
 
 **What counts as evidence for `UNVERIFIED_DONE`.** An item may move to `done` when either
-(a) `verify.tested === true` and `verify.exit === 0` at the current `rev`, or (b) every path in
-`Item.paths` (§3, extracted from the evidence marker) has `files[path].verified === true`. Anything
-else is a rejection with the reason. `ctx.verify` is supplied by the driver from a gate it actually
-ran — never from anything the model said.
+(a) `verify.tested === true` and `verify.exit === 0`, or (b) every path in `Item.paths` (§3,
+extracted from the evidence marker) has `files[path].verified === true`. Anything else is a
+rejection with the reason. `ctx.verify` is supplied by the driver from a gate it actually ran —
+never from anything the model said.
+
+**`verified` has a lifecycle, and it is content-bound.** This is the hole a review found under the
+memo bug, and it is the deeper of the two: in an earlier draft `verified` was monotonically true.
+Nothing ever cleared it — tier 1 set `touched` without touching it, `recover()` said in as many
+words that it "leaves `verified` alone" — so a green gate on path P, followed by a further edit to
+P, left the next `move → done` citing P passing route (b) on a green that describes code that no
+longer exists. Worse than the memo bug it hides behind: `NEEDS_GATE` never fires, because the
+evidence is stale-*present* rather than absent, so the gate is never even consulted and no memo
+hash can save it. So:
+
+- When a gate credits a path, the runtime records `files[p].hash` = that path's blob sha
+  (`git hash-object`) at the moment of credit, alongside `verified: true`.
+- **Tier 1 invalidates.** Every turn, before the apply, for each path with `verified: true` the
+  driver re-hashes the file and, if it differs from `files[p].hash` (or the file is gone), passes
+  `verified: false` with `hash` cleared. Deleting the credit is a runtime fact like setting it: it
+  travels in `ctx` and is written in stage 5, so the model can neither set nor preserve it.
+- **`recover()` does the same** (§4.4), instead of leaving `verified` alone.
+
+Two properties follow, and both are worth stating because they are what the rule actually rests on:
+credit is never older than the bytes it describes, and route (b) degrades to *absent* rather than
+*stale* evidence, which is the condition that puts `NEEDS_GATE` back on the path where it belongs.
+
+**`verify` is rewritten from `ctx` every turn, which is how "at the current `rev`" is enforced.**
+An earlier draft said route (a) needed `verify.tested === true` *at the current `rev`*, and a
+review correctly pointed out that a pure core cannot check that: neither `verify` nor
+`files[].verified` carries a rev stamp, so the validator has no way to know which rev set them.
+Rather than stamp every field, stage 5 overwrites `verify` wholesale from `ctx.verify` on every
+turn — present when a gate ran or its content-bound memo hit, **cleared when neither**. `verify`
+therefore always describes this turn, no stamp is needed, and the freshness question moves to the
+memo, where §4.8 already answers it with a tree hash.
 
 **Who runs that gate is not obvious and the review was right to press on it:** in a stateless
 Phase-2a step the harness does not run the seat's tools, so nothing would populate `ctx.verify`
@@ -333,9 +377,11 @@ boundary, after the CLI has exited. So:
   reconstruction from ground truth, not from a journal: on the next `readState` after a turn that
   left a cut marker (`~/.agent-bus/turncut-<agent>-<proj>` — the runner already writes it),
   `store.recover()` sets `files[p].touched` for every path in `git status --short` in the seat
-  worktree, leaves `verified` alone, and appends one `notes` line
-  `recovered: turn <N> was cut; touched paths re-derived from git`. The seat's next observation
-  says so explicitly.
+  worktree, **re-hashes every credited path and clears `verified` wherever the blob sha no longer
+  matches `files[p].hash`** (§4.2 — a cut turn is exactly when a file changed under a credit, so
+  the old "leaves `verified` alone" was the stale-credit hole with a crash in front of it), and
+  appends one `notes` line `recovered: turn <N> was cut; touched paths re-derived from git; <k>
+  stale verifications cleared`. The seat's next observation says so explicitly.
 - The ops journal (`<sidecar>.ops.jsonl`, append-only, one accepted patch per line, capped at 200
   lines) exists for **forensics and replay in tests**, not for recovery. Recovery from a journal
   would need the journal write and the state write to be one atomic act, which they cannot be; the
@@ -357,9 +403,41 @@ The change is additive and small. The handoff record grows one field:
 }
 ```
 
-- **Writer.** `hooks/lib/handoff.mjs` gains `attachState(rec, {project, seat, card})`: reads the
-  sidecar, migrates, validates, attaches. Invalid or missing state attaches `null` and logs; it
-  never blocks a handoff. `summary` keeps being written exactly as it is today.
+- **Writer — and it BUILDS the state, it does not merely read one.** This is the correction a
+  review forced, and the sequencing argument behind it is decisive: nothing writes a `state/`
+  sidecar until the P6 runner applies patches, which is Phase 2a. A Phase-1 writer that only reads
+  a sidecar therefore reads a file that does not exist yet, `rec.state` is `null` on every handoff,
+  and the Phase-1 exit gate ("10 real handoffs carry a schema-valid STATE") cannot go green before
+  the phase after it ships. The accepted PRD §4 already says the record is "built by the Stop-hook
+  path"; an earlier draft of this TDD quietly demoted that to a read. The alternative on offer was
+  to delete the unreachable gate, and that is refused on principle: dropping an accepted
+  requirement because the gate for it is inconvenient is this whole design's failure mode, one
+  level up.
+
+  So `hooks/lib/handoff.mjs` gains `attachState(rec, {project, seat, card})` with two sources, in
+  order:
+
+  1. **Sidecar, when one exists** (Phase 2a and after): read, migrate, validate, attach. Unchanged
+     from the earlier draft, and it becomes the normal path once the runner is live.
+  2. **Derived, when none does** (every Phase-1 handoff): `lib/state/derive.mjs` —
+     `deriveState({project, seat, card, worktree, handoffText})` builds one from ground truth plus
+     the model's own handoff, and returns something the validator accepts or nothing at all.
+     - `card` from the record, `task` from the card title, capped at `CAPS.TASK`.
+     - `files`: `git status --porcelain` + `git diff --name-only HEAD` in the seat worktree →
+       `touched: true`, **`verified: false` always**. A derived state can carry no credit, because
+       no gate ran; this is the same rule as tier 1 (§4.8) and it means a derived state can never
+       satisfy route (a) or route (b) — the successor must re-earn evidence. That is the honest
+       outcome, not a limitation.
+     - `done` / `in_flight` / `next` / `blockers`: from the STATE block the Stop path already asks
+       the model for. It is parsed as a `TurnResult` patch and applied to an empty state through
+       **`applyTurn`**, not through a second bespoke parser — so the write matrix, the caps and the
+       verified-done rule all hold on the handoff path exactly as they do on the runner path, and
+       there is one place where a patch can become state.
+     - If that patch is missing or rejected, the derived state keeps the git-derived `files`, the
+       `task`, and one `notes` line naming the rejection code. It is still schema-valid, which is
+       what the gate measures.
+  Invalid or underivable state attaches `null` and logs; it never blocks a handoff. `summary` keeps
+  being written exactly as it is today, so the prose path is intact underneath either source.
 - **Cap.** `capSummary()` is untouched and still applies to `summary` only. `state` is bounded by
   construction (§3.1), so it needs no cap and cannot be elided. **That is the whole fix**: the
   structured field cannot lose a member because the lossy operation is not applied to it.
@@ -475,6 +553,13 @@ gate and no model cooperation, and it is ground truth rather than testimony. **T
 `verified`.** Touching a file is not evidence that it works, and conflating the two is the exact
 hole the write matrix exists to close.
 
+**Tier 1 does, however, *clear* `verified` — that half is not optional** (§4.2). In the same pass
+it re-hashes every path currently carrying `verified: true` (`git hash-object` over just those
+paths, so the cost scales with credits, not with the tree) and drops the credit wherever the blob
+sha has moved off `files[p].hash`. Setting evidence is a privilege the gate holds; *expiring* it is
+tier 1's job, because tier 1 is the only thing that runs every single turn. Without this half, a
+credited file that the seat then edits keeps its green and route (b) never even reaches the gate.
+
 **Tier 2 — the gate, run lazily, at the `move → done` boundary.** A patch containing a `move …
 to:"done"` whose evidence is absent is not rejected outright. The pure core returns the rejection
 code **`NEEDS_GATE`**, carrying what would satisfy it:
@@ -531,15 +616,21 @@ The retry is now bounded at one *by construction* rather than by assertion: the 
   full suite every time, which is the exact port-collision failure the rule exists to prevent and a
   silent inflation of R10's cost. `coverage` records which one ran: `"scoped:test/state"` or
   `"project"`.
+- *Build source, so `verify.built` has a defined origin*: `TRANTOR_STATE_BUILD` (explicit, per
+  project) → `package.json` `scripts.typecheck` → `scripts.build` → **none**, and none is the
+  common case in this repo. `verify.built` is set only when one of those resolved and ran; with no
+  build command configured the field stays absent, which reads as "not built" and never as "built".
+  An undefined origin here would have let a builder invent one.
 - *What it may write*: `verify.tested = (exit === 0)`, `verify.cmd`, `verify.exit`. `verify.built`
-  only when a build/typecheck command is configured and ran. **`verify.observed` is never set by
+  only when a build/typecheck command resolved above and ran. **`verify.observed` is never set by
   `runGate`** — observation means a human, a drill, or a captured runtime artifact, and a test
   runner is none of those. That keeps the four-block Definition of Done honest instead of letting a
   passing suite quietly claim the fourth block.
-- *Which paths get `verified`*: on `coverage: "project"`, every currently-`touched` path. On
-  `coverage: "scoped:<dir>"`, only touched paths under `<dir>` — a scoped suite is not evidence
-  about files it never loaded. Paths outside both stay `verified: false` and their items keep
-  failing route (b), loudly.
+- *Which paths get `verified`, and with what*: on `coverage: "project"`, every currently-`touched`
+  path. On `coverage: "scoped:<dir>"`, only touched paths under `<dir>` — a scoped suite is not
+  evidence about files it never loaded. Paths outside both stay `verified: false` and their items
+  keep failing route (b), loudly. Every credit is recorded with the path's blob sha in
+  `files[p].hash`, which is what tier 1 later checks the credit against (§4.2).
 - *Timebox*: `GATE_MAX_MS` (default 300 000). A timeout is a red gate, not a missing one.
 
 **Cost control, because a suite per done-move is not free.** Two rules:
@@ -620,7 +711,7 @@ listed separately and are edited by exactly one package each, in phase order.
 | **P1 store** | `lib/state/store.mjs` · `test/state/test-store.mjs` | — |
 | **P2 CLI** | `bin/state.mjs` · `test/state/test-cli.mjs` | `bin/cli.mjs` (one subcommand row) |
 | **P3 promote** | `lib/state/promote.mjs` · `test/state/test-promote.mjs` | — |
-| **P4 handoff** | `test/state/test-handoff-state.mjs` | `hooks/lib/handoff.mjs`, `hooks/sessionstart.mjs`, `bin/write-handoff.mjs` |
+| **P4 handoff** | `lib/state/derive.mjs` · `test/state/test-handoff-state.mjs`, `test-derive.mjs` | `hooks/lib/handoff.mjs`, `hooks/sessionstart.mjs`, `bin/write-handoff.mjs` |
 | **P5 assemble** | `lib/state/assemble.mjs`, `lib/state/cost.mjs` · `test/state/test-assemble.mjs`, `test-cost.mjs` | — |
 | **P5.5 gate** | `lib/state/gate.mjs` · `test/state/test-gate.mjs` | — |
 | **P6 runner** | — | `bin/crew-runner.mjs` (the `claude.next` row + turn-boundary apply) |
@@ -692,6 +783,15 @@ budget, the runner disables `TRANTOR_STATE_ASSEMBLE` for that seat, falls back t
 path, and emits one bus event saying so (once — monitoring doctrine: duration, not repetition).
 A phase gate fails if the breaker trips during the gate run.
 
+**What counts as an invalid patch, and what emphatically does not.** The budget and the breaker
+count *malformed output*: `SCHEMA`, `BAD_ACTION`, `READONLY_FIELD`, `CAP`, `UNKNOWN_FIELD`,
+`UNKNOWN_LIST`, `DUP_ID`, `NO_SUCH_ID` — the seat failed to speak the grammar. They do **not**
+count `UNVERIFIED_DONE` from a red gate, or `NEEDS_GATE`: there the patch was well-formed and the
+*code* was wrong, which is the system working. Counting them would trip the breaker on the
+healthiest possible seat — one writing perfect patches against a failing test — and would drop it
+back to the transcript path precisely when the evidence loop is doing its job. `bin/state-bench.mjs
+--patches` reports the two classes separately for the same reason.
+
 ### 7.4 Per-project `ext` — yes, capped
 Include it. Without an escape hatch, per-project needs (a drill's phase id, a build's artifact
 path) get stuffed into `notes`, which is the one unstructured field and the one we cap hardest.
@@ -736,6 +836,9 @@ Every gate below is a command with an exit code. "The design is done" is not a t
 | no valid patch corrupts state | `test-apply.mjs` | property: 500 generated op sequences over a generated state; after each, the result re-validates against the schema or was rejected. No third outcome — `NEEDS_GATE` is asserted to be a *rejection*, so §4.8 does not weaken this property. |
 | arrays change only by id | `test-apply.mjs` | property: for every accepted patch, the multiset of ids changes only by the ops' declared ids |
 | harness/runtime fields never model-writable | `test-validate.mjs` | table-driven: one case per row of the §2/§4.2 write matrix, each asserting `READONLY_FIELD` — including `files[*].touched`, which is harness-only |
+| a credit expires with the bytes it describes | `test-validate.mjs` | green gate credits path P (`verified:true`, `hash` recorded) → P's content changes → tier 1's ctx clears `verified` → the same `move → done` citing P is now rejected. The negative case is the point: without the clear it passes, which is R12 |
+| working lists reject on overflow, history compacts | `test-caps.mjs` | `done`/`files` overflow into `done_count`/`files_count`; an `add` past `CAPS.LIST` on `in_flight`/`next`/`blockers` returns `CAP` naming the list and drops nothing (§3.1) |
+| a red gate is not an invalid patch | `test-validate.mjs` + `bin/state-bench.mjs --patches` | `UNVERIFIED_DONE`/`NEEDS_GATE` are reported in a separate class from malformed output and never count against the §7.3 budget or the breaker |
 | an unknown field is a named rejection | `test-validate.mjs` | `set` on a field the schema does not define returns `UNKNOWN_FIELD` and creates no key (§4.2 stage 3) |
 | `move→done` without verification rejected | `test-validate.mjs` | both evidence routes (§4.2) pass; with `ctx.gate_attempted` absent, missing evidence returns `NEEDS_GATE` carrying the paths that would satisfy it; **with it present, the same patch returns `UNVERIFIED_DONE` carrying `cmd`/`exit`/tail and never `NEEDS_GATE`** — this is what makes §4.8's one-retry bound a fact rather than a claim |
 | the evidence marker survives capping | `test-caps.mjs` | an item whose text exceeds `CAPS.ITEM` *including* a marker keeps every path in `Item.paths`; a malformed marker is rejected with `CAP`, never trimmed into silence (§3) |
@@ -752,10 +855,11 @@ Plus `node bin/slop-gate.mjs` clean on every changed file — a package does not
 ### Phase 1 (handoff)
 | gate | how |
 |---|---|
-| 10 real handoffs carry a schema-valid STATE, 0 dropped fields | `bin/state-bench.mjs --handoffs 10` reads the last 10 records in `~/.agent-bus/handoffs/`, validates each `rec.state`, and diffs its field set against the sidecar at write time. Exit non-zero on any drop. |
+| 10 real handoffs carry a schema-valid STATE, 0 dropped fields | `bin/state-bench.mjs --handoffs 10` reads the last 10 records in `~/.agent-bus/handoffs/`, validates each `rec.state`, and diffs its field set against the object the writer validated (the sidecar when there was one, else the derived state `deriveState` returned — §4.5, since pre-2a there is no sidecar to diff against). Exit non-zero on any drop, and on any record where `rec.state` is `null` while the seat had a card and a dirty worktree. |
 | mid-turn handoff drill recaps from the object | new `step("S4c · handoff carries WorkingState")` in `bin/drill-surface.mjs`, riding the existing S4 machine: arm → fire → successor claims → assert the injected kickoff contains the state block and the RECAPPED gate still closes |
 | prose path off on one dogfood project | `TRANTOR_STATE_HANDOFF=1` on `trantor`, one week, no regression in the S4 drill |
 | unit | `test/state/test-handoff-state.mjs`: `attachState` on a valid/invalid/missing sidecar; `capSummary` never touches `rec.state` |
+| the derived state is real state, not a stub | `test/state/test-derive.mjs`: with no sidecar, `deriveState` returns a schema-valid object whose `files` match `git status` in a fixture worktree; **every derived path is `verified: false`** and no derived item can move to `done`; a model STATE block goes through `applyTurn` so the write matrix still rejects a self-declared `verified`; a missing or rejected block still yields a valid state carrying the rejection code in `notes` |
 
 ### Phase 2a (assembly) — the honest gate
 1. **Pre-condition, checked first:** the committed baseline artifact from §7.5 exists for the
@@ -774,7 +878,9 @@ Plus `node bin/slop-gate.mjs` clean on every changed file — a package does not
    is not a re-orientation read.
 6. **The evidence pipeline is live, not theoretical** (§4.8): over the dogfood run, assert that at
    least one real gate ran with `verify.cmd` recorded, that every item in `done` has evidence at the
-   `rev` it landed on, and — the negative half, which is the one that matters — inject a failing
+   `rev` it landed on — **items carry no rev, so the bench derives item→rev by replaying the ops
+   journal** (§4.4: one accepted patch per line, in order, each with its `rev`), which is what that
+   journal is for and needs no schema field — and — the negative half, which is the one that matters — inject a failing
    test mid-run and assert the next `move → done` is **rejected** with the failure tail as the
    seat's observation. A run where nothing was ever rejected has not tested the rule.
 7. **Metric 3 — turns per card before a forced cut** (PRD §5, previously ungated). `bin/state-bench.mjs
@@ -804,7 +910,8 @@ Plus `node bin/slop-gate.mjs` clean on every changed file — a package does not
 | R8 | **Scope creep into the merge operator** the moment two seats want shared state. | medium | The ownership row says private working memory; a second consumer is a signal to open the merge PRD, not to widen this one. |
 | R9 | **Sidecar sprawl** in `~/.agent-bus/state/`. | low | `trantor state gc` in P2: sidecars for cards in a terminal status, older than 14 days, are deleted; state is derived and safe to lose. |
 | R10 | **The lazy gate is expensive**: a suite per `done` move could cost more than the tokens saved, and a seat that moves items one at a time pays repeatedly. | medium | One gate per turn, tree-hash memoisation, scoped suites preferred over the project suite (§4.8). `bin/state-bench.mjs --report` prints gate wall-clock alongside cost so the trade is visible rather than assumed; if gate time dominates, the answer is batching done-moves, not weakening the rule. |
-| R11 | **The scoped gate over-credits.** `coverage: "scoped:test/state"` marks touched paths under that dir `verified` on a suite that may not exercise them. | medium | Honest and bounded: scoped credit never extends outside the scope, and the project-wide gate remains available via `TRANTOR_STATE_GATE`. Real coverage mapping is a bigger machine than this phase justifies; the field means "a gate covering this path passed", not "this line ran". Stated here so nobody reads more into it later. |
+| R11 | **The gate over-credits, at both settings.** `coverage: "scoped:test/state"` marks touched paths under that dir `verified` on a suite that may not exercise them — and `coverage: "project"` is the broader case, crediting **every** touched path on one green run. | medium | Honest and bounded rather than solved: credit never extends outside the coverage, and `verified` now expires the moment a credited file changes (§4.2), so over-credit cannot outlive the bytes it was granted on. Real per-line coverage mapping is a bigger machine than this phase justifies; the field means "a gate covering this path passed", not "this line ran". Stated here, for both settings, so nobody reads more into it later. |
+| R12 | **`verified` goes stale silently** — the failure that hid under R11: a credit that outlives the file it describes lets `move → done` pass route (b) without the gate ever being consulted. | **high** — it voids the verified-done rule on the ordinary flow of editing a file twice | Credit is content-bound and expires: `files[p].hash` at credit time, re-hashed and cleared by tier 1 every turn and by `recover()` after a cut (§4.2, §4.4, §4.8). Forced by `test-validate.mjs` and by gate 6's negative half — a run in which nothing was ever rejected fails. |
 
 ---
 
@@ -820,7 +927,7 @@ row are parallel-safe by §5 file ownership.
 | **P1** | `store.mjs`: paths, sanitisation, atomic write, `rev` CAS, `recover()`, ops journal, gc helper | **medium** | P0 |
 | **P2** | `bin/state.mjs` (`show`/`validate`/`reset`/`gc`) + one `case "state":` row in `bin/cli.mjs` | **easy** | P1 |
 | **P3** | `promote.mjs`: delta → one card note, content-hash dedupe, `signedPost` | **medium** | P0 |
-| **P4** | Phase 1 handoff: `attachState`, sessionstart render, flag, suite | **medium** | P1 |
+| **P4** | Phase 1 handoff: `derive.mjs` (the Stop-path state writer, §4.5), `attachState`, sessionstart render, flag, suites | **medium** | P0, P1 |
 | **P5** | `assemble.mjs` (+ prefix invariant test) and `cost.mjs` (envelope + transcript parsers) | **medium** | P0 |
 | **P5.5** | `gate.mjs`: command resolution, scoped vs project coverage, tree-hash memo, timebox, the `NEEDS_GATE` cure contract | **medium** | P0 |
 | **P7** | `bin/state-bench.mjs`: `--baseline`, `--patches`, `--handoffs`, `--run`, `--disturb`, `--report` + the committed baseline artifact | **hard** | P5 |
