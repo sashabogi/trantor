@@ -1,4 +1,16 @@
 /* oxlint-disable anti-slop/no-runtime-typeof, anti-slop/no-conditional-empty-object-spread -- SAFETY: Card wire envelopes and omission semantics are a compatibility contract; this module is a mechanical extraction with unchanged suites. */
+// The three fields that make a card heavy (#6983): its note log, its status history, and its
+// checklist. All three are per-card detail nobody reads off a board — a board shows how many notes
+// a card carries, never their text. Dropping them is what turns a 1.55MB read into 0.26MB.
+const SLIM_DROP = new Set(["log", "history", "checklist"]);
+function slimCard(t) {
+  const out = {};
+  for (const k of Object.keys(t)) if (!SLIM_DROP.has(k)) out[k] = t[k];
+  // Keep the ·N the board renders, so slimming costs a reader nothing visible.
+  out.logCount = Array.isArray(t.log) ? t.log.length : 0;
+  return out;
+}
+
 export async function routeCards({ req, res, q, P, auth, ctx }) {
   const {
     state, body, json, crossProjectGuard, touch, canon, filterReadable,
@@ -361,9 +373,22 @@ export async function routeCards({ req, res, q, P, auth, ctx }) {
       if (t && !canRead(auth, t.project || "")) return json(res, 404, { id: null, task: null });
       return json(res, 200, { id: t ? t.id : null, task: t || null });
     }
+    // #6983 fixes 2+3. /tasks is the hot read — every seat pays it several times a session — and on
+    // trantor it had grown to 1.55MB across 958 cards: 625-961ms against a 1500ms budget, and past
+    // execSync's 1MB pipe. Measured, the weight is not the cards, it is what hangs off them: log
+    // 56.3%, history 11.8%, checklist 4.4%. `fields=slim` drops exactly those three and keeps every
+    // column a reader actually renders (log becomes logCount) — 16.8% of full. `card=<id>` then
+    // re-attaches the ONE card the caller opened, so reading a card costs an index, not the board.
+    // Both are opt-in and additive: a client that sends neither gets the unchanged full payload, so
+    // this does not move the cliff for anyone, and old clients keep working against a new hub.
     if (req.method === "GET" && P === "/tasks") {
       const proj = q.project ? canon(q.project) : ""; const ts = filterReadable(auth, proj ? state.tasks.filter(t => canon(t.project) === proj) : state.tasks, t => t.project || "");
-      return json(res, 200, { tasks: ts });
+      if (String(q.fields || "") !== "slim") return json(res, 200, { tasks: ts });
+      const keep = Number(q.card);
+      const tasks = ts.map(t => (Number.isInteger(keep) && t.id === keep ? t : slimCard(t)));
+      // Echo the projection back. Without it a client cannot tell "hub honored slim" from "old hub
+      // ignored the param and sent everything", and would have to guess from a missing field.
+      return json(res, 200, { tasks, fields: "slim" });
     }
     if (req.method === "GET" && P === "/history") {
       const requestedLimit = Number(q.limit || 200);

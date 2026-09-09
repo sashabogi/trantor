@@ -332,6 +332,10 @@ const STOPWORDS = new Set(["the","a","an","and","or","of","to","in","on","for","
 function titleWords(title) {
   return new Set(String(title || "").toLowerCase().match(/[a-z][a-z0-9_-]{2,}/g)?.filter(w => !STOPWORDS.has(w)) || []);
 }
+// How many notes a card carries, whichever shape the hub sent (#6983). A slim card has been stripped
+// of its log and carries logCount instead; a full card — an older hub, or the one card we asked for
+// in full — still has the log itself. Read both so the ·N is right against any hub version.
+const noteCount = (t) => (Array.isArray(t.log) ? t.log.length : Number(t.logCount) || 0);
 function cardView(tasks, id, proj) {
   const card = tasks.find(t => t.id === id);
   if (!card) return `${proj}: no card #${id}`;
@@ -358,7 +362,7 @@ function cardView(tasks, id, proj) {
     .filter(t => t.status === "done" && t.id !== card.id && [...titleWords(t.title)].some(w => mine.has(w)))
     .sort((a, b) => (b.updated || b.ts || 0) - (a.updated || a.ts || 0))
     .slice(0, 5)
-    .map(t => `#${t.id} ${t.title}${t.log?.length ? ` ·${t.log.length}` : ""}`);
+    .map(t => `#${t.id} ${t.title}${noteCount(t) ? ` ·${noteCount(t)}` : ""}`);
   if (kin.length) out.push(`related done cards:\n  ${kin.join("\n  ")}`);
 
   return out.join("\n");
@@ -369,11 +373,16 @@ server.tool("relay_board", "Show a project's Kanban board (all cards + their sta
     card: z.number().optional().describe("read ONE card instead of the board: the card itself, its notes, and the last five done cards whose title shares a word with it. This is what a seat starting a card should call — the whole board is 1900+ cards of someone else's work.") },
   async ({ project, card }) => {
   const proj = project || PROJECT;
-  const { tasks } = await api("GET", `/tasks?project=${encodeURIComponent(proj)}`);
+  // #6983: ask for the SLIM projection, and when opening one card ask for that card full. The board
+  // needs titles and a note COUNT, never every card's note text — on trantor that was 1.55MB and
+  // 625-961ms against a 1500ms budget, which is why this tool intermittently answered "hub 0" when
+  // the hub was 200 OK and merely slow. An older hub ignores both params and returns the full board,
+  // which still renders — so this asks for cheap and works either way, rather than requiring a deploy.
+  const { tasks } = await api("GET", `/tasks?project=${encodeURIComponent(proj)}&fields=slim${card ? `&card=${encodeURIComponent(card)}` : ""}`);
   if (!tasks.length) return { content: [{ type: "text", text: `${proj}: no cards yet` }] };
   if (card) return { content: [{ type: "text", text: cardView(tasks, card, proj) }] };
   const by = { todo: [], doing: [], testing: [], failed: [], done: [], blocked: [] };
-  for (const t of tasks) (by[t.status] || by.todo).push(`#${t.id} ${t.title}${t.assignee ? ` (@${t.assignee})` : ""}${t.log?.length ? ` ·${t.log.length}` : ""}`);
+  for (const t of tasks) (by[t.status] || by.todo).push(`#${t.id} ${t.title}${t.assignee ? ` (@${t.assignee})` : ""}${noteCount(t) ? ` ·${noteCount(t)}` : ""}`);
   const cols = Object.entries(by).filter(([, v]) => v.length).map(([k, v]) => `${k.toUpperCase()}:\n  ${v.join("\n  ")}`);
   return { content: [{ type: "text", text: `${proj} board\n${cols.join("\n")}` }] };
 });
