@@ -14,6 +14,7 @@ import { fileURLToPath } from "node:url";
 import { resolveProject, hostId, resolveHubInfo, knownProjects, nonSeatReason, handoffDir, readOrchSession, writeOrchSession } from "../lib/project.mjs";
 import { formatSubagentManifest } from "../lib/subagent-manifest.mjs";
 import { updateAvailable, maybeNotifyDesktop, readConfig } from "./lib/update-check.mjs";
+import { renderStateBlock } from "./lib/handoff.mjs";
 import { maybeCheckBalances } from "./lib/balance-check.mjs";
 import { getJSON, signedGet, signedPost, loadIdentity } from "./lib/api.mjs";
 import { ledgerPaths, ensureStart, anchorCursor, writeCursor } from "./lib/inbox-ledger.mjs";
@@ -568,6 +569,15 @@ try {
         additionalContext += `\n`;
       }
       additionalContext += `\n`;
+    }
+    // The structured working state (TDD §4.5), AFTER the recap instruction and above the prose: it
+    // is bounded by the schema's own caps, so unlike the summary it cannot have lost a member to an
+    // elision (#6528). A record without one — every handoff until the flag is on — renders nothing
+    // and the successor sees exactly today's prose handoff.
+    const stateBlock = renderStateBlock(handoff.state);
+    if (stateBlock) {
+      additionalContext += `## Working state (structured, card #${sanitize(String(handoff.state.card || 0))}, turn ${sanitize(String(handoff.state.cursor?.turn ?? 0))})\n`;
+      additionalContext += `${sanitize(stateBlock)}\n\n`;
     }
     additionalContext += `## Handoff summary\n${sanitize(capHandoffSummary(handoff))}\n`;
     if (handoff.gitStatus) additionalContext += `\n## Git working-tree at handoff\n\`\`\`\n${sanitize(handoff.gitStatus)}\n\`\`\`\n`;

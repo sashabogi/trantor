@@ -6,7 +6,7 @@ import { writeFileSync, readFileSync, existsSync, mkdirSync, readdirSync } from 
 import { join, basename } from "node:path";
 import { homedir, hostname } from "node:os";
 import { execSync } from "node:child_process";
-import { spawnBaton, handoffMode, resolveHandoffSurface } from "../hooks/lib/handoff.mjs";
+import { spawnBaton, handoffMode, resolveHandoffSurface, attachState, resolveSeat, resolveHandoffCard } from "../hooks/lib/handoff.mjs";
 import { handoffDir } from "../lib/project.mjs";
 
 const baton = process.argv.includes("--baton");
@@ -63,6 +63,12 @@ if (latest) {
 // carries the same interface the hooks-side records have: transcript_path ("" — the summary IS
 // the model's own words), mode (attended|unattended, #5648).
 const rec = { id: `${name}-${stamp}`, project, projectName: name, machine: hostname(), trigger: baton ? "manual-baton" : "manual-skill", stamp: Number(stamp) || 0, summary: summary.trim() || "(empty)", transcript_path: "", mode: handoffMode(name), gitStatus: git, consumed: false, states: [{ state: "written", ts: Number(stamp) || 0, by: baton ? "manual-baton" : "manual-skill" }] };
+// The structured working state rides beside the prose (TDD §4.5), dark behind
+// TRANTOR_STATE_HANDOFF. The manual path gets it for the same reason the hook path does: this
+// record is what the successor loads, and `summary` here IS the model's own handoff — the richest
+// STATE block there is.
+const seat = resolveSeat(name);
+attachState(rec, { project: name, seat, card: resolveHandoffCard({ projectName: name, seat }), worktree: project });
 const file = join(dir, `${rec.id}.json`);
 writeFileSync(file, JSON.stringify(rec, null, 2));
 console.log(`handoff saved: ${file}`);
