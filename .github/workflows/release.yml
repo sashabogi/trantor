@@ -12,9 +12,10 @@
 # It NEVER fires on a push to main. Two triggers only: a v* tag, or a manual dispatch. So merging
 # this file publishes nothing, and neither does any ordinary commit.
 #
-# SETUP IS DONE. The trusted publisher is live on npmjs.com — sashabogi/trantor, release.yml — with
-# the permission set to "npm stage publish" and direct publish deliberately withheld. So this
-# workflow STAGES a release and a human promotes it with 2FA; see the staging step at the bottom.
+# The trusted publisher is live on npmjs.com — sashabogi/trantor, release.yml. It must grant
+# "npm publish", not only "npm stage publish": the whole point is that a session can ship a gated
+# build with nobody at the keyboard, so a human approval step would defeat it. With stage-only the
+# publish step fails closed, which is the safe direction if the permission is ever narrowed.
 # The stale token in ~/.npmrc is now dead weight and can be deleted.
 
 name: release
@@ -110,6 +111,12 @@ jobs:
           unset HERDR_ENV HERDR_PANE_ID TRANTOR_ORCH TRANTOR_SEAT RELAY_PROJECT TRANTOR_PROJECT RELAY_SESSION RELAY_AGENT
           npm test
 
+      # The gate that stands in for a human looking at the release: every path bin/cli.mjs can spawn
+      # must be in the tarball. cli.mjs resolves subcommands at runtime, so a directory missing from
+      # the `files` allowlist passes every other check and dies on a user's machine.
+      - name: Tarball carries everything the CLI dispatches to
+        run: node test/release/test-package-contents.mjs
+
       - name: Pack and show what would ship
         run: |
           npm pack --dry-run
@@ -120,29 +127,33 @@ jobs:
               console.log(f.filename, f.size+'B', f.entryCount+' entries');
             });"
 
-      # STAGE, do not publish. The trusted publisher for this package grants "npm stage publish"
-      # only — direct publish was deliberately not enabled — so CI submits the version and a human
-      # promotes it with 2FA. `npm publish` is a different code path with no staging fallback, so
-      # calling it here would just fail; and per npm's docs "npm stage publish is always allowed",
-      # which makes this the one command that works whether or not direct publish is ever granted.
+      # PUBLISH DIRECTLY. This was briefly `npm stage publish`, which put a human 2FA approval
+      # between a green build and the registry. The operator's objection is correct and decides it:
+      # an approval you cannot reach is not a control, it is latency — and a button pressed
+      # reflexively from a phone is not review either. The point of this workflow is that a session
+      # can commit, push and ship without anyone at the keyboard.
       #
-      # This is the better arrangement, not a workaround. A session can take a gated build all the
-      # way to the registry's doorstep without ever holding a credential that can make something
-      # public on its own — the bottleneck goes away, the unilateral-publish risk does not appear.
-      - name: Stage the release (trusted, OIDC — no token)
+      # What replaces the human glance is not nothing. It is the gate list above, which runs on
+      # every release and does not get tired: version agreement across both files, tag match,
+      # not-already-published, the whole suite in CI's own environment, and
+      # test/release/test-package-contents.mjs, which asserts every path bin/cli.mjs can spawn is
+      # actually in the tarball. That last one catches the class a human reviewer would also have
+      # missed — cli.mjs resolves subcommands by path at RUNTIME, so a directory dropped from the
+      # `files` allowlist ships green and throws ENOENT on a user's machine.
+      #
+      # REQUIRES the trusted publisher to grant "npm publish", not just "npm stage publish":
+      # npmjs.com → trantor → Settings → Trusted Publisher → Edit. With stage-only it fails closed.
+      - name: Publish (trusted, OIDC — no token)
         if: github.event_name == 'push' || inputs.dry_run == false
-        run: npm stage publish . --provenance --access public
+        run: npm publish --provenance --access public
 
-      - name: How to promote it
+      - name: Published
         if: github.event_name == 'push' || inputs.dry_run == false
         run: |
-          echo "Staged, awaiting a maintainer's 2FA approval. Nothing is public yet."
-          echo "  npm stage list trantor      # find the stage id"
-          echo "  npm stage view <stage-id>   # inspect what would ship"
-          echo "  npm stage approve <stage-id>   # publishes it"
-          echo "  npm stage reject <stage-id>    # discards it"
-          echo "Or approve it on npmjs.com. These need interactive auth and cannot use the OIDC token."
+          V=$(node -p "require('./package.json').version")
+          echo "trantor@$V is live on the registry, with provenance."
+          echo "  npm view trantor version"
 
-      - name: Dry run stopped before staging
+      - name: Dry run stopped before publishing
         if: github.event_name == 'workflow_dispatch' && inputs.dry_run == true
-        run: echo "All gates green. Re-run with dry_run=false, or push a v tag, to stage the release."
+        run: echo "All gates green. Re-run with dry_run=false, or push a v tag, to publish."
