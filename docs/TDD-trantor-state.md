@@ -286,7 +286,11 @@ gate and re-entering `applyTurn` with the evidence (§4.8) — still before any 
    silently created key: an unknown field that is quietly accepted is the write matrix stopping
    being enforceable, because tomorrow's real field arrives as today's typo. (PRD §3.3 wants an
    unmigratable *patch* rejected loudly; §4.3's `MIGRATE_FAILED` answers only for unmigratable
-   *objects*, so this is the patch half of the same rule.) `move … to:"done"` where the item's
+   *objects*, so this is the patch half of the same rule.) `set { field, value }` targeting a
+   **list** is a named rejection — `READONLY_FIELD` with `"<list> changes by add/remove/move only,
+   never by set — arrays change only by id"` — never an accepted no-op: lists change via
+   `add`/`remove`/`move`, and a `set` on one is a model that has misunderstood the grammar, which
+   silently ignoring it would hide from the seat. `move … to:"done"` where the item's
    evidence is absent → `UNVERIFIED_DONE` or `NEEDS_GATE`, per the split in §4.8.
 4. **Apply, in order, on a structural clone.** Any stage-3 failure aborts the whole patch; there is
    no partial application. All-or-nothing is what makes "no valid patch corrupts state" testable.
@@ -342,7 +346,11 @@ answer, and it is a load-bearing part of this design rather than an implementati
 `migrate.mjs` holds `MIGRATIONS = { 2: up2to3, … }`, applied in sequence on read until
 `schema_version` matches `CURRENT`. A field the newer schema does not know is not dropped: it is
 appended to `notes` as `migrated:<path>=<json>` (truncated to fit `CAPS.NOTES`, oldest migrated
-line evicted first). This is #6528 generalised, and it is the single rule that makes the whole
+line evicted first). A **known** key holding a wrong-typed value is treated the same way: it is
+salvaged into `notes` under a `migrated:` line exactly like an unknown key — the field keeps its
+default AND the original value is preserved — never coerced to the field default. Coercion is
+field loss wearing a helpful face, and zero-field-loss means zero. This is #6528 generalised, and
+it is the single rule that makes the whole
 scheme safe to version. An unmigratable object returns `MIGRATE_FAILED` and the store keeps the
 original file untouched under `.v<n>.json` rather than half-upgrading it.
 
