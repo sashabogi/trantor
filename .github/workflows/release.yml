@@ -12,14 +12,10 @@
 # It NEVER fires on a push to main. Two triggers only: a v* tag, or a manual dispatch. So merging
 # this file publishes nothing, and neither does any ordinary commit.
 #
-# ONE-TIME SETUP, on npmjs.com, by the package owner — until this is done the publish step fails
-# closed with "Unable to authenticate", which is the correct behaviour:
-#   npmjs.com → the `trantor` package → Settings → Trusted Publisher → GitHub Actions, with
-#     Organization or user: sashabogi
-#     Repository:           trantor
-#     Workflow filename:    release.yml
-#     Environment:          (leave empty)
-#   Then delete the stale token from ~/.npmrc — with this in place nothing needs it.
+# SETUP IS DONE. The trusted publisher is live on npmjs.com — sashabogi/trantor, release.yml — with
+# the permission set to "npm stage publish" and direct publish deliberately withheld. So this
+# workflow STAGES a release and a human promotes it with 2FA; see the staging step at the bottom.
+# The stale token in ~/.npmrc is now dead weight and can be deleted.
 
 name: release
 
@@ -107,10 +103,29 @@ jobs:
               console.log(f.filename, f.size+'B', f.entryCount+' entries');
             });"
 
-      - name: Publish (trusted, OIDC — no token)
+      # STAGE, do not publish. The trusted publisher for this package grants "npm stage publish"
+      # only — direct publish was deliberately not enabled — so CI submits the version and a human
+      # promotes it with 2FA. `npm publish` is a different code path with no staging fallback, so
+      # calling it here would just fail; and per npm's docs "npm stage publish is always allowed",
+      # which makes this the one command that works whether or not direct publish is ever granted.
+      #
+      # This is the better arrangement, not a workaround. A session can take a gated build all the
+      # way to the registry's doorstep without ever holding a credential that can make something
+      # public on its own — the bottleneck goes away, the unilateral-publish risk does not appear.
+      - name: Stage the release (trusted, OIDC — no token)
         if: github.event_name == 'push' || inputs.dry_run == false
-        run: npm publish --provenance --access public
+        run: npm stage publish . --provenance --access public
 
-      - name: Dry run stopped before publishing
+      - name: How to promote it
+        if: github.event_name == 'push' || inputs.dry_run == false
+        run: |
+          echo "Staged, awaiting a maintainer's 2FA approval. Nothing is public yet."
+          echo "  npm stage list trantor      # find the stage id"
+          echo "  npm stage view <stage-id>   # inspect what would ship"
+          echo "  npm stage approve <stage-id>   # publishes it"
+          echo "  npm stage reject <stage-id>    # discards it"
+          echo "Or approve it on npmjs.com. These need interactive auth and cannot use the OIDC token."
+
+      - name: Dry run stopped before staging
         if: github.event_name == 'workflow_dispatch' && inputs.dry_run == true
-        run: echo "All gates green. Re-run with dry_run=false, or push a v tag, to publish."
+        run: echo "All gates green. Re-run with dry_run=false, or push a v tag, to stage the release."
