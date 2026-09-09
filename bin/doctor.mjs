@@ -3,7 +3,7 @@
 // Checks: runtime, hub, plugin, each CLI (installed? wired? AUTHENTICATED?), API keys,
 // quota profile, optional Scrooge brain. Prints a checklist with copy-paste fixes.
 //   node bin/doctor.mjs
-import { readFileSync, existsSync } from "node:fs";
+import { readFileSync, readdirSync, existsSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { homedir } from "node:os";
 import { execSync } from "node:child_process";
@@ -303,6 +303,66 @@ const prof = read(join(H, ".agent-bus", "profile.json"));
 prof?.providers && Object.keys(prof.providers).length
   ? ok(`quota profile set (${Object.entries(prof.providers).map(([k, v]) => `${k}=${v.plan}`).join(", ")})`)
   : warn("quota profile not set — the Advisor will assume API billing everywhere", `node ${join(ROOT, "bin", "profile.mjs")} set claude=max codex=plus deepseek=api …  (use YOUR real plans)`);
+
+// fleet — is the crew actually OPERATING, not just installed?
+//
+// Added 2026-09-09, because on that morning this command reported nine issues, every one about
+// provider keys and billing attribution, while the duty seat had been holding 48 undelivered
+// messages for 21.9 hours and the orchestrator had slept through a night of finished crew work.
+// Doctor checked whether credentials EXIST. Nothing checked whether the fleet was MOVING. These
+// two signals are both already on disk, written by the runner itself — nobody was reading them.
+section("the fleet (is it actually running?)");
+{
+  const busDir = join(H, ".agent-bus");
+  // 1. Undelivered queues. crew-runner persists pending-<agent>-<project>.json on every failed
+  //    delivery and unlinks it when the queue drains, so a file with an old head means mail is
+  //    stuck for that seat — whatever its process table says.
+  let stuck = 0;
+  const abandonedSeats = [];
+  try {
+    for (const f of readdirSync(busDir).filter(n => n.startsWith("pending-") && n.endsWith(".json"))) {
+      const j = read(join(busDir, f));
+      const held = [...(j?.wake || []), ...(j?.bcast || [])];
+      if (!held.length) continue;
+      const stamps = held.map(m => m?.ts).filter(Number.isFinite);
+      const oldest = stamps.length ? Math.min(...stamps) : j?.ts;
+      const hours = (Date.now() - oldest) / 3.6e6;
+      const seat = f.replace(/^pending-|\.json$/g, "");
+      // Three bands, because one flat warning per stuck queue is its own failure: this machine has
+      // leftovers from projects that ended weeks ago, and a doctor that cries about ten of them
+      // every run teaches you to skim past the one that matters. Under an hour is the retry ladder
+      // doing its job. Over a week is an abandoned seat, worth tidying, not worth alarming about.
+      // The band between is the live stall — the shape of the 2026-09-09 incident.
+      const abandoned = hours >= 24 * 7;
+      if (hours >= 1 && !abandoned) {
+        stuck++;
+        warn(`${seat}: ${held.length} message(s) undelivered, oldest ${hours.toFixed(1)}h old — mail is not moving`,
+          `the runner parks on quota/api failure and only a restart un-parks it: trantor up ${seat.split("-")[0]}   (duty: trantor duty up)`);
+      } else if (abandoned) {
+        abandonedSeats.push(`${seat} (${(hours / 24).toFixed(0)}d)`);
+      } else {
+        note(`${seat}: ${held.length} queued, oldest ${hours.toFixed(1)}h — within the retry ladder`);
+      }
+    }
+    if (abandonedSeats.length) {
+      note(`${abandonedSeats.length} abandoned queue(s) older than a week: ${abandonedSeats.join(", ")} — leftovers from finished work, safe to delete`);
+    }
+    if (!stuck) ok("no live seat is sitting on undelivered mail");
+  } catch { note(`no bus directory at ${busDir} yet — nothing has run`); }
+
+  // 2. Park alerts. notifyOperator appends one line per park, so a park that happened while nobody
+  //    was at the machine is still visible here afterwards — the point of writing it to disk.
+  try {
+    const alerts = readFileSync(join(busDir, "alerts.jsonl"), "utf8").trim().split("\n").filter(Boolean);
+    const recent = alerts.map(l => { try { return JSON.parse(l); } catch { return null; } })
+      .filter(a => a && Date.now() - a.ts < 24 * 3.6e6);
+    if (recent.length) {
+      const last = recent[recent.length - 1];
+      warn(`${recent.length} seat park alert(s) in the last 24h — most recent: ${last.title}`,
+        `read them: tail ~/.agent-bus/alerts.jsonl   — then restart the seat named above`);
+    } else ok("no seat has parked in the last 24h");
+  } catch { ok("no seat has parked in the last 24h"); }
+}
 
 say(issues ? `\n${issues} issue(s) — fix the → lines above, then re-run the doctor.` : "\nAll clear — open a claude session in any project and say: \"fire up the crew\".");
 // Must come BEFORE the exit — process.exit() here truncated the report entirely.
