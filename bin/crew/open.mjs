@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { existsSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { spawn, execSync } from "node:child_process";
 import { call, parseJsonOutput } from "./core.mjs";
 import { createWorkspace, herdrCall, reportAgent, splitPane, workspaceList, workspacePane } from "./herdr.mjs";
 import { dropState, readRows, recordState } from "./state.mjs";
@@ -150,6 +151,25 @@ function hostPane(ctx, chosen, id) {
   return pane;
 }
 
+// #6888: index the project once so its seats' Graft tools (graft_find_code, _trace_calls, …) have a
+// graph to serve. Non-blocking — the pane opens now, the ~7s build lands in the background; a no-op
+// if graft isn't installed or the index already exists (the graph self-refreshes per query after the
+// first build). Keeps the 20MB index out of the project's git.
+function maybeBuildGraft(dir) {
+  if (!dir) return;
+  try { execSync("command -v graft", { stdio: "ignore", shell: "/bin/sh" }); } catch { return; }
+  try {
+    if (existsSync(join(dir, "graft", ".graph"))) return;
+    const gi = join(dir, ".gitignore");
+    try {
+      const cur = existsSync(gi) ? readFileSync(gi, "utf8") : "";
+      if (!/^graft\/?$/m.test(cur)) writeFileSync(gi, cur + (cur && !cur.endsWith("\n") ? "\n" : "") + "graft/\n");
+    } catch {}
+    spawn("graft", ["build", dir], { cwd: dir, stdio: "ignore", detached: true }).unref();
+    console.error("— indexing this project for the seats' Graft tools in the background —");
+  } catch {}
+}
+
 export function openOrchestrator(ctx, args) {
   let parsed;
   try { parsed = parseArgs(args); }
@@ -157,6 +177,7 @@ export function openOrchestrator(ctx, args) {
   if (parsed.help) { usage(); return 0; }
   try {
     Object.assign(ctx, resolveOrchestratorDir(ctx, parsed.project));
+    if (!ctx.dry) maybeBuildGraft(ctx.dir);
     if (!ctx.have.herdr) throw new Error("trantor open needs herdr (the pane host) — install: curl -fsSL https://herdr.dev/install.sh | sh");
     let id = sessionId(ctx);
     if (hasPendingHandoff(ctx)) {

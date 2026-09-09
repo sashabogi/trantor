@@ -24,6 +24,16 @@ if [ -f "$REPO/engine/install.sh" ]; then
     || echo "  (engine install failed — Trantor still works; the Advisor runs without live pricing. Retry: trantor setup)"
   case ":$PATH:" in *":$HOME/.local/bin:"*) ;; *) echo "  note: add ~/.local/bin to your PATH";; esac
 fi
+# Graft — local code-graph MCP tools every seat can call (token-saving retrieval; NanoNets, MIT).
+# Installed here so connect (next) wires it into each CLI; the graph self-refreshes per query and is
+# a no-op where a project has no index (built per project at crew launch). Non-fatal if it fails.
+if ! command -v graft >/dev/null 2>&1; then
+  echo "▸ installing Graft (code-graph MCP tools for the seats)…"
+  npm install -g @nanonets/graft >/dev/null 2>&1 \
+    && echo "✓ Graft installed" \
+    || echo "  (Graft install failed — seats keep working without graft_* tools; retry: npm install -g @nanonets/graft)"
+fi
+
 node "$REPO/bin/connect.mjs"
 echo
 node "$REPO/bin/doctor.mjs" || true
