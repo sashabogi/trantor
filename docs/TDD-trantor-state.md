@@ -503,6 +503,28 @@ strictly better than the transcript path where a seat marks its own work done an
 surfaces a merge later. **This is the mechanism that turns the verified-done rule from a rule into
 a loop**, and it is what closes the live half of R7.
 
+**Why not the other two candidates.** The review offered three; this design took the first two
+*combined* (they are complementary, not alternatives) and rejected the third.
+
+- **Interception alone, with no git tier.** Rejected because `touched` would then only ever be
+  populated at a `done` boundary, so route (b) would have no base to stand on between moves, and
+  §4.4's crashed-turn recovery already has to derive touched paths from `git status` regardless.
+  Tier 1 is therefore free — the code exists for recovery either way — and omitting it would buy
+  nothing.
+- **A lazy gate alone, with no interception.** Rejected as underspecified rather than wrong: "lazy"
+  needs a trigger, and the only honest trigger is the moment the evidence is demanded. That *is*
+  the interception. The two are one mechanism described from two ends.
+- **Deriving evidence from the seat's `stream-json` output.** Rejected on principle and on
+  mechanics. On principle: it would read `verified` off the tool calls *the seat chose to make*,
+  which makes the seat the judge of its own work — the one rule this project does not bend, and the
+  hole the write matrix (§2) exists to close. A seat that runs a suite with no tests, or greps a
+  file and calls it green, would produce identical evidence to one that ran the real gate. On
+  mechanics: it is a parser against an unversioned stream format that shifts between CLI releases
+  (this repo has paid for format staleness before), and it yields nothing at all for the
+  opencode/codex/kimi seats, so a second mechanism would be needed anyway. **What the stream is
+  genuinely good for is kept**: it remains the cost source (§4.6) and may corroborate `touched`,
+  but corroboration is not evidence and never sets `verified`.
+
 **Ordering, added to the §4.1 invariant:** tier 1 before `applyTurn`; `NEEDS_GATE` cure between the
 two `applyTurn` calls; commit after the second. The gate runs *after* the CLI has exited, so a
 killed gate still leaves state whole — the single-apply-point property of §4.4 is preserved.
