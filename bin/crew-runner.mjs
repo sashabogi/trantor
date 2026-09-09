@@ -31,6 +31,11 @@ import {
   auditDutyNudges, claimDutyNudges, claudeTranscriptDir, dutyEscalations, dutyNudgeDirective,
   observedDutyNudgeIds,
 } from "../lib/duty-nudges.mjs";
+import {
+  BREAKER_WINDOW, STATE_ENV, TURN_RESULT_SCHEMA,
+  breakerVerdict, describeTurn, hasJsonSchemaFlag, parseEnvelope, renderCardTail, runStep,
+} from "../lib/state/driver.mjs";
+import { costLine } from "../lib/state/cost.mjs";
 
 const AGENT = process.argv[2];
 const DIR = process.argv[3] || process.cwd();
@@ -289,7 +294,19 @@ const CLI = {
   openrouter: { first: `opencode run --dir {DIR}{M} "$(cat {P})"`,
               next:  `opencode run --dir {DIR} -s {SID}{M} "$(cat {P})"`, mflag: " -m ", pinned: true, env: join(homedir(), ".token-scrooge", ".env") },
   claude:   { first: `claude{M} -p "$(cat {P})" --dangerously-skip-permissions`,
-              next:  `claude -c{M} -p "$(cat {P})" --dangerously-skip-permissions`, mflag: " --model " },
+              next:  `claude -c{M} -p "$(cat {P})" --dangerously-skip-permissions`,
+              // TRANTOR_STATE_ASSEMBLE=1 — Trantor State Phase 2a (TDD §4.6). Note what is GONE:
+              // `-c`. The resumed transcript is the thing this path exists to stop re-sending, so a
+              // state step is a fresh `claude -p` carrying the assembled prefix instead, and
+              // `--json-schema` holds the seat to the TurnResult grammar. Used for the first step
+              // of a card too: with no `-c` it IS the `first` shape, and a first step that returned
+              // no TurnResult would leave the run recorder a hole on turn 1.
+              //
+              // The flag is off by default and nothing above changes, so the transcript path stays
+              // byte-identical — test/state/test-runner-state.mjs asserts that against these very
+              // strings rather than against a reading of this comment.
+              stateNext: `claude{M} -p "$(cat {P})" --dangerously-skip-permissions --output-format json --json-schema "$(cat {S})"`,
+              mflag: " --model " },
   // DeepSeek Harness. Every turn is a FRESH session — headless has no resume yet — so the seat
   // relies on the wake prompt + the board (via the relay tools its profile mounts) rather than
   // conversation memory. `trantor connect` builds the ~/.dsh/profiles/trantor composition: their
@@ -576,6 +593,66 @@ async function reportHealthy() {
   cmuxStatus("ok", "#14b8a6", "check"); herdrAgent("idle");
 }
 
+// ---- Trantor State Phase 2a — the flagged path (TDD §4.1, §4.6, §7.3) -----------------------
+//
+// OFF BY DEFAULT, and off means the transcript path runs unchanged. Three things have to be true
+// before a single byte of this is reachable: the operator set TRANTOR_STATE_ASSEMBLE=1, the seat is
+// `claude` (§7.3 — it is the only row whose CLI can enforce the grammar), and the installed CLI
+// actually carries `--json-schema` (§6 — the minimum version is unconfirmed, so this PROBES rather
+// than assuming; no flag, no state mode, and the runner says so once).
+const STATE_FLAG_ON = process.env[STATE_ENV] === "1";
+const STATE_SCHEMA_FILE = join(homedir(), ".agent-bus", `state-schema-${AGENT}-${PROJ}.json`);
+const STATE_MODE = (() => {
+  if (!STATE_FLAG_ON) return false;
+  if (AGENT !== "claude") { log(`${STATE_ENV}=1 but this seat is '${AGENT}' — state mode is claude-only (TDD §7.3); staying on the transcript path`); return false; }
+  const probe = hasJsonSchemaFlag((bin, args) => spawnSync(bin, args, { encoding: "utf8", timeout: 20000 }));
+  if (!probe) { log(`\x1b[33m${STATE_ENV}=1 but this claude CLI has no --json-schema — state mode stays OFF (TDD §6)\x1b[0m`); return false; }
+  try {
+    mkdirSync(join(homedir(), ".agent-bus"), { recursive: true, mode: 0o700 });
+    writeFileSync(STATE_SCHEMA_FILE, JSON.stringify(TURN_RESULT_SCHEMA), { mode: 0o600 });
+  } catch (e) { log(`\x1b[33mstate mode OFF — could not write ${STATE_SCHEMA_FILE}: ${e.message}\x1b[0m`); return false; }
+  log(`\x1b[36mTrantor State: ASSEMBLE mode ON for this seat (schema ${STATE_SCHEMA_FILE})\x1b[0m`);
+  return true;
+})();
+
+// The PREAMBLE, and it is the whole cost claim in one constant: the bytes before STATE_DELIM must
+// be identical on every step or provider prefix caching never engages and the curve stays O(T).
+// So it is computed ONCE, from things that do not vary per turn — no clock, no turn number, no
+// wake text. Everything that changes rides in the state block, the card log, or the observation.
+const STATE_PREAMBLE = `You are running on Trantor State. Your working memory for this card is the STATE block below — it is carried for you, so you do not have to re-read the conversation or the worktree to know where you are.
+
+Answer with ONE JSON object matching the schema you were given: { "patch": Op[], "action": Action }.
+
+  { "set":    { "field": "task"|"notes"|"ext.<key>", "value": ... } }
+  { "add":    { "list": "done"|"in_flight"|"next"|"blockers", "item": { "id", "text", "paths"? } } }
+  { "remove": { "list": ..., "id": ... } }
+  { "move":   { "id": ..., "from": ..., "to": ... } }
+
+action is exactly one of { "done": true } (the card is finished), { "ask": "<question>" }, or { "continue": true } (you did real work this step and are not finished).
+
+Rules the harness enforces, so that you do not have to guess at them:
+  · verify, files, cursor, rev, card and the counters are HARNESS-WRITTEN. A patch touching them is rejected.
+  · An item may only reach "done" with evidence. Cite the files it rests on inline — "wire the promoter @lib/x.mjs,test/test-x.mjs" — and the harness runs the gate for you. A red gate hands you the failing assertion as your next observation; it does not mark your work done and it does not mark it failed.
+  · Do the actual work with your own tools during this step. The patch describes what you did; it is not a plan.
+
+${RULES}`;
+
+// The card log the state block is read against (§4.1's `tail`). One board read per step, the same
+// call hooks/lib/handoff.mjs already makes.
+async function cardTail(card) {
+  try {
+    const r = await api(`/tasks?project=${encodeURIComponent(PROJ)}`);
+    return renderCardTail(Array.isArray(r?.tasks) ? r.tasks : r, card);
+  } catch { return ""; }
+}
+
+// The patch-outcome ledger the breaker reads back. Kept in memory for this runner AND appended to
+// disk by the driver, because the breaker is a per-seat rolling window and a runner restart should
+// not hand a misbehaving seat a clean slate it did not earn.
+let patchLedger = [];
+let breakerTripped = false;
+let statePromotedHash;
+
 // ---- the time box (#6134) --------------------------------------------------------------------
 // A turn with no ceiling is how a seat spends an afternoon on one card: the 09-02 baseline was 151
 // turns and ~16 agentic hours across the fleet. TRANTOR_TURN_MAX_MS ends the CLI's process group
@@ -602,8 +679,12 @@ let WD_CHILD = null;
 function killWatchdog() { if (WD_CHILD) { try { WD_CHILD.kill("SIGTERM"); } catch {} WD_CHILD = null; } }
 process.on("exit", killWatchdog);
 
-async function runTurn(prompt, isFirst, trigger = "kickoff") {
+// #6969: `opts.state` is the ONLY way this function behaves differently, and it is set from one
+// place (stateTurn). With it unset every line below is the path that shipped before Phase 2a.
+let lastEnvelope = "";
+async function runTurn(prompt, isFirst, trigger = "kickoff", opts = {}) {
   TURN++; banner(trigger);
+  lastEnvelope = "";
   const t0 = Date.now();
   // A fresh session must not resume the old one's id: `first` is chosen by isFirst OR a missing
   // sid, so a stale sid would quietly resume the session this turn exists to leave behind.
@@ -622,8 +703,12 @@ async function runTurn(prompt, isFirst, trigger = "kickoff") {
   // #6154: a pinned seat with no sid yet resumes as FRESH — the guard below fails open, because
   // a resume without an id must fall back to a new session, never to `next`'s bare resume shape.
   let cmd = (isFirst || ((cli.sid || cli.pinned) && !sid)) ? cli.first : cli.next;
+  // The flagged row (TDD §4.6). `{S}` exists only in `stateNext`, so the replaceAll below is a
+  // no-op on every other path — which is what "flag off = byte-identical" has to mean.
+  if (opts.state && cli.stateNext) cmd = cli.stateNext;
   const mfrag = MODEL && cli.mflag ? `${cli.mflag}${MODEL}` : "";
-  cmd = cmd.replaceAll("{M}", mfrag).replaceAll("{P}", pf).replaceAll("{SID}", sid).replaceAll("{DIR}", TURN_DIR);
+  cmd = cmd.replaceAll("{M}", mfrag).replaceAll("{P}", pf).replaceAll("{SID}", sid).replaceAll("{DIR}", TURN_DIR)
+    .replaceAll("{S}", STATE_SCHEMA_FILE);
   // PRECEDENCE, and it is easy to get backwards — this is the second time.
   // Each file is PREPENDED, so the one prepended LAST runs FIRST, and in shell the file that runs
   // LAST wins. To make ~/.agent-bus/.env (the CREW layer) win it must be prepended FIRST, i.e.
@@ -653,7 +738,15 @@ async function runTurn(prompt, isFirst, trigger = "kickoff") {
   // topology is load-bearing (#5481): stdout+stderr must still BOTH land in ERRF, and the sid
   // path still folds stdout in via /dev/stderr → the --tee2 hop below.
   const SCRUB = `node ${join(import.meta.dirname, "..", "lib", "redact.mjs")}`;
-  const inner = cli.sid ? `${cmd} | tee /dev/stderr` : `${cmd} | ${SCRUB} --tee ${ERRF}`;
+  // §4.6 names a real cost of `--output-format json`: the seat's window would print a JSON blob
+  // instead of prose, and the operator watches that window. So on a state step stdout goes to a
+  // file and the runner prints the result line and the cost line itself. stderr still streams to
+  // the window through the process substitution below, unchanged.
+  const ENVF = join(homedir(), ".agent-bus", `envelope-${AGENT}-${PROJ}.json`);
+  if (opts.state) { try { unlinkSync(ENVF); } catch {} }
+  const inner = opts.state
+    ? `${cmd} > ${ENVF}`
+    : (cli.sid ? `${cmd} | tee /dev/stderr` : `${cmd} | ${SCRUB} --tee ${ERRF}`);
   // #5684: runTurn is spawnSync, so the runner cannot watch its own turn — a DETACHED watchdog
   // does. Armed by a stamp file, disarmed when the turn ends (stamp removed below); a turn past
   // the window with no activity (transcript, worktree, or stderr — #6206: stdout silence alone
@@ -784,6 +877,12 @@ exit $turn_exit`;
   let ownOut = "";
   try { ownOut = stripPromptEcho(readFileSync(ERRF, "utf8"), readPromptText(pf)); } catch { ownOut = ""; }
   lastErrText = ownOut.slice(-4000);
+  if (opts.state) {
+    try { lastEnvelope = redactKeys(readFileSync(ENVF, "utf8")); } catch { lastEnvelope = ""; }
+    const env = parseEnvelope(lastEnvelope);
+    if (env.turn) log(`state step: ${describeTurn(env.turn)} · ${costLine(env.cost)}`);
+    else log(`\x1b[33mstate step: no TurnResult — ${env.error}\x1b[0m`);
+  }
   if (cli.sid && r.stdout) { const m = r.stdout.match(cli.sid); if (m) sid = m[1]; }
   // #6154: the opencode family prints no sid on stdout — the id comes from opencode's own DB,
   // keyed by the worktree the session was created in. Fail-open: nothing found leaves sid empty,
@@ -817,7 +916,10 @@ exit $turn_exit`;
   // never fired — the tee topology is the load-bearing fact; keep this comment with it.)
   // The judgment now runs on the ECHO-STRIPPED text (#5868): a CLI that replays the prompt but
   // does no work has still produced nothing of its own.
-  if (realExit === 0 && effExit === 0 && !lastErrText.trim()) {
+  // #6969: on a state step the CLI's whole answer is the envelope, so ERRF holds only stderr and
+  // silence there is the NORMAL shape of a healthy turn. Judging it "empty-output" would park a
+  // working seat on its first clean state step.
+  if (realExit === 0 && effExit === 0 && !lastErrText.trim() && !lastEnvelope.trim()) {
     effExit = 1;
     lastEmptyOutput = true;
     log("\x1b[31mexit 0 but the turn produced NO output — treating as FAILED (empty-output)\x1b[0m");
@@ -827,7 +929,13 @@ exit $turn_exit`;
   const verdict = verdictFor(realExit, effExit, lastEmptyOutput, ownOut);
   // #6134: what the turn COST, from the CLI's own usage line. Zero means this CLI printed none —
   // never that the turn was free. `trantor seat-why` totals these into today's spend per seat.
-  const tokens = parseTurnTokens(ownOut);
+  let tokens = parseTurnTokens(ownOut);
+  if (opts.state && lastEnvelope) {
+    const c = parseEnvelope(lastEnvelope).cost;
+    // 0 means "this CLI printed no usage", never "free" — so only overwrite when the envelope
+    // actually carried counts.
+    if (c) tokens = c.input + c.output + c.cache_read + c.cache_creation;
+  }
   // #6289: every ledger row names in ONE field what happened to the turn — cut (the box ended it),
   // api-error (the CLI failed), completed — and what it cost in tokens, even when this CLI printed
   // no usage line (0 means "not reported", never "free"). `cut` stays too: the drills read it.
@@ -843,13 +951,82 @@ exit $turn_exit`;
   // The follow-up rides the SAME session, so the model still has the turn it was cut out of and
   // only has to land it. Exactly one — a follow-up that runs long is itself boxed, and boxing a
   // boxed turn forever is the loop this card exists to end.
-  if (cut && !inFollowUp) {
+  // A state step gets no prose follow-up: TIME_BOX_PROMPT is not a TurnResult prompt, and feeding
+  // it would break the byte-identical prefix the cost claim rests on. It is also unnecessary —
+  // §4.4 is explicit that a cut turn has never partially applied a patch, so what was lost is the
+  // dead turn's observations, and store.recover() rebuilds those from git on the next readState.
+  // The step is recorded with `cut: true` so §8.7 can still count it.
+  if (cut && !inFollowUp && !opts.state) {
     inFollowUp = true;
     try { return await runTurn(TIME_BOX_PROMPT, false, "time-box follow-up"); }
     finally { inFollowUp = false; }
   }
   return effExit;
 }
+
+// What the NEXT state step opens with when the last one was rejected (§4.8: the seat's next step
+// begins with the actual failing assertion). Cleared on every accepted patch.
+let stateObservation = "";
+
+// ---- Phase 2a: one state step, driven by lib/state/driver.mjs -------------------------------
+//
+// The runner's whole job here is transport and side effects: it hands the driver a way to run the
+// CLI and a way to act on the returned action, and the driver holds the §4.1 order. Returns an
+// exit code so deliverWake's success/failure ladder is untouched.
+async function stateTurn({ card, observation, trigger, assigners = [] }) {
+  const tail = await cardTail(card);
+  const r = await runStep({
+    seat: SESSION, card, project: PROJ, cwd: TURN_DIR,
+    preamble: STATE_PREAMBLE, tail, observation,
+    promoted: statePromotedHash,
+    now: Date.now(),
+    deps: {
+      callCli: async (prompt) => {
+        // isFirst=true every step ON PURPOSE: a state step carries no `-c`, so there is no session
+        // to resume and a stale sid must never be handed to one.
+        const exit = await runTurn(prompt, true, trigger, { state: true });
+        return { exit, stdout: lastEnvelope, cut: lastTurnCut };
+      },
+      executeAction: async (action) => {
+        // `ask` is the one action with an outside effect. State does NOT move cards (§4.7) — the
+        // seat calls relay_task_move itself — so `done` and `continue` are recorded and nothing else.
+        const ask = String(action?.ask ?? "").trim();
+        if (ask) await notifyAssigners(assigners, `❓ ${SESSION} asks on #${card}: ${ask}`);
+      },
+    },
+  });
+
+  statePromotedHash = r.promoted;
+  if (r.patchRecord) patchLedger.push(r.patchRecord);
+
+  // §7.3's breaker: a seat whose rolling MALFORMED rate is over budget goes back to the transcript
+  // path, and the room is told ONCE. Never repeated — a warning repeated every turn is the thing
+  // the monitoring doctrine calls noise, and the condition is a state, not an event.
+  if (!breakerTripped) {
+    const v = breakerVerdict(patchLedger, SESSION, { window: BREAKER_WINDOW });
+    if (v.tripped) {
+      breakerTripped = true;
+      log(`\x1b[31mstate-mode CIRCUIT BREAKER tripped — ${v.message}; falling back to the transcript path\x1b[0m`);
+      await api("/send", {
+        from: SESSION, to: "all", project: PROJ, kind: "status",
+        text: `⚠️ ${SESSION} left Trantor State: ${v.message} (TDD §7.3 breaker) — back on the transcript path`,
+      }).catch(() => {});
+    }
+  }
+
+  if (!r.ok) {
+    // A rejection is NOT a failed turn. The patch was refused, the state is untouched, and the
+    // rejection is the next step's observation — which is the loop working, not the seat dying.
+    // Only the transport's own exit decides the runner's ladder, and a rejected patch on an exit-0
+    // CLI is an exit-0 turn.
+    log(`state step rejected (${r.code}): ${String(r.message).slice(0, 200)}`);
+    stateObservation = r.observation;
+    return r.step && r.step.exit ? r.step.exit : 0;
+  }
+  stateObservation = "";
+  return 0;
+}
+
 
 // ---- main loop ----
 const KICKOFF = process.env.CREW_KICKOFF ||
@@ -1187,7 +1364,19 @@ function askedExcerpt(message) {
     });
     const stopDutyNudgeWatcher = startDutyNudgeWatcher(dutyPlan, tStart);
     let ec;
-    try { ec = await runTurn(prompt, fresh, deliveryFails ? `${trigger} (redelivery)` : trigger); }
+    const stateStep = STATE_MODE && !breakerTripped && card > 0;
+    try {
+      ec = stateStep
+        ? await stateTurn({
+          card, trigger: deliveryFails ? `${trigger} (redelivery)` : trigger, assigners,
+          // The observation is everything that CHANGED since the last step — the wake, the
+          // broadcasts, the redelivery note, and any rejection the last step earned. None of it
+          // may reach the preamble, or the prefix stops being byte-identical and the cache claim
+          // dies quietly (§4.6).
+          observation: [stateObservation, wakeText, ctxText, againText + freshText].filter(Boolean).join("\n"),
+        })
+        : await runTurn(prompt, fresh, deliveryFails ? `${trigger} (redelivery)` : trigger);
+    }
     finally { stopDutyNudgeWatcher(); }
     const secs = Math.round((Date.now() - tStart) / 1000);
     let skippedNudges = [];
