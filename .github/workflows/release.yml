@@ -1,0 +1,116 @@
+# Publish trantor to npm via TRUSTED PUBLISHING (OIDC) — no npm token anywhere.
+#
+# Why this exists. The publish path used to be a long-lived token in the operator's ~/.npmrc, which
+# is a dead end on two counts. It blocked: an agent session that had gated a build could not ship it,
+# because only the human holds the credential — three sessions in a row ended with verified work
+# unpublished. And it expires as a strategy: npm is retiring 2FA-bypass granular tokens, which lose
+# direct publish around January 2027 and are cut back to staged publishes needing human approval
+# (github.blog changelog, 2026-07-08). Trusted publishing replaces the secret with a short-lived
+# OIDC token minted per run, which is why `permissions: id-token: write` below is the whole mechanism
+# and there is no NODE_AUTH_TOKEN in this file.
+#
+# It NEVER fires on a push to main. Two triggers only: a v* tag, or a manual dispatch. So merging
+# this file publishes nothing, and neither does any ordinary commit.
+#
+# ONE-TIME SETUP, on npmjs.com, by the package owner — until this is done the publish step fails
+# closed with "Unable to authenticate", which is the correct behaviour:
+#   npmjs.com → the `trantor` package → Settings → Trusted Publisher → GitHub Actions, with
+#     Organization or user: sashabogi
+#     Repository:           trantor
+#     Workflow filename:    release.yml
+#     Environment:          (leave empty)
+#   Then delete the stale token from ~/.npmrc — with this in place nothing needs it.
+
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Run every gate and stop before publishing"
+        type: boolean
+        default: true
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  id-token: write        # mints the OIDC token npm exchanges for publish rights. Without it, no auth.
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+
+      # Trusted publishing needs npm >= 11.5.1; Node 22 ships older. Pin rather than track latest so
+      # a release cannot change its own toolchain underneath us.
+      - name: Pin npm with OIDC support
+        run: |
+          npm install -g npm@11.19.0
+          npm --version
+
+      - name: Install deps
+        run: npm install --no-audit --no-fund
+
+      # The version lives in TWO files and 0.18.50 shipped with them disagreeing: the release commit
+      # bumped package.json and missed .claude-plugin/plugin.json. That file wins in
+      # hooks/lib/update-check.mjs installedVersion(), so every hook stamped the old version onto peer
+      # rows — and update-check compares installed against the registry, so the release would have
+      # told every user they were already current and no update prompt would ever have fired.
+      # A human caught it once by reading a failing assertion. This makes it impossible to ship again.
+      - name: Versions agree, and match the tag
+        run: |
+          PKG=$(node -p "require('./package.json').version")
+          PLUGIN=$(node -p "require('./.claude-plugin/plugin.json').version")
+          echo "package.json=$PKG  plugin.json=$PLUGIN"
+          if [ "$PKG" != "$PLUGIN" ]; then
+            echo "::error::version skew — package.json $PKG vs .claude-plugin/plugin.json $PLUGIN. Bump both."
+            exit 1
+          fi
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            TAG="${GITHUB_REF_NAME#v}"
+            if [ "$TAG" != "$PKG" ]; then
+              echo "::error::tag v$TAG does not match version $PKG"
+              exit 1
+            fi
+          fi
+          if npm view "trantor@$PKG" version >/dev/null 2>&1; then
+            echo "::error::trantor@$PKG is already published. Bump the version."
+            exit 1
+          fi
+
+      # Never publish unverified work. Same env scrub as ci.yml: the drills must not see a runner
+      # identity, and each step gets a fresh shell, so unset and run in one.
+      - name: Whole suite (npm test)
+        run: |
+          unset HERDR_ENV HERDR_PANE_ID TRANTOR_ORCH TRANTOR_SEAT RELAY_PROJECT TRANTOR_PROJECT RELAY_SESSION RELAY_AGENT
+          npm test
+
+      - name: Pack and show what would ship
+        run: |
+          npm pack --dry-run
+          echo "--- files ---"
+          npm pack --json --dry-run | node -e "
+            let s='';process.stdin.on('data',d=>s+=d).on('end',()=>{
+              const f=JSON.parse(s)[0];
+              console.log(f.filename, f.size+'B', f.entryCount+' entries');
+            });"
+
+      - name: Publish (trusted, OIDC — no token)
+        if: github.event_name == 'push' || inputs.dry_run == false
+        run: npm publish --provenance --access public
+
+      - name: Dry run stopped before publishing
+        if: github.event_name == 'workflow_dispatch' && inputs.dry_run == true
+        run: echo "All gates green. Re-run with dry_run=false, or push a v tag, to publish."
