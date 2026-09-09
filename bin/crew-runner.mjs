@@ -1011,7 +1011,15 @@ function askedExcerpt(message) {
                restored.bcast.filter(isExpiredHubAlert).length;
   let pendingWake = restored.wake.filter(shouldWake);
   let pendingBcast = restored.bcast.filter(m => !isExpiredHubAlert(m) && !isReceipt(m) && !isStatusBroadcast(m));
-  if (shed) log(`\x1b[33mdropped ${shed} expired hub staleness alert(s) older than ${Math.round(HUB_ALERT_TTL_MS / 60000)}m — they describe conditions that have long since changed\x1b[0m`);
+  if (shed) {
+    log(`\x1b[33mdropped ${shed} expired hub staleness alert(s) older than ${Math.round(HUB_ALERT_TTL_MS / 60000)}m — they describe conditions that have long since changed\x1b[0m`);
+    // Write the shed queue back NOW rather than waiting for the next failed delivery to persist it.
+    // Caught live on 2026-09-09: after a restart shed 3 of 4, `trantor duty status` still reported
+    // 4 held, because status reads the FILE and the file was still the pre-shed one. Disk and memory
+    // disagreeing is the whole class of bug this day was about — a health check cannot be honest if
+    // the state it reads is stale.
+    savePending(pendingWake, pendingBcast);
+  }
   let retryAt = 0;            // 0 = deliver at the next opportunity
   let deliveryFails = 0;      // consecutive failed attempts at the SAME pending batch
   if (pendingWake.length) log(`\x1b[33m${pendingWake.length} message(s) survived from a previous run — redelivering\x1b[0m`);
