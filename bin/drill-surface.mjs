@@ -35,6 +35,9 @@ export const CARD_STEPS = {
   6668: { steps: ["S6-handoff"], autoClose: true },
   6317: { steps: ["S6-key-post", "S6-key-throw"], autoClose: false, recipe: "covered by in-app Drill Mode: open a real Workspace with a live terminal pane and exercise key dispatch in the terminal and composer" },
   6667: { steps: ["S4b", "S7"], autoClose: true },
+  // P9 (#6965): the Phase-1 handoff carries a WorkingState and it carries NO credit. Never
+  // auto-closes — with the flag off the step SKIPs, and a skip must not be mistaken for proof.
+  6965: { steps: ["S4c"], autoClose: false, recipe: "set TRANTOR_STATE_HANDOFF=1 on a dogfood card, run `trantor drill`, and read S4c: the carried state must show 0 credited paths" },
   6587: { steps: ["S8"], autoClose: false, recipe: "needs live duty probe: operator removes the trantor/trantor-duty link, DMs the idle orchestrator, and checks for a socket nudge within 3 minutes" },
   6481: { steps: ["S9"], autoClose: true },
   6483: { steps: ["S10"], autoClose: false, recipe: "covered by in-app Drill Mode (#6800): operator checks Accounts with the CLI below the app minimum, then restores the CLI" },
@@ -346,6 +349,50 @@ step("S4 · handoff machine: warn → arm → fire → WRITTEN → successor cla
     }, { timeoutMs: 120_000, everyMs: 2_000 });
     if (recapped) PASS("first Stop recorded RECAPPED and cleared the net", recapped.states.map(s => s.state).join("→"));
     else FAIL("first Stop recorded RECAPPED and cleared the net", stamp() ? "stamp still present" : "no recapped state");
+
+    // ---------- S4c · the handoff carries a WorkingState, and it carries NO CREDIT ----------
+    // Rides S4's machine deliberately: the record above is a REAL handoff, written by the real Stop
+    // path and claimed by a real successor. Everything else about Phase 1 is proven against
+    // fixtures, and today taught us what that gap costs — a defect that survived two review rounds,
+    // five reviewers and 264 assertions was found only when something finally ran the live path.
+    //
+    // The load-bearing assertion is the second one. A derived state carries NO credit, because no
+    // gate ran: every path must be verified:false, so the successor has to re-earn its evidence
+    // before anything moves to done. If that ever came back true, the handoff path would be a
+    // laundering route for unverified work — a hole in the verified-done rule shaped exactly like a
+    // session boundary. P4's unit tests hold the same property (flipping it kills 4 assertions);
+    // this is that property on a real record.
+    //
+    // Flag OFF is the norm today, and then the correct outcome is a SKIP: the state block must be
+    // absent and the prose path untouched. A step that only passes with the feature on would go red
+    // for everyone until it ships, and a red nobody can act on is noise.
+    const carried = (() => {
+      try { return JSON.parse(readFileSync(handoffFile, "utf8")).state ?? null; }
+      catch { return null; }
+    })();
+    if (!carried) {
+      SKIP("S4c · handoff carries WorkingState",
+        "TRANTOR_STATE_HANDOFF is off — no state block on the record, and the prose path is unchanged. Turn the flag on for a dogfood card to exercise this.");
+    } else {
+      // oxlint-disable-next-line anti-slop/no-runtime-typeof -- SAFETY: `carried` is JSON.parse of a handoff record read off disk — an untrusted I/O boundary, and this is its decode. A record written by an older schema, or a truncated write, can put anything in `files`; Object.keys on a non-object would throw and turn a real drill run into a crash rather than a verdict.
+      const files = (carried.files && typeof carried.files === "object") ? carried.files : {};
+      const paths = Object.keys(files);
+      const credited = paths.filter(p => files[p]?.verified === true);
+      if (credited.length === 0) {
+        PASS("S4c · the carried state grants NO credit (every path verified:false)",
+          `${paths.length} path(s), 0 credited`);
+      } else {
+        FAIL("S4c · the carried state grants NO credit (every path verified:false)",
+          `CREDITED: ${credited.join(", ")} — the handoff is laundering unverified work`);
+      }
+      // verify is a harness field; a derived state must not arrive claiming a gate ran either.
+      const v = carried.verify || {};
+      if (v.tested === true) FAIL("S4c · the carried state claims no gate ran", `verify.tested=true cmd=${v.cmd || "?"}`);
+      else PASS("S4c · the carried state claims no gate ran", `verify.tested=${v.tested ?? "absent"}`);
+
+      if (carried.schema_version) PASS("S4c · the carried state is schema-stamped", `v${carried.schema_version}`);
+      else FAIL("S4c · the carried state is schema-stamped", "no schema_version on the record");
+    }
   }
 }
 
