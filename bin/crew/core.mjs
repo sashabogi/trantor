@@ -132,8 +132,21 @@ export function gridColumns(size) {
   return columns;
 }
 
+// Operator flags the RUNNER itself reads, forwarded from whoever launched the seat.
+//
+// The Trantor State flags are read as `process.env` INSIDE crew-runner.mjs, not by the CLI it
+// spawns — so ~/.agent-bus/.env (the crew key layer) cannot set them: that file is applied to the
+// spawned command, one level too deep. Without this list the flags documented in TDD §11 have no
+// supported way to reach a seat at all, which is how Phase 2a came to be "enabled" with a schema
+// file that was never written and a runner still on the transcript path.
+const FORWARDED_ENV = ["TRANTOR_STATE", "TRANTOR_STATE_ASSEMBLE", "TRANTOR_STATE_HANDOFF", "TRANTOR_STATE_GATE"];
+
 export function runnerCommand(ctx, agent, model = "") {
-  return `cd ${shellQuote(ctx.dir)} && CREW_MODEL=${shellQuote(model)} RELAY_PROJECT=${shellQuote(ctx.project)} RELAY_URL=${shellQuote(ctx.hub)} node ${shellQuote(join(ROOT, "bin/crew-runner.mjs"))} ${shellQuote(agent)} ${shellQuote(ctx.dir)}`;
+  const forwarded = FORWARDED_ENV
+    .filter((name) => process.env[name])
+    .map((name) => `${name}=${shellQuote(process.env[name])} `)
+    .join("");
+  return `cd ${shellQuote(ctx.dir)} && ${forwarded}CREW_MODEL=${shellQuote(model)} RELAY_PROJECT=${shellQuote(ctx.project)} RELAY_URL=${shellQuote(ctx.hub)} node ${shellQuote(join(ROOT, "bin/crew-runner.mjs"))} ${shellQuote(agent)} ${shellQuote(ctx.dir)}`;
 }
 
 export function listPids(pattern) {
