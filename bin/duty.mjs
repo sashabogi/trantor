@@ -245,6 +245,14 @@ if (cmd === "up") {
   const env = (() => {
     const e = { RELAY_URL: hub, RUNNER_RULES: RULES, CREW_KICKOFF: KICKOFF,
                 RUNNER_DUTY_NUDGES: "1",
+                // A parked seat waits for `trantor up`. That is right for a CODE seat — burning a
+                // plan re-sending the same contract helps nobody (#6270). It is wrong for DUTY,
+                // which is the seat every other seat's liveness runs through: on 2026-09-09 it
+                // parked on a quota read and sat holding 48 messages for 21.9 hours while the
+                // crew finished a night's work nobody gated. Duty is the one seat under a launchd
+                // keepalive, so it does not need to sit there — it can exit and let the supervisor
+                // bring it back clean, which also re-reads auth. 15 minutes, then hand over.
+                RUNNER_PARK_MAX_MS: "900000",
                 RUNNER_TITLE: "Trantor Duty Agent", RUNNER_ABOUT: ABOUT,
                 // launchd starts jobs with a MINIMAL Path — the resurrected seat could not find
                 // `claude` and every turn died exit 127 "missing-cli" (found live 2026-08-31,

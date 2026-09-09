@@ -469,8 +469,38 @@ async function parkSeat(reason, undelivered, resetHint = 0) {
     if (orch !== SESSION) await api("/send", { from: SESSION, to: orch, text, project: PROJ, kind: "alert" }).catch(() => {});
   }
   log(`\x1b[31mparked (${reason})${when ? ` — retrying after ${when}` : " — no reset time in the output; waiting for a restart"}\x1b[0m`);
+  // The two /send calls above are the whole escalation, and on 2026-09-09 that was not enough:
+  // the DUTY seat parked on a quota read, held 48 messages for 21.9 hours, and announced it over
+  // the very bus that had stopped moving, to an orchestrator that was idle and therefore could not
+  // receive it. The alarm for "the bus is stuck" cannot itself be a bus message. So park also
+  // rings a bell the operator can actually hear, out of band, once per park.
+  notifyOperator(`Trantor: ${SESSION} PARKED (${reason})`,
+    `${undelivered} message(s) held${when ? ` — retrying after ${when}` : ` — needs \`trantor up ${AGENT}\``}`);
   // No reset time means no timer can clear it: hold until the operator restarts the seat.
   return resetAt || Number.MAX_SAFE_INTEGER;
+}
+
+/**
+ * Reach the operator on a channel that does not depend on the bus, the hub, or a live session.
+ * Best-effort and strictly non-fatal: a seat must never die because a notifier is missing.
+ * Silence-able with TRANTOR_NO_DESKTOP_NOTIFY=1 for headless boxes and test runs.
+ */
+function notifyOperator(title, body) {
+  if (process.env.TRANTOR_NO_DESKTOP_NOTIFY === "1") return;
+  try {
+    // Always leave a durable trace first: a notification can be missed or suppressed, a file cannot.
+    // This is what `trantor doctor` reads, so the escalation survives a machine nobody was sitting at.
+    const alertsPath = join(homedir(), ".agent-bus", "alerts.jsonl");
+    appendFileSync(alertsPath, `${JSON.stringify({ ts: Date.now(), session: SESSION, title, body })}\n`);
+  } catch {}
+  try {
+    if (process.platform === "darwin") {
+      // osascript is present on every mac; no dependency to install and nothing to keep running.
+      const esc = (s) => String(s).replace(/["\\]/g, "\\$&");
+      spawnSync("osascript", ["-e", `display notification "${esc(body)}" with title "${esc(title)}"`],
+        { timeout: 5000, stdio: "ignore" });
+    }
+  } catch {}
 }
 
 // The seat's own balance rows, for the #6131 read: a stalled turn that printed nothing on a seat
@@ -1183,6 +1213,21 @@ function askedExcerpt(message) {
       const parkReason = PARKING_REASONS.has(reason) ? reason : (lastTurnCut ? "time-box" : "api-error");
       if (PARKING_REASONS.has(reason) || deliveryFails >= 2) {
         retryAt = await parkSeat(parkReason, pendingWake.length, quotaReset);
+        // A supervised seat does not have to sit parked until someone notices. RUNNER_PARK_MAX_MS
+        // is set only by `trantor duty up`, which runs the seat under a launchd keepalive: past the
+        // ceiling, exit and let the supervisor restart it clean — a fresh process re-reads auth and
+        // redelivers the queue from disk, which is exactly what un-wedged the 2026-09-09 incident
+        // when the operator finally ran `trantor duty up` by hand 21.9 hours late.
+        // Unsupervised seats keep the old behaviour: exiting would just kill them for good.
+        const parkMax = Number(process.env.RUNNER_PARK_MAX_MS || 0);
+        if (parkMax > 0) {
+          const wakeIn = Math.max(0, Math.min(retryAt - Date.now(), parkMax));
+          log(`\x1b[33msupervised seat: exiting in ${Math.round(wakeIn / 1000)}s so the keepalive restarts it clean\x1b[0m`);
+          setTimeout(() => {
+            log("parked past the ceiling — exiting for the keepalive to relaunch");
+            process.exit(0);   // 0, not 1: this is a deliberate hand-off, not a crash
+          }, wakeIn).unref?.();
+        }
         await notifyAssigners(assigners,
           `⛔ your contract is PARKED on ${SESSION} (${parkReason}) — not retrying · asked: "${asked}"`);
         lastTurnAt = Date.now();
