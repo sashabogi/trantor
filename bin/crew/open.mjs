@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
-import { existsSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, openSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { basename, join } from "node:path";
 import { spawn, execSync } from "node:child_process";
 import { call, parseJsonOutput } from "./core.mjs";
 import { createWorkspace, herdrCall, reportAgent, splitPane, workspaceList, workspacePane } from "./herdr.mjs";
@@ -155,7 +156,7 @@ function hostPane(ctx, chosen, id) {
 // graph to serve. Non-blocking — the pane opens now, the ~7s build lands in the background; a no-op
 // if graft isn't installed or the index already exists (the graph self-refreshes per query after the
 // first build). Keeps the 20MB index out of the project's git.
-function maybeBuildGraft(dir) {
+export function maybeBuildGraft(dir) {
   if (!dir) return;
   try { execSync("command -v graft", { stdio: "ignore", shell: "/bin/sh" }); } catch { return; }
   try {
@@ -165,8 +166,21 @@ function maybeBuildGraft(dir) {
       const cur = existsSync(gi) ? readFileSync(gi, "utf8") : "";
       if (!/^graft\/?$/m.test(cur)) writeFileSync(gi, cur + (cur && !cur.endsWith("\n") ? "\n" : "") + "graft/\n");
     } catch {}
-    spawn("graft", ["build", dir], { cwd: dir, stdio: "ignore", detached: true }).unref();
-    console.error("— indexing this project for the seats' Graft tools in the background —");
+    // The build is backgrounded, so we cannot gate the pane on its exit code — but a failure has to
+    // land SOMEWHERE. It used to go to stdio:"ignore", which meant a graft whose native parsers were
+    // never built (npm v12 skips node-gyp by default; see deploy/setup.sh) failed in total silence
+    // while the line below still claimed an index was being built.
+    //
+    // The log goes to the OS temp dir rather than the project: nothing to gitignore, nothing to clean
+    // up, and no exit handler — after unref() the parent usually dies first, so an on-exit cleanup
+    // would be a promise we cannot keep. It is simply overwritten by the next open of this project.
+    const log = join(tmpdir(), `trantor-graft-build-${basename(dir)}.log`);
+    let fd = "ignore";
+    try { fd = openSync(log, "w"); } catch {}
+    const child = spawn("graft", ["build", dir], { cwd: dir, stdio: ["ignore", fd, fd], detached: true });
+    child.on("error", () => {});   // ENOENT/EACCES: the log and the absent index are the evidence
+    child.unref();
+    console.error(`— indexing this project for the seats' Graft tools in the background (failures land in ${log}) —`);
   } catch {}
 }
 
