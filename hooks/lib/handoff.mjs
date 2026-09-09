@@ -18,7 +18,13 @@ import { fileURLToPath } from "node:url";
 import { deriveSubagentManifest } from "../../lib/subagent-manifest.mjs";
 import { signedPost } from "./api.mjs";
 import { loadAutonomy, resolveAutonomy } from "../../lib/autonomy.mjs";
-import { resolveProject, orchSessionsPath } from "../../lib/project.mjs";
+import { resolveProject, orchSessionsPath, hostId } from "../../lib/project.mjs";
+// Trantor State (TDD §4.5). Dark behind TRANTOR_STATE_HANDOFF: these are imported unconditionally
+// because they are pure modules with no side effects at load, and a lazy import would make
+// attachState async on a path that is deliberately synchronous.
+import { statePath, readState } from "../../lib/state/store.mjs";
+import { stateError } from "../../lib/state/schema.mjs";
+import { deriveState } from "../../lib/state/derive.mjs";
 
 // Writer and reader MUST resolve the same directory — see lib/project.mjs busDir(). This used to
 // honour only RELAY_DATA_DIR while the reader honoured neither override.
@@ -448,6 +454,109 @@ export function capSummary(text, cap = 4096) {
   return head + elide + tail;
 }
 
+// ---------------------------------------------------------------------------------------------
+// Trantor State — the structured field on the record (TDD §4.5). `summary` keeps being written
+// exactly as it is today; `state` rides beside it, validated on write and NEVER capped. That is
+// the whole fix for #6528: capSummary's mid-string elision ate the STATE section of the prose, and
+// the structured field cannot lose a member because the lossy operation is not applied to it.
+// ---------------------------------------------------------------------------------------------
+
+/** Dark by default. The prose path is untouched either way; this flag only decides whether the
+ *  structured field is built and rendered (TDD §4.5, "Fallback"). */
+export function stateHandoffEnabled(env = process.env) {
+  return ["1", "true", "on", "yes"].includes(String(env.TRANTOR_STATE_HANDOFF || "").toLowerCase());
+}
+
+/** The bus id of the seat writing this handoff — the same resolution sessionstart.mjs uses, so a
+ *  sidecar written under the runner's seat name is the one this path reads back. */
+export function resolveSeat(projectName, env = process.env) {
+  return env.RELAY_SESSION || (env.RELAY_AGENT ? `${env.RELAY_AGENT}:${projectName}` : `${hostId()}:${projectName}`);
+}
+
+/**
+ * Which card this handoff belongs to. `TRANTOR_CARD` wins — the crew runner knows the answer for
+ * certain and a lookup cannot beat being told. Otherwise ask the hub for this seat's newest open
+ * card, on the same 2s best-effort budget as the verify-gates fetch: a hub that is down costs the
+ * handoff a card number, never the handoff.
+ */
+export function resolveHandoffCard({ projectName, seat, env = process.env } = {}) {
+  const told = Number(env.TRANTOR_CARD);
+  if (Number.isInteger(told) && told > 0) return told;
+  try {
+    const out = execSync(`curl -s --max-time 2 ${JSON.stringify(relayUrl() + "/tasks?project=" + encodeURIComponent(projectName))}`, { encoding: "utf8", timeout: 2500 });
+    const tasks = JSON.parse(out).tasks || [];
+    const mine = tasks
+      .filter(t => t && Number.isInteger(t.id) && t.assignee === seat && ["doing", "testing"].includes(t.status))
+      .sort((a, b) => (a.status === b.status ? (b.updated || b.ts || 0) - (a.updated || a.ts || 0) : a.status === "doing" ? -1 : 1));
+    return mine.length ? mine[0].id : 0;
+  } catch { return 0; }
+}
+
+/**
+ * Attach the structured working state to a handoff record, from two sources in order:
+ *   1. the sidecar, when one exists (Phase 2a and after) — read, migrated, validated;
+ *   2. derived from git + the model's own STATE block, when none does (every Phase-1 handoff).
+ *
+ * Invalid or underivable state attaches `null` and logs. It NEVER blocks a handoff: a session at
+ * the context wall losing its baton because a state object would not validate is a far worse
+ * failure than a successor reading prose, which is exactly what it read before this field existed.
+ * @returns {object|null} the attached state
+ */
+export function attachState(rec, { project, seat, card, worktree, env = process.env } = {}) {
+  if (!stateHandoffEnabled(env)) return null;
+  try {
+    const name = project || rec?.projectName || "";
+    const who = seat || resolveSeat(name, env);
+    const no = Number.isInteger(card) ? card : 0;
+    const cwd = worktree || rec?.project || "";
+
+    let state = null;
+    const sidecar = statePath(who, no, name);
+    if (sidecar && existsSync(sidecar)) {
+      const r = readState(who, no, { project: name, cwd, recover: false });
+      if (!r.ok) throw new Error(`sidecar rejected: ${r.code} at ${r.at} — ${r.message}`);
+      state = r.state;
+    } else {
+      state = deriveState({ project: name, seat: who, card: no, worktree: cwd, handoffText: rec?.summary || "" });
+    }
+
+    const why = state ? stateError(state) : "no state could be derived";
+    if (why) throw new Error(why);
+    rec.state = state;
+    return state;
+  } catch (e) {
+    process.stderr.write(`[trantor] handoff state skipped: ${e?.message || e}\n`);
+    rec.state = null;
+    return null;
+  }
+}
+
+/** The state as the successor reads it: one compact block, bounded by the schema's own caps, with
+ *  the absence of credit stated rather than implied. */
+export function renderStateBlock(state) {
+  const line = (items) => items.map(i => `${i.id} ${i.text}${i.paths?.length ? ` [${i.paths.join(", ")}]` : ""}`).join("; ");
+  const rows = [];
+  if (state?.task) rows.push(`task: ${state.task}`);
+  for (const [list, label] of [["done", "done"], ["in_flight", "in flight"], ["next", "next"], ["blockers", "blockers"]]) {
+    const items = state?.[list] || [];
+    if (!items.length) continue;
+    const more = list === "done" && state.done_count ? ` (+${state.done_count} compacted)` : "";
+    rows.push(`${label} (${items.length}${more}): ${line(items)}`);
+  }
+  const files = state?.files || {};
+  const paths = Object.keys(files);
+  const verified = paths.filter(p => files[p].verified === true);
+  if (paths.length) rows.push(`files: ${paths.length} touched, ${verified.length} verified${verified.length ? ` — ${verified.join(", ")}` : ""}`);
+  const verify = Object.entries(state?.verify || {});
+  if (verify.length) rows.push(`verify: ${verify.map(([k, v]) => `${k}=${v}`).join(" ")}`);
+  if (!rows.length) return "";   // nothing to render is not a block with a warning in it
+  if (!verified.length) {
+    rows.push("NO PATH IS VERIFIED HERE — no gate ran at the handoff. Nothing in this block is evidence: re-earn it before you move anything to done.");
+  }
+  if (state.notes) rows.push(`notes: ${state.notes}`);
+  return rows.join("\n");
+}
+
 // How fresh a model-authored handoff must be before an automatic digest DEFERS to it: 15 minutes.
 // Older than that, the state it describes has likely moved on — compose fresh.
 const FRESH_HANDOFF_SEC = 15 * 60;
@@ -564,6 +673,11 @@ export function writeHandoff({ projectDir, sessionId, transcript, trigger, summa
     // The §5 machine's ledger: every transition appends here via appendHandoffState.
     states: [{ state: "written", ts: Number(stamp) || 0, by: sessionId || "" }],
   };
+  // The structured field (TDD §4.5), dark behind TRANTOR_STATE_HANDOFF. It is attached AFTER the
+  // record is built because it reads `summary` — the model's own STATE block is one of its two
+  // sources — and BEFORE the write, so the field lands in the same file the successor loads.
+  const seat = resolveSeat(projectName);
+  attachState(record, { project: projectName, seat, card: resolveHandoffCard({ projectName, seat }), worktree: projectDir });
   const file = join(HANDOFF_DIR, `${record.id}.json`);
   writeFileSync(file, JSON.stringify(record, null, 2));
   supersedeOlderHandoffs(projectName, record.id);
