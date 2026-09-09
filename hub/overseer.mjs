@@ -36,6 +36,12 @@ function overseerInputs() {
       llm: v.llm || "", model: v.model || "", status: v.status || "",
     })),
     claims: [...fileClaims.values()],
+    // #7029: linked-activity needs an EVENT, and a card held from both sides of a link is one of
+    // the two the hub already has. Only cards in hand travel — the board is 950+ rows and 99% of
+    // them are done, so shipping the open ones keeps this tick as cheap as it was.
+    cards: state.tasks
+      .filter(t => t.status === "doing" || t.status === "testing")
+      .map(t => ({ id: t.id, project: t.project || "", status: t.status, assignee: t.assignee || "", workedBy: t.workedBy || "" })),
     ...overseerPolicy(),
     now: now(),
   };
@@ -160,6 +166,10 @@ function overseerTick() {
       // intro only to newly arrived sessions, and remember them so they are not re-introduced.
       standing.lastTick = t;
       c.since = standing.since;
+      // Every standing kind reports DURATION, not a count — the doctrine's rule, and until #7029 only
+      // same-project obeyed it. "held for 4h" is the line that tells an operator whether a collision
+      // is a moment or a stuck seat; "warned 40 times" tells them only that the watcher is loud.
+      if (_sameProject?.durationLabel) c.detail = `${c.detail || ""} (standing for ${_sameProject.durationLabel(t - standing.since)})`.trim();
       for (const me of parties) if (!standing.sessions.has(me)) intro(c, me, parties);
       for (const me of parties) standing.sessions.add(me);
       continue;

@@ -215,14 +215,15 @@ export async function routeAdmin({ req, res, q, P, auth, ctx }) {
             declaredCrew: declaredCrewFor(c.project),
             now: now(),
           }).reason === "crew-only"));
-        // The record line reports DURATION ("same-project for 6h"), never a count of warnings.
+        // The record line reports DURATION ("standing for 6h"), never a count of warnings. Episode
+        // identity is project+kind+files, exactly as the tick loop keys it, so this view says the
+        // same thing the warning did  for every kind, not just same-project (#7029).
         for (const c of warnings) {
-          if (c.kind !== "same-project-sessions") continue;
-          const ep = overseer.active.get(`${c.project} same-project-sessions`);
-          if (ep) {
-            c.since = ep.since;
-            if (overseer.sameProject?.durationLabel) c.detail = `${c.detail || ""} (same-project for ${overseer.sameProject.durationLabel(now() - ep.since)})`.trim();
-          }
+          const ep = overseer.active.get(`${c.project} ${c.kind}${c.kind === "same-project-sessions" ? "" : ` ${(c.files || []).join(",")}`}`);
+          if (!ep) continue;
+          c.since = ep.since;
+          const label = c.kind === "same-project-sessions" ? "same-project" : "standing";
+          if (overseer.sameProject?.durationLabel) c.detail = `${c.detail || ""} (${label} for ${overseer.sameProject.durationLabel(now() - ep.since)})`.trim();
         }
       } catch {}
       return json(res, 200, { level, links: links.map(l => ({ projects: l.projects, reason: l.reason })), peers: peersOut, inflight, warnings });

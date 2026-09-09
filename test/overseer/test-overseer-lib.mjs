@@ -73,58 +73,154 @@ await test("file-conflict reports live claims by different sessions on the same 
   assert.equal(collisions[0].detail, "codex:alpha, kimi:alpha have live claims on alpha/src/a.ts.");
 });
 
-await test("linked-activity reports one collision for a declared active link", () => {
+// THE NEGATIVE CASE — the reason #7029 exists, and the one the fix is FOR.
+// The old detector warned because two sessions were LIVE on linked projects. On this machine that
+// is the permanent condition (trantor and trantor-duty are declared codependent), so it fired
+// constantly, woke a seat each time, and cost a full turn proving a negative. Presence is a STATE;
+// a warning needs an EVENT. Without this test the whole card is unverified: deleting the
+// `evidence.length === 0` guard leaves every other assertion green.
+await test("co-presence on linked projects with NO overlap is SILENT", () => {
   const collisions = detectCollisions({
     now,
-    peers: [
-      live("b:bravo", "bravo"),
-      live("a:alpha", "alpha"),
-      live("c:charlie", "charlie"),
-      live("stale:delta", "delta", 5 * 60 * 1000 + 1),
+    // Both live, both busy, both on linked projects — exactly the standing condition.
+    peers: [live("a:alpha", "alpha"), live("b:bravo", "bravo")],
+    // Each holds its OWN file. Nothing is contended.
+    claims: [
+      claim("a:alpha", "alpha", "src/mine.ts"),
+      claim("b:bravo", "bravo", "src/theirs.ts"),
     ],
-    links: [
-      { projects: ["delta", "alpha"], reason: "stale side" },
-      { projects: ["charlie", "alpha", "bravo"], reason: "shared release" },
+    links: [{ projects: ["alpha", "bravo"], reason: "shared schema" }],
+  });
+  assert.deepEqual(
+    collisions.filter((c) => c.kind === "linked-activity"), [],
+    "presence alone must never raise linked-activity",
+  );
+});
+
+await test("co-presence with NO claims at all is SILENT", () => {
+  // The barest version: two live sessions on linked projects, touching nothing.
+  const collisions = detectCollisions({
+    now,
+    peers: [live("a:alpha", "alpha"), live("b:bravo", "bravo")],
+    claims: [],
+    links: [{ projects: ["alpha", "bravo"], reason: "shared schema" }],
+  });
+  assert.deepEqual(collisions.filter((c) => c.kind === "linked-activity"), []);
+});
+
+await test("linked-activity fires on one FILE PATH claimed from both sides of the link", () => {
+  const collisions = detectCollisions({
+    now,
+    peers: [live("a:alpha", "alpha"), live("b:bravo", "bravo")],
+    claims: [
+      claim("a:alpha", "alpha", "src/schema.ts"),
+      claim("b:bravo", "bravo", "src/schema.ts"),
+      claim("a:alpha", "alpha", "src/only-mine.ts"),
     ],
+    links: [{ projects: ["alpha", "bravo"], reason: "shared schema" }],
   });
   const linked = collisions.find((c) => c.kind === "linked-activity");
   assert.equal(linked.project, "alpha");
-  assert.deepEqual(linked.sessions, ["a:alpha", "b:bravo", "c:charlie"]);
-  assert.deepEqual(linked.files, []);
-  assert.equal(linked.detail, "Linked projects alpha, bravo, charlie are being worked on at the same time by a:alpha, b:bravo, c:charlie.");
+  assert.deepEqual(linked.sessions, ["a:alpha", "b:bravo"]);
+  assert.deepEqual(linked.files, ["src/schema.ts"]);
+  assert.equal(linked.detail, "Linked projects alpha, bravo are on the same work: src/schema.ts is claimed by a:alpha, b:bravo.");
 });
 
-// Regression (2026-08-12): linked-activity used to fire on mere PRESENCE, so two linked projects
-// with idle-but-online sessions warned every dedup window forever — 468 identical events in 8 days.
-// A link is DECLARED; restating it is not a collision. Only CONCURRENT WORK counts: a peer inside
-// the 90s work window, or a fresh file claim.
-await test("linked-activity ignores linked projects whose sessions are merely online, not working", () => {
-  const idle = (session, project) => live(session, project, 3 * 60 * 1000);   // online (<5m), not working (>90s)
+await test("linked-activity fires on one CARD held by live sessions from both sides", () => {
   const collisions = detectCollisions({
     now,
-    peers: [idle("a:alpha", "alpha"), idle("b:bravo", "bravo")],
+    peers: [live("a:alpha", "alpha"), live("b:bravo", "bravo")],
+    cards: [
+      { id: 7029, project: "alpha", status: "doing", assignee: "a:alpha", workedBy: "b:bravo" },
+      { id: 7030, project: "alpha", status: "doing", assignee: "a:alpha", workedBy: "a:alpha" },
+    ],
+    links: [{ projects: ["alpha", "bravo"], reason: "codependent" }],
+  });
+  const linked = collisions.find((c) => c.kind === "linked-activity");
+  assert.deepEqual(linked.sessions, ["a:alpha", "b:bravo"]);
+  assert.deepEqual(linked.files, []);
+  assert.equal(linked.detail, "Linked projects alpha, bravo are on the same work: card #7029 is held by a:alpha, b:bravo.");
+});
+
+// Regression (#7029, 2026-09-09): the warning fired because two sessions were LIVE on linked
+// projects — a STATE, and on a machine with a declared codependence the PERMANENT state. It woke a
+// seat, which spent a full turn proving nothing overlapped. Presence is not evidence; an event is.
+await test("linked-activity stays silent when both sides work but nothing is shared", () => {
+  const collisions = detectCollisions({
+    now,
+    peers: [live("a:alpha", "alpha"), live("b:bravo", "bravo")],
+    claims: [claim("a:alpha", "alpha", "src/a.ts"), claim("b:bravo", "bravo", "src/b.ts")],
+    cards: [
+      { id: 1, project: "alpha", status: "doing", assignee: "a:alpha", workedBy: "a:alpha" },
+      { id: 2, project: "bravo", status: "testing", assignee: "b:bravo", workedBy: "b:bravo" },
+    ],
+    links: [{ projects: ["alpha", "bravo"], reason: "codependent" }],
+  });
+  assert.equal(collisions.find((c) => c.kind === "linked-activity"), undefined);
+});
+
+await test("linked-activity ignores linked projects whose sessions are merely online", () => {
+  const collisions = detectCollisions({
+    now,
+    peers: [live("a:alpha", "alpha"), live("b:bravo", "bravo")],
     links: [{ projects: ["alpha", "bravo"], reason: "shared schema" }],
   });
   assert.equal(collisions.find((c) => c.kind === "linked-activity"), undefined);
 });
 
-await test("linked-activity fires when a linked project's work is proven by a fresh file claim", () => {
+await test("linked-activity ignores queued cards, dead holders, and one-sided evidence", () => {
+  const linkedOf = (input) => detectCollisions({
+    now,
+    peers: [live("a:alpha", "alpha"), live("b:bravo", "bravo")],
+    links: [{ projects: ["alpha", "bravo"] }],
+    ...input,
+  }).find((c) => c.kind === "linked-activity");
+  // a card nobody has picked up yet is not held
+  assert.equal(linkedOf({ cards: [{ id: 9, project: "alpha", status: "todo", assignee: "a:alpha", workedBy: "b:bravo" }] }), undefined);
+  // a finished card is nobody's hands
+  assert.equal(linkedOf({ cards: [{ id: 9, project: "alpha", status: "done", assignee: "a:alpha", workedBy: "b:bravo" }] }), undefined);
+  // the second holder went home — one live session is not a collision
+  assert.equal(linkedOf({ cards: [{ id: 9, project: "alpha", status: "doing", assignee: "a:alpha", workedBy: "gone:bravo" }] }), undefined);
+  // both holders live but in the SAME project: an orchestrator filing and a seat working is the
+  // normal shape of a card, not a cross-project collision
+  assert.equal(detectCollisions({
+    now,
+    peers: [live("orch:alpha", "alpha"), live("seat:alpha", "alpha"), live("b:bravo", "bravo")],
+    cards: [{ id: 9, project: "alpha", status: "doing", assignee: "orch:alpha", workedBy: "seat:alpha" }],
+    links: [{ projects: ["alpha", "bravo"] }],
+  }).find((c) => c.kind === "linked-activity"), undefined);
+  // a stale claim on one side leaves the path claimed by one live session only
+  assert.equal(linkedOf({ claims: [claim("a:alpha", "alpha", "s.ts"), claim("b:bravo", "bravo", "s.ts", 10 * 60 * 1000 + 1)] }), undefined);
+  // a path claimed twice from ONE side of the link is a file-conflict, not a linked-activity
+  assert.equal(linkedOf({ claims: [claim("a:alpha", "alpha", "s.ts"), claim("a2:alpha", "alpha", "s.ts")] }), undefined);
+});
+
+await test("linked-activity reports one collision per link, evidence and all", () => {
   const collisions = detectCollisions({
     now,
-    peers: [live("a:alpha", "alpha"), live("b:bravo", "bravo", 3 * 60 * 1000)],
-    claims: [{ project: "bravo", file: "src/schema.ts", session: "b:bravo", ts: now - 1000 }],
-    links: [{ projects: ["alpha", "bravo"], reason: "shared schema" }],
+    peers: [live("a:alpha", "alpha"), live("b:bravo", "bravo"), live("c:charlie", "charlie")],
+    claims: [
+      claim("a:alpha", "alpha", "z.ts"),
+      claim("b:bravo", "bravo", "z.ts"),
+      claim("c:charlie", "charlie", "y.ts"),
+      claim("a:alpha", "alpha", "y.ts"),
+    ],
+    cards: [{ id: 42, project: "alpha", status: "testing", assignee: "a:alpha", workedBy: "b:bravo" }],
+    links: [{ projects: ["charlie", "alpha", "bravo"], reason: "shared release" }],
   });
-  const linked = collisions.find((c) => c.kind === "linked-activity");
-  assert.ok(linked, "a fresh claim proves work even when the heartbeat is older than the work window");
-  assert.deepEqual(linked.sessions, ["a:alpha", "b:bravo"]);
+  const linked = collisions.filter((c) => c.kind === "linked-activity");
+  assert.equal(linked.length, 1);
+  assert.deepEqual(linked[0].files, ["y.ts", "z.ts"]);
+  assert.deepEqual(linked[0].sessions, ["a:alpha", "b:bravo", "c:charlie"]);
+  assert.equal(linked[0].detail,
+    "Linked projects alpha, bravo, charlie are on the same work: y.ts is claimed by a:alpha, c:charlie; z.ts is claimed by a:alpha, b:bravo; card #42 is held by a:alpha, b:bravo.");
 });
 
 await test("deduplicates duplicate peers, claims, and links", () => {
   const input = {
     now,
     peers: [live("a:p", "p"), live("a:p", "p"), live("b:p", "p")],
-    claims: [claim("a:p", "p", "x.js"), claim("a:p", "p", "x.js"), claim("b:p", "p", "x.js")],
+    claims: [claim("a:p", "p", "x.js"), claim("a:p", "p", "x.js"), claim("b:p", "p", "x.js"), claim("q:q", "q", "x.js")],
     links: [
       { projects: ["p", "q"] },
       { projects: ["q", "p", "p"] },
@@ -151,13 +247,14 @@ await test("orders by project, kind, first file, then first session", () => {
       claim("y:zeta", "zeta", "b.ts"),
       claim("x:alpha", "alpha", "a.ts"),
       claim("y:alpha", "alpha", "a.ts"),
+      claim("m:beta", "beta", "b.ts"),
     ],
     links: [{ projects: ["beta", "zeta"] }],
   });
   assert.deepEqual(collisions.map((c) => `${c.project}:${c.kind}:${c.files[0] ?? ""}:${c.sessions[0]}`), [
     "alpha:file-conflict:a.ts:x:alpha",
     "alpha:same-project-sessions::a:alpha",
-    "beta:linked-activity::a:zeta",
+    "beta:linked-activity:b.ts:m:beta",
     "zeta:file-conflict:b.ts:x:zeta",
     "zeta:same-project-sessions::a:zeta",
   ]);
