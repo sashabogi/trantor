@@ -16,7 +16,7 @@ import { mkdtempSync, writeFileSync, readFileSync, chmodSync, mkdirSync } from "
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { drillEnv } from "../drill-env.mjs";
-import { cardRef, carriesWork, parseTurnTokens, parseResetAt, quotaSpent, reasonWithBalances, quotaResetAt, isLinkedProject, senderProjectOf } from "../../lib/turn-policy.mjs";
+import { cardRef, cardRefs, assignedCardRef, wakeCard, carriesWork, parseTurnTokens, parseResetAt, quotaSpent, reasonWithBalances, quotaResetAt, isLinkedProject, senderProjectOf } from "../../lib/turn-policy.mjs";
 
 let pass = 0, fail = 0;
 const ok = (name, cond, extra) => { console.log(`  ${cond ? "PASS" : "FAIL"}  ${name}${cond || !extra ? "" : `\n          ${extra}`}`); cond ? pass++ : fail++; };
@@ -34,6 +34,62 @@ console.log("\n## the rules");
   ok("an imperative alone is work", carriesWork("resume where you left off"));
   ok("an ack is NOT work", !carriesWork("thanks, acknowledged"));
   ok("a queue note is NOT work", !carriesWork("noted, I will queue that behind the current one"));
+
+  // ---- #7061: which card a wake BINDS to ------------------------------------------------------
+  // The live failure, verbatim in shape: the order opened with what shipped since the seat's last
+  // turn and named the real card in its second sentence. `cardRef` bound the turn to the DONE
+  // card, so the state sidecar, the card log and the run record were all written against #7037.
+  const realOrder = "#7037 is merged as a01f629 and pushed. YOUR CARD: #6983, fixes 2 and 3.";
+  ok("#7061: the pre-fix reading is the bug — first id in the text is the DONE card",
+    cardRef(realOrder) === 7037);
+  ok("#7061: binding by SHAPE picks the card the order ASSIGNS",
+    wakeCard([{ to: "claude:t", id: 1, text: realOrder }], { session: "claude:t" }) === 6983,
+    `got ${wakeCard([{ to: "claude:t", id: 1, text: realOrder }], { session: "claude:t" })}`);
+
+  ok("an assignment label binds: YOUR CARD", assignedCardRef("shipped #1 · YOUR CARD: #6983") === 6983);
+  ok("an assignment verb binds: take", assignedCardRef("#7037 merged. Contract: take #7061, it is yours.") === 7061);
+  ok("an assignment verb binds through 'card'", assignedCardRef("Work order: take card #6897 (easy)") === 6897);
+  ok("a bounce binds", assignedCardRef("#7002 is bounced: the gate is red") === 7002);
+  ok("plain prose about a card assigns NOTHING", assignedCardRef("your 40593e5 for #6983 is merged and deployed") === 0);
+  ok("a forward-looking mention does not steal the binding",
+    assignedCardRef("take #7061 now; #7060 is next after this one") === 7061);
+
+  ok("cardRefs lists every citation in order", JSON.stringify(cardRefs("#7037 done, take #6983, then #7060")) === "[7037,6983,7060]");
+
+  // The batch axis: a direct contract outranks an @mention, and the NEWEST order wins.
+  const batch = [
+    { id: 4, to: "claude:t", text: "FYI #7037 is merged as a01f629" },
+    { id: 9, to: "claude:t", text: "Contract: take #7061, the wrong-card binding you found" },
+  ];
+  ok("#7061: the newest ASSIGNMENT in the batch wins, not the oldest message",
+    wakeCard(batch, { session: "claude:t" }) === 7061, `got ${wakeCard(batch, { session: "claude:t" })}`);
+  // The @mention is the NEWER message here on purpose: only the direct-message preference can pick
+  // #7061, so this assertion dies if that rule is dropped (it survived a mutation that did).
+  ok("#7061: a direct contract outranks a LATER @mention citing another card",
+    wakeCard([
+      { id: 3, to: "claude:t", text: "YOUR CARD: #7061" },
+      { id: 8, to: "all", text: "@claude take #7099 when free" },
+    ], { session: "claude:t" }) === 7061,
+    `got ${wakeCard([{ id: 3, to: "claude:t", text: "YOUR CARD: #7061" }, { id: 8, to: "all", text: "@claude take #7099 when free" }], { session: "claude:t" })}`);
+  ok("#7061: two real orders in one batch -> the LATER one wins",
+    wakeCard([
+      { id: 4, to: "claude:t", text: "take #6983" },
+      { id: 9, to: "claude:t", text: "change of plan, take #7061 instead" },
+    ], { session: "claude:t" }) === 7061);
+  ok("#7061: out-of-order ids still resolve newest-last",
+    wakeCard([
+      { id: 9, to: "claude:t", text: "take #7061" },
+      { id: 4, to: "claude:t", text: "take #6983" },
+    ], { session: "claude:t" }) === 7061);
+  // The fallback is deliberately the OLD reading, narrowed to one message: nothing regresses to 0.
+  ok("#7061: no assignment shape anywhere -> the newest message's first citation",
+    wakeCard([
+      { id: 1, to: "claude:t", text: "#111 and #222 are both interesting" },
+      { id: 2, to: "claude:t", text: "anyway #333 then #444" },
+    ], { session: "claude:t" }) === 333);
+  ok("#7061: a wake citing no card at all still binds to nothing",
+    wakeCard([{ id: 1, to: "claude:t", text: "resume where you left off" }], { session: "claude:t" }) === 0);
+  ok("#7061: an empty batch binds to nothing", wakeCard([], { session: "claude:t" }) === 0);
 
   ok("codex's usage line is read", parseTurnTokens("thinking...\ntokens used: 12,345\ndone") === 12345);
   ok("the LAST running total wins", parseTurnTokens("tokens used 100\ntokens used 4,200") === 4200);
@@ -197,6 +253,34 @@ console.log("\n## one session per card");
   ok("two wakes citing the SAME card are one session, not two",
     second.wakeTurns.length === 1 && second.fresh.length === 1,
     `wakes=${second.wakeTurns.length} fresh=${second.fresh.length}`);
+}
+
+// ---- drill 2b: the wake binds to the card it ASSIGNS, live through the real runner (#7061) ----
+console.log("\n## the bound card is the assigned one");
+{
+  // The shape that broke it on 2026-09-09: the order opens with the card that just MERGED. The
+  // runner is the only thing that writes the FRESH SESSION line, so the line is proof of what the
+  // machine believed — the same proof the card's own forensics rested on.
+  const r = await drill([
+    { text: "#7037 is merged as a01f629 and pushed. YOUR CARD: #6983, fixes 2 and 3." },
+  ], { waitMs: 5000 });
+  ok("#7061: the turn is bound to the ASSIGNED card, not the merged one",
+    r.wakeTurns[0]?.includes("FRESH SESSION for card #6983"), r.wakeTurns[0]?.slice(0, 400));
+  ok("#7061: and the done card is NOT what the seat is sent to read",
+    !r.wakeTurns[0]?.includes("relay_board with card:7037"), r.wakeTurns[0]?.slice(0, 400));
+}
+{
+  // Same card twice in one batch, with an unrelated id in the chatter: the session must not be
+  // torn down and rebuilt on a card nobody assigned, and the seat is told which one it is on.
+  const r = await drill([
+    { text: "contract: card #7040, build the thing" },
+    { text: "note: #7041 is merged, unrelated to yours — carry on with #7040" },
+  ], { waitMs: 5000 });
+  ok("#7061: one batch, one session — the mentioned card does not buy a second one",
+    r.wakeTurns.length === 1 && r.fresh.length === 1,
+    `wakes=${r.wakeTurns.length} fresh=${r.fresh.length}`);
+  ok("#7061: bound to the contract's card", r.wakeTurns[0]?.includes("FRESH SESSION for card #7040"),
+    r.wakeTurns[0]?.slice(0, 400));
 }
 
 // ---- drill 3: a wake from another project is dropped, never worked (#6228) --------------------

@@ -24,7 +24,7 @@ import {
 } from "../lib/classify-failure.mjs";
 import { capWake, capBcast, pickLessons, composePrompt } from "./crew-payload.mjs";
 import {
-  cardRef, carriesWork, parseTurnTokens, parseResetAt, reasonWithBalances, quotaResetAt, PARKING_REASONS,
+  cardRefs, wakeCard, carriesWork, parseTurnTokens, parseResetAt, reasonWithBalances, quotaResetAt, PARKING_REASONS,
   senderProjectOf, isLinkedProject,
 } from "../lib/turn-policy.mjs";
 import {
@@ -1362,12 +1362,20 @@ function askedExcerpt(message) {
     // into every later turn — qwen's 85.7M tokens were 96.7% cached, i.e. replayed history. The
     // card that moved this wake decides: a different one starts a fresh CLI session, and the seat
     // is told so, because a fresh session remembers nothing and must be sent to its card.
-    const card = wakeForTurn.map(m => cardRef(m.text)).find(Boolean) || 0;
+    // #7061: bound by SHAPE, not by position. `cardRef` alone took the earliest id in the wake
+    // TEXT, and an order that opens with what shipped ("#7037 is merged as a01f629 … YOUR CARD:
+    // #6983") binds the turn — its state sidecar, its card log, its run record — to a done card.
+    const card = wakeCard(wakeForTurn, { session: SESSION });
     const fresh = card > 0 && card !== sessionCard;
     if (card) sessionCard = card;
+    const cited = [...new Set(wakeForTurn.flatMap(m => cardRefs(m.text)))];
     const freshText = fresh
       ? `\n(FRESH SESSION for card #${card} — you are not the session that worked earlier cards and you remember none of them. Read your card first: relay_board with card:${card}.)\n`
-      : "";
+      // A wake naming several cards used to leave the seat guessing which one the machine believed
+      // — the prompt named two and committed to neither. Say it, even when the session continues.
+      : (card && cited.length > 1
+        ? `\n(This turn is card #${card} — the wake cites ${cited.length} cards; the rest are context.)\n`
+        : "");
     const prompt = composedTurn({
       wakeText, ctxText, againText: againText + freshText + dutyNudgeDirective(dutyPlan),
       tailText: "\nAct on what's addressed to you, then end your turn.\n\n",
