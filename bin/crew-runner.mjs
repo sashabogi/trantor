@@ -917,7 +917,24 @@ function isRunnerSession(session) {
   return /^[a-z0-9_.-]+$/.test(label) && !label.startsWith("hub:");
 }
 
+// A hub staleness alert describes a condition that was true for a moment: "#16909 has been
+// UNDELIVERED for 2m — go nudge someone". Acting on it 22 hours later is meaningless, and the queue
+// had no expiry, so on 2026-09-09 the duty seat's backlog became SELF-POISONING: the hub kept
+// noticing undelivered mail and sending more alerts, duty could not work them off, and a restart
+// faithfully redelivered 49 dead nudges and re-wedged the seat. 46 of those 49 were hub alerts, the
+// oldest 22.1 hours old, every one describing a two-minute condition.
+//
+// So these EXPIRE. Deliberately narrow: only messages the HUB generated about staleness, never a
+// message from a peer. A real contract is never dropped for being old — a seat that misses a
+// teammate's request is the failure this bus exists to prevent, and no backlog is worth causing it.
+const HUB_ALERT_TTL_MS = Number(process.env.TRANTOR_HUB_ALERT_TTL_MS || 30 * 60_000);
+const isExpiredHubAlert = (m) =>
+  m?.from === "hub:duty" &&
+  Number.isFinite(m?.ts) &&
+  Date.now() - m.ts > HUB_ALERT_TTL_MS;
+
 function shouldWake(message) {
+  if (isExpiredHubAlert(message)) return false;
   if (isReceipt(message) || isStatusBroadcast(message)) return false;
   // #6134: the SENDER decides. `wake:false` says "this is context, not a contract" — it batches
   // into the next turn's prompt like a broadcast and never buys a CLI session of its own.
@@ -987,8 +1004,14 @@ function askedExcerpt(message) {
   // broadcasts batched behind them. Restored from disk first: a runner that was killed mid-turn
   // (or a machine that rebooted) still owes those messages, and the hub will never send them again.
   const restored = loadPending();
+  // Say what the restore SHED, not just what it kept. A queue that quietly halves itself on restart
+  // is indistinguishable from one that lost real work, and this is the moment the expiry above
+  // actually bites — a wedged seat comes back carrying only what still means something.
+  const shed = restored.wake.filter(isExpiredHubAlert).length +
+               restored.bcast.filter(isExpiredHubAlert).length;
   let pendingWake = restored.wake.filter(shouldWake);
-  let pendingBcast = restored.bcast.filter(m => !isReceipt(m) && !isStatusBroadcast(m));
+  let pendingBcast = restored.bcast.filter(m => !isExpiredHubAlert(m) && !isReceipt(m) && !isStatusBroadcast(m));
+  if (shed) log(`\x1b[33mdropped ${shed} expired hub staleness alert(s) older than ${Math.round(HUB_ALERT_TTL_MS / 60000)}m — they describe conditions that have long since changed\x1b[0m`);
   let retryAt = 0;            // 0 = deliver at the next opportunity
   let deliveryFails = 0;      // consecutive failed attempts at the SAME pending batch
   if (pendingWake.length) log(`\x1b[33m${pendingWake.length} message(s) survived from a previous run — redelivering\x1b[0m`);
