@@ -33,6 +33,7 @@ const write = (p, s) => { mkdirSync(dirname(p), { recursive: true }); writeFileS
 /** A real git repo with this repo's shape: lib/state/, test/state/ + a stub runner, scripts.test. */
 function tempRepo({ slop = null } = {}) {
   const dir = mkdtempSync(join(FIXTURES, "repo-"));
+  git(["init", "-q", "-b", "main"], dir);
   write(join(dir, ".gitignore"), ".agent-bus-out/\n");
   write(join(dir, "package.json"), JSON.stringify({ scripts: { test: "node test/run.mjs" } }));
   write(join(dir, "lib", "state", "a.mjs"), "export const a = 1;\n");
@@ -72,7 +73,8 @@ console.log("\nshape — runGate returns the record §4.8's driver loop consumes
   ok("verify.cmd/exit name the command that ran", g.verify.cmd?.includes("stub-") && g.verify.exit === 0);
   ok("coverage project on the explicit form", g.coverage === "project");
   ok("verify.observed is NEVER set by runGate", !("observed" in g.verify), JSON.stringify(g.verify));
-  ok("a memo record for ext._gate comes back", typeof g.memo?.hash === "string" && g.memo.verify?.tested === true);
+  ok("a memo record for ext._gate comes back", /^[0-9a-f]{40}\+[0-9a-f]{40}$/.test(g.memo?.hash || "") && g.memo.verify?.tested === true,
+    JSON.stringify(g.memo?.hash));
   ok("and the credited path carries its blob sha", /^[0-9a-f]{40}$/.test(g.files["lib/state/a.mjs"].hash || ""));
 }
 
@@ -100,6 +102,7 @@ console.log("\nresolution — scoped BEFORE scripts.test, explicit before both (
 
 console.log("\nTHE MEMO BUST TEST — re-edit an ALREADY-modified file: porcelain identical, memo MISSES");
 {
+  rmSync(join(FIXTURES, `count-${process.pid}`), { force: true }); // per-block counter
   const repo = tempRepo();
   write(join(repo, "lib", "state", "a.mjs"), "export const a = 11;\n"); // 1st edit: now ` M a.mjs`
   const before = porcelain(repo);
@@ -123,7 +126,9 @@ console.log("\nTHE MEMO BUST TEST — re-edit an ALREADY-modified file: porcelai
 
   const g5 = runGate({}, { cwd: repo, env: stubEnv(1), memo: g4.memo }); // red
   const g6 = runGate({}, { cwd: repo, env: stubEnv(1), memo: g5.memo });
-  ok("a RED result is never memoised — the gate re-runs", g5.memoHit === false && g6.memoHit === false && stubRuns() === 5);
+  ok("a RED result is never memoised — the gate re-runs",
+    g5.memoHit === false && g6.memoHit === false && stubRuns() === 5,
+    JSON.stringify({ runs: stubRuns(), g5: g5.memoHit, g6: g6.memoHit }));
   rmSync(join(FIXTURES, `count-${process.pid}`), { force: true });
 }
 
