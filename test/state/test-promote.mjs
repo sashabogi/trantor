@@ -12,7 +12,7 @@
 //   skips. Written early, a promote that loses to a network blip would be counted as delivered and
 //   the line dropped silently — the worst failure this design can have. That test is here, under
 //   "ordering".
-import { ERR, emptyState } from "../../lib/state/schema.mjs";
+import { emptyState } from "../../lib/state/schema.mjs";
 import { noteHash, composeNote, promote } from "../../lib/state/promote.mjs";
 import { harness } from "./_helpers.mjs";
 
