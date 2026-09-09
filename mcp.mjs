@@ -110,7 +110,11 @@ async function api(method, path, payload, { timeoutMs } = {}) {
     ? await signedGet(path, { session: SESSION, instance: INSTANCE_ID, project: PROJECT, timeoutMs })
     : await signedPost(path, payload, { session: SESSION, instance: INSTANCE_ID, project: PROJECT, timeoutMs });
   if (!r.ok) {
-    const error = new Error(`hub ${r.status} on ${path}${r.json?.error ? `: ${r.json.error}` : ""}`);
+    // A timeout is not an outage. `hub 0 on /tasks` read as a DEAD HUB when the hub was 200 OK and
+    // merely slow — /tasks is 1.59MB across 941 cards — and a reader who cannot tell them apart
+    // retries past a real outage and investigates a slow read. Name which one it was.
+    const what = r.status === 0 ? (r.reason || "unreachable") : `hub ${r.status}`;
+    const error = new Error(`${what} on ${path}${r.json?.error ? `: ${r.json.error}` : ""}`);
     error.status = r.status;
     error.hubError = r.json?.error || "";
     throw error;

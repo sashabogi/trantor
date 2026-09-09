@@ -156,6 +156,26 @@ function toUrl(pathOrUrl, project) {
 // /peers roster. So reads stay unsigned: accepted+flagged under the default `warn` mode, and the
 // roster stays global. Flipping individual reads to signed later is a one-liner once a read needs
 // enforce-mode attribution (add a signedGet that passes `identity` through sfetchJson with GET).
+/**
+ * The shape every fail-open read returns when the request never got an answer.
+ *
+ * `status: 0` collapsed three very different things into one indistinguishable code: a TIMEOUT (the
+ * hub is fine, the read was too slow), a connection refusal (the hub is down), and a DNS/network
+ * failure. Callers render that as "hub 0", so on 2026-09-09 a /tasks read that was 200 OK but
+ * exceeded its 1500ms budget — 1.59MB across 941 cards, 625-961ms typical — read to every seat as a
+ * DEAD HUB. I retried past it four times as a blip, and the duty seat could not file a card at all.
+ *
+ * A timeout and an outage need OPPOSITE responses: retry versus investigate. So carry the reason.
+ * `status` stays 0 for every existing caller; `timedOut` and `reason` are additive.
+ */
+function failure(e, timeoutMs) {
+  const timedOut = e?.name === "TimeoutError" || e?.name === "AbortError" || e?.code === "ABORT_ERR";
+  return {
+    ok: false, status: 0, json: null, timedOut,
+    reason: timedOut ? `timed out after ${timeoutMs}ms` : (e?.message || "unreachable"),
+  };
+}
+
 export async function getJSON(pathOrUrl, { timeoutMs = DEFAULT_TIMEOUT_MS, project } = {}) {
   const url = toUrl(pathOrUrl, projectOf(project, null, pathOrUrl));
   try {
@@ -170,7 +190,7 @@ export async function getJSON(pathOrUrl, { timeoutMs = DEFAULT_TIMEOUT_MS, proje
     const text = await r.text();
     let json = null; try { json = text ? JSON.parse(text) : null; } catch {}
     return { ok: true, status: r.status, json };
-  } catch { return { ok: false, status: 0, json: null }; }
+  } catch (e) { return failure(e, timeoutMs); }
 }
 
 // Signed GET → { ok, status, json|null }. Never throws. The "one-liner" the getJSON comment
@@ -200,7 +220,7 @@ export async function signedGet(pathOrUrl, { timeoutMs = DEFAULT_TIMEOUT_MS, ses
     const text = await r.text();
     let json = null; try { json = text ? JSON.parse(text) : null; } catch {}
     return { ok: true, status: r.status, json };
-  } catch { return { ok: false, status: 0, json: null }; }
+  } catch (e) { return failure(e, timeoutMs); }
 }
 
 // Signed POST → { ok, status, json|null }. Never throws.
@@ -229,5 +249,5 @@ export async function signedPost(pathOrUrl, payload, { timeoutMs = DEFAULT_TIMEO
     const text = await r.text();
     let json = null; try { json = text ? JSON.parse(text) : null; } catch {}
     return { ok: true, status: r.status, json };
-  } catch { return { ok: false, status: 0, json: null }; }
+  } catch (e) { return failure(e, timeoutMs); }
 }
