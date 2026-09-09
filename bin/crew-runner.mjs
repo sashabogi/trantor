@@ -25,7 +25,7 @@ import {
 import { capWake, capBcast, pickLessons, composePrompt } from "./crew-payload.mjs";
 import {
   cardRefs, wakeCard, carriesWork, parseTurnTokens, parseResetAt, reasonWithBalances, quotaResetAt, PARKING_REASONS,
-  senderProjectOf, isLinkedProject,
+  senderProjectOf, isLinkedProject, stateSkipReason,
 } from "../lib/turn-policy.mjs";
 import {
   auditDutyNudges, claimDutyNudges, claudeTranscriptDir, dutyEscalations, dutyNudgeDirective,
@@ -611,9 +611,32 @@ const STATE_MODE = (() => {
     mkdirSync(join(homedir(), ".agent-bus"), { recursive: true, mode: 0o700 });
     writeFileSync(STATE_SCHEMA_FILE, JSON.stringify(TURN_RESULT_SCHEMA), { mode: 0o600 });
   } catch (e) { log(`\x1b[33mstate mode OFF — could not write ${STATE_SCHEMA_FILE}: ${e.message}\x1b[0m`); return false; }
-  log(`\x1b[36mTrantor State: ASSEMBLE mode ON for this seat (schema ${STATE_SCHEMA_FILE})\x1b[0m`);
+  // #7060: this line used to read "ASSEMBLE mode ON for this seat", which is a claim about the
+  // PROMPT that nothing here established. What the four checks above prove is CONFIGURATION, and
+  // the two come apart on the literal next turn: the kickoff runs before any message exists, so it
+  // belongs to no card and cannot be a state step. So say what was proved — armed — and name the
+  // one thing that engages it. Each turn then reports which path it actually took.
+  log(`\x1b[36mTrantor State: ASSEMBLE armed for this seat (schema ${STATE_SCHEMA_FILE})\x1b[0m`);
+  log(`\x1b[36m  a turn is assembled only when a wake ASSIGNS it a card — the kickoff and every pulse run the transcript path, and each turn says which one it took\x1b[0m`);
   return true;
 })();
+
+// #7060: the one place a turn decides whether it is a state step, and the one place a skip is
+// spoken. Returns the reason the turn is NOT assembled (already logged), or null when it is — so
+// the runner reads `if (!stateSkip(...))` and cannot drift from what the operator was just told.
+//
+// It speaks on CHANGE, not on repetition. A pulse fires on a timer and skips for the same reason
+// every time; printing that line forever is the repetition the monitoring doctrine rules out, and
+// it would bury the turn where the path actually flipped. Assembling a turn clears the memory, so
+// the next skip after real work always speaks. Silent when state mode is off: the IIFE above
+// already said why, once, and a transcript seat has no claim here to mistake for proof.
+let spokenStateSkip = null;
+const stateSkip = (kind, card = 0) => {
+  const why = stateSkipReason({ mode: STATE_MODE, kind, breakerTripped, card });
+  if (STATE_MODE && why && why !== spokenStateSkip) log(`\x1b[33mTrantor State: this turn is NOT assembled — ${why}\x1b[0m`);
+  spokenStateSkip = why;
+  return why;
+};
 
 // The PREAMBLE, and it is the whole cost claim in one constant: the bytes before STATE_DELIM must
 // be identical on every step or provider prefix caching never engages and the curve stays O(T).
@@ -1201,6 +1224,9 @@ function askedExcerpt(message) {
   let deliveryFails = 0;      // consecutive failed attempts at the SAME pending batch
   if (pendingWake.length) log(`\x1b[33m${pendingWake.length} message(s) survived from a previous run — redelivering\x1b[0m`);
 
+  // #7060: the turn the boot line was read as a promise about. It is a transcript turn by
+  // construction and now says so, in the same breath as the line that armed the mode.
+  stateSkip("kickoff");
   const ec0 = await runTurn(composedTurn({ base: KICKOFF, lessons: pickLessons(LESSONS_RAW, "") }), true, "kickoff");
   if (ec0) await reportFailure(ec0, "kickoff", pendingWake.length);   // a failed kickoff = the "fired up, died, nobody knew" case
   let lastTurnAt = Date.now();
@@ -1211,6 +1237,7 @@ function askedExcerpt(message) {
     // pulse first: a due mission beat runs even on a silent bus. Measured from the END of the
     // last turn, so a long turn doesn't stack an immediate pulse on top of itself.
     if (PULSE_MS && Date.now() - lastTurnAt >= PULSE_MS) {
+      stateSkip("pulse");
       const ecp = await runTurn(composedTurn({ base: PULSE_PROMPT + "\n\n", rulesText: RULES, lessons: pickLessons(LESSONS_RAW, PULSE_PROMPT) }), false, "pulse");
       if (ecp) await reportFailure(ecp, "pulse"); else await reportHealthy();
       lastTurnAt = Date.now();
@@ -1383,7 +1410,7 @@ function askedExcerpt(message) {
     });
     const stopDutyNudgeWatcher = startDutyNudgeWatcher(dutyPlan, tStart);
     let ec;
-    const stateStep = STATE_MODE && !breakerTripped && card > 0;
+    const stateStep = !stateSkip("wake", card);
     try {
       ec = stateStep
         ? await stateTurn({
