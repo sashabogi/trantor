@@ -16,6 +16,14 @@ import { fileURLToPath } from "node:url";
 const DRY = process.argv.includes("--dry-run");
 const MCP = join(dirname(dirname(fileURLToPath(import.meta.url))), "mcp.mjs");
 const URL_ = process.env.RELAY_URL || "http://127.0.0.1:4477";
+// Graft (github.com/NanoNets/context-graph-engine): a local Tree-sitter dependency graph served
+// over MCP (graft_find_code / _find_all / _trace_calls / _file_api / _repo_map). Wired next to
+// `relay` so a seat can locate code with one call instead of grep+read-many — the graph refreshes
+// itself before each query (no freshness hook) and serves the nearest ancestor with a graft/ index,
+// so it keys off the seat's cwd project. A project with no graft/ index simply returns empty tools,
+// never an error. `graft build` (or `graft init`) seeds a project's index; graft/ is gitignored.
+const GRAFT = (() => { try { return execSync("command -v graft", { encoding: "utf8", shell: "/bin/sh" }).trim(); } catch { return "graft"; } })();
+const HAS_GRAFT = GRAFT !== "graft" || (() => { try { execSync("command -v graft", { stdio: "ignore", shell: "/bin/sh" }); return true; } catch { return false; } })();
 const has = (cmd) => { try { execSync(`command -v ${cmd}`, { stdio: "ignore", shell: "/bin/sh" }); return true; } catch { return false; } };
 const stamp = new Date().toISOString().slice(0, 10);
 const backup = (p) => { const b = `${p}.bak-${stamp}`; if (!existsSync(b)) copyFileSync(p, b); return b; };
@@ -65,6 +73,16 @@ if (has("codex")) {
     if (!DRY) { if (existsSync(p)) backup(p); else mkdirSync(dirname(p), { recursive: true }); writeFileSync(p, cur + block); }
     report("codex", cur ? "wired" : "wired (new config)", p);
   }
+  // graft alongside relay
+  if (HAS_GRAFT) {
+    const g = existsSync(p) ? readFileSync(p, "utf8") : "";
+    if (g.includes("[mcp_servers.graft]")) report("codex", "graft already wired");
+    else {
+      const gblock = `\n# trantor — Graft code-graph tools (graft_find_code/_find_all/_trace_calls/_file_api/_repo_map)\n[mcp_servers.graft]\ncommand = "${GRAFT}"\nargs = ["mcp"]\n`;
+      if (!DRY) { if (existsSync(p)) backup(p); writeFileSync(p, g + gblock); }
+      report("codex", "graft wired", p);
+    }
+  }
 }
 
 // ---- Gemini CLI ----  (existing relay entries are never overwritten — user customization wins)
@@ -73,6 +91,7 @@ if (has("gemini")) {
   report("gemini", patchJson(p, d => {
     d.mcpServers ||= {};
     d.mcpServers.relay ||= { command: "node", args: [MCP], env: relayEnv("gemini") };
+    if (HAS_GRAFT) d.mcpServers.graft ||= { command: GRAFT, args: ["mcp"] };
   }), p);
 }
 
@@ -82,6 +101,7 @@ if (has("kimi")) {
   report("kimi", patchJson(p, d => {
     d.mcpServers ||= {};
     d.mcpServers.relay ||= { command: "node", args: [MCP], env: relayEnv("kimi") };
+    if (HAS_GRAFT) d.mcpServers.graft ||= { command: GRAFT, args: ["mcp"] };
   }), p);
 }
 
@@ -92,6 +112,7 @@ if (has("opencode")) {
     d.$schema ||= "https://opencode.ai/config.json";
     d.mcp ||= {};
     d.mcp.relay ||= { type: "local", command: ["node", MCP], enabled: true };
+    if (HAS_GRAFT) d.mcp.graft ||= { type: "local", command: [GRAFT, "mcp"], enabled: true };
     d.mcp.relay.environment ||= {};
     // Migrate the old generated pin too: `||=` alone left RELAY_AGENT=opencode in every existing
     // config forever, where OpenCode overlaid it on the qwen/glm/deepseek runner environment.
@@ -154,7 +175,14 @@ if (has("dsh")) {
           RELAY_AGENT: !!js process.env.RELAY_AGENT ?? 'dsh'
           RELAY_PROJECT: !!js process.env.RELAY_PROJECT ?? ''
           RELAY_SESSION: !!js process.env.RELAY_SESSION ?? ''
-`;
+${HAS_GRAFT ? `    - id: trantor-graft
+      name: '@deepseek-ai/dsh-mcp-client'
+      config:
+        serverName: graft
+        transport: stdio
+        command: ${GRAFT}
+        args: ['mcp']
+` : ""}`;
   const fresh = !existsSync(patchPath);
   if (!fresh) report("dsh", "already wired", prof);
   else {
