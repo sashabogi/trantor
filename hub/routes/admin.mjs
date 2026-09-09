@@ -168,6 +168,11 @@ export async function routeAdmin({ req, res, q, P, auth, ctx }) {
         clearMs: overseer.OVERSEER_CLEAR_MS,
         dutySession: duty.session || "",
         dutyFailures: duty.dutyFailures(),
+        // The signal that mattered on 2026-09-09 and that nothing could see. The hub knew duty was
+        // holding escalations it never consumed; `trantor doctor`, the app and the operator had no
+        // way to ask. Exposing beating/consuming SEPARATELY is the point — "up and stuck" and
+        // "crashed" need different fixes and are indistinguishable from a single online flag.
+        duty: duty.dutyLiveness ? duty.dutyLiveness() : null,
         watching: {
           sessions: livePeers.length,
           projects: new Set(livePeers.map(([, v]) => v.project).filter(Boolean)).size,
