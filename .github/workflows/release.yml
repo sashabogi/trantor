@@ -39,8 +39,15 @@ permissions:
 
 jobs:
   release:
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # macos-latest, matching ci.yml, and not for taste. `npm test` is macOS-dependent in two places:
+    # it shells out to the desktop vitest suite, and test/hub/test-duty-seat.mjs asserts the launchd
+    # keepalive that bin/duty.mjs only installs when process.platform === "darwin". On ubuntu-latest
+    # this job went red on 7 duty-seat assertions and 2 vite failures while ci.yml was green on the
+    # same commit — a release gate that disagrees with CI is worse than no gate, because it trains
+    # you to wave the red one through. The gate must be the suite CI already proves, in CI's
+    # environment.
+    runs-on: macos-latest
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
 
@@ -49,6 +56,13 @@ jobs:
           node-version: 22
           registry-url: https://registry.npmjs.org
 
+      # The suite runs desktop's vitest, so its deps have to be here or the run dies with
+      # "Cannot find module 'vite'". Same pinned pnpm as ci.yml: the desktop lockfile is written by
+      # 11.18.0 and another major can drift it under --frozen-lockfile.
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.18.0
+
       # Trusted publishing needs npm >= 11.5.1; Node 22 ships older. Pin rather than track latest so
       # a release cannot change its own toolchain underneath us.
       - name: Pin npm with OIDC support
@@ -56,8 +70,11 @@ jobs:
           npm install -g npm@11.19.0
           npm --version
 
-      - name: Install deps
+      - name: Install root deps
         run: npm install --no-audit --no-fund
+
+      - name: Install desktop deps (pnpm, frozen)
+        run: pnpm -C desktop install --frozen-lockfile
 
       # The version lives in TWO files and 0.18.50 shipped with them disagreeing: the release commit
       # bumped package.json and missed .claude-plugin/plugin.json. That file wins in
