@@ -116,8 +116,8 @@ Two consequences worth stating out loud, because they are the design:
 `lib/state/schema.mjs` owns these. The shapes are the PRD's §3 with the ambiguities closed.
 
 ```js
-/** @typedef {{ id: string, text: string, paths?: string[] }} Item   // text <= CAPS.ITEM */
-/** @typedef {{ touched: boolean, verified: boolean, blast_radius?: number }} FileFact */
+/** @typedef {{ id: string, text: string, paths?: string[] }} Item   // id <= CAPS.ID, text <= CAPS.ITEM */
+/** @typedef {{ touched: boolean, verified: boolean, blast_radius?: number }} FileFact  // all three harness-written */
 
 /** @typedef {{
  *   schema_version: 3,
@@ -160,6 +160,7 @@ directly; the two routes converge on the same validated field.
 
 ```js
 export const CAPS = {
+  ID: 32,           // chars per item id — ids render into the prompt and key every array op
   ITEM: 240,        // chars per item PROSE, after the evidence marker is extracted
   ITEM_PATHS: 8,    // evidence paths per item
   PATH: 400,        // chars per files key
@@ -174,6 +175,12 @@ export const CAPS = {
 
 Every cap is enforced in `validate.mjs` and asserted in `test/state/test-caps.mjs`. There is no
 second copy of any number anywhere in the tree; a driver that wants a cap imports `CAPS`.
+
+`ID` is in that table for the same reason as the rest, and it was missing from an earlier draft:
+`Item.id` is state content — it renders into every prompt and keys every array op — so an
+uncapped id is a hole straight through the "bounded by construction" claim, reachable by one model
+emitting a 4KB id. Over-long ids are a `CAP` rejection, not a truncation: a trimmed id would no
+longer address the item the next op names.
 
 ### 3.2 The turn envelope
 
@@ -203,9 +210,16 @@ seat as its next observation:
 ```js
 /** @typedef {{ ok: true, state: WorkingState, promoted: Promotion[] }
  *          | { ok: false, code: ErrCode, at: string, message: string }} ApplyResult */
-// ErrCode: SCHEMA | READONLY_FIELD | CAP | UNKNOWN_LIST | DUP_ID | NO_SUCH_ID
-//        | UNVERIFIED_DONE | NEEDS_GATE | BAD_ACTION | MIGRATE_FAILED | STALE
+// ErrCode (pure core — every one of these is returned by validate.mjs/applyTurn):
+//        SCHEMA | READONLY_FIELD | CAP | UNKNOWN_LIST | UNKNOWN_FIELD | DUP_ID | NO_SUCH_ID
+//        | UNVERIFIED_DONE | NEEDS_GATE | BAD_ACTION | MIGRATE_FAILED
+// StoreErrCode (store-owned — returned by commit() and nothing else): STALE
 ```
+
+**`STALE` is deliberately not in `ErrCode`.** It is the CAS-conflict outcome of `commit()` (§4.4),
+so no branch of `validate.mjs` can ever produce it and a builder should not go looking for one. It
+is also handled differently: the driver cures `STALE` itself by re-reading and re-applying, whereas
+every `ErrCode` is fed back to the seat as its next observation. Two owners, two unions.
 
 `message` is written for a model to act on, not for a log: `"move x7 → done rejected:
 files['lib/state/apply.mjs'].verified is false and verify.tested is not set. Run the gate first."`
@@ -243,12 +257,25 @@ gate and re-entering `applyTurn` with the evidence (§4.8) — still before any 
 
 1. **Shape.** `TurnResult` matches the schema; each `Op` has exactly one operator key; `action`
    matches one `Action` variant. Missing `action` → `BAD_ACTION` (PRD §3.1: act, finish, or ask).
-2. **Write-matrix.** Any op targeting `verify`, `files[*].verified`, `files[*].blast_radius`,
-   `card`, `schema_version`, `cursor`, `done_count`, `files_count`, `rev` → `READONLY_FIELD`.
+2. **Write-matrix.** Any op targeting `verify`, `files[*].verified`, `files[*].touched`,
+   `files[*].blast_radius`, `card`, `schema_version`, `cursor`, `done_count`, `files_count`,
+   `rev` → `READONLY_FIELD`.
    `task` is set-once: writable only while empty. This is the whole "a seat marks its own work
    verified" hole, closed in one table lookup.
+
+   **`files[*].touched` is harness-only, not advisory.** The field means "git says this path
+   changed", so testimony has nothing to add to it and a model-supplied value would be a second
+   source for a fact that already has ground truth. §4.8 tier 1 writes it from `git status` every
+   turn, before the apply (§4.1). Leaving it model-writable would mean a patch to `touched` is
+   accepted and then silently clobbered by tier 1 — the reading a builder should never have to
+   guess at — so it is a `READONLY_FIELD` rejection instead, which says so out loud.
 3. **Semantics.** `add` with an existing id → `DUP_ID`. `remove`/`move` on a missing id →
-   `NO_SUCH_ID`. `move … to:"done"` where the item's evidence is absent → `UNVERIFIED_DONE`.
+   `NO_SUCH_ID`. `set` naming a field the schema does not define → **`UNKNOWN_FIELD`**, never a
+   silently created key: an unknown field that is quietly accepted is the write matrix stopping
+   being enforceable, because tomorrow's real field arrives as today's typo. (PRD §3.3 wants an
+   unmigratable *patch* rejected loudly; §4.3's `MIGRATE_FAILED` answers only for unmigratable
+   *objects*, so this is the patch half of the same rule.) `move … to:"done"` where the item's
+   evidence is absent → `UNVERIFIED_DONE` or `NEEDS_GATE`, per the split in §4.8.
 4. **Apply, in order, on a structural clone.** Any stage-3 failure aborts the whole patch; there is
    no partial application. All-or-nothing is what makes "no valid patch corrupts state" testable.
 5. **Runtime pass** (not model-visible): `cursor` bump, `rev+1`, compaction of overflow lists into
@@ -421,6 +448,14 @@ content hash** — the last promoted hash is stored in the sidecar under `ext["_
 runtime-owned `ext` key, model-unwritable) so a re-run after a `STALE` retry cannot double-post.
 Promotion failures are non-fatal and never roll back state.
 
+**Ordering, and it is load-bearing: `_promoted` advances only on a confirmed POST.** The hash is
+written after the hub answers 2xx, never when the plan is computed. Written early, a promote that
+loses to a network blip would be counted as delivered: the next turn diffs against a hash claiming
+the note already went out, and the line is dropped silently — the worst failure this design can
+have, because the record simply lacks a `done` that happened. Written late, a failed promote leaves
+the hash where it was and the next turn re-sends the same content; the content hash makes that
+re-send idempotent if the POST in fact landed and only the response was lost.
+
 ### 4.8 The evidence pipeline — who actually runs the gate
 
 The review's substantive finding, and it is correct: §4.2 says `verified` comes from "the gate the
@@ -458,23 +493,44 @@ loop with exactly one retry:
 let r = applyTurn(state, patch, ctx);
 if (!r.ok && r.code === "NEEDS_GATE") {
   const g = runGate(r.gate, { cwd: seatWorktree });   // spawnSync, timeboxed
-  r = applyTurn(state, patch, { ...ctx, verify: g.verify, files: g.files });
+  r = applyTurn(state, patch, { ...ctx, gate_attempted: g, verify: g.verify, files: g.files });
 }
 ```
 
-The retry is bounded at one by construction: the second call either has the evidence or does not,
-and a red gate produces `UNVERIFIED_DONE` with the real failure tail, never another `NEEDS_GATE`.
+**`NEEDS_GATE` vs `UNVERIFIED_DONE` turns on `ctx.gate_attempted`, and nothing else.** Missing
+evidence has two causes that look identical in the state — no gate has run yet, and a gate ran and
+came back red — and a core that cannot tell them apart returns `NEEDS_GATE` both times. That was
+true of an earlier draft, and it made this section's own bounded-retry claim false: a red gate
+sets `verify.tested = false` and credits no paths, so route (a) and route (b) are both false on the
+second call, the condition for `NEEDS_GATE` holds again, and the loop either spins or drops the
+failure tail on the floor and reports the wrong code. So the driver passes the gate *attempt*
+forward — `ctx.gate_attempted = { cmd, exit, tail, coverage }`, a runtime fact like every other
+`ctx` field, unwritable by the model — and the validator branches on it:
+
+- `ctx.gate_attempted` absent and evidence absent → **`NEEDS_GATE`**, carrying the paths that would
+  satisfy it. The driver cures it.
+- `ctx.gate_attempted` present and evidence still absent → **`UNVERIFIED_DONE`**, carrying
+  `cmd`/`exit` and the last `CAPS.OBS_TOKENS` of the tail. The seat gets the failing assertion.
+
+The retry is now bounded at one *by construction* rather than by assertion: the second call has
+`gate_attempted` set, and no branch reachable with it set returns `NEEDS_GATE`.
 
 **`lib/state/gate.mjs` — `runGate(spec, opts) -> { verify, files, coverage, cmd, exit, ms, tail }`**
 
-- *Command resolution*, first match wins: `TRANTOR_STATE_GATE` (explicit, per project) →
-  `package.json` `scripts.test` → `node test/run.mjs --only <subsystem>` when every path in
-  `spec.paths` sits under one `test/<subsystem>` sibling → none. Plus `node bin/slop-gate.mjs`,
-  always, because this repo's own rule is that a card does not reach done with slop-gate red.
+- *Command resolution*, first match wins: `TRANTOR_STATE_GATE` (explicit, per project) → **the
+  scoped form**, `node test/run.mjs --only <subsystem>`, when every path in `spec.paths` sits under
+  one `test/<subsystem>` sibling → `package.json` `scripts.test` → none. Plus `node
+  bin/slop-gate.mjs`, always, because this repo's own rule is that a card does not reach done with
+  slop-gate red.
 - *Scope, and the crew lesson it respects*: a seat must never run the full `npm test` — sibling
   seats' suites collide on fixed ports and a green build has already been marked failed that way.
-  So the scoped form is **preferred** over `scripts.test`, and `coverage` records which ran:
-  `"scoped:test/state"` or `"project"`.
+  The scoped form is therefore **ahead of** `scripts.test` in that order, not behind it, and
+  `scripts.test` is the fallback for work the scope rule cannot place. An earlier draft had the two
+  the other way round while still claiming the scoped form was preferred; those cannot both be
+  true, and as ordered every project with a `test` script — this one included — would have run the
+  full suite every time, which is the exact port-collision failure the rule exists to prevent and a
+  silent inflation of R10's cost. `coverage` records which one ran: `"scoped:test/state"` or
+  `"project"`.
 - *What it may write*: `verify.tested = (exit === 0)`, `verify.cmd`, `verify.exit`. `verify.built`
   only when a build/typecheck command is configured and ran. **`verify.observed` is never set by
   `runGate`** — observation means a human, a drill, or a captured runtime artifact, and a test
@@ -489,12 +545,32 @@ and a red gate produces `UNVERIFIED_DONE` with the real failure tail, never anot
 **Cost control, because a suite per done-move is not free.** Two rules:
 
 1. **At most one gate run per turn.** Several `done` moves in one patch share the run.
-2. **Memoised by tree hash.** `runGate` records `ext._gate = { hash, verify, coverage, ts }`, where
-   `hash` = HEAD sha + a hash of `git status --porcelain` output. If the hash is unchanged since the
-   last green run, the recorded result is reused with no spawn. So N done-moves across M turns with
-   no code change cost exactly one suite run, and the first edit after that invalidates it.
+2. **Memoised by tree CONTENT.** `runGate` records `ext._gate = { hash, verify, coverage, ts }`,
+   where `hash` = HEAD sha + the worktree's **tree sha**: with `GIT_INDEX_FILE` pointed at a
+   scratch index under `.agent-bus-out/` (gitignored, same filesystem, never the seat's real
+   `.git/index`), the driver runs `git add -A` then `git write-tree`. If the hash is unchanged
+   since the last green run, the recorded result is reused with no spawn. So N done-moves across M
+   turns with no code change cost exactly one suite run, and the first byte changed after that
+   invalidates it.
 
-`ext._gate` is runtime-owned and model-unwritable, like `ext._promoted` (§4.7).
+   **Why not a hash of `git status --porcelain`** — an earlier draft said exactly that, and it was
+   a rubber stamp with extra steps. Porcelain prints *path + status letters*: it says that a file
+   is modified, never what is in it. So a green gate on a dirty tree, followed by the single most
+   common thing a seat does — edit a file it has already modified — leaves the porcelain output
+   byte-identical (` M lib/state/apply.mjs`, still) and HEAD unchanged. The memo would hit and a
+   green recorded *before* the edit would be reused as evidence for a `done` move on code no gate
+   has ever seen, which is precisely the rubber stamp §4.8 exists to prevent. A tree sha changes
+   whenever any byte does, and `add -A` folds in untracked files so a brand-new test file busts it
+   too.
+
+**Who writes `ext._gate`, and when.** `runGate` computes the record and *returns* it; it never
+touches state. The driver hands it forward in `ctx` (alongside `gate_attempted`), and the apply
+writes it in the stage-5 runtime pass, so the memo lands through the single apply point and rides
+the same commit as everything else in the turn. Any other arrangement costs something real:
+`runGate` mutating `state.ext` would make it impure and would write state outside the one apply
+point §4.4's crash-safety argument leans on, and keeping the memo in driver-local memory would put
+it somewhere the next turn cannot read, which is the whole purpose of the memo. `ext._gate` is
+runtime-owned and model-unwritable, like `ext._promoted` (§4.7).
 
 **Failure is the useful path, not the sad one.** A red gate rejects the move with
 `UNVERIFIED_DONE` and hands the seat the last `CAPS.OBS_TOKENS` of the gate output as its next
@@ -659,11 +735,14 @@ Every gate below is a command with an exit code. "The design is done" is not a t
 |---|---|---|
 | no valid patch corrupts state | `test-apply.mjs` | property: 500 generated op sequences over a generated state; after each, the result re-validates against the schema or was rejected. No third outcome — `NEEDS_GATE` is asserted to be a *rejection*, so §4.8 does not weaken this property. |
 | arrays change only by id | `test-apply.mjs` | property: for every accepted patch, the multiset of ids changes only by the ops' declared ids |
-| harness/runtime fields never model-writable | `test-validate.mjs` | table-driven: one case per row of the §2/§4.2 write matrix, each asserting `READONLY_FIELD` |
-| `move→done` without verification rejected | `test-validate.mjs` | both evidence routes (§4.2) pass; absent evidence returns `UNVERIFIED_DONE` naming the missing field, or `NEEDS_GATE` carrying the paths that would satisfy it |
+| harness/runtime fields never model-writable | `test-validate.mjs` | table-driven: one case per row of the §2/§4.2 write matrix, each asserting `READONLY_FIELD` — including `files[*].touched`, which is harness-only |
+| an unknown field is a named rejection | `test-validate.mjs` | `set` on a field the schema does not define returns `UNKNOWN_FIELD` and creates no key (§4.2 stage 3) |
+| `move→done` without verification rejected | `test-validate.mjs` | both evidence routes (§4.2) pass; with `ctx.gate_attempted` absent, missing evidence returns `NEEDS_GATE` carrying the paths that would satisfy it; **with it present, the same patch returns `UNVERIFIED_DONE` carrying `cmd`/`exit`/tail and never `NEEDS_GATE`** — this is what makes §4.8's one-retry bound a fact rather than a claim |
 | the evidence marker survives capping | `test-caps.mjs` | an item whose text exceeds `CAPS.ITEM` *including* a marker keeps every path in `Item.paths`; a malformed marker is rejected with `CAP`, never trimmed into silence (§3) |
-| the gate pipeline | `test-gate.mjs` | command resolution order; scoped vs project `coverage` decides which touched paths get `verified`; `observed` is never auto-set; a red gate yields `UNVERIFIED_DONE` carrying the output tail; the tree-hash memo skips the second spawn and a dirty tree busts it; a timeout counts as red |
-| caps hold on counts **and** content | `test-caps.mjs` | overflow of each list/field; asserts compaction into `_count` and that content is truncated, not dropped silently |
+| the gate pipeline | `test-gate.mjs` | command resolution order, asserted on a fixture that has **both** a `scripts.test` and a scoped sibling — the scoped form must win; scoped vs project `coverage` decides which touched paths get `verified`; `observed` is never auto-set; a red gate yields `UNVERIFIED_DONE` carrying the output tail; a timeout counts as red |
+| the gate memo busts on content, not on status | `test-gate.mjs` | the memo skips a second spawn when nothing changed, **and the case that matters: after a green gate, modify a file that is already modified so `git status --porcelain` is byte-identical and HEAD is unchanged, then assert the memo MISSES and the gate re-runs.** "A dirty tree busts it" is not enough on its own — that assertion passes while the status-hash bug is live (§4.8) |
+| a failed promote is re-sent, not swallowed | `test-promote.mjs` | a POST that throws leaves `ext._promoted` unchanged, so the next turn's delta still contains the note; a 2xx advances it and the next turn skips (§4.7) |
+| caps hold on counts **and** content | `test-caps.mjs` | overflow of each list/field, **one case per key of `CAPS` including `ID`** (an over-long `Item.id` is a `CAP` rejection, never a trim); asserts compaction into `_count` and that content is truncated, not dropped silently |
 | v2→v3 migrates with zero field loss | `test-migrate.mjs` | a v2 fixture with an unknown field round-trips; the unknown field is findable in `notes` under `migrated:` |
 | ordering invariant | `test-order.mjs` | a rejected patch leaves state byte-identical and promotes nothing |
 | invalid-patch budget measured | `bin/state-bench.mjs --patches` | prints the rate per seat class; §7.3 thresholds |
