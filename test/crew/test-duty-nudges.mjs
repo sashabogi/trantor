@@ -101,5 +101,49 @@ try {
   rmSync(work, { recursive: true, force: true });
 }
 
+// --- #6951 fault 2: a delivered message must not be nudged for -------------------------------
+// The ledger answers "did I nudge for this id"; it cannot answer "does this id still need one".
+// Those came apart on 2026-09-09: duty nudged the orchestrator four times for ids its own cursor
+// was already past — real escalations when duty first saw them, read by the recipient before duty
+// got a turn, and nothing re-checked. Every nudge wakes a session and costs a turn on both sides.
+{
+  const p = join(mkdtempSync(join(tmpdir(), "duty-delivered-")), "duty-nudged.json");
+  const msgs = feed(["A", "B"]);
+  // The recipient has read everything: deliveredUpTo is past both ids.
+  const allRead = await claimDutyNudges({
+    messages: msgs, statePath: p, owner: "turn-1",
+    isDelivered: async () => true,
+  });
+  ok("a fully-read inbox plans NO nudges", allRead.items.length === 0,
+    JSON.stringify(allRead.items.map(i => i.id)));
+  // Nothing was claimed, so a later wake on the same ids is still free to nudge if they go unread.
+  const nowUnread = await claimDutyNudges({
+    messages: msgs, statePath: p, owner: "turn-2",
+    isDelivered: async () => false,
+  });
+  ok("skipping a delivered id does not burn it — an unread id still earns its nudge",
+    nowUnread.items.length === 2, JSON.stringify(nowUnread.items.map(i => i.id)));
+}
+{
+  const p = join(mkdtempSync(join(tmpdir(), "duty-partial-")), "duty-nudged.json");
+  // Only the first id has been read. The second must still be nudged.
+  const plan = await claimDutyNudges({
+    messages: feed(["A", "B"]), statePath: p, owner: "turn-1",
+    isDelivered: async ({ id }) => id === "A",
+  });
+  ok("a partially-read batch nudges only what is still unread",
+    plan.items.length === 1 && plan.items[0].id === "B", JSON.stringify(plan.items.map(i => i.id)));
+}
+{
+  const p = join(mkdtempSync(join(tmpdir(), "duty-unknown-")), "duty-nudged.json");
+  // The hub is unreachable. UNKNOWN IS NOT DELIVERED: a missed nudge is worse than a redundant one.
+  const plan = await claimDutyNudges({
+    messages: feed(["A"]), statePath: p, owner: "turn-1",
+    isDelivered: async () => { throw new Error("hub unreachable"); },
+  });
+  ok("a failing delivery check leaves the nudge STANDING, never silently drops it",
+    plan.items.length === 1, JSON.stringify(plan.items.map(i => i.id)));
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

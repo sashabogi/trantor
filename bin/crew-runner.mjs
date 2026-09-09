@@ -1311,6 +1311,17 @@ function askedExcerpt(message) {
         messages: wake,
         statePath: DUTY_NUDGE_STATE,
         owner: `${RUNNER_ID}:${TURN + 1}`,
+        // Has the recipient already read it? /peer — SINGULAR — is the only endpoint that serialises
+        // deliveredUpTo (/peers does not, a gap that already cost one wrong diagnosis today). The
+        // cursor is monotonic, so `>= id` means the message was handed over and there is nothing to
+        // nudge about. Best-effort by design: any failure here leaves the nudge standing, because a
+        // missed nudge is worse than a redundant one.
+        isDelivered: async ({ id, recipient }) => {
+          if (!recipient || !/^\d+$/.test(String(id))) return false;
+          const r = await api(`/peer?session=${encodeURIComponent(recipient)}`).catch(() => null);
+          const upTo = Number(r?.deliveredUpTo || 0);
+          return upTo > 0 && upTo >= Number(id);
+        },
       })
       : { items: [], targets: [], owner: "" };
     const claimedIds = new Set(dutyPlan.items.map(item => item.id));
