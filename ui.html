@@ -664,7 +664,8 @@ async function openCard(id){
     + `<div class="cmhead"><div><div class="cmtitle">${esc(t.title)}</div>`
     + `<div class="cmmeta">${iconFor(t.assignee||'',14)} ${esc(String(t.assignee||'unassigned').split(':')[0])}`
     + ` <span class="cmstat" style="color:${SC[t.status]||'var(--mut)'};border-color:${SC[t.status]||'var(--line)'}">${esc(t.status)}</span>`
-    + `${t.difficulty?` · ${esc(t.difficulty)}`:''}${t.model?` · ${esc(String(t.model).slice(0,26))}`:''} · #${id} · ${esc(t.project||'')}</div></div>`
+    + `${t.difficulty?` · ${esc(t.difficulty)}`:''}${t.model?` · ${esc(String(t.model).slice(0,26))}`:''} · #${id} · ${esc(t.project||'')}</div>`
+    + `<div class="cmmeta">drill: ${t.drill?esc(t.drill):'<i>none on the card — the hub refuses done until one is set</i>'}</div></div>`
     + `<span class="cmclose" id="cmclose">✕</span></div>`
     + `<div class="cmbody">${rows || '<div class="cmempty">No recorded activity for this card yet — no bus reports reference #'+id+'.</div>'}</div></div>`;
   el.style.display = 'flex';
@@ -953,7 +954,7 @@ async function render(){
         const rank={todo:0,doing:1,testing:2,done:3};
         const bounced=last&&last.from!==undefined&&rank[last.to]<rank[last.from]&&(Date.now()-last.ts)<10*60*1000;
         const trail=hist.map(h=>`${h.from?h.from+'→':''}${h.to}${h.by?' by '+String(h.by).split(':')[0]:''} @${new Date(h.ts).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'})}`).join('\n');
-        return `<div class="tcard ${t.status}" data-id="${t.id}" title="${esc(trail)||'click to advance'}"><span>${esc(t.title)}</span>${t.count>1?`<span class="xcount">×${t.count}</span>`:''}${t.difficulty?`<span class="diff ${t.difficulty}">${t.difficulty[0].toUpperCase()}</span>`:''}${t.model?`<span class="mdl">${esc(t.model)}</span>`:''}${bounced?`<span class="bounce">↩ bounced${last.by?' by '+esc(String(last.by).split(':')[0]):''}</span>`:''}${t.assignee?`<div class="who">${iconFor(t.assignee,12)}@${esc(t.assignee)}</div>`:''}</div>`;
+        return `<div class="tcard ${t.status}" data-id="${t.id}" title="${esc(trail)||'click to advance'}"><span>${esc(t.title)}</span>${t.count>1?`<span class="xcount">×${t.count}</span>`:''}${t.drill?`<span class="mdl" title="drill: ${esc(t.drill)}">drill</span>`:''}${t.difficulty?`<span class="diff ${t.difficulty}">${t.difficulty[0].toUpperCase()}</span>`:''}${t.model?`<span class="mdl">${esc(t.model)}</span>`:''}${bounced?`<span class="bounce">↩ bounced${last.by?' by '+esc(String(last.by).split(':')[0]):''}</span>`:''}${t.assignee?`<div class="who">${iconFor(t.assignee,12)}@${esc(t.assignee)}</div>`:''}</div>`;
       })()).join('')}</div>`;
     }).join('');
     const ph=p.phase||'';
@@ -1040,7 +1041,9 @@ async function render(){
     const id=+c.dataset.id,t=tasks.find(x=>x.id===id);if(!t)return;
     if(suppressClickId&&+suppressClickId===id)return;   // drag-end, not a click
     const next={todo:'doing',doing:'testing',testing:'done',failed:'doing',done:'todo',blocked:'doing',stale:'todo'}[t.status];
-    await fetch('/task/update',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({id,status:next})});render();
+    const r=await fetch('/task/update',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({id,status:next})});
+    if(!r.ok){let j={};try{j=await r.json();}catch{} alert(`#${id} stays ${t.status}: ${j.error||('hub '+r.status)}`);}   // #6452: a refused move (no drill line, frozen assignee) says why
+    render();
   });
 }
 function addMsg(m,count=true){

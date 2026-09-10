@@ -83,12 +83,14 @@ const getCard = async (id) => {
   ok("relay_task_move exposes an optional note param", !!move?.inputSchema?.properties?.note);
   ok("relay_task_move's description DEMANDS a note on testing/done", /note/.test(move?.description || "") && /testing|done/.test(move?.description || ""), (move?.description || "").slice(0, 90));
   ok("relay_board's description mentions the ·N note count", /·N|note/.test(board?.description || ""));
+  ok("relay_task_add exposes an optional drill param (#6452)", !!add?.inputSchema?.properties?.drill && /done/.test(add.inputSchema.properties.drill.description || ""));
+  ok("relay_task_move exposes an optional drill param (#6452)", !!move?.inputSchema?.properties?.drill);
 }
 
 // ---- 1. task_add with a note lands on the card's log ------------------------------------------
 let cardId;
 {
-  const r = await call("relay_task_add", { title: "note drill card", note: "plan: add note pass-through on the MCP tools" });
+  const r = await call("relay_task_add", { title: "note drill card", note: "plan: add note pass-through on the MCP tools", drill: "open the card and see the note count" });   // #6452: the done gate needs a drill line on this card by section 5
   const out = text(r);
   const m = out.match(/card #(\d+)/);
   ok("task_add succeeded", !!m, out.slice(0, 90));
@@ -139,6 +141,25 @@ let cardId;
   ok("note ==2000 chars passes through", !isErr(exact) && /-> done/.test(text(exact)), text(exact).slice(0, 90));
   const card2 = await getCard(cardId);
   ok("...and lands full-length on the log", card2?.log?.length === 3 && card2.log[2].text.length === 2000, `len=${card2?.log?.[2]?.text?.length}`);
+}
+
+// ---- 6. #6452: the done gate as the MCP caller sees it ------------------------------------------
+{
+  const added = await call("relay_task_add", { title: "drill-less card" });
+  const id = Number(text(added).match(/card #(\d+)/)?.[1] || 0);
+  ok("task_add without a drill says so in its reply", /NO DRILL/.test(text(added)), text(added).slice(0, 120));
+  await call("relay_task_move", { id, status: "testing", note: "tests: green" });
+  const refused = await call("relay_task_move", { id, status: "done", note: "closing" });
+  ok("task_move to done is REFUSED with the hub's reason, not 'hub 409'", isErr(refused) && /REFUSED/.test(text(refused)) && /drill/i.test(text(refused)) && !/hub 409/.test(text(refused)), text(refused).slice(0, 160));
+  ok("...and the card stayed in testing", (await getCard(id))?.status === "testing");
+  const view = text(await call("relay_board", { card: id }));
+  ok("the card view says the drill is missing and how to add one", /drill: \(none on the card/.test(view) && /Drill:/.test(view), view.split("\n").slice(0, 4).join(" | "));
+  const closed = await call("relay_task_move", { id, status: "done", note: "Drill: ran it, saw it", drill: "move a drill-less card to done and read the refusal" });
+  ok("task_move with a drill in the same call reaches done", !isErr(closed) && /-> done/.test(text(closed)), text(closed).slice(0, 120));
+  const view2 = text(await call("relay_board", { card: id }));
+  ok("the card view shows the drill line", /^drill: move a drill-less card to done/m.test(view2), view2.split("\n").slice(0, 3).join(" | "));
+  const board = text(await call("relay_board", {}));
+  ok("the board listing marks a card that carries a drill", new RegExp(`#${id} [^\\n]*·drill`).test(board), board.split("\n").find(l => l.includes(`#${id}`)) || "");
 }
 
 mcp.kill(); hub.kill();
