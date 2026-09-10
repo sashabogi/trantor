@@ -61,11 +61,8 @@ const rh = spawnSync("node", ["hooks/sessionstart.mjs"], {
   env: { ...envSansOptIn, CLAUDE_PROJECT_DIR: homedir(), RELAY_URL: CLOSED },
 });
 ok("home-dir session exits 0", rh.status === 0);
-// Was: assert stdout is exactly "{}". Silence was the bug (2026-08-23) — a reboot put every
-// window in $HOME, each session assumed it was still its old seat, and one finally reported
-// "Trantor is unreachable" with every hub healthy. The INVARIANT is unchanged (no registration,
-// no phantom project); the session must now also be TOLD, so the output carries the not-a-seat
-// block and never the registered-session block.
+// Was: assert stdout is exactly "{}". A session in $HOME is not a seat, and it must be TOLD so:
+// the output carries the not-a-seat block and never the registered-session block.
 {
   let hctx = ""; try { hctx = JSON.parse(rh.stdout || "{}")?.hookSpecificOutput?.additionalContext || ""; } catch {}
   ok("home-dir session does not register — no phantom project", !hctx.includes("<trantor session="));
@@ -76,8 +73,8 @@ const rh2 = runHook(homedir(), "deliberate:home");
 ok("RELAY_SESSION opts a home-dir session back in", rh2.status === 0 && !rh2.stderr.includes("not registering"));
 
 // plugin-cache guard: verifying `node mcp.mjs` boots from a plugin snapshot is the documented
-// check after an update, but PROJECT falls back to the cwd basename — so each check used to
-// leave a lane named after the VERSION (a real "0.17.66" lane sat in the sidebar until 2026-08-12).
+// check after an update, but PROJECT falls back to the cwd basename, so each check used to
+// leave a lane named after the VERSION in the sidebar.
 {
   // realpath: macOS tmpdir() is a symlink (/var -> /private/var) but process.cwd() reports the
   // real path, so a raw join() would never prefix-match. CLAUDE_PROJECT_DIR must be stripped too —
@@ -103,10 +100,8 @@ ok("RELAY_SESSION opts a home-dir session back in", rh2.status === 0 && !rh2.std
 }
 
 // --- regression: is-main guard must fire when the install path contains a SPACE ---
-// Bug (0.17.24): bin/profile.mjs & bin/advise.mjs compared import.meta.url to a hand-built
-// `file://${argv[1]}` (raw, unencoded). import.meta.url is percent-encoded, so a space in the path
-// (e.g. ".../Application Support/..." — Herd's bundled nvm) made the guard false → main block skipped,
-// exit 0, no write. The whole class: any URL-reserved char in the path. Fixed via pathToFileURL.
+// import.meta.url is percent-encoded, so comparing it to a raw `file://${argv[1]}` skipped the
+// main block for any URL-reserved char in the path. Fixed via pathToFileURL.
 {
   // realpath the tmp base first: macOS tmpdir() lives under /var → /private/var (a symlink), which would
   // otherwise mismatch import.meta.url (realpath-resolved) vs argv1 for reasons unrelated to the space.
@@ -135,10 +130,8 @@ ok("RELAY_SESSION opts a home-dir session back in", rh2.status === 0 && !rh2.std
 }
 
 // --- regression: sessionstart's hub reads must actually WORK against a live hub ---
-// Bug (≤0.17.68): jget() called signedGet without importing it from ./lib/api.mjs. Every hub read
-// (peers, catchup, board context) threw ReferenceError — swallowed by the callers' catch{}, so the
-// hook exited 0 with its context injection silently EMPTY. The closed-port tests above can't see
-// this class (network failure and a ReferenceError look identical there), so: live hub, real read.
+// A missing import once made every hub read throw inside a swallowed catch, so the hook exited 0
+// with empty context; the closed-port tests above cannot see that class, so: live hub, real read.
 {
   const { spawn } = await import("node:child_process");
   const PORT = 47911;
@@ -192,13 +185,31 @@ ok("RELAY_SESSION opts a home-dir session back in", rh2.status === 0 && !rh2.std
 }
 
 rmSync(hfFile, { force: true });
-// slop-gate must never report clean when oxlint itself could not run (2026-09-03: a worktree
-// without node_modules made npx fail and the empty output read as zero hits).
+// slop-gate must never report clean when oxlint itself could not run (a worktree without
+// node_modules made npx fail and the empty output read as zero hits).
 {
   const rg = spawnSync(process.execPath, [join(process.cwd(), "bin/slop-gate.mjs"), "--surface", "bin/slop-gate.mjs"],
     { encoding: "utf8", timeout: 30000, env: { ...process.env, PATH: "/nonexistent-bin" } });
   ok("slop-gate exits non-zero when oxlint cannot run", rg.status !== 0);
   ok("slop-gate says it could not run, not clean", /could not run oxlint/.test(rg.stderr) && !/clean/.test(rg.stdout));
+}
+
+// comment policy (#6450): a block over 4 lines or a dated comment line errors; .sh and .rs surfaces gate
+// on comments alone because oxlint ignores them.
+{
+  const cpDir = join(tmpdir(), `slop-cp-${process.pid}`);
+  mkdirSync(cpDir, { recursive: true });
+  const gate = (name, body) => {
+    writeFileSync(join(cpDir, name), body);
+    return spawnSync(process.execPath, [join(process.cwd(), "bin/slop-gate.mjs"), "--surface", join(cpDir, name)], { encoding: "utf8", timeout: 30000 });
+  };
+  const long = gate("long.sh", "#!/bin/sh\n# one\n# two\n# three\n# four\n# five\necho ok\n");
+  ok("a 5-line comment block fails the gate", long.status === 1 && /comment-policy\(long-block\)/.test(long.stdout));
+  const dated = gate("dated.rs", "// fixed 2026-09-03 after the incident\nfn main() {}\n");
+  ok("a dated comment line fails the gate", dated.status === 1 && /comment-policy\(dated\)/.test(dated.stdout));
+  const fine = gate("fine.sh", "#!/bin/sh\n# one line of why (#6450)\n# and a second\n# three\n# four\necho ok\n");
+  ok("four comment lines with no date pass, on comments alone", fine.status === 0 && /comment policy only/.test(fine.stdout));
+  rmSync(cpDir, { recursive: true, force: true });
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);
