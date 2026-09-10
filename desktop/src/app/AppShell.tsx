@@ -13,7 +13,7 @@ import { usePendingProposals } from "../shared/Proposals";
 import { ProjectIcon } from "../shared/ProjectIcon";
 import type { LensCompat } from "../features/project/ProjectHeader";
 import { orchRestorables, type RestorableSession } from "../features/workspace/herdr";
-import { visibleRestorables } from "../features/workspace/restorables";
+import { restoreSettled, settleEntries } from "../features/workspace/restorables";
 import { dismissedSessionsApi } from "../features/workspace/dismissedSessions";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
@@ -27,6 +27,10 @@ import { classifyWakeOutcome, wakeOutcomeIsTransient, wakeRowLine, WAKE_OUTCOME_
 import { applyWakeProgress, wakeInProgress, wakeProgressRowState, WAKE_PROGRESS_EVENT, type WakeProgress } from "../features/genesis/wakeProgress";
 
 const LOCAL_HUB = "http://127.0.0.1:4477";
+// #7269: the launch snapshot's settle window — re-poll cadence, and how long the window runs
+// before whatever is still dead just shows, Resume/takeover as today.
+const RESTORE_SETTLE_TICK_MS = 5_000;
+const RESTORE_SETTLE_MS = 60_000;
 import { Home } from "../features/home/Home";
 import { Board } from "../features/board/Board";
 import { Workspace } from "../features/workspace/Workspace";
@@ -358,27 +362,31 @@ export function AppShell() {
     // runs once at mount; the fold helpers are stable component-body closures
   }, []);  // eslint-disable-line react-hooks/exhaustive-deps
 
-  // #5401: at launch only (with a 30s retry for herdr still starting), find projects whose
-  // orchestrator pane outlived its conversation. The baton dial decides auto-resume vs an
-  // ask strip, both through the same wakeProject path as the sidebar, so there is one
-  // resume route. A continuous poll would nag about a deliberately /exited session forever.
+  // #5401: at launch, projects whose orchestrator pane outlived its conversation. #7269: herdr's
+  // own persist::restore re-runs `claude --resume` the same second the app boots and those fresh
+  // claudes register as live agents only seconds later — a run-once snapshot reads them ALL as
+  // Interrupted and stays wrong. The snapshot settles instead: re-poll until two polls agree.
   const [restorables, setRestorables] = useState<RestorableSession[]>([]);
   const restoreRan = useRef(false);
   useEffect(() => {
     if (restoreRan.current) return;
     restoreRan.current = true;
     let alive = true;
-    const attempt = async (retriesLeft: number) => {
-      let found: RestorableSession[];
+    let timer: ReturnType<typeof setInterval> | null = null;
+    let prev: RestorableSession[] | null = null;
+    const handled = new Set<string>(); // classified: auto-woken, or in askProjects below
+    const askProjects = new Set<string>();
+    const poll = async (): Promise<RestorableSession[] | null> => {
+      let fresh: RestorableSession[];
       try {
-        found = await orchRestorables();
+        fresh = await orchRestorables();
       } catch {
-        if (retriesLeft > 0) setTimeout(() => { if (alive) void attempt(retriesLeft - 1); }, 30_000);
-        return;
+        return null; // herdr still starting — the caller retries
       }
-      if (!alive || !found.length) return;
-      const ask: RestorableSession[] = [];
-      for (const r of found) {
+      if (!alive) return null;
+      for (const r of fresh) {
+        if (handled.has(r.project)) continue;
+        handled.add(r.project);
         let baton = "ask";
         try {
           // SAFETY: autonomy_get returns lib/autonomy.mjs's resolved-dials JSON, whose `baton`
@@ -386,18 +394,33 @@ export function AppShell() {
           baton = (JSON.parse(await invoke<string>("autonomy_get", { project: r.project })) as { baton?: string }).baton ?? "ask";
         } catch { /* unreadable dial = the safe default */ }
         if (baton === "auto") { if (alive) await wakeProject(r.project); }
-        else ask.push(r);
+        else askProjects.add(r.project);
       }
-      if (!alive || !ask.length) return;
-      // #6476 — a dismissal is a decision, not a snooze: it must survive this very relaunch.
-      // Keyed on (project, sessionId), so a NEW dead session for a project dismissed last time
-      // still makes the cut.
+      // Re-read every pass: a dismissal clicked mid-window must survive the next poll (#6476).
       const dismissed = await dismissedSessionsApi.list().catch(() => []);
-      const visible = visibleRestorables(ask, dismissed);
-      if (alive && visible.length) setRestorables(visible);
+      if (alive) setRestorables(settleEntries(askProjects, fresh, dismissed));
+      return fresh;
+    };
+    const attempt = async (retriesLeft: number) => {
+      const fresh = await poll();
+      if (fresh === null) {
+        if (retriesLeft > 0) setTimeout(() => { if (alive) void attempt(retriesLeft - 1); }, 30_000);
+        return;
+      }
+      if (!alive || !fresh.length) return;
+      prev = fresh;
+      const deadline = Date.now() + RESTORE_SETTLE_MS;
+      timer = setInterval(async () => {
+        if (!alive) return;
+        if (Date.now() >= deadline) { if (timer) clearInterval(timer); return; }
+        const next = await poll();
+        if (!alive || next === null) return;
+        if (restoreSettled(prev, next)) { if (timer) clearInterval(timer); }
+        else prev = next;
+      }, RESTORE_SETTLE_TICK_MS);
     };
     void attempt(1);
-    return () => { alive = false; };
+    return () => { alive = false; if (timer) clearInterval(timer); };
     // wakeProject is stable enough for a run-once effect; re-running on its identity would defeat the launch-only design.
   }, []);  // eslint-disable-line react-hooks/exhaustive-deps
 
