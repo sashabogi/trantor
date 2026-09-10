@@ -1,26 +1,8 @@
 #!/usr/bin/env node
-// trantor PostToolUse inbox delivery — surface bus messages to a BUSY session.
-//
-// The bug this fixes: Trantor message delivery is pure pull-on-demand. relay_send only
-// enqueues on the hub; the recipient learns of a message ONLY when the model itself
-// chooses to call relay_inbox/relay_wait. A session grinding through a long tool-use loop
-// never makes that choice, so it sits "online" (the heartbeat keeps lastSeen fresh) but
-// DEAF — a peer can ping it twice over 10 minutes and get no reply. (Observed 2026-06-23:
-// a new session pinged a mid-build sibling; the sibling never answered because it was busy
-// and never polled.)
-//
-// The fix, hook-side (don't trust the model to poll): a busy session IS firing tool calls,
-// so this PostToolUse hook runs constantly. Each run polls /inbox and injects any NEW peer
-// messages via hookSpecificOutput.additionalContext — which Claude Code delivers as a
-// system reminder the model acts on IN THE SAME TURN, between its own tool calls. So a ping
-// lands within a few seconds even mid-build, and the model can reply via relay_send without
-// waiting for the human to prompt it.
-//
-// Cheap + fail-silent by contract: a per-session poll stamp gates the network call, a short
-// fetch timeout means we never add real latency, and we ALWAYS exit clean with valid stdout.
-// First run anchors the cursor to SESSION START (hooks/lib/inbox-ledger.mjs): backlog from before
-// the session is never replayed, while anything that arrived on this session's watch is delivered
-// even when the very first poll failed.
+// trantor PostToolUse inbox delivery: delivery is pull-on-demand and a busy session never polls,
+// so this hook polls /inbox on every tool call (stamp-throttled) and injects NEW peer messages as
+// additionalContext, which the model acts on in the same turn. Cheap + fail-silent by contract.
+// The cursor anchors to SESSION START (hooks/lib/inbox-ledger.mjs), never to the first success.
 import { readFileSync, writeFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
@@ -44,13 +26,8 @@ async function getInbox(session, since, instance, project, { peek = false, timeo
   return json;   // { messages: [...], cursor, superseded? }
 }
 
-// PostToolUse hands us the tool-input JSON on stdin, and we MUST drain it: a large tool input
-// (e.g. a big Write) can exceed the 64KB pipe buffer and block the parent's write if nobody reads.
-// It used to drain into the void and resolve with NOTHING, so `main(stdinRaw)` always got
-// undefined — which silently cost two things: `session_id` (so the per-instance cursor in
-// docs/INSTANCE-KEYS-CONTRACT.md never actually keyed by instance) and `cwd` (so this hook could
-// only ever guess its project from the process directory). Draining and KEEPING the bytes is the
-// same protection, minus the amnesia.
+// Drain stdin fully (a large tool input blocks the parent's pipe otherwise) and KEEP the bytes:
+// session_id keys the per-instance cursor (docs/INSTANCE-KEYS-CONTRACT.md) and cwd names the project.
 function drainStdin() {
   return new Promise(res => {
     let d = "";
@@ -89,13 +66,8 @@ async function main(stdinRaw) {
   // same peer the relay registered (RELAY_SESSION wins; else RELAY_AGENT brand; else host:project).
   const project = resolveProject(projectDir);
 
-  // IDENTITY DRIFT. The relay MCP server is a separate long-lived process: it resolved its project
-  // once, from the directory the session STARTED in, and cannot see a later `cd`. These hooks
-  // resolve per call from the CURRENT directory. Move between projects mid-session and the two stop
-  // agreeing: mail arrives as one identity while relay_send speaks as the other, so reads work and
-  // sends can 401 on an enrolled hub. Both halves had real traffic on the production hub before
-  // anyone noticed. It cannot be repaired from here (the MCP's cwd is fixed), so say it plainly,
-  // once, with the two ways out.
+  // IDENTITY DRIFT: the relay MCP resolved its project once at start, hooks resolve per call, so a
+  // mid-session cd across projects splits reads from sends. Not repairable here; say it once.
   const driftNote = (() => {
     try {
       const startDir = process.env.CLAUDE_PROJECT_DIR || "";

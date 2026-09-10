@@ -1,11 +1,7 @@
 #!/usr/bin/env node
-// trantor PreCompact hook — fires right before Claude Code compacts a full context
-// window. A PreCompact hook CANNOT stop compaction; the current window is always
-// compacted. So its job is to write a rich WHOLE-SESSION handoff and (on macOS, by
-// default) prompt to open a FRESH session in a new terminal that takes over with a
-// full window. The new session's SessionStart hook loads the handoff. This is the
-// at-the-wall backstop; the heartbeat hook can also fire this earlier when the
-// context window size is known (see hooks/lib/handoff.mjs).
+// trantor PreCompact hook: compaction cannot be stopped, so write a rich whole-session handoff and
+// (on macOS, by default) prompt to open a FRESH session that takes over with a full window. The
+// at-the-wall backstop; the heartbeat fires earlier when the window is known (hooks/lib/handoff.mjs).
 import { readConfig, writeHandoff, pingBus, maybeSpawn, armBatonClose,
          contextUsage, alreadyHandedOff, markHandedOff, controllingTty, terminalWindowForTty } from "./lib/handoff.mjs";
 import { basename } from "node:path";
@@ -39,9 +35,8 @@ try {
     process.stderr.write(`[trantor] fresh session already spawned for this window — handoff refreshed only\n`);
   } else if (maybeSpawn(projectDir, conf)) {
     markHandedOff(sessionId, cur);
-    // baton pass: at-the-wall fresh session. Close THIS window ONLY if opted in
-    // (config.autoCloseOriginal:true) — default leaves the original alive (2026-06-21 fix: an auto
-    // baton must never kill a session). We have the controlling tty here for the opt-in case.
+    // baton pass at the wall. Close THIS window ONLY if opted in (config.autoCloseOriginal:true):
+    // an auto baton must never kill a session. We hold the controlling tty for the opt-in case.
     const tty = controllingTty();
     const windowId = tty ? terminalWindowForTty(tty) : "";
     const armed = windowId ? armBatonClose(file, windowId, tty, conf, { auto: true }) : false;

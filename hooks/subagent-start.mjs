@@ -1,22 +1,8 @@
 #!/usr/bin/env node
-// trantor sub-agent in-flight hook — posts/enriches a "doing" card so the board shows sub-agent work IN
-// PROGRESS while it runs. The SubagentStop hook (subagent-cost.mjs) flips it to "done" (with notional cost).
-//
-// This ONE script serves TWO hook events (dispatch on input.hook_event_name):
-//
-//   • PreToolUse (matcher Task|Agent) — fires at DISPATCH TIME and carries tool_input.prompt, so it has a
-//     good human title. It CREATES the in-flight card (source:"cc-subagent", title-fingerprinted). Works on
-//     every CC version → the universal in-flight source, no regression on older CC.
-//
-//   • SubagentStart (native, CC 2.1.x+) — fires when the sub-agent actually SPAWNS and carries the real
-//     agent_id + agent_type (+ parent session), but NO prompt. It ENRICHES the card the PreToolUse create
-//     already made: stamps agent_id (robust start↔stop pairing key, replacing the fragile title match) and
-//     parent (for nesting sub-agents under the session focus card). If no create card exists (a spawn with
-//     no matching PreToolUse — rare), it CREATES one keyed by agent_id so nothing orphans.
-//
-// Registering BOTH never double-posts: on modern CC the PreToolUse create runs first, then SubagentStart
-// finds that card by (project, agentType) and enriches in place (creates nothing). Fail-silent throughout —
-// never block or delay a dispatch.
+// trantor sub-agent in-flight hook: posts/enriches a "doing" card while a sub-agent runs; subagent-cost
+// flips it to done. ONE script, TWO events: PreToolUse (Task|Agent) has the prompt and CREATES the
+// card (source "cc-subagent"); SubagentStart has agent_id + parent and ENRICHES that card, creating
+// one keyed by agent_id only when none exists. Never double-posts; fail-silent, never delays a dispatch.
 import { resolveProject, hostId } from "../lib/project.mjs";
 import { signedPost } from "./lib/api.mjs";
 

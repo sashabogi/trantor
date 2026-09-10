@@ -1,15 +1,6 @@
-// trantor handoff core — shared by the PreCompact hook (at-the-wall) and the
-// PostToolUse heartbeat (proactive early-warning). One place that knows how to:
-//   • read a session's live context occupancy from its transcript usage,
-//   • build a WHOLE-SESSION summary (not just the tail),
-//   • write a handoff record, and
-//   • spawn a fresh same-agent session in a new terminal that takes it over.
-//
-// Why this exists: PreCompact fires only at the compaction wall and cannot stop
-// compaction, so the only way to continue with a full window is to open a NEW
-// session that loads the handoff. The heartbeat path lets us do that BEFORE the
-// wall when we know the window size. Both paths share a per-session guard so we
-// never write/spawn twice for the same context window.
+// trantor handoff core, shared by PreCompact (at the wall) and the heartbeat (early warning):
+// reads live context occupancy, builds a whole-session summary, writes the record, spawns a fresh
+// session that takes it over. Both paths share a per-session guard. Seams: docs/CONTRACT-hooks.md.
 import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync, statSync, openSync, readSync, fstatSync, closeSync, rmSync } from "node:fs";
 import { join, basename, dirname, sep } from "node:path";
 import { homedir, hostname } from "node:os";
@@ -80,13 +71,9 @@ export function contextUsage(transcriptPath, conf = readConfig()) {
   return { tokens, window, frac: window ? tokens / window : null, model };
 }
 
-// The #5572 poison guard — the SAME rule, from the SAME fixture manifest
-// (test/fixtures/context/manifest.json), as the desktop gauge's ContextGuard: the baton must
-// read what the gauge reads, or the banner and the heartbeat disagree. Report the last row
-// unless it falls below 40% of the session max; then report the recent maximum (a lone
-// collapsed row is an artifact — across 1,839 usage rows in the two incident-era transcripts,
-// zero real drops below that floor were observed) unless the last FIVE rows all sit below the
-// floor: a sustained new level is reality, accept it.
+// The #5572 poison guard, from the SAME fixture manifest as the desktop gauge's ContextGuard: report
+// the last row unless it falls below 40% of the session max, then the recent maximum, unless the
+// last FIVE rows all sit below the floor (a sustained new level is reality).
 export function guardContextTokens(rows) {
   let max = 0;
   const recent = [];
@@ -104,13 +91,8 @@ export function guardContextTokens(rows) {
   return Math.max(...recent);
 }
 
-// The transcript logs the model WITHOUT the [1m] marker, so we cannot tell a
-// 200k window from a 1M one in general. Fable is the known exception (#5503):
-// its window is 1M and the name is all the transcript ever gives us — the
-// undeclared window kept the early-warning off and the session hit the wall
-// silently. An explicit declaration (env RELAY_CONTEXT_WINDOW or
-// config.contextWindow) always wins over any name-based inference. Returns 0
-// when unknown (→ no warning).
+// The transcript logs the model WITHOUT the [1m] marker. Fable is the known 1M exception (#5503);
+// an explicit declaration (RELAY_CONTEXT_WINDOW / config.contextWindow) always wins. 0 = unknown.
 export function resolveWindow(model = "", conf = readConfig()) {
   const explicit = Number(process.env.RELAY_CONTEXT_WINDOW || conf.contextWindow || 0);
   if (explicit > 0) return explicit;
@@ -150,23 +132,10 @@ export function markHandedOff(sessionId, curTokens = 0) {
 
 function nowSec() { try { return Number(execSync("date +%s", { encoding: "utf8" }).trim()) || 0; } catch { return 0; } }
 
-// ---- in-flight guard --------------------------------------------------------
-// True when this session is actively orchestrating sub-agents (Agent/Task tool, Workflow swarms,
-// agent-teams): any `agent-*.jsonl` under <transcriptDir>/<sid>/subagents/ (incl. workflows/) was
-// written within `withinMs`. The auto baton-pass uses this to DEFER — we must never yank a fresh
-// window up (or, before the 2026-06-21 fix, kill the original) while real in-flight agent work is
-// running. INCIDENT 2026-06-21: a 90% baton fired mid 2-agent build and the original session was
-// SIGKILLed mid-flight. Best-effort; returns false on any error.
-// ---- ARMING: the baton waits for a turn boundary --------------------------------------------
-// The heartbeat runs on PostToolUse, so the only moment it can ever fire is BETWEEN TWO TOOL CALLS
-// — the middle of a turn. On 2026-08-24 that produced a handoff written 36 seconds before the work
-// it described was committed, and the successor reported four finished things as still open.
-// subagentsActive() was the only mid-flight guard and it only sees spawned sub-agents, not a
-// session driving tool calls in its own loop.
-//
-// So the threshold ARMS and the Stop hook FIRES: at a Stop the turn is complete, which is the only
-// point where a summary can describe something finished. One resolver for the marker path, used by
-// both hooks, because two hooks disagreeing about a file path is its own recurring bug here.
+// ---- in-flight guard: true when a sub-agent transcript was written within `withinMs`; the auto
+// baton DEFERS on it. Best-effort; false on any error.
+// ---- ARMING: the threshold ARMS and the Stop hook FIRES, because PostToolUse only ever runs
+// mid-turn. One resolver for the marker path, used by both hooks.
 export function armPath(sessionId) {
   const safe = String(sessionId || "s").replace(/[^A-Za-z0-9_.-]/g, "_");
   return join(process.env.AGENT_BUS_DIR || process.env.RELAY_DATA_DIR || join(homedir(), ".agent-bus"), `handoff-armed-${safe}.json`);
@@ -219,20 +188,10 @@ export function subagentsActive(transcriptPath, withinMs = 90_000) {
   } catch { return false; }
 }
 
-// ---- #6528: THE ONE GATE — is this session's turn still in flight? --------------------------
-// Two signals, both read from artifacts the session itself already writes:
-//   1. subagentsActive() — a spawned sub-agent wrote its transcript recently. The 90s mtime
-//      window is a false-idle risk (a sub-agent in a long model stretch writes nothing for
-//      minutes — that is exactly how orca-onboarding-map went unseen on #6528), but widening
-//      it only ever DEFERS a handoff, never fires one early — the safe direction.
-//   2. the transcript TAIL — the last real row tells where the turn stands. A user row
-//      carrying tool_result means the model is about to continue (mid-turn). An assistant
-//      row carrying tool_use means a result is still owed (mid-turn). Only an assistant row
-//      that is plain text (the turn's closing words) reads as idle — the same state the Stop
-//      hook fires on.
-// Every path that can WRITE+SPAWN a handoff (heartbeat backstop, Stop hook, `trantor handoff`)
-// asks this before firing; only an operator's own typed command or the explicit hard-cap leg
-// (--force) may bypass it.
+// ---- #6528: THE ONE GATE: is this session's turn still in flight? --------------------------
+// Two signals: subagentsActive() (widening its window only ever defers, the safe direction) and
+// the transcript TAIL: only a text-only assistant row reads as idle, the state the Stop hook
+// fires on. Every WRITE+SPAWN path asks this; only a typed command or --force bypasses it.
 const TAIL_BYTES = 262_144;
 function transcriptTailRows(transcriptPath) {
   const fd = openSync(transcriptPath, "r");
@@ -264,11 +223,8 @@ export function lastRowMidTurn(transcriptPath) {
         if (calls.length) return true;                               // a result is still owed
         return false;                                                // text-only → turn said its piece
       }
-      // user row: #6528 follow-up — a trailing user row of ANY kind means in flight. A
-      // tool_result is the model mid-cycle, and a PLAIN prompt is the model WORKING on that
-      // prompt: Claude Code does not flush the assistant turn until it ends, so the assistant
-      // row's absence is not idle evidence. The only idle evidence is the text-only assistant
-      // row above, or the Stop hook itself.
+      // #6528 follow-up: a trailing user row of ANY kind means in flight. CC does not flush the
+      // assistant turn until it ends, so the assistant row's absence is not idle evidence.
       return true;
     }
     return false;
@@ -284,17 +240,9 @@ function isRelayWaitCall(block) {
 }
 
 // ---- does the transcript's session still have a process? (#6668) ------------------------------
-// Claude Code registers every live session in ~/.claude/sessions/<pid>.json ({pid, sessionId,
-// cwd, ...}) and removes the file at exit. The 09-07 12:35 chain armed on a transcript whose
-// session had exited at 12:16: the transcript's last row was a tool_result ("Connection closed"),
-// so the boundary gate read it as mid-turn and waited on a turn that no process would ever end.
-// A session with no live process IS at its boundary — its record can be written now.
-//   "live"    an entry names this session and its pid answers kill -0
-//   "dead"    the registry is in use (some other session is live) and none of its live entries
-//             name this session
-//   "unknown" no registry, or nothing in it is alive — say nothing, the boundary gate decides
-// The "dead" verdict needs another LIVE entry on purpose: a Claude Code too old to keep the
-// registry must not turn every mid-turn handoff into an immediate write.
+// CC registers live sessions in ~/.claude/sessions/<pid>.json. A session with no live process IS
+// at its boundary. "dead" needs another LIVE entry on purpose: a CC too old to keep the registry
+// must not turn every mid-turn handoff into an immediate write. "unknown" = say nothing.
 export function sessionProcessState(sessionId, { home = homedir() } = {}) {
   if (!sessionId) return "unknown";
   let files;
@@ -368,11 +316,8 @@ function digest(turns, budget = 56_000) {
   return out;
 }
 
-// Where scrooge actually lives. `command -v` alone was the bug: it installs into ~/.local/bin,
-// which is NOT on a default PATH, so every handoff written from a hook, launchd job or precompact
-// silently failed the check and dumped raw transcript instead. Those are precisely the automatic
-// paths, so the summarizer was missing exactly when nobody was watching. Resolve to an absolute
-// path and exec THAT.
+// Where scrooge actually lives: `command -v` misses ~/.local/bin on a hook's PATH, so the automatic
+// paths silently dumped raw transcript. Resolve to an absolute path and exec THAT.
 const SCROOGE_DIRS = [
   join(homedir(), ".local", "bin"),
   "/opt/homebrew/bin",
@@ -396,8 +341,8 @@ export function buildSummary(transcriptPath) {
   try { convo = digest(collectTurns(transcriptPath)); } catch { convo = ""; }
   if (!convo) return "*(transcript unreadable)*";
   const sys = "You are writing a SESSION HANDOFF so a fresh Claude Code session can take over without losing context. The text spans an entire (possibly multi-hour) session: opening turns, an even sample of the middle, and the recent tail. Produce a concise but COMPLETE markdown handoff with these sections: TASK (what we're doing + the goal), STATE (done / in-progress), KEY DECISIONS, OPEN THREADS & NEXT STEPS (concrete actions), KEY FILES & locations (exact paths). Be specific. Cover the whole arc, not just the end. The finished handoff must fit ~3500 characters — anything longer is capped with an elision marker and the elided middle (usually STATE) is exactly what the successor needed (#6528), so compress the arc, never drop a section. Do not pad.";
-  // Cut the raw tail on a TURN boundary. A blind slice(-12000) opens mid-sentence, which is how the
-  // 2026-08-24 handoff began, and a successor cannot tell a truncated thought from a complete one.
+  // Cut the raw tail on a TURN boundary: a blind slice opens mid-sentence and a successor cannot
+  // tell a truncated thought from a complete one.
   const tail = (n) => {
     // Only trim to a turn boundary when we ACTUALLY truncated. When the whole digest fits, trimming
     // would throw away the session's opening — which is the part a successor needs most, and which
@@ -438,11 +383,9 @@ export function verbatimRecentTail(transcript, chars = 7000) {
 }
 
 // ---- #5648: handoff writer discipline --------------------------------------
-// The inline summary is the RECAP, not the record: the successor reads it as a hook injection,
-// and an oversized injection gets persisted to a file the successor re-reads — paying twice for
-// the same context. Cap the composed digest at ~4KB. When it must cut, keep BOTH ends a successor
-// needs — the opening (task & goal framing) and the tail (current state) — cutting each on a
-// paragraph boundary, with an explicit elision marker so nobody mistakes the middle for missing.
+// The inline summary is the RECAP, not the record, and an oversized injection is paid for twice.
+// Cap at ~4KB keeping BOTH ends (framing + current state) on paragraph boundaries, with an
+// explicit elision marker.
 export function capSummary(text, cap = 4096) {
   const s = String(text || "");
   if (s.length <= cap) return s;
@@ -456,12 +399,9 @@ export function capSummary(text, cap = 4096) {
   return head + elide + tail;
 }
 
-// ---------------------------------------------------------------------------------------------
-// Trantor State — the structured field on the record (TDD §4.5). `summary` keeps being written
-// exactly as it is today; `state` rides beside it, validated on write and NEVER capped. That is
-// the whole fix for #6528: capSummary's mid-string elision ate the STATE section of the prose, and
-// the structured field cannot lose a member because the lossy operation is not applied to it.
-// ---------------------------------------------------------------------------------------------
+// Trantor State: the structured field on the record (TDD §4.5). `summary` is unchanged; `state`
+// rides beside it, validated on write and NEVER capped (#6528: capSummary once ate the STATE
+// section of the prose).
 
 /** Dark by default. The prose path is untouched either way; this flag only decides whether the
  *  structured field is built and rendered (TDD §4.5, "Fallback"). */
@@ -475,21 +415,10 @@ export function resolveSeat(projectName, env = process.env) {
   return env.RELAY_SESSION || (env.RELAY_AGENT ? `${env.RELAY_AGENT}:${projectName}` : `${hostId()}:${projectName}`);
 }
 
-// ── #7037: one SIGNED, synchronous hub call, and an error that cannot be mistaken for data ──────
-//
-// Three reads on this path curl'd the hub UNSIGNED and read the refusal as an answer. The hub
-// replies 401 {"error":"signature required"}; a 401 body is VALID JSON, so `JSON.parse(out).tasks
-// || []` parses fine, finds no `tasks` key, and hands back an empty list. The catch never fires
-// because nothing threw. Silently, on every handoff: the card id resolved to 0, the verify-gate
-// list to [], and the storm guard — which exists because an old-hook session once fired 9 handoffs
-// in 49 minutes — read a refusal as "allowed" and stopped guarding.
-//
-// So the shape matters more than the signature: this returns { ok, status, json, reason } and NEVER
-// a bare list. A caller has to look at `ok` before it can reach the data, which is the property the
-// old code lacked. An auth failure must not be spellable as an empty result.
-//
-// Synchronous on purpose — this whole path is (see the state imports above), so api.mjs's async
-// signedGet is unavailable. signedHeaders IS synchronous, so only the transport differs.
+// ── #7037: one SIGNED, synchronous hub call whose error cannot be mistaken for data ──────
+// A 401 body is valid JSON, so `JSON.parse(out).tasks || []` once read a refusal as an empty
+// board. Returns { ok, status, json, reason }, never a bare list: a caller must look at `ok`.
+// Synchronous because this whole path is; signedHeaders is synchronous, only transport differs.
 function hubCallSync(path, { project, session, method = "GET", body, timeoutMs = 2500 } = {}) {
   const url = relayUrl(project) + path;
   let headers = {};
@@ -527,17 +456,8 @@ function warnHubRead(what, r) {
 }
 
 /**
- * Which card this handoff belongs to. `TRANTOR_CARD` wins — the crew runner knows the answer for
- * certain and a lookup cannot beat being told. Otherwise ask the hub for this seat's newest open
- * card, on the same 2s best-effort budget as the verify-gates fetch: a hub that is down costs the
- * handoff a card number, never the handoff.
- *
- * #7037: reads /catchup, not /tasks. /tasks is the whole board with every card's full log — 1.6MB
- * here, 625-961ms typical, and it already blew a 1500ms budget once today (#6983). /catchup answers
- * the question actually being asked in a few hundred bytes. Its buckets are capped at 8, so "my
- * card is not in the list" and "the list was truncated before it got to me" are different answers,
- * and the second is reported as UNKNOWN rather than quietly resolving to 0 — which is the same
- * defect this card exists to remove, one layer up.
+ * Which card this handoff belongs to: TRANTOR_CARD wins, else this seat's newest open card from
+ * /catchup (not /tasks, #7037) on a 2s budget; a truncated bucket reports UNKNOWN, never 0.
  */
 export function resolveHandoffCard({ projectName, seat, env = process.env } = {}) {
   const told = Number(env.TRANTOR_CARD);
@@ -561,14 +481,8 @@ export function resolveHandoffCard({ projectName, seat, env = process.env } = {}
 }
 
 /**
- * Attach the structured working state to a handoff record, from two sources in order:
- *   1. the sidecar, when one exists (Phase 2a and after) — read, migrated, validated;
- *   2. derived from git + the model's own STATE block, when none does (every Phase-1 handoff).
- *
- * Invalid or underivable state attaches `null` and logs. It NEVER blocks a handoff: a session at
- * the context wall losing its baton because a state object would not validate is a far worse
- * failure than a successor reading prose, which is exactly what it read before this field existed.
- * @returns {object|null} the attached state
+ * Attach the structured working state: the sidecar when one exists, else derived from git + the
+ * model's STATE block. Invalid state attaches null and logs; it NEVER blocks a handoff.
  */
 export function attachState(rec, { project, seat, card, worktree, env = process.env } = {}) {
   if (!stateHandoffEnabled(env)) return null;
@@ -630,11 +544,8 @@ export function renderStateBlock(state) {
 const FRESH_HANDOFF_SEC = 15 * 60;
 const MANUAL_TRIGGERS = ["manual-skill", "manual-baton"];
 
-// The newest unconsumed MODEL-authored handoff (the /trantor:handoff skill / manual baton path)
-// for this project, if it is still fresh. Incident (#5648): minutes after the operator hand-wrote
-// trantor-1788141357, an automatic digest recomposed and SUPERSEDED it — the successor then
-// loaded the machine's lossy summary instead of the author's exact words. The digest is the
-// fallback, never the replacement.
+// The newest unconsumed MODEL-authored handoff for this project, if still fresh. The digest is the
+// fallback, never the replacement (#5648: an automatic digest once superseded the author's words).
 export function freshAuthoredHandoff(projectName, nowS = nowSec() || Math.floor(Date.now() / 1000)) {
   try {
     if (!existsSync(HANDOFF_DIR)) return null;
@@ -687,11 +598,9 @@ export function writeHandoff({ projectDir, sessionId, transcript, trigger, summa
   // #6074: the NAME may come from the session's registration (resolveHandoffSurface), not from
   // this directory's basename — a subfolder cwd must not rename the project on the record.
   const projectName = projectNameArg || basename(projectDir);
-  // Server-side storm guard: a session running OLD hooks (before the local markHandedOff guard) re-fires
-  // context-warn handoffs every few minutes — the crebral-cortex storm (9 in 49 min, each spawning a
-  // window). Ask the hub for clearance (rate-limit per project+session); a non-forced handoff inside the
-  // cooldown is SKIPPED — no file, no spawn. Manual (/trantor:handoff) + at-wall (precompact) handoffs
-  // force through. Fail-OPEN if the hub is unreachable, so a legit handoff is never blocked.
+  // Server-side storm guard: sessions on OLD hooks re-fire context-warn handoffs every few minutes.
+  // Ask the hub for clearance; a non-forced handoff inside the cooldown is skipped. Manual and
+  // at-wall handoffs force through. Fail-open when the hub is unreachable.
   if (!force) {
     // #7037: this is the costliest of the three unsigned reads. A 401 body parses, `r.allow` comes
     // back undefined, `undefined === false` is false — so the guard said "go" on every handoff and
@@ -723,12 +632,9 @@ export function writeHandoff({ projectDir, sessionId, transcript, trigger, summa
   // baked copy is just orientation if the live command isn't available. Best-effort; never throws.
   let subagents = null;
   try { subagents = deriveSubagentManifest(transcript, { projectRoot: projectDir }); } catch {}
-  // Open verification gates for this project — structured "must verify before shipping" claims that
-  // MUST survive the handoff (a narrative line gets skimmed past; this is what the v0.17.31 incident
-  // taught — the "verify Gail coefficients" intent vanished into prose). Fetched synchronously from
-  // the local hub; best-effort, never blocks the handoff.
-  // #7037: signed, and an unreadable list is reported rather than rendered as "no open gates" —
-  // a record that silently claims zero gates is worse than one that admits it could not ask.
+  // Open verification gates for this project MUST survive the handoff (a narrative line gets
+  // skimmed past). Best-effort, never blocks. #7037: signed, and an unreadable list is reported
+  // rather than rendered as "no open gates".
   let verifyGates = [];
   {
     const r = hubCallSync(`/verify-gates?project=${encodeURIComponent(projectName)}`, { project: projectName, session: sessionId || "" });
@@ -803,11 +709,8 @@ export function terminalWindowForTty(tty) {
     end repeat
     return ""
   end tell`;
-  // Pass the MULTI-LINE script via stdin, NOT `-e ${JSON.stringify(osa)}`: a single -e arg keeps the
-  // newlines as literal "\n" (JSON escapes them, the shell's double-quotes don't expand them), so
-  // osascript saw `…"Terminal"\n  repeat…` and died with "27:28: Expected end of line but found unknown
-  // token". stdin gives it real newlines. (This silently returned "" for years → callers always fell
-  // through to frontTerminalWindow, which after a spawn grabs the WRONG window.)
+  // Pass the MULTI-LINE script via stdin, NOT `-e`: a single -e arg keeps the newlines literal and
+  // osascript dies, silently returning "" so callers fall through to the WRONG front window.
   try { return execSync(`osascript`, { input: osa, encoding: "utf8", timeout: 3000 }).trim(); } catch { return ""; }
 }
 
@@ -818,12 +721,9 @@ export function armBatonClose(handoffFile, originalWindowId, originalTty, conf =
   try {
     if (process.platform !== "darwin" || !originalWindowId) return false;
     if (process.env.TRANTOR_NO_BATON_CLOSE === "1" || conf.batonClose === false) return false;
-    // SAFETY (incident 2026-06-21): an AUTOMATIC baton must NEVER close the original session. At 90%
-    // (10% headroom) mid 2-agent build, auto-close SIGKILLed the original window's processes and killed
-    // in-flight work — the scariest possible failure. Auto-close is now strictly opt-in
-    // (config.autoCloseOriginal:true). The default auto baton just opens the fresh window and LEAVES the
-    // original alive. Manual /trantor:handoff still closes (the user explicitly invoked a wrap-up) — and
-    // even that is now non-destructive (baton-close never SIGKILLs and aborts if the original is busy).
+    // SAFETY: an AUTOMATIC baton must NEVER close the original session (it once SIGKILLed in-flight
+    // work). Auto-close is opt-in (config.autoCloseOriginal:true); a manual /trantor:handoff still
+    // closes, non-destructively (baton-close never SIGKILLs and aborts if the original is busy).
     if (auto && conf.autoCloseOriginal !== true) return false;
     const closer = join(HERE, "..", "..", "bin", "baton-close.mjs");
     if (!existsSync(closer)) return false;
@@ -869,25 +769,20 @@ export function maybeSpawn(projectDir, conf = readConfig()) {
   } catch (e) { process.stderr.write(`[trantor] maybeSpawn error: ${e?.message}\n`); return false; }
 }
 
-// The self-announcing fresh session command (single-quoted so it survives osascript→shell un-escaped).
-// The recap must be READABLE: on 2026-08-27 a takeover session answered with three consecutive
-// 4-5k-character status dumps and the operator abandoned the app. Brevity is part of the prompt.
+// The self-announcing fresh session command (single-quoted so it survives osascript→shell).
+// Brevity is part of the prompt: a takeover that answers with status dumps loses the operator.
 export const RECAP_CMD = "claude 'Recap the handoff you just took over — task, state, next step — in at most 3 sentences. Then wait for me. Keep all replies short by default: no status tables, no headers, no walls of text unless I explicitly ask for detail.'";
 
-// Spawn a fresh self-announcing session WITHOUT the dialog (manual handoff — the user already decided).
-// ONE suppression check for every path that can open a terminal window. There were two names for
-// this — TRANTOR_NO_HANDOFF_SPAWN here and TRANTOR_NO_BATON_SPAWN on spawnBaton — and a drill that
-// set the wrong one opened eight live sessions in deleted temp directories, twice. A guard with two
-// names is a guard you can miss, so both are honoured wherever a window is opened.
+// Spawn a fresh self-announcing session WITHOUT the dialog (manual handoff).
+// ONE suppression check for every path that opens a window: two names existed and a drill that
+// set the wrong one opened live sessions in deleted temp dirs, so both are honoured everywhere.
 export function spawnSuppressed() {
   return process.env.TRANTOR_NO_HANDOFF_SPAWN === "1" || process.env.TRANTOR_NO_BATON_SPAWN === "1";
 }
 
-// Does this project have a hosted orchestrator pane? When it does, the PANE is the successor
-// surface: `trantor open` claims the handoff there, and spawning a Terminal window would put the
-// fresh session on exactly the surface the operator is trying to leave (#5509 W1). The tracked
-// row is the signal — rows are recorded by open and dropped by teardown/prune, and a stale row
-// costs only a skipped window, never a lost handoff (the handoff waits, held for the pane).
+// Does this project have a hosted orchestrator pane? Then the PANE is the successor surface
+// (#5509 W1): `trantor open` claims the handoff there, and a Terminal window would land on the
+// surface the operator is leaving. A stale row costs a skipped window, never a lost handoff.
 export function hasOrchPane(projectName) {
   try {
     const state = join(process.env.AGENT_BUS_DIR || process.env.RELAY_DATA_DIR || join(homedir(), ".agent-bus"), "crew-windows.txt");
@@ -900,15 +795,9 @@ export function hasOrchPane(projectName) {
 }
 
 // ---- #6074: WHERE the session lives, and WHICH project it is ----------------
-// Witnessed 2026-09-02 (crebral-scribe/ios): a pane session ran the handoff skill with its shell
-// cwd in a subfolder. The project name came from basename(cwd) = "ios", the pane lookup found no
-// "ios" row, and the baton fell to the window leg — whose front-Terminal-window fallback picked a
-// window the pane session never owned, spawned a stray Terminal session, and armed a close on a
-// stranger's window. Two facts the code ignored: a session's OWN env knows where it lives
-// (HERDR_PANE_ID — herdr sets it in every pane), and the project's REGISTRATION knows its name
-// (the `trantor open` badge, RELAY_PROJECT, the orch-sessions map) long before cwd is worth
-// consulting. One resolver, shared by write-handoff.mjs --baton AND bin/baton.mjs, so the skill
-// path and the CLI path cannot diverge.
+// A session's OWN env knows where it lives (HERDR_PANE_ID) and the project's REGISTRATION knows
+// its name long before cwd is worth consulting; basename(cwd) once picked a stranger's window.
+// One resolver, shared by write-handoff.mjs --baton AND bin/baton.mjs.
 export function paneSurfaceEnv(env = process.env) {
   return String(env.HERDR_PANE_ID || "").trim();
 }
@@ -943,18 +832,10 @@ export function cwdInsideProject(projectName, dir, bus = process.env.AGENT_BUS_D
   }
 }
 
-// The one resolver. Returns { project, projectDir, pane, surface }:
-//   pane    — the session's own pane id ("" when it is not a hosted pane)
-//   surface — "pane" (the baton MUST take the pane leg) or "window" (today's behavior)
-//   project — the REGISTERED project name; a subfolder cwd never renames it
-// #6218 — the badge wins only where it is TRUE. Witnessed 2026-09-03: a run from a
-// trantor-badged shell in ~/development/tiny-timer wrote "handoff saved for trantor" with
-// tiny-timer's transcript inside. #6074's registration-before-cwd rule was written for a
-// subfolder cwd of the SAME project; a FOREIGN project dir is a different case and must not be
-// silently relabeled. So the badge (and the rest of the registration chain behind it) claims
-// this handoff only when the cwd lies inside the named project's directory or one of its
-// worktrees; a badged shell sitting elsewhere resolves from the cwd, and ONE warning line names
-// both — the badge that lied and the project the record actually went to.
+// The one resolver. Returns { project, projectDir, pane, surface }: pane = own pane id or "";
+// surface = "pane" (must take the pane leg) or "window"; project = the REGISTERED name.
+// #6218: the badge wins only where it is TRUE, i.e. cwd lies inside the named project or one of
+// its worktrees; a badged shell elsewhere resolves from cwd and ONE warning line names both.
 export function resolveHandoffSurface({ projectDir, sessionId, env = process.env } = {}) {
   const dir = projectDir || env.CLAUDE_PROJECT_DIR || process.cwd();
   const badge = String(env.TRANTOR_ORCH || "").trim();
@@ -999,11 +880,8 @@ export function frontTerminalWindow() {
   } catch { return { id: "", tty: "" }; }
 }
 
-// Resolve the ORIGINAL window (id + tty) to close on takeover. Controlling tty first (if we were
-// invoked with one — heartbeat/precompact have it), else the CURRENT front window (a manual baton
-// runs through the headless Bash tool with no tty; the session you're looking at is frontmost).
-// MUST be called BEFORE spawning the fresh session — once the new window opens it becomes frontmost
-// and this would capture IT instead.
+// Resolve the ORIGINAL window (id + tty) to close on takeover: controlling tty first, else the
+// CURRENT front window. MUST run BEFORE spawning the fresh session, which becomes frontmost.
 export function resolveOriginalWindow() {
   let tty = controllingTty(), windowId = tty ? terminalWindowForTty(tty) : "";
   if (!windowId) { const f = frontTerminalWindow(); windowId = f.id; tty = f.tty; }
@@ -1011,10 +889,7 @@ export function resolveOriginalWindow() {
 }
 
 // The pane leg of the baton (#5643): hand the replacement to a DETACHED driver (bin/baton-pane.mjs)
-// that survives this session's death — idle-gate → graceful end → trantor open → kickoff. The
-// window machinery (resolve/arm-close) is deliberately absent here: there is no window to close,
-// and the old path's answer ("spawn disabled — open manually") left the operator doing the
-// machine's job by hand.
+// that survives this session's death. No window machinery here: there is no window to close.
 export function spawnPaneBaton(projectDir, handoffFile, paneId = "") {
   try {
     const script = join(HERE, "..", "..", "bin", "baton-pane.mjs");
@@ -1029,34 +904,22 @@ export function spawnPaneBaton(projectDir, handoffFile, paneId = "") {
   } catch { return false; }
 }
 
-// MANUAL one-command baton: spawn the fresh session (no dialog) + arm the close of THIS window once the
-// fresh one consumes the handoff. Returns { spawned, armed, windowId }.
-// ORDER IS LOAD-BEARING: resolve the original window BEFORE spawning. Reversing it is the
-// "successor closes ITSELF" bug — the just-opened window is frontmost, the front-window fallback
-// captures it, and baton-close then kills the FRESH session the moment it takes over. The seams
-// (_resolveWindow/_spawnFresh/_armClose/_hasPane/_spawnPane) exist so the ordering can be
-// regression-tested headlessly.
+// MANUAL one-command baton: spawn the fresh session + arm the close of THIS window. Returns
+// { spawned, armed, windowId }. ORDER IS LOAD-BEARING: resolve the original window BEFORE
+// spawning, or the successor closes ITSELF. The seams exist so the ordering is drill-tested.
 export function spawnBaton({ projectDir, handoffFile, conf = readConfig(),
   _resolveWindow = resolveOriginalWindow, _spawnFresh = spawnFresh, _armClose = armBatonClose,
   _hasPane = hasOrchPane, _spawnPane = spawnPaneBaton, _env = process.env }) {
-  // A DRILL MUST BE ABLE TO SAY NO. There was no such switch, so exercising the baton path in a
-  // test opened real Terminal windows running real `claude` sessions in temp directories the test
-  // then deleted, each parked on a "do you trust this folder?" prompt. Five of them were found by
-  // the operator on 2026-08-24. A code path that spawns windows needs an off switch, or it cannot
-  // be tested honestly and someone will fake one that does not exist. The check reads the REAL env
-  // (spawnSuppressed) AND the injected one (_env) — a crew runner exports TRANTOR_NO_*_SPAWN for
-  // its seats, and a drill that inherits that must still be able to exercise each branch by
-  // passing its own env, not by mutating the runner's.
+  // A DRILL MUST BE ABLE TO SAY NO: a spawn path without an off switch cannot be tested honestly
+  // (it once opened real sessions in deleted temp dirs). Reads the REAL env AND the injected one,
+  // so a drill under a runner's TRANTOR_NO_*_SPAWN can still exercise each branch.
   const suppressed = spawnSuppressed()
     || String(_env.TRANTOR_NO_HANDOFF_SPAWN || "") === "1" || String(_env.TRANTOR_NO_BATON_SPAWN || "") === "1";
   if (suppressed || conf.batonSpawn === false) {
     return { spawned: false, armed: false, windowId: "", suppressed: true };
   }
-  // #6074, checked FIRST: the session's OWN env is the truth about where it lives. HERDR_PANE_ID
-  // set means the pane leg, keyed by THAT pane id — regardless of cwd or project name — and the
-  // whole window machinery (resolve + spawn + arm-close) is forbidden here: a pane session has no
-  // Terminal window, so the front-window fallback can only ever pick a stranger's (the witnessed
-  // crebral-scribe/ios incident armed a close on a window this session never owned).
+  // #6074, checked FIRST: HERDR_PANE_ID means the pane leg keyed by THAT pane, regardless of cwd,
+  // and the whole window machinery is forbidden (a pane session owns no Terminal window).
   const paneId = paneSurfaceEnv(_env);
   if (paneId) {
     const spawned = _spawnPane(projectDir, handoffFile, paneId);

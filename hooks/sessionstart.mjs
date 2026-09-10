@@ -1,11 +1,7 @@
 #!/usr/bin/env node
-// trantor SessionStart hook — every session auto-registers with the hub and
-// gets a roster of OTHER live sessions injected into context, so independent
-// sessions discover each other automatically (locally or across machines).
-//
-// Config resolution (first hit wins):
-//   env RELAY_URL  →  ~/.agent-bus/config.json {"url": "..."}  →  http://127.0.0.1:4477
-// Identity: env RELAY_SESSION  →  "<hostname>:<basename(cwd)>"  (stable per project/machine)
+// trantor SessionStart hook: every session registers with the hub and gets the roster of OTHER
+// live sessions injected, so independent sessions discover each other. Config: env RELAY_URL →
+// ~/.agent-bus/config.json → 127.0.0.1:4477. Identity: RELAY_SESSION → "<host>:<basename(cwd)>".
 import { readFileSync, writeFileSync, existsSync, readdirSync } from "node:fs";
 import { join, basename, dirname } from "node:path";
 import { homedir, hostname } from "node:os";
@@ -20,20 +16,15 @@ import { getJSON, signedGet, signedPost, loadIdentity } from "./lib/api.mjs";
 import { ledgerPaths, ensureStart, anchorCursor, writeCursor } from "./lib/inbox-ledger.mjs";
 import { ensureEnrolled } from "../lib/enroll.mjs";
 
-// Load the most recent UNCONSUMED handoff for this project (written by precompact.mjs
-// / the heartbeat early-warning). `claim` marks it consumed so exactly one session
-// takes it. A compaction-triggered SessionStart (source="compact") is the SAME session
-// that just wrote the handoff for a FRESH window to pick up — it may show the summary
-// for continuity but must NOT claim it, or it steals the handoff from the new window.
+// Load the most recent UNCONSUMED handoff for this project; `claim` marks it consumed so exactly
+// one session takes it. A compact-triggered start is the WRITER: it may show the summary for
+// continuity but must NOT claim, or it steals the handoff from the fresh window.
 function loadPendingHandoff(projectName, { claim = true, freshSession = null } = {}) {
   try {
     const dir = handoffDir();   // NEVER join(homedir(), …) here: a drill pointed at a temp bus dir must not claim the real handoffs
     if (!existsSync(dir)) return null;
-    // Match ONLY this project's handoffs: "<projectName>-<numeric stamp>.json".
-    // NOT a loose startsWith() — that also caught leaked test fixtures like
-    // "trantor-handoff-61385-….json" for project "trantor". And sort by the numeric
-    // stamp (newest first), NOT lexicographically — string sort ranks a letter prefix
-    // ("…-handoff-…") above a digit one, so it could pick a stale/wrong handoff.
+    // Match ONLY "<projectName>-<numeric stamp>.json" (a loose startsWith caught leaked fixtures) and
+    // sort by the NUMERIC stamp, newest first (string sort ranks a letter prefix above a digit).
     const re = new RegExp("^" + projectName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "-(\\d+)\\.json$");
     const files = readdirSync(dir)
       .map(f => { const m = re.exec(f); return m ? { f, stamp: Number(m[1]) } : null; })
@@ -45,12 +36,9 @@ function loadPendingHandoff(projectName, { claim = true, freshSession = null } =
       const rec = JSON.parse(readFileSync(p, "utf8"));
       if (!rec.consumed) {
         if (claim) {
-          // `consumed` means "injected into THIS fresh session's first-turn context" — which happens
-          // here at hook time, BEFORE the model has actually read anything. So we also record WHO is
-          // taking over (session id + transcript path) and when. baton-close watches that transcript
-          // for the fresh session's first assistant turn and only then closes the original window —
-          // otherwise it pulled the original ~4s after the fresh window booted, "before it even read
-          // the handoff."
+          // `consumed` = injected into THIS fresh session's first-turn context, before the model read
+          // anything. Record WHO took over: baton-close waits for the successor's first assistant
+          // turn in that transcript before closing the original window.
           rec.consumed = true;
           rec.consumedAt = nowSec();
           if (freshSession && (freshSession.session_id || freshSession.transcript_path)) {
@@ -59,11 +47,8 @@ function loadPendingHandoff(projectName, { claim = true, freshSession = null } =
               transcript_path: freshSession.transcript_path || "",
             };
           }
-          // §5 CLAIMED, on the machine's ledger (SYSTEM-CONTRACT), and the recap net armed:
-          // a recap-pending stamp names this successor. Every prompt before its first Stop
-          // carries a recap reminder (prompt-focus), and the first Stop marks RECAPPED —
-          // the 2026-08-30 failure (successor answered a stale queued message, never
-          // recapped) becomes mechanically impossible instead of hopefully avoided.
+          // §5 CLAIMED on the machine's ledger (SYSTEM-CONTRACT) and the recap net armed: every prompt
+          // before the first Stop carries a recap reminder (prompt-focus), the first Stop marks RECAPPED.
           if (!Array.isArray(rec.states)) rec.states = [];
           rec.states.push({ state: "claimed", ts: nowSec(), by: freshSession?.session_id || "" });
           writeFileSync(p, JSON.stringify(rec, null, 2));
@@ -90,13 +75,9 @@ function readStdin() {
     process.stdin.on("data", c => (d += c)); process.stdin.on("end", () => res(d));
     setTimeout(() => res(d), 100); });
 }
-// Hub reads/writes through the shared client (TDD §8), ALL signed (Ed25519). Writes via signedPost
-// close the self-asserted `from` hole; reads via signedGet survive RELAY_AUTH=enforce, which 401s
-// unsigned reads (unsigned, the roster/handoff injection was silently dead on the remote hub — the
-// 2026-07-30 agent-UX gap). The hub scope-filters signed reads to this identity's grants; for a
-// session reading its own project + declared links that is the intended shape. Each resolves to
-// {ok,status,json}; a down hub returns {ok:false,json:null} and the caller's catch keeps the
-// session alive (fail-open contract, acceptance §9 #10).
+// Hub reads/writes through the shared client (TDD §8), ALL signed: writes close the self-asserted
+// `from` hole, reads survive RELAY_AUTH=enforce (unsigned, the roster injection was silently dead
+// on the remote hub). A down hub returns {ok:false,json:null}; the caller stays alive (fail-open).
 async function jget(u, session) { const r = await signedGet(u, { timeoutMs: 2500, session }); return r.ok ? (r.json || {}) : {}; }
 async function jpost(u, b, session) { return (await signedPost(u, b, { session, timeoutMs: 2500 })).ok; }
 
@@ -113,12 +94,9 @@ function sanitize(s) {
   return out;
 }
 
-// #5645 injection cap: the handoff injection is a POINTER, not a payload. The 2026-08-30 failure:
-// a 22KB record (narrative + embedded verbatim tail) was injected and then re-read, costing ~9% of
-// the fresh window at boot. The writer contract (#5648, hooks/lib) caps rec.summary at ~4KB and
-// keeps the verbatim tail OUT of it; this reader enforces the same bound against older/oversized
-// records — strip any embedded verbatim block, hard-cap on a line boundary, point at the record
-// file + transcript for the rest.
+// #5645 injection cap: the handoff injection is a POINTER, not a payload (a 22KB record once cost
+// ~9% of a fresh window at boot). The writer caps rec.summary at ~4KB (#5648); this reader
+// enforces the same bound on older records: strip the verbatim block, cut on a line, point at the file.
 const HANDOFF_INJECT_CAP = 4096;
 function capHandoffSummary(handoff) {
   let s = String(handoff?.summary || "");
@@ -138,12 +116,9 @@ function capHandoffSummary(handoff) {
 // session start; this returns dft on any error. The lib is itself fail-silent, this is defense-in-depth.
 function safeInv(fn, dft = []) { try { const r = fn(); return r == null ? dft : r; } catch { return dft; } }
 
-// Session title for the picker / `claude --resume` / Claude mobile. Claude Code otherwise names a session
-// after its FIRST PROMPT (the `ai-title` transcript entry) — so several sessions started with the same
-// prompt (or sibling sessions in different projects) all look alike. We name it "<project> · <current work>"
-// where the work is the single most relevant in-flight item from the board, so concurrent sessions are
-// instantly distinguishable. (SessionStart can set the title via hookSpecificOutput.sessionTitle; it has no
-// mid-session rename, so this reflects the project's state at startup.)
+// Session title for the picker / --resume / mobile: CC names a session after its FIRST PROMPT, so
+// siblings look alike. "<project> · <current work>" from the board makes them distinguishable.
+// (No mid-session rename exists, so this reflects state at startup.)
 function sessionTitleFrom(project, cu) {
   let work = "";
   if (cu) {
@@ -171,17 +146,10 @@ try {
   // session resolved two different projects — and therefore two different hubs — so half a
   // session's work recorded on a hub nobody was reading.
   const projectDir = stdinObj.cwd || process.env.CLAUDE_PROJECT_DIR || process.cwd();
-  // NOT A SEAT — say so, loudly, to BOTH the user and the model.
-  //
-  // A session started outside a project (the home directory, a non-repo like ~/development, the
-  // plugin cache) is not project work, and registering it mints a phantom "<username>" board that,
-  // being unpinned, lands on the LOCAL hub while the real crew lives on the remote one. Declining
-  // to register was always right. Doing it via a stderr line NOBODY READS was not: the session
-  // then spends an hour believing it is the crebral-health seat and eventually reports "Trantor is
-  // unreachable" — with every hub healthy. That is what a macOS reboot produces every time, since
-  // reopened Terminal windows come back in $HOME and `claude --resume` restores the conversation
-  // but not the directory. So: no registration, and an unmissable explanation of what this session
-  // is not, what it therefore cannot do, and the one command that fixes it.
+  // NOT A SEAT: say so, loudly, to BOTH the user and the model. A session started outside a project
+  // (home, ~/development, the plugin cache) mints a phantom board on the LOCAL hub if registered,
+  // and a stderr line nobody reads left sessions believing they were a seat for an hour (every
+  // macOS reboot reopens Terminal in $HOME). So: no registration, and the one command that fixes it.
   const notSeat = nonSeatReason(projectDir);
   if (notSeat) {
     const known = knownProjects();
@@ -223,16 +191,10 @@ try {
   // instead of silently routing to the default.
   const { url, via: hubVia } = resolveHubInfo(project);
 
-  // Self-enrol on an enforce hub BEFORE the first read/write, the way bin/crew-runner.mjs does for
-  // crew seats (#6270). A session started via `trantor open` (or any Claude session not spawned by
-  // the runner) never went through that path: hooks/lib/api.mjs's own ensureEnrolled POSTs /enroll
-  // with no invite token, which a non-loopback enforce hub refuses — and refuses SILENTLY, because
-  // that helper is fail-open by design. The identity then sits registered-looking (whoami works,
-  // it has a keypair) but unknown to the hub, and every read 401s for as long as nobody notices
-  // (crebral-com sat like this for 20 minutes). lib/enroll.mjs's ensureEnrolled is the real fix: it
-  // mints a one-shot invite with the OPERATOR's owner key and spends it as this identity, exactly
-  // like a crew seat enrols itself. Never silent on failure — the reason lands in both the user
-  // banner and the model's context, not just a stderr line nobody reads.
+  // Self-enrol on an enforce hub BEFORE the first read/write, as crew-runner does for seats (#6270):
+  // api.mjs's own ensureEnrolled POSTs /enroll with no invite, which a non-loopback enforce hub
+  // refuses SILENTLY, and every read then 401s. lib/enroll.mjs mints a one-shot invite with the
+  // OPERATOR's key. Never silent on failure: the reason lands in the banner and the model's context.
   const orchIdentity = loadIdentity(session);
   const enrolment = orchIdentity
     ? await ensureEnrolled(url, orchIdentity, project).catch((e) => ({ ok: false, reason: "error:" + String(e?.message || e).slice(0, 40) }))
@@ -250,13 +212,10 @@ try {
     process.stderr.write(`[trantor] WARNING: ${session} not enrolled on ${url} (${enrolment.reason})\n`);
   }
 
-  // register self + post an initial presence status (no LLM turn — instant for others to read).
-  // kind "orch" when `trantor open` badged THIS session as the project's orchestrator pane
-  // (#6075): the peer row's kind is the hub's own record of what a session is — the overseer's
-  // declared-crew exemption reads it, and on the remote hub there is no local crew-windows.txt.
-  // Strict match (badge === project), same rule the doctrine gate below uses; a badge of "1"
-  // carries no name, so it stamps nothing. Absent kind is preserved by /register, so the MCP's
-  // kindless heartbeats never erase this.
+  // register self + post an initial presence status (no LLM turn). kind "orch" when `trantor open`
+  // badged THIS session as the orchestrator pane (#6075): the hub's own record of what a session
+  // is, read by the overseer's declared-crew exemption. Strict match (badge === project); absent
+  // kind is preserved by /register, so kindless heartbeats never erase this.
   const orchBadge = process.env.TRANTOR_ORCH || "";
   const registerBody = { session, project, status: `active in ${project}` };
   if (orchBadge === project) registerBody.kind = "orch";
@@ -296,10 +255,8 @@ try {
   }
 
   // ── GRANTS: standing permissions the operator has APPROVED for this project ──────
-  // The mechanical half of governance: an approval used to live only in a one-shot DM that died
-  // with the session that received it. Injecting the active grants here means EVERY future seat
-  // (including the duty agent and orchestrators, whose runners fire this hook each turn) inherits
-  // the operator's recorded decisions instead of re-asking or acting around them.
+  // An approval used to live only in a one-shot DM that died with its session; injecting active
+  // grants here means every future seat inherits the operator's recorded decisions.
   try {
     const { grants = [] } = await jget(`${url}/grants?project=${encodeURIComponent(project)}`, session);
     if (grants.length) {
@@ -311,13 +268,9 @@ try {
   } catch {}
 
   // ── ADOPT live crews (intersession-ops S1+S2, contract #4215) ─────────────────
-  // Every boot inventories leftover crew resources via the #4214 detection lib and steers the
-  // session toward ADOPTING a live crew rather than `trantor up`-ing over it (replace-in-place
-  // kills the seats' accumulated context). Detection is sync + fail-silent; the dead-row cleanup
-  // runs in a detached, unref'd child so it NEVER blocks session start. The lib import is OPTIONAL
-  // on purpose — until kimi lands #4214 this whole block is a no-op rather than a hard import
-  // error that would break every session start. Added latency <300ms; everything wrapped; all
-  // injected text is sanitized; block kept ≤12 lines.
+  // Every boot inventories leftover crew resources (#4214) and steers toward ADOPTING a live crew
+  // rather than `trantor up`-ing over it. Detection is sync + fail-silent; dead-row cleanup runs
+  // detached and unref'd. The lib import is OPTIONAL so a missing lib is a no-op, never a boot error.
   let res = null;
   try { res = await import("./lib/resources.mjs"); } catch {}
   if (res) {
@@ -407,14 +360,10 @@ try {
     }
   } catch {}
 
-  // THE ORCHESTRATOR ROLE (2026-08-31 — the operator had to say it by hand, twice in one day:
-  // "your job is to oversee and be a project manager, not a coder"). A session opened by
-  // `trantor open` carries TRANTOR_ORCH=<project>; every such session gets the doctrine at
-  // boot, so the role survives wakes, handoffs and restarts without anyone restating it.
-  // #6226: the doctrine also carries the target-project dispatch rule (the pr-os incident —
-  // an orchestrator followed "build it where the answers are stored" into another project):
-  // confirm the target from badge + cwd before any dispatch, and never wake a session that
-  // is asking the operator a question.
+  // THE ORCHESTRATOR ROLE: a session opened by `trantor open` carries TRANTOR_ORCH=<project> and
+  // gets the doctrine at boot, so the role survives wakes, handoffs and restarts. #6226: it also
+  // carries the dispatch rule (confirm the target from badge + cwd; never wake a session that is
+  // asking the operator a question).
   try {
     if (project && (process.env.TRANTOR_ORCH || "") === project) {
       additionalContext += `<trantor-orchestrator-role project="${sanitize(project)}">\n` +
@@ -429,14 +378,10 @@ try {
     }
   } catch {}
 
-  // Update available? Surface it the way a terminal tool should — an in-terminal `systemMessage`
-  // line the USER sees at session start (NOT a macOS desktop popup, which macOS misattributes to
-  // Script Editor and which fires off-screen). It shows every session while an update is pending and
-  // auto-clears the moment they update (updateAvailable() flips false) — a persistent-until-resolved
-  // reminder, like the built-in MCP-disconnected indicator. The model also gets the <trantor-update>
-  // context block so it can give the exact commands on request. Desktop notification is now OPT-IN
-  // (config.updateDesktopNotify:true) for anyone who genuinely wants the OS-level ping.
-  // Throttled + fail-silent; most starts do zero network (6h TTL cache). Disable: TRANTOR_NO_UPDATE_CHECK.
+  // Update available? An in-terminal `systemMessage` the USER sees at session start (a macOS popup
+  // is misattributed to Script Editor and fires off-screen), persistent until they update, plus the
+  // <trantor-update> context block for the model. Desktop notification is OPT-IN
+  // (config.updateDesktopNotify:true). Throttled (6h TTL), fail-silent; TRANTOR_NO_UPDATE_CHECK disables.
   try {
     const upd = await updateAvailable();
     if (upd.available) {
@@ -467,11 +412,9 @@ try {
     }
   } catch {}
 
-  // Inbox ledger: stamp session start and seed the cursor NOW, the moment that defines "backlog".
-  // Seeding used to happen on the first successful PostToolUse poll, which on a remote hub timed out
-  // and slid the seed to a later tool call, swallowing (and marking delivered) everything in between.
-  // Compaction keeps the session_id, so an existing ledger is left alone. Best-effort: the start
-  // stamp is written before any network I/O, so inbox-deliver can still anchor correctly if this fails.
+  // Inbox ledger: stamp session start and seed the cursor NOW, the moment that defines "backlog"
+  // (seeding on the first successful poll once swallowed everything before it). Compaction keeps
+  // the session_id, so an existing ledger is left alone. Written before any network I/O.
   if (stdinObj.session_id && source !== "compact") {
     try {
       const paths = ledgerPaths(session, String(stdinObj.session_id));
@@ -488,23 +431,13 @@ try {
     } catch {}
   }
 
-  // Pending handoff? A prior session hit the context limit and left a handoff for this
-  // project — take over with this fresh full window instead of starting cold. On a
-  // compaction-triggered start, DON'T claim it (that's the same session that wrote it;
-  // claiming would steal it from the freshly-spawned window) — show it for continuity only.
-  //
-  // WHO may claim depends on who WROTE it. A handoff written by the project's recorded
-  // orchestrator thread (orch-sessions.txt) is the ORCHESTRATOR'S baton: it is HELD for the
-  // orchestrator pane (`trantor open`, which marks itself with TRANTOR_ORCH) for a window,
-  // instead of going to whichever window happens to start first — on 2026-08-27 a stray 22:58
-  // Terminal session claimed the orch baton, then died, and the pane was muzzled all night.
-  // The hold LAPSES (default 30m) so an unclaimed baton never strands every other session.
-  // Any other handoff keeps first-fresh-session-wins.
+  // Pending handoff? Take over with this fresh window instead of starting cold. A compact start
+  // shows it for continuity but never claims (it is the writer). A handoff written by the recorded
+  // orchestrator thread is HELD for the orchestrator pane (TRANTOR_ORCH) for a window (default 30m,
+  // then it lapses); any other handoff keeps first-fresh-session-wins.
   const isCompact = source === "compact";
-  // A RESUMED session must never claim a handoff (2026-08-31, twice in one afternoon): it
-  // already carries its whole history, so claiming injects the takeover banner into the same
-  // maxed-out context — the recap LOOKS right while the window never reset, which is worse
-  // than failing loudly. The successor is whatever fresh session `trantor open` starts.
+  // A RESUMED session must never claim a handoff: it already carries its whole history, so the
+  // recap would look right while the window never reset. The successor is a fresh session.
   const isResume = source === "resume";
   const orchEnv = process.env.TRANTOR_ORCH || "";
   const isOrchPane = !!orchEnv && (orchEnv === "1" || orchEnv === project);   // project-matched: a child claude in another dir must not inherit the badge

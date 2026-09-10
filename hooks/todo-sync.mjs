@@ -25,11 +25,8 @@ async function main() {
   const todos = input.tool_input?.todos;
   if (!Array.isArray(todos) || !todos.length) return;
 
-  // Identity EXACTLY as mcp.mjs/heartbeat resolve it, so we card the same peer the relay registered.
-  // This said `basename(projectDir)` and `hostname()`, which is not the same thing at all:
-  // resolveProject keys off the GIT ROOT (a subdirectory forked its own lane) and hostId is the
-  // stable machine id, where hostname() drifts to "MacBook-Pro-M1.local" on some networks and
-  // splits one machine into two peers.
+  // Identity EXACTLY as mcp.mjs/heartbeat resolve it: resolveProject keys off the GIT ROOT and hostId
+  // is stable, where basename(projectDir)/hostname() forked lanes and split one machine into two peers.
   const project = resolveProject(projectDir);
   const session = process.env.RELAY_SESSION
     || (process.env.RELAY_AGENT ? `${process.env.RELAY_AGENT}:${project}` : `${hostId()}:${project}`);
