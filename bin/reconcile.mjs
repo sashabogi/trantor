@@ -45,8 +45,25 @@ async function tasks() {
   const j = r.json;
   return Array.isArray(j) ? j : (j?.tasks || j?.cards || []);
 }
-async function move(id, status) {
-  await signedPost("/task/update", { id, status, by: "reconcile" }, { timeoutMs: 4000 }).catch(() => {});
+async function move(id, status, note) {
+  return signedPost("/task/update", { id, status, by: "reconcile", note }, { timeoutMs: 4000 })
+    .catch(e => ({ ok: false, status: 0, json: { error: e.message } }));
+}
+// #6452: the hub refuses done on a card with no drill line, and reconcile cannot claim a drill it
+// never ran. A card judged shipped closes when it already carries a drill line; otherwise it parks
+// at testing with the verdict on its log, and the orchestrator runs the drill and closes it.
+async function close(x) {
+  const note = `reconcile: judged shipped${x.commit ? ` at ${x.commit}` : ""}${x.reason ? ` — ${x.reason}` : ""}`;
+  const r = await move(x.t.id, "done", note);
+  if (r.ok) return "closed";
+  if (r.status === 409 && /drill/i.test(r.json?.error || "")) {
+    const parked = await move(x.t.id, "testing", `${note}; no drill line on the card, so it waits at testing for the orchestrator's drill`);
+    if (parked.ok) return "parked";
+    console.error(`    #${x.t.id}: hub ${parked.status} ${parked.json?.error || ""}`);
+    return "failed";
+  }
+  console.error(`    #${x.t.id}: hub ${r.status} ${r.json?.error || ""}`);
+  return "failed";
 }
 // the memory record for THIS project (Claude Code stores it per encoded-cwd); optional context.
 function memoryExcerpt() {
@@ -118,6 +135,7 @@ if (!doIt) {
   console.log(`\n  ${done.length} card(s) → done, ${stale.length} → stale. Re-run to apply:\n    trantor reconcile${val("--older", "-o") ? ` --older ${val("--older", "-o")}` : ""} --yes\n`);
   process.exit(0);
 }
-for (const x of done) await move(x.t.id, "done");
+const outcome = { closed: 0, parked: 0, failed: 0 };
+for (const x of done) outcome[await close(x)]++;
 for (const x of stale) await move(x.t.id, "stale");
-console.log(`\n  ✓ reconciled: ${done.length} closed as done, ${stale.length} moved to stale. ${active.length} left active.\n`);
+console.log(`\n  ✓ reconciled: ${outcome.closed} closed as done${outcome.parked ? `, ${outcome.parked} parked at testing (no drill line)` : ""}${outcome.failed ? `, ${outcome.failed} refused` : ""}, ${stale.length} moved to stale. ${active.length} left active.\n`);

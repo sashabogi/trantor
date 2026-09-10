@@ -47,6 +47,21 @@ function appendTaskNote(t, b, ts = Date.now()) {
 // Card checklists (#5624): acceptance items are the one honest denominator for a progress bar.
 // Accepts plain strings (fresh items) or {text,done} (round-trips); caps 20 items x 200 chars.
 // Returns null for a non-array so callers can distinguish "not sent" from "sent empty".
+// #6452: a card's drill line (build doctrine rule 1) — what a person does on the built artifact
+// and must see. Any of: the `drill` field, a checklist item or a log note starting "Drill:", or
+// the note riding the move itself. The done gate in routes/cards.mjs reads this.
+const DRILL_MAX = 300;
+const DRILL_LINE = /^\s*drill:/i;
+function cleanDrill(v) {
+  const s = stripNulText(v).replace(/\s+/g, " ").trim();
+  return s ? s.slice(0, DRILL_MAX) : "";
+}
+function hasDrillLine(t, b = {}) {
+  if (cleanDrill(b.drill) || cleanDrill(t.drill)) return true;
+  if (Array.isArray(t.checklist) && t.checklist.some(c => DRILL_LINE.test(String(c?.text ?? "")))) return true;
+  if (Array.isArray(t.log) && t.log.some(e => DRILL_LINE.test(String(e?.text ?? "")))) return true;
+  return typeof b.note === "string" && DRILL_LINE.test(b.note);
+}
 function cleanChecklist(v) {
   if (!Array.isArray(v)) return null;
   return v.slice(0, 20)
@@ -240,6 +255,6 @@ setInterval(persist, persistTickMs).unref?.();
 
   return {
     state, durableStore, persist, persistHealth, markDirty, reload, startChangeSubscription,
-    HUB_SRC, appendTaskLog, appendTaskNote, cleanChecklist, stripNulText,
+    HUB_SRC, appendTaskLog, appendTaskNote, cleanChecklist, cleanDrill, hasDrillLine, stripNulText,
   };
 }

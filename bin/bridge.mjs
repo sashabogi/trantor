@@ -62,6 +62,7 @@ const saveMap = () => { try { mkdirSync(dirname(MAPFILE), { recursive: true }); 
 
 const cardBody = (t) => ({ project: PROJECT, title: t.title, status: t.status, assignee: t.assignee || "",
   difficulty: t.difficulty || undefined, model: t.model || undefined, phase: t.phase || undefined,
+  drill: t.drill || undefined,   // #6452: a mirror keeps its source's drill line
   by: t.by || "", source: "bridge" });
 
 async function tick() {

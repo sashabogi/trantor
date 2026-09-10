@@ -51,6 +51,7 @@ test("signed closer on an enforce hub: complete evidence closes, partial/failure
     const card = (await signedGet("/tasks?project=trantor")).json.tasks[0];
     assert.equal(card.status, "done");
     assert.equal(card.workedBy, session);
+    assert.match(card.log.at(-1).text, /^Drill: trantor drill PASS/);   // #6452: the closer's note IS the drill line the hub gate requires
     assert.match(card.log.at(-1).text, /real evidence A/);
     assert.match(card.log.at(-1).text, /real evidence B/);
     assert.equal(JSON.parse(readFileSync(path, "utf8"))[id].closure, "done");
