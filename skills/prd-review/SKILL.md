@@ -164,8 +164,12 @@ substitute for getting the target right in the first place.
 1. Move the TDD card through `testing` to `done` with the tally and the decision.
 2. `relay_advise` with the work breakdown's packages, then one `relay_task_add` per package:
    phase `build`, the advisor's assignee and `model`, its `difficulty`, `deps` on the packages it
-   needs first, and a `checklist` of its acceptance tests from the TDD's verification plan. A
-   build card without its model set is a defect.
+   needs first, a `checklist` of its acceptance tests from the TDD's verification plan, and a
+   `drill` — the exact thing a person does on the built artifact and what they must see, taken
+   from the same verification plan (BUILD-DOCTRINE rule 1). A build card without its model set
+   is a defect; a build card without a drill line cannot reach done, because the hub refuses the
+   move. The seat that builds a card never closes it to done: testing is the seat's last move,
+   done is yours after you have run the drill and noted the result on the card as `Drill: …`.
 3. Start the build as the crew skill's phase 3: contracts over the bus, one file-set per seat.
    How far the build may go on its own (commit, push, deploy, handing off) is the project's
    autonomy dial (`trantor autonomy`); the dial governs the build, not the opening of its cards.

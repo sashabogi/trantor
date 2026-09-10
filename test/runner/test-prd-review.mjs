@@ -169,6 +169,19 @@ function readFileSafe(p) { try { return readFileSync(p, "utf8"); } catch { retur
   ok("build cards open on a TDD pass per the autonomy dial with no extra ask",
     has("Do not ask the operator again merely to open its build cards", "phase `build`", "autonomy dial (`trantor autonomy`)"));
   ok("the skill names the resume entry point", has("`/trantor:prd-review tdd` resumes here"));
+  // #6452 — doctrine rule 1 wired into the build cards this skill cuts
+  ok("build cards carry a drill and the builder never closes its own card",
+    has("a\n   `drill` — the exact thing a person does on the built artifact", "without a drill line cannot reach done", "The seat that builds a card never closes it to done", "as `Drill: …`"));
+}
+
+// ── 4. the crew skill against the same ruling (#6452) ───────────────────────────────────────────
+{
+  const skill = readFileSync(join(ROOT, "skills", "crew", "SKILL.md"), "utf8");
+  const has = (...parts) => parts.every(part => skill.includes(part));
+  ok("crew: relay_task_add takes a drill and every card names it",
+    has("relay_task_add(title, assignee, difficulty, model, drill)", "**Every card names its drill** (BUILD-DOCTRINE rule 1)", "A card without a drill line is not ready to be worked"));
+  ok("crew: the seat never closes its own card; done is the orchestrator's after the drill",
+    has("**The seat that wrote the code never closes its own card to done.**", "done is YOURS, after you have run the card's drill", "a note starting `Drill:`", "your own moves included"));
 }
 
 console.log(`\n${fail === 0 ? "✅" : "❌"} prd-review: ${pass} passed, ${fail} failed`);

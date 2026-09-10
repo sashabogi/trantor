@@ -36,9 +36,13 @@ explicit EVENT/INTERFACE CONTRACT — cross-agent bugs come from contract drift.
    from the brief, hooks, hub brief + first card) — it never spawns a session; firing the crew
    is this phase's job.
 1. `relay_project_brief("<what + why + goal>")`
-2. One card per package: `relay_task_add(title, assignee, difficulty, model)` — set `model`
+2. One card per package: `relay_task_add(title, assignee, difficulty, model, drill)` — set `model`
    to the advisor-routed model (or the CLI's default name); difficulty + model show as badges
    on the card. Assignees: `codex:<project>` etc. Keep one for yourself.
+   **Every card names its drill** (BUILD-DOCTRINE rule 1): the `drill` field is the exact thing
+   a person does on the built artifact and what they must see ("open the app, press ⌘K, see the
+   palette"), never "tests pass". A card without a drill line is not ready to be worked, and the
+   hub refuses to move it to done — a checklist item or a card note starting `Drill:` counts too.
 3. Open the dashboard: **`trantor ui`** — which opens the **desktop app**, not a browser.
    Do NOT open the hub URL in a browser. A remote hub runs `auth:enforce`, and a browser cannot
    sign its requests: the page loads but `/projects`, `/tasks` and `/peers` all return 401, so the
@@ -150,6 +154,10 @@ orchestrator runs the full suite at integration) plus `node bin/slop-gate.mjs` w
 one (the anti-slop lint over the seat's changed files — a card must not reach done failing it);
 `done` only green, and moves to testing/done carry a `note` with the evidence — the note is the
 card's permanent story; `failed` (+ bus report) pulses red on the board until you bounce it.
+**The seat that wrote the code never closes its own card to done.** Testing is the seat's last
+move; done is YOURS, after you have run the card's drill on the built artifact and written the
+result on the card as a note starting `Drill:`. The hub refuses a move to done on any card with
+no drill line, your own moves included — so a seat that reports done has skipped the gate: bounce it.
 Enforce the gate — bounce anything that skipped it (bounces are visible: "↩ bounced" on the
 card, history in its tooltip). When all report done: integrate, fix contract mismatches
 YOURSELF, move your card through testing → done, broadcast "🚀 <thing> is live", and when the
