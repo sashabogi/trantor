@@ -1,13 +1,8 @@
 #!/usr/bin/env node
-// USAGE v2 — the Claude statusline sidechannel (docs/RESEARCH-orca-usage.md §1.1).
-// Claude Code >=2.1.80 pipes a JSON blob (with `rate_limits`) into the statusLine command on
-// every turn, piggybacked on the Messages API response — live usage that costs zero API budget.
-// This forwarder reads that stdin, POSTs the windows to the hub's /usage/claude (signed), and
-// prints NOTHING: it is designed to be tee'd ahead of the operator's real statusline command,
-// never to be one. Every failure is swallowed — a usage forwarder must never break a statusline.
-//
-// Floor: one POST per session per 15s (stamp file) — the statusline ticks ~3x/sec while
-// streaming, and the hub dedupes same-value posts inside 30s anyway.
+// USAGE v2 — the Claude statusline sidechannel (docs/RESEARCH-orca-usage.md §1.1): Claude Code pipes
+// a JSON blob with `rate_limits` into the statusLine command each turn. This forwarder POSTs the windows
+// to the hub's /usage/claude (signed) and prints NOTHING (tee'd ahead of the real statusline); every
+// failure is swallowed. Floor: one POST per session per 15s, the hub dedupes same-value posts anyway.
 import { readFileSync, writeFileSync, statSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";

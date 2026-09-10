@@ -1,10 +1,6 @@
 #!/usr/bin/env node
-// trantor SubagentStop hook — when a Claude Code sub-agent (Agent/Task tool, Workflow swarm, ultracode,
-// agent-team teammate) finishes, read ITS OWN transcript's token usage and post a board card tagged with
-// the NOTIONAL API cost (what those tokens would cost at API rates — plan-covered, not billed, on a sub).
-// No hook carries cost, so we parse the sub-agent transcript (confirmed to carry per-turn message.usage +
-// message.model). This is the orchestrator's-own-work blind spot that crew (external CLIs) + Scrooge
-// (real $) don't cover. Fail-silent: never break the parent session.
+// trantor SubagentStop hook — when a sub-agent finishes, read ITS OWN transcript's token usage and post
+// a board card with the NOTIONAL API cost (plan-covered, not billed). Fail-silent: never break the parent.
 import { readFileSync, existsSync, readdirSync, statSync } from "node:fs";
 import { join, basename } from "node:path";
 import { homedir } from "node:os";

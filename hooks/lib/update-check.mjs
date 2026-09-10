@@ -1,15 +1,7 @@
-// trantor update-check — surfaces "a newer Trantor is available" the way desktop software does:
-// a one-time desktop notification (macOS osascript / Linux notify-send) plus an in-session context
-// block so the running model also tells the user the exact update commands.
-//
-// Design constraints (same contract as the other hooks): cheap, fail-silent, never blocks a session.
-//   • The installed version is self-discovered from the hook's OWN plugin.json (the plugin is installed at
-//     …/cache/trantor/trantor/<version>/…), so there's no guessing.
-//   • "latest" comes from the npm dist-tags endpoint — tiny + no auth — and is THROTTLED behind a TTL
-//     (default 6h) cached in ~/.agent-bus/update-check.json, so the vast majority of session starts do
-//     ZERO network. The fetch itself has a 1.5s timeout and any failure falls back to the cached value.
-//   • The desktop notification fires at most ONCE PER NEW VERSION (tracked by notifiedVersion), so it's
-//     not per-session spam — exactly one ping when a release lands, like a real updater.
+// trantor update-check — a one-time desktop notification plus an in-session context block when a newer
+// Trantor is available. Cheap, fail-silent: version from the hook's OWN plugin.json, "latest" from the
+// npm dist-tags endpoint behind a 6h TTL cache (1.5s timeout, cached fallback), and the notification
+// fires at most once per new version (notifiedVersion).
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { homedir } from "node:os";

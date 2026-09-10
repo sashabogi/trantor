@@ -1,18 +1,8 @@
 #!/usr/bin/env node
-// trantor PostToolUse heartbeat — keeps a live session's presence fresh on the bus.
-//
-// Registration (sessionstart.mjs / mcp.mjs) tells the hub a session was BORN; nothing
-// tells it the session is still ALIVE. So presence decays after RELAY_ONLINE_MS (5 min)
-// and the dashboard rots into a graveyard of "idle" boards even while sessions work —
-// worst right after the laptop wakes from sleep, when every lastSeen is stale at once and
-// there is no resume event to re-register. This hook fixes that: every tool call (a true
-// sign of life) refreshes lastSeen, throttled so we hit the hub at most once per window.
-// The first tool call after a wake re-greens the session — that first action IS the resume signal.
-//
-// Cheap + fail-silent by contract: a per-session stamp file gates the network call to once
-// per HEARTBEAT_MS, and a short fetch timeout means we never add real latency to a tool call.
-// We POST /register WITHOUT a status field so the session's meaningful status is preserved
-// (the hub only overwrites status when one is supplied).
+// trantor PostToolUse heartbeat — presence decays after RELAY_ONLINE_MS and nothing but a tool call
+// proves a session is alive, so every tool call refreshes lastSeen, throttled to once per HEARTBEAT_MS.
+// Cheap + fail-silent by contract (stamp file, short fetch timeout). POSTs /register WITHOUT a status
+// field so the session's meaningful status is preserved.
 import { readFileSync, writeFileSync, existsSync, statSync, openSync, readSync, closeSync } from "node:fs";
 import { join, basename, dirname } from "node:path";
 import { homedir, hostname } from "node:os";
@@ -29,14 +19,8 @@ const ARM_MAX_MS = armMaxMs();   // #6528: one source for the hard cap (shared w
 const INFLIGHT_MS = 5 * 60 * 1000;
 const HERE = dirname(fileURLToPath(import.meta.url));
 
-// #5645 agent-aware succession: the moment the baton ARMS (warn frac, auto dial), the running agent
-// is TOLD — via this hook's PostToolUse additionalContext, the one sanctioned channel that reaches a
-// session mid-flow without driving its terminal. The agent then participates in its own succession:
-// it reaches a real task boundary and authors the model-written handoff from the FRESHEST state,
-// instead of the digest describing work 36 seconds stale (2026-08-24) or missing everything done
-// after an early handoff write. Injected ONCE per arming (the fresh-arm path only) — a per-tool-call
-// reminder would be context spam. Guards stay upstream: no arm mid-sub-agent build, no arm in 'ask'
-// dial mode, so neither produces the notice.
+// #5645 agent-aware succession: when the baton ARMS, the running agent is told via additionalContext
+// (the one sanctioned mid-flow channel) so it authors the handoff from the freshest state. Once per arming.
 let ARM_CTX = "";
 
 // The model this session is ACTUALLY running, read from the transcript tail — the harness does not
@@ -65,11 +49,8 @@ function readStdin() {
     setTimeout(() => res(d), 80); });
 }
 
-// Proactive early-warning: when the live context occupancy crosses the warn
-// fraction of a KNOWN window (env RELAY_CONTEXT_WINDOW / config.contextWindow —
-// the transcript can't reveal 200k vs 1M, so it must be declared), hand off
-// BEFORE the compaction wall. The heavy summary runs in a detached worker so we
-// never block this tool call. No-op when the window is unknown.
+// Proactive early-warning: when occupancy crosses the warn fraction of a KNOWN window (RELAY_CONTEXT_WINDOW
+// / config.contextWindow, since the transcript cannot reveal 200k vs 1M), hand off before the wall.
 async function maybeEarlyWarn(stdinRaw, session) {
   try {
     const conf = readConfig();
@@ -82,22 +63,15 @@ async function maybeEarlyWarn(stdinRaw, session) {
     if (usage.frac < warnFrac(conf)) return;
     if (alreadyHandedOff(sessionId, usage.tokens)) return;
 
-    // Mid-build guard (incident 2026-06-21): never fire an auto baton-pass while this session is
-    // actively orchestrating sub-agents — popping a fresh window (or, before the fix, killing the
-    // original) mid 2-agent build is exactly the failure we must prevent. Defer: the next heartbeat
-    // re-checks once the agents finish, and PreCompact remains the at-the-wall backstop. We do NOT
-    // markHandedOff here, so the baton genuinely retries later instead of being silently skipped.
+    // Mid-build guard: never fire an auto baton-pass while this session is orchestrating sub-agents.
+    // Defer without markHandedOff, so the baton genuinely retries on a later heartbeat.
     if (subagentsActive(transcript)) {
       process.stderr.write(`[trantor] context ${Math.round(usage.frac * 100)}% but sub-agents active — deferring baton pass\n`);
       return;
     }
 
-    // In-flight guard: the detached worker takes ~tens of seconds to summarize;
-    // don't launch a second one on the next heartbeat tick meanwhile.
-    // NOTE the ordering: this debounce guards the SPAWN, not the arming. It used to sit here and
-    // return before any of the logic below, which meant the arm/backstop path never ran a second
-    // time and a session that reached no turn boundary would stay armed forever. Arming is cheap
-    // and idempotent; only launching the worker needs debouncing.
+    // In-flight debounce guards the SPAWN, not the arming: arming is cheap and idempotent, and a
+    // debounce placed before the arm/backstop logic once left a boundary-less session armed forever.
     const inflight = join(homedir(), ".agent-bus", `handoff-inflight-${String(sessionId).replace(/[^A-Za-z0-9_.-]/g, "_")}.stamp`);
     const spawnDebounced = () => {
       try { if (existsSync(inflight) && Date.now() - (Number(readFileSync(inflight, "utf8")) || 0) < INFLIGHT_MS) return false; } catch {}
@@ -119,13 +93,8 @@ async function maybeEarlyWarn(stdinRaw, session) {
     // won't) so the baton-close can replace this exact window once the fresh session takes over.
     const tty = controllingTty();
     const windowId = tty ? terminalWindowForTty(tty) : "";
-    // ARM, do not fire. This hook is PostToolUse: the only moment it can ever run is between two
-    // tool calls, i.e. mid-turn. Firing here produced a handoff written 36 seconds before the work
-    // it described was committed (2026-08-24), and the successor reported four finished things as
-    // still open. The Stop hook fires it at the next turn boundary, where the turn is complete.
-    //
-    // The window id and tty are captured HERE on purpose: this hook has the controlling tty and the
-    // detached worker does not, so the baton-close can still replace this exact window later.
+    // ARM, do not fire: PostToolUse only ever runs mid-turn, and the Stop hook fires at the boundary.
+    // The window id and tty are captured HERE because the detached worker has no controlling tty.
     const armed = readArm(sessionId);
     const age = armed ? Date.now() - (Number(armed.ts) || 0) : 0;
     if (armed && age < ARM_MAX_MS) {
@@ -146,12 +115,8 @@ async function maybeEarlyWarn(stdinRaw, session) {
       return;
     }
     process.stderr.write(`[trantor] context ${Math.round(usage.frac * 100)}% of ${usage.window} — arming the baton for the next turn boundary (window ${windowId || "?"})\n`);
-    // Arming does NOT markHandedOff. That guard exists so a session parked above the warn line does
-    // not re-fire every tick (8 stacked handoffs ~5 min apart, once observed) — but it makes
-    // alreadyHandedOff() short-circuit this whole block, so marking at ARM time meant no later
-    // heartbeat could ever run the backstop and a session that reached no Stop stayed armed
-    // forever. It is marked where the baton actually fires: here on the backstop path, and in the
-    // Stop hook on the normal path. Re-arming every tick is prevented by the age check above.
+    // Arming does NOT markHandedOff: that guard would short-circuit this block and starve the backstop.
+    // It is marked where the baton fires (here on the backstop, in Stop on the normal path).
     armBaton(sessionId, { projectDir, transcript, reason: "context-warn", windowId, tty, tokens: usage.tokens });
     // Tell the RUNNING agent (once, at arm time): wrap up and author the boundary handoff yourself.
     ARM_CTX = `<system-reminder>TRANTOR SUCCESSION ARMED — this session is at ${Math.round(usage.frac * 100)}% of its context window, and the baton is armed: your NEXT STOP fires the handoff. You are now responsible for your own succession:\n`

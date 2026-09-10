@@ -1,13 +1,7 @@
-// trantor — resource inventory (INTERSESSION-OPS-CONTRACT #4214). PURE DETECTION: what crew
-// tracking rows exist, which crew runners are actually alive, which cmux workspaces are open,
-// which dev servers run under a directory. Sessions ADOPT live crews; boots clean the provably
-// dead. Provably dead = no live process AND no bus heartbeat AND no owning session — one signal
-// is never proof, and NOTHING here ever kills a process. The only mutation is cleanDead(), which
-// runs `crew.mjs prune` (drops dead TRACKING ROWS, never processes).
-//
-// Hard rules (contract-frozen): every export is fail-silent ([] / "" on any error, never throws)
-// and every subprocess has a ≤2s timeout. Hooks run inside the user's tool loop — a throw or a
-// hang breaks a session.
+// trantor — resource inventory (INTERSESSION-OPS-CONTRACT #4214). PURE DETECTION of crew rows, live
+// runners, cmux workspaces and dev servers. Provably dead = no process AND no heartbeat AND no owning
+// session; nothing here ever kills a process (cleanDead() only prunes tracking rows). Contract-frozen:
+// every export is fail-silent and every subprocess has a ≤2s timeout, because hooks run inside the tool loop.
 import { execFileSync } from "node:child_process";
 import { readFileSync, existsSync } from "node:fs";
 import { join, basename, dirname } from "node:path";
@@ -85,12 +79,8 @@ function psTable() {
   return rows;
 }
 
-// Live crew-runner processes → [{pid,agent,dir,model}]. Runner argv (crew.mjs RUN_CMD) is
-// `node …/crew-runner.mjs <agent> <dir>` — dir is the LAST argument, so the regex is anchored
-// on end-of-string. project=null → all runners; project given → only runners whose dir resolves
-// to that project. Resolution is the lib/project.mjs walk (git-root basename, else dir basename)
-// compared with EXACT equality — a substring/prefix test would let …/proj match a runner in
-// …/proj2 (the sibling-project reap bug).
+// Live crew-runner processes → [{pid,agent,dir,model}]. dir is the LAST argv, so the regex anchors on
+// end-of-string; project match is EXACT equality on the lib/project.mjs resolution (…/proj must not match …/proj2).
 export function liveRunners(project = null) {
   try {
     const out = [];

@@ -1,25 +1,7 @@
-// trantor — the ONE signed-HTTP client every hook and the MCP server speak to the hub through
-// (TDD §8). Before this existed, each of the 12 hooks hand-rolled its own relayUrl(), identity
-// derivation, and a bare `fetch` wrapped in try/catch. That worked, but it was 12 copies of the
-// same shape AND it sent every request UNSIGNED — which is the hole Phase 0 closes: a request
-// must be provably attributable to a keypair (TDD §7.3), so /send's self-asserted `from` can no
-// longer be forged by any local process (the 2026-07-28 RCE).
-//
-// This module wraps lib/signed-fetch.mjs (the frozen interface contract from #3916) with three
-// things every caller needs and none of them should re-implement:
-//   1. hub URL resolution, per-project (env RELAY_URL → config.json hubs[project] → config.json
-//      url → 127.0.0.1:4477) — TDD §12.1: a project lives on exactly one hub
-//   2. session identity resolution (RELAY_SESSION → RELAY_AGENT:project → hostId:project) — the
-//      SAME derivation mcp.mjs uses, so we sign as the peer the relay registered
-//   3. the Ed25519 keypair for that name (loadOrCreate: atomic, 0600, race-safe)
-//
-// FAIL-OPEN IS A CONTRACT, NOT A CONVENIENCE (acceptance §9 #10). A hook runs inside the user's
-// tool loop; if it throws or hangs it breaks their session. So getJSON/signedPost NEVER throw —
-// not on a down hub, not on a timeout, not on an unreadable key file. They resolve to
-// { ok:false, status:0, json:null } and let the caller proceed exactly as it did when its own
-// try/catch swallowed a bare fetch. Signing itself is fail-open too: no key → the request goes
-// unsigned and the HUB decides what to do under its RELAY_AUTH policy (off|warn|enforce). The
-// client never makes that call, because only the hub knows the policy.
+// trantor — the ONE signed-HTTP client every hook and the MCP server speak to the hub through (TDD §8).
+// Wraps lib/signed-fetch.mjs (#3916) with hub URL resolution per project (§12.1), session identity
+// (the same derivation mcp.mjs uses) and the Ed25519 keypair. FAIL-OPEN IS A CONTRACT (acceptance §9
+// #10): getJSON/signedPost never throw; no key means unsigned, and only the hub knows its RELAY_AUTH policy.
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
@@ -29,11 +11,8 @@ import { sfetchJson } from "../../lib/signed-fetch.mjs";
 
 export const DEFAULT_TIMEOUT_MS = 1500;
 
-// Hub URL, PER-PROJECT (TDD §12.1): a project resolves to exactly one hub; codependent projects
-// share one. Env RELAY_URL wins (tests / explicit override / crew seats), then the per-project
-// `hubs` map in the shared config, then the legacy global `url`, then the local default. Reading
-// the config here means a hook works the moment `trantor` has been run once. resolveHub never
-// throws, keeping hooks fail-open.
+// Hub URL, PER-PROJECT (TDD §12.1): env RELAY_URL, then config `hubs[project]`, then the legacy global
+// `url`, then the local default. Never throws, keeping hooks fail-open.
 export function relayUrl(project) {
   return resolveHub(project || sessionContext().project);
 }
@@ -49,14 +28,8 @@ export function sessionContext(projectDir) {
   return { session, project, projectDir: dir };
 }
 
-// THE PROJECT A REQUEST IS ABOUT, which is not always the project the hook process is standing in.
-//
-// This distinction cost two diagnosis sessions. A hook stamps its payload with the project from
-// Claude's session cwd (`input.cwd`), but the hub URL used to come from the HOOK PROCESS's cwd.
-// Launch a session from ~/development and those disagree: every card says "crebral-health" and
-// every one of them lands on the LOCAL hub, because "development" has no pin and falls through to
-// the global default. Nothing errors, the seat looks healthy, and half the work records where
-// nobody reads. So: the project travels WITH the request, explicit > payload > query > cwd.
+// THE PROJECT A REQUEST IS ABOUT is not always the hook process's cwd (a session launched from a
+// non-project dir pinned every card to the wrong hub), so the project travels WITH the request: explicit > payload > query > cwd.
 function projectFromQuery(pathOrUrl) {
   const m = String(pathOrUrl).match(/[?&]project=([^&]*)/);
   try { return m ? decodeURIComponent(m[1]) : ""; } catch { return m ? m[1] : ""; }
@@ -104,12 +77,8 @@ export function loadInstance(session, instanceId) {
   return inst;
 }
 
-// Best-effort, once-per-key enrollment (TDD §7.4). /enroll is unauthenticated BY NECESSITY — it is
-// how an identity is BORN — so we POST the pubkey in the body and stamp it to a file keyed by the
-// session name so we never repeat the round trip while the key is unchanged. Under RELAY_AUTH=enforce
-// the hub rejects signed writes from unknown pubkeys, so this MUST precede a write; under warn it is
-// harmless (the hub TOFUs on loopback either way). A hub that is down, or that refuses (non-loopback
-// bind), is silently ignored — fail-open: the signed request still goes out and the hub decides.
+// Best-effort, once-per-key enrollment (TDD §7.4). /enroll is unauthenticated because it is how an
+// identity is born; stamped per session name so the round trip is not repeated. Fail-open: the hub decides.
 function enrolledPath(session) {
   const busDir = process.env.AGENT_BUS_DIR || join(homedir(), ".agent-bus");
   return join(busDir, "keys", `${String(session).replace(/[^A-Za-z0-9_.-]/g, "_")}.enrolled`);
@@ -146,27 +115,12 @@ function toUrl(pathOrUrl, project) {
   return /^https?:\/\//.test(pathOrUrl) ? pathOrUrl : `${relayUrl(project || projectFromQuery(pathOrUrl))}${pathOrUrl}`;
 }
 
-// Unsigned GET → { ok, status, json|null }. Never throws.
-//
-// WHY READS STAY UNSIGNED: the card signs WRITES ("signed POST") — that is what closes the 2026-07-28
-// hole (/send's self-asserted `from`). The hub's read scope-filtering (filterReadable, #3917) now
-// exempts direct messages (m.to === session), so /inbox COULD be signed — BUT signing /peers and
-// /catchup filters them to the reader's OWN project only, which breaks cross-project session
-// discovery (sessionstart's "independent sessions find each other across machines" purpose) and the
-// /peers roster. So reads stay unsigned: accepted+flagged under the default `warn` mode, and the
-// roster stays global. Flipping individual reads to signed later is a one-liner once a read needs
-// enforce-mode attribution (add a signedGet that passes `identity` through sfetchJson with GET).
+// Unsigned GET → { ok, status, json|null }. Never throws. Reads stay UNSIGNED on purpose: signing /peers
+// and /catchup scopes them to the reader's own project and breaks discovery; signedGet is for enforce-mode reads.
+
 /**
- * The shape every fail-open read returns when the request never got an answer.
- *
- * `status: 0` collapsed three very different things into one indistinguishable code: a TIMEOUT (the
- * hub is fine, the read was too slow), a connection refusal (the hub is down), and a DNS/network
- * failure. Callers render that as "hub 0", so on 2026-09-09 a /tasks read that was 200 OK but
- * exceeded its 1500ms budget — 1.59MB across 941 cards, 625-961ms typical — read to every seat as a
- * DEAD HUB. I retried past it four times as a blip, and the duty seat could not file a card at all.
- *
- * A timeout and an outage need OPPOSITE responses: retry versus investigate. So carry the reason.
- * `status` stays 0 for every existing caller; `timedOut` and `reason` are additive.
+ * The shape every fail-open read returns when the request never got an answer. `status` stays 0 for
+ * existing callers; `timedOut` and `reason` are additive, since a timeout and an outage need opposite responses.
  */
 function failure(e, timeoutMs) {
   const timedOut = e?.name === "TimeoutError" || e?.name === "AbortError" || e?.code === "ABORT_ERR";
@@ -193,11 +147,8 @@ export async function getJSON(pathOrUrl, { timeoutMs = DEFAULT_TIMEOUT_MS, proje
   } catch (e) { return failure(e, timeoutMs); }
 }
 
-// Signed GET → { ok, status, json|null }. Never throws. The "one-liner" the getJSON comment
-// promised: for reads that MUST work under RELAY_AUTH=enforce (which 401s unsigned reads).
-// First user: the overseer-warn hook's /overseer/context — a project-scoped read, so the
-// enforce hub's own-project scope filtering is the correct behavior, not a loss. Roster-style
-// reads (/peers, /catchup cross-project discovery) stay on getJSON on purpose — see above.
+// Signed GET → { ok, status, json|null }. Never throws. For reads that MUST work under RELAY_AUTH=enforce
+// (project-scoped reads like /overseer/context); roster-style reads stay on getJSON, see above.
 export async function signedGet(pathOrUrl, { timeoutMs = DEFAULT_TIMEOUT_MS, session, instance, project } = {}) {
   const proj = projectOf(project, null, pathOrUrl);
   const sess = session || sessionFor(proj);

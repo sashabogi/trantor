@@ -1,20 +1,8 @@
 #!/usr/bin/env node
-// trantor SessionStart overseer-warn — a session hears about collisions through its OWN harness.
-//
-// THE doctrine (docs/OVERSEER-CONTRACT.md): detection is MECHANICAL and lives in the hub
-// (GET /overseer/context computes level/links/peers/inflight/warnings); this hook only NARRATES
-// what the hub already knows, at the one moment narration is cheap and useful — session start.
-// A session never reaches into another session's process; context arrives via its own hook.
-//
-// Deliberately INFORMATIONAL below level 3, and never blocking at any level: the hook emits
-// additionalContext or nothing. Warn mode annotates, it does not gate (see hub: "warn mode
-// NEVER blocks").
-//
-// Fail-open is a contract, not a convenience: a hook that throws or hangs breaks the user's
-// session. Hub down, timeout (1500ms), malformed payload, missing project — all resolve to {}.
-// signedGet, not getJSON: RELAY_AUTH=enforce hubs 401 unsigned reads, and this hook fails open —
-// an unsigned read here means the overseer warning silently NEVER reaches a session in production.
-// /overseer/context is project-scoped, so enforce's own-project read filtering is correct for it.
+// trantor SessionStart overseer-warn — narrates what the hub already computed (GET /overseer/context,
+// docs/OVERSEER-CONTRACT.md) through the session's OWN harness. Informational below level 3, never
+// blocking at any level. Fail-open (1500ms timeout, anything wrong resolves to {}). signedGet, not
+// getJSON: an enforce hub 401s unsigned reads and the warning would silently never arrive.
 import { relayUrl, sessionContext, signedGet } from "./lib/api.mjs";
 
 const silent = () => { process.stdout.write("{}"); process.exit(0); };

@@ -1,26 +1,8 @@
 #!/usr/bin/env node
-// trantor Stop hook — don't go idle with a peer waiting on you.
-//
-// Pairs with hooks/inbox-deliver.mjs (PostToolUse), which reaches a session while it is MID-TURN calling
-// tools. Between them they cover a running session; this one covers the moment it is about to stop.
-//
-// Both deliver the SAME way, and it is the only way that is safe: a session's own hook reads that
-// session's own inbox and hands the text to its own model through the harness's sanctioned channel.
-// Nothing reaches across a process boundary. An earlier attempt DID reach across — it typed messages
-// into another session's terminal — and was removed: /send is unauthenticated with a self-asserted
-// `from`, so any local process could have aimed keystrokes at an agent running with permissions
-// bypassed. Delivery must go through the receiving agent's own harness, never by driving its terminal.
-//
-// The mechanism is the one already proven in-house by ~/.claude/hooks/verify-done-gate.py: a Stop hook
-// that prints {"decision":"block","reason":…} makes the model continue with `reason` as its instruction.
-//
-// Design rules (deliberately conservative — a hook that blocks stops is a hook that can trap a session):
-//   * DIRECT messages only. A broadcast is FYI; refusing to go idle over one would be maddening, and
-//     inbox-deliver will surface it on the next turn anyway.
-//   * stop_hook_active -> ALWAYS allow. One block per stop-cycle, never a loop, no matter what arrives.
-//   * Only claim delivery once we have actually decided to surface it (peek first). Marking a message
-//     delivered and then letting the stop through would hide it from the waker too — a silent hole.
-//   * Any error, or a hub that is down -> allow the stop. Never trap a session because of us.
+// trantor Stop hook — don't go idle with a peer waiting on you. Pairs with inbox-deliver.mjs; both hand
+// the session's own inbox to its own model through the harness (never by driving a terminal: /send's
+// self-asserted `from` made that an injection path). A Stop hook printing {"decision":"block"} makes
+// the model continue. Rules: DIRECT messages only; stop_hook_active → allow; peek before claiming; any error → allow.
 import { readFileSync, writeFileSync, existsSync, unlinkSync, mkdirSync, renameSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { spawn } from "node:child_process";
@@ -48,23 +30,9 @@ function readStdin() {
 }
 
 
-// ---- the metronome: never park while a dispatched contract is stalled ----------------------
-// An empty inbox is not the same as nothing outstanding. A session that dispatched work to a seat
-// that then died sees silence and parks, and the human becomes the one who remembers, which is the
-// complaint this exists to answer. So before letting a stop through we ask the hub what this
-// session is still owed, and refuse ONCE if any of it has gone quiet.
-//
-// Deliberately narrow: only a contract the hub calls `stalled` blocks — assignee offline, or overdue
-// while online. An open contract with a healthy seat working on it is exactly what "in progress"
-// looks like, and nagging about it every stop would be worse than saying nothing. Fail-open
-// throughout: a hub that is down or slow must never trap a session.
-//
-// `abandoned` deliberately does NOT block. Its assignee has been quiet so long the contract can no
-// longer resolve itself, and blocking on it would nag every future session forever about a seat that
-// is never coming back — the ghost problem this hook was accused of causing. The lifecycle guarantees
-// the dispatcher was already told: a contract is always `stalled` (and blocking) for a long while
-// before it can become `abandoned`. After that the hub keeps it in the ledger, and relay_contracts
-// still shows it, but it stops trapping anyone.
+// ---- the metronome: never park while a dispatched contract is stalled. Only a contract the hub calls
+// `stalled` blocks, ONCE; open-and-healthy is what "in progress" looks like. `abandoned` never blocks
+// (it was `stalled` long enough to be told). Fail-open throughout: a down hub must never trap a session.
 const OVERDUE_MS = (() => {
   const raw = process.env.TRANTOR_CONTRACT_OVERDUE_MS;
   const n = raw === undefined || raw === "" ? NaN : Number(raw);
@@ -164,16 +132,8 @@ async function main() {
 
   const projectDir = input.cwd || process.env.CLAUDE_PROJECT_DIR || process.cwd();
 
-  // A Stop IS the turn boundary. If the heartbeat armed a baton while this session was mid-turn,
-  // this is the first honest moment to fire it: the turn is complete, so the summary describes
-  // finished work rather than a session thirty seconds from its own conclusions. Fired detached and
-  // never awaited, and the arming is cleared FIRST so a crash in the worker cannot re-fire it on
-  // every subsequent Stop.
-  // #6528: a boundary is only a boundary when NOTHING is still running. CC's Stop fires while a
-  // backgrounded sub-agent (fork, teammate, workflow leg) can still be mid-flight — firing then
-  // hands the baton to a successor that yanks the work's parent out from under it. The arm STAYS:
-  // the next Stop fires it, and the heartbeat's hard cap (armMaxMs, next tool boundary) keeps a
-  // never-idle session from being armed forever.
+  // A Stop IS the turn boundary, so an armed baton fires here, detached, with the arming cleared FIRST.
+  // #6528: not while a backgrounded sub-agent is still mid-flight; the arm STAYS for the next Stop.
   try {
     const armed = readArm(input.session_id || "");
     if (armed && armed.transcript && subagentsActive(armed.transcript)) {

@@ -1,15 +1,7 @@
 // The local inbox ledger every reader in a session shares (inbox-deliver, stop-inbox, sessionstart, mcp).
-//
-// Why this exists (2026-08-20, crebral-health #7282): a reader's FIRST poll used to seed its cursor to
-// "now" — now being whenever that first poll happened to SUCCEED. The first PostToolUse poll of a fresh
-// session timed out (1.5s budget, first-run enrollment on a remote hub), wrote nothing, and the seed
-// slid to the next tool call 33 minutes later. Everything that arrived in between was treated as
-// backlog: never shown, yet marked delivered on the hub, so nothing escalated either. The session
-// honestly said "no new messages" to the very nudge sent about #7282.
-//
-// The invariant now: the seed anchors to SESSION START, never to the first successful call. A start
-// stamp is written locally before any network I/O (it cannot fail), and a late seed uses it to split
-// "backlog the session was never meant to see" from "messages that arrived on its watch".
+// Invariant (#7282): the cursor seeds at SESSION START, never at the first successful poll, so a slow
+// first poll cannot turn messages that arrived on this session's watch into silently-delivered backlog.
+// The start stamp is written before any network I/O, so it cannot fail.
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";

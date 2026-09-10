@@ -1,12 +1,8 @@
 #!/usr/bin/env node
-// trantor UserPromptSubmit hook — turn each substantive user prompt into the session's live "focus" card,
-// so a REGULAR (non-crew) Claude session's OWN work shows IN PROGRESS on the board as it happens — not only
-// when it commits or dispatches a sub-agent. ONE rolling card per session (the hub re-titles it as the focus
-// shifts and closes it to "done" when the session goes offline). Trivial acks ("yes", "go ahead") don't
-// refocus. Fail-silent + fast: NO LLM call ON THE TURN PATH — the title is a heuristic clean of the
-// prompt, posted immediately. A long prompt then hands its rewrite to bin/focus-title.mjs, spawned
-// DETACHED so a cheap model can produce a readable board line a few seconds later without the user
-// ever waiting on it. Never blocks or delays the turn.
+// trantor UserPromptSubmit hook — each substantive prompt becomes the session's ONE rolling "focus"
+// card, so a regular session's own work shows IN PROGRESS on the board. Trivial acks do not refocus.
+// No LLM call on the turn path: a heuristic title posts immediately, and a long prompt hands its
+// rewrite to bin/focus-title.mjs, spawned DETACHED. Never blocks or delays the turn.
 import { homedir } from "node:os";
 import { join, dirname } from "node:path";
 import { writeFileSync, mkdirSync } from "node:fs";
@@ -30,10 +26,8 @@ function titleFrom(prompt) {
 }
 
 
-// §5 recap net (SYSTEM-CONTRACT): while this session carries a claimed-but-unrecapped handoff
-// (the recap-pending stamp sessionstart wrote), EVERY prompt before its first Stop carries the
-// reminder — including the stale queued message that ate the 2026-08-30 takeover. The stamp is
-// cleared (and RECAPPED recorded) by stop-inbox at the first turn boundary.
+// §5 recap net (SYSTEM-CONTRACT): while this session carries a claimed-but-unrecapped handoff, EVERY
+// prompt before its first Stop carries the reminder; stop-inbox clears the stamp at the first boundary.
 import { handoffDir } from "../lib/project.mjs";
 import { existsSync as _ex, readFileSync as _rf } from "node:fs";
 let RECAP_CTX = "";
