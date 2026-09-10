@@ -37,11 +37,27 @@ export function splitPane(ctx, pane, direction, cwd = "", execute = herdrCall) {
   return parsed?.result?.pane?.pane_id || "";
 }
 
+// A pane herdr LISTS is not always a pane herdr can RUN (#7247: a restart kept w2:p8 in the
+// layout, so list/get/rename answered, while read/process-info/run said pane_not_found). Rename
+// is a layout question; process-info is the terminal question, and only a terminal hosts a session.
+export function paneAlive(ctx, pane) {
+  if (!pane) return false;
+  const result = herdrCall(ctx, ["pane", "process-info", "--pane", pane]);
+  const parsed = parseJsonOutput(result.stdout);
+  return Boolean(result.ok && parsed && !parsed.error && parsed.result?.process_info);
+}
+
 export function workspacePane(ctx, workspace, preferredCwd) {
   const parsed = parseJsonOutput(herdrCall(ctx, ["pane", "list"]).stdout);
   const panes = Array.isArray(parsed) ? parsed : parsed?.panes || parsed?.result?.panes || [];
   const matches = panes.filter(pane => (pane.workspace_id || pane.workspace || "") === workspace);
-  return matches.find(pane => (pane.cwd || "") === preferredCwd)?.pane_id || matches[0]?.pane_id || matches[0]?.id || "";
+  const preferred = matches.filter(pane => (pane.cwd || "") === preferredCwd);
+  const ordered = [...preferred, ...matches.filter(pane => !preferred.includes(pane))];
+  for (const pane of ordered) {
+    const id = pane.pane_id || pane.id || "";
+    if (id && paneAlive(ctx, id)) return id;
+  }
+  return "";
 }
 
 export function closeWorkspace(ctx, id) {
@@ -179,5 +195,6 @@ export function createHerdrAdapter(ctx) {
     closeWorkspace: id => closeWorkspace(ctx, id),
     closePane: id => closePane(ctx, id),
     liveWorkspaces: () => workspaceList(ctx),
+    paneAlive: pane => paneAlive(ctx, pane),
   };
 }

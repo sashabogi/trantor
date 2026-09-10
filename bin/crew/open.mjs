@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { spawn, execSync } from "node:child_process";
 import { call, parseJsonOutput } from "./core.mjs";
-import { createWorkspace, herdrCall, reportAgent, splitPane, workspaceList, workspacePane } from "./herdr.mjs";
+import { createWorkspace, herdrCall, paneAlive, reportAgent, splitPane, workspaceList, workspacePane } from "./herdr.mjs";
 import { dropState, readRows, recordState } from "./state.mjs";
 import { resolveOrchestratorDir } from "./worktrees.mjs";
 
@@ -103,6 +103,14 @@ function tracked(ctx, live) {
 function reattach(ctx, workspace, pane, id) {
   if (!pane) return false;
   if (ctx.dry) { console.log(`herdr:${workspace || "%DRYWS"}/${pane}`); return true; }
+  // Two probes, because herdr answers them from different places: a pane a restart left in the
+  // layout without a terminal still answers rename, and only process-info says it cannot host
+  // anything. Either way the row is dead and the open path hosts a fresh pane.
+  if (!paneAlive(ctx, pane)) {
+    dropState(ctx, ctx.project, "orch");
+    console.error(`— tracked orchestrator pane ${pane} has no terminal behind it (herdr restarted without it): hosting a fresh pane —`);
+    return false;
+  }
   const renamed = herdrCall(ctx, ["pane", "rename", pane, `orchestrator · ${ctx.project}`]);
   if (!renamed.ok) { dropState(ctx, ctx.project, "orch"); return false; }
   if (!paneHasAgent(ctx, pane)) {
@@ -166,11 +174,10 @@ export function maybeBuildGraft(dir) {
       const cur = existsSync(gi) ? readFileSync(gi, "utf8") : "";
       if (!/^graft\/?$/m.test(cur)) writeFileSync(gi, cur + (cur && !cur.endsWith("\n") ? "\n" : "") + "graft/\n");
     } catch {}
-    // The build is backgrounded, so we cannot gate the pane on its exit code — but a failure has to
-    // land SOMEWHERE. It used to go to stdio:"ignore", which meant a graft whose native parsers were
-    // never built (npm v12 skips node-gyp by default; see deploy/setup.sh) failed in total silence
-    // while the line below still claimed an index was being built.
-    //
+    // The build is backgrounded, so its exit code cannot gate the pane, but a failure has to land
+    // SOMEWHERE: under stdio:"ignore" a graft without native parsers (see deploy/setup.sh) failed in
+    // silence while the line below still claimed an index was being built.
+
     // The log goes to the OS temp dir rather than the project: nothing to gitignore, nothing to clean
     // up, and no exit handler — after unref() the parent usually dies first, so an on-exit cleanup
     // would be a promise we cannot keep. It is simply overwritten by the next open of this project.

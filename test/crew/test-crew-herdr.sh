@@ -1,10 +1,9 @@
 #!/bin/bash
-# herdr mux tests (card #5345, P0-B): CREW_MUX=herdr is an EXPLICIT opt-in — herdr is never
-# auto-detected, and every other mux path (cmux/tmux/terminal) stays untouched. herdr is not
-# installed on this machine, so every drill runs the REAL crew.sh against a temp HOME with a STUB
-# herdr (counter-unique JSON ids, exactly the capture-don't-predict contract of the real CLI).
-# The osascript stub CATS STDIN — every crew.sh invocation here carries </dev/null (hung-suite
-# lesson, 2026-08-20).
+# herdr mux tests (card #5345, P0-B): every drill runs the REAL crew.sh against a temp HOME with a
+# STUB herdr (counter-unique JSON ids, the capture-don't-predict contract of the real CLI), so the
+# other mux paths (cmux/tmux/terminal) are proven untouched without herdr installed.
+
+# The osascript stub CATS STDIN — every crew.sh invocation here carries </dev/null (#5345 hung-suite lesson).
 set -u
 # Same as test-crew.sh (#6228 bounce, 8c82e8e): the suite must not inherit the RUNNER's own identity
 # badge, or every dry spawn for testproj is refused by the cross-project guard as a badge mismatch.
@@ -64,6 +63,9 @@ case "\$1" in
     run)    [ "\${HERDR_PANE_RUN_FAIL:-}" = "1" ] && exit 1 ;;
     list)   printf '{"result":{"panes":[%s]}}' "\${HERDR_LIVE_PANES:-}" ;;   # replays \$HERDR_LIVE_PANES (open's host pick)
     process-info)
+            # \$HERDR_GHOST: comma-separated pane ids herdr still LISTS (and renames) but has no
+            # terminal behind — the post-reboot shape of #7247: pane_not_found, exit 1.
+            case ",\${HERDR_GHOST:-}," in *",\$4,"*) printf '{"error":{"code":"pane_not_found","message":"pane %s not found"},"id":"cli:pane:process_info"}' "\$4"; exit 1 ;; esac
             if [ -n "\${HERDR_PROCESS_INFO:-}" ]; then printf '%s' "\$HERDR_PROCESS_INFO"
             elif [ -f "$TMP/herdr.agents" ] && grep -qx "\$4" "$TMP/herdr.agents"; then
               printf '{"result":{"process_info":{"foreground_processes":[{"name":"claude","pid":123}]}}}'
@@ -196,6 +198,16 @@ ok "prune drops the dead workspace row" '! has_row "WS-DEAD"'
 ok "prune keeps EVERY seat row of a live-workspace project" 'has_row "protest	herdr	glm	SURF-A" && has_row "protest	herdr	codex	SURF-B"'
 ok "prune drops seat rows of a project with no live workspace" '! has_row "SURF-C"'
 
+# 11b. prune also drops the rows of GHOST panes (listed by herdr, no terminal behind them, #7247)
+#      while keeping a pane that merely hosts a shell: workspace first, then the one per-pane fact
+#      herdr states plainly (process-info → pane_not_found).
+seed "protest\therdrws\t__ws__\tWS-LIVE\nprotest\torch\t__orch__\tP-GHOST-ORCH\nprotest\therdr\tclaude\tP-GHOST-SEAT\nprotest\therdr\tglm\tSURF-SHELL\n"
+CREW_MUX=herdr HOME="$TMP" PATH="$TMP/fakebin:$PATH" RELAY_PROJECT=protest HERDR_LIVE_WS='{"workspace_id":"WS-LIVE","label":"trantor:protest"}' HERDR_GHOST=P-GHOST-ORCH,P-GHOST-SEAT "${CREW[@]}" prune </dev/null >/dev/null 2>&1
+ok "prune drops the ghost orch row" '! has_row "P-GHOST-ORCH"'
+ok "prune drops the ghost seat row" '! has_row "P-GHOST-SEAT"'
+ok "prune keeps a seat row whose pane still hosts a shell" 'has_row "protest	herdr	glm	SURF-SHELL"'
+ok "prune keeps the live workspace row" 'has_row "protest	herdrws	__ws__	WS-LIVE"'
+
 # 12. prune with NO herdr on PATH preserves herdr rows and cannot invoke the binary — the row-
 # preservation invariant survives the auto-preference change; only the "never consults herdr while
 # it is installed" claim died with the opt-in contract.
@@ -272,7 +284,7 @@ ok "still exactly one orch row" '[ "$(grep -c "	orch	" "$STATE")" = "1" ]'
 echo 0 > "$TMP/herdr.n"; rm -f "$TMP/herdr.log"
 seed "testproj	herdrws	__ws__	WS-9\ntestproj	orch	__orch__	P-DEAD\n"
 # The host of that split is a pane INSIDE WS-9 (the project's own workspace), in the project dir —
-# never the UI-focused pane, which lives wherever the operator is looking (2026-09-03: crebral-com's
+# never the UI-focused pane, which lives wherever the operator is looking (#5396 seam: crebral-com's
 # orchestrator opened in the trantor window twice, as a trantor twin). The focused pane here is foreign.
 PANES17='{"pane_id":"P-FOCUS","workspace_id":"WS-OTHER","cwd":"/elsewhere","focused":true},{"pane_id":"P-HOST","workspace_id":"WS-9","cwd":"'"$TMP/proj"'"}'
 OUT17="$(cd "$TMP/proj" && HOME="$TMP" PATH="$TMP/fakebin:$PATH" RELAY_PROJECT=testproj HERDR_LIVE_WS='{"workspace_id":"WS-9","label":"trantor:testproj"}' HERDR_LIVE_PANES="$PANES17" CREW_NO_PROC_KILL=1 "${CREW[@]}" open </dev/null 2>/dev/null)"
@@ -287,6 +299,25 @@ seed "testproj	herdrws	__ws__	WS-9\ntestproj	orch	__orch__	P-DEAD\n"
 OUT17b="$(cd "$TMP/proj" && HOME="$TMP" PATH="$TMP/fakebin:$PATH" RELAY_PROJECT=testproj HERDR_LIVE_WS='{"workspace_id":"WS-9","label":"trantor:testproj"}' HERDR_LIVE_PANES='{"pane_id":"P-FOCUS","workspace_id":"WS-OTHER","cwd":"/elsewhere","focused":true}' CREW_NO_PROC_KILL=1 "${CREW[@]}" open </dev/null 2>&1)"; rc17b=$?
 ok "a workspace with no live pane is a hard error, not a split off a foreign pane" '[ "$rc17b" = "1" ] && echo "$OUT17b" | grep -q "no live pane to host"'
 ok "the live tracked workspace was reused, not recreated" '! grep -q "workspace create" "$TMP/herdr.log"'
+
+# 17c. a GHOST orch pane (herdr restarted, kept the pane in its layout, lost the terminal, #7247):
+#      rename still answers, process-info says pane_not_found. Reattach must
+#      treat it as dead, and the host pick must skip it even though it is listed FIRST with the
+#      project cwd (exactly how w2:p8 sat in front of the live panes of workspace w2).
+echo 0 > "$TMP/herdr.n"; rm -f "$TMP/herdr.log"
+seed "testproj	herdrws	__ws__	WS-9\ntestproj	orch	__orch__	P-GHOST\n"
+PANES17c='{"pane_id":"P-GHOST","workspace_id":"WS-9","cwd":"'"$TMP/proj"'"},{"pane_id":"P-HOST","workspace_id":"WS-9","cwd":"'"$TMP/proj"'"}'
+OUT17c="$(cd "$TMP/proj" && HOME="$TMP" PATH="$TMP/fakebin:$PATH" RELAY_PROJECT=testproj HERDR_LIVE_WS='{"workspace_id":"WS-9","label":"trantor:testproj"}' HERDR_LIVE_PANES="$PANES17c" HERDR_GHOST=P-GHOST CREW_NO_PROC_KILL=1 "${CREW[@]}" open </dev/null 2>"$TMP/open17c.err")"; rc17c=$?
+ok "a ghost orch pane is healed onto a fresh split (exit 0)" '[ "$rc17c" = "0" ] && [ "$OUT17c" = "herdr:WS-9/P-1" ]'
+ok "the operator is told the pane had no terminal behind it" 'grep -q "no terminal behind it" "$TMP/open17c.err"'
+ok "nothing is ever run in the ghost pane" '! grep -q "pane run P-GHOST" "$TMP/herdr.log"'
+ok "the split is hosted off the LIVE pane, not the ghost listed before it" 'grep -q "herdr pane split P-HOST --direction right --no-focus --cwd $TMP/proj" "$TMP/herdr.log" && ! grep -q "pane split P-GHOST" "$TMP/herdr.log"'
+ok "the ghost orch row is replaced, not duplicated" 'has_row "testproj	orch	__orch__	P-1" && ! has_row "P-GHOST" && [ "$(grep -c "	orch	" "$STATE")" = "1" ]'
+# ...and when EVERY pane of the workspace is a ghost, open refuses rather than splitting a ghost
+echo 0 > "$TMP/herdr.n"; rm -f "$TMP/herdr.log"
+seed "testproj	herdrws	__ws__	WS-9\ntestproj	orch	__orch__	P-GHOST\n"
+OUT17d="$(cd "$TMP/proj" && HOME="$TMP" PATH="$TMP/fakebin:$PATH" RELAY_PROJECT=testproj HERDR_LIVE_WS='{"workspace_id":"WS-9","label":"trantor:testproj"}' HERDR_LIVE_PANES="$PANES17c" HERDR_GHOST=P-GHOST,P-HOST CREW_NO_PROC_KILL=1 "${CREW[@]}" open </dev/null 2>&1)"; rc17d=$?
+ok "a workspace of ghost panes only is a hard error, never a split off a ghost" '[ "$rc17d" = "1" ] && echo "$OUT17d" | grep -q "no live pane to host" && ! grep -q "pane split" "$TMP/herdr.log"'
 
 # 18. down SPARES the orch row: whole-project teardown closes seat panes only — the workspace (and
 #     the operator's terminal inside it) survives, so a down typed INSIDE the orchestrator pane
@@ -378,7 +409,7 @@ ok "turning the dial to bypass reaches the pane's command" 'echo "$OUT20b" | gre
 rm -f "$TMP/.agent-bus/autonomy.json"
 
 # 21. a recorded thread that HANDED OFF is not resumed. Its conversation ended in a handoff that
-#     waits for a successor; resuming the dead id replays the wrong thread (2026-08-27 seam). Open
+#     waits for a successor; resuming the dead id replays the wrong thread (the #5396 handoff seam). Open
 #     must start a FRESH id so the sessionstart hook can claim the baton and re-record the map.
 echo ""
 echo "A handed-off thread is not resumed:"

@@ -139,7 +139,13 @@ export function prune(ctx, adapters) {
     if (row.kind === "cmuxws") return !cmuxLive.proven || cmuxLive.ids.has(row.handle);
     if (row.kind === "cmux") return !cmuxLive.proven || cmuxLive.names.has(`trantor:${row.project}`);
     if (row.kind === "herdrws") return !herdrLive.proven || herdrLive.ids.has(row.handle);
-    if (["herdr", "orch"].includes(row.kind)) return !herdrLive.proven || herdrLive.names.has(`trantor:${row.project}`);
+    // Workspace first (the cmux 0.17.61 lesson: pane ids there were not a liveness fact), then
+    // the one per-pane fact herdr does state plainly: a pane whose terminal is gone answers
+    // process-info with pane_not_found. A pane that merely hosts a shell stays.
+    if (["herdr", "orch"].includes(row.kind)) {
+      if (!herdrLive.proven) return true;
+      return herdrLive.names.has(`trantor:${row.project}`) && (!adapters.herdr.paneAlive || adapters.herdr.paneAlive(row.handle));
+    }
     return true;
   });
   writeRows(ctx, kept);
