@@ -206,6 +206,15 @@ function isToolResult(row) {
   return c.some(part => part && typeof part === "object" && part.type === "tool_result");
 }
 
+/** The rows a MEASUREMENT gate may read: every row except one the time box cut short (#7135).
+ *  A cut row is honest — recordStep keeps its absent cost null and its cache_read 0 — and §8.7
+ *  needs it to find the cut, but it measured nothing: its 0 is not a cache miss and its null is
+ *  not a price. Gates 3, 4 and 5 filter through here so one boxed turn neither reads as preamble
+ *  drift nor voids a whole run's cost basis; §8.6 and §8.7 keep the full record. */
+export function measurableSteps(steps) {
+  return (Array.isArray(steps) ? steps : []).filter(s => s?.cut !== true);
+}
+
 /** Sum rows into the totals the ratio is computed from. `cost_usd` stays null unless EVERY row
  *  carried one: a partial sum compared against a full one is a fake ratio. */
 export function totals(rows) {
@@ -299,22 +308,25 @@ export function baselineMarkdown({ project, card, transcript, rows, capturedAt, 
  * assembled preamble drifted between turns, prefix caching never engaged, and the cost claim is
  * void even when the totals happen to look fine — which they can, on a short run, for entirely
  * unrelated reasons. The first step is exempt because there is nothing before it to have cached.
+ * Cut rows are excluded before any of this (measurableSteps): a boxed turn's cache_read 0 is an
+ * absence of measurement, not a miss.
  */
 export function checkCache(steps) {
-  if (!Array.isArray(steps) || steps.length < 2) {
-    return { ok: false, code: "TOO_FEW_STEPS", checked: steps?.length ?? 0, violations: [], message: "fewer than two steps: the cache property has no second turn to hold on and was not observed" };
+  const rows = measurableSteps(steps);
+  if (rows.length < 2) {
+    return { ok: false, code: "TOO_FEW_STEPS", checked: rows.length, violations: [], message: "fewer than two steps: the cache property has no second turn to hold on and was not observed" };
   }
   const violations = [];
-  for (let i = 1; i < steps.length; i++) {
-    const read = tokens(steps[i].cache_read);
-    if (read <= 0) violations.push({ turn: steps[i].turn ?? i + 1, cache_read: read });
+  for (let i = 1; i < rows.length; i++) {
+    const read = tokens(rows[i].cache_read);
+    if (read <= 0) violations.push({ turn: rows[i].turn ?? i + 1, cache_read: read });
   }
   return {
     ok: violations.length === 0, code: violations.length ? "CACHE_MISS" : null,
-    checked: steps.length - 1, violations,
+    checked: rows.length - 1, violations,
     message: violations.length
-      ? `${violations.length} of ${steps.length - 1} steps read 0 cached tokens — the preamble drifted, prefix caching never engaged, and the ≥${COST_FACTOR}× claim is VOID regardless of the totals`
-      : `all ${steps.length - 1} steps after the first read cached prefix tokens`,
+      ? `${violations.length} of ${rows.length - 1} steps read 0 cached tokens — the preamble drifted, prefix caching never engaged, and the ≥${COST_FACTOR}× claim is VOID regardless of the totals`
+      : `all ${rows.length - 1} steps after the first read cached prefix tokens`,
   };
 }
 
@@ -327,11 +339,16 @@ export function checkCache(steps) {
  * problem worth knowing about; a bench that only knows how to agree is not a gate. When no row
  * carries a price the ratio is computed on total tokens and says so in `basis`, because tokens are
  * a real measurement and a price derived from a rate card we did not record is not.
+ *
+ * Cut rows are excluded first (measurableSteps): one boxed turn's null price used to void
+ * `cost_usd` for the ENTIRE run through totals(), silently downgrading a measured-dollar result
+ * to an estimate — the unfalsifiability the PRD forbids (#7135).
  */
 export function costGate(steps, baselineRows, opts = {}) {
   const factor = opts.factor ?? COST_FACTOR;
   const minTurns = opts.minTurns ?? MIN_TURNS;
-  const run = totals(steps || []);
+  const measured = measurableSteps(steps);
+  const run = totals(measured);
   const base = totals(baselineRows || []);
   const out = { ok: false, code: null, run, base, turns: run.turns, slope: null, slope_ratio: null, ratio: null, basis: null, message: "" };
 
@@ -353,12 +370,12 @@ export function costGate(steps, baselineRows, opts = {}) {
   out.basis = priced ? "cost_usd" : "weighted";
   const weigh = (r) => tokens(r.input) * weights.input + tokens(r.cache_read) * weights.cache_read
     + tokens(r.cache_creation) * weights.cache_creation + tokens(r.output) * weights.output;
-  const perTurn = steps.map(s => (priced ? finite(s.cost_usd) : weigh(s)));
+  const perTurn = measured.map(s => (priced ? finite(s.cost_usd) : weigh(s)));
   out.slope = fitSlope(perTurn);
   const mean = perTurn.reduce((a, b) => a + (b ?? 0), 0) / perTurn.length;
   out.slope_ratio = out.slope === null || mean === 0 ? null : Math.abs(out.slope) * (perTurn.length - 1) / mean;
 
-  const runTotal = priced ? run.cost_usd : steps.reduce((a, r) => a + weigh(r), 0);
+  const runTotal = priced ? run.cost_usd : measured.reduce((a, r) => a + weigh(r), 0);
   const baseTotal = priced ? base.cost_usd : (baselineRows || []).reduce((a, r) => a + weigh(r), 0);
   out.ratio = runTotal > 0 ? baseTotal / runTotal : null;
 
@@ -381,18 +398,23 @@ export function costGate(steps, baselineRows, opts = {}) {
  * that quietly re-read half the worktree), and the action check catches the cheaper failure the
  * bound cannot see: one small `Read` that says the state block did not carry, so the seat went
  * back to the filesystem to find out where it was.
+ *
+ * Cut rows are excluded first (measurableSteps): a boxed turn's zeroed measurements are not a
+ * recovery step — if the row after a disturbance was cut, this check reports NO_NEXT_STEP rather
+ * than passing on a turn that never ran.
  */
 export function disturbanceCheck(steps, opts = {}) {
-  const marks = (steps || []).map((s, i) => (s.disturbed ? i : -1)).filter(i => i >= 0);
+  const rows = measurableSteps(steps);
+  const marks = rows.map((s, i) => (s.disturbed ? i : -1)).filter(i => i >= 0);
   if (!marks.length) {
     return { ok: false, code: "NO_DISTURBANCE", cases: [], message: "no step is marked `disturbed` — §8.5 was never exercised on this run, so it did not pass it" };
   }
   const factor = opts.factor ?? DISTURB_INPUT_FACTOR;
   const cases = [];
   for (const i of marks) {
-    const next = steps[i + 1];
-    if (!next) { cases.push({ at: steps[i].turn ?? i + 1, ok: false, code: "NO_NEXT_STEP", detail: "the run ended at the disturbance — the recovery step was never taken" }); continue; }
-    const priorMedian = median(steps.slice(0, i + 1).map(s => tokens(s.input)));
+    const next = rows[i + 1];
+    if (!next) { cases.push({ at: rows[i].turn ?? i + 1, ok: false, code: "NO_NEXT_STEP", detail: "the run ended at the disturbance — the recovery step was never taken" }); continue; }
+    const priorMedian = median(rows.slice(0, i + 1).map(s => tokens(s.input)));
     const bound = priorMedian === null ? null : priorMedian * factor;
     const input = tokens(next.input);
     const tool = next.action && typeof next.action === "object" ? next.action.tool : null;
@@ -630,7 +652,8 @@ export function evaluateRun({ project, card, repo = REPO, ...opts }) {
     gates.push({ n: 2, name: "state-mode run recorded", ok: false, code: "NO_RUN", message: `no run steps at ${runPath(project, card)} — the state-mode driver (P6) has not recorded a run for this card, so there is nothing to measure. This is an UNKNOWN, and an unknown is not a pass.` });
     return { ok: false, gates, halted: "no run", project, card, baseline: base };
   }
-  gates.push({ n: 2, name: "state-mode run recorded", ok: true, code: null, message: `${steps.length} steps at ${runPath(project, card)}` });
+  const cutRows = steps.length - measurableSteps(steps).length;
+  gates.push({ n: 2, name: "state-mode run recorded", ok: true, code: null, message: `${steps.length} steps at ${runPath(project, card)}${cutRows ? ` · ${cutRows} cut row${cutRows === 1 ? "" : "s"} excluded from the measurement gates (3–5); §8.7 still counts ${cutRows === 1 ? "it" : "them"}` : ""}` });
 
   const cache = checkCache(steps);
   gates.push({ n: 3, name: "cache read > 0 after the first step (§8.3)", ok: cache.ok, code: cache.code, message: cache.message });
