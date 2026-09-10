@@ -1,18 +1,7 @@
-// trantor desktop — request signing, in RUST so the private key never reaches the webview.
-//
-// This MUST produce byte-identical signatures to lib/identity.mjs. The canonical string is a fixed
-// six-field, newline-joined block; any divergence (field order, a trailing newline, hex casing)
-// yields a signature the hub rejects with a generic 401, which is miserable to debug from the JS side.
-//
-//   trantor-v1
-//   <METHOD>
-//   <PATH+QUERY>
-//   <sha256(body) hex, or "" when there is no body>
-//   <unix ms>
-//   <16 random bytes, hex>
-//
-// Keys are the same files the CLI and hooks already use: ~/.agent-bus/keys/<safe-name>.json, holding
-// the RAW 32-byte scalars as hex. We never write them, only read.
+// trantor desktop request signing, in RUST so the private key never reaches the webview. MUST be
+// byte-identical to lib/identity.mjs: `trantor-v1`, METHOD, PATH+QUERY, sha256(body) hex or "",
+// unix ms, 16 random bytes hex, newline-joined; any divergence is a generic 401. Keys are the
+// CLI's own ~/.agent-bus/keys/<safe-name>.json (raw 32-byte scalars as hex), read, never written.
 use base64::{engine::general_purpose::STANDARD as B64, Engine};
 use ed25519_dalek::{Signer, SigningKey};
 use rand::RngCore;
@@ -114,12 +103,8 @@ pub fn hub_for_project(project: &str) -> String {
 }
 
 /// A project is something you can actually OPEN: a hub you pinned, or a checkout on this machine.
-///
-/// It is deliberately NOT "any project name the bus has ever mentioned". Sessions register with
-/// whatever string they resolved, and a path slug or an agent id is not a project — that is how the
-/// sidebar ended up listing `-Users-sashabogojevic-…` and `agent-a52823753451c…` beside real work.
-/// A positive rule beats blocklisting name shapes, which only ever catches the junk you have
-/// already seen.
+/// Deliberately NOT "any name the bus has mentioned": a path slug or an agent id is not a project.
+/// A positive rule beats blocklisting name shapes.
 pub fn known_projects() -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
     if let Ok(raw) = fs::read_to_string(bus_dir().join("config.json")) {
@@ -181,12 +166,8 @@ mod parity {
     }
 }
 
-/// Perform a SIGNED request to a hub, from Rust.
-///
-/// Why not fetch() in the webview: macOS App Transport Security blocks cleartext HTTP from WKWebView,
-/// so a hub on http://100.79.242.104:4477 fails with a bare "Load failed" that CSP cannot fix. Doing
-/// it here sidesteps ATS entirely AND keeps the private key on this side of the boundary — the
-/// webview never sees a key or a signature, only JSON.
+/// Perform a SIGNED request to a hub, from Rust: macOS App Transport Security blocks cleartext
+/// HTTP from WKWebView, and the private key stays on this side of the boundary.
 pub async fn request(identity: &str, base: &str, method: &str, path: &str, body: Option<String>)
     -> Result<(u16, String), String>
 {
@@ -205,14 +186,9 @@ pub async fn request(identity: &str, base: &str, method: &str, path: &str, body:
     Ok((status, text))
 }
 
-/// Open the hub's SSE stream and hand each event to `on_event`.
-///
-/// In Rust rather than the webview for the same reason as request(): macOS ATS blocks cleartext HTTP
-/// from WKWebView. It also means EventSource's absence costs us nothing — we were already parsing
-/// frames by hand because EventSource cannot send auth headers.
-///
-/// Reconnect is ours to own: backoff capped so a hub restart recovers fast while a dead network does
-/// not spin, and `since` resumes from the last id so a reconnect never drops events.
+/// Open the hub's SSE stream and hand each event to `on_event`. In Rust for the same ATS reason as
+/// request(); EventSource could not send auth headers anyway. Reconnect is ours: capped backoff,
+/// and `since` resumes from the last id so a reconnect never drops events.
 pub async fn stream(identity: &str, base: &str, mut on_event: impl FnMut(String)) {
     use futures_util::StreamExt;
     let mut last_id: u64 = 0;

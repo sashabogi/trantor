@@ -1,23 +1,7 @@
-//! Ghost-text fast path (#5897).
-//!
-//! The original `ghost_complete` shelled out to scrooge (a CLI that spins up a fresh model per
-//! call): 16-36 s end to end, so the feature shipped OFF. This module replaces that with ONE
-//! direct OpenAI-compatible HTTP call from the app process to a fast model, so a ghost can answer
-//! in well under a second. Config is read at RUNTIME from ~/.agent-bus/.env — never baked in:
-//!
-//!   • qwen (preferred): base https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1,
-//!     model qwen3.8-flash, key QWEN_API_KEY. `enable_thinking: false` keeps it fast.
-//!   • deepseek (fallback when QWEN_API_KEY is absent): base https://api.deepseek.com/v1,
-//!     model deepseek-v4-flash, key DEEPSEEK_API_KEY.
-//!
-//! The call is deliberately small: max_tokens 32 (measured default, #5897 probe: 32 ran ~200 ms
-//! faster p50 than 64 and its p95 stays under the 2 s timeout that 64 occasionally tripped), a
-//! stop at the first blank line, and a 2 s client timeout so a slow provider degrades to "no
-//! ghost" rather than a stalled editor.
-//!
-//! Purity split: everything that SHAPES the request (env parse, provider pick, prompt, request
-//! body, completion parse) is a plain function with a unit test; only the network round-trip lives
-//! in `ghost_complete`.
+//! Ghost-text fast path (#5897): ONE direct OpenAI-compatible call from the app process to a fast
+//! model (qwen preferred, deepseek fallback), config read at RUNTIME from ~/.agent-bus/.env.
+//! Small on purpose: max_tokens 32, stop at the first blank line, 2 s timeout so a slow provider
+//! degrades to "no ghost". Request shaping is pure and unit-tested; only the round-trip is not.
 use futures_util::StreamExt;
 use serde_json::{json, Value};
 use std::collections::HashMap;
@@ -199,11 +183,9 @@ fn read_env_file() -> HashMap<String, String> {
 }
 
 // ── Streaming ghost (#6160) ────────────────────────────────────────────────────────────────────
-// The non-streaming path above measures ~1.4 s of network+server floor before the WHOLE body lands
-// (see ghost_latency_matrix). Streaming flips the target to TIME-TO-FIRST-LINE: we read the SSE
-// byte stream as it arrives, forward each delta to the webview on a request-keyed channel, and stop
-// the moment the first line is complete (or ~32 tokens), aborting the HTTP stream so we never pay
-// for the rest. The same 2 s budget now applies to first-line arrival, not to the whole response.
+// The target is TIME-TO-FIRST-LINE: read the SSE stream as it arrives, forward each delta on a
+// request-keyed channel, stop at the first complete line (or ~32 tokens) and abort the rest.
+// The 2 s budget applies to first-line arrival.
 
 /// One streaming event, pushed to the webview on the channel keyed by request id. `Delta` fires as
 /// each token chunk lands; `Done` fires when the first line is complete (or the stream is capped),
@@ -268,11 +250,9 @@ impl GhostAcc {
     }
 }
 
-/// The streaming FIM prompt, ordered for the provider's cached-input tier: the STABLE bytes go
-/// first (instructions, the FILE header, then the context block above the cursor minus its last
-/// few lines), and the only part that changes per keystroke — the last few lines right before the
-/// cursor — rides LAST inside the before-cursor block. Keystroke N and N+1 therefore share an
-/// identical leading prefix, so prefill can hit the cache.
+/// The streaming FIM prompt, ordered for the provider's cached-input tier: STABLE bytes first, and
+/// the only per-keystroke part (the last few lines before the cursor) LAST, so keystrokes N and
+/// N+1 share a prefix and prefill can hit the cache.
 pub fn build_stream_prompt(head: &str, near: &str, suffix: &str, path: &str) -> String {
     format!(
         "You are an inline code-completion model in an editor.\n\
@@ -339,11 +319,9 @@ fn trace_stream(ms: u128, ttl_ms: u64, model: &str, chars: usize, reason: &str) 
     }
 }
 
-/// One streaming inline-completion call. Reads provider config at runtime, opens a `stream: true`
-/// request, and reads the SSE byte stream as it arrives — forwarding each delta on `on_event` and
-/// resolving to the first-line ghost the moment the first line is complete (or at ~32 tokens),
-/// aborting the rest of the HTTP stream. The 2 s budget is TIME-TO-FIRST-LINE: if no first line has
-/// landed by then, the request is dropped and an error is returned (the editor shows no ghost).
+/// One streaming inline-completion call: reads provider config at runtime, opens a `stream: true`
+/// request, forwards each delta on `on_event`, resolves at the first complete line (or ~32 tokens)
+/// and aborts the rest. The 2 s budget is TIME-TO-FIRST-LINE; past it, no ghost.
 #[tauri::command]
 pub async fn ghost_complete_stream(
     id: String,
@@ -632,15 +610,9 @@ mod tests {
         unregister_cancel("req-6160");
     }
 
-    // ── #5897 latency probe ─────────────────────────────────────────────────────────────────────
-    // NOT part of `cargo test`: it makes 80 REAL calls against the live token-plan endpoint and
-    // spends the provider key. Run it on purpose:
-    //   cargo test ghost_latency_matrix -- --ignored --nocapture
-    // It exercises the SAME request builder ghost_complete uses (only max_tokens overridden per
-    // case, and a longer timeout so the probe SEES latencies production's 2 s cap would censor),
-    // across the four shapes the card asks about — max_tokens 32/64 × 30/60 lines of context —
-    // and prints p50/p95 plus a sample first line per shape, so the fastest shape that still
-    // returns a useful first line can become the default.
+    // ── #5897 latency probe: NOT part of `cargo test` (80 REAL calls, spends the key). Run it on
+    // purpose: cargo test ghost_latency_matrix -- --ignored --nocapture. Same request builder as
+    // ghost_complete, max_tokens 32/64 × 30/60 lines, prints p50/p95 + a sample first line.
     const RUNS: usize = 20;
     const PROBE_SUFFIX: &str = "}\n";
     /// The TS side splits the before-cursor context so the last ~8 lines (the only part that
@@ -762,14 +734,9 @@ mod tests {
         });
     }
 
-    // ── #6160 streaming probe ───────────────────────────────────────────────────────────────────
-    // The acceptance item for #6160: p50 TIME-TO-FIRST-LINE under 600 ms on qwen3.8-flash. This is
-    // the same 20-run harness as ghost_latency_matrix, but it streams: it measures t0 -> the instant
-    // the first '\n' of completion content lands (the moment the ghost would paint), NOT the whole
-    // response. Run it on purpose (it spends the provider key on 20 REAL streaming calls):
-    //   cargo test ghost_stream_latency -- --ignored --nocapture
-    // The ceiling is 15 s per call so a slow one is RECORDED (production censors it at 2 s); the
-    // numbers decide whether the streaming target is met.
+    // ── #6160 streaming probe: p50 TIME-TO-FIRST-LINE under 600 ms is the acceptance item. Same
+    // 20-run harness, but streamed: t0 → the first '\n' of completion content. Spends the key:
+    // cargo test ghost_stream_latency -- --ignored --nocapture. 15 s ceiling so slow calls are RECORDED.
     async fn stream_first_line_ms(provider: &Provider, head: &str, near: &str) -> Result<(u64, String), String> {
         let t0 = Instant::now();
         let body = build_stream_request_body(provider, head, near, PROBE_SUFFIX, "src/features/code/documents.ts");

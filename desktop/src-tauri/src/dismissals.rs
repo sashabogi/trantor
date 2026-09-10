@@ -1,11 +1,6 @@
-// Interrupted-session dismissals — persisted in ~/.agent-bus/config.json under
-// "dismissedSessions", mirroring onboarding.rs's config.json convention.
-//
-// #6476: a dismissal used to live in React state only, so every launch rebuilt the Interrupted
-// strip from crew-windows.txt and a dismissed dead session (tiny-timer, hive-digital) popped
-// right back up. A dismissal is a decision, not a snooze — it must survive a restart. It is keyed
-// on (project, sessionId) rather than project alone so a NEW dead session for the same project
-// (a fresh orch pane handle) still shows: dismissing the old one must never hide the new one.
+// Interrupted-session dismissals, persisted in ~/.agent-bus/config.json under "dismissedSessions".
+// #6476: a dismissal is a decision, not a snooze, so it survives a restart; keyed on (project,
+// sessionId) so a NEW dead session for the same project still shows. docs/CONTRACT-desktop-shell.md.
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::fs;
@@ -151,13 +146,9 @@ mod tests {
         assert!(with_list(&json!([1, 2]), &[]).is_err());
     }
 
-    /// The real path end to end, against actual disk: dismiss two sessions, read the list back
-    /// with a FRESH read (simulating the app relaunching and re-parsing config.json from
-    /// scratch) — both stay dismissed. Clearing one project's dismissal removes only that row. A
-    /// new session id for the same project is a separate row the clear never touched.
-    /// right_panel.rs and onboarding.rs each have an equivalent real-path test that also
-    /// repoints AGENT_BUS_DIR — crate::BUS_DIR_TEST_LOCK serializes all three so their
-    /// concurrent set_var/remove_var calls never race the shared process environ block.
+    /// The real path against actual disk: dismiss two, re-read fresh (a relaunch), both stay; clearing
+    /// one project removes only that row. Holds crate::BUS_DIR_TEST_LOCK like right_panel.rs and
+    /// onboarding.rs, because set_var/remove_var race the shared process environ block.
     #[test]
     fn the_real_path_two_dismissed_sessions_survive_a_simulated_relaunch() {
         let _guard = crate::BUS_DIR_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
