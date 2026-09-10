@@ -455,5 +455,58 @@ const bench = (...args) => spawnSync(process.execPath, [BENCH_BIN, "--project", 
   ok("report: a failing verdict renders **NO**, with the halting gate named", /verdict \*\*NO\*\*/.test(md) && /halted at gate 1/.test(md), md.slice(0, 300));
 }
 
+// ── 12. the cut row: honest, needed by §8.7, and not a measurement (#7135) ────────────────────
+//
+// The lie this catches: a turn SIGKILLed at the 20-minute box still records a row (cost_usd null,
+// cache_read 0, cut true). Read as a measurement, that one row poisons everything downstream —
+// gate 3 reports its 0 as CACHE_MISS (a cut is not drift) and totals() nulls cost_usd for the
+// WHOLE run because one row is unpriced, silently downgrading a measured-dollar result to an
+// estimate. Read as nothing at all, §8.7 loses the cut it exists to count. Both readings are
+// wrong; the row is evidence about the box, not about the design.
+{
+  const r = B.measurableSteps([step(1), step(2, { cut: true }), step(3)]);
+  ok("cut: measurableSteps drops cut rows and keeps everything else, in order",
+    r.length === 2 && r[0].turn === 1 && r[1].turn === 3, JSON.stringify(r.map(s => s.turn)));
+  ok("cut: measurableSteps tolerates a non-array", Array.isArray(B.measurableSteps(null)) && B.measurableSteps(undefined).length === 0);
+}
+// The positive half: 9 good steps plus the boxed turn. The run must still price from cost_usd
+// (basis cost_usd, a real ratio) and gate 3 must not report the cut row's zero as a miss.
+{
+  const cutRow = step(10, { rev: null, cost_usd: null, cache_read: 0, cache_creation: 0, input: 0, output: 0, cut: true });
+  const steps = [...runSteps(9), cutRow];
+  const base = Array.from({ length: 9 }, (_, i) => baseRow(i + 1));
+  const cache = B.checkCache(steps);
+  ok("cut: a boxed turn's cache_read 0 is NOT a CACHE_MISS — a cut is not drift",
+    cache.ok === true && cache.checked === 8, JSON.stringify({ ok: cache.ok, code: cache.code, checked: cache.checked }));
+  const cost = B.costGate(steps, base);
+  ok("cut: one unpriced cut row does not void the whole run's cost basis",
+    cost.ok === true && cost.basis === "cost_usd" && cost.run.cost_usd !== null && cost.run.turns === 9 && Math.abs(cost.ratio - 5) < 0.001,
+    JSON.stringify({ ok: cost.ok, basis: cost.basis, run_cost: cost.run.cost_usd, turns: cost.run.turns, ratio: cost.ratio }));
+}
+// THE NEGATIVE HALF, and the one this section exists for: the SAME zero cache_read on a step that
+// was NOT cut must still fail gate 3. Without this assertion the gate has been taught to ignore
+// the exact failure it exists to catch, and it will pass forever looking healthy.
+{
+  const steps = [...runSteps(9), step(10, { cache_read: 0 })];
+  const r = B.checkCache(steps);
+  ok("cut: a genuine cache_read 0 on a NON-cut step still FAILS gate 3 as CACHE_MISS",
+    r.ok === false && r.code === "CACHE_MISS" && r.violations.length === 1 && r.violations[0].turn === 10, JSON.stringify(r.violations));
+}
+// The disturbance gate must not pass on a boxed turn either: the row after the marker was cut, so
+// the recovery step was never observed — NO_NEXT_STEP, not a pass on zeroed measurements.
+{
+  const steps = [...runSteps(5), step(6, { disturbed: true }), step(7, { cost_usd: null, cache_read: 0, input: 0, output: 0, cut: true })];
+  const r = B.disturbanceCheck(steps);
+  ok("cut: a disturbance whose next step was cut is NO_NEXT_STEP, not a pass",
+    r.ok === false && r.code === "NO_NEXT_STEP", JSON.stringify(r.cases));
+}
+// And §8.7 keeps the full record: the cut row is still there to be found.
+{
+  const rows = [...runSteps(9), step(10, { cut: true })];
+  ok("cut: §8.7 still sees every row — counting stops at the cut the measurement gates ignore",
+    B.turnsBeforeCut(rows) === 9 && B.turnsGate([{ card: 1, state: rows, baseline: [baseRow(1)] }]).cards[0].state === 9,
+    `turnsBeforeCut ${B.turnsBeforeCut(rows)}`);
+}
+
 rmSync(ROOT, { recursive: true, force: true });
 done();
