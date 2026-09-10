@@ -23,6 +23,7 @@
     "hooks/",
     "lib/",
     "skills/",
+    "docs/BUILD-DOCTRINE.md",
     "deploy/",
     "configs/",
     ".claude-plugin/",

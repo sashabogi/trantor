@@ -425,6 +425,7 @@ try {
         `- Check relay_inbox and the board before asking the operator anything a peer may already have answered.\n` +
         `- Dispatch rule: the target project is confirmed from the session's badge and cwd before any relay_send, relay_task_add or \`trantor up\` — an ambiguous instruction is not a project name; and a session asking the operator a question never triggers a wake (its messages batch until the answer).\n` +
         `</trantor-orchestrator-role>\n`;
+      additionalContext += buildDoctrineShortForm();
       process.stderr.write(`[trantor] injected orchestrator-role doctrine for ${project}\n`);
     }
   } catch {}
@@ -620,3 +621,27 @@ function emit(ctx, sysMsg, title) {
 // Set the session title unless the user already named it explicitly (--name / rename).
 process.stdout.write(emit(additionalContext, userBanner, userTitle ? "" : sessionTitle));
 process.exit(0);
+
+// #6452: the build doctrine (docs/BUILD-DOCTRINE.md, operator ruling 2026-09-04) reaches every
+// project's orchestrator at boot as a short form — one line per rule, the full text linked — so no
+// orchestrator on any project can miss it. Under 40 lines by contract (test/hooks/test.mjs).
+export function buildDoctrineShortForm() {
+  const doc = join(dirname(fileURLToPath(import.meta.url)), "..", "docs", "BUILD-DOCTRINE.md");
+  return `<trantor-build-doctrine>\n` +
+    `📐 **Build doctrine** (operator ruling 2026-09-04): rules with a gate each, not advice. Full text: ${doc}\n` +
+    `1. The real path is the gate — every card names its drill (what a person does on the built artifact and what they must see); the orchestrator runs it before merge and writes the result on the card; the seat that wrote the code never closes its own card to done — testing is the seat's last move, done is the orchestrator's.\n` +
+    `2. Red blocks merge — a red suite blocks merge, no exceptions; a flaky test is fixed or deleted within a week; a test never inherits the runner's own identity.\n` +
+    `3. One owner per subsystem — the owner reviews every change to it and may say no; the orchestrator owns the gates and the merges; no seat merges to main.\n` +
+    `4. Causes, not symptoms — a fix names its cause and adds the drill that fails without it; trace first, a bug becomes a card only with the mechanism in hand; a second fix in one seam within a week stops the line for a contract doc.\n` +
+    `5. Fewer parts — prefer deleting to patching; no hand-rolled protocol, transport, sync or auth when a maintained library does it; look at the reference product first.\n` +
+    `6. Shape limits — a source file is at most 800 lines (Rust 1,000), a function 80; one language per layer; a module has one reason to change.\n` +
+    `7. Comments and records — a code comment is one line of why linking the card; contracts live in docs/CONTRACT-*.md and win over code; memory records decisions and traps, the repo records code.\n` +
+    `8. Rust and native boundaries — no unwrap/expect outside tests; every callback into native code catches and logs panics; a vendored patch carries its upstream link and an expiry.\n` +
+    `9. Dependencies and releases — pinned; an upgrade is a card with a drill; published is not shipped, installed and drilled is; every report carries the four evidence blocks or says which is missing.\n` +
+    `10. Turn economy — a turn ends with a commit; a contract names the card, the files, the gate and the drill; no acks over the bus; two non-zero exits on one contract parks the seat.\n` +
+    `11. Anything that warns — the monitoring doctrine: state not event, episodes not timers, never warn about what the operator declared, duration not repetition, quiet is not dead, every wake costs a turn.\n` +
+    `12. Seats never touch the operator's live surfaces — a seat never launches, installs or drives the app, never logs into a provider, never runs trantor up/down/open; its evidence ends at tests green, a build from its worktree and a note naming the drill.\n` +
+    `13. Audit — a project is audited against this doctrine before its next wave; the scorecard decides where the wave waits.\n` +
+    `Enforced by the hub: a move to done is refused on a card with no drill line (a \`drill\` field from relay_task_add, a checklist item, or a card note starting "Drill:").\n` +
+    `</trantor-build-doctrine>\n`;
+}

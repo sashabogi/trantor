@@ -189,6 +189,31 @@ ok("RELAY_SESSION opts a home-dir session back in", rh2.status === 0 && !rh2.std
   try { octx = JSON.parse(rOrch.stdout || "{}")?.hookSpecificOutput?.additionalContext || ""; } catch {}
   ok("orchestrator-role context carries the dispatch rule (badge+cwd confirmed before relay_send/task_add/trantor up; a session asking the operator a question never triggers a wake)",
     octx.includes("<trantor-orchestrator-role") && octx.includes("badge and cwd") && octx.includes("never triggers a wake"));
+
+  // #6452: the build doctrine's short form rides the same badge — every project's orchestrator
+  // sees the thirteen rule titles, one line each, under 40 lines, with the full doc linked and
+  // the hub's drill gate named. A non-orchestrator session must NOT get it (it is the
+  // orchestrator's job; seats get the rules through the crew skill and the gate itself).
+  const dStart = octx.indexOf("<trantor-build-doctrine>"), dEnd = octx.indexOf("</trantor-build-doctrine>");
+  const doctrine = dStart >= 0 && dEnd > dStart ? octx.slice(dStart, dEnd) : "";
+  ok("orchestrator context carries the build-doctrine short form", doctrine.length > 0);
+  ok("doctrine short form names all thirteen rules in the doc's order",
+    [/\n1\. The real path is the gate/, /\n2\. Red blocks merge/, /\n3\. One owner per subsystem/, /\n4\. Causes, not symptoms/,
+     /\n5\. Fewer parts/, /\n6\. Shape limits/, /\n7\. Comments and records/, /\n8\. Rust and native boundaries/,
+     /\n9\. Dependencies and releases/, /\n10\. Turn economy/, /\n11\. Anything that warns/,
+     /\n12\. Seats never touch the operator's live surfaces/, /\n13\. Audit/].every(re => re.test(doctrine)));
+  ok("doctrine short form is under 40 lines", doctrine.split("\n").length < 40, `${doctrine.split("\n").length} lines`);
+  const docLink = /Full text: (\S+BUILD-DOCTRINE\.md)/.exec(doctrine)?.[1] || "";
+  ok("doctrine short form links the full doc, and the linked file exists", !!docLink && existsSync(docLink), docLink);
+  ok("doctrine short form carries rule 1's two teeth: the drill line and no self-close to done",
+    doctrine.includes("names its drill") && doctrine.includes("never closes its own card to done") && doctrine.includes('starting "Drill:"'));
+  const rSeat = spawnSync("node", ["hooks/sessionstart.mjs"], {
+    input: '{"source":"startup"}', encoding: "utf8", timeout: 15000,
+    env: { ...drillEnv(), CLAUDE_PROJECT_DIR: projDir, RELAY_SESSION: proj, RELAY_URL: CLOSED },
+  });
+  let sctx = "";
+  try { sctx = JSON.parse(rSeat.stdout || "{}")?.hookSpecificOutput?.additionalContext || ""; } catch {}
+  ok("a session without the orchestrator badge does not get the doctrine block", !sctx.includes("<trantor-build-doctrine>"));
 }
 
 rmSync(hfFile, { force: true });
