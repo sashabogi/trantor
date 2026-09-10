@@ -326,7 +326,9 @@ export function AppShell() {
       showOutcome(p, classifyWakeOutcome(result, null));
       setActive(p);
       setPane({ kind: "project", lens: "workspace" });
-      setRestorables(rs => rs.filter(r => r.project !== p));
+      // #7269 — drop through the settle loop's mirror: state alone would resurrect the
+      // just-resumed row on the next poll, until the new pane registers as live.
+      dropRestorable(p);
       // #6476 — a real Wake means the project is live again: any dismissal recorded against it
       // (whichever dead session it was against) is now stale. Fire-and-forget — the UI has
       // already moved on to the woken project either way.
@@ -369,6 +371,12 @@ export function AppShell() {
   // freezing: poll 5s for a minute then 30s, later polls only dropping, until the strip empties.
   const [restorables, setRestorables] = useState<RestorableSession[]>([]);
   const stripRef = useRef<RestorableSession[]>([]);
+  // One drop path for the strip (#7269): the × button and a Wake both remove the row through the
+  // mirror the settle loop filters from, so the next poll can never resurrect a removed row.
+  const dropRestorable = (project: string) => {
+    stripRef.current = stripRef.current.filter(x => x.project !== project);
+    setRestorables(stripRef.current);
+  };
   const restoreRan = useRef(false);
   useEffect(() => {
     if (restoreRan.current) return;
@@ -572,10 +580,7 @@ export function AppShell() {
                 </button>
                 <button type="button" title="dismiss — it stays wakeable from its project row"
                   onClick={() => {
-                    // Drop through the same mirror the settle loop reads (#7269): a later
-                    // poll filters from stripRef, so a dismissed entry cannot come back.
-                    stripRef.current = stripRef.current.filter(x => x.project !== r.project);
-                    setRestorables(stripRef.current);
+                    dropRestorable(r.project);
                     // #6476 — a dismissal is a decision, not a snooze: persist it so it survives
                     // a restart. Fire-and-forget — the strip has already updated optimistically.
                     void dismissedSessionsApi.dismiss(r.project, r.sessionId).catch(() => {});
