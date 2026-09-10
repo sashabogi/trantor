@@ -122,6 +122,20 @@ Loop until the board is done — you are a foreman, not a mailbox:
    - **ABANDONED** — the assignee has been gone long enough that the contract can never be
      answered. Nobody is coming back. **Reassign the work or drop it deliberately** — it will not
      block you again, and it will not resolve itself.
+   - **SUPERSEDED** — the assignee is alive and has since answered a NEWER contract from you, so
+     this row was never going to be answered on its own. Nothing is owed. Do not chase it.
+   - **ACK** — you sent it with `wake:false`, or as a `receipt`/`status`. You declared that nothing
+     was owed, so it never waits and never stalls. It stays in the ledger as a record that you said
+     the thing; it is not work you are waiting on.
+
+   Two sizing rules that cost real money to learn:
+   - **A turn is killed at 20 minutes** (`TURN_MAX_MS`), so write a contract that can FINISH inside
+     one. A seat cut at the box loses the turn, and on the state path nothing salvages it. If a
+     seat reports a "crash", check `duration_ms` against 1200000 before believing it — SIGKILL at
+     the box exits 137 and reads like a fault.
+   - **A wake is capped at 2000 characters and truncated HEAD-first**, which eats your instructions
+     and keeps your rationale. Put the ask in the FIRST sentence, keep it short, and split a long
+     order into two sends rather than one long one.
    A contract is never closed on the assignee's behalf: quiet is not an outcome. An abandoned one
    stays in the ledger with the evidence, and a seat that revives still closes its own contract.
 4. Grunt sub-tasks that appear mid-build (a regex, a config block, a doc paragraph) →
