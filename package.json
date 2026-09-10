@@ -28,7 +28,8 @@
     ".claude-plugin/",
     "README.md",
     "LICENSE",
-    "engine/"
+    "engine/",
+    "docs/BUILD-DOCTRINE.md"
   ],
   "repository": {
     "type": "git",

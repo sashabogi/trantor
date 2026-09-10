@@ -189,6 +189,20 @@ ok("RELAY_SESSION opts a home-dir session back in", rh2.status === 0 && !rh2.std
   try { octx = JSON.parse(rOrch.stdout || "{}")?.hookSpecificOutput?.additionalContext || ""; } catch {}
   ok("orchestrator-role context carries the dispatch rule (badge+cwd confirmed before relay_send/task_add/trantor up; a session asking the operator a question never triggers a wake)",
     octx.includes("<trantor-orchestrator-role") && octx.includes("badge and cwd") && octx.includes("never triggers a wake"));
+
+  // #6452: the build doctrine rides with the orchestrator role — short form, every rule of
+  // docs/BUILD-DOCTRINE.md present by its heading, the full doc linked, under 40 lines.
+  const doctrineDoc = readFileSync("docs/BUILD-DOCTRINE.md", "utf8");
+  const headings = [...doctrineDoc.matchAll(/^## (\d+)\. (.+)$/gm)].map(m => `${m[1]}. ${m[2]}`);
+  const block = (octx.match(/<trantor-build-doctrine>[\s\S]*?<\/trantor-build-doctrine>/) || [""])[0];
+  ok("orchestrator context carries the <trantor-build-doctrine> short form", block.length > 0);
+  ok(`the short form names every rule of docs/BUILD-DOCTRINE.md by heading (${headings.length} rules)`,
+    headings.length >= 12 && headings.every(h => block.includes(h)));
+  ok("the short form links the full doctrine document", /docs\/BUILD-DOCTRINE\.md/.test(block));
+  ok("the short form stays under 40 lines", block.split("\n").length <= 40);
+  ok("the short form states the drill rule and that the seat never closes its own card",
+    block.includes("DRILL") && block.includes("never closes its own card"));
+  ok("no doctrine block without the orchestrator badge", !ctx.includes("<trantor-build-doctrine"));
 }
 
 rmSync(hfFile, { force: true });

@@ -20,6 +20,32 @@ import { getJSON, signedGet, signedPost, loadIdentity } from "./lib/api.mjs";
 import { ledgerPaths, ensureStart, anchorCursor, writeCursor } from "./lib/inbox-ledger.mjs";
 import { ensureEnrolled } from "../lib/enroll.mjs";
 
+// The build doctrine (docs/BUILD-DOCTRINE.md, operator ruling 2026-09-04) in short form: one line
+// per rule, the full document linked. Injected for every project's ORCHESTRATOR at boot (#6452),
+// because the ruling was being missed by orchestrators that never opened the doc. Kept under 40
+// lines; test/hooks/test.mjs checks every heading of the doc has a line here, so the two cannot
+// drift apart silently.
+function buildDoctrineShortForm() {
+  const doc = join(dirname(dirname(fileURLToPath(import.meta.url))), "docs", "BUILD-DOCTRINE.md");
+  return `<trantor-build-doctrine>\n` +
+    `📐 **Build doctrine** (operator ruling 2026-09-04; rules with a gate each, not advice). Full text: ${doc}\n` +
+    `1. The real path is the gate — every card names its DRILL (what a person does on the built artifact and must see); nothing merges until you ran it and wrote the result on the card; unit tests are never sufficient; the seat that wrote the code never closes its own card to done (testing is the seat's last move, done is yours after the drill).\n` +
+    `2. Red blocks merge — a red suite blocks merge; red for a day is an incident with a card; a flaky test is fixed or deleted within a week; no test inherits the runner's identity.\n` +
+    `3. One owner per subsystem — one named owner per wave who reviews every change; cross-seat edits go through the owner over the bus; you own the gates and merges, no seat merges to main.\n` +
+    `4. Causes, not symptoms — a fix names its cause in the commit and adds the drill that fails without it; a second fix in one seam within a week stops the line for a docs/CONTRACT-*.md; trace first, a bug becomes a card only with the mechanism in hand.\n` +
+    `5. Fewer parts — prefer deleting to patching (three fixes in a month = removal candidate); no hand-rolled protocol/transport/sync/auth when a maintained library does it; look at the reference product first (the Orca rule).\n` +
+    `6. Shape limits — a file is at most 800 lines (Rust 1,000), a function at most 80; one language per layer; a module has one reason to change and is never named after a card, date or person.\n` +
+    `7. Comments and records — a code comment is one line of why linking the card; contracts live in docs/CONTRACT-*.md and code that contradicts one is the bug; memory records decisions and traps, the repo records code.\n` +
+    `8. Rust and native boundaries — no unwrap/expect outside tests (clippy denies them); every callback into native code catches and logs panics; a patched/vendored dependency carries its upstream link and an expiry date.\n` +
+    `9. Dependencies and releases — dependencies are pinned and an upgrade is a card with a drill; a release is bump, build, install on the operator's machine, drill, card note, memory line (published is not shipped); every report carries the four evidence blocks: code, build, tests, observed.\n` +
+    `10. Turn economy — a seat's turn ends with a commit (uncommitted work does not exist); a contract names card, files, gate and drill, never "look into"; no acks over the bus; a seat that exits non-zero twice on one contract parks.\n` +
+    `11. Anything that warns — the monitoring doctrine: state not event, episodes not timers, never warn about what the operator declared, report duration not repetition, quiet is not dead, every wake costs a turn.\n` +
+    `12. Seats never touch the operator's live surfaces — a seat never launches/quits/installs the app, drives its UI, logs into providers, or runs trantor up/down/open; its evidence ends at tests green, a build from its worktree and a note naming the drill; you run the drill.\n` +
+    `13. Audit — a project is audited against the doctrine before its next wave (file shape, tests and CI, owners, drills, pins, comments); the wave waits for the consolidation phase the scorecard demands.\n` +
+    `Mechanics: relay_task_add has a \`drill\` field; the hub refuses any move to done, yours included, when the card carries no drill line.\n` +
+    `</trantor-build-doctrine>\n`;
+}
+
 // Load the most recent UNCONSUMED handoff for this project (written by precompact.mjs
 // / the heartbeat early-warning). `claim` marks it consumed so exactly one session
 // takes it. A compaction-triggered SessionStart (source="compact") is the SAME session
@@ -425,6 +451,7 @@ try {
         `- Check relay_inbox and the board before asking the operator anything a peer may already have answered.\n` +
         `- Dispatch rule: the target project is confirmed from the session's badge and cwd before any relay_send, relay_task_add or \`trantor up\` — an ambiguous instruction is not a project name; and a session asking the operator a question never triggers a wake (its messages batch until the answer).\n` +
         `</trantor-orchestrator-role>\n`;
+      additionalContext += buildDoctrineShortForm();
       process.stderr.write(`[trantor] injected orchestrator-role doctrine for ${project}\n`);
     }
   } catch {}
