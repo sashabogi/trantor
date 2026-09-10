@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { restoreSettled, settleEntries, visibleRestorables, type DismissedSession } from "./restorables";
+import { retainFresh, settleEntries, visibleRestorables, type DismissedSession } from "./restorables";
 import type { RestorableSession } from "./herdr";
 
 const session = (project: string, sessionId: string): RestorableSession => ({ project, sessionId });
@@ -60,18 +60,28 @@ describe("settleEntries (the #7269 restore race)", () => {
   });
 });
 
-describe("restoreSettled (the #7269 settle check)", () => {
-  it("a first poll alone is never settled", () => {
-    expect(restoreSettled(null, [session("a", "1")])).toBe(false);
+// #7269: later polls may only DROP. The restored claudes register late under boot load, so the
+// loop polls while the strip is non-empty — but nothing may ever re-enter it, or a session that
+// exited on its own after launch would be nagged forever.
+describe("retainFresh (later polls only drop)", () => {
+  it("an entry whose pane came alive drops out", () => {
+    const current = [session("tiny-timer", "wM:p1"), session("hive-digital", "wN:p1")];
+    const fresh = [session("hive-digital", "wN:p1")]; // tiny-timer's claude is live now
+    expect(retainFresh(current, fresh)).toEqual([session("hive-digital", "wN:p1")]);
   });
 
-  it("two agreeing polls settle the window, row order notwithstanding", () => {
-    const first = [session("a", "1"), session("b", "2")];
-    expect(restoreSettled(first, [session("b", "2"), session("a", "1")])).toBe(true);
+  it("never adds: a project the strip never showed cannot appear, even when fresh reports it dead", () => {
+    const current = [session("a", "1")];
+    const fresh = [session("a", "1"), session("b", "9")]; // b died after launch — not our nag
+    expect(retainFresh(current, fresh)).toEqual([session("a", "1")]);
   });
 
-  it("an entry dropping (its pane went live) keeps the window open", () => {
-    const prev = [session("a", "1"), session("b", "2")];
-    expect(restoreSettled(prev, [session("b", "2")])).toBe(false);
+  it("a pane that dropped on live is not re-added when it dies again", () => {
+    expect(retainFresh([], [session("drill-2", "w2N:p1")])).toEqual([]);
+  });
+
+  it("a changed sessionId drops the old entry rather than re-showing it", () => {
+    const current = [session("tiny-timer", "wM:p1")];
+    expect(retainFresh(current, [session("tiny-timer", "wM:p9")])).toEqual([]);
   });
 });
