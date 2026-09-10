@@ -1,13 +1,7 @@
-// The Usage popover — the app's Orca-parity roster (docs/RESEARCH-orca-usage.md §4.2/§4.3):
-// header with refresh, a Detailed/Compact density toggle persisted across opens, one row per
-// provider sorted WORST-FIRST (the agent nearest a limit sits on top), the six-way honesty
-// ladder, and a click-to-drill per-agent panel with "Updated {timeAgo}", per-window bars and
-// "Resets in {countdown}".
-//
-// It presents the SAME BalancesReport the footer strip already pulled — no second fetch, no
-// new data plane (the card correction). A stale snapshot keeps its values with the strip's
-// dim, and an unreachable provider reads "unreachable", never "sign in" — this data plane
-// shells the local CLI and cannot know credential state.
+// The Usage popover: the app's Orca-parity roster (docs/RESEARCH-orca-usage.md §4.2/§4.3), sorted
+// WORST-FIRST (agent nearest a limit on top), with a click-to-drill per-agent panel.
+// It presents the SAME BalancesReport the footer strip already pulled: no second fetch, no new
+// data plane. Unreachable reads "unreachable", never "sign in": this shells the CLI, not credentials.
 import { useEffect, useState } from "react";
 import { ChevronRight, RefreshCw } from "lucide-react";
 import type { BalanceRow } from "./balanceChips";

@@ -191,7 +191,7 @@ describe("receiptFor", () => {
   });
 
   it("a dropped image path (trailing space by design, #5507) matches its [Image: source:] row", () => {
-    // The 2026-08-30 false alarm: single screenshot dropped, path + trailing space sent,
+    // False alarm: a single screenshot dropped, path + trailing space sent,
     // transcript recorded "[Image: source: <path>]" — path followed by "]", not by a space.
     const p = "/Users/x/Library/Application Support/CleanShot/media/m_1/CleanShot 2026-08-30 at 18.18.39.jpg";
     expect(receiptFor({ text: `${p} `, at }, [`[Image: source: ${p}]`], at + 100)).toBe("delivered");
@@ -203,7 +203,7 @@ describe("receiptFor", () => {
   });
 
   it("image + Shift-Enter prose delivers LINE-WISE — the CLI splits them into separate blocks", () => {
-    // The third receipt gap (2026-08-30): path line became an image block, prose its own text
+    // A receipt gap: path line became an image block, prose its own text
     // block; the full draft never exists as one string again.
     const draft = "/Users/x/CleanShot 2026-08-30 at 18.53.25.jpg \nGo ahead, but also one of the bigger annoyances";
     const turns = ["[Image: source: /Users/x/CleanShot 2026-08-30 at 18.53.25.jpg]", "Go ahead, but also one of the bigger annoyances that I have"];

@@ -1,23 +1,7 @@
-// Reading and changing the code, in the app.
-//
-// The v3 editor core (#5809), shaped by Orca's renderer (RESEARCH-orca-renderer.md):
-//
-// 1. A file opens EDITABLE, always. There is no edit button and no read/edit switch — an editor
-//    that needs a mode change before it accepts a keystroke is the invention the deletion map
-//    retired. The seat-working guard still holds server-side; herdr owns that signal, asked
-//    through Rust, because the runner reports it there at every turn boundary.
-//
-// 2. "Changes" is the open file wearing a diff: HEAD on the left, the LIVE editor on the right
-//    (Orca's ChangesModeView anatomy — ChangesModeView.tsx:12-16, 99). The same draft both views
-//    edit, so dirty tracking, save, and the conflict bar are one truth.
-//
-// 3. Saving is a PLAIN file write — no staging, no commit (file_write_plain). Dirty work stays
-//    visible in the Changes view until an explicit stage/commit; the authorship record is an
-//    honest act, not a keystroke's side effect.
-//
-// 4. Open files are TABS (#5813), the model in codeTabs.ts: identity is scope+path, a plain open
-//    is a PREVIEW the next open replaces, a pin makes it permanent, and the dirty dot follows the
-//    draft — per Orca's split-open.ts:26-29.
+// Reading and changing the code, in the app. v3 editor core (#5809, RESEARCH-orca-renderer.md):
+// files open editable always (no edit/read mode switch), Changes is the same draft as a
+// HEAD-vs-live diff, saving is a plain file write with no auto-stage or commit, and open
+// files are tabs (#5813, codeTabs.ts) where a plain open previews and a pin makes it permanent.
 import { useEffect, useRef, useState } from "react";
 import { X, Pin } from "lucide-react";
 import type { HubClient } from "../../shared/api/client";
@@ -183,11 +167,9 @@ export function Files({ project, lens, onLens, path, seat }: {
     readFileAtHead(project, tab.path, tabSeat).then(setHead).catch(() => setHead(""));
   };
 
-  // Open (or activate) a path, preview semantics live in codeTabs.openInTabs. Every activation
-  // passes through here so the outgoing tab's draft is stashed before the swap — but ONLY a
-  // draft whose document actually finished loading. Stashing before readFile resolved recorded
-  // the initial "" as the tab's kept work (the 2026-09-01 empty-editor regression); a draft
-  // without a completed load is not a draft, it is a loading screen.
+  // Opens or activates a path (preview semantics live in codeTabs.openInTabs). Every
+  // activation stashes the outgoing tab's draft first, but only if its document finished
+  // loading: a draft stashed before readFile resolves is just the initial "", not real work.
   const stashDraft = () => {
     if (!activeKey) return;
     const ok = canStashDraft({

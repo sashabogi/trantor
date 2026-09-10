@@ -1,5 +1,5 @@
 // Real brand marks for the fleet status bar (#5570 — the Orca standard: real icons, not
-// colored monogram circles). Vendored 2026-08-30 from @lobehub/icons-static-svg (MIT),
+// colored monogram circles). Vendored from @lobehub/icons-static-svg (MIT),
 // single-path 24x24 glyphs, fill inherits currentColor so each mark wears its brand hue.
 
 // The table's named owner contract: any provider key may be asked for a mark, and most simply

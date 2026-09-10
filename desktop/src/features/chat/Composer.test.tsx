@@ -1,11 +1,7 @@
 // @vitest-environment happy-dom
 //
-// The composer's drag handle, proven against the REAL component (#6070 bounce): the pure geometry
-// was green while the built app's handle sat inert — the moves rode the element's own pointermove
-// under WKWebView pointer capture and never arrived. The fix rides window listeners; this drill
-// dispatches pointerdown → window pointermove → pointerup and asserts the height actually reaches
-// the textarea's style and lands in localStorage. The Tauri surface is stubbed at its one real
-// boundary (window.__TAURI_INTERNALS__) — the component's own try/catches do the rest.
+// Drilled against the real component (#6070): pure geometry passed while the built app's
+// handle stayed inert, since moves ride window pointermove under WKWebView capture, not the element's own.
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -186,13 +182,10 @@ describe("composerTakesDrop (#6147)", () => {
   });
 });
 
-// #6250 — a pending send belongs to the project and pane it was DELIVERED to, never to the
-// selection the composer shows now. The trace this drills: a message sent to trantor, the
-// operator switched to hive-digital, and the turn boundary there judged the trantor pending
-// against hive-digital's transcript, read it lost, and typed it into hive-digital's pane
-// eleven seconds later. Every drill below crosses that exact switch at the REAL IPC boundary
-// (the stub records pane_send's args) with the clock pushed past LOST_AFTER_MS, because a
-// pending within its grace window can never look lost and so never drills the bug.
+// #6250: a pending send belongs to the project and pane it was delivered to, never to the
+// selection the composer shows now. These drills cross a project switch at the real IPC
+// boundary with the clock pushed past LOST_AFTER_MS, since a pending inside its grace
+// window can never look lost and so never exercises the bug.
 describe("a pending send keeps its own project and pane (#6250)", () => {
   // The recorded IPC surface — pane_send's target is the assertion the whole card hangs on.
   // The args ride tauri's own InvokeArgs, the real seam's type, never a raw unknown dictionary.
@@ -327,15 +320,10 @@ describe("a pending send keeps its own project and pane (#6250)", () => {
   });
 });
 
-// #6701 — at a narrow pane the context gauge must never shove the Aa font-size control off
-// the pane: the gauge is status and collapses, the menu is a control and stays. A flex row
-// pushes its LATER children out only when an EARLIER child cannot shrink, so the guarantee
-// is structural: the gauge (the item before the menu) must be shrinkable to zero width and
-// clip its own overflow, its pieces must retire by the gauge's own width in the ordered
-// ladder (the bar flexes away first, then the word, then the number), and the menu's wrapper
-// must be shrink-0 and sit AFTER the gauge. happy-dom lays nothing out, so the narrow-width
-// case is asserted the way the drag drills assert height — against the structure that
-// determines it, not a measured pixel.
+// #6701: at a narrow pane the context gauge (status) must collapse before the Aa menu
+// (control) is pushed off. This needs the gauge to shrink to zero and clip overflow, its
+// pieces retiring in order (bar, then word, then number), and the menu wrapper to stay
+// shrink-0 and sit after the gauge. happy-dom lays nothing out, so this asserts structure.
 describe("the dial row keeps the Aa font menu reachable at any width (#6701)", () => {
   const viewGauge = () => {
     act(() => root.render(
@@ -376,11 +364,10 @@ describe("the dial row keeps the Aa font menu reachable at any width (#6701)", (
     // (shrinks to nothing first)…
     const bar = gauge!.querySelector("div.min-w-0");
     expect(bar).toBeTruthy();
-    // …then the word steps out below 76px, and the number below 32px — the number outlives
-    // the word, so the percentage is the last face standing before the gauge is empty.
-    // SAFETY: the gauge's children are exactly the word span, the bar div and the number span,
-    // so the word find is always present; undefined would fail the className assertion below,
-    // and the cast only names the element type, never asserting a value away.
+    // The word retires below 76px and the number below 32px, so the percentage is the
+    // last face standing before the gauge is empty.
+    // SAFETY: the gauge always has a word span, bar div, and number span, so this find
+    // is never undefined; the cast only names the type, it never asserts a value away.
     const word = [...gauge!.children].find(c => c.textContent === "context") as HTMLElement | undefined;
     // SAFETY: same children shape — the number span is the only child ending in "%", so the
     // find is always present; the cast names the element type for the className assertion.

@@ -1,8 +1,7 @@
-// One seat tab (#5890): the seat's REAL brand mark (shared/Avatar's BrandGlyph — the same mark
-// the sidebar and Sessions rows use) + name, with the state worn by the mark, not by a dot:
-// working = quiet pulse, blocked = amber ring + amber name, idle = still. The blue dot is gone —
-// it never said "working", it said "online", which the terminal being open already proves.
-// The orchestrator tab shares the shape and keeps its "you" chip (it is the operator, not a seat).
+// One seat tab (#5890): the seat's REAL brand mark (shared/Avatar's BrandGlyph, same mark the
+// sidebar and Sessions rows use) + name, with state worn by the mark, not a dot: working = quiet
+// pulse, blocked = amber ring + amber name, idle = still. The blue dot said "online", not
+// "working", so it is gone; the orchestrator tab keeps its own "you" chip.
 import { brandFor } from "../../shared/Avatar";
 import { seatTabVisual } from "./seatTabVisual";
 

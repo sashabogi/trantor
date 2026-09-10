@@ -1,10 +1,7 @@
-// HOME — the overseer's screen, and the app's default view. One glance answers: is work moving,
-// who is live, what needs me, what did it cost, what did we learn. This is where the fleet-level
-// telemetry LIVES — it used to be crammed into the project tab strip as raw text, which is exactly
-// the altitude mistake the IA forbids: fleet data does not belong in project chrome.
-//
-// Two hubs feed it by design: economics/balances come from the MACHINE-LOCAL hub (the Scrooge
-// ledger and profile.json are files on this machine); cards/peers/lessons ride the project hub.
+// HOME: the overseer's screen and the app's default view. One glance answers: is work moving,
+// who is live, what needs me, what did it cost, what did we learn. Fleet-level telemetry lives
+// here, never in project chrome, per the altitude rule in the IA: two hubs feed it, economics
+// and balances from the MACHINE-LOCAL hub (Scrooge ledger, profile.json), the rest from the project hub.
 import { useEffect, useState } from "react";
 import { HubClient } from "../../shared/api/client";
 import { cleanTitle } from "../../shared/Avatar";

@@ -1,8 +1,7 @@
 // The per-tab disk-change guard (#5811), the persistent version of the conflict bar. Orca keeps
-// `lastKnownDiskSignature` + `externalMutation` ON THE TAB (open-file.ts:124-128): a file that
-// moved on disk while a tab held unsaved work stays flagged until the operator resolves it, and
-// the flag survives tab switches instead of living in one component's local state. These are the
-// two pure decisions the Files lens needs for that; the component owns the maps.
+// `lastKnownDiskSignature` + `externalMutation` ON THE TAB (open-file.ts:124-128) so the flag
+// survives tab switches instead of living in one component's local state. These are the two pure
+// decisions the Files lens needs; the component owns the maps.
 
 /** A cheap, stable content fingerprint (FNV-1a 32-bit, hex). Not cryptographic — it exists so a
  *  guard can ask "is this the SAME text I based my edits on?" without holding whole files. */
@@ -17,13 +16,10 @@ export function diskSignature(text: string): string {
 
 export type DiskVerdict = "moved" | null;
 
-/** Decided when a tab's file is re-read while the tab holds a draft.
- *
- *  - No draft: nothing to protect — the disk text simply becomes the editor's content.
- *  - Draft already IS the disk text: a clean tab, likewise nothing.
- *  - The disk text equals what the draft was based on (same signature): the disk did not move.
- *  - Otherwise the disk MOVED AWAY from under the draft: "moved", and the caller must flag the
- *    tab, keep the draft, and gate saving until the operator picks reload or keep. */
+/** Decided when a tab's file is re-read while the tab holds a draft: no draft, or draft already
+ *  matching disk, or disk still matching the draft's base signature all mean nothing to do.
+ *  Otherwise the disk moved away from under the draft ("moved"), and the caller must flag the tab,
+ *  keep the draft, and gate saving until the operator picks reload or keep. */
 export function externalMutationOnLoad(args: {
   draft: string | null;
   baseSignature: string | null;
@@ -31,7 +27,7 @@ export function externalMutationOnLoad(args: {
 }): DiskVerdict {
   if (args.draft === null) return null;
   // A draft with NO recorded base signature cannot be evidence of anything: it predates the
-  // first completed load (the 2026-09-01 regression — a tab switch stashed the still-empty
+  // first completed load: a tab switch can stash the still-empty
   // draft before readFile resolved, and this function then called the file "moved", showing an
   // empty editor under a false conflict bar). No base, no verdict — the disk text wins.
   if (args.baseSignature === null) return null;

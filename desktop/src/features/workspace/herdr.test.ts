@@ -2,14 +2,10 @@ import { describe, expect, it } from "vitest";
 import type { InvokeArgs } from "@tauri-apps/api/core";
 import { answerAtPane, terminalBytes } from "./herdr";
 
-// #6094, 0.3.147 real-path bounce: answerAtPane's FIRST version opened its own term_attach (a
-// local `herdr agent attach` subprocess) and wrote into it — a STREAMING watch client, read-only
-// by design without an explicit takeover, so the write always failed with EIO
-// ("term write 3: Input/output error"). The fix routes through the Rust `ask_answer` command
-// (herdr's `pane.send_text`, the pane-level primitive underneath `agent.prompt` with none of its
-// agent-lifecycle gating) instead — a single fire-and-forget call, never an attach/write/detach
-// dance. This asserts answerAtPane calls the NEW writable command, not the old attach path, using
-// the same injectable-invoke seam Chat's own ChatDeps uses rather than a mocked module.
+// #6094: answerAtPane must write through the Rust `ask_answer` command (herdr's `pane.send_text`,
+// the primitive under `agent.prompt` minus its lifecycle gating), a single fire-and-forget call.
+// term_attach is a read-only streaming watch client by design; writing to it fails with EIO. This
+// test drives the same injectable-invoke seam Chat's ChatDeps uses, not a mocked module.
 describe("answerAtPane (#6094, 2026-09-05)", () => {
   it("writes through ask_answer (pane.send_text), never term_attach/term_write/term_detach", async () => {
     const calls: Array<{ cmd: string; args: InvokeArgs | undefined }> = [];

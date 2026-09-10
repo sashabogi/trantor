@@ -1,16 +1,7 @@
-// A seat's ACTIVITY, resolved from one place (#5965). The workspace seat tabs and the sidebar
-// project rows ask "is this seat working right now?", and two sources answer:
-//
-//   • the herdr per-pane agent row (`agent_status`, plus whether herdr could even screen-detect the
-//     pane). herdr sees an INTERACTIVE seat mid-turn and says "working"; for a RUNNER-driven seat
-//     (kimi, glm, …) herdr skips screen detection, so its row never leaves "idle" while the seat
-//     is genuinely turning.
-//   • the hub peer status the runner registers. The runner is the only process that KNOWS a turn
-//     started, so #5965 makes it the source of truth: `working · <trigger>` at turn start, `idle`
-//     at turn end, `down:` / `errored:` on failure.
-//
-// The rule: trust herdr when it actually looked (agent_status present AND screen detection not
-// skipped); otherwise FALL BACK to the hub status. Pure, so the whole precedence is unit-tested.
+// A seat's ACTIVITY, resolved from one place (#5965): herdr's per-pane `agent_status` (screen
+// detection, blind for RUNNER seats like kimi/glm) versus the hub peer status the runner itself
+// registers (`working · <trigger>` / `idle` / `down:` / `errored:`). Trust herdr only when
+// it actually looked; otherwise fall back to the hub status. Pure, unit-tested precedence.
 export type SeatActivity = "working" | "blocked" | "idle" | "down";
 
 export type HerdrAgentRow = {

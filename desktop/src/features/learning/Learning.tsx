@@ -1,13 +1,7 @@
-// LEARNING — the self-learning loop, surfaced. What the agents learned while building (relay
-// lessons), how reliable each seat actually is (turn telemetry), and what each cheap model cost
-// and saved (Scrooge ledger + guardrails). GLOBAL view: a lesson learned on one project exists to
-// be applied on the next, so scoping this to the active project by default would defeat it —
-// the scope selector narrows on demand instead.
-//
-// TWO hubs feed this on purpose. Lessons are SHARED state and live on the project hub. Turn
-// telemetry and the Scrooge ledger are files on THIS MACHINE (~/.agent-bus/logs, ~/.token-scrooge)
-// — only the machine-local hub can read them, and they are this operator's economics, not the
-// team's. So: merge the project hub's view with the local hub's, dedup lessons, union the rest.
+// LEARNING: relay lessons, seat reliability (turn telemetry), and cost/savings (Scrooge ledger).
+// GLOBAL by default since a lesson learned on one project applies to the next. TWO hubs feed it:
+// lessons are shared state on the project hub; telemetry and the Scrooge ledger are local-machine
+// files (~/.agent-bus/logs, ~/.token-scrooge), so the view merges both, dedup lessons, union rest.
 import { useEffect, useMemo, useState } from "react";
 import { HubClient } from "../../shared/api/client";
 import type { Learning as LearningData, LessonRec } from "../../shared/api/client";

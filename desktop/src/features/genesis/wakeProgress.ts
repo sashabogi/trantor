@@ -1,10 +1,7 @@
-// wakeProgress.ts — the frontend's read on a running wake chain (#6201), the mirror of
-// workspace/handoffProgress.ts for handoff chains (#6081). The wake used to go quiet for the
-// whole idle gate (88s on tiny-timer) while the session's own startup made the chat header read
-// "working", so the operator read a woken session as idle with nothing to do. Rust now marks the
-// chain (wake_in_progress, the mount-time truth) and emits wake-progress at every step; the
-// sidebar row and the chat header follow it. One invoke + one event name, both owned by
-// genesis.rs project_wake.
+// wakeProgress.ts: the frontend's read on a running wake chain (#6201), mirroring
+// workspace/handoffProgress.ts for handoff chains (#6081). Rust marks the chain
+// (wake_in_progress, the mount-time truth) and emits wake-progress at every step, so the sidebar
+// row and chat header never read a woken session as idle. One invoke, one event, owned by genesis.rs.
 import { invoke } from "@tauri-apps/api/core";
 import { WAKE_PENDING_LINE, WAKE_SENT_LINE, type WakeRowState } from "./wakeRow";
 
@@ -61,11 +58,10 @@ export function wakeProgressRowState(phase: WakePhase, detail: string | null): W
   }
 }
 
-/** Fold one wake-progress event into the shell's wake-state map — the event guard (#6201). A
- *  phase still in flight sets its row; ended clears the row ONLY while it still shows an
- *  in-flight state: the chain lands (kickoff_landed) moments before the command's own answer
- *  arrives and re-sets the outcome with its fade timer, so an ended that overtakes a showing
- *  outcome must not cut the "few seconds" short. */
+/** Fold one wake-progress event into the shell's wake-state map (#6201). A phase still in flight
+ *  sets its row; "ended" clears the row only while it still shows an in-flight state, since
+ *  kickoff_landed can arrive moments before the command's own answer re-sets the outcome with its
+ *  fade timer, and an ended event must never cut that fade timer short. */
 export function applyWakeProgress(prev: Map<string, WakeRowState>, p: WakeProgress): Map<string, WakeRowState> {
   const next = wakeProgressRowState(p.phase, p.detail);
   const cur = prev.get(p.project);

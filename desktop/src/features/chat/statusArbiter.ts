@@ -1,21 +1,7 @@
-// STATUS ARBITER — pure on purpose (#6146). The composer's liveness (streaming.ts's
-// sessionLiveness) is decided by one string, `status`, fed by two sources that race: a one-shot
-// `orchestrator_status` seed dispatched at mount (and re-dispatched a few times on recovery), and
-// a stream of "orch-status" pushes from the Rust watcher `chat_watch` spawns. Both are async and
-// nothing here assumes which one resolves first.
-//
-// The real-path failure (2026-09-02, card #6146): the operator created project pr-os from the
-// genesis sheet. The Rust watcher found the orchestrator pane and pushed "blocked" then "working"
-// within four seconds — but the composer stayed disabled with "no orchestrator session is behind
-// this pane". Chat.tsx seeded `status` with `orchestrator_status` at mount AND independently set it
-// from every "orch-status" push, so whichever resolved LAST won — and the seed, fired before the
-// wake had written the crew-windows row, resolved to "none" AFTER a push had already delivered
-// "working". A later arrival stomped an earlier, more current truth.
-//
-// The fix is ordering, not timing: every candidate update carries a `seq` assigned when it was
-// DISPATCHED (a seed) or RECEIVED (a push) — never when its promise happens to settle — and
-// `apply` keeps whichever update owns the highest seq it has ever seen. A seed born before a push
-// arrived can resolve arbitrarily late; its seq still loses to the push's, so it can never undo it.
+// STATUS ARBITER, pure on purpose (#6146). `status` is fed by two async, racing sources: a
+// one-shot `orchestrator_status` seed at mount, and a stream of "orch-status" pushes from the
+// Rust watcher. Ordering is by `seq`, assigned at DISPATCH or RECEIPT, never at promise-settle
+// time; `apply` keeps the highest seq seen, so a late-resolving seed can never undo a newer push.
 export type StatusSource = "seed" | "push";
 export type StatusEvent = { source: StatusSource; seq: number; value: string };
 export type ArbiterState = { value: string; seq: number };

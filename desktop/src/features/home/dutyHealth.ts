@@ -1,9 +1,7 @@
-// Duty liveness — the pure half of Home's dead-duty strip (#5688 folded into the Usage card).
-// The hub publishes the duty seat's heartbeat on /health (one truth for the app and doctor):
+// Duty liveness: the pure half of Home's dead-duty strip (#5688, folded into the Usage card).
+// The hub publishes the duty seat's heartbeat on /health:
 //   duty: { configured, online, lastSeenMs, darkSinceMs, queuedEscalations }
-// This module decides what that means: whether the strip shows at all, and whether a poll is
-// the EDGE of a dark episode (the only moment a human gets a notification — one per episode,
-// never per poll). The component half lives in DutyStrip.tsx.
+// This decides if the strip shows and if a poll is the EDGE of a dark episode. Component: DutyStrip.tsx.
 import { invoke } from "@tauri-apps/api/core";
 
 export type DutyHealth = {

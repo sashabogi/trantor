@@ -1,10 +1,7 @@
 // Roll-up for overseer history, shared by the Overseer view and Home's Collisions pointer.
-//
-// History repeats itself — literally. Before episode-based warning (hub 0.17.66) a standing
-// condition re-fired every dedup window, so the log holds hundreds of identical rows: 500 events
-// for four distinct conditions in one 8-day audit. Any surface that renders that log one-row-per-
-// event reads as a stuck record. This lives in ONE place because it shipped in two: the Overseer
-// view got the roll-up and Home did not, which is exactly the drift the design system warns about.
+// A standing condition re-fires every dedup window, so the raw log holds many near-identical
+// rows; rendering one-row-per-event reads as stuck. Lives in ONE place because it shipped in
+// two before (Overseer got it, Home did not), exactly the drift the design system warns about.
 import type { HubEvent } from "./api/client";
 
 export type Rolled = { rep: HubEvent; count: number; first: number; last: number };

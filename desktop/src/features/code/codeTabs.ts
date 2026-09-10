@@ -1,9 +1,7 @@
-// The Code lens's tab model (#5813), lifted from Orca's preview/pin anatomy
-// (RESEARCH-orca-renderer.md §4): tabs carry an identity of scope+path, a plain click opens a
-// PREVIEW that the next preview click replaces, and only an explicit pin makes a tab permanent
-// (split-open.ts:26-29 — `!targetGroupId && event?.openAsPermanent !== true`). Pure so the two
-// rules the operator can feel — "my pinned tabs never move", "the dirty dot only follows the
-// draft" — are unit-tested.
+// The Code lens's tab model (#5813, RESEARCH-orca-renderer.md §4): identity is scope+path,
+// a plain click opens a preview that the next preview replaces, and only an explicit pin
+// makes a tab permanent (split-open.ts, lines 26 through 29). Pure, so "pinned tabs never
+// move" and "the dirty dot follows the draft" are unit-tested.
 export type CodeTab = {
   /** `${scope}:${path}` — scope is "project" or the seat name. The identity: the same path in
    *  two worktrees is two files and two tabs. */
@@ -27,11 +25,9 @@ export function findTab(tabs: CodeTab[], scope: string, path: string): CodeTab |
 }
 
 /**
- * Open a path under a scope, preview semantics. If the currently ACTIVE tab is a preview, it is
- * replaced in place (same slot, same activation); otherwise a fresh preview tab opens at the end
- * and becomes active. An existing tab for the path — pinned or not — is just activated and its
- * view set, never duplicated, never moved.
- */
+ * Opens a path under a scope with preview semantics: if the active tab is a preview, it is
+ * replaced in place; otherwise a new preview tab opens at the end and becomes active. An
+ * existing tab for the path, pinned or not, is only activated, never duplicated or moved. */
 export function openInTabs(
   tabs: CodeTab[],
   activeKey: string | null,

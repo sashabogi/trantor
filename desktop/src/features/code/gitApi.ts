@@ -164,9 +164,8 @@ export function aheadLabel(s: Pick<GitPanelSnapshot, "ahead" | "behind" | "upstr
 
 /** The two sections the SCM panel renders, as the exact pathspecs each bulk action sends in ONE
  *  batched git call (RESEARCH-orca-files §3: batch against E2BIG, never one subprocess per file).
- *  `staged` is what "unstage all" restores; `changes` merges the unstaged and untracked rows, which
- *  the panel shows as a single section. A path edited after staging appears in BOTH, on purpose —
- *  the two actions mean different things to it. */
+ *  `staged` is what "unstage all" restores; `changes` merges unstaged and untracked. A path
+ *  edited after staging appears in BOTH on purpose: the two bulk actions mean different things to it. */
 export type ScmSections = { staged: string[]; changes: string[] };
 export function scmSections(entries: GitStatusEntry[]): ScmSections {
   const { staged, unstaged, untracked } = bucketStatus(entries);
@@ -187,7 +186,7 @@ export function isUnmerged(entry: Pick<GitStatusEntry, "x" | "y">): boolean {
 /** The conflicted paths, for the SCM panel to protect: staging one erases git's conflict record
  *  (the only live signal that a review is still owed), so bulk stage skips them and the row's
  *  stage button refuses with that reason. Orca reaches the same rule from richer data
- *  (uncommitted-entry-row.tsx:82-83); ours reads it straight off the porcelain code. */
+ *  (uncommitted-entry-row.tsx L82-L83); ours reads it straight off the porcelain code. */
 export function conflictPaths(entries: GitStatusEntry[]): string[] {
   return entries.filter(isUnmerged).map(e => e.path);
 }

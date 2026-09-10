@@ -1,13 +1,7 @@
-// SETTINGS — the things that otherwise only exist as CLI flags and JSON files.
-//
-// Mostly read-only, and deliberately so: hub pins and identity are written by `trantor hub set` and
-// the enrolment flow, and a second writer for the same config invites the two paths to disagree.
-// Showing them is still worth it — "which hub is this project on, and who am I signing as" is the
-// first question when something 401s. What IS writable here is app behavior (notifications),
-// because that is the app's own preference, nobody else's.
-//
-// The Update button below is NOT a fake affordance (the sin the first Buzz pass was warned off):
-// it fronts a real in-process updater — download the release DMG, swap /Applications, relaunch.
+// SETTINGS: things that otherwise only exist as CLI flags and JSON files. Mostly read-only by
+// design: hub pins and identity are written by `trantor hub set` and enrolment, and a second
+// writer for the same config would let the two paths disagree. Only app behavior (notifications)
+// is writable here, since that is the app's own preference. The Update button is a real updater.
 import { useEffect, useState } from "react";
 import { getVersion } from "@tauri-apps/api/app";
 import { HubClient, knownProjects, hubForProject, editorPref, setEditorPref, isEditorPref, appUpdateCheck, appUpdateInstall } from "../../shared/api/client";

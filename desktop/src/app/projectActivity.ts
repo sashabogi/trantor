@@ -1,10 +1,7 @@
-// Sidebar ACTIVE-NOW activity for a project, resolved from the same two truths AppShell's
-// comment above its activity effect documents — OPEN (a live session process on this machine,
-// or a herdr-visible pane wherever it actually runs) and BUSY (a hub heartbeat inside the 90s
-// work window). Pulled out as a pure function (#6163) so the case that broke — a freshly-woken
-// orch pane herdr already names an agent for, but that has no hub heartbeat yet because hooks
-// fire on tool calls and it hasn't run one — is testable without mounting AppShell or mocking
-// the Tauri bridge.
+// Sidebar ACTIVE-NOW activity for a project: OPEN (a live session process here, or a
+// herdr-visible pane wherever it runs) and BUSY (a hub heartbeat inside the 90s work window).
+// Pulled out as a pure function (#6163) so the freshly-woken-pane-with-no-heartbeat-yet case is
+// testable without mounting AppShell or mocking the Tauri bridge.
 import type { LocalSession } from "../shared/api/client";
 import type { Peer } from "../shared/api/client";
 import { hubActivity } from "../features/workspace/seatActivity";

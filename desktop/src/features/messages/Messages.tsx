@@ -1,26 +1,7 @@
-// MESSAGES — the fleet's conversations, Buzz/Slack-shaped: a list of who-is-talking-to-whom on
-// the left, the actual back-and-forth on the right, live.
-//
-// Sasha (2026-08-13): "How do I see when the cross-session communication is happening? Unless
-// you're looking at the terminal windows while it's happening, you will never know there was any
-// interchange." He was right: agent↔agent DMs (health ↔ scribe planning a schema, duty's nudges)
-// rendered NOWHERE — the Chat lens is per-project, the Inbox is only what's addressed to the
-// human. This view is the missing surface.
-//
-// Data: zero new hub machinery. Every /send appends a `message` EVENT to the one log; /events
-// without a project filter returns everything the signed-in identity may read; the SSE stream
-// pushes new ones. Conversations are a client-side GROUPING of that log:
-//   • a DM thread per unordered session pair   (crebral-health ↔ crebral-scribe)
-//   • a broadcast thread per project           (# crebral-health — to:"all" announcements)
-//
-// Watching AND interjecting (v2 — "does that even work?"): every DM thread composes. On a pair
-// thread between two agents the composer carries a recipient toggle, and the thread FOLDS IN the
-// human's own exchanges with either party — an interjection and its answer render right where the
-// conversation is happening, not in some other thread. Delivery is the same signed /send every
-// agent uses; an idle interactive recipient gets woken by the duty seat's cross-session nudge
-// (proven end-to-end 2026-08-13). "New message" starts a conversation with any live session —
-// including the duty seat, which is the fleet's acting brain and the address for "tell the
-// overseer something".
+// MESSAGES: the fleet's conversations, Buzz/Slack-shaped, who-is-talking-to-whom on the left,
+// the back-and-forth on the right, live. Agent-to-agent DMs had no surface (Chat is per-project,
+// Inbox is human-only), so this view groups the one event log client-side into DM and
+// broadcast threads and lets the human watch or interject in either.
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { HubClient, HubEvent, Peer } from "../../shared/api/client";
 import { Avatar, BrandGlyph, displayName } from "../../shared/Avatar";
@@ -38,14 +19,9 @@ type Thread = {
   msgs: Msg[];
 };
 
-/** The name a human recognizes, per session KIND — the head and tail carry different information
- * for different senders, and picking the wrong half made every pair read "crebral-health ↔
- * crebral-health":
- *   MacBook-Pro-M1:crebral-health → "crebral-health"   (interactive window: machine head is chrome)
- *   glm:crebral-health            → "glm:crebral-health" (crew seat: the AGENT is the identity)
- *   claude:trantor-duty           → "Trantor Duty Agent"  (the always-on triage seat, by its job)
- *   sasha@mac                     → "sasha@mac"
- * Full session id stays available as a tooltip wherever this renders. */
+/** The name a human recognizes, per session KIND: an interactive window shows the machine as
+ *  chrome, a crew seat shows the agent as the identity, and the duty seat shows its job name.
+ *  Full session id stays available as a tooltip wherever this renders. */
 const HOSTISH = /^(macbook|imac|mac[-.]|.*\.local$)|@/i;
 /** hub:* names are the hub's own synthetic senders (overseer announcements, escalation notices).
  * They WRITE and never read — a message sent to one sits undelivered forever. The UI must not
@@ -64,11 +40,9 @@ function msgOf(ev: HubEvent): Msg | null {
   const from = ev.by ?? "";
   const to = ev.toSession ?? "";
   if (!text || !from || !to) return null;
-  // Sasha's question, answered: "are those even messages and conversations? Or are they notices?"
-  // Notices. hub:* traffic is the overseer reporting STATE — it has a real surface (the Overseer
-  // view, with per-condition roll-ups) and rendering it here as fake conversations buried every
-  // real exchange under walls of boilerplate. Messages is conversations between parties that can
-  // actually converse.
+  // hub:* traffic is the overseer reporting STATE, not a conversation: it has its own surface
+  // (the Overseer view, with per-condition roll-ups). Rendering it here would bury real
+  // exchanges under boilerplate, so Messages only shows parties that can actually converse.
   if (isSynthetic(from) || isSynthetic(to)) return null;
   return { id: Number(ev.msgId ?? ev.id ?? 0), ts: ev.ts, from, to, project: String(ev.project ?? ""), text };
 }
@@ -101,11 +75,9 @@ function buildThreads(msgs: Msg[]): Thread[] {
 
 const dayOf = (ts: number) => new Date(ts).toDateString();
 
-// The doctrine rule this view initially broke: any surface that renders a log must ROLL IT UP.
-// The hub's overseer notices arrive dozens at a time with near-identical text, and rendering
-// them verbatim buried the two real messages in a 150-row wall (Sasha: "unreadable and
-// completely useless"). Consecutive synthetic-sender messages collapse into ONE quiet row —
-// count + span, expandable — while real agents' words always render in full.
+// Doctrine rule: any surface that renders a log must roll it up. Consecutive synthetic-sender
+// messages collapse into one quiet row (count + span, expandable), while real agents' words
+// always render in full.
 type ThreadItem = { kind: "msg"; msg: Msg } | { kind: "run"; msgs: Msg[] };
 function collapseRuns(msgs: Msg[]): ThreadItem[] {
   const out: ThreadItem[] = [];

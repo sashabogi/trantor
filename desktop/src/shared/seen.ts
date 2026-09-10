@@ -1,13 +1,7 @@
-// Which messages the HUMAN has actually looked at.
-//
-// The inbox badge used to call client.inbox(me) with the default since=0 and count everything it
-// got back, so it was a lifetime total dressed up as an unread count: it only ever went up, and
-// nothing you did in the app could bring it down.
-//
-// The fix cannot be the hub's delivery cursor. That ledger belongs to the receiving SESSION's hooks,
-// and the badge reads with peek=1 precisely so that glancing at it never steals a message a session
-// still has to act on. So "seen" is a local, human-side notion, kept here and persisted, and the
-// badge is simply (direct messages to me) minus (ids I have seen).
+// Which messages the HUMAN has actually looked at, tracked locally and persisted here.
+// The badge cannot use the hub's delivery cursor: that ledger belongs to the receiving
+// session's hooks, and the badge reads with peek=1 so glancing at it never steals a message
+// a session still has to act on. Badge count = direct messages to me minus ids I have seen.
 const KEY = "trantor.seenMessageIds";
 const CAP = 2000;   // ids are monotonic; keeping the newest few thousand is plenty and bounds growth
 

@@ -1,14 +1,7 @@
-// A project's own face in the sidebar.
-//
-// Sasha: "the actual project could possibly inherit their favicons or icons from the projects
-// themselves. Then they will be a lot easier to kind of find." That is the whole idea — a list of
-// nineteen same-looking text rows has nothing for the eye to land on, and every one of these repos
-// already HAS a mark sitting on disk. We read it (Rust side, `project_icon`) rather than invent one.
-//
-// About 40% of the projects on this machine ship real art; the rest get a deterministic monogram in
-// the same hue family the Avatar primitive uses for people. Two shapes, one rule: agents and humans
-// are CIRCLES (see Avatar), projects are ROUNDED SQUARES. You can tell what kind of thing a row is
-// without reading it.
+// A project's own face in the sidebar, read from disk (Rust side, `project_icon`) rather than
+// invented, since a list of same-looking text rows gives the eye nothing to land on. Projects
+// without real art get a deterministic monogram in the Avatar primitive's hue family. Shapes
+// carry meaning: agents and humans are CIRCLES (see Avatar), projects are ROUNDED SQUARES.
 import { useEffect, useState } from "react";
 import { projectIcon } from "./api/client";
 import { hueOf } from "./Avatar";
@@ -31,16 +24,10 @@ function load(project: string): Promise<string | null> {
   return p;
 }
 
-/** "crm-platform" → "CP", "crebral-health" → "CH", "capowerball" → "CA".
- *
- * Two characters, always. Initials for hyphenated names, because the first two LETTERS make half
- * this fleet identical (crebral, crebral-health, crebral-legal and crm-platform would all read
- * "CR"); the first two letters for single-word names, because one initial does the same thing from
- * the other direction (CSS, capowerball, council and crunchcap would all read "C").
- *
- * Two characters still collide across nineteen projects — CSS and crebral-scribe both give "CS".
- * That is fine and not worth more cleverness: the tile's hue is derived from the full name, so two
- * "CS" tiles are different colours, in different sections, next to their own labels. */
+/** "crm-platform" -> "CP", "crebral-health" -> "CH", "capowerball" -> "CA".
+ * Two characters, always: initials for hyphenated names, since first-two-letters collides across
+ * half this fleet; the first two letters for single-word names. Two-character collisions across
+ * the full set are fine, since the tile's hue comes from the full name, not the monogram. */
 export function monogramFor(project: string): string {
   const words = project.split(/[-_.\s]+/).filter(Boolean);
   if (words.length === 0) return "?";

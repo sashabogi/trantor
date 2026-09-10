@@ -1,11 +1,7 @@
 // The WORKSPACE lens's one bridge to Rust: codex's FROZEN herdr commands (#5366/#5399). The shapes
-// below are the contract — if they ever need to change, that is a conversation with the
-// architect, not an edit here.
-//
-// herdr_seats() parses ~/.agent-bus/herdr-windows.txt down to [{project, agent, surface}] (rows
-// are TAB-separated `PROJECT\tKIND\tAGENT\tHANDLE`, KIND=="herdr" only, last row per
-// (project, agent) wins). The terminal functions attach a client pty to that surface and stream
-// raw bytes; there is no pane-read polling path anymore.
+// below are the contract; changing them is a conversation with the architect, not an edit here.
+// herdr_seats() parses ~/.agent-bus/herdr-windows.txt (TAB-separated PROJECT\tKIND\tAGENT\tHANDLE,
+// KIND=="herdr" only, last row per (project, agent) wins) into [{project, agent, surface}].
 import { Channel, invoke, type InvokeArgs } from "@tauri-apps/api/core";
 
 export type HerdrSeat = {
@@ -66,27 +62,10 @@ export async function termDetach(sub: number): Promise<void> {
   await invoke("term_detach", { sub });
 }
 
-/** Answer a picker (AskUserQuestion, a permission prompt, any TUI choice) the same way the live
- *  terminal does (#6094): `pane_send`'s `agent.prompt` refuses outright while the pane is
- *  blocked — the picker needs raw keystrokes, not a prompt — so this writes `data` through
- *  herdr's `pane.send_text` (the Rust command `ask_answer`), the pane-level primitive underneath
- *  `agent.prompt` with none of its agent-lifecycle gating.
- *
- *  0.3.147's real-path bounce (09-05, EIO "Input/output error"): the FIRST version of this
- *  function opened its own throwaway `term_attach` (spawning a local `herdr agent attach`
- *  subprocess) and wrote into that. `attach` opens a STREAMING watch client — read-only by
- *  design without an explicit takeover, since a second observer must never be able to inject
- *  into a pane someone else is typing in — so the write always failed. `pane.send_text` is a
- *  single fire-and-forget socket call with no client lifecycle to get wrong: verified live
- *  against a throwaway pane, an escape sequence arrived byte-for-byte.
- *
- *  Traced into app-trace.log (the 0.3.147 bounce's own lesson: a click that answered nothing
- *  left no evidence at all beyond a success-only log line) so a future failure still names
- *  itself, even though there is only one step now.
- *
- *  `invokeFn` is the same seam Chat's own `ChatDeps` uses (never a mocked module) — a test
- *  supplies a faithful in-memory `invoke` and asserts on exactly which command name and args
- *  this function called, proving the writable path without touching Tauri's real IPC. */
+/** Answer a picker (AskUserQuestion, permission prompt, any TUI choice) via herdr's `pane.send_text`
+ *  (`ask_answer`, #6094): `agent.prompt` refuses while the pane is blocked, and `term_attach`
+ *  opens a read-only streaming client that can never write. Traces into app-trace.log so a
+ *  failure names itself. `invokeFn` is the same seam as Chat's `ChatDeps`, never a mocked module. */
 export async function answerAtPane(
   target: string,
   data: string,

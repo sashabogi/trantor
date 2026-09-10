@@ -1,8 +1,7 @@
-// The WORKSPACE lens — the one-surface view (mockup: artifact 3d6dbb67). The three surfaces
-// collapse here: seats across the top, the seat's terminal in the center, the record on the right.
-//
-// HONESTY RULE (design system: no fake affordances): everything rendered is REAL hub data — peers,
-// cards, events. Anything without a live data source ships as a stated placeholder, not imitations.
+// The Workspace lens is the one-surface view: seats across the top, the seat's terminal in
+// the center, the record on the right.
+// Honesty rule (design system): everything rendered is real hub data, peers, cards, events.
+// Anything without a live source ships as a stated placeholder, never an imitation.
 import { useEffect, useMemo, useState } from "react";
 import type { Card, HubClient, HubEvent, Peer } from "../../shared/api/client";
 import { ProjectHeader, type Lens } from "../project/ProjectHeader";
@@ -40,12 +39,10 @@ function SeatDot({ online }: { online: boolean }) {
   return <span className={`tr-dot ${online ? "bg-tr-doing" : "bg-tr-muted/50"}`} />;
 }
 
-// One row in the pane strip. The crew's seats and the operator's own orchestrator pane are both
-// just panes you can open, so they share a shape here — the difference is that the orchestrator is
-// the person's session, which is why it leads the row and says so.
-// Watching a crew and driving one seat are different jobs, and tabs only serve the second. cmux
-// and herdr both showed every seat at once; replacing that with clicking made supervision worse.
-// FOCUS stays the default (one seat, full size); GRID is the opt-in that puts them side by side.
+// A pane row: crew seats and the operator's own orchestrator pane share one shape, but the
+// orchestrator leads the row since it is the person's own session.
+// FOCUS (one seat, full size) is the default; GRID is opt-in, since watching a crew and
+// driving one seat are different jobs and tabs only serve the second.
 type PaneView = "focus" | "grid";
 const VIEW_KEY = "trantor.workspace.view";
 
@@ -53,11 +50,10 @@ const VIEW_KEY = "trantor.workspace.view";
 // what a crew of N looks like.
 export const gridCols = (n: number) => { let c = 1; while (c * c < n) c += 1; return c; };
 
-// The pane area's empty state, honest by inventory (#5479). "No crew — trantor up" was a lie by
-// omission while the operator's own conversation ran in a Terminal; when the inventory sees one,
-// this says what IS true — the terminal cannot be mirrored (macOS will not hand one process
-// another's pty), but the conversation can be read in Chat and taken over, right here. Polls
-// only while shown: this card exists precisely when nothing else is rendering.
+// The pane area's empty state, honest by inventory (#5479): when the operator's own
+// conversation runs in a Terminal, this says the terminal cannot be mirrored (macOS will
+// not hand one process another's pty) but the conversation can be read and taken over in
+// Chat. Polls only while shown, since this card exists exactly when nothing else renders.
 function PaneEmptyState({ project }: { project: string }) {
   const [inventory, setInventory] = useState<ProjectSessions | null>(null);
   useEffect(() => {

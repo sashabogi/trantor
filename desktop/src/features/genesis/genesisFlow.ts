@@ -1,14 +1,7 @@
-// genesisFlow.ts — the pure state machine behind the "Start a project" sheet (#6161).
-//
-// Before this: GenesisSheet awaited BOTH `trantor new` AND the orchestrator wake before closing
-// itself, so a slow (or failing) wake left the dialog open with a disabled Cancel button and no
-// visible progress — exactly the operator's 2026-09-02 report ("Create & wake" created the
-// project and woke the orchestrator, but the sheet stayed open; Cancel then did nothing visible).
-// The fix moves the close to the moment `trantor new` succeeds; the wake becomes a detached step
-// whose only remaining UI is a toast, because there is no dialog left to show it in.
-//
-// This module has no React and no side effects (no invoke, no notifications) — it is only the
-// transition table and the two small predicates the sheet needs, so it is directly unit-testable.
+// genesisFlow.ts: the pure state machine behind the "Start a project" sheet (#6161).
+// The sheet used to await BOTH `trantor new` AND the orchestrator wake before closing, so a slow
+// wake left it open with a disabled Cancel and no progress. Now it closes the moment `trantor new`
+// succeeds; the wake becomes a detached step surfaced only as a toast. No React, no side effects.
 
 export type GenesisState =
   | { status: "idle" }

@@ -1,13 +1,7 @@
-// The ONE right mode pane (#5841, per .scratch/design-v4/*.dc.html): Files | Git | Sessions |
-// Chat. This pane REPLACES three older surfaces — the chat dock, the left tree column, and the
-// in-lens SCM rail — by MOVING their pieces here, not duplicating them: the tree is the same
-// FileTree, the Git mode is the same GitPanel, the Chat tab is the same Chat component, and the
-// note composer is the one that used to ride the SCM rail. The center editor keeps v3 whole and
-// narrows, never disappears (ChatFocused.dc.html).
-//
-// Mode widths follow the artboards: 300 for Files/Git/Sessions, 440 for Chat. The seat scope
-// selector lives at the BOTTOM of the pane (Main.dc.html:147-152) and feeds tree, editor, and
-// git alike — one picker, three consumers.
+// The ONE mode pane (#5841): Files | Git | Sessions | Chat. Replaces the chat dock, left tree
+// column, and in-lens SCM rail by MOVING their components here (same FileTree, GitPanel, Chat),
+// not duplicating them, so the three surfaces cannot drift apart. Widths: 300 for Files/Git/
+// Sessions, 440 for Chat; the seat scope selector sits at the bottom and feeds tree, editor, and git.
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ChevronDown, FolderTree, GitBranch, History, MessageSquare } from "lucide-react";
 import type { Card, HubClient, Peer } from "../../shared/api/client";
@@ -46,11 +40,10 @@ export function ModePane({ client, project, seat, onSeat, onOpenFile }: {
   onOpenFile: (path: string) => void;
 }) {
   const [mode, setMode] = useState<Mode>("files");
-  // #6499 — the panel remembers its tab per project (config.json, via rightPanelState.ts) and
-  // restores it on launch; a project nobody has ever touched here defaults to Chat while its
-  // orchestrator is live (a question may already be waiting), Files otherwise. One resolve per
-  // project, not a poll — once the operator switches tabs the stored value wins from then on, so
-  // a live orchestrator can never yank the panel back to Chat out from under a deliberate choice.
+  // #6499: the panel remembers its tab per project (config.json via rightPanelState.ts) and
+  // restores it on launch. A project never touched here defaults to Chat while its orchestrator
+  // is live, Files otherwise: one resolve per project, not a poll, so once the operator switches
+  // tabs the stored value wins and a live orchestrator can never yank the panel back to Chat.
   useEffect(() => {
     let alive = true;
     void (async () => {
@@ -89,14 +82,10 @@ export function ModePane({ client, project, seat, onSeat, onOpenFile }: {
   const [sent, setSent] = useState<"ok" | "fail" | null>(null);
   const [selectedClaude, setSelectedClaude] = useState<SessionRow | null>(null);
 
-  // The tab strip's measured layout (#6036): a tab word NEVER truncates, so the strip compares
-  // the natural width of its four full labels against the width the strip really has, and
-  // renders icon-only only when the labels would not fit. The labels' truth is read off twin
-  // tab buttons that live INSIDE the strip as direct children (stripLabelsNeed) — the drill
-  // taught that a twin styled anywhere else lies, because unlayered `.tr-seg > button` CSS
-  // beats every utility class. The observers watch the elements whose width actually changes —
-  // the strip AND the pane root it fills — never the twins, whose intrinsic width would lie.
-  // Unmeasured stays on labels: the designed default never degrades on a guess.
+  // Tab strip measured layout (#6036): compares the four labels' natural width against the strip's
+  // real width, showing icon-only when they would not fit. Twin measuring buttons (stripLabelsNeed)
+  // must live INSIDE the strip as direct children: `.tr-seg > button` CSS beats utility classes
+  // elsewhere. Observers watch the strip and pane root, not the twins; unmeasured stays on labels.
   const paneRef = useRef<HTMLDivElement | null>(null);
   const stripRef = useRef<HTMLDivElement | null>(null);
   const [dims, setDims] = useState<{ labels: number | null; strip: number | null }>({ labels: null, strip: null });
@@ -211,7 +200,7 @@ export function ModePane({ client, project, seat, onSeat, onOpenFile }: {
   const folderMarks = useMemo(() => folderSeats(merged), [merged]);
 
   // Changed-file count per seat, for the footer chips: the one-click answer to "which worktree
-  // has edits" (2026-09-01). Absent = clean, never a zero.
+  // has edits". Absent = clean, never a zero.
   const seats = useMemo(
     () => peers.filter(p => p.session.endsWith(`:${project}`) && !p.session.toLowerCase().startsWith("macbook")),
     [peers, project],
@@ -274,13 +263,10 @@ export function ModePane({ client, project, seat, onSeat, onOpenFile }: {
     setChooserFor(current => (current === path ? null : path));
   };
 
-  // The rail is the SAME object as the lens tabs (tr-seg + a raised active segment) with a
-  // Lucide icon per mode, so it reads as clickable by association with every other tab in the
-  // app. The four segments share the strip's width and shrink under it (#5960): the Chat
-  // segment's live dot used to push the row past the 300px rail. A label never truncates
-  // (#6036): when the measured labels would not fit the strip steps down to icon-only (title
-  // carries the word); the truncate class below is the last-resort guard for the gap zone,
-  // not the design.
+  // The rail reuses the lens tabs' object (tr-seg + a raised active segment, Lucide icon per
+  // mode) so it reads as clickable like every other tab. The four segments share and shrink
+  // under the strip's width (#5960: the Chat live dot used to push the row past the 300px rail).
+  // Labels never truncate (#6036): unmeasured steps to icon-only; truncate class is a last resort.
   const modeBtn = (m: Mode, label: string, Icon: typeof FolderTree, dot?: boolean, needsYou?: boolean) => (
     <button
       type="button"
@@ -297,11 +283,10 @@ export function ModePane({ client, project, seat, onSeat, onOpenFile }: {
     </button>
   );
 
-  // One truth for the real tabs and the twins alike — the twins measure what the four
-  // LABELED tabs need, so they share the real tabs' parent (same cascade), icon, label,
-  // dot, and internal gap verbatim. #6499 — the Chat tab's needs-you badge rides the same dot
-  // slot as its always-on live dot, so BOTH tabs (real and twin) measure the same width whether
-  // or not an ask is open.
+  // One truth for real tabs and twins: twins measure what the four LABELED tabs need, sharing
+  // the real tabs' parent (same cascade), icon, label, dot, and gap verbatim. #6499: the Chat
+  // tab's needs-you badge rides the same dot slot as its live dot, so both tabs measure the
+  // same width whether or not an ask is open.
   const MODES: { m: Mode; label: string; Icon: typeof FolderTree; dot?: boolean; needsYou?: boolean }[] = useMemo(() => [
     { m: "files", label: "Files", Icon: FolderTree },
     { m: "git", label: "Git", Icon: GitBranch },

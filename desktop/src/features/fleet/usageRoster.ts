@@ -1,14 +1,7 @@
-// Usage roster — the pure formatting behind the Usage popover, the same split the balance
-// chips use: every decision lives here so the popover stays a dumb renderer and the drillable
-// surface is the logic. The data is whatever BalanceStrip ALREADY pulled from the local hub
-// (/balances) — this module never fetches, it only presents (the correction to the card note:
-// do not rewire the data plane, just present it).
-//
-// Orca parity (docs/RESEARCH-orca-usage.md §4+§6): worst-first roster order, one shared
-// 60/80 tone function for bars AND text (they can never disagree), a six-way honesty ladder
-// (usage/loading/plan/unlimited/error/empty — never a sign-in CTA, because this data plane
-// cannot know credentials; a transient fetch error must not read as "sign in again"),
-// "Updated {timeAgo}" and "Resets in {countdown}" in the drill-in.
+// Usage roster: pure formatting behind the Usage popover, same split as the balance chips. This
+// module never fetches, only presents data BalanceStrip already pulled from /balances. Orca
+// parity (docs/RESEARCH-orca-usage.md §4+§6): worst-first order, one shared 60/80 tone
+// function for bars AND text, a six-way honesty ladder, never a sign-in CTA.
 import type { BalanceRow } from "./balanceChips";
 import { untilLong, WINDOW_LABEL } from "./balanceChips";
 import { dictGet } from "../../shared/dict";

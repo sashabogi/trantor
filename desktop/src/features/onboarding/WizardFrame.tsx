@@ -1,9 +1,7 @@
-// The guided-flow chrome the first-run wizard (#6392) and Drill Mode (#6800) share: an icon, a
-// title and sub-line, an "n / N" progress mark, a scrolling body, and a footer for the flow's own
-// buttons. Extracted from OnboardingFlow so the second guided flow renders the same frame instead
-// of a near-copy. Two layouts: `modal` is the onboarding wizard's full-window card; `dock` is a
-// corner panel that leaves the app visible and clickable behind it — a drill step tells the
-// operator to go DO something in the app, so covering the app would defeat it.
+// Guided-flow chrome shared by the first-run wizard (#6392) and Drill Mode (#6800): icon,
+// title/sub-line, "n / N" progress, scrolling body, footer buttons. Extracted from
+// OnboardingFlow so the second flow reuses the frame instead of a near-copy. `dock` layout
+// leaves the app clickable behind it, for drill steps that need the operator to act in the app.
 import type { ReactNode } from "react";
 
 export function WizardFrame({ icon, title, sub, index, total, layout = "modal", hidden = false, children, footer }: {

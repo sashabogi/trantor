@@ -1,9 +1,7 @@
-// The search palette (#5625) — ONE component, two scopes, per the operator's design:
-//   · project scope — the always-visible trigger above every lens: "you save space in that
-//     pane and it becomes a global search bar for that particular project."
-//   · global scope — ⌘K anywhere: projects by name plus cards across every known board.
-// Results speak the board's own vocabulary (match.ts): text, #id, @assignee, then message,
-// event and file rows from the read APIs that already exist.
+// The search palette (#5625): one component, two scopes. Project scope is the
+// always-visible trigger above every lens; global scope is ⌘K anywhere, searching
+// projects by name plus cards across every known board. Results use the board's own
+// vocabulary (match.ts): text, #id, @assignee, then message/event/file rows.
 import { useEffect, useMemo, useRef, useState } from "react";
 import { FileText, MessageSquare, Search } from "lucide-react";
 import { HubClient, hubForProject, type Card, type HubEvent } from "../../shared/api/client";

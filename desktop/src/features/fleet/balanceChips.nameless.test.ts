@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { chipFrom, type BalanceRow } from "./balanceChips";
 
-// #6391 real path (2026-09-04): the Accounts pane blanked the whole app because chipFrom read
+// #6391: the Accounts pane blanked the whole app because chipFrom read
 // `.slice` on an undefined name for a usage row without label or provider.
 describe("chipFrom never throws over a nameless usage row", () => {
   const namelessRows: Array<Partial<BalanceRow>> = [

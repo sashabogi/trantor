@@ -1,16 +1,7 @@
-// Native notifications — the HUMAN half of the wake ladder.
-//
-// The agent half (T1 mid-turn, T2 at end-of-turn) already works via hooks. This is the other half:
-// the operator is not staring at the board, and something happened that genuinely needs them. That
-// was the whole point of the intersession arc — Sasha had to be the message bus because nothing
-// could reach him either.
-//
-// Deliberately NARROW. A notification for every event is a notification for nothing, and the fastest
-// way to have someone disable them permanently. Only things that actually want a human:
-//   • a DIRECT message addressed to this operator (a broadcast is FYI — it does not interrupt)
-//   • a verify gate opening (work is blocked pending a decision — that IS the go/no-go moment)
-//   • a crew seat failing (a stalled crew burns quota silently)
-// Card moves, presence and handoffs are deliberately excluded: high volume, low urgency.
+// Native notifications, the HUMAN half of the wake ladder (the agent half runs via hooks).
+// Deliberately NARROW: only a direct message, a verify gate opening, or a crew seat failing
+// interrupt. A notification for every event is a notification for nothing, and the fastest way
+// to have someone disable them permanently. Card moves, presence and handoffs stay excluded.
 import { isPermissionGranted, requestPermission, sendNotification } from "@tauri-apps/plugin-notification";
 import type { HubEvent } from "./api/client";
 
@@ -64,11 +55,10 @@ export function notificationFor(ev: HubEvent, me: string, isOffline?: (session: 
   return null;
 }
 
-// The duty whitelist — a STATE edge, not a hub event (home/DutyStrip.tsx watches /health and
-// calls this only on the healthy→dark transition it observed, once per episode). A dead duty
-// seat is the same class as a failed crew seat: the fleet's watcher is gone and nothing else
-// will say so. First-read-dark stays silent (the strip says it; a notification for hours-old
-// news is noise).
+// notifyDutyDark fires on a STATE edge, not a hub event: call it only on the healthy->dark
+// transition you observed, once per episode, never on every dark poll. A dead duty seat is the
+// same class as a failed crew seat: nothing else will say so. First-read-dark stays silent,
+// since hours-old news is noise, not a new event.
 export async function notifyDutyDark(d: { lastSeenMs: number; queuedEscalations?: number }): Promise<boolean> {
   if (!notificationsEnabled()) return false;
   if (!(await ensurePermission())) return false;

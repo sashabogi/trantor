@@ -1,8 +1,7 @@
 // @vitest-environment happy-dom
 //
-// The tab renders the CONTRACT, not a guess: the brand mark is present (aria-label carries the
-// brand), the pulse class exists only while working, amber only when blocked, the blue dot is
-// GONE, and the title says the state. Same harness as TerminalPane: happy-dom + createRoot + act.
+// The tab renders the CONTRACT: brand mark present (aria-label), pulse only while working,
+// amber only when blocked, no blue dot ever, title states the seat's state.
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";

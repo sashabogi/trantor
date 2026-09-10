@@ -1,10 +1,7 @@
 // #6317's built-app acceptance drill. TRANTOR_KEY_DRILL=post|throw makes Rust emit `key-drill`
-// after boot; this focuses nothing, then the terminal pane, then any other textarea, and has Rust
-// post a real right-arrow keyDown/keyUp through AppKit's event queue for each (src-tauri/src/
-// key_drill.rs). TRANTOR_KEY_DRILL_PROJECT=<project name> rides in the payload: the drill opens
-// that project from the sidebar and switches to its Workspace lens first, so a terminal pane is
-// in the DOM for pass 2 (the 09-07 run on 0.3.159 skipped it: no project was open). The seat
-// writes this drill but never launches it. The orchestrator builds and runs it.
+// after boot, focusing nothing, then the terminal pane, then any other textarea, posting a real
+// right-arrow keyDown/keyUp for each (src-tauri/src/key_drill.rs). TRANTOR_KEY_DRILL_PROJECT=<name>
+// opens that project first so pass 2 has a pane. The seat writes this; the orchestrator runs it.
 import { invoke, type InvokeArgs } from "@tauri-apps/api/core";
 import { selectProject, type AskDrillDeps } from "../chat/askDrill";
 
@@ -144,7 +141,7 @@ export async function runKeyDrill(payload: KeyDrillPayload, deps: KeyDrillDeps =
     const active = deps.document.activeElement;
     if (active instanceof HTMLElement) active.blur();
     passes.push(`1:${(await postPass(1, deps)).target}`);
-    // Pass 2: the terminal pane's xterm textarea, the element under the operator's 09-07 right
+    // Pass 2: the terminal pane's xterm textarea, the element under the operator's own right
     // arrow. An editable element, so WebKit has an active NSTextInputContext (the IME path).
     const terminal = await waitFor(
       () => deps.document.querySelector<HTMLTextAreaElement>(TERMINAL_INPUT_SELECTOR),
@@ -152,7 +149,7 @@ export async function runKeyDrill(payload: KeyDrillPayload, deps: KeyDrillDeps =
       deps,
     );
     passes.push(await focusAndPost(2, terminal, "no terminal pane mounted", deps));
-    // Pass 3: any other textarea (the composer took the 09-03 Up arrow).
+    // Pass 3: any other textarea (the composer already owns the Up arrow).
     const other = deps.document.querySelector<HTMLTextAreaElement>(OTHER_TEXTAREA_SELECTOR);
     passes.push(await focusAndPost(3, other, "no other textarea", deps));
     await deps.sleep(SETTLE_MS);

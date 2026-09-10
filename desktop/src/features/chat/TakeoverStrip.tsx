@@ -1,8 +1,7 @@
 // The takeover offer as one strip: the why, the button, and the CLI's refusal verbatim (#5495).
 // Shared by the composer's locked state and the Workspace empty state (#5479) so both surfaces
-// offer the SAME action from the same inventory — one tested implementation, like the CLI chain
-// beneath. The refusal (mid-turn, ambiguity, a failed open) renders word for word next to the
-// button: a takeover that failed silently is a trap set for the next conversation.
+// offer the SAME action from one tested implementation. The refusal renders word for word next to
+// the button, since a takeover that failed silently is a trap set for the next conversation.
 import { useState } from "react";
 import { takeoverNow, type TakeoverAction } from "./takeover";
 

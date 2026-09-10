@@ -1,10 +1,7 @@
-// Collisions — the overseer's POINTER on Home: is anything about to step on itself, and how long
-// has it been true. The full surface (watcher heartbeat, watch map, history) is the Overseer view;
-// this stays deliberately short.
-//
-// It renders the SAME rolled-up conditions as that view. Rendering one row per event turned a
-// single 8-day condition into an endless identical list on the home screen — the log is a log, not
-// a feed of news.
+// Collisions: the overseer's POINTER on Home, is anything about to step on itself and for how
+// long. The full surface (watcher heartbeat, watch map, history) lives in the Overseer view; this
+// stays short, rendering the SAME rolled-up conditions rather than one row per event, since a
+// single condition rendered as a feed of repeated rows reads as endless news, not a log.
 import { useEffect, useState } from "react";
 import type { HubClient, HubEvent } from "../../shared/api/client";
 import { rollUp } from "../../shared/rollup";

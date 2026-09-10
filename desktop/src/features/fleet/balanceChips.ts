@@ -1,21 +1,14 @@
-// Fleet balance chips — the pure formatting that turns a /balances row into the one chip that
-// belongs in the app header: a brand-hue monogram circle + the single number that matters. All
-// decision logic lives here so the strip component stays a dumb renderer and the drillable
-// surface is the formatting itself. Semantics mirror lib/balances.mjs (symbols, reset short-forms,
-// kind shapes) so the header and the CLI agree about what a row means.
-//
-// v7: ICONS not words — the value reads at full brightness (text-tr-text), the icon/label stays
-// muted. A stale snapshot (older than 30 min) dims the chip AND says so in the tooltip ("as of
-// 2h ago"). Claude's two usage windows fold into one chip ("10% · 24%"); a stale zombie row
-// (gemini, snapshot older than 24h) is HIDDEN entirely.
+// Fleet balance chips: pure formatting turning a /balances row into one header chip. All decision
+// logic lives here, not in the strip component, and mirrors lib/balances.mjs (symbols, reset
+// short-forms, kind shapes) so the header and the CLI agree on what a row means. Icons, not words:
+// stale snapshots dim, and a dead-provider zombie row hides entirely.
 import type { BalanceEntry } from "../../shared/api/client";
 import { dictGet } from "../../shared/dict";
 
-// The hub's /balances rows carry MORE than the client's conservative BalanceEntry declares: the
-// fetch adapters spread the raw provider payload (usage/limit/resetTime/via/unlimited/windows)
-// into each entry before POSTing. The strip reads those extra fields, so the boundary cast widens
-// once, in the component — never scattered through the formatter. kind also widens: the frozen
-// client type predates the Claude "windows" row the orchestrator ships.
+// The hub's /balances rows carry more than the client's conservative BalanceEntry declares: fetch
+// adapters spread the raw provider payload (usage/limit/resetTime/via/unlimited/windows) into
+// each entry before POSTing. The boundary cast widens once, here, never scattered through the
+// formatter; kind also widens since the frozen client type predates the Claude "windows" row.
 export type BalanceWindow = {
   name: string;
   usedPct?: number | null;
@@ -171,9 +164,9 @@ export function isStale(snapshotTs: number, now = Date.now()): boolean {
 }
 
 export function isZombie(e: BalanceRow, snapshotTs: number, now = Date.now()): boolean {
-  // Gemini's CLI was retired 2026-06-18 — a gemini row is ALWAYS a ghost (a stale profile
+  // Gemini's CLI was retired: a gemini row is ALWAYS a ghost (a stale profile
   // entry the hub faithfully reconciled), never a live seat. Hide it outright; the old
-  // 24h-staleness rule let a fresh snapshot resurrect it (operator caught it 2026-08-30).
+  // 24h-staleness rule let a fresh snapshot resurrect it.
   if (e.provider === "gemini") return true;
   return snapshotTs > 0 && now - snapshotTs > ZOMBIE_HIDE_MS && e.kind === "subscription" && !e.plan;
 }

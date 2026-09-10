@@ -1,13 +1,7 @@
-// Suggested-reply chips (#5929) — the pure extractor. The TUI offers a suggested next input;
-// the chat offers the same KIND of one-click answers, read strictly from what the orchestrator's
-// last turn actually says. Nothing is invented and nothing is sent anywhere: this function turns
-// closing sentences into at most three chip labels, or none. The transcript does not record the
-// suggestion text itself — only `promptSource: "suggestion_accepted"` when one is taken — so
-// adoption is evaluated later by counting those turns against chip clicks, not here.
-// #6702 — a chip alone is a reinvented yes/no; the terminal shows what you're saying yes TO. So
-// a prose chip carries the closing sentence it was read from: `tooltip` is what the button shows
-// on hover, `ask` is what the chip row's lead-in echoes (the two differ for a numbered pick, where
-// the tooltip is the option and the ask is the sentence that asked to pick).
+// Suggested-reply chips (#5929): the pure extractor. Reads strictly from what the orchestrator's
+// last turn says, nothing invented, nothing sent; turns closing sentences into at most three chip
+// labels or none. #6702: a chip alone reinvents yes/no, so `tooltip` (button hover) and `ask` (the
+// chip row's lead-in) both carry the closing sentence, differing only for a numbered pick.
 export type Suggestion = { text: string; tooltip?: string; ask?: string };
 
 const YES_NO_OPENER =
@@ -49,11 +43,10 @@ export function suggestionsFromTurn(text: string): Suggestion[] {
   const pushAsk = /\bpush\b\s*\?/i.test(last);
   if (pushAsk) push({ text: "push it", tooltip: last, ask: last });
 
-  // 2. "say <word>", the operator's own idiom for "answer with exactly this word". "Say go."
-  //    was the original; the orchestrator now confirms in prose too ("Say yes and I ship it.",
-  //    "...waits on your yes.", #5993), so the cue reads any closing sentence, and only words
-  //    that ARE answers count: "say the word" / "say more" stay silent. A plain affirmation
-  //    carries its refusal with it: yes without no would put a thumb on the scale.
+  // 2. "say <word>": the operator's idiom for "answer with exactly this word" (#5993). The cue
+  //    reads any closing sentence, but only words that ARE answers count: "say the word" / "say
+  //    more" stay silent. A plain affirmation carries its refusal with it, since yes without no
+  //    would put a thumb on the scale.
   for (const sentence of [...closing].reverse()) {
     const m = sentence.match(SAY_WORD) ?? sentence.match(WAITS_ON_YOUR_WORD);
     if (!m) continue;
@@ -126,11 +119,10 @@ export function suggestionsFromTurns(turnTextsNewestFirst: string[]): Suggestion
   return chips;
 }
 
-/** An AskUserQuestion tool call carries its own closing question as structured options rather
- *  than a sentence to parse — the same "nothing invented" rule applies, so its options ARE the
- *  chips, verbatim, capped at three the same way. Takes the option shape structurally (label +
- *  description) rather than importing streaming.ts's AskQuestion type, so this stays the pure,
- *  transcript-agnostic extractor its neighbors are. */
+/** An AskUserQuestion tool call carries structured options rather than a sentence to parse; the
+ *  same "nothing invented" rule applies, so its options ARE the chips verbatim, capped at three.
+ *  Takes the option shape structurally (label + description) rather than importing streaming.ts's
+ *  AskQuestion type, keeping this a pure, transcript-agnostic extractor. */
 export function suggestionsFromAskOptions(options: { label: string; description: string }[]): Suggestion[] {
   return options.slice(0, 3).map(o => ({ text: o.label, tooltip: o.description || undefined }));
 }

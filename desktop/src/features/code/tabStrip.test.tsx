@@ -1,12 +1,7 @@
 // @vitest-environment happy-dom
-//
-// The mode rail's width→layout contract (#6036): a tab word NEVER truncates. The bounces taught
-// the real rules — the strip MEASURES both sides (the labels' natural width vs the width the
-// strip really has) instead of trusting a hardcoded constant, and the measuring twins must live
-// under the SAME cascade as the real tabs (direct children of the strip), because unlayered
-// `.tr-seg > button` CSS beats every utility class and a twin styled elsewhere lies. Pinned
-// here: around equality, around the hysteresis band, the unmeasured default, the twin-sum
-// arithmetic, and — mounted in happy-dom — at a 270px strip like the operator's.
+// The mode rail's width->layout contract (#6036): a tab word NEVER truncates. The strip MEASURES
+// both sides (natural label width vs available width) instead of trusting a constant, and the
+// measuring twins must share the real tabs' cascade, since unlayered CSS beats utility classes.
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";

@@ -1,10 +1,7 @@
-// The seat's live terminal — the one-surface mockup's center block. W3-C replaces the old
-// read-only pane snapshot with a client pty attached to herdr, so xterm sees raw bytes and its
+// The seat's live terminal: a client pty attached to herdr, so xterm sees raw bytes and its
 // onData goes straight back to Rust.
-//
-// HONESTY RULE carries over from the scaffold: when the selected seat has no herdr surface, this
-// component renders NOTHING and the workspace keeps its stated-placeholder ghost — a fallback,
-// not an error, and never an imitation of a live pane.
+// HONESTY RULE: when the selected seat has no herdr surface, this component renders NOTHING and
+// the workspace keeps its stated-placeholder ghost, a fallback, never an imitation of a live pane.
 import { useCallback, useEffect, useRef, useState } from "react";
 import { FitAddon } from "@xterm/addon-fit";
 import { WebglAddon } from "@xterm/addon-webgl";
@@ -43,12 +40,10 @@ const THEME = {
   selectionBackground: "rgba(20, 184, 166, 0.25)",
 };
 
-// Everything this pane reaches outside itself, behind one narrow surface. The component never
-// imports xterm or the Rust bridge directly, so a test supplies a faithful stand-in instead of
-// rewriting the module graph underneath it (anti-slop: no-module-mocking).
-//
-// The three xterm objects collapse into ONE session because the pane only ever uses them together:
-// a terminal, its fit addon and its webgl addon share a lifetime and are disposed as a unit.
+// Everything this pane reaches outside itself, behind one narrow surface, so a test can supply a
+// faithful stand-in instead of module-mocking (anti-slop: no-module-mocking).
+// The three xterm objects collapse into ONE session because they share a lifetime: terminal, fit
+// addon and webgl addon are used together and disposed as a unit.
 export type PaneSession = {
   onData(cb: (data: string) => void): { dispose(): void };
   write(bytes: Uint8Array): void;
@@ -85,12 +80,10 @@ function createXtermSession(host: HTMLElement): PaneSession {
   const fit = new FitAddon();
   term.loadAddon(fit);
 
-  // WebGL is an optimisation and it is NOT always available in a WKWebView. Two things follow, and
-  // getting either wrong takes the whole app down rather than the renderer:
-  //   1. Only hold the addon if loadAddon actually accepted it. Disposing an addon that never
-  //      activated throws, and that throw lands in a React effect cleanup during a tab switch,
-  //      which unmounts the tree and leaves a blank frozen window (observed 2026-08-27).
-  //   2. A lost context must dispose the addon, or xterm keeps drawing into a dead surface.
+  // WebGL is an optimisation, not always available in a WKWebView, and mishandling its lifecycle
+  // can freeze the whole app, not just the renderer: only hold the addon if loadAddon actually
+  // accepted it (disposing one that never activated throws inside a React effect cleanup), and a
+  // lost context must dispose the addon or xterm keeps drawing into a dead surface.
   let webgl: WebglAddon | null = null;
   try {
     const addon = new WebglAddon();
@@ -202,11 +195,10 @@ export function TerminalPane({
     const session = deps.createSession(hostRef.current);
 
     let alive = true;
-    // Dictation and paste arrive as a DRIP of small onData fragments (traced 2026-09-02: dozens
-    // of ~12-byte writes), and each raw write became a separate input the TUI could split into
-    // two submissions. So: a lone keystroke goes straight through (no added latency), but a
-    // multi-char fragment buffers for one beat and flushes as ONE bracketed paste — the TUI then
-    // treats the whole block as a single atomic paste however it was fragmented on the way in.
+    // Dictation and paste arrive as a drip of small onData fragments, and each raw write became a
+    // separate input the TUI could split into two submissions. So a lone keystroke goes straight
+    // through (no added latency), but a multi-char fragment buffers for one beat and flushes as
+    // ONE bracketed paste, so the TUI treats the whole block as a single atomic paste.
     let pasteBuf = "";
     let pasteTimer: ReturnType<typeof setTimeout> | null = null;
     const flushPaste = () => {
@@ -283,12 +275,10 @@ export function TerminalPane({
     };
   }, [surface, deps]);
 
-  // Dropped files (#5949, leak fixed #5949-bounce): the paths are written into the seat's
-  // terminal shell-quoted and space-separated, through the same term_write path keystrokes use.
-  // The event is webview-level, so "over this pane" is decided by the TOPMOST element under the
-  // cursor — a rectangle test alone passes whenever a floating sheet covers the pane's rect,
-  // which typed a dropped path into the orchestrator's terminal (the operator's bounce). No
-  // position = not ours, never a drop. Every write is traced: sub, bytes, chunks, ms (#5921).
+  // Dropped files (#5949, leak fixed #5949-bounce): paths are written into the seat's terminal
+  // shell-quoted and space-separated, through the same term_write path keystrokes use. "Over this
+  // pane" is decided by the TOPMOST element under the cursor, not a rectangle test, since a
+  // floating sheet can cover the pane's rect. No position means not ours, never a drop.
   useEffect(() => {
     if (!surface) return;
     const overThisPane = (position: { x: number; y: number } | undefined): boolean => {

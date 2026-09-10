@@ -1,8 +1,7 @@
-// Drill Mode (#6800) — the DOM probes that can pre-fill a verdict. Each reads the LIVE app
-// document for the exact elements the card's fix mounts (the same hooks the unit suites assert
-// on: SuggestionChips' data-testid, Chat's jump-to-latest aria-label, the composer's gauge and
-// Aa control, wakeRow's pending line) and says what it saw. A probe never moves a card: the
-// operator still presses Pass. Pure over a Document, so the tests hand it a happy-dom tree.
+// Drill Mode (#6800): DOM probes that pre-fill a verdict by reading the live app document
+// for the exact elements a card's fix mounts (the same hooks the unit suites assert on)
+// and reporting what they saw. A probe never moves a card itself; the operator still
+// presses Pass. Pure over a Document, so tests can hand it a happy-dom tree.
 import { WAKE_PENDING_LINE } from "../genesis/wakeRow";
 import type { AutoCheckKind, AutoCheckResult } from "./drillSteps";
 

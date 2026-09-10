@@ -1,13 +1,7 @@
-// PROPOSALS — the human half of agent-proposed permissions, in ONE module on purpose.
-//
-// The roll-up lesson (monitoring doctrine): the moment two surfaces render the same queue from
-// separate code, they disagree about the same data. Home and Overseer both show this queue, and
-// the sidebar badges its count — all three read through here.
-//
-// An undecided proposal is a BLOCKED AGENT: it filed its bound and moved on, but whatever needed
-// the permission stays undone until the human rules. So pending proposals are surfaced (Home,
-// Overseer, badge, native notification on filing) rather than waiting to be found — while an
-// EMPTY queue renders nothing at all, because "no decisions waiting" is not news.
+// PROPOSALS: the human half of agent-proposed permissions, in ONE module on purpose. Home,
+// Overseer, and the sidebar badge all read through here, per the monitoring doctrine that two
+// surfaces rendering the same queue from separate code will disagree. An undecided proposal is a
+// BLOCKED AGENT, so it is surfaced everywhere (plus native notification); an empty queue renders nothing.
 import { useEffect, useState } from "react";
 import type { HubClient, Proposal } from "./api/client";
 
@@ -37,11 +31,9 @@ function agoS(ts: number) {
   return `${Math.round(s / 86400)}d ago`;
 }
 
-/**
- * The decision queue itself. Renders NOTHING when no proposals are pending — callers can mount it
- * unconditionally. Approve is one click; Deny demands a note, because the note is what the agent
- * gets quoted back if it ever re-asks (the hub's denial memory).
- */
+/** The decision queue. Renders nothing when no proposals are pending, so callers mount it
+ * unconditionally. Approve is one click; Deny demands a note, since that note is what the
+ * agent gets quoted back if it re-asks (the hub's denial memory). */
 export function ProposalsSection({ client }: { client: HubClient }) {
   const proposals = usePendingProposals(client);
   const [denying, setDenying] = useState<number | null>(null);

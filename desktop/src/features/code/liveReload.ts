@@ -13,14 +13,9 @@ export type FileStat = {
 /** What to do when a file's stat moved under the operator. */
 export type ReloadDecision = "reload" | "conflict" | "none";
 
-/**
- * Decide between silently reloading the open file and warning the operator.
- *
- * - no fresh stat, or no baseline yet: nothing to act on (the first poll only sets the baseline)
- * - stat unchanged: nothing to do
- * - stat changed and the editor holds unsaved work: conflict, never clobber the operator's edits
- * - stat changed and the editor is clean: reload silently
- */
+/** Decide between silently reloading the open file and warning the operator: nothing to act on
+ * without a fresh stat or baseline; unsaved editor work always wins as a conflict, never
+ * clobbered; a clean editor reloads silently on an external change. */
 export function decideReload(args: {
   /** whether the editor holds unsaved work a reload would clobber */
   dirty: boolean;

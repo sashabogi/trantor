@@ -1,13 +1,7 @@
-// The one way a project screen opens — restructured, not squeezed (#5616). The old header put
-// title, stats, search, filter and six lens tabs in ONE flex row with a shrink-0 right side; at
-// laptop widths with the chat docked, the tabs clipped off the edge and the stats stacked into
-// a vertical mangle (operator screenshot, 2026-08-30). Now each row has one job:
-//   row 1 — identity: the name and its quiet stats line share a baseline and TRUNCATE; the row
-//           is one line tall at every width, no stacking, ever.
-//   row 2 — working chrome: the lens tabs own the left and never clip invisibly (they scroll as
-//           a last resort); the tools (search/filter) live right and shrink FIRST.
-// Owning this in one component is what keeps BOARD/FEED/CHAT from drifting apart — the
-// whack-a-mole lesson, structural.
+// The project screen header, restructured not squeezed (#5616): two rows, each with one job.
+// Row 1 (identity): name and stats share a baseline and TRUNCATE, always one line tall, never
+// stacking. Row 2 (chrome): lens tabs own the left and scroll rather than clip; search/filter
+// live right and shrink FIRST. One component here keeps BOARD/FEED/CHAT from drifting apart.
 import type { ReactNode } from "react";
 
 const LENSES = ["workspace", "code", "board", "feed", "bus"] as const;

@@ -1,11 +1,7 @@
 // The Workspace tab row as data: one PaneTarget per crew seat plus the operator's own
-// orchestrator pane leading the row. Pure, so the identity split below stays tested.
-//
-// Two identities live on every row and must not be conflated (the 0.3.99 regression did):
-//   agent  — the herdr pane name. surfaceFor(project, agent) resolves the live terminal by it,
-//            so the orchestrator row keeps "orchestrator", the name Rust gives its pane.
-//   brand  — what the tab's mark reads. For the orchestrator that is the HOST session
-//            (MacBook-*:project), which brandFor's host-name rule resolves to Claude (#5890).
+// orchestrator pane leading the row. Pure, so the identity split stays tested.
+// Two identities on every row must not be conflated (the 0.3.99 regression did): `agent` is the
+// herdr pane name surfaceFor resolves the terminal by; `brand` is the tab's mark (#5890).
 import type { Peer } from "../../shared/api/client";
 import type { HerdrSeat } from "./herdr";
 

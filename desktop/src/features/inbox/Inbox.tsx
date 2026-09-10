@@ -1,13 +1,7 @@
-// INBOX — ONLY what needs an answer from you, across every project.
-//
-// Scope correction: this used to hold every message the hub would hand over, broadcasts included,
-// which buried the handful that actually wanted a human. Agent-to-agent traffic now lives in each
-// project's Conversation, where it belongs and where the roster gives it context. What is left here
-// is the question Sasha actually asks of an inbox: "is anything waiting on ME?"
-//
-// Reads with peek=1 on purpose. The app is a viewer; advancing the delivery ledger because a human
-// glanced at a list would hide the message from the receiving SESSION's hooks, which are the thing
-// that actually acts on it. Marking-as-read is the agent's business, not the dashboard's.
+// INBOX: only what needs an answer from a human, across every project. Agent-to-agent traffic
+// lives in each project's Conversation instead, where the roster gives it context. Reads use
+// peek=1 on purpose: the app is a viewer, and advancing the delivery ledger on a glance would
+// hide the message from the receiving session's own hooks, which are what actually acts on it.
 import { useEffect, useRef, useState } from "react";
 import { hasSeen, markSeen } from "../../shared/seen";
 import { stalenessOf } from "./staleness";
@@ -20,15 +14,10 @@ const brandOf = (s: string) => s.split(":")[0] ?? s;
 
 
 
-// QUICK ACTIONS — answer without leaving the row.
-//
-// "Reply to X" only set the recipient on the footer composer, so answering a yes/no question meant
-// three moves: click, scroll, type. The inbox exists to hold decisions that are waiting on a human,
-// and a decision you cannot take in one click isn't really in an inbox, it's in a queue.
-//
-// The three canned answers are deliberately blunt and few. A longer menu becomes a thing to read,
-// which is the cost this is meant to remove; anything subtler goes in the free-text box next to
-// them. Sending marks the message read, because answering IS reading, and the badge drops at once.
+// QUICK ACTIONS: answer without leaving the row. A decision you cannot take in one click is not
+// really in an inbox, it is a queue. The three canned answers are deliberately blunt and few:
+// a longer menu becomes something to read, which is the cost this exists to remove; anything
+// subtler goes in the free-text box. Sending marks the message read since answering IS reading.
 const QUICK_ANSWERS = ["Go ahead", "No", "Hold off for now"] as const;
 
 function QuickActions({ msg, client, onSent, onOpenConversation }: {
@@ -154,11 +143,10 @@ export function Inbox({ client, me, onOpenConversation }: {
   }, [client, me]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => client.streamEvents(ev => { if (ev.type === "message") load(); }), [client, me]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Computed once per render rather than per row: the bulk action and the rows must agree about
-  // what is stale, or "Dismiss all 6" leaves something behind and the count stops being trustworthy.
-  // ONE definition of "the human has read this": the local badge count and the hub's delivery
-  // watermark move together, so the hub can never think mail is undelivered that is sitting read on
-  // the screen.
+  // Computed once per render, not per row: the bulk action and the rows must agree on what is
+  // stale, or "Dismiss all 6" leaves something behind and the count stops being trustworthy. ONE
+  // definition of "read": the local badge count and the hub's delivery watermark move together,
+  // so the hub can never think mail sitting read on screen is still undelivered.
   const see = (id: number) => { markSeen(id); void client.delivered(id); };
 
   const staleIds = messages.filter(m => stalenessOf(m, messages, peers, cards).stale).map(m => m.id);

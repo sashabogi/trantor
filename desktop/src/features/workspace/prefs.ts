@@ -8,7 +8,7 @@ const RAIL_KEY = "trantor.workspace.rail";
 
 /** CLOSED unless the operator opened it. The first cut defaulted open "for discoverability"
  *  and the operator's screenshot answered that: at laptop width the rail dwarfed the terminal
- *  it sits beside ("a log being bigger than the terminal itself is just dumb", 2026-08-30).
+ *  it sits beside ("a log being bigger than the terminal itself is just dumb").
  *  A log's resting state is folded; the labeled edge control IS the discoverability. */
 export function loadRailOpen(store: Store | null = domStore()): boolean {
   try { return store?.getItem(RAIL_KEY) === "1"; } catch { return false; }

@@ -1,14 +1,7 @@
-// Assistant replies arrive as markdown text; the old renderer showed the literal "**" and "- "
-// markup, so long orchestrator replies were read in the terminal instead. This renders the subset
-// that makes a chat reply readable: paragraphs, bullet and numbered lists, bold/italic, inline and
-// fenced code, external links (opened by the shell opener, never in the webview), headings demoted
-// to a bold line, and tables as a monospace block.
-//
-// Hand-rolled on purpose: react-markdown is not a dependency, and adding one would churn the shared
-// pnpm lockfile under concurrent seats. The scope is deliberately smaller than CommonMark — no
-// images, no raw-HTML passthrough (every token becomes a React element, so nothing can inject a
-// tag), no footnotes. The parser is fault-tolerant: a reply mid-stream (unclosed fence or link) is
-// rendered as text rather than swallowed, because the watcher appends rows as a turn runs.
+// Renders the markdown subset that makes a chat reply readable: paragraphs, lists, bold/italic,
+// code, external links (opened by the shell opener, never in the webview), and tables. Hand-rolled
+// on purpose to avoid adding react-markdown to the shared pnpm lockfile; no images, no raw-HTML
+// passthrough (every token becomes a React element, so nothing can inject a tag), no footnotes.
 import type { ReactNode } from "react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 
@@ -26,11 +19,10 @@ type InlineNode =
 // text instead of recursing further (#6113).
 const INLINE_MAX_DEPTH = 16;
 
-/** Split one text run into inline tokens. `*`/`**` mark italic/bold; backticks are code; a
- *  `[label](http(s)://…)` link opens externally. A marker with no closer is left as text (streaming
- *  replies are frequently mid-token). SAFETY: the only atoms emitted are text/code/strong/em and
- *  http(s)-only links — an image or a javascript: URL can never become an element here.
- */
+/** Split one text run into inline tokens. `*`/`**` mark italic/bold, backticks are code, and
+ *  `[label](http(s)://…)` opens externally. An unclosed marker renders as text (streaming is
+ *  often mid-token). SAFETY: only text/code/strong/em and http(s) links can be emitted, never
+ *  an image or a javascript: URL. */
 function inline(text: string, depth = 0): InlineNode[] {
   if (depth >= INLINE_MAX_DEPTH) return [{ t: "text", s: text }];
   const out: InlineNode[] = [];

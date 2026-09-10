@@ -1,9 +1,7 @@
-// Interrupted-session dismissal — pure filtering logic, apart from the strip's rendering and the
-// Tauri round trip, so it is testable without mounting anything (mirrors onboardingState.ts).
-//
-// #6476: a dismissal is durable (config.json, via dismissedSessions.ts) and keyed on
-// (project, sessionId) — a NEW dead session for the same project (a fresh orch pane handle) must
-// still show even though an older session for that project stays dismissed.
+// Interrupted-session dismissal: pure filtering logic apart from the strip's rendering and the
+// Tauri round trip, testable without mounting anything (mirrors onboardingState.ts). #6476: a
+// dismissal is durable (config.json, via dismissedSessions.ts) and keyed on (project, sessionId),
+// so a NEW dead session for the same project must still show even if an older one stays dismissed.
 import type { RestorableSession } from "./herdr";
 
 export type DismissedSession = { project: string; sessionId: string; ts: number };

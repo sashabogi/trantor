@@ -1,12 +1,7 @@
-// The composer's height (#6070): freely resizable between two lines and about 60% of the pane,
-// auto-growing with content, the chosen height remembered across restarts.
-//
-// Two rules, both pure so they can be drilled without a DOM: GROWTH (content decides the height
-// within the pane's bounds — the state before any drag) and CHOICE (a drag sets an explicit height
-// the box holds; content taller than it scrolls inside). Persistence follows prefs.ts' seam: the
-// store is injected and defaults to the DOM's own storage, every reader total — a missing,
-// corrupted or REFUSING store falls back to "never resized", storage bytes are decoded, never
-// trusted.
+// The composer's height (#6070): resizable between two lines and about 60% of the pane, auto-
+// growing with content, remembered across restarts. Two pure rules so they drill without a DOM:
+// GROWTH (content decides height pre-drag) and CHOICE (a drag sets an explicit height the box
+// holds; taller content scrolls). Storage bytes are decoded, never trusted; failures mean "never resized".
 
 import { domStore, type Store } from "./prefs";
 

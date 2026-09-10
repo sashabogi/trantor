@@ -1,16 +1,6 @@
-// STREAMING — the chat's state machine, pure on purpose.
-//
-// The transcript cursor is the whole game. Claude writes COMPLETE JSONL rows while a turn runs,
-// and the watcher (#5474) pushes each new batch as a `chat-rows` event whose `after` is the line
-// offset the batch starts at. Rows only ever append when `after` matches what we have already
-// folded in; anything else means a batch was missed and the caller refetches via
-// `orchestrator_chat`, whose `total` is the authoritative line count.
-//
-// Why a batch's own cursor can drift: not every transcript line becomes a turn. System rows,
-// harness injections and pure tool_result lines advance the file without producing a Turn, so
-// `after + turns.length` is a lower bound, not the truth. The mismatch path heals the drift —
-// a wrong guess costs one refetch, never a gap and never a duplicate. When the watcher offers
-// the post-batch line count as `total`, the guess becomes exact and the heals stop.
+// STREAMING: the chat's state machine, pure on purpose.
+// The watcher (#5474) emits `chat-rows` batches keyed by `after`, the line offset already folded
+// in; a mismatch means a missed batch, so we refetch via `orchestrator_chat` and trust its `total`.
 /** One AskUserQuestion option, straight off the tool's own `input.questions[].options[]`. */
 export type AskOption = { label: string; description: string };
 /** One AskUserQuestion question. `ask` on a Block carries an array because the tool CAN ask
@@ -116,11 +106,9 @@ function absorb(s: ChatState, fresh: Turn[], rs: ToolResult[], m: Meta, receipts
   };
 }
 
-/** Apply one `chat-rows` batch. In order → append and advance the cursor. Out of order → resync:
- *  the payload is DISCARDED untouched and the caller refetches, because a cursor mismatch means a
- *  batch was missed and guessing where these rows belong is how gaps and duplicates happen. */
-/** What applying a rows batch yields: the (possibly unchanged) state, and whether the caller
- *  must refetch because the batch missed the cursor. */
+/** Apply one `chat-rows` batch: in order, append and advance the cursor. Out of order, resync by
+ *  discarding the payload untouched, since a mismatch means a batch was missed. */
+/** What applying a rows batch yields: the resulting state, and whether the caller must refetch. */
 export type RowsApplied = { state: ChatState; resync: boolean };
 
 export function applyRows(s: ChatState, p: RowsPayload): RowsApplied {
@@ -154,11 +142,9 @@ export function applySessionChanged(s: ChatState): ChatState {
    };
 }
 
-/** Can the operator talk to the orchestrator, and if not, why — for the composer's disabled
- *  state (#5477). Liveness is asked of the pane (orchestrator_status → herdr's agent list), not
- *  guessed from a pane row existing: a registered pane whose agent exited is exactly the dead
- *  surface this check exists to catch. "none"/"unknown" are the closed not-live set — herdr only
- *  lists agents it vouches for, so any OTHER status (idle, working, …) means one is running. */
+/** Can the operator talk to the orchestrator, and if not why, for the composer's disabled state
+ *  (#5477). Liveness comes from orchestrator_status (herdr's agent list), not a pane row existing:
+ *  "none"/"unknown" are the only closed states; any other status means an agent is running. */
 /** Whether the operator can talk to the orchestrator, and if not, the reason the UI shows. */
 export type Liveness = { live: boolean; why: string };
 
@@ -175,44 +161,34 @@ export function sessionLiveness(status: string, target: string | null): Liveness
   return { live: true, why: "" };
 }
 
-/** A message the composer sent that the transcript has not yet echoed back (#5504).
- *  `retried` marks the one mechanical turn-boundary retry as spent — after that, staying
- *  lost is the human's call. `project` and `target` are where the send WENT (#6250): the
- *  receipt is judged against that project's transcript and every retry lands on that pane,
- *  never on whatever project the composer happens to show now — a send that outlives a
- *  project switch keeps its own address. */
+/** A message the composer sent that the transcript has not yet echoed back (#5504). `retried`
+ *  marks the one mechanical turn-boundary retry as spent; after that, staying lost is the human's
+ *  call. `project`/`target` pin where the send went (#6250) so retries and the receipt judge
+ *  against that pane, never whatever project the composer shows now. */
 export type PendingSend = { text: string; at: number; project: string; target: string; retried?: boolean };
 
 /** Silence past this window means the words never made it into the conversation. */
 export const LOST_AFTER_MS = 10_000;
 
-/** Judge one pending send against the transcript's user turns.
- *
- *  Sending is not delivery: text typed into the pane can be eaten by whatever UI state the CLI is
- *  in (2026-08-28: two dictated messages vanished into a compacting TUI, and one fused onto a
- *  staged "/compact"). The transcript is the only truth about arrival, so the composer holds each
- *  send as pending until a user turn CONTAINS it — containment, not equality, because a fused row
- *  is still delivered, just dirty. "lost" only after the window: silence before that is transit. */
+/** Judge one pending send against the transcript's user turns. Sending is not delivery: the CLI's
+ *  UI state can eat or fuse typed text, so the transcript is the only truth. A send counts as
+ *  delivered when a user turn CONTAINS it, not equals it, since a fused row is still delivered,
+ *  just dirty; "lost" only fires after the window, not before. */
 export function receiptFor(p: Pick<PendingSend, "text" | "at">, userTexts: string[], now: number): "sending" | "delivered" | "lost" {
-  // TRIMMED containment. The drop-insert appends a trailing space to each path by design
-  // (#5507), but CC records a dropped image as its own "[Image: source: <path>]" text block —
-  // path followed by "]", never by the draft's trailing space — so the untrimmed needle missed
-  // and the receipt cried "not delivered" about a screenshot the session was actively answering
-  // (2026-08-30, fourth member of the false-alarm family).
+  // TRIMMED containment: the drop-insert appends a trailing space to each path (#5507), but CC
+  // records a dropped image as "[Image: source: <path>]" with no trailing space, so an untrimmed
+  // needle never matches.
   let sent = (p.text ?? "").trim();
   // A "!" command executes in the session and is recorded as a <bash-input> row WITHOUT the
-  // bang (gap five, 2026-08-30 — the operator ran the npm publish through the composer, it
+  // bang (gap five: the operator ran the npm publish through the composer, it
   // WORKED, and the receipt cried about it). Match on what the record can actually contain.
   if (sent.startsWith("!")) sent = sent.slice(1).trim();
   if (sent) {
     if (userTexts.some(t => t.includes(sent))) return "delivered";
-    // LINE-WISE fallback (gaps three AND four, 2026-08-30): the CLI transforms what the
-    // composer sent — an image path may survive as an "[Image: source: <path>]" text record,
-    // or vanish ENTIRELY into a pathless "[Image #7]" placeholder + binary block (both shapes
-    // observed in ONE two-image turn). So: every prose line must arrive verbatim; a PATH line
-    // arrives either verbatim or by consuming one pathless placeholder from the turn's budget.
-    // The budget keeps this honest: two images sent, one placeholder recorded → the second
-    // path finds no marker and the send still goes LOST, loudly.
+    // LINE-WISE fallback: the CLI may keep an image path as "[Image: source: <path>]" text or
+    // drop it into a pathless "[Image #N]" placeholder. Every prose line must arrive verbatim;
+    // a path line arrives verbatim or consumes one placeholder from the turn's budget. The budget
+    // stops a dropped second image from reading as delivered when only one placeholder landed.
     const lines = sent.split("\n").map(l => l.trim()).filter(Boolean);
     if (lines.length >= 1) {
       const all = userTexts.join("\n");
@@ -227,13 +203,10 @@ export function receiptFor(p: Pick<PendingSend, "text" | "at">, userTexts: strin
       });
       if (arrived) return "delivered";
     }
-    // Gap six (2026-08-31): images ATTACHED with their paths spliced INLINE defeat the
-    // line-wise budget — drag-drop inserts mid-line and CleanShot paths carry spaces, so no
-    // line is a bare path. Worse than the false alarm: the turn-boundary auto-retry trusted it
-    // and would have re-sent a DELIVERED message as a duplicate. Applies ONLY to the inline
-    // shape (a line mixing a path with prose or a second path) — own-line paths keep the strict
-    // budget above, which is what the honesty drills pin. Same budget here: every path span
-    // must arrive verbatim or consume one image marker, and the prose residue must arrive.
+    // Inline-spliced paths (drag-drop mid-line, or CleanShot paths with spaces) defeat the
+    // line-wise budget above since no line is a bare path; own-line paths keep that budget. Here
+    // every path span must arrive verbatim or consume one image marker, and the prose residue
+    // must arrive too, or a delivered message risks being auto-retried as a duplicate.
     const spans = sent.match(IMAGE_PATH_RE) ?? [];
     const inline = spans.length > 0 && sent.split("\n").some(l => {
       const ls = l.match(IMAGE_PATH_RE) ?? [];
@@ -262,14 +235,10 @@ export function receiptFor(p: Pick<PendingSend, "text" | "at">, userTexts: strin
 export const IMAGE_PATH_RE = /(?:\/|~\/)[^\n]*?\.(?:png|jpe?g|gif|webp|heic|pdf)/gi;
 export const hasImagePath = (s: string) => { IMAGE_PATH_RE.lastIndex = 0; return IMAGE_PATH_RE.test(s); };
 
-/** #5709 — CC's attachment conversion DROPS an image when several paths ride one message
- *  inline (lab-reproduced 2026-08-31: two inline paths in one prompt → ONE image block in the
- *  transcript; the other survived only as raw text the model never saw). One path per LINE
- *  converts every image (2/2 and 3/3 in the same lab), so the composer normalizes at SEND
- *  time: each path moves to its own leading line and a "(image N)" marker holds its place in
- *  the prose, keeping sentences readable ("compare (image 1) with (image 2)"). Single-path
- *  sends pass through byte-identical — they have never dropped, and the receipt drills pin
- *  their exact shapes. */
+/** #5709: CC's attachment conversion drops an image when several paths ride one message inline.
+ *  One path per line converts every image, so the composer normalizes at send time: each path
+ *  moves to its own leading line and a "(image N)" marker holds its place in the prose. Single-
+ *  path sends pass through unchanged. */
 export function normalizeAttachments(text: string): string {
   IMAGE_PATH_RE.lastIndex = 0;
   const spans = text.match(IMAGE_PATH_RE) ?? [];
@@ -288,11 +257,9 @@ export function normalizeAttachments(text: string): string {
 export type OpenQuestion = { tool_id: string; questions: AskQuestion[] };
 
 /** The most recent AskUserQuestion whose tool_result has not landed yet. Scans backward so only
- *  the LATEST call can surface — an earlier one is either answered (its result exists) or was
- *  superseded by whatever the agent asked next, and a stale card resurrecting would let the
- *  operator answer a question the session has moved past. Pure and status-agnostic; the caller
- *  gates rendering on `status === "blocked"` (a result-less ask while the pane is NOT blocked is
- *  a race between the tool_use and tool_result rows landing, not an open question). */
+ *  the LATEST call can surface; an earlier one is answered or superseded, and resurrecting it
+ *  would let the operator answer a question the session has moved past. Pure and status-agnostic:
+ *  the caller gates on `status === "blocked"`, since a result-less ask otherwise is just a race. */
 export function openQuestion(turns: Turn[], results: Record<string, ToolResult>): OpenQuestion | null {
   for (let i = turns.length - 1; i >= 0; i--) {
     const t = turns[i];
@@ -311,19 +278,10 @@ export function openQuestion(turns: Turn[], results: Record<string, ToolResult>)
  *  path and the "Other" free-text path (#6094), both of which walk the same option list. */
 export const DOWN_ARROW = "\x1b[B";
 
-/** The keystrokes that answer one AskUserQuestion question the same way a person at the keyboard
- *  would (#6094): the picker's own footer names its controls — "Tab/Arrow keys to navigate" —
- *  the only keybinding hint the compiled CLI's UI strings carry anywhere near this component; a
- *  digit shortcut exists as a DIFFERENT component's contract (the permission-ask dialog's "single
- *  stray keystroke" approve, its own string right by "takes no digit shortcut" for the
- *  defaultToNo case) and does not apply here. So a choice is reached by walking Down from the row
- *  the picker opens on (assumed row 0 — "initialValue" sits beside `multiSelect` in the same
- *  string cluster) to the target index, then Enter/Return to confirm. Multi-select toggles each
- *  picked row with Space while passing it, in one downward sweep so no row is revisited, then
- *  Enter submits — Space-to-toggle is the Ink convention this assumes, not confirmed by the same
- *  string evidence as the navigation keys, so treat the multi-select path as the weaker half of
- *  this contract until a live picker confirms it. `indices` are 0-based into `q.options`;
- *  out-of-range indices are dropped rather than walking toward a row the picker never offered. */
+/** The keystrokes that answer one AskUserQuestion the way a person at the keyboard would (#6094):
+ *  walk Down from row 0 to the target index, then Enter to confirm. Multi-select toggles each
+ *  picked row with Space in one downward sweep, then Enter submits. `indices` are 0-based into
+ *  `q.options`; out-of-range indices are dropped rather than walking past what the picker offers. */
 export function answerKeystrokes(q: AskQuestion, indices: number[]): string {
   const valid = [...new Set(indices.filter(i => i >= 0 && i < q.options.length))].sort((a, b) => a - b);
   if (valid.length === 0) return "";
@@ -404,11 +362,10 @@ export function gaugeLabel(c: ContextGauge): string {
   return `${k(c.tokens ?? 0)} / ${k(c.window)} (${Math.round((c.frac ?? 0) * 100)}%)`;
 }
 
-/** The composer's ONE action slot (#5556): while the agent works, the slot stops the turn;
- *  otherwise it sends. One position, two states — never both, never neither. STOP ignores the
- *  send gates entirely (the old external button behaved the same): interrupting a runaway turn
- *  must not be locked behind liveness or an empty draft, because the turn ITSELF proves there is
- *  something to interrupt. */
+/** The composer's ONE action slot (#5556): while the agent works it stops the turn, otherwise it
+ *  sends. One position, two states, never both, never neither. STOP ignores the send gates
+ *  (liveness, empty draft) entirely, since a running turn is itself proof there is something to
+ *  interrupt. */
 export type ComposerSlot = { kind: "stop" } | { kind: "send"; disabled: boolean };
 
 /** Decide what the slot shows. The send state carries its own disabled rule so the wiring stays
@@ -425,11 +382,9 @@ export const HANDOFF_WARN_FRAC = 0.90;
 /** After a "keep going", the re-offer waits for one more episode of growth, this much. */
 export const HANDOFF_REARM_STEP = 0.02;
 
-/** The handoff banner's visibility rule (#5509 W1): show from the warning threshold, and after a
- *  "keep going" stay hidden until frac has grown another step — an EPISODE, not a timer, so a
- *  long turn at a flat fraction never re-nags while one more episode of growth does. Despite the
- *  name (kept from the contract's wording), `dismissedAt` is the frac AT dismissal, not a time.
- */
+/** The handoff banner's visibility rule (#5509 W1): show from the warning threshold; after a
+ *  "keep going" stay hidden until frac grows another step, an episode not a timer, so a flat-frac
+ *  turn never re-nags. Despite the name, `dismissedAt` holds the frac at dismissal, not a time. */
 export function bannerVisible(frac: number | null, dismissedAt: number | null): boolean {
   if (frac === null || frac < HANDOFF_WARN_FRAC) return false;
   if (dismissedAt === null) return true;

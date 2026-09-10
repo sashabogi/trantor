@@ -1,11 +1,7 @@
-// The Review lens's git rail, now the SCM panel (#5791). Review showed the seat's diff but left
-// every git action to a terminal; this panel is branch, commit box on top, then STAGED / CHANGES
-// as collapsible sections with counts and bulk actions — VS Code's source-control shape — plus
-// push and the recent log, all against the SELECTED seat's worktree through the git_* commands in
-// src-tauri. Every mutation is refused seat-side while the seat is working (the same guard
-// file_write_plain applies) — the refusal comes back verbatim and lands in the status line, never a
-// dialog. There is deliberately NO discard here: deleting a seat's uncommitted work is not a
-// review action.
+// The Review lens's git rail, now the SCM panel (#5791): branch, commit box, STAGED/CHANGES as
+// collapsible sections, push, and recent log, against the SELECTED seat's worktree via the git_*
+// commands in src-tauri. Mutations are refused seat-side while the seat is working (same guard
+// as file_write_plain, surfaced verbatim in the status line, never a dialog); no discard here.
 import { useCallback, useEffect, useState } from "react";
 import {
   aheadLabel,

@@ -1,11 +1,7 @@
-// The mode pane's drag-resizable width (#6086) — pure clamp + persistence, so each mode comes
-// back the width you left it. The pane root in ModePane renders this width, and the #6036
-// observers already watch that root, so a live drag re-fits the tab strip with no extra wiring.
-//
-// Storage rides the same injected Store the chat prefs use (#5522) — siblings under the
-// "trantor." prefix. Every reader is total: a missing, corrupted, foreign or REFUSING store
-// falls back to the default rather than to a crash or a silently wrong size. Storage is a
-// boundary; its bytes are decoded, never trusted.
+// The mode pane's drag-resizable width (#6086): pure clamp + persistence, so each mode comes back
+// the width you left it. The #6036 observers already watch the pane root this renders into, so a
+// live drag re-fits the tab strip with no extra wiring. Storage rides the same injected Store the
+// chat prefs use (#5522); every reader is total, falling back to the default rather than crashing.
 import { domStore, type Store } from "../chat/prefs";
 
 export type PaneMode = "files" | "git" | "sessions" | "chat";
