@@ -1,16 +1,7 @@
-//! #6800: Drill Mode's evidence capture. `drill_screenshot` shells to macOS `screencapture`,
-//! cropped to the main window's rect when the window can report one (whole screen otherwise),
-//! and writes the PNG under `<bus dir>/drills/`. The path is what the card note cites, so a
-//! reader of the board can open the exact frame the operator pressed Pass on.
-//!
-//! The label is the card id the frontend passes; it is sanitized here, never trusted as a path.
-//!
-//! Two more commands serve the steps the headless runners cannot stage. `drill_key_post` posts
-//! the #6317 right-arrow through AppKit's event queue into whatever the operator (or the panel)
-//! focused, and `drill_panics_since` reads what app-panics.log gained after a byte mark, so the
-//! step can say the app is still here and name any Objective-C exception the boundary caught.
-//! Both are reachable only from the running app's own webview; neither injects anything on its
-//! own.
+//! #6800: Drill Mode's evidence capture. `drill_screenshot` shells to `screencapture`, cropped to the
+//! main window, under `<bus dir>/drills/`; the label is the card id, sanitized, never trusted as a
+//! path. `drill_key_post` and `drill_panics_since` serve the steps headless runners cannot stage.
+//! Both are reachable only from the running app's webview; neither injects anything on its own.
 
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};

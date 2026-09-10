@@ -1,20 +1,7 @@
-//! #6668: the built-app acceptance drill for the handoff entry guard.
-//!
-//! Witnessed 2026-09-07 12:35: the operator opened the crebral-health Chat onto a pane whose
-//! claude had died at 12:16 (a bare zsh, pid 80368), the gauge read the dead transcript at 92%,
-//! and app-trace showed "chain started (reason unattended)" then "armed mid-turn". The chain's
-//! boundary wait would have expired at 12:52 and TERMed the shell. Two guards now stand in
-//! front of that: Chat withholds the banner/countdown/auto-fire unless the pane has a live
-//! agent, and `handoff_now` refuses (Err, traced) before writing anything when herdr reports
-//! no agent in the orch pane.
-//!
-//! `TRANTOR_HANDOFF_DRILL=<project>`: after boot the Rust shell emits `handoff-drill`; the
-//! frontend (src/features/chat/handoffDrill.ts) opens that project's Chat, watches for a
-//! banner and a chain for a while, then invokes `handoff_now` directly and expects the refusal.
-//! The verdict reads only what THIS run wrote to app-trace.log: no "chain started" for the
-//! project, the Chat's "banner withheld" line, and the "refused" line. Exit 0 on pass, 3
-//! otherwise. Inert unless the variable is set. The seat writes this drill; the orchestrator
-//! stages a project whose pane is a bare shell at 92% and runs it.
+//! #6668: the built-app acceptance drill for the handoff entry guard. Two guards stand in front of
+//! a chain on a pane whose agent died: Chat withholds the banner unless the pane has a live agent,
+//! and `handoff_now` refuses before writing anything. `TRANTOR_HANDOFF_DRILL=<project>` runs it;
+//! verdict and exit codes: docs/CONTRACT-desktop.md.
 
 use serde::Serialize;
 use std::sync::OnceLock;

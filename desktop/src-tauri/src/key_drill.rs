@@ -1,29 +1,7 @@
-//! #6317: the Objective-C exception reporter and the built-app key-injection drill.
-//!
-//! Three SIGABRTs on macOS 26 (2026-09-03 x2, 2026-09-07) logged only "panic in a function that
-//! cannot unwind" from tao's `sendEvent:` override, with no first Rust panic anywhere: an
-//! Objective-C exception thrown by AppKit during key dispatch unwound through that `extern "C"`
-//! frame. The vendored tao now catches it at the boundary and calls the reporter installed here,
-//! which lands the exception's name, reason and Objective-C call stack in app-panics.log.
-//!
-//! `TRANTOR_KEY_DRILL=post`: after boot the Rust shell emits `key-drill`; the frontend
-//! (src/features/workspace/keyDrill.ts) focuses nothing, then the terminal pane, then any other
-//! textarea, and for each asks Rust to post a right-arrow keyDown/keyUp through AppKit's real
-//! event queue (`[NSApp postEvent:atStart:]` -> `-[NSApplication _handleEvent:]` -> tao's
-//! `sendEvent:` override -> the webview). The 09-07 crash was that key in that pane.
-//! `TRANTOR_KEY_DRILL=throw`: the same, and tao raises a real NSException from inside its
-//! `sendEvent:` guard on the first right-arrow keyDown, so the run proves the boundary catches,
-//! names and survives the exception the crash reports could never show. The process exits 0 when
-//! the app survived (and, in throw mode, app-panics.log names the drill's exception), 3
-//! otherwise. Inert unless the variable is set. The seat writes this drill; the orchestrator
-//! builds and runs it.
-//!
-//! `TRANTOR_KEY_DRILL_PROJECT=<project name>`: the 09-07 run on 0.3.159 posted into "no key
-//! window" (the drill instance launched behind the operator's app) and skipped passes 2 and 3
-//! (no project open, so no terminal pane in the DOM). `arm` now makes the main window key before
-//! it emits, and the payload names the project the frontend opens on its Workspace lens so the
-//! terminal pane mounts. The value is the sidebar's project name, the same one TRANTOR_ASK_DRILL
-//! takes.
+//! #6317: the Objective-C exception reporter and the built-app key-injection drill. An NSException
+//! thrown by AppKit during key dispatch unwound through tao's `extern "C"` `sendEvent:` and aborted
+//! with no Rust panic to read; the vendored tao now catches it at the boundary and calls the reporter
+//! here, which lands name, reason and stack in app-panics.log. Drill modes: docs/CONTRACT-desktop.md.
 
 use std::sync::OnceLock;
 use std::time::Duration;

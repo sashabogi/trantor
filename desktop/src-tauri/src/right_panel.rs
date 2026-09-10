@@ -1,9 +1,5 @@
-// The right mode pane's tab + dock state — persisted in ~/.agent-bus/config.json under
-// "rightPanel", mirroring dismissals.rs's and onboarding.rs's config.json convention.
-//
-// #6499: the panel always opened on Files after a restart because nothing remembered where you
-// left it, so a question already waiting in Chat could sit unseen. Keyed by project — each
-// project remembers its own tab, the way `seat`/file selections already work per project.
+// The right mode pane's tab + dock state, in ~/.agent-bus/config.json under "rightPanel" (#6499):
+// keyed by project so each remembers its own tab, and a question waiting in Chat is not left unseen.
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;

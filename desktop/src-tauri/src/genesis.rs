@@ -370,12 +370,8 @@ pub(crate) async fn project_wake(
     // plainly. The app's own `kickoff` is the fallback for a CLI that cannot answer. The
     // selector blocks on a signed hub read, so it runs off the async runtime's threads.
     let kickoff = cli_decided_kickoff(&project, &dir, kickoff).await;
-    // #6139: the reopened session is BOOTING. A prompt fired straight after `trantor open`
-    // returned was logged by herdr 90 ms after the claude process appeared, reported as
-    // agent_prompted, and never reached the session (four wakes in a row, no kickoff in the
-    // transcript). Ride the handoff chain's ladder: wait for idle, send, retry the transient
-    // outcomes, and say how it went. The progress callback rides along so the row and the
-    // header can follow the gate (#6201).
+    // The reopened session is BOOTING (#6139): a prompt fired straight after `trantor open` never
+    // reaches it. Ride the handoff chain's ladder; the progress callback feeds the row (#6201).
     let KickoffReport {
         outcome,
         attempts,
@@ -432,8 +428,8 @@ mod tests {
 
     #[test]
     fn the_pane_agent_state_reads_idle_working_and_no_agent_off_herdr_list_output() {
-        // Shape copied from a real `herdr agent list` (2026-09-03): result.agents[] with pane_id
-        // and agent_status; a pane can be idle, working, done (process gone), or absent.
+        // Shape copied from a real `herdr agent list`: result.agents[] with pane_id and
+        // agent_status; a pane can be idle, working, done (process gone), or absent.
         let raw = r#"{"id":"cli:agent:list","result":{"agents":[
             {"agent":"claude","agent_status":"idle","pane_id":"wJ:p1","cwd":"/tmp/pr-os"},
             {"agent":"claude","agent_status":"working","pane_id":"w2:p3H","cwd":"/tmp/busy"},
@@ -517,16 +513,8 @@ mod tests {
         assert!(pane_project_dir(rows, "pane-stale", Path::new("/tmp/project-a")).is_ok());
     }
 
-    // #6138/#6201 real path, run by hand against a REAL idle orchestrator pane (from the app
-    // running, since the handler now takes the AppHandle to emit wake-progress):
-    //   1. `trantor new` a throwaway + `trantor open <name>` (a claude session boots in a pane)
-    //   2. wait for `herdr agent list` to read idle on that pane
-    //   3. press Wake on the project's sidebar row
-    //   4. watch the row say "kickoff pending" during the gate, then the outcome for a few
-    //      seconds (the chat header follows the same wake-progress event)
-    //   5. expect the row to land on "kickoff sent" and herdr's log to show exactly ONE
-    //      agent.prompt (the #6201 double-send guard: a Stalled send with the pane reading
-    //      working must never be re-typed)
+    // The #6138/#6201 real path runs by hand against a live idle orchestrator pane; the steps are
+    // in docs/CONTRACT-desktop.md (wake kickoff).
 
     // #6201 — the phase names are the frontend contract (wakeProgress.ts's WakePhase union);
     // a rename here breaks the row and the header, so it is asserted, not assumed.

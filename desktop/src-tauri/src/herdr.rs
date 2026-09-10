@@ -1,18 +1,7 @@
-//! The herdr adapter — the ONE place this app speaks to herdr's agent surface.
-//!
-//! Phase 1 of the reassembly (docs/TDD-one-surface-reassembly.md; ownership:
-//! SYSTEM-CONTRACT §4 "prompt delivery" + "agent lifecycle"). The composer's send path
-//! rides `agent.prompt`: herdr owns paste-mode handling, Enter encoding, and refuses a
-//! blocked agent BEFORE any bytes land — the entire keystroke-transport bug family
-//! (newline-as-Enter, /compact fusion, the esc-clear that interrupted live turns) is
-//! herdr's solved problem, drill-proven in docs/RESEARCH-herdr-prompt.md.
-//!
-//! Requests go over herdr's local socket (newline-delimited JSON, protocol 20), not the
-//! CLI: composer text is arbitrary, and a message starting with "-" breaks argv parsing
-//! (verified 2026-08-30 — the CLI has no `--` separator), while the socket has no quoting
-//! layer at all. One request per connection: prompt volume is a human typing, and a fresh
-//! connection per send avoids holding a stream the server may drop on live-handoff
-//! (socket-api.mdx: in-flight requests may be interrupted across server replacement).
+//! The herdr adapter, the ONE place this app speaks to herdr's agent surface (SYSTEM-CONTRACT §4
+//! "prompt delivery" + "agent lifecycle"). Requests go over the local socket, not the CLI: composer
+//! text is arbitrary and the CLI has no `--` separator. One request per connection, since the server
+//! may drop a held stream on live-handoff. Contract: docs/CONTRACT-desktop.md.
 
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::UnixStream;
@@ -45,11 +34,9 @@ fn request(req: &serde_json::Value) -> Result<String, String> {
     request_within(req, Duration::from_secs(30))
 }
 
-/// Same, with the caller's own read budget. QUERIES on hot paths use a short one: the chat
-/// watcher resolves identity every tick, and on 2026-08-30 a herdr server slowed by machine
-/// load held one agent.get for the full 30s default — which stalled the transcript tail and
-/// the operator watched their own message take ~34s to echo in the chat. A local socket
-/// answers a query in milliseconds or it is not going to answer usefully at all.
+/// Same, with the caller's own read budget. Hot-path queries use a short one: a load-slowed herdr
+/// held one agent.get for the full 30s default and stalled the transcript tail. A local socket
+/// answers in milliseconds or not usefully at all.
 fn request_within(req: &serde_json::Value, read_timeout: Duration) -> Result<String, String> {
     let mut s = UnixStream::connect(socket_path())
         .map_err(|e| format!("herdr is not reachable ({e}) — is the herdr server running?"))?;
@@ -77,18 +64,9 @@ pub fn prompt(target: &str, text: &str) -> Result<PromptOutcome, String> {
     map_prompt_response(&request(&req)?)
 }
 
-/// Write raw bytes into `target`'s pty (#6094): the AskUserQuestion/permission-prompt answer
-/// path, where `agent.prompt`'s own blocked-refusal is exactly the wrong behavior — the picker
-/// IS the blocked state, and answering it needs keystrokes to land anyway, not a prompt delivery.
-/// `pane.send_text` is the pane-level primitive underneath `agent.prompt`, with none of its
-/// agent-lifecycle gating: verified live against a throwaway `cat -v` pane, an escape sequence
-/// (`\x1b[B`) arrived byte-for-byte (echoed as `^[[B`), and the same call against a pane with no
-/// recognized agent at all (`agent_status: "unknown"`) still succeeded — this operates on the
-/// terminal, never the agent classification. This is also why the OLD path (term_attach spawning
-/// a local `herdr agent attach` subprocess) broke: `attach` opens a STREAMING watch client, and
-/// without an explicit takeover it is read-only by design (a second observer must never be able
-/// to inject into a pane someone else is typing in) — writing into it returned EIO. `send_text`
-/// is a single fire-and-forget socket call with no client lifecycle to get wrong.
+/// Write raw bytes into `target`'s pty (#6094): the picker-answer path, where `agent.prompt`'s
+/// blocked-refusal is exactly wrong. `pane.send_text` is the primitive underneath `agent.prompt`
+/// with no agent-lifecycle gating; a streaming `attach` client is read-only by design (EIO on write).
 pub fn send_text(target: &str, text: &str) -> Result<(), String> {
     let req = serde_json::json!({
         "id": "trantor:pane.send_text",
@@ -118,13 +96,9 @@ fn map_ok_response(raw: &str) -> Result<(), String> {
     Err(format!("herdr sent an unexpected response: {}", raw.trim()))
 }
 
-/// The session id the agent occupying `target` reported through its official herdr
-/// integration (`agent_session`, source e.g. "herdr:claude"). This is the RUNTIME identity
-/// authority (SYSTEM-CONTRACT §4): the pane itself says which conversation lives in it,
-/// reported by Claude Code's own SessionStart hook — so it is correct the moment a
-/// successor session boots, before any map file catches up. None when no agent occupies
-/// the target, no report was made (integration absent), or herdr is unreachable — callers
-/// fall back to the durable map.
+/// The session id the agent in `target` reported through its herdr integration (`agent_session`):
+/// the RUNTIME identity authority (SYSTEM-CONTRACT §4), correct the moment a successor boots.
+/// None when no agent, no report, or herdr unreachable; callers fall back to the durable map.
 pub fn reported_session(target: &str) -> Option<String> {
     let req = serde_json::json!({
         "id": "trantor:agent.get",
@@ -163,13 +137,9 @@ pub fn agent_status(target: &str) -> Option<String> {
         .map(str::to_string)
 }
 
-/// A live `pane.agent_status_changed` subscription for ONE pane (Phase 3: the composer gate
-/// stops polling). Protocol facts, captured live 2026-08-30 (see docs/CHECKLIST-reassembly.md
-/// Phase 3): the ack line is `{"result":{"type":"subscription_started"}}`; frames are
-/// `{"data":{"agent","agent_status","pane_id","workspace_id"},"event":"pane.agent_status_changed"}`.
-/// Per-pane status subscriptions were observed LIVE-ONLY, unlike the global pane.* types,
-/// which REPLAY history on subscribe — that replay is why this design subscribes per pane and
-/// re-seeds via `agent_status()` instead of consuming the global stream.
+/// A live `pane.agent_status_changed` subscription for ONE pane (the composer gate stops polling).
+/// Per-pane subscriptions are live-only, while the global pane.* types replay history on subscribe,
+/// which is why this subscribes per pane and re-seeds via `agent_status()`. Frames: docs/CONTRACT-desktop.md.
 pub struct StatusStream {
     reader: BufReader<UnixStream>,
 }
@@ -265,8 +235,8 @@ fn map_prompt_response(raw: &str) -> Result<PromptOutcome, String> {
 mod tests {
     use super::*;
 
-    // Captured live 2026-08-30 (docs/RESEARCH-herdr-prompt.md): CLI and socket share the
-    // same response bodies; the socket one carries our request id.
+    // Captured live (docs/RESEARCH-herdr-prompt.md): CLI and socket share the same response
+    // bodies; the socket one carries our request id.
     const PROMPTED: &str = r#"{"id":"trantor:agent.prompt","result":{"agent":{"agent":"claude","agent_status":"idle","name":"drill2","pane_id":"w2:p16"},"type":"agent_prompted"}}"#;
     const BLOCKED: &str = r#"{"error":{"code":"agent_blocked","message":"agent drill2 is blocked and requires interactive input"},"id":"trantor:agent.prompt"}"#;
     const NOT_FOUND: &str = r#"{"id":"probe2","error":{"code":"agent_not_found","message":"agent target nonexistent not found"}}"#;
@@ -282,11 +252,8 @@ mod tests {
         assert!(matches!(map_prompt_response(STALLED), Ok(PromptOutcome::Stalled)));
     }
 
-    // Captured live 2026-09-05: `pane.send_text` called over the real socket against a
-    // throwaway `herdr workspace create` pane (closed immediately after), both the success shape
-    // and a `pane_not_found` error against a nonexistent pane id — the same error envelope
-    // `agent.prompt` uses, confirming `map_ok_response` can share its shape-checking with
-    // `map_prompt_response`'s error arm.
+    // `pane.send_text` over the real socket: the success shape, and a `pane_not_found` error that
+    // shares `agent.prompt`'s envelope, so `map_ok_response` shares its shape-checking.
     const SEND_TEXT_OK: &str = r#"{"id":"probe:send_text","result":{"type":"ok"}}"#;
     const SEND_TEXT_PANE_NOT_FOUND: &str =
         r#"{"error":{"code":"pane_not_found","message":"pane nonexistent-pane not found"},"id":"cli:request"}"#;
@@ -304,13 +271,13 @@ mod tests {
         assert!(map_ok_response(r#"{"id":"x","result":{"type":"something_else"}}"#).is_err());
     }
 
-    // Captured live 2026-08-30: the p2drill measurement (docs/CHECKLIST-reassembly.md Phase 2)
-    // — a fresh claude in a herdr pane, integration v8 installed, self-reported its session.
+    // Captured live (docs/CHECKLIST-reassembly.md Phase 2): a fresh claude in a herdr pane,
+    // integration v8 installed, self-reported its session.
     const AGENT_GET_WITH_SESSION: &str = r#"{"id":"trantor:agent.get","result":{"type":"agent_info","agent":{"agent":"claude","agent_status":"idle","name":"p2drill","pane_id":"w2:p18","agent_session":{"agent":"claude","kind":"id","source":"herdr:claude","value":"152505be-9b47-45e7-9c5c-211adda4695e"}}}}"#;
     const AGENT_GET_NO_SESSION: &str = r#"{"id":"trantor:agent.get","result":{"type":"agent_info","agent":{"agent":"claude","agent_status":"idle","name":"drill","pane_id":"w2:p16"}}}"#;
 
-    // Captured live 2026-08-30 (scratchpad/status-events.txt): a per-pane subscription frame,
-    // Claude Code's startup trust dialog recognized as blocked.
+    // Captured live (scratchpad/status-events.txt): a per-pane subscription frame, Claude
+    // Code's startup trust dialog recognized as blocked.
     const STATUS_FRAME: &str = r#"{"data":{"agent":"claude","agent_status":"blocked","pane_id":"w2:p1B","workspace_id":"w2"},"event":"pane.agent_status_changed"}"#;
     const ACK_FRAME: &str = r#"{"id":"trantor:events.subscribe","result":{"type":"subscription_started"}}"#;
 

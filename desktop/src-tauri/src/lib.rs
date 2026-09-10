@@ -81,11 +81,8 @@ async fn hub_request(
     Ok(HubResponse { status, body })
 }
 
-/// Streams already running, keyed by hub base URL.
-///
-/// Without this, every subscriber spawns its OWN connection: BOARD and FEED both subscribe, so each
-/// event arrived twice and was rendered twice. One stream per hub, fanned out to all listeners by
-/// Tauri's event bus — which is what the event bus is for.
+/// Streams already running, keyed by hub base URL: one stream per hub, fanned out over Tauri's
+/// event bus, or BOARD and FEED each open their own connection and every event renders twice.
 static STREAMS: std::sync::Mutex<Option<std::collections::HashSet<String>>> =
     std::sync::Mutex::new(None);
 
@@ -107,14 +104,8 @@ async fn start_stream(app: tauri::AppHandle, base: String) {
     });
 }
 
-/// The PATH a terminal would have. A Finder-launched app inherits only /usr/bin:/bin:/usr/sbin:/sbin,
-/// so every brew/npm/cargo-installed CLI is invisible to anything we spawn. Fixing `node` alone was
-/// not enough: the doctor probes each seat with `command -v`, so it reported a machine with no crew
-/// CLIs at all while the same command in a terminal found six.
-///
-/// Ask the user's login shell first (it knows about the install dirs we can't guess, e.g. kimi's
-/// ~/.kimi-code/bin), then union the usual roots, then whatever we inherited. Order is preserved and
-/// duplicates dropped, so the shell's own precedence wins.
+/// The PATH a terminal would have. A Finder-launched app inherits a bare PATH, so every brew/npm/
+/// cargo CLI is invisible to what we spawn; the login shell's answer wins, then the usual roots.
 pub(crate) fn terminal_path() -> String {
     let home = std::env::var("HOME").unwrap_or_default();
     let mut parts: Vec<String> = Vec::new();
@@ -320,11 +311,8 @@ const TREE_SKIP: &[&str] = &[
     ".venv",
 ];
 
-/// +N/−N per path vs HEAD, parsed once per call from `git diff --numstat HEAD` — the working
-/// tree against the last commit, which is what a tree row or an SCM row means by "changed".
-/// Untracked files produce no numstat row and binary files count as "- -"; both map to nothing,
-/// because a fake zero would read as "known small" (#5811). Read ONCE per tree/panel request,
-/// same one-subprocess discipline as git_status_map.
+/// +N/−N per path vs HEAD from one `git diff --numstat HEAD` per request. Untracked and binary
+/// rows map to nothing: a fake zero would read as "known small" (#5811).
 fn git_numstat_vs_head(dir: &Path) -> std::collections::HashMap<String, (u64, u64)> {
     let mut map = std::collections::HashMap::new();
     let out = match std::process::Command::new("git")
@@ -557,11 +545,8 @@ fn file_diff(project: String, path: String, seat: Option<String>) -> Result<Stri
     Ok(String::from_utf8_lossy(&no_index.stdout).to_string())
 }
 
-/// Paths matching a query, for the composer's @-reference menu.
-///
-/// A flat search rather than the lazy tree: autocomplete needs to reach a file three folders deep
-/// from four typed characters, which a per-directory reader cannot do. Bounded on both sides —
-/// depth and result count — because this runs on every keystroke.
+/// Paths matching a query, for the composer's @-reference menu. A flat search bounded on depth
+/// and count: autocomplete must reach a file three folders deep, and this runs on every keystroke.
 #[tauri::command]
 fn search_files(project: String, query: String, seat: Option<String>) -> Result<String, String> {
     let root = source_root(&project, seat.as_deref())?;
@@ -672,35 +657,16 @@ fn project_files(
     serde_json::to_string(&out).map_err(|e| e.to_string())
 }
 
-/// The orchestrator's conversation, as chat.
-///
-/// The session runs in a terminal, but a terminal is a bad place to READ a conversation: escape
-/// codes, reflowed wrapping, and no structure to render against. Claude writes every turn to a
-/// JSONL transcript, and `trantor open` now chooses the session id, so that file is addressable
-/// rather than guessed at. This reads it.
-///
-/// `after` is a line offset, not a timestamp: the transcript is append-only, so the count of lines
-/// already seen is the cheapest correct cursor and survives a restart.
-/// The session id of this project's orchestrator conversation.
-///
-/// Resolution order is the SYSTEM-CONTRACT §4 identity row, not a preference:
-/// 1. The pane's own report — Claude Code's herdr integration reports the session id at
-///    SessionStart (`agent_session`, source "herdr:claude"), so it is correct the moment a
-///    handoff successor boots, before the map file catches up.
-/// 2. `orch-sessions.txt`, the durable map — the cold-start fallback, and the only answer for
-///    sessions that are not in a herdr pane (a Terminal-window conversation being read here).
-/// Never "the newest transcript": guessing between conversations is the adopt PICKER's job,
-/// in front of the operator.
+/// The session id of this project's orchestrator conversation. Resolution order is the
+/// SYSTEM-CONTRACT §4 identity row: the pane's own herdr report, then `orch-sessions.txt`.
+/// Never "the newest transcript": guessing between conversations is the adopt picker's job.
 fn orch_session_id(project: &str) -> Option<String> {
     let rows =
         std::fs::read_to_string(desktop_bus_dir().join("crew-windows.txt")).unwrap_or_default();
     if let Some(pane) = orch_pane_from_rows(&rows, project) {
-        // The herdr leg is CACHED (3s): the chat watcher calls this every 300ms, and paying a
-        // socket round-trip per tick let a load-slowed herdr stall the transcript tail — the
-        // operator watched their own message take ~34s to echo (2026-08-30). Identity moves at
-        // handoff speed, not tick speed; 3 seconds of staleness is invisible, a blocked tail
-        // is not. The query itself also carries a 1.5s budget now (herdr.rs), so even a cache
-        // miss against a wedged server costs one bounded beat, once per 3 seconds.
+        // The herdr leg is cached (3s): the chat watcher calls this every 300ms and a per-tick
+        // socket round-trip let a load-slowed herdr stall the transcript tail. Identity moves at
+        // handoff speed, so 3s of staleness is invisible.
         static HERDR_SID: std::sync::Mutex<Option<(String, Instant, Option<String>)>> =
             std::sync::Mutex::new(None);
         let cached: Option<Option<String>> = {
@@ -718,12 +684,8 @@ fn orch_session_id(project: &str) -> Option<String> {
             }
         };
         if let Some(sid) = reported {
-            // A pane report can be POISONED by an ephemeral claude run in the same pane —
-            // `claude plugin update` (observed live 2026-08-31) registers a session-start with
-            // herdr, its sid has no transcript, and the app then reads a file that does not
-            // exist: empty chat, no meta, no context gauge, "history lost" on every restart.
-            // The report only wins when its transcript actually exists on disk; otherwise the
-            // durable map below is the truth.
+            // A pane report can be poisoned by an ephemeral claude run in the same pane (a plugin
+            // update registers a sid with no transcript), so it only wins when its transcript exists.
             let plausible = orchestrator_transcript_path(project, &sid)
                 .map(|p| p.exists())
                 .unwrap_or(false);
@@ -746,18 +708,9 @@ fn orch_session_id(project: &str) -> Option<String> {
     None
 }
 
-/// One renderable piece of a turn. Decoded from what a Claude transcript ACTUALLY contains, which
-/// was checked against a real file rather than assumed:
-///
-///   assistant::text · assistant::thinking · assistant::tool_use
-///   user::text · user::tool_result · user::image
-///
-/// A raw TUI y/n permission prompt never reaches the transcript, so this cannot render an approval
-/// card for one of those — no signal exists to build it from. AskUserQuestion is different: it is
-/// an ordinary tool_use (name "AskUserQuestion", `input.questions[{question, header, multiSelect,
-/// options[{label, description}]}]`), confirmed 2026-09-03 against a real transcript row
-/// (~/.claude/projects/.../918e0f72-*.jsonl) — the signal was always here, `ask` below just keeps
-/// it instead of discarding it into a flattened text summary (#6094).
+/// One renderable piece of a turn, decoded from what a Claude transcript actually contains:
+/// assistant text/thinking/tool_use, user text/tool_result/image. A raw TUI y/n prompt never
+/// reaches the transcript; AskUserQuestion does, as an ordinary tool_use, and `ask` keeps it (#6094).
 #[derive(Debug, Clone, Serialize)]
 struct ChatBlock {
     /// "text" | "thinking" | "tool" | "image"
@@ -824,22 +777,14 @@ fn parse_ask_questions(input: &serde_json::Value) -> Option<Vec<AskQuestion>> {
 struct ChatTurn {
     role: String,
     blocks: Vec<ChatBlock>,
-    /// A message the operator sent while the agent was mid-turn: recorded, but NOT yet seen by
-    /// the session. Rendering it as an ordinary turn made the chat claim "read" while the
-    /// terminal's queue said otherwise (2026-08-28) — three states exist (sent, queued, seen)
-    /// and the middle one must show. Cleared by the queue's `remove` row via a dequeue marker
-    /// the front-end reducer consumes.
+    /// A message the operator sent while the agent was mid-turn: recorded, not yet seen. Three
+    /// states exist (sent, queued, seen) and the middle one must show; a dequeue marker clears it.
     #[serde(skip_serializing_if = "Option::is_none")]
     queued: Option<bool>,
 }
 
-/// A tool's outcome, keyed by the call it answers. Returned SEPARATELY from the turns because a
-/// result usually arrives in a later batch than the call that produced it: the front end holds the
-/// rendered turns and fills each card in when its answer shows up, rather than the reader having to
-/// re-parse the whole file to pair them.
-/// What the agent IS, taken from the transcript rather than asserted. Every field here is what
-/// Orca would call `reported`: the session itself wrote it, so it is evidence. Nothing is guessed,
-/// and an empty field renders as absent rather than as a default that looks like knowledge.
+/// What the agent IS, taken from the transcript rather than asserted: the session itself wrote it,
+/// so it is evidence. An empty field renders as absent, never as a default that looks like knowledge.
 #[derive(Debug, Clone, Default, Serialize)]
 struct ChatMeta {
     model: String,
@@ -850,17 +795,9 @@ struct ChatMeta {
     guard: ContextGuard,
 }
 
-/// The context gauge's poison guard (#5572, Phase 4A — SYSTEM-CONTRACT §4 "context %").
-///
-/// Within one session file, real context never collapses: across 1,839 usage rows in the two
-/// long incident-era transcripts (77b17edd, 52109744), zero drops below 40% of the running max
-/// were observed. So one row far below the session's max is an artifact — the recent maximum
-/// is reported instead — while a SUSTAINED new level (five consecutive low rows) is accepted
-/// and re-baselines the guard, so any future legitimate collapse (context editing, in-place
-/// compaction) heals on its own instead of pinning the gauge high forever.
-///
-/// The same rule, from the same fixture manifest, lives in hooks/lib/handoff.mjs — the baton
-/// reads what the gauge reads, or the banner and the heartbeat disagree (the #5572 disease).
+/// The context gauge's poison guard (#5572, SYSTEM-CONTRACT §4 "context %"): one usage row far
+/// below the session's running max is an artifact, a sustained new level (five rows) re-baselines.
+/// The same rule lives in hooks/lib/handoff.mjs so the baton and the gauge never disagree.
 #[derive(Debug, Clone, Default)]
 struct ContextGuard {
     max: u64,
@@ -916,12 +853,9 @@ struct ChatContext {
     frac: Option<f64>,
 }
 
-/// Text the HARNESS injected into the conversation, wearing the user's role.
-///
-/// Hook output, interruption notices and reminders all arrive as ordinary user turns, so without
-/// this a 6,849-character stop-hook dump renders as though the operator typed it — which is exactly
-/// what it did before this list existed. A closed list of known prefixes rather than a heuristic on
-/// length: a long message from a person is still a message from a person.
+/// Text the harness injected into the conversation wearing the user's role (hook output, notices,
+/// reminders). A closed list of known prefixes, not a length heuristic: a long message from a person
+/// is still a message from a person.
 fn is_harness_injection(t: &str) -> bool {
     const MARKERS: &[&str] = &[
         "Stop hook feedback:",
@@ -1032,12 +966,8 @@ fn bookkeeping_divider_text(v: &serde_json::Value, content: &serde_json::Value) 
     }
 }
 
-/// A slash-COMMAND record, not merely text starting with "/". A command's first token is one
-/// bare name — "/compact", "/model opus", "/trantor:handoff" — while an absolute path has more
-/// slashes inside its first token. The distinction is load-bearing: the first live file-drop
-/// ("/Users/…/shot.jpg  here is the screen shot") matched a bare starts_with('/'), rendered as
-/// bookkeeping, vanished from user turns, and the delivery receipt declared a delivered message
-/// lost (2026-08-28).
+/// A slash-command record, not merely text starting with "/": a command's first token is one bare
+/// name, an absolute path has more slashes in it. A bare starts_with('/') swallowed a file drop.
 fn is_slash_command(s: &str) -> bool {
     let Some(rest) = s.strip_prefix('/') else {
         return false;
@@ -1350,12 +1280,9 @@ where
         let role = match v.get("type").and_then(|t| t.as_str()) {
             Some("user") => "user",
             Some("assistant") => "assistant",
-            // A message sent while the agent is MID-TURN never becomes a `user` row: the CLI
-            // records an enqueue and folds the words into the running turn. The enqueue IS the
-            // operator speaking — without this branch their message neither rendered in the
-            // thread nor satisfied its delivery receipt, which then cried "not delivered" about
-            // a message that arrived (2026-08-28, third false alarm of the day). `remove` is the
-            // queue's own bookkeeping and stays invisible.
+            // A message sent mid-turn never becomes a `user` row: the CLI records an enqueue and
+            // folds the words into the running turn. The enqueue IS the operator speaking; `remove`
+            // is queue bookkeeping and stays invisible.
             Some("queue-operation") => {
                 let op = v.get("operation").and_then(|o| o.as_str());
                 // `remove` = the session consumed the queued message. Emitted as a marker the
@@ -1382,9 +1309,8 @@ where
                 if op == Some("enqueue") {
                     if let Some(text) = v.get("content").and_then(|c| c.as_str()) {
                         // The queue carries the HARNESS too: task-notifications and system
-                        // notices are enqueued exactly like operator messages (2026-08-28, a
-                        // build-completion notice rendered as "YOU" hours after this branch
-                        // was added). Same filter as every other user-shaped row.
+                        // notices are enqueued exactly like operator messages. Same filter as
+                        // every other user-shaped row.
                         if !text.trim().is_empty() && !is_harness_injection(text) {
                             turns.push(ChatTurn {
                                 role: "user".into(),
@@ -1402,12 +1328,9 @@ where
                 }
                 continue;
             }
-            // A turn's END is a fact the transcript states (#5993): the CLI records a `system`
-            // row with subtype `turn_duration`, and the stop hook writes `stop_hook_summary`,
-            // at the boundary. The pushed status stream can freeze on `working` — a dead
-            // subscription never delivers the idle frame — so the rows batch itself carries
-            // the truth and the frontend re-seeds the status ONCE per turn end. The row stays
-            // invisible: bookkeeping addressed to the machinery, never a bubble.
+            // A turn's end is a fact the transcript states (#5993): a `system` row with subtype
+            // `turn_duration`, or the stop hook's `stop_hook_summary`. The pushed status stream can
+            // freeze on `working`, so the rows batch carries the truth. Bookkeeping, never a bubble.
             Some("system") => {
                 if matches!(
                     v.get("subtype").and_then(|s| s.as_str()),
@@ -1613,11 +1536,8 @@ fn orchestrator_chat(project: String, after: usize, session_id: Option<String>) 
     .map_err(|e| e.to_string())
 }
 
-// The status watcher thread (spawn_status_watcher) and the chat watcher task
-// (spawn_chat_watcher) share one Arc<AtomicBool> stop flag, keyed by `project:session`. A stale
-// chat_unwatch arriving after a fresh chat_watch for the same key must not kill the fresh
-// watcher (#6113) — so each entry also carries the generation it was created with, and unwatch
-// only fires when the caller's generation matches (or supplies none, for older callers).
+// Status and chat watchers share one stop flag keyed by `project:session`, tagged with the
+// generation it was created with: a stale unwatch must not kill a fresh watcher (#6113).
 static CHAT_WATCHERS: std::sync::Mutex<Option<std::collections::HashMap<String, (u64, Arc<AtomicBool>)>>> =
     std::sync::Mutex::new(None);
 static CHAT_WATCH_GENERATION: AtomicU64 = AtomicU64::new(0);
@@ -1667,11 +1587,8 @@ fn chat_watchers_watch(key: &str) -> (u64, Arc<AtomicBool>, bool) {
     (generation, stop, true)
 }
 
-/// Stop and remove the watcher at `key`, but only when `generation` matches the entry currently
-/// there (or is `None`, which keeps the old unconditional behavior for callers that predate the
-/// generation token). A stale unwatch — one whose generation no longer matches because a fresh
-/// chat_watch already replaced the entry — is a no-op instead of silently killing the fresh
-/// watcher (#6113).
+/// Stop and remove the watcher at `key` only when `generation` matches (or is None, for older
+/// callers). A stale unwatch after a fresh chat_watch is a no-op (#6113).
 fn chat_watchers_unwatch(key: &str, generation: Option<u64>) -> Option<Arc<AtomicBool>> {
     let mut g = CHAT_WATCHERS.lock().unwrap();
     let map = g.as_mut()?;
@@ -1761,11 +1678,8 @@ fn spawn_chat_watcher(
     });
 }
 
-/// Re-query the providers NOW, through their owner (SYSTEM-CONTRACT §4: balances belong to
-/// lib/balances.mjs → the local hub snapshot; the app never calls a provider itself). The CLI
-/// run fetches every configured provider and dual-pushes the snapshot; the strip re-reads it
-/// on completion. Without this, the footer only moved when a session started — the operator
-/// sat at a real 44% while the bar said 38% ("unless it's live or semi-live, it's useless").
+/// Re-query the providers NOW through their owner (SYSTEM-CONTRACT §4: balances belong to
+/// lib/balances.mjs; the app never calls a provider itself). The strip re-reads the snapshot after.
 #[tauri::command]
 fn balances_refresh() -> Result<(), String> {
     let out = trantor_cli::command()
@@ -1786,24 +1700,13 @@ struct OrchStatusPayload {
     status: String,
 }
 
-/// Push the orchestrator's lifecycle state instead of polling for it (Phase 3).
-///
-/// Replaces the 3-second `orchestrator_status` poll — which spawned a `herdr agent list`
-/// subprocess forever, per open chat — with one per-pane `pane.agent_status_changed`
-/// subscription. The stream's quiet read-timeout tick doubles as the health loop: it
-/// re-checks the pane mapping (a `trantor open` can mint a new pane) and re-seeds the
-/// status via one socket query, healing any missed frame. Reconnects with a short pause
-/// when herdr drops the stream — documented behavior across server replacement.
+/// Push the orchestrator's lifecycle state instead of polling for it: one per-pane
+/// `pane.agent_status_changed` subscription replaces a 3s `herdr agent list` subprocess loop.
+/// The stream's quiet tick doubles as the health loop (re-check pane mapping, re-seed status).
 fn spawn_status_watcher(window: tauri::Window, project: String, stop: Arc<AtomicBool>) {
     use tauri::Emitter;
-    // #5993 regression (traced on card #5993, 2026-09-03): this watcher used to call
-    // `window.emit()` directly from this raw `std::thread::spawn` thread. Rust's own log showed
-    // it succeeding — `status: emit ... ok=true` — but the frontend's "orch-status" listener
-    // never once fired: 0 of 225 chat-status commits logged across 7 projects over 23h were
-    // source=push. spawn_chat_watcher (chat-rows/chat-session-changed), whose events DO reach
-    // the frontend, emits from `tauri::async_runtime::spawn` instead of a raw OS thread — that
-    // was the only structural difference. This thread now sends the payload over a channel to
-    // an async task that owns the actual `window.emit()` call, matching the working pattern.
+    // Emits go through an async task, never straight from this OS thread: a `window.emit()` from a
+    // raw std::thread reports ok and never reaches the frontend listener (#5993).
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<OrchStatusPayload>();
     tauri::async_runtime::spawn(async move {
         while let Some(payload) = rx.recv().await {
@@ -1936,14 +1839,8 @@ fn spawn_status_watcher(window: tauri::Window, project: String, stop: Arc<Atomic
     });
 }
 
-/// #6094 acceptance drill: fires the SAME emit mechanism spawn_status_watcher's background
-/// thread uses (a payload handed to `tauri::async_runtime::spawn`, which owns the actual
-/// `window.emit()` call — the #5993 fix: emitting from a raw `std::thread` never reached the
-/// frontend, only an async task does) — but on the drill script's own schedule, so it can be
-/// invoked well after Chat has settled on its gen-2 watcher, matching the real timing the
-/// 0.3.148 bounce showed (blocked arrived ~20s after mount, not within the same tick). Gated on
-/// TRANTOR_ASK_DRILL so this "fire an arbitrary status event" capability never exists in a
-/// normal run.
+/// #6094 acceptance drill: fires the same async-task emit spawn_status_watcher uses, on the drill
+/// script's own schedule. Gated on TRANTOR_ASK_DRILL so the capability never exists in a normal run.
 #[tauri::command]
 fn ask_drill_fire_status(window: tauri::Window, project: String, status: String) -> Result<(), String> {
     if std::env::var("TRANTOR_ASK_DRILL").is_err() {
@@ -2275,20 +2172,9 @@ fn pane_keys(target: String, keys: String) -> Result<(), String> {
     }
 }
 
-/// Answer a picker (AskUserQuestion, a permission prompt, any TUI choice) with raw keystrokes
-/// (#6094) — `pane_send`'s own `agent.prompt` refuses outright while the pane is blocked, since a
-/// blocked agent is exactly the case a normal prompt delivery must not run into, but the picker
-/// IS that blocked state and needs bytes written anyway. `herdr::send_text` is the pane-level
-/// primitive underneath `agent.prompt`, with none of its agent-lifecycle gating (verified live
-/// 2026-09-05: an escape sequence arrived byte-for-byte in a throwaway pane, and the same call
-/// succeeds against a pane with no recognized agent at all).
-///
-/// Replaces the OLD path (a JS-side term_attach/term_write/term_detach dance spawning a local
-/// `herdr agent attach` subprocess): `attach` opens a STREAMING watch client, read-only by
-/// design without an explicit takeover (a second observer must never be able to inject into a
-/// pane someone else is typing in) — writing into it returned EIO ("term write 3: Input/output
-/// error", 0.3.147's real-path bounce). One fire-and-forget socket call has no client lifecycle
-/// to get wrong.
+/// Answer a picker (AskUserQuestion, a permission prompt) with raw keystrokes (#6094): the picker IS
+/// the blocked state `agent.prompt` refuses, so this rides `herdr::send_text`, the pane-level
+/// primitive with no agent-lifecycle gating and no client lifecycle to get wrong.
 #[tauri::command]
 fn ask_answer(target: String, data: String) -> Result<(), String> {
     if target.trim().is_empty() {
@@ -2297,16 +2183,9 @@ fn ask_answer(target: String, data: String) -> Result<(), String> {
     herdr::send_text(&target, &data)
 }
 
-/// Deliver the operator's message to the agent in a pane — through herdr's agent surface,
-/// never as keystrokes.
-///
-/// This command spent August 2026 as hand-rolled terminal typing and collected the scars to
-/// prove it (bracketed-paste wrapping after newlines submitted fragments; an esc-esc-esc input
-/// clear that interrupted live turns and was reverted the same day). `agent.prompt` makes all
-/// of that herdr's job: it honors the pane's live paste mode, encodes Enter itself, refuses a
-/// blocked agent BEFORE any bytes land, and reports a stall instead of typing into the void.
-/// Delivery TRUTH is unchanged: the transcript receipt decides what the operator is told —
-/// this call's outcome only shapes the fast-path error states.
+/// Deliver the operator's message to the agent in a pane through herdr's `agent.prompt`, never as
+/// keystrokes: herdr honors paste mode, encodes Enter, refuses a blocked agent before any bytes land.
+/// Delivery truth is unchanged: the transcript receipt decides what the operator is told.
 #[tauri::command]
 fn pane_send(target: String, text: String) -> Result<(), String> {
     if target.trim().is_empty() {
@@ -2333,12 +2212,8 @@ fn pane_send(target: String, text: String) -> Result<(), String> {
     }
 }
 
-/// Is this seat writing to its worktree right now?
-///
-/// ONE owner for this answer. herdr is asked, because crew-runner reports the seat's state to it at
-/// every turn boundary and that reflects the process actually running. The UI used to guess from
-/// the seat's bus status instead, which is a second truth about the same fact — and this one
-/// decides whether a human edit is allowed, so it cannot be a guess.
+/// Is this seat writing to its worktree right now? One owner for this answer: herdr, which
+/// crew-runner tells at every turn boundary. It decides whether a human edit is allowed, so no guess.
 #[tauri::command]
 fn seat_state(agent: String) -> Result<String, String> {
     if agent.trim().is_empty() {
@@ -2372,13 +2247,8 @@ fn seat_state(agent: String) -> Result<String, String> {
     Ok("unknown".into())
 }
 
-/// Save an edit, PLAINLY.
-///
-/// The v3 Code lens (#5809) follows Orca's save anatomy (RESEARCH-orca-renderer.md §6.2): a
-/// save is a file write and nothing else — no staging, no commit. Dirty work stays visible in
-/// the Changes view until an explicit stage/commit, so the record of who wrote what is made
-/// when the operator commits, not smuggled in by a keystroke. The seat-working guard stays: a
-/// file an agent is part way through writing must not take a concurrent human write.
+/// Save an edit, plainly: a file write and nothing else (#5809, Orca's save anatomy). Dirty work
+/// stays in Changes until an explicit stage/commit. The seat-working guard stays.
 #[tauri::command]
 fn file_write_plain(
     project: String,
@@ -2653,11 +2523,8 @@ fn right_panel_set(project: String, tab: String, dock: String) -> Result<String,
     serde_json::to_string(&right_panel::set(project, tab, dock)?).map_err(|e| e.to_string())
 }
 
-/// The autonomy dials, read and written through the CLI rather than by parsing autonomy.json here.
-///
-/// The dependency rules between dials (push implies commit, deploy implies push) live in
-/// lib/autonomy.mjs. A second implementation in Rust would drift from it the first time either
-/// side changed, and the thing that drifts would be the one deciding whether we push to a remote.
+/// The autonomy dials, read and written through the CLI: the dependency rules between dials live
+/// in lib/autonomy.mjs, and a Rust copy would drift on the side that decides whether we push.
 #[tauri::command]
 fn autonomy_get(project: Option<String>) -> Result<String, String> {
     let mut cmd = trantor_cli::command();
@@ -2681,12 +2548,8 @@ fn autonomy_get(project: Option<String>) -> Result<String, String> {
 
 #[tauri::command]
 fn autonomy_set(project: Option<String>, dial: String, value: String) -> Result<String, String> {
-    // The CLI owns the json AND the validation: the dial/value whitelist lives in one place
-    // (bin/autonomy.mjs + lib/autonomy.mjs), and a parallel copy here would drift the first time
-    // either side changes — exactly what happened when the `baton` dial landed (the Rust list was
-    // stale for a week before this comment was written). An unknown dial or value makes the CLI
-    // exit non-zero with a specific message, which is surfaced verbatim; nothing unvalidated ever
-    // reaches the autonomy.json file because the CLI is the only writer of it.
+    // The CLI owns the json AND the validation (bin/autonomy.mjs + lib/autonomy.mjs); a parallel
+    // whitelist here went stale when the `baton` dial landed. Its error is surfaced verbatim.
     let mut cmd = trantor_cli::command();
     cmd.arg("autonomy").arg("set").arg(&dial).arg(&value);
     match project.as_deref() {
@@ -2864,11 +2727,8 @@ const ICON_CANDIDATES: &[&str] = &[
     "favicon.ico",
 ];
 
-/// Monorepo layouts put the web app one level down. Checked only after the top-level list misses,
-/// and only for a bounded set of parent dirs — `apps/web/public/favicon.ico` (crm-platform) and
-/// `web/app/favicon.ico` (polymarket-playground) are both real cases on this machine.
-/// …and a desktop shell is very often its own subpackage — Trantor's own mark lives at
-/// `desktop/src-tauri/icons/`, so without this the app is the one project that cannot show its face.
+/// Monorepo layouts put the web app one level down (apps/web, web/app), and a desktop shell is its
+/// own subpackage (Trantor's mark lives at desktop/src-tauri/icons/). Checked after the top level misses.
 const ICON_SUBROOTS: &[&str] = &[
     "apps/web",
     "apps/app",
@@ -2889,12 +2749,8 @@ fn mime_for(path: &std::path::Path) -> Option<&'static str> {
     }
 }
 
-/// A project's own icon as a `data:` URI, read from the repo on THIS machine.
-///
-/// Repos live here and hubs do not — the same reason `card_code` runs locally. Returns null rather
-/// than erroring whenever there is nothing good to show (no repo, no art, unreadable, or absurdly
-/// large): roughly 60% of the projects on this machine ship no icon at all, so "none" is the normal
-/// path and the caller falls back to a monogram. A hard error here would blank a sidebar row.
+/// A project's own icon as a `data:` URI, read from the repo on THIS machine (repos live here, hubs
+/// do not). Null, never an error, when there is nothing to show: most projects ship no icon.
 #[tauri::command]
 fn project_icon(project: String) -> Option<String> {
     // Never let a hub-supplied project name walk the filesystem.
@@ -2956,21 +2812,9 @@ fn b64(data: &[u8]) -> String {
 }
 
 // ── local session truth ────────────────────────────────────────────────────────────────────────
-// Sasha's ruling on what ACTIVE means (2026-08-13): "any project that has a terminal window open
-// and is registered." Hub heartbeats cannot answer that — they ride hook fires, so an idle session
-// goes dark after 5 quiet minutes and its project fell out of ACTIVE NOW while its window sat
-// right there. Same quiet≠dead trap the delivery fix hit; same cure: consult PROCESS truth.
-// Heartbeats keep the one job they are good at — "actually mid-turn right now" (the blink).
-//
-// #6163 — PROCESS truth (pgrep/lsof) only sees what runs on THIS machine, but herdr can host an
-// orchestrator pane headless on another box entirely (the netcup hub). A freshly-woken pane has
-// no heartbeat yet either — hooks fire on tool calls, and a pane that hasn't run one has none —
-// so the project rode in on the first heartbeat and vanished the moment that 90s window lapsed,
-// even though herdr's own crew-windows.txt row and its live agent.get answer both say the pane is
-// right there. So OPEN also asks herdr directly for every project with an orch row: a pane herdr
-// can still name (any agent_status, not just "working") counts as open, independent of whether
-// this machine can see its process. Each project appears once, herdr's status winning over bare
-// process truth when both are seen (herdr actually knows whether it's idle or mid-turn).
+// ACTIVE means a registered project with a terminal open. Heartbeats ride hook fires and go dark
+// on an idle session, so this consults process truth, and herdr as well (#6163): a pane herdr can
+// still name counts as open even when it runs on another machine. Contract: docs/CONTRACT-desktop.md.
 
 /// Parse `lsof -Fn` field output (p<pid> / fcwd / n<path>) into cwd paths.
 fn lsof_cwds(out: &str) -> Vec<String> {
@@ -3035,11 +2879,8 @@ fn merge_local_sessions(
         .collect()
 }
 
-/// Projects with a live session on THIS machine or visible to herdr: interactive `claude` windows
-/// (cwd under the dev root), crew-runner seats (project dir is argv[2]; ~/.agent-bus/fleet →
-/// "fleet") — process truth, all local — PLUS any project whose orch pane herdr can still name an
-/// agent for, wherever that pane actually runs (see the module comment above for why process
-/// truth alone missed a freshly-woken, not-yet-local-heartbeat, possibly-remote pane).
+/// Projects with a live session: interactive `claude` windows and crew-runner seats on THIS
+/// machine (process truth) plus any project whose orch pane herdr can still name an agent for.
 #[tauri::command]
 fn local_sessions() -> Vec<LocalSessionRow> {
     let root = std::env::var("TRANTOR_DEV_ROOT")
@@ -3409,15 +3250,9 @@ pub(crate) fn desktop_bus_dir() -> PathBuf {
         })
 }
 
-/// Serializes every test that repoints the process-wide `AGENT_BUS_DIR` env var at a scratch
-/// dir to prove its config.json module survives a simulated relaunch (right_panel.rs,
-/// onboarding.rs, dismissals.rs each have one). `set_var`/`remove_var` mutate the single
-/// process-wide environ block non-atomically — two of these tests running concurrently under
-/// `cargo test`'s default thread pool could each read the other's scratch dir, or race any other
-/// thread's unrelated `getenv` against the mutation. Each test that touches AGENT_BUS_DIR must
-/// hold this for its ENTIRE body (acquire before the first set_var, release only after the env is
-/// restored), and restore the PRIOR value rather than a bare remove_var, so a test that happens
-/// to run right after another real AGENT_BUS_DIR consumer never wipes a value that consumer set.
+/// Serializes every test that repoints the process-wide `AGENT_BUS_DIR` env var: set_var/remove_var
+/// mutate one environ block non-atomically. Hold it for the whole test body and restore the PRIOR
+/// value, never a bare remove_var.
 #[cfg(test)]
 pub(crate) static BUS_DIR_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
@@ -3527,8 +3362,7 @@ fn parse_herdr_seats(raw: &str) -> Vec<HerdrSeat> {
 #[tauri::command]
 fn herdr_seats() -> Result<String, String> {
     // One state file, one recorder: crew.sh records herdr seats into the SAME crew-windows.txt as
-    // every other mux (kind column = "herdr"). The original contract named a separate file, which was
-    // drift waiting to happen — verified live 2026-08-27 when the mapping came back empty.
+    // every other mux (kind column = "herdr"); a separate file was drift waiting to happen.
     let path = desktop_bus_dir().join("crew-windows.txt");
     let raw = match std::fs::read_to_string(&path) {
         Ok(s) => s,
@@ -3590,11 +3424,9 @@ fn pid_field(v: &serde_json::Value, key: &str) -> Option<u32> {
         .filter(|p| *p > 0)
 }
 
-/// The pid the graceful end targets, from herdr's `pane process-info` reply. Parity with
-/// bin/baton-pane.mjs foregroundPid. #6668: the 09-07 12:35 chain would have TERMed 80368, the
-/// pane's bare zsh, because `foreground_process_group_id` was taken as-is. The shell
-/// (`shell_pid`, or any foreground entry named like one) is never a candidate: with only the
-/// shell in the foreground there is nothing to end, and the answer is None.
+/// The pid the graceful end targets, from herdr's `pane process-info` reply (parity with
+/// bin/baton-pane.mjs foregroundPid). The shell is never a candidate (#6668): with only the shell
+/// in the foreground there is nothing to end, and the answer is None.
 fn foreground_pid_from_process_info(raw: &str) -> Option<u32> {
     let v: serde_json::Value = serde_json::from_str(raw).ok()?;
     let info = v.get("result")?.get("process_info")?;
@@ -3630,11 +3462,8 @@ fn foreground_pid_from_process_info(raw: &str) -> Option<u32> {
         .find(|p| usable(*p))
 }
 
-/// #6668: why `handoff_now` will not start a chain on this pane, or None when it may. herdr's
-/// `agent get` answers with a status word for a pane running an agent and nothing (None) for
-/// a pane holding a bare shell — the 12:35 chain's pane, whose claude had exited 19 minutes
-/// earlier. A chain on such a pane summarizes a dead transcript, passes the idle gate at once,
-/// and ends whatever IS in the foreground: the shell. Nothing to hand off means no chain.
+/// Why `handoff_now` will not start a chain on this pane, or None when it may (#6668). No agent in
+/// the pane means nothing to hand off: a chain there would summarize a dead transcript and end the shell.
 fn handoff_refusal(pane: &str, agent_status: Option<&str>) -> Option<String> {
     match agent_status.map(str::trim) {
         Some(s) if !s.is_empty() && s != "none" => None,
@@ -3726,11 +3555,8 @@ const HANDOFF_REASONS: &[&str] = &["clicked", "countdown", "unattended"];
 const KICKOFF_PROMPT: &str =
     "You have just taken over via handoff. Recap now per your instructions.";
 
-/// The pane-level warning while a handoff chain runs (#6081). The 21:46 drill: write-only
-/// stamped 21:46:01 and the pane stayed typeable the whole chain — the operator typed at :07,
-/// the doomed session ran tool calls until the kill landed at :50, and its answer never
-/// existed. The chain now marks its project from the first step to the last, and the Workspace
-/// pane tab reads the mark, so the session visibly goes away before anyone types into it.
+/// The pane-level warning while a handoff chain runs (#6081): the chain marks its project from the
+/// first step to the last so the Workspace tab shows the session going away before anyone types into it.
 const HANDOFF_PROGRESS_EVENT: &str = "handoff-progress";
 
 #[derive(Serialize, Clone)]
@@ -3821,11 +3647,8 @@ async fn handoff_now(
     }
     let dir = project_dir(&project).ok_or_else(|| format!("no local checkout for {project}"))?;
 
-    // THE ENTRY GUARD (#6668): before a single step runs, the orch pane must exist AND hold a
-    // live agent. 09-07 12:35: the crebral-health Chat opened onto a pane whose claude had died
-    // at 12:16, the gauge read the dead transcript at 92%, and the chain started — its boundary
-    // wait would have expired at 12:52 and TERMed the pane's zsh. herdr answering nothing for
-    // the pane is the whole evidence; the refusal is traced so the next incident reads itself.
+    // The entry guard (#6668): before a single step runs, the orch pane must exist AND hold a live
+    // agent, or the chain would end a bare shell. The refusal is traced so the next incident reads itself.
     let rows =
         std::fs::read_to_string(desktop_bus_dir().join("crew-windows.txt")).unwrap_or_default();
     let pane = match orch_pane_from_rows(&rows, &project) {
@@ -3864,11 +3687,8 @@ async fn handoff_now(
         ));
     }
 
-    // #6528: the CLI's boundary gate may have ARMED the baton instead of writing a record —
-    // the session was mid-turn, and the record must describe a FINISHED turn. The session's own
-    // Stop hook fires the baton at the boundary; wait (bounded) for that record before the
-    // kill. Killing now is the #6528 failure shape: a successor claiming a pane with nothing
-    // to claim, while the predecessor is still working.
+    // The CLI's boundary gate may have ARMED the baton instead of writing a record (#6528): the
+    // record must describe a finished turn, so wait (bounded) for the Stop hook's record before the kill.
     let chain_start = unix_secs();
     if handoff_armed(&handoff_stdout) {
         app_trace(&format!("handoff[{project}]: armed mid-turn — chain waits for the turn boundary (deadline {}s)", HANDOFF_BOUNDARY_DEADLINE.as_secs()));
@@ -3896,13 +3716,9 @@ async fn handoff_now(
         app_trace(&format!("handoff[{project}]: record written immediately (session was idle)"));
     }
 
-    // THE IDLE GATE BEFORE THE KILL (#6081): the 21:46 drill ended a predecessor mid-turn —
-    // handoff stamped at :01, the operator's :07 prompt started a turn, tool calls ran at
-    // :17/:39/:42, and the kill landed at :50. baton-pane.mjs has always waited for the turn
-    // boundary before ending the session; the app chain only mirrored its post-reopen step.
-    // Same shape as the kickoff's idle wait below: poll on KICKOFF_CADENCE, bounded by
-    // HANDOFF_IDLE_DEADLINE. A deadline pass still ends the session — the chain must stay
-    // bounded — and the returned label names which side of the gate the kill happened on.
+    // The idle gate before the kill (#6081): never end a predecessor mid-turn. Poll on
+    // KICKOFF_CADENCE, bounded by HANDOFF_IDLE_DEADLINE; a deadline pass still ends the session
+    // (the chain stays bounded) and the label names which side of the gate the kill happened on.
     let gate_started = Instant::now();
     let gate_outcome = loop {
         let status = {
@@ -3987,17 +3803,9 @@ async fn handoff_now(
             });
         }
 
-        // KICKOFF-AFTER-REOPEN (card #5649, failure 2): ONE boot prompt over the herdr SOCKET so the
-        // successor recaps the handoff unprompted. Agent text never rides the CLI (socket only), and
-        // the outcome is surfaced rather than swallowed — a blocked or still-starting agent means the
-        // recap is still waiting on a human, which is exactly the failure this fixes.
-        // #6184: the successor is BOOTING after the reopen, and a prompt fired straight at it landed
-        // on nobody (NotReady/NoAgent were the common outcomes — the herdr-log trace on the card).
-        // Mirror of bin/baton-pane.mjs step 4: wait for the agent to read idle before the first
-        // prompt, then retry the transient outcomes on a 3s cadence until it lands, is blocked (a
-        // human must answer the dialog — retrying hammers it), or the deadline passes. Every herdr
-        // call rides spawn_blocking (a blocking UnixStream underneath); the sleeps are tokio's, so
-        // the async runtime never blocks. #6139: the same ladder serves project_wake — one helper.
+        // Kickoff-after-reopen (#5649, #6184, #6139): one boot prompt over the herdr SOCKET, only
+        // after the successor reads idle, retrying transient outcomes on a cadence. Every herdr call
+        // rides spawn_blocking; the sleeps are tokio's. The same ladder serves project_wake.
         let KickoffReport {
             outcome,
             attempts,
@@ -4042,12 +3850,8 @@ pub(crate) struct KickoffReport {
 }
 
 /// The boot prompt for a session that was JUST reopened in `pane` (#6184, #6139). A prompt fired
-/// straight after `trantor open` returns lands on nobody: tonight's wake trace had herdr log the
-/// prompt 90 ms after the claude process appeared, say agent_prompted, and the session never saw
-/// it, four times in a row. So: wait for the agent to read idle, then send, retrying the transient
-/// outcomes on the kickoff cadence until it lands, is blocked, or the deadline passes. Both the
-/// handoff chain and the Wake button ride this one ladder; every herdr call sits on
-/// spawn_blocking so the async runtime never blocks.
+/// straight after `trantor open` lands on nobody, so: wait for idle, send, retry the transient
+/// outcomes on the kickoff cadence until it lands, is blocked, or the deadline passes.
 pub(crate) async fn kickoff_after_reopen(
     pane: &str,
     prompt: String,
@@ -4103,11 +3907,9 @@ impl KickoffPhase {
     }
 }
 
-/// The ladder itself, over a status poll and a prompt send so it drills without a herdr socket:
-/// phase one waits for `status` to read idle (bounded by `deadline`); phase two sends `prompt`
-/// and retries per boot_prompt_decision on `cadence` (bounded by its own `deadline`). The first
-/// send always happens, so the report always carries a real last outcome. `progress` hears where
-/// the ladder is — the wake chain forwards it to the frontend as wake-progress (#6201).
+/// The ladder itself over a status poll and a prompt send, so it drills without a herdr socket:
+/// wait for idle (bounded), then send and retry per boot_prompt_decision on `cadence`. The first
+/// send always happens, so the report carries a real last outcome; `progress` feeds wake-progress (#6201).
 async fn kickoff_ladder<S, SF, P, PF, C>(
     status: S,
     prompt: P,
@@ -4149,13 +3951,9 @@ where
         if matches!(r, Ok(herdr::PromptOutcome::Stalled)) {
             stalled_retries += 1;
         }
-        // #6201 — the double-kickoff guard. herdr's Stalled means "no lifecycle change
-        // OBSERVED in the window", not "the send did not happen": tiny-timer's kickoff
-        // registered on the first send (the transcript shows it landing), herdr still answered
-        // Stalled, and this ladder re-typed the prompt 16s later (13:23:50 + 13:24:06) into a
-        // session already chewing on it. Before any retry, ask the pane: an agent that now
-        // reads working/blocked is mid-turn ON OUR PROMPT — a Delivered outcome must not be
-        // retried, and neither may a delivery herdr misreported.
+        // The double-kickoff guard (#6201): herdr's Stalled means "no lifecycle change observed",
+        // not "the send did not happen". An agent now reading working/blocked is mid-turn on OUR
+        // prompt, so no retry.
         if !prompt_retry_safe(status().await.as_deref()) {
             break r;
         }
@@ -4190,17 +3988,9 @@ fn kickoff_landed_detail(outcome: &Result<herdr::PromptOutcome, String>) -> Stri
     }
 }
 
-/// The budget for the PRE-kill idle gate (#6081). The baton-pane helper waits up to 600s
-/// detached; here an operator is watching the chain, and a typical turn finishes inside two
-/// minutes — so the gate polls on the kickoff cadence with its own bounded deadline, then the
-/// chain proceeds and reports the outcome honestly instead of hanging.
-///
-/// #6668, the relay_wait question: an orchestrator parked in `relay_wait` reads "working" to
-/// herdr for as long as the bus stays quiet, so for that session THIS DEADLINE IS THE GATE —
-/// the normal path, not a failure. It is safe because the wait is not work: everything the
-/// turn did is on disk, and the CLI's boundary gate already wrote the record (a lone
-/// relay_wait tail is a boundary to hooks/lib/handoff.mjs lastRowMidTurn). The returned label
-/// says which side of the gate the kill happened on; "deadline" on a parked session is expected.
+/// The budget for the pre-kill idle gate (#6081): an operator is watching, and a typical turn ends
+/// inside two minutes. A session parked in `relay_wait` reads "working" forever, so for it this
+/// deadline IS the gate (#6668): the wait is not work, and the boundary record is already on disk.
 const HANDOFF_IDLE_DEADLINE: Duration = Duration::from_secs(120);
 
 const HANDOFF_AGENT_DROP_CADENCE: Duration = Duration::from_millis(200);
@@ -4248,12 +4038,8 @@ enum IdleGateStep {
     Pass(IdleGateOutcome),
 }
 
-/// One polling step of the pre-kill idle gate (#6081), pure so the ladder drills without a
-/// herdr socket. Only an in-flight turn holds the gate — "working" (and "busy", the same pair
-/// the Workspace tab reads as a live turn); every other state, including no agent at all,
-/// means nothing live gets ended. baton-pane.mjs gates on the same rule. Once the budget
-/// passes, the gate lets the chain proceed and the outcome says so — a handoff that never
-/// finishes is worse than one that reports it ended a turn short.
+/// One polling step of the pre-kill idle gate (#6081), pure so it drills without a socket. Only an
+/// in-flight turn ("working"/"busy") holds the gate; once the budget passes the chain proceeds and says so.
 fn idle_gate_step(
     status: Option<&str>,
     elapsed: Duration,
@@ -4364,12 +4150,8 @@ fn unix_secs() -> u64 {
         .unwrap_or_default()
 }
 
-/// The retry decision for one boot-prompt attempt, pure so the ladder drills without a herdr
-/// socket (#6184). Delivered and Blocked stop — blocked means a human must answer a dialog in
-/// the pane, and retrying just hammers it. NotReady and NoAgent are the successor still booting
-/// — retry. Stalled gets exactly ONE retry (herdr's stall rule means the send did not register;
-/// a second look is fair, a third is noise) — the count lives with the caller. Err (herdr
-/// unreachable / unreadable) is transient by definition — retry until the deadline.
+/// The retry decision for one boot-prompt attempt (#6184), pure. Delivered and Blocked stop,
+/// NotReady/NoAgent/Err retry, Stalled gets exactly one retry (the count lives with the caller).
 #[derive(Debug, PartialEq, Eq)]
 enum BootPromptDecision {
     Retry,
@@ -4458,11 +4240,9 @@ async fn takeover_now(project: String) -> Result<String, String> {
     }
 }
 
-/// Pasted-image attach (2026-09-01: the operator pasted a CleanShot screenshot into the chat
-/// twice and NOTHING happened — the textarea silently swallows image DATA; only file paths ever
-/// worked). The webview hands the clipboard image over as base64; this writes it to a real file
-/// under ~/.agent-bus/attachments/ and returns the path, which the composer splices into the
-/// draft exactly like a drop — one attach mechanism (paths), two doors (drop, paste).
+/// Pasted-image attach: the textarea swallows image DATA, only paths ever worked. The webview hands
+/// the clipboard image over as base64; this writes it under ~/.agent-bus/attachments/ and returns
+/// the path the composer splices in like a drop. One attach mechanism (paths), two doors.
 #[tauri::command]
 fn save_pasted_image(data_base64: String, kind: String) -> Result<String, String> {
     use base64::Engine as _;
@@ -4601,11 +4381,8 @@ mod draft_tests {
     }
 }
 
-/// The attachment chip's facts off the disk (#6070): the file's size — a chip always shows name +
-/// size — plus a `data:` URI thumbnail when the file is an image the webview can paint and small
-/// enough to inline. Same read-and-inline shape `project_icon` uses, and the CSP already allows
-/// `img-src data:`. Returns None (not an error) when the path is not a file: a chip degrades to
-/// name-only, it does not fail.
+/// The attachment chip's facts off the disk (#6070): size, plus a `data:` thumbnail for a small
+/// image. None (not an error) when the path is not a file: a chip degrades to name-only.
 #[derive(Debug, Clone, Serialize)]
 struct AttachmentInfo {
     bytes: u64,
@@ -4648,17 +4425,9 @@ fn attachment_info(path: String) -> Option<AttachmentInfo> {
     Some(AttachmentInfo { bytes, thumb })
 }
 
-/// #5401 — projects whose orchestrator PANE survived (a tracked orch row) while the
-/// conversation inside did not (no agent registered on that pane): the reboot shape. herdr's
-/// login agent restores panes, not the claude processes in them. The app offers/fires resume
-/// per the project's baton dial; `trantor open` is the resume vehicle — checkout resolution,
-/// handoff-beats-resume, and the wake kickoff all already live there. Queried at app LAUNCH
-/// only: a session the operator deliberately /exited also leaves an agent-less pane, and a
-/// continuous poll would nag about it forever (monitoring doctrine: never warn about what the
-/// operator declared).
-/// #6476 — the pane handle (crew-windows.txt's HANDLE column) doubles as a stable session id: a
-/// dismissal is keyed against it so a NEW dead session for the same project (a fresh handle after
-/// a real resume) is never confused with the one that got dismissed.
+/// Projects whose orchestrator PANE survived while the conversation inside did not (#5401): herdr
+/// restores panes, not the claude processes in them. Queried at app LAUNCH only, never polled.
+/// The pane handle doubles as the session id a dismissal is keyed on (#6476).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct RestorableSession {
@@ -4880,11 +4649,8 @@ fn seat_diff(project: String, agent: String) -> Result<String, String> {
 }
 
 // ── git panel (#5775) ──────────────────────────────────────────────────────────────────────────
-// The Review lens showed what a seat CHANGED but left every git ACTION to a terminal. These four
-// commands are the panel's whole surface: one read snapshot (branch, ahead/behind, raw porcelain
-// status, recent log) and three mutations (stage/unstage, commit, push) — all against the SEAT's
-// worktree, the tree review is already looking at. seat_diff above stays frozen; this is
-// additive on purpose and shares no mutable state with it.
+// One read snapshot and three mutations (stage/unstage, commit, push) against the SEAT's worktree.
+// Additive: seat_diff above stays frozen and shares no mutable state with it.
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 struct GitStatusEntry {
@@ -5032,12 +4798,8 @@ async fn git_mutation_guard(agent: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// Pure porcelain v1 parser, `-z` flavour: NUL-separated "XY PATH" records → entries. X is the
-/// index state, Y the worktree state ("?" in X means untracked). With `-z`, git emits paths raw —
-/// no quoting, no escaping — so a path containing spaces, quotes, or non-ASCII bytes is never
-/// corrupted by a split; and a rename/copy carries its ORIGIN path as a SECOND NUL-separated
-/// field, which we consume by skipping the next record instead of inventing a bogus entry. Records
-/// too short to carry XY + a path are skipped, never guessed at. No I/O — cargo-tested below.
+/// Pure porcelain v1 parser, `-z` flavour: NUL-separated "XY PATH" records. With `-z` git emits
+/// paths raw, so odd bytes never corrupt a split; a rename carries its origin as a second field, skipped.
 fn parse_porcelain_v1(raw: &str) -> Vec<GitStatusEntry> {
     let mut entries = Vec::new();
     let mut records = raw.split('\0');
@@ -5089,11 +4851,8 @@ fn parse_left_right(raw: &str) -> (Option<u64>, Option<u64>) {
     )
 }
 
-/// Where a branch stands relative to its upstream, with no-upstream as an explicit STATE rather
-/// than a null to special-case at every call site. A fresh seat branches with no remote, which is
-/// normal, not an error — `has_upstream` selects what `ahead` describes: the real remote when
-/// true, the merge base with main when false (and `behind` is then None because "behind main" is
-/// a claim a seat has not measured).
+/// Where a branch stands relative to its upstream, with no-upstream as an explicit STATE:
+/// `has_upstream` selects what `ahead` describes (the remote, else the merge base with main).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 struct UpstreamStatus {
     has_upstream: bool,
@@ -5193,14 +4952,9 @@ async fn git_panel(project: String, agent: String) -> Result<String, String> {
     .map_err(|e| e.to_string())
 }
 
-/// Prove `rel` stays inside `root`, symlinks and all — the shared path guard every git/fs handler
-/// passes through. A textual "no .., no absolute" check stops the obvious escapes but not a
-/// symlink: a worktree that links a directory out to somewhere else passes "no .." and then reads
-/// whatever the link points at. So this RESOLVES the path for real (canonicalize follows symlinks)
-/// and then checks the result is still a DESCENDANT of the canonical root — the one check a
-/// symlink cannot lie its way past. Rejects empty, NUL-containing, and absolute inputs before any
-/// I/O. A path whose final component does not exist (a staged-then-deleted file) is checked by its
-/// nearest existing ancestor, so unstage still works on a file already gone from disk.
+/// Prove `rel` stays inside `root`, symlinks and all: the shared path guard every git/fs handler
+/// passes through. Canonicalize, then require a descendant of the canonical root; a missing final
+/// component is checked by its nearest existing ancestor so unstage works on a deleted file.
 fn resolve_within(root: &Path, rel: &str) -> Result<(), String> {
     if rel.is_empty() || rel.contains('\0') || Path::new(rel).is_absolute() {
         return Err(format!("path is invalid: {rel}"));
@@ -5431,11 +5185,8 @@ mod git_panel_tests {
 }
 
 // ── self-update ────────────────────────────────────────────────────────────────────────────────
-// The app used to have NO idea a newer release existed: the only update path was someone typing
-// `trantor app update` by hand, so a teammate's install stayed stale silently forever. These two
-// commands close the loop — same release discovery as bin/app.mjs (any release carrying a
-// Trantor_*.dmg is an app release, newest wins), same install steps, but runs in-process so it
-// needs no CLI on PATH (a Finder-launched app gets a bare PATH — the 0.3.3 doctor bug).
+// Same release discovery as bin/app.mjs (any release carrying a Trantor_*.dmg, newest wins), run
+// in-process so it needs no CLI on PATH: a Finder-launched app gets a bare PATH.
 
 const RELEASES_URL: &str = "https://api.github.com/repos/sashabogi/trantor/releases?per_page=30";
 const APP_PATH: &str = "/Applications/Trantor.app";
@@ -5819,9 +5570,8 @@ fn panic_payload_message(payload: &(dyn std::any::Any + Send)) -> String {
         .unwrap_or_else(|| "non-string panic payload".to_string())
 }
 
-/// One app-panics.log record. The 2026-09-01 .ips reports of #5917 showed ONLY the abort
-/// (`panic_cannot_unwind` inside tao's extern "C" sendEvent override), so the record carries
-/// everything the crash report never can: the message, the thread, the location, the backtrace.
+/// One app-panics.log record. The crash reports of #5917 showed ONLY the abort, so the record
+/// carries everything they never can: the message, the thread, the location, the backtrace.
 fn panic_log_line(now: &str, thread: &str, msg: &str, loc: &str, backtrace: &str) -> String {
     if backtrace.is_empty() {
         format!("{now} thread={thread} {msg} at {loc}\n")
@@ -5847,12 +5597,9 @@ fn append_panic_log(msg: &str, loc: &str, backtrace: &str) {
     }
 }
 
-/// #5917/#6317: a panic on the main thread inside AppKit's sendEvent cannot unwind — the process
-/// aborts with SIGABRT and the crash report shows only the abort, never the original message
-/// (10:08 and 21:48 on 2026-09-03: pressing Up in the composer, and once before that pasting into
-/// the editor). This hook writes the message, location, thread and backtrace to a file BEFORE the
-/// abort, so the crash names itself. It changes nothing about how the panic proceeds — the default
-/// hook (which prints the crash-reporter-visible summary) still runs after.
+/// A panic on the main thread inside AppKit's sendEvent cannot unwind: SIGABRT, and the crash report
+/// shows only the abort (#5917, #6317). This hook writes the message, location, thread and backtrace
+/// BEFORE the abort. The default hook still runs after.
 fn install_panic_hook() {
     let default_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
@@ -5867,13 +5614,9 @@ fn install_panic_hook() {
     }));
 }
 
-/// #6317 acceptance drill: TRANTOR_PANIC_DRILL=1 reproduces the exact shape of the tao crash —
-/// a panic that starts inside an ordinary Rust call and tries to unwind out through a plain
-/// `extern "C" fn` boundary (tao's `send_event` is exactly this: registered as an Objective-C
-/// method via `extern "C" fn send_event(...)`, no `C-unwind` ABI) — without needing a live
-/// AppKit event loop. Runs headless, before tauri::Builder, then aborts (matching production).
-/// Proves whether the hook sees the ORIGINAL panic (message below) as well as the synthetic
-/// "panic in a function that cannot unwind" the compiler inserts at the ABI boundary.
+/// #6317 acceptance drill: TRANTOR_PANIC_DRILL=1 reproduces the tao crash shape, a panic unwinding
+/// through a plain `extern "C" fn` boundary, headless before tauri::Builder. Proves the hook sees
+/// the ORIGINAL panic as well as the compiler's "cannot unwind" one.
 fn run_panic_drill() -> ! {
     fn panics_directly(arg: u32) -> u32 {
         if arg == std::hint::black_box(arg) {
@@ -5928,17 +5671,10 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_notification::init())
         .setup(|app| {
-            // #6094 acceptance drill: TRANTOR_ASK_DRILL=<project> makes the webview mount Chat on
-            // that project's orchestrator pane headlessly and drive the real backfill/blocked
-            // path (src/features/chat/askDrill.ts), narrating every step into app-trace.log.
-            // Inert in normal runs. Same pattern the removed #5857 lsp-drill used (c3553bb).
-            //
-            // TRANTOR_ASK_DRILL_WRITE_TARGET=<pane-id> (0.3.148, #6094's EIO bounce) additionally
-            // proves the WRITE path against a pane the operator sets up themselves (e.g. a
-            // throwaway `herdr workspace create` pane running `cat -v`) — never the real
-            // orchestrator, so the drill can never answer a live question on the operator's
-            // behalf. The probe bytes are the same shape answerKeystrokes() sends for a real
-            // pick; the operator reads the pane back (`herdr pane read <target>`) to confirm.
+            // #6094 acceptance drill: TRANTOR_ASK_DRILL=<project> mounts Chat headlessly on that
+            // project's orch pane and drives the real blocked path (src/features/chat/askDrill.ts).
+            // TRANTOR_ASK_DRILL_WRITE_TARGET=<pane-id> also proves the write path against a pane the
+            // operator set up, never the real orchestrator. Inert in normal runs.
             use tauri::{Emitter, Manager};
             // #6317 acceptance drill: TRANTOR_KEY_DRILL=post|throw posts a real right-arrow key
             // event through AppKit once the webview is live (src/key_drill.rs). Inert otherwise.
@@ -5959,11 +5695,8 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(|invoke: tauri::ipc::Invoke<tauri::Wry>| {
-            // #5917 guard: tauri 2.11.5 has NO catch_unwind anywhere in its src (verified), so a
-            // panic in any command would unwind out through the AppKit/WebKit extern "C" callback
-            // that delivered the invoke — panic_cannot_unwind, SIGABRT — exactly the shape of the
-            // 2026-09-01 crashes. Catch instead: the panic is logged, the invoke goes unhandled,
-            // and the app lives.
+            // #5917 guard: tauri has no catch_unwind, so a panic in any command would unwind through
+            // the AppKit extern "C" callback and abort. Catch: log it, drop the invoke, the app lives.
             let handler: fn(tauri::ipc::Invoke<tauri::Wry>) -> bool = tauri::generate_handler![
             greet,
             sign_request,
@@ -6126,7 +5859,7 @@ mod panic_guard_tests {
 
     #[test]
     fn panic_log_line_carries_everything_the_ips_reports_never_had() {
-        // The 2026-09-01 .ips stacks of #5917 showed ONLY the abort frames, so the log line must
+        // The crash reports of #5917 showed ONLY the abort frames, so the log line must
         // name the message, the thread, the location and the backtrace.
         let line = panic_log_line("1788374793", "main", "called `Option::unwrap()` on a `None` value", "view.rs:546", "0: tao::send_event");
         assert!(line.contains("1788374793 thread=main"));
@@ -6410,9 +6143,8 @@ mod herdr_tests {
         assert_eq!(foreground_pid_from_process_info(&raw), Some(23311));
     }
 
-    // #6668 — the 09-07 12:35 shape: the pane's claude had exited, the foreground process group
-    // WAS the pane's zsh (80368), and the chain would have TERMed it. The shell is never the
-    // process to end, by shell_pid or by name, and a shell-only foreground answers None.
+    // #6668: the pane's claude had exited and the foreground process group WAS the pane's zsh.
+    // The shell is never the process to end, by shell_pid or by name; a shell-only foreground answers None.
     #[test]
     fn process_info_never_returns_the_panes_shell() {
         let bare_shell = serde_json::json!({
@@ -6472,8 +6204,8 @@ mod herdr_tests {
 
     #[test]
     fn process_info_with_a_live_agent_still_ends_the_agent() {
-        // The live shape (captured 2026-09-07 from herdr pane process-info on w2:p8): the group
-        // id is claude's pid, MCP children follow it, and shell_pid is the pane's zsh.
+        // The live shape from herdr pane process-info: the group id is claude's pid, MCP children
+        // follow it, and shell_pid is the pane's zsh.
         let live = serde_json::json!({
             "result": {
                 "process_info": {
@@ -6983,8 +6715,7 @@ mod herdr_tests {
 
     #[test]
     fn parse_ask_questions_reads_the_real_transcript_shape() {
-        // Exact shape confirmed 2026-09-03 against a real tool_use row
-        // (~/.claude/projects/.../918e0f72-*.jsonl) — not invented.
+        // Exact shape confirmed against a real tool_use row in a session transcript, not invented.
         let input = serde_json::json!({
             "questions": [{
                 "question": "Go with the hybrid plan?",
@@ -7042,16 +6773,9 @@ mod herdr_tests {
 
     #[test]
     fn decode_chat_lines_returns_a_trailing_open_ask_with_no_closing_user_line() {
-        // #6094, 0.3.146 real-path failure: the CLI writes one JSONL row PER content block, so an
-        // in-progress assistant turn streams as several separate, individually newline-terminated
-        // rows (thinking, thinking, tool_use) with no `user` row after it yet — the tool_result
-        // only lands once the operator answers. Confirmed on the real transcript: the
-        // AskUserQuestion tool_use at line 8274 sat on disk 31+ real seconds, with two more
-        // `attachment` rows written after it (8275-8276) and still no `user` row, while Chat
-        // retried 15 times over 8s and never found the ask. This mirrors read_chat_snapshot's own
-        // shape: raw multi-line text through complete_lines, then decode_chat_lines with the
-        // `after` cursor sitting right before the block, exactly the transcript's real shape —
-        // not a hand-built single-turn stub.
+        // #6094 real-path shape: the CLI writes one JSONL row PER content block, so an in-progress
+        // assistant turn is several rows with no `user` row after it until the operator answers.
+        // Mirrors read_chat_snapshot: raw multi-line text through complete_lines, then decode_chat_lines.
         let filler = "{\"type\":\"attachment\"}\n".repeat(5);
         let block = concat!(
             "{\"type\":\"attachment\"}\n",
@@ -7075,18 +6799,9 @@ mod herdr_tests {
 
     #[test]
     fn decode_chat_lines_finds_the_open_ask_in_the_real_9291_line_transcript() {
-        // #6094, 2026-09-05, 0.3.150 real-panel drill: the singleton-run batch() fix and the
-        // orch-status object decoder both landed, yet the blocked-no-ask retry loop ran 13 times
-        // over 6.4s and never found the ask, while the AskUserQuestion tool_use sat at transcript
-        // line 9289 the whole time (no tool_result, two `attachment` rows written after it, no
-        // `user` row — exactly this fixture's shape). Every decode test above uses a hand-built
-        // transcript a dozen lines long; that shape passed while the real one keeps failing. This
-        // is the operator's own 9291-line, 16.7MB session file (copied to .agent-bus-out/ —
-        // gitignored, never committed) — the only way to catch a bug a synthetic shape can't
-        // reproduce.
-        // The fixture is gitignored (16.7MB of the operator's session), so a clean checkout (CI,
-        // a seat worktree) does not have it: skip there rather than fail a suite over a file that
-        // was never meant to be committed. Locally, with the file present, the assertions run.
+        // #6094: the operator's own 9291-line session file, the only shape that reproduced the
+        // blocked-no-ask retry loop after every synthetic fixture passed. It is gitignored (16.7MB),
+        // so a clean checkout skips rather than fails.
         let fixture = concat!(
             env!("CARGO_MANIFEST_DIR"),
             "/../../.agent-bus-out/6094-ask-open-fixture.jsonl"

@@ -1,9 +1,5 @@
-// Onboarding — first-run wizard state, persisted in ~/.agent-bus/config.json under "onboarding".
-//
-// A fresh install has never pinned a hub, so it sees the wizard (closedAt: null). An install that
-// already has real config — a hub pin from before onboarding existed — is migrated straight past
-// it the first time this is read: closedAt gets set right then, so nobody already running Trantor
-// is walked through a wizard for a machine they set up months ago.
+// Onboarding: first-run wizard state, in ~/.agent-bus/config.json under "onboarding". An install
+// with a hub pin from before onboarding existed is migrated straight past the wizard on first read.
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::fs;
@@ -168,12 +164,8 @@ mod tests {
         assert!(with_onboarding(&json!([1, 2]), &migrated_state(&json!({}))).is_err());
     }
 
-    /// The real path end to end, against actual disk: a fresh bus dir shows the wizard, a
-    /// pre-existing one (a hub pin already on disk) is migrated straight past it, and the public
-    /// get/set_step/close/reopen commands round-trip through the same config.json file a real
-    /// launch would use. right_panel.rs and dismissals.rs each have an equivalent real-path test
-    /// that also repoints AGENT_BUS_DIR — crate::BUS_DIR_TEST_LOCK serializes all three so their
-    /// concurrent set_var/remove_var calls never race the shared process environ block.
+    /// The real path against actual disk: fresh bus dir shows the wizard, a pre-existing pin is
+    /// migrated past it, and the commands round-trip through config.json. Holds BUS_DIR_TEST_LOCK.
     #[test]
     fn the_real_path_a_fresh_dir_then_an_existing_one() {
         let _guard = crate::BUS_DIR_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
