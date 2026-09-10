@@ -84,13 +84,16 @@ export async function routeMessages({ req, res, q, P, auth, ctx }) {
       // `superseded` leaves `contracts` for exactly the reason `abandoned` does: a session's hooks
       // are PINNED at session start, so an older stop hook filters this array with its own
       // predicate and would keep blocking on a row the hub has already settled.
-      const out = all.filter(c => c.disposition !== "abandoned" && c.disposition !== "superseded");
+      // `ack` leaves `contracts` too (#7079): a `wake:false` send, a `receipt` or a `status` is the
+      // sender declaring nothing is owed, so an old pinned hook must never see it as a row to block on.
+      const out = all.filter(c => c.disposition !== "abandoned" && c.disposition !== "superseded" && c.disposition !== "ack");
       return json(res, 200, {
         session, contracts: out, abandonedContracts: all.filter(c => c.disposition === "abandoned"),
         supersededContracts: all.filter(c => c.disposition === "superseded"),
+        ackContracts: all.filter(c => c.disposition === "ack"),
         open: out.filter(c => !c.answered).length,
         waiting: by("waiting"), stalled: by("stalled"), abandoned: by("abandoned"),
-        superseded: by("superseded"), answered: by("answered"),
+        superseded: by("superseded"), ack: by("ack"), answered: by("answered"),
       });
     }
 

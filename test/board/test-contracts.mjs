@@ -55,7 +55,7 @@ await post("/send", { from: ORCH, to: "all", project: PROJ, text: "morning, crew
   ok("a broadcast is NOT counted as a contract", (r.contracts || []).length > 0 && (r.contracts || []).every(c => c.to !== "all"));
   ok("each one says who owes it and what was asked",
     open.length > 0 && open.every(c => c.to && /cardiology|derm/.test(c.text || "")), JSON.stringify(open).slice(0, 160));
-  ok("…and how long it has been outstanding", open.length > 0 && open.every(c => typeof c.ageMs === "number"));
+  ok("…and how long it has been outstanding", open.length > 0 && open.every(c => c.ageMs >= 0 && c.ageMs < 60000));
 }
 
 console.log("\nAn outcome closes the contract it answers, and only that one:");
@@ -73,9 +73,10 @@ console.log("\nA contract whose seat has gone quiet is flagged, because waiting 
 {
   const r = await get(`/contracts?session=${encodeURIComponent(ORCH)}&project=${PROJ}`);
   const open = (r.contracts || []).find(c => !c.answered);
-  ok("the open contract reports its assignee's health", open && typeof open.assigneeOnline === "boolean",
+  // glm:ctr registered moments ago with a status, so the row must say alive + that exact status.
+  ok("the open contract reports its assignee's health", open?.assigneeOnline === true,
     JSON.stringify(open || {}).slice(0, 160));
-  ok("…and the assignee's last known status", open && typeof open.assigneeStatus === "string");
+  ok("…and the assignee's last known status", open?.assigneeStatus === "active in ctr", `${open?.assigneeStatus}`);
 }
 
 console.log("\nA session does not park while a dispatched contract is stalled:");
@@ -390,6 +391,104 @@ console.log("\nA re-dispatch's direct reply settles the OLDER row it stranded (m
     sup[stranded.id]?.assigneeOnline === true, `online=${sup[stranded.id]?.assigneeOnline}`);
   ok("a FRESH re-dispatch is untouched by the direct-reply rule (age gate protects in-flight work)",
     open[redispatch.id]?.disposition === "waiting", `${open[redispatch.id]?.disposition}`);
+}
+
+// ---- ack: a send the SENDER declared owes nothing is never a contract (#7079) -----------------
+// Four times in one day the orchestrator's stop was refused over rows that were all its own
+// `wake:false` acks ("read and acked, nothing here needs you") to seats that were alive and idle.
+// `wake:false` buys the recipient no turn by design, so the row can never be answered; counted as a
+// contract it ages past the overdue window and the hub calls it `stalled`. The hook obeys the hub, so
+// the fix is hub-side: an ack (wake:false, kind receipt, kind status) gets its own disposition and
+// leaves `contracts`, exactly as `abandoned` and `superseded` do. The half that matters is the second
+// one: a REAL contract to the very same seat must still appear and still stall.
+console.log("\nA session whose only sends are acks owes nothing, and a real contract still stalls:");
+{
+  // Session names carry the project suffix on purpose: a signed hook read is scoped by the identity's
+  // default scope, which is derived from the name, so `host:acker` reading project `life` would 403
+  // and the hook would allow silently — a vacuous pass. `acker:life` is a real member of `life`.
+  const AO = "acker:life", AS = "qwen:life";
+  await post2("/register", { session: AO, project: PROJ2, status: "orchestrating" });
+  await post2("/register", { session: AS, project: PROJ2, status: "working" });
+  const a1 = await post2("/send", { from: AO, to: AS, project: PROJ2, text: "read and acked, nothing here needs you", wake: false });
+  const a2 = await post2("/send", { from: AO, to: AS, project: PROJ2, text: "✅ your #6897 accepted and DONE", kind: "receipt" });
+  const a3 = await post2("/send", { from: AO, to: AS, project: PROJ2, text: "heads-up: gating from the hash", kind: "status" });
+  {
+    // overdueMs=0 is the stop hook's own drill setting: every open row counts as overdue. An ack must
+    // not become stalled even under it.
+    const r = await get2(`/contracts?session=${encodeURIComponent(AO)}&overdueMs=0`);
+    const ackIds = new Set((r.ackContracts || []).map(c => Number(c.id)));
+    ok("a session whose only sends are acks has ZERO rows in `contracts`",
+      Array.isArray(r.contracts) && r.contracts.length === 0, JSON.stringify(r.contracts || r).slice(0, 200));
+    ok("…so it counts nothing as open, waiting or stalled",
+      r.open === 0 && r.waiting === 0 && r.stalled === 0, JSON.stringify({ open: r.open, waiting: r.waiting, stalled: r.stalled }));
+    ok("the acks still ride in `ackContracts`, so the ledger can show what was said",
+      [a1.id, a2.id, a3.id].every(id => ackIds.has(Number(id))) && r.ack === 3,
+      JSON.stringify({ ack: r.ack, ids: [...ackIds] }));
+    ok("…each with disposition `ack` — not waiting, not stalled, not abandonment wearing a new name",
+      (r.ackContracts || []).every(c => c.disposition === "ack" && c.answered === false));
+  }
+
+  // The REAL stop hook must let this session idle.
+  const { writeFileSync } = await import("node:fs");
+  const { spawnSync: sp4 } = await import("node:child_process");
+  const w4 = mkdtempSync(join(tmpdir(), "trantor-ackstop-"));
+  const BUS4 = join(w4, "bus"); mkdirSync(BUS4, { recursive: true });
+  const repo4 = join(w4, "life"); mkdirSync(repo4, { recursive: true });
+  sp4("git", ["init", "-q"], { cwd: repo4 });
+  writeFileSync(join(BUS4, "config.json"), JSON.stringify({ url: BASE2, hubs: { life: BASE2 } }));
+  const runStop4 = () => new Promise((resolve) => {
+    const kid = spawn(process.execPath, [join(ROOT, "hooks", "stop-inbox.mjs")], {
+      cwd: ROOT, stdio: ["pipe", "pipe", "pipe"],
+      env: { ...drillEnv(), AGENT_BUS_DIR: BUS4, CLAUDE_PROJECT_DIR: repo4, RELAY_HOST_ID: "host",
+             RELAY_SESSION: AO, RELAY_PROJECT: PROJ2, RELAY_URL: BASE2,
+             TRANTOR_CONTRACT_OVERDUE_MS: "0" },
+    });
+    let b = "", e = ""; kid.stdout.on("data", d => (b += d)); kid.stderr.on("data", d => (e += d));
+    kid.on("close", () => resolve({ so: b, se: e }));
+    // ONE session_id across both runs: the hook derives its instance key from it, and a second run
+    // under a fresh id reads as a baton twin that lost the claim and is waved through as superseded.
+    kid.stdin.end(JSON.stringify({ session_id: "ack-stop-1", cwd: repo4, stop_hook_active: false }));
+    setTimeout(() => { try { kid.kill("SIGKILL"); } catch {} }, 15000).unref?.();
+  });
+  await get2(`/inbox?session=${encodeURIComponent(AO)}`);   // consuming read: unread mail would block for another reason
+  {
+    const { so, se } = await runStop4();
+    let o = {}; try { o = JSON.parse(so || "{}"); } catch {}
+    ok("the stop guard lets a session that has only sent acks go idle", o.decision !== "block", (o.reason || so || se || "").slice(0, 220));
+  }
+
+  // Second half: a real contract to the SAME seat still appears and still stalls. Under overdueMs=0
+  // an open row is stalled at once; the acks sitting beside it must not change that.
+  const real = await post2("/send", { from: AO, to: AS, project: PROJ2, text: "the actual job: port the neuro ruleset" });
+  {
+    const r = await get2(`/contracts?session=${encodeURIComponent(AO)}&overdueMs=0`);
+    const row = (r.contracts || []).find(c => Number(c.id) === Number(real.id));
+    ok("a real wake:true contract to the same seat still appears in `contracts`", !!row, JSON.stringify(r.contracts || []).slice(0, 200));
+    ok("…and still STALLS when overdue — the acks silenced nothing real", row?.disposition === "stalled" && r.stalled === 1,
+      JSON.stringify({ disposition: row?.disposition, stalled: r.stalled }));
+    ok("the acks are still out of the array beside it", (r.contracts || []).length === 1, `${(r.contracts || []).length} rows`);
+  }
+  await get2(`/inbox?session=${encodeURIComponent(AO)}`);
+  {
+    const { so, se } = await runStop4();
+    let o = {}; try { o = JSON.parse(so || "{}"); } catch {}
+    ok("the stop guard BLOCKS on the real stalled contract", o.decision === "block", `stdout=${so.slice(0, 120)} stderr=${se.slice(0, 300)}`);
+    ok("…and its reason names the seat that owes it, not an ack", /qwen:life/.test(o.reason || "") && !/nothing here needs you/.test(o.reason || ""),
+      (o.reason || "").slice(0, 220));
+  }
+
+  // The seat's untagged "done" must close the REAL row. The acks are older, so a naive oldest-open
+  // match would hand the reply to an ack and leave the real contract stalled forever.
+  await post2("/send", { from: AS, to: AO, project: PROJ2, text: "✅ neuro done (exit 0)" });
+  {
+    const r = await get2(`/contracts?session=${encodeURIComponent(AO)}&overdueMs=0`);
+    const row = (r.contracts || []).find(c => Number(c.id) === Number(real.id));
+    ok("a loose reply from the seat closes the REAL contract, not an older ack",
+      row?.answered === true && row?.disposition === "answered", JSON.stringify(row || {}).slice(0, 200));
+    ok("…and the acks stay acks — a reply is never mistaken for an answer to nothing",
+      (r.ackContracts || []).length === 3 && (r.ackContracts || []).every(c => c.disposition === "ack"),
+      JSON.stringify((r.ackContracts || []).map(c => c.disposition)));
+  }
 }
 
 hub2.kill("SIGKILL");

@@ -158,6 +158,15 @@ function contractRecipientIsAnswerable(m) {
   return !!m.to && m.to !== "all" && m.from !== m.to && !m.to.startsWith("hub:") && !m.from.startsWith("hub:");
 }
 
+// A direct message the SENDER declared owes nothing back (#7079). `wake:false` is the sender saying
+// "context, not a contract" — the send result even prints "(batched — no turn)" — and a `receipt` or
+// `status` is a report, not a request. None of these ever buys the recipient a turn, so none can be
+// answered; counted as contracts they age into `stalled` and block the dispatcher's stop hook over
+// work that was never owed (four times in one day, every row an ack to an idle seat).
+function contractIsAck(m) {
+  return m.wake === false || m.kind === "receipt" || m.kind === "status";
+}
+
 function contractsFor(session, { project = "", windowMs = CONTRACT_WINDOW_MS, overdueMs = null } = {}) {
   const t = now();
   const cutoff = t - windowMs;
@@ -174,8 +183,12 @@ function contractsFor(session, { project = "", windowMs = CONTRACT_WINDOW_MS, ov
 
   const out = [];
   for (const c of mine.sort((a, b) => a.ts - b.ts)) {
+    const ack = contractIsAck(c);
     let answer = byRe.get(c.id) || null;
-    if (!answer) {
+    // An ack never claims a LOOSE reply: it is older than the real contract more often than not, and
+    // letting it consume the seat's untagged "done" would leave the real row WAITING — a false stall
+    // manufactured by the very row that was supposed to owe nothing.
+    if (!answer && !ack) {
       const pool = looseByPeer.get(c.to) || [];
       const i = pool.findIndex(r => r.ts > c.ts);
       if (i >= 0) answer = pool.splice(i, 1)[0];
@@ -190,6 +203,7 @@ function contractsFor(session, { project = "", windowMs = CONTRACT_WINDOW_MS, ov
     // tombstone. A seat that comes back and reports still closes its own contract.
     let disposition;
     if (answer) disposition = "answered";
+    else if (ack) disposition = "ack";                          // nothing owed: never waits, never stalls
     else if (seen < abandonCut) disposition = "abandoned";     // covers never-seen (seen === 0)
     else if (!online || (overdueMs != null && ageMs >= overdueMs)) disposition = "stalled";
     else disposition = "waiting";
@@ -224,7 +238,7 @@ function contractsFor(session, { project = "", windowMs = CONTRACT_WINDOW_MS, ov
     if (c.answered && c.ts > (newestAnswered.get(c.to) || 0)) newestAnswered.set(c.to, c.ts);
   }
   for (const c of out) {
-    if (c.answered || c.disposition === "abandoned") continue;
+    if (c.answered || c.disposition === "abandoned" || c.disposition === "ack") continue;
     if (c.ageMs < CONTRACT_ABANDON_MS) continue;
     if (c.ts < (newestAnswered.get(c.to) || 0)) c.disposition = "superseded";
   }
@@ -248,7 +262,7 @@ function contractsFor(session, { project = "", windowMs = CONTRACT_WINDOW_MS, ov
     if (r.ts > (latestDirectReply.get(r.from) || 0)) latestDirectReply.set(r.from, r.ts);
   }
   for (const c of out) {
-    if (c.answered || c.disposition === "abandoned") continue;
+    if (c.answered || c.disposition === "abandoned" || c.disposition === "ack") continue;
     if (c.ageMs < CONTRACT_ABANDON_MS) continue;
     const latest = latestDirectReply.get(c.to);
     if (latest != null && c.ts < latest) c.disposition = "superseded";
