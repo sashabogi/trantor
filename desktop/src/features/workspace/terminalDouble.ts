@@ -1,12 +1,7 @@
-// A faithful stand-in for everything TerminalPane reaches outside itself.
-//
-// It implements the SAME PaneSession/TerminalDeps surface the real wiring implements, so the pane
-// under test runs its real code path against a real object. Nothing rewrites the module graph
-// underneath it, which is what the anti-slop no-module-mocking rule is protecting: a pane that
-// passes here passes because its own logic is right, not because an import was swapped.
-//
-// It also records what the pane did, and exposes the two things only the outside world can
-// trigger: bytes arriving from the pty, and the user typing.
+// A faithful stand-in for everything TerminalPane reaches outside itself: the SAME
+// PaneSession/TerminalDeps surface, so the pane under test runs its real code path (anti-slop
+// no-module-mocking). It records what the pane did and exposes the two outside triggers: bytes
+// from the pty, and the user typing.
 import type { PaneSession, PaneDragDropEvent, TerminalDeps } from "./TerminalPane";
 import type { TerminalBytes } from "./herdr";
 

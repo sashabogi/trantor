@@ -1,19 +1,7 @@
-// The Monaco wiring, one import away from both editor surfaces. Modeled on Orca's
-// monaco-setup.ts (.scratch/orca/src/renderer/src/lib/monaco-setup.ts) — the local-bundling
-// contract, not their app-specific guards:
-//
-// - LOCAL, never CDN: vite `?worker` imports decide how the workers boot, and
-//   MonacoEnvironment.getWorker picks one per language label (monaco-setup.ts:20-40). Nothing
-//   here fetches from jsdelivr/unpkg, which is @monaco-editor/react's default and why raw
-//   monaco + explicit wiring won.
-// - The TS/JS language services are MUTED (semantic + suggestion + syntax diagnostics off,
-//   monaco-setup.ts:42-60): an editor that cannot resolve project imports raises a long tail
-//   of false errors (unresolved modules, unused-import fades, JSX parse noise). Tokenization
-//   stays — that is the part that helps you read code.
-// - JSX needs Preserve compiler options or the worker raises TS17004 on every tag
-//   (monaco-setup.ts:62-75).
-// - ONE theme, `trantor-calm`, built from the palette in src/styles.css (--color-tr-*). The
-//   only derivations are alpha fades of token values, marked inline.
+// The Monaco wiring, modeled on Orca's monaco-setup.ts (the local-bundling contract): LOCAL, never
+// CDN (vite `?worker` imports, MonacoEnvironment.getWorker per language); TS/JS language services
+// MUTED (an editor that cannot resolve imports raises false errors; tokenization stays); JSX needs
+// Preserve or TS17004 fires; ONE theme, `trantor-calm`, from the palette in src/styles.css.
 import * as monaco from "monaco-editor";
 import { typescript as monacoTS } from "monaco-editor";
 import "monaco-editor/min/vs/editor/editor.main.css";

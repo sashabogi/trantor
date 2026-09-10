@@ -1,8 +1,6 @@
 // @vitest-environment happy-dom
-//
-// #6668 — the built-app drill's pure legs: the banner detector and the verdict. The drill run
-// itself needs the built app and a staged bare-shell pane (see handoff_drill.rs); these pin
-// what it reads and what it concludes.
+// #6668: the built-app drill's pure legs (the banner detector and the verdict). The drill run
+// itself needs the built app and a staged bare-shell pane (handoff_drill.rs).
 import { describe, expect, it } from "vitest";
 import { bannerShown, verdict, type HandoffDrillEvidence } from "./handoffDrill";
 

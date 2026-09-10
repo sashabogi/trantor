@@ -1,14 +1,6 @@
-// CONVERSATION — the project's own channel. This is where the agents talk to EACH OTHER.
-//
-// Corrects a scoping mistake: the first cut had one global Inbox holding everything, which buried
-// the thing that matters most. The two are different questions:
-//
-//   this view   "what are the agents on crebral-scribe saying to each other right now?"
-//   Inbox       "what needs an answer from ME?"
-//
-// A project is a channel. The roster sits beside the conversation on purpose — knowing WHO is in the
-// room while they talk is most of the context, and it is exactly what the operator loses when they
-// have to read two terminal windows to follow one exchange.
+// CONVERSATION: the project's own channel, where the agents talk to EACH OTHER. This view asks
+// "what are the agents on this project saying?"; Inbox asks "what needs an answer from ME?".
+// The roster sits beside the conversation because knowing WHO is in the room is most of the context.
 import { useEffect, useMemo, useState } from "react";
 import type { Card, HubClient, HubEvent, Peer } from "../../shared/api/client";
 import { ProjectHeader, type Lens } from "../project/ProjectHeader";

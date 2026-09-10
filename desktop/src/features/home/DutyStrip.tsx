@@ -1,11 +1,7 @@
-// The dead-duty strip (#5688, folded into the Usage card): Home wears a red strip while the
-// hub flags the duty seat dark — "nobody is watching the bus" must be visible on the one
-// screen that claims to show the fleet at a glance, not buried in a log. The native
-// notification fires ONLY on the healthy→dark edge the app observed (dutyDarkEdge), once per
-// episode — a first read that is already dark is hours-old news and stays silent.
-//
-// The read is the hub's /health duty block, per the contract: "the /health duty read for the
-// Home strip stands as written."
+// The dead-duty strip (#5688, in the Usage card): Home wears a red strip while the hub flags the duty
+// seat dark. The native notification fires ONLY on the healthy→dark edge the app observed
+// (dutyDarkEdge), once per episode; a first read that is already dark stays silent. The read is
+// the hub's /health duty block, per the contract.
 import { useEffect, useRef, useState } from "react";
 import { HubClient } from "../../shared/api/client";
 import { notifyDutyDark } from "../../shared/notify";

@@ -1,8 +1,5 @@
-// The Files column's open/closed state, as a working preference.
-//
-// Whether you want the file tree visible is a choice that outlives one launch, so it persists to
-// localStorage — but the I/O boundary stays here, not in the shell. Passing the store in (rather
-// than reading the global) keeps the toggle/persist logic pure and testable under node.
+// The Files column's open/closed state, persisted to localStorage as a working preference. The
+// store is passed in, so the toggle/persist logic stays pure and testable under node.
 export interface FilesColumnStore {
   getItem(key: string): string | null;
   setItem(key: string, value: string): void;

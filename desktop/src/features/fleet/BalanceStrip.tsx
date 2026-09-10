@@ -1,11 +1,7 @@
-// The fleet status bar — the app's FOOTER, to the Orca standard (#5570, the operator's
-// screenshot is the binding spec): real brand marks, a micro progress bar, and per-window
-// "N% used <time-left>" segments, including model-scoped limits ("37% used Fable") and
-// Codex's real windows. Values read at full text brightness; marks and separators stay
-// muted; LOW/LOCKED carry the status tints. A failed fetch keeps the last known values with
-// the bar dimmed — never an error banner — and the trailing refresh control re-reads the
-// snapshot on demand. Data rides the MACHINE-LOCAL hub by design (balances/profile are files
-// on this machine; the snapshot the CLI pushes there is cheap to read).
+// The fleet status bar, the app's FOOTER to the Orca standard (#5570): real brand marks, a micro
+// progress bar, per-window "N% used <time-left>" segments including model-scoped limits. A failed
+// fetch keeps the last values with the bar dimmed, never an error banner. Data rides the
+// MACHINE-LOCAL hub by design (balances/profile are files on this machine).
 import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { RefreshCw } from "lucide-react";
@@ -16,11 +12,9 @@ import { UsagePopover } from "./UsagePopover";
 
 const LOCAL_HUB = "http://127.0.0.1:4477";
 const REFRESH_MS = 5 * 60 * 1000;
-// Semi-live contract (operator, 2026-08-30: "unless it's live or semi-live, it's useless"):
-// a snapshot older than this triggers a REAL provider re-fetch through the CLI on the next
-// tick — so the bar is never more than ~10 minutes behind reality, without per-minute
-// provider polling (the Claude OAuth usage endpoint 429s under real polling; Orca's
-// statusline sidechannel is the true-live v2, noted in RESEARCH-orca.md).
+// Semi-live contract (operator: "unless it's live or semi-live, it's useless"): a snapshot older
+// than this triggers a REAL provider re-fetch through the CLI on the next tick, without per-minute
+// polling (the Claude OAuth usage endpoint 429s under real polling; RESEARCH-orca.md).
 const REFETCH_AFTER_MS = 10 * 60 * 1000;
 
 export function BalanceStrip({ client }: { client: HubClient }) {

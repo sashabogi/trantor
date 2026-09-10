@@ -1,9 +1,6 @@
-// Presence, defined ONCE. Every surface that says "live" must mean the same thing: the hub's
-// heartbeat fires on PostToolUse, so a FRESH lastSeen means "actively calling tools", a stale-but-
-// recent one means idle-at-the-prompt, and past the hub's online window the session is gone. The
-// Agents view had this locally; the board needs it too (a DOING card is only believably in motion
-// when its assignee is actually alive), and two copies of "what counts as live" is how the app and
-// the board would drift apart.
+// Presence, defined ONCE: the hub's heartbeat fires on PostToolUse, so a FRESH lastSeen means calling
+// tools, a stale-but-recent one means idle-at-the-prompt, and past the online window the session is
+// gone. Shared by the Agents view and the board so "what counts as live" cannot drift.
 import { useEffect, useState } from "react";
 import type { HubClient, Peer } from "./api/client";
 

@@ -1,9 +1,6 @@
 // @vitest-environment happy-dom
-//
-// #6005: an assistant reply that is markdown renders AS markdown — real <ul>/<li>, <strong>,
-// <code>/<pre> nodes — and never shows the literal "**" / "- " syntax that sent the operator to
-// the terminal. The fixture is shaped like a real orchestrator reply (a card-style summary the
-// morning builds actually produce).
+// #6005: an assistant reply that is markdown renders AS markdown (real <ul>/<li>, <strong>, <code>)
+// and never shows the literal "**" / "- " syntax. The fixture is shaped like a real orchestrator reply.
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";

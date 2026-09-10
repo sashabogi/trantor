@@ -1,12 +1,7 @@
-// Chat panel preferences — the reading-comfort dials (#5522) and the terminal tray's folded
-// state (#5523), pure and persisted so the panel comes back as you left it.
-//
-// localStorage is the store AppShell already uses for this panel's open/dock state
-// ("trantor.chat.open", "trantor.chat.dock"); these are siblings under the same prefix. The
-// store is injected the way TerminalDeps injects the pane's reach — the functions default to
-// the DOM's own storage, and every reader is total: a missing, corrupted, foreign or REFUSING
-// store falls back to the default rather than to a crash or a silently wrong size. Storage is
-// a boundary; its bytes are decoded, never trusted.
+// Chat panel preferences: the reading-comfort dials (#5522) and the tray's folded state (#5523),
+// pure and persisted. localStorage siblings of AppShell's "trantor.chat.*" keys; the store is
+// injected, every reader is total (a missing, corrupted, foreign or REFUSING store falls back to
+// the default). Storage is a boundary; its bytes are decoded, never trusted.
 
 /** The two-method surface localStorage has always had, narrowed so tests (and any embedding)
  *  can supply a faithful stand-in instead of a mocked global. */

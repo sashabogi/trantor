@@ -1,14 +1,7 @@
-// The seat tab's state-to-visual mapping (#5890). The operator's ruling: a blue dot does not say
-// "working" — motion does. So: a turn in progress pulses the mark; blocked is amber and STILL
-// (attention without noise); idle is still and quiet; down/errored is still and shows the failure
-// colour.
-//
-// The STATE the tab is in comes from the raw status string it receives (see #5965): herdr's own
-// words (`working`/`busy`/`blocked`/`idle`) for a pane herdr can see, or the hub peer status the
-// runner now writes at every turn boundary (`working · <trigger>` / `idle` / `down:` / `errored:`)
-// — a runner-driven seat falls back to that hub status because herdr skips screen detection for
-// it. This file maps either vocabulary to the same visual contract.
-// Pure, so the whole visual contract is unit-tested.
+// The seat tab's state-to-visual mapping (#5890): a blue dot does not say "working", motion does.
+// A turn in progress pulses the mark; blocked is amber and STILL; idle is still; down/errored is
+// still in the failure colour. The state comes from herdr's own words or the hub status the runner
+// writes (#5965); this maps either vocabulary to the same contract. Pure.
 import { hubActivity, type SeatActivity } from "./seatActivity";
 
 export type SeatTabState = SeatActivity;

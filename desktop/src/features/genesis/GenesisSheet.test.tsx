@@ -1,11 +1,7 @@
 // @vitest-environment happy-dom
-//
-// The genesis sheet's two paths (#6120), proven against the REAL component: Blank is the default,
-// a paste anywhere that is not a text input selects From a brief and fills it, and the create
-// call carries a brief only on the brief path. The wake kickoff follows the path: BLANK_KICKOFF
-// for Blank, the #6112 review wording for From a brief. The tauri surface arrives through the
-// sheet's OWN deps seam (#6253) — a faithful in-memory invoke and a no-op drop channel — never a
-// module mock.
+// The genesis sheet's two paths (#6120) against the REAL component: Blank is the default, a paste
+// outside a text input selects From a brief, the create call carries a brief only on that path, and
+// the kickoff follows it. The tauri surface arrives through the sheet's OWN deps seam (#6253).
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";

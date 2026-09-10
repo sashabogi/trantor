@@ -1,8 +1,6 @@
-// FEED — the second lens. Same append-only log the BOARD is a projection of, shown as it happens:
-// cards, messages, presence, handoffs and gates in one stream. That is the whole point of the
-// 0.17.54 event-log work — one record, two views — so this deliberately does not filter down to
-// "chat". Chat is one type among several — which is exactly what the chips express: they narrow
-// the ONE stream, they never change what is in it.
+// FEED: the second lens. The same append-only log the BOARD projects, shown as it happens: cards,
+// messages, presence, handoffs and gates in one stream (one record, two views). The chips narrow
+// the ONE stream; they never change what is in it.
 import { useEffect, useMemo, useState } from "react";
 import type { HubClient, HubEvent } from "../../shared/api/client";
 import { CardDetail } from "../board/CardDetail";

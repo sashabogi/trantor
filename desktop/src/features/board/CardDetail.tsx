@@ -1,11 +1,6 @@
-// CardDetail — the drawer a card opens into, shared by BOARD and FEED. One card's full story:
-// status events and the bus messages that reference it (#<id>), interleaved chronologically —
-// the /card endpoint's thread derivation (invariant 3: threads are DERIVED, never stored).
-//
-// This exists because a board tile can only say WHAT state a card is in; the drawer says WHY —
-// the agent's own reports are in the messages, and the moves are in the events. Since the CARDLOG
-// contract, the card's own `log` (notes attached as it moved) leads as the STORY — the timeline
-// of events/messages follows as the supplement.
+// CardDetail: the drawer a card opens into, shared by BOARD and FEED. The card's own `log` leads as
+// the STORY (CARDLOG contract); the /card thread (events + messages referencing #<id>, derived, never
+// stored) follows as the supplement. A tile says WHAT state; the drawer says WHY.
 import { useEffect, useState } from "react";
 import { cardCode, openFileInEditor, openCode } from "../../shared/api/client";
 import type { Card, CardCode, HubClient, HubEvent, Message } from "../../shared/api/client";

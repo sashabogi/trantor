@@ -1,11 +1,5 @@
-// The project's file tree, in the sidebar, with git state on every row.
-//
-// This exists for the operator Sasha named as the audience: a developer who wants to SEE and TOUCH
-// the code rather than trust an agent's summary of it. So the tree's job is not navigation, it is
-// WITNESS — which files the crew is touching, right now, without asking anyone.
-//
-// The tree also supports create/rename/delete operations, all path-guarded so that
-// no operation can escape the project root.
+// The project's file tree, with git state on every row. Its job is WITNESS, not navigation: which
+// files the crew is touching, right now. Create/rename/delete are all path-guarded to the root.
 import { useCallback, useEffect, useState } from "react";
 import { ChevronDown, ChevronRight, File as FileIcon, Folder, Plus, Trash2, Pencil } from "lucide-react";
 import { projectFiles, createFile, deleteFile, renameFile, safePath, statusColor, statusLabel, type FileEntry } from "./fileApi";
@@ -122,8 +116,7 @@ function Row({ entry, depth, project, seat, onOpen, onRefresh, openPath, marks }
     <>
       <div
         className={`relative flex w-full items-center gap-1.5 rounded-md py-[3px] pr-2 text-left text-[12px] hover:bg-white/[0.04] ${
-          /* the OPEN file's row says so (2026-09-01, operator: "the picker doesn't even know
-             you selected it") — same treatment the sidebar gives the active project */
+          /* the OPEN file's row says so, the same treatment the sidebar gives the active project */
           !entry.dir && openPath === entry.path
             ? "bg-white/[0.07] font-medium text-[var(--color-tr-text)]"
             : "text-tr-muted"

@@ -1,11 +1,7 @@
 // @vitest-environment happy-dom
-//
-// #5993 — the working gate's belt. The pushed status stream can freeze on `working`, so the
-// chat re-seeds the status ONCE when the transcript says a turn ended (a `chat-rows` batch
-// carrying `turn_ended`) and once per `chat-session-changed`. The chat's tauri/herdr seams are
-// INJECTED through the ChatDeps prop (real interface — the same pattern TerminalPane's `deps`
-// uses), and the assertions count `orchestrator_status` invokes, so a missing seed, a duplicate,
-// or a polling loop all fail loudly.
+// #5993: the working gate's belt. The pushed status stream can freeze on `working`, so the chat
+// re-seeds ONCE per `turn_ended` batch and per `chat-session-changed`. The tauri/herdr seams are
+// INJECTED through ChatDeps; assertions count `orchestrator_status` invokes.
 import { act, useEffect } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -568,13 +564,9 @@ describe("orch-ask is the pending-card source (#6533)", () => {
   });
 });
 
-// #5993 — the regression: an open AskUserQuestion's tool_use block carries the question as
-// structured options, not a sentence, so the prose extractor (which only reads `kind === "text"`
-// blocks) saw an empty string and produced zero chips for the ask shape the orchestrator now
-// asks with most often. This mounts Chat with a REAL blocked-ask transcript (the same fixture
-// #6094's card renders from, above) and expects the suggestion row, not just the card, to show
-// the options — and a chip click to answer the SAME way the card's own button does: keystrokes
-// into the live pane, never a composer send.
+// #5993 regression: an open AskUserQuestion carries its question as structured options, and the prose
+// extractor produced zero chips. Mounts Chat with a REAL blocked-ask transcript and expects the
+// suggestion row to show the options, answering via keystrokes into the pane like the card does.
 describe("suggestion chips from an open AskUserQuestion (#5993)", () => {
   let host: HTMLDivElement;
   let root: Root;
@@ -617,19 +609,10 @@ describe("suggestion chips from an open AskUserQuestion (#5993)", () => {
   });
 });
 
-// #6094 REGRESSION (2026-09-05, 0.3.142): a real AskUserQuestion asked twice by the live
-// orchestrator rendered NOTHING in Chat — no card, no chips — though status correctly went
-// "blocked" (app-trace: "status: frame parsed=Some(\"blocked\")" for both asks). The hand-written
-// stub above (`askTurn`, a single turn holding exactly one block) never exercised the shape a
-// REAL transcript actually produces: Claude Code writes one JSONL row per content block (a
-// `thinking` row, then a separate `tool_use` row, sharing one message id), and decode_chat_lines
-// (lib.rs) turns each row into its OWN Turn — so a real backfill arrives as several consecutive
-// single-block assistant turns, not one turn with several blocks. This fixture is exactly that
-// shape: decoded (via the app's own decode_chat_lines_with_context_window) from the operator's
-// own transcript lines 7280-7313 of
-// ~/.claude/projects/-Users-sashabogojevic-development-trantor/2e1e3b96-ccf2-43a7-9ec5-4e5fe3f86acf.jsonl
-// (an earlier Bash call, a thinking block, then the AskUserQuestion tool_use — the drill the
-// operator ran to test 0.3.142 itself), truncated before the tool_result so the ask is still open.
+// #6094 REGRESSION: a real AskUserQuestion rendered NOTHING in Chat though status went "blocked".
+// Claude Code writes one JSONL row per content block, so a real backfill arrives as several
+// consecutive single-block assistant turns, not one turn with several blocks. This fixture is
+// decoded from the operator's own transcript, truncated before the tool_result so the ask is open.
 const REAL_ASK_TURNS = [
   { role: "user", blocks: [{ kind: "text", text: "check", tool: null, tool_id: null }] },
   {
@@ -756,13 +739,9 @@ describe("the transcript is history, not the pending-ask source (#6533)", () => 
   });
 });
 
-// Same real-shape data, but delivered the way the LIVE app actually delivers it: Chat already
-// mounted and idle (empty initial backfill), then the ask's rows arrive via "chat-rows" PUSH
-// events (spawn_chat_watcher's 300ms file tail) in two batches — [Bash, thinking] then
-// [AskUserQuestion] — followed by an "orch-status" push flipping status to blocked, exactly the
-// order app-trace showed live (rows land before the status push, since the transcript write
-// precedes herdr's own status flip). If the card only ever worked through the INITIAL backfill
-// path (applyBackfill) and not the PUSH path (applyRows), this is where it would show.
+// Same real-shape data, delivered the way the LIVE app delivers it: Chat mounted and idle, then the
+// ask's rows arrive via "chat-rows" PUSH in two batches, then an "orch-status" push flips to
+// blocked (rows land before the status push live). Proves the PUSH path (applyRows), not only backfill.
 describe("real transcript regression via the PUSH path (chat-rows then orch-status)", () => {
   let host: HTMLDivElement;
   let root: Root;
@@ -860,21 +839,10 @@ describe("real transcript regression via the PUSH path (chat-rows then orch-stat
   });
 });
 
-// #6094 REGRESSION, root cause: two concurrent orchestrator_chat backfills. Chat's mount effect
-// (line ~516) unconditionally calls sync() at the top and its OWN cleanup+re-run fires again the
-// instant `target` resolves from null to a real pane surface (normal: the panel looks for a pane
-// AFTER mounting, #5495) — so two sync() calls can be IN FLIGHT at once, BOTH dispatched while
-// seenRef.current is still 0 (the second fires before the first's promise has resolved and moved
-// the cursor). applyBackfill's own comment says a second answer "left after an earlier one landed
-// is entirely subsumed by it" — true only if the second call was DISPATCHED after the first
-// resolved. Here it was dispatched CONCURRENTLY with a stale after=0, and it happens to carry
-// MORE rows (the orchestrator kept writing while both fetches were in flight) — exactly the
-// live timeline: the ask was written seconds into the mount, while a second concurrent backfill
-// was still settling. When that later-resolving, stale-`after` call finally lands, `s.seen`
-// (already 29 from the first call) no longer matches its own captured `after` (0), so it takes
-// the "heal the cursor" branch and BUMPS `seen` straight to the newer total — discarding the
-// batch's `turns` entirely. The cursor now sits PAST the ask, so no future sync() ever re-fetches
-// it: the ask is gone for good, exactly matching "nothing rendered, ever" (not a transient race).
+// #6094 root cause: two concurrent orchestrator_chat backfills. The mount effect's sync() and its
+// re-run when `target` resolves (#5495) were both dispatched with a stale after=0; the later,
+// larger one hit the "heal the cursor" branch, bumped `seen` past the ask and dropped its turns,
+// so no future sync() ever re-fetched it.
 describe("concurrent backfill data loss (#6094 root cause, 2026-09-05)", () => {
   let host: HTMLDivElement;
   let root: Root;
@@ -892,13 +860,9 @@ describe("concurrent backfill data loss (#6094 root cause, 2026-09-05)", () => {
 
   it("does not lose the ask when a second concurrent backfill resolves after the first", async () => {
     type Resolver = (raw: string) => void;
-    // sync()'s own busy-guard (added alongside the retry work) now collapses what used to be a
-    // second genuinely concurrent dispatch into a deferred "pending" catch-up: the mount effect's
-    // re-run (target null -> live pane, #5495) calls sync() again while the first call is still
-    // in flight, but the guard just marks the want and returns immediately rather than reaching
-    // the backend a second time. So only ONE call is ever manually held open; the catch-up that
-    // fires once it resolves is the fix's own recovery re-sync — auto-answered immediately, from
-    // wherever its `after` says the cursor actually sits, the way the real backend would.
+    // sync()'s busy-guard collapses the second concurrent dispatch into a deferred "pending"
+    // catch-up, so only ONE call is held open here; the catch-up that fires on resolve is the
+    // recovery re-sync, auto-answered from wherever its `after` says the cursor sits.
     const manual: Resolver[] = [];
     let resolvePane: (() => void) | null = null;
 
@@ -969,20 +933,10 @@ describe("concurrent backfill data loss (#6094 root cause, 2026-09-05)", () => {
   });
 });
 
-// #6094 REAL-PATH REGRESSION (2026-09-05, ask drill on 0.3.144): the ask drill proved the card
-// path works once the surface is resolved and a blocked push arrives afterward — so the deeper
-// bug is in the mount/unmount plumbing itself. In every real failure, app-trace showed: chat_watch
-// generation 1, chat_unwatch, chat_watch generation 2 (an IMMEDIATE re-mount — target resolves
-// from null to a live pane, #5495 — normal and expected), then herdr's blocked emit, then
-// NOTHING from Chat. Root cause: the effect's cleanup used to read `watchGenerationRef.current`
-// SYNCHRONOUSLY at cleanup time. If `target` resolves fast enough that generation 1's OWN
-// chat_watch call has not resolved YET when its cleanup runs, that ref is still undefined, so
-// cleanup sent chat_unwatch the generation-LESS fallback — which the Rust side (chat_watchers_unwatch,
-// lib.rs) treats as "remove unconditionally, whatever is there", not "remove only if it's still
-// generation 1". If generation 2's chat_watch had by then already installed its OWN watcher under
-// the same key, this stale unconditional unwatch kills generation 2's Rust-side watcher too —
-// leaving generation 2's "orch-status" listener registered but with no thread left to ever push
-// it a frame: exactly the silence app-trace showed.
+// #6094 REAL-PATH REGRESSION: chat_watch gen 1, chat_unwatch, chat_watch gen 2 (target resolving
+// null → pane, #5495), then herdr's blocked emit, then NOTHING. Cleanup read the generation ref
+// SYNCHRONOUSLY before gen 1's chat_watch had resolved, sent the generation-less unwatch, and
+// killed gen 2's Rust watcher too, leaving a listener no thread would ever push a frame to.
 describe("chat_unwatch never sends a stale generation-less unwatch (#6094 real-path, 2026-09-05)", () => {
   let host: HTMLDivElement;
   let root: Root;
@@ -1070,12 +1024,9 @@ describe("chat_unwatch never sends a stale generation-less unwatch (#6094 real-p
     expect(unwatches[0].args).toMatchObject({ generation: 1 });
   });
 });
-// #6094, 0.3.148/0.3.149 real-path bounce: the live push emitted "ok=true" on the Rust side
-// (confirmed via app-trace), with NOT ONE "chat status ...: push=..." line following it — the
-// listener's own silent `catch {}` and silent "project didn't match" fall-through were both
-// indistinguishable from "the event never arrived at all", leaving zero evidence for the one
-// push that mattered. This proves every arrival now traces itself, naming which of the outcomes
-// happened instead of vanishing silently.
+// #6094 real-path bounce: the live push emitted ok=true on the Rust side with no "chat status"
+// line following; the listener's silent catch and project-mismatch fall-through left zero
+// evidence. Every arrival now traces itself, naming which outcome happened.
 describe("orch-status listener traces every arrival, never silently (#6094, 2026-09-05)", () => {
   let host: HTMLDivElement;
   let root: Root;
@@ -1176,17 +1127,9 @@ describe("orch-status listener traces every arrival, never silently (#6094, 2026
     expect(appLogLines.some(l => l.includes("did not match") || l.includes("FAILED to parse"))).toBe(false);
   });
 });
-// #6094 root cause (2026-09-05, 0.3.149 real-panel drill): decodeOrchStatus (edc9558) fixed the
-// listener, so a live blocked push now commits status and openQuestion() DOES find the ask in
-// chat.turns — no "blocked with no open ask" trace fires, exactly what the operator saw. Yet no
-// card appeared. batch() (line ~61) groups every CONSECUTIVE `kind: "tool"` block into one array,
-// and ToolRun collapses any array longer than 1 behind a closed-by-default "N tools" toggle. The
-// REAL_ASK_TURNS fixture above never hit this: a `thinking` block sits between the Bash call and
-// the AskUserQuestion, breaking the run into two singletons. A turn where a tool call is followed
-// DIRECTLY by an AskUserQuestion — no thinking, no text in between, the shape an orchestrator
-// produces when it checks something and then asks in the same breath — batches them into ONE
-// array of length 2, and the ask (the one thing in the transcript the operator must act on) hides
-// behind a collapsed bar reading "2 tools" until someone thinks to click it open.
+// #6094 root cause, second half: batch() groups every CONSECUTIVE tool block into one array and
+// ToolRun collapses arrays longer than 1 behind a closed "N tools" toggle. A tool call followed
+// DIRECTLY by an AskUserQuestion (no thinking between) hid the ask behind "2 tools".
 const ADJACENT_ASK_TURNS = [
   { role: "user" as const, blocks: [{ kind: "text" as const, text: "check", tool: undefined, tool_id: undefined }] },
   {
@@ -1262,10 +1205,9 @@ describe("an ask adjacent to another tool call in the same turn (#6094, 2026-09-
   });
 });
 
-// #6668 — the handoff offer needs a LIVE agent in the pane. 2026-09-07 12:35: the crebral-health
-// Chat opened onto a pane whose claude had died at 12:16; the gauge read the dead session's
-// transcript at 92% and the unattended path fired a chain that would have TERMed the pane's zsh.
-// Banner, countdown and auto-fire all hang off `bannerOffered`; these drills pin it to liveness.
+// #6668: the handoff offer needs a LIVE agent in the pane. A Chat once opened onto a pane whose
+// claude had died, read the dead transcript at 92%, and fired a chain that would have ended the
+// pane's shell. Banner, countdown and auto-fire hang off `bannerOffered`; pinned to liveness.
 describe("the handoff offer needs a live agent in the pane (#6668)", () => {
   const OVER_META = {
     model: "claude-fable-5-1", version: "2.1.257", branch: "main",

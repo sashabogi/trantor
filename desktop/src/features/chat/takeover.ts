@@ -1,10 +1,6 @@
-// TAKEOVER — the locked composer's one action, pure on purpose (#5495 / #5479).
-//
-// The inventory is Rust's `project_sessions` (docs/CONTRACT-chat-streaming.md v5): process +
-// filesystem truth, no heartbeats, no hub. From it this derives THE one action a disabled
-// composer offers — the #5477 doctrine extended to the biggest control: a locked state that
-// names its moment instead of pretending emptiness. The branches mirror the CLI chain
-// (`trantor takeover`) exactly, so the button can never offer what the chain would refuse.
+// TAKEOVER: the locked composer's one action, pure on purpose (#5495 / #5479). The inventory is
+// Rust's `project_sessions` (docs/CONTRACT-chat-streaming.md v5): process + filesystem truth. The
+// branches mirror `trantor takeover` exactly, so the button can never offer what the chain refuses.
 import { invoke } from "@tauri-apps/api/core";
 
 /** One row of the session inventory. `kind` is the source of evidence: "pane" = the hosted

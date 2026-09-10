@@ -1,14 +1,7 @@
-// The sub-agent roll-up: ONE quiet line at the foot of a lane standing in for every cc-subagent
-// card in it. Collapsed by default, because these are the machine's own bookkeeping — on
-// crebral-health they are 412 of the done lane's tiles, and as flat siblings they buried every
-// piece of real work on the board.
-//
-// It renders in two places. Under a focus card (`variant="nested"`) it is that session's own
-// sub-agents, joined on `parent === cc`. At the head of a lane (`variant="lane"`) it is the
-// fallback for everything that could not be resolved to a session — a pre-0.17.70 card with no
-// `cc` to join to, or a rolling card the hub collapsed across many sessions. Board.tsx has the
-// join. Nesting takes a card out of its lane, so the child rows carry their own STATUS colour:
-// lane position is no longer saying it for them.
+// The sub-agent roll-up: ONE quiet line standing in for every cc-subagent card, collapsed by default
+// (machine bookkeeping that buried real work as flat siblings). `variant="nested"` under a focus
+// card (joined on `parent === cc`); `variant="lane"` for everything Board.tsx could not resolve.
+// Nested rows carry their own STATUS colour, since lane position no longer says it.
 import { useState } from "react";
 import type { Card } from "../../shared/api/client";
 import { cleanTitle } from "../../shared/Avatar";

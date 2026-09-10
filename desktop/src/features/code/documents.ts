@@ -1,13 +1,7 @@
-// The editor's document store (#5938): the state that must OUTLIVE the lens, held at module
-// level and keyed by project. AppShell unmounts the Code surface on every lens switch, and until
-// this store existed the operator's tabs, drafts, and dirty flags died with it. Files becomes a
-// VIEW over this store — it reads on mount, writes on every change, and does nothing on unmount.
-//
-// Composition, not duplication: tab-list operations still go through the PURE helpers in
-// codeTabs.ts (openInTabs/pin/close/markDirty/markExternalMutation), and the disk-conflict
-// decision stays in tabGuard.ts. This file only OWNS the maps — tabs, activeKey, and per-tab
-// { draft, disk, baseSignature, loaded } — exactly the refs Files used to hold (draftsRef,
-// diskRef, sigRef, loadedKeyRef) plus the tabs state.
+// The editor's document store (#5938): state that must OUTLIVE the lens (AppShell unmounts the Code
+// surface on every lens switch). Files is a VIEW over this store. Composition, not duplication:
+// tab operations stay in codeTabs.ts and the conflict decision in tabGuard.ts; this file OWNS the
+// maps (tabs, activeKey, per-tab { draft, disk, baseSignature, loaded }).
 import type { CodeTab } from "./codeTabs";
 
 export type DocumentState = {
@@ -103,12 +97,9 @@ export function keptDraft(project: string, key: string): { draft: string; baseSi
   return { draft: d.draft, baseSignature: d.baseSignature };
 }
 
-/** Whether a lens may write its local draft back to the store as the tab's kept work (#5938).
- *  Three things must be true: there is an active document, it finished loading (a draft without a
- *  completed load is a loading screen), and the VIEW has hydrated its local draft from that very
- *  document. The third leg is the 2026-09-02 empty-editor regression: on remount the effect that
- *  opens the tree-selected path ran before the effect that hydrates the local draft, so the stash
- *  wrote the initial "" over a 222,668-character kept draft, and reload then let "" win. */
+/** Whether a lens may write its local draft back as the tab's kept work (#5938): an active
+ *  document, finished loading, and a VIEW that hydrated from that very document. The third leg
+ *  once let a remount stash the initial "" over a kept draft. */
 export function canStashDraft(args: { activeKey: string | null; loaded: boolean; hydratedKey: string | null }): boolean {
   return !!args.activeKey && args.loaded && args.hydratedKey === args.activeKey;
 }

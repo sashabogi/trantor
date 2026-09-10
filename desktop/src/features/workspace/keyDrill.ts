@@ -1,10 +1,7 @@
-// #6317's built-app acceptance drill. TRANTOR_KEY_DRILL=post|throw makes Rust emit `key-drill`
-// after boot; this focuses nothing, then the terminal pane, then any other textarea, and has Rust
-// post a real right-arrow keyDown/keyUp through AppKit's event queue for each (src-tauri/src/
-// key_drill.rs). TRANTOR_KEY_DRILL_PROJECT=<project name> rides in the payload: the drill opens
-// that project from the sidebar and switches to its Workspace lens first, so a terminal pane is
-// in the DOM for pass 2 (the 09-07 run on 0.3.159 skipped it: no project was open). The seat
-// writes this drill but never launches it. The orchestrator builds and runs it.
+// #6317's built-app acceptance drill. TRANTOR_KEY_DRILL=post|throw makes Rust emit `key-drill` after
+// boot; this focuses nothing, then the terminal pane, then any other textarea, and has Rust post a
+// real right-arrow through AppKit's queue for each (key_drill.rs). TRANTOR_KEY_DRILL_PROJECT names
+// the project to open first so a terminal pane is in the DOM. The orchestrator builds and runs it.
 import { invoke, type InvokeArgs } from "@tauri-apps/api/core";
 import { selectProject, type AskDrillDeps } from "../chat/askDrill";
 

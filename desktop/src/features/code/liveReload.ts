@@ -14,12 +14,8 @@ export type FileStat = {
 export type ReloadDecision = "reload" | "conflict" | "none";
 
 /**
- * Decide between silently reloading the open file and warning the operator.
- *
- * - no fresh stat, or no baseline yet: nothing to act on (the first poll only sets the baseline)
- * - stat unchanged: nothing to do
- * - stat changed and the editor holds unsaved work: conflict, never clobber the operator's edits
- * - stat changed and the editor is clean: reload silently
+ * Silently reload the open file or warn: no baseline or unchanged stat means nothing to do; a
+ * changed stat with unsaved work is a conflict (never clobber); changed and clean reloads silently.
  */
 export function decideReload(args: {
   /** whether the editor holds unsaved work a reload would clobber */

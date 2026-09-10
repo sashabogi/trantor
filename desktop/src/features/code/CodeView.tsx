@@ -1,16 +1,7 @@
-// A real editor, not a text box.
-//
-// Monaco replaces CodeMirror (#5790): literal VS Code editing — the engine Orca's editor
-// surfaces run on — bundled locally through vite workers with no CDN (the wiring contract
-// lives in monacoSetup.ts). The component contract is unchanged from the CodeMirror build:
-// same props, path is the editor's identity (a rebuild keeps the cursor out of trouble), a
-// new value for the same path replaces the text in place, ⌘S saves.
-//
-// No language server (#6437, following Orca's own shape): a month of custom LSP glue (start
-// caps, client reuse, root-key matching) produced a steady stream of #5857-class failures and
-// the operator still had no completions. Suggestions are Monaco's own built-ins — quick
-// suggestions, trigger characters, word-based — same as any file with no semantic service.
-// Ghost text (registerGhostTextProvider) is unrelated and unchanged.
+// A real editor: Monaco (#5790), bundled locally via vite workers (monacoSetup.ts). Same props as the
+// CodeMirror build: path is the editor's identity, a new value for the same path replaces in
+// place, ⌘S saves. No language server (#6437): suggestions are Monaco's built-ins. Ghost text
+// (registerGhostTextProvider) is unrelated.
 import { useEffect, useRef } from "react";
 import * as monaco from "monaco-editor";
 import { monacoLanguageFor } from "./editorLanguage";
@@ -88,11 +79,8 @@ export function CodeView({ value, path, editable, onChange, onSave, project, sea
     }
     editorRef.current = ed;
     modelRef.current = model;
-    // Setup is over the moment the editor is up (#5938, the third face, 0.3.114): this effect
-    // re-runs when `path` changes, and nothing else cleared the guard when the value prop did
-    // not change afterwards — every keystroke was then muted, the store never saw the typed
-    // text, and the next remount resumed the disk text. The value effect still raises and lowers
-    // the guard around its own push.
+    // Setup is over the moment the editor is up (#5938): this effect re-runs on `path`, and nothing
+    // else cleared the guard, so every keystroke was muted. The value effect raises and lowers it.
     setupRef.current = false;
     return () => {
       sub.dispose();
@@ -109,11 +97,9 @@ export function CodeView({ value, path, editable, onChange, onSave, project, sea
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [path, editable, project, seat]);
 
-  // A new document for the same path (saved, reloaded, switched source) replaces the text
-  // without tearing the editor down. pushEditOperations keeps the undo stack, so a live reload
-  // remains undoable — the silent-reload half of the liveReload rule. One skip (#5857 bounce):
-  // while a resumed tab is still loading, the prop is "" and the model holds the STORE's resumed
-  // draft — pushing "" here would erase it. That artifact never applies; setup stays on.
+  // A new document for the same path replaces the text without tearing the editor down;
+  // pushEditOperations keeps the undo stack. One skip (#5857 bounce): while a resumed tab is still
+  // loading the prop is "" and the model holds the STORE's draft; pushing "" would erase it.
   useEffect(() => {
     const model = modelRef.current;
     if (!model) return;

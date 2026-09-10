@@ -1,12 +1,7 @@
-// AGENTS — the roster. Humans and agents are both peers on the bus; the difference is `kind`, not
-// a separate concept. This is the view Buzz got right and nobody else has: which harnesses exist,
-// which are alive, and what each is doing right now — and Buzz's Agents screen is the design
-// reference for the whole app, so THIS view carries its language hardest: a card grid with big
-// colorful avatars for the harnesses, quiet rows for the live sessions.
-//
-// Presence is derived, not stored: the hub's heartbeat fires on PostToolUse, so a FRESH lastSeen
-// means "actively calling tools" and a stale one means idle-at-the-prompt. That distinction is the
-// whole reason the wake ladder exists, so it is surfaced here rather than flattened to a dot.
+// AGENTS: the roster. Humans and agents are both peers; the difference is `kind`. A card grid with
+// big brand avatars for the harnesses, quiet rows for the live sessions (Buzz's Agents screen is
+// the design reference). Presence is derived: a FRESH lastSeen means calling tools, a stale one
+// means idle-at-the-prompt, and that distinction is surfaced, not flattened to a dot.
 import { useEffect, useState } from "react";
 import { doctor, type DoctorReport } from "../../shared/api/client";
 import type { HubClient, Peer } from "../../shared/api/client";

@@ -1,20 +1,7 @@
-// Talking to the orchestrator, as a conversation.
-//
-// The session runs in a terminal — that is what keeps slash commands, plan mode and everything else
-// the harness does. But a terminal is a bad place to READ a conversation, so this renders the
-// transcript claude writes anyway and types into the pane the way a person would. Orca calls the
-// same approach "native chat"; this is the same architecture with our own decoding.
-//
-// The first version dropped tool calls to avoid a wall of text. That was the wrong call: what an
-// agent DID is most of what you want to see. They render as collapsed cards instead, and a result
-// fills its card in when it arrives, which is usually a later row than the call.
-//
-// Liveness is row-level (#5475): the watcher (#5474) pushes each transcript row as it lands, so a
-// turn in progress renders progressively instead of appearing on the next 2s poll. The whole state
-// machine lives in streaming.ts so the cursor rules are testable without a window; this file is
-// only the wiring — backfill once via orchestrator_chat, then chat_watch + the two events, with
-// the old poll kept as the transport when the watcher is not offered (older build, or no session
-// behind the pane yet).
+// Talking to the orchestrator, as a conversation: the session runs in a terminal (slash commands,
+// plan mode), this renders the transcript claude writes and types into the pane. Tool calls render
+// as collapsed cards; a result fills its card in when it lands. Liveness is row-level (#5475): the
+// watcher (#5474) pushes each row. The state machine is streaming.ts; this file is the wiring.
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent as RPointerEvent } from "react";
 import { invoke, type InvokeArgs } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
@@ -44,11 +31,9 @@ import {
 import { WAKE_PENDING_LINE, WAKE_OUTCOME_MS } from "../genesis/wakeRow";
 import { wakeProgressText, WAKE_PROGRESS_EVENT, type WakeProgress } from "../genesis/wakeProgress";
 
-/** "pane" = hosted inside the ModePane (#5841): the pane owns width, height, and the mode
- *  rail, so the chat brings no column chrome of its own — no fixed width, no resize strip, no
- *  dock/hide buttons. Rendering the dock chrome inside the pane made the chat taller than its
- *  host (h-full + rail + footer) and wider than 440 (the saved dock width), so focusing the
- *  composer scrolled the rail out of the clipped container: "no way to change it back". */
+/** "pane" = hosted inside the ModePane (#5841): the pane owns width, height and the mode rail, so
+ *  the chat brings no column chrome (no fixed width, resize strip, or dock buttons); rendering
+ *  dock chrome inside the pane once scrolled the rail out of the clipped container. */
 export type Dock = "right" | "bottom" | "pane";
 
 /** chat_watch's return shape (#6113): `current` is the tail cursor at seed time, `generation` is
@@ -90,13 +75,8 @@ function transcriptAnswered(ask: OrchAsk, chat: ChatState): boolean {
 /** Consecutive turns from the same speaker are ONE thing to a reader. The transcript splits them
  *  every time a tool runs, which is why the panel showed "ORCHESTRATOR" stacked above every card. */
 /** Consecutive tool blocks become one array; everything else passes through. An AskUserQuestion
- *  never joins (or absorbs) a neighbour (#6094, 2026-09-05): ToolRun collapses any array longer
- *  than 1 behind a closed-by-default "N tools" toggle, and an orchestrator that checks something
- *  then asks in the same breath — no thinking/text block between the two tool calls — used to
- *  batch its ask right into that collapsed run, hiding the one card the operator must act on
- *  behind a bar that read "2 tools". Keeping every ask its own singleton routes it through
- *  ToolRun's `blocks.length === 1` path straight to AskCard, regardless of what tool call sits
- *  next to it. */
+ *  never joins a neighbour (#6094): ToolRun collapses arrays longer than 1 behind a closed toggle,
+ *  which hid the one card the operator must act on behind "2 tools". */
 function batch(blocks: Block[]): Array<Block | Block[]> {
   const out: Array<Block | Block[]> = [];
   const isAsk = (b: Block) => b.kind === "tool" && b.tool === "AskUserQuestion";
@@ -184,13 +164,10 @@ function ToolCard({ block, result }: { block: Block; result?: ToolResult }) {
   );
 }
 
-/** The question card (#6094): an AskUserQuestion tool_use rendered as something the operator can
- *  actually answer, instead of a collapsed "AskUserQuestion running" row. Answered (once the
- *  transcript's tool_result lands — never asserted locally) shows the recorded choice, same as
- *  ToolCard shows any other finished call; open shows buttons per option, a multi-select tray
- *  when the question asks for one, and an Other free-text row. A click writes keystrokes into
- *  the pane hosting that event's session rather than claiming success itself — the card reflects
- *  what the transcript says happened. */
+/** The question card (#6094): an AskUserQuestion rendered as something the operator can answer.
+ *  Answered (once the transcript's tool_result lands, never asserted locally) shows the choice;
+ *  open shows buttons, a multi-select tray, and an Other row. A click writes keystrokes into the
+ *  pane hosting that session; the card reflects what the transcript says happened. */
 function AskCard({ tool_id, questions, result, target, visible = true, onAnswer }: {
   tool_id: string | null; questions: AskQuestion[]; result?: ToolResult;
   target: string | null; visible?: boolean;
@@ -358,11 +335,8 @@ function Thinking({ text }: { text: string }) {
 }
 
 /** The window's early warning, worn as a choice (#5509 W1): at the gauge's red threshold the
- *  panel offers the handoff instead of just colouring a bar. [Hand off now] drives the same-pane
- *  replacement through the Tauri command — busy while it runs, its failure shown HERE, because a
- *  handoff that failed silently is a trap set for the next wall. Success stays quiet: the
- *  session-changed flow already draws the "session continued" divider, and the composer's
- *  liveness gate covers the gap while the pane restarts. */
+ *  panel offers the handoff. [Hand off now] drives the same-pane replacement; its failure is
+ *  shown HERE (a silent failure is a trap for the next wall). Success stays quiet. */
 function HandoffBanner({ frac, busy, error, onKeepGoing, onHandOffNow }: {
   frac: number;
   countdown: HandoffCountdown;   // still passed by the caller (drives the expiry auto-fire upstream); the banner no longer shows a clock (#6528)
@@ -409,12 +383,9 @@ function HandoffBanner({ frac, busy, error, onKeepGoing, onHandOffNow }: {
 // The window filling up (#5508) moved to the composer (#5521) — the gauge lives beside the
 // model/effort dials that spend the window it measures. Its implementation moved with it.
 
-// The reading size's units (#5522): the chat root carries the step as a `--chat-scale` custom
-// property, and the TRANSCRIPT's text sizes below are literal `calc()` Tailwind classes over
-// it — literal, NOT helper-built, because Tailwind only emits classes its scanner can read.
-// The header, composer and tray chrome keep their designed sizes, so comfort tuning never
-// reflows the controls. Scales stay on text: spacing and bubbles' padding are layout, not
-// reading size.
+// The reading size's units (#5522): the chat root carries `--chat-scale`, and the TRANSCRIPT's
+// text sizes are literal `calc()` Tailwind classes over it (Tailwind only emits classes its
+// scanner can read). Chrome keeps its designed sizes; scales stay on text, not spacing.
 
 // The tray mounts the Workspace lens's live pane WATCHING ONLY (#5523). TerminalPane is not
 // this tree's to edit, so the keyboard is severed at the deps seam it already exposes:
@@ -499,13 +470,9 @@ export function Chat({ project, sessionId, dock, onDock, onClose, deps = DEFAULT
   // decides whether the composer is worth typing into (#5477) — a registered pane whose agent
   // exited must not look like a conversation.
   const [status, setStatus] = useState("unknown");
-  // #6146 — status has two sources racing (a one-shot seed and a stream of pushes), and a late
-  // seed stomping a fresher push is exactly the bug: pr-os's pane pushed "working" while the
-  // composer stayed disabled on a seed that resolved to "none" after the fact. arbiterRef mirrors
-  // `status` but additionally remembers the seq of whichever event produced it, so a late arrival
-  // can be told apart from a genuinely newer one (statusArbiter.ts). seqRef mints that seq: a
-  // seed's is assigned at DISPATCH (before its promise settles), a push's at ARRIVAL — never at
-  // resolution — so ordering reflects when the truth was actually known, not when React heard back.
+  // #6146: status has two sources racing (a one-shot seed and pushes), and a late seed stomping a
+  // fresher push is the bug. arbiterRef remembers the seq of the event that produced `status`;
+  // seqRef mints it at DISPATCH for a seed and at ARRIVAL for a push, never at resolution.
   const arbiterRef = useRef<ArbiterState>(initialArbiterState);
   const seqRef = useRef(0);
   const nextSeq = useCallback(() => seqRef.current++, []);
@@ -659,17 +626,10 @@ export function Chat({ project, sessionId, dock, onDock, onClose, deps = DEFAULT
     };
   }, [history, project, invokeFn, listenFn]);
 
-  // #6094, 0.3.146 — sync() can be asked for concurrently from several INDEPENDENT sources: the
-  // chat_watch effect's own unconditional call at mount, its "watch.current > seenRef.current"
-  // gap-check, a chat-rows cursor-mismatch resync, and a plain handoff-backward restart. None of
-  // them know about each other. A large real transcript's
-  // decode round trip (read_chat_snapshot walks the whole file twice) can outlast a 300ms retry
-  // interval, so two independently-dispatched calls both capture the same stale cursor and each
-  // looks "stale" to the other once it resolves — re-triggering forever without ever reaching
-  // the success path that absorbs a batch (observed on the real transcript: 15 retries over 8s,
-  // never found an ask that had been on disk the whole time). One fetch in flight at a time,
-  // globally: a request that arrives mid-flight marks `pending` and returns immediately; the
-  // in-flight call's own completion picks it up.
+  // #6094: sync() can be asked for concurrently from several independent sources, and a large
+  // transcript's decode can outlast the 300ms retry interval, so two calls captured the same
+  // stale cursor and re-triggered forever. One fetch in flight at a time, globally: a request
+  // arriving mid-flight marks `pending` and the in-flight call's completion picks it up.
   const syncBusyRef = useRef(false);
   const syncPendingRef = useRef(false);
   /** Fetch everything past the cursor and fold it in. This is the backfill, the mismatch repair
@@ -704,17 +664,10 @@ export function Chat({ project, sessionId, dock, onDock, onClose, deps = DEFAULT
           syncRef.current();
           return;
         }
-        // #6094 — a second sync() can dispatch before this one resolves: the chat_watch effect
-        // tears down and re-runs the instant `target` moves from null to a live pane (#5495), and
-        // its own unconditional sync() at the top races whatever this call already had in
-        // flight, both captured with the SAME stale `after`. Landing this call while the OTHER
-        // one already moved the cursor forward is not automatically "subsumed" — applyBackfill's
-        // own mismatch guard only bumps the cursor and drops `fresh` untouched, which is correct
-        // when this call saw nothing past what already landed, but silently discards live rows
-        // (an AskUserQuestion, 2026-09-05 — status went blocked, nothing rendered, ever, because
-        // the cursor jumped past the ask and no future sync() ever asks for it again) when this
-        // call actually reached further than the other one did. Re-sync from wherever the cursor
-        // NOW sits instead of guessing how to merge two overlapping reads.
+        // #6094: a second sync() can dispatch before this one resolves (the chat_watch effect re-runs
+        // when `target` resolves, #5495), both with the SAME stale `after`. applyBackfill's mismatch
+        // guard drops `fresh`, which silently discarded live rows when this call reached further.
+        // Re-sync from wherever the cursor NOW sits instead of merging two overlapping reads.
         if (seenRef.current !== after) {
           if (b[2] > seenRef.current) syncRef.current();
           return;
@@ -740,19 +693,10 @@ export function Chat({ project, sessionId, dock, onDock, onClose, deps = DEFAULT
     const offs: Array<() => void> = [];
     let badFrames = 0;
     setStreamed(false);
-    // #6094 — the cleanup below must echo THIS instance's OWN generation back to chat_unwatch,
-    // never a snapshot taken too early: if `target` resolves (null -> a live pane, #5495) fast
-    // enough that this effect tears down before its OWN chat_watch call has resolved, reading a
-    // ref synchronously at cleanup time finds it still undefined even though a Rust-side watcher
-    // for THIS instance may already exist — sending chat_unwatch the generation-less fallback,
-    // which removes WHATEVER entry is live for the key unconditionally (#6113's own
-    // "unconditional-removal" description). If the next mount's chat_watch has by then already
-    // installed ITS watcher under the same key, this stale unconditional unwatch kills it too —
-    // leaving a live "orch-status" listener with no Rust thread left to ever push it a frame
-    // again (silent from then on: no backfill call, no trace, nothing — the 09-05 18:37 real-path
-    // failure). `generation` resolves to this instance's own chat_watch answer (or undefined if
-    // it never got one), and cleanup AWAITS it — so the unwatch it sends is always this
-    // instance's true identity, never a guess.
+    // #6094: cleanup must echo THIS instance's OWN generation back to chat_unwatch, never a ref read
+    // too early: torn down before its own chat_watch resolved, it sent the generation-less fallback,
+    // which removes WHATEVER entry is live (#6113) and killed the next mount's watcher. `generation`
+    // resolves to this instance's chat_watch answer, and cleanup AWAITS it.
     let resolveGeneration: (g: number | undefined) => void = () => {};
     const generationPromise = new Promise<number | undefined>(resolve => { resolveGeneration = resolve; });
     // The contract keeps the initial whole-file read on orchestrator_chat; the watcher takes over
@@ -761,33 +705,22 @@ export function Chat({ project, sessionId, dock, onDock, onClose, deps = DEFAULT
     sync();
     void (async () => {
       try {
-        // #6146 — the "orch-status" listener is registered, and its registration AWAITED, BEFORE
-        // chat_watch is invoked below. chat_watch is what spawns the Rust status watcher thread
-        // (spawn_status_watcher, lib.rs), and that thread emits its first frame within
-        // microseconds of chat_watch returning — the same event-registration race fixed for the
-        // LSP transport (lspTransport.ts's TauriMessageReader). A listener wired up AFTER the
-        // invoke can miss that very first push outright; the bounded re-seed schedule below is
-        // the belt for whatever this ordering fix still lets slip through.
+        // #6146: the "orch-status" listener is registered and AWAITED before chat_watch is invoked:
+        // the Rust status watcher emits its first frame within microseconds of chat_watch returning
+        // (the same race lspTransport.ts hit). The re-seed schedule below is the belt.
         if (!history) {
           offs.push(await listenFn<OrchStatusRaw>("orch-status", ev => {
-            // #6094, 0.3.148/149 — the LIVE push emitted "ok=true" on the Rust side (confirmed
-            // via app-trace) with NOT ONE "chat status ...: push=..." line following it — meaning
-            // commitStatus was never even called, and this listener's own silent `catch {}` and
-            // silent "project didn't match" fall-through were both indistinguishable from "the
-            // event never arrived at all". Every arrival now traces itself, so the next real
-            // bounce names exactly which of the four outcomes (dead listener / not-alive /
-            // parse failure / project mismatch) actually happened instead of leaving zero
-            // evidence for the one push that matters most (the one Chat never acted on).
+            // #6094: a live push once reached the Rust emitter and vanished here with no evidence (a
+            // silent catch and a silent project-mismatch fall-through). Every arrival now traces which
+            // of the four outcomes happened: dead listener, not-alive, parse failure, project mismatch.
             if (!alive) {
               void invokeFn("app_log", { line: `chat orch-status received but listener not alive: project=${project} raw=${ev.payload}` }).catch(() => {});
               return;
             }
             try {
-              // SAFETY: payload comes from our own Rust emitter (orch-status), and both fields
-              // are re-checked before use — a malformed payload falls through the guard or catch.
-              // The Rust emitter sends a serialized struct, which Tauri hands the listener as an
-              // OBJECT; only the tests ever sent a string. Parsing an object threw on every live
-              // frame (#6094, the 0.3.148 trace: "FAILED to parse ... raw=[object Object]").
+              // SAFETY: payload comes from our own Rust emitter (orch-status), and both fields are
+              // re-checked before use; a malformed payload falls through the guard or catch. Tauri
+              // hands the serialized struct over as an OBJECT (parsing it as a string threw, #6094).
               const p = decodeOrchStatus(ev.payload);
               if (p.project === project && p.status) {
                 commitStatus("push", nextSeq(), p.status);
@@ -867,11 +800,8 @@ export function Chat({ project, sessionId, dock, onDock, onClose, deps = DEFAULT
     return () => {
       alive = false;
       for (const off of offs) off();
-      // Echo back the generation THIS instance's OWN chat_watch resolved to (#6113, #6094) —
-      // awaited, never read from the ref synchronously: a mount torn down before its chat_watch
-      // answered must still learn its true generation before unwatching, or it sends the
-      // generation-less fallback and can kill a DIFFERENT (later) mount's live watcher instead of
-      // its own (see the comment above generationPromise's declaration).
+      // Echo back the generation THIS instance's OWN chat_watch resolved to (#6113, #6094), awaited,
+      // never read from the ref synchronously (see generationPromise above).
       void generationPromise.then(generation => {
         invokeFn("chat_unwatch", { project, sessionId: sessionId ?? null, generation: generation ?? null }).catch(() => {});
       });
@@ -885,14 +815,10 @@ export function Chat({ project, sessionId, dock, onDock, onClose, deps = DEFAULT
     return () => clearInterval(iv);
   }, [streamed, sync]);
 
-  // Status is PUSHED (Phase 3): the backend holds a per-pane herdr subscription (spawned with
-  // chat_watch, whose "orch-status" listener is wired in the effect above — registered before the
-  // invoke, #6146) and emits on every lifecycle change. This effect owns only the SEED side: one
-  // dispatch at mount paints the first state, and — recovering the exact pr-os failure, where the
-  // seed resolved to "none" after a push had already landed "working" — a bounded re-seed at
-  // RESEED_DELAYS_MS offsets fires only while the effective status is still closed ("none" /
-  // "unknown"). Finite and self-cancelling, never a polling loop: a real status (from either
-  // source) disarms every remaining timer's own check, and all timers clear on unmount/switch.
+  // Status is PUSHED (Phase 3) by the per-pane herdr subscription chat_watch spawns; this effect owns
+  // only the SEED side: one dispatch at mount, plus a bounded re-seed at RESEED_DELAYS_MS that fires
+  // only while the effective status is still closed ("none"/"unknown"). Finite and self-cancelling,
+  // never a polling loop; a real status from either source disarms the remaining timers.
   useEffect(() => {
     if (history) { commitStatus("seed", nextSeq(), "ended"); return; }
     let alive = true;
@@ -919,11 +845,9 @@ export function Chat({ project, sessionId, dock, onDock, onClose, deps = DEFAULT
 
   const working = status === "working";
 
-  // #6201 — the wake chain's line in this header. During the idle gate the session's own startup
-  // makes status read "working" (tiny-timer: "working · 44s" across an 88s silent gate), which
-  // is exactly how a woken session read as idle-with-nothing-to-do. So while a wake runs, its
-  // truth REPLACES the ticker; when the chain lands, the outcome shows for the same few seconds
-  // the sidebar row gives it, then the ticker returns.
+  // #6201: the wake chain's line in this header. During the idle gate the session's own startup reads
+  // "working", which made a woken session look idle with nothing to do; while a wake runs its truth
+  // REPLACES the ticker, then the outcome shows for a few seconds.
   const [wakeNote, setWakeNote] = useState<{ kind: "pending" | "outcome"; text: string } | null>(null);
   useEffect(() => {
     if (history) return;
@@ -968,20 +892,10 @@ export function Chat({ project, sessionId, dock, onDock, onClose, deps = DEFAULT
   const openAsk: OpenQuestion | null = activeLiveAsk
     ? { tool_id: activeLiveAsk.tool_use_id ?? askKey(activeLiveAsk), questions: activeLiveAsk.questions }
     : null;
-  // Suggested-reply chips (#5929): asks collected from EVERY orchestrator turn since the
-  // operator's last user turn (walk back until a user turn — the real ask is routinely one turn
-  // back behind a hook-driven "Nothing to swap."), most recent ask first, capped at three.
-  // Purely derived (suggestions.ts — nothing invented, no LLM call). Live only while that ask
-  // turn is still the last thing said (answered → gone), composer empty (typing → gone), and
-  // Esc or the × dismisses until the next orchestrator turn recomputes the row.
-  //
-  // An open AskUserQuestion (#6094) wins over prose: its tool_use block carries the actual
-  // question as structured options, not a sentence — the text extractor below only reads
-  // `kind === "text"` blocks, so a turn that ends in the ask TOOL rather than typed prose (the
-  // orchestrator's other and increasingly common way to ask "push?"/pick-one) fed it an empty
-  // string and produced zero chips. That was the #5993 regression: not the status gate (already
-  // fixed, #6215/#6201), but this extractor never having read the one place the question text
-  // actually lives on a tool-shaped ask.
+  // Suggested-reply chips (#5929): asks from EVERY orchestrator turn since the operator's last user
+  // turn, most recent first, capped at three, purely derived (suggestions.ts). Live only while that
+  // ask turn is the last thing said and the composer is empty. An open AskUserQuestion (#6094) wins
+  // over prose: its options are the question (the #5993 regression was the extractor missing it).
   const [composerDraft, setComposerDraft] = useState("");
   const [chipsDismissed, setChipsDismissed] = useState(false);
   const [activeSuggestion, setActiveSuggestion] = useState<string | null>(null);
@@ -1012,12 +926,9 @@ export function Chat({ project, sessionId, dock, onDock, onClose, deps = DEFAULT
     !history && !!(activeLiveAsk?.target ?? target) && !working && suggestions.length > 0 &&
     lastSpeechRole === "assistant" && !composerDraft.trim() && !chipsDismissed;
   useEffect(() => { setChipsDismissed(false); }, [orchestratorTexts]);
-  // #5993, third reopen — the built app names the input that hid the chips, so the next "chips
-  // are gone" report reads the reason out of app-trace.log instead of a code walk. Whenever the
-  // orchestrator holds the floor and the row is hidden, one line names the first gate input
-  // (in gate order) that failed; the extractor case carries the turn's tail, since that tail
-  // IS the idiom the extractor missed. Deduped on the reason (plus the tail), so a working
-  // stretch logs once, not once per streamed row.
+  // #5993, third reopen: whenever the orchestrator holds the floor and the chip row is hidden, one
+  // app-trace line names the first gate input that failed (the extractor case carries the turn's
+  // tail). Deduped on the reason so a working stretch logs once.
   const chipTraceRef = useRef("");
   const chipTarget = activeLiveAsk?.target ?? target;
   const chipTail = (orchestratorTexts[0] ?? "").replace(/\s+/g, " ").trim().slice(-80);
@@ -1076,11 +987,9 @@ export function Chat({ project, sessionId, dock, onDock, onClose, deps = DEFAULT
   const side = dock === "right";
   const hosted = dock === "pane";
 
-  /** Resize by dragging the panel's inner edge (#5522). The panel is anchored to the window's
-   *  far side (right of the content, or its bottom), so the dragged edge is the NEAR one and
-   *  the size is the anchored edge minus the pointer: pulling away from the content grows the
-   *  panel. Clamped on every move so the pointer can never stretch the panel past its sane
-   *  range; persisted once, on release. */
+  /** Resize by dragging the panel's inner edge (#5522): the panel is anchored to the window's far
+   *  side, so the size is the anchored edge minus the pointer. Clamped on every move; persisted
+   *  once, on release. */
   const startDrag = (e: RPointerEvent<HTMLDivElement>) => {
     const anchored = root.current?.getBoundingClientRect();
     if (!anchored) return;
@@ -1139,12 +1048,9 @@ export function Chat({ project, sessionId, dock, onDock, onClose, deps = DEFAULT
       .finally(() => setHandoffBusy(false));
   }, [addDivider, handoffBusy, project]);
 
-  // #6668: the offer — banner, countdown and the unattended auto-fire alike — needs a LIVE
-  // agent in the pane, the same liveness the composer gates on. 09-07 12:35: the crebral-health
-  // Chat opened onto a pane whose claude had died at 12:16, the gauge read the DEAD session's
-  // transcript at 92%, and the unattended path fired a chain that would have ended the pane's
-  // shell. A gauge is a property of a transcript; a handoff is an act on a session. No session,
-  // no offer — and the withheld gauge is traced once per status so the incident reads itself.
+  // #6668: the offer (banner, countdown, unattended auto-fire) needs a LIVE agent in the pane, the
+  // same liveness the composer gates on. A gauge is a property of a transcript; a handoff is an
+  // act on a session. No session, no offer; the withheld gauge is traced once per status.
   const gaugeOver = !history && bannerVisible(chat.meta.context.frac, dismissedAt);
   const bannerOffered = gaugeOver && liveness.live;
   const withheldKey = useRef<string | null>(null);

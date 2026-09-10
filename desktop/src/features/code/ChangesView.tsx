@@ -1,9 +1,6 @@
-// The Changes view (#5809) — Orca's ChangesModeView anatomy copied, not adapted
-// (RESEARCH-orca-renderer.md §2): the open file rendered as a HEAD-vs-editor diff WITHOUT a
-// separate diff tab, and the EDITOR IS THE MODIFIED SIDE. The original (HEAD) is frozen; the
-// modified side is live — every keystroke lands in the same draft the code view edits, so dirty
-// tracking, save, and the conflict bar keep working in both views. This REPLACES the read-only
-// DiffView: a diff you must leave to edit was the invented piece the deletion map retired.
+// The Changes view (#5809), Orca's ChangesModeView anatomy (RESEARCH-orca-renderer.md §2): the open
+// file as a HEAD-vs-editor diff, and the EDITOR IS THE MODIFIED SIDE, live on the same draft, so
+// dirty tracking, save and the conflict bar work in both views. Replaces the read-only DiffView.
 import { useEffect, useRef } from "react";
 import * as monaco from "monaco-editor";
 import { monacoLanguageFor } from "./editorLanguage";

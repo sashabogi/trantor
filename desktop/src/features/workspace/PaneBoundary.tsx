@@ -1,10 +1,6 @@
-// A terminal is the one part of this app that talks to a pty, a WebGL context and a Rust bridge on
-// every tab switch. When something in there throws, React unmounts the whole tree and the window
-// goes blank and frozen with the process still alive — which is exactly what happened on
-// 2026-08-27 switching from the orchestrator to a seat.
-//
-// A blank window tells the operator nothing and cannot be recovered without quitting. This keeps
-// the failure inside the pane, says what broke, and offers a retry that remounts just the pane.
+// A terminal talks to a pty, a WebGL context and a Rust bridge on every tab switch; when something
+// throws, React unmounts the whole tree and the window goes blank with the process alive. This
+// keeps the failure inside the pane, says what broke, and offers a retry that remounts the pane.
 import { Component, type ErrorInfo, type ReactNode } from "react";
 
 type Props = { children: ReactNode; onRetry?: () => void };

@@ -1,8 +1,6 @@
-// The right mode pane's tab + dock state — persisted per project in ~/.agent-bus/config.json
-// (#6499: the panel always opened on Files after a restart because nothing remembered where you
-// left it, so an ask already waiting in Chat could sit unseen). Storage rides the config.json
-// convention dismissals.rs and onboarding.rs already use for durable per-PROJECT state — the
-// localStorage seam paneWidth.ts and chat/prefs.ts use is per-mode/global, not per-project.
+// The right mode pane's tab + dock state, persisted per project in ~/.agent-bus/config.json (#6499:
+// the panel always reopened on Files, so a waiting ask sat unseen). The config.json convention is
+// for durable per-PROJECT state; the localStorage seam is per-mode/global.
 import { invoke, type InvokeArgs } from "@tauri-apps/api/core";
 
 export type PanelTab = "files" | "git" | "sessions" | "chat";

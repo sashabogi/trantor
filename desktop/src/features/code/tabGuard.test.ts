@@ -3,9 +3,8 @@
 import { describe, expect, it } from "vitest";
 import { externalMutationOnLoad as verdictOf } from "./tabGuard";
 
-// The 2026-09-01 empty-editor regression: a tab switch stashed the pre-load "" as a kept draft,
-// and a draft with NO base signature was read as evidence the disk moved — empty editor under a
-// false conflict bar. A signature-less draft must never produce a verdict.
+// The empty-editor regression: a tab switch stashed the pre-load "" as a kept draft, and a draft
+// with NO base signature was read as evidence the disk moved. No signature, no verdict.
 describe("externalMutationOnLoad — the signature-less draft (regression)", () => {
   it("an empty draft with no base signature is a loading screen, not a conflict", () => {
     expect(verdictOf({ draft: "", baseSignature: null, diskText: "real content" })).toBeNull();
@@ -56,9 +55,8 @@ describe("externalMutationOnLoad", () => {
   });
 
   it("yields NO verdict without a baseline — the rule the empty-editor regression rewrote", () => {
-    // This leg used to assert the opposite ("still flags"), which is exactly the semantic that
-    // showed an empty editor under a false conflict bar (2026-09-01): a pre-load "" stash has no
-    // baseline and must never be read as evidence the disk moved.
+    // This leg used to assert the opposite ("still flags"), the semantic that showed an empty editor
+    // under a false conflict bar: a pre-load "" stash has no baseline.
     expect(externalMutationOnLoad({ draft: "my edits", baseSignature: null, diskText: "disk" })).toBeNull();
   });
 });

@@ -1,8 +1,5 @@
-// OVERSEER — the watcher's own view: what it is monitoring and proof it is operating.
-//
-// The duty seat must not be another terminal window the operator has to watch. This screen folds
-// the whole surface into the app: duty liveness and controls, open episodes, stuck-mail ledger, and
-// the policy map the hub uses to decide when to warn or gate.
+// OVERSEER: the watcher's own view, so the duty seat is not another terminal window to watch: duty
+// liveness and controls, open episodes, the stuck-mail ledger, and the hub's policy map.
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { Activity, ExternalLink, Link2, Minus, Plus, Power, ShieldCheck, Square, Unlink } from "lucide-react";
 import {

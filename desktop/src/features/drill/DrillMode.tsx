@@ -1,10 +1,7 @@
-// Drill Mode (#6800): the guided pass over the visual testing backlog. A corner panel (the
-// onboarding wizard's frame in its dock layout) walks the operator card by card — title, the
-// exact action, the expected result — on a DISPOSABLE drill-* project seeded at start, never a
-// real one. Pass captures a screenshot and closes the card with a note that cites it; Fail
-// bounces the card to doing with the operator's words. A DOM auto-check can pre-fill the verdict
-// where the app can vouch for itself (chips mounted, gauge and Aa disjoint, pending header on
-// screen), but per the stabilize doctrine the operator's press is what moves the card.
+// Drill Mode (#6800): the guided pass over the visual testing backlog, a corner panel walking the
+// operator card by card on a DISPOSABLE drill-* project. Pass captures a screenshot and closes the
+// card with a note citing it; Fail bounces it with the operator's words. A DOM auto-check may
+// pre-fill the verdict, but the operator's press is what moves the card (stabilize doctrine).
 import { useEffect, useState } from "react";
 import { flushSync } from "react-dom";
 import { CheckCircle2, ChevronRight, ClipboardCheck, Play, X, XCircle } from "lucide-react";

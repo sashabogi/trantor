@@ -1,14 +1,7 @@
-// Assistant replies arrive as markdown text; the old renderer showed the literal "**" and "- "
-// markup, so long orchestrator replies were read in the terminal instead. This renders the subset
-// that makes a chat reply readable: paragraphs, bullet and numbered lists, bold/italic, inline and
-// fenced code, external links (opened by the shell opener, never in the webview), headings demoted
-// to a bold line, and tables as a monospace block.
-//
-// Hand-rolled on purpose: react-markdown is not a dependency, and adding one would churn the shared
-// pnpm lockfile under concurrent seats. The scope is deliberately smaller than CommonMark — no
-// images, no raw-HTML passthrough (every token becomes a React element, so nothing can inject a
-// tag), no footnotes. The parser is fault-tolerant: a reply mid-stream (unclosed fence or link) is
-// rendered as text rather than swallowed, because the watcher appends rows as a turn runs.
+// Assistant replies arrive as markdown; this renders the subset that makes a reply readable:
+// paragraphs, lists, bold/italic, inline and fenced code, external links (shell opener), headings
+// demoted, tables as a monospace block. Hand-rolled on purpose (no react-markdown dependency), no
+// images or raw HTML (every token becomes a React element), fault-tolerant mid-stream.
 import type { ReactNode } from "react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 
@@ -26,11 +19,9 @@ type InlineNode =
 // text instead of recursing further (#6113).
 const INLINE_MAX_DEPTH = 16;
 
-/** Split one text run into inline tokens. `*`/`**` mark italic/bold; backticks are code; a
- *  `[label](http(s)://…)` link opens externally. A marker with no closer is left as text (streaming
- *  replies are frequently mid-token). SAFETY: the only atoms emitted are text/code/strong/em and
- *  http(s)-only links — an image or a javascript: URL can never become an element here.
- */
+/** Split one text run into inline tokens: `*`/`**`, backticks, `[label](http(s)://…)`. A marker
+ *  with no closer is left as text. SAFETY: the only atoms emitted are text/code/strong/em and
+ *  http(s)-only links; an image or a javascript: URL can never become an element here. */
 function inline(text: string, depth = 0): InlineNode[] {
   if (depth >= INLINE_MAX_DEPTH) return [{ t: "text", s: text }];
   const out: InlineNode[] = [];

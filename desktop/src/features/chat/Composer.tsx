@@ -1,17 +1,7 @@
-// The composer: attach, model, effort, send/stop.
-//
-// The provenance rule, taken from Orca and the reason this is not just a dropdown: you cannot KNOW
-// a terminal agent's current model. You know what the transcript reported, and you know what you
-// sent. So a value carries where it came from — `reported` is evidence, `dispatched` means sent and
-// not yet confirmed — and the control says so rather than asserting.
-//
-// Both option lists come from `claude --help`, not from memory: effort is a closed list, and model
-// takes documented aliases. Typing a model id from memory is a mistake this codebase has already
-// paid for once.
-//
-// Every input is gated on LIVE, not on a pane row existing (#5477): a pane whose agent exited is
-// registered but dead, and typing into it would queue words nobody will ever read. `liveWhy`
-// names the reason on every locked control, because a control that explains itself is trusted.
+// The composer: attach, model, effort, send/stop. Provenance rule (from Orca): you cannot KNOW a
+// terminal agent's current model, so a value carries where it came from (`reported` is evidence,
+// `dispatched` is sent, unconfirmed). Option lists come from `claude --help`, never memory. Every
+// input gates on LIVE, not on a pane row existing (#5477), and `liveWhy` names the reason.
 import { type ReactNode, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
@@ -81,12 +71,9 @@ function ContextGauge({ ctx }: { ctx: ContextGauge }) {
   // the early return has already made unreachable.
   const frac = ctx.frac ?? 0;
   return (
-    // #6701 round 2 — the gauge is the dial row's ONLY give. min-w-0 plus overflow-hidden mean
-    // flexbox may take its width all the way to zero and clip whatever is still painted, so the
-    // gauge can displace nothing: the Aa menu at its right stays on the pane at every width.
-    // The pieces retire by the gauge's OWN width (the root is the @container), in order: the
-    // bar flexes away first, the word steps out below 76px, the number below 32px, and past
-    // that the gauge is an invisible sliver. Status yields; the control does not.
+    // #6701: the gauge is the dial row's ONLY give: min-w-0 + overflow-hidden let flexbox take it to
+    // zero and clip, so the Aa menu stays on the pane at every width. Its pieces retire by the
+    // gauge's OWN width (@container): bar first, word below 76px, number below 32px.
     <div className="@container flex min-w-0 flex-1 items-center gap-1.5 overflow-hidden" title={gaugeLabel(ctx)}>
       {/* The bar says what it measures (#5556): a bare percentage next to two dials could be
           anything, so the word rides with it and the tooltip keeps the exact tokens. Every dial
@@ -260,11 +247,9 @@ function ChipThumb({ path }: { path: string }) {
   );
 }
 
-/** The chip row (#6070, bounced): one horizontal ROW below the text area — an image wears its
- *  thumbnail, anything else a file glyph, the size as a small caption, the × only on hover, and
- *  NO file name. Several attachments sit inline and never stack vertically, so the composer does
- *  not grow with them; the row scrolls sideways when it overflows. The full path stays in the
- *  tooltip. */
+/** The chip row (#6070): one horizontal ROW below the text area; an image wears its thumbnail,
+ *  anything else a glyph, size as a caption, × on hover, NO file name. Chips never stack
+ *  vertically; the row scrolls sideways. The full path stays in the tooltip. */
 function AttachmentChips({ chips, onRemove }: { chips: AttachmentChip[]; onRemove: (id: string) => void }) {
   if (!chips.length) return null;
   return (
@@ -299,11 +284,9 @@ function AttachmentChips({ chips, onRemove }: { chips: AttachmentChip[]; onRemov
   );
 }
 
-// #6147: the webview's drop event is WINDOW-global — the composer and the genesis sheet both
-// hear every drop, so a PRD dropped on the sheet's brief also became an attachment chip in the
-// chat behind it. A drop is the composer's only when the topmost element at the drop point is
-// inside the composer, and never while a modal sheet is open: while the sheet is up its root
-// carries data-modal-sheet-open and it owns every drop, wherever it lands.
+// #6147: the webview's drop event is WINDOW-global, so a PRD dropped on the genesis sheet also became
+// a chat chip. A drop is the composer's only when the topmost element at the point is inside it,
+// and never while a modal sheet is open (data-modal-sheet-open on the sheet's root).
 export function composerTakesDrop(hit: Element | null, root: Element | null): boolean {
   if (!hit || !root) return false;
   if (document.querySelector("[data-modal-sheet-open]")) return false;
@@ -410,11 +393,9 @@ export function Composer({ project, target, live, liveWhy, blockedAsk, model, mo
     heightLoaded.current = true;
     setChosenPx(loadComposerHeight(minPx, maxPx));
   }, [minPx, maxPx]);
-  // The content's own height, measured whenever the draft changes: collapse to auto and read the
-  // scroll height. The measured value is RESTORED afterwards, not blanked — React wrote that style
-  // at commit and does not rewrite an unchanged prop, so a blank would strand the textarea with
-  // whatever default the webview falls back to (that blank is what made the first build's box
-  // forget its height). A layout effect, so it never paints between the two writes.
+  // The content's own height, measured whenever the draft changes: collapse to auto, read the scroll
+  // height, then RESTORE the measured value (React does not rewrite an unchanged prop, so a blank
+  // would strand the textarea). A layout effect, so it never paints between the two writes.
   const [contentPx, setContentPx] = useState<number | null>(null);
   useLayoutEffect(() => {
     const el = box.current;
@@ -428,11 +409,8 @@ export function Composer({ project, target, live, liveWhy, blockedAsk, model, mo
   const grown = growComposerPx(contentPx ?? minPx, minPx, maxPx);
   const heightPx = chosenPx === null ? grown : Math.min(chosenPx, maxPx);
   const dragRef = useRef<{ startY: number; startH: number } | null>(null);
-  // The drag rides WINDOW listeners, not the handle's own pointermove (#6070 bounce: the built
-  // app's handle was inert). Pointer capture does not reliably retarget moves back to the
-  // capturing element under WKWebView, so the moves never arrived there; window carries the drag
-  // wherever the pointer goes. Capture stays as an enhancement that cannot kill the drag when a
-  // window refuses it.
+  // The drag rides WINDOW listeners, not the handle's own pointermove (#6070 bounce): pointer capture
+  // does not reliably retarget moves under WKWebView. Capture stays as an enhancement only.
   const dragCleanup = useRef<(() => void) | null>(null);
   useEffect(() => () => { dragCleanup.current?.(); }, []);
   const handleDragStart = (e: React.PointerEvent<HTMLDivElement>) => {
@@ -470,11 +448,8 @@ export function Composer({ project, target, live, liveWhy, blockedAsk, model, mo
     dragCleanup.current = () => { drop(); dragRef.current = null; };
   };
 
-  // The locked composer's one action (#5495), derived from the session inventory and polled
-  // ONLY while locked — the contract's gentle cadence, not a second heartbeat. A mid-turn
-  // Terminal conversation auto-enables the moment its turn ends; a live pane stops the poll
-  // entirely. A failed read keeps the last good inventory (transient), and none read yet means
-  // no offer: an unread state never wears a button.
+  // The locked composer's one action (#5495), derived from the session inventory and polled ONLY
+  // while locked. A failed read keeps the last good inventory; none read yet means no offer.
   const [inventory, setInventory] = useState<ProjectSessions | null>(null);
   useEffect(() => {
     if (live) return;
@@ -561,11 +536,9 @@ export function Composer({ project, target, live, liveWhy, blockedAsk, model, mo
     attach([path], null);
   };
 
-  // File drop (#5507). Tauri's webview intercepts native HTML5 drops by default, so
-  // onDragDropEvent is the only channel an ondrop handler would never fire on. A drop lands each
-  // file as a CHIP below the text (#6070) — the path never enters the text area, so dictation
-  // cannot split it — and at SEND the chips serialize to exactly the bytes the old drop splice
-  // shipped, receipts and normalization untouched.
+  // File drop (#5507): Tauri intercepts native drops, so onDragDropEvent is the only channel. A drop
+  // lands each file as a CHIP (#6070), never in the text area; at SEND the chips serialize to
+  // exactly the bytes the old drop splice shipped, receipts and normalization untouched.
   useEffect(() => {
     let alive = true;
     let off: (() => void) | undefined;
@@ -599,11 +572,9 @@ export function Composer({ project, target, live, liveWhy, blockedAsk, model, mo
       blockedAsk ? `The agent is asking a question above — answer it there: "${blockedAsk.questions[0]?.question ?? ""}"` : String(e),
     ));
 
-  // Paste-an-image (2026-09-01: the operator pasted a CleanShot screenshot twice and NOTHING
-  // happened — a textarea silently swallows image DATA, so "upload" looked broken with no error).
-  // The clipboard image is written to a real file (Rust, ~/.agent-bus/attachments/) and lands as
-  // a CHIP (#6070) — the same one attach mechanism the drop uses. Plain text pastes are
-  // untouched. Failures surface in the composer's error line, never silently.
+  // Paste-an-image: a textarea silently swallows image DATA. The clipboard image is written to a real
+  // file (Rust, ~/.agent-bus/attachments/) and lands as a CHIP (#6070), the same attach mechanism the
+  // drop uses. Plain text pastes are untouched; failures surface in the composer's error line.
   const onPaste = (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
     const img = Array.from(e.clipboardData?.items ?? []).find(
       i => i.kind === "file" && i.type.startsWith("image/"),
@@ -625,16 +596,10 @@ export function Composer({ project, target, live, liveWhy, blockedAsk, model, mo
     }).catch(err => setError(`pasted image failed: ${err instanceof Error ? err.message : String(err)}`));
   };
 
-  // Delivery receipts (#5504). Typed-into-a-terminal is not a delivery channel: the CLI's UI can
-  // eat or fuse what arrives, so every send is held as PENDING until the transcript echoes it
-  // back. While anything is pending, poll the transcript and re-judge; a send the transcript
-  // never echoes is declared LOST, visibly, with its words intact for retry — never silently.
-  //
-  // A pending is judged ONLY against its own project's transcript (#6250): this morning a send
-  // to trantor was judged against hive-digital's transcript the moment the operator switched,
-  // read as lost, and mechanically retried into hive-digital's pane. So a pending whose project
-  // is not the selection is neither judged, retried, nor shown — it just waits, holding the
-  // address it was sent to, until its own project is back.
+  // Delivery receipts (#5504): typed-into-a-terminal is not delivery, so every send is PENDING until
+  // the transcript echoes it back, and a send never echoed is declared LOST, visibly, words intact.
+  // A pending is judged ONLY against its own project's transcript (#6250): a foreign pending is
+  // neither judged, retried, nor shown until its own project is back.
   const [pendings, setPendings] = useState<PendingSend[]>([]);
   const [, setTick] = useState(0);
   useEffect(() => {
@@ -686,13 +651,9 @@ export function Composer({ project, target, live, liveWhy, blockedAsk, model, mo
     line(p.text, p.target).then(() => setPendings(ps => [...ps, { text: p.text, at: Date.now(), project: p.project, target: p.target }]));
   };
 
-  // ONE mechanical retry at the turn boundary (2026-08-31: an attachment sent MID-TURN was eaten
-  // by the streaming TUI and sat "lost" until a human clicked retry — the exact failure the
-  // receipt exists to catch, now answered by the machine once). A send lost AGAIN after its
-  // retry stays red for the human; retrying forever would spam a genuinely broken pane.
-  // Only THIS project's pendings are in evidence here (#6250): the transcript and the turn
-  // boundary are the selection's, so a foreign pending is neither judged lost by them nor
-  // re-sent into the selected pane — the trace that put trantor's words in hive-digital.
+  // ONE mechanical retry at the turn boundary (an attachment sent MID-TURN was once eaten by the
+  // streaming TUI). A send lost AGAIN after its retry stays red for the human. Only THIS project's
+  // pendings are in evidence here (#6250).
   useEffect(() => {
     if (working) return;
     setPendings(ps => {

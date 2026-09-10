@@ -1,16 +1,7 @@
-// The ghost-text debounce + cancel core (#5897), PURE on purpose so the timing rules are
-// unit-tested without Monaco or Tauri.
-//
-// Two problems the naive provider had:
-//   1. every keystroke fired a request (after a debounce the OLD code only cleared the timer but
-//      never cancelled an already-in-flight request — a slow answer could land AFTER a newer
-//      keystroke and overwrite the correct ghost with a stale one);
-//   2. the debounce was owned by a module-level timer shared across editors.
-//
-// This is a small "latest-wins" gate: schedule() debounces, and the moment a newer keystroke
-// arrives it invalidates whatever is pending OR already in flight. The caller resolves its item
-// list to [] when the gate reports superseded, so Monaco never paints a stale ghost. Every promise
-// settles — a superseded one with null, never a hang.
+// The ghost-text debounce + cancel core (#5897), PURE so the timing rules are tested without Monaco.
+// A "latest-wins" gate: schedule() debounces, and a newer keystroke invalidates whatever is
+// pending OR in flight (the naive provider let a slow answer overwrite a fresher ghost). Every
+// promise settles; a superseded one with null.
 export type GhostRequest = {
   prefix: string;
   suffix: string;

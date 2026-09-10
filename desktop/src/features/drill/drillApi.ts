@@ -1,8 +1,6 @@
-// Drill Mode (#6800) — the side-effect seam. Everything DrillMode.tsx does to the world goes
-// through this object so the flow test hands in fakes the way OnboardingFlow's deps work:
-// the disposable stage (trantor new), the card moves (the trantor hub, where the visual cards
-// live — NOT the stage project's hub), the screenshot (a Rust command shelling to screencapture),
-// and the app-trace line that lets app-trace.log tell a drill close from a seat's.
+// Drill Mode (#6800): the side-effect seam, so the flow test hands in fakes: the disposable stage
+// (trantor new), the card moves (on the trantor hub, NOT the stage project's), the screenshot
+// (a Rust command), and the app-trace line that tells a drill close from a seat's.
 import { invoke, type InvokeArgs } from "@tauri-apps/api/core";
 import { HubClient, hubForProject, knownProjects } from "../../shared/api/client";
 import { CHAT_TAB_SELECTOR, selectMode, selectProject, type AskDrillDeps } from "../chat/askDrill";

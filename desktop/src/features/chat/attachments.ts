@@ -1,12 +1,7 @@
 // The composer's attachments as CHIPS (#6070): a dropped, pasted or picked file lands as a chip
-// below the text area, never as a path INSIDE the text where dictation can splice itself into the
-// middle of the path and break it (operator, #5773 — CleanShot names carry spaces, and a dictated
-// word inside a path sends garbage). The text area holds only words the operator typed.
-//
-// Chips serialize AT SEND time into exactly the text the delivery contract already ships (#5507's
-// path splice, #5709's one-path-per-line normalization, receipts untouched): one attach mechanism
-// (the path), three doors (drop, paste, picker). This module is pure on purpose — add / remove /
-// serialize are the load-bearing rules, and the component is their rendering.
+// below the text, never as a path INSIDE it where dictation can splice into it (#5773). Chips
+// serialize AT SEND into the text the delivery contract already ships (#5507 splice, #5709
+// normalization). Pure on purpose: add / remove / serialize are the rules, the component renders.
 
 export type AttachmentKind = "image" | "file";
 
@@ -57,13 +52,9 @@ export function removeChip(chips: readonly AttachmentChip[], id: string): Attach
   return chips.filter(c => c.id !== id);
 }
 
-/** Serialize the chips into the send text. Paths ride in the same shapes #5507's drop splice used
- *  to produce, so normalizeAttachments and the receipts judge bytes they already know:
- *  - ONE chip with prose stays INLINE ("path draft") — the single-path shape the receipt drills
- *    pin byte-for-byte;
- *  - TWO or more chips go one path per LINE before the prose — the shape #5709 normalization
- *    produces anyway, minus the "(image N)" markers that only make sense mid-sentence.
- *  No chips: the draft passes through untouched. */
+/** Serialize the chips into the send text, in the shapes #5507's drop splice produced: ONE chip with
+ *  prose stays INLINE; TWO or more go one path per LINE before the prose (#5709's shape, minus the
+ *  "(image N)" markers). No chips: the draft passes through untouched. */
 export function serializeForSend(chips: readonly AttachmentChip[], draft: string): string {
   const text = draft.trim();
   if (!chips.length) return draft;

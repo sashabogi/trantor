@@ -1,12 +1,6 @@
-// The three dials, in the app.
-//
-// Reads and writes through the CLI, never by touching autonomy.json directly: the dependency rules
-// between dials live in one place, and the half that drifts would be the half deciding whether we
-// push to a remote.
-//
-// The scope picker is not decoration. These settings apply per project on top of a global default,
-// and a control that silently changed one when you meant the other would be the worst kind of
-// wrong here.
+// The three dials, in the app. Reads and writes through the CLI, never autonomy.json directly: the
+// dependency rules live in one place. The scope picker is not decoration: settings apply per
+// project on top of a global default, and changing the wrong one would be the worst kind of wrong.
 import { useCallback, useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 

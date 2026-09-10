@@ -162,11 +162,9 @@ export function aheadLabel(s: Pick<GitPanelSnapshot, "ahead" | "behind" | "upstr
   return "all landed";
 }
 
-/** The two sections the SCM panel renders, as the exact pathspecs each bulk action sends in ONE
- *  batched git call (RESEARCH-orca-files §3: batch against E2BIG, never one subprocess per file).
- *  `staged` is what "unstage all" restores; `changes` merges the unstaged and untracked rows, which
- *  the panel shows as a single section. A path edited after staging appears in BOTH, on purpose —
- *  the two actions mean different things to it. */
+/** The two SCM sections as the exact pathspecs each bulk action sends in ONE batched git call
+ *  (RESEARCH-orca-files §3: batch against E2BIG). `changes` merges unstaged and untracked; a path
+ *  edited after staging appears in BOTH, on purpose. */
 export type ScmSections = { staged: string[]; changes: string[] };
 export function scmSections(entries: GitStatusEntry[]): ScmSections {
   const { staged, unstaged, untracked } = bucketStatus(entries);

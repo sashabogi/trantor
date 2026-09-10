@@ -1,21 +1,10 @@
-/** Transport failures, translated into something a person can act on.
- *
- * Deliberately dependency-free so it can be unit-tested directly (node strips the types), and
- * because this is pure string mapping with nothing to mock.
- */
+/** Transport failures, translated into something a person can act on. Dependency-free so it is
+ * unit-tested directly; pure string mapping with nothing to mock. */
 
-/** Turn a transport failure into a sentence a person can act on.
- *
- * These strings come from reqwest, through Rust, and land in front of whoever opened the app. The
- * one that prompted this was "error decoding response body", which sounds like corrupt data and is
- * not: it is what reqwest says when the BODY READ is interrupted — most often because the hub was
- * restarted mid-request, which happens on every deploy and is entirely routine. A person read that
- * as their data being broken.
- *
- * Translate, do not swallow. An unrecognised failure is passed through VERBATIM rather than
- * flattened into a friendly non-answer: a wrong reassuring message is worse than an ugly true one,
- * and the raw text is what makes a bug report useful.
- */
+/** Turn a transport failure into a sentence a person can act on. reqwest's "error decoding response
+ * body" sounds like corrupt data and is not: the BODY READ was interrupted, usually a hub restart
+ * mid-request. Translate, do not swallow: an unrecognised failure passes through VERBATIM, because
+ * a wrong reassuring message is worse than an ugly true one. */
 export function describeTransportFailure(raw: string, baseUrl: string): string {
   const r = raw.toLowerCase();
   if (r.includes("decoding response body") || r.includes("error reading response") || r.includes("incomplete message")) {

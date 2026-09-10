@@ -1,8 +1,6 @@
-// prefs.ts drills (#5522 #5523): the persistence is the feature — a panel that forgets its size,
-// its reading step or its tray fold on restart is a panel nobody bothers to tune twice. The
-// store is injected (the same seam TerminalDeps gives the pane), so these drills run against a
-// faithful in-memory stand-in in the node environment — no DOM, no global state between tests —
-// and the REFUSING store exercises the private-mode paths the real window can hit.
+// prefs.ts drills (#5522 #5523): the persistence is the feature. The store is injected (the same
+// seam TerminalDeps gives the pane), so these run against an in-memory stand-in under node, and
+// the REFUSING store exercises the private-mode paths.
 import { beforeEach, describe, expect, it } from "vitest";
 import {
   FONT_SCALE, FONT_STEPS, PANEL_RANGE, clampPanel, fontScale, loadDismissedAt, loadFontStep,

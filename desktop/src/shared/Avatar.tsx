@@ -1,16 +1,7 @@
-// Brand avatars — the REAL marks, not letters. Sasha: "give all of the LLMs their appropriate
-// logos… instead of just having these little letters."
-//
-// Source: @lobehub/icons-static-svg — the AI-brand icon collection, bundled at build time (the
-// CSP forbids remote assets). One source for every mark, including the two simple-icons cannot
-// carry (OpenAI honors takedowns there; Zhipu was never contributed): Codex has its own official
-// mark, GLM ships as Z.ai. Each SVG is viewBox 24 with currentColor fill, so the brand color is
-// just CSS `color` on the wrapper.
-//
-// Resolution order: an explicit `llm` prop wins (the bus carries llm+model per peer); else the
-// name's brand token; else host-looking names resolve to Claude — an orchestrator session named
-// after the laptop is still Claude doing the work, which was exactly the complaint. Anything else
-// (projects, humans) stays a deterministic monogram.
+// Brand avatars: the REAL marks, from @lobehub/icons-static-svg bundled at build time (the CSP forbids
+// remote assets); Codex has its own mark, GLM ships as Z.ai; viewBox 24, currentColor fill.
+// Resolution: an explicit `llm` prop wins; else the name's brand token; else host-looking names
+// resolve to Claude (an orchestrator named after the laptop is still Claude); else a monogram.
 import claudeSvg from "@lobehub/icons-static-svg/icons/claude.svg?raw";
 import deepseekSvg from "@lobehub/icons-static-svg/icons/deepseek.svg?raw";
 import kimiSvg from "@lobehub/icons-static-svg/icons/kimi.svg?raw";

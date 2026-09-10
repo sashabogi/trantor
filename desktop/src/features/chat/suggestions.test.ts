@@ -103,9 +103,8 @@ describe("suggestionsFromTurn", () => {
   });
 });
 
-// The crebral-health merge-confirm turns, verbatim from the 2026-09-07 17:01 transcript: the
-// operator saw NO chips above the composer on app 0.3.159 (#5993). Two orchestrator turns since
-// the operator's last word, newest first: the trailer, then the ship-it ask.
+// The crebral-health merge-confirm turns, verbatim from a real transcript where the operator saw
+// NO chips (#5993). Two orchestrator turns since the operator's last word, newest first.
 const CREBRAL_SHIP_IT = `The QA gate is closed and the only remaining step is a production deploy, which needs your yes.
 
 **State of \`integration/dashboard-account\`** (5 commits, fast-forwardable onto main at \`33eef59\`):

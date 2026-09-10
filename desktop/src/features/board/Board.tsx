@@ -1,10 +1,6 @@
-// BOARD — one of the two lenses (the other is FEED). Lanes of cards for a single project.
-//
-// Deliberately NOT a port of Buzz's UI: theirs is channels/messages/threads, ours is lanes/cards.
-// What we take from them is the SHELL (sidebar + main), which is layout rather than code — so no
-// Apache-2.0 obligations land on an MIT repo. Colours are Trantor's own: the same hex values
-// bin/crew-runner.mjs already pushes into the cmux sidebar, so a seat that is "building" in the
-// terminal is the same blue here.
+// BOARD: one of the two lenses (the other is FEED). Lanes of cards for a single project. Not a
+// port of Buzz's UI, only its shell layout (no Apache-2.0 obligations). Colours are the same hex
+// values bin/crew-runner.mjs pushes into the cmux sidebar.
 import { useEffect, useMemo, useState } from "react";
 import type { Card, HubClient } from "../../shared/api/client";
 import { CardDetail } from "./CardDetail";
@@ -30,27 +26,16 @@ const LANE_COLOR = {
   stale: "var(--color-tr-muted)",
 } as const satisfies Record<LaneName, string>;
 
-// The hub's own card flow. NEVER jump straight to done: `testing` is a real gate, and the whole
-// crew protocol depends on it (bin/crew.sh bounces anything that skips it), so the client must not
-// offer a shortcut the protocol forbids. Keyed by a card's live `status`, which is not a closed
-// type client-side — a hub-side status this build has never seen must fall through to "no move",
-// not a type error, so lookups go through `dictGet` rather than indexing directly.
+// The hub's own card flow. NEVER jump straight to done: `testing` is a real gate the crew protocol
+// depends on. Keyed by a card's live `status`, which is not closed client-side, so lookups go
+// through `dictGet` rather than indexing directly.
 const NEXT = { todo: "doing", doing: "testing", testing: "done" } as const satisfies Record<string, string>;
 
 
-// Sub-agents nest under the session that spawned them, and the join is `subagent.parent === focus.cc`.
-//
-// That took a data change to make possible. `parent` has always been a Claude Code session UUID,
-// while a focus card's `assignee` is a BUS session id ("MacBook-Pro-M1:trantor") — different
-// namespaces, so joining on it resolved 0 of 431 live cards. And a bus id is per (host, project),
-// so ALL 28 of crebral-health's focus cards shared one: joining on THAT piled every sub-agent the
-// machine ever ran onto whichever tile rendered last ("2157 sub-agents · $9068.89"). Focus cards
-// now carry `cc`, the Claude session UUID, which is exactly the key `parent` already spoke.
-//
-// Two things stay true and the fallback keeps honouring them: the hub COLLAPSES repeat runs into
-// one rolling card (counts reach 739), so a card can genuinely span many sessions; and a card
-// written before 0.17.70 has no `cc` to join to. Anything that does not resolve to a focus card in
-// this project keeps the LANE roll-up — one quiet line per lane, claiming only what is true.
+// Sub-agents nest under the session that spawned them: `subagent.parent === focus.cc`, where `cc` is
+// the Claude session UUID (a bus id is per host+project, so joining on `assignee` piled every
+// sub-agent onto one tile). Anything that does not resolve (a pre-0.17.70 card with no `cc`, a
+// rolling card the hub collapsed) keeps the LANE roll-up, one quiet line per lane.
 type Lane = { cards: Card[]; subagents: Card[]; openSubagents: boolean };
 
 /** focus card (by cc) ← its sub-agent children, plus the ids that are now rendered as children. */
@@ -79,11 +64,8 @@ function passesAssignee(card: Card, assignee: string): boolean {
 
 const isSubagent = (c: Card) => c.source === "cc-subagent";
 
-/** Split one lane's cards into real work and the sub-agent roll-up that sits under it.
- *
- * A sub-agent card matched by an ACTIVE search is never hidden inside a collapsed group — the
- * group opens instead. Searching for something and having it silently swallowed by a collapsed
- * summary is the one behaviour a board cannot have. */
+/** Split one lane's cards into real work and the sub-agent roll-up under it. A sub-agent card
+ *  matched by an ACTIVE search is never hidden inside a collapsed group; the group opens instead. */
 function splitLane(cards: Card[], query: string, assignee: string, nesting: Nesting): Lane {
   const searching = query.trim() !== "" || assignee !== "";
   const hit = (c: Card) => matchesCard(c, query) && passesAssignee(c, assignee);
@@ -99,16 +81,12 @@ function splitLane(cards: Card[], query: string, assignee: string, nesting: Nest
   return { cards: work, subagents, openSubagents: searching && subagents.length > 0 };
 }
 
-/** #5609 — what a card's face says about life, decided ONCE. Both active lanes wear liveness:
- *  doing AND testing breathe while their assignee is mid-turn (verification is work too), a
- *  doing card with a dead assignee says so, and a testing card whose assignee went quiet is
- *  waiting on the OPERATOR — the card says "awaiting verdict" instead of sitting there looking
- *  dead (the operator asked "why do these testing cards say nothing" twice on 2026-08-30). */
-/** #5609 follow-up — the card's own pace, from the two truths it carries: when it was last
- *  touched (`updated`, which log notes bump) and how deep its story runs (`log.length`). This
- *  is what separates five identically-pulsing cards: "last activity 30s ago" is being driven,
- *  "2h ago" is parked. Deliberately NOT a percentage: progress needs a denominator, open-ended
- *  agent work has none, and the board never asserts knowledge it does not have. */
+/** #5609: what a card's face says about life, decided ONCE. doing AND testing breathe while their
+ *  assignee is mid-turn; a doing card with a dead assignee says so; a testing card whose assignee
+ *  went quiet says "awaiting verdict" (it is waiting on the OPERATOR). */
+/** #5609 follow-up: the card's own pace from `updated` and `log.length`, so five pulsing cards
+ *  differ ("last activity 30s ago" is being driven, "2h ago" is parked). Deliberately NOT a
+ *  percentage: open-ended agent work has no denominator. */
 export function cardPace(card: { updated?: number; ts?: number; log?: { ts: number }[] }, now = Date.now()): string | null {
   const logs = card.log ?? [];
   const lastLog = logs.length ? logs[logs.length - 1].ts : 0;

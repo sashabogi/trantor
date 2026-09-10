@@ -2,12 +2,9 @@ import { Channel, invoke } from "@tauri-apps/api/core";
 import * as monaco from "monaco-editor";
 import { createGhostGate, splitPrefix, type GhostFetcher, type GhostRequest } from "./ghostGate";
 
-// #5897 fast path, made live by #6160: the Rust side now opens ONE `stream: true` call to the fast
-// model and forwards deltas on a request-keyed channel; the invoke resolves the moment the FIRST
-// LINE is complete (or ~32 tokens), and the rest of the HTTP stream is aborted. Timing rules stay
-// in ghostGate.ts (pure, tested): 250ms debounce, in-flight fetch cancelled on the next keystroke —
-// the cancellation now also reaches Rust (ghost_cancel), so a superseded request stops generating.
-// The 2s ceiling is time-to-first-line, not the whole response.
+// #5897 fast path, live via #6160: Rust opens ONE streaming call and the invoke resolves at the FIRST
+// LINE (or ~32 tokens). Timing rules stay in ghostGate.ts: 250ms debounce, in-flight cancel on the
+// next keystroke, and the cancel now reaches Rust (ghost_cancel). The 2s ceiling is time-to-first-line.
 const DEBOUNCE_MS = 250;
 const LINES_BEFORE = 60;
 const LINES_AFTER = 20;

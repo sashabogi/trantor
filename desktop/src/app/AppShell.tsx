@@ -1,14 +1,7 @@
-// Shell — sidebar on the backdrop, content on a FLOATING main panel (the Buzz layout DNA).
-//
-// The IA is SCOPE, and the layout says so:
-//   FLEET    Home, Inbox, Agents, Learning — cross-project by definition. Sidebar, top.
-//   PROJECT  BOARD | FEED | CHAT — the only things that change when you pick a project.
-//   APP      Settings + identity. Sidebar footer.
-//
-// Fleet telemetry (economics, lessons, tallies) lives on the HOME view as designed cards —
-// never in chrome. The ONE exception is the balance strip (v6, #5555): a minimal row of
-// per-provider chips in the header, because "is a provider about to stall mid-build" is an
-// always-in-view question, not a "go look at Home" one. Chips only — the old text dump stays dead.
+// Shell: sidebar on the backdrop, content on a floating main panel. The IA is SCOPE: FLEET (Home,
+// Inbox, Agents, Learning), PROJECT (BOARD | FEED | CHAT), APP (Settings + identity). Fleet
+// telemetry lives on Home as cards, never in chrome; the balance strip is the one exception
+// (#5555). Seams: docs/CONTRACT-desktop-app.md.
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ArrowDownToLine, Bot, Eye, GraduationCap, House, Inbox as InboxIcon, MessagesSquare, Plus, Search, Settings as SettingsIcon } from "lucide-react";
 import { appUpdateCheck, HubClient, hubForProject, knownProjects, localSessions, trantorCliCompatibility, type AppUpdate, type Peer, type TrantorCliCompatibility } from "../shared/api/client";
@@ -63,13 +56,8 @@ type Pane =
 // Who this app signs as. Mirrors the Rust default; RELAY_OWNER_IDENTITY overrides it there.
 const ME = "sasha@mac";
 
-// The fleet nav, as DATA — five hand-written <NavItem> lines was how the operational half of the
-// sidebar ended up typographically identical to the project half.
-//
-// Icons are Lucide: one stroke weight, one grid, drawn by people who draw icons. Hand-rolling six
-// SVGs to save a dependency is exactly the "rabid dogs were taught how to code" failure mode, and
-// the marks here do real work — they are the only thing that separates FLEET rows from PROJECT rows
-// at a glance, which is the complaint this whole pass exists to answer.
+// The fleet nav, as DATA, with Lucide icons: one stroke weight, one grid. The marks are the only
+// thing that separates FLEET rows from PROJECT rows at a glance.
 const FLEET_NAV = [
   { kind: "home",     label: "Home",     Icon: House },
   { kind: "inbox",    label: "Inbox",    Icon: InboxIcon },
@@ -132,23 +120,13 @@ export function AppShell() {
   // #6800 — Drill Mode is opened from Settings only; it docks in a corner so the app stays usable.
   const [drill, setDrill] = useState(false);
 
-  // Pinned projects PLUS whatever lives on the machine-local hub. A brand-new project has no
-  // routing pin yet — it falls back to the local hub BY DESIGN (TDD §12.1's default), and a
-  // project the app cannot see is a project that "isn't registering in Trantor at all" (the
-  // crm-platform incident: a whole live crew, invisible, because only pins were listed).
-  // The list is ALIVE and it only GROWS during a run: fetched at mount, refreshed every 45s,
-  // merged into what we already know. Both failure modes were real within one hour: crebral-fleet
-  // was born after launch (a fetch-once list never shows it), and crm-platform vanished because
-  // one fetch raced a hub restart (a failed fetch must never shrink the list).
+  // Pinned projects PLUS whatever lives on the machine-local hub: a brand-new project has no pin
+  // yet and falls back to the local hub BY DESIGN (TDD §12.1). Fetched at mount, refreshed every
+  // 45s, merged in; a failed fetch must never shrink the list.
   useEffect(() => {
     let alive = true;
-    // The LIST comes from known_projects alone — pinned hubs plus real checkouts. Bus traffic used
-    // to be merged in too, and since sessions register with whatever string they resolved, a path
-    // slug and an agent id ended up in the sidebar next to real work.
-    //
-    // It also REPLACES rather than accumulates. The old merge only ever added, so anything that
-    // appeared once stayed for the life of the window: the list read 26 while the hub reported no
-    // peers at all.
+    // The LIST comes from known_projects alone (pins + real checkouts): bus traffic once put a path
+    // slug and an agent id in the sidebar. It REPLACES rather than accumulates.
     const pull = () => knownProjects().catch((): string[] => []).then(found => {
       if (!alive) return;
       const all = [...new Set(found)].sort();
@@ -172,26 +150,10 @@ export function AppShell() {
   // way — it must not go dark just because no project is pinned.
   const fleetClient = useMemo(() => client ?? new HubClient(LOCAL_HUB), [client]);
 
-  // Sidebar activity — Sasha's ruling (2026-08-13): ACTIVE means "a terminal window is open and
-  // registered", and the dot BLINKS only for actual activity, never for merely sitting open.
-  // Two independent truths feed it:
-  //   • OPEN — a live session process on this machine (local_sessions: claude windows + crew
-  //     seats), OR a herdr-visible orch pane wherever it actually runs. Process truth so an
-  //     idle-but-open window stays active; heartbeats ride hook fires and go dark after 5 quiet
-  //     minutes, which is how crebral-health vanished from ACTIVE NOW while its window sat right
-  //     there (quiet ≠ dead). #6163 — a freshly-woken orch pane has no heartbeat yet either (hooks
-  //     fire on tool calls, and a pane that hasn't run one has none) and may not even be a local
-  //     process (herdr can host it headless on another box), so process truth alone dropped it the
-  //     instant its one heartbeat aged out of the busy window — local_sessions now also asks herdr
-  //     directly for every project it can still name an agent for, carrying that status along.
-  //   • BUSY — a hub heartbeat inside the 90s work window (mid-turn NOW). Blink. Also counts as
-  //     open on its own, so a busy session on ANOTHER machine (teams) still lights its row.
-  // Peers still aggregate from BOTH the active hub and the machine-local hub, freshest wins.
-  // #5610 v1 — Active Now carries the WHAT, not just a dot: each live row keeps the freshest
-  // peer's lastSeen + model so the sidebar can say "mid-turn · 8s ago · fable" from data this
-  // pull already fetched. Zero new requests; crew seats heartbeat as peers, so herdr's busy
-  // panes are already counted through presence. The merge itself lives in projectActivity.ts —
-  // pure, so the herdr-open-no-heartbeat-yet case is unit-tested without mounting this component.
+  // Sidebar activity (operator ruling): ACTIVE means "a terminal window is open and registered",
+  // and the dot BLINKS only for actual activity. OPEN = a live session process here, or a
+  // herdr-visible orch pane wherever it runs (#6163); BUSY = a hub heartbeat inside the 90s work
+  // window. #5610: each live row keeps lastSeen + model. The merge is pure in projectActivity.ts.
   const [activity, setActivity] = useState<Map<string, ProjectActivity>>(new Map());
   useEffect(() => {
     let alive = true;
@@ -209,13 +171,9 @@ export function AppShell() {
     return () => { alive = false; clearInterval(t); };
   }, [hub]);
 
-  // ACTIVE NOW vs the rest. This is the answer to "I have a hard time figuring out where the
-  // projects are": the handful you are actually working in rise to the top, and everything else
-  // stays alphabetical below so it is still a predictable place to look.
-  //
-  // Sorted mid-turn-before-idle inside the active group (activityRank), and the group only
-  // EXISTS when something is live — an empty "Active now" header on a quiet machine would be
-  // chrome that says nothing.
+  // ACTIVE NOW vs the rest: the handful you are working in rise to the top, everything else stays
+  // alphabetical. Sorted mid-turn-before-idle inside the group (activityRank), and the group only
+  // EXISTS when something is live.
   const [activeProjects, restProjects] = useMemo(() => {
     const live = projects.filter(p => activity.has(p))
       .sort((a, b) => activityRank(activity.get(a)) - activityRank(activity.get(b)) || a.localeCompare(b));
@@ -232,12 +190,8 @@ export function AppShell() {
     return n;
   }, [activity]);
 
-  // Newer app release out? Checked at launch and every 6h — the release cadence here is days, not
-  // minutes, and unauthenticated GitHub API calls are rate-limited. The chip this feeds is the
-  // answer to "how does a teammate ever find out 0.3.3 is stale": before this, the app itself
-  // never knew.
-  // #5625 — the search palette: one component, two scopes. The trigger above every lens opens
-  // it scoped to the project; ⌘K anywhere opens it global (projects + cards of the live set).
+  // Newer app release out? Checked at launch and every 6h (GitHub API calls are rate-limited).
+  // #5625: the search palette, one component, two scopes (project trigger; ⌘K global).
   const [palette, setPalette] = useState<PaletteScope | null>(null);
   const [focusCard, setFocusCard] = useState<number | null>(null);
   useEffect(() => {
@@ -268,11 +222,8 @@ export function AppShell() {
   useEffect(() => {
     if (!client) return;
     let alive = true;
-    // Count only what the human has NOT looked at. inbox() peeks with since=0, so it returns
-    // everything ever addressed to ME; counting all of it made a lifetime total that could only
-    // climb, and nothing in the app could bring it down. "Seen" is tracked locally rather than by
-    // advancing the hub cursor, because that cursor belongs to the receiving session's delivery
-    // hooks and peeking must never steal a message a session still has to act on.
+    // Count only what the human has NOT looked at: inbox() peeks with since=0, so it returns
+    // everything ever addressed to ME. "Seen" is local; the hub cursor belongs to the delivery hooks.
     const pull = () => client.inbox(ME)
       .then(r => {
         if (!alive) return;
@@ -322,15 +273,9 @@ export function AppShell() {
     setPane({ kind: "project", lens: "board" });
   };
 
-  // WAKE — the sidebar's way to make a sleeping project live without ever leaving the app
-  // (Sasha's ruling, 2026-08-31: "we want to stay away from firing up terminal sessions outside
-  // of Trantor"). One call to `trantor open` via the frozen herdr bridge: it reattaches rather
-  // than stacks, claims any waiting handoff with a FRESH session id, and records the pane —
-  // so the click is idempotent and lands you in the Workspace lens already attached.
-  // (#6138) Per-row wake states: only the clicked row shows the in-flight state, then the
-  // outcome (woken / kickoff sent / busy / the error) for a few seconds. Other rows keep their
-  // look — a run elsewhere never greys them. One wake at a time still holds: a second click
-  // mid-open is a re-ask, not a queue.
+  // WAKE: make a sleeping project live without leaving the app. One call to `trantor open` via the
+  // frozen herdr bridge, idempotent (reattaches, claims a waiting handoff, records the pane).
+  // #6138: per-row wake states; only the clicked row shows in-flight, then the outcome briefly.
   const [wakeStates, setWakeStates] = useState<Map<string, WakeRowState>>(new Map());
   const wakingRef = useRef(false);
   const wakeTimers = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
@@ -378,11 +323,8 @@ export function AppShell() {
     }
   };
 
-  // #6201 — the wake says where it is while it runs. The mount query covers a window opened
-  // mid-wake (an event alone would never tell it anything until the next phase), and the
-  // wake-progress events keep the rows current: "kickoff pending" through the idle gate, the
-  // send, then the outcome for the usual few seconds. Genesis's detached wake (#6161) and a
-  // wake from another window both show up here — no row goes quiet mid-chain again.
+  // #6201: the wake says where it is while it runs. The mount query covers a window opened
+  // mid-wake; wake-progress events keep the rows current through the idle gate and the send.
   useEffect(() => {
     let alive = true;
     wakeInProgress().then(ps => {
@@ -403,13 +345,9 @@ export function AppShell() {
     // runs once at mount; the fold helpers are stable component-body closures
   }, []);  // eslint-disable-line react-hooks/exhaustive-deps
 
-  // #5401 — the reboot-restore offer. At LAUNCH (once, with one 30s retry for a herdr that is
-  // still coming up), find projects whose orchestrator pane outlived its conversation. Per the
-  // project's baton dial: "auto" resumes immediately (loudly — the wake lands you nothing, but
-  // the row lights and the pane recaps); "ask" (default) lists it in a strip with a Resume
-  // button — the same wakeProject the sidebar uses, so there is exactly ONE resume path.
-  // Launch-only on purpose: a deliberately /exited session leaves the same agent-less pane,
-  // and a continuous poll would nag about it forever.
+  // #5401: the reboot-restore offer, at LAUNCH only (one 30s retry for a slow herdr): projects whose
+  // orch pane outlived its conversation. "auto" resumes; "ask" (default) lists a Resume button on
+  // the same wakeProject path. Launch-only because a deliberate /exit leaves the same pane.
   const [restorables, setRestorables] = useState<RestorableSession[]>([]);
   const restoreRan = useRef(false);
   useEffect(() => {
@@ -481,18 +419,10 @@ export function AppShell() {
     const wakeLine = wakeRowLine(wakeState);
     const underway = wakeUnderway(wakeState);
     const open = () => { setActive(p); setPane(cur => ({ kind: "project", lens: cur.kind === "project" ? cur.lens : "board" })); };
-    // #5610 v1 — the happening-now line: a BUSY row says what is true beneath its name
-    // ("mid-turn · 8s ago · fable"), from data the activity pull already holds. An open-idle
-    // row stays a quiet dot; absence of the line is the idle state, never dead chrome.
-    // #6163 — an OPEN row can also carry a herdr status now (local_sessions asks herdr directly
-    // for panes with no hub heartbeat yet): "working" reads the same as busy — mid-turn — since
-    // that is a live pane genuinely mid-turn, just before its first heartbeat; any other known
-    // status ("idle", "blocked", "done", "unknown") shows as "open · <status>" instead of a bare
-    // dot, so the row says what herdr actually knows rather than nothing.
-    // #6094 — "blocked" is not just another status word: it means the session is sitting on an
-    // approval or an AskUserQuestion, waiting on the operator specifically. That reads as "needs
-    // you", amber, never blinking — attention without noise, the same contract seatTabVisual.ts
-    // already gives the Workspace tab for the identical state.
+    // #5610: a BUSY row says what is true beneath its name ("mid-turn · 8s ago · fable"); an
+    // open-idle row is a quiet dot. #6163: an OPEN row may carry a herdr status ("working" reads
+    // as mid-turn, any other known status as "open · <status>"). #6094: "blocked" means waiting
+    // on the operator: amber, never blinking, the same contract seatTabVisual.ts gives the tab.
     const blocked = act?.kind === "open" && needsYou(act.status);
     const blinking = act?.kind === "busy" || (act?.kind === "open" && isWorkingStatus(act.status));
     const statusLine = act?.kind === "busy"

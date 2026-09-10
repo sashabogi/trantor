@@ -1,9 +1,6 @@
-// wakeRow.ts — the sidebar's per-row wake states (#6138).
-//
-// One wake used to grey every other row and failures surfaced nowhere ("pressing the wake button
-// does nothing"). Now only the clicked row shows the in-flight state and then the OUTCOME for a
-// few seconds: woken, kickoff sent, busy, or the error. Pure state + classification, no React —
-// directly unit-testable.
+// wakeRow.ts: the sidebar's per-row wake states (#6138). One wake used to grey every row and
+// failures surfaced nowhere; now only the clicked row shows in-flight, then the OUTCOME for a
+// few seconds. Pure state + classification, no React.
 
 export type WakeRowState =
   | { phase: "running" }

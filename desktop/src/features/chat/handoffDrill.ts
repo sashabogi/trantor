@@ -1,9 +1,7 @@
-// #6668's built-app acceptance drill. TRANTOR_HANDOFF_DRILL=<project> makes Rust emit
-// `handoff-drill` after boot (src-tauri/src/handoff_drill.rs); this opens that project's Chat
-// the way the operator did on 09-07 12:35 — onto a pane holding a bare shell, with the newest
-// transcript over the handoff threshold — and proves the machine does nothing: no banner, no
-// chain, and a direct handoff_now is refused by the entry guard. The seat writes this drill but
-// never launches it. The orchestrator stages the project and runs it.
+// #6668's built-app acceptance drill. TRANTOR_HANDOFF_DRILL=<project> makes Rust emit `handoff-drill`
+// after boot; this opens that project's Chat onto a pane holding a bare shell over the handoff
+// threshold and proves the machine does nothing: no banner, no chain, handoff_now refused. The
+// seat writes this drill but never launches it; the orchestrator stages the project and runs it.
 import { invoke, type InvokeArgs } from "@tauri-apps/api/core";
 import { CHAT_TAB_SELECTOR, selectMode, selectProject, type AskDrillDeps } from "./askDrill";
 

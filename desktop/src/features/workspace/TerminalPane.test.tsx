@@ -1,8 +1,6 @@
 // @vitest-environment happy-dom
-//
-// The pane is exercised through injected dependencies, never through module mocking: it runs its
-// real effects against a faithful stand-in (terminalDouble.ts) that implements the same surface
-// the production wiring does.
+// The pane is exercised through injected dependencies, never module mocking: real effects against
+// a faithful stand-in (terminalDouble.ts) implementing the production surface.
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";

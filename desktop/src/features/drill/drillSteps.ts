@@ -1,11 +1,6 @@
-// Drill Mode (#6800) — the pure half. The visual testing backlog as a step catalogue (which card,
-// what the operator does, what they should see, which DOM check can pre-fill the verdict), the
-// verdict → card-move mapping, and the note each move carries. No React, no IPC: DrillMode.tsx
-// renders this and drillApi.ts performs it, so the flow is provable without mounting anything.
-//
-// Stabilize doctrine (2026-09-02): unit suites stood in for what the operator sees. Every step
-// here therefore ends with a HUMAN Pass — an auto-check only pre-fills the verdict, it never
-// moves a card on its own.
+// Drill Mode (#6800): the pure half. The visual backlog as a step catalogue, the verdict → card-move
+// mapping, and each move's note. No React, no IPC. Stabilize doctrine: every step ends with a
+// HUMAN Pass; an auto-check only pre-fills the verdict.
 
 /** Which built-app fact a DOM probe can vouch for before the operator looks (drillChecks.ts). */
 export type AutoCheckKind =

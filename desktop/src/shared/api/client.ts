@@ -1,21 +1,7 @@
-// trantor desktop — THE CLIENT CONTRACT. Every view imports this; nothing else talks to a hub.
-//
-// Frozen the same way lib/identity.mjs and lib/store-contract.mjs were, and for the same reason: the
-// views fan out against it, and contract drift between them is what actually costs a rebuild.
-//
-// WHY THIS FILE EXISTS AT ALL — the hub runs RELAY_AUTH=enforce, and every request needs four headers
-// (x-trantor-pubkey / -sig / -ts / -nonce). Two consequences shape everything below:
-//
-//   1. `EventSource` CANNOT be used. The browser API accepts a URL and one boolean — it cannot set
-//      headers, so it can never authenticate against our hub. That is exactly why the old ui.html
-//      gets a 200 for the page and 401 for every data call. We therefore parse SSE ourselves from a
-//      streaming fetch (decision: Option A — one auth mechanism, not two; a token-in-URL scheme would
-//      have put secrets in logs and history AND added a second thing to get wrong).
-//
-//   2. Signing AND transport both happen in RUST. The key lives in ~/.agent-bus/keys/*.json and the
-//      webview never sees it — nor a signature, nor even a header, only JSON. That was forced as well
-//      as chosen: macOS App Transport Security blocks cleartext HTTP from WKWebView, so fetch() to a
-//      hub on http://<tailnet>:4477 fails with an opaque "Load failed" that CSP cannot waive.
+// trantor desktop: THE CLIENT CONTRACT. Every view imports this; nothing else talks to a hub. Frozen
+// like lib/identity.mjs. The hub runs RELAY_AUTH=enforce (four signing headers), so EventSource
+// cannot be used, and macOS ATS blocks cleartext HTTP from WKWebView, so signing AND transport
+// happen in RUST: the webview sees only JSON. docs/CONTRACT-desktop-app.md.
 import { describeTransportFailure } from "./transport-errors";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
@@ -144,12 +130,8 @@ export class HubClient {
   constructor(readonly baseUrl: string) {}
 
   /** path MUST include the query string — it is part of what gets signed. */
-  // Goes through RUST, not fetch(). macOS App Transport Security blocks cleartext HTTP from the
-  // webview, so a hub on http://<tailnet>:4477 fails with an opaque "Load failed" that CSP cannot
-  // fix. Routing via Rust also means the webview never handles a key or a signature — only JSON.
-  // P is inferred from whatever object literal each call site builds (e.g. `{ id, status }`) —
-  // there is no one shape to name here, since this is the shared transport for every endpoint's
-  // own already-typed request body.
+  // Goes through RUST, not fetch(): macOS ATS blocks cleartext HTTP from the webview, and the
+  // webview never handles a key or a signature. P is inferred from each call site's literal.
   private async request<T, P = never>(method: string, path: string, payload?: P): Promise<T> {
     const body = payload === undefined ? undefined : JSON.stringify(payload);
     let res: { status: number; body: string };
@@ -205,10 +187,8 @@ export class HubClient {
   }
 
   /**
-   * The brain's books: Scrooge ledger windows (real spend + frontier-yardstick savings) and
-   * card-based costs. NOTIONAL (plan-covered Claude work) stays strictly separate from REAL spend —
-   * summing them would imply we paid for plan-covered tokens. Ledger sections are empty on a hub
-   * whose machine has no Scrooge ledger (the remote hub); card costs work everywhere.
+   * The brain's books: Scrooge ledger windows and card-based costs. NOTIONAL (plan-covered) stays
+   * strictly separate from REAL spend. Ledger sections are empty on a hub with no Scrooge ledger.
    */
   economics() { return this.request<Economics>("GET", "/economics"); }
 
@@ -250,27 +230,20 @@ export class HubClient {
     return this.request("POST", "/proposal/decide", { id, status, note });
   }
 
-  /**
-   * Provider balances/quotas/subscriptions, server-scoped to the operator's configured profile.
-   * MACHINE-LOCAL by nature (profile.json + the crew's own balance snapshots live on this machine),
-   * so callers should ask the local hub.
-   */
+  /** Provider balances, scoped to the operator's profile. MACHINE-LOCAL by nature: ask the local hub. */
   balances() { return this.request<BalancesReport>("GET", "/balances"); }
 
   /**
-   * Messages addressed to `session`. peek=1 reads WITHOUT advancing the delivery ledger — the app is
-   * a viewer here, and marking a message delivered because a human glanced at a list would hide it
-   * from the session's own hooks, which are the thing that actually acts on it.
+   * Messages addressed to `session`. peek=1 reads WITHOUT advancing the delivery ledger: the app is
+   * a viewer, and marking mail delivered on a glance would hide it from the session's own hooks.
    */
   inbox(session: string, since = 0) {
     const q = `?session=${encodeURIComponent(session)}&since=${since}&peek=1`;
     return this.request<{ messages: Message[]; cursor: number }>("GET", `/inbox${q}`);
   }
   /**
-   * Tell the hub this endpoint has actually read up to `upTo`. The app lists with peek=1 so it
-   * never steals a message from a session's delivery hooks, but a HUMAN endpoint has no hooks —
-   * this app is the only reader — so without an explicit ack sasha@mac's watermark stayed at 0 and
-   * every message already read kept escalating as undelivered. Monotonic hub-side.
+   * Tell the hub this endpoint has read up to `upTo`. A HUMAN endpoint has no hooks, so without an
+   * explicit ack the watermark stayed at 0 and read mail kept escalating. Monotonic hub-side.
    */
   async delivered(upTo: number): Promise<void> {
     if (!Number.isSafeInteger(upTo) || upTo <= 0) return;
@@ -285,33 +258,20 @@ export class HubClient {
   }
 
   /**
-   * The hub requires `from` and rejects it unless it matches the request signer:
-   *   if (!b.from || !text.trim()) return 400 "from and non-empty text required"
-   * This omitted it entirely, so every send from the app — the composer as well as the new inbox
-   * quick actions — came back 400. Nothing surfaced it until a reply button put the failure where
-   * someone would look.
+   * The hub requires `from` matching the request signer (else 400). Omitting it once broke every
+   * send from the app until a reply button put the failure where someone would look.
    */
   async send(to: string, text: string, project?: string): Promise<{ ok: boolean; id: number }> {
     return this.request("POST", "/send", { from: await this.me(), to, text, project });
   }
 
   /**
-   * Live event stream. Replaces EventSource, which cannot send our auth headers.
-   *
-   * Everything EventSource would have given for free — frame parsing, reconnect, backoff, resume —
-   * is ours to implement, so it is all here rather than scattered across views:
-   *   • frames are blocks separated by a blank line; we buffer because a chunk can split one in half
-   *   • the hub emits a NAMED `event: ev` channel, so a plain onmessage consumer never sees it
-   *   • reconnect uses exponential backoff, and resumes from the last id so nothing is missed
-   * Returns an unsubscribe function.
+   * Live event stream. Replaces EventSource, which cannot send our auth headers; frame parsing,
+   * reconnect, backoff and resume are ours. Returns an unsubscribe function.
    */
   /**
-   * Live event stream, fed by RUST (see identity.rs::stream).
-   *
-   * EventSource was never an option — it cannot send our four auth headers. The fetch+ReadableStream
-   * version that replaced it then hit macOS App Transport Security, which blocks cleartext HTTP from
-   * the webview and cannot be waived by CSP. So frame parsing, reconnect, backoff and `since` resume
-   * all live in Rust, and the webview just receives parsed JSON on a Tauri event.
+   * Live event stream, fed by RUST (identity.rs::stream): EventSource cannot send our headers and
+   * a fetch stream hits macOS ATS, so parsing, reconnect, backoff and `since` resume live in Rust.
    */
   streamEvents(onEvent: (e: HubEvent) => void, onOpen?: () => void) {
     let unlisten: (() => void) | undefined;
@@ -468,14 +428,9 @@ export async function attachmentInfo(path: string): Promise<AttachmentInfo | nul
  * no herdr pane confirmed a status for it). */
 export type LocalSession = { project: string; status: string | null };
 
-/** Projects with a live session — interactive claude windows + crew seats found by PROCESS
- * truth on this machine, PLUS any project whose orch pane herdr can still name an agent for,
- * wherever that pane's process actually runs (#6163: a freshly-woken pane herdr already sees
- * has no local process to pgrep and no heartbeat yet — hooks fire on tool calls, and a pane that
- * hasn't run one has none — so process truth alone dropped it the moment its one heartbeat aged
- * out of the 90s work window). This, not heartbeat freshness, is what "a terminal window is
- * open" means; heartbeats ride hook fires, so an idle-but-open session goes dark on the hub
- * after 5 quiet minutes. */
+/** Projects with a live session: interactive claude windows + crew seats by PROCESS truth here, PLUS
+ * any project whose orch pane herdr can still name an agent for (#6163: a freshly-woken pane has
+ * no heartbeat yet). This, not heartbeat freshness, is what "a terminal window is open" means. */
 export async function localSessions(): Promise<LocalSession[]> {
   try { return await invoke<LocalSession[]>("local_sessions"); } catch { return []; }
 }

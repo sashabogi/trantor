@@ -1,10 +1,7 @@
-// wakeProgress.ts — the frontend's read on a running wake chain (#6201), the mirror of
-// workspace/handoffProgress.ts for handoff chains (#6081). The wake used to go quiet for the
-// whole idle gate (88s on tiny-timer) while the session's own startup made the chat header read
-// "working", so the operator read a woken session as idle with nothing to do. Rust now marks the
-// chain (wake_in_progress, the mount-time truth) and emits wake-progress at every step; the
-// sidebar row and the chat header follow it. One invoke + one event name, both owned by
-// genesis.rs project_wake.
+// wakeProgress.ts: the frontend's read on a running wake chain (#6201), mirror of
+// workspace/handoffProgress.ts. The wake used to go quiet for the whole idle gate while the chat
+// header read "working". Rust marks the chain (wake_in_progress) and emits wake-progress at every
+// step; one invoke + one event name, both owned by genesis.rs project_wake.
 import { invoke } from "@tauri-apps/api/core";
 import { WAKE_PENDING_LINE, WAKE_SENT_LINE, type WakeRowState } from "./wakeRow";
 
@@ -61,11 +58,9 @@ export function wakeProgressRowState(phase: WakePhase, detail: string | null): W
   }
 }
 
-/** Fold one wake-progress event into the shell's wake-state map — the event guard (#6201). A
- *  phase still in flight sets its row; ended clears the row ONLY while it still shows an
- *  in-flight state: the chain lands (kickoff_landed) moments before the command's own answer
- *  arrives and re-sets the outcome with its fade timer, so an ended that overtakes a showing
- *  outcome must not cut the "few seconds" short. */
+/** Fold one wake-progress event into the shell's wake-state map (#6201). A phase in flight sets its
+ *  row; ended clears it ONLY while it still shows an in-flight state, so an ended that overtakes a
+ *  showing outcome does not cut the "few seconds" short. */
 export function applyWakeProgress(prev: Map<string, WakeRowState>, p: WakeProgress): Map<string, WakeRowState> {
   const next = wakeProgressRowState(p.phase, p.detail);
   const cur = prev.get(p.project);
