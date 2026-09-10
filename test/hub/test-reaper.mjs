@@ -108,9 +108,9 @@ await sleep(800);
 try {
   const C = mk(`http://127.0.0.1:${PC}`);
   // project A: 2 doing + 1 testing + 1 done + 1 todo ; project B: 1 doing (must be untouched by a scoped sweep)
-  await C.post("/task", { project: "swA", title: "doing one", status: "doing", assignee: "codex:swA", by: "codex:swA" });
-  await C.post("/task", { project: "swA", title: "doing two", status: "doing", assignee: "glm:swA", by: "glm:swA" });
-  await C.post("/task", { project: "swA", title: "testing one", status: "testing", assignee: "kimi:swA", by: "kimi:swA" });
+  await C.post("/task", { project: "swA", title: "doing one", drill: "sweep drill", status: "doing", assignee: "codex:swA", by: "codex:swA" });
+  await C.post("/task", { project: "swA", title: "doing two", drill: "sweep drill", status: "doing", assignee: "glm:swA", by: "glm:swA" });
+  await C.post("/task", { project: "swA", title: "testing one", drill: "sweep drill", status: "testing", assignee: "kimi:swA", by: "kimi:swA" });
   await C.post("/task", { project: "swA", title: "already done", status: "done", assignee: "codex:swA", by: "codex:swA" });
   await C.post("/task", { project: "swA", title: "still queued", status: "todo", assignee: "codex:swA", by: "codex:swA" });
   await C.post("/task", { project: "swB", title: "other project doing", status: "doing", assignee: "codex:swB", by: "codex:swB" });

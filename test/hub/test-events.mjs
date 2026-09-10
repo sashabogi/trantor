@@ -53,7 +53,7 @@ try {
 
   await A.post("/register", { session: "host:evtA", project: PROJ, status: "orchestrating" });
   await A.post("/focus", { session: "host:evtA", project: PROJ, title: "wire the unified log" });
-  const card = await A.post("/task", { project: PROJ, title: "build /events", by: "host:evtA", assignee: "codex:evtA", status: "doing" });
+  const card = await A.post("/task", { project: PROJ, title: "build /events", by: "host:evtA", assignee: "codex:evtA", status: "doing", drill: "GET /events?project=evtA shows the card thread" });
   const cid = card?.task?.id;
   await A.post("/send", { from: "codex:evtA", to: "all", project: PROJ, text: `taking #${cid} — ETA 20m` });
   await A.post("/task/update", { id: cid, status: "done", by: "codex:evtA" });

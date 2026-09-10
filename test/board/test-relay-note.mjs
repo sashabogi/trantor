@@ -88,12 +88,17 @@ const getCard = async (id) => {
 // ---- 1. task_add with a note lands on the card's log ------------------------------------------
 let cardId;
 {
-  const r = await call("relay_task_add", { title: "note drill card", note: "plan: add note pass-through on the MCP tools" });
+  // #6452: the card carries a drill from birth — without one the hub refuses the done move in §5.
+  const r = await call("relay_task_add", { title: "note drill card", note: "plan: add note pass-through on the MCP tools", drill: "run node test/board/test-relay-note.mjs and see 0 failed" });
   const out = text(r);
   const m = out.match(/card #(\d+)/);
   ok("task_add succeeded", !!m, out.slice(0, 90));
+  ok("task_add echoes the drill", /drill: run node test\/board/.test(out), out.slice(0, 160));
   cardId = m ? Number(m[1]) : 0;
   const card = await getCard(cardId);
+  ok("the drill is stored on the card", card?.drill === "run node test/board/test-relay-note.mjs and see 0 failed", JSON.stringify(card?.drill));
+  const cv = text(await call("relay_board", { card: cardId }));
+  ok("relay_board card view shows the drill line", /^drill: run node test\/board/m.test(cv), cv.slice(0, 200));
   ok("the note is on the card's log", Array.isArray(card?.log) && card.log.length === 1, JSON.stringify(card?.log || null).slice(0, 120));
   const e = card?.log?.[0] || {};
   ok("log entry is {ts,by,text} with the session as author", e.text === "plan: add note pass-through on the MCP tools" && e.by === SESSION && Number.isFinite(e.ts), JSON.stringify(e).slice(0, 120));
@@ -125,6 +130,8 @@ let cardId;
   const sid = Number(text(silent).match(/card #(\d+)/)?.[1] || 0);
   const out2 = text(await call("relay_board", {}));
   ok("a note-less card shows no · count", new RegExp(`#${sid} [^\\n]*`).test(out2) && !new RegExp(`#${sid} [^\\n]*·\\d`).test(out2), out2.split("\n").find(l => l.includes(`#${sid}`)) || "");
+  ok("board marks the drilled card and not the drill-less one (#6452)",
+    new RegExp(`#${cardId} [^\\n]*drill ✓`).test(out2) && !new RegExp(`#${sid} [^\\n]*drill ✓`).test(out2), out2.split("\n").filter(l => l.includes(`#${cardId}`) || l.includes(`#${sid}`)).join(" | "));
 }
 
 // ---- 5. an oversize note (>2000) is refused client-side ------------------------------------------

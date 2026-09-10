@@ -110,6 +110,9 @@ main:not(.learn-open) .learn-body{display:none}
 .diff.easy{background:#13302b;color:#2dd4bf}.diff.medium{background:#2c2a17;color:#f5d90b}.diff.hard{background:#33181f;color:#ff7a90}
 .bounce{display:inline-block;font-size:9.5px;font-weight:700;color:#ef6a6a;background:#2a1517;border:1px solid #5a2c2c;border-radius:8px;padding:1px 6px;margin-left:5px}
 .mdl{font-size:9px;font-family:ui-monospace,monospace;color:#8fa3be;background:#16202f;border:1px solid #243049;border-radius:7px;padding:1px 5px;margin-left:4px;vertical-align:1px}
+.drill{font-size:9px;font-family:ui-monospace,monospace;color:#8fbe9e;background:#14231b;border:1px solid #244a34;border-radius:7px;padding:1px 5px;margin-left:4px;vertical-align:1px}
+.drill.none{color:#be8f8f;background:#2a1717;border-color:#4a2424}
+.cmdrill{margin-top:6px;font-size:11.5px;color:var(--mut);white-space:pre-wrap}
 .xcount{font-size:9px;font-weight:800;color:#cbd5e1;background:#1c2740;border:1px solid #2c3a52;border-radius:8px;padding:1px 5px;margin-left:5px;vertical-align:1px}
 .tcard.done{opacity:.65}.tcard.done span{text-decoration:line-through}
 .empty{color:var(--dim);text-align:center;padding:30px}
@@ -664,7 +667,8 @@ async function openCard(id){
     + `<div class="cmhead"><div><div class="cmtitle">${esc(t.title)}</div>`
     + `<div class="cmmeta">${iconFor(t.assignee||'',14)} ${esc(String(t.assignee||'unassigned').split(':')[0])}`
     + ` <span class="cmstat" style="color:${SC[t.status]||'var(--mut)'};border-color:${SC[t.status]||'var(--line)'}">${esc(t.status)}</span>`
-    + `${t.difficulty?` · ${esc(t.difficulty)}`:''}${t.model?` · ${esc(String(t.model).slice(0,26))}`:''} · #${id} · ${esc(t.project||'')}</div></div>`
+    + `${t.difficulty?` · ${esc(t.difficulty)}`:''}${t.model?` · ${esc(String(t.model).slice(0,26))}`:''} · #${id} · ${esc(t.project||'')}</div>`
+    + `<div class="cmdrill">${t.drill?`Drill: ${esc(t.drill)}`:'No drill line — set one with relay_task_add `drill`, a checklist item or a note starting "Drill:"; the hub refuses done without it.'}</div></div>`
     + `<span class="cmclose" id="cmclose">✕</span></div>`
     + `<div class="cmbody">${rows || '<div class="cmempty">No recorded activity for this card yet — no bus reports reference #'+id+'.</div>'}</div></div>`;
   el.style.display = 'flex';
@@ -953,7 +957,7 @@ async function render(){
         const rank={todo:0,doing:1,testing:2,done:3};
         const bounced=last&&last.from!==undefined&&rank[last.to]<rank[last.from]&&(Date.now()-last.ts)<10*60*1000;
         const trail=hist.map(h=>`${h.from?h.from+'→':''}${h.to}${h.by?' by '+String(h.by).split(':')[0]:''} @${new Date(h.ts).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'})}`).join('\n');
-        return `<div class="tcard ${t.status}" data-id="${t.id}" title="${esc(trail)||'click to advance'}"><span>${esc(t.title)}</span>${t.count>1?`<span class="xcount">×${t.count}</span>`:''}${t.difficulty?`<span class="diff ${t.difficulty}">${t.difficulty[0].toUpperCase()}</span>`:''}${t.model?`<span class="mdl">${esc(t.model)}</span>`:''}${bounced?`<span class="bounce">↩ bounced${last.by?' by '+esc(String(last.by).split(':')[0]):''}</span>`:''}${t.assignee?`<div class="who">${iconFor(t.assignee,12)}@${esc(t.assignee)}</div>`:''}</div>`;
+        return `<div class="tcard ${t.status}" data-id="${t.id}" title="${esc(trail)||'click to advance'}"><span>${esc(t.title)}</span>${t.count>1?`<span class="xcount">×${t.count}</span>`:''}${t.difficulty?`<span class="diff ${t.difficulty}">${t.difficulty[0].toUpperCase()}</span>`:''}${t.model?`<span class="mdl">${esc(t.model)}</span>`:''}${t.drill?`<span class="drill" title="drill: ${esc(t.drill)}">drill</span>`:(t.status!=='done'?`<span class="drill none" title="no drill line — the hub refuses done until one is on the card">no drill</span>`:'')}${bounced?`<span class="bounce">↩ bounced${last.by?' by '+esc(String(last.by).split(':')[0]):''}</span>`:''}${t.assignee?`<div class="who">${iconFor(t.assignee,12)}@${esc(t.assignee)}</div>`:''}</div>`;
       })()).join('')}</div>`;
     }).join('');
     const ph=p.phase||'';
@@ -1040,7 +1044,9 @@ async function render(){
     const id=+c.dataset.id,t=tasks.find(x=>x.id===id);if(!t)return;
     if(suppressClickId&&+suppressClickId===id)return;   // drag-end, not a click
     const next={todo:'doing',doing:'testing',testing:'done',failed:'doing',done:'todo',blocked:'doing',stale:'todo'}[t.status];
-    await fetch('/task/update',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({id,status:next})});render();
+    const r=await fetch('/task/update',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({id,status:next})});
+    if(!r.ok){const j=await r.json().catch(()=>({}));alert(j.error||`the hub refused the move (${r.status})`);}   // #6452: a refused done says why instead of silently staying put
+    render();
   });
 }
 function addMsg(m,count=true){

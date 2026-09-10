@@ -198,11 +198,12 @@ server.tool("relay_contracts", "What you dispatched and are still owed. Lists ev
   });
 
 server.tool("relay_task_add", "Add a Kanban card to a project's board on the dashboard (what you're about to work on). Defaults: THIS project, assigned to you, status 'todo'. Pass `project` to target another board — e.g. when you orchestrate a crew that runs in a different directory than the one you launched Claude from. Keep the team's progress visible. Attach a `note` whenever context isn't obvious from the title — it lands on the card's permanent log ({ts,by,text}, kept: last 40).",
-  { title: z.string().describe("short task title"), status: z.enum(["todo","doing","testing","failed","done","blocked"]).optional(), assignee: z.string().optional().describe("session id to assign (default: you)"), difficulty: z.enum(["easy","medium","hard"]).optional().describe("difficulty tag — drives model/agent routing (relay_advise) and shows on the board"), model: z.string().optional().describe("the model this card is routed to (from relay_advise routing, or the CLI default) — shown on the card"), deps: z.array(z.number()).optional().describe("card ids this card depends on — drawn as branch edges in the Flow view (e.g. integration depends on every crew card)"), phase: z.string().optional().describe("phase/milestone this card belongs to (e.g. 'P5', 'Auth', 'Launch') — groups it in the Flow view's phase flowchart. Optional; otherwise inferred from the title prefix + time."), note: z.string().max(2000).optional().describe("optional card-log entry (<=2000 chars): context, the plan, or a link — stored on the card as {ts,by,text}"), project: z.string().optional().describe("board to add to (default: this session's project). Set to the crew's project when you orchestrate from a different directory"), checklist: z.array(z.string().max(200)).max(20).optional().describe("acceptance items for the card — the honest denominator for its progress bar. Tick them off with relay_task_check as each is truly met") },
-  async ({ title, status, assignee, difficulty, model, deps, phase, note, project, checklist }) => {
+  { title: z.string().describe("short task title"), status: z.enum(["todo","doing","testing","failed","done","blocked"]).optional(), assignee: z.string().optional().describe("session id to assign (default: you)"), difficulty: z.enum(["easy","medium","hard"]).optional().describe("difficulty tag — drives model/agent routing (relay_advise) and shows on the board"), model: z.string().optional().describe("the model this card is routed to (from relay_advise routing, or the CLI default) — shown on the card"), deps: z.array(z.number()).optional().describe("card ids this card depends on — drawn as branch edges in the Flow view (e.g. integration depends on every crew card)"), phase: z.string().optional().describe("phase/milestone this card belongs to (e.g. 'P5', 'Auth', 'Launch') — groups it in the Flow view's phase flowchart. Optional; otherwise inferred from the title prefix + time."), note: z.string().max(2000).optional().describe("optional card-log entry (<=2000 chars): context, the plan, or a link — stored on the card as {ts,by,text}"), project: z.string().optional().describe("board to add to (default: this session's project). Set to the crew's project when you orchestrate from a different directory"), checklist: z.array(z.string().max(200)).max(20).optional().describe("acceptance items for the card — the honest denominator for its progress bar. Tick them off with relay_task_check as each is truly met"),
+    drill: z.string().max(300).optional().describe("the card's DRILL (BUILD-DOCTRINE rule 1): the exact thing a person does on the built artifact and what they must see. Stored on the card and shown on the board; the hub refuses a move to done on a card with no drill line (this field, a checklist item or a note starting \"Drill:\")") },
+  async ({ title, status, assignee, difficulty, model, deps, phase, note, project, checklist, drill }) => {
     const proj = project || PROJECT;
-    const { task } = await api("POST", "/task", { project: proj, title, status: status || "todo", assignee: assignee || SESSION, difficulty, model, deps, phase, note, checklist, by: SESSION });
-    return { content: [{ type: "text", text: `card #${task.id} added to ${proj}: "${title}" [${task.status}]${phase?` · phase ${phase}`:""}${task.checklist?.length?` · ${task.checklist.length} acceptance item(s)`:""}` }] };
+    const { task } = await api("POST", "/task", { project: proj, title, status: status || "todo", assignee: assignee || SESSION, difficulty, model, deps, phase, note, checklist, drill, by: SESSION });
+    return { content: [{ type: "text", text: `card #${task.id} added to ${proj}: "${title}" [${task.status}]${phase?` · phase ${phase}`:""}${task.checklist?.length?` · ${task.checklist.length} acceptance item(s)`:""}${task.drill ? ` · drill: ${task.drill}` : " · NO DRILL — it cannot reach done until one is on the card"}` }] };
   });
 
 server.tool("relay_task_check", "Tick (or untick) ONE acceptance item on a card's checklist — the card's progress bar reads checked/total, so tick an item only when it is genuinely met (tests run, behavior observed), never to make the bar move. Items are 0-indexed in the order relay_task_add listed them.",
@@ -353,6 +354,10 @@ function cardView(tasks, id, proj) {
   });
   if (deps.length) out.push(`depends on:\n  ${deps.join("\n  ")}`);
 
+  // #6452: the drill is the card's gate to done, so a reader sees it (or its absence) up front.
+  if (typeof card.drill === "string" && card.drill.trim()) out.push(`drill: ${card.drill.trim()}`);
+  else if (card.status !== "done") out.push(`drill: (none — a checklist item or note starting "Drill:" also counts; without one the hub refuses done)`);
+
   if (Array.isArray(card.checklist) && card.checklist.length) {
     out.push(`checklist:\n  ${card.checklist.map((c, i) => `[${c.done ? "x" : " "}] ${i}. ${c.text || c}`).join("\n  ")}`);
   }
@@ -387,7 +392,7 @@ server.tool("relay_board", "Show a project's Kanban board (all cards + their sta
   if (!tasks.length) return { content: [{ type: "text", text: `${proj}: no cards yet` }] };
   if (card) return { content: [{ type: "text", text: cardView(tasks, card, proj) }] };
   const by = { todo: [], doing: [], testing: [], failed: [], done: [], blocked: [] };
-  for (const t of tasks) (by[t.status] || by.todo).push(`#${t.id} ${t.title}${t.assignee ? ` (@${t.assignee})` : ""}${noteCount(t) ? ` ·${noteCount(t)}` : ""}`);
+  for (const t of tasks) (by[t.status] || by.todo).push(`#${t.id} ${t.title}${t.assignee ? ` (@${t.assignee})` : ""}${noteCount(t) ? ` ·${noteCount(t)}` : ""}${typeof t.drill === "string" && t.drill.trim() ? " · drill ✓" : ""}`);
   const cols = Object.entries(by).filter(([, v]) => v.length).map(([k, v]) => `${k.toUpperCase()}:\n  ${v.join("\n  ")}`);
   return { content: [{ type: "text", text: `${proj} board\n${cols.join("\n")}` }] };
 });
