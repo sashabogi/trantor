@@ -368,6 +368,8 @@ Waking works the same way from the other end: hover a sleeping project in the ap
 **Wake** hosts its session as an in-app pane — `trantor open` under the hood, opened in the
 project's own checkout wherever it is called from, handoff-beats-resume, and the same kickoff
 prompt so the woken session catches up (handoff, board, memory) and recaps on its own.
+A reboot can leave herdr with a pane in its layout and no terminal behind it; `trantor open`,
+the app's Resume and `trantor prune` all treat such a pane as dead and host a fresh one.
 
 Why crews never exhaust the orchestrator: bus messages are **by reference** (~70 tokens),
 work products stay in each agent's own context — the orchestrator burns at coordination
