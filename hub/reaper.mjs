@@ -208,7 +208,7 @@ function contractsFor(session, { project = "", windowMs = CONTRACT_WINDOW_MS, ov
     else if (!online || (overdueMs != null && ageMs >= overdueMs)) disposition = "stalled";
     else disposition = "waiting";
 
-    out.push({
+    const row = {
       id: c.id, to: c.to, text: c.text, ts: c.ts, ageMs,
       answered: !!answer,
       answer: answer ? { id: answer.id, ts: answer.ts, text: answer.text } : null,
@@ -217,7 +217,12 @@ function contractsFor(session, { project = "", windowMs = CONTRACT_WINDOW_MS, ov
       assigneeStatus: String(peer?.status || ""),
       assigneeLastSeenMs: seen ? t - seen : null,
       reaped: reaped ? { ts: reaped.ts, reason: reaped.reason } : null,
-    });
+    };
+    // The two inputs the `ack` disposition is decided on, shown so a reader can tell a row that
+    // LOST its flag (#7140: the store dropped it) from one that was never sent with it.
+    if (c.wake === false) row.wake = false;
+    if (c.kind) row.kind = c.kind;
+    out.push(row);
   }
 
   // ---- superseded: the terminal state for a row nobody will ever answer ------------------------
