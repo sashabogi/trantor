@@ -1,13 +1,8 @@
 #!/usr/bin/env node
-// trantor crew runner — keeps a crew agent alive forever without burning tokens.
-//
+// trantor crew runner: keeps a crew seat alive without burning tokens.
 //   node crew-runner.mjs <agent> [project-dir]
-//
-// The park problem: CLIs end their turn no matter what you prompt (harnesses actively kill
-// "call relay_wait repeatedly" loops). So the runner owns the waiting: it long-polls the bus
-// over plain HTTP (zero tokens, doubles as a heartbeat), and when a message addressed to this
-// agent arrives it RESUMES the CLI session (native resume = full context kept) with that
-// message as the prompt. The model just works and ends its turn; the runner does the rest.
+// The runner long-polls the bus and resumes the CLI with each wake as the prompt; the
+// seams (delivery, time box, parking, state path) are in docs/CONTRACT-crew-runner.md.
 import { execSync, spawnSync, spawn } from "node:child_process";
 import { readFileSync, writeFileSync, unlinkSync, existsSync, appendFileSync, mkdirSync, realpathSync } from "node:fs";
 import { join, basename } from "node:path";
@@ -120,11 +115,8 @@ function ensureSeatWorktree(sourceDir) {
 
 const TURN_DIR = ensureSeatWorktree(DIR);
 
-// #6154: opencode prints no session id on stdout, but it records every session in its own sqlite
-// DB with the directory the session was created in. The newest row for OUR worktree is the only
-// session a resume may pin — anything else in that DB belongs to another project on this machine,
-// which is exactly what `run -c` used to hand us. Read-only, fail-open: no DB or no row means the
-// next turn starts fresh, which is always safe, instead of resuming a stranger, which never is.
+// #6154: a resume may pin only the newest opencode session created in OUR worktree; the DB is
+// read fail-open, so a missed lookup starts fresh rather than resuming a stranger.
 const OC_DB = join(process.env.XDG_DATA_HOME || join(homedir(), ".local", "share"), "opencode", "opencode.db");
 function ocSid(dir) {
   try {
@@ -171,8 +163,7 @@ const LOGDIR = join(homedir(), ".agent-bus", "logs");
 try { mkdirSync(LOGDIR, { recursive: true }); } catch {}
 let TURN = 0;
 const telemetry = (rec) => { try { appendFileSync(join(LOGDIR, `${AGENT}-${PROJ}.jsonl`), JSON.stringify(rec) + "\n"); } catch {} };
-// Boot line records the HUB this runner bound to — the 2026-08-14 split-brain took an hour to
-// diagnose because nothing on disk said which hub a seat was talking to.
+// The boot line records which hub this runner bound to (the split-brain lesson).
 telemetry({ ts: Date.now(), agent: AGENT, project: PROJ, boot: true, hub: HUB });
 // A seat can open a terminal window on a machine whose owner never asked for one and does not know
 // what they are looking at. "◤ CLAUDE ◢ trantor crew · fleet" tells that person nothing: not what
@@ -194,11 +185,8 @@ async function api(path, body) {
   // that shows up as a seat that quietly records nothing rather than one that errors.
   const url = HUB + path;
   const sig = signedHeaders(identity, url, opts);
-  // HARD DEADLINE on every call (2026-08-01, crebral-health kimi seat): a long-poll whose socket
-  // dies silently (idle NAT/tailscale reset, no RST delivered) otherwise hangs fetch FOREVER —
-  // the runner sat "parked" with zero connections and zero retries while its crew was rebuilt
-  // around it. Deadline = the poll's own wait window + slack, so a healthy long-poll never trips
-  // it and a dead one surfaces as a catchable error that the main loop retries in 5s.
+  // Hard deadline on every call: a long-poll whose socket dies silently would hang fetch forever.
+  // Deadline = the poll's own wait window + slack, so a healthy long-poll never trips it.
   const waitS = Number((path.match(/[?&]wait=(\d+)/) || [])[1] || 0);
   const r = await fetch(url, { ...opts, headers: { ...opts.headers, ...sig }, signal: AbortSignal.timeout((waitS + 30) * 1000) });
   return r.json();
@@ -220,24 +208,13 @@ const BRAND_HEX = { claude: "#D97757", codex: "#e8e8ee", openai: "#e8e8ee", deep
   kimi: "#8b8bf5", moonshot: "#8b8bf5", glm: "#5ea0f5", zai: "#5ea0f5", gemini: "#8E75B2", openrouter: "#94A3B8" };
 function cmuxStatus(value, color, icon = "robot", opts = {}) {
   if (!inCmux()) return;
-  // Label with the REAL seat identity, not a literal. This was hardcoded to "trantor", so every seat
-  // in every project reported under one name — four different agents (and their duplicates) rendered
-  // identically in the sidebar, which is why a runner leak looked like mystery sessions instead of
-  // obvious duplicates. Note this is the DISPLAY path; two previous fixes to the crossed-label
-  // symptom both landed on the *bus* identity and never touched this line.
-  // Pill = "<agent> · <state>" in the agent's BRAND color (alerts keep their alarm color — a red
-  // error must read as red at a glance); errors sort first via --priority.
+  // Label with the REAL seat identity (this is the DISPLAY path, distinct from the bus identity).
+  // Pill = "<agent> · <state>" in the agent's brand color; alerts keep their alarm color.
   const col = opts.alert ? color : (BRAND_HEX[AGENT.toLowerCase()] || color);
   try { spawnSync(CMUX_BIN, ["set-status", SESSION, `${AGENT} · ${value}`, "--color", col, "--icon", icon, "--priority", String(opts.priority ?? 0)], { stdio: "ignore", timeout: 1500, env: { ...process.env, CMUX_QUIET: "1" } }); } catch {}
 }
-// herdr drops a pane's agent registration when the process inside it exits — and a seat's CLI
-// exits at the END OF EVERY TURN. Reporting once when the pane is created is therefore not enough:
-// the seat vanishes from `herdr agent list` after its first turn, `herdr agent attach` starts
-// answering agent_not_found, and the app renders that raw error where the terminal should be.
-// Observed 2026-08-27 on codex, which was crash-looping on an exhausted quota.
-//
-// So re-report at every turn boundary, which also gives herdr a truthful working/idle state.
-// NOTE the argument order: the pane id comes FIRST, before the flags.
+// herdr drops the agent registration when the pane's process exits, and a seat's CLI exits every
+// turn, so re-report at every turn boundary. Argument order: the pane id comes FIRST.
 function herdrAgent(state) {
   try {
     const f = join(homedir(), ".agent-bus", "crew-windows.txt");
@@ -274,15 +251,8 @@ const CLI = {
   // --yolo in prompt mode (prompt mode auto-approves tools), and emits session_-prefixed ids.
   kimi:     { first: `kimi{M} -p "$(cat {P})" < /dev/null`,
               next:  `kimi{M} -r {SID} -p "$(cat {P})" < /dev/null`, mflag: " --model ", sid: /To resume this session: kimi -r (\S+)/ },
-  // #6154: the opencode family never resumes blind. `run -c` continues the GLOBALLY last session
-  // on this machine — any project's (opencode.db showed a pr-os session interleaved between two
-  // trantor ones) — and the resumed session's stored directory becomes the Location every relative
-  // path resolves against. A seat then `cd desktop/src-tauri` inside its own worktree while
-  // opencode resolves it against a stranger's root, the bash tool reads it as external_directory
-  // and auto-rejects, and the turn dies mid-work with everything uncommitted. So: every spawn
-  // pins --dir to the seat worktree, and a resume pins -s to the session id looked up from
-  // opencode's own DB by directory — the session CREATED here (ocSid below). A missed lookup
-  // degrades to a fresh session, never to a foreign one.
+  // #6154: never resume blind. `run -c` continues the machine's globally last session, so every
+  // spawn pins --dir and a resume pins -s to the session found by directory (ocSid below).
   deepseek: { first: `opencode run --dir {DIR}{M} "$(cat {P})"`,
               next:  `opencode run --dir {DIR} -s {SID}{M} "$(cat {P})"`, mflag: " -m ", pinned: true, env: join(homedir(), ".token-scrooge", ".env") },
   opencode: { first: `opencode run --dir {DIR}{M} "$(cat {P})"`,
@@ -295,23 +265,13 @@ const CLI = {
               next:  `opencode run --dir {DIR} -s {SID}{M} "$(cat {P})"`, mflag: " -m ", pinned: true, env: join(homedir(), ".token-scrooge", ".env") },
   claude:   { first: `claude{M} -p "$(cat {P})" --dangerously-skip-permissions`,
               next:  `claude -c{M} -p "$(cat {P})" --dangerously-skip-permissions`,
-              // TRANTOR_STATE_ASSEMBLE=1 — Trantor State Phase 2a (TDD §4.6). Note what is GONE:
-              // `-c`. The resumed transcript is the thing this path exists to stop re-sending, so a
-              // state step is a fresh `claude -p` carrying the assembled prefix instead, and
-              // `--json-schema` holds the seat to the TurnResult grammar. Used for the first step
-              // of a card too: with no `-c` it IS the `first` shape, and a first step that returned
-              // no TurnResult would leave the run recorder a hole on turn 1.
-              //
-              // The flag is off by default and nothing above changes, so the transcript path stays
-              // byte-identical — test/state/test-runner-state.mjs asserts that against these very
-              // strings rather than against a reading of this comment.
+              // TRANTOR_STATE_ASSEMBLE=1 (TDD §4.6): a state step is a fresh `claude -p` with the
+              // assembled prefix and no `-c`; --json-schema holds the seat to the TurnResult grammar.
+              // test/state/test-runner-state.mjs asserts the transcript path stays byte-identical.
               stateNext: `claude{M} -p "$(cat {P})" --dangerously-skip-permissions --output-format json --json-schema "$(cat {S})"`,
               mflag: " --model " },
-  // DeepSeek Harness. Every turn is a FRESH session — headless has no resume yet — so the seat
-  // relies on the wake prompt + the board (via the relay tools its profile mounts) rather than
-  // conversation memory. `trantor connect` builds the ~/.dsh/profiles/trantor composition: their
-  // CC-hooks bridge running OUR hooks + their MCP client running our relay server. No model flag:
-  // headless takes only the task; the model is profile config.
+  // DeepSeek Harness: every turn is a fresh session (no headless resume), so the seat relies on
+  // the wake prompt + the board. `trantor connect` builds the ~/.dsh/profiles/trantor composition.
   dsh:      { first: `dsh --profile trantor "$(cat {P})" < /dev/null`,
               next:  `dsh --profile trantor "$(cat {P})" < /dev/null`, mflag: "", env: join(homedir(), ".token-scrooge", ".env") },
 };
@@ -328,27 +288,19 @@ if (!CLI[AGENT]) log(`'${AGENT}' is not a built-in seat — running it as an ope
 // always-on seats (the fleet DUTY agent, bin/duty.mjs) whose doctrine is not "work your card".
 const RULES = process.env.RUNNER_RULES || `Rules: you are ${SESSION} on the trantor crew. Before starting a card, read YOUR card: relay_board with card:<id> (the card, its deps, its notes, and the last five done cards whose title shares a word); never the whole board. Work your assigned file(s), report on the bus (relay_send, <280 chars), move your Kanban card as you go with a NOTE saying what you did (doing -> testing -> done; in 'testing' run YOUR OWN test file — never the full npm test, suites collide across seats — plus \`node bin/slop-gate.mjs\` when the repo has one: it lints ONLY your changed files against the anti-slop rules, and a card must not reach done with slop-gate failing; use 'failed' + a report if anything breaks). If you need something from another session, message THAT SESSION (relay_peers to find its id, relay_send to reach it) — never ask the human to pass it along; carrying messages between agents is the job this bus exists to remove. When your work for THIS message is finished, END YOUR TURN — do NOT park, do NOT loop relay_wait; the runner waits for you and will wake you with the next message. Path discipline: build/test from your worktree root ${TURN_DIR} with absolute paths or --manifest-path/--prefix instead of cd-ing into subdirs, and put anything that must land outside the repo under ${TURN_DIR}/.agent-bus-out/ (gitignored) — never ~/.agent-bus. Cross-project action is a breach: never \`trantor up\` a crew, register a seat, or send a card/contract into a project other than ${PROJ} unless the operator ran \`trantor policy link ${PROJ} <other> --reason "<why>"\` first — the hub, the CLI and this runner all refuse it mechanically, so ask the operator to link the projects instead of routing around the refusal.`;
 
-// ---- the pulse (Scape's Lloyd/Argus loop, Trantor-shaped) --------------------
-// A message-driven seat is DEAF between messages. An orchestrator seat with a mission needs a
-// metronome: RUNNER_PULSE_MS re-runs its mission note on a cadence even when the bus is silent.
-// The pulse prompt is deliberately almost verbatim the one that works in the wild: re-read the
-// note, continue, check your children, record. Boot discipline rides with it — an empty mission
-// means STAND BY, never invented work.
+// ---- the pulse --------------------
+// A message-driven seat is deaf between messages; RUNNER_PULSE_MS re-runs an orchestrator seat's
+// mission note on a cadence. An empty mission means STAND BY, never invented work.
 const PULSE_MS = Math.max(0, Number(process.env.RUNNER_PULSE_MS || 0));
 const MISSION_FILE = process.env.RUNNER_MISSION_FILE || "MISSION.md";
 const PULSE_PROMPT = `[pulse] Re-read your mission note (${MISSION_FILE} in your working directory) and continue your mission. Check on your children and your board, unblock what is stuck, and record what you did. If the mission note is missing, empty, or has no actionable mission, reply ONLY that you are standing by and end your turn — do NOT invent work, create files, or spawn anything.`;
 
 // ---- failure visibility ----------------------------------------------------
-// A turn's CLI can fail (credits exhausted, auth, crash) and the runner would just
-// re-park — staying green on the bus, telling the orchestrator NOTHING. These surface
-// every non-zero turn to the bus in real time so the orchestrator (and `trantor swap`)
-// can react, and flip presence to errored/down.
+// Every non-zero turn is surfaced to the bus in real time so the orchestrator and `trantor swap`
+// can react, and presence flips to errored/down.
 let consecFails = 0;
-// The failure STATE the room has already been told about. A seat that is down stays down, and
-// saying so again every retry is repetition, not news — the monitoring doctrine this project holds
-// everyone else to says report duration, not repetition. Observed cost: a permanently exhausted
-// codex seat broadcast "DOWN" to `all` 31 times over six hours, and every broadcast is a turn for
-// every live seat, so two working agents spent the evening reading the same sentence.
+// The failure STATE the room has already been told about: report on change, never on every
+// retry (monitoring doctrine).
 let announced = "";
 let lastErrText = "";
 // #5481: the turn exited 0 with a NULL/empty transcript — the Inception/Mercury trap. The provider
@@ -374,21 +326,14 @@ function startDutyNudgeWatcher(plan, sinceMs) {
 }
 
 // ---- undelivered wake messages (the runner owns delivery, not the hub) ----
-// The hub hands a message out exactly ONCE: the poll cursor advances the instant we read it, and
-// nothing ever re-fires. So a turn that died — API outage, quota wall, crashed CLI — used to take
-// its wake message down with it, and an escalation addressed to this seat was gone forever with
-// no trace anywhere. The queue below makes delivery the runner's job: a message is not consumed
-// until a turn actually exits 0. It survives a runner restart on disk, retries on its own backoff
-// so a silent bus still gets it through, and says how many are outstanding every time it reports.
+// The hub hands a message out exactly once, so a message is consumed only when a turn exits 0.
+// The queue survives a restart on disk and retries on its own backoff (CONTRACT-crew-runner.md).
 const PENDF = join(homedir(), ".agent-bus", `pending-${AGENT}-${PROJ}.json`);
 // A cap, so a long outage cannot grow the queue without bound. Overflow drops the OLDEST and says
 // so on the bus — a silent drop is the exact failure this whole mechanism exists to end.
 const PENDING_MAX = 50;
-// Backoff between redelivery attempts. Starts fast (a blip clears in 30s) and lands at 15 minutes,
-// which is the cadence for "this seat is properly down" rather than a retry storm against a hub
-// that is already refusing us.
-// TRANTOR_RETRY_MS (comma-separated ms) shortens the ladder so the redelivery drill can exercise
-// a real backoff in seconds instead of waiting out the production one.
+// Redelivery backoff: 30s rising to 15 minutes ("properly down", not a retry storm).
+// TRANTOR_RETRY_MS (comma-separated ms) shortens the ladder for the redelivery drill.
 const RETRY_MS = (() => {
   // Guard the UNSET case explicitly: "".split(",") is [""], Number("") is 0, and a >=0 filter
   // accepted it — so every production runner got a ZERO backoff and a failing seat became a
@@ -411,12 +356,8 @@ function loadPending() {
   } catch { return { wake: [], bcast: [] }; }
 }
 
-// Auth-failure markers in TURN OUTPUT. opencode prints its auth error ("401 Unauthorized" /
-// "Invalid API key") and STILL exits 0, so a bare 0 from the CLI is not proof the turn ran
-// (card #5405). The rules live in lib/classify-failure.mjs (#5868) so they are testable against
-// the real specimens; classify() wraps them with the one-line verdict the seat log carries, and
-// runTurn judges only the CLI's OWN output (the prompt echo is replay, not speech — the rules
-// line "…deleting failing tests is forbidden." once classified healthy codex turns as auth).
+// Auth-failure markers in TURN OUTPUT: opencode prints its auth error and still exits 0 (#5405).
+// The rules live in lib/classify-failure.mjs (#5868); runTurn judges only the CLI's own output.
 function classify(exit) {
   const { reason, matched } = classifyFailure(exit, lastErrText, lastEmptyOutput);
   log(`classified ${reason} because ${matched}`);
@@ -468,10 +409,8 @@ async function reportFailure(exit, trigger, undelivered = 0, reasonOverride = ""
 }
 
 // ---- a dead seat is not retried (#6134) -------------------------------------------------------
-// The redelivery ladder assumes the next attempt might work. Against a spent plan or a rejected
-// key it never will, and the cost is real: codex burned 60 turns on 09-02 doing nothing but being
-// redelivered to. So those two reasons PARK — the queue is kept, the ladder stops, and the room is
-// told once, with the reset time when the CLI printed one. `trantor up` (a restart) resumes.
+// A spent plan or a rejected key parks the seat: queue kept, ladder stopped, room told once with
+// the reset time when the CLI printed one. `trantor up` resumes.
 let parkAnnounced = false;
 async function parkSeat(reason, undelivered, resetHint = 0) {
   // A seat that went QUIET printed no wall message to parse (#6131), so its own balance row is the
@@ -486,22 +425,15 @@ async function parkSeat(reason, undelivered, resetHint = 0) {
     if (orch !== SESSION) await api("/send", { from: SESSION, to: orch, text, project: PROJ, kind: "alert" }).catch(() => {});
   }
   log(`\x1b[31mparked (${reason})${when ? ` — retrying after ${when}` : " — no reset time in the output; waiting for a restart"}\x1b[0m`);
-  // The two /send calls above are the whole escalation, and on 2026-09-09 that was not enough:
-  // the DUTY seat parked on a quota read, held 48 messages for 21.9 hours, and announced it over
-  // the very bus that had stopped moving, to an orchestrator that was idle and therefore could not
-  // receive it. The alarm for "the bus is stuck" cannot itself be a bus message. So park also
-  // rings a bell the operator can actually hear, out of band, once per park.
+  // The bus cannot carry the alarm that the bus is stuck (#7131): park also rings the operator
+  // out of band, once per park.
   notifyOperator(`Trantor: ${SESSION} PARKED (${reason})`,
     `${undelivered} message(s) held${when ? ` — retrying after ${when}` : ` — needs \`trantor up ${AGENT}\``}`);
   // No reset time means no timer can clear it: hold until the operator restarts the seat.
   return resetAt || Number.MAX_SAFE_INTEGER;
 }
 
-/**
- * Reach the operator on a channel that does not depend on the bus, the hub, or a live session.
- * Best-effort and strictly non-fatal: a seat must never die because a notifier is missing.
- * Silence-able with TRANTOR_NO_DESKTOP_NOTIFY=1 for headless boxes and test runs.
- */
+/** Reach the operator off-bus; best-effort and never fatal. TRANTOR_NO_DESKTOP_NOTIFY=1 silences. */
 function notifyOperator(title, body) {
   if (process.env.TRANTOR_NO_DESKTOP_NOTIFY === "1") return;
   try {
@@ -538,13 +470,8 @@ async function balanceRows() {
 }
 
 // ---- activity truth (#5965): the RUNNER is the source for this seat ----------------
-// The app pulses a seat from its hub peer status. The runner is what actually knows when a
-// turn starts and ends, so it reports the boundaries: `working · <trigger>` the moment a turn
-// begins and `idle` the instant it lands clean. herdr's screen detection cannot see a
-// runner-driven CLI mid-turn (it sets screen_detection_skipped for those panes), which is why
-// seats used to read as idle while genuinely working — the desktop's herdr row is unreliable
-// for runner seats, so it falls back to this hub status. Bounded 5s so a slow hub never delays
-// the very turn it is reporting; one HTTP call per transition, never a poll.
+// herdr cannot see a runner-driven CLI mid-turn, so the runner reports the boundaries itself:
+// one bounded HTTP call per transition, never a poll.
 async function registerStatus(status) {
   const url = HUB + "/register";
   const body = JSON.stringify({ session: SESSION, project: PROJ, status, llm: AGENT, model: MODEL });
@@ -555,14 +482,8 @@ async function registerStatus(status) {
 }
 
 // ---- telling the ASSIGNER, mechanically ------------------------------------
-// A seat used to finish its contract and say nothing. Completion lived only in the RULES prompt
-// ("report on the bus"), so a cheap model that did the work and ended its turn left the
-// orchestrator blind, and nothing watched for the omission. Failures were mechanical but went to
-// "all", and a plain broadcast does not wake anyone (see the wake policy in the main loop). From
-// the orchestrator's seat a finished crew and a crew that never started looked identical.
-//
-// So: whoever sent the message that woke this seat gets told DIRECTLY what became of it. Direct
-// messages wake; that is the whole difference. Kept short, like every other bus line.
+// Whoever sent the message that woke this seat is told directly what became of it. Direct
+// messages wake; a broadcast does not, which is why the old "report to all" left foremen blind.
 async function notifyAssigners(pairs, text) {
   text = redactKeys(text);   // #5869: the "asked" excerpt quotes the wake message — keys stay off the bus
   const seen = new Set();
@@ -593,13 +514,9 @@ async function reportHealthy() {
   cmuxStatus("ok", "#14b8a6", "check"); herdrAgent("idle");
 }
 
-// ---- Trantor State Phase 2a — the flagged path (TDD §4.1, §4.6, §7.3) -----------------------
-//
-// OFF BY DEFAULT, and off means the transcript path runs unchanged. Three things have to be true
-// before a single byte of this is reachable: the operator set TRANTOR_STATE_ASSEMBLE=1, the seat is
-// `claude` (§7.3 — it is the only row whose CLI can enforce the grammar), and the installed CLI
-// actually carries `--json-schema` (§6 — the minimum version is unconfirmed, so this PROBES rather
-// than assuming; no flag, no state mode, and the runner says so once).
+// ---- Trantor State Phase 2a: the flagged path (TDD §4.1, §4.6, §7.3) -----------------------
+// OFF by default and off means the transcript path runs unchanged. Reachable only when the flag
+// is set, the seat is `claude`, and the installed CLI carries --json-schema (probed, not assumed).
 const STATE_FLAG_ON = process.env[STATE_ENV] === "1";
 const STATE_SCHEMA_FILE = join(homedir(), ".agent-bus", `state-schema-${AGENT}-${PROJ}.json`);
 const STATE_MODE = (() => {
@@ -611,25 +528,16 @@ const STATE_MODE = (() => {
     mkdirSync(join(homedir(), ".agent-bus"), { recursive: true, mode: 0o700 });
     writeFileSync(STATE_SCHEMA_FILE, JSON.stringify(TURN_RESULT_SCHEMA), { mode: 0o600 });
   } catch (e) { log(`\x1b[33mstate mode OFF — could not write ${STATE_SCHEMA_FILE}: ${e.message}\x1b[0m`); return false; }
-  // #7060: this line used to read "ASSEMBLE mode ON for this seat", which is a claim about the
-  // PROMPT that nothing here established. What the four checks above prove is CONFIGURATION, and
-  // the two come apart on the literal next turn: the kickoff runs before any message exists, so it
-  // belongs to no card and cannot be a state step. So say what was proved — armed — and name the
-  // one thing that engages it. Each turn then reports which path it actually took.
+  // #7060: say what was proved (configuration, hence "armed"), not a claim about the prompt: the
+  // kickoff belongs to no card and cannot be a state step. Each turn reports the path it took.
   log(`\x1b[36mTrantor State: ASSEMBLE armed for this seat (schema ${STATE_SCHEMA_FILE})\x1b[0m`);
   log(`\x1b[36m  a turn is assembled only when a wake ASSIGNS it a card — the kickoff and every pulse run the transcript path, and each turn says which one it took\x1b[0m`);
   return true;
 })();
 
-// #7060: the one place a turn decides whether it is a state step, and the one place a skip is
-// spoken. Returns the reason the turn is NOT assembled (already logged), or null when it is — so
-// the runner reads `if (!stateSkip(...))` and cannot drift from what the operator was just told.
-//
-// It speaks on CHANGE, not on repetition. A pulse fires on a timer and skips for the same reason
-// every time; printing that line forever is the repetition the monitoring doctrine rules out, and
-// it would bury the turn where the path actually flipped. Assembling a turn clears the memory, so
-// the next skip after real work always speaks. Silent when state mode is off: the IIFE above
-// already said why, once, and a transcript seat has no claim here to mistake for proof.
+// #7060: the one place a turn decides whether it is a state step and the one place a skip is
+// spoken; returns the skip reason or null. Speaks on CHANGE, not repetition (#7118): a pulse
+// skips for the same reason every time, and assembling a turn clears the memory.
 let spokenStateSkip = null;
 const stateSkip = (kind, card = 0) => {
   const why = stateSkipReason({ mode: STATE_MODE, kind, breakerTripped, card });
@@ -677,10 +585,8 @@ let breakerTripped = false;
 let statePromotedHash;
 
 // ---- the time box (#6134) --------------------------------------------------------------------
-// A turn with no ceiling is how a seat spends an afternoon on one card: the 09-02 baseline was 151
-// turns and ~16 agentic hours across the fleet. TRANTOR_TURN_MAX_MS ends the CLI's process group
-// at the box and runs ONE follow-up turn in the SAME session — "commit what is done, move the
-// card, report in one line" — so a cut turn lands its work instead of losing it.
+// TRANTOR_TURN_MAX_MS ends the CLI's process group at the box and runs ONE follow-up turn in the
+// same session so a cut turn lands its work instead of losing it.
 const TURN_MAX_MS = Math.max(0, Number(process.env.TRANTOR_TURN_MAX_MS || 20 * 60 * 1000));
 const TIME_BOX_PROMPT = "your previous turn was cut at the time box; commit what is done, move the card with a note, report in one line";
 let inFollowUp = false;
@@ -693,10 +599,8 @@ let lastTurnCut = false;
 let sessionCard = 0;
 
 let sid = "";
-// #6206: the watchdog is DETACHED, so a runner that dies without ending it leaves an orphan
-// sleeping toward a false alarm against whatever runner comes next (22 found on 2026-09-03).
-// Every exit path therefore kills it, and the stamp carries this runner's instance id so any
-// survivor that outlives the kill still refuses to speak for a runner it never belonged to.
+// #6206: the watchdog is DETACHED, so every exit path kills it, and the stamp carries this
+// runner's instance id so an orphan never speaks for a runner it did not belong to.
 const RUNNER_ID = `${process.pid}.${Date.now()}`;
 let WD_CHILD = null;
 function killWatchdog() { if (WD_CHILD) { try { WD_CHILD.kill("SIGTERM"); } catch {} WD_CHILD = null; } }
@@ -732,14 +636,9 @@ async function runTurn(prompt, isFirst, trigger = "kickoff", opts = {}) {
   const mfrag = MODEL && cli.mflag ? `${cli.mflag}${MODEL}` : "";
   cmd = cmd.replaceAll("{M}", mfrag).replaceAll("{P}", pf).replaceAll("{SID}", sid).replaceAll("{DIR}", TURN_DIR)
     .replaceAll("{S}", STATE_SCHEMA_FILE);
-  // PRECEDENCE, and it is easy to get backwards — this is the second time.
-  // Each file is PREPENDED, so the one prepended LAST runs FIRST, and in shell the file that runs
-  // LAST wins. To make ~/.agent-bus/.env (the CREW layer) win it must be prepended FIRST, i.e.
-  // iterate the list in its written order — highest priority first. A `.reverse()` here inverted it
-  // and handed every seat Scrooge's key instead of the crew's, which is why one key was paying for
-  // both and no provider bill could tell them apart. `.reverse()` also mutated the array in place.
-  // Verified by test-crew-env.mjs, which runs the real shell rather than reading this comment.
-  // Priority order: the CREW layer first, the agent's own fallback (Scrooge's .env) after it.
+  // PRECEDENCE: each file is PREPENDED, so the one prepended last runs first and the one that runs
+  // last wins. Iterate highest priority first (the crew layer, then the agent's fallback); a
+  // `.reverse()` here once inverted it. test-crew-env.mjs runs the real shell to prove it.
   const envs = [join(homedir(), ".agent-bus", ".env"), cli.env].filter(f => f && existsSync(f));
   cmd = withEnvFiles(cmd, envs);
   log(`turn starting (${isFirst ? "fresh session" : "resume"})${MODEL ? ` · model=${MODEL}` : ""}`);
@@ -748,18 +647,10 @@ async function runTurn(prompt, isFirst, trigger = "kickoff", opts = {}) {
   // Tee stderr to ERRF (still shown live in the window) so a failed turn can be classified.
   try { appendFileSync(ERRF, "", { flag: "w" }); } catch {}   // truncate
   lastEmptyOutput = false;
-  // pipefail: without it the sid-capture `| tee` makes a FAILED turn exit 0 (tee's status),
-  // so the failure reporter never fires and a dead seat heartbeats green on the bus.
-  // A CLI's own explanation for quitting often goes to STDOUT, not stderr — Claude's usage-limit
-  // notice is the case that bit us: ERRF stayed empty, so a plainly exhausted seat was reported as
-  // `crashed` and nobody knew to swap it. sid seats already fold stdout into the ERRF stream via
-  // `tee /dev/stderr`; the rest now tee straight into ERRF. A real pipeline (not a process
-  // substitution) so bash waits for tee to flush before we read the file back.
-  // #5869: redaction rides IN the pipeline — lib/redact.mjs is a tee replacement that echoes
-  // stdin verbatim to the live window and appends only REDACTED bytes to ERRF, so a CLI that
-  // echoes its environment never parks a provider key in a file every seat can read. The tee
-  // topology is load-bearing (#5481): stdout+stderr must still BOTH land in ERRF, and the sid
-  // path still folds stdout in via /dev/stderr → the --tee2 hop below.
+  // pipefail: without it the sid-capture `| tee` makes a failed turn exit 0.
+  // ERRF is the TOTAL output capture; a CLI's reason for quitting often goes to stdout (#5481).
+  // #5869: lib/redact.mjs replaces tee so only redacted bytes land in ERRF. The tee topology is
+  // load-bearing: stdout+stderr both reach ERRF, the sid path via /dev/stderr → the --tee2 hop.
   const SCRUB = `node ${join(import.meta.dirname, "..", "lib", "redact.mjs")}`;
   // §4.6 names a real cost of `--output-format json`: the seat's window would print a JSON blob
   // instead of prose, and the operator watches that window. So on a state step stdout goes to a
@@ -770,19 +661,14 @@ async function runTurn(prompt, isFirst, trigger = "kickoff", opts = {}) {
   const inner = opts.state
     ? `${cmd} > ${ENVF}`
     : (cli.sid ? `${cmd} | tee /dev/stderr` : `${cmd} | ${SCRUB} --tee ${ERRF}`);
-  // #5684: runTurn is spawnSync, so the runner cannot watch its own turn — a DETACHED watchdog
-  // does. Armed by a stamp file, disarmed when the turn ends (stamp removed below); a turn past
-  // the window with no activity (transcript, worktree, or stderr — #6206: stdout silence alone
-  // is never a stall) earns ONE direct stall report to the foreman, never a kill.
-  // #6206: the window's floor is 10 minutes and is never derived from TRANTOR_TURN_MAX_MS —
-  // a 1-minute alarm is a false alarm by construction. The env override exists for drills.
+  // #5684: runTurn is spawnSync, so a DETACHED watchdog watches the turn (armed by a stamp file).
+  // A turn past the window with no transcript/worktree/stderr activity earns ONE stall report,
+  // never a kill. #6206: the floor is 10 minutes and never derives from TRANTOR_TURN_MAX_MS.
   const WD_MS = Number(process.env.TRANTOR_TURN_WATCHDOG_MS) || 10 * 60 * 1000;
   const STAMPF = join(homedir(), ".agent-bus", `turnstamp-${AGENT}-${PROJ}.json`);
-  // #6206: where the CLI appends its session transcript (claude's project dir; other CLIs may
-  // not have one — the watchdog treats a missing dir as a quiet channel). Also exported to the
-  // CLI's env so a drill's fake CLI can write transcript lines the watchdog will see.
-  // Written by the shell's own time box (below) and read back here — the only honest signal that
-  // the turn was CUT rather than that the CLI failed on its own. Cleared before every turn.
+  // #6206: where the CLI appends its transcript (a missing dir is a quiet channel); exported so a
+  // drill's fake CLI can write lines the watchdog sees.
+  // CUTF is written by the shell's time box and is the only honest signal that the turn was CUT.
   const CUTF = join(homedir(), ".agent-bus", `turncut-${AGENT}-${PROJ}`);
   try { unlinkSync(CUTF); } catch {}
   // Touched by the stderr scrubber as its LAST act (the shell below); node waits for it after
@@ -796,22 +682,10 @@ async function runTurn(prompt, isFirst, trigger = "kickoff", opts = {}) {
     WD_CHILD = wd;
     wd.unref();
   } catch {}
-  // Preserve the CLI's exit before waiting for the stderr process substitution. Without the
-  // explicit wait, a short failing CLI can return while its error is still in the scrub pipe;
-  // under load the classifier then reads an empty ERRF and reports the wrong failure reason.
-  // #6134-followup: the time box has to fire from INSIDE the shell, while the process tree is
-  // still standing. Killing the turn's process group from node missed a grandchild — codex runs
-  // its own commands via setsid, so `sleep 400` sat in a different group and survived
-  // process.kill(-pid). Worse, by the time node's timeout has killed bash the survivors have been
-  // reparented to init, so there is no tree left to walk and nothing to sweep.
-  //
-  // So bash boxes itself: at the deadline it walks its own descendants and kills them bottom-up.
-  // setsid changes a process's group and session but NEVER its parent, so `pgrep -P` recursion
-  // reaches exactly the children that a group signal cannot. Children first, then the parent, so
-  // nothing gets reparented mid-sweep and escapes the walk.
-  //
-  // The marker file is how node learns the turn was cut rather than merely failing: an exit status
-  // alone cannot tell "killed at the box" from "the CLI died on its own".
+  // Wait for the stderr scrub pipe before reading ERRF, or a short failing CLI is misclassified.
+  // #6134: the box fires from INSIDE bash while the tree stands: setsid moves a grandchild out
+  // of the group but never changes its parent, so `pgrep -P` recursion reaches what a group
+  // signal cannot. Children first, then the parent. The marker file tells node the turn was cut.
   const sweep = `sweep() { local p; for p in $(pgrep -P $1 2>/dev/null); do sweep $p; done; kill -KILL $1 2>/dev/null; }`;
   const box = TURN_MAX_MS ? `
 ${sweep}
@@ -828,31 +702,17 @@ wait $job; turn_exit=$?
 wait
 exit $turn_exit`;
   const spawnOpts = {
-    // detached: bash leads its OWN process group, so the time box can kill the CLI and everything
-    // it spawned with one signal instead of orphaning the model process behind a dead shell.
-    // stdin is /dev/null for every seat (it already was for codex/kimi/dsh via `< /dev/null`):
-    // a detached group is a BACKGROUND group, and a background process that reads the terminal
-    // takes SIGTTIN and stops forever. Nothing here runs interactively — every CLI is in -p /
-    // exec / run mode — so closing stdin is what makes the group safe.
+    // detached: bash leads its own process group so the box can kill the whole tree at once.
+    // stdin is /dev/null: a background group that reads the terminal takes SIGTTIN and stops
+    // forever, and nothing here runs interactively.
     detached: true,
     cwd: TURN_DIR, encoding: "utf8", stdio: cli.sid ? ["ignore", "pipe", "inherit"] : ["ignore", "inherit", "inherit"],
     env: { ...process.env, RELAY_URL: HUB, RELAY_AGENT: AGENT, RELAY_SESSION: SESSION, RELAY_PROJECT: PROJ,
-      // #6228: badges this seat's env as belonging to PROJ, distinctly from a one-off RELAY_PROJECT
-      // override (bin/crew.mjs's own tests, and any deliberate `RELAY_PROJECT=x trantor up` from a
-      // plain shell, set RELAY_PROJECT alone and must keep working — only THIS marker means "the
-      // env I'm running in already has a project home"). crew.mjs's `up` guard refuses to bring up a
-      // DIFFERENT project's crew from a shell carrying this badge, same as it refuses TRANTOR_ORCH.
+      // #6228: badges this env as belonging to PROJ, distinct from a bare RELAY_PROJECT override;
+      // crew.mjs's `up` refuses another project's crew from a shell carrying this badge.
       TRANTOR_SEAT: PROJ,
-      // A RUNNER-MANAGED SEAT MUST NEVER HAND ITSELF A BATON.
-      //
-      // The handoff machinery exists for an INTERACTIVE session: near its context limit it writes a
-      // handoff and opens a fresh window to carry on. A seat has no use for that — the runner is its
-      // lifecycle manager and wakes it per event — so the spawn just leaks an unmanaged interactive
-      // session into a window nobody asked for.
-      //
-      // Observed on the duty seat: handoff records at 17:24 and 18:59 on 2026-08-24, and two stray
-      // `claude` processes in ~/.agent-bus/trantor-duty started at 17:24:57 and 18:59:50, still
-      // sitting there days later. To the operator that reads as "why are there two duty agents".
+      // A runner-managed seat never hands itself a baton: the runner is its lifecycle manager, and
+      // an interactive handoff spawn leaks a session into a window nobody asked for.
       TRANTOR_NO_HANDOFF_SPAWN: "1", TRANTOR_NO_BATON_SPAWN: "1",
       // #6206: the seat's transcript dir — a real CLI ignores it, a drill's fake CLI writes
       // its transcript lines there so the watchdog sees the liveness a real claude shows.
@@ -868,14 +728,9 @@ exit $turn_exit`;
   // cut, not merely failed.
   const boxed = existsSync(CUTF);
   const cut = !!TURN_MAX_MS && (boxed || r.error?.code === "ETIMEDOUT");
-  // DRAIN before classifying — but never on a CUT turn: the box's sweep killed the scrubber
-  // mid-flight, so its marker can never appear and waiting is pure stall. bash 3.2 (macOS's
-  // /bin/bash) `wait` does NOT wait for process substitutions — verified 2026-09-05 — so when
-  // spawnSync returns on a LIVE turn, the stderr scrubber can still be draining, and an auth
-  // line still in the pipe reads as an EMPTY ERRF: the turn is then mislabelled "empty-output",
-  // which breaks the seat-down contract (wrong DOWN label, retry ladder instead of a park) and
-  // cost run 33940247163 three CI-only drill-6 failures. The scrubber touches DRAINF as its
-  // last act; wait for it, bounded.
+  // DRAIN before classifying, never on a CUT turn (the sweep killed the scrubber). macOS bash 3.2
+  // `wait` does not wait for process substitutions, so an auth line can still be in the pipe and
+  // read as an EMPTY ERRF, breaking the seat-down contract. The scrubber touches DRAINF last.
   if (!cut) {
     const drainStart = Date.now();
     while (!existsSync(DRAINF) && Date.now() - drainStart < 3000) await new Promise(s => setTimeout(s, 50));
@@ -912,13 +767,9 @@ exit $turn_exit`;
   // and the next turn starts fresh rather than resuming whatever other project ran last.
   if (cli.pinned) { const found = ocSid(TURN_DIR); if (found) sid = found; }
   const realExit = r.status;
-  // A zero exit is NOT proof the turn ran: opencode prints "401 Unauthorized" / "Invalid API key"
-  // and exits 0, so a bare 0 made the runner ack "✅ done", clear the pending queue and heartbeat
-  // green through an auth outage (card #5405). Cross-check the turn output and treat an
-  // exit-0-with-auth turn as FAILED — but ONLY when the CLI's own output is short enough to be
-  // just the error (#5868): a long output is a real answer, and a warning inside it must not
-  // fail the turn. Telemetry keeps the REAL exit; the returned code is the effective one every
-  // call site branches on (kickoff, pulse, deliverWake).
+  // A zero exit is NOT proof the turn ran (#5405): treat exit-0-with-auth as FAILED, but only when
+  // the CLI's own output is short enough to be just the error (#5868). Telemetry keeps the real
+  // exit; the returned code is the effective one every call site branches on.
   let effExit = realExit;
   let authHit = "";
   // #5868: a NEW commit since turn start is real work, and an exit-0 turn with real output is
@@ -930,18 +781,10 @@ exit $turn_exit`;
     authHit = AUTH_MARKER_RE.exec(ownOut)[0];
     log(`\x1b[31mexit 0 but the turn output IS an auth failure — treating as FAILED (auth, "${authHit}")\x1b[0m`);
   }
-  // #5481: the Inception/Mercury trap — exit 0 with a NULL completion. ERRF is the TOTAL output
-  // capture, not just stderr: every seat's stdout is tee'd into it (`| tee -a ERRF` for the
-  // opencode family, `| tee /dev/stderr` + the stderr tee for sid seats — line ~448). So an
-  // empty ERRF on a clean exit means the turn produced nothing on EITHER stream — and every
-  // real CLI prints something on success (drill C pins that), so silence is the trap, not a
-  // quiet victory. (Integration note: this was nearly "fixed" into stdout-only detection that
-  // never fired — the tee topology is the load-bearing fact; keep this comment with it.)
-  // The judgment now runs on the ECHO-STRIPPED text (#5868): a CLI that replays the prompt but
-  // does no work has still produced nothing of its own.
-  // #6969: on a state step the CLI's whole answer is the envelope, so ERRF holds only stderr and
-  // silence there is the NORMAL shape of a healthy turn. Judging it "empty-output" would park a
-  // working seat on its first clean state step.
+  // #5481: exit 0 with a NULL completion. ERRF is the TOTAL capture (the tee topology is the
+  // load-bearing fact), and every real CLI prints something on success, so silence is the trap.
+  // Judged on the echo-stripped text (#5868). #6969: on a state step the answer is the envelope
+  // and an empty ERRF is the normal healthy shape.
   if (realExit === 0 && effExit === 0 && !lastErrText.trim() && !lastEnvelope.trim()) {
     effExit = 1;
     lastEmptyOutput = true;
@@ -971,14 +814,9 @@ exit $turn_exit`;
   // #5965 — TURN END. A clean exit means the seat is idle again; say so right away so the app stops
   // pulsing it even before the next /poll heartbeat. Failure keeps reportFailure's down/errored.
   if (realExit === 0 && effExit === 0) await registerStatus("idle");
-  // The follow-up rides the SAME session, so the model still has the turn it was cut out of and
-  // only has to land it. Exactly one — a follow-up that runs long is itself boxed, and boxing a
-  // boxed turn forever is the loop this card exists to end.
-  // A state step gets no prose follow-up: TIME_BOX_PROMPT is not a TurnResult prompt, and feeding
-  // it would break the byte-identical prefix the cost claim rests on. It is also unnecessary —
-  // §4.4 is explicit that a cut turn has never partially applied a patch, so what was lost is the
-  // dead turn's observations, and store.recover() rebuilds those from git on the next readState.
-  // The step is recorded with `cut: true` so §8.7 can still count it.
+  // The follow-up rides the SAME session, exactly once: boxing a boxed turn forever is the loop.
+  // A state step gets no prose follow-up: it would break the byte-identical prefix, and the
+  // driver recovers a cut step from git (TDD §4.4); recorded `cut: true` for §8.7.
   if (cut && !inFollowUp && !opts.state) {
     inFollowUp = true;
     try { return await runTurn(TIME_BOX_PROMPT, false, "time-box follow-up"); }
@@ -992,10 +830,8 @@ exit $turn_exit`;
 let stateObservation = "";
 
 // ---- Phase 2a: one state step, driven by lib/state/driver.mjs -------------------------------
-//
-// The runner's whole job here is transport and side effects: it hands the driver a way to run the
-// CLI and a way to act on the returned action, and the driver holds the §4.1 order. Returns an
-// exit code so deliverWake's success/failure ladder is untouched.
+// The runner is transport and side effects only; the driver holds the §4.1 order. Returns an exit
+// code so deliverWake's success/failure ladder is untouched.
 async function stateTurn({ card, observation, trigger, assigners = [] }) {
   const tail = await cardTail(card);
   const r = await runStep({
@@ -1063,11 +899,9 @@ async function loadLessons() {
   } catch {}
 }
 
-// card #5683: every section of a turn prompt is capped (bin/crew-payload.mjs) and the whole
-// payload has ONE hard total cap. Codex burned 306k tokens into a remote-compact 404 crash-loop
-// because a resumed session re-fed the full lessons block (22,298 of the 24,698 chars in its last
-// turn file — 90%) plus an unbounded broadcast backlog on EVERY turn, redelivery after redelivery.
-// Below the caps the composition is byte-identical to the old concatenation.
+// #5683: every prompt section is capped (bin/crew-payload.mjs) and the payload has ONE hard total
+// cap; a resumed session once re-fed the full lessons block every turn. Below the caps the
+// composition is byte-identical to the old concatenation.
 function composedTurn({ base = "", wakeText = "", ctxText = "", againText = "", tailText = "", rulesText = "", lessons = null }) {
   const built = composePrompt([
     { name: "base", text: base },
@@ -1117,16 +951,9 @@ function isRunnerSession(session) {
   return /^[a-z0-9_.-]+$/.test(label) && !label.startsWith("hub:");
 }
 
-// A hub staleness alert describes a condition that was true for a moment: "#16909 has been
-// UNDELIVERED for 2m — go nudge someone". Acting on it 22 hours later is meaningless, and the queue
-// had no expiry, so on 2026-09-09 the duty seat's backlog became SELF-POISONING: the hub kept
-// noticing undelivered mail and sending more alerts, duty could not work them off, and a restart
-// faithfully redelivered 49 dead nudges and re-wedged the seat. 46 of those 49 were hub alerts, the
-// oldest 22.1 hours old, every one describing a two-minute condition.
-//
-// So these EXPIRE. Deliberately narrow: only messages the HUB generated about staleness, never a
-// message from a peer. A real contract is never dropped for being old — a seat that misses a
-// teammate's request is the failure this bus exists to prevent, and no backlog is worth causing it.
+// Hub staleness alerts describe a two-minute condition, so they EXPIRE (#7131: a backlog of them
+// re-wedged the duty seat on restart). Narrow on purpose: a message from a peer is never
+// dropped for being old.
 const HUB_ALERT_TTL_MS = Number(process.env.TRANTOR_HUB_ALERT_TTL_MS || 30 * 60_000);
 const isExpiredHubAlert = (m) =>
   m?.from === "hub:duty" &&
@@ -1141,12 +968,9 @@ function shouldWake(message) {
   if (message?.wake === false) return false;
   if (message?.to === SESSION) {
     if (message?.kind === "status") return false;
-    // The safety net for every sender that never set the flag: a direct message carrying no card
-    // and no instruction is an ack, an FYI or a queue note. Those made up most of the 09-02 burn.
-    // Two exemptions, both because the shape net reads WORDS and these carry their meaning in
-    // their type: a typed alert (a failure escalation, a bounce), and an OVERSEER warning that got
-    // this far — the one chatty overseer kind is already batched by name upstream, so anything
-    // still here is file-conflict or linked-activity, which #5760 deliberately kept waking.
+    // Safety net for senders that never set the flag: a direct message with no card and no
+    // instruction is an ack or an FYI and batches. Typed alerts and OVERSEER warnings that got
+    // this far still wake (#5760 kept file-conflict and linked-activity waking).
     const typed = message?.kind === "alert" || /^🤝 OVERSEER /.test(String(message?.text || ""));
     if (!typed && !isContract(message) && !carriesWork(message?.text)) return false;
     return !isRunnerSession(message?.from) || isContract(message);
@@ -1187,9 +1011,8 @@ function askedExcerpt(message) {
   // no crew-windows.txt to fall back to. /register preserves absent fields, so a seat running an
   // older runner never loses a kind an updated one stamped.
   await api("/register", { session: SESSION, project: PROJ, status: "crew member booting", llm: AGENT, model: MODEL, kind: "agent" }).catch(() => {});
-  // Announce runner-side, signed as THIS seat. Asking the seat to announce itself sent glm's hello
-  // out under deepseek's identity whenever opencode seats shared one MCP daemon (lesson on the bus,
-  // 2026-07-29): the runner process is per-seat by construction, so its signature cannot be borrowed.
+  // Announce runner-side, signed as THIS seat: opencode seats sharing one MCP daemon once
+  // announced under each other's identity, and the runner process is per-seat by construction.
   try {
     const { sfetchJson } = await import("../lib/signed-fetch.mjs");
     const { loadOrCreate } = await import("../lib/identity.mjs");
@@ -1213,11 +1036,8 @@ function askedExcerpt(message) {
   let pendingBcast = restored.bcast.filter(m => !isExpiredHubAlert(m) && !isReceipt(m) && !isStatusBroadcast(m));
   if (shed) {
     log(`\x1b[33mdropped ${shed} expired hub staleness alert(s) older than ${Math.round(HUB_ALERT_TTL_MS / 60000)}m — they describe conditions that have long since changed\x1b[0m`);
-    // Write the shed queue back NOW rather than waiting for the next failed delivery to persist it.
-    // Caught live on 2026-09-09: after a restart shed 3 of 4, `trantor duty status` still reported
-    // 4 held, because status reads the FILE and the file was still the pre-shed one. Disk and memory
-    // disagreeing is the whole class of bug this day was about — a health check cannot be honest if
-    // the state it reads is stale.
+    // Persist the shed queue NOW: `trantor duty status` reads the file, and disk and memory
+    // disagreeing makes the health check lie (#7131).
     savePending(pendingWake, pendingBcast);
   }
   let retryAt = 0;            // 0 = deliver at the next opportunity
@@ -1279,11 +1099,8 @@ function askedExcerpt(message) {
     // reply-linked outcomes, and the old stable marker before direct-address logic sees them. Status
     // broadcasts are presence chatter and are dropped rather than saved as future prompt context.
     msgs = msgs.filter(m => !isReceipt(m) && !isStatusBroadcast(m));
-    // #5760 (the night of 08-31): the hub's hourly "same-project-sessions" FYI woke every seat
-    // into a real CLI turn — three wedged for hours mid-chatter, one on the metered pool. That
-    // kind is pure coordination CONTEXT ("no human needs to relay this" — and no turn needs to
-    // burn on it either): batch it like a broadcast. file-conflict and linked-activity overseer
-    // warnings still wake — those are actionable by the seat right now.
+    // #5760: the hourly same-project-sessions FYI is coordination CONTEXT and batches like a
+    // broadcast; file-conflict and linked-activity warnings still wake.
     const fyi = msgs.filter(m => m.from === "hub:duty" && String(m.text || "").startsWith("🤝 OVERSEER same-project-sessions"));
     const rest = msgs.filter(m => !fyi.includes(m));
     const direct = rest.filter(m => m.to === SESSION && shouldWake(m));
@@ -1294,14 +1111,8 @@ function askedExcerpt(message) {
     const bcast = [...rest.filter(m => !direct.includes(m) && !mentions.includes(m)), ...fyi];
     pendingBcast.push(...bcast);                      // wake-policy: plain broadcasts batch, they don't wake
     const wakeCandidates = [...direct, ...mentions];
-    // #6228: a wake naming another project (its sender's home project, not this seat's, and the
-    // two are not `trantor policy link`ed) is dropped without acting — never queued, never folded
-    // into context. One report goes back to the sender so it does not just look like silence.
-    // The hub's OWN agents (`hub:duty` et al.) are exempt: they speak for this hub's projects,
-    // not a foreign one, and fencing them made every seat deaf to #5760's actionable
-    // file-conflict warnings — the same class of pseudo-id notifyAssigners already treats
-    // specially. Found by test-failure.mjs (#6301): the fence refused the drill's duty-agent
-    // wake exactly as it refused real cross-project traffic.
+    // #6228: a wake from another, unlinked project is dropped with one report back to the sender.
+    // The hub's OWN agents are exempt (#6301): they speak for this hub's projects.
     const links = wakeCandidates.length ? await currentLinks() : [];
     const crossProject = wakeCandidates.filter(m => !String(m.from || "").startsWith("hub:") && !isLinkedProject(senderProjectOf(m.from), PROJ, links));
     for (const m of crossProject) {
@@ -1338,11 +1149,8 @@ function askedExcerpt(message) {
         messages: wake,
         statePath: DUTY_NUDGE_STATE,
         owner: `${RUNNER_ID}:${TURN + 1}`,
-        // Has the recipient already read it? /peer — SINGULAR — is the only endpoint that serialises
-        // deliveredUpTo (/peers does not, a gap that already cost one wrong diagnosis today). The
-        // cursor is monotonic, so `>= id` means the message was handed over and there is nothing to
-        // nudge about. Best-effort by design: any failure here leaves the nudge standing, because a
-        // missed nudge is worse than a redundant one.
+        // /peer (singular) is the only endpoint that serialises deliveredUpTo; the cursor is
+        // monotonic, so `>= id` means handed over. Best-effort: a failure leaves the nudge standing.
         isDelivered: async ({ id, recipient }) => {
           if (!recipient || !/^\d+$/.test(String(id))) return false;
           const r = await api(`/peer?session=${encodeURIComponent(recipient)}`).catch(() => null);
@@ -1385,13 +1193,9 @@ function askedExcerpt(message) {
     for (const m of wakeForTurn) if (m.from && !assigners.some(a => a.from === m.from)) assigners.push({ from: m.from, id: m.id });
     const asked = askedExcerpt(wakeForTurn[0]);
     const tStart = Date.now();
-    // #6134: ONE SESSION PER CARD. A seat that resumes forever carries every card it ever worked
-    // into every later turn — qwen's 85.7M tokens were 96.7% cached, i.e. replayed history. The
-    // card that moved this wake decides: a different one starts a fresh CLI session, and the seat
-    // is told so, because a fresh session remembers nothing and must be sent to its card.
-    // #7061: bound by SHAPE, not by position. `cardRef` alone took the earliest id in the wake
-    // TEXT, and an order that opens with what shipped ("#7037 is merged as a01f629 … YOUR CARD:
-    // #6983") binds the turn — its state sidecar, its card log, its run record — to a done card.
+    // #6134: ONE SESSION PER CARD. A different card starts a fresh CLI session and the seat is told
+    // so. #7061: bound by SHAPE, not by the first #NNNN in the text, or a wake that opens with a
+    // merged card binds the turn to a done card.
     const card = wakeCard(wakeForTurn, { session: SESSION });
     const fresh = card > 0 && card !== sessionCard;
     if (card) sessionCard = card;
@@ -1469,22 +1273,15 @@ function askedExcerpt(message) {
       }
       savePending(pendingWake, pendingBcast);
       await reportFailure(ec, "message", pendingWake.length, reason);
-      // #6289: TWO consecutive exit-1 turns on one contract PARK the seat — no third attempt.
-      // The burn this stops (card #6270, 2026-09-03): an exit-1 turn rode the redelivery ladder,
-      // and every rung re-sent the SAME contract as a fresh full turn — the seat re-read and
-      // re-did finished work, then died to the same API error or the box again; five cycles,
-      // 4.7h, for a 34-line change. The first failure still retries; the second parks with a
-      // reason (time-box when the chain died to box cuts, api-error otherwise), holds the queue,
-      // and is woken again only by `trantor up` (a restart).
+      // #6289: TWO consecutive exit-1 turns on one contract PARK the seat, no third attempt: the
+      // ladder otherwise re-sends the same contract as a fresh full turn. The reason is time-box
+      // when the chain died to cuts, api-error otherwise; `trantor up` wakes it again.
       const parkReason = PARKING_REASONS.has(reason) ? reason : (lastTurnCut ? "time-box" : "api-error");
       if (PARKING_REASONS.has(reason) || deliveryFails >= 2) {
         retryAt = await parkSeat(parkReason, pendingWake.length, quotaReset);
-        // A supervised seat does not have to sit parked until someone notices. RUNNER_PARK_MAX_MS
-        // is set only by `trantor duty up`, which runs the seat under a launchd keepalive: past the
-        // ceiling, exit and let the supervisor restart it clean — a fresh process re-reads auth and
-        // redelivers the queue from disk, which is exactly what un-wedged the 2026-09-09 incident
-        // when the operator finally ran `trantor duty up` by hand 21.9 hours late.
-        // Unsupervised seats keep the old behaviour: exiting would just kill them for good.
+        // RUNNER_PARK_MAX_MS is set only by `trantor duty up` (launchd keepalive): past the ceiling,
+        // exit and let the supervisor restart clean, which re-reads auth and redelivers the queue.
+        // Unsupervised seats stay parked: exiting would just kill them for good.
         const parkMax = Number(process.env.RUNNER_PARK_MAX_MS || 0);
         if (parkMax > 0) {
           const wakeIn = Math.max(0, Math.min(retryAt - Date.now(), parkMax));
