@@ -154,7 +154,7 @@ server.tool("relay_contracts", "What you dispatched and are still owed. Lists ev
     catch (e) { return { content: [{ type: "text", text: `could not reach the hub: ${e?.message || e}` }] }; }
     // The hub keeps abandoned contracts in their own key so older stop hooks stop blocking on them.
     // The ledger still wants to SHOW them, so put the two halves back together here.
-    const all = [...(r?.contracts || []), ...(r?.abandonedContracts || []), ...(r?.supersededContracts || [])]
+    const all = [...(r?.contracts || []), ...(r?.abandonedContracts || []), ...(r?.supersededContracts || []), ...(r?.ackContracts || [])]
       .sort((a, b) => a.ts - b.ts);
     if (!all.length) return { content: [{ type: "text", text: "You have not dispatched any contracts in the last 24h." }] };
     // Fall back to the pre-disposition shape when talking to an older hub.
@@ -162,8 +162,9 @@ server.tool("relay_contracts", "What you dispatched and are still owed. Lists ev
     const open = all.filter(c => disp(c) === "waiting" || disp(c) === "stalled");
     const abandoned = all.filter(c => disp(c) === "abandoned");
     const superseded = all.filter(c => disp(c) === "superseded");
+    const acks = all.filter(c => disp(c) === "ack");
     const mins = (ms) => (ms >= 60000 ? `${Math.round(ms / 60000)}m` : `${Math.round(ms / 1000)}s`);
-    const MARK = { answered: "✅", waiting: "⏳", stalled: "⚠️", abandoned: "🪦", superseded: "⤳" };
+    const MARK = { answered: "✅", waiting: "⏳", stalled: "⚠️", abandoned: "🪦", superseded: "⤳", ack: "·" };
     const line = (c) => {
       const d = disp(c);
       const health = d === "answered" ? "" :
@@ -184,9 +185,13 @@ server.tool("relay_contracts", "What you dispatched and are still owed. Lists ev
     if (superseded.length) {
       notes.push(`⤳ ${superseded.length} SUPERSEDED: the assignee is alive and has since answered a newer contract from you, so these were never going to be answered. Nothing is owed — do not chase them.`);
     }
-    const text = `${open.length} outstanding of ${all.length} contract(s) in the last 24h`
+    if (acks.length) {
+      notes.push(`· ${acks.length} ACK: sent with wake:false, or as a receipt/status. You declared nothing was owed on these, so they never wait and never stall.`);
+    }
+    const text = `${open.length} outstanding of ${all.length - acks.length} contract(s) in the last 24h`
       + (abandoned.length ? ` (plus ${abandoned.length} abandoned)` : "")
-      + (superseded.length ? ` (plus ${superseded.length} superseded)` : "") + `:\n`
+      + (superseded.length ? ` (plus ${superseded.length} superseded)` : "")
+      + (acks.length ? ` (plus ${acks.length} acks, nothing owed)` : "") + `:\n`
       + all.slice(-25).map(line).join("\n")
       + (notes.length ? "\n\n" + notes.join("\n") : "");
     return { content: [{ type: "text", text }] };
