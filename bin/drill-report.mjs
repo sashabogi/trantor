@@ -68,7 +68,7 @@ export class DrillReport {
       if (!this.map[id].autoClose || result.status !== "pass" || this.closures[id]) continue;
       const response = await signedPost("/task/update", {
         id: Number(id), project: this.project, by: this.session, status: "done",
-        note: `trantor drill PASS\n${result.evidence.join("\n")}`.slice(0, 2000),
+        note: `Drill: trantor drill PASS\n${result.evidence.join("\n")}`.slice(0, 2000),   // "Drill:" prefix: the hub's done gate (#6452) reads it as the drill line
       }, { project: this.project, session: this.session, timeoutMs: 15000 });
       this.closures[id] = response.ok && response.json?.task?.status === "done"
         && response.json.task.id === Number(id) && response.json.task.project === this.project

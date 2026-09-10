@@ -15,7 +15,7 @@ export async function routeCards({ req, res, q, P, auth, ctx }) {
   const {
     state, body, json, crossProjectGuard, touch, canon, filterReadable,
     appendEvent, appendCardEvent, now, markDirty, stripNulText,
-    appendTaskLog, appendTaskNote, cleanChecklist, linkCommitToFocus,
+    appendTaskLog, appendTaskNote, cleanChecklist, cleanDrill, hasDrillLine, linkCommitToFocus,
     derivePhases, PROPOSAL_CAP, propFp, healthOf, REAP_GRACE_MS, subFp,
     prunePeers, canRead, HUB_VERSION, cmpSemver, isCardEvent, fmtAge, hubSend,
     ONLINE_MS,
@@ -166,6 +166,7 @@ export async function routeCards({ req, res, q, P, auth, ctx }) {
         by: b.by || "", ts: ts0, updated: ts0,
         history: [{ to: st0, by: b.by || "", ts: ts0 }] };
       { const cl = cleanChecklist(b.checklist); if (cl?.length) t.checklist = cl; }   // #5624 — rides `extra`, survives restarts
+      { const dr = cleanDrill(b.drill); if (dr) t.drill = dr; }                        // #6452 — the card's drill line, rides `extra`
       if (b.source === "cc-subagent") { t._fp = subFp(b.title); if (b.agentType) t._atype = String(b.agentType).slice(0, 40); if (b.agentId) t._aid = String(b.agentId).slice(0, 80); if (b.parent) t.parent = String(b.parent).slice(0, 120); t.count = 1; if (t.status === "doing") { t._everStarted = true; t._inflight = 1; } }
       appendTaskNote(t, b, ts0);
       state.tasks.push(t); if (state.tasks.length > 2000) state.tasks.splice(0, 500);
@@ -200,6 +201,14 @@ export async function routeCards({ req, res, q, P, auth, ctx }) {
           }
         }
       }
+      // The done gate (#6452, build doctrine rule 1): a card reaches done only with a drill line —
+      // `drill`, a checklist item or a log note starting "Drill:", or the note on this very move.
+      // Whoever moves it, the orchestrator included; the seat that wrote the code was never meant
+      // to. Runs BEFORE any mutation so a refused close leaves the card exactly as it was. A bridge
+      // mirror replicates a status its source hub already gated, so it passes.
+      if (b.status === "done" && t.status !== "done" && t.source !== "bridge" && !hasDrillLine(t, b)) {
+        return json(res, 409, { error: `no drill line on card #${t.id}: a card names what a person does on the built artifact and must see before it can be done — set \`drill\`, add a checklist item or a note starting with "Drill:" (build doctrine rule 1)`, id: t.id, status: t.status });
+      }
       let eventType = "updated", eventFrom = null, eventTo = null;
       if (b.status && ["todo","doing","testing","failed","done","blocked","stale"].includes(b.status) && b.status !== t.status) {
         eventType = "moved"; eventFrom = t.status; eventTo = b.status;
@@ -228,6 +237,7 @@ export async function routeCards({ req, res, q, P, auth, ctx }) {
       // the narrative line a human reads on the board ("assigned — did"), written by the cheap
       // summarizer; rides the tasks.extra column, so it survives restarts everywhere
       if (b.summary !== undefined) t.summary = String(b.summary).slice(0, 220);
+      if (b.drill !== undefined) { const dr = cleanDrill(b.drill); if (dr) t.drill = dr; else delete t.drill; }   // #6452: set or clear the drill line
       // #5624: full checklist replace (null clears). Item-level toggles ride /task/checklist-toggle.
       if (b.checklist !== undefined) {
         const cl = cleanChecklist(b.checklist);

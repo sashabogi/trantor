@@ -59,6 +59,8 @@ try {
   const c1 = (await post("/task", { project: PROJ, title: "implement the stale-card reaper", status: "doing", assignee: "codex:reconproj", by: "codex:reconproj" })).task.id;
   const c2 = (await post("/task", { project: PROJ, title: "old abandoned spike nobody finished", status: "testing", assignee: "glm:reconproj", by: "glm:reconproj" })).task.id;
   const c3 = (await post("/task", { project: PROJ, title: "feature still genuinely pending", status: "todo", assignee: "host:reconproj", by: "host:reconproj" })).task.id;
+  // #6452: a shipped card CLOSES only with a drill line; c1 has none and must park at testing instead
+  const c4 = (await post("/task", { project: PROJ, title: "implement the drill gate", status: "doing", assignee: "codex:reconproj", by: "codex:reconproj", drill: "move a drill-less card to done and see the 409" })).task.id;
   const cSub = (await post("/task", { project: PROJ, title: "subagent: transient infra card", status: "doing", source: "cc-subagent", agentId: "aid1", by: "host:reconproj" })).task.id;
   await post("/focus", { session: "host:reconproj", project: PROJ, title: "the session focus card", by: "host:reconproj" });
 
@@ -66,6 +68,7 @@ try {
     { id: c1, verdict: "done", reason: "shipped in commit abc123", commit: "abc123" },
     { id: c2, verdict: "stale", reason: "superseded, never finished", commit: "" },
     { id: c3, verdict: "active", reason: "still needed", commit: "" },
+    { id: c4, verdict: "done", reason: "shipped in commit def456", commit: "def456" },
   ];
 
   // 1. PREVIEW (no --yes) changes nothing
@@ -78,10 +81,13 @@ try {
 
   // 2. APPLY (--yes)
   out = await reconcile(verdicts, ["--older", "0", "--yes"]);
-  ok("apply closes the DONE card", (await cardStatus(c1)) === "done", `(got ${await cardStatus(c1)})`);
+  ok("apply closes the DONE card that carries a drill line", (await cardStatus(c4)) === "done", `(got ${await cardStatus(c4)})`);
+  ok("apply PARKS a drill-less DONE card at testing instead of closing it (#6452)", (await cardStatus(c1)) === "testing", `(got ${await cardStatus(c1)})`);
+  const parkedLog = (await get(`/tasks?project=${PROJ}`)).tasks.find(t => t.id === c1)?.log || [];
+  ok("...with the verdict and the reason it waits on the card's log", parkedLog.some(e => /judged shipped at abc123/.test(e.text) && /no drill line/.test(e.text)), JSON.stringify(parkedLog).slice(0, 200));
   ok("apply stales the STALE card", (await cardStatus(c2)) === "stale", `(got ${await cardStatus(c2)})`);
   ok("apply leaves the ACTIVE card as todo", (await cardStatus(c3)) === "todo", `(got ${await cardStatus(c3)})`);
-  ok("apply reports the counts", /1 closed as done, 1 moved to stale/.test(out), `\n${out}`);
+  ok("apply reports the counts, parked ones included", /1 closed as done, 1 parked at testing \(no drill line\), 1 moved to stale/.test(out), `\n${out}`);
 
   // 3. ephemeral cc-subagent + session focus cards are NEVER candidates
   ok("cc-subagent card untouched (not a reconcile candidate)", (await cardStatus(cSub)) === "doing");
