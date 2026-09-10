@@ -217,7 +217,7 @@ long-lived sessions keep working across the upgrade; remote is `enforce` by cons
 |---|---|
 | `/send` `/task` `/task/update` `/focus` `/status` `/register` `/handoff` `/lesson` `/verify-gate` | valid signature; `write` on the target project |
 | `/project/delete` `/sweep` `/reconcile` | `owner` on the target project |
-| `/peers` `/tasks` `/events` `/inbox` `/peer` `/card` `/stream` | signature required in `enforce`; results **scope-filtered** to projects the identity can read |
+| `/peers` `/tasks` `/events` `/inbox` `/unread` `/peer` `/card` `/stream` | signature required in `enforce`; results **scope-filtered** to projects the identity can read. `/unread?session=S[&ids=a,b]` answers "what would `/inbox` hand S right now" with the read path's own predicate, never consuming (#7131: the duty nudge asks this, not the ledger) |
 | `/enroll` `/` (ui) `/health` | unauthenticated by necessity |
 
 `/send` additionally requires that `from` **matches the signing identity**. That single check is what

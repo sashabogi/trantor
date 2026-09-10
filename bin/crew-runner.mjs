@@ -1338,16 +1338,18 @@ function askedExcerpt(message) {
         messages: wake,
         statePath: DUTY_NUDGE_STATE,
         owner: `${RUNNER_ID}:${TURN + 1}`,
-        // Has the recipient already read it? /peer — SINGULAR — is the only endpoint that serialises
-        // deliveredUpTo (/peers does not, a gap that already cost one wrong diagnosis today). The
-        // cursor is monotonic, so `>= id` means the message was handed over and there is nothing to
-        // nudge about. Best-effort by design: any failure here leaves the nudge standing, because a
-        // missed nudge is worse than a redundant one.
-        isDelivered: async ({ id, recipient }) => {
-          if (!recipient || !/^\d+$/.test(String(id))) return false;
-          const r = await api(`/peer?session=${encodeURIComponent(recipient)}`).catch(() => null);
-          const upTo = Number(r?.deliveredUpTo || 0);
-          return upTo > 0 && upTo >= Number(id);
+        // Will the hub actually hand this id to the recipient? /unread answers with the read path's
+        // own predicate (deliverable + readable, past the recipient's ledger) — the thing a nudge is
+        // for. The old /peer ledger comparison (#6951) caught mail already read; it could not tell
+        // mail the recipient can NEVER read (#7131: a lane post escalated as undelivered), and the
+        // nudge for that cost the orchestrator a turn. Best-effort by design: only an explicit "not
+        // in the unread set" drops the nudge; an old hub, a 404 or a dead socket leaves it standing,
+        // because a missed nudge is worse than a redundant one.
+        stillUnread: async ({ id, recipient }) => {
+          if (!recipient || !/^\d+$/.test(String(id))) return undefined;
+          const r = await api(`/unread?session=${encodeURIComponent(recipient)}&ids=${id}`).catch(() => null);
+          if (!Array.isArray(r?.unread)) return undefined;
+          return r.unread.includes(Number(id));
         },
       })
       : { items: [], targets: [], owner: "" };

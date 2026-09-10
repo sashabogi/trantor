@@ -125,6 +125,11 @@ function dutyTick() {
     // Skipping the FROM side was already here; the TO side is the half that loops.
     if (!m.to || m.to === "all" || m.to === DUTY_SESSION || m.from === "hub:duty" || m.to.startsWith("hub:")) continue;
     if (dutyEscalated.has(m.id)) continue;
+    // #7131: "undelivered" only means something when a session could be handed the message. A lane
+    // post (to: "<project>", how a seat reaches the human's app) names no session: no colon, no peer,
+    // and /inbox will never match it. Escalating #17816 (-> "trantor") sent duty after the project's
+    // orchestrator with a nudge for mail it could not read, and the wake cost a whole turn.
+    if (!state.peers[m.to] && !m.to.includes(":")) continue;
     if ((state.peers[m.to]?.deliveredUpTo || 0) >= m.id) continue;
     dutyEscalated.add(m.id);
     // #5686: a dark janitor must not eat escalations. Route to the SENDER — the party who

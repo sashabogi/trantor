@@ -106,43 +106,78 @@ try {
 // Those came apart on 2026-09-09: duty nudged the orchestrator four times for ids its own cursor
 // was already past — real escalations when duty first saw them, read by the recipient before duty
 // got a turn, and nothing re-checked. Every nudge wakes a session and costs a turn on both sides.
+// #7131 widened the check from "has the ledger passed it" to "would /inbox hand it over": the hub's
+// /unread answers with the read path's own predicate, and only an explicit `false` drops a nudge.
 {
   const p = join(mkdtempSync(join(tmpdir(), "duty-delivered-")), "duty-nudged.json");
   const msgs = feed(["A", "B"]);
-  // The recipient has read everything: deliveredUpTo is past both ids.
+  // The recipient has read everything: the hub says neither id is in its unread set.
   const allRead = await claimDutyNudges({
     messages: msgs, statePath: p, owner: "turn-1",
-    isDelivered: async () => true,
+    stillUnread: async () => false,
   });
   ok("a fully-read inbox plans NO nudges", allRead.items.length === 0,
     JSON.stringify(allRead.items.map(i => i.id)));
   // Nothing was claimed, so a later wake on the same ids is still free to nudge if they go unread.
   const nowUnread = await claimDutyNudges({
     messages: msgs, statePath: p, owner: "turn-2",
-    isDelivered: async () => false,
+    stillUnread: async () => true,
   });
-  ok("skipping a delivered id does not burn it — an unread id still earns its nudge",
+  ok("skipping a read id does not burn it — an unread id still earns its nudge",
     nowUnread.items.length === 2, JSON.stringify(nowUnread.items.map(i => i.id)));
+}
+{
+  // THE test that matters most (#7131): a message that IS deliverable and unread must still nudge.
+  // The easy "fix" is to nudge less; that would break the feature the nudge exists for.
+  const p = join(mkdtempSync(join(tmpdir(), "duty-deliverable-")), "duty-nudged.json");
+  const asked = [];
+  const plan = await claimDutyNudges({
+    messages: feed(["17900"]), statePath: p, owner: "turn-1",
+    stillUnread: async item => { asked.push(item); return true; },
+  });
+  ok("a deliverable, unread message produces exactly its nudge",
+    plan.items.length === 1 && plan.items[0].id === "17900", JSON.stringify(plan.items.map(i => i.id)));
+  ok("the check was asked about the recipient the nudge is for",
+    asked.length === 1 && asked[0].recipient === "MacBook-Pro-M1:proj" && asked[0].id === "17900", JSON.stringify(asked));
+  ok("the directive names it as mandatory", dutyNudgeDirective(plan).includes("MacBook-Pro-M1:proj: #17900"));
 }
 {
   const p = join(mkdtempSync(join(tmpdir(), "duty-partial-")), "duty-nudged.json");
   // Only the first id has been read. The second must still be nudged.
   const plan = await claimDutyNudges({
     messages: feed(["A", "B"]), statePath: p, owner: "turn-1",
-    isDelivered: async ({ id }) => id === "A",
+    stillUnread: async ({ id }) => id !== "A",
   });
   ok("a partially-read batch nudges only what is still unread",
     plan.items.length === 1 && plan.items[0].id === "B", JSON.stringify(plan.items.map(i => i.id)));
 }
 {
+  const p = join(mkdtempSync(join(tmpdir(), "duty-unreadable-")), "duty-nudged.json");
+  // The #7131 shape: undelivered in the ledger, but the read path will never hand it to this session
+  // (a lane post, a self-send). The hub says "not in the unread set" and the nudge is dropped.
+  const plan = await claimDutyNudges({
+    messages: feed(["17816"]), statePath: p, owner: "turn-1",
+    stillUnread: async () => false,
+  });
+  ok("mail the recipient can never read earns NO nudge", plan.items.length === 0,
+    JSON.stringify(plan.items.map(i => i.id)));
+}
+{
   const p = join(mkdtempSync(join(tmpdir(), "duty-unknown-")), "duty-nudged.json");
-  // The hub is unreachable. UNKNOWN IS NOT DELIVERED: a missed nudge is worse than a redundant one.
+  // The hub is unreachable. UNKNOWN IS NOT READ: a missed nudge is worse than a redundant one.
   const plan = await claimDutyNudges({
     messages: feed(["A"]), statePath: p, owner: "turn-1",
-    isDelivered: async () => { throw new Error("hub unreachable"); },
+    stillUnread: async () => { throw new Error("hub unreachable"); },
   });
-  ok("a failing delivery check leaves the nudge STANDING, never silently drops it",
+  ok("a failing check leaves the nudge STANDING, never silently drops it",
     plan.items.length === 1, JSON.stringify(plan.items.map(i => i.id)));
+  // An older hub without /unread answers with no set at all: also unknown, also standing.
+  const older = await claimDutyNudges({
+    messages: feed(["B"]), statePath: p, owner: "turn-2",
+    stillUnread: async () => undefined,
+  });
+  ok("a hub that cannot answer (no /unread) leaves the nudge STANDING",
+    older.items.length === 1, JSON.stringify(older.items.map(i => i.id)));
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

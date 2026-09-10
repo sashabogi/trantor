@@ -7,8 +7,13 @@ export async function routeMessages({ req, res, q, P, auth, ctx }) {
     appendEvent, markDelivered, contractsFor, canUseInboxSession, inboxWindow,
     deliverable, inboxReadable, inboxResponse, filterReadable, streams, UI,
     AUTH_MODE, persistHealth, duty, now, markDirty, assertNoSecrets,
-    CONTRACT_WINDOW_MS,
+    CONTRACT_WINDOW_MS, canRead,
   } = ctx;
+  // ONE answer to "will the hub hand message m to session s": /inbox, /poll and /unread all go
+  // through it. #7131: duty judged "unread" from the delivery ledger alone, and nudged an idle
+  // orchestrator for #17816 — a lane post no session could ever be handed. A check that does not
+  // share the read path's predicate can only ever approximate it.
+  const readable = (m, session, as = auth) => deliverable(m, session) && inboxReadable(as, m, session);
     if (req.method === "POST" && P === "/send") {
       const b = await body(req);
       const text = stripNulText(b.text);
@@ -101,7 +106,7 @@ export async function routeMessages({ req, res, q, P, auth, ctx }) {
       if (!canUseInboxSession(auth, q.session)) return json(res, 403, { error: "forbidden" });
       touch(q.session, undefined, undefined, undefined, auth); const window = inboxWindow(q.since);
       const { since, rewound } = window;
-      const msgs = state.messages.filter(m => m.id > since && deliverable(m, q.session) && inboxReadable(auth, m, q.session));
+      const msgs = state.messages.filter(m => m.id > since && readable(m, q.session));
       const cursor = msgs.length ? msgs[msgs.length - 1].id : since;
       // peek=1 -> LOOK without claiming delivery. The Stop hook has to ask "is anything waiting?" before
       // it knows whether it will surface it (it may be on its second pass, where it must let the stop
@@ -111,6 +116,27 @@ export async function routeMessages({ req, res, q, P, auth, ctx }) {
       // superseded (instance-keys contract): a baton twin that lost the claim learns it HERE, via
       // its own read — its hooks turn this into a stand-down note for the model. Never a block.
       return json(res, 200, inboxResponse(auth, msgs, cursor, rewound));
+    }
+    // ---- /unread: "does session S have anything it can actually read?" ------------------------
+    // The question the duty seat must ask before it spends a wake on a nudge (#7131). Answered from
+    // S's ledger with the SAME predicate /inbox applies, evaluated as S itself — so a message that is
+    // undelivered in the ledger but never deliverable to S (a lane post, a self-send) is not "unread".
+    // Read-scoped like /peer: the caller must be able to read S's project. Never consumes anything.
+    // `ids=a,b` narrows the answer to those ids, which is how a caller verifies one escalation.
+    if (req.method === "GET" && P === "/unread") {
+      const session = String(q.session || "").slice(0, 120);
+      if (!session) return json(res, 400, { error: "session required" });
+      const peer = state.peers[session];
+      const project = peer?.project || (session.includes(":") ? session.split(":").pop() : "");
+      if (!canRead(auth, project)) return json(res, 404, { error: "unknown peer" });
+      const deliveredUpTo = Number(peer?.deliveredUpTo || 0);
+      const wanted = new Set(String(q.ids || "").split(",").map(Number).filter(n => Number.isFinite(n) && n > 0));
+      const identity = Object.values(state.identities || {}).find(i => String(i?.name || "") === session) || null;
+      const asSession = { identity };
+      const unread = state.messages
+        .filter(m => m.id > deliveredUpTo && (!wanted.size || wanted.has(m.id)) && readable(m, session, asSession))
+        .map(m => m.id);
+      return json(res, 200, { session, known: !!peer, deliveredUpTo, unread, count: unread.length });
     }
     if (req.method === "GET" && P === "/poll") {
       if (!canUseInboxSession(auth, q.session)) return json(res, 403, { error: "forbidden" });
@@ -128,7 +154,7 @@ export async function routeMessages({ req, res, q, P, auth, ctx }) {
           settled = true;
           return;
         }
-        const msgs = state.messages.filter(m => m.id > since && deliverable(m, q.session) && inboxReadable(auth, m, q.session));
+        const msgs = state.messages.filter(m => m.id > since && readable(m, q.session));
         if (msgs.length || now() >= deadline) { settled = true; touch(q.session, undefined, undefined, undefined, auth); const cursor = msgs.length ? msgs[msgs.length - 1].id : since; markDelivered(q.session, cursor); return json(res, 200, inboxResponse(auth, msgs, cursor)); }
         setTimeout(tick, 300);
       };
