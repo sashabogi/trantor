@@ -61,11 +61,9 @@ const rh = spawnSync("node", ["hooks/sessionstart.mjs"], {
   env: { ...envSansOptIn, CLAUDE_PROJECT_DIR: homedir(), RELAY_URL: CLOSED },
 });
 ok("home-dir session exits 0", rh.status === 0);
-// Was: assert stdout is exactly "{}". Silence was the bug (2026-08-23) — a reboot put every
-// window in $HOME, each session assumed it was still its old seat, and one finally reported
-// "Trantor is unreachable" with every hub healthy. The INVARIANT is unchanged (no registration,
-// no phantom project); the session must now also be TOLD, so the output carries the not-a-seat
-// block and never the registered-session block.
+// Was: assert stdout is exactly "{}". Silence was the bug: a reboot put every window in $HOME and
+// each session assumed it was still its old seat. The INVARIANT is unchanged (no registration, no
+// phantom project); the session must now also be TOLD, so the output carries the not-a-seat block.
 {
   let hctx = ""; try { hctx = JSON.parse(rh.stdout || "{}")?.hookSpecificOutput?.additionalContext || ""; } catch {}
   ok("home-dir session does not register — no phantom project", !hctx.includes("<trantor session="));
@@ -75,9 +73,8 @@ ok("home-dir session says why on stderr", rh.stderr.includes("home directory"));
 const rh2 = runHook(homedir(), "deliberate:home");
 ok("RELAY_SESSION opts a home-dir session back in", rh2.status === 0 && !rh2.stderr.includes("not registering"));
 
-// plugin-cache guard: verifying `node mcp.mjs` boots from a plugin snapshot is the documented
-// check after an update, but PROJECT falls back to the cwd basename — so each check used to
-// leave a lane named after the VERSION (a real "0.17.66" lane sat in the sidebar until 2026-08-12).
+// plugin-cache guard: `node mcp.mjs` booting from a plugin snapshot is the documented check after an
+// update, but PROJECT falls back to the cwd basename, so each check once left a lane named after the VERSION.
 {
   // realpath: macOS tmpdir() is a symlink (/var -> /private/var) but process.cwd() reports the
   // real path, so a raw join() would never prefix-match. CLAUDE_PROJECT_DIR must be stripped too —
@@ -103,10 +100,8 @@ ok("RELAY_SESSION opts a home-dir session back in", rh2.status === 0 && !rh2.std
 }
 
 // --- regression: is-main guard must fire when the install path contains a SPACE ---
-// Bug (0.17.24): bin/profile.mjs & bin/advise.mjs compared import.meta.url to a hand-built
-// `file://${argv[1]}` (raw, unencoded). import.meta.url is percent-encoded, so a space in the path
-// (e.g. ".../Application Support/..." — Herd's bundled nvm) made the guard false → main block skipped,
-// exit 0, no write. The whole class: any URL-reserved char in the path. Fixed via pathToFileURL.
+// bin/profile.mjs & bin/advise.mjs compared import.meta.url (percent-encoded) to a raw hand-built
+// `file://${argv[1]}`, so a space in the path skipped the main block. Fixed via pathToFileURL.
 {
   // realpath the tmp base first: macOS tmpdir() lives under /var → /private/var (a symlink), which would
   // otherwise mismatch import.meta.url (realpath-resolved) vs argv1 for reasons unrelated to the space.
@@ -135,10 +130,8 @@ ok("RELAY_SESSION opts a home-dir session back in", rh2.status === 0 && !rh2.std
 }
 
 // --- regression: sessionstart's hub reads must actually WORK against a live hub ---
-// Bug (≤0.17.68): jget() called signedGet without importing it from ./lib/api.mjs. Every hub read
-// (peers, catchup, board context) threw ReferenceError — swallowed by the callers' catch{}, so the
-// hook exited 0 with its context injection silently EMPTY. The closed-port tests above can't see
-// this class (network failure and a ReferenceError look identical there), so: live hub, real read.
+// jget() once called signedGet without importing it; every hub read threw a ReferenceError swallowed
+// by catch{}, and the hook exited 0 with an EMPTY injection. Closed-port tests cannot see this class.
 {
   const { spawn } = await import("node:child_process");
   const PORT = 47911;
@@ -192,13 +185,34 @@ ok("RELAY_SESSION opts a home-dir session back in", rh2.status === 0 && !rh2.std
 }
 
 rmSync(hfFile, { force: true });
-// slop-gate must never report clean when oxlint itself could not run (2026-09-03: a worktree
-// without node_modules made npx fail and the empty output read as zero hits).
+// slop-gate must never report clean when oxlint itself could not run (a worktree without
+// node_modules made npx fail and the empty output read as zero hits).
 {
   const rg = spawnSync(process.execPath, [join(process.cwd(), "bin/slop-gate.mjs"), "--surface", "bin/slop-gate.mjs"],
     { encoding: "utf8", timeout: 30000, env: { ...process.env, PATH: "/nonexistent-bin" } });
   ok("slop-gate exits non-zero when oxlint cannot run", rg.status !== 0);
   ok("slop-gate says it could not run, not clean", /could not run oxlint/.test(rg.stderr) && !/clean/.test(rg.stdout));
+}
+
+// slop-gate comment policy (#6450): a block over 4 lines or a dated line errors, a two-line why with a
+// card link passes, on .mjs and .rs alike (oxlint never sees .rs, so the rule cannot live in oxlint).
+{
+  const dir = join(tmpdir(), `slop-comment-${process.pid}`);
+  mkdirSync(dir, { recursive: true });
+  const gate = join(process.cwd(), "bin/slop-gate.mjs");
+  const run = (file, body) => {
+    writeFileSync(join(dir, file), body);
+    return spawnSync(process.execPath, [gate, "--surface", join(dir, file)], { encoding: "utf8", timeout: 30000 });
+  };
+  const long = run("long.mjs", "// one\n// two\n// three\n// four\n// five\nexport const a = 1;\n");
+  ok("slop-gate: a 5-line comment block is a comment-policy error", long.status === 1 && /block-too-long/.test(long.stdout));
+  const dated = run("dated.mjs", "// fixed on 2026-09-03 after the drill\nexport const a = 1;\n");
+  ok("slop-gate: a dated comment line is a comment-policy error", dated.status === 1 && /dated-comment/.test(dated.stdout));
+  const rust = run("long.rs", "/// one\n/// two\n/// three\n/// four\n/// five\npub fn a() {}\n");
+  ok("slop-gate: the comment policy covers .rs files oxlint ignores", rust.status === 1 && /block-too-long/.test(rust.stdout));
+  const clean = run("clean.mjs", "// #6450: two lines of why, and the story lives on the card.\n// The second line is still allowed.\nexport const a = 1;\n");
+  ok("slop-gate: a two-line why with a card link is clean", clean.status === 0 && /clean/.test(clean.stdout));
+  rmSync(dir, { recursive: true, force: true });
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);
