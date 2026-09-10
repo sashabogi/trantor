@@ -169,6 +169,33 @@ function readFileSafe(p) { try { return readFileSync(p, "utf8"); } catch { retur
   ok("build cards open on a TDD pass per the autonomy dial with no extra ask",
     has("Do not ask the operator again merely to open its build cards", "phase `build`", "autonomy dial (`trantor autonomy`)"));
   ok("the skill names the resume entry point", has("`/trantor:prd-review tdd` resumes here"));
+  // #6452: build doctrine rule 1 wired into the skill — every card it cuts names a drill, and the
+  // seat that wrote the code never closes its own card.
+  ok("prd-review: the review card carries a `drill` and the hub refusal is named",
+    has("- `drill`: what the operator does and sees for this card", "the hub refuses a move to done on a card without one"));
+  ok("prd-review: every build card carries a `drill` taken from the TDD's verification plan",
+    has("a\n   `drill`: the exact thing a person does on the built artifact", "409 on a\n   move to done with no drill line"));
+  ok("prd-review: the seat stops at testing and the orchestrator runs the drill and closes",
+    has("moves its card to `testing` with the evidence and\n   stops there", "**The seat that wrote the code never closes its own card to done**"));
+}
+
+// #6452: the same two rules in the crew skill (the flow every build runs) and in the seat-facing
+// RULES line the runner prepends to every wake, so a seat is told at the source, not only refused
+// by the hub.
+{
+  const crew = readFileSync(join(ROOT, "skills", "crew", "SKILL.md"), "utf8");
+  const hasCrew = (...parts) => parts.every(part => crew.includes(part));
+  ok("crew: relay_task_add carries `drill` and a card without one is not ready to be worked",
+    hasCrew("`relay_task_add(title, assignee, difficulty, model, drill)`", "**Every card names its drill**", "A card without a drill line is not ready to be worked"));
+  ok("crew: the hub's 409 on a drill-less move to done is named, including the orchestrator's own moves",
+    hasCrew("`/task/update` answers 409 unless the card carries a `drill`", "your\nown moves included"));
+  ok("crew: the seat never closes its own card; testing is its last move and done is the orchestrator's after the drill",
+    hasCrew("**The seat that wrote the code never closes its own card to done.**", "`testing` is the seat's\nlast move; `done` is yours, after you ran the card's drill"));
+  ok("crew: every contract tells the seat to stop at testing",
+    hasCrew("move to testing with the evidence, then stop; the orchestrator runs the drill and closes"));
+  const runner = readFileSync(join(ROOT, "bin", "crew-runner.mjs"), "utf8");
+  ok("runner RULES: the seat is told doing -> testing then STOP, never done",
+    runner.includes("doing -> testing, then STOP: you never close your own card to done") && !runner.includes("doing -> testing -> done"));
 }
 
 console.log(`\n${fail === 0 ? "✅" : "❌"} prd-review: ${pass} passed, ${fail} failed`);

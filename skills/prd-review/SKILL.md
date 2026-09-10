@@ -84,7 +84,10 @@ Run the two Scrooge reads first (they are stateless and need no card id), then o
 - `checklist`: exactly ONE item per reviewer, labelled with the reviewer's identity
   (`codex:<project>`, `glm:<project>`, `scrooge deepseek/deepseek-v4-flash`, …);
 - the opening `note`: the document path, the frozen roster, the six-part rubric, and the consensus
-  rule from §4.
+  rule from §4;
+- `drill`: what the operator does and sees for this card ("the operator reads the roster and
+  every verdict in the ask, and their decision is the last note on this card"). Every card names
+  its drill (build doctrine rule 1); the hub refuses a move to done on a card without one.
 
 Append each Scrooge verdict UNCHANGED as a card note prefixed with its receipt's model, then tick
 that model's item. Carrying a reader's verdict onto the card is transport, not a vote of yours.
@@ -164,8 +167,14 @@ substitute for getting the target right in the first place.
 1. Move the TDD card through `testing` to `done` with the tally and the decision.
 2. `relay_advise` with the work breakdown's packages, then one `relay_task_add` per package:
    phase `build`, the advisor's assignee and `model`, its `difficulty`, `deps` on the packages it
-   needs first, and a `checklist` of its acceptance tests from the TDD's verification plan. A
-   build card without its model set is a defect.
+   needs first, a `checklist` of its acceptance tests from the TDD's verification plan, and a
+   `drill`: the exact thing a person does on the built artifact and what they must see, taken
+   from the TDD's verification plan. A build card without its model set is a defect; a build
+   card without its drill is not ready to be worked, and the hub refuses to close it (409 on a
+   move to done with no drill line).
 3. Start the build as the crew skill's phase 3: contracts over the bus, one file-set per seat.
+   Every contract ends the same way: the seat moves its card to `testing` with the evidence and
+   stops there. **The seat that wrote the code never closes its own card to done**; you run the
+   card's drill on the built artifact, write the result on the card, and close it.
    How far the build may go on its own (commit, push, deploy, handing off) is the project's
    autonomy dial (`trantor autonomy`); the dial governs the build, not the opening of its cards.

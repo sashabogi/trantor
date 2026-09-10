@@ -36,9 +36,14 @@ explicit EVENT/INTERFACE CONTRACT — cross-agent bugs come from contract drift.
    from the brief, hooks, hub brief + first card) — it never spawns a session; firing the crew
    is this phase's job.
 1. `relay_project_brief("<what + why + goal>")`
-2. One card per package: `relay_task_add(title, assignee, difficulty, model)` — set `model`
-   to the advisor-routed model (or the CLI's default name); difficulty + model show as badges
-   on the card. Assignees: `codex:<project>` etc. Keep one for yourself.
+2. One card per package: `relay_task_add(title, assignee, difficulty, model, drill)` — set
+   `model` to the advisor-routed model (or the CLI's default name); difficulty + model show as
+   badges on the card. Assignees: `codex:<project>` etc. Keep one for yourself.
+   **Every card names its drill** (build doctrine rule 1): `drill` is the exact thing a person
+   does on the built artifact and what they must see ("open Settings, toggle X, the badge turns
+   green"), not a test command. A card without a drill line is not ready to be worked, and the
+   hub refuses to move it to done: `/task/update` answers 409 unless the card carries a `drill`,
+   a checklist item or a note starting with `Drill:`. Cutting a card without one is a defect.
 3. Open the dashboard: **`trantor ui`** — which opens the **desktop app**, not a browser.
    Do NOT open the hub URL in a browser. A remote hub runs `auth:enforce`, and a browser cannot
    sign its requests: the page loads but `/projects`, `/tasks` and `/peers` all return 401, so the
@@ -150,10 +155,16 @@ orchestrator runs the full suite at integration) plus `node bin/slop-gate.mjs` w
 one (the anti-slop lint over the seat's changed files — a card must not reach done failing it);
 `done` only green, and moves to testing/done carry a `note` with the evidence — the note is the
 card's permanent story; `failed` (+ bus report) pulses red on the board until you bounce it.
-Enforce the gate — bounce anything that skipped it (bounces are visible: "↩ bounced" on the
-card, history in its tooltip). When all report done: integrate, fix contract mismatches
-YOURSELF, move your card through testing → done, broadcast "🚀 <thing> is live", and when the
-user is finished: `trantor down`.
+**The seat that wrote the code never closes its own card to done.** `testing` is the seat's
+last move; `done` is yours, after you ran the card's drill on the built artifact (the installed
+app, the live hub, the real CLI) and wrote the result on the card. Say so in every contract:
+"move to testing with the evidence, then stop; the orchestrator runs the drill and closes". The
+hub enforces the drill half: a move to done on a card with no drill line is refused (409), your
+own moves included. Enforce the rest — bounce anything that skipped the gate (bounces are
+visible: "↩ bounced" on the card, history in its tooltip). When all report testing: run each
+drill, close the cards that pass, bounce the rest, integrate, fix contract mismatches
+YOURSELF, move your own card through testing → done (its drill run and noted, same as any
+other), broadcast "🚀 <thing> is live", and when the user is finished: `trantor down`.
 
 ## Rules
 - Coordinate ONLY over the bus; messages <280 chars; the dashboard lanes are the user's view.
