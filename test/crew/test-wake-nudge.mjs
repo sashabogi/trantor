@@ -31,7 +31,11 @@ function fixtureCommand(socketPath, options = {}) {
   return (cmd, args) => {
     if (cmd === "herdr" && args[0] === "agent") return JSON.stringify({ result: { agents: options.noPane ? [] : [{ agent: "claude", cwd: "/work/trantor", pane_id: "w1:p1", agent_session: { value: sid } }] } });
     if (cmd === "ps" && args[0] === "-axo") return `101 1 claude --resume ${sid}\n102 101 node mcp.mjs\n103 101 claude --resume another\n104 103 node nested.mjs\n${options.duplicate ? `105 1 claude --resume ${sid}` : ""}`;
-    if (cmd === "ps") return args[2] === "102" ? `node mcp.mjs CLAUDE_CODE_MESSAGING_SOCKET=${socketPath} CLAUDE_CODE_MESSAGING_TOKEN=private-token` : "no-token";
+    if (cmd === "ps") {
+      assert.deepEqual(args, ["eww", "-p", args[2]], "environment reads retain default ps columns");
+      const envPid = options.directToken ? "101" : "102";
+      return args[2] === envPid ? `PID TTY STAT TIME COMMAND\n${envPid} ?? S 0:00 claude CLAUDE_CODE_MESSAGING_SOCKET=${socketPath} CLAUDE_CODE_MESSAGING_TOKEN=private-token` : "no-token";
+    }
     throw new Error("unexpected command");
   };
 }
@@ -42,6 +46,7 @@ test("resolves mapped session and inherited token without crossing nested Claude
   const socketPath = join(bus, "101.sock"); writeFileSync(socketPath, "");
   const options = { bus, localHost: "local", socketDir: bus, command: fixtureCommand(socketPath) };
   assert.equal(resolveRecipient(recipient, options).pid, 101);
+  assert.equal(resolveRecipient(recipient, { ...options, command: fixtureCommand(socketPath, { directToken: true }) }).token, "private-token");
   assert.equal(resolveRecipient(recipient, { ...options, command: fixtureCommand(socketPath, { noPane: true }) }).sid, sid);
   assert.equal(resolveRecipient("remote:trantor", options), null);
   assert.equal(resolveRecipient("claude:trantor", options), null);

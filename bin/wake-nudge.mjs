@@ -1,5 +1,18 @@
 #!/usr/bin/env node
 // #7429: hub detection → local socket wake; the duty model handles unreachable recipients.
+// up/down/status manage com.trantor.wake-nudge; run/once poll with the existing duty identity.
+// --hub overrides config.hubs.trantor/config.url; AGENT_BUS_DIR controls ledger and log paths.
+// Latency: hub UNDELIVERED after 2m → 2s event poll → socket → recipient inbox hook.
+
+// #7429: read hub:duty events without consuming duty's inbox; ignore delivered/24h-old alerts.
+// Resolve this host's idle Claude via herdr, the session map and an unambiguous process tree.
+// Authenticate with its token, send ID-only NDJSON, and never inject terminal input or log tokens.
+// Record only after its poll stamp advances within 10s; a poll proves activity, not a reply.
+
+// #7429: failed/held attempts release claims to duty and are attempted once per daemon lifetime.
+// Successful records deduplicate restarts; busy, remote and unresolved sessions fall through.
+// Live drill: WAKE_NUDGE_LIVE=1 node --test test/crew/test-wake-nudge.mjs (artifacts: .agent-bus-out).
+// KeepAlive + RunAtLoad use a 30s crash throttle; installation never enrolls a new identity.
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync, rmSync } from "node:fs";
 import { join, dirname, resolve } from "node:path";
@@ -70,10 +83,10 @@ export function resolveRecipient(recipient, { bus = busDir(), localHost = hostId
   const pid = matches[0].pid;
   const socketPath = join(socketDir, `${pid}.sock`);
   if (!existsSync(socketPath)) return null;
-  // #7429: macOS ps sees initial env; MCP descendants inherit Claude's later token export.
+  // #7429: preserve ps's default columns for env; descendants must name this exact socket.
   for (const envPid of descendants(pid, rows)) {
     let token = "";
-    try { token = tokenFromEnvironment(command("ps", ["eww", "-p", String(envPid), "-o", "command="]), socketPath); } catch { continue; }
+    try { token = tokenFromEnvironment(command("ps", ["eww", "-p", String(envPid)]), socketPath); } catch { continue; }
     if (token) return { pid, sid, token, socketPath, pollStamp: ledgerPaths(recipient, sid, bus).pollStamp };
   }
   return null;

@@ -238,6 +238,9 @@ failure classifier tells a provider backend error ("retry or swap") from real qu
 janitor relaunches after a crash or reboot instead of dying silently, and the hub routes
 escalations back to their senders whenever the janitor goes dark.
 
+Start duty with `trantor duty up`; add local socket wakes with `node bin/wake-nudge.mjs up --hub <url>` (`status` checks it; `down` stops it).
+Wake latency is the hub's 2-minute UNDELIVERED threshold + a 2-second poll + socket/hook time; verified nudges share duty's ledger, while unreachable sessions fall through to duty.
+
 **One-time setup:**
 - Install cmux — `brew install --cask cmux` (or grab it from **[cmux.com](https://cmux.com)**).
 - Trantor drives cmux over its control socket, which is off to outside processes by default. Enable it in
