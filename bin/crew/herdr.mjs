@@ -141,6 +141,12 @@ function prepareWorkspace(ctx, prune) {
       console.log(`  → adopting existing untracked crew workspace for ${ctx.project} (${id})`);
       reuse = id;
       recordState(ctx, ctx.project, "herdrws", "__ws__", id);
+    } else if (orchSpaces.has(id)) {
+      // #7285: a labeled workspace hosting the tracked orch pane is the orchestrator's home, not a
+      // stray — adopt it, never close it (the #7285 rule extends past the stale loop).
+      console.log(`  → adopting the crew workspace hosting the tracked orchestrator for ${ctx.project} (${id})`);
+      reuse = id;
+      recordState(ctx, ctx.project, "herdrws", "__ws__", id);
     } else {
       console.log(`  → closing stray crew workspace for ${ctx.project} (${id})`);
       closeWorkspace(ctx, id);

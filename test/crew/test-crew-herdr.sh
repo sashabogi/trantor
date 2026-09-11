@@ -186,6 +186,23 @@ OUT6d="$(STATE6D="$TMP/state6d.txt" "${CREW[0]}" --input-type=module -e '
 ' "$ROOT/bin/crew/state.mjs" 2>&1)"
 ok "recordState keeps ONE row for a twice-recorded fact" '[ "$OUT6d" = "WS-DUP,WS-OTHER" ]'
 
+# 6e. the stray-closing loop (#7285): a live workspace labeled trantor:<project> with no state row
+#     is "stray" — unless the tracked orch pane lives in it. Then it is the orchestrator's home:
+#     adopt it, never close it. Real (non-dry) spawn so the second loop actually runs.
+echo 0 > "$TMP/herdr.n"; rm -f "$TMP/herdr.log" "$TMP/herdr.agents"
+seed "testproj\therdrws\t__ws__\tWS-TRACKED\ntestproj\torch\t__orch__\tWS-STRAY:P-ORCH\n"
+PANES6E='{"pane_id":"P-ORCH","workspace_id":"WS-STRAY","cwd":"'"$TMP/proj"'"}'
+HERDR_LIVE_WS='{"workspace_id":"WS-TRACKED","label":"trantor:testproj"},{"workspace_id":"WS-STRAY","label":"trantor:testproj"}' HERDR_LIVE_PANES="$PANES6E" \
+HOME="$TMP" PATH="$TMP/fakebin:$PATH" SPAWN_STATE="$STATE" SPAWN_DIR="$TMP/proj" \
+"${CREW[0]}" --input-type=module -e '
+  import { pathToFileURL } from "node:url";
+  const { spawnHerdr } = await import(pathToFileURL(process.argv[1]));
+  const ctx = { dry: false, project: "testproj", dir: process.env.SPAWN_DIR, statePath: process.env.SPAWN_STATE, have: { herdr: true }, env: process.env };
+  spawnHerdr(ctx, ["codex"], agent => ({ agent, model: "" }), () => {});
+' "$ROOT/bin/crew/herdr.mjs" >/dev/null 2>&1
+ok "the orch-hosting stray workspace is adopted, never closed" '! grep -q "workspace close WS-STRAY" "$TMP/herdr.log" && has_row "testproj	herdrws	__ws__	WS-STRAY"'
+ok "the seat lands in the adopted workspace, split off the orch pane" 'grep -q "herdr pane split P-ORCH --direction right --no-focus --cwd $TMP/proj" "$TMP/herdr.log"'
+
 # 7. replace-in-place: re-upping a tracked seat replaces ITS pane (split off it, then close it)
 seed "testproj\therdrws\t__ws__\tWS-NEW\ntestproj\therdr\tcodex\tTERM-1\n"
 OUT7="$(cd "$TMP/proj" && CREW_MUX=herdr CREW_DRY_RUN=1 HOME="$TMP" PATH="$TMP/fakebin:$PATH" RELAY_PROJECT=testproj RELAY_URL=http://127.0.0.1:1111 "${CREW[@]}" up codex </dev/null 2>&1)"
