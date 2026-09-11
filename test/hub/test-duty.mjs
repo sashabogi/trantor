@@ -52,10 +52,7 @@ try {
       `${echo.length} echo(es): ${echo.map(m => m.text.slice(0, 70)).join(" | ")}`);
   }
 
-  // 0b. A HUMAN endpoint read in the desktop app must be able to record delivery. The app lists
-  // with peek=1 on purpose, so sasha@mac's deliveredUpTo sat at 0 forever while 17 messages piled
-  // up — every one of them escalated to the duty seat as undelivered, which then messaged the
-  // human about it, which was also undelivered. Six escalations a minute about mail already read.
+  // Desktop peek reads need an explicit acknowledgment to suppress delivery escalations.
   await post("/send", { from: "arch:projA", to: "sasha@mac", text: "a question for the human", project: "projA" });
   const humanBox = await get(`/inbox?session=${encodeURIComponent("sasha@mac")}&since=0&peek=1`);
   const humanMsg = (humanBox.messages || []).filter(m => m.to === "sasha@mac").pop();
@@ -75,12 +72,34 @@ try {
       JSON.stringify(again || {}));
   }
 
-  // 1. a DM to a session nobody delivers -> duty gets ONE escalation citing it
+  // #7440: batched context, status/receipts and unregistered destinations never wake duty.
+  await post("/register", { session: "ghost:projA", project: "projA", status: "parked" });
+  for (const message of [
+    { to: "ghost:projA", wake: false, text: "batched context" },
+    { to: "ghost:projA", kind: "status", text: "status context" },
+    { to: "ghost:projA", kind: "receipt", text: "receipt context" },
+    { to: "trantor", text: "project lane context" },
+    { to: "duty", text: "duty lane context" },
+    { to: "unregistered:projA", text: "unknown session context" },
+    { to: "constructor", text: "inherited property is not a session" },
+  ]) {
+    const sent = await post("/send", { from: "arch:projA", project: "projA", ...message });
+    ok(`exclusion drill sends ${message.text}`, sent.ok === true, JSON.stringify(sent));
+  }
+  await sleep(1800);
+  {
+    const box = await get(`/inbox?session=${encodeURIComponent("claude:trantor-duty")}&since=0&peek=1`);
+    const alerts = (box.messages || []).filter(m => m.from === "hub:duty" && /UNDELIVERED/.test(m.text));
+    ok("no-wake, status, receipt and non-session sends produce zero alerts", alerts.length === 0,
+      JSON.stringify(alerts));
+  }
+
+  // 1. a DM to a registered session nobody delivers -> duty gets ONE escalation citing it
   await post("/send", { from: "arch:projA", to: "ghost:projA", text: "please do the thing", project: "projA" });
   await sleep(1800);   // > undelivered window + a couple of ticks
   let inbox = await get(`/inbox?session=${encodeURIComponent("claude:trantor-duty")}&since=0&peek=1`);
   let esc = (inbox.messages || []).filter(m => m.from === "hub:duty" && /UNDELIVERED/.test(m.text));
-  ok("undelivered DM escalates to the duty session", esc.length >= 1, `got ${esc.length}`);
+  ok("undelivered DM escalates to the duty session", esc.length === 1, `got ${esc.length}`);
   ok("escalation cites sender, recipient, and content", esc.length > 0 && /arch:projA/.test(esc[0].text) && /ghost:projA/.test(esc[0].text) && /please do the thing/.test(esc[0].text));
   ok("escalation is hub-authored, not impersonated", esc.every(m => m.from === "hub:duty"));
   await sleep(1000);
@@ -124,6 +143,7 @@ try {
   ok("POST /overseer/duty accepts a new seat", setRes.ok === true && setRes.dutySession === "claude:relief", JSON.stringify(setRes));
   st = await get("/overseer/status");
   ok("status reflects the runtime duty session", st.dutySession === "claude:relief");
+  await post("/register", { session: "ghost:projC", project: "projC", status: "parked" });
   await post("/send", { from: "arch:projC", to: "ghost:projC", text: "after the handover", project: "projC" });
   await sleep(1800);
   const relief = await get(`/inbox?session=${encodeURIComponent("claude:relief")}&since=0&peek=1`);

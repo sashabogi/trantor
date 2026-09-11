@@ -1,16 +1,9 @@
 export function createDuty({ state, now, appendEvent, appendTaskLog, canon, markDirty, pushToStreams, OVERSEER_TICK_MS }) {
 let DUTY_SESSION = String(process.env.RELAY_DUTY_SESSION || state.dutySession || "");
-// 2 MINUTES, not 10 (2026-08-31): scribe DMed the woken crebral-health session at 16:11 and the
-// operator hand-relayed at 16:21:58 — beating the old 10m escalation by seconds. Two agents
-// actively collaborating cannot wait ten minutes; with duty's direct-wake the full chain
-// (escalate → duty nudge → target's hooks poll) now lands in ~3m. Duty's own batch rules
-// (one nudge per recipient per batch, consumed on activity) keep the shorter window from nagging.
+// Escalate after two minutes so idle recipients can be woken before collaboration stalls.
 const DUTY_UNDELIVERED_MS = Number(process.env.RELAY_DUTY_UNDELIVERED_MS || 2 * 60 * 1000);
 const dutyEscalated = new Set();
-// #5686: the janitor died 08-27 and NOTHING noticed for 4 days — the hub kept escalating to a
-// corpse. Duty liveness is now a first-class state: dark = configured but no heartbeat inside
-// DUTY_DARK_MS. Episode semantics (one event per transition, a standing flag on /health), and
-// while dark, escalations go to the party owed the reply instead of the dead seat.
+// #5686: emit one event per dark episode and route escalations to the sender while duty is dark.
 const DUTY_DARK_MS = Number(process.env.RELAY_DUTY_DARK_MS || 10 * 60 * 1000);
 let dutyDarkSince = 0;
 // A freshly appointed seat has no heartbeat yet and is NOT a corpse: the dark clock starts at
@@ -25,15 +18,8 @@ function dutyLiveness() {
   const seen = Math.max(state.peers[DUTY_SESSION]?.lastSeen || 0, dutySeenFloor);
   const lastSeenMs = now() - seen;
   const beating = lastSeenMs < DUTY_DARK_MS;
-  // A heartbeat is not work. This used to be `online: beating`, and on 2026-09-09 that let a duty
-  // seat look healthy to the hub for 21.9 hours while it held 48 escalations it could not touch:
-  // the runner's heartbeat IS its long-poll, and the long-poll keeps running while the seat is
-  // parked on a quota failure. So the #5686 dark-duty path — route escalations to the SENDER
-  // rather than queue them on a corpse — never armed, and every alert kept going to the corpse.
-  //
-  // dutyQueuedEscalations() below already computes the honest signal and nothing consulted it.
-  // A seat that is not CONSUMING is dark whatever its heartbeat says: `deliveredUpTo` stops
-  // advancing the moment it stops working, so a backlog that is both large and old is proof.
+  // #5686: long-poll heartbeats can continue while a seat is stuck; an old unread backlog
+  // must also trigger the dark-duty route to the sender.
   const stuck = dutyQueuedEscalations();
   const oldestStuckMs = stuck ? now() - oldestUnconsumedTs() : 0;
   const consuming = !(stuck >= DUTY_STUCK_MAX && oldestStuckMs >= DUTY_STUCK_MS);
@@ -117,13 +103,10 @@ function dutyTick() {
   const floor = now() - 24 * 3600 * 1000;                 // never escalate ancient history
   for (const m of state.messages) {
     if (m.ts > cutoff || m.ts < floor) continue;
-    // `hub:*` is the hub's own pseudo-identity, not a session: nothing polls it and nothing ever
-    // will, so a message addressed there can never be "delivered". Escalating it is a category
-    // error that feeds itself — the duty seat acks the escalation to hub:duty, that ack is
-    // undelivered too, and since dutyEscalated prunes its oldest ids at 5,000 the same ones come
-    // back around. Reported from the seat as "a fresh identical echo every stop-hook cycle".
-    // Skipping the FROM side was already here; the TO side is the half that loops.
+    // #7440: context and non-session destinations cannot justify a wake. Exclude hub mail
+    // on both sides so duty acknowledgments cannot feed another escalation.
     if (!m.to || m.to === "all" || m.to === DUTY_SESSION || m.from === "hub:duty" || m.to.startsWith("hub:")) continue;
+    if (m.wake === false || m.kind === "status" || m.kind === "receipt" || !Object.hasOwn(state.peers, m.to)) continue;
     if (dutyEscalated.has(m.id)) continue;
     if ((state.peers[m.to]?.deliveredUpTo || 0) >= m.id) continue;
     dutyEscalated.add(m.id);
