@@ -1,20 +1,20 @@
 #!/usr/bin/env node
 // #7429: hub detection → local socket wake; the duty model handles unreachable recipients.
 // up/down/status manage com.trantor.wake-nudge; run/once poll with the existing duty identity.
-// --hub overrides config.hubs.trantor/config.url; AGENT_BUS_DIR controls ledger and log paths.
-// Latency: hub UNDELIVERED after 2m → 2s event poll → socket → recipient inbox hook.
+// --hub overrides fleet config; AGENT_BUS_DIR controls ledger, cursor and log paths.
+// Latency: hub UNDELIVERED after 2m → 5s incremental event poll → socket → inbox hook.
 
 // #7429: read hub:duty events without consuming duty's inbox; ignore delivered/24h-old alerts.
 // Resolve this host's idle Claude via herdr, the session map and an unambiguous process tree.
 // Authenticate with its token, send ID-only NDJSON, and never inject terminal input or log tokens.
 // Record only after its poll stamp advances within 10s; a poll proves activity, not a reply.
 
-// #7429: failed/held attempts release claims to duty and are attempted once per daemon lifetime.
-// Successful records deduplicate restarts; busy, remote and unresolved sessions fall through.
-// Live drill: WAKE_NUDGE_LIVE=1 node --test test/crew/test-wake-nudge.mjs (artifacts: .agent-bus-out).
+// #7429: duty-nudged.json claims are the ONLY arbitration with duty: first claim wins.
+// The audit releases unverified claims; verified records deduplicate daemon restarts.
+// Busy, remote and unresolved sessions fall through; no priority or takeover is implied.
 // KeepAlive + RunAtLoad use a 30s crash throttle; installation never enrolls a new identity.
-import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, writeFileSync, rmSync } from "node:fs";
+import { execFileSync, spawn } from "node:child_process";
+import { existsSync, mkdirSync, readFileSync, writeFileSync, rmSync, renameSync } from "node:fs";
 import { join, dirname, resolve } from "node:path";
 import { homedir } from "node:os";
 import { fileURLToPath } from "node:url";
@@ -106,8 +106,15 @@ export function postNudge({ socketPath, token, sid }, ids, timeoutMs = 1500) {
   });
 }
 
-export async function wakeOnce({ api, bus = busDir(), resolver = recipient => resolveRecipient(recipient, { bus }), verifyMs = 10000, now = Date.now(), attempted = new Set() }) {
-  const feed = await api("/events?type=message&by=hub%3Aduty&limit=2000");
+export async function wakeOnce({ api, bus = busDir(), resolver = recipient => resolveRecipient(recipient, { bus }), verifyMs = 10000, now = Date.now(), attempted = new Set(), cursor = { id: 0, ts: 0 } }) {
+  const feed = await api(`/events?type=message&by=hub%3Aduty&since=${cursor.id}${cursor.id ? "" : "&limit=2000"}`);
+  if (Number.isFinite(feed.latest) && feed.latest < cursor.id) {
+    cursor.id = 0; cursor.ts = 0;
+    return { nudged: [], missing: [] };
+  }
+  for (const event of feed.events) {
+    if (event.id > cursor.id) { cursor.id = event.id; cursor.ts = event.ts; }
+  }
   const messages = feed.events.filter(event => event.by === "hub:duty" && now - event.ts < 24 * 3600 * 1000)
     .map(event => ({ from: event.by, text: event.text, ts: event.ts }));
   const resolved = new Map();
@@ -149,6 +156,32 @@ export async function wakeOnce({ api, bus = busDir(), resolver = recipient => re
   return result;
 }
 
+function fleetHub(args) {
+  const at = args.indexOf("--hub");
+  if (at >= 0 && args[at + 1]) return args[at + 1];
+  const config = readConfig();
+  const counts = new Map();
+  for (const hub of Object.values(config.hubs || {})) counts.set(hub, (counts.get(hub) || 0) + 1);
+  return [...counts].sort((a, b) => b[1] - a[1])[0]?.[0] || config.url || "http://127.0.0.1:4477";
+}
+
+export async function runDuty(args) {
+  const cmd = args[0] || "status";
+  const execute = (script, argv) => new Promise(resolve => {
+    const child = spawn(process.execPath, [join(dirname(SELF), script), ...argv], { stdio: "inherit" });
+    child.on("error", error => { console.error(error.message); resolve(1); });
+    child.on("exit", code => resolve(code ?? 1));
+  });
+  const wakeArgs = [cmd, "--hub", fleetHub(args)];
+  const supported = ["up", "down", "status"].includes(cmd) && process.platform === "darwin";
+  const wakeCode = supported && cmd === "down" ? await execute("wake-nudge.mjs", wakeArgs) : 0;
+  const dutyCode = await execute("duty.mjs", args);
+  if (supported && (cmd === "status" || (cmd === "up" && dutyCode === 0))) {
+    return (await execute("wake-nudge.mjs", wakeArgs)) || dutyCode;
+  }
+  return dutyCode || wakeCode;
+}
+
 const xml = value => String(value).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&apos;" })[c]);
 export function keepalivePlist({ bus, hub, home = homedir(), node = process.execPath, script = SELF, path = process.env.PATH }) {
   const args = [node, script, "run", "--hub", hub];
@@ -166,9 +199,7 @@ export function keepalivePlist({ bus, hub, home = homedir(), node = process.exec
 
 async function main() {
   const [cmd = "status", ...args] = process.argv.slice(2);
-  const config = readConfig();
-  const hubAt = args.indexOf("--hub");
-  const hub = (hubAt >= 0 ? args[hubAt + 1] : "") || config.hubs?.trantor || config.url || "http://127.0.0.1:4477";
+  const hub = fleetHub(args);
   const bus = busDir();
   const plist = join(homedir(), "Library", "LaunchAgents", `${LABEL}.plist`);
   const service = `gui/${process.getuid()}/${LABEL}`;
@@ -197,16 +228,25 @@ async function main() {
       return response.json();
     };
     const attempted = new Set();
+    const cursorPath = join(bus, "wake-nudge-cursor.json");
+    let cursor = { hub, id: 0, ts: 0 };
+    try {
+      const saved = JSON.parse(read(cursorPath));
+      if (saved.hub === hub && Number.isSafeInteger(saved.id) && saved.id >= 0) cursor = saved;
+    } catch { /* #7429: first start reads the retained alert window once. */ }
     do {
       // #7429: a held recipient's verification must not delay polling for other alerts.
-      const tick = wakeOnce({ api, bus, attempted }).then(result => {
+      const tick = wakeOnce({ api, bus, attempted, cursor }).then(result => {
+        const temporary = `${cursorPath}.${process.pid}.tmp`;
+        writeFileSync(temporary, JSON.stringify(cursor) + "\n", { mode: 0o600 });
+        renameSync(temporary, cursorPath);
         if (result.nudged.length || result.missing.length) console.log(JSON.stringify(result));
       }).catch(error => {
         console.error(error.message);
         if (cmd === "once") throw error;
       });
       if (cmd === "once") await tick;
-      if (cmd === "run") await sleep(2000);
+      if (cmd === "run") await sleep(5000);
     } while (cmd === "run");
   } else throw new Error("usage: node bin/wake-nudge.mjs up|down|status|run|once [--hub URL]");
 }

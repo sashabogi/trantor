@@ -89,7 +89,11 @@ switch (cmd) {
   case "policy": run("bin/policy.mjs"); break;
   case "proposals": case "proposal": run("bin/proposals.mjs"); break;
   case "inbox": run("bin/inbox.mjs"); break;
-  case "duty": run("bin/duty.mjs"); break;
+  case "duty": {
+    const { runDuty } = await import("./wake-nudge.mjs");
+    process.exitCode = await runDuty(args);
+    break;
+  }
   case "state": run("bin/state.mjs"); break;
   case "seats": case "seat": run("bin/seats.mjs"); break;
   case "seat-why": case "why": run("bin/seat-why.mjs"); break;
@@ -157,15 +161,8 @@ switch (cmd) {
     else console.error(`Enrollment failed: ${j.error || r.statusText}`);
     break;
   }
-  // A BROWSER CANNOT READ AN ENFORCE-MODE HUB. The page itself is served (200), but every data
-  // endpoint answers 401 to an unsigned request — /projects, /tasks, /peers — because a browser has
-  // no keypair and nothing in a webview can safely hold one. So the dashboard renders as an empty
-  // shell with no projects, which reads as "the hub is broken" when the hub is fine and refusing
-  // correctly. That is exactly what happened to a crew launch on 2026-08-26.
-  //
-  // The desktop app is the surface that works: it signs every request in Rust, which is also why
-  // the webview never touches a key. Prefer it, and when it is missing say plainly why the browser
-  // will look empty rather than opening one and letting the operator draw the wrong conclusion.
+  // Prefer the desktop app: it signs hub requests in Rust; the browser has no signing key.
+  // Explain the browser's read limitation when the desktop app is unavailable.
   case "ui": {
     const { resolveHubInfo } = await import(join(ROOT, "lib/project.mjs"));
     const { resolveProject } = await import(join(ROOT, "lib/project.mjs"));

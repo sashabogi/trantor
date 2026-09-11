@@ -1,10 +1,12 @@
 // #7429: socket protocol, local resolution, shared ledger and an opt-in real Claude wake drill.
+// WAKE_NUDGE_LIVE=1 enables both parked-Claude drills; sockets use a short tmpdir path.
 import assert from "node:assert/strict";
-import { test } from "node:test";
+import { test, after } from "node:test";
 import { createServer as netServer } from "node:net";
 import { createServer as httpServer } from "node:http";
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync, existsSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync, existsSync, rmSync, copyFileSync, symlinkSync } from "node:fs";
 import { join, resolve } from "node:path";
+import { tmpdir } from "node:os";
 import { spawn, execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { once } from "node:events";
@@ -16,9 +18,11 @@ const root = resolve(".");
 const out = join(root, ".agent-bus-out");
 mkdirSync(out, { recursive: true });
 const dir = mkdtempSync(join(out, "wn-"));
+const sockets = mkdtempSync(join(tmpdir(), "wn-"));
+after(() => rmSync(sockets, { recursive: true, force: true }));
 const recipient = "local:trantor";
 const sid = randomUUID();
-const alert = (id = 51, to = recipient) => ({ by: "hub:duty", type: "message", ts: Date.now(), text: `UNDELIVERED for 2m: #${id} sender:trantor -> ${to} — "untrusted content"` });
+const alert = (id = 51, to = recipient) => ({ id: id + 1000, by: "hub:duty", type: "message", ts: Date.now(), text: `UNDELIVERED for 2m: #${id} sender:trantor -> ${to} — "untrusted content"` });
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 const value = path => existsSync(path) ? Number(readFileSync(path, "utf8")) : 0;
 async function until(check, ms = 15000) {
@@ -43,8 +47,8 @@ function fixtureCommand(socketPath, options = {}) {
 test("resolves mapped session and inherited token without crossing nested Claude sessions", () => {
   const bus = join(dir, "resolve"); mkdirSync(bus);
   writeFileSync(join(bus, "orch-sessions.txt"), `trantor\t${sid}\n`);
-  const socketPath = join(bus, "101.sock"); writeFileSync(socketPath, "");
-  const options = { bus, localHost: "local", socketDir: bus, command: fixtureCommand(socketPath) };
+  const socketPath = join(sockets, "101.sock"); writeFileSync(socketPath, "");
+  const options = { bus, localHost: "local", socketDir: sockets, command: fixtureCommand(socketPath) };
   assert.equal(resolveRecipient(recipient, options).pid, 101);
   assert.equal(resolveRecipient(recipient, { ...options, command: fixtureCommand(socketPath, { directToken: true }) }).token, "private-token");
   assert.equal(resolveRecipient(recipient, { ...options, command: fixtureCommand(socketPath, { noPane: true }) }).sid, sid);
@@ -57,7 +61,7 @@ test("resolves mapped session and inherited token without crossing nested Claude
 
 test("NDJSON wake advances poll, records once, and excludes sender-controlled content", async () => {
   const bus = join(dir, "success"); mkdirSync(bus);
-  const socketPath = join(dir, "s.sock");
+  const socketPath = join(sockets, "s.sock");
   const pollStamp = ledgerPaths(recipient, sid, bus).pollStamp;
   let count = 0;
   const server = netServer(socket => {
@@ -82,13 +86,13 @@ test("NDJSON wake advances poll, records once, and excludes sender-controlled co
     assert.equal((await wakeOnce(options)).nudged.length, 1);
     assert.equal((await wakeOnce(options)).nudged.length, 0);
     assert.equal(count, 1);
-    assert.equal(planDutyNudges([{ from: "hub:duty", text: event.text }], join(bus, "duty-nudged.json")).items.length, 0);
+    assert.equal((await planDutyNudges([{ from: "hub:duty", text: event.text }], join(bus, "duty-nudged.json"))).items.length, 0);
   } finally { server.close(); }
 });
 
 test("held, closed, remote, and already delivered alerts remain available or untouched", async () => {
   const bus = join(dir, "fallthrough"); mkdirSync(bus);
-  const socketPath = join(dir, "h.sock");
+  const socketPath = join(sockets, "h.sock");
   let posts = 0;
   const server = netServer(socket => { posts++; socket.resume(); socket.on("end", () => socket.end()); }).listen(socketPath);
   await once(server, "listening");
@@ -101,7 +105,7 @@ test("held, closed, remote, and already delivered alerts remain available or unt
     assert.equal((await wakeOnce({ ...options, attempted })).missing.length, 0);
     assert.deepEqual(readDutyNudgeState(join(bus, "duty-nudged.json")).nudged, {});
     assert.deepEqual(readDutyNudgeState(join(bus, "duty-nudged.json")).planned, {});
-    assert.equal(planDutyNudges([{ from: "hub:duty", text: events[0].text }], join(bus, "duty-nudged.json")).items.length, 1);
+    assert.equal((await planDutyNudges([{ from: "hub:duty", text: events[0].text }], join(bus, "duty-nudged.json"))).items.length, 1);
     assert.equal((await wakeOnce({ ...options, resolver: () => null })).missing.length, 0);
     assert.equal((await wakeOnce({ ...options, api: async path => path.startsWith("/events") ? { events } : { deliveredUpTo: 52 } })).nudged.length, 0);
     assert.equal(posts, 1);
@@ -117,6 +121,78 @@ test("launchd plist keeps the daemon alive and escapes paths", () => {
   assert.match(plist, /\/a&amp;b/);
   const path = join(dir, "wake.plist"); writeFileSync(path, plist);
   if (process.platform === "darwin") execFileSync("plutil", ["-lint", path]);
+});
+
+test("event cursor reads only new alerts, retains failed polls and resets after hub replacement", async () => {
+  const cursor = { id: 0, ts: 0 };
+  let events = [alert(61)];
+  let latest = events[0].id;
+  const paths = [];
+  let resolutions = 0;
+  const api = async path => {
+    paths.push(path);
+    const since = Number(new URL(path, "http://localhost").searchParams.get("since"));
+    return { events: events.filter(event => event.id > since), latest };
+  };
+  const options = { api, cursor, resolver: () => { resolutions++; return null; } };
+  await wakeOnce(options);
+  assert.deepEqual(cursor, { id: 1061, ts: events[0].ts });
+  await wakeOnce(options);
+  assert.equal(resolutions, 1);
+  assert.match(paths[1], /since=1061$/);
+  assert.doesNotMatch(paths[1], /limit=2000/);
+  events.push(alert(62)); latest++;
+  await wakeOnce(options);
+  assert.equal(resolutions, 2);
+  assert.equal(cursor.id, 1062);
+  await assert.rejects(wakeOnce({ ...options, api: async () => { throw new Error("hub unavailable"); } }), /hub unavailable/);
+  assert.equal(cursor.id, 1062);
+  latest = 1; events = [];
+  await wakeOnce(options);
+  assert.deepEqual(cursor, { id: 0, ts: 0 });
+});
+
+test("duty CLI installs, reports and stops both services, propagating failures", { skip: process.platform !== "darwin" }, () => {
+  const fixture = join(dir, "cli");
+  const bin = join(fixture, "bin"); mkdirSync(bin, { recursive: true });
+  const home = join(fixture, "home"); mkdirSync(home);
+  const bus = join(home, ".agent-bus"); mkdirSync(join(bus, "keys"), { recursive: true });
+  for (const file of ["cli.mjs", "wake-nudge.mjs"]) copyFileSync(join(root, "bin", file), join(bin, file));
+  for (const folder of ["lib", "hooks"]) symlinkSync(join(root, folder), join(fixture, folder));
+  const log = join(fixture, "calls.jsonl");
+  writeFileSync(join(bin, "duty.mjs"), `import {appendFileSync} from 'node:fs';
+appendFileSync(process.env.WAKE_TEST_LOG, JSON.stringify(['duty',...process.argv.slice(2)])+'\\n');
+console.log('com.trantor.duty '+(process.argv[2]||'status'));
+process.exit(Number(process.env.WAKE_TEST_DUTY_EXIT||0));`);
+  writeFileSync(join(bin, "launchctl"), `#!${process.execPath}
+import {appendFileSync} from 'node:fs';
+appendFileSync(process.env.WAKE_TEST_LOG, JSON.stringify(['launchctl',...process.argv.slice(2)])+'\\n');
+console.log(process.argv.slice(2).join(' '));
+if(process.argv[2]==='bootstrap') process.exit(Number(process.env.WAKE_TEST_LAUNCH_EXIT||0));`, { mode: 0o700 });
+  writeFileSync(join(bus, "keys", "claude_trantor-duty.json"), JSON.stringify({ pubkey: "fixture", privkey: "fixture" }));
+  const env = { ...process.env, HOME: home, AGENT_BUS_DIR: bus, PATH: `${bin}:${process.env.PATH}`, WAKE_TEST_LOG: log };
+  const invoke = (args, extra = {}) => execFileSync(process.execPath, [join(bin, "cli.mjs"), "duty", ...args], { env: { ...env, ...extra }, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+  const calls = () => readFileSync(log, "utf8").trim().split("\n").map(line => JSON.parse(line));
+  const plist = join(home, "Library", "LaunchAgents", "com.trantor.wake-nudge.plist");
+  assert.match(invoke(["up", "--hub", "http://localhost:54321"]), /com.trantor.wake-nudge installed/);
+  assert.match(readFileSync(plist, "utf8"), /http:\/\/localhost:54321/);
+  assert.equal(calls()[0][0], "duty");
+  assert.ok(calls().some(row => row[1] === "bootstrap"));
+  const status = invoke([]);
+  assert.match(status, /com.trantor.duty status/);
+  assert.match(status, /com.trantor.wake-nudge/);
+  let before = calls().length;
+  invoke(["down"]);
+  assert.equal(calls()[before][1], "bootout");
+  assert.equal(calls().at(-1)[0], "duty");
+  assert.equal(existsSync(plist), false);
+  before = calls().length;
+  assert.throws(() => invoke(["up"], { WAKE_TEST_DUTY_EXIT: "7" }), error => error.status === 7);
+  assert.equal(calls().length, before + 1, "failed duty start must not install wake service");
+  assert.throws(() => invoke(["up"], { WAKE_TEST_LAUNCH_EXIT: "8" }), error => error.status !== 0);
+  assert.throws(() => invoke(["status"], { WAKE_TEST_DUTY_EXIT: "7" }), error => error.status === 7 && /com.trantor.wake-nudge/.test(error.stdout));
+  assert.throws(() => invoke(["down"], { WAKE_TEST_DUTY_EXIT: "7" }), error => error.status === 7);
+  assert.equal(existsSync(plist), false);
 });
 
 for (const mode of ["accept", "hold"]) test(`parked claude -p respects ${mode} on UNDELIVERED`, { skip: process.env.WAKE_NUDGE_LIVE !== "1", timeout: 90000 }, async () => {
@@ -146,7 +222,7 @@ process.stdout.write(JSON.stringify({jsonrpc:'2.0',id:q.id,result})+'\\n'); });\
     const credentials = JSON.parse(execFileSync("security", ["find-generic-password", "-s", "Claude Code-credentials", "-w"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }));
     token = credentials.claudeAiOauth.accessToken;
   }
-  const env = { ...process.env, HOME: home, CLAUDE_CONFIG_DIR: join(home, ".claude"), CLAUDE_CODE_OAUTH_TOKEN: token, AGENT_BUS_DIR: bus, RELAY_PROJECT: "trantor", RELAY_SESSION: recipient, RELAY_HOST_ID: "local", RELAY_URL: url, RELAY_INBOX_POLL_MS: "0", WAKE_DRILL_DIR: dir };
+  const env = { ...process.env, HOME: home, CLAUDE_CONFIG_DIR: join(home, ".claude"), CLAUDE_CODE_OAUTH_TOKEN: token, AGENT_BUS_DIR: bus, RELAY_PROJECT: "trantor", RELAY_SESSION: recipient, RELAY_HOST_ID: "local", RELAY_URL: url, RELAY_INBOX_POLL_MS: "0", WAKE_DRILL_DIR: sockets };
   delete env.CLAUDECODE; delete env.CLAUDE_CODE_MESSAGING_TOKEN; delete env.CLAUDE_CODE_MESSAGING_SOCKET;
   const child = spawn("/bin/sh", ["-c", 'exec claude --messaging-socket-path "$WAKE_DRILL_DIR/$$.sock" "$@"', "wake-drill", "-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose", "--session-id", sessionId, "--model", "haiku", "--setting-sources", "", "--settings", JSON.stringify(settings), "--strict-mcp-config", "--mcp-config", JSON.stringify({ mcpServers: { drill: { command: process.execPath, args: [mcp] } } }), "--allowedTools", "mcp__drill__relay_inbox", "--no-session-persistence"], { cwd: root, env, stdio: ["pipe", "pipe", "pipe"] });
   let output = ""; let errors = "";
@@ -162,7 +238,7 @@ process.stdout.write(JSON.stringify({jsonrpc:'2.0',id:q.id,result})+'\\n'); });\
     events = [alert(53)];
     const started = Date.now();
     const command = (cmd, args) => cmd === "herdr" ? JSON.stringify({ result: { agents: [] } }) : execFileSync(cmd, args, { encoding: "utf8" });
-    const resolver = target => resolveRecipient(target, { bus, localHost: "local", command, socketDir: dir });
+    const resolver = target => resolveRecipient(target, { bus, localHost: "local", command, socketDir: sockets });
     assert.ok(resolver(recipient), "resolve live Claude pid and inherited messaging token");
     const result = await wakeOnce({ bus, resolver, api: async path => (await fetch(url + path)).json() });
     if (mode === "hold") {
