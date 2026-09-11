@@ -22,8 +22,9 @@ import {
 } from "../lib/turn-policy.mjs";
 import {
   auditDutyNudges, claimDutyNudges, claudeTranscriptDir, dutyEscalations, dutyNudgeDirective,
-  observedDutyNudgeIds,
+  observedDutyNudgeIds, requeueMissingWakeMessages, shedExpiredHubAlerts,
 } from "../lib/duty-nudges.mjs";
+import { dutyRecipientResolver } from "../lib/duty-recipient.mjs";
 import {
   BREAKER_WINDOW, STATE_ENV, TURN_RESULT_SCHEMA,
   breakerVerdict, describeTurn, hasJsonSchemaFlag, parseEnvelope, renderCardTail, runStep,
@@ -1105,8 +1106,12 @@ function askedExcerpt(message) {
     // Everything that did not earn a turn still becomes CONTEXT — including a DIRECT message that
     // batched (wake:false, or an ack by shape). Dropping those would trade a token problem for a
     // deafness problem: the seat would never learn what it was told (#6134).
-    const bcast = [...rest.filter(m => !direct.includes(m) && !mentions.includes(m)), ...fyi];
-    pendingBcast.push(...bcast);                      // wake-policy: plain broadcasts batch, they don't wake
+    // #7430: stale hub alerts are shed HERE too, not only at boot — one that arrives already past
+    // its TTL must not sit in every prompt until the next successful turn clears the batch.
+    const batched = [...rest.filter(m => !direct.includes(m) && !mentions.includes(m)), ...fyi];
+    const freshBatch = shedExpiredHubAlerts(batched, HUB_ALERT_TTL_MS);
+    if (freshBatch.shed) log(`\x1b[33mshed ${freshBatch.shed} hub alert(s) already past the ${Math.round(HUB_ALERT_TTL_MS / 60000)}m TTL at queue time\x1b[0m`);
+    pendingBcast.push(...freshBatch.kept);            // wake-policy: plain broadcasts batch, they don't wake
     const wakeCandidates = [...direct, ...mentions];
     // #6228: a wake naming an unlinked foreign project is dropped, with one report to the sender.
     // The hub's own agents (`hub:duty` et al.) are exempt: they speak for this hub's projects (#6301).
@@ -1119,7 +1124,7 @@ function askedExcerpt(message) {
         text: `⛔ cross-project: ${SESSION} is ${PROJ}'s seat, not ${sp}'s — dropped without acting. Link them first: trantor policy link ${PROJ} ${sp} --reason "<why>"` }).catch(() => {});
     }
     const wake = wakeCandidates.filter(m => !crossProject.includes(m));
-    if (!wake.length) { if (bcast.length) { savePending(pendingWake, pendingBcast); log(`${bcast.length} broadcast(s) batched (no wake) — ${pendingBcast.length} pending`); } continue; }
+    if (!wake.length) { if (freshBatch.kept.length) { savePending(pendingWake, pendingBcast); log(`${freshBatch.kept.length} broadcast(s) batched (no wake) — ${pendingBcast.length} pending`); } continue; }
     // Queue BEFORE running the turn, and persist immediately. Everything between here and a clean
     // exit 0 — the CLI dying, the machine losing power — now leaves a record of what this seat owes.
     pendingWake.push(...wake);
@@ -1146,6 +1151,10 @@ function askedExcerpt(message) {
         messages: wake,
         statePath: DUTY_NUDGE_STATE,
         owner: `${RUNNER_ID}:${TURN + 1}`,
+        // #7430: pre-flight recipients (herdr + orch-sessions) so busy sessions plan as no-ops and
+        // recipients with no local session go terminal — the prompt and the audit can no longer
+        // disagree, and the seat is never ordered to make a nudge it cannot make.
+        resolveRecipient: dutyRecipientResolver(),
         // /peer (singular) is the only endpoint that serialises deliveredUpTo; the cursor is monotonic,
         // so `>= id` means handed over. Best-effort: a missed nudge is worse than a redundant one.
         isDelivered: async ({ id, recipient }) => {
@@ -1246,11 +1255,18 @@ function askedExcerpt(message) {
     }
     if (!ec && skippedNudges.length) {
       deliveryFails++;
+      // #7430: re-queue ONLY the messages whose escalation id went missing. Saving the whole batch
+      // is what grew the pending queue (22 -> 27) while every turn exited 0: handled alerts must
+      // not ride the redelivery backoff behind the one id that still owes a nudge.
+      const requeued = requeueMissingWakeMessages(pendingWake, skippedNudges);
+      const handled = pendingWake.length - requeued.length;
+      pendingWake = requeued.length ? requeued : pendingWake;   // never retry an empty queue
       savePending(pendingWake, pendingBcast);
       const wait = RETRY_MS[Math.min(deliveryFails - 1, RETRY_MS.length - 1)];
       retryAt = Date.now() + wait;
       const ids = skippedNudges.flatMap(target => target.ids).map(id => `#${id}`).join(", ");
       log(`\x1b[31mduty turn skipped mandatory socket nudge(s) ${ids} — recorded failure; retrying in ${Math.round(wait / 1000)}s\x1b[0m`);
+      if (handled > 0) log(`${handled} already-handled message(s) consumed instead of redelivered`);
       lastTurnAt = Date.now();
       return;
     }

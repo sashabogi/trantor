@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   auditDutyNudges, claimDutyNudges, claudeTranscriptDir, dutyNudgeDirective,
-  observedDutyNudgeIds, planDutyNudges,
+  observedDutyNudgeIds, planDutyNudges, recordDutyNudges, WAKE_TAKEOVER_MS,
 } from "../../lib/duty-nudges.mjs";
 
 const work = mkdtempSync(join(tmpdir(), "trantor-duty-nudges-"));
@@ -195,6 +195,51 @@ try {
   ok("the audit does not count a busy recipient missing", audit.missing.length === 0);
   ok("a resolver crash fails OPEN to a standing nudge",
     (await planDutyNudges(feed(["Z"]), p, { resolveRecipient: async () => { throw new Error("x"); } })).items.length === 1);
+}
+
+// --- #7429: the mechanical wake gets first chance at a fresh duty claim -----------------------
+// The duty LLM turn claims an alert for minutes, which used to lock the 5s wake daemon out for a
+// whole turn. The ledger is the referee: wake may take over a FRESH duty claim, nothing may take
+// over a wake claim, and the audit counts a ledger-verified id handled instead of missing.
+{
+  const p = join(mkdtempSync(join(tmpdir(), "duty-takeover-")), "duty-nudged.json");
+  const t0 = 1_700_000_000_000;
+  const duty = await claimDutyNudges({ messages: feed(["A"]), statePath: p, owner: "duty-turn-1", now: t0 });
+  ok("duty claims the alert", duty.items.length === 1 && duty.targets.length === 1);
+  const wake = await claimDutyNudges({ messages: feed(["A"]), statePath: p, owner: "wake:999", now: t0 + 5000 });
+  ok("wake takes over a fresh duty claim inside the grace", wake.items.length === 1);
+  ok("the takeover moves the claim to the wake owner",
+    JSON.parse(readFileSync(p, "utf8")).planned.A?.owner === "wake:999");
+  const dutyAgain = await claimDutyNudges({ messages: feed(["A"]), statePath: p, owner: "duty-turn-2", now: t0 + 6000 });
+  ok("duty never steals a wake claim", dutyAgain.items.length === 0);
+  // wake's socket is held: its audit releases its own claim, with no terminal marking anywhere.
+  const wakeAudit = await auditDutyNudges({
+    plan: wake, observedIds: new Set(), statePath: p, reportFailure: async () => {},
+  });
+  const afterRelease = JSON.parse(readFileSync(p, "utf8"));
+  ok("a held socket releases the wake claim without terminal marking",
+    !afterRelease.planned.A && !afterRelease.nudged.A, JSON.stringify(afterRelease));
+  ok("the wake audit still reports the id as undelivered for its own logging", wakeAudit.missing.length === 1);
+  const duty2 = await claimDutyNudges({ messages: feed(["A"]), statePath: p, owner: "duty-turn-3", now: t0 + 7000 });
+  ok("duty re-claims after the release", duty2.items.length === 1);
+  const late = await claimDutyNudges({
+    messages: feed(["A"]), statePath: p, owner: "wake:998", now: t0 + 7000 + WAKE_TAKEOVER_MS + 1000,
+  });
+  ok("past the grace a duty claim is respected", late.items.length === 0);
+  // ...and when wake verifies first, duty's audit reads the ledger instead of crying missing.
+  await recordDutyNudges({ plan: { ...duty2, owner: "wake:998" }, observedIds: new Set(["A"]), statePath: p, now: t0 + 8000 });
+  const recorded = JSON.parse(readFileSync(p, "utf8")).nudged.A;
+  ok("a wake-verified entry records the mechanical source", recorded?.source === "wake", JSON.stringify(recorded || null));
+  const dutyAudit = await auditDutyNudges({
+    plan: duty2, observedIds: new Set(), statePath: p,
+    reportFailure: async () => { throw new Error("a ledger-verified id was reported missing"); },
+  });
+  ok("the audit counts a ledger-verified id handled even when this turn did not nudge it",
+    dutyAudit.missing.length === 0);
+  await recordDutyNudges({ plan: duty2, observedIds: new Set(["A"]), statePath: p, now: t0 + 99999 });
+  const kept = JSON.parse(readFileSync(p, "utf8")).nudged.A;
+  ok("a later record from the other path never clobbers the first",
+    kept.source === "wake" && kept.nudgedAt === recorded.nudgedAt, JSON.stringify(kept || null));
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);
