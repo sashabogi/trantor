@@ -27,6 +27,9 @@ export function writeRows(ctx, rows) {
 export function recordState(ctx, project, kind, agent, handle) {
   if (ctx.dry) return;
   const rows = readRows(ctx);
+  // #7285: an exact duplicate carries no new fact, and a doubled herdrws row is how `up` came to
+  // see the live workspace as its own stale copy. One row per fact — refuse the push.
+  if (rows.some(row => row.project === project && row.kind === kind && row.agent === agent && row.handle === handle)) return;
   rows.push({ project, kind, agent, handle });
   writeRows(ctx, rows);
 }

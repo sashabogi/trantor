@@ -48,8 +48,7 @@ export function paneAlive(ctx, pane) {
 }
 
 export function workspacePane(ctx, workspace, preferredCwd) {
-  const parsed = parseJsonOutput(herdrCall(ctx, ["pane", "list"]).stdout);
-  const panes = Array.isArray(parsed) ? parsed : parsed?.panes || parsed?.result?.panes || [];
+  const panes = listPanes(ctx);
   const matches = panes.filter(pane => (pane.workspace_id || pane.workspace || "") === workspace);
   const preferred = matches.filter(pane => (pane.cwd || "") === preferredCwd);
   const ordered = [...preferred, ...matches.filter(pane => !preferred.includes(pane))];
@@ -86,13 +85,47 @@ function runSeat(ctx, pane, agent, command) {
 }
 
 function trackedWorkspace(ctx) {
-  const ids = readRows(ctx).filter(row => row.project === ctx.project && row.kind === "herdrws").map(row => row.handle);
+  // #7285: duplicate rows of ONE workspace must dedupe — a takeover used to append a second row of
+  // the live workspace, and slice(0,-1) then handed that live workspace to the stale list.
+  const ids = [];
+  for (const id of readRows(ctx).filter(row => row.project === ctx.project && row.kind === "herdrws").map(row => row.handle)) {
+    const at = ids.indexOf(id);
+    if (at >= 0) ids.splice(at, 1);
+    ids.push(id);
+  }
   return { reuse: ids.at(-1) || "", stale: ids.slice(0, -1) };
+}
+
+function listPanes(ctx) {
+  const parsed = parseJsonOutput(herdrCall(ctx, ["pane", "list"]).stdout);
+  return Array.isArray(parsed) ? parsed : parsed?.panes || parsed?.result?.panes || [];
+}
+
+// #7285: the workspaces hosting THIS project's tracked orchestrator pane. Herdr pane ids embed
+// their workspace (#7247 forensics: 'w2:p4Y' lived in w2), so the handle prefix names the home
+// without a round trip; when herdr answers, the pane list is a second opinion (stub ids carry no
+// prefix). Closing such a workspace kills the orchestrator's shell.
+function orchPaneWorkspaces(ctx) {
+  const handles = readRows(ctx).filter(row => row.project === ctx.project && row.kind === "orch").map(row => row.handle);
+  if (!handles.length) return new Set();
+  const spaces = new Set(handles.map(handle => handle.split(":")[0]).filter(Boolean));
+  if (ctx.dry) return spaces;
+  const tracked = new Set(handles);
+  for (const pane of listPanes(ctx)) {
+    if (!tracked.has(pane.pane_id || pane.id || "")) continue;
+    const space = pane.workspace_id || pane.workspace || "";
+    if (space) spaces.add(space);
+  }
+  return spaces;
 }
 
 function prepareWorkspace(ctx, prune) {
   const tracked = trackedWorkspace(ctx);
+  const orchSpaces = orchPaneWorkspaces(ctx);
   for (const id of tracked.stale) {
+    // #7285: never close reuse itself, nor a workspace hosting the tracked orch pane — `up` once
+    // killed its own orchestrator that way. The row stays: the workspace is still live.
+    if (id === tracked.reuse || orchSpaces.has(id)) continue;
     console.log(`  → closing stale stacked crew workspace for ${ctx.project} (${id})`);
     closeWorkspace(ctx, id);
     dropState(ctx, ctx.project, "herdrws", "", id);

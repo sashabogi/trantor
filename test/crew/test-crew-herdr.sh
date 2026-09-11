@@ -157,6 +157,35 @@ ok "both seats land in the reused workspace" '[ "$(echo "$OUT6" | grep -c "reuse
 ok "the older stacked workspace is closed" 'echo "$OUT6" | grep -q "herdr workspace close WS-OLD"'
 ok "the reused workspace is NOT closed" '! echo "$OUT6" | grep -q "workspace close WS-NEW"'
 
+# 6b. (#7285) the app's Resume recorded a SECOND herdrws row of the already-tracked live workspace;
+#     the next up then read ids.at(-1) as reuse and ids.slice(0,-1) as stale — closing the
+#     "duplicate", which WAS the live workspace, with the orchestrator's shell inside it. Dry repro
+#     of exactly that state: up must dedupe, reuse once, and print NO workspace close at all.
+seed "testproj\therdrws\t__ws__\tWS-LIVE\ntestproj\therdrws\t__ws__\tWS-LIVE\ntestproj\torch\t__orch__\tWS-LIVE:P-ORCH\n"
+OUT6b="$(cd "$TMP/proj" && CREW_MUX=herdr CREW_DRY_RUN=1 HOME="$TMP" PATH="$TMP/fakebin:$PATH" RELAY_PROJECT=testproj RELAY_URL=http://127.0.0.1:1111 "${CREW[@]}" up codex </dev/null 2>&1)"
+ok "duplicate herdrws rows dedupe: the live workspace is reused" 'echo "$OUT6b" | grep -q "reuse workspace WS-LIVE"'
+ok "…and never closed, not even as its own stale duplicate" '! echo "$OUT6b" | grep -q "workspace close WS-LIVE"'
+ok "no stale-stacked close when every herdrws row is the live workspace" '! echo "$OUT6b" | grep -q "closing stale stacked"'
+
+# 6c. the second guard (#7285): even a DISTINCT older workspace that hosts the tracked orch pane is
+#     never closed — herdr pane ids embed their workspace, so the orch handle names its home.
+seed "testproj\therdrws\t__ws__\tWS-ORCHHOME\ntestproj\therdrws\t__ws__\tWS-NEW\ntestproj\torch\t__orch__\tWS-ORCHHOME:P-ORCH\n"
+OUT6c="$(cd "$TMP/proj" && CREW_MUX=herdr CREW_DRY_RUN=1 HOME="$TMP" PATH="$TMP/fakebin:$PATH" RELAY_PROJECT=testproj RELAY_URL=http://127.0.0.1:1111 "${CREW[@]}" up codex </dev/null 2>&1)"
+ok "a stale workspace hosting the orch pane is spared" '! echo "$OUT6c" | grep -q "workspace close WS-ORCHHOME"'
+ok "…while the newest distinct workspace is still the reuse" 'echo "$OUT6c" | grep -q "reuse workspace WS-NEW"'
+
+# 6d. the third layer (#7285): recordState refuses an exact duplicate, distinct rows still land
+OUT6d="$(STATE6D="$TMP/state6d.txt" "${CREW[0]}" --input-type=module -e '
+  import { pathToFileURL } from "node:url";
+  const mod = await import(pathToFileURL(process.argv[1]));
+  const ctx = { dry: false, statePath: process.env.STATE6D };
+  mod.recordState(ctx, "testproj", "herdrws", "__ws__", "WS-DUP");
+  mod.recordState(ctx, "testproj", "herdrws", "__ws__", "WS-DUP");
+  mod.recordState(ctx, "testproj", "herdrws", "__ws__", "WS-OTHER");
+  process.stdout.write(mod.readRows(ctx).map(row => row.handle).join(","));
+' "$ROOT/bin/crew/state.mjs" 2>&1)"
+ok "recordState keeps ONE row for a twice-recorded fact" '[ "$OUT6d" = "WS-DUP,WS-OTHER" ]'
+
 # 7. replace-in-place: re-upping a tracked seat replaces ITS pane (split off it, then close it)
 seed "testproj\therdrws\t__ws__\tWS-NEW\ntestproj\therdr\tcodex\tTERM-1\n"
 OUT7="$(cd "$TMP/proj" && CREW_MUX=herdr CREW_DRY_RUN=1 HOME="$TMP" PATH="$TMP/fakebin:$PATH" RELAY_PROJECT=testproj RELAY_URL=http://127.0.0.1:1111 "${CREW[@]}" up codex </dev/null 2>&1)"

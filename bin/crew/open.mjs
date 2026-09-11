@@ -210,6 +210,9 @@ export function openOrchestrator(ctx, args) {
     const prior = tracked(ctx, live);
     if (reattach(ctx, prior.workspace, prior.pane, id)) return 0;
     const chosen = chooseWorkspace(ctx, live, prior.workspace);
+    // #7285: ONE herdrws row per project — re-record exactly like the orch row below, never append.
+    // The appended duplicate made the next `up` close the "stale" copy of the live workspace.
+    dropState(ctx, ctx.project, "herdrws");
     recordState(ctx, ctx.project, "herdrws", "__ws__", chosen.workspace);
     const pane = hostPane(ctx, chosen, id);
     dropState(ctx, ctx.project, "orch");
