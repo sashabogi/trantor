@@ -67,7 +67,7 @@ try {
   ok("watcher persists A before the duty turn ends",
     JSON.parse(readFileSync(statePath, "utf8")).nudged.A?.recipient === "MacBook-Pro-M1:proj");
   ok("watcher finalizes A by removing its planned mark", !JSON.parse(readFileSync(statePath, "utf8")).planned.A);
-  ok("a concurrent second wake with A plans nothing", planDutyNudges(feed(["A"]), statePath).items.length === 0);
+  ok("a concurrent second wake with A plans nothing", (await planDutyNudges(feed(["A"]), statePath)).items.length === 0);
   writeFileSync(stopPath, "");
   await new Promise(resolve => watcher.on("close", resolve));
   const observedA = observedDutyNudgeIds(transcriptDir, stamp);
@@ -102,10 +102,9 @@ try {
 }
 
 // --- #6951 fault 2: a delivered message must not be nudged for -------------------------------
-// The ledger answers "did I nudge for this id"; it cannot answer "does this id still need one".
-// Those came apart on 2026-09-09: duty nudged the orchestrator four times for ids its own cursor
-// was already past — real escalations when duty first saw them, read by the recipient before duty
-// got a turn, and nothing re-checked. Every nudge wakes a session and costs a turn on both sides.
+// The ledger answers "did I nudge for this id"; it cannot answer "does this id still need one" —
+// duty nudged an orchestrator four times for ids its own cursor was already past (#6951). Every
+// nudge wakes a session and costs a turn on both sides.
 {
   const p = join(mkdtempSync(join(tmpdir(), "duty-delivered-")), "duty-nudged.json");
   const msgs = feed(["A", "B"]);
@@ -143,6 +142,59 @@ try {
   });
   ok("a failing delivery check leaves the nudge STANDING, never silently drops it",
     plan.items.length === 1, JSON.stringify(plan.items.map(i => i.id)));
+}
+
+// --- #7430: the audit must never demand a nudge the seat cannot make --------------------------
+// Mail addressed to a recipient with no local session (duty's own echoes) and mail for a session
+// observed busy both used to count as "skipped mandatory nudges", so every alert rode a redelivery
+// backoff and the pending queue only ever grew.
+{
+  const p = join(mkdtempSync(join(tmpdir(), "duty-terminal-")), "duty-nudged.json");
+  const msgs = [...feed(["T"]), {
+    from: "hub:duty", text: `⚠️ UNDELIVERED for 2m: #U claude:src -> duty — "self echo"`,
+  }];
+  const plan = await claimDutyNudges({
+    messages: msgs, statePath: p, owner: "turn-1",
+    resolveRecipient: async r => (r === "duty" ? "unknown" : "idle"),
+  });
+  ok("an unresolvable recipient is terminal, not a planned nudge",
+    plan.items.length === 1 && plan.terminal.length === 1 && plan.terminal[0].ids.join() === "U",
+    JSON.stringify({ items: plan.items.map(i => i.id), terminal: plan.terminal }));
+  const saved = JSON.parse(readFileSync(p, "utf8"));
+  ok("the terminal id is recorded with a reason, never to be retried",
+    saved.nudged.U?.terminal === true && Boolean(saved.nudged.U?.reason),
+    JSON.stringify(saved.nudged.U || null));
+  const again = await planDutyNudges(msgs, p, { resolveRecipient: async () => "idle" });
+  ok("a terminal id is never re-planned on a later turn", again.items.length === 0,
+    JSON.stringify(again.items.map(i => i.id)));
+  const audit = await auditDutyNudges({
+    plan, observedIds: new Set(plan.items.map(i => i.id)), statePath: p,
+    reportFailure: async () => { throw new Error("terminal id reported as a skipped nudge"); },
+  });
+  ok("the audit demands nothing for a terminal recipient", audit.missing.length === 0);
+}
+{
+  const p = join(mkdtempSync(join(tmpdir(), "duty-busy-")), "duty-nudged.json");
+  const two = [{ from: "hub:duty", text: `⚠️ UNDELIVERED for 2m: #B claude:src -> codex:proj — "stuck"` }, ...feed(["C"])];
+  const plan = await claimDutyNudges({
+    messages: two, statePath: p, owner: "turn-1",
+    resolveRecipient: async r => (r === "codex:proj" ? "busy" : "idle"),
+  });
+  ok("a busy recipient is planned as a no-op, not a mandatory nudge",
+    plan.items.map(i => i.id).join() === "C" && plan.noops.length === 1 && plan.noops[0].ids.join() === "B",
+    JSON.stringify({ items: plan.items.map(i => i.id), noops: plan.noops }));
+  ok("a busy id is NOT terminalised — the next turn re-resolves it",
+    !JSON.parse(readFileSync(p, "utf8")).nudged.B);
+  ok("the directive marks the busy id do-not-nudge",
+    dutyNudgeDirective(plan).includes("NO-OP") && dutyNudgeDirective(plan).includes("#B"),
+    dutyNudgeDirective(plan).slice(0, 120));
+  const audit = await auditDutyNudges({
+    plan, observedIds: new Set(["C"]), statePath: p,
+    reportFailure: async () => { throw new Error("busy id reported as a skipped nudge"); },
+  });
+  ok("the audit does not count a busy recipient missing", audit.missing.length === 0);
+  ok("a resolver crash fails OPEN to a standing nudge",
+    (await planDutyNudges(feed(["Z"]), p, { resolveRecipient: async () => { throw new Error("x"); } })).items.length === 1);
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);
