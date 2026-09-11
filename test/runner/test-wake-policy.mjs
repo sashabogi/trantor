@@ -1,15 +1,8 @@
 #!/usr/bin/env node
-// trantor wake-policy drill (#6134) — proves the two rules that cut the fleet's turn count:
-//
-//   1. A TURN COSTS A SESSION, so only a contract or a bounce buys one. A message sent with
-//      wake:false batches into the next turn's context, and so does a direct message that carries
-//      neither a card ref nor an instruction (the safety net for senders that never set the flag).
-//   2. ONE SESSION PER CARD. A wake naming a different card starts a FRESH CLI session instead of
-//      resuming — a seat that resumes forever replays every card it ever worked (qwen: 85.7M
-//      tokens at 96.7% cached on 09-02).
-//
-// Hermetic: a mock hub (never touches the real ~/.agent-bus/bus.json) + a fake CLI that records
-// every turn and how it was invoked, driving the REAL bin/crew-runner.mjs.
+// trantor wake-policy drill (#6134) — the two rules that cut the fleet's turn count:
+// a turn costs a session (only a contract or bounce buys one; wake:false and acks batch as
+// context) and one session per card (a wake naming a new card starts a FRESH CLI session, never
+// an endless resume). Hermetic: mock hub + fake CLI driving the REAL bin/crew-runner.mjs.
 import http from "node:http";
 import { spawn } from "node:child_process";
 import { mkdtempSync, writeFileSync, readFileSync, chmodSync, mkdirSync } from "node:fs";
@@ -166,8 +159,9 @@ console.log("\n## the rules");
 }
 
 // ---- the runner, against a mock hub -----------------------------------------------------------
-// Hands out one batch of messages, then stays silent. Whatever the seat does with them is the test.
-let queued = [], served = 0, links = [], sent = [];
+// Hands out one batch of messages (or a SEQUENCE of batches for the #7288 threading drills), then
+// stays silent. Whatever the seat does with them is the test.
+let queued = [], served = 0, links = [], sent = [], batchQueue = [], msgSeq = 1;
 const hub = http.createServer((req, res) => {
   let buf = ""; req.on("data", c => (buf += c));
   req.on("end", () => {
@@ -178,6 +172,17 @@ const hub = http.createServer((req, res) => {
     if (P === "/policy") return reply({ links, autonomy: { "*": 1 } });
     if (P === "/send") { try { sent.push(JSON.parse(buf || "{}")); } catch {} return reply({ ok: true, id: sent.length }); }
     if (P === "/poll") {
+      if (batchQueue.length) {
+        const batch = batchQueue.shift().map((m, i) => {
+          const out = { id: msgSeq++, ts: Date.now(), to: u.searchParams.get("session"), from: "sasha@mac", ...m };
+          if (out.re === "@receipt") {   // thread onto the receipt the runner last SENT (#7288)
+            const at = sent.map(s => s.kind).lastIndexOf("receipt");
+            if (at >= 0) out.re = at + 1;   // /send answers { id: sent.length }
+          }
+          return out;
+        });
+        return reply({ messages: batch, cursor: msgSeq });
+      }
       if (served++ === 0 && queued.length) {
         return reply({ messages: queued.map((m, i) => ({ id: i + 1, ts: Date.now(), to: u.searchParams.get("session"), from: "sasha@mac", ...m })), cursor: 1 });
       }
@@ -191,8 +196,7 @@ const HUB = `http://127.0.0.1:${hub.address().port}`;
 
 // The fake CLI logs one record per turn: how it was invoked (`exec` = a fresh session, `resume` =
 // continuing one) and the prompt it was handed. That is exactly what both rules are about.
-async function drill(messages, { waitMs = 7000, projectLinks = [] } = {}) {
-  queued = messages; served = 0; links = projectLinks; sent = [];
+async function spawnDrill({ waitMs = 7000, projectLinks = [] } = {}) {
   const work = mkdtempSync(join(tmpdir(), "tt-wake-"));
   const HOME = join(work, "home");
   mkdirSync(join(HOME, ".agent-bus"), { recursive: true });
@@ -225,6 +229,16 @@ exit 0
     resumed: turns.filter(t => t.includes("NEW BUS MESSAGE") && /^ mode=resume/.test(t)),
     sent,
   };
+}
+async function drill(messages, { waitMs = 7000, projectLinks = [] } = {}) {
+  queued = messages; served = 0; links = projectLinks; sent = []; batchQueue = [];
+  return spawnDrill({ waitMs, projectLinks });
+}
+// #7288: several batches handed out one per poll, so a message can REPLY to something the seat
+// said in an earlier batch (re:"@receipt" resolves to the receipt the runner last sent).
+async function drillSequence(batches, { waitMs = 7000, projectLinks = [] } = {}) {
+  batchQueue = batches; queued = []; served = 0; links = projectLinks; sent = []; msgSeq = 1;
+  return spawnDrill({ waitMs, projectLinks });
 }
 
 // ---- drill 1: wake:false batches, a contract wakes --------------------------------------------
@@ -281,9 +295,8 @@ console.log("\n## one session per card");
 // ---- drill 2b: the wake binds to the card it ASSIGNS, live through the real runner (#7061) ----
 console.log("\n## the bound card is the assigned one");
 {
-  // The shape that broke it on 2026-09-09: the order opens with the card that just MERGED. The
-  // runner is the only thing that writes the FRESH SESSION line, so the line is proof of what the
-  // machine believed — the same proof the card's own forensics rested on.
+  // The #7061 shape: the order opens with the card that just MERGED. The runner is the only thing
+  // that writes the FRESH SESSION line, so the line is proof of what the machine believed.
   const r = await drill([
     { text: "#7037 is merged as a01f629 and pushed. YOUR CARD: #6983, fixes 2 and 3." },
   ], { waitMs: 5000 });
@@ -307,13 +320,9 @@ console.log("\n## the bound card is the assigned one");
 }
 
 // ---- drill 2c: an armed seat SAYS which path each turn took (#7060) ---------------------------
-//
-// The defect: the boot line read "ASSEMBLE mode ON for this seat" and the very next turn — the
-// kickoff — could not possibly be assembled, because a kickoff has no wake and therefore no card.
-// The seat that hit it had confirmed flags, a valid schema and an unassembled prompt, and nothing
-// on the surface distinguished that from a working state path. So the runner is armed for real
-// here, with a claude seat and a CLI whose --help carries --json-schema, and STDOUT is the
-// evidence: what the operator can see is the whole subject of this card.
+// #7060: the boot line used to read "ASSEMBLE mode ON" while the kickoff turn could never be
+// assembled (a kickoff has no wake, so no card). The runner is armed for real here — claude seat,
+// a CLI whose --help carries --json-schema — and STDOUT is the evidence this card is about.
 console.log("\n## an armed seat says which path each turn took");
 {
   const work = mkdtempSync(join(tmpdir(), "tt-state-"));
@@ -387,6 +396,42 @@ console.log("\n## cross-project wakes are dropped");
   ok("a linked project's wake still buys its turn", r.wakeTurns.length === 1, `${r.wakeTurns.length} wake turn(s)`);
   ok("nothing is reported as dropped once the projects are linked",
     !r.sent.some(m => /cross-project/.test(m.text || "")), JSON.stringify(r.sent));
+}
+
+// ---- drill 4: a threaded reply is not a receipt (#7288) ---------------------------------------
+// The live failure: the orchestrator answered the seat's done-receipt with a corrected contract,
+// relay_send-style with `re` set — and isReceipt() read re>0 as "receipt", consuming the order
+// before direct-address logic ever saw it. The seat stayed parked while the hub showed WAITING.
+console.log("\n## threaded replies");
+{
+  const r = await drill([
+    { text: "corrected contract for #7288: the seat must wake on this", re: 18684 },
+  ], { waitMs: 5000 });
+  ok("#7288: a direct work order riding `re` wakes the seat", r.wakeTurns.length === 1, `${r.wakeTurns.length} wake turn(s)`);
+}
+{
+  const r = await drill([{ kind: "receipt", text: "whatever the text says" }], { waitMs: 5000 });
+  ok("a typed receipt still never wakes", r.wakeTurns.length === 0, `${r.wakeTurns.length} wake turn(s)`);
+}
+{
+  const r = await drill([{ text: "✅ done on codex:t (exit 0, 9s) · asked: \"x\"" }], { waitMs: 5000 });
+  ok("the stable ✅ marker still never wakes", r.wakeTurns.length === 0, `${r.wakeTurns.length} wake turn(s)`);
+}
+{
+  // The ledger leg: an ack threaded onto a receipt this seat actually SENT is consumed as a
+  // receipt — dropped, never batched as context, and it buys no turn.
+  const r = await drillSequence([
+    [{ text: "contract: card #9100, build it" }],
+    [{ text: "thanks, accepted — nothing more owed on that card; the gate is mine", re: "@receipt" }],
+    [{ text: "contract: card #9101, next one" }],
+  ], { waitMs: 9000 });
+  const receipt = r.sent.find(m => m.kind === "receipt");
+  ok("#7288: the seat really reported its outcome first (the thread target exists)",
+    Boolean(receipt), JSON.stringify(r.sent.map(m => m.kind)));
+  ok("#7288: the ack threaded onto the seat's own receipt buys NO turn", r.wakeTurns.length === 2,
+    `${r.wakeTurns.length} wake turn(s)`);
+  ok("#7288: the ack was consumed as a receipt, not kept as context",
+    r.wakeTurns.length === 2 && !r.wakeTurns[1].includes("nothing more owed"), r.wakeTurns[1]?.slice(0, 300));
 }
 
 // ---- the flag survives the REAL hub -----------------------------------------------------------

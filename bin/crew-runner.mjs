@@ -498,7 +498,10 @@ async function notifyAssigners(pairs, text) {
     // right one instead of guessing from timing.
     const payload = { from: SESSION, to: f, text: text.slice(0, 280), project: PROJ, kind: "receipt" };
     if (id) payload.re = id;
-    await api("/send", payload).catch(() => {});
+    const ack = await api("/send", payload).catch(() => ({}));
+    // #7288: remember the id, so a reply threaded onto THIS outcome can later be told apart from a
+    // work order that merely rides `re`.
+    if (Number(ack?.id) > 0) sentOutcomes.add(Number(ack.id));
   }
   if (seen.size) log(`reported outcome to ${[...seen].join(", ")}`);
 }
@@ -908,11 +911,20 @@ function composedTurn({ base = "", wakeText = "", ctxText = "", againText = "", 
 const RECEIPT_MARKER = "✅ done on";
 const CARD_REF_RE = /#\d{1,7}(?!\d)/;
 
+// Outcome ids this seat SENT (notifyAssigners records them): a reply threaded onto one of these is
+// about our own outcome, not a new contract.
+const sentOutcomes = new Set();
+
 // Runner-authored metadata is bus state, not work. Typed messages are authoritative; `re` and the
 // stable text marker keep a mixed-version crew safe while older runners are still on the bus.
 function isReceipt(message) {
   const text = String(message?.text || "").trimStart();
-  return message?.kind === "receipt" || Number(message?.re) > 0 || text.startsWith(RECEIPT_MARKER);
+  if (message?.kind === "receipt" || text.startsWith(RECEIPT_MARKER)) return true;
+  // #7288: `re` alone is NOT a receipt — senders are told to thread EVERY reply, so a corrected
+  // contract riding `re` must wake. A reply is a receipt only when it threads an outcome THIS seat
+  // sent and its own text carries no work (an ack/closure, #7079).
+  if (!(Number(message?.re) > 0)) return false;
+  return sentOutcomes.has(Number(message.re)) && !carriesWork(text) && !isContract(message);
 }
 
 function isStatusBroadcast(message) {
