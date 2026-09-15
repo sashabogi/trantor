@@ -685,13 +685,16 @@ async function runTurn(prompt, isFirst, trigger = "kickoff", opts = {}) {
   // #6134: the box fires from INSIDE the shell, walking its own descendants bottom-up with `pgrep -P`
   // (setsid escapes a group signal, never its parent). The marker file tells node "cut", not "crashed".
   const sweep = `sweep() { local p; for p in $(pgrep -P $1 2>/dev/null); do sweep $p; done; kill -KILL $1 2>/dev/null; }`;
+  // #7742: the box must neither hold the sid capture pipe nor orphan its sleep on turn exit.
   const box = TURN_MAX_MS ? `
 ${sweep}
-( sleep ${Math.ceil(TURN_MAX_MS / 1000)}
+( trap 'kill "$sleeppid" 2>/dev/null; wait "$sleeppid" 2>/dev/null; exit 0' TERM
+  sleep ${Math.ceil(TURN_MAX_MS / 1000)} & sleeppid=$!
+  wait "$sleeppid"
   kill -0 $job 2>/dev/null || exit 0
   : > ${CUTF}
   sweep $job
-) & boxpid=$!` : "boxpid=";
+) >/dev/null 2>&1 & boxpid=$!` : "\nboxpid=";
   const shell = `set -o pipefail
 { ${inner} ; } 2> >(${SCRUB} --tee2 ${ERRF}; : >> "${DRAINF}") &
 job=$!${box}
@@ -1103,9 +1106,7 @@ function askedExcerpt(message) {
     const rest = msgs.filter(m => !fyi.includes(m));
     const direct = rest.filter(m => m.to === SESSION && shouldWake(m));
     const mentions = rest.filter(m => m.to === "all" && shouldWake(m));
-    // Everything that did not earn a turn still becomes CONTEXT — including a DIRECT message that
-    // batched (wake:false, or an ack by shape). Dropping those would trade a token problem for a
-    // deafness problem: the seat would never learn what it was told (#6134).
+    // #6134: messages that do not earn a turn still become context, including direct acks.
     // #7430: stale hub alerts are shed HERE too, not only at boot — one that arrives already past
     // its TTL must not sit in every prompt until the next successful turn clears the batch.
     const batched = [...rest.filter(m => !direct.includes(m) && !mentions.includes(m)), ...fyi];
