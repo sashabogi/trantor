@@ -6,28 +6,30 @@
       "card": 6568,
       "reason": "Asserts a wall-clock arm-aging boundary: sleeps 1.6s (let the arm age past the bound) then 2.5s and asserts the heartbeat fires anyway — under runner load the arm ages differently and the drill goes red.",
       "quarantined": "2026-09-06",
-      "expires": "2026-09-13"
+      "expires": "2026-09-22",
+      "note": "GREEN at the last two expiries — owed a promotion decision back into the gate (#6447 contract), deferred once so a blocked release could ship."
     },
     {
       "suite": "quarantine/providers/test-kimi-bridge.mjs",
       "card": 6569,
       "reason": "The slow-hook drill spawns a hook whose body is a real 5s setTimeout and asserts the hook runner times it out (child timeout fails open) — a race between two real clocks under load.",
       "quarantined": "2026-09-06",
-      "expires": "2026-09-13"
+      "expires": "2026-09-22",
+      "note": "GREEN at the last two expiries — owed a promotion decision back into the gate (#6447 contract), deferred once so a blocked release could ship."
     },
     {
       "suite": "quarantine/crew/test-crew-activity.mjs",
       "card": 6588,
-      "reason": "Asserts the crew-runner's status SEQUENCE (crew member booting | working · kickoff | idle) through a real spawned runner turn — the ordering races real process scheduling and goes red on CI runners and loaded machines, green elsewhere. Never in the old &&-chain; the #6447 runner surfaced it.",
+      "reason": "Asserts the crew-runner's status SEQUENCE (crew member booting | working · kickoff | idle) through a real spawned runner turn — the ordering races real process scheduling and goes red on CI runners and loaded machines, green elsewhere. #7227: the move into quarantine/crew/ left the import at ../drill-env.mjs, one level too shallow, so both drills crashed on load and could not even show their real red; that import is fixed and the underlying environment race above is what remains.",
       "quarantined": "2026-09-07",
-      "expires": "2026-09-14"
+      "expires": "2026-09-22"
     },
     {
       "suite": "quarantine/crew/test-spawn-root.mjs",
       "card": 6588,
-      "reason": "Spawns the REAL opencode CLI and asserts its recorded argv pins --dir to the seat worktree; where opencode is absent or shaped differently (CI runner) the spawn list differs and the drill crashes on a missing argv element. Never in the old &&-chain; surfaced by the #6447 runner.",
+      "reason": "Spawns the REAL opencode CLI and asserts its recorded argv pins --dir to the seat worktree; where opencode is absent or shaped differently (CI runner) the spawn list differs and the drill crashes on a missing argv element. #7227: the move into quarantine/crew/ left the import at ../drill-env.mjs, one level too shallow, so both drills crashed on load and could not even show their real red; that import is fixed and the underlying environment race above is what remains.",
       "quarantined": "2026-09-07",
-      "expires": "2026-09-14"
+      "expires": "2026-09-22"
     }
   ]
 }

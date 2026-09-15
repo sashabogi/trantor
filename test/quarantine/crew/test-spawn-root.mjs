@@ -1,18 +1,14 @@
 #!/usr/bin/env node
-// trantor crew SPAWN-ROOT drill (#6154) — `opencode run -c` continues the GLOBALLY last session
-// on this machine, and the resumed session's stored directory becomes the root every relative
-// path resolves against: a seat cd-ing inside its own worktree then reads as external_directory
-// and the tool auto-rejects, killing the turn mid-work. The fix under test: the runner pins
-// --dir to the seat worktree on EVERY opencode-family spawn, and resumes pin -s to the session
-// id from opencode's own DB (keyed by directory), fresh-session on a card change, fail-open to
-// fresh when the lookup finds nothing. Hermetic: mock hub + a fake opencode that leaves the DB
-// rows the real CLI would + the REAL bin/crew-runner.mjs.
+// trantor crew SPAWN-ROOT drill (#6154): the runner must pin --dir to the seat worktree on every
+// opencode-family spawn, because a globally-resumed session's stored directory becomes the root
+// for relative paths and the seat's own worktree then reads as external_directory.
+// Hermetic: mock hub + fake opencode leaving the DB rows the real CLI would + the real runner.
 import http from "node:http";
 import { spawn } from "node:child_process";
 import { mkdtempSync, writeFileSync, chmodSync, mkdirSync, readFileSync, existsSync, realpathSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { drillEnv } from "../drill-env.mjs";
+import { drillEnv } from "../../drill-env.mjs";
 
 let pass = 0, fail = 0;
 const ok = (name, cond, extra = "") => { console.log(`  ${cond ? "PASS" : "FAIL"}  ${name}${cond ? "" : ` — ${extra}`}`); cond ? pass++ : fail++; };

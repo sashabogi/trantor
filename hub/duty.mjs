@@ -106,7 +106,10 @@ function dutyTick() {
     // #7440: context and non-session destinations cannot justify a wake. Exclude hub mail
     // on both sides so duty acknowledgments cannot feed another escalation.
     if (!m.to || m.to === "all" || m.to === DUTY_SESSION || m.from === "hub:duty" || m.to.startsWith("hub:")) continue;
-    if (m.wake === false || m.kind === "status" || m.kind === "receipt" || !Object.hasOwn(state.peers, m.to)) continue;
+    // #7440 addendum: a LANE name is not a session, but an unregistered SESSION is exactly the
+    // case escalation exists for — a dead or never-started seat. Session ids carry a colon.
+    const toIsSession = m.to.includes(":") || Object.hasOwn(state.peers, m.to);
+    if (m.wake === false || m.kind === "status" || m.kind === "receipt" || !toIsSession) continue;
     if (dutyEscalated.has(m.id)) continue;
     if ((state.peers[m.to]?.deliveredUpTo || 0) >= m.id) continue;
     dutyEscalated.add(m.id);

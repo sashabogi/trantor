@@ -1,15 +1,14 @@
 #!/usr/bin/env node
-// trantor crew ACTIVITY drill (#5965) — the runner is the source of truth for a seat's activity:
-// it registers `working · <trigger>` the moment a turn starts and `idle` the instant it lands clean
-// (down/errored on failure, as before). herdr skips screen detection for runner-driven seats, so
-// this hub status is what the app's seat tabs and sidebar rows fall back to.
-// Hermetic: a mock recording hub + a fake CLI, driving the REAL bin/crew-runner.mjs.
+// trantor crew ACTIVITY drill (#5965): the runner is the source of truth for a seat's activity,
+// registering `working · <trigger>` when a turn starts and `idle` when it lands clean, which is
+// what the app's seat rows fall back to when herdr skips screen detection.
+// Hermetic: a mock recording hub + a fake CLI driving the real runner.
 import http from "node:http";
 import { spawn } from "node:child_process";
 import { mkdtempSync, writeFileSync, chmodSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { drillEnv } from "../drill-env.mjs";
+import { drillEnv } from "../../drill-env.mjs";
 
 let pass = 0, fail = 0;
 const ok = (name, cond, extra = "") => { console.log(`  ${cond ? "PASS" : "FAIL"}  ${name}${cond ? "" : ` — ${extra}`}`); cond ? pass++ : fail++; };

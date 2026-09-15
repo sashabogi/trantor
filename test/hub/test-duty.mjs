@@ -80,7 +80,8 @@ try {
     { to: "ghost:projA", kind: "receipt", text: "receipt context" },
     { to: "trantor", text: "project lane context" },
     { to: "duty", text: "duty lane context" },
-    { to: "unregistered:projA", text: "unknown session context" },
+    // An UNREGISTERED session still escalates: a dead or never-started seat is the case duty
+    // exists for, asserted by test-duty-dark.mjs and test-duty-stuck-drill.mjs (#5686, #7440).
     { to: "constructor", text: "inherited property is not a session" },
   ]) {
     const sent = await post("/send", { from: "arch:projA", project: "projA", ...message });
