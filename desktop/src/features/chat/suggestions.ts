@@ -119,12 +119,30 @@ export function suggestionsFromTurns(turnTextsNewestFirst: string[]): Suggestion
   return chips;
 }
 
-/** An AskUserQuestion tool call carries structured options rather than a sentence to parse; the
- *  same "nothing invented" rule applies, so its options ARE the chips verbatim, capped at three.
- *  Takes the option shape structurally (label + description) rather than importing streaming.ts's
- *  AskQuestion type, keeping this a pure, transcript-agnostic extractor. */
-export function suggestionsFromAskOptions(options: { label: string; description: string }[]): Suggestion[] {
-  return options.slice(0, 3).map(o => ({ text: o.label, tooltip: o.description || undefined }));
+/** The ask a session DECLARED (#7776): the sidecar's `ask` field, or an AskUserQuestion's first
+ *  question mapped to the same shape. Structural on purpose: a pure, transcript-agnostic input. */
+export type DeclaredAsk = { question: string; options: { label: string; description?: string }[]; multi: boolean };
+
+export function declaredFromQuestion(
+  q: { question: string; multiSelect: boolean; options: { label: string; description: string }[] },
+): DeclaredAsk {
+  return {
+    question: q.question,
+    options: q.options.map(o => o.description ? { label: o.label, description: o.description } : { label: o.label }),
+    multi: q.multiSelect,
+  };
+}
+
+/** A declared ask's options ARE the chips, every one of them, verbatim (#7776): the session
+ *  offered exactly these, so capping would hide a real choice and nothing may be added. */
+export function suggestionsFromDeclaredAsk(ask: DeclaredAsk): Suggestion[] {
+  const chips: Suggestion[] = [];
+  for (const o of ask.options) {
+    if (o.label && !chips.some(c => c.text === o.label)) {
+      chips.push({ text: o.label, tooltip: o.description || undefined, ask: ask.question });
+    }
+  }
+  return chips;
 }
 
 /** The chip row's lead-in (#6702): the ask itself, trimmed, in place of the bare word

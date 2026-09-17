@@ -1,7 +1,33 @@
 // The chip extractor's contract (#5929): chips come ONLY from explicit asks in the closing
 // sentences, capped at three, and silence when nothing matches. Nothing invented, nothing sent.
 import { describe, expect, it } from "vitest";
-import { suggestionsFromTurn, suggestionsFromTurns } from "./suggestions";
+import { declaredFromQuestion, suggestionsFromDeclaredAsk, suggestionsFromTurn, suggestionsFromTurns } from "./suggestions";
+
+// #7776: a declared ask is rendered verbatim — every option, nothing capped, nothing added.
+describe("suggestionsFromDeclaredAsk", () => {
+  it("chips every offered option with its description as tooltip and the question as ask", () => {
+    const chips = suggestionsFromDeclaredAsk({
+      question: "Which release lane?",
+      options: [{ label: "Stable", description: "tested" }, { label: "Canary" }, { label: "Both" }, { label: "Neither" }],
+      multi: false,
+    });
+    expect(chips.map(c => c.text)).toEqual(["Stable", "Canary", "Both", "Neither"]);
+    expect(chips[0]).toEqual({ text: "Stable", tooltip: "tested", ask: "Which release lane?" });
+    expect(chips[1].tooltip).toBeUndefined();
+  });
+
+  it("a declared ask without options offers no chip", () => {
+    expect(suggestionsFromDeclaredAsk({ question: "Which sha?", options: [], multi: false })).toEqual([]);
+    expect(suggestionsFromDeclaredAsk({ question: "Which sha?", options: [{ label: "" }], multi: false })).toEqual([]);
+  });
+
+  it("declaredFromQuestion maps an AskUserQuestion's first question to the declared shape", () => {
+    expect(declaredFromQuestion({
+      question: "Ship it?", multiSelect: true,
+      options: [{ label: "Yes", description: "Proceed" }, { label: "No", description: "" }],
+    })).toEqual({ question: "Ship it?", options: [{ label: "Yes", description: "Proceed" }, { label: "No" }], multi: true });
+  });
+});
 
 const texts = (s: ReturnType<typeof suggestionsFromTurn>) => s.map(c => c.text);
 

@@ -1520,8 +1520,78 @@ describe("chip trace: the app names the input that hid the chips (#5993)", () =>
     await flush();
     expect(host.querySelector('[data-testid="suggestion-chips"]')).toBeNull();
     expect(chipLines(lines)).toEqual([
-      'chat chips p: hidden by suggestions.length===0 (last turn ends: "Landed on the seat. Nothing to swap.")',
+      'chat chips p: hidden by suggestions.length===0 (last turn ends: "Landed on the seat. Nothing to swap.") tally rendered=0 empty=1',
     ]);
+  });
+
+  // #7776: the session declares its ask through the sidecar; the chips are its options, every
+  // one, before the asking turn reaches the transcript, and the regex extractor never runs.
+  it("a declared ask chips every offered option, uncapped, before the asking turn lands (#7776)", async () => {
+    const { deps, handlers, lines } = tracingDeps();
+    act(() => { root.render(<Chat project="p" dock="right" onDock={() => {}} onClose={() => {}} deps={deps} />); });
+    await flush();
+    await flush();
+    // The operator spoke last and the asking turn has not flushed: prose alone shows nothing.
+    await act(async () => {
+      for (const cb of handlers.get("chat-rows") ?? []) cb({ payload: JSON.stringify({
+        project: "p", sessionId: "s1", after: 0, total: 1, results: [], meta: META,
+        turns: [{ role: "user", blocks: [{ kind: "text", text: "go on" }] }],
+      }) });
+    });
+    await flush();
+    const options = [
+      { label: "Stable", description: "the tested lane" }, { label: "Canary" }, { label: "Both" }, { label: "Neither" },
+    ];
+    const payload = {
+      project: "p", session_id: "s1", tool_use_id: "ask-7776", open: true, visible: true,
+      kind: "AskUserQuestion",
+      ask: { question: "Which release lane?", options, multi: false },
+      questions: [{
+        header: "Lane", question: "Which release lane?", multiSelect: false,
+        options: options.map(o => ({ label: o.label, description: o.description ?? "" })),
+      }],
+    };
+    await act(async () => { for (const cb of handlers.get("orch-ask") ?? []) cb({ payload }); });
+    await flush();
+    const chips = host.querySelector('[data-testid="suggestion-chips"]');
+    expect(chips).not.toBeNull();
+    const buttons = [...chips!.querySelectorAll("button")].filter(b => b.textContent !== "×");
+    expect(buttons.map(b => b.textContent)).toEqual(["Stable", "Canary", "Both", "Neither"]);
+    expect(buttons[0].title).toBe("the tested lane");
+    expect(chips!.querySelector('[data-testid="suggestion-lead-in"]')!.textContent).toBe("Which release lane?");
+    expect(chipLines(lines)).toEqual(["chat chips p: rendered source=declared n=4 tally rendered=1 empty=0"]);
+    await act(async () => { for (const cb of handlers.get("orch-ask") ?? []) cb({ payload: { ...payload, open: false } }); });
+    await flush();
+    expect(host.querySelector('[data-testid="suggestion-chips"]')).toBeNull();
+  });
+
+  it("a relay_ask declares a question with no options: the card shows it, no chip is invented, its own tool_result does not close it (#7776)", async () => {
+    const { deps, handlers, lines } = tracingDeps();
+    act(() => { root.render(<Chat project="p" dock="right" onDock={() => {}} onClose={() => {}} deps={deps} />); });
+    await flush();
+    await flush();
+    const question = "Which sha is the base?";
+    const payload = {
+      project: "p", session_id: "s1", tool_use_id: "toolu_RELAY", open: true, visible: true,
+      kind: "relay_ask",
+      ask: { question, options: [], multi: false },
+      questions: [{ header: "ask", question, multiSelect: false, options: [] }],
+    };
+    await act(async () => { for (const cb of handlers.get("orch-ask") ?? []) cb({ payload }); });
+    await flush();
+    expect(host.querySelector('[data-testid="ask-card"]')?.textContent).toContain(question);
+    expect(host.querySelector('[data-testid="suggestion-chips"]')).toBeNull();
+    expect(chipLines(lines)).toEqual(["chat chips p: hidden by declared without options"]);
+    // The relay_ask tool returns at once, so its tool_result is a receipt, not the answer.
+    await act(async () => {
+      for (const cb of handlers.get("chat-rows") ?? []) cb({ payload: JSON.stringify({
+        project: "p", sessionId: "s1", after: 0, total: 1,
+        results: [{ tool_id: "toolu_RELAY", ok: true, preview: "asked" }], meta: META,
+        turns: [{ role: "assistant", blocks: [{ kind: "tool", text: "", tool: "mcp__plugin_trantor_relay__relay_ask", tool_id: "toolu_RELAY" }] }],
+      }) });
+    });
+    await flush();
+    expect(host.querySelector('[data-testid="ask-card"]')?.textContent).toContain(question);
   });
 
   it("a working orchestrator traces 'working', and the pushed idle flips the row on with no further line", async () => {
@@ -1542,7 +1612,10 @@ describe("chip trace: the app names the input that hid the chips (#5993)", () =>
     const chips = host.querySelector('[data-testid="suggestion-chips"]');
     expect(chips).not.toBeNull();
     expect([...chips!.querySelectorAll("button")].filter(b => b.textContent !== "×").map(b => b.textContent)).toEqual(["yes"]);
-    expect(chipLines(lines)).toEqual(["chat chips p: hidden by working"]);
+    expect(chipLines(lines)).toEqual([
+      "chat chips p: hidden by working",
+      "chat chips p: rendered source=prose n=1 tally rendered=1 empty=0",
+    ]);
   });
 
   it("no hosted pane traces 'no target'", async () => {

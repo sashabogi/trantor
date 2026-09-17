@@ -11,7 +11,7 @@ import { DEFAULT_TERMINAL_DEPS, TerminalPane, type TerminalDeps } from "../works
 import { bannerCountdown, type HandoffCountdown } from "./banner";
 import { Composer, type Provenance } from "./Composer";
 import { MarkdownText } from "./MarkdownText";
-import { askLeadIn, suggestionsFromAskOptions, suggestionsFromTurns, trimAsk } from "./suggestions";
+import { askLeadIn, declaredFromQuestion, suggestionsFromDeclaredAsk, suggestionsFromTurns, trimAsk, type DeclaredAsk } from "./suggestions";
 import { SuggestionChips } from "./SuggestionChips";
 import { isPinned } from "./scrollPin";
 import {
@@ -48,6 +48,10 @@ type OrchAsk = {
   tool_use_id: string | null;
   open: boolean;
   visible: boolean;
+  /** #7776: `AskUserQuestion` or `relay_ask`; absent from an older sidecar. */
+  kind?: string;
+  /** #7776: the declared ask the chips render verbatim; absent from an older sidecar. */
+  ask?: DeclaredAsk | null;
   questions: AskQuestion[];
 };
 type LiveAsk = OrchAsk & { target: string | null };
@@ -66,6 +70,8 @@ function sameAskQuestions(left: AskQuestion[], right: AskQuestion[]): boolean {
 }
 
 function transcriptAnswered(ask: OrchAsk, chat: ChatState): boolean {
+  // A relay_ask's tool_result is the bus receipt, not the answer (#7776): the next prompt closes it.
+  if (ask.kind === "relay_ask") return false;
   if (ask.tool_use_id) return Boolean(chat.results[ask.tool_use_id]);
   return chat.turns.some(turn => turn.blocks.some(block =>
     block.tool === "AskUserQuestion" && Boolean(block.tool_id && chat.results[block.tool_id]) &&
@@ -919,41 +925,68 @@ export function Chat({ project, sessionId, dock, onDock, onClose, deps = DEFAULT
     return out;
   }, [chat.turns]);
   const askQuestion = openAsk?.questions[0] ?? null;
+  // #7776: the declaration wins, and prose is parsed only when the turn declared nothing. An
+  // older sidecar without `ask` still declares through its first question.
+  const declared: DeclaredAsk | null = useMemo(
+    () => activeLiveAsk?.ask ?? (askQuestion ? declaredFromQuestion(askQuestion) : null),
+    [activeLiveAsk, askQuestion],
+  );
   const suggestions = useMemo(() => {
     if (history || working) return [];
-    if (askQuestion) return suggestionsFromAskOptions(askQuestion.options);
+    if (declared) return suggestionsFromDeclaredAsk(declared);
     return suggestionsFromTurns(orchestratorTexts);
-  }, [history, working, askQuestion, orchestratorTexts]);
-  // #6702 — the row reads with its question: the AskUserQuestion's own, or the prose ask the
-  // chips were read from.
+  }, [history, working, declared, orchestratorTexts]);
+  // #6702 — the row reads with its question: the declared one, or the prose ask the chips were
+  // read from.
   const chipLeadIn = useMemo(
-    () => askQuestion ? trimAsk(askQuestion.question) : askLeadIn(suggestions),
-    [askQuestion, suggestions],
+    () => declared ? trimAsk(declared.question) : askLeadIn(suggestions),
+    [declared, suggestions],
   );
   const lastSpeechRole = [...chat.turns].reverse().find(t => t.role === "user" || t.role === "assistant")?.role ?? null;
+  // A declared ask is fresher than the transcript, which flushes at the turn's end (#6533), so
+  // it counts as the turn having asked before the asking turn lands.
+  const turnAsked = declared !== null || lastSpeechRole === "assistant";
   const chipsVisible =
     !history && !!(activeLiveAsk?.target ?? target) && !working && suggestions.length > 0 &&
-    lastSpeechRole === "assistant" && !composerDraft.trim() && !chipsDismissed;
+    turnAsked && !composerDraft.trim() && !chipsDismissed;
   useEffect(() => { setChipsDismissed(false); }, [orchestratorTexts]);
   // #5993: whenever the chip row should show but is hidden, one line traces the first gate
-  // input (in gate order) that failed, so a "chips are gone" report reads app-trace.log instead
-  // of a code walk. Deduped on the reason plus turn tail, so a working stretch logs once, not
-  // once per streamed row.
+  // input (in gate order) that failed, deduped on reason plus turn tail. #7776: the
+  // empty-extractor line and the rendered line carry a running tally, so the hidden-by-empty
+  // share can be re-measured from app-trace.log.
   const chipTraceRef = useRef("");
+  const chipTally = useRef({ rendered: 0, empty: 0 });
   const chipTarget = activeLiveAsk?.target ?? target;
   const chipTail = (orchestratorTexts[0] ?? "").replace(/\s+/g, " ").trim().slice(-80);
   useEffect(() => {
-    if (history || chipsVisible || lastSpeechRole !== "assistant") return;
+    if (history || chipsVisible || !turnAsked) return;
     const blocker =
       !chipTarget ? "no target" :
       working ? "working" :
-      suggestions.length === 0 ? "suggestions.length===0" :
+      suggestions.length === 0 ? (declared ? "declared without options" : "suggestions.length===0") :
       composerDraft.trim() ? "composerDraft non-empty" : "chipsDismissed";
     const line = `chat chips ${project}: hidden by ${blocker}${blocker === "suggestions.length===0" ? ` (last turn ends: "${chipTail}")` : ""}`;
     if (chipTraceRef.current === line) return;
     chipTraceRef.current = line;
-    invokeFn("app_log", { line }).catch(() => {});
-  }, [history, chipsVisible, lastSpeechRole, chipTarget, working, suggestions, composerDraft, chipTail, project, invokeFn]);
+    if (blocker !== "suggestions.length===0") {
+      invokeFn("app_log", { line }).catch(() => {});
+      return;
+    }
+    chipTally.current.empty += 1;
+    const tally = chipTally.current;
+    invokeFn("app_log", { line: `${line} tally rendered=${tally.rendered} empty=${tally.empty}` }).catch(() => {});
+  }, [history, chipsVisible, turnAsked, chipTarget, working, suggestions, declared, composerDraft, chipTail, project, invokeFn]);
+  const chipSource = declared ? "declared" : "prose";
+  const chipSet = chipsVisible ? `${chipSource}:${suggestions.map(s => s.text).join(" ")}` : "";
+  useEffect(() => {
+    if (!chipSet || chipTraceRef.current === chipSet) return;
+    chipTraceRef.current = chipSet;
+    chipTally.current.rendered += 1;
+    const tally = chipTally.current;
+    invokeFn("app_log", {
+      line: `chat chips ${project}: rendered source=${chipSource} n=${suggestions.length} tally rendered=${tally.rendered} empty=${tally.empty}`,
+    }).catch(() => {});
+  }, [chipSet, chipSource, suggestions.length, project, invokeFn]);
   useEffect(() => {
     if (!chipsVisible) return;
     const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") setChipsDismissed(true); };
