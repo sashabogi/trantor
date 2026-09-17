@@ -69,11 +69,11 @@ console.log("# trantor connect — relay entry env stamp + refresh (#7893)");
   const r = t.run();
   ok("connect reports the project and hub it stamps", r.status === 0 && new RegExp(`project: acme, hub: ${PIN}`).test(r.stdout), r.stderr || r.stdout);
   const kimi = relayEnvOf(t.home, ".kimi/mcp.json");
-  ok("kimi relay env carries agent, pinned hub, project",
-    kimi?.RELAY_AGENT === "kimi" && kimi?.RELAY_URL === PIN && kimi?.RELAY_PROJECT === "acme", JSON.stringify(kimi));
+  ok("kimi relay env carries agent and pinned hub, never the project (global config, #7893)",
+    kimi?.RELAY_AGENT === "kimi" && kimi?.RELAY_URL === PIN && !("RELAY_PROJECT" in kimi), JSON.stringify(kimi));
   const gemini = relayEnvOf(t.home, ".gemini/settings.json");
   ok("gemini relay env carries the same stamp for its own agent",
-    gemini?.RELAY_AGENT === "gemini" && gemini?.RELAY_URL === PIN && gemini?.RELAY_PROJECT === "acme", JSON.stringify(gemini));
+    gemini?.RELAY_AGENT === "gemini" && gemini?.RELAY_URL === PIN && !("RELAY_PROJECT" in gemini), JSON.stringify(gemini));
   rmSync(t.work, { recursive: true, force: true });
 }
 
@@ -82,8 +82,8 @@ console.log("# trantor connect — relay entry env stamp + refresh (#7893)");
   const t = setup(["kimi"], { ".kimi/mcp.json": { mcpServers: { relay: { command: "node", args: ["/old/mcp.mjs"], env: { RELAY_AGENT: "kimi", CUSTOM: "keep" } } } } });
   const r = t.run();
   const env = relayEnvOf(t.home, ".kimi/mcp.json");
-  ok("a stale RELAY_AGENT-only entry is refreshed with hub + project",
-    env?.RELAY_URL === PIN && env?.RELAY_PROJECT === "acme", JSON.stringify(env));
+  ok("a stale RELAY_AGENT-only entry is refreshed with the hub",
+    env?.RELAY_URL === PIN && !("RELAY_PROJECT" in env), JSON.stringify(env));
   ok("the refresh keeps the user's own env keys and command",
     env?.CUSTOM === "keep" && relayCommand(t.home, ".kimi/mcp.json") === "/old/mcp.mjs", JSON.stringify(env));
   ok("the refresh is reported and backed up",
@@ -108,7 +108,7 @@ console.log("# trantor connect — relay entry env stamp + refresh (#7893)");
   const r = t.run();
   const toml = readFileSync(join(t.home, ".codex", "config.toml"), "utf8");
   ok("codex's stale relay env line is refreshed in place",
-    /relay env refreshed/.test(r.stdout) && toml.includes(`env = { RELAY_AGENT = "codex", RELAY_URL = "${PIN}", RELAY_PROJECT = "acme" }`), toml);
+    /relay env refreshed/.test(r.stdout) && toml.includes(`env = { RELAY_AGENT = "codex", RELAY_URL = "${PIN}" }`), toml);
   rmSync(t.work, { recursive: true, force: true });
 }
 {

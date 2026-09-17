@@ -41,9 +41,11 @@ function patchJson(path, mutate) {
   return exists ? "wired" : "wired (new config)";
 }
 
-// Three keys, refreshed by every connect run (see PROJECT_AT_CONNECT above): agent identity, the
-// hub, and the project whose pin chose it. A user-added env key survives the refresh merge.
-const relayEnv = (agent) => ({ RELAY_AGENT: agent, RELAY_URL: URL_, RELAY_PROJECT: PROJECT_AT_CONNECT });
+// Two keys, refreshed by every connect run: agent identity and the hub. The PROJECT is never
+// stamped: these configs are global to the CLI, and a seat of that CLI in another project would
+// inherit the wrong board (RELAY_PROJECT outranks the worktree rule in resolveProject, #7893).
+// A user-added env key survives the refresh merge.
+const relayEnv = (agent) => ({ RELAY_AGENT: agent, RELAY_URL: URL_ });
 // OpenCode hosts several differently-named seats. Its global MCP environment must not stamp all
 // of them "opencode": ambient runner identity wins, while this fallback names a normal interactive
 // OpenCode session that has no RELAY_AGENT/RELAY_SESSION of its own.
@@ -60,7 +62,7 @@ if (has("claude")) {
 }
 
 // ---- Codex (TOML — append a missing relay section, refresh its env when it exists) ----
-const tomlRelayEnv = `env = { RELAY_AGENT = "codex", RELAY_URL = "${URL_}", RELAY_PROJECT = "${PROJECT_AT_CONNECT}" }`;
+const tomlRelayEnv = `env = { RELAY_AGENT = "codex", RELAY_URL = "${URL_}" }`;
 if (has("codex")) {
   const p = join(homedir(), ".codex", "config.toml");
   let cur = existsSync(p) ? readFileSync(p, "utf8") : "";
