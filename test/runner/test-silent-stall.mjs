@@ -140,9 +140,16 @@ console.log("\n## a silent turn ends at the stall window");
     r.handed === 1, `handed ${r.handed}`);
   ok("#7752: the seat PARKED after two silent chains instead of a third attempt",
     r.sends.some(s => s.to === "all" && /PARKED/.test(s.text || "")));
-  ok("#7752: the park is never labelled exhausted or crashed",
-    r.sends.some(s => s.to === "all" && /PARKED/.test(s.text || ""))
-    && !r.sends.some(s => /PARKED/.test(s.text || "") && /exhausted|crashed/i.test(s.text || "")));
+  const park = r.sends.find(s => s.to === "all" && /PARKED/.test(s.text || ""));
+  ok("#7752: the park reads stalled — never exhausted or crashed — and names the CLI and model",
+    park && /\(stalled/.test(park.text || "") && !/exhausted|crashed/i.test(park.text || "")
+    && /codex/.test(park.text || "") && /qwen3\/deepseek-v4-pro/.test(park.text || ""),
+    park && String(park.text).slice(0, 140));
+  ok("#7752: the assigner hears STALLED with the wake still owed, never a clean done",
+    r.sends.some(s => s.to === "sasha@mac" && /STALLED on/.test(s.text || "") && /wake stays owed/.test(s.text || ""))
+    && !r.sends.some(s => /✅ done on/.test(s.text || "")));
+  ok("#7752: the vanished contract's wake is NOT consumed — the queue survives the park",
+    r.pendingLeft);
 }
 
 // ---- drill 2: a BUSY turn runs to the box and is cut, exactly as before ------------------------

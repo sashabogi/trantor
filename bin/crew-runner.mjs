@@ -360,6 +360,7 @@ async function reportFailure(exit, trigger, undelivered = 0, reasonOverride = ""
   const status = down ? `down: ${reason} · ${consecFails} fails` : `errored: ${reason}`;
   await api("/register", { session: SESSION, project: PROJ, status, llm: AGENT, model: MODEL, kind: "agent" }).catch(() => {});
   const hint = reason === "exhausted" ? " — needs `trantor swap`"
+    : reason === "stalled" ? " — CLI silent for the whole watchdog window: check the provider, or `trantor swap`"
     : reason === "auth" ? " — check credentials"
     : reason === "backend-error" ? " — provider backend error (NOT quota): retry, or `trantor swap` to another provider"
     : reason === "missing-cli" ? " — CLI not on PATH"
@@ -408,7 +409,10 @@ async function parkSeat(reason, undelivered, resetHint = 0) {
   const when = resetAt ? new Date(resetAt).toLocaleString() : "";
   if (!parkAnnounced) {
     parkAnnounced = true;
-    const text = redactKeys(`⛔ ${SESSION} PARKED (${reason}) — holding ${undelivered} message(s), redelivery stopped ${when ? `until ${when}` : `until \`trantor up ${AGENT}\``}`);
+    // #7752: a stalled park names the CLI and its model — the swap decision needs both, and this
+    // line is the one place the room reads them together.
+    const named = reason === "stalled" ? ` — ${AGENT}${MODEL ? `, model ${MODEL}` : " (cli default model)"}` : "";
+    const text = redactKeys(`⛔ ${SESSION} PARKED (${reason}${named}) — holding ${undelivered} message(s), redelivery stopped ${when ? `until ${when}` : `until \`trantor up ${AGENT}\``}`);
     await api("/send", { from: SESSION, to: "all", text, project: PROJ, kind: "status" }).catch(() => {});
     const orch = `${hostId()}:${PROJ}`;
     if (orch !== SESSION) await api("/send", { from: SESSION, to: orch, text, project: PROJ, kind: "alert" }).catch(() => {});
@@ -1407,11 +1411,15 @@ function askedExcerpt(message) {
     }
     if (ec) {
       deliveryFails++;
-      // #6131: a silent turn on a seat whose plan reads spent is exhaustion wearing a crash's
-      // clothes. Only that one reason is ever re-read, and only from the seat's own balance rows.
-      let reason = classify(ec);
+      // #7752: a SILENT cut is a stall, whatever the captured text contains — the qwen
+      // specimen's err file carried a "rate-limit" line and the seat was parked exhausted on a
+      // turn the box itself had killed. The wake stays owed (#7759's shape): the queue is kept,
+      // the ladder retries, and the second silent chain parks as "stalled".
+      let reason = lastTurnStalled ? "stalled" : classify(ec);
       let quotaReset = 0;
       if (reason === "empty-output") {
+        // #6131: a silent turn on a seat whose plan reads spent is exhaustion wearing a crash's
+        // clothes. Only that one reason is ever re-read, and only from the seat's balance rows.
         const rows = await balanceRows();
         reason = reasonWithBalances(reason, rows);
         // The rows that just proved the plan is spent also carry when it lifts — a park that names
@@ -1420,9 +1428,10 @@ function askedExcerpt(message) {
       }
       savePending(pendingWake, pendingBcast);
       await reportFailure(ec, "message", pendingWake.length, reason);
-      // #6289: TWO consecutive exit-1 turns on one contract PARK the seat (time-box when the chain
-      // died to cuts, api-error otherwise), holding the queue until `trantor up`.
-      const parkReason = PARKING_REASONS.has(reason) ? reason : (lastTurnCut ? "time-box" : "api-error");
+      // #6289: TWO consecutive failed turns on one contract PARK the seat — "stalled" for a
+      // silent chain (#7752), time-box when the chain died to cuts, api-error otherwise —
+      // holding the queue until `trantor up`.
+      const parkReason = lastTurnStalled ? "stalled" : (PARKING_REASONS.has(reason) ? reason : (lastTurnCut ? "time-box" : "api-error"));
       if (PARKING_REASONS.has(reason) || deliveryFails >= 2) {
         retryAt = await parkSeat(parkReason, pendingWake.length, quotaReset);
         // RUNNER_PARK_MAX_MS is set only by `trantor duty up` (launchd keepalive): past the ceiling,
@@ -1437,7 +1446,9 @@ function askedExcerpt(message) {
           }, wakeIn).unref?.();
         }
         await notifyAssigners(assigners,
-          `⛔ your contract is PARKED on ${SESSION} (${parkReason}) — not retrying · asked: "${asked}"`);
+          reason === "stalled"
+            ? `⛔ your contract is PARKED on ${SESSION} (stalled: two turns silent for the whole watchdog window) — not retrying · asked: "${asked}"`
+            : `⛔ your contract is PARKED on ${SESSION} (${parkReason}) — not retrying · asked: "${asked}"`);
         lastTurnAt = Date.now();
         return;
       }
@@ -1445,7 +1456,9 @@ function askedExcerpt(message) {
       retryAt = Date.now() + wait;
       // The room hears the broadcast above; the one who is actually blocked hears it directly.
       await notifyAssigners(assigners,
-        `⚠️ your contract FAILED on ${SESSION} (exit ${ec}, ${reason}) · retrying in ${Math.round(wait / 1000)}s · asked: "${asked}"`);
+        reason === "stalled"
+          ? `🫥 your contract STALLED on ${SESSION} (no output for the whole watchdog window; ended at the window, not the box) · wake stays owed · retrying in ${Math.round(wait / 1000)}s · asked: "${asked}"`
+          : `⚠️ your contract FAILED on ${SESSION} (exit ${ec}, ${reason}) · retrying in ${Math.round(wait / 1000)}s · asked: "${asked}"`);
       log(`\x1b[31m${pendingWake.length} message(s) still UNDELIVERED — next attempt in ${Math.round(wait / 1000)}s\x1b[0m`);
     } else if (turnAsk) {
       // #7756: a clean exit that ASKED is not "done". The wake stays owed — queued on disk with
