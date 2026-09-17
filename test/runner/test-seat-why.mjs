@@ -38,6 +38,44 @@ console.log("\nLive seat (runner pid + pane + clean last turn):");
   ok("...why names the pid", /4242/.test(r.why));
 }
 
+console.log("\nLive seat with a turn-state file (#7749): the advice IS the phase");
+{
+  const { dir, put } = env();
+  put("crew-windows.txt", "ttwhy\therdr\tcodex\tpane-1\n");
+  // The last ledger row FAILED — before #7749 that meant "watch it or swap". With a live phase
+  // the file wins: a seat mid-turn is working, however its previous turn ended.
+  put("logs/codex-ttwhy.jsonl", turn(now - 60000, "message", 1) + "\n");
+  put("turnstate-codex-ttwhy.json", JSON.stringify({ turn: 4, phase: "working", since: now - 240000, card: 7749, lastBytesAt: now - 5000 }));
+  const r = seatWhy("ttwhy", "codex", { dir, pidCheck: () => pid(4242) });
+  ok("working phase + failed last turn = working advice, not watch-or-swap",
+    /^working for 4m on #7749/.test(r.advice) && !/watch it or swap/i.test(r.advice), r.advice);
+  ok("...why names the live phase and the card", /turn 4 working for 4m \(card #7749\)/.test(r.why), r.why);
+  ok("...why carries the last-output age for a working turn", /last output \d+s ago/.test(r.why), r.why);
+}
+{
+  const { dir, put } = env();
+  put("crew-windows.txt", "ttwhy\therdr\tcodex\tpane-1\n");
+  put("turnstate-codex-ttwhy.json", JSON.stringify({ turn: 4, phase: "parked", since: now - 90000 }));
+  const r = seatWhy("ttwhy", "codex", { dir, pidCheck: () => pid(4242) });
+  ok("parked reads 'parked since <time>' and says the queue is held",
+    /^parked since /.test(r.advice) && /holds its queue/.test(r.advice), r.advice);
+}
+{
+  const { dir, put } = env();
+  put("crew-windows.txt", "ttwhy\therdr\tcodex\tpane-1\n");
+  put("turnstate-codex-ttwhy.json", JSON.stringify({ turn: 4, phase: "stalled", since: now - 30000, card: 7749 }));
+  const r = seatWhy("ttwhy", "codex", { dir, pidCheck: () => pid(4242) });
+  ok("stalled reads 'stalled since <time>'", /^stalled since /.test(r.advice), r.advice);
+}
+{
+  const { dir, put } = env();
+  put("crew-windows.txt", "ttwhy\therdr\tcodex\tpane-1\n");
+  put("turnstate-codex-ttwhy.json", JSON.stringify({ turn: 4, phase: "idle", since: now - 30000 }));
+  const r = seatWhy("ttwhy", "codex", { dir, pidCheck: () => pid(4242) });
+  ok("idle reads 'idle since <time>', nothing to do",
+    /^idle since /.test(r.advice) && /nothing to do/.test(r.advice), r.advice);
+}
+
 console.log("\nHeadless seat (runner pid, no pane row):");
 {
   const { dir } = env();
