@@ -72,6 +72,8 @@ echo 'the runner can move on to its next wake without a redelivery ladder or a p
     EFFORT: null, EFFORT_FLAG: { flag: "", text: "" },
     TURN_DIR: work, ERRF: join(work, "err.txt"), TRANSCRIPT_DIR: work, RUNNER_ID: "drill",
     MODEL: "", STATE_SCHEMA_FILE: "", TURN_MAX_MS: maxMs, TURN: 0, sid: "", inFollowUp: true,
+    // #7762: runTurn's telemetry row reads the module-scope sessionCard (0 = no card yet).
+    sessionCard: 0,
   });
   runInContext(`const cli = ${kimiSource};\n${inheritBoxOutput ? turnSource.replace(") >/dev/null 2>&1 & boxpid", ") & boxpid") : turnSource}`, context);
   await runInContext('runTurn("finish this drill", true)', context);
@@ -84,6 +86,7 @@ for (const inheritOutput of [false, true]) {
     assert.equal(r.spawnResult.status, 0);
     assert.equal(r.context.sid, "box-drill-session");
     assert.equal(r.rows[0].outcome, "completed");
+    assert.equal(r.rows[0].card, 0, "no card bound → the ledger row carries card 0 (#7762)");
     assert.ok(r.rows[0].duration_ms < 4000, `turn took ${r.rows[0].duration_ms}ms with a 10s box`);
     assert.equal(r.sawMarker, false);
     const pid = Number(fs.readFileSync(r.sleepFile, "utf8").trim());
