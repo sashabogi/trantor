@@ -8,6 +8,7 @@ import { cleanTitle } from "../../shared/Avatar";
 import { ProposalsSection } from "../../shared/Proposals";
 import { Collisions } from "./Collisions";
 import { DutyStrip } from "./DutyStrip";
+import { FILE_EVENT_TYPES, unreadStat, unreadTally, type FileEvent } from "../code/graph/unread";
 import type { BalancesReport, Card, Economics, Handoff, Peer } from "../../shared/api/client";
 
 const LOCAL_HUB = "http://127.0.0.1:4477";
@@ -17,14 +18,16 @@ type Snapshot = {
   econ: Economics | null; balances: BalancesReport | null;
   cards: Card[]; peers: Peer[]; lessons: { text: string; scope: string; by: string; ts: number }[];
   handoffs: Handoff[];
+  /** file.claim and file.read across every project: the Unread stat (#7977) */
+  fileEvents: FileEvent[];
 };
 // Module-level so a pane switch away from Home and back repaints instantly from the last pull
 // instead of a blank screen while the next poll lands.
 let cachedSnap: Snapshot | null = null;
 
-function StatCard({ label, value, sub, tone }: { label: string; value: string; sub?: string; tone?: string }) {
+function StatCard({ label, value, sub, tone, testId }: { label: string; value: string; sub?: string; tone?: string; testId?: string }) {
   return (
-    <div className="tr-card flex min-w-0 flex-1 flex-col gap-1 p-5">
+    <div className="tr-card flex min-w-0 flex-1 flex-col gap-1 p-5" data-testid={testId}>
       <div className="text-[12px] font-medium text-[var(--color-tr-muted)]">{label}</div>
       <div className="tr-mono text-[22px] font-semibold" style={tone ? { color: tone } : undefined}>{value}</div>
       {sub && <div className="truncate text-[12px] text-[var(--color-tr-muted)]">{sub}</div>}
@@ -42,20 +45,21 @@ export function Home({ client, me, onOpenProject }: {
     const isLocal = client.baseUrl.includes("127.0.0.1") || client.baseUrl.includes("localhost");
     const local = isLocal ? client : new HubClient(LOCAL_HUB);
     const pull = async () => {
-      const [econ, balances, cards, peers, learning, handoffs] = await Promise.all([
+      const [econ, balances, cards, peers, learning, handoffs, fileEvents] = await Promise.all([
         local.economics().catch(() => null),
         local.balances().catch(() => null),
         client.tasks().catch((): Card[] => []),
         client.peers().catch((): Peer[] => []),
         client.learning().catch(() => null),
         client.handoffs().catch((): Handoff[] => []),
+        client.events({ type: FILE_EVENT_TYPES, limit: 2000 }).then(r => r.events).catch((): FileEvent[] => []),
       ]);
       if (!alive) return;
       const lessons = learning
         ? [...learning.lessons.global, ...Object.values(learning.lessons.byAgent).flat()]
             .sort((a, b) => (b.ts || 0) - (a.ts || 0)).slice(0, 6)
         : [];
-      const s = { econ, balances, cards, peers, lessons, handoffs: handoffs.slice(0, 5) };
+      const s = { econ, balances, cards, peers, lessons, handoffs: handoffs.slice(0, 5), fileEvents };
       cachedSnap = s;
       setSnap(s);
     };
@@ -70,6 +74,7 @@ export function Home({ client, me, onOpenProject }: {
   const now = Date.now();
   const live = (snap?.peers ?? []).filter(p => p.online || (p.lastSeen && now - p.lastSeen < ONLINE_MS));
   const projects = new Set((snap?.cards ?? []).map(c => c.project).filter(Boolean));
+  const unread = unreadStat(unreadTally(snap?.fileEvents ?? []));
   const attention = (snap?.cards ?? [])
     .filter(c => ["failed", "blocked", "stale"].includes(c.status))
     .sort((a, b) => (b.updated ?? 0) - (a.updated ?? 0)).slice(0, 6);
@@ -93,6 +98,7 @@ export function Home({ client, me, onOpenProject }: {
                   sub="plan-covered, never billed" />
         <StatCard label="Fleet" value={`${projects.size} projects`}
                   sub={`${live.length} live session${live.length === 1 ? "" : "s"} · ${(snap?.cards ?? []).length.toLocaleString()} cards`} />
+        <StatCard label="Unread" value={unread.value} sub={unread.sub} testId="home-unread" />
         <div className="tr-card flex min-w-0 flex-1 flex-col gap-2 p-5">
           <div className="flex items-center justify-between">
             <span className="text-[12px] font-medium text-[var(--color-tr-muted)]">Providers</span>

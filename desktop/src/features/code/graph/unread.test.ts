@@ -1,7 +1,7 @@
 // The unit drill for #7977 (blueprint §5 card 7): the four-row table over Flare's rule, then the
 // tally the Home stat shows across projects.
 import { describe, expect, it } from "vitest";
-import { unreadCount, unreadLabel, unreadMarks, unreadState, unreadTally, type FileEvent } from "./unread";
+import { unreadCount, unreadMarks, unreadStat, unreadState, unreadTally, type FileEvent } from "./unread";
 
 const t0 = 1_000;
 const t1 = 2_000;
@@ -68,7 +68,7 @@ describe("unreadTally · the Home stat across projects", () => {
       claim("x.ts", t1, "gamma"),
     ];
     expect(unreadTally(events)).toEqual({ files: 3, projects: 2 });
-    expect(unreadLabel(unreadTally(events))).toBe("3 files across 2 projects");
+    expect(unreadStat(unreadTally(events))).toEqual({ value: "3 files", sub: "across 2 projects · crew code no person has opened" });
   });
 
   it("the same path in two projects is two files, and a read in one clears only that one", () => {
@@ -79,7 +79,8 @@ describe("unreadTally · the Home stat across projects", () => {
   });
 
   it("nothing unread reads as the calm zero", () => {
-    expect(unreadLabel(unreadTally([]))).toBe("nothing unread");
-    expect(unreadLabel({ files: 1, projects: 1 })).toBe("1 file across 1 project");
+    expect(unreadStat(unreadTally([]))).toEqual({ value: "0 files", sub: "every crew change has been opened" });
+    expect(unreadStat({ files: 1, projects: 1 }).value).toBe("1 file");
+    expect(unreadStat({ files: 1, projects: 1 }).sub).toContain("across 1 project ·");
   });
 });

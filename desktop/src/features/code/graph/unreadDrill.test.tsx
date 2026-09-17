@@ -6,8 +6,10 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { GraphView } from "../GraphView";
+import { Home } from "../../home/Home";
+import { HubClient } from "../../../shared/api/client";
 import type { GraphApi } from "./graphApi";
-import type { FileEvent } from "./unread";
+import { FILE_EVENT_TYPES, type FileEvent } from "./unread";
 import { SIX_NODE_GRAPH } from "./fixture";
 
 // SAFETY: React's act() reads this flag off globalThis; the cast adds the one key TS does not know.
@@ -22,6 +24,20 @@ const fakeApi = (events: FileEvent[]): GraphApi => ({
   changes: async () => [],
   fileChanges: () => () => {},
   fileEvents: async () => events,
+});
+
+/** Home's client, answering the file events on their exact query and nothing on the rest. */
+const stubClient = (events: FileEvent[]): HubClient => Object.assign(Object.create(HubClient.prototype), {
+  baseUrl: "http://127.0.0.1:4477",
+  economics: async () => null,
+  balances: async () => null,
+  tasks: async () => [],
+  peers: async () => [],
+  learning: async () => null,
+  handoffs: async () => [],
+  proposals: async () => ({ proposals: [] }),
+  events: async (opts: { type?: string }) => ({ events: opts.type === FILE_EVENT_TYPES ? events : [] }),
+  streamEvents: () => () => {},
 });
 
 describe("S-unread · the Unread lens on the graph view", () => {
@@ -95,6 +111,28 @@ describe("S-unread · the Unread lens on the graph view", () => {
     act(() => lensTab()?.click());
     expect(count()).toBe("0 unread");
     expect([...host.querySelectorAll<HTMLElement>("[data-graph-node]")].every(n => n.dataset.graphTone === "calm")).toBe(true);
+  });
+
+  it("the Home stat counts the same events across projects and drops by one on the read", async () => {
+    const stat = () => host.querySelector('[data-testid="home-unread"]')?.textContent ?? null;
+    const claims: FileEvent[] = [
+      { type: "file.claim", ts: T1, file: "lib/a.ts", project: "p" },
+      { type: "file.claim", ts: T1, file: "src/x.ts", project: "q" },
+    ];
+    act(() => root.render(<Home client={stubClient(claims)} me="sasha@mac" onOpenProject={() => {}} />));
+    await flush();
+    expect(stat()).toContain("2 files");
+    expect(stat()).toContain("across 2 projects");
+    evidence.push(`home before: 2 files across 2 projects`);
+
+    act(() => root.unmount());
+    root = createRoot(host);
+    const read: FileEvent = { type: "file.read", ts: T1 + 1, file: "lib/a.ts", project: "p" };
+    act(() => root.render(<Home client={stubClient([...claims, read])} me="sasha@mac" onOpenProject={() => {}} />));
+    await flush();
+    expect(stat()).toContain("1 file");
+    expect(stat()).toContain("across 1 project");
+    evidence.push(`home after the read: 1 file across 1 project`);
     console.log(`PASS S-unread · ${evidence.join(" | ")}`);
   });
 });

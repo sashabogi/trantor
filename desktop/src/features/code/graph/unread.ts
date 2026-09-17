@@ -73,9 +73,11 @@ export function unreadTally(events: readonly FileEvent[]): UnreadTally {
   return { files, projects };
 }
 
-/** "14 files across 3 projects", or the calm zero. */
-export function unreadLabel(t: UnreadTally): string {
-  if (t.files === 0) return "nothing unread";
-  const files = `${t.files} file${t.files === 1 ? "" : "s"}`;
-  return `${files} across ${t.projects} project${t.projects === 1 ? "" : "s"}`;
+export type UnreadStat = { value: string; sub: string };
+
+/** The Home stat's two lines: "14 files" over "across 3 projects", or the calm zero. */
+export function unreadStat(t: UnreadTally): UnreadStat {
+  const value = `${t.files} file${t.files === 1 ? "" : "s"}`;
+  if (t.files === 0) return { value, sub: "every crew change has been opened" };
+  return { value, sub: `across ${t.projects} project${t.projects === 1 ? "" : "s"} · crew code no person has opened` };
 }
