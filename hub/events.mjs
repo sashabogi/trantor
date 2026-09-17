@@ -138,8 +138,9 @@ function appendEvent(type, project, by, extra = {}) {
   return ev;
 }
 
-function appendCardEvent(type, task, by, from = null, to = null) {
+function appendCardEvent(type, task, by, from = null, to = null, extra = {}) {
   return appendEvent(type, task.project, by, {
+    ...extra,
     taskId: task.id,
     title: task.title,
     from,

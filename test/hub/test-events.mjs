@@ -95,6 +95,22 @@ try {
   ok("/card events stay card-only", (detail.events || []).every(e => ["created", "moved", "updated"].includes(e.type)));
   ok("/card still joins the citing message separately", (detail.messages || []).some(m => m.text.includes(`#${cid}`)));
 
+  // #7968: a seat's testing move posts `blast`; the hub keeps it on the card EVENT and nowhere else,
+  // and /history keeps its legacy flat shape beside it.
+  const c2 = (await A.post("/task", { project: PROJ, title: "blast card", by: "host:evtA", assignee: "codex:evtA", status: "doing" }))?.task?.id;
+  const movedTo = async (to) => (await A.get(`/history?project=${PROJ}`)).events.filter(e => e.taskId === c2 && e.type === "moved" && e.to === to).pop();
+  await A.post("/task/update", { id: c2, status: "testing", by: "codex:evtA", note: "verified at abc1234\nblast: 2 files depend on the 1 changed",
+    blast: { base: "abc1234", changed: ["lib/a.mjs"], unindexed: [], dependents: 2, junk: "dropped" } });
+  const bev = await movedTo("testing");
+  ok("#7968: the moved card event carries blast", bev?.blast?.dependents === 2 && bev.blast.base === "abc1234" && bev.blast.changed[0] === "lib/a.mjs" && !("junk" in bev.blast), JSON.stringify(bev?.blast));
+  ok("#7968: /history keeps the legacy flat shape beside blast", !!bev && "taskId" in bev && "title" in bev && "from" in bev && "to" in bev && "assignee" in bev);
+  ok("#7968: blast never lands on the card itself", !("blast" in ((await A.get(`/tasks?project=${PROJ}`)).tasks.find(t => t.id === c2) || {})));
+  await A.post("/task/update", { id: c2, status: "failed", by: "codex:evtA", blast: "7 files" });
+  ok("#7968: a malformed blast is dropped, the move still lands", (await movedTo("failed")) && !("blast" in (await movedTo("failed"))));
+  await A.post("/task/update", { id: c2, status: "done", by: "codex:evtA", blast: { unavailable: true, dependents: 99 } });
+  ok("#7968: an unavailable blast is kept as exactly {unavailable:true}", JSON.stringify((await movedTo("done"))?.blast) === '{"unavailable":true}');
+  ok("#7968: an update without blast carries none", !("blast" in ((await A.get(`/history?project=${PROJ}`)).events.find(e => e.taskId === c2 && e.type === "created") || {})));
+
   // filters compose
   const pres = (await A.get(`/events?project=${PROJ}&type=presence.`)).events;
   ok("type= prefix match works", pres.length > 0 && pres.every(e => e.type.startsWith("presence.")));

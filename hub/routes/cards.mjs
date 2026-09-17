@@ -3,6 +3,17 @@
 // checklist. All three are per-card detail nobody reads off a board — a board shows how many notes
 // a card carries, never their text. Dropping them is what turns a 1.55MB read into 0.26MB.
 const SLIM_DROP = new Set(["log", "history", "checklist"]);
+// #7968: the shape hollow-move.mjs posts — { base, changed[], unindexed[], dependents } or
+// { unavailable: true }; anything else is dropped so a stray payload cannot bloat the log.
+const BLAST_PATHS_MAX = 40;
+function cleanBlast(v) {
+  if (!v || typeof v !== "object" || Array.isArray(v)) return null;
+  if (v.unavailable) return { unavailable: true };
+  const paths = (a) => (Array.isArray(a) ? a : []).map(p => String(p).slice(0, 200)).filter(Boolean).slice(0, BLAST_PATHS_MAX);
+  const dependents = Number(v.dependents);
+  if (!Number.isInteger(dependents) || dependents < 0) return null;
+  return { base: String(v.base || "").slice(0, 40), changed: paths(v.changed), unindexed: paths(v.unindexed), dependents };
+}
 function slimCard(t) {
   const out = {};
   for (const k of Object.keys(t)) if (!SLIM_DROP.has(k)) out[k] = t[k];
@@ -236,7 +247,9 @@ export async function routeCards({ req, res, q, P, auth, ctx }) {
       }
       appendTaskNote(t, b);
       if (b.delete) { eventType = "deleted"; eventFrom = null; eventTo = null; state.tasks = state.tasks.filter(x => x.id !== t.id); }
-      appendCardEvent(eventType, t, b.by, eventFrom, eventTo);
+      // #7968: the blast radius a seat measured rides the card EVENT only, never the card itself.
+      const blast = cleanBlast(b.blast);
+      appendCardEvent(eventType, t, b.by, eventFrom, eventTo, blast ? { blast } : {});
       t.updated = now(); markDirty(); return json(res, 200, { ok: true, task: t });
     }
     // #5624: toggle ONE acceptance item. Index-addressed against the card's current checklist —
