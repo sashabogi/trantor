@@ -79,3 +79,53 @@ that is the live "what the crew is doing to files" signal, polled, and it is the
 non-Claude seats. `read_file` (`lib.rs` L453) takes a `seat` parameter and reads from the seat's
 worktree, so the app already knows how to address a file in a seat's tree. The watcher covers the
 main checkout only; nothing watches seat worktrees today.
+
+## 2. The smallest build that gives the Workspace a live graph
+
+**Source of truth: graft's `wiring.json`, one per checkout, produced by the graft CLI the app
+already has on PATH.** Not the hub, not Demerzel, not a port. The reasons are in §1: graft already
+holds the file→file import and call edges for this repo, resolves in-repo specifiers, runs in
+under a second warm, and ships `blast`. The hub knows nothing about code and should stay that
+way for the MVP; it becomes the attribution side (§4) once the graph exists. The app reads the
+graph the way it reads git: a Rust command shells out to a CLI. `desktop/src-tauri/src/trantor_cli.rs`
+is the precedent (resolves the node binary at L13-22, wraps `Command::new("trantor")` at L170
+with a minimum-version probe); a `graft_cli.rs` sibling does the same for `graft build` and
+`graft blast`, with the same "not installed" error surfaced in the lens instead of a blank canvas.
+
+**Shape handed to React.** One Tauri command `code_graph(project, seat?)` returns file-level nodes
+and edges only: the 522 file nodes with their cluster (top directory, as `graft map` already
+groups them), in-degree and out-degree, and the 2278 collapsed file→file edges tagged
+`imports` or `calls`. The 3.6MB wiring file stays in Rust; symbol-level nodes never cross the
+bridge (the MVP has no use for 3512 function nodes on a canvas). Collapsing 10921 edges to file
+pairs is a single pass over the array, a few milliseconds. With `seat` set, the command runs in
+`~/.agent-bus/worktrees/<project>/<seat>` exactly as `read_file` does (`lib.rs` L453), so the
+lens can show the graph as a seat's tree has it, uncommitted edits included.
+
+**Refresh, in this order.** On file change: `file_watch` (`lib.rs` L2000) already emits
+`file-changed` batches every 200ms for the main checkout; the graph command debounces those to
+one `graft build` per quiet second. graft fingerprints files (`graft/.cache/fingerprint.*`), so a
+one-file edit re-extracts one file: measured 0.7s for a no-op build, 8.0s cold, so the first
+open of a checkout that has no `graft/` yet is the only slow moment and shows a "building"
+state. On demand: a refresh affordance in the lens header calls the same command, which is also
+the path for seat worktrees (nothing watches them; extending `file_watch` to seat roots is a
+later card, §5). On commit: not available. The post-commit hook does not fire here (§1), and even
+where it does it carries no sha; the MVP does not wait for it, because the watcher already sees
+the working tree the moment a seat writes, before any commit exists. Commit-time is the wrong
+trigger for a live graph anyway; it is the right trigger for attribution, which is §4.
+
+**Where it lives: a sidecar inside the app, not the hub.** The graph is a property of a checkout
+on this machine, exactly like the Changes rows from `project_changes_sync` (`lib.rs` L7829),
+which already walk every seat worktree. Putting it in the hub would mean shipping 3.6MB per
+project per refresh over the tailnet to answer a question the operator's own disk answers in
+0.7s, and the remote hub on netcup has no checkout to build from. The hub's role in the MVP is
+unchanged: it keeps supplying `file.claim` and card events that the lens overlays on the graph.
+
+**Cost per refresh on this repo.** Warm rebuild 0.7s wall on one core; cold 8.0s; blast for a
+diff 0.33s; collapse and serialise about 2.3k edges to the webview, single-digit milliseconds;
+disk 18MB under `graft/.cache` plus 3.6MB wiring per checkout, gitignored already. At one build
+per quiet second while a seat is writing, that is well under one core-second per edit burst and
+zero LLM tokens: graft's wiring tier needs no key, and the `--deep` summaries are never invoked.
+
+**What the MVP explicitly does not do.** No node positions persisted, no heat decay, no
+attribution, no Unread. It draws the checkout's file graph, keeps it current with the watcher,
+and answers blast radius for the current diff. Everything else composes on top (§4, §5).
