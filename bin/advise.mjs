@@ -252,7 +252,9 @@ export function advise(input, world = loadWorld()) {
   // #7777: crew-bound packages get their catalog effort attached at SPAWN, when the live model is
   // known (bin/crew/models.mjs resolveSpec → CREW_EFFORT); the advisor only records that it is deferred.
   const catalogMeta = (() => { const c = loadCatalog(); return { version: c.version, models: Object.keys(c.models).length, source: "configs/model-catalog.json" }; })();
-  return { mode, why, crew, routing, routing_table_md: table, card_args: cards, est_api_cost_usd: apiCost, quota_pools: pools, summary, orchestrator_tier: orchTier, agents_available: agents, catalog: catalogMeta, ...(feedback.length ? { seat_feedback: feedback } : {}) };
+  const recommendation = { mode, why, crew, routing, routing_table_md: table, card_args: cards, est_api_cost_usd: apiCost, quota_pools: pools, summary, orchestrator_tier: orchTier, agents_available: agents, catalog: catalogMeta };
+  if (feedback.length) recommendation.seat_feedback = feedback;
+  return recommendation;
 }
 
 // ---- CLI ----
