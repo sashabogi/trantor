@@ -331,6 +331,11 @@ function startDutyNudgeWatcher(plan, sinceMs) {
 // The hub hands a message out exactly once, so a turn that died took its wake with it. Here a
 // message is consumed only when a turn exits 0; the queue lives on disk and retries on backoff.
 const PENDF = join(homedir(), ".agent-bus", `pending-${AGENT}-${PROJ}.json`);
+// #7778: message ids this seat already consumed through its OWN inbox path (relay_inbox, the
+// PostToolUse hook) — reconciled from the hub's deliveredUpTo ledger at each clean turn boundary
+// and persisted in the pending file, so a message the session read mid-turn is never re-woken by
+// the poll, across turn AND process boundaries.
+let seenLedger = [];
 // A cap, so a long outage cannot grow the queue without bound. Overflow drops the OLDEST and says
 // so on the bus — a silent drop is the exact failure this whole mechanism exists to end.
 const PENDING_MAX = 50;
@@ -347,15 +352,23 @@ const RETRY_MS = (() => {
 })();
 function savePending(wake, bcast) {
   try {
-    if (!wake.length && !bcast.length) { try { unlinkSync(PENDF); } catch {} return; }
-    writeFileSync(PENDF, JSON.stringify({ agent: AGENT, project: PROJ, ts: Date.now(), wake, bcast }));
+    // the seen-set keeps the file alive even with both queues empty: the dedupe ledger outlives
+    // the deliveries it guards (#7778).
+    if (!wake.length && !bcast.length && !seenLedger.length) { try { unlinkSync(PENDF); } catch {} return; }
+    writeFileSync(PENDF, JSON.stringify({ agent: AGENT, project: PROJ, ts: Date.now(), wake, bcast, seen: seenLedger }));
   } catch {}
 }
 function loadPending() {
   try {
     const j = JSON.parse(readFileSync(PENDF, "utf8"));
-    return { wake: Array.isArray(j.wake) ? j.wake : [], bcast: Array.isArray(j.bcast) ? j.bcast : [] };
-  } catch { return { wake: [], bcast: [] }; }
+    return {
+      wake: Array.isArray(j.wake) ? j.wake : [],
+      bcast: Array.isArray(j.bcast) ? j.bcast : [],
+      seen: Array.isArray(j.seen)
+        ? j.seen.filter(e => e && Number.isFinite(Number(e.id))).map(e => ({ id: Number(e.id), ts: Number(e.ts) || 0 }))
+        : [],
+    };
+  } catch { return { wake: [], bcast: [], seen: [] }; }
 }
 
 // Auth failures in TURN OUTPUT: opencode prints its auth error and still exits 0 (#5405). The rules
@@ -1051,6 +1064,8 @@ function askedExcerpt(message) {
   // broadcasts batched behind them. Restored from disk first: a runner that was killed mid-turn
   // (or a machine that rebooted) still owes those messages, and the hub will never send them again.
   const restored = loadPending();
+  seenLedger = restored.seen;
+  if (seenLedger.length) log(`\x1b[33m${seenLedger.length} consumed message id(s) restored from the pending file — the poll keeps standing down on them\x1b[0m`);
   // Say what the restore SHED, not just what it kept. A queue that quietly halves itself on restart
   // is indistinguishable from one that lost real work, and this is the moment the expiry above
   // actually bites — a wedged seat comes back carrying only what still means something.
@@ -1073,6 +1088,10 @@ function askedExcerpt(message) {
   stateSkip("kickoff");
   const ec0 = await runTurn(composedTurn({ base: KICKOFF, lessons: pickLessons(LESSONS_RAW, "") }), true, "kickoff");
   if (ec0) await reportFailure(ec0, "kickoff", pendingWake.length);   // a failed kickoff = the "fired up, died, nobody knew" case
+  // #7778: the kickoff is a turn like any other — a message that landed mid-kickoff and was read
+  // through the session's own inbox is consumed by a successful kickoff, and the first poll must
+  // not wake on it. Same reconcile, same clean-boundary rule as deliverWake below.
+  else await reconcileSessionReads(cursor);
   let lastTurnAt = Date.now();
   if (PULSE_MS) log(`pulse armed — mission re-read every ${Math.round(PULSE_MS / 1000)}s (${MISSION_FILE})`);
   log(`parked — long-polling the bus as ${SESSION} (free; this poll is also the heartbeat)`);
@@ -1083,7 +1102,9 @@ function askedExcerpt(message) {
     if (PULSE_MS && Date.now() - lastTurnAt >= PULSE_MS) {
       stateSkip("pulse");
       const ecp = await runTurn(composedTurn({ base: PULSE_PROMPT + "\n\n", rulesText: RULES, lessons: pickLessons(LESSONS_RAW, PULSE_PROMPT) }), false, "pulse");
-      if (ecp) await reportFailure(ecp, "pulse"); else await reportHealthy();
+      // #7778: a pulse turn is also a clean boundary when it succeeds — same reconcile rule.
+      if (ecp) await reportFailure(ecp, "pulse");
+      else { await reconcileSessionReads(cursor); await reportHealthy(); }
       lastTurnAt = Date.now();
       log("parked — waiting for the next message or pulse");
       continue;
@@ -1123,6 +1144,23 @@ function askedExcerpt(message) {
     // reply-linked outcomes, and the old stable marker before direct-address logic sees them. Status
     // broadcasts are presence chatter and are dropped rather than saved as future prompt context.
     msgs = msgs.filter(m => !isReceipt(m) && !isStatusBroadcast(m));
+    // #7778: ids in the seen-set were already handed to the model through the session's own inbox
+    // read mid-turn (the reconcile at the last clean turn boundary recorded them). The poll still
+    // serves them — it filters by THIS runner's cursor, not the shared ledger — so the second
+    // reader stands down here, and the cursor adopts the consumed ids so the hub stops re-serving.
+    // Filtering BEFORE the wake/bcast split keeps a dupe out of the demoted-sender notice too:
+    // the seat DID turn on that message, and #7766's notice must not say otherwise.
+    if (seenLedger.length) {
+      const seenIds = new Set(seenLedger.map(e => e.id));
+      const dupes = msgs.filter(m => seenIds.has(m.id));
+      if (dupes.length) {
+        log(`duplicate delivery suppressed — ${dupes.map(m => `#${m.id}`).join(", ")} already consumed by the session's own inbox read`);
+        msgs = msgs.filter(m => !seenIds.has(m.id));
+        const top = Math.max(...dupes.map(m => m.id));
+        if (top > cursor) cursor = top;
+        seenLedger = seenLedger.filter(e => e.id > cursor);
+      }
+    }
     // #5760: the hub's hourly same-project-sessions FYI is coordination context, batched like a
     // broadcast; file-conflict and linked-activity overseer warnings still wake.
     const fyi = msgs.filter(m => m.from === "hub:duty" && String(m.text || "").startsWith("🤝 OVERSEER same-project-sessions"));
@@ -1182,6 +1220,31 @@ function askedExcerpt(message) {
 
   // Run the pending batch. The messages are cleared ONLY on exit 0; any other outcome leaves them
   // queued, on disk, with a backoff — which is the whole point of the change.
+  // #7778 — one message, one delivery, whichever path sees it first. The session's own inbox read
+  // and this runner's /poll are two readers of one bus with no shared cursor: a message the seat
+  // read and answered MID-TURN was re-polled after the turn and woken AGAIN (seen live: a seat
+  // answered inside its turn, then a second turn 16s later re-quoted the same message verbatim).
+  // The hub's deliveredUpTo is the one ledger both paths already write, so at a CLEAN turn
+  // boundary every id above our poll cursor but at-or-below it was necessarily consumed by the
+  // session-side path. Those ids go into the persisted seen-set; the poll filter stands the
+  // second reader down. A failed, parked or hollow turn reconciles NOTHING — dedupe must never
+  // swallow a message the seat still owes, so only full success is trusted to mark history read.
+  async function reconcileSessionReads(upToCursor) {
+    try {
+      const peer = await api(`/peer?session=${encodeURIComponent(SESSION)}`);
+      const readUpTo = Number(peer?.deliveredUpTo || 0);
+      // A delta wider than one turn could plausibly carry is a corrupt or rewound ledger: mark
+      // nothing. Non-marking only risks the duplicate this fixes, never a lost message.
+      if (!(readUpTo > upToCursor) || readUpTo - upToCursor > 10000) return 0;
+      for (let id = upToCursor + 1; id <= readUpTo; id++) seenLedger.push({ id, ts: Date.now() });
+      seenLedger = seenLedger.filter(e => e.id > upToCursor).slice(-500);
+      // persist HERE, at every caller: a runner killed seconds after the boundary is exactly the
+      // restart the restored seen-set exists for.
+      savePending(pendingWake, pendingBcast);
+      log(`dedupe: message id(s) ${upToCursor + 1}..${readUpTo} were consumed by the session's own inbox read — the poll will not wake on them again`);
+      return readUpTo - upToCursor;
+    } catch { return 0; }
+  }
   async function deliverWake() {
     const wake = pendingWake;
     const dutyPlan = DUTY_NUDGES
@@ -1370,6 +1433,8 @@ function askedExcerpt(message) {
         `🫥 EMPTY turn on ${SESSION} (exit 0, ${secs}s — no worktree change, no substantive output, no bus activity) · wake stays owed · retrying in ${Math.round(wait / 1000)}s · asked: "${asked}"`);
     } else {
       pendingWake = []; pendingBcast = []; deliveryFails = 0; retryAt = 0;
+      // #7778: reconcile BEFORE the write below so the persisted snapshot carries the seen-set.
+      await reconcileSessionReads(cursor);
       savePending([], []);
       await reportHealthy();
       await notifyAssigners(assigners,
