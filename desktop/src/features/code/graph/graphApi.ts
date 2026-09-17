@@ -18,6 +18,10 @@ export type GraphNode = {
   orphan: boolean;
   doc: boolean;
   cycleId: number | null;
+  /** Hotspots (#7978): Flare's branch-keyword count, marker count, commits in 90 days */
+  complexity: number;
+  todos: number;
+  churn: number;
 };
 
 export type GraphEdge = { source: string; target: string; relation: "imports" | "calls" };

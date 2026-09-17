@@ -4,9 +4,31 @@
 import type { CodeGraph, GraphEdge, GraphNode } from "./graphApi";
 import type { UnreadState } from "./unread";
 
-export type GraphLens = "clusters" | "activity" | "cycles" | "unread";
+export type GraphLens = "clusters" | "activity" | "cycles" | "unread" | "hotspots";
 
-export const LENSES: readonly GraphLens[] = ["clusters", "activity", "cycles", "unread"];
+export const LENSES: readonly GraphLens[] = ["clusters", "activity", "cycles", "unread", "hotspots"];
+
+/** Flare's hotspot (insights.ts): complexity × (min(churn, 50) + sessionChurn × 3 + 1). */
+export const CHURN_CAP = 50;
+
+export function hotspotRaw(node: Pick<GraphNode, "complexity" | "churn">, sessionChurn: number): number {
+  return node.complexity * (Math.min(node.churn, CHURN_CAP) + sessionChurn * 3 + 1);
+}
+
+export type Hotspot = { id: string; complexity: number; churn: number; sessionChurn: number; raw: number; heat: number };
+
+/** Every file ranked hottest first, heat 0..100 against the hottest; a flat repo is all 0. */
+export function hotspotRank(graph: CodeGraph, dirty: readonly DirtyMark[]): Hotspot[] {
+  const sessionChurn = new Map<string, number>();
+  for (const mark of dirty) sessionChurn.set(mark.path, (sessionChurn.get(mark.path) ?? 0) + 1);
+  const rows = graph.nodes.map(n => {
+    const session = sessionChurn.get(n.id) ?? 0;
+    return { id: n.id, complexity: n.complexity, churn: n.churn, sessionChurn: session, raw: hotspotRaw(n, session), heat: 0 };
+  });
+  const max = rows.reduce((m, r) => Math.max(m, r.raw), 0);
+  for (const r of rows) r.heat = max > 0 ? Math.round((r.raw / max) * 100) : 0;
+  return rows.sort((a, b) => b.raw - a.raw || a.id.localeCompare(b.id));
+}
 
 /** One dirty path in one tree; seat null is the project checkout itself. */
 export type DirtyMark = { path: string; seat: string | null };
@@ -31,6 +53,10 @@ export type RenderNode = {
   outDegree: number;
   /** the Unread lens's state; a cluster is unread while any member is, read while any member is */
   unread: UnreadState;
+  /** the Hotspots lens's ramp, 0..100 against the hottest file; a cluster carries its hottest */
+  heat: number;
+  /** graft's size, the districts layout's area; a cluster carries its members' sum */
+  chars: number;
   tone: Tone;
 };
 
@@ -95,6 +121,8 @@ export function deriveGraph(graph: CodeGraph, view: GraphView): DerivedGraph {
     else dirtyByPath.set(mark.path, [mark.seat]);
   }
 
+  const heat = new Map(hotspotRank(graph, view.dirty).map(h => [h.id, h.heat]));
+
   const members = new Map<string, GraphNode[]>();
   for (const node of graph.nodes) {
     const name = clusterName(node);
@@ -123,6 +151,8 @@ export function deriveGraph(graph: CodeGraph, view: GraphView): DerivedGraph {
           inDegree: node.inDegree,
           outDegree: node.outDegree,
           unread: view.unread?.get(node.id) ?? "unchanged",
+          heat: heat.get(node.id) ?? 0,
+          chars: node.chars,
           tone: "calm",
         });
       }
@@ -142,6 +172,8 @@ export function deriveGraph(graph: CodeGraph, view: GraphView): DerivedGraph {
       inDegree: 0,
       outDegree: 0,
       unread: clusterUnread(list, view.unread),
+      heat: list.reduce((m, node) => Math.max(m, heat.get(node.id) ?? 0), 0),
+      chars: list.reduce((sum, node) => sum + node.chars, 0),
       tone: "calm",
     });
   }
@@ -209,6 +241,7 @@ function tone(nodes: RenderNode[], edges: RenderEdge[], view: GraphView) {
     else if (view.lens === "cycles") n.tone = n.cycle ? "warn" : "dim";
     else if (view.lens === "activity") n.tone = dirty.has(n.id) ? "calm" : "dim";
     else if (view.lens === "unread") n.tone = n.unread === "unchanged" ? "calm" : n.unread;
+    else if (view.lens === "hotspots") n.tone = n.heat > 0 ? "calm" : "dim";
     else n.tone = "calm";
   }
   for (const e of edges) {
@@ -216,6 +249,7 @@ function tone(nodes: RenderNode[], edges: RenderEdge[], view: GraphView) {
     if (touchesSelected) e.tone = "linked";
     else if (view.lens === "cycles") e.tone = e.cycle ? "warn" : "dim";
     else if (view.lens === "activity") e.tone = dirty.has(e.source) || dirty.has(e.target) ? "calm" : "dim";
+    else if (view.lens === "hotspots") e.tone = "dim";
     else e.tone = "calm";
   }
 }

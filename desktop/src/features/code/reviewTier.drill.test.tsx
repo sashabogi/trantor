@@ -20,9 +20,9 @@ const flush = async () => { await act(async () => { await Promise.resolve(); });
 const TEN_DEPENDENTS: CodeGraph = {
   root: "/fixture-ten",
   nodes: [
-    { id: "lib/core.ts", name: "core.ts", cluster: "lib", chars: 100, inDegree: 10, outDegree: 0, isTest: false, testedBy: 1, orphan: false, doc: false, cycleId: null },
+    { id: "lib/core.ts", name: "core.ts", cluster: "lib", chars: 100, inDegree: 10, outDegree: 0, isTest: false, testedBy: 1, orphan: false, doc: false, cycleId: null, complexity: 0, todos: 0, churn: 0 },
     ...Array.from({ length: 10 }, (_, i) => ({
-      id: `bin/cmd${i}.ts`, name: `cmd${i}.ts`, cluster: "bin", chars: 50, inDegree: 0, outDegree: 1, isTest: false, testedBy: 1, orphan: false, doc: false, cycleId: null,
+      id: `bin/cmd${i}.ts`, name: `cmd${i}.ts`, cluster: "bin", chars: 50, inDegree: 0, outDegree: 1, isTest: false, testedBy: 1, orphan: false, doc: false, cycleId: null, complexity: 0, todos: 0, churn: 0,
     })),
   ],
   edges: Array.from({ length: 10 }, (_, i) => ({ source: `bin/cmd${i}.ts`, target: "lib/core.ts", relation: "imports" as const })),

@@ -15,6 +15,9 @@ const node = (id: string, cluster: string, over: Partial<GraphNode> = {}): Graph
   orphan: false,
   doc: false,
   cycleId: null,
+  complexity: 0,
+  todos: 0,
+  churn: 0,
   ...over,
 });
 
@@ -39,3 +42,13 @@ export const SIX_NODE_GRAPH: CodeGraph = {
 
 /** The fixture's top-level directories: what cluster zoom must show, one card each. */
 export const SIX_NODE_CLUSTERS = ["bin", "docs", "lib", "test"];
+
+/** The six nodes at real sizes, lib/a.ts warm, plus this repo's own hotspot (#7978): lib.rs. */
+const SIZED_NODES = SIX_NODE_GRAPH.nodes.map(n => ({ ...n, chars: 20_000 }));
+const WARM_NODES = SIZED_NODES.map(n => (n.id === "lib/a.ts" ? { ...n, complexity: 40, churn: 20 } : n));
+
+export const HOTSPOT_GRAPH: CodeGraph = {
+  ...SIX_NODE_GRAPH,
+  nodes: [...WARM_NODES, node("desktop/src-tauri/src/lib.rs", "desktop", { chars: 300_000, complexity: 762, churn: 112 })],
+  meta: { ...SIX_NODE_GRAPH.meta, files: 7 },
+};
