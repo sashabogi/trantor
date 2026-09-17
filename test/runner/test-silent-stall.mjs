@@ -23,11 +23,20 @@ console.log("# trantor silent-stall drill (#7752)");
 console.log("\n## the rules");
 {
   ok("exit 141 on a cut IS the SIGPIPE cut signal", cutSignalFor(141) === "SIGPIPE");
-  ok("any other exit is not a cut signal", cutSignalFor(137) === "" && cutSignalFor(0) === "");
+  ok("#7099: exit 137 on a cut IS the SIGKILL cut signal (128+9 — the sweep's own kill -KILL)",
+    cutSignalFor(137) === "SIGKILL");
+  ok("any other exit is not a cut signal", cutSignalFor(0) === "" && cutSignalFor(1) === "");
   ok("141 is never matched as a quota pattern, whatever the captured text says",
     classifyFailure(141, "Error: rate-limit: you exceeded your quota, try again later").reason === "cut-signal");
   ok("141 is never matched as a crash pattern either",
     classifyFailure(141, "").reason === "cut-signal" && !/crash/.test(classifyFailure(141, "").reason));
+  ok("#7099: 137 UNDER the cut marker is never matched as a quota pattern, whatever the text says",
+    classifyFailure(137, "Error: rate-limit: you exceeded your quota, try again later", false, false, true).reason === "cut-signal");
+  ok("#7099: 137 UNDER the cut marker is never matched as a crash pattern either",
+    classifyFailure(137, "", false, false, true).reason === "cut-signal"
+    && !/crash/.test(classifyFailure(137, "", false, false, true).reason));
+  ok("#7099: 137 WITHOUT the cut marker is still a crash — an OOM or outside kill is not the box",
+    classifyFailure(137, "").reason === "crashed");
   ok("the stall verdict names the silence, not a provider failure",
     stallVerdict() === "classified stalled because no bytes on either stream and no transcript advance for the whole watchdog window");
 }
@@ -170,6 +179,12 @@ console.log("\n## a busy turn is still a box cut");
   ok("#7752: the cut turn ran its ONE follow-up in the same session",
     r.rows.filter(x => x.trigger === "time-box follow-up").length === 1,
     `${r.rows.filter(x => x.trigger === "time-box follow-up").length} follow-up(s)`);
+  ok("#7099: the cut row's exit is the box's own signal, ledgered as cutSignal — never absent",
+    cutRow && cutRow.cutSignal && cutRow.cutSignal === cutSignalFor(cutRow.exit),
+    JSON.stringify(cutRow && { exit: cutRow.exit, cutSignal: cutRow.cutSignal }));
+  ok("#7099: the cut turn's verdict names the sweep's signal, never a crash",
+    cutRow && /cut-signal/.test(cutRow.verdict || "") && !/crash/.test(cutRow.verdict || ""),
+    cutRow && cutRow.verdict);
 }
 
 hub.close();

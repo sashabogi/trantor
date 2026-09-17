@@ -356,7 +356,9 @@ function loadPending() {
 // Auth failures in TURN OUTPUT: opencode prints its auth error and still exits 0 (#5405). The rules
 // live in lib/classify-failure.mjs (#5868); runTurn judges only the CLI's own output, not the echo.
 function classify(exit) {
-  const { reason, matched } = classifyFailure(exit, lastErrText, lastEmptyOutput, lastEmptyTurn);
+  // lastTurnCut lets a boxed turn's 137 read as the sweep's SIGKILL (#7099); without the cut
+  // marker the same exit stays a crash, exactly as classifyFailure's cut rule draws it.
+  const { reason, matched } = classifyFailure(exit, lastErrText, lastEmptyOutput, lastEmptyTurn, lastTurnCut);
   log(`classified ${reason} because ${matched}`);
   return reason;
 }
@@ -848,8 +850,8 @@ exit $turn_exit`;
   // #5868: the verdict rides the telemetry row so a classification survives the pane scrolling
   // away — the same "classified X because Y" shape the runner logs, in the seat's jsonl forever.
   // A silent cut names its own verdict (#7752): the exit under it is the sweep's SIGPIPE, never
-  // a provider failure.
-  const verdict = stallCut ? stallVerdict() : verdictFor(realExit, effExit, lastEmptyOutput, ownOut, lastEmptyTurn);
+  // a provider failure. A box cut passes `cut` so its 137 reads as the sweep's SIGKILL (#7099).
+  const verdict = stallCut ? stallVerdict() : verdictFor(realExit, effExit, lastEmptyOutput, ownOut, lastEmptyTurn, cut);
   // #6134: what the turn COST, from the CLI's own usage line. Zero means this CLI printed none —
   // never that the turn was free. `trantor seat-why` totals these into today's spend per seat.
   let tokens = parseTurnTokens(ownOut);
@@ -859,12 +861,10 @@ exit $turn_exit`;
     // actually carried counts.
     if (c) tokens = c.input + c.output + c.cache_read + c.cache_creation;
   }
-  // #6289: every ledger row names in ONE field what happened to the turn — cut (the box ended
-  // it), stalled (the watchdog window ended it, #7752), api-error (the CLI failed), completed —
-  // and what it cost in tokens, even when this CLI printed no usage line (0 means "not
-  // reported", never "free"). `cut` stays too: the drills read it. #7762: `card` binds the row
-  // to the card the turn was working (0 = kickoff/pulse, no card) so the seat record can
-  // attribute empty/stalled turns to the card that produced nothing.
+  // #6289: every ledger row names in ONE field what happened to the turn — cut, stalled (#7752),
+  // api-error, completed — and what it cost (0 means "not reported", never "free"). #7762: `card`
+  // binds the row to the card the turn worked (0 = kickoff/pulse) so the seat record attributes
+  // empty/stalled turns to the card that produced nothing. `cut` stays too: the drills read it.
   const outcome = cut ? (stallCut ? "stalled" : "cut") : (effExit !== 0 ? "api-error" : lastEmptyTurn ? "empty" : "completed");
   // #7756: a clean turn that ASKED its assigner is demoted-but-owed, not "completed". The judge
   // (deliverWake's /contracts read) renames the ledger row, so "asked" is what the log keeps.
@@ -875,8 +875,8 @@ exit $turn_exit`;
   const telemetryRow = { ts: Date.now(), agent: AGENT, project: PROJ, turn: TURN, trigger, card: sessionCard || 0, model: MODEL || "cli-default", duration_ms: Date.now() - t0, exit: realExit, effExit, authFailed: effExit !== realExit, emptyOutput: lastEmptyOutput, emptyTurn: lastEmptyTurn, verdict, outcome: finalOutcome, tokens };
   if (cut) telemetryRow.cut = true;
   if (stallCut) telemetryRow.stalled = true;
-  // #7752: a cut turn's 141 is the sweep's SIGPIPE, recorded as the cut signal — never read as
-  // a quota or crash pattern downstream.
+  // #7752/#7099: a cut turn's 141/137 is the sweep's own signal (SIGPIPE/SIGKILL), recorded as
+  // the cut signal — never read as a quota or crash pattern downstream.
   if (cut) { const sig = cutSignalFor(realExit); if (sig) telemetryRow.cutSignal = sig; }
   telemetry(telemetryRow);
   log(`turn ended (exit ${realExit}${effExit !== realExit ? ` → effective ${effExit} (${lastEmptyOutput ? "empty-output" : "auth"})` : ""}, ${((Date.now() - t0) / 1000).toFixed(0)}s)`);

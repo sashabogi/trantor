@@ -1,10 +1,7 @@
 // Regression for #5868: the codex seat sat "DOWN — 44 consecutive failures (exhausted)" while
-// every telemetry row read exit:0 and the transcript showed real work. Both labels came from the
-// seat's own PROMPT echoing through the transcript: the rules line "…deleting failing tests is
-// forbidden." matched AUTH_MARKER_RE's bare "forbidden" ("FAILED (exit 1, auth)"), and the codex
-// lesson "retries burn quota" matched the exhausted rule. Fixtures below are the REAL excerpts
-// from ~/.agent-bus/err-codex-trantor.txt plus the classic failure specimens (#5405 opencode
-// auth, #5683 codex compact-404, Claude's usage-limit notice).
+// every telemetry row read exit:0 — both labels came from the seat's own PROMPT echoing through
+// the transcript ("…deleting failing tests is forbidden." matched AUTH_MARKER_RE, the codex lesson
+// "retries burn quota" matched exhausted). Fixtures are the REAL specimens (#5405, #5683, Claude).
 import { strict as assert } from "node:assert";
 import {
   AUTH_MARKER_RE, OWN_OUTPUT_ANSWER_MIN, classifyFailure, looksLikeAuthDeath, stripPromptEcho, verdictFor,
@@ -13,7 +10,7 @@ import {
 let fail = 0; const ok = (c, m) => { console.log((c ? "✓" : "✗ FAIL") + " " + m); if (!c) fail++; };
 const same = (a, b, m) => { try { assert.deepStrictEqual(a, b); ok(true, m); } catch (e) { ok(false, `${m} — got ${JSON.stringify(a)?.slice(0, 120)}`); } };
 
-// --- the real evidence, verbatim from err-codex-trantor.txt (2026-09-02) ---
+// --- the real evidence, verbatim from err-codex-trantor.txt (#5868) ---
 const RULES_LINE =
   "- [global] Never edit files owned by another agent — if your change breaks their tests, message the owner with what changed and let them update; deleting failing tests is forbidden.";
 const QUOTA_LESSON_LINE =
@@ -78,6 +75,17 @@ console.log("# classifyFailure — reasons and the matched evidence");
   same(classifyFailure(1, "error: 401 unauthorized").reason, "auth", "auth on the CLI's own error output");
   same(classifyFailure(127, ""), { reason: "missing-cli", matched: "exit 127 — command not found" }, "missing-cli keeps its reason");
   same(classifyFailure(0, "", true), { reason: "empty-output", matched: "exit 0 with no output on either stream" }, "empty-output keeps its reason");
+  // #7099: 137 is 128+9 — SIGKILL. Under the runner's cut marker it is the box sweep's own
+  // signature, never a quota or crash pattern; WITHOUT the marker it is an OOM/outside kill and
+  // stays a crash.
+  same(classifyFailure(137, "Error: rate-limit: you exceeded your quota, try again later", false, false, true).reason,
+    "cut-signal", "137 on a CUT turn is never matched as a quota pattern, whatever the captured text says");
+  same(classifyFailure(137, "", false, false, true),
+    { reason: "cut-signal", matched: "exit 137 — SIGKILL from the time box sweep, not a provider failure" },
+    "137 on a CUT turn is never matched as a crash pattern either");
+  same(classifyFailure(137, "").reason, "crashed", "137 WITHOUT the cut marker is still a crash");
+  ok(classifyFailure(137, "quota exceeded for this billing period").reason === "exhausted",
+    "137 without the cut marker still follows the ordinary patterns");
 }
 
 console.log("# the qwen specimen — contract echo the exact-match strip provably missed (#5868 turn 9)");
@@ -160,6 +168,10 @@ console.log("# verdictFor — the verdict field that rides the seat's jsonl row 
   ok(verdictFor(1, 1, false, "You've reached your usage limit.").startsWith("classified exhausted"),
     "non-zero turn → the classifyFailure verdict verbatim");
   ok(verdictFor(1, 1, false, "segfault").startsWith("classified crashed"), "unknown failure → crashed");
+  ok(verdictFor(137, 137, false, "", false, true) === "classified cut-signal because exit 137 — SIGKILL from the time box sweep, not a provider failure",
+    "#7099: a cut turn's 137 verdict names the sweep's SIGKILL, never a crash");
+  ok(verdictFor(137, 137, false, "").startsWith("classified crashed"),
+    "#7099: the same 137 without the cut marker stays a crash verdict");
 }
 
 
