@@ -26,8 +26,12 @@ const PROJ = "tt-ask", SESSION = `codex:${PROJ}`, CARD = 4401;
 
 // ---- mock hub: exactly-once delivery, the kind:ask card moves, and a /contracts view --------
 // The card moves replicate hub/routes/messages.mjs (eb3d74d): kind:ask blocks the cited card
-// with the question as its note; a reply threaded re = the ask's id moves it back to doing.
+// with the question as its note; a reply threaded re = the ask's id moves it back to doing. It
+// also keeps the hub's unified event log (by-actor, GET /events filters by/since) — what the
+// runner's busActivitySince reads to tell a quiet-but-busy turn from an EMPTY one (#7759).
 const messages = [];
+const events = [];
+let eventSeq = 0;
 let nextId = 1;
 const served = new Set();
 const card = { id: CARD, project: PROJ, status: "doing", notes: [] };
@@ -40,16 +44,25 @@ const hub = http.createServer((req, res) => {
       let msg; try { msg = JSON.parse(buf); } catch { return reply({ ok: false }); }
       msg = { id: nextId++, ts: Date.now(), ...msg };
       messages.push(msg);
+      events.push({ id: ++eventSeq, ts: msg.ts, type: "message", project: msg.project || "", by: msg.from || "" });
       const refs = [...new Set((String(msg.text || "").match(/#(\d{1,7})(?![0-9])/g) || []).map(s => Number(s.slice(1))))];
       if (msg.kind === "ask" && refs[0] === CARD && card.status !== "blocked") {
         card.status = "blocked"; card.notes.push({ by: msg.from, text: msg.text });
+        events.push({ id: ++eventSeq, ts: msg.ts, type: "moved", project: PROJ, by: msg.from || "" });
       } else if (msg.re) {
         const opened = messages.find(m => m.id === Number(msg.re) && m.kind === "ask");
         if (opened && card.status === "blocked") {
           card.status = "doing"; card.notes.push({ by: msg.from, text: `answered: ${msg.text}` });
+          events.push({ id: ++eventSeq, ts: msg.ts, type: "moved", project: PROJ, by: msg.from || "" });
         }
       }
       return reply({ ok: true, id: msg.id });
+    }
+    if (P === "/events") {
+      const since = Number(u.searchParams.get("since") || 0);
+      const by = u.searchParams.get("by") || "";
+      const out = events.filter(e => e.id > since && (!by || e.by === by));
+      return reply({ events: out, cursor: out.length ? out[out.length - 1].id : since, latest: eventSeq });
     }
     if (P === "/contracts") {
       const session = u.searchParams.get("session");
@@ -98,13 +111,16 @@ const j = await r.json();
 console.log("ask sent, id", j.id);
 `);
 // The contract names a value the seat cannot know. The fake CLI's ONLY move on that turn is the
-// ask relay_ask would send — it writes no file, invents no DEPLOY_TARGET, and exits 0.
+// ask relay_ask would send — it writes no file, invents no DEPLOY_TARGET, prints UNDER the 120-
+// char substantive floor (the codex-drill line is CLI chrome), and exits 0: if the ask did not
+// count as bus activity, that turn would read EMPTY (#7759). The ANSWER turn is the opposite
+// specimen — real resumed work, so it prints a substantive line like a real CLI would.
 writeFileSync(join(fakebin, "codex"), `#!/bin/sh
 P="$HOME/.agent-bus/turn-codex-${PROJ}.txt"
 { echo "===TURN==="; echo "ARGV: $*"; cat "$P"; } >> "${LOGF}"
 if grep -q "NEW BUS MESSAGE" "$P"; then
   if grep -q "ANSWER:" "$P"; then
-    echo "codex-drill: answer received — setting DEPLOY_TARGET and finishing"
+    echo "the answer landed — DEPLOY_TARGET is staging; writing it into the release config now and closing the contract out exactly as the assigner specified"
     exit 0
   fi
   node "${ASKJS}" "${HUB}" "${SESSION}" "sasha@mac" "❓ ask on #${CARD}: which value should DEPLOY_TARGET get? The contract does not say."
@@ -160,6 +176,19 @@ ok("#7756: the asking turn invented no value — its only direct bus write is th
 ok("#7756: the ledger row for the asking turn reads outcome \`asked\`, not \`completed\`",
   ledger().some(r => r.outcome === "asked"),
   ledger().map(r => r.outcome).join(","));
+// Design check (#7756 × #7759): the asking turn touched no file and printed under the
+// substantive floor, so ONLY the hub's event record of the ask (kind:ask send + card move,
+// both by the seat — what busActivitySince reads) can keep it from reading EMPTY. If that
+// chain breaks the row below flips to emptyTurn:true / outcome "empty" and the hold would
+// ride the failure ladder instead.
+{
+  const askRow = ledger().find(r => r.outcome === "asked");
+  ok("#7756: the asking turn counted as BUS ACTIVITY, not EMPTY (under the floor, no worktree change)",
+    !!askRow && askRow.emptyTurn === false,
+    JSON.stringify(ledger().map(r => ({ outcome: r.outcome, emptyTurn: r.emptyTurn }))));
+  ok("#7756: no EMPTY notice went out for the asking turn",
+    !messages.some(m => String(m.text || "").includes("EMPTY turn") && m.from === SESSION));
+}
 ok("#7756: no park, no failure notice — the failure ladder never saw the ask",
   !messages.some(m => /PARKED|FAILED|retrying in/.test(String(m.text || "")) && m.from === SESSION),
   messages.filter(m => m.from === SESSION).map(m => m.text).join(" | ").slice(0, 200));
