@@ -100,7 +100,7 @@ console.log("# advisor attaches parameters");
 const { advise } = await import(pathToFileURL(join(root, "bin/advise.mjs")).href);
 const world = {
   profile: { providers: {} },
-  registry: { models: { "deepseek-v4-flash": { cost_in: 0.14, cost_out: 0.28, good_for: ["code"] }, "madeup-model-9": { cost_in: 0.01, cost_out: 0.02, good_for: ["code"] } } },
+  registry: { models: { "deepseek-v4-flash": { cost_in: 0.14, cost_out: 0.28, good_for: ["code"] }, "madeup-model-9": { cost_in: 0.5, cost_out: 1.0, good_for: ["code"] } } },
   caps: {},
   agents: [],
   scrooge: true,
