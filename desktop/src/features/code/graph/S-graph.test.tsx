@@ -20,6 +20,7 @@ const flush = async () => { await act(async () => { await Promise.resolve(); });
 const fakeApi = (over: Partial<GraphApi> = {}): GraphApi => ({
   graph: async () => SIX_NODE_GRAPH,
   changes: async () => [{ seat: "kimi", path: "lib/a.ts", status: "M", plus: 1, minus: 0 }],
+  fileChanges: () => () => {},
   ...over,
 });
 
