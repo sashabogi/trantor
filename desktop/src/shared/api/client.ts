@@ -353,6 +353,8 @@ export type BalanceEntry = {
   ok: boolean; low: boolean;
   remaining?: number | null; currency?: string;
   remainingPct?: number | null; plan?: string;
+  // the adapter's word on a missing number (#7413): qwen's active plan reads only the wall
+  detail?: string;
 };
 export type BalancesReport = { ts: number; entries: BalanceEntry[]; lowCount: number; stale: boolean };
 

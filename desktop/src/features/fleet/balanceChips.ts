@@ -218,6 +218,11 @@ export function chipFrom(e: BalanceRow, opts: ChipOpts = {}): BalanceChip | null
       barPct = usedPct;
       detail = `${Math.round(e.remainingPct)}% left${rs ? ` · resets in ${rs}` : ""}`;
       if (e.low) tone = "warn";
+    } else if (e.detail) {
+      // #7413 — the adapter said why the number is missing (qwen can only read the wall): an
+      // active plan is not an unknown gauge. The tooltip is the adapter's line, minus its brackets.
+      value = /\bactive\b/i.test(e.detail) ? "active" : "?";
+      detail = e.detail.replace(/\s*\(([^)]*)\)\s*$/, " · $1");
     } else {
       detail = "quota unknown";
     }

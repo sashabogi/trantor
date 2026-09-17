@@ -111,7 +111,7 @@ export function Home({ client, me, onOpenProject }: {
                     title={`${e.provider} · ${e.kind}${e.plan ? ` · ${e.plan}` : ""}`}>
                 <span className="tr-dot" style={{ background: e.low ? "var(--color-tr-fail)" : "var(--color-tr-ok)" }} />
                 {e.kind === "prepaid" ? `${e.label || e.provider}${e.remaining != null ? ` $${e.remaining.toFixed(0)}` : ""}`
-                 : e.kind === "quota" ? `${e.label || e.provider} ${e.remainingPct ?? "?"}%`
+                 : e.kind === "quota" ? `${e.label || e.provider} ${e.remainingPct != null ? `${e.remainingPct}%` : /\bactive\b/i.test(e.detail ?? "") ? "active" : "?"}`
                  : `${e.label || e.provider}`}
               </span>
             ))}

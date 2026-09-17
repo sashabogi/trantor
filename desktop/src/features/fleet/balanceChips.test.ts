@@ -83,7 +83,33 @@ describe("quota rows", () => {
   });
 
   it("shows a question mark when the quota is unknown", () => {
-    expect(chipFrom(row({ kind: "quota" }))!.value).toBe("?");
+    const c = chipFrom(row({ kind: "quota" }))!;
+    expect(c.value).toBe("?");
+    expect(c.tooltip).toContain("quota unknown");
+  });
+
+  // #7413 — qwen reads only the wall: an active plan has no number, and that is not "unknown".
+  it("reads an active plan with a console-only gauge as active, never a question mark", () => {
+    const c = chipFrom(row({ provider: "qwen", label: "Qwen", kind: "quota", plan: "token plan", detail: "plan active (remaining % is console-only)" }))!;
+    expect(c.value).toBe("active");
+    expect(c.tooltip).toContain("plan active · remaining % is console-only");
+    expect(c.tooltip).not.toContain("quota unknown");
+    expect(c.tone).toBe("ok");
+    expect(c.barPct).toBeNull();
+  });
+
+  it("keeps the question mark when the detail does not say the plan is active", () => {
+    const c = chipFrom(row({ kind: "quota", detail: "gauge unreachable" }))!;
+    expect(c.value).toBe("?");
+    expect(c.tooltip).toContain("gauge unreachable");
+  });
+
+  it("still reads the exhausted wall as 100% used with the reset, detail or not", () => {
+    const c = chipFrom(row({ provider: "qwen", label: "Qwen", kind: "quota", remainingPct: 0, plan: "token plan", detail: "7-day token plan exhausted", resetTime: Date.now() + 3 * 24 * 3600e3 }))!;
+    expect(c.value).toBe("100% used 3d");
+    expect(c.barPct).toBe(100);
+    expect(c.tooltip).toContain("0% left");
+    expect(c.tooltip).toContain("resets in 3d");
   });
 });
 
