@@ -26,6 +26,10 @@ ok(fmtBalance({ ok: true, label: "Sub", kind: "subscription", remaining: null })
 ok(isLow({ ok: true, kind: "quota", remainingPct: 8 }) === true, "isLow: quota 8% < 15% default → low");
 ok(isLow({ ok: true, kind: "quota", remainingPct: 99 }) === false, "isLow: quota 99% → not low");
 ok(isLow({ ok: true, kind: "quota", remainingPct: 40 }, DEFAULT_LOW, 50) === true, "isLow: quota respects custom pct (40<50)");
+// #7413 — qwen's active plan carries no number; the line prints the adapter's detail, not "unknown".
+ok(fmtBalance({ ok: true, label: "Qwen", kind: "quota", plan: "token plan", remainingPct: null, detail: "plan active (remaining % is console-only)" }) === "Qwen (token plan): plan active (remaining % is console-only)", "fmtBalance: active plan with a console-only gauge prints the detail");
+ok(fmtBalance({ ok: true, label: "Qwen", kind: "quota", plan: "token plan", remainingPct: null }) === "Qwen (token plan): quota unknown", "fmtBalance: no number and no detail is still quota unknown");
+ok(fmtBalance({ ok: true, label: "Qwen", kind: "quota", plan: "token plan", remainingPct: 0, detail: "7-day token plan exhausted", resetTime: Date.now() + 3 * 86400e3 }).startsWith("Qwen (token plan): 0% left · resets"), "fmtBalance: the exhausted wall still prints 0% left with the reset");
 ok(isLow({ ok: true, kind: "quota", remainingPct: null }) === false, "isLow: quota unknown% → never low");
 ok(fmtBalance({ ok: true, kind: "quota", label: "Kimi Code", plan: "intermediate", remainingPct: 99 }).includes("99% left"), "fmtBalance: quota shows % left + plan");
 
@@ -83,7 +87,7 @@ ok(fmtBalance({ ok: true, kind: "quota", label: "Kimi Code", plan: "intermediate
 }
 
 // --- windows rows (#5570: Claude scoped limits + Codex real windows, Orca parity) ---
-// Shapes captured LIVE 2026-08-30: oauth/usage limits[] weekly_scoped → a named scoped window;
+// Shapes captured LIVE (#5570): oauth/usage limits[] weekly_scoped → a named scoped window;
 // wham/usage primary/secondary → 5h/7d with unix-second resets (normalized to ms upstream).
 const claudeWin = { ok: true, label: "Claude", kind: "windows", windows: [
   { name: "5h", usedPct: 8, resetsAt: new Date(Date.now() + 5 * 3600e3).toISOString() },
@@ -106,7 +110,7 @@ ok(Array.isArray(noProfile) && noProfile.length === 0, "fetchBalances: no `only`
 const notConfigured = await fetchBalances({ OPENROUTER_API_KEY: "x" }, { only: ["deepseek", "claude"] });
 // Assert the INTENT (no .env scraping), not a row count: claude is in the profile and its
 // keyless OAuth adapter may legitimately produce a row on a machine with Claude Code installed
-// (latent since 0.18.15 — this suite hadn't run between that adapter landing and 2026-08-30).
+// (latent since 0.18.15 — this suite hadn't run since that adapter landed).
 ok(!notConfigured.find(e => e.provider === "openrouter"), "fetchBalances: OpenRouter key in env but NOT in profile → skipped (the .env-scraping bug fix)");
 ok(!notConfigured.find(e => e.provider === "deepseek"), "fetchBalances: deepseek configured but no key → still skipped");
 const noKey = await fetchBalances({}, { only: ["deepseek"] });
