@@ -63,6 +63,20 @@ pub(crate) struct GraphNode {
     pub(crate) orphan: bool,
     pub(crate) doc: bool,
     pub(crate) cycle_id: Option<u32>,
+    /// Flare's branch-keyword count over comment-stripped source (#7978); 0 for prose.
+    pub(crate) complexity: u32,
+    /// TODO / FIXME / HACK / XXX as whole words, over the raw source.
+    pub(crate) todos: u32,
+    /// Commits touching the path in the last 90 days.
+    pub(crate) churn: u32,
+}
+
+/// What the Hotspots lens reads beside the wiring: measured per file, churn from git.
+#[derive(Debug, Default)]
+pub(crate) struct Signals {
+    /// path -> (complexity, todos)
+    measured: BTreeMap<String, (u32, u32)>,
+    churn: BTreeMap<String, u32>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -155,13 +169,309 @@ pub(crate) fn build_graph(root: &Path, graft: Option<&Path>, path_env: &str) -> 
     let started = Instant::now();
     let built = run_build(graft, root, path_env).and_then(|()| read_wiring(root));
     match built {
-        Ok(wiring) => Response::Graph(derive(
-            &wiring,
-            &root.to_string_lossy(),
-            started.elapsed().as_millis() as u64,
-        )),
+        Ok(wiring) => {
+            let files: Vec<&str> = wiring
+                .nodes
+                .iter()
+                .filter(|node| node.kind == "file")
+                .map(|node| node.path.as_str())
+                .collect();
+            let signals = Signals {
+                measured: measure(root, &files),
+                churn: git_churn(root, path_env),
+            };
+            Response::Graph(derive(
+                &wiring,
+                &root.to_string_lossy(),
+                started.elapsed().as_millis() as u64,
+                &signals,
+            ))
+        }
         Err(error) => Response::Error { error },
     }
+}
+
+fn is_word(c: char) -> bool {
+    c.is_ascii_alphanumeric() || c == '_'
+}
+
+/// Flare's `PRESERVE_STRING_RE`: the quote that follows `from`, `import`, `import(` or
+/// `require(` opens an import specifier, whose text the strip keeps.
+fn preserves_string(recent: &str) -> bool {
+    let ends_with_word = |text: &str, word: &str| {
+        text.ends_with(word) && !text[..text.len() - word.len()].chars().last().is_some_and(is_word)
+    };
+    let trimmed = recent.trim_end();
+    match trimmed.strip_suffix('(') {
+        Some(before) => {
+            let before = before.trim_end();
+            ends_with_word(before, "import") || ends_with_word(before, "require")
+        }
+        None => ends_with_word(trimmed, "from") || ends_with_word(trimmed, "import"),
+    }
+}
+
+/// The last 32 chars, Flare's `recent.slice(-32)`.
+fn tail32(text: &str) -> &str {
+    let cut = text.char_indices().rev().nth(31).map_or(0, |(at, _)| at);
+    &text[cut..]
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum StripState {
+    Code,
+    Line,
+    Block,
+    Single,
+    Double,
+    Template,
+}
+
+/// Flare's `stripJsComments` (parser.ts): comments and string bodies become spaces, import
+/// specifiers and line structure survive, `${ }` nests inside template literals.
+pub(crate) fn strip_js_comments(src: &str) -> String {
+    let chars: Vec<char> = src.chars().collect();
+    let n = chars.len();
+    let mut out = String::with_capacity(src.len());
+    let mut recent = String::new();
+    let mut state = StripState::Code;
+    let mut template_stack: Vec<u32> = Vec::new();
+    let mut preserve = false;
+    let mut i = 0;
+    // `recent` is the tail of emitted code the preserve check reads; trimmed in batches.
+    let push_code = |out: &mut String, recent: &mut String, text: &str| {
+        out.push_str(text);
+        recent.push_str(text);
+        if recent.len() > 256 {
+            let cut = recent.char_indices().rev().nth(31).map_or(0, |(at, _)| at);
+            recent.drain(..cut);
+        }
+    };
+    while i < n {
+        let c = chars[i];
+        let next = if i + 1 < n { Some(chars[i + 1]) } else { None };
+        match state {
+            StripState::Code => {
+                if c == '/' && next == Some('/') {
+                    state = StripState::Line;
+                    out.push_str("  ");
+                    i += 2;
+                    continue;
+                }
+                if c == '/' && next == Some('*') {
+                    state = StripState::Block;
+                    out.push_str("  ");
+                    i += 2;
+                    continue;
+                }
+                if c == '\'' || c == '"' {
+                    state = if c == '\'' { StripState::Single } else { StripState::Double };
+                    preserve = preserves_string(tail32(&recent));
+                    push_code(&mut out, &mut recent, c.encode_utf8(&mut [0; 4]));
+                    i += 1;
+                    continue;
+                }
+                if c == '`' {
+                    state = StripState::Template;
+                    template_stack.push(0);
+                    push_code(&mut out, &mut recent, "`");
+                    i += 1;
+                    continue;
+                }
+                if c == '}' && !template_stack.is_empty() {
+                    let depth = *template_stack.last().unwrap_or(&0);
+                    if depth == 0 {
+                        state = StripState::Template;
+                        push_code(&mut out, &mut recent, "}");
+                        i += 1;
+                        continue;
+                    }
+                    if let Some(top) = template_stack.last_mut() {
+                        *top -= 1;
+                    }
+                } else if c == '{' && !template_stack.is_empty() {
+                    if let Some(top) = template_stack.last_mut() {
+                        *top += 1;
+                    }
+                }
+                push_code(&mut out, &mut recent, c.encode_utf8(&mut [0; 4]));
+                i += 1;
+            }
+            StripState::Line => {
+                if c == '\n' {
+                    state = StripState::Code;
+                    out.push('\n');
+                } else {
+                    out.push(' ');
+                }
+                i += 1;
+            }
+            StripState::Block => {
+                if c == '*' && next == Some('/') {
+                    state = StripState::Code;
+                    out.push_str("  ");
+                    i += 2;
+                    continue;
+                }
+                out.push(if c == '\n' { '\n' } else { ' ' });
+                i += 1;
+            }
+            StripState::Single | StripState::Double => {
+                let quote = if state == StripState::Single { '\'' } else { '"' };
+                if c == '\\' {
+                    if preserve {
+                        out.extend(chars[i..(i + 2).min(n)].iter());
+                    } else {
+                        out.push_str("  ");
+                    }
+                    i += 2;
+                    continue;
+                }
+                if c == quote || c == '\n' {
+                    state = StripState::Code;
+                    push_code(&mut out, &mut recent, c.encode_utf8(&mut [0; 4]));
+                    i += 1;
+                    continue;
+                }
+                out.push(if preserve { c } else { ' ' });
+                i += 1;
+            }
+            StripState::Template => {
+                if c == '\\' {
+                    out.push_str("  ");
+                    i += 2;
+                    continue;
+                }
+                if c == '`' {
+                    state = StripState::Code;
+                    template_stack.pop();
+                    push_code(&mut out, &mut recent, "`");
+                    i += 1;
+                    continue;
+                }
+                if c == '$' && next == Some('{') {
+                    state = StripState::Code;
+                    push_code(&mut out, &mut recent, "${");
+                    i += 2;
+                    continue;
+                }
+                out.push(if c == '\n' { '\n' } else { ' ' });
+                i += 1;
+            }
+        }
+    }
+    out
+}
+
+/// Whole-word hits, `\b(a|b)\b` with JS's ASCII word class.
+fn count_words(text: &str, words: &[&str]) -> u32 {
+    let mut count = 0;
+    let mut run = String::new();
+    for c in text.chars().chain(std::iter::once(' ')) {
+        if is_word(c) {
+            run.push(c);
+            continue;
+        }
+        if !run.is_empty() && words.contains(&run.as_str()) {
+            count += 1;
+        }
+        run.clear();
+    }
+    count
+}
+
+/// Flare's `jsComplexity` over stripped source: branch keywords, `&&`/`||`, and `?` not
+/// followed by `.`, `?` or `:` (so `a ?? b` counts once, as Flare counts it).
+pub(crate) fn js_complexity(stripped: &str) -> u32 {
+    let keywords = count_words(stripped, &["if", "for", "while", "case", "catch", "do"]);
+    let chars: Vec<char> = stripped.chars().collect();
+    let mut logical = 0;
+    let mut ternary = 0;
+    let mut i = 0;
+    while i < chars.len() {
+        let pair = (chars[i], chars.get(i + 1).copied());
+        if matches!(pair, ('&', Some('&')) | ('|', Some('|'))) {
+            logical += 1;
+            i += 2;
+            continue;
+        }
+        i += 1;
+    }
+    i = 0;
+    while i + 1 < chars.len() {
+        if chars[i] == '?' && !matches!(chars[i + 1], '.' | '?' | ':') {
+            ternary += 1;
+            i += 2;
+            continue;
+        }
+        i += 1;
+    }
+    keywords + logical + ternary
+}
+
+/// Flare's `pyComplexity`: `#` comments cut per line, then the Python branch words.
+pub(crate) fn py_complexity(source: &str) -> u32 {
+    let stripped: String = source
+        .lines()
+        .map(|line| line.split_once('#').map_or(line, |(code, _)| code))
+        .collect::<Vec<_>>()
+        .join("\n");
+    count_words(&stripped, &["if", "elif", "for", "while", "except", "and", "or", "case"])
+}
+
+/// Flare's `countTodos`, over the raw source, comments included.
+pub(crate) fn count_todos(content: &str) -> u32 {
+    count_words(content, &["TODO", "FIXME", "HACK", "XXX"])
+}
+
+/// Flare scores JS/TS and Python and leaves prose at 0; every other code file graft indexed
+/// (Rust here) takes the JS rule, whose comments and branch words read the same way.
+pub(crate) fn complexity_of(path: &str, content: &str) -> u32 {
+    if is_doc_path(path) {
+        return 0;
+    }
+    let ext = path.rsplit_once('.').map(|(_, ext)| ext.to_ascii_lowercase());
+    if ext.as_deref() == Some("py") {
+        return py_complexity(content);
+    }
+    js_complexity(&strip_js_comments(content))
+}
+
+/// (complexity, todos) per file, read off the scope's tree; a file gone since the build is 0.
+fn measure(root: &Path, files: &[&str]) -> BTreeMap<String, (u32, u32)> {
+    files
+        .iter()
+        .map(|path| {
+            let content = std::fs::read(root.join(path))
+                .map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
+                .unwrap_or_default();
+            (path.to_string(), (complexity_of(path, &content), count_todos(&content)))
+        })
+        .collect()
+}
+
+/// Commits per path over the last 90 days, paths relative to `root` like the wiring's.
+pub(crate) fn git_churn(root: &Path, path_env: &str) -> BTreeMap<String, u32> {
+    let mut churn = BTreeMap::new();
+    let Ok(out) = std::process::Command::new("git")
+        .args(["log", "--format=", "--name-only", "--since=90.days", "--relative"])
+        .current_dir(root)
+        .env("PATH", path_env)
+        .stdin(Stdio::null())
+        .output()
+    else {
+        return churn;
+    };
+    if !out.status.success() {
+        return churn;
+    }
+    for line in String::from_utf8_lossy(&out.stdout).lines() {
+        let path = line.trim();
+        if !path.is_empty() {
+            *churn.entry(path.to_string()).or_insert(0) += 1;
+        }
+    }
+    churn
 }
 
 fn file_of(id: &str) -> &str {
@@ -317,7 +627,7 @@ fn find_cycles(adjacency: &[Vec<usize>]) -> (Vec<Option<u32>>, u32) {
 
 /// Collapse symbol edges to file pairs and label every file node. Same-file edges and edges
 /// to targets graft left unresolved are dropped; the latter are counted in meta.
-fn derive(wiring: &Wiring, root: &str, build_ms: u64) -> CodeGraph {
+fn derive(wiring: &Wiring, root: &str, build_ms: u64, signals: &Signals) -> CodeGraph {
     let mut chars: BTreeMap<&str, u64> = BTreeMap::new();
     for node in wiring.nodes.iter().filter(|node| node.kind == "file") {
         chars.insert(node.path.as_str(), node.chars);
@@ -389,6 +699,9 @@ fn derive(wiring: &Wiring, root: &str, build_ms: u64) -> CodeGraph {
                 orphan,
                 doc,
                 cycle_id: cycle_ids[i],
+                complexity: signals.measured.get(*path).map_or(0, |m| m.0),
+                todos: signals.measured.get(*path).map_or(0, |m| m.1),
+                churn: signals.churn.get(*path).copied().unwrap_or(0),
             }
         })
         .collect();
@@ -541,7 +854,7 @@ mod tests {
 
     #[test]
     fn derive_collapses_symbol_edges_to_file_pairs_and_labels_every_node() {
-        let graph = derive(&fixture(), "/repo", 7);
+        let graph = derive(&fixture(), "/repo", 7, &Signals::default());
         assert_eq!(graph.root, "/repo");
         assert_eq!(graph.meta.build_ms, 7);
         assert_eq!(graph.meta.files, 12);
@@ -675,7 +988,7 @@ mod tests {
             }
         );
 
-        let control = derive(&fixture(), "/fixture", 0);
+        let control = derive(&fixture(), "/fixture", 0, &Signals::default());
         assert_eq!(control.meta.cycles, 1, "positive control: the fixture's 2-cycle is found");
         assert_eq!(
             self_reachable(&adjacency_of(&control)),
@@ -749,5 +1062,104 @@ mod tests {
             graph.meta.cycles,
             elapsed
         );
+    }
+
+    const COMPLEXITY_FIXTURE: &str = include_str!("../fixtures/complexity.ts");
+    /// Taken once from the Flare clone (parser.ts at 5adc94b) over the same fixture text.
+    const FLARE_COMPLEXITY: u32 = 18;
+    const FLARE_TODOS: u32 = 4;
+
+    #[test]
+    fn complexity_of_the_fixture_matches_flare() {
+        assert_eq!(js_complexity(&strip_js_comments(COMPLEXITY_FIXTURE)), FLARE_COMPLEXITY);
+        assert_eq!(complexity_of("fixtures/complexity.ts", COMPLEXITY_FIXTURE), FLARE_COMPLEXITY);
+        assert_eq!(count_todos(COMPLEXITY_FIXTURE), FLARE_TODOS);
+        assert_eq!(complexity_of("docs/complexity.md", COMPLEXITY_FIXTURE), 0, "prose has no complexity");
+    }
+
+    #[test]
+    fn complexity_strip_blanks_strings_and_comments_and_keeps_import_specifiers_like_flare() {
+        let stripped = strip_js_comments(COMPLEXITY_FIXTURE);
+        let lines: Vec<&str> = stripped.lines().collect();
+        assert_eq!(lines.len(), COMPLEXITY_FIXTURE.lines().count(), "line structure survives");
+        assert_eq!(lines[0].trim(), "", "the header comment is spaces");
+        assert!(lines[2].starts_with(r#"import { readFile } from "node:fs/promises";"#), "{}", lines[2]);
+        assert_eq!(lines[3], r#"import type { Options } from "./if-options";"#);
+        assert_eq!(lines[7], r#"const NOT_CODE = "                                                           ";"#);
+        assert_eq!(lines[8], r#"const TEMPLATE = `      ${"   "}    ${1 ? "    " : "     "}   `;"#);
+        assert!(!stripped.contains("TODO"), "a line comment is blanked");
+        assert_eq!(strip_js_comments("a = 'x\\'y'; // c\nb"), "a = '    ';     \nb", "an escape blanks to two spaces");
+        assert_eq!(strip_js_comments("require( 'if' )"), "require( 'if' )");
+        assert_eq!(strip_js_comments("import('if')"), "import('if')");
+        assert_eq!(strip_js_comments("x = f('if')"), "x = f('  ')");
+    }
+
+    #[test]
+    fn complexity_counts_words_and_operators_the_way_flare_s_regexes_do() {
+        assert_eq!(js_complexity("if (a && b || c) { }"), 3);
+        assert_eq!(js_complexity("iffy ifs _if if_"), 0, "whole words only");
+        assert_eq!(js_complexity("a?.b ?? c"), 1, "`?.` is not a ternary, `??` counts once");
+        assert_eq!(js_complexity("x ? y : z"), 1);
+        assert_eq!(js_complexity("let t: {w?: number}"), 0);
+        assert_eq!(js_complexity("&&&"), 1);
+        assert_eq!(js_complexity("||||"), 2);
+        assert_eq!(js_complexity("do {} while (x) for (;;) case 1: catch (e)"), 5);
+        assert_eq!(js_complexity("?"), 0, "a trailing ? has nothing after it");
+        assert_eq!(py_complexity("if a and b or c:  # while\n    pass\nelif d: x\nfor i in y: z\nexcept E: w"), 6);
+        assert_eq!(complexity_of("tool.py", "# if\nif x: pass"), 1);
+        assert_eq!(complexity_of("src/lib.rs", "// if\nif x { } else if y { } while z { }"), 3);
+        assert_eq!(count_todos("TODO FIXME HACK XXX TODOS xTODO // TODO"), 5);
+    }
+
+    #[test]
+    fn complexity_todos_and_churn_ride_the_node_and_cross_the_bridge_in_camel_case() {
+        let mut signals = Signals::default();
+        signals.measured.insert("lib/a.ts".to_string(), (7, 2));
+        signals.churn.insert("lib/a.ts".to_string(), 4);
+        signals.churn.insert("not/in/graph.ts".to_string(), 9);
+        let graph = derive(&fixture(), "/repo", 0, &signals);
+        let a = node(&graph, "lib/a.ts");
+        assert_eq!((a.complexity, a.todos, a.churn), (7, 2, 4));
+        let b = node(&graph, "lib/b.ts");
+        assert_eq!((b.complexity, b.todos, b.churn), (0, 0, 0));
+        let json = serde_json::to_string(&Response::Graph(graph)).unwrap();
+        assert!(json.contains(r#""complexity":7"#) && json.contains(r#""todos":2"#) && json.contains(r#""churn":4"#));
+    }
+
+    #[test]
+    fn complexity_churn_reads_the_last_90_days_of_this_checkout() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..").canonicalize().unwrap();
+        let churn = git_churn(&root, &crate::terminal_path());
+        let lib = churn.get("desktop/src-tauri/src/lib.rs").copied().unwrap_or(0);
+        assert!(lib > 0, "lib.rs is touched in the log");
+        assert!(churn.keys().all(|p| !p.starts_with('/')), "paths are relative to the root");
+        let nowhere = git_churn(Path::new("/"), "/usr/bin:/bin");
+        assert!(nowhere.is_empty(), "no repository is an empty map, never an error");
+    }
+
+    /// The card's drill: the Hotspots lens ranks lib.rs first on this repo. Same warm graft
+    /// build as the #7952 drill, the rank read off the node fields the lens reads.
+    #[test]
+    fn complexity_drill_real_checkout_ranks_lib_rs_first_by_hotspot() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..").canonicalize().unwrap();
+        let path_env = crate::terminal_path();
+        let graft = resolve_on(&path_env)
+            .unwrap_or_else(|| panic!("the drill needs graft on PATH ({path_env}); npm i -g @nanonets/graft"));
+        let Response::Graph(graph) = build_graph(&root, Some(&graft), &path_env) else {
+            panic!("build failed")
+        };
+        let hotspot = |n: &GraphNode| u64::from(n.complexity) * (u64::from(n.churn.min(50)) + 1);
+        let mut ranked: Vec<&GraphNode> = graph.nodes.iter().collect();
+        ranked.sort_by(|a, b| hotspot(b).cmp(&hotspot(a)).then_with(|| a.id.cmp(&b.id)));
+        let top: Vec<String> = ranked
+            .iter()
+            .take(3)
+            .map(|n| format!("{} (complexity {}, churn {}, hotspot {})", n.id, n.complexity, n.churn, hotspot(n)))
+            .collect();
+        eprintln!("drill hotspots: {}", top.join(" · "));
+        assert!(hotspot(ranked[0]) > 0, "positive control: the top hotspot is a real number");
+        assert_eq!(ranked[0].id, "desktop/src-tauri/src/lib.rs");
+        let measured = graph.nodes.iter().filter(|n| n.complexity > 0).count();
+        assert!(measured * 2 > graph.nodes.len(), "most code files carry a complexity");
     }
 }
