@@ -944,16 +944,6 @@ function isContract(message) {
   return message?.kind === "contract" || /^\s*contract\s*:/i.test(text) || CARD_REF_RE.test(text);
 }
 
-function isRunnerSession(session) {
-  const suffix = `:${PROJ}`;
-  const name = String(session || "");
-  if (!name.endsWith(suffix)) return false;
-  const label = name.slice(0, -suffix.length);
-  // Crew labels are CLI/provider slugs. Host sessions keep their machine-style identity and remain
-  // valid direct assigners; runner-to-runner prose needs `contract:` or a card reference.
-  return /^[a-z0-9_.-]+$/.test(label) && !label.startsWith("hub:");
-}
-
 // A hub staleness alert describes a moment, so it EXPIRES; a peer's message never does, because a
 // seat missing a teammate's request is the failure this bus exists to prevent.
 const HUB_ALERT_TTL_MS = Number(process.env.TRANTOR_HUB_ALERT_TTL_MS || 30 * 60_000);
@@ -969,12 +959,12 @@ function shouldWake(message) {
   // into the next turn's prompt like a broadcast and never buys a CLI session of its own.
   if (message?.wake === false) return false;
   if (message?.to === SESSION) {
+    // #7766: with wake unset or true the sender's flag IS the decision. No keyword, card or
+    // sender-shape heuristic on the body second-guesses a direct message any more, so a plain
+    // question buys its turn. kind:status stays chatter; what is still demoted tells the sender
+    // (see the demotion notice at the wake split).
     if (message?.kind === "status") return false;
-    // Safety net for senders that never set the flag: a direct message carrying no card and no
-    // instruction is context. Typed alerts and overseer warnings still wake (#5760).
-    const typed = message?.kind === "alert" || /^🤝 OVERSEER /.test(String(message?.text || ""));
-    if (!typed && !isContract(message) && !carriesWork(message?.text)) return false;
-    return !isRunnerSession(message?.from) || isContract(message);
+    return true;
   }
   return message?.to === "all"
     && isContract(message)
@@ -1106,6 +1096,20 @@ function askedExcerpt(message) {
     const rest = msgs.filter(m => !fyi.includes(m));
     const direct = rest.filter(m => m.to === SESSION && shouldWake(m));
     const mentions = rest.filter(m => m.to === "all" && shouldWake(m));
+    // #7766: a direct message that is STILL demoted to context tells its SENDER in one line, so a
+    // dropped ask is visible instead of looking like a dead seat. Two demotions stay silent: the
+    // sender's own wake:false, and kind:status chatter — this notice is itself kind status, so
+    // answering one would loop. What remains today is the expired hub alert.
+    const demotedSenders = new Set();
+    for (const m of rest) {
+      if (m.to !== SESSION || direct.includes(m) || m.wake === false || m.kind === "status") continue;
+      const who = String(m.from || "");
+      if (!who || who === SESSION || demotedSenders.has(who)) continue;
+      demotedSenders.add(who);
+      log(`\x1b[33mdirect message demoted to context\x1b[0m — telling ${who}`);
+      api("/send", { from: SESSION, to: who, project: senderProjectOf(who) || PROJ, kind: "status",
+        text: `ℹ️ ${SESSION} did not turn on your direct message — demoted to context: "${askedExcerpt(m)}". Re-send citing a card if it still needs a turn` }).catch(() => {});
+    }
     // #6134: messages that do not earn a turn still become context, including direct acks.
     // #7430: stale hub alerts are shed HERE too, not only at boot — one that arrives already past
     // its TTL must not sit in every prompt until the next successful turn clears the batch.

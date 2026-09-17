@@ -1,8 +1,9 @@
 #!/usr/bin/env node
-// trantor wake-policy drill (#6134) — the two rules that cut the fleet's turn count:
-// a turn costs a session (only a contract or bounce buys one; wake:false and acks batch as
-// context) and one session per card (a wake naming a new card starts a FRESH CLI session, never
-// an endless resume). Hermetic: mock hub + fake CLI driving the REAL bin/crew-runner.mjs.
+// trantor wake-policy drill (#6134, #7766) — the two rules that cut the fleet's turn count:
+// a turn costs a session (on a direct message the SENDER's wake flag decides: unset or true turns,
+// false batches as context; receipts and kind:status never wake) and one session per card (a wake
+// naming a new card starts a FRESH CLI session, never an endless resume). Hermetic: mock hub +
+// fake CLI driving the REAL bin/crew-runner.mjs.
 import http from "node:http";
 import { spawn } from "node:child_process";
 import { mkdtempSync, writeFileSync, readFileSync, chmodSync, mkdirSync } from "node:fs";
@@ -258,13 +259,56 @@ console.log("\n## a turn costs a session");
   ok("a wake:false message ALONE never starts a turn", r.wakeTurns.length === 0, `${r.wakeTurns.length} wake turn(s)`);
 }
 {
-  // The safety net: the sender set no flag at all, and the message is plainly not work.
+  // #7766: the old shape-based veto is gone — the SENDER decides. An unflagged direct message
+  // buys a turn whatever its text says; a sender who wants context must set wake:false.
   const r = await drill([{ text: "thanks, acknowledged" }]);
-  ok("an ack with no flag set batches on its shape alone", r.wakeTurns.length === 0, `${r.wakeTurns.length} wake turn(s)`);
+  ok("#7766: an unflagged direct message buys a turn even when the text reads as an ack",
+    r.wakeTurns.length === 1, `${r.wakeTurns.length} wake turn(s)`);
+}
+{
+  // #7766: the drill the card is ABOUT — no card id, no imperative word, no wake flag.
+  const r = await drill([{ text: "did the gate pass on your last run?" }]);
+  ok("#7766: a plain question, no card id, no imperative, default wake -> exactly one turn",
+    r.wakeTurns.length === 1, `${r.wakeTurns.length} wake turn(s)`);
+}
+{
+  // #7766: the field shape — the ask came from a sibling seat, not a host session, and still
+  // must wake. The old runner-label veto is gone with the keyword net.
+  const r = await drill([{ from: "kimi:tt-wake", text: "can you check the schema before you ship?" }]);
+  ok("#7766: a plain question from a sibling seat wakes too, not only host senders",
+    r.wakeTurns.length === 1, `${r.wakeTurns.length} wake turn(s)`);
 }
 {
   const r = await drill([{ text: "#7002 is bounced: the gate is red" }]);
   ok("a bounce naming a card wakes", r.wakeTurns.length === 1, `${r.wakeTurns.length} wake turn(s)`);
+}
+
+// ---- drill 1b: a demotion tells its sender (#7766) ----------------------------------------------
+// Silence was the second half of the defect: a dropped ask looked like a dead seat. Whatever is
+// still demoted says so; the sender's own wake:false and kind:status chatter stay quiet (the
+// notice is itself kind status — answering one would loop).
+console.log("\n## a demotion tells its sender");
+{
+  const r = await drill([
+    { from: "hub:duty", text: "🤝 OVERSEER file-conflict: another seat edits the file you hold", ts: Date.now() - 31 * 60_000 },
+    { text: "contract: card #7800, the real work" },
+  ], { waitMs: 5000 });
+  ok("#7766: the real work in the batch still buys its turn", r.wakeTurns.length === 1, `${r.wakeTurns.length} wake turn(s)`);
+  const notices = r.sent.filter(m => m.to === "hub:duty" && /did not turn on your direct message/.test(m.text || ""));
+  ok("#7766: a demoted direct message (expired hub alert) tells its sender, once",
+    notices.length === 1, JSON.stringify(r.sent.map(m => ({ to: m.to, text: m.text }))));
+}
+{
+  const r = await drill([{ text: "fyi only, nothing owed", wake: false }]);
+  ok("#7766: the sender's own wake:false batches silently — no demotion notice",
+    r.wakeTurns.length === 0 && !r.sent.some(m => /did not turn on your direct message/.test(m.text || "")),
+    `${r.wakeTurns.length} wake turn(s)`);
+}
+{
+  const r = await drill([{ kind: "status", text: "presence ping, nothing owed" }]);
+  ok("#7766: a direct kind:status still never buys a turn and stays silent",
+    r.wakeTurns.length === 0 && !r.sent.some(m => /did not turn on your direct message/.test(m.text || "")),
+    `${r.wakeTurns.length} wake turn(s)`);
 }
 
 // ---- drill 2: two cards -> two sessions -------------------------------------------------------
