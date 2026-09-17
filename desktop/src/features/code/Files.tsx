@@ -12,6 +12,7 @@ import { ChangesView } from "./ChangesView";
 import { decideReload, type FileStat } from "./liveReload";
 import { closeTab, GRAPH_PATH, markDirty, markExternalMutation, openGraphTab, openInTabs, tabLabel, togglePin, type CodeTab, type TabView } from "./codeTabs";
 import { GraphView } from "./GraphView";
+import { ReviewChip } from "./ReviewChip";
 import { diskSignature, externalMutationOnLoad } from "./tabGuard";
 import {
   dropDocument,
@@ -357,6 +358,15 @@ export function Files({ client, project, lens, onLens, path, seat }: {
                   </button>
                 ))}
               </div>
+            )}
+            {/* #7971: the tier and blast of the open file ride the Changes strip, off the scope's graph. */}
+            {activePath && body && changedFromHead && activeView === "changes" && (
+              <ReviewChip
+                project={project}
+                seat={activeScope === "project" ? null : activeScope}
+                path={activePath}
+                onOpenGraph={() => openGraph(activeScope)}
+              />
             )}
             <button
               type="button"
