@@ -6,7 +6,7 @@ use ed25519_dalek::{Signer, SigningKey};
 use rand::RngCore;
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
-use std::{collections::HashMap, fs, path::PathBuf, time::{SystemTime, UNIX_EPOCH}};
+use std::{collections::HashMap, fs, path::{Path, PathBuf}, time::{SystemTime, UNIX_EPOCH}};
 
 pub const SCHEME: &str = "trantor-v1";
 
@@ -104,19 +104,25 @@ pub fn hub_for_project(project: &str) -> String {
 /// A project is something you can actually OPEN: a hub you pinned, or a checkout on this machine.
 /// A positive rule, not a blocklist on name shapes: sessions register whatever string they resolved.
 pub fn known_projects() -> Vec<String> {
-    let mut out: Vec<String> = Vec::new();
+    let mut pinned: Vec<String> = Vec::new();
     if let Ok(raw) = fs::read_to_string(bus_dir().join("config.json")) {
         if let Ok(v) = serde_json::from_str::<serde_json::Value>(&raw) {
             if let Some(h) = v.get("hubs").and_then(|h| h.as_object()) {
-                out.extend(h.keys().cloned());
+                pinned.extend(h.keys().cloned());
             }
         }
     }
-    // Every checkout in the dev root, whether or not it was ever pinned. This is the list the
-    // operator means when they say "all of the projects are in the development folder".
     let root = std::env::var("TRANTOR_DEV_ROOT")
         .unwrap_or_else(|_| format!("{}/development", std::env::var("HOME").unwrap_or_default()));
-    if let Ok(rd) = fs::read_dir(&root) {
+    projects_in(Path::new(&root), pinned)
+}
+
+/// The pinned names plus every checkout in the dev root ("all of the projects are in the
+/// development folder"), minus any name whose checkout is a folder of projects: a wrapper the
+/// list offered was woken into a dead non-seat session (#6842).
+pub fn projects_in(root: &Path, pinned: Vec<String>) -> Vec<String> {
+    let mut out = pinned;
+    if let Ok(rd) = fs::read_dir(root) {
         for e in rd.flatten() {
             if !e.file_type().map(|t| t.is_dir()).unwrap_or(false) {
                 continue;
@@ -131,9 +137,37 @@ pub fn known_projects() -> Vec<String> {
             }
         }
     }
+    out.retain(|name| !folder_of_projects(&root.join(name)));
     out.sort();
     out.dedup();
     out
+}
+
+/// The immediate child repos of `dir`, bounded like lib/project.mjs countChildRepos (first 200
+/// entries, dot-dirs skipped).
+fn child_repos(dir: &Path) -> Vec<PathBuf> {
+    let Ok(rd) = fs::read_dir(dir) else { return Vec::new() };
+    let mut out: Vec<PathBuf> = rd
+        .flatten()
+        .take(200)
+        .filter(|e| !e.file_name().to_string_lossy().starts_with('.'))
+        .map(|e| e.path())
+        .filter(|p| p.is_dir() && p.join(".git").exists())
+        .collect();
+    out.sort();
+    out
+}
+
+/// The folder-of-projects rule, the twin of lib/project.mjs nonSeatReason: not a repo itself,
+/// two or more child repos. Such a dir can never be a seat, so the app must never offer it.
+pub fn folder_of_projects(dir: &Path) -> bool {
+    !dir.join(".git").exists() && child_repos(dir).len() >= 2
+}
+
+/// The real project(s) inside a folder of projects (#6842): the child repos carrying a CLAUDE.md.
+/// A stray clone or worktree beside the real one carries none.
+pub fn nested_projects(dir: &Path) -> Vec<PathBuf> {
+    child_repos(dir).into_iter().filter(|p| p.join("CLAUDE.md").is_file()).collect()
 }
 
 #[cfg(test)]
@@ -150,6 +184,53 @@ mod tests {
         assert!(!safe_name("../../etc/passwd").contains(".."));
         assert_eq!(safe_name("MacBook-Pro-M1:trantor"), "MacBook-Pro-M1_trantor");
         assert_eq!(safe_name("builtbetter.ai"), "builtbetter.ai");
+    }
+}
+
+#[cfg(test)]
+mod folder_of_projects_tests {
+    use super::*;
+
+    /// A dev root holding: a real repo, a wrapper (not a repo) with one nested CLAUDE.md repo
+    /// plus two stray repos, a scratch dir, and a lone-child dir (one repo inside, not a wrapper).
+    fn dev_root() -> PathBuf {
+        let root = std::env::temp_dir().join(format!("trantor-6842-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join("real/.git")).unwrap();
+        fs::create_dir_all(root.join("wrapper.ai/builtbetter/.git")).unwrap();
+        fs::write(root.join("wrapper.ai/builtbetter/CLAUDE.md"), "# builtbetter").unwrap();
+        fs::create_dir_all(root.join("wrapper.ai/builtbetter-git/.git")).unwrap();
+        fs::create_dir_all(root.join("wrapper.ai/builtbetter-worktree/.git")).unwrap();
+        fs::create_dir_all(root.join("wrapper.ai/.tmp/.git")).unwrap();
+        fs::create_dir_all(root.join("scratch")).unwrap();
+        fs::create_dir_all(root.join("lone/only/.git")).unwrap();
+        root
+    }
+
+    #[test]
+    fn a_wrapper_dir_is_a_folder_of_projects_and_a_repo_or_lone_child_is_not() {
+        let root = dev_root();
+        assert!(folder_of_projects(&root.join("wrapper.ai")));
+        assert!(!folder_of_projects(&root.join("real")), "a git root is a project whatever it holds");
+        assert!(!folder_of_projects(&root.join("lone")), "one child repo does not make a wrapper");
+        assert!(!folder_of_projects(&root.join("scratch")));
+        assert!(!folder_of_projects(&root.join("missing")));
+    }
+
+    #[test]
+    fn the_nested_project_is_the_child_repo_with_a_claude_md_not_the_strays() {
+        let root = dev_root();
+        let nested = nested_projects(&root.join("wrapper.ai"));
+        assert_eq!(nested, vec![root.join("wrapper.ai/builtbetter")]);
+        assert!(nested_projects(&root.join("real")).is_empty());
+    }
+
+    #[test]
+    fn the_project_list_drops_a_wrapper_even_when_pinned_and_keeps_the_rest() {
+        let root = dev_root();
+        let pinned = vec!["wrapper.ai".to_string(), "remote-only".to_string(), "real".to_string()];
+        let list = projects_in(&root, pinned);
+        assert_eq!(list, vec!["real".to_string(), "remote-only".to_string()]);
     }
 }
 

@@ -221,6 +221,32 @@ fn pane_project_dir(raw: &str, pane: &str, expected: &Path) -> Result<(), String
     }
 }
 
+/// The refusal for a folder of projects (#6842), before any session starts. The row shows the
+/// part after the dash, so it opens with the fix: the nested project by name, then the
+/// promotion (mv into the dev root) that makes it appear in the list, or starting it in place.
+fn container_wake_refusal(project: &str, dir: &Path, nested: &[std::path::PathBuf]) -> String {
+    let root = dir.parent().unwrap_or(dir);
+    let name = |p: &std::path::PathBuf| p.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+    let head = format!("{project} is a folder of projects, not a project");
+    match nested {
+        [one] => {
+            let target = root.join(name(one));
+            let promote = if target.exists() {
+                format!("promote it beside {} under a free name", root.display())
+            } else {
+                format!("promote it: mv {} {}", one.display(), target.display())
+            };
+            format!("{head} — its project is {}: {promote}, or start it in place: cd {} && claude", name(one), one.display())
+        }
+        [] => format!("{head} — none of its repos carries a CLAUDE.md; promote the one you mean into {}", root.display()),
+        many => format!(
+            "{head} — it holds {}: promote the one you mean into {}",
+            many.iter().map(name).collect::<Vec<_>>().join(", "),
+            root.display()
+        ),
+    }
+}
+
 fn project_wake_reopen_args(project: &str) -> [&str; 2] {
     // An explicit project beats an inherited RELAY_PROJECT inside crew.sh. Its open path then
     // resolves `autonomy get harness --project "$PROJ"`; prompt/missing dials add no bypass flag.
@@ -301,6 +327,9 @@ pub(crate) async fn project_wake(
         return Err("kickoff prompt is required".into());
     }
     let dir = project_dir(&project).ok_or_else(|| format!("no local checkout for {project}"))?;
+    if crate::identity::folder_of_projects(&dir) {
+        return Err(container_wake_refusal(&project, &dir, &crate::identity::nested_projects(&dir)));
+    }
     // Mark the chain for the whole wake (#6201): the row and the chat header read the mark on
     // mount and the wake-progress events keep it current, so the idle gate never reads as
     // "idle, nothing to do". Drop unmarks on every exit path, errors included.
@@ -478,6 +507,22 @@ mod tests {
         let cli = project_wake_reopen_args("pros");
         assert_eq!(cli, ["open", "pros"]);
         assert!(!cli.contains(&"--dangerously-skip-permissions"));
+    }
+
+    // #6842 — the wrapper refusal is the fix itself: the nested project by name, the mv that
+    // promotes it into the list, and the in-place start; strays are never offered.
+    #[test]
+    fn wake_refuses_a_folder_of_projects_with_the_nested_project_and_the_promotion() {
+        let dir = Path::new("/Users/s/development/builtbetter.ai");
+        let nested = vec![dir.join("builtbetter")];
+        let line = container_wake_refusal("builtbetter.ai", dir, &nested);
+        assert!(line.starts_with("builtbetter.ai is a folder of projects, not a project — its project is builtbetter: "), "{line}");
+        assert!(line.contains("mv /Users/s/development/builtbetter.ai/builtbetter /Users/s/development/builtbetter"), "{line}");
+        assert!(line.contains("cd /Users/s/development/builtbetter.ai/builtbetter && claude"), "{line}");
+        let none = container_wake_refusal("builtbetter.ai", dir, &[]);
+        assert!(none.contains("none of its repos carries a CLAUDE.md"), "{none}");
+        let many = container_wake_refusal("w", dir, &[dir.join("a"), dir.join("b")]);
+        assert!(many.contains("it holds a, b"), "{many}");
     }
 
     // #6139 — the wake's line carries the kickoff outcome, the tries and the seconds, like the
