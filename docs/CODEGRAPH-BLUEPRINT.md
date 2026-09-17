@@ -104,7 +104,7 @@ lens can show the graph as a seat's tree has it, uncommitted edits included.
 **Refresh, in this order.** On file change: `file_watch` (`lib.rs` L2000) already emits
 `file-changed` batches every 200ms for the main checkout; the graph command debounces those to
 one `graft build` per quiet second. graft fingerprints files (`graft/.cache/fingerprint.*`), so a
-one-file edit re-extracts one file: measured 0.7s for a no-op build, 8.0s cold, so the first
+one-file edit re-extracts one file: measured 0.8s for a one-file change, 0.7s for a no-op, 8.0s cold, so the first
 open of a checkout that has no `graft/` yet is the only slow moment and shows a "building"
 state. On demand: a refresh affordance in the lens header calls the same command, which is also
 the path for seat worktrees (nothing watches them; extending `file_watch` to seat roots is a
