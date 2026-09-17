@@ -798,14 +798,6 @@ exit $turn_exit`;
   // never re-labelled auth — the qwen specimen exited 0 with a shipped commit (aa3c340) while a
   // short capture of echoed contract text tripped the regex.
   const newCommit = !!headBefore && gitOut(["rev-parse", "HEAD"], TURN_DIR) !== headBefore;
-  // #7759: the turn is HOLLOW when it exited 0 having neither changed the worktree (HEAD or
-  // porcelain vs the turn-start snapshot, untracked included) nor said anything beyond CLI
-  // chrome. State steps are exempt: their answer is the envelope, stderr silence is normal.
-  const worktreeChanged = newCommit || gitOut(["status", "--porcelain"], TURN_DIR) !== statusBefore;
-  const busActive = await busActivitySince(busSeqBefore);
-  lastEmptyTurn = !cut && realExit === 0 && effExit === 0 && !opts.state
-    && !worktreeChanged && !busActive && !substantiveOutput(ownOut);
-  if (lastEmptyTurn) log("\x1b[33mexit 0 but the turn was EMPTY — no worktree change, no substantive output, no bus activity\x1b[0m");
   if (realExit === 0 && looksLikeAuthDeath(ownOut, newCommit)) {
     effExit = 1;
     authHit = AUTH_MARKER_RE.exec(ownOut)[0];
@@ -818,6 +810,15 @@ exit $turn_exit`;
     lastEmptyOutput = true;
     log("\x1b[31mexit 0 but the turn produced NO output — treating as FAILED (empty-output)\x1b[0m");
   }
+  // #7759: the turn is HOLLOW when it exited 0 having neither changed the worktree (HEAD or
+  // porcelain vs the turn-start snapshot, untracked included), said anything beyond CLI chrome,
+  // nor posted to the bus. Computed LAST and only when the escalations above did not claim the
+  // turn: an auth death or a null completion is never re-labelled empty (#7759, #5405, #5481).
+  const worktreeChanged = newCommit || gitOut(["status", "--porcelain"], TURN_DIR) !== statusBefore;
+  const busActive = await busActivitySince(busSeqBefore);
+  lastEmptyTurn = !cut && realExit === 0 && effExit === 0 && !authHit && !opts.state
+    && !worktreeChanged && !busActive && !substantiveOutput(ownOut);
+  if (lastEmptyTurn) log("\x1b[33mexit 0 but the turn was EMPTY — no worktree change, no substantive output, no bus activity\x1b[0m");
   // #5868: the verdict rides the telemetry row so a classification survives the pane scrolling
   // away — the same "classified X because Y" shape the runner logs, in the seat's jsonl forever.
   const verdict = verdictFor(realExit, effExit, lastEmptyOutput, ownOut, lastEmptyTurn);

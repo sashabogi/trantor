@@ -40,7 +40,9 @@ console.log("\n## the rules");
   ok("#7759: classifyFailure gives the hollow turn its own reason and evidence",
     classifyFailure(0, "", false, true).reason === "empty-turn"
     && /no worktree change/.test(classifyFailure(0, "", false, true).matched));
-  ok("the both-streams-silent rule keeps its reason (ordering unchanged)",
+  ok("#7759: an auth-shaped turn is auth even when it was also workless — auth wins",
+    classifyFailure(0, "401 unauthorized: invalid api key", false, true).reason === "auth");
+  ok("#7759: the both-streams-silent rule keeps its reason (ordering unchanged)",
     classifyFailure(0, "", true, false).reason === "empty-output");
 }
 

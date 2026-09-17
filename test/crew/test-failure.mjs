@@ -411,7 +411,9 @@ async function drill(agent, script, opts = {}) {
 // transcript), so output on the streams must keep meaning success.
 {
   // prime one wake so the success path runs deliverWake → the assigner gets its ✅
-  const { sends } = await drill("opencode", '#!/bin/sh\necho "did the thing"\nexit 0\n',
+  // #7759: the success answer must clear the substantive floor, or the turn reads as a hollow
+  // EMPTY turn and its wake is never consumed — this drill tests the ack, not turn validity.
+  const { sends } = await drill("opencode", '#!/bin/sh\necho "did the thing on card #8020: the files changed, the gate ran green, and the card moved with a note, so this turn is done and consumed its wake."\nexit 0\n',
     { inbox: [{ text: "contract: do the thing on card #8020" }], waitMs: 4000 });
   ok("#5481: a turn with output and exit 0 is still success (no failure posted)",
      !sends.some((m) => /turn FAILED/.test(m.text || "")));
@@ -442,7 +444,9 @@ async function drill(agent, script, opts = {}) {
     // rather than setsid(1): macOS ships /usr/bin/perl but no setsid binary.
     `#!/bin/sh
 P="$HOME/.agent-bus/turn-codex-tt-fail-codex.txt"
-if grep -q "cut at the time box" "$P"; then echo "committed and reported"; exit 0; fi
+# #7759: the salvaged follow-up must clear the substantive floor, or the ledger row reads
+# outcome "empty" and the wake is never consumed — this drill tests the box sweep, not validity.
+if grep -q "cut at the time box" "$P"; then echo "committed the cut work: the fix landed, the gate ran green, and the card moved with a note, so this turn is done and consumed its wake."; exit 0; fi
 if grep -q "NEW BUS MESSAGE" "$P"; then
   echo "working..."
   /usr/bin/perl -e 'use POSIX; POSIX::setsid(); exec("sleep", "600")' &
@@ -532,8 +536,11 @@ exit 0
 # not CLI calls (#6301: the runner was right — 3 calls, one -c resume — the stub was wrong).
 printf '%s ' "$@" | tr '\\n' ' ' >> "$HOME/claude-argv.log"; printf '\\n' >> "$HOME/claude-argv.log"
 P="$HOME/.agent-bus/turn-claude-tt-fail-claude.txt"
+# #7759: the salvaged follow-up must clear the substantive floor, or the ledger row reads
+# outcome "empty" and the wake is never consumed — this drill tests the resume shape, not validity.
+# The follow-up prompt does NOT carry the NEW BUS MESSAGE wrapper, so key on "cut at the time box".
+if grep -q "cut at the time box" "$P"; then echo "landed the cut work: the fix is in, the gate is green, the card moved with a note, and the assigner has the outcome, so this turn is done."; exit 0; fi
 if grep -q "NEW BUS MESSAGE" "$P"; then
-  if grep -q "cut at the time box" "$P"; then echo "landed the cut work"; exit 0; fi
   echo "tokens used: 4,321"
   sleep 30
 fi
