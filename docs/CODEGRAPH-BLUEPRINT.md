@@ -417,7 +417,7 @@ Owns `hooks/lib/hollow-move.mjs` (add `graft blast --base <base> --depth all --f
 json`, 2.5s timeout, fail-open to "blast: unavailable") and the `blast` field the move posts;
 `hub/routes/cards.mjs` keeps the field on the card event and nothing else. The base is the
 card's `base:` sha when the contract carries one, else `git merge-base main HEAD`.
-Gate: `node test/hooks/test-hollow-move.mjs` (extend the existing file) and
+Gate: `node test/runner/test-hollow-move.mjs` (extend the existing file) and
 `node test/hub/test-events.mjs`.
 Drill (unit): a fixture worktree with one changed `lib/a.mjs` imported by two files yields a
 note line `blast: 2 files depend on the 1 changed`; a fixture with only `package.json`
