@@ -197,7 +197,9 @@ exit 0
       text: `✅ done on runner-b:${project} (exit 0, 1s) · asked: "older untyped contract"` },
     { id: ++seq, ts: Date.now(), from: `runner-a:${project}`, to: "all", kind: "status",
       text: "runner-a reporting — ready for a contract" },
-    { id: ++seq, ts: Date.now(), from: `runner-a:${project}`, to: `runner-b:${project}`,
+    // #7766: an ack is context only when its sender says so — an unflagged direct message earns a
+    // turn whatever it says, so the well-behaved ack carries wake:false.
+    { id: ++seq, ts: Date.now(), from: `runner-a:${project}`, to: `runner-b:${project}`, wake: false,
       text: "thanks, acknowledged" },
   );
   await sleep(900);
