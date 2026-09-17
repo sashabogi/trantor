@@ -11,7 +11,7 @@ import { randomUUID } from "node:crypto";
 import { createRequire } from "node:module";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { advise } from "./bin/advise.mjs";
-import { resolveProject, hostId, resolveHub, resolveHubInfo, nonSeatReason, handoffDir, orchWriterSid } from "./lib/project.mjs";
+import { resolveProject, hostId, resolveHubInfo, nonSeatReason, handoffDir, orchWriterSid } from "./lib/project.mjs";
 import { signedPost, signedGet } from "./hooks/lib/api.mjs";
 import { anchorCursor } from "./hooks/lib/inbox-ledger.mjs";
 import { assertNoSecrets } from "./lib/scrub.mjs";
@@ -62,10 +62,11 @@ const { z } = await dep("zod");
 // Stable project key: RELAY_PROJECT > git-repo-root basename > cwd basename. Keying by
 // the git root (not a loose cwd basename) stops one repo fragmenting into several lanes.
 const PROJECT = resolveProject(process.env.CLAUDE_PROJECT_DIR || process.cwd());
-// Hub URL is PER-PROJECT (TDD §12.1): RELAY_URL env → config.json hubs[PROJECT] → legacy
-// global `url` → local default. A project lives on exactly one hub; codependent projects
-// must share one, so both are pinned to the same hub via `trantor hub set`.
-const URL_BASE = resolveHub(PROJECT);   // boot-time snapshot: startup log only — every api() call re-resolves
+// Hub URL is PER-PROJECT (TDD §12.1): RELAY_URL env → config.json hubs[PROJECT] → legacy global
+// `url` → local default. The boot snapshot carries HOW it was chosen (#7893): a fallback hub must
+// say so at startup and in every tool error, never surface as silent localhost. api() re-resolves.
+const HUB_INFO = resolveHubInfo(PROJECT);
+const URL_BASE = HUB_INFO.url;
 // Identity: the runner's exact RELAY_SESSION wins, then its RELAY_AGENT. A multi-seat host such as
 // OpenCode contributes only RELAY_AGENT_FALLBACK in its global MCP config, so qwen/glm/deepseek do
 // not get rebranded "opencode" when that config is overlaid on the runner environment.
@@ -105,11 +106,13 @@ async function api(method, path, payload, { timeoutMs } = {}) {
     ? await signedGet(path, { session: SESSION, instance: INSTANCE_ID, project: PROJECT, timeoutMs })
     : await signedPost(path, { ...payload, _op: randomUUID() }, { session: SESSION, instance: INSTANCE_ID, project: PROJECT, timeoutMs });
   if (!r.ok) {
-    // A timeout is not an outage. `hub 0 on /tasks` read as a DEAD HUB when the hub was 200 OK and
-    // merely slow — /tasks is 1.59MB across 941 cards — and a reader who cannot tell them apart
-    // retries past a real outage and investigates a slow read. Name which one it was.
+    // A timeout is not an outage: `hub 0 on /tasks` once read as a DEAD HUB while the hub was 200 OK
+    // and merely slow, and a reader who cannot tell them apart retries past a real outage. #7893:
+    // the message also names the hub and the rule that chose it, so a seat on the wrong hub is
+    // diagnosed from the first failed tool call instead of after its messages go missing.
     const what = r.status === 0 ? (r.reason || "unreachable") : `hub ${r.status}`;
-    const error = new Error(`${what} on ${path}${r.json?.error ? `: ${r.json.error}` : ""}`);
+    const { url: hubUrl, via } = resolveHubInfo(PROJECT);
+    const error = new Error(`${what} on ${path} — hub ${hubUrl} (via ${via})${r.json?.error ? `: ${r.json.error}` : ""}`);
     error.status = r.status;
     error.hubError = r.json?.error || "";
     throw error;
@@ -573,4 +576,9 @@ if (!isHomeDirSession) {
 }
 
 await server.connect(new StdioServerTransport());
-process.stderr.write(`[trantor-mcp] connected as ${SESSION} -> ${URL_BASE}${isHomeDirSession ? ` (no auto-presence: ${nonProjectReason})` : ` (heartbeat ${HEARTBEAT_MS}ms)`}\n`);
+// #7893: the boot line names the hub AND the rule that chose it — a seat whose MCP fell back to
+// localhost says so in its first heartbeat instead of after its messages fail to arrive.
+const HUB_RULE = HUB_INFO.via === "pin" || HUB_INFO.via === "env"
+  ? `hub ${URL_BASE} via ${HUB_INFO.via}`
+  : `hub ${URL_BASE} via ${HUB_INFO.via} (fallback, not a pin)`;
+process.stderr.write(`[trantor-mcp] connected as ${SESSION} in ${PROJECT} -> ${HUB_RULE}${isHomeDirSession ? ` (no auto-presence: ${nonProjectReason})` : ` (heartbeat ${HEARTBEAT_MS}ms)`}\n`);

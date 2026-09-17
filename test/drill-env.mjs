@@ -1,18 +1,15 @@
 // Shared drill env (#6108): a gate runner or crew seat lives in a herdr pane and exports exactly
-// the identity vars the resolvers read FIRST (HERDR_PANE_ID, TRANTOR_ORCH, RELAY_PROJECT, ...).
-// Any drill spawn that passes process.env through inherits the RUNNER's identity, so results
-// depend on who runs the suite. Every spawn that exercises identity-sensitive code builds its env
-// with drillEnv(): the mechanical vars (PATH/HOME/TMPDIR) are inherited, the identity vars are
-// deleted, and per-case overrides win — set or deleted ON PURPOSE, never by accident of who ran
-// the drill (pattern proven in test-baton-surface.mjs, #6074 bounce).
+// the identity vars the resolvers read FIRST. Any drill spawn that passes process.env through
+// inherits the RUNNER's identity, so results depend on who ran the suite — drillEnv() deletes the
+// identity vars and applies only the caller's deliberate overrides (pattern from #6074).
 export const DRILL_IDENTITY_VARS = [
   "HERDR_ENV", "HERDR_PANE_ID", "TRANTOR_ORCH", "TRANTOR_SEAT",
   "RELAY_PROJECT", "TRANTOR_PROJECT", "RELAY_SESSION", "RELAY_AGENT",
-  // A mode flag, scrubbed for the same reason: a seat running UNDER Trantor State exports it,
-  // and drills inheriting it armed state mode in every spawned runner — whose hasJsonSchemaFlag
-  // probe then burned its 20s timeout against the drill's fake CLI, blowing every deadline
-  // (#7759: test-failure was 8/8 red from the seat that ran the suite, green from every other
-  // shell). Drill results must not depend on who ran the suite.
+  // The hub binding is identity too (#7893): a spawn inheriting the RUNNER's RELAY_URL resolves
+  // "via env" and can never exercise pin/path resolution.
+  "RELAY_URL",
+  // A mode flag scrubbed for the same reason: a seat under Trantor State exports it and drills
+  // inheriting it armed state mode in every spawned runner (#7759).
   "TRANTOR_STATE_ASSEMBLE",
 ];
 

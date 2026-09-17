@@ -1,27 +1,25 @@
 #!/usr/bin/env node
-// trantor connect — wire every AI coding CLI on this machine to the bus, in one shot.
-//
-//   node bin/connect.mjs            # detect installed CLIs, patch each one's MCP config (idempotent)
-//   node bin/connect.mjs --dry-run  # show what would change, touch nothing
-//
-// Each CLI keeps its own MCP config file/format; this writes the one "relay" entry into each
-// (with a timestamped .bak backup the first time it changes a file). Claude Code is handled by
-// the plugin (claude plugin install trantor), so it's only verified here, not patched.
+// trantor connect — wire every AI coding CLI on this machine to the bus, in one shot (idempotent;
+// --dry-run touches nothing). Writes the one "relay" MCP entry into each CLI's own config format,
+// with a timestamped .bak backup on first change. Claude Code rides the plugin: verified, not patched.
 import { readFileSync, writeFileSync, existsSync, mkdirSync, copyFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { homedir } from "node:os";
 import { execSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import { resolveProject, resolveHubInfo } from "../lib/project.mjs";
 
 const DRY = process.argv.includes("--dry-run");
 const MCP = join(dirname(dirname(fileURLToPath(import.meta.url))), "mcp.mjs");
-const URL_ = process.env.RELAY_URL || "http://127.0.0.1:4477";
-// Graft (github.com/NanoNets/context-graph-engine): a local Tree-sitter dependency graph served
-// over MCP (graft_find_code / _find_all / _trace_calls / _file_api / _repo_map). Wired next to
-// `relay` so a seat can locate code with one call instead of grep+read-many — the graph refreshes
-// itself before each query (no freshness hook) and serves the nearest ancestor with a graft/ index,
-// so it keys off the seat's cwd project. A project with no graft/ index simply returns empty tools,
-// never an error. `graft build` (or `graft init`) seeds a project's index; graft/ is gitignored.
+// Connect-time truth stamped into every relay entry env (#7893): the project this checkout resolves
+// to and the hub THAT project resolves to. Some CLIs spawn MCP with a scrubbed env where even `git`
+// is missing, so the stamp is the belt; the worktree path rule in lib/project.mjs stays primary.
+// Env wins in resolveHubInfo, so these keys are REFRESHED on every connect run — re-run after a pin change.
+const PROJECT_AT_CONNECT = resolveProject(process.cwd());
+const URL_ = resolveHubInfo(PROJECT_AT_CONNECT).url;
+// Graft (github.com/NanoNets/context-graph-engine): local Tree-sitter dependency graph over MCP,
+// wired next to `relay` so a seat locates code in one call; the graph refreshes itself per query
+// and a project with no graft/ index simply returns empty tools. `graft build` seeds an index.
 const GRAFT = (() => { try { return execSync("command -v graft", { encoding: "utf8", shell: "/bin/sh" }).trim(); } catch { return "graft"; } })();
 const HAS_GRAFT = GRAFT !== "graft" || (() => { try { execSync("command -v graft", { stdio: "ignore", shell: "/bin/sh" }); return true; } catch { return false; } })();
 const has = (cmd) => { try { execSync(`command -v ${cmd}`, { stdio: "ignore", shell: "/bin/sh" }); return true; } catch { return false; } };
@@ -43,11 +41,9 @@ function patchJson(path, mutate) {
   return exists ? "wired" : "wired (new config)";
 }
 
-// NO RELAY_URL here. A hardcoded URL in a CLI's MCP config OVERRIDES the per-project hub pin
-// (env wins in resolveHub), which silently sent every crew seat's relay tools to the local hub
-// while its runner sat on the pinned one — the residual split-brain mechanism (2026-08-20).
-// mcp.mjs resolves the hub from the session's project pin; that resolution must stay in charge.
-const relayEnv = (agent) => ({ RELAY_AGENT: agent });
+// Three keys, refreshed by every connect run (see PROJECT_AT_CONNECT above): agent identity, the
+// hub, and the project whose pin chose it. A user-added env key survives the refresh merge.
+const relayEnv = (agent) => ({ RELAY_AGENT: agent, RELAY_URL: URL_, RELAY_PROJECT: PROJECT_AT_CONNECT });
 // OpenCode hosts several differently-named seats. Its global MCP environment must not stamp all
 // of them "opencode": ambient runner identity wins, while this fallback names a normal interactive
 // OpenCode session that has no RELAY_AGENT/RELAY_SESSION of its own.
@@ -63,15 +59,31 @@ if (has("claude")) {
   report("claude", st);
 }
 
-// ---- Codex (TOML append — no TOML lib needed) ----
+// ---- Codex (TOML — append a missing relay section, refresh its env when it exists) ----
+const tomlRelayEnv = `env = { RELAY_AGENT = "codex", RELAY_URL = "${URL_}", RELAY_PROJECT = "${PROJECT_AT_CONNECT}" }`;
 if (has("codex")) {
   const p = join(homedir(), ".codex", "config.toml");
-  const cur = existsSync(p) ? readFileSync(p, "utf8") : "";
-  if (cur.includes("[mcp_servers.relay]")) report("codex", "already wired");
-  else {
-    const block = `\n# trantor — auto-registers each Codex session on the bus + adds relay_* tools\n# (no RELAY_URL on purpose: the per-project hub pin decides the hub)\n[mcp_servers.relay]\ncommand = "node"\nargs = ["${MCP}"]\nenv = { RELAY_AGENT = "codex" }\n`;
+  let cur = existsSync(p) ? readFileSync(p, "utf8") : "";
+  if (!cur.includes("[mcp_servers.relay]")) {
+    const block = `\n# trantor — auto-registers each Codex session on the bus + adds relay_* tools\n# (env is REFRESHED by every \`trantor connect\`: agent + connect-time hub + project)\n[mcp_servers.relay]\ncommand = "node"\nargs = ["${MCP}"]\n${tomlRelayEnv}\n`;
     if (!DRY) { if (existsSync(p)) backup(p); else mkdirSync(dirname(p), { recursive: true }); writeFileSync(p, cur + block); }
     report("codex", cur ? "wired" : "wired (new config)", p);
+  } else {
+    // Refresh the connect-written single-line `env = { ... }` inside the existing section; a
+    // hand-rolled multi-line env table is left untouched (user customization wins) and is named.
+    const start = cur.indexOf("[mcp_servers.relay]");
+    const next = cur.indexOf("\n[", start + 1);
+    const end = next === -1 ? cur.length : next + 1;
+    const section = cur.slice(start, end);
+    let refreshed = section, note = "already wired";
+    if (/^env\s*=\s*\{.*\}\s*$/m.test(section)) refreshed = section.replace(/^env\s*=.*$/m, tomlRelayEnv);
+    else if (!/^env\s*=/m.test(section)) refreshed = section.replace(/\n*$/, "\n") + tomlRelayEnv + "\n";
+    else note = "relay env kept (custom shape) — refresh it by hand";
+    if (refreshed !== section) {
+      if (!DRY) { backup(p); writeFileSync(p, cur.slice(0, start) + refreshed + cur.slice(end)); }
+      note = "relay env refreshed";
+    }
+    report("codex", note, p);
   }
   // graft alongside relay
   if (HAS_GRAFT) {
@@ -85,27 +97,32 @@ if (has("codex")) {
   }
 }
 
-// ---- Gemini CLI ----  (existing relay entries are never overwritten — user customization wins)
+// ---- Gemini CLI ----  (relay entry env is REFRESHED: ||= kept an older connect's stale env forever)
 if (has("gemini")) {
   const p = join(homedir(), ".gemini", "settings.json");
   report("gemini", patchJson(p, d => {
     d.mcpServers ||= {};
-    d.mcpServers.relay ||= { command: "node", args: [MCP], env: relayEnv("gemini") };
+    d.mcpServers.relay ||= { command: "node", args: [MCP], env: {} };
+    d.mcpServers.relay.env = { ...d.mcpServers.relay.env, ...relayEnv("gemini") };
     if (HAS_GRAFT) d.mcpServers.graft ||= { command: GRAFT, args: ["mcp"] };
   }), p);
 }
 
-// ---- Kimi CLI ----
+// ---- Kimi CLI ----  (same refresh: the stale entry that caused #7893 was {RELAY_AGENT: kimi} only)
 if (has("kimi")) {
   const p = join(homedir(), ".kimi", "mcp.json");
   report("kimi", patchJson(p, d => {
     d.mcpServers ||= {};
-    d.mcpServers.relay ||= { command: "node", args: [MCP], env: relayEnv("kimi") };
+    d.mcpServers.relay ||= { command: "node", args: [MCP], env: {} };
+    d.mcpServers.relay.env = { ...d.mcpServers.relay.env, ...relayEnv("kimi") };
     if (HAS_GRAFT) d.mcpServers.graft ||= { command: GRAFT, args: ["mcp"] };
   }), p);
 }
 
 // ---- OpenCode ----
+// Deliberately NOT stamped with RELAY_URL/RELAY_PROJECT: OpenCode hosts several differently-named
+// seats from one config, and a stamped project/hub would override every hosted seat's runner-provided
+// env (the overlay bug the deletes below fix). Ambient runner env + RELAY_AGENT_FALLBACK stay in charge.
 if (has("opencode")) {
   const p = join(homedir(), ".config", "opencode", "opencode.json");
   report("opencode", patchJson(p, d => {
@@ -122,16 +139,10 @@ if (has("opencode")) {
   }), p);
 }
 
-// ---- DeepSeek Harness (dsh) ----
-// dsh has no single MCP config file — composition is a PROFILE (~/.dsh/profiles/<name>): a package.json
-// naming the bundles it stacks and a cordis.patch.yml inserting plugin rows. We build a "trantor"
-// profile on the stock headless bundle and mount two rows:
-//   1. their Claude Code hooks bridge pointed at OUR hooks.json — presence, focus cards, heartbeats,
-//      file claims run inside dsh exactly as they do inside CC (verified live 2026-08-19);
-//   2. their MCP client spawning our relay server — relay_* tools with the seat identity forwarded
-//      from the ambient RELAY_* env (crew-runner sets those per seat).
-// The bridge's own protocol lib is declared as a dependency explicitly: the rc package forgets it
-// (ERR_MODULE_NOT_FOUND at boot without it — reported upstream).
+// ---- DeepSeek Harness (dsh): composes from PROFILES (~/.dsh/profiles/<name>), no single MCP config.
+// We build a "trantor" profile mounting their Claude Code hooks bridge at OUR hooks.json plus their
+// MCP client running our relay server with ambient RELAY_* identity; the bridge's protocol lib is
+// declared explicitly — the rc package forgets it (ERR_MODULE_NOT_FOUND at boot).
 if (has("dsh")) {
   const ROOT = dirname(MCP);
   const prof = join(homedir(), ".dsh", "profiles", "trantor");
@@ -183,12 +194,10 @@ ${HAS_GRAFT ? `    - id: trantor-graft
         command: ${GRAFT}
         args: ['mcp']
 ` : ""}`;
-  // "a profile exists" is not "a profile is current": connect grows rows over time (relay, then
-  // graft, then whatever comes next), and an existence check short-circuits on a profile written
-  // by an older connect forever — the seat silently never gets the new row. So the gate is
-  // CONTENT-based: every row id this connect would write must already be in the patch; a missing
-  // one regenerates the patch (backed up). Presence, not diff — user edits to rows that ARE there
-  // still win, the same rule as the gemini/kimi/opencode `||=` patches above.
+  // "a profile exists" is not "a profile is current": connect grows rows over time, and an existence
+  // check short-circuits on a profile written by an older connect forever. The gate is CONTENT-based:
+  // every row id this connect writes must already be in the patch, else regenerate (backed up).
+  // Presence, not diff — user edits to rows that ARE there still win, like the JSON patches above.
   const expectedIds = [...patch.matchAll(/- id: (\S+)/g)].map(m => m[1]);
   const cur = existsSync(patchPath) ? readFileSync(patchPath, "utf8") : "";
   const missing = expectedIds.filter(id => !cur.split("\n").some(l => l.trim() === `- id: ${id}`));
@@ -201,11 +210,9 @@ ${HAS_GRAFT ? `    - id: trantor-graft
     if (!DRY) {
       mkdirSync(prof, { recursive: true });
       // The seat runs the plugin's hooks MINUS SessionStart: the crew runner already owns
-      // registration/announcement, and per-turn roster/catchup injection is wasted spend in a
-      // fresh one-shot session (headless has no resume — every turn re-pays it). Note: an earlier
-      // version of this comment blamed a dsh teardown crash on SessionStart; that was FALSE — the
-      // crash was the duplicated-core install below, refuted by a clean-profile repro before we
-      // reported upstream (deepseek-harness discussions #3515/#3516).
+      // registration/announcement, and per-turn roster injection is wasted spend in a one-shot
+      // session. (A dsh teardown crash was once blamed on SessionStart — FALSE: it was the
+      // duplicated-core install below, refuted by clean-profile repro; deepseek-harness #3515/#3516.)
       try {
         const full = JSON.parse(readFileSync(join(ROOT, "hooks", "hooks.json"), "utf8"));
         const subset = Object.fromEntries(Object.entries(full.hooks || {}).filter(([k]) => k !== "SessionStart"));
@@ -222,10 +229,8 @@ ${HAS_GRAFT ? `    - id: trantor-graft
       const rootPath = join(prof, "cordis.yml");
       if (!existsSync(rootPath)) writeFileSync(rootPath, "# dsh profile root — an empty entry list; the tree is composed from bundles + cordis.patch.yml.\n[]\n");
       // pnpm settings mirroring dsh's own profile template. autoInstallPeers:false is LOAD-BEARING:
-      // an installer that pulls the bridge's peers drops a SECOND copy of dsh's core packages into
-      // the profile, the loader mounts services from both module instances, and the first tool call
-      // dies on ctx.tools[TOOL_RUNTIME_SCHEDULER] being undefined (observed: every turn that used
-      // any tool crashed "reading 'prepare'"; tool-free turns worked).
+      // an installer that pulls the bridge's peers drops a SECOND copy of dsh's core into the
+      // profile, both instances mount, and the first tool call dies on ctx.tools being undefined.
       writeFileSync(join(prof, "pnpm-workspace.yaml"), "packages:\n  - .\n\nnodeLinker: hoisted\nautoInstallPeers: false\n");
       // the two bridge packages must be importable from the profile's node_modules — via pnpm
       // (peers OFF, hoisted) like dsh's own template; npm needs --legacy-peer-deps for the same
@@ -240,7 +245,7 @@ ${HAS_GRAFT ? `    - id: trantor-graft
 }
 
 const found = out.length;
-console.log(`trantor connect${DRY ? " (dry run)" : ""} — hub: ${URL_}`);
+console.log(`trantor connect${DRY ? " (dry run)" : ""} — project: ${PROJECT_AT_CONNECT}, hub: ${URL_}`);
 for (const r of out) console.log(`  ${r.cli.padEnd(9)} ${r.status}${r.detail ? `  (${r.detail})` : ""}`);
 if (!found) console.log("  no supported CLIs found on PATH (claude, codex, gemini, kimi, opencode, dsh)");
 console.log(DRY ? "\nRun without --dry-run to apply." : "\nDone. New sessions of each CLI auto-join the bus.");
