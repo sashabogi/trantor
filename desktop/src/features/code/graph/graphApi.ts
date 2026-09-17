@@ -3,6 +3,8 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { projectChanges, type ProjectChangeRow } from "../gitApi";
+import type { HubClient } from "../../../shared/api/client";
+import { FILE_EVENT_TYPES, type FileEvent } from "./unread";
 
 export type GraphNode = {
   id: string;
@@ -61,6 +63,16 @@ export type GraphApi = {
   graph: (project: string, seat?: string) => Promise<CodeGraphResponse>;
   changes: (project: string) => Promise<ProjectChangeRow[]>;
   fileChanges: (project: string, onBatch: (paths: string[]) => void) => () => void;
+  /** The project's file.claim and file.read events for the Unread lens (#7977); absent = no hub. */
+  fileEvents?: (project: string) => Promise<FileEvent[]>;
 };
 
 export const graphApi: GraphApi = { graph: codeGraph, changes: projectChanges, fileChanges: watchFileChanges };
+
+/** The app's api: the commands above plus the hub's file events, exact types, newest 2000. */
+export function graphApiFor(client: Pick<HubClient, "events">): GraphApi {
+  return {
+    ...graphApi,
+    fileEvents: project => client.events({ project, type: FILE_EVENT_TYPES, limit: 2000 }).then(r => r.events),
+  };
+}

@@ -2,7 +2,7 @@
 // files open editable always (no edit/read mode switch), Changes is the same draft as a
 // HEAD-vs-live diff, saving is a plain file write with no auto-stage or commit, and open
 // files are tabs (#5813, codeTabs.ts) where a plain open previews and a pin makes it permanent.
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { X, Pin } from "lucide-react";
 import type { HubClient } from "../../shared/api/client";
 import { ProjectHeader, type Lens } from "../project/ProjectHeader";
@@ -13,6 +13,7 @@ import { decideReload, type FileStat } from "./liveReload";
 import { closeTab, GRAPH_PATH, markDirty, markExternalMutation, openGraphTab, openInTabs, tabLabel, togglePin, type CodeTab, type TabView } from "./codeTabs";
 import { GraphView } from "./GraphView";
 import { ReviewChip } from "./ReviewChip";
+import { graphApiFor } from "./graph/graphApi";
 import { diskSignature, externalMutationOnLoad } from "./tabGuard";
 import {
   dropDocument,
@@ -180,6 +181,8 @@ export function Files({ client, project, lens, onLens, path, seat }: {
     trace(`stashDraft ${activeKey} len=${draft.length} hydrated=${hydratedKeyRef.current === activeKey} written=${ok}`);
     if (ok) storeSetDraft(project, activeKey, draft);
   };
+  // The graph's hub reads (#7977) ride the same client; memoised so the view's effects hold still.
+  const graphApi = useMemo(() => graphApiFor(client), [client]);
   const openPath = (scope: string, p: string, view: ViewMode) => {
     stashDraft();
     const { tabs: next, activeKey: nextKey } = openInTabs(tabs, activeKey, scope, p, view);
@@ -463,6 +466,7 @@ export function Files({ client, project, lens, onLens, path, seat }: {
               project={project}
               seat={activeScope === "project" ? null : activeScope}
               onOpen={p => openPath(activeScope, p, "code")}
+              api={graphApi}
             />
           ) : !activePath || !body ? (
             <div className="flex h-full items-center justify-center">

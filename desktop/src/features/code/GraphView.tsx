@@ -18,7 +18,8 @@ import {
   type Tone,
 } from "./graph/deriveGraph";
 import { GRAFT_MISSING, graphApi, isGraphError, type CodeGraphResponse, type GraphApi } from "./graph/graphApi";
-import { quietRebuild, rebuildWorthy } from "./graph/refresh";
+import { isBuildOutput, quietRebuild, rebuildWorthy } from "./graph/refresh";
+import { unreadCount, unreadMarks, type ChangeStamp, type FileEvent } from "./graph/unread";
 
 const CARD_W = 112;
 const CARD_H = 30;
@@ -38,6 +39,23 @@ const NODE_BORDER = {
   read: "var(--color-tr-ok)",
 } satisfies { [T in Tone]: string | undefined };
 
+/** The Unread lens's fills (#7977): unread in tr-fail at low alpha, changed-and-read in tr-ok. */
+const NODE_FILL = {
+  calm: undefined,
+  warn: undefined,
+  dim: undefined,
+  selected: undefined,
+  linked: undefined,
+  unread: "color-mix(in srgb, var(--color-tr-fail) 16%, transparent)",
+  read: "color-mix(in srgb, var(--color-tr-ok) 12%, transparent)",
+} satisfies { [T in Tone]: string | undefined };
+
+const LEGEND = [
+  { label: "changed, not read", color: "var(--color-tr-fail)" },
+  { label: "changed and read", color: "var(--color-tr-ok)" },
+  { label: "unchanged this session", color: "var(--color-tr-edge)" },
+];
+
 const EDGE_STROKE = {
   calm: "var(--color-tr-edge)",
   warn: "var(--color-tr-warn)",
@@ -49,6 +67,15 @@ const EDGE_STROKE = {
 } satisfies { [T in Tone]: string };
 
 type Placed = { node: RenderNode; left: number; top: number };
+
+/** One stamp per path, the newest batch winning. */
+function stampsWith(prev: readonly ChangeStamp[], paths: readonly string[], ts: number): ChangeStamp[] {
+  const changed = new Set(paths.filter(p => p.length > 0 && !isBuildOutput(p)));
+  if (changed.size === 0) return prev.slice();
+  const next = prev.filter(s => !changed.has(s.path));
+  for (const path of changed) next.push({ path, ts });
+  return next;
+}
 
 function place(nodes: RenderNode[], edges: RenderEdge[]) {
   const layout = hierarchicalFlowLayout(
@@ -101,6 +128,10 @@ export function GraphView({ project, seat, onOpen, api = graphApi }: {
   const [response, setResponse] = useState<CodeGraphResponse | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [dirty, setDirty] = useState<DirtyMark[]>([]);
+  const [fileEvents, setFileEvents] = useState<FileEvent[]>([]);
+  // Opening a card from the graph is the read: the lens clears at once, the hub's event follows.
+  const [localReads, setLocalReads] = useState<FileEvent[]>([]);
+  const [stamps, setStamps] = useState<ChangeStamp[]>([]);
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(new Set());
   const [lens, setLens] = useState<GraphLens>("clusters");
   const [selected, setSelected] = useState<string | null>(null);
@@ -133,25 +164,40 @@ export function GraphView({ project, seat, onOpen, api = graphApi }: {
   useEffect(() => {
     if (seat !== null) return;
     const scheduler = quietRebuild(() => load("rebuild"));
-    const off = api.fileChanges(project, paths => { if (rebuildWorthy(paths)) scheduler.touch(); });
-    return () => { scheduler.cancel(); off(); };
+    const off = api.fileChanges(project, paths => {
+      if (!rebuildWorthy(paths)) return;
+      scheduler.touch();
+      const ts = Date.now();
+      setStamps(prev => stampsWith(prev, paths, ts));
+    });
+    return () => { scheduler.cancel(); off(); setStamps([]); };
   }, [api, project, seat, load]);
 
   // The same project-wide change rows the ModePane polls: which nodes are dirty, in whose tree.
   useEffect(() => {
     let alive = true;
-    const pull = () => api.changes(project)
-      .then(rows => { if (alive) setDirty(dirtyMarks(rows)); })
-      .catch(() => { if (alive) setDirty([]); });
+    const pull = () => {
+      api.changes(project)
+        .then(rows => { if (alive) setDirty(dirtyMarks(rows)); })
+        .catch(() => { if (alive) setDirty([]); });
+      (api.fileEvents ? api.fileEvents(project) : Promise.resolve([]))
+        .then(events => { if (alive) setFileEvents(events); })
+        .catch(() => { if (alive) setFileEvents([]); });
+    };
     pull();
     const iv = setInterval(pull, 12_000);
-    return () => { alive = false; clearInterval(iv); };
+    return () => { alive = false; clearInterval(iv); setLocalReads([]); };
   }, [api, project]);
+
+  const unread = useMemo(
+    () => unreadMarks([...fileEvents, ...localReads], stamps),
+    [fileEvents, localReads, stamps],
+  );
 
   const graph = response && !isGraphError(response) ? response : null;
   const derived = useMemo(
-    () => (graph ? deriveGraph(graph, { expanded, lens, dirty, selected }) : null),
-    [graph, expanded, lens, dirty, selected],
+    () => (graph ? deriveGraph(graph, { expanded, lens, dirty, selected, unread }) : null),
+    [graph, expanded, lens, dirty, selected, unread],
   );
   const scene = useMemo(() => (derived ? place(derived.nodes, derived.edges) : null), [derived]);
 
@@ -163,6 +209,7 @@ export function GraphView({ project, seat, onOpen, api = graphApi }: {
       return;
     }
     setSelected(node.id);
+    setLocalReads(prev => [...prev, { type: "file.read", ts: Date.now(), file: node.id }]);
     onOpen(node.id);
   };
 
@@ -188,6 +235,21 @@ export function GraphView({ project, seat, onOpen, api = graphApi }: {
         )}
         {rebuilding && (
           <span className="tr-mono text-[11px] text-tr-muted" data-testid="graph-rebuilding">rebuilding…</span>
+        )}
+        {lens === "unread" && (
+          <>
+            <span className="tr-mono text-[11px] text-tr-muted" data-testid="graph-unread-count">
+              {unreadCount(unread)} unread
+            </span>
+            <span className="flex items-center gap-2.5 text-[11px] text-tr-muted" data-testid="graph-legend">
+              {LEGEND.map(l => (
+                <span key={l.label} className="flex items-center gap-1">
+                  <span className="tr-dot" style={{ background: l.color, width: 7, height: 7 }} />
+                  {l.label}
+                </span>
+              ))}
+            </span>
+          </>
         )}
         <div className="ml-auto flex items-center gap-1.5">
           {expanded.size > 0 && (
@@ -275,6 +337,7 @@ export function GraphView({ project, seat, onOpen, api = graphApi }: {
                   borderLeftWidth: 3,
                   borderLeftColor: clusterTint(node.cluster),
                   borderColor: NODE_BORDER[node.tone],
+                  background: NODE_FILL[node.tone],
                   opacity: node.tone === "dim" ? 0.35 : 1,
                   fontWeight: node.kind === "cluster" ? 600 : 400,
                 }}
