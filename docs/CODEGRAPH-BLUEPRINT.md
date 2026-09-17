@@ -230,3 +230,130 @@ graft. Ported: about 200 lines of graph algebra, about 150 lines of scoring form
 10.7K layout file vendored. Skipped: the patch protocol, chokidar, and 1300 lines of
 attribution and conflict guessing that Trantor's worktree-per-seat design makes unnecessary.
 Rewritten: the views, against the design system.
+
+## 4. The three views
+
+Three views, in the order #6878 ranks them: the graph, blast radius, unread. Each names the
+seam it hangs on, the data it reads (all of it from §1 and §2), what it draws, and the design
+rule it must obey. Flare's three renderers (Canvas, Wheel, Districts) are three layouts of
+the first view; only one ships in the MVP, and the reason is at the end of 4.1.
+
+### 4.1 The graph: a `graph` view on the Code surface
+
+**Seam.** Not a sixth top-level lens. The project lenses are `workspace · code · board · feed
+· bus` (`desktop/src/features/project/ProjectHeader.tsx` L7) and each is an altitude of the
+project, not a rendering; a code graph is the Code surface looking at the checkout from above
+rather than one file at a time. `Files.tsx` already has an orthogonal view axis on its tab
+body, `type ViewMode = "code" | "changes"` (L32), chosen per tab (`codeTabs.ts` L12) and
+switched at L442: the diff view when the tab says `changes`, else the editor. `graph` is the
+third value of that union, opened by a chip in the ModePane footer next to the scope picker
+(the "WHICH COPY" control, `Files.tsx` L326), so it inherits the scope: project checkout or a
+seat's worktree, the same `seat` that `read_file` takes. One tab, pinned, keyed by scope, so
+switching seats in the footer swaps the graph the way it swaps the tree.
+
+**Data.** `code_graph(project, seat?)` from §2: file nodes with `cluster`, `inDegree`,
+`outDegree`, `isTest`, `testedBy`, `orphan`, `cycleId`, `doc`, and the collapsed file→file
+edges tagged `imports` or `calls`. Overlaid from what the app already fetches: the
+`project_changes` rows (`gitApi.ts` L16-24, one `{seat, path, status, plus, minus}` per
+touched path per seat) mark which nodes are dirty and in whose tree; `file.claim` events
+(`client.events({type: "file.claim."})`, the same call `Feed.tsx` L76 makes) mark which nodes
+a Claude seat is on right now, within the ten-minute claim window. Positions live in the
+app's per-machine prefs (`workspace/prefs.ts` pattern), keyed by project; nothing about the
+graph is written to the hub.
+
+**Draws.** Flare's flow layout, vendored (`flowLayout.ts`, §3): clusters as blocks left to
+right by dependency depth, so `lib/` and `desktop/src/shared/` sit left and `bin/`, `App.tsx`
+and the Tauri commands sit right, files as cards inside their block, edges as one SVG layer
+underneath. On this repo that is 522 cards in 14 top-level clusters; `graft map` already
+groups the same way and names the hubs (`act` in GitPanel.tsx with 50 callers, `drillEnv` in
+test/ with 109). Cards are `tr-card` at the smallest size the primitive allows, edges use
+`--color-tr-edge`, and colour appears only where the design system lets it appear: in
+content and status dots. The default colouring is the calm one, cluster hue at low
+saturation, and every lens is a recolour of the same cards, never a second drawing:
+Activity (a `tr-dot` per seat on a dirty node, the seat's own hue, the same dots the
+Workspace seat tabs wear), Cycles (`cycleId` nodes and their edges in `--color-tr-warn`),
+Tests (`testedBy = 0` non-test, non-doc code in `--color-tr-fail` at low alpha, per Flare's
+rule that a document "has no tests" is a category error), Hotspots and Risk and Coverage once
+their inputs exist (§3, §5). A lens legend is a `tr-seg` in the tab strip, not a floating
+panel. Selection is the drill: clicking a card opens the file in a `code` tab under the same
+scope through `openPath` (`Files.tsx` L183) and highlights direct dependents and
+dependencies; the file's importers and imports list in the right panel (`rightPanelState.ts`
+already owns that pane). No drag in the MVP: Flare's drag-with-persisted-positions is 300
+lines of `CanvasView` and the flow layout is deterministic, so a relayout gives the same
+picture; persistence of positions is a later card.
+
+**Rule 7 applies.** A 522-node canvas is a wall of cards at project zoom. The view opens
+collapsed to clusters (Flare's `renderModel.ts` has the same idea, `DIR_PREFIX` dir nodes and
+`representingDir`, L46-91): one card per top-level directory with its file count and its
+inter-cluster edges, and a cluster expands in place to its files. A seat's dirty files are the
+exception and stay visible at cluster zoom as dots on the cluster card, because "what is the
+crew doing to the code right now" is the question the view exists to answer.
+
+**Why the flow layout and not the wheel or the districts.** The wheel (radial arcs, chords)
+reads dependency direction poorly and has no place to put a dirty-file dot that is not also a
+tick mark; the districts (treemap, area by size) are the right picture for Hotspots and
+Coverage, where the answer is "how much of the code is in this state", and the wrong one for
+dependencies, which are the MVP. Districts land with the Hotspots lens as the second layout,
+selected by the same `tr-seg`; the wheel does not land.
+
+### 4.2 Blast radius: a number that rides the testing move
+
+**Seam.** Not a view of its own first; a fact attached to three surfaces that exist. The
+seat side is `hooks/lib/hollow-move.mjs`, which `relay_task_move` calls at report time to
+gather evidence from the worktree before a `testing` or `done` move lands (`mcp.mjs`
+L224-235): it already reads the diff to decide whether the move is hollow. That is where
+`graft blast --base <merge-base> --depth all --format json` runs (0.33s, §1) and its
+`changed[]` paths plus the transitive dependents count are appended to the card note as one
+line, `blast: 7 files depend on the 3 changed`, and posted to the hub with the move as a
+`blast` field on the card event, so the count sits on the card's permanent log next to
+`verified at <sha>`. The hub side needs no code beyond keeping the field. The operator side
+is the gate list in `Overseer.tsx` L274-300, which renders each `verify.gate.opened` as a
+`tr-card` with the claim: the same card gains the blast line when the gate's card carries
+one, and the `careful` tier from `reviewTier` (§3) when blast ≥ 10 or the change sits in a
+cycle, so "hold changes until the gate is independently resolved" is a button next to a
+reason rather than next to a claim.
+
+**Data.** `graft blast` over the seat's worktree, base = the card's `base:` sha or
+`merge-base main HEAD`; `code_graph` for `cycleId` and `testedBy` of the changed paths;
+`reviewTier` inputs from §3 without coverage (coverage is null until the lcov reader lands,
+and the tier function already treats null as uncovered only for the `careful` rule).
+
+**Draws.** In the Changes tab of the Code surface (`ChangesView`, the diff of one file), a
+`tr-chip` in the tab strip: `N dependents`, click to select those nodes on the graph view
+under the same scope. In the Overseer gate card, one muted line under the claim. On the
+Board card, nothing new: the note already carries it. No colour beyond the chip's `tr-warn`
+when the tier is `careful`. A blast of zero is shown as `0 dependents`, never hidden; a
+package.json or tauri.conf.json change is shown as `not in the graph`, which is what graft
+says (§1), because a silent zero on a config file is the false comfort the gate exists to
+remove.
+
+### 4.3 Unread: the comprehension-debt lens
+
+**Seam.** The signal does not exist yet (§1: `CodeView.tsx`, `Files.tsx`, `FileTree.tsx`
+never tell the hub a human opened a file). It is created at one place: `openPath` in
+`Files.tsx` L183, the single function every open in the Code surface goes through, posts
+`{project, file, seat}` to a new hub route `POST /read`, a sibling of `POST /claim`
+(`hub/routes/admin.mjs` L270-286) with the same shape and the same throttle (first touch in a
+window emits the event, repeats do not), appending `file.read {file, seat}` by the operator's
+session. It is posted only when the app is the reader: the desktop app's own session id,
+never a seat's, so the event means what the lens needs it to mean. `file.read` is one more
+dotted type in the log (`hub/events.mjs`), readable through `GET /events?type=file.read.` and
+live over SSE like every other event; nothing else in the hub changes.
+
+**Data.** For each node: `changedAt` = the latest of the watcher's `file-changed` stamp for
+that path in the scope's tree and the newest `file.claim` on it; `readAt` = the newest
+`file.read` on it by a human session. Flare's rule, kept exactly (§3): unread when
+`changedAt > 0 && readAt < changedAt`, and nothing is unread on a repo the operator merely
+opened. Because `changedAt` comes from seats and `readAt` from the operator, the lens is by
+construction "code the crew wrote that no person has looked at", which is the testing-lane
+rot in code space that #6878 item 2 asks for.
+
+**Draws.** A recolour of the graph (4.1): unread nodes in `--color-tr-fail` at low alpha,
+changed-and-read in `--color-tr-ok`, everything else the calm default; the legend is the same
+three swatches Flare uses ("changed, not read", "changed and read", "unchanged this session",
+`lenses.ts` L111-113). And one number at fleet altitude, where the design system says fleet
+facts live: a stat on the Home view, `unread: 14 files across 3 projects`, computed from the
+same events, because the operator's question at Home is "how much crew code have I not seen",
+not "which file". Opening a file from the graph under this lens is the act that clears it,
+which is why the read event is posted by `openPath` and not by the editor mounting: a file
+opened is a file looked at; a file scrolled past in a diff is not.
