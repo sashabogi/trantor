@@ -1,10 +1,8 @@
 #!/usr/bin/env node
 // #7752 silent-stall drill — a CLI that goes silent is a different cut from one that is busy.
 // SILENT: no bytes on either stream and no transcript advance for the whole watchdog window,
-// so the runner ends the turn AT THE WINDOW with outcome "stalled" — never exhausted/crashed,
-// never the full box. BUSY: output keeps advancing, so the turn runs to the box and is cut
-// with outcome "cut", exactly as before. Runs the REAL runner + REAL watchdog with a fake CLI;
-// the mock hub is hermetic (ephemeral port, mkdtemp homes, no live bus state).
+// so the runner ends the turn AT THE WINDOW with outcome "stalled", never exhausted/crashed.
+// BUSY: output keeps advancing, so the turn runs to the box and is outcome "cut". Real runner.
 import http from "node:http";
 import { spawn } from "node:child_process";
 import { mkdtempSync, writeFileSync, readFileSync, chmodSync, mkdirSync, existsSync } from "node:fs";
@@ -64,12 +62,13 @@ await new Promise(r => hub.listen(0, "127.0.0.1", r));
 const HUB = `http://127.0.0.1:${hub.address().port}`;
 
 // ---- harness: the REAL runner + REAL watchdog + a fake `codex` --------------------------------
-// silent: a banner, then nothing — no stream moves, no transcript, no worktree. busy: a line
-// past the 200-byte liveness bar every 300ms, forever. The box is 6s and the watchdog window
-// 2.5s, so a silent turn must end well before the box and a busy one never before it.
-async function drill(mode, { waitMs = 30000, untilPark = true } = {}) {
+// silent: banner then nothing. busy: a line past the 200-byte liveness bar every 300ms. The
+// CLI's turn LOG lives in a SIBLING mkdtemp, outside the watched work dir — a write at turn
+// start counts as liveness until window+SLACK and races the marker to the box.
+async function drill(mode, { waitMs = 45000, untilPark = true } = {}) {
   sends.length = 0; eventSeq = 0; handed = 0;
   const root = mkdtempSync(join(tmpdir(), "tt-stall-"));
+  const scratch = mkdtempSync(join(tmpdir(), "tt-stall-scratch-"));
   const HOME = join(root, "home");
   const REPO = join(root, "repo");
   const BUS = join(HOME, ".agent-bus");
@@ -77,7 +76,7 @@ async function drill(mode, { waitMs = 30000, untilPark = true } = {}) {
   mkdirSync(REPO, { recursive: true });
   execSync("git init -q", { cwd: REPO });
   const fakebin = join(root, "bin"); mkdirSync(fakebin, { recursive: true });
-  const LOGF = join(root, "turns.log"), CNTF = join(root, "count");
+  const LOGF = join(scratch, "turns.log");
   const PROJ = "tt-stall";
   const body = mode === "silent"
     ? `echo "OpenAI Codex v2.3.4"
@@ -101,7 +100,7 @@ ${body}
     cwd: process.cwd(), stdio: "ignore",
     env: { ...drillEnv({ TRANTOR_NO_DESKTOP_NOTIFY: "1", RELAY_HOST_ID: "drillhost" }), HOME, PATH: `${fakebin}:${process.env.PATH}`,
       RELAY_URL: HUB, RELAY_AGENT: "codex", RELAY_PROJECT: PROJ,
-      TRANTOR_TURN_MAX_MS: "6000", TRANTOR_TURN_WATCHDOG_MS: "2500", TRANTOR_RETRY_MS: "1200",
+      TRANTOR_TURN_MAX_MS: "12000", TRANTOR_TURN_WATCHDOG_MS: "2500", TRANTOR_RETRY_MS: "1200",
       CREW_MODEL: "qwen3/deepseek-v4-pro", CREW_KICKOFF: "say hi and end your turn" },
   });
   const start = Date.now();
@@ -125,8 +124,8 @@ console.log("\n## a silent turn ends at the stall window");
   ok("#7752: the silent contract turn is ledgered outcome 'stalled' with the stalled flag",
     wakeRow && wakeRow.outcome === "stalled" && wakeRow.cut === true,
     JSON.stringify(wakeRow && { outcome: wakeRow.outcome, cut: wakeRow.cut, exit: wakeRow.exit }));
-  ok("#7752: it ended at the 2.5s window, nowhere near the 6s box",
-    wakeRow && wakeRow.duration_ms < 5500, `duration ${wakeRow && wakeRow.duration_ms}ms`);
+  ok("#7752: it ended at the 2.5s window, nowhere near the 12s box",
+    wakeRow && wakeRow.duration_ms < 8000, `duration ${wakeRow && wakeRow.duration_ms}ms`);
   ok("#7752: the row names the model the seat was pinned to",
     wakeRow && wakeRow.model === "qwen3/deepseek-v4-pro", wakeRow && wakeRow.model);
   ok("#7752: the verdict names the silence, never a provider failure",
@@ -155,13 +154,13 @@ console.log("\n## a silent turn ends at the stall window");
 // ---- drill 2: a BUSY turn runs to the box and is cut, exactly as before ------------------------
 console.log("\n## a busy turn is still a box cut");
 {
-  const r = await drill("busy", { waitMs: 12000, untilPark: false });
+  const r = await drill("busy", { waitMs: 16000, untilPark: false });
   const cutRow = r.rows.find(x => x.trigger === "direct message" && x.cut === true);
   ok("#7752: the busy contract turn is cut at the box, outcome 'cut', never 'stalled'",
     cutRow && cutRow.outcome === "cut" && !cutRow.stalled,
     JSON.stringify(cutRow && { outcome: cutRow.outcome, stalled: cutRow.stalled, duration: cutRow.duration_ms }));
-  ok("#7752: it ran to the 6s box, so the stall window never claimed a producing turn",
-    cutRow && cutRow.duration_ms >= 5500, `duration ${cutRow && cutRow.duration_ms}ms`);
+  ok("#7752: it ran to the 12s box, so the stall window never claimed a producing turn",
+    cutRow && cutRow.duration_ms >= 11500, `duration ${cutRow && cutRow.duration_ms}ms`);
   ok("#7752: no stalled row exists anywhere in the busy run",
     !r.rows.some(x => x.outcome === "stalled" || x.stalled === true));
   ok("#7752: no STALLED report and no exhausted reading for a busy turn",
