@@ -1,9 +1,8 @@
 #!/usr/bin/env node
 // trantor wake-policy drill (#6134, #7766) — the two rules that cut the fleet's turn count:
-// a turn costs a session (on a direct message the SENDER's wake flag decides: unset or true turns,
-// false batches as context; receipts and kind:status never wake) and one session per card (a wake
-// naming a new card starts a FRESH CLI session, never an endless resume). Hermetic: mock hub +
-// fake CLI driving the REAL bin/crew-runner.mjs.
+// a turn costs a session (on a direct message the SENDER's wake flag decides: unset or true
+// turns, false batches as context; receipts and kind:status never wake) and one session per card
+// (a wake naming a new card = a FRESH CLI session). Hermetic: mock hub + fake CLI, REAL runner.
 import http from "node:http";
 import { spawn } from "node:child_process";
 import { mkdtempSync, writeFileSync, readFileSync, chmodSync, mkdirSync } from "node:fs";

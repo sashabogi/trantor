@@ -15,14 +15,10 @@ import { signedPost, signedGet } from "./hooks/lib/api.mjs";
 import { anchorCursor } from "./hooks/lib/inbox-ledger.mjs";
 import { assertNoSecrets } from "./lib/scrub.mjs";
 
-// ---- runtime dep resolution -------------------------------------------------
-// `claude plugin install` snapshots the REPO, not an npm tarball, so a GitHub-sourced
-// plugin ships no node_modules — and a static `import "@modelcontextprotocol/sdk/..."`
-// then dies with ERR_MODULE_NOT_FOUND before a single line runs. The failure is silent
-// from the user's side: every relay tool just disappears. So resolve these two ourselves.
-// Normal path is untouched (plain `import(spec)`, ESM build, deps present); only when that
-// comes back NOT_FOUND do we borrow the tree from the globally installed `trantor`, which
-// npm always gives real dependencies at the same version as the plugin.
+// Runtime dep resolution: `claude plugin install` snapshots the repo, not an npm tarball, so a
+// GitHub-sourced plugin ships no node_modules and a static SDK import dies with
+// ERR_MODULE_NOT_FOUND before any line runs — silently: every relay tool just disappears.
+// Resolve ourselves: plain import(spec) first; on NOT_FOUND borrow the global trantor's tree.
 const HERE = dirname(fileURLToPath(import.meta.url));
 const req = createRequire(import.meta.url);
 
@@ -75,12 +71,10 @@ const SESSION_AGENT = process.env.RELAY_AGENT || process.env.RELAY_AGENT_FALLBAC
 const SESSION = process.env.RELAY_SESSION
   || (SESSION_AGENT ? `${SESSION_AGENT}:${PROJECT}` : `${hostId()}:${PROJECT}`);
 let cursor = 0;
-// First-call guard: a brand-new MCP process must NOT replay the entire historical backlog (observed:
-// 2,379 msgs / 520KB back to an old asteroids project) the instant relay_inbox/relay_wait is called.
-// The seed anchors to BOOT (this server starts with the session), never to the time of the first call:
-// seeding to "now at first call" swallowed #7282 on 2026-08-20 — the call came 33 minutes into the
-// session, prompted by a nudge ABOUT that message. PEEK only: the hooks own the hub's delivery ledger
-// (sessionstart claims the pre-start backlog); a non-peek seed here marked unseen messages delivered.
+// First-call guard: a new MCP process must NOT replay the historical backlog the instant
+// relay_inbox/relay_wait is called (one project got 2,379 msgs / 520KB back). The seed anchors to
+// BOOT, never to the first call — a "now" seed swallowed #7282. PEEK only: the hooks own the
+// delivery ledger; a non-peek seed here marked unseen messages delivered.
 const BOOT_TS = Date.now();
 let cursorSeeded = false;
 async function seedCursor() {
@@ -92,16 +86,13 @@ async function seedCursor() {
   } catch { /* hub down: the subsequent real call surfaces the error; retry the seed next time */ }
 }
 
-// Every hub call is SIGNED with this session's Ed25519 keypair (TDD §7.3) via the shared client in
-// hooks/lib/api.mjs. Writes: that is what binds /send's `from` to the signer and closes the
-// self-asserted `from` hole (the 2026-07-28 RCE). Reads TOO (the 2026-07-30 agent-UX gap): an
-// enforce hub 401s unsigned reads, which made relay_inbox/board/peers dead for the very agents the
-// bus exists for. Signed reads are scope-filtered by the hub to this identity's grants — for a
-// session reading its own project + DMs that is the intended behavior. The client fail-opens on a
-// down hub (returns {ok:false}); we surface that as a thrown Error so individual tools .catch it.
-// Instance id (docs/INSTANCE-KEYS-CONTRACT.md): the MCP server has no harness session_id, so it
-// mints a random id at boot — its lifetime ≈ the session's. The endorsed subkey it keys signs all
-// traffic; the durable identity keeps enrollment and attribution.
+// Every hub call is SIGNED with this session's Ed25519 keypair (TDD §7.3) via hooks/lib/api.mjs:
+// writes bind /send's `from` to the signer (closing the self-asserted `from` RCE hole), reads stay
+// alive under an enforcing hub and are scope-filtered by the hub to this identity's grants. The
+// client fail-opens on a down hub ({ok:false}); we throw so individual tools .catch it.
+
+// Instance id (docs/INSTANCE-KEYS-CONTRACT.md): no harness session_id exists here, so mint a
+// random id at boot — its lifetime ≈ the session's; the endorsed subkey it keys signs all traffic.
 const INSTANCE_ID = `mcp-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
 async function api(method, path, payload, { timeoutMs } = {}) {
   // PROJECT explicitly, never the client's cwd fallback: this server's project is fixed at boot,
@@ -126,11 +117,10 @@ const fmt = (m) => `#${m.id} [${m.from} -> ${m.to}] ${new Date(m.ts).toLocaleTim
 const server = new McpServer({ name: "trantor", version: "0.1.0" });
 
 server.tool("relay_whoami", "Show this session's relay identity, project, hub URL, HOW that hub was chosen, and whether this session is actually a registered seat.", {}, async () => {
-  // This tool used to POST /register before answering — so asking "where am I?" from a
-  // non-project directory CREATED the phantom seat it then reported, on the local hub, and the
-  // answer looked healthy. A diagnostic must observe, never mutate. It now reports the truth,
-  // including the two things that actually go wrong: an unregistered session, and a hub that was
-  // a fallback rather than a pin.
+  // A diagnostic must observe, never mutate: this tool used to POST /register before answering, so
+  // asking "where am I?" from a non-project directory CREATED the phantom seat it then reported,
+  // and the answer looked healthy. It now reports the truth — an unregistered session, or a hub
+  // that is a fallback rather than a pin.
   const { url, via } = resolveHubInfo(PROJECT);
   const viaText = { env: "RELAY_URL env override", pin: "pinned for this project", global: "GLOBAL DEFAULT — this project is not pinned", default: "BUILT-IN DEFAULT — no config found" }[via] || via;
   let text = `session=${SESSION}\nproject=${PROJECT}\nhub=${url}\nhub_via=${via} (${viaText})\nregistered=${isHomeDirSession ? "NO" : "yes"}`;
@@ -328,11 +318,10 @@ server.tool("relay_withdraw_proposal", "Withdraw one of THIS session's PENDING p
     return { content: [{ type: "text", text: `proposal #${id} withdrawn — one queue slot free` }] };
   });
 
-// ONE card, not the board (#6134). A seat used to be told to "query the board for related PAST
-// cards and lessons — 1900+ cards of tribal knowledge", and it did: the whole board, every turn,
-// almost all of it other people's work. This is the same intent at a thousandth of the tokens —
-// the card, what it waits on, its own notes, and the handful of done cards that actually rhyme
-// with it. Client-side on /tasks, so no hub change and it works against any hub version.
+// ONE card, not the board (#6134): a seat told to "query the board for related PAST cards and
+// lessons" pulled 1900+ cards of mostly other people's work, every turn. This is the same intent
+// at a thousandth of the tokens — the card, what it waits on, its notes, and the done cards that
+// rhyme with it. Client-side on /tasks, so no hub change and it works against any hub version.
 const STOPWORDS = new Set(["the","a","an","and","or","of","to","in","on","for","with","is","it","its","that","this","not","but","by","at","as","from","into","out","up","down","when","then","than","so","no","new","one","two","every","all","any"]);
 function titleWords(title) {
   return new Set(String(title || "").toLowerCase().match(/[a-z][a-z0-9_-]{2,}/g)?.filter(w => !STOPWORDS.has(w)) || []);
@@ -378,11 +367,10 @@ server.tool("relay_board", "Show a project's Kanban board (all cards + their sta
     card: z.number().optional().describe("read ONE card instead of the board: the card itself, its notes, and the last five done cards whose title shares a word with it. This is what a seat starting a card should call — the whole board is 1900+ cards of someone else's work.") },
   async ({ project, card }) => {
   const proj = project || PROJECT;
-  // #6983: ask for the SLIM projection, and when opening one card ask for that card full. The board
-  // needs titles and a note COUNT, never every card's note text — on trantor that was 1.55MB and
-  // 625-961ms against a 1500ms budget, which is why this tool intermittently answered "hub 0" when
-  // the hub was 200 OK and merely slow. An older hub ignores both params and returns the full board,
-  // which still renders — so this asks for cheap and works either way, rather than requiring a deploy.
+  // #6983: ask for the SLIM projection, and for that one card full when opening one. The board
+  // needs titles and a note COUNT, never every card's note text: 1.55MB / 625-961ms against a
+  // 1500ms budget is why this tool answered "hub 0" while the hub was 200 OK and merely slow.
+  // An older hub ignores both params and returns the full board, which still renders either way.
   const { tasks } = await api("GET", `/tasks?project=${encodeURIComponent(proj)}&fields=slim${card ? `&card=${encodeURIComponent(card)}` : ""}`);
   if (!tasks.length) return { content: [{ type: "text", text: `${proj}: no cards yet` }] };
   if (card) return { content: [{ type: "text", text: cardView(tasks, card, proj) }] };
@@ -456,7 +444,7 @@ server.tool("relay_handoff", "Write a rich handoff for THIS session so a fresh s
     // session_id: WHO wrote this. This server has no harness session id, so it records the orch
     // thread's id when the evidence says the writer IS that thread (orchWriterSid). Without it a
     // tool-written orchestrator handoff carries no writer and the baton-hold + map-follow logic in
-    // sessionstart.mjs can never fire (found live 2026-08-28: trantor-1787886998 had session_id null).
+    // sessionstart.mjs can never fire (seen live: an orch handoff carried session_id null).
     const rec = { id: `${name}-${stamp}`, project, projectName: name, machine: hostname(), trigger: "relay_handoff-tool", session_id: orchWriterSid(project, PROJECT), stamp: Number(stamp) || 0, summary: String(summary), gitStatus: git, consumed: false };
     writeFileSync(join(dir, `${rec.id}.json`), JSON.stringify(rec, null, 2));
     await api("POST", "/send", { from: SESSION, to: "all", text: `📋 Handoff ready for ${name} — open a fresh session here to take over (${rec.id}).` }).catch(() => {});
@@ -490,10 +478,8 @@ const HEARTBEAT_MS = Number(process.env.RELAY_HEARTBEAT_MS || 60 * 1000);
 
 // This server's own plugin version, stamped on every /register. Only the tool-use heartbeat HOOK
 // used to write hookVersion, so a fresh-but-idle session's peer row kept its DEAD predecessor's
-// version until the first tool call — misread twice on 2026-08-19 as "wrong plugin version after
-// restart". The MCP boots with the session and registers immediately, so it makes the row truthful
-// from second one. Same lookup as hooks/lib/update-check.mjs: plugin.json beside this file, then
-// package.json (running straight from the repo).
+// version until the first tool call — misread as "wrong plugin version after restart". The MCP
+// registers at boot, making the row truthful from second one. Same lookup as update-check.mjs.
 const MCP_VERSION = (() => {
   for (const rel of ["./.claude-plugin/plugin.json", "./package.json"]) {
     try {
@@ -504,45 +490,32 @@ const MCP_VERSION = (() => {
   return "";
 })();
 
-// Mirror the SessionStart/PostToolUse hooks: some directories aren't project work, and
-// auto-registering from them spawns a phantom project lane that then sits in the sidebar forever.
-// PROJECT falls back to the cwd basename, so the directory name becomes the lane name:
-//   - the home directory itself      → a "<username>" lane
-//   - a plugin-cache snapshot        → a lane named after the VERSION, e.g. "0.17.66"
-// The second one is not hypothetical: `cd ~/.claude/plugins/cache/trantor/trantor/<ver> &&
-// node mcp.mjs` is the documented way to check the relay server still boots after a plugin
-// update, and every such check was leaving a version-numbered lane behind.
-// Opt in explicitly with RELAY_SESSION or RELAY_PROJECT. The MCP server still starts so the
-// user can call relay tools (e.g. relay_whoami) deliberately; we just skip auto-presence.
+// Mirror the SessionStart/PostToolUse hooks: some directories are not project work, and
+// auto-registering from them spawns a phantom project lane that sits in the sidebar forever
+// (home dir → a "<username>" lane; a plugin-cache snapshot → a VERSION-numbered lane, left
+// behind by every documented post-update boot check). Opt in with RELAY_SESSION/RELAY_PROJECT.
 const projectDir = process.env.CLAUDE_PROJECT_DIR || process.cwd();
-// ONE definition of "is this a seat", shared with the SessionStart hook (lib/project.mjs). When
-// the hook and this server disagreed, a session in a non-repo directory got the hook's "not a
-// seat" verdict AND an MCP registration — a phantom peer on the fallback hub, which is the
-// split-brain the whole fix exists to remove. nonSeatReason() also covers a plain non-git
-// directory (~/development), the case the old home-dir-only check let through.
+// ONE definition of "is this a seat", shared with the SessionStart hook (lib/project.mjs): when
+// the two disagreed, a session in a non-repo directory got the hook's "not a seat" verdict AND an
+// MCP registration — a phantom peer on the fallback hub, the split-brain this removes.
+// nonSeatReason() also covers a plain non-git directory, which the old home-dir-only check missed.
 const nonProjectReason = nonSeatReason(projectDir);
 const isHomeDirSession = !!nonProjectReason;
 
 // #6170: WHAT this session is, when it can know. sessionstart stamps kind "orch" on the
 // orchestrator pane, but that runs once — every MCP beat afterwards was kindless, and the hub's
 // crew exemption reads the peer row's kind, so the orchestrator kept being demoted by its own
-// heartbeat and then warned about as an intruder on its own project. Same test sessionstart uses:
-// TRANTOR_ORCH names the project this pane orchestrates.
+// heartbeat, then warned about as an intruder on its own project. Same test sessionstart uses.
 const KIND = process.env.TRANTOR_ORCH && process.env.TRANTOR_ORCH === PROJECT ? { kind: "orch" } : {};
 
 if (!isHomeDirSession) {
   await api("POST", "/register", { session: SESSION, project: PROJECT, status: `active in ${PROJECT}`, hookVersion: MCP_VERSION, ...KIND })
     .catch((err) => { process.stderr.write(`[trantor-mcp] initial register failed: ${err?.message || err}\n`); });
 
-  // Heartbeat — keep this session's presence fresh for as long as the MCP process lives.
-  // Registration alone decays after the hub's online window (5 min); without this, idle agents
-  // — and EVERY agent after the laptop sleeps (dead connection, no resume event) — fall off the
-  // board while their process is still alive. This is the UNIVERSAL counterpart to the Claude-only
-  // PostToolUse heartbeat hook: it runs inside the relay every agent loads (Claude, codex, gemini,
-  // kimi, deepseek), so the whole crew stays tracked. We POST /register with NO status, so the
-  // hub refreshes lastSeen but preserves the session's meaningful status. setInterval pauses during
-  // sleep and fires on wake, so presence self-heals within one interval; .unref() lets the process
-  // still exit cleanly when the agent closes the stdio transport (no phantom peers).
+  // Heartbeat — presence decays after the hub's 5-min online window, so without this idle agents
+  // (and every agent after laptop sleep) fall off the board while their process is alive. This is
+  // the universal counterpart to the Claude-only PostToolUse hook, running in the relay every
+  // agent loads. NO status on the POST (lastSeen refreshes, status preserved); .unref() keeps exit clean.
   setInterval(() => { api("POST", "/register", { session: SESSION, project: PROJECT, hookVersion: MCP_VERSION, ...KIND }).catch(() => {}); }, HEARTBEAT_MS).unref?.();
 } else {
   process.stderr.write(`[trantor-mcp] ${nonProjectReason} — not auto-registering on the bus (set RELAY_SESSION or RELAY_PROJECT to opt in)\n`);
