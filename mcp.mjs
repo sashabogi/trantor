@@ -234,12 +234,14 @@ server.tool("relay_task_move", "Move a Kanban card as you progress: todo -> doin
         // #7968: the blast radius rides the note as one line and the move as a field the hub keeps
         // on the card event; the contract's `base:` line is read off the card's own messages.
         blast = blastRadius(process.cwd(), messages);
-        const line = blastLine(blast);
-        outNote = `${String(note || "").slice(0, 2000 - line.length - 1)}\n${line}`;
+        // The line rides the note only when there was something to measure: with no recorded base
+        // blastRadius returns null and the seat's note stays its own words (test-relay-note).
+        const line = blast ? blastLine(blast) : "";
+        outNote = line ? `${String(note || "").slice(0, 2000 - line.length - 1)}\n${line}` : note;
         const v = hollowVerdict(process.cwd(), id, note, task?.checklist);
         if (v.checked && v.hollow) {
           const what = `no ${v.missing.join(", no ")}`;
-          outNote = `HOLLOW: ${what} — ${note || "(no note)"}\n${line}`.slice(0, 2000);
+          outNote = `HOLLOW: ${what} — ${note || "(no note)"}${line ? `\n${line}` : ""}`.slice(0, 2000);
           const assigner = task?.by;
           if (assigner && assigner !== SESSION) {
             await api("POST", "/send", { from: SESSION, to: assigner, wake: false,

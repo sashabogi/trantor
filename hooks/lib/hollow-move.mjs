@@ -99,7 +99,10 @@ export function blastLine(b) {
 // { unavailable: true }. GRAFT_BIN lets a drill point at an absent or slow binary.
 export function blastRadius(cwd, messages) {
   const base = blastBase(cwd, messages);
-  if (!base) return { unavailable: true };
+  // No recorded base (a card taken before #7750, or a move from a non-git cwd): nothing to measure
+  // and nothing to say, so the note keeps the seat's words untouched. Graft absent or slow WITH a
+  // base is the fail-open case below, and that one does say unavailable.
+  if (!base) return null;
   const r = spawnSync(process.env.GRAFT_BIN || "graft", ["blast", "--base", base, "--depth", "all", "--format", "json"],
     { cwd, encoding: "utf8", timeout: BLAST_TIMEOUT_MS, stdio: ["ignore", "pipe", "ignore"], maxBuffer: 64 * 1024 * 1024 });
   if (r.error || r.status !== 0) return { unavailable: true };
