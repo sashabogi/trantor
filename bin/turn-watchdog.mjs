@@ -2,7 +2,10 @@
 // Turn watchdog (#5684, reworked #6206). runTurn is spawnSync — the runner cannot watch its own
 // turn — so this DETACHED helper does: armed at turn start, disarmed by turn end. A turn past
 // the window with NO new activity earns ONE direct stall report to the foreman (episode, never a
-// timer storm), and the turn is never killed — reporting is the whole job.
+// timer storm). With no stall file (report-only mode) the turn is never killed — reporting is
+// the whole job. With one (#7752, kill mode) a turn silent on EVERY channel for the whole
+// window is also ENDED at the window: the marker tells the runner's shell box to sweep early,
+// so the kill itself still lives in exactly one place — the shell that owns $job.
 //
 // #6206: stdout silence is NOT a stall — `claude -p` prints nothing until the turn ends by
 // design, so a seat editing five files was reported STALLED while its transcript advanced.
@@ -12,13 +15,13 @@
 // instance id, so a survivor of a replaced runner exits on mismatch or runner death instead of
 // re-matching the NEW runner's turn number (the 09:47 false alarm was exactly that orphan).
 //
-//   node bin/turn-watchdog.mjs <stampFile> <errFile> <windowMs> <session> <project> <hubUrl> <transcriptDir> <workDir>
+//   node bin/turn-watchdog.mjs <stampFile> <errFile> <windowMs> <session> <project> <hubUrl> <transcriptDir> <workDir> [stallFile]
 import { readFileSync, statSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { hostId } from "../lib/project.mjs";
 import { signedPost } from "../hooks/lib/api.mjs";
 
-const [stampFile, errFile, windowMsRaw, session, project, hub, transcriptDir = "", workDir = ""] = process.argv.slice(2);
+const [stampFile, errFile, windowMsRaw, session, project, hub, transcriptDir = "", workDir = "", stallFile = ""] = process.argv.slice(2);
 // SAFETY: the 10-minute floor lives in crew-runner.mjs (the default when TRANTOR_TURN_WATCHDOG_MS
 // is unset); this fallback only covers a missing argument. Drills pass tiny windows on purpose.
 const windowMs = Number(windowMsRaw) || 10 * 60 * 1000;
@@ -70,6 +73,37 @@ const describeLast = (b) => {
 let baseErr = errSize();
 const armedAt = armed.startedAt || Date.now();
 const SLACK = 2000;   // timestamp granularity + scheduler drift under load
+
+// #7752 kill mode: poll liveness continuously and, on a whole window of silence on EVERY
+// channel, write the stall marker, report once, exit. The runner's shell box sweeps the CLI
+// when it sees the marker, so a silent turn ends at the window instead of burning the box.
+// stderr liveness is measured ROLLING here (growth since the last poll, not since arm): the
+// question is "any bytes in this window", not "any bytes ever".
+if (stallFile) {
+  const poll = Math.max(250, Math.min(windowMs / 4, 10000));
+  let lastErrAt = armedAt;
+  for (;;) {
+    await sleep(poll);
+    const s = readStamp();
+    if (!s || s.turn !== armed.turn || (armed.runner && s.runner !== armed.runner)) process.exit(0); // turn ended, or a NEWER runner owns the stamp now
+    if (!runnerAlive()) process.exit(0);                       // our runner is gone — never speak for it
+    const now = Date.now();
+    const size = errSize();
+    if (size > baseErr + 200) { baseErr = size; lastErrAt = now; }   // new bytes: alive
+    const freshCut = Math.max(armedAt, now - windowMs - SLACK);
+    const tr = transcriptDir ? newestMtime(transcriptDir) : 0;
+    const wk = workDir ? newestMtime(workDir) : 0;
+    if (tr > freshCut || wk > freshCut || now - lastErrAt < windowMs) continue;   // producing work: alive
+    try { writeFileSync(stallFile, ""); } catch {}
+    const mins = Math.round((now - armedAt) / 60000);
+    const orch = `${hostId()}:${project}`;
+    const text = `⏱ ${session} turn STALLED — ${mins}m with no activity (turn ${s.turn}; last seen: ${describeLast({ tr, wk })}, stderr ${baseErr > 0 ? `${baseErr}B` : "silent"}); ending the turn at the stall window, not the box.`;
+    // Direct = wake. The foreman first; if this seat IS the foreman's own runner, say it to all.
+    const to = orch === session ? "all" : orch;
+    try { await signedPost(`${hub}/send`, { from: session, to, text, project }, { session }); } catch {}
+    process.exit(0);                                            // one report per turn, by construction
+  }
+}
 
 for (;;) {
   await sleep(windowMs);

@@ -270,11 +270,14 @@ async function drill(agent, script, opts = {}) {
      sends.some((m) => m.to === "drillhost:tt-fail-codex" && /FAILED|DOWN/.test(m.text || "")));
 }
 
-// ---- #5684 drill B: the turn watchdog reports a silent long turn, and never kills it ----
+// ---- #5684 drill B: a provider BACKEND-less silent long turn earns ONE stall report ---------
+// Report-ONLY watchdog: with the time box disabled (#7752 kill mode rides the box — no box, no
+// sweep, no stall marker) a silent over-window turn is still reported but never killed, and it
+// finishes clean once the drill releases it.
 {
   const { sends } = await drill("claude",
     '#!/bin/sh\nuntil [ -f "$TRANTOR_TEST_STALL_RELEASE_FILE" ]; do sleep 0.01; done\necho done\nexit 0\n',
-    { env: { RELAY_HOST_ID: "drillhost", TRANTOR_TURN_WATCHDOG_MS: "10" },
+    { env: { RELAY_HOST_ID: "drillhost", TRANTOR_TURN_WATCHDOG_MS: "10", TRANTOR_TURN_MAX_MS: "0" },
       releaseOnStall: true, quietDeadlineMs: 0,
       until: (messages) => messages.some((m) => /STALLED/.test(m.text || "")),
       settleUntil: (_messages, rows) => rows.some((r) => r.status === "idle") });
@@ -282,7 +285,7 @@ async function drill(agent, script, opts = {}) {
   ok("#5684: a silent over-window turn earns a stall report", stalls.length >= 1);
   ok("#5684: exactly ONE report per turn (episode, never a timer storm)", stalls.length === 1);
   ok("#5684: the stall goes DIRECT to the orchestrator", stalls[0]?.to === "drillhost:tt-fail-claude");
-  ok("#5684: the turn was NOT killed — it finished clean, no failure reported",
+  ok("#5684: a BOXLESS turn is NOT killed — it finished clean, no failure reported",
      !sends.some((m) => /turn FAILED/.test(m.text || "")));
 }
 

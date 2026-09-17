@@ -13,7 +13,7 @@ import { redactKeys } from "../lib/redact.mjs";
 import { applyWorktreeDeclaration, ensureSeatWorktree, provisioningLines, readWorktreeDeclaration } from "../lib/seat-worktree.mjs";
 import {
   AUTH_MARKER_RE, classifyFailure, looksLikeAuthDeath,
-  verdictFor, substantiveOutput,
+  verdictFor, substantiveOutput, stallVerdict, cutSignalFor,
   readPromptText, stripPromptEcho,
 } from "../lib/classify-failure.mjs";
 import { capWake, capBcast, pickLessons, composePrompt, contractBase, baseLine } from "./crew-payload.mjs";
@@ -602,6 +602,10 @@ let inFollowUp = false;
 // overwrites it with its own state, so a caller reading it after the chain sees the state of the
 // LAST turn — which is what decides whether a failed chain died to the box or to the API.
 let lastTurnCut = false;
+// #7752: whether the turn that just ended was a SILENT cut — the watchdog's stall marker (every
+// liveness channel quiet for the whole window), not the box. Same overwrite semantics as
+// lastTurnCut: the follow-up's own ending is what the ladder reads.
+let lastTurnStalled = false;
 // The card the CURRENT CLI session belongs to (#6134). 0 = the kickoff session, which belongs to
 // no card, so the first contract that names one starts a session of its own.
 let sessionCard = 0;
@@ -682,13 +686,21 @@ async function runTurn(prompt, isFirst, trigger = "kickoff", opts = {}) {
   // CLI can write lines the watchdog sees. CUTF is written by the shell's time box: cut, not crashed.
   const CUTF = join(homedir(), ".agent-bus", `turncut-${AGENT}-${PROJ}`);
   try { unlinkSync(CUTF); } catch {}
+  // #7752: written by the watchdog's kill mode when EVERY liveness channel has been quiet for
+  // the whole window; the box sweeps on the marker, so a silent turn ends at the stall window
+  // instead of burning the box. Unlinked at turn start and again with the cut cleanup.
+  const STALLF = join(homedir(), ".agent-bus", `turnstall-${AGENT}-${PROJ}`);
+  try { unlinkSync(STALLF); } catch {}
   // Touched by the stderr scrubber as its LAST act (the shell below); node waits for it after
   // spawnSync before reading ERRF — see the drain note at the spawnSync call.
   const DRAINF = join(homedir(), ".agent-bus", `turndrain-${AGENT}-${PROJ}`);
   try { unlinkSync(DRAINF); } catch {}
   try {
     writeFileSync(STAMPF, JSON.stringify({ turn: TURN, startedAt: Date.now(), runner: RUNNER_ID }));
-    const wd = spawn(process.execPath, [join(import.meta.dirname, "turn-watchdog.mjs"), STAMPF, ERRF, String(WD_MS), SESSION, PROJ, HUB, TRANSCRIPT_DIR, TURN_DIR],
+    const wd = spawn(process.execPath, [join(import.meta.dirname, "turn-watchdog.mjs"), STAMPF, ERRF, String(WD_MS), SESSION, PROJ, HUB, TRANSCRIPT_DIR, TURN_DIR,
+      // #7752: the stall marker only exists when a box does — with no box there is no sweep to
+      // end the turn, so the watchdog stays report-only (reporting is the whole job, boxless).
+      TURN_MAX_MS ? STALLF : ""],
       { detached: true, stdio: "ignore" });
     WD_CHILD = wd;
     wd.unref();
@@ -697,13 +709,21 @@ async function runTurn(prompt, isFirst, trigger = "kickoff", opts = {}) {
   // (setsid escapes a group signal, never its parent). The marker file tells node "cut", not "crashed".
   const sweep = `sweep() { local p; for p in $(pgrep -P $1 2>/dev/null); do sweep $p; done; kill -KILL $1 2>/dev/null; }`;
   // #7742: the box must neither hold the sid capture pipe nor orphan its sleep on turn exit.
+  // #7752: the box POLLS instead of one long sleep — the watchdog's stall marker (a silent
+  // turn) breaks the loop at the stall window, the deadline breaks it at the full box, and only
+  // the deadline path writes CUTF so the runner can tell the two cuts apart.
   const box = TURN_MAX_MS ? `
 ${sweep}
 ( trap 'kill "$sleeppid" 2>/dev/null; wait "$sleeppid" 2>/dev/null; exit 0' TERM
-  sleep ${Math.ceil(TURN_MAX_MS / 1000)} & sleeppid=$!
-  wait "$sleeppid"
+  deadline=$(( $(date +%s) + ${Math.ceil(TURN_MAX_MS / 1000)} ))
+  while :; do
+    [ -f "${STALLF}" ] && break
+    [ "$(date +%s)" -ge "$deadline" ] && break
+    sleep 1 & sleeppid=$!
+    wait "$sleeppid"
+  done
   kill -0 $job 2>/dev/null || exit 0
-  : > ${CUTF}
+  [ -f "${STALLF}" ] || : > ${CUTF}
   sweep $job
 ) >/dev/null 2>&1 & boxpid=$!` : "\nboxpid=";
   const shell = `set -o pipefail
@@ -736,9 +756,11 @@ exit $turn_exit`;
   if (TURN_MAX_MS) { spawnOpts.timeout = TURN_MAX_MS + 30000; spawnOpts.killSignal = "SIGKILL"; }
   const r = spawnSync("/bin/bash", ["-c", shell], spawnOpts);
   // The shell's box leaves the marker; the backstop leaves an ETIMEDOUT. Either way the turn was
-  // cut, not merely failed.
+  // cut, not merely failed. A stall marker (#7752) outranks the box marker: a turn silent for
+  // the whole window is a stall however the sweep found it.
   const boxed = existsSync(CUTF);
-  const cut = !!TURN_MAX_MS && (boxed || r.error?.code === "ETIMEDOUT");
+  const stallCut = existsSync(STALLF);
+  const cut = !!TURN_MAX_MS && (boxed || stallCut || r.error?.code === "ETIMEDOUT");
   // DRAIN before classifying, never on a CUT turn (the sweep killed the scrubber, its marker never
   // comes). bash 3.2 `wait` skips process substitutions, so wait for DRAINF, bounded.
   if (!cut) {
@@ -752,9 +774,12 @@ exit $turn_exit`;
     // Belt and braces after the shell's descendant sweep: anything still sharing the turn's group.
     if (r.pid) { try { process.kill(-r.pid, "SIGKILL"); } catch {} }
     try { unlinkSync(CUTF); } catch {}
-    log(`\x1b[33mturn cut at the ${Math.round(TURN_MAX_MS / 1000)}s time box — CLI and every descendant ended${boxed ? "" : " (node backstop: bash itself was wedged)"}\x1b[0m`);
+    try { unlinkSync(STALLF); } catch {}
+    if (stallCut) log(`\x1b[33mturn STALLED — no bytes on either stream and no transcript advance for ${Math.round(WD_MS / 60000)}m; ended at the stall window, not the ${Math.round(TURN_MAX_MS / 1000)}s box\x1b[0m`);
+    else log(`\x1b[33mturn cut at the ${Math.round(TURN_MAX_MS / 1000)}s time box — CLI and every descendant ended${boxed ? "" : " (node backstop: bash itself was wedged)"}\x1b[0m`);
   }
   lastTurnCut = cut;
+  lastTurnStalled = cut && stallCut;
   // #5869: scrub AT REST, synchronously, before anything reads the file back. The explicit shell
   // wait above drains the live stderr scrubber first; this pass is defense in depth for redaction.
   try { writeFileSync(ERRF, redactKeys(readFileSync(ERRF, "utf8"))); } catch {}
@@ -808,7 +833,9 @@ exit $turn_exit`;
   if (lastEmptyTurn) log("\x1b[33mexit 0 but the turn was EMPTY — no worktree change, no substantive output, no bus activity\x1b[0m");
   // #5868: the verdict rides the telemetry row so a classification survives the pane scrolling
   // away — the same "classified X because Y" shape the runner logs, in the seat's jsonl forever.
-  const verdict = verdictFor(realExit, effExit, lastEmptyOutput, ownOut, lastEmptyTurn);
+  // A silent cut names its own verdict (#7752): the exit under it is the sweep's SIGPIPE, never
+  // a provider failure.
+  const verdict = stallCut ? stallVerdict() : verdictFor(realExit, effExit, lastEmptyOutput, ownOut, lastEmptyTurn);
   // #6134: what the turn COST, from the CLI's own usage line. Zero means this CLI printed none —
   // never that the turn was free. `trantor seat-why` totals these into today's spend per seat.
   let tokens = parseTurnTokens(ownOut);
@@ -818,10 +845,11 @@ exit $turn_exit`;
     // actually carried counts.
     if (c) tokens = c.input + c.output + c.cache_read + c.cache_creation;
   }
-  // #6289: every ledger row names in ONE field what happened to the turn — cut (the box ended it),
-  // api-error (the CLI failed), completed — and what it cost in tokens, even when this CLI printed
-  // no usage line (0 means "not reported", never "free"). `cut` stays too: the drills read it.
-  const outcome = cut ? "cut" : (effExit !== 0 ? "api-error" : lastEmptyTurn ? "empty" : "completed");
+  // #6289: every ledger row names in ONE field what happened to the turn — cut (the box ended
+  // it), stalled (the watchdog window ended it, #7752), api-error (the CLI failed), completed —
+  // and what it cost in tokens, even when this CLI printed no usage line (0 means "not
+  // reported", never "free"). `cut` stays too: the drills read it.
+  const outcome = cut ? (stallCut ? "stalled" : "cut") : (effExit !== 0 ? "api-error" : lastEmptyTurn ? "empty" : "completed");
   // #7756: a clean turn that ASKED its assigner is demoted-but-owed, not "completed". The judge
   // (deliverWake's /contracts read) renames the ledger row, so "asked" is what the log keeps.
   let finalOutcome = outcome;
@@ -830,6 +858,10 @@ exit $turn_exit`;
   }
   const telemetryRow = { ts: Date.now(), agent: AGENT, project: PROJ, turn: TURN, trigger, model: MODEL || "cli-default", duration_ms: Date.now() - t0, exit: realExit, effExit, authFailed: effExit !== realExit, emptyOutput: lastEmptyOutput, emptyTurn: lastEmptyTurn, verdict, outcome: finalOutcome, tokens };
   if (cut) telemetryRow.cut = true;
+  if (stallCut) telemetryRow.stalled = true;
+  // #7752: a cut turn's 141 is the sweep's SIGPIPE, recorded as the cut signal — never read as
+  // a quota or crash pattern downstream.
+  if (cut) { const sig = cutSignalFor(realExit); if (sig) telemetryRow.cutSignal = sig; }
   telemetry(telemetryRow);
   log(`turn ended (exit ${realExit}${effExit !== realExit ? ` → effective ${effExit} (${lastEmptyOutput ? "empty-output" : "auth"})` : ""}, ${((Date.now() - t0) / 1000).toFixed(0)}s)`);
   if (realExit === 0 && effExit === 0) { cmuxStatus("idle", "#8a94a6", "robot"); herdrAgent("idle"); }   // finished this turn, waiting for the next
