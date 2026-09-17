@@ -569,8 +569,8 @@ exit 0
     turnRows.some((r) => r.cut === true && r.outcome === "cut"));
   ok("#6289: the follow-up's ledger row carries outcome:'completed'",
     turnRows.some((r) => r.trigger === "time-box follow-up" && r.outcome === "completed"));
-  ok("#6289: EVERY ledger row names its outcome (cut | api-error | completed) and its tokens",
-    turnRows.length > 0 && turnRows.every((r) => ["cut", "api-error", "completed"].includes(r.outcome) && Number.isFinite(r.tokens)),
+  ok("#6289: EVERY ledger row names its outcome (cut | api-error | completed | empty) and its tokens",
+    turnRows.length > 0 && turnRows.every((r) => ["cut", "api-error", "completed", "empty"].includes(r.outcome) && Number.isFinite(r.tokens)),
     JSON.stringify(turnRows.map((r) => ({ t: r.trigger, o: r.outcome, k: r.tokens }))));
 }
 

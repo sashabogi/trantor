@@ -74,7 +74,7 @@ P="$HOME/.agent-bus/turn-codex-${PROJ}.txt"
 # #5481: a real CLI always prints something, so the fixture must too or its success reads as
 # empty-output. #7759: short output on an untouched worktree also reads as a hollow EMPTY turn
 # now, so the success answer clears the substantive floor — this drill tests the ack, not validity.
-echo "the contract is done: the work landed in the worktree, the gate ran green, and the card moved with a note."
+echo "the contract is done: the work landed in the worktree, the gate ran green, and the card moved with a note, so this turn consumed its wake."
 if grep -q "NEW BUS MESSAGE" "$P"; then exit ${exitCode}; fi
 exit 0
 `);
@@ -178,7 +178,7 @@ P="$HOME/.agent-bus/turn-codex-${project}.txt"
 { echo "===TURN==="; cat "$P"; } >> "${logFile}"
 # #7759: the success answer clears the substantive floor, or the wake reads as a hollow EMPTY
 # turn and is re-delivered — this drill counts wake turns, not turn validity.
-echo "the contract is done: the work landed, the gate ran green, and the card moved with a note."
+echo "the contract is done: the work landed in the worktree, the gate ran green, and the card moved with a note, so this turn consumed its wake."
 exit 0
 `);
     chmodSync(join(fakebin, "codex"), 0o755);

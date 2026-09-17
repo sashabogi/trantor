@@ -8,6 +8,12 @@
 export const DRILL_IDENTITY_VARS = [
   "HERDR_ENV", "HERDR_PANE_ID", "TRANTOR_ORCH", "TRANTOR_SEAT",
   "RELAY_PROJECT", "TRANTOR_PROJECT", "RELAY_SESSION", "RELAY_AGENT",
+  // A mode flag, scrubbed for the same reason: a seat running UNDER Trantor State exports it,
+  // and drills inheriting it armed state mode in every spawned runner — whose hasJsonSchemaFlag
+  // probe then burned its 20s timeout against the drill's fake CLI, blowing every deadline
+  // (#7759: test-failure was 8/8 red from the seat that ran the suite, green from every other
+  // shell). Drill results must not depend on who ran the suite.
+  "TRANTOR_STATE_ASSEMBLE",
 ];
 
 // Child env for a drill spawn: host env minus identity, plus the caller's deliberate overrides.
