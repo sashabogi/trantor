@@ -10,7 +10,8 @@ import { execSync, spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { createRequire } from "node:module";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { advise } from "./bin/advise.mjs";
+import { advise, loadWorld } from "./bin/advise.mjs";
+import { loadSeatRecord } from "./lib/seat-record.mjs";
 import { resolveProject, hostId, resolveHubInfo, nonSeatReason, handoffDir, orchWriterSid } from "./lib/project.mjs";
 import { signedPost, signedGet } from "./hooks/lib/api.mjs";
 import { anchorCursor } from "./hooks/lib/inbox-ledger.mjs";
@@ -258,7 +259,11 @@ server.tool("relay_advise", "THE ADVISOR — ask the brain how to execute a body
     packages: z.array(z.object({ title: z.string(), difficulty: z.enum(["easy","medium","hard"]).optional(), kind: z.string().optional() })).describe("the work packages you'd cut as cards"),
     horizon: z.enum(["short","medium","long"]).optional().describe("how long this build will run (default inferred from package count)") },
   async ({ task, packages, horizon }) => {
-    const out = advise({ task, packages, horizon });
+    // #7762: the advisor reads THIS project's seat record (derived, fail-open) so a seat whose
+    // recent cards produced nothing is benched at that difficulty instead of re-picked as cheap.
+    const world = loadWorld();
+    try { world.record = await loadSeatRecord({ project: PROJECT }); } catch {}
+    const out = advise({ task, packages, horizon }, world);
     return { content: [{ type: "text", text: JSON.stringify(out, null, 2) }] };
   });
 

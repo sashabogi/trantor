@@ -15,8 +15,9 @@ import { join } from "node:path";
 import { homedir } from "node:os";
 import { execSync } from "node:child_process";
 import { pathToFileURL } from "node:url";
-import { busDir, readConfig } from "../lib/project.mjs";
+import { busDir, readConfig, resolveProject } from "../lib/project.mjs";
 import { loadCatalog, lookup as catalogLookup, effortParams, UNCATALOGUED_STATUS } from "../lib/model-catalog.mjs";
+import { benchedAt, loadSeatRecord } from "../lib/seat-record.mjs";
 
 const H = homedir();
 const read = (p, fb) => { try { return JSON.parse(readFileSync(p, "utf8")); } catch { return fb; } };
@@ -120,7 +121,7 @@ const FORECAST = { easy: 0.3e6, medium: 1.5e6, hard: 6e6 };  // tokens
 const CREW_PREF = { hard: ["codex", "glm", "kimi", "deepseek", "openrouter"], medium: ["kimi", "glm", "codex", "deepseek", "openrouter"], easy: ["deepseek", "kimi", "glm", "codex", "openrouter"] };
 
 export function advise(input, world = loadWorld()) {
-  const { profile, registry, caps, agents, scrooge, roster = BUILTIN_ROSTER } = world;
+  const { profile, registry, caps, agents, scrooge, roster = BUILTIN_ROSTER, record } = world;
   // brought (discovered) opencode providers extend the preference list — appended LAST in every
   // tier (unknown strength a priori, like openrouter), so they fill once the curated seats are
   // taken, and are the only option for a user who brought nothing but a custom provider.
@@ -149,6 +150,9 @@ export function advise(input, world = loadWorld()) {
 
   // ---- routing per package ----
   const used = {};
+  // #7762: seats benched by the record ride along so the recommendation says WHO was benched,
+  // at which difficulty, and what their producing nothing already cost (tokens the crew burned).
+  const seatFeedback = [];
   const routing = pkgs.map(p => {
     if ((mode === "hybrid" || mode === "scrooge") && p.difficulty === "easy" && scrooge) {
       const m = scroogeModelFor(registry, caps, p.kind, p.difficulty);
@@ -166,7 +170,19 @@ export function advise(input, world = loadWorld()) {
     }
     if (p.owner === "self") return { ...p, executor: "orchestrator", pool: tierOf(profile, "claude"), reason: "architect-owned (foundation/integration doctrine) — the orchestrator keeps the shared contract in its own hands" };
     if (mode === "solo") return { ...p, executor: "orchestrator", pool: tierOf(profile, "claude"), reason: "small enough to do inline" };
-    const pref = [...CREW_PREF[p.difficulty], ...broughtPref].filter(a => agents.includes(a));
+    const prefAll = [...CREW_PREF[p.difficulty], ...broughtPref].filter(a => agents.includes(a));
+    // #7762 feedback loop: a seat whose last 3 cards AT THIS DIFFICULTY in THIS project were
+    // empty/bounced is benched at that difficulty — the redone work counts against it, so it
+    // stops being "the cheap option". A bench never empties the pool (better a struck seat
+    // than no seat), and the record is per project — never global.
+    const struck = prefAll.map(a => [a, benchedAt(record, a, p.difficulty)]).filter(([, b]) => b);
+    const eligible = prefAll.filter(a => !benchedAt(record, a, p.difficulty));
+    const pref = eligible.length ? eligible : prefAll;
+    for (const [s, b] of struck) {
+      const wasted = b.wastedTokens ? ` ≈${(b.wastedTokens / 1e6).toFixed(1)}M tok burned` : "";
+      seatFeedback.push({ seat: s, difficulty: p.difficulty, streak: b.streak, cardIds: b.cardIds, wastedTokens: b.wastedTokens,
+        note: `${s} benched at ${p.difficulty}: last ${b.streak.length} cards ${b.streak.join("/")} (#${b.cardIds.join(" #")})${wasted}` });
+    }
     const agent = pref.sort((a, b) => (used[a] || 0) - (used[b] || 0))[0] || agents[0] || "deepseek";
     used[agent] = (used[agent] || 0) + 1;
     const pool = tierOf(profile, roster[agent]?.provider || agent);
@@ -184,6 +200,7 @@ export function advise(input, world = loadWorld()) {
     // has scored it (AA scores + price proxy + per-difficulty cost weighting → hard escalates to a
     // strong model, easy stays cheap). If it hasn't been run, routing falls back to cost-only.
     if (agent === "openrouter" && p.difficulty === "hard") why_r += ` — OpenRouter ranks capability×cost; run \`scrooge-capabilities\` to keep the catalog scored (or pin openrouter:openrouter/<vendor>/<model>)`;
+    if (struck.length && !struck.some(([s]) => s === agent)) why_r += ` — ${struck.map(([s]) => s).join("/")} benched at ${p.difficulty} here (last 3 cards empty/bounced; seat_feedback)`;
     return { ...p, executor: agent, pool, est_cost_usd: est, reason: why_r };
   });
   // crew-size rationale: seats are EMERGENT from the work, and we say so
@@ -196,11 +213,14 @@ export function advise(input, world = loadWorld()) {
 
   const apiCost = +(routing.reduce((s, r) => s + (r.est_cost_usd || 0), 0)).toFixed(2);
   const pools = [...new Set(routing.map(r => `${r.executor}:${r.pool}`))];
+  // One bench line per seat+difficulty, however many packages tripped it.
+  const feedback = [...new Map(seatFeedback.map(f => [`${f.seat}@${f.difficulty}`, f])).values()];
   const summary =
     `Recommendation: ${mode.toUpperCase()}. ${why.join("; ")}. ` +
     (mode === "crew" || mode === "hybrid"
       ? `Routing: ${routing.map(r => `${r.title}→${r.executor}${r.model ? `(${r.model})` : ""}`).join(", ")}. ` +
-        `Estimated real-money cost ≈ $${apiCost} (everything on a subscription pool is $0 marginal — quota pooling across ${pools.length} pools).`
+        `Estimated real-money cost ≈ $${apiCost} (everything on a subscription pool is $0 marginal — quota pooling across ${pools.length} pools).` +
+        (feedback.length ? ` Seat record (this project): ${feedback.map(f => f.note).join("; ")}.` : "")
       : "");
   const table = ["| package | diff | executor (model) | pool | est $ | reason |", "|---|---|---|---|---|---|",
     ...routing.map(r => `| ${r.title} | ${r.difficulty} | ${r.executor}${r.model ? ` (${r.model})` : ""} | ${r.pool} | ${r.est_cost_usd ?? "—"} | ${r.reason} |`)].join("\n");
@@ -232,7 +252,7 @@ export function advise(input, world = loadWorld()) {
   // #7777: crew-bound packages get their catalog effort attached at SPAWN, when the live model is
   // known (bin/crew/models.mjs resolveSpec → CREW_EFFORT); the advisor only records that it is deferred.
   const catalogMeta = (() => { const c = loadCatalog(); return { version: c.version, models: Object.keys(c.models).length, source: "configs/model-catalog.json" }; })();
-  return { mode, why, crew, routing, routing_table_md: table, card_args: cards, est_api_cost_usd: apiCost, quota_pools: pools, summary, orchestrator_tier: orchTier, agents_available: agents, catalog: catalogMeta };
+  return { mode, why, crew, routing, routing_table_md: table, card_args: cards, est_api_cost_usd: apiCost, quota_pools: pools, summary, orchestrator_tier: orchTier, agents_available: agents, catalog: catalogMeta, ...(feedback.length ? { seat_feedback: feedback } : {}) };
 }
 
 // ---- CLI ----
@@ -249,6 +269,10 @@ if (import.meta.url === pathToFileURL(process.argv[1]).href) {
     const stdin = readFileSync(0, "utf8").trim();
     input = stdin ? JSON.parse(stdin) : { packages: [] };
   }
-  const out = advise(input);
+  const world = loadWorld();
+  // #7762: fold this project's seat record into the routing (fail-open — no hub, no record,
+  // and the advice is exactly what it was before the feedback loop existed).
+  try { world.record = await loadSeatRecord({ project: resolveProject(process.cwd()) }); } catch {}
+  const out = advise(input, world);
   console.log(JSON.stringify(out, null, 2));
 }

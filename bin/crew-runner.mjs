@@ -862,7 +862,9 @@ exit $turn_exit`;
   // #6289: every ledger row names in ONE field what happened to the turn — cut (the box ended
   // it), stalled (the watchdog window ended it, #7752), api-error (the CLI failed), completed —
   // and what it cost in tokens, even when this CLI printed no usage line (0 means "not
-  // reported", never "free"). `cut` stays too: the drills read it.
+  // reported", never "free"). `cut` stays too: the drills read it. #7762: `card` binds the row
+  // to the card the turn was working (0 = kickoff/pulse, no card) so the seat record can
+  // attribute empty/stalled turns to the card that produced nothing.
   const outcome = cut ? (stallCut ? "stalled" : "cut") : (effExit !== 0 ? "api-error" : lastEmptyTurn ? "empty" : "completed");
   // #7756: a clean turn that ASKED its assigner is demoted-but-owed, not "completed". The judge
   // (deliverWake's /contracts read) renames the ledger row, so "asked" is what the log keeps.
@@ -870,7 +872,7 @@ exit $turn_exit`;
   if (outcome === "completed" && opts.judgeOutcome) {
     try { finalOutcome = (await opts.judgeOutcome()) || outcome; } catch {}
   }
-  const telemetryRow = { ts: Date.now(), agent: AGENT, project: PROJ, turn: TURN, trigger, model: MODEL || "cli-default", duration_ms: Date.now() - t0, exit: realExit, effExit, authFailed: effExit !== realExit, emptyOutput: lastEmptyOutput, emptyTurn: lastEmptyTurn, verdict, outcome: finalOutcome, tokens };
+  const telemetryRow = { ts: Date.now(), agent: AGENT, project: PROJ, turn: TURN, trigger, card: sessionCard || 0, model: MODEL || "cli-default", duration_ms: Date.now() - t0, exit: realExit, effExit, authFailed: effExit !== realExit, emptyOutput: lastEmptyOutput, emptyTurn: lastEmptyTurn, verdict, outcome: finalOutcome, tokens };
   if (cut) telemetryRow.cut = true;
   if (stallCut) telemetryRow.stalled = true;
   // #7752: a cut turn's 141 is the sweep's SIGPIPE, recorded as the cut signal — never read as

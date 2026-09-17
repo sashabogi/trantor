@@ -99,6 +99,7 @@ switch (cmd) {
   case "state": run("bin/state.mjs"); break;
   case "seats": case "seat": run("bin/seats.mjs"); break;
   case "seat-why": case "why": run("bin/seat-why.mjs"); break;
+  case "seat-record": run("bin/seat-record.mjs"); break;
   case "orchestrate": run("bin/orchestrate.mjs"); break;
   case "app": run("bin/app.mjs"); break;
   case "patrol": run("bin/patrol.mjs"); break;
@@ -231,6 +232,7 @@ switch (cmd) {
                       seats: which project lives in which directory — seats · seats add · seats up · seats login install
   trantor state       a seat's working memory: show <seat> <card> [--json] · validate · reset --force · gc [--apply]
   trantor seat-why    WHY a seat is down (err file, logs, pids): seat-why <agent> [--json] — quota, auth, crash, or just no pane
+  trantor seat-record the per-project seat record the advisor benches from (✓/∅/↩ per difficulty) — [--project p] [--reset <seat>] [--json]
   trantor watch       live bus feed in the terminal
   trantor inbox       THIS session's unread bus messages, signed (works under enforce) — [--all] [--consume] [--json]
   trantor policy      the autonomy ladder: show | set <project> <1-4> | link <a> <b> --reason "<why>"
