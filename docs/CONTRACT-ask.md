@@ -30,6 +30,8 @@ The JSON shape is exact:
   "project": "<project resolved from cwd>",
   "cwd": "<hook payload cwd>",
   "tool_use_id": "<AskUserQuestion tool-use id, or null>",
+  "kind": "AskUserQuestion",
+  "ask": { "question": "Ship it?", "options": [{ "label": "Yes", "description": "Proceed" }], "multi": false },
   "questions": [{
     "question": "Ship it?", "header": "Ship", "multiSelect": false,
     "options": [{ "label": "Yes", "description": "Proceed" }]
@@ -39,6 +41,17 @@ The JSON shape is exact:
   "ts": 0
 }
 ```
+
+`ask` is the declaration the Chat chips render from (#7776): the first question, every option as
+offered (`description` omitted when the tool gave none), and `multi` mirroring `multiSelect`. The
+chips never invent an option that is not in this list; the prose extractor runs only when no
+sidecar is open.
+
+A `relay_ask` tool call (#7756) is the other declaration: `PreToolUse` on `mcp__.*relay_ask`
+writes `kind: "relay_ask"`, `ask: { question, options: [], multi: false }`, a one-entry
+`questions` mirror with header `ask`, and `visible_ts` set at once. It survives `Stop`, since the
+turn ended by asking, and `UserPromptSubmit` deletes it: the next prompt is the answer or
+supersedes the question. It offers no options, so the card shows the question and no chips.
 
 `ts` is the first hook's Unix epoch milliseconds. `PermissionRequest` changes `event` and sets
 `visible_ts` without changing the ask's identity; a repeated identical event does not rewrite the

@@ -25,6 +25,15 @@
             "command": "node ${CLAUDE_PLUGIN_ROOT}/hooks/prompt-focus.mjs"
           }
         ]
+      },
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node ${CLAUDE_PLUGIN_ROOT}/hooks/ask-sidecar.mjs"
+          }
+        ]
       }
     ],
     "PreToolUse": [
@@ -48,6 +57,15 @@
       },
       {
         "matcher": "AskUserQuestion",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node ${CLAUDE_PLUGIN_ROOT}/hooks/ask-sidecar.mjs"
+          }
+        ]
+      },
+      {
+        "matcher": "mcp__.*relay_ask",
         "hooks": [
           {
             "type": "command",

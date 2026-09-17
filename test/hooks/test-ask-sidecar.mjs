@@ -92,6 +92,44 @@ run(open);
 run({ hook_event_name: "Stop", session_id: sid, cwd });
 ok(!existsSync(sidecar), "Stop clears an ask when Claude omits its closing tool hook");
 
+// #7776: the sidecar declares the ask as structure the chips render verbatim.
+run(open);
+const declared = JSON.parse(readFileSync(sidecar, "utf8"));
+ok(declared.kind === "AskUserQuestion" && declared.ask?.question === "Which release lane?",
+   "the sidecar declares the first question as `ask`");
+ok(JSON.stringify(declared.ask?.options) === JSON.stringify([
+     { label: "Stable", description: "Use the tested lane" },
+     { label: "Canary", description: "Use the preview lane" },
+   ]) && declared.ask?.multi === false,
+   "`ask.options` carries every offered option with its description, and `multi` mirrors multiSelect");
+run({ ...open, tool_input: { questions: [{ ...questions[0], multiSelect: true, options: [{ label: "Only" }] }] } });
+const multi = JSON.parse(readFileSync(sidecar, "utf8"));
+ok(multi.ask?.multi === true && JSON.stringify(multi.ask?.options) === JSON.stringify([{ label: "Only" }]),
+   "a multi-select ask declares multi, and an option without a description carries none");
+run({ ...open, hook_event_name: "PostToolUse" });
+
+const relayAsk = {
+  hook_event_name: "PreToolUse",
+  session_id: sid,
+  cwd,
+  tool_name: "mcp__plugin_trantor_relay__relay_ask",
+  tool_input: { card: 7776, question: "Which sha is the base?" },
+  tool_use_id: "toolu_RELAY",
+};
+const relayed = run(relayAsk);
+const relayStored = JSON.parse(readFileSync(sidecar, "utf8"));
+ok(relayed.status === 0 && relayed.stdout === "{}" && relayStored.kind === "relay_ask",
+   "a relay_ask PreToolUse opens an ask-shaped sidecar and returns no decision");
+ok(relayStored.ask?.question === "Which sha is the base?" && relayStored.ask?.options.length === 0 &&
+   relayStored.questions[0]?.question === "Which sha is the base?" && Number.isFinite(relayStored.visible_ts),
+   "the relay_ask declares its question with no options, visible at once");
+run({ hook_event_name: "Stop", session_id: sid, cwd });
+ok(existsSync(sidecar), "Stop keeps a relay_ask open: the turn ended by asking");
+run({ hook_event_name: "UserPromptSubmit", session_id: sid, cwd, prompt: "af6f339" });
+ok(!existsSync(sidecar), "the next prompt closes a relay_ask");
+run({ ...relayAsk, tool_input: { card: 7776 } });
+ok(!existsSync(sidecar), "a relay_ask without a question opens nothing");
+
 mkdirSync(dirname(sidecar), { recursive: true });
 writeFileSync(sidecar, "not json");
 const malformedClose = run({ ...open, hook_event_name: "PostToolUse" });
@@ -113,6 +151,10 @@ for (const event of ["PreToolUse", "PermissionRequest", "PostToolUse", "PostTool
 }
 ok(commands("Stop").includes(`:node \${CLAUDE_PLUGIN_ROOT}/hooks/ask-sidecar.mjs`),
    "Stop registers unconditional stale-open cleanup");
+ok(commands("PreToolUse").includes(`mcp__.*relay_ask:node \${CLAUDE_PLUGIN_ROOT}/hooks/ask-sidecar.mjs`),
+   "PreToolUse registers the relay_ask sidecar hook (#7776)");
+ok(commands("UserPromptSubmit").includes(`:node \${CLAUDE_PLUGIN_ROOT}/hooks/ask-sidecar.mjs`),
+   "UserPromptSubmit registers the relay_ask close (#7776)");
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
