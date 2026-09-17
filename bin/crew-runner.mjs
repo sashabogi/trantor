@@ -284,7 +284,7 @@ if (!CLI[AGENT]) log(`'${AGENT}' is not a built-in seat — running it as an ope
 
 // RUNNER_RULES / RUNNER_KICKOFF env overrides: the runner is also the substrate for non-crew
 // always-on seats (the fleet DUTY agent, bin/duty.mjs) whose doctrine is not "work your card".
-const RULES = process.env.RUNNER_RULES || `Rules: you are ${SESSION} on the trantor crew. Before starting a card, read YOUR card: relay_board with card:<id> (the card, its deps, its notes, and the last five done cards whose title shares a word); never the whole board. Work your assigned file(s), report on the bus (relay_send, <280 chars), move your Kanban card as you go with a NOTE saying what you did (doing -> testing -> done; in 'testing' run YOUR OWN test file — never the full npm test, suites collide across seats — plus \`node bin/slop-gate.mjs\` when the repo has one: it lints ONLY your changed files against the anti-slop rules, and a card must not reach done with slop-gate failing; use 'failed' + a report if anything breaks). If you need something from another session, message THAT SESSION (relay_peers to find its id, relay_send to reach it) — never ask the human to pass it along; carrying messages between agents is the job this bus exists to remove. When your work for THIS message is finished, END YOUR TURN — do NOT park, do NOT loop relay_wait; the runner waits for you and will wake you with the next message. Path discipline: build/test from your worktree root ${TURN_DIR} with absolute paths or --manifest-path/--prefix instead of cd-ing into subdirs, and put anything that must land outside the repo under ${TURN_DIR}/.agent-bus-out/ (gitignored) — never ~/.agent-bus. Realigning your seat branch after the orchestrator harvested your commits is \`trantor sync\` run from your worktree: it reads the harvest receipts and refuses when an unharvested commit would be lost, so never reset or rebase onto main by hand. Cross-project action is a breach: never \`trantor up\` a crew, register a seat, or send a card/contract into a project other than ${PROJ} unless the operator ran \`trantor policy link ${PROJ} <other> --reason "<why>"\` first — the hub, the CLI and this runner all refuse it mechanically, so ask the operator to link the projects instead of routing around the refusal.`;
+const RULES = process.env.RUNNER_RULES || `Rules: you are ${SESSION} on the trantor crew. Before starting a card, read YOUR card: relay_board with card:<id> (the card, its deps, its notes, and the last five done cards whose title shares a word); never the whole board. Work your assigned file(s), report on the bus (relay_send, <280 chars), move your Kanban card as you go with a NOTE saying what you did (doing -> testing -> done; in 'testing' run YOUR OWN test file — never the full npm test, suites collide across seats — plus \`node bin/slop-gate.mjs\` when the repo has one: it lints ONLY your changed files against the anti-slop rules, and a card must not reach done with slop-gate failing; use 'failed' + a report if anything breaks). If a contract omits a fact you cannot proceed without, ASK — never invent the value: relay_ask(<card>, <question>) blocks the card with your question, keeps the turn owed (no park, no failure), and resumes you when the assigner's answer lands; an invented value that reads as reasoned is the worst outcome this crew ships (#7756). If you need something from another session, message THAT SESSION (relay_peers to find its id, relay_send to reach it) — never ask the human to pass it along; carrying messages between agents is the job this bus exists to remove. When your work for THIS message is finished, END YOUR TURN — do NOT park, do NOT loop relay_wait; the runner waits for you and will wake you with the next message. Path discipline: build/test from your worktree root ${TURN_DIR} with absolute paths or --manifest-path/--prefix instead of cd-ing into subdirs, and put anything that must land outside the repo under ${TURN_DIR}/.agent-bus-out/ (gitignored) — never ~/.agent-bus. Realigning your seat branch after the orchestrator harvested your commits is \`trantor sync\` run from your worktree: it reads the harvest receipts and refuses when an unharvested commit would be lost, so never reset or rebase onto main by hand. Cross-project action is a breach: never \`trantor up\` a crew, register a seat, or send a card/contract into a project other than ${PROJ} unless the operator ran \`trantor policy link ${PROJ} <other> --reason "<why>"\` first — the hub, the CLI and this runner all refuse it mechanically, so ask the operator to link the projects instead of routing around the refusal.`;
 
 // ---- the pulse --------------------------------------------------------------
 // RUNNER_PULSE_MS re-runs an orchestrator seat's mission note on a cadence when the bus is silent;
@@ -350,12 +350,16 @@ const RETRY_MS = (() => {
   const custom = raw ? raw.split(",").map(Number).filter(n => Number.isFinite(n) && n > 0) : [];
   return custom.length ? custom : [30e3, 60e3, 120e3, 300e3, 900e3];
 })();
+// #7756: while an ask awaits its answer the contract's wake stays owed but is NOT redelivered —
+// the answer (re = the ask's id, or any direct word from the assigner) is what releases it.
+let awaitingAsk = null;
 function savePending(wake, bcast) {
   try {
-    // the seen-set keeps the file alive even with both queues empty: the dedupe ledger outlives
-    // the deliveries it guards (#7778).
-    if (!wake.length && !bcast.length && !seenLedger.length) { try { unlinkSync(PENDF); } catch {} return; }
-    writeFileSync(PENDF, JSON.stringify({ agent: AGENT, project: PROJ, ts: Date.now(), wake, bcast, seen: seenLedger }));
+    // the seen-set (#7778) and a held ask (#7756) keep the file alive even with both queues empty:
+    // the dedupe ledger outlives the deliveries it guards, and a restarted runner must wait for
+    // the answer instead of redelivering the very contract the seat already asked about.
+    if (!wake.length && !bcast.length && !seenLedger.length && !awaitingAsk) { try { unlinkSync(PENDF); } catch {} return; }
+    writeFileSync(PENDF, JSON.stringify({ agent: AGENT, project: PROJ, ts: Date.now(), wake, bcast, seen: seenLedger, ask: awaitingAsk?.id || 0, askTo: awaitingAsk?.to || "" }));
   } catch {}
 }
 function loadPending() {
@@ -367,8 +371,9 @@ function loadPending() {
       seen: Array.isArray(j.seen)
         ? j.seen.filter(e => e && Number.isFinite(Number(e.id))).map(e => ({ id: Number(e.id), ts: Number(e.ts) || 0 }))
         : [],
+      ask: Number(j.ask) || 0, askTo: String(j.askTo || ""),
     };
-  } catch { return { wake: [], bcast: [], seen: [] }; }
+  } catch { return { wake: [], bcast: [], seen: [], ask: 0, askTo: "" }; }
 }
 
 // Auth failures in TURN OUTPUT: opencode prints its auth error and still exits 0 (#5405). The rules
@@ -848,7 +853,13 @@ exit $turn_exit`;
   // api-error (the CLI failed), completed — and what it cost in tokens, even when this CLI printed
   // no usage line (0 means "not reported", never "free"). `cut` stays too: the drills read it.
   const outcome = cut ? "cut" : (effExit !== 0 ? "api-error" : lastEmptyTurn ? "empty" : "completed");
-  const telemetryRow = { ts: Date.now(), agent: AGENT, project: PROJ, turn: TURN, trigger, model: MODEL || "cli-default", duration_ms: Date.now() - t0, exit: realExit, effExit, authFailed: effExit !== realExit, emptyOutput: lastEmptyOutput, emptyTurn: lastEmptyTurn, verdict, outcome, tokens };
+  // #7756: a clean turn that ASKED its assigner is demoted-but-owed, not "completed". The judge
+  // (deliverWake's /contracts read) renames the ledger row, so "asked" is what the log keeps.
+  let finalOutcome = outcome;
+  if (outcome === "completed" && opts.judgeOutcome) {
+    try { finalOutcome = (await opts.judgeOutcome()) || outcome; } catch {}
+  }
+  const telemetryRow = { ts: Date.now(), agent: AGENT, project: PROJ, turn: TURN, trigger, model: MODEL || "cli-default", duration_ms: Date.now() - t0, exit: realExit, effExit, authFailed: effExit !== realExit, emptyOutput: lastEmptyOutput, emptyTurn: lastEmptyTurn, verdict, outcome: finalOutcome, tokens };
   if (cut) telemetryRow.cut = true;
   telemetry(telemetryRow);
   log(`turn ended (exit ${realExit}${effExit !== realExit ? ` → effective ${effExit} (${lastEmptyOutput ? "empty-output" : "auth"})` : ""}, ${((Date.now() - t0) / 1000).toFixed(0)}s)`);
@@ -1066,6 +1077,10 @@ function askedExcerpt(message) {
   const restored = loadPending();
   seenLedger = restored.seen;
   if (seenLedger.length) log(`\x1b[33m${seenLedger.length} consumed message id(s) restored from the pending file — the poll keeps standing down on them\x1b[0m`);
+  if (restored.ask) {
+    awaitingAsk = { id: restored.ask, to: restored.askTo };
+    log(`resuming a held ask (#${awaitingAsk.id}) — the queue stays owed until ${awaitingAsk.to || "the assigner"} answers`);
+  }
   // Say what the restore SHED, not just what it kept. A queue that quietly halves itself on restart
   // is indistinguishable from one that lost real work, and this is the moment the expiry above
   // actually bites — a wedged seat comes back carrying only what still means something.
@@ -1111,11 +1126,12 @@ function askedExcerpt(message) {
     }
     // A due REDELIVERY runs before we go back to waiting — during an outage the bus is silent by
     // definition, so the retry timer is the only thing that will ever move these messages.
-    if (pendingWake.length && Date.now() >= retryAt) { await deliverWake(); continue; }
+    // #7756: a held ask is owed but NEVER redelivered — only the assigner's answer releases it.
+    if (pendingWake.length && !awaitingAsk && Date.now() >= retryAt) { await deliverWake(); continue; }
     // cap the long-poll hold so neither a due pulse nor a due redelivery waits out a silent 280s window
     const due = [];
     if (PULSE_MS) due.push(PULSE_MS - (Date.now() - lastTurnAt));
-    if (pendingWake.length) due.push(retryAt - Date.now());
+    if (pendingWake.length && !awaitingAsk) due.push(retryAt - Date.now());
     const holdS = due.length
       ? Math.max(5, Math.min(280, Math.ceil(Math.min(...due) / 1000)))
       : 280;
@@ -1211,6 +1227,15 @@ function askedExcerpt(message) {
         kind: "status", text: `⚠️ ${SESSION} dropped ${dropped.length} undelivered message(s) — queue hit its ${PENDING_MAX} cap during a failure streak` }).catch(() => {});
     }
     savePending(pendingWake, pendingBcast);
+    // #7756: the assigner's answer releases a held ask — by `re` on the ask's id, or any direct
+    // word from the assigner (an older peer answers untagged). The owed contract is still queued
+    // ahead of it, so the resumed turn reads the contract re-attached above the answer.
+    if (awaitingAsk && wake.some(m => m.to === SESSION && (Number(m.re) === awaitingAsk.id || m.from === awaitingAsk.to))) {
+      log(`answer to ask #${awaitingAsk.id} landed — resuming with the contract re-attached`);
+      awaitingAsk = null;
+      savePending(pendingWake, pendingBcast);
+    }
+    if (awaitingAsk) { log(`holding for the answer to ask #${awaitingAsk.id} — ${wake.length} new message(s) queued behind it`); continue; }
     // Respect an active backoff: a new message during an outage joins the batch, it does not
     // reset the clock and hammer a CLI that is already failing.
     if (Date.now() < retryAt) { log(`queued — ${pendingWake.length} undelivered, next attempt in ${Math.max(0, Math.round((retryAt - Date.now()) / 1000))}s`); continue; }

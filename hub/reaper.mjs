@@ -82,12 +82,10 @@ function appendReaperStaleLog(t, reason, ts) {
   const lastSeen = seen ? `${humanMs(ts - seen)} ago` : "never";
   appendTaskLog(t, "reaper", `${reason}; owner last seen ${lastSeen}`, ts);
 }
-// The general stale-card reaper prunePeers never was. Every 60s:
-//  (a) close a focus card once its session has been OFFLINE past FOCUS_OFFLINE_MS (not the old 6h peer TTL).
-//  (b) move an OFFLINE-owner doing card to "stale" once it's untouched past REAP_GRACE_MS.
-// Testing is waiting for the operator's verdict and is therefore outside the reaper's authority.
-// It NEVER touches a card whose owner is still online, so a live long task is safe; the owner-alive-but-idle
-// "forgot its card" case is left to the explicit /sweep path (preview + confirm).
+// The general stale-card reaper prunePeers never was. Every 60s: (a) close a focus card whose
+// session is OFFLINE past FOCUS_OFFLINE_MS; (b) stale an offline-owner doing card past REAP_GRACE_MS.
+// Testing (the operator's verdict) and online owners are NEVER touched — the owner-alive-but-idle
+// case belongs to the explicit /sweep path (preview + confirm).
 function reapStaleCards() {
   const onCut = now() - ONLINE_MS;
   const focusCut = now() - FOCUS_OFFLINE_MS;
@@ -133,20 +131,10 @@ function reapStaleCards() {
 }
 setInterval(reapStaleCards, REAP_INTERVAL_MS).unref?.();
 
-// ---- the contract ledger -------------------------------------------------------------------
-// ONE derivation, shared by GET /contracts and the reaper below. Two copies of this is how you get
-// an endpoint and a sweeper that disagree about what is open, which is the same "two names for one
-// intent" mistake the spawn guards made.
-//
-// A contract is a DIRECT message from `session` to one peer. It closes when that peer answers:
-// strictly by `re`, or, for seats that predate that column, oldest-open-first. Excluded outright,
-// because none of these can ever be answered and so would hang open forever:
-//   - broadcasts (`to === "all"`)
-//   - self-dispatch (`from === to`) — a reply from yourself is never counted as an answer
-//   - the hub's own pseudo-identities (`hub:*`) and hub-authored mail — nothing polls them (0.17.87)
-// Durations an agent READS and acts on, so they must not round to nonsense. Minutes are the useful
-// unit in production (the abandon window is an hour), but the drills run in seconds and "past the 0m
-// abandon window" is a sentence that tells the reader nothing.
+// ---- the contract ledger: ONE derivation shared by GET /contracts and the reaper below ---------
+// A contract is a DIRECT message from `session` to one peer, closed when that peer answers:
+// strictly by `re`, or, for seats that predate that column, oldest-open-first. Broadcasts,
+// self-dispatch and hub:* identities are excluded — none can ever be answered (0.17.87).
 function humanMs(ms) {
   const n = Math.max(0, Number(ms) || 0);
   if (n < 60000) return `${Math.max(1, Math.round(n / 1000))}s`;
@@ -158,11 +146,10 @@ function contractRecipientIsAnswerable(m) {
   return !!m.to && m.to !== "all" && m.from !== m.to && !m.to.startsWith("hub:") && !m.from.startsWith("hub:");
 }
 
-// A direct message the SENDER declared owes nothing back (#7079). `wake:false` is the sender saying
-// "context, not a contract" — the send result even prints "(batched — no turn)" — and a `receipt` or
-// `status` is a report, not a request. None of these ever buys the recipient a turn, so none can be
-// answered; counted as contracts they age into `stalled` and block the dispatcher's stop hook over
-// work that was never owed (four times in one day, every row an ack to an idle seat).
+// A direct message the SENDER declared owes nothing back (#7079): `wake:false` ("context, not a
+// contract"), a `receipt`, or a `status` never buys the recipient a turn, so none can be answered —
+// counted as contracts they age into `stalled` and block the dispatcher's stop hook over work that
+// was never owed.
 function contractIsAck(m) {
   return m.wake === false || m.kind === "receipt" || m.kind === "status";
 }
@@ -175,10 +162,12 @@ function contractsFor(session, { project = "", windowMs = CONTRACT_WINDOW_MS, ov
   const mine = state.messages.filter(m =>
     m.from === session && m.ts >= cutoff && contractRecipientIsAnswerable(m) && (!project || m.project === project));
   const replies = state.messages.filter(m => m.to === session && m.from !== session && m.ts >= cutoff);
+  // #7756: an ask (kind:"ask") rides `re` to name the contract it QUESTIONS — it is not the answer.
+  // Counted as one, the contract would read answered while the seat sits blocked waiting.
   const byRe = new Map();
-  for (const r of replies) if (r.re) byRe.set(Number(r.re), r);
+  for (const r of replies) if (r.re && r.kind !== "ask") byRe.set(Number(r.re), r);
   const looseByPeer = new Map();
-  for (const r of replies) if (!r.re) { if (!looseByPeer.has(r.from)) looseByPeer.set(r.from, []); looseByPeer.get(r.from).push(r); }
+  for (const r of replies) if (!r.re && r.kind !== "ask") { if (!looseByPeer.has(r.from)) looseByPeer.set(r.from, []); looseByPeer.get(r.from).push(r); }
   for (const arr of looseByPeer.values()) arr.sort((a, b) => a.ts - b.ts);
 
   const out = [];
@@ -227,17 +216,8 @@ function contractsFor(session, { project = "", windowMs = CONTRACT_WINDOW_MS, ov
 
   // ---- superseded: the terminal state for a row nobody will ever answer ------------------------
   // `abandoned` keys on the ASSIGNEE being gone, so a permanently HEALTHY seat could strand a
-  // contract forever: it can never be answered (that seat's replies all carry `re` for other
-  // contracts, so the loose-reply fallback above never claims this one) and it can never be
-  // abandoned (the seat is alive). The row then blocks its dispatcher's stop hook every single
-  // turn, for days — observed on #10573 across two consecutive sessions.
-  //
-  // TWO signals must agree, because either alone is wrong. "The peer answered something newer" on
-  // its own would punish honest out-of-order completion — a seat handed three jobs may finish the
-  // third first and still be working the second, which is a real pattern this suite already drills.
-  // Age on its own would punish a seat legitimately grinding one long job. Together they are only
-  // true when the assignee is alive, has moved on to later work, AND the row has sat unanswered
-  // past the window in which any genuine in-flight job would have reported.
+  // contract forever — unanswerable, yet never abandoned — blocking the stop hook for days (#10573).
+  // Two signals must agree (a newer answer AND age past the window) so out-of-order completion is safe.
   const newestAnswered = new Map();
   for (const c of out) {
     if (c.answered && c.ts > (newestAnswered.get(c.to) || 0)) newestAnswered.set(c.to, c.ts);
@@ -248,20 +228,9 @@ function contractsFor(session, { project = "", windowMs = CONTRACT_WINDOW_MS, ov
     if (c.ts < (newestAnswered.get(c.to) || 0)) c.disposition = "superseded";
   }
   // ---- superseded by a later DIRECT reply: the morning case (#11047/#11048) --------------------
-  // A row can be unanswerable by a seat that is perfectly healthy: its later replies all carry `re`
-  // for NEWER contracts (a re-dispatch, or an "ack by reference" threaded to the newer id), so
-  // neither byRe nor the loose fallback ever claims the old row — the two matchers above only ever
-  // see replies aimed at the NEWER work. The row then sits WAITING forever: it can never be
-  // answered, it can never be abandoned (the seat is alive), and the newestAnswered rule above
-  // misses it whenever the newer work was dispatched under a peer identity the old row never shares.
-  //
-  // The signal both matchers ignored is the DIRECT reply itself: if the assignee has sent this
-  // session ANY message after the row was dispatched, the assignee is alive, reachable, and has
-  // demonstrably moved on to later work — an older row that has then sat unanswered past the
-  // abandon window is dead weight, not in flight. Age still gates it, so honest out-of-order
-  // completion (a seat that answered a newer job while still working an older one) is never
-  // punished — the older row stays open until the window that any genuine in-flight job would have
-  // reported within has passed.
+  // Both matchers above only see replies aimed at NEWER work, so a healthy seat whose replies are
+  // all `re`-threaded to newer contracts strands the old row even when newestAnswered misses it.
+  // ANY later direct reply + past the abandon window = moved on; age gates out-of-order completion.
   const latestDirectReply = new Map();
   for (const r of replies) {
     if (r.ts > (latestDirectReply.get(r.from) || 0)) latestDirectReply.set(r.from, r.ts);
@@ -285,10 +254,8 @@ function contractDispatchers(windowMs = CONTRACT_WINDOW_MS) {
 }
 
 // The contract reaper. Records — never invents an answer for — a contract whose assignee has been
-// quiet past CONTRACT_ABANDON_MS, so the abandonment survives a hub restart (in-memory-only state is
-// exactly why the escalation backlog re-fires on every restart) and shows up once in the FEED.
-// After this the contract stops counting as open, so it stops nagging every future session; it stays
-// listed with its evidence, so `relay_contracts` can still show what died.
+// quiet past CONTRACT_ABANDON_MS, persisted so the abandonment survives a hub restart and shows once
+// in the FEED. It stops counting as open but stays listed with its evidence for `relay_contracts`.
 function reapAbandonedContracts() {
   let changed = false;
   for (const session of contractDispatchers()) {

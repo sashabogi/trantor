@@ -442,6 +442,33 @@ server.tool("relay_send", "Send a live message to another agent session (or 'all
     return { content: [{ type: "text", text: `sent #${id} to ${to}${wake === false ? " (batched — no turn)" : ""}` }] };
   });
 
+server.tool("relay_ask", "Ask a BLOCKING question on your card without forfeiting the contract (#7756). This is the correct move when the contract omits a fact you cannot proceed without — never invent the value. Sends a kind:ask message to the card's assigner: the hub blocks the card with your question as its note so the board reads why nothing is moving, your runner keeps the wake owed (no failure, no park), and the assigner's answer resumes THIS session with the original contract re-attached. End your turn right after calling it.",
+  { card: z.number().describe("the card your current contract is working"),
+    question: z.string().describe("the ONE missing fact you cannot proceed without, stated precisely") },
+  async ({ card, question }) => {
+    // Append-only log rule, same as relay_send: a secret is refused BEFORE anything reaches the hub.
+    const scrub = assertNoSecrets(question);
+    if (!scrub.ok) return { content: [{ type: "text", text: `REFUSED — not sent. Credential-shaped string(s) detected: ${scrub.kinds.join(", ")}. Remove them and resend.` }], isError: true };
+    const { task } = await api("GET", `/card?project=${encodeURIComponent(PROJECT)}&id=${card}`);
+    if (!task) return { content: [{ type: "text", text: `${PROJECT}: no card #${card}` }], isError: true };
+    // The assigner is who DISPATCHED the card (by); the assignee is usually this seat itself.
+    const assigner = task.by && task.by !== SESSION ? task.by
+      : task.assignee && task.assignee !== SESSION ? task.assignee : "";
+    if (!assigner) return { content: [{ type: "text", text: `card #${card} has nobody to ask (by=${task.by || "?"}, assignee=${task.assignee || "?"})` }], isError: true };
+    // `re` threads the ask to the contract it questions: the assigner's latest direct message to
+    // this session, preferring one that cites this card. Peek only — the hooks own delivery.
+    let re = 0;
+    try {
+      const { messages } = await api("GET", `/inbox?session=${encodeURIComponent(SESSION)}&since=0&peek=1`);
+      const direct = (messages || []).filter(m => m.from === assigner && m.to === SESSION);
+      re = (direct.filter(m => String(m.text || "").includes(`#${card}`)).pop() || direct.pop())?.id || 0;
+    } catch {}
+    const payload = { from: SESSION, to: assigner, kind: "ask", text: `❓ ask on #${card}: ${question}` };
+    if (re) payload.re = re;
+    const sentAsk = await api("POST", "/send", payload);
+    return { content: [{ type: "text", text: `ask #${sentAsk.id} sent to ${assigner} — card #${card} now reads blocked with your question. Your turn stays owed (no park, no failure); the answer resumes this session with the contract re-attached. End your turn now.` }] };
+  });
+
 server.tool("relay_duty_failure", "Duty-seat only: record that a required cross-session socket nudge was skipped or that a relay send returned 403. The hub appends the failure to the target project's active focus card and exposes it in trantor doctor.",
   { recipient: z.string().describe("recipient session whose project is affected"), project: z.string().optional().describe("target project; normally inferred from the recipient"), kind: z.enum(["relay-403", "skipped-nudge"]), detail: z.string().max(500).optional() },
   async ({ recipient, project, kind, detail }) => {

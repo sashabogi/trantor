@@ -4,7 +4,7 @@ import { setTimeout, setInterval, clearInterval } from "node:timers";
 export async function routeMessages({ req, res, q, P, auth, ctx }) {
   const {
     state, body, json, stripNulText, crossProjectGuard, touch, pushToStreams,
-    appendEvent, markDelivered, contractsFor, canUseInboxSession, inboxWindow,
+    appendEvent, appendCardEvent, appendTaskLog, markDelivered, contractsFor, canUseInboxSession, inboxWindow,
     deliverable, inboxReadable, inboxResponse, filterReadable, streams, UI,
     AUTH_MODE, persistHealth, duty, now, markDirty, assertNoSecrets,
     CONTRACT_WINDOW_MS,
@@ -39,20 +39,28 @@ export async function routeMessages({ req, res, q, P, auth, ctx }) {
       // that field is the card-event key, and /card must keep counting card events only.
       const refs = [...new Set((msg.text.match(/#(\d{1,7})(?![0-9])/g) || []).map(s => Number(s.slice(1))))].slice(0, 8);
       appendEvent("message", msg.project, msg.from, { msgId: msg.id, toSession: msg.to, text: msg.text.slice(0, 2000), refs });
+      // #7756: the ask primitive's board half — a kind:ask blocks the card it cites (the question is
+      // the note, so the board reads why nothing moves); the answer (re = the ask's id) unblocks it.
+      const askCardMove = (cardId, to, noteText) => {
+        const t = cardId && state.tasks.find(x => x.id === cardId && x.project === msg.project);
+        if (!t || t.status === to || (to === "doing" && t.status !== "blocked")) return;
+        const from = t.status;
+        (t.history ||= []).push({ from, to, by: msg.from, ts: now() });
+        if (t.history.length > 40) t.history.splice(0, 10);
+        t.status = to; t.updated = now();
+        appendTaskLog(t, msg.from, noteText); appendCardEvent("moved", t, msg.from, from, to); markDirty();
+      };
+      if (kind === "ask") askCardMove(refs[0] || 0, "blocked", msg.text);
+      else if (re) {
+        const opened = state.messages.find(m => m.id === re && m.kind === "ask");
+        if (opened) askCardMove(Number((String(opened.text).match(/#(\d{1,7})(?![0-9])/) || [])[1] || 0), "doing", `answered: ${text}`);
+      }
       return json(res, 200, { ok: true, id: msg.id });
     }
     // ---- /contracts: what this session dispatched and has not been answered on ----------------
-    // A contract is a DIRECT message from you to one peer. It closes when that peer sends you an
-    // outcome: strictly by `re`, or, for seats that predate it, oldest-open-first. Broadcasts are
-    // never contracts. Each open one carries the assignee's presence, because the actionable half
-    // of "still waiting" is whether anyone is still on the other end.
-    // ---- /delivered: an endpoint that has actually READ its mail says so ----------------------
-    // The desktop app lists with peek=1 on purpose, so it never steals a message from a session's
-    // delivery hooks. For a HUMAN endpoint there are no hooks — the app is the only reader — so
-    // sasha@mac's deliveredUpTo sat at 0 forever while mail piled up. dutyTick then escalated every
-    // message the human had already read, told the duty seat about it, the seat messaged the human,
-    // and that was undelivered too: about six escalations a minute, all about mail already read.
-    // Peeking stays the default; this lets a reader record delivery explicitly instead.
+    // Open contracts carry the assignee's presence — the actionable half of "still waiting" is
+    // whether anyone is on the other end. /delivered lets a HUMAN endpoint (the app peeks, never
+    // steals) record delivery explicitly, so duty stops escalating mail the human already read.
     if (req.method === "POST" && P === "/delivered") {
       const b = await body(req);
       const session = String(b.session || "");
@@ -73,19 +81,10 @@ export async function routeMessages({ req, res, q, P, auth, ctx }) {
       const overdueMs = Number.isFinite(rawOverdue) ? Math.max(0, rawOverdue) : null;
       const all = contractsFor(session, { project: String(q.project || ""), windowMs, overdueMs });
       const by = (d) => all.filter(c => c.disposition === d).length;
-      // Abandoned contracts leave `contracts` entirely and ride in their own key.
-      //
-      // Not cosmetic. A session's hooks are PINNED at session start, so an older stop hook iterates
-      // `contracts` with its own predicate and knows nothing about `disposition` — it kept blocking on
-      // ghosts no matter what the hub called them. Keeping them in the array meant the fix only
-      // reached sessions that restarted, and a live one nagged its operator every single turn.
-      // Splitting them out fixes every running session the moment the hub redeploys, and the ledger
-      // still shows what died via `abandonedContracts`.
-      // `superseded` leaves `contracts` for exactly the reason `abandoned` does: a session's hooks
-      // are PINNED at session start, so an older stop hook filters this array with its own
-      // predicate and would keep blocking on a row the hub has already settled.
-      // `ack` leaves `contracts` too (#7079): a `wake:false` send, a `receipt` or a `status` is the
-      // sender declaring nothing is owed, so an old pinned hook must never see it as a row to block on.
+      // Abandoned/superseded/ack contracts leave `contracts` and ride in their own keys (#7079).
+      // Not cosmetic: a session's hooks are PINNED at session start, so an older stop hook filters
+      // this array with its own predicate and would keep blocking on rows the hub already settled —
+      // splitting them out fixes every running session the moment the hub redeploys.
       const out = all.filter(c => c.disposition !== "abandoned" && c.disposition !== "superseded" && c.disposition !== "ack");
       return json(res, 200, {
         session, contracts: out, abandonedContracts: all.filter(c => c.disposition === "abandoned"),
