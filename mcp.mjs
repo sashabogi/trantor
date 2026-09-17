@@ -16,7 +16,7 @@ import { resolveProject, hostId, resolveHubInfo, nonSeatReason, handoffDir, orch
 import { signedPost, signedGet } from "./hooks/lib/api.mjs";
 import { anchorCursor } from "./hooks/lib/inbox-ledger.mjs";
 import { assertNoSecrets } from "./lib/scrub.mjs";
-import { markDoing, hollowVerdict } from "./hooks/lib/hollow-move.mjs";
+import { markDoing, hollowVerdict, blastRadius, blastLine } from "./hooks/lib/hollow-move.mjs";
 
 // Runtime dep resolution: `claude plugin install` snapshots the repo, not an npm tarball, so a
 // GitHub-sourced plugin ships no node_modules and a static SDK import dies with
@@ -225,15 +225,20 @@ server.tool("relay_task_move", "Move a Kanban card as you progress: todo -> doin
     // #7750: seat-side hollow-move check. The hub cannot see this worktree, so the evidence is
     // gathered HERE at report time; a hollow move still lands (never blocks a no-code card), the
     // note is prefixed HOLLOW: and the card's assigner gets one bus line. Never throws into the move.
-    let outNote = note;
+    let outNote = note, blast;
     try {
       if (status === "doing") markDoing(process.cwd(), id);
       if (status === "testing" || status === "done") {
-        const { task } = await api("GET", `/card?project=${encodeURIComponent(PROJECT)}&id=${id}`);
+        const { task, messages } = await api("GET", `/card?project=${encodeURIComponent(PROJECT)}&id=${id}`);
+        // #7968: the blast radius rides the note as one line and the move as a field the hub keeps
+        // on the card event; the contract's `base:` line is read off the card's own messages.
+        blast = blastRadius(process.cwd(), messages);
+        const line = blastLine(blast);
+        outNote = `${String(note || "").slice(0, 2000 - line.length - 1)}\n${line}`;
         const v = hollowVerdict(process.cwd(), id, note, task?.checklist);
         if (v.checked && v.hollow) {
           const what = `no ${v.missing.join(", no ")}`;
-          outNote = `HOLLOW: ${what} — ${note || "(no note)"}`.slice(0, 2000);
+          outNote = `HOLLOW: ${what} — ${note || "(no note)"}\n${line}`.slice(0, 2000);
           const assigner = task?.by;
           if (assigner && assigner !== SESSION) {
             await api("POST", "/send", { from: SESSION, to: assigner, wake: false,
@@ -242,7 +247,7 @@ server.tool("relay_task_move", "Move a Kanban card as you progress: todo -> doin
         }
       }
     } catch { /* the flag must never break a move */ }
-    await api("POST", "/task/update", { id, status, note: outNote, by: SESSION });
+    await api("POST", "/task/update", { id, status, note: outNote, by: SESSION, ...(blast ? { blast } : {}) });
     return { content: [{ type: "text", text: `card #${id} -> ${status}` }] };
   });
 

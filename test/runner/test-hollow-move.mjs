@@ -3,8 +3,8 @@
 // from a clean worktree with no ticks and no test command lands but is prefixed HOLLOW: and the
 // assigner gets one bus line; a real diff, an untracked file, a tick + test command, or a declared
 // no-code outcome is NOT flagged. #7754: a note without `verified at <sha>` is flagged on its own.
-import { spawn, execFileSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { spawn, spawnSync, execFileSync } from "node:child_process";
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync, chmodSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -22,9 +22,20 @@ mkdirSync(join(W, ".agent-bus"), { recursive: true });
 const REPO = join(W, "repo");
 mkdirSync(REPO);
 const git = (args) => execFileSync("git", args, { cwd: REPO, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim();
-git(["init", "-q"]);
-git(["-c", "user.name=drill", "-c", "user.email=drill@x", "commit", "-q", "--allow-empty", "-m", "init"]);
+git(["init", "-q", "-b", "main"]);
+// lib/a.mjs imported by two files, plus a config file graft never indexes
+mkdirSync(join(REPO, "lib"));
+writeFileSync(join(REPO, "lib", "a.mjs"), "export const a = 1;\n");
+writeFileSync(join(REPO, "b.mjs"), 'import { a } from "./lib/a.mjs";\nexport const b = a + 1;\n');
+writeFileSync(join(REPO, "c.mjs"), 'import { a } from "./lib/a.mjs";\nexport const c = a + 2;\n');
+writeFileSync(join(REPO, "package.json"), '{"name":"hollow-fixture","type":"module"}\n');
+git(["add", "-A"]);
+const commit = (msg) => { git(["add", "-A"]); git(["-c", "user.name=drill", "-c", "user.email=drill@x", "commit", "-q", "-m", msg]); };
+commit("init");
 const SHA = git(["rev-parse", "HEAD"]);
+const HAS_GRAFT = spawnSync("graft", ["build", REPO], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).status === 0;
+if (HAS_GRAFT) commit("graft ignore files");   // graft build drops .gitignore/.ignore; keep them out of the drill diffs
+else console.log("  (graft not on PATH: the blast count drills are skipped, only the fail-open path is checked)");
 
 const PORT = 47877, HUB = `http://127.0.0.1:${PORT}`;
 const SESSION = "seat:hollowproj", ORCH = "orch:hollowproj";
@@ -40,37 +51,42 @@ for (let i = 0; i < 50; i++) {
   await sleep(100);
 }
 
-// the REAL MCP server, cwd = the fake seat worktree
-const mcp = spawn("node", [join(ROOT, "mcp.mjs")], {
-  cwd: REPO,
-  env: { ...drillEnv(), HOME: W, AGENT_BUS_DIR: join(W, ".agent-bus"), RELAY_URL: HUB,
-    RELAY_SESSION: SESSION, RELAY_PROJECT: "hollowproj", RELAY_HEARTBEAT_MS: "600000" },
-  stdio: ["pipe", "pipe", "pipe"],
-});
-let buf = "";
-const pending = new Map();
-mcp.stdout.on("data", d => {
-  buf += d;
-  let i;
-  while ((i = buf.indexOf("\n")) >= 0) {
-    const line = buf.slice(0, i); buf = buf.slice(i + 1);
-    try { const m = JSON.parse(line); if (m.id && pending.has(m.id)) { pending.get(m.id)(m); pending.delete(m.id); } } catch {}
-  }
-});
-let rpcId = 0;
-function rpc(method, params, timeoutMs = 30000) {
-  const id = ++rpcId;
-  const p = new Promise((res, rej) => {
-    pending.set(id, res);
-    setTimeout(() => { if (pending.has(id)) { pending.delete(id); rej(new Error(`rpc ${method} timed out`)); } }, timeoutMs);
+// the REAL MCP server, cwd = the fake seat worktree; extra env lets a drill point GRAFT_BIN at an
+// absent or slow binary without touching the seat under test
+async function spawnMcp(session, extraEnv = {}) {
+  const mcp = spawn("node", [join(ROOT, "mcp.mjs")], {
+    cwd: REPO,
+    env: { ...drillEnv(), HOME: W, AGENT_BUS_DIR: join(W, ".agent-bus"), RELAY_URL: HUB,
+      RELAY_SESSION: session, RELAY_PROJECT: "hollowproj", RELAY_HEARTBEAT_MS: "600000", ...extraEnv },
+    stdio: ["pipe", "pipe", "pipe"],
   });
-  mcp.stdin.write(JSON.stringify({ jsonrpc: "2.0", id, method, params }) + "\n");
-  return p;
+  let buf = "";
+  const pending = new Map();
+  mcp.stdout.on("data", d => {
+    buf += d;
+    let i;
+    while ((i = buf.indexOf("\n")) >= 0) {
+      const line = buf.slice(0, i); buf = buf.slice(i + 1);
+      try { const m = JSON.parse(line); if (m.id && pending.has(m.id)) { pending.get(m.id)(m); pending.delete(m.id); } } catch {}
+    }
+  });
+  let rpcId = 0;
+  function rpc(method, params, timeoutMs = 30000) {
+    const id = ++rpcId;
+    const p = new Promise((res, rej) => {
+      pending.set(id, res);
+      setTimeout(() => { if (pending.has(id)) { pending.delete(id); rej(new Error(`rpc ${method} timed out`)); } }, timeoutMs);
+    });
+    mcp.stdin.write(JSON.stringify({ jsonrpc: "2.0", id, method, params }) + "\n");
+    return p;
+  }
+  await rpc("initialize", { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "drill", version: "0" } });
+  mcp.stdin.write(JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" }) + "\n");
+  const call = (name, args, timeoutMs) => rpc("tools/call", { name, arguments: args }, timeoutMs);
+  return { call, kill: () => mcp.kill() };
 }
-await rpc("initialize", { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "drill", version: "0" } });
-mcp.stdin.write(JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" }) + "\n");
-
-const call = (name, args, timeoutMs) => rpc("tools/call", { name, arguments: args }, timeoutMs);
+const mcp = await spawnMcp(SESSION);
+const call = mcp.call;
 const text = (r) => r?.result?.content?.[0]?.text ?? JSON.stringify(r?.result ?? r?.error ?? {});
 const getCard = async (id) => {
   const r = await fetch(`${HUB}/tasks?project=hollowproj`);
@@ -96,7 +112,7 @@ const take = (id) => call("relay_task_move", { id, status: "doing" });
   const card = await getCard(id);
   ok("the move still LANDS (testing)", card?.status === "testing", card?.status);
   ok("note is prefixed HOLLOW: naming all four missing pieces",
-    /^HOLLOW: no diff, no new files, no ticked checklist items, no test command in the note, no verified-at sha in the note — finished it$/.test(lastNote(card)),
+    /^HOLLOW: no diff, no new files, no ticked checklist items, no test command in the note, no verified-at sha in the note — finished it\nblast: /.test(lastNote(card)),
     lastNote(card).slice(0, 140));
   const inbox = await (await fetch(`${HUB}/inbox?session=${ORCH}&since=0&peek=1`)).json();
   const msg = (inbox.messages || []).find(m => m.from === SESSION && /HOLLOW move/.test(m.text || ""));
@@ -176,6 +192,82 @@ const take = (id) => call("relay_task_move", { id, status: "doing" });
   await take(id);
   await call("relay_task_move", { id, status: "done", note: `node test/runner/test-hollow-move.mjs 8/8 verified at ${SHA.slice(0, 7)}` });
   ok("#7754: a short sha after `verified at` satisfies the check", !lastNote(await getCard(id)).startsWith("HOLLOW:"), lastNote(await getCard(id)).slice(0, 90));
+}
+
+// ---- 8. #7968: blast radius rides the note and the card event ------------------------------------
+const blastOf = async (id) => {
+  const r = await fetch(`${HUB}/card?id=${id}`);
+  const moved = ((await r.json()).events || []).filter(e => e.type === "moved").pop();
+  return moved?.blast;
+};
+const lastLine = (card) => lastNote(card).split("\n").pop();
+const contract = (id, base) => fetch(`${HUB}/send`, { method: "POST", headers: { "content-type": "application/json" },
+  body: JSON.stringify({ from: ORCH, to: SESSION, project: "hollowproj", text: `take #${id}\nbase: ${base}` }) });
+if (HAS_GRAFT) {
+  // 8a. the contract's base sha, one changed lib/a.mjs imported by two files
+  const id = await addCard("blast card", ["code lands"]);
+  const base = git(["rev-parse", "HEAD"]);
+  await contract(id, base);
+  await take(id);
+  writeFileSync(join(REPO, "lib", "a.mjs"), "export const a = 2;\n");
+  commit("a=2");
+  await call("relay_task_move", { id, status: "testing", note: `node test/x.mjs 1/1, verified at ${SHA}` });
+  const card = await getCard(id);
+  ok("#7968: the note ends with the dependents count", lastLine(card) === "blast: 2 files depend on the 1 changed", lastLine(card));
+  const b = await blastOf(id);
+  ok("#7968: the moved event carries blast {base, changed, dependents}",
+    b?.base === base && b?.dependents === 2 && b?.changed?.length === 1 && b.changed[0] === "lib/a.mjs" && b.unindexed?.length === 0, JSON.stringify(b));
+  ok("#7968: blast never lands on the card itself", !("blast" in card));
+}
+if (HAS_GRAFT) {
+  // 8b. only package.json changed: graft does not index it, and the note says so instead of a silent zero
+  const id = await addCard("config card");
+  const base = git(["rev-parse", "HEAD"]);
+  await contract(id, base);
+  await take(id);
+  writeFileSync(join(REPO, "package.json"), '{"name":"hollow-fixture-2","type":"module"}\n');
+  commit("rename");
+  await call("relay_task_move", { id, status: "done", note: `bumped the name, verified at ${SHA}` });
+  ok("#7968: an unindexed-only change reads `not in the graph`", lastLine(await getCard(id)) === "blast: not in the graph (package.json)", lastLine(await getCard(id)));
+  const b = await blastOf(id);
+  ok("#7968: the event names the unindexed path with zero dependents", b?.dependents === 0 && b?.unindexed?.[0] === "package.json", JSON.stringify(b));
+}
+if (HAS_GRAFT) {
+  // 8c. no contract base: the merge base of main and HEAD, from a seat branch one commit ahead
+  git(["checkout", "-q", "-b", "seat/drill"]);
+  const id = await addCard("merge-base card");
+  await take(id);
+  writeFileSync(join(REPO, "lib", "a.mjs"), "export const a = 3;\n");
+  commit("a=3");
+  await call("relay_task_move", { id, status: "testing", note: `node test/x.mjs 1/1, verified at ${SHA}` });
+  ok("#7968: without a base line the diff is taken from merge-base main HEAD", lastLine(await getCard(id)) === "blast: 2 files depend on the 1 changed", lastLine(await getCard(id)));
+  ok("#7968: the event's base is main's tip", (await blastOf(id))?.base === git(["rev-parse", "main"]));
+}
+{
+  // 8d. graft absent: the move lands, the note says unavailable, the event says unavailable
+  const seat2 = await spawnMcp("seat2:hollowproj", { GRAFT_BIN: join(W, "no-such-graft") });
+  const id = await addCard("no-graft card");
+  await seat2.call("relay_task_move", { id, status: "doing" });
+  await seat2.call("relay_task_move", { id, status: "testing", note: `eyeballed, verified at ${SHA}` });
+  const card = await getCard(id);
+  ok("#7968: graft absent — the move still lands", card?.status === "testing", card?.status);
+  ok("#7968: graft absent — the note fails open to `blast: unavailable`", lastLine(card) === "blast: unavailable", lastLine(card));
+  ok("#7968: graft absent — the event carries {unavailable:true}", JSON.stringify(await blastOf(id)) === '{"unavailable":true}', JSON.stringify(await blastOf(id)));
+  seat2.kill();
+}
+{
+  // 8e. graft slow: the 2.5s box fails open instead of holding the move
+  const slow = join(W, "slow-graft");
+  writeFileSync(slow, "#!/bin/sh\nsleep 6\n"); chmodSync(slow, 0o755);
+  const seat3 = await spawnMcp("seat3:hollowproj", { GRAFT_BIN: slow });
+  const id = await addCard("slow-graft card");
+  await seat3.call("relay_task_move", { id, status: "doing" });
+  const t0 = Date.now();
+  await seat3.call("relay_task_move", { id, status: "testing", note: `eyeballed, verified at ${SHA}` });
+  const took = Date.now() - t0;
+  ok("#7968: graft slow — the move lands inside the box, not after graft", took < 5000 && (await getCard(id))?.status === "testing", `${took}ms`);
+  ok("#7968: graft slow — the note says unavailable", lastLine(await getCard(id)) === "blast: unavailable", lastLine(await getCard(id)));
+  seat3.kill();
 }
 
 mcp.kill(); hub.kill();

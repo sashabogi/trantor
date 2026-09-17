@@ -2,9 +2,10 @@
 // a move to testing/done mcp.mjs diffs the worktree against the sha recorded at `doing`, reads
 // checklist ticks and scans the note for a test command. All missing + no declared no-code
 // outcome → the move still lands, note prefixed HOLLOW:, assigner told on the bus.
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { contractBase } from "../../bin/crew-payload.mjs";
 
 // A "test command" is a command shape or a pass count — the note contract already demands both.
 const TEST_CMD_RE = /(node\s+test\/|npm\s+(run\s+)?test|pnpm\s+test|yarn\s+test|vitest|pytest|go\s+test|cargo\s+test|make\s+test|\b\d+\s*\/\s*\d+\b|\b\d+\s+passed\b)/i;
@@ -61,4 +62,51 @@ export function hollowVerdict(cwd, id, note, checklist) {
   if (unanchored) missing.push(VERIFIED_AT_MISSING);
   const hollow = (evidenceless || unanchored) && !declaresNoCode(note);
   return { checked: true, hollow, missing };
+}
+
+// #7968: blast radius on the testing/done move — `graft blast` over the card's committed diff, so
+// the note says how many files depend on what changed. Fails open to `blast: unavailable` when graft
+// is absent, slow (2.5s box), has no index here, or the base cannot be resolved.
+export const BLAST_TIMEOUT_MS = 2500;
+const BLAST_PATHS_MAX = 40;
+
+const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
+
+// The base is the contract's `base: <sha>` when this worktree can resolve it, else the merge base
+// of main and HEAD — never origin/main, which trails the orchestrator's unpushed integration head.
+export function blastBase(cwd, messages) {
+  const declared = contractBase(messages);
+  if (declared) {
+    try { git(cwd, ["cat-file", "-e", `${declared}^{commit}`]); return declared; } catch { /* not here: fall through */ }
+  }
+  try { return git(cwd, ["merge-base", "main", "HEAD"]); } catch { return ""; }
+}
+
+// One line for the card note. A silent zero on a config file is the false comfort the gate exists
+// to remove, so an unindexed change is named, and zero dependents is said as zero.
+export function blastLine(b) {
+  if (!b || b.unavailable) return "blast: unavailable";
+  const unindexed = b.unindexed || [];
+  const indexed = (b.changed || []).filter((p) => !unindexed.includes(p));
+  if (!indexed.length && !unindexed.length) return `blast: no committed changes since ${String(b.base || "").slice(0, 7)}`;
+  if (!indexed.length) return `blast: not in the graph (${unindexed.join(", ")})`;
+  const n = b.dependents || 0;
+  const tail = unindexed.length ? ` (${unindexed.join(", ")} not in the graph)` : "";
+  return `blast: ${plural(n, "file depends", "files depend")} on the ${indexed.length} changed${tail}`;
+}
+
+// Runs graft and shapes the field the move posts: { base, changed[], unindexed[], dependents } or
+// { unavailable: true }. GRAFT_BIN lets a drill point at an absent or slow binary.
+export function blastRadius(cwd, messages) {
+  const base = blastBase(cwd, messages);
+  if (!base) return { unavailable: true };
+  const r = spawnSync(process.env.GRAFT_BIN || "graft", ["blast", "--base", base, "--depth", "all", "--format", "json"],
+    { cwd, encoding: "utf8", timeout: BLAST_TIMEOUT_MS, stdio: ["ignore", "pipe", "ignore"], maxBuffer: 64 * 1024 * 1024 });
+  if (r.error || r.status !== 0) return { unavailable: true };
+  let j;
+  try { j = JSON.parse(r.stdout); } catch { return { unavailable: true }; }
+  const changed = (j.changed || []).map((c) => String(c.path || "")).filter(Boolean);
+  const unindexed = (j.unindexed || []).map(String).filter((p) => changed.includes(p));
+  const dependents = new Set((j.impacted || []).map((i) => String(i.path || "")).filter((p) => p && !changed.includes(p))).size;
+  return { base, changed: changed.slice(0, BLAST_PATHS_MAX), unindexed: unindexed.slice(0, BLAST_PATHS_MAX), dependents };
 }
