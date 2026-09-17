@@ -16,6 +16,7 @@ import { resolveProject, hostId, resolveHubInfo, nonSeatReason, handoffDir, orch
 import { signedPost, signedGet } from "./hooks/lib/api.mjs";
 import { anchorCursor } from "./hooks/lib/inbox-ledger.mjs";
 import { assertNoSecrets } from "./lib/scrub.mjs";
+import { isMessageCardTitle, OPEN_CARD_STATUSES } from "./lib/turn-policy.mjs";
 import { markDoing, hollowVerdict, blastRadius, blastLine } from "./hooks/lib/hollow-move.mjs";
 
 // Runtime dep resolution: `claude plugin install` snapshots the repo, not an npm tarball, so a
@@ -401,13 +402,28 @@ function cardView(tasks, id, proj) {
 
 server.tool("relay_board", "Show a project's Kanban board (all cards + their status + assignee). Defaults to THIS project; pass `project` to read a crew board you orchestrate from elsewhere. Cards carrying log notes show a ·N count (the card's note-log size).",
   { project: z.string().optional().describe("board to show (default: this session's project)"),
-    card: z.number().optional().describe("read ONE card instead of the board: the card itself, its notes, and the last five done cards whose title shares a word with it. This is what a seat starting a card should call — the whole board is 1900+ cards of someone else's work.") },
-  async ({ project, card }) => {
+    card: z.number().optional().describe("read ONE card instead of the board: the card itself, its notes, and the last five done cards whose title shares a word with it. This is what a seat starting a card should call — the whole board is 1900+ cards of someone else's work."),
+    mine: z.boolean().optional().describe("your cards instead of the board: everything assigned to the calling session in doing/testing/todo, newest first, each with the full card:<id> shape. The FIRST call of a turn whose wake names no card id (#7763) — no second message from the orchestrator needed.") },
+  async ({ project, card, mine }) => {
   const proj = project || PROJECT;
   // #6983: ask for the SLIM projection, and for that one card full when opening one. The board
   // needs titles and a note COUNT, never every card's note text: 1.55MB / 625-961ms against a
   // 1500ms budget is why this tool answered "hub 0" while the hub was 200 OK and merely slow.
   // An older hub ignores both params and returns the full board, which still renders either way.
+  if (mine) {
+    // #7763: the my-cards view. Bounded by assignee AND status (never a board dump), message-cards
+    // excluded — a transcript of a bus message is not work, and listing one would send the seat
+    // straight back to chasing it. Newest first so "work your newest" reads straight off the list.
+    const slim = await api("GET", `/tasks?project=${encodeURIComponent(proj)}&fields=slim`);
+    const own = (slim.tasks || [])
+      .filter(t => t.assignee === SESSION && OPEN_CARD_STATUSES.includes(t.status) && !isMessageCardTitle(t.title))
+      .sort((a, b) => (b.updated || b.ts || 0) - (a.updated || a.ts || 0));
+    if (!own.length) return { content: [{ type: "text", text: `${proj}: no cards assigned to ${SESSION} in doing/testing/todo` }] };
+    // Re-attach the full card for each id in ONE request (hub honors a comma-separated card= list;
+    // an older hub returns everything slim, which cardView still renders — notes just stay folded).
+    const { tasks } = await api("GET", `/tasks?project=${encodeURIComponent(proj)}&fields=slim&card=${encodeURIComponent(own.map(t => t.id).join(","))}`);
+    return { content: [{ type: "text", text: own.map(t => cardView(tasks || [], t.id, proj)).join("\n\n") }] };
+  }
   const { tasks } = await api("GET", `/tasks?project=${encodeURIComponent(proj)}&fields=slim${card ? `&card=${encodeURIComponent(card)}` : ""}`);
   if (!tasks.length) return { content: [{ type: "text", text: `${proj}: no cards yet` }] };
   if (card) return { content: [{ type: "text", text: cardView(tasks, card, proj) }] };

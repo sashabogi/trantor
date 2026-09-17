@@ -9,7 +9,7 @@ import { mkdtempSync, writeFileSync, readFileSync, chmodSync, mkdirSync } from "
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { drillEnv } from "../drill-env.mjs";
-import { cardRef, cardRefs, assignedCardRef, wakeCard, carriesWork, parseTurnTokens, parseResetAt, quotaSpent, reasonWithBalances, quotaResetAt, isLinkedProject, senderProjectOf, stateSkipReason } from "../../lib/turn-policy.mjs";
+import { cardRef, cardRefs, assignedCardRef, wakeCard, carriesWork, parseTurnTokens, parseResetAt, quotaSpent, reasonWithBalances, quotaResetAt, isLinkedProject, senderProjectOf, stateSkipReason, isMessageCardTitle, OPEN_CARD_STATUSES } from "../../lib/turn-policy.mjs";
 
 let pass = 0, fail = 0;
 const ok = (name, cond, extra) => { console.log(`  ${cond ? "PASS" : "FAIL"}  ${name}${cond || !extra ? "" : `\n          ${extra}`}`); cond ? pass++ : fail++; };
@@ -83,6 +83,19 @@ console.log("\n## the rules");
   ok("#7061: a wake citing no card at all still binds to nothing",
     wakeCard([{ id: 1, to: "claude:t", text: "resume where you left off" }], { session: "claude:t" }) === 0);
   ok("#7061: an empty batch binds to nothing", wakeCard([], { session: "claude:t" }) === 0);
+
+  // #7763/#7765: a MESSAGE-CARD is a transcript of a bus message parked on the board, never work.
+  // The runner checks the board before binding, so the predicate lives where the other rules do.
+  ok("#7763: a NEW BUS MESSAGE card is a message-card",
+    isMessageCardTitle("NEW BUS MESSAGE for you: [MacBook-Pro-M1:trantor]: #7938 landed on main"));
+  ok("#7763: the join note is one too",
+    isMessageCardTitle("You just joined (your arrival was already announced on the bus). 1) relay_inbox"));
+  ok("#7763: case and leading space do not hide it", isMessageCardTitle("  new bus messages for you: x"));
+  ok("#7763: a real work title is never a message-card",
+    !isMessageCardTitle("relay_board gains a my-cards view so seats can find their own cards"));
+  ok("#7763: no title is nothing", !isMessageCardTitle("") && !isMessageCardTitle(null));
+  ok("#7763: the open-work set is exactly doing/testing/todo",
+    JSON.stringify(OPEN_CARD_STATUSES) === JSON.stringify(["doing", "testing", "todo"]));
 
   ok("codex's usage line is read", parseTurnTokens("thinking...\ntokens used: 12,345\ndone") === 12345);
   ok("the LAST running total wins", parseTurnTokens("tokens used 100\ntokens used 4,200") === 4200);
@@ -162,6 +175,9 @@ console.log("\n## the rules");
 // Hands out one batch of messages (or a SEQUENCE of batches for the #7288 threading drills), then
 // stays silent. Whatever the seat does with them is the test.
 let queued = [], served = 0, links = [], sent = [], batchQueue = [], msgSeq = 1;
+// #7763: what the mock BOARD holds, so the runner's board checks (is this citation a message-card?
+// what does the seat own?) have something true to read.
+let cardStore = {}, tasksList = [];
 const hub = http.createServer((req, res) => {
   let buf = ""; req.on("data", c => (buf += c));
   req.on("end", () => {
@@ -171,6 +187,8 @@ const hub = http.createServer((req, res) => {
     if (P === "/lessons") return reply({ lessons: [] });
     if (P === "/policy") return reply({ links, autonomy: { "*": 1 } });
     if (P === "/send") { try { sent.push(JSON.parse(buf || "{}")); } catch {} return reply({ ok: true, id: sent.length }); }
+    if (P === "/card") { const id = Number(u.searchParams.get("id")); return reply({ task: cardStore[id] || null, events: [], messages: [] }); }
+    if (P === "/tasks") return reply({ tasks: tasksList });
     if (P === "/poll") {
       if (batchQueue.length) {
         const batch = batchQueue.shift().map((m, i) => {
@@ -233,16 +251,25 @@ exit 0
     sent,
   };
 }
-async function drill(messages, { waitMs = 7000, projectLinks = [] } = {}) {
+async function drill(messages, { waitMs = 7000, projectLinks = [], cards, tasks } = {}) {
   queued = messages; served = 0; links = projectLinks; sent = []; batchQueue = [];
+  // #7763: the mock BOARD for this drill — the cards whose ids the wake cites, and what the seat owns.
+  cardStore = cards || {}; tasksList = tasks || [];
   return spawnDrill({ waitMs, projectLinks });
 }
 // #7288: several batches handed out one per poll, so a message can REPLY to something the seat
 // said in an earlier batch (re:"@receipt" resolves to the receipt the runner last sent).
 async function drillSequence(batches, { waitMs = 7000, projectLinks = [] } = {}) {
-  batchQueue = batches; queued = []; served = 0; links = projectLinks; sent = []; msgSeq = 1;
+  batchQueue = batches; queued = []; served = 0; links = projectLinks; sent = []; msgSeq = 1; cardStore = {}; tasksList = [];
   return spawnDrill({ waitMs, projectLinks });
 }
+
+// The board shapes the #7763 drills serve: 7700 is a message-card transcript, 7701 the seat's real
+// open card.
+const MSGCARD_BOARD = {
+  7700: { id: 7700, project: "tt-wake", title: "NEW BUS MESSAGE for you: [orch]: read this and answer the question inside", assignee: "codex:tt-wake", status: "todo" },
+  7701: { id: 7701, project: "tt-wake", title: "the seat's real work card", assignee: "codex:tt-wake", status: "doing", updated: 2 },
+};
 
 // ---- drill 1: wake:false batches, a contract wakes --------------------------------------------
 console.log("\n## a turn costs a session");
@@ -316,7 +343,10 @@ console.log("\n## a demotion tells its sender");
 // ---- drill 2: two cards -> two sessions -------------------------------------------------------
 console.log("\n## one session per card");
 {
-  const r = await drill([{ text: "contract: card #7010, build the thing" }], { waitMs: 5000 });
+  // #7763: the mock board serves the card the contract cites — on a real hub it exists, and the
+  // runner now checks the board before binding.
+  const r = await drill([{ text: "contract: card #7010, build the thing" }],
+    { waitMs: 5000, cards: { 7010: { id: 7010, project: "tt-wake", title: "build the thing", assignee: "codex:tt-wake", status: "todo" } } });
   ok("the first card starts a FRESH session (it is not the kickoff's session)",
     r.fresh.length === 1 && r.resumed.length === 0, `fresh=${r.fresh.length} resumed=${r.resumed.length}`);
   ok("the fresh session is told it has no memory and where its card is",
@@ -345,7 +375,10 @@ console.log("\n## the bound card is the assigned one");
   // that writes the FRESH SESSION line, so the line is proof of what the machine believed.
   const r = await drill([
     { text: "#7037 is merged as a01f629 and pushed. YOUR CARD: #6983, fixes 2 and 3." },
-  ], { waitMs: 5000 });
+  ], { waitMs: 5000, cards: {
+    7037: { id: 7037, project: "tt-wake", title: "the merged card", assignee: "", status: "done" },
+    6983: { id: 6983, project: "tt-wake", title: "fixes 2 and 3", assignee: "codex:tt-wake", status: "todo" },
+  } });
   ok("#7061: the turn is bound to the ASSIGNED card, not the merged one",
     r.wakeTurns[0]?.includes("FRESH SESSION for card #6983"), r.wakeTurns[0]?.slice(0, 400));
   ok("#7061: and the done card is NOT what the seat is sent to read",
@@ -357,7 +390,10 @@ console.log("\n## the bound card is the assigned one");
   const r = await drill([
     { text: "contract: card #7040, build the thing" },
     { text: "note: #7041 is merged, unrelated to yours — carry on with #7040" },
-  ], { waitMs: 5000 });
+  ], { waitMs: 5000, cards: {
+    7040: { id: 7040, project: "tt-wake", title: "build the thing", assignee: "codex:tt-wake", status: "todo" },
+    7041: { id: 7041, project: "tt-wake", title: "the merged one", assignee: "", status: "done" },
+  } });
   ok("#7061: one batch, one session — the mentioned card does not buy a second one",
     r.wakeTurns.length === 1 && r.fresh.length === 1,
     `wakes=${r.wakeTurns.length} fresh=${r.fresh.length}`);
@@ -365,7 +401,45 @@ console.log("\n## the bound card is the assigned one");
     r.wakeTurns[0]?.slice(0, 400));
 }
 
-// ---- drill 2c: an armed seat SAYS which path each turn took (#7060) ---------------------------
+// ---- drill 2c: a wake citing a message-card resolves to the seat's REAL card (#7763, #7765) ----
+// The kimi specimen: exit 0 at 1201s, stderr ending in "tried to close message-card #7731, but it
+// doesn't exist on this board either" — a whole turn burned on a transcript instead of the
+// question it carried. Now the runner checks the board BEFORE binding and reroutes.
+console.log("\n## a message-card citation binds the seat's own card");
+{
+  const r = await drill([{ text: "#7700 is the transcript — answer the question inside it" }],
+    { waitMs: 5000, cards: MSGCARD_BOARD, tasks: Object.values(MSGCARD_BOARD) });
+  ok("#7765: the wake still buys its turn — the question gets reached, not dropped", r.wakeTurns.length === 1, `${r.wakeTurns.length} wake turn(s)`);
+  ok("#7763: the turn is bound to the seat's REAL card, not the message-card",
+    r.wakeTurns[0]?.includes("FRESH SESSION for card #7701"), r.wakeTurns[0]?.slice(0, 400));
+  ok("#7763: the seat is never sent to read the message-card as its card",
+    !r.wakeTurns[0]?.includes("relay_board with card:7700"), r.wakeTurns[0]?.slice(0, 400));
+  ok("#7763: the rules name the mine view as the no-card-id first call",
+    r.wakeTurns[0]?.includes("relay_board with mine:true"), r.wakeTurns[0]?.slice(0, 400));
+}
+{
+  // The phantom shape — the exact id kimi died on: the board does not have the card AT ALL. No
+  // confirmed title means no reroute and no binding either: the turn still happens, the question
+  // still rides, and the rules send the seat to its mine view instead of chasing the id.
+  const r = await drill([{ text: "close message-card #7731, then: is the gate green?" }], { waitMs: 5000 });
+  ok("#7765: a wake naming a NON-EXISTENT message-card still gets the question answered",
+    r.wakeTurns.length === 1 && r.wakeTurns[0]?.includes("is the gate green?"), r.wakeTurns[0]?.slice(0, 400));
+  ok("#7765: the phantom id binds NO card — the seat is never sent to chase it",
+    !r.wakeTurns[0]?.includes("FRESH SESSION for card #7731") && !r.wakeTurns[0]?.includes("relay_board with card:7731"),
+    r.wakeTurns[0]?.slice(0, 400));
+  ok("#7765: the no-card-id rule points the seat at its own cards instead",
+    r.wakeTurns[0]?.includes("relay_board with mine:true"), r.wakeTurns[0]?.slice(0, 400));
+}
+{
+  // Regression guard: a wake citing a REAL card must bind exactly as before — the board check may
+  // only reroute message-cards and phantoms, never ordinary contracts.
+  const r = await drill([{ text: "contract: card #7702, build the thing" }],
+    { waitMs: 5000, cards: { 7702: { id: 7702, project: "tt-wake", title: "build the thing", assignee: "codex:tt-wake", status: "todo" } } });
+  ok("#7763: an ordinary contract still binds its own card, unchanged",
+    r.wakeTurns.length === 1 && r.wakeTurns[0]?.includes("FRESH SESSION for card #7702"), r.wakeTurns[0]?.slice(0, 400));
+}
+
+// ---- drill 2d: an armed seat SAYS which path each turn took (#7060) ---------------------------
 // #7060: the boot line used to read "ASSEMBLE mode ON" while the kickoff turn could never be
 // assembled (a kickoff has no wake, so no card). The runner is armed for real here — claude seat,
 // a CLI whose --help carries --json-schema — and STDOUT is the evidence this card is about.

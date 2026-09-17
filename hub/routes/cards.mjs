@@ -195,11 +195,10 @@ export async function routeCards({ req, res, q, P, auth, ctx }) {
       if (!cpg.ok) return json(res, cpg.code, { error: cpg.error });
       if (b.title !== undefined) b.title = stripNulText(b.title);
       if (b.note !== undefined) b.note = stripNulText(b.note);
-      // Board integrity (#5406): a card can never change hands silently. The assignee is frozen once
-      // set; a mutation is legitimate only as a HANDOFF (the current assignee reassigning to someone
-      // else) or an EXPLICIT reassign (reassign:true — e.g. the orchestrator re-routing work after a
-      // seat dies). A silent third-party overwrite 409s so the caller knows the board refused to move.
-      // Runs BEFORE any other field mutation so a refused steal cannot half-apply a status move.
+      // Board integrity (#5406): a card can never change hands silently — the assignee is frozen
+      // once set, and a mutation is legitimate only as a HANDOFF (current assignee reassigning) or
+      // an EXPLICIT reassign:true (the orchestrator re-routing after a seat dies). A silent
+      // third-party overwrite 409s, BEFORE any other field mutation, so a refused steal half-applies nothing.
       if (b.assignee !== undefined) {
         const want = String(b.assignee).slice(0, 60);
         if (want !== t.assignee) {
@@ -219,8 +218,8 @@ export async function routeCards({ req, res, q, P, auth, ctx }) {
         t.status = b.status;
         // WHO is actually working this card — the SIGNED mover, not the assignee. A card filed by
         // the orchestrator and built by a seat wore the orchestrator's face on every board
-        // (2026-08-28, operator caught it: "they all say claude"). The assignee stays intent;
-        // workedBy is evidence, stamped only on real work moves and never from a self-asserted by.
+        // (operator caught it: "they all say claude"). The assignee stays intent; workedBy is
+        // evidence, stamped only on real work moves and never from a self-asserted by.
         if (["doing","testing","done"].includes(b.status) && auth?.identity?.name) {
           t.workedBy = String(auth.identity.name).slice(0, 120);
         }
@@ -264,11 +263,9 @@ export async function routeCards({ req, res, q, P, auth, ctx }) {
       t.checklist[i].done = !!b.done;
       t.updated = now(); markDirty(); return json(res, 200, { ok: true, task: t });
     }
-    // Manual board sweep — the aggressive companion to the automatic reaper. The reaper only touches
-    // OFFLINE-owner cards (no false positives on live work); /sweep is the explicit "this live seat forgot
-    // its card" path: it stales EVERY doing/testing card untouched past `olderMs`, regardless of owner
-    // liveness — so it is preview-first (dryRun returns the candidates and changes nothing; the CLI/dashboard
-    // confirm before the real move). Optional `project` scopes it to one board.
+    // Manual board sweep — the aggressive companion to the automatic reaper: where the reaper only
+    // touches OFFLINE-owner cards, /sweep stales EVERY doing/testing card untouched past `olderMs`,
+    // so it is preview-first (dryRun changes nothing; the CLI/dashboard confirm). `project` scopes it.
     if (req.method === "POST" && P === "/sweep") {
       const b = await body(req);
       const project = b.project ? canon(String(b.project).slice(0, 80)) : null;
@@ -337,12 +334,10 @@ export async function routeCards({ req, res, q, P, auth, ctx }) {
       const session = String(b.session || b.by || "").slice(0, 120);
       const project = canon(String(b.project || "").slice(0, 80));
       const title = String(b.title || "").replace(/\s+/g, " ").trim().slice(0, 200);
-      // `cc` = the Claude Code session UUID (hooks/prompt-focus.mjs passes session_id). It is the
-      // ONLY per-session key on the board: `assignee` is a bus id, which is per host+project, so
-      // two Claude sessions in one project used to fight over a single rolling card — and every
-      // sub-agent card, whose `parent` is that same UUID, had nothing to join to (measured over
-      // 431 live cards, joining on the bus id resolved 0 of them). With `cc` stored here, a
-      // sub-agent nests under the session that actually spawned it.
+      // `cc` = the Claude Code session UUID — the ONLY per-session key on the board (`assignee` is
+      // a per-host+project bus id, so two Claude sessions used to fight over one rolling card, and
+      // 431 live cards measured 0 sub-agent joins on it). With `cc` stored, a sub-agent nests under
+      // the session that spawned it.
       const cc = String(b.cc || "").slice(0, 120);
       if (!session || !project || !title) return json(res, 400, { error: "session, project, title required" });
       touch(session, undefined, project, undefined, auth);
@@ -386,19 +381,17 @@ export async function routeCards({ req, res, q, P, auth, ctx }) {
       if (t && !canRead(auth, t.project || "")) return json(res, 404, { id: null, task: null });
       return json(res, 200, { id: t ? t.id : null, task: t || null });
     }
-    // #6983 fixes 2+3. /tasks is the hot read — every seat pays it several times a session — and on
-    // trantor it had grown to 1.55MB across 958 cards: 625-961ms against a 1500ms budget, and past
-    // execSync's 1MB pipe. Measured, the weight is not the cards, it is what hangs off them: log
-    // 56.3%, history 11.8%, checklist 4.4%. `fields=slim` drops exactly those three and keeps every
-    // column a reader actually renders (log becomes logCount) — 16.8% of full. `card=<id>` then
-    // re-attaches the ONE card the caller opened, so reading a card costs an index, not the board.
-    // Both are opt-in and additive: a client that sends neither gets the unchanged full payload, so
-    // this does not move the cliff for anyone, and old clients keep working against a new hub.
+    // #6983: /tasks is the hot read — on trantor it hit 1.55MB/958 cards, 625-961ms against a
+    // 1500ms budget. The weight is log 56.3% + history 11.8% + checklist 4.4%, so `fields=slim`
+    // drops exactly those (log becomes logCount, 16.8% of full) and `card=<id>[,<id>]` (#7763)
+    // re-attaches full rows for the cards actually opened — opt-in, additive, old clients safe.
     if (req.method === "GET" && P === "/tasks") {
       const proj = q.project ? canon(q.project) : ""; const ts = filterReadable(auth, proj ? state.tasks.filter(t => canon(t.project) === proj) : state.tasks, t => t.project || "");
       if (String(q.fields || "") !== "slim") return json(res, 200, { tasks: ts });
-      const keep = Number(q.card);
-      const tasks = ts.map(t => (Number.isInteger(keep) && t.id === keep ? t : slimCard(t)));
+      // #7763: comma-separated ids too — relay_board's mine view re-attaches EVERY card the seat
+      // owns in one request instead of one per card. Single-id and no-param behavior unchanged.
+      const keep = q.card ? String(q.card).split(",").map(Number).filter(Number.isInteger) : [];
+      const tasks = ts.map(t => (keep.includes(t.id) ? t : slimCard(t)));
       // Echo the projection back. Without it a client cannot tell "hub honored slim" from "old hub
       // ignored the param and sent everything", and would have to guess from a missing field.
       return json(res, 200, { tasks, fields: "slim" });
@@ -617,20 +610,9 @@ export async function routeCards({ req, res, q, P, auth, ctx }) {
       return json(res, 200, { gates });
     }
     // --- agent-proposed permissions (governance): the autonomy ladder made two-directional ---
-    // The operator sets levels top-down (`trantor policy`); this is the bottom-up half — an agent
-    // that needs more rope FILES A PROPOSAL instead of assuming, working around, or DM'ing the
-    // human free-form. Three rules, all Argus-derived and all enforced HERE, not by convention:
-    //   1. A proposal must state its BOUND — scope (what), condition (when), exclusions (what is
-    //      still NOT covered). A permission without a bound is a blank cheque, so an unbounded
-    //      proposal is a 400, not a pending row.
-    //   2. The queue is CAPPED per session (default 3 pending). To file past the cap the agent
-    //      must withdraw one of its own — a full queue is a prioritization exercise, not a bug.
-    //   3. Denials are REMEMBERED. A near-duplicate of a denied proposal (normalized scope +
-    //      condition, same project) is refused with the operator's original note, so "ask again
-    //      until the human gives in" is structurally impossible.
-    // Deciding is the HUMAN's act alone: /proposal/decide is owner-gated (OWNER_ENDPOINTS) and
-    // nothing hub-side ever flips a proposal to approved. Approval grants nothing mechanical
-    // today — it is a recorded operator decision the agent may rely on, like a mission note line.
+    // An agent needing more rope FILES A PROPOSAL here instead of assuming or working around.
+    // Enforced HERE: unbounded proposal = 400; queue caps at 3 pending/session; near-duplicate of
+    // a DENIED proposal = refused. Deciding is the HUMAN's alone — /proposal/decide is owner-gated.
     if (req.method === "POST" && P === "/propose") {
       const b = await body(req);
       const session = String(b.session || b.by || "").slice(0, 120);

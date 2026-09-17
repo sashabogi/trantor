@@ -19,7 +19,7 @@ import {
 import { capWake, capBcast, pickLessons, composePrompt, contractBase, baseLine } from "./crew-payload.mjs";
 import {
   cardRefs, wakeCard, carriesWork, parseTurnTokens, parseResetAt, reasonWithBalances, quotaResetAt, PARKING_REASONS,
-  senderProjectOf, isLinkedProject, stateSkipReason,
+  senderProjectOf, isLinkedProject, stateSkipReason, isMessageCardTitle, OPEN_CARD_STATUSES,
 } from "../lib/turn-policy.mjs";
 import {
   auditDutyNudges, claimDutyNudges, claudeTranscriptDir, dutyEscalations, dutyNudgeDirective,
@@ -246,7 +246,7 @@ const EFFORT_FLAG = EFFORT ? cliEffortFlag(AGENT, EFFORT) : { flag: "", text: ""
 
 // RUNNER_RULES / RUNNER_KICKOFF env overrides: the runner is also the substrate for non-crew
 // always-on seats (the fleet DUTY agent, bin/duty.mjs) whose doctrine is not "work your card".
-const RULES = process.env.RUNNER_RULES || `Rules: you are ${SESSION} on the trantor crew. Before starting a card, read YOUR card: relay_board with card:<id> (the card, its deps, its notes, and the last five done cards whose title shares a word); never the whole board. Work your assigned file(s), report on the bus (relay_send, <280 chars), move your Kanban card as you go with a NOTE saying what you did (doing -> testing -> done; in 'testing' run YOUR OWN test file — never the full npm test, suites collide across seats — plus \`node bin/slop-gate.mjs\` when the repo has one: it lints ONLY your changed files against the anti-slop rules, and a card must not reach done with slop-gate failing; use 'failed' + a report if anything breaks). If a contract omits a fact you cannot proceed without, ASK — never invent the value: relay_ask(<card>, <question>) blocks the card with your question, keeps the turn owed (no park, no failure), and resumes you when the assigner's answer lands; an invented value that reads as reasoned is the worst outcome this crew ships (#7756). If you need something from another session, message THAT SESSION (relay_peers to find its id, relay_send to reach it) — never ask the human to pass it along; carrying messages between agents is the job this bus exists to remove. When your work for THIS message is finished, END YOUR TURN — do NOT park, do NOT loop relay_wait; the runner waits for you and will wake you with the next message. Path discipline: build/test from your worktree root ${TURN_DIR} with absolute paths or --manifest-path/--prefix instead of cd-ing into subdirs, and put anything that must land outside the repo under ${TURN_DIR}/.agent-bus-out/ (gitignored) — never ~/.agent-bus. Realigning your seat branch after the orchestrator harvested your commits is \`trantor sync\` run from your worktree: it reads the harvest receipts and refuses when an unharvested commit would be lost, so never reset or rebase onto main by hand. A contract's \`base: <sha>\` line is the integration head: start your seat branch at that sha (\`git reset --hard <sha>\` on the fresh branch), never at origin/main, which trails the orchestrator's unpushed integration commits; the object is already here as the ref \`main\`. If \`git cat-file -e <sha>\` fails, say \`cannot resolve base <sha>\` on the bus and move the card to blocked instead of reasoning from origin/main. Every testing/done note names the sha you verified against as \`verified at <sha>\`; a note without it is flagged HOLLOW. Cross-project action is a breach: never \`trantor up\` a crew, register a seat, or send a card/contract into a project other than ${PROJ} unless the operator ran \`trantor policy link ${PROJ} <other> --reason "<why>"\` first — the hub, the CLI and this runner all refuse it mechanically, so ask the operator to link the projects instead of routing around the refusal.`;
+const RULES = process.env.RUNNER_RULES || `Rules: you are ${SESSION} on the trantor crew. Before starting a card, read YOUR card: relay_board with card:<id> (the card, its deps, its notes, and the last five done cards whose title shares a word); never the whole board. If your wake names no card id (or cites only a message-card), make relay_board with mine:true your FIRST call — it lists the cards assigned to you (doing/testing/todo, newest first, full card shape); work your newest one (#7763). Work your assigned file(s), report on the bus (relay_send, <280 chars), move your Kanban card as you go with a NOTE saying what you did (doing -> testing -> done; in 'testing' run YOUR OWN test file — never the full npm test, suites collide across seats — plus \`node bin/slop-gate.mjs\` when the repo has one: it lints ONLY your changed files against the anti-slop rules, and a card must not reach done with slop-gate failing; use 'failed' + a report if anything breaks). If a contract omits a fact you cannot proceed without, ASK — never invent the value: relay_ask(<card>, <question>) blocks the card with your question, keeps the turn owed (no park, no failure), and resumes you when the assigner's answer lands; an invented value that reads as reasoned is the worst outcome this crew ships (#7756). If you need something from another session, message THAT SESSION (relay_peers to find its id, relay_send to reach it) — never ask the human to pass it along; carrying messages between agents is the job this bus exists to remove. When your work for THIS message is finished, END YOUR TURN — do NOT park, do NOT loop relay_wait; the runner waits for you and will wake you with the next message. Path discipline: build/test from your worktree root ${TURN_DIR} with absolute paths or --manifest-path/--prefix instead of cd-ing into subdirs, and put anything that must land outside the repo under ${TURN_DIR}/.agent-bus-out/ (gitignored) — never ~/.agent-bus. Realigning your seat branch after the orchestrator harvested your commits is \`trantor sync\` run from your worktree: it reads the harvest receipts and refuses when an unharvested commit would be lost, so never reset or rebase onto main by hand. A contract's \`base: <sha>\` line is the integration head: start your seat branch at that sha (\`git reset --hard <sha>\` on the fresh branch), never at origin/main, which trails the orchestrator's unpushed integration commits; the object is already here as the ref \`main\`. If \`git cat-file -e <sha>\` fails, say \`cannot resolve base <sha>\` on the bus and move the card to blocked instead of reasoning from origin/main. Every testing/done note names the sha you verified against as \`verified at <sha>\`; a note without it is flagged HOLLOW. Cross-project action is a breach: never \`trantor up\` a crew, register a seat, or send a card/contract into a project other than ${PROJ} unless the operator ran \`trantor policy link ${PROJ} <other> --reason "<why>"\` first — the hub, the CLI and this runner all refuse it mechanically, so ask the operator to link the projects instead of routing around the refusal.`;
 
 // ---- the pulse --------------------------------------------------------------
 // RUNNER_PULSE_MS re-runs an orchestrator seat's mission note on a cadence when the bus is silent;
@@ -1066,6 +1066,32 @@ function askedExcerpt(message) {
   return text.slice(0, 120);
 }
 
+// #7763/#7765: the card a wake binds to, with message-cards out of the race — a transcript of a
+// bus message parked on the board is never work, and chasing one (or a phantom id) is how a turn
+// burns on bookkeeping. Only a CONFIRMED message-card title reroutes, to the seat's OWN newest
+// open card (same statuses/ordering as relay_board's mine view); a phantom binds nothing.
+async function newestOwnCard(session, why) {
+  try {
+    const { tasks } = await api(`/tasks?project=${encodeURIComponent(PROJ)}`);
+    const own = (Array.isArray(tasks) ? tasks : [])
+      .filter((t) => t.assignee === session && OPEN_CARD_STATUSES.includes(t.status) && !isMessageCardTitle(t.title))
+      .sort((a, b) => (b.updated || b.ts || 0) - (a.updated || a.ts || 0));
+    if (own.length) log(`${why} — resolved to the seat's own #${own[0].id} (${own[0].status})`);
+    else log(`${why} — and the seat has no open card, so this turn carries no card binding`);
+    return own.length ? own[0].id : 0;
+  } catch { return 0; }   // board unreadable: no binding beats a guessed one
+}
+async function resolveWakeCard(messages, { session }) {
+  const cited = wakeCard(messages, { session });
+  if (!(cited > 0)) return 0;
+  try {
+    const { task } = await api(`/card?project=${encodeURIComponent(PROJ)}&id=${cited}`);
+    if (!task) { log(`#${cited}: the wake cites a card this board does not have — no card binding; the mine view is the first call`); return 0; }
+    if (isMessageCardTitle(task.title)) return newestOwnCard(session, `#${cited} is a message-card ("${String(task.title).slice(0, 60)}")`);
+    return cited;
+  } catch { return cited; }   // hub unreachable: keep the pre-#7763 reading rather than drop a contract
+}
+
 (async () => {
   await loadLessons();
   // start cursor at the CURRENT tip so we don't replay history
@@ -1335,7 +1361,8 @@ function askedExcerpt(message) {
     const tStart = Date.now();
     // #6134: ONE SESSION PER CARD; a different card starts a fresh CLI session and the seat is told.
     // #7061: bound by SHAPE, not position, so an order opening with what shipped binds the right card.
-    const card = wakeCard(wakeForTurn, { session: SESSION });
+    // #7763: a message-card (or phantom) citation never binds — the seat's own newest card does.
+    const card = await resolveWakeCard(wakeForTurn, { session: SESSION });
     // #7754: the contract carries the integration head as `base: <sha>` — the wake's own line if it
     // has one, else local main. A sha this worktree cannot resolve is never worked from origin/main:
     // the card goes to blocked and the assigner is told, and no model turn is spent on it.
