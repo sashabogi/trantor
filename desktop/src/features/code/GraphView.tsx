@@ -2,7 +2,7 @@
 // `code_graph`, drawn as Flare's flow layout, opened collapsed to one card per top-level
 // directory (rule 7), each cluster expanding in place. Clusters / Activity / Cycles are tones
 // over the same cards. No drag, no persisted positions: the layout is deterministic.
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { hueOf } from "../../shared/Avatar";
 import { hierarchicalFlowLayout, type Point } from "./graph/flowLayout";
 import {
@@ -18,6 +18,7 @@ import {
   type Tone,
 } from "./graph/deriveGraph";
 import { GRAFT_MISSING, graphApi, isGraphError, type CodeGraphResponse, type GraphApi } from "./graph/graphApi";
+import { quietRebuild, rebuildWorthy } from "./graph/refresh";
 
 const CARD_W = 112;
 const CARD_H = 30;
@@ -99,17 +100,38 @@ export function GraphView({ project, seat, onOpen, api = graphApi }: {
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(new Set());
   const [lens, setLens] = useState<GraphLens>("clusters");
   const [selected, setSelected] = useState<string | null>(null);
-  const [generation, setGeneration] = useState(0);
+  const [rebuilding, setRebuilding] = useState(false);
+  // Only the newest request may land: a slow build must not overwrite a newer scope's graph.
+  const requestRef = useRef(0);
+
+  const load = useCallback((mode: "fresh" | "rebuild") => {
+    const id = ++requestRef.current;
+    if (mode === "fresh") {
+      setResponse(null);
+      setLoadError(null);
+      setRebuilding(false);
+    } else {
+      setRebuilding(true);
+    }
+    return api.graph(project, seat ?? undefined)
+      .then(r => { if (id === requestRef.current) { setResponse(r); setLoadError(null); } })
+      .catch(e => { if (id === requestRef.current) setLoadError(e instanceof Error ? e.message : String(e)); })
+      .finally(() => { if (id === requestRef.current) setRebuilding(false); });
+  }, [api, project, seat]);
 
   useEffect(() => {
-    let alive = true;
-    setResponse(null);
-    setLoadError(null);
-    api.graph(project, seat ?? undefined)
-      .then(r => { if (alive) setResponse(r); })
-      .catch(e => { if (alive) setLoadError(e instanceof Error ? e.message : String(e)); });
-    return () => { alive = false; };
-  }, [api, project, seat, generation]);
+    void load("fresh");
+    return () => { requestRef.current++; };
+  }, [load]);
+
+  // Refresh (#7953): one rebuild per quiet second, the old canvas up while graft runs. The
+  // watcher sees the main checkout only, so a seat scope rebuilds from its refresh chip.
+  useEffect(() => {
+    if (seat !== null) return;
+    const scheduler = quietRebuild(() => load("rebuild"));
+    const off = api.fileChanges(project, paths => { if (rebuildWorthy(paths)) scheduler.touch(); });
+    return () => { scheduler.cancel(); off(); };
+  }, [api, project, seat, load]);
 
   // The same project-wide change rows the ModePane polls: which nodes are dirty, in whose tree.
   useEffect(() => {
@@ -160,6 +182,9 @@ export function GraphView({ project, seat, onOpen, api = graphApi }: {
             {graph.meta.externalTargets > 0 ? ` · ${graph.meta.externalTargets} external` : ""}
           </span>
         )}
+        {rebuilding && (
+          <span className="tr-mono text-[11px] text-tr-muted" data-testid="graph-rebuilding">rebuilding…</span>
+        )}
         <div className="ml-auto flex items-center gap-1.5">
           {expanded.size > 0 && (
             <button
@@ -172,7 +197,7 @@ export function GraphView({ project, seat, onOpen, api = graphApi }: {
           )}
           <button
             type="button"
-            onClick={() => setGeneration(g => g + 1)}
+            onClick={() => { void load("rebuild"); }}
             title="Rebuild the graph from this scope's tree"
             className="tr-chip hover:text-tr-text"
           >
