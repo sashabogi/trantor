@@ -1,24 +1,18 @@
 #!/usr/bin/env node
-// trantor app — install/update the Trantor DESKTOP APP (Tauri) from GitHub Releases.
-//
-// The npm package deliberately does NOT ship desktop/ (a 6MB DMG has no business in node_modules);
-// the app travels as a GitHub Release asset instead. This command is the whole distribution story
-// for a teammate: `npm i -g trantor && trantor app install` → latest DMG lands in /Applications.
-//
-//   trantor app            status: installed version vs latest release
-//   trantor app install    download the latest release DMG and install to /Applications
-//   trantor app update     same as install (re-pulls whatever is latest)
-//
+// trantor app — install/update the Trantor DESKTOP APP (Tauri) from GitHub Releases. The npm
+// package does not ship desktop/ (a 6MB DMG has no business in node_modules); the app travels as
+// a GitHub Release asset, so `npm i -g trantor && trantor app install` is the whole story.
+
 // Release side (maintainer): build the DMG (cd desktop && npm run tauri build), then
 //   gh release create app-v<ver> desktop/src-tauri/target/release/bundle/dmg/Trantor_<ver>_aarch64.dmg
-// Any release whose assets include a Trantor_*.dmg is an app release; the newest one wins, so app
-// releases interleave freely with code (npm) releases.
-import { execFileSync } from "node:child_process";
+// Any release whose assets include a Trantor_*.dmg is an app release; the newest one wins.
+import { execFileSync, spawn } from "node:child_process";
 import { createWriteStream, existsSync, rmSync } from "node:fs";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
+import { cleanLaunchEnv } from "../lib/launch-env.mjs";
 
 const REPO = "sashabogi/trantor";
 const APP = "/Applications/Trantor.app";
@@ -27,10 +21,38 @@ const cmd = process.argv[2] || "status";
 
 if (process.platform !== "darwin") { console.error("trantor app: the desktop app is macOS-only for now"); process.exit(1); }
 if (!["status", "install", "update"].includes(cmd)) {
-  console.error("usage: trantor app [status|install|update]"); process.exit(1);
+  console.error([
+    "usage: trantor app [status|install|update]",
+    "  status   installed version vs latest release (default)",
+    "  install  download the latest release DMG and install to /Applications",
+    "  update   same as install, then relaunch the app from a clean env",
+  ].join("\n"));
+  process.exit(1);
 }
 
 function sh(file, args) { return execFileSync(file, args, { encoding: "utf8" }); }
+
+function appRunning() {
+  try { return sh("/usr/bin/pgrep", ["-x", "Trantor"]).trim() !== ""; }
+  catch { return false; }
+}
+
+function pause(ms) { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms); }
+
+// `open` hands the caller's environment to the app, so an update run from a badged crew pane would
+// badge every child the new app spawns and its hand-offs would reattach to the wrong project (#7414).
+function relaunch(wasRunning) {
+  if (wasRunning) {
+    try { sh("/usr/bin/osascript", ["-e", 'tell application "Trantor" to quit']); } catch {}
+    const deadline = Date.now() + 10000;
+    while (appRunning() && Date.now() < deadline) pause(200);
+    if (appRunning()) { try { sh("/usr/bin/pkill", ["-x", "Trantor"]); } catch {} pause(500); }
+  }
+  const child = spawn("/usr/bin/open", ["-a", APP], { env: cleanLaunchEnv(), stdio: "ignore", detached: true });
+  child.on("error", e => console.error(`relaunch failed: ${e.message}`));
+  child.unref();
+  console.log(`↻ ${wasRunning ? "quit the old app and " : ""}launched ${APP} from a clean env`);
+}
 
 function installedVersion() {
   try { return sh("plutil", ["-extract", "CFBundleShortVersionString", "raw", join(APP, "Contents/Info.plist")]).trim(); }
@@ -76,12 +98,14 @@ if (!dl.ok || !dl.body) { console.error(`download failed: HTTP ${dl.status}`); p
 await pipeline(Readable.fromWeb(dl.body), createWriteStream(dmg));
 
 let mount = "";
+let installed = false;
+const wasRunning = appRunning();
 try {
   // diskutil first: on macOS 26 the deprecated hdiutil shim IGNORES -nobrowse, so the mounted
-  // volume popped a Finder window mid-update and read as an install prompt (2026-08-27). Parse
+  // volume popped a Finder window mid-update and read as an install prompt. Parse
   // the mount point as everything after the last " at " — volume names can contain spaces.
   try {
-    // real output (verified 2026-08-27): tab-separated, same shape as hdiutil —
+    // real output (verified live): tab-separated, same shape as hdiutil —
     // "/dev/disk12s1\tApple_HFS            \t/Volumes/Trantor" — last tab field is the mount.
     const out = sh("diskutil", ["image", "attach", "--mountOptions", "nobrowse", "--readOnly", dmg]);
     const line = out.trim().split("\n").filter(l => l.includes("/Volumes/")).pop() || "";
@@ -100,6 +124,7 @@ try {
   // Gatekeeper doesn't refuse the unsigned build on first launch.
   try { sh("xattr", ["-dr", "com.apple.quarantine", APP]); } catch {}
   console.log(`✓ Trantor.app ${installedVersion() || rel.version} installed → ${APP}`);
+  installed = true;
 } catch (e) {
   console.error(`install failed: ${e.message}`); process.exitCode = 1;
 } finally {
@@ -109,3 +134,5 @@ try {
   }
   try { rmSync(dmg, { force: true }); } catch {}
 }
+// A replaced app keeps running its deleted binary until relaunched; `update` always relaunches.
+if (installed && (cmd === "update" || wasRunning)) relaunch(wasRunning);
