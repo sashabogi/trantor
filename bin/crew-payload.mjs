@@ -1,11 +1,7 @@
 // Payload composition for crew-runner turn prompts — pure, unit-testable (card #5683).
-//
-// A fresh codex seat burned 306k tokens and crash-looped into a remote-compact 404. The runner-side
-// part of that: every turn re-feeds the FULL lessons block (22,298 of the 24,698 chars in codex's
-// last turn file — 90%), plus an unbounded FYI-broadcast backlog that grows across a failure streak
-// and is replayed on every redelivery, on a RESUMED session where it all stacks. So every section
-// here is capped, and the assembled prompt has ONE hard total cap with a visible truncation notice.
-// Below the caps the output is byte-identical to the old string concatenation.
+// A fresh codex seat burned 306k tokens re-feeding the FULL lessons block plus an unbounded
+// broadcast backlog every turn, so every section here is capped and the assembled prompt has ONE
+// hard total cap with a visible truncation notice; below the caps the output is byte-identical.
 
 export const PAYLOAD_CAPS = Object.freeze({
   wakeCount: 10,       // direct/@mention messages: keep the last ~10
@@ -80,9 +76,8 @@ export function pickLessons(lessons, trigger = "", caps = PAYLOAD_CAPS) {
 
 // ---- one composer, one hard total cap ----
 // sections: [{ name, text, trim?, order? }] joined in order. `trim: "drop"` removes the whole
-// section when the total is over `totalChars` (lowest `order` dropped first); `trim: "truncate"`
-// cuts the section to the remaining budget. Sections without `trim` are never touched — they are
-// the runner-authored frame. The payload carries a visible notice naming every trim.
+// section when over `totalChars` (lowest `order` first); `trim: "truncate"` cuts it to the remaining
+// budget; no `trim` = the runner-authored frame, never touched. A visible notice names every trim.
 export function composePrompt(sections, caps = PAYLOAD_CAPS) {
   const secs = sections.map(s => ({ ...s, text: String(s?.text ?? "") }));
   let total = secs.reduce((a, s) => a + s.text.length, 0);
@@ -112,4 +107,18 @@ export function composePrompt(sections, caps = PAYLOAD_CAPS) {
     truncated: dropped.length > 0,
     dropped,
   };
+}
+
+// ---- the integration head (#7754): one `base: <sha>` line on every contract. A seat starts its
+// branch at that sha, never at origin/main, which trails the orchestrator's unpushed integration.
+const BASE_LINE_RE = /^\s*base:\s*([0-9a-f]{7,40})\b/im;
+export const baseLine = (sha) => (sha ? `base: ${sha}` : "");
+// The newest wake message naming a base wins: an orchestrator's explicit head outranks local main.
+export function contractBase(wake) {
+  const list = Array.isArray(wake) ? wake : [];
+  for (let i = list.length - 1; i >= 0; i--) {
+    const m = String(list[i]?.text ?? "").match(BASE_LINE_RE);
+    if (m) return m[1];
+  }
+  return "";
 }

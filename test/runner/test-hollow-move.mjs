@@ -2,7 +2,7 @@
 // #7750 drill: the seat-side hollow-move check in mcp.mjs's relay_task_move — a testing/done move
 // from a clean worktree with no ticks and no test command lands but is prefixed HOLLOW: and the
 // assigner gets one bus line; a real diff, an untracked file, a tick + test command, or a declared
-// no-code outcome is NOT flagged. REAL mcp.mjs over stdio vs a REAL throwaway hub, cwd = git repo.
+// no-code outcome is NOT flagged. #7754: a note without `verified at <sha>` is flagged on its own.
 import { spawn, execFileSync } from "node:child_process";
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -24,6 +24,7 @@ mkdirSync(REPO);
 const git = (args) => execFileSync("git", args, { cwd: REPO, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim();
 git(["init", "-q"]);
 git(["-c", "user.name=drill", "-c", "user.email=drill@x", "commit", "-q", "--allow-empty", "-m", "init"]);
+const SHA = git(["rev-parse", "HEAD"]);
 
 const PORT = 47877, HUB = `http://127.0.0.1:${PORT}`;
 const SESSION = "seat:hollowproj", ORCH = "orch:hollowproj";
@@ -95,7 +96,7 @@ const take = (id) => call("relay_task_move", { id, status: "doing" });
   const card = await getCard(id);
   ok("the move still LANDS (testing)", card?.status === "testing", card?.status);
   ok("note is prefixed HOLLOW: naming all four missing pieces",
-    /^HOLLOW: no diff, no new files, no ticked checklist items, no test command in the note — finished it$/.test(lastNote(card)),
+    /^HOLLOW: no diff, no new files, no ticked checklist items, no test command in the note, no verified-at sha in the note — finished it$/.test(lastNote(card)),
     lastNote(card).slice(0, 140));
   const inbox = await (await fetch(`${HUB}/inbox?session=${ORCH}&since=0&peek=1`)).json();
   const msg = (inbox.messages || []).find(m => m.from === SESSION && /HOLLOW move/.test(m.text || ""));
@@ -110,7 +111,7 @@ const take = (id) => call("relay_task_move", { id, status: "doing" });
   writeFileSync(join(REPO, "feature.mjs"), "export const x = 1;\n");
   git(["add", "feature.mjs"]);
   git(["-c", "user.name=drill", "-c", "user.email=drill@x", "commit", "-q", "-m", "feature"]);
-  await call("relay_task_move", { id, status: "testing", note: "feature.mjs added; eyeball only" });
+  await call("relay_task_move", { id, status: "testing", note: `feature.mjs added; eyeball only; verified at ${SHA}` });
   const card = await getCard(id);
   ok("real diff: move lands", card?.status === "testing", card?.status);
   ok("real diff: no HOLLOW prefix despite no test command and unticked items", !lastNote(card).startsWith("HOLLOW:"), lastNote(card).slice(0, 90));
@@ -121,7 +122,7 @@ const take = (id) => call("relay_task_move", { id, status: "doing" });
   const id = await addCard("untracked card");
   await take(id);
   writeFileSync(join(REPO, "draft.mjs"), "// new module, not yet added\n");
-  await call("relay_task_move", { id, status: "testing", note: "drafted the module" });
+  await call("relay_task_move", { id, status: "testing", note: `drafted the module, verified at ${SHA}` });
   ok("new untracked file: no HOLLOW prefix", !lastNote(await getCard(id)).startsWith("HOLLOW:"), lastNote(await getCard(id)).slice(0, 90));
   rmSync(join(REPO, "draft.mjs"));
 }
@@ -141,7 +142,7 @@ const take = (id) => call("relay_task_move", { id, status: "doing" });
   const id = await addCard("honest card", ["check lands", "drill green"]);
   await take(id);
   await call("relay_task_check", { id, index: 0 });
-  await call("relay_task_move", { id, status: "done", note: "tests: node test/runner/test-hollow-move.mjs — 4/4 green" });
+  await call("relay_task_move", { id, status: "done", note: `tests: node test/runner/test-hollow-move.mjs — 4/4 green, verified at ${SHA}` });
   const card = await getCard(id);
   ok("ticked item + test command: move lands done", card?.status === "done", card?.status);
   ok("ticked item + test command: no HOLLOW prefix", !lastNote(card).startsWith("HOLLOW:"), lastNote(card).slice(0, 90));
@@ -155,6 +156,26 @@ const take = (id) => call("relay_task_move", { id, status: "doing" });
   const card = await getCard(id);
   ok("no recorded base: move lands and stays UNflagged (fail-open)", card?.status === "testing" && !lastNote(card).startsWith("HOLLOW:"),
     `${card?.status} ${lastNote(card).slice(0, 60)}`);
+}
+
+// ---- 7. #7754: full evidence but no `verified at <sha>` -> flagged on that alone ----------------
+{
+  const id = await addCard("unanchored card", ["check lands", "drill green"]);
+  await take(id);
+  writeFileSync(join(REPO, "feature.mjs"), "export const x = 2;\n");
+  await call("relay_task_check", { id, index: 0 });
+  await call("relay_task_move", { id, status: "testing", note: "tests: node test/runner/test-hollow-move.mjs — 6/6 green on origin/main" });
+  const card = await getCard(id);
+  ok("#7754: the move still lands", card?.status === "testing", card?.status);
+  ok("#7754: diff + tick + test command without a verified-at sha is flagged, naming only the sha",
+    /^HOLLOW: no verified-at sha in the note — tests:/.test(lastNote(card)), lastNote(card).slice(0, 120));
+  git(["checkout", "-q", "--", "feature.mjs"]);
+}
+{
+  const id = await addCard("anchored card");
+  await take(id);
+  await call("relay_task_move", { id, status: "done", note: `node test/runner/test-hollow-move.mjs 8/8 verified at ${SHA.slice(0, 7)}` });
+  ok("#7754: a short sha after `verified at` satisfies the check", !lastNote(await getCard(id)).startsWith("HOLLOW:"), lastNote(await getCard(id)).slice(0, 90));
 }
 
 mcp.kill(); hub.kill();

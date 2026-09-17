@@ -12,8 +12,14 @@ const TEST_CMD_RE = /(node\s+test\/|npm\s+(run\s+)?test|pnpm\s+test|yarn\s+test|
 // that says one of these is NEVER flagged, however empty its worktree is.
 const NOCODE_RE = /\b(no[- ]code|docs?[- ]only|investigat\w*|read[- ]only|research[- ]only|analysis[- ]only|answered (on|in) the bus|refus\w+|declin\w+|won'?t fix)\b/i;
 
+// #7754: the note names the sha it verified against, or a gate cannot tell green-on-the-wrong-base
+// from green. Required on its own, not only when every other piece of evidence is missing too.
+const VERIFIED_AT_RE = /\bverified at\s+([0-9a-f]{7,40})\b/i;
+const VERIFIED_AT_MISSING = "verified-at sha in the note";
+
 export const hasTestCommand = (note) => TEST_CMD_RE.test(String(note || ""));
 export const declaresNoCode = (note) => NOCODE_RE.test(String(note || ""));
+export const namesVerifiedSha = (note) => VERIFIED_AT_RE.test(String(note || ""));
 
 function git(cwd, args) {
   return execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim();
@@ -48,6 +54,11 @@ export function hollowVerdict(cwd, id, note, checklist) {
   } catch { return { checked: false, hollow: false, missing: [] }; }
   if (!(checklist || []).some((c) => c.done)) missing.push("ticked checklist items");
   if (!hasTestCommand(note)) missing.push("test command in the note");
-  const hollow = missing.length === 4 && !declaresNoCode(note);
+  const evidenceless = missing.length === 4;
+  const unanchored = !namesVerifiedSha(note);
+  // The flag names only what tripped it: the four evidence gaps together, or the missing sha alone.
+  if (!evidenceless) missing.length = 0;
+  if (unanchored) missing.push(VERIFIED_AT_MISSING);
+  const hollow = (evidenceless || unanchored) && !declaresNoCode(note);
   return { checked: true, hollow, missing };
 }

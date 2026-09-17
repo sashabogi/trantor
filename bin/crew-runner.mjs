@@ -15,7 +15,7 @@ import {
   verdictFor, substantiveOutput,
   readPromptText, stripPromptEcho,
 } from "../lib/classify-failure.mjs";
-import { capWake, capBcast, pickLessons, composePrompt } from "./crew-payload.mjs";
+import { capWake, capBcast, pickLessons, composePrompt, contractBase, baseLine } from "./crew-payload.mjs";
 import {
   cardRefs, wakeCard, carriesWork, parseTurnTokens, parseResetAt, reasonWithBalances, quotaResetAt, PARKING_REASONS,
   senderProjectOf, isLinkedProject, stateSkipReason,
@@ -113,6 +113,12 @@ function ensureSeatWorktree(sourceDir) {
 }
 
 const TURN_DIR = ensureSeatWorktree(DIR);
+
+// #7754: the integration head is the orchestrator's LOCAL main, which this linked worktree already
+// holds as the ref `main`; origin/main trails it whenever integration commits are unpushed.
+const localMainHead = () => gitOut(["rev-parse", "--verify", "--quiet", "main^{commit}"], TURN_DIR);
+const resolvesHere = (sha) =>
+  spawnSync("git", ["cat-file", "-e", `${sha}^{commit}`], { cwd: TURN_DIR, stdio: "ignore", timeout: 8000 }).status === 0;
 
 // #6154: opencode records each session with its directory; the newest row for OUR worktree is the
 // only session a resume may pin. Fail-open: no row means a fresh turn, never a stranger's session.
@@ -284,7 +290,7 @@ if (!CLI[AGENT]) log(`'${AGENT}' is not a built-in seat — running it as an ope
 
 // RUNNER_RULES / RUNNER_KICKOFF env overrides: the runner is also the substrate for non-crew
 // always-on seats (the fleet DUTY agent, bin/duty.mjs) whose doctrine is not "work your card".
-const RULES = process.env.RUNNER_RULES || `Rules: you are ${SESSION} on the trantor crew. Before starting a card, read YOUR card: relay_board with card:<id> (the card, its deps, its notes, and the last five done cards whose title shares a word); never the whole board. Work your assigned file(s), report on the bus (relay_send, <280 chars), move your Kanban card as you go with a NOTE saying what you did (doing -> testing -> done; in 'testing' run YOUR OWN test file — never the full npm test, suites collide across seats — plus \`node bin/slop-gate.mjs\` when the repo has one: it lints ONLY your changed files against the anti-slop rules, and a card must not reach done with slop-gate failing; use 'failed' + a report if anything breaks). If a contract omits a fact you cannot proceed without, ASK — never invent the value: relay_ask(<card>, <question>) blocks the card with your question, keeps the turn owed (no park, no failure), and resumes you when the assigner's answer lands; an invented value that reads as reasoned is the worst outcome this crew ships (#7756). If you need something from another session, message THAT SESSION (relay_peers to find its id, relay_send to reach it) — never ask the human to pass it along; carrying messages between agents is the job this bus exists to remove. When your work for THIS message is finished, END YOUR TURN — do NOT park, do NOT loop relay_wait; the runner waits for you and will wake you with the next message. Path discipline: build/test from your worktree root ${TURN_DIR} with absolute paths or --manifest-path/--prefix instead of cd-ing into subdirs, and put anything that must land outside the repo under ${TURN_DIR}/.agent-bus-out/ (gitignored) — never ~/.agent-bus. Realigning your seat branch after the orchestrator harvested your commits is \`trantor sync\` run from your worktree: it reads the harvest receipts and refuses when an unharvested commit would be lost, so never reset or rebase onto main by hand. Cross-project action is a breach: never \`trantor up\` a crew, register a seat, or send a card/contract into a project other than ${PROJ} unless the operator ran \`trantor policy link ${PROJ} <other> --reason "<why>"\` first — the hub, the CLI and this runner all refuse it mechanically, so ask the operator to link the projects instead of routing around the refusal.`;
+const RULES = process.env.RUNNER_RULES || `Rules: you are ${SESSION} on the trantor crew. Before starting a card, read YOUR card: relay_board with card:<id> (the card, its deps, its notes, and the last five done cards whose title shares a word); never the whole board. Work your assigned file(s), report on the bus (relay_send, <280 chars), move your Kanban card as you go with a NOTE saying what you did (doing -> testing -> done; in 'testing' run YOUR OWN test file — never the full npm test, suites collide across seats — plus \`node bin/slop-gate.mjs\` when the repo has one: it lints ONLY your changed files against the anti-slop rules, and a card must not reach done with slop-gate failing; use 'failed' + a report if anything breaks). If a contract omits a fact you cannot proceed without, ASK — never invent the value: relay_ask(<card>, <question>) blocks the card with your question, keeps the turn owed (no park, no failure), and resumes you when the assigner's answer lands; an invented value that reads as reasoned is the worst outcome this crew ships (#7756). If you need something from another session, message THAT SESSION (relay_peers to find its id, relay_send to reach it) — never ask the human to pass it along; carrying messages between agents is the job this bus exists to remove. When your work for THIS message is finished, END YOUR TURN — do NOT park, do NOT loop relay_wait; the runner waits for you and will wake you with the next message. Path discipline: build/test from your worktree root ${TURN_DIR} with absolute paths or --manifest-path/--prefix instead of cd-ing into subdirs, and put anything that must land outside the repo under ${TURN_DIR}/.agent-bus-out/ (gitignored) — never ~/.agent-bus. Realigning your seat branch after the orchestrator harvested your commits is \`trantor sync\` run from your worktree: it reads the harvest receipts and refuses when an unharvested commit would be lost, so never reset or rebase onto main by hand. A contract's \`base: <sha>\` line is the integration head: start your seat branch at that sha (\`git reset --hard <sha>\` on the fresh branch), never at origin/main, which trails the orchestrator's unpushed integration commits; the object is already here as the ref \`main\`. If \`git cat-file -e <sha>\` fails, say \`cannot resolve base <sha>\` on the bus and move the card to blocked instead of reasoning from origin/main. Every testing/done note names the sha you verified against as \`verified at <sha>\`; a note without it is flagged HOLLOW. Cross-project action is a breach: never \`trantor up\` a crew, register a seat, or send a card/contract into a project other than ${PROJ} unless the operator ran \`trantor policy link ${PROJ} <other> --reason "<why>"\` first — the hub, the CLI and this runner all refuse it mechanically, so ask the operator to link the projects instead of routing around the refusal.`;
 
 // ---- the pulse --------------------------------------------------------------
 // RUNNER_PULSE_MS re-runs an orchestrator seat's mission note on a cadence when the bus is silent;
@@ -1175,12 +1181,10 @@ function askedExcerpt(message) {
     // reply-linked outcomes, and the old stable marker before direct-address logic sees them. Status
     // broadcasts are presence chatter and are dropped rather than saved as future prompt context.
     msgs = msgs.filter(m => !isReceipt(m) && !isStatusBroadcast(m));
-    // #7778: ids in the seen-set were already handed to the model through the session's own inbox
-    // read mid-turn (the reconcile at the last clean turn boundary recorded them). The poll still
-    // serves them — it filters by THIS runner's cursor, not the shared ledger — so the second
-    // reader stands down here, and the cursor adopts the consumed ids so the hub stops re-serving.
-    // Filtering BEFORE the wake/bcast split keeps a dupe out of the demoted-sender notice too:
-    // the seat DID turn on that message, and #7766's notice must not say otherwise.
+    // #7778: ids in the seen-set already reached the model through the session's own inbox read
+    // mid-turn (recorded at the last clean turn boundary). The poll filters by THIS runner's cursor,
+    // not the shared ledger, so the second reader stands down here and the cursor adopts the consumed
+    // ids. Filtering BEFORE the wake/bcast split keeps a dupe out of #7766's demoted-sender notice.
     if (seenLedger.length) {
       const seenIds = new Set(seenLedger.map(e => e.id));
       const dupes = msgs.filter(m => seenIds.has(m.id));
@@ -1258,17 +1262,10 @@ function askedExcerpt(message) {
     log("parked — waiting for the next message");
   }
 
-  // Run the pending batch. The messages are cleared ONLY on exit 0; any other outcome leaves them
-  // queued, on disk, with a backoff — which is the whole point of the change.
-  // #7778 — one message, one delivery, whichever path sees it first. The session's own inbox read
-  // and this runner's /poll are two readers of one bus with no shared cursor: a message the seat
-  // read and answered MID-TURN was re-polled after the turn and woken AGAIN (seen live: a seat
-  // answered inside its turn, then a second turn 16s later re-quoted the same message verbatim).
-  // The hub's deliveredUpTo is the one ledger both paths already write, so at a CLEAN turn
-  // boundary every id above our poll cursor but at-or-below it was necessarily consumed by the
-  // session-side path. Those ids go into the persisted seen-set; the poll filter stands the
-  // second reader down. A failed, parked or hollow turn reconciles NOTHING — dedupe must never
-  // swallow a message the seat still owes, so only full success is trusted to mark history read.
+  // The pending batch is cleared ONLY on exit 0; any other outcome leaves it queued on disk with a
+  // backoff. #7778: the session's inbox read and this /poll are two readers of one bus with no shared
+  // cursor, so a message answered mid-turn was woken AGAIN. The hub's deliveredUpTo is the ledger both
+  // write: at a CLEAN boundary the ids it covers join the seen-set; a failed or parked turn marks nothing.
   async function reconcileSessionReads(upToCursor) {
     try {
       const peer = await api(`/peer?session=${encodeURIComponent(SESSION)}`);
@@ -1343,6 +1340,22 @@ function askedExcerpt(message) {
     // #6134: ONE SESSION PER CARD; a different card starts a fresh CLI session and the seat is told.
     // #7061: bound by SHAPE, not position, so an order opening with what shipped binds the right card.
     const card = wakeCard(wakeForTurn, { session: SESSION });
+    // #7754: the contract carries the integration head as `base: <sha>` — the wake's own line if it
+    // has one, else local main. A sha this worktree cannot resolve is never worked from origin/main:
+    // the card goes to blocked and the assigner is told, and no model turn is spent on it.
+    const base = contractBase(wakeForTurn) || localMainHead();
+    if (base && card && !resolvesHere(base)) {
+      const text = `cannot resolve base ${base} in ${TURN_DIR} (git cat-file -e failed) — #${card} moved to blocked; push or fetch that sha, or name one this worktree can reach`;
+      log(text);
+      await api("/task/update", { id: card, status: "blocked", note: text, by: SESSION }).catch(() => {});
+      const owed = assigners.map(a => a.from).filter(f => f && f !== SESSION);
+      for (const to of (owed.length ? owed : ["all"]))
+        await api("/send", { from: SESSION, to, text, project: PROJ, kind: "alert" }).catch(() => {});
+      pendingWake = [];
+      savePending([], pendingBcast);
+      return;
+    }
+    const baseText = base ? `\n${baseLine(base)}\n` : "";
     const fresh = card > 0 && card !== sessionCard;
     if (card) sessionCard = card;
     const cited = [...new Set(wakeForTurn.flatMap(m => cardRefs(m.text)))];
@@ -1354,7 +1367,7 @@ function askedExcerpt(message) {
         ? `\n(This turn is card #${card} — the wake cites ${cited.length} cards; the rest are context.)\n`
         : "");
     const prompt = composedTurn({
-      wakeText, ctxText, againText: againText + freshText + dutyNudgeDirective(dutyPlan),
+      wakeText, ctxText, againText: againText + freshText + baseText + dutyNudgeDirective(dutyPlan),
       tailText: "\nAct on what's addressed to you, then end your turn.\n\n",
       rulesText: RULES, lessons,
     });
@@ -1370,7 +1383,7 @@ function askedExcerpt(message) {
           // broadcasts, the redelivery note, and any rejection the last step earned. None of it
           // may reach the preamble, or the prefix stops being byte-identical and the cache claim
           // dies quietly (§4.6).
-          observation: [stateObservation, wakeText, ctxText, againText + freshText].filter(Boolean).join("\n"),
+          observation: [stateObservation, wakeText, ctxText, againText + freshText + baseText].filter(Boolean).join("\n"),
         })
         : await runTurn(prompt, fresh, deliveryFails ? `${trigger} (redelivery)` : trigger, { judgeOutcome: askJudge });
     }
