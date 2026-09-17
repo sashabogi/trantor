@@ -60,8 +60,10 @@ export type HubEvent = {
   msgId?: number; text?: string; toSession?: string;
   /** card events: created / moved / updated */
   from?: string; to?: string; status?: string; title?: string;
-  /** file.claim / file.conflict */
+  /** file.claim / file.conflict / file.read */
   file?: string; with?: string[];
+  /** file.read: the seat worktree the read file lives under ("" = the project scope) */
+  seat?: string;
   /** overseer.warn / verify.gate.* roll-up fields */
   kind?: string; detail?: string; claim?: string; narration?: string; files?: string[];
   /** proposal.filed */
@@ -206,6 +208,15 @@ export class HubClient {
   claims(project?: string) {
     const q = project ? `?project=${encodeURIComponent(project)}` : "";
     return this.request<{ claims: FileClaim[] }>("GET", `/claims${q}`).then(r => r.claims ?? []);
+  }
+
+  /** The human-opened-file signal (CodeGraph blueprint §4.3): POST /read, throttled hub-side to one
+   *  event per claim window. The session is ALWAYS the app's own identity, never a seat's — if it
+   *  cannot resolve, nothing is posted. A failed report must never break opening a file. */
+  async read(project: string, file: string, seat?: string): Promise<void> {
+    const session = await this.me().catch(() => "");
+    if (!session) return;
+    await this.request("POST", "/read", { project, file, seat, session }).catch(() => {});
   }
 
   /** The autonomy ladder (PRD §6): levels per project + declared codependency links. */

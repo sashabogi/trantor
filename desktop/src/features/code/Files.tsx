@@ -32,7 +32,7 @@ const trace = (line: string) => { invoke("app_log", { line }).catch(() => {}); }
 
 type ViewMode = TabView;
 
-export function Files({ project, lens, onLens, path, seat }: {
+export function Files({ client, project, lens, onLens, path, seat }: {
   client: HubClient;
   project: string;
   lens: Lens;
@@ -184,6 +184,9 @@ export function Files({ project, lens, onLens, path, seat }: {
     const { tabs: next, activeKey: nextKey } = openInTabs(tabs, activeKey, scope, p, view);
     setTabs(next);
     setActiveKey(nextKey);
+    // The one read post (CodeGraph card 6): client.read reports with the APP's own session id
+    // or not at all, so a file read is always a person's read. Fire-and-forget by contract.
+    void client.read(project, p, scope === "project" ? undefined : scope);
   };
 
   // The scope's graph tab (#7954): pinned, keyed by scope, so the footer's scope switch swaps
