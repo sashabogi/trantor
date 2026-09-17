@@ -33,6 +33,8 @@ switch (cmd) {
   case "agent-settings": run("bin/agent-settings.mjs"); break;
   case "adopt":   spawn(process.execPath, [join(ROOT, "bin/adopt.mjs"), ...args], { stdio: "inherit", cwd: process.cwd() }).on("exit", c => process.exit(c ?? 0)); break;
   case "integrate": spawn(process.execPath, [join(ROOT, "bin/integrate.mjs"), ...args], { stdio: "inherit", cwd: process.cwd() }).on("exit", c => process.exit(c ?? 0)); break;
+  case "harvest": run("bin/harvest.mjs"); break;
+  case "sync": run("bin/sync.mjs"); break;
   case "down":    runCrew(); break;
   case "swap":    runCrew(); break;
   case "prune":   runCrew(); break;
@@ -207,6 +209,8 @@ switch (cmd) {
   trantor adopt       take over a session already running in a Terminal, then open it here
   trantor takeover    the whole move in one command: idle-gate the Terminal session, end it gracefully, adopt, open in the pane — [--force] [--session <id>] [--dry-run]
   trantor integrate   collect the crew's work, merge it, verify it, push it (--dry-run to rehearse)
+  trantor harvest     receipt for a seat commit you landed on main by hand: harvest <seat-sha> <main-sha> [--card N]
+  trantor sync        realign a seat branch with main from the receipts: sync [<seat>] [--dry-run] — refuses and names unharvested commits
   trantor down        tear the crew down (kills processes, closes windows, no dialogs)
   trantor prune       drop dead crew-window tracking rows (ghost workspaces/panes) without spawning anything
   trantor ui          open the live dashboard (board + flow views)

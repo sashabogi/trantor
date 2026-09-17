@@ -96,3 +96,24 @@ from comments; the incidents behind them live on the cards linked below.
 - A state step is a fresh `claude -p` carrying the assembled prefix, with no `-c`, held to the
   TurnResult grammar by `--json-schema`. `lib/state/driver.mjs` holds the §4.1 order; the runner is
   transport and side effects.
+
+## Harvest receipts and `trantor sync` (#7748)
+
+A seat commit the orchestrator lands on main by cherry-pick or squash gets a NEW sha, so the seat
+branch diverges for good and every later card opened with the seat proving patch-equivalence by
+hand before it dared reset. The receipt replaces that proof.
+
+- A receipt is `seat sha -> main sha -> card`, kept in `~/.agent-bus/harvest-<project>.json`
+  (`AGENT_BUS_DIR` honoured, as everywhere). `trantor harvest <seat-sha> <main-sha> [--card N]`
+  writes one for a hand-made harvest and, with `--card`, posts the line
+  `harvested <seat> as <main>` to that card's log. `trantor integrate` writes one per merged seat
+  branch (seat tip -> merge commit) so the record is complete either way. Short shas match by prefix.
+- `trantor sync [<seat>]` (no seat: the worktree you are in) fetches the base branch, lists every
+  commit the seat branch carries that `origin/<base>` lacks, and moves the branch to the target
+  with `git reset --keep` only when EVERY such commit has a receipt. Uncommitted edits ride along;
+  git itself refuses when one touches a file main changed.
+- A branch carrying an unreceipted commit is never reset: sync exits 1 and names each commit
+  (`<sha7>  <subject>`). Park the work on another branch or harvest it first.
+- The base is `branch.<seat>.base` (the runner persists it at worktree creation), else `main`.
+- The runner's RULES tell a seat to use `trantor sync`, never a hand reset or rebase onto main.
+- Drill: `test/crew/test-crew-harvest.mjs`.

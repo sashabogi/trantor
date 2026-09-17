@@ -1,12 +1,12 @@
 #!/usr/bin/env node
 // `trantor integrate` — collect the crew's work, prove it, ship it.
-//
 // The steps are the ones the orchestrator already performs by hand. The dials decide how far it is
 // allowed to go on its own, and every stop says which dial stopped it, so "why didn't it push"
 // always has an answer.
 import { resolveProject } from "../lib/project.mjs";
 import { resolveAutonomy } from "../lib/autonomy.mjs";
 import { seatWorktrees, commitSeatWork, seatAhead, mergeSeat, verify, git } from "../lib/integrate.mjs";
+import { recordHarvest } from "../lib/harvest.mjs";
 
 const D = "\x1b[2m", B = "\x1b[1m", G = "\x1b[32m", Y = "\x1b[33m", RED = "\x1b[31m", R = "\x1b[0m";
 const args = process.argv.slice(2);
@@ -53,7 +53,14 @@ for (const w of seats) {
     blocked = true;
     continue;
   }
-  if (m.merged) { console.log(`  ${G}merged ${branch} (${ahead} commit(s))${R}`); merged.push(branch); }
+  if (m.merged) {
+    console.log(`  ${G}merged ${branch} (${ahead} commit(s))${R}`);
+    merged.push(branch);
+    // #7748: the receipt `trantor sync` reads later; a merge keeps the seat shas, so this one is
+    // the seat tip -> the merge commit.
+    try { recordHarvest(project, { seat: git(w.dir, ["rev-parse", branch]), main: git(repo, ["rev-parse", "HEAD"]), branch, by: "integrate" }); }
+    catch (e) { console.log(`  ${Y}${branch}: receipt not written (${e.message})${R}`); }
+  }
 }
 
 if (blocked) {
