@@ -206,7 +206,10 @@ async function spawnDrill({ waitMs = 7000, projectLinks = [] } = {}) {
   writeFileSync(join(fakebin, "codex"), `#!/bin/sh
 P="$HOME/.agent-bus/turn-codex-${PROJ}.txt"
 { echo "===TURN=== mode=$1"; cat "$P"; } >> "${LOGF}"
-echo "codex-drill: turn done"
+# #7759: the success answer must clear the substantive floor, or every turn reads as an
+# EMPTY hollow turn and its wake is never consumed — this drill tests wake policy, not validity.
+echo "the contract is worked: the card moved with a note, the files changed, and the"
+echo "assigner has been told the outcome, so this turn is done and consumed its wake."
 exit 0
 `);
   chmodSync(join(fakebin, "codex"), 0o755);
