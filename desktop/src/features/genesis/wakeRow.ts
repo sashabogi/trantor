@@ -8,7 +8,8 @@ export type WakeRowState =
   // is still in flight: the idle gate that used to read as "waking…/working" silence, then the
   // send (retries included) until the chain lands.
   | { phase: "kickoff"; step: "pending" | "sent" }
-  | { phase: "outcome"; kind: "woken" | "sent" | "busy" | "error"; text: string };
+  // #6842 — unseatable: the checkout is a folder of projects; a retry cannot help, the fix can.
+  | { phase: "outcome"; kind: "woken" | "sent" | "busy" | "error" | "unseatable"; text: string };
 
 export type WakeOutcome = Extract<WakeRowState, { phase: "outcome" }>;
 
@@ -22,19 +23,26 @@ export const WAKE_SENT_LINE = "kickoff sent — waiting on the session";
 export const WAKE_OUTCOME_MS = 4000;
 
 export function wakeOutcomeIsTransient(state: WakeRowState): boolean {
-  return !(state.phase === "outcome" && state.kind === "error");
+  return !(state.phase === "outcome" && (state.kind === "error" || state.kind === "unseatable"));
 }
 
-/** Map project_wake's answer to a row outcome. The Rust lines are contracts:
- *  ok "kickoff sent into idle pane X · …" — the idle-pane path (#6138);
- *  ok "project awake in pane X · …" — the reopen path (#6139);
- *  err "… busy in pane X …" — a live mid-turn orchestrator; anything else is the error text. */
+/** Map project_wake's answer to a row outcome. The Rust lines are contracts: ok "kickoff sent
+ *  into idle pane X · …" (#6138) and ok "project awake in pane X · …" (#6139); err "… busy in
+ *  pane X …" is a live mid-turn orchestrator, err "… is a folder of projects, not a project — <fix>"
+ *  is unseatable (#6842), anything else is the error text. */
 export function classifyWakeOutcome(ok: string | null, err: string | null): WakeOutcome {
   if (ok !== null) {
     return { phase: "outcome", kind: ok.startsWith("kickoff sent") ? "sent" : "woken", text: ok };
   }
   const text = err ?? "wake failed";
-  return { phase: "outcome", kind: /busy in pane/.test(text) ? "busy" : "error", text };
+  const kind = /busy in pane/.test(text) ? "busy" : /folder of projects/.test(text) ? "unseatable" : "error";
+  return { phase: "outcome", kind, text };
+}
+
+/** The fix the unseatable refusal carries after its dash; the whole line when it has none. */
+function unseatableFix(text: string): string {
+  const dash = text.indexOf(" — ");
+  return dash >= 0 ? `not a project — ${text.slice(dash + 3)}` : text;
 }
 
 /** The short line under the project name; `title` carries the full Rust line for the tooltip. */
@@ -51,5 +59,6 @@ export function wakeRowLine(state: WakeRowState | undefined): { text: string; to
     case "woken": return { text: "woken", tone: "ok", title: state.text };
     case "busy": return { text: "busy — the orchestrator is mid-turn", tone: "muted", title: state.text };
     case "error": return { text: "wake failed — click Wake to retry", tone: "danger", title: state.text };
+    case "unseatable": return { text: unseatableFix(state.text), tone: "danger", title: state.text };
   }
 }

@@ -43,4 +43,18 @@ describe("wakeRow states (#6138)", () => {
     expect(wakeRowLine({ phase: "outcome", kind: "error", text: "no checkout" })?.text).toBe("wake failed — click Wake to retry");
     expect(wakeRowLine(undefined)).toBeNull();
   });
+
+  // #6842 — a folder of projects is unseatable: the row carries the fix, not a retry, and keeps it.
+  it("a folder-of-projects refusal reads as the inline fix and stays on the row", () => {
+    const refusal = "builtbetter.ai is a folder of projects, not a project — its project is builtbetter: promote it: mv /d/builtbetter.ai/builtbetter /d/builtbetter, or start it in place: cd /d/builtbetter.ai/builtbetter && claude";
+    const outcome = classifyWakeOutcome(null, refusal);
+    expect(outcome.kind).toBe("unseatable");
+    expect(wakeOutcomeIsTransient(outcome)).toBe(false);
+    const line = wakeRowLine(outcome);
+    expect(line?.tone).toBe("danger");
+    expect(line?.text).toBe("not a project — its project is builtbetter: promote it: mv /d/builtbetter.ai/builtbetter /d/builtbetter, or start it in place: cd /d/builtbetter.ai/builtbetter && claude");
+    expect(line?.text).not.toContain("retry");
+    expect(line?.title).toBe(refusal);
+    expect(wakeRowLine({ phase: "outcome", kind: "unseatable", text: "w is a folder of projects" })?.text).toBe("w is a folder of projects");
+  });
 });
