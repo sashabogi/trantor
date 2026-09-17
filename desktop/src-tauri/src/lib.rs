@@ -3,6 +3,7 @@ mod asks;
 mod dismissals;
 mod drill_mode;
 mod genesis;
+mod graft_cli;
 mod right_panel;
 mod ghost;
 mod handoff_drill;
@@ -5781,6 +5782,7 @@ pub fn run() {
             draft_forget,
             file_write_plain,
             project_changes,
+            graft_cli::code_graph,
             app_log,
             create_file,
             delete_file,
