@@ -88,6 +88,28 @@ const overseer = createOverseer({
 });
 store.startChangeSubscription(() => events.pushEventToStreams({ ts: Date.now(), type: "hub.reload", project: "", by: "" }));
 
+// #7755: a write carrying `_op` replays its stored outcome on a retry, and GET /_op answers
+// committed / rejected / unknown, so a client timeout never has to guess whether the write landed.
+const opOutcomes = new Map();
+const OP_OUTCOME_WINDOW_MS = 3600000;
+setInterval(() => {
+  const cutoff = Date.now() - OP_OUTCOME_WINDOW_MS;
+  for (const [id, o] of opOutcomes) { if (o.ts < cutoff) opOutcomes.delete(id); }
+}, 60000).unref?.();
+const opIdOf = (b) => String(b?._op || "").slice(0, 80) || null;
+// Only a definite answer is stored: 2xx is committed, 4xx is rejected, a 5xx stays unknown.
+function recordOpOutcome(res, op) {
+  const end = res.end.bind(res);
+  res.end = (chunk, ...rest) => {
+    const code = res.statusCode;
+    if (code < 500 && !opOutcomes.has(op)) {
+      let body = null; try { body = chunk ? JSON.parse(String(chunk)) : null; } catch {}
+      opOutcomes.set(op, { ts: Date.now(), code, status: code < 400 ? "committed" : "rejected", body });
+    }
+    return end(chunk, ...rest);
+  };
+}
+
 let UI = "";
 try { UI = readFileSync(new URL("./ui.html", import.meta.url), "utf8"); } catch {}
 const context = {
@@ -111,6 +133,14 @@ const server = http.createServer(async (req, res) => {
     if (!auth.ok) return authRuntime.json(res, auth.code || 401, { error: auth.error || "unauthorized" });
     const authorization = authRuntime.authorize(auth, req.method, P, authRuntime.projectFromRequest(P, q, b0));
     if (!authorization.ok) return authRuntime.json(res, authorization.code || 403, { error: authorization.error || "forbidden" });
+    if (req.method === "GET" && P === "/_op") {
+      const o = opOutcomes.get(String(q.id || "").slice(0, 80));
+      return authRuntime.json(res, 200, o ? { status: o.status, code: o.code, body: o.body } : { status: "unknown" });
+    }
+    const op = req.method === "POST" ? opIdOf(b0) : null;
+    const seen = op ? opOutcomes.get(op) : null;
+    if (seen) return authRuntime.json(res, seen.code, seen.body);
+    if (op) recordOpOutcome(res, op);
     for (const route of routes) if (await route({ req, res, q, P, auth, ctx: context })) return;
     authRuntime.json(res, 404, { error: "not found" });
   } catch (error) {

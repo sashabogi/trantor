@@ -7,6 +7,7 @@ import { writeFileSync, readFileSync, existsSync, mkdirSync } from "node:fs";
 import { join, basename, dirname } from "node:path";
 import { homedir, hostname } from "node:os";
 import { execSync, spawnSync } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { createRequire } from "node:module";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { advise } from "./bin/advise.mjs";
@@ -98,9 +99,11 @@ const INSTANCE_ID = `mcp-${Date.now().toString(36)}-${Math.random().toString(36)
 async function api(method, path, payload, { timeoutMs } = {}) {
   // PROJECT explicitly, never the client's cwd fallback: this server's project is fixed at boot,
   // and letting the hub be re-derived per call is how a session ends up writing to two hubs.
+  // #7755: every write carries an op id; signedPost resolves its own timeout through GET /_op,
+  // so a timed-out write comes back committed, rejected, or ambiguous in those words.
   const r = method.toUpperCase() === "GET"
     ? await signedGet(path, { session: SESSION, instance: INSTANCE_ID, project: PROJECT, timeoutMs })
-    : await signedPost(path, payload, { session: SESSION, instance: INSTANCE_ID, project: PROJECT, timeoutMs });
+    : await signedPost(path, { ...payload, _op: randomUUID() }, { session: SESSION, instance: INSTANCE_ID, project: PROJECT, timeoutMs });
   if (!r.ok) {
     // A timeout is not an outage. `hub 0 on /tasks` read as a DEAD HUB when the hub was 200 OK and
     // merely slow — /tasks is 1.59MB across 941 cards — and a reader who cannot tell them apart

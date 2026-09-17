@@ -10,6 +10,7 @@ import { loadOrCreate, loadOrCreateInstance } from "../../lib/identity.mjs";
 import { sfetchJson } from "../../lib/signed-fetch.mjs";
 
 export const DEFAULT_TIMEOUT_MS = 1500;
+export const WRITE_TIMEOUT_MS = 8000;   // #7755: writes get their own budget above the read default
 
 // Hub URL, PER-PROJECT (TDD §12.1): env RELAY_URL, then config `hubs[project]`, then the legacy global
 // `url`, then the local default. Never throws, keeping hooks fail-open.
@@ -175,12 +176,25 @@ export async function signedGet(pathOrUrl, { timeoutMs = DEFAULT_TIMEOUT_MS, ses
 }
 
 // Signed POST → { ok, status, json|null }. Never throws.
-export async function signedPost(pathOrUrl, payload, { timeoutMs = DEFAULT_TIMEOUT_MS, session, instance, project } = {}) {
+// #7755: writes keep their own timeout, and a write carrying `_op` resolves a timeout through
+// one GET /_op — committed returns the stored body as success, rejected returns the stored refusal,
+// unknown reads "ambiguous: timed out, outcome unknown". Never a bare failure for a write that landed.
+export async function signedPost(pathOrUrl, payload, { timeoutMs = WRITE_TIMEOUT_MS, session, instance, project } = {}) {
   const proj = projectOf(project, payload, pathOrUrl);
   const sess = session || sessionFor(proj);
   const durable = loadIdentity(sess);
   const id = instance ? loadInstance(sess, instance) : durable;
   await ensureEnrolled(sess, durable, proj);     // instances never enroll — the DURABLE key does
+  const resolveOp = async (f) => {
+    const op = String(payload?._op || "");
+    if (!f.timedOut || !op) return f;
+    const base = new URL(toUrl(pathOrUrl, proj)).origin;
+    const q = await signedGet(`${base}/_op?id=${encodeURIComponent(op)}`, { session: sess, instance, project: proj });
+    const st = q.ok ? q.json?.status : "unknown";
+    if (st === "committed") return { ok: true, status: q.json.code || 200, json: q.json.body, resolved: "committed" };
+    if (st === "rejected") return { ok: false, status: q.json.code || 400, json: q.json.body, resolved: "rejected" };
+    return { ...f, ambiguous: true, reason: "ambiguous: timed out, outcome unknown" };
+  };
   try {
     // sfetchJson (FROZEN) stringifies the payload + signs with `id` in one call — the single shape
     // every client uses (lib/signed-fetch.mjs). We pass our memoised identity so it doesn't re-load.
@@ -200,5 +214,5 @@ export async function signedPost(pathOrUrl, payload, { timeoutMs = DEFAULT_TIMEO
     const text = await r.text();
     let json = null; try { json = text ? JSON.parse(text) : null; } catch {}
     return { ok: true, status: r.status, json };
-  } catch (e) { return failure(e, timeoutMs); }
+  } catch (e) { return resolveOp(failure(e, timeoutMs)); }
 }
