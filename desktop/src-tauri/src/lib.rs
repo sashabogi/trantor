@@ -3166,7 +3166,7 @@ fn project_sessions_json(
 }
 
 fn shell_stdout(bin: &str, args: &[&str]) -> String {
-    std::process::Command::new(bin)
+    identity_env::command(bin)
         .args(args)
         .env("PATH", terminal_path())
         .output()
@@ -3284,7 +3284,7 @@ async fn herdr_pane_read(pane_id: String) -> Result<String, String> {
     let Some(bin) = find_herdr_binary() else {
         return Err("herdr is not installed".into());
     };
-    let out = tokio::process::Command::new(bin)
+    let out = identity_env::async_command(bin)
         .args(["pane", "read", id, "--source", "recent-unwrapped"])
         .env("PATH", terminal_path())
         .output()
@@ -3388,8 +3388,17 @@ fn trantor_handoff_args(reason: Option<&str>) -> Vec<&str> {
     args
 }
 
-fn trantor_reopen_args() -> [&'static str; 1] {
-    ["open"]
+/// The successor opens in the CLICKED project's workspace: a bare `trantor open` lets the CLI read
+/// the badge of whoever launched the app instead of the click (#7414).
+fn trantor_reopen_args(project: &str) -> [&str; 2] {
+    ["open", project]
+}
+
+/// The reopen step's command, built in one place so the drill inspects what the chain spawns.
+fn reopen_command(project: &str, dir: &Path) -> tokio::process::Command {
+    let mut reopen = trantor_cli::async_command();
+    reopen.args(trantor_reopen_args(project)).current_dir(dir);
+    reopen
 }
 
 fn trantor_takeover_args(project: &str) -> [&str; 3] {
@@ -3773,8 +3782,7 @@ async fn handoff_now(
             drop_started.elapsed().as_millis()
         ));
 
-        let mut reopen = trantor_cli::async_command();
-        reopen.args(trantor_reopen_args()).current_dir(&dir);
+        let mut reopen = reopen_command(&project, &dir);
         app_trace(&format!("handoff[{project}]: trantor open starting"));
         let reopened = reopen
             .output()
@@ -5403,7 +5411,7 @@ async fn app_update_install(url: String, asset_name: String) -> Result<(), Strin
 
     // -n: a fresh instance of the NEW bundle even though this (old) one is still alive for a
     // few more milliseconds. Then exit — the overlap is the handoff.
-    let _ = std::process::Command::new("/usr/bin/open")
+    let _ = identity_env::command("/usr/bin/open")
         .args(["-n", APP_PATH])
         .spawn();
     std::thread::sleep(std::time::Duration::from_millis(300));
@@ -6051,11 +6059,53 @@ mod herdr_tests {
     #[test]
     fn handoff_command_args_are_write_only_and_same_pane() {
         assert_eq!(trantor_handoff_args(None), ["handoff", "--write-only"]);
-        assert_eq!(trantor_reopen_args(), ["open"]);
+        assert_eq!(trantor_reopen_args("trantor"), ["open", "trantor"]);
         assert_eq!(
             trantor_takeover_args("trantor"),
             ["takeover", "trantor", "--json"]
         );
+    }
+
+    #[test]
+    fn handoff_reopen_names_the_clicked_project_under_a_badged_env() {
+        // The #7414 incident: the app launched from a badged pane ran a bare `trantor open` and
+        // reattached to the badge's orchestrator instead of the clicked project's.
+        let badge = [
+            ("TRANTOR_ORCH", "other"),
+            ("TRANTOR_SEAT", "codex"),
+            ("RELAY_PROJECT", "other"),
+            ("RELAY_URL", "http://other.invalid"),
+            ("CLAUDECODE", "1"),
+            ("CLAUDE_CODE_SESSION_ID", "badge"),
+            ("CLAUDE_PID", "1"),
+            ("HERDR_PANE_ID", "w2R:p1"),
+            ("HERDR_WORKSPACE_ID", "w2R"),
+            ("HERDR_TAB_ID", "t1"),
+        ];
+        for (key, value) in badge {
+            std::env::set_var(key, value);
+        }
+        let reopen = reopen_command("crebral-scribe", Path::new("/tmp/crebral-scribe"));
+        let spawned = reopen.as_std();
+        let args: Vec<String> = spawned
+            .get_args()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect();
+        let leaked: Vec<String> = spawned
+            .get_envs()
+            .filter(|(_, value)| value.is_some())
+            .map(|(key, _)| key.to_string_lossy().into_owned())
+            .filter(|key| identity_env::is_identity_key(std::ffi::OsStr::new(key)))
+            .collect();
+        for (key, _) in badge {
+            std::env::remove_var(key);
+        }
+        assert_eq!(&args[args.len() - 2..], ["open", "crebral-scribe"]);
+        assert_eq!(
+            spawned.get_current_dir(),
+            Some(Path::new("/tmp/crebral-scribe"))
+        );
+        assert!(leaked.is_empty(), "badge leaked into the successor: {leaked:?}");
     }
 
     #[test]

@@ -65,6 +65,7 @@ pub struct TerminalManager {
 impl TerminalManager {
     fn attach_command(&self, mut cmd: CommandBuilder, on_bytes: ByteSink) -> Result<u64, String> {
         cmd.env("PATH", crate::terminal_path());
+        crate::identity_env::scrub_pty_command(&mut cmd);
         let pty = native_pty_system();
         let pair = pty
             .openpty(PtySize {
