@@ -3,6 +3,10 @@ import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
+// /read's throttle state: the same window as /claim's, but a SEPARATE map — a read must never
+// consume a claim's first-touch (or vice versa), and /claims must never list reads. #7972.
+const fileReads = new Map();
+
 export async function routeAdmin({ req, res, q, P, auth, ctx }) {
   const {
     state, body, json, crossProjectGuard, touch, canon, filterReadable,
@@ -36,10 +40,9 @@ export async function routeAdmin({ req, res, q, P, auth, ctx }) {
         online: p._on === true, deliveredUpTo: p.deliveredUpTo || 0 });
     }
     // --- Handoff storm guard (server-side, version-independent) ---
-    // A session running OLD hooks (before the local markHandedOff guard) re-fires a handoff every few
-    // minutes — the crebral-cortex storm: 9 handoffs in 49 min, each spawning a Terminal window. The hub
-    // rate-limits per (project, session): a fresh handoff within the cooldown is refused, so an updated
-    // client DEFERS the spawn. Manual handoffs (force:true) always pass. GET /handoffs exposes the log.
+    // OLD hooks re-fired a handoff every few minutes (the crebral-cortex storm: 9 handoffs in 49
+    // min, each spawning a Terminal window). The hub rate-limits per (project, session): a fresh
+    // handoff within the cooldown is refused, so an updated client DEFERS the spawn; force passes.
     if (req.method === "POST" && P === "/handoff") {
       const b = await body(req);
       const proj = canon(String(b.project || "").slice(0, 80));
@@ -65,18 +68,14 @@ export async function routeAdmin({ req, res, q, P, auth, ctx }) {
       return json(res, 200, { handoffs: rows });
     }
     // --- file claims: shared-resource awareness (the "two sessions, one file" problem) ----------
-    // A claim says "this session touched this file moments ago". The PreToolUse hook posts one
-    // BEFORE every file edit, and the response carries any live claims by OTHER sessions — which
-    // the hook hands to the acting session's own model, so an orchestrator learns about a
-    // collision before the edit lands, not at git time. Ephemeral BY DESIGN: like presence, a
-    // claim describes NOW, and a restart forgetting it is correct, so nothing touches the store.
+    // A claim says "this session touched this file moments ago": the PreToolUse hook posts one
+    // BEFORE every file edit and the response carries any live claims by OTHER sessions, so an
+    // orchestrator learns of a collision before the edit lands. Ephemeral like presence BY DESIGN.
+
     // --- project adoption: merge one project's rows brought from ANOTHER hub -------------------
-    // The other half of `trantor adopt`: the CLI reads the project's data off the machine-local
-    // hub and POSTs it here (owner-signed), so onboarding needs no ssh and no direct Postgres
-    // access. Colliding card ids get FRESH ids (both hubs mint from their own taskSeq — the
-    // split-brain lesson from the first migration), and their events are re-pointed. Events append
-    // with new log ids; messages take the next seq. Idempotence is the CALLER's contract: adopt
-    // refuses to run when the project already has cards here, unless forced.
+    // The other half of `trantor adopt`: the CLI reads the project's rows off the machine-local hub
+    // and POSTs them here (owner-signed). Colliding card ids get FRESH ids; idempotence is the
+    // CALLER's contract: adopt refuses when the project already has cards here, unless forced.
     if (req.method === "POST" && P === "/import") {
       const b = await body(req);
       const proj = canon(String(b.project || "").slice(0, 80));
@@ -168,10 +167,10 @@ export async function routeAdmin({ req, res, q, P, auth, ctx }) {
         clearMs: overseer.OVERSEER_CLEAR_MS,
         dutySession: duty.session || "",
         dutyFailures: duty.dutyFailures(),
-        // The signal that mattered on 2026-09-09 and that nothing could see. The hub knew duty was
-        // holding escalations it never consumed; `trantor doctor`, the app and the operator had no
-        // way to ask. Exposing beating/consuming SEPARATELY is the point — "up and stuck" and
-        // "crashed" need different fixes and are indistinguishable from a single online flag.
+        // The signal nothing could see: the hub knew duty was holding escalations it never consumed,
+        // but neither `trantor doctor` nor the operator had a way to ask. Exposing beating/consuming
+        // SEPARATELY is the point — "up and stuck" and "crashed" need different fixes and are
+        // indistinguishable from a single online flag.
         duty: duty.dutyLiveness ? duty.dutyLiveness() : null,
         watching: {
           sessions: livePeers.length,
@@ -229,10 +228,9 @@ export async function routeAdmin({ req, res, q, P, auth, ctx }) {
       return json(res, 200, { level, links: links.map(l => ({ projects: l.projects, reason: l.reason })), peers: peersOut, inflight, warnings });
     }
     // Supersession (docs/INSTANCE-KEYS-CONTRACT.md): EXPLICIT, never automatic — the baton-claim
-    // path calls this when a fresh session consumes a handoff. Marks every OTHER instance of the
-    // named durable identity superseded; their /inbox + /poll answers then carry superseded:true so
-    // their own hooks tell the model to stand down. Informational, never a hard block. Accepted
-    // only from an endorsed instance of the SAME durable identity, or the owner.
+    // path calls this when a fresh session consumes a handoff, marking every OTHER instance of the
+    // named durable identity superseded so /inbox + /poll carry superseded:true. Informational,
+    // never a hard block. Accepted only from an endorsed instance of the SAME identity, or the owner.
     if (req.method === "POST" && P === "/instance/supersede") {
       const b = await body(req);
       const name = String(b.name || "").slice(0, 200);
@@ -295,6 +293,25 @@ export async function routeAdmin({ req, res, q, P, auth, ctx }) {
         .sort((a, b) => b.ts - a.ts);
       return json(res, 200, { claims: rows });
     }
+    // A read says "a person opened this file" (CodeGraph blueprint §4.3, card 6 of 9) — the one
+    // human-read signal the Unread lens is built on. Same shape and window as /claim: the FIRST
+    // post for (project, file, session) inside the claim TTL emits the event, repeats stay quiet.
+    // `session` is the desktop app's own id, never a seat's, so the event means what the lens needs.
+    if (req.method === "POST" && P === "/read") {
+      const b = await body(req);
+      const proj = canon(String(b.project || "").slice(0, 80));
+      const file = String(b.file || "").slice(0, 400);
+      const session = String(b.session || "").slice(0, 120);
+      const seat = String(b.seat || "").slice(0, 120);
+      if (!proj || !file || !session) return json(res, 400, { error: "project, file and session required" });
+      const cut = now() - CLAIM_TTL_MS;
+      for (const [k, r] of fileReads) if (r.ts < cut) fileReads.delete(k);
+      const key = `${proj} ${file} ${session}`;
+      const mine = fileReads.get(key);
+      fileReads.set(key, { project: proj, file, session, ts: now() });
+      if (!mine) appendEvent("file.read", proj, session, { file, seat });
+      return json(res, 200, { ok: true, ttlMs: CLAIM_TTL_MS });
+    }
     if (req.method === "GET" && P === "/peers") {
       prunePeers();
       const cutoff = now() - ONLINE_MS;
@@ -315,11 +332,10 @@ export async function routeAdmin({ req, res, q, P, auth, ctx }) {
       if (ts >= (state.balances?.ts || 0)) { state.balances = { ts, by: String(b.by || "").slice(0, 120), entries }; markDirty(); }
       return json(res, 200, { ok: true });
     }
-    // USAGE v2: the Claude statusline sidechannel. Claude Code >=2.1.80 pipes rate_limits into
-    // the statusLine command on every turn; hooks/statusline.mjs forwards it here (floored 15s
-    // client-side). The live windows PATCH the cached balances snapshot — free usage between
-    // `trantor balances` runs, and the poller can skip Claude while liveTs is fresh (Orca's
-    // lesson, docs/RESEARCH-orca-usage.md §1.1: the OAuth endpoint 429s under polling).
+    // USAGE v2: the Claude statusline sidechannel. Claude Code >=2.1.80 pipes rate_limits into the
+    // statusLine command every turn; hooks/statusline.mjs forwards it here (floored 15s client-side).
+    // The live windows PATCH the cached snapshot — free usage between `trantor balances` runs — and
+    // the poller can skip Claude while liveTs is fresh (the OAuth endpoint 429s under polling).
     if (req.method === "POST" && P === "/usage/claude") {
       const b = await body(req);
       const win = (w, name) => (w && (w.used_percentage ?? w.utilization) != null)
@@ -351,10 +367,9 @@ export async function routeAdmin({ req, res, q, P, auth, ctx }) {
       const profByCanon = {}; for (const [p, v] of Object.entries(prof)) profByCanon[canonP(p)] = v;
       const detectedCli = new Set(["claude", "codex"]);
       // API-key rows remain profile-scoped so a stray ambient key never appears. Claude and Codex
-      // instead arrive only after the client registry detects their binary, auth artifact and probe;
-      // a missing quota declaration must not hide those machine-login rows from the bottom bar.
-      // a prepaid entry that ERRORED but whose provider is a subscription per profile is really a
-      // subscription (some plan keys have no balance endpoint → the 401 is expected, not a problem).
+      // arrive only after the client registry detects their binary, auth artifact and probe — a
+      // missing quota declaration must not hide those machine-login rows from the bottom bar. A
+      // prepaid entry that ERRORED but is a subscription per profile is really one (401 expected).
       const isSub = (t) => !!t && t !== "api";   // capped-sub / high-sub → a subscription (nothing to refill)
       const entries = (state.balances?.entries || []).filter(e => detectedCli.has(e.provider) || profByCanon[canonP(e.provider)]).map(e => {
         const pv = profByCanon[canonP(e.provider)];

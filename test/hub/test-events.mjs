@@ -1,19 +1,8 @@
 #!/usr/bin/env node
-// trantor unified event-log tests (2026-07-28).
-//
-// v0.17.54 reframed the board as ONE append-only log with two lenses: the BOARD (derived index,
-// unchanged) and the FEED (the log itself). `state.cardEvents` became `state.events` and now carries
-// bus messages, presence edges, focus shifts, handoffs, lessons and verify gates alongside card
-// lifecycle. The whole design rests on two promises, and these tests exist to keep them honest:
-//
-//   1. NOTHING REGRESSES. /history is the TIMELINE's feed and predates the log, so it must keep
-//      returning card events and ONLY card events — the new dotted types must never leak into it.
-//      Card events must also keep their legacy flat shape and legacy type names.
-//   2. THE THREAD IS DERIVED, NOT STORED. Asking /events for a card id returns that card's own
-//      events PLUS every message citing "#id" — the join that makes the FEED chat-shaped.
-//
-// Plus: the on-disk migration (an old `cardEvents` file must load as `events`), the legacy mirror
-// written back for downgrade safety, filter composition, and SSE channel separation.
+// trantor unified event-log tests. The unified log rests on two promises, and these tests keep
+// them honest: (1) /history is the TIMELINE's feed and stays card-events-only in the legacy
+// shape; (2) the thread is DERIVED, not stored — /events for a card id joins the card's events
+// with every message citing it. Plus the on-disk migration, filter composition, SSE separation.
 import { spawn } from "node:child_process";
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -187,6 +176,43 @@ try {
     `(got ${JSON.stringify((onDisk.cardEvents || []).map(e => e.type))})`);
 } finally { hubB.kill(); }
 ok("hub B clean stderr", !/TypeError|ReferenceError|not defined/.test(errB), errB.slice(0, 300));
+
+// ── Hub C: /read — the human-opened-file signal (#7972, CodeGraph blueprint card 6) ──────────────
+// The claim-shaped throttle: two posts inside the window append ONE file.read event, a third
+// after the window appends another. Read through /events?type=file.read (exact); /history,
+// the card-only feed, must never carry it. The window is shrunk via RELAY_CLAIM_TTL_MS.
+const PC = 47903;
+const hubC = spawnHub(PC, { extraEnv: { RELAY_CLAIM_TTL_MS: "1200" } });
+let errC = ""; hubC.stderr.on("data", d => errC += d);
+await sleep(800);
+try {
+  const C = mk(`http://127.0.0.1:${PC}`); const PROJ = "evtC";
+  await C.post("/register", { session: "host:evtC", project: PROJ, status: "reading" });
+  await C.post("/task", { project: PROJ, title: "a card so /history has something", by: "host:evtC", status: "doing" });
+
+  const bad = await C.post("/read", { project: PROJ, file: "lib/a.mjs" });
+  ok("/read without a session is refused", !!bad.error, JSON.stringify(bad));
+
+  await C.post("/read", { project: PROJ, file: "lib/a.mjs", session: "host:evtC", seat: "glm" });
+  await C.post("/read", { project: PROJ, file: "lib/a.mjs", session: "host:evtC", seat: "glm" });
+  const reads = (await C.get(`/events?project=${PROJ}&type=file.read`)).events;
+  ok("two posts inside the window append ONE file.read", reads.length === 1, `(got ${reads.length})`);
+  ok("the event carries file, seat and the reader session", reads[0]?.file === "lib/a.mjs" && reads[0]?.seat === "glm" && reads[0]?.by === "host:evtC", JSON.stringify(reads[0] || {}));
+
+  await C.post("/read", { project: PROJ, file: "lib/b.mjs", session: "host:evtC", seat: "glm" });
+  const perFile = (await C.get(`/events?project=${PROJ}&type=file.read`)).events;
+  ok("the throttle is keyed per file", perFile.length === 2 && perFile.some(e => e.file === "lib/b.mjs"), `(got ${perFile.length})`);
+
+  await sleep(1500);
+  await C.post("/read", { project: PROJ, file: "lib/a.mjs", session: "host:evtC", seat: "glm" });
+  const reads2 = (await C.get(`/events?project=${PROJ}&type=file.read`)).events;
+  ok("a third post AFTER the window appends another", reads2.length === 3 && reads2[2]?.file === "lib/a.mjs", `(got ${reads2.length})`);
+
+  const hist = (await C.get(`/history?project=${PROJ}`)).events;
+  ok("/history never carries file.read", hist.every(e => e.type !== "file.read"), `(got ${hist.map(e => e.type)})`);
+  ok("/history still serves its card events", hist.some(e => e.type === "created"));
+} finally { hubC.kill(); }
+ok("hub C clean stderr", !/TypeError|ReferenceError|not defined/.test(errC), errC.slice(0, 300));
 
 console.log(`\n${fail === 0 ? "PASS" : "FAIL"} — ${pass} passed, ${fail} failed`);
 process.exit(fail === 0 ? 0 : 1);
