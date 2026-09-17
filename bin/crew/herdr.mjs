@@ -165,7 +165,7 @@ function replacementPane(ctx, workspace, spec, hostPane, resolve) {
     pane = `%DRYT${spec.index}`;
   } else {
     pane = splitPane(ctx, hostPane, "right", ctx.dir);
-    runSeat(ctx, pane, seat.agent, runnerCommand(ctx, seat.agent, seat.model));
+    runSeat(ctx, pane, seat.agent, runnerCommand(ctx, seat.agent, seat.model, seat.effort));
   }
   if (old) {
     closePane(ctx, old);
@@ -202,7 +202,7 @@ export function spawnHerdr(ctx, specs, resolve, prune) {
 function freshPane(ctx, workspace, spec, panes, columns, resolve) {
   const seat = resolve(spec.value);
   if (!seat) return null;
-  const command = runnerCommand(ctx, seat.agent, seat.model);
+  const command = runnerCommand(ctx, seat.agent, seat.model, seat.effort);
   let pane = "";
   if (spec.index === 0) {
     if (ctx.dry) {

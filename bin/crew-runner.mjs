@@ -26,6 +26,7 @@ import {
   observedDutyNudgeIds, requeueMissingWakeMessages, shedExpiredHubAlerts,
 } from "../lib/duty-nudges.mjs";
 import { dutyRecipientResolver } from "../lib/duty-recipient.mjs";
+import { cliEffortFlag } from "../lib/model-catalog.mjs";
 import {
   BREAKER_WINDOW, STATE_ENV, TURN_RESULT_SCHEMA,
   breakerVerdict, describeTurn, hasJsonSchemaFlag, parseEnvelope, renderCardTail, runStep,
@@ -235,6 +236,13 @@ const NATIVE = new Set(["codex", "gemini", "kimi", "claude", "dsh"]);
 const cli = CLI[AGENT] || (NATIVE.has(AGENT) ? null : CLI.opencode);
 if (!cli) { console.error(`unknown agent '${AGENT}' (native: ${[...NATIVE].join(", ")}; any other name = an opencode provider seat)`); process.exit(1); }
 if (!CLI[AGENT]) log(`'${AGENT}' is not a built-in seat — running it as an opencode provider (BYOM)`);
+
+// #7777: the launcher resolved the model catalog's per-difficulty effort for this seat and sent
+// it as CREW_EFFORT (JSON from bin/crew/core.mjs runnerCommand). The runner applies the
+// parameters the CLI can carry (codex -c model_reasoning_effort / claude --effort / opencode
+// --variant) and logs ONE line saying what it set — or that the model is uncatalogued.
+const EFFORT = (() => { try { return JSON.parse(process.env.CREW_EFFORT || "null"); } catch { return null; } })();
+const EFFORT_FLAG = EFFORT ? cliEffortFlag(AGENT, EFFORT) : { flag: "", text: "" };
 
 // RUNNER_RULES / RUNNER_KICKOFF env overrides: the runner is also the substrate for non-crew
 // always-on seats (the fleet DUTY agent, bin/duty.mjs) whose doctrine is not "work your card".
@@ -657,7 +665,7 @@ async function runTurn(prompt, isFirst, trigger = "kickoff", opts = {}) {
   // The flagged row (TDD §4.6). `{S}` exists only in `stateNext`, so the replaceAll below is a
   // no-op on every other path — which is what "flag off = byte-identical" has to mean.
   if (opts.state && cli.stateNext) cmd = cli.stateNext;
-  const mfrag = MODEL && cli.mflag ? `${cli.mflag}${MODEL}` : "";
+  const mfrag = (MODEL && cli.mflag ? `${cli.mflag}${MODEL}` : "") + EFFORT_FLAG.flag;
   cmd = cmd.replaceAll("{M}", mfrag).replaceAll("{P}", pf).replaceAll("{SID}", sid).replaceAll("{DIR}", TURN_DIR)
     .replaceAll("{S}", STATE_SCHEMA_FILE);
   // PRECEDENCE: each file is PREPENDED, so the list is iterated in written order, highest priority
@@ -665,6 +673,8 @@ async function runTurn(prompt, isFirst, trigger = "kickoff", opts = {}) {
   const envs = [join(homedir(), ".agent-bus", ".env"), cli.env].filter(f => f && existsSync(f));
   cmd = withEnvFiles(cmd, envs);
   log(`turn starting (${isFirst ? "fresh session" : "resume"})${MODEL ? ` · model=${MODEL}` : ""}`);
+  // #7777: the one effort line — which effort parameters were set, or that the model is uncatalogued.
+  if (EFFORT && EFFORT_FLAG.text) log(EFFORT_FLAG.text);
   cmuxStatus("building", "#4a90d9", "hammer", { priority: 50 }); herdrAgent("working");
   // inherit stdio so the window shows the agent working live; also capture for sid-parsing.
   // Tee stderr to ERRF (still shown live in the window) so a failed turn can be classified.

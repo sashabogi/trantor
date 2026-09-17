@@ -7,7 +7,7 @@ export function spawnTmux(ctx, specs, resolve) {
   for (const spec of specs) {
     const seat = resolve(spec);
     if (!seat) continue;
-    const command = runnerCommand(ctx, seat.agent, seat.model);
+    const command = runnerCommand(ctx, seat.agent, seat.model, seat.effort);
     let pane = ctx.dry ? "%DRY" : "";
     if (first) {
       run(ctx, "tmux", ["new-session", "-d", "-s", session, "-n", "crew", "-x", "260", "-y", "60"], { rendered: `tmux new-session -d -s '${session}' -n crew -x 260 -y 60` });
@@ -52,7 +52,7 @@ export function spawnTerminal(ctx, specs, resolve) {
       recordState(ctx, ctx.project, "win", seat.agent, `%DRYWIN${index}`);
       continue;
     }
-    const command = `clear && ${runnerCommand(ctx, seat.agent, seat.model)}`;
+    const command = `clear && ${runnerCommand(ctx, seat.agent, seat.model, seat.effort)}`;
     const title = `${ctx.project} · ${seat.agent.toUpperCase()}`;
     const result = appleScript(`tell application "Terminal"\nset w to do script "${appleScriptString(command)}"\nset custom title of w to "${appleScriptString(title)}"\nset theWin to first window whose tabs contains w\nset bounds of theWin to {${x}, ${y}, ${x + width}, ${y + height}}\nreturn id of theWin\nend tell\n`);
     if (result.stdout) {

@@ -141,12 +141,15 @@ export function gridColumns(size) {
 // file that was never written and a runner still on the transcript path.
 const FORWARDED_ENV = ["TRANTOR_STATE", "TRANTOR_STATE_ASSEMBLE", "TRANTOR_STATE_HANDOFF", "TRANTOR_STATE_GATE"];
 
-export function runnerCommand(ctx, agent, model = "") {
+export function runnerCommand(ctx, agent, model = "", effort = null) {
   const forwarded = FORWARDED_ENV
     .filter((name) => process.env[name])
     .map((name) => `${name}=${shellQuote(process.env[name])} `)
     .join("");
-  return `cd ${shellQuote(ctx.dir)} && ${forwarded}CREW_MODEL=${shellQuote(model)} RELAY_PROJECT=${shellQuote(ctx.project)} RELAY_URL=${shellQuote(ctx.hub)} node ${shellQuote(join(ROOT, "bin/crew-runner.mjs"))} ${shellQuote(agent)} ${shellQuote(ctx.dir)}`;
+  // #7777: the launcher resolved the catalog's per-difficulty effort for this seat; the runner
+  // reads CREW_EFFORT, applies what the CLI accepts and logs the one-line summary.
+  const effortEnv = effort ? ` CREW_EFFORT=${shellQuote(JSON.stringify(effort))}` : "";
+  return `cd ${shellQuote(ctx.dir)} && ${forwarded}CREW_MODEL=${shellQuote(model)}${effortEnv} RELAY_PROJECT=${shellQuote(ctx.project)} RELAY_URL=${shellQuote(ctx.hub)} node ${shellQuote(join(ROOT, "bin/crew-runner.mjs"))} ${shellQuote(agent)} ${shellQuote(ctx.dir)}`;
 }
 
 export function listPids(pattern) {

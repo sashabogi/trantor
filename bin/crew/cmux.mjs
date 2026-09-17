@@ -109,7 +109,7 @@ export function spawnCmux(ctx, specs, resolve, prune) {
   for (let index = 0; index < specs.length; index += 1) {
     const seat = resolve(specs[index]);
     if (!seat) continue;
-    const launcher = seatLauncher(ctx, seat.agent, runnerCommand(ctx, seat.agent, seat.model));
+    const launcher = seatLauncher(ctx, seat.agent, runnerCommand(ctx, seat.agent, seat.model, seat.effort));
     const old = reuse ? readRows(ctx).filter(row => row.project === ctx.project && row.kind === "cmux" && row.agent === seat.agent).at(-1)?.handle || "" : "";
     let pane = "";
     if (reuse) {
@@ -149,7 +149,7 @@ function spawnAppleScript(ctx, specs, resolve) {
   for (let index = 0; index < specs.length; index += 1) {
     const seat = resolve(specs[index]);
     if (!seat) continue;
-    const launcher = seatLauncher(ctx, seat.agent, runnerCommand(ctx, seat.agent, seat.model));
+    const launcher = seatLauncher(ctx, seat.agent, runnerCommand(ctx, seat.agent, seat.model, seat.effort));
     const old = reuse ? readRows(ctx).filter(row => row.project === ctx.project && row.kind === "cmux" && row.agent === seat.agent).at(-1)?.handle || "" : "";
     let pane;
     if (!tab && index === 0) {

@@ -2,6 +2,7 @@ import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { call } from "./core.mjs";
 import { reapSeat } from "./state.mjs";
+import { resolveEffort } from "../../lib/model-catalog.mjs";
 
 function routeModel(ctx, provider, candidates, task, difficulty) {
   const bundled = join(ctx.root, "engine/bin/scrooge");
@@ -36,16 +37,22 @@ export function resolveSpec(ctx, spec, task, difficulty, skipped) {
     if (agent === "glm") field = "zai-coding-plan";
     else if (!["codex", "kimi", "claude", "gemini", "dsh", "opencode"].includes(agent)) field = agent;
   }
-  if (!field) return { agent, model: "" };
-  if (field.includes("/")) return { agent, model: field };
+  if (!field) {
+    // #7777: CLI-default seat (kimi/codex/claude/dsh) — the catalog finds the entry through the
+    // agent alias so the runner still gets a CREW_EFFORT record (or the uncatalogued line).
+    return { agent, model: "", effort: resolveEffort(agent, "", difficulty) };
+  }
+  if (field.includes("/")) return { agent, model: field, effort: resolveEffort(agent, field, difficulty) };
   if (["claude", "codex", "kimi", "gemini"].includes(agent)) {
     console.log(`  → ${agent}: model ${field} (native pin)`);
-    return { agent, model: field };
+    return { agent, model: field, effort: resolveEffort(agent, field, difficulty) };
   }
   try {
     const model = resolveModel(ctx, agent, field, task, difficulty);
+    // #7777: the live model is known — attach the catalog's per-difficulty effort parameters here
+    // so the runner applies them where the CLI accepts them (CREW_EFFORT, below).
     console.log(`  → ${agent}: live model ${model} (${field} · ${task}/${difficulty})`);
-    return { agent, model };
+    return { agent, model, effort: resolveEffort(agent, model, difficulty) };
   } catch (error) {
     console.error(error.message);
     console.error(`[crew] ✗ skipping seat '${agent}' — model resolution failed for ${field} (${task}/${difficulty}); remaining seats still launch`);

@@ -1,0 +1,119 @@
+{
+  "version": 1,
+  "source": "card #7777 — model ids come from `trantor models` (opencode adapters) and the seat CLIs' defaults; limits and effort levels come from each provider's published docs, cited per entry. modalities = accepted inputs; every entry outputs text.",
+  "models": {
+    "zai-coding-plan/glm-5.3-flash": {
+      "api": ["openai-chat", "openai-responses", "anthropic-messages"],
+      "context": 1000000,
+      "maxOutput": 128000,
+      "modalities": ["text", "image", "video", "file"],
+      "url": "https://docs.z.ai/guides/vlm/glm-5.3-flash",
+      "notes": "docs: 1M context / 128K max output; thinking.type only supports enabled; reasoning_effort low|high|max (recommended max). GLM Coding Plan serves the OpenAI Chat Completion protocol only, so effort is keyed on openai-chat. The glm seat's easy/medium router pick (`trantor models glm`).",
+      "effort": {
+        "easy":   { "openai-chat": { "reasoning_effort": "low" } },
+        "medium": { "openai-chat": { "reasoning_effort": "high" } },
+        "hard":   { "openai-chat": { "reasoning_effort": "max" } }
+      }
+    },
+    "zai-coding-plan/glm-5.3": {
+      "api": ["openai-chat", "openai-responses", "anthropic-messages"],
+      "context": 1000000,
+      "maxOutput": 128000,
+      "modalities": ["text"],
+      "url": "https://docs.z.ai/guides/llm/glm-5.3",
+      "notes": "docs: 1M context / 128K max output; text-only input; reasoning always enabled (disabling not supported); reasoning_effort low|high|max, default max. The glm seat's hard router pick. Coding plan serves openai-chat only.",
+      "effort": {
+        "easy":   { "openai-chat": { "reasoning_effort": "low" } },
+        "medium": { "openai-chat": { "reasoning_effort": "high" } },
+        "hard":   { "openai-chat": { "reasoning_effort": "max" } }
+      }
+    },
+    "deepseek/deepseek-v4-flash": {
+      "api": ["openai-chat", "anthropic-messages", "openai-responses"],
+      "context": 1000000,
+      "maxOutput": 384000,
+      "modalities": ["text", "image"],
+      "url": "https://api-docs.deepseek.com/quick_start/pricing",
+      "notes": "Legacy id served by DeepSeek-V4.1-Flash at flash price (docs: 1M context, max output 384K, vision supported). Thinking mode is enabled by default with default effort high; legacy id still accepted by the API. The deepseek seat's easy/medium router pick.",
+      "effort": {
+        "easy":   { "openai-chat": { "thinking": { "type": "enabled" }, "reasoning_effort": "low" },
+                    "anthropic-messages": { "reasoning": { "effort": "low" } } },
+        "medium": { "openai-chat": { "thinking": { "type": "enabled" }, "reasoning_effort": "high" },
+                    "anthropic-messages": { "reasoning": { "effort": "high" } } },
+        "hard":   { "openai-chat": { "thinking": { "type": "enabled" }, "reasoning_effort": "max" },
+                    "anthropic-messages": { "reasoning": { "effort": "max" } } }
+      }
+    },
+    "deepseek/deepseek-v4-pro": {
+      "api": ["openai-chat", "anthropic-messages", "openai-responses"],
+      "context": 1000000,
+      "maxOutput": 384000,
+      "modalities": ["text"],
+      "url": "https://api-docs.deepseek.com/quick_start/pricing",
+      "notes": "DeepSeek-V4-Pro-0813 (docs: 1M context, max output 384K, no vision; API service continues past 2026-09-14). Thinking mode enabled by default, default effort high. The deepseek seat's hard router pick.",
+      "effort": {
+        "easy":   { "openai-chat": { "thinking": { "type": "enabled" }, "reasoning_effort": "low" },
+                    "anthropic-messages": { "reasoning": { "effort": "low" } } },
+        "medium": { "openai-chat": { "thinking": { "type": "enabled" }, "reasoning_effort": "high" },
+                    "anthropic-messages": { "reasoning": { "effort": "high" } } },
+        "hard":   { "openai-chat": { "thinking": { "type": "enabled" }, "reasoning_effort": "max" },
+                    "anthropic-messages": { "reasoning": { "effort": "max" } } }
+      }
+    },
+    "qwen/deepseek-v4-pro": {
+      "api": ["openai-chat"],
+      "context": 1000000,
+      "maxOutput": 384000,
+      "modalities": ["text"],
+      "url": "https://api-docs.deepseek.com/quick_start/pricing",
+      "notes": "DeepSeek V4-Pro served through the qwen opencode provider (Alibaba Model Studio openai-compatible endpoint, per the provider adapter). Model limits and effort levels per DeepSeek's own V4-Pro docs. The qwen seat's router pick at every difficulty.",
+      "effort": {
+        "easy":   { "openai-chat": { "thinking": { "type": "enabled" }, "reasoning_effort": "low" } },
+        "medium": { "openai-chat": { "thinking": { "type": "enabled" }, "reasoning_effort": "high" } },
+        "hard":   { "openai-chat": { "thinking": { "type": "enabled" }, "reasoning_effort": "max" } }
+      }
+    },
+    "kimi-code/default": {
+      "aliases": ["kimi"],
+      "api": ["openai-chat", "anthropic-messages"],
+      "context": 256000,
+      "maxOutput": 32768,
+      "modalities": ["text", "image", "video"],
+      "url": "https://platform.kimi.ai/docs/guide/kimi-k2-7-code-quickstart",
+      "notes": "kimi-code default — the kimi CLI's managed coding model (Kimi K2.7 Code family). docs: 256K context; max_tokens defaults to 32768 (no higher maximum published); thinking is always on and cannot be disabled; reasoning_effort is NOT supported on K2.7 Code — so no effort parameters are declarable and every level maps to provider default. Kimi API is OpenAI- and Anthropic-compatible.",
+      "effort": {
+        "easy":   { "openai-chat": {} },
+        "medium": { "openai-chat": {} },
+        "hard":   { "openai-chat": {} }
+      }
+    },
+    "codex/gpt-5.6-sol": {
+      "aliases": ["codex"],
+      "api": ["openai-responses", "openai-chat"],
+      "context": 1050000,
+      "maxOutput": 128000,
+      "modalities": ["text", "image"],
+      "url": "https://developers.openai.com/api/docs/models/gpt-5.6-sol",
+      "notes": "Codex CLI default model (codex docs name gpt-5.6-sol the replacement/default with default effort medium — https://developers.openai.com/codex/models). API docs: 1,050,000 context window / 128,000 max output; reasoning.effort supports none|low|medium(default)|high|xhigh|max. Codex applies effort via its model_reasoning_effort config key (codex exec -c model_reasoning_effort=...).",
+      "effort": {
+        "easy":   { "openai-responses": { "reasoning_effort": "low" } },
+        "medium": { "openai-responses": { "reasoning_effort": "medium" } },
+        "hard":   { "openai-responses": { "reasoning_effort": "high" } }
+      }
+    },
+    "anthropic/claude-sonnet-5": {
+      "aliases": ["claude", "sonnet"],
+      "api": ["anthropic-messages"],
+      "context": 1000000,
+      "maxOutput": 128000,
+      "modalities": ["text", "image"],
+      "url": "https://platform.claude.com/docs/en/models/overview",
+      "notes": "Claude Sonnet 5 (claude-sonnet-5) — the speed/intelligence default of the current lineup and the Claude Code default family. docs: 1M context, 128K max output, adaptive thinking with the effort parameter (default high; levels low|medium|high|xhigh|max). The claude CLI carries it per request via --effort.",
+      "effort": {
+        "easy":   { "anthropic-messages": { "effort": "low" } },
+        "medium": { "anthropic-messages": { "effort": "medium" } },
+        "hard":   { "anthropic-messages": { "effort": "high" } }
+      }
+    }
+  }
+}

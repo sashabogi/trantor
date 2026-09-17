@@ -16,6 +16,7 @@ import { homedir } from "node:os";
 import { execSync } from "node:child_process";
 import { pathToFileURL } from "node:url";
 import { busDir, readConfig } from "../lib/project.mjs";
+import { loadCatalog, lookup as catalogLookup, effortParams, UNCATALOGUED_STATUS } from "../lib/model-catalog.mjs";
 
 const H = homedir();
 const read = (p, fb) => { try { return JSON.parse(readFileSync(p, "utf8")); } catch { return fb; } };
@@ -153,7 +154,14 @@ export function advise(input, world = loadWorld()) {
       const m = scroogeModelFor(registry, caps, p.kind, p.difficulty);
       const tok = FORECAST.easy;
       const cost = m ? +(tok * 0.6 * m.cost_in / 1e6 + tok * 0.4 * m.cost_out / 1e6).toFixed(3) : null;
-      return { ...p, executor: "scrooge", model: m?.model, pool: "api", est_cost_usd: cost,
+      // #7777: scores pick WHICH model; the catalog says HOW to call it — attach the per-difficulty
+      // request parameters so the executor does not have to look them up again.
+      const catEntry = catalogLookup(m?.model);
+      const catParams = catEntry.found ? effortParams(m.model, p.difficulty, "openai-chat") : null;
+      const effort = catEntry.found
+        ? { found: true, difficulty: p.difficulty, api: "openai-chat", params: catParams || {} }
+        : { found: false, difficulty: p.difficulty, params: null, status: UNCATALOGUED_STATUS };
+      return { ...p, executor: "scrooge", model: m?.model, pool: "api", est_cost_usd: cost, effort,
         reason: `easy + stateless → cheapest capable model (${m?.model}); not worth a crew seat` };
     }
     if (p.owner === "self") return { ...p, executor: "orchestrator", pool: tierOf(profile, "claude"), reason: "architect-owned (foundation/integration doctrine) — the orchestrator keeps the shared contract in its own hands" };
@@ -221,7 +229,10 @@ export function advise(input, world = loadWorld()) {
       ? routing.map((x, j) => j + 1).filter(j => j !== i + 1)
       : (r.executor !== "orchestrator" ? foundationIdx.filter(f => f !== i + 1) : []) };
   });
-  return { mode, why, crew, routing, routing_table_md: table, card_args: cards, est_api_cost_usd: apiCost, quota_pools: pools, summary, orchestrator_tier: orchTier, agents_available: agents };
+  // #7777: crew-bound packages get their catalog effort attached at SPAWN, when the live model is
+  // known (bin/crew/models.mjs resolveSpec → CREW_EFFORT); the advisor only records that it is deferred.
+  const catalogMeta = (() => { const c = loadCatalog(); return { version: c.version, models: Object.keys(c.models).length, source: "configs/model-catalog.json" }; })();
+  return { mode, why, crew, routing, routing_table_md: table, card_args: cards, est_api_cost_usd: apiCost, quota_pools: pools, summary, orchestrator_tier: orchTier, agents_available: agents, catalog: catalogMeta };
 }
 
 // ---- CLI ----
