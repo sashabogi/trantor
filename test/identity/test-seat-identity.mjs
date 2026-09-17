@@ -1,20 +1,8 @@
 #!/usr/bin/env node
-// trantor — a session must KNOW whether it is a seat, and a hub must never be chosen silently.
-//
-// The bug this pins (2026-08-23): a macOS reboot reopened every Terminal window in $HOME.
-// `claude --resume` restored each conversation but not its directory, so the crebral-health and
-// crebral-scribe windows came back as home-directory sessions. The SessionStart hook correctly
-// declined to register them — and said so ONLY on stderr, which nobody reads. Each session spent
-// an hour believing it was its old seat and finally reported "Trantor is unreachable" while every
-// hub was healthy. Meanwhile relay_whoami POSTed /register before answering, so the act of asking
-// "where am I?" minted the phantom seat it then reported, on the local fallback hub.
-//
-// Three invariants, drilled against the REAL hook:
-//   1. A non-seat directory does not register — and the session is TOLD, in context and on screen.
-//   2. A seat whose project has no hub pin registers, but is warned that its hub was a fallback.
-//   3. A pinned project registers on its pinned hub with no warning at all.
-//
-// Run against an older tree with TRANTOR_ROOT=<path> to prove these fail before the fix.
+// trantor — a session must KNOW whether it is a seat, and a hub must never be chosen silently
+// (the reboot-into-$HOME phantom seats, #6108). Drilled against the REAL hook: a non-seat does not
+// register and is TOLD; an unpinned seat registers but is warned; a pinned one lands on its hub
+// silently. Run against an older tree with TRANTOR_ROOT=<path> to prove these fail before the fix.
 import http from "node:http";
 import { spawnSync, spawn } from "node:child_process";
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from "node:fs";
@@ -67,6 +55,12 @@ const plainDir = join(W, "not-a-repo"); mkdirSync(plainDir, { recursive: true })
 // a workspace CONTAINER: ~/development — not a repo, but full of them
 const container = join(W, "workspace"); mkdirSync(container, { recursive: true });
 for (const r of ["alpha", "beta"]) { const d = join(container, r); mkdirSync(d, { recursive: true }); spawnSync("git", ["init", "-q"], { cwd: d }); }
+// #6842 — a WRAPPER: a leftover workspace folder holding the real project (a repo with a
+// CLAUDE.md) beside two stray repos and a .tmp, the witnessed builtbetter.ai shape.
+const wrapper = join(W, "builtbetter.ai"); mkdirSync(wrapper, { recursive: true });
+for (const r of ["builtbetter", "builtbetter-git", "builtbetter-worktree", ".tmp"]) { const d = join(wrapper, r); mkdirSync(d, { recursive: true }); spawnSync("git", ["init", "-q"], { cwd: d }); }
+writeFileSync(join(wrapper, "builtbetter", "CLAUDE.md"), "# builtbetter\n");
+const nestedReal = join(wrapper, "builtbetter");
 
 let n = 0;
 // The hook must run ASYNC (spawn, not spawnSync): the recorder hubs live in THIS process, so a
@@ -118,6 +112,17 @@ console.log("\n2. A folder OF projects (~/development) is not a seat either:");
   ok("says why (a folder of projects)", /folder of projects/i.test(r.ctx + r.sys), r.sys.slice(0, 90));
 }
 
+console.log("\n2a. A wrapper dir names its nested project and the fix, not a wall of text (#6842):");
+{
+  const r = await runHook(wrapper);
+  ok("does not register", r.registers.length === 0, `${r.registers.length} register(s)`);
+  ok("the banner names the nested project", r.sys.includes(`Its project is builtbetter`), r.sys.slice(0, 160));
+  ok("the banner names the in-place start", r.sys.includes(`cd ${nestedReal} && claude`), r.sys.slice(0, 160));
+  ok("the banner names the promotion", r.sys.includes(`mv ${nestedReal} ${join(W, "builtbetter")}`), r.sys.slice(0, 200));
+  ok("the strays are not offered", !/builtbetter-git|builtbetter-worktree/.test(r.sys + r.ctx));
+  ok("the model is told the real project", /Its real project:\*\* builtbetter/.test(r.ctx), r.ctx.slice(0, 200));
+}
+
 console.log("\n2b. …but a plain directory with no repo IS still a seat (do not over-block):");
 {
   const r = await runHook(plainDir);
@@ -145,9 +150,8 @@ console.log("\n4. A pinned project routes to its hub, silently (no false alarm):
 
 console.log("\n4b. A drill must never touch the REAL bus directory:");
 {
-  // Regression for 2026-08-23: this very pre-flight, pointed at a temp AGENT_BUS_DIR, claimed two
-  // live pending handoffs because the handoff READER joined homedir() directly while the WRITER
-  // honoured RELAY_DATA_DIR. Both now resolve through busDir().
+  // Regression: this very pre-flight, pointed at a temp AGENT_BUS_DIR, once claimed two live
+  // handoffs because the READER joined homedir() while the WRITER honoured RELAY_DATA_DIR.
   const hoDir = join(BUS, "handoffs"); mkdirSync(hoDir, { recursive: true });
   const proj = "pinned-proj";
   writeFileSync(join(hoDir, `${proj}-1700000001.json`), JSON.stringify({
@@ -177,6 +181,10 @@ console.log("\n5. Hub provenance is part of the answer (unit):");
   ok("a repo container is classified a non-seat", /folder of projects/.test(m.nonSeatReason?.(container) || ""));
   ok("a plain non-git dir is still a seat", m.nonSeatReason?.(plainDir) === "");
   ok("a git repo is a seat", m.nonSeatReason?.(pinnedRepo) === "");
+  ok("a wrapper is classified a non-seat", /folder of projects/.test(m.nonSeatReason?.(wrapper) || ""));
+  ok("the nested project is the CLAUDE.md repo, never the strays", JSON.stringify(m.nestedProjects?.(wrapper)) === JSON.stringify([nestedReal]), JSON.stringify(m.nestedProjects?.(wrapper)));
+  ok("a container without a CLAUDE.md repo has no nested project", (m.nestedProjects?.(container) || []).length === 0);
+  ok("a plain repo has no nested project", (m.nestedProjects?.(pinnedRepo) || []).length === 0);
   ok("known projects are listable", Array.isArray(m.knownProjects?.()) && m.knownProjects().includes("pinned-proj"));
 }
 

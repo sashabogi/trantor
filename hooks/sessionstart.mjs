@@ -7,7 +7,7 @@ import { join, basename, dirname } from "node:path";
 import { homedir, hostname } from "node:os";
 import { execSync, spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { resolveProject, hostId, resolveHubInfo, knownProjects, nonSeatReason, handoffDir, readOrchSession, writeOrchSession } from "../lib/project.mjs";
+import { resolveProject, hostId, resolveHubInfo, knownProjects, nonSeatReason, nestedProjects, handoffDir, readOrchSession, writeOrchSession } from "../lib/project.mjs";
 import { formatSubagentManifest } from "../lib/subagent-manifest.mjs";
 import { updateAvailable, maybeNotifyDesktop, readConfig } from "./lib/update-check.mjs";
 import { renderStateBlock } from "./lib/handoff.mjs";
@@ -147,12 +147,20 @@ try {
   if (notSeat) {
     const known = knownProjects();
     const O = "\x1b[1;38;5;208m", R = "\x1b[0m";
+    // #6842 — a folder of projects names its real project and the two fixes: start it in place,
+    // or promote it into the dev root so the app lists it.
+    const nested = /folder of projects/.test(notSeat) ? nestedProjects(projectDir) : [];
+    const fix = nested.length === 1
+      ? `Its project is ${basename(nested[0])}: ${O}cd ${nested[0]} && claude${R}, or promote it: ${O}mv ${nested[0]} ${join(dirname(projectDir), basename(nested[0]))}${R}`
+      : nested.length > 1
+        ? `It holds ${nested.map(p => basename(p)).join(", ")}: start the one you mean in place (${O}cd <that dir> && claude${R}), or promote it into ${dirname(projectDir)}`
+        : `Start it from the project directory instead:  ${O}cd <project> && claude${R}`;
     const banner = `🟠 ${O}Not a Trantor seat${R} — ${projectDir} is ${notSeat}. `
-      + `It is NOT on the bus: no board, no peers, no inbox. `
-      + `Start it from the project directory instead:  ${O}cd <project> && claude${R}`;
+      + `It is NOT on the bus: no board, no peers, no inbox. ` + fix;
     let ctx = `<trantor-not-a-seat cwd="${sanitize(projectDir)}" reason="${sanitize(notSeat)}">\n`;
     ctx += `⚠️ **This session is NOT registered on Trantor.** Its working directory `;
     ctx += `(\`${sanitize(projectDir)}\`) is ${sanitize(notSeat)} — not a project — so no seat was created for it.\n\n`;
+    if (nested.length) ctx += `**Its real project:** ${sanitize(nested.map(p => basename(p)).join(", "))} (${sanitize(nested.join(", "))}). Start Claude there, or promote it into \`${sanitize(dirname(projectDir))}\` so the app lists it.\n\n`;
     ctx += `**What that means — do not work around it, and do not report the bus as broken:**\n`;
     ctx += `- You have no project board, no peers, and no inbox. \`relay_peers\` will look empty and \`relay_send\` reaches nobody.\n`;
     ctx += `- Messages other sessions address to this project are NOT lost — they are waiting on the hub for a real seat.\n`;
