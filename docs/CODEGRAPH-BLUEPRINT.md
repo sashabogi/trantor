@@ -357,3 +357,131 @@ same events, because the operator's question at Home is "how much crew code have
 not "which file". Opening a file from the graph under this lens is the act that clears it,
 which is why the read event is posted by `openPath` and not by the editor mounting: a file
 opened is a file looked at; a file scrolled past in a diff is not.
+
+## 5. The card split for #6878, in build order, with an acceptance drill each
+
+Nine cards. Each names the files it owns (one seat, one card, no shared file), its gate
+command (the one the seat runs in `testing`, never the full suite), and the drill that
+proves it from the outside. A drill here is in the form `bin/drill-surface.mjs` uses: a
+step with a PASS/FAIL line and the evidence string, so it can join `trantor drill` when the
+card lands. Cards 1-5 are the scoped MVP of #6878 item 5 (graph + blast); 6-7 are Unread;
+8 is Hotspots; 9 is the parking list. Sizes are in seat sessions on the box the crew runs
+today (a session is one time-boxed turn of one seat), and the wall clock is the slowest
+chain, not the sum: 1 → 2 → 3 is the critical path, 4 and 6 run beside it.
+
+**Card 1 · `code_graph` Rust command over graft (hard, 1-2 sessions).**
+Owns `desktop/src-tauri/src/graft_cli.rs` (new) and the one registration line in
+`lib.rs` `generate_handler!` (L5700). Resolves the `graft` binary the way `trantor_cli.rs`
+L13-22 resolves node; runs `graft build` in the checkout or in
+`~/.agent-bus/worktrees/<project>/<seat>` when `seat` is set; reads `graft/.graph/wiring.json`;
+collapses to file nodes and file→file edges; adds `cluster`, degrees, `isTest`, `testedBy`,
+`orphan`, `doc`, and `cycleId` by Tarjan over the collapsed edges (§3). Returns JSON as
+`project_changes` does. A missing binary returns `{error: "graft not installed"}`, never a
+panic and never an empty graph.
+Gate: `cargo test --manifest-path desktop/src-tauri/Cargo.toml graft_cli`.
+Drill: `code_graph("trantor")` on this checkout answers within 2s warm with node count 522
+and edge count 2278 (the §1 numbers; the drill reads them from `graft map` first so the
+assertion tracks the repo, not a constant); with `PATH` stripped of graft it answers the
+error string; `cycleId` is non-null for at least one node only if `graft` reports a cycle
+in the same run, else the drill asserts zero cycles (positive control before trusting a
+zero, per the crew lesson).
+
+**Card 2 · the graph view on the Code surface (hard, 2 sessions).**
+Owns `desktop/src/features/code/GraphView.tsx` (new), `desktop/src/features/code/graph/`
+(new: `flowLayout.ts` vendored from Flare with its MIT header, `deriveGraph.ts` for the
+cluster collapse and lens colouring, both pure), the `ViewMode` union in `Files.tsx` L32
+and its body switch at L442, `codeTabs.ts` L12, and the footer chip in `ModePane.tsx`. No
+drag, no positions, no lens but Clusters, Activity and Cycles.
+Gate: `pnpm --prefix desktop vitest run src/features/code/graph`.
+Drill (unit): `deriveGraph` over a 6-node fixture with one 2-cycle yields the expected
+cluster cards, expands one cluster to its files, and colours the cycle pair. Drill (app,
+`trantor drill` step `S-graph`): open the Code lens on the drill project, click the graph
+chip, count `[data-graph-node]` at cluster zoom = number of top-level directories with code;
+expand `lib/`; click one card; a `code` tab for that path opens under the same scope
+(evidence: the tab strip text). Positive control: the count is asserted non-zero before the
+expand assertion runs.
+
+**Card 3 · refresh from the watcher and the seat scope (medium, 1 session).**
+Owns the debounce in `GraphView.tsx` (listen to `file-changed`, one rebuild per quiet
+second) and the seat branch of the scope picker feeding `seat` to `code_graph`. Touches no
+Rust: the command from card 1 already takes `seat`.
+Gate: `pnpm --prefix desktop vitest run src/features/code/graph/refresh`.
+Drill (app): with the graph open on the project scope, append `import "./x"` to a fixture
+file and create `x.ts`; within 3s the node's `outDegree` rises by one and `x.ts` appears
+(the drill records both counts before and after; the before value is the positive
+control). Then switch the footer scope to a seat worktree that holds an uncommitted new
+file: it appears under the seat scope and not under the project scope.
+
+**Card 4 · blast on the testing move (medium, 1 session).**
+Owns `hooks/lib/hollow-move.mjs` (add `graft blast --base <base> --depth all --format
+json`, 2.5s timeout, fail-open to "blast: unavailable") and the `blast` field the move posts;
+`hub/routes/cards.mjs` keeps the field on the card event and nothing else. The base is the
+card's `base:` sha when the contract carries one, else `git merge-base main HEAD`.
+Gate: `node test/hooks/test-hollow-move.mjs` (extend the existing file) and
+`node test/hub/test-events.mjs`.
+Drill (unit): a fixture worktree with one changed `lib/a.mjs` imported by two files yields a
+note line `blast: 2 files depend on the 1 changed`; a fixture with only `package.json`
+changed yields `blast: not in the graph (package.json)`; with graft absent the move still
+lands and the note says `blast: unavailable`. Drill (hub): the moved card's event carries
+`blast` and `GET /history` still returns the legacy flat shape.
+
+**Card 5 · blast on the surfaces and the review tier (medium, 1 session).**
+Owns `desktop/src/features/code/reviewTier.ts` (new, Flare's `reviewTier` with its
+thresholds, coverage null-safe), the chip in the Changes tab strip (`Files.tsx`, the tab
+strip only), and the blast line in the Overseer gate card (`Overseer.tsx` L274-300).
+Gate: `pnpm --prefix desktop vitest run src/features/code/reviewTier`.
+Drill (unit): the tier table from `review.ts` L52-78 reproduced as cases: blast 10 →
+careful; blast 3 → read; test file with nothing depending on it → skim with the "a test"
+reason. Drill (app): open a project with an open verify gate whose card note carries
+`blast:`; the gate card shows the line and, at blast ≥ 10, the `careful` chip in `tr-warn`.
+
+**Card 6 · `file.read`: the hub route and the app's post (easy, 1 session).**
+Owns `hub/routes/admin.mjs` (`POST /read` beside `/claim`, same throttle, appends
+`file.read`), `hub/events.mjs` if the type list is enumerated there, `desktop/src/shared/api/client.ts`
+(`read(project, file, seat?)`), and the one call in `openPath` (`Files.tsx` L183) guarded
+to the app's own session id.
+Gate: `node test/hub/test-events.mjs` and `pnpm --prefix desktop vitest run src/features/code/codeTabs`.
+Drill (hub): two `POST /read` for the same file inside the window append one `file.read`
+event, a third after the window appends another; `GET /events?type=file.read.` returns them
+and `/history` does not (promise 1 of that test file). Drill (app): opening a file from the
+tree posts once (the drill hub counts requests); opening it again within the window posts
+nothing.
+
+**Card 7 · the Unread lens and the Home stat (medium, 1 session).**
+Owns `desktop/src/features/code/graph/unread.ts` (new, the rule from §4.3 over `file.claim`,
+`file-changed` and `file.read`), the lens entry in `deriveGraph.ts`, and one stat card on
+the Home view (`desktop/src/features/home/`), computed from the same events across
+projects.
+Gate: `pnpm --prefix desktop vitest run src/features/code/graph/unread`.
+Drill (unit): a table: no changes → nothing unread on a fresh repo; claim at t1, no read →
+unread; claim at t1, read at t2 > t1 → read; read at t0 then claim at t1 → unread again.
+Drill (app): on the drill project a seat posts a `file.claim` for `lib/a.mjs`; the graph
+under the Unread lens colours that node `tr-fail`; opening it from the graph clears it and
+the Home stat drops by one (both counts recorded, before is the positive control).
+
+**Card 8 · Hotspots: complexity, todos, churn, and the districts layout (medium, 1-2
+sessions).** Owns the two functions in `graft_cli.rs` (branch-keyword complexity and
+marker count over comment-stripped source, Flare `parser.ts` L313-314 as the spec), the
+`churn` field from `git log --format= --name-only --since=90.days` counted per path, and
+`DistrictsView.tsx` (new) as the second layout behind the `tr-seg`.
+Gate: `cargo test --manifest-path desktop/src-tauri/Cargo.toml complexity` and
+`pnpm --prefix desktop vitest run src/features/code/graph/districts`.
+Drill (unit): complexity of a fixture source equals the count Flare's `parser.ts` gives for
+the same text (the fixture and its expected number are committed together, taken once from
+the Flare clone). Drill (app): the Hotspots lens ranks `desktop/src-tauri/src/lib.rs` first
+on this repo (7,400 lines, highest churn in the log), and the districts layout draws it as
+the largest rectangle.
+
+**Card 9 · parked, not cards yet.** Positions persistence and drag (the flow layout is
+deterministic; wait for a complaint); heat decay and the patch protocol (#6878 item 4;
+needs card 3 in use first); the Coverage lens (an lcov reader, 100 lines, waits for a
+project that produces lcov); the Risk lens (waits for coverage); review bursts with
+revert-to-last-verified (#6878 item 3; a query over `verified at <sha>` notes and seat
+branches, designed in §3, no UI until the graph has been looked at for a while); watching
+seat worktrees from `file_watch` (card 3's refresh affordance covers it until then).
+
+**Order and why.** 1 before everything (the data); 2 before 3 (a view to refresh); 4 needs
+only graft and can start on day one beside 1; 5 needs 4's field and 2's chip slot; 6 needs
+nothing and can also start on day one; 7 needs 2 and 6; 8 needs 1 and 2. The MVP is
+done when the `S-graph` drill and card 4's hollow-move test are green on main; the
+STABILIZE ruling holds, so no card opens until the operator says the phase has settled.
