@@ -200,6 +200,14 @@ project takes over with a full window (and a PreCompact hook does this automatic
    **best live model** for the work at spawn (capability × cost), enumerated from the provider
    itself — never a guessed endpoint. **Serialized and then verified on the bus** — the launcher
    ends with "crew verified" or names the no-shows loudly. The orchestrator never gets a green lie.
+   **Seats build in their own git worktrees** (`~/.agent-bus/worktrees/<project>/<seat>`), and a
+   fresh checkout lacks gitignored files and cannot resolve relative sibling packages. Declare what a
+   worktree needs in `.trantor/worktree.json`:
+   `{"link": ["../sibling-repo"], "provision": [{"path": "ios/Config.swift", "mode": "link|stub|operator"}], "preflight": "npm test --silent"}`.
+   `trantor up` links the siblings beside the worktree, links or stubs the declared files (a real
+   credential is never copied; `operator` entries are named for you), runs the preflight once in the
+   first fresh worktree (5-minute cap) and prints `preflight ok` or the last 20 lines — broadcast on
+   the bus too, so the orchestrator sees it before writing contracts. No declaration, no preflight.
 3. **Work flows over the bus.** Contracts arrive as messages; each agent owns its own files;
    coordination happens in <280-char messages you can read on the dashboard. Crew members
    live under a **runner**: the CLI works one turn and exits, the runner long-polls the bus

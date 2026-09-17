@@ -9,6 +9,7 @@ import { down, prune } from "./crew/state.mjs";
 import { spawnTerminal, spawnTmux } from "./crew/tmux.mjs";
 import { epochMs, failedAgents, verifyCrew } from "./crew/verify.mjs";
 import { guardCrossProjectUp } from "./crew/worktrees.mjs";
+import { preflightFirstSeat } from "./crew/preflight.mjs";
 import { resolveAgentLaunchSpecs } from "../lib/agent-preferences.mjs";
 import { readConfig } from "../lib/project.mjs";
 
@@ -51,7 +52,7 @@ function connect() {
   call(process.execPath, [join(ctx.root, "bin/connect.mjs")], { env: ctx.env });
 }
 
-function runUp(args, verify = true) {
+async function runUp(args, verify = true) {
   const options = parseUpArgs(args);
   const requested = resolveAgentLaunchSpecs(options.specs, readConfig());
   options.specs = requested.specs;
@@ -67,6 +68,8 @@ function runUp(args, verify = true) {
   connect();
   console.log(`[crew] hub for ${ctx.project}: ${ctx.hub} (baked into every seat; CREW_HUB=<url> overrides)`);
   console.log(`— bringing up crew for ${ctx.project} (${ctx.mux === "terminal" ? "Terminal windows" : ctx.mux}) —`);
+  // #7760: build once in the first seat's worktree before any seat gets a contract.
+  if (!ctx.dry) await preflightFirstSeat(ctx, options.specs[0].split(":")[0]);
   const skipped = [];
   const started = epochMs();
   spawnCrew(options, skipped);
@@ -92,7 +95,7 @@ function runUp(args, verify = true) {
   return reportSkipped(skipped);
 }
 
-function swap(args) {
+async function swap(args) {
   const [oldAgent, replacement, ...flags] = args;
   if (!oldAgent || !replacement) {
     console.log("usage: trantor swap <oldAgent> <newAgent[:provider[/model]]> [--task K --difficulty D]");
@@ -101,7 +104,7 @@ function swap(args) {
   console.log(`— tearing down old seat '${oldAgent}' in ${ctx.project} —`);
   down(ctx, [oldAgent], adapters);
   console.log(`— spawning replacement: ${replacement} —`);
-  const code = runUp([...flags, replacement]);
+  const code = await runUp([...flags, replacement]);
   if (!code) console.log(`— swapped. RESEND the contract to '${replacement.split(":")[0]}' (it joined fresh with no context). —`);
   return code;
 }
@@ -110,7 +113,7 @@ let code = 0;
 if (command === "down") code = down(ctx, rawArgs, adapters);
 else if (command === "prune") { prune(ctx, adapters); console.log(`— pruned dead crew rows (${ctx.statePath}) —`); }
 else if (command === "open") code = openOrchestrator(ctx, rawArgs);
-else if (command === "swap") code = swap(rawArgs);
-else if (command === "up") code = guardCrossProjectUp(ctx) ? runUp(rawArgs) : 1;
+else if (command === "swap") code = await swap(rawArgs);
+else if (command === "up") code = guardCrossProjectUp(ctx) ? await runUp(rawArgs) : 1;
 else { usage(); code = 1; }
 process.exit(code);

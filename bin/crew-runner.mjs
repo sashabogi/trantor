@@ -10,6 +10,7 @@ import { loadOrCreate } from "../lib/identity.mjs";
 import { signedHeaders } from "../lib/signed-fetch.mjs";
 import { ensureEnrolled } from "../lib/enroll.mjs";
 import { redactKeys } from "../lib/redact.mjs";
+import { applyWorktreeDeclaration, ensureSeatWorktree, provisioningLines, readWorktreeDeclaration } from "../lib/seat-worktree.mjs";
 import {
   AUTH_MARKER_RE, classifyFailure, looksLikeAuthDeath,
   verdictFor, substantiveOutput,
@@ -39,80 +40,27 @@ const DIR = process.argv[3] || process.cwd();
 // fork the host's "builtbetter.ai" into a separate "builtbetter" lane.
 const PROJ = process.env.RELAY_PROJECT || resolveProject(DIR);
 
-function safePathSegment(s) {
-  return String(s).replace(/\.{2,}/g, "_").replace(/[^A-Za-z0-9_.-]/g, "_");
-}
-
 function gitOut(args, cwd = DIR) {
   const r = spawnSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], timeout: 8000 });
   return r.status === 0 ? String(r.stdout || "").trim() : "";
 }
 
-function ensureSeatWorktree(sourceDir) {
-  if (process.env.TRANTOR_NO_WORKTREE === "1") return sourceDir;
-  const root = gitOut(["-C", sourceDir, "rev-parse", "--show-toplevel"], sourceDir);
-  if (!root) return sourceDir;
-
-  spawnSync("git", ["-C", root, "worktree", "prune"], { stdio: "ignore", timeout: 8000 });
-  const seatDir = join(homedir(), ".agent-bus", "worktrees", safePathSegment(PROJ), safePathSegment(AGENT));
-  const branch = `seat/${AGENT}`;
-  if (existsSync(seatDir)) {
-    const ok = gitOut(["-C", seatDir, "rev-parse", "--is-inside-work-tree"], seatDir) === "true";
-    if (ok) {
-      // #5403: a worktree created once builds against THAT day's main forever — every wave since
-      // has needed a hand fast-forward. Refresh only when it is CLEAN: a dirty tree is a seat's
-      // unintegrated work and a diverged branch is a decision, and refreshing must never eat
-      // either. Failure to refresh is loud but non-fatal: stale beats broken.
-      const dirty = gitOut(["-C", seatDir, "status", "--porcelain"], seatDir);
-      if (dirty === "") {
-        const head = gitOut(["-C", root, "rev-parse", "HEAD"], root);
-        const ff = head && spawnSync("git", ["-C", seatDir, "merge", "--ff-only", head], { stdio: "ignore", timeout: 15000 });
-        if (ff && ff.status === 0) console.log(`\x1b[2m[runner]\x1b[0m ${branch} worktree refreshed to ${head.slice(0, 7)}`);
-        else console.log(`\x1b[33m[runner]\x1b[0m ${branch} worktree diverged from main HEAD — left as-is (integrate or reset it)`);
-      } else {
-        console.log(`\x1b[33m[runner]\x1b[0m ${branch} worktree has uncommitted work — not refreshed`);
-      }
-      return seatDir;
-    }
-    console.log(`\x1b[33m[runner]\x1b[0m worktree path exists but is not a git worktree: ${seatDir} — using ${sourceDir}`);
-    return sourceDir;
-  }
-
-  try { mkdirSync(join(homedir(), ".agent-bus", "worktrees", safePathSegment(PROJ)), { recursive: true }); } catch {}
-
-  // Fast-forward the base branch before branching: the worktree should build
-  // against the latest main, not a stale checkout. (#5403)
-  const base = gitOut(["-C", root, "rev-parse", "--abbrev-ref", "HEAD"], root);
-  if (base) {
-    const remote = gitOut(["-C", root, "rev-parse", "--abbrev-ref", `${base}@{upstream}`], root);
-    if (remote) {
-      const ff = spawnSync("git", ["-C", root, "merge", "--ff-only", remote], { stdio: "ignore", timeout: 15000 });
-      if (ff && ff.status === 0) console.log(`\x1b[2m[runner]\x1b[0m ${base} fast-forwarded to ${remote}`);
+function seatWorktree(sourceDir) {
+  const wt = ensureSeatWorktree({ sourceDir, project: PROJ, agent: AGENT });
+  // #7760: a worktree is a git checkout — it lacks the gitignored files the build needs and cannot
+  // resolve relative sibling packages. The project's declaration provides both before the first turn.
+  if (wt.root) {
+    const decl = readWorktreeDeclaration(wt.root);
+    if (decl) {
+      const applied = applyWorktreeDeclaration(decl, { root: wt.root, seatDir: wt.dir });
+      const lines = wt.created ? provisioningLines(applied) : provisioningLines({ linked: [], provisioned: [], operator: applied.operator, problems: applied.problems });
+      for (const l of lines) console.log(`\x1b[2m[runner]\x1b[0m ${l}`);
     }
   }
-
-  const r = spawnSync("git", ["-C", root, "worktree", "add", "--no-track", "-B", branch, seatDir, "HEAD"], {
-    encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], timeout: 30000,
-  });
-  if (r.status === 0) {
-    // Persist the base branch so the Review lens can name the real base instead
-    // of guessing via merge-base. Stale metadata is unset, not trusted. (#5403)
-    if (base) {
-      spawnSync("git", ["-C", seatDir, "config", `branch.${branch}.base`, base], { stdio: "ignore", timeout: 5000 });
-    }
-    // Set push.autoSetupRemote so a plain git push creates and sets upstream on
-    // first push (git >= 2.37, older clients ignore it). (#5403)
-    const pushAuto = gitOut(["-C", seatDir, "config", "--get", "push.autoSetupRemote"], seatDir);
-    if (!pushAuto) {
-      spawnSync("git", ["-C", seatDir, "config", "push.autoSetupRemote", "true"], { stdio: "ignore", timeout: 5000 });
-    }
-    return seatDir;
-  }
-  console.log(`\x1b[33m[runner]\x1b[0m could not create ${branch} worktree — using ${sourceDir}`);
-  return sourceDir;
+  return wt.dir;
 }
 
-const TURN_DIR = ensureSeatWorktree(DIR);
+const TURN_DIR = seatWorktree(DIR);
 
 // #7754: the integration head is the orchestrator's LOCAL main, which this linked worktree already
 // holds as the ref `main`; origin/main trails it whenever integration commits are unpushed.
