@@ -16,7 +16,7 @@
 // re-matching the NEW runner's turn number (the 09:47 false alarm was exactly that orphan).
 //
 //   node bin/turn-watchdog.mjs <stampFile> <errFile> <windowMs> <session> <project> <hubUrl> <transcriptDir> <workDir> [stallFile]
-import { readFileSync, statSync, readdirSync } from "node:fs";
+import { readFileSync, writeFileSync, statSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { hostId } from "../lib/project.mjs";
 import { signedPost } from "../hooks/lib/api.mjs";
