@@ -2,14 +2,19 @@
 // a plain click opens a preview that the next preview replaces, and only an explicit pin
 // makes a tab permanent (split-open.ts, lines 26 through 29). Pure, so "pinned tabs never
 // move" and "the dirty dot follows the draft" are unit-tested.
+export type TabView = "code" | "changes" | "graph";
+
+/** The graph tab's path (#7954): not a file, one pinned tab per scope, never read from disk.
+ *  The view is the editor, the live-editable diff vs HEAD, or the scope seen from above. */
+export const GRAPH_PATH = "@graph";
+
 export type CodeTab = {
   /** `${scope}:${path}` — scope is "project" or the seat name. The identity: the same path in
    *  two worktrees is two files and two tabs. */
   key: string;
   scope: string;
   path: string;
-  /** The orthogonal view: the editor, or the live-editable diff vs HEAD. */
-  view: "code" | "changes";
+  view: TabView;
   pinned: boolean;
   dirty: boolean;
   /** Orca open-file.ts:124-128, per-tab: the file moved on disk under this tab's unsaved work.
@@ -33,7 +38,7 @@ export function openInTabs(
   activeKey: string | null,
   scope: string,
   path: string,
-  view: "code" | "changes",
+  view: TabView,
 ) {
   const key = tabKey(scope, path);
   const existing = tabs.find(t => t.key === key);
@@ -51,6 +56,24 @@ export function openInTabs(
     };
   }
   return { tabs: [...tabs, { key, scope, path, view, pinned: false, dirty: false }], activeKey: key };
+}
+
+export const isGraphTab = (tab: CodeTab): boolean => tab.view === "graph";
+
+/** What the strip prints for a tab: the file's base name, or the word graph. */
+export function tabLabel(tab: CodeTab): string {
+  return isGraphTab(tab) ? "graph" : (tab.path.split("/").pop() ?? tab.path);
+}
+
+/** The scope's graph tab: activated when it exists, else appended PINNED (a graph is never a
+ *  preview the next click replaces). Switching scope opens that scope's own graph tab. */
+export function openGraphTab(tabs: CodeTab[], scope: string) {
+  const key = tabKey(scope, GRAPH_PATH);
+  if (tabs.some(t => t.key === key)) return { tabs, activeKey: key };
+  return {
+    tabs: [...tabs, { key, scope, path: GRAPH_PATH, view: "graph" as const, pinned: true, dirty: false }],
+    activeKey: key,
+  };
 }
 
 /** Pin toggles permanence; unpinning is allowed and the tab simply becomes the preview again. */

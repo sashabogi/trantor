@@ -3,7 +3,8 @@
 // not duplicating them, so the three surfaces cannot drift apart. Widths: 300 for Files/Git/
 // Sessions, 440 for Chat; the seat scope selector sits at the bottom and feeds tree, editor, and git.
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ChevronDown, FolderTree, GitBranch, History, MessageSquare } from "lucide-react";
+import { ChevronDown, FolderTree, GitBranch, History, MessageSquare, Network } from "lucide-react";
+import { GRAPH_PATH } from "./codeTabs";
 import type { Card, HubClient, Peer } from "../../shared/api/client";
 import { localSessions } from "../../shared/api/client";
 import { BrandGlyph } from "../../shared/Avatar";
@@ -504,12 +505,12 @@ export function ModePane({ client, project, seat, onSeat, onOpenFile }: {
           The raised face says which copy the tree, editor, and git are reading; the menu lists
           the project checkout and every seat with its changed-file count. */}
       {(mode === "files" || mode === "git") && (
-        <div className="relative shrink-0 border-t border-tr-edge px-3 py-2">
+        <div className="relative flex shrink-0 items-center gap-1.5 border-t border-tr-edge px-3 py-2">
           <button
             type="button"
             onClick={() => setScopeOpen(o => !o)}
             title="Which checkout the tree, editor, and git read"
-            className="flex w-full items-center gap-2 rounded-[8px] border border-tr-edge bg-white/[0.03] px-2.5 py-[6px] text-[12px] text-tr-text hover:bg-white/[0.05]"
+            className="flex min-w-0 flex-1 items-center gap-2 rounded-[8px] border border-tr-edge bg-white/[0.03] px-2.5 py-[6px] text-[12px] text-tr-text hover:bg-white/[0.05]"
           >
             <span className="text-[10.5px] text-tr-muted">scope</span>
             <span className="tr-mono min-w-0 flex-1 truncate text-left text-[11.5px]">
@@ -519,6 +520,19 @@ export function ModePane({ client, project, seat, onSeat, onOpenFile }: {
               <span className="tr-mono shrink-0 text-[10.5px] text-tr-doing">{seatCount(seat)} changed</span>
             )}
             <ChevronDown size={11} strokeWidth={2.5} className="shrink-0 text-tr-muted" />
+          </button>
+          {/* The graph chip (#7954): the same scope, seen from above. It rides the scope picker so
+              the graph inherits which copy the tree and editor read. */}
+          <button
+            type="button"
+            data-testid="graph-chip"
+            onClick={() => onOpenFile(GRAPH_PATH)}
+            title="The file graph of this scope"
+            aria-label="Open the file graph"
+            className="flex shrink-0 items-center gap-1 rounded-[8px] border border-tr-edge bg-white/[0.03] px-2 py-[6px] text-[11.5px] text-tr-muted hover:bg-white/[0.05] hover:text-tr-text"
+          >
+            <Network size={12} strokeWidth={1.75} />
+            <span>graph</span>
           </button>
           {scopeOpen && (
             <div className="absolute bottom-full left-3 right-3 z-10 mb-1 overflow-hidden rounded-lg border border-tr-edge bg-tr-panel shadow-lg">

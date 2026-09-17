@@ -10,7 +10,8 @@ import { draftForget, draftLoad, draftPersist, fileStat, readFile, readFileAtHea
 import { CodeView } from "./CodeView";
 import { ChangesView } from "./ChangesView";
 import { decideReload, type FileStat } from "./liveReload";
-import { closeTab, markDirty, markExternalMutation, openInTabs, togglePin, type CodeTab } from "./codeTabs";
+import { closeTab, GRAPH_PATH, markDirty, markExternalMutation, openGraphTab, openInTabs, tabLabel, togglePin, type CodeTab, type TabView } from "./codeTabs";
+import { GraphView } from "./GraphView";
 import { diskSignature, externalMutationOnLoad } from "./tabGuard";
 import {
   dropDocument,
@@ -29,9 +30,7 @@ import { listen } from "@tauri-apps/api/event";
 
 const trace = (line: string) => { invoke("app_log", { line }).catch(() => {}); };
 
-type ViewMode = "code" | "changes";
-
-const baseName = (p: string) => p.split("/").pop() ?? p;
+type ViewMode = TabView;
 
 export function Files({ project, lens, onLens, path, seat }: {
   client: HubClient;
@@ -187,6 +186,15 @@ export function Files({ project, lens, onLens, path, seat }: {
     setActiveKey(nextKey);
   };
 
+  // The scope's graph tab (#7954): pinned, keyed by scope, so the footer's scope switch swaps
+  // the graph the way it swaps the tree.
+  const openGraph = (scope: string) => {
+    stashDraft();
+    const { tabs: next, activeKey: nextKey } = openGraphTab(tabs, scope);
+    setTabs(next);
+    setActiveKey(nextKey);
+  };
+
   const activateTab = (key: string) => {
     if (key === activeKey) return;
     stashDraft();
@@ -194,15 +202,18 @@ export function Files({ project, lens, onLens, path, seat }: {
   };
 
   // The Files column (AppShell) opens paths from the tree: a preview open under this scope.
+  // GRAPH_PATH is the ModePane footer's graph chip, not a file.
   useEffect(() => {
     if (!path) return;
-    openPath(seat ?? "project", path, "code");
+    if (path === GRAPH_PATH) openGraph(seat ?? "project");
+    else openPath(seat ?? "project", path, "code");
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [path, seat]);
 
   // Load the active tab's documents. body/head reset per tab; the draft survives in the store.
+  // A graph tab has no document: the same reset, and nothing is read.
   useEffect(() => {
-    if (!activeTab) { hydratedKeyRef.current = null; setBody(null); setHead(null); setError(null); setDraftState(""); setSaved(false); return; }
+    if (!activeTab || activeTab.view === "graph") { hydratedKeyRef.current = null; setBody(null); setHead(null); setError(null); setDraftState(""); setSaved(false); return; }
     setBody(null); setHead(null); setError(null); setSaved(false);
     // setDraftState, NOT setDraft: the setter below also records the value as the tab's kept
     // draft, and recording "" for a tab with nothing kept is what made reload() adopt "" over the
@@ -218,7 +229,7 @@ export function Files({ project, lens, onLens, path, seat }: {
   // The open file follows the disk via fs watch events instead of polling.
   // decideReload (7 legs, UNTOUCHED) decides reload vs conflict vs none.
   useEffect(() => {
-    if (!activeTab) return;
+    if (!activeTab || activeTab.view === "graph") return;
     let alive = true;
     const tabPath = activeTab.path;
     const tabScope = activeTab.scope;
@@ -313,9 +324,12 @@ export function Files({ project, lens, onLens, path, seat }: {
   };
 
   const dirty = body !== null && draft !== body.text;
-  const sub = activePath
-    ? `${activeScope === "project" ? "project" : `seat/${activeScope}`} · ${activePath}${body ? ` · ${body.bytes.toLocaleString()} bytes` : ""}`
-    : "pick a file in the sidebar";
+  const scopeLabel = activeScope === "project" ? "project" : `seat/${activeScope}`;
+  const sub = activeView === "graph"
+    ? `${scopeLabel} · graph`
+    : activePath
+      ? `${scopeLabel} · ${activePath}${body ? ` · ${body.bytes.toLocaleString()} bytes` : ""}`
+      : "pick a file in the sidebar";
   const visibleTabs = tabs.filter(t => t.scope === (seat ?? "project"));
 
   return (
@@ -370,7 +384,7 @@ export function Files({ project, lens, onLens, path, seat }: {
               >
                 <span className={`h-[6px] w-[6px] shrink-0 rounded-full ${t.dirty ? "bg-tr-warn" : "bg-transparent"}`}
                       data-testid={`dirty-${t.key}`} />
-                <span className="tr-mono min-w-0 flex-1 truncate">{baseName(t.path)}</span>
+                <span className="tr-mono min-w-0 flex-1 truncate">{tabLabel(t)}</span>
                 <button
                   type="button"
                   onClick={e => { e.stopPropagation(); setTabs(ts => togglePin(ts, t.key)); }}
@@ -431,7 +445,13 @@ export function Files({ project, lens, onLens, path, seat }: {
         {error && <div className="tr-mono px-1 text-[12px] text-tr-danger">{error}</div>}
 
         <div className="min-h-0 flex-1 overflow-hidden rounded-xl border border-tr-edge bg-[#101013] p-1.5">
-          {!activePath || !body ? (
+          {activeView === "graph" ? (
+            <GraphView
+              project={project}
+              seat={activeScope === "project" ? null : activeScope}
+              onOpen={p => openPath(activeScope, p, "code")}
+            />
+          ) : !activePath || !body ? (
             <div className="flex h-full items-center justify-center">
               <div className="tr-card-ghost max-w-[440px] px-6 py-5 text-center text-[12.5px] leading-relaxed">
                 {activePath
