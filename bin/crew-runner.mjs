@@ -353,6 +353,21 @@ const RETRY_MS = (() => {
 // #7756: while an ask awaits its answer the contract's wake stays owed but is NOT redelivered —
 // the answer (re = the ask's id, or any direct word from the assigner) is what releases it.
 let awaitingAsk = null;
+// The bus is the record of a turn that ended by ASKING: an open kind:ask contract from this
+// session. deliverWake judges each clean wake turn against /contracts — an open ask renames the
+// ledger row "asked" and HOLDS the wake (no failure count, no backoff, no park) until the answer.
+let turnAsk = null;
+async function askJudge() {
+  try {
+    const r = await api(`/contracts?session=${encodeURIComponent(SESSION)}&project=${encodeURIComponent(PROJ)}`);
+    // abandonedContracts included on purpose: an ask to a gone-quiet assigner is exactly the ask
+    // that must keep holding, and the hub files those rows under their own key (#7079).
+    const rows = [...(r?.contracts || []), ...(r?.abandonedContracts || [])];
+    const open = rows.filter(c => c.kind === "ask" && !c.answered);
+    turnAsk = open.length ? { id: open[open.length - 1].id, to: String(open[open.length - 1].to || "") } : null;
+    return turnAsk ? "asked" : null;
+  } catch { return null; }
+}
 function savePending(wake, bcast) {
   try {
     // the seen-set (#7778) and a held ask (#7756) keep the file alive even with both queues empty:
@@ -1345,6 +1360,7 @@ function askedExcerpt(message) {
     });
     const stopDutyNudgeWatcher = startDutyNudgeWatcher(dutyPlan, tStart);
     let ec;
+    turnAsk = null;   // #7756: the judge reads THIS turn's ending, never a previous turn's ask
     const stateStep = !stateSkip("wake", card);
     try {
       ec = stateStep
@@ -1356,7 +1372,7 @@ function askedExcerpt(message) {
           // dies quietly (§4.6).
           observation: [stateObservation, wakeText, ctxText, againText + freshText].filter(Boolean).join("\n"),
         })
-        : await runTurn(prompt, fresh, deliveryFails ? `${trigger} (redelivery)` : trigger);
+        : await runTurn(prompt, fresh, deliveryFails ? `${trigger} (redelivery)` : trigger, { judgeOutcome: askJudge });
     }
     finally { stopDutyNudgeWatcher(); }
     const secs = Math.round((Date.now() - tStart) / 1000);
@@ -1438,6 +1454,14 @@ function askedExcerpt(message) {
       await notifyAssigners(assigners,
         `⚠️ your contract FAILED on ${SESSION} (exit ${ec}, ${reason}) · retrying in ${Math.round(wait / 1000)}s · asked: "${asked}"`);
       log(`\x1b[31m${pendingWake.length} message(s) still UNDELIVERED — next attempt in ${Math.round(wait / 1000)}s\x1b[0m`);
+    } else if (turnAsk) {
+      // #7756: a clean exit that ASKED is not "done". The wake stays owed — queued on disk with
+      // the ask's id, so a restart keeps holding — and the failure ladder never sees it. The
+      // assigner is NOT notified here: the kind:ask message itself is already that notification.
+      awaitingAsk = turnAsk; turnAsk = null;
+      savePending(pendingWake, pendingBcast);
+      await reportHealthy();
+      log(`turn asked its assigner — holding the contract until ask #${awaitingAsk.id} is answered`);
     } else if (lastEmptyTurn) {
       // #7759: the turn exited 0 but was HOLLOW — a banner is not work. The wake is NOT
       // consumed: the queue is kept and the ladder retries, and the assigner hears EMPTY,
