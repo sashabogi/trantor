@@ -1,8 +1,8 @@
 #!/usr/bin/env node
-// `trantor connect` relay-env drill (#7893). connect used to build the relay entry with `||=`, so an
-// entry written by an older connect (kimi's was {RELAY_AGENT: kimi} only) was never refreshed, and
-// no CLI carried RELAY_URL/RELAY_PROJECT — an MCP spawned with a scrubbed env had nothing to
-// resolve from. Every case runs in a temp HOME + temp bus dir with stub CLIs on PATH.
+// `trantor connect` relay-env drill (#7893, #7938). connect used to build the relay entry with `||=`, so an
+// entry written by an older connect (kimi's was {RELAY_AGENT: kimi} only) was never refreshed — an MCP
+// spawned with a scrubbed env had nothing to resolve from. Every case runs in a temp HOME + temp bus
+// dir with stub CLIs on PATH; the kimi-code cases (#7938) run entirely inside that fake HOME too.
 import { spawnSync } from "node:child_process";
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, chmodSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -128,6 +128,49 @@ console.log("# trantor connect — relay entry env stamp + refresh (#7893)");
   const env = JSON.parse(readFileSync(join(t.home, ".config/opencode/opencode.json"), "utf8"))?.mcp?.relay?.environment || {};
   ok("opencode's environment carries no project/hub stamp (hosted seats keep ambient env)",
     !("RELAY_URL" in env) && !("RELAY_PROJECT" in env) && env.RELAY_AGENT_FALLBACK === "opencode", JSON.stringify(env));
+  rmSync(t.work, { recursive: true, force: true });
+}
+
+// 6. kimi-code (#7938): a second kimi install reads ~/.kimi-code/mcp.json — same relay shape,
+// detected by config.toml presence (existsSync only; the config itself is never read).
+{
+  const t = setup(["kimi"], {
+    ".kimi-code/config.toml": "# kimi-code config — its presence is the signal; connect never reads it\n",
+    ".kimi-code/mcp.json": { mcpServers: { relay: { command: "node", args: ["/old/mcp.mjs"], env: { RELAY_URL: "http://127.0.0.1:4477", CUSTOM: "keep" } } } },
+  });
+  const r = t.run();
+  const env = relayEnvOf(t.home, ".kimi-code/mcp.json");
+  ok("the #7938 incident shape: kimi-code's hard-coded 127.0.0.1 hub is refreshed to the pin",
+    env?.RELAY_URL === PIN, JSON.stringify(env));
+  ok("kimi-code gets the same kimi stamp — agent yes, project never — and keeps user keys",
+    env?.RELAY_AGENT === "kimi" && env?.CUSTOM === "keep" && !("RELAY_PROJECT" in env), JSON.stringify(env));
+  ok("connect names the kimi-code file it wrote", /kimi-code\s+wired.*\.kimi-code\/mcp\.json/s.test(r.stdout), r.stdout);
+  rmSync(t.work, { recursive: true, force: true });
+}
+
+// 7. detection is config-driven: no ~/.kimi-code/config.toml → its mcp.json is not ours to touch,
+// and the divergent hub it still carries is warned about, not silently ignored.
+{
+  const t = setup(["kimi"], { ".kimi-code/mcp.json": { mcpServers: { relay: { env: { RELAY_URL: "http://127.0.0.1:9" } } } } });
+  const r = t.run();
+  ok("without config.toml the kimi-code file is left untouched",
+    relayEnvOf(t.home, ".kimi-code/mcp.json")?.RELAY_URL === "http://127.0.0.1:9");
+  ok("the untouched file's divergent hub draws a warning", /WARN/.test(r.stdout) && /127\.0\.0\.1:9/.test(r.stdout), r.stdout);
+  rmSync(t.work, { recursive: true, force: true });
+}
+
+// 8. the kimi binary is gone but its old config remains: kimi-code still wires (config.toml is
+// the trigger, not the binary), and the orphaned file is named with the hub it is stuck on.
+{
+  const t = setup([], {
+    ".kimi/mcp.json": { mcpServers: { relay: { env: { RELAY_URL: "http://127.0.0.1:4477" } } } },
+    ".kimi-code/config.toml": "# presence only\n",
+  });
+  const r = t.run();
+  ok("kimi-code wires with no kimi binary on PATH",
+    relayEnvOf(t.home, ".kimi-code/mcp.json")?.RELAY_URL === PIN);
+  ok("the orphaned ~/.kimi config is warned about, neither clobbered nor hidden",
+    /WARN/.test(r.stdout) && /127\.0\.0\.1:4477/.test(r.stdout) && relayEnvOf(t.home, ".kimi/mcp.json")?.RELAY_URL === "http://127.0.0.1:4477", r.stdout);
   rmSync(t.work, { recursive: true, force: true });
 }
 

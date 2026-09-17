@@ -110,15 +110,28 @@ if (has("gemini")) {
   }), p);
 }
 
-// ---- Kimi CLI ----  (same refresh: the stale entry that caused #7893 was {RELAY_AGENT: kimi} only)
-if (has("kimi")) {
-  const p = join(homedir(), ".kimi", "mcp.json");
-  report("kimi", patchJson(p, d => {
-    d.mcpServers ||= {};
-    d.mcpServers.relay ||= { command: "node", args: [MCP], env: {} };
-    d.mcpServers.relay.env = { ...d.mcpServers.relay.env, ...relayEnv("kimi") };
-    if (HAS_GRAFT) d.mcpServers.graft ||= { command: GRAFT, args: ["mcp"] };
-  }), p);
+// ---- Kimi CLI + kimi-code ----  (same refresh: the stale entry that caused #7893 was {RELAY_AGENT: kimi} only)
+// kimi-code is a separate install reading ~/.kimi-code/mcp.json — wiring only the old file left the
+// running kimi seat on a hard-coded stale hub (#7938). Same shape and stamp; the dir is detected by
+// config.toml presence — existsSync only, the config itself is never read.
+const kimiRelay = (cli, p) => report(cli, patchJson(p, d => {
+  d.mcpServers ||= {};
+  d.mcpServers.relay ||= { command: "node", args: [MCP], env: {} };
+  d.mcpServers.relay.env = { ...d.mcpServers.relay.env, ...relayEnv("kimi") };
+  if (HAS_GRAFT) d.mcpServers.graft ||= { command: GRAFT, args: ["mcp"] };
+}), p);
+const kimiPaths = [join(homedir(), ".kimi", "mcp.json"), join(homedir(), ".kimi-code", "mcp.json")];
+const kimiWritten = new Set();
+if (has("kimi")) { kimiRelay("kimi", kimiPaths[0]); kimiWritten.add(kimiPaths[0]); }
+if (existsSync(join(homedir(), ".kimi-code", "config.toml"))) { kimiRelay("kimi-code", kimiPaths[1]); kimiWritten.add(kimiPaths[1]); }
+// A kimi-family config this run did NOT write still names a hub of its own; if it disagrees with
+// the pin, say so — one CLI of the pair would keep registering on a different bus (#7938).
+for (const p of kimiPaths) {
+  if (kimiWritten.has(p) || !existsSync(p)) continue;
+  try {
+    const u = JSON.parse(readFileSync(p, "utf8"))?.mcpServers?.relay?.env?.RELAY_URL;
+    if (u && u !== URL_) report("kimi", `WARN: ${p} still points at ${u} — re-run connect or refresh it by hand`);
+  } catch {}
 }
 
 // ---- OpenCode ----
