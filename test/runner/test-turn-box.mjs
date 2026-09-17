@@ -67,6 +67,9 @@ echo 'the runner can move on to its next wake without a redelivery ladder or a p
       return exists;
     },
     AGENT: "kimi", PROJ: "box-drill", SESSION: "kimi:box-drill", HUB: "http://127.0.0.1:1",
+    // module consts the extracted runTurn reads (#7777): this sandbox launches with no CREW_EFFORT,
+    // so the effort record is null and its flag renders as the empty string — byte-identical command.
+    EFFORT: null, EFFORT_FLAG: { flag: "", text: "" },
     TURN_DIR: work, ERRF: join(work, "err.txt"), TRANSCRIPT_DIR: work, RUNNER_ID: "drill",
     MODEL: "", STATE_SCHEMA_FILE: "", TURN_MAX_MS: maxMs, TURN: 0, sid: "", inFollowUp: true,
   });
