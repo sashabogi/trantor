@@ -1363,14 +1363,16 @@ async function resolveWakeCard(messages, { session }) {
     // #7061: bound by SHAPE, not position, so an order opening with what shipped binds the right card.
     // #7763: a message-card (or phantom) citation never binds — the seat's own newest card does.
     const card = await resolveWakeCard(wakeForTurn, { session: SESSION });
-    // #7754: the contract carries the integration head as `base: <sha>` — the wake's own line if it
-    // has one, else local main. A sha this worktree cannot resolve is never worked from origin/main:
-    // the card goes to blocked and the assigner is told, and no model turn is spent on it.
+    // #7754: a `base:` sha this worktree cannot resolve is never worked from origin/main — the card
+    // goes to blocked, the assigner is told, and no model turn is spent. The check keeps the id the
+    // wake cites in its text: #7763's rebinding covers confirmed message-card ids only, never a
+    // card cited in the text, so the unresolvable-base branch blocks the cited card.
+    const baseCard = card || wakeCard(wakeForTurn, { session: SESSION });
     const base = contractBase(wakeForTurn) || localMainHead();
-    if (base && card && !resolvesHere(base)) {
-      const text = `cannot resolve base ${base} in ${TURN_DIR} (git cat-file -e failed) — #${card} moved to blocked; push or fetch that sha, or name one this worktree can reach`;
+    if (base && baseCard && !resolvesHere(base)) {
+      const text = `cannot resolve base ${base} in ${TURN_DIR} (git cat-file -e failed) — #${baseCard} moved to blocked; push or fetch that sha, or name one this worktree can reach`;
       log(text);
-      await api("/task/update", { id: card, status: "blocked", note: text, by: SESSION }).catch(() => {});
+      await api("/task/update", { id: baseCard, status: "blocked", note: text, by: SESSION }).catch(() => {});
       const owed = assigners.map(a => a.from).filter(f => f && f !== SESSION);
       for (const to of (owed.length ? owed : ["all"]))
         await api("/send", { from: SESSION, to, text, project: PROJ, kind: "alert" }).catch(() => {});
