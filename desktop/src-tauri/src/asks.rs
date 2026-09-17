@@ -22,6 +22,10 @@ struct AskSidecar {
     project: String,
     cwd: String,
     tool_use_id: Option<String>,
+    #[serde(default)]
+    kind: String,
+    #[serde(default)]
+    ask: Option<AskDeclared>,
     questions: Vec<AskQuestion>,
     #[serde(default)]
     event: String,
@@ -29,6 +33,24 @@ struct AskSidecar {
     visible_ts: Option<u64>,
     #[allow(dead_code)]
     ts: u64,
+}
+
+/// The declared ask (#7776): the question and its options as offered, passed through untouched
+/// so the chips render exactly what the session declared.
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+struct AskDeclared {
+    question: String,
+    #[serde(default)]
+    options: Vec<AskDeclaredOption>,
+    #[serde(default)]
+    multi: bool,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+struct AskDeclaredOption {
+    label: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    description: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
@@ -56,6 +78,8 @@ pub struct OrchAsk {
     tool_use_id: Option<String>,
     open: bool,
     visible: bool,
+    kind: String,
+    ask: Option<AskDeclared>,
     questions: Vec<AskQuestion>,
     #[serde(skip_serializing)]
     ts: u64,
@@ -114,6 +138,8 @@ fn read_sidecar(
         tool_use_id: ask.tool_use_id,
         open: true,
         visible: ask.visible_ts.is_some() || ask.event == "PermissionRequest",
+        kind: ask.kind,
+        ask: ask.ask,
         questions: ask.questions,
         ts: ask.ts,
         visible_ts: ask.visible_ts,
@@ -806,6 +832,39 @@ mod tests {
     }
 
     #[test]
+    fn declared_ask_and_kind_pass_through_and_older_sidecars_carry_none() {
+        let dir = temp_dir();
+        let project_for = |_: &AskSidecar| Some("trantor".to_string());
+        let legacy = write_ask(&dir, "sid-legacy", Some("tool-legacy"), "/tmp/trantor");
+        let mut declared_value: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&legacy).unwrap()).unwrap();
+        declared_value["session_id"] = serde_json::json!("sid-declared");
+        declared_value["kind"] = serde_json::json!("AskUserQuestion");
+        declared_value["ask"] = serde_json::json!({
+            "question": "Ship it?",
+            "options": [{ "label": "Yes", "description": "Proceed" }, { "label": "No" }],
+            "multi": true
+        });
+        fs::write(dir.join("sid-declared.json"), declared_value.to_string()).unwrap();
+        let found = scan_with(&dir, project_for, |_| {}).unwrap();
+        let by_session = |sid: &str| found.values().find(|ask| ask.session_id == sid).unwrap();
+        let declared = by_session("sid-declared");
+        assert_eq!(declared.kind, "AskUserQuestion");
+        let ask = declared.ask.as_ref().unwrap();
+        assert_eq!(ask.question, "Ship it?");
+        assert!(ask.multi);
+        assert_eq!(ask.options.len(), 2);
+        assert_eq!(ask.options[1].description, None);
+        let emitted = serde_json::to_value(declared).unwrap();
+        assert_eq!(emitted["ask"]["options"][0]["label"], "Yes");
+        assert!(emitted["ask"]["options"][1].get("description").is_none());
+        let legacy_ask = by_session("sid-legacy");
+        assert_eq!(legacy_ask.kind, "");
+        assert!(legacy_ask.ask.is_none());
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
     fn temp_directory_reconciles_create_replace_and_delete() {
         let dir = temp_dir();
         let project_for = |_: &AskSidecar| Some("trantor".to_string());
@@ -887,6 +946,8 @@ mod tests {
             project: "untrusted".into(),
             cwd: "/dev/other/deep/path".into(),
             tool_use_id: None,
+            kind: String::new(),
+            ask: None,
             questions: Vec::new(),
             event: "PreToolUse".into(),
             visible_ts: None,
