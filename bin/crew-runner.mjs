@@ -511,6 +511,20 @@ async function notifyAssigners(pairs, text) {
   if (seen.size) log(`reported outcome to ${[...seen].join(", ")}`);
 }
 
+// #7759: bus activity is work. The hub's unified log already records sends and card moves/notes
+// with the actor (`by`), and GET /events filters by it — so the runner can see, with no new
+// endpoint, that the seat answered on the bus even when it printed nothing and touched no file.
+// Fail-open: an unreachable or older hub yields "no activity", the pre-fix behaviour.
+async function latestBusEventId() {
+  try { const r = await api("/events?limit=1"); return Number(r?.latest) || 0; } catch { return 0; }
+}
+async function busActivitySince(seq) {
+  try {
+    const r = await api(`/events?by=${encodeURIComponent(SESSION)}&since=${seq}&limit=500`);
+    return Array.isArray(r?.events) && r.events.some(e => Number(e?.id) > seq);
+  } catch { return false; }
+}
+
 async function reportHealthy() {
   if (consecFails === 0) return;        // already healthy — don't spam
   consecFails = 0;
@@ -639,6 +653,9 @@ async function runTurn(prompt, isFirst, trigger = "kickoff", opts = {}) {
   // #7759: the worktree snapshot the turn is judged against at its end — porcelain covers edits
   // AND new untracked files, which a HEAD-only comparison misses.
   const statusBefore = gitOut(["status", "--porcelain"], TURN_DIR);
+  // #7759: the bus event cursor the turn is judged against — anything the seat posts after this
+  // (relay_send, a card move or note) is bus activity, which counts as work.
+  const busSeqBefore = await latestBusEventId();
   // #6154: a pinned seat with no sid yet resumes as FRESH — the guard below fails open, because
   // a resume without an id must fall back to a new session, never to `next`'s bare resume shape.
   let cmd = (isFirst || ((cli.sid || cli.pinned) && !sid)) ? cli.first : cli.next;
@@ -785,9 +802,10 @@ exit $turn_exit`;
   // porcelain vs the turn-start snapshot, untracked included) nor said anything beyond CLI
   // chrome. State steps are exempt: their answer is the envelope, stderr silence is normal.
   const worktreeChanged = newCommit || gitOut(["status", "--porcelain"], TURN_DIR) !== statusBefore;
+  const busActive = await busActivitySince(busSeqBefore);
   lastEmptyTurn = !cut && realExit === 0 && effExit === 0 && !opts.state
-    && !worktreeChanged && !substantiveOutput(ownOut);
-  if (lastEmptyTurn) log("\x1b[33mexit 0 but the turn was EMPTY — no worktree change, no substantive output\x1b[0m");
+    && !worktreeChanged && !busActive && !substantiveOutput(ownOut);
+  if (lastEmptyTurn) log("\x1b[33mexit 0 but the turn was EMPTY — no worktree change, no substantive output, no bus activity\x1b[0m");
   if (realExit === 0 && looksLikeAuthDeath(ownOut, newCommit)) {
     effExit = 1;
     authHit = AUTH_MARKER_RE.exec(ownOut)[0];
@@ -1340,7 +1358,7 @@ function askedExcerpt(message) {
       if (deliveryFails >= 2) {
         retryAt = await parkSeat("empty-turn", pendingWake.length);
         await notifyAssigners(assigners,
-          `⛔ your contract is PARKED on ${SESSION} (empty-turn: two exit-0 turns with no worktree change or substantive output) · asked: "${asked}"`);
+          `⛔ your contract is PARKED on ${SESSION} (empty-turn: two exit-0 turns with no worktree change, substantive output or bus activity) · asked: "${asked}"`);
         lastTurnAt = Date.now();
         return;
       }
@@ -1348,7 +1366,7 @@ function askedExcerpt(message) {
       retryAt = Date.now() + wait;
       log(`\x1b[33mturn was EMPTY — wake not consumed, ${pendingWake.length} message(s) stay owed; retrying in ${Math.round(wait / 1000)}s\x1b[0m`);
       await notifyAssigners(assigners,
-        `🫥 EMPTY turn on ${SESSION} (exit 0, ${secs}s — no worktree change, no substantive output) · wake stays owed · retrying in ${Math.round(wait / 1000)}s · asked: "${asked}"`);
+        `🫥 EMPTY turn on ${SESSION} (exit 0, ${secs}s — no worktree change, no substantive output, no bus activity) · wake stays owed · retrying in ${Math.round(wait / 1000)}s · asked: "${asked}"`);
     } else {
       pendingWake = []; pendingBcast = []; deliveryFails = 0; retryAt = 0;
       savePending([], []);

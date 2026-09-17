@@ -52,6 +52,8 @@ echo 'the runner can move on to its next wake without a redelivery ladder or a p
     ...fs, ...classify, join, redactKeys, parseTurnTokens, withEnvFiles, setTimeout,
     process: { env: drillEnv({ HOME: work, PATH: `${bin}:${process.env.PATH}` }), execPath: process.execPath },
     homedir: () => work, gitOut: () => "unchanged-head", registerStatus: record,
+    // #7759 helpers, stubbed like gitOut: no hub in this sandbox, so bus activity reads as none.
+    latestBusEventId: async () => 0, busActivitySince: async () => false,
     banner: record, log: record, cmuxStatus: record, herdrAgent: record, killWatchdog: record,
     spawn: () => ({ unref: record }), telemetry: row => rows.push(row),
     spawnSync: (cmd, args, opts) => {

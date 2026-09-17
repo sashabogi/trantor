@@ -45,15 +45,32 @@ console.log("\n## the rules");
 }
 
 // ---- mock hub: hand out ONE direct contract, then stay silent forever --------------------------
+// The mock also keeps the hub's unified event log: POST /send appends a "message" event with the
+// actor, GET /events filters by `by` and `since` — the same contract the runner reads (#7759).
 const sends = [];
-let served = 0, handed = 0;
+const events = [];
+let eventSeq = 0;
+let handed = 0;
 const MSG = { id: 7, from: "sasha@mac", to: "", text: "contract: work card #7001 now", ts: Date.now() };
 const hub = http.createServer((req, res) => {
   let buf = ""; req.on("data", c => (buf += c));
   req.on("end", () => {
     const u = new URL(req.url, "http://x"), P = u.pathname;
     const reply = (o) => { res.writeHead(200, { "content-type": "application/json" }); res.end(JSON.stringify(o)); };
-    if (req.method === "POST" && P === "/send") { try { sends.push(JSON.parse(buf)); } catch {} return reply({ ok: true, id: sends.length }); }
+    if (req.method === "POST" && P === "/send") {
+      try {
+        const body = JSON.parse(buf);
+        sends.push(body);
+        events.push({ id: ++eventSeq, ts: Date.now(), type: "message", project: body.project || "", by: body.from || "" });
+      } catch {}
+      return reply({ ok: true, id: sends.length });
+    }
+    if (P === "/events") {
+      const since = Number(u.searchParams.get("since") || 0);
+      const by = u.searchParams.get("by") || "";
+      const out = events.filter(e => e.id > since && (!by || e.by === by));
+      return reply({ events: out, cursor: out.length ? out[out.length - 1].id : since, latest: eventSeq });
+    }
     if (P === "/inbox") return reply({ messages: [], cursor: 0 });
     if (P === "/lessons") return reply({ lessons: [] });
     if (P === "/policy") return reply({ links: [], autonomy: { "*": 1 } });
@@ -69,10 +86,10 @@ const HUB = `http://127.0.0.1:${hub.address().port}`;
 
 // ---- harness: the REAL runner + a fake `codex` ----------------------------------------------
 // banner: CLI chrome, exit 0, touches nothing — the hollow specimen. edit: writes a NEW file into
-// its cwd (the seat's git repo) every turn — real work. answer: prose past the substantive floor,
-// touches nothing (#7766). HOME and the repo are SIBLINGS: the runner's files never pollute it.
+// its cwd every turn — real work. answer: prose past the floor (#7766). reply: prints UNDER the
+// floor but posts one bus message mid-turn — relay work counts (#7759). HOME and repo are siblings.
 async function drill(mode, { waitMs = 11000 } = {}) {
-  sends.length = 0; handed = 0;
+  sends.length = 0; events.length = 0; eventSeq = 0; handed = 0;
   const root = mkdtempSync(join(tmpdir(), "tt-hollow-"));
   const HOME = join(root, "home");
   const REPO = join(root, "repo");
@@ -93,6 +110,10 @@ if grep -q "NEW BUS MESSAGE" "$P"; then
     echo "The gate passed on eab5766: 92 wake-policy assertions green, slop-gate clean, and the"
     echo "worktree holds only the two committed files. Nothing else moved during the turn, so"
     echo "the contract is satisfied and the card can move to testing with the counts attached."
+  fi
+  if [ "${mode}" = "reply" ]; then
+    node -e "fetch(process.env.RELAY_URL + '/send', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ from: 'codex:${PROJ}', to: 'sasha@mac', project: '${PROJ}', text: 'Replied on the bus.' }) }).catch(() => {})"
+    echo "Replied on the bus."
   fi
 fi
 echo "OpenAI Codex v2.3.4"
@@ -174,6 +195,22 @@ console.log("\n## a substantive answer is work");
   ok("#7759: the assigner hears done", r.sends.some(s => s.to === "sasha@mac" && /✅ done on/.test(s.text || "")));
   ok("#7759: the queue is cleared", !r.pendingLeft);
   ok("#7759: no park happened", !r.sends.some(s => /PARKED/.test(s.text || "")));
+}
+
+// ---- drill 4: a SHORT bus-only answer is work — the seat replied on the relay (#7759 gap) ------
+console.log("\n## bus activity is work");
+{
+  const r = await drill("reply");
+  ok("#7759: a turn that answered via relay_send completes and consumes the wake, however terse",
+    r.wakeTurns.length === 1, `got ${r.wakeTurns.length} wake turn(s)`);
+  ok("#7759: the assigner hears done, not EMPTY",
+    r.sends.some(s => s.to === "sasha@mac" && /✅ done on/.test(s.text || ""))
+    && !r.sends.some(s => s.to === "sasha@mac" && /EMPTY turn/.test(s.text || "")));
+  ok("#7759: the queue is cleared", !r.pendingLeft);
+  ok("#7759: no park happened", !r.sends.some(s => /PARKED/.test(s.text || "")));
+  const row = r.rows.find(x => x.trigger === "direct message");
+  ok("#7759: telemetry outcome completed, emptyTurn false",
+    row && row.outcome === "completed" && row.emptyTurn === false, JSON.stringify(row && { outcome: row.outcome, emptyTurn: row.emptyTurn }));
 }
 
 hub.close();
