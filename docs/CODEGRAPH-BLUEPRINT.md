@@ -129,3 +129,104 @@ zero LLM tokens: graft's wiring tier needs no key, and the `--deep` summaries ar
 **What the MVP explicitly does not do.** No node positions persisted, no heat decay, no
 attribution, no Unread. It draws the checkout's file graph, keeps it current with the watcher,
 and answers blast radius for the current diff. Everything else composes on top (§4, §5).
+
+## 3. Port or reuse: the Flare engine piece by piece
+
+Read from the clone at `.agent-bus-out/flare` (commit 5adc94b, 2026-09-13). The engine is
+`flare/shared/` (7398 lines over 29 files, pure TypeScript, no DOM) and the three views are
+`flare/src/components/{CanvasView,WheelView,DistrictsView}.tsx` (1403, 972 and 502 lines) over
+`flare/src/graph/{flowLayout,renderModel,lensColor,lenses}.ts`. The verdict per piece is the
+first word; the reason follows.
+
+**REUSE: scanner, parser, resolver (`scanner.ts` 132, `parser.ts` 523, `resolver.ts` 282).**
+Flare walks the tree with the `ignore` package over `.gitignore`, strips comments and pulls
+imports with six regexes (`JS_IMPORT_FROM_RE`, bare import, export-from, `require`, dynamic
+`import()`, plus two Python forms, `parser.ts` L172-180, L322-323), then resolves specifiers
+through tsconfig `paths` (its own JSONC scanner, `parseJsonc` L79, written because a
+regex-stripped tsconfig once "quietly ate `paths` and with it every alias edge"), workspace
+packages, extension and index guessing, and Python `__init__`. graft already does all three
+with a parser rather than regexes and produced the numbers in §1. The risk the card named,
+resolver correctness, is measured rather than assumed: of 2143 import specifiers graft
+extracted here, 882 are relative (`./`, `../`) and 864 became distinct file→file `imports`
+edges in `wiring.json`, all at confidence `extracted`. The 18-specifier gap, spot-checked, is
+repeat imports of one target from one file (counted once as an edge) and non-code assets
+(`./assets/react.svg`); no code import checked failed to resolve. Trantor has no tsconfig
+`paths` aliases and no workspace packages, which is the case where Flare's resolver earns its
+282 lines and graft has nothing to prove. What graft does not compute and Flare does: per-file
+`complexity` (a branch-keyword count over comment-stripped source, `parser.ts` L313) and
+`todos` (`countTodos`, L314). Those are two small functions the Rust sidecar ports when the
+Hotspots lens lands (§5), not before.
+
+**PORT, small: the graph algebra in `graph.ts` (407).** `GraphBuilder` keeps parsed files and
+an edge map keyed `"source\ntarget"` with weight = referenced-binding count, and offers
+`setAll` (L71), `apply(changed, removed) → GraphPatch` (L85), `neighbors` (L136),
+`blastRadius` (reverse BFS, L148), `withBlastRadius(seeds, edges)` (L296, seeds included in
+the result), and `findCycles` (iterative Tarjan SCC, L321, components of size > 1 only).
+Node derivation adds `cluster` (top directory, or the second level under a "container" dir
+such as `apps/` that has no code of its own), `isTest`/`testedBy` (path heuristics, L10),
+`orphan` (non-test, nothing imports it, not entry-like, L19), `doc` (prose files stay on the
+graph for their links but are exempt from every judgement). All of it is under 200 lines of
+plain graph code and ports to the Rust sidecar (§2) over graft's collapsed file edges in an
+afternoon: SCC and reverse BFS over 522 nodes and 2278 edges are microseconds. `graft blast`
+already answers blast-for-a-diff (§1) and stays the gate's tool; the per-node blast radius
+the lens colours by is one reverse BFS per node, which Flare also does eagerly
+(`insights.ts` `allBlastRadii`, L236). Edge weight is the one thing dropped: graft's wiring
+edges carry no binding-reference count, and no lens in #6878 reads it.
+
+**SKIP for the MVP: `GraphPatch` (`types.ts` L96-103) and the chokidar path.** Flare patches
+because its renderer owns node positions and a full graph replacement would reset them;
+`electron/session.ts` L412-445 re-parses each changed file and pushes the delta. Our React
+side receives 522 nodes and 2278 edges per rebuild (§2), diffs by id in a `useMemo`, and keeps
+whatever positions it holds; that is the same outcome with no second wire format. The patch
+shape comes back with heat decay (#6878 item 4), when "what changed in this refresh" becomes
+a signal the view draws rather than an optimisation.
+
+**PORT, as formulas: lens scoring in `insights.ts` (576) and `review.ts` (145), fed by Trantor's
+own data.** The formulas are small and worth keeping verbatim: hotspot = `complexity ×
+(min(gitChurn, 50) + sessionChurn × 3 + 1)` normalised to 0-100 (`insights.ts` L258, L332);
+unread = `changedAt > 0 && readAt < changedAt`, with the comment that only code changed this
+session can be unread, "on a repo you just opened, 100% unread would be true and useless"
+(L328-330); `reviewTier` gives `careful` when risk ≥ 60, blast ≥ 10, in a cycle with a
+dependent, or uncovered with fan-in ≥ 3; `read` when risk ≥ 30, blast ≥ 3, complexity ≥ 40 or
+fan-in ≥ 3; else `skim`, each with its reasons as strings (`review.ts` L52-78). The inputs are
+where Trantor differs and wins: `gitChurn` from `git log --format= --name-only` per path, which
+`project_changes_sync` already shells for numstat (§1); `sessionChurn` from `project_changes`
+rows per seat; `changedAt` from the watcher and from `file.claim` events, both timestamped and
+both attributed to a seat by construction. Coverage (`coverage.ts`, 100 lines, an lcov reader)
+ports when the Coverage lens lands.
+
+**DO NOT PORT: attribution, bursts, conflicts, shadow snapshots (`attribution.ts` 232,
+`activity.ts` 184, `conflicts.ts` 678, `session.ts` snapshot timers).** Flare's watcher "sees a
+file change; it does not see who changed it", so `attribution.ts` L1-40 builds a five-rung
+ladder (one recorded MCP intent, several intents separated by channel talk, the channel
+alone, the board, the only agent running, else `mixed`) and `conflicts.ts` spends 678 lines
+deciding when two agents crossed. A burst is a batch of writes attributed by that ladder,
+verified by shell commands observed in Flare's own terminals (`activity.ts` L116-121), with a
+git shadow snapshot taken 1.5s after the burst as the revert target (`session.ts` L460). None
+of that has a job here: each seat writes in its own worktree, so `project_changes` rows carry
+the seat as a fact, not a guess; a seat's burst is its uncommitted diff or the commits it
+landed for a card; verification is the card's testing note with `verified at <sha>`; the
+revert target is the last commit on the seat branch that carried such a note, which git holds
+already. #6878 item 3 (review bursts with intent, risk tier, revert-to-last-verified) is
+therefore a query over things Trantor records, plus `reviewTier` from the paragraph above.
+
+**PORT the ideas, not the code: the three views.** `CanvasView` draws file cards as DOM
+nodes with one SVG for edges (L1139), laid out by `hierarchicalFlowLayout` (`flowLayout.ts`
+L204): clusters become blocks ordered left-to-right by inter-cluster dependency depth over
+the SCC-condensed graph, longest-path layering inside each block, barycenter sweeps to cut
+crossings, deterministic for the same graph; dragged positions persist through
+`positions:load/save` into `~/.flare` (`electron/core.ts` L468-470). `WheelView` is a radial
+SVG: clusters as arcs, files as ticks, edges as chords. `DistrictsView` is a squarified
+treemap (`squarify` L31), area by size, colour by lens, "treemap position is fixed by size,
+selection is the affordance" (L266). The layout function is 10.7K of TypeScript with no Flare
+dependency beyond `findCycles` and can be vendored as-is under the desktop app; the views
+themselves are rewritten against Trantor's primitives and palette (§4), because their 2900
+lines are mostly Flare's own drag, drill-in, agent-ring and notice machinery, none of which
+matches the data we have. Storage of positions follows the app's existing per-machine prefs
+pattern (`desktop/src/features/workspace/prefs.ts`), keyed by project, never the hub.
+
+**Net.** Reused: three files and the hard part (scanner, parser, resolver), by pointing at
+graft. Ported: about 200 lines of graph algebra, about 150 lines of scoring formulas, and one
+10.7K layout file vendored. Skipped: the patch protocol, chokidar, and 1300 lines of
+attribution and conflict guessing that Trantor's worktree-per-seat design makes unnecessary.
+Rewritten: the views, against the design system.
