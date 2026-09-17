@@ -2,7 +2,7 @@
 // seat must not be another terminal window the operator has to watch, so this screen folds duty
 // liveness and controls, open episodes, the stuck-mail ledger, and the hub's warn/gate policy map
 // into the app.
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Activity, ExternalLink, Link2, Minus, Plus, Power, ShieldCheck, Square, Unlink } from "lucide-react";
 import {
   dutyLogPath,
@@ -24,6 +24,7 @@ import { usePeers, stateOf } from "../../shared/presence";
 import { lasting } from "../../shared/rollup";
 import { dictGet } from "../../shared/dict";
 import { dutyActions, episodeCards, escalationLedger, LEVEL_LABEL, policyProjects, quietEvidence, type Episode } from "./model";
+import { blastFromLog, blastText, blastTier, claimCardId, fallbackCandidates, type BlastNote } from "../code/reviewTier";
 
 function agoS(ts: number) {
   if (!ts) return "never";
@@ -43,6 +44,25 @@ function eventText(e: HubEvent) {
 
 function eventSessions(e: HubEvent) {
   return Array.isArray(e.sessions) ? e.sessions.filter(Boolean) : [];
+}
+
+// #7971: the gate's card is the #<id> its claim cites, else the opening session's newest
+// doing/testing card whose log carries a blast line; no join, no line, never a guessed one.
+type GateBlast = { card: number; note: BlastNote };
+const gateKey = (g: HubEvent) => String(g.id ?? g.ts);
+const FALLBACK_CARDS_MAX = 5;
+
+async function resolveGateBlast(client: HubClient, gate: HubEvent): Promise<GateBlast | null> {
+  const cited = claimCardId(gate.claim ?? "");
+  const ids = cited !== null
+    ? [cited]
+    : await client.tasks(gate.project).then(cards => fallbackCandidates(gate.by ?? "", gate.project ?? "", cards).map(c => c.id)).catch((): number[] => []);
+  for (const id of ids.slice(0, FALLBACK_CARDS_MAX)) {
+    const task = await client.card(id).then(r => r.task).catch(() => null);
+    const note = task?.log ? blastFromLog(task.log) : null;
+    if (note) return { card: id, note };
+  }
+  return null;
 }
 
 function dutyCost(econ: Economics | null) {
@@ -147,6 +167,27 @@ export function Overseer({ client }: { client: HubClient }) {
   const actions = status ? dutyActions(messages, status.dutySession) : [];
   const gates = history.filter(e => e.type === "verify.gate.opened");
   const projects = status ? policyProjects(status) : [];
+
+  const [gateBlasts, setGateBlasts] = useState<Map<string, GateBlast | null>>(new Map());
+  const resolvingRef = useRef<Set<string>>(new Set());
+  const shownGateKeys = gates.slice(0, 8).map(gateKey).join(",");
+  useEffect(() => {
+    let alive = true;
+    const pending = gates.slice(0, 8).filter(g => !gateBlasts.has(gateKey(g)) && !resolvingRef.current.has(gateKey(g)));
+    if (!pending.length) return;
+    for (const g of pending) resolvingRef.current.add(gateKey(g));
+    Promise.all(pending.map(async g => [gateKey(g), await resolveGateBlast(client, g)] as const)).then(rows => {
+      for (const [k] of rows) resolvingRef.current.delete(k);
+      if (!alive) return;
+      setGateBlasts(prev => {
+        const next = new Map(prev);
+        for (const [k, v] of rows) next.set(k, v);
+        return next;
+      });
+    });
+    return () => { alive = false; };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [client, shownGateKeys]);
 
   const run = async (key: string, action: () => Promise<string>) => {
     setBusy(key);
@@ -278,9 +319,17 @@ export function Overseer({ client }: { client: HubClient }) {
             <div className="mt-3 flex flex-col gap-2">
               {gates.slice(0, 8).map(g => {
                 const sessions = eventSessions(g);
+                const blast = gateBlasts.get(gateKey(g)) ?? null;
+                const tier = blast ? blastTier(blast.note) : null;
                 return (
-                  <div key={g.id ?? g.ts} className="tr-card p-3.5">
+                  <div key={g.id ?? g.ts} className="tr-card p-3.5" data-testid="gate-card">
                     <div className="break-words text-[13px] leading-snug">{g.claim || g.detail || "verification gate"}</div>
+                    {blast && (
+                      <div className="mt-1 flex flex-wrap items-center gap-1.5 text-[12px] text-[var(--color-tr-muted)]" data-testid="gate-blast">
+                        <span>#{blast.card} · {blastText(blast.note)}</span>
+                        {tier === "careful" && <span className="tr-chip text-[var(--color-tr-warn)]" data-testid="gate-careful">careful</span>}
+                      </div>
+                    )}
                     <div className="mt-3 grid gap-2 md:grid-cols-2">
                       {[0, 1].map(i => (
                         <div key={i} className="rounded-md border border-[var(--color-tr-edge)] bg-black/10 p-2">

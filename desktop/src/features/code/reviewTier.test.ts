@@ -2,7 +2,7 @@
 // the dependents walk over the six-node fixture, and the blast line read back off a card note.
 import { describe, expect, it } from "vitest";
 import { SIX_NODE_GRAPH } from "./graph/fixture";
-import { blastTier, chipText, dependentsOf, fileReview, parseBlastLine, reviewTier, uncovered, type TierInput } from "./reviewTier";
+import { blastFromLog, blastText, blastTier, chipText, claimCardId, dependentsOf, fallbackCandidates, fileReview, parseBlastLine, reviewTier, uncovered, type TierInput } from "./reviewTier";
 
 const input = (over: Partial<TierInput> = {}): TierInput => ({
   path: "lib/x.ts",
@@ -113,5 +113,40 @@ describe("parseBlastLine · the note line hollow-move.mjs writes", () => {
     expect(blastTier({ kind: "measured", dependents: 3, changed: 1, unindexed: [] })).toBe("read");
     expect(blastTier({ kind: "measured", dependents: 2, changed: 1, unindexed: [] })).toBe("skim");
     expect(blastTier({ kind: "unavailable" })).toBeNull();
+  });
+});
+
+describe("the gate's card · the join the orchestrator ruled on #7971", () => {
+  it("takes the first #<id> the claim cites, and none when it cites nothing", () => {
+    expect(claimCardId("#7968 gated clean and cherry-picked")).toBe(7968);
+    expect(claimCardId("see #50 then #7")).toBe(50);
+    expect(claimCardId("the hub keeps blast")).toBeNull();
+  });
+
+  it("falls back to the opening session's newest doing/testing card in the project", () => {
+    const cards = [
+      { id: 1, project: "p", status: "doing", assignee: "kimi:p", updated: 10 },
+      { id: 2, project: "p", status: "testing", workedBy: "kimi:p", updated: 30 },
+      { id: 3, project: "p", status: "done", assignee: "kimi:p", updated: 40 },
+      { id: 4, project: "q", status: "doing", assignee: "kimi:p", updated: 50 },
+      { id: 5, project: "p", status: "doing", assignee: "glm:p", updated: 60 },
+    ];
+    expect(fallbackCandidates("kimi:p", "p", cards).map(c => c.id)).toEqual([2, 1]);
+    expect(fallbackCandidates("", "p", cards)).toEqual([]);
+  });
+
+  it("reads the newest blast line off a log and words it back as hollow-move did", () => {
+    const log = [
+      { text: "verified at abc1234\nblast: unavailable" },
+      { text: "no blast here" },
+      { text: "verified at def5678\nblast: 12 files depend on the 2 changed (package.json not in the graph)" },
+    ];
+    const note = blastFromLog(log);
+    expect(note).toMatchObject({ kind: "measured", dependents: 12 });
+    expect(note && blastText(note)).toBe("blast: 12 files depend on the 2 changed (package.json not in the graph)");
+    expect(blastFromLog([{ text: "verified at abc1234" }])).toBeNull();
+    expect(blastText({ kind: "not-in-graph", unindexed: ["package.json"] })).toBe("blast: not in the graph (package.json)");
+    expect(blastText({ kind: "no-changes", base: "3a26730" })).toBe("blast: no committed changes since 3a26730");
+    expect(blastText({ kind: "measured", dependents: 1, changed: 1, unindexed: [] })).toBe("blast: 1 file depends on the 1 changed");
   });
 });

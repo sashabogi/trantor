@@ -174,3 +174,39 @@ export function blastTier(note: BlastNote): ReviewTier | null {
     isTest: false,
   }).tier;
 }
+
+/** The gate's card, as the orchestrator ruled on #7971: the #<id> the claim cites first (claims
+ *  cite their card by convention), else the opening session's newest doing/testing card whose log
+ *  carries a blast line, else no line at all, never a guessed one. */
+export function claimCardId(claim: string): number | null {
+  const m = /#(\d+)(?![0-9])/.exec(claim);
+  return m ? Number(m[1]) : null;
+}
+
+export type GateCard = { id: number; project: string; status: string; assignee?: string; workedBy?: string; updated?: number; ts?: number };
+
+export function fallbackCandidates<T extends GateCard>(by: string, project: string, cards: readonly T[]): T[] {
+  if (!by) return [];
+  return cards
+    .filter(c => (!project || c.project === project) && (c.status === "doing" || c.status === "testing") && (c.assignee === by || c.workedBy === by))
+    .sort((a, b) => (b.updated ?? b.ts ?? 0) - (a.updated ?? a.ts ?? 0));
+}
+
+/** The newest blast line on a card's log, or null when no entry carries one. */
+export function blastFromLog(log: readonly { text: string }[]): BlastNote | null {
+  for (let i = log.length - 1; i >= 0; i--) {
+    const note = parseBlastLine(log[i]?.text ?? "");
+    if (note) return note;
+  }
+  return null;
+}
+
+/** The line as hollow-move.mjs worded it, for the gate card. */
+export function blastText(note: BlastNote): string {
+  if (note.kind === "unavailable") return "blast: unavailable";
+  if (note.kind === "no-changes") return `blast: no committed changes since ${note.base}`;
+  if (note.kind === "not-in-graph") return `blast: not in the graph (${note.unindexed.join(", ")})`;
+  const n = note.dependents;
+  const tail = note.unindexed.length ? ` (${note.unindexed.join(", ")} not in the graph)` : "";
+  return `blast: ${n} ${n === 1 ? "file depends" : "files depend"} on the ${note.changed} changed${tail}`;
+}
