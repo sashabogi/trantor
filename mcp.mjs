@@ -14,6 +14,7 @@ import { resolveProject, hostId, resolveHub, resolveHubInfo, nonSeatReason, hand
 import { signedPost, signedGet } from "./hooks/lib/api.mjs";
 import { anchorCursor } from "./hooks/lib/inbox-ledger.mjs";
 import { assertNoSecrets } from "./lib/scrub.mjs";
+import { markDoing, hollowVerdict } from "./hooks/lib/hollow-move.mjs";
 
 // Runtime dep resolution: `claude plugin install` snapshots the repo, not an npm tarball, so a
 // GitHub-sourced plugin ships no node_modules and a static SDK import dies with
@@ -211,10 +212,30 @@ server.tool("relay_phase_goal", "Set what a PHASE is for — its goal — shown 
     return { content: [{ type: "text", text: `phase "${phase}" goal set for ${proj}` }] };
   });
 
-server.tool("relay_task_move", "Move a Kanban card as you progress: todo -> doing -> testing -> done. NEVER move straight to done: move to 'testing' when you finish, run the project's tests/typecheck, then 'done' only if green — or 'failed' (with a relay_send explaining what broke) if not. The orchestrator bounces failed cards back to doing. blocked = waiting on something external. A move to 'testing' or 'done' MUST carry a `note` (<=2000 chars): what you changed and the evidence (the test command + counts). The note lands on the card's permanent log — the board shows its ·N count, so a silent move reads as unverified work.",
+server.tool("relay_task_move", "Move a Kanban card as you progress: todo -> doing -> testing -> done. NEVER move straight to done: move to 'testing' when you finish, run the project's tests/typecheck, then 'done' only if green — or 'failed' (with a relay_send explaining what broke) if not. The orchestrator bounces failed cards back to doing. blocked = waiting on something external. A move to 'testing' or 'done' MUST carry a `note` (<=2000 chars): what you changed and the evidence (the test command + counts). The note lands on the card's permanent log — the board shows its ·N count, so a silent move reads as unverified work. A testing/done move with NO worktree diff, no new files, no ticked checklist items and no test command in the note is flagged HOLLOW: and reported to the card's assigner (#7750) — a legitimately no-code card (docs, investigation, refusal, answered on the bus) avoids the flag by declaring that outcome in the note.",
   { id: z.number(), status: z.enum(["todo","doing","testing","failed","done","blocked"]), note: z.string().max(2000).optional().describe("card-log entry (<=2000 chars) — REQUIRED on moves to testing/done: what changed + the evidence (command, pass counts)") },
   async ({ id, status, note }) => {
-    await api("POST", "/task/update", { id, status, note, by: SESSION });
+    // #7750: seat-side hollow-move check. The hub cannot see this worktree, so the evidence is
+    // gathered HERE at report time; a hollow move still lands (never blocks a no-code card), the
+    // note is prefixed HOLLOW: and the card's assigner gets one bus line. Never throws into the move.
+    let outNote = note;
+    try {
+      if (status === "doing") markDoing(process.cwd(), id);
+      if (status === "testing" || status === "done") {
+        const { task } = await api("GET", `/card?project=${encodeURIComponent(PROJECT)}&id=${id}`);
+        const v = hollowVerdict(process.cwd(), id, note, task?.checklist);
+        if (v.checked && v.hollow) {
+          const what = `no ${v.missing.join(", no ")}`;
+          outNote = `HOLLOW: ${what} — ${note || "(no note)"}`.slice(0, 2000);
+          const assigner = task?.by;
+          if (assigner && assigner !== SESSION) {
+            await api("POST", "/send", { from: SESSION, to: assigner, wake: false,
+              text: `HOLLOW move on #${id} -> ${status} by ${SESSION}: ${what}. The move landed; the note is flagged on the card.` });
+          }
+        }
+      }
+    } catch { /* the flag must never break a move */ }
+    await api("POST", "/task/update", { id, status, note: outNote, by: SESSION });
     return { content: [{ type: "text", text: `card #${id} -> ${status}` }] };
   });
 
