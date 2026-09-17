@@ -40,7 +40,9 @@ exec /bin/sleep "$@"
 `, { mode: 0o755 });
   fs.writeFileSync(join(bin, "kimi"), `#!/bin/sh
 echo 'To resume this session: kimi -r box-drill-session'
-echo 'turn work complete'
+echo 'turn work complete: the drill card is finished, the box sleep was reaped, the session id'
+echo 'was captured from the resume line, and the telemetry row records a completed turn, so'
+echo 'the runner can move on to its next wake without a redelivery ladder or a park (#7759).'
 /bin/sleep ${slow ? 30 : 0.2}
 `, { mode: 0o755 });
   const rows = [], logs = [];

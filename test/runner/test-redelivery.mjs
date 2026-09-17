@@ -1,11 +1,8 @@
 #!/usr/bin/env node
-// trantor wake-message redelivery drill — proves a crashed turn no longer EATS the message that
-// woke it. The hub hands each message out exactly once (the poll cursor advances on read, nothing
-// ever re-fires), so before this the escalation that woke a seat during an API outage was gone
-// forever with no trace. Delivery is now the runner's job: a message is consumed only by a turn
-// that exits 0, it survives a runner restart on disk, and it retries on its own backoff.
-// Hermetic: a mock hub (never touches the real ~/.agent-bus/bus.json) + a fake CLI that fails on
-// command, driving the REAL bin/crew-runner.mjs.
+// trantor wake-message redelivery drill — a crashed turn must not EAT the message that woke it:
+// the hub hands each message out exactly once, so delivery is the runner's job. A message is
+// consumed only by a turn that exits 0, it survives a runner restart on disk, and it retries on
+// its own backoff. Hermetic: mock hub + a fake CLI that fails on command, driving the REAL runner.
 import http from "node:http";
 import { spawn } from "node:child_process";
 import { mkdtempSync, writeFileSync, readFileSync, chmodSync, mkdirSync, existsSync } from "node:fs";
@@ -65,7 +62,10 @@ if grep -q "NEW BUS MESSAGE" "$P"; then
 fi
 # #5481: a turn with NO output and exit 0 is now the Inception/Mercury failure shape — a real
 # CLI always prints something, so the fixture must too or its success reads as empty-output.
-echo "codex-drill: turn done"
+# #7759: short output on an untouched worktree also reads HOLLOW now, so the success fixture
+# answers past the substantive floor — this drill tests redelivery, not turn validity.
+echo "the escalation was read and worked: the card moved, the fix landed in the worktree, and"
+echo "the gate ran green, so this turn consumed the wake message and cleared the pending queue."
 exit 0
 `);
   chmodSync(join(fakebin, "codex"), 0o755);
@@ -118,10 +118,9 @@ exit 0
 }
 
 // ---- drill 1b: PRODUCTION defaults — a failure must NOT retry instantly ----------------
-// The bug this pins: with TRANTOR_RETRY_MS unset, "".split(",") -> [""] -> Number("") -> 0
-// passed a >=0 filter, so the production ladder was [0] and a failing seat retry-STORMED
-// (43 crashed turns in ~3 minutes, observed live on the first dsh seat). With the default
-// 30s ladder, a 10s window must see exactly ONE delivery attempt.
+// The bug this pins: an unset TRANTOR_RETRY_MS once became ladder [0] ("".split(",") numeric
+// cast) and a failing seat retry-STORMED — 43 crashed turns in ~3 minutes on the first dsh seat.
+// With the default 30s ladder, a 10s window must see exactly ONE delivery attempt.
 {
   const r = await drill({ failTurns: 99, waitMs: 10000, noBackoffOverride: true });
   ok("with NO env override, a failed delivery does not retry within 10s (default ladder is 30s+)",
@@ -141,10 +140,9 @@ exit 0
 }
 
 // ---- #6289 drill 3: two consecutive exit-1 turns PARK the seat — no third attempt ---------
-// The 4.7h burn (claude seat, card #6270, 2026-09-03): an exit-1 turn rode the redelivery ladder
-// forever — every rung re-sent the SAME contract as a full turn, the seat re-read and re-did the
-// work, then died to the same error again. Two strikes and the ladder stops: the seat parks with
-// a reason, the queue is kept, and `trantor up` (a restart) is the way back in.
+// The 4.7h burn on claude seat #6270: an exit-1 turn rode the ladder forever — every rung re-sent
+// the SAME contract as a full turn, the seat re-read and re-did the work, then died to the same
+// error again. Two strikes and the ladder stops: the queue is kept; `trantor up` is the way back.
 {
   const r = await drill({ failTurns: 99, waitMs: 9000 });
   ok("#6289: an exit-1 contract is attempted exactly TWICE — no third attempt",

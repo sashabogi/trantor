@@ -12,7 +12,7 @@ import { ensureEnrolled } from "../lib/enroll.mjs";
 import { redactKeys } from "../lib/redact.mjs";
 import {
   AUTH_MARKER_RE, classifyFailure, looksLikeAuthDeath,
-  verdictFor,
+  verdictFor, substantiveOutput,
   readPromptText, stripPromptEcho,
 } from "../lib/classify-failure.mjs";
 import { capWake, capBcast, pickLessons, composePrompt } from "./crew-payload.mjs";
@@ -305,6 +305,10 @@ let lastErrText = "";
 // burned its whole max_tokens budget on internal reasoning and returned a null completion; the
 // runner used to read that silence as a clean turn while nothing was produced.
 let lastEmptyOutput = false;
+// #7759: exit 0 with bytes on the stream but neither a changed worktree nor substantive output —
+// the CLI printed its banner and quit. The both-streams-silent rule above stays; this is the
+// second, harder-to-see empty shape.
+let lastEmptyTurn = false;
 const ERRF = join(homedir(), ".agent-bus", `err-${AGENT}-${PROJ}.txt`);
 const DUTY_NUDGES = process.env.RUNNER_DUTY_NUDGES === "1";
 const DUTY_NUDGE_STATE = process.env.RUNNER_DUTY_NUDGE_STATE
@@ -357,7 +361,7 @@ function loadPending() {
 // Auth failures in TURN OUTPUT: opencode prints its auth error and still exits 0 (#5405). The rules
 // live in lib/classify-failure.mjs (#5868); runTurn judges only the CLI's own output, not the echo.
 function classify(exit) {
-  const { reason, matched } = classifyFailure(exit, lastErrText, lastEmptyOutput);
+  const { reason, matched } = classifyFailure(exit, lastErrText, lastEmptyOutput, lastEmptyTurn);
   log(`classified ${reason} because ${matched}`);
   return reason;
 }
@@ -632,6 +636,9 @@ async function runTurn(prompt, isFirst, trigger = "kickoff", opts = {}) {
   // exit-0 turn with real output must never be re-labelled "auth" by the #5405 escalation — the
   // qwen specimen committed aa3c340 while its captured stream still tripped the auth regex.
   const headBefore = gitOut(["rev-parse", "HEAD"], TURN_DIR);
+  // #7759: the worktree snapshot the turn is judged against at its end — porcelain covers edits
+  // AND new untracked files, which a HEAD-only comparison misses.
+  const statusBefore = gitOut(["status", "--porcelain"], TURN_DIR);
   // #6154: a pinned seat with no sid yet resumes as FRESH — the guard below fails open, because
   // a resume without an id must fall back to a new session, never to `next`'s bare resume shape.
   let cmd = (isFirst || ((cli.sid || cli.pinned) && !sid)) ? cli.first : cli.next;
@@ -774,6 +781,13 @@ exit $turn_exit`;
   // never re-labelled auth — the qwen specimen exited 0 with a shipped commit (aa3c340) while a
   // short capture of echoed contract text tripped the regex.
   const newCommit = !!headBefore && gitOut(["rev-parse", "HEAD"], TURN_DIR) !== headBefore;
+  // #7759: the turn is HOLLOW when it exited 0 having neither changed the worktree (HEAD or
+  // porcelain vs the turn-start snapshot, untracked included) nor said anything beyond CLI
+  // chrome. State steps are exempt: their answer is the envelope, stderr silence is normal.
+  const worktreeChanged = newCommit || gitOut(["status", "--porcelain"], TURN_DIR) !== statusBefore;
+  lastEmptyTurn = !cut && realExit === 0 && effExit === 0 && !opts.state
+    && !worktreeChanged && !substantiveOutput(ownOut);
+  if (lastEmptyTurn) log("\x1b[33mexit 0 but the turn was EMPTY — no worktree change, no substantive output\x1b[0m");
   if (realExit === 0 && looksLikeAuthDeath(ownOut, newCommit)) {
     effExit = 1;
     authHit = AUTH_MARKER_RE.exec(ownOut)[0];
@@ -788,7 +802,7 @@ exit $turn_exit`;
   }
   // #5868: the verdict rides the telemetry row so a classification survives the pane scrolling
   // away — the same "classified X because Y" shape the runner logs, in the seat's jsonl forever.
-  const verdict = verdictFor(realExit, effExit, lastEmptyOutput, ownOut);
+  const verdict = verdictFor(realExit, effExit, lastEmptyOutput, ownOut, lastEmptyTurn);
   // #6134: what the turn COST, from the CLI's own usage line. Zero means this CLI printed none —
   // never that the turn was free. `trantor seat-why` totals these into today's spend per seat.
   let tokens = parseTurnTokens(ownOut);
@@ -801,8 +815,8 @@ exit $turn_exit`;
   // #6289: every ledger row names in ONE field what happened to the turn — cut (the box ended it),
   // api-error (the CLI failed), completed — and what it cost in tokens, even when this CLI printed
   // no usage line (0 means "not reported", never "free"). `cut` stays too: the drills read it.
-  const outcome = cut ? "cut" : (effExit !== 0 ? "api-error" : "completed");
-  const telemetryRow = { ts: Date.now(), agent: AGENT, project: PROJ, turn: TURN, trigger, model: MODEL || "cli-default", duration_ms: Date.now() - t0, exit: realExit, effExit, authFailed: effExit !== realExit, emptyOutput: lastEmptyOutput, verdict, outcome, tokens };
+  const outcome = cut ? "cut" : (effExit !== 0 ? "api-error" : lastEmptyTurn ? "empty" : "completed");
+  const telemetryRow = { ts: Date.now(), agent: AGENT, project: PROJ, turn: TURN, trigger, model: MODEL || "cli-default", duration_ms: Date.now() - t0, exit: realExit, effExit, authFailed: effExit !== realExit, emptyOutput: lastEmptyOutput, emptyTurn: lastEmptyTurn, verdict, outcome, tokens };
   if (cut) telemetryRow.cut = true;
   telemetry(telemetryRow);
   log(`turn ended (exit ${realExit}${effExit !== realExit ? ` → effective ${effExit} (${lastEmptyOutput ? "empty-output" : "auth"})` : ""}, ${((Date.now() - t0) / 1000).toFixed(0)}s)`);
@@ -1317,6 +1331,24 @@ function askedExcerpt(message) {
       await notifyAssigners(assigners,
         `⚠️ your contract FAILED on ${SESSION} (exit ${ec}, ${reason}) · retrying in ${Math.round(wait / 1000)}s · asked: "${asked}"`);
       log(`\x1b[31m${pendingWake.length} message(s) still UNDELIVERED — next attempt in ${Math.round(wait / 1000)}s\x1b[0m`);
+    } else if (lastEmptyTurn) {
+      // #7759: the turn exited 0 but was HOLLOW — a banner is not work. The wake is NOT
+      // consumed: the queue is kept and the ladder retries, and the assigner hears EMPTY,
+      // never "done". Second hollow attempt in a row parks the seat, like a failed turn.
+      deliveryFails++;
+      savePending(pendingWake, pendingBcast);
+      if (deliveryFails >= 2) {
+        retryAt = await parkSeat("empty-turn", pendingWake.length);
+        await notifyAssigners(assigners,
+          `⛔ your contract is PARKED on ${SESSION} (empty-turn: two exit-0 turns with no worktree change or substantive output) · asked: "${asked}"`);
+        lastTurnAt = Date.now();
+        return;
+      }
+      const wait = RETRY_MS[Math.min(deliveryFails - 1, RETRY_MS.length - 1)];
+      retryAt = Date.now() + wait;
+      log(`\x1b[33mturn was EMPTY — wake not consumed, ${pendingWake.length} message(s) stay owed; retrying in ${Math.round(wait / 1000)}s\x1b[0m`);
+      await notifyAssigners(assigners,
+        `🫥 EMPTY turn on ${SESSION} (exit 0, ${secs}s — no worktree change, no substantive output) · wake stays owed · retrying in ${Math.round(wait / 1000)}s · asked: "${asked}"`);
     } else {
       pendingWake = []; pendingBcast = []; deliveryFails = 0; retryAt = 0;
       savePending([], []);
