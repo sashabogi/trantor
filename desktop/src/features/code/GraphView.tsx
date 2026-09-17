@@ -34,6 +34,8 @@ const NODE_BORDER = {
   dim: undefined,
   selected: "var(--color-tr-doing)",
   linked: "var(--color-tr-doing)",
+  unread: "var(--color-tr-fail)",
+  read: "var(--color-tr-ok)",
 } satisfies { [T in Tone]: string | undefined };
 
 const EDGE_STROKE = {
@@ -42,6 +44,8 @@ const EDGE_STROKE = {
   dim: "var(--color-tr-edge)",
   selected: "var(--color-tr-doing)",
   linked: "var(--color-tr-doing)",
+  unread: "var(--color-tr-edge)",
+  read: "var(--color-tr-edge)",
 } satisfies { [T in Tone]: string };
 
 type Placed = { node: RenderNode; left: number; top: number };

@@ -74,6 +74,21 @@ describe("deriveGraph with lib expanded", () => {
     expect(d.edges.map(e => e.tone)).toEqual(["dim", "dim", "warn", "warn"]);
   });
 
+  it("Unread lens colours a claimed, unopened file unread, a read one read, and folds the state onto the cluster card", () => {
+    const unread = new Map([["lib/a.ts", "unread" as const], ["lib/b.ts", "read" as const], ["bin/cli.ts", "read" as const]]);
+    const d = deriveGraph(SIX_NODE_GRAPH, view({ expanded, lens: "unread", unread }));
+    const tones = new Map(d.nodes.map(n => [n.id, n.tone]));
+    expect(tones.get("lib/a.ts")).toBe("unread");
+    expect(tones.get("lib/b.ts")).toBe("read");
+    expect(tones.get("lib/stray.ts")).toBe("calm");
+    expect(tones.get("@dir:bin")).toBe("read");
+    expect(tones.get("@dir:docs")).toBe("calm");
+    expect(d.edges.every(e => e.tone === "calm")).toBe(true);
+    const folded = deriveGraph(SIX_NODE_GRAPH, view({ lens: "unread", unread }));
+    expect(folded.nodes.find(n => n.id === "@dir:lib")?.tone).toBe("unread");
+    expect(deriveGraph(SIX_NODE_GRAPH, view({ expanded, lens: "unread" })).nodes.every(n => n.tone === "calm")).toBe(true);
+  });
+
   it("Activity lens keeps the dirty nodes and their edges, dims the rest, and names the seat", () => {
     const dirty = dirtyMarks([{ seat: "kimi", path: "lib/a.ts" }, { seat: null, path: "lib/a.ts" }, { seat: "glm", path: "bin/cli.ts" }]);
     const d = deriveGraph(SIX_NODE_GRAPH, view({ expanded, lens: "activity", dirty }));

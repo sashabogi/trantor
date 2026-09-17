@@ -2,17 +2,19 @@
 // one card per top-level directory, expanded in place per cluster, and recoloured per lens. Every
 // lens is a tone over the same cards, never a second drawing.
 import type { CodeGraph, GraphEdge, GraphNode } from "./graphApi";
+import type { UnreadState } from "./unread";
 
-export type GraphLens = "clusters" | "activity" | "cycles";
+export type GraphLens = "clusters" | "activity" | "cycles" | "unread";
 
-export const LENSES: readonly GraphLens[] = ["clusters", "activity", "cycles"];
+export const LENSES: readonly GraphLens[] = ["clusters", "activity", "cycles", "unread"];
 
 /** One dirty path in one tree; seat null is the project checkout itself. */
 export type DirtyMark = { path: string; seat: string | null };
 
 /** calm = the default; warn = on a cycle under the Cycles lens; dim = outside the lens's
- *  question; selected = the clicked card; linked = a direct dependency or dependent of it. */
-export type Tone = "calm" | "warn" | "dim" | "selected" | "linked";
+ *  question; selected = the clicked card; linked = a direct dependency or dependent of it;
+ *  unread / read = the Unread lens (#7977): changed by the crew and not / since looked at. */
+export type Tone = "calm" | "warn" | "dim" | "selected" | "linked" | "unread" | "read";
 
 export type RenderNode = {
   id: string;
@@ -27,6 +29,8 @@ export type RenderNode = {
   cycleId: number | null;
   inDegree: number;
   outDegree: number;
+  /** the Unread lens's state; a cluster is unread while any member is, read while any member is */
+  unread: UnreadState;
   tone: Tone;
 };
 
@@ -47,6 +51,8 @@ export type GraphView = {
   lens: GraphLens;
   dirty: readonly DirtyMark[];
   selected: string | null;
+  /** per path, from unreadMarks(); absent = nothing is unread */
+  unread?: ReadonlyMap<string, UnreadState>;
 };
 
 export const CLUSTER_PREFIX = "@dir:";
@@ -61,6 +67,17 @@ const baseName = (path: string): string => path.split("/").pop() ?? path;
 
 function addSeat(seats: (string | null)[], seat: string | null) {
   if (!seats.includes(seat)) seats.push(seat);
+}
+
+function clusterUnread(list: readonly GraphNode[], marks: ReadonlyMap<string, UnreadState> | undefined): UnreadState {
+  if (!marks) return "unchanged";
+  let state: UnreadState = "unchanged";
+  for (const node of list) {
+    const s = marks.get(node.id);
+    if (s === "unread") return "unread";
+    if (s === "read") state = "read";
+  }
+  return state;
 }
 
 function edgeCycle(source: GraphNode, target: GraphNode): boolean {
@@ -105,6 +122,7 @@ export function deriveGraph(graph: CodeGraph, view: GraphView): DerivedGraph {
           cycleId: node.cycleId,
           inDegree: node.inDegree,
           outDegree: node.outDegree,
+          unread: view.unread?.get(node.id) ?? "unchanged",
           tone: "calm",
         });
       }
@@ -123,6 +141,7 @@ export function deriveGraph(graph: CodeGraph, view: GraphView): DerivedGraph {
       cycleId: null,
       inDegree: 0,
       outDegree: 0,
+      unread: clusterUnread(list, view.unread),
       tone: "calm",
     });
   }
@@ -189,6 +208,7 @@ function tone(nodes: RenderNode[], edges: RenderEdge[], view: GraphView) {
     else if (linked.has(n.id)) n.tone = "linked";
     else if (view.lens === "cycles") n.tone = n.cycle ? "warn" : "dim";
     else if (view.lens === "activity") n.tone = dirty.has(n.id) ? "calm" : "dim";
+    else if (view.lens === "unread") n.tone = n.unread === "unchanged" ? "calm" : n.unread;
     else n.tone = "calm";
   }
   for (const e of edges) {
