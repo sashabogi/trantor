@@ -4,11 +4,14 @@
 // over the same cards. No drag, no persisted positions: the layout is deterministic.
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { hueOf } from "../../shared/Avatar";
+import { DistrictsView } from "./DistrictsView";
+import { districtsOf, heatFill } from "./graph/districts";
 import { hierarchicalFlowLayout, type Point } from "./graph/flowLayout";
 import {
   clusterOfId,
   deriveGraph,
   dirtyMarks,
+  hotspotRank,
   LENSES,
   toggleCluster,
   type DirtyMark,
@@ -24,6 +27,11 @@ import { unreadCount, unreadMarks, type ChangeStamp, type FileEvent } from "./gr
 const CARD_W = 112;
 const CARD_H = 30;
 const PAD = 40;
+
+/** flow = Flare's flow layout (the default); districts = the treemap (#7978). */
+export type GraphLayout = "flow" | "districts";
+export const LAYOUTS: readonly GraphLayout[] = ["flow", "districts"];
+const DEFAULT_PANE = { w: 960, h: 560 };
 
 /** Cluster hue at low saturation, on the card's leading edge only: colour in content, not chrome. */
 const clusterTint = (cluster: string) => `hsl(${hueOf(cluster)} 28% 58% / 0.55)`;
@@ -134,7 +142,10 @@ export function GraphView({ project, seat, onOpen, api = graphApi }: {
   const [stamps, setStamps] = useState<ChangeStamp[]>([]);
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(new Set());
   const [lens, setLens] = useState<GraphLens>("clusters");
+  const [layout, setLayout] = useState<GraphLayout>("flow");
   const [selected, setSelected] = useState<string | null>(null);
+  const [pane, setPane] = useState(DEFAULT_PANE);
+  const canvasRef = useRef<HTMLDivElement | null>(null);
   const [rebuilding, setRebuilding] = useState(false);
   // Only the newest request may land: a slow build must not overwrite a newer scope's graph.
   const requestRef = useRef(0);
@@ -193,6 +204,20 @@ export function GraphView({ project, seat, onOpen, api = graphApi }: {
     () => unreadMarks([...fileEvents, ...localReads], stamps),
     [fileEvents, localReads, stamps],
   );
+  // The districts layout fills the pane, so it needs the pane's size; a host without
+  // ResizeObserver (the drill) draws at the default.
+  useEffect(() => {
+    const el = canvasRef.current;
+    // SAFETY: ResizeObserver is a host capability, absent under happy-dom; the optional type is the check.
+    const Observer = (globalThis as { ResizeObserver?: typeof ResizeObserver }).ResizeObserver;
+    if (!el || !Observer) return;
+    const ro = new Observer(entries => {
+      const r = entries[0]?.contentRect;
+      if (r && r.width > 0 && r.height > 0) setPane({ w: r.width, h: r.height });
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
 
   const graph = response && !isGraphError(response) ? response : null;
   const derived = useMemo(
@@ -200,6 +225,13 @@ export function GraphView({ project, seat, onOpen, api = graphApi }: {
     [graph, expanded, lens, dirty, selected, unread],
   );
   const scene = useMemo(() => (derived ? place(derived.nodes, derived.edges) : null), [derived]);
+  // Districts show every file: the same derivation with every cluster expanded.
+  const districts = useMemo(() => {
+    if (!graph || !derived || layout !== "districts") return null;
+    const full = deriveGraph(graph, { expanded: new Set(derived.clusters), lens, dirty, selected });
+    return districtsOf(full.nodes, pane.w, pane.h);
+  }, [graph, derived, layout, lens, dirty, selected, pane]);
+  const hottest = useMemo(() => (graph ? hotspotRank(graph, dirty)[0] ?? null : null), [graph, dirty]);
 
   const onCard = (node: RenderNode) => {
     const cluster = clusterOfId(node.id);
@@ -226,6 +258,18 @@ export function GraphView({ project, seat, onOpen, api = graphApi }: {
             </button>
           ))}
         </div>
+        <div className="tr-seg" data-testid="graph-layout" role="tablist" aria-label="Graph layout">
+          {LAYOUTS.map(l => (
+            <button key={l} type="button" role="tab" data-on={layout === l} aria-selected={layout === l} onClick={() => setLayout(l)}>
+              {l}
+            </button>
+          ))}
+        </div>
+        {lens === "hotspots" && hottest && hottest.heat > 0 && (
+          <span className="tr-mono text-[11px] text-tr-muted" data-testid="graph-hottest">
+            hottest: {hottest.id} · complexity {hottest.complexity} · churn {hottest.churn}
+          </span>
+        )}
         {graph && derived && (
           <span className="tr-mono text-[11px] text-tr-muted" data-testid="graph-meta">
             {graph.meta.files} files · {graph.meta.edges} edges · {derived.clusters.length} clusters
@@ -272,7 +316,7 @@ export function GraphView({ project, seat, onOpen, api = graphApi }: {
         </div>
       </div>
 
-      <div className="relative min-h-0 flex-1 overflow-auto" data-testid="graph-canvas">
+      <div ref={canvasRef} className="relative min-h-0 flex-1 overflow-auto" data-testid="graph-canvas">
         {error ? (
           <div className="flex h-full items-center justify-center">
             <div className="tr-card-ghost max-w-[460px] px-6 py-5 text-center text-[12.5px] leading-relaxed" data-testid="graph-error">
@@ -293,6 +337,8 @@ export function GraphView({ project, seat, onOpen, api = graphApi }: {
               graft found no code files in {scopeLabel}.
             </div>
           </div>
+        ) : districts ? (
+          <DistrictsView districts={districts} lens={lens} selected={selected} width={pane.w} height={pane.h} onCard={onCard} />
         ) : (
           <div className="relative" style={{ width: scene.width, height: scene.height }}>
             <svg className="pointer-events-none absolute inset-0" width={scene.width} height={scene.height} aria-hidden="true">
@@ -324,6 +370,7 @@ export function GraphView({ project, seat, onOpen, api = graphApi }: {
                 data-graph-kind={node.kind}
                 data-graph-cluster={node.cluster}
                 data-graph-tone={node.tone}
+                data-graph-heat={node.heat}
                 title={node.kind === "cluster"
                   ? `${node.label} · ${node.files} files · click to expand`
                   : `${node.id} · ${node.inDegree} in · ${node.outDegree} out`}
@@ -337,7 +384,7 @@ export function GraphView({ project, seat, onOpen, api = graphApi }: {
                   borderLeftWidth: 3,
                   borderLeftColor: clusterTint(node.cluster),
                   borderColor: NODE_BORDER[node.tone],
-                  background: NODE_FILL[node.tone],
+                  background: lens === "hotspots" ? heatFill(node.heat) : NODE_FILL[node.tone],
                   opacity: node.tone === "dim" ? 0.35 : 1,
                   fontWeight: node.kind === "cluster" ? 600 : 400,
                 }}
