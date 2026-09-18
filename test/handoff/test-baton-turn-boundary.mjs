@@ -1,25 +1,16 @@
 #!/usr/bin/env node
-// trantor — the baton must not fire in the middle of a turn.
-//
-// 2026-08-24, measured: the handoff was written at 23:11:49 and the work it was meant to describe
-// was committed at 23:12:25. Thirty-six seconds. The successor got a summary of a session that was
-// half a minute from its own conclusions, and reported four things as open that were already done.
-//
-// There WAS a mid-build guard — subagentsActive() — but it only asks "is a spawned sub-agent still
-// writing?". A session driving tool calls in its own main loop has no sub-agents, so the check
-// passes and the baton fires. And it can only ever fire mid-turn, because the heartbeat runs on
-// PostToolUse: between two tool calls is the only moment it is ever called.
-//
-// So the warn threshold ARMS the baton, and the Stop hook fires it at the next turn boundary —
-// the one point where the turn is finished and a summary describes something complete.
+// trantor — the baton must not fire mid-turn: a heartbeat past the warn line ARMS the handoff and
+// the Stop hook fires it at the next turn boundary, the only point where a summary describes a
+// finished turn — a mid-turn write once summarized work seconds from its own conclusions, the
+// main-loop case subagentsActive() never covered (promoted from quarantine per #6447, #7771).
 import { spawn, spawnSync } from "node:child_process";
 import { mkdtempSync, mkdirSync, writeFileSync, readdirSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { drillEnv } from "../../drill-env.mjs";
+import { drillEnv } from "../drill-env.mjs";
 
-const ROOT = fileURLToPath(new URL("../../..", import.meta.url)).replace(/\/$/, "");
+const ROOT = fileURLToPath(new URL("../..", import.meta.url)).replace(/\/$/, "");
 let pass = 0, fail = 0;
 const ok = (n, c, x = "") => { if (c) { pass++; console.log(`  ✓ ${n}`); } else { fail++; console.log(`  ✗ ${n}${x ? " — " + x : ""}`); } };
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
