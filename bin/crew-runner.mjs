@@ -315,6 +315,10 @@ const RETRY_MS = (() => {
 // #7756: while an ask awaits its answer the contract's wake stays owed but is NOT redelivered —
 // the answer (re = the ask's id, or any direct word from the assigner) is what releases it.
 let awaitingAsk = null;
+// #7756: set the moment an answer releases a held ask, consumed by the next deliverWake — the
+// released turn RESUMES the held contract's session, so it is never "fresh" however the batch
+// cites cards (the session already belongs to the contract the ask was holding).
+let askReleased = false;
 // The bus is the record of a turn that ended by ASKING: an open kind:ask contract from this
 // session. deliverWake judges each clean wake turn against /contracts — an open ask renames the
 // ledger row "asked" and HOLDS the wake (no failure count, no backoff, no park) until the answer.
@@ -1274,6 +1278,7 @@ async function resolveWakeCard(messages, { session }) {
     if (awaitingAsk && wake.some(m => m.to === SESSION && (Number(m.re) === awaitingAsk.id || m.from === awaitingAsk.to))) {
       log(`answer to ask #${awaitingAsk.id} landed — resuming with the contract re-attached`);
       awaitingAsk = null;
+      askReleased = true;
       savePending(pendingWake, pendingBcast);
     }
     if (awaitingAsk) { log(`holding for the answer to ask #${awaitingAsk.id} — ${wake.length} new message(s) queued behind it`); continue; }
@@ -1305,6 +1310,10 @@ async function resolveWakeCard(messages, { session }) {
     } catch { return 0; }
   }
   async function deliverWake() {
+    // #7756: captured and cleared HERE so an early return below never leaks the flag into a
+    // later turn — only the turn the answer released reads it.
+    const resumedAfterAsk = askReleased;
+    askReleased = false;
     const wake = pendingWake;
     const dutyPlan = DUTY_NUDGES
       ? await claimDutyNudges({
@@ -1381,11 +1390,12 @@ async function resolveWakeCard(messages, { session }) {
       return;
     }
     const baseText = base ? `\n${baseLine(base)}\n` : "";
-    // #6289 regression: the card the SESSION belongs to reads the citation when the rebinding
-    // binds nothing — #7763 decides WHICH card work binds to, never the turn shape, and a wake
-    // the board cannot bind still opens its own session instead of resuming the kickoff's.
+    // #6289: the card the SESSION belongs to reads the citation when the rebinding binds nothing —
+    // #7763 decides WHICH card work binds to, never the turn shape. #7756: the turn an ask's
+    // ANSWER releases is the exception — it resumes the session the held contract already owns,
+    // whatever card the batch cites; only a new contract for a different card opens fresh.
     const sessionCardForTurn = card || baseCard;
-    const fresh = sessionCardForTurn > 0 && sessionCardForTurn !== sessionCard;
+    const fresh = !resumedAfterAsk && sessionCardForTurn > 0 && sessionCardForTurn !== sessionCard;
     if (card) sessionCard = card;
     const cited = [...new Set(wakeForTurn.flatMap(m => cardRefs(m.text)))];
     const freshText = fresh
