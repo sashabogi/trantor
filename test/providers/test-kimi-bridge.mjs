@@ -4,9 +4,9 @@ import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileS
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { drillEnv } from "../../drill-env.mjs";
+import { drillEnv } from "../drill-env.mjs";
 
-const ROOT = fileURLToPath(new URL("../../..", import.meta.url)).replace(/\/$/, "");
+const ROOT = fileURLToPath(new URL("../..", import.meta.url)).replace(/\/$/, "");
 const HOME = mkdtempSync(join(tmpdir(), "trantor-kimi-bridge-"));
 const REAL_HOME = realpathSync(HOME);
 const BUS = join(HOME, ".agent-bus");

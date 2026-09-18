@@ -2,14 +2,6 @@
   "contract": "Timing drills whose red is REPORTED but does not fail the gate (#6447). Each entry carries the card tracking its fix and a one-week expiry: an expired entry un-quarantines — its red gates again, and green gets flagged for promotion back into the gate.",
   "entries": [
     {
-      "suite": "quarantine/providers/test-kimi-bridge.mjs",
-      "card": 6569,
-      "reason": "The slow-hook drill spawns a hook whose body is a real 5s setTimeout and asserts the hook runner times it out (child timeout fails open) — a race between two real clocks under load.",
-      "quarantined": "2026-09-06",
-      "expires": "2026-09-22",
-      "note": "GREEN at the last two expiries — owed a promotion decision back into the gate (#6447 contract), deferred once so a blocked release could ship."
-    },
-    {
       "suite": "quarantine/crew/test-crew-activity.mjs",
       "card": 6588,
       "reason": "Asserts the crew-runner's status SEQUENCE (crew member booting | working · kickoff | idle) through a real spawned runner turn — the ordering races real process scheduling and goes red on CI runners and loaded machines, green elsewhere. #7227: the move into quarantine/crew/ left the import at ../drill-env.mjs, one level too shallow, so both drills crashed on load and could not even show their real red; that import is fixed and the underlying environment race above is what remains.",
