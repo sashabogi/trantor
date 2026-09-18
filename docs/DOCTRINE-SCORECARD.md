@@ -76,3 +76,30 @@ Consolidation phase: (1) CI on push running tsc, eslint and vitest, so red block
 (2) a drill line on every card and a base line on every .crew contract; (3) replace the four
 inbox-shaped polls with one subscription or one episode model (rule 11); (4) split the four files
 over 1,500 lines. The next vertical waits for (1) and (2).
+
+## crebral-scribe (99f4f3d, 1.0.1 build 21)
+
+Brief: unread (403). Checkout: the iOS 27, iPadOS and Mac ambient scribe; 179 Swift files, 195
+commits in 90 days, 30 naming a card; seat/glm was merged for #7870, so the crew flow runs here.
+Shape: 6 files over 800 lines, none over 1,500 (DesktopOverviewTab.swift 1,326); 44 unit and 5 UI
+test files; no CI and no fastlane, builds hand-numbered; docs/contracts/ carries the two cross-repo
+contracts with semver (chart-tabs 1.3.0).
+
+- state not event: MET. The chart strip is served, never derived (docs/contracts/chart-tabs.md §1);
+  capabilities.md exists so that drift "must be impossible to ship unnoticed".
+- episodes not timers: PARTIAL. 24 Timer and Task.sleep sites outside tests (RescueService,
+  CoverageTracker, PCCProbe, NoteFormer, the Mac tray); the recording clock and the debounce are
+  earned, the rescue and coverage warnings run on timers with no episode model.
+- no fake affordances: MET. An id without a view is skipped, never drawn as an empty tab
+  (chart-tabs.md); the only "not implemented" in the tree is a comment on the DICOM binary decoder.
+- done is a gate: PARTIAL. ROADMAP.md: nothing is done without build, tests and an observed run,
+  and the #7870 test commit ships PNGs as proof; but nothing runs on push and 0 of 195 commits name
+  a drill or a verified-at sha.
+- contracts carry a base: PARTIAL. The cross-repo contracts are versioned, the right shape for the
+  health seam; the seat contracts live on the bus, unread here, and the repo records no base.
+- seats can ask: PARTIAL. Inherited from the runner; capabilities.md was born from an ask
+  ("crebral-health asked the consumer to specify the shape it consumes") made in a doc, not on the bus.
+
+Consolidation phase: (1) CI: xcodebuild test on push for the 49 test files; (2) a drill line on
+every card of the form "install build N on the phone and see X"; (3) an episode model for the
+rescue and coverage warnings (rule 11); (4) split DesktopOverviewTab.swift. The GA push waits for (1).
