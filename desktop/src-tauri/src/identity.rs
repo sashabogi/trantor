@@ -101,27 +101,56 @@ pub fn hub_for_project(project: &str) -> String {
     "http://127.0.0.1:4477".into()
 }
 
-/// A project is something you can actually OPEN: a hub you pinned, or a checkout on this machine.
-/// A positive rule, not a blocklist on name shapes: sessions register whatever string they resolved.
-pub fn known_projects() -> Vec<String> {
-    let mut pinned: Vec<String> = Vec::new();
-    if let Ok(raw) = fs::read_to_string(bus_dir().join("config.json")) {
-        if let Ok(v) = serde_json::from_str::<serde_json::Value>(&raw) {
-            if let Some(h) = v.get("hubs").and_then(|h| h.as_object()) {
-                pinned.extend(h.keys().cloned());
-            }
-        }
-    }
-    let root = std::env::var("TRANTOR_DEV_ROOT")
-        .unwrap_or_else(|_| format!("{}/development", std::env::var("HOME").unwrap_or_default()));
-    projects_in(Path::new(&root), pinned)
+/// Where projects live on THIS machine: ~/development by convention, TRANTOR_DEV_ROOT to relocate.
+pub fn dev_root() -> PathBuf {
+    PathBuf::from(
+        std::env::var("TRANTOR_DEV_ROOT")
+            .unwrap_or_else(|_| format!("{}/development", std::env::var("HOME").unwrap_or_default())),
+    )
 }
 
-/// The pinned names plus every checkout in the dev root ("all of the projects are in the
-/// development folder"), minus any name whose checkout is a folder of projects: a wrapper the
-/// list offered was woken into a dead non-seat session (#6842).
-pub fn projects_in(root: &Path, pinned: Vec<String>) -> Vec<String> {
-    let mut out = pinned;
+/// The id a checkout records in `.trantor/project.json` (#6724), the same file lib/project.mjs
+/// reads. A directory rename used to rename the project: the pin, the board and the sessions
+/// stayed under the old name while the new directory showed up as an empty twin. With the id in
+/// the checkout the directory name is a label. Malformed ids (path shapes) read as unmarked.
+pub fn project_id_of(dir: &Path) -> Option<String> {
+    let raw = fs::read_to_string(dir.join(".trantor").join("project.json")).ok()?;
+    let v: serde_json::Value = serde_json::from_str(&raw).ok()?;
+    let id = v.get("id")?.as_str()?.trim();
+    let shape = !id.is_empty()
+        && id.len() <= 80
+        && !id.contains("..")
+        && id.chars().all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '_' || c == '-');
+    if shape { Some(id.to_string()) } else { None }
+}
+
+/// The checkout under `root` that carries project `id`: `<root>/<id>` unless that directory claims
+/// a different id, else the child whose marker says `id` — the renamed directory. Every
+/// `root.join(project)` by hand was the lookup a rename broke.
+pub fn checkout_for(root: &Path, id: &str) -> Option<PathBuf> {
+    if id.trim().is_empty() || id.contains('/') || id.contains("..") {
+        return None;
+    }
+    let direct = root.join(id);
+    if direct.is_dir() && project_id_of(&direct).map_or(true, |m| m == id) {
+        return Some(direct);
+    }
+    for e in fs::read_dir(root).ok()?.flatten().take(200) {
+        let name = e.file_name().to_string_lossy().to_string();
+        if name.starts_with('.') || name.starts_with('_') || !e.path().is_dir() {
+            continue;
+        }
+        if project_id_of(&e.path()).as_deref() == Some(id) {
+            return Some(e.path());
+        }
+    }
+    None
+}
+
+/// Every checkout under `root`, named by its recorded id when it has one, else by its directory.
+/// A directory is a project when it is a repo. A scratch folder is not.
+pub fn known_projects_under(root: &Path) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
     if let Ok(rd) = fs::read_dir(root) {
         for e in rd.flatten() {
             if !e.file_type().map(|t| t.is_dir()).unwrap_or(false) {
@@ -131,13 +160,37 @@ pub fn projects_in(root: &Path, pinned: Vec<String>) -> Vec<String> {
             if name.starts_with('.') || name.starts_with('_') {
                 continue;
             }
-            // A directory is a project when it is a repo. A scratch folder is not.
             if e.path().join(".git").exists() {
-                out.push(name);
+                out.push(project_id_of(&e.path()).unwrap_or(name));
             }
         }
     }
-    out.retain(|name| !folder_of_projects(&root.join(name)));
+    out
+}
+
+/// A project is something you can actually OPEN: a hub you pinned, or a checkout on this machine.
+/// A positive rule, not a blocklist on name shapes: sessions register whatever string they resolved.
+/// A renamed checkout lists ONCE, under its recorded id, beside its pin (#6724).
+pub fn known_projects() -> Vec<String> {
+    let mut pinned: Vec<String> = Vec::new();
+    if let Ok(raw) = fs::read_to_string(bus_dir().join("config.json")) {
+        if let Ok(v) = serde_json::from_str::<serde_json::Value>(&raw) {
+            if let Some(h) = v.get("hubs").and_then(|h| h.as_object()) {
+                pinned.extend(h.keys().cloned());
+            }
+        }
+    }
+    projects_in(&dev_root(), pinned)
+}
+
+/// The pinned names plus every checkout in the dev root ("all of the projects are in the
+/// development folder"), each named by its recorded id (#6724), minus any name whose checkout is
+/// a folder of projects: a wrapper the list offered was woken into a dead non-seat session (#6842).
+/// The checkout is found by id, so a renamed directory gets the same filter as a direct one.
+pub fn projects_in(root: &Path, pinned: Vec<String>) -> Vec<String> {
+    let mut out = pinned;
+    out.extend(known_projects_under(root));
+    out.retain(|name| checkout_for(root, name).map_or(true, |dir| !folder_of_projects(&dir)));
     out.sort();
     out.dedup();
     out
@@ -168,6 +221,58 @@ pub fn folder_of_projects(dir: &Path) -> bool {
 /// A stray clone or worktree beside the real one carries none.
 pub fn nested_projects(dir: &Path) -> Vec<PathBuf> {
     child_repos(dir).into_iter().filter(|p| p.join("CLAUDE.md").is_file()).collect()
+}
+
+#[cfg(test)]
+mod project_id_tests {
+    use super::*;
+    fn scratch(tag: &str) -> PathBuf {
+        let d = std::env::temp_dir().join(format!("trantor-project-id-{}-{tag}", std::process::id()));
+        let _ = fs::remove_dir_all(&d);
+        fs::create_dir_all(&d).unwrap();
+        d
+    }
+    fn checkout(root: &Path, dir: &str, id: Option<&str>) -> PathBuf {
+        let d = root.join(dir);
+        fs::create_dir_all(d.join(".git")).unwrap();
+        if let Some(id) = id {
+            fs::create_dir_all(d.join(".trantor")).unwrap();
+            fs::write(d.join(".trantor/project.json"), format!("{{\"id\":\"{id}\",\"since\":\"2026-09-17\"}}")).unwrap();
+        }
+        d
+    }
+    #[test]
+    fn a_renamed_checkout_keeps_its_id_and_lists_once() {
+        let root = scratch("rename");
+        let dir = checkout(&root, "stone-tracker", Some("juans-project"));
+        assert_eq!(project_id_of(&dir).as_deref(), Some("juans-project"));
+        assert_eq!(checkout_for(&root, "juans-project"), Some(dir.clone()));
+        assert_eq!(checkout_for(&root, "stone-tracker"), None, "the directory name is a label, not a project");
+        assert_eq!(known_projects_under(&root), vec!["juans-project".to_string()]);
+    }
+    #[test]
+    fn an_unmarked_checkout_is_named_by_its_directory() {
+        let root = scratch("plain");
+        let dir = checkout(&root, "acme", None);
+        assert_eq!(project_id_of(&dir), None);
+        assert_eq!(checkout_for(&root, "acme"), Some(dir));
+        assert_eq!(known_projects_under(&root), vec!["acme".to_string()]);
+    }
+    #[test]
+    fn a_directory_claiming_another_id_is_not_that_project() {
+        let root = scratch("claim");
+        checkout(&root, "acme", Some("other"));
+        assert_eq!(checkout_for(&root, "acme"), None);
+        assert_eq!(checkout_for(&root, "other"), Some(root.join("acme")));
+    }
+    #[test]
+    fn a_path_shaped_id_reads_as_unmarked() {
+        let root = scratch("shape");
+        let dir = checkout(&root, "acme", Some("../escape"));
+        assert_eq!(project_id_of(&dir), None);
+        assert_eq!(checkout_for(&root, "../escape"), None);
+        assert_eq!(checkout_for(&root, "a/b"), None);
+    }
 }
 
 #[cfg(test)]

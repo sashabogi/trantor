@@ -268,17 +268,11 @@ async fn agent_settings_set_default(id: Option<String>) -> Result<String, String
 }
 
 /// Where a project's code lives on THIS machine. Convention first (~/development/<project>),
-/// TRANTOR_DEV_ROOT to relocate. Returns None when the repo simply isn't here — a card can
-/// reference code on another operator's machine and the UI degrades to text.
+/// TRANTOR_DEV_ROOT to relocate, and a renamed checkout answers by the id it records (#6724).
+/// Returns None when the repo simply isn't here — a card can reference code on another
+/// operator's machine and the UI degrades to text.
 fn project_dir(project: &str) -> Option<std::path::PathBuf> {
-    let root = std::env::var("TRANTOR_DEV_ROOT")
-        .unwrap_or_else(|_| format!("{}/development", std::env::var("HOME").unwrap_or_default()));
-    let dir = std::path::Path::new(&root).join(project);
-    if dir.is_dir() {
-        Some(dir)
-    } else {
-        None
-    }
+    identity::checkout_for(&identity::dev_root(), project)
 }
 
 /// One entry in the project's file tree. `status` carries git's porcelain code for the file, which
@@ -2833,7 +2827,9 @@ fn project_of_cwd(cwd: &str, root: &str) -> Option<String> {
     if first.is_empty() || first.starts_with('.') {
         return None;
     }
-    Some(first.to_string())
+    // The directory name is a label once the checkout records its id (#6724): a session whose
+    // directory was renamed still lights the project the list shows.
+    Some(identity::project_id_of(&Path::new(root).join(first)).unwrap_or_else(|| first.to_string()))
 }
 
 /// A project a session is open for, plus herdr's lifecycle status when one was resolved from the
@@ -7885,10 +7881,8 @@ fn project_changes_sync(project: &str) -> Result<Vec<ChangeRow>, String> {
     {
         return Err("project is invalid".into());
     }
-    let dev_root = std::env::var("TRANTOR_DEV_ROOT")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| PathBuf::from(format!("{}/development", std::env::var("HOME").unwrap_or_default())));
-    let checkout = dev_root.join(project);
+    let dev_root = identity::dev_root();
+    let checkout = identity::checkout_for(&dev_root, project).unwrap_or_else(|| dev_root.join(project));
     let seats_root = desktop_bus_dir().join("worktrees").join(project);
 
     let mut rows = collect_changes_for_root(&checkout, None);
