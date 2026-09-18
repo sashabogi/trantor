@@ -1,6 +1,7 @@
 import { basename, join } from "node:path";
 import { existsSync } from "node:fs";
 import { call } from "./core.mjs";
+import { checkoutFor, readProjectId } from "../../lib/project.mjs";
 
 function gitRoot(dir) {
   const result = call("git", ["-C", dir, "rev-parse", "--show-toplevel"]);
@@ -11,7 +12,8 @@ export function resolveOrchestratorDir(ctx, projectArg) {
   const target = projectArg || ctx.project;
   const badge = ctx.env.TRANTOR_ORCH || ctx.env.TRANTOR_SEAT || "";
   const root = gitRoot(ctx.dir);
-  const here = root ? basename(root) : "";
+  // The checkout's recorded id outranks its directory name (#6724): a renamed dir is the same project.
+  const here = root ? (readProjectId(root) || basename(root)) : "";
   if (badge && badge !== target) {
     throw new Error(`trantor open: refused — this shell is badged for '${badge}', not '${target}'; open it from the target project's shell`);
   }
@@ -19,13 +21,13 @@ export function resolveOrchestratorDir(ctx, projectArg) {
     throw new Error(`trantor open: refused — cwd belongs to project '${here}', not '${target}'; cd to the target checkout first`);
   }
   if (!projectArg || target === here) return { dir: ctx.dir, project: target };
-  const devRoot = ctx.env.TRANTOR_DEV_ROOT || join(ctx.home, "development");
-  const targetDir = join(devRoot, target);
-  if (existsSync(targetDir)) {
+  // By the project's id (#6724): a renamed checkout carries its marker and still answers.
+  const targetDir = checkoutFor(target, { ...ctx.env, HOME: ctx.home });
+  if (targetDir) {
     console.error(`— opening ${target} in its checkout: ${targetDir} —`);
     return { dir: targetDir, project: target };
   }
-  throw new Error(`trantor open: '${target}' has no checkout at ${targetDir} — cd into the project first`);
+  throw new Error(`trantor open: '${target}' has no checkout under ${ctx.env.TRANTOR_DEV_ROOT || join(ctx.home, "development")} — cd into the project first`);
 }
 
 function linkedByTest(env, badge, project) {

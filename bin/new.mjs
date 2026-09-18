@@ -22,7 +22,7 @@ import { fileURLToPath } from "node:url";
 import { ensureEnrolled as enrollTofu, loadIdentity, signedPost } from "../hooks/lib/api.mjs";
 import { ensureEnrolled as enrollViaOwnerInvite } from "../lib/enroll.mjs";
 import { setAutonomy } from "../lib/autonomy.mjs";
-import { resolveHub, setProjectHub } from "../lib/project.mjs";
+import { resolveHub, setProjectHub, writeProjectId, isProjectId } from "../lib/project.mjs";
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 
@@ -93,6 +93,8 @@ if (from) {
   if (!existsSync(join(dir, ".git"))) gitOk(git(["init", "-b", "main"]), "git init");
   branch = git(["branch", "--show-current"]).stdout.trim() || "main";
 }
+// The identity lives in the checkout from birth (#6724): a later directory rename keeps the board.
+if (isProjectId(basename(name))) writeProjectId(dir, basename(name), "trantor new");
 
 // ── durable brief + small CLAUDE.md pointer ─────────────────────────────────────────────────────
 if (brief) {

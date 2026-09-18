@@ -7,7 +7,7 @@ import { join, dirname } from "node:path";
 import { homedir } from "node:os";
 import { execSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { resolveProject, resolveHubInfo } from "../lib/project.mjs";
+import { resolveProjectInfo, resolveHubInfo, gitRoot, writeProjectId, PROJECT_MARKER } from "../lib/project.mjs";
 
 const DRY = process.argv.includes("--dry-run");
 const MCP = join(dirname(dirname(fileURLToPath(import.meta.url))), "mcp.mjs");
@@ -15,7 +15,8 @@ const MCP = join(dirname(dirname(fileURLToPath(import.meta.url))), "mcp.mjs");
 // to and the hub THAT project resolves to. Some CLIs spawn MCP with a scrubbed env where even `git`
 // is missing, so the stamp is the belt; the worktree path rule in lib/project.mjs stays primary.
 // Env wins in resolveHubInfo, so these keys are REFRESHED on every connect run — re-run after a pin change.
-const PROJECT_AT_CONNECT = resolveProject(process.cwd());
+const PROJECT_INFO = resolveProjectInfo(process.cwd());
+const PROJECT_AT_CONNECT = PROJECT_INFO.project;
 const URL_ = resolveHubInfo(PROJECT_AT_CONNECT).url;
 // Graft (github.com/NanoNets/context-graph-engine): local Tree-sitter dependency graph over MCP,
 // wired next to `relay` so a seat locates code in one call; the graph refreshes itself per query
@@ -260,6 +261,17 @@ ${HAS_GRAFT ? `    - id: trantor-graft
 }
 
 const found = out.length;
+// The checkout records its id at connect time (#6724) when the name came from the directory, so a
+// later rename carries the pin, board and sessions along. Never from RELAY_PROJECT or a seat
+// worktree path: a badge must not stamp its name into somebody else's repo.
+{
+  const root = gitRoot(process.cwd());
+  if (PROJECT_INFO.via === "marker") report("project", `id ${PROJECT_AT_CONNECT} already recorded in ${PROJECT_MARKER}`);
+  else if (root && PROJECT_INFO.via === "git") {
+    if (!DRY) writeProjectId(root, PROJECT_AT_CONNECT, "trantor connect");
+    report("project", `id ${PROJECT_AT_CONNECT} recorded in ${PROJECT_MARKER} — commit it so worktrees and clones carry the identity`, root);
+  }
+}
 console.log(`trantor connect${DRY ? " (dry run)" : ""} — project: ${PROJECT_AT_CONNECT}, hub: ${URL_}`);
 for (const r of out) console.log(`  ${r.cli.padEnd(9)} ${r.status}${r.detail ? `  (${r.detail})` : ""}`);
 if (!found) console.log("  no supported CLIs found on PATH (claude, codex, gemini, kimi, opencode, dsh)");

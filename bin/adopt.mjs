@@ -13,9 +13,9 @@
 // newest, rather than asserting which one is yours.
 import { readdirSync, statSync, existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { execFileSync } from "node:child_process";
-import { join, dirname } from "node:path";
+import { join, dirname, basename } from "node:path";
 import { homedir } from "node:os";
-import { resolveProject, writeOrchSession } from "../lib/project.mjs";
+import { resolveProject, writeOrchSession, checkoutFor, devRootFor, readOrchSession } from "../lib/project.mjs";
 
 const D = "\x1b[2m", B = "\x1b[1m", Y = "\x1b[33m", G = "\x1b[32m", R = "\x1b[0m";
 const args = process.argv.slice(2);
@@ -23,29 +23,44 @@ const flag = (n) => { const i = args.indexOf(n); return i >= 0 ? args[i + 1] : n
 
 const project = args.find(a => !a.startsWith("--") && args[args.indexOf(a) - 1] !== "--session")
   || resolveProject(process.cwd());
-const devRoot = process.env.TRANTOR_DEV_ROOT || join(homedir(), "development");
-const dir = join(devRoot, project);
-if (!existsSync(dir)) {
-  console.error(`no local checkout for ${project} (looked in ${devRoot})`);
+// The checkout is found by the project's ID (#6724): a renamed directory still answers.
+const dir = checkoutFor(project);
+if (!dir) {
+  console.error(`no local checkout for ${project} (looked in ${devRootFor()})`);
   process.exit(1);
 }
 
 /** claude keeps a project's transcripts under a slug of its working directory. */
 const slug = dir.replace(/[/.]/g, "-");
-const tdir = join(homedir(), ".claude", "projects", slug);
-if (!existsSync(tdir)) {
+const projectsDir = join(homedir(), ".claude", "projects");
+const tdir = join(projectsDir, slug);
+// A session that was running when the directory was renamed keeps writing under the OLD path's
+// slug (#6724: "no transcript in the last hour" while the thread was 9 minutes fresh). The
+// recorded orchestrator sid names that transcript wherever its slug lives, so it stays a candidate.
+const recordedSid = readOrchSession(project);
+const recordedTranscript = (() => {
+  if (!recordedSid) return "";
+  try {
+    for (const d of readdirSync(projectsDir)) {
+      const t = join(projectsDir, d, `${recordedSid}.jsonl`);
+      if (existsSync(t)) return t;
+    }
+  } catch {}
+  return "";
+})();
+if (!existsSync(tdir) && !recordedTranscript) {
   console.error(`no claude sessions have ever run in ${dir}`);
   process.exit(1);
 }
 
 const RECENT_MS = 60 * 60 * 1000;
 const now = Date.now();
-const candidates = readdirSync(tdir)
-  .filter(f => f.endsWith(".jsonl"))
-  .map(f => {
-    const p = join(tdir, f);
+const transcripts = existsSync(tdir) ? readdirSync(tdir).filter(f => f.endsWith(".jsonl")).map(f => join(tdir, f)) : [];
+if (recordedTranscript && !transcripts.includes(recordedTranscript)) transcripts.push(recordedTranscript);
+const candidates = transcripts
+  .map(p => {
     const st = statSync(p);
-    return { id: f.replace(/\.jsonl$/, ""), mtime: st.mtimeMs, size: st.size };
+    return { id: basename(p, ".jsonl"), mtime: st.mtimeMs, size: st.size };
   })
   .filter(c => now - c.mtime < RECENT_MS)
   .sort((a, b) => b.mtime - a.mtime);

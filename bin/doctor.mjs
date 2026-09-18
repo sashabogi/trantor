@@ -4,11 +4,11 @@
 // quota profile, optional Scrooge brain. Prints a checklist with copy-paste fixes.
 //   node bin/doctor.mjs
 import { readFileSync, readdirSync, existsSync } from "node:fs";
-import { join, dirname } from "node:path";
+import { join, dirname, basename } from "node:path";
 import { homedir } from "node:os";
 import { execSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { resolveProject, resolveHub, DEFAULT_HUB_URL } from "../lib/project.mjs";
+import { resolveProject, resolveProjectInfo, resolveHub, DEFAULT_HUB_URL, gitRoot, readProjectId, checkoutFor, orchSessionsPath, PROJECT_MARKER } from "../lib/project.mjs";
 import { loadOrCreate } from "../lib/identity.mjs";
 import { sfetchJson } from "../lib/signed-fetch.mjs";
 import { scan } from "../lib/splitbrain.mjs";
@@ -63,6 +63,36 @@ if (pkg?.version) {
   const tooOld = cur[0] < min[0] || (cur[0] === min[0] && (cur[1] < min[1] || (cur[1] === min[1] && cur[2] < min[2])));
   tooOld ? warn(`trantor v${pkg.version} too old — heartbeat/presence requires v0.17.0+`, "npm update -g trantor") : ok(`trantor v${pkg.version}`);
 } else warn("could not read trantor version", "reinstall: npm install -g trantor");
+
+// ── project identity (#6724): a directory rename left every record under the old name and minted
+// an empty twin. The id in .trantor/project.json survives a rename; this section says whether THIS
+// checkout has one and names every orchestrated project whose checkout is gone, with the fix.
+section("project identity");
+{
+  const root = gitRoot(process.cwd()) || process.cwd();
+  const label = basename(root);
+  const { via } = resolveProjectInfo(process.cwd());
+  const marked = readProjectId(root);
+  if (marked) ok(`${marked} recorded in ${PROJECT_MARKER}${marked !== label ? ` — directory "${label}" is a label; the identity survived a rename` : ""}`);
+  else if (via === "env" || via === "worktree") note(`${PROJECT} named by ${via === "env" ? "RELAY_PROJECT" : "the seat worktree path"}; the checkout itself is unmarked`);
+  else note(`${PROJECT} is named by its directory; a rename would orphan its pin, board and orchestrator row → trantor project ${PROJECT}   (records ${PROJECT_MARKER}; commit it)`);
+  // An orphan is a name with an orchestrator row (a session ran HERE) and no checkout. A pin alone
+  // is not evidence: projects that live on another machine are pinned here too, so pins get a note.
+  const orchRows = (() => { try { return [...new Set(readFileSync(orchSessionsPath(), "utf8").split("\n").map(l => l.split("\t")[0]).filter(Boolean))]; } catch { return []; } })();
+  const pinned = Object.keys(cfg.hubs || {});
+  const claim = (name) => marked
+    ? `if that project was renamed, claim it inside its checkout: cd <its dir> && trantor project ${name}`
+    : `if "${label}" is that project renamed: trantor project ${name}   (the pin, board and orchestrator row then follow the id)`;
+  let orphans = 0;
+  for (const name of orchRows) {
+    if (checkoutFor(name)) continue;
+    orphans++;
+    warn(`orphaned identity: ${name} has an orchestrator session row${pinned.includes(name) ? " and a hub pin" : ""} but no checkout on this machine carries it`, claim(name));
+  }
+  const pinnedOnly = pinned.filter(n => !orchRows.includes(n) && !checkoutFor(n));
+  if (pinnedOnly.length) note(`${pinnedOnly.length} pinned project(s) with no checkout here (${pinnedOnly.slice(0, 8).join(", ")}${pinnedOnly.length > 8 ? ", …" : ""}) — fine when they live on another machine`);
+  if (!orphans) ok("every orchestrated project still has its checkout");
+}
 
 // ── hub routing: is any project split across two hubs? ───────────────────────────────────────
 // Cards, messages and collision detection only work over ONE hub. A project split across two

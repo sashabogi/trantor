@@ -16,7 +16,7 @@ import { join, dirname } from "node:path";
 import { homedir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { execFileSync, spawnSync } from "node:child_process";
-import { resolveProject } from "../lib/project.mjs";
+import { resolveProject, checkoutFor, devRootFor } from "../lib/project.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const args = process.argv.slice(2);
@@ -102,9 +102,9 @@ import { basename as _bn } from "node:path";
 if (process.argv[1] && _bn(process.argv[1]) === "takeover.mjs") {
   const project = args.find(a => !a.startsWith("--") && args[args.indexOf(a) - 1] !== "--session")
     || resolveProject(process.cwd());
-  const devRoot = process.env.TRANTOR_DEV_ROOT || join(homedir(), "development");
-  const dir = join(devRoot, project);
-  if (!existsSync(dir)) { say(`no local checkout for ${project} (looked in ${devRoot})`); out(false, { reason: "no-checkout" }); }
+  // By the project's id, so a renamed directory still answers (#6724).
+  const dir = checkoutFor(project);
+  if (!dir) { say(`no local checkout for ${project} (looked in ${devRootFor()})`); out(false, { reason: "no-checkout" }); }
   const d = decide({ terminalPids: terminalClaudePids(dir, project), candidates: recentCandidates(dir), sessionFlag: opt("--session"), force: flag("--force") });
   if (flag("--dry-run")) { say(`dry-run: ${d.action}${d.reason ? ` — ${d.reason}` : ""}${d.sid ? ` (sid ${d.sid}, pid ${d.pid})` : ""}`); out(true, { decision: d }); }
   if (d.action === "refuse") { say(d.reason); out(false, { reason: d.reason }); }
