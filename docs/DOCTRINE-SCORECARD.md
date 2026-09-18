@@ -103,3 +103,34 @@ contracts with semver (chart-tabs 1.3.0).
 Consolidation phase: (1) CI: xcodebuild test on push for the 49 test files; (2) a drill line on
 every card of the form "install build N on the phone and see X"; (3) an episode model for the
 rescue and coverage warnings (rule 11); (4) split DesktopOverviewTab.swift. The GA push waits for (1).
+
+## builtbetter (9eb571b)
+
+Brief: unread (403). Checkout: construction SaaS on Next.js and Convex; 888 source files, 136
+commits in 90 days, 4 naming a card (one a bounce, #7844); PROJECT-STATUS.md and TODO.md frozen at
+2026-05-19 while 103 commits landed in the last 30 days.
+Shape: 83 files over 800 lines, 23 over 1,500 (convex/construction/planTakeoff.ts 8,152,
+convex/schema.ts 5,065, convex/crm/estimates.ts 4,207); 191 test files (convex 83, lib 61,
+components 41); no CI, no pre-commit hook; 62 of 64 dependencies caret-ranged; a 647-line CLAUDE.md.
+
+- state not event: PARTIAL. The data rules are the strongest of the five (one owner per fact,
+  derived at read time, provenance on every measured fact; CLAUDE.md), yet the notification center
+  is a "Coming Soon" panel (notification-center.tsx:268), so no operator state is surfaced at all.
+- episodes not timers: MET. Convex subscriptions push state; the 4 setInterval sites are two
+  clocks and a presence heartbeat, none an alert.
+- no fake affordances: MISSING. 10 files ship controls that do nothing: Edit on an integration
+  toasts "coming soon" (settings/integrations/page.tsx:389), "Request Document Update (Coming
+  Soon)" is a button (sub-compliance-panel.tsx:680), photo upload, notifications and estimates say
+  the same.
+- done is a gate: PARTIAL. AGENTS.md's verification protocol ("agent prose is not evidence", from
+  the 2026-05-13 fabricated reports) and the #7844 bounce show the gate is practised; but nothing
+  runs on push and 1 of 136 commits names a drill.
+- contracts carry a base: PARTIAL. Cards reach the repo (#7844, #7853, #7879), so contracts exist
+  on the bus; unread here, and the repo carries none.
+- seats can ask: PARTIAL. Inherited from the runner; neither CLAUDE.md nor AGENTS.md has an ask
+  rule (0 mentions), and the verification protocol says what to check, not what to ask.
+
+Consolidation phase: (1) CI on push (vitest and tsc) so red blocks merge; (2) delete or wire the 10
+dead controls (rule 5: prefer deleting); (3) split the 23 files over 1,500 lines, planTakeoff.ts
+first, by feature (rule 6); (4) move the 647-line CLAUDE.md narrative into docs/CONTRACT-*.md and
+retire the stale status files (rule 7). The next feature wave waits for (1) and (3).
