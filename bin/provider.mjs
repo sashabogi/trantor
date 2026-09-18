@@ -1,20 +1,8 @@
 #!/usr/bin/env node
-// trantor provider — bring ANY model to the crew (BYOM). opencode is a universal adapter, so a
-// provider you configure there (or declare here) becomes a crew seat with no code change.
-//
-//   trantor provider                 # seats (built-in + discovered) + the provider status board
-//   trantor provider status [--json] # the registry: state + reason per provider (#6390)
-//   trantor provider login <name>    # run the CLI's own login command (the pane's "login" action)
-//   trantor provider verify <name> --key sk-… [--json]   # probe a CANDIDATE key, write nothing
-//   trantor provider add <name> [--key sk-…] [--plan api|coding-plan|max] [--label <bus-name>]
-//                       [--base-url <url> [--models m1,m2]]   # wire a CUSTOM OpenAI-compatible endpoint
-//   trantor provider remove <name> [--credentials]   # drop it from your profile (--credentials: also the key)
-//
-// `add` writes <NAME>_API_KEY to ~/.agent-bus/.env (if --key given), declares the plan in your
-// quota profile, verifies opencode can see the provider's models, and prints the seat spec. For a
-// provider opencode already knows (openrouter, groq, …) the key is enough; for a CUSTOM endpoint,
-// pass --base-url and it writes the opencode.json provider block for you. The Advisor then routes
-// to it automatically; run `scrooge-capabilities` so it routes well by difficulty.
+// trantor provider — bring ANY model to the crew (BYOM): opencode is a universal adapter, so a
+// provider configured there (or declared here) becomes a seat with no code change (#6390).
+//   status [--json] · login <name> · verify <name> --key … (writes nothing) · add <name> [--key …]
+//   [--plan …] [--label …] [--base-url <url> [--models m1,m2]] · remove <name> [--credentials]
 import { readFileSync, writeFileSync, existsSync, mkdirSync, chmodSync, appendFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { homedir } from "node:os";
@@ -22,6 +10,7 @@ import { execSync, spawnSync } from "node:child_process";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { buildRoster, loadWorld } from "./advise.mjs";
 import { providerStatus, providerVerify, PROVIDERS } from "../lib/providers.mjs";
+import { backendFor, putSecret, dropSecret } from "../lib/secrets.mjs";
 
 const H = homedir();
 const ENV = join(H, ".agent-bus", ".env");
@@ -136,8 +125,15 @@ function addProvider(name, opts) {
   const label = (opts.label || provider).toLowerCase().replace(/[^a-z0-9-]/g, "-");
   const plan = (opts.plan || "api").toLowerCase();
 
-  // 1) key → ~/.agent-bus/.env (the runner sources it; opencode reads <NAME>_API_KEY for known providers)
-  if (opts.key) {
+  // 1) key → the secret store once it is on (#6393), else ~/.agent-bus/.env (the runner sources
+  //    it; opencode reads <NAME>_API_KEY for known providers)
+  if (opts.key && backendFor() !== "none") {
+    const k = envKeyName(provider);
+    try {
+      const put = putSecret(k, opts.key);
+      console.log(`${C.grn}✓${C.off} stored ${k} in the ${put.backend}${put.stubbed ? " (its .env line is now a stub)" : ""}`);
+    } catch (e) { console.error(String(e?.message || e)); process.exit(1); }
+  } else if (opts.key) {
     mkdirSync(dirname(ENV), { recursive: true });
     const k = envKeyName(provider);
     let cur = existsSync(ENV) ? readFileSync(ENV, "utf8") : "";
@@ -210,6 +206,10 @@ function removeProvider(name, opts = {}) {
   // so removing a provider from the UI doesn't leave a live secret in the crew's .env.
   if (opts.credentials) {
     const k = envKeyName(name);
+    try {
+      const dropped = dropSecret(k);
+      if (dropped.removed) console.log(`${C.grn}✓${C.off} removed ${k} from the ${dropped.backend}`);
+    } catch (e) { console.log(`${C.yel}⚠${C.off} ${String(e?.message || e)}`); }
     if (existsSync(ENV)) {
       const cur = readFileSync(ENV, "utf8");
       const next = cur.split("\n").filter((l) => !l.startsWith(`${k}=`)).join("\n");

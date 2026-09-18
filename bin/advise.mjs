@@ -1,15 +1,8 @@
 #!/usr/bin/env node
-// The Advisor — the brain's front door. Given work packages, decide HOW to execute:
-// solo | scrooge | crew | hybrid — from task shape × plan economics × context horizon.
-//
+// The Advisor — the brain's front door: given work packages, decide HOW to execute (solo |
+// scrooge | crew | hybrid) from task difficulty × plan economics × context horizon.
 //   echo '{"task":"build X","packages":[{"title":"engine","difficulty":"hard"},…]}' | node bin/advise.mjs
-//   node bin/advise.mjs --demo            # canned example
-//
-// Reads (all read-only):
-//   ~/.agent-bus/profile.json             — the user's declared plans (bin/profile.mjs)
-//   ~/.token-scrooge/registry.json        — Scrooge's models {cost_in, cost_out, good_for}
-//   ~/.token-scrooge/capabilities.json    — per-model quality scores
-// Exposed to agents as the MCP tool `relay_advise`; the crew skill calls it at kickoff.
+// Reads profile.json and Scrooge's registry + capabilities (read-only); exposed as `relay_advise`.
 import { readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
@@ -18,23 +11,15 @@ import { pathToFileURL } from "node:url";
 import { busDir, readConfig, resolveProject } from "../lib/project.mjs";
 import { loadCatalog, lookup as catalogLookup, effortParams, UNCATALOGUED_STATUS } from "../lib/model-catalog.mjs";
 import { benchedAt, loadSeatRecord } from "../lib/seat-record.mjs";
+import { openStore } from "../lib/secrets.mjs";
 
 const H = homedir();
 const read = (p, fb) => { try { return JSON.parse(readFileSync(p, "utf8")); } catch { return fb; } };
 
 // ---- crew roster: BUILT-IN seats + ANY opencode provider the user has brought (BYOM) ----
-// Each seat: the CLI binary that must exist (`cli`) · the `trantor up` LAUNCH spec · the bus
-// SESSION label (its identity on the board) · the profile PROVIDER key (tier/cost) · for
-// opencode-driven seats, the opencode PROVIDER id (`providerOc`) used to enumerate models + auth.
-//
-// GEMINI is deliberately absent: Google retired the free CLI seat (2026-06-18) → `gemini --yolo`
-// crashes exit 1. Its replacement is GLM via opencode.
-//
-// The opencode-driven seats are the BYOM substrate: opencode is a UNIVERSAL adapter, so any
-// provider the user configures in opencode (or declares in their profile) becomes a crew seat
-// with ZERO code change here — `buildRoster()` discovers them at runtime. The built-ins below are
-// just the curated defaults + the two opencode seats with non-obvious mappings (glm: profile key
-// `zai` ↔ opencode provider `zai-coding-plan`).
+// Each seat: the CLI binary (`cli`), the `trantor up` LAUNCH spec, the bus SESSION label, the
+// profile PROVIDER key and, for opencode seats, the opencode provider id (`providerOc`). Gemini is
+// absent (its free CLI seat was retired; GLM via opencode replaced it); buildRoster() finds the rest.
 export const BUILTIN_ROSTER = {
   codex:      { cli: "codex",    launch: "codex",                   session: "codex",      provider: "codex" },
   kimi:       { cli: "kimi",     launch: "kimi",                    session: "kimi",       provider: "kimi" },
@@ -47,11 +32,10 @@ export const BUILTIN_ROSTER = {
 const BUILTIN_OC = new Set(Object.values(BUILTIN_ROSTER).filter(s => s.providerOc).map(s => s.providerOc));
 const NEVER_DISCOVER = new Set(["claude", "codex", "kimi", "gemini", "zai", "opencode"]);
 
-// Discover opencode providers the user has configured — from opencode.json `provider` keys AND
-// from profile providers declared via `trantor provider add` — that aren't already built-in. Each
-// becomes an opencode-driven seat under its OWN bus label (distinct session, no collisions). THIS
-// is what lets a brought provider (Inception, a Japanese model, any opencode vendor) light up a
-// seat with no code edit. T2's capability ingestion then makes it route well by difficulty.
+// Discover opencode providers the user configured (opencode.json `provider` keys and profile
+// providers from `trantor provider add`) that aren't built in. Each becomes an opencode-driven
+// seat under its OWN bus label, so a brought provider lights up a seat with no code edit; T2's
+// capability ingestion then makes it route well by difficulty.
 export function discoverSeats(profile, ocConfig) {
   const out = {};
   const provKeys = new Set([...Object.keys(ocConfig?.provider || {}), ...Object.keys(profile?.providers || {})]);
@@ -83,7 +67,7 @@ export function loadWorld() {
   const opencodeKey = (prov) => !!ocConfig?.provider?.[prov]?.options?.apiKey;
   // a key the user already has for Scrooge counts too — the opencode runner sources these .env
   // files, so e.g. OPENROUTER_API_KEY in ~/.token-scrooge/.env lights up the seat with no extra setup.
-  const envHasKey = (k) => !!process.env[k] || [join(H, ".token-scrooge", ".env"), join(H, ".agent-bus", ".env")]
+  const envHasKey = (k) => !!process.env[k] || openStore().has(k) || [join(H, ".token-scrooge", ".env"), join(H, ".agent-bus", ".env")]
     .some(f => { try { return readFileSync(f, "utf8").includes(k); } catch { return false; } });
   // a seat is available only if its CLI exists AND (for opencode-driven seats) the provider is
   // actually set up — a present binary with a dead/missing seat must NOT be recommended.

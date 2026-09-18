@@ -12,6 +12,7 @@ import { resolveProject, resolveProjectInfo, resolveHub, DEFAULT_HUB_URL, gitRoo
 import { loadOrCreate } from "../lib/identity.mjs";
 import { sfetchJson } from "../lib/signed-fetch.mjs";
 import { scan } from "../lib/splitbrain.mjs";
+import { resolveSecrets, envFileSecrets, backendFor } from "../lib/secrets.mjs";
 
 const H = homedir();
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
@@ -119,10 +120,9 @@ section("hub routing");
 }
 
 // ── duty seat: is the fleet's watcher actually alive? ────────────────────────────────────────
-// The duty seat sat dead for four days (2026-08-27→31) while everything else reported green.
-// A dead watcher raises no error of its own — it just stops producing nudges — so this row makes
-// that state loud: process, keepalive, hub registration and the freshness of the seat's last hub
-// beat, each with its fix.
+// A dead watcher raises no error of its own, it just stops producing nudges (it once sat dead for
+// four days while everything else reported green), so this row makes that state loud: process,
+// keepalive, hub registration and the freshness of the seat's last hub beat, each with its fix.
 section("duty seat (the fleet watcher)");
 {
   const BUSD = join(H, ".agent-bus");
@@ -193,7 +193,7 @@ const CLIS = [
     auth: () => !!process.env.ANTHROPIC_API_KEY || existsSync(join(H, ".claude", ".credentials.json")) || keychainHas("Claude Code-credentials"),
     login: "claude   (sign in with your Anthropic account on first run)" },
   { name: "codex",  bin: "codex",  wired: () => (readFileSync(join(H, ".codex", "config.toml"), "utf8")).includes("[mcp_servers.relay]"), auth: () => existsSync(join(H, ".codex", "auth.json")), login: "codex   (sign in with your ChatGPT account on first run)" },
-  // Gemini CLI was retired 2026-06-18 for free/Pro/Ultra (Google → Antigravity `agy`). Kept as an
+  // Gemini CLI was retired for free/Pro/Ultra (Google → Antigravity `agy`). Kept as an
   // optional seat for enterprise/paid-key holders; for everyone else the seat moved to GLM/opencode,
   // and Gemini lives on only as a Scrooge cheap-model via GEMINI_API_KEY (the API/models aren't retired).
   { name: "gemini (CLI retired 2026-06-18)", bin: "gemini",   wired: () => !!read(join(H, ".gemini", "settings.json"))?.mcpServers?.relay, auth: () => existsSync(join(H, ".gemini", "oauth_creds.json")) || !!process.env.GEMINI_API_KEY || !!process.env.GOOGLE_API_KEY, login: "Gemini CLI retired 2026-06-18 (free/Pro/Ultra). Crew seat → GLM (opencode) or Antigravity `agy`. Gemini still serves as a Scrooge cheap-model via GEMINI_API_KEY." },
@@ -242,28 +242,15 @@ section("providers");
 }
 
 // ---- key attribution: WHICH key does each surface actually spend on? ------------------------
-// Provider keys resolve through a LAYERED lookup and nothing ever showed which layer won. On
-// 2026-08-25 a $14 DeepSeek day could not be explained: ~/.token-scrooge/.env held the only
-// DEEPSEEK_API_KEY, so Scrooge's `dev-infra` key was ALSO authenticating every crew seat (the
-// runner sources that file). Scrooge turned out to be 0.15% of the tokens on that key and the
-// crew was the other 99.85%, but the bill could not say so — one key, two jobs, one line item.
-//
-// The layers, highest priority first — this MIRRORS bin/crew-runner.mjs, which sources
-// ~/.agent-bus/.env last so it wins:
-//   1. the process environment
-//   2. ~/.agent-bus/.env      — the CREW layer (seats: opencode/deepseek/openrouter/dsh)
-//   3. ~/.token-scrooge/.env  — the SCROOGE layer (cheap-model grunt routing)
+// A layered lookup with nothing showing which layer won once let Scrooge's key authenticate every
+// crew seat (a $14 day the bill could not attribute). Precedence, highest first, mirroring the
+// runner: the secret store (keychain, #6393), ~/.agent-bus/.env, ~/.token-scrooge/.env, process env.
 section("provider keys (who spends on what)");
 const KEY_VARS = ["DEEPSEEK_API_KEY", "OPENROUTER_API_KEY", "MOONSHOT_API_KEY", "ZAI_API_KEY", "OPENAI_API_KEY", "GEMINI_API_KEY", "XAI_API_KEY", "INCEPTION_API_KEY"];
-// Only some of these are a CREW credential. A seat that authenticates through its own config never
-// reads the env var at all, so a shared value there costs nothing and flagging it is noise:
-//   glm    → opencode.json provider["zai-coding-plan"].options.apiKey  (and a coding plan is flat
-//            rate, so there is no per-token bill to attribute even in principle)
-//   kimi   → ~/.kimi/credentials      codex → its own login      gemini → retired
-// The opencode-driven seats that DO take their key from the env layer are deepseek and openrouter,
-// and even then only when opencode.json has not already given that provider its own key.
-// Getting this wrong cries wolf: the first version flagged all seven and five were false positives,
-// which is how a doctor becomes something you skip.
+// Only some of these are a CREW credential: glm reads opencode.json, kimi its own credentials,
+// codex its own login, so a shared value in their env var costs nothing and flagging it is noise.
+// deepseek and openrouter DO take the env layer, and only when opencode.json gave them no literal
+// key. The first version flagged all seven, five were false positives; a doctor gets skipped that way.
 const OPENCODE_CFG = read(join(H, ".config", "opencode", "opencode.json")) || {};
 const SEAT_ENV_VARS = { DEEPSEEK_API_KEY: "deepseek", OPENROUTER_API_KEY: "openrouter" };
 const ENV_TEMPLATE = /\{env:([A-Z0-9_]+)\}/;
@@ -299,14 +286,15 @@ const readEnvFile = (f) => {
 // Never print a key. The suffix is enough to match a line item in a provider console.
 const mask = (v) => (!v ? "" : v.length <= 12 ? "****" : `${v.slice(0, 5)}…${v.slice(-4)}`);
 const crewEnv = readEnvFile(CREW_ENV), scroogeEnv = readEnvFile(SCROOGE_ENV);
+const storeEnv = resolveSecrets();
 let anyKey = false, shared = 0; const sharedVars = [];
-for (const v of KEY_VARS) {
-  const crew = process.env[v] || crewEnv[v] || "";
-  const scrooge = process.env[v] || scroogeEnv[v] || "";
-  if (!crew && !scrooge) continue;
+for (const v of [...new Set([...KEY_VARS, ...Object.keys(storeEnv)])]) {
+  // The layer that answers is named on the line, in the runner's precedence.
+  const answered = storeEnv[v] ? ["keychain", storeEnv[v]] : crewEnv[v] ? ["~/.agent-bus/.env (crew)", crewEnv[v]]
+    : scroogeEnv[v] ? ["~/.token-scrooge/.env (FALLBACK)", scroogeEnv[v]] : process.env[v] ? ["process env", process.env[v]] : null;
+  if (!answered) continue;
   anyKey = true;
-  const crewSrc = process.env[v] ? "process env" : crewEnv[v] ? "~/.agent-bus/.env (crew)" : scroogeEnv[v] ? "~/.token-scrooge/.env (FALLBACK)" : "none";
-  const crewKey = crew || scrooge;
+  const [crewSrc, crewKey] = answered;
   const scroogeFileKey = scroogeEnv[v] || "";
   if (!crewUsesVar(v)) {
     ok(`${v}: Scrooge only ${mask(scroogeFileKey || crewKey)} — no crew seat reads this var`);
@@ -317,11 +305,23 @@ for (const v of KEY_VARS) {
     ok(`${v}: crew ${mask(crewKey)} via ${crewSrc}${scroogeFileKey && scroogeFileKey !== crewKey ? ` · scrooge ${mask(scroogeFileKey)} via ~/.token-scrooge/.env` : ""}`);
   }
 }
-if (!anyKey) note("no provider API keys found in env, ~/.agent-bus/.env or ~/.token-scrooge/.env");
+if (!anyKey) note("no provider API keys found in the keychain, env, ~/.agent-bus/.env or ~/.token-scrooge/.env");
 else if (!shared) ok("crew and Scrooge spend on separate keys — each shows up as its own line item");
 else {
   warn(`${shared} provider key(s) do double duty (${sharedVars.join(", ")}) — a spike on the bill cannot be attributed to the crew or to Scrooge`,
-    `mint a second key per provider and give the CREW its own, e.g.: echo 'DEEPSEEK_API_KEY=<new-crew-key>' >> ~/.agent-bus/.env   (Scrooge keeps ~/.token-scrooge/.env; the runner sources ~/.agent-bus/.env last, so it wins)`);
+    `mint a second key per provider and give the CREW its own, e.g.: printf '%s' '<new-crew-key>' | trantor secrets set DEEPSEEK_API_KEY   (Scrooge keeps ~/.token-scrooge/.env; the store wins over every file)`);
+}
+// Keys still living in the file (#6393): a mode-600 file is still a file any process of yours can
+// read; the store is the keychain. Named by key so the fix is one command.
+const straggling = envFileSecrets();
+const storeNames = Object.keys(storeEnv);
+if (straggling.live.length && backendFor(process.env, { create: true }) !== "none") {
+  warn(`${straggling.live.length} key(s) still live in ~/.agent-bus/.env (${straggling.live.join(", ")})`,
+    "trantor secrets migrate   (each moves to the keychain; the line becomes a `# NAME -> keychain` stub)");
+} else if (straggling.live.length) {
+  note(`${straggling.live.length} key(s) live in ~/.agent-bus/.env (${straggling.live.join(", ")}) — no keychain on this platform; TRANTOR_SECRETS_BACKEND=file opts into a file store`);
+} else if (storeNames.length) {
+  ok(`secret store: ${storeNames.length} key(s) in the ${backendFor()} (${storeNames.join(", ")}), none left in .env`);
 }
 
 // brain
@@ -334,13 +334,10 @@ prof?.providers && Object.keys(prof.providers).length
   ? ok(`quota profile set (${Object.entries(prof.providers).map(([k, v]) => `${k}=${v.plan}`).join(", ")})`)
   : warn("quota profile not set — the Advisor will assume API billing everywhere", `node ${join(ROOT, "bin", "profile.mjs")} set claude=max codex=plus deepseek=api …  (use YOUR real plans)`);
 
-// fleet — is the crew actually OPERATING, not just installed?
-//
-// Added 2026-09-09, because on that morning this command reported nine issues, every one about
-// provider keys and billing attribution, while the duty seat had been holding 48 undelivered
-// messages for 21.9 hours and the orchestrator had slept through a night of finished crew work.
-// Doctor checked whether credentials EXIST. Nothing checked whether the fleet was MOVING. These
-// two signals are both already on disk, written by the runner itself — nobody was reading them.
+// fleet — is the crew actually OPERATING, not just installed? Doctor once reported nine key and
+// billing issues while the duty seat had held 48 undelivered messages for 22 hours and finished
+// crew work went unread overnight: credentials EXIST is not the fleet is MOVING. Both signals are
+// already on disk, written by the runner itself.
 section("the fleet (is it actually running?)");
 {
   const busDir = join(H, ".agent-bus");
@@ -358,11 +355,10 @@ section("the fleet (is it actually running?)");
       const oldest = stamps.length ? Math.min(...stamps) : j?.ts;
       const hours = (Date.now() - oldest) / 3.6e6;
       const seat = f.replace(/^pending-|\.json$/g, "");
-      // Three bands, because one flat warning per stuck queue is its own failure: this machine has
-      // leftovers from projects that ended weeks ago, and a doctor that cries about ten of them
-      // every run teaches you to skim past the one that matters. Under an hour is the retry ladder
-      // doing its job. Over a week is an abandoned seat, worth tidying, not worth alarming about.
-      // The band between is the live stall — the shape of the 2026-09-09 incident.
+      // Three bands, because one flat warning per stuck queue is its own failure: leftovers from
+      // projects that ended weeks ago would drown the one that matters. Under an hour is the retry
+      // ladder doing its job; over a week is an abandoned seat, worth tidying, not alarming about;
+      // the band between is the live stall.
       const abandoned = hours >= 24 * 7;
       if (hours >= 1 && !abandoned) {
         stuck++;
