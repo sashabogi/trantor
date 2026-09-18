@@ -11,6 +11,7 @@ import * as classify from "../../lib/classify-failure.mjs";
 import { redactKeys } from "../../lib/redact.mjs";
 import { parseTurnTokens } from "../../lib/turn-policy.mjs";
 import { withEnvFiles } from "../../lib/project.mjs";
+import { shadowEnv, withSecretExports } from "../../lib/secrets.mjs";
 
 const ROOT = new URL("../../", import.meta.url).pathname.replace(/\/$/, "");
 const source = fs.readFileSync(join(ROOT, "bin/crew-runner.mjs"), "utf8");
@@ -50,6 +51,8 @@ echo 'the runner can move on to its next wake without a redelivery ladder or a p
   const record = (...args) => logs.push(args.join(" "));
   const context = createContext({
     ...fs, ...classify, join, redactKeys, parseTurnTokens, withEnvFiles, setTimeout,
+    // #6393: the store is keychain I/O, stubbed empty like the hub; the shell helpers are the real ones.
+    shadowEnv, withSecretExports, resolveSecrets: () => ({}),
     process: { env: drillEnv({ HOME: work, PATH: `${bin}:${process.env.PATH}` }), execPath: process.execPath },
     homedir: () => work, gitOut: () => "unchanged-head", registerStatus: record,
     // #7759 helpers, stubbed like gitOut: no hub in this sandbox, so bus activity reads as none.
