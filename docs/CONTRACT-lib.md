@@ -125,6 +125,16 @@ these contracts here from comments; the incidents behind them live on the cards 
 - `lib/seat-why.mjs` diagnoses a seat from local evidence in order: the err log, the runner
   telemetry, the pane record, live runner processes. States: live, dead-quota, dead-auth,
   dead-crash, no-runner, no-pane.
+- `lib/seat-record.mjs` (#7762) is a read-time projection, never a store: card history from the hub
+  (`/tasks` notes and `/events` for aged-out cards) plus the runner's ledger rows
+  (`~/.agent-bus/logs/<seat>-<project>.jsonl`) give, per project and per seat, the last
+  `RECORD_LIMIT` cards as completed / empty / bounced. Bounced is a testing->doing move by someone
+  other than the seat, or a HOLLOW: note (#7750); completed is done with no bounce on the trail;
+  empty is a card that never reached done while none of the seat's turns on it completed.
+  `relay_advise` benches a seat at a difficulty when its last STRIKE cards there are all
+  empty/bounced, and only two things forgive it: `trantor seat-record --reset <seat>`, which drops
+  evidence older than the reset stamp, and new completed cards aging the bad ones out of the window.
+  No seat is blacklisted forever.
 
 ## Providers and balances
 
@@ -154,6 +164,17 @@ these contracts here from comments; the incidents behind them live on the cards 
 - Codex (#5570): the Codex CLI's own token reads the ChatGPT usage windows; the token never leaves
   the process and only percentages are reported. Unreachable falls back to the flat subscription
   row, never an error row. Profile-gated like every adapter: no profile, no row.
+- `lib/model-catalog.mjs` (#7777) reads `configs/model-catalog.json`, which records per
+  `"<provider>/<model-id>"` the API kinds it speaks, context window, max output, input modalities,
+  and the part capabilities.json has no answer for: an `effort` block mapping each crew difficulty
+  (easy/medium/hard) to concrete request parameters PER API KIND (reasoning_effort, thinking,
+  effort). Scores pick which model, this catalog says how to call it. A model missing from the
+  catalog still works at its provider default, because `lookup()` returns an entry whose status
+  reads "not in catalog, provider default". Model ids come from `trantor models`, the provider
+  adapters and the CLI defaults, never typed from memory, and every entry cites its limits with a
+  url. `cliEffortFlag` then applies only what a given CLI can actually carry (codex:
+  `-c model_reasoning_effort`; claude: `--effort`; opencode seats: `--variant`); anything else
+  stays at provider default and the one log line the runner prints says so.
 
 ## Redaction and scrubbing
 
