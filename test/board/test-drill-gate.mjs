@@ -1,9 +1,8 @@
 #!/usr/bin/env node
-// The done gate (#6452, build doctrine rule 1): a card reaches done only when it carries a drill
-// line — the `drill` field, a checklist item or a log note starting "Drill:", or the note riding
-// the move itself. Everything else answers 409 and changes nothing on the card, whoever moves it.
-// Drives the REAL hub over HTTP with the plain (unsigned, warn-mode) client, then restarts it to
-// show the drill survives the JSON store the way `extra` fields do on Postgres.
+// The done gate (#6452, build doctrine rule 1): done only with a drill line — the `drill` field, a
+// checklist item or log note starting "Drill:", or the move's note (a "Drill:" line or the gate
+// command it ran). Everything else answers 409 and changes nothing on the card, whoever moves it.
+// Drives the REAL hub over HTTP, then restarts it to show the drill survives the JSON store.
 import { spawn } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -111,6 +110,17 @@ try {
   const redo = await post("/task/update", { id: bare.id, status: "todo", by: "MacBook:drillproj" });
   const again = await post("/task/update", { id: bare.id, status: "done", by: "MacBook:drillproj" });
   ok("a reopened card whose drill line is on its log closes again", redo.status === 200 && again.status === 200 && again.json.task.status === "done");
+
+  // ---- 7b. the orchestrator's own close: "verified at <sha>" + the gate command names the drill --
+  const gated = await create({ title: "closed on the gate command", status: "testing" });
+  const countOnly = await post("/task/update", { id: gated.id, status: "done", by: "MacBook:drillproj", note: "verified at b3ad7a4 — 16/16 green" });
+  ok("a bare pass count names no gate: still 409", countOnly.status === 409, `status=${countOnly.status}`);
+  ok("...and the refusal now offers the gate-command route", /gate command/.test(countOnly.json.error || ""), countOnly.json.error);
+  const viaGate = await post("/task/update", { id: gated.id, status: "done", by: "MacBook:drillproj", note: "verified at b3ad7a4 — node test/run.mjs --only board 16/16 green" });
+  ok("a note naming the gate command it ran is the drill line — the orchestrator's close lands", viaGate.status === 200 && viaGate.json.task.status === "done", JSON.stringify(viaGate.json).slice(0, 160));
+  const viaNpm = await create({ title: "closed on npm test", status: "testing" });
+  const npmClose = await post("/task/update", { id: viaNpm.id, status: "done", by: "MacBook:drillproj", note: "verified at cbb5633; npm test 146/146" });
+  ok("npm test in the note counts the same way", npmClose.status === 200 && npmClose.json.task.status === "done", `status=${npmClose.status}`);
 
   // ---- 8. restart: the drill survives the store ------------------------------------------------
   await sleep(1400);   // the JSON store persists on a 1s tick; give the last writes a chance to land

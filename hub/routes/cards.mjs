@@ -211,13 +211,11 @@ export async function routeCards({ req, res, q, P, auth, ctx }) {
           }
         }
       }
-      // The done gate (#6452, build doctrine rule 1): a card reaches done only with a drill line —
-      // `drill`, a checklist item or a log note starting "Drill:", or the note on this very move.
-      // Whoever moves it, the orchestrator included; the seat that wrote the code was never meant
-      // to. Runs BEFORE any mutation so a refused close leaves the card exactly as it was. A bridge
-      // mirror replicates a status its source hub already gated, so it passes.
+      // The done gate (#6452, build doctrine rule 1): done only with a drill line (store.hasDrillLine),
+      // whoever moves it, the orchestrator included. Runs BEFORE any mutation so a refused close leaves
+      // the card as it was; a bridge mirror replicates a status its source hub already gated.
       if (b.status === "done" && t.status !== "done" && t.source !== "bridge" && !hasDrillLine(t, b)) {
-        return json(res, 409, { error: `no drill line on card #${t.id}: a card names what a person does on the built artifact and must see before it can be done — set \`drill\`, add a checklist item or a note starting with "Drill:" (build doctrine rule 1)`, id: t.id, status: t.status });
+        return json(res, 409, { error: `no drill line on card #${t.id}: a card names what a person does on the built artifact and must see before it can be done — set \`drill\`, add a checklist item or a note starting with "Drill:", or close with a note naming the gate command you ran (build doctrine rule 1)`, id: t.id, status: t.status });
       }
       let eventType = "updated", eventFrom = null, eventTo = null;
       if (b.status && ["todo","doing","testing","failed","done","blocked","stale"].includes(b.status) && b.status !== t.status) {

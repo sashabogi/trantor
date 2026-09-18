@@ -44,14 +44,13 @@ function appendTaskNote(t, b, ts = Date.now()) {
   if (!b || typeof b.note !== "string") return false;
   return appendTaskLog(t, b.by || "", b.note, ts);
 }
-// Card checklists (#5624): acceptance items are the one honest denominator for a progress bar.
-// Accepts plain strings (fresh items) or {text,done} (round-trips); caps 20 items x 200 chars.
-// Returns null for a non-array so callers can distinguish "not sent" from "sent empty".
-// #6452: a card's drill line (build doctrine rule 1) — what a person does on the built artifact
-// and must see. Any of: the `drill` field, a checklist item or a log note starting "Drill:", or
-// the note riding the move itself. The done gate in routes/cards.mjs reads this.
+// #6452: a card's drill line (build doctrine rule 1) — the `drill` field, a checklist item or a log
+// note starting "Drill:", or the move's own note; that note also counts when it names the gate
+// command it ran (the orchestrator closes with "verified at <sha>" + the gate). The command shapes
+// mirror hooks/lib/hollow-move.mjs, minus bare pass counts: "12/12" names no gate.
 const DRILL_MAX = 300;
 const DRILL_LINE = /^\s*drill:/i;
+const GATE_CMD = /(node\s+test\/|npm\s+(run\s+)?test|pnpm\s+test|yarn\s+test|vitest|pytest|go\s+test|cargo\s+test|make\s+test)/i;
 function cleanDrill(v) {
   const s = stripNulText(v).replace(/\s+/g, " ").trim();
   return s ? s.slice(0, DRILL_MAX) : "";
@@ -60,8 +59,12 @@ function hasDrillLine(t, b = {}) {
   if (cleanDrill(b.drill) || cleanDrill(t.drill)) return true;
   if (Array.isArray(t.checklist) && t.checklist.some(c => DRILL_LINE.test(String(c?.text ?? "")))) return true;
   if (Array.isArray(t.log) && t.log.some(e => DRILL_LINE.test(String(e?.text ?? "")))) return true;
-  return typeof b.note === "string" && DRILL_LINE.test(b.note);
+  return typeof b.note === "string" && (DRILL_LINE.test(b.note) || GATE_CMD.test(b.note));
 }
+
+// Card checklists (#5624): acceptance items are the one honest denominator for a progress bar.
+// Accepts plain strings (fresh items) or {text,done} (round-trips); caps 20 items x 200 chars.
+// Returns null for a non-array so callers can distinguish "not sent" from "sent empty".
 function cleanChecklist(v) {
   if (!Array.isArray(v)) return null;
   return v.slice(0, 20)
@@ -121,11 +124,9 @@ function normalizeState(loaded = {}) {
     // migrate old numeric form
     s.peers[session] = typeof v === "number"
       ? { lastSeen: v, status: "", project: "" }
-      // #6170: `kind` must be carried across the load. This normalizer rebuilds every peer from an
-      // explicit field list, so a field missing here is dropped no matter how faithfully the store
-      // returned it — which is exactly what happened: the column was added, Postgres held the right
-      // values, and the kinds still came back empty on the first live restart. llm/model stay
-      // out on purpose: those ARE in-memory presence, re-supplied by the next heartbeat.
+      // #6170: `kind` rides the load. This normalizer rebuilds every peer from an explicit field
+      // list, so a field missing here is dropped however faithfully the store returned it (the kinds
+      // came back empty on the first live restart). llm/model stay out: they are in-memory presence.
       : { lastSeen: v.lastSeen || 0, status: v.status || "", project: v.project || "", pubkey: v.pubkey || "", identity: v.identity || null, authWarning: v.authWarning || "", hookVersion: v.hookVersion || "", kind: v.kind || "", deliveredUpTo: v.deliveredUpTo || v.delivered_up_to || 0, _on: v._on === true || v.online === true };
   }
   return s;
