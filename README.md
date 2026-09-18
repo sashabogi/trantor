@@ -150,8 +150,13 @@ the brain
 Fix the `→` lines (each CLI's own sign-in happens once, in that CLI) and re-run `trantor doctor`
 until it's clean.
 
-Provider API keys (e.g. `DEEPSEEK_API_KEY`) live in one file: **`~/.agent-bus/.env`** — the
-crew runners source it automatically, and it wins over anything Scrooge has.
+Provider API keys (e.g. `DEEPSEEK_API_KEY`) start in one file, **`~/.agent-bus/.env`**, and on
+macOS they belong in the keychain: `trantor secrets migrate` moves every key there and leaves a
+`# NAME -> keychain` stub in its place, `trantor secrets list` shows which layer holds each key
+(never a value), and `printf '%s' "$KEY" | trantor secrets set NAME` adds one. The crew runner
+reads the store at every turn and hands the keys to the seat in its environment, so nothing is
+copied to disk; a key still in `.env` keeps working as the fallback, and `trantor doctor` names it.
+The store wins over `.env`, which wins over anything Scrooge has.
 
 That precedence is the point. Scrooge (the cheap-model router) keeps its own keys in
 `~/.token-scrooge/.env`, and if the crew has no key of its own it falls through to Scrooge's. That

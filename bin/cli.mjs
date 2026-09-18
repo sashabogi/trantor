@@ -23,6 +23,7 @@ switch (cmd) {
   case "connect": run("bin/connect.mjs"); break;
   case "profile": run("bin/profile.mjs"); break;
   case "provider": case "providers": run("bin/provider.mjs"); break;
+  case "secrets": run("bin/secrets.mjs"); break;
   case "models": run("bin/models.mjs"); break;
   case "advise":  run("bin/advise.mjs"); break;
   case "verify":  run("bin/crew-verify.mjs"); break;
@@ -230,6 +231,7 @@ switch (cmd) {
   trantor connect     (re)wire every installed AI CLI to the bus
   trantor profile     declare your plans:  trantor profile set claude=max codex=plus deepseek=api
   trantor provider    bring ANY model (BYOM): list · status [--json] · verify <name> --key … · add <name> --key … · remove <name>
+  trantor secrets     provider keys in the OS keychain: list · set <NAME> (stdin) · remove <NAME> · migrate [--dry-run]
   trantor models      browse live models behind each seat + the router's pick per difficulty
   trantor up …        spawn a crew here:   trantor up codex kimi deepseek:deepseek glm:zai-coding-plan
   trantor open        host THIS session as the project's orchestrator pane (trantor down spares it)

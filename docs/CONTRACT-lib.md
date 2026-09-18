@@ -67,7 +67,18 @@ these contracts here from comments; the incidents behind them live on the cards 
   shell the last run wins. Callers pass files highest priority first (crew layer, then fallbacks).
   Getting it backwards once handed every crew seat Scrooge's key; `test-crew-env.mjs` proves it
   against a real shell. `lib/provider-keys.mjs` resolves keys the same way (`~/.token-scrooge/.env`,
-  then `~/.agent-bus/.env` which wins, over `process.env`).
+  then `~/.agent-bus/.env` which wins, over `process.env`), with the secret store on top when the
+  caller passes it.
+- The secret store (`lib/secrets.mjs`, #6393): values live in the OS keychain (service `trantor`,
+  account = the env name) through the `security` CLI, written on stdin and read in-process, so a
+  value never reaches argv, a log or stdout; `~/.agent-bus/secrets.json` records names only. The
+  keychain is the backend on darwin once the manifest exists (a writer creates it), never for a
+  fake-HOME drill; `TRANTOR_SECRETS_BACKEND=keychain|file|none` and `TRANTOR_NO_KEYCHAIN=1` override,
+  and `TRANTOR_SECRETS_KEYCHAIN=<path>` pins a keychain file so a drill exercises the real binary.
+  `migrateSecrets` turns each live secret line of `.env` into a `# NAME -> keychain` comment (never
+  `NAME=`, an empty export would shadow the store) and skips stubs, so a rerun is a no-op. The runner
+  injects the store per turn as shadow env names re-exported after the `.env` sources
+  (`withSecretExports`), so the store wins over a stale file line and no file is copied.
 
 ## Autonomy (`lib/autonomy.mjs`)
 
