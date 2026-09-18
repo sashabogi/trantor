@@ -24,10 +24,19 @@ these contracts here from comments; the incidents behind them live on the cards 
 
 ## Project identity and hub routing
 
-- One repo = one lane, keyed by the git repo ROOT basename. A linked worktree resolves to its main
-  repo's name through git-common-dir, because seat worktrees live at
-  `~/.agent-bus/worktrees/<project>/<agent>` and the plain basename named the project after the
-  agent. An explicit `RELAY_PROJECT` always wins; the hub folds aliases on top.
+- One repo = one lane, keyed by the id the checkout records in `.trantor/project.json` (#6724) or,
+  unmarked, by the git repo ROOT basename. A linked worktree resolves to its main repo's name
+  through git-common-dir, because seat worktrees live at `~/.agent-bus/worktrees/<project>/<agent>`
+  and the plain basename named the project after the agent. An explicit `RELAY_PROJECT` always
+  wins; the hub folds aliases on top. `resolveProjectInfo` reports the provenance
+  (`env | worktree | marker | git | basename`).
+- The id is the project's bus name at claim time, never a random token: the hub, the pins, the
+  boards, the seat worktrees and every session id already key on that name. The directory name is
+  a label. `trantor new` records the id at genesis, `trantor connect` records it for an unmarked
+  checkout, `trantor project [<id>]` shows or claims it; commit the file so worktrees and clones
+  carry it. The reverse lookup is `checkoutFor(id)`: `<devRoot>/<id>` unless that directory claims
+  a different id, else the dev-root child whose marker says `id` — the renamed directory. Every
+  `join(devRoot, project)` by hand is the lookup a rename broke.
 - A project lives on exactly ONE hub (TDD §12.1). Resolution: `RELAY_URL` env, then config
   `hubs[project]`, then the legacy global `url`, then the local default. Never throws.
 - Provenance is part of the answer: `via` is `env`, `pin` (the only deliberate routing), `global`

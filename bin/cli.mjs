@@ -71,6 +71,34 @@ switch (cmd) {
     }
     run("hub.mjs"); break;
   }
+  case "project": {
+    // The checkout's identity (#6724): show where this project's name comes from, or record an id
+    // in .trantor/project.json so a directory rename cannot orphan the pin, board and sessions.
+    const { resolveProjectInfo, resolveHubInfo, gitRoot, readProjectId, writeProjectId, isProjectId, PROJECT_MARKER } = await import(join(ROOT, "lib/project.mjs"));
+    const { basename } = await import("node:path");
+    const id = args.find(a => !a.startsWith("--"));
+    const root = gitRoot(process.cwd()) || process.cwd();
+    const label = basename(root);
+    if (!id) {
+      const { project, via } = resolveProjectInfo(process.cwd());
+      const hub = resolveHubInfo(project);
+      const marked = readProjectId(root);
+      console.log(`project:   ${project}  (via ${via})`);
+      console.log(`directory: ${label}${marked && marked !== label ? "  (a label — the id is recorded in the checkout)" : ""}`);
+      console.log(`marker:    ${marked ? `${PROJECT_MARKER} → ${marked}` : `none — trantor project ${project} records one, so a rename cannot orphan the identity`}`);
+      console.log(`hub:       ${hub.url}  (via ${hub.via})`);
+      break;
+    }
+    if (!isProjectId(id)) { console.error(`error: "${id}" is not a project id (letters, digits, . _ - ; 80 max)`); process.exit(1); }
+    const current = readProjectId(root);
+    if (current && current !== id && !args.includes("--force")) {
+      console.error(`refused: ${root} is recorded as "${current}" — pass --force to re-claim it as "${id}" (the old name's board, pin and session rows will NOT follow)`);
+      process.exit(1);
+    }
+    const p = writeProjectId(root, id, "trantor project");
+    console.log(`${id} recorded in ${p}${current === id ? " (unchanged)" : ""} — commit it so worktrees and clones carry the identity`);
+    break;
+  }
   case "watch":   run("bin/relay-watch.mjs"); break;
   case "catchup": run("bin/catchup.mjs"); break;
   case "agents":  run("bin/agents.mjs"); break;
@@ -227,6 +255,7 @@ switch (cmd) {
   trantor recost      recompute sub-agent notional cost from on-disk transcripts + reseed the board (repair after upgrade) — [--dry-run]
   trantor handoff     finish this session NOW: write a handoff, open a fresh session that takes over, and close this one (manual baton)
   trantor advise      ask the Advisor directly (JSON on stdin; --demo to see it)
+  trantor project     this checkout's identity: project [<id>] — records .trantor/project.json so a directory rename cannot orphan the board, pin and sessions
   trantor hub         run the hub in the foreground (setup installs it as a service instead)
                       …or manage per-project hub pins: hub list · hub set <project> <url> · hub unset <project>
                       seats: which project lives in which directory — seats · seats add · seats up · seats login install

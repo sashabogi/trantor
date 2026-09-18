@@ -304,7 +304,10 @@ STALE with an "aged out" note instead of rotting silently, and todo tiles wear a
 day 7. A commit closes the session's focus card and the two link both ways. `trantor doctor`
 cross-checks every hub you know about against the per-project pins and reports any **split-brain**
 (a project live on two hubs) with the exact fix — and `trantor adopt <project>` migrates a project
-between hubs in one verified step, telling stale sessions to restart.
+between hubs in one verified step, telling stale sessions to restart. A project's identity lives
+in its checkout (`.trantor/project.json`, written by `trantor new`, `trantor connect` or
+`trantor project <id>`), so renaming the directory keeps the board, the pin and the sessions; the
+doctor names an orphaned identity and the one command that reclaims it.
 
 Crew output is gated mechanically, too: `bin/slop-gate.mjs` runs the vendored
 [anti-slop](https://github.com/dmmulroy/anti-slop) Oxlint rules over an agent's **changed files
