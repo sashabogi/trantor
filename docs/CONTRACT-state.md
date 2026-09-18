@@ -47,11 +47,16 @@ State, §3, §4) and the incidents behind the rules live on the cards linked bel
 
 ## The run record
 
-- One row per step is appended to `~/.agent-bus/state/runs/<project>-<card>.jsonl`. The field
-  names are a contract with `bin/state-bench.mjs`: gate 3 reads `cache_read`; gate 4 reads
-  `cost_usd`, `input`, `output`; gate 5 reads `disturbed`, `action`, `input`; gate 6 reads `rev`,
+- One row per CLI call is appended to `~/.agent-bus/state/runs/<project>-<card>.jsonl`. A step
+  is usually one call; the §7.3 malformed retry makes it two, and the retried attempt is a row of
+  its own carrying `retry: true`, written before the retry's call so a runner that dies mid-retry
+  cannot fold it into the step's row (#7226). The step's outcome is the last row. The field names
+  are a contract with `bin/state-bench.mjs`: gate 3 reads `cache_read`; gate 4 reads `cost_usd`,
+  `input`, `output`; gate 5 reads `disturbed`, `action`, `input`; gate 6 reads `rev`,
   `verify.cmd`, `verify.exit`, `verified_paths`, `rejected.code`, `by`; §8.7 reads `cut`. A row
   with the wrong names is a run the bench cannot see (NO_RUN).
+- `cut`, `disturbed` and `retry` are present only when true; each row prices only its own call, so
+  a cut retry keeps `cost_usd` null rather than inheriting the first attempt's price.
 - A cost the envelope did not carry stays null. Never 0: a 0 flatters the ≥5× gate.
 
 ## Cost (§4.6, §4.8)

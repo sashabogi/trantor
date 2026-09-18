@@ -2,18 +2,9 @@
 /* oxlint-disable anti-slop/no-runtime-typeof -- SAFETY: the suite feeds parseEnvelope the shapes a
    CLI release can actually print — a truncated read, an error blob, a string result — which means
    handing a decoder values of the wrong type on purpose. */
-// Trantor State P6 — the runner wiring (TDD §4.1, §4.8, §7.3).
-//
-// Six things this suite exists to hold, and each is a claim the card said was easy to get subtly
-// wrong:
-//   0. FLAG OFF IS BYTE-IDENTICAL — proven against the shipped command strings, not by reading.
-//   1. THE §4.1 ORDER — read → assemble → cli → tier 1 → apply → commit → promote → act.
-//   2. TIER 1 EXPIRES CREDITS — the live half of R12; without it `verified` goes monotonic-true in
-//      production while every unit test still passes.
-//   3. THE NEEDS_GATE CURE — one gate run, re-entered with gate_attempted; a red gate yields
-//      UNVERIFIED_DONE with the tail, never a second NEEDS_GATE.
-//   4. A REJECTED PATCH STOPS AT STEP ONE — nothing committed, nothing promoted, nothing executed.
-//   5. STALE, and the breaker's two classes.
+// Trantor State P6 — the runner wiring (TDD §4.1, §4.8, §7.3). Each section holds a claim the card
+// said was easy to get subtly wrong: flag off byte-identical, the §4.1 order, tier 1 expiring
+// credits, the one-shot NEEDS_GATE cure, a rejected patch stopping at step one, STALE + breaker.
 import { readFileSync, mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
@@ -32,10 +23,8 @@ const { ok, done } = harness();
 const RUNNER = readFileSync(new URL("../../bin/crew-runner.mjs", import.meta.url), "utf8");
 
 // ── 0. the flag, and what OFF means ───────────────────────────────────────────────────────────
-//
-// The card's first item: "flag off = today's path byte-identical, proven by test not by reading".
-// So the assertion is against the literal strings the runner ships, character for character. A
-// refactor that "tidies" the transcript rows fails here, which is the point.
+// "flag off = today's path byte-identical, proven by test not by reading": the assertions are
+// against the literal strings the runner ships, so a refactor that "tidies" them fails here.
 console.log("\n0. flag off leaves the transcript path byte-identical");
 const CLAUDE_FIRST = 'first: `claude{M} -p "$(cat {P})" --dangerously-skip-permissions`';
 const CLAUDE_NEXT = 'next:  `claude -c{M} -p "$(cat {P})" --dangerously-skip-permissions`';
@@ -346,7 +335,7 @@ console.log("\n6. the run recorder writes what bin/state-bench.mjs --run reads")
   const FIELDS = ["turn", "rev", "by", "ts", "cost_usd", "input", "output", "cache_read", "cache_creation", "action", "verify", "verified_paths", "rejected"];
   ok(`every field gate 3-6 reads is present: ${FIELDS.join(", ")}`, FIELDS.every(f => f in row), JSON.stringify(row));
   ok("it lands under ~/.agent-bus/state/runs/<project>-<card>.jsonl", rows[0].p.endsWith("state/runs/trantor-6969.jsonl"));
-  ok("cut and disturbed are absent unless true — the bench reads their presence", !("cut" in row) && !("disturbed" in row));
+  ok("cut, disturbed and retry are absent unless true — the bench reads their presence", !("cut" in row) && !("disturbed" in row) && !("retry" in row));
   const cutRow = recordStep({ appendJsonl: () => {} }, "trantor", 1, { turn: 1, rev: 1, by: "s", ts: 1, exit: 0, cost: null, action: null, verify: null, verified_paths: [], rejected: null, cut: true, disturbed: true });
   ok("and present when they are", cutRow.cut === true && cutRow.disturbed === true);
   ok("an unpriced envelope leaves cost_usd NULL, never 0 — a 0 flatters the ≥5× gate", cutRow.cost_usd === null);
@@ -400,5 +389,85 @@ console.log("\n   and the window line the operator reads instead of a JSON blob 
 ok("it names the op count and the action", describeTurn({ patch: [1, 2], action: { done: true } }) === "2 op(s), action done");
 ok("an actionless turn says so rather than printing undefined", describeTurn({ patch: [], action: null }) === "0 op(s), action none");
 ok("and nothing is a TurnResult by accident", describeTurn(null) === "no TurnResult");
+
+// ── 8. #7226: one run row per CLI call the box actually ran ───────────────────────────────────
+// §7.3's in-step retry used to fold two CLI calls into one row, and a runner that died during the
+// retry left none; §8.7 counts rows, so the runs the box hit hardest were the ones undercounted.
+console.log("\n8. #7226: every CLI call the step made is a run row of its own");
+const RUN_ROWS = (r) => r.seen.appended.filter(a => a.path.endsWith("state/runs/trantor-6969.jsonl")).map(a => a.row);
+{
+  // Two boxed turns: both cut, both malformed, one retry — two rows, not one.
+  const r = rig({});
+  r.deps.callCli = async () => ({ exit: 137, stdout: "", cut: true });
+  const out = await runStep({ seat: "claude:trantor", card: 6969, project: "trantor", cwd: CWD, preamble: "P", now: 1, deps: r.deps });
+  const rows = RUN_ROWS(r);
+  ok("two boxed CLI calls were made (the §7.3 retry still runs)", out.trace.filter(t => t === "cli").length === 2, out.trace.join(" "));
+  ok("and they yield TWO run rows, not one", rows.length === 2, JSON.stringify(rows));
+  ok("both rows carry cut: true — the bench's §8.7 finds the first one", rows.every(x => x.cut === true));
+  ok("the first row is the retried attempt: retry: true, rejected SCHEMA, exit 137",
+    rows[0].retry === true && rows[0].rejected && rows[0].rejected.code === ERR.SCHEMA && rows[0].exit === 137, JSON.stringify(rows[0]));
+  ok("the second row is the step's outcome and carries no retry flag", !("retry" in rows[1]) && rows[1].rejected && rows[1].rejected.code === ERR.SCHEMA);
+  ok("neither row inherits a price it did not have", rows.every(x => x.cost_usd === null));
+  ok("the step still reports the rejection as its outcome", out.code === ERR.SCHEMA && out.step && out.step.cut === true);
+}
+{
+  // A malformed retry that recovers: prose, then a good patch. The prose call is a row of its own.
+  const r = rig({});
+  const turns = ["I had a think about it and decided not to.", ENV({ patch: [{ set: { field: "task", value: "P6" } }], action: { continue: true } })];
+  r.deps.callCli = async () => ({ exit: 0, stdout: turns.shift() });
+  const out = await runStep({ seat: "claude:trantor", card: 6969, project: "trantor", cwd: CWD, preamble: "P", now: 1, deps: r.deps });
+  const rows = RUN_ROWS(r);
+  ok("the retry recovered the step", out.ok === true, out.message);
+  ok("a malformed retry yields a row of its own — two rows for two calls", rows.length === 2, JSON.stringify(rows));
+  ok("the first row is the rejected attempt, flagged retry, not cut",
+    rows[0].retry === true && rows[0].rejected.code === ERR.SCHEMA && !("cut" in rows[0]) && rows[0].rev === null);
+  ok("the second row is the accepted outcome with its rev and the envelope's price",
+    !("retry" in rows[1]) && rows[1].rejected === null && rows[1].rev !== null && rows[1].cost_usd === 0.01, JSON.stringify(rows[1]));
+  ok("the patch ledger is still one record per step, not per call (§7.3 counts after one retry)",
+    r.seen.appended.filter(a => !a.path.endsWith("state/runs/trantor-6969.jsonl")).length === 1);
+}
+{
+  // A priced first attempt, then a cut retry: the cut row must not carry the first call's price,
+  // and the first call's row must not carry the retry's cut — each row is its own call.
+  const r = rig({});
+  const calls = [
+    { exit: 0, stdout: ENV("prose where a TurnResult should be") },
+    { exit: 137, stdout: "", cut: true },
+  ];
+  r.deps.callCli = async () => calls.shift();
+  const out = await runStep({ seat: "claude:trantor", card: 6969, project: "trantor", cwd: CWD, preamble: "P", now: 1, deps: r.deps });
+  const rows = RUN_ROWS(r);
+  ok("two rows again", rows.length === 2 && out.code === ERR.SCHEMA);
+  ok("the first row is priced and NOT cut", rows[0].cost_usd === 0.01 && !("cut" in rows[0]) && rows[0].exit === 0, JSON.stringify(rows[0]));
+  ok("the cut retry's row is unpriced (null, never the first call's 0.01) and cut", rows[1].cost_usd === null && rows[1].cut === true && rows[1].exit === 137, JSON.stringify(rows[1]));
+}
+{
+  // An interrupted step never merges into its predecessor: the runner dies during the retry (the
+  // transport throws), and the first attempt's cut row is ALREADY on disk — written the moment the
+  // box came back, not when runStep returned.
+  const r = rig({});
+  let calls = 0;
+  r.deps.callCli = async () => { calls++; if (calls === 1) return { exit: 137, stdout: "", cut: true }; throw new Error("runner torn down mid-retry"); };
+  let threw = null;
+  try { await runStep({ seat: "claude:trantor", card: 6969, project: "trantor", cwd: CWD, preamble: "P", now: 1, deps: r.deps }); }
+  catch (e) { threw = e; }
+  const rows = RUN_ROWS(r);
+  ok("the step was interrupted before runStep returned", threw !== null && calls === 2);
+  ok("its first cut call still left its row", rows.length === 1 && rows[0].cut === true && rows[0].retry === true, JSON.stringify(rows));
+}
+{
+  // An evidence rejection is not retried, so it is one call and exactly one row — the fix adds
+  // rows for calls that happened, never for ones that did not.
+  const state = emptyState(6969, "claude:trantor");
+  state.in_flight = [{ id: "x1", text: "t", paths: ["lib/a.mjs"] }];
+  const r = rig({
+    state,
+    gate: { verify: { tested: false, cmd: "c", exit: 1 }, files: {}, coverage: "project", cmd: "c", exit: 1, ms: 1, tail: "boom", memo: {} },
+    cliTurns: { patch: [{ move: { id: "x1", from: "in_flight", to: "done" } }], action: { done: true } },
+  });
+  await runStep({ seat: "claude:trantor", card: 6969, project: "trantor", cwd: CWD, preamble: "P", now: 1, deps: r.deps });
+  const rows = RUN_ROWS(r);
+  ok("one call, one row, no retry flag", rows.length === 1 && !("retry" in rows[0]) && rows[0].rejected.code === ERR.UNVERIFIED_DONE, JSON.stringify(rows));
+}
 
 done();
