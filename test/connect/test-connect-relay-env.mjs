@@ -68,6 +68,9 @@ console.log("# trantor connect — relay entry env stamp + refresh (#7893)");
   const t = setup(["gemini", "kimi"]);
   const r = t.run();
   ok("connect reports the project and hub it stamps", r.status === 0 && new RegExp(`project: acme, hub: ${PIN}`).test(r.stdout), r.stderr || r.stdout);
+  // #6724: connect records the checkout's id so a later directory rename keeps the board and pin.
+  const marker = (() => { try { return JSON.parse(readFileSync(join(t.work, "acme", ".trantor", "project.json"), "utf8")); } catch { return null; } })();
+  ok("connect records the project id in the checkout (.trantor/project.json)", marker?.id === "acme" && marker?.by === "trantor connect" && /project\s+id acme recorded/.test(r.stdout), JSON.stringify(marker) || r.stdout);
   const kimi = relayEnvOf(t.home, ".kimi/mcp.json");
   ok("kimi relay env carries agent and pinned hub, never the project (global config, #7893)",
     kimi?.RELAY_AGENT === "kimi" && kimi?.RELAY_URL === PIN && !("RELAY_PROJECT" in kimi), JSON.stringify(kimi));
