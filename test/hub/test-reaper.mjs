@@ -139,7 +139,8 @@ try {
   const requeued = await C.post("/task/update", { id: staleId, status: "todo", by: "host:swA" });
   ok("stale card can be re-queued to todo", requeued?.task?.status === "todo", `(got "${requeued?.task?.status}")`);
   const staleId2 = swA.filter(t => t.status === "stale").map(t => t.id).find(id => id !== staleId);
-  const discarded = await C.post("/task/update", { id: staleId2, status: "done", by: "host:swA" });
+  // #6452: done needs a drill line even at triage; a discard says so on the note
+  const discarded = await C.post("/task/update", { id: staleId2, status: "done", by: "host:swA", note: "Drill: none — stale card discarded at triage, nothing shipped" });
   ok("stale card can be discarded to done", discarded?.task?.status === "done", `(got "${discarded?.task?.status}")`);
 } catch (e) { fail++; console.log("  ✗ hubC threw:", e?.message || e, errC ? `\n  stderr: ${errC}` : ""); }
 finally { hubC.kill(); try { rmSync(hubC._dir, { recursive: true, force: true }); } catch {} }

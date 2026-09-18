@@ -72,7 +72,8 @@ try {
   let phase = (await api("/projects")).projects.find(p => p.project === "proj")?.phase || "";
   ok("phase escalates on failure", /FAILED/.test(phase), `(got "${phase}")`);
   await api("/task/update", { id: task.id, status: "doing" });          // orchestrator bounces it
-  for (const s of ["testing", "done"]) await api("/task/update", { id: task.id, status: s });
+  await api("/task/update", { id: task.id, status: "testing" });
+  await api("/task/update", { id: task.id, status: "done", note: "Drill: opened the widget and saw it render" });   // #6452: done carries a drill line
   ok("bounced card reaches done", (await api("/tasks?project=proj")).tasks.find(t => t.id === task.id)?.status === "done");
   ok("bogus status rejected", (await api("/task/update", { id: task.id, status: "yolo" })).task?.status === "done");
 
@@ -105,7 +106,7 @@ try {
   const { task: t2 } = await api("/task", { project: "proj", title: "hist", assignee: "kimi:proj", difficulty: "hard", by: "arch" });
   ok("difficulty stored", t2.difficulty === "hard");
   ok("creation in history", t2.history?.length === 1 && t2.history[0].to === "todo");
-  for (const st of ["doing", "testing", "done"]) await api("/task/update", { id: t2.id, status: st, by: "kimi:proj" });
+  for (const st of ["doing", "testing", "done"]) await api("/task/update", { id: t2.id, status: st, by: "kimi:proj", ...(st === "done" ? { note: "Drill: opened it and saw it work" } : {}) });   // #6452
   await api("/task/update", { id: t2.id, status: "doing", by: "arch" });   // the bounce
   const t2b = (await api("/tasks?project=proj")).tasks.find(t => t.id === t2.id);
   const lastH = t2b.history.at(-1);
@@ -268,7 +269,7 @@ try {
 
   console.log("scenario: /history — card create+move produces chronological events with correct from/to/by");
   const { task: ht } = await api("/task", { project: "proj", title: "timeline-test", by: "arch" });
-  for (const st of ["doing", "testing", "done"]) await api("/task/update", { id: ht.id, status: st, by: "kimi:proj" });
+  for (const st of ["doing", "testing", "done"]) await api("/task/update", { id: ht.id, status: st, by: "kimi:proj", ...(st === "done" ? { note: "Drill: opened it and saw it work" } : {}) });   // #6452
   const hist = (await api("/history?project=proj")).events;
   const hEvents = hist.filter(e => e.taskId === ht.id);
   ok("/history returns events in chronological order", hEvents.length >= 2 && hEvents[0].ts <= hEvents[1].ts);

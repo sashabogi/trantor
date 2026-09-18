@@ -42,7 +42,7 @@ try {
 
   await A.post("/register", { session: "host:evtA", project: PROJ, status: "orchestrating" });
   await A.post("/focus", { session: "host:evtA", project: PROJ, title: "wire the unified log" });
-  const card = await A.post("/task", { project: PROJ, title: "build /events", by: "host:evtA", assignee: "codex:evtA", status: "doing" });
+  const card = await A.post("/task", { project: PROJ, title: "build /events", by: "host:evtA", assignee: "codex:evtA", status: "doing", drill: "hit /events and read the row" });   // #6452: done needs a drill
   const cid = card?.task?.id;
   await A.post("/send", { from: "codex:evtA", to: "all", project: PROJ, text: `taking #${cid} — ETA 20m` });
   await A.post("/task/update", { id: cid, status: "done", by: "codex:evtA" });
@@ -86,7 +86,7 @@ try {
 
   // #7968: a seat's testing move posts `blast`; the hub keeps it on the card EVENT and nowhere else,
   // and /history keeps its legacy flat shape beside it.
-  const c2 = (await A.post("/task", { project: PROJ, title: "blast card", by: "host:evtA", assignee: "codex:evtA", status: "doing" }))?.task?.id;
+  const c2 = (await A.post("/task", { project: PROJ, title: "blast card", by: "host:evtA", assignee: "codex:evtA", status: "doing", drill: "open the card, read the blast line" }))?.task?.id;   // #6452: done needs a drill
   const movedTo = async (to) => (await A.get(`/history?project=${PROJ}`)).events.filter(e => e.taskId === c2 && e.type === "moved" && e.to === to).pop();
   await A.post("/task/update", { id: c2, status: "testing", by: "codex:evtA", note: "verified at abc1234\nblast: 2 files depend on the 1 changed",
     blast: { base: "abc1234", changed: ["lib/a.mjs"], unindexed: [], dependents: 2, junk: "dropped" } });

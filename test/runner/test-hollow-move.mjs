@@ -147,7 +147,7 @@ const take = (id) => call("relay_task_move", { id, status: "doing" });
 {
   const id = await addCard("investigation card");
   await take(id);
-  await call("relay_task_move", { id, status: "done", note: "Investigation only, no code change: root cause is the runner's poll; answered on the bus." });
+  await call("relay_task_move", { id, status: "done", note: "Drill: none (investigation only, no code change): root cause is the runner's poll; answered on the bus." });
   const card = await getCard(id);
   ok("no-code declaration: move lands done", card?.status === "done", card?.status);
   ok("no-code declaration: no HOLLOW prefix from a clean worktree", !lastNote(card).startsWith("HOLLOW:"), lastNote(card).slice(0, 90));
@@ -227,7 +227,7 @@ if (HAS_GRAFT) {
   await take(id);
   writeFileSync(join(REPO, "package.json"), '{"name":"hollow-fixture-2","type":"module"}\n');
   commit("rename");
-  await call("relay_task_move", { id, status: "done", note: `bumped the name, verified at ${SHA}` });
+  await call("relay_task_move", { id, status: "done", note: `bumped the name; node test/runner/test-hollow-move.mjs green, verified at ${SHA}` });
   ok("#7968: an unindexed-only change reads `not in the graph`", lastLine(await getCard(id)) === "blast: not in the graph (package.json)", lastLine(await getCard(id)));
   const b = await blastOf(id);
   ok("#7968: the event names the unindexed path with zero dependents", b?.dependents === 0 && b?.unindexed?.[0] === "package.json", JSON.stringify(b));
