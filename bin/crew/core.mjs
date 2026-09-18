@@ -2,6 +2,7 @@ import { accessSync, constants, existsSync, mkdirSync, readFileSync } from "node
 import { basename, dirname, join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import { STATE_FLAGS } from "../../lib/state/flags.mjs";
 
 export const ROOT = dirname(dirname(dirname(fileURLToPath(import.meta.url))));
 
@@ -132,14 +133,11 @@ export function gridColumns(size) {
   return columns;
 }
 
-// Operator flags the RUNNER itself reads, forwarded from whoever launched the seat.
-//
-// The Trantor State flags are read as `process.env` INSIDE crew-runner.mjs, not by the CLI it
-// spawns — so ~/.agent-bus/.env (the crew key layer) cannot set them: that file is applied to the
-// spawned command, one level too deep. Without this list the flags documented in TDD §11 have no
-// supported way to reach a seat at all, which is how Phase 2a came to be "enabled" with a schema
-// file that was never written and a runner still on the transcript path.
-const FORWARDED_ENV = ["TRANTOR_STATE", "TRANTOR_STATE_ASSEMBLE", "TRANTOR_STATE_HANDOFF", "TRANTOR_STATE_GATE"];
+// Operator flags the RUNNER itself reads, forwarded from whoever launched the seat. The list lives
+// in lib/state/flags.mjs beside the resolver: the launcher env stays the forwarder (the runner boots
+// before any file is sourced), and #7159 lets the runner fall back to ~/.agent-bus/.env itself, so a
+// flag documented there finally arms the seat that reads it.
+const FORWARDED_ENV = STATE_FLAGS;
 
 export function runnerCommand(ctx, agent, model = "", effort = null) {
   const forwarded = FORWARDED_ENV

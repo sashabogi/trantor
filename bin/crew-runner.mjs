@@ -33,6 +33,7 @@ import {
   breakerVerdict, describeTurn, hasJsonSchemaFlag, parseEnvelope, renderCardTail, runStep,
 } from "../lib/state/driver.mjs";
 import { costLine } from "../lib/state/cost.mjs";
+import { resolveStateFlags } from "../lib/state/flags.mjs";
 
 const AGENT = process.argv[2];
 const DIR = process.argv[3] || process.cwd();
@@ -543,8 +544,13 @@ async function reportHealthy() {
 }
 
 // ---- Trantor State Phase 2a — the flagged path (TDD §4.1, §4.6, §7.3) -----------------------
-// Off by default, and off means the transcript path runs unchanged. Reachable only when the operator
-// set TRANTOR_STATE_ASSEMBLE=1, the seat is `claude` (§7.3) and the CLI carries --json-schema (§6).
+// Off by default — off means the transcript path runs unchanged. #7159: the flags resolve through
+// the one place (lib/state/flags.mjs), launcher env first and ~/.agent-bus/.env filling the rest;
+// resolved values are applied fill-only to process.env so downstream reads (runGate's GATE) agree.
+const stateFlags = resolveStateFlags();
+for (const [name, flag] of Object.entries(stateFlags)) {
+  if (flag.value && process.env[name] === undefined) process.env[name] = flag.value;
+}
 const STATE_FLAG_ON = process.env[STATE_ENV] === "1";
 const STATE_SCHEMA_FILE = join(homedir(), ".agent-bus", `state-schema-${AGENT}-${PROJ}.json`);
 const STATE_MODE = (() => {
@@ -558,7 +564,7 @@ const STATE_MODE = (() => {
   } catch (e) { log(`\x1b[33mstate mode OFF — could not write ${STATE_SCHEMA_FILE}: ${e.message}\x1b[0m`); return false; }
   // #7060: the checks above prove CONFIGURATION, not the prompt, so say "armed" and name the one
   // thing that engages it; each turn then reports which path it took.
-  log(`\x1b[36mTrantor State: ASSEMBLE armed for this seat (schema ${STATE_SCHEMA_FILE})\x1b[0m`);
+  log(`\x1b[36mTrantor State: ASSEMBLE armed for this seat (${STATE_ENV}=${stateFlags[STATE_ENV].value} via ${stateFlags[STATE_ENV].layer}; schema ${STATE_SCHEMA_FILE})\x1b[0m`);
   log(`\x1b[36m  a turn is assembled only when a wake ASSIGNS it a card — the kickoff and every pulse run the transcript path, and each turn says which one it took\x1b[0m`);
   return true;
 })();
@@ -1397,10 +1403,9 @@ async function resolveWakeCard(messages, { session }) {
     const lessons = pickLessons(LESSONS_RAW, wakeCapped.text + " " + bcastCapped.text);
     const trigger = wakeForTurn.some(m => m.to === SESSION) ? "direct message" : "@mention";
     // Who is owed an answer, captured BEFORE the turn: pendingWake is cleared on success. The id is
-    // the NEWEST wake this runner holds for that assigner (#6987): pendingWake is append-ordered,
-    // so first-wins threaded the receipt onto a PREVIOUS turn's id — in the ask flow the original
-    // contract, not the answer that released this turn — and the contract that actually woke it
-    // kept reading WAITING while the stop hook chased.
+    // the NEWEST wake this runner holds for that assigner (#6987): append order means first-wins
+    // threaded the receipt onto a PREVIOUS turn's id — the original contract, not the answer that
+    // released this turn — which kept the contract reading WAITING while the stop hook chased.
     const assigners = [];
     for (const m of wakeForTurn) {
       if (!m.from) continue;

@@ -13,6 +13,7 @@ import { loadOrCreate } from "../lib/identity.mjs";
 import { sfetchJson } from "../lib/signed-fetch.mjs";
 import { scan } from "../lib/splitbrain.mjs";
 import { resolveSecrets, envFileSecrets, backendFor } from "../lib/secrets.mjs";
+import { resolveStateFlags } from "../lib/state/flags.mjs";
 
 const H = homedir();
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
@@ -322,6 +323,17 @@ if (straggling.live.length && backendFor(process.env, { create: true }) !== "non
   note(`${straggling.live.length} key(s) live in ~/.agent-bus/.env (${straggling.live.join(", ")}) — no keychain on this platform; TRANTOR_SECRETS_BACKEND=file opts into a file store`);
 } else if (storeNames.length) {
   ok(`secret store: ${storeNames.length} key(s) in the ${backendFor()} (${storeNames.join(", ")}), none left in .env`);
+}
+
+// ── Trantor State flags (#7159): the runners resolve these through ONE place — process env first,
+// ~/.agent-bus/.env second — and each line names the layer that answered, so a flag that LOOKED
+// applied can no longer pass for armed.
+section("trantor state flags");
+{
+  const resolved = resolveStateFlags();
+  const setFlags = Object.entries(resolved).filter(([, r]) => r.layer !== "unset");
+  for (const [name, r] of setFlags) ok(`${name}=${r.value} via ${r.layer}`);
+  if (!setFlags.length) note("no state flags set — Trantor State runs dark by default (TDD §11)");
 }
 
 // brain
