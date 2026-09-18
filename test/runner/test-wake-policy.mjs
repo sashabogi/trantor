@@ -223,7 +223,7 @@ async function spawnDrill({ waitMs = 7000, projectLinks = [] } = {}) {
   const PROJ = "tt-wake";
   writeFileSync(join(fakebin, "codex"), `#!/bin/sh
 P="$HOME/.agent-bus/turn-codex-${PROJ}.txt"
-{ echo "===TURN=== mode=$1"; cat "$P"; } >> "${LOGF}"
+{ echo "===TURN=== mode=$1 sub=$2"; cat "$P"; } >> "${LOGF}"
 # #7759: the success answer must clear the substantive floor, or every turn reads as an
 # EMPTY hollow turn and its wake is never consumed — this drill tests wake policy, not validity.
 echo "the contract is worked: the card moved with a note, the files changed, and the"
@@ -245,9 +245,11 @@ exit 0
   return {
     turns,
     wakeTurns: turns.filter(t => t.includes("NEW BUS MESSAGE")),
-    // `codex exec resume` passes "resume" as argv[1]; a fresh `codex exec` does not.
-    fresh: turns.filter(t => t.includes("NEW BUS MESSAGE") && !/^ mode=resume/.test(t)),
-    resumed: turns.filter(t => t.includes("NEW BUS MESSAGE") && /^ mode=resume/.test(t)),
+    // `codex exec resume --last` carries "resume" as the SECOND argv word; a fresh `codex exec`
+    // has none. (#6289 regression: mode=$1 alone read "exec" for BOTH shapes, so these fresh/
+    // resumed counts were vacuous and the resume downgrade slipped past them.)
+    fresh: turns.filter(t => t.includes("NEW BUS MESSAGE") && !/^ mode=\S+ sub=resume\b/.test(t)),
+    resumed: turns.filter(t => t.includes("NEW BUS MESSAGE") && /^ mode=\S+ sub=resume\b/.test(t)),
     sent,
   };
 }
@@ -358,6 +360,12 @@ console.log("\n## one session per card");
   // what a later wake would carry. Two separate batches is the honest shape of that.
   const first = await drill([{ text: "contract: card #7020, build the thing" }], { waitMs: 5000 });
   ok("card A runs fresh", first.fresh.length === 1, `fresh=${first.fresh.length}`);
+  // #6289 regression (the #7763 rebinding must never touch the session SHAPE): the mock board
+  // has NO #7020, so the binding resolves to nothing — the wake still opens its OWN fresh
+  // session instead of silently resuming the kickoff's CLI session as a bare resume.
+  ok("#6289: a wake whose card the board lacks still runs FRESH, never a bare resume",
+    first.fresh.length === 1 && first.resumed.length === 0,
+    `fresh=${first.fresh.length} resumed=${first.resumed.length}`);
 
   const second = await drill([
     { text: "contract: card #7030, build the other thing" },

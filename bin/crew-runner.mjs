@@ -1381,7 +1381,11 @@ async function resolveWakeCard(messages, { session }) {
       return;
     }
     const baseText = base ? `\n${baseLine(base)}\n` : "";
-    const fresh = card > 0 && card !== sessionCard;
+    // #6289 regression: the card the SESSION belongs to reads the citation when the rebinding
+    // binds nothing — #7763 decides WHICH card work binds to, never the turn shape, and a wake
+    // the board cannot bind still opens its own session instead of resuming the kickoff's.
+    const sessionCardForTurn = card || baseCard;
+    const fresh = sessionCardForTurn > 0 && sessionCardForTurn !== sessionCard;
     if (card) sessionCard = card;
     const cited = [...new Set(wakeForTurn.flatMap(m => cardRefs(m.text)))];
     const freshText = fresh
