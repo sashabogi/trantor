@@ -134,3 +134,30 @@ Consolidation phase: (1) CI on push (vitest and tsc) so red blocks merge; (2) de
 dead controls (rule 5: prefer deleting); (3) split the 23 files over 1,500 lines, planTakeoff.ts
 first, by feature (rule 6); (4) move the 647-line CLAUDE.md narrative into docs/CONTRACT-*.md and
 retire the stale status files (rule 7). The next feature wave waits for (1) and (3).
+
+## crm-platform (2eb5281b)
+
+Brief: unread (403). Checkout: LeadFlow CRM monorepo (FastAPI api, Next.js web, Expo mobile, two
+services); dormant, last commit 2026-08-12, 0 commits in 30 days, 0 of 69 in 90 days naming a card.
+Shape: 564 source files; 22 over 800 lines, 5 over 1,500 (settings/page.tsx 2,913); two lockfiles
+(package-lock and pnpm-lock) at the root; the root `npm test` runs pytest over an api with 0 test
+files while the 34 web vitest files are reachable only from apps/web; no CI; 85 of 87 web deps
+caret-ranged, python pinned exactly.
+
+- state not event: MISSING. No surface single-sources status; the last fix in this class was one
+  surface at a time (db524793 "show an honest connect state instead of a dead button").
+- episodes not timers: PARTIAL. 5 setInterval polls for job progress (drafts every 5 s, audits,
+  creative) and no subscription; no alert model at all.
+- no fake affordances: MISSING. Five pipeline filter chips with onClick={() => {}}
+  (filter-chips.tsx:268 to 428), Archive toasts "coming soon" (leads/[id]/page.tsx:523), admin
+  maintenance mode toasts "not yet implemented", Slack sits in settings as "Coming Soon".
+- done is a gate: MISSING. The root test script tests nothing, nothing runs on push, and no commit
+  names a card, a drill or a verified-at sha.
+- contracts carry a base: MISSING. No crew directory, no contract file, no card in any commit.
+- seats can ask: MISSING. No seat has worked this repo through the runner; there is nothing to
+  ask with.
+
+Consolidation phase: (0) decide whether the project is alive; if it is: (1) one lockfile and a
+root test script that runs the 34 web tests, then CI on push; (2) delete the five dead chips and
+the three "coming soon" controls; (3) split settings/page.tsx and the other four files over 1,500
+lines. No wave until (1).
