@@ -6,6 +6,7 @@ import { strict as assert } from "node:assert";
 import {
   AUTH_MARKER_RE, OWN_OUTPUT_ANSWER_MIN, classifyFailure, looksLikeAuthDeath, stripPromptEcho, verdictFor,
 } from "../../lib/classify-failure.mjs";
+import { PARKING_REASONS } from "../../lib/turn-policy.mjs";
 
 let fail = 0; const ok = (c, m) => { console.log((c ? "✓" : "✗ FAIL") + " " + m); if (!c) fail++; };
 const same = (a, b, m) => { try { assert.deepStrictEqual(a, b); ok(true, m); } catch (e) { ok(false, `${m} — got ${JSON.stringify(a)?.slice(0, 120)}`); } };
@@ -86,6 +87,16 @@ console.log("# classifyFailure — reasons and the matched evidence");
   same(classifyFailure(137, "").reason, "crashed", "137 WITHOUT the cut marker is still a crash");
   ok(classifyFailure(137, "quota exceeded for this billing period").reason === "exhausted",
     "137 without the cut marker still follows the ordinary patterns");
+  // #6489: 141 is 128+13 — SIGPIPE from our own stderr scrubber pipe, so it outranks every text
+  // pattern with or without the cut marker and cut-signal is not a parking reason.
+  same(classifyFailure(141, "Error: 403 Forbidden — invalid api key").reason, "cut-signal",
+    "141 is never auth, whatever auth vocabulary the captured text carries");
+  same(classifyFailure(141, "Error: 403 Forbidden — invalid api key", false, false, true).reason, "cut-signal",
+    "…and the cut marker changes nothing: 141 reads as the signal with or without it");
+  ok(!PARKING_REASONS.has(classifyFailure(141, "401 unauthorized").reason),
+    "a 141 turn is not a parking reason, so it never parks the seat on the first strike");
+  ok(/^classified cut-signal because exit 141/.test(verdictFor(141, 141, false, "403 Forbidden: invalid api key")),
+    "the verdict the seat's jsonl keeps names the cut signal, never auth");
 }
 
 console.log("# the qwen specimen — contract echo the exact-match strip provably missed (#5868 turn 9)");
