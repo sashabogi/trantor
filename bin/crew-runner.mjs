@@ -615,6 +615,14 @@ let statePromotedHash;
 // TRANTOR_TURN_MAX_MS ends the CLI's process group at the box and runs ONE follow-up turn in the
 // same session ("commit what is done, move the card, report") so a cut turn lands its work.
 const TURN_MAX_MS = Math.max(0, Number(process.env.TRANTOR_TURN_MAX_MS || 20 * 60 * 1000));
+// #7761: the box counts LIVENESS. At the deadline a turn that moved within the stall window is
+// extended one step (half the box: +10m at the default) up to TRANTOR_TURN_CEILING_MS, the one
+// knob (default 60m). A ceiling at or under the box disables extension; a silent turn still ends
+// at the #7752 stall window, extended or not. The watchdog owns the clock — see turn-watchdog.mjs.
+const TURN_CEILING_MS = TURN_MAX_MS ? Math.max(0, Number(process.env.TRANTOR_TURN_CEILING_MS || 60 * 60 * 1000)) : 0;
+const TURN_EXTEND_MS = Math.ceil(TURN_MAX_MS / 2);
+const TURN_EXTENSIONS_MAX = TURN_EXTEND_MS > 0 && TURN_CEILING_MS > TURN_MAX_MS
+  ? Math.floor((TURN_CEILING_MS - TURN_MAX_MS) / TURN_EXTEND_MS) : 0;
 const TIME_BOX_PROMPT = "your previous turn was cut at the time box; commit what is done, move the card with a note, report in one line";
 let inFollowUp = false;
 // #6289: whether the turn that just ended was CUT at the time box. The follow-up recursion
@@ -715,12 +723,23 @@ async function runTurn(prompt, isFirst, trigger = "kickoff", opts = {}) {
   // instead of burning the box. Unlinked at turn start and again with the cut cleanup.
   const STALLF = join(homedir(), ".agent-bus", `turnstall-${AGENT}-${PROJ}`);
   try { unlinkSync(STALLF); } catch {}
+  // #7761: the watchdog writes the extended deadline (epoch seconds) here for the shell box to
+  // re-read, and one row per extension to EXTF for the ledger. Both unlinked at turn start.
+  const DEADLINEF = join(homedir(), ".agent-bus", `turndeadline-${AGENT}-${PROJ}`);
+  const EXTF = join(homedir(), ".agent-bus", `turnext-${AGENT}-${PROJ}`);
+  try { unlinkSync(DEADLINEF); } catch {}
+  try { unlinkSync(EXTF); } catch {}
+  const boxPlan = TURN_EXTENSIONS_MAX ? {
+    maxMs: TURN_MAX_MS, extendMs: TURN_EXTEND_MS, ceilingMs: TURN_CEILING_MS, extensionsMax: TURN_EXTENSIONS_MAX,
+    deadlineFile: DEADLINEF, extFile: EXTF, card: sessionCard || 0,
+    assigners: (opts.assigners || []).map(a => ({ from: a.from, id: a.id })),
+  } : undefined;
   // Touched by the stderr scrubber as its LAST act (the shell below); node waits for it after
   // spawnSync before reading ERRF — see the drain note at the spawnSync call.
   const DRAINF = join(homedir(), ".agent-bus", `turndrain-${AGENT}-${PROJ}`);
   try { unlinkSync(DRAINF); } catch {}
   try {
-    writeFileSync(STAMPF, JSON.stringify({ turn: TURN, startedAt: Date.now(), runner: RUNNER_ID }));
+    writeFileSync(STAMPF, JSON.stringify({ turn: TURN, startedAt: Date.now(), runner: RUNNER_ID, box: boxPlan }));
     const wd = spawn(process.execPath, [join(import.meta.dirname, "turn-watchdog.mjs"), STAMPF, ERRF, String(WD_MS), SESSION, PROJ, HUB, TRANSCRIPT_DIR, TURN_DIR,
       // #7752: the stall marker only exists when a box does — with no box there is no sweep to
       // end the turn, so the watchdog stays report-only (reporting is the whole job, boxless).
@@ -742,6 +761,7 @@ ${sweep}
   deadline=$(( $(date +%s) + ${Math.ceil(TURN_MAX_MS / 1000)} ))
   while :; do
     [ -f "${STALLF}" ] && break
+    d=$(cat "${DEADLINEF}" 2>/dev/null); case "$d" in ""|*[!0-9]*) ;; *) deadline=$d;; esac
     [ "$(date +%s)" -ge "$deadline" ] && break
     sleep 1 & sleeppid=$!
     wait "$sleeppid"
@@ -777,7 +797,7 @@ exit $turn_exit`;
   // A BACKSTOP only, deliberately later than the shell's own box: if bash itself wedges, node
   // still ends the turn. When the in-shell box works — the normal path — this never fires, which
   // is the point: the shell kills while the tree is still walkable, node cannot.
-  if (TURN_MAX_MS) { spawnOpts.timeout = TURN_MAX_MS + 30000; spawnOpts.killSignal = "SIGKILL"; }
+  if (TURN_MAX_MS) { spawnOpts.timeout = (TURN_EXTENSIONS_MAX ? TURN_CEILING_MS : TURN_MAX_MS) + 30000; spawnOpts.killSignal = "SIGKILL"; }
   const r = spawnSync("/bin/bash", ["-c", shell], spawnOpts);
   // The shell's box leaves the marker; the backstop leaves an ETIMEDOUT. Either way the turn was
   // cut, not merely failed. A stall marker (#7752) outranks the box marker: a turn silent for
@@ -785,6 +805,13 @@ exit $turn_exit`;
   const boxed = existsSync(CUTF);
   const stallCut = existsSync(STALLF);
   const cut = !!TURN_MAX_MS && (boxed || stallCut || r.error?.code === "ETIMEDOUT");
+  // #7761: how far the watchdog moved the box, one EXTF row per extension. boxMs is the box the
+  // turn actually had, so a ceiling cut reads as the ceiling, never as the 20-minute default.
+  let extensions = 0;
+  try { extensions = readFileSync(EXTF, "utf8").split("\n").filter(Boolean).length; } catch {}
+  const boxMs = TURN_MAX_MS + extensions * TURN_EXTEND_MS;
+  try { unlinkSync(DEADLINEF); } catch {}
+  try { unlinkSync(EXTF); } catch {}
   // DRAIN before classifying, never on a CUT turn (the sweep killed the scrubber, its marker never
   // comes). bash 3.2 `wait` skips process substitutions, so wait for DRAINF, bounded.
   if (!cut) {
@@ -800,6 +827,7 @@ exit $turn_exit`;
     try { unlinkSync(CUTF); } catch {}
     try { unlinkSync(STALLF); } catch {}
     if (stallCut) log(`\x1b[33mturn STALLED — no bytes on either stream and no transcript advance for ${Math.round(WD_MS / 60000)}m; ended at the stall window, not the ${Math.round(TURN_MAX_MS / 1000)}s box\x1b[0m`);
+    else if (extensions) log(`\x1b[33mturn cut at the ${Math.round(boxMs / 1000)}s box after ${extensions} liveness extension(s) (ceiling ${Math.round(TURN_CEILING_MS / 1000)}s) — CLI and every descendant ended${boxed ? "" : " (node backstop: bash itself was wedged)"}\x1b[0m`);
     else log(`\x1b[33mturn cut at the ${Math.round(TURN_MAX_MS / 1000)}s time box — CLI and every descendant ended${boxed ? "" : " (node backstop: bash itself was wedged)"}\x1b[0m`);
   }
   lastTurnCut = cut;
@@ -883,6 +911,7 @@ exit $turn_exit`;
   const telemetryRow = { ts: Date.now(), agent: AGENT, project: PROJ, turn: TURN, trigger, card: sessionCard || 0, model: MODEL || "cli-default", duration_ms: Date.now() - t0, exit: realExit, effExit, authFailed: effExit !== realExit, emptyOutput: lastEmptyOutput, emptyTurn: lastEmptyTurn, verdict, outcome: finalOutcome, tokens };
   if (cut) telemetryRow.cut = true;
   if (stallCut) telemetryRow.stalled = true;
+  if (extensions) { telemetryRow.extensions = extensions; telemetryRow.boxMs = boxMs; }
   // #7752/#7099: a cut turn's 141/137 is the sweep's own signal (SIGPIPE/SIGKILL), recorded as
   // the cut signal — never read as a quota or crash pattern downstream.
   if (cut) { const sig = cutSignalFor(realExit); if (sig) telemetryRow.cutSignal = sig; }
@@ -920,7 +949,7 @@ async function stateTurn({ card, observation, trigger, assigners = [] }) {
       callCli: async (prompt) => {
         // isFirst=true every step ON PURPOSE: a state step carries no `-c`, so there is no session
         // to resume and a stale sid must never be handed to one.
-        const exit = await runTurn(prompt, true, trigger, { state: true });
+        const exit = await runTurn(prompt, true, trigger, { state: true, assigners });
         return { exit, stdout: lastEnvelope, cut: lastTurnCut };
       },
       executeAction: async (action) => {
@@ -1428,7 +1457,7 @@ async function resolveWakeCard(messages, { session }) {
           // dies quietly (§4.6).
           observation: [stateObservation, wakeText, ctxText, againText + freshText + baseText].filter(Boolean).join("\n"),
         })
-        : await runTurn(prompt, fresh, deliveryFails ? `${trigger} (redelivery)` : trigger, { judgeOutcome: askJudge });
+        : await runTurn(prompt, fresh, deliveryFails ? `${trigger} (redelivery)` : trigger, { judgeOutcome: askJudge, assigners });
     }
     finally { stopDutyNudgeWatcher(); }
     const secs = Math.round((Date.now() - tStart) / 1000);

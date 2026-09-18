@@ -75,6 +75,8 @@ echo 'the runner can move on to its next wake without a redelivery ladder or a p
     EFFORT: null, EFFORT_FLAG: { flag: "", text: "" },
     TURN_DIR: work, ERRF: join(work, "err.txt"), TRANSCRIPT_DIR: work, RUNNER_ID: "drill",
     MODEL: "", STATE_SCHEMA_FILE: "", TURN_MAX_MS: maxMs, TURN: 0, sid: "", inFollowUp: true,
+    // #7761: no ceiling here, so the box is the plain wall-clock box these drills measure.
+    TURN_CEILING_MS: 0, TURN_EXTEND_MS: 0, TURN_EXTENSIONS_MAX: 0,
     // #7762: runTurn's telemetry row reads the module-scope sessionCard (0 = no card yet).
     sessionCard: 0,
   });

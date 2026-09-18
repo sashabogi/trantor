@@ -110,6 +110,8 @@ ${body}
     env: { ...drillEnv({ TRANTOR_NO_DESKTOP_NOTIFY: "1", RELAY_HOST_ID: "drillhost" }), HOME, PATH: `${fakebin}:${process.env.PATH}`,
       RELAY_URL: HUB, RELAY_AGENT: "codex", RELAY_PROJECT: PROJ,
       TRANTOR_TURN_MAX_MS: "12000", TRANTOR_TURN_WATCHDOG_MS: "2500", TRANTOR_RETRY_MS: "1200",
+      // #7761: ceiling == box, so the busy turn meets the plain box this drill measures, not an extension.
+      TRANTOR_TURN_CEILING_MS: "12000",
       CREW_MODEL: "qwen3/deepseek-v4-pro", CREW_KICKOFF: "say hi and end your turn" },
   });
   const start = Date.now();

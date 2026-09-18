@@ -1,22 +1,9 @@
 #!/usr/bin/env node
-// Turn watchdog (#5684, reworked #6206). runTurn is spawnSync — the runner cannot watch its own
-// turn — so this DETACHED helper does: armed at turn start, disarmed by turn end. A turn past
-// the window with NO new activity earns ONE direct stall report to the foreman (episode, never a
-// timer storm). With no stall file (report-only mode) the turn is never killed — reporting is
-// the whole job. With one (#7752, kill mode) a turn silent on EVERY channel for the whole
-// window is also ENDED at the window: the marker tells the runner's shell box to sweep early,
-// so the kill itself still lives in exactly one place — the shell that owns $job.
-//
-// #6206: stdout silence is NOT a stall — `claude -p` prints nothing until the turn ends by
-// design, so a seat editing five files was reported STALLED while its transcript advanced.
-// Liveness is new activity in the seat's transcript (the CLI's session file), its worktree, or
-// stderr growth; silence on ALL of them for a whole window is the only thing reported. And a
-// watchdog never speaks for a runner it does not belong to: the stamp carries the runner's
-// instance id, so a survivor of a replaced runner exits on mismatch or runner death instead of
-// re-matching the NEW runner's turn number (the 09:47 false alarm was exactly that orphan).
-//
+// Turn watchdog (#5684, #6206, #7752, #7761): runTurn is spawnSync, so this DETACHED helper watches
+// the turn — liveness = transcript, worktree or stderr moving; a whole silent window earns ONE stall
+// report, and in kill mode (stall file given) also ends the turn via the shell box. Stamp-bound to one runner.
 //   node bin/turn-watchdog.mjs <stampFile> <errFile> <windowMs> <session> <project> <hubUrl> <transcriptDir> <workDir> [stallFile]
-import { readFileSync, writeFileSync, statSync, readdirSync } from "node:fs";
+import { readFileSync, writeFileSync, appendFileSync, statSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { hostId } from "../lib/project.mjs";
 import { signedPost } from "../hooks/lib/api.mjs";
@@ -74,14 +61,29 @@ let baseErr = errSize();
 const armedAt = armed.startedAt || Date.now();
 const SLACK = 2000;   // timestamp granularity + scheduler drift under load
 
-// #7752 kill mode: poll liveness continuously and, on a whole window of silence on EVERY
-// channel, write the stall marker, report once, exit. The runner's shell box sweeps the CLI
-// when it sees the marker, so a silent turn ends at the window instead of burning the box.
-// stderr liveness is measured ROLLING here (growth since the last poll, not since arm): the
-// question is "any bytes in this window", not "any bytes ever".
+// #7752 kill mode: poll liveness; a whole window silent on EVERY channel writes the stall marker
+// (the shell box sweeps on it), reports once, exits; stderr is measured ROLLING (bytes this window).
+// #7761: `armed.box` (step, ceiling, assigners) exists only when a ceiling above the box does; a
+// deadline one poll away on a turn that moved within the window is pushed out one step.
+const box = stallFile && armed.box && Number(armed.box.extensionsMax) > 0 ? armed.box : null;
+const mins = (ms) => `${Math.max(1, Math.round(ms / 60000))}m`;
+const secsOrMins = (ms) => (ms >= 60000 ? mins(ms) : `${Math.round(ms / 1000)}s`);
+async function tellExtension(text) {
+  const orch = `${hostId()}:${project}`;
+  const seen = new Set();
+  for (const a of [...(box.assigners || []), { from: orch }]) {
+    const to = String(a?.from || "");
+    if (!to || to === "all" || to === session || to.startsWith("hub:") || seen.has(to)) continue;
+    seen.add(to);
+    try { await signedPost(`${hub}/send`, { from: session, to, text, project, kind: "status", wake: false }, { session }); } catch {}
+  }
+}
+
 if (stallFile) {
   const poll = Math.max(250, Math.min(windowMs / 4, 10000));
   let lastErrAt = armedAt;
+  let deadline = armedAt + (box ? Number(box.maxMs) : 0);
+  let extensions = 0;
   for (;;) {
     await sleep(poll);
     const s = readStamp();
@@ -93,7 +95,17 @@ if (stallFile) {
     const freshCut = Math.max(armedAt, now - windowMs - SLACK);
     const tr = transcriptDir ? newestMtime(transcriptDir) : 0;
     const wk = workDir ? newestMtime(workDir) : 0;
-    if (tr > freshCut || wk > freshCut || now - lastErrAt < windowMs) continue;   // producing work: alive
+    if (tr > freshCut || wk > freshCut || now - lastErrAt < windowMs) {           // producing work: alive
+      if (box && extensions < Number(box.extensionsMax) && now + poll + SLACK >= deadline) {
+        extensions++;
+        deadline += Number(box.extendMs);
+        try { writeFileSync(box.deadlineFile, String(Math.floor(deadline / 1000))); } catch {}
+        try { appendFileSync(box.extFile, JSON.stringify({ n: extensions, at: now, until: deadline }) + "\n"); } catch {}
+        const card = Number(box.card) > 0 ? ` on #${box.card}` : "";
+        await tellExtension(`⏳ ${session} turn extended +${secsOrMins(Number(box.extendMs))} (${extensions}/${box.extensionsMax})${card} — alive: ${describeLast({ tr, wk })}${now - lastErrAt < windowMs ? ", stderr moving" : ""}; box now ${secsOrMins(deadline - armedAt)} of a ${secsOrMins(Number(box.ceilingMs))} ceiling`);
+      }
+      continue;
+    }
     try { writeFileSync(stallFile, ""); } catch {}
     const mins = Math.round((now - armedAt) / 60000);
     const orch = `${hostId()}:${project}`;

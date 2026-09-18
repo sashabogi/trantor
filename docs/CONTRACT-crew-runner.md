@@ -69,6 +69,13 @@ from comments; the incidents behind them live on the cards linked below.
   walks its own descendants with `pgrep -P` and kills them bottom-up, then writes the CUTF marker.
   Exactly one follow-up turn runs in the same session to land the work. A state step gets no
   follow-up (TDD §4.4) and is recorded with `cut: true`.
+- The box counts liveness (#7761): at the deadline a turn that moved on any watchdog channel
+  (transcript, worktree, stderr) within the stall window is extended by half the box (+10 minutes
+  at the default), up to `TRANTOR_TURN_CEILING_MS` (default 60 minutes; at or under the box it
+  disables extension). The watchdog owns the clock: it writes the new deadline for the shell box
+  to re-read, appends one row per extension, and tells each assigner and the foreman (`wake:false`).
+  A turn silent for the whole window still ends at the window, extended or not. A ledger row that
+  was extended carries `extensions` and `boxMs`, so a ceiling cut never reads as the default box.
 - Watchdog (#5684, #6206): a detached watchdog armed by a stamp file sends one stall report to the
   foreman when the transcript, worktree and stderr are all quiet for `TRANTOR_TURN_WATCHDOG_MS`
   (floor 10 minutes, never derived from the time box). It never kills. Every runner exit kills its
