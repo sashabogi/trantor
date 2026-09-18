@@ -54,8 +54,12 @@ const setup = ({ withGraft, profile }) => {
     mkdirSync(prof, { recursive: true });
     writeFileSync(join(prof, "cordis.patch.yml"), profile);
   }
+  // A scratch checkout named trantor, never ROOT: connect records the project id in its cwd (#6724).
+  const repo = join(work, "trantor");
+  mkdirSync(repo, { recursive: true });
+  spawnSync("git", ["init", "-q"], { cwd: repo });
   const run = (args = []) => spawnSync(process.execPath, [join(ROOT, "bin", "connect.mjs"), ...args], {
-    cwd: ROOT,
+    cwd: repo,
     env: { ...drillEnv(), HOME: home, PATH: `${fakebin}:/usr/bin:/bin` },
     encoding: "utf8",
   });
