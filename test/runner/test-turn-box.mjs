@@ -79,6 +79,8 @@ echo 'the runner can move on to its next wake without a redelivery ladder or a p
     TURN_CEILING_MS: 0, TURN_EXTEND_MS: 0, TURN_EXTENSIONS_MAX: 0,
     // #7762: runTurn's telemetry row reads the module-scope sessionCard (0 = no card yet).
     sessionCard: 0,
+    // #7914: runTurn records each BOX cut on the module-scope cut chain the park notice reads.
+    cutChain: [],
   });
   runInContext(`const cli = ${kimiSource};\n${inheritBoxOutput ? turnSource.replace(") >/dev/null 2>&1 & boxpid", ") & boxpid") : turnSource}`, context);
   await runInContext('runTurn("finish this drill", true)', context);

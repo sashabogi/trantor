@@ -21,6 +21,7 @@ import { capWake, capBcast, pickLessons, composePrompt, contractBase, baseLine }
 import {
   cardRefs, wakeCard, carriesWork, parseTurnTokens, parseResetAt, reasonWithBalances, quotaResetAt, PARKING_REASONS,
   senderProjectOf, isLinkedProject, stateSkipReason, isMessageCardTitle, OPEN_CARD_STATUSES,
+  CUT_CHAIN_PARK_MIN, cutChainEvidence, isBoundedPark,
 } from "../lib/turn-policy.mjs";
 import {
   auditDutyNudges, claimDutyNudges, claudeTranscriptDir, dutyEscalations, dutyNudgeDirective,
@@ -295,6 +296,11 @@ function startDutyNudgeWatcher(plan, sinceMs) {
 // The hub hands a message out exactly once, so a turn that died took its wake with it. Here a
 // message is consumed only when a turn exits 0; the queue lives on disk and retries on backoff.
 const PENDF = join(homedir(), ".agent-bus", `pending-${AGENT}-${PROJ}.json`);
+// #7914: the park, on disk, for everyone who is not on the bus. A park announces itself once and
+// then the seat looks exactly like an idle one — which is how three seats sat 46 minutes while
+// `trantor seat-why` read "live, last turn failed". This file is the state behind that event, so a
+// reader who missed the message still finds the reason, the evidence and when it lifts.
+const PARKF = join(homedir(), ".agent-bus", `park-${AGENT}-${PROJ}.json`);
 // #7778: message ids this seat already consumed through its OWN inbox path (relay_inbox, the
 // PostToolUse hook) — reconciled from the hub's deliveredUpTo ledger at each clean turn boundary
 // and persisted in the pending file, so a message the session read mid-turn is never re-woken by
@@ -418,28 +424,53 @@ async function reportFailure(exit, trigger, undelivered = 0, reasonOverride = ""
 // Against a spent plan or a rejected key the ladder never succeeds, so those two reasons PARK:
 // queue kept, ladder stopped, room told once with the reset time. `trantor up` resumes.
 let parkAnnounced = false;
-async function parkSeat(reason, undelivered, resetHint = 0) {
+// #7914: the park this seat is currently sitting in, or null. Read by the poll loop, which ends a
+// bounded one the moment somebody sends a direct message, and cleared by any turn that lands.
+let parkState = null;
+async function parkSeat(reason, undelivered, resetHint = 0, { evidence = "" } = {}) {
   // A seat that went QUIET printed no wall message to parse (#6131), so its own balance row is the
   // only place the reset time exists. Output first when there is any: it is this turn's evidence.
   const resetAt = parseResetAt(lastErrText) || resetHint;
-  const when = resetAt ? new Date(resetAt).toLocaleString() : "";
+  // #7914: a park a timer can clear resumes on its own. The box ending a turn twice says nothing
+  // about the plan or the key, so holding that queue until `trantor up` was the seat going silent;
+  // exhaustion and auth keep the old shape, because no window makes a spent plan usable.
+  const bounded = isBoundedPark(reason) && PARK_WINDOW_MS > 0;
+  const until = bounded ? Date.now() + PARK_WINDOW_MS : (resetAt || Number.MAX_SAFE_INTEGER);
+  const when = bounded || resetAt ? new Date(bounded ? until : resetAt).toLocaleString() : "";
+  parkState = { reason, until, evidence, held: undelivered, ts: Date.now(), bounded };
+  // The park is a STATE, and every reader of it is off the bus: `trantor seat-why`, the app, the
+  // operator at a terminal an hour later. The message below is the event; this file is the state.
+  try { writeFileSync(PARKF, JSON.stringify({ session: SESSION, agent: AGENT, project: PROJ, ...parkState })); } catch {}
   if (!parkAnnounced) {
     parkAnnounced = true;
     // #7752: a stalled park names the CLI and its model — the swap decision needs both, and this
     // line is the one place the room reads them together.
     const named = reason === "stalled" ? ` — ${AGENT}${MODEL ? `, model ${MODEL}` : " (cli default model)"}` : "";
-    const text = redactKeys(`⛔ ${SESSION} PARKED (${reason}${named}) — holding ${undelivered} message(s), redelivery stopped ${when ? `until ${when}` : `until \`trantor up ${AGENT}\``}`);
+    // #7914: the notice carries its own evidence. A reader who has to open three logs to learn
+    // which turns died and how is a reader who does not look, which is how 46 minutes passed.
+    const why = evidence ? ` · ${evidence}` : "";
+    const text = redactKeys(`⛔ ${SESSION} PARKED (${reason}${named}) — holding ${undelivered} message(s), redelivery stopped ${when ? `until ${when}` : `until \`trantor up ${AGENT}\``}${bounded ? " · a direct message ends the park now" : ""}${why}`);
     await api("/send", { from: SESSION, to: "all", text, project: PROJ, kind: "status" }).catch(() => {});
     const orch = `${hostId()}:${PROJ}`;
     if (orch !== SESSION) await api("/send", { from: SESSION, to: orch, text, project: PROJ, kind: "alert" }).catch(() => {});
   }
-  log(`\x1b[31mparked (${reason})${when ? ` — retrying after ${when}` : " — no reset time in the output; waiting for a restart"}\x1b[0m`);
+  log(`\x1b[31mparked (${reason})${when ? ` — retrying after ${when}` : " — no reset time in the output; waiting for a restart"}${evidence ? `\n  evidence: ${evidence}` : ""}\x1b[0m`);
   // The alarm for "the bus is stuck" cannot itself be a bus message, so a park also rings a bell
   // the operator can hear out of band, once per park.
   notifyOperator(`Trantor: ${SESSION} PARKED (${reason})`,
     `${undelivered} message(s) held${when ? ` — retrying after ${when}` : ` — needs \`trantor up ${AGENT}\``}`);
-  // No reset time means no timer can clear it: hold until the operator restarts the seat.
-  return resetAt || Number.MAX_SAFE_INTEGER;
+  return until;
+}
+
+// #7914: the park is over — because a direct message asked for a turn now, or because one landed.
+// The record goes with it, and the announce latch reopens so the NEXT park is heard too (a latch
+// that never reopens turns a repeating park into one message and then silence).
+function unpark(why) {
+  if (!parkState) return;
+  log(`\x1b[33mpark ended (${parkState.reason}) — ${why}\x1b[0m`);
+  parkState = null;
+  parkAnnounced = false;
+  try { unlinkSync(PARKF); } catch {}
 }
 
 /**
@@ -639,6 +670,12 @@ let lastTurnCut = false;
 // liveness channel quiet for the whole window), not the box. Same overwrite semantics as
 // lastTurnCut: the follow-up's own ending is what the ladder reads.
 let lastTurnStalled = false;
+// #7914: one row per CUT turn in the CURRENT chain — the evidence a time-box park owes the
+// orchestrator (which turns died, their exit codes, how the sweep ended them). Any turn that was
+// not cut empties it, so the rows always describe the chain that is parking and never a cut from
+// an hour ago. TRANTOR_PARK_WINDOW_MS is how long that park lasts before the seat resumes itself.
+let cutChain = [];
+const PARK_WINDOW_MS = Math.max(0, Number(process.env.TRANTOR_PARK_WINDOW_MS || 15 * 60 * 1000));
 // The card the CURRENT CLI session belongs to (#6134). 0 = the kickoff session, which belongs to
 // no card, so the first contract that names one starts a session of its own.
 let sessionCard = 0;
@@ -922,6 +959,10 @@ exit $turn_exit`;
   // the cut signal — never read as a quota or crash pattern downstream.
   if (cut) { const sig = cutSignalFor(realExit); if (sig) telemetryRow.cutSignal = sig; }
   telemetry(telemetryRow);
+  // #7914: the same facts the ledger row keeps, held in memory for the park notice. Only a BOX cut
+  // joins the chain — a turn the stall watchdog ended has its own ladder and park reason (#7752).
+  if (cut && !stallCut) cutChain.push({ turn: TURN, trigger, exit: realExit, signal: cutSignalFor(realExit) || "", boxMs, extensions });
+  else cutChain = [];
   log(`turn ended (exit ${realExit}${effExit !== realExit ? ` → effective ${effExit} (${lastEmptyOutput ? "empty-output" : "auth"})` : ""}, ${((Date.now() - t0) / 1000).toFixed(0)}s)`);
   if (realExit === 0 && effExit === 0) { cmuxStatus("idle", "#8a94a6", "robot"); herdrAgent("idle"); }   // finished this turn, waiting for the next
   // #5965 — TURN END. A clean exit means the seat is idle again; say so right away so the app stops
@@ -1179,6 +1220,10 @@ async function resolveWakeCard(messages, { session }) {
   // broadcasts batched behind them. Restored from disk first: a runner that was killed mid-turn
   // (or a machine that rebooted) still owes those messages, and the hub will never send them again.
   const restored = loadPending();
+  // #7914: a park belongs to the runner that made it. This process is starting fresh and will
+  // re-park if the CLI is still cutting, so a record left by the runner before it is stale state —
+  // and stale state in a health read is the same failure as no state at all.
+  try { unlinkSync(PARKF); } catch {}
   seenLedger = restored.seen;
   if (seenLedger.length) log(`\x1b[33m${seenLedger.length} consumed message id(s) restored from the pending file — the poll keeps standing down on them\x1b[0m`);
   if (restored.ask) {
@@ -1339,6 +1384,18 @@ async function resolveWakeCard(messages, { session }) {
       savePending(pendingWake, pendingBcast);
     }
     if (awaitingAsk) { log(`holding for the answer to ask #${awaitingAsk.id} — ${wake.length} new message(s) queued behind it`); continue; }
+    // #7914: a fresh DIRECT message to a parked seat is somebody asking for a turn now, so it ends
+    // a bounded park instead of queueing behind the window; a mention does not, because the room
+    // talking is not a request. An exhausted or auth park is a wall and stands anyway (#6134).
+    const directWake = wake.filter(m => m.to === SESSION);
+    if (parkState && directWake.length) {
+      if (isBoundedPark(parkState.reason)) {
+        unpark(`direct message from ${directWake[0].from || "?"}`);
+        retryAt = 0; deliveryFails = 0; cutChain = [];
+      } else {
+        log(`\x1b[33mparked (${parkState.reason}) — a direct message cannot clear this park; it holds until the reset or \`trantor up ${AGENT}\`\x1b[0m`);
+      }
+    }
     // Respect an active backoff: a new message during an outage joins the batch, it does not
     // reset the clock and hammer a CLI that is already failing.
     if (Date.now() < retryAt) { log(`queued — ${pendingWake.length} undelivered, next attempt in ${Math.max(0, Math.round((retryAt - Date.now()) / 1000))}s`); continue; }
@@ -1552,8 +1609,12 @@ async function resolveWakeCard(messages, { session }) {
       // silent chain (#7752), time-box when the chain died to cuts, api-error otherwise —
       // holding the queue until `trantor up`.
       const parkReason = lastTurnStalled ? "stalled" : (PARKING_REASONS.has(reason) ? reason : (lastTurnCut ? "time-box" : "api-error"));
+      // #7914: the park owes its evidence — which turns the box killed, their exits, the box that
+      // ended them — whatever rung fired it. The THRESHOLD is #6289's and stays #6289's: a chain
+      // retries once and the second failed chain parks, never the first (its drill B pins that).
+      const evidence = cutChain.length >= CUT_CHAIN_PARK_MIN ? cutChainEvidence(cutChain) : "";
       if (PARKING_REASONS.has(reason) || deliveryFails >= 2) {
-        retryAt = await parkSeat(parkReason, pendingWake.length, quotaReset);
+        retryAt = await parkSeat(parkReason, pendingWake.length, quotaReset, { evidence });
         // RUNNER_PARK_MAX_MS is set only by `trantor duty up` (launchd keepalive): past the ceiling,
         // exit so the supervisor restarts clean. Unsupervised seats stay parked; exiting would kill them.
         const parkMax = Number(process.env.RUNNER_PARK_MAX_MS || 0);
@@ -1565,10 +1626,17 @@ async function resolveWakeCard(messages, { session }) {
             process.exit(0);   // 0, not 1: this is a deliberate hand-off, not a crash
           }, wakeIn).unref?.();
         }
+        // #7914: what the park is, when it lifts, and the evidence it rests on — in the message
+        // that reaches the one who is actually blocked, not only in the card log they never read.
+        const lifts = parkState?.bounded
+          ? ` · resumes ${new Date(parkState.until).toLocaleTimeString()} (a direct message ends it now)`
+          : " — not retrying";
+        // The lift time goes BEFORE the evidence: the transport caps the line, and what the reader
+        // has to act on must never be the part that gets eaten.
         await notifyAssigners(assigners,
           reason === "stalled"
-            ? `⛔ your contract is PARKED on ${SESSION} (stalled: two turns silent for the whole watchdog window) — not retrying · asked: "${asked}"`
-            : `⛔ your contract is PARKED on ${SESSION} (${parkReason}) — not retrying · asked: "${asked}"`);
+            ? `⛔ your contract is PARKED on ${SESSION} (stalled: two turns silent for the whole watchdog window)${lifts} · asked: "${asked}"`
+            : `⛔ your contract is PARKED on ${SESSION} (${parkReason})${lifts}${evidence ? ` · ${evidence}` : ""} · asked: "${asked}"`);
         lastTurnAt = Date.now();
         return;
       }
@@ -1608,6 +1676,7 @@ async function resolveWakeCard(messages, { session }) {
         `🫥 EMPTY turn on ${SESSION} (exit 0, ${secs}s — no worktree change, no substantive output, no bus activity) · wake stays owed · retrying in ${Math.round(wait / 1000)}s · asked: "${asked}"`);
     } else {
       pendingWake = []; pendingBcast = []; deliveryFails = 0; retryAt = 0;
+      unpark("a turn landed");   // #7914: the seat is working again — the park record must not outlive it
       // #7778: reconcile BEFORE the write below so the persisted snapshot carries the seen-set.
       await reconcileSessionReads(cursor);
       savePending([], []);
