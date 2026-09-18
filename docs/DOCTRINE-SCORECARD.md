@@ -44,3 +44,35 @@ Consolidation phase, in order: (1) merge #6452 and #6450 so the drill gate and t
 hold on main, not on a seat branch; (2) SYSTEM-CONTRACT phase 3, events.subscribe replaces the 36
 desktop polls; (3) expose turn state instead of inferring it (#7749, #7775); (4) unblock #6448, the
 lib.rs split and the clippy deny. The next feature wave waits for (1) and (2).
+
+## crebral-health (f4923c0)
+
+Brief: unread (403). README: in production, in daily use by beta clinics; 136 API routes, 90 pages,
+96 migrations; 770 commits in 90 days, 281 in the last 30.
+Shape: 1,390 source files; 18 over 800 lines, 4 over 1,500 (EncounterList.tsx 1,473, the
+neuroscience capture config 1,420, AssistantDock.tsx 1,274); 373 test files under src; no CI
+workflow, the gates (tsc, eslint, vitest) run by hand; 42 of 42 dependencies caret-ranged.
+
+- state not event: PARTIAL. The record is single-sourced by rule (docs/clinic-single-source-of-truth.md,
+  docs/server-resolved-surfaces.md: the server resolves what a clinic sees), but no status surface
+  models an episode; "episode" appears only in clinical-note code.
+- episodes not timers: PARTIAL. 18 setInterval sites in 12 files: NotificationsMenu, MessagesMenu
+  and RegulatoryStatusCard poll every 30 s and ScribeReturnStatus polls for the note; the calendar
+  now-line and the recording clock are the only timers that should be timers.
+- no fake affordances: PARTIAL. Unbuilt modules render disabled with a badge from one feature map
+  (clinic-features.ts, FeaturesSection.tsx), which is honest; the platform-assistant button ships
+  live with the title "coming soon" (ContextBar.tsx:53), and portal/connect labels its connect
+  button "Coming soon" when the wearables flag is off.
+- done is a gate: PARTIAL. Every "Help me learn" fix ships a regression test (CLAUDE.md) and the
+  billing spec names a verification gate per card (.crew/billing-p1-spec.md), but nothing runs on
+  push and 4 of 770 commits name a drill or a verified-at sha.
+- contracts carry a base: MISSING. .crew/ holds some thirty seat contracts and specs (billing-A to
+  D, cardio-demo-A to D); none carries a base line, so a seat starts wherever main happens to be.
+  Bus contracts unread.
+- seats can ask: PARTIAL. The primitive is the runner's and reaches any seat launched through it;
+  the project's own specs never name a fact a seat must ask for rather than invent. Card logs unread.
+
+Consolidation phase: (1) CI on push running tsc, eslint and vitest, so red blocks merge (rule 2);
+(2) a drill line on every card and a base line on every .crew contract; (3) replace the four
+inbox-shaped polls with one subscription or one episode model (rule 11); (4) split the four files
+over 1,500 lines. The next vertical waits for (1) and (2).
