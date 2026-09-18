@@ -298,8 +298,8 @@ mod folder_of_projects_tests {
 
     /// A dev root holding: a real repo, a wrapper (not a repo) with one nested CLAUDE.md repo
     /// plus two stray repos, a scratch dir, and a lone-child dir (one repo inside, not a wrapper).
-    fn dev_root() -> PathBuf {
-        let root = std::env::temp_dir().join(format!("trantor-6842-{}", std::process::id()));
+    fn dev_root(tag: &str) -> PathBuf {
+        let root = std::env::temp_dir().join(format!("trantor-6842-{}-{tag}", std::process::id()));
         let _ = fs::remove_dir_all(&root);
         fs::create_dir_all(root.join("real/.git")).unwrap();
         fs::create_dir_all(root.join("wrapper.ai/builtbetter/.git")).unwrap();
@@ -314,7 +314,7 @@ mod folder_of_projects_tests {
 
     #[test]
     fn a_wrapper_dir_is_a_folder_of_projects_and_a_repo_or_lone_child_is_not() {
-        let root = dev_root();
+        let root = dev_root("wrapper");
         assert!(folder_of_projects(&root.join("wrapper.ai")));
         assert!(!folder_of_projects(&root.join("real")), "a git root is a project whatever it holds");
         assert!(!folder_of_projects(&root.join("lone")), "one child repo does not make a wrapper");
@@ -324,7 +324,7 @@ mod folder_of_projects_tests {
 
     #[test]
     fn the_nested_project_is_the_child_repo_with_a_claude_md_not_the_strays() {
-        let root = dev_root();
+        let root = dev_root("nested");
         let nested = nested_projects(&root.join("wrapper.ai"));
         assert_eq!(nested, vec![root.join("wrapper.ai/builtbetter")]);
         assert!(nested_projects(&root.join("real")).is_empty());
@@ -332,7 +332,7 @@ mod folder_of_projects_tests {
 
     #[test]
     fn the_project_list_drops_a_wrapper_even_when_pinned_and_keeps_the_rest() {
-        let root = dev_root();
+        let root = dev_root("list");
         let pinned = vec!["wrapper.ai".to_string(), "remote-only".to_string(), "real".to_string()];
         let list = projects_in(&root, pinned);
         assert_eq!(list, vec!["real".to_string(), "remote-only".to_string()]);
