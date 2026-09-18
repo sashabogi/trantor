@@ -1396,9 +1396,18 @@ async function resolveWakeCard(messages, { session }) {
     await loadLessons();
     const lessons = pickLessons(LESSONS_RAW, wakeCapped.text + " " + bcastCapped.text);
     const trigger = wakeForTurn.some(m => m.to === SESSION) ? "direct message" : "@mention";
-    // Who is owed an answer, captured BEFORE the turn: pendingWake is cleared on success.
+    // Who is owed an answer, captured BEFORE the turn: pendingWake is cleared on success. The id is
+    // the NEWEST wake this runner holds for that assigner (#6987): pendingWake is append-ordered,
+    // so first-wins threaded the receipt onto a PREVIOUS turn's id — in the ask flow the original
+    // contract, not the answer that released this turn — and the contract that actually woke it
+    // kept reading WAITING while the stop hook chased.
     const assigners = [];
-    for (const m of wakeForTurn) if (m.from && !assigners.some(a => a.from === m.from)) assigners.push({ from: m.from, id: m.id });
+    for (const m of wakeForTurn) {
+      if (!m.from) continue;
+      const held = assigners.find(a => a.from === m.from);
+      if (held) held.id = m.id;
+      else assigners.push({ from: m.from, id: m.id });
+    }
     const asked = askedExcerpt(wakeForTurn[0]);
     const tStart = Date.now();
     // #6134: ONE SESSION PER CARD; a different card starts a fresh CLI session and the seat is told.
