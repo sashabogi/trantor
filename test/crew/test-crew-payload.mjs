@@ -59,7 +59,11 @@ console.log("# crew-runner payload caps (#5683)");
   ok("wake drops the EARLIEST messages, not the newest", capped.text.startsWith("[s5]: msg 5") && capped.text.endsWith("msg 14"));
   const huge = [{ from: "a", to: "b", text: "x".repeat(5000) }];
   const hc = capWake(huge);
-  ok("oversized wake body is cut at 2000 chars with a visible marker", hc.text.length < 2200 && hc.text.includes("+3,000 chars of this message dropped"));
+  ok("oversized wake body keeps head AND tail around one marker (#7063)",
+    hc.text.startsWith("[a]: " + "x".repeat(1200))
+    && hc.text.endsWith("x".repeat(700))
+    && hc.text.includes("3,100 chars of this message elided from the middle")
+    && hc.text.length < 2200, `len=${hc.text.length}`);
   ok("a small wake body passes through untouched", capWake([{ from: "a", to: "b", text: "hi" }]).text === "[a]: hi");
 }
 

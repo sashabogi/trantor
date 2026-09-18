@@ -6,6 +6,8 @@
 export const PAYLOAD_CAPS = Object.freeze({
   wakeCount: 10,       // direct/@mention messages: keep the last ~10
   wakeMsgChars: 2000,  // per-message body cap (the hub caps card notes at 2000 too)
+  wakeHeadChars: 1200, // #7063: over the per-message cap, keep the head…
+  wakeTailChars: 700,  // #7063: …AND the tail — a work order is asks-last, the instructions live there
   bcastCount: 10,      // FYI broadcast context: keep the last ~10
   bcastMsgChars: 1000,
   lessonsCount: 15,    // top ~15 lessons, ranked by relevance to this turn's trigger
@@ -22,8 +24,17 @@ export function capWake(wake, caps = PAYLOAD_CAPS) {
   const kept = list.slice(-caps.wakeCount);
   const lines = kept.map(m => {
     let body = String(m?.text ?? "");
-    if (body.length > caps.wakeMsgChars)
-      body = body.slice(0, caps.wakeMsgChars) + ` …[+${n(body.length - caps.wakeMsgChars)} chars of this message dropped]`;
+    // #7063: a work order is written context-first, asks-last, so a HEAD cut deleted exactly the
+    // instructions ("so, do this: 1) … 2) …") and kept the rationale — two orders lost their item 2
+    // in one turn. Over the per-message cap, keep the head AND the tail with ONE marker line
+    // between, so a card id, a base: line and the closing asks all survive. The cap is per
+    // message, never a batch budget (body > wakeMsgChars ⇒ elided > 0, the marker is always true).
+    if (body.length > caps.wakeMsgChars) {
+      const elided = body.length - caps.wakeHeadChars - caps.wakeTailChars;
+      body = body.slice(0, caps.wakeHeadChars)
+        + `\n…[${n(elided)} chars of this message elided from the middle]\n`
+        + body.slice(-caps.wakeTailChars);
+    }
     return `[${m?.from}${m?.to === "all" ? " -> all (mentions you)" : ""}]: ${body}`;
   });
   return { text: lines.join("\n"), kept: kept.length, total: list.length };
