@@ -553,14 +553,16 @@ def cmd_call(reg, args):
     try:
         resp = http_post(url, headers, payload)
     except urllib.error.HTTPError as e:
-        body = e.read().decode(errors="replace")[:500]
+        # ONE stderr line naming the status and the model (#6893): a provider body with
+        # newlines must not smear the ✗ across the caller's log — collapse, then clamp.
+        body = " ".join(e.read().decode(errors="replace").split())[:500]
         err(RED("🪙 scrooge ✗ %s/%s HTTP %s: %s" % (provider, model, e.code, body)))
         append_ledger({"ts": int(t0), "provider": provider, "model": model, "task": args.task,
                        "project": proj, "cwd": cwd,
                        "ok": False, "error": "HTTP %s" % e.code, "duration_ms": int((time.time()-t0)*1000)})
         raise SystemExit(2)
     except Exception as e:
-        err(RED("🪙 scrooge ✗ %s/%s: %s" % (provider, model, e)))
+        err(RED("🪙 scrooge ✗ %s/%s: %s" % (provider, model, " ".join(str(e).split()))))
         append_ledger({"ts": int(t0), "provider": provider, "model": model, "task": args.task,
                        "project": proj, "cwd": cwd,
                        "ok": False, "error": str(e), "duration_ms": int((time.time()-t0)*1000)})
@@ -586,6 +588,12 @@ def cmd_call(reg, args):
                              "prompt_preview": preview})
     err(ORANGE("🪙 scrooge ✓ %s/%s · %d→%d tok · ~$%.5f · %.1fs%s" %
                (provider, model, tin, tout, c, dt, (" · ledger#%d" % line_no) if line_no else "")))
+    # A genuinely empty model answer is a SUCCESS the caller must be able to tell from a
+    # failed call (#6893): exit 0, stdout stays EMPTY (not even a newline), and stderr
+    # carries the "empty answer" note — the ✗/exit-2 path is the only other possibility.
+    if not text.strip():
+        err(DIM("🪙 scrooge · empty answer"))
+        return
     sys.stdout.write(text)
     if not text.endswith("\n"):
         sys.stdout.write("\n")
