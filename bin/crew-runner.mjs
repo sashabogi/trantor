@@ -6,6 +6,7 @@ import { readFileSync, writeFileSync, unlinkSync, existsSync, appendFileSync, mk
 import { join, basename } from "node:path";
 import { homedir } from "node:os";
 import { resolveProject, resolveHub, withEnvFiles, hostId } from "../lib/project.mjs";
+import { resolveSecrets, shadowEnv, withSecretExports } from "../lib/secrets.mjs";
 import { loadOrCreate } from "../lib/identity.mjs";
 import { signedHeaders } from "../lib/signed-fetch.mjs";
 import { ensureEnrolled } from "../lib/enroll.mjs";
@@ -471,9 +472,9 @@ async function balanceRows() {
     // Same key sources the crew itself uses: QWEN_API_KEY (and most others) live in
     // ~/.agent-bus/.env, not in the runner's inherited environment — reading bare process.env
     // here would report "no key" and quietly leave every silent turn classified as a crash.
-    const { resolveKeys } = await import("../lib/provider-keys.mjs");
+    const { resolveKeys, keyFiles } = await import("../lib/provider-keys.mjs");
     return await Promise.race([
-      fetchBalances(resolveKeys(process.env), { only: [AGENT] }),
+      fetchBalances(resolveKeys(process.env, keyFiles(), resolveSecrets(process.env)), { only: [AGENT] }),
       new Promise((r) => setTimeout(() => r([]), 4000)),
     ]);
   } catch { return []; }
@@ -677,7 +678,10 @@ async function runTurn(prompt, isFirst, trigger = "kickoff", opts = {}) {
   // PRECEDENCE: each file is PREPENDED, so the list is iterated in written order, highest priority
   // first, and the CREW layer (~/.agent-bus/.env) wins. test-crew-env.mjs runs the real shell.
   const envs = [join(homedir(), ".agent-bus", ".env"), cli.env].filter(f => f && existsSync(f));
-  cmd = withEnvFiles(cmd, envs);
+  // #6393: the store's keys ride the spawn env under shadow names and the shell re-exports them
+  // AFTER the sources ran, so the keychain wins over a stale .env line and no file is ever copied.
+  const secrets = resolveSecrets(process.env);
+  cmd = withEnvFiles(withSecretExports(cmd, Object.keys(secrets)), envs);
   log(`turn starting (${isFirst ? "fresh session" : "resume"})${MODEL ? ` · model=${MODEL}` : ""}`);
   // #7777: the one effort line — which effort parameters were set, or that the model is uncatalogued.
   if (EFFORT && EFFORT_FLAG.text) log(EFFORT_FLAG.text);
@@ -758,7 +762,7 @@ exit $turn_exit`;
     // spawned. stdin is /dev/null: a background group that reads the terminal stops on SIGTTIN.
     detached: true,
     cwd: TURN_DIR, encoding: "utf8", stdio: cli.sid ? ["ignore", "pipe", "inherit"] : ["ignore", "inherit", "inherit"],
-    env: { ...process.env, RELAY_URL: HUB, RELAY_AGENT: AGENT, RELAY_SESSION: SESSION, RELAY_PROJECT: PROJ,
+    env: { ...process.env, ...shadowEnv(secrets), RELAY_URL: HUB, RELAY_AGENT: AGENT, RELAY_SESSION: SESSION, RELAY_PROJECT: PROJ,
       // #6228: marks this env as belonging to PROJ, unlike a one-off RELAY_PROJECT override; crew.mjs's
       // `up` guard refuses to bring up another project's crew from a shell carrying this badge.
       TRANTOR_SEAT: PROJ,
