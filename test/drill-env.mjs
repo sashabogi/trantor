@@ -11,6 +11,8 @@ export const DRILL_IDENTITY_VARS = [
   // A mode flag scrubbed for the same reason: a seat under Trantor State exports it and drills
   // inheriting it armed state mode in every spawned runner (#7759).
   "TRANTOR_STATE_ASSEMBLE",
+  // The secret store backend is the operator's choice, never a drill's inheritance (#6393).
+  "TRANTOR_SECRETS_BACKEND", "TRANTOR_SECRETS_KEYCHAIN",
 ];
 
 // Child env for a drill spawn: host env minus identity, plus the caller's deliberate overrides.
