@@ -58,6 +58,8 @@ use git_panel::*;
 use update::*;
 #[allow(unused_imports)]
 use app::*;
+/// main.rs calls this: the Tauri entry point keeps its crate-root name after the split.
+pub use app::run;
 #[allow(unused_imports)]
 use changes::*;
 

@@ -199,26 +199,26 @@ pub(crate) const HANDOFF_PROGRESS_EVENT: &str = "handoff-progress";
 
 #[derive(Serialize, Clone)]
 pub(crate) struct HandoffProgress {
-    project: String,
-    active: bool,
+    pub(crate) project: String,
+    pub(crate) active: bool,
 }
 
 /// Which projects have a handoff chain in flight right now. Two projects can hand off at once;
 /// the frontend busy-gates its click per project, so one project never runs two chains. Queried
 /// on lens mount as well — an event alone would race a lens switch mid-chain.
 #[derive(Default)]
-pub(crate) struct HandoffChains(std::sync::Mutex<Vec<String>>);
+pub(crate) struct HandoffChains(pub(crate) std::sync::Mutex<Vec<String>>);
 
 /// Emits the marker active on begin and inactive on drop, so EVERY exit path — early error
 /// returns included — unmarks the pane. Drop also runs on unwind, so a panic inside the chain
 /// cannot strand the "handing off" label.
 pub(crate) struct HandoffChainGuard {
-    app: tauri::AppHandle,
-    project: String,
+    pub(crate) app: tauri::AppHandle,
+    pub(crate) project: String,
 }
 
 impl HandoffChainGuard {
-    fn begin(app: tauri::AppHandle, project: &str) -> Self {
+    pub(crate) fn begin(app: tauri::AppHandle, project: &str) -> Self {
         use tauri::{Emitter, Manager};
         {
             let chains = app.state::<HandoffChains>();
@@ -641,7 +641,7 @@ pub(crate) enum AgentDropStep {
 }
 
 impl AgentDropStep {
-    fn as_str(&self) -> &'static str {
+    pub(crate) fn as_str(&self) -> &'static str {
         match self {
             Self::Wait => "waiting",
             Self::Dropped => "confirmed",

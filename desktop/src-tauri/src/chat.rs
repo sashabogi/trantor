@@ -58,31 +58,31 @@ pub(crate) fn orch_session_id(project: &str) -> Option<String> {
 #[derive(Debug, Clone, Serialize)]
 pub(crate) struct ChatBlock {
     /// "text" | "thinking" | "tool" | "image"
-    kind: String,
-    text: String,
+    pub(crate) kind: String,
+    pub(crate) text: String,
     /// tool blocks only
-    tool: Option<String>,
-    tool_id: Option<String>,
+    pub(crate) tool: Option<String>,
+    pub(crate) tool_id: Option<String>,
     /// Set only when `tool == "AskUserQuestion"` and `input.questions` parses — the structured
     /// data the question card renders. None (never an empty vec) on a shape mismatch, so a
     /// surprise input falls back to the plain tool row rather than a broken card.
     #[serde(skip_serializing_if = "Option::is_none")]
-    ask: Option<Vec<AskQuestion>>,
+    pub(crate) ask: Option<Vec<AskQuestion>>,
 }
 
 #[derive(Debug, Clone, Serialize)]
 pub(crate) struct AskOption {
-    label: String,
-    description: String,
+    pub(crate) label: String,
+    pub(crate) description: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct AskQuestion {
-    header: String,
-    question: String,
-    multi_select: bool,
-    options: Vec<AskOption>,
+    pub(crate) header: String,
+    pub(crate) question: String,
+    pub(crate) multi_select: bool,
+    pub(crate) options: Vec<AskOption>,
 }
 
 /// Parse an AskUserQuestion tool_use's `input.questions[]` into the question card's data. `?`
@@ -119,24 +119,24 @@ pub(crate) fn parse_ask_questions(input: &serde_json::Value) -> Option<Vec<AskQu
 
 #[derive(Debug, Clone, Serialize)]
 pub(crate) struct ChatTurn {
-    role: String,
-    blocks: Vec<ChatBlock>,
+    pub(crate) role: String,
+    pub(crate) blocks: Vec<ChatBlock>,
     /// A message the operator sent while the agent was mid-turn: recorded, not yet seen. Three
     /// states exist (sent, queued, seen) and the middle one must show; a dequeue marker clears it.
     #[serde(skip_serializing_if = "Option::is_none")]
-    queued: Option<bool>,
+    pub(crate) queued: Option<bool>,
 }
 
 /// What the agent IS, taken from the transcript rather than asserted: the session itself wrote it,
 /// so it is evidence. An empty field renders as absent, never as a default that looks like knowledge.
 #[derive(Debug, Clone, Default, Serialize)]
 pub(crate) struct ChatMeta {
-    model: String,
-    version: String,
-    branch: String,
-    context: ChatContext,
+    pub(crate) model: String,
+    pub(crate) version: String,
+    pub(crate) branch: String,
+    pub(crate) context: ChatContext,
     #[serde(skip)]
-    guard: ContextGuard,
+    pub(crate) guard: ContextGuard,
 }
 
 /// The context gauge's poison guard (#5572, SYSTEM-CONTRACT §4 "context %"): one usage row far
@@ -144,15 +144,15 @@ pub(crate) struct ChatMeta {
 /// The same rule lives in hooks/lib/handoff.mjs so the baton and the gauge never disagree.
 #[derive(Debug, Clone, Default)]
 pub(crate) struct ContextGuard {
-    max: u64,
-    recent: Vec<u64>,
+    pub(crate) max: u64,
+    pub(crate) recent: Vec<u64>,
 }
 
 impl ContextGuard {
     const RING: usize = 5;
     const FLOOR_FRAC: f64 = 0.4;
 
-    fn push(&mut self, tokens: u64) {
+    pub(crate) fn push(&mut self, tokens: u64) {
         if tokens == 0 {
             return;
         }
@@ -165,7 +165,7 @@ impl ContextGuard {
         }
     }
 
-    fn absorb(&mut self, other: &ContextGuard) {
+    pub(crate) fn absorb(&mut self, other: &ContextGuard) {
         for t in &other.recent {
             self.push(*t);
         }
@@ -174,7 +174,7 @@ impl ContextGuard {
         }
     }
 
-    fn report(&mut self) -> Option<u64> {
+    pub(crate) fn report(&mut self) -> Option<u64> {
         let last = *self.recent.last()?;
         let floor = (self.max as f64 * Self::FLOOR_FRAC) as u64;
         if last >= floor {
@@ -192,9 +192,9 @@ impl ContextGuard {
 
 #[derive(Debug, Clone, Default, Serialize)]
 pub(crate) struct ChatContext {
-    tokens: Option<u64>,
-    window: u64,
-    frac: Option<f64>,
+    pub(crate) tokens: Option<u64>,
+    pub(crate) window: u64,
+    pub(crate) frac: Option<f64>,
 }
 
 /// Text the harness injected into the conversation wearing the user's role (hook output, notices,
@@ -344,75 +344,75 @@ pub(crate) fn merge_chat_meta(current: &mut ChatMeta, next: ChatMeta) {
 
 #[derive(Debug, Clone, Serialize)]
 pub(crate) struct ChatToolResult {
-    tool_id: String,
-    ok: bool,
-    preview: String,
+    pub(crate) tool_id: String,
+    pub(crate) ok: bool,
+    pub(crate) preview: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
 pub(crate) struct ChatSnapshot {
-    turns: Vec<ChatTurn>,
-    results: Vec<ChatToolResult>,
-    total: usize,
-    meta: ChatMeta,
+    pub(crate) turns: Vec<ChatTurn>,
+    pub(crate) results: Vec<ChatToolResult>,
+    pub(crate) total: usize,
+    pub(crate) meta: ChatMeta,
     /// RAW text of every user-role row, UNFILTERED (receipts read the record, not the display —
     /// five delivery false-alarms came from matching against harness-filtered turns; a
     /// bang-command's <bash-input> row, a /compact record, an isMeta row all vanish from
     /// display but all PROVE arrival).
-    receipt_texts: Vec<String>,
+    pub(crate) receipt_texts: Vec<String>,
     /// The batch contained a turn-boundary system row (`turn_duration` / `stop_hook_summary`).
     /// The status stream can freeze on `working` — a dead subscription never delivers the idle
     /// frame (#5993, 40 minutes stuck) — so the transcript itself carries the belt: the batch
     /// that SAYS the turn ended lets the frontend re-seed the status once, no polling.
-    turn_ended: bool,
+    pub(crate) turn_ended: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
 pub(crate) struct ChatRowsPayload {
-    project: String,
+    pub(crate) project: String,
     #[serde(rename = "sessionId")]
-    session_id: String,
-    after: usize,
-    total: usize,
-    turns: Vec<ChatTurn>,
-    results: Vec<ChatToolResult>,
-    meta: ChatMeta,
+    pub(crate) session_id: String,
+    pub(crate) after: usize,
+    pub(crate) total: usize,
+    pub(crate) turns: Vec<ChatTurn>,
+    pub(crate) results: Vec<ChatToolResult>,
+    pub(crate) meta: ChatMeta,
     #[serde(rename = "receiptTexts")]
-    receipt_texts: Vec<String>,
+    pub(crate) receipt_texts: Vec<String>,
     /// True when this batch carried the turn-boundary system row (#5993) — the frontend's one
     /// allowed moment to re-seed the pushed status without polling.
-    turn_ended: bool,
+    pub(crate) turn_ended: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
 pub(crate) struct ChatSessionChangedPayload {
-    project: String,
+    pub(crate) project: String,
     #[serde(rename = "sessionId")]
-    session_id: String,
+    pub(crate) session_id: String,
 }
 
 #[derive(Debug, Default)]
 pub(crate) struct TranscriptTail {
-    byte_offset: u64,
-    line_offset: usize,
-    pending: String,
+    pub(crate) byte_offset: u64,
+    pub(crate) line_offset: usize,
+    pub(crate) pending: String,
 }
 
 impl TranscriptTail {
-    fn reset(&mut self) {
+    pub(crate) fn reset(&mut self) {
         self.byte_offset = 0;
         self.line_offset = 0;
         self.pending.clear();
     }
 
-    fn seed_from_raw(&mut self, raw: &str) {
+    pub(crate) fn seed_from_raw(&mut self, raw: &str) {
         self.byte_offset = raw.len() as u64;
         let (complete, pending) = complete_line_count(raw);
         self.line_offset = complete;
         self.pending = pending;
     }
 
-    fn push_chunk(&mut self, chunk: &str) -> (usize, Vec<String>, usize) {
+    pub(crate) fn push_chunk(&mut self, chunk: &str) -> (usize, Vec<String>, usize) {
         let after = self.line_offset;
         if chunk.is_empty() {
             return (after, Vec::new(), self.line_offset);
@@ -443,7 +443,7 @@ impl TranscriptTail {
         (after, lines, self.line_offset)
     }
 
-    fn read_new_lines(&mut self, path: &Path) -> std::io::Result<(usize, Vec<String>, usize)> {
+    pub(crate) fn read_new_lines(&mut self, path: &Path) -> std::io::Result<(usize, Vec<String>, usize)> {
         let mut f = std::fs::File::open(path)?;
         let len = f.metadata()?.len();
         if len < self.byte_offset {

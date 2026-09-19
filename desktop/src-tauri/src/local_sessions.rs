@@ -28,8 +28,8 @@ pub(crate) fn project_of_cwd(cwd: &str, root: &str) -> Option<String> {
 /// than a status word.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub(crate) struct LocalSessionRow {
-    project: String,
-    status: Option<String>,
+    pub(crate) project: String,
+    pub(crate) status: Option<String>,
 }
 
 /// Every project with an orch row in `crew-windows.txt`, mapped to its pane id. Last row wins per
@@ -131,26 +131,26 @@ pub(crate) fn local_sessions() -> Vec<LocalSessionRow> {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct TranscriptCandidate {
-    session_id: String,
-    active_ago_sec: u64,
-    transcript: String,
+    pub(crate) session_id: String,
+    pub(crate) active_ago_sec: u64,
+    pub(crate) transcript: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub(crate) struct ProjectSessionRow {
-    kind: String,
-    pid: Option<u32>,
+    pub(crate) kind: String,
+    pub(crate) pid: Option<u32>,
     #[serde(rename = "sessionId")]
-    session_id: Option<String>,
-    state: Option<String>,
+    pub(crate) session_id: Option<String>,
+    pub(crate) state: Option<String>,
     #[serde(rename = "activeAgoSec")]
-    active_ago_sec: Option<u64>,
-    transcript: Option<String>,
+    pub(crate) active_ago_sec: Option<u64>,
+    pub(crate) transcript: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub(crate) struct ProjectSessionsPayload {
-    sessions: Vec<ProjectSessionRow>,
+    pub(crate) sessions: Vec<ProjectSessionRow>,
 }
 
 pub(crate) fn orch_session_id_from_rows(raw: &str, project: &str) -> Option<String> {
@@ -495,12 +495,12 @@ pub(crate) async fn herdr_pane_read(pane_id: String) -> Result<String, String> {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub(crate) struct HerdrSeat {
-    project: String,
-    agent: String,
-    surface: String,
+    pub(crate) project: String,
+    pub(crate) agent: String,
+    pub(crate) surface: String,
     /// "herdr" for a crew seat, "orch" for the operator's own orchestrator pane. The pane strip
     /// needs the difference: an orchestrator is the person's session, not a worker to supervise.
-    kind: String,
+    pub(crate) kind: String,
 }
 
 pub(crate) fn parse_herdr_seats(raw: &str) -> Vec<HerdrSeat> {
@@ -566,8 +566,8 @@ pub(crate) fn herdr_seats() -> Result<String, String> {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct RestorableSession {
-    project: String,
-    session_id: String,
+    pub(crate) project: String,
+    pub(crate) session_id: String,
 }
 
 #[tauri::command]

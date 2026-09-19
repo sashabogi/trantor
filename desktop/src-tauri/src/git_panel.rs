@@ -3,19 +3,19 @@ use super::*;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub(crate) struct SeatDiffFile {
-    path: String,
-    plus: Option<u64>,
-    minus: Option<u64>,
-    untracked: bool,
+    pub(crate) path: String,
+    pub(crate) plus: Option<u64>,
+    pub(crate) minus: Option<u64>,
+    pub(crate) untracked: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub(crate) struct SeatDiff {
-    branch: String,
-    base: String,
-    files: Vec<SeatDiffFile>,
-    patch: String,
-    truncated: bool,
+    pub(crate) branch: String,
+    pub(crate) base: String,
+    pub(crate) files: Vec<SeatDiffFile>,
+    pub(crate) patch: String,
+    pub(crate) truncated: bool,
 }
 
 pub(crate) fn parse_numstat(raw: &str) -> Vec<SeatDiffFile> {
@@ -173,38 +173,38 @@ pub(crate) fn seat_diff(project: String, agent: String) -> Result<String, String
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub(crate) struct GitStatusEntry {
-    path: String,
+    pub(crate) path: String,
     /// porcelain v1 X: the index state. "?" means the file is untracked.
-    x: String,
+    pub(crate) x: String,
     /// porcelain v1 Y: the worktree state relative to the index.
-    y: String,
+    pub(crate) y: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub(crate) struct GitLogEntry {
-    sha: String,
-    author: String,
+    pub(crate) sha: String,
+    pub(crate) author: String,
     /// author date, relative ("2 hours ago") — git's own rendering, shown as-is
-    when: String,
-    subject: String,
+    pub(crate) when: String,
+    pub(crate) subject: String,
 }
 
 #[derive(Debug, Serialize)]
 pub(crate) struct GitPanel {
-    branch: String,
-    upstream: Option<String>,
+    pub(crate) branch: String,
+    pub(crate) upstream: Option<String>,
     /// commits ahead of the upstream — or, with no upstream, ahead of the merge base with main
     /// (the seat's unlanded work). behind only exists against an upstream; without one the seat
     /// branched from main and "behind" is a claim we have not measured.
-    ahead: Option<u64>,
-    behind: Option<u64>,
+    pub(crate) ahead: Option<u64>,
+    pub(crate) behind: Option<u64>,
     /// raw `git status --porcelain=v1` rows; the frontend owns bucketing into
     /// staged/unstaged/untracked because that split is presentation, not git knowledge.
-    status: Vec<GitStatusEntry>,
+    pub(crate) status: Vec<GitStatusEntry>,
     /// +N/−N per changed path vs HEAD (numstat) — the SCM row's change-size chip (#5811).
     /// Untracked and binary paths are absent: git counts neither, and null beats a fake zero.
-    counts: Vec<SeatDiffFile>,
-    log: Vec<GitLogEntry>,
+    pub(crate) counts: Vec<SeatDiffFile>,
+    pub(crate) log: Vec<GitLogEntry>,
 }
 
 /// The seat's worktree, validated. The same guards seat_diff applies — project and agent name a
@@ -374,9 +374,9 @@ pub(crate) fn parse_left_right(raw: &str) -> (Option<u64>, Option<u64>) {
 /// `has_upstream` selects what `ahead` describes (the remote, else the merge base with main).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub(crate) struct UpstreamStatus {
-    has_upstream: bool,
-    ahead: Option<u64>,
-    behind: Option<u64>,
+    pub(crate) has_upstream: bool,
+    pub(crate) ahead: Option<u64>,
+    pub(crate) behind: Option<u64>,
 }
 
 /// The narrow "no upstream" matcher. `rev-parse @{u}` is THE honest upstream probe and fails

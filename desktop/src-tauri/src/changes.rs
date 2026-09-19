@@ -4,12 +4,12 @@ use super::*;
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub(crate) struct ChangeRow {
     /// None = the project checkout itself; Some = the seat whose worktree changed.
-    seat: Option<String>,
-    path: String,
+    pub(crate) seat: Option<String>,
+    pub(crate) path: String,
     /// git porcelain code, trimmed ("M", "A", "??", "D")
-    status: String,
-    plus: Option<u64>,
-    minus: Option<u64>,
+    pub(crate) status: String,
+    pub(crate) plus: Option<u64>,
+    pub(crate) minus: Option<u64>,
 }
 
 /// Status + numstat rows for ONE root (the checkout or a single seat worktree).

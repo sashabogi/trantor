@@ -150,10 +150,10 @@ pub(crate) async fn doctor() -> Result<String, String> {
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct TrantorCliCompatibility {
-    installed: Option<String>,
-    minimum: &'static str,
-    compatible: bool,
-    reason: Option<String>,
+    pub(crate) installed: Option<String>,
+    pub(crate) minimum: &'static str,
+    pub(crate) compatible: bool,
+    pub(crate) reason: Option<String>,
 }
 
 pub(crate) fn cli_compatibility(installed: Option<&str>) -> TrantorCliCompatibility {

@@ -6,16 +6,16 @@ use super::*;
 /// agents are touching, not just that a repo exists.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub(crate) struct FileEntry {
-    name: String,
+    pub(crate) name: String,
     /// path relative to the project root, so the front end can ask for a subtree by the same key
-    path: String,
-    dir: bool,
+    pub(crate) path: String,
+    pub(crate) dir: bool,
     /// "" when unchanged, else git's two-letter porcelain code trimmed ("M", "A", "??", "D")
-    status: String,
+    pub(crate) status: String,
     /// +N/−N vs HEAD (numstat) — the tree row's change-size chip. null for untracked and
     /// binary files: git has no count for either, and a fake zero would be a lie (#5811).
-    plus: Option<u64>,
-    minus: Option<u64>,
+    pub(crate) plus: Option<u64>,
+    pub(crate) minus: Option<u64>,
 }
 
 /// Directories that are output or vendored. Walking them is how a file tree turns into a hang: a
@@ -131,10 +131,10 @@ pub(crate) fn source_root(project: &str, seat: Option<&str>) -> Result<std::path
 /// pointed at something that is neither small nor text.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub(crate) struct FileBody {
-    text: String,
+    pub(crate) text: String,
     /// set when the file was cut at the cap, so the UI can say so instead of implying it is whole
-    truncated: bool,
-    bytes: u64,
+    pub(crate) truncated: bool,
+    pub(crate) bytes: u64,
 }
 
 pub(crate) const FILE_VIEW_CAP: u64 = 512 * 1024;
@@ -145,8 +145,8 @@ pub(crate) const FILE_VIEW_CAP: u64 = 512 * 1024;
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub(crate) struct FileStat {
     /// modified time in milliseconds since the Unix epoch, 0 when the OS could not say
-    mtime_ms: u64,
-    bytes: u64,
+    pub(crate) mtime_ms: u64,
+    pub(crate) bytes: u64,
 }
 
 #[tauri::command]

@@ -57,10 +57,10 @@ pub(crate) fn draft_file_name(seat: Option<&str>, path: &str) -> String {
 
 #[derive(Debug, Serialize, serde::Deserialize)]
 pub(crate) struct DraftEntry {
-    path: String,
-    seat: Option<String>,
-    text: String,
-    ts: u64,
+    pub(crate) path: String,
+    pub(crate) seat: Option<String>,
+    pub(crate) text: String,
+    pub(crate) ts: u64,
 }
 
 #[tauri::command]
@@ -146,8 +146,8 @@ mod draft_tests {
 /// image. None (not an error) when the path is not a file: a chip degrades to name-only.
 #[derive(Debug, Clone, Serialize)]
 pub(crate) struct AttachmentInfo {
-    bytes: u64,
-    thumb: Option<String>,
+    pub(crate) bytes: u64,
+    pub(crate) thumb: Option<String>,
 }
 
 /// Extensions the webview can actually decode. heic and friends stay out on purpose — a data URI

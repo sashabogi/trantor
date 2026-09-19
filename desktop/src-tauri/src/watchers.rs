@@ -160,9 +160,9 @@ pub(crate) fn balances_refresh() -> Result<(), String> {
 
 #[derive(Debug, Clone, Serialize)]
 pub(crate) struct OrchStatusPayload {
-    project: String,
-    pane: String,
-    status: String,
+    pub(crate) project: String,
+    pub(crate) pane: String,
+    pub(crate) status: String,
 }
 
 /// Push the orchestrator's lifecycle state instead of polling for it: one per-pane
@@ -327,8 +327,8 @@ pub(crate) fn ask_drill_fire_status(window: tauri::Window, project: String, stat
 /// token chat_unwatch must echo back so a stale unwatch can't kill a fresher watcher (#6113).
 #[derive(Debug, Clone, Serialize)]
 pub(crate) struct ChatWatchResult {
-    current: u64,
-    generation: u64,
+    pub(crate) current: u64,
+    pub(crate) generation: u64,
 }
 
 #[tauri::command]
