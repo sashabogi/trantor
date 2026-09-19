@@ -355,9 +355,23 @@ const donePair = () => {
   ok("turns: n=3 with a higher state median → pass", r.ok === true && r.state_median === 9 && r.baseline_median === 6, JSON.stringify(r));
 }
 {
+  // #8066: this case used to demand FEWER_TURNS, and that expectation was the bug. None of these
+  // runs was CUT — they each reached their own end, in fewer turns than the baseline needed. §8.7
+  // measures runway, so a run nothing stopped has nothing for it to fail on; scoring it here meant
+  // the better the state path did, the worse it read. The regression the gate exists to catch is
+  // the CUT case directly below.
   const pair = (card, s, b) => ({ card, state: runSteps(s), baseline: Array.from({ length: b }, (_, i) => baseRow(i + 1)) });
   const r = B.turnsGate([pair(1, 4, 9), pair(2, 3, 8), pair(3, 5, 10)]);
-  ok("turns: fewer turns per card on the state path → FEWER_TURNS", r.ok === false && r.code === "FEWER_TURNS", JSON.stringify(r));
+  ok("turns: fewer turns but every run FINISHED → pass, not FEWER_TURNS", r.ok === true && r.cut_n === 0, JSON.stringify(r));
+}
+{
+  // The genuine regression, and it must still fail: the state path gets STOPPED, earlier than the
+  // prose path was. Same shape as above except the state runs carry a cut.
+  const cutAt = (n, at) => Array.from({ length: n }, (_, i) => (i === at ? { turn: i + 1, cut: true } : { turn: i + 1 }));
+  const pair = (card, at, b) => ({ card, state: cutAt(12, at), baseline: Array.from({ length: b }, (_, i) => baseRow(i + 1)) });
+  const r = B.turnsGate([pair(1, 2, 9), pair(2, 1, 8), pair(3, 3, 10)]);
+  ok("turns: a state path CUT earlier than baseline still → FEWER_TURNS",
+    r.ok === false && r.code === "FEWER_TURNS" && r.cut_n === 3, JSON.stringify(r));
 }
 {
   const rows = [{ turn: 1 }, { turn: 2 }, { turn: 3, cut: true }, { turn: 4 }];

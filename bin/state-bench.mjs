@@ -616,6 +616,13 @@ export function turnsBeforeCut(rows) {
   return cut >= 0 ? cut : (rows || []).length;
 }
 
+/** Was this run STOPPED, or did it reach its own end? §8.7 is a runway metric and runway only means
+ *  something for a run something cut short (#8066). Kept separate from turnsBeforeCut so that
+ *  function's return shape — and every caller reading it as a number — stays as it was. */
+export function wasCut(rows) {
+  return (rows || []).some(r => r?.cut === true);
+}
+
 /**
  * §8.7 — median turns-per-card on the state path vs the baseline path, over n ≥ MIN_CARDS.
  *
@@ -625,16 +632,35 @@ export function turnsBeforeCut(rows) {
  */
 export function turnsGate(pairs, { minCards = MIN_CARDS } = {}) {
   const usable = (pairs || []).filter(p => p.state?.length && p.baseline?.length)
-    .map(p => ({ card: p.card, state: turnsBeforeCut(p.state), baseline: turnsBeforeCut(p.baseline) }));
+    .map(p => ({
+      card: p.card,
+      state: turnsBeforeCut(p.state), baseline: turnsBeforeCut(p.baseline),
+      state_cut: wasCut(p.state), baseline_cut: wasCut(p.baseline),
+    }));
   const out = { cards: usable, n: usable.length, state_median: median(usable.map(u => u.state)), baseline_median: median(usable.map(u => u.baseline)), ok: false, code: null, message: "" };
   if (usable.length < minCards) {
     out.code = "CARRY_FORWARD";
     out.message = `n=${usable.length} card(s) with both paths recorded; §8.7 wants ≥${minCards}. The medians are recorded on the card and this gate CARRIES FORWARD to the next phase — it is not waived.`;
     return out;
   }
+  // Runway is only a question for a run something STOPPED. A state run that reached its own end has
+  // no runway problem, and scoring it against a baseline that WAS stopped inverts the metric — the
+  // better the state path does, the worse this reads. That is not hypothetical: the first real
+  // Phase-2a run finished card #6448 in ONE turn against a 149-turn baseline that never finished,
+  // and this gate called it FEWER_TURNS (#8066). The regression §8.7 exists to catch is the state
+  // path being cut EARLIER than the prose path, and that still fails below.
+  const stopped = usable.filter(u => u.state_cut);
+  out.cut_n = stopped.length;
+  if (!stopped.length) {
+    out.ok = true;
+    out.message = `no state run was forced to cut across n=${usable.length} card(s) — every card reached its own end, so there is no runway to compare (state median ${out.state_median} turns vs baseline ${out.baseline_median})`;
+    return out;
+  }
+  out.state_median = median(stopped.map(u => u.state));
+  out.baseline_median = median(stopped.map(u => u.baseline));
   out.ok = out.state_median >= out.baseline_median;
   out.code = out.ok ? null : "FEWER_TURNS";
-  out.message = `median turns before a forced cut — state ${out.state_median} vs baseline ${out.baseline_median} over n=${usable.length}`;
+  out.message = `median turns before a forced cut, over the ${stopped.length} card(s) whose state run WAS cut — state ${out.state_median} vs baseline ${out.baseline_median} (n=${usable.length} recorded)`;
   return out;
 }
 

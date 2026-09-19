@@ -903,10 +903,21 @@ Plus `node bin/slop-gate.mjs` clean on every changed file — a package does not
 7. **Metric 3 — turns per card before a forced cut** (PRD §5, previously ungated). `bin/state-bench.mjs
    --turns` counts turns per card up to the first forced cut (a `turncut-*` marker, a context-driven
    handoff, or a watchdog stall report) on the state path, against the same count on the baseline
-   path. **Gate: median over n ≥ 3 cards is ≥ the baseline median.** With n < 3 the number is
-   recorded on the card and the gate **carries forward** to the next phase rather than being waved
-   through — one card is an anecdote, and a metric that can be satisfied by an anecdote is not a
-   gate.
+   path. **Gate: over the cards whose STATE RUN WAS CUT, median turns is ≥ the baseline median.**
+   With n < 3 recorded cards the number goes on the card and the gate **carries forward** to the
+   next phase rather than being waved through — one card is an anecdote, and a metric that can be
+   satisfied by an anecdote is not a gate.
+
+   **This metric judges runway, so it may only judge runs that were stopped (#8066).** A state run
+   that reached its own end has no runway problem, and comparing its turn count against a baseline
+   that *was* stopped inverts the metric — the fewer turns the state path needs to FINISH, the worse
+   it scores. That is not a hypothetical: the first live Phase-2a run finished card #6448 in ONE
+   turn against a 149-turn baseline that had landed nothing across three attempts, and this gate
+   returned `FEWER_TURNS`. Every other NO on that run was an honest could-not-evaluate; this one
+   returned a substantive verdict and it was the wrong one. So the condition is on the terminal
+   state, **not** a reversed inequality: cards whose state run completed cannot fail this gate, and
+   the regression it exists to catch — the state path cut *earlier* than the prose path — still
+   does. When no state run was cut at all, the gate passes and says so.
 
 **Reporting.** `bin/state-bench.mjs --report` writes the comparison table to
 `.agent-bus-out/` and prints it; the numbers go on the card, not in a claim.
