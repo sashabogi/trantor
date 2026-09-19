@@ -33,7 +33,7 @@ const log = (s) => { try { appendFileSync(logFile, `${new Date().toISOString()} 
 
 // Same text as the app's kickoff (lib.rs KICKOFF_PROMPT) — one boot prompt so the successor
 // recaps unprompted instead of sitting idle until a human types (the 15-minute silence, #5649).
-const KICKOFF_PROMPT = "You have just taken over via handoff. Recap now per your instructions.";
+const KICKOFF_PROMPT = "You have just taken over via handoff. FIRST open every file it names as read-first — memory, PRD, TDD — before you answer or touch anything; the summary points at them, it does not replace them (#8162). THEN recap per your instructions.";
 
 // The pane, resolved exactly like the app does (orch_pane_from_rows): last orch row wins.
 export function orchPane(rows, project) {

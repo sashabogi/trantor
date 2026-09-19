@@ -10,7 +10,7 @@ import { fileURLToPath } from "node:url";
 import { resolveProject, hostId, resolveHubInfo, knownProjects, nonSeatReason, nestedProjects, handoffDir, readOrchSession, writeOrchSession } from "../lib/project.mjs";
 import { formatSubagentManifest } from "../lib/subagent-manifest.mjs";
 import { updateAvailable, maybeNotifyDesktop, readConfig } from "./lib/update-check.mjs";
-import { renderStateBlock } from "./lib/handoff.mjs";
+import { renderStateBlock, readFirstPaths} from "./lib/handoff.mjs";
 import { maybeCheckBalances } from "./lib/balance-check.mjs";
 import { getJSON, signedGet, signedPost, loadIdentity } from "./lib/api.mjs";
 import { ledgerPaths, ensureStart, anchorCursor, writeCursor } from "./lib/inbox-ledger.mjs";
@@ -78,8 +78,11 @@ function loadPendingHandoff(projectName, { claim = true, freshSession = null } =
             try {
               // #5645: the mandate rides the stamp too, so prompt-focus's recap reminder pins
               // the SAME rec.mode the injection below announces (attended=WAIT / unattended=RESUME).
+              // #8162: the READ-FIRST list rides the stamp as DATA, so the Stop hook can check the
+              // successor opened it instead of accepting a reply as proof it understood anything.
+              const readFirst = readFirstPaths(rec.summary || "");
               writeFileSync(join(dir, `recap-pending-${String(freshSession.session_id).replace(/[^A-Za-z0-9_.-]/g, "_")}.json`),
-                JSON.stringify({ handoffId: rec.id, ts: nowSec(), mode: rec.mode === "unattended" ? "unattended" : "attended" }));
+                JSON.stringify({ handoffId: rec.id, ts: nowSec(), mode: rec.mode === "unattended" ? "unattended" : "attended", readFirst }));
             } catch {}
           }
         }
@@ -499,9 +502,9 @@ try {
     // attended (default) = recap-then-WAIT; unattended = recap-then-RESUME — the handoff's OPEN
     // THREADS are the work order ("handoffs must never be a break").
     if (handoff.mode === "unattended") {
-      additionalContext += `🔄 **You are taking over from a prior session that hit its context limit, in UNATTENDED (long-run) mode.** This is a fresh full window. Resume the work below — the prior session's summary, git state, and a pointer to its full transcript (searchable; Foundation/Gaia has it ingested) follow. Continue from "OPEN THREADS & NEXT STEPS"; do not restart from scratch. Recap the task, state, and next step in at most 3 sentences, then RESUME the open threads immediately — they are your work order. Do NOT wait for the user; keep building. Keep replies short: no status tables, no headers, no walls of text.\n\n`;
+      additionalContext += `🔄 **You are taking over from a prior session that hit its context limit, in UNATTENDED (long-run) mode.** This is a fresh full window. Resume the work below — the prior session's summary, git state, and a pointer to its full transcript (searchable; Foundation/Gaia has it ingested) follow. Continue from "OPEN THREADS & NEXT STEPS"; do not restart from scratch.\n\n**READ BEFORE YOU BUILD (#8162).** This summary is a POINTER to the project's context, not a replacement for it. Open every file this handoff names as read-first — its memory files, its PRD and its TDD — BEFORE you touch code. Reading is not waiting, and it is not optional: three days running, successors recapped from this summary alone and went straight to code, burning a fifth of a context window rediscovering what was already written down. The ledger now checks which files you opened, not whether you replied.\n\nThen recap the task, state, and next step in at most 3 sentences, then RESUME the open threads — they are your work order. Do NOT wait for the user; keep building. Keep replies short: no status tables, no headers, no walls of text.\n\n`;
     } else {
-      additionalContext += `🔄 **You are taking over from a prior session that hit its context limit.** This is a fresh full window. Resume the work below — the prior session's summary, git state, and a pointer to its full transcript (searchable; Foundation/Gaia has it ingested) follow. Continue from "OPEN THREADS & NEXT STEPS"; do not restart from scratch. Recap the task, state, and next step in at most 3 sentences, then wait. Keep replies short: no status tables, no headers, no walls of text unless the user explicitly asks for detail.\n\n`;
+      additionalContext += `🔄 **You are taking over from a prior session that hit its context limit.** This is a fresh full window. Resume the work below — the prior session's summary, git state, and a pointer to its full transcript (searchable; Foundation/Gaia has it ingested) follow. Continue from "OPEN THREADS & NEXT STEPS"; do not restart from scratch.\n\n**READ BEFORE YOU ANSWER (#8162).** This summary is a POINTER to the project's context, not a replacement for it. Open every file this handoff names as read-first — its memory files, its PRD and its TDD — before you recap. A 3-sentence recap is producible from this summary alone, which is exactly how three days of takeovers went straight to code without opening anything. The ledger now checks which files you opened, not whether you replied.\n\nThen recap the task, state, and next step in at most 3 sentences, then wait. Keep replies short: no status tables, no headers, no walls of text unless the user explicitly asks for detail.\n\n`;
     }
     // Verification gates FIRST — these are structured "must verify before shipping" claims the prior
     // session couldn't independently prove. They go above the summary on purpose: a safety-critical

@@ -794,9 +794,74 @@ export function maybeSpawn(projectDir, conf = readConfig(), handoffFile = "", de
   } catch (e) { process.stderr.write(`[trantor] maybeSpawn error: ${e?.message}\n`); return false; }
 }
 
+/** The files a handoff tells its successor to read before doing anything (#8162).
+ *
+ *  A handoff has always been able to SAY "read these first" — crebral-health's named three memory
+ *  files on 2026-09-19 and the successor opened none of them. Saying it was the whole mechanism.
+ *  This pulls the list out as data so something downstream can check it.
+ *
+ *  Recognised: a `READ FIRST` / `READ-FIRST` / `Read first:` heading or line, and every path-looking
+ *  token on it and the lines beneath it until the next blank line or heading. Deliberately narrow —
+ *  a handoff that mentions a file in passing is not asking anyone to read it, and a gate that fires
+ *  on every path in a 4k summary would be noise the successor learns to ignore.
+ *  @returns {string[]} project-relative or absolute paths, de-duplicated, capped
+ */
+export function readFirstPaths(summary, { max = 12 } = {}) {
+  const text = String(summary || "");
+  const out = [];
+  const lines = text.split(/\r?\n/);
+  let collecting = false;
+  for (const raw of lines) {
+    const line = raw.trim();
+    const opens = /read[\s-]?first/i.test(line);
+    if (!collecting && !opens) continue;
+    if (collecting && (line === "" || /^#{1,6}\s/.test(line))) break;
+    collecting = true;
+    // Paths: a token with a slash or a known doc/memory extension, stripped of markdown furniture.
+    for (const m of line.matchAll(/[`"'(\[]?([~./\w-]*[\w-]+\.(?:md|mjs|js|ts|tsx|json|sql|rs|py|sh|txt))[`"')\]]?/g)) {
+      const p = m[1].replace(/^[`"'(\[]+|[`"')\]]+$/g, "");
+      if (p && !out.includes(p)) out.push(p);
+      if (out.length >= max) return out;
+    }
+  }
+  return out;
+}
+
+/** Which of `paths` this session actually OPENED, read off its own transcript (#8162).
+ *
+ *  Ground truth rather than testimony, the same rule the state gate learned the hard way: a
+ *  successor saying "I have read the handoff" is not evidence that it did. A Read/Grep/Glob tool
+ *  call naming the path is. Matches on basename as well as full path, because a handoff written by
+ *  a model may name `revenue-integrity-build.md` where the Read call carries the absolute path.
+ *  @returns {{read: string[], missed: string[]}}
+ */
+export function pathsReadIn(transcriptPath, paths) {
+  const want = (paths || []).filter(Boolean);
+  if (!want.length) return { read: [], missed: [] };
+  let body = "";
+  try { body = readFileSync(transcriptPath, "utf8"); } catch { return { read: [], missed: want }; }
+  // Only the tool CALLS count. A path quoted in the injected handoff summary, or in the model's own
+  // prose, must never read as "opened" — that is precisely the proxy this card exists to kill.
+  const opened = new Set();
+  for (const m of body.matchAll(/"name"\s*:\s*"(Read|Grep|Glob|NotebookRead)"\s*,\s*"input"\s*:\s*\{([^}]*)\}/g)) {
+    for (const f of m[2].matchAll(/"(?:file_path|path|pattern)"\s*:\s*"([^"]+)"/g)) opened.add(f[1]);
+  }
+  const hit = (p) => {
+    const base = p.split("/").pop();
+    for (const o of opened) if (o === p || o.endsWith("/" + p) || (base && o.endsWith("/" + base)) || o === base) return true;
+    return false;
+  };
+  const read = want.filter(hit);
+  return { read, missed: want.filter(p => !read.includes(p)) };
+}
+
 // The self-announcing fresh session command (single-quoted so it survives osascript→shell un-escaped).
-// Brevity is part of the prompt: a takeover that answers with 5k-character status dumps loses the operator.
-export const RECAP_CMD = "claude 'Recap the handoff you just took over — task, state, next step — in at most 3 sentences. Then wait for me. Keep all replies short by default: no status tables, no headers, no walls of text unless I explicitly ask for detail.'";
+// Brevity is part of the prompt: a takeover that answers with 5k-character status dumps loses the
+// operator. But brevity is about what you SAY, and #8162 found it had quietly become permission not
+// to READ: the summary is injected at SessionStart, so a 3-sentence recap is producible without
+// opening a file, and a successor doing exactly as asked never opened one. Three days of takeovers
+// went straight to code off a summary. So the order is now read-then-recap, and the recap stays short.
+export const RECAP_CMD = "claude 'You have just taken over via handoff. FIRST open every file the handoff names as read-first — its memory files, its PRD and TDD — and do not answer until you have. They are the context the handoff exists to carry, and the summary is a pointer to them, not a substitute. THEN recap in at most 3 sentences: task, state, next step. Then wait for me. Keep all replies short by default: no status tables, no headers, no walls of text unless I explicitly ask for detail.'";
 
 // ONE suppression check for every path that can open a terminal window: two names for it once let a
 // drill set the wrong one and open eight live sessions in deleted temp directories, so both are honoured.

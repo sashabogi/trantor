@@ -11,7 +11,7 @@ import { homedir } from "node:os";
 import { resolveProject, hostId, handoffDir, busDir } from "../lib/project.mjs";
 import { signedGet } from "./lib/api.mjs";   // signed: enforce hubs 401 unsigned reads — unsigned, T2 delivery is silently dead
 import { ledgerPaths, ensureStart, anchorCursor, writeCursor } from "./lib/inbox-ledger.mjs";
-import { readArm, clearArm, markHandedOff, appendHandoffState, subagentsActive } from "./lib/handoff.mjs";
+import { readArm, clearArm, markHandedOff, appendHandoffState, subagentsActive, pathsReadIn} from "./lib/handoff.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 
@@ -162,9 +162,27 @@ async function main() {
       if (existsSync(stampPath)) {
         try {
           const stamp = JSON.parse(readFileSync(stampPath, "utf8"));
-          appendHandoffState(stamp.handoffId, "recapped", sid);
-        } catch {}
-        try { unlinkSync(stampPath); } catch {}
+          // #8162: RECAPPED used to mean "a reply exists by Stop time", which a successor satisfies
+          // from the injected summary alone — so a handoff naming read-first files certified a
+          // takeover that opened none of them, three days running. Now the ledger asks the same
+          // question the state gate learned to ask: ground truth, not testimony. A Read/Grep tool
+          // call naming the path is evidence; the successor's own say-so is not.
+          const want = Array.isArray(stamp.readFirst) ? stamp.readFirst : [];
+          const { missed } = want.length
+            ? pathsReadIn(input.transcript_path || "", want)
+            : { missed: [] };
+          if (missed.length) {
+            // The stamp STAYS. Not recapped, so the next boundary asks again — and the successor is
+            // told exactly what it skipped rather than left to discover it when the operator does.
+            process.stderr.write(
+              `[trantor] handoff ${stamp.handoffId}: NOT recapped — the handoff named ${want.length} file(s) to read first and ${missed.length} ${missed.length === 1 ? "was" : "were"} never opened: ${missed.join(", ")}. Read them before going further; this is the context the handoff exists to carry.\n`);
+          } else {
+            appendHandoffState(stamp.handoffId, "recapped", sid);
+            try { unlinkSync(stampPath); } catch {}
+          }
+        } catch {
+          try { unlinkSync(stampPath); } catch {}
+        }
       }
     }
   } catch {}
