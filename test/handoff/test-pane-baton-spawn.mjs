@@ -29,15 +29,20 @@ const CONF = {};
 /** A maybeSpawn call with every side effect captured instead of performed. */
 function call({ pane = "", hasOrch = false, file = FILE, platform = "darwin", conf = CONF, env = {} } = {}) {
   const calls = [];
+  const windows = [];
   const logs = [];
   const res = maybeSpawn(DIR, conf, file, {
     platform, env,
     paneSurfaceEnv: () => pane,
     hasOrchPane: () => hasOrch,
     spawnPaneBaton: (d, f, p) => { calls.push({ dir: d, file: f, pane: p }); return true; },
+    // MUST be injected. Without it the no-pane case falls through to a REAL `spawn` of
+    // handoff-prompt.sh and opens a Terminal window on every run of this suite — which is exactly
+    // what happened between 2026-09-18 and 2026-09-19 until the operator saw four of them.
+    spawnPrompt: (...a) => { windows.push(a[1]?.[1]); return { unref() {} }; },
     log: (s) => logs.push(s),
   });
-  return { res, calls, logs: logs.join("") };
+  return { res, calls, windows, logs: logs.join("") };
 }
 
 console.log("\nthe bug: a pane session's armed baton opens a successor");
@@ -79,10 +84,13 @@ console.log("\na driver that fails to spawn is reported, not swallowed");
 
 console.log("\nthe non-pane paths are untouched");
 {
-  // No pane anywhere: maybeSpawn must NOT take a pane branch. It falls through to the Terminal leg,
-  // which this drill deliberately does not exercise — spawning a real window is not a unit test.
-  const { calls } = call({ pane: "", hasOrch: false });
+  // No pane anywhere: maybeSpawn must NOT take a pane branch, and DOES fall through to the Terminal
+  // leg. That leg is injected above — reaching it for real opens a window, which is what this very
+  // block used to do on every `npm test`.
+  const { calls, windows } = call({ pane: "", hasOrch: false });
   ok("no pane → no pane-baton driver", calls.length === 0, JSON.stringify(calls));
+  ok("…it takes the Terminal leg instead, and this drill CAPTURES it rather than opening a window",
+    windows.length === 1 && windows[0] === DIR, JSON.stringify(windows));
 
   const off = call({ pane: "w9:p1", env: { TRANTOR_NO_HANDOFF_SPAWN: "1" } });
   ok("the spawn kill-switch still wins over the pane branch", off.res === false && off.calls.length === 0);

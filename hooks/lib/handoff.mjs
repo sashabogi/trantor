@@ -780,10 +780,16 @@ export function maybeSpawn(projectDir, conf = readConfig(), handoffFile = "", de
       return ok;
     }
     const script = join(HERE, "..", "..", "bin", "handoff-prompt.sh");
-    if (!existsSync(script)) { process.stderr.write(`[trantor] handoff-prompt.sh missing\n`); return false; }
+    if (!existsSync(script)) { _log(`[trantor] handoff-prompt.sh missing\n`); return false; }
     const timeout = String(conf.handoffPromptTimeout || 25);
-    const child = spawn("/bin/bash", [script, projectDir, timeout], { detached: true, stdio: "ignore" });
-    child.unref();
+    // Injectable for the same reason the pane legs are: this line opens a REAL Terminal window, and
+    // a drill that reaches it opens one per run. That is not hypothetical — test-pane-baton-spawn's
+    // "no pane" case fell through to here and opened a window on every `npm test`, with a comment
+    // above it claiming the drill did not exercise this leg. Four of them were sitting on the
+    // operator's desktop before anyone noticed, and only a non-existent fixture path stopped each
+    // one from starting a live billable session.
+    const child = (deps.spawnPrompt || spawn)("/bin/bash", [script, projectDir, timeout], { detached: true, stdio: "ignore" });
+    if (child && typeof child.unref === "function") child.unref();
     return true;
   } catch (e) { process.stderr.write(`[trantor] maybeSpawn error: ${e?.message}\n`); return false; }
 }
