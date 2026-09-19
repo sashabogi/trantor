@@ -5,8 +5,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ArrowDownToLine, Bot, Eye, GraduationCap, House, Inbox as InboxIcon, MessagesSquare, Plus, Search, Settings as SettingsIcon } from "lucide-react";
 import { appUpdateCheck, HubClient, hubForProject, knownProjects, localSessions, trantorCliCompatibility, type AppUpdate, type Peer, type TrantorCliCompatibility } from "../shared/api/client";
-import { ago } from "../shared/presence";
-import { computeProjectActivity, activityRank, isWorkingStatus, needsYou, type ProjectActivity } from "./projectActivity";
+import { computeProjectActivity, activityRank, activityLine, activityTitle, wakeIsReal, type ProjectActivity } from "./projectActivity";
 import { Palette, type PaletteScope } from "../features/search/Palette";
 import { countUnseen, onSeenChange } from "../shared/seen";
 import { usePendingProposals } from "../shared/Proposals";
@@ -197,7 +196,7 @@ export function AppShell() {
   // pane is exactly that question, not a different one.
   const needsYouCount = useMemo(() => {
     let n = 0;
-    for (const a of activity.values()) if (a.kind === "open" && needsYou(a.status)) n++;
+    for (const a of activity.values()) if (a.state === "needs-you") n++;
     return n;
   }, [activity]);
 
@@ -475,23 +474,18 @@ export function AppShell() {
     const wakeLine = wakeRowLine(wakeState);
     const underway = wakeUnderway(wakeState);
     const open = () => { setActive(p); setPane(cur => ({ kind: "project", lens: cur.kind === "project" ? cur.lens : "board" })); };
-    // #5610: a BUSY row shows "mid-turn · Ns ago · model" beneath its name; idle stays
-    // a quiet dot. #6163: an OPEN row with no heartbeat yet carries herdr's own status:
-    // "working" reads as busy, other statuses show as "open · <status>" instead.
-    // #6094: "blocked" means the session needs the operator; amber, never blinking.
-    const blocked = act?.kind === "open" && needsYou(act.status);
-    const blinking = act?.kind === "busy" || (act?.kind === "open" && isWorkingStatus(act.status));
-    const statusLine = act?.kind === "busy"
-      ? ["mid-turn", act.lastSeen ? `${ago(act.lastSeen)} ago` : null, act.model || null]
-          .filter(Boolean).join(" · ")
-      : act?.kind === "open"
-        ? (blocked ? "needs you" : isWorkingStatus(act.status) ? "mid-turn" : act.status ? `open · ${act.status}` : null)
-        : null;
+    // #7775: the line, the pulse and the tooltip all come from the one state and its evidence, so
+    // "mid-turn" appears only while a turn is executing and the row can say "status unknown" rather
+    // than inventing one. #6094: "needs you" is amber and never blinks — it is a stop, not motion.
+    const blocked = act?.state === "needs-you";
+    const blinking = act?.state === "working";
+    const line = activityLine(act);
+    const wakeable = wakeIsReal(act);
     return (
       <div key={p} role="button" tabIndex={0}
         onClick={open}
         onKeyDown={e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); open(); } }}
-        title={blocked ? "blocked, waiting on you" : blinking ? "a session here is mid-turn right now" : act?.kind === "open" ? "session open, idle" : undefined}
+        title={activityTitle(act)}
         className={`group flex w-full cursor-pointer items-center gap-2.5 rounded-lg px-3 py-1.5 text-left text-[13px] ${
           on ? "bg-white/[0.07] font-medium text-[var(--color-tr-text)]"
              : act ? "text-[var(--color-tr-text)]/85 hover:bg-white/[0.04]"
@@ -499,8 +493,8 @@ export function AppShell() {
         <ProjectIcon project={p} size={20} />
         <span className="min-w-0 flex-1">
           <span className="block truncate">{p}</span>
-          {statusLine && (
-            <span className={`tr-mono block truncate text-[10px] font-normal ${blocked ? "text-tr-warn" : "text-[var(--color-tr-muted)]"}`}>{statusLine}</span>
+          {line && (
+            <span className={`tr-mono block truncate text-[10px] font-normal ${line.tone === "warn" ? "text-tr-warn" : "text-[var(--color-tr-muted)]"}`}>{line.text}</span>
           )}
           {wakeLine && !isWaking && (
             <span title={wakeLine.title}
@@ -511,9 +505,11 @@ export function AppShell() {
             </span>
           )}
         </span>
-        {/* Every project has the same Wake affordance, and a wake elsewhere never touches this
-            row's (#6138). Rust owns the process truth: an idle pane gets the kickoff, a working
-            pane answers busy with its pane id, an agent-less pane reopens. */}
+        {/* #7775 item 1: Wake appears only where waking DOES something — an idle pane takes the
+            kickoff, an agent-less project gets one opened. A row mid-turn would only be told its
+            own pane id, and an unknown row cannot be promised either, so neither offers the button.
+            A wake elsewhere never touches this row's (#6138). */}
+        {(wakeable || underway) && (
         <button type="button"
           onClick={e => { e.stopPropagation(); void wakeProject(p); }}
           disabled={underway}
@@ -522,11 +518,13 @@ export function AppShell() {
             ${underway ? "opacity-100" : "opacity-0 focus:opacity-100 group-hover:opacity-100 group-focus-within:opacity-100"}`}>
           {underway ? "Waking…" : "Wake"}
         </button>
-        {/* the dot is BLUE for any open session and blinks ONLY when work is actually happening —
-            a window sitting open earns presence, never motion */}
+        )}
+        {/* The dot blinks ONLY while a turn is executing — a window sitting open earns presence,
+            never motion. Amber for a row waiting on the operator, and muted where the state is
+            unknown, so the colour never claims more than the evidence does. */}
         {act && (
           <span className={`tr-dot shrink-0 ${blinking ? "tr-dot-pulse" : ""}`}
-                style={{ background: "var(--color-tr-doing)", width: 6, height: 6 }} />
+                style={{ background: blocked ? "var(--color-tr-warn)" : act.state === "unknown" ? "var(--color-tr-muted)" : "var(--color-tr-doing)", width: 6, height: 6 }} />
         )}
       </div>
     );

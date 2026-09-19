@@ -22,9 +22,9 @@ export const PRESENCE_COLOR = {
   offline: "var(--color-tr-edge)",
 } as const satisfies Record<PresenceState, string>;
 
-export function ago(ts?: number) {
+export function ago(ts?: number, now: number = Date.now()) {
   if (!ts) return "never";
-  const s = Math.round((Date.now() - ts) / 1000);
+  const s = Math.round((now - ts) / 1000);
   if (s < 60) return `${s}s`;
   if (s < 3600) return `${Math.round(s / 60)}m`;
   return `${Math.round(s / 3600)}h`;
