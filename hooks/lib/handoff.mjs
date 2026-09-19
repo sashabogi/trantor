@@ -738,20 +738,46 @@ export async function pingBus(projectName, id, conf = readConfig()) {
 // Spawn a fresh same-agent session (macOS) that takes over via the handoff.
 // Default = ON (prompt with a timeout, default button "Open fresh session").
 // Disable with config.autoHandoffPrompt:false or env TRANTOR_NO_HANDOFF_SPAWN=1.
-export function maybeSpawn(projectDir, conf = readConfig()) {
+export function maybeSpawn(projectDir, conf = readConfig(), handoffFile = "", deps = {}) {
+  // Injection points, for the same reason spawnBaton has them: "A DRILL MUST BE ABLE TO SAY NO —
+  // a path that spawns windows needs an off switch or it cannot be tested honestly." maybeSpawn had
+  // none, so its pane branch was never drilled, and that is exactly where #8089 lived for weeks.
+  const _pane = deps.paneSurfaceEnv || paneSurfaceEnv;
+  const _spawnPane = deps.spawnPaneBaton || spawnPaneBaton;
+  const _hasPane = deps.hasOrchPane || hasOrchPane;
+  const _platform = deps.platform || process.platform;
+  const _env = deps.env || process.env;
+  const _log = deps.log || ((s) => process.stderr.write(s));
   try {
-    if (process.platform !== "darwin") return false;
-    if (process.env.TRANTOR_NO_HANDOFF_SPAWN === "1") return false;
-    // #6074: a session in a hosted pane never gets a Terminal window — the pane is the successor
-    // surface, and the pane claims the handoff (trantor open) on its own.
-    if (paneSurfaceEnv()) {
-      process.stderr.write(`[trantor] session lives in herdr pane ${paneSurfaceEnv()} — no Terminal window; the pane claims the handoff\n`);
-      return false;
+    if (_platform !== "darwin") return false;
+    if (_env.TRANTOR_NO_HANDOFF_SPAWN === "1") return false;
+    // #8089: a pane session gets NO Terminal window — but it does get a successor. This used to
+    // return false on the theory that "the pane claims the handoff (trantor open) on its own",
+    // and for an ARMED baton nothing was driving that: /trantor:handoff always runs inside a turn,
+    // so it always arms, so this is always the path taken — and spawnPaneBaton, which the direct
+    // path (spawnBaton) calls right here, was never reached. The record was written and the session
+    // sat there. Witnessed on crebral-health 2026-09-19: written 00:18:58, unclaimed, original alive.
+    const paneId = _pane(_env);
+    if (paneId) {
+      if (!handoffFile) {
+        _log(`[trantor] pane ${paneId} needs the handoff file to pass the baton and none was given — no successor opened\n`);
+        return false;
+      }
+      const ok = _spawnPane(projectDir, handoffFile, paneId);
+      _log(`[trantor] herdr pane ${paneId}: ${ok ? "baton driver spawned — it replaces this pane in place" : "baton driver FAILED to spawn — no successor"}\n`);
+      return ok;
     }
     if (conf.autoHandoffPrompt === false) return false;
-    if (hasOrchPane(basename(projectDir))) {
-      process.stderr.write(`[trantor] orch pane hosts ${basename(projectDir)} — no Terminal window; the pane claims the handoff on its next open\n`);
-      return false;
+    if (_hasPane(basename(projectDir))) {
+      // Same correction as above for the cwd-keyed pane: drive the replacement, do not assume
+      // something else will. Without HERDR_PANE_ID the driver resolves the pane from crew-windows.
+      if (!handoffFile) {
+        _log(`[trantor] orch pane hosts ${basename(projectDir)} but no handoff file was given — no successor opened\n`);
+        return false;
+      }
+      const ok = _spawnPane(projectDir, handoffFile);
+      _log(`[trantor] orch pane hosts ${basename(projectDir)}: ${ok ? "baton driver spawned — it replaces the pane in place" : "baton driver FAILED to spawn — no successor"}\n`);
+      return ok;
     }
     const script = join(HERE, "..", "..", "bin", "handoff-prompt.sh");
     if (!existsSync(script)) { process.stderr.write(`[trantor] handoff-prompt.sh missing\n`); return false; }

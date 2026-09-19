@@ -19,6 +19,7 @@ import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { scrubIdentityEnv } from "../drill-env.mjs";
+import { maybeSpawn } from "../../hooks/lib/handoff.mjs";
 
 const ROOT = fileURLToPath(new URL("../..", import.meta.url)).replace(/\/$/, "");
 let pass = 0, fail = 0;
@@ -145,16 +146,28 @@ console.log("\nNo pane env: today's window behavior, unchanged:");
 }
 
 // ── 4. the guards on the OTHER window paths (maybeSpawn / spawnFresh) ───────
-// These spawn REAL dialogs/windows when the guard is missing, so they cannot be invoked in a
-// drill; assert the guard is inside their bodies (the spawnBaton seam above proves the shared
-// predicate; this proves the direct callers call it too).
+// spawnFresh spawns a REAL window when its guard is missing and has no injection points, so its
+// guard is asserted from source. maybeSpawn no longer needs that: #8089 gave it the same seams
+// spawnBaton has, so it is exercised for real below — and the source-grep it used to rely on was
+// itself the thing that let #8089 through. A grep proves a symbol is MENTIONED, never that the
+// branch does the right thing; this one passed for weeks while the pane branch opened no successor.
 console.log("\nThe direct window callers carry the pane-env guard:");
 {
   const src = readFileSync(join(ROOT, "hooks", "lib", "handoff.mjs"), "utf8");
-  for (const fn of ["maybeSpawn", "spawnFresh"]) {
-    const body = src.slice(src.indexOf(`export function ${fn}(`), src.indexOf("export function", src.indexOf(`export function ${fn}(`) + 10));
-    ok(`${fn} refuses under HERDR_PANE_ID`, /paneSurfaceEnv\(\)/.test(body), fn);
-  }
+  const body = src.slice(src.indexOf("export function spawnFresh("), src.indexOf("export function", src.indexOf("export function spawnFresh(") + 10));
+  ok("spawnFresh refuses under HERDR_PANE_ID", /paneSurfaceEnv\(/.test(body), "spawnFresh");
+}
+{
+  const calls = [];
+  const acted = maybeSpawn("/tmp/proj/demo", {}, "/tmp/handoffs/demo-1.json", {
+    platform: "darwin", env: {},
+    paneSurfaceEnv: () => "w9:p1",
+    hasOrchPane: () => false,
+    spawnPaneBaton: (d, f, pane) => { calls.push(pane); return true; },
+    log: () => {},
+  });
+  ok("maybeSpawn under HERDR_PANE_ID opens no window but DOES pass the baton",
+    acted === true && calls.length === 1 && calls[0] === "w9:p1", JSON.stringify(calls));
 }
 
 // ── 5. end to end through the real CLIs (suppressed spawn — no live windows) ─

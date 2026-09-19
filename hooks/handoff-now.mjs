@@ -14,11 +14,18 @@ try {
   const { file, record } = result;
   process.stderr.write(`[trantor] baton handoff written: ${file}\n`);
   await pingBus(basename(projectDir), record.id, conf);
-  if (maybeSpawn(projectDir, conf)) {                 // open the fresh session that takes over
+  // The handoff file goes in: a pane baton cannot be driven without it (#8089).
+  if (maybeSpawn(projectDir, conf, file)) {           // open the fresh session that takes over
     // AUTO baton: close the original ONLY when config.autoCloseOriginal is true; an auto-close must
-    // never kill an in-flight session, so the default leaves the original alive.
+    // never kill an in-flight session, so the default leaves the original alive. A pane baton
+    // replaces its own pane and resolves no window, so there is nothing here to arm.
     const armed = windowId ? armBatonClose(file, windowId, tty, conf, { auto: true }) : false;
     process.stderr.write(`[trantor] fresh session spawned${armed ? ` · baton-close armed for window ${windowId}` : " · original window left alive (auto-close off by default)"}\n`);
+  } else {
+    // #8089's second half: this used to be an `if` with no `else`, so a declined spawn printed
+    // NOTHING. The record was written, no successor came, and the only evidence was a handoff stuck
+    // at `written`. A path that decides not to act still has to say so.
+    process.stderr.write(`[trantor] NO successor session opened for ${basename(projectDir)} — handoff ${basename(file)} is written but unclaimed; open one to take over\n`);
   }
 } catch (e) {
   process.stderr.write(`[trantor] handoff-now error: ${e?.message || e}\n`);
