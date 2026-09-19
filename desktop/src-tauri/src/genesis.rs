@@ -51,7 +51,7 @@ pub(crate) struct WakeChains(pub(crate) Mutex<Vec<String>>);
 /// The projects whose wake chain is in flight right now (#6201).
 #[tauri::command]
 pub(crate) fn wake_in_progress(chains: tauri::State<'_, WakeChains>) -> Vec<String> {
-    chains.0.lock().unwrap().clone()
+    crate::lock_or_recover(&chains.0).clone()
 }
 
 /// Marks a project's wake from the first step to the last (#6201). Drop runs on EVERY exit
@@ -67,7 +67,7 @@ impl WakeChainGuard {
         use tauri::Manager;
         {
             let chains = app.state::<WakeChains>();
-            let mut v = chains.0.lock().unwrap();
+            let mut v = crate::lock_or_recover(&chains.0);
             if !v.iter().any(|p| p == project) {
                 v.push(project.to_string());
             }
@@ -84,7 +84,7 @@ impl Drop for WakeChainGuard {
         use tauri::Manager;
         {
             let chains = self.app.state::<WakeChains>();
-            chains.0.lock().unwrap().retain(|p| p != &self.project);
+            crate::lock_or_recover(&chains.0).retain(|p| p != &self.project);
         }
         emit_wake_progress(&self.app, &self.project, wake_phase::ENDED, None);
     }

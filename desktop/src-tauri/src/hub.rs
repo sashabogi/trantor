@@ -65,7 +65,7 @@ pub(crate) static STREAMS: std::sync::Mutex<Option<std::collections::HashSet<Str
 pub(crate) async fn start_stream(app: tauri::AppHandle, base: String) {
     use tauri::Emitter;
     {
-        let mut g = STREAMS.lock().unwrap();
+        let mut g = lock_or_recover(&STREAMS);
         let set = g.get_or_insert_with(std::collections::HashSet::new);
         if !set.insert(base.clone()) {
             return;

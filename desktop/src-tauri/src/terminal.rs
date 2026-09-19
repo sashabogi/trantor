@@ -102,7 +102,11 @@ impl TerminalManager {
             loop {
                 match reader.read(&mut buf) {
                     Ok(0) => break,
-                    Ok(n) => on_bytes(buf[..n].to_vec()),
+                    // Rule 8: on_bytes emits into the webview from the PTY reader thread. A panic
+                    // here used to kill the reader and freeze the terminal with nothing logged.
+                    Ok(n) => {
+                        crate::guard_boundary("terminal pty reader", || on_bytes(buf[..n].to_vec()));
+                    }
                     Err(_) => break,
                 }
             }
@@ -116,13 +120,13 @@ impl TerminalManager {
             reaped,
             pid,
         });
-        self.sessions.lock().unwrap().insert(sub, session);
+        crate::lock_or_recover(&self.sessions).insert(sub, session);
         Ok(sub)
     }
 
     fn write(&self, sub: u64, data: &str) -> Result<usize, String> {
         let session = self.session(sub)?;
-        let mut writer = session.writer.lock().unwrap();
+        let mut writer = crate::lock_or_recover(&session.writer);
         let bytes = data.as_bytes();
         let mut offset = 0;
         let mut chunks = 0usize;
@@ -150,7 +154,7 @@ impl TerminalManager {
     fn resize(&self, sub: u64, cols: u16, rows: u16) -> Result<(), String> {
         let session = self.session(sub)?;
         let result = {
-            let master = session.master.lock().unwrap();
+            let master = crate::lock_or_recover(&session.master);
             master
                 .resize(PtySize {
                     cols,
@@ -164,17 +168,14 @@ impl TerminalManager {
     }
 
     fn detach(&self, sub: u64) -> Result<DetachReport, String> {
-        let session = self
-            .sessions
-            .lock()
-            .unwrap()
+        let session = crate::lock_or_recover(&self.sessions)
             .remove(&sub)
             .ok_or_else(|| format!("unknown terminal subscription {sub}"))?;
         {
-            let mut killer = session.killer.lock().unwrap();
+            let mut killer = crate::lock_or_recover(&session.killer);
             let _ = killer.kill();
         }
-        drop(session.writer.lock().unwrap());
+        drop(crate::lock_or_recover(&session.writer));
         let deadline = Instant::now() + DETACH_REAP_TIMEOUT;
         while !session.reaped.load(Ordering::SeqCst) && Instant::now() < deadline {
             thread::sleep(Duration::from_millis(20));
@@ -186,9 +187,7 @@ impl TerminalManager {
     }
 
     fn session(&self, sub: u64) -> Result<Arc<TerminalSession>, String> {
-        self.sessions
-            .lock()
-            .unwrap()
+        crate::lock_or_recover(&self.sessions)
             .get(&sub)
             .cloned()
             .ok_or_else(|| format!("unknown terminal subscription {sub}"))
@@ -196,7 +195,7 @@ impl TerminalManager {
 
     #[cfg(test)]
     fn contains(&self, sub: u64) -> bool {
-        self.sessions.lock().unwrap().contains_key(&sub)
+        crate::lock_or_recover(&self.sessions).contains_key(&sub)
     }
 }
 

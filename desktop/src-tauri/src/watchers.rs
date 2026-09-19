@@ -29,7 +29,7 @@ pub(crate) fn chat_watcher_key(project: &str, session_id: Option<&str>) -> Strin
 }
 
 pub(crate) fn forget_chat_watcher(key: &str, stop: &Arc<AtomicBool>) {
-    let mut g = CHAT_WATCHERS.lock().unwrap();
+    let mut g = lock_or_recover(&CHAT_WATCHERS);
     if let Some(map) = g.as_mut() {
         if map.get(key).is_some_and(|(_, live)| Arc::ptr_eq(live, stop)) {
             map.remove(key);
@@ -41,7 +41,7 @@ pub(crate) fn forget_chat_watcher(key: &str, stop: &Arc<AtomicBool>) {
 /// flag, and whether this call just created it (false means a live watcher was already there —
 /// the caller should not spawn a second one).
 pub(crate) fn chat_watchers_watch(key: &str) -> (u64, Arc<AtomicBool>, bool) {
-    let mut g = CHAT_WATCHERS.lock().unwrap();
+    let mut g = lock_or_recover(&CHAT_WATCHERS);
     let map = g.get_or_insert_with(std::collections::HashMap::new);
     if let Some((generation, stop)) = map.get(key) {
         return (*generation, Arc::clone(stop), false);
@@ -55,7 +55,7 @@ pub(crate) fn chat_watchers_watch(key: &str) -> (u64, Arc<AtomicBool>, bool) {
 /// Stop and remove the watcher at `key` only when `generation` matches (or is None, for older
 /// callers). A stale unwatch after a fresh chat_watch is a no-op (#6113).
 pub(crate) fn chat_watchers_unwatch(key: &str, generation: Option<u64>) -> Option<Arc<AtomicBool>> {
-    let mut g = CHAT_WATCHERS.lock().unwrap();
+    let mut g = lock_or_recover(&CHAT_WATCHERS);
     let map = g.as_mut()?;
     let matches = match generation {
         Some(gen) => map.get(key).is_some_and(|(live_gen, _)| *live_gen == gen),
@@ -447,7 +447,7 @@ mod chat_watcher_tests {
 }
 
 pub(crate) fn forget_file_watcher(project: &str, stop: &Arc<AtomicBool>) {
-    let mut g = FILE_WATCHERS.lock().unwrap();
+    let mut g = lock_or_recover(&FILE_WATCHERS);
     if let Some(map) = g.as_mut() {
         if let Some(existing) = map.get(project) {
             if Arc::ptr_eq(existing, stop) {
@@ -470,7 +470,7 @@ pub(crate) fn file_watch(window: tauri::Window, project: String) -> Result<(), S
     let root = project_dir(&project).ok_or_else(|| format!("no local checkout for {project}"))?;
 
     {
-        let g = FILE_WATCHERS.lock().unwrap();
+        let g = lock_or_recover(&FILE_WATCHERS);
         if let Some(map) = g.as_ref() {
             if map.contains_key(&project) {
                 return Ok(());
@@ -482,7 +482,7 @@ pub(crate) fn file_watch(window: tauri::Window, project: String) -> Result<(), S
     let stop_clone = Arc::clone(&stop);
 
     {
-        let mut g = FILE_WATCHERS.lock().unwrap();
+        let mut g = lock_or_recover(&FILE_WATCHERS);
         let map = g.get_or_insert_with(std::collections::HashMap::new);
         map.insert(project.clone(), Arc::clone(&stop));
     }
@@ -490,10 +490,14 @@ pub(crate) fn file_watch(window: tauri::Window, project: String) -> Result<(), S
     let (tx, rx) = std::sync::mpsc::channel();
 
     let mut watcher = notify::recommended_watcher(
+        // Rule 8: FSEvents drives this closure from platform code, so a panic here would unwind
+        // through an extern "C" frame and abort the app instead of losing one file event.
         move |res| {
-            if let Ok(event) = res {
-                let _ = tx.send(event);
-            }
+            crate::guard_boundary("notify file watcher callback", || {
+                if let Ok(event) = res {
+                    let _ = tx.send(event);
+                }
+            });
         },
     )
     .map_err(|e| format!("failed to create watcher: {e}"))?;
@@ -556,7 +560,7 @@ pub(crate) fn file_unwatch(project: String) {
         return;
     }
     let stop = {
-        let mut g = FILE_WATCHERS.lock().unwrap();
+        let mut g = lock_or_recover(&FILE_WATCHERS);
         g.as_mut().and_then(|map| map.remove(project))
     };
     if let Some(stop) = stop {

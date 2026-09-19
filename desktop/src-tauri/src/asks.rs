@@ -294,10 +294,13 @@ pub fn ask_watch(window: tauri::Window) -> Result<(), String> {
     }
 
     let (tx, rx) = std::sync::mpsc::channel();
+    // Rule 8: the same platform-driven boundary as the file watcher (#6448).
     let mut watcher = notify::recommended_watcher(move |event: notify::Result<notify::Event>| {
-        if event.is_ok() {
-            let _ = tx.send(());
-        }
+        crate::guard_boundary("notify asks watcher callback", || {
+            if event.is_ok() {
+                let _ = tx.send(());
+            }
+        });
     })
     .map_err(|error| {
         WATCHING.store(false, Ordering::SeqCst);

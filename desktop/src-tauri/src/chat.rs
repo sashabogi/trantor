@@ -14,7 +14,7 @@ pub(crate) fn orch_session_id(project: &str) -> Option<String> {
         static HERDR_SID: std::sync::Mutex<Option<(String, Instant, Option<String>)>> =
             std::sync::Mutex::new(None);
         let cached: Option<Option<String>> = {
-            let g = HERDR_SID.lock().unwrap();
+            let g = lock_or_recover(&HERDR_SID);
             g.as_ref()
                 .filter(|(p, at, _)| p == &pane && at.elapsed() < Duration::from_secs(3))
                 .map(|(_, _, sid)| sid.clone())
@@ -23,7 +23,7 @@ pub(crate) fn orch_session_id(project: &str) -> Option<String> {
             Some(sid) => sid,
             None => {
                 let sid = herdr::reported_session(&pane);
-                *HERDR_SID.lock().unwrap() = Some((pane.clone(), Instant::now(), sid.clone()));
+                *lock_or_recover(&HERDR_SID) = Some((pane.clone(), Instant::now(), sid.clone()));
                 sid
             }
         };
@@ -182,11 +182,12 @@ impl ContextGuard {
         }
         if self.recent.len() == Self::RING && self.recent.iter().all(|r| *r < floor) {
             // Five in a row agree: reality changed. Re-baseline so the guard follows it.
-            self.max = *self.recent.iter().max().unwrap();
+            // `last` came out of the ring, so the max is never below it and the fallback never fires.
+            self.max = self.recent.iter().copied().max().unwrap_or(last);
             return Some(last);
         }
         // A transient artifact: report the best recent evidence, never the poisoned row.
-        Some(*self.recent.iter().max().unwrap())
+        Some(self.recent.iter().copied().max().unwrap_or(last))
     }
 }
 

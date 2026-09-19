@@ -104,7 +104,10 @@ pub(crate) fn redirect_stderr_to_log() {
 pub fn run() {
     identity_env::scrub_launch_identity();
     if std::env::var_os("TRANTOR_ENV_SCRUB_DRILL").is_some() {
-        identity_env::run_scrub_drill().unwrap();
+        if let Err(err) = identity_env::run_scrub_drill() {
+            eprintln!("env scrub drill: {err}");
+            std::process::exit(1);
+        }
         return;
     }
     redirect_stderr_to_log();
@@ -276,7 +279,13 @@ pub fn run() {
             }
         })
         .build(tauri::generate_context!())
-        .expect("error while building tauri application")
+        .unwrap_or_else(|err| {
+            // There is no window yet to report into, so the log the panic hook writes is the only
+            // place an operator can read why the app never came up.
+            append_panic_log(&format!("tauri build failed: {err}"), "desktop_lib::run", "");
+            eprintln!("error while building tauri application: {err}");
+            std::process::exit(1)
+        })
         .run(|_app_handle, event| {
             // #5917 guard, part two: tao's run loop calls this closure on the main thread for
             // every event, and a panic here would unwind out through the same extern "C" boundary

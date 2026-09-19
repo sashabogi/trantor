@@ -525,7 +525,7 @@ fn collect_file_sessions(project_scope: Option<(&str, &str)>) -> Vec<SessionReco
 }
 
 fn cache_records(records: &[SessionRecord]) {
-    let mut guard = SESSION_INDEX.lock().unwrap();
+    let mut guard = crate::lock_or_recover(&SESSION_INDEX);
     let index = guard.get_or_insert_with(HashMap::new);
     for record in records {
         index.insert(
@@ -536,9 +536,7 @@ fn cache_records(records: &[SessionRecord]) {
 }
 
 fn cached_record(harness: &str, id: &str) -> Option<SessionRecord> {
-    SESSION_INDEX
-        .lock()
-        .unwrap()
+    crate::lock_or_recover(&SESSION_INDEX)
         .as_ref()
         .and_then(|index| index.get(&format!("{harness}:{id}")).cloned())
 }

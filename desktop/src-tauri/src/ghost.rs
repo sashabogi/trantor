@@ -290,18 +290,18 @@ fn cancel_registry() -> &'static Mutex<HashMap<String, Arc<AtomicBool>>> {
 
 fn register_cancel(id: &str) -> Arc<AtomicBool> {
     let flag = Arc::new(AtomicBool::new(false));
-    cancel_registry().lock().unwrap().insert(id.to_string(), flag.clone());
+    crate::lock_or_recover(cancel_registry()).insert(id.to_string(), flag.clone());
     flag
 }
 
 fn unregister_cancel(id: &str) {
-    cancel_registry().lock().unwrap().remove(id);
+    crate::lock_or_recover(cancel_registry()).remove(id);
 }
 
 /// Ask an in-flight streaming ghost to stop. Idempotent; a completed/unknown id is a no-op.
 #[tauri::command]
 pub fn ghost_cancel(id: String) -> Result<(), String> {
-    if let Some(flag) = cancel_registry().lock().unwrap().get(&id) {
+    if let Some(flag) = crate::lock_or_recover(cancel_registry()).get(&id) {
         flag.store(true, Ordering::Relaxed);
     }
     Ok(())

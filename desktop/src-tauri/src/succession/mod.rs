@@ -222,7 +222,7 @@ impl HandoffChainGuard {
         use tauri::{Emitter, Manager};
         {
             let chains = app.state::<HandoffChains>();
-            let mut v = chains.0.lock().unwrap();
+            let mut v = lock_or_recover(&chains.0);
             if !v.iter().any(|p| p == project) {
                 v.push(project.to_string());
             }
@@ -246,7 +246,7 @@ impl Drop for HandoffChainGuard {
         use tauri::{Emitter, Manager};
         {
             let chains = self.app.state::<HandoffChains>();
-            let mut v = chains.0.lock().unwrap();
+            let mut v = lock_or_recover(&chains.0);
             v.retain(|p| p != &self.project);
         }
         let _ = self.app.emit(
@@ -263,7 +263,7 @@ impl Drop for HandoffChainGuard {
 /// the pane label; the event stream keeps it current afterwards.
 #[tauri::command]
 pub(crate) fn handoff_in_progress(chains: tauri::State<'_, HandoffChains>) -> Vec<String> {
-    chains.0.lock().unwrap().clone()
+    lock_or_recover(&chains.0).clone()
 }
 
 #[tauri::command]

@@ -602,7 +602,11 @@ fn find_cycles(adjacency: &[Vec<usize>]) -> (Vec<Option<u32>>, u32) {
             if low[node] == index[node] {
                 let mut component = Vec::new();
                 loop {
-                    let popped = stack.pop().expect("tarjan stack holds the root");
+                    let Some(popped) = stack.pop() else {
+                        // The stack holds the root of every component it closes; an empty one is not a
+                        // state this walk can be in, so stop the component rather than panic.
+                        break;
+                    };
                     on_stack[popped] = false;
                     component.push(popped);
                     if popped == node {
