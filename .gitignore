@@ -16,3 +16,6 @@ id_rsa*
 .agent-bus-out/
 graft/
 .ignore
+
+# Per-checkout stamp written by `trantor connect` — local, never shared (#6448 swept it in by accident)
+.trantor/
