@@ -1014,14 +1014,32 @@ async function loadLessons() {
 // #5683: every prompt section is capped (bin/crew-payload.mjs) and the payload has ONE hard total
 // cap; below the caps the composition is byte-identical to the old concatenation.
 function composedTurn({ base = "", wakeText = "", ctxText = "", againText = "", tailText = "", rulesText = "", lessons = null }) {
+  // STABLE FIRST, VOLATILE LAST — this order is a COST decision, not a stylistic one (#8199).
+  // Every provider we send this to caches on an exact prefix match from token 0: DeepSeek's docs say
+  // "only requests with identical prefixes (starting from the 0th token) will be considered
+  // duplicates, and partial matches in the middle of the input will not trigger a cache hit", and a
+  // hit bills at roughly a tenth of a miss. This array used to open with `base` and then the
+  // per-turn WAKE, with the big unchanging blocks (RULES, lessons) buried at the end. On an ordinary
+  // turn `base` is empty — the sha rides inside `again` — so token 0 was the wake text itself, which
+  // is different every turn by definition. No cache could ever hit, and ~4,800 tokens of identical preamble were re-bought at full rate per turn,
+  // on every foreign-CLI seat: dsh, codex, kimi and every opencode/BYOM seat. The state path had
+  // known this for weeks — lib/state/assemble.mjs: "the bytes before STATE_DELIM are the caller's
+  // preamble and NOTHING else, or prefix caching never engages" — and it was never carried across.
+  //
+  // Reading order improves with it rather than suffering: rules and lessons are the standing brief,
+  // then context and history, and the ASK lands last, which is what #7063 found a work order wants.
+  //
+  // The `order` field is UNRELATED to this and deliberately unchanged: it ranks what gets trimmed
+  // when the payload busts its total cap, and wake is trimmed last there because losing the
+  // instruction is worse than losing the cache on that one turn.
   const built = composePrompt([
-    { name: "base", text: base },
-    { name: "wake", text: wakeText, trim: "truncate", order: 4 },
-    { name: "ctx", text: ctxText, trim: "drop", order: 1 },
-    { name: "again", text: againText },
-    { name: "tail", text: tailText },
     { name: "rules", text: rulesText, trim: "drop", order: 3 },
     { name: "lessons", text: lessons?.text || "", trim: "drop", order: 2 },
+    { name: "ctx", text: ctxText, trim: "drop", order: 1 },
+    { name: "tail", text: tailText },
+    { name: "again", text: againText },
+    { name: "base", text: base },
+    { name: "wake", text: wakeText, trim: "truncate", order: 4 },
   ]);
   const parts = built.sections.filter(s => s.chars).map(s => `${s.name} ${s.chars.toLocaleString("en-US")}c`).join(" · ");
   const lessonsNote = lessons && lessons.total ? ` (lessons ${lessons.kept}/${lessons.total})` : "";
