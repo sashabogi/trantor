@@ -104,11 +104,23 @@ const gitRepo = (() => {
   ok("gate 1: committed table with no per-turn rows → NO_BASELINE_ROWS", r.ok === false && r.code === "NO_BASELINE_ROWS", JSON.stringify(r));
 }
 
-// And the pre-condition is a PRE-condition: nothing downstream is measured when it fails.
+// §7.5 is a pre-condition for the CLAIM, not for the whole measurement. A missing baseline still
+// means the phase does not open and the run cannot pass — but it no longer blinds the gates that
+// never touch the baseline. Every card that HAS a baseline is now done, so halting here made
+// "does the evidence pipeline work at all" unanswerable for every card worth asking about.
 {
   const v = B.evaluateRun({ project: PROJ, card: 4242, repo: gitRepo.dir });
-  ok("gate 1 halts the run: exactly one gate evaluated, no measurement",
-    v.ok === false && v.gates.length === 1 && v.gates[0].n === 1 && v.halted === "gate 1", JSON.stringify(v.gates.map(g => g.n)));
+  ok("gate 1 failing does NOT halt before gate 2", v.gates.length > 1 && v.gates[0].n === 1, JSON.stringify(v.gates.map(g => g.n)));
+  ok("…and the run still fails overall — the phase does not open without a baseline", v.ok === false, JSON.stringify(v.ok));
+  ok("…and nothing downstream invents a ratio", !v.gates.some(g => g.n === 4 && g.ok === true), JSON.stringify(v.gates.map(g => [g.n, g.ok])));
+}
+// With a real run recorded but no baseline, the MECHANISM gates report and the COMPARISON gates
+// decline by name — that is the whole point of not halting.
+{
+  const v = B.evaluateRun({ project: PROJ, card: 4242, repo: gitRepo.dir, _steps: runSteps(9) });
+  const byN = Object.fromEntries((v.gates || []).map(g => [g.n, g]));
+  if (byN[4]) ok("gate 4 declines by name without a baseline", byN[4].code === "NO_BASELINE", JSON.stringify(byN[4]));
+  if (byN[7]) ok("gate 7 declines by name without a baseline", byN[7].code === "NO_BASELINE", JSON.stringify(byN[7]));
 }
 
 // ── 2. the cache check, which is what catches silent drift ────────────────────────────────────
@@ -466,7 +478,9 @@ const bench = (...args) => spawnSync(process.execPath, [BENCH_BIN, "--project", 
   // The report is a rendering of the verdict, so a NO verdict must render as a NO.
   const v = B.evaluateRun({ project: PROJ, card: 4242, repo: gitRepo.dir });
   const md = B.renderReport(v);
-  ok("report: a failing verdict renders **NO**, with the halting gate named", /verdict \*\*NO\*\*/.test(md) && /halted at gate 1/.test(md), md.slice(0, 300));
+  // The halt is now at gate 2 (no run recorded), because a missing baseline no longer stops the
+  // mechanism gates from being asked — it only stops the comparison from being claimed.
+  ok("report: a failing verdict renders **NO**, with the halting gate named", /verdict \*\*NO\*\*/.test(md) && /halted at no run/.test(md), md.slice(0, 300));
 }
 
 // ── 12. the cut row: honest, needed by §8.7, and not a measurement (#7135) ────────────────────

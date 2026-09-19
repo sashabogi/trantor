@@ -671,7 +671,14 @@ export function evaluateRun({ project, card, repo = REPO, ...opts }) {
   const gates = [];
   const base = requireBaseline({ project, card, repo });
   gates.push({ n: 1, name: "baseline committed (§7.5)", ok: base.ok, code: base.code ?? null, message: base.ok ? `${base.doc} in HEAD · ${base.rows.length} baseline turns` : base.message });
-  if (!base.ok) return { ok: false, gates, halted: "gate 1", project, card };
+  // §7.5 exists so the >=5x CLAIM cannot be made against a number recorded after the fact, and that
+  // still holds: with no baseline the phase does NOT open and this run cannot pass. But halting here
+  // also blocked gates 3, 5 and 6 — which read the state run alone and never touch the baseline — so
+  // "does the evidence pipeline work at all" was unanswerable for any card without prose-path
+  // history. Since every card that HAS a baseline is now done, that was every card worth asking
+  // about. The unfalsifiability guard is kept where it belongs (gates 4 and 7, the comparisons) and
+  // the mechanism gates are allowed to report.
+  const noBaseline = !base.ok;
 
   const steps = readJsonl(runPath(project, card));
   if (!steps || !steps.length) {
@@ -684,8 +691,15 @@ export function evaluateRun({ project, card, repo = REPO, ...opts }) {
   const cache = checkCache(steps);
   gates.push({ n: 3, name: "cache read > 0 after the first step (§8.3)", ok: cache.ok, code: cache.code, message: cache.message });
 
-  const cost = costGate(steps, base.rows, { weights: opts.weights || null });
-  gates.push({ n: 4, name: `cost: flat curve, ≥${COST_FACTOR}× below baseline (§8.4)`, ok: cost.ok, code: cost.code, message: cost.message, numbers: cost });
+  // The ONE gate §7.5's guard actually protects: no recorded-first baseline, no ratio, no claim.
+  const cost = noBaseline ? null : costGate(steps, base.rows, { weights: opts.weights || null });
+  gates.push({ n: 4, name: `cost: flat curve, ≥${COST_FACTOR}× below baseline (§8.4)`,
+    ok: noBaseline ? false : cost.ok,
+    code: noBaseline ? "NO_BASELINE" : cost.code,
+    message: noBaseline
+      ? "no committed baseline for this card — the ≥5× claim is measured against a number recorded BEFORE the thing that judges it (§7.5), and there is none, so no ratio is computed and none is guessed"
+      : cost.message,
+    numbers: cost });
 
   const dist = disturbanceCheck(steps);
   gates.push({ n: 5, name: "zero recovery after a mid-run disturbance (§8.5)", ok: dist.ok, code: dist.code, message: dist.message, cases: dist.cases });
@@ -699,7 +713,7 @@ export function evaluateRun({ project, card, repo = REPO, ...opts }) {
 
   // §8.4's "at equal-or-better task success": the cache claim can hold while the card gets less far.
   const turns = turnsGate(collectTurnPairs(project));
-  gates.push({ n: 7, name: `turns per card, median over n≥${MIN_CARDS} (§8.7)`, ok: turns.ok, code: turns.code, message: turns.message, numbers: turns });
+  gates.push({ n: 7, name: `turns per card, median over n≥${MIN_CARDS} (§8.7)`, ok: noBaseline ? false : turns.ok, code: noBaseline ? "NO_BASELINE" : turns.code, message: noBaseline ? "no committed baseline for this card — §8.7 pairs the state path against the prose path and has nothing to pair with" : turns.message, numbers: turns });
 
   return { ok: gates.every(g => g.ok), gates, project, card, baseline: base, steps: steps.length };
 }
