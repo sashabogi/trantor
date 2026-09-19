@@ -881,3 +881,5 @@ pub(crate) async fn takeover_now(project: String) -> Result<String, String> {
 mod herdr_tests;
 #[cfg(test)]
 mod succession_tests;
+#[cfg(test)]
+mod transcript_and_diff_tests;
