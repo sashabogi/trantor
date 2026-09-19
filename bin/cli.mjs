@@ -132,6 +132,7 @@ switch (cmd) {
   case "orchestrate": run("bin/orchestrate.mjs"); break;
   case "app": run("bin/app.mjs"); break;
   case "patrol": run("bin/patrol.mjs"); break;
+  case "retire": run("bin/retire.mjs"); break;
   case "identity": {
     const { load, publicView, generate, keyPath } = await import(join(ROOT, "lib/identity.mjs"));
     const sub = args[0], name = args[1] || "human";
@@ -271,6 +272,7 @@ switch (cmd) {
   trantor duty        the always-on fleet duty agent: up | down | status — hub-escalated triage so you are not the switchboard
                       runs on sonnet by default (it never writes code); duty up --model <m> to pick, or --model inherit for the CLI default
   trantor orchestrate a per-project ORCHESTRATOR with a MISSION.md and a pulse: up [--every 10m] | down | status — the loop-orchestrator pattern
+  trantor retire      retire orchestrator panes nothing is using — preview by default [--hours N] [--yes] [--json]
   trantor patrol      machine-wide resource sweep: crews/runners/workspaces/orphans — [--json] [--reap] (reap = dead rows + stale artifacts ONLY)
 
 Claude Code plugin (the orchestrator side):
