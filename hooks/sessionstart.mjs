@@ -10,7 +10,7 @@ import { fileURLToPath } from "node:url";
 import { resolveProject, hostId, resolveHubInfo, knownProjects, nonSeatReason, nestedProjects, handoffDir, readOrchSession, writeOrchSession } from "../lib/project.mjs";
 import { formatSubagentManifest } from "../lib/subagent-manifest.mjs";
 import { updateAvailable, maybeNotifyDesktop, readConfig } from "./lib/update-check.mjs";
-import { renderStateBlock, readFirstPaths} from "./lib/handoff.mjs";
+import { renderStateBlock, readFirstPaths, capSummary } from "./lib/handoff.mjs";
 import { maybeCheckBalances } from "./lib/balance-check.mjs";
 import { getJSON, signedGet, signedPost, loadIdentity } from "./lib/api.mjs";
 import { ledgerPaths, ensureStart, anchorCursor, writeCursor } from "./lib/inbox-ledger.mjs";
@@ -118,20 +118,19 @@ function sanitize(s) {
   return out;
 }
 
-// #5645 injection cap: the handoff injection is a POINTER, not a payload. The writer (#5648) caps
-// rec.summary at ~4KB; this reader enforces the same bound against older records and points at the file.
+// #5645 injection cap — #8222: the writer persists rec.summary UNCAPPED (a JSON record has no
+// context budget), so this reader is the ONLY place the ~4KB injection budget is enforced. The cut
+// is section-aware (TASK / STATE / OPEN THREADS survive; KEY DECISIONS / KEY FILES elide) and the
+// pointer names the full record for whatever was dropped.
 const HANDOFF_INJECT_CAP = 4096;
 function capHandoffSummary(handoff) {
   let s = String(handoff?.summary || "");
   const marker = s.indexOf("\n---\n## Verbatim recent exchange");
   if (marker > 0) s = s.slice(0, marker);
   if (s.length <= HANDOFF_INJECT_CAP) return s;
-  const cut = s.slice(0, HANDOFF_INJECT_CAP);
-  const nl = cut.lastIndexOf("\n");
-  s = (nl > HANDOFF_INJECT_CAP * 0.6 ? cut.slice(0, nl) : cut).trimEnd();
   let ptr = `\n\n…(summary capped at ${HANDOFF_INJECT_CAP} chars — full record: ${join(handoffDir(), `${handoff.id}.json`)}`;
   if (handoff.transcript_path) ptr += ` · full transcript: ${handoff.transcript_path}`;
-  return s + ptr + ")";
+  return capSummary(s, HANDOFF_INJECT_CAP) + ptr;
 }
 
 // Fail-silent wrapper for the optional #4214 resources detection lib (hooks/lib/resources.mjs).

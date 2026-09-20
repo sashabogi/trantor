@@ -382,19 +382,59 @@ export function verbatimRecentTail(transcript, chars = 7000) {
   try { return collectTurns(transcript).join("\n\n").slice(-chars); } catch { return ""; }
 }
 
-// ---- #5648: handoff writer discipline. The inline summary is the RECAP, not the record: capped at
-// ~4KB, keeping BOTH ends (goal framing and current state) cut on paragraph boundaries with an elision marker.
+// ---- #5648: the inline summary is the RECAP, not the record; #8222: the ~4KB budget is an
+// INJECTION budget — the record persists the text UNCAPPED, this cut runs only at render time
+// (sessionstart.mjs). Section-aware: every handoff shares the five-section shape, so a head+tail
+// cut elides the middle — TASK / STATE / OPEN THREADS survive in full, KEY DECISIONS / KEY FILES elide.
+const IS_SECTION_HEADER = /^\s*#{1,6}\s+\S/;
+const MUST_KEEP_SECTION = /^\s*#{1,6}\s*(task|state|open threads|next steps)\b/i;
+
+// `cap` bounds the ELIDABLE sections, not the return value: must-keeps are never cut (#8222).
 export function capSummary(text, cap = 4096) {
   const s = String(text || "");
   if (s.length <= cap) return s;
   const elide = "\n\n[…]\n\n";
-  const headRaw = s.slice(0, Math.max(0, cap - elide.length - 2048));
-  const hCut = headRaw.lastIndexOf("\n\n");
-  const head = hCut > 200 ? headRaw.slice(0, hCut) : headRaw;
-  let tail = s.slice(s.length - (cap - head.length - elide.length));
-  const tCut = tail.indexOf("\n\n");
-  if (tCut > 0 && tCut < 2000) tail = tail.slice(tCut + 2);   // drop the partial opening line
-  return head + elide + tail;
+  // Split into blocks at markdown headers; text before the first header is the title block.
+  const blocks = [];
+  let cur = null;
+  for (const line of s.split("\n")) {
+    if (IS_SECTION_HEADER.test(line)) { cur = { title: line, lines: [] }; blocks.push(cur); }
+    else { if (!cur) { cur = { title: "", lines: [] }; blocks.push(cur); } cur.lines.push(line); }
+  }
+  const render = (b) => ((b.title ? `${b.title}\n` : "") + b.lines.join("\n")).replace(/^\n+/, "").replace(/\n+$/, "");
+  // Must-keeps claim the budget first and are never cut (the leading H1 title rides with them);
+  // headerless text has no sections to protect, so it is one elidable block like any other.
+  const kept = new Map();
+  let budget = cap;
+  blocks.forEach((b, i) => {
+    if ((i === 0 && b.title) || MUST_KEEP_SECTION.test(b.title)) {
+      const r = render(b);
+      kept.set(i, r);
+      budget -= r.length + 2;   // the "\n\n" join
+    }
+  });
+  // Elidables (KEY DECISIONS, KEY FILES, anything unrecognized) fill what remains, in order; past
+  // the first one that does not fit, the marker stands for the rest. Must-keeps after that point
+  // still render — a work order is never dropped for sitting behind a KEY DECISIONS.
+  const parts = [];
+  let over = false;
+  blocks.forEach((b, i) => {
+    if (kept.has(i)) { parts.push(kept.get(i)); return; }
+    if (over) return;
+    const r = render(b);
+    if (r.length + 2 <= budget) { parts.push(r); budget -= r.length + 2; return; }
+    over = true;
+    let acc = "";
+    for (const p of r.split("\n\n")) {
+      if (acc.length + p.length + 2 > budget - elide.length) break;
+      acc = acc ? `${acc}\n\n${p}` : p;
+    }
+    // One unbreakable paragraph bigger than the whole budget (a pathological summary) still keeps
+    // its opening — a hard slice beats injecting nothing but the marker.
+    if (!acc) acc = r.slice(0, Math.max(0, budget - elide.length));
+    if (acc) parts.push(acc);
+  });
+  return parts.join("\n\n") + (over ? elide : "");
 }
 
 // Trantor State — the structured field on the record (TDD §4.5). `summary` is written as before;
@@ -617,10 +657,11 @@ export function writeHandoff({ projectDir, sessionId, transcript, trigger, summa
   const stamp = nowSec() || Date.now();
   let gitStatus = "";
   try { gitStatus = execSync("git -C " + JSON.stringify(projectDir) + " status --short 2>/dev/null | head -30", { encoding: "utf8" }).trim(); } catch {}
-  // Cap the composed narrative to the injection budget (~4KB). The verbatim tail is deliberately
-  // NOT embedded anymore: the record's transcript_path points at the full exchange, and embedding
-  // it here doubled the successor's read for state that was already one path away (#5648).
-  const narrative = capSummary(summary ?? buildSummary(transcript));
+  // #8222: persist the narrative UNCAPPED — a record has no context budget, and cutting here
+  // DESTROYS the work order rather than hiding it (trantor-1789869270 lost its numbered OPEN
+  // THREADS this way). The ~4KB budget is enforced at injection (sessionstart.mjs); the verbatim
+  // tail is not embedded — transcript_path points at the full exchange (#5648).
+  const narrative = summary ?? buildSummary(transcript);
   // Sub-agent manifest SNAPSHOT (fallback). The successor should re-derive it LIVE via
   // `trantor agents <sid>` (catches files an agent finished that were clobbered AFTER this
   // snapshot — the kill that motivated this corrupted a completed 30KB lib post-handoff). This
@@ -640,7 +681,8 @@ export function writeHandoff({ projectDir, sessionId, transcript, trigger, summa
     project: projectDir, projectName, machine: hostname(),
     session_id: sessionId || "", trigger: trigger || "auto",
     transcript_path: transcript || "", stamp: Number(stamp) || 0,
-    // recap-sufficient inline summary, capped ~4KB — the full story lives at transcript_path
+    // model-authored summary, persisted UNCAPPED (#8222) — the ~4KB cap lives at injection time;
+    // the full story also lives at transcript_path
     summary: narrative,
     // attended|unattended — who pulls the baton trigger (resolved autonomy `baton` dial)
     mode: handoffMode(projectName),
@@ -751,14 +793,10 @@ export function maybeSpawn(projectDir, conf = readConfig(), handoffFile = "", de
   try {
     if (_platform !== "darwin") return false;
     if (_env.TRANTOR_NO_HANDOFF_SPAWN === "1") return false;
-    // #8089 REVERTED 2026-09-19, and the revert is the point. A pane session gets NO Terminal
-    // window AND no baton driver from here: the APP owns the replacement. app handoff_now runs
-    // `trantor handoff --write-only`, waits for the record (including the armed-mid-turn case it
-    // explicitly handles), then does its OWN idle gate, kill and reopen (#6081, #5509). Making this
-    // spawn a pane baton put a SECOND driver on the same pane, racing the app's — which broke the
-    // chat handoff button and the skill, both of which had been working. The stranding this was
-    // meant to fix is real but lives in the SKILL path, where no app driver exists; fixing it here
-    // cannot tell the two flows apart, so it must be fixed where the flows are distinguishable.
+    // #8089 REVERTED — the APP owns pane replacement: handoff_now runs `trantor handoff --write-only`
+    // then its OWN idle gate/kill/reopen (#6081, #5509). A pane gets no Terminal window and no baton
+    // driver from here; spawning one put a SECOND driver on the pane, racing the app's and breaking
+    // the chat button + skill. #8089's stranding lives in the SKILL path — fix it there or not at all.
     if (_pane(_env)) {
       _log(`[trantor] session lives in herdr pane ${_pane(_env)} — no Terminal window and no baton driver from here; the app (or the skill path) owns the replacement\n`);
       return false;
@@ -772,30 +810,20 @@ export function maybeSpawn(projectDir, conf = readConfig(), handoffFile = "", de
     const script = join(HERE, "..", "..", "bin", "handoff-prompt.sh");
     if (!existsSync(script)) { _log(`[trantor] handoff-prompt.sh missing\n`); return false; }
     const timeout = String(conf.handoffPromptTimeout || 25);
-    // Injectable for the same reason the pane legs are: this line opens a REAL Terminal window, and
-    // a drill that reaches it opens one per run. That is not hypothetical — test-pane-baton-spawn's
-    // "no pane" case fell through to here and opened a window on every `npm test`, with a comment
-    // above it claiming the drill did not exercise this leg. Four of them were sitting on the
-    // operator's desktop before anyone noticed, and only a non-existent fixture path stopped each
-    // one from starting a live billable session.
+    // Injectable (deps.spawnPrompt): this line opens a REAL Terminal window, and a drill reaching it
+    // opens one per run — test-pane-baton-spawn's "no pane" case fell through here on every npm test
+    // and four windows landed on the operator's desktop before anyone noticed; only a non-existent
+    // fixture path stopped each from starting a live billable session.
     const child = (deps.spawnPrompt || spawn)("/bin/bash", [script, projectDir, timeout], { detached: true, stdio: "ignore" });
-    if (child && typeof child.unref === "function") child.unref();
+    if (child?.unref) child.unref();
     return true;
   } catch (e) { process.stderr.write(`[trantor] maybeSpawn error: ${e?.message}\n`); return false; }
 }
 
-/** The files a handoff tells its successor to read before doing anything (#8162).
- *
- *  A handoff has always been able to SAY "read these first" — crebral-health's named three memory
- *  files on 2026-09-19 and the successor opened none of them. Saying it was the whole mechanism.
- *  This pulls the list out as data so something downstream can check it.
- *
- *  Recognised: a `READ FIRST` / `READ-FIRST` / `Read first:` heading or line, and every path-looking
- *  token on it and the lines beneath it until the next blank line or heading. Deliberately narrow —
- *  a handoff that mentions a file in passing is not asking anyone to read it, and a gate that fires
- *  on every path in a 4k summary would be noise the successor learns to ignore.
- *  @returns {string[]} project-relative or absolute paths, de-duplicated, capped
- */
+/** The files a handoff tells its successor to READ FIRST (#8162) as DATA, so something downstream
+ *  can check it. Recognised: a `READ FIRST`/`READ-FIRST`/`Read first:` heading or line, and every
+ *  path-looking token until the next blank line or heading — narrow on purpose: a path in passing
+ *  is not a reading order. @returns {string[]} paths, deduped, capped */
 export function readFirstPaths(summary, { max = 12 } = {}) {
   const text = String(summary || "");
   const out = [];
@@ -817,14 +845,9 @@ export function readFirstPaths(summary, { max = 12 } = {}) {
   return out;
 }
 
-/** Which of `paths` this session actually OPENED, read off its own transcript (#8162).
- *
- *  Ground truth rather than testimony, the same rule the state gate learned the hard way: a
- *  successor saying "I have read the handoff" is not evidence that it did. A Read/Grep/Glob tool
- *  call naming the path is. Matches on basename as well as full path, because a handoff written by
- *  a model may name `revenue-integrity-build.md` where the Read call carries the absolute path.
- *  @returns {{read: string[], missed: string[]}}
- */
+/** Which of `paths` this session actually OPENED, read off its own transcript (#8162) — ground
+ *  truth, not testimony: a Read/Grep/Glob tool call naming the path is evidence, "I have read the
+ *  handoff" is not. Matches basename as well as full path. @returns {{read: string[], missed: string[]}} */
 export function pathsReadIn(transcriptPath, paths) {
   const want = (paths || []).filter(Boolean);
   if (!want.length) return { read: [], missed: [] };
@@ -846,11 +869,9 @@ export function pathsReadIn(transcriptPath, paths) {
 }
 
 // The self-announcing fresh session command (single-quoted so it survives osascript→shell un-escaped).
-// Brevity is part of the prompt: a takeover that answers with 5k-character status dumps loses the
-// operator. But brevity is about what you SAY, and #8162 found it had quietly become permission not
-// to READ: the summary is injected at SessionStart, so a 3-sentence recap is producible without
-// opening a file, and a successor doing exactly as asked never opened one. Three days of takeovers
-// went straight to code off a summary. So the order is now read-then-recap, and the recap stays short.
+// Brevity is the point, but #8162 found it had become permission not to READ: the summary is injected
+// at SessionStart, so a 3-sentence recap is producible without opening a file. The order is now
+// read-then-recap, and the recap stays short.
 export const RECAP_CMD = "claude 'You have just taken over via handoff. FIRST open every file the handoff names as read-first — its memory files, its PRD and TDD — and do not answer until you have. They are the context the handoff exists to carry, and the summary is a pointer to them, not a substitute. THEN recap in at most 3 sentences: task, state, next step. Then wait for me. Keep all replies short by default: no status tables, no headers, no walls of text unless I explicitly ask for detail.'";
 
 // ONE suppression check for every path that can open a terminal window: two names for it once let a

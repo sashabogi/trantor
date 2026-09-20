@@ -63,12 +63,17 @@ comments; the incidents behind them live on the cards linked below.
   registration chain, then cwd. The badge wins only when the cwd lies inside the named project or
   one of its worktrees (#6218). A hosted orchestrator pane is the successor surface (#5509 W1,
   #5643) and the handoff waits for it.
-- Writer discipline (#5648): the inline summary is capped at about 4 KB on paragraph boundaries,
-  keeping both ends. The structured `state` field (TDD §4.5) is validated and never capped. A fresh
-  model-authored handoff is never superseded by an automatic digest.
-- Reader discipline (#5645): the injection is a pointer, capped at 4 KB, with the verbatim tail
-  stripped. A compaction start shows a pending handoff without claiming it; a resumed session never
-  claims. An orchestrator's baton is held for the orchestrator pane for 30 minutes, then lapses.
+- Writer discipline (#5648): the record persists the model-authored summary UNCAPPED — a handoff
+  record may never lose its sections, and the ~4 KB budget is an injection concern (#8222: the
+  section-aware cut runs at render time; TASK / STATE / OPEN THREADS always survive it, KEY
+  DECISIONS / KEY FILES are the elidable ones). The structured `state` field (TDD §4.5) is validated
+  and never capped. A fresh model-authored handoff is never superseded by an automatic digest.
+- Reader discipline (#5645): the injection is a pointer, budgeted at 4 KB (the ONLY place the summary
+  is cut, #8222), with the verbatim tail stripped. The 4 KB is the budget the ELIDABLE sections must
+  fit in, not a hard ceiling on the output: TASK / STATE / OPEN THREADS are never cut, so a handoff
+  whose must-keeps alone exceed the budget injects larger, deliberately. A compaction start shows a pending handoff
+  without claiming it; a resumed session never claims. An orchestrator's baton is held for the
+  orchestrator pane for 30 minutes, then lapses.
 - Claiming records who took over and arms the recap net (SYSTEM-CONTRACT §5): every prompt before
   the successor's first Stop carries the recap reminder.
 - The card a handoff belongs to comes from `TRANTOR_CARD`, else `/catchup` on a 2 second budget

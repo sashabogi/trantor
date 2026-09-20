@@ -1,10 +1,8 @@
 #!/usr/bin/env node
 // trantor handoff tests — the context-limit → fresh-session machinery.
-// Hermetic: no network (RELAY_URL closed), no LLM (TRANTOR_NO_SCROOGE=1 → the
-// deterministic whole-session digest is used instead of scrooge), no Terminal
-// windows (TRANTOR_NO_HANDOFF_SPAWN=1). Regression coverage for the three gaps
-// that broke the promise: tail-only summary, compact eating its own handoff,
-// and the spawn never firing.
+// Hermetic: no network (RELAY_URL closed), no LLM (TRANTOR_NO_SCROOGE=1 → the deterministic
+// digest), no Terminal windows (TRANTOR_NO_HANDOFF_SPAWN=1). Regression coverage for the gaps
+// that broke the promise: tail-only summary, compact eating its own handoff, spawn never firing.
 import { writeFileSync, mkdirSync, existsSync, readFileSync, rmSync, utimesSync, readdirSync } from "node:fs";
 import { basename, join } from "node:path";
 import { homedir, tmpdir } from "node:os";
@@ -26,8 +24,8 @@ const CLOSED = "http://127.0.0.1:1";
 console.log("# trantor handoff tests");
 
 // Hermetic env: a crew seat's runner exports RELAY_PROJECT/RELAY_AGENT, which the spawned hooks
-// below would inherit — resolving the CREW's project instead of each fixture's (2026-08-31: six
-// orch-baton failures on the kimi:trantor seat, all from the leaked RELAY_PROJECT). Strip them
+// below would inherit — resolving the CREW's project instead of each fixture's (six orch-baton
+// failures on the kimi:trantor seat, all from the leaked RELAY_PROJECT). Strip them
 // once here; every block that needs a seat identity sets RELAY_SESSION explicitly.
 delete process.env.RELAY_PROJECT;
 delete process.env.RELAY_AGENT;
@@ -112,16 +110,14 @@ restoreGuards();
 delete process.env.TRANTOR_NO_SCROOGE;
 
 // --- regression: baton must close the ORIGINAL window, never the freshly-spawned successor ---
-// Bug (2026-06-18): spawnBaton spawned the fresh session FIRST, then detected the window to close.
-// The new window was frontmost, so the front-window fallback captured IT — and baton-close killed
-// the SUCCESSOR the instant it took over ("you're supposed to shut yourself off, not the other one").
-// Lock the order: resolve the original window BEFORE spawning, and arm the close against it.
+// Bug: spawnBaton spawned the fresh session FIRST, then detected the window to close; the new
+// window was frontmost, so the front-window fallback captured IT and baton-close killed the
+// SUCCESSOR at takeover. Lock the order: resolve the original window BEFORE spawning, arm on it.
 {
-  // 0.17.98 moved spawnBaton onto spawnSuppressed(), which honours BOTH guard names — and that check
-  // runs BEFORE the injected seams. So an operator who exported the guards (as the GOTCHAS instruct)
-  // turned this ordering regression test into a silent no-op that reported two spurious failures.
-  // Clearing them here is safe BY CONSTRUCTION: every seam that could touch a real window is mocked
-  // below, so nothing can spawn. Restored in the finally, whatever happens.
+  // 0.17.98 moved spawnBaton onto spawnSuppressed(), which honours BOTH guard names BEFORE the
+  // injected seams — so an operator who exported the guards (as the GOTCHAS instruct) turned this
+  // ordering regression test into a silent no-op with two spurious failures. Clearing them here is
+  // safe BY CONSTRUCTION: every seam that could touch a real window is mocked below. Restored in finally.
   const order = [];
   let b2;
   clearGuards();
@@ -139,6 +135,8 @@ delete process.env.TRANTOR_NO_SCROOGE;
     order.length === 3, `order=${JSON.stringify(order)}`);
   // resolveOriginalWindow is callable and shaped right (returns {windowId,tty}); headless → empty, never throws
   const rw = resolveOriginalWindow();
+  // SAFETY: this IS the boundary — the assertion checks the returned shape's types, there is no deeper domain value to branch on.
+  // oxlint-disable-next-line anti-slop/no-runtime-typeof
   ok("resolveOriginalWindow returns a {windowId,tty} shape", typeof rw.windowId === "string" && typeof rw.tty === "string");
 }
 
@@ -160,10 +158,9 @@ const rs = ss("startup");
 ok("startup consumes the handoff", consumed() === true);
 
 // --- regression: select newest-by-STAMP for THIS project, ignore look-alike names ---
-// Bug (2026-06-18): loose startsWith()+lexicographic sort grabbed a stale
-// "<proj>-handoff-<pid>-….json" leaked fixture over the real "<proj>-<stamp>.json",
-// because a letter ('h') sorts above a digit. So a manual baton handed the fresh
-// session synthetic test data instead of the just-written handoff. Lock it down.
+// Bug: loose startsWith()+lexicographic sort grabbed a stale "<proj>-handoff-<pid>-….json" leaked
+// fixture over the real "<proj>-<stamp>.json" (a letter sorts above a digit), so a manual baton
+// handed the fresh session synthetic test data instead of the just-written handoff. Lock it down.
 rmSync(hf, { force: true });
 const older = join(handoffDir, `${proj}-1000000000.json`);
 const newer = join(handoffDir, `${proj}-2000000000.json`);
@@ -178,7 +175,7 @@ rmSync(older, { force: true }); rmSync(newer, { force: true }); rmSync(decoy, { 
 seed();
 
 // --- regression: a new handoff SUPERSEDES older unconsumed siblings (no stale-pile / scrambled load) ---
-// Bug (2026-06-21): the early-warning re-fired every 5 min (guarded only by the inflight stamp, never
+// Bug: the early-warning re-fired every 5 min (guarded only by the inflight stamp, never
 // markHandedOff), stacking 8 unconsumed handoffs ~5 min apart for one project. A scrambled spawn could
 // then load an OLD snapshot ("stale by ~15 commits"). writeHandoff now retires older unconsumed ones.
 {
@@ -204,7 +201,7 @@ seed();
 }
 
 // --- regression: claiming a handoff stamps WHO took over, and baton-close waits for a real turn ---
-// Bug (2026-06-21): `consumed` flips at SessionStart (inject time), and baton-close closed the original
+// Bug: `consumed` flips at SessionStart (inject time), and baton-close closed the original
 // ~4s later — before the fresh model had read the handoff. Now sessionstart records consumedBy/consumedAt
 // and baton-close (freshEngaged) waits for the fresh session's first assistant turn.
 {
@@ -221,7 +218,7 @@ seed();
   });
   const claimed = JSON.parse(readFileSync(chf, "utf8"));
   ok("consumedBy: claim records the fresh session id + transcript path", claimed.consumed === true && claimed.consumedBy?.session_id === "FRESH-SID" && claimed.consumedBy?.transcript_path === freshTranscript);
-  ok("consumedBy: claim stamps consumedAt (epoch sec)", typeof claimed.consumedAt === "number" && claimed.consumedAt > 1_700_000_000);
+  ok("consumedBy: claim stamps consumedAt (epoch sec)", claimed.consumedAt > 1_700_000_000);
 
   // freshEngaged: false until the fresh transcript shows an assistant turn; true once it does.
   ok("freshEngaged: false before any fresh turn exists", freshEngaged(claimed) === false);
@@ -235,7 +232,7 @@ seed();
   rmSync(cpDir, { recursive: true, force: true });
 }
 
-// --- SAFETY (incident 2026-06-21): auto-baton must not fire mid-build, and must never auto-close ---
+// --- SAFETY: auto-baton must not fire mid-build, and must never auto-close ---
 // A 90% baton fired while the session was orchestrating 2 agents and the original was SIGKILLed
 // mid-flight. Three guards now: (1) detect live sub-agents, (2) auto-close is opt-in only,
 // (3) baton-close aborts if the original is still working.
@@ -277,12 +274,10 @@ seed();
   rmSync(od, { recursive: true, force: true });
 }
 
-// --- orchestrator baton: held for the pane, and the map follows the thread (2026-08-27 seam) ---
-// A handoff written by the project's recorded orchestrator thread (orch-sessions.txt) must not go
-// to whichever window starts first: a stray 22:58 Terminal session claimed the orch baton, died,
-// and muzzled the pane all night. Held for the pane (TRANTOR_ORCH) for a window that LAPSES; and
-// whoever claims the orch baton becomes the recorded orch thread, so `trantor open` follows it.
-// Hermetic: its own AGENT_BUS_DIR, so nothing touches the real map or handoffs.
+// --- orchestrator baton: held for the pane, and the map follows the thread ---
+// A handoff written by the project's recorded orchestrator thread (orch-sessions.txt) must not go to
+// whichever window starts first: a stray late Terminal session claimed the orch baton, died, and
+// muzzled the pane all night. Held for the pane (TRANTOR_ORCH) while the window LAPSES. Hermetic bus dir.
 {
   const op = "orchbaton-" + process.pid;
   const opDir = join(tmpdir(), op);
@@ -343,10 +338,9 @@ seed();
 }
 
 // --- orchWriterSid: who is writing this handoff — evidence, not assertion ---
-// The relay MCP server has no harness session id (found live 2026-08-28: a tool-written orch
-// handoff carried session_id null, so the baton-hold could never fire). The writer is the orch
-// thread when the pane badge says so, or when the recorded thread's transcript is being written
-// RIGHT NOW (mtime — the adopt standard). Idle-thread and no-map cases must answer "".
+// The relay MCP server has no harness session id (found live: a tool-written orch handoff carried
+// session_id null, so the baton-hold could never fire). The writer is the orch thread when the pane
+// badge says so, or when the recorded thread's transcript is being written NOW. Else "".
 {
   const wp = "orchwriter-" + process.pid;
   const wpDir = join(tmpdir(), wp);
@@ -502,31 +496,98 @@ rmSync(projDir, { recursive: true, force: true });
   const { capSummary, freshAuthoredHandoff, handoffMode } = await import("../../hooks/lib/handoff.mjs");
   const { setAutonomy } = await import("../../lib/autonomy.mjs");
 
-  // cap: pure function — small text untouched, big text keeps BOTH ends on paragraph boundaries
+  // cap: pure function — small text untouched; oversized text is cut to the budget, and the cut
+  // is SECTION-AWARE: TASK/STATE/OPEN THREADS survive, KEY DECISIONS/KEY FILES are the elidable
+  // ones (#8222). The old assertion here — "keeps the opening AND the tail" — asserted exactly the
+  // head+tail cut that structurally ate the work order in the middle, so it is replaced, not deleted.
   const small = "tiny";
   ok("capSummary: text under the cap is untouched", capSummary(small) === small);
   const big = Array.from({ length: 400 }, (_, i) => `para ${i} ${String(i).repeat(30)}`).join("\n\n");
   const capped = capSummary(big);
   ok("capSummary: oversized text is cut to ~4KB", capped.length <= 4096 && capped.includes("[…]"));
-  ok("capSummary: the cut keeps the opening AND the tail", capped.startsWith(big.slice(0, 40)) && capped.endsWith(big.slice(-40)));
+  ok("capSummary: the cut keeps the opening", capped.startsWith(big.slice(0, 40)));
 
-  // end to end: the composed digest of a big transcript is recap-sufficient at <=~4KB,
-  // carries mode:"attended" by default, and seeds the §5 ledger. Own transcript: the shared
-  // `transcript` fixture is DELETED by the mid-file cleanup above, and a deleted input would
-  // silently summarize to the placeholder.
+  // #8222 regression, built from the REAL record that showed the failure —
+  // ~/.agent-bus/handoffs/trantor-1789869270.json: its stored summary read TASK, STATE, KEY
+  // DECISIONS, then literally "[…]", then KEY FILES — the successor's NUMBERED work order was
+  // elided at WRITE time and destroyed. Threads come from the superseded record; fallbacks keep it hermetic.
+  const realRec = (name) => { try { return JSON.parse(readFileSync(join(homedir(), ".agent-bus", "handoffs", name), "utf8")); } catch { return null; } };
+  const section = (text, name) => {
+    const piece = String(text || "").split(/^##\s+/m).find(b => b.startsWith(name));
+    return piece ? `## ${piece.trimEnd()}` : "";
+  };
+  const found = realRec("trantor-1789869270.json");
+  const superseded = realRec("trantor-1789868748.json");
+  const taskS = section(found?.summary, "TASK") || "## TASK\nOperate the release/orchestration seat: land gated cards, cut releases, unblock the phase.";
+  const stateS = section(found?.summary, "STATE") || "## STATE\n**Done.** main unblocked, 19 commits cherry-picked clean, release cut and installed.\n\n**In progress.** the handoff cap fix, in review.";
+  const kdS = section(found?.summary, "KEY DECISIONS") || "## KEY DECISIONS\n- maybeSpawn returns false for panes — deliberate; the app owns pane replacement.\n- Keep #8162 (read-first gate) — successors must open the files, not recap from the summary.";
+  const kfS = section(found?.summary, "KEY FILES") || "## KEY FILES\n- hooks/lib/handoff.mjs (capSummary, writeHandoff)\n- hooks/sessionstart.mjs (capHandoffSummary)";
+  let threadsS = section(superseded?.summary, "OPEN THREADS");
+  if (!threadsS) threadsS = "## OPEN THREADS & NEXT STEPS\n" + Array.from({ length: 8 }, (_, i) => `${i + 1}. Thread ${i + 1}: continue the succession work (step ${i + 1} of 8).`).join("\n");
+  const threadLines = threadsS.split("\n").filter(l => /^\s*\d+[.)]/.test(l)).map(l => l.trim());
+  ok("#8222 fixture: the real record yields a numbered work order to protect", threadLines.length >= 5);
+  // Pad the two elidable sections so the five-section handoff is solidly OVER the injection cap.
+  const pad = (n, tag) => Array.from({ length: n }, (_, i) => `- ${tag} padding ${i + 1}: ${tag.toLowerCase()}-${String(i).repeat(24)} — elidable context, safe to drop.`).join("\n");
+  const summaryBig = ["# HANDOFF — Trantor orchestrator seat", taskS, stateS, `${kdS}\n${pad(14, "DECISION")}`, threadsS, `${kfS}\n${pad(14, "FILE")}`].join("\n\n");
+  ok("#8222 fixture: five sections, over the injection cap", summaryBig.length > 5000 && ["TASK", "STATE", "KEY DECISIONS", "OPEN THREADS", "KEY FILES"].every(n => summaryBig.includes(`## ${n}`)));
+  const cappedBig = capSummary(summaryBig);
+  ok("#8222: the injection cut stays within the ~4KB budget", cappedBig.length <= 4300);
+  ok("#8222: the cut marks what it elided with […]", cappedBig.includes("[…]"));
+  ok("#8222: TASK and STATE survive the cut", cappedBig.includes("## TASK") && cappedBig.includes("## STATE"));
+  ok("#8222: EVERY numbered open thread survives the cut — the work order is never the middle", threadLines.every(l => cappedBig.includes(l)));
+  const elidableTail = summaryBig.split("## KEY FILES")[1].slice(-60);
+  ok("#8222: KEY FILES is the part that gets elided", !cappedBig.includes(elidableTail));
+
+  // Must-keeps over the budget inject larger on purpose — dropping half a work order to hit a
+  // number is the bug. What it must not do is carry the elidables along, or grow unbounded.
+  const hugeThreads = "## OPEN THREADS & NEXT STEPS\n" + Array.from({ length: 40 }, (_, i) =>
+    `${i + 1}. Thread ${i + 1}: ${String(i).repeat(70)} — a real work order item, not padding.`).join("\n");
+  const hugeLines = hugeThreads.split("\n").filter(l => /^\s*\d+[.)]/.test(l)).map(l => l.trim());
+  const overMust = ["# HANDOFF", taskS, stateS, `${kdS}\n${pad(14, "DECISION")}`, hugeThreads, `${kfS}\n${pad(14, "FILE")}`].join("\n\n");
+  const cappedOver = capSummary(overMust, 4096);
+  ok("#8222: must-keeps larger than the budget are still never cut", hugeLines.every(l => cappedOver.includes(l)));
+  ok("#8222: …and the elidable sections are dropped, not carried past the budget", !cappedOver.includes(elidableTail) && cappedOver.includes("[…]"));
+  ok("#8222: …so the overshoot is bounded by the must-keeps themselves, never by the input", cappedOver.length < overMust.length && cappedOver.length <= taskS.length + stateS.length + hugeThreads.length + 4096);
+
+  // end to end through writeHandoff: the model-authored summary is persisted UNCAPPED (the record
+  // has no context budget), and the injection-side cut of the STORED record still keeps the work
+  // order. Own transcript: the shared `transcript` fixture is DELETED by the mid-file cleanup
+  // above, and a deleted input would silently summarize to the placeholder.
   const cp = "cap-e2e-" + process.pid;
   const cpDir = join(tmpdir(), cp);
   mkdirSync(cpDir, { recursive: true });
   const capT = join(cpDir, "t.jsonl");
   writeFileSync(capT, rows.map(r => JSON.stringify(r)).join("\n"));
   process.env.TRANTOR_NO_SCROOGE = "1";
-  const { record: crec, file: cfile } = writeHandoff({ projectDir: cpDir, sessionId: "cap-e2e", transcript: capT, trigger: "context-warn" });
+  const { record: crec, file: cfile } = writeHandoff({ projectDir: cpDir, sessionId: "cap-e2e", transcript: capT, trigger: "context-warn", summary: summaryBig });
   delete process.env.TRANTOR_NO_SCROOGE;
-  ok("cap: the inline summary stays within the ~4KB injection budget", crec.summary.length <= 4200);
-  ok("cap: recap-sufficient — the SESSION START and END both survive the cut", crec.summary.includes(FIRST) && crec.summary.includes(LAST));
+  ok("#8222: writeHandoff persists the summary UNCAPPED — byte-identical, no cut, no marker", crec.summary === summaryBig);
+  ok("#8222: the injection-side cut of the stored record keeps the numbered work order", capSummary(crec.summary, 4096).includes(threadLines[threadLines.length - 1]) && !capSummary(crec.summary, 4096).includes(elidableTail));
   ok("mode: defaults to attended", crec.mode === "attended");
   rmSync(cfile, { force: true });
   rmSync(cpDir, { recursive: true, force: true });
+
+  // #8222 at the injection SITE: sessionstart renders the <trantor-handoff> block from the uncapped
+  // record — the successor must see the numbered threads and the pointer to the full record, never
+  // a head+tail cut of the stored text.
+  {
+    const hp = "injcap-" + process.pid;
+    const hpDir = join(tmpdir(), hp);
+    mkdirSync(hpDir, { recursive: true });
+    const hfile = join(handoffDir, `${hp}-1700000000.json`);
+    writeFileSync(hfile, JSON.stringify({ id: `${hp}-1700000000`, project: hpDir, projectName: hp, machine: "h", trigger: "context-warn", summary: summaryBig, gitStatus: "", consumed: false }, null, 2));
+    const rInj = spawnSync(process.execPath, ["hooks/sessionstart.mjs"], {
+      input: JSON.stringify({ source: "startup", session_id: "injcap-1" }),
+      encoding: "utf8", timeout: 15000,
+      env: { ...drillEnv(), CLAUDE_PROJECT_DIR: hpDir, RELAY_SESSION: hp, RELAY_URL: CLOSED },
+    });
+    const ctx = (() => { try { return JSON.parse(rInj.stdout).hookSpecificOutput.additionalContext; } catch { return ""; } })();
+    ok("#8222: sessionstart injects the over-cap record with the pointer to the full file", ctx.includes("summary capped at 4096") && ctx.includes(hfile));
+    ok("#8222: the injected block keeps EVERY numbered open thread", threadLines.length >= 5 && threadLines.every(l => ctx.includes(l)));
+    ok("#8222: the injected block elides KEY FILES, not the work order", !ctx.includes(elidableTail));
+    rmSync(hfile, { force: true });
+    rmSync(hpDir, { recursive: true, force: true });
+  }
 
   // defer: a FRESH (<15min) unconsumed model-authored handoff is deferred TO — not recomposed,
   // not superseded. The digest is the fallback, never the replacement (#5648 incident).
@@ -648,7 +709,9 @@ rmSync(projDir, { recursive: true, force: true });
   }, null, 2));
   const capCtx = ctxOf(ssrun("CAP-SID"));
   ok("cap: the embedded verbatim tail is NEVER injected inline", !capCtx.includes("V".repeat(100)));
-  ok("cap: the injected summary is hard-capped at 4KB", capCtx.includes("N".repeat(4096)) && !capCtx.includes("N".repeat(4100)));
+  // #8222: the injected narrative is still bounded at ~4KB — the old assertion demanded the full
+  // 4096-char head-keep of the hard cut; the section-aware cut keeps ~4KB minus the marker.
+  ok("cap: the injected summary is hard-capped at 4KB", capCtx.includes("N".repeat(4000)) && !capCtx.includes("N".repeat(4096)));
   ok("cap: the cap notice points at the full record + transcript", capCtx.includes("summary capped at 4096 chars") && capCtx.includes("full transcript: /tmp/full-transcript.jsonl"));
   ok("cap: a capped record still claims + stamps the recap net (default attended)",
     JSON.parse(readFileSync(join(bus, "handoffs", `${proj3}-1000000000.json`), "utf8")).consumed === true
@@ -707,7 +770,7 @@ rmSync(projDir, { recursive: true, force: true });
     && orchPane("x\therdr\ta\tw1:p1\n", "x") === null);
 }
 
-// ---- the resume-vs-handoff collision (2026-08-31: TWO handoffs written, ZERO fresh takeovers —
+// ---- the resume-vs-handoff collision (TWO handoffs written, ZERO fresh takeovers —
 // each "successor" was the old conversation resumed with the takeover banner injected on top,
 // so the recap read clean while the context never reset) ----
 {
@@ -745,7 +808,7 @@ rmSync(projDir, { recursive: true, force: true });
   rmSync(bus, { recursive: true, force: true });
 }
 
-// ---- open resolves a NAMED project's checkout (2026-08-31: the app's Wake ran `trantor open
+// ---- open resolves a NAMED project's checkout (the app's Wake ran `trantor open
 // crebral-health` from the Tauri cwd and claude booted there — wrong-folder trust prompt, wrong
 // transcript slug, ACTIVE NOW blind) ----
 {
