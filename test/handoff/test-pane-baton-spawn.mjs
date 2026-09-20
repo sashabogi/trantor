@@ -45,42 +45,26 @@ function call({ pane = "", hasOrch = false, file = FILE, platform = "darwin", co
   return { res, calls, windows, logs: logs.join("") };
 }
 
-console.log("\nthe bug: a pane session's armed baton opens a successor");
+// REVERSED 2026-09-19. This suite briefly asserted that maybeSpawn DRIVES the pane baton. That was
+// wrong and it broke two working paths. The app owns a pane replacement: handoff_now runs
+// `trantor handoff --write-only`, waits for the record (armed-mid-turn included), then does its own
+// idle gate, kill and reopen (#6081). A driver spawned here races the app's on the same pane.
+// maybeSpawn cannot tell "the app is driving" from "nobody is driving", so it must not drive.
+console.log("\na pane session gets NO driver from maybeSpawn — the app owns the replacement");
 {
-  const { res, calls } = call({ pane: "w9:p1" });
-  ok("maybeSpawn reports it acted", res === true, `got ${res}`);
-  ok("…by driving the pane baton", calls.length === 1, JSON.stringify(calls));
-  ok("…for THIS pane, not one guessed from cwd", calls[0]?.pane === "w9:p1", JSON.stringify(calls[0]));
-  ok("…carrying the handoff file the successor must claim", calls[0]?.file === FILE, JSON.stringify(calls[0]));
+  const { res, calls, logs } = call({ pane: "w9:p1" });
+  ok("maybeSpawn declines for a pane", res === false, `got ${res}`);
+  ok("…and spawns NO second driver onto that pane", calls.length === 0, JSON.stringify(calls));
+  ok("…and says so, rather than going silent", /no baton driver from here/.test(logs), logs);
 }
 
-console.log("\nthe cwd-keyed orch pane takes the same route");
+console.log("\nthe cwd-keyed orch pane declines too, for the same reason");
 {
   const { res, calls } = call({ hasOrch: true });
-  ok("an orch pane also gets a baton driver", res === true && calls.length === 1, JSON.stringify(calls));
-  ok("…and without HERDR_PANE_ID the driver resolves the pane itself", calls[0]?.pane === undefined, JSON.stringify(calls[0]));
+  ok("an orch pane gets no driver either", res === false && calls.length === 0, JSON.stringify(calls));
 }
 
-console.log("\nno handoff file is a refusal that SAYS SO, never a silent false");
-{
-  const { res, calls, logs } = call({ pane: "w9:p1", file: "" });
-  ok("it refuses", res === false && calls.length === 0);
-  ok("…and names why, so the failure is readable", /needs the handoff file/.test(logs), logs);
-}
 
-console.log("\na driver that fails to spawn is reported, not swallowed");
-{
-  const logs = [];
-  const res = maybeSpawn(DIR, CONF, FILE, {
-    platform: "darwin", env: {},
-    paneSurfaceEnv: () => "w9:p1",
-    hasOrchPane: () => false,
-    spawnPaneBaton: () => false,
-    log: (s) => logs.push(s),
-  });
-  ok("a failed driver returns false", res === false);
-  ok("…and says FAILED rather than going quiet", /FAILED to spawn/.test(logs.join("")), logs.join(""));
-}
 
 console.log("\nthe non-pane paths are untouched");
 {

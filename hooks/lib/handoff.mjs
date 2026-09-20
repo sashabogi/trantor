@@ -751,33 +751,23 @@ export function maybeSpawn(projectDir, conf = readConfig(), handoffFile = "", de
   try {
     if (_platform !== "darwin") return false;
     if (_env.TRANTOR_NO_HANDOFF_SPAWN === "1") return false;
-    // #8089: a pane session gets NO Terminal window — but it does get a successor. This used to
-    // return false on the theory that "the pane claims the handoff (trantor open) on its own",
-    // and for an ARMED baton nothing was driving that: /trantor:handoff always runs inside a turn,
-    // so it always arms, so this is always the path taken — and spawnPaneBaton, which the direct
-    // path (spawnBaton) calls right here, was never reached. The record was written and the session
-    // sat there. Witnessed on crebral-health 2026-09-19: written 00:18:58, unclaimed, original alive.
-    const paneId = _pane(_env);
-    if (paneId) {
-      if (!handoffFile) {
-        _log(`[trantor] pane ${paneId} needs the handoff file to pass the baton and none was given — no successor opened\n`);
-        return false;
-      }
-      const ok = _spawnPane(projectDir, handoffFile, paneId);
-      _log(`[trantor] herdr pane ${paneId}: ${ok ? "baton driver spawned — it replaces this pane in place" : "baton driver FAILED to spawn — no successor"}\n`);
-      return ok;
+    // #8089 REVERTED 2026-09-19, and the revert is the point. A pane session gets NO Terminal
+    // window AND no baton driver from here: the APP owns the replacement. app handoff_now runs
+    // `trantor handoff --write-only`, waits for the record (including the armed-mid-turn case it
+    // explicitly handles), then does its OWN idle gate, kill and reopen (#6081, #5509). Making this
+    // spawn a pane baton put a SECOND driver on the same pane, racing the app's — which broke the
+    // chat handoff button and the skill, both of which had been working. The stranding this was
+    // meant to fix is real but lives in the SKILL path, where no app driver exists; fixing it here
+    // cannot tell the two flows apart, so it must be fixed where the flows are distinguishable.
+    if (_pane(_env)) {
+      _log(`[trantor] session lives in herdr pane ${_pane(_env)} — no Terminal window and no baton driver from here; the app (or the skill path) owns the replacement\n`);
+      return false;
     }
     if (conf.autoHandoffPrompt === false) return false;
     if (_hasPane(basename(projectDir))) {
-      // Same correction as above for the cwd-keyed pane: drive the replacement, do not assume
-      // something else will. Without HERDR_PANE_ID the driver resolves the pane from crew-windows.
-      if (!handoffFile) {
-        _log(`[trantor] orch pane hosts ${basename(projectDir)} but no handoff file was given — no successor opened\n`);
-        return false;
-      }
-      const ok = _spawnPane(projectDir, handoffFile);
-      _log(`[trantor] orch pane hosts ${basename(projectDir)}: ${ok ? "baton driver spawned — it replaces the pane in place" : "baton driver FAILED to spawn — no successor"}\n`);
-      return ok;
+      _log(`[trantor] orch pane hosts ${basename(projectDir)} — no Terminal window; the app or the skill path claims the handoff
+`);
+      return false;
     }
     const script = join(HERE, "..", "..", "bin", "handoff-prompt.sh");
     if (!existsSync(script)) { _log(`[trantor] handoff-prompt.sh missing\n`); return false; }

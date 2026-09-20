@@ -166,8 +166,11 @@ console.log("\nThe direct window callers carry the pane-env guard:");
     spawnPaneBaton: (d, f, pane) => { calls.push(pane); return true; },
     log: () => {},
   });
-  ok("maybeSpawn under HERDR_PANE_ID opens no window but DOES pass the baton",
-    acted === true && calls.length === 1 && calls[0] === "w9:p1", JSON.stringify(calls));
+  // REVERSED with the #8089 revert: maybeSpawn must open no window AND spawn no driver. The app
+  // owns a pane replacement (handoff_now: --write-only, then its own idle gate, kill and reopen),
+  // and a driver from here races it on the same pane.
+  ok("maybeSpawn under HERDR_PANE_ID opens no window and passes no baton",
+    acted === false && calls.length === 0, JSON.stringify({ acted, calls }));
 }
 
 // ── 5. end to end through the real CLIs (suppressed spawn — no live windows) ─
