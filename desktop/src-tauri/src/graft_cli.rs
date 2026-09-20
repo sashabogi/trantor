@@ -743,6 +743,16 @@ mod tests {
     use super::*;
     use std::collections::{BTreeSet, HashMap, HashSet};
 
+    /// Both real-checkout drills run `graft build .` in THIS repo, and cargo runs tests in
+    /// parallel: two builds writing graft/.graph at once lose the race and one reports a bare
+    /// "build failed" (#8223 — 11/1 parallel, 12/0 with --test-threads=1). The checkout is a
+    /// shared resource, so the drills take turns on it. Poison is stepped over deliberately:
+    /// a drill that already failed must not convert every later drill into a lock panic.
+    fn checkout_drill() -> std::sync::MutexGuard<'static, ()> {
+        static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
     fn temp_dir(tag: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!("trantor-graft-{tag}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
@@ -977,6 +987,7 @@ mod tests {
     /// graft yields the error string, and cycles trusted only after a positive control.
     #[test]
     fn drill_real_checkout_answers_warm_with_counts_that_track_graft_map() {
+        let _serial = checkout_drill();
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
         let root = root.canonicalize().unwrap();
         let path_env = crate::terminal_path();
@@ -1147,6 +1158,7 @@ mod tests {
     /// that file gets split, which is exactly how #6448 broke it (#8065).
     #[test]
     fn complexity_drill_real_checkout_ranks_a_real_hotspot_first() {
+        let _serial = checkout_drill();
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..").canonicalize().unwrap();
         let path_env = crate::terminal_path();
         let graft = resolve_on(&path_env)

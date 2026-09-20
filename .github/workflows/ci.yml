@@ -56,5 +56,11 @@ jobs:
       - name: Desktop typecheck + build
         run: pnpm -C desktop run build
 
+      # The graft_cli drills shell out to the graft CLI and read the wiring `graft build`
+      # writes; graft/ is gitignored, so without the binary they panic and main goes red — it
+      # had been red for six releases (#8223). Pinned to the operator's version (doctrine 9).
+      - name: Install graft (graft_cli drill dependency)
+        run: npm i -g @nanonets/graft@0.16.0
+
       - name: Cargo test (desktop/src-tauri)
         run: cargo test --locked --manifest-path desktop/src-tauri/Cargo.toml
