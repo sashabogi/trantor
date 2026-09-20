@@ -378,9 +378,11 @@ agent via `relay_handoff`. Optional macOS auto-prompt (`autoHandoffPrompt` in
 Since 0.18.18 the succession is a machine, not a ritual: at 90% context the running agent is
 told to finish or checkpoint and author the boundary handoff itself; the app's banner counts
 down ("handing off in 10s") when the dial allows; an automatic digest defers to a fresh
-model-authored handoff instead of superseding it; the successor is injected a capped ≤4KB recap
-(the verbatim tail stays on disk, one path away) and gets a kickoff prompt so it recaps without
-being spoken to; and a session hosted in a Workspace pane is replaced in place by a detached
+model-authored handoff instead of superseding it; the record on disk keeps the author's summary
+whole and the ~4KB budget applies only to what is injected, where the cut is section-aware so the
+successor's open threads survive it (0.18.68 — before that the cut ran at write time and ate the
+middle, which is exactly where a work order sits); the successor gets a kickoff prompt so it recaps
+without being spoken to; and a session hosted in a Workspace pane is replaced in place by a detached
 driver — the same chain the app's [Hand off now] button runs.
 
 Waking works the same way from the other end: hover a sleeping project in the app's sidebar and

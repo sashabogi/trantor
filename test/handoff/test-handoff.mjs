@@ -527,8 +527,11 @@ rmSync(projDir, { recursive: true, force: true });
   const threadLines = threadsS.split("\n").filter(l => /^\s*\d+[.)]/.test(l)).map(l => l.trim());
   ok("#8222 fixture: the real record yields a numbered work order to protect", threadLines.length >= 5);
   // Pad the two elidable sections so the five-section handoff is solidly OVER the injection cap.
+  // The padding is sized so the fixture clears the cap on the FALLBACK sections alone: when the real
+  // record is absent (CI, a fresh machine) the borrowed sections are short, and a fixture that is
+  // only over-cap on the operator's disk fails everywhere else — it did, 145/6, run 35485044032.
   const pad = (n, tag) => Array.from({ length: n }, (_, i) => `- ${tag} padding ${i + 1}: ${tag.toLowerCase()}-${String(i).repeat(24)} — elidable context, safe to drop.`).join("\n");
-  const summaryBig = ["# HANDOFF — Trantor orchestrator seat", taskS, stateS, `${kdS}\n${pad(14, "DECISION")}`, threadsS, `${kfS}\n${pad(14, "FILE")}`].join("\n\n");
+  const summaryBig = ["# HANDOFF — Trantor orchestrator seat", taskS, stateS, `${kdS}\n${pad(30, "DECISION")}`, threadsS, `${kfS}\n${pad(30, "FILE")}`].join("\n\n");
   ok("#8222 fixture: five sections, over the injection cap", summaryBig.length > 5000 && ["TASK", "STATE", "KEY DECISIONS", "OPEN THREADS", "KEY FILES"].every(n => summaryBig.includes(`## ${n}`)));
   const cappedBig = capSummary(summaryBig);
   ok("#8222: the injection cut stays within the ~4KB budget", cappedBig.length <= 4300);
