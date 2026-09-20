@@ -645,29 +645,56 @@ rmSync(projDir, { recursive: true, force: true });
   rmSync(mpDir, { recursive: true, force: true });
 }
 
-// ---- #5642/#5648: the MANUAL skill path opens the §5 ledger and carries the same interface ----
+// ---- #5642/#5648/#8263: the MANUAL skill path is the SAME writer ----
 {
   const wp2 = "manual-skill-" + process.pid;
   const wp2Dir = join(tmpdir(), wp2);
   mkdirSync(wp2Dir, { recursive: true });
-  const r = spawnSync("node", [join(process.cwd(), "bin", "write-handoff.mjs")], {
-    cwd: wp2Dir, input: "# handoff\nMANUAL_SKILL_BODY", encoding: "utf8", timeout: 30000,
+  // Hermetic HOME (#8263): the memory index the read-first floor appends is CREATED here, never
+  // borrowed from the operator's disk — a fixture may read a live artifact, never depend on one.
+  const home2 = join(tmpdir(), "manual-home-" + process.pid);
+  const memDir = join(home2, ".claude", "projects", wp2Dir.replaceAll("/", "-"), "memory");
+  mkdirSync(memDir, { recursive: true });
+  const memIdx = join(memDir, "MEMORY.md");
+  writeFileSync(memIdx, "# memory index fixture\n");
+  const hDir = join(home2, ".agent-bus", "handoffs");
+  mkdirSync(hDir, { recursive: true });
+  // A FRESH authored sibling is the exact #8263 hazard: the skill's write must LAND (and supersede),
+  // never silently defer to the older record.
+  const nowS = Math.floor(Date.now() / 1000);
+  const sibFile = join(hDir, `${wp2}-${nowS - 1}.json`);
+  writeFileSync(sibFile, JSON.stringify({ id: `${wp2}-${nowS - 1}`, project: wp2Dir, projectName: wp2, machine: "h", trigger: "manual-skill", stamp: nowS - 1, summary: "OLDER_AUTHORED_SIBLING", consumed: false }, null, 2));
+  const BIG = "# handoff\nMANUAL_SKILL_BODY\n\n" + "X".repeat(6000);   // past the 4KB injection budget
+  const r = spawnSync(process.execPath, [join(process.cwd(), "bin", "write-handoff.mjs")], {
+    cwd: wp2Dir, input: BIG, encoding: "utf8", timeout: 30000,
     // Explicit env, no process.env passthrough (#6074): a gate runner inside a herdr pane exports
     // HERDR_PANE_ID/TRANTOR_ORCH — the resolver reads that registration FIRST, so the record would
     // be named (and autonomy-keyed) after the RUNNER's project instead of this temp one.
     env: {
-      PATH: process.env.PATH, HOME: process.env.HOME, TMPDIR: process.env.TMPDIR,
+      PATH: process.env.PATH, HOME: home2, TMPDIR: process.env.TMPDIR,
       CLAUDE_PROJECT_DIR: wp2Dir, RELAY_URL: CLOSED, TRANTOR_NO_HANDOFF_SPAWN: "1", TRANTOR_NO_BATON_SPAWN: "1",
       HERDR_ENV: "", HERDR_PANE_ID: "", TRANTOR_ORCH: "",
       RELAY_PROJECT: "", TRANTOR_PROJECT: "", RELAY_SESSION: "", RELAY_AGENT: "",
     },
   });
-  ok("manual write-handoff exits 0", r.status === 0);
+  ok("manual write-handoff exits 0", r.status === 0, (r.stdout || "").slice(0, 120) + (r.stderr || "").slice(0, 120));
   const mf = /handoff saved: (\S+\.json)/.exec(r.stdout)?.[1];
   const mrec = (() => { try { return JSON.parse(readFileSync(mf, "utf8")); } catch { return null; } })();
-  ok("manual record opens the §5 ledger with WRITTEN (#5642)", mrec?.states?.length === 1 && mrec.states[0].state === "written" && mrec.states[0].by === "manual-skill");
-  ok("manual record carries the kimi-consumed interface (mode + transcript_path)", mrec?.mode === "attended" && mrec?.transcript_path === "");
+  ok("#8263: the authored write LANDS even with a fresh authored sibling — no silent defer", !!mf && mf !== sibFile && !!mrec);
+  ok("#8263: one writer — trigger manual-skill, mode attended, transcript_path \"\"",
+    mrec?.trigger === "manual-skill" && mrec?.mode === "attended" && mrec?.transcript_path === "");
+  ok("manual record opens the §5 ledger with WRITTEN (#5642)", mrec?.states?.length === 1 && mrec.states[0].state === "written" && mrec.states[0].by === "");
+  ok("#8263: verifyGates ride the manual record as structure (closed hub → [], never the field missing)", Array.isArray(mrec?.verifyGates));
+  ok("#8263: the sub-agent manifest field exists on the manual record", !!mrec && "subagents" in mrec);
+  ok("#8232 floor reaches the model-authored path: the memory index lands under READ FIRST",
+    (mrec?.summary || "").includes("## READ FIRST") && (mrec?.summary || "").includes(memIdx));
+  ok("#8222 holds on the manual path: the summary persists UNCAPPED — every X survives, no elision marker",
+    (mrec?.summary || "").startsWith(BIG.trim()) && (mrec?.summary || "").includes("X".repeat(6000)) && !(mrec?.summary || "").includes("[…]"));
+  ok("#8263: supersede runs — the fresh authored sibling is retired (one live handoff per project)",
+    JSON.parse(readFileSync(sibFile, "utf8")).consumed === true);
   if (mf) rmSync(mf, { force: true });
+  rmSync(sibFile, { force: true });
+  rmSync(home2, { recursive: true, force: true });
   rmSync(wp2Dir, { recursive: true, force: true });
 }
 

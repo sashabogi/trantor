@@ -71,7 +71,11 @@ comments; the incidents behind them live on the cards linked below.
   The summarizer is asked for a READ FIRST section naming the project's memory index, PRD and TDD
   by path, and a record whose summary names no read-first paths gets the memory index appended
   anyway (#8232) — the one reading order knowable without the model, so a lazy summary cannot
-  disarm the recap gate.
+  disarm the recap gate. There is ONE writer: the model-authored path (`/trantor:handoff`, a piped
+  heredoc, `--latest`) goes through the same writeHandoff — only the trigger, the empty
+  transcript_path and the resolved mode differ (#8263) — and an authored write supersedes a fresh
+  authored sibling rather than deferring to it: the defer protects a digest from replacing the
+  author's words, never newer authored words from landing.
 - Reader discipline (#5645): the injection is a pointer, budgeted at 4 KB (the ONLY place the summary
   is cut, #8222), with the verbatim tail stripped. The 4 KB is the budget the ELIDABLE sections must
   fit in, not a hard ceiling on the output: TASK / STATE / OPEN THREADS are never cut, so a handoff

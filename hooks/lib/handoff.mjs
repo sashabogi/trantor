@@ -649,11 +649,12 @@ export function writeHandoff({ projectDir, sessionId, transcript, trigger, summa
     else if (r.json && r.json.allow === false) return { skipped: true, reason: r.json.reason || "storm-guard", sinceSec: r.json.sinceSec };
   }
   if (!existsSync(HANDOFF_DIR)) mkdirSync(HANDOFF_DIR, { recursive: true });
-  // #5648: an automatic digest must never recompose+supersede a FRESH model-authored handoff.
-  // If one exists (<15min, unconsumed), point the baton at THAT and write nothing — the caller's
-  // spawn path proceeds on the authored handoff exactly as if it had just written it.
+  // #5648: an automatic digest must never recompose+supersede a FRESH model-authored handoff —
+  // if one exists (<15min, unconsumed), point the baton at THAT and write nothing, so the caller's
+  // spawn path proceeds on the authored handoff exactly as if it had just written it. #8263: the
+  // defer keys on the TRIGGER — manual-skill/manual-baton IS the model's newer words and must land.
   const fresh = freshAuthoredHandoff(projectName);
-  if (fresh) return { deferred: true, file: join(HANDOFF_DIR, `${fresh.id}.json`), record: fresh };
+  if (fresh && !MANUAL_TRIGGERS.includes(trigger)) return { deferred: true, file: join(HANDOFF_DIR, `${fresh.id}.json`), record: fresh };
   const stamp = nowSec() || Date.now();
   let gitStatus = "";
   try { gitStatus = execSync("git -C " + JSON.stringify(projectDir) + " status --short 2>/dev/null | head -30", { encoding: "utf8" }).trim(); } catch {}

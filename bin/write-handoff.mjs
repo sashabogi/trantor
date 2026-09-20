@@ -2,23 +2,18 @@
 // Save a model-authored handoff (piped on stdin) for this project; the next session auto-loads it.
 // With --baton: ALSO open a fresh self-announcing session and close THIS window once it takes over
 // (the one-command manual baton behind /trantor:handoff). Without it: just write the file (legacy).
-import { writeFileSync, readFileSync, existsSync, mkdirSync, readdirSync } from "node:fs";
-import { join, basename } from "node:path";
-import { homedir, hostname } from "node:os";
-import { execSync } from "node:child_process";
-import { spawnBaton, handoffMode, resolveHandoffSurface, attachState, resolveSeat, resolveHandoffCard } from "../hooks/lib/handoff.mjs";
+import { readFileSync, existsSync, mkdirSync, readdirSync } from "node:fs";
+import { join } from "node:path";
+import { writeHandoff, spawnBaton, resolveHandoffSurface } from "../hooks/lib/handoff.mjs";
 import { handoffDir } from "../lib/project.mjs";
 
 const baton = process.argv.includes("--baton");
-// --latest: pass the baton on a handoff ALREADY on disk. Without it the only route was "compose a
-// fresh one on stdin", so a session that had just written a 5KB handoff had to write it again to
-// hand it over — 2m28s of regenerated prose on a live scribe session, 2026-08-24.
+// --latest: pass the baton on a handoff ALREADY on disk — composing it again cost 2m28s of
+// regenerated prose on a live scribe session (drill: test/handoff/test-baton-latest.mjs).
 const latest = process.argv.includes("--latest");
 // #6074: ONE resolver for which project this is and where the session lives — shared with
-// bin/baton.mjs (the `trantor handoff` CLI path) so the two cannot diverge. The name comes from
-// the session's registration (TRANTOR_ORCH / RELAY_PROJECT / orch-sessions.txt) before the cwd;
-// the witnessed crebral-scribe/ios handoff recorded project "ios" from a subfolder cwd and never
-// found its pane.
+// bin/baton.mjs so the two cannot diverge. The name comes from the registration
+// (TRANTOR_ORCH / RELAY_PROJECT / orch-sessions.txt) before the cwd; a subfolder cwd never renames the project.
 const resolved = resolveHandoffSurface({ sessionId: process.env.CLAUDE_SESSION_ID || "" });
 const project = resolved.projectDir;
 const name = resolved.project;
@@ -37,8 +32,6 @@ if (!latest) {
 // directly, so an AGENT_BUS_DIR install wrote where nothing would look.
 const dir = handoffDir();
 if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
-const stamp = (() => { try { return execSync("date +%s", { encoding: "utf8" }).trim(); } catch { return String(process.pid); } })();
-let git = ""; try { git = execSync("git -C " + JSON.stringify(project) + " status --short 2>/dev/null | head -30", { encoding: "utf8" }).trim(); } catch {}
 // --latest short-circuits everything below: find this project's newest UNCONSUMED handoff and hand
 // that over, untouched.
 if (latest) {
@@ -59,18 +52,19 @@ if (latest) {
   process.exit(0);
 }
 
-// The manual skill path opens the §5 ledger with WRITTEN like every other writer (#5642), and
-// carries the same interface the hooks-side records have: transcript_path ("" — the summary IS
-// the model's own words), mode (attended|unattended, #5648).
-const rec = { id: `${name}-${stamp}`, project, projectName: name, machine: hostname(), trigger: baton ? "manual-baton" : "manual-skill", stamp: Number(stamp) || 0, summary: summary.trim() || "(empty)", transcript_path: "", mode: handoffMode(name), gitStatus: git, consumed: false, states: [{ state: "written", ts: Number(stamp) || 0, by: baton ? "manual-baton" : "manual-skill" }] };
-// The structured working state rides beside the prose (TDD §4.5), dark behind
-// TRANTOR_STATE_HANDOFF. The manual path gets it for the same reason the hook path does: this
-// record is what the successor loads, and `summary` here IS the model's own handoff — the richest
-// STATE block there is.
-const seat = resolveSeat(name);
-attachState(rec, { project: name, seat, card: resolveHandoffCard({ projectName: name, seat }), worktree: project });
-const file = join(dir, `${rec.id}.json`);
-writeFileSync(file, JSON.stringify(rec, null, 2));
+// ONE WRITER (#8263): every guarantee CONTRACT-hooks states for "a handoff record" — the read-first
+// floor, verifyGates, the sub-agent manifest, supersedeOlderHandoffs, uncapped persistence — lives
+// in writeHandoff; the literal record assembled here reached none of them. Only trigger,
+// transcript_path "" and force (the command IS the intent) differ.
+const { file } = writeHandoff({
+  projectDir: project,
+  projectName: name,
+  sessionId: "",
+  transcript: "",
+  trigger: baton ? "manual-baton" : "manual-skill",
+  summary: summary.trim(),
+  force: true,
+});
 console.log(`handoff saved: ${file}`);
 
 if (baton) {

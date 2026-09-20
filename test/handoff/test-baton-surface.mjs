@@ -1,18 +1,8 @@
 #!/usr/bin/env node
 // trantor — the baton resolves WHERE the session lives from its own env, and WHICH project from
-// its registration (#6074).
-//
-// Witnessed 2026-09-02 on crebral-scribe (hosted pane): the handoff skill ran with the shell cwd
-// in a SUBFOLDER (crebral-scribe/ios). The project name came from basename(cwd) = "ios", the pane
-// lookup found no "ios" row, and the baton fell to the window leg — whose front-Terminal-window
-// fallback picked a window the pane session never owned: a stray Terminal session opened, and a
-// close was armed against a stranger's window while the real pane session stayed alive believing
-// it had handed off. The fix, as one shared resolver (resolveHandoffSurface) + a first-checked
-// pane-env branch in spawnBaton:
-//   • HERDR_PANE_ID set  → the pane leg, keyed by THAT pane id; no window resolved/spawned/armed.
-//   • project name       → TRANTOR_ORCH / RELAY_PROJECT / orch-sessions.txt by session id, BEFORE
-//                          the cwd; a subfolder cwd never renames the project.
-//   • no pane env        → today's window behavior, byte for byte.
+// its registration (#6074, witnessed on crebral-scribe: a subfolder cwd renamed the project, a
+// stranger's window got armed for closing). Fix: resolveHandoffSurface + a first-checked pane-env
+// branch in spawnBaton; no pane env means today's window behavior, byte for byte.
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
@@ -29,9 +19,7 @@ console.log("# trantor baton surface drill (#6074)");
 
 // The drill runs under a crew runner, which exports TRANTOR_NO_*_SPAWN for its seats — correct in
 // production, fatal here: every spawnBaton branch would report "suppressed" and nothing would be
-// exercised. Clear the process copies; per-call suppression is injected through the _env seam
-// (which spawnBaton also honors). The bus dir is pointed at the drill's own before the lib is
-// imported, so orch-sessions lookups read the drill's rows, not the operator's.
+// exercised. Clear them; the bus dir is pointed at the drill's own before the lib is imported.
 const w = mkdtempSync(join(tmpdir(), "tt-surface-"));
 const BUS = join(w, ".agent-bus");
 delete process.env.TRANTOR_NO_HANDOFF_SPAWN;
@@ -146,11 +134,9 @@ console.log("\nNo pane env: today's window behavior, unchanged:");
 }
 
 // ── 4. the guards on the OTHER window paths (maybeSpawn / spawnFresh) ───────
-// spawnFresh spawns a REAL window when its guard is missing and has no injection points, so its
-// guard is asserted from source. maybeSpawn no longer needs that: #8089 gave it the same seams
-// spawnBaton has, so it is exercised for real below — and the source-grep it used to rely on was
-// itself the thing that let #8089 through. A grep proves a symbol is MENTIONED, never that the
-// branch does the right thing; this one passed for weeks while the pane branch opened no successor.
+// spawnFresh has no injection points, so its guard is asserted from source; maybeSpawn (#8089 gave
+// it the same seams spawnBaton has) is exercised for real below — a source-grep proves a symbol is
+// MENTIONED, never that the branch does the right thing, and that gap hid #8089 for weeks.
 console.log("\nThe direct window callers carry the pane-env guard:");
 {
   const src = readFileSync(join(ROOT, "hooks", "lib", "handoff.mjs"), "utf8");
@@ -183,19 +169,21 @@ function run(cli, args, { cwdDir, env = {}, stdin = "", stdio } = {}) {
   // a herdr pane and export exactly the identity this drill varies (HERDR_PANE_ID, TRANTOR_ORCH,
   // RELAY_PROJECT). Every var the CLIs read is set or blanked here; each case overrides
   // deliberately through `env`. Only the mechanical vars (PATH, TMPDIR) are inherited.
-  const r = spawnSync(process.execPath, [join(ROOT, "bin", cli), ...args], {
+  const opts = {
     input: stdin, encoding: "utf8", timeout: 20000, cwd: cwdDir,
     env: {
       PATH: process.env.PATH || "/usr/bin:/bin:/usr/sbin:/sbin",
       HOME: w, TMPDIR: process.env.TMPDIR || "/tmp",
       AGENT_BUS_DIR: BUS, RELAY_DATA_DIR: BUS, CLAUDE_PROJECT_DIR: cwdDir,
       TRANTOR_NO_SCROOGE: "1",
+      RELAY_URL: "http://127.0.0.1:1",   // #8263: the one writer now asks the hub (card lookup, verify gates) — never the operator's live one
       HERDR_ENV: "", HERDR_PANE_ID: "", TRANTOR_ORCH: "",
       RELAY_PROJECT: "", TRANTOR_PROJECT: "", RELAY_SESSION: "", RELAY_AGENT: "",
       ...env,
     },
-    ...(stdio ? { stdio } : {}),
-  });
+  };
+  if (stdio) opts.stdio = stdio;
+  const r = spawnSync(process.execPath, [join(ROOT, "bin", cli), ...args], opts);
   return { out: (r.stdout || "") + (r.stderr || ""), status: r.status };
 }
 const decoy = "ios-9999999999", real = "crebral-scribe-7777777777";
@@ -219,6 +207,9 @@ seed(decoy); seed(real);
   ok("an authored handoff is written under the REGISTERED name", r.status === 0 && written.length === 1 && written[0].startsWith("crebral-scribe-"), `exit ${r.status}: ${r.out.slice(0, 160)} wrote ${written}`);
   const rec = JSON.parse(readFileSync(join(BUS, "handoffs", written[0]), "utf8"));
   ok("the record's projectName is the registered one, the dir stays honest", rec.projectName === "crebral-scribe" && rec.project === subDir, JSON.stringify({ projectName: rec.projectName, project: rec.project }));
+  ok("#8263: the authored write superseded the stale sibling (supersedeOlderHandoffs reaches the manual path)",
+     JSON.parse(readFileSync(join(BUS, "handoffs", `${real}.json`), "utf8")).consumed === true, r.out.slice(0, 200));
+  seed(real);   // re-arm the --latest case below: it batons on the seeded stamp, not on the fresh write
 }
 {
   const before = handoffs().length;
