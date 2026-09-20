@@ -340,7 +340,7 @@ export function buildSummary(transcriptPath) {
   let convo = "";
   try { convo = digest(collectTurns(transcriptPath)); } catch { convo = ""; }
   if (!convo) return "*(transcript unreadable)*";
-  const sys = "You are writing a SESSION HANDOFF so a fresh Claude Code session can take over without losing context. The text spans an entire (possibly multi-hour) session: opening turns, an even sample of the middle, and the recent tail. Produce a concise but COMPLETE markdown handoff with these sections: TASK (what we're doing + the goal), STATE (done / in-progress), KEY DECISIONS, OPEN THREADS & NEXT STEPS (concrete actions), KEY FILES & locations (exact paths). Be specific. Cover the whole arc, not just the end. The finished handoff must fit ~3500 characters — anything longer is capped with an elision marker and the elided middle (usually STATE) is exactly what the successor needed (#6528), so compress the arc, never drop a section. Do not pad.";
+  const sys = "You are writing a SESSION HANDOFF so a fresh Claude Code session can take over without losing context. The text spans an entire (possibly multi-hour) session: opening turns, an even sample of the middle, and the recent tail. Produce a concise but COMPLETE markdown handoff with these sections: TASK (what we're doing + the goal), STATE (done / in-progress), READ FIRST (the files a successor must open before acting — name the project's memory index and, where it has them, its PRD and its TDD, by exact path), KEY DECISIONS, OPEN THREADS & NEXT STEPS (concrete actions), KEY FILES & locations (exact paths). Be specific. Cover the whole arc, not just the end. The finished handoff must fit ~3500 characters — anything longer is capped with an elision marker and the elided middle (usually STATE) is exactly what the successor needed (#6528), so compress the arc, never drop a section. Do not pad.";
   // Cut the raw tail on a TURN boundary: a blind slice opens mid-sentence, and a successor cannot
   // tell a truncated thought from a complete one.
   const tail = (n) => {
@@ -387,7 +387,7 @@ export function verbatimRecentTail(transcript, chars = 7000) {
 // (sessionstart.mjs). Section-aware: every handoff shares the five-section shape, so a head+tail
 // cut elides the middle — TASK / STATE / OPEN THREADS survive in full, KEY DECISIONS / KEY FILES elide.
 const IS_SECTION_HEADER = /^\s*#{1,6}\s+\S/;
-const MUST_KEEP_SECTION = /^\s*#{1,6}\s*(task|state|open threads|next steps)\b/i;
+const MUST_KEEP_SECTION = /^\s*#{1,6}\s*(task|state|open threads|next steps|read[\s-]?first)\b/i;
 
 // `cap` bounds the ELIDABLE sections, not the return value: must-keeps are never cut (#8222).
 export function capSummary(text, cap = 4096) {
@@ -661,7 +661,15 @@ export function writeHandoff({ projectDir, sessionId, transcript, trigger, summa
   // DESTROYS the work order rather than hiding it (trantor-1789869270 lost its numbered OPEN
   // THREADS this way). The ~4KB budget is enforced at injection (sessionstart.mjs); the verbatim
   // tail is not embedded — transcript_path points at the full exchange (#5648).
-  const narrative = summary ?? buildSummary(transcript);
+  let narrative = summary ?? buildSummary(transcript);
+  // #8232 floor: readFirstPaths short-circuits on an empty list, so a summary naming no read-first
+  // paths disarms the #8162 gate — every check downstream passes vacuously, and the summarizer
+  // produced exactly that before #8232 asked it for the section. The memory index is knowable
+  // without the model; PRD and TDD stay the summarizer's to find (only it knows they exist).
+  if (!readFirstPaths(narrative).length) {
+    const mem = memoryIndexPath(projectDir);
+    if (mem) narrative += `\n\n## READ FIRST\n${mem}`;
+  }
   // Sub-agent manifest SNAPSHOT (fallback). The successor should re-derive it LIVE via
   // `trantor agents <sid>` (catches files an agent finished that were clobbered AFTER this
   // snapshot — the kill that motivated this corrupted a completed 30KB lib post-handoff). This
@@ -818,6 +826,17 @@ export function maybeSpawn(projectDir, conf = readConfig(), handoffFile = "", de
     if (child?.unref) child.unref();
     return true;
   } catch (e) { process.stderr.write(`[trantor] maybeSpawn error: ${e?.message}\n`); return false; }
+}
+
+/** #8232: the one read-first path knowable WITHOUT the model — the project's own memory index, at
+ *  the encoded-cwd location Claude Code keeps it (the same resolver bin/reconcile.mjs reads).
+ *  "" when the project has none: naming a file that does not exist would arm a gate no successor
+ *  could ever satisfy, and the stamp would nag at every Stop forever. */
+export function memoryIndexPath(projectDir) {
+  try {
+    const p = join(homedir(), ".claude", "projects", String(projectDir || "").replaceAll("/", "-"), "memory", "MEMORY.md");
+    return existsSync(p) ? p : "";
+  } catch { return ""; }
 }
 
 /** The files a handoff tells its successor to READ FIRST (#8162) as DATA, so something downstream

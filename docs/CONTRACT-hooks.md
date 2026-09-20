@@ -68,6 +68,10 @@ comments; the incidents behind them live on the cards linked below.
   section-aware cut runs at render time; TASK / STATE / OPEN THREADS always survive it, KEY
   DECISIONS / KEY FILES are the elidable ones). The structured `state` field (TDD §4.5) is validated
   and never capped. A fresh model-authored handoff is never superseded by an automatic digest.
+  The summarizer is asked for a READ FIRST section naming the project's memory index, PRD and TDD
+  by path, and a record whose summary names no read-first paths gets the memory index appended
+  anyway (#8232) — the one reading order knowable without the model, so a lazy summary cannot
+  disarm the recap gate.
 - Reader discipline (#5645): the injection is a pointer, budgeted at 4 KB (the ONLY place the summary
   is cut, #8222), with the verbatim tail stripped. The 4 KB is the budget the ELIDABLE sections must
   fit in, not a hard ceiling on the output: TASK / STATE / OPEN THREADS are never cut, so a handoff

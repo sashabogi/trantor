@@ -1,24 +1,13 @@
 #!/usr/bin/env node
-// A handoff's READ-FIRST list is checked, not merely stated (#8162).
-//
-// The operator, three days running: "the agent after the handoff just starts working, wastes about
-// 20% of the context, and does not read the memory or the handoff completely at all."
-//
-// It was not disobedience. Neither kickoff prompt asked the successor to read anything — both asked
-// it to RECAP — and the handoff summary is injected at SessionStart, so a competent 3-sentence recap
-// is producible without opening a single file. The successor satisfied its instruction completely.
-// Then the ledger certified it: RECAPPED was stamped because "by Stop time an assistant reply
-// exists". A reply is the proxy; comprehension is the thing; we checked the proxy.
-//
-// crebral-health's own account, unprompted: "I have not read PRD.md at all ... I have not read the
-// three memory files the handoff explicitly labelled read first ... I went straight to code."
-//
-// So the list is data now, and the evidence is a tool call — the same rule the state gate arrived at
-// the hard way: ground truth, not testimony. A successor saying it read the handoff is not evidence.
-import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
+// A handoff's READ-FIRST list is checked, not merely stated (#8162): a recap is producible from the
+// injected summary alone, so a reply was never evidence a successor opened anything. The list is
+// data and the evidence is a tool call — ground truth, not testimony. #8232: a lazy summary must
+// not be able to disarm the gate either.
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, chmodSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
+import { homedir } from "node:os";
 import { join } from "node:path";
-import { readFirstPaths, pathsReadIn } from "../../hooks/lib/handoff.mjs";
+import { readFirstPaths, pathsReadIn, writeHandoff, memoryIndexPath, capSummary } from "../../hooks/lib/handoff.mjs";
 
 let pass = 0, fail = 0;
 const ok = (name, cond, detail = "") => {
@@ -97,6 +86,82 @@ console.log("\nthe evidence is a TOOL CALL, never the successor's say-so");
   ok("an unreadable transcript fails CLOSED — all missed, never all read", gone.missed.length === 3 && gone.read.length === 0, JSON.stringify(gone));
 
   ok("an empty want-list is satisfied trivially", pathsReadIn(none, []).missed.length === 0);
+}
+
+console.log("\nthe gate cannot be disarmed by a lazy summary (#8232)");
+{
+  // #8232: the summarizer was asked for five sections, none of them READ FIRST, so every machine
+  // handoff produced an empty want-list and the gate passed vacuously. A fake scrooge captures the
+  // system prompt buildSummary actually sends, then replies with a canned summary in exactly the old
+  // five-section shape — the lazy output the floor has to catch.
+  const VARS = ["RELAY_URL", "TRANTOR_SCROOGE_BIN", "TRANTOR_NO_SCROOGE", "TRANTOR_STATE_HANDOFF", "RELAY_PROJECT", "RELAY_AGENT", "RELAY_SESSION", "HERDR_PANE_ID", "TRANTOR_ORCH"];
+  const saved = Object.fromEntries(VARS.map(k => [k, process.env[k]]));
+  let projDir = "", memRoot = "";
+  try {
+    for (const k of VARS) delete process.env[k];
+    process.env.RELAY_URL = "http://127.0.0.1:1";   // storm guard: dead port → fail-open, offline
+
+    projDir = mkdtempSync(join(tmpdir(), "recap-proj-"));
+    memRoot = join(homedir(), ".claude", "projects", projDir.replaceAll("/", "-"));
+    const memIndex = join(memRoot, "memory", "MEMORY.md");
+    mkdirSync(join(memRoot, "memory"), { recursive: true });
+    writeFileSync(memIndex, "# index — the durable record lives here\n");
+    ok("memoryIndexPath resolves the project's index at the encoded-cwd location", memoryIndexPath(projDir) === memIndex, memoryIndexPath(projDir));
+    ok("memoryIndexPath is empty for a project that has none", memoryIndexPath(join(tmpdir(), "recap-no-such-proj")) === "");
+
+    const argsFile = join(dir, "scrooge-args.txt");
+    const canned = "# HANDOFF — Lazy Machine\n\n## TASK\nShip the thing.\n\n## STATE\nHalf shipped.\n\n## KEY DECISIONS\nUse the simple shape.\n\n## OPEN THREADS & NEXT STEPS\n1. Finish shipping.\n\n## KEY FILES & locations\n- src/thing.mjs\n";
+    const cannedFile = join(dir, "scrooge-canned.txt");
+    writeFileSync(cannedFile, canned);
+    const fake = join(dir, "fake-scrooge.sh");
+    writeFileSync(fake, "#!/bin/sh\nprintf '%s\\n' \"$@\" > " + JSON.stringify(argsFile) + "\ncat > /dev/null\ncat " + JSON.stringify(cannedFile) + "\n");
+    chmodSync(fake, 0o755);
+    process.env.TRANTOR_SCROOGE_BIN = fake;
+
+    // A successor that DID something (Bash) but read nothing — tool_use for pathsReadIn, a text
+    // turn so collectTurns has something to digest and buildSummary reaches the summarizer.
+    const t = transcript([{ name: "Bash", input: { command: "git status" } }]);
+    writeFileSync(t, readFileSync(t, "utf8") + "\n" + JSON.stringify({ type: "assistant", message: { role: "assistant", content: [{ type: "text", text: "Taking over the takeover work." }] } }));
+    const { record, file } = writeHandoff({ projectDir: projDir, sessionId: "rf-floor", transcript: t, trigger: "context-warn" });
+
+    const asked = readFileSync(argsFile, "utf8");
+    ok("the summarizer was ASKED for a READ FIRST section", /--system/.test(asked) && /READ FIRST/.test(asked), asked.slice(0, 160));
+    ok("…and for the memory index, PRD and TDD by path", /memory index/.test(asked) && /PRD/.test(asked) && /TDD/.test(asked) && /path/.test(asked));
+
+    ok("the lazy five-section summary is persisted, not discarded", record.summary.startsWith("# HANDOFF — Lazy Machine"));
+    ok("…and the floor appended the memory index under READ FIRST", record.summary.includes("## READ FIRST") && record.summary.includes(memIndex));
+    const want = readFirstPaths(record.summary);
+    ok("the machine-written record yields a NON-EMPTY want-list", want.length === 1 && want[0] === memIndex, JSON.stringify(want));
+    const rf = pathsReadIn(t, want);
+    ok("a successor who opened none of it is reported as having missed it", rf.missed.length === 1 && rf.missed[0] === memIndex && rf.read.length === 0, JSON.stringify(rf));
+    rmSync(file, { force: true });   // never leak into the live handoffs dir
+
+    // A compliant summary is left alone: the floor must not double-append or conscript extras.
+    const rec2 = writeHandoff({ projectDir: projDir, sessionId: "rf-ok", transcript: t, trigger: "context-warn", summary: SUMMARY });
+    const want2 = readFirstPaths(rec2.record.summary);
+    ok("a summary that already names read-first paths gets no floor appended",
+      want2.length === 3 && !want2.includes(memIndex), JSON.stringify(want2));
+    rmSync(rec2.file, { force: true });
+  } finally {
+    for (const [k, v] of Object.entries(saved)) { if (v === undefined) delete process.env[k]; else process.env[k] = v; }
+    if (projDir) rmSync(projDir, { recursive: true, force: true });
+    if (memRoot) rmSync(memRoot, { recursive: true, force: true });
+  }
+}
+
+// The gate and the render must agree on the list. A summary whose must-keeps are heavy pushes the
+// elidables out at 4KB, and READ FIRST was one of them: the ledger then demanded files the successor
+// was never shown, which is worse than no gate at all (#8232 follow-up on #8222's section-aware cut).
+{
+  const big = (n) => "x".repeat(n);
+  const heavy = ["# HANDOFF", `## TASK\n${big(2200)}`, `## STATE\n${big(2200)}`,
+    "## READ FIRST\n- ~/.claude/projects/p/memory/MEMORY.md\n- docs/PRD.md",
+    "## OPEN THREADS & NEXT STEPS\n1. first thread\n2. second thread",
+    `## KEY FILES\n${big(500)}`].join("\n\n");
+  const demanded = readFirstPaths(heavy);
+  const shown = readFirstPaths(capSummary(heavy, 4096));
+  ok("#8232: the render cannot drop the READ FIRST list the gate checks", shown.length === demanded.length && demanded.length === 2, JSON.stringify({ demanded, shown }));
+  ok("#8232: …and the work order still survives beside it", capSummary(heavy, 4096).includes("1. first thread"));
 }
 
 rmSync(dir, { recursive: true, force: true });
