@@ -1,9 +1,8 @@
 #!/usr/bin/env node
 // #7749 drill: the live turn-state file across a turn's whole life. Part A runs the PRODUCTION
 // runTurn (vm-extracted, like test-turn-box) against a fake CLI — the CLI reads its own file
-// mid-turn (phase working), a stall-marker cut leaves it "stalled", a clean landing leaves it
-// "idle". Part B spawns the REAL turn-watchdog against a seeded file: new stderr bytes and
-// transcript writes move lastBytesAt/lastTranscriptAt while the phase stays the runner's to write.
+// mid-turn (working), a stall-marker cut leaves "stalled", a clean landing "idle". Part B spawns
+// the REAL turn-watchdog against a seeded file: liveness timestamps rise, phase stays the runner's.
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
 import * as fs from "node:fs";

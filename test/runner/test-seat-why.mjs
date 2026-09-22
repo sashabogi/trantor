@@ -128,10 +128,9 @@ console.log("\nNever-run seat:");
 }
 
 // ---- #6134: what the seat SPENT today ---------------------------------------------------------
-// The number the operator actually needs when the bill jumps 10x: turns, minutes and tokens for
-// this seat since midnight. Turns from the runner's telemetry; tokens only from the turns whose
-// CLI printed a usage line, and the count of those is reported so a partial total never reads as
-// the whole truth.
+// Turns, minutes and tokens for this seat since midnight — the number the operator needs when the
+// bill jumps. Tokens come only from turns whose CLI printed a usage line; the count of those is
+// reported so a partial total never reads as the whole truth.
 console.log("\nToday's spend (#6134):");
 {
   const t = (ts, extra = {}) => ({ ts, turn: 1, duration_ms: 60000, exit: 0, ...extra });
