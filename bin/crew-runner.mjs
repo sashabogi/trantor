@@ -23,6 +23,7 @@ import {
   senderProjectOf, isLinkedProject, stateSkipReason, isMessageCardTitle, OPEN_CARD_STATUSES,
   CUT_CHAIN_PARK_MIN, cutChainEvidence, isBoundedPark,
 } from "../lib/turn-policy.mjs";
+import { ocTurnUsage, usageTotal } from "../lib/turn-usage.mjs";
 import {
   auditDutyNudges, claimDutyNudges, claudeTranscriptDir, dutyEscalations, dutyNudgeDirective,
   observedDutyNudgeIds, requeueMissingWakeMessages, shedExpiredHubAlerts,
@@ -940,6 +941,11 @@ exit $turn_exit`;
     // actually carried counts.
     if (c) tokens = c.input + c.output + c.cache_read + c.cache_creation;
   }
+  // #8234: the CLIs that print no usage on stdout keep the counts in their own session records —
+  // opencode's db, the session resolved for this turn exactly like the `-s` resume id. Sum this
+  // turn's window there; null (unknown) leaves the stdout paths above standing — never 0 ("free").
+  const usage = cli.pinned && sid ? ocTurnUsage(OC_DB, sid, t0, Date.now()) : null;
+  if (usage) tokens = usageTotal(usage);
   // #6289: every ledger row names in ONE field what happened to the turn — cut, stalled (#7752),
   // api-error, completed — and what it cost (0 means "not reported", never "free"). #7762: `card`
   // binds the row to the card the turn worked (0 = kickoff/pulse) so the seat record attributes
@@ -952,6 +958,7 @@ exit $turn_exit`;
     try { finalOutcome = (await opts.judgeOutcome()) || outcome; } catch {}
   }
   const telemetryRow = { ts: Date.now(), agent: AGENT, project: PROJ, turn: TURN, trigger, card: sessionCard || 0, model: MODEL || "cli-default", duration_ms: Date.now() - t0, exit: realExit, effExit, authFailed: effExit !== realExit, emptyOutput: lastEmptyOutput, emptyTurn: lastEmptyTurn, verdict, outcome: finalOutcome, tokens };
+  if (usage) telemetryRow.usage = usage;
   if (cut) telemetryRow.cut = true;
   if (stallCut) telemetryRow.stalled = true;
   if (extensions) { telemetryRow.extensions = extensions; telemetryRow.boxMs = boxMs; }
@@ -1055,24 +1062,10 @@ async function loadLessons() {
 // #5683: every prompt section is capped (bin/crew-payload.mjs) and the payload has ONE hard total
 // cap; below the caps the composition is byte-identical to the old concatenation.
 function composedTurn({ base = "", wakeText = "", ctxText = "", againText = "", tailText = "", rulesText = "", lessons = null }) {
-  // STABLE FIRST, VOLATILE LAST — this order is a COST decision, not a stylistic one (#8199).
-  // Every provider we send this to caches on an exact prefix match from token 0: DeepSeek's docs say
-  // "only requests with identical prefixes (starting from the 0th token) will be considered
-  // duplicates, and partial matches in the middle of the input will not trigger a cache hit", and a
-  // hit bills at roughly a tenth of a miss. This array used to open with `base` and then the
-  // per-turn WAKE, with the big unchanging blocks (RULES, lessons) buried at the end. On an ordinary
-  // turn `base` is empty — the sha rides inside `again` — so token 0 was the wake text itself, which
-  // is different every turn by definition. No cache could ever hit, and ~4,800 tokens of identical preamble were re-bought at full rate per turn,
-  // on every foreign-CLI seat: dsh, codex, kimi and every opencode/BYOM seat. The state path had
-  // known this for weeks — lib/state/assemble.mjs: "the bytes before STATE_DELIM are the caller's
-  // preamble and NOTHING else, or prefix caching never engages" — and it was never carried across.
-  //
-  // Reading order improves with it rather than suffering: rules and lessons are the standing brief,
-  // then context and history, and the ASK lands last, which is what #7063 found a work order wants.
-  //
-  // The `order` field is UNRELATED to this and deliberately unchanged: it ranks what gets trimmed
-  // when the payload busts its total cap, and wake is trimmed last there because losing the
-  // instruction is worse than losing the cache on that one turn.
+  // STABLE FIRST, VOLATILE LAST — a COST decision, not style (#8199): providers cache on an exact
+  // prefix from token 0, and the old order opened with the per-turn wake, so no cache could ever
+  // hit and ~4,800 identical preamble tokens re-bought at full rate per turn on every seat. The
+  // `order` field is the unrelated trim ranking under the total cap (#5683).
   const built = composePrompt([
     { name: "rules", text: rulesText, trim: "drop", order: 3 },
     { name: "lessons", text: lessons?.text || "", trim: "drop", order: 2 },
