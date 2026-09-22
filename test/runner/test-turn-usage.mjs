@@ -1,11 +1,11 @@
 #!/usr/bin/env node
 // trantor turn-usage drill — hermetic. Fixture sqlite db in a temp dir, real lib logic; the real
 // ~/.local/share/opencode db is never opened. Runs under `node test/run.mjs --only runner`.
-import { mkdtempSync, writeFileSync, existsSync } from "node:fs";
+import { mkdtempSync, writeFileSync, existsSync, mkdirSync, utimesSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { spawnSync } from "node:child_process";
-import { sumOcRows, ocTurnUsage, usageTotal } from "../../lib/turn-usage.mjs";
+import { sumOcRows, ocTurnUsage, dshUsageFromEvent, sumDshLog, dshSessionDirName, dshTurnUsage, usageTotal } from "../../lib/turn-usage.mjs";
 
 let pass = 0, fail = 0;
 const ok = (name, cond, extra) => { console.log(`  ${cond ? "PASS" : "FAIL"}  ${name}${cond || !extra ? "" : `\n          ${extra}`}`); cond ? pass++ : fail++; };
@@ -77,6 +77,69 @@ console.log("\nReal-spawn smoke over the fixture (the ocSid mechanics, unmocked)
   ok("real sqlite3 CLI path sums correctly",
     JSON.stringify(u) === JSON.stringify({ input: 5, output: 6, cacheRead: 7, cacheWrite: 8 }), JSON.stringify(u));
   ok("fixture file was actually created", existsSync(db));
+}
+
+console.log("\ndsh event parser and log sum:");
+{
+  const chunk = { type: "assistant/chunk", time: 500, data: { turn: 1, step: 1, chunk: { type: "usage", usage: { inputTokens: 10, outputTokens: 20, cacheReadTokens: 300 } } } };
+  const msg = { type: "assistant/message", time: 500, data: { turn: 1, step: 1, usage: { inputTokens: 10, outputTokens: 20, cacheReadTokens: 300 } } };
+  ok("assistant/message carries usage", JSON.stringify(dshUsageFromEvent(msg)) === JSON.stringify({ input: 10, output: 20, cacheRead: 300, cacheWrite: 0 }));
+  ok("assistant/chunk carries NONE (its double-count twin)", dshUsageFromEvent(chunk) === null);
+  ok("non-usage events carry none", dshUsageFromEvent({ type: "session", data: {} }) === null);
+  const log = [
+    JSON.stringify({ type: "session", id: "session-x", time: 100 }),
+    JSON.stringify(chunk),
+    JSON.stringify(msg),
+    JSON.stringify({ type: "assistant/message", time: 9000, data: { usage: { inputTokens: 1, outputTokens: 2, cacheReadTokens: 3, cacheWriteTokens: 4 } } }),
+    "{ broken json",
+    JSON.stringify({ type: "assistant/message", time: 99000, data: { usage: { inputTokens: 555 } } }),
+    "",
+  ].join("\n");
+  const s = sumDshLog(log, 0, 10_000);
+  ok("window filters the far-future step; chunk copy not double-counted; junk skipped",
+    JSON.stringify(s) === JSON.stringify({ input: 11, output: 22, cacheRead: 303, cacheWrite: 4 }), JSON.stringify(s));
+  ok("no events in window = null", sumDshLog(log, 50_000, 60_000) === null);
+  ok("empty log = null", sumDshLog("", 0, 10_000) === null);
+  ok("dir name encodes cwd with / -> -, wrapped with dashes", dshSessionDirName("/Users/x/.agent-bus/wt/dsh") === "--Users-x-.agent-bus-wt-dsh--");
+}
+
+console.log("\ndsh reader over a fixture zstd session log:");
+{
+  const root = mkdtempSync(join(tmpdir(), `tt-usage-dsh-${n++}-`));
+  const cwd = "/tmp/tt-seat/dsh";
+  const dir = join(root, dshSessionDirName(cwd));
+  const T = 1_700_000_000_000;
+  const mkSession = (name, events) => {
+    const sd = join(dir, name); // mkdirSync recursive returns the FIRST dir created, not the leaf
+    mkdirSync(sd, { recursive: true });
+    const plain = join(sd, "session.jsonl");
+    writeFileSync(plain, events.map((e) => JSON.stringify(e)).join("\n") + "\n");
+    const zst = join(sd, "session.jsonl.zstd");
+    const z = spawnSync("zstd", ["-q", "-f", "-o", zst, plain], { encoding: "utf8" });
+    if (z.status !== 0) throw new Error(`fixture zstd failed: ${z.stderr}`);
+    return zst;
+  };
+  const step = (t, i, o, cr, cw) => ({ type: "assistant/message", time: T + t, data: { usage: { inputTokens: i, outputTokens: o, cacheReadTokens: cr, cacheWriteTokens: cw } } });
+  mkSession("session-fix1", [
+    { type: "session", time: T },
+    { type: "assistant/chunk", time: T + 100, data: { chunk: { type: "usage", usage: { inputTokens: 10, outputTokens: 20, cacheReadTokens: 300 } } } },
+    step(100, 10, 20, 300, 0),
+    step(200, 1, 2, 3, 4),
+    step(90_000, 777, 777, 777, 777),
+  ]);
+  const u = dshTurnUsage(root, cwd, T, T + 10_000);
+  ok("sums in-window steps from the real zstd decode",
+    JSON.stringify(u) === JSON.stringify({ input: 11, output: 22, cacheRead: 303, cacheWrite: 4 }), JSON.stringify(u));
+  ok("unknown cwd = null", dshTurnUsage(root, "/tmp/never-was/dsh", T, T + 10_000) === null);
+  ok("empty window = null", dshTurnUsage(root, cwd, T + 500_000, T + 600_000) === null);
+  ok("non-finite window = null", dshTurnUsage(root, cwd, NaN, T) === null);
+  ok("decoder failure = null", dshTurnUsage(root, cwd, T, T + 10_000, () => ({ status: 1, stderr: "boom" })) === null);
+  // a log whose last write predates the window can hold no in-window event; the reader must skip it
+  const old = mkSession("session-old", [step(-60_000, 5, 5, 5, 5)]);
+  utimesSync(old, new Date(T - 120_000), new Date(T - 120_000));
+  const u2 = dshTurnUsage(root, cwd, T, T + 10_000);
+  ok("stale-mtime log skipped, live log still summed",
+    JSON.stringify(u2) === JSON.stringify({ input: 11, output: 22, cacheRead: 303, cacheWrite: 4 }), JSON.stringify(u2));
 }
 
 console.log(`\n${pass} pass, ${fail} fail`);

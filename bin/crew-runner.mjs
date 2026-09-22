@@ -23,7 +23,7 @@ import {
   senderProjectOf, isLinkedProject, stateSkipReason, isMessageCardTitle, OPEN_CARD_STATUSES,
   CUT_CHAIN_PARK_MIN, cutChainEvidence, isBoundedPark,
 } from "../lib/turn-policy.mjs";
-import { ocTurnUsage, usageTotal } from "../lib/turn-usage.mjs";
+import { ocTurnUsage, dshTurnUsage, usageTotal } from "../lib/turn-usage.mjs";
 import {
   auditDutyNudges, claimDutyNudges, claudeTranscriptDir, dutyEscalations, dutyNudgeDirective,
   observedDutyNudgeIds, requeueMissingWakeMessages, shedExpiredHubAlerts,
@@ -944,7 +944,9 @@ exit $turn_exit`;
   // #8234: the CLIs that print no usage on stdout keep the counts in their own session records —
   // opencode's db, the session resolved for this turn exactly like the `-s` resume id. Sum this
   // turn's window there; null (unknown) leaves the stdout paths above standing — never 0 ("free").
-  const usage = cli.pinned && sid ? ocTurnUsage(OC_DB, sid, t0, Date.now()) : null;
+  const usage = cli.pinned && sid ? ocTurnUsage(OC_DB, sid, t0, Date.now())
+    : AGENT === "dsh" ? dshTurnUsage(join(homedir(), ".dsh", "sessions"), TURN_DIR, t0, Date.now())
+    : null;
   if (usage) tokens = usageTotal(usage);
   // #6289: every ledger row names in ONE field what happened to the turn — cut, stalled (#7752),
   // api-error, completed — and what it cost (0 means "not reported", never "free"). #7762: `card`
