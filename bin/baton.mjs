@@ -3,12 +3,12 @@
 // a whole-session handoff (auto-summary + verbatim in-flight tail), opens a fresh self-announcing
 // session, and closes THIS window once it takes over. Run from inside the session you want to hand
 // off. (The richer MODEL-authored handoff is the /trantor:handoff skill.)
-import { readdirSync, statSync, fstatSync } from "node:fs";
+import { readdirSync, statSync } from "node:fs";
 import { join, basename, dirname } from "node:path";
 import { homedir } from "node:os";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { writeHandoff, spawnBaton, resolveHandoffSurface, armBaton, contextUsage, controllingTty, turnInFlight, armMaxMs, sessionProcessState } from "../hooks/lib/handoff.mjs";
+import { writeHandoff, spawnBaton, resolveHandoffSurface, armBaton, contextUsage, controllingTty, turnInFlight, armMaxMs, sessionProcessState, stdinCarriesMarkdown } from "../hooks/lib/handoff.mjs";
 
 // #6074: the skill path (write-handoff.mjs) and this CLI path must share ONE resolution of which
 // project this is and where the session lives. Both call resolveHandoffSurface; the name comes
@@ -22,18 +22,11 @@ const project = resolved.project;
 // cwd that cd'd somewhere else: a handoff record must carry the transcript it was written from.
 const sessionDir = resolved.projectDir;
 
-// Model-authored handoffs ride THIS binary too (`trantor handoff` — always the global install's
-// CURRENT code, never the plugin-cache copy a session booted with, the stale-0.18.20 bug). A piped
-// stdin (a heredoc, a cat, `<<HANDOFF`) means "here is the handoff markdown" — exactly the skill's
-// contract — so forward to write-handoff.mjs in the SAME package (same version, same resolution)
-// and exit with its status. --latest forwards too. A true pipe is a FIFO; a TTY and /dev/null are
-// character devices, so a plain `trantor handoff` typed at a prompt (or run by a hook with stdin
-// at /dev/null) keeps the auto-summary behavior. Detection must NOT be `!process.stdin.isTTY` —
-// that misreads /dev/null as a handoff and errors where auto-summary used to work.
-function stdinIsPipe() {
-  try { return fstatSync(0).isFIFO(); } catch { return false; }
-}
-if (stdinIsPipe() || process.argv.includes("--latest")) {
+// Model-authored handoffs ride THIS binary too — always the global install's CURRENT code, never
+// the plugin-cache copy a session booted with (the stale-0.18.20 bug). Markdown on stdin means
+// "here is the handoff", so forward to write-handoff.mjs in the SAME package; --latest forwards too.
+// What counts as markdown, and why /dev/null must not: stdinCarriesMarkdown in hooks/lib (#8459).
+if (stdinCarriesMarkdown() || process.argv.includes("--latest")) {
   const helper = join(dirname(fileURLToPath(import.meta.url)), "write-handoff.mjs");
   const child = spawn(process.execPath, [helper, ...process.argv.slice(2)], { stdio: ["inherit", "inherit", "inherit"] });
   child.on("exit", (c) => process.exit(c ?? 1));
@@ -64,12 +57,10 @@ function autoBaton() {
   // The transcript's filename IS the writing session's id — record it, or an orchestrator-thread
   // handoff carries no writer and the baton-hold + map-follow logic in sessionstart.mjs can't fire.
   const sessionId = transcript ? basename(transcript, ".jsonl") : "";
-  // #6528: WHO pulled the trigger. A TTY stdin means a human typed `trantor handoff` at a prompt;
-  // the app chain (lib.rs handoff_now) and hooks spawn this binary with piped stdio. The operator's
-  // own typed command keeps the storm-guard bypass (force:true — "manual = intentional"); every
-  // invoked path goes through the boundary gate and the hub's storm guard like any auto handoff.
-  // --reason rides through from the app (`--reason clicked|countdown|unattended`) so the RECORD
-  // finally names the real trigger instead of laundering every banner fire into "manual-cli".
+  // #6528: WHO pulled the trigger. A TTY stdin is a human typing it; the app chain (handoff_now)
+  // and hooks spawn this with piped stdio. Only the typed command keeps the storm-guard bypass
+  // (manual = intentional); every invoked path goes through the boundary gate like an auto handoff.
+  // --reason rides through from the app so the record names the real trigger, not "manual-cli".
   const reasonArg = (() => {
     const i = process.argv.indexOf("--reason");
     const v = i >= 0 ? String(process.argv[i + 1] || "").trim() : "";

@@ -3,13 +3,13 @@
 // its registration (#6074, witnessed on crebral-scribe: a subfolder cwd renamed the project, a
 // stranger's window got armed for closing). Fix: resolveHandoffSurface + a first-checked pane-env
 // branch in spawnBaton; no pane env means today's window behavior, byte for byte.
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync, openSync, closeSync, rmSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { scrubIdentityEnv } from "../drill-env.mjs";
-import { maybeSpawn } from "../../hooks/lib/handoff.mjs";
+import { maybeSpawn, stdinCarriesMarkdown} from "../../hooks/lib/handoff.mjs";
 
 const ROOT = fileURLToPath(new URL("../..", import.meta.url)).replace(/\/$/, "");
 let pass = 0, fail = 0;
@@ -245,5 +245,19 @@ seed(decoy); seed(real);
      JSON.stringify({ projectName: rec.projectName, transcript_path: rec.transcript_path }));
 }
 
+// #8459: the skill documents `trantor handoff --baton << 'HANDOFF'`, and a shell heredoc is a TEMP
+// FILE. An isFIFO()-only check sent that to the auto-summary path and threw the model's words away.
+{
+  const hd = join(tmpdir(), `baton-stdin-${process.pid}.md`);
+  writeFileSync(hd, "# HANDOFF\n\n## TASK\nwork\n");
+  const fileFd = openSync(hd, "r");
+  const nullFd = openSync("/dev/null", "r");
+  ok("#8459: a heredoc (regular file) counts as the model's markdown", stdinCarriesMarkdown(fileFd) === true);
+  ok("#8459: /dev/null does not — a hook's bare `trantor handoff` still auto-summarizes", stdinCarriesMarkdown(nullFd) === false);
+  ok("#8459: a closed/invalid fd is not markdown either, and does not throw", stdinCarriesMarkdown(999999) === false);
+  closeSync(fileFd); closeSync(nullFd); rmSync(hd, { force: true });
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
+
 process.exit(fail ? 1 : 0);

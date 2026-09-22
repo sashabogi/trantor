@@ -888,6 +888,14 @@ export function pathsReadIn(transcriptPath, paths) {
   return { read, missed: want.filter(p => !read.includes(p)) };
 }
 
+/** Markdown on stdin, or a bare `trantor handoff`? A heredoc is a TEMP FILE, not a FIFO, and an
+ *  isFIFO()-only check discarded the model's handoff while printing "handoff armed" (#8459).
+ *  Character devices stay out: that is the TTY and the /dev/null a hook runs with.
+ */
+export function stdinCarriesMarkdown(fd = 0) {
+  try { const st = fstatSync(fd); return st.isFIFO() || st.isFile(); } catch { return false; }
+}
+
 // The self-announcing fresh session command (single-quoted so it survives osascript→shell un-escaped).
 // Brevity is the point, but #8162 found it had become permission not to READ: the summary is injected
 // at SessionStart, so a 3-sentence recap is producible without opening a file. The order is now
