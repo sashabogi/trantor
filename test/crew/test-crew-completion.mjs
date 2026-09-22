@@ -1,17 +1,7 @@
 #!/usr/bin/env node
 // trantor crew-completion drill — an orchestrator must learn, MECHANICALLY, when a seat it
-// dispatched finishes or fails.
-//
-// The gap this pins (2026-08-24, reported from a live crebral-health session): the orchestrator
-// sends a contract, the seat does the work, ends its turn, and the runner parks silently. Nothing
-// about the result goes on the bus. Completion was delegated to the seat's own model through the
-// RULES prompt ("report on the bus (relay_send, <280 chars)"), so a cheap model that just does the
-// work and stops leaves the orchestrator blind, with nothing watching for the omission. Failures
-// were mechanical but went to "all", and a plain broadcast does not wake anybody.
-//
-// From the orchestrator's seat, a crew that finished cleanly and a crew that never started looked
-// identical. These drills make both outcomes a DIRECT message to whoever assigned the work.
-//
+// dispatched finishes or fails: a silent park and a clean finish must not look identical, so both
+// outcomes become a DIRECT machine-readable receipt to whoever assigned the work.
 // Hermetic: a mock hub + a fake CLI that never touches the bus itself, driving the REAL runner.
 import http from "node:http";
 import { spawn } from "node:child_process";
@@ -23,6 +13,16 @@ import { drillEnv } from "../drill-env.mjs";
 let pass = 0, fail = 0;
 const ok = (name, cond, extra) => { console.log(`  ${cond ? "PASS" : "FAIL"}  ${name}${cond || !extra ? "" : `\n          ${extra}`}`); cond ? pass++ : fail++; };
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+// #8446: wait on a condition with a deadline instead of betting on a wall-clock budget — a loaded
+// box makes the wait longer, never wrong. Returns the check's truthy value, null on deadline.
+const waitFor = async (check, timeoutMs = 15000) => {
+  const t0 = Date.now();
+  for (;;) {
+    try { const v = await check(); if (v) return v; } catch {}
+    if (Date.now() - t0 >= timeoutMs) return null;
+    await sleep(50);
+  }
+};
 const read = (p) => { try { return readFileSync(p, "utf8"); } catch { return ""; } };
 
 console.log("# trantor crew-completion drill");
@@ -43,10 +43,9 @@ const hub = http.createServer((req, res) => {
     if (P === "/inbox") return reply({ messages: [], cursor: 0 });
     if (P === "/lessons") return reply({ lessons: [] });
     // #6228: the runner drops a wake from an unlinked project's sender, so the mock hub declares
-    // the link the drill's fixture implies (an orchestrator of crebral-health lawfully dispatching
-    // this tt-complete seat). Without it the fence refused the wake (#6446: red since 3e18faf,
-    // same class #6301 fixed in test-failure.mjs) and every receipt assertion failed on the drop
-    // note instead of the completion notice.
+    // the link the drill's fixture implies. Without it the fence refused the wake (#6446, same
+    // class #6301 fixed in test-failure.mjs) and every receipt assertion failed on the drop note
+    // instead of the completion notice.
     if (P === "/policy") return reply({ links: [{ projects: ["crebral-health", "tt-complete"] }] });
     if (P === "/poll") {
       if (served++ === 0) return reply({ messages: [{ id: 11, from: servedFrom, to: u.searchParams.get("session"),
@@ -61,13 +60,20 @@ const HUB = `http://127.0.0.1:${hub.address().port}`;
 
 // The fake CLI is the whole point: it does the work and ends its turn WITHOUT reporting on the
 // bus, exactly like a cheap seat that ignored that line of the RULES prompt.
-async function drill({ exitCode = 0, waitMs = 9000 } = {}) {
+// #8446: no wall-clock budget — `until(ctx)` names the drill's own terminal signal (the receipt
+// landing in sends, or the turnstate file proving the wake turn ENDED), with a 30s deadline.
+async function drill({ exitCode = 0, until } = {}) {
   sends.length = 0; served = 0;
   const work = mkdtempSync(join(tmpdir(), "tt-complete-"));
   const HOME = join(work, "home"); mkdirSync(join(HOME, ".agent-bus"), { recursive: true });
   const fakebin = join(work, "bin"); mkdirSync(fakebin, { recursive: true });
   const LOGF = join(work, "turns.log");
   const PROJ = "tt-complete";
+  const ctx = {
+    logFile: LOGF,
+    // #7749: the runner's per-seat turnstate file — phase "idle" is written only when a turn ENDS.
+    phase: () => { try { return JSON.parse(read(join(HOME, ".agent-bus", `turnstate-codex-${PROJ}.json`))).phase; } catch { return null; } },
+  };
   writeFileSync(join(fakebin, "codex"), `#!/bin/sh
 P="$HOME/.agent-bus/turn-codex-${PROJ}.txt"
 { echo "===TURN==="; cat "$P"; } >> "${LOGF}"
@@ -85,7 +91,7 @@ exit 0
       RELAY_URL: HUB, RELAY_AGENT: "codex", RELAY_PROJECT: PROJ,
       CREW_KICKOFF: "say hi and end your turn", TRANTOR_RETRY_MS: "1200" },
   });
-  await sleep(waitMs);
+  await waitFor(() => until(ctx), 30000);
   runner.kill("SIGKILL"); await sleep(150);
   const turns = read(LOGF).split("===TURN===").filter(t => t.trim());
   return { turns, wakeTurns: turns.filter(t => t.includes("NEW BUS MESSAGE")), sends: [...sends] };
@@ -95,7 +101,7 @@ console.log("\nA seat that finishes its contract reports back, without being ask
 {
   const previousText = servedText;
   servedText = `contract: #6079 ${"x".repeat(170)} · asked: "an older nested receipt"`;
-  const r = await drill({ exitCode: 0 });
+  const r = await drill({ exitCode: 0, until: () => sends.some(s => s.to === ORCH) });
   servedText = previousText;
   ok("the seat actually ran the contract", r.wakeTurns.length === 1, `${r.wakeTurns.length} wake turn(s)`);
   const done = r.sends.filter(s => s.to === ORCH);
@@ -115,7 +121,7 @@ console.log("\nA seat that finishes its contract reports back, without being ask
 
 console.log("\nA seat whose turn FAILS tells the assigner directly, not just the room:");
 {
-  const r = await drill({ exitCode: 1, waitMs: 7000 });
+  const r = await drill({ exitCode: 1, until: () => sends.some(s => s.to === ORCH) });
   const toOrch = r.sends.filter(s => s.to === ORCH);
   ok("the orchestrator is told its contract failed",
     toOrch.length >= 1, `sends: ${JSON.stringify(r.sends.map(s => ({ to: s.to, text: (s.text || "").slice(0, 50) })))}`);
@@ -132,8 +138,10 @@ console.log("\nAn outcome is never acked back to a hub pseudo-id (that loops):")
   // and wakes the seat again, so every overseer-woken turn loops forever.
   const prevServe = servedFrom;
   servedFrom = "hub:duty";
-  const r = await drill({ exitCode: 0, waitMs: 8000 });
+  const r = await drill({ exitCode: 0,
+    until: (c) => c.phase() === "idle" && read(c.logFile).includes("NEW BUS MESSAGE") });
   servedFrom = prevServe;
+  await sleep(250);   // settle: a mis-addressed ack is sent as the turn ends — give it its chance
   ok("the seat still ran the overseer's wake", r.wakeTurns.length === 1, `${r.wakeTurns.length} wake turn(s)`);
   ok("but nothing is addressed back to hub:duty",
     !r.sends.some(s => s.to === "hub:duty"),
@@ -144,6 +152,11 @@ console.log("\nTwo runners consume receipts and status chatter without starting 
 {
   const messages = [];
   let seq = 0;
+  // #8446: each runner's latest `since` cursor, recorded where the hub hears it. A runner only
+  // presents an advanced cursor after CONSUMING everything up to that id and deciding whether it
+  // wakes (deliverWake is awaited before the loop polls again), so the cursor is the runner's own
+  // receipt of consumption — the signal every wait below keys on instead of a fixed sleep.
+  const seen = {};
   const echoHub = http.createServer((req, res) => {
     let buf = ""; req.on("data", c => (buf += c));
     req.on("end", () => {
@@ -158,6 +171,7 @@ console.log("\nTwo runners consume receipts and status chatter without starting 
       if (P === "/inbox" || P === "/poll") {
         const since = Number(u.searchParams.get("since") || 0);
         const session = u.searchParams.get("session");
+        if (P === "/poll" && session) seen[session] = Math.max(seen[session] || 0, since);
         const found = messages.filter(m => m.id > since && m.from !== session && (m.to === session || m.to === "all"));
         const cursor = found.length ? found.at(-1).id : since;
         return setTimeout(() => reply({ messages: found, cursor }), P === "/poll" && !found.length ? 80 : 0);
@@ -190,33 +204,46 @@ exit 0
     });
     return { runner, logFile };
   };
-  const a = startRunner(`runner-a:${project}`);
-  const b = startRunner(`runner-b:${project}`);
-  await sleep(800);
+  const sessA = `runner-a:${project}`, sessB = `runner-b:${project}`;
+  const a = startRunner(sessA);
+  const b = startRunner(sessB);
+  const wakeCount = (file) => read(file).split("===TURN===").filter(t => t.includes("NEW BUS MESSAGE")).length;
+  // The hub never delivers a session its own sends, so each runner's watermark is the last
+  // message deliverable TO it — not the global last id.
+  const watermark = (s) => messages.reduce((top, m) =>
+    m.from !== s && (m.to === s || m.to === "all") ? Math.max(top, m.id) : top, 0);
+  // Both runners parked in the poll loop (past boot + kickoff) before anything is pushed.
+  await waitFor(() => seen[sessA] !== undefined && seen[sessB] !== undefined);
   messages.push(
-    { id: ++seq, ts: Date.now(), from: `runner-a:${project}`, to: `runner-b:${project}`, kind: "receipt", re: 4,
+    { id: ++seq, ts: Date.now(), from: sessA, to: sessB, kind: "receipt", re: 4,
       text: `✅ done on runner-a:${project} (exit 0, 1s) · asked: "old contract"` },
-    { id: ++seq, ts: Date.now(), from: `runner-b:${project}`, to: `runner-a:${project}`,
+    { id: ++seq, ts: Date.now(), from: sessB, to: sessA,
       text: `✅ done on runner-b:${project} (exit 0, 1s) · asked: "older untyped contract"` },
-    { id: ++seq, ts: Date.now(), from: `runner-a:${project}`, to: "all", kind: "status",
+    { id: ++seq, ts: Date.now(), from: sessA, to: "all", kind: "status",
       text: "runner-a reporting — ready for a contract" },
     // #7766: an ack is context only when its sender says so — an unflagged direct message earns a
     // turn whatever it says, so the well-behaved ack carries wake:false.
-    { id: ++seq, ts: Date.now(), from: `runner-a:${project}`, to: `runner-b:${project}`, wake: false,
+    { id: ++seq, ts: Date.now(), from: sessA, to: sessB, wake: false,
       text: "thanks, acknowledged" },
   );
-  await sleep(900);
-  const wakeCount = (file) => read(file).split("===TURN===").filter(t => t.includes("NEW BUS MESSAGE")).length;
+  // Both runners have POLLED PAST every message meant for them => consumed and decided, no wake.
+  await waitFor(() => seen[sessA] >= watermark(sessA) && seen[sessB] >= watermark(sessB));
+  await sleep(250);   // settle: a spawned turn's log line lands just after its cursor advances
   ok("exchanged typed and legacy receipts produce zero turns", wakeCount(a.logFile) === 0 && wakeCount(b.logFile) === 0,
-    `runner-a=${wakeCount(a.logFile)}, runner-b=${wakeCount(b.logFile)}`);
-  messages.push({ id: ++seq, ts: Date.now(), from: `runner-a:${project}`, to: `runner-b:${project}`,
+    `runner-a=${wakeCount(a.logFile)}, runner-b=${wakeCount(b.logFile)}, cursors a=${seen[sessA]}/${watermark(sessA)} b=${seen[sessB]}/${watermark(sessB)}`);
+  messages.push({ id: ++seq, ts: Date.now(), from: sessA, to: sessB,
     kind: "contract", text: "contract: implement card #6079" });
-  await sleep(1400);
-  ok("a real card contract still wakes exactly one runner", wakeCount(a.logFile) === 0 && wakeCount(b.logFile) === 1,
-    `runner-a=${wakeCount(a.logFile)}, runner-b=${wakeCount(b.logFile)}`);
+  // The wake's own evidence is the ===TURN=== marker in b's log — wait for it, 15s deadline.
+  const woken = await waitFor(() => wakeCount(b.logFile) === 1);
+  ok("a real card contract still wakes exactly one runner", !!woken && wakeCount(a.logFile) === 0,
+    `runner-a=${wakeCount(a.logFile)}, runner-b=${wakeCount(b.logFile)}${woken ? "" : " (15s deadline hit)"}`);
+  // The receipt b's runner posts for that turn must not wake a: wait until it EXISTS and a has
+  // polled past its id — the same consumption signal as the zero-turn case above.
+  const receipt = await waitFor(() => messages.find(m => m.from === sessB && m.to === sessA && m.kind === "receipt"));
+  if (receipt) await waitFor(() => seen[sessA] >= receipt.id);
   ok("the resulting receipt is typed and does not wake the sender",
-    messages.some(m => m.from === `runner-b:${project}` && m.to === `runner-a:${project}` && m.kind === "receipt")
-      && wakeCount(a.logFile) === 0);
+    !!receipt && wakeCount(a.logFile) === 0,
+    receipt ? `runner-a=${wakeCount(a.logFile)}` : "no receipt from runner-b within 15s");
   a.runner.kill("SIGKILL"); b.runner.kill("SIGKILL"); await sleep(150);
   echoHub.close();
 }
