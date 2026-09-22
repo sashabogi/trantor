@@ -398,6 +398,12 @@ try {
   ok("pricing: sonnet cache-read 1M = $0.30 (0.1x input)", Math.abs(costOfTurn({ model: "claude-sonnet-4-6", cacheRead: 1e6 }) - 0.3) < 1e-9);
   ok("pricing: cache-write defaults to 5m (haiku 1M = $1.25)", Math.abs(costOfTurn({ model: "claude-haiku-4-5", cacheWrite: 1e6 }) - 1.25) < 1e-9);
   ok("pricing: unknown model → null (never fabricate)", costOfTurn({ model: "gpt-5", input: 1e6 }) === null && tierFor("gpt-5") === null);
+  // #8443: the default Opus 5.5 was priced off the Opus 5 tier — 25% over, 2.5x on cache reads.
+  ok("pricing: opus-5-5 is its own tier, not the generic opus one", tierFor("claude-opus-5-5") === "opus-5-5" && costOfTurn({ model: "claude-opus-5-5", input: 1e6, output: 1e6 }) === 24);
+  ok("pricing: opus-5-5 cache reads are 0.05x input, not 0.1x", Math.abs(costOfTurn({ model: "claude-opus-5-5", cacheRead: 1e6 }) - 0.2) < 1e-9);
+  ok("pricing: sonnet-5 and sonnet-4-6 are priced apart", costOfTurn({ model: "claude-sonnet-5", input: 1e6 }) === 2 && costOfTurn({ model: "claude-sonnet-4-6", input: 1e6 }) === 3 && costOfTurn({ model: "claude-sonnet-4-5", input: 1e6 }) === 3);
+  ok("pricing: fable is priced instead of returning null", costOfTurn({ model: "claude-fable-5-1", input: 1e6, output: 1e6 }) === 60);
+  ok("pricing: an unrecognised opus version stays null rather than falling back to a nearby tier", tierFor("claude-opus-9-9") === null);
   const nc = notionalCost([{ model: "claude-opus-4-8", input: 1000, output: 500 }, { model: "gpt-5", input: 999 }]);
   ok("notionalCost sums priced rows + counts unpriced (no fabrication)", nc.usd > 0 && nc.unpriced === 1 && nc.tokens.input === 1999);
   const { task: sc } = await api("/task", { project: "ccproj", title: "claude-code-guide: research hooks", status: "done",
