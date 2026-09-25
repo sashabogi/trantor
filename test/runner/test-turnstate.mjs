@@ -15,6 +15,7 @@ import { redactKeys } from "../../lib/redact.mjs";
 import { parseTurnTokens } from "../../lib/turn-policy.mjs";
 import { readTurnStateFile, refreshTurnLiveness, writeTurnState, writeTurnStateFile } from "../../lib/turnstate.mjs";
 import { withEnvFiles } from "../../lib/project.mjs";
+import { shadowEnv, withSecretExports } from "../../lib/secrets.mjs";
 
 const ROOT = new URL("../../", import.meta.url).pathname.replace(/\/$/, "");
 const source = fs.readFileSync(join(ROOT, "bin/crew-runner.mjs"), "utf8");
@@ -42,6 +43,8 @@ async function drill(t, { maxMs, cliBody }) {
   const record = (...args) => logs.push(args.join(" "));
   const context = createContext({
     ...fs, ...classify, join, redactKeys, parseTurnTokens, withEnvFiles, setTimeout,
+    // #6393: the store is keychain I/O, stubbed empty like the hub; the shell helpers are the real ones.
+    shadowEnv, withSecretExports, resolveSecrets: () => ({}),
     // #7749: the real turn-state writer, aimed at the drill's bus dir — not the live ~/.agent-bus.
     writeTurnState: (agent, proj, patch) => writeTurnState(agent, proj, patch, bus),
     process: { env: drillEnv({ HOME: work, PATH: `${bin}:${process.env.PATH}` }), execPath: process.execPath },
@@ -55,6 +58,10 @@ async function drill(t, { maxMs, cliBody }) {
     TURN_DIR: work, ERRF: join(work, "err.txt"), TRANSCRIPT_DIR: work, RUNNER_ID: "drill",
     MODEL: "", STATE_SCHEMA_FILE: "", TURN_MAX_MS: maxMs, TURN: 0, sid: "", inFollowUp: true,
     sessionCard: 7749,
+    // #7761: no ceiling here, so the box is the plain wall-clock box these drills measure.
+    TURN_CEILING_MS: 0, TURN_EXTEND_MS: 0, TURN_EXTENSIONS_MAX: 0,
+    // #7914: runTurn records each BOX cut on the module-scope cut chain the park notice reads.
+    cutChain: [],
   });
   runInContext(`const cli = ${kimiSource};\n${turnSource}`, context);
   await runInContext('runTurn("finish this drill", true)', context);
