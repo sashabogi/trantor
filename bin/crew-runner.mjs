@@ -11,6 +11,7 @@ import { loadOrCreate } from "../lib/identity.mjs";
 import { signedHeaders } from "../lib/signed-fetch.mjs";
 import { ensureEnrolled } from "../lib/enroll.mjs";
 import { redactKeys } from "../lib/redact.mjs";
+import { writeTurnState } from "../lib/turnstate.mjs";
 import { applyWorktreeDeclaration, ensureSeatWorktree, provisioningLines, readWorktreeDeclaration } from "../lib/seat-worktree.mjs";
 import {
   AUTH_MARKER_RE, classifyFailure, looksLikeAuthDeath,
@@ -460,6 +461,10 @@ async function parkSeat(reason, undelivered, resetHint = 0, { evidence = "" } = 
   // the operator can hear out of band, once per park.
   notifyOperator(`Trantor: ${SESSION} PARKED (${reason})`,
     `${undelivered} message(s) held${when ? ` — retrying after ${when}` : ` — needs \`trantor up ${AGENT}\``}`);
+  // #7749: parked is a first-class phase — the file and the peer row both say so, so an
+  // orchestrator stops confusing a quota-held seat with a working or a dead one.
+  writeTurnState(AGENT, PROJ, { phase: "parked", since: Date.now() });
+  await registerStatus(`parked (${reason})`, { phase: "parked", phaseSince: Date.now() });
   return until;
 }
 
@@ -516,9 +521,11 @@ async function balanceRows() {
 // ---- activity truth (#5965): the RUNNER is the source for this seat ----------------
 // herdr cannot see a runner-driven CLI mid-turn, so the runner reports turn boundaries to the hub:
 // `working · <trigger>` at start, `idle` on a clean landing. Bounded 5s, one call per transition.
-async function registerStatus(status) {
+// #7749: the live phase + its start ride the same call, so /peers answers "what is the seat doing
+// RIGHT NOW" instead of leaving orchestrators to infer it from ledger rows that land at turn end.
+async function registerStatus(status, extra = {}) {
   const url = HUB + "/register";
-  const body = JSON.stringify({ session: SESSION, project: PROJ, status, llm: AGENT, model: MODEL });
+  const body = JSON.stringify({ session: SESSION, project: PROJ, status, llm: AGENT, model: MODEL, ...extra });
   try {
     const opts = { method: "POST", headers: { "content-type": "application/json", connection: "close" }, body };
     await fetch(url, { ...opts, headers: { ...opts.headers, ...signedHeaders(identity, url, opts) }, signal: AbortSignal.timeout(5000) });
@@ -704,7 +711,10 @@ async function runTurn(prompt, isFirst, trigger = "kickoff", opts = {}) {
   // #5965 — TURN START. The hub peer row is where the app reads activity from, and the runner is
   // the only one who knows a turn is starting, so say so before the CLI spawn (awaited: the spawn
   // below blocks the loop, an unawaited fetch would not leave the machine until the turn ended).
-  await registerStatus(`working · ${trigger}`);
+  await registerStatus(`working · ${trigger}`, { phase: "working", phaseSince: t0 });
+  // #7749: the same boundary on disk — the watchdog refreshes lastBytesAt/lastTranscriptAt while
+  // the turn runs, so a live reader sees the turn advance without waiting for its end.
+  writeTurnState(AGENT, PROJ, { turn: TURN, phase: "working", since: t0, card: sessionCard || 0, lastBytesAt: t0, lastTranscriptAt: 0 });
   const pf = join(homedir(), ".agent-bus", `turn-${AGENT}-${PROJ}.txt`);
   appendFileSync(pf, "", { flag: "w" }); // truncate
   appendFileSync(pf, prompt);
@@ -787,7 +797,9 @@ async function runTurn(prompt, isFirst, trigger = "kickoff", opts = {}) {
     const wd = spawn(process.execPath, [join(import.meta.dirname, "turn-watchdog.mjs"), STAMPF, ERRF, String(WD_MS), SESSION, PROJ, HUB, TRANSCRIPT_DIR, TURN_DIR,
       // #7752: the stall marker only exists when a box does — with no box there is no sweep to
       // end the turn, so the watchdog stays report-only (reporting is the whole job, boxless).
-      TURN_MAX_MS ? STALLF : ""],
+      TURN_MAX_MS ? STALLF : "",
+      // #7749: the turn-state file the watchdog refreshes mid-turn (lastBytesAt/lastTranscriptAt).
+      join(homedir(), ".agent-bus", `turnstate-${AGENT}-${PROJ}.json`)],
       { detached: true, stdio: "ignore" });
     WD_CHILD = wd;
     wd.unref();
@@ -876,6 +888,12 @@ exit $turn_exit`;
   }
   lastTurnCut = cut;
   lastTurnStalled = cut && stallCut;
+  // #7749: the cut boundary lands on disk and on the peer row BEFORE the follow-up turn overwrites
+  // it — a reader sampling mid-chain sees what actually just happened, not a stale "working".
+  if (cut) {
+    writeTurnState(AGENT, PROJ, { phase: stallCut ? "stalled" : "cut", since: Date.now() });
+    await registerStatus(stallCut ? "stalled · no activity" : "cut at the time box", { phase: stallCut ? "stalled" : "cut", phaseSince: Date.now() });
+  }
   // #5869: scrub AT REST, synchronously, before anything reads the file back. The explicit shell
   // wait above drains the live stderr scrubber first; this pass is defense in depth for redaction.
   try { writeFileSync(ERRF, redactKeys(readFileSync(ERRF, "utf8"))); } catch {}
@@ -976,7 +994,10 @@ exit $turn_exit`;
   if (realExit === 0 && effExit === 0) { cmuxStatus("idle", "#8a94a6", "robot"); herdrAgent("idle"); }   // finished this turn, waiting for the next
   // #5965 — TURN END. A clean exit means the seat is idle again; say so right away so the app stops
   // pulsing it even before the next /poll heartbeat. Failure keeps reportFailure's down/errored.
-  if (realExit === 0 && effExit === 0) await registerStatus("idle");
+  if (realExit === 0 && effExit === 0) {
+    writeTurnState(AGENT, PROJ, { phase: "idle", since: Date.now() });
+    await registerStatus("idle", { phase: "idle", phaseSince: Date.now() });
+  }
   // The follow-up rides the SAME session, exactly once. A state step gets none: TIME_BOX_PROMPT
   // would break the byte-identical prefix, and §4.4 says a cut turn never partially applied a patch.
   if (cut && !inFollowUp && !opts.state) {

@@ -26,6 +26,9 @@ export async function routeAdmin({ req, res, q, P, auth, ctx }) {
       // #6148: WHAT a session is rides its peer row (kind "genesis" = the CLI's brief-poster,
       // "agent" = a crew seat) — /peers hands it to the app so the seat strip can tell them apart.
       if (pr) { if (b.model) pr.model = String(b.model).slice(0, 80); if (b.llm) pr.llm = String(b.llm).slice(0, 40); if (b.kind) pr.kind = String(b.kind).slice(0, 40); }
+      // #7749: the runner's live turn phase (working/idle/cut/stalled/parked) + its start ride the
+      // presence row, so /peers answers "what is the seat doing now" without inferring it from durations.
+      if (pr && b.phase) { pr.phase = String(b.phase).slice(0, 20); pr.phaseSince = Number(b.phaseSince) || now(); }
       return json(res, 200, { ok: true, session: b.session, peers: Object.keys(state.peers) });
     }
     if (req.method === "POST" && P === "/status") { const b = await body(req); touch(b.session, b.status ?? "", b.project, b.hookVersion, auth); return json(res, 200, { ok: true }); }
@@ -316,7 +319,7 @@ export async function routeAdmin({ req, res, q, P, auth, ctx }) {
       prunePeers();
       const cutoff = now() - ONLINE_MS;
       const peerRows = filterDiscoverable(auth, Object.entries(state.peers), ([, v]) => v.project || "");
-      return json(res, 200, { hubVersion: HUB_VERSION, authMode: AUTH_MODE, peers: peerRows.map(([s, v]) => ({ session: s, lastSeen: v.lastSeen, online: v.lastSeen > cutoff, status: v.status || "", health: healthOf(v.status), project: v.project || "",
+      return json(res, 200, { hubVersion: HUB_VERSION, authMode: AUTH_MODE, peers: peerRows.map(([s, v]) => ({ session: s, lastSeen: v.lastSeen, online: v.lastSeen > cutoff, status: v.status || "", health: healthOf(v.status), project: v.project || "", phase: v.phase || "", phaseSince: v.phaseSince || 0,
         pubkey: v.pubkey || "", identity: v.identity || null, authWarning: v.authWarning || "",
         kind: v.kind || v.identity?.kind || "", llm: v.llm || "", model: v.model || "", hookVersion: v.hookVersion || "", staleHooks: !!(v.lastSeen > cutoff && v.hookVersion && HUB_VERSION && cmpSemver(v.hookVersion, HUB_VERSION) < 0) })) });
     }

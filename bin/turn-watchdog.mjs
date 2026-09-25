@@ -2,13 +2,14 @@
 // Turn watchdog (#5684, #6206, #7752, #7761): runTurn is spawnSync, so this DETACHED helper watches
 // the turn — liveness = transcript, worktree or stderr moving; a whole silent window earns ONE stall
 // report, and in kill mode (stall file given) also ends the turn via the shell box. Stamp-bound to one runner.
-//   node bin/turn-watchdog.mjs <stampFile> <errFile> <windowMs> <session> <project> <hubUrl> <transcriptDir> <workDir> [stallFile]
+//   node bin/turn-watchdog.mjs <stampFile> <errFile> <windowMs> <session> <project> <hubUrl> <transcriptDir> <workDir> [stallFile] [turnStateFile]
 import { readFileSync, writeFileSync, appendFileSync, statSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { hostId } from "../lib/project.mjs";
 import { signedPost } from "../hooks/lib/api.mjs";
+import { refreshTurnLiveness } from "../lib/turnstate.mjs";
 
-const [stampFile, errFile, windowMsRaw, session, project, hub, transcriptDir = "", workDir = "", stallFile = ""] = process.argv.slice(2);
+const [stampFile, errFile, windowMsRaw, session, project, hub, transcriptDir = "", workDir = "", stallFile = "", turnStateFile = ""] = process.argv.slice(2);
 // SAFETY: the 10-minute floor lives in crew-runner.mjs (the default when TRANTOR_TURN_WATCHDOG_MS
 // is unset); this fallback only covers a missing argument. Drills pass tiny windows on purpose.
 const windowMs = Number(windowMsRaw) || 10 * 60 * 1000;
@@ -61,6 +62,21 @@ let baseErr = errSize();
 const armedAt = armed.startedAt || Date.now();
 const SLACK = 2000;   // timestamp granularity + scheduler drift under load
 
+// #7749: mid-turn liveness lands in the seat's turn-state file — any new stderr byte moves
+// lastBytesAt, a newer transcript file moves lastTranscriptAt. The refresh never writes phase
+// (the runner owns transitions) and refuses a file whose turn or phase has moved on.
+let prevSize = baseErr;
+let prevTr = 0;
+function reportLiveness(now, tr) {
+  if (!turnStateFile) return;
+  const size = errSize();
+  const grew = size > prevSize;
+  prevSize = size;
+  const trGrew = tr > prevTr;
+  if (trGrew) prevTr = tr;
+  if (grew || trGrew) refreshTurnLiveness(turnStateFile, { turn: armed.turn, bytesAt: grew ? now : 0, transcriptAt: trGrew ? tr : 0 });
+}
+
 // #7752 kill mode: poll liveness; a whole window silent on EVERY channel writes the stall marker
 // (the shell box sweeps on it), reports once, exits; stderr is measured ROLLING (bytes this window).
 // #7761: `armed.box` (step, ceiling, assigners) exists only when a ceiling above the box does; a
@@ -95,6 +111,7 @@ if (stallFile) {
     const freshCut = Math.max(armedAt, now - windowMs - SLACK);
     const tr = transcriptDir ? newestMtime(transcriptDir) : 0;
     const wk = workDir ? newestMtime(workDir) : 0;
+    reportLiveness(now, tr);
     if (tr > freshCut || wk > freshCut || now - lastErrAt < windowMs) {           // producing work: alive
       if (box && extensions < Number(box.extensionsMax) && now + poll + SLACK >= deadline) {
         extensions++;
@@ -129,6 +146,7 @@ for (;;) {
   const freshCut = Math.max(armedAt, Date.now() - windowMs - SLACK);
   const tr = transcriptDir ? newestMtime(transcriptDir) : 0;
   const wk = workDir ? newestMtime(workDir) : 0;
+  reportLiveness(Date.now(), tr);
   if (errSize() > baseErr + 200 || tr > freshCut || wk > freshCut) continue;   // producing work: alive, re-arm
   const mins = Math.round((Date.now() - armedAt) / 60000);
   const orch = `${hostId()}:${project}`;

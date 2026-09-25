@@ -22,6 +22,12 @@ if (asJson) {
   console.log(JSON.stringify({ agent, project, ...out }, null, 2));
 } else {
   console.log(`seat ${agent}:${project} -> ${out.state}`);
+  // #7749: the live phase line — what the seat is doing NOW and for how long, from the
+  // turn-state file, not inferred from the last ledger row.
+  if (out.turnState?.phase) {
+    const t = out.turnState;
+    console.log(`turn:   ${t.phase} for ${dur(Date.now() - t.since)} (turn ${t.turn}${t.card ? `, card #${t.card}` : ""})`);
+  }
   console.log(`why:    ${out.why}`);
   console.log(`today:  ${fmtSpend(out.today)}`);
   console.log(`advice: ${out.advice}`);
