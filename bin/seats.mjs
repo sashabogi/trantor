@@ -1,21 +1,14 @@
 #!/usr/bin/env node
 // trantor seats — declare which project lives in which directory, see which ones are missing, and
-// put them back. The answer to "a reboot reopened every window in $HOME and un-seated the crew".
-//
-//   trantor seats                     status of every declared seat
-//   trantor seats add <project> [dir] declare one (dir defaults to the cwd)
-//   trantor seats remove <project>    undeclare one
-//   trantor seats adopt [workspace]   declare every pinned project found under a workspace root
-//   trantor seats up [project…]       open a window for each MISSING seat, in its own directory
-//   trantor seats login install       bring missing seats back automatically after a reboot
-//   trantor seats login uninstall|status
+// put them back after a reboot that reopened every window in $HOME. Run with no arguments for the
+// full command list.
 import { existsSync, writeFileSync, unlinkSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { homedir } from "node:os";
 import { execFileSync } from "node:child_process";
 import {
-  readSeats, declareSeat, undeclareSeat, seatStatus, missingSeats,
-  launchSeat, suggestSeats, projectForDir,
+  readSeats, declareSeat, undeclareSeat, seatStatus,
+  launchSeat, suggestSeats, projectForDir, waitForHerdr,
 } from "../lib/seats.mjs";
 
 const args = process.argv.slice(2);
@@ -38,19 +31,24 @@ function printStatus() {
   const w = Math.max(...rows.map(r => r.project.length), 7);
   console.log(`${D}seat${" ".repeat(Math.max(0, w - 4))}  status              directory${R}`);
   for (const r of rows) {
-    const status = r.live ? `${G}live${R} ${D}(${r.agent} ${r.pid})${R}`
+    const status = r.live ? `${G}live${R} ${D}(${r.agent} ${r.pid !== null ? r.pid : `pane ${r.pane}`})${R}`
+      : r.state === "unknown" ? `${O}UNKNOWN${R}`
       : r.exists ? `${O}MISSING${R}` : `${O}NO DIR${R}`;
     // (why is printed below for anything not live)
     const pad = " ".repeat(Math.max(0, w - r.project.length));
-    console.log(`${r.project}${pad}  ${status}${" ".repeat(Math.max(1, 20 - (r.live ? 4 + String(r.pid).length + r.agent.length + 4 : 7)))}${D}${r.dir}${R}`);
+    console.log(`${r.project}${pad}  ${status}${" ".repeat(Math.max(1, 20 - (r.live ? 4 + String(r.pid !== null ? r.pid : `pane ${r.pane}`).length + r.agent.length + 4 : 7)))}${D}${r.dir}${R}`);
     if (!r.live && r.why) console.log(`${" ".repeat(w + 2)}${D}${r.why}${R}`);
     if (r.via !== "pin") console.log(`${" ".repeat(w + 2)}${O}⚠ hub not pinned${R} ${D}— resolves to ${r.hub} via ${r.via}; pin it: trantor hub set ${r.project} <url>${R}`);
   }
-  const miss = rows.filter(r => !r.live && r.exists);
+  const miss = rows.filter(r => r.state === "missing" && r.exists);
+  const unk = rows.filter(r => r.state === "unknown");
   console.log("");
   if (miss.length) {
     console.log(`${O}${miss.length} seat(s) not running${R}: ${miss.map(m => m.project).join(", ")}`);
     console.log(`Bring them back:  ${O}trantor seats up${R}`);
+  } else if (unk.length) {
+    console.log(`${O}${unk.length} seat(s) in an unknown state${R}: ${unk.map(u => u.project).join(", ")}`);
+    console.log(`${D}Unknown is not missing — nothing is launched for them until the state is provable.${R}`);
   } else {
     console.log(`${G}every declared seat is live${R}`);
   }
@@ -63,9 +61,8 @@ function trantorBin() {
 }
 
 // One-shot login job. Deliberately NOT KeepAlive: a KeepAlive job whose command fails relaunches
-// every ThrottleInterval forever, which is precisely how this machine ended up at load 490 on
-// 2026-08-21 (four portless services rebuilding every 10s). It runs once, after a delay that lets
-// the desktop settle, and exits.
+// every ThrottleInterval forever (it once drove this machine to load 490, four portless services
+// rebuilding every 10s). It runs once, after a delay that lets the desktop settle, and exits.
 function plistBody(delay) {
   const bin = trantorBin();
   return `<?xml version="1.0" encoding="UTF-8"?>
@@ -129,28 +126,37 @@ switch (sub) {
 
   case "up": {
     const only = rest;
-    let miss = missingSeats();
-    if (only.length) miss = miss.filter(m => only.includes(m.project));
     const login = flag("login");
-    if (!miss.length) {
-      if (!login) console.log(`${G}nothing to do — every declared seat is live${R}`);
-      else console.log(`[${new Date().toISOString()}] all declared seats live; nothing launched`);
+    // #8716: the login job races herdr's pane restore — a seat judged missing before its pane is
+    // back gets launched as a second Terminal window. Wait bounded, then never launch on UNKNOWN.
+    const herdr = login ? await waitForHerdr() : undefined;
+    if (herdr && !herdr.ok) {
+      console.log(`[${new Date().toISOString()}] herdr is installed but did not answer within 120s — its panes may still be restoring, so no seat can be judged missing; launching nothing`);
       break;
     }
-    // A guard rail, not a policy: launching a dozen agent windows at once is never what anyone
-    // meant, and at login it would be actively hostile.
+    const rows = seatStatus(undefined, herdr).filter(r => !only.length || only.includes(r.project));
+    const unknowns = rows.filter(r => r.state === "unknown");
+    const miss = rows.filter(r => r.state === "missing" && r.exists);
+    const when = login ? `[${new Date().toISOString()}] ` : "";
+    for (const u of unknowns) console.log(`${when}${O}unknown, not launching${R}: ${u.project} — ${u.why}`);
+    if (!miss.length) {
+      if (!login) console.log(`${G}nothing to do — every declared seat is live or unknown${R}`);
+      else console.log(`${when}nothing launched${unknowns.length ? ` — ${unknowns.length} seat(s) unknown, see above` : "; every declared seat is live"}`);
+      break;
+    }
+    // A guard rail, not a policy: restoring a dozen seats at once is never what anyone meant, and
+    // at login it would be actively hostile.
     const CAP = 6;
     if (miss.length > CAP && !flag("force")) {
-      console.error(`${O}${miss.length} seats are missing — refusing to open that many windows at once.${R}`);
+      console.error(`${O}${miss.length} seats are missing — refusing to restore that many at once.${R}`);
       console.error(`Name the ones you want (trantor seats up <project>…), or pass --force.`);
       process.exit(1);
     }
     for (const m of miss) {
       const r = launchSeat(m, { dryRun: flag("dry-run") });
-      const when = login ? `[${new Date().toISOString()}] ` : "";
-      if (r.launched) console.log(`${when}${G}opened${R} ${m.project} — ${m.dir}`);
+      if (r.launched) console.log(`${when}${G}restored${R} ${m.project} — ${m.dir}`);
       else if (flag("dry-run")) console.log(`${when}would run: ${r.command}`);
-      else console.log(`${when}${O}could not open a window${R} for ${m.project}; run it yourself: ${r.command}${r.error ? ` (${r.error})` : ""}`);
+      else console.log(`${when}${O}not launched${R} for ${m.project} — run it yourself: ${r.command}${r.error ? ` (${r.error})` : ""}`);
     }
     break;
   }
@@ -162,11 +168,10 @@ switch (sub) {
       const delay = Number(rest[1] || 60);
       writeFileSync(PLIST, plistBody(Number.isFinite(delay) && delay >= 0 ? delay : 60));
       try { execFileSync("/bin/launchctl", ["bootout", `gui/${process.getuid()}/${LABEL}`], { stdio: "ignore" }); } catch {}
-      // Deliberately NOT bootstrapped here. RunAtLoad fires on bootstrap, not only at login, so
-      // `seats login install` would immediately open a window for every missing seat — which is
-      // never what installing a RECOVERY job means, and on 2026-08-23 it very nearly reopened two
-      // sessions the operator was deliberately holding closed. The plist on disk is the install;
-      // launchd loads it at the next login. --now is the explicit opt-in for right this second.
+      // Deliberately NOT bootstrapped here: RunAtLoad fires on bootstrap, and installing a RECOVERY
+      // job must never immediately reopen the very sessions the operator is holding closed (it once
+      // very nearly did). The plist on disk is the install; launchd loads it at the next login.
+      // --now is the explicit opt-in for right this second.
       if (flag("now")) {
         try {
           execFileSync("/bin/launchctl", ["bootstrap", `gui/${process.getuid()}`, PLIST], { stdio: "ignore" });
@@ -204,12 +209,13 @@ switch (sub) {
   add <project> [dir]       declare a seat (dir defaults to cwd; --agent=claude|codex|opencode)
   remove <project>          undeclare a seat
   adopt [workspace] --yes   declare every pinned project that has a directory there
-  up [project…]             open a window for each missing seat, in its own directory
+  up [project…]             restore each missing seat as a herdr pane, in its own directory
                             (--dry-run to see the commands, --force past the 6-seat cap)
   login install [delay]     reopen missing seats automatically after a reboot (--now to start it immediately)
   login uninstall|status
 
 Seats live in ~/.agent-bus/config.json alongside the hub pins. A seat is "live" when a real agent
-process is standing in its directory — not when something on the hub claims that name.`);
+process (or its herdr pane) is standing in its directory — not when something on the hub claims
+that name. A seat whose holder cannot be proven absent is UNKNOWN: recovery never launches into it.`);
     process.exit(readSeats() ? 0 : 0);
 }
