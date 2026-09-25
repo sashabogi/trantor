@@ -521,8 +521,7 @@ async function balanceRows() {
 // ---- activity truth (#5965): the RUNNER is the source for this seat ----------------
 // herdr cannot see a runner-driven CLI mid-turn, so the runner reports turn boundaries to the hub:
 // `working · <trigger>` at start, `idle` on a clean landing. Bounded 5s, one call per transition.
-// #7749: the live phase + its start ride the same call, so /peers answers "what is the seat doing
-// RIGHT NOW" instead of leaving orchestrators to infer it from ledger rows that land at turn end.
+// #7749: the live phase + its start ride the same call, so /peers answers what the seat does NOW.
 async function registerStatus(status, extra = {}) {
   const url = HUB + "/register";
   const body = JSON.stringify({ session: SESSION, project: PROJ, status, llm: AGENT, model: MODEL, ...extra });
