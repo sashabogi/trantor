@@ -19,6 +19,9 @@ State, §3, §4) and the incidents behind the rules live on the cards linked bel
   nothing.
 - `executeAction` runs LAST, after promote, and only on an accepted patch. "Promote before act" is
   the half of §4.1 a refactor loses most easily, because nothing downstream notices for a while.
+- Where HEAD sat is captured ONCE per step, outside the retry loop: a retried attempt re-runs the
+  CLI, and the commits the first attempt already made are still this step's work — re-reading
+  HEAD per attempt would silently drop them (#8069).
 - The JSON schema handed to `claude --json-schema` is built from the list names, so a fifth list
   added to the schema and not to the driver cannot drift silently. `action` carries no
   `{tool,input}`: on a CC seat one step is one whole agent loop.
@@ -38,11 +41,18 @@ State, §3, §4) and the incidents behind the rules live on the cards linked bel
   only thing that runs every turn. Without this half `verified` goes monotonic-true in production
   while every unit test stays green.
 - Tier 1 never sets `verified: true`. Touching a file is not evidence that it works.
+- `git status` and `git diff --name-only HEAD` measure the working tree against HEAD, so a seat
+  that commits moves HEAD along with its work and both read empty. Committing is the ordinary
+  flow (it is what survives a cut), so tier 1 also takes `gitCommittedSince(sha..HEAD)`: without
+  it a card that rewrote 8,000 lines across 4 commits recorded `files:{}` (#8069).
 
 ## The circuit breaker (§7.3)
 
 - Counts MALFORMED output only. `UNVERIFIED_DONE` and `NEEDS_GATE` are the system working: a seat
   writing perfect patches against a failing test is the healthiest seat there is.
+- The in-turn retry is §7.3's fallback ladder: a MALFORMED patch earns exactly one retry, with the
+  rejection message as the next observation. An EVIDENCE rejection (`UNVERIFIED_DONE`) is NOT
+  retried in-turn — the code was wrong, not the grammar, and fixing it takes a whole step (#8068).
 - The window must be FULL before it can trip. A rate of 1.0 over one turn is not a rolling rate.
 
 ## The run record
@@ -89,6 +99,10 @@ State, §3, §4) and the incidents behind the rules live on the cards linked bel
   credited. The check reads `ctx` FIRST with the same precedence apply.mjs stage 5 uses (`verify`
   wholesale from ctx, `files` merged per path), because the gate's facts reach the state only
   through stage 5, which never runs when validation rejects first (#6969).
+- Both doors into `done` — `move → done` and `add … list:"done"` — lead through the one check
+  `arrivalInDone` (#8068): before it `add` had no gate, so completing an item in the turn the
+  work was done (the ordinary flow) walked past the verified-done rule. Only `at` differs between
+  the doors, so the rejection names the op the seat actually wrote.
 - `ctx.gate_attempted` splits NEEDS_GATE (no gate ran) from UNVERIFIED_DONE (a gate ran and came
   back red). Without it the one-retry bound of §4.8 is false.
 - Apply is one point per turn on a CLONE, returned only when every op passed. That is the whole
@@ -103,6 +117,10 @@ State, §3, §4) and the incidents behind the rules live on the cards linked bel
   the handoff path for free.
 - A DERIVED STATE CARRIES NO CREDIT: every path is `verified: false` and `verify` is empty, so the
   successor must re-earn its evidence before anything moves to `done`.
+- The derive build sets `ctx.reconstructing`, and `arrivalInDone` exempts it: a ✅ bullet in the
+  handoff is a RECORD of what the predecessor reported done, not this seat claiming it now, and
+  gating it would delete the handoff's content — #6528's failure exactly. The flag is safe only
+  because `ctx` is harness-supplied and a patch cannot write it (§3.0 write matrix).
 - Bullets only; an unlabelled bullet lands in `in_flight`, never `done`. Over-cap lines are dropped
   in derive with a notes line naming the count, rather than rejecting the whole patch.
 - A rejected patch does not cost the state: git-derived files, the task and one notes line still
