@@ -6,7 +6,7 @@ export async function routeMessages({ req, res, q, P, auth, ctx }) {
     state, body, json, stripNulText, crossProjectGuard, touch, pushToStreams,
     appendEvent, appendCardEvent, appendTaskLog, markDelivered, contractsFor, canUseInboxSession, inboxWindow,
     deliverable, inboxReadable, inboxResponse, filterReadable, streams, UI,
-    AUTH_MODE, persistHealth, duty, now, markDirty, assertNoSecrets,
+    AUTH_MODE, persistHealth, duty, now, markDirty, assertNoSecrets, PEER_TTL_MS,
     CONTRACT_WINDOW_MS,
   } = ctx;
     if (req.method === "POST" && P === "/send") {
@@ -157,7 +157,8 @@ export async function routeMessages({ req, res, q, P, auth, ctx }) {
     if (req.method === "GET" && (P === "/" || P === "/ui")) {
       res.writeHead(200, { "content-type": "text/html; charset=utf-8" }); return res.end(UI || "<h1>trantor</h1><p>dashboard unavailable</p>");
     }
-    if (P === "/health") return json(res, 200, { ok: true, authMode: AUTH_MODE, peers: Object.keys(state.peers).length, messages: state.messages.length, streams: streams.length,
+    // #8723: the count is a listing in aggregate — memory rows (past PEER_TTL_MS) never count.
+    if (P === "/health") return json(res, 200, { ok: true, authMode: AUTH_MODE, peers: Object.values(state.peers).filter(v => (v.lastSeen || 0) >= now() - PEER_TTL_MS).length, messages: state.messages.length, streams: streams.length,
       persist: persistHealth.view(),
       // #5686: duty liveness rides /health so the app's Home strip and doctor read one truth.
       duty: { ...duty.dutyLiveness(), darkSinceMs: duty.darkSince ? now() - duty.darkSince : 0, queuedEscalations: duty.dutyQueuedEscalations() } });

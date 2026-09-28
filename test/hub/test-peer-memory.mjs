@@ -52,14 +52,14 @@ try {
   await sleep(1200);                        // past RELAY_PEER_TTL_MS
   await get("/peers");                      // GET /peers runs prunePeers()
 
-  // The row survives, and with it the delivery watermark duty reads. /peer does not serialize
-  // kind, so the kind assertions read the /peers roster — the same field declaredCrewFor scans.
+  // The row survives, and with it the delivery watermark duty reads. It is INTERNAL state now:
+  // /peer still answers it for diagnostics, but no peer listing (/peers, board) may show it.
   const peer = await get(`/peer?session=${encodeURIComponent("glm:mem")}`).catch(() => null);
   ok("the expired peer row still exists", !!peer && !peer.error, JSON.stringify(peer || {}));
   ok("…and keeps its deliveredUpTo watermark", (peer?.deliveredUpTo || 0) >= deliveredId, JSON.stringify(peer || {}));
   const roster = await get("/peers");
-  const rowOf = s => (roster.peers || []).find(p => p.session === s) || {};
-  ok("…and keeps the kind that declaredCrewFor reads", rowOf("glm:mem").kind === "agent", `got ${JSON.stringify(rowOf("glm:mem").kind)}`);
+  ok("…but is absent from the /peers roster", !(roster.peers || []).some(p => p.session === "glm:mem"),
+    JSON.stringify((roster.peers || []).map(p => p.session)));
 
   // A kindless heartbeat beat (what hooks/heartbeat.mjs sends) must not demote the kept row.
   await post("/register", { session: "glm:mem", project: "mem" });
@@ -101,11 +101,17 @@ try {
   ok("a peer quiet past the TTL but inside the forget window still exists", !!kept && !kept.error, JSON.stringify(kept || {}));
   ok("…and keeps its deliveredUpTo watermark", (kept?.deliveredUpTo || 0) >= frgetId, JSON.stringify(kept || {}));
   const roster3 = await get("/peers");
-  ok("…and keeps its kind", (roster3.peers || []).find(p => p.session === "glm:frget")?.kind === "agent",
-    JSON.stringify((roster3.peers || []).find(p => p.session === "glm:frget") || {}));
+  ok("…but is absent from the /peers roster too", !(roster3.peers || []).some(p => p.session === "glm:frget"), "");
   const board = await get("/projects");
   const boardSessions = ((board.projects || []).find(p => p.project === "mem")?.agents || []).map(a => a.session);
   ok("…but is absent from the board agents list", !boardSessions.includes("glm:frget"), JSON.stringify(boardSessions));
+
+  // A kindless beat re-registers the seat (fresh lastSeen): the kept row's kind must have survived
+  // both the quiet window and the beat — /peers lists it again, still the crew "agent" kind.
+  await post("/register", { session: "glm:frget", project: "mem" });
+  const roster5 = await get("/peers");
+  ok("a kindless beat after the quiet window keeps the kind", (roster5.peers || []).find(p => p.session === "glm:frget")?.kind === "agent",
+    JSON.stringify((roster5.peers || []).find(p => p.session === "glm:frget") || {}));
 
   // FORGOTTEN window (the "31-day" case): a second hub with a SHORT override deletes the row once
   // quiet crosses RELAY_PEER_FORGET_MS — impossible under the 30-day default, so the deletion at

@@ -10,7 +10,7 @@ const fileReads = new Map();
 export async function routeAdmin({ req, res, q, P, auth, ctx }) {
   const {
     state, body, json, crossProjectGuard, touch, canon, filterReadable,
-    appendEvent, EVENT_CAP, overseer, ONLINE_MS, pruneClaims, fileClaims,
+    appendEvent, EVENT_CAP, overseer, ONLINE_MS, PEER_TTL_MS, pruneClaims, fileClaims,
     scopeAllows, duty, markDirty, HUB_VERSION, cmpSemver, prunePeers,
     filterDiscoverable, healthOf, now, canRead, AUTH_MODE, CLAIM_TTL_MS, subFp,
   } = ctx;
@@ -29,7 +29,8 @@ export async function routeAdmin({ req, res, q, P, auth, ctx }) {
       // #7749: the runner's live turn phase (working/idle/cut/stalled/parked) + its start ride the
       // presence row, so /peers answers "what is the seat doing now" without inferring it from durations.
       if (pr && b.phase) { pr.phase = String(b.phase).slice(0, 20); pr.phaseSince = Number(b.phaseSince) || now(); }
-      return json(res, 200, { ok: true, session: b.session, peers: Object.keys(state.peers) });
+      // #8723: memory rows (quiet past PEER_TTL_MS) are internal state — a peer listing never shows them.
+      return json(res, 200, { ok: true, session: b.session, peers: Object.keys(state.peers).filter(s => (state.peers[s]?.lastSeen || 0) >= now() - PEER_TTL_MS) });
     }
     if (req.method === "POST" && P === "/status") { const b = await body(req); touch(b.session, b.status ?? "", b.project, b.hookVersion, auth); return json(res, 200, { ok: true }); }
     // Single-peer lookup, including the read receipt (how far this session's inbox has actually been
@@ -318,7 +319,8 @@ export async function routeAdmin({ req, res, q, P, auth, ctx }) {
     if (req.method === "GET" && P === "/peers") {
       prunePeers();
       const cutoff = now() - ONLINE_MS;
-      const peerRows = filterDiscoverable(auth, Object.entries(state.peers), ([, v]) => v.project || "");
+      const ttlCut = now() - PEER_TTL_MS;   // #8723: memory rows are for declaredCrewFor + duty only, never a listing
+      const peerRows = filterDiscoverable(auth, Object.entries(state.peers), ([, v]) => v.project || "").filter(([, v]) => (v.lastSeen || 0) >= ttlCut);
       return json(res, 200, { hubVersion: HUB_VERSION, authMode: AUTH_MODE, peers: peerRows.map(([s, v]) => ({ session: s, lastSeen: v.lastSeen, online: v.lastSeen > cutoff, status: v.status || "", health: healthOf(v.status), project: v.project || "", phase: v.phase || "", phaseSince: v.phaseSince || 0,
         pubkey: v.pubkey || "", identity: v.identity || null, authWarning: v.authWarning || "",
         kind: v.kind || v.identity?.kind || "", llm: v.llm || "", model: v.model || "", hookVersion: v.hookVersion || "", staleHooks: !!(v.lastSeen > cutoff && v.hookVersion && HUB_VERSION && cmpSemver(v.hookVersion, HUB_VERSION) < 0) })) });
