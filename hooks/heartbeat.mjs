@@ -153,12 +153,18 @@ async function main(stdinRaw) {
   // Write the stamp BEFORE the network call so rapid concurrent tool calls don't all fire.
   try { writeFileSync(stamp, String(Date.now())); } catch {}
 
-  // POST /register with no status -> hub refreshes lastSeen + project, preserves status.
-  // llm from the seat brand when a dialect bridge runs us (RELAY_AGENT=kimi-orch etc.), else claude.
-  await signedPost("/register", { session, project,
+  // POST /register with no status -> hub refreshes lastSeen + project, preserves status; llm from
+  // the seat brand when a dialect bridge runs us (RELAY_AGENT=kimi-orch etc.), else claude.
+  // #8723 bounce-3: the beat carries the kind too — "orch" for the orchestrator pane (the same
+  // strict test sessionstart.mjs uses), "agent" when the runner's TRANTOR_SEAT says crew seat.
+  const beatKind = process.env.TRANTOR_ORCH && process.env.TRANTOR_ORCH === project ? "orch"
+    : process.env.TRANTOR_SEAT ? "agent" : "";
+  const beatBody = { session, project,
     llm: process.env.RELAY_LLM || (process.env.RELAY_AGENT ? process.env.RELAY_AGENT.replace(/-orch$/, "") : "claude"),
     model: modelFromTranscript(stdinRaw),
-    hookVersion: (() => { try { return installedVersion(); } catch { return ""; } })() }, { session, timeoutMs: Number(process.env.RELAY_HEARTBEAT_TIMEOUT_MS || 1500) });
+    hookVersion: (() => { try { return installedVersion(); } catch { return ""; } })() };
+  if (beatKind) beatBody.kind = beatKind;
+  await signedPost("/register", beatBody, { session, timeoutMs: Number(process.env.RELAY_HEARTBEAT_TIMEOUT_MS || 1500) });
 
   // Ambient narratives: once an hour (machine-wide stamp), spawn the summarizer detached — the
   // board's machine-titled cards gain a plain-language "assigned — did" line without anyone asking.

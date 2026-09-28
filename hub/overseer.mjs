@@ -12,11 +12,9 @@ const OVERSEER_TICK_MS = Number(process.env.RELAY_OVERSEER_TICK_MS || 30 * 1000)
 // timer: see overseerTick.
 const OVERSEER_CLEAR_MS = Number(process.env.RELAY_OVERSEER_CLEAR_MS || process.env.RELAY_OVERSEER_DEDUP_MS || 10 * 60 * 1000);
 // Standing conditions, keyed by collision identity -> { since, lastTick }. A collision is a STATE,
-// not an event: it persists. Emitting on a 10-minute timer turned the watcher into a metronome —
-// 500 events for 4 distinct conditions (2026-08-12 audit), each one also waking the duty seat for a
-// full turn. Now an episode fires ONCE when it starts and stays quiet while it holds; the entry is
-// forgotten only after the condition has been gone for OVERSEER_CLEAR_MS, so a genuine recurrence
-// warns again.
+// not an event: it persists (#5350 doctrine). It fires ONCE when it starts, stays quiet while it
+// holds (a metronome woke duty on 500 events for 4 conditions once), and the entry is forgotten
+// only after OVERSEER_CLEAR_MS of absence, so a genuine recurrence warns again.
 const overseerActive = new Map();
 // Heartbeat for the WATCHER itself: /overseer/status must distinguish "fleet is clear" from "the
 // overseer stopped ticking" — a monitor that cannot prove it is alive reads as clear when dead.
@@ -48,31 +46,33 @@ function overseerInputs() {
 }
 
 // --- #5760: the same-project warning is an EPISODE keyed by the MEMBER SET -------------------
-// The night of 08-31 the same-project DM re-fired hourly for a membership that never changed and
-// woke every seat into metered chatter turns. The rule (lib/same-project.mjs, pure) decides
-// fire-or-not from (previous set, current set, declared crew, last-fired-at): a declared crew is
-// the NORMAL state of a project and is not a collision at all; a set that never changed re-warns
-// never. The warn itself rides the SAME episode machinery as every other kind (#5350: one warn at
-// open, newcomer-only intros while standing, a genuine clear ends it) — the record below only
-// feeds the pure rule the set it judged last, so "unchanged" is one hash comparison and the
-// record line reports DURATION ("same-project for 6h"), never a count of warnings.
+// lib/same-project.mjs (pure) decides from (previous set, current set, declared crew,
+// last-fired-at): a declared crew is the NORMAL state of a project and not a collision at all,
+// an unchanged set never re-warns (#5350 machinery), and the record reports DURATION.
 const sameProjectFired = new Map(); // project -> { hash, sessions, ts } — the set as of the last verdict
 
-// The declared crew: HUB state, never a file on the operator's machine (#6075). The production
-// hub runs on netcup, where ~/.agent-bus/crew-windows.txt does not exist — the file describes the
-// OPERATOR'S machine (it is written by `trantor up` there), so on the remote hub the old reader
-// found nothing and every same-project set looked like intruders: the crew-only exemption simply
-// never held remotely. What the hub itself knows is the peer row's `kind` (#6148): "agent" is a
-// crew seat — crew-runner stamps it on every /register its seats make — and "orch" is the
-// project's orchestrator pane (sessionstart stamps it when TRANTOR_ORCH names this project).
-// The HOST_NAME exemption is gone with the file: the hub's hostname is the hub machine's
-// (netcup), never the operator's, so `<HOST_NAME>:<project>` exempted a session that cannot
-// exist. Genesis is deliberately NOT crew (#6068: a bookkeeping identity, not a seat).
+// #8723 bounce-3: peerKindOf is the ONE resolver for "what is this peer" — own kind, else the
+// enrolled identity's kind by pubkey — shared with /peers, so a kindless row (beats carry no
+// kind; the pg loader yields "") cannot read agent on the roster while counting as an intruder
+// here. The identities state survives the restart; the per-request v.identity does not.
+function peerKindOf(p) {
+  if (!p || typeof p !== "object") return "";
+  if (p.kind) return p.kind;
+  // A revoked identity confers nothing, matching findIdentity in hub/auth.mjs.
+  const id = state.identities?.[p.pubkey || ""];
+  return id && !id.revoked ? String(id.kind || "") : "";
+}
+
+// The declared crew is HUB state: the peer row's kind (#6148, #6075) — "agent" is a crew seat
+// (crew-runner stamps every /register its seats make), "orch" the project's orchestrator pane
+// (sessionstart stamps it when TRANTOR_ORCH names this project). A local crew-windows.txt reader
+// would describe the OPERATOR's machine, never this hub's. Genesis is deliberately NOT crew (#6068).
 function declaredCrewFor(project) {
   const crew = new Set();
   for (const [sid, p] of Object.entries(state.peers)) {
     if ((p.project || "") !== project) continue;
-    if (p.kind === "agent" || p.kind === "orch") crew.add(sid);
+    const k = peerKindOf(p);
+    if (k === "agent" || k === "orch") crew.add(sid);
   }
   return [...crew];
 }
@@ -85,12 +85,10 @@ function overseerTick() {
   overseerLastTick = t;
   const pol = overseerPolicy();
   const seen = new Set();
-  // Hand each party the others' session ids at the moment coordination is warranted. Telling two
-  // sessions to "coordinate over the bus" is useless if neither knows the other's id, and the
-  // warning alone went only to the duty seat and the log — so coordination needed a human to carry
-  // the ids across. Shared by the episode-start branch (all parties) and the standing branch
-  // (newcomers only, same-project included): existing members never
-  // re-hear it, so a standing condition must not re-wake every party every tick.
+  // The intro hands each party the others' session ids at the moment coordination is warranted —
+  // the warning alone went only to duty, and ids never cross the bus by themselves. Shared by the
+  // episode-start branch (all parties) and the standing branch (newcomers only, same-project
+  // included): existing members never re-hear it, so a standing condition cannot re-wake every tick.
   const intro = (c, me, others) => {
     const rest = others.filter(p => p !== me);
     if (rest.length === 0) return;
@@ -102,13 +100,10 @@ function overseerTick() {
   // project, not a collision — so not even the context feed narrates them.
   const kept = [];
   for (const c of collisions) {
-    // #5760: same-project gets the pure episode rule (lib/same-project.mjs) ON TOP of the shared
-    // episode machinery below: a crew-only set is not a collision at all (dropped — no warn, no
-    // context, no state); a standing set re-warns never (a liveness flap replays the SAME set —
-    // 08-31's metronome — and must stay silent, only genuine newcomers hear the intro once); and
-    // the record line reports DURATION. Without the rule module this branch is invisible and
-    // same-project rides the generic loop exactly as before — a missing rule must never
-    // re-instate the hourly metronome, so the fallback is the pre-#5760 behavior, never stricter.
+    // #5760: the pure episode rule rides ON TOP of the shared machinery — a crew-only set is not
+    // a collision at all (dropped, no context), a liveness flap replays the SAME set and stays
+    // silent, the record reports DURATION. Without the rule module the fallback is the pre-#5760
+    // generic loop: a missing rule must never re-instate the metronome, only loosen it.
     if (c.kind === "same-project-sessions" && _sameProject?.sameProjectDecision) {
       const prior = sameProjectFired.get(c.project) || null;
       const d = _sameProject.sameProjectDecision({
@@ -205,7 +200,7 @@ setInterval(overseerTick, OVERSEER_TICK_MS).unref?.();
 setTimeout(overseerTick, 2000).unref?.();
 
   return {
-    overseerTick, overseerPolicy, overseerInputs, declaredCrewFor,
+    overseerTick, overseerPolicy, overseerInputs, declaredCrewFor, peerKindOf,
     active: overseerActive,
     get engine() { return _overseer; },
     get sameProject() { return _sameProject; },

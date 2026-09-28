@@ -14,7 +14,7 @@ export async function routeAdmin({ req, res, q, P, auth, ctx }) {
     scopeAllows, duty, markDirty, HUB_VERSION, cmpSemver, prunePeers,
     filterDiscoverable, healthOf, now, canRead, AUTH_MODE, CLAIM_TTL_MS, subFp,
   } = ctx;
-  const { overseerPolicy, overseerInputs, declaredCrewFor } = overseer;
+  const { overseerPolicy, overseerInputs, declaredCrewFor, peerKindOf } = overseer;
     if (req.method === "POST" && P === "/register") {
       const b = await body(req);
       const cpg = crossProjectGuard(auth, P, b);
@@ -323,7 +323,8 @@ export async function routeAdmin({ req, res, q, P, auth, ctx }) {
       const peerRows = filterDiscoverable(auth, Object.entries(state.peers), ([, v]) => v.project || "").filter(([, v]) => (v.lastSeen || 0) >= ttlCut);
       return json(res, 200, { hubVersion: HUB_VERSION, authMode: AUTH_MODE, peers: peerRows.map(([s, v]) => ({ session: s, lastSeen: v.lastSeen, online: v.lastSeen > cutoff, status: v.status || "", health: healthOf(v.status), project: v.project || "", phase: v.phase || "", phaseSince: v.phaseSince || 0,
         pubkey: v.pubkey || "", identity: v.identity || null, authWarning: v.authWarning || "",
-        kind: v.kind || v.identity?.kind || "", llm: v.llm || "", model: v.model || "", hookVersion: v.hookVersion || "", staleHooks: !!(v.lastSeen > cutoff && v.hookVersion && HUB_VERSION && cmpSemver(v.hookVersion, HUB_VERSION) < 0) })) });
+        kind: peerKindOf(v),   // #8723 bounce-3: same resolver declaredCrewFor reads — never a roster-only answer
+        llm: v.llm || "", model: v.model || "", hookVersion: v.hookVersion || "", staleHooks: !!(v.lastSeen > cutoff && v.hookVersion && HUB_VERSION && cmpSemver(v.hookVersion, HUB_VERSION) < 0) })) });
     }
     // --- Provider balances (prepaid credit) ---
     // The hub runs under launchd with no provider keys, so it can't fetch balances itself. Env-having

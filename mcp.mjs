@@ -594,11 +594,12 @@ const projectDir = process.env.CLAUDE_PROJECT_DIR || process.cwd();
 const nonProjectReason = nonSeatReason(projectDir);
 const isHomeDirSession = !!nonProjectReason;
 
-// #6170: WHAT this session is, when it can know. sessionstart stamps kind "orch" on the
-// orchestrator pane, but that runs once — every MCP beat afterwards was kindless, and the hub's
-// crew exemption reads the peer row's kind, so the orchestrator kept being demoted by its own
-// heartbeat, then warned about as an intruder on its own project. Same test sessionstart uses.
-const KIND = process.env.TRANTOR_ORCH && process.env.TRANTOR_ORCH === PROJECT ? { kind: "orch" } : {};
+// #6170: WHAT this session is, when it can know — sessionstart stamps kind "orch" once, but every
+// MCP beat afterwards was kindless, so the hub's crew exemption read the demoted row and the
+// orchestrator was warned as an intruder on its own project. Same test sessionstart uses.
+// #8723 bounce-3: a crew seat stamps "agent" the same way (TRANTOR_SEAT, set by bin/crew-runner.mjs).
+const KIND = process.env.TRANTOR_ORCH && process.env.TRANTOR_ORCH === PROJECT ? { kind: "orch" }
+  : process.env.TRANTOR_SEAT ? { kind: "agent" } : {};
 
 if (!isHomeDirSession) {
   await api("POST", "/register", { session: SESSION, project: PROJECT, status: `active in ${PROJECT}`, hookVersion: MCP_VERSION, ...KIND })
