@@ -1,6 +1,6 @@
 export function createReaper({
   state, now, canon, appendCardEvent, appendEvent, appendTaskLog, markDirty, sweepPresence,
-  ONLINE_MS, PEER_TTL_MS, FOCUS_OFFLINE_MS, FOCUS_IDLE_MS,
+  ONLINE_MS, PEER_TTL_MS, PEER_FORGET_MS, FOCUS_OFFLINE_MS, FOCUS_IDLE_MS,
   REAP_GRACE_MS, TODO_STALE_MS, REAP_INTERVAL_MS,
   CONTRACT_ABANDON_MS, CONTRACT_WINDOW_MS,
 }) {
@@ -49,9 +49,17 @@ function linkCommitToFocus(commitCard, by) {
 }
 function prunePeers() {
   const cutoff = now() - PEER_TTL_MS;
+  const forgetCut = now() - PEER_FORGET_MS;
   let changed = false;
   for (const [session, peer] of Object.entries(state.peers)) {
-    if ((peer.lastSeen || 0) >= cutoff) continue;
+    const seen = peer.lastSeen || 0;
+    if (seen < forgetCut) {                       // #8723: the memory row itself is forgotten after RELAY_PEER_FORGET_MS
+      if (closeFocus(session)) changed = true;
+      delete state.peers[session];
+      changed = true;
+      continue;
+    }
+    if (seen >= cutoff) continue;
     // #8723: a TTL-expired peer is a memory row, not a deleted one — deleting dropped `kind`
     // (the overseer then warned about the crew's own returning seats) and `deliveredUpTo`
     // (duty then escalated consumed mail as UNDELIVERED, "last seen never"). Presence readers

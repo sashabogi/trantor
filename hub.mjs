@@ -33,6 +33,11 @@ const ONLINE_MS = Number(process.env.RELAY_ONLINE_MS || 5 * 60 * 1000);
 const PEER_TTL_DEFAULT_MS = 21600000;
 const peerTtlRaw = Number(process.env.RELAY_PEER_TTL_MS || PEER_TTL_DEFAULT_MS);
 const PEER_TTL_MS = Math.max(Number.isFinite(peerTtlRaw) ? peerTtlRaw : PEER_TTL_DEFAULT_MS, ONLINE_MS);
+// #8723: the memory row a TTL-expired peer becomes is not immortal either — after this long quiet
+// it is forgotten outright. Floored at PEER_TTL_MS so every row gets its memory phase before deletion.
+const PEER_FORGET_DEFAULT_MS = 30 * 24 * 60 * 60 * 1000;
+const forgetRaw = Number(process.env.RELAY_PEER_FORGET_MS || PEER_FORGET_DEFAULT_MS);
+const PEER_FORGET_MS = Math.max(Number.isFinite(forgetRaw) ? forgetRaw : PEER_FORGET_DEFAULT_MS, PEER_TTL_MS);
 const REAP_GRACE_MS = Number(process.env.RELAY_REAP_GRACE_MS || 15 * 60 * 1000);
 const SUPERSEDE_GRACE_MS = Number(process.env.RELAY_SUPERSEDE_GRACE_MS || REAP_GRACE_MS);
 const TODO_STALE_DEFAULT_MS = 14 * 24 * 60 * 60 * 1000;
@@ -73,8 +78,8 @@ if (process.argv.includes("--smoke")) {
 const reaper = createReaper({
   state: store.state, markDirty: store.markDirty, canon: authRuntime.canon,
   now: events.now, appendCardEvent: events.appendCardEvent, appendEvent: events.appendEvent,
-  appendTaskLog: store.appendTaskLog, sweepPresence: events.sweepPresence, ONLINE_MS, PEER_TTL_MS, FOCUS_OFFLINE_MS,
-  FOCUS_IDLE_MS, REAP_GRACE_MS, TODO_STALE_MS, REAP_INTERVAL_MS,
+  appendTaskLog: store.appendTaskLog, sweepPresence: events.sweepPresence, ONLINE_MS, PEER_TTL_MS, PEER_FORGET_MS,
+  FOCUS_OFFLINE_MS, FOCUS_IDLE_MS, REAP_GRACE_MS, TODO_STALE_MS, REAP_INTERVAL_MS,
   CONTRACT_ABANDON_MS, CONTRACT_WINDOW_MS,
 });
 const duty = createDuty({
@@ -114,7 +119,7 @@ let UI = "";
 try { UI = readFileSync(new URL("./ui.html", import.meta.url), "utf8"); } catch {}
 const context = {
   ...store, ...authRuntime, ...events, ...reaper, duty, overseer, derivePhases,
-  hubSend: duty.hubSend, assertNoSecrets, UI, AUTH_MODE, ONLINE_MS,
+  hubSend: duty.hubSend, assertNoSecrets, UI, AUTH_MODE, ONLINE_MS, PEER_TTL_MS,
   REAP_GRACE_MS, CONTRACT_WINDOW_MS,
 };
 const routes = [routeAdmin, routeCards, routeInsights, routeMessages];

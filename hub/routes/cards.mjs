@@ -29,7 +29,7 @@ export async function routeCards({ req, res, q, P, auth, ctx }) {
     appendTaskLog, appendTaskNote, cleanChecklist, cleanDrill, hasDrillLine, linkCommitToFocus,
     derivePhases, PROPOSAL_CAP, propFp, healthOf, REAP_GRACE_MS, subFp,
     prunePeers, canRead, HUB_VERSION, cmpSemver, isCardEvent, fmtAge, hubSend,
-    ONLINE_MS,
+    ONLINE_MS, PEER_TTL_MS,
   } = ctx;
     if (req.method === "POST" && P === "/task") {           // create a card
       const b = await body(req);
@@ -544,7 +544,9 @@ export async function routeCards({ req, res, q, P, auth, ctx }) {
       const cutoff = now() - ONLINE_MS; const byProj = {};
       const proj = p => canon(p) || "(unassigned)";
       const mk = k => (byProj[k] ||= { project: k, brief: (state.projectMeta[k]?.brief) || "", agents: [], tasks: { todo:0,doing:0,testing:0,failed:0,done:0,blocked:0 }, doingTitles: [], lastActivity: 0 });
+      const ttlCut = now() - PEER_TTL_MS;   // #8723: a memory row (quiet past PEER_TTL_MS) never lists as a board agent…
       for (const [s, v] of filterReadable(auth, Object.entries(state.peers), ([, v]) => v.project || "")) {
+        if ((v.lastSeen || 0) < ttlCut) continue;   // …declaredCrewFor and the duty watermark still read it from state.
         const k = proj(v.project); const e = mk(k); e.agents.push({ session: s, online: v.lastSeen > cutoff, status: v.status || "", health: healthOf(v.status),
           llm: v.llm || "", model: v.model || "", hookVersion: v.hookVersion || "", staleHooks: !!(v.lastSeen > cutoff && v.hookVersion && HUB_VERSION && cmpSemver(v.hookVersion, HUB_VERSION) < 0) });
         if ((v.lastSeen || 0) > e.lastActivity) e.lastActivity = v.lastSeen;

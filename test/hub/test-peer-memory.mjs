@@ -25,6 +25,7 @@ const env = {
   RELAY_OVERSEER_TICK_MS: "200",
   RELAY_ONLINE_MS: "200",
   RELAY_PEER_TTL_MS: "600",
+  RELAY_PEER_FORGET_MS: "30000",   // far above every sleep below, so the kept window cannot race the forget bound
 };
 delete env.RELAY_URL;
 let hub = spawn(process.execPath, [join(HERE, "hub.mjs")], { env, stdio: ["ignore", "pipe", "pipe"] });
@@ -82,6 +83,53 @@ try {
   const warns2 = await get(`/events?project=mem&type=overseer.warn`);
   const strangerWarns = (warns2.events || []).filter(e => e.kind === "same-project-sessions" && (e.sessions || []).includes("stranger:mem"));
   ok("an unknown session on the project still warns (positive control)", strangerWarns.length >= 1, JSON.stringify(warns2.events || []).slice(0, 200));
+
+  // --- the forget bound (#8723 bounce) ----------------------------------------------------------
+  // KEPT window (the "7h" case): quiet past the TTL but far under the forget window — this hub's
+  // RELAY_PEER_FORGET_MS=30000 cannot fire during the test, so what survives here is the bound
+  // itself: kind and watermark live on, but the board agents list no longer shows the row.
+  await post("/register", { session: "host:frget", project: "mem", status: "orchestrating", kind: "orch" });
+  await post("/register", { session: "glm:frget", project: "mem", status: "active", kind: "agent" });
+  await post("/send", { from: "host:frget", to: "glm:frget", text: "contract to watermark before idle", project: "mem" });
+  const box2 = await get(`/inbox?session=${encodeURIComponent("glm:frget")}&since=0`);
+  const frgetId = (box2.messages || []).filter(m => m.to === "glm:frget").pop()?.id ?? 0;
+  ok("the forget-case message reached the seat", frgetId > 0, JSON.stringify(box2).slice(0, 120));
+
+  await sleep(1000);                        // quiet > RELAY_PEER_TTL_MS(600): a memory row
+  await get("/peers");                      // runs prunePeers()
+  const kept = await get(`/peer?session=${encodeURIComponent("glm:frget")}`).catch(() => null);
+  ok("a peer quiet past the TTL but inside the forget window still exists", !!kept && !kept.error, JSON.stringify(kept || {}));
+  ok("…and keeps its deliveredUpTo watermark", (kept?.deliveredUpTo || 0) >= frgetId, JSON.stringify(kept || {}));
+  const roster3 = await get("/peers");
+  ok("…and keeps its kind", (roster3.peers || []).find(p => p.session === "glm:frget")?.kind === "agent",
+    JSON.stringify((roster3.peers || []).find(p => p.session === "glm:frget") || {}));
+  const board = await get("/projects");
+  const boardSessions = ((board.projects || []).find(p => p.project === "mem")?.agents || []).map(a => a.session);
+  ok("…but is absent from the board agents list", !boardSessions.includes("glm:frget"), JSON.stringify(boardSessions));
+
+  // FORGOTTEN window (the "31-day" case): a second hub with a SHORT override deletes the row once
+  // quiet crosses RELAY_PEER_FORGET_MS — impossible under the 30-day default, so the deletion at
+  // ~3s of quiet is itself the proof that the env override is read.
+  const dir2 = mkdtempSync(join(tmpdir(), `tpm2-${process.pid}-${randomBytes(3).toString("hex")}-`));
+  mkdirSync(join(dir2, ".agent-bus"), { recursive: true });
+  const port2 = 5000 + Math.floor(Math.random() * 20000);
+  const env2 = { ...env, HOME: dir2, AGENT_BUS_DIR: join(dir2, ".agent-bus"), RELAY_DATA_DIR: dir2, RELAY_PORT: String(port2), RELAY_PEER_FORGET_MS: "2500" };
+  let hub2 = spawn(process.execPath, [join(HERE, "hub.mjs")], { env: env2, stdio: ["ignore", "pipe", "pipe"] });
+  const B2 = `http://127.0.0.1:${port2}`;
+  const post2 = (p, b) => fetch(B2 + p, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(b) }).then(r => r.json());
+  const get2 = (p) => fetch(B2 + p).then(r => r.json());
+  let up2 = false;
+  for (let i = 0; i < 90 && !up2; i++) { try { up2 = (await fetch(B2 + "/health")).ok; } catch {} if (!up2) await sleep(80); }
+  if (!up2) throw new Error("hub2 no start");
+  await post2("/register", { session: "glm:frget2", project: "mem", status: "active", kind: "agent" });
+  await sleep(3200);                        // quiet > RELAY_PEER_FORGET_MS(2500)
+  await get2("/peers");                     // runs prunePeers()
+  const gone = await get2(`/peer?session=${encodeURIComponent("glm:frget2")}`).catch(() => null);
+  ok("a peer quiet past the forget window is deleted (short override; default is 30 days)", !gone || !!gone.error, JSON.stringify(gone || {}));
+  const roster4 = await get2("/peers");
+  ok("…and is gone from the roster too", !(roster4.peers || []).some(p => p.session === "glm:frget2"), "");
+  try { hub2.kill(); } catch {}
+  try { rmSync(dir2, { recursive: true, force: true }); } catch {}
 } finally {
   try { hub.kill(); } catch {}
   try { rmSync(dir, { recursive: true, force: true }); } catch {}
