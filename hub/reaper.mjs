@@ -49,11 +49,17 @@ function linkCommitToFocus(commitCard, by) {
 }
 function prunePeers() {
   const cutoff = now() - PEER_TTL_MS;
-  let removed = false;
+  let changed = false;
   for (const [session, peer] of Object.entries(state.peers)) {
-    if ((peer.lastSeen || 0) < cutoff) { if (closeFocus(session)) removed = true; delete state.peers[session]; removed = true; }
+    if ((peer.lastSeen || 0) >= cutoff) continue;
+    // #8723: a TTL-expired peer is a memory row, not a deleted one — deleting dropped `kind`
+    // (the overseer then warned about the crew's own returning seats) and `deliveredUpTo`
+    // (duty then escalated consumed mail as UNDELIVERED, "last seen never"). Presence readers
+    // already filter by lastSeen freshness, so only the offline edge is pinned here.
+    if (closeFocus(session)) changed = true;
+    if (peer._on === true) { peer._on = false; changed = true; }
   }
-  if (removed) markDirty();
+  if (changed) markDirty();
 }
 setInterval(prunePeers, 60000).unref?.();
 setInterval(sweepPresence, 60000).unref?.();
