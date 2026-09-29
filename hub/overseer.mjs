@@ -51,16 +51,12 @@ function overseerInputs() {
 // an unchanged set never re-warns (#5350 machinery), and the record reports DURATION.
 const sameProjectFired = new Map(); // project -> { hash, sessions, ts } — the set as of the last verdict
 
-// #8723 bounce-3: peerKindOf is the ONE resolver for "what is this peer" — own kind, else the
-// enrolled identity's kind by pubkey — shared with /peers, so a kindless row (beats carry no
-// kind; the pg loader yields "") cannot read agent on the roster while counting as an intruder
-// here. The identities state survives the restart; the per-request v.identity does not.
+// #8723 bounce-4: peerKindOf is the ONE answer to "what is this peer" — the row's own kind,
+// nothing else — shared with /peers, so roster and overseer can never disagree. The enrolled
+// identity is NOT a fallback (every identity defaults kind "agent", which made every peer crew
+// and hid real intruders): the beats stamp orch/agent and pg COALESCE keeps the kind instead.
 function peerKindOf(p) {
-  if (!p || typeof p !== "object") return "";
-  if (p.kind) return p.kind;
-  // A revoked identity confers nothing, matching findIdentity in hub/auth.mjs.
-  const id = state.identities?.[p.pubkey || ""];
-  return id && !id.revoked ? String(id.kind || "") : "";
+  return p && typeof p === "object" ? String(p.kind || "") : "";
 }
 
 // The declared crew is HUB state: the peer row's kind (#6148, #6075) — "agent" is a crew seat

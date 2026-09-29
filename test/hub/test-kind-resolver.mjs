@@ -1,23 +1,22 @@
 #!/usr/bin/env node
-// #8723 bounce-3 — ONE kind resolver for a peer, used by BOTH /peers and declaredCrewFor.
-// Simulates the live restart: peer rows loaded kindless with the identities state loaded — the
-// boot tick must judge the set crew-only and send NOTHING (red against the pre-fix code, which
-// read declaredCrewFor off p.kind alone and counted the crew as intruders).
+// #8723 bounce-4 — peerKindOf is the row's OWN kind, nothing else, behind BOTH /peers and
+// declaredCrewFor. Bounce-3's identity fallback was wrong: every enrolled identity defaults kind
+// "agent", so every peer went crew and test-discovery's real intruder was never warned about.
+// A kindless row is an intruder even when enrolled "agent" — beat stamping keeps rows stamped.
 import { createOverseer } from "../../hub/overseer.mjs";
 import { setTimeout as sleep } from "node:timers/promises";
 
 let pass = 0, fail = 0;
 const ok = (n, c, e = "") => { if (c) { pass++; console.log(`  ✓ ${n}`); } else { fail++; console.log(`  ✗ ${n}${e ? " — " + e : ""}`); } };
-console.log("\n# test-kind-resolver — one answer to 'what is this peer' (#8723 bounce-3)");
+console.log("\n# test-kind-resolver — the row's own kind is the only answer (#8723 bounce-4)");
 
-// Simulated post-restart state: rows exactly as the store loads them — kind "", pubkey kept,
-// no per-request identity. Identities survive the restart and carry the enrolled kind.
-// Crew-only, the way the incident project looked at boot: seats + orchestrator, all kindless.
+// Post-restart state, the way it looks when every client stamps its beats: loaded rows carry
+// the kind pg COALESCE kept. No identity is consulted anywhere in the crew decision.
 const state = {
   peers: {
-    "host:x": { project: "x", kind: "", pubkey: "PK-orch", lastSeen: Date.now(), _on: true },
-    "glm:x":  { project: "x", kind: "", pubkey: "PK-agent", lastSeen: Date.now(), _on: true },
-    "kimi:x": { project: "x", kind: "", pubkey: "PK-agent2", lastSeen: Date.now(), _on: true },
+    "host:x": { project: "x", kind: "orch", pubkey: "PK-orch", lastSeen: Date.now(), _on: true },
+    "glm:x":  { project: "x", kind: "agent", pubkey: "PK-agent", lastSeen: Date.now(), _on: true },
+    "kimi:x": { project: "x", kind: "agent", pubkey: "PK-agent2", lastSeen: Date.now(), _on: true },
   },
   identities: {
     "PK-orch":   { name: "host", kind: "orch", pubkey: "PK-orch" },
@@ -37,41 +36,42 @@ const o = createOverseer({
 for (let i = 0; i < 100 && (!o.engine || !o.sameProject); i++) await sleep(20);
 ok("the overseer engine and the same-project rule loaded", !!o.engine && !!o.sameProject);
 
-// Resolver contract, standalone rows: own kind, else the enrolled identity's kind by pubkey.
-ok("peerKindOf: own kind wins", o.peerKindOf({ kind: "agent", pubkey: "PK-orch" }) === "agent");
-ok("peerKindOf: kindless row falls back to the enrolled identity by pubkey",
-  o.peerKindOf({ kind: "", pubkey: "PK-agent" }) === "agent" && o.peerKindOf({ kind: "", pubkey: "PK-orch" }) === "orch");
-ok("peerKindOf: no kind and no identity stays kindless", o.peerKindOf({ kind: "", pubkey: "" }) === "");
-state.identities["PK-gone"] = { name: "gone", kind: "agent", pubkey: "PK-gone", revoked: true };
-ok("peerKindOf: a revoked identity confers no kind", o.peerKindOf({ kind: "", pubkey: "PK-gone" }) === "",
-  `got ${JSON.stringify(o.peerKindOf({ kind: "", pubkey: "PK-gone" }))}`);
+ok("peerKindOf: the row's own kind, verbatim",
+  o.peerKindOf({ kind: "agent" }) === "agent" && o.peerKindOf({ kind: "orch" }) === "orch");
+ok("peerKindOf: a kindless row is kindless even with an enrolled agent identity by pubkey",
+  o.peerKindOf({ kind: "", pubkey: "PK-agent" }) === "",
+  `got ${JSON.stringify(o.peerKindOf({ kind: "", pubkey: "PK-agent" }))}`);
+ok("peerKindOf: no kind and no identity stays kindless",
+  o.peerKindOf({ kind: "", pubkey: "" }) === "" && o.peerKindOf(undefined) === "");
 
-// THE contract case: after the simulated restart, declaredCrewFor resolves the kindless rows
-// through their identities.
+// Stamped rows are crew; an UNSTAMPED row with an enrolled agent identity is NOT (the discovery red).
 const crew = o.declaredCrewFor("x");
-ok("declaredCrewFor resolves the kindless rows through their identities",
+ok("declaredCrewFor: stamped agent/orch rows are crew",
   crew.includes("host:x") && crew.includes("glm:x") && crew.includes("kimi:x"),
   `got ${JSON.stringify(crew)}`);
 
-// The boot tick itself: crew-only set -> no warn, nothing sent. Red against the pre-fix code.
+// The stamped crew alone: the boot tick stays silent, and stays silent.
 o.overseerTick();
-ok("boot tick on the restart state sends nothing to duty", sends.length === 0, JSON.stringify(sends).slice(0, 200));
+ok("boot tick on the stamped crew sends nothing to duty", sends.length === 0, JSON.stringify(sends).slice(0, 200));
 ok("boot tick logs no overseer.warn", warns.length === 0, JSON.stringify(warns).slice(0, 200));
 o.overseerTick();
 ok("a further tick stays silent (crew-only is dropped, never an episode)", sends.length === 0 && warns.length === 0);
 
-// Discrimination control: an unenrolled stranger + a revoked-identity peer are the intruders.
-// One warn; the crew is inside the reported live set but only intruders make it fire.
+// Discrimination control, the bounce-3 regression: an unstamped row whose identity IS enrolled
+// "agent" is still an intruder, alongside a plain stranger. One warn, then the episode holds.
+state.peers["enrolled:x"] = { project: "x", kind: "", pubkey: "PK-agent", lastSeen: Date.now(), _on: true };
 state.peers["stranger:x"] = { project: "x", kind: "", pubkey: "", lastSeen: Date.now(), _on: true };
-state.peers["revoked:x"] = { project: "x", kind: "", pubkey: "PK-gone", lastSeen: Date.now(), _on: true };
+ok("declaredCrewFor still excludes the unstamped row despite its enrolled agent identity",
+  !o.declaredCrewFor("x").includes("enrolled:x"),
+  `got ${JSON.stringify(o.declaredCrewFor("x"))}`);
 o.overseerTick();
-ok("the intruder set fires exactly one warn",
-  warns.length === 1 && (warns[0].sessions || []).includes("stranger:x") && (warns[0].sessions || []).includes("revoked:x"),
+ok("an unstamped but enrolled row warns like any intruder",
+  warns.length === 1 && (warns[0].sessions || []).includes("enrolled:x") && (warns[0].sessions || []).includes("stranger:x"),
   JSON.stringify(warns).slice(0, 200));
 ok("duty hears the warning once", sends.filter(s => s.to === "claude:duty" && /OVERSEER/.test(s.text)).length === 1,
   JSON.stringify(sends).slice(0, 300));
 o.overseerTick();
-ok("the stranger episode holds: no second warn", warns.length === 1, JSON.stringify(warns).slice(0, 200));
+ok("the intruder episode holds: no second warn", warns.length === 1, JSON.stringify(warns).slice(0, 200));
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
