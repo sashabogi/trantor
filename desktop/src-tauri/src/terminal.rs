@@ -159,8 +159,7 @@ impl TerminalManager {
     /// The registry door every `herdr agent attach` walks through (#9811): at most ONE live child
     /// per pane target, owned by this process. A second request for the same pane kills and reaps
     /// the child this app registered before spawning a fresh one, so herdr only ever sees one
-    /// client of ours — `--takeover` is never needed and never passed. A foreign client (a
-    /// previous run's orphan, a hand-typed attach) is not ours to steal.
+    /// client of ours — `--takeover` is never passed; a client we cannot prove is ours is not ours to steal.
     fn attach_target(
         &self,
         target: &str,
