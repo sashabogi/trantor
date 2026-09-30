@@ -102,7 +102,7 @@ async function swap(args) {
     return 1;
   }
   console.log(`— tearing down old seat '${oldAgent}' in ${ctx.project} —`);
-  down(ctx, [oldAgent], adapters);
+  await down(ctx, [oldAgent], adapters);
   console.log(`— spawning replacement: ${replacement} —`);
   const code = await runUp([...flags, replacement]);
   if (!code) console.log(`— swapped. RESEND the contract to '${replacement.split(":")[0]}' (it joined fresh with no context). —`);
@@ -110,7 +110,7 @@ async function swap(args) {
 }
 
 let code = 0;
-if (command === "down") code = down(ctx, rawArgs, adapters);
+if (command === "down") code = await down(ctx, rawArgs, adapters);
 else if (command === "prune") { prune(ctx, adapters); console.log(`— pruned dead crew rows (${ctx.statePath}) —`); }
 else if (command === "open") code = openOrchestrator(ctx, rawArgs);
 else if (command === "swap") code = await swap(rawArgs);

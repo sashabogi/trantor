@@ -26,6 +26,7 @@ import {
   CUT_CHAIN_PARK_MIN, cutChainEvidence, isBoundedPark,
 } from "../lib/turn-policy.mjs";
 import { ocTurnUsage, dshTurnUsage, usageTotal } from "../lib/turn-usage.mjs";
+import { listContainers, newContainers, recordContainers, statePathFor as dockerStatePathFor, sweep as dockerSweep } from "../lib/docker-janitor.mjs";
 import {
   auditDutyNudges, claimDutyNudges, claudeTranscriptDir, dutyEscalations, dutyNudgeDirective,
   observedDutyNudgeIds, requeueMissingWakeMessages, shedExpiredHubAlerts,
@@ -252,7 +253,7 @@ const EFFORT_FLAG = EFFORT ? cliEffortFlag(AGENT, EFFORT) : { flag: "", text: ""
 
 // RUNNER_RULES / RUNNER_KICKOFF env overrides: the runner is also the substrate for non-crew
 // always-on seats (the fleet DUTY agent, bin/duty.mjs) whose doctrine is not "work your card".
-const RULES = process.env.RUNNER_RULES || `Rules: you are ${SESSION} on the trantor crew. Before starting a card, read YOUR card: relay_board with card:<id> (the card, its deps, its notes, and the last five done cards whose title shares a word); never the whole board. If your wake names no card id (or cites only a message-card), make relay_board with mine:true your FIRST call — it lists the cards assigned to you (doing/testing/todo, newest first, full card shape); work your newest one (#7763). Work your assigned file(s), report on the bus (relay_send, <280 chars), move your Kanban card as you go with a NOTE saying what you did (doing -> testing, then STOP: you never close your own card to done — the orchestrator runs the card's drill on the built artifact and closes it, and the hub refuses a move to done on a card with no drill line anyway; in 'testing' run YOUR OWN test file — never the full npm test, suites collide across seats — plus \`node bin/slop-gate.mjs\` when the repo has one: it lints ONLY your changed files against the anti-slop rules, and a card must not reach testing with slop-gate failing; use 'failed' + a report if anything breaks). If a contract omits a fact you cannot proceed without, ASK — never invent the value: relay_ask(<card>, <question>) blocks the card with your question, keeps the turn owed (no park, no failure), and resumes you when the assigner's answer lands; an invented value that reads as reasoned is the worst outcome this crew ships (#7756). If you need something from another session, message THAT SESSION (relay_peers to find its id, relay_send to reach it) — never ask the human to pass it along; carrying messages between agents is the job this bus exists to remove. When your work for THIS message is finished, END YOUR TURN — do NOT park, do NOT loop relay_wait; the runner waits for you and will wake you with the next message. Path discipline: build/test from your worktree root ${TURN_DIR} with absolute paths or --manifest-path/--prefix instead of cd-ing into subdirs, and put anything that must land outside the repo under ${TURN_DIR}/.agent-bus-out/ (gitignored) — never ~/.agent-bus. Realigning your seat branch after the orchestrator harvested your commits is \`trantor sync\` run from your worktree: it reads the harvest receipts and refuses when an unharvested commit would be lost, so never reset or rebase onto main by hand. A contract's \`base: <sha>\` line is the integration head: start your seat branch at that sha (\`git reset --hard <sha>\` on the fresh branch), never at origin/main, which trails the orchestrator's unpushed integration commits; the object is already here as the ref \`main\`. If \`git cat-file -e <sha>\` fails, say \`cannot resolve base <sha>\` on the bus and move the card to blocked instead of reasoning from origin/main. Every testing/done note names the sha you verified against as \`verified at <sha>\`; a note without it is flagged HOLLOW. Cross-project action is a breach: never \`trantor up\` a crew, register a seat, or send a card/contract into a project other than ${PROJ} unless the operator ran \`trantor policy link ${PROJ} <other> --reason "<why>"\` first — the hub, the CLI and this runner all refuse it mechanically, so ask the operator to link the projects instead of routing around the refusal.`;
+const RULES = process.env.RUNNER_RULES || `Rules: you are ${SESSION} on the trantor crew. Before starting a card, read YOUR card: relay_board with card:<id> (the card, its deps, its notes, and the last five done cards whose title shares a word); never the whole board. If your wake names no card id (or cites only a message-card), make relay_board with mine:true your FIRST call — it lists the cards assigned to you (doing/testing/todo, newest first, full card shape); work your newest one (#7763). Work your assigned file(s), report on the bus (relay_send, <280 chars), move your Kanban card as you go with a NOTE saying what you did (doing -> testing, then STOP: you never close your own card to done — the orchestrator runs the card's drill on the built artifact and closes it, and the hub refuses a move to done on a card with no drill line anyway; in 'testing' run YOUR OWN test file — never the full npm test, suites collide across seats — plus \`node bin/slop-gate.mjs\` when the repo has one: it lints ONLY your changed files against the anti-slop rules, and a card must not reach testing with slop-gate failing; use 'failed' + a report if anything breaks). If your work starts containers or a dev server (\`supabase start\`, \`docker run\`, a watch process), stop them before moving your card to testing and name them in the note — the runner also stops containers it saw your turn create when the card closes, but the first responsibility is yours (#9778). If a contract omits a fact you cannot proceed without, ASK — never invent the value: relay_ask(<card>, <question>) blocks the card with your question, keeps the turn owed (no park, no failure), and resumes you when the assigner's answer lands; an invented value that reads as reasoned is the worst outcome this crew ships (#7756). If you need something from another session, message THAT SESSION (relay_peers to find its id, relay_send to reach it) — never ask the human to pass it along; carrying messages between agents is the job this bus exists to remove. When your work for THIS message is finished, END YOUR TURN — do NOT park, do NOT loop relay_wait; the runner waits for you and will wake you with the next message. Path discipline: build/test from your worktree root ${TURN_DIR} with absolute paths or --manifest-path/--prefix instead of cd-ing into subdirs, and put anything that must land outside the repo under ${TURN_DIR}/.agent-bus-out/ (gitignored) — never ~/.agent-bus. Realigning your seat branch after the orchestrator harvested your commits is \`trantor sync\` run from your worktree: it reads the harvest receipts and refuses when an unharvested commit would be lost, so never reset or rebase onto main by hand. A contract's \`base: <sha>\` line is the integration head: start your seat branch at that sha (\`git reset --hard <sha>\` on the fresh branch), never at origin/main, which trails the orchestrator's unpushed integration commits; the object is already here as the ref \`main\`. If \`git cat-file -e <sha>\` fails, say \`cannot resolve base <sha>\` on the bus and move the card to blocked instead of reasoning from origin/main. Every testing/done note names the sha you verified against as \`verified at <sha>\`; a note without it is flagged HOLLOW. Cross-project action is a breach: never \`trantor up\` a crew, register a seat, or send a card/contract into a project other than ${PROJ} unless the operator ran \`trantor policy link ${PROJ} <other> --reason "<why>"\` first — the hub, the CLI and this runner all refuse it mechanically, so ask the operator to link the projects instead of routing around the refusal.`;
 
 // ---- the pulse --------------------------------------------------------------
 // RUNNER_PULSE_MS re-runs an orchestrator seat's mission note on a cadence when the bus is silent;
@@ -304,6 +305,17 @@ const PENDF = join(homedir(), ".agent-bus", `pending-${AGENT}-${PROJ}.json`);
 // `trantor seat-why` read "live, last turn failed". This file is the state behind that event, so a
 // reader who missed the message still finds the reason, the evidence and when it lifts.
 const PARKF = join(homedir(), ".agent-bus", `park-${AGENT}-${PROJ}.json`);
+// #9778: the seat's recorded containers, persisted per seat so a card close, a park or
+// `trantor down <seat>` can stop what the seat started even after this runner is gone.
+const DOCKERF = dockerStatePathFor(AGENT, PROJ);
+// One bus line per sweep, naming what was stopped; docker absent sweeps stay silent by contract.
+async function janitorStop(why, card) {
+  const r = dockerSweep({ path: DOCKERF, card });
+  if (r.skipped || !r.stopped.length) return;
+  const text = `🧹 ${SESSION} stopped ${r.stopped.length} container(s) (${why}): ${r.stopped.join(", ")}${r.failed.length ? ` · could not stop: ${r.failed.join(", ")}` : ""}`;
+  log(text);
+  await api("/send", { from: SESSION, to: "all", text, project: PROJ, kind: "status" }).catch(() => {});
+}
 // #7778: message ids this seat already consumed through its OWN inbox path (relay_inbox, the
 // PostToolUse hook) — reconciled from the hub's deliveredUpTo ledger at each clean turn boundary
 // and persisted in the pending file, so a message the session read mid-turn is never re-woken by
@@ -466,6 +478,8 @@ async function parkSeat(reason, undelivered, resetHint = 0, { evidence = "" } = 
   // orchestrator stops confusing a quota-held seat with a working or a dead one.
   writeTurnState(AGENT, PROJ, { phase: "parked", since: Date.now() });
   await registerStatus(`parked (${reason})`, { phase: "parked", phaseSince: Date.now() });
+  // #9778: a parked seat is done working for now — its recorded containers go down with it.
+  await janitorStop(`seat parked (${reason})`);
   return until;
 }
 
@@ -725,6 +739,9 @@ async function runTurn(prompt, isFirst, trigger = "kickoff", opts = {}) {
   // #7759: the worktree snapshot the turn is judged against at its end — porcelain covers edits
   // AND new untracked files, which a HEAD-only comparison misses.
   const statusBefore = gitOut(["status", "--porcelain"], TURN_DIR);
+  // #9778: the docker snapshot the turn is judged against — containers the CLI spawns are recorded
+  // against the seat's card at turn end, then stopped when the card closes or the seat parks.
+  const dockerBefore = listContainers();
   // #7759: the bus event cursor the turn is judged against — anything the seat posts after this
   // (relay_send, a card move or note) is bus activity, which counts as work.
   const busSeqBefore = await latestBusEventId();
@@ -950,6 +967,13 @@ exit $turn_exit`;
   // turn: an auth death or a null completion is never re-labelled empty (#7759, #5405, #5481).
   const worktreeChanged = newCommit || gitOut(["status", "--porcelain"], TURN_DIR) !== statusBefore;
   const busActive = await busActivitySince(busSeqBefore);
+  // #9778: containers this turn created are recorded against its card — and land on the telemetry
+  // row, which is the ledger the seat record (#7762) is derived from.
+  const dockerNew = newContainers(dockerBefore, listContainers());
+  if (dockerNew.length) {
+    recordContainers({ path: DOCKERF, card: sessionCard || 0, containers: dockerNew });
+    log(`turn started ${dockerNew.length} container(s) — recorded against #${sessionCard || 0}: ${dockerNew.map(c => c.name || c.id).join(", ")}`);
+  }
   lastEmptyTurn = !cut && realExit === 0 && effExit === 0 && !authHit && !opts.state
     && !worktreeChanged && !busActive && !substantiveOutput(ownOut);
   if (lastEmptyTurn) log("\x1b[33mexit 0 but the turn was EMPTY — no worktree change, no substantive output, no bus activity\x1b[0m");
@@ -994,6 +1018,7 @@ exit $turn_exit`;
   }
   const telemetryRow = { ts: Date.now(), agent: AGENT, project: PROJ, turn: TURN, trigger, card: sessionCard || 0, model: MODEL || "cli-default", duration_ms: Date.now() - t0, exit: realExit, effExit, authFailed: effExit !== realExit, emptyOutput: lastEmptyOutput, emptyTurn: lastEmptyTurn, verdict, outcome: finalOutcome, tokens };
   if (usage) telemetryRow.usage = usage;
+  if (dockerNew.length) telemetryRow.containers = dockerNew.map(c => c.name || c.id);
   if (cut) telemetryRow.cut = true;
   if (stallCut) telemetryRow.stalled = true;
   if (extensions) { telemetryRow.extensions = extensions; telemetryRow.boxMs = boxMs; }
@@ -1712,6 +1737,14 @@ async function resolveWakeCard(messages, { session }) {
       await reconcileSessionReads(cursor);
       savePending([], []);
       await reportHealthy();
+      // #9778: the seat moves its own card mid-turn — a card that just reached testing/done
+      // releases the containers recorded against it, one bus line naming them.
+      if (sessionCard > 0) {
+        try {
+          const { task } = await api(`/card?project=${encodeURIComponent(PROJ)}&id=${sessionCard}`);
+          if (task && (task.status === "testing" || task.status === "done")) await janitorStop(`#${sessionCard} → ${task.status}`, sessionCard);
+        } catch {}
+      }
       await notifyAssigners(assigners,
         `✅ done on ${SESSION} (exit 0, ${secs}s) · asked: "${asked}" · check the board card and the files for what changed`);
     }

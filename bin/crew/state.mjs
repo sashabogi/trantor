@@ -1,5 +1,7 @@
 import { existsSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { call, listPids, run } from "./core.mjs";
+import { hostId } from "../../lib/project.mjs";
+import { statePathFor as dockerStatePathFor, sweep as dockerSweep } from "../../lib/docker-janitor.mjs";
 
 export function parseRow(line) {
   const fields = line.split("\t");
@@ -42,8 +44,23 @@ export function dropState(ctx, project, kind, agent = "", handle = "") {
   writeRows(ctx, rows);
 }
 
-function killSeatProcesses(ctx, project, agent) {
+// #9778: a seat going down releases the containers its runner recorded — `docker stop` only,
+// never rm, never volumes; docker absent skips silently. Same kill-switch as the process kill.
+async function stopSeatContainers(ctx, project, agent) {
+  if (ctx.dry || ctx.env?.CREW_NO_PROC_KILL === "1" || !project || !agent) return;
+  const r = dockerSweep({ path: dockerStatePathFor(agent, project) });
+  if (r.skipped || !r.stopped.length) return;
+  console.log(`  🧹 ${agent}:${project} — stopped ${r.stopped.length} container(s): ${r.stopped.join(", ")}`);
+  try {
+    const { signedPost } = await import("../../hooks/lib/api.mjs");
+    await signedPost("/send", { from: `${hostId()}:${project}`, to: "all", kind: "status", project,
+      text: `🧹 ${agent}:${project} torn down — stopped ${r.stopped.length} container(s): ${r.stopped.join(", ")}` }, { project });
+  } catch {}
+}
+
+async function killSeatProcesses(ctx, project, agent) {
   if (ctx.env.CREW_NO_PROC_KILL === "1" || !project || !agent) return;
+  await stopSeatContainers(ctx, project, agent);
   const patterns = [`seats/${project}-${agent}\\.sh`, `crew-runner\\.mjs ${agent} .*/${project}$`];
   for (const pattern of patterns) {
     for (const pid of listPids(pattern)) run(ctx, "kill", ["-9", pid], { rendered: `kill -9 ${pid} 2>/dev/null` });
@@ -79,7 +96,7 @@ function parseDownArgs(ctx, args) {
   return parsed;
 }
 
-function closeRow(ctx, row, selected, orchProjects, adapters, tmuxClosed) {
+async function closeRow(ctx, row, selected, orchProjects, adapters, tmuxClosed) {
   const perSeat = selected.length > 0;
   const hasOrch = orchProjects.has(row.project);
   if (row.kind === "cmuxws" && !perSeat && !hasOrch) adapters.cmux.closeWorkspace(row.handle);
@@ -88,7 +105,7 @@ function closeRow(ctx, row, selected, orchProjects, adapters, tmuxClosed) {
   if (row.kind === "herdr" && (perSeat || hasOrch)) adapters.herdr.closePane(row.handle);
   if (row.kind === "tmux") closeTmux(ctx, row, perSeat, tmuxClosed);
   if ((row.kind === "win" || row.kind === "attach") && !(perSeat && row.kind === "attach")) killTerminal(ctx, row.handle);
-  if (!["cmuxws", "attach", "herdrws", "orch"].includes(row.kind)) killSeatProcesses(ctx, row.project, row.agent);
+  if (!["cmuxws", "attach", "herdrws", "orch"].includes(row.kind)) await killSeatProcesses(ctx, row.project, row.agent);
 }
 
 function closeTmux(ctx, row, perSeat, seen) {
@@ -102,7 +119,7 @@ function closeTmux(ctx, row, perSeat, seen) {
   run(ctx, "tmux", ["kill-session", "-t", session], { rendered: `tmux kill-session -t '${session}' 2>/dev/null` });
 }
 
-export function down(ctx, args, adapters) {
+export async function down(ctx, args, adapters) {
   const options = parseDownArgs(ctx, args);
   if (options.help) return 0;
   if (options.error) return 1;
@@ -119,7 +136,7 @@ export function down(ctx, args, adapters) {
   }
   const orchProjects = new Set(rows.filter(row => row.kind === "orch").map(row => row.project));
   const tmuxClosed = new Set();
-  for (const row of scoped) closeRow(ctx, row, options.agents, orchProjects, adapters, tmuxClosed);
+  for (const row of scoped) await closeRow(ctx, row, options.agents, orchProjects, adapters, tmuxClosed);
   const removed = new Set(scoped.map(row => `${row.project}|${row.kind}|${row.agent}|${row.handle}`));
   const kept = rows.filter(row => !removed.has(`${row.project}|${row.kind}|${row.agent}|${row.handle}`) || (orchProjects.has(row.project) && ["herdrws", "cmuxws", "orch"].includes(row.kind)));
   writeRows(ctx, kept);

@@ -13,6 +13,7 @@ import { parseTurnTokens } from "../../lib/turn-policy.mjs";
 import { writeTurnState } from "../../lib/turnstate.mjs";
 import { withEnvFiles } from "../../lib/project.mjs";
 import { shadowEnv, withSecretExports } from "../../lib/secrets.mjs";
+import { newContainers, recordContainers } from "../../lib/docker-janitor.mjs";
 
 const ROOT = new URL("../../", import.meta.url).pathname.replace(/\/$/, "");
 const source = fs.readFileSync(join(ROOT, "bin/crew-runner.mjs"), "utf8");
@@ -60,6 +61,8 @@ echo 'the runner can move on to its next wake without a redelivery ladder or a p
     homedir: () => work, gitOut: () => "unchanged-head", registerStatus: record,
     // #7759 helpers, stubbed like gitOut: no hub in this sandbox, so bus activity reads as none.
     latestBusEventId: async () => 0, busActivitySince: async () => false,
+    // #9778: runTurn snapshots containers at both ends — docker reads as absent in this sandbox.
+    listContainers: () => null, newContainers, recordContainers,
     banner: record, log: record, cmuxStatus: record, herdrAgent: record, killWatchdog: record,
     spawn: () => ({ unref: record }), telemetry: row => rows.push(row),
     spawnSync: (cmd, args, opts) => {
