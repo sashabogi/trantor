@@ -37,7 +37,11 @@ async function contractsFor(session) {
 
 const panes = collectPanes({ turnInFlight, sessionProcessState, hostId: host }).filter(p => !isRetired(p.sid));
 for (const p of panes) p.openContracts = await contractsFor(`${host}:${p.project}`);
-const decided = panes.map(p => retireDecision(p, { hours }));
+// #8017: the operator names projects to keep open whatever their idle age.
+const keep = new Set(String(flag("--keep") || "").split(",").map(s => s.trim()).filter(Boolean));
+const decided = panes.map(p => keep.has(p.project)
+  ? { ...retireDecision(p, { hours }), retire: false, reason: "kept by the operator (--keep)" }
+  : retireDecision(p, { hours }));
 const due = decided.filter(d => d.retire);
 
 if (JSON_OUT) {
