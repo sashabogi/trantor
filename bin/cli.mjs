@@ -132,6 +132,7 @@ switch (cmd) {
   case "orchestrate": run("bin/orchestrate.mjs"); break;
   case "app": run("bin/app.mjs"); break;
   case "patrol": run("bin/patrol.mjs"); break;
+  case "disk": run("bin/disk.mjs"); break;
   case "retire": run("bin/retire.mjs"); break;
   case "identity": {
     const { load, publicView, generate, keyPath } = await import(join(ROOT, "lib/identity.mjs"));
@@ -274,6 +275,7 @@ switch (cmd) {
   trantor orchestrate a per-project ORCHESTRATOR with a MISSION.md and a pulse: up [--every 10m] | down | status — the loop-orchestrator pattern
   trantor retire      retire orchestrator panes nothing is using — preview by default [--hours N] [--yes] [--json]
   trantor patrol      machine-wide resource sweep: crews/runners/workspaces/orphans — [--json] [--reap] (reap = dead rows + stale artifacts ONLY)
+  trantor disk        where the disk went + the safe tier to reclaim — [--dry-run] [--clean] [--json] · install (Monday 09:00 launchd)
 
 Claude Code plugin (the orchestrator side):
   claude plugin marketplace add sashabogi/trantor && claude plugin install trantor
