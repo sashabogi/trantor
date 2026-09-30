@@ -30,6 +30,12 @@ pub(crate) fn project_of_cwd(cwd: &str, root: &str) -> Option<String> {
 pub(crate) struct LocalSessionRow {
     pub(crate) project: String,
     pub(crate) status: Option<String>,
+    /// Freshest transcript write for the project, epoch ms — the same mtime `trantor retire`'s
+    /// idleMsFor stats (lib/retire-panes.mjs). #9813: ACTIVE NOW breaks rank ties by recency so
+    /// a project worked on minutes ago does not drop below week-old ones the moment its turn
+    /// ends. None when no transcript is on disk: no evidence, no claim.
+    #[serde(rename = "lastTurnMs")]
+    pub(crate) last_turn_ms: Option<u64>,
 }
 
 /// Every project with an orch row in `crew-windows.txt`, mapped to its pane id. Last row wins per
@@ -62,8 +68,35 @@ pub(crate) fn merge_local_sessions(
         map.insert(p, Some(status));
     }
     map.into_iter()
-        .map(|(project, status)| LocalSessionRow { project, status })
+        .map(|(project, status)| LocalSessionRow { project, status, last_turn_ms: None })
         .collect()
+}
+
+/// The freshest transcript write in a project's claude-projects dir, in epoch ms. Pure over the
+/// directory: newest `.jsonl` mtime wins, and a missing dir or a dir with no transcripts yields
+/// None — the same "no transcript = no evidence = null" rule idleMsFor applies to one file.
+pub(crate) fn newest_transcript_mtime_ms(tdir: &Path) -> Option<u64> {
+    let entries = std::fs::read_dir(tdir).ok()?;
+    let mut newest: Option<std::time::SystemTime> = None;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|e| e.to_str()) != Some("jsonl") {
+            continue;
+        }
+        let Ok(meta) = entry.metadata() else { continue };
+        if !meta.is_file() {
+            continue; // a dir named *.jsonl is not a transcript
+        }
+        let Ok(mtime) = meta.modified() else { continue };
+        if newest.map_or(true, |cur| mtime > cur) {
+            newest = Some(mtime);
+        }
+    }
+    newest.map(|t| {
+        t.duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as u64)
+            .unwrap_or(0)
+    })
 }
 
 /// Projects with a live session: interactive `claude` windows and crew-runner seats on THIS
@@ -126,7 +159,14 @@ pub(crate) fn local_sessions() -> Vec<LocalSessionRow> {
         }
     }
 
-    merge_local_sessions(out, herdr_open)
+    let mut rows = merge_local_sessions(out, herdr_open);
+    for r in &mut rows {
+        r.last_turn_ms = project_dir(&r.project)
+            .as_deref()
+            .map(transcript_dir_for_project_dir)
+            .and_then(|tdir| newest_transcript_mtime_ms(&tdir));
+    }
+    rows
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -651,5 +691,45 @@ mod session_tests {
         assert_eq!(project_of_cwd("/Users/s/development", r), None);
         assert_eq!(project_of_cwd("/Users/s/development/.hidden", r), None);
         assert_eq!(project_of_cwd("/Users/s/elsewhere/thing", r), None);
+    }
+
+    // #9813 — the freshest transcript write is the last-turn time, whatever its age: the scan
+    // must NOT carry recent_transcript_candidates' one-hour window, or a week-idle project
+    // would sort as "no evidence" against one worked on minutes ago.
+    #[test]
+    fn newest_transcript_mtime_picks_the_freshest_jsonl_at_any_age() {
+        let dir = std::env::temp_dir().join(format!(
+            "trantor-lastturn-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        // A base in 2023 keeps every stamp far in the past, so a real file's now-mtime can
+        // never outrank the fixtures. Newest = largest epoch ms.
+        const BASE: u64 = 1_700_000_000_000;
+        let write_at = |name: &str, ms: u64| {
+            let p = dir.join(name);
+            let f = std::fs::File::create(&p).unwrap();
+            let t = std::time::UNIX_EPOCH + std::time::Duration::from_millis(ms);
+            f.set_times(std::fs::FileTimes::new().set_modified(t)).unwrap();
+        };
+        // a five-day-old transcript, a two-hour-older one, the freshest winner — plus a .txt
+        // that must never count, and a directory whose name happens to end in .jsonl
+        write_at("old.jsonl", BASE);
+        write_at("mid.jsonl", BASE + 2 * 3_600_000);
+        write_at("fresh.jsonl", BASE + 5 * 86_400_000);
+        std::fs::write(dir.join("notes.txt"), "not a transcript").unwrap();
+        std::fs::create_dir_all(dir.join("dir.jsonl")).unwrap();
+        assert_eq!(newest_transcript_mtime_ms(&dir), Some(BASE + 5 * 86_400_000));
+        assert_eq!(newest_transcript_mtime_ms(&dir.join("missing")), None);
+
+        let empty = dir.join("empty");
+        std::fs::create_dir_all(&empty).unwrap();
+        assert_eq!(newest_transcript_mtime_ms(&empty), None);
+
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 }

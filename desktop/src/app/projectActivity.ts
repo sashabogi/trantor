@@ -104,6 +104,24 @@ export function activityRank(act: ProjectActivity | undefined): number {
   return act ? RANK[act.state] : RANK.unknown;
 }
 
+/** #9813 — the ACTIVE NOW order: rank first, then recency, newest turn on top; the old name
+ *  tie-break let a project just worked on sink beneath week-idle siblings when its turn ended.
+ *  `lastTurn` is the freshest transcript write per project (the mtime `trantor retire` stats).
+ *  No stamp sorts last in its rank — no evidence cannot out-rank evidence; ties stay name-stable. */
+export function sortByRecency(
+  names: string[],
+  activity: Map<string, ProjectActivity>,
+  lastTurn: Map<string, number>,
+): string[] {
+  const stamp = (p: string): number => lastTurn.get(p) ?? Number.NEGATIVE_INFINITY;
+  return [...names].sort(
+    (a, b) =>
+      activityRank(activity.get(a)) - activityRank(activity.get(b)) ||
+      stamp(b) - stamp(a) ||
+      a.localeCompare(b),
+  );
+}
+
 /** Wake is a real action only where the evidence says no turn is running: an idle session takes the
  *  kickoff, a project with no session at all gets one opened. A working row would only answer with
  *  its pane id, and an unknown row cannot be promised either outcome — so neither offers the button.

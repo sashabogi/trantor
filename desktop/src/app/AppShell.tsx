@@ -5,7 +5,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ArrowDownToLine, Bot, Eye, GraduationCap, House, Inbox as InboxIcon, MessagesSquare, Plus, Search, Settings as SettingsIcon } from "lucide-react";
 import { appUpdateCheck, HubClient, hubForProject, knownProjects, localSessions, trantorCliCompatibility, type AppUpdate, type Peer, type TrantorCliCompatibility } from "../shared/api/client";
-import { computeProjectActivity, activityRank, activityLine, activityTitle, wakeIsReal, type ProjectActivity } from "./projectActivity";
+import { computeProjectActivity, activityLine, activityTitle, sortByRecency, wakeIsReal, type ProjectActivity } from "./projectActivity";
 import { Palette, type PaletteScope } from "../features/search/Palette";
 import { countUnseen, onSeenChange } from "../shared/seen";
 import { usePendingProposals } from "../shared/Proposals";
@@ -164,6 +164,10 @@ export function AppShell() {
   // and BUSY (a hub heartbeat inside the 90s work window). Peers aggregate from both the
   // active and local hub, freshest wins; the WHAT line (#5610) rides the same pull, free.
   const [activity, setActivity] = useState<Map<string, ProjectActivity>>(new Map());
+  // Per-project last-turn time (freshest transcript write, epoch ms) from the same pull —
+  // #9813: the recency tie-break inside a rank group. Kept next to `activity` so the sort
+  // never pairs a fresh activity map with a stale set of timestamps.
+  const [lastTurn, setLastTurn] = useState<Map<string, number>>(new Map());
   useEffect(() => {
     let alive = true;
     const pull = async () => {
@@ -174,21 +178,27 @@ export function AppShell() {
       ]);
       if (!alive) return;
       setActivity(computeProjectActivity(open, lists.flat()));
+      const turns = new Map<string, number>();
+      for (const o of open) if (o.lastTurnMs != null) turns.set(o.project, o.lastTurnMs);
+      setLastTurn(turns);
     };
     void pull();
     const t = setInterval(pull, 15_000);
     return () => { alive = false; clearInterval(t); };
   }, [hub]);
 
-  // Active projects rise above an alphabetical rest, sorted mid-turn-before-idle within
-  // the active group (activityRank).
-  // The "Active now" group only renders when something is actually live; an empty header
-  // on a quiet machine would be chrome that says nothing.
+  // Active projects rise above an alphabetical rest: activityRank first, then #9813's recency
+  // tie-break — never the project name, or a project just worked on sinks beneath week-idle
+  // siblings the moment its turn ends. The group only renders when something is actually live;
+  // an empty header on a quiet machine would be chrome that says nothing.
   const [activeProjects, restProjects] = useMemo(() => {
-    const live = projects.filter(p => activity.has(p))
-      .sort((a, b) => activityRank(activity.get(a)) - activityRank(activity.get(b)) || a.localeCompare(b));
+    const live = sortByRecency(
+      projects.filter(p => activity.has(p)),
+      activity,
+      lastTurn,
+    );
     return [live, projects.filter(p => !activity.has(p))] as const;
-  }, [projects, activity]);
+  }, [projects, activity, lastTurn]);
 
   // #6094 — how many open sessions are BLOCKED right now: an approval or an AskUserQuestion the
   // pane is sitting on, waiting on the operator. Folded into the Inbox badge below, because that

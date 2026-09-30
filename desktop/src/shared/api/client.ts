@@ -437,9 +437,9 @@ export async function attachmentInfo(path: string): Promise<AttachmentInfo | nul
 
 /** A project with a live session, plus herdr's lifecycle status when its orch pane answered one
  * ("working" | "idle" | "blocked" | "done" | "unknown"). `status` is null when this project's
- * presence is process-truth only (interactive claude window or crew seat pgrep/lsof found, but
- * no herdr pane confirmed a status for it). */
-export type LocalSession = { project: string; status: string | null };
+ * presence is process-truth only. `lastTurnMs` is the project's freshest session-transcript
+ * write, epoch ms — the same mtime `trantor retire`'s idleMsFor stats (#9813); null on disk-silence. */
+export type LocalSession = { project: string; status: string | null; lastTurnMs?: number | null };
 
 /** Projects with a live session: interactive claude windows + crew seats found by PROCESS
  * truth, PLUS any project whose orch pane herdr can still name an agent for (#6163: process

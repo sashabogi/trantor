@@ -1,8 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
   activityLine, activityRank, activityTitle, computeProjectActivity,
-  isWorkingStatus, needsYou, wakeIsReal,
+  isWorkingStatus, needsYou, sortByRecency, wakeIsReal,
 } from "./projectActivity";
+import type { ProjectActivity } from "./projectActivity";
 import type { LocalSession, Peer } from "../shared/api/client";
 import { ONLINE_MS } from "../shared/presence";
 
@@ -154,6 +155,68 @@ describe("activityRank", () => {
     expect(activityRank({ state: "idle", evidence: "" })).toBe(2);
     expect(activityRank({ state: "unknown", evidence: "" })).toBe(3);
     expect(activityRank(undefined)).toBe(3);
+  });
+});
+
+describe("sortByRecency (#9813 — the ACTIVE NOW tie-break is recency, never the name)", () => {
+  const HOUR = 3_600_000;
+  const DAY = 24 * HOUR;
+
+  const idleMap = (names: string[]): Map<string, ProjectActivity> =>
+    new Map(names.map(n => [n, { state: "idle" as const, evidence: "idle" }]));
+
+  it("orders three idle projects newest-turn first, where alphabetical order would differ", () => {
+    // Alphabetically this list reads asteroids, css, trantor — the bug: trantor, worked on
+    // minutes ago, sank beneath a week-idle project the moment its turn ended.
+    const names = ["css", "trantor", "asteroids"];
+    const activity = idleMap(names);
+    const lastTurn = new Map([
+      ["trantor", NOW - 3 * 60_000],
+      ["asteroids", NOW - 2 * HOUR],
+      ["css", NOW - 5 * DAY],
+    ]);
+    expect(sortByRecency(names, activity, lastTurn)).toEqual(["trantor", "asteroids", "css"]);
+  });
+
+  it("keeps rank above recency: an hours-old needs-you row still tops a just-worked idle one", () => {
+    const names = ["zeta", "alpha"];
+    const activity = new Map<string, ProjectActivity>([
+      ["zeta", { state: "idle", evidence: "" }],
+      ["alpha", { state: "needs-you", evidence: "" }],
+    ]);
+    const lastTurn = new Map([
+      ["zeta", NOW - 1_000],
+      ["alpha", NOW - 6 * HOUR],
+    ]);
+    expect(sortByRecency(names, activity, lastTurn)).toEqual(["alpha", "zeta"]);
+  });
+
+  it("sorts a project with no transcript stamp after timestamped siblings in its rank", () => {
+    // No evidence cannot out-rank evidence: an unknown age goes last even when its name is
+    // alphabetically first, so a fresh row is never pushed down by a blank.
+    const names = ["aaa", "mmm", "zzz"];
+    const activity = idleMap(names);
+    const lastTurn = new Map([
+      ["zzz", NOW - 30_000],
+      ["mmm", NOW - HOUR],
+    ]);
+    expect(sortByRecency(names, activity, lastTurn)).toEqual(["zzz", "mmm", "aaa"]);
+  });
+
+  it("breaks equal stamps by name so the order never flickers between renders", () => {
+    const names = ["bravo", "alpha"];
+    const activity = idleMap(names);
+    const t = NOW - HOUR;
+    const lastTurn = new Map([["alpha", t], ["bravo", t]]);
+    expect(sortByRecency(names, activity, lastTurn)).toEqual(["alpha", "bravo"]);
+  });
+
+  it("does not mutate the caller's array", () => {
+    const names = ["css", "trantor"];
+    const activity = idleMap(names);
+    const lastTurn = new Map([["trantor", NOW], ["css", NOW - 1]]);
+    sortByRecency(names, activity, lastTurn);
+    expect(names).toEqual(["css", "trantor"]);
   });
 });
 

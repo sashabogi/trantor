@@ -193,7 +193,11 @@ fn local_sessions_merge_counts_a_herdr_only_pane_as_open() {
     let rows = merge_local_sessions(vec![], vec![("pr-os".to_string(), "working".to_string())]);
     assert_eq!(
         rows,
-        vec![LocalSessionRow { project: "pr-os".to_string(), status: Some("working".to_string()) }]
+        vec![LocalSessionRow {
+            project: "pr-os".to_string(),
+            status: Some("working".to_string()),
+            last_turn_ms: None,
+        }]
     );
 }
 
@@ -205,7 +209,11 @@ fn local_sessions_merge_prefers_herdr_status_over_bare_process_truth() {
     );
     assert_eq!(
         rows,
-        vec![LocalSessionRow { project: "pr-os".to_string(), status: Some("idle".to_string()) }]
+        vec![LocalSessionRow {
+            project: "pr-os".to_string(),
+            status: Some("idle".to_string()),
+            last_turn_ms: None,
+        }]
     );
 }
 
@@ -216,7 +224,11 @@ fn local_sessions_merge_keeps_a_process_only_project_with_no_status() {
     let rows = merge_local_sessions(vec!["crebral-health".to_string()], vec![]);
     assert_eq!(
         rows,
-        vec![LocalSessionRow { project: "crebral-health".to_string(), status: None }]
+        vec![LocalSessionRow {
+            project: "crebral-health".to_string(),
+            status: None,
+            last_turn_ms: None,
+        }]
     );
 }
 
