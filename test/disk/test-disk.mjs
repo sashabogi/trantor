@@ -37,6 +37,30 @@ try {
   mkdirSync(join(tracked, "target"), { recursive: true });
   writeFileSync(join(tracked, "target", "keep.js"), "z");
 
+  // ---- HF cache fixture: shared-blob layout, the real weights at the end of
+  // snapshot symlinks; a per-model blob, a second rev re-linking the same blob, a
+  // second model sharing the same big blob, and a broken symlink to survive.
+  const HUB = join(HOME, ".cache", "huggingface", "hub");
+  const BLOB64 = "a".repeat(64);
+  mkdirSync(join(HUB, "blobs", "4f"), { recursive: true });
+  writeFileSync(join(HUB, "blobs", "4f", BLOB64), "B".repeat(7 * 1024 * 1024));
+  const m1 = join(HUB, "models--org--m1");
+  const rev1 = join(m1, "snapshots", "rev1");
+  mkdirSync(rev1, { recursive: true });
+  mkdirSync(join(m1, "blobs"), { recursive: true });
+  writeFileSync(join(m1, "blobs", "cfg"), "cfg!");
+  symlinkSync(join("..", "..", "..", "blobs", "4f", BLOB64), join(rev1, "weights.safetensors"), "file");
+  symlinkSync(join("..", "blobs", "cfg"), join(rev1, "config.json"), "file");
+  symlinkSync(join("..", "blobs", "missing"), join(rev1, "broken.bin"), "file");
+  const rev2 = join(m1, "snapshots", "rev2");
+  mkdirSync(rev2, { recursive: true });
+  symlinkSync(join("..", "..", "..", "blobs", "4f", BLOB64), join(rev2, "weights.safetensors"), "file");
+  const m2 = join(HUB, "models--org--m2");
+  const m2snap = join(m2, "snapshots", "r");
+  mkdirSync(m2snap, { recursive: true });
+  symlinkSync(join("..", "..", "..", "blobs", "4f", BLOB64), join(m2snap, "weights.safetensors"), "file");
+  const HF_TOTAL = 7 * 1024 * 1024 + 4; // shared big blob + per-model config, each once
+
   const opencodeJson = JSON.stringify([
     { id: "ses_old", title: "old", updated: NOW - 20 * DAY, directory: join(HOME, "elsewhere") },
     { id: "ses_fresh", title: "fresh", updated: NOW - 2 * DAY, directory: join(HOME, "elsewhere") },
@@ -70,6 +94,12 @@ try {
   ok("tracked target listed as KEPT", report.kept.some((k) => k.path === join(tracked, "target") && /git-tracked/.test(k.reason)));
   ok("unavailable simulators counted from simctl output", report.simulators.unavailable === 2 && report.simulators.available);
   ok("simulators are one plan entry", report.plan.filter((p) => p.type === "simulators").length === 1);
+  ok("HF model sizes resolve snapshot symlinks to the blobs, deduped",
+    report.hf.models.find((m) => m.model === "models--org--m1")?.bytes === HF_TOTAL,
+    JSON.stringify(report.hf.models));
+  ok("HF cache total counts a blob shared across models once",
+    report.hf.totalBytes === HF_TOTAL && report.hf.models.find((m) => m.model === "models--org--m2")?.bytes === 7 * 1024 * 1024,
+    JSON.stringify({ totalBytes: report.hf.totalBytes, models: report.hf.models }));
   ok("report mode performed zero deletions and zero clean calls",
     removed.length === 0
     && !calls.some((c) => c.join(" ") === "xcrun simctl delete unavailable")
@@ -78,6 +108,9 @@ try {
   const human = formatHuman(report);
   ok("drill: free space, category sizes and the exact deletion list print", human.includes("free of") && human.includes("safe tier would delete") && human.includes("dead-seat"));
   ok("drill: KEPT lines carry their reasons", /KEPT: .*live seat process/.test(human) && /KEPT: .*git-tracked/.test(human));
+  ok("drill: KEPT lines name the path, same as DELETE", human.includes(`KEPT: a live seat process uses this worktree  ${join(live, ".next")}`));
+  ok("drill: HF cache header is formatted, not a raw byte count",
+    human.includes(`huggingface cache: ${fmtBytes(HF_TOTAL)}`) && !human.includes(`huggingface cache: ${HF_TOTAL}`));
 
   // ---- clean mode: only the plan executes, only under the temp HOME ----
   const results = await runClean(report, d);
