@@ -286,12 +286,27 @@ pub fn run() {
             eprintln!("error while building tauri application: {err}");
             std::process::exit(1)
         })
-        .run(|_app_handle, event| {
+        .run(|app_handle, event| {
             // #5917 guard, part two: tao's run loop calls this closure on the main thread for
             // every event, and a panic here would unwind out through the same extern "C" boundary
             // and abort — so catch and log it the way the invoke guard does.
             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
-                let _ = event;
+                // #9811: on quit nothing else kills the `herdr agent attach` children — the
+                // webview's term_detach never runs once the process is going down, and an
+                // orphaned client holds the pane until someone kills it by hand ("already has an
+                // attached client" on the next launch). Every registered child dies here.
+                if matches!(event, tauri::RunEvent::Exit) {
+                    use tauri::Manager;
+                    let report = app_handle
+                        .state::<terminal::TerminalManager>()
+                        .kill_all();
+                    if report.killed > 0 {
+                        let _ = crate::changes::app_log(format!(
+                            "quit: killed {} terminal attach child(ren), all reaped: {}",
+                            report.killed, report.all_reaped
+                        ));
+                    }
+                }
             }));
             if let Err(payload) = result {
                 append_panic_log(

@@ -48,6 +48,9 @@ struct TerminalSession {
     killer: Mutex<Box<dyn ChildKiller + Send + Sync>>,
     reaped: Arc<AtomicBool>,
     pid: Option<u32>,
+    /// The herdr pane target this child attaches (`w9:p1G`), when it is an agent attach and not a
+    /// raw test shell. The registry's kill-first and detach cleanup key off this.
+    target: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -56,14 +59,42 @@ struct DetachReport {
     reaped: bool,
 }
 
+/// What a target-keyed attach did: the subscription id to stream from, and — when a previous
+/// client for the SAME pane was still registered — the report of killing and reaping it first.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct AttachOutcome {
+    sub: u64,
+    replaced: Option<DetachReport>,
+}
+
+/// What a full teardown (app quit) killed and whether every child was reaped within the timeout.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct KillAllReport {
+    pub(crate) killed: usize,
+    pub(crate) all_reaped: bool,
+}
+
 #[derive(Default)]
 pub struct TerminalManager {
     next_sub: AtomicU64,
     sessions: Mutex<HashMap<u64, Arc<TerminalSession>>>,
+    /// One attach per pane, #9811: herdr refuses a second `agent attach` for a pane with a live
+    /// client ("already has an attached client"), so a second request for the same target must
+    /// first kill the child this app itself registered. Keyed by the pane target string.
+    targets: Mutex<HashMap<String, u64>>,
 }
 
 impl TerminalManager {
-    fn attach_command(&self, mut cmd: CommandBuilder, on_bytes: ByteSink) -> Result<u64, String> {
+    fn attach_command(&self, cmd: CommandBuilder, on_bytes: ByteSink) -> Result<u64, String> {
+        self.attach_session(None, cmd, on_bytes)
+    }
+
+    fn attach_session(
+        &self,
+        target: Option<String>,
+        mut cmd: CommandBuilder,
+        on_bytes: ByteSink,
+    ) -> Result<u64, String> {
         cmd.env("PATH", crate::terminal_path());
         crate::identity_env::scrub_pty_command(&mut cmd);
         let pty = native_pty_system();
@@ -119,9 +150,37 @@ impl TerminalManager {
             killer: Mutex::new(killer),
             reaped,
             pid,
+            target,
         });
         crate::lock_or_recover(&self.sessions).insert(sub, session);
         Ok(sub)
+    }
+
+    /// The registry door every `herdr agent attach` walks through (#9811): at most ONE live child
+    /// per pane target, owned by this process. A second request for the same pane kills and reaps
+    /// the child this app registered before spawning a fresh one — herdr only ever sees one client
+    /// of ours, so `--takeover` (stealing a client we cannot prove is ours) is never needed and
+    /// never passed: after kill-first there is no live registered child, and a foreign client —
+    /// an orphan from a previous app run, a hand-typed `herdr attach` — is not ours to take.
+    fn attach_target(
+        &self,
+        target: &str,
+        cmd: CommandBuilder,
+        on_bytes: ByteSink,
+    ) -> Result<AttachOutcome, String> {
+        // Kill-first, reap-waited: the old client is gone from herdr's registry before the new
+        // spawn, which is exactly the window the 14:14 trace fell into. The index guard is bound
+        // and dropped in its own statement BEFORE detach runs — detach cleans the same index, and
+        // the guard of a match scrutinee would otherwise be held straight through it (the 60s
+        // test hang that caught this).
+        let existing = crate::lock_or_recover(&self.targets).remove(target);
+        let replaced = match existing {
+            Some(old_sub) => self.detach(old_sub).ok(),
+            None => None,
+        };
+        let sub = self.attach_session(Some(target.to_string()), cmd, on_bytes)?;
+        crate::lock_or_recover(&self.targets).insert(target.to_string(), sub);
+        Ok(AttachOutcome { sub, replaced })
     }
 
     fn write(&self, sub: u64, data: &str) -> Result<usize, String> {
@@ -171,6 +230,12 @@ impl TerminalManager {
         let session = crate::lock_or_recover(&self.sessions)
             .remove(&sub)
             .ok_or_else(|| format!("unknown terminal subscription {sub}"))?;
+        if let Some(target) = &session.target {
+            let mut targets = crate::lock_or_recover(&self.targets);
+            if targets.get(target) == Some(&sub) {
+                targets.remove(target);
+            }
+        }
         {
             let mut killer = crate::lock_or_recover(&session.killer);
             let _ = killer.kill();
@@ -186,6 +251,33 @@ impl TerminalManager {
         })
     }
 
+    /// The teardown of last resort, wired to the app's exit (#9811): a webview reload or a quit
+    /// never delivers the frontend's `term_detach`, so whatever is still registered dies here —
+    /// killed and reaped, bounded by the same timeout a single detach gets. Idempotent.
+    pub(crate) fn kill_all(&self) -> KillAllReport {
+        let sessions: Vec<Arc<TerminalSession>> = {
+            let mut map = crate::lock_or_recover(&self.sessions);
+            map.drain().map(|(_, session)| session).collect()
+        };
+        crate::lock_or_recover(&self.targets).clear();
+        for session in &sessions {
+            let mut killer = crate::lock_or_recover(&session.killer);
+            let _ = killer.kill();
+        }
+        let deadline = Instant::now() + DETACH_REAP_TIMEOUT;
+        while Instant::now() < deadline
+            && sessions.iter().any(|s| !s.reaped.load(Ordering::SeqCst))
+        {
+            thread::sleep(Duration::from_millis(20));
+        }
+        KillAllReport {
+            killed: sessions.len(),
+            all_reaped: sessions
+                .iter()
+                .all(|s| s.reaped.load(Ordering::SeqCst)),
+        }
+    }
+
     fn session(&self, sub: u64) -> Result<Arc<TerminalSession>, String> {
         crate::lock_or_recover(&self.sessions)
             .get(&sub)
@@ -196,6 +288,16 @@ impl TerminalManager {
     #[cfg(test)]
     fn contains(&self, sub: u64) -> bool {
         crate::lock_or_recover(&self.sessions).contains_key(&sub)
+    }
+
+    #[cfg(test)]
+    fn lookup_target(&self, target: &str) -> Option<u64> {
+        crate::lock_or_recover(&self.targets).get(target).copied()
+    }
+
+    #[cfg(test)]
+    fn target_count(&self) -> usize {
+        crate::lock_or_recover(&self.targets).len()
     }
 }
 
@@ -285,23 +387,33 @@ pub fn orchestrator_open(project: String) -> Result<String, String> {
     Ok(target)
 }
 
+/// The argv for an agent attach — pure so the no-takeover guarantee (#9811) is testable: a
+/// second client of ours is killed before we spawn, and a foreign one is never ours to steal.
+fn attach_args(target: &str) -> [&str; 3] {
+    ["agent", "attach", target]
+}
+
 #[tauri::command]
 pub async fn term_attach(
     target: String,
     on_bytes: Channel<Vec<u8>>,
     terminals: State<'_, TerminalManager>,
 ) -> Result<u64, String> {
-    if target.trim().is_empty() {
+    let target = target.trim().to_string();
+    if target.is_empty() {
         return Err("target is required".into());
     }
     let mut cmd = CommandBuilder::new("herdr");
-    cmd.args(["agent", "attach", target.as_str()]);
-    terminals.attach_command(
-        cmd,
-        Arc::new(move |bytes| {
-            let _ = on_bytes.send(bytes);
-        }),
-    )
+    cmd.args(attach_args(&target));
+    terminals
+        .attach_target(
+            &target,
+            cmd,
+            Arc::new(move |bytes| {
+                let _ = on_bytes.send(bytes);
+            }),
+        )
+        .map(|outcome| outcome.sub)
 }
 
 #[tauri::command]
@@ -620,5 +732,147 @@ mod tests {
         assert_eq!(kickoff_from_cli(false, selected, "plain"), "plain");
         assert_eq!(kickoff_from_cli(true, "", "plain"), "plain");
         assert_eq!(kickoff_from_cli(true, "first\nsecond", "plain"), "plain");
+    }
+
+    // ---- the per-pane attach registry (#9811) ----
+
+    fn wait_reaped(manager: &TerminalManager, sub: u64) -> bool {
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while Instant::now() < deadline {
+            if let Ok(session) = manager.session(sub) {
+                if session.reaped.load(Ordering::SeqCst) {
+                    return true;
+                }
+            } else {
+                return false; // already detached: gone from the map
+            }
+            thread::sleep(Duration::from_millis(20));
+        }
+        false
+    }
+
+    #[test]
+    fn attach_args_never_asks_for_takeover() {
+        // --takeover steals whatever client holds the pane, ours or not. The registry's
+        // kill-first means our own client is dead before we spawn, and a foreign one (an orphan
+        // of a previous app run, a hand-typed attach) is not ours to take — so no code path may
+        // ever add the flag.
+        assert_eq!(attach_args("w9:p1G"), ["agent", "attach", "w9:p1G"]);
+        assert!(!attach_args("w9:p1G").contains(&"--takeover"));
+        assert!(!attach_args("w9:p1G").iter().any(|a| a.contains("takeover")));
+    }
+
+    #[test]
+    fn a_second_attach_for_the_same_pane_kills_the_first_child_and_keeps_one_entry() {
+        let manager = TerminalManager::default();
+        let sink: ByteSink = Arc::new(|_| {});
+
+        let first = manager
+            .attach_target("w9:p1G", shell_command("while :; do sleep 1; done"), Arc::clone(&sink))
+            .expect("first attach")
+            .sub;
+        let first_pid = manager.session(first).expect("first session").pid;
+        assert!(first_pid.is_some(), "portable-pty should expose the child pid on Unix");
+
+        let second = manager
+            .attach_target("w9:p1G", shell_command("while :; do sleep 1; done"), sink)
+            .expect("second attach")
+            .sub;
+        let second_pid = manager.session(second).expect("second session").pid;
+        assert_ne!(first, second);
+        assert_ne!(first_pid, second_pid, "two spawns are two distinct children");
+
+        // The replacement report proves kill-first: the OLD child was killed AND reaped before
+        // the new spawn registered — herdr never sees two clients of ours on one pane.
+        let outcome = manager
+            .attach_target("w9:p1G", shell_command("while :; do sleep 1; done"), Arc::new(|_| {}))
+            .expect("third attach");
+        let replaced = outcome.replaced.expect("the live second client was replaced");
+        assert_eq!(replaced.pid, second_pid, "the killed client is the one this app registered");
+        assert!(replaced.reaped, "the replaced child was reaped, not just abandoned");
+        // Exactly one registry entry and one live session for the pane.
+        assert_eq!(manager.target_count(), 1);
+        assert_eq!(manager.lookup_target("w9:p1G"), Some(outcome.sub));
+        assert!(!manager.contains(first), "the first session was removed with its registry entry");
+        assert!(!manager.contains(second));
+        assert!(manager.detach(outcome.sub).expect("the surviving attach detaches").reaped);
+    }
+
+    #[test]
+    fn detach_via_sub_cleans_the_target_index() {
+        let manager = TerminalManager::default();
+        let sub = manager
+            .attach_target("w2R:p1", shell_command("while :; do sleep 1; done"), Arc::new(|_| {}))
+            .expect("attach")
+            .sub;
+        assert_eq!(manager.lookup_target("w2R:p1"), Some(sub));
+        assert!(manager.detach(sub).expect("detach").reaped);
+        assert_eq!(manager.lookup_target("w2R:p1"), None, "the pane's registry entry dies with its subscription");
+        assert_eq!(manager.target_count(), 0);
+    }
+
+    #[test]
+    fn a_child_that_exits_on_its_own_leaves_a_stale_entry_the_next_attach_purges() {
+        let manager = TerminalManager::default();
+        let sub = manager
+            .attach_target("w9:p1G", shell_command("exit 0"), Arc::new(|_| {}))
+            .expect("attach")
+            .sub;
+        assert!(wait_reaped(&manager, sub), "the child exited by itself");
+        // The stale entry still sits in the registry (nothing observed the exit yet)…
+        assert_eq!(manager.lookup_target("w9:p1G"), Some(sub));
+        // …and the next request for the pane removes it and installs the fresh client, reporting
+        // the dead one as reaped rather than trying to stream from a corpse.
+        let outcome = manager
+            .attach_target("w9:p1G", shell_command("while :; do sleep 1; done"), Arc::new(|_| {}))
+            .expect("re-attach over a stale entry");
+        assert!(outcome.replaced.expect("stale entry reported").reaped);
+        assert_eq!(manager.lookup_target("w9:p1G"), Some(outcome.sub));
+        assert!(manager.detach(outcome.sub).expect("detach").reaped);
+    }
+
+    #[test]
+    fn kill_all_drops_every_session_and_reaps_every_child() {
+        let manager = TerminalManager::default();
+        let a = manager
+            .attach_target("w9:p1G", shell_command("while :; do sleep 1; done"), Arc::new(|_| {}))
+            .expect("attach a")
+            .sub;
+        let b = manager
+            .attach_target("w2R:p1", shell_command("while :; do sleep 1; done"), Arc::new(|_| {}))
+            .expect("attach b")
+            .sub;
+        let raw = manager
+            .attach_command(shell_command("while :; do sleep 1; done"), Arc::new(|_| {}))
+            .expect("raw shell has no pane target");
+
+        let report = manager.kill_all();
+        assert_eq!(report.killed, 3, "two pane attaches and one raw session");
+        assert!(report.all_reaped, "every child was reaped within the timeout");
+        assert_eq!(manager.target_count(), 0);
+        assert!(!manager.contains(a));
+        assert!(!manager.contains(b));
+        assert!(!manager.contains(raw));
+        // Idempotent: a second sweep at an already-empty registry is a clean no-op.
+        assert_eq!(manager.kill_all(), KillAllReport { killed: 0, all_reaped: true });
+    }
+
+    #[test]
+    fn a_failed_spawn_leaves_no_registry_entry_behind() {
+        let manager = TerminalManager::default();
+        // A command that cannot spawn: the binary does not exist.
+        let missing = CommandBuilder::new("/nonexistent/herdr-stand-in");
+        let err = manager
+            .attach_target("w9:p1G", missing, Arc::new(|_| {}))
+            .expect_err("spawn of a missing binary fails");
+        assert!(err.contains("spawn"), "failed at spawn: {err}");
+        assert_eq!(manager.target_count(), 0, "no entry for a child that never existed");
+        assert_eq!(manager.kill_all(), KillAllReport { killed: 0, all_reaped: true });
+        // The pane is still attachable afterwards: the registry is not poisoned by the failure.
+        let sub = manager
+            .attach_target("w9:p1G", shell_command("while :; do sleep 1; done"), Arc::new(|_| {}))
+            .expect("attach after a failed spawn")
+            .sub;
+        assert!(manager.detach(sub).expect("detach").reaped);
     }
 }
