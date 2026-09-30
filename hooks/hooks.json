@@ -34,6 +34,15 @@
             "command": "node ${CLAUDE_PLUGIN_ROOT}/hooks/ask-sidecar.mjs"
           }
         ]
+      },
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node ${CLAUDE_PLUGIN_ROOT}/hooks/await-operator.mjs"
+          }
+        ]
       }
     ],
     "PreToolUse": [
@@ -194,6 +203,15 @@
           {
             "type": "command",
             "command": "node ${CLAUDE_PLUGIN_ROOT}/hooks/stop-inbox.mjs"
+          }
+        ]
+      },
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node ${CLAUDE_PLUGIN_ROOT}/hooks/await-operator.mjs"
           }
         ]
       }
