@@ -16,6 +16,7 @@ import { applyWorktreeDeclaration, ensureSeatWorktree, provisioningLines, readWo
 import {
   AUTH_MARKER_RE, classifyFailure, looksLikeAuthDeath,
   verdictFor, substantiveOutput, stallVerdict, cutSignalFor,
+  BILLING_RE, looksLikeBillingDeath, usageSaysNoWork, zeroUsageVerdict,
   readPromptText, stripPromptEcho,
 } from "../lib/classify-failure.mjs";
 import { capWake, capBcast, pickLessons, composePrompt, contractBase, baseLine } from "./crew-payload.mjs";
@@ -928,6 +929,14 @@ exit $turn_exit`;
     authHit = AUTH_MARKER_RE.exec(ownOut)[0];
     log(`\x1b[31mexit 0 but the turn output IS an auth failure — treating as FAILED (auth, "${authHit}")\x1b[0m`);
   }
+  // #9724: the same trap in the quota family — opencode printed the OpenRouter credit error and
+  // exited 0, and exit 0 + output read as success over a turn where nothing ran. A billing
+  // rejection on a clean exit lifts effExit like the auth death does; classifyFailure names it
+  // exhausted and the existing ladder parks the seat (exhausted is in PARKING_REASONS).
+  if (realExit === 0 && effExit === 0 && looksLikeBillingDeath(ownOut, newCommit)) {
+    effExit = 1;
+    log(`\x1b[31mexit 0 but the turn output IS a provider billing rejection — treating as FAILED (exhausted, "${BILLING_RE.exec(ownOut)[0]}")\x1b[0m`);
+  }
   // #5481: exit 0 with an empty ERRF (the TOTAL capture, both streams) is the null-completion trap,
   // judged on echo-stripped text (#5868). #6969: on a state step ERRF is stderr only, so silence is normal.
   if (realExit === 0 && effExit === 0 && !lastErrText.trim() && !lastEnvelope.trim()) {
@@ -944,11 +953,6 @@ exit $turn_exit`;
   lastEmptyTurn = !cut && realExit === 0 && effExit === 0 && !authHit && !opts.state
     && !worktreeChanged && !busActive && !substantiveOutput(ownOut);
   if (lastEmptyTurn) log("\x1b[33mexit 0 but the turn was EMPTY — no worktree change, no substantive output, no bus activity\x1b[0m");
-  // #5868: the verdict rides the telemetry row so a classification survives the pane scrolling
-  // away — the same "classified X because Y" shape the runner logs, in the seat's jsonl forever.
-  // A silent cut names its own verdict (#7752): the exit under it is the sweep's SIGPIPE, never
-  // a provider failure. A box cut passes `cut` so its 137 reads as the sweep's SIGKILL (#7099).
-  const verdict = stallCut ? stallVerdict() : verdictFor(realExit, effExit, lastEmptyOutput, ownOut, lastEmptyTurn, cut);
   // #6134: what the turn COST, from the CLI's own usage line. Zero means this CLI printed none —
   // never that the turn was free. `trantor seat-why` totals these into today's spend per seat.
   let tokens = parseTurnTokens(ownOut);
@@ -965,6 +969,18 @@ exit $turn_exit`;
     : AGENT === "dsh" ? dshTurnUsage(join(homedir(), ".dsh", "sessions"), TURN_DIR, t0, Date.now())
     : null;
   if (usage) tokens = usageTotal(usage);
+  // #9724: usage RESOLVED to all zeros means no model work happened — never success; null stays
+  // unknown, never failure, and a shipped commit is real work (stale record, not the turn).
+  const zeroUsage = realExit === 0 && effExit === 0 && !newCommit && usageSaysNoWork(usage);
+  if (zeroUsage) {
+    effExit = 1;
+    log("\x1b[31mexit 0 but the session usage record resolved to all zeros — no model work happened; treating as FAILED\x1b[0m");
+  }
+  // #5868: the verdict rides the telemetry row so a classification survives the pane scrolling
+  // away — the same "classified X because Y" shape the runner logs. A silent cut names its own
+  // verdict (#7752): the exit under it is the sweep's SIGPIPE. A box cut passes `cut` so its 137
+  // reads as the sweep's SIGKILL (#7099); a zero-usage turn names its own verdict too (#9724).
+  const verdict = stallCut ? stallVerdict() : zeroUsage ? zeroUsageVerdict() : verdictFor(realExit, effExit, lastEmptyOutput, ownOut, lastEmptyTurn, cut);
   // #6289: every ledger row names in ONE field what happened to the turn — cut, stalled (#7752),
   // api-error, completed — and what it cost (0 means "not reported", never "free"). #7762: `card`
   // binds the row to the card the turn worked (0 = kickoff/pulse) so the seat record attributes
