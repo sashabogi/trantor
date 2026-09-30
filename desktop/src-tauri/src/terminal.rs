@@ -158,10 +158,9 @@ impl TerminalManager {
 
     /// The registry door every `herdr agent attach` walks through (#9811): at most ONE live child
     /// per pane target, owned by this process. A second request for the same pane kills and reaps
-    /// the child this app registered before spawning a fresh one — herdr only ever sees one client
-    /// of ours, so `--takeover` (stealing a client we cannot prove is ours) is never needed and
-    /// never passed: after kill-first there is no live registered child, and a foreign client —
-    /// an orphan from a previous app run, a hand-typed `herdr attach` — is not ours to take.
+    /// the child this app registered before spawning a fresh one, so herdr only ever sees one
+    /// client of ours — `--takeover` is never needed and never passed. A foreign client (a
+    /// previous run's orphan, a hand-typed attach) is not ours to steal.
     fn attach_target(
         &self,
         target: &str,
@@ -169,10 +168,9 @@ impl TerminalManager {
         on_bytes: ByteSink,
     ) -> Result<AttachOutcome, String> {
         // Kill-first, reap-waited: the old client is gone from herdr's registry before the new
-        // spawn, which is exactly the window the 14:14 trace fell into. The index guard is bound
-        // and dropped in its own statement BEFORE detach runs — detach cleans the same index, and
-        // the guard of a match scrutinee would otherwise be held straight through it (the 60s
-        // test hang that caught this).
+        // spawn — the window the 14:14 trace fell into. The index guard is bound and dropped in
+        // its own statement BEFORE detach runs, because detach cleans the same index and a match
+        // scrutinee's guard would be held straight through it (the 60s test hang).
         let existing = crate::lock_or_recover(&self.targets).remove(target);
         let replaced = match existing {
             Some(old_sub) => self.detach(old_sub).ok(),
