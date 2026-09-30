@@ -21,5 +21,30 @@ ok(isImplausibleCost({ usd: null, cacheRead: 60e6 }) === true, "flags 60M cache-
 ok(isImplausibleCost({ usd: 80, cacheRead: 1e6 }) === true, "flags >$50 even with small cache-read");
 ok(isImplausibleCost({}) === false, "empty → not implausible");
 
+// --- #9707: the hook's stdout must carry no additionalContext; CC feeds it back to the sub-agent and loops it ---
+{
+  const { mkdtempSync, mkdirSync, writeFileSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const { join, dirname } = await import("node:path");
+  const { spawnSync } = await import("node:child_process");
+  const { fileURLToPath } = await import("node:url");
+  const home = mkdtempSync(join(tmpdir(), "tt-subcost-"));
+  const tp = join(home, ".claude", "projects", "p", "SID", "subagents", "agent-loop1.jsonl");
+  mkdirSync(dirname(tp), { recursive: true });
+  writeFileSync(tp, [
+    JSON.stringify({ type: "user", message: { role: "user", content: "do a small task" } }),
+    JSON.stringify({ type: "assistant", message: { model: "claude-sonnet-5", usage: { input_tokens: 10, output_tokens: 5, cache_read_input_tokens: 100, cache_creation_input_tokens: 0 } } }),
+  ].join("\n") + "\n");
+  const hook = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "hooks", "subagent-cost.mjs");
+  const run = spawnSync(process.execPath, [hook], {
+    input: JSON.stringify({ transcript_path: tp, cwd: home, agent_type: "general-purpose", agent_id: "loop1", session_id: "SID" }),
+    env: { PATH: process.env.PATH, HOME: home, RELAY_URL: "http://127.0.0.1:9", TRANTOR_PROJECT: "tt-subcost" },
+    encoding: "utf8", timeout: 20000,
+  });
+  const out = (run.stdout || "").trim();
+  ok(run.status === 0, `hook exits 0 (status ${run.status})`);
+  ok(!out.includes("additionalContext"), `SubagentStop output carries no additionalContext, so the sub-agent is not re-woken (got ${out.slice(0, 120)})`);
+}
+
 console.log(fail ? `\n${fail} FAILED` : "\nALL PASS");
 process.exit(fail ? 1 : 0);

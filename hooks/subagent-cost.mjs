@@ -109,8 +109,8 @@ try {
     phase: "sub-agents",
   }, { timeoutMs: 2500 });
   process.stderr.write(`[trantor] subagent-cost: ${agentType} ${model} ~$${usd == null ? "?" : usd.toFixed(4)} (${tokens.input + tokens.output + tokens.cacheWrite + tokens.cacheRead} tok) → ${project}\n`);
-  // surface it back to the parent's Claude inline
-  process.stdout.write(JSON.stringify({ hookSpecificOutput: { hookEventName: "SubagentStop", additionalContext: `[trantor] logged sub-agent ${agentType} — notional $${usd == null ? "?" : usd.toFixed(4)}` } }));
+  // #9707: log only. CC 2.1.280 feeds SubagentStop additionalContext back to the sub-agent as input, which re-woke it in a loop.
+  process.stdout.write("{}");
 } catch (e) {
   process.stderr.write(`[trantor] subagent-cost error: ${e?.message || e}\n`);
   process.stdout.write("{}");
