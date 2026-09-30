@@ -51,6 +51,17 @@ console.log("\n## the exit-0 guard keeps the doctrine — real work and honest a
     classifyFailure(1, "you've reached your usage limit").reason === "exhausted");
 }
 
+console.log("\n## a long turn that QUOTES the phrases is work, not a billing death (#9812)");
+{
+  // kimi's 09-30 kickoff: 72s, exit 0, ran `git log`, and 58fc5e2's message names every phrase.
+  const GIT_LOG = "58fc5e2 #9724: ... FIX: BILLING_RE + looksLikeBillingDeath in lib/classify-failure.mjs (requires more credits | can only afford | http 402 | insufficient balance | payment required); the runner lifts effExit";
+  const KIMI_TURN = `• The contract scope is items 0, 1, 4 (runner half + RULES line). First, verify the base sha.\n$ git log --oneline -5\n${GIT_LOG}\n${LONG_ANSWER}`;
+  ok("the kimi turn is not a billing death", looksLikeBillingDeath(KIMI_TURN) === false);
+  ok("its verdict is success, never exhausted", verdictFor(0, 0, false, KIMI_TURN, false, false) === ROW.verdict,
+    verdictFor(0, 0, false, KIMI_TURN, false, false));
+  ok("the real 300-byte stderr still trips", looksLikeBillingDeath(`${SPECIMEN}\n${" ".repeat(30)}`) === true);
+}
+
 console.log("\n## a usage record RESOLVED to all zeros is never success; null stays unknown");
 {
   ok("usageSaysNoWork(the row's zero record) is true", usageSaysNoWork(ROW.usage) === true, JSON.stringify(ROW.usage));
