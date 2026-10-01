@@ -20,6 +20,10 @@ export type ProjectActivity = {
   /** Freshest heartbeat behind the row, when a hub peer supplied the signal. Never the signal itself. */
   lastSeen?: number;
   model?: string;
+  /** #10007 — live background sub-agents behind a `working` row. Set only when the count itself
+   *  is the signal (herdr said done/idle while sub-agents still run); a mid-turn row leaves it
+   *  unset and keeps saying so. */
+  subagents?: number;
 };
 
 /** Only "working" reads as mid-turn; idle, blocked, done and unknown are all "here, not moving". */
@@ -52,6 +56,10 @@ const EVIDENCE = {
   unknown: "a session process is here; nothing reports what it is doing",
 } as const;
 
+/** #10007 — a turn ended but its background sub-agents did not. Parameterized: the number is the
+ *  claim. Singular only at 1; 0 never reaches this (the branch is `> 0`). */
+const subagentEvidence = (n: number): string => `${n} background sub-agent${n === 1 ? "" : "s"} running`;
+
 const RANK = { "needs-you": 0, working: 1, idle: 2, unknown: 3 } satisfies Record<ActivityState, number>;
 
 /** A peer only carries evidence while the hub still considers it online. Past that window its last
@@ -73,10 +81,16 @@ export function computeProjectActivity(
     m.set(project, next);
   };
 
+  const inflight = (o: LocalSession): number => o.inFlight ?? 0;
   for (const o of open) {
     if (!o.project) continue;
     if (herdrWorking(o.status)) put(o.project, { state: "working", evidence: EVIDENCE.herdrWorking });
     else if (needsYou(o.status)) put(o.project, { state: "needs-you", evidence: EVIDENCE.herdrBlocked });
+    else if (inflight(o) > 0) {
+      // #10007 — herdr said done/idle, but the session's own transcript still owes completions
+      // to sub-agents it launched since its process started: it IS working, just not mid-turn.
+      put(o.project, { state: "working", evidence: subagentEvidence(inflight(o)), subagents: inflight(o) });
+    }
     else if ((o.status ?? "").trim()) put(o.project, { state: "idle", evidence: EVIDENCE.idle });
     else put(o.project, { state: "unknown", evidence: EVIDENCE.unknown });
   }
@@ -139,6 +153,12 @@ export function activityLine(act: ProjectActivity | undefined, now: number = Dat
   if (!act) return null;
   if (act.state === "needs-you") return { text: "needs you", tone: "warn" };
   if (act.state === "working") {
+    // #10007 — the sub-agent flavor of working reads "working · N sub-agent(s)": the turn itself
+    // ended, so "mid-turn" would overclaim; the count is the whole truth the row has.
+    if (act.subagents != null && act.subagents > 0) {
+      const n = act.subagents;
+      return { text: `working · ${n} sub-agent${n === 1 ? "" : "s"}`, tone: "muted" };
+    }
     const parts = ["mid-turn", act.lastSeen ? `${ago(act.lastSeen, now)} ago` : null, act.model || null];
     return { text: parts.filter(Boolean).join(" · "), tone: "muted" };
   }

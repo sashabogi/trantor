@@ -36,6 +36,11 @@ pub(crate) struct LocalSessionRow {
     /// ends. None when no transcript is on disk: no evidence, no claim.
     #[serde(rename = "lastTurnMs")]
     pub(crate) last_turn_ms: Option<u64>,
+    /// Background sub-agents this session's CURRENT process could still be running (#10007):
+    /// launched, no completion in the transcript, launch after the process started. `None` when
+    /// there is no live pane, session id, process start, or manifest — no evidence, no claim.
+    #[serde(rename = "inFlight")]
+    pub(crate) in_flight: Option<u32>,
 }
 
 /// Every project with an orch row in `crew-windows.txt`, mapped to its pane id. Last row wins per
@@ -68,7 +73,7 @@ pub(crate) fn merge_local_sessions(
         map.insert(p, Some(status));
     }
     map.into_iter()
-        .map(|(project, status)| LocalSessionRow { project, status, last_turn_ms: None })
+        .map(|(project, status)| LocalSessionRow { project, status, last_turn_ms: None, in_flight: None })
         .collect()
 }
 
@@ -97,6 +102,59 @@ pub(crate) fn newest_transcript_mtime_ms(tdir: &Path) -> Option<u64> {
             .map(|d| d.as_millis() as u64)
             .unwrap_or(0)
     })
+}
+
+/// `ps -o etime=` output → the process's age in ms (#10007 stale guard). macOS formats: `SS`,
+/// `MM:SS`, `HH:MM:SS`, `DD-HH:MM:SS`. A mangled answer is no answer: None, and the caller claims
+/// nothing rather than skipping the guard.
+pub(crate) fn parse_ps_elapsed_ms(raw: &str) -> Option<u64> {
+    let s = raw.trim();
+    if s.is_empty() {
+        return None;
+    }
+    let (days, rest) = match s.split_once('-') {
+        Some((d, r)) => (d.parse::<u64>().ok()?, r),
+        None => (0, s),
+    };
+    let f: Vec<u64> = rest.split(':').map(|v| v.parse().ok()).collect::<Option<Vec<_>>>()?;
+    let (sec, min, hr) = match f.as_slice() {
+        [sec] => (*sec, 0, 0),
+        [min, sec] => (*sec, *min, 0),
+        [hr, min, sec] => (*sec, *min, *hr),
+        _ => return None,
+    };
+    Some(((days * 24 + hr) * 3600 + min * 60 + sec) * 1000)
+}
+
+/// `counts.inFlight` out of `trantor agents <sid> --json` (#10007). None when the payload is not
+/// the manifest shape — an unreadable answer is no answer, never zero.
+pub(crate) fn in_flight_from_agents_json(raw: &str) -> Option<u32> {
+    let v: serde_json::Value = serde_json::from_str(raw.trim()).ok()?;
+    v.get("counts")?
+        .get("inFlight")?
+        .as_u64()
+        .and_then(|n| u32::try_from(n).ok())
+}
+
+/// Live background sub-agents for one herdr pane's session, or None when any link is missing.
+/// The in-flight RULE lives once, in the trantor CLI (`trantor agents <sid> --json` over
+/// lib/subagent-manifest.mjs); `--since` anchors it on the pane's foreground process start, so
+/// an unguarded count can never keep a crashed pane "working" forever.
+pub(crate) fn pane_in_flight(project: &str, pane: &str, sid: &str, now_ms: u64) -> Option<u32> {
+    let tdir = project_dir(project).map(|d| transcript_dir_for_project_dir(&d))?;
+    if !tdir.join(sid).join("subagents").is_dir() {
+        return None;
+    }
+    let info = shell_stdout("herdr", &["pane", "process-info", "--pane", pane]);
+    let pid = foreground_pid_from_process_info(&info)?;
+    let elapsed_ms = parse_ps_elapsed_ms(&shell_stdout("/bin/ps", &["-p", &pid.to_string(), "-o", "etime="]))?;
+    let since = now_ms.checked_sub(elapsed_ms)?;
+    let out = trantor_cli::command()
+        .args(["agents", sid, "--json", "--since", &since.to_string()])
+        .output()
+        .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
+        .unwrap_or_default();
+    in_flight_from_agents_json(&out)
 }
 
 /// Projects with a live session: interactive `claude` windows and crew-runner seats on THIS
@@ -150,11 +208,25 @@ pub(crate) fn local_sessions() -> Vec<LocalSessionRow> {
     out.dedup();
 
     // herdr truth: every orch pane herdr can still resolve an agent for, regardless of where the
-    // pane's process actually lives.
+    // pane's process actually lives. One agent.get per pane carries status AND session id; a
+    // session id plus a subagents dir buys the #10007 count (cheap skips first, so panes without
+    // sub-agents never pay for a spawn), stale-guarded by the pane process's start.
     let rows = std::fs::read_to_string(desktop_bus_dir().join("crew-windows.txt")).unwrap_or_default();
+    let orch_rows =
+        std::fs::read_to_string(desktop_bus_dir().join("orch-sessions.txt")).unwrap_or_default();
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0);
     let mut herdr_open: Vec<(String, String)> = Vec::new();
+    let mut in_flight_of: BTreeMap<String, u32> = BTreeMap::new();
     for (project, pane) in orch_projects_from_rows(&rows) {
-        if let Some(status) = herdr::agent_status(&pane) {
+        let (status, sid) = herdr::agent_status_and_session(&pane);
+        let sid = sid.or_else(|| orch_session_id_from_rows(&orch_rows, &project));
+        if let (Some(sid), Some(status)) = (sid, status) {
+            if let Some(n) = pane_in_flight(&project, &pane, &sid, now_ms) {
+                in_flight_of.insert(project.clone(), n);
+            }
             herdr_open.push((project, status));
         }
     }
@@ -165,6 +237,7 @@ pub(crate) fn local_sessions() -> Vec<LocalSessionRow> {
             .as_deref()
             .map(transcript_dir_for_project_dir)
             .and_then(|tdir| newest_transcript_mtime_ms(&tdir));
+        r.in_flight = in_flight_of.get(&r.project).copied();
     }
     rows
 }
@@ -661,6 +734,30 @@ pub(crate) fn restorables_from(rows: &str, live_panes: &std::collections::HashSe
 #[cfg(test)]
 mod session_tests {
     use super::*;
+
+    // #10007 — `ps -o etime=` speaks macOS's four shapes; anything else is no answer.
+    #[test]
+    fn ps_elapsed_parses_every_macos_shape_and_refuses_garbage() {
+        assert_eq!(parse_ps_elapsed_ms("42"), Some(42_000));
+        assert_eq!(parse_ps_elapsed_ms("05:30"), Some(330_000));
+        assert_eq!(parse_ps_elapsed_ms("1:02:03"), Some(3_723_000));
+        assert_eq!(parse_ps_elapsed_ms("2-03:04:05"), Some(((2 * 24 + 3) * 3600 + 4 * 60 + 5) * 1000));
+        assert_eq!(parse_ps_elapsed_ms(""), None);
+        assert_eq!(parse_ps_elapsed_ms("soon"), None);
+        assert_eq!(parse_ps_elapsed_ms("1-2:x:3"), None);
+    }
+
+    // #10007 — the CLI's counts.inFlight is the number; a payload that is not the manifest shape
+    // is no evidence, never zero.
+    #[test]
+    fn in_flight_reads_the_manifest_shape_and_refuses_other_payloads() {
+        let shape = r#"{"sessionId":"s1","counts":{"total":2,"completed":1,"inFlight":1,"stale":0,"suspectFiles":0}}"#;
+        assert_eq!(in_flight_from_agents_json(shape), Some(1));
+        assert_eq!(in_flight_from_agents_json(r#"{"counts":{"inFlight":0}}"#), Some(0));
+        assert_eq!(in_flight_from_agents_json("{}"), None);
+        assert_eq!(in_flight_from_agents_json("not json"), None);
+        assert_eq!(in_flight_from_agents_json(""), None);
+    }
 
     #[test]
     fn lsof_field_output_yields_only_paths() {

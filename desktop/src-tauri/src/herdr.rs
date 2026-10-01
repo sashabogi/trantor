@@ -137,6 +137,36 @@ pub fn agent_status(target: &str) -> Option<String> {
         .map(str::to_string)
 }
 
+/// Status AND reported session id from ONE `agent.get` roundtrip (#10007): local_sessions polls
+/// every live pane on the UI cadence and needs both, and a second request per pane would double
+/// herdr traffic. `(None, None)` when herdr is unreachable or the reply is not an agent reply.
+pub(crate) fn agent_status_and_session(target: &str) -> (Option<String>, Option<String>) {
+    let req = serde_json::json!({
+        "id": "trantor:agent.get",
+        "method": "agent.get",
+        "params": { "target": target },
+    });
+    match request_within(&req, Duration::from_millis(1500)) {
+        Ok(raw) => status_and_session_from_agent_get(&raw),
+        Err(_) => (None, None),
+    }
+}
+
+/// Pure extraction over a captured `agent.get` reply. The session half keeps the strict
+/// kind=="id" gate session_from_agent_get applies.
+fn status_and_session_from_agent_get(raw: &str) -> (Option<String>, Option<String>) {
+    let status = serde_json::from_str::<serde_json::Value>(raw.trim())
+        .ok()
+        .and_then(|v| {
+            v.get("result")
+                .and_then(|r| r.get("agent"))
+                .and_then(|a| a.get("agent_status"))
+                .and_then(|s| s.as_str())
+                .map(str::to_string)
+        });
+    (status, session_from_agent_get(raw))
+}
+
 /// A live `pane.agent_status_changed` subscription for ONE pane (the composer gate stops polling).
 /// Per-pane subscriptions are live-only, while the global pane.* types replay history on subscribe,
 /// which is why this subscribes per pane and re-seeds via `agent_status()`. Frames: docs/CONTRACT-desktop.md.

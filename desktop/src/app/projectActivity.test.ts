@@ -240,3 +240,49 @@ describe("needsYou", () => {
     expect(needsYou(null)).toBe(false);
   });
 });
+
+describe("background sub-agents read working (#10007)", () => {
+  it("an orchestrator whose turn ENDED reads working while its sub-agents still run", () => {
+    // The live case that opened the card: herdr pane says "done", the manifest still owes two
+    // completions — the row must not say idle while background work is running.
+    const open: LocalSession[] = [{ project: "ibkr", status: "done", inFlight: 2 }];
+    const act = computeProjectActivity(open, [], NOW);
+    expect(act.get("ibkr")?.state).toBe("working");
+    expect(activityLine(act.get("ibkr"), NOW)?.text).toBe("working · 2 sub-agents");
+    expect(activityTitle(act.get("ibkr"))).toBe("2 background sub-agents running");
+  });
+
+  it("one sub-agent reads singular", () => {
+    const open: LocalSession[] = [{ project: "ibkr", status: "done", inFlight: 1 }];
+    const act = computeProjectActivity(open, [], NOW);
+    expect(activityLine(act.get("ibkr"), NOW)?.text).toBe("working · 1 sub-agent");
+    expect(activityTitle(act.get("ibkr"))).toBe("1 background sub-agent running");
+  });
+
+  it("inFlight 0 claims nothing: herdr's 'done' stays idle", () => {
+    const open: LocalSession[] = [{ project: "ibkr", status: "done", inFlight: 0 }];
+    const act = computeProjectActivity(open, [], NOW);
+    expect(act.get("ibkr")?.state).toBe("idle");
+    expect(activityLine(act.get("ibkr"), NOW)?.text).toBe("idle");
+  });
+
+  it("a null inFlight claims nothing — no manifest evidence, no working", () => {
+    const open: LocalSession[] = [{ project: "ibkr", status: "idle", inFlight: null }];
+    expect(computeProjectActivity(open, [], NOW).get("ibkr")?.state).toBe("idle");
+  });
+
+  it("a real mid-turn outranks the sub-agent signal: herdr's working keeps the row", () => {
+    const open: LocalSession[] = [{ project: "ibkr", status: "working", inFlight: 3 }];
+    const act = computeProjectActivity(open, [], NOW);
+    expect(act.get("ibkr")?.state).toBe("working");
+    expect(act.get("ibkr")?.subagents).toBeUndefined();
+    expect(activityLine(act.get("ibkr"), NOW)?.text).toBe("mid-turn");
+  });
+
+  it("a blocked pane still reads needs-you even with sub-agents in flight", () => {
+    const open: LocalSession[] = [{ project: "ibkr", status: "blocked", inFlight: 1 }];
+    const act = computeProjectActivity(open, [], NOW);
+    expect(act.get("ibkr")?.state).toBe("needs-you");
+    expect(activityLine(act.get("ibkr"), NOW)?.text).toBe("needs you");
+  });
+});

@@ -197,6 +197,7 @@ fn local_sessions_merge_counts_a_herdr_only_pane_as_open() {
             project: "pr-os".to_string(),
             status: Some("working".to_string()),
             last_turn_ms: None,
+            in_flight: None,
         }]
     );
 }
@@ -213,6 +214,7 @@ fn local_sessions_merge_prefers_herdr_status_over_bare_process_truth() {
             project: "pr-os".to_string(),
             status: Some("idle".to_string()),
             last_turn_ms: None,
+            in_flight: None,
         }]
     );
 }
@@ -228,6 +230,7 @@ fn local_sessions_merge_keeps_a_process_only_project_with_no_status() {
             project: "crebral-health".to_string(),
             status: None,
             last_turn_ms: None,
+            in_flight: None,
         }]
     );
 }

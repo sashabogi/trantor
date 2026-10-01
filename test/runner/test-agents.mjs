@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // trantor sub-agent manifest tests — derive a session's sub-agent activity purely from on-disk
 // transcripts, and use the disk-reconcile to flag files an agent finished that were later
-// clobbered (the 2026-06-21 kill corrupted a completed 30KB lib to a 17-byte stub). Hermetic:
+// clobbered by a kill (a completed 30KB lib once survived only as a 17-byte stub). Hermetic:
 // builds a synthetic ~/.claude/projects-style tree in a temp dir, no network, no real sessions.
 import { writeFileSync, mkdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
@@ -78,6 +78,52 @@ ok("format: surfaces the IN-FLIGHT badge", /IN-FLIGHT/.test(text));
 
 ok("resolveTranscriptForSid: empty for an unknown sid", resolveTranscriptForSid("definitely-not-real-xyz") === "");
 ok("safety: missing transcript → empty manifest, no throw", deriveSubagentManifest(join(root, "nope.jsonl")).counts.total === 0);
+
+// ── #10007 — the stale guard: agents launched before the session process started (sinceMs) can
+// never return, so liveness mode must not count them as in-flight.
+const T0 = Date.parse("2026-06-21T20:02:00.000Z"); // C's (gamma's) launch
+const mFresh = deriveSubagentManifest(parent, { projectRoot: projDir, sinceMs: T0 - 1 });
+ok("stale guard: since before every launch → 1 in-flight (C)", mFresh.counts.inFlight === 1);
+ok("stale guard: nothing is stale yet", mFresh.counts.stale === 0);
+
+const mAfter = deriveSubagentManifest(parent, { projectRoot: projDir, sinceMs: T0 + 1 });
+ok("stale guard: since past C's launch → C reads stale, 0 in-flight", mAfter.counts.inFlight === 0 && mAfter.counts.stale === 1);
+ok("stale guard: completed agents stay completed under since", mAfter.counts.completed === 3);
+ok("stale guard: per-agent launchMs exposed", byName.gamma.launchMs === T0);
+ok("format: stale badge names the process boundary", /stale/.test(formatSubagentManifest(mAfter)));
+
+// The gate shape itself: 2 launched, 1 done → exactly 1 in flight. The tree sits under
+// root/.claude/projects so the CLI (which resolves sids via homedir()) finds it under HOME=root.
+const encDir2 = join(root, ".claude", "projects", "-enc-two");
+const sid2 = "SID2LAUNCH";
+const sub2 = join(encDir2, sid2, "subagents");
+mkdirSync(sub2, { recursive: true });
+writeFileSync(join(sub2, "agent-d1.meta.json"), J({ agentType: "general-purpose", name: "done-one", toolUseId: "tool_D1" }));
+writeFileSync(join(sub2, "agent-d1.jsonl"), J(say("D1 done.", "2026-06-21T21:00:00.000Z")) + "\n");
+writeFileSync(join(sub2, "agent-f1.meta.json"), J({ agentType: "general-purpose", name: "live-one", toolUseId: "tool_F1" }));
+writeFileSync(join(sub2, "agent-f1.jsonl"), J({ type: "user", timestamp: "2026-06-21T21:01:00.000Z", message: { content: "go" } }) + "\n");
+writeFileSync(join(encDir2, sid2 + ".jsonl"), [
+  J({ type: "user", message: { content: [{ type: "tool_result", tool_use_id: "tool_D1" }] } }),
+].join("\n") + "\n");
+const m2 = deriveSubagentManifest(join(encDir2, sid2 + ".jsonl"), { projectRoot: projDir });
+ok("gate shape: 2 launched, 1 done, 1 in flight", m2.counts.total === 2 && m2.counts.completed === 1 && m2.counts.inFlight === 1);
+
+// The CLI the desktop shells: `trantor agents <sid> --json --since <ms>` over the same rule.
+import { execFileSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
+const repoRoot = fileURLToPath(new URL("../..", import.meta.url));
+const cliOut = JSON.parse(execFileSync(process.execPath, [join(repoRoot, "bin", "agents.mjs"), sid2, "--json"],
+  { cwd: repoRoot, env: { ...process.env, HOME: root, RELAY_DATA_DIR: root }, encoding: "utf8" }));
+ok("cli: agents <sid> --json parses and counts the gate shape", cliOut.counts.total === 2 && cliOut.counts.inFlight === 1);
+const cliSince = JSON.parse(execFileSync(process.execPath, [join(repoRoot, "bin", "agents.mjs"), sid2, "--json",
+  "--since", String(Date.parse("2026-06-21T21:01:30.000Z"))],
+  { cwd: repoRoot, env: { ...process.env, HOME: root, RELAY_DATA_DIR: root }, encoding: "utf8" }));
+ok("cli: --since marks the older launch stale → 0 in flight", cliSince.counts.inFlight === 0 && cliSince.counts.stale === 1);
+// A future --since: both launches predate the process → both stale, nothing live.
+const cliFuture = JSON.parse(execFileSync(process.execPath, [join(repoRoot, "bin", "agents.mjs"), sid2, "--json", "--since", "99999999999999"],
+  { cwd: repoRoot, env: { ...process.env, HOME: root, RELAY_DATA_DIR: root }, encoding: "utf8" }));
+ok("cli: future --since → the live launch goes stale, 0 in flight, done stays done",
+  cliFuture.counts.inFlight === 0 && cliFuture.counts.stale === 1 && cliFuture.counts.completed === 1);
 
 rmSync(root, { recursive: true, force: true });
 console.log(`\n${pass} passed, ${fail} failed`);

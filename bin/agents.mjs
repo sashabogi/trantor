@@ -1,16 +1,8 @@
 #!/usr/bin/env node
-// trantor agents [sessionId] [--json] — the LIVE sub-agent manifest for a session.
-//
-// What were this session's sub-agents (Agent/Task tool, Workflow swarms, agent-teams) doing —
-// what was each tasked with, did it return, what did it write, and do those files still survive
-// on disk? Derived fresh from the on-disk transcripts every run (so it reflects CURRENT disk,
-// catching files an agent finished that were later clobbered — the 2026-06-21 kill corrupted a
-// completed 30KB lib down to a 17-byte stub).
-//
-//   trantor agents                 → the session of the newest handoff for THIS project (the
-//                                     predecessor a fresh session is taking over from)
-//   trantor agents <sessionId>     → that specific session
-//   trantor agents --json          → structured manifest (for tools)
+// trantor agents [sessionId] [--json] [--since <epochMs>] — the LIVE sub-agent manifest for a
+// session: what was each sub-agent tasked with, did it return, what did it write, did it survive
+// on disk — re-derived fresh from the transcripts every run. `--since <epochMs>` (#10007) reads
+// agents launched before that instant "stale", never "in-flight"; the app polls this for liveness.
 import { readFileSync, readdirSync, existsSync } from "node:fs";
 import { join, basename } from "node:path";
 import { homedir } from "node:os";
@@ -18,7 +10,10 @@ import { deriveSubagentManifest, formatSubagentManifest, resolveTranscriptForSid
 
 const args = process.argv.slice(2);
 const json = args.includes("--json");
-const sid = args.find((a) => !a.startsWith("--"));
+const sinceIdx = args.indexOf("--since");
+const sinceVal = sinceIdx !== -1 ? args[sinceIdx + 1] : undefined;
+const sinceMs = sinceVal != null ? Number(sinceVal) : undefined;
+const sid = args.find((a) => !a.startsWith("--") && a !== sinceVal);
 
 const HANDOFF_DIR = join(process.env.RELAY_DATA_DIR || join(homedir(), ".agent-bus"), "handoffs");
 
@@ -55,7 +50,7 @@ if (sid) {
   projectRoot = h.project || projectRoot;
 }
 
-const manifest = deriveSubagentManifest(transcript, { projectRoot });
+const manifest = deriveSubagentManifest(transcript, { projectRoot, sinceMs: Number.isFinite(sinceMs) ? sinceMs : undefined });
 if (json) {
   process.stdout.write(JSON.stringify(manifest, null, 2) + "\n");
 } else {
