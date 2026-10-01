@@ -26,6 +26,8 @@ export type TerminalDouble = {
   emitData(data: string): void;
   /** drive the container: the ResizeObserver fires */
   fireResize(): void;
+  /** change what the session reports as its fitted size (a divider drag moves it) */
+  setSessionSize(cols: number, rows: number): void;
   /** drive a webview drag-drop event into the pane (#5949) */
   emitDragDrop(event: PaneDragDropEvent): void;
 };
@@ -71,6 +73,8 @@ export function makeTerminalDouble(opts: {
   let onDataCb: ((data: string) => void) | null = null;
   let onBytesCb: ((bytes: TerminalBytes) => void) | null = null;
   let dragCb: ((event: PaneDragDropEvent) => void) | null = null;
+  let curCols = cols;
+  let curRows = rows;
   const d: TerminalDouble = {
     dragOver: false,
     deps: {
@@ -83,8 +87,8 @@ export function makeTerminalDouble(opts: {
           write(bytes) { d.writes.push(bytes); },
           writeln(text) { d.lines.push(text); },
           fit() { d.fits += 1; },
-          cols,
-          rows,
+          get cols() { return curCols; },
+          get rows() { return curRows; },
           dispose() { d.disposed = true; },
         };
         return session;
@@ -119,6 +123,7 @@ export function makeTerminalDouble(opts: {
     emitBytes(bytes) { onBytesCb?.(bytes); },
     emitData(data) { onDataCb?.(data); },
     fireResize() { for (const cb of [...resizeCallbacks]) cb(); },
+    setSessionSize(c, r) { curCols = c; curRows = r; },
     emitDragDrop(event) {
       dragCb?.(event);
       d.dragOver = event.type === "enter" || event.type === "over";

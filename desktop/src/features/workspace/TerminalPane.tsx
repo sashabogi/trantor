@@ -23,6 +23,12 @@ import {
 
 const SEATS_POLL_MS = 12_000;
 
+/// Every pty resize is a SIGWINCH that makes the attached TUI repaint its whole screen (#10028):
+/// a drag's per-tick resizes arrive as interleaved partial frames — the doubled columns. So the
+/// fit runs per tick (renderer-local reflow) while the pty resize is debounced to ONE settled
+/// send, letting the final SIGWINCH repaint the TUI exactly once, after the burst drains.
+const PANE_RESIZE_DEBOUNCE_MS = 150;
+
 /** The slice of Tauri's DragDropEvent the pane reacts to. HTML5 drop never fires under Tauri —
  *  onDragDropEvent is the only channel (same receipt as the composer's drop, #5507). */
 export type PaneDragDropEvent =
@@ -222,11 +228,34 @@ export function TerminalPane({
       if (pasteTimer !== null) clearTimeout(pasteTimer);
       pasteTimer = setTimeout(flushPaste, 30);
     });
+    // The last size actually delivered to the pty: a settle send that would repeat it is a
+    // no-op and is skipped, so idle ResizeObserver ticks (layout jitter, sibling relayouts)
+    // never wake the TUI at all.
+    let sentCols: number | null = null;
+    let sentRows: number | null = null;
+    let resizeTimer: ReturnType<typeof setTimeout> | null = null;
+    const sendResize = () => {
+      resizeTimer = null;
+      const sub = subRef.current;
+      if (sub === null) return;
+      if (sentCols === session.cols && sentRows === session.rows) return;
+      sentCols = session.cols;
+      sentRows = session.rows;
+      void deps.termResize(sub, session.cols, session.rows);
+    };
     const resize = () => {
       if (!hostRef.current) return;
       try { session.fit(); } catch { return; }
-      const sub = subRef.current;
-      if (sub !== null) void deps.termResize(sub, session.cols, session.rows);
+      if (resizeTimer !== null) clearTimeout(resizeTimer);
+      resizeTimer = setTimeout(sendResize, PANE_RESIZE_DEBOUNCE_MS);
+    };
+    // The FIRST size goes out immediately, not debounced: the attach child spawns the pane at
+    // the Rust pty's 80x24 default, and waiting 150ms would show the TUI drawing at the wrong
+    // width before the real one lands.
+    const resizeNow = () => {
+      if (!hostRef.current) return;
+      try { session.fit(); } catch { return; }
+      sendResize();
     };
     const ro = new ResizeObserver(resize);
     ro.observe(hostRef.current);
@@ -257,7 +286,7 @@ export function TerminalPane({
           return;
         }
         subRef.current = sub;
-        resize();
+        resizeNow();
       })
       .catch(err => {
         if (alive) session.writeln(`\r\nterminal attach failed: ${err instanceof Error ? err.message : String(err)}`);
@@ -266,6 +295,7 @@ export function TerminalPane({
     return () => {
       alive = false;
       ro.disconnect();
+      if (resizeTimer !== null) { clearTimeout(resizeTimer); resizeTimer = null; }
       onData.dispose();
       flushPaste();
       const sub = subRef.current;

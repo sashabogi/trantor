@@ -100,6 +100,53 @@ describe("TerminalPane", () => {
     expect(d.resized[d.resized.length - 1]).toEqual({ sub: 42, cols: 100, rows: 30 });
   });
 
+  // #10028: every pty resize SIGWINCHes the attached TUI into a full-screen repaint — a divider
+  // drag emits dozens of ticks, and the pane's ~4KB frames at every intermediate width arrived
+  // interleaved (the doubled columns). The contract: ticks fit xterm every time but the pty
+  // resize is debounced to ONE send carrying the FINAL size, after the burst settles.
+  it("collapses a divider-drag burst into ONE pty resize with the settled size", async () => {
+    await render(d);
+    await flush();
+    expect(d.resized).toEqual([{ sub: 42, cols: 100, rows: 30 }]);
+
+    for (let cols = 101; cols <= 120; cols++) {
+      d.setSessionSize(cols, 30);
+      d.fireResize();
+    }
+    // mid-burst: xterm kept fitting (live reflow), the pty heard nothing
+    expect(d.fits).toBeGreaterThanOrEqual(21);
+    expect(d.resized).toEqual([{ sub: 42, cols: 100, rows: 30 }]);
+
+    await new Promise(resolve => setTimeout(resolve, 180));
+    expect(d.resized).toEqual([
+      { sub: 42, cols: 100, rows: 30 },
+      { sub: 42, cols: 120, rows: 30 },
+    ]);
+  });
+
+  it("a settled tick that repeats the already-sent size sends nothing", async () => {
+    await render(d);
+    await flush();
+    expect(d.resized).toEqual([{ sub: 42, cols: 100, rows: 30 }]);
+
+    d.fireResize();
+    d.fireResize();
+    await new Promise(resolve => setTimeout(resolve, 180));
+    expect(d.resized).toEqual([{ sub: 42, cols: 100, rows: 30 }]);
+  });
+
+  it("an unmount mid-burst never sends the pending resize", async () => {
+    await render(d);
+    await flush();
+
+    d.setSessionSize(140, 30);
+    d.fireResize();
+    act(() => root.unmount());
+    await new Promise(resolve => setTimeout(resolve, 180));
+    expect(d.resized).toEqual([{ sub: 42, cols: 100, rows: 30 }]);
+    expect(d.detached).toEqual([42]);
+  });
+
   it("opens a project session when the ORCHESTRATOR has no pane", async () => {
     const empty = makeTerminalDouble({ surface: null });
     await act(async () => root.render(
