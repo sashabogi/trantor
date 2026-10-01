@@ -1,0 +1,47 @@
+ /Users/sashabogojevic/.agent-bus/worktrees/trantor/glm/test/runner/fixtures/ 2>/dev/null
+test-agent-preferences.mjs
+test-agents.mjs
+test-ask.mjs
+test-base-sha.mjs
+test-billing-exhausted.mjs
+test-box-extension.mjs
+test-cursor-rewind.mjs
+test-cut-park.mjs
+test-dedupe-delivery.mjs
+test-docker-janitor.mjs
+test-doctor.mjs
+test-duty-audit.mjs
+test-empty-turn.mjs
+test-focus.mjs
+test-hollow-move.mjs
+test-inflight.mjs
+test-integrate.mjs
+test-new.mjs
+test-patrol.mjs
+test-prd-review.mjs
+test-provider-rejected.mjs
+test-receipt-threading.mjs
+test-redelivery.mjs
+test-relay-wait.mjs
+test-same-project.mjs
+test-scenarios.mjs
+test-scrub.mjs
+test-seat-why.mjs
+test-seats.mjs
+test-silent-stall.mjs
+test-stop-stalled.mjs
+test-takeover.mjs
+test-turn-box.mjs
+test-turn-usage.mjs
+test-turnstate.mjs
+test-update.mjs
+test-wake-cap.mjs
+test-wake-policy.mjs
+[0m
+[0m✱ [0mGrep "looksLikeBillingDeath|verdictFor|effExit"[90m in . · 69 matches[0m
+[0m→ [0mRead bin/crew-runner.mjs[90m [limit=130, offset=920][0m
+I have the full picture. Let me read the billing test to model mine on, and check the run harness:
+[93m[1m! [0mpermission requested: external_directory (/Users/sashabogojevic/.agent-bus/*); auto-rejecting
+[0m✗ [0mcat -v /Users/sashabogojevic/.agent-bus/err-glm-ibkr.txt | tail -5; echo ===; wc -c /Users/sashabogojevic/.agent-bus/err-glm-ibkr.txt failed
+[91m[1mError: [0mThe user rejected permission to use this specific tool call.
+[0m→ [0mRead test/runner/test-billing-exhausted.mjs

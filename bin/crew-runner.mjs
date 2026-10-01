@@ -17,6 +17,7 @@ import {
   AUTH_MARKER_RE, classifyFailure, looksLikeAuthDeath,
   verdictFor, substantiveOutput, stallVerdict, cutSignalFor,
   BILLING_RE, looksLikeBillingDeath, usageSaysNoWork, zeroUsageVerdict,
+  permissionRejection, looksLikePermissionDeath,
   readPromptText, stripPromptEcho,
 } from "../lib/classify-failure.mjs";
 import { capWake, capBcast, pickLessons, composePrompt, contractBase, baseLine } from "./crew-payload.mjs";
@@ -401,6 +402,8 @@ async function reportFailure(exit, trigger, undelivered = 0, reasonOverride = ""
     : reason === "auth" ? " — check credentials"
     : reason === "backend-error" ? " — provider backend error (NOT quota): retry, or `trantor swap` to another provider"
     : reason === "missing-cli" ? " — CLI not on PATH"
+    // #9919: the sandbox refused a path outside the worktree — the fix is where the scratch goes.
+    : reason === "permission-rejected" ? " — the sandbox refuses paths outside the worktree: keep scratch (logs, baselines, temp files) under <worktree>/.agent-bus-out"
     // #5481: name the suspected trap, not just the symptom — the dial lives in the provider's
     // opencode model config (limit.output), not in the runner.
     : reason === "empty-output" ? (AGENT === "inception"
@@ -953,6 +956,14 @@ exit $turn_exit`;
   if (realExit === 0 && effExit === 0 && looksLikeBillingDeath(ownOut, newCommit)) {
     effExit = 1;
     log(`\x1b[31mexit 0 but the turn output IS a provider billing rejection — treating as FAILED (exhausted, "${BILLING_RE.exec(ownOut)[0]}")\x1b[0m`);
+  }
+  // #9919: the same trap in the sandbox family — the seat reached outside its worktree, opencode
+  // auto-rejected the permission and killed the turn at exit 0, and glm:ibkr sat 8h on an
+  // uncommitted #9859 under a "success" row. Judged on the output TAIL: the rejection prints where
+  // the turn ended, so a turn that only quotes the phrase mid-stream stays success.
+  if (realExit === 0 && effExit === 0 && looksLikePermissionDeath(ownOut, newCommit)) {
+    effExit = 1;
+    log(`\x1b[31mexit 0 but the turn output IS a sandbox permission rejection — treating as FAILED (permission-rejected, "${permissionRejection(ownOut)}")\x1b[0m`);
   }
   // #5481: exit 0 with an empty ERRF (the TOTAL capture, both streams) is the null-completion trap,
   // judged on echo-stripped text (#5868). #6969: on a state step ERRF is stderr only, so silence is normal.
