@@ -15,6 +15,7 @@ import { loadSeatRecord } from "./lib/seat-record.mjs";
 import { resolveProject, hostId, resolveHubInfo, nonSeatReason, handoffDir, orchWriterSid } from "./lib/project.mjs";
 import { signedPost, signedGet } from "./hooks/lib/api.mjs";
 import { anchorCursor } from "./hooks/lib/inbox-ledger.mjs";
+import { formatInboxPage, fmtMessage } from "./hooks/lib/inbox-page.mjs";
 import { assertNoSecrets } from "./lib/scrub.mjs";
 import { isMessageCardTitle, OPEN_CARD_STATUSES } from "./lib/turn-policy.mjs";
 import { markDoing, hollowVerdict, blastRadius, blastLine } from "./hooks/lib/hollow-move.mjs";
@@ -121,7 +122,7 @@ async function api(method, path, payload, { timeoutMs } = {}) {
   }
   return r.json;
 }
-const fmt = (m) => `#${m.id} [${m.from} -> ${m.to}] ${new Date(m.ts).toLocaleTimeString()}: ${m.text}`;
+const fmt = fmtMessage;
 
 const server = new McpServer({ name: "trantor", version: "0.1.0" });
 
@@ -543,12 +544,21 @@ server.tool("relay_handoff", "Write a rich handoff for THIS session so a fresh s
     return { content: [{ type: "text", text: `handoff saved (${rec.id}). A fresh session in ${name} will load it on start. Tell the user to open a new terminal here.` }] };
   });
 
-server.tool("relay_inbox", "Read NEW messages addressed to this session since the last read (non-blocking).", {}, async () => {
-  await seedCursor();
-  const { messages, cursor: c } = await api("GET", `/inbox?session=${encodeURIComponent(SESSION)}&since=${cursor}`);
-  cursor = c;
-  return { content: [{ type: "text", text: messages.length ? messages.map(fmt).join("\n") : "(no new messages)" }] };
-});
+server.tool("relay_inbox", "Read NEW messages addressed to this session since the last read (non-blocking). The result is a bounded page — newest first, repeats of the same notice collapsed with ×N, capped near 20K chars. When older messages exist it ends with a before-cursor: pass it back as relay_inbox({before}) to page into older history.",
+  { before: z.number().optional().describe("page BACK: return only messages with id < before (the cursor from the 'older not shown' footer). A peek — does not advance the new-message cursor.") },
+  async ({ before }) => {
+    if (before) {
+      // History paging peeks from 0 and filters: it must not advance the delivery ledger.
+      const { messages } = await api("GET", `/inbox?session=${encodeURIComponent(SESSION)}&since=0&peek=1`);
+      const page = formatInboxPage((messages || []).filter(m => Number(m.id) < before));
+      return { content: [{ type: "text", text: page.text || `(nothing older than #${before})` }] };
+    }
+    await seedCursor();
+    const { messages, cursor: c } = await api("GET", `/inbox?session=${encodeURIComponent(SESSION)}&since=${cursor}`);
+    cursor = c;
+    const page = formatInboxPage(messages || []);
+    return { content: [{ type: "text", text: page.text || "(no new messages)" }] };
+  });
 
 server.tool("relay_wait", "Block up to `timeout` seconds waiting for the next message to this session (long-poll). Returns the instant a message arrives. When idle, park by calling this repeatedly. IMPORTANT: MCP clients cap or background long tool calls — OpenCode ~60s; Codex ~120s; Claude Code auto-backgrounds ANY MCP call at 120s (CC 2.1.212+, tunable via CLAUDE_CODE_MCP_AUTO_BACKGROUND_MS), which breaks inline parking. Use timeout 50 and loop for cross-client safety.",
   { timeout: z.number().optional().describe("seconds to wait, default 25. Effective wait is capped at 110s so the call always returns inline (a longer wait would be auto-backgrounded by Claude Code's 120s MCP floor or dropped by other clients). Use 50 and call repeatedly to park while idle.") },
