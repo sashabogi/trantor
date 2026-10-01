@@ -60,8 +60,9 @@ fn one_line(raw: &str) -> String {
 
 fn text_content(value: &Value) -> String {
     match value {
-        Value::String(s) => one_line(s),
-        Value::Array(items) => one_line(
+        // A paste arrives wrapped in <pasted_content>; the title is the operator's words (#10027).
+        Value::String(s) => one_line(super::unwrap_pasted(s)),
+        Value::Array(items) => one_line(super::unwrap_pasted(
             &items
                 .iter()
                 .filter_map(|part| {
@@ -71,7 +72,7 @@ fn text_content(value: &Value) -> String {
                 })
                 .collect::<Vec<_>>()
                 .join(" "),
-        ),
+        )),
         _ => String::new(),
     }
 }
@@ -935,6 +936,20 @@ mod tests {
         assert_eq!(record.row.model, "claude-fable-5");
         assert_eq!(record.row.last_message, "The store is mapped.");
         assert_eq!(record.row.message_count, 6);
+    }
+
+    #[test]
+    fn claude_pasted_fixture_titles_the_operators_words_not_the_wrapper() {
+        // #10027: a paste is stored wrapped in <pasted_content>. The blanket '<' rule used to
+        // drop it (title fell through to the assistant); unwrapping must show the words, never
+        // the raw tag, and the <system-reminder> row after it must stay hidden.
+        let record = decode_claude(&fixture("claude-pasted.jsonl")).unwrap();
+        assert_eq!(
+            record.row.title,
+            "Okay, on the slanted lines they zigzag. Make them straight."
+        );
+        assert!(!record.row.title.contains("<pasted_content"));
+        assert_eq!(record.row.last_message, "Straightening them now.");
     }
 
     #[test]

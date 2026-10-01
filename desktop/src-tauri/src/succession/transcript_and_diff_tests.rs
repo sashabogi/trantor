@@ -25,6 +25,9 @@ fn harness_injections_never_wear_the_operator_role() {
         "<system-reminder>read this</system-reminder>"
     ));
     assert!(is_harness_injection(
+        "<environment_context><cwd>/Users/test</cwd></environment_context>"
+    ));
+    assert!(is_harness_injection(
         "PostToolUse:Bash hook additional context: <trantor-inbox>"
     ));
     assert!(is_harness_injection(
@@ -36,6 +39,51 @@ fn harness_injections_never_wear_the_operator_role() {
     assert!(is_harness_injection(
         "NEW BUS MESSAGE for you:\n[foreman]: contract"
     ));
+}
+
+#[test]
+fn pasted_operator_message_shows_unwrapped() {
+    // The real ibkr shape (#10027): a terminal paste is stored wrapped in <pasted_content>,
+    // and the old blanket '<' rule dropped it whole — the operator's words vanished.
+    let row = serde_json::json!({
+        "type": "user",
+        "message": { "content": "\n\n<pasted_content id=\"141b\">\nOkay, on the slanted lines they zigzag. Make them straight.\n</pasted_content>" }
+    })
+    .to_string();
+    let snap = decode_chat_lines_with_context_window([row], 1, 0);
+    assert_eq!(snap.turns.len(), 1);
+    assert_eq!(snap.turns[0].role, "user");
+    assert_eq!(
+        snap.turns[0].blocks[0].text,
+        "Okay, on the slanted lines they zigzag. Make them straight."
+    );
+}
+
+#[test]
+fn a_person_mentioning_system_reminder_mid_text_still_shows() {
+    let row = serde_json::json!({
+        "type": "user",
+        "message": { "content": "why does the log say system-reminder at line 3?" }
+    })
+    .to_string();
+    let snap = decode_chat_lines_with_context_window([row], 1, 0);
+    assert_eq!(snap.turns.len(), 1);
+    assert_eq!(snap.turns[0].role, "user");
+    assert_eq!(
+        snap.turns[0].blocks[0].text,
+        "why does the log say system-reminder at line 3?"
+    );
+}
+
+#[test]
+fn a_real_system_reminder_stays_hidden() {
+    let row = serde_json::json!({
+        "type": "user",
+        "message": { "content": "<system-reminder>tokens are running low</system-reminder>" }
+    })
+    .to_string();
+    let snap = decode_chat_lines_with_context_window([row], 1, 0);
+    assert!(snap.turns.is_empty());
 }
 
 #[test]
@@ -292,6 +340,15 @@ fn a_real_message_is_never_mistaken_for_machinery() {
     // "contains" check falls into, so markers must anchor at the start.
     assert!(!is_harness_injection(
         "can you look at why the Stop hook feedback fires twice?"
+    ));
+    // A paste merely happens to start with a tag; the blanket starts_with('<') rule used to
+    // swallow the operator's own words whole (#10027).
+    assert!(!is_harness_injection(
+        "\n\n<pasted_content id=\"141b\">\nOkay, on the slanted lines they zigzag.\n</pasted_content>"
+    ));
+    // A person DISCUSSING system-reminder mid-text is not wearing the harness's role.
+    assert!(!is_harness_injection(
+        "why does the log say system-reminder at line 3?"
     ));
 }
 

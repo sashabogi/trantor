@@ -200,7 +200,8 @@ pub(crate) struct ChatContext {
 
 /// Text the harness injected into the conversation wearing the user's role (hook output, notices,
 /// reminders). A closed list of known prefixes, not a length heuristic: a long message from a person
-/// is still a message from a person.
+/// is still a message from a person, and a paste (which merely happens to start with a tag) is the
+/// operator's own words — `unwrap_pasted` peels its wrapper instead of dropping it (#10027).
 pub(crate) fn is_harness_injection(t: &str) -> bool {
     const MARKERS: &[&str] = &[
         "Stop hook feedback:",
@@ -211,6 +212,8 @@ pub(crate) fn is_harness_injection(t: &str) -> bool {
         "Caveat: The messages below",
         "<system-reminder",
         "<command-name>",
+        "<environment_context",
+        "<task-notification",
         "[SYSTEM NOTIFICATION",
         "This session is being continued from a previous conversation",
         // The crew boot prompt (bin/crew-runner.mjs kicks every seat off with it). Matched as a
@@ -221,7 +224,22 @@ pub(crate) fn is_harness_injection(t: &str) -> bool {
         "NEW BUS MESSAGES for you:",
     ];
     let t = t.trim_start();
-    t.starts_with('<') || MARKERS.iter().any(|m| t.starts_with(m)) || t.contains("system-reminder")
+    MARKERS.iter().any(|m| t.starts_with(m))
+}
+
+/// A paste typed into the terminal arrives wrapped in `<pasted_content id="…">…</pasted_content>`
+/// (#10027): the wrapper is transport, not content — the operator typed what is inside it. Peel it
+/// so chat and Sessions show the words, not the tag. Text without a wrapper passes through.
+pub(crate) fn unwrap_pasted(t: &str) -> &str {
+    let t = t.trim();
+    let Some(rest) = t.strip_prefix("<pasted_content") else {
+        return t;
+    };
+    let Some(gt) = rest.find('>') else {
+        return t;
+    };
+    let inner = &rest[gt + 1..];
+    inner.strip_suffix("</pasted_content>").unwrap_or(inner).trim()
 }
 
 pub(crate) fn chat_context(tokens: Option<u64>, window: u64) -> ChatContext {
@@ -640,7 +658,7 @@ where
                                 role: "system".into(),
                                 blocks: vec![ChatBlock {
                                     kind: "dequeue".into(),
-                                    text: text.to_string(),
+                                    text: unwrap_pasted(text).to_string(),
                                     tool: None,
                                     tool_id: None,
                                     ask: None,
@@ -661,7 +679,7 @@ where
                                 role: "user".into(),
                                 blocks: vec![ChatBlock {
                                     kind: "text".into(),
-                                    text: text.to_string(),
+                                    text: unwrap_pasted(text).to_string(),
                                     tool: None,
                                     tool_id: None,
                                     ask: None,
@@ -737,7 +755,7 @@ where
             serde_json::Value::String(s) if !s.trim().is_empty() && !is_harness_injection(s) => {
                 blocks.push(ChatBlock {
                     kind: "text".into(),
-                    text: s.trim().to_string(),
+                    text: unwrap_pasted(s).to_string(),
                     tool: None,
                     tool_id: None,
                     ask: None,
@@ -755,7 +773,7 @@ where
                             }
                             blocks.push(ChatBlock {
                                 kind: "text".into(),
-                                text: t.to_string(),
+                                text: unwrap_pasted(t).to_string(),
                                 tool: None,
                                 tool_id: None,
                                 ask: None,
