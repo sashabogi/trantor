@@ -107,6 +107,16 @@ const selected = ONLY ? suites.filter(s => s.rel.includes(ONLY)) : suites;
 if (!selected.length) { console.error(`no suite matches --only ${ONLY}`); process.exit(1); }
 
 // ---- 3. run in parallel, per-suite timeout, process-group kill ----
+// #9832: when a suite goes red the CI log must name WHAT failed. 0.18.74's test-contracts
+// retried red twice and the log held only section headers — the failing assertion's ✗/FAIL
+// line never surfaced, so the fix started from a guess. These lines are extracted from a red
+// run's output and printed at the retry and in the final report; caps keep a flooding suite
+// from burying the log.
+const failLines = (out) => out.split("\n").filter((l) => /✗|\bFAIL\b/.test(l));
+const printFlagged = (lines, indent = "    | ") => {
+  if (!lines.length) return;
+  console.log(lines.slice(0, 20).map((l) => `${indent}${l}`).join("\n") + (lines.length > 20 ? `\n${indent}… ${lines.length - 20} more` : ""));
+};
 function runSuite(s) {
   const [cmd, args] = s.cmd || (s.rel.endsWith(".sh") ? ["bash", [s.rel]] : [process.execPath, [s.rel]]);
   return new Promise((resolveRun) => {
@@ -144,8 +154,14 @@ async function worker() {
     // twice in a row and still gates; quarantine suites don't retry (their red is reported only).
     if (s.lane === "gate" && r.code !== 0) {
       console.log(`  ↻ retry ${s.rel} (first run exit=${r.code}${r.timedOut ? " TIMEOUT" : ""})`);
+      const firstFailLines = failLines(r.out);
+      if (firstFailLines.length) {
+        console.log(`  first run flagged ${firstFailLines.length} line(s):`);
+        printFlagged(firstFailLines);
+      }
       r = await runSuite(s);
       r.retried = true;
+      r.firstFailLines = firstFailLines;
     }
     results.push(r);
   }
@@ -165,6 +181,15 @@ const expiredGreen = results.filter(r => r.code === 0 && lane(r) === "quarantine
 
 for (const r of failed) {
   console.log(`\n✗ ${r.rel} [${lane(r)}] exit=${r.code}${r.timedOut ? " TIMEOUT" : ""} (${(r.ms / 1000).toFixed(1)}s)`);
+  if (r.retried && r.firstFailLines?.length) {
+    console.log(`  first run flagged ${r.firstFailLines.length} line(s):`);
+    printFlagged(r.firstFailLines, "    | ");
+  }
+  const flagged = failLines(r.out);
+  if (flagged.length) {
+    console.log(`  this run flagged ${flagged.length} line(s):`);
+    printFlagged(flagged, "    | ");
+  }
   console.log(r.out.split("\n").slice(-40).join("\n"));
 }
 for (const r of expiredGreen) console.log(`\n⚠ ${r.rel}: quarantine entry EXPIRED (card #${entryFor(r.rel).card}, was ${entryFor(r.rel).expires}) and the suite is GREEN — fix the drill back into the gate or drop the entry.`);
