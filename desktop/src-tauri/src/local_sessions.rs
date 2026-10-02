@@ -136,25 +136,147 @@ pub(crate) fn in_flight_from_agents_json(raw: &str) -> Option<u32> {
         .and_then(|n| u32::try_from(n).ok())
 }
 
+/// herdr lifecycle words that already light the row as working — recounting background
+/// sub-agents for one spends a node spawn to learn nothing the row doesn't already show
+/// (#10048). herdr says "working"; "busy" is the same word in other muxers' vocabularies.
+pub(crate) fn is_busy_status(status: Option<&str>) -> bool {
+    matches!(status, Some("working") | Some("busy"))
+}
+
+/// One cached `trantor agents` answer (#10048): the manifest count observed while the session's
+/// transcript was exactly this long, exactly this fresh, counted from exactly this bucketed
+/// since. Any of those changing means the count can have changed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct InFlightCacheEntry {
+    sid: String,
+    transcript_len: u64,
+    transcript_mtime_ms: u64,
+    since_ms: u64,
+    in_flight: Option<u32>,
+}
+
+/// Process-wide, pane-keyed memo of the last `trantor agents` answer per pane (#10048). The poll
+/// runs every 15s; without this, every poll pays a node spawn plus a 15-50MB transcript parse
+/// per pane with sub-agents.
+static IN_FLIGHT_CACHE: std::sync::Mutex<BTreeMap<String, InFlightCacheEntry>> =
+    std::sync::Mutex::new(BTreeMap::new());
+
+/// `since` is the pane process's start — a FIXED moment each poll re-derives with ~1s of
+/// etime-rounding jitter, so an exact key would miss nearly every poll. Bucketing keeps one
+/// process in one bucket; a real swap changes sid and the transcript stamp too, so the stale
+/// guard can never ride a stale bucket across a session change.
+const SINCE_BUCKET_MS: u64 = 600_000;
+
+fn bucket_since(since_ms: u64) -> u64 {
+    since_ms - since_ms % SINCE_BUCKET_MS
+}
+
+/// (len, mtime epoch ms) of one transcript file; a missing or unreadable file stamps (0, 0),
+/// which is still a stable key — the count just recomputes whenever the file appears.
+fn transcript_stamp(path: &Path) -> (u64, u64) {
+    let Ok(meta) = std::fs::metadata(path) else {
+        return (0, 0);
+    };
+    let mtime = meta
+        .modified()
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0);
+    (meta.len(), mtime)
+}
+
+/// Panes the poll no longer listed (pane closed, project gone) would keep their entries
+/// forever; drop everything not in the live set so the map stays the size of the pane list.
+pub(crate) fn evict_in_flight_cache(live_panes: &[String]) {
+    IN_FLIGHT_CACHE
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .retain(|pane, _| live_panes.iter().any(|p| p == pane));
+}
+
 /// Live background sub-agents for one herdr pane's session, or None when any link is missing.
-/// The in-flight RULE lives once, in the trantor CLI (`trantor agents <sid> --json` over
-/// lib/subagent-manifest.mjs); `--since` anchors it on the pane's foreground process start, so
-/// an unguarded count can never keep a crashed pane "working" forever.
-pub(crate) fn pane_in_flight(project: &str, pane: &str, sid: &str, now_ms: u64) -> Option<u32> {
+/// The in-flight RULE lives once, in the trantor CLI (`trantor agents <sid> --json`); `--since`
+/// anchors it on the pane's foreground process start. #10048: a working pane skips the count
+/// entirely, and everyone else respawns only when sid, the transcript stamp, or the bucket moved.
+pub(crate) fn pane_in_flight(
+    project: &str,
+    pane: &str,
+    sid: &str,
+    now_ms: u64,
+    status: Option<&str>,
+) -> Option<u32> {
+    if is_busy_status(status) {
+        return None;
+    }
     let tdir = project_dir(project).map(|d| transcript_dir_for_project_dir(&d))?;
+    let info = shell_stdout("herdr", &["pane", "process-info", "--pane", pane]);
+    let pid = foreground_pid_from_process_info(&info)?;
+    let etime = shell_stdout("/bin/ps", &["-p", &pid.to_string(), "-o", "etime="]);
+    pane_in_flight_with(
+        &tdir,
+        pane,
+        sid,
+        now_ms,
+        status,
+        &info,
+        &etime,
+        &|sid, since| {
+            trantor_cli::command()
+                .args(["agents", sid, "--json", "--since", &since.to_string()])
+                .output()
+                .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
+                .unwrap_or_default()
+        },
+    )
+}
+
+/// The seam `pane_in_flight` shells around, with every side effect injectable so tests can
+/// count `trantor agents` spawns: process-info and etime arrive as captured strings and the
+/// agents call arrives as `run_agents` (#10048 gate).
+pub(crate) fn pane_in_flight_with(
+    tdir: &Path,
+    pane: &str,
+    sid: &str,
+    now_ms: u64,
+    status: Option<&str>,
+    process_info: &str,
+    etime_raw: &str,
+    run_agents: &dyn Fn(&str, u64) -> String,
+) -> Option<u32> {
+    if is_busy_status(status) {
+        return None;
+    }
     if !tdir.join(sid).join("subagents").is_dir() {
         return None;
     }
-    let info = shell_stdout("herdr", &["pane", "process-info", "--pane", pane]);
-    let pid = foreground_pid_from_process_info(&info)?;
-    let elapsed_ms = parse_ps_elapsed_ms(&shell_stdout("/bin/ps", &["-p", &pid.to_string(), "-o", "etime="]))?;
-    let since = now_ms.checked_sub(elapsed_ms)?;
-    let out = trantor_cli::command()
-        .args(["agents", sid, "--json", "--since", &since.to_string()])
-        .output()
-        .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
-        .unwrap_or_default();
-    in_flight_from_agents_json(&out)
+    // The pid's existence is the gate; the pane-in-flight math never needs the number itself.
+    foreground_pid_from_process_info(process_info)?;
+    let elapsed_ms = parse_ps_elapsed_ms(etime_raw)?;
+    let since = bucket_since(now_ms.checked_sub(elapsed_ms)?);
+    let (len, mtime) = transcript_stamp(&tdir.join(format!("{sid}.jsonl")));
+    let mut cache = IN_FLIGHT_CACHE.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(hit) = cache.get(pane) {
+        if hit.sid == sid
+            && hit.transcript_len == len
+            && hit.transcript_mtime_ms == mtime
+            && hit.since_ms == since
+        {
+            return hit.in_flight;
+        }
+    }
+    let in_flight = in_flight_from_agents_json(&run_agents(sid, since));
+    cache.insert(
+        pane.to_string(),
+        InFlightCacheEntry {
+            sid: sid.to_string(),
+            transcript_len: len,
+            transcript_mtime_ms: mtime,
+            since_ms: since,
+            in_flight,
+        },
+    );
+    in_flight
 }
 
 /// Projects with a live session: interactive `claude` windows and crew-runner seats on THIS
@@ -208,9 +330,9 @@ pub(crate) fn local_sessions() -> Vec<LocalSessionRow> {
     out.dedup();
 
     // herdr truth: every orch pane herdr can still resolve an agent for, regardless of where the
-    // pane's process actually lives. One agent.get per pane carries status AND session id; a
-    // session id plus a subagents dir buys the #10007 count (cheap skips first, so panes without
-    // sub-agents never pay for a spawn), stale-guarded by the pane process's start.
+    // pane's process actually lives. One agent.get per pane carries status AND session id; the
+    // #10007 count rides it (cheap skips first), memoized per pane on the transcript stamp and
+    // skipped entirely for working panes (#10048).
     let rows = std::fs::read_to_string(desktop_bus_dir().join("crew-windows.txt")).unwrap_or_default();
     let orch_rows =
         std::fs::read_to_string(desktop_bus_dir().join("orch-sessions.txt")).unwrap_or_default();
@@ -219,17 +341,22 @@ pub(crate) fn local_sessions() -> Vec<LocalSessionRow> {
         .map(|d| d.as_millis() as u64)
         .unwrap_or(0);
     let mut herdr_open: Vec<(String, String)> = Vec::new();
+    let mut live_panes: Vec<String> = Vec::new();
     let mut in_flight_of: BTreeMap<String, u32> = BTreeMap::new();
     for (project, pane) in orch_projects_from_rows(&rows) {
+        live_panes.push(pane.clone());
         let (status, sid) = herdr::agent_status_and_session(&pane);
         let sid = sid.or_else(|| orch_session_id_from_rows(&orch_rows, &project));
         if let (Some(sid), Some(status)) = (sid, status) {
-            if let Some(n) = pane_in_flight(&project, &pane, &sid, now_ms) {
+            // herdr said working: the row is working either way, so the pane pays no
+            // transcript-cache check and no `trantor agents` spawn (#10048).
+            if let Some(n) = pane_in_flight(&project, &pane, &sid, now_ms, Some(&status)) {
                 in_flight_of.insert(project.clone(), n);
             }
             herdr_open.push((project, status));
         }
     }
+    evict_in_flight_cache(&live_panes);
 
     let mut rows = merge_local_sessions(out, herdr_open);
     for r in &mut rows {
@@ -828,5 +955,160 @@ mod session_tests {
         assert_eq!(newest_transcript_mtime_ms(&empty), None);
 
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    // ── #10048: the `trantor agents` spawn is memoized per pane on the transcript stamp ─────────
+
+    const INFO: &str = r#"{"result":{"process_info":{"shell_pid":100,"foreground_process_group_id":200,"foreground_processes":[{"pid":200,"name":"claude","argv0":"/usr/local/bin/claude","cmdline":"claude"}]}}}"#;
+
+    fn manifest(count: u32) -> String {
+        format!(
+            r#"{{"sessionId":"sess1","counts":{{"total":1,"completed":0,"inFlight":{count},"stale":0,"suspectFiles":0}}}}"#
+        )
+    }
+
+    /// A transcript dir with session `sess1`: its subagents dir and a one-line transcript.
+    fn in_flight_tdir(tag: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "trantor-inflight-{tag}-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(dir.join("sess1").join("subagents")).unwrap();
+        std::fs::write(dir.join("sess1.jsonl"), "{\"line\":1}\n").unwrap();
+        dir
+    }
+
+    /// Calls pane_in_flight_with with a counting runner whose answer flips to 0 after the first
+    /// spawn, so a cache hit is provably served from the memo, not from a fresh identical spawn.
+    struct CountingRunner {
+        spawns: std::cell::Cell<usize>,
+        last_since: std::cell::Cell<u64>,
+    }
+
+    impl CountingRunner {
+        fn run(&self, _sid: &str, since: u64) -> String {
+            self.spawns.set(self.spawns.get() + 1);
+            self.last_since.set(since);
+            if self.spawns.get() == 1 {
+                manifest(2)
+            } else {
+                manifest(0)
+            }
+        }
+    }
+
+    fn call_in_flight(
+        tdir: &Path,
+        pane: &str,
+        now_ms: u64,
+        status: Option<&str>,
+        runner: &CountingRunner,
+    ) -> Option<u32> {
+        pane_in_flight_with(tdir, pane, "sess1", now_ms, status, INFO, "42", &|sid, since| {
+            runner.run(sid, since)
+        })
+    }
+
+    #[test]
+    fn unchanged_transcript_never_respawns_the_agents_call() {
+        let _lock = BUS_DIR_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        evict_in_flight_cache(&[]);
+        let tdir = in_flight_tdir("unchanged");
+        let runner = CountingRunner {
+            spawns: std::cell::Cell::new(0),
+            last_since: std::cell::Cell::new(0),
+        };
+
+        // etime "42" against now 1_000_000 puts the process start at 958_000, bucketed to
+        // 600_000 — the value handed to the CLI is the bucket, not the raw since.
+        assert_eq!(call_in_flight(&tdir, "p-unchanged", 1_000_000, None, &runner), Some(2));
+        assert_eq!(runner.spawns.get(), 1);
+        assert_eq!(runner.last_since.get(), 600_000);
+
+        // Same pane, same stamp: served from the memo even though the fresh answer differs.
+        assert_eq!(call_in_flight(&tdir, "p-unchanged", 1_000_000, None, &runner), Some(2));
+        assert_eq!(runner.spawns.get(), 1);
+
+        std::fs::remove_dir_all(&tdir).unwrap();
+    }
+
+    #[test]
+    fn changed_transcript_len_respawns_and_reads_the_new_count() {
+        let _lock = BUS_DIR_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        evict_in_flight_cache(&[]);
+        let tdir = in_flight_tdir("changed");
+        let runner = CountingRunner {
+            spawns: std::cell::Cell::new(0),
+            last_since: std::cell::Cell::new(0),
+        };
+        assert_eq!(call_in_flight(&tdir, "p-changed", 1_000_000, None, &runner), Some(2));
+
+        // The turn wrote more transcript: the memo can no longer speak for it.
+        let mut transcript = std::fs::read(tdir.join("sess1.jsonl")).unwrap();
+        transcript.extend_from_slice(b"{\"line\":2}\n");
+        std::fs::write(tdir.join("sess1.jsonl"), &transcript).unwrap();
+
+        assert_eq!(call_in_flight(&tdir, "p-changed", 1_000_000, None, &runner), Some(0));
+        assert_eq!(runner.spawns.get(), 2);
+
+        std::fs::remove_dir_all(&tdir).unwrap();
+    }
+
+    #[test]
+    fn working_pane_never_spawns_and_bucket_roll_respawns() {
+        let _lock = BUS_DIR_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        evict_in_flight_cache(&[]);
+        let tdir = in_flight_tdir("working");
+        let runner = CountingRunner {
+            spawns: std::cell::Cell::new(0),
+            last_since: std::cell::Cell::new(0),
+        };
+
+        // herdr already says working/busy: no spawn, no count — the row is working anyway.
+        assert_eq!(call_in_flight(&tdir, "p-working", 1_000_000, Some("working"), &runner), None);
+        assert_eq!(call_in_flight(&tdir, "p-working", 1_000_000, Some("busy"), &runner), None);
+        assert_eq!(runner.spawns.get(), 0);
+
+        // An idle pane in the same shape does spawn, so the guard above is what held.
+        assert_eq!(call_in_flight(&tdir, "p-working", 1_000_000, Some("idle"), &runner), Some(2));
+        assert_eq!(runner.spawns.get(), 1);
+
+        // Poll jitter within the since bucket stays a cache hit…
+        assert_eq!(call_in_flight(&tdir, "p-working", 1_001_500, Some("idle"), &runner), Some(2));
+        assert_eq!(runner.spawns.get(), 1);
+        // …while a since that lands in the NEXT bucket (a genuinely different guard) respawns.
+        assert_eq!(call_in_flight(&tdir, "p-working", 1_600_000, Some("idle"), &runner), Some(0));
+        assert_eq!(runner.spawns.get(), 2);
+
+        std::fs::remove_dir_all(&tdir).unwrap();
+    }
+
+    #[test]
+    fn cache_evicts_panes_the_poll_no_longer_lists() {
+        let _lock = BUS_DIR_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        evict_in_flight_cache(&[]);
+        let tdir = in_flight_tdir("evict");
+        let runner = CountingRunner {
+            spawns: std::cell::Cell::new(0),
+            last_since: std::cell::Cell::new(0),
+        };
+        assert_eq!(call_in_flight(&tdir, "p-gone", 1_000_000, None, &runner), Some(2));
+        assert_eq!(runner.spawns.get(), 1);
+
+        // A poll that still lists the pane keeps the memo warm.
+        evict_in_flight_cache(&["p-gone".into(), "p-other".into()]);
+        assert_eq!(call_in_flight(&tdir, "p-gone", 1_000_000, None, &runner), Some(2));
+        assert_eq!(runner.spawns.get(), 1);
+
+        // The pane dropped off the poll: its entry dies with it, so the next call respawns.
+        evict_in_flight_cache(&["p-other".into()]);
+        assert_eq!(call_in_flight(&tdir, "p-gone", 1_000_000, None, &runner), Some(0));
+        assert_eq!(runner.spawns.get(), 2);
+
+        std::fs::remove_dir_all(&tdir).unwrap();
     }
 }
