@@ -37,6 +37,19 @@ const mk = (base) => ({
   post: (p, b) => fetch(base + p, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(b) }).then(async r => ({ status: r.status, ...(await r.json()) })),
   get: (p) => fetch(base + p).then(r => r.json()),
 });
+// The fixed 800ms "let the hub boot" sleep raced node's boot under a loaded host: the first
+// propose fetch landed before the hub listened and the whole block threw "fetch failed"
+// (0.18.76's release run 36898350251, and the 10-01 local red). Wait for the CONDITION —
+// /health answering — never for the clock; fail fast if the hub process died instead.
+async function waitHub(base, dead, label = "hub") {
+  const t0 = Date.now();
+  for (;;) {
+    if (dead()) throw new Error(`${label} exited before accepting requests`);
+    try { const r = await fetch(`${base}/health`); if (r.ok) return; } catch {}
+    if (Date.now() - t0 > 15000) throw new Error(`${label} not accepting requests after 15s`);
+    await sleep(50);
+  }
+}
 
 const BOUND = (n) => ({ scope: `push to main in repo ${n}`, condition: "only after npm test exits 0", exclusions: "never force-push" });
 
@@ -46,7 +59,7 @@ console.log("# trantor agent-proposed permissions tests");
 const PA = 47941;
 let hubA = spawnHub(PA);
 let errA = ""; hubA.stderr.on("data", d => errA += d);
-await sleep(800);
+await waitHub(`http://127.0.0.1:${PA}`, () => hubA.exitCode !== null, "hub A");
 const dirA = hubA._dir;
 try {
   const A = mk(`http://127.0.0.1:${PA}`);
@@ -183,7 +196,7 @@ try {
 const PB = 47942;
 const hubB = spawnHub(PB, { extraEnv: { RELAY_AUTH: "enforce", RELAY_ENROLL: "tofu" } });
 let errB = ""; hubB.stderr.on("data", d => errB += d);
-await sleep(800);
+await waitHub(`http://127.0.0.1:${PB}`, () => hubB.exitCode !== null, "hub B");
 try {
   const base = `http://127.0.0.1:${PB}`;
   const { generate, signRequest } = await import("../../lib/identity.mjs");
