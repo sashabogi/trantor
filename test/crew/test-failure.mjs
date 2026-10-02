@@ -355,7 +355,14 @@ async function drill(agent, script, opts = {}) {
 // done" while nothing was produced. An empty transcript on a clean exit is a failure shape.
 {
   const { sends, registers } = await drill("opencode", '#!/bin/sh\nexit 0\n',
-    { env: { RELAY_HOST_ID: "drillhost" } });
+    { env: { RELAY_HOST_ID: "drillhost" },
+      // The default 2.5s wait raced the runner's COLD boot on the release runner (0.18.76: both
+      // #5481 assertions red at 74/76 while green locally twice) — the classification landed
+      // after the drill had already asked. Wait for the classified report itself, and for the
+      // direct foreman wake this drill asserts on, never for the clock.
+      until: (messages) =>
+        messages.some((m) => m.to === "all" && /turn FAILED/.test(m.text || "") && /empty-output/.test(m.text || ""))
+        && messages.some((m) => m.to === "drillhost:tt-fail-opencode" && /FAILED/.test(m.text || "")) });
   const failMsg = sends.find((m) => /turn FAILED/i.test(m.text || ""));
   ok("#5481: an exit-0 turn with NULL output is reported FAILED, never clean", !!failMsg);
   ok("#5481: it classifies as empty-output", !!failMsg && /empty-output/.test(failMsg.text));
@@ -373,7 +380,10 @@ async function drill(agent, script, opts = {}) {
 // the failure's one job is to point the operator at the right knob, by name, for this provider.
 {
   const { sends } = await drill("inception", '#!/bin/sh\nexit 0\n',
-    { fakeName: "opencode", env: { RELAY_HOST_ID: "drillhost" } });
+    { fakeName: "opencode", env: { RELAY_HOST_ID: "drillhost" },
+      // Same cold-boot race as drill A (0.18.76: this drill's two assertions were the release
+      // run's other reds). Wait for the classified report, never for the clock.
+      until: (messages) => messages.some((m) => /turn FAILED/.test(m.text || "") && /empty-output/.test(m.text || "")) });
   const failMsg = sends.find((m) => /turn FAILED/i.test(m.text || ""));
   ok("#5481: the inception seat is classified empty-output too (BYOM opencode fallback)",
      !!failMsg && /empty-output/.test(failMsg.text));
