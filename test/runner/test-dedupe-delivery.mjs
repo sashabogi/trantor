@@ -70,8 +70,13 @@ const HUB = `http://127.0.0.1:${hub.address().port}`;
 const post = (path, b) => fetch(`${HUB}${path}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(b) }).then(r => r.json());
 const handoffs = (id) => state.events.filter(e => e.id === id).map(e => `${e.path}@${new Date(e.ts).toISOString()}`);
 
-// ---- harness: the REAL runner + a fake `codex`. The kickoff turn lasts 2s, which is the window
-// in which the probe arrives and the session reads it — the exact shape of the live incident. ----
+// ---- harness: the REAL runner + a fake `codex`. #9832: the kickoff turn no longer lasts a
+// fixed 2s — the fake CLI SIGNS its start (kickoff-live marker) and HOLDS the turn open until
+// the drill releases it. The probe's mid-turn arrival is then an EVENT anchored to the turn,
+// not a race against the runner's boot: under a loaded host the old sleep(800) could fire
+// before the kickoff had even started (the poll woke on the probe directly — the exact
+// duplicate delivery this suite exists to prove suppressed) and sleep(3200) could post probe 2
+// before the kickoff's boundary reconcile had consumed probe 1. -------------------------------
 const PROJ = "tt-dedupe";
 const PROBE1 = "DEDUPE-PROBE #4242: answer this clarification in place, then end your turn";
 const PROBE2 = "SECOND-PROBE #4243: one more ask, needing its own turn";
@@ -84,12 +89,15 @@ async function drill({ sessionRead = false, failWakeTurns = 0, lateProbe = false
   mkdirSync(BUS, { recursive: true });
   const fakebin = join(work, "bin"); mkdirSync(fakebin, { recursive: true });
   const LOGF = join(work, "turns.log"), CNTF = join(work, "count");
+  const KICKMARK = join(work, "kickoff-live"), RELEASE = join(work, "release");
   const PENDF = join(BUS, `pending-codex-${PROJ}.json`);
   writeFileSync(join(fakebin, "codex"), `#!/bin/sh
 P="$HOME/.agent-bus/turn-codex-${PROJ}.txt"
 { echo "===TURN ts=$(date +%s)==="; cat "$P"; } >> "${LOGF}"
 if ! grep -q "NEW BUS MESSAGE" "$P"; then
-  sleep 2
+  : > "${KICKMARK}"
+  i=0
+  while [ ! -f "${RELEASE}" ] && [ "$i" -lt 6000 ]; do sleep 0.02; i=$((i+1)); done
 fi
 if grep -q "NEW BUS MESSAGE" "$P"; then
   n=$(cat "${CNTF}" 2>/dev/null || echo 0); n=$((n+1)); echo "$n" > "${CNTF}"
@@ -108,11 +116,15 @@ exit 0
   const spawnRunner = () => spawn("node", ["bin/crew-runner.mjs", "codex", work], {
     cwd: process.cwd(), stdio: "ignore", env: runnerEnv,
   });
+  // the persisted seen-set gaining the id IS the boundary reconcile having consumed it —
+  // both the restart gate and the late-probe gate hang off that event, not off a clock.
+  const seenHas = (id) => { try { const j = JSON.parse(readFileSync(PENDF, "utf8")); return (j.seen || []).some(e => e.id === id); } catch { return false; } };
   let runner = spawnRunner();
   const session = `codex:${PROJ}`;
   let probe1Id = 0;
-  // the probe lands MID-TURN in every scenario — delivery-path dedupe is what varies, not timing.
-  await sleep(800);
+  const bootT0 = Date.now();
+  while (!existsSync(KICKMARK) && Date.now() - bootT0 < 30000) await sleep(50);
+  if (!existsSync(KICKMARK)) console.log("  FAIL  kickoff never signalled live within 30s — drill window missed");
   const sent = await post("/send", { from: "sasha@mac", to: session, text: PROBE1 });
   probe1Id = sent.id;
   if (sessionRead) {
@@ -121,24 +133,25 @@ exit 0
     const r = await (await fetch(`${HUB}/inbox?session=${encodeURIComponent(session)}&since=0`)).json();
     if (!r.messages.length) console.log("  FAIL  the session-side read got an empty inbox — drill window missed");
   }
+  writeFileSync(RELEASE, "go\n");
   let fileHadSeen = false;
   if (restart) {
-    // wait for the reconcile to persist the seen-set, then kill the runner and boot a NEW one
-    // whose boot cursor sync fails — the restored seen-set is then the only duplicate guard.
+    // wait for the boundary reconcile to persist the consumed id, then kill the runner and boot a
+    // NEW one whose boot cursor sync fails — the restored seen-set is then the only duplicate guard.
     const t0 = Date.now();
-    while (Date.now() - t0 < 8000) {
-      try { const j = JSON.parse(readFileSync(PENDF, "utf8")); if (Array.isArray(j.seen) && j.seen.length) { fileHadSeen = true; break; } } catch {}
-      await sleep(120);
-    }
+    while (Date.now() - t0 < 15000 && !seenHas(probe1Id)) await sleep(120);
+    fileHadSeen = seenHas(probe1Id);
     runner.kill("SIGKILL"); await sleep(200);
     state.inboxDown = true;
     runner = spawnRunner();
   }
   let probe2Id = 0;
   if (lateProbe) {
-    // arrives AFTER the first turn completed — the runner's poll queue is the only path that
-    // will ever carry it, and its first wake fails, so redelivery must survive the dedupe.
-    await sleep(3200);
+    // arrives AFTER the kickoff's boundary reconcile consumed probe 1 — its id is beyond the
+    // ledger that boundary wrote, so only the poll path will ever carry it, and its first wake
+    // fails, so redelivery must survive the dedupe.
+    const t0 = Date.now();
+    while (Date.now() - t0 < 15000 && !seenHas(probe1Id)) await sleep(120);
     const sent = await post("/send", { from: "sasha@mac", to: session, text: PROBE2 });
     probe2Id = sent.id;
   }

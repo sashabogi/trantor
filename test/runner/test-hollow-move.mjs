@@ -3,7 +3,7 @@
 // from a clean worktree with no ticks and no test command lands but is prefixed HOLLOW: and the
 // assigner gets one bus line; a real diff, an untracked file, a tick + test command, or a declared
 // no-code outcome is NOT flagged. #7754: a note without `verified at <sha>` is flagged on its own.
-import { spawn, spawnSync, execFileSync } from "node:child_process";
+import { spawn, execFileSync } from "node:child_process";
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync, chmodSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -33,9 +33,29 @@ git(["add", "-A"]);
 const commit = (msg) => { git(["add", "-A"]); git(["-c", "user.name=drill", "-c", "user.email=drill@x", "commit", "-q", "-m", msg]); };
 commit("init");
 const SHA = git(["rev-parse", "HEAD"]);
-const HAS_GRAFT = spawnSync("graft", ["build", REPO], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).status === 0;
-if (HAS_GRAFT) commit("graft ignore files");   // graft build drops .gitignore/.ignore; keep them out of the drill diffs
-else console.log("  (graft not on PATH: the blast count drills are skipped, only the fail-open path is checked)");
+// #9832: the blast drills used the REAL graft and so inherited its AVAILABILITY — under host
+// load graft missed blastRadius's 2.5s box and 8a-8c read "blast: unavailable" (the 10-01 red:
+// 4 fails, all blast). What they test is mcp.mjs's SHAPING of graft's output, not graft itself,
+// so every drill runs against a stub GRAFT_BIN with graft's exact CLI and JSON shape — instant,
+// deterministic, no PATH dependency. 8d/8e still cover the fail-open paths (absent / slow).
+const STUB = join(W, "stub-graft");
+writeFileSync(STUB, `#!/usr/bin/env node
+const { execFileSync } = require("node:child_process");
+const args = process.argv.slice(2);
+const base = args[args.indexOf("--base") + 1] || "HEAD";
+let changed = [];
+try {
+  changed = execFileSync("git", ["diff", "--name-only", base, "HEAD"], { encoding: "utf8" })
+    .split("\\n").map((s) => s.trim()).filter(Boolean);
+} catch {}
+const INDEXED = ["lib/a.mjs", "b.mjs", "c.mjs"];
+const DEPS = { "lib/a.mjs": ["b.mjs", "c.mjs"] };
+const impacted = [];
+for (const c of changed) for (const d of (DEPS[c] || [])) impacted.push({ path: d });
+const unindexed = changed.filter((c) => !INDEXED.includes(c));
+console.log(JSON.stringify({ changed: changed.map((p) => ({ path: p })), unindexed, impacted }));
+`);
+chmodSync(STUB, 0o755);
 
 const PORT = 47877, HUB = `http://127.0.0.1:${PORT}`;
 const SESSION = "seat:hollowproj", ORCH = "orch:hollowproj";
@@ -85,7 +105,7 @@ async function spawnMcp(session, extraEnv = {}) {
   const call = (name, args, timeoutMs) => rpc("tools/call", { name, arguments: args }, timeoutMs);
   return { call, kill: () => mcp.kill() };
 }
-const mcp = await spawnMcp(SESSION);
+const mcp = await spawnMcp(SESSION, { GRAFT_BIN: STUB });
 const call = mcp.call;
 const text = (r) => r?.result?.content?.[0]?.text ?? JSON.stringify(r?.result ?? r?.error ?? {});
 const getCard = async (id) => {
@@ -203,7 +223,7 @@ const blastOf = async (id) => {
 const lastLine = (card) => lastNote(card).split("\n").pop();
 const contract = (id, base) => fetch(`${HUB}/send`, { method: "POST", headers: { "content-type": "application/json" },
   body: JSON.stringify({ from: ORCH, to: SESSION, project: "hollowproj", text: `take #${id}\nbase: ${base}` }) });
-if (HAS_GRAFT) {
+{
   // 8a. the contract's base sha, one changed lib/a.mjs imported by two files
   const id = await addCard("blast card", ["code lands"]);
   const base = git(["rev-parse", "HEAD"]);
@@ -219,7 +239,7 @@ if (HAS_GRAFT) {
     b?.base === base && b?.dependents === 2 && b?.changed?.length === 1 && b.changed[0] === "lib/a.mjs" && b.unindexed?.length === 0, JSON.stringify(b));
   ok("#7968: blast never lands on the card itself", !("blast" in card));
 }
-if (HAS_GRAFT) {
+{
   // 8b. only package.json changed: graft does not index it, and the note says so instead of a silent zero
   const id = await addCard("config card");
   const base = git(["rev-parse", "HEAD"]);
@@ -232,7 +252,7 @@ if (HAS_GRAFT) {
   const b = await blastOf(id);
   ok("#7968: the event names the unindexed path with zero dependents", b?.dependents === 0 && b?.unindexed?.[0] === "package.json", JSON.stringify(b));
 }
-if (HAS_GRAFT) {
+{
   // 8c. no contract base: the merge base of main and HEAD, from a seat branch one commit ahead
   git(["checkout", "-q", "-b", "seat/drill"]);
   const id = await addCard("merge-base card");
