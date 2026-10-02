@@ -143,7 +143,11 @@ async function drill(agent, script, opts = {}) {
 // ---- drill 1: an exhausted account complaining on STDERR ------------------------------
 {
   const { registers, sends } = await drill("codex",
-    '#!/bin/sh\necho "Error: insufficient_quota — you exceeded your current quota, please check your plan" >&2\nexit 1\n');
+    '#!/bin/sh\necho "Error: insufficient_quota — you exceeded your current quota, please check your plan" >&2\nexit 1\n',
+    // #9832: every fixed-wait drill here measured the MACHINE, not the behaviour — under the
+    // gate's own load (four suites running alongside) the classified report landed after the
+    // 2.5s window and five assertions red at once. Each now waits for the event it asserts.
+    { until: (messages) => messages.some((m) => /turn FAILED/.test(m.text || "") && /exhausted/.test(m.text || "")) });
   const failMsg = sends.find((m) => /turn FAILED/i.test(m.text || ""));
   ok("a failure message was posted to the bus (orchestrator is no longer blind)", !!failMsg);
   ok("failure went to 'all' so the orchestrator's relay_wait sees it", failMsg && failMsg.to === "all");
@@ -160,7 +164,8 @@ async function drill(agent, script, opts = {}) {
 // `claude` seat has no sid regex — so the CLI's own explanation never reached classifyFailure.
 {
   const { sends } = await drill("claude",
-    '#!/bin/sh\necho "You\'ve reached your Fable 5 limit. Run /usage-credits to continue or switch models with /model."\nexit 1\n');
+    '#!/bin/sh\necho "You\'ve reached your Fable 5 limit. Run /usage-credits to continue or switch models with /model."\nexit 1\n',
+    { until: (messages) => messages.some((m) => /turn FAILED/.test(m.text || "") && /exhausted/.test(m.text || "")) });
   const failMsg = sends.find((m) => /turn FAILED/i.test(m.text || ""));
   ok("a stdout-only failure still reaches the bus", !!failMsg);
   ok("a usage limit on STDOUT is classified exhausted, not crashed",
@@ -172,7 +177,8 @@ async function drill(agent, script, opts = {}) {
 // Guards the classifier itself: this text shares no word with the old pattern, so it proves
 // the match is on "reached your … limit" and not on the incidental "credit" in /usage-credits.
 {
-  const { sends } = await drill("claude", '#!/bin/sh\necho "You\'ve reached your Opus 5 limit."\nexit 1\n');
+  const { sends } = await drill("claude", '#!/bin/sh\necho "You\'ve reached your Opus 5 limit."\nexit 1\n',
+    { until: (messages) => messages.some((m) => /turn FAILED/.test(m.text || "") && /exhausted/.test(m.text || "")) });
   const failMsg = sends.find((m) => /turn FAILED/i.test(m.text || ""));
   ok("a bare subscription limit is classified exhausted", !!failMsg && /exhausted/i.test(failMsg.text));
 }
@@ -204,7 +210,8 @@ async function drill(agent, script, opts = {}) {
 // outage (card #5405). The turn output must be cross-checked before a 0 means anything.
 {
   const r = await drill("opencode",
-    '#!/bin/sh\necho "Error: 401 Unauthorized — Invalid API key provided" >&2\nexit 0\n');
+    '#!/bin/sh\necho "Error: 401 Unauthorized — Invalid API key provided" >&2\nexit 0\n',
+    { until: (messages) => messages.some((m) => /turn FAILED/.test(m.text || "") && /auth/.test(m.text || "")) });
   const failMsg = r.sends.find((m) => /turn FAILED/i.test(m.text || ""));
   ok("an exit-0 auth failure is still reported to the bus", !!failMsg);
   ok("...classified as auth (→ check credentials), never as success",
@@ -427,7 +434,10 @@ async function drill(agent, script, opts = {}) {
   // #7759: the success answer must clear the substantive floor, or the turn reads as a hollow
   // EMPTY turn and its wake is never consumed — this drill tests the ack, not turn validity.
   const { sends } = await drill("opencode", '#!/bin/sh\necho "did the thing on card #8020: the files changed, the gate ran green, and the card moved with a note, so this turn is done and consumed its wake."\nexit 0\n',
-    { inbox: [{ text: "contract: do the thing on card #8020" }], waitMs: 4000 });
+    { inbox: [{ text: "contract: do the thing on card #8020" }],
+      // #9832: the 4s window raced the wake turn's completion under load (run 2 of the gate:
+      // the ✅ ack hadn't landed when the drill asked). Wait for the ack itself.
+      until: (messages) => messages.some((m) => /✅/.test(m.text || "")) });
   ok("#5481: a turn with output and exit 0 is still success (no failure posted)",
      !sends.some((m) => /turn FAILED/.test(m.text || "")));
   ok("#5481: ...and the completion ack still goes to the assigner",
