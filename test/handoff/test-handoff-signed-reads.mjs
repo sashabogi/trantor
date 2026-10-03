@@ -7,15 +7,15 @@
 //
 // The property under test is therefore NOT "signing works". It is that an auth failure cannot be
 // spelled as an empty result: a signed read finds the card, and an unsigned one SAYS SO.
-import { spawn, execFileSync, spawnSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { mkdtempSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { drillEnv } from "../drill-env.mjs";
+import { startTestHub } from "../lib/test-hub.mjs";
 
 const ROOT = fileURLToPath(new URL("../..", import.meta.url)).replace(/\/$/, "");
-const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 let pass = 0, fail = 0;
 const ok = (c, name) => { c ? pass++ : fail++; console.log(`  ${c ? "✓" : "✗"} ${name}`); };
 
@@ -29,7 +29,7 @@ const hubEnv = {
   RELAY_AUTH: "enforce", RELAY_ENROLL: "tofu", RELAY_OVERSEER_TICK_MS: "600000",
   TRANTOR_NO_UPDATE_CHECK: "1",
 };
-const hub = spawn(process.execPath, [join(ROOT, "hub.mjs")], { env: hubEnv, stdio: ["ignore", "ignore", "pipe"] });
+const hub = await startTestHub({ port: PORT, env: hubEnv });
 
 console.log("# handoff signed hub reads (#7037)");
 
@@ -44,7 +44,6 @@ function inChild(src, extraEnv = {}) {
 }
 
 try {
-  await sleep(1200);
   const base = `http://127.0.0.1:${PORT}`;
 
   // An unsigned write is refused under enforce, so seed the board with a signed one — the same
@@ -100,7 +99,7 @@ try {
      `the storm guard still denies a second handoff inside the cooldown (${g.first} then ${g.second})`);
 } catch (e) {
   fail++; console.log(`  ✗ harness: ${e.message}`);
-} finally { hub.kill(); }
+} finally { hub.proc.kill(); }
 
 // THE CASE THE OTHER STORM-GUARD TEST CANNOT REACH, and the worst of the three sites.
 // The fixture above signs correctly, so the guard always talks to a hub that ANSWERS — and a

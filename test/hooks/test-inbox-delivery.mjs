@@ -4,13 +4,14 @@
 //
 // Runs the hub on an ISOLATED port with an isolated state file — never touches the live board.
 // Also guards the invariant that a peer is never addressable as a terminal (see hub.mjs touch()).
-import { spawn, execFileSync } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import { drillEnv } from "../drill-env.mjs";
+import { startTestHub } from "../lib/test-hub.mjs";
 
 const HERE = fileURLToPath(new URL("../..", import.meta.url));
 const PORT = Number(process.env.WAKE_TEST_PORT || 4491);
@@ -21,22 +22,15 @@ const ok = (name, cond, extra = "") => { if (cond) { pass++; console.log(`  ✓ 
 const dir = mkdtempSync(join(tmpdir(), "trantor-wake-"));
 let hub;
 
+async function startHub() {
+  hub = await startTestHub({ port: PORT, dir, env: { RELAY_HOST: "127.0.0.1", RELAY_STATE: join(dir, "bus.json"), AGENT_BUS_DIR: dir } });
+}
+
 async function post(path, body) {
   const r = await fetch(URL_BASE + path, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
   return r.json();
 }
 async function get(path) { const r = await fetch(URL_BASE + path); return { status: r.status, body: await r.json().catch(() => ({})) }; }
-
-async function startHub() {
-  hub = spawn(process.execPath, [join(HERE, "hub.mjs")], {
-    env: { ...drillEnv(), RELAY_PORT: String(PORT), RELAY_HOST: "127.0.0.1", RELAY_STATE: join(dir, "bus.json"), AGENT_BUS_DIR: dir },
-    stdio: "ignore",
-  });
-  for (let i = 0; i < 60; i++) {
-    try { await fetch(URL_BASE + "/peers"); return; } catch { await sleep(100); }
-  }
-  throw new Error("hub did not start");
-}
 
 // ---------------------------------------------------------------- hub state
 async function testReceipts() {
@@ -228,7 +222,7 @@ try {
 } catch (e) {
   fail++; console.log(`  ✗ harness error: ${e && e.message}`);
 } finally {
-  try { hub?.kill(); } catch {}
+  try { hub?.proc.kill(); } catch {}
   try { rmSync(dir, { recursive: true, force: true }); } catch {}
 }
 

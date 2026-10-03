@@ -13,27 +13,18 @@
 //   4. the REAL hook script, run as Claude Code runs it, injects the warning on a conflict and
 //      stays silent (and fail-open) otherwise
 import { spawn, spawnSync } from "node:child_process";
-import { mkdtempSync, mkdirSync } from "node:fs";
+import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { drillEnv } from "../drill-env.mjs";
+import { startTestHub } from "../lib/test-hub.mjs";
 
 const ROOT = fileURLToPath(new URL("../..", import.meta.url)).replace(/\/$/, "");
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 let pass = 0, fail = 0;
 const ok = (c, name) => { c ? pass++ : fail++; console.log(`  ${c ? "✓" : "✗"} ${name}`); };
 
-function spawnHub(port, extraEnv = {}) {
-  const dir = mkdtempSync(join(tmpdir(), "trantor-claims-"));
-  mkdirSync(join(dir, ".agent-bus"), { recursive: true });
-  const hub = spawn("node", [join(ROOT, "hub.mjs")], {
-    env: { ...drillEnv(), RELAY_DATA_DIR: dir, HOME: dir, RELAY_PORT: String(port), PORT: String(port), TRANTOR_NO_UPDATE_CHECK: "1", RELAY_AUTH: "off", ...extraEnv },
-    stdio: ["ignore", "ignore", "pipe"],
-  });
-  hub._dir = dir;
-  return hub;
-}
 const mk = (base) => ({
   post: (p, b) => fetch(base + p, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(b) }).then(r => r.json()),
   get: (p) => fetch(base + p).then(r => r.json()),
@@ -42,8 +33,7 @@ const mk = (base) => ({
 console.log("# trantor file-claims tests");
 
 // ── hub semantics ────────────────────────────────────────────────────────────────────────────────
-const PA = 47921, hubA = spawnHub(PA);
-await sleep(800);
+const PA = 47921, hubA = await startTestHub({ port: PA, env: { RELAY_AUTH: "off" } });
 try {
   const A = mk(`http://127.0.0.1:${PA}`);
 
@@ -74,11 +64,10 @@ try {
   const hist = await A.get("/history?project=p");
   ok((hist.events ?? []).every(e => !String(e.type).startsWith("file.")), "dotted claim types never leak into /history");
 } catch (e) { fail++; console.log(`  ✗ hub semantics: ${e.message}`); }
-finally { hubA.kill(); }
+finally { hubA.proc.kill(); }
 
 // ── TTL ──────────────────────────────────────────────────────────────────────────────────────────
-const PB = 47922, hubB = spawnHub(PB, { RELAY_CLAIM_TTL_MS: "300" });
-await sleep(800);
+const PB = 47922, hubB = await startTestHub({ port: PB, env: { RELAY_AUTH: "off", RELAY_CLAIM_TTL_MS: "300" } });
 try {
   const B = mk(`http://127.0.0.1:${PB}`);
   await B.post("/claim", { project: "p", file: "a.ts", session: "host:p" });
@@ -88,11 +77,10 @@ try {
   const list = await B.get("/claims?project=p");
   ok((list.claims ?? []).length === 1, "expired claims are pruned from /claims");
 } catch (e) { fail++; console.log(`  ✗ TTL: ${e.message}`); }
-finally { hubB.kill(); }
+finally { hubB.proc.kill(); }
 
 // ── the REAL hook, run the way Claude Code runs it ──────────────────────────────────────────────
-const PC = 47923, hubC = spawnHub(PC);
-await sleep(800);
+const PC = 47923, hubC = await startTestHub({ port: PC, env: { RELAY_AUTH: "off" } });
 try {
   const C = mk(`http://127.0.0.1:${PC}`);
   const work = mkdtempSync(join(tmpdir(), "trantor-claimhook-"));   // the "project" directory
@@ -139,7 +127,7 @@ try {
   });
   ok(dead.status === 0 && dead.stdout.trim() === "{}", "hook: hub down -> allow, never trap the session");
 } catch (e) { fail++; console.log(`  ✗ hook e2e: ${e.message}`); }
-finally { hubC.kill(); }
+finally { hubC.proc.kill(); }
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

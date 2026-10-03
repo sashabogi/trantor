@@ -11,12 +11,12 @@
 //   3. agent_completed with no prior card → creates a "done" card,
 //   4. overlap guard: an agent_id already tracked as cc-subagent → the Notification is dropped (no dupe),
 //   5. parent is stamped for nesting under the spawning session's focus card.
-import { spawn } from "node:child_process";
 import { mkdtempSync, mkdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { drillEnv } from "../drill-env.mjs";
+import { startTestHub } from "../lib/test-hub.mjs";
 
 const ROOT = fileURLToPath(new URL("../..", import.meta.url)).replace(/\/$/, "");
 const PORT = 47822;
@@ -28,7 +28,6 @@ let pass = 0, fail = 0;
 const ok = (name, cond, detail = "") => { if (cond) { pass++; console.log(`  ✓ ${name}`); } else { fail++; console.log(`  ✗ ${name} ${detail}`); } };
 const post = (p, b) => fetch(base + p, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(b) }).then(r => r.json());
 const get = (p) => fetch(base + p).then(r => r.json());
-const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 const PROJ = "notifyproj";
 // mirror what hooks/agent-notify.mjs POSTs
 const notify = (nt, agentId, title, parent, agentType = "agent") =>
@@ -41,9 +40,7 @@ console.log("# trantor cc-bg-agent (Notification) card tests");
 
 try { await fetch(`${base}/health`, { signal: AbortSignal.timeout(700) }); console.error(`✗ something already listening on :${PORT} — kill it first`); process.exit(2); } catch {}
 
-const hub = spawn("node", [join(ROOT, "hub.mjs")], { env: { ...drillEnv(), RELAY_DATA_DIR: dir, HOME: dir, RELAY_PORT: String(PORT), PORT: String(PORT) }, stdio: ["ignore", "ignore", "pipe"] });
-let herr = ""; hub.stderr.on("data", d => herr += d);
-await sleep(800);
+const hub = await startTestHub({ port: PORT, dir });
 
 try {
   // 1. agent_needs_input → blocked card, distinct source
@@ -78,9 +75,9 @@ try {
   c = await bgCardById("bg-3");
   ok("an unmapped type falls through to a plain 'doing' card (hook never sends these, hub is defensive)", c?.status === "doing", `(got "${c?.status}")`);
 } catch (e) {
-  fail++; console.log("  ✗ threw:", e?.message || e, herr ? `\n  hub stderr: ${herr}` : "");
+  fail++; console.log("  ✗ threw:", e?.message || e, hub.stderr ? `\n  hub stderr: ${hub.stderr.slice(-400)}` : "");
 } finally {
-  hub.kill();
+  hub.proc.kill();
   try { rmSync(dir, { recursive: true, force: true }); } catch {}
 }
 
