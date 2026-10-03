@@ -3,6 +3,7 @@
 // reads/sends, failures land on the target focus card + doctor, and the prompt keeps the socket
 // nudge independent from relay delivery.
 import { spawn } from "node:child_process";
+import { startTestHub } from "../lib/test-hub.mjs";
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -22,16 +23,14 @@ const ok = (name, condition, detail = "") => {
   else { fail++; console.log(`  ✗ ${name}${detail ? ` — ${detail}` : ""}`); }
 };
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
-const hub = spawn(process.execPath, [join(ROOT, "hub.mjs")], {
+const hub = await startTestHub({
+  port,
   env: {
     ...drillEnv(), HOME: work, AGENT_BUS_DIR: join(work, ".agent-bus"), RELAY_DATA_DIR: work,
     RELAY_PORT: String(port), RELAY_HOST: "127.0.0.1", RELAY_AUTH: "enforce", RELAY_ENROLL: "tofu",
     RELAY_OVERSEER_TICK_MS: "600000",
   },
-  stdio: ["ignore", "ignore", "pipe"],
 });
-let hubError = "";
-hub.stderr.on("data", data => { hubError += String(data); });
 
 async function request(identity, method, path, payload) {
   const body = payload === undefined ? undefined : JSON.stringify(payload);
@@ -52,13 +51,6 @@ async function enrollAgent(owner, name, project) {
 
 console.log("# duty reachability + wake-chain diagnostics");
 try {
-  let ready = false;
-  for (let i = 0; i < 80 && !ready; i++) {
-    try { ready = (await fetch(`${base}/health`)).ok; } catch {}
-    if (!ready) await sleep(50);
-  }
-  if (!ready) throw new Error(`hub did not start: ${hubError.slice(-300)}`);
-
   const owner = generate();
   await request(owner, "POST", "/enroll", { name: "owner", kind: "human", scopes: [{ project: "*", role: "owner" }] });
   const target = await enrollAgent(owner, "MacBook-Pro-M1:projTarget", "projTarget");
@@ -138,7 +130,7 @@ try {
   ok("trantor doctor names the affected target project", report.issues.some(issue => /duty seat cannot reach project projTarget/.test(issue.message)), JSON.stringify(report.issues));
   await new Promise(resolve => doctorHub.close(resolve));
 } finally {
-  hub.kill("SIGKILL");
+  hub.proc.kill("SIGKILL");
   rmSync(work, { recursive: true, force: true });
 }
 

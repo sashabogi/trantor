@@ -3,12 +3,13 @@
 // The bridge exists for hub split-brain (a crew on one hub, the board on another), so the
 // tests exercise exactly that: crew-side cards appear on the board hub, board-side OPEN
 // cards appear on the crew hub, status moves propagate both ways, restarts never duplicate.
-import { spawn, spawnSync } from "node:child_process";
+import { spawnSync } from "node:child_process";
 import { mkdtempSync, rmSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { drillEnv } from "../drill-env.mjs";
+import { startTestHub } from "../lib/test-hub.mjs";
 
 const ROOT = fileURLToPath(new URL("../..", import.meta.url)).replace(/\/$/, "");
 let pass = 0, fail = 0;
@@ -17,12 +18,9 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
 const HOME = mkdtempSync(join(tmpdir(), "trantor-bridge-"));
 const PA = 47961, PB = 47962;
-const hubs = [PA, PB].map(port => spawn("node", [join(ROOT, "hub.mjs")], {
-  env: { ...drillEnv(), RELAY_DATA_DIR: join(HOME, `hub${port}`), HOME, RELAY_PORT: String(port), TRANTOR_NO_UPDATE_CHECK: "1" },
-  stdio: ["ignore", "ignore", "pipe"],
-}));
-let errs = ""; for (const h of hubs) h.stderr.on("data", d => errs += d);
-await sleep(900);
+const hubA = await startTestHub({ port: PA, dir: join(HOME, `hub${PA}`) });
+const hubB = await startTestHub({ port: PB, dir: join(HOME, `hub${PB}`) });
+const errs = () => hubA.stderr + hubB.stderr;
 
 const A = `http://127.0.0.1:${PA}`, B = `http://127.0.0.1:${PB}`;
 const api = (base) => ({
@@ -126,11 +124,11 @@ try {
     && !(await a.get(`/tasks?project=${seedProj}`)).tasks.some(t => t.title === "months-old open backlog"), r9.stderr);
   void oldOpen;
 } catch (e) {
-  fail++; console.log(`  ✗ threw: ${e.message}\n${errs.slice(-400)}`);
+  fail++; console.log(`  ✗ threw: ${e.message}\n${errs().slice(-400)}`);
 } finally {
-  for (const h of hubs) { try { h.kill(); } catch {} }
+  try { hubA.proc.kill(); } catch {} try { hubB.proc.kill(); } catch {}
   try { rmSync(HOME, { recursive: true, force: true }); } catch {}
 }
-ok("hubs clean stderr", !/TypeError|ReferenceError|not defined/.test(errs), errs.slice(0, 300));
+ok("hubs clean stderr", !/TypeError|ReferenceError|not defined/.test(errs()), errs().slice(0, 300));
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

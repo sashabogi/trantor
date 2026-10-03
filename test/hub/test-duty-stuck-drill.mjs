@@ -16,7 +16,7 @@
 //
 // The drill: duty POLLS throughout (so it is always beating) but never consumes its escalations.
 // The hub must notice anyway, flip it dark, and re-route to the sender.
-import { spawn } from "node:child_process";
+import { startTestHub } from "../lib/test-hub.mjs";
 import { mkdtempSync, rmSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -48,8 +48,7 @@ const env = {
   RELAY_DUTY_STUCK_MS: "1500",
 };
 delete env.RELAY_URL;
-const hub = spawn(process.execPath, [join(HERE, "hub.mjs")], { env, stdio: ["ignore", "pipe", "pipe"] });
-let er = ""; hub.stderr.on("data", d => { er += d; });
+const hub = await startTestHub({ port, dir, env });
 const B = `http://127.0.0.1:${port}`;
 const j = (r) => r.json();
 const post = (p, b) => fetch(B + p, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(b) }).then(j);
@@ -58,9 +57,6 @@ const get = (p) => fetch(B + p).then(j);
 const dutyBeatOnly = () => get(`/inbox?session=${encodeURIComponent(DUTY)}&since=0&peek=1`);
 
 try {
-  let up = false;
-  for (let i = 0; i < 90 && !up; i++) { try { up = (await fetch(B + "/health")).ok; } catch {} if (!up) await sleep(80); }
-  if (!up) throw new Error("hub no start: " + er.slice(-300));
   console.log("\n# test-duty-stuck-drill — a seat that beats but does not work is still dark");
 
   // Duty is alive and polling from the start. Nothing here is a corpse.
@@ -109,7 +105,7 @@ try {
 } catch (e) {
   ok("suite ran", false, String(e?.stack || e).slice(0, 300));
 } finally {
-  hub.kill(); await sleep(200);
+  hub.proc.kill(); await sleep(200);
   rmSync(dir, { recursive: true, force: true });
 }
 console.log(`\n${pass} passed, ${fail} failed`);

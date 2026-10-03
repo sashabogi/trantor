@@ -8,13 +8,11 @@
 // pins the ledger end to end over HTTP: a threaded reply answers exactly the contract it names, a
 // threaded receipt closes exactly its own contract, and the FIFO fallback still exists but never
 // touches a reply that carries `re`.
-import { spawn } from "node:child_process";
 import { mkdtempSync, mkdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { drillEnv } from "../drill-env.mjs";
+import { startTestHub } from "../lib/test-hub.mjs";
 
-const ROOT = new URL("../..", import.meta.url).pathname.replace(/\/$/, "");
 let pass = 0, fail = 0;
 const ok = (name, cond, detail = "") => { if (cond) { pass++; console.log(`  ✓ ${name}`); } else { fail++; console.log(`  ✗ ${name}${detail ? " — " + detail : ""}`); } };
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
@@ -22,21 +20,14 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 const PORT = 47971;
 const dir = mkdtempSync(join(tmpdir(), "trantor-thread-"));
 mkdirSync(join(dir, ".agent-bus"), { recursive: true });
-const hub = spawn("node", [join(ROOT, "hub.mjs")], {
-  env: { ...drillEnv(), RELAY_DATA_DIR: dir, HOME: dir, RELAY_PORT: String(PORT), PORT: String(PORT), TRANTOR_NO_UPDATE_CHECK: "1" },
-  stdio: ["ignore", "ignore", "pipe"],
-});
-let err = ""; hub.stderr.on("data", d => err += d);
+const hub = await startTestHub({ port: PORT, dir });
 
 const base = `http://127.0.0.1:${PORT}`;
 const post = (p, b) => fetch(base + p, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(b) }).then(r => r.json());
 const get = (p) => fetch(base + p).then(r => r.json());
 
-console.log("# trantor contract threading (#6987)");
-
 const ORCH = "orch:threadA", SEAT = "seat:threadA", PROJ = "threadA";
 
-await sleep(800);
 try {
   // the assignee is on the bus, so open rows read `waiting`, not `stalled`
   await post("/register", { session: SEAT, project: PROJ, status: "active", llm: "glm", model: "test" });
@@ -75,8 +66,8 @@ try {
   rows = (await ledger()).contracts;
   ok("a reply without `re` falls through to the only open contract", row(c)?.answered === true && row(c)?.answer?.id === loose.id, JSON.stringify(row(c)));
   ok("the ledger is fully settled: no open rows", (await ledger()).open === 0);
-} catch (e) { fail++; console.log("  ✗ drill threw:", e?.message || e, err ? `\n  stderr: ${err}` : ""); }
-finally { hub.kill(); try { rmSync(dir, { recursive: true, force: true }); } catch {} }
+} catch (e) { fail++; console.log("  ✗ drill threw:", e?.message || e, hub.stderr ? `\n  stderr: ${hub.stderr.slice(-400)}` : ""); }
+finally { hub.proc.kill(); try { rmSync(dir, { recursive: true, force: true }); } catch {} }
 
 console.log(fail ? `\n${fail} FAILED` : "\nALL PASS");
 process.exit(fail ? 1 : 0);
