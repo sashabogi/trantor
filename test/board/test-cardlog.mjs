@@ -1,14 +1,11 @@
 #!/usr/bin/env node
 // Card-log contract test: notes live on the card, survive restart, cap at 40, and stale todo cards
 // record their reaper story on the card itself.
-import { spawn } from "node:child_process";
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, dirname } from "node:path";
-import { fileURLToPath } from "node:url";
-import { drillEnv } from "../drill-env.mjs";
+import { join } from "node:path";
+import { startTestHub } from "../lib/test-hub.mjs";
 
-const ROOT = fileURLToPath(new URL("../..", import.meta.url)).replace(/\/$/, "");
 const DAY = 24 * 60 * 60 * 1000;
 let pass = 0, fail = 0;
 const ok = (name, cond, detail = "") => {
@@ -17,44 +14,11 @@ const ok = (name, cond, detail = "") => {
 };
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
-function spawnHub(port, dir) {
-  const hub = spawn("node", [join(ROOT, "hub.mjs")], {
-    cwd: ROOT,
-    env: {
-      ...drillEnv(),
-      HOME: dir,
-      RELAY_DATA_DIR: dir,
-      RELAY_PORT: String(port),
-      PORT: String(port),
-      RELAY_REAP_INTERVAL_MS: "120",
-      RELAY_TODO_STALE_MS: "250",
-      RELAY_ONLINE_MS: "999999",
-      TRANTOR_NO_UPDATE_CHECK: "1",
-    },
-    stdio: ["ignore", "ignore", "pipe"],
-  });
-  hub._stderr = "";
-  hub.stderr.on("data", d => { hub._stderr += String(d); });
-  return hub;
-}
-
-async function waitHub(base, hub) {
-  for (let i = 0; i < 50; i++) {
-    if (hub.exitCode !== null) throw new Error(`hub exited early: ${hub._stderr}`);
-    try {
-      const r = await fetch(`${base}/health`);
-      if (r.ok) return;
-    } catch {}
-    await sleep(100);
-  }
-  throw new Error(`hub did not become healthy: ${hub._stderr}`);
-}
-
 async function stopHub(hub) {
-  hub.kill();
+  hub.proc.kill();
   await Promise.race([
-    new Promise(r => hub.once("close", r)),
-    sleep(1500).then(() => hub.kill("SIGKILL")),
+    new Promise(r => hub.proc.once("close", r)),
+    sleep(1500).then(() => hub.proc.kill("SIGKILL")),
   ]);
 }
 
@@ -93,9 +57,8 @@ writeFileSync(join(dir, "bus.json"), JSON.stringify({
   events: [],
 }));
 
-let hub = spawnHub(port, dir);
+let hub = await startTestHub({ port, dir, env: { RELAY_REAP_INTERVAL_MS: "120", RELAY_TODO_STALE_MS: "250", RELAY_ONLINE_MS: "999999" } });
 try {
-  await waitHub(base, hub);
   const A = client(base);
 
   await sleep(550);
@@ -129,8 +92,7 @@ try {
   await sleep(1400);
   await stopHub(hub);
 
-  hub = spawnHub(port, dir);
-  await waitHub(base, hub);
+  hub = await startTestHub({ port, dir, env: { RELAY_REAP_INTERVAL_MS: "120", RELAY_TODO_STALE_MS: "250", RELAY_ONLINE_MS: "999999" } });
   const B = client(base);
   const roundTrip = (await B.get(`/card?id=${id}`)).task;
   ok("restart round-trip preserves card log", roundTrip?.log?.length === 40 && roundTrip.log.at(-1)?.text === "bulk 44", JSON.stringify(roundTrip?.log));
@@ -138,7 +100,7 @@ try {
   fail++;
   console.log(`  FAIL  test threw\n        ${e?.stack || e}`);
 } finally {
-  if (hub?.exitCode === null) await stopHub(hub);
+  if (hub?.proc?.exitCode === null) await stopHub(hub);
   rmSync(dir, { recursive: true, force: true });
 }
 

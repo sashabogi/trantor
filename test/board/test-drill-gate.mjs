@@ -3,14 +3,11 @@
 // checklist item or log note starting "Drill:", or the move's note (a "Drill:" line or the gate
 // command it ran). Everything else answers 409 and changes nothing on the card, whoever moves it.
 // Drives the REAL hub over HTTP, then restarts it to show the drill survives the JSON store.
-import { spawn } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { fileURLToPath } from "node:url";
-import { drillEnv } from "../drill-env.mjs";
+import { startTestHub } from "../lib/test-hub.mjs";
 
-const ROOT = fileURLToPath(new URL("../..", import.meta.url)).replace(/\/$/, "");
 let pass = 0, fail = 0;
 const ok = (name, cond, detail = "") => {
   if (cond) { pass++; console.log(`  PASS  ${name}`); }
@@ -19,27 +16,9 @@ const ok = (name, cond, detail = "") => {
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 const PORT = 47893, BASE = `http://127.0.0.1:${PORT}`, PROJ = "drillproj";
 
-function spawnHub(dir) {
-  const hub = spawn("node", [join(ROOT, "hub.mjs")], {
-    cwd: ROOT,
-    env: { ...drillEnv(), HOME: dir, RELAY_DATA_DIR: dir, RELAY_PORT: String(PORT), PORT: String(PORT), RELAY_ONLINE_MS: "999999", TRANTOR_NO_UPDATE_CHECK: "1" },
-    stdio: ["ignore", "ignore", "pipe"],
-  });
-  hub._stderr = "";
-  hub.stderr.on("data", d => { hub._stderr += String(d); });
-  return hub;
-}
-async function waitHub(hub) {
-  for (let i = 0; i < 50; i++) {
-    if (hub.exitCode !== null) throw new Error(`hub exited early: ${hub._stderr}`);
-    try { if ((await fetch(`${BASE}/health`)).ok) return; } catch {}
-    await sleep(100);
-  }
-  throw new Error(`hub did not become healthy: ${hub._stderr}`);
-}
 async function stopHub(hub) {
-  hub.kill();
-  await Promise.race([new Promise(r => hub.once("close", r)), sleep(1500).then(() => hub.kill("SIGKILL"))]);
+  hub.proc.kill();
+  await Promise.race([new Promise(r => hub.proc.once("close", r)), sleep(1500).then(() => hub.proc.kill("SIGKILL"))]);
 }
 const post = async (p, b) => { const r = await fetch(BASE + p, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(b) }); return { status: r.status, json: await r.json() }; };
 const card = async (id, q = "") => (await (await fetch(`${BASE}/tasks?project=${PROJ}${q}`)).json()).tasks.find(t => t.id === id);
@@ -47,8 +26,7 @@ const create = async (b) => (await post("/task", { project: PROJ, by: "seat:dril
 
 console.log("# trantor done gate: no drill line, no done");
 const W = mkdtempSync(join(tmpdir(), "trantor-drill-gate-"));
-let hub = spawnHub(W);
-await waitHub(hub);
+let hub = await startTestHub({ port: PORT, dir: W, env: { RELAY_ONLINE_MS: "999999" } });
 try {
   // ---- 1. the plain path: no drill anywhere -> 409, and the refused move touches nothing -------
   const bare = await create({ title: "wire the promoter", status: "doing" });
@@ -125,8 +103,7 @@ try {
   // ---- 8. restart: the drill survives the store ------------------------------------------------
   await sleep(1400);   // the JSON store persists on a 1s tick; give the last writes a chance to land
   await stopHub(hub);
-  hub = spawnHub(W);
-  await waitHub(hub);
+  hub = await startTestHub({ port: PORT, dir: W, env: { RELAY_ONLINE_MS: "999999" } });
   const backDrill = await card(withDrill.id);
   const backBare = await card(bare.id);
   ok("after a hub restart the drill field is still on the card", backDrill?.drill === withDrill.drill, String(backDrill?.drill).slice(0, 80));
@@ -137,7 +114,7 @@ try {
 } catch (e) {
   fail++; console.log(`  FAIL  drill gate threw: ${e.stack || e}`);
 } finally {
-  await stopHub(hub);
+  if (hub) await stopHub(hub);
   rmSync(W, { recursive: true, force: true });
 }
 console.log(`\n${pass} passed, ${fail} failed`);

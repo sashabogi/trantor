@@ -14,48 +14,17 @@
 //   5. logCount preserves the ·N a board shows, so slimming costs a reader nothing visible.
 //
 // Written to FAIL if the projection is reverted: each assertion names a field the bug shipped.
-import { spawn } from "node:child_process";
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { fileURLToPath } from "node:url";
-import { drillEnv } from "../drill-env.mjs";
+import { startTestHub } from "../lib/test-hub.mjs";
 
-const ROOT = fileURLToPath(new URL("../..", import.meta.url)).replace(/\/$/, "");
 let pass = 0, fail = 0;
 const ok = (name, cond, detail = "") => {
   if (cond) { pass++; console.log(`  PASS  ${name}`); }
   else { fail++; console.log(`  FAIL  ${name}${detail ? `\n        ${detail}` : ""}`); }
 };
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
-
-function spawnHub(port, dir) {
-  const hub = spawn("node", [join(ROOT, "hub.mjs")], {
-    cwd: ROOT,
-    env: {
-      ...drillEnv(),
-      HOME: dir,
-      RELAY_DATA_DIR: dir,
-      RELAY_PORT: String(port),
-      PORT: String(port),
-      RELAY_ONLINE_MS: "999999",
-      TRANTOR_NO_UPDATE_CHECK: "1",
-    },
-    stdio: ["ignore", "ignore", "pipe"],
-  });
-  hub._stderr = "";
-  hub.stderr.on("data", d => { hub._stderr += String(d); });
-  return hub;
-}
-
-async function waitHub(base, hub) {
-  for (let i = 0; i < 50; i++) {
-    if (hub.exitCode !== null) throw new Error(`hub exited early: ${hub._stderr}`);
-    try { if ((await fetch(`${base}/health`)).ok) return; } catch {}
-    await sleep(100);
-  }
-  throw new Error(`hub did not become healthy: ${hub._stderr}`);
-}
 
 console.log("# /tasks slim projection (#6983)");
 
@@ -87,12 +56,10 @@ for (let id = 1; id <= 200; id++) {
 }
 writeFileSync(join(dir, "bus.json"), JSON.stringify({ tasks, taskSeq: 200, events: [] }));
 
-const hub = spawnHub(port, dir);
+const hub = await startTestHub({ port, dir, env: { RELAY_ONLINE_MS: "999999" } });
 const get = (p) => fetch(base + p).then(async r => ({ status: r.status, body: await r.text() }));
 
 try {
-  await waitHub(base, hub);
-
   const full = await get("/tasks?project=slim");
   const slim = await get("/tasks?project=slim&fields=slim");
   const one = await get("/tasks?project=slim&fields=slim&card=7");
@@ -155,8 +122,8 @@ try {
   const unknown = JSON.parse((await get("/tasks?project=slim&fields=tiny")).body);
   ok("unknown fields= falls back to full", unknown.tasks.every(t => Array.isArray(t.log)) && unknown.fields === undefined);
 } finally {
-  hub.kill();
-  await Promise.race([new Promise(r => hub.once("close", r)), sleep(1500).then(() => hub.kill("SIGKILL"))]);
+  hub.proc.kill();
+  await Promise.race([new Promise(r => hub.proc.once("close", r)), sleep(1500).then(() => hub.proc.kill("SIGKILL"))]);
   rmSync(dir, { recursive: true, force: true });
 }
 

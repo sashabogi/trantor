@@ -6,11 +6,12 @@
 // ACTIVE (leave). These tests stub the Scrooge judge (SCROOGE_BIN) so they're hermetic, and assert the
 // candidate selection + verdict application against a real spawned hub.
 import { spawn } from "node:child_process";
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, chmodSync } from "node:fs";
+import { mkdtempSync, writeFileSync, rmSync, chmodSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { drillEnv } from "../drill-env.mjs";
+import { startTestHub } from "../lib/test-hub.mjs";
 
 const ROOT = fileURLToPath(new URL("../..", import.meta.url)).replace(/\/$/, "");
 let pass = 0, fail = 0;
@@ -18,16 +19,6 @@ const ok = (name, cond, detail = "") => { if (cond) { pass++; console.log(`  ✓
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 const PROJ = "reconproj";
 
-function spawnHub(port) {
-  const dir = mkdtempSync(join(tmpdir(), "trantor-recon-"));
-  mkdirSync(join(dir, ".agent-bus"), { recursive: true });
-  const hub = spawn("node", [join(ROOT, "hub.mjs")], {
-    env: { ...drillEnv(), RELAY_DATA_DIR: dir, HOME: dir, RELAY_PORT: String(port), PORT: String(port), TRANTOR_NO_UPDATE_CHECK: "1", RELAY_REAP_INTERVAL_MS: "999999" },
-    stdio: ["ignore", "ignore", "pipe"],
-  });
-  hub._dir = dir;
-  return hub;
-}
 console.log("# trantor reconcile tests");
 const PORT = 47881, base = `http://127.0.0.1:${PORT}`;
 const post = (p, b) => fetch(base + p, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(b) }).then(r => r.json());
@@ -51,9 +42,7 @@ function reconcile(stubVerdicts, extraArgs = []) {
   });
 }
 
-const hub = spawnHub(PORT);
-let herr = ""; hub.stderr.on("data", d => herr += d);
-await sleep(800);
+const hub = await startTestHub({ port: PORT, env: { RELAY_REAP_INTERVAL_MS: "999999" } });
 try {
   // seed: 3 real work cards + an ephemeral cc-subagent card + a session focus card (both must be ignored)
   const c1 = (await post("/task", { project: PROJ, title: "implement the stale-card reaper", status: "doing", assignee: "codex:reconproj", by: "codex:reconproj" })).task.id;
@@ -101,15 +90,15 @@ try {
   // 5. scrooge missing → safe no-op (doesn't fabricate verdicts)
   const p = await new Promise((res) => {
     const cp = spawn("node", [join(ROOT, "bin/reconcile.mjs"), "--older", "0"], {
-      cwd: hub._dir, env: { ...drillEnv(), RELAY_URL: base, RELAY_PROJECT: PROJ, SCROOGE_BIN: "/nonexistent/scrooge" },
+      cwd: hub.dir, env: { ...drillEnv(), RELAY_URL: base, RELAY_PROJECT: PROJ, SCROOGE_BIN: "/nonexistent/scrooge" },
     });
     let o = ""; cp.stdout.on("data", d => o += d); cp.stderr.on("data", d => o += d); cp.on("close", () => res(o));
   });
   ok("missing scrooge → leaves the board untouched", /leaving the board untouched/i.test(p) && (await cardStatus(c3)) === "todo");
 } catch (e) {
-  fail++; console.log("  ✗ threw:", e?.message || e, herr ? `\n  hub stderr: ${herr}` : "");
+  fail++; console.log("  ✗ threw:", e?.message || e, hub.stderr ? `\n  hub stderr: ${hub.stderr.slice(-400)}` : "");
 } finally {
-  hub.kill(); try { rmSync(hub._dir, { recursive: true, force: true }); } catch {}
+  hub.proc.kill(); try { rmSync(hub.dir, { recursive: true, force: true }); } catch {}
 }
 console.log(fail ? `\n${fail} FAILED` : "\nALL PASS");
 process.exit(fail ? 1 : 0);

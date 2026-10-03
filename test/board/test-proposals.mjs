@@ -11,45 +11,19 @@
 //      project) is refused WITH the operator's note — and the memory survives a hub restart.
 // Plus: deciding is owner-gated under enforce (never auto, never agent-side), decisions DM the
 // proposer, and everything lands in the ONE event log so the app streams it.
-import { spawn } from "node:child_process";
-import { mkdtempSync, mkdirSync, rmSync, readFileSync } from "node:fs";
+import { mkdtempSync, rmSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, dirname } from "node:path";
-import { fileURLToPath } from "node:url";
-import { drillEnv } from "../drill-env.mjs";
+import { join } from "node:path";
+import { startTestHub } from "../lib/test-hub.mjs";
 
-const ROOT = fileURLToPath(new URL("../..", import.meta.url)).replace(/\/$/, "");
 let pass = 0, fail = 0;
 const ok = (name, cond, detail = "") => { if (cond) { pass++; console.log(`  ✓ ${name}`); } else { fail++; console.log(`  ✗ ${name} ${detail}`); } };
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
-function spawnHub(port, { dir = null, extraEnv = {} } = {}) {
-  const d = dir || mkdtempSync(join(tmpdir(), "trantor-prop-"));
-  mkdirSync(join(d, ".agent-bus"), { recursive: true });
-  const hub = spawn("node", [join(ROOT, "hub.mjs")], {
-    env: { ...drillEnv(), RELAY_DATA_DIR: d, HOME: d, RELAY_PORT: String(port), PORT: String(port), TRANTOR_NO_UPDATE_CHECK: "1", ...extraEnv },
-    stdio: ["ignore", "ignore", "pipe"],
-  });
-  hub._dir = d;
-  return hub;
-}
 const mk = (base) => ({
   post: (p, b) => fetch(base + p, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(b) }).then(async r => ({ status: r.status, ...(await r.json()) })),
   get: (p) => fetch(base + p).then(r => r.json()),
 });
-// The fixed 800ms "let the hub boot" sleep raced node's boot under a loaded host: the first
-// propose fetch landed before the hub listened and the whole block threw "fetch failed"
-// (0.18.76's release run 36898350251, and the 10-01 local red). Wait for the CONDITION —
-// /health answering — never for the clock; fail fast if the hub process died instead.
-async function waitHub(base, dead, label = "hub") {
-  const t0 = Date.now();
-  for (;;) {
-    if (dead()) throw new Error(`${label} exited before accepting requests`);
-    try { const r = await fetch(`${base}/health`); if (r.ok) return; } catch {}
-    if (Date.now() - t0 > 15000) throw new Error(`${label} not accepting requests after 15s`);
-    await sleep(50);
-  }
-}
 
 const BOUND = (n) => ({ scope: `push to main in repo ${n}`, condition: "only after npm test exits 0", exclusions: "never force-push" });
 
@@ -57,10 +31,8 @@ console.log("# trantor agent-proposed permissions tests");
 
 // ── Hub A (warn mode): bound rule, cap, withdraw, denial memory, events, restart survival ────────
 const PA = 47941;
-let hubA = spawnHub(PA);
-let errA = ""; hubA.stderr.on("data", d => errA += d);
-await waitHub(`http://127.0.0.1:${PA}`, () => hubA.exitCode !== null, "hub A");
-const dirA = hubA._dir;
+let hubA = await startTestHub({ port: PA });
+const dirA = hubA.dir;
 try {
   const A = mk(`http://127.0.0.1:${PA}`);
   const S = "codex:govtest";
@@ -145,17 +117,9 @@ try {
       await sleep(50);
     }
   }
-  hubA.kill();
-  for (let i = 0; hubA.exitCode === null && i < 100; i++) await sleep(50);   // gone before respawn
-  hubA = spawnHub(PA, { dir: dirA });
-  hubA.stderr.on("data", d => errA += d);
-  {
-    const bootStart = Date.now();                                            // wait for accept, not 800ms
-    for (;;) {
-      try { await fetch(`http://127.0.0.1:${PA}/proposals`); break; }
-      catch { if (Date.now() - bootStart > 15000) throw new Error("restarted hub did not come up in 15s"); await sleep(50); }
-    }
-  }
+  hubA.proc.kill();
+  for (let i = 0; hubA.proc.exitCode === null && i < 100; i++) await sleep(50);   // gone before respawn
+  hubA = await startTestHub({ port: PA, dir: dirA });
   const re2 = await A.post("/propose", { session: S, project: "govtest", ...BOUND(1) });
   ok("denied memory survives restart -> 409", re2.status === 409 && re2.note === "main is protected; use PRs", JSON.stringify(re2));
   const afterRestart = await A.get("/proposals?project=govtest");
@@ -186,17 +150,15 @@ try {
   const refile = await A.post("/propose", { session: S2, project: "grantstest", ...KB, key: "patrol.reap-orphans" });
   ok("revocation leaves NO denial memory (a refined re-propose is allowed)", refile.ok === true && refile.proposal.status === "pending", JSON.stringify(refile));
 } catch (e) {
-  fail++; console.log(`  ✗ hub A block threw: ${e.message}\n${errA.slice(-500)}`);
+  fail++; console.log(`  ✗ hub A block threw: ${e.message}\n${hubA.stderr.slice(-500)}`);
 } finally {
-  try { hubA.kill(); } catch {}
+  try { hubA.proc.kill(); } catch {}
   try { rmSync(dirA, { recursive: true, force: true }); } catch {}
 }
 
 // ── Hub B (enforce mode): deciding is the OWNER's act — agents cannot approve themselves ─────────
 const PB = 47942;
-const hubB = spawnHub(PB, { extraEnv: { RELAY_AUTH: "enforce", RELAY_ENROLL: "tofu" } });
-let errB = ""; hubB.stderr.on("data", d => errB += d);
-await waitHub(`http://127.0.0.1:${PB}`, () => hubB.exitCode !== null, "hub B");
+const hubB = await startTestHub({ port: PB, env: { RELAY_AUTH: "enforce", RELAY_ENROLL: "tofu" } });
 try {
   const base = `http://127.0.0.1:${PB}`;
   const { generate, signRequest } = await import("../../lib/identity.mjs");
@@ -226,10 +188,10 @@ try {
   ok("owner approves", ownerDecide.ok === true && ownerDecide.proposal.status === "approved", JSON.stringify(ownerDecide));
   ok("decidedBy is the signer, not a self-asserted field", ownerDecide.proposal.decidedBy === "sasha", ownerDecide.proposal.decidedBy);
 } catch (e) {
-  fail++; console.log(`  ✗ hub B block threw: ${e.message}\n${errB.slice(-500)}`);
+  fail++; console.log(`  ✗ hub B block threw: ${e.message}\n${hubB.stderr.slice(-500)}`);
 } finally {
-  try { hubB.kill(); } catch {}
-  try { rmSync(hubB._dir, { recursive: true, force: true }); } catch {}
+  try { hubB.proc.kill(); } catch {}
+  try { rmSync(hubB.dir, { recursive: true, force: true }); } catch {}
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

@@ -1,14 +1,11 @@
 #!/usr/bin/env node
 // Checklist contract test (#5624): acceptance items live on the card, toggle by index, refuse a
 // stale index, replace wholesale via /task/update, and survive a hub restart (they ride `extra`).
-import { spawn } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, dirname } from "node:path";
-import { fileURLToPath } from "node:url";
-import { drillEnv } from "../drill-env.mjs";
+import { join } from "node:path";
+import { startTestHub } from "../lib/test-hub.mjs";
 
-const ROOT = fileURLToPath(new URL("../..", import.meta.url)).replace(/\/$/, "");
 let pass = 0, fail = 0;
 const ok = (name, cond, detail = "") => {
   if (cond) { pass++; console.log(`  PASS  ${name}`); }
@@ -16,27 +13,9 @@ const ok = (name, cond, detail = "") => {
 };
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
-function spawnHub(port, dir) {
-  const hub = spawn("node", [join(ROOT, "hub.mjs")], {
-    cwd: ROOT,
-    env: { ...drillEnv(), HOME: dir, RELAY_DATA_DIR: dir, RELAY_PORT: String(port), PORT: String(port), TRANTOR_NO_UPDATE_CHECK: "1" },
-    stdio: ["ignore", "ignore", "pipe"],
-  });
-  hub._stderr = "";
-  hub.stderr.on("data", d => { hub._stderr += String(d); });
-  return hub;
-}
-async function waitHub(base, hub) {
-  for (let i = 0; i < 50; i++) {
-    if (hub.exitCode !== null) throw new Error(`hub exited early: ${hub._stderr}`);
-    try { const r = await fetch(`${base}/health`); if (r.ok) return; } catch {}
-    await sleep(100);
-  }
-  throw new Error(`hub did not become healthy: ${hub._stderr}`);
-}
 async function stopHub(hub) {
-  hub.kill();
-  await Promise.race([new Promise(r => hub.once("close", r)), sleep(1500).then(() => hub.kill("SIGKILL"))]);
+  hub.proc.kill();
+  await Promise.race([new Promise(r => hub.proc.once("close", r)), sleep(1500).then(() => hub.proc.kill("SIGKILL"))]);
 }
 const post = (base, path, bodyObj) =>
   fetch(base + path, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(bodyObj) });
@@ -44,9 +23,8 @@ const post = (base, path, bodyObj) =>
 console.log("# trantor checklist tests");
 const W = mkdtempSync(join(tmpdir(), "trantor-checklist-"));
 const PORT = 47871, BASE = `http://127.0.0.1:${PORT}`;
-let hub = spawnHub(PORT, W);
+let hub = await startTestHub({ port: PORT, dir: W });
 try {
-  await waitHub(BASE, hub);
 
   // create with plain-string items — they become {text, done:false}
   let r = await post(BASE, "/task", { project: "clproj", title: "the checklisted card", by: "t",
@@ -80,8 +58,7 @@ try {
   await post(BASE, "/task/checklist-toggle", { id: t.id, index: 0, done: true });
   await sleep(1200);   // let the dirty flush land before the restart
   await stopHub(hub);
-  hub = spawnHub(PORT, W);
-  await waitHub(BASE, hub);
+  hub = await startTestHub({ port: PORT, dir: W });
   const tasks = (await (await fetch(`${BASE}/tasks?project=clproj`)).json()).tasks || [];
   const back = tasks.find(x => x.id === t.id);
   ok("checklist survives a hub restart, ticks included", back?.checklist?.length === 1 && back.checklist[0].done === true,
@@ -89,7 +66,7 @@ try {
 } catch (e) {
   ok("suite ran", false, String(e?.stack || e).slice(0, 300));
 } finally {
-  await stopHub(hub);
+  if (hub) await stopHub(hub);
   rmSync(W, { recursive: true, force: true });
 }
 console.log(`\n${pass} passed, ${fail} failed`);

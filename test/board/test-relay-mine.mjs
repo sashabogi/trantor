@@ -9,6 +9,7 @@ import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { drillEnv } from "../drill-env.mjs";
+import { startTestHub } from "../lib/test-hub.mjs";
 
 const ROOT = fileURLToPath(new URL("../..", import.meta.url)).replace(/\/$/, "");
 let pass = 0, fail = 0;
@@ -21,17 +22,7 @@ const W = mkdtempSync(join(tmpdir(), "trantor-mine-"));
 mkdirSync(join(W, ".agent-bus"), { recursive: true });
 const PORT = 47872, HUB = `http://127.0.0.1:${PORT}`;
 const PROJ = "minedriv", SESSION = `miner:${PROJ}`;
-const hub = spawn("node", [join(ROOT, "hub.mjs")], {
-  env: { ...drillEnv(), RELAY_DATA_DIR: W, HOME: W, RELAY_PORT: String(PORT), PORT: String(PORT), TRANTOR_NO_UPDATE_CHECK: "1" },
-  stdio: ["ignore", "ignore", "pipe"],
-});
-hub._stderr = "";
-hub.stderr.on("data", d => { hub._stderr += String(d); });
-for (let i = 0; i < 50; i++) {
-  if (hub.exitCode !== null) { console.error("hub exited early:", hub._stderr); process.exit(1); }
-  try { const r = await fetch(`${HUB}/health`); if (r.ok) break; } catch {}
-  await sleep(100);
-}
+const hub = await startTestHub({ port: PORT, dir: W });
 
 // the REAL MCP server, as a stdio JSON-RPC peer — spawned per session id, since `mine` reads
 // the calling session out of the server's env.
@@ -137,7 +128,7 @@ ok("all seven seed cards landed", [a, b, c, d, e, f, m].every(Number.isInteger) 
   nobody.proc.kill();
 }
 
-mine.proc.kill(); hub.kill();
+mine.proc.kill(); hub.proc.kill();
 rmSync(W, { recursive: true, force: true });
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

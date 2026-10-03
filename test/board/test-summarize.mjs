@@ -2,12 +2,13 @@
 // trantor narrative-cards tests (2026-07-30). Scrooge is STUBBED (same doctrine as test-reconcile):
 // these tests prove the PIPELINE — candidate selection, one batched call, summaries landing on the
 // hub and surviving as card fields — not the cheap model's prose.
-import { spawn, spawnSync } from "node:child_process";
+import { spawnSync } from "node:child_process";
 import { mkdtempSync, mkdirSync, writeFileSync, chmodSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { drillEnv } from "../drill-env.mjs";
+import { startTestHub } from "../lib/test-hub.mjs";
 
 const ROOT = fileURLToPath(new URL("../..", import.meta.url)).replace(/\/$/, "");
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
@@ -33,12 +34,6 @@ process.stdin.on("end", () => {
 `);
 chmodSync(stub, 0o755);
 
-function spawnHub() {
-  return spawn("node", [join(ROOT, "hub.mjs")], {
-    env: { ...drillEnv(), RELAY_DATA_DIR: dir, HOME: dir, RELAY_PORT: String(P), PORT: String(P), TRANTOR_NO_UPDATE_CHECK: "1", RELAY_AUTH: "off" },
-    stdio: ["ignore", "ignore", "pipe"],
-  });
-}
 // #6447: under the parallel runner a single in-flight request can be refused while the box is
 // saturated (the hub is up — the boot gate below proved it). Retry the TRANSPORT a bounded 3×,
 // 250ms apart; a hub that is actually dead fails every retry and the suite still goes red.
@@ -58,12 +53,11 @@ const api = {
 };
 
 console.log("# trantor narrative-cards tests");
-const hub = spawnHub();
-// #6447: the parallel runner exposed the fixed 800ms boot sleep — under load the hub was not
-// listening yet and the first fetch died with "fetch failed". And waiting for the PORT alone is
-// still a race: the `run()` children resolve the hub from HOME/.agent-bus/config.json (there is
-// no env override), and until the hub writes it they fall back to 127.0.0.1:4477 — the operator's
-// LIVE hub. Wait for the config to name THIS hub (#6084 doctrine: wait for the condition).
+const hub = await startTestHub({ port: P, dir, env: { RELAY_AUTH: "off" } });
+// The boot is gated on /health (inside startTestHub), but the `run()` children resolve the hub
+// from HOME/.agent-bus/config.json (there is no env override), and until the hub writes it they
+// fall back to 127.0.0.1:4477 — the operator's LIVE hub. Wait for the config to name THIS hub
+// (#6084 doctrine: wait for the condition).
 {
   const bootStart = Date.now();
   const cfgPath = join(dir, ".agent-bus", "config.json");
@@ -108,7 +102,7 @@ try {
   const again = run([]);
   ok(again.status === 0 && /0 narrative\(s\) written/.test(again.stdout), "second run is a no-op (permanent, not recomputed)");
 } catch (e) { fail++; console.log(`  ✗ ${e.message}`); }
-finally { hub.kill(); }
+finally { hub.proc.kill(); }
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

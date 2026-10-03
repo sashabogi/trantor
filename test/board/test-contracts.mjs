@@ -17,6 +17,7 @@ import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { drillEnv } from "../drill-env.mjs";
+import { startTestHub } from "../lib/test-hub.mjs";
 
 const ROOT = fileURLToPath(new URL("../..", import.meta.url)).replace(/\/$/, "");
 let pass = 0, fail = 0;
@@ -28,11 +29,7 @@ console.log("# trantor outstanding-contract drills");
 const PORT = 47931;
 const dir = mkdtempSync(join(tmpdir(), "trantor-contracts-"));
 mkdirSync(join(dir, ".agent-bus"), { recursive: true });
-const hub = spawn("node", [join(ROOT, "hub.mjs")], {
-  env: { ...drillEnv(), RELAY_DATA_DIR: dir, HOME: dir, RELAY_PORT: String(PORT), PORT: String(PORT), TRANTOR_NO_UPDATE_CHECK: "1" },
-  stdio: ["ignore", "ignore", "pipe"],
-});
-await sleep(900);
+const hub = await startTestHub({ port: PORT, dir });
 const BASE = `http://127.0.0.1:${PORT}`;
 const post = (p, b) => fetch(BASE + p, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(b) }).then(r => r.json()).catch(e => ({ error: String(e) }));
 const get = (p) => fetch(BASE + p).then(r => r.json()).catch(e => ({ error: String(e) }));
@@ -154,8 +151,7 @@ const life = {
   RELAY_CONTRACT_ABANDON_MS: "2500",       // abandoned after 2.5s quiet
   RELAY_REAP_INTERVAL_MS: "300",           // sweep fast
 };
-let hub2 = spawn("node", [join(ROOT, "hub.mjs")], { env: { ...drillEnv(), ...life }, stdio: ["ignore", "ignore", "pipe"] });
-await sleep(900);
+let hub2 = await startTestHub({ port: PORT2, env: life });
 const BASE2 = `http://127.0.0.1:${PORT2}`;
 const post2 = (p, b) => fetch(BASE2 + p, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(b) }).then(r => r.json()).catch(e => ({ error: String(e) }));
 const get2 = (p) => fetch(BASE2 + p).then(r => r.json()).catch(e => ({ error: String(e) }));
@@ -249,10 +245,9 @@ await post2("/send", { from: DEAD, to: O, project: PROJ2, text: "✅ ortho done 
   const before = await ctr2(O);
   const reapedIn = (r) => [...(r.contracts || []), ...(r.abandonedContracts || [])].filter(c => c.reaped).length;
   const abandonedBefore = reapedIn(before);
-  hub2.kill("SIGKILL");
+  hub2.proc.kill("SIGKILL");
   await sleep(400);
-  hub2 = spawn("node", [join(ROOT, "hub.mjs")], { env: { ...drillEnv(), ...life }, stdio: ["ignore", "ignore", "pipe"] });
-  await sleep(1200);
+  hub2 = await startTestHub({ port: PORT2, env: life });
   const after = await ctr2(O);
   const abandonedAfter = reapedIn(after);
   ok("a hub restart remembers what it already reaped (no re-announced ghost backlog)",
@@ -491,7 +486,7 @@ console.log("\nA session whose only sends are acks owes nothing, and a real cont
   }
 }
 
-hub2.kill("SIGKILL");
-hub.kill("SIGKILL");
+hub2.proc.kill("SIGKILL");
+hub.proc.kill("SIGKILL");
 console.log(`\n${fail === 0 ? "✅" : "❌"} contracts: ${pass} passed, ${fail} failed`);
 process.exit(fail === 0 ? 0 : 1);

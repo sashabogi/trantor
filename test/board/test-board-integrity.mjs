@@ -6,14 +6,11 @@
 //   - a HANDOFF (the current assignee reassigning) is legal and lands on the card log
 //   - an EXPLICIT reassign (reassign:true) is legal and lands on the card log
 //   - a normal status move (no assignee in the payload) still works, unchanged
-import { spawn } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, dirname } from "node:path";
-import { fileURLToPath } from "node:url";
-import { drillEnv } from "../drill-env.mjs";
+import { join } from "node:path";
+import { startTestHub } from "../lib/test-hub.mjs";
 
-const ROOT = fileURLToPath(new URL("../..", import.meta.url)).replace(/\/$/, "");
 let pass = 0, fail = 0;
 const ok = (name, cond, detail = "") => {
   if (cond) { pass++; console.log(`  PASS  ${name}`); }
@@ -21,40 +18,11 @@ const ok = (name, cond, detail = "") => {
 };
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
-function spawnHub(port, dir) {
-  const hub = spawn("node", [join(ROOT, "hub.mjs")], {
-    cwd: ROOT,
-    env: {
-      ...drillEnv(),
-      HOME: dir,
-      RELAY_DATA_DIR: dir,
-      RELAY_PORT: String(port),
-      PORT: String(port),
-      RELAY_REAP_INTERVAL_MS: "120",
-      RELAY_ONLINE_MS: "999999",
-      TRANTOR_NO_UPDATE_CHECK: "1",
-    },
-    stdio: ["ignore", "ignore", "pipe"],
-  });
-  hub._stderr = "";
-  hub.stderr.on("data", d => { hub._stderr += String(d); });
-  return hub;
-}
-
-async function waitHub(base, hub) {
-  for (let i = 0; i < 50; i++) {
-    if (hub.exitCode !== null) throw new Error(`hub exited early: ${hub._stderr}`);
-    try { const r = await fetch(`${base}/health`); if (r.ok) return; } catch {}
-    await sleep(100);
-  }
-  throw new Error(`hub did not become healthy: ${hub._stderr}`);
-}
-
 async function stopHub(hub) {
-  hub.kill();
+  hub.proc.kill();
   await Promise.race([
-    new Promise(r => hub.once("close", r)),
-    sleep(1500).then(() => hub.kill("SIGKILL")),
+    new Promise(r => hub.proc.once("close", r)),
+    sleep(1500).then(() => hub.proc.kill("SIGKILL")),
   ]);
 }
 
@@ -77,9 +45,8 @@ const dir = mkdtempSync(join(tmpdir(), "trantor-board-integrity-"));
 const port = 48060;
 const base = `http://127.0.0.1:${port}`;
 
-let hub = spawnHub(port, dir);
+let hub = await startTestHub({ port, dir, env: { RELAY_REAP_INTERVAL_MS: "120", RELAY_ONLINE_MS: "999999" } });
 try {
-  await waitHub(base, hub);
   const A = client(base);
 
   const created = await A.post("/task", {
@@ -131,7 +98,7 @@ try {
   fail++;
   console.log(`  FAIL  test threw\n        ${e?.stack || e}`);
 } finally {
-  if (hub?.exitCode === null) await stopHub(hub);
+  if (hub?.proc?.exitCode === null) await stopHub(hub);
   rmSync(dir, { recursive: true, force: true });
 }
 
