@@ -276,12 +276,13 @@ await post2("/send", { from: DEAD, to: O, project: PROJ2, text: "✅ ortho done 
       cwd: ROOT, stdio: ["pipe", "pipe", "pipe"],
       env: { ...drillEnv(), AGENT_BUS_DIR: BUS, CLAUDE_PROJECT_DIR: repo, RELAY_HOST_ID: "host",
              RELAY_SESSION: GHOST, RELAY_PROJECT: PROJ2, RELAY_URL: BASE2,
+             RELAY_STOP_TIMEOUT_MS: "10000",
              TRANTOR_CONTRACT_OVERDUE_MS: "0" },
     });
     let so = ""; kid.stdout.on("data", d => (so += d));
     kid.on("close", () => resolve(so));
     kid.stdin.end(JSON.stringify({ session_id: "life-stop-1", cwd: repo, stop_hook_active: active }));
-    setTimeout(() => { try { kid.kill("SIGKILL"); } catch {} }, 15000).unref?.();
+    setTimeout(() => { try { kid.kill("SIGKILL"); } catch {} }, 30000).unref?.();
   });
   const out = await runStop(false);
   let o = {}; try { o = JSON.parse(out || "{}"); } catch {}
@@ -334,12 +335,13 @@ console.log("\nA row an alive seat has moved on from is settled, not nagged fore
       cwd: ROOT, stdio: ["pipe", "pipe", "pipe"],
       env: { ...drillEnv(), AGENT_BUS_DIR: BUS3, CLAUDE_PROJECT_DIR: repo3, RELAY_HOST_ID: "host",
              RELAY_SESSION: O, RELAY_PROJECT: PROJ2, RELAY_URL: BASE2,
+             RELAY_STOP_TIMEOUT_MS: "10000",
              TRANTOR_CONTRACT_OVERDUE_MS: "0" },
     });
     let b = ""; kid.stdout.on("data", d => (b += d));
     kid.on("close", () => resolve(b));
     kid.stdin.end(JSON.stringify({ session_id: "sup-stop-1", cwd: repo3, stop_hook_active: false }));
-    setTimeout(() => { try { kid.kill("SIGKILL"); } catch {} }, 15000).unref?.();
+    setTimeout(() => { try { kid.kill("SIGKILL"); } catch {} }, 30000).unref?.();
   });
   let o = {}; try { o = JSON.parse(so || "{}"); } catch {}
   const blockedOnIt = o.decision === "block" && new RegExp(String(stranded.id)).test(o.reason || "");
@@ -434,6 +436,7 @@ console.log("\nA session whose only sends are acks owes nothing, and a real cont
       cwd: ROOT, stdio: ["pipe", "pipe", "pipe"],
       env: { ...drillEnv(), AGENT_BUS_DIR: BUS4, CLAUDE_PROJECT_DIR: repo4, RELAY_HOST_ID: "host",
              RELAY_SESSION: AO, RELAY_PROJECT: PROJ2, RELAY_URL: BASE2,
+             RELAY_STOP_TIMEOUT_MS: "10000",
              TRANTOR_CONTRACT_OVERDUE_MS: "0" },
     });
     let b = "", e = ""; kid.stdout.on("data", d => (b += d)); kid.stderr.on("data", d => (e += d));
@@ -441,7 +444,7 @@ console.log("\nA session whose only sends are acks owes nothing, and a real cont
     // ONE session_id across both runs: the hook derives its instance key from it, and a second run
     // under a fresh id reads as a baton twin that lost the claim and is waved through as superseded.
     kid.stdin.end(JSON.stringify({ session_id: "ack-stop-1", cwd: repo4, stop_hook_active: false }));
-    setTimeout(() => { try { kid.kill("SIGKILL"); } catch {} }, 15000).unref?.();
+    setTimeout(() => { try { kid.kill("SIGKILL"); } catch {} }, 30000).unref?.();
   });
   await get2(`/inbox?session=${encodeURIComponent(AO)}`);   // consuming read: unread mail would block for another reason
   {
@@ -454,9 +457,16 @@ console.log("\nA session whose only sends are acks owes nothing, and a real cont
   // an open row is stalled at once; the acks sitting beside it must not change that.
   const real = await post2("/send", { from: AO, to: AS, project: PROJ2, text: "the actual job: port the neuro ruleset" });
   {
-    const r = await get2(`/contracts?session=${encodeURIComponent(AO)}&overdueMs=0`);
-    const row = (r.contracts || []).find(c => Number(c.id) === Number(real.id));
-    ok("a real wake:true contract to the same seat still appears in `contracts`", !!row, JSON.stringify(r.contracts || []).slice(0, 200));
+    // #9832: the instant read raced the row's visibility under a loaded host — the read came back
+    // [] and the stop hook below fail-opened "{}" on the same missing row. Await the row the send
+    // must create (10s bound), then assert the whole trio on that one read.
+    let r = null, row = null;
+    for (let i = 0; i < 50 && !row; i++) {
+      r = await get2(`/contracts?session=${encodeURIComponent(AO)}&overdueMs=0`);
+      row = (r.contracts || []).find(c => Number(c.id) === Number(real.id));
+      if (!row) await sleep(200);
+    }
+    ok("a real wake:true contract to the same seat still appears in `contracts`", !!row, JSON.stringify((r && r.contracts) || []).slice(0, 200));
     ok("…and still STALLS when overdue — the acks silenced nothing real", row?.disposition === "stalled" && r.stalled === 1,
       JSON.stringify({ disposition: row?.disposition, stalled: r.stalled }));
     ok("the acks are still out of the array beside it", (r.contracts || []).length === 1, `${(r.contracts || []).length} rows`);
