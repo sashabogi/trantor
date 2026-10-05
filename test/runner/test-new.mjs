@@ -11,6 +11,7 @@ import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { drillEnv } from "../drill-env.mjs";
+import { startTestHub, freePort } from "../lib/test-hub.mjs";
 
 const ROOT = fileURLToPath(new URL("../..", import.meta.url)).replace(/\/$/, "");
 let pass = 0, fail = 0;
@@ -28,21 +29,9 @@ writeFileSync(join(W, ".agent-bus", "autonomy.json"), JSON.stringify({
   defaults: { harness: "bypass" },
   projects: { inherited: { harness: "bypass" } },
 }));
-const PORT = 47877, HUB = `http://127.0.0.1:${PORT}`;
-
-const hub = spawn("node", [join(ROOT, "hub.mjs")], {
-  env: { ...drillEnv(), RELAY_DATA_DIR: W, HOME: W, RELAY_PORT: String(PORT), PORT: String(PORT), TRANTOR_NO_UPDATE_CHECK: "1" },
-  stdio: ["ignore", "ignore", "pipe"],
-});
-hub._stderr = "";
-hub.stderr.on("data", d => { hub._stderr += String(d); });
-let hubUp = false;
-for (let i = 0; i < 50; i++) {
-  if (hub.exitCode !== null) { console.error("hub exited early:", hub._stderr); process.exit(1); }
-  try { const r = await fetch(`${HUB}/health`); if (r.ok) { hubUp = true; break; } } catch {}
-  await sleep(100);
-}
-ok("throwaway hub is up", hubUp);
+const hub = await startTestHub({ dir: W });
+const HUB = hub.base;
+ok("throwaway hub is up", !!hub.proc);
 
 const childEnv = (extra = {}) => ({
   ...drillEnv(), HOME: W, AGENT_BUS_DIR: join(W, ".agent-bus"),
@@ -174,7 +163,7 @@ ok("parent: CLAUDE.md seeded in the created dir", !!dJson && readFileSync(join(A
 
   const recorded = [];
   let inviteToken = "invite-token";
-  const FPORT = 47878;
+  const FPORT = await freePort();
   const recFile = join(FW, "records.jsonl");
   const fakeHub = spawn("node", ["-e", `
     const http = require("http");
@@ -253,7 +242,7 @@ ok("parent: CLAUDE.md seeded in the created dir", !!dJson && readFileSync(join(A
   writeFileSync(join(bus, "config.json"), JSON.stringify({ ownerIdentity: "drill-owner2" }));
   writeFileSync(join(bus, "autonomy.json"), JSON.stringify({ version: 1, defaults: { harness: "bypass" }, projects: {} }));
 
-  const IPORT = 47880;
+  const IPORT = await freePort();
   const inviteFailHub = spawn("node", ["-e", `
     const http = require("http");
     http.createServer((req, res) => {
@@ -291,7 +280,7 @@ ok("parent: CLAUDE.md seeded in the created dir", !!dJson && readFileSync(join(A
   const bus = join(FW, ".agent-bus");
   mkdirSync(bus, { recursive: true });
   writeFileSync(join(bus, "autonomy.json"), JSON.stringify({ version: 1, defaults: { harness: "bypass" }, projects: {} }));
-  const RPORT = 47879;
+  const RPORT = await freePort();
   const refuseHub = spawn("node", ["-e", `
     const http = require("http");
     http.createServer((req, res) => {
@@ -318,7 +307,7 @@ ok("parent: CLAUDE.md seeded in the created dir", !!dJson && readFileSync(join(A
   try { rmSync(FW, { recursive: true, force: true }); } catch {}
 }
 
-hub.kill();
+await hub.stop();
 try { rmSync(W, { recursive: true, force: true }); } catch {}
 
 console.log(`\n${fail === 0 ? "✅" : "❌"} new: ${pass} passed, ${fail} failed`);

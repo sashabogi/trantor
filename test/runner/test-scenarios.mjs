@@ -8,11 +8,10 @@ import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { drillEnv } from "../drill-env.mjs";
+import { startTestHub } from "../lib/test-hub.mjs";
 import { generate, signRequest } from "../../lib/identity.mjs";
 
 const ROOT = fileURLToPath(new URL("../..", import.meta.url)).replace(/\/$/, "");
-const PORT = 4951;
-const HUB = `http://127.0.0.1:${PORT}`;
 const FAKE_HOME = mkdtempSync(join(tmpdir(), "ab-scn-"));
 let pass = 0, fail = 0;
 const ok = (name, cond, detail = "") => { if (cond) { pass++; console.log(`  ✓ ${name}`); } else { fail++; console.log(`  ✗ ${name} ${detail}`); } };
@@ -30,13 +29,9 @@ async function sApi(id, method, path, bodyObj) {
   return { status: r.status, json: j };
 }
 
-// refuse to run against a squatter: an orphaned hub on the test port would silently
-// serve STALE code (spawn's EADDRINUSE dies into stdio:ignore) and poison every drill
-try { await fetch(`${HUB}/health`, { signal: AbortSignal.timeout(700) }); console.error(`✗ something is already listening on :${PORT} — kill it first (lsof -ti :${PORT} | xargs kill)`); process.exit(2); } catch {}
-
-// isolated hub: fake HOME (own bus.json), test port, 2s online cutoff so death is observable fast
-const hub = spawn("node", [join(ROOT, "hub.mjs")], { env: { ...drillEnv(), HOME: FAKE_HOME, RELAY_PORT: String(PORT), RELAY_HOST: "127.0.0.1", RELAY_ONLINE_MS: "2000", RELAY_PEER_TTL_MS: "4000" }, stdio: "ignore" });
-await sleep(900);
+// isolated hub: fake HOME (own bus.json), FREE port, 2s online cutoff so death is observable fast
+const hub = await startTestHub({ dir: FAKE_HOME, env: { RELAY_ONLINE_MS: "2000", RELAY_PEER_TTL_MS: "4000" } });
+const HUB = hub.base;
 
 try {
   console.log("scenario: agent registers and is honestly online");
@@ -286,14 +281,12 @@ try {
       tasks: [{ id: 1, project: "legacy", title: "old card", status: "done", assignee: "kimi:legacy", difficulty: "hard", by: "arch", ts: 1000, updated: 3000,
         history: [{ to: "todo", by: "arch", ts: 1000 }, { from: "todo", to: "doing", by: "kimi:legacy", ts: 2000 }, { from: "doing", to: "done", by: "kimi:legacy", ts: 3000 }] }] };
     writeFileSync(join(BHOME, "bus.json"), JSON.stringify(seeded));
-    const BPORT = 4952;
-    const bh = spawn("node", [join(ROOT, "hub.mjs")], { env: { ...drillEnv(), HOME: BHOME, RELAY_DATA_DIR: BHOME, RELAY_PORT: String(BPORT), RELAY_HOST: "127.0.0.1" }, stdio: "ignore" });
-    await sleep(900);
-    const bev = (await (await fetch(`http://127.0.0.1:${BPORT}/history?project=legacy`)).json()).events;
+    const bh = await startTestHub({ dir: BHOME });
+    const bev = (await (await fetch(`${bh.base}/history?project=legacy`)).json()).events;
     ok("backfill reconstructed all 3 legacy history entries", bev.length === 3);
     ok("backfill first event is created->todo", bev[0]?.type === "created" && bev[0]?.to === "todo");
     ok("backfill rebuilds moves chronologically with from/to/by", bev[1]?.type === "moved" && bev[1]?.from === "todo" && bev[1]?.to === "doing" && bev[1]?.by === "kimi:legacy" && bev[2]?.to === "done");
-    bh.kill("SIGKILL"); rmSync(BHOME, { recursive: true, force: true });
+    await bh.stop(); rmSync(BHOME, { recursive: true, force: true });
   }
 
   console.log("scenario: /todos — a session's TodoWrite list mirrors onto its board as cards");
@@ -469,7 +462,7 @@ try {
   }
 
 } finally {
-  hub.kill("SIGKILL");
+  await hub.stop();
   rmSync(FAKE_HOME, { recursive: true, force: true });
 }
 

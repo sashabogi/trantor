@@ -2,12 +2,12 @@
 // Regression drill for the 2026-09-02 stale-snapshot restart: a runner retained cursor 500 while
 // the restored hub's message tip was 200, so every poll heartbeat succeeded but no work arrived.
 import http from "node:http";
-import net from "node:net";
 import { spawn } from "node:child_process";
 import { chmodSync, existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { drillEnv } from "../drill-env.mjs";
+import { startTestHub } from "../lib/test-hub.mjs";
 
 let pass = 0;
 let fail = 0;
@@ -16,14 +16,6 @@ const ok = (name, condition, detail = "") => {
   if (condition) pass += 1; else fail += 1;
 };
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
-const freePort = () => new Promise((resolve, reject) => {
-  const server = net.createServer();
-  server.once("error", reject);
-  server.listen(0, "127.0.0.1", () => {
-    const port = server.address().port;
-    server.close(error => error ? reject(error) : resolve(port));
-  });
-});
 const waitFor = async (check, timeoutMs = 5000) => {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
@@ -42,20 +34,13 @@ console.log("# hub cursor rewind clamp");
 const scratch = mkdtempSync(join(tmpdir(), "trantor-cursor-rewind-"));
 const children = new Set();
 try {
-  const port = await freePort();
-  const base = `http://127.0.0.1:${port}`;
   const statePath = join(scratch, "state.json");
   writeFileSync(statePath, JSON.stringify({
     seq: 200,
     messages: [{ id: 200, ts: Date.now(), from: "seed:p", to: "other:p", text: "tip", project: "p" }],
   }));
-  let hub = spawn(process.execPath, ["hub.mjs"], {
-    cwd: process.cwd(),
-    env: { ...drillEnv(), HOME: scratch, RELAY_PORT: String(port), RELAY_HOST: "127.0.0.1", RELAY_AUTH: "off", RELAY_STORE: "json", RELAY_DATA_DIR: scratch, RELAY_STATE: statePath },
-    stdio: "ignore",
-  });
-  children.add(hub); hub.once("exit", () => children.delete(hub));
-  await waitFor(async () => (await fetch(base + "/health")).ok);
+  const hub = await startTestHub({ dir: scratch, env: { RELAY_AUTH: "off", RELAY_STORE: "json", RELAY_STATE: statePath } });
+  const base = hub.base;
 
   const inbox = await fetch(base + "/inbox?session=runner:p&since=500").then(response => response.json());
   ok("/inbox clamps an impossible cursor to the current tip", inbox.cursor === 200 && inbox.rewound === true && inbox.messages.length === 0, JSON.stringify(inbox));
@@ -67,7 +52,7 @@ try {
   const sent = await fetch(base + "/send", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ from: "host:p", to: "runner:p", text: "next contract" }) }).then(response => response.json());
   const next = await fetch(base + "/inbox?session=runner:p&since=200").then(response => response.json());
   ok("the first message after the restored tip is delivered", sent.id === 201 && next.cursor === 201 && next.messages[0]?.text === "next contract" && !next.rewound, JSON.stringify(next));
-  await stop(hub);
+  await hub.stop();
 
   console.log("# crew runner adopts the lower cursor");
   const pollSince = [];

@@ -9,6 +9,7 @@ import { mkdtempSync, writeFileSync, readFileSync, chmodSync, mkdirSync } from "
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { drillEnv } from "../drill-env.mjs";
+import { startTestHub } from "../lib/test-hub.mjs";
 import { cardRef, cardRefs, assignedCardRef, wakeCard, carriesWork, parseTurnTokens, parseResetAt, quotaSpent, reasonWithBalances, quotaResetAt, isLinkedProject, senderProjectOf, stateSkipReason, isMessageCardTitle, OPEN_CARD_STATUSES } from "../../lib/turn-policy.mjs";
 
 let pass = 0, fail = 0;
@@ -567,17 +568,8 @@ console.log("\n## threaded replies");
 // gets there. Stored only when false, so every client that predates the flag is untouched.
 console.log("\n## the hub carries the flag");
 {
-  const { spawn: spawnHub } = await import("node:child_process");
-  const dir = mkdtempSync(join(tmpdir(), "tt-wake-hub-"));
-  mkdirSync(join(dir, ".agent-bus"), { recursive: true });
-  const PORT = 47948;
-  const proc = spawnHub("node", ["hub.mjs"], {
-    cwd: process.cwd(),
-    env: { ...drillEnv(), RELAY_DATA_DIR: dir, HOME: dir, RELAY_PORT: String(PORT), PORT: String(PORT), TRANTOR_NO_UPDATE_CHECK: "1" },
-    stdio: ["ignore", "ignore", "pipe"],
-  });
-  await sleep(1200);
-  const BASE = `http://127.0.0.1:${PORT}`;
+  const hub = await startTestHub();
+  const BASE = hub.base;
   const post = (p, b) => fetch(BASE + p, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(b) }).then(r => r.json()).catch(e => ({ error: String(e) }));
   const get = (p) => fetch(BASE + p).then(r => r.json()).catch(e => ({ error: String(e) }));
 
@@ -590,7 +582,7 @@ console.log("\n## the hub carries the flag");
   ok("the hub stores wake:false on the message", batched?.wake === false, JSON.stringify(batched));
   ok("and leaves it ABSENT on an ordinary send, so older clients are unchanged",
     waking && waking.wake === undefined, JSON.stringify(waking));
-  proc.kill("SIGKILL");
+  await hub.stop();
 }
 
 hub.close();
