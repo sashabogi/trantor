@@ -16,7 +16,7 @@ import { applyWorktreeDeclaration, ensureSeatWorktree, provisioningLines, readWo
 import {
   AUTH_MARKER_RE, classifyFailure, looksLikeAuthDeath,
   verdictFor, substantiveOutput, stallVerdict, cutSignalFor,
-  BILLING_RE, looksLikeBillingDeath, usageSaysNoWork, zeroUsageVerdict,
+  BILLING_RE, looksLikeBillingDeath, usageSaysNoWork, zeroUsageVerdict, noDeliveryVerdict,
   permissionRejection, looksLikePermissionDeath,
   readPromptText, stripPromptEcho,
 } from "../lib/classify-failure.mjs";
@@ -279,6 +279,11 @@ let lastEmptyOutput = false;
 // the CLI printed its banner and quit. The both-streams-silent rule above stays; this is the
 // second, harder-to-see empty shape.
 let lastEmptyTurn = false;
+// #10197: exit 0 on a turn BOUND to a card contract with neither a new commit nor a card move to
+// testing/done — the ibkr shape (48s, prose, card still todo, announced done). The card's status
+// at turn end rides along so the assigner's notice can name it.
+let lastNoDelivery = false;
+let lastNoDeliveryStatus = "";
 const ERRF = join(homedir(), ".agent-bus", `err-${AGENT}-${PROJ}.txt`);
 const DUTY_NUDGES = process.env.RUNNER_DUTY_NUDGES === "1";
 const DUTY_NUDGE_STATE = process.env.RUNNER_DUTY_NUDGE_STATE
@@ -742,6 +747,16 @@ async function runTurn(prompt, isFirst, trigger = "kickoff", opts = {}) {
   // #7759: the worktree snapshot the turn is judged against at its end — porcelain covers edits
   // AND new untracked files, which a HEAD-only comparison misses.
   const statusBefore = gitOut(["status", "--porcelain"], TURN_DIR);
+  // #10197: the card status snapshot the turn is judged against at its end — a move to
+  // testing/done under the turn is delivery even without a commit. null = the hub read failed:
+  // the delivery check stands down rather than claim no-delivery on a transport error.
+  let cardStatusBefore = null;
+  if (!opts.state && sessionCard > 0) {
+    try {
+      const { task } = await api(`/card?project=${encodeURIComponent(PROJ)}&id=${sessionCard}`);
+      cardStatusBefore = task ? String(task.status || "") : null;
+    } catch { cardStatusBefore = null; }
+  }
   // #9778: the docker snapshot the turn is judged against — containers the CLI spawns are recorded
   // against the seat's card at turn end, then stopped when the card closes or the seat parks.
   const dockerBefore = listContainers();
@@ -1011,16 +1026,38 @@ exit $turn_exit`;
     effExit = 1;
     log("\x1b[31mexit 0 but the session usage record resolved to all zeros — no model work happened; treating as FAILED\x1b[0m");
   }
+  // #10197: a turn BOUND to a card contract reads done only on DELIVERY — a NEW commit since the
+  // turn started, or the card moved to testing/done under it. The ibkr shape (exit 0, output, no
+  // commit, card still todo) is NO-DELIVERY: the ledger names it and the contract stays owed.
+  // Judged on hub reads of the card status; a failed read keeps today's label, never no-delivery.
+  let cardStatusAtEnd = "", noDelivery = false;
+  if (!cut && !opts.state && realExit === 0 && effExit === 0 && sessionCard > 0 && cardStatusBefore !== null) {
+    let endStatus = null;
+    try {
+      const { task } = await api(`/card?project=${encodeURIComponent(PROJ)}&id=${sessionCard}`);
+      endStatus = task ? String(task.status || "") : null;
+    } catch { endStatus = null; }
+    if (endStatus !== null) {
+      cardStatusAtEnd = endStatus;
+      const moved = ["testing", "done"].includes(endStatus) && !["testing", "done"].includes(cardStatusBefore);
+      noDelivery = !newCommit && !moved;
+    }
+  }
+  lastNoDelivery = noDelivery;
+  lastNoDeliveryStatus = cardStatusAtEnd;
+  if (noDelivery) log(`\x1b[33mexit 0 but the turn DELIVERED NOTHING on #${sessionCard} — no new commit, card still ${cardStatusAtEnd || "unknown"}\x1b[0m`);
   // #5868: the verdict rides the telemetry row so a classification survives the pane scrolling
   // away — the same "classified X because Y" shape the runner logs. A silent cut names its own
   // verdict (#7752): the exit under it is the sweep's SIGPIPE. A box cut passes `cut` so its 137
   // reads as the sweep's SIGKILL (#7099); a zero-usage turn names its own verdict too (#9724).
-  const verdict = stallCut ? stallVerdict() : zeroUsage ? zeroUsageVerdict() : verdictFor(realExit, effExit, lastEmptyOutput, ownOut, lastEmptyTurn, cut);
+  const verdict = stallCut ? stallVerdict() : zeroUsage ? zeroUsageVerdict()
+    : noDelivery ? noDeliveryVerdict(sessionCard, cardStatusAtEnd || "unknown")
+    : verdictFor(realExit, effExit, lastEmptyOutput, ownOut, lastEmptyTurn, cut);
   // #6289: every ledger row names in ONE field what happened to the turn — cut, stalled (#7752),
   // api-error, completed — and what it cost (0 means "not reported", never "free"). #7762: `card`
   // binds the row to the card the turn worked (0 = kickoff/pulse) so the seat record attributes
   // empty/stalled turns to the card that produced nothing. `cut` stays too: the drills read it.
-  const outcome = cut ? (stallCut ? "stalled" : "cut") : (effExit !== 0 ? "api-error" : lastEmptyTurn ? "empty" : "completed");
+  const outcome = cut ? (stallCut ? "stalled" : "cut") : (effExit !== 0 ? "api-error" : noDelivery ? "no-delivery" : lastEmptyTurn ? "empty" : "completed");
   // #7756: a clean turn that ASKED its assigner is demoted-but-owed, not "completed". The judge
   // (deliverWake's /contracts read) renames the ledger row, so "asked" is what the log keeps.
   let finalOutcome = outcome;
@@ -1602,6 +1639,7 @@ async function resolveWakeCard(messages, { session }) {
     const stopDutyNudgeWatcher = startDutyNudgeWatcher(dutyPlan, tStart);
     let ec;
     turnAsk = null;   // #7756: the judge reads THIS turn's ending, never a previous turn's ask
+    lastNoDelivery = false; lastNoDeliveryStatus = "";   // #10197: runTurn judges THIS turn only
     const stateStep = !stateSkip("wake", card);
     try {
       ec = stateStep
@@ -1723,6 +1761,26 @@ async function resolveWakeCard(messages, { session }) {
       savePending(pendingWake, pendingBcast);
       await reportHealthy();
       log(`turn asked its assigner — holding the contract until ask #${awaitingAsk.id} is answered`);
+    } else if (lastNoDelivery) {
+      // #10197: the turn exited 0 but DELIVERED NOTHING on its card — no new commit, the card
+      // still short of testing/done. "⚠ no commit" is not a receipt, so the sender's ledger keeps
+      // the contract owed; the queue is kept and the ladder retries — a second no-delivery
+      // attempt parks, exactly like the empty-turn ladder it sits beside.
+      deliveryFails++;
+      savePending(pendingWake, pendingBcast);
+      const still = lastNoDeliveryStatus || "unresolved";
+      if (deliveryFails >= 2) {
+        retryAt = await parkSeat("no-delivery", pendingWake.length);
+        await notifyAssigners(assigners,
+          `⛔ your contract is PARKED on ${SESSION} (no-delivery: two exit-0 turns with no commit and card #${sessionCard} unmoved) · asked: "${asked}"`);
+        lastTurnAt = Date.now();
+        return;
+      }
+      const wait = RETRY_MS[Math.min(deliveryFails - 1, RETRY_MS.length - 1)];
+      retryAt = Date.now() + wait;
+      log(`\x1b[33mno commit, card #${sessionCard} still ${still} — wake not consumed, ${pendingWake.length} message(s) stay owed; retrying in ${Math.round(wait / 1000)}s\x1b[0m`);
+      await notifyAssigners(assigners,
+        `⚠ no commit, card #${sessionCard} still ${still} on ${SESSION} (exit 0, ${secs}s) · asked: "${asked}"`);
     } else if (lastEmptyTurn) {
       // #7759: the turn exited 0 but was HOLLOW — a banner is not work. The wake is NOT
       // consumed: the queue is kept and the ladder retries, and the assigner hears EMPTY,
