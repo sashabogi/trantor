@@ -12,16 +12,13 @@
 //   2. the matching stop post flips it to "done", count STILL 1 (no double-count), cost recorded,
 //   3. legacy: a stop for a never-started title creates a "done" card count 1; a 2nd identical stop → 2,
 //   4. parallel: two starts (same title) → count 2, doing; one stop → still doing; second stop → done.
-import { spawn } from "node:child_process";
 import { mkdtempSync, mkdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { drillEnv } from "../drill-env.mjs";
+import { startTestHub } from "../lib/test-hub.mjs";
 
 const ROOT = fileURLToPath(new URL("../..", import.meta.url)).replace(/\/$/, "");
-const PORT = 47821;
-const base = `http://127.0.0.1:${PORT}`;
 const dir = mkdtempSync(join(tmpdir(), "trantor-inflight-"));
 mkdirSync(join(dir, ".agent-bus"), { recursive: true });
 
@@ -41,13 +38,10 @@ const cardById = async (agentId) => (await get("/tasks")).tasks.find(t => t.sour
 
 console.log("# trantor in-flight sub-agent card tests");
 
-// refuse to run against a squatter on the test port (would serve stale code)
-try { await fetch(`${base}/health`, { signal: AbortSignal.timeout(700) }); console.error(`✗ something already listening on :${PORT} — kill it first`); process.exit(2); } catch {}
-
-const hub = spawn("node", [join(ROOT, "hub.mjs")], { env: { ...drillEnv(), RELAY_DATA_DIR: dir, HOME: dir, RELAY_PORT: String(PORT), PORT: String(PORT) }, stdio: ["ignore", "ignore", "pipe"] });
-let herr = ""; hub.stderr.on("data", d => herr += d);
-await sleep(800);
-
+// refuse-to-run squatter check deleted with the fixed port — a free port cannot have one.
+const hub = await startTestHub({ dir });
+const base = hub.base;
+let herr = "";
 try {
   // 1. start → doing, count 1
   const T1 = "general-purpose: build the widget";
@@ -124,7 +118,8 @@ try {
 } catch (e) {
   fail++; console.log("  ✗ threw:", e?.message || e, herr ? `\n  hub stderr: ${herr}` : "");
 } finally {
-  hub.kill();
+  herr = hub.stderr.slice(-400);
+  await hub.stop();
   try { rmSync(dir, { recursive: true, force: true }); } catch {}
 }
 

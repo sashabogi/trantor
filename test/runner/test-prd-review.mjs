@@ -13,6 +13,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { drillEnv, scrubIdentityEnv } from "../drill-env.mjs";
+import { startTestHub } from "../lib/test-hub.mjs";
 import {
   PLAIN_WAKE_KICKOFF,
   PRD_REVIEW_KICKOFF,
@@ -69,20 +70,9 @@ console.log("# genesis PRD-review path");
   mkdirSync(DEV, { recursive: true });
   mkdirSync(join(W, ".agent-bus"), { recursive: true });
   writeFileSync(join(W, ".agent-bus", "autonomy.json"), JSON.stringify({ version: 1, defaults: { harness: "bypass" }, projects: {} }));
-  const PORT = 47881, HUB = `http://127.0.0.1:${PORT}`;
-  const hub = spawn("node", [join(ROOT, "hub.mjs")], {
-    env: { ...drillEnv(), RELAY_DATA_DIR: W, HOME: W, RELAY_PORT: String(PORT), PORT: String(PORT), TRANTOR_NO_UPDATE_CHECK: "1" },
-    stdio: ["ignore", "ignore", "pipe"],
-  });
-  let hubErr = "";
-  hub.stderr.on("data", d => { hubErr += String(d); });
-  let hubUp = false;
-  for (let i = 0; i < 50; i++) {
-    if (hub.exitCode !== null) { console.error("hub exited early:", hubErr); process.exit(1); }
-    try { const r = await fetch(`${HUB}/health`); if (r.ok) { hubUp = true; break; } } catch {}
-    await sleep(100);
-  }
-  ok("throwaway hub is up", hubUp);
+  const hub = await startTestHub({ dir: W });
+  const HUB = hub.base;
+  ok("throwaway hub is up", !!hub.proc);
 
   const env = (extra = {}) => ({
     ...drillEnv(), HOME: W, AGENT_BUS_DIR: join(W, ".agent-bus"), RELAY_URL: HUB,
@@ -136,7 +126,7 @@ console.log("# genesis PRD-review path");
   ok("selector: PRD present but board unreachable → exit 1, empty stdout, reason on stderr",
     ke.status === 1 && ke.stdout.trim() === "" && /could not be read/.test(ke.stderr) && /unreachable/.test(ke.stderr), `${ke.status} ${ke.stdout}${ke.stderr}`);
 
-  hub.kill();
+  await hub.stop();
   try { rmSync(W, { recursive: true, force: true }); } catch {}
 }
 

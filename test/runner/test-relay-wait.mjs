@@ -12,6 +12,7 @@ import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { drillEnv } from "../drill-env.mjs";
+import { startTestHub } from "../lib/test-hub.mjs";
 
 const ROOT = fileURLToPath(new URL("../..", import.meta.url)).replace(/\/$/, "");
 let pass = 0, fail = 0;
@@ -22,12 +23,8 @@ console.log("# trantor relay_wait long-poll drill");
 
 const W = mkdtempSync(join(tmpdir(), "trantor-wait-"));
 mkdirSync(join(W, ".agent-bus"), { recursive: true });
-const PORT = 47861, HUB = `http://127.0.0.1:${PORT}`;
-const hub = spawn("node", [join(ROOT, "hub.mjs")], {
-  env: { ...drillEnv(), RELAY_DATA_DIR: W, HOME: W, RELAY_PORT: String(PORT), PORT: String(PORT), TRANTOR_NO_UPDATE_CHECK: "1" },
-  stdio: ["ignore", "ignore", "pipe"],
-});
-await sleep(900);
+const hub = await startTestHub({ dir: W });
+const HUB = hub.base;
 
 // the REAL MCP server, as a stdio JSON-RPC peer
 const mcp = spawn("node", [join(ROOT, "mcp.mjs")], {
@@ -97,7 +94,7 @@ const text = (r) => r?.result?.content?.[0]?.text ?? JSON.stringify(r?.result ??
     me?.hookVersion === expected, `row=${me?.hookVersion} expected=${expected}`);
 }
 
-mcp.kill(); hub.kill();
+mcp.kill(); await hub.stop();
 rmSync(W, { recursive: true, force: true });
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

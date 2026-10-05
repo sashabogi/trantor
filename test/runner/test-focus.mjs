@@ -6,44 +6,24 @@
 // rolling "doing" card per session (source:"session"), re-titled as the focus shifts, auto-closed to "done"
 // when the session is pruned offline. These tests spin up the REAL hub.mjs and assert the /focus contract.
 // (The hook's ack-filter / title-cleanup is verified separately; this locks the durable hub behavior.)
-import { spawn } from "node:child_process";
-import { mkdtempSync, mkdirSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join, dirname } from "node:path";
-import { fileURLToPath } from "node:url";
-import { drillEnv } from "../drill-env.mjs";
+import { startTestHub } from "../lib/test-hub.mjs";
 
-const ROOT = fileURLToPath(new URL("../..", import.meta.url)).replace(/\/$/, "");
 let pass = 0, fail = 0;
 const ok = (name, cond, detail = "") => { if (cond) { pass++; console.log(`  ✓ ${name}`); } else { fail++; console.log(`  ✗ ${name} ${detail}`); } };
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 const PROJ = "focusproj";
 
-function spawnHub(port, extraEnv = {}) {
-  const dir = mkdtempSync(join(tmpdir(), "trantor-focus-"));
-  mkdirSync(join(dir, ".agent-bus"), { recursive: true });
-  const hub = spawn("node", [join(ROOT, "hub.mjs")], {
-    env: { ...drillEnv(), RELAY_DATA_DIR: dir, HOME: dir, RELAY_PORT: String(port), PORT: String(port), TRANTOR_NO_UPDATE_CHECK: "1", ...extraEnv },
-    stdio: ["ignore", "ignore", "pipe"],
-  });
-  hub._dir = dir;
-  return hub;
-}
-
 console.log("# trantor session-focus card tests");
 
-const PORT = 47831, base = `http://127.0.0.1:${PORT}`;
-const post = (p, b) => fetch(base + p, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(b) }).then(r => r.json());
+const post0 = (base, p, b) => fetch(base + p, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(b) }).then(r => r.json());
 const get = (p) => fetch(base + p).then(r => r.json());
 const focus = (session, title, cc) => post("/focus", { session, project: PROJ, title, by: session, ...(cc ? { cc } : {}) });
 const sessionCards = async () => (await get(`/tasks?project=${PROJ}`)).tasks.filter(t => t.source === "session");
 
-try { await fetch(`${base}/health`, { signal: AbortSignal.timeout(700) }); console.error(`✗ something already listening on :${PORT}`); process.exit(2); } catch {}
-const hub = spawnHub(PORT);
-let herr = ""; hub.stderr.on("data", d => herr += d);
-await sleep(800);
-
+let base, post, herr, hub;
 try {
+  hub = await startTestHub();
+  base = hub.base; post = (p, b) => post0(base, p, b); herr = hub.stderr;
   const S1 = "host:focusproj", S2 = "codex:focusproj";
 
   // 1. first prompt → ONE doing card for the session
@@ -133,15 +113,14 @@ try {
 } catch (e) {
   fail++; console.log("  ✗ threw:", e?.message || e, herr ? `\n  hub stderr: ${herr}` : "");
 } finally {
-  hub.kill(); try { rmSync(hub._dir, { recursive: true, force: true }); } catch {}
+  try { await hub?.stop(); } catch {}
 }
 
 // 6. prune-close: a fresh hub with tiny online/TTL windows → a stale session's focus auto-closes to "done"
-const PORT2 = 47832, base2 = `http://127.0.0.1:${PORT2}`;
-const hub2 = spawnHub(PORT2, { RELAY_ONLINE_MS: "1", RELAY_PEER_TTL_MS: "1" });
-let herr2 = ""; hub2.stderr.on("data", d => herr2 += d);
-await sleep(800);
+let base2, herr2, hub2;
 try {
+  hub2 = await startTestHub({ env: { RELAY_ONLINE_MS: "1", RELAY_PEER_TTL_MS: "1" } });
+  base2 = hub2.base; herr2 = hub2.stderr;
   await fetch(base2 + "/focus", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ session: "host:focusproj", project: PROJ, title: "work that will go stale", by: "host:focusproj" }) });
   let f = (await fetch(`${base2}/tasks?project=${PROJ}`).then(r => r.json())).tasks.filter(t => t.source === "session");
   ok("focus card starts doing", f[0]?.status === "doing", `(got "${f[0]?.status}")`);
@@ -164,7 +143,7 @@ try {
 } catch (e) {
   fail++; console.log("  ✗ threw (prune):", e?.message || e, herr2 ? `\n  hub stderr: ${herr2}` : "");
 } finally {
-  hub2.kill(); try { rmSync(hub2._dir, { recursive: true, force: true }); } catch {}
+  try { await hub2?.stop(); } catch {}
 }
 
 console.log(fail ? `\n${fail} FAILED` : "\nALL PASS");
