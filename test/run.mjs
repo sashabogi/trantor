@@ -37,7 +37,10 @@ const flag = (name) => {
 };
 const LIST = argv.includes("--list");
 const ONLY = flag("--only");
-const TIMEOUT_MS = Number(flag("--timeout") || process.env.RUN_SUITE_TIMEOUT_MS || 150_000);
+// 240s: the slowest suite measured (test-wake-policy, 107 checks with real-hub + drill legs) runs
+// 150.65s ALONE — the old 150s default killed it at the bound before its own finish line, load or
+// no load (#9832 red 1: exit=null TIMEOUT 150.0s, green 107/107 standalone 3 minutes later).
+const TIMEOUT_MS = Number(flag("--timeout") || process.env.RUN_SUITE_TIMEOUT_MS || 240_000);
 const CONCURRENCY = Number(flag("--concurrency") || process.env.RUN_SUITE_CONCURRENCY || 6);
 const QUARANTINE_DIR = join(ROOT, "test", "quarantine");
 
