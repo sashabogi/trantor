@@ -7,33 +7,24 @@
 // neither could find the other, leaving the human to carry messages between two agents.
 //
 // Isolated: random port, tmp dirs, enforce auth, real Ed25519 signatures.
-import { spawn } from "node:child_process";
 import { mkdtempSync, rmSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { fileURLToPath } from "node:url";
 import { setTimeout as sleep } from "node:timers/promises";
 import { randomBytes } from "node:crypto";
-import { drillEnv } from "../drill-env.mjs";
+import { startTestHub } from "../lib/test-hub.mjs";
 
-const HERE = fileURLToPath(new URL("../..", import.meta.url)).replace(/\/[^/]+$/, "");
 const { generate, signRequest } = await import("../../lib/identity.mjs");
 let pass = 0, fail = 0;
 const ok = (n, c, e = "") => { if (c) { pass++; console.log(`  ✓ ${n}`); } else { fail++; console.log(`  ✗ ${n}${e ? " — " + e : ""}`); } };
 
 const dir = mkdtempSync(join(tmpdir(), `td-${process.pid}-${randomBytes(3).toString("hex")}-`));
 mkdirSync(join(dir, ".agent-bus"), { recursive: true });
-const port = 5000 + Math.floor(Math.random() * 20000);
-const base = `http://127.0.0.1:${port}`;
-const hub = spawn(process.execPath, [join(HERE, "hub.mjs")], {
-  env: {
-    ...drillEnv(), HOME: dir, AGENT_BUS_DIR: join(dir, ".agent-bus"), RELAY_DATA_DIR: dir,
-    RELAY_PORT: String(port), RELAY_HOST: "127.0.0.1", RELAY_AUTH: "enforce", RELAY_ENROLL: "tofu",
-    RELAY_OVERSEER_TICK_MS: "300", RELAY_ONLINE_MS: "60000", RELAY_URL: undefined,
-  },
-  stdio: ["ignore", "pipe", "pipe"],
-});
-let er = ""; hub.stderr.on("data", d => { er += d; });
+const hub = await startTestHub({ dir, env: {
+  AGENT_BUS_DIR: join(dir, ".agent-bus"), RELAY_HOST: "127.0.0.1", RELAY_AUTH: "enforce", RELAY_ENROLL: "tofu",
+  RELAY_OVERSEER_TICK_MS: "300", RELAY_ONLINE_MS: "60000",
+} });
+const base = hub.base;
 
 async function sFetch(id, method, path, bodyObj) {
   const body = bodyObj === undefined ? undefined : JSON.stringify(bodyObj);
@@ -47,9 +38,6 @@ async function sFetch(id, method, path, bodyObj) {
 const sessionsIn = (res) => (res.json.peers || []).map(p => p.session);
 
 try {
-  let up = false;
-  for (let i = 0; i < 90 && !up; i++) { try { up = (await fetch(base + "/health")).ok; } catch {} if (!up) await sleep(80); }
-  if (!up) throw new Error("hub no start: " + er.slice(-300));
   console.log("\n# test-discovery — linked projects can find each other");
 
   // Owner, plus two agents each scoped to ONE project — the normal per-project enrollment.
@@ -117,7 +105,7 @@ try {
   const again = (await inboxOf(a, "agent:projPair-a")).filter(m => m.from === "hub:duty" && /🤝/.test(m.text));
   ok("a standing collision introduces ONCE per episode", toA.length >= 1 && again.length === toA.length, `${toA.length} -> ${again.length}`);
 } finally {
-  try { hub.kill(); } catch {}
+  try { await hub.stop(); } catch {}
   try { rmSync(dir, { recursive: true, force: true }); } catch {}
 }
 

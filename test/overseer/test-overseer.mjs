@@ -12,28 +12,17 @@
 //   5. level 3+file-conflict opens a verify gate
 //   6. POST /overseer/narrate marks an event narrated
 //   7. all endpoints survive missing _overseer module (hub runs without it)
-import { spawn } from "node:child_process";
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, dirname } from "node:path";
-import { fileURLToPath } from "node:url";
-import { drillEnv } from "../drill-env.mjs";
+import { join } from "node:path";
+import { startTestHub } from "../lib/test-hub.mjs";
 
-const ROOT = fileURLToPath(new URL("../..", import.meta.url)).replace(/\/$/, "");
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 let pass = 0, fail = 0;
 const ok = (c, name) => { c ? pass++ : fail++; console.log(`  ${c ? "✓" : "✗"} ${name}`); };
 
-function spawnHub(port, extraEnv = {}, dir = mkdtempSync(join(tmpdir(), "trantor-overseer-"))) {
-  mkdirSync(join(dir, ".agent-bus"), { recursive: true });
-  const hub = spawn("node", [join(ROOT, "hub.mjs")], {
-    env: { ...drillEnv(), RELAY_DATA_DIR: dir, HOME: dir, RELAY_PORT: String(port), PORT: String(port),
-           TRANTOR_NO_UPDATE_CHECK: "1", RELAY_AUTH: "off", RELAY_OVERSEER_TICK_MS: "1000", ...extraEnv },
-    stdio: ["ignore", "ignore", "pipe"],
-  });
-  hub._dir = dir;
-  return hub;
-}
+const spawnHub = (extraEnv = {}, dir = mkdtempSync(join(tmpdir(), "trantor-overseer-"))) =>
+  startTestHub({ dir, env: { RELAY_AUTH: "off", RELAY_OVERSEER_TICK_MS: "1000", ...extraEnv } });
 const mk = (base) => ({
   post: (p, b) => fetch(base + p, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(b) }).then(r => r.json()),
   get: (p) => fetch(base + p).then(r => r.json()),
@@ -42,10 +31,9 @@ const mk = (base) => ({
 console.log("# trantor overseer e2e tests");
 
 // ── /policy defaults + set/get round-trip ─────────────────────────────────────────────────────
-const PA = 47931, hubA = spawnHub(PA);
-await sleep(800);
+const hubA = await spawnHub();
 try {
-  const A = mk(`http://127.0.0.1:${PA}`);
+  const A = mk(hubA.base);
   const def = await A.get("/policy");
   ok(def.autonomy && def.autonomy["*"] === 1 && Array.isArray(def.links) && def.links.length === 0,
      "GET /policy default {autonomy:{'*':1},links:[]}");
@@ -62,13 +50,12 @@ try {
   ok(a2.links?.some(l => (l.projects || []).includes("alpha") && (l.projects || []).includes("charlie")),
      "link persists across GET");
 } catch (e) { fail++; console.log(`  ✗ /policy: ${e.message}`); }
-finally { hubA.kill(); }
+finally { await hubA.stop(); }
 
 // ── overseer tick: same-project-sessions at level>=2 ───────────────────────────────────────────
-const PB = 47932, hubB = spawnHub(PB);
-await sleep(1500);
+const hubB = await spawnHub();
 try {
-  const B = mk(`http://127.0.0.1:${PB}`);
+  const B = mk(hubB.base);
   await B.post("/policy", { autonomy: { alpha: 2 } });
   await B.post("/register", { session: "host:alpha", project: "alpha", status: "orchestrating" });
   await B.post("/register", { session: "codex:alpha", project: "alpha", status: "ready" });
@@ -77,13 +64,12 @@ try {
   const warns = (ev.events ?? []).filter(e => e.type === "overseer.warn" && e.kind === "same-project-sessions");
   ok(warns.length >= 1, `overseer.warn same-project-sessions emitted (got ${warns.length})`);
 } catch (e) { fail++; console.log(`  ✗ tick same-project: ${e.message}`); }
-finally { hubB.kill(); }
+finally { await hubB.stop(); }
 
 // ── file-conflict from /claim ──────────────────────────────────────────────────────────────────
-const PC = 47933, hubC = spawnHub(PC);
-await sleep(1500);
+const hubC = await spawnHub();
 try {
-  const C = mk(`http://127.0.0.1:${PC}`);
+  const C = mk(hubC.base);
   await C.post("/policy", { autonomy: { alpha: 2 } });
   await C.post("/register", { session: "host:alpha", project: "alpha" });
   await C.post("/register", { session: "codex:alpha", project: "alpha" });
@@ -94,13 +80,12 @@ try {
   const warns = (ev.events ?? []).filter(e => e.type === "overseer.warn" && e.kind === "file-conflict");
   ok(warns.length >= 1, `overseer.warn file-conflict emitted (got ${warns.length})`);
 } catch (e) { fail++; console.log(`  ✗ tick file-conflict: ${e.message}`); }
-finally { hubC.kill(); }
+finally { await hubC.stop(); }
 
 // ── level 1: events still logged, /overseer/context.warnings populated ──────────────────────────
-const PD = 47934, hubD = spawnHub(PD);
-await sleep(1500);
+const hubD = await spawnHub();
 try {
-  const D = mk(`http://127.0.0.1:${PD}`);
+  const D = mk(hubD.base);
   await D.post("/policy", { autonomy: { alpha: 1 } });
   await D.post("/register", { session: "host:alpha", project: "alpha" });
   await D.post("/register", { session: "codex:alpha", project: "alpha" });
@@ -113,13 +98,12 @@ try {
   ok(Array.isArray(ctx.warnings) && ctx.warnings.length >= 1,
      "level 1: /overseer/context.warnings populated");
 } catch (e) { fail++; console.log(`  ✗ level 1: ${e.message}`); }
-finally { hubD.kill(); }
+finally { await hubD.stop(); }
 
 // ── level 3 + file-conflict -> verify gate ─────────────────────────────────────────────────────
-const PE = 47935, hubE = spawnHub(PE);
-await sleep(1500);
+const hubE = await spawnHub();
 try {
-  const E = mk(`http://127.0.0.1:${PE}`);
+  const E = mk(hubE.base);
   await E.post("/policy", { autonomy: { alpha: 3 } });
   await E.post("/register", { session: "host:alpha", project: "alpha" });
   await E.post("/register", { session: "codex:alpha", project: "alpha" });
@@ -133,13 +117,12 @@ try {
   ok((gateEv.events ?? []).some(e => e.type === "verify.gate.opened"),
      "verify.gate.opened event logged");
 } catch (e) { fail++; console.log(`  ✗ level 3 gate: ${e.message}`); }
-finally { hubE.kill(); }
+finally { await hubE.stop(); }
 
 // ── POST /overseer/narrate marks event narrated ────────────────────────────────────────────────
-const PF = 47936, hubF = spawnHub(PF);
-await sleep(1500);
+const hubF = await spawnHub();
 try {
-  const F = mk(`http://127.0.0.1:${PF}`);
+  const F = mk(hubF.base);
   await F.post("/policy", { autonomy: { alpha: 2 } });
   await F.post("/register", { session: "host:alpha", project: "alpha" });
   await F.post("/register", { session: "codex:alpha", project: "alpha" });
@@ -156,23 +139,22 @@ try {
        "event marked narrated=true after POST /overseer/narrate");
   }
 } catch (e) { fail++; console.log(`  ✗ narrate: ${e.message}`); }
-finally { hubF.kill(); }
+finally { await hubF.stop(); }
 
 // ── EPISODES, not a metronome (regression 2026-08-12) ──────────────────────────────────────────
 // A collision is a STATE. The old code cleared its dedup map on a timer, so a standing condition
 // re-fired every window forever — 500 events for 4 distinct conditions in 8 days, each one also
 // waking the duty seat for a full turn. A held condition must warn EXACTLY ONCE, and must be able
 // to fire again only after it has genuinely cleared.
-const PG = 47937, hubG = spawnHub(PG, {
+const hubG = await spawnHub({
   RELAY_OVERSEER_TICK_MS: "300", RELAY_OVERSEER_CLEAR_MS: "2500",
   RELAY_OVERSEER_PEER_LIVE_MS: "2500",  // so the condition can actually go away inside a test —
   // but with margin: the original 800ms window was narrower than an event-loop stall on a loaded
   // machine, so a stretched heartbeat FLAPPED the condition and the hub (correctly, per its own
   // contract) opened a fresh episode. "got 2/3/4 warns" tracked machine load exactly (#4854 family).
 });
-await sleep(1500);
 try {
-  const G = mk(`http://127.0.0.1:${PG}`);
+  const G = mk(hubG.base);
   await G.post("/policy", { autonomy: { alpha: 2 } });
   // Keep the condition CONTINUOUSLY true across many ticks by re-registering (fresh heartbeats).
   // Both sessions beat CONCURRENTLY on an interval, not via sequential awaits — one slow HTTP
@@ -200,7 +182,7 @@ try {
   const warns2 = (ev2.events ?? []).filter(e => e.type === "overseer.warn");
   ok(warns2.length === 2, `a recurrence AFTER the condition cleared warns again (got ${warns2.length})`);
 } catch (e) { fail++; console.log(`  ✗ episodes: ${e.message}`); }
-finally { hubG.kill(); }
+finally { await hubG.stop(); }
 
 // ── EPISODE IDENTITY is the condition, not the membership (fixes #5350) ────────────────────────
 // The episode key included the session list, so a seat bouncing in and out of a STANDING collision
@@ -208,12 +190,11 @@ finally { hubG.kill(); }
 // party intros — churn proportional to how often seats come and go, not to how often conditions
 // actually start. The episode must be the CONDITION (project+kind+files): membership volatility
 // holds the existing episode; only a genuine clear-then-recur may warn again.
-const PH = 47938, hubH = spawnHub(PH, {
+const hubH = await spawnHub({
   RELAY_OVERSEER_TICK_MS: "300", RELAY_OVERSEER_CLEAR_MS: "1500", RELAY_OVERSEER_PEER_LIVE_MS: "1500",
 });
-await sleep(1500);
 try {
-  const H = mk(`http://127.0.0.1:${PH}`);
+  const H = mk(hubH.base);
   await H.post("/policy", { autonomy: { alpha: 2 } });
   // The standing pair beats continuously; a THIRD seat flaps in and out of liveness. Old keying:
   // {host,codex} and {host,codex,kimi} are two episodes -> 2 warns. Fixed: one holds throughout.
@@ -253,7 +234,7 @@ try {
   const warns2 = (ev2.events ?? []).filter(e => e.type === "overseer.warn" && e.kind === "same-project-sessions");
   ok(warns2.length === 2, `recurrence after a genuine clear still re-warns (got ${warns2.length})`);
 } catch (e) { fail++; console.log(`  ✗ churn: ${e.message}`); }
-finally { hubH.kill(); }
+finally { await hubH.stop(); }
 
 // ── #5760: a DECLARED CREW is the normal state, not a collision ────────────────────────────────
 // The seats `trantor up` spawned plus the operator's orchestrator are how every project normally
@@ -263,13 +244,11 @@ finally { hubH.kill(); }
 // (crew-runner stamps every /register), "orch" for the project's orchestrator pane. NO local
 // crew-windows.txt is written here: this hub's HOME is a fixture dir on purpose, the same way
 // the production netcup hub has no operator-machine files to read.
-const PI = 47939;
 const dirI = mkdtempSync(join(tmpdir(), "trantor-overseer-crew-"));
 mkdirSync(join(dirI, ".agent-bus"), { recursive: true });
-const hubI = spawnHub(PI, {}, dirI);
-await sleep(1500);
+const hubI = await spawnHub({}, dirI);
 try {
-  const I = mk(`http://127.0.0.1:${PI}`);
+  const I = mk(hubI.base);
   await I.post("/policy", { autonomy: { alpha: 2 } });
   // The declared crew, live and beating: three seats (kind "agent") plus the project's
   // orchestrator (kind "orch") — all of it HUB state, nothing on disk.
@@ -310,7 +289,7 @@ try {
   ok((bySession["codex:alpha"] || 0) <= 1 && (bySession["kimi:alpha"] || 0) <= 1,
      `crew members are introed at most once across the episode (got ${JSON.stringify(bySession)})`);
 } catch (e) { fail++; console.log(`  ✗ crew: ${e.message}`); }
-finally { hubI.kill(); rmSync(dirI, { recursive: true, force: true }); }
+finally { await hubI.stop(); rmSync(dirI, { recursive: true, force: true }); }
 
 // ── #6170: a hub restart must not forget who is crew ──────────────────────────────────────────
 // The bug, twice on 09-03 (08:05 and 08:20): peer kinds lived only in hub memory, so a restart
@@ -321,12 +300,10 @@ finally { hubI.kill(); rmSync(dirI, { recursive: true, force: true }); }
 // normalizer runs on that path too, and it is the one that survived the first fix.
 console.log("\n#6170: peer kinds survive a hub restart");
 {
-  const PK = 47945;
   const dirK = mkdtempSync(join(tmpdir(), "trantor-overseer-kind-"));
-  let hubK = spawnHub(PK, {}, dirK);
-  await sleep(900);
+  let hubK = await spawnHub({}, dirK);
   try {
-    const K = mk(`http://127.0.0.1:${PK}`);
+    const K = mk(hubK.base);
     await K.post("/register", { session: "claude:kk", project: "kk", status: "active", kind: "agent" });
     await K.post("/register", { session: "mac:kk", project: "kk", status: "orchestrating", kind: "orch" });
     await K.post("/register", { session: "sasha@mac", project: "kk", status: "watching" });
@@ -339,16 +316,15 @@ console.log("\n#6170: peer kinds survive a hub restart");
        "kinds are set before the restart (positive control)");
 
     await sleep(1200);                       // let the persist tick write
-    hubK.kill(); await sleep(500);
-    hubK = spawnHub(PK, {}, dirK);           // SAME data dir: this is a restart, not a new hub
-    await sleep(1200);
+    await hubK.stop();
+    hubK = await spawnHub({}, dirK);         // SAME data dir: this is a restart, not a new hub
 
-    const after = (await mk(`http://127.0.0.1:${PK}`).get("/peers")).peers;
+    const after = (await mk(hubK.base).get("/peers")).peers;
     ok(kindOf(after, "claude:kk") === "agent", "#6170: a crew seat is still 'agent' after the restart");
     ok(kindOf(after, "mac:kk") === "orch", "#6170: the orchestrator is still 'orch' after the restart");
     ok(kindOf(after, "sasha@mac") === "", "#6170: a peer that never declared a kind is not given one");
   } catch (e) { fail++; console.log(`  ✗ #6170 restart: ${e.message}`); }
-  finally { hubK.kill(); rmSync(dirK, { recursive: true, force: true }); }
+  finally { await hubK.stop(); rmSync(dirK, { recursive: true, force: true }); }
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);
