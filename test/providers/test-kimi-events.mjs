@@ -10,7 +10,7 @@
 // Isolation: random port, temp HOME/AGENT_BUS_DIR/RELAY_DATA_DIR — never :4477 or real ~/.agent-bus.
 // KIMI_TEST_BRIDGE overrides the bridge path for pre-P1 validation ONLY; default is the real bridge.
 // Package: test-kimi-events.mjs (owned by #4786 only).
-import { spawn, spawnSync, execSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { mkdtempSync, rmSync, existsSync, readdirSync, writeFileSync, mkdirSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, basename, dirname } from "node:path";
@@ -18,6 +18,7 @@ import { fileURLToPath } from "node:url";
 import { setTimeout as sleep } from "node:timers/promises";
 import { randomBytes } from "node:crypto";
 import { drillEnv } from "../drill-env.mjs";
+import { startTestHub } from "../lib/test-hub.mjs";
 
 const ROOT = fileURLToPath(new URL("../..", import.meta.url)).replace(/\/$/, "");
 const BRIDGE = process.env.KIMI_TEST_BRIDGE || join(ROOT, "kimi", "bridge.mjs");
@@ -27,53 +28,17 @@ const ok = (n, c, e = "") => { if (c) { pass++; console.log(`  ✓ ${n}`); } els
 function mDir(pfx) { return mkdtempSync(join(tmpdir(), `${pfx}-${process.pid}-${randomBytes(3).toString("hex")}-`)); }
 let HUB = null;
 
+// The shared helper boots on a FREE port and gates on /health — no lsof discovery needed anymore.
 async function startHub() {
   const dir = mDir("ke-hub");
   mkdirSync(join(dir, ".agent-bus"), { recursive: true });
-  // LISTEN 0, never a fixed or even a picked-random port: parallel suites each spawning hubs
-  // can collide by chance and false-fail a green build. RELAY_PORT=0 → the OS assigns an
-  // ephemeral port, announced on stderr ("[trantor] hub on http://127.0.0.1:<port>"), which
-  // we parse below. Collision-free by construction.
-  const env = {
-    ...drillEnv(),
-    HOME: dir, AGENT_BUS_DIR: join(dir, ".agent-bus"), RELAY_DATA_DIR: dir,
-    RELAY_PORT: "0", RELAY_HOST: "127.0.0.1",
+  return startTestHub({ dir, env: {
+    AGENT_BUS_DIR: join(dir, ".agent-bus"), RELAY_HOST: "127.0.0.1",
     RELAY_AUTH: "enforce", RELAY_ENROLL: "tofu",
     RELAY_ONLINE_MS: "1500", RELAY_PEER_TTL_MS: "3000", RELAY_EVENT_CAP: "300",
-    TRANTOR_NO_UPDATE_CHECK: "1",
-  };
-  delete env.RELAY_URL; delete env.RELAY_SESSION; delete env.RELAY_PROJECT; delete env.RELAY_HOST_ID; delete env.CLAUDE_PROJECT_DIR;
-  const child = spawn(process.execPath, [join(ROOT, "hub.mjs")], { env, stdio: ["ignore", "pipe", "pipe"] });
-  let er = "";
-  child.stderr.on("data", d => { er += d.toString(); });
-  // The hub's own announcement prints the ENV port ("…:0"), not the assigned one (hub.mjs:2304 —
-  // reported; not this card's file). Discover the REAL listening port from the child itself.
-  const portByLsof = () => {
-    try {
-      const out = execSync(`lsof -nP -iTCP -sTCP:LISTEN -a -p ${child.pid} -Fn 2>/dev/null`, { encoding: "utf8", timeout: 3000 });
-      const m = out.match(/n127\.0\.0\.1:(\d+)/) || out.match(/n\*:(\d+)/) || out.match(/n:(\d+)/);
-      return m ? Number(m[1]) : 0;
-    } catch { return 0; }
-  };
-  let port = 0;
-  for (let i = 0; i < 60 && !port; i++) { port = portByLsof(); if (!port) await sleep(150); }
-  if (!port) {
-    try { child.kill(); } catch {}
-    try { rmSync(dir, { recursive: true, force: true }); } catch {}
-    throw new Error(`hub (listen 0) never got a port err=${er.slice(-500)}`);
-  }
-  for (let i = 0; i < 40; i++) {
-    try {
-      const r = await fetch(`http://127.0.0.1:${port}/health`, { signal: AbortSignal.timeout(300) });
-      if (r.ok) return { child, dir, port, base: `http://127.0.0.1:${port}`, err: () => er };
-    } catch {}
-    await sleep(80);
-  }
-  try { child.kill(); } catch {}
-  try { rmSync(dir, { recursive: true, force: true }); } catch {}
-  throw new Error(`hub :${port} no health err=${er.slice(-500)}`);
+  } });
 }
-function stopHub() { if (HUB) { try { HUB.child.kill(); } catch {} try { rmSync(HUB.dir, { recursive: true, force: true }); } catch {} HUB = null; } }
+function stopHub() { if (HUB) { try { HUB.stop(); } catch {} try { rmSync(HUB.dir, { recursive: true, force: true }); } catch {} HUB = null; } }
 
 // Signed hub client for the test's OWN reads/writes (owner identity), per test-identity.mjs.
 const { generate, signRequest, HDR } = await import(join(ROOT, "lib", "identity.mjs"));

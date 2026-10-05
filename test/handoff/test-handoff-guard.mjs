@@ -1,18 +1,15 @@
 // Regression for the hub-side handoff storm guard + stale-hook visibility (the crebral-cortex incident:
 // an old-hook session re-fired a handoff every few minutes — 9 in 49 min — each spawning a window).
-import { spawn } from "node:child_process";
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { drillEnv } from "../drill-env.mjs";
+import { startTestHub } from "../lib/test-hub.mjs";
 
 let fail = 0; const ok = (c, m) => { console.log((c ? "✓" : "✗ FAIL") + " " + m); if (!c) fail++; };
 
 const dir = mkdtempSync(join(tmpdir(), "trantor-hg-"));
-const PORT = 47757;
-const hub = spawn("node", ["hub.mjs"], { env: { ...drillEnv(), RELAY_DATA_DIR: dir, RELAY_PORT: String(PORT), PORT: String(PORT) }, stdio: ["ignore", "ignore", "pipe"] });
-await new Promise(r => setTimeout(r, 800));
-const base = `http://127.0.0.1:${PORT}`;
+const hub = await startTestHub({ dir });
+const base = hub.base;
 const post = (p, b) => fetch(base + p, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(b) }).then(r => r.json());
 const get = (p) => fetch(base + p).then(r => r.json());
 
@@ -42,6 +39,7 @@ const cur = peers.find(p => p.session === "host2:demo");
 ok(old && old.hookVersion === "0.0.1" && old.staleHooks === true, "peer on old hooks flagged staleHooks:true");
 ok(cur && cur.staleHooks === false, "peer on current hooks → staleHooks:false");
 
-hub.kill();
+await hub.stop();
+try { rmSync(dir, { recursive: true, force: true }); } catch {}
 console.log(fail ? `\n${fail} FAILED` : "\nALL PASS");
 process.exit(fail ? 1 : 0);

@@ -7,6 +7,7 @@ import { join } from "node:path";
 import { homedir, tmpdir } from "node:os";
 import { spawnSync } from "node:child_process";
 import { drillEnv } from "../drill-env.mjs";
+import { startTestHub } from "../lib/test-hub.mjs";
 
 let pass = 0, fail = 0;
 const ok = (name, cond) => { console.log(`  ${cond ? "PASS" : "FAIL"}  ${name}`); cond ? pass++ : fail++; };
@@ -133,21 +134,19 @@ ok("RELAY_SESSION opts a home-dir session back in", rh2.status === 0 && !rh2.std
 // A missing import once made every hub read throw inside a swallowed catch, so the hook exited 0
 // with empty context; the closed-port tests above cannot see that class, so: live hub, real read.
 {
-  const { spawn } = await import("node:child_process");
-  const PORT = 47911;
   const hubDir = join(realpathSync(tmpdir()), `trantor-ss-live-${process.pid}`);
   mkdirSync(hubDir, { recursive: true });
-  const hub = spawn("node", ["hub.mjs"], { env: { ...drillEnv(), RELAY_PORT: String(PORT), RELAY_DATA_DIR: hubDir, RELAY_HOST: "127.0.0.1" }, stdio: "ignore" });
+  const hub = await startTestHub({ dir: hubDir, env: { RELAY_HOST: "127.0.0.1" } });
   try {
-    await new Promise(r => setTimeout(r, 900));
+    const PORT_HUB = hub.base;
     const sess = `livetest:${proj}`;
     // a SECOND live session in the same project makes the hook render its peers block — which only
     // happens if jget('/peers') returns real data instead of throwing
-    await fetch(`http://127.0.0.1:${PORT}/register`, { method: "POST", headers: { "content-type": "application/json" },
+    await fetch(`${PORT_HUB}/register`, { method: "POST", headers: { "content-type": "application/json" },
       body: JSON.stringify({ session: `other:${proj}`, project: proj }) });
     const r2 = spawnSync("node", ["hooks/sessionstart.mjs"], {
       input: '{"source":"startup"}', encoding: "utf8", timeout: 15000,
-      env: { ...drillEnv(), CLAUDE_PROJECT_DIR: projDir, RELAY_SESSION: sess, RELAY_URL: `http://127.0.0.1:${PORT}` },
+      env: { ...drillEnv(), CLAUDE_PROJECT_DIR: projDir, RELAY_SESSION: sess, RELAY_URL: PORT_HUB },
     });
     let ctx = "";
     try { ctx = JSON.parse(r2.stdout)?.hookSpecificOutput?.additionalContext || ""; } catch {}
@@ -155,18 +154,18 @@ ok("RELAY_SESSION opts a home-dir session back in", rh2.status === 0 && !rh2.std
     ok("sessionstart live run has no ReferenceError on stderr", !/ReferenceError|is not defined/.test(r2.stderr || ""));
 
     // grants injection: an APPROVED proposal must reach every future session's context
-    const fp = await fetch(`http://127.0.0.1:${PORT}/propose`, { method: "POST", headers: { "content-type": "application/json" },
+    const fp = await fetch(`${PORT_HUB}/propose`, { method: "POST", headers: { "content-type": "application/json" },
       body: JSON.stringify({ session: sess, project: proj, scope: "grant-inject probe", condition: "always in this test", exclusions: "nothing else" }) }).then(r => r.json());
-    await fetch(`http://127.0.0.1:${PORT}/proposal/decide`, { method: "POST", headers: { "content-type": "application/json" },
+    await fetch(`${PORT_HUB}/proposal/decide`, { method: "POST", headers: { "content-type": "application/json" },
       body: JSON.stringify({ id: fp.proposal.id, status: "approved", by: "owner@test" }) });
     const r3 = spawnSync("node", ["hooks/sessionstart.mjs"], {
       input: '{"source":"startup"}', encoding: "utf8", timeout: 15000,
-      env: { ...drillEnv(), CLAUDE_PROJECT_DIR: projDir, RELAY_SESSION: sess, RELAY_URL: `http://127.0.0.1:${PORT}` },
+      env: { ...drillEnv(), CLAUDE_PROJECT_DIR: projDir, RELAY_SESSION: sess, RELAY_URL: PORT_HUB },
     });
     let ctx3 = "";
     try { ctx3 = JSON.parse(r3.stdout)?.hookSpecificOutput?.additionalContext || ""; } catch {}
     ok("an approved GRANT is injected into the next session's context", ctx3.includes("<trantor-grants") && ctx3.includes("grant-inject probe"));
-  } finally { hub.kill(); rmSync(hubDir, { recursive: true, force: true }); }
+  } finally { await hub.stop(); rmSync(hubDir, { recursive: true, force: true }); }
 }
 
 // #6226: the orchestrator-role doctrine must carry the target-project dispatch rule — an
