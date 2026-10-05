@@ -8,10 +8,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { drillEnv, scrubIdentityEnv } from "../drill-env.mjs";
+import { startTestHub } from "../lib/test-hub.mjs";
 
 const ROOT = fileURLToPath(new URL("../..", import.meta.url)).replace(/\/$/, "");
-const PORT = 47941;
-const HUB = `http://127.0.0.1:${PORT}`;
+let HUB = "";                               // set once the hub has booted on its free port
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 let pass = 0, fail = 0;
 const ok = (name, cond, detail = "") => { cond ? pass++ : fail++; console.log(`  ${cond ? "PASS" : "FAIL"}  ${name}${cond || !detail ? "" : ` — ${detail}`}`); };
@@ -29,6 +29,9 @@ const ENV = { HOME: home, AGENT_BUS_DIR: bus, TRANTOR_DEV_ROOT: dev, TRANTOR_NO_
 const env = (extra = {}) => { const e = drillEnv({ ...ENV, ...extra }); delete e.CLAUDE_PROJECT_DIR; return e; };
 const run = (file, args, cwd, extra = {}) => spawnSync(process.execPath, [join(ROOT, file), ...args], { cwd, env: env(extra), encoding: "utf8" });
 spawnSync("git", ["init", "-q", "-b", "main"], { cwd: oldDir });
+
+const hub = await startTestHub({ dir: join(work, "hubdata"), env: { HOME: home, AGENT_BUS_DIR: bus, RELAY_DATA_DIR: join(work, "hubdata"), RELAY_AUTH: "off" } });
+HUB = hub.base;
 // The global default points at the drill hub too, so an unpinned name can never reach a real hub.
 writeFileSync(join(bus, "config.json"), JSON.stringify({ url: HUB, hubs: { "juans-project": HUB } }));
 
@@ -36,11 +39,6 @@ const api = {
   post: (p, b) => fetch(HUB + p, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(b) }).then(r => r.json()),
   get: (p) => fetch(HUB + p).then(r => r.json()),
 };
-const hub = spawn(process.execPath, [join(ROOT, "hub.mjs")], {
-  env: env({ RELAY_DATA_DIR: join(work, "hubdata"), RELAY_PORT: String(PORT), PORT: String(PORT), RELAY_AUTH: "off" }),
-  stdio: ["ignore", "ignore", "pipe"],
-});
-for (let i = 0; i < 40; i++) { try { await api.get("/health"); break; } catch { await sleep(250); } }
 
 // Boot the relay MCP from a directory and return its startup line (registration is done by then).
 function bootMcp(cwd) {
@@ -136,7 +134,7 @@ try {
     ok("and the orphan is gone", !d2.issues.some(i => /orphaned identity: old-name/.test(i.message)));
   }
 } finally {
-  try { hub.kill("SIGKILL"); } catch {}
+  try { await hub.stop(); } catch {}
   rmSync(work, { recursive: true, force: true });
 }
 console.log(`\n${pass} passed, ${fail} failed`);

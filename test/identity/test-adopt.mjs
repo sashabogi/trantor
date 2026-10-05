@@ -10,27 +10,17 @@
 //      their own counters must never collide again after a merge
 // Plus the peer identity fields: /register carries llm+model, /peers returns them — WHO is
 // working and on WHAT model is now a bus fact, not a guess.
-import { spawn } from "node:child_process";
 import { mkdtempSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, dirname } from "node:path";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { drillEnv } from "../drill-env.mjs";
+import { startTestHub } from "../lib/test-hub.mjs";
 
 const ROOT = fileURLToPath(new URL("../..", import.meta.url)).replace(/\/$/, "");
-const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 let pass = 0, fail = 0;
 const ok = (c, name) => { c ? pass++ : fail++; console.log(`  ${c ? "✓" : "✗"} ${name}`); };
 
-function spawnHub(port) {
-  const dir = mkdtempSync(join(tmpdir(), "trantor-adopt-"));
-  mkdirSync(join(dir, ".agent-bus"), { recursive: true });
-  const hub = spawn("node", [join(ROOT, "hub.mjs")], {
-    env: { ...drillEnv(), RELAY_DATA_DIR: dir, HOME: dir, RELAY_PORT: String(port), PORT: String(port), TRANTOR_NO_UPDATE_CHECK: "1", RELAY_AUTH: "off" },
-    stdio: ["ignore", "ignore", "pipe"],
-  });
-  return hub;
-}
+
 const mk = (base) => ({
   post: (p, b) => fetch(base + p, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(b) }).then(r => r.json().then(j => ({ status: r.status, ...j }))),
   get: (p) => fetch(base + p).then(r => r.json()),
@@ -38,10 +28,9 @@ const mk = (base) => ({
 
 console.log("# trantor adopt/import + peer identity tests");
 
-const P = 47931, hub = spawnHub(P);
-await sleep(800);
+const hub = await startTestHub({ env: { RELAY_AUTH: "off" } });
 try {
-  const A = mk(`http://127.0.0.1:${P}`);
+  const A = mk(hub.base);
 
   // the target hub already has a card whose id will collide with an imported one
   const native = await A.post("/task", { project: "resident", title: "native card", by: "host:resident" });
@@ -102,33 +91,24 @@ try {
   const me2 = (peers2.peers ?? []).find(p => p.session === "host:resident");
   ok(me2?.model === "claude-fable-5", "a heartbeat without model does not erase the known model");
 } catch (e) { fail++; console.log(`  ✗ ${e.message}`); }
-finally { hub.kill(); }
+finally { await hub.stop(); }
 
 // ── warn mode NEVER blocks — it annotates ─────────────────────────────────────────────────────────
 // The local-hub incident: a restarted hub 401'd signed requests from a not-yet-enrolled identity
 // while UNSIGNED requests passed — warn mode punished exactly the clients doing the right thing.
-const PW = 47932, hubW = spawnHub(PW);
-hubW.spawnargs && null;
-await sleep(800);
 try {
-  // spawnHub forces RELAY_AUTH off; override with a dedicated warn hub
-  hubW.kill();
   const dir2 = mkdtempSync(join(tmpdir(), "trantor-warn-"));
   mkdirSync(join(dir2, ".agent-bus"), { recursive: true });
-  const hub2 = spawn("node", [join(ROOT, "hub.mjs")], {
-    env: { ...drillEnv(), RELAY_DATA_DIR: dir2, HOME: dir2, RELAY_PORT: String(PW), PORT: String(PW), TRANTOR_NO_UPDATE_CHECK: "1", RELAY_AUTH: "warn" },
-    stdio: ["ignore", "ignore", "pipe"],
-  });
-  await sleep(800);
+  const hub2 = await startTestHub({ env: { RELAY_AUTH: "warn" } });
   const { loadOrCreate, signRequest } = await import(join(ROOT, "lib/identity.mjs"));
   process.env.AGENT_BUS_DIR = join(dir2, ".agent-bus");
   const id = loadOrCreate("stranger@test", "human");
   const sig = signRequest(id, { method: "GET", path: "/tasks" });
-  const r = await fetch(`http://127.0.0.1:${PW}/tasks`, { headers: sig });
+  const r = await fetch(`${hub2.base}/tasks`, { headers: sig });
   ok(r.status === 200, "warn mode: a SIGNED request from an unknown identity passes (annotated, not blocked)");
-  const r2 = await fetch(`http://127.0.0.1:${PW}/tasks`);
+  const r2 = await fetch(`${hub2.base}/tasks`);
   ok(r2.status === 200, "warn mode: unsigned still passes");
-  hub2.kill();
+  await hub2.stop();
 } catch (e) { fail++; console.log(`  ✗ warn mode: ${e.message}`); }
 
 console.log(`\n${pass} passed, ${fail} failed`);

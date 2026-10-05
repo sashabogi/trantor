@@ -3,7 +3,7 @@
 // Isolated ONLY: random ports, TMP HOME+DATA+KEYS dirs — never :4477 or real ~/.agent-bus.
 // Real Ed25519 sigs via lib/identity.mjs (frozen contract). No stubs to bypass.
 // Package: test-identity.mjs (owned by #3920 only).
-import { spawn, execFileSync } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -11,6 +11,7 @@ import { fileURLToPath } from "node:url";
 import { setTimeout as sleep } from "node:timers/promises";
 import { randomBytes, sign as cryptoSign, createPrivateKey } from "node:crypto";
 import { drillEnv } from "../drill-env.mjs";
+import { startTestHub } from "../lib/test-hub.mjs";
 
 const HERE = fileURLToPath(new URL("../..", import.meta.url)).replace(/\/[^/]+$/, "");
 let pass = 0, fail = 0;
@@ -22,48 +23,32 @@ let HUBS = [];
 async function startHub(extraEnv = {}) {
   const dir = mDir();
   mkdirSync(join(dir, ".agent-bus"), { recursive: true });
-  const port = 5000 + Math.floor(Math.random() * 20000);
-  const env = {
-    ...drillEnv(),
-    HOME: dir,
+  const hub = await startTestHub({ dir, env: {
     AGENT_BUS_DIR: join(dir, ".agent-bus"),
-    RELAY_DATA_DIR: dir,
-    RELAY_PORT: String(port),
     RELAY_HOST: "127.0.0.1",
     RELAY_ONLINE_MS: "1500",
     RELAY_PEER_TTL_MS: "3000",
     RELAY_EVENT_CAP: "300",
     ...extraEnv,
-  };
-  delete env.RELAY_URL;
-  const child = spawn(process.execPath, [join(HERE, "hub.mjs")], { env, stdio: ["ignore", "pipe", "pipe"] });
-  let er = ""; child.stderr.on("data", d => { er += d.toString(); });
-  for (let i = 0; i < 90; i++) {
-    try {
-      const r = await fetch(`http://127.0.0.1:${port}/health`, { signal: AbortSignal.timeout(300) });
-      if (r.ok) { const h = { child, dir, port, base: `http://127.0.0.1:${port}`, err: () => er }; HUBS.push(h); return h; }
-    } catch {}
-    await sleep(80);
-  }
-  try { child.kill(); } catch {}
-  try { rmSync(dir, { recursive: true, force: true }); } catch {}
-  throw new Error(`hub :${port} no start err=${er.slice(-500)}`);
+  } });
+  HUBS.push(hub);
+  return hub;
 }
 
 async function startHubExpectFail(extraEnv = {}) {
   const dir = mDir();
-  const port = 5000 + Math.floor(Math.random() * 20000);
-  const env = { ...drillEnv(), HOME: dir, AGENT_BUS_DIR: join(dir, ".agent-bus"), RELAY_DATA_DIR: dir, RELAY_PORT: String(port), ...extraEnv };
-  const child = spawn(process.execPath, [join(HERE, "hub.mjs")], { env, stdio: ["ignore", "pipe", "pipe"] });
-  let er = ""; child.stderr.on("data", d => { er += d; });
-  await sleep(1300);
-  const exited = child.exitCode !== null;
-  try { child.kill(); } catch {}
-  try { rmSync(dir, { recursive: true, force: true }); } catch {}
-  return { exited, err: er, port };
+  try {
+    const hub = await startTestHub({ dir, env: { AGENT_BUS_DIR: join(dir, ".agent-bus"), ...extraEnv } });
+    try { await hub.stop(); } catch {}
+    try { rmSync(dir, { recursive: true, force: true }); } catch {}
+    return { exited: false, err: "hub booted but was expected to refuse" };
+  } catch (e) {
+    try { rmSync(dir, { recursive: true, force: true }); } catch {}
+    return { exited: true, err: String(e?.message || e) };
+  }
 }
-function stopOne(h) { try { h.child.kill(); } catch {} try { rmSync(h.dir, { recursive: true, force: true }); } catch {} HUBS = HUBS.filter(x => x !== h); }
-function stopAll() { for (const h of HUBS) { try { h.child.kill(); } catch {} try { rmSync(h.dir, { recursive: true, force: true }); } catch {} } HUBS = []; }
+function stopOne(h) { try { h.stop(); } catch {} try { rmSync(h.dir, { recursive: true, force: true }); } catch {} HUBS = HUBS.filter(x => x !== h); }
+function stopAll() { for (const h of [...HUBS]) stopOne(h); }
 async function waitFor(check, timeoutMs = 5000) {
   const until = Date.now() + timeoutMs;
   while (Date.now() < until) {

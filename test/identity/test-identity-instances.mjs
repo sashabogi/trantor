@@ -2,16 +2,13 @@
 // trantor — session-instance subkeys acceptance (docs/INSTANCE-KEYS-CONTRACT.md).
 // Isolated ONLY: random ports, TMP HOME+DATA+KEYS dirs — never :4477 or real ~/.agent-bus.
 // Real Ed25519 via lib/identity.mjs; the hub under RELAY_AUTH=enforce is the system under test.
-import { spawn } from "node:child_process";
 import { mkdtempSync, rmSync, mkdirSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { fileURLToPath } from "node:url";
 import { setTimeout as sleep } from "node:timers/promises";
 import { randomBytes } from "node:crypto";
-import { drillEnv } from "../drill-env.mjs";
+import { startTestHub } from "../lib/test-hub.mjs";
 
-const HERE = fileURLToPath(new URL("../..", import.meta.url)).replace(/\/[^/]+$/, "");
 let pass = 0, fail = 0;
 const ok = (n, c, e = "") => { if (c) { pass++; console.log(`  ✓ ${n}`); } else { fail++; console.log(`  ✗ ${n}${e ? " — " + e : ""}`); } };
 
@@ -20,25 +17,13 @@ let HUBS = [];
 async function startHub(extraEnv = {}) {
   const dir = mDir();
   mkdirSync(join(dir, ".agent-bus"), { recursive: true });
-  const port = 5000 + Math.floor(Math.random() * 20000);
-  const env = {
-    ...drillEnv(), HOME: dir, AGENT_BUS_DIR: join(dir, ".agent-bus"), RELAY_DATA_DIR: dir,
-    RELAY_PORT: String(port), RELAY_HOST: "127.0.0.1", RELAY_ONLINE_MS: "1500", ...extraEnv,
-  };
-  delete env.RELAY_URL;
-  const child = spawn(process.execPath, [join(HERE, "hub.mjs")], { env, stdio: ["ignore", "pipe", "pipe"] });
-  let er = ""; child.stderr.on("data", d => { er += d.toString(); });
-  for (let i = 0; i < 90; i++) {
-    try {
-      const r = await fetch(`http://127.0.0.1:${port}/health`, { signal: AbortSignal.timeout(300) });
-      if (r.ok) { const h = { child, dir, port, base: `http://127.0.0.1:${port}` }; HUBS.push(h); return h; }
-    } catch {}
-    await sleep(80);
-  }
-  try { child.kill(); } catch {}
-  throw new Error(`hub :${port} no start err=${er.slice(-400)}`);
+  const hub = await startTestHub({ dir, env: {
+    AGENT_BUS_DIR: join(dir, ".agent-bus"), RELAY_HOST: "127.0.0.1", RELAY_ONLINE_MS: "1500", ...extraEnv,
+  } });
+  HUBS.push(hub);
+  return hub;
 }
-function stopAll() { for (const h of HUBS) { try { h.child.kill(); } catch {} try { rmSync(h.dir, { recursive: true, force: true }); } catch {} } HUBS = []; }
+function stopAll() { for (const h of [...HUBS]) { try { h.stop(); } catch {} try { rmSync(h.dir, { recursive: true, force: true }); } catch {} } HUBS = []; }
 
 const {
   generate, signRequest, loadOrCreate, loadOrCreateInstance, instanceHeaders,
