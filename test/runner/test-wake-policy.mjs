@@ -11,7 +11,7 @@
 import { drillEnv } from "../drill-env.mjs";
 import { startTestHub } from "../lib/test-hub.mjs";
 import { createWakeHarness } from "../lib/wake-mock.mjs";
-import { cardRef, cardRefs, assignedCardRef, wakeCard, carriesWork, parseTurnTokens, parseResetAt, quotaSpent, reasonWithBalances, quotaResetAt, isLinkedProject, senderProjectOf, stateSkipReason, isMessageCardTitle, OPEN_CARD_STATUSES } from "../../lib/turn-policy.mjs";
+import { cardRef, cardRefs, assignedCardRef, wakeCard, servedContractCard, carriesWork, parseTurnTokens, parseResetAt, quotaSpent, reasonWithBalances, quotaResetAt, isLinkedProject, senderProjectOf, stateSkipReason, isMessageCardTitle, OPEN_CARD_STATUSES } from "../../lib/turn-policy.mjs";
 
 let pass = 0, fail = 0;
 const ok = (name, cond, extra) => { console.log(`  ${cond ? "PASS" : "FAIL"}  ${name}${cond || !extra ? "" : `\n          ${extra}`}`); cond ? pass++ : fail++; };
@@ -84,6 +84,43 @@ console.log("\n## the rules");
   ok("#7061: a wake citing no card at all still binds to nothing",
     wakeCard([{ id: 1, to: "claude:t", text: "resume where you left off" }], { session: "claude:t" }) === 0);
   ok("#7061: an empty batch binds to nothing", wakeCard([], { session: "claude:t" }) === 0);
+
+  // ---- #10824: the contract message BEING SERVED decides, never earlier batch text ---------------
+  console.log("\n## #10824: the served contract names the card");
+  const scc = (msgs) => servedContractCard(msgs, { session: "claude:t" });
+  // The live ibkr shape: contract A (#X) still owed behind a no-delivery retry, then contract B
+  // arrives naming only #Y. The row must say #Y — A's assignment must not reach across the queue.
+  ok("#10824: a newer contract citing its own card beats an older contract's assignment",
+    scc([
+      { id: 4, to: "claude:t", text: "contract: work card #10173, run the gate" },
+      { id: 5, to: "claude:t", text: "#10809 is the next one — the agent Approve prefill" },
+    ]) === 10809, `got ${scc([{ id: 4, to: "claude:t", text: "contract: work card #10173, run the gate" }, { id: 5, to: "claude:t", text: "#10809 is the next one — the agent Approve prefill" }])}`);
+  ok("#10824: the served message's OWN assignment wins inside it (#7061 kept)",
+    scc([{ id: 1, to: "claude:t", text: "#7037 is merged as a01f629 and pushed. YOUR CARD: #6983, fixes 2 and 3." }]) === 6983);
+  ok("#10824: a hub-stamped card field on the served message wins outright",
+    scc([{ id: 1, to: "claude:t", text: "no ids in here at all", card: 7001 }]) === 7001);
+  ok("#10824: a served note citing NOTHING defers to the contract still queued with it",
+    scc([
+      { id: 4, to: "claude:t", text: "contract: work card #10173, run the gate" },
+      { id: 5, to: "claude:t", text: "quick heads-up, nothing carded" },
+    ]) === 10173, `got ${scc([{ id: 4, to: "claude:t", text: "contract: work card #10173, run the gate" }, { id: 5, to: "claude:t", text: "quick heads-up, nothing carded" }])}`);
+  ok("#10824: a batch with NO card anywhere binds nothing (and the runner must label it 0, not inherit)",
+    scc([
+      { id: 4, to: "claude:t", text: "resume where you left off" },
+      { id: 5, to: "claude:t", text: "also, the hub was restarted" },
+    ]) === 0);
+  // The deference: chatter that re-cites the standing contract defers to it — the pinned #7061
+  // drill's note ("#7041 is merged … carry on with #7040") must not steal the binding.
+  ok("#10824: a newest message that re-cites an older assignment is commentary, and defers",
+    scc([
+      { id: 1, to: "claude:t", text: "contract: card #7040, build the thing" },
+      { id: 2, to: "claude:t", text: "note: #7041 is merged, unrelated to yours — carry on with #7040" },
+    ]) === 7040, `got ${scc([{ id: 1, to: "claude:t", text: "contract: card #7040, build the thing" }, { id: 2, to: "claude:t", text: "note: #7041 is merged, unrelated to yours — carry on with #7040" }])}`);
+  ok("#10824: a mention-only batch (no direct messages) keeps the #7061 reading",
+    scc([
+      { id: 3, to: "all", text: "@claude take #7099 when free" },
+    ]) === 7099);
+  ok("#10824: an empty batch binds nothing", scc([]) === 0);
 
   // #7763/#7765: a MESSAGE-CARD is a transcript of a bus message parked on the board, never work.
   // The runner checks the board before binding, so the predicate lives where the other rules do.

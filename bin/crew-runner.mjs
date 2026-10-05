@@ -22,7 +22,7 @@ import {
 } from "../lib/classify-failure.mjs";
 import { capWake, capBcast, pickLessons, composePrompt, contractBase, baseLine } from "./crew-payload.mjs";
 import {
-  cardRefs, wakeCard, carriesWork, parseTurnTokens, parseResetAt, reasonWithBalances, quotaResetAt, PARKING_REASONS,
+  cardRefs, servedContractCard, carriesWork, parseTurnTokens, parseResetAt, reasonWithBalances, quotaResetAt, PARKING_REASONS,
   senderProjectOf, isLinkedProject, stateSkipReason, isMessageCardTitle, OPEN_CARD_STATUSES,
   CUT_CHAIN_PARK_MIN, cutChainEvidence, isBoundedPark,
 } from "../lib/turn-policy.mjs";
@@ -1288,7 +1288,9 @@ async function newestOwnCard(session, why) {
   } catch { return 0; }   // board unreadable: no binding beats a guessed one
 }
 async function resolveWakeCard(messages, { session }) {
-  const cited = wakeCard(messages, { session });
+  // #10824: the contract message BEING SERVED names the card — the newest direct message's own
+  // binding — never a contract still queued behind it and never the session's previous card.
+  const cited = servedContractCard(messages, { session });
   if (!(cited > 0)) return 0;
   try {
     const { task } = await api(`/card?project=${encodeURIComponent(PROJ)}&id=${cited}`);
@@ -1597,12 +1599,13 @@ async function resolveWakeCard(messages, { session }) {
     // #6134: ONE SESSION PER CARD; a different card starts a fresh CLI session and the seat is told.
     // #7061: bound by SHAPE, not position, so an order opening with what shipped binds the right card.
     // #7763: a message-card (or phantom) citation never binds — the seat's own newest card does.
-    const card = await resolveWakeCard(wakeForTurn, { session: SESSION });
+    // #10824: the binding is the SERVED contract's; #7756's answer-released turn keeps the held card.
+    const card = resumedAfterAsk ? sessionCard : await resolveWakeCard(wakeForTurn, { session: SESSION });
     // #7754: a `base:` sha this worktree cannot resolve is never worked from origin/main — the card
     // goes to blocked, the assigner is told, and no model turn is spent. The check keeps the id the
-    // wake cites in its text: #7763's rebinding covers confirmed message-card ids only, never a
+    // served contract cites: #7763's rebinding covers confirmed message-card ids only, never a
     // card cited in the text, so the unresolvable-base branch blocks the cited card.
-    const baseCard = card || wakeCard(wakeForTurn, { session: SESSION });
+    const baseCard = card || servedContractCard(wakeForTurn, { session: SESSION });
     const base = contractBase(wakeForTurn) || localMainHead();
     if (base && baseCard && !resolvesHere(base)) {
       const text = `cannot resolve base ${base} in ${TURN_DIR} (git cat-file -e failed) — #${baseCard} moved to blocked; push or fetch that sha, or name one this worktree can reach`;
@@ -1616,13 +1619,13 @@ async function resolveWakeCard(messages, { session }) {
       return;
     }
     const baseText = base ? `\n${baseLine(base)}\n` : "";
-    // #6289: the card the SESSION belongs to reads the citation when the rebinding binds nothing —
-    // #7763 decides WHICH card work binds to, never the turn shape. #7756: the turn an ask's
-    // ANSWER releases is the exception — it resumes the session the held contract already owns,
-    // whatever card the batch cites; only a new contract for a different card opens fresh.
+    // #6289: the session SHAPE (fresh vs resume) reads the served contract's raw citation — a wake
+    // whose card the board lacks still opens fresh, never a bare resume of the kickoff's CLI.
+    // #10824: the LABEL is the binding, 0 included — a wake that binds nothing labels its turn 0
+    // and never inherits the previous contract's card (#10197's judge then reads the right card).
     const sessionCardForTurn = card || baseCard;
     const fresh = !resumedAfterAsk && sessionCardForTurn > 0 && sessionCardForTurn !== sessionCard;
-    if (card) sessionCard = card;
+    sessionCard = card;
     const cited = [...new Set(wakeForTurn.flatMap(m => cardRefs(m.text)))];
     const freshText = fresh
       ? `\n(FRESH SESSION for card #${card} — you are not the session that worked earlier cards and you remember none of them. Read your card first: relay_board with card:${card}.)\n`
