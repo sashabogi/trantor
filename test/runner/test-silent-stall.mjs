@@ -74,7 +74,7 @@ const HUB = `http://127.0.0.1:${hub.address().port}`;
 // silent: banner then nothing. busy: a line past the 200-byte liveness bar every 300ms. The
 // CLI's turn LOG lives in a SIBLING mkdtemp, outside the watched work dir — a write at turn
 // start counts as liveness until window+SLACK and races the marker to the box.
-async function drill(mode, { waitMs = 45000, untilPark = true } = {}) {
+async function drill(mode, { waitMs = 45000, untilPark = true, untilFollowUp = false } = {}) {
   sends.length = 0; eventSeq = 0; handed = 0;
   const root = mkdtempSync(join(tmpdir(), "tt-stall-"));
   const scratch = mkdtempSync(join(tmpdir(), "tt-stall-scratch-"));
@@ -115,8 +115,15 @@ ${body}
       CREW_MODEL: "qwen3/deepseek-v4-pro", CREW_KICKOFF: "say hi and end your turn" },
   });
   const start = Date.now();
+  const rowsNow = () => (existsSync(JSONL)
+    ? read(JSONL).split("\n").filter(Boolean).map(l => { try { return JSON.parse(l); } catch { return {}; } })
+    : []);
   if (untilPark) {
     while (!sends.some(s => /PARKED/.test(s.text || "")) && Date.now() - start < waitMs) await sleep(200);
+  } else if (untilFollowUp) {
+    // #9832: the old fixed sleep(16000) assumed box(12s)+setup+ledger flush fit in 16s — under a
+    // loaded host the follow-up row lands after the kill and the drill read 0. Await the row.
+    while (!rowsNow().some(x => x.trigger === "time-box follow-up") && Date.now() - start < waitMs) await sleep(200);
   } else {
     await sleep(waitMs);
   }
@@ -165,7 +172,7 @@ console.log("\n## a silent turn ends at the stall window");
 // ---- drill 2: a BUSY turn runs to the box and is cut, exactly as before ------------------------
 console.log("\n## a busy turn is still a box cut");
 {
-  const r = await drill("busy", { waitMs: 16000, untilPark: false });
+  const r = await drill("busy", { untilPark: false, untilFollowUp: true });
   const cutRow = r.rows.find(x => x.trigger === "direct message" && x.cut === true);
   ok("#7752: the busy contract turn is cut at the box, outcome 'cut', never 'stalled'",
     cutRow && cutRow.outcome === "cut" && !cutRow.stalled,

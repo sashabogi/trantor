@@ -329,7 +329,9 @@ try {
         execFileSync(process.execPath, [join(HERE, h)], {
           input: JSON.stringify({ source: "startup", tool_name: "Bash", cwd: HERE }),
           env: { ...drillEnv(), RELAY_URL: `http://127.0.0.1:${9000 + Math.floor(Math.random() * 2000)}`, RELAY_SESSION: "test:proj", HOME: mDir() },
-          timeout: 4000,
+          // #9832: 4s killed sessionstart under a loaded host mid-startup (status null, SIGTERM) —
+          // the assertion is exit 0, not fast; the bound is anti-hang, so give it real headroom.
+          timeout: 15000,
           encoding: "utf8",
         });
         ok(`${h} exit 0 hub-down`, true);
