@@ -29,9 +29,8 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 console.log("# /tasks slim projection (#6983)");
 
 const dir = mkdtempSync(join(tmpdir(), "trantor-slim-"));
-const port = 47899;
-const base = `http://127.0.0.1:${port}`;
 mkdirSync(dir, { recursive: true });
+let base = "";
 
 // A board shaped like the real one: many cards, each carrying the three heavy fields. The note text
 // is what actually blew the budget, so the fixture makes it the dominant cost here too.
@@ -56,7 +55,8 @@ for (let id = 1; id <= 200; id++) {
 }
 writeFileSync(join(dir, "bus.json"), JSON.stringify({ tasks, taskSeq: 200, events: [] }));
 
-const hub = await startTestHub({ port, dir, env: { RELAY_ONLINE_MS: "999999" } });
+const hub = await startTestHub({ dir, env: { RELAY_ONLINE_MS: "999999" } });
+base = hub.base;
 const get = (p) => fetch(base + p).then(async r => ({ status: r.status, body: await r.text() }));
 
 try {

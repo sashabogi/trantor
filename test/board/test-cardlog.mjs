@@ -36,8 +36,7 @@ function client(base) {
 console.log("# card log contract");
 
 const dir = mkdtempSync(join(tmpdir(), "trantor-cardlog-"));
-const port = 47874;
-const base = `http://127.0.0.1:${port}`;
+let base = "";
 mkdirSync(dir, { recursive: true });
 
 const legacyTs = Date.now() - (20 * DAY);
@@ -57,7 +56,8 @@ writeFileSync(join(dir, "bus.json"), JSON.stringify({
   events: [],
 }));
 
-let hub = await startTestHub({ port, dir, env: { RELAY_REAP_INTERVAL_MS: "120", RELAY_TODO_STALE_MS: "250", RELAY_ONLINE_MS: "999999" } });
+let hub = await startTestHub({ dir, env: { RELAY_REAP_INTERVAL_MS: "120", RELAY_TODO_STALE_MS: "250", RELAY_ONLINE_MS: "999999" } });
+base = hub.base;
 try {
   const A = client(base);
 
@@ -92,7 +92,8 @@ try {
   await sleep(1400);
   await stopHub(hub);
 
-  hub = await startTestHub({ port, dir, env: { RELAY_REAP_INTERVAL_MS: "120", RELAY_TODO_STALE_MS: "250", RELAY_ONLINE_MS: "999999" } });
+  hub = await startTestHub({ dir, env: { RELAY_REAP_INTERVAL_MS: "120", RELAY_TODO_STALE_MS: "250", RELAY_ONLINE_MS: "999999" } });
+  base = hub.base;   // restart lands on a NEW free port
   const B = client(base);
   const roundTrip = (await B.get(`/card?id=${id}`)).task;
   ok("restart round-trip preserves card log", roundTrip?.log?.length === 40 && roundTrip.log.at(-1)?.text === "bulk 44", JSON.stringify(roundTrip?.log));

@@ -26,11 +26,10 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
 console.log("# trantor outstanding-contract drills");
 
-const PORT = 47931;
 const dir = mkdtempSync(join(tmpdir(), "trantor-contracts-"));
 mkdirSync(join(dir, ".agent-bus"), { recursive: true });
-const hub = await startTestHub({ port: PORT, dir });
-const BASE = `http://127.0.0.1:${PORT}`;
+const hub = await startTestHub({ dir });
+const BASE = hub.base;
 const post = (p, b) => fetch(BASE + p, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(b) }).then(r => r.json()).catch(e => ({ error: String(e) }));
 const get = (p) => fetch(BASE + p).then(r => r.json()).catch(e => ({ error: String(e) }));
 
@@ -141,18 +140,16 @@ console.log("\nAn outcome is threaded to the contract it names, not merely the o
 // the stop guard then nagged about them at every stop forever. These drills run a SECOND hub with
 // tiny windows and assert the whole lifecycle, including that quiet is never treated as an answer.
 console.log("\nA contract whose assignee dies walks a lifecycle instead of hanging open forever:");
-const PORT2 = 47932;
 const dir2 = mkdtempSync(join(tmpdir(), "trantor-ctrlife-"));
 mkdirSync(join(dir2, ".agent-bus"), { recursive: true });
 const life = {
-  RELAY_DATA_DIR: dir2, HOME: dir2, RELAY_PORT: String(PORT2), PORT: String(PORT2),
   TRANTOR_NO_UPDATE_CHECK: "1",
   RELAY_ONLINE_MS: "600",                  // offline after 0.6s quiet
   RELAY_CONTRACT_ABANDON_MS: "2500",       // abandoned after 2.5s quiet
   RELAY_REAP_INTERVAL_MS: "300",           // sweep fast
 };
-let hub2 = await startTestHub({ port: PORT2, env: life });
-const BASE2 = `http://127.0.0.1:${PORT2}`;
+let hub2 = await startTestHub({ dir: dir2, env: life });
+let BASE2 = hub2.base;
 const post2 = (p, b) => fetch(BASE2 + p, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(b) }).then(r => r.json()).catch(e => ({ error: String(e) }));
 const get2 = (p) => fetch(BASE2 + p).then(r => r.json()).catch(e => ({ error: String(e) }));
 const ctr2 = (sess) => get2(`/contracts?session=${encodeURIComponent(sess)}`);
@@ -247,7 +244,8 @@ await post2("/send", { from: DEAD, to: O, project: PROJ2, text: "✅ ortho done 
   const abandonedBefore = reapedIn(before);
   hub2.proc.kill("SIGKILL");
   await sleep(400);
-  hub2 = await startTestHub({ port: PORT2, env: life });
+  hub2 = await startTestHub({ dir: dir2, env: life });
+  BASE2 = hub2.base;                       // restart lands on a NEW free port
   const after = await ctr2(O);
   const abandonedAfter = reapedIn(after);
   ok("a hub restart remembers what it already reaped (no re-announced ghost backlog)",

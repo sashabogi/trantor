@@ -17,12 +17,11 @@ let pass = 0, fail = 0;
 const ok = (name, cond, detail = "") => { if (cond) { pass++; console.log(`  ✓ ${name}`); } else { fail++; console.log(`  ✗ ${name}${detail ? " — " + detail : ""}`); } };
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
-const PORT = 47971;
 const dir = mkdtempSync(join(tmpdir(), "trantor-thread-"));
 mkdirSync(join(dir, ".agent-bus"), { recursive: true });
-const hub = await startTestHub({ port: PORT, dir });
+const hub = await startTestHub({ dir });
+const base = hub.base;
 
-const base = `http://127.0.0.1:${PORT}`;
 const post = (p, b) => fetch(base + p, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(b) }).then(r => r.json());
 const get = (p) => fetch(base + p).then(r => r.json());
 

@@ -22,8 +22,8 @@ const post = (base, path, bodyObj) =>
 
 console.log("# trantor checklist tests");
 const W = mkdtempSync(join(tmpdir(), "trantor-checklist-"));
-const PORT = 47871, BASE = `http://127.0.0.1:${PORT}`;
-let hub = await startTestHub({ port: PORT, dir: W });
+let hub = await startTestHub({ dir: W });
+let BASE = hub.base;
 try {
 
   // create with plain-string items — they become {text, done:false}
@@ -58,7 +58,8 @@ try {
   await post(BASE, "/task/checklist-toggle", { id: t.id, index: 0, done: true });
   await sleep(1200);   // let the dirty flush land before the restart
   await stopHub(hub);
-  hub = await startTestHub({ port: PORT, dir: W });
+  hub = await startTestHub({ dir: W });
+  BASE = hub.base;
   const tasks = (await (await fetch(`${BASE}/tasks?project=clproj`)).json()).tasks || [];
   const back = tasks.find(x => x.id === t.id);
   ok("checklist survives a hub restart, ticks included", back?.checklist?.length === 1 && back.checklist[0].done === true,

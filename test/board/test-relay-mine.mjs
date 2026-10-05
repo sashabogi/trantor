@@ -20,9 +20,9 @@ console.log("# trantor relay_board mine drill");
 
 const W = mkdtempSync(join(tmpdir(), "trantor-mine-"));
 mkdirSync(join(W, ".agent-bus"), { recursive: true });
-const PORT = 47872, HUB = `http://127.0.0.1:${PORT}`;
 const PROJ = "minedriv", SESSION = `miner:${PROJ}`;
-const hub = await startTestHub({ port: PORT, dir: W });
+const hub = await startTestHub({ dir: W });
+const HUB = hub.base;
 
 // the REAL MCP server, as a stdio JSON-RPC peer — spawned per session id, since `mine` reads
 // the calling session out of the server's env.

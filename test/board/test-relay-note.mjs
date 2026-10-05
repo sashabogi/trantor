@@ -21,9 +21,9 @@ console.log("# trantor card-note MCP drill");
 
 const W = mkdtempSync(join(tmpdir(), "trantor-note-"));
 mkdirSync(join(W, ".agent-bus"), { recursive: true });
-const PORT = 47862, HUB = `http://127.0.0.1:${PORT}`;
 const SESSION = "noter:noteproj";
-const hub = await startTestHub({ port: PORT, dir: W });
+const hub = await startTestHub({ dir: W });
+const HUB = hub.base;
 
 // the REAL MCP server, as a stdio JSON-RPC peer
 const mcp = spawn("node", [join(ROOT, "mcp.mjs")], {

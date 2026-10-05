@@ -14,16 +14,16 @@ import { drillEnv } from "../drill-env.mjs";
 import { startTestHub } from "../lib/test-hub.mjs";
 
 const HERE = fileURLToPath(new URL("../..", import.meta.url));
-const PORT = Number(process.env.WAKE_TEST_PORT || 4491);
-const URL_BASE = `http://127.0.0.1:${PORT}`;
 let pass = 0, fail = 0;
 const ok = (name, cond, extra = "") => { if (cond) { pass++; console.log(`  ✓ ${name}`); } else { fail++; console.log(`  ✗ ${name}${extra ? " — " + extra : ""}`); } };
 
 const dir = mkdtempSync(join(tmpdir(), "trantor-wake-"));
 let hub;
 
+let URL_BASE = "";
 async function startHub() {
-  hub = await startTestHub({ port: PORT, dir, env: { RELAY_HOST: "127.0.0.1", RELAY_STATE: join(dir, "bus.json"), AGENT_BUS_DIR: dir } });
+  hub = await startTestHub({ dir, env: { RELAY_HOST: "127.0.0.1", RELAY_STATE: join(dir, "bus.json"), AGENT_BUS_DIR: dir } });
+  URL_BASE = hub.base;
 }
 
 async function post(path, body) {

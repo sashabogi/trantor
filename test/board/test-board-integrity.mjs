@@ -42,10 +42,9 @@ function client(base) {
 console.log("# board integrity (assignee immutability)");
 
 const dir = mkdtempSync(join(tmpdir(), "trantor-board-integrity-"));
-const port = 48060;
-const base = `http://127.0.0.1:${port}`;
 
-let hub = await startTestHub({ port, dir, env: { RELAY_REAP_INTERVAL_MS: "120", RELAY_ONLINE_MS: "999999" } });
+let hub = await startTestHub({ dir, env: { RELAY_REAP_INTERVAL_MS: "120", RELAY_ONLINE_MS: "999999" } });
+const base = hub.base;
 try {
   const A = client(base);
 

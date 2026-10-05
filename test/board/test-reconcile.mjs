@@ -20,7 +20,6 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 const PROJ = "reconproj";
 
 console.log("# trantor reconcile tests");
-const PORT = 47881, base = `http://127.0.0.1:${PORT}`;
 const post = (p, b) => fetch(base + p, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(b) }).then(r => r.json());
 const get = (p) => fetch(base + p).then(r => r.json());
 const cardStatus = async (id) => ((await get(`/tasks?project=${PROJ}`)).tasks.find(t => t.id === id) || {}).status;
@@ -42,7 +41,8 @@ function reconcile(stubVerdicts, extraArgs = []) {
   });
 }
 
-const hub = await startTestHub({ port: PORT, env: { RELAY_REAP_INTERVAL_MS: "999999" } });
+const hub = await startTestHub({ env: { RELAY_REAP_INTERVAL_MS: "999999" } });
+const base = hub.base;
 try {
   // seed: 3 real work cards + an ephemeral cc-subagent card + a session focus card (both must be ignored)
   const c1 = (await post("/task", { project: PROJ, title: "implement the stale-card reaper", status: "doing", assignee: "codex:reconproj", by: "codex:reconproj" })).task.id;

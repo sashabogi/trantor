@@ -17,12 +17,11 @@ const ok = (name, cond, detail = "") => { if (cond) { pass++; console.log(`  ✓
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
 const HOME = mkdtempSync(join(tmpdir(), "trantor-bridge-"));
-const PA = 47961, PB = 47962;
-const hubA = await startTestHub({ port: PA, dir: join(HOME, `hub${PA}`) });
-const hubB = await startTestHub({ port: PB, dir: join(HOME, `hub${PB}`) });
+const hubA = await startTestHub({ dir: join(HOME, "hubA") });
+const hubB = await startTestHub({ dir: join(HOME, "hubB") });
 const errs = () => hubA.stderr + hubB.stderr;
 
-const A = `http://127.0.0.1:${PA}`, B = `http://127.0.0.1:${PB}`;
+const A = hubA.base, B = hubB.base;
 const api = (base) => ({
   post: (p, b) => fetch(base + p, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(b) }).then(r => r.json()),
   get: (p) => fetch(base + p).then(r => r.json()),

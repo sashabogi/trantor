@@ -15,12 +15,8 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 let pass = 0, fail = 0;
 const ok = (c, name) => { c ? pass++ : fail++; console.log(`  ${c ? "✓" : "✗"} ${name}`); };
 
-const P = 47941;
 const dir = mkdtempSync(join(tmpdir(), "trantor-summarize-"));
 mkdirSync(join(dir, ".agent-bus"), { recursive: true });
-// the summarizer's config: one hub (ours), an owner identity it can mint locally
-writeFileSync(join(dir, ".agent-bus", "config.json"),
-  JSON.stringify({ url: `http://127.0.0.1:${P}`, ownerIdentity: "owner@test", hubs: {} }));
 
 // stub scrooge: proves the batch shape (echoes ids it saw), returns canned narratives
 const stub = join(dir, "scrooge-stub");
@@ -48,12 +44,15 @@ async function fetchJson(url, opts) {
   throw last;
 }
 const api = {
-  post: (p, b) => fetchJson(`http://127.0.0.1:${P}${p}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(b) }),
-  get: (p) => fetchJson(`http://127.0.0.1:${P}${p}`),
+  post: (p, b) => fetchJson(`${hub.base}${p}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(b) }),
+  get: (p) => fetchJson(`${hub.base}${p}`),
 };
 
 console.log("# trantor narrative-cards tests");
-const hub = await startTestHub({ port: P, dir, env: { RELAY_AUTH: "off" } });
+const hub = await startTestHub({ dir, env: { RELAY_AUTH: "off" } });
+// the summarizer's config: one hub (ours), an owner identity it can mint locally
+writeFileSync(join(dir, ".agent-bus", "config.json"),
+  JSON.stringify({ url: hub.base, ownerIdentity: "owner@test", hubs: {} }));
 // The boot is gated on /health (inside startTestHub), but the `run()` children resolve the hub
 // from HOME/.agent-bus/config.json (there is no env override), and until the hub writes it they
 // fall back to 127.0.0.1:4477 — the operator's LIVE hub. Wait for the config to name THIS hub
@@ -63,7 +62,7 @@ const hub = await startTestHub({ port: P, dir, env: { RELAY_AUTH: "off" } });
   const cfgPath = join(dir, ".agent-bus", "config.json");
   for (;;) {
     let ready = false;
-    try { ready = JSON.parse(readFileSync(cfgPath, "utf8")).url === `http://127.0.0.1:${P}`; } catch {}
+    try { ready = JSON.parse(readFileSync(cfgPath, "utf8")).url === hub.base; } catch {}
     if (ready) break;
     if (Date.now() - bootStart > 15000) throw new Error("hub config did not name the drill hub in 15s");
     await sleep(50);

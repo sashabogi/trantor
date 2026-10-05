@@ -14,8 +14,7 @@ import { drillEnv } from "../drill-env.mjs";
 
 const ROOT = dirname(dirname(dirname(fileURLToPath(import.meta.url))));
 const work = mkdtempSync(join(tmpdir(), "trantor-duty-reach-"));
-const port = 10000 + Math.floor(Math.random() * 40000);
-const base = `http://127.0.0.1:${port}`;
+
 let pass = 0;
 let fail = 0;
 const ok = (name, condition, detail = "") => {
@@ -24,13 +23,14 @@ const ok = (name, condition, detail = "") => {
 };
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 const hub = await startTestHub({
-  port,
+  dir: work,
   env: {
-    ...drillEnv(), HOME: work, AGENT_BUS_DIR: join(work, ".agent-bus"), RELAY_DATA_DIR: work,
-    RELAY_PORT: String(port), RELAY_HOST: "127.0.0.1", RELAY_AUTH: "enforce", RELAY_ENROLL: "tofu",
+    AGENT_BUS_DIR: join(work, ".agent-bus"),
+    RELAY_HOST: "127.0.0.1", RELAY_AUTH: "enforce", RELAY_ENROLL: "tofu",
     RELAY_OVERSEER_TICK_MS: "600000",
   },
 });
+const base = hub.base;
 
 async function request(identity, method, path, payload) {
   const body = payload === undefined ? undefined : JSON.stringify(payload);

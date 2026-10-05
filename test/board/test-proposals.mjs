@@ -30,11 +30,10 @@ const BOUND = (n) => ({ scope: `push to main in repo ${n}`, condition: "only aft
 console.log("# trantor agent-proposed permissions tests");
 
 // ── Hub A (warn mode): bound rule, cap, withdraw, denial memory, events, restart survival ────────
-const PA = 47941;
-let hubA = await startTestHub({ port: PA });
+let hubA = await startTestHub();
 const dirA = hubA.dir;
 try {
-  const A = mk(`http://127.0.0.1:${PA}`);
+  let A = mk(hubA.base);
   const S = "codex:govtest";
 
   console.log("\n[1] the bound is mandatory:");
@@ -119,7 +118,8 @@ try {
   }
   hubA.proc.kill();
   for (let i = 0; hubA.proc.exitCode === null && i < 100; i++) await sleep(50);   // gone before respawn
-  hubA = await startTestHub({ port: PA, dir: dirA });
+  hubA = await startTestHub({ dir: dirA });
+  A = mk(hubA.base);                       // restart lands on a NEW free port
   const re2 = await A.post("/propose", { session: S, project: "govtest", ...BOUND(1) });
   ok("denied memory survives restart -> 409", re2.status === 409 && re2.note === "main is protected; use PRs", JSON.stringify(re2));
   const afterRestart = await A.get("/proposals?project=govtest");
@@ -157,10 +157,9 @@ try {
 }
 
 // ── Hub B (enforce mode): deciding is the OWNER's act — agents cannot approve themselves ─────────
-const PB = 47942;
-const hubB = await startTestHub({ port: PB, env: { RELAY_AUTH: "enforce", RELAY_ENROLL: "tofu" } });
+const hubB = await startTestHub({ env: { RELAY_AUTH: "enforce", RELAY_ENROLL: "tofu" } });
 try {
-  const base = `http://127.0.0.1:${PB}`;
+  const base = hubB.base;
   const { generate, signRequest } = await import("../../lib/identity.mjs");
   const signHdr = (id, method, path, body) => signRequest({ pubkey: id.pubkey, privkey: id.privkey }, { method, path, body });
   const sFetch = async (id, method, path, bodyObj) => {

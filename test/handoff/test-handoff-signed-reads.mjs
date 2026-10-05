@@ -21,15 +21,14 @@ const ok = (c, name) => { c ? pass++ : fail++; console.log(`  ${c ? "✓" : "✗
 
 const work = mkdtempSync(join(tmpdir(), "trantor-7037-"));
 mkdirSync(join(work, ".agent-bus"), { recursive: true });
-const PORT = 47966;
 const busDir = join(work, ".agent-bus");
 const hubEnv = {
   ...drillEnv(), HOME: work, AGENT_BUS_DIR: busDir, RELAY_DATA_DIR: work,
-  RELAY_PORT: String(PORT), PORT: String(PORT), RELAY_HOST: "127.0.0.1",
+  RELAY_HOST: "127.0.0.1",
   RELAY_AUTH: "enforce", RELAY_ENROLL: "tofu", RELAY_OVERSEER_TICK_MS: "600000",
   TRANTOR_NO_UPDATE_CHECK: "1",
 };
-const hub = await startTestHub({ port: PORT, env: hubEnv });
+const hub = await startTestHub({ env: hubEnv });
 
 console.log("# handoff signed hub reads (#7037)");
 
@@ -38,13 +37,13 @@ console.log("# handoff signed hub reads (#7037)");
 function inChild(src, extraEnv = {}) {
   return execFileSync(process.execPath, ["--input-type=module", "-e", src], {
     encoding: "utf8",
-    env: { ...hubEnv, RELAY_URL: `http://127.0.0.1:${PORT}`, TRANTOR_CARD: "", ...extraEnv },
+    env: { ...hubEnv, RELAY_URL: hub.base, TRANTOR_CARD: "", ...extraEnv },
     cwd: ROOT,
   });
 }
 
 try {
-  const base = `http://127.0.0.1:${PORT}`;
+  const base = hub.base;
 
   // An unsigned write is refused under enforce, so seed the board with a signed one — the same
   // path the CLI uses. This also proves the fixture hub really is enforcing.

@@ -31,11 +31,10 @@ const ok = (n, c, e = "") => { if (c) { pass++; console.log(`  ✓ ${n}`); } els
 
 const dir = mkdtempSync(join(tmpdir(), `tds-${process.pid}-${randomBytes(3).toString("hex")}-`));
 mkdirSync(join(dir, ".agent-bus"), { recursive: true });
-const port = 5000 + Math.floor(Math.random() * 20000);
 const DUTY = "claude:trantor-duty";
 const env = {
   ...drillEnv(), HOME: dir, AGENT_BUS_DIR: join(dir, ".agent-bus"), RELAY_DATA_DIR: dir,
-  RELAY_PORT: String(port), RELAY_HOST: "127.0.0.1", RELAY_AUTH: "off",
+  RELAY_HOST: "127.0.0.1", RELAY_AUTH: "off",
   RELAY_DUTY_SESSION: DUTY,
   RELAY_DUTY_UNDELIVERED_MS: "600",
   // Generous, so duty stays comfortably BEATING for the whole run: the point is that a healthy
@@ -48,8 +47,8 @@ const env = {
   RELAY_DUTY_STUCK_MS: "1500",
 };
 delete env.RELAY_URL;
-const hub = await startTestHub({ port, dir, env });
-const B = `http://127.0.0.1:${port}`;
+const hub = await startTestHub({ dir, env });
+const B = hub.base;
 const j = (r) => r.json();
 const post = (p, b) => fetch(B + p, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(b) }).then(j);
 const get = (p) => fetch(B + p).then(j);

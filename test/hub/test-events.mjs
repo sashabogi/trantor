@@ -129,7 +129,6 @@ try {
 ok("hub A clean stderr", !/TypeError|ReferenceError|not defined/.test(hubA.stderr), hubA.stderr.slice(0, 300));
 
 // ── Hub B: on-disk migration — an OLD state file (cardEvents, no events) must load ───────────────
-const PB = 47902;
 const legacy = {
   messages: [], peers: {}, seq: 0, taskSeq: 2, projectMeta: {}, lessons: [],
   tasks: [{ id: 1, project: "evtB", title: "legacy card", status: "done", by: "host:evtB", ts: 1, updated: 2, history: [] }],

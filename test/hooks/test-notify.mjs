@@ -19,8 +19,6 @@ import { drillEnv } from "../drill-env.mjs";
 import { startTestHub } from "../lib/test-hub.mjs";
 
 const ROOT = fileURLToPath(new URL("../..", import.meta.url)).replace(/\/$/, "");
-const PORT = 47822;
-const base = `http://127.0.0.1:${PORT}`;
 const dir = mkdtempSync(join(tmpdir(), "trantor-notify-"));
 mkdirSync(join(dir, ".agent-bus"), { recursive: true });
 
@@ -38,9 +36,9 @@ const enrich = (agentType, agentId) => post("/task", { project: PROJ, enrich: tr
 
 console.log("# trantor cc-bg-agent (Notification) card tests");
 
-try { await fetch(`${base}/health`, { signal: AbortSignal.timeout(700) }); console.error(`✗ something already listening on :${PORT} — kill it first`); process.exit(2); } catch {}
 
-const hub = await startTestHub({ port: PORT, dir });
+const hub = await startTestHub({ dir });
+const base = hub.base;
 
 try {
   // 1. agent_needs_input → blocked card, distinct source

@@ -33,9 +33,9 @@ const mk = (base) => ({
 console.log("# trantor file-claims tests");
 
 // ── hub semantics ────────────────────────────────────────────────────────────────────────────────
-const PA = 47921, hubA = await startTestHub({ port: PA, env: { RELAY_AUTH: "off" } });
+const hubA = await startTestHub({ env: { RELAY_AUTH: "off" } });
 try {
-  const A = mk(`http://127.0.0.1:${PA}`);
+  const A = mk(hubA.base);
 
   const first = await A.post("/claim", { project: "p", file: "src/app.ts", session: "host:p" });
   ok(first.ok === true && first.conflicts.length === 0, "first claim: no conflicts");
@@ -67,9 +67,9 @@ try {
 finally { hubA.proc.kill(); }
 
 // ── TTL ──────────────────────────────────────────────────────────────────────────────────────────
-const PB = 47922, hubB = await startTestHub({ port: PB, env: { RELAY_AUTH: "off", RELAY_CLAIM_TTL_MS: "300" } });
+const hubB = await startTestHub({ env: { RELAY_AUTH: "off", RELAY_CLAIM_TTL_MS: "300" } });
 try {
-  const B = mk(`http://127.0.0.1:${PB}`);
+  const B = mk(hubB.base);
   await B.post("/claim", { project: "p", file: "a.ts", session: "host:p" });
   await sleep(400);   // past the 300ms TTL
   const late = await B.post("/claim", { project: "p", file: "a.ts", session: "codex:p" });
@@ -80,15 +80,15 @@ try {
 finally { hubB.proc.kill(); }
 
 // ── the REAL hook, run the way Claude Code runs it ──────────────────────────────────────────────
-const PC = 47923, hubC = await startTestHub({ port: PC, env: { RELAY_AUTH: "off" } });
+const hubC = await startTestHub({ env: { RELAY_AUTH: "off" } });
 try {
-  const C = mk(`http://127.0.0.1:${PC}`);
+  const C = mk(hubC.base);
   const work = mkdtempSync(join(tmpdir(), "trantor-claimhook-"));   // the "project" directory
   const busDir = mkdtempSync(join(tmpdir(), "trantor-claimbus-"));  // isolated keys/stamps
 
   const runHook = (session, file) => spawnSync("node", [join(ROOT, "hooks/file-claim.mjs")], {
     input: JSON.stringify({ tool_name: "Edit", tool_input: { file_path: join(work, file) }, cwd: work }),
-    env: { ...drillEnv(), RELAY_URL: `http://127.0.0.1:${PC}`, RELAY_SESSION: session, AGENT_BUS_DIR: busDir, HOME: busDir },
+    env: { ...drillEnv(), RELAY_URL: hubC.base, RELAY_SESSION: session, AGENT_BUS_DIR: busDir, HOME: busDir },
     encoding: "utf8", timeout: 10000,
   });
 
