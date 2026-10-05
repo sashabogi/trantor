@@ -21,6 +21,7 @@ import { fileURLToPath } from "node:url";
 import { PgStore } from "../../lib/store-pg.mjs";
 import { SCHEMA_SQL } from "../../lib/store-contract.mjs";
 import { drillEnv } from "../drill-env.mjs";
+import { startTestHub } from "../lib/test-hub.mjs";
 
 const ROOT = fileURLToPath(new URL("../..", import.meta.url)).replace(/\/$/, "");
 let pass = 0, fail = 0;
@@ -134,43 +135,32 @@ if (!PG_URL) {
   console.log("\n(live Postgres section skipped — set RELAY_TEST_PG_URL or put initdb/pg_ctl on PATH to run it)");
 } else {
   console.log("\nA pg-backed hub restarts and a wake:false send is STILL an ack:");
-  const PORT = 47953;
-  const BASE = `http://127.0.0.1:${PORT}`;
   const dir = mkdtempSync(join(tmpdir(), "trantor-ackhub-"));
   mkdirSync(join(dir, ".agent-bus"), { recursive: true });
   const ORG = `t${Date.now() % 1e9}`;       // fresh org per run — reruns against a shared DB stay independent
   const env = {
-    ...drillEnv(), RELAY_DATA_DIR: dir, HOME: dir, RELAY_PORT: String(PORT), PORT: String(PORT),
+    RELAY_DATA_DIR: dir, HOME: dir,
     TRANTOR_NO_UPDATE_CHECK: "1", RELAY_STORE: "pg", RELAY_DATABASE_URL: PG_URL, RELAY_ORG_ID: ORG,
   };
+  let BASE = "";                            // re-pointed by every boot — each one gets a FREE port
   const post = (p, b) => fetch(BASE + p, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(b) }).then(r => r.json()).catch(e => ({ error: String(e) }));
   const get = (p) => fetch(BASE + p).then(r => r.json()).catch(e => ({ error: String(e) }));
   const AO = "acker:life", AS = "qwen:life", PROJ = "life";
 
-  let hub = null, stderr = "";
+  let hub = null;
   const boot = async () => {
-    stderr = "";
-    hub = spawn("node", [join(ROOT, "hub.mjs")], { env, stdio: ["ignore", "ignore", "pipe"] });
-    hub.stderr.on("data", d => { stderr += d; });
-    const exited = new Promise(r => hub.once("exit", code => r(code)));
-    for (let i = 0; i < 60; i++) {
-      const up = await Promise.race([get("/health"), exited]);
-      if (up && !up.error && Number.isNaN(Number(up))) return true;
-      if (hub.exitCode != null) return false;
-      await sleep(250);
-    }
-    return false;
+    try { hub = await startTestHub({ dir, env }); } catch (e) { hub = null; return false; }
+    BASE = hub.base;
+    return true;
   };
   const stop = async () => {
-    if (!hub || hub.exitCode != null) return;
-    const exited = new Promise(r => hub.once("exit", r));
-    hub.kill("SIGTERM");
-    await Promise.race([exited, sleep(4000)]);
-    if (hub.exitCode == null) { hub.kill("SIGKILL"); await exited; }
+    if (!hub) return;
+    await hub.stop();
+    hub = null;
   };
 
   try {
-    ok("the hub boots on RELAY_STORE=pg", await boot(), stderr.slice(0, 300));
+    ok("the hub boots on RELAY_STORE=pg", await boot(), hub?.stderr.slice(0, 300) || "");
     await post("/register", { session: AO, project: PROJ, status: "orchestrating" });
     await post("/register", { session: AS, project: PROJ, status: "working" });
     const a1 = await post("/send", { from: AO, to: AS, project: PROJ, text: "read and acked, nothing here needs you", wake: false });
@@ -195,7 +185,7 @@ if (!PG_URL) {
     ok("the real contract's row carries neither", !!rowOf(c1.id) && !("wake" in rowOf(c1.id)) && !("kind" in rowOf(c1.id)), JSON.stringify(rowOf(c1.id)));
 
     await stop();
-    ok("the hub comes back from Postgres", await boot(), stderr.slice(0, 300));
+    ok("the hub comes back from Postgres", await boot(), hub?.stderr.slice(0, 300) || "");
     {
       const r = await get(`/contracts?session=${encodeURIComponent(AO)}&overdueMs=0`);
       const acks = new Map((r.ackContracts || []).map(c => [Number(c.id), c]));
@@ -226,7 +216,7 @@ if (!PG_URL) {
       !!oldRow(a1.id) && !("wake" in oldRow(a1.id)) && !!oldRow(a2.id) && !("kind" in oldRow(a2.id)),
       JSON.stringify([oldRow(a1.id), oldRow(a2.id)]).slice(0, 200));
     await probe.close?.();
-    ok("the hub boots on the migrated database", await boot(), stderr.slice(0, 300));
+    ok("the hub boots on the migrated database", await boot(), hub?.stderr.slice(0, 300) || "");
     {
       const r = await get(`/contracts?session=${encodeURIComponent(AO)}&overdueMs=0`);
       const ids = new Set((r.contracts || []).map(c => Number(c.id)));

@@ -2,51 +2,24 @@
 // #7755 drill: a write whose response is dropped after commit resolves to committed on query,
 // a retry with the same op id does not duplicate the message or the move, a dropped refusal
 // resolves to rejected, and a write the hub never saw reads "ambiguous" in those words.
-import { spawn } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createServer, connect } from "node:net";
+import { connect, createServer } from "node:net";
 import { fileURLToPath } from "node:url";
-import { drillEnv, scrubIdentityEnv } from "../drill-env.mjs";
+import { scrubIdentityEnv } from "../drill-env.mjs";
+import { startTestHub, freePort } from "../lib/test-hub.mjs";
 
 const ROOT = fileURLToPath(new URL("../..", import.meta.url));
 let pass = 0, fail = 0;
 const ok = (n, c, e = "") => { if (c) { pass++; console.log(`  ✓ ${n}`); } else { fail++; console.log(`  ✗ ${n}${e ? " — " + e : ""}`); } };
 
-const freePort = () => new Promise((resolve, reject) => {
-  const server = createServer();
-  server.once("error", reject);
-  server.listen(0, "127.0.0.1", () => {
-    const p = server.address().port;
-    server.close(e => e ? reject(e) : resolve(p));
-  });
-});
-const sleep = (ms) => new Promise(r => setTimeout(r, ms));
-const waitFor = async (check, ms = 8000) => {
-  const until = Date.now() + ms;
-  while (Date.now() < until) { try { const v = await check(); if (v) return v; } catch {} await sleep(30); }
-  return null;
-};
 
 const post = (base, path, payload) => fetch(base + path, {
   method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(payload),
 }).then(async r => ({ ...(await r.json()), _status: r.status }));
 const get = async (base, path) => fetch(base + path).then(async r => ({ ...(await r.json()), _status: r.status }));
 
-const scratch = mkdtempSync(join(tmpdir(), "trantor-opid-"));
-const children = new Set();
-function startHub(port, dataDir, statePath) {
-  const c = spawn(process.execPath, [join(ROOT, "hub.mjs")], {
-    cwd: ROOT,
-    env: drillEnv({ HOME: dataDir, RELAY_PORT: String(port), RELAY_HOST: "127.0.0.1",
-      RELAY_AUTH: "off", RELAY_STORE: "json", RELAY_DATA_DIR: dataDir, RELAY_STATE: statePath }),
-    stdio: ["ignore", "ignore", "pipe"],
-  });
-  children.add(c);
-  c.once("exit", () => children.delete(c));
-  return c;
-}
 
 // A byte-level proxy in front of the hub. A POST whose bytes carry "opdrop" is forwarded and the
 // hub's reply is swallowed, so the hub commits and the client times out: the dropped-response
@@ -74,13 +47,14 @@ function startProxy(hubPort) {
 }
 
 let proxy = null;
+const scratch = mkdtempSync(join(tmpdir(), "trantor-opid-"));
 try {
   const statePath = join(scratch, "state.json");
+  // the proxy needs a CONCRETE upstream port, so ask the OS for a free one and hand it over
   const port = await freePort();
-  const base = `http://127.0.0.1:${port}`;
-  startHub(port, scratch, statePath);
-  const up = await waitFor(async () => fetch(`${base}/health`).then(r => r.ok ? r.json() : null));
-  ok("scratch hub is up", !!up);
+  const hub = await startTestHub({ port, dir: scratch, env: { RELAY_AUTH: "off", RELAY_STORE: "json", RELAY_STATE: statePath } });
+  const base = hub.base;
+  ok("scratch hub is up", !!hub.proc);
 
   // The client library enrolls against relayUrl(project) and keeps its keys under HOME. Pin both
   // to the scratch hub so the drill never touches the real hub or the runner's identity.
@@ -197,7 +171,7 @@ try {
   }
 } finally {
   if (proxy) proxy.close();
-  for (const c of children) c.kill("SIGTERM");
+  try { await hub.stop(); } catch {}
   rmSync(scratch, { recursive: true, force: true });
 }
 

@@ -2,12 +2,12 @@
 // USAGE v2 contract test — the statusline sidechannel's hub half (/usage/claude):
 // live windows PATCH the cached balances snapshot, same-value posts dedupe inside 30s,
 // an empty payload refuses, and a full `trantor balances` push still wins the shape.
-import { spawn } from "node:child_process";
 import { mkdtempSync, rmSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { drillEnv } from "../drill-env.mjs";
+import { startTestHub } from "../lib/test-hub.mjs";
 
 const ROOT = fileURLToPath(new URL("../..", import.meta.url)).replace(/\/$/, "");
 let pass = 0, fail = 0;
@@ -23,19 +23,11 @@ const W = mkdtempSync(join(tmpdir(), "trantor-usage-"));
 // the drill's providers are filtered out and every assertion reads an empty list.
 mkdirSync(join(W, ".agent-bus"), { recursive: true });
 writeFileSync(join(W, ".agent-bus", "profile.json"), JSON.stringify({ providers: { claude: "max", codex: "plus" } }));
-const PORT = 47881, BASE = `http://127.0.0.1:${PORT}`;
-const hub = spawn("node", [join(ROOT, "hub.mjs")], {
-  cwd: ROOT,
-  env: { ...drillEnv(), HOME: W, RELAY_DATA_DIR: W, RELAY_PORT: String(PORT), PORT: String(PORT), TRANTOR_NO_UPDATE_CHECK: "1" },
-  stdio: ["ignore", "ignore", "pipe"],
-});
-let er = ""; hub.stderr.on("data", d => { er += d; });
+const hub = await startTestHub({ dir: W });
+const BASE = hub.base;
 const post = (p, b) => fetch(BASE + p, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(b) });
 
 try {
-  let up = false;
-  for (let i = 0; i < 50 && !up; i++) { try { up = (await fetch(BASE + "/health")).ok; } catch {} if (!up) await sleep(100); }
-  if (!up) throw new Error("hub no start: " + er.slice(-300));
 
   // A normal balances snapshot first — the sidechannel must PATCH it, not clobber it.
   await post("/balances", { ts: Date.now(), by: "t", balances: [
@@ -64,7 +56,7 @@ try {
 } catch (e) {
   ok("suite ran", false, String(e?.stack || e).slice(0, 300));
 } finally {
-  hub.kill(); await sleep(200);
+  await hub.stop();
   rmSync(W, { recursive: true, force: true });
 }
 console.log(`\n${pass} passed, ${fail} failed`);

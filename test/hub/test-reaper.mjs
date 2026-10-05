@@ -10,28 +10,11 @@
 //       explanation — never a testing card (that is waiting for the operator) or an online owner's card;
 //   plus POST /sweep: the explicit "live seat forgot its card" path (preview-first, owner-liveness-agnostic).
 // These spin up the REAL hub.mjs with tiny time windows and assert the durable contract.
-import { spawn } from "node:child_process";
-import { mkdtempSync, mkdirSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join, dirname } from "node:path";
-import { fileURLToPath } from "node:url";
-import { drillEnv } from "../drill-env.mjs";
+import { startTestHub } from "../lib/test-hub.mjs";
 
-const ROOT = fileURLToPath(new URL("../..", import.meta.url)).replace(/\/$/, "");
 let pass = 0, fail = 0;
 const ok = (name, cond, detail = "") => { if (cond) { pass++; console.log(`  ✓ ${name}`); } else { fail++; console.log(`  ✗ ${name} ${detail}`); } };
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
-
-function spawnHub(port, extraEnv = {}) {
-  const dir = mkdtempSync(join(tmpdir(), "trantor-reaper-"));
-  mkdirSync(join(dir, ".agent-bus"), { recursive: true });
-  const hub = spawn("node", [join(ROOT, "hub.mjs")], {
-    env: { ...drillEnv(), RELAY_DATA_DIR: dir, HOME: dir, RELAY_PORT: String(port), PORT: String(port), TRANTOR_NO_UPDATE_CHECK: "1", ...extraEnv },
-    stdio: ["ignore", "ignore", "pipe"],
-  });
-  hub._dir = dir;
-  return hub;
-}
 const mk = (base) => ({
   post: (p, b) => fetch(base + p, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(b) }).then(r => r.json()),
   get: (p) => fetch(base + p).then(r => r.json()),
@@ -40,13 +23,11 @@ const mk = (base) => ({
 console.log("# trantor stale-card reaper + sweep tests");
 
 // ── Hub A: the automatic reaper (offline owner → stale; focus → done) with tiny windows ─────────────
-const PA = 47861, hubA = spawnHub(PA, {
-  RELAY_ONLINE_MS: "250", RELAY_REAP_GRACE_MS: "250", RELAY_FOCUS_OFFLINE_MS: "250", RELAY_REAP_INTERVAL_MS: "120",
+const hubA = await startTestHub({
+  env: { RELAY_ONLINE_MS: "250", RELAY_REAP_GRACE_MS: "250", RELAY_FOCUS_OFFLINE_MS: "250", RELAY_REAP_INTERVAL_MS: "120" },
 });
-let errA = ""; hubA.stderr.on("data", d => errA += d);
-await sleep(800);
 try {
-  const A = mk(`http://127.0.0.1:${PA}`); const PROJ = "reapA";
+  const A = mk(hubA.base); const PROJ = "reapA";
   const tasksFor = async (proj = PROJ) => (await A.get(`/tasks?project=${proj}`)).tasks;
 
   // an offline-owner crew work card → stale (owner "codex:reapA" is touched at create, then lapses offline)
@@ -78,35 +59,31 @@ try {
   ok("testing card has no reaper stale log", !(testing?.log || []).some(l => l.by === "reaper"));
   f = after.filter(t => t.source === "session");
   ok("focus card auto-closed to done by the reaper (no /peers read)", f[0]?.status === "done", `(got "${f[0]?.status}")`);
-} catch (e) { fail++; console.log("  ✗ hubA threw:", e?.message || e, errA ? `\n  stderr: ${errA}` : ""); }
-finally { hubA.kill(); try { rmSync(hubA._dir, { recursive: true, force: true }); } catch {} }
+} catch (e) { fail++; console.log("  ✗ hubA threw:", e?.message || e, hubA.stderr ? `\n  stderr: ${hubA.stderr.slice(-300)}` : ""); }
+finally { await hubA.stop(); }
 
 // ── Hub B: the reaper must NOT touch a card whose owner is still ONLINE ──────────────────────────────
-const PB = 47862, hubB = spawnHub(PB, {
-  RELAY_ONLINE_MS: "8000", RELAY_REAP_GRACE_MS: "200", RELAY_REAP_INTERVAL_MS: "120",
+const hubB = await startTestHub({
+  env: { RELAY_ONLINE_MS: "8000", RELAY_REAP_GRACE_MS: "200", RELAY_REAP_INTERVAL_MS: "120" },
 });
-let errB = ""; hubB.stderr.on("data", d => errB += d);
-await sleep(800);
 try {
-  const B = mk(`http://127.0.0.1:${PB}`); const PROJ = "reapB";
+  const B = mk(hubB.base); const PROJ = "reapB";
   const c = await B.post("/task", { project: PROJ, title: "a live long-running task", status: "doing", assignee: "codex:reapB", by: "codex:reapB" });
   const wid = c?.task?.id;
   // owner stays online (ONLINE_MS 8s ≫ test); grace is 200ms so the reaper WILL consider it, and must skip it
   await sleep(700);
   const work = (await B.get(`/tasks?project=${PROJ}`)).tasks.find(t => t.id === wid);
   ok("online-owner doing card is NOT reaped (live long task safe)", work?.status === "doing", `(got "${work?.status}")`);
-} catch (e) { fail++; console.log("  ✗ hubB threw:", e?.message || e, errB ? `\n  stderr: ${errB}` : ""); }
-finally { hubB.kill(); try { rmSync(hubB._dir, { recursive: true, force: true }); } catch {} }
+} catch (e) { fail++; console.log("  ✗ hubB threw:", e?.message || e, hubB.stderr ? `\n  stderr: ${hubB.stderr.slice(-300)}` : ""); }
+finally { await hubB.stop(); }
 
 // ── Hub C: manual /sweep — preview (dryRun), real move, project scoping, and triage OUT of stale ─────
 // Auto-reaper disabled by huge windows so ONLY /sweep acts.
-const PC = 47863, hubC = spawnHub(PC, {
-  RELAY_ONLINE_MS: "999999", RELAY_REAP_GRACE_MS: "999999", RELAY_REAP_INTERVAL_MS: "999999",
+const hubC = await startTestHub({
+  env: { RELAY_ONLINE_MS: "999999", RELAY_REAP_GRACE_MS: "999999", RELAY_REAP_INTERVAL_MS: "999999" },
 });
-let errC = ""; hubC.stderr.on("data", d => errC += d);
-await sleep(800);
 try {
-  const C = mk(`http://127.0.0.1:${PC}`);
+  const C = mk(hubC.base);
   // project A: 2 doing + 1 testing + 1 done + 1 todo ; project B: 1 doing (must be untouched by a scoped sweep)
   await C.post("/task", { project: "swA", title: "doing one", status: "doing", assignee: "codex:swA", by: "codex:swA" });
   await C.post("/task", { project: "swA", title: "doing two", status: "doing", assignee: "glm:swA", by: "glm:swA" });
@@ -142,8 +119,8 @@ try {
   // #6452: done needs a drill line even at triage; a discard says so on the note
   const discarded = await C.post("/task/update", { id: staleId2, status: "done", by: "host:swA", note: "Drill: none — stale card discarded at triage, nothing shipped" });
   ok("stale card can be discarded to done", discarded?.task?.status === "done", `(got "${discarded?.task?.status}")`);
-} catch (e) { fail++; console.log("  ✗ hubC threw:", e?.message || e, errC ? `\n  stderr: ${errC}` : ""); }
-finally { hubC.kill(); try { rmSync(hubC._dir, { recursive: true, force: true }); } catch {} }
+} catch (e) { fail++; console.log("  ✗ hubC threw:", e?.message || e, hubC.stderr ? `\n  stderr: ${hubC.stderr.slice(-300)}` : ""); }
+finally { await hubC.stop(); }
 
 console.log(fail ? `\n${fail} FAILED` : "\nALL PASS");
 process.exit(fail ? 1 : 0);

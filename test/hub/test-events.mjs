@@ -3,28 +3,20 @@
 // them honest: (1) /history is the TIMELINE's feed and stays card-events-only in the legacy
 // shape; (2) the thread is DERIVED, not stored — /events for a card id joins the card's events
 // with every message citing it. Plus the on-disk migration, filter composition, SSE separation.
-import { spawn } from "node:child_process";
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, dirname } from "node:path";
-import { fileURLToPath } from "node:url";
-import { drillEnv } from "../drill-env.mjs";
+import { join } from "node:path";
+import { startTestHub } from "../lib/test-hub.mjs";
 
-const ROOT = fileURLToPath(new URL("../..", import.meta.url)).replace(/\/$/, "");
 let pass = 0, fail = 0;
 const ok = (name, cond, detail = "") => { if (cond) { pass++; console.log(`  ✓ ${name}`); } else { fail++; console.log(`  ✗ ${name} ${detail}`); } };
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
-function spawnHub(port, { seed = null, extraEnv = {} } = {}) {
+async function spawnHub({ seed = null, extraEnv = {} } = {}) {
   const dir = mkdtempSync(join(tmpdir(), "trantor-events-"));
   mkdirSync(join(dir, ".agent-bus"), { recursive: true });
   if (seed) writeFileSync(join(dir, "bus.json"), JSON.stringify(seed));
-  const hub = spawn("node", [join(ROOT, "hub.mjs")], {
-    env: { ...drillEnv(), RELAY_DATA_DIR: dir, HOME: dir, RELAY_PORT: String(port), PORT: String(port), TRANTOR_NO_UPDATE_CHECK: "1", ...extraEnv },
-    stdio: ["ignore", "ignore", "pipe"],
-  });
-  hub._dir = dir;
-  return hub;
+  return startTestHub({ dir, env: extraEnv });
 }
 const mk = (base) => ({
   post: (p, b) => fetch(base + p, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(b) }).then(r => r.json()),
@@ -34,11 +26,9 @@ const mk = (base) => ({
 console.log("# trantor unified event-log tests");
 
 // ── Hub A: the log itself — every type lands, /history stays card-only, threads derive ───────────
-const PA = 47901, hubA = spawnHub(PA);
-let errA = ""; hubA.stderr.on("data", d => errA += d);
-await sleep(800);
+const hubA = await spawnHub();
 try {
-  const A = mk(`http://127.0.0.1:${PA}`); const PROJ = "evtA";
+  const A = mk(hubA.base); const PROJ = "evtA";
 
   await A.post("/register", { session: "host:evtA", project: PROJ, status: "orchestrating" });
   await A.post("/focus", { session: "host:evtA", project: PROJ, title: "wire the unified log" });
@@ -118,7 +108,7 @@ try {
   ok("presence.online is edge-triggered, not per-heartbeat", onEvents.length === 1, `(got ${onEvents.length})`);
 
   // SSE: the log rides a NAMED channel so legacy message consumers can't see it
-  const res = await fetch(`http://127.0.0.1:${PA}/stream?session=probe&events=1`);
+  const res = await fetch(`${hubA.base}/stream?session=probe&events=1`);
   const rd = res.body.getReader(); const dec = new TextDecoder();
   let buf = "";
   const reading = (async () => { for (let i = 0; i < 60; i++) { const { value, done } = await rd.read(); if (done) break; buf += dec.decode(value); if (/event: ev\ndata: [^\n]*sse probe/.test(buf)) break; } })();
@@ -135,8 +125,8 @@ try {
   // deleting a project forgets its log too
   await A.post("/project/delete", { project: PROJ });
   ok("project delete purges its events", (await A.get(`/events?project=${PROJ}`)).events.length === 0);
-} finally { hubA.kill(); }
-ok("hub A clean stderr", !/TypeError|ReferenceError|not defined/.test(errA), errA.slice(0, 300));
+} finally { await hubA.stop(); }
+ok("hub A clean stderr", !/TypeError|ReferenceError|not defined/.test(hubA.stderr), hubA.stderr.slice(0, 300));
 
 // ── Hub B: on-disk migration — an OLD state file (cardEvents, no events) must load ───────────────
 const PB = 47902;
@@ -149,11 +139,9 @@ const legacy = {
   ],
   cardEventsBackfilled: true,
 };
-const hubB = spawnHub(PB, { seed: legacy });
-let errB = ""; hubB.stderr.on("data", d => errB += d);
-await sleep(800);
+const hubB = await spawnHub({ seed: legacy });
 try {
-  const B = mk(`http://127.0.0.1:${PB}`);
+  const B = mk(hubB.base);
   const ev = (await B.get(`/events?project=evtB`)).events;
   ok("legacy cardEvents load as events", ev.length === 2 && ev[0].type === "created", `(got ${ev.length})`);
   ok("legacy history still served", (await B.get(`/history?project=evtB`)).events.length === 2);
@@ -168,25 +156,22 @@ try {
 
   // downgrade safety: the persisted file mirrors a card-only `cardEvents` key for an older hub
   await sleep(1400);
-  const onDisk = JSON.parse(readFileSync(join(hubB._dir, "bus.json"), "utf8"));
+  const onDisk = JSON.parse(readFileSync(join(hubB.dir, "bus.json"), "utf8"));
   ok("persists the unified log under `events`", Array.isArray(onDisk.events) && onDisk.events.length === ev2.length && onDisk.events.some(e => e.type === "message"));
   ok("mirrors a card-only `cardEvents` for downgrade", Array.isArray(onDisk.cardEvents)
     && onDisk.cardEvents.length === 2
     && onDisk.cardEvents.every(e => ["created", "moved", "updated"].includes(e.type)),
     `(got ${JSON.stringify((onDisk.cardEvents || []).map(e => e.type))})`);
-} finally { hubB.kill(); }
-ok("hub B clean stderr", !/TypeError|ReferenceError|not defined/.test(errB), errB.slice(0, 300));
+} finally { await hubB.stop(); }
+ok("hub B clean stderr", !/TypeError|ReferenceError|not defined/.test(hubB.stderr), hubB.stderr.slice(0, 300));
 
 // ── Hub C: /read — the human-opened-file signal (#7972, CodeGraph blueprint card 6) ──────────────
 // The claim-shaped throttle: two posts inside the window append ONE file.read event, a third
 // after the window appends another. Read through /events?type=file.read (exact); /history,
 // the card-only feed, must never carry it. The window is shrunk via RELAY_CLAIM_TTL_MS.
-const PC = 47903;
-const hubC = spawnHub(PC, { extraEnv: { RELAY_CLAIM_TTL_MS: "1200" } });
-let errC = ""; hubC.stderr.on("data", d => errC += d);
-await sleep(800);
+const hubC = await spawnHub({ extraEnv: { RELAY_CLAIM_TTL_MS: "1200" } });
 try {
-  const C = mk(`http://127.0.0.1:${PC}`); const PROJ = "evtC";
+  const C = mk(hubC.base); const PROJ = "evtC";
   await C.post("/register", { session: "host:evtC", project: PROJ, status: "reading" });
   await C.post("/task", { project: PROJ, title: "a card so /history has something", by: "host:evtC", status: "doing" });
 
@@ -211,8 +196,8 @@ try {
   const hist = (await C.get(`/history?project=${PROJ}`)).events;
   ok("/history never carries file.read", hist.every(e => e.type !== "file.read"), `(got ${hist.map(e => e.type)})`);
   ok("/history still serves its card events", hist.some(e => e.type === "created"));
-} finally { hubC.kill(); }
-ok("hub C clean stderr", !/TypeError|ReferenceError|not defined/.test(errC), errC.slice(0, 300));
+} finally { await hubC.stop(); }
+ok("hub C clean stderr", !/TypeError|ReferenceError|not defined/.test(hubC.stderr), hubC.stderr.slice(0, 300));
 
 console.log(`\n${fail === 0 ? "PASS" : "FAIL"} — ${pass} passed, ${fail} failed`);
 process.exit(fail === 0 ? 0 : 1);

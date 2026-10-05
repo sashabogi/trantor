@@ -1,25 +1,21 @@
 #!/usr/bin/env node
 // #8723 — a TTL-expired peer must keep its durable fields (kind, deliveredUpTo, lastSeen).
 // Isolated: random port, tmp dirs, RELAY_AUTH=off, fast ticks.
-import { spawn } from "node:child_process";
 import { mkdtempSync, rmSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { fileURLToPath } from "node:url";
 import { setTimeout as sleep } from "node:timers/promises";
 import { randomBytes } from "node:crypto";
-import { drillEnv } from "../drill-env.mjs";
+import { startTestHub } from "../lib/test-hub.mjs";
 
-const HERE = fileURLToPath(new URL("../..", import.meta.url)).replace(/\/[^/]+$/, "");
 let pass = 0, fail = 0;
 const ok = (n, c, e = "") => { if (c) { pass++; console.log(`  ✓ ${n}`); } else { fail++; console.log(`  ✗ ${n}${e ? " — " + e : ""}`); } };
 
 const dir = mkdtempSync(join(tmpdir(), `tpm-${process.pid}-${randomBytes(3).toString("hex")}-`));
 mkdirSync(join(dir, ".agent-bus"), { recursive: true });
-const port = 5000 + Math.floor(Math.random() * 20000);
 const env = {
-  ...drillEnv(), HOME: dir, AGENT_BUS_DIR: join(dir, ".agent-bus"), RELAY_DATA_DIR: dir,
-  RELAY_PORT: String(port), RELAY_HOST: "127.0.0.1", RELAY_AUTH: "off",
+  HOME: dir, AGENT_BUS_DIR: join(dir, ".agent-bus"), RELAY_DATA_DIR: dir,
+  RELAY_HOST: "127.0.0.1", RELAY_AUTH: "off",
   RELAY_DUTY_SESSION: "claude:trantor-duty",
   RELAY_DUTY_UNDELIVERED_MS: "500",
   RELAY_OVERSEER_TICK_MS: "200",
@@ -27,18 +23,13 @@ const env = {
   RELAY_PEER_TTL_MS: "600",
   RELAY_PEER_FORGET_MS: "30000",   // far above every sleep below, so the kept window cannot race the forget bound
 };
-delete env.RELAY_URL;
-let hub = spawn(process.execPath, [join(HERE, "hub.mjs")], { env, stdio: ["ignore", "pipe", "pipe"] });
-let er = ""; hub.stderr.on("data", d => { er += d; });
-const B = `http://127.0.0.1:${port}`;
+const hub = await startTestHub({ dir, env });
+const B = hub.base;
 const j = (r) => r.json();
 const post = (p, b) => fetch(B + p, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(b) }).then(j);
 const get = (p) => fetch(B + p).then(j);
 
 try {
-  let up = false;
-  for (let i = 0; i < 90 && !up; i++) { try { up = (await fetch(B + "/health")).ok; } catch {} if (!up) await sleep(80); }
-  if (!up) throw new Error("hub no start: " + er.slice(-300));
   console.log("\n# test-peer-memory — the peer row outlives its own presence (#8723)");
 
   // Crew seats + orchestrator register WITH their kind, then go quiet past the peer TTL.
@@ -118,15 +109,9 @@ try {
   // ~3s of quiet is itself the proof that the env override is read.
   const dir2 = mkdtempSync(join(tmpdir(), `tpm2-${process.pid}-${randomBytes(3).toString("hex")}-`));
   mkdirSync(join(dir2, ".agent-bus"), { recursive: true });
-  const port2 = 5000 + Math.floor(Math.random() * 20000);
-  const env2 = { ...env, HOME: dir2, AGENT_BUS_DIR: join(dir2, ".agent-bus"), RELAY_DATA_DIR: dir2, RELAY_PORT: String(port2), RELAY_PEER_FORGET_MS: "2500" };
-  let hub2 = spawn(process.execPath, [join(HERE, "hub.mjs")], { env: env2, stdio: ["ignore", "pipe", "pipe"] });
-  const B2 = `http://127.0.0.1:${port2}`;
-  const post2 = (p, b) => fetch(B2 + p, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(b) }).then(r => r.json());
-  const get2 = (p) => fetch(B2 + p).then(r => r.json());
-  let up2 = false;
-  for (let i = 0; i < 90 && !up2; i++) { try { up2 = (await fetch(B2 + "/health")).ok; } catch {} if (!up2) await sleep(80); }
-  if (!up2) throw new Error("hub2 no start");
+  const hub2 = await startTestHub({ dir: dir2, env: { ...env, HOME: dir2, AGENT_BUS_DIR: join(dir2, ".agent-bus"), RELAY_DATA_DIR: dir2, RELAY_PEER_FORGET_MS: "2500" } });
+  const post2 = (p, b) => fetch(hub2.base + p, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(b) }).then(r => r.json());
+  const get2 = (p) => fetch(hub2.base + p).then(r => r.json());
   await post2("/register", { session: "glm:frget2", project: "mem", status: "active", kind: "agent" });
   await sleep(3200);                        // quiet > RELAY_PEER_FORGET_MS(2500)
   await get2("/peers");                     // runs prunePeers()
@@ -134,10 +119,10 @@ try {
   ok("a peer quiet past the forget window is deleted (short override; default is 30 days)", !gone || !!gone.error, JSON.stringify(gone || {}));
   const roster4 = await get2("/peers");
   ok("…and is gone from the roster too", !(roster4.peers || []).some(p => p.session === "glm:frget2"), "");
-  try { hub2.kill(); } catch {}
+  await hub2.stop();
   try { rmSync(dir2, { recursive: true, force: true }); } catch {}
 } finally {
-  try { hub.kill(); } catch {}
+  await hub.stop();
   try { rmSync(dir, { recursive: true, force: true }); } catch {}
 }
 

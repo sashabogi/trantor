@@ -1,15 +1,15 @@
 #!/usr/bin/env node
 // Regression drill for the 2026-09-02 data loss: a single NUL poisoned every Postgres delta for
 // hours, while retries stayed invisible and a restart discarded the in-memory-only tail.
-import { spawn, spawnSync } from "node:child_process";
+import { spawnSync } from "node:child_process";
 import { chmodSync, existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { createServer } from "node:net";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { PgStore } from "../../lib/store-pg.mjs";
 import { createPersistHealth } from "../../lib/persist-health.mjs";
 import { drillEnv } from "../drill-env.mjs";
+import { startTestHub } from "../lib/test-hub.mjs";
 
 const ROOT = fileURLToPath(new URL("../..", import.meta.url)).replace(/\/$/, "");
 let pass = 0;
@@ -102,15 +102,6 @@ console.log("persist state: exponential retry, one-minute logging and recovery")
   ok(JSON.stringify(logs.view(70000)) === JSON.stringify({ ok: true, failingSinceMs: 0, lastError: "", retries: 0 }), "a successful persist clears the failure state");
 }
 
-const freePort = () => new Promise((resolve, reject) => {
-  const server = createServer();
-  server.once("error", reject);
-  server.listen(0, "127.0.0.1", () => {
-    const port = server.address().port;
-    server.close(error => error ? reject(error) : resolve(port));
-  });
-});
-
 const waitFor = async (check, timeoutMs = 5000) => {
   const until = Date.now() + timeoutMs;
   while (Date.now() < until) {
@@ -119,27 +110,6 @@ const waitFor = async (check, timeoutMs = 5000) => {
   }
   return null;
 };
-
-const children = new Set();
-function startHub(port, dataDir, statePath, extraEnv = {}) {
-  const child = spawn(process.execPath, [join(ROOT, "hub.mjs")], {
-    cwd: ROOT,
-    env: { ...drillEnv(), HOME: dataDir, RELAY_PORT: String(port), RELAY_HOST: "127.0.0.1", RELAY_AUTH: "off", RELAY_STORE: "json", RELAY_DATA_DIR: dataDir, RELAY_STATE: statePath, ...extraEnv },
-    stdio: ["ignore", "ignore", "pipe"],
-  });
-  child.stderr.setEncoding("utf8");
-  child.errorText = "";
-  child.stderr.on("data", chunk => { child.errorText += chunk; });
-  children.add(child);
-  child.once("exit", () => children.delete(child));
-  return child;
-}
-
-const stopHub = child => new Promise(resolve => {
-  if (!child || child.exitCode !== null) return resolve();
-  child.once("exit", resolve);
-  child.kill("SIGTERM");
-});
 
 const post = (base, path, payload) => fetch(base + path, {
   method: "POST",
@@ -151,13 +121,10 @@ const scratch = mkdtempSync(join(tmpdir(), "trantor-persist-safety-"));
 try {
   console.log("hub boundary: NUL input is stripped and the send survives a restart");
   const statePath = join(scratch, "state.json");
-  const port = await freePort();
-  const base = `http://127.0.0.1:${port}`;
-  let hub = startHub(port, scratch, statePath);
-  const initialHealth = await waitFor(async () => {
-    const response = await fetch(base + "/health");
-    return response.ok ? response.json() : null;
-  });
+  const hubEnv = { RELAY_AUTH: "off", RELAY_STORE: "json", RELAY_STATE: statePath };
+  let hub = await startTestHub({ dir: scratch, env: hubEnv });
+  let base = hub.base;   // `let`: each restart boots on a NEW free port
+  const initialHealth = await fetch(base + "/health").then(r => r.json());   // startTestHub already gated /health
   ok(initialHealth?.persist?.ok === true, "healthy hub exposes persist.ok=true");
 
   const sent = await post(base, "/send", { from: "tester:p", to: "reader:p", text: "hello\0world" });
@@ -171,32 +138,30 @@ try {
     return value.messages?.some(message => message.id === sent.id) ? value : null;
   });
   ok(!!persisted && !containsNul(persisted), "persisted JSON contains no U+0000 anywhere");
-  await stopHub(hub);
+  await hub.stop();
 
-  hub = startHub(port, scratch, statePath);
-  await waitFor(async () => (await fetch(base + "/health")).ok);
+  hub = await startTestHub({ dir: scratch, env: hubEnv });
+  base = hub.base;
   const recent = await fetch(base + "/recent?limit=20").then(response => response.json());
   const tasks = await fetch(base + "/tasks?project=p").then(response => response.json());
   ok(recent.messages?.some(message => message.id === sent.id && message.text === "helloworld"), "the sanitized NUL send survives hub restart");
   const restoredTask = tasks.tasks?.find(task => task.id === created.task.id);
   ok(restoredTask?.title === "updated" && restoredTask.log?.every(entry => !entry.text.includes("\0")), "task create/update title and notes are clean after restart");
-  await stopHub(hub);
+  await hub.stop();
 
   console.log("hub health: an actual write failure becomes visible state");
   const badState = join(scratch, "state-is-a-directory");
   mkdirSync(badState);
-  const badPort = await freePort();
-  const badBase = `http://127.0.0.1:${badPort}`;
-  hub = startHub(badPort, scratch, badState, { RELAY_PERSIST_RETRY_BASE_MS: "30", RELAY_PERSIST_RETRY_MAX_MS: "120", RELAY_PERSIST_LOG_INTERVAL_MS: "120" });
-  await waitFor(async () => (await fetch(badBase + "/health")).ok);
+  hub = await startTestHub({ dir: scratch, env: { RELAY_AUTH: "off", RELAY_STORE: "json", RELAY_STATE: badState, RELAY_PERSIST_RETRY_BASE_MS: "30", RELAY_PERSIST_RETRY_MAX_MS: "120", RELAY_PERSIST_LOG_INTERVAL_MS: "120" } });
+  const badBase = hub.base;
   await post(badBase, "/send", { from: "tester:p", to: "reader:p", text: "cannot persist" });
   const failedHealth = await waitFor(async () => {
     const value = await fetch(badBase + "/health").then(response => response.json());
     return value.persist?.retries >= 2 ? value : null;
   });
   ok(failedHealth?.persist?.ok === false && failedHealth.persist.failingSinceMs >= 0 && /EISDIR|directory/i.test(failedHealth.persist.lastError), "write failure is standing /health state", JSON.stringify(failedHealth?.persist));
-  ok((hub.errorText.match(/persist failing:/g) || []).length < failedHealth.persist.retries, "stderr is rate-limited instead of logging every retry");
-  await stopHub(hub);
+  ok((hub.stderr.match(/persist failing:/g) || []).length < failedHealth.persist.retries, "stderr is rate-limited instead of logging every retry");
+  await hub.stop();
 
   console.log("restart guard: unhealthy persistence blocks restart unless forced");
   const mockBin = join(scratch, "mock-bin");
@@ -222,7 +187,7 @@ try {
   const forced = spawnSync("bash", [join(ROOT, "deploy/restart-hub.sh"), "--force"], { cwd: ROOT, env: guardEnv, encoding: "utf8" });
   ok(forced.status === 0 && stubLog().includes("restart trantor-hub"), "--force explicitly permits the restart", forced.stderr.trim());
 } finally {
-  for (const child of children) child.kill("SIGTERM");
+  try { await hub.stop(); } catch {}
   rmSync(scratch, { recursive: true, force: true });
 }
 

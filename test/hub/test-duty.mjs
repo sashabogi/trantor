@@ -1,42 +1,33 @@
 #!/usr/bin/env node
 // trantor — duty-agent hub feed acceptance (bin/duty.mjs is the seat; this tests the HUB half).
 // Isolated: random port, tmp dirs, RELAY_AUTH=off, fast ticks.
-import { spawn } from "node:child_process";
 import { mkdtempSync, rmSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { fileURLToPath } from "node:url";
 import { setTimeout as sleep } from "node:timers/promises";
 import { randomBytes } from "node:crypto";
-import { drillEnv } from "../drill-env.mjs";
+import { startTestHub } from "../lib/test-hub.mjs";
 
-const HERE = fileURLToPath(new URL("../..", import.meta.url)).replace(/\/[^/]+$/, "");
 let pass = 0, fail = 0;
 const ok = (n, c, e = "") => { if (c) { pass++; console.log(`  ✓ ${n}`); } else { fail++; console.log(`  ✗ ${n}${e ? " — " + e : ""}`); } };
 
 const dir = mkdtempSync(join(tmpdir(), `td-${process.pid}-${randomBytes(3).toString("hex")}-`));
 mkdirSync(join(dir, ".agent-bus"), { recursive: true });
-const port = 5000 + Math.floor(Math.random() * 20000);
 const env = {
-  ...drillEnv(), HOME: dir, AGENT_BUS_DIR: join(dir, ".agent-bus"), RELAY_DATA_DIR: dir,
-  RELAY_PORT: String(port), RELAY_HOST: "127.0.0.1", RELAY_AUTH: "off",
+  HOME: dir, AGENT_BUS_DIR: join(dir, ".agent-bus"), RELAY_DATA_DIR: dir,
+  RELAY_HOST: "127.0.0.1", RELAY_AUTH: "off",
   RELAY_DUTY_SESSION: "claude:trantor-duty",
   RELAY_DUTY_UNDELIVERED_MS: "600",       // 0.6s: "undelivered" fast
   RELAY_OVERSEER_TICK_MS: "300",          // duty tick shares this cadence
   RELAY_ONLINE_MS: "60000",
 };
-delete env.RELAY_URL;
-let hub = spawn(process.execPath, [join(HERE, "hub.mjs")], { env, stdio: ["ignore", "pipe", "pipe"] });
-let er = ""; hub.stderr.on("data", d => { er += d; });
-const B = `http://127.0.0.1:${port}`;
+let hub = await startTestHub({ dir, env });
+let B = hub.base;                       // `let`: a restart hub lands on a NEW free port
 const j = (r) => r.json();
 const post = (p, b) => fetch(B + p, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(b) }).then(j);
 const get = (p) => fetch(B + p).then(j);
 
 try {
-  let up = false;
-  for (let i = 0; i < 90 && !up; i++) { try { up = (await fetch(B + "/health")).ok; } catch {} if (!up) await sleep(80); }
-  if (!up) throw new Error("hub no start: " + er.slice(-300));
   console.log("\n# test-duty — hub escalation feed for the duty agent");
 
   // 0. mail addressed to the hub's own pseudo-identity must NEVER escalate. Nothing polls hub:*,
@@ -162,17 +153,15 @@ try {
   //    and the seat, still running, looks perfectly healthy.
   await post("/overseer/duty", { session: "claude:relief" });
   await sleep(1400);                                   // persist runs on a 1s timer
-  hub.kill(); await sleep(400);
+  await hub.stop();
   const envNoDuty = { ...env }; delete envNoDuty.RELAY_DUTY_SESSION;
-  hub = spawn(process.execPath, [join(HERE, "hub.mjs")], { env: envNoDuty, stdio: ["ignore", "pipe", "pipe"] });
-  hub.stderr.on("data", d => { er += d; });
-  let back = false;
-  for (let i = 0; i < 90 && !back; i++) { try { back = (await fetch(B + "/health")).ok; } catch {} if (!back) await sleep(80); }
-  ok("hub restarts", back, er.slice(-200));
+  hub = await startTestHub({ dir, env: envNoDuty });   // /health-gated: past this line it is accepting
+  B = hub.base;
+  ok("hub restarts", true);
   st = await get("/overseer/status");
   ok("the duty seat survives a hub restart with no env var", st.dutySession === "claude:relief", `got ${JSON.stringify(st.dutySession)}`);
 } finally {
-  try { hub.kill(); } catch {}
+  try { await hub.stop(); } catch {}
   try { rmSync(dir, { recursive: true, force: true }); } catch {}
 }
 

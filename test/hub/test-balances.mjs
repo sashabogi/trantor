@@ -1,14 +1,13 @@
 // trantor balance feature tests — pure helpers (isLow/fmtBalance/fetchBalances skip) + hub POST/GET
 // round-trip with low-flagging and profile→subscription merge. Hermetic: temp data dir, no network
 // for the hub tests (adapters are verified live separately).
-import { spawn } from "node:child_process";
 import { chmodSync, existsSync, mkdtempSync, writeFileSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import http from "node:http";
 import { isLow, fmtBalance, fetchBalances, qwenResetFromMessage, DEFAULT_LOW } from "../../lib/balances.mjs";
 import { detectedCliBalanceRows } from "../../lib/providers.mjs";
-import { drillEnv } from "../drill-env.mjs";
+import { startTestHub } from "../lib/test-hub.mjs";
 
 let fail = 0; const ok = (c, m) => { console.log((c ? "✓" : "✗ FAIL") + " " + m); if (!c) fail++; };
 
@@ -146,11 +145,8 @@ writeFileSync(join(dir, ".agent-bus", "profile.json"), JSON.stringify({ provider
   claude: { plan: "max", tier: "capped-sub" }, kimi: { plan: "coding-plan", tier: "capped-sub" },
   openrouter: { plan: "api", tier: "api" }, deepseek: { plan: "api", tier: "api" }, zai: { plan: "coding-plan", tier: "capped-sub" },
 } }));
-const PORT = 47713;
-const hub = spawn("node", ["hub.mjs"], { env: { ...drillEnv(), RELAY_DATA_DIR: dir, HOME: dir, RELAY_PORT: String(PORT), PORT: String(PORT) }, stdio: ["ignore", "ignore", "pipe"] });
-let err = ""; hub.stderr.on("data", d => err += d);
-await new Promise(r => setTimeout(r, 800));
-const base = `http://127.0.0.1:${PORT}`;
+const hub = await startTestHub({ dir });
+const base = hub.base;
 const post = (p, b) => fetch(base + p, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(b) }).then(r => r.json());
 const get = (p) => fetch(base + p).then(r => r.json());
 
@@ -194,6 +190,6 @@ const fine = await post("/task", { project: "guardp", title: "general-purpose: b
   source: "cc-subagent", costKind: "subagent-notional", costUsd: 12.5, tokens: { cacheRead: 20e6, input: 1e6, output: 5e5, cacheWrite: 0 }, by: "x:guardp" });
 ok(fine.task && fine.task.costUsd === 12.5, "hub: plausible cc-subagent cost ($12.50/20M) kept");
 
-hub.kill();
+await hub.stop();
 console.log(fail ? `\n${fail} FAILED` : "\nALL PASS");
 process.exit(fail ? 1 : 0);
