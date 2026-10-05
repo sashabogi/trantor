@@ -74,6 +74,31 @@ const HUB = `http://127.0.0.1:${hub.address().port}`;
 // silent: banner then nothing. busy: a line past the 200-byte liveness bar every 300ms. The
 // CLI's turn LOG lives in a SIBLING mkdtemp, outside the watched work dir — a write at turn
 // start counts as liveness until window+SLACK and races the marker to the box.
+//
+// #9832 part 4: the drill races the stall window against the box on the WALL CLOCK, and at load
+// ~40 the window fired during turn set-up (first liveness line still sitting in the pipe), so a
+// busy turn ledgered "stalled" and the run went red. The windows are now scaled to the host this
+// run actually sits on: PROBE measures node-boot-to-first-output three times and takes the max;
+// the watchdog clears 4x that (so pipe lag can never outrun it), and the box stays watchdog+12s —
+// the busy turn must outlast the window by the full contract margin at ANY host speed. On an idle
+// host PROBE is tens of ms, so both windows land on their original 2500/12000 values and every
+// assertion threshold below compiles to exactly the constant it had before.
+async function hostLatencyMs() {
+  let max = 0;
+  for (let i = 0; i < 3; i++) {
+    const t0 = Date.now();
+    await new Promise(res => {
+      const k = spawn(process.execPath, ["-e", "process.stdout.write('x')"], { stdio: ["ignore", "pipe", "ignore"] });
+      k.stdout.on("data", () => { k.kill(); res(); });
+      k.on("close", res);
+      k.on("error", res);
+    });
+    max = Math.max(max, Date.now() - t0);
+  }
+  return max;
+}
+const WD = Math.min(15000, Math.max(2500, (await hostLatencyMs()) * 4));
+const BOX = WD + 12000;
 async function drill(mode, { waitMs = 45000, untilPark = true, untilFollowUp = false } = {}) {
   sends.length = 0; eventSeq = 0; handed = 0;
   const root = mkdtempSync(join(tmpdir(), "tt-stall-"));
@@ -109,9 +134,9 @@ ${body}
     cwd: process.cwd(), stdio: "ignore",
     env: { ...drillEnv({ TRANTOR_NO_DESKTOP_NOTIFY: "1", RELAY_HOST_ID: "drillhost" }), HOME, PATH: `${fakebin}:${process.env.PATH}`,
       RELAY_URL: HUB, RELAY_AGENT: "codex", RELAY_PROJECT: PROJ,
-      TRANTOR_TURN_MAX_MS: "12000", TRANTOR_TURN_WATCHDOG_MS: "2500", TRANTOR_RETRY_MS: "1200",
+      TRANTOR_TURN_MAX_MS: String(BOX), TRANTOR_TURN_WATCHDOG_MS: String(WD), TRANTOR_RETRY_MS: "1200",
       // #7761: ceiling == box, so the busy turn meets the plain box this drill measures, not an extension.
-      TRANTOR_TURN_CEILING_MS: "12000",
+      TRANTOR_TURN_CEILING_MS: String(BOX),
       CREW_MODEL: "qwen3/deepseek-v4-pro", CREW_KICKOFF: "say hi and end your turn" },
   });
   const start = Date.now();
@@ -121,8 +146,9 @@ ${body}
   if (untilPark) {
     while (!sends.some(s => /PARKED/.test(s.text || "")) && Date.now() - start < waitMs) await sleep(200);
   } else if (untilFollowUp) {
-    // #9832: the old fixed sleep(16000) assumed box(12s)+setup+ledger flush fit in 16s — under a
-    // loaded host the follow-up row lands after the kill and the drill read 0. Await the row.
+    // #9832: the old fixed sleep(16000) assumed box+setup+ledger flush fit in 16s — under a
+    // loaded host the follow-up row lands after the kill and the drill read 0. Await the row;
+    // the 45s bound also covers a probe-widened box on a slow host.
     while (!rowsNow().some(x => x.trigger === "time-box follow-up") && Date.now() - start < waitMs) await sleep(200);
   } else {
     await sleep(waitMs);
@@ -143,7 +169,7 @@ console.log("\n## a silent turn ends at the stall window");
     wakeRow && wakeRow.outcome === "stalled" && wakeRow.cut === true,
     JSON.stringify(wakeRow && { outcome: wakeRow.outcome, cut: wakeRow.cut, exit: wakeRow.exit }));
   ok("#7752: it ended at the 2.5s window, nowhere near the 12s box",
-    wakeRow && wakeRow.duration_ms < 8000, `duration ${wakeRow && wakeRow.duration_ms}ms`);
+    wakeRow && wakeRow.duration_ms < WD + 5500, `duration ${wakeRow && wakeRow.duration_ms}ms (window ${WD}ms)`);
   ok("#7752: the row names the model the seat was pinned to",
     wakeRow && wakeRow.model === "qwen3/deepseek-v4-pro", wakeRow && wakeRow.model);
   ok("#7752: the verdict names the silence, never a provider failure",
@@ -179,8 +205,9 @@ console.log("\n## a busy turn is still a box cut");
     JSON.stringify(cutRow && { outcome: cutRow.outcome, stalled: cutRow.stalled, duration: cutRow.duration_ms }));
   ok("#7752: it ran to the 12s box, so the stall window never claimed a producing turn",
     // The row's duration is measured inside the turn, after spawn set-up, so it runs ~100ms short of
-// the box; anything past 10s is unambiguously the box, never the 4.5s stall window (#7752).
-    cutRow && cutRow.duration_ms >= 10000, `duration ${cutRow && cutRow.duration_ms}ms`);
+// the box; anything within 2s of the box is unambiguously the box, never the stall window (#7752).
+// Both the box and this threshold scale with the host probe — idle host: >= 10000, as always.
+    cutRow && cutRow.duration_ms >= BOX - 2000, `duration ${cutRow && cutRow.duration_ms}ms (box ${BOX}ms)`);
   ok("#7752: no stalled row exists anywhere in the busy run",
     !r.rows.some(x => x.outcome === "stalled" || x.stalled === true));
   ok("#7752: no STALLED report and no exhausted reading for a busy turn",
