@@ -6,6 +6,15 @@ const SLIM_DROP = new Set(["log", "history", "checklist"]);
 // #7968: the shape hollow-move.mjs posts — { base, changed[], unindexed[], dependents } or
 // { unavailable: true }; anything else is dropped so a stray payload cannot bloat the log.
 const BLAST_PATHS_MAX = 40;
+// #11142: the fleet-wide cap evicts done/stale cards oldest-first, never an open one.
+const TASK_CAP = 2000, TASK_TRIM_TO = 1750;
+const EVICTABLE = new Set(["done", "stale"]);
+function trimTasks(state) {
+  if (state.tasks.length <= TASK_CAP) return;
+  let drop = state.tasks.length - TASK_TRIM_TO;
+  state.tasks = state.tasks.filter(t => drop <= 0 || !EVICTABLE.has(t.status) || (drop--, false));
+}
+
 function cleanBlast(v) {
   if (!v || typeof v !== "object" || Array.isArray(v)) return null;
   if (v.unavailable) return { unavailable: true };
@@ -153,7 +162,7 @@ export async function routeCards({ req, res, q, P, auth, ctx }) {
           by: b.by || "", ts: ts0, updated: ts0, history: [{ to: target, by: b.by || "", ts: ts0 }] };
         if (bgId) bt._aid = bgId; if (b.agentType) bt._atype = String(b.agentType).slice(0, 40);
         appendTaskNote(bt, b, ts0);
-        state.tasks.push(bt); if (state.tasks.length > 2000) state.tasks.splice(0, 500);
+        state.tasks.push(bt); trimTasks(state);
         appendCardEvent("created", bt, b.by, null, target);
         markDirty(); return json(res, 200, { ok: true, task: bt, created: true });
       }
@@ -180,7 +189,7 @@ export async function routeCards({ req, res, q, P, auth, ctx }) {
       { const dr = cleanDrill(b.drill); if (dr) t.drill = dr; }                        // #6452 — the card's drill line, rides `extra`
       if (b.source === "cc-subagent") { t._fp = subFp(b.title); if (b.agentType) t._atype = String(b.agentType).slice(0, 40); if (b.agentId) t._aid = String(b.agentId).slice(0, 80); if (b.parent) t.parent = String(b.parent).slice(0, 120); t.count = 1; if (t.status === "doing") { t._everStarted = true; t._inflight = 1; } }
       appendTaskNote(t, b, ts0);
-      state.tasks.push(t); if (state.tasks.length > 2000) state.tasks.splice(0, 500);
+      state.tasks.push(t); trimTasks(state);
       appendCardEvent("created", t, b.by, null, st0);
       // A COMMIT closes the focus. A focus card says "this session is working on X right now"; the
       // commit is X arriving, so the card that was rolling forever now completes with the commit
@@ -330,7 +339,7 @@ export async function routeCards({ req, res, q, P, auth, ctx }) {
         if (seen.has(t.todoKey) || t.status === "done") continue;   // keep accomplished work on the board
         state.tasks = state.tasks.filter(x => x.id !== t.id); appendCardEvent("deleted", t, session, null, null); markDirty();
       }
-      if (state.tasks.length > 2000) state.tasks.splice(0, state.tasks.length - 2000);
+      trimTasks(state);
       return json(res, 200, { ok: true, count: todos.length });
     }
     // A REGULAR session's live "focus" card — what THIS session is working on right now, set from each
@@ -375,7 +384,7 @@ export async function routeCards({ req, res, q, P, auth, ctx }) {
           history: [{ to: "doing", by: session, ts: now() }] };
         state.tasks.push(t); appendCardEvent("created", t, session, null, "doing");
         appendEvent("focus", project, session, { taskId: t.id, title, shift: false });
-        if (state.tasks.length > 2000) state.tasks.splice(0, state.tasks.length - 2000);
+        trimTasks(state);
       }
       markDirty(); return json(res, 200, { ok: true, id: t.id, task: t });
     }
