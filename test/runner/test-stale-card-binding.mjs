@@ -134,8 +134,8 @@ exit 0
 console.log("\n## contract A #X is served, stays owed, then B naming only #Y is served");
 {
   const r = await drill({ waitMs: 14000 });
-  ok("#10824: both contracts got their turn — A served, then the batch with B",
-    r.wakeTurns.length === 2, `got ${r.wakeTurns.length} wake turn(s); hub handed ${r.handed}`);
+  ok("#10824: A and B get their own turns, then B retries once",
+    r.wakeTurns.length === 3, `got ${r.wakeTurns.length} wake turn(s); hub handed ${r.handed}`);
   const rows = r.rows.filter(x => x.trigger === "direct message" || /redelivery/.test(x.trigger || ""));
   ok("#10824: turn A's row binds #X",
     rows[0] && rows[0].card === CARD_A, JSON.stringify(rows[0] && { trigger: rows[0].trigger, card: rows[0].card }));
@@ -146,11 +146,12 @@ console.log("\n## contract A #X is served, stays owed, then B naming only #Y is 
   ok("#10824: B's turn is never told it is A's card",
     r.wakeTurns[1] && !r.wakeTurns[1].includes(`FRESH SESSION for card #${CARD_A}`)
       && !r.wakeTurns[1].includes(`relay_board with card:${CARD_A}`), r.wakeTurns[1]?.slice(0, 400));
-  // The ladder warns ONCE (attempt 1, served contract A — so #A is CORRECT there) and parks on
-  // attempt 2; the park is where a stale label would lie about the served contract.
+  // #10197: B is a fresh contract, not A's retry. Each warns on its first attempt;
+  // B's own retry parks, and all three outcomes must name the card actually served.
   const warns = r.sends.filter(s => s.to === "sasha@mac" && s.text?.startsWith("⚠ no commit"));
-  ok("#10824: the single no-delivery warning belongs to A's turn and names #A",
-    warns.length === 1 && warns[0].text.includes(`card #${CARD_A} still todo`),
+  ok("#10824: no-delivery warnings name A then B as each contract is served",
+    warns.length === 2 && warns[0].text.includes(`card #${CARD_A} still todo`)
+      && warns[1].text.includes(`card #${CARD_B} still todo`),
     warns.map(s => String(s.text).slice(0, 110)).join(" | "));
   const parks = r.sends.filter(s => s.to === "sasha@mac" && /PARKED/.test(s.text || ""));
   ok("#10824: the park notice names #Y — the second no-delivery turn read the SERVED card",
@@ -158,7 +159,7 @@ console.log("\n## contract A #X is served, stays owed, then B naming only #Y is 
     parks[0] && String(parks[0].text).slice(0, 160));
   ok("#10824: the turnstate file (what seat-why reads) says #Y after the run",
     r.state && r.state.card === CARD_B, JSON.stringify(r.state && { card: r.state.card, phase: r.state.phase }));
-  ok("#10824: the queue stays owed after two no-delivery attempts", r.pendingLeft);
+  ok("#10824: the queue stays owed after B's second no-delivery attempt", r.pendingLeft);
 }
 
 hub.close();

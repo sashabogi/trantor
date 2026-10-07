@@ -32,6 +32,7 @@ const sends = [];
 let eventSeq = 0;
 let handed = 0;
 let cardFail = false;
+let followup = false;
 const cards = new Map([[CARD, { id: CARD, status: "todo" }]]);
 const MSG = { id: 7, from: "sasha@mac", to: "", text: `contract: work card #${CARD} — run the tests and gate output`, ts: Date.now() };
 const hub = http.createServer((req, res) => {
@@ -68,6 +69,11 @@ const hub = http.createServer((req, res) => {
     if (P === "/policy") return reply({ links: [], autonomy: { "*": 1 } });
     if (P === "/poll") {
       if (handed === 0) { handed = 1; return reply({ messages: [{ ...MSG, to: u.searchParams.get("session") }], cursor: 1 }); }
+      if (followup && handed === 1 && sends.some(s => /⚠ no commit, card/.test(s.text || ""))) {
+        handed++;
+        return reply({ messages: [{ ...MSG, id: 8, to: u.searchParams.get("session"),
+          text: `card #${CARD}: second contract — commit the fix now` }], cursor: 8 });
+      }
       return setTimeout(() => reply({ messages: [], cursor: 1 }), 250);
     }
     return reply({ ok: true });
@@ -82,6 +88,7 @@ const HUB = `http://127.0.0.1:${hub.address().port}`;
 // starts at an initial commit so headBefore resolves and a commit is a HEAD move.
 async function drill(mode, { waitMs = 12000, failCard = false } = {}) {
   sends.length = 0; eventSeq = 0; handed = 0; cardFail = failCard;
+  followup = mode === "followup";
   cards.set(CARD, { id: CARD, status: "todo" });
   const root = mkdtempSync(join(tmpdir(), "tt-nodelivery-"));
   const HOME = join(root, "home");
@@ -102,7 +109,7 @@ P="$HOME/.agent-bus/turn-codex-${PROJ}.txt"
 { echo "===TURN==="; cat "$P"; } >> "${LOGF}"
 if grep -q "NEW BUS MESSAGE" "$P"; then
   n=$(cat "${CNTF}" 2>/dev/null || echo 0); n=$((n+1)); echo "$n" > "${CNTF}"
-  if [ "${mode}" = "commit" ]; then
+  if [ "${mode}" = "commit" ] || { [ "${mode}" = "followup" ] && [ "$n" -gt 1 ]; }; then
     echo "shipped $n" > "shipped-$n.txt"
     git add -A && git -c user.name=d -c user.email=d@d commit -qm "w$n"
   fi
@@ -128,7 +135,7 @@ exit 0
     cwd: process.cwd(), stdio: "ignore",
     env: { ...drillEnv({ TRANTOR_NO_DESKTOP_NOTIFY: "1" }), HOME, PATH: `${fakebin}:${process.env.PATH}`,
       RELAY_URL: HUB, RELAY_AGENT: "codex", RELAY_PROJECT: PROJ,
-      TRANTOR_RETRY_MS: "1200", CREW_KICKOFF: "say hi and end your turn" },
+      TRANTOR_RETRY_MS: followup ? "60000" : "1200", CREW_KICKOFF: "say hi and end your turn" },
   });
   await sleep(waitMs);
   runner.kill("SIGKILL"); await sleep(150);
@@ -167,6 +174,20 @@ console.log("\n## the ibkr shape is no-delivery");
   ok("#10197: the verdict names the gap — no new commit, card still todo",
     row && /no-delivery/.test(row.verdict || "") && /still todo/.test(row.verdict || ""),
     row && row.verdict);
+}
+
+console.log("\n## a second contract on the same card wakes before the no-delivery retry");
+{
+  const r = await drill("followup");
+  const wakes = r.rows.filter(x => x.trigger === "direct message");
+  ok("#10197: both same-card contracts get a turn before the 60s retry", r.handed === 2 && r.wakeTurns.length === 2);
+  ok("#10197: first contract records no-delivery and second delivers",
+    wakes.length === 2 && wakes[0].outcome === "no-delivery" && wakes[1].outcome === "completed"
+    && wakes.every(x => x.card === CARD));
+  ok("#10197: the second turn sees both the owed contract and the new instruction",
+    r.wakeTurns[1]?.includes(MSG.text) && r.wakeTurns[1]?.includes("second contract — commit the fix now"));
+  ok("#10197: follow-up delivery clears the owed queue", !r.pendingLeft);
+  ok("#10197: no no-delivery park suppresses the follow-up", !r.sends.some(s => /PARKED/.test(s.text || "")));
 }
 
 // ---- drill 2: a committed turn reads done ------------------------------------------------------

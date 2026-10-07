@@ -1351,6 +1351,7 @@ async function resolveWakeCard(messages, { session }) {
   }
   let retryAt = 0;            // 0 = deliver at the next opportunity
   let deliveryFails = 0;      // consecutive failed attempts at the SAME pending batch
+  let noDeliveryRetry = false;
   if (pendingWake.length) log(`\x1b[33m${pendingWake.length} message(s) survived from a previous run — redelivering\x1b[0m`);
 
   // #7060: the turn the boot line was read as a promise about. It is a transcript turn by
@@ -1494,6 +1495,12 @@ async function resolveWakeCard(messages, { session }) {
     // a bounded park instead of queueing behind the window; a mention does not, because the room
     // talking is not a request. An exhausted or auth park is a wall and stands anyway (#6134).
     const directWake = wake.filter(m => m.to === SESSION);
+    // #10197: no-delivery owes the old contract, but its retry delay must not batch away
+    // fresh contracts. Only actual CLI failures impose backoff on a new wake.
+    if (noDeliveryRetry) {
+      unpark("new wake after no-delivery");
+      retryAt = 0; deliveryFails = 0; noDeliveryRetry = false;
+    }
     if (parkState && directWake.length) {
       if (isBoundedPark(parkState.reason)) {
         unpark(`direct message from ${directWake[0].from || "?"}`);
@@ -1530,6 +1537,7 @@ async function resolveWakeCard(messages, { session }) {
     } catch { return 0; }
   }
   async function deliverWake() {
+    noDeliveryRetry = false;
     // #7756: captured and cleared HERE so an early return below never leaks the flag into a
     // later turn — only the turn the answer released reads it.
     const resumedAfterAsk = askReleased;
@@ -1770,6 +1778,7 @@ async function resolveWakeCard(messages, { session }) {
       // the contract owed; the queue is kept and the ladder retries — a second no-delivery
       // attempt parks, exactly like the empty-turn ladder it sits beside.
       deliveryFails++;
+      noDeliveryRetry = true;
       savePending(pendingWake, pendingBcast);
       const still = lastNoDeliveryStatus || "unresolved";
       if (deliveryFails >= 2) {
