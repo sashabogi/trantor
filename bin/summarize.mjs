@@ -1,18 +1,8 @@
 #!/usr/bin/env node
-// trantor summarize — narrative cards: what was ASSIGNED and what was DONE, in plain language.
-//
-//   trantor summarize [--project <p>] [--limit N] [--all] [--dry] [--quiet]
-//
-// Title-cleaning makes machine-generated cards readable; it cannot make them MEAN anything. This
-// gives each card a one-line narrative ("assigned — did") written by a CHEAP model from the card's
-// own thread (its events + the messages that cite it). The board then reads as a story a human can
-// follow, which was the ask: "what the agent was assigned, what the agent did, what the flow was."
-//
-// Economics by design (the Scrooge doctrine): candidates are MACHINE-TITLED cards without a
-// summary (--all widens to every unsummarized card), batched into ONE cheap-model call per hub,
-// difficulty easy, capped per run. The summary lands via /task/update and rides the tasks.extra
-// column — permanent, never recomputed. Runs ambiently from the heartbeat (hourly, detached) and
-// on demand as `trantor summarize`.
+// trantor summarize [--project <p>] [--limit N] [--all] [--dry] [--quiet] — gives each machine-titled
+// card a one-line "assigned — did" narrative written by ONE cheap-model call per hub from the card's
+// own thread; lands via /task/update on tasks.extra (permanent, never recomputed). Runs ambiently
+// from the heartbeat (hourly, detached) and on demand as `trantor summarize`.
 import { execSync, spawnSync } from "node:child_process";
 import { readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
@@ -40,7 +30,7 @@ const scroogeBin = () => process.env.SCROOGE_BIN
 // A title no human wrote: protocol frames, dumped prompts, id soup. These are the cards whose
 // board presence is noise until a narrative replaces them.
 const machineTitled = (t) =>
-  /^\s*[<{[]/.test(t) || /<task-notification>|<system-reminder>|toolu_[A-Za-z0-9]/.test(t) ||
+  /^\s*[<{[]/.test(t) || /<task-notification>|<system-reminder>|<trantor-succession>|<trantor-takeover>|toolu_[A-Za-z0-9]/.test(t) ||
   /^\s*(subagent|general-purpose|Explore|Task|Plan):/i.test(t) || t.length > 130;
 
 const hubs = new Set([config.url || "http://127.0.0.1:4477", ...Object.values(config.hubs || {})]);

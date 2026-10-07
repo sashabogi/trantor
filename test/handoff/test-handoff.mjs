@@ -720,6 +720,8 @@ rmSync(projDir, { recursive: true, force: true });
   const hb1 = spawnSync(process.execPath, ["hooks/heartbeat.mjs"], { input: hbIn, encoding: "utf8", timeout: 15000, env: hbEnv });
   const hbCtx1 = (() => { try { return JSON.parse(hb1.stdout).hookSpecificOutput?.additionalContext || ""; } catch { return ""; } })();
   ok("arm: the heartbeat injects the succession notice AT arm time", hbCtx1.includes("SUCCESSION ARMED") && hbCtx1.includes("NEXT STOP"));
+  ok("arm: the notice wears <trantor-succession>, never <system-reminder> (CC 2.1.292 escapes it, #11110)",
+    hbCtx1.includes("<trantor-succession>") && hbCtx1.includes("</trantor-succession>") && !hbCtx1.includes("system-reminder"));
   ok("arm: the notice makes the agent author its own boundary handoff", hbCtx1.includes("handoff skill") && hbCtx1.includes("relay_handoff"));
   const hb2 = spawnSync(process.execPath, ["hooks/heartbeat.mjs"], { input: hbIn, encoding: "utf8", timeout: 15000, env: hbEnv });
   ok("arm: already-armed ticks inject NOTHING (no per-tool-call spam)", hb2.stdout.trim() === "{}");
@@ -753,6 +755,8 @@ rmSync(projDir, { recursive: true, force: true });
     input: JSON.stringify({ session_id: "CAP-SID", prompt: "a queued message before the recap", cwd: projDir3 }),
     encoding: "utf8", env: { ...succEnv, TRANTOR_NO_FOCUS: "" }, timeout: 15000 });
   ok("mandate: the attended recap reminder pins WAIT", pfA.stdout.includes("WAIT for the user"));
+  ok("mandate: the reminder wears <trantor-takeover>, never <system-reminder> (#11110)",
+    pfA.stdout.includes("<trantor-takeover>") && !pfA.stdout.includes("system-reminder"));
 
   writeFileSync(join(bus, "handoffs", `${proj3}-1000000100.json`), JSON.stringify({
     id: `${proj3}-1000000100`, project: projDir3, projectName: proj3, machine: "h", trigger: "context-warn",

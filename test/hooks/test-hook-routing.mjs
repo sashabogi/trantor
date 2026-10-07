@@ -1,15 +1,8 @@
 #!/usr/bin/env node
 // trantor — a hook must address the hub of the project its CARD is about, not the hub of whatever
-// directory the hook process happens to be standing in.
-//
-// The bug this pins (found 2026-08-19, after two separate diagnosis sessions blamed everything
-// else): `toUrl()` resolved the hub from `CLAUDE_PROJECT_DIR || process.cwd()` while the payload's
-// project came from Claude's session cwd. Launch a session from ~/development and those disagree —
-// every card is stamped "crebral-health" and every one of them lands on the LOCAL hub, because
-// "development" has no pin and falls through to the global default. Nothing errors. The seat looks
-// healthy. Half the work records where nobody is reading.
-//
-// So these drills run the REAL hooks against two recorder hubs and vary ONLY the process cwd.
+// directory the hook process happens to be standing in: the pinned-project/hook-cwd disagreement
+// once stamped every card "crebral-health" on the LOCAL hub, and nothing errored. So these drills
+// run the REAL hooks against two recorder hubs and vary ONLY the process cwd.
 import http from "node:http";
 import { spawnSync, spawn } from "node:child_process";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
@@ -31,7 +24,7 @@ function recorder(which) {
     let b = ""; req.on("data", c => (b += c));
     req.on("end", () => {
       let body = {}; try { body = JSON.parse(b || "{}"); } catch {}
-      hits[which].push({ path: req.url, method: req.method, project: body.project, session: body.session });
+      hits[which].push({ path: req.url, method: req.method, project: body.project, session: body.session, title: body.title });
       res.writeHead(200, { "content-type": "application/json" });
       res.end(JSON.stringify({ ok: true, id: 1, task: {}, messages: [], cursor: 0, peers: [], grants: [], tasks: [] }));
     });
@@ -105,6 +98,41 @@ function runHook(hook, cwd, event, procCwd, prompt) {
   ok("a TRANTOR ASK DRILL prompt posts no focus card",
     r.remote.length === 0 && r.local.length === 0,
     `remote=${JSON.stringify(r.remote.map(h => h.path))} local=${JSON.stringify(r.local.map(h => h.path))}`);
+}
+
+// ---- #11110: a PASTED operator prompt is human focus, not harness noise ------------------
+// CC stores a paste as <pasted_content …>…</pasted_content>; the old ^\s*[<{[] heuristic dropped
+// every one of them. The wrapper is transport — the card title must be the words inside.
+{
+  const paste = `<pasted_content id="p1">Fix the workspace terminal resize garbling, it keeps the old wrap width</pasted_content>`;
+  const r = await runHook("hooks/prompt-focus.mjs", repo, "UserPromptSubmit", repo, paste);
+  const focus = r.remote.find(h => h.path === "/focus");
+  ok("a pasted operator prompt posts a focus card", !!focus, JSON.stringify(r.remote.map(h => h.path)));
+  ok("...titled with the UNWRAPPED paste text, never the <pasted_content> tag",
+    focus?.title === "Fix the workspace terminal resize garbling, it keeps the old wrap width", String(focus?.title));
+}
+
+// ---- #11110: harness frames still never card (closed marker list, not a '<' heuristic) ----
+{
+  const r = await runHook("hooks/prompt-focus.mjs", repo, "UserPromptSubmit", repo,
+    "<task-notification><task-id>bavlqfmzq</task-id><status>completed</status></task-notification>");
+  ok("a task-notification posts no focus card",
+    r.remote.length === 0 && r.local.length === 0,
+    `remote=${JSON.stringify(r.remote.map(h => h.path))} local=${JSON.stringify(r.local.map(h => h.path))}`);
+}
+{
+  const r = await runHook("hooks/prompt-focus.mjs", repo, "UserPromptSubmit", repo,
+    "<system-reminder>hook output the model must read, never a board card title</system-reminder>");
+  ok("a system-reminder posts no focus card",
+    r.remote.length === 0 && r.local.length === 0,
+    `remote=${JSON.stringify(r.remote.map(h => h.path))} local=${JSON.stringify(r.local.map(h => h.path))}`);
+}
+{
+  // A human pasting JSON or angle-bracket text is STILL a human — only the closed list is noise.
+  const r = await runHook("hooks/prompt-focus.mjs", repo, "UserPromptSubmit", repo,
+    `{"error": "this paste from my logs keeps failing the login flow, please investigate"}`);
+  ok("a human's JSON-looking prompt still posts a focus card",
+    !!r.remote.find(h => h.path === "/focus"), JSON.stringify(r.remote.map(h => h.path)));
 }
 
 // ---- sessionstart builds absolute URLs; they must be the pinned hub's too ---------------

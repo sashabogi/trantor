@@ -119,10 +119,12 @@ async function maybeEarlyWarn(stdinRaw, session) {
     // It is marked where the baton fires (here on the backstop, in Stop on the normal path).
     armBaton(sessionId, { projectDir, transcript, reason: "context-warn", windowId, tty, tokens: usage.tokens });
     // Tell the RUNNING agent (once, at arm time): wrap up and author the boundary handoff yourself.
-    ARM_CTX = `<system-reminder>TRANTOR SUCCESSION ARMED — this session is at ${Math.round(usage.frac * 100)}% of its context window, and the baton is armed: your NEXT STOP fires the handoff. You are now responsible for your own succession:\n`
+    // NOT <system-reminder>: CC 2.1.292 escapes that tag in hook output, so the notice would
+    // arrive as literal text (#11110). Our own <trantor-…> tags pass through like the other hooks'.
+    ARM_CTX = `<trantor-succession>TRANTOR SUCCESSION ARMED — this session is at ${Math.round(usage.frac * 100)}% of its context window, and the baton is armed: your NEXT STOP fires the handoff. You are now responsible for your own succession:\n`
       + `1. Reach a real task boundary — finish, pause, or checkpoint your in-flight work NOW; do not start new work.\n`
       + `2. Author (or refresh) the rich handoff from your CURRENT state — via the handoff skill or the relay_handoff MCP tool — so the successor gets the freshest picture, not a digest of a session 36 seconds stale. A fresh model-authored handoff supersedes the auto-digest.\n`
-      + `3. Then end your turn. The Stop hook fires the baton at that boundary.</system-reminder>`;
+      + `3. Then end your turn. The Stop hook fires the baton at that boundary.</trantor-succession>`;
   } catch {}
 }
 
