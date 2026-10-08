@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import assert from "node:assert/strict";
-import { execFileSync, spawn } from "node:child_process";
+import { execFileSync, spawnSync, spawn } from "node:child_process";
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { startTestHub, freePort } from "../lib/test-hub.mjs";
@@ -110,6 +110,11 @@ try {
   const separate = detectCollisions({ claims: [claim("alpha", "a", checkout), claim("alpha", "b", join(dir, "another-checkout"))], now });
   check(!separate.some(c => c.kind === "file-conflict"), "different checkouts sharing a label and relative path do not collide");
   await exercise("json", {});
+  // #11310: CI runners have no initdb on PATH; skip the live-Postgres half loudly, like test-message-ack-durability.
+  const haveBin = (b) => spawnSync("sh", ["-c", `command -v ${b}`], { stdio: "ignore" }).status === 0;
+  if (!haveBin("initdb") || !haveBin("pg_ctl")) {
+    console.log("# (live Postgres section skipped: put initdb/pg_ctl on PATH to run it)");
+  } else {
   const pgData = join(dir, "pg-data");
   execFileSync("initdb", ["-D", pgData, "-U", "trantor", "-A", "trust", "--no-locale", "-E", "UTF8"], { stdio: "ignore" });
   const port = await freePort();
@@ -119,6 +124,7 @@ try {
   observer = new PgStore({ url });
   await observer.init();
   await exercise("postgres", { RELAY_STORE: "pg", RELAY_DATABASE_URL: url, RELAY_ORG_ID: "local" }, observer);
+  }
 } finally {
   if (observer) await observer.close();
   if (pgStarted) execFileSync("pg_ctl", ["-D", join(dir, "pg-data"), "-w", "-m", "fast", "stop"], { stdio: "ignore" });
