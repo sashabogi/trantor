@@ -3,7 +3,7 @@ import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, expect, it, vi } from "vitest";
 import { HandoffRecapStatus } from "./HandoffRecapStatus";
-import { handoffWaiting, type HandoffState } from "./handoffState";
+import { handoffStatusText, handoffWaiting, type HandoffState } from "./handoffState";
 
 type StateReply = { records: HandoffState[] };
 const ipc: StateReply = { records: [] };
@@ -49,7 +49,11 @@ it("project row and single chat line follow every fixture state and clear on REC
 
 it("terminal records are not pending", () => {
   expect(handoffWaiting()).toBe(false);
-  for (const state of ["ARMED", "WRITING", "WRITTEN", "ENDED", "OPENED", "CLAIMED", "RECAPPED", "FAILED"] as const) {
-    expect(handoffWaiting({ project: "p", id: "p-1", state })).toBe(state !== "RECAPPED" && state !== "FAILED");
+  for (const state of ["IDLE", "ARMED", "WRITING", "WRITTEN", "ENDED", "OPENED", "CLAIMED", "RECAPPED", "FAILED"] as const) {
+    expect(handoffWaiting({ project: "p", id: "p-1", state })).toBe(state !== "IDLE" && state !== "RECAPPED" && state !== "FAILED");
   }
+});
+
+it("inactive newest records leave no waiting label", () => {
+  expect(handoffStatusText({ project: "CSS", id: "CSS-100", state: "IDLE" })).toBeNull();
 });

@@ -1,0 +1,43 @@
+{
+  "id": "crebral-health-100",
+  "project": "fixture",
+  "projectName": "crebral-health",
+  "machine": "fixture",
+  "session_id": "fixture",
+  "trigger": "manual-baton",
+  "transcript_path": "fixture",
+  "stamp": 100,
+  "summary": "fixture",
+  "mode": "unattended",
+  "gitStatus": "fixture",
+  "subagents": {
+    "sessionId": "fixture",
+    "subagents": [],
+    "counts": {
+      "total": 100,
+      "completed": 100,
+      "inFlight": 100,
+      "stale": 100,
+      "suspectFiles": 100
+    }
+  },
+  "verifyGates": [],
+  "consumed": true,
+  "states": [
+    {
+      "state": "written",
+      "ts": 100,
+      "by": "fixture"
+    },
+    {
+      "state": "claimed",
+      "ts": 100,
+      "by": "fixture"
+    }
+  ],
+  "consumedAt": 100,
+  "consumedBy": {
+    "session_id": "fixture",
+    "transcript_path": "fixture"
+  }
+}

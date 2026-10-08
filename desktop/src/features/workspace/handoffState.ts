@@ -1,7 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { useSyncExternalStore } from "react";
 
-export type HandoffState = { project: string; id: string; state: "ARMED" | "WRITING" | "WRITTEN" | "ENDED" | "OPENED" | "CLAIMED" | "RECAPPED" | "FAILED"; reason?: string | null };
+export type HandoffState = { project: string; id: string; state: "IDLE" | "ARMED" | "WRITING" | "WRITTEN" | "ENDED" | "OPENED" | "CLAIMED" | "RECAPPED" | "FAILED"; reason?: string | null };
 let records: HandoffState[] = [];
 const subscribers = new Set<() => void>();
 let timer: ReturnType<typeof setInterval> | undefined;
@@ -38,11 +38,11 @@ export function useHandoffState(project: string) {
 }
 
 export function handoffWaiting(state?: HandoffState) {
-  return state !== undefined && state.state !== "RECAPPED" && state.state !== "FAILED";
+  return state !== undefined && state.state !== "IDLE" && state.state !== "RECAPPED" && state.state !== "FAILED";
 }
 
 export function handoffStatusText(record?: HandoffState) {
-  if (!record || record.state === "RECAPPED") return null;
+  if (!record || record.state === "IDLE" || record.state === "RECAPPED") return null;
   switch (record.state) {
     case "ARMED": return "handoff armed · waiting for the turn to end";
     case "WRITING": return "handoff writing";

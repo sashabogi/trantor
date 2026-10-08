@@ -110,6 +110,10 @@ describe("Workspace crew controls", () => {
       await act(async () => root.render(<CrewControls project="trantor" targets={Array.from({ length: 12 }, (_, i) => target(`seat${i}`))} onSelect={vi.fn()} onChanged={vi.fn()} api={fakeApi()} />));
       expect(host.querySelector('[aria-label="Seat tabs"]')?.className).toContain("overflow-x-auto");
       expect(host.querySelectorAll(".tr-dot")).toHaveLength(12);
+      const strip = host.querySelector('[aria-label="Seat tabs"]');
+      const add = host.querySelector('[aria-label="Add seat"]');
+      expect(strip?.contains(add)).toBe(false);
+      expect(strip?.parentElement).toBe(add?.parentElement);
       await click("seat0 actions"); await click("Stop");
       expect(host.querySelectorAll('[role="status"]')).toHaveLength(1);
       await act(async () => vi.advanceTimersByTimeAsync(5100));

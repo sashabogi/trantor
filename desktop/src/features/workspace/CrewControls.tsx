@@ -69,11 +69,13 @@ export function CrewControls({ project, targets, selected, onSelect, onChanged, 
   const extra: PaneTarget[] = added.filter(name => !names.includes(name)).map(name => ({ key: `${name}:${project}`, label: name,
     agent: name, brand: name, session: `${name}:${project}`, online: false, isOrchestrator: false }));
   return <>
-    <div className="flex min-w-0 flex-nowrap items-center gap-1 overflow-x-auto" aria-label="Seat tabs">
+    <div className="flex min-w-0 max-w-full items-center gap-1">
+      <div className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto" aria-label="Seat tabs">
       {[...targets, ...extra].map(t => t.isOrchestrator
         ? <SeatTab key={t.key} name={t.label} brandName={t.brand} status={t.status} active={selected === t.key} onClick={() => onSelect(t)} you />
         : <CrewSeatTab key={t.key} project={project} target={t} active={selected === t.key} onSelect={() => onSelect(t)}
           catalog={catalog} api={api} onChanged={onChanged} report={report} actionPending={notice.busy} />)}
+      </div>
       <button ref={addAnchor} type="button" aria-label="Add seat" title="Add seat" aria-haspopup="menu" aria-expanded={adding}
         className="shrink-0 rounded-[9px] px-3 py-[7px] text-tr-muted hover:bg-tr-panel hover:text-tr-text"
         onClick={() => setAdding(!adding)}>+</button>

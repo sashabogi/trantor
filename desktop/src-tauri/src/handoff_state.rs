@@ -9,7 +9,31 @@ pub(crate) struct HandoffState {
     reason: Option<String>,
 }
 
+const CLAIM_TTL_SECONDS: u64 = 600;
+
+fn record_state(record: &serde_json::Value, stamp: u64, now: u64) -> &'static str {
+    if record["consumed"] == true { return "RECAPPED"; }
+    if record["trigger"] == "idle-retire" { return "IDLE"; }
+    if record["consumed"] != false { return "IDLE"; }
+    let live_claim = record["claim"]["expiresAt"].as_u64().is_some_and(|expiry| expiry > now);
+    let fresh_baton = matches!(record["trigger"].as_str(), Some("manual-baton" | "manual-cli" | "handoff_now" | "clicked" | "countdown" | "unattended"))
+        && stamp <= now && now - stamp < CLAIM_TTL_SECONDS;
+    if !live_claim && !fresh_baton { return "IDLE"; }
+    if live_claim { return "CLAIMED"; }
+    record["states"].as_array()
+        .and_then(|states| states.iter().rev().find_map(|s| match s["state"].as_str()? {
+            "written" => Some("WRITTEN"), "ended" => Some("ENDED"),
+            "opened" => Some("OPENED"), "failed" => Some("FAILED"), _ => None,
+        })).unwrap_or("WRITTEN")
+}
+
 fn read_states(dir: &Path) -> Vec<HandoffState> {
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default().as_secs();
+    read_states_at(dir, now)
+}
+
+fn read_states_at(dir: &Path, now: u64) -> Vec<HandoffState> {
     let mut latest: HashMap<String, (u64, HandoffState)> = HashMap::new();
     let Ok(entries) = std::fs::read_dir(dir) else { return Vec::new() };
     for entry in entries.flatten() {
@@ -20,16 +44,7 @@ fn read_states(dir: &Path) -> Vec<HandoffState> {
         let Ok(stamp) = stamp.parse::<u64>() else { continue };
         let Ok(body) = std::fs::read_to_string(entry.path()) else { continue };
         let Ok(record) = serde_json::from_str::<serde_json::Value>(&body) else { continue };
-        let state = record["states"].as_array()
-            .and_then(|states| states.iter().rev().find_map(|s| match s["state"].as_str()? {
-                "armed" => Some("ARMED"), "writing" => Some("WRITING"),
-                "written" => Some("WRITTEN"), "ended" => Some("ENDED"),
-                "opened" => Some("OPENED"), "claimed" => Some("CLAIMED"),
-                "recapped" => Some("RECAPPED"), "failed" => Some("FAILED"), _ => None,
-            })).unwrap_or("WRITTEN");
-        let state = if record["claim"].is_object() && !matches!(state, "RECAPPED" | "FAILED") {
-            "CLAIMED"
-        } else { state };
+        let state = record_state(&record, stamp, now);
         let reason = record["states"].as_array().and_then(|states| states.last())
             .and_then(|s| s["reason"].as_str()).or(record["reason"].as_str()).map(str::to_string);
         let item = HandoffState { project: project.to_string(), id: stem.to_string(), state, reason };
@@ -66,7 +81,7 @@ pub(crate) fn handoff_states() -> Vec<HandoffState> {
     let records = read_states(&crate::desktop_bus_dir().join("handoffs"));
     let mut chains = crate::lock_or_recover(&CHAINS);
     chains.retain(|chain| !records.iter().any(|record| record.project == chain.snapshot.project
-        && Some(&record.id) != chain.previous_id.as_ref() && record.state == "RECAPPED"));
+        && Some(&record.id) != chain.previous_id.as_ref() && matches!(record.state, "RECAPPED" | "IDLE")));
     merge_states(records, &chains)
 }
 
@@ -74,7 +89,7 @@ fn merge_states(mut records: Vec<HandoffState>, chains: &[ChainState]) -> Vec<Ha
     for chain in chains {
         let record = records.iter().find(|s| s.project == chain.snapshot.project);
         let successor = record.is_some_and(|s| Some(&s.id) != chain.previous_id.as_ref()
-            && matches!(s.state, "CLAIMED" | "RECAPPED" | "FAILED"));
+            && matches!(s.state, "CLAIMED" | "RECAPPED" | "FAILED" | "IDLE"));
         if successor && chain.snapshot.state != "FAILED" { continue; }
         records.retain(|s| s.project != chain.snapshot.project);
         records.push(chain.snapshot.clone());
@@ -95,18 +110,17 @@ mod tests {
         std::fs::write(dir.join("my-project-100.json"), r#"{"consumed":false}"#).expect("older record");
         std::fs::write(dir.join("recap-pending-123.json"), "{}").expect("stamp");
         for (body, expected) in [
-            (r#"{"states":[{"state":"armed"}]}"#, "ARMED"),
-            (r#"{"states":[{"state":"armed"},{"state":"writing"}]}"#, "WRITING"),
-            (r#"{"consumed":false,"states":[{"state":"written"}]}"#, "WRITTEN"),
-            (r#"{"states":[{"state":"written"},{"state":"ended"}]}"#, "ENDED"),
-            (r#"{"states":[{"state":"ended"},{"state":"opened"}]}"#, "OPENED"),
-            (r#"{"states":[{"state":"opened"},{"state":"failed","reason":"open refused"}]}"#, "FAILED"),
-            (r#"{"consumed":false,"claim":{"session_id":"successor","expiresAt":1}}"#, "CLAIMED"),
-            (r#"{"consumed":true,"states":[{"state":"claimed"}]}"#, "CLAIMED"),
+            (r#"{"consumed":false,"trigger":"manual-baton","states":[{"state":"written"}]}"#, "WRITTEN"),
+            (r#"{"consumed":false,"trigger":"manual-baton","states":[{"state":"ended"}]}"#, "ENDED"),
+            (r#"{"consumed":false,"trigger":"manual-baton","states":[{"state":"opened"}]}"#, "OPENED"),
+            (r#"{"consumed":false,"trigger":"manual-baton","states":[{"state":"failed","reason":"open refused"}]}"#, "FAILED"),
+            (r#"{"consumed":false,"claim":{"session_id":"successor","expiresAt":301}}"#, "CLAIMED"),
+            (r#"{"consumed":false,"claim":{"session_id":"successor","expiresAt":300}}"#, "IDLE"),
+            (r#"{"consumed":true,"states":[{"state":"claimed"}]}"#, "RECAPPED"),
             (r#"{"consumed":true,"states":[{"state":"recapped"}]}"#, "RECAPPED"),
         ] {
             std::fs::write(&file, body).expect("handoff record");
-            let states = read_states(&dir);
+            let states = read_states_at(&dir, 300);
             assert_eq!(states.len(), 1);
             assert_eq!(states[0].project, "my-project");
             assert_eq!(states[0].id, "my-project-200");
@@ -114,6 +128,36 @@ mod tests {
             if expected == "FAILED" { assert_eq!(states[0].reason.as_deref(), Some("open refused")); }
         }
         std::fs::remove_dir_all(&dir).expect("fixture cleanup");
+    }
+
+    #[test]
+    fn legacy_consumed_and_retirement_fixtures_never_wait() {
+        for (body, expected) in [
+            (include_str!("fixtures/handoff-records/trantor.json"), "RECAPPED"),
+            (include_str!("fixtures/handoff-records/crebral-health.json"), "RECAPPED"),
+            (include_str!("fixtures/handoff-records/ibkr.json"), "RECAPPED"),
+            (include_str!("fixtures/handoff-records/CSS.json"), "IDLE"),
+        ] {
+            let mut record: serde_json::Value = serde_json::from_str(body).unwrap();
+            assert_eq!(record_state(&record, 100, 110), expected);
+            record["claim"] = serde_json::json!({"expiresAt": 900});
+            assert_eq!(record_state(&record, 100, 110), expected);
+        }
+    }
+
+    #[test]
+    fn fresh_baton_and_claim_expiry_bound_waiting() {
+        for trigger in ["manual-baton", "manual-cli", "handoff_now", "clicked", "countdown", "unattended"] {
+            let record = serde_json::json!({"consumed":false,"trigger":trigger});
+            assert_eq!(record_state(&record, 100, 699), "WRITTEN");
+            assert_eq!(record_state(&record, 100, 700), "IDLE");
+            assert_eq!(record_state(&record, 701, 700), "IDLE");
+        }
+        let mut record = serde_json::json!({"consumed":false,"trigger":"auto","claim":{"expiresAt":800}});
+        assert_eq!(record_state(&record, 100, 799), "CLAIMED");
+        assert_eq!(record_state(&record, 100, 800), "IDLE");
+        record["consumed"] = serde_json::Value::Null;
+        assert_eq!(record_state(&record, 100, 799), "IDLE");
     }
 
     #[test]
@@ -130,7 +174,7 @@ mod tests {
             assert_eq!(live.len(), 1);
             assert_eq!(live[0].state, state);
         }
-        for state in ["CLAIMED", "RECAPPED"] {
+        for state in ["CLAIMED", "RECAPPED", "IDLE"] {
             let successor = merge_states(vec![fixture("p-2", state)], std::slice::from_ref(&chain));
             assert_eq!(successor[0].state, state);
         }
