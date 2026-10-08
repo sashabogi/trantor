@@ -1,7 +1,11 @@
 #!/usr/bin/env node
 import assert from "node:assert/strict";
+import { mkdtempSync, readFileSync, existsSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { parseRepoUrl, detectRepo, createRemoteOverlap } from "../../lib/remote-overlap.mjs";
-import { detectCollisions } from "../../lib/overseer.mjs";
+import { detectCollisions, collisionIdentity } from "../../lib/overseer.mjs";
 
 let pass = 0, fail = 0;
 const ok = (condition, name) => {
@@ -19,9 +23,12 @@ async function test(name, fn) {
 }
 
 const NOW = 1_000_000;
+// scratch stays inside the worktree, under the gitignored out-dir
+const ROOT = fileURLToPath(new URL("../..", import.meta.url));
+const scratch = () => mkdtempSync(join(ROOT, ".agent-bus-out", "ro-"));
 
-// A fake gh: the injected runner contract is (args) -> { code, stdout, stderr }, exactly what the
-// default execFile wrapper resolves. No network, no spawn — fixtures are inline JSON.
+// A fake gh: the injected runner contract is (args) -> { code, stdout, stderr }, sync like the
+// default spawnSync wrapper. No network, no spawn — fixtures are inline JSON.
 const listJson = (prs) => JSON.stringify(
   prs.map(({ number, login = "alice", url }) => ({
     number,
@@ -33,9 +40,12 @@ const filesJson = (files) => JSON.stringify(files.map((filename) => ({ filename 
 
 function fakeGh(opts = {}) {
   const calls = [];
-  const run = async (args) => {
+  const run = (args) => {
     calls.push(args.join(" "));
     const path = String(args[1] ?? "");
+    const rm = path.match(/^repos\/([^/]+\/[^/]+)\/pulls/);
+    // repo-aware: a fixture answers ONLY for its own repo — any other repo sees an empty list
+    if (rm && opts.repo && rm[1] !== opts.repo) return { code: 0, stdout: "[]", stderr: "" };
     if (path.endsWith("/pulls?state=open")) return opts.listError ?? { code: 0, stdout: listJson(opts.list ?? []), stderr: "" };
     const m = path.match(/pulls\/(\d+)\/files$/);
     if (m) {
@@ -47,7 +57,7 @@ function fakeGh(opts = {}) {
   return { run, calls, opts };
 }
 
-const tick = () => new Promise((r) => setImmediate(r));
+const ENOENT = { code: "ENOENT", stdout: "", stderr: "spawn gh ENOENT" };
 
 console.log("# remote-overlap tests");
 
@@ -74,161 +84,206 @@ await test("detectRepo parses origin, and null on no-origin or failure", () => {
   assert.equal(detectRepo({ run: () => { throw new Error("spawn git ENOENT"); } }), null);
 });
 
-await test("overlap match: a PR touching a wanted file reports pr, author, url and the intersected files", async () => {
-  const gh = fakeGh({ list: [{ number: 7 }, { number: 9 }], filesByPr: { 7: ["src/x.ts", "src/y.ts"], 9: ["docs/a.md"] } });
-  const api = createRemoteOverlap({ run: gh.run, now: () => NOW });
-  await api.refresh("acme/widgets");
-  assert.deepEqual(api.overlapsFor("acme/widgets", ["src/x.ts", "src/z.ts"]), [{
-    pr: 7,
+await test("overlap match: PR touching a wanted file reports repo, number, author, url, intersected files", () => {
+  const gh = fakeGh({ repo: "acme/widgets", list: [{ number: 7 }, { number: 9 }], filesByPr: { 7: ["src/x.ts", "src/y.ts"], 9: ["docs/a.md"] } });
+  const api = createRemoteOverlap({ run: gh.run, now: () => NOW, cacheDir: scratch() });
+  const out = api.overlapsFor({ repo: "acme/widgets", files: ["src/x.ts", "src/z.ts"] });
+  assert.deepEqual(out, [{
+    repo: "acme/widgets",
+    number: 7,
     author: "alice",
     url: "https://github.com/acme/widgets/pull/7",
     files: ["src/x.ts"],
   }]);
-  assert.deepEqual(api.overlapsFor("acme/widgets", []), []);
-  assert.deepEqual(api.overlapsFor(null, ["src/x.ts"]), []);
+  assert.deepEqual(api.overlapsFor({ repo: "acme/widgets", files: [] }), []);
+  assert.deepEqual(api.overlapsFor({ files: ["src/x.ts"] }), []);
 });
 
-await test("cache hit: a poll inside the TTL makes no new gh calls", async () => {
-  const gh = fakeGh({ list: [{ number: 7 }], filesByPr: { 7: ["src/x.ts"] } });
-  const api = createRemoteOverlap({ run: gh.run, now: () => NOW });
-  await api.refresh("acme/widgets");
+await test("cache hit and miss: poll once per TTL window, file cache carries it across instances", () => {
+  const dir = scratch();
+  const gh = fakeGh({ repo: "acme/widgets", list: [{ number: 7 }], filesByPr: { 7: ["src/x.ts"] } });
+  const api = createRemoteOverlap({ run: gh.run, now: () => NOW, cacheDir: dir });
+  api.overlapsFor({ repo: "acme/widgets", files: ["src/x.ts"] });
   const afterFirst = gh.calls.length;
-  await api.refresh("acme/widgets");
-  api.overlapsFor("acme/widgets", ["src/x.ts"]);
-  assert.equal(gh.calls.length, afterFirst, "TTL-fresh reads must not re-poll");
+  api.overlapsFor({ repo: "acme/widgets", files: ["src/x.ts"] });
+  assert.equal(gh.calls.length, afterFirst, "TTL-fresh reads make no gh calls");
+  assert.ok(existsSync(join(dir, "remote-overlap-acme-widgets.json")), "cache file written");
+
+  // a second instance (the next hook process) reads the SAME warm file with zero gh calls
+  const gh2 = fakeGh({});
+  const api2 = createRemoteOverlap({ run: gh2.run, now: () => NOW, cacheDir: dir });
+  assert.deepEqual(api2.overlapsFor({ repo: "acme/widgets", files: ["src/x.ts"] }).map((o) => o.number), [7]);
+  assert.equal(gh2.calls.length, 0, "warm cache file answers with no poll");
+
+  // past the TTL the poll reruns (cache miss)
+  const api3 = createRemoteOverlap({ run: gh.run, now: () => NOW + 5 * 60 * 1000 + 1, cacheDir: dir });
+  api3.overlapsFor({ repo: "acme/widgets", files: ["src/x.ts"] });
+  assert.ok(gh.calls.length > afterFirst, "stale cache triggers a fresh poll");
 });
 
-await test("cache miss: past the TTL overlapsFor serves stale and kicks exactly one refresh", async () => {
-  let at = NOW;
-  const gh = fakeGh({ list: [{ number: 7 }], filesByPr: { 7: ["src/x.ts"] } });
-  const api = createRemoteOverlap({ run: gh.run, now: () => at });
-  await api.refresh("acme/widgets");
-  const afterFirst = gh.calls.length;
-  at = NOW + 5 * 60 * 1000 + 1;
-  assert.deepEqual(api.overlapsFor("acme/widgets", ["src/x.ts"]).length, 1, "stale data still answers synchronously");
-  await tick();
-  assert.ok(gh.calls.length > afterFirst, "a stale read kicks a background refresh");
-  await api.refresh("acme/widgets");
-  const afterSecond = gh.calls.length;
-  await tick();
-  assert.equal(gh.calls.length, afterSecond, "concurrent kicks dedupe into one poll");
+await test("an unrelated repo never matches: its own cache is polled, never another repo's", () => {
+  const gh = fakeGh({ repo: "acme/widgets", list: [{ number: 7 }], filesByPr: { 7: ["src/x.ts"] } });
+  const api = createRemoteOverlap({ run: gh.run, now: () => NOW, cacheDir: scratch() });
+  assert.deepEqual(api.overlapsFor({ repo: "acme/widgets", files: ["src/x.ts"] }).length, 1);
+  const before = gh.calls.length;
+  assert.deepEqual(api.overlapsFor({ repo: "other/repo", files: ["src/x.ts"] }), [], "no PRs in other/repo at all");
+  assert.ok(gh.calls.length > before, "other/repo got its own poll");
+  assert.ok(!gh.calls.some((c) => c.includes("other/repo/pulls/")), "no cross-repo reads");
 });
 
-await test("per-PR files failure is contained: that PR contributes nothing, the rest survive", async () => {
-  const gh = fakeGh({ list: [{ number: 7 }, { number: 8 }], filesByPr: { 8: ["src/x.ts"] }, fileErrors: { 7: { code: 1, stdout: "", stderr: "boom" } } });
-  const api = createRemoteOverlap({ run: gh.run, now: () => NOW });
-  await api.refresh("acme/widgets");
-  assert.deepEqual(api.overlapsFor("acme/widgets", ["src/x.ts"]).map((o) => o.pr), [8]);
+await test("gitRoot scoping: repo is derived from the checkout the session actually edits", () => {
+  const gh = fakeGh({ repo: "acme/widgets", list: [{ number: 7 }], filesByPr: { 7: ["src/x.ts"] } });
+  const gitRun = (args, { cwd } = {}) =>
+    cwd === "/wt/glm"
+      ? { status: 0, stdout: "git@github.com:acme/widgets.git\n", stderr: "" }
+      : { status: 1, stdout: "", stderr: "not a repo" };
+  const api = createRemoteOverlap({ run: gh.run, gitRun, now: () => NOW, cacheDir: scratch() });
+  assert.deepEqual(api.overlapsFor({ gitRoot: "/wt/glm", files: ["src/x.ts"] }).map((o) => o.repo), ["acme/widgets"]);
+  assert.deepEqual(api.overlapsFor({ gitRoot: "/elsewhere", files: ["src/x.ts"] }), [], "no origin, no evidence");
+  assert.deepEqual(api.overlapsFor({ gitRoot: null, files: ["src/x.ts"] }), []);
 });
 
-await test("gh missing: off with one log line, no raise, no further calls, forever empty", async () => {
+await test("gh missing means off: one log line, empty forever, no more gh calls", () => {
   const logs = [];
-  const gh = fakeGh({ listError: { code: "ENOENT", stdout: "", stderr: "spawn gh ENOENT" } });
-  const api = createRemoteOverlap({ run: gh.run, log: (m) => logs.push(m), now: () => NOW });
-  assert.equal(await api.refresh("acme/widgets"), null);
+  const gh = fakeGh({ repo: "acme/widgets", listError: ENOENT });
+  const api = createRemoteOverlap({ run: gh.run, log: (m) => logs.push(m), now: () => NOW, cacheDir: scratch() });
+  assert.deepEqual(api.overlapsFor({ repo: "acme/widgets", files: ["src/x.ts"] }), []);
   assert.equal(api.enabled, false);
-  assert.deepEqual(api.overlapsFor("acme/widgets", ["src/x.ts"]), []);
-  await api.refresh("acme/widgets");
-  await tick();
+  api.overlapsFor({ repo: "acme/widgets", files: ["src/x.ts"] });
+  api.overlapsFor({ repo: "acme/widgets", files: ["src/x.ts"] });
   assert.equal(logs.length, 1, `one log line, got ${logs.length}`);
   assert.equal(gh.calls.length, 1, "a turned-off poller never calls gh again");
 });
 
-await test("gh unauthenticated: same off-with-one-line behavior", async () => {
+await test("gh unauthenticated: same off-with-one-line behavior", () => {
   const logs = [];
-  const gh = fakeGh({ listError: { code: 4, stdout: "", stderr: "gh: To get started with GitHub CLI, please run: gh auth login" } });
-  const api = createRemoteOverlap({ run: gh.run, log: (m) => logs.push(m), now: () => NOW });
-  await api.refresh("acme/widgets");
+  const gh = fakeGh({ repo: "acme/widgets", listError: { code: 4, stdout: "", stderr: "gh: To get started with GitHub CLI, please run: gh auth login" } });
+  const api = createRemoteOverlap({ run: gh.run, log: (m) => logs.push(m), now: () => NOW, cacheDir: scratch() });
+  api.overlapsFor({ repo: "acme/widgets", files: ["src/x.ts"] });
   assert.equal(api.enabled, false);
   assert.equal(logs.length, 1);
-  assert.deepEqual(api.overlapsFor("acme/widgets", ["src/x.ts"]), []);
+  assert.deepEqual(api.overlapsFor({ repo: "acme/widgets", files: ["src/x.ts"] }), []);
 });
 
-await test("rate limit: pause with one log line, serve stale, resume after the backoff", async () => {
+await test("rate limit: backoff persisted in the cache, stale evidence served, poll resumes later", () => {
   let at = NOW;
   const logs = [];
-  const gh = fakeGh({ list: [{ number: 7 }], filesByPr: { 7: ["src/x.ts"] } });
-  const api = createRemoteOverlap({ run: gh.run, log: (m) => logs.push(m), now: () => at });
-  await api.refresh("acme/widgets");
-  assert.deepEqual(api.overlapsFor("acme/widgets", ["src/x.ts"]).length, 1);
+  const dir = scratch();
+  const gh = fakeGh({ repo: "acme/widgets", list: [{ number: 7 }], filesByPr: { 7: ["src/x.ts"] } });
+  const api = createRemoteOverlap({ run: gh.run, log: (m) => logs.push(m), now: () => at, cacheDir: dir });
+  assert.deepEqual(api.overlapsFor({ repo: "acme/widgets", files: ["src/x.ts"] }).length, 1);
   const goodCalls = gh.calls.length;
-  gh.opts.list = [{ number: 8 }];
+  gh.opts.list = [{ number: 7 }, { number: 8 }];
   gh.opts.listError = { code: 1, stdout: "", stderr: "gh: API rate limit exceeded for user ID 123." };
   at = NOW + 6 * 60 * 1000;
-  const served = await api.refresh("acme/widgets");
-  assert.deepEqual(served?.prs.map((o) => o.pr), [7], "rate-limited poll serves the stale cache");
+  assert.deepEqual(api.overlapsFor({ repo: "acme/widgets", files: ["src/x.ts"] }).map((o) => o.number), [7],
+    "rate-limited poll serves the stale cache");
   assert.equal(api.enabled, true, "a rate limit is not an outage");
   assert.equal(logs.length, 1);
   const blockedCalls = gh.calls.length;
-  await api.refresh("acme/widgets");
-  assert.equal(gh.calls.length, blockedCalls, "blocked poller makes no calls");
-  assert.deepEqual(api.overlapsFor("acme/widgets", ["src/x.ts"]).map((o) => o.pr), [7], "stale evidence stays in use");
+  // a SIBLING process (new instance, same cache file) must honor the persisted backoff
+  const api2 = createRemoteOverlap({ run: gh.run, log: () => {}, now: () => at, cacheDir: dir });
+  api2.overlapsFor({ repo: "acme/widgets", files: ["src/x.ts"] });
+  assert.equal(gh.calls.length, blockedCalls, "backoff survives the process boundary");
   at = NOW + 17 * 60 * 1000;
   gh.opts.listError = null;
   gh.opts.filesByPr[8] = ["src/x.ts"];
-  await api.refresh("acme/widgets");
-  assert.ok(gh.calls.length > blockedCalls, "polling resumes after the backoff");
-  // PR 7 closed and dropped off the list while paused; only PR 8 remains.
-  assert.deepEqual(api.overlapsFor("acme/widgets", ["src/x.ts"]).map((o) => o.pr), [8]);
+  assert.deepEqual(api.overlapsFor({ repo: "acme/widgets", files: ["src/x.ts"] }).map((o) => o.number), [7, 8],
+    "polling resumes after the backoff");
+  assert.ok(gh.calls.length > blockedCalls);
 });
 
-await test("detector: one remote-overlap collision per (pr, file) with claimants as sessions", () => {
-  const claim = (session, project, file, age = 0) => ({ session, project, file, ts: NOW - age });
-  const overlap = (files) => ({ pr: 7, author: "alice", url: "https://github.com/acme/widgets/pull/7", files });
+await test("closed PR ends it: dropped from the open list, next poll stops matching", () => {
+  let at = NOW;
+  const gh = fakeGh({ repo: "acme/widgets", list: [{ number: 7 }], filesByPr: { 7: ["src/x.ts"] } });
+  const api = createRemoteOverlap({ run: gh.run, now: () => at, cacheDir: scratch() });
+  assert.deepEqual(api.overlapsFor({ repo: "acme/widgets", files: ["src/x.ts"] }).length, 1);
+  at = NOW + 5 * 60 * 1000 + 1;
+  gh.opts.list = [];
+  assert.deepEqual(api.overlapsFor({ repo: "acme/widgets", files: ["src/x.ts"] }), [], "PR 7 closed, no more evidence");
+});
+
+await test("per-PR files failure is contained: that PR contributes nothing, the rest survive", () => {
+  const gh = fakeGh({ repo: "acme/widgets", list: [{ number: 7 }, { number: 8 }], filesByPr: { 8: ["src/x.ts"] }, fileErrors: { 7: { code: 1, stdout: "", stderr: "boom" } } });
+  const api = createRemoteOverlap({ run: gh.run, now: () => NOW, cacheDir: scratch() });
+  assert.deepEqual(api.overlapsFor({ repo: "acme/widgets", files: ["src/x.ts"] }).map((o) => o.number), [8]);
+});
+
+const claim = (session, project, file, extra = {}) =>
+  ({ session, project, file, ts: NOW, ...extra });
+const remote7 = (files = ["src/x.ts"]) => ({ repo: "acme/widgets", number: 7, author: "alice", url: "https://github.com/acme/widgets/pull/7", files });
+
+await test("detector: claim.remote yields one remote-overlap collision per (repo, pr, file)", () => {
   const collisions = detectCollisions({
     now: NOW,
-    claims: [
-      claim("glm:trantor", "trantor", "src/x.ts"),
-      claim("codex:trantor", "trantor", "src/x.ts"),
-      claim("glm:trantor", "trantor", "src/y.ts"),
-    ],
-    remoteOverlaps: [overlap(["src/x.ts", "src/y.ts", "src/untouched.ts"])],
+    claims: [claim("glm:trantor", "trantor", "src/x.ts", { gitRoot: "/wt/glm", remote: [remote7()] })],
   });
   const remote = collisions.filter((c) => c.kind === "remote-overlap");
-  assert.equal(remote.length, 2, "one per (pr, file), untouched file has no claimant");
-  const x = remote.find((c) => c.files[0] === "src/x.ts");
-  const y = remote.find((c) => c.files[0] === "src/y.ts");
-  assert.deepEqual(x.sessions, ["codex:trantor", "glm:trantor"]);
-  assert.equal(x.project, "trantor");
-  assert.equal(x.detail, "open PR #7 by alice also changes src/x.ts (https://github.com/acme/widgets/pull/7).");
-  assert.deepEqual(y.sessions, ["glm:trantor"]);
+  assert.equal(remote.length, 1);
+  assert.equal(remote[0].repo, "acme/widgets");
+  assert.equal(remote[0].pr, 7);
+  assert.deepEqual(remote[0].sessions, ["glm:trantor"]);
+  assert.equal(remote[0].gitRoot, "/wt/glm");
+  assert.equal(remote[0].detail, "open PR #7 by alice in acme/widgets also changes src/x.ts (https://github.com/acme/widgets/pull/7).");
 });
 
-await test("detector: closed PR ends the episode, stale claims and PR-less files stay silent", () => {
-  const claim = (session, project, file, age = 0) => ({ session, project, file, ts: NOW - age });
-  const overlap = (files) => ({ pr: 7, author: "alice", url: "", files });
+await test("two PRs on one file are TWO episodes: distinct collisionIdentity per (repo, pr, file)", () => {
+  const collisions = detectCollisions({
+    now: NOW,
+    claims: [claim("glm:trantor", "trantor", "src/x.ts", { gitRoot: "/wt/glm", remote: [remote7(), { ...remote7(), number: 8, author: "bob" }] })],
+  }).filter((c) => c.kind === "remote-overlap");
+  assert.equal(collisions.length, 2);
+  const ids = collisions.map(collisionIdentity);
+  assert.equal(new Set(ids).size, 2, `identities must differ: ${ids.join(" | ")}`);
+  assert.ok(ids[0].includes("acme/widgets#7") && ids.some((i) => i.includes("acme/widgets#8")));
+});
+
+await test("an unrelated checkout/repo never matches: no remote, other gitRoot, other repo all silent", () => {
+  const withEvidence = claim("glm:trantor", "trantor", "src/x.ts", { gitRoot: "/wt/glm", remote: [remote7()] });
+  const without = claim("codex:trantor", "trantor", "src/x.ts", { gitRoot: "/wt/codex", remote: [] });
+  const collisions = detectCollisions({ now: NOW, claims: [withEvidence, without] })
+    .filter((c) => c.kind === "remote-overlap");
+  assert.equal(collisions.length, 1, "only the claimant whose OWN repo has the PR");
+  assert.deepEqual(collisions[0].sessions, ["glm:trantor"]);
+  // PRs of one repo never reach another repo's claimant: two claims, two separate episodes
+  const otherRepo = claim("kimi:trantor", "trantor", "src/x.ts", {
+    gitRoot: "/wt/kimi",
+    remote: [{ repo: "acme/other", number: 7, author: "alice", url: "", files: ["src/x.ts"] }],
+  });
+  const mixed = detectCollisions({ now: NOW, claims: [withEvidence, otherRepo] })
+    .filter((c) => c.kind === "remote-overlap");
+  assert.equal(mixed.length, 2, "each claimant sees only its OWN repo's PR");
+  const glmEpisode = mixed.find((c) => c.repo === "acme/widgets");
+  const kimiEpisode = mixed.find((c) => c.repo === "acme/other");
+  assert.deepEqual(glmEpisode.sessions, ["glm:trantor"], "acme/other's PR never leaks into acme/widgets's episode");
+  assert.deepEqual(kimiEpisode.sessions, ["kimi:trantor"], "acme/widgets's PR never leaks into acme/other's episode");
+  assert.notEqual(collisionIdentity(glmEpisode), collisionIdentity(kimiEpisode));
+});
+
+await test("closed PR ends the episode; stale claims and non-claimed files stay silent", () => {
   const open = detectCollisions({
     now: NOW,
-    claims: [claim("glm:trantor", "trantor", "src/x.ts")],
-    remoteOverlaps: [overlap(["src/x.ts"])],
+    claims: [claim("glm:trantor", "trantor", "src/x.ts", { gitRoot: "/wt/glm", remote: [remote7()] })],
   }).filter((c) => c.kind === "remote-overlap");
   assert.equal(open.length, 1);
-  // The PR closed: the next poll drops it, so the evidence input carries it no more.
+  // the PR closed: the next client poll drops it, so the refreshed claim carries no remote
   const closed = detectCollisions({
     now: NOW,
-    claims: [claim("glm:trantor", "trantor", "src/x.ts")],
-    remoteOverlaps: [],
+    claims: [claim("glm:trantor", "trantor", "src/x.ts", { gitRoot: "/wt/glm", remote: [] })],
   }).filter((c) => c.kind === "remote-overlap");
   assert.deepEqual(closed, [], "no PR evidence, no collision — the episode ends");
   assert.deepEqual(detectCollisions({
     now: NOW,
-    claims: [claim("glm:trantor", "trantor", "src/x.ts", 10 * 60 * 1000 + 1)],
-    remoteOverlaps: [overlap(["src/x.ts"])],
+    claims: [claim("glm:trantor", "trantor", "src/x.ts", { gitRoot: "/wt/glm", remote: [remote7()], ts: NOW - 10 * 60 * 1000 - 1 })],
   }).filter((c) => c.kind === "remote-overlap"), [], "a stale claim is nobody editing");
   assert.deepEqual(detectCollisions({
     now: NOW,
-    claims: [],
-    remoteOverlaps: [overlap(["src/x.ts"])],
-  }).filter((c) => c.kind === "remote-overlap"), [], "a PR over files nobody claims is silent");
-});
-
-await test("detector: remote-overlap never leaks into other kinds and tolerates junk input", () => {
-  const collisions = detectCollisions({
+    claims: [claim("glm:trantor", "trantor", "src/x.ts", { gitRoot: "/wt/glm", remote: [remote7(["src/other.ts"])] })],
+  }).filter((c) => c.kind === "remote-overlap"), [], "evidence for another file never attaches here");
+  assert.deepEqual(detectCollisions({
     now: NOW,
-    claims: [{ session: "s:p", project: "p", file: "f.ts", ts: NOW }],
-    remoteOverlaps: [null, {}, { pr: "nope", files: ["f.ts"] }, { pr: 3, files: [] }],
-  });
-  assert.deepEqual(collisions, []);
+    claims: [claim("glm:trantor", "trantor", "src/x.ts", { gitRoot: "/wt/glm", remote: [null, {}, { repo: "no-slash", number: 7, files: ["src/x.ts"] }, { repo: "acme/widgets", number: "x", files: ["src/x.ts"] }] })],
+  }).filter((c) => c.kind === "remote-overlap"), [], "junk evidence is dropped");
 });
 
 console.log(`\n${pass} passed, ${fail} failed`);

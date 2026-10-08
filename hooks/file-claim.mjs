@@ -9,6 +9,7 @@ import { join, relative, resolve } from "node:path";
 import { homedir } from "node:os";
 import { relayUrl, sessionContext, signedPost } from "./lib/api.mjs";
 import { writeOverseerLevel } from "./lib/overseer-level-cache.mjs";
+import { overlapsFor } from "../lib/remote-overlap.mjs";
 
 const FETCH_TIMEOUT_MS = Number(process.env.RELAY_CLAIM_TIMEOUT_MS || 900);
 const RECLAIM_MS = Number(process.env.RELAY_RECLAIM_MS || 60 * 1000);
@@ -56,8 +57,14 @@ try {
     if (Date.now() - last < RECLAIM_MS) allow();
   } catch {}
 
+  // #11311: open-PR evidence, computed HERE from this session's own checkout (the hub's gh is not
+  // logged in and its cwd is the wrong repo). Cache file makes the normal call a stat+read; off
+  // when gh is missing. Fail-open like everything else in this hook.
+  let remote = [];
+  try { remote = overlapsFor({ gitRoot, files: [file] }); } catch {}
+
   const r = await signedPost(`${relayUrl(ctx.project)}/claim`,
-    { project: ctx.project, file, session: ctx.session, gitRoot },
+    { project: ctx.project, file, session: ctx.session, gitRoot, remote },
     { timeoutMs: FETCH_TIMEOUT_MS, session: ctx.session });
 
   try { mkdirSync(stampDir, { recursive: true }); writeFileSync(stamp, String(Date.now())); } catch {}
