@@ -1,0 +1,39 @@
+e. And "status --json is machine-readable": rows.find(x => x.name === "ivan:proj") — same.
+
+  "an unmigrated key reads as file (plaintext)": rows.find(r => r.name === name) where name="grace:proj" → find fails → g undefined. Same.
+
+  "security finds the entry under trantor-identity": real keychain check with -a "judy:proj" but stored as "judy_proj". Same root cause.
+
+  So all 12 failures trace to safe-name vs raw-name. Fix: use the raw identity name (id.name from file) as keychain account and as display name in reports.
+
+  Changes in lib/identity.mjs:
+  1. resolveIdentity: `keychainGet(String(name))` instead of safe(name). Hmm but the fallback... load(name) is called with the raw name everywhere. OK.
+
+  Wait — is there any place where load is called with a name whose file contains a different id.name? keyPath uses safe(name) for filename; the JSON inside has name: original. In loadOrCreate, id.name = String(name). Consistent.
+
+  2. migrateKeysToKeychain: iterate file stems; read id; account = id.name || stem; report name = id.name || stem. keychainSet(account, JSON.stringify(id)); read-back keychainGet(account).
+
+  3. keyLocationReport: report name = id.name || stem; keychainGet(id.name || stem).
+
+  Edge: a file whose JSON is unreadable → failed entry name = stem (no id.name). Fine.
+
+  But hold on: in keyLocationReport the test "status reports WHERE, never WHAT": room("grace:proj") creates keys "heidi:proj" and "grace:proj" — files heidi_proj.json, grace_proj.json. Report names via id.name → "heidi:proj", "grace:proj". Test finds by those names ✓. h.where === "NO USABLE PRIVATE KEY": heidi migrated, then inject fake without heidi's entry → keychainGet miss → inKeychain false, fileKey false → where = "NO USABLE PRIVATE KEY" ✓.
+
+  4. resolveIdentity merging: `keychainGet(safe(name))` → change to raw name. Also account names with weird chars are fine in Keychain.
+
+  Also, warning text mentions `"${name}"` — raw name, fine.
+
+  Now also check the real-keychain test: store account "judy:proj" via CLI migrate. bin/keys.mjs calls migrateKeysToKeychain → account = id.name = "judy:proj". Then test `security find-generic-password -a judy:proj -s trantor-identity -w kc` ✓.
+
+  And in-process load("judy:proj") → keychainGet("judy:proj") → realKeychain get ✓.
+
+  Also check: the secrets refactor — did the earlier passing tests still pass after my refactor? 30 passed including real-keychain CLI migrate, so the wrapper works. 
+
+  One more consideration: injectIdentityKeychain(null) clears cache. In resolveIdentity, cache key includes keysDir, good.
+
+  Also "the keychain is read ONCE per process" passed.
+
+  Now implement the changes.
+
+error: failed to run prompt: provider.auth_error: 403 You've reached your weekly (7-day) usage limit. Your quota will reset when the current 7-day window ends. To continue now, purchase extra usage or upgrade your plan: https://www.kimi.com/membership/subscription?tab=quota
+See log: /Users/<user>/.kimi-code/logs/kimi-code.log
