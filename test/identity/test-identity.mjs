@@ -137,8 +137,14 @@ try {
     stopOne(hub);
   }
 
-  console.log("\n[2] enforce unsigned 401; warn unsigned 200:");
+  console.log("\n[2] enforce unsigned 401 (explicit AND default); warn unsigned 200 + peer FLAGGED:");
   {
+    // #11368: an unset RELAY_AUTH must boot CLOSED (enforce), not warn-open.
+    const hubDef = await startHub({ RELAY_AUTH: undefined });
+    const ud = await fetch(hubDef.base + "/send", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ from: "x:proj", to: "all", text: "hi" }) });
+    ok("default auth (unset) rejects unsigned POST 401", ud.status === 401, `got ${ud.status}`);
+    stopOne(hubDef);
+
     const hubEnf = await startHub({ RELAY_AUTH: "enforce", RELAY_ENROLL: "tofu" });
     const u = await fetch(hubEnf.base + "/peers", { method: "GET" });
     ok("enforce unsigned -> 401", u.status === 401, `got ${u.status}`);
@@ -147,6 +153,22 @@ try {
     const hubWarn = await startHub({ RELAY_AUTH: "warn", RELAY_ENROLL: "tofu" });
     const uw = await fetch(hubWarn.base + "/peers", { method: "GET" });
     ok("warn unsigned -> 200", uw.status === 200, `got ${uw.status}`);
+    // §9.2: warn must FLAG the unsigned peer (applyPeerAuth's authWarning), not just admit it.
+    const touch = await fetch(hubWarn.base + "/status", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ session: "ghost:proj", status: "alive", project: "proj" }) });
+    ok("warn unsigned /status accepted", touch.status === 200, `got ${touch.status}`);
+    const ghost = await waitFor(async () => {
+      const r = await fetch(hubWarn.base + "/peers");
+      return ((await r.json()).peers || []).find(p => p.session === "ghost:proj") || null;
+    });
+    ok("warn unsigned peer FLAGGED authWarning=unsigned", ghost?.authWarning === "unsigned", JSON.stringify(ghost || {}).slice(0, 160));
+    const signedId = generate();
+    await sFetch(hubWarn.base, signedId, "POST", "/enroll", { name: "honest:proj", kind: "agent" });
+    await sFetch(hubWarn.base, signedId, "POST", "/status", { session: "honest:proj", status: "alive", project: "proj" });
+    const honest = await waitFor(async () => {
+      const r = await fetch(hubWarn.base + "/peers");
+      return ((await r.json()).peers || []).find(p => p.session === "honest:proj") || null;
+    });
+    ok("warn signed peer carries NO authWarning", !!honest && honest.authWarning === "", JSON.stringify(honest || {}).slice(0, 160));
     stopOne(hubWarn);
   }
 
@@ -200,7 +222,7 @@ try {
     } else {
       ok("invite issued 2xx", inv.status < 400, `status ${inv.status}`);
       const token = String(inv.json.token || "");
-      ok("token >=16", token.length >= 16, `len ${token.length}`);
+      ok("token is 32 bytes (64 hex chars)", /^[0-9a-f]{64}$/.test(token), `len ${token.length}`);
       if (token) {
         const invitee = generate();
         const use1 = await sFetch(hub.base, invitee, "POST", "/enroll", { token, name: "invitee", kind: "human" });
@@ -282,6 +304,15 @@ try {
       if (direct.status < 400) readerId = reader;
     }
 
+    // §9.8: give BOTH projects live rows (presence + events) so the content assertions below
+    // can actually fail — a filtered-but-empty response would prove nothing.
+    const pa = generate(); const pb = generate();
+    await sFetch(hub.base, pa, "POST", "/enroll", { name: "pa:projA", kind: "agent", project: "projA" });
+    await sFetch(hub.base, pb, "POST", "/enroll", { name: "pb:projB", kind: "agent", project: "projB" });
+    const stA = await sFetch(hub.base, pa, "POST", "/status", { session: "pa:projA", status: "alive", project: "projA" });
+    const stB = await sFetch(hub.base, pb, "POST", "/status", { session: "pb:projB", status: "alive", project: "projB" });
+    ok("both project peers touched", stA.status < 400 && stB.status < 400, `A ${stA.status} B ${stB.status}`);
+
     if (readerId) {
       const all = await sFetch(hub.base, readerId, "GET", "/tasks", undefined);
       ok("scoped /tasks 200", all.status === 200, `got ${all.status}`);
@@ -290,8 +321,15 @@ try {
       ok("scoped NOT see projB", !seesB, seesB ? `leaks` : `total ${tasks.length}`);
       const ev = await sFetch(hub.base, readerId, "GET", "/events", undefined);
       ok("scoped /events 200", ev.status === 200, `got ${ev.status}`);
+      const evRows = ev.json.events || [];
+      const evB = evRows.filter(e => e.project === "projB");
+      ok("scoped /events has A-side rows (nonempty)", evRows.length > 0, `total ${evRows.length}`);
+      ok("scoped /events NO projB rows", evB.length === 0, `${evB.length} projB rows leaked`);
       const peers = await sFetch(hub.base, readerId, "GET", "/peers", undefined);
       ok("scoped /peers 200", peers.status === 200, `got ${peers.status}`);
+      const prows = peers.json.peers || [];
+      ok("scoped /peers sees projA peer", prows.some(p => p.session === "pa:projA"), `rows: ${prows.map(p => p.session).join(",")}`);
+      ok("scoped /peers NO projB peer", !prows.some(p => p.project === "projB" || p.session === "pb:projB"), `rows: ${prows.map(p => p.session).join(",")}`);
     } else {
       console.log("  ⊘ no invite route yet — scoping via direct enroll scopes (pending #3917 final wiring)");
       ok("scope reader enrolled (invite pending, will land)", true);

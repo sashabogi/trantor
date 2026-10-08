@@ -330,7 +330,7 @@ const seenNonces = new Map();
     const guard = crossProjectGuard(auth, P, { scopes });
     if (!guard.ok) return json(res, guard.code, { error: guard.error });
     const ttlSec = Math.min(Math.max(Number(b0.ttlSec) || 86400, 1), 30 * 86400);
-    const token = randomBytes(24).toString("hex");
+    const token = randomBytes(32).toString("hex");
     state.inviteTokens[token] = { scopes, kind: invitedKind, expiresAt: now() + ttlSec * 1000, used: false,
       createdBy: auth.identity?.pubkey || "", createdAt: now() };
     markDirty();

@@ -27,7 +27,7 @@ const PG_URL = process.env.RELAY_DATABASE_URL || process.env.POSTGRES_URL ||
   ((RAW_STORE_KIND === "pg" || RAW_STORE_KIND === "postgres") ? process.env.DATABASE_URL : "");
 const STORE_KIND = RAW_STORE_KIND || (PG_URL ? "pg" : "json");
 const ORG_ID = process.env.RELAY_ORG_ID || DEFAULT_ORG;
-const AUTH_MODE = ["off", "warn", "enforce"].includes(process.env.RELAY_AUTH) ? process.env.RELAY_AUTH : "warn";
+const AUTH_MODE = ["off", "warn", "enforce"].includes(process.env.RELAY_AUTH) ? process.env.RELAY_AUTH : "enforce";
 const ENROLL_MODE = process.env.RELAY_ENROLL || "tofu";
 const ONLINE_MS = Number(process.env.RELAY_ONLINE_MS || 5 * 60 * 1000);
 const PEER_TTL_DEFAULT_MS = 21600000;

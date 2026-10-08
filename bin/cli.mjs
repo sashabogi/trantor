@@ -70,6 +70,10 @@ switch (cmd) {
       }
       break;
     }
+    // Local throwaway: the hub's default is RELAY_AUTH=enforce (#11368), but a foreground
+    // `trantor hub` on loopback is a dev convenience — keep it usable (warn) unless the
+    // operator asked for a mode explicitly.
+    if (!process.env.RELAY_AUTH) process.env.RELAY_AUTH = "warn";
     run("hub.mjs"); break;
   }
   case "project": {
