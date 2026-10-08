@@ -783,11 +783,12 @@ async function runTurn(prompt, isFirst, trigger = "kickoff", opts = {}) {
   // #10197: the card status snapshot the turn is judged against at its end — a move to
   // testing/done under the turn is delivery even without a commit. null = the hub read failed:
   // the delivery check stands down rather than claim no-delivery on a transport error.
-  let cardStatusBefore = null;
+  let cardStatusBefore = null, cardLogBefore = [];
   if (!opts.state && sessionCard > 0) {
     try {
       const { task } = await api(`/card?project=${encodeURIComponent(PROJ)}&id=${sessionCard}`);
       cardStatusBefore = task ? String(task.status || "") : null;
+      cardLogBefore = task?.log || [];
     } catch { cardStatusBefore = null; }
   }
   // #9778: the docker snapshot the turn is judged against — containers the CLI spawns are recorded
@@ -1069,17 +1070,24 @@ exit $turn_exit`;
   // turn started, or the card moved to testing/done under it. The ibkr shape (exit 0, output, no
   // commit, card still todo) is NO-DELIVERY: the ledger names it and the contract stays owed.
   // Judged on hub reads of the card status; a failed read keeps today's label, never no-delivery.
-  let cardStatusAtEnd = "", noDelivery = false;
+  let cardStatusAtEnd = "", noDelivery = false, blockedVerdict = "";
   if (!cut && !opts.state && realExit === 0 && effExit === 0 && sessionCard > 0 && cardStatusBefore !== null) {
     let endStatus = null;
     try {
       const { task } = await api(`/card?project=${encodeURIComponent(PROJ)}&id=${sessionCard}`);
       endStatus = task ? String(task.status || "") : null;
+      const freshNote = (task?.log || []).filter(n => n.by === SESSION && n.ts >= t0
+        && !cardLogBefore.some(old => old.ts === n.ts && old.by === n.by && old.text === n.text)).at(-1);
+      if (endStatus === "blocked" && (cardStatusBefore !== "blocked" || freshNote)) {
+        const note = freshNote || (task?.log || []).at(-1);
+        blockedVerdict = `blocked: ${String(note?.text || "").split(/\r?\n/)[0]}`;
+        lastEmptyTurn = false;
+      }
     } catch { endStatus = null; }
     if (endStatus !== null) {
       cardStatusAtEnd = endStatus;
       const moved = ["testing", "done"].includes(endStatus) && !["testing", "done"].includes(cardStatusBefore);
-      noDelivery = !newCommit && !moved && !askVerdict;
+      noDelivery = !newCommit && !moved && !askVerdict && !blockedVerdict;
     }
   }
   lastNoDelivery = noDelivery;
@@ -1091,6 +1099,7 @@ exit $turn_exit`;
   // reads as the sweep's SIGKILL (#7099); a zero-usage turn names its own verdict too (#9724).
   const verdict = stallCut ? stallVerdict() : zeroUsage ? zeroUsageVerdict()
     : askVerdict ? askVerdict
+    : blockedVerdict ? blockedVerdict
     : noDelivery ? noDeliveryVerdict(sessionCard, cardStatusAtEnd || "unknown")
     : verdictFor(realExit, effExit, lastEmptyOutput, ownOut, lastEmptyTurn, cut);
   // #6289: every ledger row names in ONE field what happened to the turn — cut, stalled (#7752),
@@ -1098,7 +1107,7 @@ exit $turn_exit`;
   // binds the row to the card the turn worked (0 = kickoff/pulse) so the seat record attributes
   // empty/stalled turns to the card that produced nothing. `cut` stays too: the drills read it.
   const outcome = cut ? (stallCut ? "stalled" : "cut") : (effExit !== 0 ? "api-error" : noDelivery ? "no-delivery" : lastEmptyTurn ? "empty" : "completed");
-  const finalOutcome = askVerdict ? "asked" : outcome;
+  const finalOutcome = askVerdict ? "asked" : blockedVerdict ? "blocked" : outcome;
   const telemetryRow = { ts: Date.now(), agent: AGENT, project: PROJ, turn: TURN, trigger, card: sessionCard || 0, model: MODEL || "cli-default", duration_ms: Date.now() - t0, exit: realExit, effExit, authFailed: effExit !== realExit, emptyOutput: lastEmptyOutput, emptyTurn: lastEmptyTurn, verdict, outcome: finalOutcome, tokens };
   if (usage) telemetryRow.usage = usage;
   if (dockerNew.length) telemetryRow.containers = dockerNew.map(c => c.name || c.id);

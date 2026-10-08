@@ -33,6 +33,7 @@ let eventSeq = 0;
 let handed = 0;
 let cardFail = false;
 let followup = false;
+let blockedFollowup = false;
 const cards = new Map([[CARD, { id: CARD, status: "todo" }]]);
 const MSG = { id: 7, from: "sasha@mac", to: "", text: `contract: work card #${CARD} — run the tests and gate output`, ts: Date.now() };
 const hub = http.createServer((req, res) => {
@@ -48,7 +49,10 @@ const hub = http.createServer((req, res) => {
       try {
         const body = JSON.parse(buf);
         const t = cards.get(Number(body.id));
-        if (t) t.status = String(body.status || "todo");
+        if (t) {
+          t.status = String(body.status || "todo");
+          if (body.note) (t.log ||= []).push({ ts: Date.now(), by: body.by, text: body.note });
+        }
         eventSeq++;
       } catch {}
       return reply({ ok: true });
@@ -69,6 +73,10 @@ const hub = http.createServer((req, res) => {
     if (P === "/policy") return reply({ links: [], autonomy: { "*": 1 } });
     if (P === "/poll") {
       if (handed === 0) { handed = 1; return reply({ messages: [{ ...MSG, to: u.searchParams.get("session") }], cursor: 1 }); }
+      if (blockedFollowup && handed === 1 && sends.some(s => /✅ done on/.test(s.text || ""))) {
+        handed++;
+        return reply({ messages: [{ ...MSG, id: 8, to: u.searchParams.get("session"), text: `card #${CARD}: dependency update; add a new blocked note` }], cursor: 8 });
+      }
       if (followup && handed === 1 && sends.some(s => /⚠ no commit, card/.test(s.text || ""))) {
         handed++;
         return reply({ messages: [{ ...MSG, id: 8, to: u.searchParams.get("session"),
@@ -89,7 +97,9 @@ const HUB = `http://127.0.0.1:${hub.address().port}`;
 async function drill(mode, { waitMs = 12000, failCard = false } = {}) {
   sends.length = 0; eventSeq = 0; handed = 0; cardFail = failCard;
   followup = mode === "followup";
-  cards.set(CARD, { id: CARD, status: "todo" });
+  blockedFollowup = mode === "blocked";
+  cards.set(CARD, { id: CARD, status: mode === "staleblocked" ? "blocked" : "todo",
+    log: [{ ts: Date.now() - 60000, by: "codex:tt-nodelivery", text: "old dependency" }] });
   const root = mkdtempSync(join(tmpdir(), "tt-nodelivery-"));
   const HOME = join(root, "home");
   const REPO = join(root, "repo");
@@ -115,6 +125,9 @@ if grep -q "NEW BUS MESSAGE" "$P"; then
   fi
   if [ "${mode}" = "movetesting" ]; then
     node --input-type=module -e "await fetch(process.env.RELAY_URL + '/card-move', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ project: '${PROJ}', id: ${CARD}, status: 'testing' }) })" || true
+  fi
+  if [ "${mode}" = "blocked" ]; then
+    node --input-type=module -e "await fetch(process.env.RELAY_URL + '/card-move', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ id: ${CARD}, status: 'blocked', by: process.env.RELAY_SESSION, note: 'waiting for dependency $n' }) })"
   fi
   echo "The gate passed on eab5766: 92 wake-policy assertions green, slop-gate clean, and the"
   echo "worktree holds only the two committed files. Nothing else moved during the turn, so"
@@ -234,6 +247,20 @@ console.log("\n## a failed hub read stands down");
     row && row.outcome === "completed", JSON.stringify(row && { outcome: row.outcome, verdict: row.verdict }));
 }
 
+console.log("\n## blocked transitions and renewed notes deliver and allow dependency wakes");
+{
+  const r = await drill("blocked");
+  const rows = r.rows.filter(x => x.trigger === "direct message");
+  ok("#11352: dependency message wakes the already-blocked seat", r.handed === 2 && r.wakeTurns.length === 2);
+  ok("#11352: both blocked turns deliver with the note label", rows.length === 2
+    && rows.every((row, i) => row.outcome === "blocked" && row.verdict === `blocked: waiting for dependency ${i + 1}`));
+  ok("#11352: neither turn parks or leaves an owed queue", !r.pendingLeft && !r.sends.some(s => /PARKED|no commit, card/.test(s.text || "")));
+}
+{
+  const r = await drill("staleblocked");
+  ok("#11352: an unchanged old blocked card still parks for no delivery",
+    r.rows.some(row => row.outcome === "no-delivery") && r.sends.some(s => /PARKED/.test(s.text || "")));
+}
 hub.close();
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
