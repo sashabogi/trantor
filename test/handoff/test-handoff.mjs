@@ -12,6 +12,7 @@ import {
   alreadyHandedOff, markHandedOff, buildSummary, verbatimRecentTail, writeHandoff, spawnBaton,
   resolveOriginalWindow, supersedeOlderHandoffs, subagentsActive, armBatonClose,
 } from "../../hooks/lib/handoff.mjs";
+import { loadPendingHandoff, completeHandoffRecap } from "../../hooks/lib/handoff-claims.mjs";
 import { orchWriterSid } from "../../lib/project.mjs";
 import { freshEngaged, originalStillWorking } from "../../bin/baton-close.mjs";
 import { takeoverSessionId } from "../../bin/crew/open.mjs";
@@ -140,7 +141,7 @@ delete process.env.TRANTOR_NO_SCROOGE;
   ok("resolveOriginalWindow returns a {windowId,tty} shape", typeof rw.windowId === "string" && typeof rw.tty === "string");
 }
 
-// --- sessionstart: compact must NOT consume; startup MUST consume ---
+// --- sessionstart: compact must NOT consume; startup MUST claim ---
 const proj = "hoff-selftest-" + process.pid;
 const projDir = join(tmpdir(), proj);
 mkdirSync(projDir, { recursive: true });
@@ -155,7 +156,7 @@ const ctxC = (() => { try { return JSON.parse(rc.stdout).hookSpecificOutput.addi
 ok("compact start injects the handoff", ctxC.includes("trantor-handoff"));
 ok("compact start does NOT consume it (reserved for fresh window)", consumed() === false);
 const rs = ss("startup");
-ok("startup consumes the handoff", consumed() === true);
+ok("startup claims without consuming the handoff", consumed() === false && JSON.parse(readFileSync(hf, "utf8")).claim?.session_id === "x");
 
 // --- regression: select newest-by-STAMP for THIS project, ignore look-alike names ---
 // Bug: loose startsWith()+lexicographic sort grabbed a stale "<proj>-handoff-<pid>-….json" leaked
@@ -217,8 +218,8 @@ seed();
     env: { ...drillEnv(), CLAUDE_PROJECT_DIR: cpDir, RELAY_SESSION: cp, RELAY_URL: CLOSED },
   });
   const claimed = JSON.parse(readFileSync(chf, "utf8"));
-  ok("consumedBy: claim records the fresh session id + transcript path", claimed.consumed === true && claimed.consumedBy?.session_id === "FRESH-SID" && claimed.consumedBy?.transcript_path === freshTranscript);
-  ok("consumedBy: claim stamps consumedAt (epoch sec)", claimed.consumedAt > 1_700_000_000);
+  ok("consumedBy: claim records the fresh session id + transcript path", claimed.consumed === false && claimed.claim?.session_id === "FRESH-SID" && claimed.claim?.transcript_path === freshTranscript);
+  ok("claim stamps claimed time (epoch sec)", claimed.claim.at > 1_700_000_000);
 
   // freshEngaged: false until the fresh transcript shows an assistant turn; true once it does.
   ok("freshEngaged: false before any fresh turn exists", freshEngaged(claimed) === false);
@@ -226,7 +227,8 @@ seed();
   ok("freshEngaged: still false with only a user turn", freshEngaged(claimed) === false);
   writeFileSync(freshTranscript, JSON.stringify({ type: "user", message: { content: "Recap…" } }) + "\n" +
     JSON.stringify({ type: "assistant", message: { content: [{ type: "text", text: "Taking over." }] } }) + "\n");
-  ok("freshEngaged: true once the fresh session produces an assistant turn", freshEngaged(claimed) === true);
+  completeHandoffRecap({ sessionId: "FRESH-SID", transcriptPath: freshTranscript, dir: handoffDir });
+  ok("freshEngaged: true after recap is consumed", freshEngaged(JSON.parse(readFileSync(chf, "utf8"))) === true);
   ok("freshEngaged: false when the handoff has no consumedBy transcript (older record)", freshEngaged({ consumed: true }) === false);
   rmSync(chf, { force: true });
   rmSync(cpDir, { recursive: true, force: true });
@@ -298,7 +300,7 @@ seed();
     });
     try { return JSON.parse(r.stdout).hookSpecificOutput?.additionalContext || ""; } catch { return ""; }
   };
-  const consumedAt = (stamp) => JSON.parse(readFileSync(hfp(stamp), "utf8")).consumed;
+  const claimedAt = (stamp) => !!JSON.parse(readFileSync(hfp(stamp), "utf8")).claim;
 
   // held: a fresh orch-origin handoff + a plain session → notice only, unconsumed, map untouched
   writeFileSync(map, `${op}\tORCH-SID\n`);
@@ -307,12 +309,12 @@ seed();
   let ctx = run();
   ok("orch-origin handoff is HELD for the pane (notice injected)", ctx.includes("trantor-handoff-held"));
   ok("held: the summary is NOT injected", !ctx.includes("ORCH_SUMMARY"));
-  ok("held: the handoff stays unconsumed", consumedAt(st) === false);
+  ok("held: the handoff stays unconsumed", claimedAt(st) === false);
   ok("held: the orch map is untouched", readFileSync(map, "utf8").includes("ORCH-SID"));
 
   // the pane claims immediately, and the map follows it
   ctx = run({ TRANTOR_ORCH: op }, "PANE-SID");
-  ok("the orch pane claims the held baton immediately", ctx.includes("ORCH_SUMMARY") && consumedAt(st) === true);
+  ok("the orch pane claims the held baton immediately", ctx.includes("ORCH_SUMMARY") && claimedAt(st) === true);
   ok("…and the map now points at the pane's session", readFileSync(map, "utf8").includes(`${op}\tPANE-SID`));
   rmSync(hfp(st), { force: true });
 
@@ -321,7 +323,7 @@ seed();
   st = Math.floor(Date.now() / 1000) - 3600;
   mkhf(st, "PANE-SID");
   ctx = run({}, "LATE-SID");
-  ok("the hold LAPSES: an aged orch baton is claimed first-come", ctx.includes("ORCH_SUMMARY") && consumedAt(st) === true);
+  ok("the hold LAPSES: an aged orch baton is claimed first-come", ctx.includes("ORCH_SUMMARY") && claimedAt(st) === true);
   ok("…and the map follows the late claimant", readFileSync(map, "utf8").includes(`${op}\tLATE-SID`));
   rmSync(hfp(st), { force: true });
 
@@ -330,7 +332,7 @@ seed();
   st = Math.floor(Date.now() / 1000) - 60;
   mkhf(st, "TERMINAL-SID");
   ctx = run({}, "ANY-SID");
-  ok("a non-orch handoff keeps first-fresh-session-wins", ctx.includes("ORCH_SUMMARY") && consumedAt(st) === true);
+  ok("a non-orch handoff keeps first-fresh-session-wins", ctx.includes("ORCH_SUMMARY") && claimedAt(st) === true);
   ok("…and does NOT rewrite the orch map", readFileSync(map, "utf8").includes(`${op}\tOTHER-SID`));
   rmSync(hfp(st), { force: true });
   rmSync(bus, { recursive: true, force: true });
@@ -477,11 +479,16 @@ rmSync(projDir, { recursive: true, force: true });
 
   // The recap net, end to end through the REAL hooks as subprocesses.
   const sid = "succ-net-1";
-  writeFileSync(join(handoffDir(), `recap-pending-${sid}.json`), JSON.stringify({ handoffId: w.id, ts: 1 }));
+  const successorTranscript = join(projDir, "successor.jsonl");
+  writeFileSync(successorTranscript, "");
+  const pending = { ...rec0, summary: "No read-first files", consumed: false };
+  writeFileSync(wfile, JSON.stringify(pending));
+  loadPendingHandoff(pending.projectName, { dir: handoffDir(), freshSession: { session_id: sid, transcript_path: successorTranscript } });
+  writeFileSync(successorTranscript, JSON.stringify({ type: "assistant", message: { content: "Task is to finish; next I will inspect it." } }) + "\n");
   const hookEnv = { ...drillEnv(), RELAY_URL: CLOSED, TRANTOR_NO_FOCUS: "" };
   const pf = spawnSync(process.execPath, ["hooks/prompt-focus.mjs"], { input: JSON.stringify({ session_id: sid, prompt: "a stale queued message that must still carry the reminder", cwd: projDir }), encoding: "utf8", env: hookEnv, timeout: 15000 });
   ok("recap net: every pre-recap prompt carries the reminder", pf.stdout.includes("additionalContext") && pf.stdout.includes(w.id));
-  const si = spawnSync(process.execPath, ["hooks/stop-inbox.mjs"], { input: JSON.stringify({ session_id: sid, cwd: projDir }), encoding: "utf8", env: { ...hookEnv, RELAY_STOP_TIMEOUT_MS: "200" }, timeout: 15000 });
+  const si = spawnSync(process.execPath, ["hooks/stop-inbox.mjs"], { input: JSON.stringify({ session_id: sid, transcript_path: successorTranscript, cwd: projDir }), encoding: "utf8", env: { ...hookEnv, RELAY_STOP_TIMEOUT_MS: "200" }, timeout: 15000 });
   const rec2 = JSON.parse(readFileSync(join(handoffDir(), `${w.id}.json`), "utf8"));
   ok("recap net: the first Stop records RECAPPED on the ledger", rec2.states.some(s => s.state === "recapped" && s.by === sid));
   ok("recap net: the stamp is cleared — the reminder stops", !existsSync(join(handoffDir(), `recap-pending-${sid}.json`)));
@@ -672,6 +679,7 @@ rmSync(projDir, { recursive: true, force: true });
     // be named (and autonomy-keyed) after the RUNNER's project instead of this temp one.
     env: {
       PATH: process.env.PATH, HOME: home2, TMPDIR: process.env.TMPDIR,
+      GIT_CEILING_DIRECTORIES: process.env.GIT_CEILING_DIRECTORIES,
       CLAUDE_PROJECT_DIR: wp2Dir, RELAY_URL: CLOSED, TRANTOR_NO_HANDOFF_SPAWN: "1", TRANTOR_NO_BATON_SPAWN: "1",
       HERDR_ENV: "", HERDR_PANE_ID: "", TRANTOR_ORCH: "",
       RELAY_PROJECT: "", TRANTOR_PROJECT: "", RELAY_SESSION: "", RELAY_AGENT: "",
@@ -746,7 +754,7 @@ rmSync(projDir, { recursive: true, force: true });
   ok("cap: the injected summary is hard-capped at 4KB", capCtx.includes("N".repeat(4000)) && !capCtx.includes("N".repeat(4096)));
   ok("cap: the cap notice points at the full record + transcript", capCtx.includes("summary capped at 4096 chars") && capCtx.includes("full transcript: /tmp/full-transcript.jsonl"));
   ok("cap: a capped record still claims + stamps the recap net (default attended)",
-    JSON.parse(readFileSync(join(bus, "handoffs", `${proj3}-1000000000.json`), "utf8")).consumed === true
+    JSON.parse(readFileSync(join(bus, "handoffs", `${proj3}-1000000000.json`), "utf8")).claim?.session_id === "CAP-SID"
     && JSON.parse(readFileSync(join(bus, "handoffs", "recap-pending-CAP-SID.json"), "utf8")).mode === "attended");
 
   // (3) mandate pinning by rec.mode.
@@ -828,7 +836,7 @@ rmSync(projDir, { recursive: true, force: true });
   // 2) a FRESH start still claims it, banner and all
   const r2 = spawnSync(process.execPath, ["hooks/sessionstart.mjs"], { input: JSON.stringify({ session_id: "fresh-1", source: "startup", cwd: projDir }), encoding: "utf8", env, timeout: 20000 });
   const rec2 = JSON.parse(readFileSync(hf, "utf8"));
-  ok("resume guard: a fresh start still claims (consumed + CLAIMED by the fresh sid)", rec2.consumed === true && rec2.states.some(s => s.state === "claimed" && s.by === "fresh-1"));
+  ok("resume guard: a fresh start claims without consuming", rec2.consumed === false && rec2.states.some(s => s.state === "claimed" && s.by === "fresh-1"));
   ok("resume guard: the fresh claimer gets the takeover banner", r2.stdout.includes("You are taking over"));
 
   // 3) crew.mjs `open`: ANY unconsumed handoff forces a FRESH sid — manual records carry no

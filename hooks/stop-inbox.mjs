@@ -8,10 +8,12 @@ import { join, dirname } from "node:path";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { homedir } from "node:os";
-import { resolveProject, hostId, handoffDir, busDir } from "../lib/project.mjs";
+import { resolveProject, hostId, busDir } from "../lib/project.mjs";
 import { signedGet } from "./lib/api.mjs";   // signed: enforce hubs 401 unsigned reads — unsigned, T2 delivery is silently dead
 import { ledgerPaths, ensureStart, anchorCursor, writeCursor } from "./lib/inbox-ledger.mjs";
-import { readArm, clearArm, markHandedOff, appendHandoffState, subagentsActive, pathsReadIn} from "./lib/handoff.mjs";
+import { readArm, clearArm, markHandedOff, subagentsActive } from "./lib/handoff.mjs";
+
+import { completeHandoffRecap } from "./lib/handoff-claims.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 
@@ -125,10 +127,14 @@ async function main() {
   let input = {};
   try { input = JSON.parse(raw || "{}"); } catch {}
 
-  // Loop guard FIRST, before any work: if we already blocked once this stop-cycle, the model has had
-  // its chance to deal with the inbox and is entitled to stop.
-  if (input.stop_hook_active) return allow();
   if (process.env.RELAY_STOP_INBOX === "0") return allow();
+  const recap = completeHandoffRecap({ sessionId: String(input.session_id || ""), transcriptPath: input.transcript_path || "" });
+  if (recap?.missed.length && !input.stop_hook_active) {
+    process.stdout.write(JSON.stringify({ decision: "block", reason: `Read these handoff files before recapping: ${recap.missed.join(", ")}` }));
+    return;
+  }
+  // A retry may satisfy the recap evidence, but must never loop the inbox block (#11223).
+  if (input.stop_hook_active) return allow();
 
   const projectDir = input.cwd || process.env.CLAUDE_PROJECT_DIR || process.cwd();
 
@@ -149,41 +155,6 @@ async function main() {
       // cannot re-arm and re-fire every tick.
       try { markHandedOff(String(input.session_id || ""), Number(armed.tokens) || 0); } catch {}
       process.stderr.write("[trantor] turn boundary reached — firing the armed baton\n");
-    }
-  } catch {}
-  // §5 RECAPPED (SYSTEM-CONTRACT): this session's FIRST turn boundary after claiming a handoff.
-  // By Stop time an assistant reply exists, and every prompt of that first turn carried the
-  // recap reminder (prompt-focus) — so the reply had the instruction in front of it. Record the
-  // transition on the handoff's own ledger and disarm the net.
-  try {
-    const sid = String(input.session_id || "");
-    if (sid) {
-      const stampPath = join(handoffDir(), `recap-pending-${sid.replace(/[^A-Za-z0-9_.-]/g, "_")}.json`);
-      if (existsSync(stampPath)) {
-        try {
-          const stamp = JSON.parse(readFileSync(stampPath, "utf8"));
-          // #8162: RECAPPED used to mean "a reply exists by Stop time", which a successor satisfies
-          // from the injected summary alone — so a handoff naming read-first files certified a
-          // takeover that opened none of them, three days running. Now the ledger asks the same
-          // question the state gate learned to ask: ground truth, not testimony. A Read/Grep tool
-          // call naming the path is evidence; the successor's own say-so is not.
-          const want = Array.isArray(stamp.readFirst) ? stamp.readFirst : [];
-          const { missed } = want.length
-            ? pathsReadIn(input.transcript_path || "", want)
-            : { missed: [] };
-          if (missed.length) {
-            // The stamp STAYS. Not recapped, so the next boundary asks again — and the successor is
-            // told exactly what it skipped rather than left to discover it when the operator does.
-            process.stderr.write(
-              `[trantor] handoff ${stamp.handoffId}: NOT recapped — the handoff named ${want.length} file(s) to read first and ${missed.length} ${missed.length === 1 ? "was" : "were"} never opened: ${missed.join(", ")}. Read them before going further; this is the context the handoff exists to carry.\n`);
-          } else {
-            appendHandoffState(stamp.handoffId, "recapped", sid);
-            try { unlinkSync(stampPath); } catch {}
-          }
-        } catch {
-          try { unlinkSync(stampPath); } catch {}
-        }
-      }
     }
   } catch {}
   // Mirror the other hooks: a home-directory session isn't project work and isn't on the bus.

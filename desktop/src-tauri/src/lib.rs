@@ -11,6 +11,7 @@ mod graft_cli;
 mod right_panel;
 mod ghost;
 mod handoff_drill;
+mod handoff_state;
 mod identity_env;
 mod key_drill;
 mod onboarding;

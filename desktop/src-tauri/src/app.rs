@@ -221,6 +221,7 @@ pub fn run() {
             drill_mode::drill_panics_since,
             handoff_now,
             handoff_in_progress,
+            handoff_state::handoff_states,
             takeover_now,
             orch_restorables,
             dismissed_sessions_list,

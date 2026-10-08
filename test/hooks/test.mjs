@@ -13,7 +13,7 @@ let pass = 0, fail = 0;
 const ok = (name, cond) => { console.log(`  ${cond ? "PASS" : "FAIL"}  ${name}`); cond ? pass++ : fail++; };
 const CLOSED = "http://127.0.0.1:1"; // refuses fast -> no network dependency
 const runHook = (projDir, sess) => spawnSync("node", ["hooks/sessionstart.mjs"], {
-  input: '{"source":"startup"}', encoding: "utf8", timeout: 15000,
+  input: JSON.stringify({ source: "startup", session_id: sess }), encoding: "utf8", timeout: 15000,
   env: { ...drillEnv(), CLAUDE_PROJECT_DIR: projDir, RELAY_SESSION: sess, RELAY_URL: CLOSED },
 });
 
@@ -44,13 +44,13 @@ const ctx = parsed?.hookSpecificOutput?.additionalContext || "";
 ok("injected the <trantor-handoff> block", ctx.includes("<trantor-handoff"));
 ok("no raw control chars left in injected context",
    ![...ctx].some(ch => { const c = ch.codePointAt(0); return (c < 0x20 && c !== 9 && c !== 10 && c !== 13) || c === 0x7f || c === 0x2028 || c === 0x2029; }));
-ok("handoff marked consumed after load",
-   existsSync(hfFile) && JSON.parse(readFileSync(hfFile, "utf8")).consumed === true);
+ok("handoff claimed but unconsumed after load",
+   existsSync(hfFile) && JSON.parse(readFileSync(hfFile, "utf8")).consumed === false && JSON.parse(readFileSync(hfFile, "utf8")).claim?.session_id === proj);
 
 const r2 = runHook(projDir, proj);
 let ctx2 = "";
 try { ctx2 = JSON.parse(r2.stdout || "{}")?.hookSpecificOutput?.additionalContext || ""; } catch {}
-ok("consumed handoff is NOT re-injected on next start", !ctx2.includes("trantor-handoff"));
+ok("live claimed handoff is NOT re-injected on next start", !ctx2.includes("trantor-handoff"));
 
 // home-directory guard: a session opened in ~ itself must NOT register (it would
 // spawn a phantom "<username>" project board) — unless RELAY_SESSION opts it in.

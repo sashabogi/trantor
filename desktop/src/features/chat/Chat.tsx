@@ -1,3 +1,4 @@
+import { HandoffRecapStatus } from "../workspace/HandoffRecapStatus";
 // Talking to the orchestrator, as a conversation: renders the transcript the session writes to
 // its terminal, since a terminal is a bad place to read one. Tool calls render as collapsed cards
 // that fill in when a result arrives. Liveness is row-level (#5475/#5474): the watcher pushes each
@@ -1234,6 +1235,7 @@ export function Chat({ project, sessionId, dock, onDock, onClose, deps = DEFAULT
 
       <div className="relative min-h-0 flex-1">
       <div ref={transcript} onScroll={onTranscriptScroll} className="h-full overflow-y-auto px-3 pb-2">
+        <HandoffRecapStatus project={project} divider />
         {!target && (
           <div className="tr-card-ghost px-4 py-3 text-[length:calc(12px*var(--chat-scale,1))] leading-relaxed">
             No orchestrator session is hosted for this project yet. Open one from the Workspace lens

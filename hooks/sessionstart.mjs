@@ -2,7 +2,7 @@
 // trantor SessionStart hook — every session registers with the hub and gets a roster of OTHER live
 // sessions injected, so independent sessions discover each other. Config: env RELAY_URL →
 // ~/.agent-bus/config.json → http://127.0.0.1:4477. Identity: RELAY_SESSION → "<hostname>:<basename(cwd)>".
-import { readFileSync, writeFileSync, existsSync, readdirSync } from "node:fs";
+import { readFileSync, existsSync } from "node:fs";
 import { join, basename, dirname } from "node:path";
 import { homedir, hostname } from "node:os";
 import { execSync, spawn } from "node:child_process";
@@ -10,7 +10,8 @@ import { fileURLToPath } from "node:url";
 import { resolveProject, hostId, resolveHubInfo, knownProjects, nonSeatReason, nestedProjects, handoffDir, readOrchSession, writeOrchSession } from "../lib/project.mjs";
 import { formatSubagentManifest } from "../lib/subagent-manifest.mjs";
 import { updateAvailable, maybeNotifyDesktop, readConfig } from "./lib/update-check.mjs";
-import { renderStateBlock, readFirstPaths, capSummary } from "./lib/handoff.mjs";
+import { renderStateBlock, capSummary } from "./lib/handoff.mjs";
+import { loadPendingHandoff } from "./lib/handoff-claims.mjs";
 import { maybeCheckBalances } from "./lib/balance-check.mjs";
 import { getJSON, signedGet, signedPost, loadIdentity } from "./lib/api.mjs";
 import { ledgerPaths, ensureStart, anchorCursor, writeCursor } from "./lib/inbox-ledger.mjs";
@@ -38,59 +39,6 @@ function buildDoctrineShortForm() {
     `13. Audit — a project is audited against the doctrine before its next wave (file shape, tests and CI, owners, drills, pins, comments); the wave waits for the consolidation phase the scorecard demands.\n` +
     `Mechanics: relay_task_add has a \`drill\` field; the hub refuses any move to done, yours included, when the card carries no drill line.\n` +
     `</trantor-build-doctrine>\n`;
-}
-
-// Load the most recent UNCONSUMED handoff for this project; `claim` marks it consumed so exactly one
-// session takes it. A compaction-triggered start may show it but must NOT claim it from the new window.
-function loadPendingHandoff(projectName, { claim = true, freshSession = null } = {}) {
-  try {
-    const dir = handoffDir();   // NEVER join(homedir(), …) here: a drill pointed at a temp bus dir must not claim the real handoffs
-    if (!existsSync(dir)) return null;
-    // Match ONLY "<projectName>-<numeric stamp>.json" (a loose startsWith caught leaked fixtures), and
-    // sort by the numeric stamp, newest first, since a string sort could pick a stale handoff.
-    const re = new RegExp("^" + projectName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "-(\\d+)\\.json$");
-    const files = readdirSync(dir)
-      .map(f => { const m = re.exec(f); return m ? { f, stamp: Number(m[1]) } : null; })
-      .filter(Boolean)
-      .sort((a, b) => b.stamp - a.stamp)
-      .map(x => x.f);
-    for (const f of files) {
-      const p = join(dir, f);
-      const rec = JSON.parse(readFileSync(p, "utf8"));
-      if (!rec.consumed) {
-        if (claim) {
-          // `consumed` is set at hook time, BEFORE the model has read anything, so also record WHO is
-          // taking over: baton-close waits for the successor's first assistant turn before closing the original.
-          rec.consumed = true;
-          rec.consumedAt = nowSec();
-          if (freshSession && (freshSession.session_id || freshSession.transcript_path)) {
-            rec.consumedBy = {
-              session_id: freshSession.session_id || "",
-              transcript_path: freshSession.transcript_path || "",
-            };
-          }
-          // §5 CLAIMED on the machine's ledger (SYSTEM-CONTRACT) and the recap net armed: a recap-pending
-          // stamp names this successor, so a successor that never recaps is mechanically impossible.
-          if (!Array.isArray(rec.states)) rec.states = [];
-          rec.states.push({ state: "claimed", ts: nowSec(), by: freshSession?.session_id || "" });
-          writeFileSync(p, JSON.stringify(rec, null, 2));
-          if (freshSession?.session_id) {
-            try {
-              // #5645: the mandate rides the stamp too, so prompt-focus's recap reminder pins
-              // the SAME rec.mode the injection below announces (attended=WAIT / unattended=RESUME).
-              // #8162: the READ-FIRST list rides the stamp as DATA, so the Stop hook can check the
-              // successor opened it instead of accepting a reply as proof it understood anything.
-              const readFirst = readFirstPaths(rec.summary || "");
-              writeFileSync(join(dir, `recap-pending-${String(freshSession.session_id).replace(/[^A-Za-z0-9_.-]/g, "_")}.json`),
-                JSON.stringify({ handoffId: rec.id, ts: nowSec(), mode: rec.mode === "unattended" ? "unattended" : "attended", readFirst }));
-            } catch {}
-          }
-        }
-        return rec;
-      }
-    }
-  } catch {}
-  return null;
 }
 
 function nowSec() { try { return Number(execSync("date +%s", { encoding: "utf8" }).trim()) || 0; } catch { return 0; } }

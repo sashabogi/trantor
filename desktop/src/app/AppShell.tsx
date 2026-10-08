@@ -25,6 +25,8 @@ import { PLAIN_WAKE_KICKOFF } from "../features/genesis/genesis";
 import { classifyWakeOutcome, wakeOutcomeIsTransient, wakeRowLine, WAKE_OUTCOME_MS, type WakeRowState } from "../features/genesis/wakeRow";
 import { applyWakeProgress, wakeInProgress, wakeProgressRowState, WAKE_PROGRESS_EVENT, type WakeProgress } from "../features/genesis/wakeProgress";
 
+import { HandoffRecapStatus } from "../features/workspace/HandoffRecapStatus";
+
 const LOCAL_HUB = "http://127.0.0.1:4477";
 // #7269: the restore strip keeps polling while it is non-empty — every 5s for the first minute
 // (herdr's restored claudes register late under boot load), then every 30s.
@@ -503,6 +505,7 @@ export function AppShell() {
         <ProjectIcon project={p} size={20} />
         <span className="min-w-0 flex-1">
           <span className="block truncate">{p}</span>
+          <HandoffRecapStatus project={p} />
           {line && (
             <span className={`tr-mono block truncate text-[10px] font-normal ${line.tone === "warn" ? "text-tr-warn" : "text-[var(--color-tr-muted)]"}`}>{line.text}</span>
           )}

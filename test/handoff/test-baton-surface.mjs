@@ -174,6 +174,7 @@ function run(cli, args, { cwdDir, env = {}, stdin = "", stdio } = {}) {
     env: {
       PATH: process.env.PATH || "/usr/bin:/bin:/usr/sbin:/sbin",
       HOME: w, TMPDIR: process.env.TMPDIR || "/tmp",
+      GIT_CEILING_DIRECTORIES: process.env.GIT_CEILING_DIRECTORIES,
       AGENT_BUS_DIR: BUS, RELAY_DATA_DIR: BUS, CLAUDE_PROJECT_DIR: cwdDir,
       TRANTOR_NO_SCROOGE: "1",
       RELAY_URL: "http://127.0.0.1:1",   // #8263: the one writer now asks the hub (card lookup, verify gates) — never the operator's live one
