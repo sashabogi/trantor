@@ -146,8 +146,9 @@ export function runnerCommand(ctx, agent, model = "", effort = null) {
     .join("");
   // #7777: the launcher resolved the catalog's per-difficulty effort for this seat; the runner
   // reads CREW_EFFORT, applies what the CLI accepts and logs the one-line summary.
+  const swapEnv = ctx.swap ? ` CREW_SWAP_STAGE=${shellQuote(ctx.swap.path)} CREW_SWAP_LABEL=${shellQuote(ctx.swap.label)} CREW_SWAP_AGENT=${shellQuote(ctx.swap.agent)} CREW_SWAP_DRIVER=${shellQuote(ctx.swap.driver || "")}` : "";
   const effortEnv = effort ? ` CREW_EFFORT=${shellQuote(JSON.stringify(effort))}` : "";
-  return `cd ${shellQuote(ctx.dir)} && ${forwarded}CREW_MODEL=${shellQuote(model)}${effortEnv} RELAY_PROJECT=${shellQuote(ctx.project)} RELAY_URL=${shellQuote(ctx.hub)} node ${shellQuote(join(ROOT, "bin/crew-runner.mjs"))} ${shellQuote(agent)} ${shellQuote(ctx.dir)}`;
+  return `cd ${shellQuote(ctx.dir)} && ${forwarded}CREW_MODEL=${shellQuote(model)}${effortEnv}${swapEnv} RELAY_PROJECT=${shellQuote(ctx.project)} RELAY_URL=${shellQuote(ctx.hub)} node ${shellQuote(join(ROOT, "bin/crew-runner.mjs"))} ${shellQuote(agent)} ${shellQuote(ctx.dir)}`;
 }
 
 export function listPids(pattern) {

@@ -1,4 +1,5 @@
 import { existsSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
+import { seatProcesses, signalProcesses } from "./processes.mjs";
 import { call, listPids, run } from "./core.mjs";
 import { hostId } from "../../lib/project.mjs";
 import { statePathFor as dockerStatePathFor, sweep as dockerSweep } from "../../lib/docker-janitor.mjs";
@@ -61,6 +62,7 @@ async function stopSeatContainers(ctx, project, agent) {
 async function killSeatProcesses(ctx, project, agent) {
   if (ctx.env.CREW_NO_PROC_KILL === "1" || !project || !agent) return;
   await stopSeatContainers(ctx, project, agent);
+  if (!ctx.dry) signalProcesses(seatProcesses(ctx, project, agent), "SIGKILL");
   const patterns = [`seats/${project}-${agent}\\.sh`, `crew-runner\\.mjs ${agent} .*/${project}$`];
   for (const pattern of patterns) {
     for (const pid of listPids(pattern)) run(ctx, "kill", ["-9", pid], { rendered: `kill -9 ${pid} 2>/dev/null` });

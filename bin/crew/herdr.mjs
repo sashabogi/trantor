@@ -121,6 +121,7 @@ function orchPaneWorkspaces(ctx) {
 
 function prepareWorkspace(ctx, prune) {
   const tracked = trackedWorkspace(ctx);
+  if (ctx.swap) return tracked.reuse;
   const orchSpaces = orchPaneWorkspaces(ctx);
   for (const id of tracked.stale) {
     // #7285: never close reuse itself, nor a workspace hosting the tracked orch pane — `up` once

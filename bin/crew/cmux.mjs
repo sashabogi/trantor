@@ -55,6 +55,7 @@ function tracked(ctx) {
 
 function prepare(ctx, prune) {
   const result = tracked(ctx);
+  if (ctx.swap) return result.reuse;
   for (const id of result.stale) {
     console.log(`  → closing stale stacked crew workspace for ${ctx.project} (${id})`);
     closeWorkspace(ctx, id);
@@ -178,6 +179,7 @@ function spawnAppleScript(ctx, specs, resolve) {
 function prepareAppleScriptWorkspace(ctx) {
   const ids = readRows(ctx).filter(row => row.project === ctx.project && row.kind === "cmuxws").map(row => row.handle);
   const reuse = ids.at(-1) || "";
+  if (ctx.swap) return reuse;
   for (const id of ids.slice(0, -1)) {
     console.log(`  → closing stale stacked crew workspace for ${ctx.project} (${id})`);
     closeWorkspace(ctx, id);

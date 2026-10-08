@@ -1,7 +1,6 @@
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { call } from "./core.mjs";
-import { reapSeat } from "./state.mjs";
 import { resolveEffort } from "../../lib/model-catalog.mjs";
 
 function routeModel(ctx, provider, candidates, task, difficulty) {
@@ -21,7 +20,8 @@ export function resolveModel(ctx, agent, provider, task, difficulty) {
   const candidates = result.ok ? result.stdout.split(/\s+/).filter(Boolean).join(" ") : "";
   let model = routeModel(ctx, provider, candidates, task, difficulty);
   if (!model && candidates) {
-    model = `${provider}/${candidates.split(" ")[0]}`;
+    const first = candidates.split(" ")[0];
+    model = first.startsWith(`${provider}/`) ? first : `${provider}/${first}`;
     console.error(`[crew] router unavailable for ${agent}:${provider} — using the provider's own catalog head (${model})`);
   }
   if (!model) throw new Error(`[crew] live model selection failed for ${agent}:${provider} — no router and no catalog; refusing opencode global default`);
@@ -31,7 +31,6 @@ export function resolveModel(ctx, agent, provider, task, difficulty) {
 
 export function resolveSpec(ctx, spec, task, difficulty, skipped) {
   const [agent, ...rest] = spec.split(":");
-  reapSeat(ctx, agent);
   let field = rest.join(":");
   if (!field) {
     if (agent === "glm") field = "zai-coding-plan";

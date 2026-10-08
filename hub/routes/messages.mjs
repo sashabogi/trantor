@@ -1,7 +1,9 @@
 /* oxlint-disable anti-slop/no-conditional-empty-object-spread -- SAFETY: Optional message fields must remain absent, not undefined; preserving the existing spread keeps the signed wire shape identical. */
+import { routeContractTransfer } from "./contract-transfer.mjs";
 import { setTimeout, setInterval, clearInterval } from "node:timers";
 
 export async function routeMessages({ req, res, q, P, auth, ctx }) {
+  if (await routeContractTransfer({ req, res, q, P, auth, ctx })) return true;
   const {
     state, body, json, stripNulText, crossProjectGuard, touch, pushToStreams,
     appendEvent, appendCardEvent, appendTaskLog, markDelivered, contractsFor, canUseInboxSession, inboxWindow,

@@ -41,7 +41,10 @@ import {
 import { costLine } from "../lib/state/cost.mjs";
 import { resolveStateFlags } from "../lib/state/flags.mjs";
 
-const AGENT = process.argv[2];
+import { awaitSwapRelease } from "./crew/stage.mjs";
+
+await awaitSwapRelease();
+const AGENT = process.env.CREW_SWAP_AGENT || process.argv[2];
 const DIR = process.argv[3] || process.cwd();
 // Crew agents MUST share the orchestrator's project key (one repo = one lane).
 // RELAY_PROJECT is inherited from crew.mjs (the host's resolved key); else fall
@@ -241,7 +244,8 @@ const CLI = {
 // <label>:<provider>` for any opencode vendor the user configured — run with no per-provider code
 // here; its model id arrives pre-qualified (`<provider>/<model>`) as CREW_MODEL.
 const NATIVE = new Set(["codex", "gemini", "kimi", "claude", "dsh"]);
-const cli = CLI[AGENT] || (NATIVE.has(AGENT) ? null : CLI.opencode);
+const DRIVER = process.env.CREW_SWAP_DRIVER || AGENT;
+const cli = CLI[DRIVER] || (NATIVE.has(AGENT) ? null : CLI.opencode);
 if (!cli) { console.error(`unknown agent '${AGENT}' (native: ${[...NATIVE].join(", ")}; any other name = an opencode provider seat)`); process.exit(1); }
 if (!CLI[AGENT]) log(`'${AGENT}' is not a built-in seat — running it as an opencode provider (BYOM)`);
 
@@ -250,7 +254,7 @@ if (!CLI[AGENT]) log(`'${AGENT}' is not a built-in seat — running it as an ope
 // parameters the CLI can carry (codex -c model_reasoning_effort / claude --effort / opencode
 // --variant) and logs ONE line saying what it set — or that the model is uncatalogued.
 const EFFORT = (() => { try { return JSON.parse(process.env.CREW_EFFORT || "null"); } catch { return null; } })();
-const EFFORT_FLAG = EFFORT ? cliEffortFlag(AGENT, EFFORT) : { flag: "", text: "" };
+const EFFORT_FLAG = EFFORT ? cliEffortFlag(DRIVER, EFFORT) : { flag: "", text: "" };
 
 // RUNNER_RULES / RUNNER_KICKOFF env overrides: the runner is also the substrate for non-crew
 // always-on seats (the fleet DUTY agent, bin/duty.mjs) whose doctrine is not "work your card".
@@ -617,6 +621,7 @@ const STATE_SCHEMA_FILE = join(homedir(), ".agent-bus", `state-schema-${AGENT}-$
 const STATE_MODE = (() => {
   if (!STATE_FLAG_ON) return false;
   if (AGENT !== "claude") { log(`${STATE_ENV}=1 but this seat is '${AGENT}' — state mode is claude-only (TDD §7.3); staying on the transcript path`); return false; }
+  if (DRIVER !== "claude") return false;
   const probe = hasJsonSchemaFlag((bin, args) => spawnSync(bin, args, { encoding: "utf8", timeout: 20000 }));
   if (!probe) { log(`\x1b[33m${STATE_ENV}=1 but this claude CLI has no --json-schema — state mode stays OFF (TDD §6)\x1b[0m`); return false; }
   try {
@@ -1304,7 +1309,8 @@ async function resolveWakeCard(messages, { session }) {
   await loadLessons();
   // start cursor at the CURRENT tip so we don't replay history
   let cursor = 0;
-  try { const r = await api(`/inbox?session=${encodeURIComponent(SESSION)}&since=0`); cursor = r.cursor || 0; } catch {}
+  if (process.env.CREW_SWAP_STAGE) cursor = JSON.parse(readFileSync(`${process.env.CREW_SWAP_STAGE}.release`, "utf8")).cursor;
+  else try { const r = await api(`/inbox?session=${encodeURIComponent(SESSION)}&since=0`); cursor = r.cursor || 0; } catch {}
   // kind "agent" on every beat (#6075): the peer row's kind is the hub's OWN record of what a
   // session is — the overseer's declared-crew exemption reads it, and on the remote hub there is
   // no crew-windows.txt to fall back to. /register preserves absent fields, so a seat running an
