@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import assert from "node:assert/strict";
+import { gitCheckoutRoot } from "../../hooks/lib/git-checkout.mjs";
 import { createServer } from "node:http";
 import { writeOverseerLevel } from "../../hooks/lib/overseer-level-cache.mjs";
 import { spawn } from "node:child_process";
@@ -40,7 +41,7 @@ try {
     await request(identity, "POST", "/enroll", { name, kind: role === "owner" ? "human" : "agent", scopes: [{ project, role }] });
   }
   await request(owner, "POST", "/policy", { autonomy: { alpha: 3 } });
-  const claim = (session, file = "same.ts") => request(session === "first:alpha" ? first : agent, "POST", "/claim", { project: "alpha", session, file });
+  const claim = (session, file = "same.ts") => request(session === "first:alpha" ? first : agent, "POST", "/claim", { project: "alpha", session, file, gitRoot: gitCheckoutRoot(root) });
   check((await request(agent, "POST", "/hold/check", { project: "alpha", session: "first:alpha", file: "same.ts" })).code === 403, "writer cannot impersonate the earlier claimant");
   check(!(await claim("first:alpha")).hold, "first claimant proceeds");
   const later = await claim("later:alpha");

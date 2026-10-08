@@ -1,3 +1,4 @@
+import { checkoutKey, collisionIdentity, levelFor } from "../../lib/overseer.mjs";
 /* oxlint-disable anti-slop/no-runtime-typeof -- SAFETY: These checks preserve the established request and provider-response compatibility boundary during a route-only extraction. */
 import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
@@ -23,6 +24,13 @@ export async function routeAdmin({ req, res, q, P, auth, ctx }) {
       // WHO is this, really: the LLM brand + the exact model currently loaded. In-memory like the
       // rest of presence — the next heartbeat re-supplies it after a restart.
       const pr = state.peers[b.session];
+      if (pr && b.gitRoot) {
+        pr.gitRoot = String(b.gitRoot).slice(0, 2000);
+        state.overseerState ??= {};
+        state.overseerState.roots ??= {};
+        state.overseerState.roots[b.session] = pr.gitRoot;
+        markDirty();
+      }
       // #6148: WHAT a session is rides its peer row (kind "genesis" = the CLI's brief-poster,
       // "agent" = a crew seat) — /peers hands it to the app so the seat strip can tell them apart.
       if (pr) { if (b.model) pr.model = String(b.model).slice(0, 80); if (b.llm) pr.llm = String(b.llm).slice(0, 40); if (b.kind) pr.kind = String(b.kind).slice(0, 40); }
@@ -207,7 +215,7 @@ export async function routeAdmin({ req, res, q, P, auth, ctx }) {
       let warnings = [];
       try {
         warnings = (overseer.engine?.detectCollisions ? overseer.engine.detectCollisions(overseerInputs()) : [])
-          .filter(c => c.project === proj || linked.has(c.project));
+          .filter(c => c.project === proj || c.projects?.includes(proj) || linked.has(c.project));
         // #5760: a declared crew is the NORMAL state of a project, not a collision — the tick
         // loop drops crew-only sets before they ever become episodes, and this live view must
         // agree with it: the SessionStart hook narrates exactly these lines, so a crew-only leak
@@ -215,14 +223,14 @@ export async function routeAdmin({ req, res, q, P, auth, ctx }) {
         warnings = warnings.filter(c => !(c.kind === "same-project-sessions" && overseer.sameProject?.sameProjectDecision &&
           overseer.sameProject.sameProjectDecision({
             current: c.sessions,
-            declaredCrew: declaredCrewFor(c.project),
+            declaredCrew: declaredCrewFor(c.project, c.gitRoot),
             now: now(),
           }).reason === "crew-only"));
         // The record line reports DURATION ("standing for 6h"), never a count of warnings. Episode
         // identity is project+kind+files, exactly as the tick loop keys it, so this view says the
         // same thing the warning did  for every kind, not just same-project (#7029).
         for (const c of warnings) {
-          const ep = overseer.active.get(`${c.project} ${c.kind}${c.kind === "same-project-sessions" ? "" : ` ${(c.files || []).join(",")}`}`);
+          const ep = overseer.active.get(c.kind === "same-project-sessions" ? `${checkoutKey(c)} ${c.kind}` : collisionIdentity(c));
           if (!ep) continue;
           c.since = ep.since;
           const label = c.kind === "same-project-sessions" ? "same-project" : "standing";
@@ -289,19 +297,27 @@ export async function routeAdmin({ req, res, q, P, auth, ctx }) {
       const session = String(b.session || "").slice(0, 120);
       if (!proj || !file || !session) return json(res, 400, { error: "project, file and session required" });
       if (auth?.identity && session !== auth.identity.name) return json(res, 403, { error: "session must match signer" });
+      const gitRoot = String(b.gitRoot || state.peers[session]?.gitRoot || state.overseerState?.roots?.[session] || "").slice(0, 2000);
       pruneClaims();
-      const key = `${proj} ${file} ${session}`;
+      const key = `${checkoutKey({ project: proj, gitRoot })}\u0000${file}\u0000${session}`;
       const mine = fileClaims.get(key);
       const conflicts = [...fileClaims.values()]
-        .filter(c => c.project === proj && c.file === file && c.session !== session)
+        .filter(c => checkoutKey(c) === checkoutKey({ project: proj, gitRoot }) && c.file === file && c.session !== session)
         .map(c => ({ session: c.session, ts: c.ts, agoSec: Math.round((now() - c.ts) / 1000) }));
-      fileClaims.set(key, { project: proj, file, session, ts: now() });
+      fileClaims.set(key, { project: proj, file, session, gitRoot, ts: now() });
       touch(session, undefined, undefined, undefined, auth);
+      if (gitRoot) {
+        state.peers[session].gitRoot = gitRoot;
+        state.overseerState ??= {};
+        state.overseerState.roots ??= {};
+        state.overseerState.roots[session] = gitRoot;
+      }
       // Repeated checks refresh the claim without repeating its conflict event.
       if (!mine) appendEvent("file.claim", proj, session, { file });
       if (!mine && conflicts.length) appendEvent("file.conflict", proj, session, { file, with: conflicts.map(c => c.session) });
-      const hold = overseer.holdFor(proj, file, session);
-      const level = overseer.overseerPolicy().autonomy[proj] ?? overseer.overseerPolicy().autonomy["*"] ?? 1;
+      overseer.overseerTick();
+      const hold = overseer.holdFor(proj, file, session, gitRoot);
+      const level = levelFor(proj, overseer.overseerPolicy().autonomy);
       return json(res, 200, { ok: true, conflicts: level >= 2 ? conflicts : [], level, hold, ttlMs: CLAIM_TTL_MS });
     }
     if (req.method === "GET" && P === "/claims") {

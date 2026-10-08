@@ -6,7 +6,7 @@ import { DEFAULT_ORG } from "../lib/store-contract.mjs";
 
 export async function createStoreRuntime({ STORE_KIND, PG_URL, ORG_ID, DATA }) {
 function emptyState() {
-  return { messages: [], peers: {}, seq: 0, tasks: [], taskSeq: 0, projectMeta: {}, lessons: [], events: [], cardEventsBackfilled: false, aliases: {}, phaseMeta: {}, verifyGates: [], verifyGateSeq: 0, proposals: [], proposalSeq: 0, balances: { ts: 0, by: "", entries: [] }, subagentCostReset: false, handoffLog: [], identities: {}, inviteTokens: {}, focus: {}, orgPolicy: {}, instances: {}, dutySession: "", contractReap: {}, eventSeq: 0 };
+  return { messages: [], peers: {}, seq: 0, tasks: [], taskSeq: 0, projectMeta: {}, lessons: [], events: [], cardEventsBackfilled: false, aliases: {}, phaseMeta: {}, verifyGates: [], verifyGateSeq: 0, proposals: [], proposalSeq: 0, balances: { ts: 0, by: "", entries: [] }, subagentCostReset: false, handoffLog: [], identities: {}, inviteTokens: {}, focus: {}, orgPolicy: {}, overseerState: {}, instances: {}, dutySession: "", contractReap: {}, eventSeq: 0 };
 }
 
 const CARD_LOG_MAX = 40;
@@ -110,6 +110,7 @@ function normalizeState(loaded = {}) {
   s.instances = loaded.instances && typeof loaded.instances === "object" ? loaded.instances : {};
   s.focus = loaded.focus && typeof loaded.focus === "object" ? loaded.focus : {};
   s.orgPolicy = loaded.orgPolicy && typeof loaded.orgPolicy === "object" ? loaded.orgPolicy : {};
+  s.overseerState = loaded.overseerState || {};
   s.dutySession = String(loaded.dutySession || "");
   s.contractReap = loaded.contractReap && typeof loaded.contractReap === "object" ? loaded.contractReap : {};
   // The event id high-water mark. Seeded from the store's own MAX(id) where it supplied one, and
@@ -127,7 +128,7 @@ function normalizeState(loaded = {}) {
       // #6170: `kind` rides the load. This normalizer rebuilds every peer from an explicit field
       // list, so a field missing here is dropped however faithfully the store returned it (the kinds
       // came back empty on the first live restart). llm/model stay out: they are in-memory presence.
-      : { lastSeen: v.lastSeen || 0, status: v.status || "", project: v.project || "", pubkey: v.pubkey || "", identity: v.identity || null, authWarning: v.authWarning || "", hookVersion: v.hookVersion || "", kind: v.kind || "", deliveredUpTo: v.deliveredUpTo || v.delivered_up_to || 0, _on: v._on === true || v.online === true };
+      : { lastSeen: v.lastSeen || 0, status: v.status || "", project: v.project || "", pubkey: v.pubkey || "", identity: v.identity || null, authWarning: v.authWarning || "", hookVersion: v.hookVersion || "", kind: v.kind || "", gitRoot: v.gitRoot || loaded.overseerState?.roots?.[session] || "", deliveredUpTo: v.deliveredUpTo || v.delivered_up_to || 0, _on: v._on === true || v.online === true };
   }
   return s;
 }

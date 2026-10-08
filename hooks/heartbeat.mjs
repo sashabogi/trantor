@@ -12,6 +12,7 @@ import { armBaton, readArm, clearArm, readConfig, contextUsage, warnFrac, alread
 import { resolveProject, hostId } from "../lib/project.mjs";
 import { installedVersion } from "./lib/update-check.mjs";   // report our hook version so the hub can flag stale sessions
 import { signedPost } from "./lib/api.mjs";
+import { gitCheckoutRoot } from "./lib/git-checkout.mjs";
 
 const HEARTBEAT_MS = Number(process.env.RELAY_HEARTBEAT_MS || 60 * 1000);
 const FETCH_TIMEOUT_MS = Number(process.env.RELAY_HEARTBEAT_TIMEOUT_MS || 1500);
@@ -161,7 +162,7 @@ async function main(stdinRaw) {
   // strict test sessionstart.mjs uses), "agent" when the runner's TRANTOR_SEAT says crew seat.
   const beatKind = process.env.TRANTOR_ORCH && process.env.TRANTOR_ORCH === project ? "orch"
     : process.env.TRANTOR_SEAT ? "agent" : "";
-  const beatBody = { session, project,
+  const beatBody = { session, project, gitRoot: gitCheckoutRoot(projectDir),
     llm: process.env.RELAY_LLM || (process.env.RELAY_AGENT ? process.env.RELAY_AGENT.replace(/-orch$/, "") : "claude"),
     model: modelFromTranscript(stdinRaw),
     hookVersion: (() => { try { return installedVersion(); } catch { return ""; } })() };

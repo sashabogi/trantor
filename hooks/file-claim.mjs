@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { gitCheckoutRoot } from "./lib/git-checkout.mjs";
 // trantor PreToolUse file-claim — before every file edit the session posts a claim and the hub answers
 // with any LIVE claim on the same file by another session, handed to the model as context.
 // Informational, never blocking: a lock server that fails open is worse than no lock. Fail-open and
@@ -42,20 +43,21 @@ try {
   const ctx = sessionContext(input.cwd);
   if (!ctx.project) allow();
   // claims compare by path, and absolute paths differ per machine — store repo-relative
+  const gitRoot = gitCheckoutRoot(ctx.projectDir);
   const absolute = resolve(ctx.projectDir, abs);
-  const rel = relative(ctx.projectDir, absolute);
+  const rel = relative(gitRoot || ctx.projectDir, absolute);
   const file = !rel.startsWith("..") ? rel : absolute;
 
   // throttle re-claims of the same file; never throttle its first touch
   const stampDir = join(process.env.AGENT_BUS_DIR || join(homedir(), ".agent-bus"), "claims");
-  const stamp = join(stampDir, `${ctx.session} ${file}`.replace(/[^A-Za-z0-9_.-]/g, "_"));
+  const stamp = join(stampDir, `${ctx.session} ${gitRoot} ${file}`.replace(/[^A-Za-z0-9_.-]/g, "_"));
   try {
     const last = Number(readFileSync(stamp, "utf8"));
     if (Date.now() - last < RECLAIM_MS) allow();
   } catch {}
 
   const r = await signedPost(`${relayUrl(ctx.project)}/claim`,
-    { project: ctx.project, file, session: ctx.session },
+    { project: ctx.project, file, session: ctx.session, gitRoot },
     { timeoutMs: FETCH_TIMEOUT_MS, session: ctx.session });
 
   try { mkdirSync(stampDir, { recursive: true }); writeFileSync(stamp, String(Date.now())); } catch {}
