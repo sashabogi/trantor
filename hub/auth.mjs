@@ -117,18 +117,7 @@ function projectFromRequest(P, q, b) {
   }
   return canon(String(b?.project || q?.project || "").slice(0, 80));
 }
-// --- Cross-project guard (#6228) -----------------------------------------------------------
-// scopeAllows/canRead answer "can this identity touch project P at all" — and most identities
-// are minted project:"*" role:"owner" by defaultScopesFor (any non-agent kind: an orchestrator,
-// genesis, a human). That is not a project fence; it is exactly the loophole the pr-os
-// orchestrator walked through to register seats and post contracts into crebral-com from its
-// own session, nothing it was ever working. This is the fence: does the CALLER's own project
-// (its identity name's "kind:project" suffix, the same convention defaultScopesFor reads) match
-// the project the request ACTS on. Only a declared `trantor policy link` (state.orgPolicy.links,
-// the same store /policy reads and writes — POST /policy is itself OWNER_ENDPOINTS-gated) or the
-// operator's own identity (kind "human", the key /instance/supersede already treats as owner)
-// opens the door. Applies to the five endpoints that reach across sessions or mint access:
-// /send, /task, /task/update, /register, /invite.
+// Cross-project actions require a declared link or the operator identity, even with wildcard scopes (#6228).
 const CROSS_PROJECT_ENDPOINTS = new Set(["/send", "/task", "/task/update", "/register", "/invite"]);
 function projectsLinked(a, b) {
   if (!a || !b || a === b) return true;
@@ -139,7 +128,7 @@ function projectsLinked(a, b) {
 }
 function overseerPolicy() {
   const policy = state.orgPolicy && typeof state.orgPolicy === "object" ? state.orgPolicy : {};
-  return { autonomy: { "*": 1, ...(policy.autonomy || {}) }, links: Array.isArray(policy.links) ? policy.links : [] };
+  return { autonomy: { "*": 2, ...(policy.autonomy || {}) }, links: Array.isArray(policy.links) ? policy.links : [] };
 }
 // "projPair-a" is an INSTANCE of "projPair", not a different project: the shorter name is a prefix
 // of the longer and the remainder starts with a separator, not another project's first letter.
@@ -147,18 +136,7 @@ function instanceOfProject(a, b) {
   const [lo, hi] = a.length <= b.length ? [a, b] : [b, a];
   return hi.length > lo.length && hi.startsWith(lo) && !/[a-z0-9]/i.test(hi[lo.length]);
 }
-// The caller's home project, by the SAME "name suffix after the colon" rule defaultScopesFor
-// uses to mint a fresh identity's default scope. An identity with no colon in its name (a bare
-// human alias, or a tool identity never given a project) has no home to fence — nothing to check.
-//
-// The suffix is a CONVENTION, not a fact: session ids routinely carry an instance marker after the
-// project — "agent:projPair-a" is session -a OF projPair, the same shape as the fleet's per-seat
-// session ids — and reading that whole suffix as a home project fenced a session against its OWN
-// project's register/send (#6446, red since 3e18faf). So when the identity's own scopes name
-// exactly one concrete project (what /enroll bound at enrollment, and what /invite granted), that
-// enrolled project is the home — unless the suffix names a DIFFERENT project, in which case the
-// stricter suffix wins. Wildcard-scope identities (the fence's original target: a "*" owner like
-// an orchestrator or genesis) keep the pure suffix rule unchanged.
+// Enrollment identifies instance sessions; a conflicting suffix stays stricter. Wildcard identities keep the suffix fence (#6446).
 function callerProject(auth) {
   const name = String(auth?.identity?.name || "");
   const suffix = name.includes(":") ? canon(name.slice(name.lastIndexOf(":") + 1)) : "";
@@ -197,15 +175,7 @@ function crossProjectGuard(auth, P, b) {
   return { ok: false, code: 403,
     error: `cross-project: ${home} may not act on ${target} — cross-project action is a breach unless the operator linked the projects. Run: trantor policy link ${home} ${target} --reason "<why>"` };
 }
-// Is a stored baton claim still worth honouring? The claim names the instance it spared
-// (`exceptInstanceId`), so we defer to THAT instance only while it is still being seen. A claimant
-// that died stops muzzling its twins; one that comes back starts again. Records claimed before
-// `supersededBy` existed carry no claimant, so they fall back to "is any OTHER live instance of this
-// name still carrying it?" — an orphaned flag must not outlive every possible carrier.
-// NOTE lastSeen only advances on a request, and the heartbeat is PostToolUse, so an alive-but-idle
-// claimant reads as gone after the grace window. That is the intended trade: the only session that
-// ever asks this question is one a human is actively driving right now, and deferring to a claimant
-// that has been silent for longer than the window is worse than letting the driven session work.
+// Supersession lasts while its claimant is live, with startup grace; legacy claims defer to another live instance.
 function supersessionActive(rec) {
   if (!rec?.superseded) return false;
   const cut = now() - SUPERSEDE_GRACE_MS;
@@ -231,12 +201,7 @@ async function authenticate(req, path) {
     return { ok: false, code: 401, error: "signature required" };
   }
   const raw = req.method === "GET" || req.method === "HEAD" ? undefined : await rawBody(req);
-  // WARN MODE NEVER BLOCKS — it annotates. That is its entire contract: an observation period
-  // where the hub records what WOULD fail under enforce. The restarted local hub proved the
-  // failure mode: signed requests from a not-yet-enrolled identity got 401 "unknown identity"
-  // while UNSIGNED requests passed — punishing exactly the clients that already do the right
-  // thing. Under warn: bad signature, replay and unknown identity all pass with a warning;
-  // under enforce they are the hard failures they should be.
+  // Auth warn mode annotates signature, replay and enrollment failures; enforce mode rejects them.
   const soft = (warning) => AUTH_MODE === "warn"
     ? { ok: true, mode: AUTH_MODE, trusted: false, warning }
     : { ok: false, code: 401, error: warning };
@@ -287,17 +252,7 @@ function filterReadable(auth, rows, projectOf) {
   if (AUTH_MODE !== "enforce" && !auth?.identity) return rows;
   return rows.filter(row => canRead(auth, projectOf(row)));
 }
-// DISCOVERY follows declared links, and is deliberately wider than read.
-//
-// Sending across projects was never blocked: /send authorizes against the SENDER's project, so any
-// session can DM any session id it happens to know. Only the ROSTER was scoped — which meant two
-// sessions the operator had explicitly declared codependent could not learn each other's ids. The
-// overseer would tell both of them to "coordinate over the bus" and neither could find the other,
-// so the only remaining channel was the human. That is the exact traffic-cop role this project
-// exists to delete.
-//
-// A link is an operator declaration that two projects share resources. Treating it as mutual
-// discovery grants nothing a linked pair wasn't already told to do.
+// Declared links permit mutual roster discovery without granting broader read or write access.
 function canDiscover(auth, project) {
   if (canRead(auth, project)) return true;
   const proj = canon(project || "");

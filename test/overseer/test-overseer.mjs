@@ -24,13 +24,13 @@ const hubA = await spawnHub();
 try {
   const A = mk(hubA.base);
   const def = await A.get("/policy");
-  ok(def.autonomy && def.autonomy["*"] === 1 && Array.isArray(def.links) && def.links.length === 0,
-     "GET /policy default {autonomy:{'*':1},links:[]}");
+  ok(def.autonomy && def.autonomy["*"] === 2 && Array.isArray(def.links) && def.links.length === 0,
+     "GET /policy default {autonomy:{'*':2},links:[]}");
 
   const s1 = await A.post("/policy", { autonomy: { alpha: 3, beta: 2 } });
   ok(s1.ok === true, "POST /policy set autonomy -> ok");
   const a1 = await A.get("/policy");
-  ok(a1.autonomy?.alpha === 3 && a1.autonomy?.beta === 2 && a1.autonomy?.["*"] === 1,
+  ok(a1.autonomy?.alpha === 3 && a1.autonomy?.beta === 2 && a1.autonomy?.["*"] === 2,
      "policy persists autonomy across GET");
 
   const s2 = await A.post("/policy", { link: { projects: ["alpha", "charlie"], reason: "codependent microservices" } });

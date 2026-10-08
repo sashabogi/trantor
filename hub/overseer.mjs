@@ -22,7 +22,7 @@ let overseerLastCollisions = [];
 function overseerPolicy() {
   const p = state.orgPolicy && typeof state.orgPolicy === "object" ? state.orgPolicy : {};
   return {
-    autonomy: { "*": 1, ...(p.autonomy || {}) },
+    autonomy: { "*": 2, ...(p.autonomy || {}) },
     links: Array.isArray(p.links) ? p.links : [],
   };
 }

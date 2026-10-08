@@ -23,11 +23,13 @@ const claim = (session, project, file, ageMs = 0) => ({ session, project, file, 
 
 console.log("# overseer pure library tests");
 
-await test("levelFor uses project key, then wildcard, then level 1", () => {
+await test("levelFor uses project key, then wildcard, then level 2", () => {
   assert.equal(levelFor("alpha", { alpha: 3, "*": 2 }), 3);
   assert.equal(levelFor("beta", { alpha: 3, "*": 2 }), 2);
-  assert.equal(levelFor("beta", { alpha: 3 }), 1);
+  assert.equal(levelFor("beta", { alpha: 3 }), 2);
   assert.equal(levelFor("beta", { beta: 9, "*": 4 }), 4);
+  assert.equal(levelFor("alpha", { alpha: 1, "*": 2 }), 1);
+  assert.equal(levelFor("alpha", {}), 2);
 });
 
 await test("empty and missing inputs produce no collisions", () => {
@@ -73,12 +75,7 @@ await test("file-conflict reports live claims by different sessions on the same 
   assert.equal(collisions[0].detail, "codex:alpha, kimi:alpha have live claims on alpha/src/a.ts.");
 });
 
-// THE NEGATIVE CASE — the reason #7029 exists, and the one the fix is FOR.
-// The old detector warned because two sessions were LIVE on linked projects. On this machine that
-// is the permanent condition (trantor and trantor-duty are declared codependent), so it fired
-// constantly, woke a seat each time, and cost a full turn proving a negative. Presence is a STATE;
-// a warning needs an EVENT. Without this test the whole card is unverified: deleting the
-// `evidence.length === 0` guard leaves every other assertion green.
+// Co-presence on linked projects is not evidence of overlap (#7029).
 await test("co-presence on linked projects with NO overlap is SILENT", () => {
   const collisions = detectCollisions({
     now,
@@ -142,7 +139,7 @@ await test("linked-activity fires on one CARD held by live sessions from both si
   assert.equal(linked.detail, "Linked projects alpha, bravo are on the same work: card #7029 is held by a:alpha, b:bravo.");
 });
 
-// Regression (#7029, 2026-09-09): the warning fired because two sessions were LIVE on linked
+// Regression (#7029): the warning fired because two sessions were LIVE on linked
 // projects — a STATE, and on a machine with a declared codependence the PERMANENT state. It woke a
 // seat, which spent a full turn proving nothing overlapped. Presence is not evidence; an event is.
 await test("linked-activity stays silent when both sides work but nothing is shared", () => {

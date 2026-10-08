@@ -366,7 +366,7 @@ export function Overseer({ client }: { client: HubClient }) {
               <div className="mb-2 text-[12px] text-[var(--color-tr-muted)]">Autonomy ladder</div>
               <div className="flex flex-col gap-2">
                 {projects.map(proj => {
-                  const lvl = status.autonomy[proj] ?? status.autonomy["*"] ?? 1;
+                  const lvl = status.autonomy[proj] ?? status.autonomy["*"] ?? 2;
                   const setLevel = (n: number) => void run(`level-${proj}`, () => policySet(proj, n));
                   return (
                     <div key={proj} className="flex items-center gap-2">
@@ -379,7 +379,7 @@ export function Overseer({ client }: { client: HubClient }) {
                     </div>
                   );
                 })}
-                {!projects.length && <div className="text-[13px] text-[var(--color-tr-muted)]">Whole fleet at level {status.autonomy["*"] ?? 1}.</div>}
+                {!projects.length && <div className="text-[13px] text-[var(--color-tr-muted)]">Whole fleet at level {status.autonomy["*"] ?? 2}.</div>}
               </div>
             </div>
 

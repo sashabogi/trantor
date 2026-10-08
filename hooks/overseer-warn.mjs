@@ -31,7 +31,7 @@ try {
   if (!r.ok || !r.json) silent();
   const c = r.json;
 
-  const level = Number(c.level || 1);
+  const level = Number(c.level ?? 2);
   const warnings = Array.isArray(c.warnings) ? c.warnings : [];
   const inflight = Array.isArray(c.inflight) ? c.inflight : [];
   const links = Array.isArray(c.links) ? c.links : [];

@@ -8,13 +8,15 @@ const cacheFile = ({ project, hub, busDir }) => join(cacheDir(busDir), createHas
 
 export function readOverseerLevel(context) {
   try {
-    const { level, ts } = JSON.parse(readFileSync(cacheFile(context), "utf8"));
+    const { level: cachedLevel, ts } = JSON.parse(readFileSync(cacheFile(context), "utf8"));
+    const level = cachedLevel ?? 2;
     const age = Date.now() - ts;
     return [1, 2, 3, 4].includes(level) && age >= 0 && age < 60_000 ? level : null;
   } catch { return null; }
 }
 
-export function writeOverseerLevel(context, level) {
+export function writeOverseerLevel(context, level = 2) {
+  level ??= 2;
   if (![1, 2, 3, 4].includes(level)) return;
   try {
     mkdirSync(cacheDir(context.busDir), { recursive: true });

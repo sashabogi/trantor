@@ -189,7 +189,7 @@ function SettingsContent({ me, update: updateFromShell, projects = [], project =
                     {["*", ...h.projects].map(proj => (
                       <div key={proj} className="flex items-center gap-3">
                         <span className="min-w-0 flex-1 truncate text-[13px]">{proj === "*" ? "default (every project)" : proj}</span>
-                        <select value={pol.levels[proj] ?? pol.levels["*"] ?? 1}
+                        <select value={pol.levels[proj] ?? pol.levels["*"] ?? 2}
                                 onChange={e => {
                                   const lvl = Number(e.target.value);
                                   void pol.client.setAutonomy(proj, lvl).then(() =>

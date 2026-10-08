@@ -202,7 +202,7 @@ export async function routeAdmin({ req, res, q, P, auth, ctx }) {
       const proj = canon(String(q.project || "").slice(0, 80));
       if (!proj) return json(res, 400, { error: "project required" });
       const pol = overseerPolicy();
-      const level = overseer.engine?.levelFor ? overseer.engine.levelFor(proj, pol.autonomy) : (pol.autonomy[proj] ?? pol.autonomy["*"] ?? 1);
+      const level = overseer.engine?.levelFor ? overseer.engine.levelFor(proj, pol.autonomy) : (pol.autonomy[proj] ?? pol.autonomy["*"] ?? 2);
       const links = pol.links.filter(l => (l.projects || []).includes(proj));
       const linked = new Set(links.flatMap(l => l.projects).filter(x => x !== proj));
       const cutoff = now() - ONLINE_MS;

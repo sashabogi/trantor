@@ -2,7 +2,7 @@
 import assert from "node:assert/strict";
 import { gitCheckoutRoot } from "../../hooks/lib/git-checkout.mjs";
 import { createServer } from "node:http";
-import { writeOverseerLevel } from "../../hooks/lib/overseer-level-cache.mjs";
+import { readOverseerLevel, writeOverseerLevel } from "../../hooks/lib/overseer-level-cache.mjs";
 import { spawn } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { resolve, join } from "node:path";
@@ -101,6 +101,8 @@ try {
   const cache = { project: "alpha", hub: url, busDir: outageBus };
   const env = drillEnv({ RELAY_URL: url, RELAY_PROJECT: "alpha", RELAY_SESSION: "later:alpha", AGENT_BUS_DIR: outageBus });
   const input = JSON.stringify({ cwd: root, tool_name: "Edit", tool_input: { file_path: join(root, "offline.ts") } });
+  writeOverseerLevel(cache);
+  check(readOverseerLevel(cache) === 2, "missing cached level defaults to Warn");
   for (const level of [1, 2]) {
     writeOverseerLevel(cache, level);
     const result = await run("hooks/file-hold.mjs", [], env, input);

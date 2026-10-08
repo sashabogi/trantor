@@ -65,7 +65,7 @@ try {
   if (r.ok) writeOverseerLevel({ project: ctx.project, hub: relayUrl(ctx.project) }, r.json?.level);
 
   const conflicts = r.ok ? r.json?.conflicts ?? [] : [];
-  if (Number(r.json?.level || 1) < 2 || !conflicts.length) allow();
+  if (Number(r.json?.level ?? 2) < 2 || !conflicts.length) allow();
 
   const who = conflicts.map(c => `${c.session} (${ago(c.agoSec)} ago)`).join(", ");
   // NO permissionDecision on purpose: additionalContext reaches the model on its own, and an "allow"
