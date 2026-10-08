@@ -31,8 +31,9 @@ import { ocTurnUsage, dshTurnUsage, usageTotal } from "../lib/turn-usage.mjs";
 import { listContainers, newContainers, recordContainers, statePathFor as dockerStatePathFor, sweep as dockerSweep } from "../lib/docker-janitor.mjs";
 import {
   auditDutyNudges, claimDutyNudges, claudeTranscriptDir, dutyEscalations, dutyNudgeDirective,
-  observedDutyNudgeIds, requeueMissingWakeMessages, shedExpiredHubAlerts,
+  observedDutyNudgeIds, requeueMissingWakeMessages, releaseDutyNudgeClaims, shedExpiredHubAlerts,
 } from "../lib/duty-nudges.mjs";
+import { reserveNudgeIds, releaseNudgeIds } from "../lib/nudge-ledger.mjs";
 import { dutyRecipientResolver } from "../lib/duty-recipient.mjs";
 import { cliEffortFlag } from "../lib/model-catalog.mjs";
 import {
@@ -1659,6 +1660,22 @@ async function resolveWakeCard(messages, { session }) {
         },
       })
       : { items: [], targets: [], owner: "" };
+    // #11355: the shared pre-send ledger — the wake daemon stamps the same files, so of the two
+    // orchestrator-wake nudgers exactly one send per unread id lands; skipped ids release this
+    // path's claim and never reach the seat, so the existing consumed-without-a-wake branch fires.
+    const dutyOwner = dutyPlan.owner;
+    const skippedNudgeIds = [];
+    for (const target of dutyPlan.targets) {
+      const reserve = await reserveNudgeIds({ recipient: target.recipient, ids: target.ids, owner: dutyOwner });
+      target.ids = reserve.allowed;
+      skippedNudgeIds.push(...reserve.skipped.map(s => s.id));
+    }
+    if (skippedNudgeIds.length) {
+      const skippedSet = new Set(skippedNudgeIds);
+      dutyPlan.items = dutyPlan.items.filter(item => !skippedSet.has(item.id));
+      dutyPlan.targets = dutyPlan.targets.filter(target => target.ids.length);
+      await releaseDutyNudgeClaims({ ids: skippedNudgeIds, statePath: DUTY_NUDGE_STATE, owner: dutyOwner });
+    }
     const claimedIds = new Set(dutyPlan.items.map(item => item.id));
     const wakeForTurn = DUTY_NUDGES
       ? wake.filter(message => {
@@ -1781,6 +1798,11 @@ async function resolveWakeCard(messages, { session }) {
         },
       });
       skippedNudges = audit.missing;
+      // #11355: the ledger mirrors the claim release — a duty turn that ended without the send
+      // must not silence the wake daemon for the TTL.
+      for (const target of audit.missing) {
+        await releaseNudgeIds({ recipient: target.recipient, ids: target.ids, owner: dutyOwner });
+      }
     }
     if (!ec && skippedNudges.length) {
       deliveryFails++;

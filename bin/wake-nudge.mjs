@@ -23,7 +23,8 @@ import { load } from "../lib/identity.mjs";
 import { sfetchJson } from "../lib/signed-fetch.mjs";
 import { busDir, hostId, readConfig } from "../lib/project.mjs";
 import { ledgerPaths } from "../hooks/lib/inbox-ledger.mjs";
-import { dutyEscalations, claimDutyNudges, auditDutyNudges } from "../lib/duty-nudges.mjs";
+import { dutyEscalations, claimDutyNudges, auditDutyNudges, releaseDutyNudgeClaims } from "../lib/duty-nudges.mjs";
+import { reserveNudgeIds, releaseNudgeIds } from "../lib/nudge-ledger.mjs";
 import { recipientPanes } from "../lib/duty-recipient.mjs";
 
 const SELF = fileURLToPath(import.meta.url);
@@ -107,7 +108,7 @@ export function postNudge({ socketPath, token, sid }, ids, timeoutMs = 1500) {
   });
 }
 
-export async function wakeOnce({ api, bus = busDir(), resolver = recipient => resolveRecipient(recipient, { bus }), verifyMs = 10000, now = Date.now(), attempted = new Set(), cursor = { id: 0, ts: 0 } }) {
+export async function wakeOnce({ api, bus = busDir(), resolver = recipient => resolveRecipient(recipient, { bus }), verifyMs = 10000, now = Date.now(), attempted = new Set(), cursor = { id: 0, ts: 0 }, log = m => console.error(m) }) {
   const feed = await api(`/events?type=message&by=hub%3Aduty&since=${cursor.id}${cursor.id ? "" : "&limit=2000"}`);
   if (Number.isFinite(feed.latest) && feed.latest < cursor.id) {
     cursor.id = 0; cursor.ts = 0;
@@ -132,6 +133,18 @@ export async function wakeOnce({ api, bus = busDir(), resolver = recipient => re
     const peer = await api(`/peer?session=${encodeURIComponent(recipient)}`);
     return Number(peer.deliveredUpTo || 0) >= Number(id);
   } });
+  // #11355: the shared pre-send ledger — the duty path stamps the same files, so of the two
+  // orchestrator-wake nudgers exactly one send per unread id lands; the loser logs and stands down.
+  const skipped = [];
+  for (const target of plan.targets) {
+    const reserve = await reserveNudgeIds({ recipient: target.recipient, ids: target.ids, owner: `wake:${process.pid}`, bus, log });
+    target.ids = reserve.allowed;
+    skipped.push(...reserve.skipped.map(s => s.id));
+  }
+  plan.items = plan.items.filter(item => !skipped.includes(item.id));
+  plan.targets = plan.targets.filter(target => target.ids.length);
+  await releaseDutyNudgeClaims({ ids: skipped, statePath, owner: plan.owner });
+  if (!plan.targets.length) return { nudged: [], missing: [] };
   const observedIds = new Set();
   let result;
   try {
@@ -150,6 +163,12 @@ export async function wakeOnce({ api, bus = busDir(), resolver = recipient => re
         await sleep(100);
       }
     }));
+    // #11355: a tick that ends with unverified sends releases their stamps — the ledger must
+    // mirror the claim release below, or a failed send would silence the duty path for the TTL.
+    for (const target of plan.targets) {
+      const unverified = target.ids.filter(id => !observedIds.has(id));
+      if (unverified.length) await releaseNudgeIds({ recipient: target.recipient, ids: unverified, owner: plan.owner, bus });
+    }
   } finally {
     // #7429: release unverified claims so the duty seat retains its triage path.
     result = await auditDutyNudges({ plan, observedIds, statePath, reportFailure: async () => {} });
