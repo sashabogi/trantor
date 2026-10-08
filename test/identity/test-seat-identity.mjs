@@ -161,7 +161,8 @@ console.log("\n4b. A drill must never touch the REAL bus directory:");
   const r = await runHook(pinnedRepo);
   ok("reads the handoff from AGENT_BUS_DIR", /SENTINEL handoff/.test(r.ctx), r.ctx.slice(0, 120));
   const after = JSON.parse(readFileSync(join(hoDir, `${proj}-1700000001.json`), "utf8"));
-  ok("claims the TEMP copy", after.consumed === true);
+  // #11223: SessionStart claims; consumed flips only after the claimer recaps.
+  ok("claims the TEMP copy", !!after.claim && after.consumed === false, JSON.stringify({ claim: !!after.claim, consumed: after.consumed }));
   process.env.AGENT_BUS_DIR = BUS;   // the child already had it; the parent needs it to assert
   const m2 = await import(join(ROOT, "lib", "project.mjs"));
   ok("handoffDir() follows AGENT_BUS_DIR", m2.handoffDir?.() === hoDir, m2.handoffDir?.());
