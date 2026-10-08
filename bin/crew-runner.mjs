@@ -2,7 +2,7 @@
 // trantor crew runner — keeps a crew agent alive without burning tokens: it long-polls the bus
 // (zero tokens) and resumes the CLI with each message. Usage: node crew-runner.mjs <agent> [dir]
 import { execSync, spawnSync, spawn } from "node:child_process";
-import { readFileSync, writeFileSync, unlinkSync, existsSync, appendFileSync, mkdirSync, realpathSync } from "node:fs";
+import { readFileSync, writeFileSync, unlinkSync, existsSync, appendFileSync, mkdirSync, realpathSync, statSync } from "node:fs";
 import { join, basename } from "node:path";
 import { homedir } from "node:os";
 import { resolveProject, resolveHub, withEnvFiles, hostId } from "../lib/project.mjs";
@@ -43,7 +43,35 @@ import { resolveStateFlags } from "../lib/state/flags.mjs";
 
 import { awaitSwapRelease } from "./crew/stage.mjs";
 
-await awaitSwapRelease();
+const releaseState = process.env.CREW_RELEASE_STATE ? JSON.parse(process.env.CREW_RELEASE_STATE) : null;
+delete process.env.CREW_RELEASE_STATE;
+const packagePath = new URL("../package.json", import.meta.url);
+function installedVersion() {
+  try {
+    statSync(packagePath);
+    return JSON.parse(readFileSync(packagePath, "utf8")).version;
+  } catch { return ""; }
+}
+const bootVersion = installedVersion();
+const attemptedVersions = new Set(releaseState?.attempted || []);
+function newerVersion(next, previous) {
+  const parse = value => /^(\d+)\.(\d+)\.(\d+)(?:-([\w.-]+))?(?:\+[\w.-]+)?$/.exec(value || "");
+  const a = parse(next), b = parse(previous);
+  if (!a || !b) return false;
+  for (let i = 1; i <= 3; i++) if (+a[i] !== +b[i]) return +a[i] > +b[i];
+  if (!a[4] || !b[4]) return !!b[4] && !a[4];
+  const ap = a[4].split("."), bp = b[4].split(".");
+  for (let i = 0; i < Math.max(ap.length, bp.length); i++) {
+    if (ap[i] === bp[i]) continue;
+    if (ap[i] === undefined || bp[i] === undefined) return bp[i] === undefined;
+    const an = /^\d+$/.test(ap[i]), bn = /^\d+$/.test(bp[i]);
+    if (an && bn) return +ap[i] > +bp[i];
+    if (an !== bn) return bn;
+    return ap[i] > bp[i];
+  }
+  return false;
+}
+if (!releaseState) await awaitSwapRelease();
 const AGENT = process.env.CREW_SWAP_AGENT || process.argv[2];
 const DIR = process.argv[3] || process.cwd();
 // Crew agents MUST share the orchestrator's project key (one repo = one lane).
@@ -126,10 +154,10 @@ process.on("unhandledRejection", (e) => { console.log(`\x1b[31m[runner] UNHANDLE
 const log = (s) => console.log(`\x1b[38;5;43m[runner]\x1b[0m ${redactKeys(String(s))}`);
 const LOGDIR = join(homedir(), ".agent-bus", "logs");
 try { mkdirSync(LOGDIR, { recursive: true }); } catch {}
-let TURN = 0;
+let TURN = releaseState?.turn || 0;
 const telemetry = (rec) => { try { appendFileSync(join(LOGDIR, `${AGENT}-${PROJ}.jsonl`), JSON.stringify(rec) + "\n"); } catch {} };
 // The boot line records the HUB this runner bound to, so a split-brain is diagnosable from disk.
-telemetry({ ts: Date.now(), agent: AGENT, project: PROJ, boot: true, hub: HUB });
+telemetry({ ts: Date.now(), agent: AGENT, project: PROJ, boot: true, hub: HUB, pid: process.pid, version: bootVersion });
 // A seat can open a terminal window on a machine whose owner never asked for one and does not know
 // what they are looking at. "◤ CLAUDE ◢ trantor crew · fleet" tells that person nothing: not what
 // started, not what it will do, not how to stop it. RUNNER_TITLE names it in full and RUNNER_ABOUT
@@ -713,9 +741,9 @@ let cutChain = [];
 const PARK_WINDOW_MS = Math.max(0, Number(process.env.TRANTOR_PARK_WINDOW_MS || 15 * 60 * 1000));
 // The card the CURRENT CLI session belongs to (#6134). 0 = the kickoff session, which belongs to
 // no card, so the first contract that names one starts a session of its own.
-let sessionCard = 0;
+let sessionCard = releaseState?.sessionCard || 0;
 
-let sid = "";
+let sid = releaseState?.sid || "";
 // #6206: the watchdog is DETACHED, so a runner that dies without ending it leaves an orphan
 // sleeping toward a false alarm against whatever runner comes next.
 // Every exit path therefore kills it, and the stamp carries this runner's instance id so any
@@ -1311,7 +1339,8 @@ async function resolveWakeCard(messages, { session }) {
   await loadLessons();
   // start cursor at the CURRENT tip so we don't replay history
   let cursor = 0;
-  if (process.env.CREW_SWAP_STAGE) cursor = JSON.parse(readFileSync(`${process.env.CREW_SWAP_STAGE}.release`, "utf8")).cursor;
+  if (releaseState) cursor = releaseState.cursor;
+  else if (process.env.CREW_SWAP_STAGE) cursor = JSON.parse(readFileSync(`${process.env.CREW_SWAP_STAGE}.release`, "utf8")).cursor;
   else try { const r = await api(`/inbox?session=${encodeURIComponent(SESSION)}&since=0`); cursor = r.cursor || 0; } catch {}
   // kind "agent" on every beat (#6075): the peer row's kind is the hub's OWN record of what a
   // session is — the overseer's declared-crew exemption reads it, and on the remote hub there is
@@ -1337,7 +1366,7 @@ async function resolveWakeCard(messages, { session }) {
   // #7914: a park belongs to the runner that made it. This process is starting fresh and will
   // re-park if the CLI is still cutting, so a record left by the runner before it is stale state —
   // and stale state in a health read is the same failure as no state at all.
-  try { unlinkSync(PARKF); } catch {}
+  if (!releaseState) { try { unlinkSync(PARKF); } catch {} }
   seenLedger = restored.seen;
   if (seenLedger.length) log(`\x1b[33m${seenLedger.length} consumed message id(s) restored from the pending file — the poll keeps standing down on them\x1b[0m`);
   if (restored.ask) {
@@ -1357,25 +1386,54 @@ async function resolveWakeCard(messages, { session }) {
     // disagreeing makes a health check lie.
     savePending(pendingWake, pendingBcast);
   }
-  let retryAt = 0;            // 0 = deliver at the next opportunity
-  let deliveryFails = 0;      // consecutive failed attempts at the SAME pending batch
-  let noDeliveryRetry = false;
+  let retryAt = releaseState?.retryAt || 0;            // 0 = deliver at the next opportunity
+  let deliveryFails = releaseState?.deliveryFails || 0;      // consecutive failed attempts at the SAME pending batch
+  let noDeliveryRetry = releaseState?.noDeliveryRetry || false;
+  askReleased = releaseState?.askReleased || false;
   if (pendingWake.length) log(`\x1b[33m${pendingWake.length} message(s) survived from a previous run — redelivering\x1b[0m`);
 
   // #7060: the turn the boot line was read as a promise about. It is a transcript turn by
   // construction and now says so, in the same breath as the line that armed the mode.
-  stateSkip("kickoff");
-  const ec0 = await runTurn(composedTurn({ base: KICKOFF, lessons: pickLessons(LESSONS_RAW, "") }), true, "kickoff");
-  if (ec0) await reportFailure(ec0, "kickoff", pendingWake.length);   // a failed kickoff = the "fired up, died, nobody knew" case
-  // #7778: the kickoff is a turn like any other — a message that landed mid-kickoff and was read
-  // through the session's own inbox is consumed by a successful kickoff, and the first poll must
-  // not wake on it. Same reconcile, same clean-boundary rule as deliverWake below.
-  else await reconcileSessionReads(cursor);
-  let lastTurnAt = Date.now();
+  if (!releaseState) {
+    stateSkip("kickoff");
+    const ec0 = await runTurn(composedTurn({ base: KICKOFF, lessons: pickLessons(LESSONS_RAW, "") }), true, "kickoff");
+    if (ec0) await reportFailure(ec0, "kickoff", pendingWake.length);   // a failed kickoff = the "fired up, died, nobody knew" case
+    // #7778: the kickoff is a turn like any other — a message that landed mid-kickoff and was read
+    // through the session's own inbox is consumed by a successful kickoff, and the first poll must
+    // not wake on it. Same reconcile, same clean-boundary rule as deliverWake below.
+    else await reconcileSessionReads(cursor);
+  } else {
+    const text = `runner restarted onto ${bootVersion}`;
+    log(text);
+    telemetry({ ts: Date.now(), text, version: bootVersion });
+    await api("/send", { from: SESSION, to: "all", project: PROJ, kind: "status", text }).catch(() => {});
+  }
+  let lastTurnAt = releaseState?.lastTurnAt || Date.now();
+  function restartForRelease() {
+    const version = installedVersion();
+    if (!newerVersion(version, bootVersion) || attemptedVersions.has(version)) return;
+    attemptedVersions.add(version);
+    // SAFETY: older supported Node releases lack in-place exec; never replace it with a duplicate runner.
+    // oxlint-disable-next-line anti-slop/no-runtime-typeof
+    if (typeof process.execve !== "function") {
+      log(`runner upgrade to ${version} requires Node with process.execve; restart manually`);
+      return;
+    }
+    try {
+      // Persist before exec: a held contract and a released ask both survive the boundary.
+      writeFileSync(PENDF, JSON.stringify({ agent: AGENT, project: PROJ, ts: Date.now(),
+        wake: pendingWake, bcast: pendingBcast, seen: seenLedger, ask: awaitingAsk?.id || 0, askTo: awaitingAsk?.to || "" }));
+      const state = { cursor, turn: TURN, sid, sessionCard, retryAt, deliveryFails,
+        noDeliveryRetry, askReleased, lastTurnAt, attempted: [...attemptedVersions] };
+      process.execve(process.execPath, [process.execPath, ...process.execArgv, ...process.argv.slice(1)],
+        { ...process.env, CREW_RELEASE_STATE: JSON.stringify(state) });
+    } catch (error) { log(`runner restart failed: ${error.message}`); }
+  }
   if (PULSE_MS) log(`pulse armed — mission re-read every ${Math.round(PULSE_MS / 1000)}s (${MISSION_FILE})`);
   log(`parked — long-polling the bus as ${SESSION} (free; this poll is also the heartbeat)`);
 
   while (true) {
+    restartForRelease();
     // pulse first: a due mission beat runs even on a silent bus. Measured from the END of the
     // last turn, so a long turn doesn't stack an immediate pulse on top of itself.
     if (PULSE_MS && Date.now() - lastTurnAt >= PULSE_MS) {
@@ -1545,6 +1603,7 @@ async function resolveWakeCard(messages, { session }) {
     } catch { return 0; }
   }
   async function deliverWake() {
+    restartForRelease();
     noDeliveryRetry = false;
     // #7756: captured and cleared HERE so an early return below never leaks the flag into a
     // later turn — only the turn the answer released reads it.
