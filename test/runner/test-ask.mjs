@@ -7,7 +7,7 @@ import http from "node:http";
 import { spawn } from "node:child_process";
 import { mkdtempSync, writeFileSync, readFileSync, chmodSync, mkdirSync, existsSync, openSync } from "node:fs";
 import { join } from "node:path";
-import { tmpdir } from "node:os";
+import { askDuringTurn, askedVerdict } from "../../lib/turn-policy.mjs";
 import { drillEnv } from "../drill-env.mjs";
 
 let pass = 0, fail = 0;
@@ -22,13 +22,16 @@ async function until(fn, ms = 15000) {
 
 console.log("# trantor relay_ask drill (#7756)");
 
+const oldAsk = { id: 1, ts: 99, kind: "ask", text: "old question" };
+const currentAsk = { id: 2, ts: 101, kind: "ask", text: "first line\nsecond line", answered: true };
+ok("#11230: stale asks do not excuse a new turn", askDuringTurn([oldAsk], 100) === null);
+ok("#11230: an ask answered before exit is still delivery", askDuringTurn([oldAsk, currentAsk], 100) === currentAsk);
+ok("#11230: the verdict includes only the question's first line", askedVerdict(currentAsk) === "asked: first line");
+ok("#11230: ordinary bus chatter is not asking", askDuringTurn([{ ts: 101, text: "progress" }], 100) === null);
+
 const PROJ = "tt-ask", SESSION = `codex:${PROJ}`, CARD = 4401;
 
-// ---- mock hub: exactly-once delivery, the kind:ask card moves, and a /contracts view --------
-// The card moves replicate hub/routes/messages.mjs (eb3d74d): kind:ask blocks the cited card
-// with the question as its note; a reply threaded re = the ask's id moves it back to doing. It
-// also keeps the hub's unified event log (by-actor, GET /events filters by/since) — what the
-// runner's busActivitySince reads to tell a quiet-but-busy turn from an EMPTY one (#7759).
+// The mock hub keeps card and event records so the runner observes both delivery checks.
 const messages = [];
 const events = [];
 let eventSeq = 0;
@@ -64,11 +67,13 @@ const hub = http.createServer((req, res) => {
       const out = events.filter(e => e.id > since && (!by || e.by === by));
       return reply({ events: out, cursor: out.length ? out[out.length - 1].id : since, latest: eventSeq });
     }
+    if (P === "/card") return reply({ task: card });
+    if (P === "/card-move") { card.status = "testing"; return reply({ ok: true }); }
     if (P === "/contracts") {
       const session = u.searchParams.get("session");
       const mine = messages.filter(m => m.from === session && m.to && m.to !== "all" && m.kind !== "status");
       const contracts = mine.map(m => ({
-        id: m.id, to: m.to, kind: m.kind, text: m.text,
+        id: m.id, to: m.to, kind: m.kind, text: m.text, ts: m.ts,
         answered: messages.some(r => r.kind !== "ask" && Number(r.re) === m.id),
         disposition: "waiting",
       }));
@@ -98,29 +103,33 @@ const HUB = `http://127.0.0.1:${hub.address().port}`;
 const post = (body) => fetch(`${HUB}/send`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) }).then(r => r.json());
 
 // ---- harness: the REAL runner + a fake `codex` that asks on the contract turn ---------------
-const work = mkdtempSync(join(tmpdir(), "tt-ask-"));
+mkdirSync(".agent-bus-out", { recursive: true });
+const work = mkdtempSync(join(process.cwd(), ".agent-bus-out", "tt-ask-"));
 const HOME = join(work, "home");
 mkdirSync(join(HOME, ".agent-bus"), { recursive: true });
 const fakebin = join(work, "bin"); mkdirSync(fakebin, { recursive: true });
 const LOGF = join(work, "turns.log"), RUNLOG = join(work, "runner.log"), ASKJS = join(work, "ask.mjs");
 const PENDF = join(HOME, ".agent-bus", `pending-codex-${PROJ}.json`);
 const LEDGER = join(HOME, ".agent-bus", "logs", `codex-${PROJ}.jsonl`);
-writeFileSync(ASKJS, `const [hub, from, to, text] = process.argv.slice(2);
-const r = await fetch(hub + "/send", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ from, to, kind: "ask", text }) });
+writeFileSync(ASKJS, `const [hub, from, to, text, kind = "ask"] = process.argv.slice(2);
+const r = await fetch(hub + "/send", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ from, to, kind, text }) });
 const j = await r.json();
 console.log("ask sent, id", j.id);
 `);
-// The contract names a value the seat cannot know. The fake CLI's ONLY move on that turn is the
-// ask relay_ask would send — it writes no file, invents no DEPLOY_TARGET, prints UNDER the 120-
-// char substantive floor (the codex-drill line is CLI chrome), and exits 0: if the ask did not
-// count as bus activity, that turn would read EMPTY (#7759). The ANSWER turn is the opposite
-// specimen — real resumed work, so it prints a substantive line like a real CLI would.
+// Ask-only turns print below the substantive floor and change no files.
+// Only their bus questions can count as delivery.
 writeFileSync(join(fakebin, "codex"), `#!/bin/sh
 P="$HOME/.agent-bus/turn-codex-${PROJ}.txt"
 { echo "===TURN==="; echo "ARGV: $*"; cat "$P"; } >> "${LOGF}"
 if grep -q "NEW BUS MESSAGE" "$P"; then
-  if grep -q "ANSWER:" "$P"; then
+  if grep -q "SECOND ANSWER:" "$P"; then
+    node --input-type=module -e 'await fetch("${HUB}/card-move", { method: "POST" })'
+
     echo "the answer landed — DEPLOY_TARGET is staging; writing it into the release config now and closing the contract out exactly as the assigner specified"
+    exit 0
+  fi
+  if grep -q "ANSWER:" "$P"; then
+    node "${ASKJS}" "${HUB}" "${SESSION}" "sasha@mac" "❓ ask on #${CARD}: which region?" "message"
     exit 0
   fi
   node "${ASKJS}" "${HUB}" "${SESSION}" "sasha@mac" "❓ ask on #${CARD}: which value should DEPLOY_TARGET get? The contract does not say."
@@ -176,11 +185,7 @@ ok("#7756: the asking turn invented no value — its only direct bus write is th
 ok("#7756: the ledger row for the asking turn reads outcome \`asked\`, not \`completed\`",
   ledger().some(r => r.outcome === "asked"),
   ledger().map(r => r.outcome).join(","));
-// Design check (#7756 × #7759): the asking turn touched no file and printed under the
-// substantive floor, so ONLY the hub's event record of the ask (kind:ask send + card move,
-// both by the seat — what busActivitySince reads) can keep it from reading EMPTY. If that
-// chain breaks the row below flips to emptyTurn:true / outcome "empty" and the hold would
-// ride the failure ladder instead.
+// Asking must count even when stdout and the worktree contain no work.
 {
   const askRow = ledger().find(r => r.outcome === "asked");
   ok("#7756: the asking turn counted as BUS ACTIVITY, not EMPTY (under the floor, no worktree change)",
@@ -207,7 +212,7 @@ ok("#7756: the runner is still alive and polling (a park would have exited or an
 // ---- act 3: the assigner answers (re = the ask's id); the seat resumes -----------------------
 await post({ from: "sasha@mac", to: SESSION, re: askMsg.id, text: "ANSWER: DEPLOY_TARGET is staging." });
 await until(() => wakeTurns().length >= 2);
-await until(() => !existsSync(PENDF) || read(RUNLOG).includes("✅ done") || messages.some(m => String(m.text || "").startsWith("✅ done")), 10000);
+await until(() => ledger().filter(r => r.outcome === "asked").length === 2);
 await sleep(400);
 
 const resumed = wakeTurns()[1] || "";
@@ -218,7 +223,17 @@ ok("#7756: the resumed turn reads the ORIGINAL contract re-attached above the an
 ok("#7756: the resume is not labelled a redelivery (the ladder was never involved)",
   !resumed.includes("REDELIVERY"));
 ok("#7756: the card is DOING again once the answer lands", card.status === "doing", `status=${card.status}`);
-ok("#7756: the queue is cleared once the resumed turn exits 0", !existsSync(PENDF));
+const secondAsk = messages.find(m => m.from === SESSION && m.text.includes("which region?"));
+await sleep(3000);
+const askedRows = ledger().filter(r => r.outcome === "asked");
+ok("#11230: two card-bound ask-only turns read asked", askedRows.length === 2 && askedRows.every(r => r.card === CARD));
+ok("#11230: both verdicts label the first line of the question", askedRows.every(r => r.verdict.startsWith("asked: ")));
+ok("#11230: two asks never park or report no-delivery", !messages.some(m => /PARKED|no commit, card/.test(m.text)) && !ledger().some(r => r.outcome === "no-delivery"));
+ok("#11230: the plain question-mark bus ask holds without retry", wakeTurns().length === 2 && JSON.parse(read(PENDF)).ask === secondAsk?.id);
+await post({ from: "sasha@mac", to: SESSION, re: secondAsk?.id, text: "SECOND ANSWER: use us-east." });
+await until(() => messages.some(m => String(m.text || "").startsWith("✅ done")));
+ok("#11230: the second answer resumes the seat normally", wakeTurns().length === 3);
+ok("#7756: the queue is cleared once the resumed turn delivers", !existsSync(PENDF));
 ok("#7756: the assigner gets the done notice only after the REAL work turn",
   messages.some(m => String(m.text || "").startsWith("✅ done")));
 

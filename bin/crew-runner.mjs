@@ -24,7 +24,7 @@ import { capWake, capBcast, pickLessons, composePrompt, contractBase, baseLine }
 import {
   cardRefs, servedContractCard, carriesWork, parseTurnTokens, parseResetAt, reasonWithBalances, quotaResetAt, PARKING_REASONS,
   senderProjectOf, isLinkedProject, stateSkipReason, isMessageCardTitle, OPEN_CARD_STATUSES,
-  CUT_CHAIN_PARK_MIN, cutChainEvidence, isBoundedPark,
+  CUT_CHAIN_PARK_MIN, cutChainEvidence, isBoundedPark, askDuringTurn, askedVerdict,
 } from "../lib/turn-policy.mjs";
 import { ocTurnUsage, dshTurnUsage, usageTotal } from "../lib/turn-usage.mjs";
 import { listContainers, newContainers, recordContainers, statePathFor as dockerStatePathFor, sweep as dockerSweep } from "../lib/docker-janitor.mjs";
@@ -356,17 +356,17 @@ let askReleased = false;
 // session. deliverWake judges each clean wake turn against /contracts — an open ask renames the
 // ledger row "asked" and HOLDS the wake (no failure count, no backoff, no park) until the answer.
 let turnAsk = null;
-async function askJudge() {
+async function askJudge(startedAt) {
   try {
     const r = await api(`/contracts?session=${encodeURIComponent(SESSION)}&project=${encodeURIComponent(PROJ)}`);
-    // abandonedContracts included on purpose: an ask to a gone-quiet assigner is exactly the ask
-    // that must keep holding, and the hub files those rows under their own key (#7079).
-    const rows = [...(r?.contracts || []), ...(r?.abandonedContracts || [])];
-    const open = rows.filter(c => c.kind === "ask" && !c.answered);
-    turnAsk = open.length ? { id: open[open.length - 1].id, to: String(open[open.length - 1].to || "") } : null;
-    return turnAsk ? "asked" : null;
+    const rows = [...(r?.contracts || []), ...(r?.abandonedContracts || []),
+      ...(r?.supersededContracts || []), ...(r?.ackContracts || [])];
+    const ask = askDuringTurn(rows, startedAt);
+    turnAsk = ask && !ask.answered ? { id: ask.id, to: String(ask.to || "") } : null;
+    return ask ? redactKeys(askedVerdict(ask)) : null;
   } catch { return null; }
 }
+
 function savePending(wake, bcast) {
   try {
     // the seen-set (#7778) and a held ask (#7756) keep the file alive even with both queues empty:
@@ -1031,6 +1031,12 @@ exit $turn_exit`;
     effExit = 1;
     log("\x1b[31mexit 0 but the session usage record resolved to all zeros — no model work happened; treating as FAILED\x1b[0m");
   }
+  // #11230: asking is delivery even without a commit or a completed card move.
+  let askVerdict = null;
+  if (!cut && realExit === 0 && effExit === 0 && opts.judgeOutcome) {
+    askVerdict = await opts.judgeOutcome(t0);
+    if (askVerdict) lastEmptyTurn = false;
+  }
   // #10197: a turn BOUND to a card contract reads done only on DELIVERY — a NEW commit since the
   // turn started, or the card moved to testing/done under it. The ibkr shape (exit 0, output, no
   // commit, card still todo) is NO-DELIVERY: the ledger names it and the contract stays owed.
@@ -1045,7 +1051,7 @@ exit $turn_exit`;
     if (endStatus !== null) {
       cardStatusAtEnd = endStatus;
       const moved = ["testing", "done"].includes(endStatus) && !["testing", "done"].includes(cardStatusBefore);
-      noDelivery = !newCommit && !moved;
+      noDelivery = !newCommit && !moved && !askVerdict;
     }
   }
   lastNoDelivery = noDelivery;
@@ -1056,6 +1062,7 @@ exit $turn_exit`;
   // verdict (#7752): the exit under it is the sweep's SIGPIPE. A box cut passes `cut` so its 137
   // reads as the sweep's SIGKILL (#7099); a zero-usage turn names its own verdict too (#9724).
   const verdict = stallCut ? stallVerdict() : zeroUsage ? zeroUsageVerdict()
+    : askVerdict ? askVerdict
     : noDelivery ? noDeliveryVerdict(sessionCard, cardStatusAtEnd || "unknown")
     : verdictFor(realExit, effExit, lastEmptyOutput, ownOut, lastEmptyTurn, cut);
   // #6289: every ledger row names in ONE field what happened to the turn — cut, stalled (#7752),
@@ -1063,12 +1070,7 @@ exit $turn_exit`;
   // binds the row to the card the turn worked (0 = kickoff/pulse) so the seat record attributes
   // empty/stalled turns to the card that produced nothing. `cut` stays too: the drills read it.
   const outcome = cut ? (stallCut ? "stalled" : "cut") : (effExit !== 0 ? "api-error" : noDelivery ? "no-delivery" : lastEmptyTurn ? "empty" : "completed");
-  // #7756: a clean turn that ASKED its assigner is demoted-but-owed, not "completed". The judge
-  // (deliverWake's /contracts read) renames the ledger row, so "asked" is what the log keeps.
-  let finalOutcome = outcome;
-  if (outcome === "completed" && opts.judgeOutcome) {
-    try { finalOutcome = (await opts.judgeOutcome()) || outcome; } catch {}
-  }
+  const finalOutcome = askVerdict ? "asked" : outcome;
   const telemetryRow = { ts: Date.now(), agent: AGENT, project: PROJ, turn: TURN, trigger, card: sessionCard || 0, model: MODEL || "cli-default", duration_ms: Date.now() - t0, exit: realExit, effExit, authFailed: effExit !== realExit, emptyOutput: lastEmptyOutput, emptyTurn: lastEmptyTurn, verdict, outcome: finalOutcome, tokens };
   if (usage) telemetryRow.usage = usage;
   if (dockerNew.length) telemetryRow.containers = dockerNew.map(c => c.name || c.id);
@@ -1775,6 +1777,7 @@ async function resolveWakeCard(messages, { session }) {
       // the ask's id, so a restart keeps holding — and the failure ladder never sees it. The
       // assigner is NOT notified here: the kind:ask message itself is already that notification.
       awaitingAsk = turnAsk; turnAsk = null;
+      deliveryFails = 0; retryAt = 0; noDeliveryRetry = false;
       savePending(pendingWake, pendingBcast);
       await reportHealthy();
       log(`turn asked its assigner — holding the contract until ask #${awaitingAsk.id} is answered`);
