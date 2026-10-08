@@ -1,7 +1,3 @@
-// One seat tab (#5890): the seat's REAL brand mark (shared/Avatar's BrandGlyph, same mark the
-// sidebar and Sessions rows use) + name, with state worn by the mark, not a dot: working = quiet
-// pulse, blocked = amber ring + amber name, idle = still. The blue dot said "online", not
-// "working", so it is gone; the orchestrator tab keeps its own "you" chip.
 import { brandFor } from "../../shared/Avatar";
 import { seatTabVisual } from "./seatTabVisual";
 
@@ -21,7 +17,9 @@ function Mark({ brandName }: { brandName: string }) {
   );
 }
 
-export function SeatTab({ name, brandName, status, active, onClick, you }: {
+export function SeatTab({ name, brandName, status, active, onClick, you, state, tooltip }: {
+  state?: "live" | "parked" | "down" | "unknown";
+  tooltip?: string;
   name: string;
   /** The identity the BRAND reads from — the agent name ("codex"), or the orchestrator's agent. */
   brandName: string;
@@ -37,13 +35,14 @@ export function SeatTab({ name, brandName, status, active, onClick, you }: {
       type="button"
       onClick={onClick}
       data-on={active}
-      title={v.title}
-      className="flex items-center gap-2 rounded-[9px] px-3 py-[7px] text-[12.5px] font-medium text-tr-muted data-[on=true]:bg-tr-panel data-[on=true]:text-tr-text data-[on=true]:shadow-sm"
+      title={tooltip ?? (state ? `${name} — ${state === "live" && v.pulse ? "working" : state}` : v.title)}
+      className="flex shrink-0 whitespace-nowrap items-center gap-2 rounded-[9px] px-3 py-[7px] text-[12.5px] font-medium text-tr-muted data-[on=true]:bg-tr-panel data-[on=true]:text-tr-text data-[on=true]:shadow-sm"
     >
-      <span className={`inline-flex shrink-0 items-center ${v.pulse ? "animate-pulse" : ""} ${v.amber ? "rounded-full ring-1 ring-tr-warn" : ""} ${v.down ? "rounded-full ring-1 ring-tr-fail" : ""}`}>
+      <span className={`inline-flex shrink-0 items-center ${!state && v.pulse ? "animate-pulse" : ""} ${!state && v.amber ? "rounded-full ring-1 ring-tr-warn" : ""} ${!state && v.down ? "rounded-full ring-1 ring-tr-fail" : ""}`}>
         <Mark brandName={brandName} />
       </span>
-      <span className={v.amber ? "text-tr-warn" : v.down ? "text-tr-fail" : undefined}>{name}</span>
+      {state && <span className={`tr-dot shrink-0 ${state === "down" || state === "unknown" ? "border border-tr-muted" : state === "parked" ? "bg-tr-muted/50" : `bg-tr-ok ${v.pulse ? "tr-dot-pulse" : ""}`}`} />}
+      <span className={state === "parked" ? "opacity-50" : state ? undefined : v.amber ? "text-tr-warn" : v.down ? "text-tr-fail" : undefined}>{name}</span>
       {you && <span className="text-[11px] text-tr-muted/70">you</span>}
     </button>
   );

@@ -7,7 +7,6 @@ import type { Card, HubClient, HubEvent, Peer } from "../../shared/api/client";
 import { ProjectHeader, type Lens } from "../project/ProjectHeader";
 import { TerminalPane } from "./TerminalPane";
 import { orchestratorOf, type HerdrSeat } from "./herdr";
-import { SeatTab } from "./SeatTab";
 import { BrandGlyph } from "../../shared/Avatar";
 import { PaneBoundary } from "./PaneBoundary";
 import { paneTargets, seatName, isAgentPeer, type PaneTarget } from "./paneTargets";
@@ -169,33 +168,17 @@ export function Workspace({ client, project, lens, onLens }: {
         {/* center: the seat */}
         <div className="flex min-w-0 flex-1 flex-col">
           {/* seat tabs */}
-          <div className="flex items-center gap-1">
-            {targets.length === 0 && (
-              <div className="tr-card-ghost px-4 py-2 text-[12.5px]">
-                Nothing is live here — <span className="font-semibold text-tr-ok">Wake</span> the project
-                from the sidebar, or choose Add seat below.
-              </div>
-            )}
-            {targets.map(t => (
-              <SeatTab
-                key={t.key}
-                name={t.label}
-                brandName={t.brand}
-                status={t.status}
-                active={selected?.key === t.key}
-                onClick={() => { setSel(t.key); if (t.isOrchestrator) setViewPersisted("focus"); }}
-                you={t.isOrchestrator}
-              />
-            ))}
+          <CrewControls key={project} project={project} targets={targets} selected={selected?.key}
+            onSelect={t => { setSel(t.key); if (t.isOrchestrator) setViewPersisted("focus"); }} onChanged={refreshCrew}>
             {/* no hosted orchestrator pane yet: the host stays a quiet chip at the row's end */}
             {host && !orch && (
-              <span className="ml-auto flex items-center gap-2 rounded-[9px] px-3 py-[7px] text-[12px] text-tr-muted">
+              <span className="ml-auto flex shrink-0 items-center gap-2 rounded-[9px] px-3 py-[7px] text-[12px] text-tr-muted">
                 <BrandGlyph name={host.session} size={12} />
                 you
               </span>
             )}
             {seats.length > 1 && (
-              <div className={`${host && !orch ? "" : "ml-auto"} flex items-center gap-1 rounded-[9px] bg-tr-panel/60 p-[3px]`}>
+              <div className={`${host && !orch ? "" : "ml-auto"} flex shrink-0 items-center gap-1 rounded-[9px] bg-tr-panel/60 p-[3px]`}>
                 {(["focus", "grid"] as const).map(v => (
                   <button
                     key={v}
@@ -210,9 +193,7 @@ export function Workspace({ client, project, lens, onLens }: {
                 ))}
               </div>
             )}
-          </div>
-
-          <CrewControls key={project} project={project} seats={seats.map(s => seatName(s.session))} onChanged={refreshCrew} />
+          </CrewControls>
 
           {view === "grid" ? (
             /* GRID: the whole crew at once, read-only. The orchestrator is deliberately absent —

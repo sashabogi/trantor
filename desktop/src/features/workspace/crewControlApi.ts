@@ -4,7 +4,7 @@ import type { AgentSettingsStatus, AgentStatus } from "../settings/agents/agentS
 export type SeatWhy = { state: string; why: string; advice: string };
 export type CrewResult = { ok: boolean; action: string; seat: string; to?: string; reason?: string };
 export type CrewAction = "up" | "down" | "swap";
-export type Balance = { provider: string; ok: boolean; remaining?: number; remainingPct?: number; currency?: string; error?: string };
+export type Balance = { provider: string; ok: boolean; remaining?: number; remainingPct?: number; currency?: string; error?: string; resetTime?: string | number; windows?: { usedPct: number; resetsAt?: string | number; locked?: string | null; scoped?: boolean }[] };
 export type CrewCatalog = { agents: AgentStatus[]; balances: Balance[] };
 export type CliRunner = (project: string, args: string[]) => Promise<string>;
 const runCliJson: CliRunner = (project, args) => invoke<string>("workspace_cli", { project, args });
@@ -37,16 +37,24 @@ export function balanceFor(agent: AgentStatus, balances: Balance[]) {
   const provider = agent.launch.split(":")[1]?.split("/")[0] ?? agent.id;
   return balances.find(b => b.provider === provider || (provider === "zai-coding-plan" && b.provider === "zai"));
 }
+function resetLabel(time?: string | number) {
+  if (!time) return "";
+  const numeric = Number(time);
+  const ms = Number.isFinite(numeric) ? numeric : Date.parse(String(time));
+  if (!Number.isFinite(ms)) return "";
+  return ` · resets in ${Math.max(0, Math.ceil((ms - Date.now()) / 60000))}m`;
+}
 export function quotaLabel(balance?: Balance) {
   if (!balance) return "quota unknown";
   if (!balance.ok) return balance.error || "quota unavailable";
-  if (balance.remainingPct != null) return `${balance.remainingPct}% left`;
+  if (balance.windows?.length) return balance.windows.map(w => `${w.usedPct}% used${resetLabel(w.resetsAt)}${w.locked ? " · locked" : ""}`).join(" · ");
+  if (balance.remainingPct != null) return `${balance.remainingPct}% left${resetLabel(balance.resetTime)}`;
   if (balance.remaining != null) return `${balance.remaining} ${balance.currency ?? "credits"} left`;
   return "quota unknown";
 }
 export function availableAgent(agent: AgentStatus, balances: Balance[]) {
   const b = balanceFor(agent, balances);
-  return agent.installed && agent.enabled && (!b || (b.ok && (b.remainingPct == null || b.remainingPct > 0) && (b.remaining == null || b.remaining > 0)));
+  return agent.installed && agent.enabled && (!b || (b.ok && (b.remainingPct == null || b.remainingPct > 0) && (b.remaining == null || b.remaining > 0) && !b.windows?.some(w => !w.scoped && (w.usedPct >= 100 || w.locked))));
 }
 export function parkReason(why: SeatWhy) {
   const reason = why.why.match(/PARKED \(([^)]+)\)/)?.[1] ?? why.why;
