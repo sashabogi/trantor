@@ -272,6 +272,15 @@ pub(crate) async fn handoff_now(
     project: String,
     reason: Option<String>,
 ) -> Result<String, String> {
+    crate::handoff_state::chain_begin(project.trim());
+    let result = run_handoff(app, project.clone(), reason).await;
+    if let Err(error) = &result {
+        crate::handoff_state::chain_stage(project.trim(), "FAILED", Some(error.clone()));
+    }
+    result
+}
+
+async fn run_handoff(app: tauri::AppHandle, project: String, reason: Option<String>) -> Result<String, String> {
     let project = project.trim().to_string();
     if project.is_empty() {
         return Err("project is required".into());
@@ -329,6 +338,7 @@ pub(crate) async fn handoff_now(
     // record must describe a finished turn, so wait (bounded) for the Stop hook's record before the kill.
     let chain_start = unix_secs();
     if handoff_armed(&handoff_stdout) {
+        crate::handoff_state::chain_stage(&project, "ARMED", None);
         app_trace(&format!("handoff[{project}]: armed mid-turn — chain waits for the turn boundary (deadline {}s)", HANDOFF_BOUNDARY_DEADLINE.as_secs()));
         let boundary_started = Instant::now();
         loop {
@@ -340,6 +350,7 @@ pub(crate) async fn handoff_now(
                 }
                 BoundaryStep::Deadline => {
                     app_trace(&format!("handoff[{project}]: boundary deadline after {}s — firing past the gate (--force)", boundary_started.elapsed().as_secs()));
+                    crate::handoff_state::chain_stage(&project, "WRITING", None);
                     let mut force_cmd = trantor_cli::async_command();
                     force_cmd
                         .args(trantor_handoff_force_args(Some(&reason)))
@@ -357,6 +368,7 @@ pub(crate) async fn handoff_now(
     // The idle gate before the kill (#6081): never end a predecessor mid-turn. Poll on
     // KICKOFF_CADENCE, bounded by HANDOFF_IDLE_DEADLINE; a deadline pass still ends the session
     // (the chain stays bounded) and the label names which side of the gate the kill happened on.
+    crate::handoff_state::chain_stage(&project, "WRITTEN", None);
     let gate_started = Instant::now();
     let gate_outcome = loop {
         let status = {
@@ -382,6 +394,7 @@ pub(crate) async fn handoff_now(
     app_trace(&format!("handoff[{project}]: ending foreground pid {pid} in pane {pane}"));
     let post_kill = async {
         end_process_gracefully(pid).await?;
+        crate::handoff_state::chain_stage(&project, "ENDED", None);
         app_trace(&format!("handoff[{project}]: foreground pid {pid} ended"));
 
         // herdr retires an ended agent asynchronously. Reopening while its registry still names
@@ -439,6 +452,8 @@ pub(crate) async fn handoff_now(
                 format!("trantor open failed: {detail}")
             });
         }
+
+        crate::handoff_state::chain_stage(&project, "OPENED", None);
 
         // Kickoff-after-reopen (#5649, #6184, #6139): one boot prompt over the herdr SOCKET, only
         // after the successor reads idle, retrying transient outcomes on a cadence. Every herdr call

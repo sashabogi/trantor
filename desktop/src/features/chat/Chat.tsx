@@ -466,6 +466,7 @@ export function Chat({ project, sessionId, dock, onDock, onClose, deps = DEFAULT
   const [trayOpen, setTrayOpen] = useState<boolean>(() => loadTrayOpen());
   const [longRun, setLongRun] = useState(false);
   const [handoffBusy, setHandoffBusy] = useState(false);
+  const [handoffConfirm, setHandoffConfirm] = useState(false);
   const [handoffError, setHandoffError] = useState<string | null>(null);
   const [bannerArmedAt, setBannerArmedAt] = useState<number | null>(null);
   const [bannerNow, setBannerNow] = useState(() => Date.now());
@@ -1171,20 +1172,19 @@ export function Chat({ project, sessionId, dock, onDock, onClose, deps = DEFAULT
             to the composer bar (#5521), where the dials that fill the window live. */}
         {chat.meta.model && <span className="tr-chip shrink-0 text-[10.5px]">{chat.meta.model}</span>}
         <div className="flex shrink-0 items-center gap-1">
-          {/* #5643: the manual baton — same chain as the banner's [Hand off now] (reason
-              "clicked"), offered without waiting for the gauge. Busy/error surface through the
-              banner's shared state. */}
-          {target && !history && (
-            <button
-              type="button"
-              onClick={() => startHandoff("clicked")}
-              disabled={handoffBusy}
-              title="Hand off now — write the handoff, restart the pane fresh, the successor recaps"
-              className="rounded-[7px] px-2 py-1.5 text-[11px] text-tr-muted hover:text-tr-text disabled:opacity-50"
-            >
-              hand off
-            </button>
-          )}
+          {target && !history && (handoffConfirm ? <>
+            <button type="button" disabled={handoffBusy || !liveness.live}
+              title="End this session and open a successor to recap the handoff"
+              onClick={() => { setHandoffConfirm(false); startHandoff("clicked"); }}
+              className="px-2 py-1.5 text-[11px] text-tr-text disabled:opacity-50">Confirm handoff</button>
+            <button type="button" onClick={() => setHandoffConfirm(false)}
+              className="px-2 py-1.5 text-[11px] text-tr-muted hover:text-tr-text">Cancel</button>
+          </> : <button type="button" onClick={() => setHandoffConfirm(true)}
+            disabled={handoffBusy || !liveness.live}
+            title="Write a handoff, end this session, and open a successor to recap it"
+            className="px-2 py-1.5 text-[11px] text-tr-muted hover:text-tr-text disabled:opacity-50">
+            Hand off
+          </button>)}
           {/* The dock toggle says what it is (#5521): an icon that reads as the target dock,
               not a mystery square. Hosted in the pane, the mode rail IS the dock control. */}
           {!hosted && <button
@@ -1233,9 +1233,10 @@ export function Chat({ project, sessionId, dock, onDock, onClose, deps = DEFAULT
         </div>
       )}
 
+      {!history && <HandoffRecapStatus project={project} divider error={handoffError} busy={handoffBusy} />}
+
       <div className="relative min-h-0 flex-1">
       <div ref={transcript} onScroll={onTranscriptScroll} className="h-full overflow-y-auto px-3 pb-2">
-        <HandoffRecapStatus project={project} divider />
         {!target && (
           <div className="tr-card-ghost px-4 py-3 text-[length:calc(12px*var(--chat-scale,1))] leading-relaxed">
             No orchestrator session is hosted for this project yet. Open one from the Workspace lens
@@ -1362,7 +1363,7 @@ export function Chat({ project, sessionId, dock, onDock, onClose, deps = DEFAULT
           frac={chat.meta.context.frac ?? 0}
           countdown={countdown}
           busy={handoffBusy}
-          error={handoffError}
+          error={null}
           onKeepGoing={keepGoing}
           onHandOffNow={() => startHandoff("clicked")}
         />
