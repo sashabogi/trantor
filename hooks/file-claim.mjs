@@ -4,7 +4,7 @@
 // Informational, never blocking: a lock server that fails open is worse than no lock. Fail-open and
 // cheap: tight timeout, per-(session,file) stamp throttles re-claims; the FIRST touch always goes out.
 import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
-import { join, relative, isAbsolute } from "node:path";
+import { join, relative, resolve } from "node:path";
 import { homedir } from "node:os";
 import { relayUrl, sessionContext, signedPost } from "./lib/api.mjs";
 
@@ -41,9 +41,9 @@ try {
   const ctx = sessionContext(input.cwd);
   if (!ctx.project) allow();
   // claims compare by path, and absolute paths differ per machine — store repo-relative
-  const file = isAbsolute(abs) && !relative(ctx.projectDir, abs).startsWith("..")
-    ? relative(ctx.projectDir, abs)
-    : abs;
+  const absolute = resolve(ctx.projectDir, abs);
+  const rel = relative(ctx.projectDir, absolute);
+  const file = !rel.startsWith("..") ? rel : absolute;
 
   // throttle re-claims of the same file; never throttle its first touch
   const stampDir = join(process.env.AGENT_BUS_DIR || join(homedir(), ".agent-bus"), "claims");
@@ -60,7 +60,7 @@ try {
   try { mkdirSync(stampDir, { recursive: true }); writeFileSync(stamp, String(Date.now())); } catch {}
 
   const conflicts = r.ok ? r.json?.conflicts ?? [] : [];
-  if (!conflicts.length) allow();
+  if (Number(r.json?.level || 1) < 2 || !conflicts.length) allow();
 
   const who = conflicts.map(c => `${c.session} (${ago(c.agoSec)} ago)`).join(", ");
   // NO permissionDecision on purpose: additionalContext reaches the model on its own, and an "allow"

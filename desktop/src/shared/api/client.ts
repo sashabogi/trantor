@@ -93,7 +93,12 @@ export type OverseerWarning = {
   /** When this episode STARTED — a standing condition is reported once and dated, not re-fired. */
   since?: number;
 };
-/** An agent-proposed permission (governance) — filed over the bus, decided ONLY by the human. */
+export type FileHold = {
+  id: number; project: string; file: string; session: string; other: string;
+  status: "pending" | "go" | "nogo"; ts: number;
+};
+
+/** An agent-proposed permission, decided by the human. */
 export type Proposal = {
   id: number; session: string; project: string;
   /** The BOUND — all three are mandatory hub-side; an unbounded proposal never becomes a row. */
@@ -230,7 +235,13 @@ export class HubClient {
   setAutonomy(project: string, level: number) {
     return this.request("POST", "/policy", { autonomy: { [project]: level } });
   }
-  /** Agent-proposed permissions awaiting (or past) the human's decision. */
+  holds() {
+    return this.request<{ holds: FileHold[] }>("GET", "/holds?status=pending");
+  }
+  decideHold(hold: FileHold, status: "go" | "nogo"): Promise<{ ok: boolean }> {
+    return this.request("POST", "/hold/decide", { id: hold.id, project: hold.project, status });
+  }
+
   proposals(opts: { project?: string; status?: string } = {}) {
     const q = new URLSearchParams();
     for (const [k, v] of Object.entries(opts)) if (v !== undefined) q.set(k, String(v));

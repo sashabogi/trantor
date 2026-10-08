@@ -103,6 +103,7 @@ switch (cmd) {
   case "watch":   run("bin/relay-watch.mjs"); break;
   case "catchup": run("bin/catchup.mjs"); break;
   case "agents":  run("bin/agents.mjs"); break;
+  case "gate":    run("bin/gate.mjs"); break;
   case "gates":   run("bin/gates.mjs"); break;
   case "backfill": run("bin/git-backfill.mjs"); break;
   case "sweep": run("bin/sweep.mjs"); break;
@@ -250,6 +251,7 @@ switch (cmd) {
   trantor app         the DESKTOP app: status | install | update — pulls the latest DMG from GitHub Releases
   trantor catchup     "where are we?" — the continuous board + git, with a synthesized brief
   trantor agents      what this session's sub-agents did (task · returned? · files written · survived on disk) — [<sessionId>] [--json]
+  trantor gate go|nogo <id>   decide a conflicting file edit
   trantor gates       verification gates: "must verify before shipping" claims that survive handoffs — [--all] [--json]
   trantor backfill    card past GIT work onto the board (solo commits that were never carded) — [--since "14 days ago"] [--dry-run]
   trantor init-hooks  install a git post-commit hook so EVERY commit auto-cards on the board (reliable solo-work backstop) — [--uninstall]

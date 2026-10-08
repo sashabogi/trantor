@@ -269,12 +269,26 @@ export async function routeAdmin({ req, res, q, P, auth, ctx }) {
       markDirty();
       return json(res, 200, { ok: true });
     }
-    if (req.method === "POST" && P === "/claim") {
+    if (req.method === "GET" && P === "/holds") {
+      const rows = overseer.listHolds().filter(h => (!q.project || h.project === canon(q.project)) && (!q.status || h.status === q.status));
+      return json(res, 200, { holds: filterReadable(auth, rows, h => h.project) });
+    }
+    if (req.method === "POST" && P === "/hold/decide") {
+      const b = await body(req);
+      const hold = overseer.listHolds().find(h => h.id === Number(b.id));
+      if (!hold) return json(res, 404, { error: "hold expired or not found" });
+      if (AUTH_MODE !== "off" && !scopeAllows(auth?.identity, hold.project, "owner")) return json(res, 403, { error: "operator permission required" });
+      if (b.status !== "go" && b.status !== "nogo") return json(res, 400, { error: "status must be go or nogo" });
+      const decided = overseer.decideHold(hold.id, b.status, auth?.identity?.name || "operator");
+      return decided ? json(res, 200, { ok: true, hold: decided }) : json(res, 409, { error: "hold already decided" });
+    }
+    if (req.method === "POST" && (P === "/claim" || P === "/hold/check")) {
       const b = await body(req);
       const proj = canon(String(b.project || "").slice(0, 80));
       const file = String(b.file || "").slice(0, 400);
       const session = String(b.session || "").slice(0, 120);
       if (!proj || !file || !session) return json(res, 400, { error: "project, file and session required" });
+      if (auth?.identity && session !== auth.identity.name) return json(res, 403, { error: "session must match signer" });
       pruneClaims();
       const key = `${proj} ${file} ${session}`;
       const mine = fileClaims.get(key);
@@ -283,11 +297,12 @@ export async function routeAdmin({ req, res, q, P, auth, ctx }) {
         .map(c => ({ session: c.session, ts: c.ts, agoSec: Math.round((now() - c.ts) / 1000) }));
       fileClaims.set(key, { project: proj, file, session, ts: now() });
       touch(session, undefined, undefined, undefined, auth);
-      // Feed events, throttled by design: the FIRST touch inside a TTL window says "claimed";
-      // a collision says so every time — that is the one worth seeing on the FEED.
+      // Repeated checks refresh the claim without repeating its conflict event.
       if (!mine) appendEvent("file.claim", proj, session, { file });
-      if (conflicts.length) appendEvent("file.conflict", proj, session, { file, with: conflicts.map(c => c.session) });
-      return json(res, 200, { ok: true, conflicts, ttlMs: CLAIM_TTL_MS });
+      if (!mine && conflicts.length) appendEvent("file.conflict", proj, session, { file, with: conflicts.map(c => c.session) });
+      const hold = overseer.holdFor(proj, file, session);
+      const level = overseer.overseerPolicy().autonomy[proj] ?? overseer.overseerPolicy().autonomy["*"] ?? 1;
+      return json(res, 200, { ok: true, conflicts: level >= 2 ? conflicts : [], level, hold, ttlMs: CLAIM_TTL_MS });
     }
     if (req.method === "GET" && P === "/claims") {
       pruneClaims();

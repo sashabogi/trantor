@@ -19,6 +19,7 @@ import {
   type OverseerStatus,
   type Peer,
 } from "../../shared/api/client";
+import { FileHoldsSection } from "../../shared/FileHolds";
 import { ProposalsSection } from "../../shared/Proposals";
 import { usePeers, stateOf } from "../../shared/presence";
 import { lasting } from "../../shared/rollup";
@@ -244,7 +245,7 @@ export function Overseer({ client }: { client: HubClient }) {
         </div>
 
         {notice && <div className="mb-5 rounded-md border border-[var(--color-tr-edge)] bg-white/[0.03] px-3 py-2 text-[12px] text-[var(--color-tr-muted)]">{notice}</div>}
-        <div className="mb-8 empty:mb-0 empty:hidden"><ProposalsSection client={client} /></div>
+        <div className="mb-8 empty:mb-0 empty:hidden"><FileHoldsSection client={client} /><ProposalsSection client={client} /></div>
 
         <section className="mb-8">
           <div className="flex flex-wrap items-center gap-2">

@@ -1,3 +1,4 @@
+import { levelFor } from "../lib/overseer.mjs";
 /* oxlint-disable anti-slop/no-runtime-typeof -- SAFETY: orgPolicy is loaded from legacy durable state and this structural split preserves its existing compatibility guard. */
 export function createOverseer({ state, fileClaims, now, appendEvent, markDirty, duty }) {
 let _overseer = null;
@@ -45,6 +46,55 @@ function overseerInputs() {
   };
 }
 
+// Holds share the lifetime of live claims; a hub restart clears both together.
+const holds = new Map();
+const claimTtl = Number(process.env.RELAY_CLAIM_TTL_MS || 10 * 60 * 1000);
+function syncHolds() {
+  const live = [...fileClaims.values()].filter(c => now() - c.ts <= claimTtl);
+  for (const [key, hold] of holds) {
+    if (levelFor(hold.project, overseerPolicy().autonomy) < 3 || !live.some(c => c.project === hold.project && c.file === hold.file && c.session === hold.other)) {
+      holds.delete(key);
+      appendEvent("hold.expired", hold.project, "overseer", { holdId: hold.id, file: hold.file });
+    }
+  }
+  const first = new Map();
+  for (const claim of live) {
+    if (levelFor(claim.project, overseerPolicy().autonomy) < 3) continue;
+    const fileKey = JSON.stringify([claim.project, claim.file]);
+    const other = first.get(fileKey);
+    if (!other) { first.set(fileKey, claim.session); continue; }
+    const key = JSON.stringify([claim.project, claim.file, claim.session]);
+    if (holds.has(key)) continue;
+    const hold = { id: ++state.verifyGateSeq, project: claim.project, file: claim.file,
+      session: claim.session, other, status: "pending", ts: now() };
+    holds.set(key, hold);
+    markDirty();
+    appendEvent("hold.opened", hold.project, hold.session,
+      { holdId: hold.id, file: hold.file, sessions: [other, hold.session], reason: holdReason(hold) });
+  }
+}
+function holdReason(hold) {
+  return `held: file conflict with ${hold.other}, ${hold.status === "nogo" ? "operator decided no-go" : "waiting on the operator"}`;
+}
+function holdFor(project, file, session) {
+  syncHolds();
+  if (levelFor(project, overseerPolicy().autonomy) < 3) return null;
+  const hold = holds.get(JSON.stringify([project, file, session]));
+  return hold && hold.status !== "go" ? { ...hold, reason: holdReason(hold) } : null;
+}
+function listHolds() { syncHolds(); return [...holds.values()]; }
+function decideHold(id, status, by) {
+  syncHolds();
+  const hold = [...holds.values()].find(h => h.id === id);
+  if (!hold || hold.status !== "pending") return null;
+  hold.status = status;
+  hold.decidedBy = by;
+  hold.decidedTs = now();
+  appendEvent("hold.decided", hold.project, by, { holdId: hold.id, file: hold.file, status });
+  duty.hubSend(hold.session, `File hold #${hold.id}: ${status === "go" ? "Go — retry your edit" : "No-go — your edit remains held"} (${hold.file}).`, hold.project);
+  return hold;
+}
+
 // --- #5760: the same-project warning is an EPISODE keyed by the MEMBER SET -------------------
 // lib/same-project.mjs (pure) decides from (previous set, current set, declared crew,
 // last-fired-at): a declared crew is the NORMAL state of a project and not a collision at all,
@@ -74,6 +124,7 @@ function declaredCrewFor(project) {
 }
 
 function overseerTick() {
+  syncHolds();
   if (!_overseer?.detectCollisions) return;
   let collisions = [];
   try { collisions = _overseer.detectCollisions(overseerInputs()) || []; } catch { return; }
@@ -86,6 +137,7 @@ function overseerTick() {
   // episode-start branch (all parties) and the standing branch (newcomers only, same-project
   // included): existing members never re-hear it, so a standing condition cannot re-wake every tick.
   const intro = (c, me, others) => {
+    if (levelFor(c.project, pol.autonomy) < 2) return;
     const rest = others.filter(p => p !== me);
     if (rest.length === 0) return;
     duty.hubSend(me,
@@ -136,7 +188,7 @@ function overseerTick() {
       sameProjectFired.set(c.project, { hash: _sameProject.memberSetHash(c.sessions), sessions: c.sessions, ts: t });
       appendEvent("overseer.warn", c.project, "overseer",
         { kind: c.kind, sessions: c.sessions || [], files: c.files || [], detail: c.detail || "", narrated: false });
-      if (duty.session) duty.hubSend(duty.session, `⚠️ OVERSEER ${c.kind} [${c.project}]: ${c.detail || ""} — if the parties are not already coordinating, message them.`, c.project);
+      if (levelFor(c.project, pol.autonomy) >= 2 && duty.session) duty.hubSend(duty.session, `⚠️ OVERSEER ${c.kind} [${c.project}]: ${c.detail || ""} — if the parties are not already coordinating, message them.`, c.project);
       if (parties.length > 1) for (const me of parties) intro(c, me, parties);
       continue;
     }
@@ -169,16 +221,9 @@ function overseerTick() {
     c.since = t;
     appendEvent("overseer.warn", c.project, "overseer",
       { kind: c.kind, sessions: c.sessions || [], files: c.files || [], detail: c.detail || "", narrated: false });
-    if (duty.session) duty.hubSend(duty.session, `⚠️ OVERSEER ${c.kind} [${c.project}]: ${c.detail || ""} — if the parties are not already coordinating, message them.`, c.project);
+    if (levelFor(c.project, pol.autonomy) >= 2 && duty.session) duty.hubSend(duty.session, `⚠️ OVERSEER ${c.kind} [${c.project}]: ${c.detail || ""} — if the parties are not already coordinating, message them.`, c.project);
     if (parties.length > 1) for (const me of parties) intro(c, me, parties);
-    const level = _overseer.levelFor ? _overseer.levelFor(c.project, pol.autonomy) : 1;
-    if (level >= 3 && c.kind === "file-conflict") {
-      const g = { id: ++state.verifyGateSeq, project: c.project, status: "open", ts: now(),
-        by: "overseer", claim: `file conflict: ${(c.files || []).join(", ")} — ${(c.sessions || []).join(" vs ")}`,
-        why: c.detail || "two live sessions on the same file", howToVerify: "decide who proceeds; coordinate over the bus" };
-      state.verifyGates.push(g); markDirty();
-      appendEvent("verify.gate.opened", c.project, "overseer", { gateId: g.id, claim: g.claim, why: g.why });
-    }
+
   }
   // Episode end: a condition gone for the whole clear window is over, so a LATER recurrence is a
   // new episode and warns again. Without this the map would grow forever and nothing could re-fire.
@@ -196,6 +241,7 @@ setInterval(overseerTick, OVERSEER_TICK_MS).unref?.();
 setTimeout(overseerTick, 2000).unref?.();
 
   return {
+    syncHolds, holdFor, listHolds, decideHold,
     overseerTick, overseerPolicy, overseerInputs, declaredCrewFor, peerKindOf,
     active: overseerActive,
     get engine() { return _overseer; },

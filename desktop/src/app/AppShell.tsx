@@ -8,6 +8,7 @@ import { appUpdateCheck, HubClient, hubForProject, knownProjects, localSessions,
 import { computeProjectActivity, activityLine, activityTitle, sortByRecency, wakeIsReal, type ProjectActivity } from "./projectActivity";
 import { Palette, type PaletteScope } from "../features/search/Palette";
 import { countUnseen, onSeenChange } from "../shared/seen";
+import { usePendingHolds } from "../shared/FileHolds";
 import { usePendingProposals } from "../shared/Proposals";
 import { ProjectIcon } from "../shared/ProjectIcon";
 import type { LensCompat } from "../features/project/ProjectHeader";
@@ -265,9 +266,9 @@ export function AppShell() {
     return () => { alive = false; clearInterval(t); off(); offSeen(); };
   }, [client]);
 
-  // How many agent proposals await the human. Badges Home (where the queue renders first) — the
-  // count comes from the same shared hook every proposals surface reads, so they can't disagree.
-  const pendingProposals = usePendingProposals(client).length;
+  // Home badges the pending proposals and file holds shown in its decision queue.
+  const pendingHolds = usePendingHolds(client).length;
+  const pendingDecisions = usePendingProposals(client).length + pendingHolds;
 
   // Shell-level on purpose: a notification must fire whichever pane is open, and exactly once — a
   // per-view subscription would double-notify whenever two views happened to be mounted.
@@ -563,7 +564,7 @@ export function AppShell() {
           <SectionLabel>Fleet</SectionLabel>
           {FLEET_NAV.map(({ kind, label, Icon }) => (
             <NavItem key={kind} label={label} Icon={Icon}
-                     badge={kind === "inbox" ? unread + needsYouCount : kind === "home" ? pendingProposals : undefined}
+                     badge={kind === "inbox" ? unread + needsYouCount : kind === "home" ? pendingDecisions : undefined}
                      on={pane.kind === kind}
                      // SAFETY: every FLEET_NAV entry's `kind` is one of Pane's no-argument
                      // variants (home/inbox/messages/agents/overseer/learning) — none of them

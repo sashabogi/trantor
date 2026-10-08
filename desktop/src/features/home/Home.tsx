@@ -5,6 +5,7 @@
 import { useEffect, useState } from "react";
 import { HubClient } from "../../shared/api/client";
 import { cleanTitle } from "../../shared/Avatar";
+import { FileHoldsSection } from "../../shared/FileHolds";
 import { ProposalsSection } from "../../shared/Proposals";
 import { Collisions } from "./Collisions";
 import { DutyStrip } from "./DutyStrip";
@@ -123,7 +124,7 @@ export function Home({ client, me, onOpenProject }: {
       <div className="flex gap-8">
         {/* what needs a human — decisions first: an undecided proposal is a blocked agent */}
         <div className="flex min-w-0 flex-1 flex-col gap-8">
-        <ProposalsSection client={client} />
+        <FileHoldsSection client={client} /><ProposalsSection client={client} />
         <section className="min-w-0">
           <h2 className="tr-sec-title">Needs attention</h2>
           <p className="tr-sec-sub">Failed, blocked and stale cards across every project.</p>

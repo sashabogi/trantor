@@ -39,6 +39,9 @@ export function notificationFor(ev: HubEvent, me: string, isOffline?: (session: 
   }
   // Same class as a verify gate: an agent filed a bounded permission ask and is working around the
   // gap until the human rules. Filing is a transition (once per proposal), so this can't spam.
+  if (ev.type === "hold.opened") {
+    return { title: "File edit needs your decision", body: `${ev.project ?? ""}: ${ev.file ?? ""} — choose Go or No-go on Home` };
+  }
   if (ev.type === "proposal.filed") {
     return {
       title: `${ev.by ?? "an agent"} proposes a permission`,
