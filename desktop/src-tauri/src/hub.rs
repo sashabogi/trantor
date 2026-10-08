@@ -126,7 +126,15 @@ pub(crate) fn terminal_path() -> String {
 /// Run the installed Trantor CLI and hand back its JSON stdout. TRANTOR_ROOT deliberately changes
 /// this same resolver for every app-spawned Trantor command; no command chooses its own checkout.
 pub(crate) async fn run_cli_json(args: &[&str]) -> Result<String, String> {
+    run_cli_json_at(args, None).await
+}
+
+pub(crate) async fn run_cli_json_at(args: &[&str], project: Option<&str>) -> Result<String, String> {
     let mut cmd = trantor_cli::async_command();
+    if let Some(project) = project {
+        let dir = project_dir(project).ok_or_else(|| format!("No local checkout for {project}"))?;
+        cmd.current_dir(&dir).env("PWD", &dir).env("RELAY_PROJECT", project);
+    }
     cmd.args(args);
     let out = cmd
         .output()

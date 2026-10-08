@@ -2,7 +2,7 @@
 // the center, the record on the right.
 // Honesty rule (design system): everything rendered is real hub data, peers, cards, events.
 // Anything without a live source ships as a stated placeholder, never an imitation.
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import type { Card, HubClient, HubEvent, Peer } from "../../shared/api/client";
 import { ProjectHeader, type Lens } from "../project/ProjectHeader";
 import { TerminalPane } from "./TerminalPane";
@@ -17,6 +17,7 @@ import { newestTerminal, projectSessions, takeoverAction, type ProjectSessions }
 import { TakeoverStrip } from "../chat/TakeoverStrip";
 import { when } from "../../shared/time";
 import { PanelRightClose, PanelRightOpen } from "lucide-react";
+import { CrewControls } from "./CrewControls";
 import { loadRailOpen, saveRailOpen } from "./prefs";
 
 // A seat = a crew peer of this project (agent:project). Host sessions (MacBook-*:project) are
@@ -70,8 +71,8 @@ function PaneEmptyState({ project }: { project: string }) {
     // for word — this surface never pretends a crew where none is.
     return (
       <div className="tr-card-ghost max-w-[440px] px-6 py-5 text-center text-[12.5px] leading-relaxed">
-        No crew on this project yet. Fire one up with <span className="tr-mono">trantor up</span>
-        &nbsp;and each seat&rsquo;s live terminal renders right here.
+        No crew on this project yet. Choose Add seat above, then Start.
+        Each seat&rsquo;s live terminal renders right here.
       </div>
     );
   }
@@ -114,6 +115,10 @@ export function Workspace({ client, project, lens, onLens }: {
     const iv = setInterval(load, 12_000);
     return () => { alive = false; clearInterval(iv); };
   }, [client, project]);
+
+  const refreshCrew = useCallback(() => {
+    client.peers().then(setPeers).catch(() => {});
+  }, [client]);
 
   const seats = useMemo(() => seatsOf(peers, project), [peers, project]);
   const host = useMemo(() => hostOf(peers, project), [peers, project]);
@@ -168,7 +173,7 @@ export function Workspace({ client, project, lens, onLens }: {
             {targets.length === 0 && (
               <div className="tr-card-ghost px-4 py-2 text-[12.5px]">
                 Nothing is live here — <span className="font-semibold text-tr-ok">Wake</span> the project
-                from the sidebar, or fire up seats with <span className="tr-mono">trantor up</span>
+                from the sidebar, or choose Add seat below.
               </div>
             )}
             {targets.map(t => (
@@ -206,6 +211,8 @@ export function Workspace({ client, project, lens, onLens }: {
               </div>
             )}
           </div>
+
+          <CrewControls key={project} project={project} seats={seats.map(s => seatName(s.session))} onChanged={refreshCrew} />
 
           {view === "grid" ? (
             /* GRID: the whole crew at once, read-only. The orchestrator is deliberately absent —

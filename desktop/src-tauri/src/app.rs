@@ -182,6 +182,7 @@ pub fn run() {
             sessions::session_transcript,
             orchestrator_chat,
             balances_refresh,
+            crew_controls::workspace_cli,
             trantor_cli_compatibility,
             provider_status,
             provider_verify,

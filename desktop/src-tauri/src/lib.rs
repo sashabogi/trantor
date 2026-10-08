@@ -20,6 +20,7 @@ mod sessions;
 mod terminal;
 mod trantor_cli;
 mod hub;
+mod crew_controls;
 mod files;
 mod chat;
 mod watchers;
@@ -85,11 +86,8 @@ pub(crate) fn lock_or_recover<T>(m: &std::sync::Mutex<T>) -> std::sync::MutexGua
     m.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
-/// Doctrine rule 8: a panic inside a callback the platform drives — an FSEvents watcher closure, a
-/// PTY reader loop feeding the UI — has nowhere to unwind to. On macOS it crosses an extern "C"
-/// frame and aborts the whole app (#5917); in a spawned thread it kills the thread and the feature
-/// it served goes quiet with nothing written down. Trap it, name the boundary in app-panics.log,
-/// and let the caller decide whether to carry on.
+/// Catch panics in platform callbacks before they cross an extern C boundary (#5917).
+/// Log the boundary and let the caller decide whether to continue.
 pub(crate) fn guard_boundary<R>(boundary: &str, body: impl FnOnce() -> R) -> Option<R> {
     match std::panic::catch_unwind(std::panic::AssertUnwindSafe(body)) {
         Ok(value) => Some(value),
