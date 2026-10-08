@@ -78,7 +78,7 @@ try {
     transfer(body) { order.push("transfer"); return post("/contracts/transfer", body); },
     stop() {
       order.push("stop");
-      const pending = JSON.parse(readFileSync(pendingPath(ctx, "codex")));
+      const pending = JSON.parse(readFileSync(pendingPath(ctx, "kimi")));
       check("replacement queue is durable before old seat stops", pending.wake.length === 2);
     },
     release() { order.push("release"); },
@@ -87,9 +87,9 @@ try {
   const swapped = await performSwap(ctx, swapOptions(["kimi", "codex"]), runtime);
   check("happy swap moved pending and hub-only contracts", swapped.ok && swapped.moved.includes(held.id) && swapped.moved.includes(owed.id) && !swapped.moved.includes(answered.id));
   check("startup, readiness and transfer precede teardown", order.join(",") === "start,ready,freeze,transfer,stop,release");
-  check("hub ownership changed without losing original message ids", (await ledger()).contracts.filter(c => swapped.moved.includes(c.id)).every(c => c.to === "codex:swap-drill"));
-  check("old pending queue is drained", JSON.parse(readFileSync(pendingPath(ctx, "kimi"))).wake.length === 0);
-  await post("/send", { from: "codex:swap-drill", to: "orch:swap-drill", text: "done", project: ctx.project, re: held.id });
+  check("persona ownership survives without losing original message ids", (await ledger()).contracts.filter(c => swapped.moved.includes(c.id)).every(c => c.to === "kimi:swap-drill"));
+  check("persona pending queue is retained", JSON.parse(readFileSync(pendingPath(ctx, "kimi"))).wake.length === 2);
+  await post("/send", { from: "kimi:swap-drill", to: "orch:swap-drill", text: "done", project: ctx.project, re: held.id });
   check("replacement reply settles original sender's contract", (await ledger()).contracts.find(c => c.id === held.id).answered);
 
   order.length = 0;
@@ -120,9 +120,9 @@ try {
   const question = await post("/send", { from: "kimi:swap-drill", to: "orch:swap-drill", text: "which target?", project: ctx.project, kind: "ask", re: questionContract.id });
   writeFileSync(pendingPath(ctx, "kimi"), JSON.stringify({ wake: [], bcast: [], seen: [], ask: question.id, askTo: "orch:swap-drill" }));
   const heldAsk = await performSwap(ctx, swapOptions(["kimi", "codex"]), { ...runtime, stop() {} });
-  const restored = JSON.parse(readFileSync(pendingPath(ctx, "codex")));
+  const restored = JSON.parse(readFileSync(pendingPath(ctx, "kimi")));
   check("held ask metadata survives handoff", heldAsk.ok && restored.ask === question.id && restored.askTo === "orch:swap-drill");
-  const questions = await get("/contracts?session=codex:swap-drill&project=swap-drill");
+  const questions = await get("/contracts?session=kimi:swap-drill&project=swap-drill");
   check("held ask now belongs to replacement's ledger", questions.contracts.some(c => c.id === question.id && c.kind === "ask"));
   const crossed = await fetch(hub.base + "/contracts/transfer", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ from: "codex:swap-drill", to: "codex:other-project", project: ctx.project }) });
   check("transfer refuses cross-project destination", crossed.status === 400);

@@ -193,7 +193,7 @@ export function spawnHerdr(ctx, specs, resolve, prune) {
     if (!seat) continue;
     workspace = seat.workspace || workspace;
     panes.push(seat.pane);
-    reportAgent(ctx, seat.pane, (seat.persona || seat.agent));
+    reportAgent(ctx, seat.pane, seat.agent);
     recordState(ctx, ctx.project, "herdr", (seat.persona || seat.agent), seat.pane, seat);
     console.log(`  → ${(seat.persona || seat.agent)} seat in herdr workspace (${ctx.project})`);
   }

@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { seatProcesses } from "./crew/processes.mjs";
 import { allocatePersona } from "../lib/persona.mjs";
 import { join } from "node:path";
 import { call, createContext } from "./crew/core.mjs";
@@ -88,17 +89,18 @@ async function runUp(args, verify = true) {
   console.log(`[crew] hub for ${ctx.project}: ${ctx.hub} (baked into every seat; CREW_HUB=<url> overrides)`);
   console.log(`— bringing up crew for ${ctx.project} (${ctx.mux === "terminal" ? "Terminal windows" : ctx.mux}) —`);
   // #7760: build once in the first seat's worktree before any seat gets a contract.
-  if (!ctx.dry) await preflightFirstSeat(ctx, options.specs[0].split(":")[0]);
   const skipped = [];
   const occupied = readRows(ctx).filter(row => row.project === ctx.project).map(row => row.persona);
   options.specs = options.specs.map(spec => {
     const resolved = resolveSpec(ctx, spec, options.task, options.difficulty, skipped);
     if (!resolved) return null;
-    const seat = allocatePersona({ dir: join(ctx.home, ".agent-bus"), project: ctx.project, ...resolved, name: options.persona, occupied });
+    if (seatProcesses(ctx, ctx.project, resolved.agent).length && !occupied.includes(resolved.agent)) occupied.push(resolved.agent);
+    const seat = allocatePersona({ dir: join(ctx.home, ".agent-bus"), project: ctx.project, ...resolved, name: options.persona, occupied, dry: ctx.dry });
     occupied.push(seat.persona);
     return { ...resolved, ...seat };
   }).filter(Boolean);
   resultSeat = options.specs.map(seat => seat.persona).join(",");
+  if (!ctx.dry && options.specs.length) await preflightFirstSeat(ctx, options.specs[0].persona);
   const started = epochMs();
   spawnCrew(options, skipped);
   if (ctx.dry || !verify) {

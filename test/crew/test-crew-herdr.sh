@@ -206,8 +206,8 @@ ok "the seat lands in the adopted workspace, split off the orch pane" 'grep -q "
 # 7. replace-in-place: re-upping a tracked seat replaces ITS pane (split off it, then close it)
 seed "testproj\therdrws\t__ws__\tWS-NEW\ntestproj\therdr\tcodex\tTERM-1\n"
 OUT7="$(cd "$TMP/proj" && CREW_MUX=herdr CREW_DRY_RUN=1 HOME="$TMP" PATH="$TMP/fakebin:$PATH" RELAY_PROJECT=testproj RELAY_URL=http://127.0.0.1:1111 "${CREW[@]}" up codex </dev/null 2>&1)"
-ok "re-up splits replacing the seat's old pane" 'echo "$OUT7" | grep -q "pane split for codex (replacing TERM-1)"'
-ok "the seat's old pane is closed" 'echo "$OUT7" | grep -q "herdr pane close TERM-1"'
+ok "second seat gets a distinct persona" 'echo "$OUT7" | grep -q "pane split for codex-2"'
+ok "existing persona pane survives" '! echo "$OUT7" | grep -q "herdr pane close TERM-1"'
 
 # 8. down is PROJECT-SCOPED for herdr rows — teardown reaches herdr regardless of CREW_MUX (you must
 #    never need to remember the flag to tear a crew down)

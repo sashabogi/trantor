@@ -7,7 +7,7 @@ export const DRILL_IDENTITY_VARS = [
   "RELAY_PROJECT", "TRANTOR_PROJECT", "RELAY_SESSION", "RELAY_AGENT",
   // The hub binding is identity too (#7893): a spawn inheriting the RUNNER's RELAY_URL resolves
   // "via env" and can never exercise pin/path resolution.
-  "RELAY_URL",
+  "RELAY_URL", "CREW_PERSONA", "CREW_AGENT", "RUNNER_SESSION",
   // A mode flag scrubbed for the same reason: a seat under Trantor State exports it and drills
   // inheriting it armed state mode in every spawned runner (#7759).
   "TRANTOR_STATE_ASSEMBLE",

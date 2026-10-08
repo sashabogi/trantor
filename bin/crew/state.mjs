@@ -24,7 +24,7 @@ export function writeRows(ctx, rows) {
     return;
   }
   const tmp = `${ctx.statePath}.tmp`;
-  writeFileSync(tmp, `${rows.map(row => [row.project, row.kind, row.persona || row.agent, row.handle, row.agent, row.model || ""].join("\t")).join("\n")}\n`);
+  writeFileSync(tmp, `${rows.map(row => [row.project, row.kind, row.persona || row.agent, row.handle, ...((row.persona && row.persona !== row.agent) || row.model ? [row.agent, row.model || ""] : [])].join("\t")).join("\n")}\n`);
   renameSync(tmp, ctx.statePath);
 }
 

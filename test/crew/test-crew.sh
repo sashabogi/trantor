@@ -1,35 +1,18 @@
 #!/bin/bash
-# trantor crew teardown-scoping tests (2026-07-20).
-#
-# The bug: crew.sh v2 tracked ALL crew windows in one global ~/.agent-bus/crew-windows.txt as bare
-# `AGENT<TAB>WID` rows (no project), so `trantor down` from ANY session killed EVERY crew on the machine.
-# v3 rows are `PROJECT<TAB>KIND<TAB>AGENT<TAB>HANDLE` and `down` is PROJECT-SCOPED. These tests run the REAL
-# down() against a temp HOME with STUBBED osascript/tmux (no windows spawned, no tmux needed) and assert
-# which STATE rows survive. This is the safety fix — one session's teardown must never touch another's crew.
+# Teardown stays scoped to the selected project and persona; exercise real CLI code with stub multiplexers.
 set -u
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 CREW=("$(command -v node)" "$ROOT/bin/crew.mjs")
 PASS=0; FAIL=0
 ok(){ if eval "$2"; then PASS=$((PASS+1)); echo "  ✓ $1"; else FAIL=$((FAIL+1)); echo "  ✗ $1  [$2]"; fi; }
 
-# #6228 bounce (2026-09-03): this suite must not depend on the RUNNER'S OWN identity env. A herdr
-# pane hosting a crew seat exports TRANTOR_ORCH/TRANTOR_SEAT persistently (and HERDR_PANE_ID,
-# RELAY_PROJECT, ...); every `bash crew.sh` invocation below that does not override one of these
-# inherits the RUNNER's badge instead — so from inside a TRANTOR_ORCH=trantor pane, every dry-run
-# spawn for testproj/crebral-health/etc. got refused by the cross-project guard (#6228) as if IT
-# were the badge mismatch, 23 drills failed. Same fix drill-env.mjs's scrubIdentityEnv() applies to
-# node drills (#6074 bounce): scrub before ANY test runs; §20's guard tests re-set TRANTOR_ORCH
-# deliberately per case, which wins over this scrub because it runs after.
+# Scrub the parent runner identity so cross-project guard checks use only the drill environment (#6228).
 unset TRANTOR_ORCH TRANTOR_SEAT HERDR_ENV HERDR_PANE_ID RELAY_PROJECT RELAY_SESSION RELAY_AGENT TRANTOR_PROJECT
 
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 mkdir -p "$TMP/.agent-bus" "$TMP/fakebin"
-# stub osascript: log any AppleScript (stdin heredoc, e.g. cmux close-tab) so we can assert on it; a query
-# for a window id returns nothing (no tty, nothing killed); everything succeeds.
-# ⚠ the stub CATS STDIN — so every crew.sh invocation in this file must carry </dev/null, or the stub
-# inherits the test runner's open stdin and blocks forever (hung npm test twice on 2026-08-20: the
-# terminal-fallback drill reaches crew.sh's Finder-bounds osascript with npm's stdin attached).
+# osascript records calls and consumes stdin; every invocation must receive /dev/null to avoid a blocked drill.
 cat > "$TMP/fakebin/osascript" <<EOF
 #!/bin/bash
 cat >> "$TMP/osa.log" 2>/dev/null </dev/stdin
@@ -179,15 +162,7 @@ ok "cmux 4-seat grid: seat 2 splits RIGHT from seat 1" 'echo "$OUT13" | grep -q 
 ok "cmux 4-seat grid: seat 3 splits DOWN from seat 1" 'echo "$OUT13" | grep -q "new-split down --surface %DRYT0"'
 ok "cmux 4-seat grid: seat 4 splits DOWN from seat 2" 'echo "$OUT13" | grep -q "new-split down --surface %DRYT1"'
 
-# 14. reap-on-up regression (2026-07-29): `trantor up <agent>` REPLACES a live runner for the same
-# agent+project instead of stacking a duplicate (the 17-runner incident: N runners long-polling ONE
-# inbox, every contract waking all of them). Three properties, proven against REAL decoy processes:
-#   a. the reap happens, and its output is VISIBLE — i.e. it runs in resolve_spec() as a plain
-#      statement, not inside RUN_CMD, whose `cmd="$(RUN_CMD)"` call would swallow it into the
-#      launcher string (the exact placement bug the fix moved it away from);
-#   b. it is scoped to agent+project: a different agent on the same project survives;
-#   c. the pgrep pattern is ANCHORED: the same agent in ".../proj2" must survive a reap for
-#      ".../proj" — an unanchored pattern kills siblings on a directory-name prefix collision.
+# A second persona preserves live runners, including siblings with a shared directory prefix.
 mkdir -p "$TMP/proj" "$TMP/proj2"
 printf 'setInterval(() => {}, 1 << 30);\n' > "$TMP/crew-runner.mjs"
 node "$TMP/crew-runner.mjs" codex "$TMP/proj"  & DECOY_SAME=$!
@@ -195,16 +170,14 @@ node "$TMP/crew-runner.mjs" glm   "$TMP/proj"  & DECOY_AGENT=$!
 node "$TMP/crew-runner.mjs" codex "$TMP/proj2" & DECOY_PREFIX=$!
 sleep 0.5
 OUT14="$(cd "$TMP/proj" && CREW_MUX=cmux CREW_DRY_RUN=1 HOME="$TMP" PATH="$TMP/fakebin:$PATH" RELAY_PROJECT=testproj "${CREW[@]}" up codex </dev/null 2>&1)"
-ok "up reaps the live runner for the SAME agent+project" 'echo "$OUT14" | grep -q "^\[dry\] kill -9 $DECOY_SAME "'
+ok "second persona preserves the existing runner" '! echo "$OUT14" | grep -q "^\[dry\] kill -9 $DECOY_SAME "'
 ok "the reap is not swallowed into the launcher string" '! echo "$OUT14" | grep -v "^\[dry\] kill -9" | grep -q "kill -9 $DECOY_SAME"'
 ok "up does NOT reap a different agent on the same project" '! echo "$OUT14" | grep -q "kill -9 $DECOY_AGENT"'
 ok "up does NOT reap the same agent in a prefix-named sibling dir" '! echo "$OUT14" | grep -q "kill -9 $DECOY_PREFIX"'
 kill -9 "$DECOY_SAME" "$DECOY_AGENT" "$DECOY_PREFIX" 2>/dev/null
 wait 2>/dev/null || true
 
-# 15. replace-never-stack (2026-08-07): a second `up` REUSES the tracked workspace instead of stacking
-# a new one; older stacked workspaces (the 6-deep crebral-health pileup) are closed. Dry mode reads
-# STATE (read-only) so we can seed the board.
+# Reuse the tracked workspace while preserving existing persona panes.
 seed "testproj\tcmuxws\t__ws__\tTAB-OLD\ntestproj\tcmuxws\t__ws__\tTAB-NEW\n"
 OUT15="$(CREW_MUX=cmux CREW_DRY_RUN=1 HOME="$TMP" PATH="$TMP/fakebin:$PATH" RELAY_PROJECT=testproj "${CREW[@]}" up codex glm </dev/null 2>&1)"
 ok "up on a tracked crew does NOT create a new workspace" '! echo "$OUT15" | grep -q "cmux: new-workspace"'
@@ -216,8 +189,8 @@ ok "up does not close the workspace it reuses" '! echo "$OUT15" | grep -q "close
 # then close it) instead of adding a duplicate.
 seed "testproj\tcmuxws\t__ws__\tTAB-NEW\ntestproj\tcmux\tcodex\tTERM-1\n"
 OUT16="$(CREW_MUX=cmux CREW_DRY_RUN=1 HOME="$TMP" PATH="$TMP/fakebin:$PATH" RELAY_PROJECT=testproj "${CREW[@]}" up codex </dev/null 2>&1)"
-ok "re-up of a live seat splits replacing its old pane" 'echo "$OUT16" | grep -q "new-split for codex (replacing TERM-1)"'
-ok "re-up closes the seat's old pane" 'echo "$OUT16" | grep -q "close-surface TERM-1"'
+ok "second seat gets a distinct persona" 'echo "$OUT16" | grep -q "new-split for codex-2"'
+ok "existing persona pane survives" '! echo "$OUT16" | grep -q "close-surface TERM-1"'
 
 # 17. prune validates cmux rows against the LIVE socket state — cmuxws rows by workspace uuid, seat
 # rows at WORKSPACE granularity (is a live workspace named trantor:<their project> still up?). NOT
@@ -242,9 +215,7 @@ ok "prune drops the dead cmux workspace row" '! has_row "WS-DEAD"'
 ok "prune keeps EVERY seat row of a live-workspace project (split seats too)" 'has_row "protest	cmux	glm	SURF-A" && has_row "protest	cmux	codex	SURF-B"'
 ok "prune drops seat rows of a project with no live workspace" '! has_row "SURF-C"'
 
-# 18. per-seat down also kills the seat's PROCESSES (anchored) — a stale pane handle must not leave an
-# invisible runner long-polling the inbox (the 2026-07-30 duplicate-row incident). Proven against real
-# decoys, dry mode so the kill is printed not executed; the anchor keeps prj-x from matching prj-xy.
+# Per-seat teardown must target only its runner, even when another project shares a directory prefix.
 node "$TMP/crew-runner.mjs" codex "$TMP/prj-x"  & DECOY_SEAT=$!
 node "$TMP/crew-runner.mjs" codex "$TMP/prj-xy" & DECOY_OTHER=$!
 sleep 0.5
@@ -256,9 +227,7 @@ ok "CREW_NO_PROC_KILL suppresses the proc sweep (test-suite guard)" '! CREW_DRY_
 kill -9 "$DECOY_SEAT" "$DECOY_OTHER" 2>/dev/null
 wait 2>/dev/null || true
 
-# 19. hub binding: the project's config PIN beats an inherited RELAY_URL (the 2026-08-14
-# split-brain: a crew launched from a local-hub seat inherited its RELAY_URL and recorded a
-# whole build onto a board nobody was looking at). CREW_HUB stays the explicit override.
+# Project hub pins take precedence over an inherited RELAY_URL.
 printf '{"url":"http://127.0.0.1:4477","hubs":{"testproj":"http://10.9.9.9:4477"}}' > "$TMP/.agent-bus/config.json"
 OUT19="$(CREW_MUX=tmux CREW_DRY_RUN=1 HOME="$TMP" RELAY_URL=http://127.0.0.1:1111 PATH="$TMP/fakebin:$PATH" RELAY_PROJECT=testproj "${CREW[@]}" up codex </dev/null 2>&1)"
 ok "seat command bakes the PINNED hub (inherited RELAY_URL loses)" 'echo "$OUT19" | grep -q "RELAY_URL=http://10.9.9.9:4477"'
@@ -270,12 +239,7 @@ OUT19C="$(CREW_MUX=tmux CREW_DRY_RUN=1 HOME="$TMP" RELAY_URL=http://127.0.0.1:22
 ok "no pin -> inherited RELAY_URL still honored (test harness contract)" 'echo "$OUT19C" | grep -q "RELAY_URL=http://127.0.0.1:2222"'
 rm -f "$TMP/.agent-bus/config.json"
 
-# 20. cross-project CLI guard (#6228): `up` from a shell badged (TRANTOR_ORCH or TRANTOR_SEAT) for a
-# DIFFERENT project than the target refuses, naming the badge, the target, and the link command — the
-# CLI belt to the hub's own 403. CREW_TEST_POLICY_LINKS is a hermetic stand-in for a real `trantor
-# policy link` (comma-separated a:b pairs) so the "already linked -> proceeds" case never depends on a
-# reachable hub. An unbadged shell, or a badge that already matches the target, is not cross-project
-# and must keep working — that's the operator's own bare `RELAY_PROJECT=x trantor up`.
+# Exercise cross-project refusal and explicit policy links without contacting a live hub (#6228).
 OUT20A="$(TRANTOR_ORCH=pr-os CREW_TEST_POLICY_LINKS="" HOME="$TMP" PATH="$TMP/fakebin:$PATH" RELAY_PROJECT=crebral-com "${CREW[@]}" up codex </dev/null 2>&1)"; RC20A=$?
 ok "badged shell into a DIFFERENT unlinked project refuses" '[ "$RC20A" != "0" ]'
 ok "refusal names the badge and the target" 'echo "$OUT20A" | grep -q "badged for .pr-os., not .crebral-com."'

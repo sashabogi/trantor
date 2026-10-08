@@ -1,3 +1,4 @@
+import { updatePersona } from "../../lib/persona.mjs";
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
@@ -89,12 +90,11 @@ export function swapRuntime(ctx, adapters, spawn) {
   let replacementPid;
   return {
     validate: options => {
-      if (options.agent !== options.from && readRows(ctx).some(row => row.project === ctx.project && row.agent === options.agent)) throw new Error(`replacement seat ${options.agent} already exists; old seat unchanged`);
       return validateReplacement(ctx, options);
     },
     async start(seat, stage) {
       const staged = { ...ctx, swap: { ...stage, agent: seat.agent, driver: seat.driver } };
-      spawn(staged, { ...seat, agent: stage.label });
+      spawn(staged, { ...seat, persona: stage.label });
     },
     async ready(stage) {
       const deadline = Date.now() + 30000;
@@ -118,10 +118,11 @@ export function swapRuntime(ctx, adapters, spawn) {
       signalProcesses(pids, "SIGKILL");
     },
     async cancel(stage) { await down(ctx, [stage.label], adapters); },
-    release(stage, agent, cursor) {
-      writeRows(ctx, readRows(ctx).map(row => row.project === ctx.project && row.agent === stage.label ? { ...row, agent } : row));
-      writeFileSync(runnerRecord(ctx, ctx.project, agent), JSON.stringify({ label: stage.label, dir: ctx.dir }));
-      writeFileSync(`${stage.path}.release`, JSON.stringify({ agent, cursor }));
+    release(stage, persona, cursor) {
+      writeRows(ctx, readRows(ctx).map(row => row.project === ctx.project && row.persona === stage.label ? { ...row, persona } : row));
+      writeFileSync(runnerRecord(ctx, ctx.project, persona), JSON.stringify({ label: stage.label, dir: ctx.dir }));
+      updatePersona({ dir: join(ctx.home, ".agent-bus"), project: ctx.project, persona, agent: stage.agent, model: stage.model });
+      writeFileSync(`${stage.path}.release`, JSON.stringify({ agent: stage.agent, persona, cursor }));
     },
   };
 }
@@ -133,23 +134,22 @@ export async function performSwap(ctx, options, runtime) {
     const seat = await runtime.validate(options);
     const label = `${options.agent}-swap-${randomUUID().slice(0, 8)}`;
     mkdirSync(ctx.seatDir, { recursive: true });
-    stage = { label, path: join(ctx.seatDir, label) };
+    stage = { label, path: join(ctx.seatDir, label), persona: options.from, agent: seat.agent, model: seat.model };
     await runtime.start(seat, stage);
     const readySession = await runtime.ready(stage);
     frozen = true;
     await runtime.freeze(options.from);
     const pending = readPending(ctx, options.from);
-    const target = options.agent === options.from ? pending : readPending(ctx, options.agent);
-    const from = `${options.from}:${ctx.project}`, to = `${options.agent}:${ctx.project}`;
+    const target = pending;
+    const from = `${options.from}:${ctx.project}`, to = from;
     const handoff = await runtime.transfer({ from, to, project: ctx.project, readySession, _op: `swap-${stage.label}`, heldAsk: pending.ask || 0, pendingIds: pending.wake.map(m => m.id) });
     transferred = true;
     result.moved = [...new Set([...pending.wake.map(m => m.id), ...handoff.moved])];
     const wake = new Map([...target.wake, ...pending.wake, ...handoff.messages].map(m => [m.id, { ...m, to }]));
-    savePending(ctx, options.agent, { ...target, wake: [...wake.values()], bcast: [...new Map([...target.bcast, ...pending.bcast].map(m => [m.id, m])).values()], ask: handoff.messages.some(m => m.re === pending.ask) ? 0 : pending.ask || target.ask, askTo: pending.askTo || target.askTo });
+    savePending(ctx, options.from, { ...target, wake: [...wake.values()], bcast: [...new Map([...target.bcast, ...pending.bcast].map(m => [m.id, m])).values()], ask: handoff.messages.some(m => m.re === pending.ask) ? 0 : pending.ask || target.ask, askTo: pending.askTo || target.askTo });
     await runtime.stop(options.from);
     frozen = false;
-    if (options.agent !== options.from) savePending(ctx, options.from, { ...pending, wake: [], bcast: [], ask: 0, askTo: "" });
-    await runtime.release(stage, options.agent, handoff.cursor);
+    await runtime.release(stage, options.from, handoff.cursor);
     return { ...result, ok: true };
   } catch (error) {
     if (!transferred) {

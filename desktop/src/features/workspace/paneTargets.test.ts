@@ -8,6 +8,13 @@ const host: Peer = { session: "MacBook-Pro-M1:trantor", online: true, status: "w
 const codex: Peer = { session: "codex:trantor", online: true, status: "idle" };
 
 describe("paneTargets", () => {
+  it("keeps persona labels and terminal keys while the agent mark changes", () => {
+    const peer: Peer = { session: "reviewer:trantor", llm: "glm", online: true };
+    const before = paneTargets([peer], null, undefined, "trantor")[0];
+    const after = paneTargets([{ ...peer, llm: "kimi" }], null, undefined, "trantor")[0];
+    expect(before).toMatchObject({ key: peer.session, label: "reviewer", agent: "reviewer", brand: "glm" });
+    expect(after).toMatchObject({ key: peer.session, label: "reviewer", agent: "reviewer", brand: "kimi" });
+  });
   it("the orchestrator row keeps the herdr pane name as its terminal key and brands from the host (0.3.99 regression)", () => {
     // 0.3.99 wrote the host session into `agent` to get the Claude mark, and the terminal pane
     // then looked up a herdr surface named "MacBook-Pro-M1:trantor" — none exists, so the

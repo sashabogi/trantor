@@ -35,7 +35,7 @@ export function paneTargets(seats: Peer[], orch: HerdrSeat | null, host: Peer | 
     key: s.session,
     label: seatName(s.session),
     agent: seatName(s.session),
-    brand: seatName(s.session),
+    brand: s.llm || seatName(s.session),
     session: s.session,
     online: !!s.online,
     lastSeen: s.lastSeen,
