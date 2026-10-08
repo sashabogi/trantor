@@ -1,4 +1,5 @@
-import { existsSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { seatProcesses, signalProcesses } from "./processes.mjs";
 import { call, listPids, run } from "./core.mjs";
 import { hostId } from "../../lib/project.mjs";
@@ -142,7 +143,21 @@ export async function down(ctx, args, adapters) {
   const removed = new Set(scoped.map(row => `${row.project}|${row.kind}|${row.agent}|${row.handle}`));
   const kept = rows.filter(row => !removed.has(`${row.project}|${row.kind}|${row.agent}|${row.handle}`) || (orchProjects.has(row.project) && ["herdrws", "cmuxws", "orch"].includes(row.kind)));
   writeRows(ctx, kept);
-  console.log(`— crew torn down (${scope})`);
+  const seatRows = scoped.filter(row => !["attach", "cmuxws", "herdrws", "orch"].includes(row.kind));
+  if (!ctx.dry) {
+    const logDir = join(dirname(ctx.statePath), "logs");
+    mkdirSync(logDir, { recursive: true });
+    for (const row of new Map(seatRows.map(row => [`${row.project}/${row.agent}`, row])).values()) {
+      appendFileSync(join(logDir, `${row.agent}-${row.project}.jsonl`),
+        `${JSON.stringify({ ts: Date.now(), agent: row.agent, project: row.project, stopped: true })}\n`);
+    }
+  }
+  if (options.agents.length) {
+    const stopped = [...new Set(seatRows.map(row => row.agent))];
+    const remaining = [...new Set(kept.filter(row => row.project === ctx.project &&
+      !["attach", "cmuxws", "herdrws", "orch"].includes(row.kind)).map(row => row.agent))];
+    console.log(`— ${stopped.join(", ") || options.agents.join(", ")} stopped${remaining.length ? ` (${remaining.join(", ")} still running)` : ""} (${scope})`);
+  } else console.log(`— crew torn down (${scope})`);
   return 0;
 }
 
