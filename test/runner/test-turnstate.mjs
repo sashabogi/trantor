@@ -13,6 +13,7 @@ import { drillEnv } from "../drill-env.mjs";
 import * as classify from "../../lib/classify-failure.mjs";
 import { redactKeys } from "../../lib/redact.mjs";
 import { parseTurnTokens } from "../../lib/turn-policy.mjs";
+import { snapshotBeforeCut } from "../../bin/cut-snapshot.mjs";
 import { newContainers, recordContainers } from "../../lib/docker-janitor.mjs";
 import { readTurnStateFile, refreshTurnLiveness, writeTurnState, writeTurnStateFile } from "../../lib/turnstate.mjs";
 import { withEnvFiles } from "../../lib/project.mjs";
@@ -52,7 +53,8 @@ async function drill(t, { maxMs, cliBody }) {
     homedir: () => work, gitOut: () => "unchanged-head", registerStatus: record,
     latestBusEventId: async () => 0, busActivitySince: async () => false,
     // #9778: runTurn snapshots containers at both ends — docker reads as absent in this sandbox.
-    listContainers: () => null, newContainers, recordContainers,
+    listContainers: () => null, newContainers, recordContainers, snapshotBeforeCut,
+    OC_DB: join(work, "absent-opencode.db"),
     banner: record, log: record, cmuxStatus: record, herdrAgent: record, killWatchdog: record,
     spawn: () => ({ unref: record }), telemetry: row => rows.push(row),
     spawnSync: (cmd, args, opts) => spawnSync(cmd, args, { ...opts, stdio: ["ignore", "pipe", "pipe"] }),

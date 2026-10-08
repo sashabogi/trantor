@@ -70,19 +70,8 @@ const hub = http.createServer((req, res) => {
 await new Promise(r => hub.listen(0, "127.0.0.1", r));
 const HUB = `http://127.0.0.1:${hub.address().port}`;
 
-// ---- harness: the REAL runner + REAL watchdog + a fake `codex` --------------------------------
-// silent: banner then nothing. busy: a line past the 200-byte liveness bar every 300ms. The
-// CLI's turn LOG lives in a SIBLING mkdtemp, outside the watched work dir — a write at turn
-// start counts as liveness until window+SLACK and races the marker to the box.
-//
-// #9832 part 4: the drill races the stall window against the box on the WALL CLOCK, and at load
-// ~40 the window fired during turn set-up (first liveness line still sitting in the pipe), so a
-// busy turn ledgered "stalled" and the run went red. The windows are now scaled to the host this
-// run actually sits on: PROBE measures node-boot-to-first-output three times and takes the max;
-// the watchdog clears 4x that (so pipe lag can never outrun it), and the box stays watchdog+12s —
-// the busy turn must outlast the window by the full contract margin at ANY host speed. On an idle
-// host PROBE is tens of ms, so both windows land on their original 2500/12000 values and every
-// assertion threshold below compiles to exactly the constant it had before.
+// Real runner and watchdog with a fake CLI. Scale windows to measured host startup latency
+// so setup delays cannot masquerade as a silent turn (#9832).
 async function hostLatencyMs() {
   let max = 0;
   for (let i = 0; i < 3; i++) {
@@ -108,14 +97,23 @@ async function drill(mode, { waitMs = 45000, untilPark = true, untilFollowUp = f
   const BUS = join(HOME, ".agent-bus");
   mkdirSync(BUS, { recursive: true });
   mkdirSync(REPO, { recursive: true });
-  execSync("git init -q", { cwd: REPO });
+  execSync("git init -q -b seat/drill", { cwd: REPO });
+  execSync("git config user.name drill", { cwd: REPO });
+  execSync("git config user.email drill@example.test", { cwd: REPO });
+  writeFileSync(join(REPO, "seed"), "seed\n");
+  execSync("git add -A && git commit -qm init", { cwd: REPO });
   const fakebin = join(root, "bin"); mkdirSync(fakebin, { recursive: true });
   const LOGF = join(scratch, "turns.log");
   const PROJ = "tt-stall";
-  const body = mode === "silent"
+  const body = ["silent", "dirty", "backstop"].includes(mode)
     ? `echo "OpenAI Codex v2.3.4"
 echo "workdir: $PWD"
 echo "model: qwen3-specimen"
+if [ "${mode}" = "dirty" ] || [ "${mode}" = "backstop" ]; then echo "preserved work" > draft.txt; fi
+if [ "${mode}" = "backstop" ]; then
+  sleep 0.5
+  kill -TERM "$(ps -o pgid= -p $$ | tr -d ' ')"
+fi
 /bin/sleep 30
 `
     : `echo "OpenAI Codex v2.3.4"
@@ -157,7 +155,7 @@ ${body}
   const turns = read(LOGF).split("===TURN===").filter(t => t.trim());
   const rows = read(JSONL).split("\n").filter(Boolean).map(l => { try { return JSON.parse(l); } catch { return {}; } });
   return { wakeTurns: turns.filter(t => t.includes("NEW BUS MESSAGE")), rows, handed,
-    sends: [...sends], pendingLeft: existsSync(PENDF), PENDF };
+    repo: join(BUS, "worktrees", PROJ, "codex"), sends: [...sends], pendingLeft: existsSync(PENDF), PENDF };
 }
 
 // ---- drill 1: a CLI that goes SILENT is cut at the window, never at the box --------------------
@@ -223,6 +221,21 @@ console.log("\n## a busy turn is still a box cut");
     cutRow && cutRow.verdict);
 }
 
+console.log("\n## a real stall cut preserves a dirty seat branch");
+{
+  const r = await drill("dirty");
+  const subject = execSync("git log -1 --format=%s", { cwd: r.repo, encoding: "utf8" }).trim();
+  ok("#10497: shell snapshots dirty work before the stall sweep", subject === "wip: cut at stall, 1 files", subject);
+  ok("#10497: cut work survives in the commit", execSync("git show HEAD:draft.txt", { cwd: r.repo, encoding: "utf8" }).trim() === "preserved work");
+  ok("#10497: snapshot does not turn the stall into delivery", r.rows.some(row => row.outcome === "stalled"));
+}
+console.log("\n## the timeout signal snapshots before its sweep");
+{
+  const r = await drill("backstop");
+  const subject = execSync("git log -1 --format=%s", { cwd: r.repo, encoding: "utf8" }).trim();
+  ok("#10497: timeout signal saves dirty work", subject === "wip: cut at box, 1 files", subject);
+  ok("#10497: timeout signal is still ledgered as a cut", r.rows.some(row => row.outcome === "cut"));
+}
 hub.close();
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

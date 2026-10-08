@@ -26,6 +26,7 @@ import {
   senderProjectOf, isLinkedProject, stateSkipReason, isMessageCardTitle, OPEN_CARD_STATUSES,
   CUT_CHAIN_PARK_MIN, cutChainEvidence, isBoundedPark, askDuringTurn, askedVerdict,
 } from "../lib/turn-policy.mjs";
+import { snapshotBeforeCut } from "./cut-snapshot.mjs";
 import { ocTurnUsage, dshTurnUsage, usageTotal } from "../lib/turn-usage.mjs";
 import { listContainers, newContainers, recordContainers, statePathFor as dockerStatePathFor, sweep as dockerSweep } from "../lib/docker-janitor.mjs";
 import {
@@ -286,7 +287,7 @@ const EFFORT_FLAG = EFFORT ? cliEffortFlag(DRIVER, EFFORT) : { flag: "", text: "
 
 // RUNNER_RULES / RUNNER_KICKOFF env overrides: the runner is also the substrate for non-crew
 // always-on seats (the fleet DUTY agent, bin/duty.mjs) whose doctrine is not "work your card".
-const RULES = process.env.RUNNER_RULES || `Rules: you are ${SESSION} on the trantor crew. Before starting a card, read YOUR card: relay_board with card:<id> (the card, its deps, its notes, and the last five done cards whose title shares a word); never the whole board. If your wake names no card id (or cites only a message-card), make relay_board with mine:true your FIRST call — it lists the cards assigned to you (doing/testing/todo, newest first, full card shape); work your newest one (#7763). Work your assigned file(s), report on the bus (relay_send, <280 chars), move your Kanban card as you go with a NOTE saying what you did (doing -> testing, then STOP: you never close your own card to done — the orchestrator runs the card's drill on the built artifact and closes it, and the hub refuses a move to done on a card with no drill line anyway; in 'testing' run YOUR OWN test file — never the full npm test, suites collide across seats — plus \`node bin/slop-gate.mjs\` when the repo has one: it lints ONLY your changed files against the anti-slop rules, and a card must not reach testing with slop-gate failing; use 'failed' + a report if anything breaks). If your work starts containers or a dev server (\`supabase start\`, \`docker run\`, a watch process), stop them before moving your card to testing and name them in the note — the runner also stops containers it saw your turn create when the card closes, but the first responsibility is yours (#9778). If a contract omits a fact you cannot proceed without, ASK — never invent the value: relay_ask(<card>, <question>) blocks the card with your question, keeps the turn owed (no park, no failure), and resumes you when the assigner's answer lands; an invented value that reads as reasoned is the worst outcome this crew ships (#7756). If you need something from another session, message THAT SESSION (relay_peers to find its id, relay_send to reach it) — never ask the human to pass it along; carrying messages between agents is the job this bus exists to remove. When your work for THIS message is finished, END YOUR TURN — do NOT park, do NOT loop relay_wait; the runner waits for you and will wake you with the next message. Path discipline: build/test from your worktree root ${TURN_DIR} with absolute paths or --manifest-path/--prefix instead of cd-ing into subdirs, and put anything that must land outside the repo under ${TURN_DIR}/.agent-bus-out/ (gitignored) — never ~/.agent-bus. Realigning your seat branch after the orchestrator harvested your commits is \`trantor sync\` run from your worktree: it reads the harvest receipts and refuses when an unharvested commit would be lost, so never reset or rebase onto main by hand. A contract's \`base: <sha>\` line is the integration head: start your seat branch at that sha (\`git reset --hard <sha>\` on the fresh branch), never at origin/main, which trails the orchestrator's unpushed integration commits; the object is already here as the ref \`main\`. If \`git cat-file -e <sha>\` fails, say \`cannot resolve base <sha>\` on the bus and move the card to blocked instead of reasoning from origin/main. Every testing/done note names the sha you verified against as \`verified at <sha>\`; a note without it is flagged HOLLOW. Cross-project action is a breach: never \`trantor up\` a crew, register a seat, or send a card/contract into a project other than ${PROJ} unless the operator ran \`trantor policy link ${PROJ} <other> --reason "<why>"\` first — the hub, the CLI and this runner all refuse it mechanically, so ask the operator to link the projects instead of routing around the refusal.`;
+const RULES = process.env.RUNNER_RULES || `Rules: you are ${SESSION} on the trantor crew. Before starting a card, read YOUR card: relay_board with card:<id> (the card, its deps, its notes, and the last five done cards whose title shares a word); never the whole board. If your wake names no card id (or cites only a message-card), make relay_board with mine:true your FIRST call — it lists the cards assigned to you (doing/testing/todo, newest first, full card shape); work your newest one (#7763). After long read-only recon, commit a WIP note with findings so the turn leaves evidence. Work your assigned file(s), report on the bus (relay_send, <280 chars), move your Kanban card as you go with a NOTE saying what you did (doing -> testing, then STOP: you never close your own card to done — the orchestrator runs the card's drill on the built artifact and closes it, and the hub refuses a move to done on a card with no drill line anyway; in 'testing' run YOUR OWN test file — never the full npm test, suites collide across seats — plus \`node bin/slop-gate.mjs\` when the repo has one: it lints ONLY your changed files against the anti-slop rules, and a card must not reach testing with slop-gate failing; use 'failed' + a report if anything breaks). If your work starts containers or a dev server (\`supabase start\`, \`docker run\`, a watch process), stop them before moving your card to testing and name them in the note — the runner also stops containers it saw your turn create when the card closes, but the first responsibility is yours (#9778). If a contract omits a fact you cannot proceed without, ASK — never invent the value: relay_ask(<card>, <question>) blocks the card with your question, keeps the turn owed (no park, no failure), and resumes you when the assigner's answer lands; an invented value that reads as reasoned is the worst outcome this crew ships (#7756). If you need something from another session, message THAT SESSION (relay_peers to find its id, relay_send to reach it) — never ask the human to pass it along; carrying messages between agents is the job this bus exists to remove. When your work for THIS message is finished, END YOUR TURN — do NOT park, do NOT loop relay_wait; the runner waits for you and will wake you with the next message. Path discipline: build/test from your worktree root ${TURN_DIR} with absolute paths or --manifest-path/--prefix instead of cd-ing into subdirs, and put anything that must land outside the repo under ${TURN_DIR}/.agent-bus-out/ (gitignored) — never ~/.agent-bus. Realigning your seat branch after the orchestrator harvested your commits is \`trantor sync\` run from your worktree: it reads the harvest receipts and refuses when an unharvested commit would be lost, so never reset or rebase onto main by hand. A contract's \`base: <sha>\` line is the integration head: start your seat branch at that sha (\`git reset --hard <sha>\` on the fresh branch), never at origin/main, which trails the orchestrator's unpushed integration commits; the object is already here as the ref \`main\`. If \`git cat-file -e <sha>\` fails, say \`cannot resolve base <sha>\` on the bus and move the card to blocked instead of reasoning from origin/main. Every testing/done note names the sha you verified against as \`verified at <sha>\`; a note without it is flagged HOLLOW. Cross-project action is a breach: never \`trantor up\` a crew, register a seat, or send a card/contract into a project other than ${PROJ} unless the operator ran \`trantor policy link ${PROJ} <other> --reason "<why>"\` first — the hub, the CLI and this runner all refuse it mechanically, so ask the operator to link the projects instead of routing around the refusal.`;
 
 // ---- the pulse --------------------------------------------------------------
 // RUNNER_PULSE_MS re-runs an orchestrator seat's mission note on a cadence when the bus is silent;
@@ -862,7 +863,11 @@ async function runTurn(prompt, isFirst, trigger = "kickoff", opts = {}) {
   const DRAINF = join(homedir(), ".agent-bus", `turndrain-${AGENT}-${PROJ}`);
   try { unlinkSync(DRAINF); } catch {}
   try {
-    writeFileSync(STAMPF, JSON.stringify({ turn: TURN, startedAt: Date.now(), runner: RUNNER_ID, box: boxPlan }));
+    const activity = cli.pinned || ["kimi", "claude"].includes(AGENT) ? {
+      kind: cli.pinned ? "opencode" : AGENT, sid, db: OC_DB, workDir: TURN_DIR,
+      home: homedir(), startedAt: t0, transcriptDir: TRANSCRIPT_DIR,
+    } : undefined;
+    writeFileSync(STAMPF, JSON.stringify({ turn: TURN, startedAt: Date.now(), runner: RUNNER_ID, box: boxPlan, activity }));
     const wd = spawn(process.execPath, [join(import.meta.dirname, "turn-watchdog.mjs"), STAMPF, ERRF, String(WD_MS), SESSION, PROJ, HUB, TRANSCRIPT_DIR, TURN_DIR,
       // #7752: the stall marker only exists when a box does — with no box there is no sweep to
       // end the turn, so the watchdog stays report-only (reporting is the whole job, boxless).
@@ -880,6 +885,8 @@ async function runTurn(prompt, isFirst, trigger = "kickoff", opts = {}) {
   // #7752: the box POLLS instead of one long sleep — the watchdog's stall marker (a silent
   // turn) breaks the loop at the stall window, the deadline breaks it at the full box, and only
   // the deadline path writes CUTF so the runner can tell the two cuts apart.
+  const shellArg = value => "'" + String(value).replaceAll("'", "'\"'\"'") + "'";
+  const snapshotCmd = [process.execPath, join(import.meta.dirname, "cut-snapshot.mjs"), TURN_DIR].map(shellArg).join(" ");
   const box = TURN_MAX_MS ? `
 ${sweep}
 ( trap 'kill "$sleeppid" 2>/dev/null; wait "$sleeppid" 2>/dev/null; exit 0' TERM
@@ -892,12 +899,25 @@ ${sweep}
     wait "$sleeppid"
   done
   kill -0 $job 2>/dev/null || exit 0
+  reason=stall
+  [ -f "${STALLF}" ] || reason=box
+  ${snapshotCmd} "$reason" 2>> ${ERRF}
   [ -f "${STALLF}" ] || : > ${CUTF}
   sweep $job
 ) >/dev/null 2>&1 & boxpid=$!` : "\nboxpid=";
+  const backstop = TURN_MAX_MS ? `
+${sweep}
+backstop() {
+  [ -n "$boxpid" ] && kill $boxpid 2>/dev/null
+  ${snapshotCmd} box 2>> ${ERRF}
+  : > ${CUTF}
+  sweep $job
+  exit 137
+}
+trap backstop TERM` : "";
   const shell = `set -o pipefail
 { ${inner} ; } 2> >(${SCRUB} --tee2 ${ERRF}; : >> "${DRAINF}") &
-job=$!${box}
+job=$!${box}${backstop}
 wait $job; turn_exit=$?
 [ -n "$boxpid" ] && kill $boxpid 2>/dev/null
 wait
@@ -919,10 +939,9 @@ exit $turn_exit`;
       TRANTOR_TRANSCRIPT_DIR: TRANSCRIPT_DIR },
     maxBuffer: 16 * 1024 * 1024,
   };
-  // A BACKSTOP only, deliberately later than the shell's own box: if bash itself wedges, node
-  // still ends the turn. When the in-shell box works — the normal path — this never fires, which
-  // is the point: the shell kills while the tree is still walkable, node cannot.
-  if (TURN_MAX_MS) { spawnOpts.timeout = (TURN_EXTENSIONS_MAX ? TURN_CEILING_MS : TURN_MAX_MS) + 30000; spawnOpts.killSignal = "SIGKILL"; }
+  // The timeout signals the shell to snapshot before sweeping, just like the normal box.
+  // Its 30s margin keeps it out of the normal cut path.
+  if (TURN_MAX_MS) { spawnOpts.timeout = (TURN_EXTENSIONS_MAX ? TURN_CEILING_MS : TURN_MAX_MS) + 30000; spawnOpts.killSignal = "SIGTERM"; }
   const r = spawnSync("/bin/bash", ["-c", shell], spawnOpts);
   // The shell's box leaves the marker; the backstop leaves an ETIMEDOUT. Either way the turn was
   // cut, not merely failed. A stall marker (#7752) outranks the box marker: a turn silent for
@@ -947,6 +966,8 @@ exit $turn_exit`;
   killWatchdog();                        // #6206: turn over — the watchdog dies NOW, it does not sleep on
   try { unlinkSync(STAMPF); } catch {}   // disarm any survivor: the stamp is gone
   if (cut) {
+    const saved = snapshotBeforeCut(TURN_DIR, stallCut ? "stall" : "box");
+    if (!saved.ok) log(`cut WIP snapshot failed: ${saved.error}`);
     // Belt and braces after the shell's descendant sweep: anything still sharing the turn's group.
     if (r.pid) { try { process.kill(-r.pid, "SIGKILL"); } catch {} }
     try { unlinkSync(CUTF); } catch {}

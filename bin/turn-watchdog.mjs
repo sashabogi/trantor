@@ -5,6 +5,7 @@
 //   node bin/turn-watchdog.mjs <stampFile> <errFile> <windowMs> <session> <project> <hubUrl> <transcriptDir> <workDir> [stallFile] [turnStateFile]
 import { readFileSync, writeFileSync, appendFileSync, statSync, readdirSync } from "node:fs";
 import { join } from "node:path";
+import { sessionActivityReader } from "../lib/session-liveness.mjs";
 import { hostId } from "../lib/project.mjs";
 import { signedPost } from "../hooks/lib/api.mjs";
 import { refreshTurnLiveness } from "../lib/turnstate.mjs";
@@ -41,6 +42,7 @@ function newestMtime(dir) {
 
 const armed = readStamp();
 if (!armed) process.exit(0);
+const sessionActivity = armed.activity ? sessionActivityReader(armed.activity) : () => 0;
 // The runner instance that armed us (pid + boot ts, so a recycled pid cannot impersonate it).
 // A stamp without a runner id (only possible mid-upgrade) skips the liveness check; the id
 // match in the loop still guards it.
@@ -56,6 +58,7 @@ const describeLast = (b) => {
   const parts = [];
   if (b.wk) parts.push(`worktree ${ago(b.wk)}`);
   if (b.tr) parts.push(`transcript ${ago(b.tr)}`);
+  if (b.cli) parts.push(`CLI session ${ago(b.cli)}`);
   return parts.length ? parts.join(", ") : "nothing";
 };
 let baseErr = errSize();
@@ -109,24 +112,25 @@ if (stallFile) {
     const size = errSize();
     if (size > baseErr + 200) { baseErr = size; lastErrAt = now; }   // new bytes: alive
     const freshCut = Math.max(armedAt, now - windowMs - SLACK);
-    const tr = transcriptDir ? newestMtime(transcriptDir) : 0;
+    const tr = transcriptDir && !armed.activity ? newestMtime(transcriptDir) : 0;
+    const cli = sessionActivity();
     const wk = workDir ? newestMtime(workDir) : 0;
-    reportLiveness(now, tr);
-    if (tr > freshCut || wk > freshCut || now - lastErrAt < windowMs) {           // producing work: alive
+    reportLiveness(now, Math.max(tr, cli));
+    if (tr > freshCut || cli > freshCut || wk > freshCut || now - lastErrAt < windowMs) {           // producing work: alive
       if (box && extensions < Number(box.extensionsMax) && now + poll + SLACK >= deadline) {
         extensions++;
         deadline += Number(box.extendMs);
         try { writeFileSync(box.deadlineFile, String(Math.floor(deadline / 1000))); } catch {}
         try { appendFileSync(box.extFile, JSON.stringify({ n: extensions, at: now, until: deadline }) + "\n"); } catch {}
         const card = Number(box.card) > 0 ? ` on #${box.card}` : "";
-        await tellExtension(`⏳ ${session} turn extended +${secsOrMins(Number(box.extendMs))} (${extensions}/${box.extensionsMax})${card} — alive: ${describeLast({ tr, wk })}${now - lastErrAt < windowMs ? ", stderr moving" : ""}; box now ${secsOrMins(deadline - armedAt)} of a ${secsOrMins(Number(box.ceilingMs))} ceiling`);
+        await tellExtension(`⏳ ${session} turn extended +${secsOrMins(Number(box.extendMs))} (${extensions}/${box.extensionsMax})${card} — alive: ${describeLast({ tr, wk, cli })}${now - lastErrAt < windowMs ? ", stderr moving" : ""}; box now ${secsOrMins(deadline - armedAt)} of a ${secsOrMins(Number(box.ceilingMs))} ceiling`);
       }
       continue;
     }
     try { writeFileSync(stallFile, ""); } catch {}
     const mins = Math.round((now - armedAt) / 60000);
     const orch = `${hostId()}:${project}`;
-    const text = `⏱ ${session} turn STALLED — ${mins}m with no activity (turn ${s.turn}; last seen: ${describeLast({ tr, wk })}, stderr ${baseErr > 0 ? `${baseErr}B` : "silent"}); ending the turn at the stall window, not the box.`;
+    const text = `⏱ ${session} turn STALLED — ${mins}m with no activity (turn ${s.turn}; last seen: ${describeLast({ tr, wk, cli })}, stderr ${baseErr > 0 ? `${baseErr}B` : "silent"}); ending the turn at the stall window, not the box.`;
     // Direct = wake. The foreman first; if this seat IS the foreman's own runner, say it to all.
     const to = orch === session ? "all" : orch;
     try { await signedPost(`${hub}/send`, { from: session, to, text, project }, { session }); } catch {}
@@ -144,13 +148,14 @@ for (;;) {
   // count (they predate arm), and absolute freshness cannot drift the way a probe-to-probe
   // delta does when the seat writes coarsely or the machine loads (the +1130ms false alarm).
   const freshCut = Math.max(armedAt, Date.now() - windowMs - SLACK);
-  const tr = transcriptDir ? newestMtime(transcriptDir) : 0;
+  const tr = transcriptDir && !armed.activity ? newestMtime(transcriptDir) : 0;
+  const cli = sessionActivity();
   const wk = workDir ? newestMtime(workDir) : 0;
-  reportLiveness(Date.now(), tr);
-  if (errSize() > baseErr + 200 || tr > freshCut || wk > freshCut) continue;   // producing work: alive, re-arm
+  reportLiveness(Date.now(), Math.max(tr, cli));
+  if (errSize() > baseErr + 200 || tr > freshCut || cli > freshCut || wk > freshCut) continue;   // producing work: alive, re-arm
   const mins = Math.round((Date.now() - armedAt) / 60000);
   const orch = `${hostId()}:${project}`;
-  const text = `⏱ ${session} turn STALLED — running ${mins}m with no activity (turn ${s.turn}; last seen: ${describeLast({ tr, wk })}, stderr ${baseErr > 0 ? `${baseErr}B` : "silent"}). Not killed; check its pane, or \`trantor swap\`.`;
+  const text = `⏱ ${session} turn STALLED — running ${mins}m with no activity (turn ${s.turn}; last seen: ${describeLast({ tr, wk, cli })}, stderr ${baseErr > 0 ? `${baseErr}B` : "silent"}). Not killed; check its pane, or \`trantor swap\`.`;
   // Direct = wake. The foreman first; if this seat IS the foreman's own runner, say it to all.
   const to = orch === session ? "all" : orch;
   try { await signedPost(`${hub}/send`, { from: session, to, text, project }, { session }); } catch {}
