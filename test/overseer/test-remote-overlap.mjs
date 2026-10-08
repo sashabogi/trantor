@@ -238,19 +238,28 @@ await test("two PRs on one file are TWO episodes: distinct collisionIdentity per
   assert.ok(ids[0].includes("acme/widgets#7") && ids.some((i) => i.includes("acme/widgets#8")));
 });
 
-await test("sessions are PROJECT-scoped: same project+file joins across checkouts, other projects never do", () => {
+await test("recipients are EVIDENCE-MATCHED: same project+file+repo/PR joins, bare co-claimant does not", () => {
   const withEvidence = claim("glm:trantor", "trantor", "src/x.ts", { gitRoot: "/wt/glm", remote: [remote7()] });
-  // same project, same file, different checkout: joins the episode's sessions (project is the scope)
-  const sameProjectOtherCheckout = claim("codex:trantor", "trantor", "src/x.ts", { gitRoot: "/wt/codex", remote: [] });
-  const collisions = detectCollisions({ now: NOW, claims: [withEvidence, sameProjectOtherCheckout] })
+  // codex's hub case: a second checkout in the same project claiming the same path WITHOUT the
+  // evidence must NOT be warned about a PR its repo does not have
+  const noEvidence = claim("codex:trantor", "trantor", "src/x.ts", { gitRoot: "/wt/codex", remote: [] });
+  const collisions = detectCollisions({ now: NOW, claims: [withEvidence, noEvidence] })
     .filter((c) => c.kind === "remote-overlap");
   assert.equal(collisions.length, 1, "a claim with no remote raises no episode of its own");
-  assert.deepEqual(collisions[0].sessions, ["codex:trantor", "glm:trantor"]);
+  assert.deepEqual(collisions[0].sessions, ["glm:trantor"], "the unevidenced checkout is not a recipient");
+  // a second checkout whose OWN client saw the SAME repo+PR is a real participant
+  const sameEvidence = claim("kimi:trantor", "trantor", "src/x.ts", { gitRoot: "/wt/kimi", remote: [remote7()] });
+  const shared = detectCollisions({ now: NOW, claims: [withEvidence, sameEvidence] })
+    .filter((c) => c.kind === "remote-overlap");
+  assert.equal(shared.length, 1, "same evidence in two checkouts is ONE episode per (project, repo, pr, file)");
+  assert.deepEqual(shared[0].sessions, ["glm:trantor", "kimi:trantor"]);
   // a DIFFERENT project claiming the same path stays out of sessions entirely
-  const otherProject = claim("kimi:elsewhere", "elsewhere", "src/x.ts", { gitRoot: "/wt/glm", remote: [] });
+  const otherProject = claim("kimi:elsewhere", "elsewhere", "src/x.ts", { gitRoot: "/wt/glm", remote: [remote7()] });
   const withElsewhere = detectCollisions({ now: NOW, claims: [withEvidence, otherProject] })
     .filter((c) => c.kind === "remote-overlap");
-  assert.deepEqual(withElsewhere[0].sessions, ["glm:trantor"], "another project is not a participant");
+  assert.equal(withElsewhere.length, 2, "different project: separate episode, never merged");
+  assert.deepEqual(withElsewhere.find((c) => c.project === "trantor").sessions, ["glm:trantor"],
+    "another project is not a participant");
 });
 
 await test("same gitRoot, different projects: TWO episodes — identity and sessions stay project-scoped", () => {
@@ -268,7 +277,7 @@ await test("same gitRoot, different projects: TWO episodes — identity and sess
   assert.deepEqual(collisions.find((c) => c.project === "beta").sessions, ["kimi:beta"]);
 });
 
-await test("two repos on one project+file: two episodes by repo#pr, sessions project-scoped", () => {
+await test("two repos on one project+file: two episodes by repo#pr, sessions evidence-matched", () => {
   const withEvidence = claim("glm:trantor", "trantor", "src/x.ts", { gitRoot: "/wt/glm", remote: [remote7()] });
   const otherRepo = claim("kimi:trantor", "trantor", "src/x.ts", {
     gitRoot: "/wt/kimi",
@@ -280,8 +289,8 @@ await test("two repos on one project+file: two episodes by repo#pr, sessions pro
   const glmEpisode = mixed.find((c) => c.repo === "acme/widgets");
   const kimiEpisode = mixed.find((c) => c.repo === "acme/other");
   assert.notEqual(collisionIdentity(glmEpisode), collisionIdentity(kimiEpisode), "repo#pr separates the episodes");
-  assert.deepEqual(glmEpisode.sessions, ["glm:trantor", "kimi:trantor"], "same project+file: both sessions, per project scope");
-  assert.deepEqual(kimiEpisode.sessions, ["glm:trantor", "kimi:trantor"]);
+  assert.deepEqual(glmEpisode.sessions, ["glm:trantor"], "kimi's acme/other evidence does not join acme/widgets's episode");
+  assert.deepEqual(kimiEpisode.sessions, ["kimi:trantor"], "glm's acme/widgets evidence does not join acme/other's episode");
 });
 
 await test("closed PR ends the episode; stale claims and non-claimed files stay silent", () => {
