@@ -1,11 +1,17 @@
 #!/usr/bin/env node
 import { relative, resolve } from "node:path";
 import { relayUrl, sessionContext, signedPost } from "./lib/api.mjs";
+import { readOverseerLevel, writeOverseerLevel } from "./lib/overseer-level-cache.mjs";
 
 function deny(reason) {
   process.stdout.write(JSON.stringify({ hookSpecificOutput: {
     hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: reason,
   } }));
+}
+
+function unavailable() {
+  process.stderr.write("trantor: file hold could not be checked; allowing this edit.\n");
+  process.stdout.write("{}");
 }
 
 try {
@@ -16,17 +22,26 @@ try {
   const ctx = sessionContext(input.cwd);
   if (!path || !ctx.project) process.stdout.write("{}");
   else {
+    const cache = { project: ctx.project, hub: relayUrl(ctx.project) };
+    const level = readOverseerLevel(cache);
+    if (level !== null && level < 3) {
+      process.stdout.write("{}");
+      process.exit(0);
+    }
     const absolute = resolve(ctx.projectDir, path);
     const rel = relative(ctx.projectDir, absolute);
     const file = !rel.startsWith("..") ? rel : absolute;
     // Register and check atomically: parallel PreToolUse hooks cannot race the first claim.
-    const r = await signedPost(`${relayUrl(ctx.project)}/hold/check`,
+    const r = await signedPost(`${cache.hub}/hold/check`,
       { project: ctx.project, file, session: ctx.session },
       { timeoutMs: 2500, session: ctx.session });
-    if (!r.ok || !r.json?.ok) deny("Cannot check file holds: hub unavailable. Retry when the hub is reachable.");
-    else if (r.json.hold) deny(r.json.hold.reason);
-    else process.stdout.write("{}");
+    if (!r.ok || !r.json?.ok) unavailable();
+    else {
+      writeOverseerLevel(cache, r.json.level);
+      if (r.json.hold) deny(r.json.hold.reason);
+      else process.stdout.write("{}");
+    }
   }
 } catch {
-  deny("Cannot check file holds: request failed. Retry when the hub is reachable.");
+  unavailable();
 }

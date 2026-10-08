@@ -1,5 +1,7 @@
 #!/usr/bin/env node
 import assert from "node:assert/strict";
+import { createServer } from "node:http";
+import { writeOverseerLevel } from "../../hooks/lib/overseer-level-cache.mjs";
 import { spawn } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { resolve, join } from "node:path";
@@ -88,6 +90,25 @@ try {
   result = await run("hooks/file-claim.mjs", [], env, JSON.stringify({ cwd: root, tool_name: "Edit", tool_input: { file_path: join(root, "same.ts") } }));
   check(result.out === "{}", "real claim hook stays silent at Observe");
 } finally { await hub.stop(); }
+
+const outageBus = join(dir, "outage-bus");
+let requests = 0;
+const unavailableHub = createServer((_req, res) => { requests++; res.writeHead(503); res.end("{}"); });
+await new Promise(resolve => unavailableHub.listen(0, "127.0.0.1", resolve));
+try {
+  const url = `http://127.0.0.1:${unavailableHub.address().port}`;
+  const cache = { project: "alpha", hub: url, busDir: outageBus };
+  const env = drillEnv({ RELAY_URL: url, RELAY_PROJECT: "alpha", RELAY_SESSION: "later:alpha", AGENT_BUS_DIR: outageBus });
+  const input = JSON.stringify({ cwd: root, tool_name: "Edit", tool_input: { file_path: join(root, "offline.ts") } });
+  for (const level of [1, 2]) {
+    writeOverseerLevel(cache, level);
+    const result = await run("hooks/file-hold.mjs", [], env, input);
+    check(result.out === "{}" && result.err === "" && requests === 0, `cached level ${level} allows without any network request during outage`);
+  }
+  writeOverseerLevel(cache, 3);
+  const result = await run("hooks/file-hold.mjs", [], env, input);
+  check(result.out === "{}" && result.err.includes("hold could not be checked") && requests > 0, "Gate fails open with a one-line notice during hub outage");
+} finally { await new Promise(resolve => unavailableHub.close(resolve)); }
 
 try {
   for (const level of [1, 2, 3]) {

@@ -7,6 +7,7 @@ import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { join, relative, resolve } from "node:path";
 import { homedir } from "node:os";
 import { relayUrl, sessionContext, signedPost } from "./lib/api.mjs";
+import { writeOverseerLevel } from "./lib/overseer-level-cache.mjs";
 
 const FETCH_TIMEOUT_MS = Number(process.env.RELAY_CLAIM_TIMEOUT_MS || 900);
 const RECLAIM_MS = Number(process.env.RELAY_RECLAIM_MS || 60 * 1000);
@@ -58,6 +59,8 @@ try {
     { timeoutMs: FETCH_TIMEOUT_MS, session: ctx.session });
 
   try { mkdirSync(stampDir, { recursive: true }); writeFileSync(stamp, String(Date.now())); } catch {}
+
+  if (r.ok) writeOverseerLevel({ project: ctx.project, hub: relayUrl(ctx.project) }, r.json?.level);
 
   const conflicts = r.ok ? r.json?.conflicts ?? [] : [];
   if (Number(r.json?.level || 1) < 2 || !conflicts.length) allow();
