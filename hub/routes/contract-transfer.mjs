@@ -22,6 +22,10 @@ export async function routeContractTransfer({ req, res, q, P, auth, ctx }) {
   if (signer && !signer.endsWith(`:${project}`) && auth.identity.kind !== "human") {
     return ctx.json(res, 403, { error: "swap must be requested from its project" });
   }
+  // #11221: a seat may never move another seat's work; only the orchestrator or a human swaps.
+  if (signer && auth.identity.kind !== "human" && ctx.state.peers[signer]?.kind !== "orch") {
+    return ctx.json(res, 403, { error: "only the project's orchestrator or a human can swap seats" });
+  }
   const messages = heldMessages(ctx, from, project, b.pendingIds || []);
   if (req.method === "GET") return ctx.json(res, 200, { ok: true, messages });
   if (!ctx.state.peers[b.readySession]?.lastSeen || ctx.state.peers[b.readySession].project !== project) {
