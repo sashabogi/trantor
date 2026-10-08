@@ -139,7 +139,7 @@ export function gridColumns(size) {
 // flag documented there finally arms the seat that reads it.
 const FORWARDED_ENV = STATE_FLAGS;
 
-export function runnerCommand(ctx, agent, model = "", effort = null) {
+export function runnerCommand(ctx, agent, model = "", effort = null, persona = agent) {
   const forwarded = FORWARDED_ENV
     .filter((name) => process.env[name])
     .map((name) => `${name}=${shellQuote(process.env[name])} `)
@@ -147,8 +147,9 @@ export function runnerCommand(ctx, agent, model = "", effort = null) {
   // #7777: the launcher resolved the catalog's per-difficulty effort for this seat; the runner
   // reads CREW_EFFORT, applies what the CLI accepts and logs the one-line summary.
   const swapEnv = ctx.swap ? ` CREW_SWAP_STAGE=${shellQuote(ctx.swap.path)} CREW_SWAP_LABEL=${shellQuote(ctx.swap.label)} CREW_SWAP_AGENT=${shellQuote(ctx.swap.agent)} CREW_SWAP_DRIVER=${shellQuote(ctx.swap.driver || "")}` : "";
+  const personaEnv = ` CREW_AGENT=${shellQuote(agent)} CREW_PERSONA=${shellQuote(ctx.swap?.persona || persona)}`;
   const effortEnv = effort ? ` CREW_EFFORT=${shellQuote(JSON.stringify(effort))}` : "";
-  return `cd ${shellQuote(ctx.dir)} && ${forwarded}CREW_MODEL=${shellQuote(model)}${effortEnv}${swapEnv} RELAY_PROJECT=${shellQuote(ctx.project)} RELAY_URL=${shellQuote(ctx.hub)} node ${shellQuote(join(ROOT, "bin/crew-runner.mjs"))} ${shellQuote(agent)} ${shellQuote(ctx.dir)}`;
+  return `cd ${shellQuote(ctx.dir)} && ${forwarded}CREW_MODEL=${shellQuote(model)}${effortEnv}${swapEnv}${personaEnv} RELAY_PROJECT=${shellQuote(ctx.project)} RELAY_URL=${shellQuote(ctx.hub)} node ${shellQuote(join(ROOT, "bin/crew-runner.mjs"))} ${shellQuote(persona)} ${shellQuote(ctx.dir)}`;
 }
 
 export function listPids(pattern) {

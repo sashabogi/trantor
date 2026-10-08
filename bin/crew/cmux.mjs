@@ -110,13 +110,13 @@ export function spawnCmux(ctx, specs, resolve, prune) {
   for (let index = 0; index < specs.length; index += 1) {
     const seat = resolve(specs[index]);
     if (!seat) continue;
-    const launcher = seatLauncher(ctx, seat.agent, runnerCommand(ctx, seat.agent, seat.model, seat.effort));
-    const old = reuse ? readRows(ctx).filter(row => row.project === ctx.project && row.kind === "cmux" && row.agent === seat.agent).at(-1)?.handle || "" : "";
+    const launcher = seatLauncher(ctx, (seat.persona || seat.agent), runnerCommand(ctx, seat.agent, seat.model, seat.effort, seat.persona));
+    const old = reuse ? readRows(ctx).filter(row => row.project === ctx.project && row.kind === "cmux" && row.persona === (seat.persona || seat.agent)).at(-1)?.handle || "" : "";
     let pane = "";
     if (reuse) {
-      console.log(ctx.dry ? `[dry] cmux: reuse workspace ${workspace} — new-split for ${seat.agent}${old ? ` (replacing ${old})` : ""}` : `  → reusing workspace ${workspace}`);
+      console.log(ctx.dry ? `[dry] cmux: reuse workspace ${workspace} — new-split for ${(seat.persona || seat.agent)}${old ? ` (replacing ${old})` : ""}` : `  → reusing workspace ${workspace}`);
       pane = ctx.dry ? `%DRYT${index}` : split(ctx, workspace, "right", old || panes.at(-1) || "", launcher);
-      if (old) { closePane(ctx, old); dropState(ctx, ctx.project, "cmux", seat.agent); }
+      if (old) { closePane(ctx, old); dropState(ctx, ctx.project, "cmux", (seat.persona || seat.agent)); }
     } else if (index === 0) {
       if (ctx.dry) {
         console.log(`[dry] cmux: new-workspace (cwd ${ctx.dir}) --command 'bash ${launcher}' → rename 'trantor:${ctx.project}'`);
@@ -133,8 +133,8 @@ export function spawnCmux(ctx, specs, resolve, prune) {
       } else pane = split(ctx, workspace, direction, target, launcher);
     }
     panes.push(pane);
-    recordState(ctx, ctx.project, "cmux", seat.agent, pane);
-    console.log(`  → ${seat.agent} seat in cmux workspace (${ctx.project})`);
+    recordState(ctx, ctx.project, "cmux", (seat.persona || seat.agent), pane, seat);
+    console.log(`  → ${(seat.persona || seat.agent)} seat in cmux workspace (${ctx.project})`);
   }
   console.log(`— crew grouped in cmux: ONE workspace tab for ${ctx.project}, seats tiled + sidebar status. Teardown (this project only): trantor down —`);
 }
@@ -150,8 +150,8 @@ function spawnAppleScript(ctx, specs, resolve) {
   for (let index = 0; index < specs.length; index += 1) {
     const seat = resolve(specs[index]);
     if (!seat) continue;
-    const launcher = seatLauncher(ctx, seat.agent, runnerCommand(ctx, seat.agent, seat.model, seat.effort));
-    const old = reuse ? readRows(ctx).filter(row => row.project === ctx.project && row.kind === "cmux" && row.agent === seat.agent).at(-1)?.handle || "" : "";
+    const launcher = seatLauncher(ctx, (seat.persona || seat.agent), runnerCommand(ctx, seat.agent, seat.model, seat.effort, seat.persona));
+    const old = reuse ? readRows(ctx).filter(row => row.project === ctx.project && row.kind === "cmux" && row.persona === (seat.persona || seat.agent)).at(-1)?.handle || "" : "";
     let pane;
     if (!tab && index === 0) {
       if (ctx.dry) {
@@ -167,11 +167,11 @@ function spawnAppleScript(ctx, specs, resolve) {
         console.log(`[dry] cmux(AppleScript): split ${direction} from ${target || "<focused>"} + run 'bash ${launcher}'`);
         pane = `%DRYT${index}`;
       } else pane = splitAppleScriptPane(ctx, tab, target, direction, launcher);
-      if (old && pane && pane !== "ERR") { closePane(ctx, old); dropState(ctx, ctx.project, "cmux", seat.agent); }
+      if (old && pane && pane !== "ERR") { closePane(ctx, old); dropState(ctx, ctx.project, "cmux", (seat.persona || seat.agent)); }
     }
     panes.push(pane);
-    recordState(ctx, ctx.project, "cmux", seat.agent, pane);
-    console.log(`  → ${seat.agent} seat in cmux workspace (${ctx.project})`);
+    recordState(ctx, ctx.project, "cmux", (seat.persona || seat.agent), pane, seat);
+    console.log(`  → ${(seat.persona || seat.agent)} seat in cmux workspace (${ctx.project})`);
   }
   console.log(`— crew grouped in cmux (AppleScript): ONE workspace tab for ${ctx.project}, seats tiled. Teardown: trantor down —`);
 }

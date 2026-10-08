@@ -7,6 +7,7 @@ import { join, basename } from "node:path";
 import { homedir } from "node:os";
 import { resolveProject, resolveHub, withEnvFiles, hostId } from "../lib/project.mjs";
 import { resolveSecrets, shadowEnv, withSecretExports } from "../lib/secrets.mjs";
+import { runnerPersona } from "../lib/persona.mjs";
 import { loadOrCreate } from "../lib/identity.mjs";
 import { signedHeaders } from "../lib/signed-fetch.mjs";
 import { ensureEnrolled } from "../lib/enroll.mjs";
@@ -74,7 +75,8 @@ function newerVersion(next, previous) {
   return false;
 }
 if (!releaseState) await awaitSwapRelease();
-const AGENT = process.env.CREW_SWAP_AGENT || process.argv[2];
+const AGENT = process.env.CREW_SWAP_AGENT || process.env.CREW_AGENT || process.argv[2];
+const PERSONA = runnerPersona(process.env, AGENT);
 const DIR = process.argv[3] || process.cwd();
 // Crew agents MUST share the orchestrator's project key (one repo = one lane).
 // RELAY_PROJECT is inherited from crew.mjs (the host's resolved key); else fall
@@ -88,7 +90,7 @@ function gitOut(args, cwd = DIR) {
 }
 
 function seatWorktree(sourceDir) {
-  const wt = ensureSeatWorktree({ sourceDir, project: PROJ, agent: AGENT });
+  const wt = ensureSeatWorktree({ sourceDir, project: PROJ, agent: PERSONA });
   // #7760: a worktree is a git checkout — it lacks the gitignored files the build needs and cannot
   // resolve relative sibling packages. The project's declaration provides both before the first turn.
   if (wt.root) {
@@ -129,7 +131,7 @@ function ocSid(dir) {
 // RUNNER_SESSION override: an orchestrator seat (bin/orchestrate.mjs) runs the same CLI as a crew
 // seat but must live on the bus under its own name (claude-orch:proj), or it would collide with a
 // plain claude crew seat on the same project.
-const SESSION = process.env.RUNNER_SESSION || `${AGENT}:${PROJ}`;
+const SESSION = process.env.RUNNER_SESSION || `${PERSONA}:${PROJ}`;
 // One keypair per seat, so `deepseek:crebral` and `deepseek:trantor` are genuinely different
 // identities on the bus rather than one shared string label.
 const identity = loadOrCreate(SESSION, "agent");
@@ -157,9 +159,9 @@ const log = (s) => console.log(`\x1b[38;5;43m[runner]\x1b[0m ${redactKeys(String
 const LOGDIR = join(homedir(), ".agent-bus", "logs");
 try { mkdirSync(LOGDIR, { recursive: true }); } catch {}
 let TURN = releaseState?.turn || 0;
-const telemetry = (rec) => { try { appendFileSync(join(LOGDIR, `${AGENT}-${PROJ}.jsonl`), JSON.stringify(rec) + "\n"); } catch {} };
+const telemetry = (rec) => { try { appendFileSync(join(LOGDIR, `${PERSONA}-${PROJ}.jsonl`), JSON.stringify(rec) + "\n"); } catch {} };
 // The boot line records the HUB this runner bound to, so a split-brain is diagnosable from disk.
-telemetry({ ts: Date.now(), agent: AGENT, project: PROJ, boot: true, hub: HUB, pid: process.pid, version: bootVersion });
+telemetry({ ts: Date.now(), persona: PERSONA, agent: AGENT, project: PROJ, boot: true, hub: HUB, pid: process.pid, version: bootVersion });
 // A seat can open a terminal window on a machine whose owner never asked for one and does not know
 // what they are looking at. "◤ CLAUDE ◢ trantor crew · fleet" tells that person nothing: not what
 // started, not what it will do, not how to stop it. RUNNER_TITLE names it in full and RUNNER_ABOUT
@@ -206,7 +208,7 @@ function cmuxStatus(value, color, icon = "robot", opts = {}) {
   // Label with the REAL seat identity (this is the DISPLAY path, distinct from the bus identity).
   // Pill = "<agent> · <state>" in the agent's brand color; alerts keep their alarm color.
   const col = opts.alert ? color : (BRAND_HEX[AGENT.toLowerCase()] || color);
-  try { spawnSync(CMUX_BIN, ["set-status", SESSION, `${AGENT} · ${value}`, "--color", col, "--icon", icon, "--priority", String(opts.priority ?? 0)], { stdio: "ignore", timeout: 1500, env: { ...process.env, CMUX_QUIET: "1" } }); } catch {}
+  try { spawnSync(CMUX_BIN, ["set-status", SESSION, `${PERSONA} · ${AGENT} · ${value}`, "--color", col, "--icon", icon, "--priority", String(opts.priority ?? 0)], { stdio: "ignore", timeout: 1500, env: { ...process.env, CMUX_QUIET: "1" } }); } catch {}
 }
 // herdr drops a pane's agent registration when the process inside exits, and a seat's CLI exits
 // every turn, so re-report at each turn boundary. Argument order: pane id FIRST, then the flags.
@@ -216,7 +218,7 @@ function herdrAgent(state) {
     if (!existsSync(f)) return;
     const row = readFileSync(f, "utf8").split("\n")
       .map(l => l.split("\t"))
-      .filter(c => c.length >= 4 && c[0] === PROJ && c[1] === "herdr" && c[2] === AGENT)
+      .filter(c => c.length >= 4 && c[0] === PROJ && c[1] === "herdr" && c[2] === PERSONA)
       .pop();
     if (!row || !row[3]) return;
     spawnSync("herdr", ["pane", "report-agent", row[3], "--source", "crew", "--agent", AGENT, "--state", state],
@@ -318,7 +320,7 @@ let lastEmptyTurn = false;
 // at turn end rides along so the assigner's notice can name it.
 let lastNoDelivery = false;
 let lastNoDeliveryStatus = "";
-const ERRF = join(homedir(), ".agent-bus", `err-${AGENT}-${PROJ}.txt`);
+const ERRF = join(homedir(), ".agent-bus", `err-${PERSONA}-${PROJ}.txt`);
 const DUTY_NUDGES = process.env.RUNNER_DUTY_NUDGES === "1";
 const DUTY_NUDGE_STATE = process.env.RUNNER_DUTY_NUDGE_STATE
   || join(homedir(), ".agent-bus", "duty-nudged.json");
@@ -339,15 +341,15 @@ function startDutyNudgeWatcher(plan, sinceMs) {
 // ---- undelivered wake messages (the runner owns delivery, not the hub) ----
 // The hub hands a message out exactly once, so a turn that died took its wake with it. Here a
 // message is consumed only when a turn exits 0; the queue lives on disk and retries on backoff.
-const PENDF = join(homedir(), ".agent-bus", `pending-${AGENT}-${PROJ}.json`);
+const PENDF = join(homedir(), ".agent-bus", `pending-${PERSONA}-${PROJ}.json`);
 // #7914: the park, on disk, for everyone who is not on the bus. A park announces itself once and
 // then the seat looks exactly like an idle one — which is how three seats sat 46 minutes while
 // `trantor seat-why` read "live, last turn failed". This file is the state behind that event, so a
 // reader who missed the message still finds the reason, the evidence and when it lifts.
-const PARKF = join(homedir(), ".agent-bus", `park-${AGENT}-${PROJ}.json`);
+const PARKF = join(homedir(), ".agent-bus", `park-${PERSONA}-${PROJ}.json`);
 // #9778: the seat's recorded containers, persisted per seat so a card close, a park or
 // `trantor down <seat>` can stop what the seat started even after this runner is gone.
-const DOCKERF = dockerStatePathFor(AGENT, PROJ);
+const DOCKERF = dockerStatePathFor(PERSONA, PROJ);
 // One bus line per sweep, naming what was stopped; docker absent sweeps stay silent by contract.
 async function janitorStop(why, card) {
   const r = dockerSweep({ path: DOCKERF, card });
@@ -403,7 +405,7 @@ function savePending(wake, bcast) {
     // the dedupe ledger outlives the deliveries it guards, and a restarted runner must wait for
     // the answer instead of redelivering the very contract the seat already asked about.
     if (!wake.length && !bcast.length && !seenLedger.length && !awaitingAsk) { try { unlinkSync(PENDF); } catch {} return; }
-    writeFileSync(PENDF, JSON.stringify({ agent: AGENT, project: PROJ, ts: Date.now(), wake, bcast, seen: seenLedger, ask: awaitingAsk?.id || 0, askTo: awaitingAsk?.to || "" }));
+    writeFileSync(PENDF, JSON.stringify({ persona: PERSONA, agent: AGENT, project: PROJ, ts: Date.now(), wake, bcast, seen: seenLedger, ask: awaitingAsk?.id || 0, askTo: awaitingAsk?.to || "" }));
   } catch {}
 }
 function loadPending() {
@@ -435,7 +437,7 @@ async function reportFailure(exit, trigger, undelivered = 0, reasonOverride = ""
   const reason = reasonOverride || classify(exit);
   const down = consecFails >= 2;
   const status = down ? `down: ${reason} · ${consecFails} fails` : `errored: ${reason}`;
-  await api("/register", { session: SESSION, project: PROJ, status, llm: AGENT, model: MODEL, kind: "agent" }).catch(() => {});
+  await api("/register", { session: SESSION, project: PROJ, status, persona: PERSONA, agent: AGENT, llm: AGENT, model: MODEL, kind: "agent" }).catch(() => {});
   const hint = reason === "exhausted" ? " — needs `trantor swap`"
     : reason === "stalled" ? " — CLI silent for the whole watchdog window: check the provider, or `trantor swap`"
     : reason === "auth" ? " — check credentials"
@@ -497,7 +499,7 @@ async function parkSeat(reason, undelivered, resetHint = 0, { evidence = "" } = 
   parkState = { reason, until, evidence, held: undelivered, ts: Date.now(), bounded };
   // The park is a STATE, and every reader of it is off the bus: `trantor seat-why`, the app, the
   // operator at a terminal an hour later. The message below is the event; this file is the state.
-  try { writeFileSync(PARKF, JSON.stringify({ session: SESSION, agent: AGENT, project: PROJ, ...parkState })); } catch {}
+  try { writeFileSync(PARKF, JSON.stringify({ session: SESSION, persona: PERSONA, agent: AGENT, project: PROJ, ...parkState })); } catch {}
   if (!parkAnnounced) {
     parkAnnounced = true;
     // #7752: a stalled park names the CLI and its model — the swap decision needs both, and this
@@ -518,7 +520,7 @@ async function parkSeat(reason, undelivered, resetHint = 0, { evidence = "" } = 
     `${undelivered} message(s) held${when ? ` — retrying after ${when}` : ` — needs \`trantor up ${AGENT}\``}`);
   // #7749: parked is a first-class phase — the file and the peer row both say so, so an
   // orchestrator stops confusing a quota-held seat with a working or a dead one.
-  writeTurnState(AGENT, PROJ, { phase: "parked", since: Date.now() });
+  writeTurnState(PERSONA, PROJ, { phase: "parked", since: Date.now() });
   await registerStatus(`parked (${reason})`, { phase: "parked", phaseSince: Date.now() });
   // #9778: a parked seat is done working for now — its recorded containers go down with it.
   await janitorStop(`seat parked (${reason})`);
@@ -581,7 +583,7 @@ async function balanceRows() {
 // #7749: the live phase + its start ride the same call, so /peers answers what the seat does NOW.
 async function registerStatus(status, extra = {}) {
   const url = HUB + "/register";
-  const body = JSON.stringify({ session: SESSION, project: PROJ, status, llm: AGENT, model: MODEL, ...extra });
+  const body = JSON.stringify({ session: SESSION, project: PROJ, status, persona: PERSONA, agent: AGENT, llm: AGENT, model: MODEL, ...extra });
   try {
     const opts = { method: "POST", headers: { "content-type": "application/json", connection: "close" }, body };
     await fetch(url, { ...opts, headers: { ...opts.headers, ...signedHeaders(identity, url, opts) }, signal: AbortSignal.timeout(5000) });
@@ -633,7 +635,7 @@ async function reportHealthy() {
   // Recovery is a change too, so the next failure is news again — a park included.
   announced = "";
   parkAnnounced = false;
-  await api("/register", { session: SESSION, project: PROJ, status: `active in ${PROJ}`, llm: AGENT, model: MODEL, kind: "agent" }).catch(() => {});
+  await api("/register", { session: SESSION, project: PROJ, status: `active in ${PROJ}`, persona: PERSONA, agent: AGENT, llm: AGENT, model: MODEL, kind: "agent" }).catch(() => {});
   await api("/send", { from: SESSION, to: "all", text: `✅ ${SESSION} recovered`, project: PROJ, kind: "status" }).catch(() => {});
   cmuxStatus("ok", "#14b8a6", "check"); herdrAgent("idle");
 }
@@ -647,7 +649,7 @@ for (const [name, flag] of Object.entries(stateFlags)) {
   if (flag.value && process.env[name] === undefined) process.env[name] = flag.value;
 }
 const STATE_FLAG_ON = process.env[STATE_ENV] === "1";
-const STATE_SCHEMA_FILE = join(homedir(), ".agent-bus", `state-schema-${AGENT}-${PROJ}.json`);
+const STATE_SCHEMA_FILE = join(homedir(), ".agent-bus", `state-schema-${PERSONA}-${PROJ}.json`);
 const STATE_MODE = (() => {
   if (!STATE_FLAG_ON) return false;
   if (AGENT !== "claude") { log(`${STATE_ENV}=1 but this seat is '${AGENT}' — state mode is claude-only (TDD §7.3); staying on the transcript path`); return false; }
@@ -771,8 +773,8 @@ async function runTurn(prompt, isFirst, trigger = "kickoff", opts = {}) {
   await registerStatus(`working · ${trigger}`, { phase: "working", phaseSince: t0 });
   // #7749: the same boundary on disk — the watchdog refreshes lastBytesAt/lastTranscriptAt while
   // the turn runs, so a live reader sees the turn advance without waiting for its end.
-  writeTurnState(AGENT, PROJ, { turn: TURN, phase: "working", since: t0, card: sessionCard || 0, lastBytesAt: t0, lastTranscriptAt: 0 });
-  const pf = join(homedir(), ".agent-bus", `turn-${AGENT}-${PROJ}.txt`);
+  writeTurnState(PERSONA, PROJ, { turn: TURN, phase: "working", since: t0, card: sessionCard || 0, lastBytesAt: t0, lastTranscriptAt: 0 });
+  const pf = join(homedir(), ".agent-bus", `turn-${PERSONA}-${PROJ}.txt`);
   appendFileSync(pf, "", { flag: "w" }); // truncate
   appendFileSync(pf, prompt);
   // #5868: where HEAD stood when the turn began. A turn that moved it shipped real work, and an
@@ -830,7 +832,7 @@ async function runTurn(prompt, isFirst, trigger = "kickoff", opts = {}) {
   // instead of prose, and the operator watches that window. So on a state step stdout goes to a
   // file and the runner prints the result line and the cost line itself. stderr still streams to
   // the window through the process substitution below, unchanged.
-  const ENVF = join(homedir(), ".agent-bus", `envelope-${AGENT}-${PROJ}.json`);
+  const ENVF = join(homedir(), ".agent-bus", `envelope-${PERSONA}-${PROJ}.json`);
   if (opts.state) { try { unlinkSync(ENVF); } catch {} }
   const inner = opts.state
     ? `${cmd} > ${ENVF}`
@@ -838,20 +840,20 @@ async function runTurn(prompt, isFirst, trigger = "kickoff", opts = {}) {
   // #5684: runTurn is spawnSync, so a DETACHED watchdog (stamp-armed) watches the turn and sends
   // ONE stall report, never a kill. #6206: floor 10 min, never derived from TRANTOR_TURN_MAX_MS.
   const WD_MS = Number(process.env.TRANTOR_TURN_WATCHDOG_MS) || 10 * 60 * 1000;
-  const STAMPF = join(homedir(), ".agent-bus", `turnstamp-${AGENT}-${PROJ}.json`);
+  const STAMPF = join(homedir(), ".agent-bus", `turnstamp-${PERSONA}-${PROJ}.json`);
   // #6206: the CLI's transcript dir (a missing dir is a quiet channel), exported so a drill's fake
   // CLI can write lines the watchdog sees. CUTF is written by the shell's time box: cut, not crashed.
-  const CUTF = join(homedir(), ".agent-bus", `turncut-${AGENT}-${PROJ}`);
+  const CUTF = join(homedir(), ".agent-bus", `turncut-${PERSONA}-${PROJ}`);
   try { unlinkSync(CUTF); } catch {}
   // #7752: written by the watchdog's kill mode when EVERY liveness channel has been quiet for
   // the whole window; the box sweeps on the marker, so a silent turn ends at the stall window
   // instead of burning the box. Unlinked at turn start and again with the cut cleanup.
-  const STALLF = join(homedir(), ".agent-bus", `turnstall-${AGENT}-${PROJ}`);
+  const STALLF = join(homedir(), ".agent-bus", `turnstall-${PERSONA}-${PROJ}`);
   try { unlinkSync(STALLF); } catch {}
   // #7761: the watchdog writes the extended deadline (epoch seconds) here for the shell box to
   // re-read, and one row per extension to EXTF for the ledger. Both unlinked at turn start.
-  const DEADLINEF = join(homedir(), ".agent-bus", `turndeadline-${AGENT}-${PROJ}`);
-  const EXTF = join(homedir(), ".agent-bus", `turnext-${AGENT}-${PROJ}`);
+  const DEADLINEF = join(homedir(), ".agent-bus", `turndeadline-${PERSONA}-${PROJ}`);
+  const EXTF = join(homedir(), ".agent-bus", `turnext-${PERSONA}-${PROJ}`);
   try { unlinkSync(DEADLINEF); } catch {}
   try { unlinkSync(EXTF); } catch {}
   const boxPlan = TURN_EXTENSIONS_MAX ? {
@@ -861,7 +863,7 @@ async function runTurn(prompt, isFirst, trigger = "kickoff", opts = {}) {
   } : undefined;
   // Touched by the stderr scrubber as its LAST act (the shell below); node waits for it after
   // spawnSync before reading ERRF — see the drain note at the spawnSync call.
-  const DRAINF = join(homedir(), ".agent-bus", `turndrain-${AGENT}-${PROJ}`);
+  const DRAINF = join(homedir(), ".agent-bus", `turndrain-${PERSONA}-${PROJ}`);
   try { unlinkSync(DRAINF); } catch {}
   try {
     const activity = cli.pinned || ["kimi", "claude"].includes(AGENT) ? {
@@ -874,7 +876,7 @@ async function runTurn(prompt, isFirst, trigger = "kickoff", opts = {}) {
       // end the turn, so the watchdog stays report-only (reporting is the whole job, boxless).
       TURN_MAX_MS ? STALLF : "",
       // #7749: the turn-state file the watchdog refreshes mid-turn (lastBytesAt/lastTranscriptAt).
-      join(homedir(), ".agent-bus", `turnstate-${AGENT}-${PROJ}.json`)],
+      join(homedir(), ".agent-bus", `turnstate-${PERSONA}-${PROJ}.json`)],
       { detached: true, stdio: "ignore" });
     WD_CHILD = wd;
     wd.unref();
@@ -982,7 +984,7 @@ exit $turn_exit`;
   // #7749: the cut boundary lands on disk and on the peer row BEFORE the follow-up turn overwrites
   // it — a reader sampling mid-chain sees what actually just happened, not a stale "working".
   if (cut) {
-    writeTurnState(AGENT, PROJ, { phase: stallCut ? "stalled" : "cut", since: Date.now() });
+    writeTurnState(PERSONA, PROJ, { phase: stallCut ? "stalled" : "cut", since: Date.now() });
     await registerStatus(stallCut ? "stalled · no activity" : "cut at the time box", { phase: stallCut ? "stalled" : "cut", phaseSince: Date.now() });
   }
   // #5869: scrub AT REST, synchronously, before anything reads the file back. The explicit shell
@@ -1130,7 +1132,7 @@ exit $turn_exit`;
   // empty/stalled turns to the card that produced nothing. `cut` stays too: the drills read it.
   const outcome = cut ? (stallCut ? "stalled" : "cut") : (effExit !== 0 ? "api-error" : noDelivery ? "no-delivery" : lastEmptyTurn ? "empty" : "completed");
   const finalOutcome = askVerdict ? "asked" : blockedVerdict ? "blocked" : outcome;
-  const telemetryRow = { ts: Date.now(), agent: AGENT, project: PROJ, turn: TURN, trigger, card: sessionCard || 0, model: MODEL || "cli-default", duration_ms: Date.now() - t0, exit: realExit, effExit, authFailed: effExit !== realExit, emptyOutput: lastEmptyOutput, emptyTurn: lastEmptyTurn, verdict, outcome: finalOutcome, tokens };
+  const telemetryRow = { ts: Date.now(), persona: PERSONA, agent: AGENT, project: PROJ, turn: TURN, trigger, card: sessionCard || 0, model: MODEL || "cli-default", duration_ms: Date.now() - t0, exit: realExit, effExit, authFailed: effExit !== realExit, emptyOutput: lastEmptyOutput, emptyTurn: lastEmptyTurn, verdict, outcome: finalOutcome, tokens };
   if (usage) telemetryRow.usage = usage;
   if (dockerNew.length) telemetryRow.containers = dockerNew.map(c => c.name || c.id);
   if (cut) telemetryRow.cut = true;
@@ -1149,7 +1151,7 @@ exit $turn_exit`;
   // #5965 — TURN END. A clean exit means the seat is idle again; say so right away so the app stops
   // pulsing it even before the next /poll heartbeat. Failure keeps reportFailure's down/errored.
   if (realExit === 0 && effExit === 0) {
-    writeTurnState(AGENT, PROJ, { phase: "idle", since: Date.now() });
+    writeTurnState(PERSONA, PROJ, { phase: "idle", since: Date.now() });
     await registerStatus("idle", { phase: "idle", phaseSince: Date.now() });
   }
   // The follow-up rides the SAME session, exactly once. A state step gets none: TIME_BOX_PROMPT
@@ -1314,7 +1316,7 @@ function shouldWake(message) {
   }
   return message?.to === "all"
     && isContract(message)
-    && (message.text.includes(`@${AGENT}`) || message.text.toLowerCase().includes(`${AGENT}:`));
+    && (message.text.includes(`@${PERSONA}`) || message.text.toLowerCase().includes(`${PERSONA.toLowerCase()}:`));
 }
 
 // #6228: the operator's declared project links, cached briefly so a burst of wakes doesn't hit
@@ -1377,7 +1379,7 @@ async function resolveWakeCard(messages, { session }) {
   // session is — the overseer's declared-crew exemption reads it, and on the remote hub there is
   // no crew-windows.txt to fall back to. /register preserves absent fields, so a seat running an
   // older runner never loses a kind an updated one stamped.
-  await api("/register", { session: SESSION, project: PROJ, status: "crew member booting", llm: AGENT, model: MODEL, kind: "agent" }).catch(() => {});
+  await api("/register", { session: SESSION, project: PROJ, status: "crew member booting", persona: PERSONA, agent: AGENT, llm: AGENT, model: MODEL, kind: "agent" }).catch(() => {});
   // Announce runner-side, signed as THIS seat: the runner process is per-seat by construction, so
   // its signature cannot be borrowed the way a shared opencode MCP daemon once borrowed identities.
   try {
@@ -1452,7 +1454,7 @@ async function resolveWakeCard(messages, { session }) {
     }
     try {
       // Persist before exec: a held contract and a released ask both survive the boundary.
-      writeFileSync(PENDF, JSON.stringify({ agent: AGENT, project: PROJ, ts: Date.now(),
+      writeFileSync(PENDF, JSON.stringify({ persona: PERSONA, agent: AGENT, project: PROJ, ts: Date.now(),
         wake: pendingWake, bcast: pendingBcast, seen: seenLedger, ask: awaitingAsk?.id || 0, askTo: awaitingAsk?.to || "" }));
       const state = { cursor, turn: TURN, sid, sessionCard, retryAt, deliveryFails,
         noDeliveryRetry, askReleased, lastTurnAt, attempted: [...attemptedVersions] };

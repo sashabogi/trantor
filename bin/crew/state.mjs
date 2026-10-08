@@ -7,9 +7,9 @@ import { statePathFor as dockerStatePathFor, sweep as dockerSweep } from "../../
 
 export function parseRow(line) {
   const fields = line.split("\t");
-  if (fields.length >= 4) return { project: fields[0], kind: fields[1], agent: fields[2], handle: fields[3] };
-  if (fields.length === 2) return { project: "", kind: "win", agent: fields[0], handle: fields[1] };
-  return { project: "", kind: "win", agent: fields[0] || "", handle: fields[1] || "" };
+  if (fields.length >= 4) return { project: fields[0], kind: fields[1], persona: fields[2], agent: fields[4] || fields[2], model: fields[5] || "", handle: fields[3] };
+  if (fields.length === 2) return { project: "", kind: "win", persona: fields[0], model: "", agent: fields[0], handle: fields[1] };
+  return { project: "", kind: "win", persona: fields[0], model: "", agent: fields[0] || "", handle: fields[1] || "" };
 }
 
 export function readRows(ctx) {
@@ -24,24 +24,24 @@ export function writeRows(ctx, rows) {
     return;
   }
   const tmp = `${ctx.statePath}.tmp`;
-  writeFileSync(tmp, `${rows.map(row => [row.project, row.kind, row.agent, row.handle].join("\t")).join("\n")}\n`);
+  writeFileSync(tmp, `${rows.map(row => [row.project, row.kind, row.persona || row.agent, row.handle, row.agent, row.model || ""].join("\t")).join("\n")}\n`);
   renameSync(tmp, ctx.statePath);
 }
 
-export function recordState(ctx, project, kind, agent, handle) {
+export function recordState(ctx, project, kind, persona, handle, metadata = {}) {
   if (ctx.dry) return;
   const rows = readRows(ctx);
   // #7285: an exact duplicate carries no new fact, and a doubled herdrws row is how `up` came to
   // see the live workspace as its own stale copy. One row per fact — refuse the push.
-  if (rows.some(row => row.project === project && row.kind === kind && row.agent === agent && row.handle === handle)) return;
-  rows.push({ project, kind, agent, handle });
+  if (rows.some(row => row.project === project && row.kind === kind && row.persona === persona && row.handle === handle)) return;
+  rows.push({ project, kind, persona, agent: metadata.agent || persona, model: metadata.model || "", handle });
   writeRows(ctx, rows);
 }
 
 export function dropState(ctx, project, kind, agent = "", handle = "") {
   const rows = readRows(ctx).filter(row => !(
     row.project === project && row.kind === kind &&
-    (!agent || row.agent === agent) && (!handle || row.handle === handle)
+    (!agent || row.persona === agent) && (!handle || row.handle === handle)
   ));
   writeRows(ctx, rows);
 }
@@ -108,7 +108,7 @@ async function closeRow(ctx, row, selected, orchProjects, adapters, tmuxClosed) 
   if (row.kind === "herdr" && (perSeat || hasOrch)) adapters.herdr.closePane(row.handle);
   if (row.kind === "tmux") closeTmux(ctx, row, perSeat, tmuxClosed);
   if ((row.kind === "win" || row.kind === "attach") && !(perSeat && row.kind === "attach")) killTerminal(ctx, row.handle);
-  if (!["cmuxws", "attach", "herdrws", "orch"].includes(row.kind)) await killSeatProcesses(ctx, row.project, row.agent);
+  if (!["cmuxws", "attach", "herdrws", "orch"].includes(row.kind)) await killSeatProcesses(ctx, row.project, row.persona);
 }
 
 function closeTmux(ctx, row, perSeat, seen) {
@@ -128,11 +128,11 @@ export async function down(ctx, args, adapters) {
   if (options.error) return 1;
   const rows = readRows(ctx);
   if (!rows.length) { console.log("no tracked crew windows"); return 0; }
-  const scoped = rows.filter(row => (options.all || row.project === ctx.project) && (!options.agents.length || options.agents.includes(row.agent)));
+  const scoped = rows.filter(row => (options.all || row.project === ctx.project) && (!options.agents.length || options.agents.includes(row.persona)));
   const scope = options.all ? "all projects" : `project \"${ctx.project}\"`;
   if (!scoped.length) { console.log(`nothing to tear down for ${scope}`); return 0; }
   console.log(`— tearing down (${scope}):`);
-  for (const row of scoped) if (!["attach", "cmuxws", "herdrws", "orch"].includes(row.kind)) console.log(`  • ${row.project || "<legacy>"} · ${row.agent} (${row.kind})`);
+  for (const row of scoped) if (!["attach", "cmuxws", "herdrws", "orch"].includes(row.kind)) console.log(`  • ${row.project || "<legacy>"} · ${row.persona} (${row.kind})`);
   if (options.all && !options.yes) {
     console.log("— this is EVERY project's crew. Re-run with --yes to confirm:  trantor down --all --yes");
     return 0;
@@ -140,22 +140,22 @@ export async function down(ctx, args, adapters) {
   const orchProjects = new Set(rows.filter(row => row.kind === "orch").map(row => row.project));
   const tmuxClosed = new Set();
   for (const row of scoped) await closeRow(ctx, row, options.agents, orchProjects, adapters, tmuxClosed);
-  const removed = new Set(scoped.map(row => `${row.project}|${row.kind}|${row.agent}|${row.handle}`));
-  const kept = rows.filter(row => !removed.has(`${row.project}|${row.kind}|${row.agent}|${row.handle}`) || (orchProjects.has(row.project) && ["herdrws", "cmuxws", "orch"].includes(row.kind)));
+  const removed = new Set(scoped.map(row => `${row.project}|${row.kind}|${row.persona}|${row.handle}`));
+  const kept = rows.filter(row => !removed.has(`${row.project}|${row.kind}|${row.persona}|${row.handle}`) || (orchProjects.has(row.project) && ["herdrws", "cmuxws", "orch"].includes(row.kind)));
   writeRows(ctx, kept);
   const seatRows = scoped.filter(row => !["attach", "cmuxws", "herdrws", "orch"].includes(row.kind));
   if (!ctx.dry) {
     const logDir = join(dirname(ctx.statePath), "logs");
     mkdirSync(logDir, { recursive: true });
-    for (const row of new Map(seatRows.map(row => [`${row.project}/${row.agent}`, row])).values()) {
-      appendFileSync(join(logDir, `${row.agent}-${row.project}.jsonl`),
-        `${JSON.stringify({ ts: Date.now(), agent: row.agent, project: row.project, stopped: true })}\n`);
+    for (const row of new Map(seatRows.map(row => [`${row.project}/${row.persona}`, row])).values()) {
+      appendFileSync(join(logDir, `${row.persona}-${row.project}.jsonl`),
+        `${JSON.stringify({ ts: Date.now(), agent: row.persona, project: row.project, stopped: true })}\n`);
     }
   }
   if (options.agents.length) {
-    const stopped = [...new Set(seatRows.map(row => row.agent))];
+    const stopped = [...new Set(seatRows.map(row => row.persona))];
     const remaining = [...new Set(kept.filter(row => row.project === ctx.project &&
-      !["attach", "cmuxws", "herdrws", "orch"].includes(row.kind)).map(row => row.agent))];
+      !["attach", "cmuxws", "herdrws", "orch"].includes(row.kind)).map(row => row.persona))];
     console.log(`— ${stopped.join(", ") || options.agents.join(", ")} stopped${remaining.length ? ` (${remaining.join(", ")} still running)` : ""} (${scope})`);
   } else console.log(`— crew torn down (${scope})`);
   return 0;

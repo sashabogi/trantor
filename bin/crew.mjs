@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { allocatePersona } from "../lib/persona.mjs";
 import { join } from "node:path";
 import { call, createContext } from "./crew/core.mjs";
 import { createCmuxAdapter, spawnCmux } from "./crew/cmux.mjs";
@@ -7,7 +8,7 @@ import { resolveSpec, reportSkipped } from "./crew/models.mjs";
 import { openOrchestrator } from "./crew/open.mjs";
 import { performSwap, swapOptions, swapRuntime } from "./crew/swap.mjs";
 import { redactKeys } from "../lib/redact.mjs";
-import { reapSeat, down, prune } from "./crew/state.mjs";
+import { reapSeat, down, prune, readRows } from "./crew/state.mjs";
 import { spawnTerminal, spawnTmux } from "./crew/tmux.mjs";
 import { epochMs, failedAgents, verifyCrew } from "./crew/verify.mjs";
 import { guardCrossProjectUp } from "./crew/worktrees.mjs";
@@ -46,17 +47,16 @@ function parseUpArgs(args) {
     const arg = args[index];
     if (arg === "--task") result.task = args[++index] || "code";
     else if (arg === "--difficulty" || arg === "--diff") result.difficulty = args[++index] || "medium";
-    else result.specs.push(arg);
+    else if (arg === "--as") {
+      result.persona = args[++index];
+      if (!result.persona) throw new Error("--as requires a persona name");
+    } else result.specs.push(arg);
   }
   return result;
 }
 
 function spawnCrew(options, skipped) {
-  const resolve = spec => {
-    const seat = resolveSpec(ctx, spec, options.task, options.difficulty, skipped);
-    if (seat) reapSeat(ctx, seat.agent);
-    return seat;
-  };
+  const resolve = seat => { reapSeat(ctx, seat.persona); return seat; };
   const pruneNow = () => prune(ctx, adapters);
   if (ctx.mux === "herdr") spawnHerdr(ctx, options.specs, resolve, pruneNow);
   else if (ctx.mux === "cmux") spawnCmux(ctx, options.specs, resolve, pruneNow);
@@ -73,6 +73,7 @@ async function runUp(args, verify = true) {
   const options = parseUpArgs(args);
   const requested = resolveAgentLaunchSpecs(options.specs, readConfig());
   options.specs = requested.specs;
+  if (options.persona && options.specs.length !== 1) throw new Error("--as requires exactly one agent");
   resultSeat = options.specs.map(spec => spec.split(":")[0]).join(",");
   if (!options.specs.length) {
     console.log("usage: crew.mjs up [--task K --difficulty D] codex glm kimi deepseek (or set a default in Settings → Agents)");
@@ -89,6 +90,15 @@ async function runUp(args, verify = true) {
   // #7760: build once in the first seat's worktree before any seat gets a contract.
   if (!ctx.dry) await preflightFirstSeat(ctx, options.specs[0].split(":")[0]);
   const skipped = [];
+  const occupied = readRows(ctx).filter(row => row.project === ctx.project).map(row => row.persona);
+  options.specs = options.specs.map(spec => {
+    const resolved = resolveSpec(ctx, spec, options.task, options.difficulty, skipped);
+    if (!resolved) return null;
+    const seat = allocatePersona({ dir: join(ctx.home, ".agent-bus"), project: ctx.project, ...resolved, name: options.persona, occupied });
+    occupied.push(seat.persona);
+    return { ...resolved, ...seat };
+  }).filter(Boolean);
+  resultSeat = options.specs.map(seat => seat.persona).join(",");
   const started = epochMs();
   spawnCrew(options, skipped);
   if (ctx.dry || !verify) {
@@ -96,9 +106,9 @@ async function runUp(args, verify = true) {
     return reportSkipped(skipped);
   }
   console.log("— verifying on the bus (the spawn is not the truth; the bus is) —");
-  let failed = failedAgents(verifyCrew(ctx, options.specs.map(spec => spec.split(":")[0]), started));
+  let failed = failedAgents(verifyCrew(ctx, options.specs.map(seat => seat.persona), started));
   if (failed.length) {
-    const retry = options.specs.filter(spec => failed.includes(spec.split(":")[0]));
+    const retry = options.specs.filter(seat => failed.includes(seat.persona));
     console.log(`— retrying failed spawns: ${retry.join(" ")} —`);
     options.specs = retry;
     spawnCrew(options, skipped);

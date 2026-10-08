@@ -7,7 +7,7 @@ export function spawnTmux(ctx, specs, resolve) {
   for (const spec of specs) {
     const seat = resolve(spec);
     if (!seat) continue;
-    const command = runnerCommand(ctx, seat.agent, seat.model, seat.effort);
+    const command = runnerCommand(ctx, seat.agent, seat.model, seat.effort, seat.persona);
     let pane = ctx.dry ? "%DRY" : "";
     if (first) {
       run(ctx, "tmux", ["new-session", "-d", "-s", session, "-n", "crew", "-x", "260", "-y", "60"], { rendered: `tmux new-session -d -s '${session}' -n crew -x 260 -y 60` });
@@ -18,9 +18,9 @@ export function spawnTmux(ctx, specs, resolve) {
       run(ctx, "tmux", ["select-layout", "-t", session, "tiled"], { rendered: `tmux select-layout -t '${session}' tiled >/dev/null 2>&1` });
     }
     if (!ctx.dry) pane = call("tmux", ["display-message", "-p", "-t", session, "#{pane_id}"], { env: ctx.env }).stdout;
-    run(ctx, "tmux", ["select-pane", "-t", pane || session, "-T", seat.agent.toUpperCase()], { rendered: `tmux select-pane -t '${pane || session}' -T ${seat.agent.toUpperCase()}` });
-    recordState(ctx, ctx.project, "tmux", seat.agent, pane || "%?");
-    console.log(`  → ${seat.agent} pane in ${session}`);
+    run(ctx, "tmux", ["select-pane", "-t", pane || session, "-T", (seat.persona || seat.agent).toUpperCase()], { rendered: `tmux select-pane -t '${pane || session}' -T ${(seat.persona || seat.agent).toUpperCase()}` });
+    recordState(ctx, ctx.project, "tmux", (seat.persona || seat.agent), pane || "%?", seat);
+    console.log(`  → ${(seat.persona || seat.agent)} pane in ${session}`);
   }
   run(ctx, "tmux", ["set-option", "-t", session, "pane-border-status", "top"], { rendered: `tmux set-option -t '${session}' pane-border-status top >/dev/null 2>&1` });
   run(ctx, "tmux", ["set-option", "-t", session, "pane-border-format", " #{pane_title} "], { rendered: `tmux set-option -t '${session}' pane-border-format ' #{pane_title} ' >/dev/null 2>&1` });
@@ -48,17 +48,17 @@ export function spawnTerminal(ctx, specs, resolve) {
     const x = rect.x + (index % columns) * width;
     const y = rect.y + Math.floor(index / columns) * height;
     if (ctx.dry) {
-      console.log(`[dry] Terminal window for ${seat.agent} at ${x},${y}`);
-      recordState(ctx, ctx.project, "win", seat.agent, `%DRYWIN${index}`);
+      console.log(`[dry] Terminal window for ${(seat.persona || seat.agent)} at ${x},${y}`);
+      recordState(ctx, ctx.project, "win", (seat.persona || seat.agent), `%DRYWIN${index}`, seat);
       continue;
     }
-    const command = `clear && ${runnerCommand(ctx, seat.agent, seat.model, seat.effort)}`;
-    const title = `${ctx.project} · ${seat.agent.toUpperCase()}`;
+    const command = `clear && ${runnerCommand(ctx, seat.agent, seat.model, seat.effort, seat.persona)}`;
+    const title = `${ctx.project} · ${(seat.persona || seat.agent).toUpperCase()}`;
     const result = appleScript(`tell application "Terminal"\nset w to do script "${appleScriptString(command)}"\nset custom title of w to "${appleScriptString(title)}"\nset theWin to first window whose tabs contains w\nset bounds of theWin to {${x}, ${y}, ${x + width}, ${y + height}}\nreturn id of theWin\nend tell\n`);
     if (result.stdout) {
-      recordState(ctx, ctx.project, "win", seat.agent, result.stdout);
-      console.log(`  → ${seat.agent} window spawned (${ctx.project} · ${seat.agent})`);
-    } else console.log(`  ✗ ${seat.agent} osascript spawn ERROR`);
+      recordState(ctx, ctx.project, "win", (seat.persona || seat.agent), result.stdout, seat);
+      console.log(`  → ${(seat.persona || seat.agent)} window spawned (${ctx.project} · ${(seat.persona || seat.agent)})`);
+    } else console.log(`  ✗ ${(seat.persona || seat.agent)} osascript spawn ERROR`);
     call("sleep", ["1.2"]);
   }
 }

@@ -159,18 +159,18 @@ function prepareWorkspace(ctx, prune) {
 function replacementPane(ctx, workspace, spec, hostPane, resolve) {
   const seat = resolve(spec);
   if (!seat) return null;
-  const old = readRows(ctx).filter(row => row.project === ctx.project && row.kind === "herdr" && row.agent === seat.agent).at(-1)?.handle || "";
+  const old = readRows(ctx).filter(row => row.project === ctx.project && row.kind === "herdr" && row.persona === (seat.persona || seat.agent)).at(-1)?.handle || "";
   let pane;
   if (ctx.dry) {
-    console.log(`[dry] herdr: reuse workspace ${workspace} — pane split for ${seat.agent}${old ? ` (replacing ${old})` : ""}`);
+    console.log(`[dry] herdr: reuse workspace ${workspace} — pane split for ${(seat.persona || seat.agent)}${old ? ` (replacing ${old})` : ""}`);
     pane = `%DRYT${spec.index}`;
   } else {
     pane = splitPane(ctx, hostPane, "right", ctx.dir);
-    runSeat(ctx, pane, seat.agent, runnerCommand(ctx, seat.agent, seat.model, seat.effort));
+    runSeat(ctx, pane, (seat.persona || seat.agent), runnerCommand(ctx, seat.agent, seat.model, seat.effort, seat.persona));
   }
   if (old) {
     closePane(ctx, old);
-    dropState(ctx, ctx.project, "herdr", seat.agent);
+    dropState(ctx, ctx.project, "herdr", (seat.persona || seat.agent));
   }
   return { ...seat, pane };
 }
@@ -193,9 +193,9 @@ export function spawnHerdr(ctx, specs, resolve, prune) {
     if (!seat) continue;
     workspace = seat.workspace || workspace;
     panes.push(seat.pane);
-    reportAgent(ctx, seat.pane, seat.agent);
-    recordState(ctx, ctx.project, "herdr", seat.agent, seat.pane);
-    console.log(`  → ${seat.agent} seat in herdr workspace (${ctx.project})`);
+    reportAgent(ctx, seat.pane, (seat.persona || seat.agent));
+    recordState(ctx, ctx.project, "herdr", (seat.persona || seat.agent), seat.pane, seat);
+    console.log(`  → ${(seat.persona || seat.agent)} seat in herdr workspace (${ctx.project})`);
   }
   console.log(`— crew grouped in herdr: ONE workspace for ${ctx.project}, seats as named panes in its server. Teardown (this project only): trantor down —`);
 }
@@ -203,7 +203,7 @@ export function spawnHerdr(ctx, specs, resolve, prune) {
 function freshPane(ctx, workspace, spec, panes, columns, resolve) {
   const seat = resolve(spec.value);
   if (!seat) return null;
-  const command = runnerCommand(ctx, seat.agent, seat.model, seat.effort);
+  const command = runnerCommand(ctx, seat.agent, seat.model, seat.effort, seat.persona);
   let pane = "";
   if (spec.index === 0) {
     if (ctx.dry) {
@@ -221,7 +221,7 @@ function freshPane(ctx, workspace, spec, panes, columns, resolve) {
       pane = `%DRYT${spec.index}`;
     } else pane = splitPane(ctx, target, direction, ctx.dir);
   }
-  runSeat(ctx, pane, seat.agent, command);
+  runSeat(ctx, pane, (seat.persona || seat.agent), command);
   return { ...seat, pane, workspace };
 }
 
