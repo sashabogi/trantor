@@ -77,7 +77,7 @@ echo 'the runner can move on to its next wake without a redelivery ladder or a p
       if (path === join(bus, "turncut-kimi-box-drill") && exists) sawMarker = true;
       return exists;
     },
-    AGENT: "kimi", PROJ: "box-drill", SESSION: "kimi:box-drill", HUB: "http://127.0.0.1:1",
+    AGENT: "kimi", PERSONA: "kimi", PROJ: "box-drill", SESSION: "kimi:box-drill", HUB: "http://127.0.0.1:1",
     // module consts the extracted runTurn reads (#7777): this sandbox launches with no CREW_EFFORT,
     // so the effort record is null and its flag renders as the empty string — byte-identical command.
     EFFORT: null, EFFORT_FLAG: { flag: "", text: "" },

@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 // trantor scenario harness — protocol-level failure drills with MOCK agents (no LLMs, free,
-// deterministic, seconds). These encode the failure modes that broke the 2026-06-09 live run,
+// deterministic, seconds). These encode protocol failure modes,
 // so they can never silently regress. Run: node test-scenarios.mjs   (part of npm test)
+import { asRecord } from "../../lib/decode.mjs";
 import { spawn } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -30,7 +31,7 @@ async function sApi(id, method, path, bodyObj) {
 }
 
 // isolated hub: fake HOME (own bus.json), FREE port, 2s online cutoff so death is observable fast
-const hub = await startTestHub({ dir: FAKE_HOME, env: { RELAY_ONLINE_MS: "2000", RELAY_PEER_TTL_MS: "4000" } });
+const hub = await startTestHub({ dir: FAKE_HOME, env: { RELAY_AUTH: "warn", RELAY_ONLINE_MS: "2000", RELAY_PEER_TTL_MS: "4000" } });
 const HUB = hub.base;
 
 try {
@@ -101,7 +102,11 @@ try {
   const { task: t2 } = await api("/task", { project: "proj", title: "hist", assignee: "kimi:proj", difficulty: "hard", by: "arch" });
   ok("difficulty stored", t2.difficulty === "hard");
   ok("creation in history", t2.history?.length === 1 && t2.history[0].to === "todo");
-  for (const st of ["doing", "testing", "done"]) await api("/task/update", { id: t2.id, status: st, by: "kimi:proj", ...(st === "done" ? { note: "Drill: opened it and saw it work" } : {}) });   // #6452
+  for (const st of ["doing", "testing", "done"]) {
+    const update = { id: t2.id, status: st, by: "kimi:proj" };
+    if (st === "done") update.note = "Drill: opened it and saw it work";
+    await api("/task/update", update);
+  }
   await api("/task/update", { id: t2.id, status: "doing", by: "arch" });   // the bounce
   const t2b = (await api("/tasks?project=proj")).tasks.find(t => t.id === t2.id);
   const lastH = t2b.history.at(-1);
@@ -123,8 +128,7 @@ try {
      Array.isArray(lr.lessons.byAgent.kimi) && lr.lessons.byProject.proj);
   ok("learning totals.lessons counts recorded lessons", lr.totals.lessons >= 2);
   ok("learning exposes per-project reliability/guardrail maps (not just global aggregates)",
-     lr.agentsByProject && typeof lr.agentsByProject === "object" &&
-     lr.modelsByProject && typeof lr.modelsByProject === "object");
+     asRecord(lr.agentsByProject) && asRecord(lr.modelsByProject));
 
   console.log("scenario: advisor — plan economics drive the mode");
   const { advise } = await import(join(ROOT, "bin/advise.mjs"));
@@ -264,7 +268,11 @@ try {
 
   console.log("scenario: /history — card create+move produces chronological events with correct from/to/by");
   const { task: ht } = await api("/task", { project: "proj", title: "timeline-test", by: "arch" });
-  for (const st of ["doing", "testing", "done"]) await api("/task/update", { id: ht.id, status: st, by: "kimi:proj", ...(st === "done" ? { note: "Drill: opened it and saw it work" } : {}) });   // #6452
+  for (const st of ["doing", "testing", "done"]) {
+    const update = { id: ht.id, status: st, by: "kimi:proj" };
+    if (st === "done") update.note = "Drill: opened it and saw it work";
+    await api("/task/update", update);
+  }
   const hist = (await api("/history?project=proj")).events;
   const hEvents = hist.filter(e => e.taskId === ht.id);
   ok("/history returns events in chronological order", hEvents.length >= 2 && hEvents[0].ts <= hEvents[1].ts);
@@ -422,11 +430,7 @@ try {
     const other = generate();
     ok("target-project identity enrolls", (await sApi(other, "POST", "/enroll", { name: "codex:crebral", kind: "agent" })).status < 400);
     await sApi(other, "POST", "/register", { session: "codex:crebral", project: "crebral", status: "seat" });
-    // A globally-scoped identity (project:"*") whose OWN NAME still says "pros" — the exact loophole
-    // the guard closes: defaultScopesFor mints project:"*" for any non-agent kind (an orchestrator, a
-    // human) by DEFAULT, so scopeAllows alone waves a cross-project write through. Self-declare the
-    // scope via TOFU (defaultScopesFor honors explicit `scopes` in the enroll body) to prove the new
-    // fence catches what the pre-existing scope check does not.
+    // Explicit global scope must not bypass the project boundary of an agent identity (#6228).
     const globalOrch = generate();
     ok("globally-scoped orchestrator identity enrolls", (await sApi(globalOrch, "POST", "/enroll", { name: "claude:pros", kind: "agent", scopes: [{ project: "*", role: "owner" }] })).status < 400);
 

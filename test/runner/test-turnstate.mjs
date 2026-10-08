@@ -58,7 +58,7 @@ async function drill(t, { maxMs, cliBody }) {
     banner: record, log: record, cmuxStatus: record, herdrAgent: record, killWatchdog: record,
     spawn: () => ({ unref: record }), telemetry: row => rows.push(row),
     spawnSync: (cmd, args, opts) => spawnSync(cmd, args, { ...opts, stdio: ["ignore", "pipe", "pipe"] }),
-    AGENT: "kimi", PROJ: "ts-drill", SESSION: "kimi:ts-drill", HUB: "http://127.0.0.1:1",
+    AGENT: "kimi", PERSONA: "kimi", PROJ: "ts-drill", SESSION: "kimi:ts-drill", HUB: "http://127.0.0.1:1",
     EFFORT: null, EFFORT_FLAG: { flag: "", text: "" },
     TURN_DIR: work, ERRF: join(work, "err.txt"), TRANSCRIPT_DIR: work, RUNNER_ID: "drill",
     MODEL: "", STATE_SCHEMA_FILE: "", TURN_MAX_MS: maxMs, TURN: 0, sid: "", inFollowUp: true,
