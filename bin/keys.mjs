@@ -2,14 +2,13 @@
 // trantor keys — identity private keys in the macOS Keychain instead of plaintext files (#11370).
 //   status [--json] · migrate [--dry-run] [--json]
 // migrate copies each file-held key into the Keychain (service trantor-identity), proves a
-// signature round-trip, and only then rewrites the file as a pubkey-only stub. Key material is
-// never printed.
+// signature round-trip, and only then rewrites the file as a pubkey-only stub. Keys are never printed.
 import { migrateKeysToKeychain, keyLocationReport, IDENTITY_SERVICE } from "../lib/identity.mjs";
 
 const args = process.argv.slice(2);
 const verb = args[0] || "status";
 const JSON_MODE = args.includes("--json");
-const C = { dim: "\x1b[2m", grn: "\x1b[32m", yel: "\x1b[33m", red: "\x1b[31m", off: "\x1b[0m]" };
+const C = { dim: "\x1b[2m", grn: "\x1b[32m", yel: "\x1b[33m", red: "\x1b[31m", off: "\x1b[0m" };
 const usage = () => {
   console.error("usage: trantor keys status [--json] | migrate [--dry-run] [--json]");
   process.exit(1);
