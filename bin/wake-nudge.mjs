@@ -24,6 +24,7 @@ import { sfetchJson } from "../lib/signed-fetch.mjs";
 import { busDir, hostId, readConfig } from "../lib/project.mjs";
 import { ledgerPaths } from "../hooks/lib/inbox-ledger.mjs";
 import { dutyEscalations, claimDutyNudges, auditDutyNudges } from "../lib/duty-nudges.mjs";
+import { recipientPanes } from "../lib/duty-recipient.mjs";
 
 const SELF = fileURLToPath(import.meta.url);
 const LABEL = "com.trantor.wake-nudge";
@@ -64,7 +65,7 @@ export function resolveRecipient(recipient, { bus = busDir(), localHost = hostId
   const mapped = read(join(bus, "orch-sessions.txt")).split("\n").find(line => line.split("\t")[0] === project)?.split("\t")[1]?.trim();
   let agents = [];
   try { agents = JSON.parse(command("herdr", ["agent", "list"])).result.agents; } catch { /* #7429: map remains available without herdr. */ }
-  const panes = agents.filter(agent => agent.agent === "claude" && (agent.agent_session?.value === mapped || agent.cwd?.split("/").pop() === project));
+  const panes = recipientPanes(project, mapped, agents);
   if (panes.length > 1) return null;
   const pane = panes[0];
   if (["working", "busy"].includes(pane?.agent_status)) return null;
