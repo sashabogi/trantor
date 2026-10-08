@@ -1,17 +1,6 @@
 #!/usr/bin/env node
-// trantor overseer e2e tests — autonomy levels, collision detection, narration, verify gates.
-//
-// The overseer detects collisions MECHANICALLY (lib/overseer.mjs) and the LLM only narrates
-// (bin/overseer-narrate.mjs). Level 1 = observe, level 2 = warn, level 3 = gate.
-//
-// Kept honest here:
-//   1. /policy defaults + set autonomy/links, GET round-trip
-//   2. overseer tick emits overseer.warn events at ANY level
-//   3. same-project-sessions + file-conflict kinds both work
-//   4. level 1 still logs events; /overseer/context.warnings is populated
-//   5. level 3+file-conflict opens a verify gate
-//   6. POST /overseer/narrate marks an event narrated
-//   7. all endpoints survive missing _overseer module (hub runs without it)
+// trantor overseer e2e tests — autonomy levels, collision detection, narration, file holds.
+// Collision detection is mechanical; narration does not decide whether work is held.
 import { mkdtempSync, mkdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -100,7 +89,7 @@ try {
 } catch (e) { fail++; console.log(`  ✗ level 1: ${e.message}`); }
 finally { await hubD.stop(); }
 
-// ── level 3 + file-conflict -> verify gate ─────────────────────────────────────────────────────
+// ── level 3 + file-conflict -> enforced hold ─────────────────────────────────────────────────────
 const hubE = await spawnHub();
 try {
   const E = mk(hubE.base);
@@ -110,12 +99,20 @@ try {
   await E.post("/claim", { project: "alpha", file: "src/x.ts", session: "host:alpha" });
   await E.post("/claim", { project: "alpha", file: "src/x.ts", session: "codex:alpha" });
   await sleep(2500);
-  const gates = await E.get("/verify-gates?project=alpha");
-  ok((gates.gates ?? []).some(g => g.status === "open" && g.by === "overseer"),
-     "level 3 + file-conflict: verify gate opened");
-  const gateEv = await E.get("/events?type=verify.gate.");
-  ok((gateEv.events ?? []).some(e => e.type === "verify.gate.opened"),
-     "verify.gate.opened event logged");
+  const holds = await E.get("/holds?project=alpha");
+  const hold = holds.holds?.find(h => h.status === "pending" && h.file === "src/x.ts" && h.session === "codex:alpha" && h.other === "host:alpha");
+  ok(Boolean(hold), "level 3 + file-conflict: later writer has a pending hold");
+  const holdEv = await E.get("/events?type=hold.");
+  ok((holdEv.events ?? []).some(e => e.type === "hold.opened" && e.holdId === hold?.id),
+     "hold.opened event logged");
+  const edit = { project: "alpha", file: "src/x.ts", session: "codex:alpha" };
+  const denied = await E.post("/hold/check", edit);
+  ok(denied.hold?.id === hold?.id && denied.hold?.reason === "held: file conflict with host:alpha, waiting on the operator",
+     "held writer's edit check is denied with the conflicting session");
+  const decision = await E.post("/hold/decide", { project: "alpha", id: hold?.id, status: "go" });
+  ok(decision.ok === true && decision.hold?.status === "go", "operator Go releases the held writer");
+  const allowed = await E.post("/hold/check", edit);
+  ok(allowed.ok === true && allowed.hold === null, "held writer's edit check is allowed after Go");
 } catch (e) { fail++; console.log(`  ✗ level 3 gate: ${e.message}`); }
 finally { await hubE.stop(); }
 
@@ -141,11 +138,8 @@ try {
 } catch (e) { fail++; console.log(`  ✗ narrate: ${e.message}`); }
 finally { await hubF.stop(); }
 
-// ── EPISODES, not a metronome (regression 2026-08-12) ──────────────────────────────────────────
-// A collision is a STATE. The old code cleared its dedup map on a timer, so a standing condition
-// re-fired every window forever — 500 events for 4 distinct conditions in 8 days, each one also
-// waking the duty seat for a full turn. A held condition must warn EXACTLY ONCE, and must be able
-// to fire again only after it has genuinely cleared.
+// ── EPISODES, not a metronome (episode regression) ──────────────────────────────────────────
+// A standing condition warns once; only a genuine clear and recurrence may warn again.
 const hubG = await spawnHub({
   RELAY_OVERSEER_TICK_MS: "300", RELAY_OVERSEER_CLEAR_MS: "2500",
   RELAY_OVERSEER_PEER_LIVE_MS: "2500",  // so the condition can actually go away inside a test —
@@ -185,11 +179,7 @@ try {
 finally { await hubG.stop(); }
 
 // ── EPISODE IDENTITY is the condition, not the membership (fixes #5350) ────────────────────────
-// The episode key included the session list, so a seat bouncing in and out of a STANDING collision
-// minted a new episode per membership permutation: a new warn, another duty wake, another round of
-// party intros — churn proportional to how often seats come and go, not to how often conditions
-// actually start. The episode must be the CONDITION (project+kind+files): membership volatility
-// holds the existing episode; only a genuine clear-then-recur may warn again.
+// Membership changes must preserve the standing episode while introducing newcomers once.
 const hubH = await spawnHub({
   RELAY_OVERSEER_TICK_MS: "300", RELAY_OVERSEER_CLEAR_MS: "1500", RELAY_OVERSEER_PEER_LIVE_MS: "1500",
 });
@@ -237,13 +227,7 @@ try {
 finally { await hubH.stop(); }
 
 // ── #5760: a DECLARED CREW is the normal state, not a collision ────────────────────────────────
-// The seats `trantor up` spawned plus the operator's orchestrator are how every project normally
-// looks — a crew-only same-project set must not warn, not DM, and not even reach the context
-// feed. Only a session OUTSIDE the declared crew is a collision. The crew declaration is HUB
-// state now (#6075): peer rows carry kind — "agent" for seats announced by `trantor up`
-// (crew-runner stamps every /register), "orch" for the project's orchestrator pane. NO local
-// crew-windows.txt is written here: this hub's HOME is a fixture dir on purpose, the same way
-// the production netcup hub has no operator-machine files to read.
+// Declared crew members are normal project activity; an undeclared stranger opens an episode.
 const dirI = mkdtempSync(join(tmpdir(), "trantor-overseer-crew-"));
 mkdirSync(join(dirI, ".agent-bus"), { recursive: true });
 const hubI = await spawnHub({}, dirI);
@@ -292,12 +276,7 @@ try {
 finally { await hubI.stop(); rmSync(dirI, { recursive: true, force: true }); }
 
 // ── #6170: a hub restart must not forget who is crew ──────────────────────────────────────────
-// The bug, twice on 09-03 (08:05 and 08:20): peer kinds lived only in hub memory, so a restart
-// came back with every seat kindless, declaredCrewFor() found no crew, and the overseer warned the
-// operator about their own seats. Two separate losses had to be fixed — the peers table had no
-// kind column, AND normalizeState() rebuilds every peer from an explicit field list that dropped
-// it on load. This drill covers the second, on the JSON store, so it needs no Postgres: the
-// normalizer runs on that path too, and it is the one that survived the first fix.
+// Persisted peer kinds preserve crew membership across hub restarts.
 console.log("\n#6170: peer kinds survive a hub restart");
 {
   const dirK = mkdtempSync(join(tmpdir(), "trantor-overseer-kind-"));
