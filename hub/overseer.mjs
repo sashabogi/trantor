@@ -152,6 +152,10 @@ function overseerTick() {
   const intro = (c, me, others) => {
     const project = state.peers[me]?.project || c.project;
     if (levelFor(project, pol.autonomy) < 2) return;
+    if (c.kind === "remote-overlap") {
+      duty.hubSend(me, `⚠️ OVERSEER remote-overlap: ${c.detail || ""}`, project);
+      return;
+    }
     const rest = others.filter(p => p !== me);
     if (rest.length === 0) return;
     duty.hubSend(me,
@@ -197,7 +201,7 @@ function overseerTick() {
       }
       // The episode OPENS and the pure rule said fire — first sighting, or a membership change
       // on a remembered set; the record line states how long the previous state held.
-      overseerActive.set(key, { since: t, lastTick: t, sessions: new Set(parties) });
+      overseerActive.set(key, { kind: c.kind, since: t, lastTick: t, sessions: new Set(parties) });
       c.since = t;
       if (d.reason === "membership-changed") c.detail = `${c.detail || ""} (same-project for ${_sameProject.durationLabel(d.durationMs)})`.trim();
       sameProjectFired.set(scope, { hash: _sameProject.memberSetHash(c.sessions), sessions: c.sessions, ts: t });
@@ -232,18 +236,18 @@ function overseerTick() {
       for (const me of parties) standing.sessions.add(me);
       continue;
     }
-    overseerActive.set(key, { since: t, lastTick: t, sessions: new Set(parties) });
+    overseerActive.set(key, { kind: c.kind, since: t, lastTick: t, sessions: new Set(parties) });
     c.since = t;
     appendEvent("overseer.warn", c.project, "overseer",
       { kind: c.kind, sessions: c.sessions || [], files: c.files || [], detail: c.detail || "", narrated: false });
     if (levelFor(c.project, pol.autonomy) >= 2 && duty.session) duty.hubSend(duty.session, `⚠️ OVERSEER ${c.kind} [${c.project}]: ${c.detail || ""} — if the parties are not already coordinating, message them.`, c.project);
-    if (parties.length > 1) for (const me of parties) intro(c, me, parties);
+    if (parties.length > 1 || c.kind === "remote-overlap") for (const me of parties) intro(c, me, parties);
 
   }
   // Episode end: a condition gone for the whole clear window is over, so a LATER recurrence is a
   // new episode and warns again. Without this the map would grow forever and nothing could re-fire.
   for (const [k, v] of overseerActive) {
-    if (!seen.has(k) && t - v.lastTick > OVERSEER_CLEAR_MS) {
+    if (!seen.has(k) && (v.kind === "remote-overlap" || t - v.lastTick > OVERSEER_CLEAR_MS)) {
       overseerActive.delete(k);
       // #5760: the same-project verdict record dies WITH its episode — a set that returns after a
       // genuine clear is a new episode (it warns again, first sighting), not the old one continuing.

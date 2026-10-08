@@ -8,6 +8,19 @@ import { join } from "node:path";
 // consume a claim's first-touch (or vice versa), and /claims must never list reads. #7972.
 const fileReads = new Map();
 
+function remoteEvidence(value, file) {
+  if (!Array.isArray(value)) return [];
+  return value.slice(0, 25).filter(row =>
+    row && typeof row.repo === "string" && /^[\w.-]+\/[\w.-]+$/.test(row.repo) && row.repo.length <= 200 &&
+    Number.isSafeInteger(row.number) && row.number > 0 &&
+    typeof row.author === "string" && row.author.length > 0 && row.author.length <= 120 &&
+    typeof row.url === "string" && row.url.length <= 2000 &&
+    (row.url === "" || /^https:\/\/[^\s]+$/.test(row.url)) &&
+    Array.isArray(row.files) && row.files.includes(file)
+  ).map(row => ({ repo: row.repo.toLowerCase(), number: row.number, author: row.author,
+    url: row.url, files: [file] }));
+}
+
 export async function routeAdmin({ req, res, q, P, auth, ctx }) {
   const {
     state, body, json, crossProjectGuard, touch, canon, filterReadable,
@@ -304,7 +317,9 @@ export async function routeAdmin({ req, res, q, P, auth, ctx }) {
       const conflicts = [...fileClaims.values()]
         .filter(c => checkoutKey(c) === checkoutKey({ project: proj, gitRoot }) && c.file === file && c.session !== session)
         .map(c => ({ session: c.session, ts: c.ts, agoSec: Math.round((now() - c.ts) / 1000) }));
-      fileClaims.set(key, { project: proj, file, session, gitRoot, ts: now() });
+      const remote = P === "/hold/check" && b.remote === undefined
+        ? (mine?.remote || []) : remoteEvidence(b.remote, file);
+      fileClaims.set(key, { project: proj, file, session, gitRoot, ts: now(), remote });
       touch(session, undefined, undefined, undefined, auth);
       if (gitRoot) {
         state.peers[session].gitRoot = gitRoot;
