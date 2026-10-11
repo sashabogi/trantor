@@ -60,6 +60,7 @@ export class DrillReport {
 
   exitCode() {
     // Manual recipes stay visible as SKIP; only missing/failed proof or a refused close is red.
+    // "gone" is neither: the seam proved, the card just isn't on the board anymore (#11498).
     return Object.values(this.results()).some(result => result.status === "fail" || result.closure.startsWith("failed:")) ? 1 : 0;
   }
 
@@ -70,11 +71,18 @@ export class DrillReport {
         id: Number(id), project: this.project, by: this.session, status: "done",
         note: `Drill: trantor drill PASS\n${result.evidence.join("\n")}`.slice(0, 2000),   // "Drill:" prefix: the hub's done gate (#6452) reads it as the drill line
       }, { project: this.project, session: this.session, timeoutMs: 15000 });
+      // A 404 on /task/update is the hub saying the card isn't on the board — the fleet cap deletes
+      // old cards (#11142), so a green drill can hold a stale map. That is not a failed seam: record
+      // it as gone and stay green. Any other refusal (403 cross-project, 409 done-gate, 500) is a
+      // real hub "no" and stays red (#11498). Never renumber the map to chase new card ids.
       this.closures[id] = response.ok && response.json?.task?.status === "done"
         && response.json.task.id === Number(id) && response.json.task.project === this.project
-        ? "done" : `failed: hub ${response.status} ${response.json?.error || "did not confirm done"}`;
+        ? "done"
+        : response.status === 404 ? "gone: card no longer on the board"
+        : `failed: hub ${response.status} ${response.json?.error || "did not confirm done"}`;
       this.write();
     }
-    return Object.values(this.closures).every(value => value === "done");
+    // "gone" closures are not failures — the verdict must not red on a stale map.
+    return Object.values(this.closures).every(value => !value.startsWith("failed:"));
   }
 }

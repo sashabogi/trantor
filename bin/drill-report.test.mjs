@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { createServer, createConnection } from "node:net";
+import { createServer as createHttpServer } from "node:http";
 import { DrillReport } from "./drill-report.mjs";
 import { CARD_STEPS, findHandoff } from "./drill-surface.mjs";
 import { appVerdict, startDrillHub, stopChild, checkSocketHome } from "./drill-seams.mjs";
@@ -72,18 +73,75 @@ test("signed closer on an enforce hub: complete evidence closes, partial/failure
       assert.equal(blocked.results()[blockedId].status, status);
       assert.equal((await signedGet("/tasks?project=trantor")).json.tasks.find(row => row.id === blockedId).status, "testing");
     }
+    // #11498: a green seam mapped to a card the board no longer has (the fleet cap deletes old
+    // cards, #11142) — the hub's 404 "no such task" is a stale map, recorded as gone, never red.
     const missing = new DrillReport({ 999999: { steps: ["step"], autoClose: true } }, path, { project, session });
     missing.record("step", "pass", "proof");
     missing.complete("step");
-    assert.equal(await missing.closePassed(), false);
-    assert.match(missing.results()[999999].closure, /failed: hub 404/);
-    assert.equal(missing.exitCode(), 1);
+    assert.equal(await missing.closePassed(), true);
+    assert.equal(missing.results()[999999].closure, "gone: card no longer on the board");
+    assert.equal(missing.exitCode(), 0);
     const fresh = new DrillReport({ [id]: { steps: ["one"], autoClose: true } }, path, { project, session });
     assert.equal(fresh.results()[id].status, "fail", "a rerun cannot inherit old PASS evidence");
   } finally {
     for (const key of Object.keys(process.env)) if (!(key in saved)) delete process.env[key];
     Object.assign(process.env, saved);
     await stopChild(hub.child);
+    rmSync(world, { recursive: true, force: true });
+  }
+});
+
+test("gone vs refused (#11498): a 404 no-such-task close is green, any other refusal stays red", async () => {
+  const out = join(import.meta.dirname, "..", ".agent-bus-out");
+  mkdirSync(out, { recursive: true });
+  const world = mkdtempSync(join(out, "refusal-test-"));
+  const bus = join(world, "bus");
+  mkdirSync(bus, { recursive: true });
+  // A stub hub that refuses per card id: 777 is gone (404 no-such-task, the fleet cap's answer,
+  // #11142), 4242 is a cross-project refusal, 5150 a server error — the closes a drill must keep red.
+  const answers = { 777: [404, "no such task"], 4242: [403, "cross-project writes are refused"], 5150: [500, "hub exploded"] };
+  const stub = createHttpServer((req, res) => {
+    let body = "";
+    req.on("data", d => { body += d; });
+    req.on("end", () => {
+      let id = null; try { id = JSON.parse(body).id; } catch {}
+      const [code, error] = answers[id] || [404, "no such task"];
+      res.writeHead(code, { "content-type": "application/json" });
+      res.end(JSON.stringify({ error }));
+    });
+  });
+  await new Promise(resolve => stub.listen(0, "127.0.0.1", resolve));
+  const saved = { ...process.env };
+  Object.assign(process.env, { RELAY_URL: `http://127.0.0.1:${stub.address().port}`, AGENT_BUS_DIR: bus, RELAY_SESSION: "drill:trantor", RELAY_PROJECT: "trantor" });
+  const ctx = { project: "trantor", session: "drill:trantor" };
+  try {
+    const report = (id) => {
+      const r = new DrillReport({ [id]: { steps: ["step"], autoClose: true } }, join(world, `result-${id}.json`), ctx);
+      r.record("step", "pass", "proof", "real evidence");
+      r.complete("step");
+      return r;
+    };
+    const gone = report(777);
+    assert.equal(await gone.closePassed(), true, "404 no-such-task is a stale map, not a failed seam");
+    assert.equal(gone.results()[777].closure, "gone: card no longer on the board");
+    assert.equal(gone.exitCode(), 0);
+
+    // gone + refused together: one real hub refusal among gones still reds the drill
+    const mixed = new DrillReport({ 777: { steps: ["step"], autoClose: true }, 4242: { steps: ["step"], autoClose: true } }, join(world, "result-mixed.json"), ctx);
+    for (const id of [777, 4242]) { mixed.record("step", "pass", "proof", "real evidence"); mixed.complete("step"); }
+    assert.equal(await mixed.closePassed(), false);
+    assert.equal(mixed.results()[777].closure, "gone: card no longer on the board");
+    assert.match(mixed.results()[4242].closure, /^failed: hub 403/);
+    assert.equal(mixed.exitCode(), 1);
+
+    const dead = report(5150);
+    assert.equal(await dead.closePassed(), false, "a server error is a real refusal");
+    assert.match(dead.results()[5150].closure, /^failed: hub 500/);
+    assert.equal(dead.exitCode(), 1);
+  } finally {
+    for (const key of Object.keys(process.env)) if (!(key in saved)) delete process.env[key];
+    Object.assign(process.env, saved);
+    stub.close();
     rmSync(world, { recursive: true, force: true });
   }
 });
