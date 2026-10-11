@@ -44,6 +44,21 @@ check("preserves live, recent, fresh, real and stub files", [live, recent, fresh
 check("requires numbered known pattern", !isTestIdentity("relay-selftest-personal") && !isTestIdentity("my-test-key"));
 check("recognizes sanitized fixture prefix", isTestIdentity("livetest_relay-selftest-123"));
 check("recognizes host-qualified test names", isTestIdentity("some-host.local:hoff-selftest-123"));
+for (const family of ["defer", "supersede"]) {
+  for (const prefix of ["", "MacBook-Pro-M1:", "MacBook-Pro-M1_"]) {
+    check(`recognizes handoff fixture ${prefix}${family}`, isTestIdentity(`${prefix}${family}-123`));
+  }
+  for (const suffix of ["", "personal", "123personal", "123-personal"]) {
+    check(`rejects handoff lookalike ${family}-${suffix}`, !isTestIdentity(`MacBook-Pro-M1:${family}-${suffix}`));
+  }
+  const fixture = mint(`MacBook-Pro-M1:${family}-123`);
+  const lookalike = mint(`MacBook-Pro-M1:${family}-personal`);
+  const dryRun = pruneTestKeys({ snapshots: [snapshot], now });
+  check(`dry run includes only numbered ${family} fixture`, dryRun.removed.includes(fixture.name) && !dryRun.removed.includes(lookalike.name));
+  check(`dry run preserves ${family} files`, existsSync(keyPath(fixture.name)) && existsSync(keyPath(lookalike.name)));
+  rmSync(keyPath(fixture.name));
+  rmSync(keyPath(lookalike.name));
+}
 const retained = keyUsageSnapshot({ peers: { old: { pubkey: real.pubkey, lastSeen: now - 86400000 } },
   instances: { stale: { durable: "a".repeat(64), lastSeen: now - 2 * 86400000 } } }, now, 300000);
 check("snapshot retains offline peer and instance history", retained.identities.length === 2 && retained.identities.every(r => !r.live && r.lastSeen > 0));
