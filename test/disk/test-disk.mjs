@@ -2,13 +2,14 @@
 // trantor disk tests — temp HOME, injected exec, recording remove: no real
 // simctl, opencode, docker, launchctl, and no deletion outside the temp dir.
 import {
-  mkdtempSync, mkdirSync, rmSync, writeFileSync, existsSync, symlinkSync, realpathSync,
+  mkdtempSync, mkdirSync, rmSync, writeFileSync, existsSync, symlinkSync, realpathSync, utimesSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   assertUnderHome, buildDiskReport, runClean, runDisk, formatHuman,
-  launchdPlist, fmtBytes, dirSize, gitTracked, DAY,
+  launchdPlist, fmtBytes, dirSize, gitTracked, DAY, freedOnDiskBytes, turnStampPath,
+  SCRATCH_DIRS, SCRATCH_IDLE_MAX,
 } from "../../lib/disk.mjs";
 
 let pass = 0, fail = 0;
@@ -23,12 +24,29 @@ console.log("# trantor disk tests");
 // and assertUnderHome's resolve() would otherwise hand back paths that fail startsWith(HOME).
 const HOME = realpathSync(mkdtempSync(join(tmpdir(), "trantor-disk-home-")));
 const NOW = 1_800_000_000_000; // fixed clock: every idle computation is exact
+const OLD = NOW - 3 * DAY;     // older than SCRATCH_IDLE_MAX (2d) — safely stale
+// Backdate a whole tree to `t`: the age rules read max mtime over files AND dirs
+// (a rename updates the dir, not the file), so every node must carry the old stamp.
+function ageTree(fsmod, root, t) {
+  // Date objects, never bare numbers: utimesSync reads numbers as SECONDS, and these
+  // ms values clamp to the max representable timestamp — a far-future "fresh" mtime.
+  utimesSync(root, new Date(t), new Date(t));
+  let entries = [];
+  try { entries = fsmod.readdirSync(root, { withFileTypes: true }); } catch { return; }
+  for (const e of entries) {
+    const p = join(root, e.name);
+    if (e.isDirectory()) ageTree(fsmod, p, t);
+    else { try { utimesSync(p, new Date(t), new Date(t)); } catch {} }
+  }
+}
 try {
-  // ---- fixture: two seat worktrees, one dead one live; a git-tracked build dir ----
+  // ---- fixture: seat worktrees — dead, live (ps + fresh turn stamp), tracked, stale-stamp ----
   const dead = join(HOME, ".agent-bus", "worktrees", "proj", "dead-seat");
   const live = join(HOME, ".agent-bus", "worktrees", "proj", "live-seat");
   const tracked = join(HOME, ".agent-bus", "worktrees", "proj", "tracked-seat");
-  for (const wt of [dead, live, tracked]) {
+  const stamped = join(HOME, ".agent-bus", "worktrees", "proj", "stamp-seat");
+  const stampLive = join(HOME, ".agent-bus", "worktrees", "proj", "stamp-live-seat");
+  for (const wt of [dead, live, tracked, stamped, stampLive]) {
     mkdirSync(join(wt, ".next", "cache"), { recursive: true });
     writeFileSync(join(wt, ".next", "cache", "f.js"), "x".repeat(1024));
   }
@@ -36,6 +54,42 @@ try {
   writeFileSync(join(dead, "target", "debug", "bin"), "y".repeat(2048));
   mkdirSync(join(tracked, "target"), { recursive: true });
   writeFileSync(join(tracked, "target", "keep.js"), "z");
+  // #11486 scratch: the contract's three shapes — an OLD entry, a FRESH one, and an OLD
+  // one in a LIVE seat (only the first is ever removed). The live seat's entry is
+  // deliberately backdated: liveness, not age, is what must protect it.
+  mkdirSync(join(dead, ".agent-bus-out", "old-entry", "deep"), { recursive: true });
+  writeFileSync(join(dead, ".agent-bus-out", "old-entry", "deep", "gate.json"), "g".repeat(512));
+  mkdirSync(join(dead, ".agent-bus-out", "fresh-entry"), { recursive: true });
+  writeFileSync(join(dead, ".agent-bus-out", "fresh-entry", "now.txt"), "n");
+  mkdirSync(join(dead, ".scratch"), { recursive: true });
+  writeFileSync(join(dead, ".scratch", "old-note.txt"), "o".repeat(256));
+  writeFileSync(join(dead, ".scratch", "recent.txt"), "r");
+  mkdirSync(join(live, ".agent-bus-out", "old-but-live"), { recursive: true });
+  writeFileSync(join(live, ".agent-bus-out", "old-but-live", "evidence.txt"), "l");
+  mkdirSync(join(stampLive, ".agent-bus-out", "old-but-fresh-stamp"), { recursive: true });
+  writeFileSync(join(stampLive, ".agent-bus-out", "old-but-fresh-stamp", "midturn.bin"), "m");
+  mkdirSync(join(stamped, ".agent-bus-out", "stale-stamp-scratch"), { recursive: true });
+  writeFileSync(join(stamped, ".agent-bus-out", "stale-stamp-scratch", "junk.bin"), "s".repeat(128));
+  // backdate everything deletable EXCEPT the live seat's fresh .next
+  for (const p of [join(dead, ".next"), join(dead, "target"), join(tracked, ".next"),
+    join(stamped, ".next"), join(stampLive, ".next"), join(dead, ".agent-bus-out", "old-entry"),
+    join(dead, ".scratch", "old-note.txt"), join(live, ".agent-bus-out", "old-but-live"),
+    join(stamped, ".agent-bus-out", "stale-stamp-scratch"),
+    join(stampLive, ".agent-bus-out", "old-but-fresh-stamp")]) ageTree(await import("node:fs"), p, OLD);
+  // "fresh" means NOW on the FIXED clock: real creation time drifts stale against it
+  for (const p of [join(dead, ".agent-bus-out", "fresh-entry"), join(dead, ".agent-bus-out", "fresh-entry", "now.txt"),
+    join(dead, ".scratch", "recent.txt"), join(live, ".next")]) ageTree(await import("node:fs"), p, NOW);
+  // the runner's turn stamps: live-seat and stamp-live-seat FRESH (a turn may be live;
+  // stamp-live has NO ps line — the stamp alone must protect it), stamp-seat's stale
+  // (3d — no turn can still be running; the time box kills in hours)
+  mkdirSync(join(HOME, ".agent-bus"), { recursive: true });
+  for (const seat of ["live-seat", "stamp-live-seat"]) {
+    writeFileSync(turnStampPath(HOME, "proj", seat), "{}");
+    utimesSync(turnStampPath(HOME, "proj", seat), new Date(NOW), new Date(NOW));
+  }
+  writeFileSync(turnStampPath(HOME, "proj", "stamp-seat"), "{}");
+  utimesSync(turnStampPath(HOME, "proj", "stamp-seat"), new Date(OLD), new Date(OLD));
+  const DEAD_BYTES = 1024 + 2048 + 1024 + 1024 + 512 + 256 + 128; // every planned on-disk item
 
   // ---- HF cache fixture: shared-blob layout, the real weights at the end of
   // snapshot symlinks; a per-model blob, a second rev re-linking the same blob, a
@@ -83,15 +137,34 @@ try {
   // ---- report mode: the plan is built, nothing is deleted ----
   const report = buildDiskReport(d);
   const planPaths = report.plan.filter((p) => p.type === "build-dir").map((p) => p.path);
+  const scratchPaths = report.plan.filter((p) => p.type === "scratch-entry").map((p) => p.path);
   const planSessions = report.plan.filter((p) => p.type === "opencode-session").map((p) => p.id);
   ok("dead seat's .next is planned for deletion", planPaths.includes(join(dead, ".next")), JSON.stringify(planPaths));
   ok("dead seat's target is planned for deletion", planPaths.includes(join(dead, "target")));
   ok("live seat's .next is never planned", !planPaths.some((p) => p.startsWith(live)));
+  ok("a stale turn stamp does not keep a seat live — stamp-seat's .next is planned",
+    planPaths.includes(join(stamped, ".next")), JSON.stringify(planPaths));
   ok("git-tracked target is never planned", !planPaths.some((p) => p === join(tracked, "target")));
   ok("only the idle >14d session is planned", JSON.stringify(planSessions) === JSON.stringify(["ses_old"]), JSON.stringify(planSessions));
+  ok("the dead seat's OLD scratch entry is planned", scratchPaths.includes(join(dead, ".agent-bus-out", "old-entry")), JSON.stringify(scratchPaths));
+  ok("the dead seat's OLD scratch FILE is planned", scratchPaths.includes(join(dead, ".scratch", "old-note.txt")), JSON.stringify(scratchPaths));
+  ok("the FRESH scratch entry is never planned", !scratchPaths.includes(join(dead, ".agent-bus-out", "fresh-entry")));
+  ok("the recent scratch file is never planned", !scratchPaths.includes(join(dead, ".scratch", "recent.txt")));
+  ok("the LIVE seat's old scratch entry is never planned — liveness outranks age",
+    !scratchPaths.some((p) => p.startsWith(live)), JSON.stringify(scratchPaths));
+  ok("the scratch dirs themselves are never planned, only entries inside",
+    !scratchPaths.some((p) => p.endsWith(".agent-bus-out") || p === join(dead, ".scratch")));
   ok("session inside a live seat worktree is KEPT with a reason", report.kept.some((k) => k.path === live && /ses_livewt/.test(k.reason)));
   ok("live seat .next listed as KEPT", report.kept.some((k) => k.path === join(live, ".next")));
+  ok("a fresh turn stamp alone keeps a seat's scratch — stamp-live has no ps line",
+    !report.plan.some((p) => String(p.path || "").startsWith(stampLive))
+    && report.kept.some((k) => k.path === join(stampLive, ".agent-bus-out", "old-but-fresh-stamp") && /turn stamp/.test(k.reason)),
+    JSON.stringify(report.kept.filter((k) => k.path.startsWith(stampLive))));
+  ok("live seat's old scratch is KEPT (ps liveness)",
+    report.kept.some((k) => k.path === join(live, ".agent-bus-out", "old-but-live") && /live seat process/.test(k.reason)));
   ok("tracked target listed as KEPT", report.kept.some((k) => k.path === join(tracked, "target") && /git-tracked/.test(k.reason)));
+  ok("fresh scratch listed as KEPT with its age reason",
+    report.kept.some((k) => k.path === join(dead, ".agent-bus-out", "fresh-entry") && /touched within/.test(k.reason)));
   ok("unavailable simulators counted from simctl output", report.simulators.unavailable === 2 && report.simulators.available);
   ok("simulators are one plan entry", report.plan.filter((p) => p.type === "simulators").length === 1);
   ok("HF model sizes resolve snapshot symlinks to the blobs, deduped",
@@ -104,25 +177,39 @@ try {
     removed.length === 0
     && !calls.some((c) => c.join(" ") === "xcrun simctl delete unavailable")
     && !calls.some((c) => c.join(" ") === "opencode session delete ses_old"));
+  ok("freedOnDiskBytes sums exactly the on-disk plan items",
+    freedOnDiskBytes(report.plan) === DEAD_BYTES, `${freedOnDiskBytes(report.plan)} vs ${DEAD_BYTES}`);
 
   const human = formatHuman(report);
   ok("drill: free space, category sizes and the exact deletion list print", human.includes("free of") && human.includes("safe tier would delete") && human.includes("dead-seat"));
+  ok("drill: scratch DELETE lines carry their bytes",
+    human.includes(`DELETE 512 B ${join(dead, ".agent-bus-out", "old-entry")}`)
+    && human.includes(`DELETE 256 B ${join(dead, ".scratch", "old-note.txt")}`),
+    human.split("\n").filter((l) => l.includes("DELETE")).join(" | "));
   ok("drill: KEPT lines carry their reasons", /KEPT: .*live seat process/.test(human) && /KEPT: .*git-tracked/.test(human));
   ok("drill: KEPT lines name the path, same as DELETE", human.includes(`KEPT: a live seat process uses this worktree  ${join(live, ".next")}`));
   ok("drill: HF cache header is formatted, not a raw byte count",
     human.includes(`huggingface cache: ${fmtBytes(HF_TOTAL)}`) && !human.includes(`huggingface cache: ${HF_TOTAL}`));
 
   // ---- clean mode: only the plan executes, only under the temp HOME ----
+  const before = removed.length;
   const results = await runClean(report, d);
-  ok("clean removed dead-seat build dirs only",
+  ok("clean removed the dead and stale-stamp seats' build dirs only",
     !existsSync(join(dead, ".next")) && !existsSync(join(dead, "target"))
+    && !existsSync(join(stamped, ".next"))
     && !existsSync(join(tracked, ".next"))
     && existsSync(join(live, ".next")) && existsSync(join(tracked, "target")));
-  ok("every removal path was asserted under the temp HOME", removed.length === 3 && removed.every((p) => p.startsWith(HOME)));
+  ok("clean removed only the OLD scratch entries",
+    !existsSync(join(dead, ".agent-bus-out", "old-entry")) && !existsSync(join(dead, ".scratch", "old-note.txt"))
+    && !existsSync(join(stamped, ".agent-bus-out", "stale-stamp-scratch"))
+    && existsSync(join(dead, ".agent-bus-out", "fresh-entry")) && existsSync(join(dead, ".scratch", "recent.txt"))
+    && existsSync(join(live, ".agent-bus-out", "old-but-live"))
+    && existsSync(join(stampLive, ".agent-bus-out", "old-but-fresh-stamp")) && existsSync(join(stampLive, ".next")));
+  ok("every removal path was asserted under the temp HOME", removed.length === before + 7 && removed.every((p) => p.startsWith(HOME)));
   ok("simulators deleted via the official CLI", calls.some((c) => c.join(" ") === "xcrun simctl delete unavailable"));
   ok("session deleted via the official CLI", calls.some((c) => c.join(" ") === "opencode session delete ses_old"));
   ok("fresh session untouched", !calls.some((c) => c.join(" ").includes("ses_fresh")));
-  ok("results report per-item success", results.length === 5 && results.every((r) => r.ok), JSON.stringify(results));
+  ok("results report per-item success", results.length === 9 && results.every((r) => r.ok), JSON.stringify(results));
 
   // ---- the under-$HOME gate refuses escapes ----
   let refused = false;
@@ -132,7 +219,7 @@ try {
 
   // ---- runDisk end-to-end in report mode (args gate the clean) ----
   const run = await runDisk({ ...d, args: [] });
-  ok("runDisk without --clean never cleans", run.results.length === 0 && removed.length === 3);
+  ok("runDisk without --clean never cleans", run.results.length === 0 && removed.length === before + 7);
 
   // ---- launchd plist is Monday 09:00 running --weekly ----
   const plist = launchdPlist({ nodePath: "/usr/local/bin/node", scriptPath: "/x/bin/disk.mjs", logPath: "/x/log" });
@@ -145,9 +232,12 @@ try {
   const symSize = dirSize(await import("node:fs"), symW);
   rmSync(symW, { recursive: true, force: true });
   ok("dirSize skips symlinks", symSize.bytes === 5 && existsSync(HOME));
+  ok("dirSize reports maxMtime over files and dirs", symSize.maxMtime > 0);
   ok("gitTracked reads git, not assumptions", gitTracked(exec, tracked, "target") === true && gitTracked(exec, dead, ".next") === false);
   ok("fmtBytes stays human", fmtBytes(Number((1.5 * 1024 ** 3).toFixed(0))) === "1.5 GB" && fmtBytes(999) === "999 B");
   ok("build-dir sizes are measured", report.plan.find((p) => p.path === join(dead, "target"))?.bytes === 2048);
+  ok("scratch constants are the 2-day window over .agent-bus-out and .scratch",
+    SCRATCH_IDLE_MAX === 2 * DAY && JSON.stringify(SCRATCH_DIRS) === JSON.stringify([".agent-bus-out", ".scratch"]));
 } finally {
   rmSync(HOME, { recursive: true, force: true });
 }

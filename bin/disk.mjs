@@ -7,15 +7,14 @@ import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { homedir, platform, userInfo } from "node:os";
-import { runDisk, formatHuman, fmtBytes, launchdPlist } from "../lib/disk.mjs";
+import { runDisk, formatHuman, fmtBytes, launchdPlist, freedOnDiskBytes } from "../lib/disk.mjs";
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 
 function summaryLine(r, results) {
   const okN = results.filter((x) => x.ok).length;
   const failN = results.length - okN;
-  const freed = r.plan.filter((p) => p.type === "build-dir").reduce((n, p) => n + (p.bytes || 0), 0);
-  return `disk janitor: safe tier ${okN ? `cleaned ${okN} item(s)` : "nothing to clean"}${failN ? `, ${failN} FAILED` : ""} (~${fmtBytes(freed)} build output), now ${fmtBytes(r.freeBytes)} free of ${fmtBytes(r.totalBytes)} — report: trantor disk`;
+  return `disk janitor: safe tier ${okN ? `cleaned ${okN} item(s)` : "nothing to clean"}${failN ? `, ${failN} FAILED` : ""} (~${fmtBytes(freedOnDiskBytes(r.plan))} freed), now ${fmtBytes(r.freeBytes)} free of ${fmtBytes(r.totalBytes)} — report: trantor disk`;
 }
 
 async function sendWeeklyMessage(text) {
@@ -66,8 +65,9 @@ if (args.includes("--help") || args.includes("-h") || args[0] === "help") {
 
   trantor disk              report only (also prints exactly what the safe tier would delete)
   trantor disk --dry-run    the same report, explicit
-  trantor disk --clean      run the SAFE tier: unavailable simulators, build output in dead
-                            seat worktrees (.next, target, desktop/src-tauri/target),
+  trantor disk --clean      run the SAFE tier: unavailable simulators, build output and
+                            stale scratch (.agent-bus-out/.scratch entries idle 2+ days) in
+                            seat worktrees with no live turn (ps + the runner's turn stamp),
                             opencode sessions idle >14 days. Everything else stays.
   trantor disk --json       machine-readable report
   trantor disk install      Monday 09:00 launchd job (runs --weekly: clean + one bus message)`);
