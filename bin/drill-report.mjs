@@ -78,7 +78,7 @@ export class DrillReport {
       this.closures[id] = response.ok && response.json?.task?.status === "done"
         && response.json.task.id === Number(id) && response.json.task.project === this.project
         ? "done"
-        : response.status === 404 ? "gone: card no longer on the board"
+        : response.status === 404 && response.json?.error === "no such task" ? "gone: card no longer on the board"
         : `failed: hub ${response.status} ${response.json?.error || "did not confirm done"}`;
       this.write();
     }
