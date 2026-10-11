@@ -1,14 +1,6 @@
 #!/usr/bin/env node
-// A parked seat must reach the operator OUT OF BAND, and a supervised seat must not sit parked.
-//
-// The 2026-09-09 incident had two halves. parkSeat() announced the park with two /send calls — over
-// the same bus that had just stopped moving, to an orchestrator that was idle and therefore could
-// not receive it. The alarm for "the bus is stuck" cannot itself be a bus message. And the duty
-// seat then sat parked for 21.9 hours because only `trantor up` un-parks a seat, even though duty
-// is the one seat running under a launchd keepalive that could have restarted it in seconds.
-//
-// These assert the two fixes at the level they can be tested without a live hub: the durable alert
-// trace that survives an unattended machine, and the ceiling that only a supervised seat carries.
+import "../isolate-bus.mjs";
+// Park alerts must survive a stalled bus; supervised seats must restart within their ceiling.
 import { spawnSync } from "node:child_process";
 import { mkdtempSync, readFileSync, existsSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";

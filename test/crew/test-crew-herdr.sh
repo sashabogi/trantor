@@ -13,7 +13,11 @@ CREW=("$(command -v node)" "$ROOT/bin/crew.mjs")
 PASS=0; FAIL=0
 ok(){ if eval "$2"; then PASS=$((PASS+1)); echo "  ✓ $1"; else FAIL=$((FAIL+1)); echo "  ✗ $1  [$2]"; fi; }
 
-TMP="$(mktemp -d)"
+mkdir -p "$ROOT/.agent-bus-out"
+TMP="$(mktemp -d "$ROOT/.agent-bus-out/crew-test.XXXXXX")"
+export AGENT_BUS_DIR="$TMP/.agent-bus"
+export TRANTOR_NO_KEYCHAIN=1
+export GIT_CEILING_DIRECTORIES="$ROOT/.agent-bus-out"
 trap 'rm -rf "$TMP"' EXIT
 mkdir -p "$TMP/.agent-bus" "$TMP/fakebin" "$TMP/proj"
 cat > "$TMP/fakebin/osascript" <<EOF

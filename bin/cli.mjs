@@ -240,7 +240,7 @@ switch (cmd) {
   trantor profile     declare your plans:  trantor profile set claude=max codex=plus deepseek=api
   trantor provider    bring ANY model (BYOM): list · status [--json] · verify <name> --key … · add <name> --key … · remove <name>
   trantor secrets     provider keys in the OS keychain: list · set <NAME> (stdin) · remove <NAME> · migrate [--dry-run]
-  trantor keys        identity keys in the OS keychain: status · migrate [--dry-run] — ~/.agent-bus/keys keeps public material only
+  trantor keys        identity keys in the OS keychain: status · migrate [--dry-run] · prune [--apply] [--idle-days N]
   trantor models      browse live models behind each seat + the router's pick per difficulty
   trantor up …        spawn a crew here:   trantor up codex kimi deepseek:deepseek glm:zai-coding-plan
   trantor open        host THIS session as the project's orchestrator pane (trantor down spares it)

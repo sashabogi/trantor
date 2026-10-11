@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import "../isolate-bus.mjs";
 // trantor handoff tests — the context-limit → fresh-session machinery.
 // Hermetic: no network (RELAY_URL closed), no LLM (TRANTOR_NO_SCROOGE=1 → the deterministic
 // digest), no Terminal windows (TRANTOR_NO_HANDOFF_SPAWN=1). Regression coverage for the gaps

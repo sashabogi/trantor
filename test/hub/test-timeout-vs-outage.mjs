@@ -1,15 +1,6 @@
 #!/usr/bin/env node
-// A TIMEOUT must not read as a DEAD HUB.
-//
-// 2026-09-09: /tasks for trantor is 1.59MB across 941 cards and takes 625-961ms against a 1500ms
-// budget. So it passes on a good run and aborts on a slow one — and the abort surfaced as
-// "hub 0 on /tasks", which is what a genuinely down hub also prints. I retried past it four times
-// as a blip; the duty seat hit it and could not file its own root-cause card because of it.
-//
-// The two need OPPOSITE responses. A timeout means the hub is fine and the read is too big: retry,
-// and go make the read smaller. An outage means investigate the hub. Rendering both as "hub 0"
-// makes the right response unknowable, which is this whole day's theme — a status surface
-// reporting the wrong thing about the state underneath.
+import "../isolate-bus.mjs";
+// Timeouts and unavailable hubs need different diagnostics so callers can respond correctly.
 import { spawn } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";

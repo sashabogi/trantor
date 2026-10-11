@@ -1,3 +1,5 @@
+import "./isolate-bus.mjs";
+import { join } from "node:path";
 // Shared drill env (#6108): a gate runner or crew seat lives in a herdr pane and exports exactly
 // the identity vars the resolvers read FIRST. Any drill spawn that passes process.env through
 // inherits the RUNNER's identity, so results depend on who ran the suite — drillEnv() deletes the
@@ -19,6 +21,7 @@ export const DRILL_IDENTITY_VARS = [
 export function drillEnv(overrides = {}) {
   const env = { ...process.env };
   for (const k of DRILL_IDENTITY_VARS) delete env[k];
+  if (overrides.HOME && !overrides.AGENT_BUS_DIR) env.AGENT_BUS_DIR = join(overrides.HOME, ".agent-bus");
   return Object.assign(env, overrides);
 }
 

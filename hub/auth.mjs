@@ -232,12 +232,15 @@ async function authenticate(req, path) {
       { durable: durableHdr, instanceId: instId, name: identity.name || "", firstSeen: now(),
         createdAt: Number(h("x-trantor-inst-ts")) || now(), superseded: false };
     rec.lastSeen = now();
+    identity.lastSeen = now();
     state.instances[verified.pubkey] = rec; markDirty();
     return { ok: true, mode: AUTH_MODE, trusted: true, pubkey: durableHdr, identity,
              instanceId: instId, instancePubkey: verified.pubkey, superseded: supersessionActive(rec) };
   }
   const identity = findIdentity(verified.pubkey);
   if (!identity) return soft("unknown identity");
+  identity.lastSeen = now();
+  markDirty();
   return { ok: true, mode: AUTH_MODE, trusted: true, pubkey: verified.pubkey, identity };
 }
 function authorize(auth, method, P, project) {

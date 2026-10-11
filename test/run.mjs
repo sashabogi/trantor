@@ -1,28 +1,17 @@
 #!/usr/bin/env node
-// trantor test runner (#6447) — `npm test` is exactly this one command.
-//
-// What it does, in order:
-//   1. Scrubs the RUNNER'S OWN identity env at the top (HERDR_PANE_ID, TRANTOR_ORCH, ... — the
-//      vars lib/drill-env.mjs's resolvers read first). A suite must depend on the drill's env,
-//      never on who ran the suite; drillEnv()/scrubIdentityEnv() still guard per-spawn, this is
-//      the belt to that braces (#6228/#6074 bounces, test-crew.sh's unset).
-//   2. Runs the paid-off slop-gate surface (desktop/src) as a hard preamble, as npm test always did.
-//   3. Discovers every suite under test/<subsystem>/ (test-*.mjs, test-*.sh, test.mjs) plus the two
-//      non-file members the old &&-chain carried (desktop vitest, engine/test-routing.py) and runs
-//      them IN PARALLEL with a per-suite timeout. Suites inherit cwd = repo root, because each was
-//      written to spawn bin/ and hooks/ by relative path from the package root.
-//   4. test/quarantine/<subsystem>/ is the TIMING LANE: quarantined suites still run and their red
-//      is REPORTED, but it does not fail the gate — IF the manifest entry (card + one-week expiry)
-//      is current. An expired entry un-quarantines: its red gates again, so quarantine cannot
-//      become a landfill (fix the drill or re-card it before the week is out).
-//
-// Seat-scoped runs: `node test/run.mjs --only crew` runs matching suites only; `--list` prints
-// the discovered suites. The full gate is `npm test` (CI runs exactly that, no unset preamble
-// needed any more — step 1 happens here).
+// Discover isolated suites, run them with bounded concurrency, and report quarantine separately.
 import { spawn, spawnSync } from "node:child_process";
-import { readdirSync, statSync, existsSync, readFileSync } from "node:fs";
+import { readdirSync, statSync, existsSync, readFileSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { join } from "node:path";import { fileURLToPath } from "node:url";
+import { userInfo } from "node:os";
 import { DRILL_IDENTITY_VARS } from "./drill-env.mjs";
+
+const realKeys = join(userInfo().homedir, ".agent-bus", "keys");
+function realKeyFiles() {
+  try { return readdirSync(realKeys).sort(); }
+  catch (error) { if (error.code === "ENOENT") return []; throw error; }
+}
+const keysBefore = realKeyFiles();
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
 process.chdir(ROOT);
@@ -110,11 +99,7 @@ const selected = ONLY ? suites.filter(s => s.rel.includes(ONLY)) : suites;
 if (!selected.length) { console.error(`no suite matches --only ${ONLY}`); process.exit(1); }
 
 // ---- 3. run in parallel, per-suite timeout, process-group kill ----
-// #9832: when a suite goes red the CI log must name WHAT failed. 0.18.74's test-contracts
-// retried red twice and the log held only section headers — the failing assertion's ✗/FAIL
-// line never surfaced, so the fix started from a guess. These lines are extracted from a red
-// run's output and printed at the retry and in the final report; caps keep a flooding suite
-// from burying the log.
+// Preserve failed assertion lines so retries do not hide the first failure.
 const failLines = (out) => out.split("\n").filter((l) => /✗|\bFAIL\b/.test(l));
 const printFlagged = (lines, indent = "    | ") => {
   if (!lines.length) return;
@@ -124,7 +109,12 @@ function runSuite(s) {
   const [cmd, args] = s.cmd || (s.rel.endsWith(".sh") ? ["bash", [s.rel]] : [process.execPath, [s.rel]]);
   return new Promise((resolveRun) => {
     const started = Date.now();
-    const kid = spawn(cmd, args, { cwd: ROOT, detached: true, stdio: ["ignore", "pipe", "pipe"] });
+    const outDir = join(ROOT, ".agent-bus-out");
+    mkdirSync(outDir, { recursive: true });
+    const home = mkdtempSync(join(outDir, "suite-home-"));
+    mkdirSync(join(home, "tmp"));
+    const env = { ...process.env, GIT_CEILING_DIRECTORIES: outDir, HOME: home, TMPDIR: join(home, "tmp"), AGENT_BUS_DIR: join(home, ".agent-bus"), TRANTOR_NO_KEYCHAIN: "1" };
+    const kid = spawn(cmd, args, { cwd: ROOT, env, detached: true, stdio: ["ignore", "pipe", "pipe"] });
     let out = "", timedOut = false;
     const timer = setTimeout(() => {
       timedOut = true;
@@ -139,6 +129,7 @@ function runSuite(s) {
       // NEXT run's suite on that port talks to a poisoned orphan. Suites that cleaned up lose
       // nothing (their group is already gone; ESRCH is swallowed).
       try { process.kill(-kid.pid, "SIGKILL"); } catch {}
+      rmSync(home, { recursive: true, force: true });
       resolveRun({ ...s, code, signal, timedOut, out, ms: Date.now() - started });
     });
   });
@@ -200,4 +191,7 @@ if (quarRed.length) console.log(`\nquarantine lane (reported, not gating): ${qua
 
 const slowest = [...results].sort((a, b) => b.ms - a.ms).slice(0, 5);
 console.log(`\n${results.length} suites: ${results.length - failed.length} green, ${gateRed.length} red (gate), ${quarRed.length} red (quarantine) — slowest: ${slowest.map(r => `${r.rel.split("/").pop()} ${(r.ms / 1000).toFixed(1)}s`).join(", ")}`);
-process.exit(gateRed.length ? 1 : 0);
+const keysAfter = realKeyFiles();
+const keysUnchanged = JSON.stringify(keysBefore) === JSON.stringify(keysAfter);
+console.log(`real identity directory: ${keysBefore.length} before, ${keysAfter.length} after — ${keysUnchanged ? "unchanged" : "CHANGED"}`);
+process.exit(gateRed.length || !keysUnchanged ? 1 : 0);

@@ -9,7 +9,11 @@ ok(){ if eval "$2"; then PASS=$((PASS+1)); echo "  ✓ $1"; else FAIL=$((FAIL+1)
 # Scrub the parent runner identity so cross-project guard checks use only the drill environment (#6228).
 unset TRANTOR_ORCH TRANTOR_SEAT HERDR_ENV HERDR_PANE_ID RELAY_PROJECT RELAY_SESSION RELAY_AGENT TRANTOR_PROJECT
 
-TMP="$(mktemp -d)"
+mkdir -p "$ROOT/.agent-bus-out"
+TMP="$(mktemp -d "$ROOT/.agent-bus-out/crew-test.XXXXXX")"
+export AGENT_BUS_DIR="$TMP/.agent-bus"
+export TRANTOR_NO_KEYCHAIN=1
+export GIT_CEILING_DIRECTORIES="$ROOT/.agent-bus-out"
 trap 'rm -rf "$TMP"' EXIT
 mkdir -p "$TMP/.agent-bus" "$TMP/fakebin"
 # osascript records calls and consumes stdin; every invocation must receive /dev/null to avoid a blocked drill.

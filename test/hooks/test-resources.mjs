@@ -1,9 +1,6 @@
 #!/usr/bin/env node
-// Tests for hooks/lib/resources.mjs (INTERSESSION-OPS-CONTRACT #4214). Stub-based: `cmux`, `ps`
-// and `lsof` are SEPARATE stub executables on a prepended PATH (an in-process stub would deadlock
-// against spawnSync/execFileSync — the kimi overseer-test lesson). HOME + RELAY_DATA_DIR point at
-// a temp tree; the fake process table uses pid numbers that map only through the stub lsof, so
-// nothing real is ever probed, killed, or pruned. Run: `node test-resources.mjs` → ALL PASS (n).
+import "../isolate-bus.mjs";
+// Fake process and multiplexer executables keep resource cleanup inside the fixture tree.
 import assert from "node:assert/strict";
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, chmodSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";

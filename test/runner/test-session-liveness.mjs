@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import "../isolate-bus.mjs";
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, writeFileSync, appendFileSync, existsSync, renameSync, rmSync } from "node:fs";

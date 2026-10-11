@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import "../isolate-bus.mjs";
 import { spawn } from "node:child_process";
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";

@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import "../isolate-bus.mjs";
 // trantor tests — hermetic (no network: RELAY_URL points at a closed port).
 // Focus: the hook must ALWAYS emit valid JSON, even when injected handoff content
 // contains control chars / U+2028 / quotes (the non-deterministic bug we hit).

@@ -1,3 +1,4 @@
+import { keyUsageSnapshot } from "../key-usage.mjs";
 import { checkoutKey, collisionIdentity, levelFor } from "../../lib/overseer.mjs";
 /* oxlint-disable anti-slop/no-runtime-typeof -- SAFETY: These checks preserve the established request and provider-response compatibility boundary during a route-only extraction. */
 import { readFileSync } from "node:fs";
@@ -29,6 +30,12 @@ export async function routeAdmin({ req, res, q, P, auth, ctx }) {
     filterDiscoverable, healthOf, now, canRead, AUTH_MODE, CLAIM_TTL_MS, subFp,
   } = ctx;
   const { overseerPolicy, overseerInputs, declaredCrewFor, peerKindOf } = overseer;
+    if (req.method === "GET" && P === "/keys/usage") {
+      if (AUTH_MODE !== "off" && !auth?.identity?.scopes?.some(s => s.project === "*" && s.role === "owner")) {
+        return json(res, 403, { error: "global owner permission required" });
+      }
+      return json(res, 200, keyUsageSnapshot(state, now(), ONLINE_MS));
+    }
     if (req.method === "POST" && P === "/register") {
       const b = await body(req);
       const cpg = crossProjectGuard(auth, P, b);

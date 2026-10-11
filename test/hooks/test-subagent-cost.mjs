@@ -1,3 +1,4 @@
+import "../isolate-bus.mjs";
 // Regression tests for the v0.17.37 sub-agent cost fix: the SubagentStop hook used to sum a PARENT
 // session transcript onto recall/handoff sub-agent cards, inflating notional cost to tens of thousands
 // of $. Guards: only accept a real sub-agent transcript path; skip implausibly large costs.
