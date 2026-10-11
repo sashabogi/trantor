@@ -197,6 +197,15 @@ symlinkSync(join(homedir(), ".config", "herdr", "herdr.sock"), join(world, ".con
 execFileSync("git", ["init", "-q"], { cwd: proj });
 // The drill's handoff phase exercises the AUTO chain deliberately; the shipped default is ask.
 writeFileSync(join(bus, "autonomy.json"), JSON.stringify({ version: 1, defaults: { baton: "auto" }, projects: {} }));
+// Stop-input capture (#11495): the recap's guards judge the Stop hook's own stdin, and a red S4b
+// leg used to carry none of it. Project-scoped hook, world-owned — every pane session's raw Stop
+// input lands here, so a failing leg can be judged on what the hook ACTUALLY received.
+const stopCaptures = join(world, "stop-input-captures");
+mkdirSync(join(proj, ".claude"), { recursive: true });
+mkdirSync(stopCaptures, { recursive: true });
+writeFileSync(join(proj, ".claude", "settings.json"), JSON.stringify({
+  hooks: { Stop: [{ matcher: "", hooks: [{ type: "command", command: `sh -c 'cat > ${stopCaptures}/stop-$$.json'` }] }] },
+}));
 const projectName = basename(proj);
 const tDir = transcriptDirFor(proj);
 
@@ -320,7 +329,7 @@ step("S4 · handoff machine: warn → arm → fire → WRITTEN → successor cla
     else FAIL("successor CLAIMED it");
 
     const stamp = () => {
-      try { return readdirSync(join(bus, "handoffs")).find(f => f.startsWith("recap-pending-")); } catch { return null; }
+      try { return readdirSync(join(bus, "handoffs")).find(f => /^recap-pending-[^.]+\.json$/.test(f)); } catch { return null; }
     };
     if (stamp()) PASS("recap net armed (pending stamp exists)");
     else FAIL("recap net armed (pending stamp exists)");
@@ -471,6 +480,17 @@ step("S4b · --baton pane leg: the driver replaces the session in place, kickoff
       await watcher;
       if (code === 0) PASS("driver ran the whole chain (idle gate → graceful end → reopen → kickoff)");
       else FAIL("driver ran the whole chain", `exit ${code} — see ${join(bus, "logs")}/baton-pane-*.log`);
+      // The recap resolves handoffDir() from the SUCCESSOR's env, and the reopen is spawned through
+      // the herdr daemon — capture that env while the process is alive, so a red leg carries its cause (#11495).
+      try {
+        const pi = herdr(["pane", "process-info", "--pane", pane]).result?.process_info;
+        const procs = Array.isArray(pi?.foreground_processes) ? pi.foreground_processes : [];
+        const cl = procs.find(p => /claude/i.test([p.name, p.argv0, p.cmdline, ...(p.argv || [])].filter(Boolean).join(" ")));
+        const pid = cl?.pid ?? cl?.process_id ?? null;
+        const line = pid ? String(execSync(`ps eww -p ${Number(pid)} 2>/dev/null | tail -1`)) : "";
+        const picked = line.split(/\s+/).filter(v => /^(AGENT_BUS_DIR|RELAY_DATA_DIR|HOME|CLAUDE_PROJECT_DIR|TRANTOR_ORCH)=/.test(v)).join(" ");
+        writeFileSync(join(bus, "s4b-successor-env.txt"), `pid=${pid}\n${picked}\n`);
+      } catch {}
       const rec = await waitFor("S4b claimed+recapped", () => {
         try {
           const r = JSON.parse(readFileSync(hf, "utf8"));
@@ -483,7 +503,18 @@ step("S4b · --baton pane leg: the driver replaces the session in place, kickoff
       else {
         let states = "unreadable";
         try { states = JSON.parse(readFileSync(hf, "utf8")).states?.map(s => s.state).join(",") || "none"; } catch {}
-        FAIL("successor claimed AND recapped without a human prompt", states);
+        let why = "";
+        try {
+          const record = JSON.parse(readFileSync(hf, "utf8"));
+          const sid = record.claim?.session_id;
+          const cap = readdirSync(stopCaptures).map(f => join(stopCaptures, f))
+            .map(f => { try { return JSON.parse(readFileSync(f, "utf8")); } catch { return null; } })
+            .filter(i => i?.session_id === sid).at(-1);
+          if (cap) {
+            why = `; stop-input: transcript_path ${cap.transcript_path === record.claim?.transcript_path ? "MATCHES the claim" : `DIFFERS from the claim (${cap.transcript_path})`}, stop_hook_active=${cap.stop_hook_active}`;
+          } else why = "; no stop-input capture for the successor sid";
+        } catch {}
+        FAIL("successor claimed AND recapped without a human prompt", states + why);
       }
     }
   }

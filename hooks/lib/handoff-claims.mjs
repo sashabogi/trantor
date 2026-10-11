@@ -100,22 +100,38 @@ export function recapStampPath(dir, sid) {
   return join(dir, `recap-pending-${String(sid).replace(/[^A-Za-z0-9_.-]/g, "_")}.json`);
 }
 
+// A recap attempt that ends without consuming leaves WHY beside the stamp (#11495): an intermittent
+// red used to carry no evidence at all, and every record-side guard looks identical from the outside.
+// Best-effort single write, only when a stamp exists; never changes recap semantics.
+function traceRecapAttempt(stampPath, entry) {
+  try { writeFileSync(`${stampPath}.attempt.json`, JSON.stringify(entry)); } catch {}
+}
+
 export function completeHandoffRecap({ sessionId, transcriptPath, dir = handoffDir(), now = Math.floor(Date.now() / 1000) }) {
   const stampPath = recapStampPath(dir, sessionId);
+  let stamp;
+  try { stamp = JSON.parse(readFileSync(stampPath, "utf8")); }
+  catch { return { recapped: false, missed: [] }; }
+  const file = stamp.file || `${stamp.handoffId}.json`;
+  if (file.includes("/") || file.includes("\\")) { traceRecapAttempt(stampPath, { ts: now, sessionId, outcome: "bad-stamp-file" }); return { recapped: false, missed: [] }; }
+  let missed = [];
+  let guard = null, guardDetail = null, refused = null;
+  let next = null;
   try {
-    const stamp = JSON.parse(readFileSync(stampPath, "utf8"));
-    const file = stamp.file || `${stamp.handoffId}.json`;
-    if (file.includes("/") || file.includes("\\")) return null;
-    let missed = [];
-    const next = updateRecord(join(dir, file), record => {
-      if (record.claim?.session_id !== sessionId || record.claim?.token !== stamp.token) return null;
-      if (record.claim.transcript_path !== transcriptPath) return null;
+    next = updateRecord(join(dir, file), record => {
+      if (record.claim?.session_id !== sessionId || record.claim?.token !== stamp.token) { guard = "claim-identity"; return null; }
+      if (record.claim.transcript_path !== transcriptPath) { guard = "transcript-path"; guardDetail = { claimPath: record.claim.transcript_path, stopPath: transcriptPath }; return null; }
       const body = readFileSync(transcriptPath).subarray(record.claim.transcriptBytes).toString("utf8");
       missed = pathsReadIn(transcriptPath, stamp.readFirst || []).missed;
-      return recapHandoff(record, { sessionId, token: stamp.token, missed,
+      const recapped = recapHandoff(record, { sessionId, token: stamp.token, missed,
         replied: hasAssistantReply(body, record.claim.at) }, now);
+      if (!recapped) refused = record.consumed ? "record-consumed" : (missed.length ? "missed-reads" : "no-reply");
+      return recapped;
     });
-    if (next) unlinkSync(stampPath);
-    return { recapped: !!next, missed };
-  } catch { return null; }
+  } catch (error) { traceRecapAttempt(stampPath, { ts: now, sessionId, outcome: `error:${error?.code || error?.message || "unknown"}` }); return { recapped: false, missed }; }
+  if (next) unlinkSync(stampPath);
+  else if (guard) traceRecapAttempt(stampPath, { ts: now, sessionId, outcome: `guard:${guard}`, ...guardDetail });
+  else if (refused) traceRecapAttempt(stampPath, { ts: now, sessionId, outcome: refused, missed });
+  else traceRecapAttempt(stampPath, { ts: now, sessionId, outcome: "no-record-update" });
+  return { recapped: !!next, missed };
 }
