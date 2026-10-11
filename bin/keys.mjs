@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // trantor keys — identity private keys in the macOS Keychain instead of plaintext files (#11370).
-//   status [--json] · migrate [--dry-run] [--json] · prune [--apply] [--idle-days N]
+//   status [--json] · migrate [name...] [--include-tests] [--dry-run] [--json] · prune [--apply] [--idle-days N]
 // migrate copies each file-held key into the Keychain (service trantor-identity), proves a
 // signature round-trip, and only then rewrites the file as a pubkey-only stub. Keys are never printed.
 import { readFileSync } from "node:fs";
@@ -15,7 +15,7 @@ const verb = args[0] || "status";
 const JSON_MODE = args.includes("--json");
 const C = { dim: "\x1b[2m", grn: "\x1b[32m", yel: "\x1b[33m", red: "\x1b[31m", off: "\x1b[0m" };
 const usage = () => {
-  console.error("usage: trantor keys status [--json] | migrate [--dry-run] [--json] | prune [--apply] [--idle-days N] [--json]");
+  console.error("usage: trantor keys status [--json] | migrate [name...] [--include-tests] [--dry-run] [--json] | prune [--apply] [--idle-days N] [--json]");
   process.exit(1);
 };
 const tilde = (p) => String(p).replace(process.env.HOME || "", "~");
@@ -37,14 +37,22 @@ function status() {
 
 function migrate() {
   const dryRun = args.includes("--dry-run");
-  const r = migrateKeysToKeychain({ dryRun });
-  if (JSON_MODE) { console.log(JSON.stringify(r, null, 2)); return; }
-  if (!r.usable) {
+  const flags = new Set(["--dry-run", "--json", "--include-tests"]);
+  const names = [];
+  for (const arg of args.slice(1)) {
+    if (flags.has(arg)) continue;
+    if (arg.startsWith("--")) throw new Error(`unknown migrate option: ${arg}`);
+    names.push(arg);
+  }
+  const r = migrateKeysToKeychain({ dryRun, names, includeTests: args.includes("--include-tests") });
+  if (JSON_MODE) { console.log(JSON.stringify(r, null, 2)); if (r.failed.length) process.exitCode = 1; return; }
+  if (!r.usable && !dryRun) {
     console.log("no Keychain on this platform (or TRANTOR_NO_KEYCHAIN=1) — identity keys stay in files; nothing to do");
     return;
   }
   const did = dryRun ? "would move" : "moved";
   console.log(`${dryRun ? `${C.dim}dry run${C.off} · ` : ""}keychain service: ${r.service}`);
+  console.log(`skipped ${r.skippedTests} test identities (use --include-tests to include them)`);
   for (const n of r.moved) console.log(`  ${C.grn}✓${C.off} ${did} ${n}${dryRun ? "" : " (file is now a pubkey-only stub)"}`);
   for (const n of r.already) console.log(`  ${C.dim}already in the keychain: ${n}${C.off}`);
   for (const f of r.failed) console.log(`  ${C.red}✗${C.off} ${f.name}: ${f.reason} — the file was left untouched`);
