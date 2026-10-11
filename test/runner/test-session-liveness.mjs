@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, writeFileSync, appendFileSync, existsSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, writeFileSync, appendFileSync, existsSync, renameSync, rmSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { createHash } from "node:crypto";
 import { sessionActivityReader } from "../../lib/session-liveness.mjs";
@@ -15,13 +15,13 @@ const run = (cmd, args, cwd = root) => {
   const r = spawnSync(cmd, args, { cwd, encoding: "utf8" });
   assert.equal(r.status, 0, r.stderr); return r.stdout.trim();
 };
-const sql = q => run("sqlite3", [db, q]);
+const sql = q => run("sqlite3", ["-cmd", ".timeout 5000", db, q]); // #9832: the watchdog reads this DB concurrently
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 let checks = 0;
 const check = (name, fn) => { fn(); checks++; console.log(`PASS ${name}`); };
 let wd;
 try {
-  sql(`CREATE TABLE session(id TEXT, directory TEXT, parent_id TEXT, time_created INTEGER);
+  sql(`PRAGMA journal_mode=WAL; CREATE TABLE session(id TEXT, directory TEXT, parent_id TEXT, time_created INTEGER);
     CREATE TABLE message(id TEXT, session_id TEXT, time_created INTEGER, time_updated INTEGER);
     CREATE TABLE part(id TEXT, session_id TEXT, time_created INTEGER, time_updated INTEGER);`);
   const startedAt = Date.now();
@@ -36,6 +36,9 @@ try {
   check("Explore child session is activity for its parent", () => assert.equal(read(), startedAt + 30));
   check("fresh session resolves by workdir and ignores child roots", () => assert.equal(sessionActivityReader(opts)(), startedAt + 30));
   check("old sessions cannot impersonate a fresh turn", () => assert.equal(sessionActivityReader({ ...opts, startedAt: startedAt + 100 })(), 0));
+  renameSync(db, `${db}.away`);
+  check("a failed DB read keeps the last seen activity, never reads as silence", () => assert.equal(read(), startedAt + 30));
+  renameSync(`${db}.away`, db);
   check("missing DB falls back to other signals", () => assert.equal(sessionActivityReader({ ...opts, db: join(root, "absent") })(), 0));
 
   for (const kind of ["kimi", "claude", "kimi-python"]) {

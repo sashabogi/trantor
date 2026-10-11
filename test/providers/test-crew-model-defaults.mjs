@@ -49,6 +49,7 @@ esac
       HOME: home,
       PATH: `${fakebin}:${process.env.PATH}`,
       CREW_DRY_RUN: "1",
+      CREW_NO_PROC_KILL: "1", // #11369: a live seat in this repo dir must not occupy the test project's persona
       CREW_MUX: "tmux",
       RELAY_PROJECT: "model-default-test",
     },
@@ -70,6 +71,7 @@ esac
       HOME: home,
       PATH: `${fakebin}:${process.env.PATH}`,
       CREW_DRY_RUN: "1",
+      CREW_NO_PROC_KILL: "1", // #11369: a live seat in this repo dir must not occupy the test project's persona
       CREW_MUX: "tmux",
       RELAY_PROJECT: "model-default-test",
       ROUTE_BAD_PROVIDER: "1",
@@ -90,6 +92,7 @@ esac
       HOME: home,
       PATH: `${fakebin}:${process.env.PATH}`,
       CREW_DRY_RUN: "1",
+      CREW_NO_PROC_KILL: "1", // #11369: a live seat in this repo dir must not occupy the test project's persona
       CREW_MUX: "tmux",
       RELAY_PROJECT: "model-default-test",
     },
