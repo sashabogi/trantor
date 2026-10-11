@@ -1,20 +1,8 @@
 #!/usr/bin/env node
 // `trantor drill` — the §7 end-to-end SEAM drill (SYSTEM-CONTRACT.md; Phase 5 of the reassembly).
-//
-// Unit suites passing while the seams fail is this project's most-repeated lesson. This drill
-// runs the REAL components against each other on a throwaway project: a real herdr workspace,
-// a real Claude session, the real socket transport the app uses, the real hooks, the real
-// handoff machine — and asserts on evidence (transcript rows, herdr state, ledger files),
-// never on exit codes alone.
-//
-// This gate covers automated seams, including the installed app's dead-pane guard. Live
-// key/ask/Accounts checks belong to in-app Drill Mode; duty needs a live probe. Those checks
-// report SKIP with recipes and never auto-close. A failed seam or signed close exits nonzero.
-//
-// Flags: --keep leaves the scratch world AND workspace for inspection.
-// Failed runs retain disk evidence after closing their workspace. No app build/install.
-// TRANTOR_DRILL_RESULT overrides ~/.agent-bus/drill-result.json (crew seats use .agent-bus-out).
-// TRANTOR_DRILL_APP selects an existing app executable; TRANTOR_DRILL_WORLD selects scratch cwd.
+// Runs the REAL components against each other on a throwaway project and asserts on evidence —
+// transcript rows, herdr state, ledger files — never exit codes alone (unit-green/seams-red is the
+// lesson). --keep keeps the world; TRANTOR_DRILL_RESULT/_APP/_WORLD override result path, app, scratch.
 
 import { mkdirSync, mkdtempSync, rmSync, existsSync, readFileSync, writeFileSync, readdirSync, statSync, symlinkSync } from "node:fs";
 import { join, basename, resolve } from "node:path";
@@ -298,10 +286,9 @@ let predecessorSid = null;
 // ---------- S4 · the handoff machine ----------
 step("S4 · handoff machine: warn → arm → fire → WRITTEN → successor claims → RECAPPED");
 {
-  // A turn that uses a tool: the heartbeat is PostToolUse, so only tool use can arm the baton.
-  // The heartbeat is PostToolUse: only a REAL tool call can arm the baton. Models sometimes
-  // answer without the tool (observed: run 2 of 3 on 2026-08-30 — 1-in-3 prompt fragility,
-  // not a seam), so ask, verify tool use in the transcript, and re-ask up to twice.
+  // The heartbeat is PostToolUse: only a REAL tool call can arm the baton. Models sometimes answer
+  // without the tool (observed: roughly one prompt round in three skips it — prompt fragility, not
+  // a seam), so ask, verify tool use in the transcript, and re-ask up to twice.
   let handoffFile = null;
   for (let attempt = 1; attempt <= 3 && !handoffFile; attempt++) {
     const raw = await socketRequest({ id: "trantor:agent.prompt", method: "agent.prompt", params: {
@@ -338,34 +325,70 @@ step("S4 · handoff machine: warn → arm → fire → WRITTEN → successor cla
     if (stamp()) PASS("recap net armed (pending stamp exists)");
     else FAIL("recap net armed (pending stamp exists)");
 
-    const raw2 = await socketRequest({ id: "trantor:agent.prompt", method: "agent.prompt", params: {
-      target: pane, text: "Say only: ACK-S4" } });
-    if (JSON.parse(raw2).result?.type !== "agent_prompted") FAIL("successor prompt accepted", raw2.slice(0, 100));
-    const recapped = await waitFor("recapped", () => {
+    // Since #11223 the recap is EARNED: recapHandoff stays null until the successor has actually
+    // opened every readFirst path the stamp carries (#11487). The drill proves both directions, and
+    // it seeds one real throwaway file into READ FIRST and drops stamp entries whose files do not
+    // exist — fixture shaping, not gate shaping (an LLM summary on a scratch world may name ghosts).
+    const stampFile = stamp();
+    if (!stampFile) {
+      SKIP("recap legs", "no pending stamp to exercise — the armed-leg FAIL above already carries this");
+    } else {
+      const handoffsDir = join(bus, "handoffs");
+      const seedPath = join(proj, "drill-read-first.md");
+      writeFileSync(seedPath, "# drill read-first seed\nThrowaway file the surface drill's successor must actually open before its recap counts.\n");
+      let readFirstNow = [];
       try {
-        const r = JSON.parse(readFileSync(handoffFile, "utf8"));
-        return (r.states || []).some(s => s.state === "recapped") && !stamp() ? r : null;
-      } catch { return null; }
-    }, { timeoutMs: 120_000, everyMs: 2_000 });
-    if (recapped) PASS("first Stop recorded RECAPPED and cleared the net", recapped.states.map(s => s.state).join("→"));
-    else FAIL("first Stop recorded RECAPPED and cleared the net", stamp() ? "stamp still present" : "no recapped state");
+        const sp = join(handoffsDir, stampFile);
+        const s = JSON.parse(readFileSync(sp, "utf8"));
+        s.readFirst = [...new Set([...(s.readFirst || []).filter(p => existsSync(p)), seedPath])];
+        writeFileSync(sp, JSON.stringify(s, null, 2));
+        readFirstNow = s.readFirst;
+      } catch {}
+      const recappedYet = () => {
+        try { return JSON.parse(readFileSync(handoffFile, "utf8")).states.some(x => x.state === "recapped"); } catch { return false; }
+      };
+
+      // NEGATIVE leg: a successor that only replies has its stop BLOCKED with the missed list
+      // (stop-inbox) and the stamp is KEPT — no reads, no recap. The block reason is observable in
+      // the successor transcript (a user row) and on the pane screen; the row persists, so a recap
+      // that lands later via the coached reads still shows the block happened first.
+      const MARKER = "Read these handoff files before recapping";
+      const blockSeen = () => {
+        const f = newestJsonl(tDir);
+        if (f && userTurnsContaining(f, MARKER).length) return "transcript row";
+        try { if (herdr(["pane", "read", pane], { json: false }).includes(MARKER)) return "pane screen"; } catch {}
+        return null;
+      };
+      const raw2 = await socketRequest({ id: "trantor:agent.prompt", method: "agent.prompt", params: {
+        target: pane, text: "Say only: ACK-S4" } });
+      if (JSON.parse(raw2).result?.type !== "agent_prompted") FAIL("successor prompt accepted", raw2.slice(0, 100));
+      await waitFor("reply-only stop blocked", () => (recappedYet() ? null : blockSeen()), { timeoutMs: 60_000, everyMs: 2_000 });
+      if (blockSeen()) PASS("negative leg: the reply-only stop was blocked and the stamp kept",
+        recappedYet() ? "recap landed only after the coached reads" : "no recap while the stamp holds");
+      else if (recappedYet()) FAIL("negative leg: the reply-only stop was blocked and the stamp kept", "recapped with no block row — reads were not demanded");
+      else FAIL("negative leg: the reply-only stop was blocked and the stamp kept", `stamp ${stamp() ? "present" : "gone"}; no block row within 60s`);
+
+      // POSITIVE leg: the successor opens every readFirst path, and only then the recap lands and
+      // the stamp clears — the state chain this step exists to see is written→claimed→recapped.
+      const raw3 = await socketRequest({ id: "trantor:agent.prompt", method: "agent.prompt", params: {
+        target: pane, text: readFirstNow.length
+          ? `Use your Read tool on every one of these files now: ${readFirstNow.join(", ")}. Then reply with just: ACK-S4`
+          : "Reply with just: ACK-S4" } });
+      if (JSON.parse(raw3).result?.type !== "agent_prompted") FAIL("successor prompt accepted", raw3.slice(0, 100));
+      const recapped = await waitFor("recapped", () => {
+        try {
+          const r = JSON.parse(readFileSync(handoffFile, "utf8"));
+          return (r.states || []).some(s => s.state === "recapped") && !stamp() ? r : null;
+        } catch { return null; }
+      }, { timeoutMs: 120_000, everyMs: 2_000 });
+      if (recapped) PASS("first Stop recorded RECAPPED and cleared the net", recapped.states.map(s => s.state).join("→"));
+      else FAIL("first Stop recorded RECAPPED and cleared the net", stamp() ? "stamp still present" : "no recapped state");
+    }
 
     // ---------- S4c · the handoff carries a WorkingState, and it carries NO CREDIT ----------
-    // Rides S4's machine deliberately: the record above is a REAL handoff, written by the real Stop
-    // path and claimed by a real successor. Everything else about Phase 1 is proven against
-    // fixtures, and today taught us what that gap costs — a defect that survived two review rounds,
-    // five reviewers and 264 assertions was found only when something finally ran the live path.
-    //
-    // The load-bearing assertion is the second one. A derived state carries NO credit, because no
-    // gate ran: every path must be verified:false, so the successor has to re-earn its evidence
-    // before anything moves to done. If that ever came back true, the handoff path would be a
-    // laundering route for unverified work — a hole in the verified-done rule shaped exactly like a
-    // session boundary. P4's unit tests hold the same property (flipping it kills 4 assertions);
-    // this is that property on a real record.
-    //
-    // Flag OFF is the norm today, and then the correct outcome is a SKIP: the state block must be
-    // absent and the prose path untouched. A step that only passes with the feature on would go red
-    // for everyone until it ships, and a red nobody can act on is noise.
+    // Rides S4's machine on purpose: a REAL handoff, written by the real Stop path, claimed by a
+    // real successor (#6965). Load-bearing: every carried path must be verified:false, or the
+    // handoff launders unverified work across a session boundary; flag off → SKIP, not a red.
     const carried = (() => {
       try { return JSON.parse(readFileSync(handoffFile, "utf8")).state ?? null; }
       catch { return null; }
@@ -401,12 +424,9 @@ if (globalThis.__skew && fail > 0) {
 }
 
 // ---------- S4b · the --baton pane leg (#5643) ----------
-// The CLI-side replacement chain: a MANUAL handoff on disk, then bin/baton-pane.mjs (the detached
-// driver spawnBaton arms for hosted panes) replaces the pane's session in place — idle gate,
-// graceful end, reopen, kickoff — and the successor claims AND recaps with no human prompt.
-// The reopen is overridden to stay inside this drill's herdr world; the chain is otherwise the
-// production one. The routing itself (spawnBaton → driver, never a window) is drilled hermetically
-// in test-handoff.mjs.
+// The CLI-side replacement chain: a MANUAL handoff on disk, then bin/baton-pane.mjs replaces the pane's
+// session in place — idle gate, graceful end, reopen, kickoff — and the successor claims AND recaps with
+// no human prompt (reopen stays in this drill's herdr world; routing itself is drilled hermetically in test-handoff.mjs).
 step("S4b · --baton pane leg: the driver replaces the session in place, kickoff recaps it");
 {
   let st0 = null;
