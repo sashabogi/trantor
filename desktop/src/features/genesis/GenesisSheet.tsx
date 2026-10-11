@@ -5,6 +5,7 @@ import type { Event } from "@tauri-apps/api/event";
 import { FileText, FolderGit2, Sparkles, X } from "lucide-react";
 import { BrandGlyph } from "../../shared/Avatar";
 import { notifyOnce } from "../../shared/notify";
+import { dropPointToCss } from "../../shared/dropPoint";
 import { genesisKickoff, projectTarget, slugProjectName } from "./genesis";
 import { GENESIS_IDLE, BLANK_KICKOFF, genesisReducer, isExistsNotEmptyError, toastForTransition } from "./genesisFlow";
 
@@ -71,8 +72,8 @@ export function GenesisSheet({ devRoot, onClose, onMade, onCreated, deps = DEFAU
     let unlisten: (() => void) | undefined;
     listenDrops(event => {
       if (!alive || event.payload.type !== "drop" || !event.payload.paths[0]) return;
-      const dpr = window.devicePixelRatio || 1;
-      const hit = document.elementFromPoint(event.payload.position.x / dpr, event.payload.position.y / dpr);
+      const at = dropPointToCss(event.payload.position);
+      const hit = document.elementFromPoint(at.x, at.y);
       if (!hit || !sheetRef.current?.contains(hit)) return;
       const dropped = event.payload.paths[0];
       void invokeFn<string>("genesis_read_brief", { path: dropped })

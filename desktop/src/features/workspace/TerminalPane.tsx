@@ -9,6 +9,7 @@ import { Terminal } from "@xterm/xterm";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import "@xterm/xterm/css/xterm.css";
 import { invoke } from "@tauri-apps/api/core";
+import { describeHit, dropPointToCss } from "../../shared/dropPoint";
 import { quotePaths } from "./quotePaths";
 import {
   orchestratorOpen,
@@ -138,6 +139,10 @@ export const DEFAULT_TERMINAL_DEPS: TerminalDeps = {
     return () => { try { off?.(); } catch { /* already gone */ } };
   },
 };
+
+// One line per drop into the app trace (#11513): the resolved point, the topmost element and
+// this pane's verdict, pairing with the composer's line so a misrouted drop names its claimant.
+const tracePaneDrop = (line: string) => { void invoke("app_log", { line: `drop #11513 ${line}` }).catch(() => {}); };
 
 export function TerminalPane({
   project,
@@ -311,19 +316,28 @@ export function TerminalPane({
   // floating sheet can cover the pane's rect. No position means not ours, never a drop.
   useEffect(() => {
     if (!surface) return;
+    const hitAt = (position: { x: number; y: number } | undefined): { at: { x: number; y: number }; top: Element | null } | null => {
+      if (!position) return null;
+      const at = dropPointToCss(position);
+      return { at, top: document.elementFromPoint(at.x, at.y) };
+    };
     const overThisPane = (position: { x: number; y: number } | undefined): boolean => {
       const el = hostRef.current;
       // No position = not ours, never a drop. And the TOPMOST element under the cursor decides:
       // a rectangle test passes whenever a floating sheet covers the pane's rect, which typed a
       // dropped path into the orchestrator's terminal (the operator's bounce, 0.3.110).
-      if (!el || !position) return false;
-      const dpr = window.devicePixelRatio || 1;
-      const top = document.elementFromPoint(position.x / dpr, position.y / dpr);
-      return !!top && el.contains(top);
+      if (!el) return false;
+      const hit = hitAt(position);
+      return !!hit?.top && el.contains(hit.top);
     };
     return deps.subscribeDragDrop(ev => {
       if (ev.type === "leave") { setDragOver(false); return; }
-      if (!overThisPane(ev.position)) { setDragOver(false); return; }
+      const over = overThisPane(ev.position);
+      if (ev.type === "drop") {
+        const hit = hitAt(ev.position);
+        tracePaneDrop(`pane(${agent}) point=${hit ? `${hit.at.x},${hit.at.y}` : "none"} over=${over} hit=${describeHit(hit?.top ?? null)}`);
+      }
+      if (!over) { setDragOver(false); return; }
       if (ev.type === "drop") {
         setDragOver(false);
         const sub = subRef.current;
@@ -335,7 +349,7 @@ export function TerminalPane({
       }
       setDragOver(true); // enter / over
     });
-  }, [surface, deps]);
+  }, [surface, deps, agent]);
 
   if (attachError === "notAnAgent") {
     return (

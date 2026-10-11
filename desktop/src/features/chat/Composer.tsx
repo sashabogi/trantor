@@ -8,6 +8,7 @@ import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { ArrowUp, ChevronDown, FileText, Image as ImageIcon, Paperclip, Square, X } from "lucide-react";
 import { searchFiles } from "../code/fileApi";
 import { attachmentInfo } from "../../shared/api/client";
+import { describeHit, dropPointToCss } from "../../shared/dropPoint";
 import { addChips, formatBytes, makeChip, removeChip, serializeForSend, type AttachmentChip } from "./attachments";
 import { clampComposerPx, growComposerPx, loadComposerHeight, maxComposerPx, minComposerPx, saveComposerHeight } from "./composerHeight";
 import { FONT_STEPS, type FontStep } from "./prefs";
@@ -296,6 +297,10 @@ export function composerTakesDrop(hit: Element | null, root: Element | null): bo
   return root.contains(hit);
 }
 
+// One line per drop into the app trace (#11513): the resolved point, the topmost element it
+// named and this handler's verdict, so a misrouted drop is diagnosed from the log alone.
+const traceDrop = (line: string) => { void invoke("app_log", { line: `drop #11513 ${line}` }).catch(() => {}); };
+
 export function Composer({ project, target, live, liveWhy, blockedAsk, model, modelSource, working, userTexts, context, fontStep, onFontStep, onSent, onLongRunChange, onDispatch, onDraftChange, suggestion, onSuggestionHandled }: {
   project: string;
   target: string | null;
@@ -555,12 +560,13 @@ export function Composer({ project, target, live, liveWhy, blockedAsk, model, mo
         if (ev.payload.type !== "drop") return;
         const paths = ev.payload.paths;
         if (!paths.length) return;
-        // #6147: the drop point resolves to the TOPMOST element (physical px → CSS px, the same
-        // resolution the genesis sheet uses for its own zone) — a drop that landed on a sheet,
-        // the file tree or the terminal is theirs, never an attachment chip here.
-        const dpr = window.devicePixelRatio || 1;
-        const hit = document.elementFromPoint(ev.payload.position.x / dpr, ev.payload.position.y / dpr);
-        if (!composerTakesDrop(hit, rootRef.current)) return;
+        // #6147: the drop point resolves to the TOPMOST element in CSS px (dropPointToCss) — a
+        // drop that landed on a sheet, the file tree or the terminal is theirs, never a chip here.
+        const at = dropPointToCss(ev.payload.position);
+        const hit = document.elementFromPoint(at.x, at.y);
+        const takes = composerTakesDrop(hit, rootRef.current);
+        traceDrop(`composer point=${at.x},${at.y} hit=${describeHit(hit)} takes=${takes}`);
+        if (!takes) return;
         attach(paths, null);
       }).then(un => { if (alive) off = un; else un(); })
         .catch(() => { /* no webview under this window (tests) — drops are a no-op there */ });
