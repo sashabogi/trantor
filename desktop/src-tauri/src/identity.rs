@@ -1,6 +1,6 @@
 // trantor desktop request signing, in Rust so the private key never reaches the webview. MUST
 // produce byte-identical signatures to lib/identity.mjs (canonical string: docs/CONTRACT-desktop.md);
-// any divergence is a generic 401. Keys are the CLI's ~/.agent-bus/keys/<safe-name>.json, read only.
+// any divergence is a generic 401. CLI key files and trantor-identity Keychain records are read only.
 use base64::{engine::general_purpose::STANDARD as B64, Engine};
 use ed25519_dalek::{Signer, SigningKey};
 use rand::RngCore;
@@ -11,7 +11,7 @@ use std::{collections::HashMap, fs, path::{Path, PathBuf}, time::{SystemTime, UN
 pub const SCHEME: &str = "trantor-v1";
 
 #[derive(Deserialize)]
-struct KeyFile { pubkey: String, privkey: String }
+struct KeyFile { pubkey: String, #[serde(default)] privkey: String }
 
 fn bus_dir() -> PathBuf {
     std::env::var("AGENT_BUS_DIR").map(PathBuf::from).unwrap_or_else(|_| {
@@ -35,12 +35,65 @@ fn safe_name(name: &str) -> String {
     s
 }
 
+fn key_pair(raw: &str) -> Result<(SigningKey, String), String> {
+    let record: KeyFile = serde_json::from_str(raw).map_err(|_| "Invalid identity key record")?;
+    let bytes = hex_to_32(&record.privkey).ok_or("Identity private key is unavailable")?;
+    let key = SigningKey::from_bytes(&bytes);
+    if hex(&key.verifying_key().to_bytes()) != record.pubkey.to_lowercase() {
+        return Err("Identity public and private keys do not match".into());
+    }
+    Ok((key, record.pubkey))
+}
+
+fn resolve_key(
+    name: &str,
+    file: Option<&str>,
+    read_keychain: impl FnOnce(&str) -> Result<Option<String>, String>,
+) -> Result<(SigningKey, String), String> {
+    if let Some(raw) = file {
+        let record: KeyFile = serde_json::from_str(raw).map_err(|_| "Invalid identity key file")?;
+        // A freshly rotated file wins over an older Keychain entry, matching the CLI.
+        if !record.privkey.is_empty() { return key_pair(raw); }
+    }
+    let raw = read_keychain(name)?.ok_or("Identity key missing from Keychain; restore the key or rerun keys migrate")?;
+    key_pair(&raw)
+}
+
+fn read_identity_keychain(name: &str) -> Result<Option<String>, String> {
+    if !cfg!(target_os = "macos") || std::env::var("TRANTOR_NO_KEYCHAIN").as_deref() == Ok("1") {
+        return Err("Identity Keychain is unavailable on this platform or disabled".into());
+    }
+    let mut command = crate::identity_env::command("/usr/bin/security");
+    command.args(["find-generic-password", "-a", name, "-s", "trantor-identity", "-w"]);
+    if let Ok(path) = std::env::var("TRANTOR_IDENTITY_KEYCHAIN") { command.arg(path); }
+    let mut child = command.stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::null())
+        .spawn().map_err(|_| "Could not read identity Keychain")?;
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(8);
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => break,
+            Ok(None) if std::time::Instant::now() < deadline => std::thread::sleep(std::time::Duration::from_millis(10)),
+            _ => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err("Identity Keychain timed out; unlock it and retry".into());
+            }
+        }
+    }
+    let output = child.wait_with_output().map_err(|_| "Could not read identity Keychain")?;
+    if output.status.code() == Some(44) { return Ok(None); }
+    if !output.status.success() { return Err("Identity Keychain is locked or unavailable; unlock it and retry".into()); }
+    String::from_utf8(output.stdout).map(Some).map_err(|_| "Invalid identity Keychain record".into())
+}
+
 fn load_key(name: &str) -> Result<(SigningKey, String), String> {
     let path = bus_dir().join("keys").join(format!("{}.json", safe_name(name)));
-    let raw = fs::read_to_string(&path).map_err(|e| format!("no key for {name}: {e}"))?;
-    let kf: KeyFile = serde_json::from_str(&raw).map_err(|e| format!("bad key file: {e}"))?;
-    let bytes = hex_to_32(&kf.privkey).ok_or("privkey is not 32 bytes of hex")?;
-    Ok((SigningKey::from_bytes(&bytes), kf.pubkey))
+    let raw = match fs::read_to_string(&path) {
+        Ok(raw) => Some(raw),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+        Err(_) => return Err("Could not read identity key file".into()),
+    };
+    resolve_key(name, raw.as_deref(), read_identity_keychain)
 }
 
 fn hex_to_32(s: &str) -> Option<[u8; 32]> {
@@ -221,6 +274,63 @@ pub fn folder_of_projects(dir: &Path) -> bool {
 /// A stray clone or worktree beside the real one carries none.
 pub fn nested_projects(dir: &Path) -> Vec<PathBuf> {
     child_repos(dir).into_iter().filter(|p| p.join("CLAUDE.md").is_file()).collect()
+}
+
+#[cfg(test)]
+mod keychain_tests {
+    use super::*;
+    use ed25519_dalek::Verifier;
+
+    fn record(seed: u8) -> String {
+        let key = SigningKey::from_bytes(&[seed; 32]);
+        serde_json::json!({ "pubkey": hex(&key.verifying_key().to_bytes()), "privkey": hex(&[seed; 32]) }).to_string()
+    }
+
+    #[test]
+    fn stub_resolves_raw_account_and_signs_without_exposing_key() {
+        let secret = record(7);
+        let stub = serde_json::json!({ "pubkey": "stale-display-value", "keychain": "trantor-identity" }).to_string();
+        let (key, pubkey) = resolve_key("sasha@mac", Some(&stub), |account| {
+            assert_eq!(account, "sasha@mac");
+            Ok(Some(secret))
+        }).expect("stub resolves");
+        assert_eq!(pubkey, hex(&key.verifying_key().to_bytes()));
+        let message = canonical("POST", "/send", "abc", 123, "nonce");
+        key.verifying_key().verify(message.as_bytes(), &key.sign(message.as_bytes())).expect("signature verifies");
+    }
+
+    #[test]
+    fn plaintext_rotation_wins_without_reading_keychain() {
+        let raw = record(9);
+        let (key, _) = resolve_key("human", Some(&raw), |_| panic!("must not read stale Keychain")).expect("file loads");
+        assert_eq!(key.to_bytes(), [9; 32]);
+    }
+
+    #[test]
+    fn missing_stub_recovers_keychain_record_without_regeneration() {
+        let (key, _) = resolve_key("human", None, |_| Ok(Some(record(8)))).expect("keychain recovers");
+        assert_eq!(key.to_bytes(), [8; 32]);
+    }
+
+    #[test]
+    fn locked_or_missing_keychain_is_an_explicit_error() {
+        let stub = "{\"pubkey\":\"stub\"}";
+        let missing = resolve_key("human", Some(stub), |_| Ok(None)).err().expect("missing fails");
+        assert!(missing.contains("missing from Keychain"));
+        let locked = resolve_key("human", Some(stub), |_| Err("Keychain locked".into())).err().expect("locked fails");
+        assert!(locked.contains("locked"));
+    }
+
+    #[test]
+    fn malformed_or_mismatched_records_fail_without_secret_in_error() {
+        let secret = "secret-key-material";
+        let error = resolve_key("human", None, |_| Ok(Some(secret.into()))).err().expect("invalid fails");
+        assert!(!error.contains(secret));
+        let malformed = serde_json::json!({ "pubkey": "0".repeat(64), "privkey": "07".repeat(32) }).to_string();
+        let error = resolve_key("human", None, |_| Ok(Some(malformed))).err().expect("mismatch fails");
+        assert!(error.contains("do not match"));
+        assert!(!error.contains(&"07".repeat(32)));
+    }
 }
 
 #[cfg(test)]
