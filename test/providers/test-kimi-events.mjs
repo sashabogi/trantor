@@ -1,15 +1,6 @@
 #!/usr/bin/env node
-// test-kimi-events — P3 of docs/KIMI-BRIDGE-CONTRACT.md (#4786): the PROOF.
-// Every event in kimi.plugin.json, fed a realistic KIMI-dialect payload, through the REAL bridge
-// (kimi/bridge.mjs, P1 #4784) against a hermetic spawned hub with RELAY_AUTH=enforce:
-//   • the hub effect (register/focus/card/heartbeat/handoff-ping/todo) lands SIGNED — an enforce
-//     hub 401s unsigned writes, so the effect existing IS the signature proof;
-//   • output translation: SessionStart context STASHED (never printed), first UserPromptSubmit
-//     FLUSHES the stash as plain text then clears it, PostToolUse context prints as PLAIN stdout;
-//   • stdout is never a CC JSON envelope / never JSON garbage into kimi's context.
-// Isolation: random port, temp HOME/AGENT_BUS_DIR/RELAY_DATA_DIR — never :4477 or real ~/.agent-bus.
-// KIMI_TEST_BRIDGE overrides the bridge path for pre-P1 validation ONLY; default is the real bridge.
-// Package: test-kimi-events.mjs (owned by #4786 only).
+// Run realistic Kimi events through the bridge against an enforce hub; verify signed effects and output.
+/* oxlint-disable anti-slop/no-runtime-typeof -- SAFETY: These assertions distinguish string envelopes and numeric costs at the bridge/hub wire boundary. */
 import { spawn, spawnSync } from "node:child_process";
 import { mkdtempSync, rmSync, existsSync, readdirSync, writeFileSync, mkdirSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -126,6 +117,9 @@ try {
 
   HUB = await startHub();
   OWNER = generate();
+  mkdirSync(join(BUS, "keys"), { recursive: true });
+  writeFileSync(join(BUS, "keys", `${OWNER_NAME}.json`), JSON.stringify({ ...OWNER, name: OWNER_NAME, kind: "human" }), { mode: 0o600 });
+  writeFileSync(join(BUS, "config.json"), JSON.stringify({ ownerIdentity: OWNER_NAME }));
   const er = await sFetch(OWNER, "POST", "/enroll", { name: OWNER_NAME, kind: "human", scopes: [{ project: "*", role: "owner" }] });
   ok("owner enrolled (TOFU, scopes *)", er.status < 400, `status ${er.status}`);
   const unsigned = await fetch(HUB.base + "/tasks");   // the premise of the whole proof: enforce rejects unsigned

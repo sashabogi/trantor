@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -10,6 +10,9 @@ const home = mkdtempSync(join(out, "test-home-"));
 process.env.HOME = home;
 process.env.TMPDIR = join(home, "tmp");
 mkdirSync(process.env.TMPDIR, { recursive: true });
+// Fixtures need the same project and module boundaries as a temp directory outside the checkout.
+mkdirSync(join(process.env.TMPDIR, ".git"));
+writeFileSync(join(process.env.TMPDIR, "package.json"), '{"type":"commonjs"}');
 process.env.AGENT_BUS_DIR = join(home, ".agent-bus");
 process.env.TRANTOR_NO_KEYCHAIN = "1";
 process.env.TRANTOR_SECRETS_BACKEND = "file";

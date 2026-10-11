@@ -1,18 +1,5 @@
 #!/usr/bin/env node
-// trantor — a `wake:false` ack must STILL be an ack after the hub restarts on Postgres (#7140).
-//
-// #7079 taught /contracts that a `wake:false` send, a `receipt` or a `status` owes nothing back,
-// so the stop gate stops blocking the dispatcher over them. It held in memory and died at the
-// store: the messages table had no `wake` and no `kind` column, so the pg store dropped both on
-// write and could not return them on read. Every hub restart reloaded each outstanding ack as a
-// plain contract, which aged into `stalled` and blocked the orchestrator again — the exact failure
-// the merge was gated against, reintroduced one layer down. The gate had run on a json-store test
-// hub and never restarted a pg one, which is why this file forces a real round trip.
-//
-// Three sections: the static shape of the fix (every write path, the read path), a round trip
-// through the real encoder/decoder against a recording pool, and — when a Postgres is reachable —
-// the thing that actually broke: a hub on RELAY_STORE=pg, a `wake:false` send, a restart, and
-// /contracts still calling it `ack`.
+// Exercise ack durability through encoder/decoder paths and a throwaway Postgres hub restart.
 import { spawn, spawnSync } from "node:child_process";
 import { mkdtempSync, mkdirSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -21,7 +8,7 @@ import { fileURLToPath } from "node:url";
 import { PgStore } from "../../lib/store-pg.mjs";
 import { SCHEMA_SQL } from "../../lib/store-contract.mjs";
 import { drillEnv } from "../drill-env.mjs";
-import { startTestHub } from "../lib/test-hub.mjs";
+import { startTestHub, freePort } from "../lib/test-hub.mjs";
 
 const ROOT = fileURLToPath(new URL("../..", import.meta.url)).replace(/\/$/, "");
 let pass = 0, fail = 0;
@@ -115,7 +102,7 @@ console.log("\nWhat goes in comes back out, on both write paths:");
 
 // --- Section 3: the real thing — a pg-backed hub, a restart, /contracts ---------------------------
 // Runs against RELAY_TEST_PG_URL when set; otherwise spins a throwaway cluster with the initdb and
-// pg_ctl on PATH (socket-only, in a temp dir, torn down after). Skips loudly when neither exists.
+// pg_ctl on PATH (loopback TCP, temp data, torn down after). Skips loudly when neither exists.
 const haveBin = (b) => spawnSync("sh", ["-c", `command -v ${b}`], { stdio: "ignore" }).status === 0;
 let PG_URL = process.env.RELAY_TEST_PG_URL || "";
 let cluster = null;
@@ -123,11 +110,11 @@ if (!PG_URL && haveBin("initdb") && haveBin("pg_ctl")) {
   cluster = mkdtempSync(join(tmpdir(), "trantor-ackpg-"));
   const data = join(cluster, "data");
   const init = spawnSync("initdb", ["-D", data, "-U", "trantor", "-A", "trust", "--no-locale", "-E", "UTF8"], { encoding: "utf8" });
-  const port = 54327;
+  const port = await freePort();
   const start = init.status === 0
-    ? spawnSync("pg_ctl", ["-D", data, "-o", `-p ${port} -k ${cluster} -c listen_addresses=''`, "-l", join(cluster, "pg.log"), "-w", "start"], { encoding: "utf8" })
+    ? spawnSync("pg_ctl", ["-D", data, "-o", `-p ${port} -k '' -c listen_addresses='127.0.0.1'`, "-l", join(cluster, "pg.log"), "-w", "start"], { encoding: "utf8" })
     : null;
-  if (start?.status === 0) PG_URL = `postgres://trantor@/postgres?host=${cluster}&port=${port}`;
+  if (start?.status === 0) PG_URL = `postgres://trantor@127.0.0.1:${port}/postgres`;
   else { console.log(`  ✗ could not start a throwaway Postgres — ${(init.stderr || start?.stderr || "").trim().slice(0, 200)}`); fail++; }
 }
 

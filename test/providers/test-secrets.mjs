@@ -132,7 +132,7 @@ console.log("# resolveKeys: store > ~/.agent-bus/.env > ~/.token-scrooge/.env > 
 console.log("# trantor secrets: the verbs, and no value ever printed");
 {
   const bus = fakeBus();
-  const env = drillEnv({ AGENT_BUS_DIR: bus, TRANTOR_SECRETS_BACKEND: "file", HOME: bus });
+  const env = drillEnv({ AGENT_BUS_DIR: bus, TRANTOR_SECRETS_BACKEND: "file", TRANTOR_NO_KEYCHAIN: "0", HOME: bus });
   const cli = (args, input) => spawnSync(process.execPath, [join(ROOT, "bin", "secrets.mjs"), ...args], { encoding: "utf8", env, input });
   const noValue = (r) => !`${r.stdout}${r.stderr}`.includes("sk-dr1ll");
   let r = cli(["set", "ZZZ_DRILL_API_KEY"], `${VALUE}\n`);
@@ -164,7 +164,7 @@ console.log("# provider add/remove go through the store once it is on");
 {
   const home = fakeBus();
   const bus = join(home, ".agent-bus");
-  const env = drillEnv({ HOME: home, AGENT_BUS_DIR: bus, TRANTOR_SECRETS_BACKEND: "file", PATH: "/usr/bin:/bin" });
+  const env = drillEnv({ HOME: home, AGENT_BUS_DIR: bus, TRANTOR_SECRETS_BACKEND: "file", TRANTOR_NO_KEYCHAIN: "0", PATH: "/usr/bin:/bin" });
   const run = (bin, args) => spawnSync(process.execPath, [join(ROOT, "bin", bin), ...args], { encoding: "utf8", env });
   const added = run("provider.mjs", ["add", "zzz-lab", "--key", "sk-dr1ll-lab"]);
   ok("provider add exits 0", added.status === 0, added.stderr);
@@ -183,7 +183,7 @@ console.log("# doctor names a key still living in .env");
   const bus = join(home, ".agent-bus");
   mkdirSync(bus, { recursive: true });
   writeFileSync(join(bus, ".env"), "DEEPSEEK_API_KEY=sk-dr1ll-doc\n");
-  const env = drillEnv({ HOME: home, AGENT_BUS_DIR: bus, TRANTOR_SECRETS_BACKEND: "file", PATH: "/usr/bin:/bin", TRANTOR_NO_DESKTOP_NOTIFY: "1" });
+  const env = drillEnv({ HOME: home, AGENT_BUS_DIR: bus, TRANTOR_SECRETS_BACKEND: "file", TRANTOR_NO_KEYCHAIN: "0", PATH: "/usr/bin:/bin", TRANTOR_NO_DESKTOP_NOTIFY: "1" });
   const r = spawnSync(process.execPath, [join(ROOT, "bin", "doctor.mjs"), "--json"], { encoding: "utf8", env, maxBuffer: 8 * 1024 * 1024, timeout: 60000 });
   let report = null;
   try { report = JSON.parse(r.stdout); } catch { /* a doctor that cannot report fails the asserts below */ }

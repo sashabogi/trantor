@@ -9,7 +9,7 @@ import { createServer as netServer } from "node:net";
 import { once } from "node:events";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { tmpdir } from "node:os";
+import { shortSocketDir } from "../lib/socket-dir.mjs";
 import { wakeOnce } from "../../bin/wake-nudge.mjs";
 import { claimDutyNudges, dutyNudgeDirective, readDutyNudgeState, releaseDutyNudgeClaims } from "../../lib/duty-nudges.mjs";
 import { reserveNudgeIds, releaseNudgeIds, nudgeLedgerPath, NUDGE_LEDGER_TTL_MS } from "../../lib/nudge-ledger.mjs";
@@ -19,7 +19,7 @@ const root = resolve(".");
 const out = join(root, ".agent-bus-out");
 mkdirSync(out, { recursive: true });
 const dir = mkdtempSync(join(out, "nl-"));
-const sockets = mkdtempSync(join(tmpdir(), "nl-"));
+const sockets = shortSocketDir("nl-");
 const recipient = "local:trantor";
 const sid = "nudge-drill-session";
 // the alert rides BOTH shapes: `by` is the /events feed field wakeOnce filters on, `from` is the

@@ -3,15 +3,12 @@
 import { spawn, spawnSync } from "node:child_process";
 import { readdirSync, statSync, existsSync, readFileSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { join } from "node:path";import { fileURLToPath } from "node:url";
+import { testIdentityFiles } from "./lib/identity-files.mjs";
 import { userInfo } from "node:os";
 import { DRILL_IDENTITY_VARS } from "./drill-env.mjs";
 
 const realKeys = join(userInfo().homedir, ".agent-bus", "keys");
-function realKeyFiles() {
-  try { return readdirSync(realKeys).sort(); }
-  catch (error) { if (error.code === "ENOENT") return []; throw error; }
-}
-const keysBefore = realKeyFiles();
+const keysBefore = testIdentityFiles(realKeys);
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
 process.chdir(ROOT);
@@ -113,7 +110,7 @@ function runSuite(s) {
     mkdirSync(outDir, { recursive: true });
     const home = mkdtempSync(join(outDir, "suite-home-"));
     mkdirSync(join(home, "tmp"));
-    const env = { ...process.env, GIT_CEILING_DIRECTORIES: outDir, HOME: home, TMPDIR: join(home, "tmp"), AGENT_BUS_DIR: join(home, ".agent-bus"), TRANTOR_NO_KEYCHAIN: "1" };
+    const env = { ...process.env, GIT_CEILING_DIRECTORIES: outDir, HOME: home, TMPDIR: join(home, "tmp"), AGENT_BUS_DIR: join(home, ".agent-bus"), TRANTOR_NO_KEYCHAIN: "1", TRANTOR_SECRETS_BACKEND: "file" };
     const kid = spawn(cmd, args, { cwd: ROOT, env, detached: true, stdio: ["ignore", "pipe", "pipe"] });
     let out = "", timedOut = false;
     const timer = setTimeout(() => {
@@ -191,7 +188,7 @@ if (quarRed.length) console.log(`\nquarantine lane (reported, not gating): ${qua
 
 const slowest = [...results].sort((a, b) => b.ms - a.ms).slice(0, 5);
 console.log(`\n${results.length} suites: ${results.length - failed.length} green, ${gateRed.length} red (gate), ${quarRed.length} red (quarantine) — slowest: ${slowest.map(r => `${r.rel.split("/").pop()} ${(r.ms / 1000).toFixed(1)}s`).join(", ")}`);
-const keysAfter = realKeyFiles();
+const keysAfter = testIdentityFiles(realKeys);
 const keysUnchanged = JSON.stringify(keysBefore) === JSON.stringify(keysAfter);
-console.log(`real identity directory: ${keysBefore.length} before, ${keysAfter.length} after — ${keysUnchanged ? "unchanged" : "CHANGED"}`);
+console.log(`real test-identity files: ${keysBefore.length} before, ${keysAfter.length} after — ${keysUnchanged ? "unchanged" : "CHANGED"}`);
 process.exit(gateRed.length || !keysUnchanged ? 1 : 0);

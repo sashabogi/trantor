@@ -115,7 +115,7 @@ exit 0
   const TURNSTATE = join(BUS, "turnstate-codex-" + PROJ + ".json");
   const runner = spawn("node", ["bin/crew-runner.mjs", "codex", REPO], {
     cwd: process.cwd(), stdio: "ignore",
-    env: { ...drillEnv({ TRANTOR_NO_DESKTOP_NOTIFY: "1" }), HOME, PATH: `${fakebin}:${process.env.PATH}`,
+    env: { ...drillEnv({ TRANTOR_NO_DESKTOP_NOTIFY: "1" }), HOME, AGENT_BUS_DIR: BUS, PATH: `${fakebin}:${process.env.PATH}`,
       RELAY_URL: HUB, RELAY_AGENT: "codex", RELAY_PROJECT: PROJ,
       TRANTOR_RETRY_MS: "1200", CREW_KICKOFF: "say hi and end your turn" },
   });
