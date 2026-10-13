@@ -436,7 +436,12 @@ trantor setup | doctor | connect | profile | provider | models
   `add <name> --key … [--plan api] [--base-url <url> --models a,b]` to bring any provider (custom
   endpoints are wired into OpenCode for you) · `remove <name>`.
 - **`trantor models [<provider>]`** — browse the live models behind each seat + the router's pick
-  per difficulty.
+  per difficulty. A model with no known price is listed as unpriced and never picked.
+- **`trantor memory`** — pins a project's Claude memory notes to the code they describe
+  (graft symbols and files) and flags a note **stale** when a pinned symbol's body changes, or
+  **broken** when it disappears. `check [--strict]` reports; `pin <note> | --all [--dry-run]`
+  pins or re-pins. Notes are pinned automatically when saved, and a session's first context line
+  names any stale or broken note. Terms: [GLOSSARY.md](GLOSSARY.md).
 - **`trantor up`** — `agent:model` pins a model (`deepseek:deepseek-v4-pro`); `agent:provider
   --task <k> --difficulty <d>` picks the **best live model** for the work at spawn
   (`glm:zai-coding-plan --difficulty hard`); spawns are verified on the bus with one retry;
