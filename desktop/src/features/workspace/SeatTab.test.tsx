@@ -37,6 +37,22 @@ describe("SeatTab", () => {
     expect(html()).toContain("codex");
   });
 
+  it("#11604: a -N instance seat renders its base brand's svg — codex-2 wears the Codex mark", async () => {
+    // trantor's second codex seat registers llm "codex-2" (RELAY_AGENT verbatim); the exact-match
+    // brand table missed it and monogrammed the tab. The instance suffix is not a brand.
+    for (const brandName of ["codex", "codex-2"]) {
+      await render({ name: brandName, brandName, status: "idle", active: false, onClick: () => {} });
+      expect(host.querySelector("[aria-label]")?.getAttribute("aria-label"), brandName).toBe("Codex");
+      expect(html(), `${brandName} must not monogram`).not.toContain("bg-white/[0.08]");
+    }
+  });
+
+  it("#11604: an unknown -N name still monograms — the strip never invents a brand", async () => {
+    await render({ name: "newbot-2", brandName: "newbot-2", status: "idle", active: false, onClick: () => {} });
+    expect(host.querySelector("[aria-label]")?.getAttribute("aria-label")).toBe("newbot-2");
+    expect(html()).toContain("bg-white/[0.08]");
+  });
+
   it("working: the mark pulses and the title says working", async () => {
     await render({ name: "codex", brandName: "codex", status: "working", active: true, onClick: () => {} });
     expect(tab()?.title).toBe("codex — working");
