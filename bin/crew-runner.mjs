@@ -29,7 +29,7 @@ import {
 } from "../lib/turn-policy.mjs";
 import { snapshotBeforeCut } from "./cut-snapshot.mjs";
 import { ocTurnUsage, dshTurnUsage, usageTotal } from "../lib/turn-usage.mjs";
-import { ocCompactionContent } from "../lib/seat-compaction.mjs";
+import { ocCompactionContent, ocCompactionLogLine } from "../lib/seat-compaction.mjs";
 import { listContainers, newContainers, recordContainers, statePathFor as dockerStatePathFor, sweep as dockerSweep } from "../lib/docker-janitor.mjs";
 import {
   auditDutyNudges, claimDutyNudges, claudeTranscriptDir, dutyEscalations, dutyNudgeDirective,
@@ -37,7 +37,7 @@ import {
 } from "../lib/duty-nudges.mjs";
 import { reserveNudgeIds, releaseNudgeIds } from "../lib/nudge-ledger.mjs";
 import { dutyRecipientResolver } from "../lib/duty-recipient.mjs";
-import { cliEffortFlag } from "../lib/model-catalog.mjs";
+import { cliEffortFlag, contextWindow } from "../lib/model-catalog.mjs";
 import {
   BREAKER_WINDOW, STATE_ENV, TURN_RESULT_SCHEMA,
   breakerVerdict, describeTurn, hasJsonSchemaFlag, parseEnvelope, renderCardTail, runStep,
@@ -758,10 +758,12 @@ let cardStartedAt = releaseState?.cardStartedAt || 0;
 let budgetStop = releaseState?.budgetStop || null;   // { card, tokens } once the card crossed
 let budgetRetryAt = releaseState?.budgetRetryAt || 0;   // paces the paused card's OWN redeliveries
 
-// #11559: the compaction block injected to opencode-family seats via OPENCODE_CONFIG_CONTENT.
-// "" injects nothing (the operator set TRANTOR_OC_COMPACTION=off, or its JSON is invalid — the
-// seat then behaves exactly as before, never with a half-armed config).
-const OC_COMPACTION = ocCompactionContent(process.env);
+// #11559: the compaction block injected to opencode-family seats via OPENCODE_CONFIG_CONTENT (""
+// injects nothing: TRANTOR_OC_COMPACTION=off or invalid JSON). opencode has no absolute-threshold
+// knob — auto-compact fires at window − reserved (opencode.ai/config.json; calculateCeiling in
+// core/src/session/compaction.ts) — so reserved is sized from the seat model's catalog window.
+const OC_COMPACTION_WINDOW = contextWindow(MODEL);
+const OC_COMPACTION = ocCompactionContent(process.env, OC_COMPACTION_WINDOW);
 
 let sid = releaseState?.sid || "";
 // #6206: the watchdog is DETACHED, so a runner that dies without ending it leaves an orphan
@@ -836,6 +838,8 @@ async function runTurn(prompt, isFirst, trigger = "kickoff", opts = {}) {
   log(`turn starting (${isFirst ? "fresh session" : "resume"})${MODEL ? ` · model=${MODEL}` : ""}`);
   // #7777: the one effort line — which effort parameters were set, or that the model is uncatalogued.
   if (EFFORT && EFFORT_FLAG.text) log(EFFORT_FLAG.text);
+  // #11559: the one compaction line — only where the block actually rides the spawn.
+  if (cli.pinned && OC_COMPACTION) log(ocCompactionLogLine(OC_COMPACTION_WINDOW));
   cmuxStatus("building", "#4a90d9", "hammer", { priority: 50 }); herdrAgent("working");
   // inherit stdio so the window shows the agent working live; also capture for sid-parsing.
   // Tee stderr to ERRF (still shown live in the window) so a failed turn can be classified.

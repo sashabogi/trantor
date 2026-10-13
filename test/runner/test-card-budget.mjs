@@ -10,7 +10,8 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { execSync } from "node:child_process";
 import { drillEnv } from "../drill-env.mjs";
-import { ocCompactionContent } from "../../lib/seat-compaction.mjs";
+import { ocCompactionContent, ocCompactionLogLine, reservedForContext } from "../../lib/seat-compaction.mjs";
+import { contextWindow } from "../../lib/model-catalog.mjs";
 import { seatTokensReport, providerOf } from "../../lib/seat-tokens.mjs";
 
 let pass = 0, fail = 0;
@@ -35,6 +36,32 @@ console.log("# trantor card-budget + compaction drills (#11559)");
   ok("#11559: custom JSON wraps as { compaction }", c.compaction && c.compaction.reserved === 900000 && c.compaction.auto === true);
   ok("#11559: invalid JSON injects nothing", ocCompactionContent({ TRANTOR_OC_COMPACTION: "{nope" }) === "");
   ok("#11559: a non-object JSON injects nothing", ocCompactionContent({ TRANTOR_OC_COMPACTION: "[1,2]" }) === "");
+  // #11559 follow-up: opencode has NO absolute-threshold knob (trigger = window − reserved:
+  // opencode.ai/config.json additionalProperties:false; calculateCeiling in core compaction.ts),
+  // so reserved is sized from the model's catalog window: window − 100K, floored at 64K.
+  ok("#11559: reservedForContext sizes window−100K with a 64K floor",
+    reservedForContext(1_000_000) === 900_000 && reservedForContext(200_000) === 100_000
+    && reservedForContext(164_000) === 64_000 && reservedForContext(100_000) === 64_000,
+    JSON.stringify([1_000_000, 200_000, 164_000, 100_000].map(reservedForContext)));
+  ok("#11559: reservedForContext rejects unknown/invalid windows",
+    reservedForContext(undefined) === undefined && reservedForContext(0) === undefined
+    && reservedForContext(NaN) === undefined);
+  const mw = JSON.parse(ocCompactionContent({}, 1_000_000));
+  ok("#11559: a 1M window arms reserved 900000 — auto-compact fires near 100K",
+    mw.compaction.reserved === 900_000 && mw.compaction.auto === true && mw.compaction.tail_turns === 4,
+    ocCompactionContent({}, 1_000_000));
+  ok("#11559: small and unknown windows keep the 64K floor",
+    JSON.parse(ocCompactionContent({}, 120_000)).compaction.reserved === 64_000
+    && JSON.parse(ocCompactionContent({})).compaction.reserved === 64_000);
+  const cw = JSON.parse(ocCompactionContent({ TRANTOR_OC_COMPACTION: '{"reserved":123}' }, 1_000_000));
+  ok("#11559: custom TRANTOR_OC_COMPACTION wins verbatim even with a window", cw.compaction.reserved === 123);
+  ok("#11559: the log line states the computed trigger",
+    ocCompactionLogLine(1_000_000).includes("reserved=900000") && ocCompactionLogLine(1_000_000).includes("100000")
+    && ocCompactionLogLine(undefined).includes("floor"), ocCompactionLogLine(1_000_000));
+  ok("#11559: contextWindow reads the catalog entry, rejects uncatalogued/invalid",
+    contextWindow("qwen/deepseek-v4-pro", { models: { "qwen/deepseek-v4-pro": { context: 1000000 } } }) === 1_000_000
+    && contextWindow("nope", { models: {} }) === undefined
+    && contextWindow("bad", { models: { bad: { context: 0 } } }) === undefined);
 }
 
 // ---- unit: providerOf + the token report on a fixture DB ----------------------------------------
@@ -213,7 +240,10 @@ exit 0
     cwd: process.cwd(), stdio: "ignore",
     env: { ...drillEnv({ TRANTOR_NO_DESKTOP_NOTIFY: "1" }), HOME, XDG_DATA_HOME: join(HOME, ".xdg"),
       PATH: `${fakebin}:${process.env.PATH}`, RELAY_URL: `http://127.0.0.1:${hub.address().port}`,
-      RELAY_AGENT: "opencode", RELAY_PROJECT: PROJ, CREW_KICKOFF: "say hi and end your turn" },
+      RELAY_AGENT: "opencode", RELAY_PROJECT: PROJ, CREW_KICKOFF: "say hi and end your turn",
+      // HERMETIC: a suite run from inside a crew seat inherits that seat's CREW_MODEL — pin the
+      // no-model case explicitly, the floor default is what this block drills.
+      CREW_MODEL: "" },
   });
   await sleep(9000);
   runner.kill("SIGKILL"); await sleep(150);
@@ -221,6 +251,42 @@ exit 0
   ok("#11559: the pinned seat's spawn carries OPENCODE_CONFIG_CONTENT with the compaction block",
     dumped.includes("OPENCODE_CONFIG_CONTENT=") && dumped.includes('"compaction"') && dumped.includes('"reserved":64000'),
     dumped.slice(0, 160));
+}
+console.log("\n## #11559 follow-up: the seat model's catalog window sizes the injected reserved (1M → compact near 100K)");
+{
+  const root = mkdtempSync(join(SCRATCH, "tt-ocwindow-"));
+  const HOME = join(root, "home");
+  const REPO = join(root, "repo");
+  mkdirSync(join(HOME, ".agent-bus"), { recursive: true });
+  mkdirSync(join(HOME, ".xdg"), { recursive: true });
+  mkdirSync(REPO, { recursive: true });
+  const g = (args) => execSync(`git ${args}`, { cwd: REPO, stdio: "ignore" });
+  g("init -q -b main");
+  writeFileSync(join(REPO, "seed.txt"), "seed\n");
+  g("add -A");
+  g("-c user.name=d -c user.email=d@d commit -qm init");
+  const fakebin = join(root, "bin"); mkdirSync(fakebin, { recursive: true });
+  const ENVF = join(root, "env-dump");
+  const PROJ = "tt-ocwindow";
+  writeFileSync(join(fakebin, "opencode"), `#!/bin/sh
+env | grep '^OPENCODE_CONFIG_CONTENT=' > "${ENVF}" 2>/dev/null || true
+echo "tokens used: 1"
+exit 0
+`);
+  chmodSync(join(fakebin, "opencode"), 0o755);
+  const runner = spawn("node", ["bin/crew-runner.mjs", "opencode", REPO], {
+    cwd: process.cwd(), stdio: "ignore",
+    env: { ...drillEnv({ TRANTOR_NO_DESKTOP_NOTIFY: "1" }), HOME, XDG_DATA_HOME: join(HOME, ".xdg"),
+      PATH: `${fakebin}:${process.env.PATH}`, RELAY_URL: `http://127.0.0.1:${hub.address().port}`,
+      RELAY_AGENT: "opencode", RELAY_PROJECT: PROJ, CREW_KICKOFF: "say hi and end your turn",
+      CREW_MODEL: "deepseek/deepseek-v4-pro" },
+  });
+  await sleep(9000);
+  runner.kill("SIGKILL"); await sleep(150);
+  const dumped = read(ENVF);
+  ok("#11559: CREW_MODEL 1M → the spawn's block carries reserved 900000 (compacts near 100K)",
+    dumped.includes("OPENCODE_CONFIG_CONTENT=") && dumped.includes('"reserved":900000'),
+    dumped.slice(0, 200) || "(env dump empty)");
 }
 hub.close();
 console.log(`\n${pass} passed, ${fail} failed`);
