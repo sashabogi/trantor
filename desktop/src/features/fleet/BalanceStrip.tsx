@@ -1,7 +1,7 @@
 // Fleet status bar, footer, to the Orca visual standard (#5570): brand marks, a micro progress
 // bar, per-window "N% used <time-left>" segments including model-scoped limits. Values render
 // at full brightness, marks stay muted, LOW/LOCKED carry status tints. A failed fetch keeps the
-// last known values dimmed, never an error banner; data is machine-local by design (CLI-pushed).
+// last known values dimmed with a visible failure reason; data is machine-local (CLI-pushed).
 import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { RefreshCw } from "lucide-react";
@@ -20,7 +20,7 @@ const REFETCH_AFTER_MS = 10 * 60 * 1000;
 
 export function BalanceStrip({ client }: { client: HubClient }) {
   const [report, setReport] = useState<BalancesReport | null>(null);
-  const [failed, setFailed] = useState(false);
+  const [failure, setFailure] = useState<string | null>(null);
   const [spinning, setSpinning] = useState(false);
   // The strip's chips open the Usage roster popover (same data, no second fetch).
   const [open, setOpen] = useState(false);
@@ -32,8 +32,11 @@ export function BalanceStrip({ client }: { client: HubClient }) {
   const local = isLocal ? client : new HubClient(LOCAL_HUB);
   const pull = useCallback(() => {
     return local.balances()
-      .then(r => { setReport(r); setFailed(false); return r; })
-      .catch(() => { setFailed(true); return null; });
+      .then(r => { setReport(r); setFailure(null); return r; })
+      .catch((error: Error) => {
+        setFailure(error.message);
+        return null;
+      });
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [client]);
 
@@ -71,16 +74,15 @@ export function BalanceStrip({ client }: { client: HubClient }) {
   // (usage/limit/resetTime/via/unlimited/windows) that the conservative BalanceEntry type omits;
   // the chip formatter reads them, so the boundary decodes to the widened row shape once, here.
   const rows = (report?.entries ?? []) as BalanceRow[];
-  if (!rows.length) return null; // no configured providers — no chrome that says nothing
 
   const ts = report?.ts ?? 0;
   const stale = isStale(ts);
   // Zombie rows (the hidden gemini ghost) stay out of the popover roster too.
   const roster = rows.filter(e => !isZombie(e, ts));
   const chips = sortRows(roster).map(e => chipFrom(e, { snapshotTs: ts })).filter((c): c is NonNullable<typeof c> => c != null);
-  if (!chips.length) return null;
+  if (!chips.length && failure === null) return null;
 
-  const dimmed = failed || stale;
+  const dimmed = failure !== null || stale;
 
   return (
     <footer className="relative flex h-7 shrink-0 items-center gap-4 border-t border-[var(--color-tr-edge)] bg-[var(--color-tr-bg)] px-3"
@@ -90,6 +92,11 @@ export function BalanceStrip({ client }: { client: HubClient }) {
           clip class the tab bar had). Overflow now scrolls; the refresh control never gets
           painted over; the tooltip always carries the full text regardless. */}
       <div className={`flex min-w-0 flex-1 items-center gap-4 overflow-x-auto ${dimmed ? "opacity-45" : ""}`}>
+        {failure !== null && (
+          <span role="status" className="tr-mono shrink-0 whitespace-nowrap text-[10.5px]">
+            usage unavailable: {failure}
+          </span>
+        )}
         {chips.map(c => (
           <button key={c.key} type="button" onClick={() => setOpen(true)} aria-haspopup="dialog" aria-expanded={open}
             title={`${c.tooltip} — click for the full usage roster`}

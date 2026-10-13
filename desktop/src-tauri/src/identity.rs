@@ -468,6 +468,8 @@ pub async fn request(identity: &str, base: &str, method: &str, path: &str, body:
     let headers = sign(identity, method, path, body.as_deref())?;
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(20))
+        // Signed requests, especially local enrollment, must never follow a redirect to another hub.
+        .redirect(reqwest::redirect::Policy::none())
         .build().map_err(|e| e.to_string())?;
     let url = format!("{}{}", base.trim_end_matches('/'), path);
     let m = reqwest::Method::from_bytes(method.to_uppercase().as_bytes()).map_err(|e| e.to_string())?;

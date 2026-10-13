@@ -52,8 +52,56 @@ pub(crate) async fn hub_request(
     path: String,
     body: Option<String>,
 ) -> Result<HubResponse, String> {
-    let (status, body) = identity::request(&owner_identity(), &base, &method, &path, body).await?;
+    let owner = owner_identity();
+    let (status, body) = request_with_local_enrollment(
+        &owner, &base, &method, &path, body,
+        |method, path, body| {
+            let owner = &owner;
+            let base = &base;
+            async move { identity::request(owner, base, &method, &path, body).await }
+        },
+    ).await?;
     Ok(HubResponse { status, body })
+}
+
+fn loopback_hub(base: &str) -> bool {
+    let Ok(url) = reqwest::Url::parse(base) else { return false };
+    if !matches!(url.scheme(), "http" | "https") || !url.username().is_empty()
+        || url.password().is_some() || url.query().is_some() || url.fragment().is_some()
+        || url.path() != "/" {
+        return false;
+    }
+    match url.host_str() {
+        Some("localhost" | "[::1]") => true,
+        Some(host) => host.parse::<std::net::IpAddr>().is_ok_and(|ip| ip.is_loopback()),
+        None => false,
+    }
+}
+
+// Recovery is bounded to one enroll and one replay per request; remote owners require an invite.
+async fn request_with_local_enrollment<F, Fut>(
+    owner: &str, base: &str, method: &str, path: &str, body: Option<String>, mut send: F,
+) -> Result<(u16, String), String>
+where
+    F: FnMut(String, String, Option<String>) -> Fut,
+    Fut: std::future::Future<Output = Result<(u16, String), String>>,
+{
+    let response = send(method.into(), path.into(), body.clone()).await?;
+    let unknown = serde_json::from_str::<serde_json::Value>(&response.1).ok()
+        .and_then(|value| value.get("error").and_then(|error| error.as_str()).map(str::to_owned))
+        .as_deref() == Some("unknown identity");
+    if response.0 != 401 || !unknown || !loopback_hub(base) || path == "/enroll" {
+        return Ok(response);
+    }
+    let enrollment = serde_json::json!({ "name": owner, "kind": "human" }).to_string();
+    let enrolled = send("POST".into(), "/enroll".into(), Some(enrollment)).await?;
+    if !(200..300).contains(&enrolled.0) {
+        let reason = serde_json::from_str::<serde_json::Value>(&enrolled.1).ok()
+            .and_then(|value| value.get("error").and_then(|error| error.as_str()).map(str::to_owned))
+            .unwrap_or_else(|| format!("HTTP {}", enrolled.0));
+        return Err(format!("Local hub enrollment refused: {reason}"));
+    }
+    send(method.into(), path.into(), body).await
 }
 
 /// Streams already running, keyed by hub base URL: one stream per hub, fanned out over Tauri's
@@ -255,4 +303,85 @@ pub(crate) async fn agent_settings_set_default(id: Option<String>) -> Result<Str
 /// operator's machine and the UI degrades to text.
 pub(crate) fn project_dir(project: &str) -> Option<std::path::PathBuf> {
     identity::checkout_for(&identity::dev_root(), project)
+}
+
+#[cfg(test)]
+mod local_enrollment_tests {
+    use super::*;
+    use std::future::ready;
+
+    const UNKNOWN: &str = r#"{"error":"unknown identity"}"#;
+
+    #[tokio::test]
+    async fn enrolls_loopback_owner_and_replays_exact_request_once() {
+        for base in ["http://127.0.0.1:4477", "http://localhost:4477/", "http://[::1]:4477"] {
+            let mut calls = Vec::new();
+            let result = request_with_local_enrollment("test-owner", base, "POST", "/balances?x=1", Some("{\"ts\":42}".into()),
+                |method, path, body| {
+                    calls.push((method, path, body));
+                    ready(Ok(if calls.len() == 1 { (401, UNKNOWN.into()) } else { (200, "{}".into()) }))
+                }).await.unwrap();
+            assert_eq!(result.0, 200);
+            assert_eq!(calls.len(), 3);
+            assert_eq!(calls[0], calls[2]);
+            assert_eq!((&*calls[1].0, &*calls[1].1), ("POST", "/enroll"));
+            let payload: serde_json::Value = serde_json::from_str(calls[1].2.as_ref().unwrap()).unwrap();
+            assert_eq!(payload, serde_json::json!({ "name": "test-owner", "kind": "human" }));
+        }
+    }
+
+    #[tokio::test]
+    async fn never_enrolls_remote_or_deceptive_hosts() {
+        for base in ["https://example.com", "http://127.0.0.1.example.com", "http://localhost@example.com", "http://example.com/?localhost", "http://0.0.0.0:4477", "file://localhost", "http://127.0.0.1:4477/proxy", "not a url"] {
+            let mut count = 0;
+            let response = request_with_local_enrollment("test-owner", base, "GET", "/balances", None,
+                |_, _, _| { count += 1; ready(Ok((401, UNKNOWN.into()))) }).await.unwrap();
+            assert_eq!(response.0, 401, "{base}");
+            assert_eq!(count, 1, "{base}");
+        }
+    }
+
+    #[tokio::test]
+    async fn leaves_success_and_other_auth_failures_untouched() {
+        for (status, body) in [(200, "{}"), (403, UNKNOWN), (401, r#"{"error":"bad signature"}"#), (401, "unknown identity")] {
+            let mut count = 0;
+            let response = request_with_local_enrollment("test-owner", "http://127.0.0.1:4477", "GET", "/balances", None,
+                |_, _, _| { count += 1; ready(Ok((status, body.into()))) }).await.unwrap();
+            assert_eq!(response, (status, body.into()));
+            assert_eq!(count, 1);
+        }
+    }
+
+    #[tokio::test]
+    async fn enrollment_refusal_is_visible_and_does_not_replay() {
+        let mut count = 0;
+        let error = request_with_local_enrollment("test-owner", "http://127.0.0.1:4477", "GET", "/balances", None,
+            |_, _, _| {
+                count += 1;
+                ready(Ok(if count == 1 { (401, UNKNOWN.into()) } else { (403, r#"{"error":"tofu enrollment refused"}"#.into()) }))
+            }).await.unwrap_err();
+        assert_eq!(count, 2);
+        assert!(error.contains("tofu enrollment refused"));
+    }
+
+    #[tokio::test]
+    async fn retry_failure_never_loops() {
+        let mut count = 0;
+        let response = request_with_local_enrollment("test-owner", "http://127.0.0.1:4477", "GET", "/balances", None,
+            |_, _, _| {
+                count += 1;
+                ready(Ok(if count == 2 { (200, "{}".into()) } else { (401, UNKNOWN.into()) }))
+            }).await.unwrap();
+        assert_eq!(count, 3);
+        assert_eq!(response.0, 401);
+    }
+
+    #[tokio::test]
+    async fn transport_failure_does_not_enroll() {
+        let mut count = 0;
+        let error = request_with_local_enrollment("test-owner", "http://127.0.0.1:4477", "GET", "/balances", None,
+            |_, _, _| { count += 1; ready(Err("connection refused".into())) }).await.unwrap_err();
+        assert_eq!(count, 1);
+        assert_eq!(error, "connection refused");
+    }
 }
