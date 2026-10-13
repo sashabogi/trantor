@@ -52,8 +52,9 @@ afterEach(() => {
   host.remove();
 });
 
-const show = (project: string) => act(() => root.render(
+const show = (project: string, ccSuggestion: string | null = null) => act(() => root.render(
   <Composer
+    ccSuggestion={ccSuggestion}
     project={project}
     target={`${project}-pane`}
     live
@@ -158,6 +159,27 @@ describe("the composer draft is per project (#11665)", () => {
     flushSaves();
     await settle();
     expect(disk.has("a")).toBe(false);
+  });
+});
+
+describe("Tab accepts Claude Code's suggestion (#11649)", () => {
+  const tab = () => act(() => { box().dispatchEvent(new KeyboardEvent("keydown", { key: "Tab", bubbles: true, cancelable: true })); });
+
+  it("Tab in an empty composer fills it with the suggestion, and sends nothing", () => {
+    show("a", "ok, ping me when the header changes are ready");
+    tab();
+    expect(box().value).toBe("ok, ping me when the header changes are ready");
+    expect(sent).toEqual([]);
+  });
+
+  it("Tab leaves a composer with words alone, and does nothing without a suggestion", () => {
+    show("a", "ghost");
+    type("my own words");
+    tab();
+    expect(box().value).toBe("my own words");
+    show("b", null);
+    tab();
+    expect(box().value).toBe("");
   });
 });
 

@@ -1627,3 +1627,66 @@ describe("chip trace: the app names the input that hid the chips (#5993)", () =>
     expect(chipLines(lines)).toEqual(["chat chips p: hidden by no target"]);
   });
 });
+
+// #11649 — the chat mirrors Claude Code's own suggested next prompt, which arrives on the orch-status
+// payload (the Rust watcher reads it off the idle pane). It leads the row and the prose guesses
+// stand down while it exists; a payload without it, or a working turn, takes it away.
+describe("Claude Code's own suggested next prompt (#11649)", () => {
+  let host: HTMLDivElement;
+  let root: Root;
+  const GHOST = "ok, ping me when the header changes are ready";
+
+  beforeEach(() => {
+    host = document.createElement("div");
+    document.body.appendChild(host);
+    root = createRoot(host);
+  });
+
+  afterEach(() => {
+    act(() => root.unmount());
+    host.remove();
+  });
+
+  const chipLabels = () => [...(host.querySelector('[data-testid="suggestion-chips"]')?.querySelectorAll("button") ?? [])]
+    .filter(b => b.textContent !== "×").map(b => b.textContent);
+  const status = async (handlers: Map<string, ((ev: { payload: unknown }) => void)[]>, payload: Record<string, unknown>) => {
+    await act(async () => { for (const cb of handlers.get("orch-status") ?? []) cb({ payload: { project: "p", ...payload } }); });
+    await flush();
+  };
+
+  it("leads the row, replaces the prose guesses, and goes when the payload stops carrying it", async () => {
+    const d = makeDeps();
+    const deps: ChatDeps = { ...d.deps, orchestratorOf: async () => ({ project: "p", agent: "orch", surface: "surf1", kind: "orch" }) };
+    act(() => { root.render(<Chat project="p" dock="right" onDock={() => {}} onClose={() => {}} deps={deps} />); });
+    await flush();
+    await flush();
+    await act(async () => {
+      for (const cb of d.handlers.get("chat-rows") ?? []) cb({ payload: JSON.stringify({
+        project: "p", sessionId: "s1", after: 0, total: 1, results: [], meta: META,
+        turns: [{ role: "assistant", blocks: [{ kind: "text", text: "Both are parked in testing. Want me to verify those handoff cards?" }] }],
+      }) });
+    });
+    await flush();
+    expect(chipLabels()).toEqual(["yes", "no"]);
+
+    await status(d.handlers, { status: "idle", suggestion: GHOST });
+    expect(chipLabels()).toEqual([GHOST]);
+    expect(host.querySelector('[data-testid="suggestion-lead-in"]')!.textContent).toBe("Claude Code suggests");
+
+    await status(d.handlers, { status: "working", suggestion: null });
+    expect(host.querySelector('[data-testid="suggestion-chips"]')).toBeNull();
+
+    await status(d.handlers, { status: "idle", suggestion: null });
+    expect(chipLabels()).toEqual(["yes", "no"]);
+  });
+
+  it("shows even when the last turn asked nothing, since Claude Code offers one after any turn", async () => {
+    const d = makeDeps();
+    const deps: ChatDeps = { ...d.deps, orchestratorOf: async () => ({ project: "p", agent: "orch", surface: "surf1", kind: "orch" }) };
+    act(() => { root.render(<Chat project="p" dock="right" onDock={() => {}} onClose={() => {}} deps={deps} />); });
+    await flush();
+    await flush();
+    await status(d.handlers, { status: "idle", suggestion: GHOST });
+    expect(chipLabels()).toEqual([GHOST]);
+  });
+});

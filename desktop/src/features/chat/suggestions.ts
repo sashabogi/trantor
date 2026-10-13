@@ -2,7 +2,7 @@
 // last turn says, nothing invented, nothing sent; turns closing sentences into at most three chip
 // labels or none. #6702: a chip alone reinvents yes/no, so `tooltip` (button hover) and `ask` (the
 // chip row's lead-in) both carry the closing sentence, differing only for a numbered pick.
-export type Suggestion = { text: string; tooltip?: string; ask?: string };
+export type Suggestion = { text: string; tooltip?: string; ask?: string; /** Claude Code's own suggestion (#11649). */ cc?: boolean };
 
 const YES_NO_OPENER =
   /^(should|shall|want|do you want|can|could|may|is|are|would|did|does|have|has)\b/i;
@@ -164,4 +164,33 @@ export function trimAsk(ask: string, max = LEAD_IN_MAX): string {
 export function askLeadIn(suggestions: Suggestion[]): string | null {
   const ask = suggestions.find(s => s.ask)?.ask;
   return ask ? trimAsk(ask) : null;
+}
+
+/** The row's lead-in when the first chip is Claude Code's own suggestion (#11649). */
+export const CC_LEAD_IN = "Claude Code suggests";
+
+export type ChipSource = "declared" | "claude-code" | "prose" | "none";
+
+/** Which chips the row shows (#11649). Claude Code's own suggestion, read off its terminal, is the
+ *  FIRST chip and replaces the prose-derived guesses, which were never what CC itself offers; a
+ *  declared ask's options are real choices and stay, after it. The suggestion hides with the
+ *  views that hide every chip, while the agent works, and once the operator has typed. */
+export function selectChips(input: {
+  history: boolean;
+  working: boolean;
+  draft: string;
+  declared: DeclaredAsk | null;
+  ccSuggestion: string | null;
+  turnTextsNewestFirst: string[];
+}): { chips: Suggestion[]; source: ChipSource } {
+  if (input.history || input.working) return { chips: [], source: "none" };
+  const cc = input.draft.trim() ? "" : (input.ccSuggestion ?? "").trim();
+  const declared = input.declared ? suggestionsFromDeclaredAsk(input.declared) : [];
+  if (cc) {
+    const chip: Suggestion = { text: cc, tooltip: "Claude Code's own suggested next prompt", cc: true };
+    return { chips: [chip, ...declared.filter(c => c.text !== cc)], source: "claude-code" };
+  }
+  if (input.declared) return { chips: declared, source: "declared" };
+  const prose = suggestionsFromTurns(input.turnTextsNewestFirst);
+  return { chips: prose, source: prose.length ? "prose" : "none" };
 }

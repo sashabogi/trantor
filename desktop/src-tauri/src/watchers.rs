@@ -163,6 +163,9 @@ pub(crate) struct OrchStatusPayload {
     pub(crate) project: String,
     pub(crate) pane: String,
     pub(crate) status: String,
+    /// #11649 — Claude Code's own suggested next prompt, read off the pane's screen when the
+    /// agent is idle and showing one. None while working, or when the screen shows no ghost text.
+    pub(crate) suggestion: Option<String>,
 }
 
 /// Push the orchestrator's lifecycle state instead of polling for it: one per-pane
@@ -183,19 +186,32 @@ pub(crate) fn spawn_status_watcher(window: tauri::Window, project: String, stop:
         }
     });
     std::thread::spawn(move || {
-        let mut last = String::new();
-        let emit = |status: &str, pane: &str, last: &mut String| -> bool {
-            if *last == status {
+        // What the frontend last heard: the status AND the suggestion, so a suggestion that
+        // appears or goes away under an unchanged `idle` still reaches the chat (#11649).
+        let mut last: (String, Option<String>) = (String::new(), None);
+        let emit = |status: &str, pane: &str, suggestion: Option<String>, last: &mut (String, Option<String>)| -> bool {
+            if last.0 == status && last.1 == suggestion {
                 trace(format!("status: emit skipped (unchanged) pane={pane} st={status}"));
                 return true;
             }
-            *last = status.to_string();
+            *last = (status.to_string(), suggestion.clone());
             tx.send(OrchStatusPayload {
                 project: project.clone(),
                 pane: pane.to_string(),
                 status: status.to_string(),
+                suggestion,
             })
             .is_ok()
+        };
+        // The suggestion rides the status path (#11649): read the screen only where an idle input
+        // line can show one, on the frames and quiet ticks this watcher already handles.
+        let read_suggestion = |status: &str, pane: &str| -> Option<String> {
+            if !cc_suggestion::status_shows_suggestion(status) {
+                return None;
+            }
+            let found = cc_suggestion::suggestion_for(pane);
+            trace(format!("status: suggestion pane={pane} st={status} found={}", found.is_some()));
+            found
         };
         let orch_pane = |project: &str| -> Option<String> {
             let rows = std::fs::read_to_string(desktop_bus_dir().join("crew-windows.txt"))
@@ -215,7 +231,7 @@ pub(crate) fn spawn_status_watcher(window: tauri::Window, project: String, stop:
         while !stop.load(Ordering::SeqCst) {
             let Some(pane) = orch_pane(&project) else {
                 trace(format!("status: no orch pane for project={project}"));
-                if !emit("none", "", &mut last) {
+                if !emit("none", "", None, &mut last) {
                     return;
                 }
                 if !nap(&stop, 10) {
@@ -225,7 +241,8 @@ pub(crate) fn spawn_status_watcher(window: tauri::Window, project: String, stop:
             };
             let seeded = herdr::agent_status(&pane).unwrap_or_else(|| "unknown".to_string());
             trace(format!("status: seed pane={pane} st={seeded}"));
-            if !emit(&seeded, &pane, &mut last) {
+            let seeded_suggestion = read_suggestion(&seeded, &pane);
+            if !emit(&seeded, &pane, seeded_suggestion, &mut last) {
                 return;
             }
             // Consecutive quiet ticks whose socket query came back None. One is a doubt; three
@@ -254,8 +271,26 @@ pub(crate) fn spawn_status_watcher(window: tauri::Window, project: String, stop:
                             let head: String = line.trim().chars().take(220).collect();
                             trace(format!("status: frame parsed={parsed:?} raw={head}"));
                             if let Some(st) = parsed {
-                                if !emit(&st, &pane, &mut last) {
+                                let mut suggestion = read_suggestion(&st, &pane);
+                                if !emit(&st, &pane, suggestion.clone(), &mut last) {
                                     return;
+                                }
+                                // Claude Code writes its suggestion a beat AFTER the turn ends: when
+                                // idle shows none yet, look again twice, bounded, before leaving it
+                                // to the quiet tick. Frames that arrive meanwhile wait in the socket.
+                                if suggestion.is_none() && cc_suggestion::status_shows_suggestion(&st) {
+                                    for wait in [3, 6] {
+                                        if !nap(&stop, wait) {
+                                            return;
+                                        }
+                                        suggestion = read_suggestion(&st, &pane);
+                                        if suggestion.is_some() {
+                                            if !emit(&st, &pane, suggestion.clone(), &mut last) {
+                                                return;
+                                            }
+                                            break;
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -270,7 +305,8 @@ pub(crate) fn spawn_status_watcher(window: tauri::Window, project: String, stop:
                             match st {
                                 Some(st) => {
                                     dead_ticks = 0;
-                                    if !emit(&st, &pane, &mut last) {
+                                    let suggestion = read_suggestion(&st, &pane);
+                                    if !emit(&st, &pane, suggestion, &mut last) {
                                         return;
                                     }
                                 }
@@ -312,7 +348,7 @@ pub(crate) fn ask_drill_fire_status(window: tauri::Window, project: String, stat
         return Err("ask_drill_fire_status is drill-only (TRANTOR_ASK_DRILL not set)".into());
     }
     use tauri::Emitter;
-    let payload = OrchStatusPayload { project, pane: "ask-drill-real-emit".into(), status };
+    let payload = OrchStatusPayload { project, pane: "ask-drill-real-emit".into(), status, suggestion: None };
     tauri::async_runtime::spawn(async move {
         let ok = window.emit("orch-status", payload.clone()).is_ok();
         trace(format!(

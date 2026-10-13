@@ -304,7 +304,7 @@ export function composerTakesDrop(hit: Element | null, root: Element | null): bo
 // named and this handler's verdict, so a misrouted drop is diagnosed from the log alone.
 const traceDrop = (line: string) => { void invoke("app_log", { line: `drop #11513 ${line}` }).catch(() => {}); };
 
-export function Composer({ project, target, live, liveWhy, blockedAsk, model, modelSource, working, userTexts, context, fontStep, onFontStep, onSent, onLongRunChange, onDispatch, onDraftChange, suggestion, onSuggestionHandled }: {
+export function Composer({ project, target, live, liveWhy, blockedAsk, model, modelSource, working, userTexts, context, fontStep, onFontStep, onSent, onLongRunChange, onDispatch, onDraftChange, suggestion, onSuggestionHandled, ccSuggestion }: {
   project: string;
   target: string | null;
   /** Is there an agent behind the pane to talk to (#5477)? Drives every input, with `liveWhy`
@@ -338,6 +338,9 @@ export function Composer({ project, target, live, liveWhy, blockedAsk, model, mo
    *  normal user turn); the panel clears it via onSuggestionHandled. */
   suggestion?: string | null;
   onSuggestionHandled?: () => void;
+  /** Claude Code's own suggested next prompt while the panel shows it as a chip (#11649): Tab in
+   *  an empty composer fills the box with it, the way Tab accepts it in the terminal. */
+  ccSuggestion?: string | null;
 }) {
   // The draft is words + attachment chips + the project they were written for (#11665), kept in
   // one slot per project. The composer is mounted once for whichever project is selected, so when
@@ -819,6 +822,11 @@ export function Composer({ project, target, live, liveWhy, blockedAsk, model, mo
               if (e.key === "ArrowUp") { e.preventDefault(); setPick(p => (p - 1 + menu.length) % menu.length); return; }
               if (e.key === "Enter" || e.key === "Tab") { e.preventDefault(); accept(menu[pick]); return; }
               if (e.key === "Escape") { e.preventDefault(); setMenu([]); return; }
+            }
+            if (e.key === "Tab" && !e.shiftKey && ccSuggestion && !draft && chips.length === 0) {
+              e.preventDefault();
+              setDraft(ccSuggestion);
+              return;
             }
             if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); }
           }}

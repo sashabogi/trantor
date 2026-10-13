@@ -13,7 +13,7 @@ import { bannerCountdown, type HandoffCountdown } from "./banner";
 import { Composer, type Provenance } from "./Composer";
 import { dialModel, projectModelApi, type ConfiguredModel } from "./projectModel";
 import { MarkdownText } from "./MarkdownText";
-import { askLeadIn, declaredFromQuestion, suggestionsFromDeclaredAsk, suggestionsFromTurns, trimAsk, type DeclaredAsk } from "./suggestions";
+import { askLeadIn, CC_LEAD_IN, declaredFromQuestion, selectChips, trimAsk, type DeclaredAsk } from "./suggestions";
 import { SuggestionChips } from "./SuggestionChips";
 import { isPinned } from "./scrollPin";
 import {
@@ -432,15 +432,20 @@ export const DEFAULT_CHAT_DEPS: ChatDeps = {
 /** An orch-status payload arrives as the emitter's OrchStatusPayload object; a string is the test
  *  harness's shape (Chat's `deps.listen` fake, unlike Tauri's real one, hands events through as
  *  whatever `JSON.stringify` the test wrote — never a live object). */
-type OrchStatusFields = { project?: unknown; status?: unknown };
+type OrchStatusFields = { project?: unknown; status?: unknown; suggestion?: unknown };
 type OrchStatusRaw = string | OrchStatusFields;
-type OrchStatusDecoded = { project: string; status: string };
+/** `suggestion` is Claude Code's own suggested next prompt (#11649), null when none is showing. */
+type OrchStatusDecoded = { project: string; status: string; suggestion: string | null };
 function decodeOrchStatus(payload: OrchStatusRaw): OrchStatusDecoded {
   // SAFETY: a string payload is always this same {project,status} shape JSON-encoded (the test
   // harness's fake `listen`); both fields are re-checked below before use, and a wrong shape falls
   // through to the empty-string default rather than being trusted.
   const obj: OrchStatusFields = payload instanceof Object ? payload : (JSON.parse(payload) as OrchStatusFields);
-  return { project: String(obj.project ?? ""), status: String(obj.status ?? "") };
+  return {
+    project: String(obj.project ?? ""),
+    status: String(obj.status ?? ""),
+    suggestion: typeof obj.suggestion === "string" && obj.suggestion.trim() ? obj.suggestion : null,
+  };
 }
 
 export function Chat({ project, sessionId, dock, onDock, onClose, deps = DEFAULT_CHAT_DEPS }: {
@@ -503,6 +508,8 @@ export function Chat({ project, sessionId, dock, onDock, onClose, deps = DEFAULT
   // What the session REPORTED, versus what we sent and have not seen confirmed.
   const [modelSource, setModelSource] = useState<Provenance>("unknown");
   const [pending, setPending] = useState<string>("");
+  const [ccSuggestion, setCcSuggestion] = useState<string | null>(null);
+  useEffect(() => { setCcSuggestion(null); }, [project, sessionId]);
   // The model this project's next session starts on (#11657): local settings over the user file.
   // Re-read after a pick, since a pick rewrites the project's settings.
   const [configuredModel, setConfiguredModel] = useState<ConfiguredModel>(null);
@@ -748,6 +755,9 @@ export function Chat({ project, sessionId, dock, onDock, onClose, deps = DEFAULT
               const p = decodeOrchStatus(ev.payload);
               if (p.project === project && p.status) {
                 commitStatus("push", nextSeq(), p.status);
+                // Claude Code's suggestion rides the same payload (#11649); every payload restates
+                // it, so a working/none status or a screen without ghost text clears it.
+                setCcSuggestion(p.suggestion);
               } else {
                 void invokeFn("app_log", {
                   line: `chat orch-status received but did not match: expected project=${project}, got project=${p.project} status=${p.status}`,
@@ -943,16 +953,19 @@ export function Chat({ project, sessionId, dock, onDock, onClose, deps = DEFAULT
     () => activeLiveAsk?.ask ?? (askQuestion ? declaredFromQuestion(askQuestion) : null),
     [activeLiveAsk, askQuestion],
   );
-  const suggestions = useMemo(() => {
-    if (history || working) return [];
-    if (declared) return suggestionsFromDeclaredAsk(declared);
-    return suggestionsFromTurns(orchestratorTexts);
-  }, [history, working, declared, orchestratorTexts]);
+  // #11649 — Claude Code's own suggested next prompt (pushed on orch-status while the pane is idle
+  // and its screen shows one) is the FIRST chip, and while it exists the prose guesses stand down.
+  const chosen = useMemo(() => selectChips({
+    history, working, draft: composerDraft, declared,
+    ccSuggestion: sessionId ? null : ccSuggestion, turnTextsNewestFirst: orchestratorTexts,
+  }), [history, working, composerDraft, declared, ccSuggestion, sessionId, orchestratorTexts]);
+  const suggestions = chosen.chips;
+  const ccChip = suggestions.find(c => c.cc)?.text ?? null;
   // #6702 — the row reads with its question: the declared one, or the prose ask the chips were
-  // read from.
+  // read from. Claude Code's own suggestion leads the row under its own name.
   const chipLeadIn = useMemo(
-    () => declared ? trimAsk(declared.question) : askLeadIn(suggestions),
-    [declared, suggestions],
+    () => declared ? trimAsk(declared.question) : ccChip ? CC_LEAD_IN : askLeadIn(suggestions),
+    [declared, ccChip, suggestions],
   );
   const lastSpeechRole = [...chat.turns].reverse().find(t => t.role === "user" || t.role === "assistant")?.role ?? null;
   // A declared ask is fresher than the transcript, which flushes at the turn's end (#6533), so
@@ -960,8 +973,8 @@ export function Chat({ project, sessionId, dock, onDock, onClose, deps = DEFAULT
   const turnAsked = declared !== null || lastSpeechRole === "assistant";
   const chipsVisible =
     !history && !!(activeLiveAsk?.target ?? target) && !working && suggestions.length > 0 &&
-    turnAsked && !composerDraft.trim() && !chipsDismissed;
-  useEffect(() => { setChipsDismissed(false); }, [orchestratorTexts]);
+    (turnAsked || ccChip !== null) && !composerDraft.trim() && !chipsDismissed;
+  useEffect(() => { setChipsDismissed(false); }, [orchestratorTexts, ccChip]);
   // #5993: whenever the chip row should show but is hidden, one line traces the first gate
   // input (in gate order) that failed, deduped on reason plus turn tail. #7776: the
   // empty-extractor line and the rendered line carry a running tally, so the hidden-by-empty
@@ -988,7 +1001,7 @@ export function Chat({ project, sessionId, dock, onDock, onClose, deps = DEFAULT
     const tally = chipTally.current;
     invokeFn("app_log", { line: `${line} tally rendered=${tally.rendered} empty=${tally.empty}` }).catch(() => {});
   }, [history, chipsVisible, turnAsked, chipTarget, working, suggestions, declared, composerDraft, chipTail, project, invokeFn]);
-  const chipSource = declared ? "declared" : "prose";
+  const chipSource = chosen.source;
   const chipSet = chipsVisible ? `${chipSource}:${suggestions.map(s => s.text).join(" ")}` : "";
   useEffect(() => {
     if (!chipSet || chipTraceRef.current === chipSet) return;
@@ -1423,6 +1436,7 @@ export function Chat({ project, sessionId, dock, onDock, onClose, deps = DEFAULT
         onLongRunChange={setLongRun}
         onDispatch={(dial, value) => { if (dial === "model") { setPending(value); setModelSource("dispatched"); } }}
         onDraftChange={setComposerDraft}
+        ccSuggestion={chipsVisible ? ccChip : null}
         suggestion={activeSuggestion}
         onSuggestionHandled={() => setActiveSuggestion(null)}
       />}
