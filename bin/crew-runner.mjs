@@ -29,6 +29,7 @@ import {
 } from "../lib/turn-policy.mjs";
 import { snapshotBeforeCut } from "./cut-snapshot.mjs";
 import { ocTurnUsage, dshTurnUsage, usageTotal } from "../lib/turn-usage.mjs";
+import { ocCompactionContent } from "../lib/seat-compaction.mjs";
 import { listContainers, newContainers, recordContainers, statePathFor as dockerStatePathFor, sweep as dockerSweep } from "../lib/docker-janitor.mjs";
 import {
   auditDutyNudges, claimDutyNudges, claudeTranscriptDir, dutyEscalations, dutyNudgeDirective,
@@ -746,6 +747,21 @@ const PARK_WINDOW_MS = Math.max(0, Number(process.env.TRANTOR_PARK_WINDOW_MS || 
 // The card the CURRENT CLI session belongs to (#6134). 0 = the kickoff session, which belongs to
 // no card, so the first contract that names one starts a session of its own.
 let sessionCard = releaseState?.sessionCard || 0;
+// #11559: per-card token accounting from the runner's own ledger (stdout usage lines, or the
+// provider's session DB when the CLI prints none). A card that crosses its budget pauses — no
+// further turn is bought for THAT card — until the card changes or the seat restarts, both of
+// which reset the counter. The budget itself is an env knob, not a constant in the wall.
+const CARD_TOKEN_BUDGET = Math.max(0, Number(process.env.TRANTOR_CARD_TOKEN_BUDGET || 1_000_000));
+const BUDGET_RETRY_MS = 10 * 60 * 1000;   // a paused card's OWN redelivery pace, never other cards'
+let cardTokens = releaseState?.cardTokens || 0;
+let cardStartedAt = releaseState?.cardStartedAt || 0;
+let budgetStop = releaseState?.budgetStop || null;   // { card, tokens } once the card crossed
+let budgetRetryAt = releaseState?.budgetRetryAt || 0;   // paces the paused card's OWN redeliveries
+
+// #11559: the compaction block injected to opencode-family seats via OPENCODE_CONFIG_CONTENT.
+// "" injects nothing (the operator set TRANTOR_OC_COMPACTION=off, or its JSON is invalid — the
+// seat then behaves exactly as before, never with a half-armed config).
+const OC_COMPACTION = ocCompactionContent(process.env);
 
 let sid = releaseState?.sid || "";
 // #6206: the watchdog is DETACHED, so a runner that dies without ending it leaves an orphan
@@ -930,18 +946,23 @@ exit $turn_exit`;
     // spawned. stdin is /dev/null: a background group that reads the terminal stops on SIGTTIN.
     detached: true,
     cwd: TURN_DIR, encoding: "utf8", stdio: cli.sid ? ["ignore", "pipe", "inherit"] : ["ignore", "inherit", "inherit"],
-    env: { ...process.env, ...shadowEnv(secrets), RELAY_URL: HUB, RELAY_AGENT: AGENT, RELAY_SESSION: SESSION, RELAY_PROJECT: PROJ,
-      // #6228: marks this env as belonging to PROJ, unlike a one-off RELAY_PROJECT override; crew.mjs's
-      // `up` guard refuses to bring up another project's crew from a shell carrying this badge.
-      TRANTOR_SEAT: PROJ,
-      // A runner-managed seat must never hand itself a baton: the runner is its lifecycle manager,
-      // so a handoff spawn would only leak an unmanaged interactive window.
-      TRANTOR_NO_HANDOFF_SPAWN: "1", TRANTOR_NO_BATON_SPAWN: "1",
-      // #6206: the seat's transcript dir — a real CLI ignores it, a drill's fake CLI writes
-      // its transcript lines there so the watchdog sees the liveness a real claude shows.
-      TRANTOR_TRANSCRIPT_DIR: TRANSCRIPT_DIR },
-    maxBuffer: 16 * 1024 * 1024,
   };
+  const spawnEnv = { ...process.env, ...shadowEnv(secrets), RELAY_URL: HUB, RELAY_AGENT: AGENT, RELAY_SESSION: SESSION, RELAY_PROJECT: PROJ,
+    // #6228: marks this env as belonging to PROJ, unlike a one-off RELAY_PROJECT override; crew.mjs's
+    // `up` guard refuses to bring up another project's crew from a shell carrying this badge.
+    TRANTOR_SEAT: PROJ,
+    // A runner-managed seat must never hand itself a baton: the runner is its lifecycle manager,
+    // so a handoff spawn would only leak an unmanaged interactive window.
+    TRANTOR_NO_HANDOFF_SPAWN: "1", TRANTOR_NO_BATON_SPAWN: "1",
+    // #6206: the seat's transcript dir — a real CLI ignores it, a drill's fake CLI writes
+    // its transcript lines there so the watchdog sees the liveness a real claude shows.
+    TRANTOR_TRANSCRIPT_DIR: TRANSCRIPT_DIR };
+  // #11559: opencode only compacts when the context is FULL, which on big-limit models is far
+  // past the point a seat card should reach. The merged-content injection arms compaction per
+  // seat (schema: opencode.ai/config.json) without touching the operator's global config.
+  if (cli.pinned && OC_COMPACTION) spawnEnv.OPENCODE_CONFIG_CONTENT = OC_COMPACTION;
+  spawnOpts.env = spawnEnv;
+  spawnOpts.maxBuffer = 16 * 1024 * 1024;
   // The timeout signals the shell to snapshot before sweeping, just like the normal box.
   // Its 30s margin keeps it out of the normal cut path.
   if (TURN_MAX_MS) { spawnOpts.timeout = (TURN_EXTENSIONS_MAX ? TURN_CEILING_MS : TURN_MAX_MS) + 30000; spawnOpts.killSignal = "SIGTERM"; }
@@ -1069,14 +1090,16 @@ exit $turn_exit`;
     // 0 means "this CLI printed no usage", never "free" — so only overwrite when the envelope
     // actually carried counts.
     if (c) tokens = c.input + c.output + c.cache_read + c.cache_creation;
-  }
-  // #8234: the CLIs that print no usage on stdout keep the counts in their own session records —
+  }  // #8234: the CLIs that print no usage on stdout keep the counts in their own session records —
   // opencode's db, the session resolved for this turn exactly like the `-s` resume id. Sum this
   // turn's window there; null (unknown) leaves the stdout paths above standing — never 0 ("free").
   const usage = cli.pinned && sid ? ocTurnUsage(OC_DB, sid, t0, Date.now())
     : AGENT === "dsh" ? dshTurnUsage(join(homedir(), ".dsh", "sessions"), TURN_DIR, t0, Date.now())
     : null;
   if (usage) tokens = usageTotal(usage);
+  // #11559: every token this turn spent rides the card it served. A card-0 turn (kickoff, pulse,
+  // duty) belongs to no card and adds nothing; the counter resets when the served card changes.
+  if (sessionCard > 0 && Number.isFinite(tokens) && tokens > 0) cardTokens += tokens;
   // #9724: usage RESOLVED to all zeros means no model work happened — never success; null stays
   // unknown, never failure, and a shipped commit is real work (stale record, not the turn).
   const zeroUsage = realExit === 0 && effExit === 0 && !newCommit && usageSaysNoWork(usage);
@@ -1463,7 +1486,8 @@ async function resolveWakeCard(messages, { session }) {
       writeFileSync(PENDF, JSON.stringify({ persona: PERSONA, agent: AGENT, project: PROJ, ts: Date.now(),
         wake: pendingWake, bcast: pendingBcast, seen: seenLedger, ask: awaitingAsk?.id || 0, askTo: awaitingAsk?.to || "" }));
       const state = { cursor, turn: TURN, sid, sessionCard, retryAt, deliveryFails,
-        noDeliveryRetry, askReleased, lastTurnAt, attempted: [...attemptedVersions] };
+        noDeliveryRetry, askReleased, lastTurnAt, attempted: [...attemptedVersions],
+        cardTokens, cardStartedAt, budgetStop, budgetRetryAt };
       process.execve(process.execPath, [process.execPath, ...process.execArgv, ...process.argv.slice(1)],
         { ...process.env, CREW_RELEASE_STATE: JSON.stringify(state) });
     } catch (error) { log(`runner restart failed: ${error.message}`); }
@@ -1485,14 +1509,15 @@ async function resolveWakeCard(messages, { session }) {
       log("parked — waiting for the next message or pulse");
       continue;
     }
-    // A due REDELIVERY runs before we go back to waiting — during an outage the bus is silent by
-    // definition, so the retry timer is the only thing that will ever move these messages.
-    // #7756: a held ask is owed but NEVER redelivered — only the assigner's answer releases it.
-    if (pendingWake.length && !awaitingAsk && Date.now() >= retryAt) { await deliverWake(); continue; }
+    // A due REDELIVERY runs before we go back to waiting: during an outage the bus is silent, so
+    // the retryAt timer is the only thing that will ever move these messages. #7756: a held ask
+    // is owed but NEVER redelivered. #11559: a budget-paused card paces its own redeliveries on
+    // budgetRetryAt - a clock that never delays a poll-delivered contract for a different card.
+    if (pendingWake.length && !awaitingAsk && Date.now() >= retryAt && Date.now() >= budgetRetryAt) { await deliverWake(); continue; }
     // cap the long-poll hold so neither a due pulse nor a due redelivery waits out a silent 280s window
     const due = [];
     if (PULSE_MS) due.push(PULSE_MS - (Date.now() - lastTurnAt));
-    if (pendingWake.length && !awaitingAsk) due.push(retryAt - Date.now());
+    if (pendingWake.length && !awaitingAsk) due.push(Math.min(retryAt, budgetRetryAt || retryAt) - Date.now());
     const holdS = due.length
       ? Math.max(5, Math.min(280, Math.ceil(Math.min(...due) / 1000)))
       : 280;
@@ -1755,6 +1780,20 @@ async function resolveWakeCard(messages, { session }) {
     // and never inherits the previous contract's card (#10197's judge then reads the right card).
     const sessionCardForTurn = card || baseCard;
     const fresh = !resumedAfterAsk && sessionCardForTurn > 0 && sessionCardForTurn !== sessionCard;
+    // #11559: a pause rides the card, not the seat — a contract for a DIFFERENT card lifts it
+    // (and resets the counter with the fresh session below); the paused card itself never buys
+    // another CLI session. The wake stays owed and retries on a long clock, so the orchestrator
+    // sees the pause, not a silent seat.
+    if (budgetStop && sessionCardForTurn > 0 && sessionCardForTurn === budgetStop.card) {
+      log(`\x1b[33mqueued — #${budgetStop.card} is over its token budget (${budgetStop.tokens} ≥ ${CARD_TOKEN_BUDGET}); paused until the card moves or \`trantor up ${AGENT}\` resets the budget\x1b[0m`);
+      // Pace only the SELF-redelivery path (a non-empty queue with retryAt=0 would otherwise
+      // hot-loop this branch and starve the poll): budgetRetryAt gates that line alone. A new
+      // contract delivered by the poll never waits on it — a different card lifts the pause.
+      budgetRetryAt = Date.now() + BUDGET_RETRY_MS;
+      return;
+    }
+    if (budgetStop && fresh) { budgetStop = null; budgetRetryAt = 0; }
+    if (fresh) { cardTokens = 0; cardStartedAt = Date.now(); }
     sessionCard = card;
     const cited = [...new Set(wakeForTurn.flatMap(m => cardRefs(m.text)))];
     const freshText = fresh
@@ -1956,6 +1995,19 @@ async function resolveWakeCard(messages, { session }) {
       }
       await notifyAssigners(assigners,
         `✅ done on ${SESSION} (exit 0, ${secs}s) · asked: "${asked}" · check the board card and the files for what changed`);
+    }
+    // #11559: the pause is judged AFTER the classification so it never masks it — a failed turn
+    // (ec !== 0) stays in its own ladder, and only a clean-exit turn hands its card to the stop.
+    // The stop blocks FUTURE turns for THIS card only: a different card starts clean, and the
+    // alert names the two ways out (move the card, or restart the seat, resetting the counter).
+    if (!budgetStop && CARD_TOKEN_BUDGET > 0 && sessionCard > 0 && cardTokens >= CARD_TOKEN_BUDGET && ec === 0) {
+      budgetStop = { card: sessionCard, tokens: cardTokens };
+      const text = `⛔ #${sessionCard} hit its token budget on ${SESSION}: ${cardTokens} ≥ ${CARD_TOKEN_BUDGET} tokens this card.`
+        + ` Further turns for THIS card are paused until it moves (new contract, or testing/done) or \`trantor up ${AGENT}\` resets the budget.`;
+      log(`\x1b[33m${text}\x1b[0m`);
+      await notifyAssigners(assigners, text);
+      const orch = `${hostId()}:${PROJ}`;
+      if (!assigners.some(a => a.from === orch)) await api("/send", { from: SESSION, to: orch, text, project: PROJ, kind: "alert" }).catch(() => {});
     }
     lastTurnAt = Date.now();
   }
