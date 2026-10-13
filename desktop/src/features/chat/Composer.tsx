@@ -350,7 +350,7 @@ export function Composer({ project, target, live, liveWhy, blockedAsk, model, mo
   const draft = current.text;
   const chips = current.chips;
   const setDraft = useCallback((v: string | ((prev: string) => string)) =>
-    setCurrent(c => ({ ...c, text: typeof v === "function" ? v(c.text) : v })), []);
+    setCurrent(c => ({ ...c, text: v instanceof Function ? v(c.text) : v })), []);
   // Attachments live as CHIPS below the text (#6070): the text area holds only words the operator
   // typed — a path inside the text is exactly what dictation splits apart (#5773).
   const setChips = useCallback((fn: (cs: AttachmentChip[]) => AttachmentChip[]) =>
@@ -683,11 +683,8 @@ export function Composer({ project, target, live, liveWhy, blockedAsk, model, mo
   };
 
   const send = () => {
-    // Chips serialize AT SEND (#6070): the paths join the words in exactly the shape the delivery
-    // path knows (sendText then normalizes exactly as it always has), and both clear together on
-    // success. A suggested-reply click rides sendText WITHOUT the chips — it is its own turn.
-    // The draft goes only to the project it was written in (#11665); the swap above makes a
-    // mismatch unreachable, and this refuses it anyway rather than trust the swap.
+    // Chips serialize AT SEND (#6070) and clear with the words on success; a suggested-reply click
+    // rides sendText WITHOUT them. #11665: the draft goes only to its own project, refused here.
     if (!canSendDraft(current, project)) { setError("this draft belongs to another project — not sent"); return; }
     // Only the sent draft's own slot clears.
     if (sendText(serializeForSend(chips, draft))) setCurrent(emptyDraft(current.project));
@@ -733,11 +730,9 @@ export function Composer({ project, target, live, liveWhy, blockedAsk, model, mo
   // pure on the draft.
   const slot = composerSlot(working, live, chips.length && !draft.trim() ? " " : draft, busy);
 
-  // A slash command is typed exactly as a person would type it, then marked dispatched until the
-  // transcript reports the new value back.
-  // The pick is PER PROJECT (#11657): Claude Code persists /model to the user file, which would
-  // move every project's next session. So the pick first lands in this project's own settings and
-  // arms the restore of the user file (project_model.rs), THEN the slash command goes to the pane.
+  // A slash command is typed as a person would, then marked dispatched until the transcript echoes it.
+  // #11657: the pick is PER PROJECT (CC writes /model to the user file), so it lands in this
+  // project's settings and arms the user-file restore (project_model.rs) BEFORE the slash command.
   const pickModel = (v: string) => {
     void invoke("project_model_pick", { project, model: v })
       .catch(e => setError(`model not saved for this project: ${String(e)}`))

@@ -2,6 +2,7 @@
 //
 // #11665: the composer's draft is per project. The component drills run the real Composer with the
 // Tauri IPC replaced by an in-memory disk, so persistence is mocked and nothing real is touched.
+import type { InvokeArgs } from "@tauri-apps/api/core";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -15,7 +16,9 @@ import { canSendDraft, composerDraftApi, draftSlots, emptyDraft, flushSaves, fro
 // The mocked IPC: `disk` stands in for config.json's composerDrafts map, `sent` records pane_send.
 let disk: Map<string, string>;
 let sent: { target: string | null; text: string }[];
-const w = window as typeof window & { __TAURI_INTERNALS__?: { invoke: (cmd: string, args?: Record<string, unknown>) => Promise<string> } };
+type IpcArgs = { project?: string; draft?: string; target?: string | null; text?: string };
+// SAFETY: Tauri's bridge object does not exist under happy-dom; this adds the one key the code reads.
+const w = window as typeof window & { __TAURI_INTERNALS__?: { invoke: (cmd: string, args?: IpcArgs) => Promise<string> } };
 w.__TAURI_INTERNALS__ = {
   invoke: (cmd, args = {}) => {
     if (cmd === "composer_draft_get") return Promise.resolve(disk.get(String(args.project)) ?? "null");
@@ -24,11 +27,12 @@ w.__TAURI_INTERNALS__ = {
       if (draft === "null") disk.delete(String(args.project)); else disk.set(String(args.project), draft);
       return Promise.resolve("");
     }
-    if (cmd === "pane_send") { sent.push({ target: args.target as string | null, text: String(args.text) }); return Promise.resolve(""); }
+    if (cmd === "pane_send") { sent.push({ target: args.target ?? null, text: String(args.text) }); return Promise.resolve(""); }
     return Promise.resolve("{}");
   },
 };
 
+// SAFETY: globalThis has no localStorage under happy-dom's setup; the cast only names that optional key.
 const stubGlobal = globalThis as { localStorage?: Storage };
 let host: HTMLDivElement;
 let root: Root;
@@ -72,6 +76,7 @@ const show = (project: string, ccSuggestion: string | null = null) => act(() => 
   />,
 ));
 
+// SAFETY: every drill mounts a Composer first, and the Composer always renders its one textarea.
 const box = () => host.querySelector("textarea") as HTMLTextAreaElement;
 const type = (text: string) => act(() => {
   // SAFETY: React tracks the value through the prototype setter; assigning on the element would be swallowed.
@@ -194,13 +199,15 @@ describe("draft storage shape", () => {
     expect(fromStored("p", null)).toBeNull();
     expect(toStored(emptyDraft("p"))).toBeNull();
     const bad = vi.fn().mockResolvedValue("{not json");
+    // SAFETY: the mock stands in for invoke and only ever answers composer_draft_get.
     expect(await composerDraftApi.get("p", bad as never)).toBeNull();
   });
 
   it("debounces saves per project and flush writes the latest immediately", async () => {
     vi.useFakeTimers();
-    const calls: unknown[] = [];
-    const inv = ((cmd: string, args: unknown) => { calls.push([cmd, args]); return Promise.resolve(""); }) as never;
+    const calls: [string, InvokeArgs | undefined][] = [];
+    // SAFETY: the recorder answers every command with "", the shape InvokeFn's callers here accept.
+    const inv = ((cmd: string, args?: InvokeArgs) => { calls.push([cmd, args]); return Promise.resolve(""); }) as never;
     scheduleSave({ project: "p", text: "a", chips: [] }, inv, 400);
     scheduleSave({ project: "p", text: "ab", chips: [] }, inv, 400);
     expect(calls).toHaveLength(0);

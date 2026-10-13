@@ -1,11 +1,6 @@
-// The composer's draft (#11665): the words, the attachment chips and the project they were written
-// for, kept per project. One composer is mounted for whichever project is selected, so a bare
-// useState let a draft written for project A ride into project B and Enter sent it to B's agent.
-// A draft now carries its project, lives in a slot keyed by it, and a send refuses a mismatch.
-//
-// Durability follows the lensState.ts convention (#11597): ~/.agent-bus/config.json under
-// "composerDrafts", one row per project (composer_draft.rs). Chips are file PATHS — a pasted image
-// is already a real file under ~/.agent-bus/attachments — so they survive a restart with the text.
+// The composer's draft (#11665): words, attachment chips and the project they were written for,
+// in a slot per project, so a draft can never ride into another project and a send refuses it.
+// Durable like lensState.ts (#11597): config.json "composerDrafts", one row per project; chips are paths.
 import { invoke, type InvokeArgs } from "@tauri-apps/api/core";
 import { makeChip, type AttachmentChip } from "./attachments";
 
@@ -47,16 +42,22 @@ export function toStored(d: ComposerDraft): StoredDraft | null {
   return { text: d.text, chips: d.chips.map(c => ({ path: c.path, size: c.size })) };
 }
 
+/** What a parsed config.json row can hold; fromStored narrows it field by field. */
+export type JsonValue = string | number | boolean | null | JsonValue[] | { [key: string]: JsonValue };
+type JsonObject = { [key: string]: JsonValue };
+const isJsonObject = (v: JsonValue | undefined): v is JsonObject => v instanceof Object && !Array.isArray(v);
+const isJsonString = (v: JsonValue | undefined): v is string => String(v) === v;
+const isJsonNumber = (v: JsonValue | undefined): v is number => Number.isFinite(v);
+
 /** A stored row back into a draft for `project`, or null when it is not a draft we wrote. */
-export function fromStored(project: string, raw: unknown): ComposerDraft | null {
-  if (!raw || typeof raw !== "object") return null;
-  const row = raw as { text?: unknown; chips?: unknown };
-  const text = typeof row.text === "string" ? row.text : "";
+export function fromStored(project: string, raw: JsonValue): ComposerDraft | null {
+  if (!isJsonObject(raw)) return null;
+  const text = isJsonString(raw.text) ? raw.text : "";
   const chips: AttachmentChip[] = [];
-  if (Array.isArray(row.chips)) {
-    for (const c of row.chips as { path?: unknown; size?: unknown }[]) {
-      if (!c || typeof c.path !== "string" || !c.path) continue;
-      chips.push(makeChip(nextChipId(), c.path, typeof c.size === "number" ? c.size : null));
+  if (Array.isArray(raw.chips)) {
+    for (const c of raw.chips) {
+      if (!isJsonObject(c) || !isJsonString(c.path) || !c.path) continue;
+      chips.push(makeChip(nextChipId(), c.path, isJsonNumber(c.size) ? c.size : null));
     }
   }
   const draft: ComposerDraft = { project, text, chips };
@@ -66,7 +67,8 @@ export function fromStored(project: string, raw: unknown): ComposerDraft | null 
 export const composerDraftApi = {
   get: async (project: string, invokeFn: InvokeFn = invoke): Promise<ComposerDraft | null> => {
     try {
-      return fromStored(project, JSON.parse(await invokeFn<string>("composer_draft_get", { project })));
+      // SAFETY: JSON.parse yields a JsonValue by construction; fromStored checks every field it reads.
+      return fromStored(project, JSON.parse(await invokeFn<string>("composer_draft_get", { project })) as JsonValue);
     } catch { return null; }
   },
   set: async (draft: ComposerDraft, invokeFn: InvokeFn = invoke): Promise<void> => {

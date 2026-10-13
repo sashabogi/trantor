@@ -26,7 +26,12 @@ const mount = async (project: string) => {
   act(() => root.render(<GraphView key={project} project={project} seat={null} onOpen={() => {}} api={api} />));
   await flush();
 };
-const click = (el: Element | null) => { act(() => { (el as HTMLElement).click(); }); };
+const click = (el: Element | null) => {
+  act(() => {
+    // SAFETY: every element passed in is a button the test just queried, and a button is an HTMLElement.
+    (el as HTMLElement).click();
+  });
+};
 const tab = (group: string, name: string) =>
   [...host.querySelectorAll(`[data-testid="${group}"] button`)].find(b => b.textContent === name) ?? null;
 
@@ -60,6 +65,7 @@ describe("graph view state", () => {
     saveGraphViewState("p", { layout: "districts", scrollLeft: 40, scrollTop: 25 });
     await mount("p");
     expect(tab("graph-layout", "districts")?.getAttribute("data-on")).toBe("true");
+    // SAFETY: graph-canvas is the GraphView's scroll container, a div, and the mount above awaited it.
     const canvas = host.querySelector('[data-testid="graph-canvas"]') as HTMLElement;
     expect(canvas.scrollLeft).toBe(40);
     expect(canvas.scrollTop).toBe(25);

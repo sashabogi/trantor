@@ -171,6 +171,8 @@ export const CC_LEAD_IN = "Claude Code suggests";
 
 export type ChipSource = "declared" | "claude-code" | "prose" | "none";
 
+export type ChipSelection = { chips: Suggestion[]; source: ChipSource };
+
 /** Which chips the row shows (#11649). Claude Code's own suggestion, read off its terminal, is the
  *  FIRST chip and replaces the prose-derived guesses, which were never what CC itself offers; a
  *  declared ask's options are real choices and stay, after it. The suggestion hides with the
@@ -182,7 +184,7 @@ export function selectChips(input: {
   declared: DeclaredAsk | null;
   ccSuggestion: string | null;
   turnTextsNewestFirst: string[];
-}): { chips: Suggestion[]; source: ChipSource } {
+}): ChipSelection {
   if (input.history || input.working) return { chips: [], source: "none" };
   const cc = input.draft.trim() ? "" : (input.ccSuggestion ?? "").trim();
   const declared = input.declared ? suggestionsFromDeclaredAsk(input.declared) : [];

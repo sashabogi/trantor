@@ -432,7 +432,7 @@ export const DEFAULT_CHAT_DEPS: ChatDeps = {
 /** An orch-status payload arrives as the emitter's OrchStatusPayload object; a string is the test
  *  harness's shape (Chat's `deps.listen` fake, unlike Tauri's real one, hands events through as
  *  whatever `JSON.stringify` the test wrote — never a live object). */
-type OrchStatusFields = { project?: unknown; status?: unknown; suggestion?: unknown };
+type OrchStatusFields = { project?: string; status?: string; suggestion?: string | null };
 type OrchStatusRaw = string | OrchStatusFields;
 /** `suggestion` is Claude Code's own suggested next prompt (#11649), null when none is showing. */
 type OrchStatusDecoded = { project: string; status: string; suggestion: string | null };
@@ -444,7 +444,7 @@ function decodeOrchStatus(payload: OrchStatusRaw): OrchStatusDecoded {
   return {
     project: String(obj.project ?? ""),
     status: String(obj.status ?? ""),
-    suggestion: typeof obj.suggestion === "string" && obj.suggestion.trim() ? obj.suggestion : null,
+    suggestion: obj.suggestion?.trim() ? obj.suggestion : null,
   };
 }
 

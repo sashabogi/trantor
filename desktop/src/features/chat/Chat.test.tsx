@@ -1649,7 +1649,7 @@ describe("Claude Code's own suggested next prompt (#11649)", () => {
 
   const chipLabels = () => [...(host.querySelector('[data-testid="suggestion-chips"]')?.querySelectorAll("button") ?? [])]
     .filter(b => b.textContent !== "×").map(b => b.textContent);
-  const status = async (handlers: Map<string, ((ev: { payload: unknown }) => void)[]>, payload: Record<string, unknown>) => {
+  const status = async (handlers: Map<string, ((ev: { payload: unknown }) => void)[]>, payload: { status?: string; suggestion?: string | null }) => {
     await act(async () => { for (const cb of handlers.get("orch-status") ?? []) cb({ payload: { project: "p", ...payload } }); });
     await flush();
   };
