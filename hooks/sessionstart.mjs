@@ -405,6 +405,11 @@ try {
   // A RESUMED session must never claim a handoff: it already carries its history, so the takeover banner
   // would land in the same maxed-out context and look right while the window never reset.
   const isResume = source === "resume";
+  // A print-mode one-shot (`claude -p`) is never the successor either (#11577): SessionStart fires
+  // for it with source "startup" — the hook INPUT is indistinguishable from a human start — but
+  // the CLI marks the hook ENV (CLAUDE_CODE_ENTRYPOINT=sdk-cli; interactive "cli", SDKs sdk-*).
+  // Unguarded, it claimed the waiting handoff and superseded the live orchestrator.
+  const isPrintRun = String(process.env.CLAUDE_CODE_ENTRYPOINT || "cli").startsWith("sdk-");
   const orchEnv = process.env.TRANTOR_ORCH || "";
   const isOrchPane = !!orchEnv && (orchEnv === "1" || orchEnv === project);   // project-matched: a child claude in another dir must not inherit the badge
   const orchSid = readOrchSession(project);
@@ -413,19 +418,24 @@ try {
   const orchOrigin = !!(peek && orchSid && peek.session_id && peek.session_id === orchSid);
   const ageMs = peek ? Date.now() - (Number(peek.stamp) || 0) * 1000 : 0;
   const held = orchOrigin && !isOrchPane && !isCompact && ageMs < holdMs;
-  const handoff = !peek ? null
+  const handoff = !peek || isPrintRun ? null
     : (isCompact || held || isResume) ? peek
     : loadPendingHandoff(basename(projectDir), {
         claim: true,
         freshSession: { session_id: stdinObj.session_id || "", transcript_path: stdinObj.transcript_path || "" },
       });
   const claimed = !!handoff && !isCompact && !held && !isResume;
+  // The handoff banner never rides a one-shot either: it is not the successor and nobody asked it
+  // to recap, so a print start with a pending handoff gets one quiet stderr line and nothing else.
+  if (isPrintRun && peek && !isCompact) {
+    process.stderr.write(`[trantor] pending handoff ${peek.id} NOT claimed — print-mode one-shot (claude -p) is never the successor\n`);
+  }
   // Follow the thread: claiming the orchestrator's baton makes THIS session the orchestrator
   // thread, so the map `trantor open` resumes and the app's chat reads moves with it. The pane
   // also records itself on every fresh start — that keeps the map honest even if a future
   // claude forks the session id on resume.
   if (claimed && orchOrigin && stdinObj.session_id) writeOrchSession(project, String(stdinObj.session_id), "sessionstart-claim");
-  if (isOrchPane && !isCompact && stdinObj.session_id) writeOrchSession(project, String(stdinObj.session_id), "orch-pane-start");
+  if (isOrchPane && !isCompact && !isPrintRun && stdinObj.session_id) writeOrchSession(project, String(stdinObj.session_id), "orch-pane-start");
   if (handoff && held) {
     process.stderr.write(`[trantor] pending handoff ${handoff.id} HELD for the orch pane (${Math.round(ageMs / 60000)}m old)\n`);
     const mins = Math.max(1, Math.round((holdMs - ageMs) / 60000));

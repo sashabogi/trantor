@@ -851,6 +851,35 @@ rmSync(projDir, { recursive: true, force: true });
   rmSync(bus, { recursive: true, force: true });
 }
 
+// ---- #11577: a print-mode one-shot (`claude -p`) claims NOTHING. The incident: a drill one-shot
+// fired SessionStart with source "startup" (byte-identical to a human start), claimed the waiting
+// handoff, and superseded the LIVE orchestrator, which stood down long after the -p had exited.
+// Marker: the hook ENV CLAUDE_CODE_ENTRYPOINT=sdk-cli; supersession is posted only on claim.
+{
+  const bus = join(tmpdir(), `tt-print-${process.pid}`);
+  const projDir = join(bus, "proj");
+  mkdirSync(join(bus, "handoffs"), { recursive: true });
+  mkdirSync(projDir, { recursive: true });
+  const hf = join(bus, "handoffs", "proj-1000000250.json");
+  writeFileSync(hf, JSON.stringify({ id: "proj-1000000250", project: projDir, projectName: "proj", machine: "h", trigger: "manual-skill", stamp: 1000000250, summary: "PRINT_GUARD", consumed: false, states: [{ state: "written", ts: 1, by: "pred" }] }));
+  const env = { ...drillEnv({ CLAUDE_CODE_ENTRYPOINT: "sdk-cli" }), AGENT_BUS_DIR: bus, RELAY_URL: CLOSED, TRANTOR_NO_HANDOFF_SPAWN: "1", TRANTOR_NO_BATON_SPAWN: "1" };
+  delete env.TRANTOR_ORCH;
+
+  const r1 = spawnSync(process.execPath, ["hooks/sessionstart.mjs"], { input: JSON.stringify({ session_id: "print-1", source: "startup", cwd: projDir }), encoding: "utf8", env, timeout: 20000 });
+  let rec = JSON.parse(readFileSync(hf, "utf8"));
+  ok("print guard: a claude -p start does NOT claim the waiting handoff", rec.consumed === false && !rec.states.some(s => s.state === "claimed"));
+  ok("print guard: no takeover banner into the one-shot's context", !r1.stdout.includes("You are taking over"));
+  ok("print guard: the skip is explained on stderr", r1.stderr.includes("print-mode"));
+
+  // The pairing check (existing modality still works): the SAME start with an interactive
+  // entrypoint still claims — the discriminator is the entrypoint env, not the fixture.
+  const r2 = spawnSync(process.execPath, ["hooks/sessionstart.mjs"], { input: JSON.stringify({ session_id: "interactive-1", source: "startup", cwd: projDir }), encoding: "utf8", env: { ...env, CLAUDE_CODE_ENTRYPOINT: "cli" }, timeout: 20000 });
+  rec = JSON.parse(readFileSync(hf, "utf8"));
+  ok("print guard: an interactive start beside it still claims", rec.consumed === false && rec.states.some(s => s.state === "claimed" && s.by === "interactive-1"));
+
+  rmSync(bus, { recursive: true, force: true });
+}
+
 // ---- open resolves a NAMED project's checkout (the app's Wake ran `trantor open
 // crebral-health` from the Tauri cwd and claude booted there — wrong-folder trust prompt, wrong
 // transcript slug, ACTIVE NOW blind) ----
