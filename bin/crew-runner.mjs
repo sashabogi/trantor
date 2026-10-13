@@ -1111,7 +1111,13 @@ exit $turn_exit`;
     if (endStatus !== null) {
       cardStatusAtEnd = endStatus;
       const moved = ["testing", "done"].includes(endStatus) && !["testing", "done"].includes(cardStatusBefore);
-      noDelivery = !newCommit && !moved && !askVerdict && !blockedVerdict;
+      // #11551: a card ALREADY at testing/done when the turn began is delivered work — the
+      // codex-2 specimen's redelivered contract could neither commit anew nor move the card, and
+      // the check parked the seat for work it had already shipped. It only stands while the card
+      // still IS testing/done: a mid-turn bounce to doing (endStatus doing) reopens the contract.
+      const alreadyDelivered = ["testing", "done"].includes(cardStatusBefore)
+        && ["testing", "done"].includes(endStatus);
+      noDelivery = !newCommit && !moved && !alreadyDelivered && !askVerdict && !blockedVerdict;
     }
   }
   lastNoDelivery = noDelivery;

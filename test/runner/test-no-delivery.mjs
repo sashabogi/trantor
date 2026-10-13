@@ -1,8 +1,8 @@
 #!/usr/bin/env node
-// #10197 no-delivery drill — a card-bound turn reads done only on delivery: a NEW commit since
-// turn start, or the card moved to testing/done. The ibkr specimen (48s, exit 0, prose output, no
-// commit, card still todo) is NO-DELIVERY and the contract stays owed; a committed turn and a
-// moved card still read done; a failed hub read keeps today's label. Hermetic.
+// #10197 no-delivery drill — a card-bound turn reads done only on delivery: a NEW commit since turn
+// start, or the card moved to testing/done; the ibkr specimen is NO-DELIVERY; a failed hub read
+// keeps today's label. #11551: a card already at testing/done at turn start is delivered — a
+// redelivered contract never parks; persona codex-2 running codex delivers normally.
 import http from "node:http";
 import { spawn } from "node:child_process";
 import { mkdtempSync, writeFileSync, readFileSync, chmodSync, mkdirSync, existsSync } from "node:fs";
@@ -90,15 +90,17 @@ const hub = http.createServer((req, res) => {
 await new Promise(r => hub.listen(0, "127.0.0.1", r));
 const HUB = `http://127.0.0.1:${hub.address().port}`;
 
-// ---- harness: the REAL runner + a fake `codex` ----------------------------------------------
-// ibkr: exit 0, substantive prose, touches NOTHING — the 48s specimen. commit: ships a real git
-// commit in its cwd. movetesting: moves card #10491 to testing on the hub mid-turn. The repo
-// starts at an initial commit so headBefore resolves and a commit is a HEAD move.
-async function drill(mode, { waitMs = 12000, failCard = false } = {}) {
+// ---- harness: the REAL runner + a fake `codex`. ibkr: exit 0, prose, touches NOTHING; commit:
+// ships a git commit; movetesting: moves card #10491 to testing mid-turn; shipall: both;
+// alreadytesting/alreadydone: the card STARTS at testing/done and the contract gets prose only.
+// `persona` spawns codex-2 running the codex CLI (the #11551 split); a commit moves HEAD.
+async function drill(mode, { waitMs = 12000, failCard = false, persona = "codex" } = {}) {
   sends.length = 0; eventSeq = 0; handed = 0; cardFail = failCard;
   followup = mode === "followup";
   blockedFollowup = mode === "blocked";
-  cards.set(CARD, { id: CARD, status: mode === "staleblocked" ? "blocked" : "todo",
+  const startStatus = mode === "alreadytesting" ? "testing" : mode === "alreadydone" ? "done"
+    : mode === "staleblocked" ? "blocked" : "todo";
+  cards.set(CARD, { id: CARD, status: startStatus,
     log: [{ ts: Date.now() - 60000, by: "codex:tt-nodelivery", text: "old dependency" }] });
   const root = mkdtempSync(join(tmpdir(), "tt-nodelivery-"));
   const HOME = join(root, "home");
@@ -115,15 +117,15 @@ async function drill(mode, { waitMs = 12000, failCard = false } = {}) {
   const LOGF = join(root, "turns.log"), CNTF = join(root, "count");
   const PROJ = "tt-nodelivery";
   writeFileSync(join(fakebin, "codex"), `#!/bin/sh
-P="$HOME/.agent-bus/turn-codex-${PROJ}.txt"
+P="$HOME/.agent-bus/turn-${persona}-${PROJ}.txt"
 { echo "===TURN==="; cat "$P"; } >> "${LOGF}"
 if grep -q "NEW BUS MESSAGE" "$P"; then
   n=$(cat "${CNTF}" 2>/dev/null || echo 0); n=$((n+1)); echo "$n" > "${CNTF}"
-  if [ "${mode}" = "commit" ] || { [ "${mode}" = "followup" ] && [ "$n" -gt 1 ]; }; then
+  if [ "${mode}" = "commit" ] || [ "${mode}" = "shipall" ] || { [ "${mode}" = "followup" ] && [ "$n" -gt 1 ]; }; then
     echo "shipped $n" > "shipped-$n.txt"
     git add -A && git -c user.name=d -c user.email=d@d commit -qm "w$n"
   fi
-  if [ "${mode}" = "movetesting" ]; then
+  if [ "${mode}" = "movetesting" ] || [ "${mode}" = "shipall" ]; then
     node --input-type=module -e "await fetch(process.env.RELAY_URL + '/card-move', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ project: '${PROJ}', id: ${CARD}, status: 'testing' }) })" || true
   fi
   if [ "${mode}" = "blocked" ]; then
@@ -143,10 +145,12 @@ exit 0
 `);
   chmodSync(join(fakebin, "codex"), 0o755);
   const PENDF = join(BUS, `pending-codex-${PROJ}.json`);
-  const JSONL = join(BUS, "logs", `codex-${PROJ}.jsonl`);
+  const JSONL = join(BUS, "logs", `${persona}-${PROJ}.jsonl`);   // telemetry is PERSONA-keyed (#11551)
+  const runnerEnv = drillEnv({ TRANTOR_NO_DESKTOP_NOTIFY: "1" });
+  if (persona !== "codex") runnerEnv.CREW_PERSONA = persona;   // the #11551 label/persona split
   const runner = spawn("node", ["bin/crew-runner.mjs", "codex", REPO], {
     cwd: process.cwd(), stdio: "ignore",
-    env: { ...drillEnv({ TRANTOR_NO_DESKTOP_NOTIFY: "1" }), HOME, PATH: `${fakebin}:${process.env.PATH}`,
+    env: { ...runnerEnv, HOME, PATH: `${fakebin}:${process.env.PATH}`,
       RELAY_URL: HUB, RELAY_AGENT: "codex", RELAY_PROJECT: PROJ,
       TRANTOR_RETRY_MS: followup ? "60000" : "1200", CREW_KICKOFF: "say hi and end your turn" },
   });
@@ -260,6 +264,46 @@ console.log("\n## blocked transitions and renewed notes deliver and allow depend
   const r = await drill("staleblocked");
   ok("#11352: an unchanged old blocked card still parks for no delivery",
     r.rows.some(row => row.outcome === "no-delivery") && r.sends.some(s => /PARKED/.test(s.text || "")));
+}
+
+// ---- drill 5 (#11551): persona codex-2 running the codex CLI — the label/persona split ---------
+// The incident: fcaa7e2 shipped and #11546 reached testing in an EARLIER turn; the redelivered
+// contract then got two exit-0 "no code changes" turns and the seat was PARKED for delivered work.
+console.log("\n## #11551: a runner persona differing from the agent label delivers normally");
+{
+  const r = await drill("shipall", { persona: "codex-2" });
+  ok("#11551: codex-2 running codex commits and moves its card with a single wake turn",
+    r.wakeTurns.length === 1, `got ${r.wakeTurns.length} wake turn(s)`);
+  ok("#11551: the assigner hears done, never 'no commit, card'",
+    r.sends.some(s => s.to === "sasha@mac" && /✅ done on/.test(s.text || ""))
+    && !r.sends.some(s => /no commit, card|PARKED/.test(s.text || "")));
+  ok("#11551: the wake is consumed", !r.pendingLeft);
+  const row = r.rows.find(x => x.trigger === "direct message");
+  ok("#11551: telemetry outcome completed", row && row.outcome === "completed",
+    JSON.stringify(row && { outcome: row.outcome, verdict: row.verdict }));
+}
+
+console.log("\n## #11551: a redelivered contract on an already-delivered card is not no-delivery");
+{
+  const r = await drill("alreadytesting", { persona: "codex-2" });
+  ok("#11551: the card was at testing BEFORE the turn and the turn shipped nothing new",
+    r.wakeTurns.length === 1, `got ${r.wakeTurns.length} wake turn(s)`);
+  ok("#11551: the turn reads completed, not no-delivery",
+    r.sends.some(s => s.to === "sasha@mac" && /✅ done on/.test(s.text || ""))
+    && !r.sends.some(s => /no commit, card/.test(s.text || "")));
+  ok("#11551: no park follows for already-shipped work", !r.sends.some(s => /PARKED/.test(s.text || "")));
+  ok("#11551: the queue is cleared — the redelivery consumed the wake", !r.pendingLeft);
+  const row = r.rows.find(x => x.trigger === "direct message");
+  ok("#11551: telemetry outcome completed, not no-delivery", row && row.outcome === "completed",
+    JSON.stringify(row && { outcome: row.outcome, verdict: row.verdict }));
+}
+{
+  const r = await drill("alreadydone", { persona: "codex-2" });
+  const row = r.rows.find(x => x.trigger === "direct message");
+  ok("#11551: the same holds for a card already at done (the specimen's last turn read 'still done')",
+    r.wakeTurns.length === 1 && row && row.outcome === "completed"
+    && !r.sends.some(s => /no commit, card|PARKED/.test(s.text || "")),
+    JSON.stringify({ wakeTurns: r.wakeTurns.length, outcome: row && row.outcome }));
 }
 hub.close();
 console.log(`\n${pass} passed, ${fail} failed`);
