@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { test } from "node:test";
 import { checkMemory, memoryDirectory, notePins } from "../../lib/memory-pins.mjs";
@@ -137,4 +137,66 @@ test("no graph leaves notes untouched, and CLI rejects ambiguous or outside note
     const result = f.cli(...args);
     assert.equal(result.status, 1, result.stdout + result.stderr);
   }
+});
+
+
+test("real-note candidates stay informational unless the file exists", t => {
+  const f = fixture(t);
+  const missing = [
+    "0.18.83/0.18.84", "2.0/6.0", "0.17.56/.57", "zai-coding-plan/glm-5.1",
+    "gui/501/com.trantor.duty", "registry.json/capabilities.json",
+    "overseer.mjs/routes/admin.mjs/package.json", "proposal.filed/.decided/.withdrawn",
+    "README/package.json", "PRD/TDD/CHECKLIST-reassembly.md", "token-scrooge/.env",
+    "bin/crew.sh", "lib/wake.mjs", "bin/audit.mjs", "missing.mjs",
+  ];
+  writeFileSync(join(f.project, "package.json"), "{}\n");
+  f.write("mentions.md", missing.map(path => `\`${path}\``).join("\n"));
+  const original = f.read("mentions.md");
+  const dry = f.cli("pin", "--all", "--dry-run");
+  assert.equal(dry.status, 0, dry.stderr);
+  assert.equal(f.read("mentions.md"), original);
+  for (const path of missing) assert.ok(dry.stdout.includes(`mentions a path that doesn't exist: ${path}`), path);
+  assert.ok(!dry.stdout.includes("broken:"));
+  const result = f.pin({ all: true }).notes[0];
+  assert.deepEqual(result.pins, []);
+  assert.deepEqual(result.diagnostics, missing.map(path => `mentions a path that doesn't exist: ${path}`));
+  assert.equal(f.read("mentions.md"), original);
+  assert.deepEqual(f.check().notes[0].pins, []);
+});
+
+test("repo prefix resolves files and symbols, and top-level file:line falls back to a file pin", t => {
+  const f = fixture(t);
+  mkdirSync(join(f.project, "engine"));
+  writeFileSync(join(f.project, "engine/README.md"), "Engine\n");
+  writeFileSync(join(f.project, "hub.mjs"), "// top-level\n".repeat(15) + "console.log('ready');\n");
+  const prefix = basename(f.project);
+  f.write("prefix.md", `${prefix}/engine/README.md ${prefix}/src/code.mjs#advise ${prefix}/src/code.mjs:2 hub.mjs:16`);
+  const result = f.pin({ all: true }).notes[0];
+  assert.deepEqual(result.pins.map(p => p.symbol || p.file), ["engine/README.md", "src/code.mjs#advise", "hub.mjs"]);
+  assert.deepEqual(result.diagnostics, []);
+  assert.ok(f.check().notes[0].pins.every(pin => pin.status === "ok"));
+  const nodes = new Map();
+  assert.deepEqual(extractMentions("trantor/engine/README.md", f.project, nodes), [{ file: "trantor/engine/README.md" }]);
+  const trantor = join(f.project, "trantor");
+  mkdirSync(join(trantor, "engine"), { recursive: true });
+  writeFileSync(join(trantor, "engine/README.md"), "Engine\n");
+  assert.deepEqual(extractMentions("trantor/engine/README.md", trantor, nodes), [{ file: "engine/README.md" }]);
+  mkdirSync(join(trantor, "trantor/engine"), { recursive: true });
+  writeFileSync(join(trantor, "trantor/engine/README.md"), "Nested engine\n");
+  assert.deepEqual(extractMentions("trantor/engine/README.md", trantor, nodes), [{ file: "trantor/engine/README.md" }]);
+});
+
+test("a file becomes broken only after a pinned file is deleted", t => {
+  const f = fixture(t);
+  f.write("deleted.md", "README.md src/code.mjs#missing");
+  const pinned = f.pin({ all: true }).notes[0];
+  assert.deepEqual(pinned.pins.map(pin => pin.file), ["README.md"]);
+  assert.deepEqual(pinned.diagnostics, ["unresolved mention: src/code.mjs#missing"]);
+  rmSync(join(f.project, "README.md"));
+  const checked = f.check().notes[0].pins;
+  assert.equal(checked[0].status, "broken");
+  const repinned = f.pin({ all: true }).notes[0];
+  assert.deepEqual(repinned.pins, pinned.pins);
+  assert.ok(repinned.diagnostics.includes("broken: file gone: README.md"));
+  assert.ok(repinned.diagnostics.includes("mentions a path that doesn't exist: README.md"));
 });
