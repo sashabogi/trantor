@@ -7,12 +7,28 @@ one Bash command with an inherited environment and permission bypass flags.
 No process ownership check exists at that launch boundary. Shell builtin
 `kill` also bypasses a PATH-only wrapper.
 
-Implementation plan: prepend guarded signal commands for every provider,
-route Bash and Zsh builtin kill through those commands, resolve all targets
-before signalling, and refuse any target outside the runner's descendants.
-Reject ambiguous arguments rather than delegating to native pkill/killall.
-Test with an unrelated decoy plus a seat-owned child and verify refusal is
-atomic when a pattern includes both.
+The runner prepends guarded signal commands after loading provider environment
+files. All provider commands inherit them, including fresh and resumed turns.
+Bash's BASH_ENV and Zsh's startup files disable builtin kill and restore the
+guard PATH after loading the user's original startup files. The supervisor
+keeps its own cleanup commands unchanged.
+
+The guard resolves targets with read-only ps/pgrep, checks the entire set
+against the runner's descendants, then checks ancestry again before sending
+signals. The runner itself is excluded. An outside target refuses the whole
+request. Orphaned processes are refused because ownership is no longer provable.
+No native pkill or killall is ever executed.
+
+Supported cleanup: kill with positive PIDs, killall with exact process names,
+and pkill with one pattern and leading -f/-i/-x options. Signals may precede
+targets as -TERM, -9, -0 or -s TERM. Ambiguous/trailing options, process groups,
+job specs and unsupported switches are refused with one line.
+
+Run `node test/crew/test-seat-signal.mjs`. It launches the real runner with fake
+Codex, Claude and GLM CLIs, each exercising Bash and available Zsh against an
+outside decoy named claude. The test checks the exact incident command, broad
+matches, mixed PID sets, and successful cleanup of owned children. It asserts
+shim resolution before any broad command and only cleans up PIDs it spawned.
 
 These inherited command guards prevent accidental broad shell cleanup. They
 are not a kernel security boundary: explicit system binaries, cleared shell

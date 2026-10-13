@@ -30,6 +30,7 @@ import {
 import { snapshotBeforeCut } from "./cut-snapshot.mjs";
 import { ocTurnUsage, dshTurnUsage, usageTotal } from "../lib/turn-usage.mjs";
 import { ocCompactionContent, ocCompactionLogLine } from "../lib/seat-compaction.mjs";
+import { seatSignalPrefix } from "../lib/seat-signal-guard.mjs";
 import { listContainers, newContainers, recordContainers, statePathFor as dockerStatePathFor, sweep as dockerSweep } from "../lib/docker-janitor.mjs";
 import {
   auditDutyNudges, claimDutyNudges, claudeTranscriptDir, dutyEscalations, dutyNudgeDirective,
@@ -834,7 +835,7 @@ async function runTurn(prompt, isFirst, trigger = "kickoff", opts = {}) {
   // #6393: the store's keys ride the spawn env under shadow names and the shell re-exports them
   // AFTER the sources ran, so the keychain wins over a stale .env line and no file is ever copied.
   const secrets = resolveSecrets(process.env);
-  cmd = withEnvFiles(withSecretExports(cmd, Object.keys(secrets)), envs);
+  cmd = withEnvFiles(withSecretExports(seatSignalPrefix(TURN_DIR) + cmd, Object.keys(secrets)), envs);
   log(`turn starting (${isFirst ? "fresh session" : "resume"})${MODEL ? ` · model=${MODEL}` : ""}`);
   // #7777: the one effort line — which effort parameters were set, or that the model is uncatalogued.
   if (EFFORT && EFFORT_FLAG.text) log(EFFORT_FLAG.text);
