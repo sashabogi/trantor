@@ -466,6 +466,8 @@ echo "A handed-off thread is not resumed:"
 echo 0 > "$TMP/herdr.n"; rm -f "$TMP/herdr.log" "$TMP/herdr.agents"; seed ""
 printf 'testproj\tDEAD-SID\n' > "$TMP/.agent-bus/orch-sessions.txt"
 mkdir -p "$TMP/.claude/projects/$SLUG19"; : > "$TMP/.claude/projects/$SLUG19/DEAD-SID.jsonl"
+# #11641: the thread ENDED in its handoff, so its transcript is as old as the handoff stamp
+node -e 'require("fs").utimesSync(process.argv[1], 1700000000, 1700000000)' "$TMP/.claude/projects/$SLUG19/DEAD-SID.jsonl"
 mkdir -p "$TMP/.agent-bus/handoffs"
 printf '{"id":"testproj-1700000000","projectName":"testproj","session_id":"DEAD-SID","stamp":1700000000,"consumed":false}' > "$TMP/.agent-bus/handoffs/testproj-1700000000.json"
 OUT21="$(cd "$TMP/proj" && HOME="$TMP" PATH="$TMP/fakebin:$PATH" RELAY_PROJECT=testproj CREW_NO_PROC_KILL=1 "${CREW[@]}" open </dev/null 2>/dev/null)"
