@@ -37,7 +37,7 @@ Config:  $SCROOGE_HOME (default ~/.token-scrooge) holds registry.json + calls.js
 Keys:    read from the environment; optionally also from $SCROOGE_ENV_FILE (KEY=VALUE)
 Exit: 0 ok, non-zero on error (message to stderr).
 """
-import sys, os, json, time, argparse, urllib.request, urllib.error, re, shutil, hashlib
+import sys, os, json, time, argparse, urllib.request, urllib.error, re, shutil, hashlib, math
 
 HOME = os.path.expanduser("~")
 SCROOGE_DIR = os.environ.get("SCROOGE_HOME", os.path.join(HOME, ".token-scrooge"))
@@ -171,18 +171,26 @@ def model_quality(caps, mid, metric):
         v = c.get("intelligence")          # fall back to the general index
     return float(v) if isinstance(v, (int, float)) else 0.0
 
-def blended_cost(reg, caps, mid):
+def model_prices(reg, caps, mid):
     # The curated registry carries cost for its own models; for CATALOG models (OpenRouter's
     # hundreds, brought via --candidates) the per-model price rides on the capability entry
     # instead — so a brought model is ranked on its real price without bloating the registry.
-    m = reg["models"].get(mid) or (caps.get(mid) if isinstance(caps, dict) else None) or {}
-    return max(1e-6, 0.3 * m.get("cost_in", 0) + 0.7 * m.get("cost_out", 0))
+    for m in (reg["models"].get(mid) or {}, (caps or {}).get(mid) or {}):
+        prices = [m.get("cost_in"), m.get("cost_out")]
+        if all(type(v) in (int, float) and math.isfinite(v) and v >= 0 for v in prices):
+            return prices
+    return None
+
+def blended_cost(reg, caps, mid):
+    prices = model_prices(reg, caps, mid)
+    return max(1e-6, 0.3 * prices[0] + 0.7 * prices[1]) if prices is not None else None
 
 def weigh_candidates(reg, caps, cand_ids, task, difficulty):
     """Apply the difficulty floor, then rank survivors by quality^qw / cost^cw.
     Returns [(model_id, score)] best-first."""
     metric = task_metric(task)
-    quals = [(mid, model_quality(caps, mid, metric)) for mid in cand_ids]
+    quals = [(mid, model_quality(caps, mid, metric)) for mid in cand_ids
+             if blended_cost(reg, caps, mid) is not None]
     scored_q = sorted(q for _, q in quals if q > 0)
     pct = DIFF_PCTL.get(difficulty, 0.5)
     floor = 0.0
@@ -218,6 +226,9 @@ def route_task(reg, caps, task, difficulty, prompt, spread=0):
     live = [m for m in cands if provider_key(reg, reg["models"][m]["provider"])]
     if not live:
         raise SystemExit("No live API key for any model serving task '%s'." % task)
+    live = [m for m in live if blended_cost(reg, caps, m) is not None]
+    if not live:
+        raise SystemExit("No priced candidate models; enrich pricing before routing.")
     if not caps:                                   # no quality data → legacy cheapest-first
         return live[0], reg["models"][live[0]]["provider"], {"difficulty": None, "weighed": False}
     diff = difficulty or infer_difficulty(task, prompt)
@@ -659,7 +670,19 @@ def cmd_route(reg, args):
     by_bare = {}
     for r in raw:
         by_bare.setdefault(r.split("/")[-1], r)
-    bare_ids = list(by_bare.keys())
+    unpriced = [b for b in by_bare if blended_cost(reg, caps, b) is None]
+    bare_ids = [b for b in by_bare if b not in unpriced]
+    if not provider:
+        providers = {r.split("/")[0] for r in raw if "/" in r}
+        if len(providers) == 1:
+            provider = next(iter(providers))
+    if provider == "qwen":
+        preferred = "qwen3.8-max" if args.difficulty == "hard" else "qwen3.8-flash"
+        bare_ids = [b for b in bare_ids if b == preferred]
+    if not bare_ids:
+        print(json.dumps({"error": "no priced candidate models matching provider preference",
+                          "unpriced": unpriced}))
+        raise SystemExit(2)
     task = args.task or "code"
     difficulty = args.difficulty or "medium"
     metric = task_metric(task)
@@ -681,11 +704,13 @@ def cmd_route(reg, args):
     original = by_bare[pick_bare]
     qualified = original if "/" in original else (("%s/%s" % (provider, pick_bare)) if provider else pick_bare)
     result = {"provider": provider, "model": pick_bare, "qualified": qualified,
-              "weighed": weighed, "task": task, "difficulty": difficulty, "why": why, "candidates": cand_out}
+              "weighed": weighed, "task": task, "difficulty": difficulty, "why": why, "candidates": cand_out, "unpriced": unpriced}
     if getattr(args, "json", False):
         print(json.dumps(result))
     else:
         err(DIM("[scrooge route] %s → %s (%s)" % (provider or "?", qualified, "weighed" if weighed else "heuristic")))
+        if unpriced:
+            err("[scrooge route] unpriced (excluded): " + ", ".join(unpriced))
         print(qualified)
     return 0
 
@@ -704,7 +729,9 @@ def cmd_list(reg, args):
             q = caps.get(m) or {}
             fmt = lambda v: ("%2.0f" % v) if isinstance(v, (int, float)) else " -"
             cap = "%s/%s/%s " % (fmt(q.get("intelligence")), fmt(q.get("coding")), fmt(q.get("reasoning")))
-        print("  %s %-24s %5.2f/%-5.2f %s%-9s %s" % (live, m, c.get("cost_in",0), c.get("cost_out",0),
+        prices = model_prices(reg, caps, m)
+        price = "unpriced" if prices is None else "%5.2f/%-5.2f" % tuple(prices)
+        print("  %s %-24s %s %s%-9s %s" % (live, m, price,
               cap, c.get("trust",""), ",".join(c.get("good_for", []))))
     print("\nTASKS (weighed by capability×cost, gated by difficulty):")
     for t, ms in reg.get("tasks", {}).items():

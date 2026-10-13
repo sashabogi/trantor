@@ -1,10 +1,6 @@
 #!/usr/bin/env node
-// trantor models — browse the live models behind your crew seats (opencode is the adapter).
-//
-//   trantor models                # every opencode-driven seat + how many live models it serves
-//   trantor models <provider>     # list that provider's live models + what the router picks per
-//                                 # difficulty (so you can see hard→strong, easy→cheap at a glance)
-import { execSync } from "node:child_process";
+// Browse live crew models and preview the same routing used at launch.
+import { execSync, spawnSync } from "node:child_process";
 import { dirname, join } from "node:path";
 import { homedir } from "node:os";
 import { existsSync, statSync } from "node:fs";
@@ -25,16 +21,11 @@ const liveModels = (providerOc) => {
   catch { return []; }
 };
 
-const FLASH_TIER = /(flash|turbo|lite|mini|highspeed|small)/i;
-
 function routePick(candList, diff) {
-  try {
-    const hard = diff === "hard";
-    const strong = hard ? candList.filter(id => !FLASH_TIER.test(id)) : candList;
-    const pool = strong.length > 0 ? strong : candList;
-    const out = execSync(`python3 ${SCROOGE} route --candidates ${JSON.stringify(pool.join(" "))} -t code -d ${diff} --json 2>/dev/null`, { encoding: "utf8" });
-    return JSON.parse(out).qualified || "?";
-  } catch { return "?"; }
+  const result = spawnSync("python3", [SCROOGE, "route", "--candidates", candList.join(" "),
+    "-t", "code", "-d", diff, "--json"], { encoding: "utf8" });
+  try { return JSON.parse(result.stdout); }
+  catch { return { error: "router unavailable", unpriced: [] }; }
 }
 
 function listAll() {
@@ -57,12 +48,14 @@ function detail(name) {
   const models = liveModels(providerOc);
   if (!models.length) { console.log(`No live models for '${providerOc}' (opencode offline / no key / unknown provider).`); return; }
   console.log(`${C.gold}${providerOc}${C.off} — ${models.length} live models\n`);
-  for (const m of models.slice(0, 60)) console.log(`  ${m}`);
+  const picks = Object.fromEntries(["easy", "medium", "hard"].map(d => [d, routePick(models, d)]));
+  const unpriced = new Set(Object.values(picks).flatMap(p => p.unpriced || []));
+  for (const m of models.slice(0, 60)) console.log(`  ${m}${unpriced.has(m.split("/").at(-1)) ? " (unpriced)" : ""}`);
   if (models.length > 60) console.log(`  ${C.dim}… +${models.length - 60} more${C.off}`);
   if (existsSync(SCROOGE) || has("scrooge")) {
     console.log(`\n${C.gold}router picks (code task):${C.off}`);
-    for (const d of ["easy", "medium", "hard"]) console.log(`  ${d.padEnd(7)} → ${routePick(models, d)}`);
-    const caps = join(H, ".token-scrooge", "capabilities.json");
+    for (const d of ["easy", "medium", "hard"]) console.log(`  ${d.padEnd(7)} → ${picks[d].qualified || picks[d].error}`);
+    const caps = join(process.env.SCROOGE_HOME || join(H, ".token-scrooge"), "capabilities.json");
     // only nag when the scores are missing or older than the weekly refresh allows for
     const ageDays = existsSync(caps) ? (Date.now() - statSync(caps).mtimeMs) / 86400e3 : Infinity;
     if (ageDays > 9) console.log(`${C.dim}(scores ${ageDays === Infinity ? "missing" : `${Math.floor(ageDays)}d old`} — run scrooge-capabilities to (re)score the catalog for accurate difficulty routing)${C.off}`);

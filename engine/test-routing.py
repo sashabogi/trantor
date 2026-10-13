@@ -36,8 +36,16 @@ def ok(name, cond):
 # 1. catalog cost via caps fallback (model absent from registry)
 ok("blended_cost falls back to the capability entry for catalog models",
    abs(g["blended_cost"](reg, caps, "frontier") - (0.3 * 5.0 + 0.7 * 22.5)) < 1e-6)
-ok("blended_cost is 1e-6 for an entirely unknown model (no crash)",
-   g["blended_cost"](reg, caps, "does-not-exist") == 1e-6)
+ok("unknown model is unpriced", g["blended_cost"](reg, caps, "does-not-exist") is None)
+for bad in ({}, {"cost_in": 1}, {"cost_in": None, "cost_out": 1},
+            {"cost_in": -1, "cost_out": 1}, {"cost_in": float("nan"), "cost_out": 1}):
+    ok("invalid or incomplete prices are unpriced", g["blended_cost"](reg, {"bad": bad}, "bad") is None)
+ok("explicit zero prices are free", g["blended_cost"](reg, {"free": {"cost_in": 0, "cost_out": 0}}, "free") == 1e-6)
+for diff in ("easy", "medium", "hard"):
+    mixed = {"priced": {"coding": 50, "cost_in": 2, "cost_out": 6}, "unpriced": {"coding": 99}}
+    ranked = g["weigh_candidates"](reg, mixed, list(mixed), "code", diff)
+    ok("priced beats stronger unpriced at " + diff, [m for m, _ in ranked] == ["priced"])
+ok("all unpriced yields no pick", g["weigh_candidates"](reg, {}, ["unknown"], "code", "easy") == [])
 
 def winner(diff):
     return g["weigh_candidates"](reg, caps, cands, "code", diff)[0][0]

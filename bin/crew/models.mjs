@@ -19,12 +19,7 @@ export function resolveModel(ctx, agent, provider, task, difficulty) {
   const result = call("opencode", ["models", provider], { env: ctx.env });
   const candidates = result.ok ? result.stdout.split(/\s+/).filter(Boolean).join(" ") : "";
   let model = routeModel(ctx, provider, candidates, task, difficulty);
-  if (!model && candidates) {
-    const first = candidates.split(" ")[0];
-    model = first.startsWith(`${provider}/`) ? first : `${provider}/${first}`;
-    console.error(`[crew] router unavailable for ${agent}:${provider} — using the provider's own catalog head (${model})`);
-  }
-  if (!model) throw new Error(`[crew] live model selection failed for ${agent}:${provider} — no router and no catalog; refusing opencode global default`);
+  if (!model) throw new Error(`[crew] live model selection failed for ${agent}:${provider} — no priced model matching provider preference; refusing opencode global default`);
   if (model.split("/")[0] !== provider) throw new Error(`[crew] router selected ${model} outside ${provider} — refusing cross-provider fallback`);
   return model;
 }
