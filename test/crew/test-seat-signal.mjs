@@ -2,7 +2,7 @@
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
 import { once } from "node:events";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import http from "node:http";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -66,7 +66,8 @@ async function fixture() {
       check(result.status === 0, `owned killall allowed: ${result.stderr}`);
       check((await namedExit)[1] === "SIGTERM", "killall child received SIGTERM");
     } finally { if (named.exitCode === null && named.signalCode === null) named.kill(); }
-    writeFileSync(process.env.RESULT, JSON.stringify({ passed }));
+    writeFileSync(`${process.env.RESULT}.tmp`, JSON.stringify({ passed }));
+    renameSync(`${process.env.RESULT}.tmp`, process.env.RESULT);
     console.log("Signal guard verified: outside targets refused atomically, own children terminated, and the operator decoy survived all shell commands.");
   } finally { if (child.exitCode === null && child.signalCode === null) child.kill(); }
 }
