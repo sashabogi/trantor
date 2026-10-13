@@ -26,6 +26,7 @@ switch (cmd) {
   case "secrets": run("bin/secrets.mjs"); break;
   case "keys":    run("bin/keys.mjs"); break;
   case "models": run("bin/models.mjs"); break;
+  case "memory": run("bin/memory.mjs"); break;
   case "advise":  run("bin/advise.mjs"); break;
   case "verify":  run("bin/crew-verify.mjs"); break;
   case "up":      runCrew(); break;
@@ -271,6 +272,7 @@ switch (cmd) {
   trantor hub         run the hub in the foreground (setup installs it as a service instead)
                       …or manage per-project hub pins: hub list · hub set <project> <url> · hub unset <project>
                       seats: which project lives in which directory — seats · seats add · seats up · seats login install
+  trantor memory check [--project <dir>] [--json]  check note pins for stale or broken code
   trantor state       a seat's working memory: show <seat> <card> [--json] · validate · reset --force · gc [--apply]
   trantor seat-why    WHY a seat is down (err file, logs, pids): seat-why <agent> [--json] — quota, auth, crash, or just no pane
   trantor seat-record the per-project seat record the advisor benches from (✓/∅/↩ per difficulty) — [--project p] [--reset <seat>] [--json]
