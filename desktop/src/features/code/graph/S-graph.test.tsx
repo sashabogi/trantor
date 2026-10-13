@@ -10,6 +10,7 @@ import { GRAPH_PATH, openGraphTab, openInTabs, tabKey, tabLabel, type CodeTab } 
 import { GraphView } from "../GraphView";
 import { ModePane } from "../ModePane";
 import type { GraphApi } from "./graphApi";
+import { resetGraphViewStates } from "./graphViewState";
 import { SIX_NODE_CLUSTERS, SIX_NODE_GRAPH } from "./fixture";
 
 // SAFETY: React's act() reads this flag off globalThis; the cast adds the one key TS does not know.
@@ -30,6 +31,7 @@ describe("S-graph · graph view on the Code surface", () => {
   const evidence: string[] = [];
 
   beforeEach(() => {
+  resetGraphViewStates();
     host = document.createElement("div");
     document.body.appendChild(host);
     root = createRoot(host);

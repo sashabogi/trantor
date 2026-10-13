@@ -12,6 +12,7 @@ import { redactKeys } from "../../lib/redact.mjs";
 import { parseTurnTokens } from "../../lib/turn-policy.mjs";
 import { writeTurnState } from "../../lib/turnstate.mjs";
 import { withEnvFiles } from "../../lib/project.mjs";
+import { seatSignalPrefix } from "../../lib/seat-signal-guard.mjs";
 import { shadowEnv, withSecretExports } from "../../lib/secrets.mjs";
 import { snapshotBeforeCut } from "../../bin/cut-snapshot.mjs";
 import { newContainers, recordContainers } from "../../lib/docker-janitor.mjs";
@@ -43,6 +44,7 @@ echo $$ > "${sleepFile}"
 exec /bin/sleep "$@"
 `, { mode: 0o755 });
   fs.writeFileSync(join(bin, "kimi"), `#!/bin/sh
+/bin/bash -c 'command -v kill' > "$HOME/cli-kill.txt"
 echo 'To resume this session: kimi -r box-drill-session'
 echo 'turn work complete: the drill card is finished, the box sleep was reaped, the session id'
 echo 'was captured from the resume line, and the telemetry row records a completed turn, so'
@@ -53,7 +55,7 @@ echo 'the runner can move on to its next wake without a redelivery ladder or a p
   let sawMarker = false, spawnResult;
   const record = (...args) => logs.push(args.join(" "));
   const context = createContext({
-    ...fs, ...classify, join, redactKeys, parseTurnTokens, withEnvFiles, setTimeout,
+    ...fs, ...classify, join, redactKeys, parseTurnTokens, withEnvFiles, seatSignalPrefix, setTimeout,
     // #6393: the store is keychain I/O, stubbed empty like the hub; the shell helpers are the real ones.
     shadowEnv, withSecretExports, resolveSecrets: () => ({}),
     // #7749: the real turn-state writer, aimed at the drill's bus dir — not the live ~/.agent-bus.
@@ -69,7 +71,9 @@ echo 'the runner can move on to its next wake without a redelivery ladder or a p
     spawn: () => ({ unref: record }), telemetry: row => rows.push(row),
     spawnSync: (cmd, args, opts) => {
       assert.deepEqual(Array.from(opts.stdio), ["ignore", "pipe", "inherit"]);
-      spawnResult = spawnSync(cmd, args, { ...opts, stdio: ["ignore", "pipe", "pipe"] });
+      const observed = [...args];
+      observed[1] = `trap 'type -t kill > "$HOME/supervisor-kill.txt"' EXIT\n${observed[1]}`;
+      spawnResult = spawnSync(cmd, observed, { ...opts, stdio: ["ignore", "pipe", "pipe"] });
       return spawnResult;
     },
     existsSync: path => {
@@ -92,6 +96,8 @@ echo 'the runner can move on to its next wake without a redelivery ladder or a p
   });
   runInContext(`const cli = ${kimiSource};\n${inheritBoxOutput ? turnSource.replace(") >/dev/null 2>&1 & boxpid", ") & boxpid") : turnSource}`, context);
   await runInContext('runTurn("finish this drill", true)', context);
+  assert.match(fs.readFileSync(join(work, "cli-kill.txt"), "utf8"), /\/signal-guard\/\d+\/kill\n$/);
+  assert.equal(fs.readFileSync(join(work, "supervisor-kill.txt"), "utf8"), "builtin\n");
   return { rows, context, spawnResult, sawMarker, sleepFile, logs };
 }
 

@@ -8,6 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { GraphView } from "../GraphView";
 import { QUIET_MS } from "./refresh";
 import type { CodeGraph, CodeGraphResponse, GraphApi } from "./graphApi";
+import { resetGraphViewStates } from "./graphViewState";
 import { SIX_NODE_GRAPH } from "./fixture";
 
 // SAFETY: React's act() reads this flag off globalThis; the cast adds the one key TS does not know.
@@ -70,6 +71,7 @@ describe("S-graph-refresh · the graph follows the watcher and the scope", () =>
   const evidence: string[] = [];
 
   beforeEach(() => {
+  resetGraphViewStates();
     vi.useFakeTimers();
     host = document.createElement("div");
     document.body.appendChild(host);

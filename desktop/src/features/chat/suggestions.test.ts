@@ -1,7 +1,47 @@
 // The chip extractor's contract (#5929): chips come ONLY from explicit asks in the closing
 // sentences, capped at three, and silence when nothing matches. Nothing invented, nothing sent.
 import { describe, expect, it } from "vitest";
-import { declaredFromQuestion, suggestionsFromDeclaredAsk, suggestionsFromTurn, suggestionsFromTurns } from "./suggestions";
+import { declaredFromQuestion, selectChips, suggestionsFromDeclaredAsk, suggestionsFromTurn, suggestionsFromTurns } from "./suggestions";
+
+// #11649: Claude Code's own suggestion leads the row; prose guesses stand down, a declared ask stays.
+describe("selectChips", () => {
+  const GHOST = "ok, ping me when the header changes are ready";
+  const base = {
+    history: false, working: false, draft: "", declared: null, ccSuggestion: GHOST,
+    turnTextsNewestFirst: ["The gate is green. Should I merge now?"],
+  };
+  const declared = { question: "Which lane?", options: [{ label: "Stable" }, { label: "Canary" }], multi: false };
+
+  it("Claude Code's suggestion is the first and only chip when no ask was declared: prose guesses stand down", () => {
+    const { chips, source } = selectChips(base);
+    expect(chips.map(c => c.text)).toEqual([GHOST]);
+    expect(chips[0].cc).toBe(true);
+    expect(source).toBe("claude-code");
+  });
+
+  it("without a suggestion the prose guesses come back unchanged", () => {
+    const { chips, source } = selectChips({ ...base, ccSuggestion: null });
+    expect(chips.map(c => c.text)).toEqual(["yes", "no"]);
+    expect(source).toBe("prose");
+  });
+
+  it("a declared AskUserQuestion's options stay, after Claude Code's suggestion", () => {
+    expect(selectChips({ ...base, declared }).chips.map(c => c.text)).toEqual([GHOST, "Stable", "Canary"]);
+    expect(selectChips({ ...base, declared, ccSuggestion: null }).chips.map(c => c.text)).toEqual(["Stable", "Canary"]);
+  });
+
+  it("hides while working, in a history view, and once the operator has typed", () => {
+    expect(selectChips({ ...base, working: true }).chips).toEqual([]);
+    expect(selectChips({ ...base, history: true }).chips).toEqual([]);
+    expect(selectChips({ ...base, draft: "  " }).chips.map(c => c.text)).toEqual([GHOST]);
+    // Typing hides only the suggestion; the extractor's own rules (the composer hides the row) are unchanged.
+    expect(selectChips({ ...base, draft: "wait" }).chips.map(c => c.text)).toEqual(["yes", "no"]);
+  });
+
+  it("a blank suggestion is none", () => {
+    expect(selectChips({ ...base, ccSuggestion: "   " }).chips.map(c => c.text)).toEqual(["yes", "no"]);
+  });
+});
 
 // #7776: a declared ask is rendered verbatim — every option, nothing capped, nothing added.
 describe("suggestionsFromDeclaredAsk", () => {

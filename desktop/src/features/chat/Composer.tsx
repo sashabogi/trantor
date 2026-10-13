@@ -10,13 +10,14 @@ import { searchFiles } from "../code/fileApi";
 import { attachmentInfo } from "../../shared/api/client";
 import { describeHit, dropPointToCss } from "../../shared/dropPoint";
 import { addChips, formatBytes, makeChip, removeChip, serializeForSend, type AttachmentChip } from "./attachments";
+import { canSendDraft, composerDraftApi, draftSlots, emptyDraft, flushSaves, isEmptyDraft, nextChipId, scheduleSave, type ComposerDraft } from "./composerDraft";
 import { clampComposerPx, growComposerPx, loadComposerHeight, maxComposerPx, minComposerPx, saveComposerHeight } from "./composerHeight";
 import { FONT_STEPS, type FontStep } from "./prefs";
 import { gaugeLabel, gaugeTone, gaugeUnknownWindow, composerSlot, hasImagePath, normalizeAttachments, receiptFor, type ContextGauge, type OpenQuestion, type PendingSend } from "./streaming";
 import { projectSessions, takeoverAction, type ProjectSessions } from "./takeover";
 import { TakeoverStrip } from "./TakeoverStrip";
 
-export type Provenance = "reported" | "dispatched" | "unknown";
+export type Provenance = "reported" | "dispatched" | "configured" | "unknown";
 type AutonomyJson = {
   resolved?: { harness?: string; baton?: string; commit?: boolean; push?: boolean; deploy?: boolean };
   overridden?: string[];
@@ -33,6 +34,7 @@ import { brandFor } from "../../shared/Avatar";
 import { modelLabel } from "./modelLabel";
 
 const MODELS = [
+  { value: "default", label: "default" },
   { value: "opus", label: "opus" },
   { value: "sonnet", label: "sonnet" },
   { value: "fable", label: "fable" },
@@ -136,6 +138,7 @@ function Picker({ label, value, source, options, onPick, disabled, why, icon, di
           disabled ? why
             : source === "dispatched" ? `Sent to the agent — not confirmed${detail ? ` · ${detail}` : ""}`
             : source === "reported" ? `${detail ?? label} reported by the session`
+            : source === "configured" ? `${detail ?? label} from this project's settings, no session has reported yet`
             : `${label} unknown until the session says`
         }
         className="flex shrink-0 items-center gap-1 whitespace-nowrap rounded-[7px] px-2 py-1 text-[11px] text-tr-muted hover:text-tr-text disabled:opacity-40"
@@ -301,7 +304,7 @@ export function composerTakesDrop(hit: Element | null, root: Element | null): bo
 // named and this handler's verdict, so a misrouted drop is diagnosed from the log alone.
 const traceDrop = (line: string) => { void invoke("app_log", { line: `drop #11513 ${line}` }).catch(() => {}); };
 
-export function Composer({ project, target, live, liveWhy, blockedAsk, model, modelSource, working, userTexts, context, fontStep, onFontStep, onSent, onLongRunChange, onDispatch, onDraftChange, suggestion, onSuggestionHandled }: {
+export function Composer({ project, target, live, liveWhy, blockedAsk, model, modelSource, working, userTexts, context, fontStep, onFontStep, onSent, onLongRunChange, onDispatch, onDraftChange, suggestion, onSuggestionHandled, ccSuggestion }: {
   project: string;
   target: string | null;
   /** Is there an agent behind the pane to talk to (#5477)? Drives every input, with `liveWhy`
@@ -335,18 +338,51 @@ export function Composer({ project, target, live, liveWhy, blockedAsk, model, mo
    *  normal user turn); the panel clears it via onSuggestionHandled. */
   suggestion?: string | null;
   onSuggestionHandled?: () => void;
+  /** Claude Code's own suggested next prompt while the panel shows it as a chip (#11649): Tab in
+   *  an empty composer fills the box with it, the way Tab accepts it in the terminal. */
+  ccSuggestion?: string | null;
 }) {
-  const [draft, setDraft] = useState("");
+  // The draft is words + attachment chips + the project they were written for (#11665), kept in
+  // one slot per project. The composer is mounted once for whichever project is selected, so when
+  // the `project` prop moves the draft is swapped (below) rather than carried into the new one.
+  const [current, setCurrent] = useState<ComposerDraft>(() => draftSlots.get(project) ?? emptyDraft(project));
+  if (current.project !== project) setCurrent(draftSlots.get(project) ?? emptyDraft(project));
+  const draft = current.text;
+  const chips = current.chips;
+  const setDraft = useCallback((v: string | ((prev: string) => string)) =>
+    setCurrent(c => ({ ...c, text: typeof v === "function" ? v(c.text) : v })), []);
   // Attachments live as CHIPS below the text (#6070): the text area holds only words the operator
   // typed — a path inside the text is exactly what dictation splits apart (#5773).
-  const [chips, setChips] = useState<AttachmentChip[]>([]);
-  const chipSeq = useRef(0);
-  /** The one door all three attaches walk through (#6070): drop, paste, picker. The size rides in
-   *  when the caller already holds it (a paste has its File); otherwise the disk answers later and
-   *  the chip shows its name alone until then. */
+  const setChips = useCallback((fn: (cs: AttachmentChip[]) => AttachmentChip[]) =>
+    setCurrent(c => ({ ...c, chips: fn(c.chips) })), []);
+  // Every edit lands in the project's slot and on disk. An untouched empty draft is not written:
+  // it would clobber the persisted one before the restore below has read it.
+  useEffect(() => {
+    if (isEmptyDraft(current) && !draftSlots.get(current.project)) return;
+    draftSlots.put(current);
+    scheduleSave(current);
+  }, [current]);
+  useEffect(() => () => flushSaves(), []);
+  // After a restart the slot is empty but the disk may hold this project's draft: read it once the
+  // project is shown, unless the operator already typed (a slot exists by then).
+  useEffect(() => {
+    if (draftSlots.get(project)) return;
+    let alive = true;
+    void composerDraftApi.get(project).then(saved => {
+      if (!alive || !saved || draftSlots.get(project)) return;
+      draftSlots.put(saved);
+      setCurrent(c => (c.project === project && isEmptyDraft(c) ? saved : c));
+    });
+    return () => { alive = false; };
+  }, [project]);
+  // Chat's suggestion chips hide while there are words in the box (#5929): report the SHOWN
+  // project's text, which also covers a swap on a project switch.
+  useEffect(() => {
+    if (current.project === project) onDraftChange?.(current.text);
+  }, [current.text, current.project, project]);  // eslint-disable-line react-hooks/exhaustive-deps
   const attach = useCallback((paths: string[], size: number | null) => {
     if (!paths.length) return;
-    const made = paths.map(p => makeChip(`chip-${chipSeq.current += 1}`, p, size));
+    const made = paths.map(p => makeChip(nextChipId(), p, size));
     setChips(cs => addChips(cs, made));
     if (size !== null) return;
     for (const p of paths) {
@@ -650,7 +686,11 @@ export function Composer({ project, target, live, liveWhy, blockedAsk, model, mo
     // Chips serialize AT SEND (#6070): the paths join the words in exactly the shape the delivery
     // path knows (sendText then normalizes exactly as it always has), and both clear together on
     // success. A suggested-reply click rides sendText WITHOUT the chips — it is its own turn.
-    if (sendText(serializeForSend(chips, draft))) { setDraft(""); setChips([]); }
+    // The draft goes only to the project it was written in (#11665); the swap above makes a
+    // mismatch unreachable, and this refuses it anyway rather than trust the swap.
+    if (!canSendDraft(current, project)) { setError("this draft belongs to another project — not sent"); return; }
+    // Only the sent draft's own slot clears.
+    if (sendText(serializeForSend(chips, draft))) setCurrent(emptyDraft(current.project));
   };
 
   // A suggested reply IS a send (#5929): it rides sendText — the same delivery, the same
@@ -695,7 +735,15 @@ export function Composer({ project, target, live, liveWhy, blockedAsk, model, mo
 
   // A slash command is typed exactly as a person would type it, then marked dispatched until the
   // transcript reports the new value back.
-  const pickModel = (v: string) => { line(`/model ${v}`); onDispatch("model", v); };
+  // The pick is PER PROJECT (#11657): Claude Code persists /model to the user file, which would
+  // move every project's next session. So the pick first lands in this project's own settings and
+  // arms the restore of the user file (project_model.rs), THEN the slash command goes to the pane.
+  const pickModel = (v: string) => {
+    void invoke("project_model_pick", { project, model: v })
+      .catch(e => setError(`model not saved for this project: ${String(e)}`))
+      .then(() => line(`/model ${v}`));
+    onDispatch("model", v);
+  };
   const pickEffort = (v: string) => {
     line(`/effort ${v}`);
     // Effort is not echoed anywhere we read, so the honest state is "dispatched" and it stays that
@@ -765,7 +813,7 @@ export function Composer({ project, target, live, liveWhy, blockedAsk, model, mo
         <textarea
           ref={box}
           value={draft}
-          onChange={e => { setDraft(e.target.value); onDraftChange?.(e.target.value); }}
+          onChange={e => setDraft(e.target.value)}
           onPaste={onPaste}
           onKeyDown={e => {
             // While the menu is up it owns the arrows and Enter, the way every editor does it.
@@ -774,6 +822,11 @@ export function Composer({ project, target, live, liveWhy, blockedAsk, model, mo
               if (e.key === "ArrowUp") { e.preventDefault(); setPick(p => (p - 1 + menu.length) % menu.length); return; }
               if (e.key === "Enter" || e.key === "Tab") { e.preventDefault(); accept(menu[pick]); return; }
               if (e.key === "Escape") { e.preventDefault(); setMenu([]); return; }
+            }
+            if (e.key === "Tab" && !e.shiftKey && ccSuggestion && !draft && chips.length === 0) {
+              e.preventDefault();
+              setDraft(ccSuggestion);
+              return;
             }
             if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); }
           }}

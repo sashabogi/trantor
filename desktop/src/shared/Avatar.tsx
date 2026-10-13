@@ -37,10 +37,13 @@ const BRANDS = {
 
 const HOSTISH = /^(macbook|imac|mac[-.]|.*\.local$)|@/i;
 
-/** The brand for a session/name: "deepseek:crm-platform" → deepseek; "MacBook-Pro-M1:x" → claude. */
+/** The brand for a session/name: "deepseek:crm-platform" → deepseek; "MacBook-Pro-M1:x" → claude.
+ *  #11604: multi-instance seats register the -N-suffixed agent id as their llm ("codex-2",
+ *  heartbeat RELAY_AGENT verbatim) — the suffix is an instance number, not a brand, so it is
+ *  stripped before the brand table lookup; an unknown base still monograms. */
 export function brandFor(name: string, llm?: string): Brand | null {
   const key = (llm || name.split(":")[0] || "").toLowerCase().trim();
-  const brand = dictGet(BRANDS, key);
+  const brand = dictGet(BRANDS, key) ?? dictGet(BRANDS, key.replace(/-\d+$/, ""));
   if (brand) return brand;
   if (HOSTISH.test(name.split(":")[0] ?? "")) return BRANDS.claude;
   return null;

@@ -16,7 +16,7 @@ import {
 import { loadPendingHandoff, completeHandoffRecap } from "../../hooks/lib/handoff-claims.mjs";
 import { orchWriterSid } from "../../lib/project.mjs";
 import { freshEngaged, originalStillWorking } from "../../bin/baton-close.mjs";
-import { takeoverSessionId } from "../../bin/crew/open.mjs";
+import { takeoverSessionId, supersededHandoff, HANDOFF_SUPERSEDE_GRACE_SECS } from "../../bin/crew/open.mjs";
 import { resolveOrchestratorDir } from "../../bin/crew/worktrees.mjs";
 import { drillEnv } from "../drill-env.mjs";
 
@@ -849,6 +849,50 @@ rmSync(projDir, { recursive: true, force: true });
   writeFileSync(hf, JSON.stringify({ ...baseRec, consumed: true }));
   ok("open: with nothing unclaimed, the recorded sid resumes as before", runFn() === "recorded-sid");
   rmSync(bus, { recursive: true, force: true });
+}
+
+// ---- #11641: a pending handoff is not claimed over a NEWER conversation. The incident: an auto
+// handoff written 10-10 sat unconsumed while its own session kept working until 10-13; `trantor open`
+// still spawned a fresh session to claim it and dropped two days of context. Temp HOME throughout.
+{
+  const home = join(tmpdir(), `tt-superseded-${process.pid}`);
+  const bus = join(home, ".agent-bus");
+  const projDir = join(home, "dev", "proj");
+  const slugDir = join(home, ".claude", "projects", projDir.replace(/[/.]/g, "-"));
+  mkdirSync(join(bus, "handoffs"), { recursive: true });
+  mkdirSync(slugDir, { recursive: true });
+  const hf = join(bus, "handoffs", "proj-1000000300.json");
+  const stamp = 1000000300;
+  const ctx = { env: { AGENT_BUS_DIR: bus }, home, project: "proj", dir: projDir };
+  const arm = (extra = {}) => writeFileSync(hf, JSON.stringify({ id: "proj-1000000300", project: projDir, projectName: "proj", trigger: "auto", stamp, summary: "STALE", consumed: false, session_id: "rec-sid", states: [{ state: "written", ts: 1, by: "rec-sid" }], ...extra }));
+  const transcript = join(slugDir, "rec-sid.jsonl");
+  const touch = (path, secs) => { writeFileSync(path, "{}\n"); utimesSync(path, secs, secs); };
+  const before = () => readFileSync(hf, "utf8");
+
+  arm(); touch(transcript, stamp + 2 * 86400);
+  const snap = before();
+  ok("superseded: a transcript days newer than the handoff resumes the recorded session", takeoverSessionId(ctx, "rec-sid") === "rec-sid");
+  const sup = supersededHandoff(ctx, "rec-sid");
+  ok("superseded: both times are reported", sup && sup.handoffAt === stamp && sup.workedAt === stamp + 2 * 86400);
+  ok("superseded: the handoff file is left untouched and unclaimed", before() === snap);
+
+  touch(transcript, stamp + HANDOFF_SUPERSEDE_GRACE_SECS - 1);
+  ok("superseded: work inside the grace window is not later work (fresh takeover)", takeoverSessionId(ctx, "rec-sid") !== "rec-sid");
+
+  touch(transcript, stamp - 500);
+  ok("superseded: a transcript not newer than the handoff takes over fresh", takeoverSessionId(ctx, "rec-sid") !== "rec-sid");
+
+  touch(transcript, stamp + 2 * 86400);
+  ok("superseded: a handoff from a different session still takes over fresh", takeoverSessionId(ctx, "other-sid") !== "other-sid");
+  arm({ session_id: "someone-else" });
+  ok("superseded: a handoff whose session differs from the recorded one takes over fresh", takeoverSessionId(ctx, "rec-sid") !== "rec-sid");
+
+  arm(); rmSync(transcript);
+  ok("superseded: a missing transcript takes over fresh", takeoverSessionId(ctx, "rec-sid") !== "rec-sid");
+
+  arm({ transcript_path: join(home, "elsewhere.jsonl") }); touch(join(home, "elsewhere.jsonl"), stamp + 2 * 86400);
+  ok("superseded: the handoff's own transcript_path is honoured", takeoverSessionId(ctx, "rec-sid") === "rec-sid");
+  rmSync(home, { recursive: true, force: true });
 }
 
 // ---- #11577: a print-mode one-shot (`claude -p`) claims NOTHING. The incident: a drill one-shot

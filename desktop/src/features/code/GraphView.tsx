@@ -2,7 +2,7 @@
 // `code_graph`, drawn as Flare's flow layout, opened collapsed to one card per top-level
 // directory (rule 7), each cluster expanding in place. Clusters / Activity / Cycles are tones
 // over the same cards. No drag, no persisted positions: the layout is deterministic.
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { hueOf } from "../../shared/Avatar";
 import { DistrictsView } from "./DistrictsView";
 import { districtsOf, heatFill } from "./graph/districts";
@@ -22,14 +22,14 @@ import {
 } from "./graph/deriveGraph";
 import { GRAFT_MISSING, graphApi, isGraphError, type CodeGraphResponse, type GraphApi } from "./graph/graphApi";
 import { isBuildOutput, quietRebuild, rebuildWorthy } from "./graph/refresh";
+import { graphViewState, saveGraphViewState, type GraphLayout } from "./graph/graphViewState";
 import { unreadCount, unreadMarks, type ChangeStamp, type FileEvent } from "./graph/unread";
 
 const CARD_W = 112;
 const CARD_H = 30;
 const PAD = 40;
 
-/** flow = Flare's flow layout (the default); districts = the treemap (#7978). */
-export type GraphLayout = "flow" | "districts";
+export type { GraphLayout };
 export const LAYOUTS: readonly GraphLayout[] = ["flow", "districts"];
 const DEFAULT_PANE = { w: 960, h: 560 };
 
@@ -140,15 +140,22 @@ export function GraphView({ project, seat, onOpen, api = graphApi }: {
   // Opening a card from the graph is the read: the lens clears at once, the hub's event follows.
   const [localReads, setLocalReads] = useState<FileEvent[]>([]);
   const [stamps, setStamps] = useState<ChangeStamp[]>([]);
-  const [expanded, setExpanded] = useState<ReadonlySet<string>>(new Set());
-  const [lens, setLens] = useState<GraphLens>("clusters");
-  const [layout, setLayout] = useState<GraphLayout>("flow");
-  const [selected, setSelected] = useState<string | null>(null);
+  // The view state is seeded from the per-project store and written back on change (#11603), so
+  // leaving the graph for a file and returning finds layout, lens, districts, selection and pan.
+  const [saved] = useState(() => graphViewState(project));
+  const [expanded, setExpanded] = useState<ReadonlySet<string>>(saved.expanded);
+  const [lens, setLens] = useState<GraphLens>(saved.lens);
+  const [layout, setLayout] = useState<GraphLayout>(saved.layout);
+  const [selected, setSelected] = useState<string | null>(saved.selected);
   const [pane, setPane] = useState(DEFAULT_PANE);
   const canvasRef = useRef<HTMLDivElement | null>(null);
   const [rebuilding, setRebuilding] = useState(false);
   // Only the newest request may land: a slow build must not overwrite a newer scope's graph.
   const requestRef = useRef(0);
+
+  useEffect(() => {
+    saveGraphViewState(project, { expanded, lens, layout, selected });
+  }, [project, expanded, lens, layout, selected]);
 
   const load = useCallback((mode: "fresh" | "rebuild") => {
     const id = ++requestRef.current;
@@ -245,6 +252,17 @@ export function GraphView({ project, seat, onOpen, api = graphApi }: {
     onOpen(node.id);
   };
 
+  // The pan: restored once, when the canvas first has content to scroll, then saved as it moves.
+  const panRestored = useRef(false);
+  const canvasReady = scene !== null && scene.placed.length > 0;
+  useLayoutEffect(() => {
+    const el = canvasRef.current;
+    if (!el || !canvasReady || panRestored.current) return;
+    panRestored.current = true;
+    el.scrollLeft = saved.scrollLeft;
+    el.scrollTop = saved.scrollTop;
+  }, [canvasReady, saved]);
+
   const error = loadError ?? (response && isGraphError(response) ? response.error : null);
   const scopeLabel = seat ? `seat/${seat}` : "the project checkout";
 
@@ -316,7 +334,15 @@ export function GraphView({ project, seat, onOpen, api = graphApi }: {
         </div>
       </div>
 
-      <div ref={canvasRef} className="relative min-h-0 flex-1 overflow-auto" data-testid="graph-canvas">
+      <div
+        ref={canvasRef}
+        className="relative min-h-0 flex-1 overflow-auto"
+        data-testid="graph-canvas"
+        onScroll={e => {
+          if (!panRestored.current) return;
+          saveGraphViewState(project, { scrollLeft: e.currentTarget.scrollLeft, scrollTop: e.currentTarget.scrollTop });
+        }}
+      >
         {error ? (
           <div className="flex h-full items-center justify-center">
             <div className="tr-card-ghost max-w-[460px] px-6 py-5 text-center text-[12.5px] leading-relaxed" data-testid="graph-error">

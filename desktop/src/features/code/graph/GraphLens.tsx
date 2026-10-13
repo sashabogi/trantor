@@ -46,7 +46,7 @@ export function GraphLens({ client, project, lens, onLens, seat, onSeat, onOpenF
           </div>
         </div>
         <div className="min-h-0 flex-1 overflow-hidden rounded-xl border border-tr-edge bg-[#101013] p-1.5">
-          <GraphView project={project} seat={seat} onOpen={onOpenFile} api={graphApi} />
+          <GraphView key={project} project={project} seat={seat} onOpen={onOpenFile} api={graphApi} />
         </div>
       </div>
     </div>

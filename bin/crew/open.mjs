@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { existsSync, openSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { existsSync, openSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { spawn, execSync } from "node:child_process";
@@ -43,19 +43,44 @@ function sessionId(ctx) {
   return id;
 }
 
-export function hasPendingHandoff(ctx) {
+// #11641: a handoff is stale once its own session kept working after writing it (auto handoffs fire
+// at a context threshold, not at the end). Slack so the write itself, and the hook flushing the
+// transcript around it, never read as "later work".
+export const HANDOFF_SUPERSEDE_GRACE_SECS = 120;
+
+function unconsumedHandoffs(ctx) {
   const dir = join(ctx.env.AGENT_BUS_DIR || ctx.env.RELAY_DATA_DIR || join(ctx.home, ".agent-bus"), "handoffs");
-  if (!existsSync(dir)) return false;
+  if (!existsSync(dir)) return [];
   const prefix = `${ctx.project}-`;
+  const out = [];
   for (const file of readdirSync(dir).filter(name => name.startsWith(prefix) && name.endsWith(".json")).sort().reverse()) {
-    try { if (!JSON.parse(readFileSync(join(dir, file), "utf8")).consumed) return true; }
+    try { const rec = JSON.parse(readFileSync(join(dir, file), "utf8")); if (!rec.consumed) out.push({ file, rec }); }
     catch {}
   }
-  return false;
+  return out;
+}
+
+// The handoff written BY the recorded session `id` whose transcript has since grown past it, or null.
+export function supersededHandoff(ctx, id) {
+  for (const { file, rec } of unconsumedHandoffs(ctx)) {
+    if (!id || rec.session_id !== id || !(Number(rec.stamp) > 0)) continue;
+    const slug = String(rec.project || ctx.dir || "").replace(/[/.]/g, "-");
+    const transcript = rec.transcript_path || join(ctx.home, ".claude", "projects", slug, `${id}.jsonl`);
+    try {
+      const workedAt = statSync(transcript).mtimeMs / 1000;
+      if (workedAt > Number(rec.stamp) + HANDOFF_SUPERSEDE_GRACE_SECS) return { file, handoffAt: Number(rec.stamp), workedAt };
+    } catch {}
+  }
+  return null;
+}
+
+export function hasPendingHandoff(ctx, id) {
+  const sup = id ? supersededHandoff(ctx, id) : null;
+  return unconsumedHandoffs(ctx).some(({ file }) => !sup || file !== sup.file);
 }
 
 export function takeoverSessionId(ctx, id) {
-  return hasPendingHandoff(ctx) ? randomUUID() : id;
+  return hasPendingHandoff(ctx, id) ? randomUUID() : id;
 }
 
 function harnessFlag(ctx) {
@@ -201,7 +226,12 @@ export function openOrchestrator(ctx, args) {
     if (!ctx.dry) maybeBuildGraft(ctx.dir);
     if (!ctx.have.herdr) throw new Error("trantor open needs herdr (the pane host) — install: curl -fsSL https://herdr.dev/install.sh | sh");
     let id = sessionId(ctx);
-    if (hasPendingHandoff(ctx)) {
+    const stale = supersededHandoff(ctx, id);
+    if (stale) {
+      const at = secs => new Date(secs * 1000).toISOString();
+      console.error(`— handoff ${stale.file} was superseded by later work in session ${id} (handoff ${at(stale.handoffAt)}, transcript ${at(stale.workedAt)}): resuming it, leaving the handoff unclaimed —`);
+    }
+    if (hasPendingHandoff(ctx, id)) {
       const fresh = takeoverSessionId(ctx, id);
       console.error(`— recorded session ${id} handed off: starting fresh as ${fresh} to claim it —`);
       id = fresh;
