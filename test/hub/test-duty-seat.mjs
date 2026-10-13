@@ -1,17 +1,8 @@
 #!/usr/bin/env node
-// trantor duty-model drill — the always-on triage seat must not silently inherit the operator's
-// interactive model.
-//
-// Found 2026-08-24. bin/duty.mjs spawned crew-runner with only RELAY_URL, RUNNER_RULES and
-// CREW_KICKOFF set. crew-runner reads CREW_MODEL, nothing set it, so the {M} placeholder stayed
-// empty and the seat ran plain `claude -p …` with no --model flag. That takes the CLI default,
-// which on this machine was opus[1m] at high effort: 1,457 turns and 66 hours of Opus in 23 days,
-// for work whose own rules open "you NEVER write code" (read a message, run a patrol script, send
-// a templated nudge, post 280 chars). Nobody chose it; it was inherited.
-//
-// The seat runs a REAL CLI, so this drill puts a fake `claude` on PATH that records its argv.
+// Duty must pin its own model instead of inheriting an expensive interactive default.
+// A fake Claude records argv from the real runner without starting an operator session.
 import http from "node:http";
-import { spawn, spawnSync } from "node:child_process";
+import { spawn } from "node:child_process";
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, chmodSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
@@ -44,6 +35,8 @@ async function dutyUp(extraArgs = [], extraEnv = {}) {
   const w = mkdtempSync(join(tmpdir(), "tt-dutymodel-"));
   const BUS = join(w, "bus"); mkdirSync(join(BUS, "fleet"), { recursive: true });
   const fakebin = join(w, "bin"); mkdirSync(fakebin, { recursive: true });
+  // Each leg is fresh; production's prior-seat sweep must not reach host processes.
+  writeFileSync(join(fakebin, "pkill"), "#!/bin/sh\nexit 1\n", { mode: 0o755 });
   const ARGV = join(w, "argv.log");
   writeFileSync(join(fakebin, "claude"), `#!/bin/sh\necho "$@" >> ${ARGV}\nexit 0\n`);
   chmodSync(join(fakebin, "claude"), 0o755);
@@ -54,6 +47,7 @@ async function dutyUp(extraArgs = [], extraEnv = {}) {
   // (detached), with stdout where the plist points. A no-op stub would make the keepalive drills
   // pass vacuously — `up` would report "no runner seen" and the seat would never run a turn.
   const LC = join(w, "launchctl.log");
+  const spawnedPids = join(w, "spawned-pids");
   writeFileSync(join(fakebin, "launchctl"), `#!/bin/sh
 echo "$@" >> ${LC}
 case "$1" in
@@ -61,7 +55,10 @@ case "$1" in
     PL="$3"
     L=$(sed -n 's/.*<string>\\(.*duty-launch\\.sh\\)<\\/string>.*/\\1/p' "$PL" | head -1)
     O=$(sed -n 's/.*<string>\\(.*duty\\.log\\)<\\/string>.*/\\1/p' "$PL" | head -1)
-    [ -n "$L" ] && nohup /bin/bash "$L" >> "\${O:-/dev/null}" 2>&1 &
+    if [ -n "$L" ]; then
+      nohup /bin/bash "$L" >> "\${O:-/dev/null}" 2>&1 &
+      echo $! >> "${spawnedPids}"
+    fi
     ;;
 esac
 exit 0
@@ -69,12 +66,7 @@ exit 0
   chmodSync(join(fakebin, "launchctl"), 0o755);
   writeFileSync(join(BUS, "config.json"), JSON.stringify({ url: HUB, ownerIdentity: "admin" }));
 
-  // The drill tests duty's OWN model defaulting and launcher payload, so the invoking shell's
-  // seat-injection vars must never reach it: run from a crew seat, `crew-runner` exports
-  // CREW_MODEL (glm:trantor carries zai-coding-plan/glm-5.3-flash), and "…the default is a
-  // mid-tier model" / "--model inherit" flip to false failures with no product bug behind them.
-  // extraEnv below is the ONLY way these legitimately enter a leg (the CREW_MODEL escape-hatch
-  // drill relies on that). Found 2026-08-31 running the drill from a seat shell.
+  // Model overrides must come from extraEnv, not the seat running this drill.
   const baseEnv = { ...drillEnv() };
   for (const k of ["CREW_MODEL", "CREW_KICKOFF", "RUNNER_RULES", "RUNNER_TITLE", "RUNNER_ABOUT"]) delete baseEnv[k];
 
@@ -83,11 +75,7 @@ exit 0
   const r = await new Promise((resolve) => {
     const kid = spawn(process.execPath, [join(ROOT, "bin", "duty.mjs"), "up", "--hub", HUB, ...extraArgs], {
       stdio: ["ignore", "pipe", "pipe"],
-      // Pin the surface to Terminal. These drills assert on the WINDOW the seat opens — its title,
-      // what it says about itself — by stubbing osascript on PATH. Since 0.18.7 the seat prefers
-      // cmux when one answers, so on a machine with cmux installed every one of those assertions
-      // would test nothing and fail. CREW_MUX is the same override bin/crew.mjs uses.
-      // The cmux path has its own drill below.
+      // Pin Terminal so the stubbed osascript observes the window payload even with cmux installed.
       env: { ...baseEnv, HOME: w, AGENT_BUS_DIR: BUS, PATH: `${fakebin}:${process.env.PATH}`,
              RELAY_URL: HUB, TRANTOR_NO_UPDATE_CHECK: "1", CREW_MUX: "terminal", ...extraEnv },
     });
@@ -97,19 +85,17 @@ exit 0
     setTimeout(() => { try { kid.kill("SIGKILL"); } catch {} }, 25000).unref?.();
   });
   await sleep(4500);                                  // let the kickoff turn actually run
-  // Guard the pid: in --window mode the stubbed osascript never executes the launcher, so no
-  // runner starts and duty writes 0 to the pidfile. process.kill(0, …) means "every process in
-  // the CALLER's process group" (POSIX pid-0) — unguarded, this drill SIGKILLed its own group:
-  // standalone it died silently mid-run; under `npm test` npm, sh, the suite runner and this file
-  // all share one group, so the whole suite was killed at once and the invoking session sat
-  // waiting on the dead pipeline — the "harness hang" these window legs were guarded behind
-  // (2026-08-20 class suspicion was stdin; the mock-hub stdin paths are all stdio:"ignore" and
-  // were never the mechanism).
+  // Window mode records PID 0 because osascript is stubbed; never signal the caller's group.
   try { const pid = Number(readFileSync(join(BUS, "duty.pid"), "utf8")); if (Number.isInteger(pid) && pid > 0) process.kill(pid, "SIGKILL"); } catch {}
-  // The seat dir is trantor-duty now (identity-by-name, not "fleet") — a pkill aimed at the old
-  // path leaked one live runner per harness run, and the leaked pack wedged the mock hub by the
-  // --window block. Sweep the whole throwaway bus, not one hardcoded child dir.
-  spawnSync("pkill", ["-f", `crew-runner.mjs claude ${BUS}`]);
+  // The fake launchctl owns these launcher PIDs; cleanup must never match process names.
+  if (existsSync(spawnedPids)) {
+    for (const value of readFileSync(spawnedPids, "utf8").trim().split(/\s+/)) {
+      const pid = Number(value);
+      if (Number.isSafeInteger(pid) && pid > 0) {
+        try { process.kill(pid, "SIGKILL"); } catch {}
+      }
+    }
+  }
   const log = (() => { try { return readFileSync(join(BUS, "duty.log"), "utf8"); } catch { return ""; } })();
   const osa = (() => { try { return readFileSync(join(w, "osascript.log"), "utf8"); } catch { return ""; } })();
   const launcher = (() => { try { return readFileSync(join(BUS, "duty-launch.sh"), "utf8"); } catch { return ""; } })();
@@ -146,10 +132,7 @@ console.log("\nAnd the operator can still choose:");
 
 console.log("\nA stranger who sees this window can tell what it is:");
 {
-  // Product concern, raised 2026-08-24: trantor installs, a terminal window opens by itself, and
-  // it says "◤ CLAUDE ◢ trantor crew · fleet". Someone who does not already know what they are
-  // looking at has no way to tell what just started on their machine, what it is doing, or how to
-  // stop it. An unexplained agent window is alarming, and rightly so.
+  // An automatically opened window must explain its purpose and how to stop it.
   const r = await dutyUp();
   ok("the window names it in full: Trantor Duty Agent", /Trantor Duty Agent/.test(r.log), r.log.slice(0, 200));
   ok("…says what it does", /triage|watches|escalat/i.test(r.log), r.log.slice(0, 300));
@@ -165,10 +148,7 @@ console.log("\nA stranger who sees this window can tell what it is:");
 
 console.log("\nBy default the seat runs headless under a launchd keepalive:");
 {
-  // The 2026-08-27→31 incident: the window-open failed, the headless fallback printed one quiet
-  // line, and the fleet had no watcher for four days. The default is now headless UNDER LAUNCHD
-  // (KeepAlive), so a crash or reboot relaunches the seat instead of silently ending it — and
-  // `up` says which mode it chose.
+  // KeepAlive must restart duty after a crash, and up must describe the selected mode.
   const r = await dutyUp();
   ok("no window is opened", !/do script/.test(r.osa), r.osa.slice(0, 160));
   ok("a keepalive plist is installed", /KeepAlive/.test(r.plist) && /com\.trantor\.duty/.test(r.plist), r.plist.slice(0, 200));
@@ -181,13 +161,8 @@ console.log("\nBy default the seat runs headless under a launchd keepalive:");
     `${r.launcher.length} chars`);
   ok("up SAYS the seat is headless under keepalive", /headless under the launchd keepalive/.test(r.stdout), r.stdout.slice(0, 200));
   ok("the seat actually ran under the keepalive (pid found, turn ran)", /pid [1-9]/.test(r.stdout) && /--model/.test(r.argv), r.stdout.slice(0, 140));
-  // The launcher must SURVIVE /bin/bash — the rules carry backticks, and the old $(cat <<'EOF')
-  // encoding silently dropped CREW_KICKOFF and RUNNER_RULES under macOS bash 3.2 (the seat ran
-  // with the runner's generic kickoff and no triage rules at all). Regression lock: execute the
-  // launcher (exec swapped for a no-op — `env` here DUMPED the whole environment to stdout and
-  // the assertion read the dump's first line as its char count, a drill bug that indicted a
-  // correct launcher) and require the full rules through the other side. Secrets stay out of the
-  // failure detail: report lengths, never values.
+  // Backticks in the rules must survive Bash. Replace exec with a no-op and report lengths,
+  // never dump the environment, which could disclose secrets.
   const probe = r.launcher.replace(/^exec .*$/m, ':');
   const { spawnSync: ss } = await import("node:child_process");
   const run = ss("/bin/bash", ["-c", `${probe}\nprintf "%s" "$RUNNER_RULES" | wc -c\nprintf "%s" "$RUNNER_TITLE"`], { encoding: "utf8" });
@@ -199,12 +174,7 @@ console.log("\nBy default the seat runs headless under a launchd keepalive:");
     `exit=${run.status} rulesChars=${rulesChars} titleLen=${title.length} stderrLen=${(run.stderr || "").length}`);
 }
 
-// The --window and --headless-alias legs below were guarded behind TRANTOR_DRILL_WINDOW=1 for
-// days as a "harness hang under the mock hub". Found 2026-08-31 while fixing #5694: there was no
-// hang — the drill was killing itself. dutyUp() read the pidfile and called process.kill(pid)
-// without guarding 0, and window mode legitimately has no runner (the stubbed osascript does not
-// execute the launcher), so pid was 0 = "my own process group". Unguarded now; the pid guard in
-// dutyUp() is the fix, and these legs always run.
+// #5694: the positive-PID cleanup guard makes window and headless legs safe to run together.
 
 console.log("\n--window still gives you the visible surface, honestly labelled:");
 {

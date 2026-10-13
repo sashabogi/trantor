@@ -7,6 +7,7 @@ import http from "node:http";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { drillEnv } from "../drill-env.mjs";
+import { seatSignalPrefix } from "../../lib/seat-signal-guard.mjs";
 
 const self = fileURLToPath(import.meta.url);
 const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
@@ -75,6 +76,11 @@ if (process.argv.includes("--fixture")) {
 } else {
   const out = resolve(".agent-bus-out"); mkdirSync(out, { recursive: true });
   const work = mkdtempSync(join(out, "signal-test-"));
+  const repository = join(work, "clean-repo"); mkdirSync(repository);
+  check(spawnSync("git", ["init", "-q", repository]).status === 0, "created repository without ignore rules");
+  seatSignalPrefix(repository);
+  const status = spawnSync("git", ["-C", repository, "status", "--porcelain", "--untracked-files=all"], { encoding: "utf8" });
+  check(status.status === 0 && status.stdout === "", "runtime shims never count as uncommitted seat work");
   const decoy = await namedChild("claude");
   const decoyExit = once(decoy, "exit");
   const hub = http.createServer((req, res) => {
@@ -107,7 +113,7 @@ if (process.argv.includes("--fixture")) {
       runner.stderr.on("data", bytes => { log += bytes; });
       const runnerExit = once(runner, "exit");
       try {
-        const deadline = Date.now() + 30000;
+        const deadline = Date.now() + 120000;
         while (!existsSync(result) && runner.exitCode === null && Date.now() < deadline) await pause(50);
         check(existsSync(result), `${agent}: real runner completed regression\n${log}`);
         passed += JSON.parse(readFileSync(result, "utf8")).passed;

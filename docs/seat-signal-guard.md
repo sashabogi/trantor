@@ -30,6 +30,19 @@ outside decoy named claude. The test checks the exact incident command, broad
 matches, mixed PID sets, and successful cleanup of owned children. It asserts
 shim resolution before any broad command and only cleans up PIDs it spawned.
 
+The runner's VM-based turn-box and turn-state tests must inject the real
+`seatSignalPrefix` helper when evaluating `runTurn`; omitting its imported
+binding fails before a CLI starts. Turn-box also observes both shell contexts:
+the CLI resolves kill to the guard, while the supervisor still reports its
+native builtin after fast completion, a box cut, and a disabled box. Cut/park
+passes unchanged on integration base d748deb with the guard present.
+
+The guard directory ignores its own runtime files even when the repository has
+no ignore rules. Otherwise the eight generated shims/startup files make an
+untouched seat appear dirty and enter the runner's automatic cut snapshot.
+The duty-seat fixture records launcher PIDs for cleanup instead of matching
+process names, and stubs the production prior-seat sweep in its fresh fixture.
+
 These inherited command guards prevent accidental broad shell cleanup. They
 are not a kernel security boundary: explicit system binaries, cleared shell
 environments, or code calling kill(2) can bypass them. A true hostile-code

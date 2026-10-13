@@ -17,6 +17,7 @@ import { snapshotBeforeCut } from "../../bin/cut-snapshot.mjs";
 import { newContainers, recordContainers } from "../../lib/docker-janitor.mjs";
 import { readTurnStateFile, refreshTurnLiveness, writeTurnState, writeTurnStateFile } from "../../lib/turnstate.mjs";
 import { withEnvFiles } from "../../lib/project.mjs";
+import { seatSignalPrefix } from "../../lib/seat-signal-guard.mjs";
 import { shadowEnv, withSecretExports } from "../../lib/secrets.mjs";
 
 const ROOT = new URL("../../", import.meta.url).pathname.replace(/\/$/, "");
@@ -44,7 +45,7 @@ async function drill(t, { maxMs, cliBody }) {
   const rows = [], logs = [];
   const record = (...args) => logs.push(args.join(" "));
   const context = createContext({
-    ...fs, ...classify, join, redactKeys, parseTurnTokens, withEnvFiles, setTimeout,
+    ...fs, ...classify, join, redactKeys, parseTurnTokens, withEnvFiles, seatSignalPrefix, setTimeout,
     // #6393: the store is keychain I/O, stubbed empty like the hub; the shell helpers are the real ones.
     shadowEnv, withSecretExports, resolveSecrets: () => ({}),
     // #7749: the real turn-state writer, aimed at the drill's bus dir — not the live ~/.agent-bus.
