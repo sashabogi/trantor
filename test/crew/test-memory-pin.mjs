@@ -1,3 +1,5 @@
+import fs from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync, statSync, readdirSync } from "node:fs";
@@ -5,7 +7,7 @@ import { basename, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { test } from "node:test";
 import { checkMemory, memoryDirectory, notePins } from "../../lib/memory-pins.mjs";
-import { extractMentions, pinMemory, replaceNotePins } from "../../lib/memory-pin-write.mjs";
+import { extractMentions, formatMemoryPin, pinMemory, replaceNotePins } from "../../lib/memory-pin-write.mjs";
 
 const root = fileURLToPath(new URL("../..", import.meta.url));
 const out = join(root, ".agent-bus-out");
@@ -236,3 +238,60 @@ test("new pins use atomic rename and empty pins remain an empty list", t => {
     { file: "absent.mjs" }, { file: "src/missing" },
   ]);
 });
+
+test("bulk pin treats ENOTDIR and overlong mentions as missing and still pins other notes", t => {
+  const f = fixture(t);
+  writeFileSync(join(f.project, "file.mjs"), "export const value = 1;\n");
+  const tooLong = `${"a".repeat(300)}.mjs`;
+  f.write("a-paths.md", `file.mjs/other.html ${tooLong} README.md\n`);
+  f.write("z-good.md", "src/code.mjs#advise\n");
+  f.write("MEMORY.md", "file.mjs/other.html\n");
+  const result = f.cli("pin", "--all", "--json");
+  assert.equal(result.status, 0, result.stderr);
+  const notes = JSON.parse(result.stdout).notes;
+  assert.deepEqual(notes[0].diagnostics, ["file.mjs/other.html", tooLong]
+    .map(path => `mentions a path that doesn't exist: ${path}`));
+  assert.deepEqual(notePins(f.read("a-paths.md")).map(pin => pin.file), ["README.md"]);
+  assert.equal(notePins(f.read("z-good.md"))[0].symbol, "src/code.mjs#advise");
+  assert.equal(f.read("MEMORY.md"), "file.mjs/other.html\n");
+  assert.ok(f.pin({ all: true }).notes.every(note => !note.changed));
+});
+
+test("stat permission errors are missing mentions instead of aborting graph refresh", t => {
+  const f = fixture(t);
+  f.write("note.md", "README.md src/code.mjs#advise\n");
+  const stat = fs.statSync;
+  t.mock.method(fs, "statSync", (path, ...args) => {
+    if (path === join(f.project, "README.md")) throw Object.assign(new Error("EACCES: fixture denied"), { code: "EACCES" });
+    return stat(path, ...args);
+  });
+  syncBuiltinESMExports();
+  t.after(() => { t.mock.restoreAll(); syncBuiltinESMExports(); });
+  const result = f.pin({ all: true });
+  assert.deepEqual(result.notes[0].diagnostics, ["mentions a path that doesn't exist: README.md"]);
+  assert.equal(notePins(f.read("note.md"))[0].symbol, "src/code.mjs#advise");
+});
+
+for (const operation of ["readFileSync", "renameSync"]) {
+  test(`bulk pin isolates a note's ${operation} failure and continues`, t => {
+    const f = fixture(t);
+    f.write("a-bad.md", "README.md\n");
+    f.write("z-good.md", "src/code.mjs#advise\n");
+    const original = fs[operation];
+    t.mock.method(fs, operation, (...args) => {
+      const path = args[operation === "renameSync" ? 1 : 0];
+      if (path === join(f.memoryDir, "a-bad.md")) throw new Error("EACCES: fixture denied note");
+      return original(...args);
+    });
+    syncBuiltinESMExports();
+    let result;
+    try { result = f.pin({ all: true }); }
+    finally { t.mock.restoreAll(); syncBuiltinESMExports(); }
+    assert.equal(result.notes[0].failed, true);
+    assert.equal(result.notes[0].changed, false);
+    assert.match(formatMemoryPin(result), /a-bad.md: failed[^]*EACCES: fixture denied note/);
+    assert.equal(f.read("a-bad.md"), "README.md\n");
+    assert.equal(notePins(f.read("z-good.md"))[0].symbol, "src/code.mjs#advise");
+    assert.deepEqual(readdirSync(f.memoryDir).sort(), ["a-bad.md", "z-good.md"]);
+  });
+}
