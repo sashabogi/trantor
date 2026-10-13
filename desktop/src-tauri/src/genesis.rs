@@ -313,8 +313,40 @@ pub(crate) async fn project_new(args: ProjectNewArgs) -> Result<String, String> 
     Ok(stdout)
 }
 
+/// One trace line per wake phase and per error, into app-trace.log (#11640). A Resume click that
+/// did nothing used to leave no evidence of which step it died at.
+fn wake_trace_line(project: &str, step: &str) -> String {
+    format!("wake: {project} {}", crate::succession::trace_summary(step))
+}
+
+fn wake_trace(project: &str, step: &str) {
+    crate::changes::trace(wake_trace_line(project, step));
+}
+
+/// What project_wake answers once `trantor open` has returned and the pane is recorded (#11640):
+/// the kickoff ladder runs on in the background and reports through wake-progress, so a slow or
+/// failing kickoff is the project row's business and never a failed Resume.
+fn reopened_label(pane: &str) -> String {
+    format!("project awake in pane {pane} · kickoff running in the background")
+}
+
 #[tauri::command]
 pub(crate) async fn project_wake(
+    app: tauri::AppHandle,
+    project: String,
+    kickoff: String,
+) -> Result<String, String> {
+    let shown = project.trim().to_string();
+    wake_trace(&shown, "start");
+    let result = project_wake_run(app, project, kickoff).await;
+    match &result {
+        Ok(line) => wake_trace(&shown, &format!("ok: {line}")),
+        Err(error) => wake_trace(&shown, &format!("error: {error}")),
+    }
+    result
+}
+
+async fn project_wake_run(
     app: tauri::AppHandle,
     project: String,
     kickoff: String,
@@ -345,6 +377,7 @@ pub(crate) async fn project_wake(
     let rows =
         std::fs::read_to_string(desktop_bus_dir().join("crew-windows.txt")).unwrap_or_default();
     if let Some(pane) = orch_pane_from_rows(&rows, &project) {
+        wake_trace(&project, &format!("tracked pane {pane}, checking herdr"));
         let mut panes = crate::identity_env::async_command("herdr");
         panes.args(["pane", "list"]).env("PATH", terminal_path());
         let (pane_rows, _) = run_command_output(panes, "herdr pane list").await?;
@@ -353,7 +386,13 @@ pub(crate) async fn project_wake(
         let mut list = crate::identity_env::async_command("herdr");
         list.args(["agent", "list"]).env("PATH", terminal_path());
         let (agents, _) = run_command_output(list, "herdr agent list").await?;
-        match pane_agent_state(&agents, &pane) {
+        let state = pane_agent_state(&agents, &pane);
+        wake_trace(&project, &format!("pane {pane} agent state {}", match state {
+            PaneAgentState::Idle => "idle",
+            PaneAgentState::Working => "working",
+            PaneAgentState::NoAgent => "none",
+        }));
+        match state {
             // A LIVE idle orchestrator: deliver the kickoff straight into it — no reopen, no
             // stacking, no "already has a live orchestrator" refusal the operator cannot see
             // past (#6138). The idle wait inside kickoff_after_reopen is already satisfied.
@@ -382,6 +421,7 @@ pub(crate) async fn project_wake(
         }
     }
 
+    wake_trace(&project, "no live agent, running trantor open");
     let mut reopen = crate::trantor_cli::async_command();
     reopen
         .args(project_wake_reopen_args(&project))
@@ -394,24 +434,29 @@ pub(crate) async fn project_wake(
         .ok_or_else(|| format!("trantor open did not record an orchestrator pane for {project}"))?;
     // The pane is live and booting — say so before the (possibly long) kickoff selection.
     emit_wake_progress(&app, &project, wake_phase::OPENED, None);
-    // The CLI decides the kickoff (#6112): it alone holds the checkout's docs/PRD.md AND the
-    // signed board, so a brief wakes into the crew's PRD review and a blank project wakes
-    // plainly. The app's own `kickoff` is the fallback for a CLI that cannot answer. The
-    // selector blocks on a signed hub read, so it runs off the async runtime's threads.
-    let kickoff = cli_decided_kickoff(&project, &dir, kickoff).await;
-    // The reopened session is BOOTING (#6139): a prompt fired straight after `trantor open` never
-    // reaches it. Ride the handoff chain's ladder; the progress callback feeds the row (#6201).
-    let KickoffReport {
-        outcome,
-        attempts,
-        elapsed_secs,
-    } = kickoff_after_reopen(&pane, kickoff, progress).await;
-    match outcome {
-        Ok(outcome) => Ok(wake_label(&pane, &outcome, attempts, elapsed_secs)),
-        Err(error) => Err(format!(
-            "project opened in pane {pane}, but the kickoff prompt failed after {attempts} attempt(s), {elapsed_secs}s: {error}"
-        )),
-    }
+    wake_trace(&project, &format!("trantor open returned, pane {pane} recorded"));
+    // #11640: the session is relaunched, so the wake is a success now. The kickoff ladder (idle
+    // gate, then retries, up to 90s each) runs detached and owns the wake-chain mark; its end
+    // reaches the row as a kickoff_landed event, an error outcome if the prompt never landed.
+    let background = (project.clone(), pane.clone());
+    tauri::async_runtime::spawn(async move {
+        let _wake = _wake;
+        let (project, pane) = background;
+        // The CLI decides the kickoff (#6112): it alone holds the checkout's docs/PRD.md AND the
+        // signed board, so a brief wakes into the crew's PRD review and a blank project wakes
+        // plainly. The app's own `kickoff` is the fallback for a CLI that cannot answer. The
+        // selector blocks on a signed hub read, so it runs off the async runtime's threads.
+        let kickoff = cli_decided_kickoff(&project, &dir, kickoff).await;
+        // The reopened session is BOOTING (#6139): a prompt fired straight after `trantor open`
+        // never reaches it. Ride the handoff chain's ladder; the progress callback feeds the row.
+        let KickoffReport { outcome, attempts, elapsed_secs } =
+            kickoff_after_reopen(&pane, kickoff, progress).await;
+        wake_trace(&project, &match outcome {
+            Ok(ref o) => format!("kickoff {} · {attempts} attempt(s), {elapsed_secs}s", kickoff_outcome_label(o)),
+            Err(ref e) => format!("kickoff failed after {attempts} attempt(s), {elapsed_secs}s: {e}"),
+        });
+    });
+    Ok(reopened_label(&pane))
 }
 
 /// The CLI decides the kickoff (#6112): it alone holds the checkout's docs/PRD.md AND the signed
@@ -425,20 +470,6 @@ async fn cli_decided_kickoff(project: &str, dir: &Path, fallback: String) -> Str
     })
     .await
     .unwrap_or_else(|_| fallback)
-}
-
-/// The line project_wake returns: where the session lives and what became of its boot prompt,
-/// with the tries and the seconds it took (#6139) — the same shape the handoff chain reports.
-fn wake_label(
-    pane: &str,
-    outcome: &herdr::PromptOutcome,
-    attempts: u32,
-    elapsed_secs: u64,
-) -> String {
-    format!(
-        "project awake in pane {pane} · kickoff: {} · {attempts} attempt(s), {elapsed_secs}s",
-        kickoff_outcome_label(outcome)
-    )
 }
 
 #[cfg(test)]
@@ -525,13 +556,23 @@ mod tests {
         assert!(many.contains("it holds a, b"), "{many}");
     }
 
-    // #6139 — the wake's line carries the kickoff outcome, the tries and the seconds, like the
-    // handoff's, so a wake that landed on the third try reads differently from one that stalled.
+    // #11640 — the reopen path answers as soon as the pane is recorded; the kickoff outcome is
+    // not in the answer, so a slow or failed kickoff can never read as a failed Resume.
     #[test]
-    fn wake_line_carries_kickoff_outcome_attempts_and_elapsed() {
-        let line = wake_label("pane-7", &herdr::PromptOutcome::Delivered, 3, 12);
-        assert!(line.starts_with("project awake in pane pane-7 · kickoff: prompt delivered"));
-        assert!(line.ends_with("· 3 attempt(s), 12s"), "{line}");
+    fn reopen_answer_names_the_pane_and_leaves_the_kickoff_to_the_row() {
+        let line = reopened_label("pane-7");
+        assert!(line.starts_with("project awake in pane pane-7"), "{line}");
+        assert!(!line.starts_with("kickoff sent"), "{line}");
+        assert!(!line.contains("failed"), "{line}");
+    }
+
+    #[test]
+    fn wake_trace_lines_name_the_project_and_stay_on_one_bounded_line() {
+        assert_eq!(wake_trace_line("builtbetter", "start"), "wake: builtbetter start");
+        let long = format!("error: herdr pane list failed:\n{}", "x".repeat(600));
+        let line = wake_trace_line("p", &long);
+        assert!(!line.contains('\n'), "{line}");
+        assert!(line.chars().count() < 280, "{}", line.chars().count());
     }
 
     #[test]

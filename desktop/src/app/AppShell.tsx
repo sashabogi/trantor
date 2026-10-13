@@ -22,6 +22,8 @@ import { OnboardingFlow } from "../features/onboarding/OnboardingFlow";
 import { DrillMode } from "../features/drill/DrillMode";
 import { onboardingApi } from "../features/onboarding/onboardingApi";
 import { shouldShowOnboarding, type OnboardingState } from "../features/onboarding/onboardingState";
+import { InterruptedStrip } from "./InterruptedStrip";
+import { guardedWake } from "./wakeGuard";
 import { PLAIN_WAKE_KICKOFF } from "../features/genesis/genesis";
 import { classifyWakeOutcome, wakeOutcomeIsTransient, wakeRowLine, WAKE_OUTCOME_MS, type WakeRowState } from "../features/genesis/wakeRow";
 import { applyWakeProgress, wakeInProgress, wakeProgressRowState, WAKE_PROGRESS_EVENT, type WakeProgress } from "../features/genesis/wakeProgress";
@@ -344,9 +346,9 @@ export function AppShell() {
   // WAKE makes a sleeping project live without leaving the app: one `trantor open` via the
   // frozen herdr bridge, which reattaches rather than stacks and claims any waiting handoff
   // with a fresh session id, so the click is idempotent. (#6138) Only the clicked row shows
-  // in-flight then its outcome; one wake at a time, a second click mid-open is a re-ask.
+  // in-flight then its outcome; one wake per project (#11640), a second click mid-open is a re-ask.
   const [wakeStates, setWakeStates] = useState<Map<string, WakeRowState>>(new Map());
-  const wakingRef = useRef(false);
+  const wakingRef = useRef<Set<string>>(new Set());
   const wakeTimers = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
   const setWakeState = (p: string, state: WakeRowState) => {
     setWakeStates(prev => new Map(prev).set(p, state));
@@ -368,9 +370,7 @@ export function AppShell() {
     if (!wakeOutcomeIsTransient(outcome)) return; // errors stay until the next click
     armOutcomeFade(p);
   };
-  const wakeProject = async (p: string) => {
-    if (wakingRef.current) return;
-    wakingRef.current = true;
+  const wakeProject = (p: string) => guardedWake(wakingRef.current, p, async () => {
     const pending = wakeTimers.current.get(p);
     if (pending) clearTimeout(pending);
     setWakeState(p, { phase: "running" });
@@ -389,10 +389,8 @@ export function AppShell() {
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       showOutcome(p, classifyWakeOutcome(null, msg));
-    } finally {
-      wakingRef.current = false;
     }
-  };
+  });
 
   // #6201: the wake reports its progress while it runs. A mount query covers a window
   // opened mid-wake, since an event alone tells it nothing until the next phase fires;
@@ -619,30 +617,14 @@ export function AppShell() {
         {restorables.length > 0 && (
           <div className="mb-3 flex flex-col gap-1">
             <SectionLabel count={restorables.length}>Interrupted</SectionLabel>
-            {restorables.map(r => (
-              <div key={r.project} className="flex items-center gap-2 rounded-lg bg-white/[0.03] px-3 py-1.5 text-[12px]">
-                <span className="min-w-0 flex-1">
-                  <span className="block truncate text-[var(--color-tr-text)]/85">{r.project}</span>
-                  <span className="block text-[10px] text-[var(--color-tr-muted)]">session died with the machine</span>
-                </span>
-                <button type="button"
-                  onClick={() => void wakeProject(r.project)}
-                  disabled={wakeUnderway(wakeStates.get(r.project))}
-                  className="shrink-0 rounded-[6px] bg-tr-ok/10 px-1.5 py-0.5 text-[10.5px] font-semibold text-tr-ok hover:bg-tr-ok/20 disabled:opacity-40">
-                  {wakeUnderway(wakeStates.get(r.project)) ? "Resuming…" : "Resume"}
-                </button>
-                <button type="button" title="dismiss — it stays wakeable from its project row"
-                  onClick={() => {
-                    dropRestorable(r.project);
-                    // #6476 — a dismissal is a decision, not a snooze: persist it so it survives
-                    // a restart. Fire-and-forget — the strip has already updated optimistically.
-                    void dismissedSessionsApi.dismiss(r.project, r.sessionId).catch(() => {});
-                  }}
-                  className="shrink-0 px-1 text-[12px] text-[var(--color-tr-muted)] hover:text-[var(--color-tr-text)]">
-                  ×
-                </button>
-              </div>
-            ))}
+            <InterruptedStrip rows={restorables} wakeStates={wakeStates}
+              onResume={p => void wakeProject(p)}
+              onDismiss={r => {
+                dropRestorable(r.project);
+                // #6476 — a dismissal is a decision, not a snooze: persist it so it survives
+                // a restart. Fire-and-forget — the strip has already updated optimistically.
+                void dismissedSessionsApi.dismiss(r.project, r.sessionId).catch(() => {});
+              }} />
           </div>
         )}
 
