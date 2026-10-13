@@ -9,6 +9,7 @@ mod drill_mode;
 mod genesis;
 mod graft_cli;
 mod right_panel;
+mod composer_draft;
 mod project_lens;
 mod ghost;
 mod handoff_drill;

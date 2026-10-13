@@ -71,6 +71,18 @@ pub(crate) fn project_lens_set(project: String, lens: String) -> Result<String, 
     serde_json::to_string(&project_lens::set(project, lens)?).map_err(|e| e.to_string())
 }
 
+/// #11665 — the chat composer's draft (words + attachment paths), durable per project. See
+/// composer_draft.rs.
+#[tauri::command]
+pub(crate) fn composer_draft_get(project: String) -> Result<String, String> {
+    serde_json::to_string(&composer_draft::get(project)?).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub(crate) fn composer_draft_set(project: String, draft: String) -> Result<(), String> {
+    composer_draft::set(project, draft)
+}
+
 /// The autonomy dials, read and written through the CLI: the dependency rules between dials live
 /// in lib/autonomy.mjs, and a Rust copy would drift on the side that decides whether we push.
 #[tauri::command]

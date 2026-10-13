@@ -231,6 +231,8 @@ pub fn run() {
             right_panel_set,
             project_lens_get,
             project_lens_set,
+            composer_draft_get,
+            composer_draft_set,
             save_pasted_image,
             attachment_info,
             draft_persist,
