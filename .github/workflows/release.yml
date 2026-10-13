@@ -104,6 +104,10 @@ jobs:
             exit 1
           fi
 
+      # Same as ci.yml: test/crew/test-memory-*.mjs shell out to graft.
+      - name: Install graft
+        run: npm i -g @nanonets/graft@0.16.0
+
       # Never publish unverified work. Same env scrub as ci.yml: the drills must not see a runner
       # identity, and each step gets a fresh shell, so unset and run in one.
       - name: Whole suite (npm test)
