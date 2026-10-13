@@ -4,12 +4,10 @@
 // via the agent's MCP config. Identity + hub URL come from env (RELAY_SESSION, RELAY_URL).
 // Loading this server AUTO-REGISTERS the session — so presence works on every agent.
 import { writeFileSync, readFileSync, existsSync, mkdirSync } from "node:fs";
-import { join, basename, dirname } from "node:path";
+import { join, basename } from "node:path";
 import { homedir, hostname } from "node:os";
 import { execSync, spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { createRequire } from "node:module";
-import { fileURLToPath, pathToFileURL } from "node:url";
 import { advise, loadWorld } from "./bin/advise.mjs";
 import { loadSeatRecord } from "./lib/seat-record.mjs";
 import { resolveProject, hostId, resolveHubInfo, nonSeatReason, handoffDir, orchWriterSid } from "./lib/project.mjs";
@@ -20,43 +18,7 @@ import { assertNoSecrets } from "./lib/scrub.mjs";
 import { isMessageCardTitle, OPEN_CARD_STATUSES } from "./lib/turn-policy.mjs";
 import { markDoing, hollowVerdict, blastRadius, blastLine } from "./hooks/lib/hollow-move.mjs";
 
-// Runtime dep resolution: `claude plugin install` snapshots the repo, not an npm tarball, so a
-// GitHub-sourced plugin ships no node_modules and a static SDK import dies with
-// ERR_MODULE_NOT_FOUND before any line runs — silently: every relay tool just disappears.
-// Resolve ourselves: plain import(spec) first; on NOT_FOUND borrow the global trantor's tree.
-const HERE = dirname(fileURLToPath(import.meta.url));
-const req = createRequire(import.meta.url);
-
-let fallbackRoots = null;
-function borrowRoots() {
-  if (fallbackRoots) return fallbackRoots;
-  const roots = [];
-  const add = (p) => { if (p && !roots.includes(p)) roots.push(p); };
-  // Cheap guesses first — every one of these is a string join, no process spawn.
-  if (process.env.npm_config_prefix) add(join(process.env.npm_config_prefix, "lib", "node_modules"));
-  add(join(dirname(process.execPath), "..", "lib", "node_modules"));   // homebrew, nvm, volta, asdf
-  // Only shell out if the guesses missed — `npm root -g` costs ~0.5s of MCP startup.
-  if (!roots.some((r) => existsSync(join(r, "trantor")))) {
-    try { add(execSync("npm root -g", { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim()); } catch {}
-  }
-  fallbackRoots = roots.flatMap((r) => [join(r, "trantor"), r]);
-  return fallbackRoots;
-}
-
-async function dep(spec) {
-  try {
-    return await import(spec);
-  } catch (err) {
-    if (err?.code !== "ERR_MODULE_NOT_FOUND" && err?.code !== "ERR_PACKAGE_PATH_NOT_EXPORTED") throw err;
-  }
-  for (const path of [HERE, ...borrowRoots()]) {
-    try { return await import(pathToFileURL(req.resolve(spec, { paths: [path] })).href); } catch {}
-  }
-  throw new Error(
-    `[trantor-mcp] cannot resolve '${spec}'. This plugin snapshot has no node_modules and no global ` +
-    `trantor install was found to borrow from. Fix: npm i -g trantor  (or: cd ${HERE} && npm install --omit=dev)`,
-  );
-}
+import { dep } from "./lib/dep.mjs";
 
 const { McpServer } = await dep("@modelcontextprotocol/sdk/server/mcp.js");
 const { StdioServerTransport } = await dep("@modelcontextprotocol/sdk/server/stdio.js");
