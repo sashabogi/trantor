@@ -9,6 +9,7 @@ import { GraphView } from "../GraphView";
 import { Home } from "../../home/Home";
 import { HubClient } from "../../../shared/api/client";
 import type { GraphApi } from "./graphApi";
+import { resetGraphViewStates } from "./graphViewState";
 import { FILE_EVENT_TYPES, type FileEvent } from "./unread";
 import { SIX_NODE_GRAPH } from "./fixture";
 
@@ -46,6 +47,7 @@ describe("S-unread · the Unread lens on the graph view", () => {
   const evidence: string[] = [];
 
   beforeEach(() => {
+  resetGraphViewStates();
     host = document.createElement("div");
     document.body.appendChild(host);
     root = createRoot(host);

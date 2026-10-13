@@ -7,6 +7,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { GraphView } from "../GraphView";
 import type { GraphApi } from "./graphApi";
+import { resetGraphViewStates } from "./graphViewState";
 import { HOTSPOT_GRAPH } from "./fixture";
 
 // SAFETY: React's act() reads this flag off globalThis; the cast adds the one key TS does not know.
@@ -26,6 +27,7 @@ describe("S-districts · the Hotspots lens and the districts layout", () => {
   const evidence: string[] = [];
 
   beforeEach(() => {
+  resetGraphViewStates();
     host = document.createElement("div");
     document.body.appendChild(host);
     root = createRoot(host);

@@ -12,6 +12,8 @@ import { ChangesView } from "./ChangesView";
 import { decideReload, type FileStat } from "./liveReload";
 import { closeTab, GRAPH_PATH, markDirty, markExternalMutation, openGraphTab, openInTabs, tabLabel, togglePin, type CodeTab, type TabView } from "./codeTabs";
 import { GraphView } from "./GraphView";
+import { BackToGraph } from "./graph/BackToGraph";
+import type { GraphOrigin } from "./graph/graphOrigin";
 import { ReviewChip } from "./ReviewChip";
 import { graphApiFor } from "./graph/graphApi";
 import { diskSignature, externalMutationOnLoad } from "./tabGuard";
@@ -34,7 +36,7 @@ const trace = (line: string) => { invoke("app_log", { line }).catch(() => {}); }
 
 type ViewMode = TabView;
 
-export function Files({ client, project, lens, onLens, path, seat }: {
+export function Files({ client, project, lens, onLens, path, seat, graphOrigin = null, onBackToGraph }: {
   client: HubClient;
   project: string;
   lens: Lens;
@@ -42,6 +44,9 @@ export function Files({ client, project, lens, onLens, path, seat }: {
   path: string | null;
   seat: string | null;
   onSeat: (s: string | null) => void;
+  /** The file the graph opened (#11603): while it is on screen the header offers the way back. */
+  graphOrigin?: GraphOrigin | null;
+  onBackToGraph?: () => void;
 }) {
   // Tabs, activeKey, drafts, disk text, base signatures, and loaded flags live in the
   // module-level document store (#5938) — they OUTLIVE this lens. This component is a VIEW over
@@ -344,6 +349,7 @@ export function Files({ client, project, lens, onLens, path, seat }: {
       <ProjectHeader project={project} sub={sub} lens={lens} onLens={onLens} />
       <div className="flex min-h-0 flex-1 flex-col gap-2.5 px-8 pb-6">
         <div className="flex items-center gap-1">
+          <BackToGraph origin={graphOrigin} project={project} activePath={activePath} onBack={() => onBackToGraph?.()} />
           {/* WHICH COPY lives in the ModePane footer now (#5841) — one picker feeds tree, editor,
               and git. This row keeps only the view toggle and Save. */}
           <div className="ml-auto flex items-center gap-2">
@@ -463,6 +469,7 @@ export function Files({ client, project, lens, onLens, path, seat }: {
         <div className="min-h-0 flex-1 overflow-hidden rounded-xl border border-tr-edge bg-[#101013] p-1.5">
           {activeView === "graph" ? (
             <GraphView
+              key={project}
               project={project}
               seat={activeScope === "project" ? null : activeScope}
               onOpen={p => openPath(activeScope, p, "code")}

@@ -8,6 +8,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { HubClient } from "../../../shared/api/client";
 import { GraphLens } from "./GraphLens";
 import type { GraphApi } from "./graphApi";
+import { resetGraphViewStates } from "./graphViewState";
 import { SIX_NODE_CLUSTERS, SIX_NODE_GRAPH } from "./fixture";
 
 // SAFETY: React's act() reads this flag off globalThis; the cast adds the one key TS does not know.
@@ -49,6 +50,7 @@ describe("GraphLens · the graph as its own top-level lens", () => {
   let root: Root;
 
   beforeEach(() => {
+  resetGraphViewStates();
     host = document.createElement("div");
     document.body.appendChild(host);
     root = createRoot(host);

@@ -47,6 +47,7 @@ import { Settings } from "../features/settings/Settings";
 import { Files } from "../features/code/Files";
 import { ModePane } from "../features/code/ModePane";
 import { GraphLens } from "../features/code/graph/GraphLens";
+import { isGraphBackKey, type GraphOrigin } from "../features/code/graph/graphOrigin";
 import type { Lens } from "../features/project/ProjectHeader";
 import { projectLensApi } from "../features/project/lensState";
 import { Conversation } from "../features/chat/Conversation";
@@ -109,6 +110,8 @@ export function AppShell() {
   // mode pane) and the editor (the center surface) are two halves of one thing: clicking in one
   // has to land in the other. The v4 mode pane owns the seat picker (#5841).
   const [filePath, setFilePath] = useState<string | null>(null);
+  // The file the Graph lens opened (#11603): the Code lens offers the way back while it is open.
+  const [graphOrigin, setGraphOrigin] = useState<GraphOrigin | null>(null);
   const [fileSeat, setFileSeat] = useState<string | null>(null);
   const [genesisRoot, setGenesisRoot] = useState<string | null>(null);
   const [cliCompatibility, setCliCompatibility] = useState<TrantorCliCompatibility | null>(null);
@@ -311,6 +314,21 @@ export function AppShell() {
     setPane({ kind: "project", lens });
     if (project) void projectLensApi.set(project, lens);
   };
+
+  // #11603: Cmd+[ is "back" from a file the graph opened. The editor owns Cmd+[ (outdent) and
+  // text fields their own keys, so the shortcut yields to anything that already took the key.
+  useEffect(() => {
+    if (pane.kind !== "project" || pane.lens !== "code" || !graphOrigin || graphOrigin.project !== active) return;
+    const onBack = (e: KeyboardEvent) => {
+      const t = e.target instanceof Element ? e.target : null;
+      if (!isGraphBackKey(e) || e.defaultPrevented || t?.closest(".monaco-editor, input, textarea")) return;
+      e.preventDefault();
+      openLens("graph");
+    };
+    window.addEventListener("keydown", onBack);
+    return () => window.removeEventListener("keydown", onBack);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pane, graphOrigin, active]);
 
   // #11597: once at launch, the first resolved project reopens its remembered lens (graph
   // included). Only a pane still on Home yields — an operator who already navigated wins.
@@ -717,9 +735,10 @@ export function AppShell() {
           : pane.lens === "bus" ? <Conversation client={client} project={active} me={ME} lens={pane.lens} onLens={openLens} />
           : pane.lens === "graph" ? <GraphLens client={client} project={active} lens={pane.lens} onLens={openLens}
               seat={fileSeat} onSeat={setFileSeat}
-              onOpenFile={p => { setFilePath(p); openLens("code"); }} />
+              onOpenFile={p => { setFilePath(p); setGraphOrigin({ project: active, path: p }); openLens("code"); }} />
           : pane.lens === "code" || pane.lens === "files" || pane.lens === "review" ? <Files client={client} project={active} lens="code" onLens={openLens}
-                                           path={filePath} seat={fileSeat} onSeat={setFileSeat} />
+                                           path={filePath} seat={fileSeat} onSeat={setFileSeat}
+                                           graphOrigin={graphOrigin} onBackToGraph={() => openLens("graph")} />
            : <Feed client={client} project={active} lens={pane.lens} onLens={openLens} />}
         </div>
       </main>
@@ -737,7 +756,7 @@ export function AppShell() {
           project={active}
           seat={fileSeat}
           onSeat={setFileSeat}
-          onOpenFile={p => { setFilePath(p); openLens("code"); }}
+          onOpenFile={p => { setFilePath(p); setGraphOrigin(null); openLens("code"); }}
         />
       )}
     </div>
