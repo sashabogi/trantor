@@ -55,7 +55,7 @@ export function resolveSpec(ctx, spec, task, difficulty, skipped) {
     const model = resolveModel(ctx, agent, field, task, difficulty);
     // #7777: the live model is known — attach the catalog's per-difficulty effort parameters here
     // so the runner applies them where the CLI accepts them (CREW_EFFORT, below).
-    console.log(`  → ${agent}: ${ctx.dry ? "preview" : "live"} model ${model} (${field} · ${task}/${difficulty})`);
+    console.log(`  → ${agent}: ${model.endsWith("/<unresolved>") ? "preview" : "live"} model ${model} (${field} · ${task}/${difficulty})`);
     return { agent, model, effort: resolveEffort(agent, model, difficulty) };
   } catch (error) {
     console.error(error.message);
