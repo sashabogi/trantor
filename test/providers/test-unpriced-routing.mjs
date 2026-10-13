@@ -47,8 +47,12 @@ try {
   assert.equal(route(["test/unpriced-v99"]).status, 2);
   delete caps["qwen3.8-flash"].cost_out;
   save();
-  assert.throws(() => resolveModel(ctx, "qwen", "qwen", "code", "easy"), /no priced model/);
+  assert.throws(() => resolveModel(ctx, "qwen", "qwen", "code", "easy"), /no priced candidate/);
   assert.equal(resolveSpec(ctx, "qwen:qwen/deepseek-v4-pro", "code", "easy", []).model, "qwen/deepseek-v4-pro");
+  assert.throws(() => resolveModel({ ...ctx, dry: true }, "qwen", "qwen", "code", "easy"), /no priced candidate/);
+  rmSync(join(store, "registry.json"));
+  assert.equal(resolveModel({ ...ctx, dry: true }, "qwen", "qwen", "code", "easy"), "qwen/<unresolved>");
+  assert.throws(() => resolveModel(ctx, "qwen", "qwen", "code", "easy"), /no priced model/);
   console.log("PASS: Qwen launcher and preview, unpriced exclusion, heuristic guard, refusal and explicit override");
 } finally {
   rmSync(home, { recursive: true, force: true });
