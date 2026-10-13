@@ -16,6 +16,7 @@ import { maybeCheckBalances } from "./lib/balance-check.mjs";
 import { getJSON, signedGet, signedPost, loadIdentity } from "./lib/api.mjs";
 import { ledgerPaths, ensureStart, anchorCursor, writeCursor } from "./lib/inbox-ledger.mjs";
 import { ensureEnrolled } from "../lib/enroll.mjs";
+import { memoryStartLine } from "./lib/memory-start.mjs";
 
 // The build doctrine (docs/BUILD-DOCTRINE.md) in short form, one line per rule, injected for every
 // project's ORCHESTRATOR at boot (#6452): orchestrators that never opened the doc missed the ruling.
@@ -156,6 +157,8 @@ try {
     process.stdout.write(emit(ctx, banner, ""));
     process.exit(0);
   }
+  const memoryLine = await memoryStartLine(projectDir);
+  if (memoryLine) additionalContext += `${memoryLine}\n`;
   const project = resolveProject(projectDir);
   sessionTitle = project;   // baseline — enriched with the current work item after the catch-up fetch below
   const session = process.env.RELAY_SESSION
