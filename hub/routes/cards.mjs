@@ -38,7 +38,7 @@ export async function routeCards({ req, res, q, P, auth, ctx }) {
     appendTaskLog, appendTaskNote, cleanChecklist, cleanDrill, hasDrillLine, linkCommitToFocus,
     derivePhases, PROPOSAL_CAP, propFp, healthOf, REAP_GRACE_MS, subFp,
     prunePeers, canRead, HUB_VERSION, cmpSemver, isCardEvent, fmtAge, hubSend,
-    ONLINE_MS, PEER_TTL_MS,
+    ONLINE_MS, PEER_TTL_MS, AUTH_MODE,
   } = ctx;
     if (req.method === "POST" && P === "/task") {           // create a card
       const b = await body(req);
@@ -595,6 +595,22 @@ export async function routeCards({ req, res, q, P, auth, ctx }) {
       const lProj = canon(String(b.project || state.peers[b.by]?.project || (b.by && b.by.includes(":") ? b.by.split(":").pop() : "")).slice(0, 80));
       appendEvent("lesson", lProj, b.by || "", { text, scope });
       return json(res, 200, { ok: true, count: state.lessons.length });
+    }
+    // A lesson can outlive the world it was learned in; only a global owner rewrites one, keeping its id and old text.
+    if (req.method === "POST" && P === "/lesson/update") {
+      if (AUTH_MODE !== "off" && !auth?.identity?.scopes?.some(s => s.project === "*" && s.role === "owner")) {
+        return json(res, 403, { error: "global owner permission required" });
+      }
+      const b = await body(req);
+      const lesson = state.lessons.find(l => l.id === Number(b.id));
+      if (!lesson) return json(res, 404, { error: "no such lesson" });
+      const text = stripNulText(b.text).trim().slice(0, 400);
+      if (!text) return json(res, 400, { error: "text required" });
+      lesson.revisions = [...(lesson.revisions || []), { text: lesson.text, by: lesson.by, ts: lesson.ts }].slice(-5);
+      Object.assign(lesson, { text, by: b.by || "", ts: now() });
+      markDirty();
+      appendEvent("lesson.revised", "", b.by || "", { id: lesson.id, text, scope: lesson.scope });
+      return json(res, 200, { ok: true, lesson });
     }
     // --- verification gates: structured "must verify before shipping" claims that travel with
     // handoffs and surface PROMINENTLY to whoever takes over (so a safety-critical check can't be
