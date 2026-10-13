@@ -17,7 +17,7 @@ import { gaugeLabel, gaugeTone, gaugeUnknownWindow, composerSlot, hasImagePath, 
 import { projectSessions, takeoverAction, type ProjectSessions } from "./takeover";
 import { TakeoverStrip } from "./TakeoverStrip";
 
-export type Provenance = "reported" | "dispatched" | "unknown";
+export type Provenance = "reported" | "dispatched" | "configured" | "unknown";
 type AutonomyJson = {
   resolved?: { harness?: string; baton?: string; commit?: boolean; push?: boolean; deploy?: boolean };
   overridden?: string[];
@@ -34,6 +34,7 @@ import { brandFor } from "../../shared/Avatar";
 import { modelLabel } from "./modelLabel";
 
 const MODELS = [
+  { value: "default", label: "default" },
   { value: "opus", label: "opus" },
   { value: "sonnet", label: "sonnet" },
   { value: "fable", label: "fable" },
@@ -137,6 +138,7 @@ function Picker({ label, value, source, options, onPick, disabled, why, icon, di
           disabled ? why
             : source === "dispatched" ? `Sent to the agent — not confirmed${detail ? ` · ${detail}` : ""}`
             : source === "reported" ? `${detail ?? label} reported by the session`
+            : source === "configured" ? `${detail ?? label} from this project's settings, no session has reported yet`
             : `${label} unknown until the session says`
         }
         className="flex shrink-0 items-center gap-1 whitespace-nowrap rounded-[7px] px-2 py-1 text-[11px] text-tr-muted hover:text-tr-text disabled:opacity-40"
@@ -730,7 +732,15 @@ export function Composer({ project, target, live, liveWhy, blockedAsk, model, mo
 
   // A slash command is typed exactly as a person would type it, then marked dispatched until the
   // transcript reports the new value back.
-  const pickModel = (v: string) => { line(`/model ${v}`); onDispatch("model", v); };
+  // The pick is PER PROJECT (#11657): Claude Code persists /model to the user file, which would
+  // move every project's next session. So the pick first lands in this project's own settings and
+  // arms the restore of the user file (project_model.rs), THEN the slash command goes to the pane.
+  const pickModel = (v: string) => {
+    void invoke("project_model_pick", { project, model: v })
+      .catch(e => setError(`model not saved for this project: ${String(e)}`))
+      .then(() => line(`/model ${v}`));
+    onDispatch("model", v);
+  };
   const pickEffort = (v: string) => {
     line(`/effort ${v}`);
     // Effort is not echoed anywhere we read, so the honest state is "dispatched" and it stays that

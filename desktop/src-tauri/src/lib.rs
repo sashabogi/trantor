@@ -11,6 +11,7 @@ mod graft_cli;
 mod right_panel;
 mod composer_draft;
 mod project_lens;
+mod project_model;
 mod ghost;
 mod handoff_drill;
 mod handoff_state;

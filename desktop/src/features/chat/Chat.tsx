@@ -11,6 +11,7 @@ import { orchestratorOf, type HerdrSeat } from "../workspace/herdr";
 import { DEFAULT_TERMINAL_DEPS, TerminalPane, type TerminalDeps } from "../workspace/TerminalPane";
 import { bannerCountdown, type HandoffCountdown } from "./banner";
 import { Composer, type Provenance } from "./Composer";
+import { dialModel, projectModelApi, type ConfiguredModel } from "./projectModel";
 import { MarkdownText } from "./MarkdownText";
 import { askLeadIn, declaredFromQuestion, suggestionsFromDeclaredAsk, suggestionsFromTurns, trimAsk, type DeclaredAsk } from "./suggestions";
 import { SuggestionChips } from "./SuggestionChips";
@@ -502,6 +503,15 @@ export function Chat({ project, sessionId, dock, onDock, onClose, deps = DEFAULT
   // What the session REPORTED, versus what we sent and have not seen confirmed.
   const [modelSource, setModelSource] = useState<Provenance>("unknown");
   const [pending, setPending] = useState<string>("");
+  // The model this project's next session starts on (#11657): local settings over the user file.
+  // Re-read after a pick, since a pick rewrites the project's settings.
+  const [configuredModel, setConfiguredModel] = useState<ConfiguredModel>(null);
+  useEffect(() => {
+    let alive = true;
+    void projectModelApi.get(project, invokeFn).then(c => { if (alive) setConfiguredModel(c); });
+    return () => { alive = false; };
+  }, [project, pending, invokeFn]);
+  const dial = dialModel(pending, chat.meta.model, modelSource, configuredModel);
   const foot = useRef<HTMLDivElement | null>(null);
   // #6697 — stick-to-bottom. `pinned` mirrors the transcript's own scroll position (onScroll
   // below); the effect that follows new turns reads the REF so a pin flip never re-runs it, and
@@ -1394,8 +1404,8 @@ export function Chat({ project, sessionId, dock, onDock, onClose, deps = DEFAULT
         live={liveness.live}
         liveWhy={liveness.why}
         blockedAsk={openAsk}
-        model={pending || chat.meta.model}
-        modelSource={pending ? "dispatched" : modelSource}
+        model={dial.model}
+        modelSource={dial.source}
         working={working}
         userTexts={
           // The RAW receipt channel (gap five): the record proves arrival, the display filters

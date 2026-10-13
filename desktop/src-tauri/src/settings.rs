@@ -83,6 +83,22 @@ pub(crate) fn composer_draft_set(project: String, draft: String) -> Result<(), S
     composer_draft::set(project, draft)
 }
 
+/// #11657 — the model a project's next session starts on, local setting over the user file's.
+/// Returns {"model": string|null, "source": "local"|"global"|null}. See project_model.rs.
+#[tauri::command]
+pub(crate) fn project_model_get(project: String) -> Result<String, String> {
+    let checkout = hub::project_dir(&project);
+    let (model, source) = project_model::effective(&project_model::home_dir(), checkout.as_deref());
+    serde_json::to_string(&serde_json::json!({ "model": model, "source": source })).map_err(|e| e.to_string())
+}
+
+/// #11657 — step one of a model pick: write it to the project's own settings and arm the restore
+/// of the user file. The caller sends `/model <v>` to the live pane AFTER this returns.
+#[tauri::command]
+pub(crate) fn project_model_pick(project: String, model: String) -> Result<(), String> {
+    project_model::begin_pick(project_model::home_dir(), hub::project_dir(&project), &model)
+}
+
 /// The autonomy dials, read and written through the CLI: the dependency rules between dials live
 /// in lib/autonomy.mjs, and a Rust copy would drift on the side that decides whether we push.
 #[tauri::command]
