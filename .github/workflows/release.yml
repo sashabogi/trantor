@@ -52,30 +52,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-node@v4
+      - name: Shared suite setup and gate
+        uses: ./.github/actions/suite-setup
         with:
-          node-version: 22
           registry-url: https://registry.npmjs.org
-
-      # The suite runs desktop's vitest, so its deps have to be here or the run dies with
-      # "Cannot find module 'vite'". Same pinned pnpm as ci.yml: the desktop lockfile is written by
-      # 11.18.0 and another major can drift it under --frozen-lockfile.
-      - uses: pnpm/action-setup@v4
-        with:
-          version: 11.18.0
-
-      # Trusted publishing needs npm >= 11.5.1; Node 22 ships older. Pin rather than track latest so
-      # a release cannot change its own toolchain underneath us.
-      - name: Pin npm with OIDC support
-        run: |
-          npm install -g npm@11.19.0
-          npm --version
-
-      - name: Install root deps
-        run: npm install --no-audit --no-fund
-
-      - name: Install desktop deps (pnpm, frozen)
-        run: pnpm -C desktop install --frozen-lockfile
 
       # The version lives in TWO files and 0.18.50 shipped with them disagreeing: the release commit
       # bumped package.json and missed .claude-plugin/plugin.json. That file wins in
@@ -103,17 +83,6 @@ jobs:
             echo "::error::trantor@$PKG is already published. Bump the version."
             exit 1
           fi
-
-      # Same as ci.yml: test/crew/test-memory-*.mjs shell out to graft.
-      - name: Install graft
-        run: npm i -g @nanonets/graft@0.16.0
-
-      # Never publish unverified work. Same env scrub as ci.yml: the drills must not see a runner
-      # identity, and each step gets a fresh shell, so unset and run in one.
-      - name: Whole suite (npm test)
-        run: |
-          unset HERDR_ENV HERDR_PANE_ID TRANTOR_ORCH TRANTOR_SEAT RELAY_PROJECT TRANTOR_PROJECT RELAY_SESSION RELAY_AGENT
-          npm test
 
       # The gate that stands in for a human looking at the release: every path bin/cli.mjs can spawn
       # must be in the tarball. cli.mjs resolves subcommands at runtime, so a directory missing from

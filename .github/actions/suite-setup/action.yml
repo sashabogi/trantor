@@ -1,0 +1,46 @@
+name: Suite setup and gate
+description: Install the shared test toolchain and run the suite without a runner identity.
+inputs:
+  registry-url:
+    description: Optional npm registry for release publishing.
+    required: false
+    default: ''
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-node@v4
+      with:
+        node-version: 22
+        registry-url: ${{ inputs.registry-url }}
+
+    # Match the desktop lockfile's pnpm major.
+    - uses: pnpm/action-setup@v4
+      with:
+        version: 11.18.0
+
+    # The release needs OIDC support; use the same npm for CI's gate.
+    - name: Pin npm with OIDC support
+      shell: bash
+      run: |
+        npm install -g npm@11.19.0
+        npm --version
+
+    - name: Install root deps
+      shell: bash
+      run: npm install --no-audit --no-fund
+
+    - name: Install desktop deps (pnpm, frozen)
+      shell: bash
+      run: pnpm -C desktop install --frozen-lockfile
+
+    # Memory and graft_cli drills require this before npm test.
+    - name: Install graft
+      shell: bash
+      run: npm i -g @nanonets/graft@0.16.0
+
+    # Keep unset and npm test in one shell: each action step starts a fresh shell.
+    - name: Whole suite (npm test)
+      shell: bash
+      run: |
+        unset HERDR_ENV HERDR_PANE_ID TRANTOR_ORCH TRANTOR_SEAT RELAY_PROJECT TRANTOR_PROJECT RELAY_SESSION RELAY_AGENT
+        npm test
