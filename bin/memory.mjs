@@ -3,11 +3,11 @@ import { parseArgs } from "node:util";
 import { checkMemory, formatMemoryCheck } from "../lib/memory-pins.mjs";
 import { pinMemory, formatMemoryPin } from "../lib/memory-pin-write.mjs";
 
-const usage = "Usage: trantor memory check [--project <dir>] [--json]\n       trantor memory pin <note> | --all [--dry-run] [--project <dir>] [--json]";
+const usage = "Usage: trantor memory check [--project <dir>] [--json] [--strict]\n       trantor memory pin <note> | --all [--dry-run] [--project <dir>] [--json]";
 try {
   const { values, positionals } = parseArgs({ allowPositionals: true, options: {
     project: { type: "string" }, json: { type: "boolean" }, help: { type: "boolean" },
-    all: { type: "boolean" }, "dry-run": { type: "boolean" },
+    strict: { type: "boolean" }, all: { type: "boolean" }, "dry-run": { type: "boolean" },
   } });
   if (values.help) {
     console.log(usage);
@@ -18,7 +18,8 @@ try {
     if (command === "check" && positionals.length === 1 && !values.all && !values["dry-run"]) {
       result = checkMemory({ project: values.project });
       format = formatMemoryCheck;
-    } else if (command === "pin" && positionals.length <= 2 && Boolean(note) !== Boolean(values.all)) {
+      if (values.strict && result.notes.some(note => note.pins.some(pin => ["stale", "broken"].includes(pin.status)))) process.exitCode = 1;
+    } else if (command === "pin" && !values.strict && positionals.length <= 2 && Boolean(note) !== Boolean(values.all)) {
       result = pinMemory({ project: values.project, note, all: values.all, dryRun: values["dry-run"] });
       format = formatMemoryPin;
     } else {

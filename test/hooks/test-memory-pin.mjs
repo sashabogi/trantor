@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync, utimesSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { test } from "node:test";
@@ -56,7 +56,7 @@ test("Write pins a symbol; Edit refreshes a stale note and memory check goes qui
   writeFileSync(path, readFileSync(path, "utf8") + "Still accurate.\n");
   silentSuccess(f.hook(f.event(path, "Edit", join(f.project, "src"))));
   assert.notEqual(notePins(readFileSync(path, "utf8"))[0].fp, first.fp);
-  assert.equal(formatMemoryCheck(checkMemory(f)), "");
+  assert.equal(formatMemoryCheck(checkMemory(f)), "ok: 1 notes, 1 pins");
   assert.ok(readFileSync(path, "utf8").endsWith("See src/code.mjs#advise.\nStill accurate.\n"));
 });
 
@@ -93,6 +93,7 @@ test("missing graph, invalid input, malformed note and graft failure log without
   assert.match(invalid.stderr, /memory-pin:/);
   mkdirSync(join(f.project, "graft/.graph"), { recursive: true });
   writeFileSync(join(f.project, "graft/.graph/wiring.json"), '{"nodes":[]}');
+  utimesSync(join(f.project, "graft/.graph/wiring.json"), new Date(0), new Date(0));
   const failure = f.hook(f.event(path), { PATH: f.dir });
   silentSuccess(failure);
   assert.match(failure.stderr, /graft build failed/);

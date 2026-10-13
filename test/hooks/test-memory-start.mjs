@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync, utimesSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { test } from "node:test";
@@ -52,6 +52,7 @@ test("session-start first context line counts notes, reads disk bodies and never
   f.note("both.md", [f.pin, { file: "missing.mjs" }]);
   f.note("broken.md", [{ symbol: "src/code.mjs#gone", fp: f.pin.fp }]);
   writeFileSync(join(f.project, "src/code.mjs"), source.replace("return 1", "return 9"));
+  utimesSync(f.graph, new Date(), new Date(Date.now() + 1000));
   const graphBefore = readFileSync(f.graph, "utf8");
   const guard = join(f.dir, "forbid-spawn.mjs");
   writeFileSync(guard, 'import cp from "node:child_process"; import { syncBuiltinESMExports } from "node:module"; cp.spawnSync = () => { throw new Error("graph rebuild forbidden"); }; syncBuiltinESMExports();');
@@ -74,7 +75,7 @@ test("deleted files are broken; a changed bare file never becomes stale", t => {
   const f = fixture(t);
   f.note("bare.md", [{ file: "src/code.mjs" }]);
   writeFileSync(join(f.project, "src/code.mjs"), "Changed entirely\n");
-  assert.deepEqual(memoryLines(f.run()), []);
+  assert.match(memoryLines(f.run())[0], /1 unchecked: graph older than code/);
   rmSync(join(f.project, "src/code.mjs"));
   assert.deepEqual(memoryLines(f.run()), ["0 stale, 1 broken notes: bare.md; run trantor memory check"]);
 });
@@ -106,4 +107,14 @@ test("note names with newlines still occupy one context line", t => {
   const f = fixture(t);
   f.note("odd\nname.md", [{ file: "missing.mjs" }]);
   assert.deepEqual(memoryLines(f.run()), ["0 stale, 1 broken notes: odd name.md; run trantor memory check"]);
+});
+
+ test("newer source with shifted spans is unchecked rather than falsely stale", t => {
+  const f = fixture(t);
+  f.note("shifted.md", [f.pin]);
+  writeFileSync(join(f.project, "src/code.mjs"), `// inserted\n\n${source}`);
+  utimesSync(join(f.project, "src/code.mjs"), new Date(), new Date(Date.now() + 1000));
+  const line = memoryLines(f.run())[0];
+  assert.match(line, /^0 stale, 0 broken notes:/);
+  assert.ok(line.endsWith(" (1 unchecked: graph older than code, run trantor memory check)"));
 });

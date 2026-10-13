@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { spawn, spawnSync } from "node:child_process";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync, utimesSync, existsSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { test } from "node:test";
-import { checkMemory, fingerprint, formatMemoryCheck, memoryDirectory, notePins } from "../../lib/memory-pins.mjs";
+import { checkMemory, fingerprint, formatMemoryCheck, memoryDirectory, notePins, pinTarget } from "../../lib/memory-pins.mjs";
 
 const root = fileURLToPath(new URL("../..", import.meta.url));
 const out = join(root, ".agent-bus-out");
@@ -43,7 +43,7 @@ test("no graph is explicit and does not create one", t => {
 test("unchanged pins stay quiet, JSON includes results and note bytes survive", t => {
   const f = fixture(t);
   f.build();
-  assert.equal(f.cli().stdout, "");
+  assert.equal(f.cli().stdout.trim(), "ok: 1 notes, 2 pins");
   const json = f.cli("--json");
   assert.equal(json.status, 0, json.stderr);
   assert.deepEqual(JSON.parse(json.stdout).notes[0].pins.map(p => p.status), ["ok", "ok"]);
@@ -65,7 +65,7 @@ test("unrelated edits, moved spans and normalized whitespace stay quiet", t => {
   const f = fixture(t);
   f.build();
   writeFileSync(join(f.project, "sample.mjs"), `// moved\n\n${body}\nexport const other = 42;\n`.replace(/\n/g, "  \r\n"));
-  assert.equal(formatMemoryCheck(f.run()), "");
+  assert.match(formatMemoryCheck(f.run()), /^ok: 1 notes, [12] pins$/);
   assert.equal(fingerprint(`\n  \n${body} \r\n\n`), fingerprint(body));
 });
 
@@ -100,8 +100,77 @@ test("nested symbol IDs resolve without confusing same-named methods", t => {
   const graph = JSON.parse(readFileSync(join(f.project, "graft/.graph/wiring.json"), "utf8"));
   assert.ok(graph.nodes.some(n => n.id === "sample.mjs#A.act"));
   writeFileSync(join(f.memoryDir, "advice.md"), `---\npins:\n  - symbol: sample.mjs#A.act\n    fp: ${fingerprint("  act() { return 1; }")}\n---\n`);
-  assert.equal(formatMemoryCheck(f.run()), "");
+  assert.match(formatMemoryCheck(f.run()), /^ok: 1 notes, [12] pins$/);
   writeFileSync(join(f.project, "sample.mjs"), source.replace("return 2", "return 3"));
-  assert.equal(formatMemoryCheck(f.run()), "");
+  assert.match(formatMemoryCheck(f.run()), /^ok: 1 notes, [12] pins$/);
   assert.equal(memoryDirectory(f.project, join(out, "config")), join(out, "config", "projects", resolve(f.project).replace(/[^a-zA-Z0-9]/g, "-"), "memory"));
+});
+
+test("bad spans isolate each pin and clean CLI has strict opt-in", t => {
+  const f = fixture(t);
+  f.build();
+  const graphPath = join(f.project, "graft/.graph/wiring.json");
+  const graph = JSON.parse(readFileSync(graphPath, "utf8"));
+  graph.nodes.find(node => node.id === "sample.mjs#advise").span = "L999-L1000";
+  writeFileSync(graphPath, JSON.stringify(graph));
+  writeFileSync(join(f.memoryDir, "other.md"), '---\npins: [{file: missing.mjs}]\n---\n');
+  const result = f.run();
+  assert.deepEqual(result.notes[0].pins.map(pin => pin.status), ["invalid pin", "ok"]);
+  assert.equal(result.notes[1].pins[0].status, "broken");
+  assert.doesNotMatch(formatMemoryCheck(result), /invalid pin.*invalid pin/);
+  assert.equal(f.cli().status, 0);
+  assert.equal(f.cli("--strict").status, 1);
+  assert.deepEqual(pinTarget({ symbol: "dir/hash#file.mjs#fn", fp: fingerprint(body) }), {
+    file: "dir/hash#file.mjs", symbol: "dir/hash#file.mjs#fn",
+  });
+});
+
+test("failed refresh reports pins off with the reason and releases lock", t => {
+  const f = fixture(t);
+  f.build();
+  const graphPath = join(f.project, "graft/.graph/wiring.json");
+  utimesSync(graphPath, new Date(0), new Date(0));
+  const previous = process.env.PATH;
+  process.env.PATH = out;
+  try {
+    const result = f.run();
+    assert.equal(result.status, "pins off");
+    assert.match(result.message, /graft build failed/);
+  } finally { process.env.PATH = previous; }
+  assert.equal(f.run().status, "checked");
+});
+
+test("concurrent checks serialize refresh and reuse the graph built by the winner", async t => {
+  const f = fixture(t);
+  f.build();
+  const graph = join(f.project, "graft/.graph/wiring.json");
+  utimesSync(graph, new Date(0), new Date(0));
+  const commands = join(f.project, "commands");
+  mkdirSync(commands);
+  const calls = join(commands, "builds");
+  writeFileSync(join(commands, "graft"), `#!${process.execPath}
+import fs from "node:fs";
+fs.appendFileSync(${JSON.stringify(calls)}, "build\\n");
+Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 250);
+fs.utimesSync(${JSON.stringify(graph)}, new Date(), new Date());
+`, { mode: 0o755 });
+  const script = `import { checkMemory } from ${JSON.stringify(new URL("../../lib/memory-pins.mjs", import.meta.url).href)};
+console.log(JSON.stringify(checkMemory(${JSON.stringify({ project: f.project, memoryDir: f.memoryDir })})));`;
+  const run = () => new Promise((resolveRun, reject) => {
+    const child = spawn(process.execPath, ["--input-type=module", "-e", script], {
+      cwd: root, env: { ...process.env, PATH: commands },
+    });
+    let output = "", errors = "";
+    child.stdout.on("data", chunk => { output += chunk; });
+    child.stderr.on("data", chunk => { errors += chunk; });
+    child.on("error", reject);
+    child.on("close", code => {
+      if (code !== 0) return reject(new Error(errors));
+      try { resolveRun(JSON.parse(output)); } catch (error) { reject(error); }
+    });
+  });
+  const results = await Promise.all([run(), run()]);
+  assert.ok(results.every(result => result.status === "checked"), JSON.stringify(results));
+  assert.equal(readFileSync(calls, "utf8"), "build\n");
+  assert.equal(existsSync(`${graph}.lock`), false);
 });

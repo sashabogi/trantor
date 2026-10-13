@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync, statSync, readdirSync } from "node:fs";
 import { basename, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { test } from "node:test";
@@ -97,13 +97,13 @@ test("value splicing preserves CRLF, comments, other keys, body and key order", 
 
 test("body-only note gets front matter; links and URLs do not add pins", t => {
   const f = fixture(t);
-  const text = "See `src/code.mjs#advise` twice: src/code.mjs#advise. [[src/code.mjs]] https://example.com/src/code.mjs and/or\n";
+  const text = "See `src/code.mjs#advise` twice: src/code.mjs#advise. [[src/code.mjs]] https://example.com/src/code.mjs prose\n";
   f.write("body.md", text);
   f.pin({ note: "body" });
   assert.ok(f.read("body.md").endsWith(text));
   assert.equal(notePins(f.read("body.md")).length, 1);
   const graph = JSON.parse(readFileSync(join(f.project, "graft/.graph/wiring.json"), "utf8"));
-  assert.equal(extractMentions("[[README.md]] https://x/README.md and/or", f.project, new Map(graph.nodes.map(n => [n.id, n]))).length, 0);
+  assert.equal(extractMentions("[[README.md]] https://x/README.md prose", f.project, new Map(graph.nodes.map(n => [n.id, n]))).length, 0);
 });
 
 test("broken and malformed manual entries survive, unresolved mentions are not downgraded", t => {
@@ -199,4 +199,40 @@ test("a file becomes broken only after a pinned file is deleted", t => {
   assert.deepEqual(repinned.pins, pinned.pins);
   assert.ok(repinned.diagnostics.includes("broken: file gone: README.md"));
   assert.ok(repinned.diagnostics.includes("mentions a path that doesn't exist: README.md"));
+});
+
+test("MEMORY.md is excluded and a later-date re-pin preserves bytes and inode", t => {
+  const f = fixture(t);
+  const index = "---\npins: [broken]\n---\nsrc/code.mjs#advise\n";
+  f.write("MEMORY.md", index);
+  f.write("note.md", "src/code.mjs#advise README.md\n");
+  t.mock.timers.enable({ apis: ["Date"], now: new Date("2026-10-13T12:00:00Z") });
+  f.pin({ all: true });
+  const before = f.read("note.md");
+  const stat = statSync(join(f.memoryDir, "note.md"));
+  const graph = statSync(join(f.project, "graft/.graph/wiring.json"));
+  t.mock.timers.tick(86400000);
+  assert.equal(f.pin({ all: true }).notes[0].changed, false);
+  assert.equal(f.read("note.md"), before);
+  assert.equal(statSync(join(f.memoryDir, "note.md")).ino, stat.ino);
+  assert.equal(statSync(join(f.memoryDir, "note.md")).mtimeMs, stat.mtimeMs);
+  assert.equal(statSync(join(f.project, "graft/.graph/wiring.json")).mtimeMs, graph.mtimeMs);
+  assert.equal(f.read("MEMORY.md"), index);
+  assert.deepEqual(f.check().notes.map(note => note.name), ["note.md"]);
+  assert.throws(() => f.pin({ note: "MEMORY" }), /cannot be pinned/);
+  assert.throws(() => f.pin({ note: "MEMORY.md" }), /cannot be pinned/);
+  assert.deepEqual(readdirSync(f.memoryDir).sort(), ["MEMORY.md", "note.md"]);
+});
+
+test("new pins use atomic rename and empty pins remain an empty list", t => {
+  const f = fixture(t);
+  f.write("note.md", "---\npins:\n---\nREADME.md\n");
+  assert.deepEqual(notePins(f.read("note.md")), []);
+  const inode = statSync(join(f.memoryDir, "note.md")).ino;
+  f.pin({ note: "note" });
+  assert.notEqual(statSync(join(f.memoryDir, "note.md")).ino, inode);
+  assert.deepEqual(notePins(f.read("note.md")).map(pin => pin.file), ["README.md"]);
+  assert.deepEqual(extractMentions("Node.js e.g. absent.mjs src/missing", f.project, new Map()), [
+    { file: "absent.mjs" }, { file: "src/missing" },
+  ]);
 });

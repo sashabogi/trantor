@@ -12,6 +12,8 @@ async function pinSavedNote() {
   if (!["Write", "Edit"].includes(input.tool_name) || !input.cwd || !input.tool_input?.file_path) return;
   const path = resolve(input.cwd, input.tool_input.file_path);
   if (!path.endsWith(".md") || basename(path) === "MEMORY.md") return;
+  const memoryRoot = dirname(dirname(memoryDirectory(input.cwd)));
+  if (!path.startsWith(`${memoryRoot}/`) || basename(dirname(path)) !== "memory") return;
   const project = gitCheckoutRoot(input.cwd) || resolve(input.cwd);
   const memoryDir = memoryDirectory(project);
   if (dirname(path) !== memoryDir) return;
