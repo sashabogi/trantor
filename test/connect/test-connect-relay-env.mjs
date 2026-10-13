@@ -49,7 +49,7 @@ const setup = (clis, configs = {}, raw = {}) => {
     env: drillEnv({ HOME: home, AGENT_BUS_DIR: bus, PATH: `${fakebin}:/usr/bin:/bin` }),
     encoding: "utf8",
   });
-  return { work, home, bus, run };
+  return { work, home, bus, fakebin, repo, run };
 };
 const writeOne = (p, body) => {
   mkdirSync(dirname(p), { recursive: true });
@@ -70,7 +70,7 @@ console.log("# trantor connect — relay entry env stamp + refresh (#7893)");
   ok("connect reports the project and hub it stamps", r.status === 0 && new RegExp(`project: acme, hub: ${PIN}`).test(r.stdout), r.stderr || r.stdout);
   // #6724: connect records the checkout's id so a later directory rename keeps the board and pin.
   const marker = (() => { try { return JSON.parse(readFileSync(join(t.work, "acme", ".trantor", "project.json"), "utf8")); } catch { return null; } })();
-  ok("connect records the project id in the checkout (.trantor/project.json)", marker?.id === "acme" && marker?.by === "trantor connect" && /project\s+id acme recorded/.test(r.stdout), JSON.stringify(marker) || r.stdout);
+  ok("connect records the project id in the checkout (.trantor/project.json)", marker?.id === "acme" && marker?.by === "trantor connect" && /project\s+id acme recorded/.test(r.stdout), JSON.stringify({ marker, cwd: t.repo, status: r.status, stdout: r.stdout, stderr: r.stderr }));
   const kimi = relayEnvOf(t.home, ".kimi/mcp.json");
   ok("kimi relay env carries agent and pinned hub, never the project (global config, #7893)",
     kimi?.RELAY_AGENT === "kimi" && kimi?.RELAY_URL === PIN && !("RELAY_PROJECT" in kimi), JSON.stringify(kimi));
@@ -78,6 +78,40 @@ console.log("# trantor connect — relay entry env stamp + refresh (#7893)");
   ok("gemini relay env carries the same stamp for its own agent",
     gemini?.RELAY_AGENT === "gemini" && gemini?.RELAY_URL === PIN && !("RELAY_PROJECT" in gemini), JSON.stringify(gemini));
   rmSync(t.work, { recursive: true, force: true });
+}
+
+// A scheduler stall on either lookup must not silently skip recording the checkout (#11580).
+for (const delayedLookup of [1, 2]) {
+  const t = setup(["kimi"]);
+  try {
+    const realGit = execSync("command -v git", { encoding: "utf8" }).trim();
+    const trace = join(t.work, "git-trace.json");
+    const shim = join(t.fakebin, "git");
+    writeFileSync(shim, `#!${process.execPath}
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+const trace = ${JSON.stringify(trace)};
+const calls = existsSync(trace) ? JSON.parse(readFileSync(trace, "utf8")) : [];
+const args = process.argv.slice(2);
+if (args.includes("--show-toplevel")) {
+  calls.push({ cwd: process.cwd(), args });
+  writeFileSync(trace, JSON.stringify(calls));
+  if (calls.length === ${delayedLookup}) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 2500);
+}
+const result = spawnSync(${JSON.stringify(realGit)}, args, { stdio: "inherit" });
+process.exit(result.status ?? 1);
+`);
+    writeOne(join(t.fakebin, "package.json"), '{"type":"module"}');
+    chmodSync(shim, 0o755);
+    const r = t.run();
+    const markerPath = join(t.repo, ".trantor", "project.json");
+    const marker = existsSync(markerPath) ? JSON.parse(readFileSync(markerPath, "utf8")) : null;
+    ok(`connect records the checkout after git lookup ${delayedLookup} stalls`,
+      r.status === 0 && marker?.id === "acme" && marker?.by === "trantor connect",
+      JSON.stringify({ marker, trace: JSON.parse(readFileSync(trace, "utf8")), stdout: r.stdout, stderr: r.stderr }));
+  } finally {
+    rmSync(t.work, { recursive: true, force: true });
+  }
 }
 
 // 2. THE INCIDENT SHAPE: a stale entry with RELAY_AGENT only — refreshed, user keys kept.
