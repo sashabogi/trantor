@@ -43,7 +43,7 @@ function fixture(t) {
 }
 
 function memoryLines(context) {
-  return context.split("\n").filter(line => /(?:stale, \d+ broken notes:|pin check skipped)/.test(line));
+  return context.split("\n").filter(line => /(?:stale, \d+ broken notes:|pinned notes unchecked|pin check skipped)/.test(line));
 }
 
 test("session-start first context line counts notes, reads disk bodies and never rebuilds graft", t => {
@@ -75,7 +75,7 @@ test("deleted files are broken; a changed bare file never becomes stale", t => {
   const f = fixture(t);
   f.note("bare.md", [{ file: "src/code.mjs" }]);
   writeFileSync(join(f.project, "src/code.mjs"), "Changed entirely\n");
-  assert.match(memoryLines(f.run())[0], /1 unchecked: graph older than code/);
+  assert.equal(memoryLines(f.run())[0], "1 pinned notes unchecked (graph older than code), run trantor memory check");
   rmSync(join(f.project, "src/code.mjs"));
   assert.deepEqual(memoryLines(f.run()), ["0 stale, 1 broken notes: bare.md; run trantor memory check"]);
 });
@@ -109,12 +109,19 @@ test("note names with newlines still occupy one context line", t => {
   assert.deepEqual(memoryLines(f.run()), ["0 stale, 1 broken notes: odd name.md; run trantor memory check"]);
 });
 
- test("newer source with shifted spans is unchecked rather than falsely stale", t => {
+test("newer source with shifted spans counts unchecked notes without an empty stale prefix", t => {
   const f = fixture(t);
-  f.note("shifted.md", [f.pin]);
+  f.note("shifted.md", [f.pin, f.pin]);
+  f.note("other.md", [f.pin]);
   writeFileSync(join(f.project, "src/code.mjs"), `// inserted\n\n${source}`);
   utimesSync(join(f.project, "src/code.mjs"), new Date(), new Date(Date.now() + 1000));
   const line = memoryLines(f.run())[0];
-  assert.match(line, /^0 stale, 0 broken notes:/);
-  assert.ok(line.endsWith(" (1 unchecked: graph older than code, run trantor memory check)"));
+  assert.equal(line, "2 pinned notes unchecked (graph older than code), run trantor memory check");
+});
+
+test("broken and unchecked notes share one memory check instruction", t => {
+  const f = fixture(t);
+  f.note("mixed.md", [f.pin, { file: "missing.mjs" }]);
+  utimesSync(join(f.project, "src/code.mjs"), new Date(), new Date(Date.now() + 1000));
+  assert.equal(memoryLines(f.run())[0], "0 stale, 1 broken notes: mixed.md; 1 pinned notes unchecked (graph older than code), run trantor memory check");
 });

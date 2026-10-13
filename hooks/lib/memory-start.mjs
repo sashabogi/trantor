@@ -37,7 +37,7 @@ async function cachedMemoryLine(directory) {
   const graph = JSON.parse(readFileSync(graphPath, "utf8"));
   const nodes = new Map(graph.nodes.map(node => [node.id, node]));
   const graphTime = statSync(graphPath).mtimeMs;
-  let unchecked = 0;
+  const unchecked = new Set();
   const stale = new Set(), broken = new Set();
   const notes = readdirSync(memoryDir, { withFileTypes: true })
     .filter(entry => entry.isFile() && entry.name.endsWith(".md") && entry.name !== "MEMORY.md");
@@ -45,7 +45,7 @@ async function cachedMemoryLine(directory) {
     try {
       const pins = notePins(readFileSync(join(memoryDir, note.name), "utf8"));
       for (const pin of pins) {
-        if (pinFileNewer(project, pin, graphTime)) { unchecked++; continue; }
+        if (pinFileNewer(project, pin, graphTime)) { unchecked.add(note.name); continue; }
         const { status } = checkPin(pin, project, nodes);
         if (status === "stale") stale.add(note.name);
         if (status === "broken") broken.add(note.name);
@@ -53,8 +53,11 @@ async function cachedMemoryLine(directory) {
     } catch { /* A concurrent edit or invalid span must not suppress other notes. */ }
   }
   const names = [...new Set([...stale, ...broken])].sort().map(name => name.replace(/[\s\x00-\x1f\x7f]+/g, " "));
-  const suffix = unchecked ? ` (${unchecked} unchecked: graph older than code, run trantor memory check)` : "";
-  return names.length || unchecked ? `${stale.size} stale, ${broken.size} broken notes: ${names.join(", ")}; run trantor memory check${suffix}` : "";
+  const parts = [];
+  if (names.length) parts.push(`${stale.size} stale, ${broken.size} broken notes: ${names.join(", ")}`);
+  if (unchecked.size) parts.push(`${unchecked.size} pinned notes unchecked (graph older than code)`);
+  if (!parts.length) return "";
+  return `${parts.join("; ")}${unchecked.size ? "," : ";"} run trantor memory check`;
 }
 
 if (!isMainThread) {
