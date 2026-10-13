@@ -150,6 +150,17 @@
             "command": "node ${CLAUDE_PLUGIN_ROOT}/hooks/ask-sidecar.mjs"
           }
         ]
+      },
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node ${CLAUDE_PLUGIN_ROOT}/hooks/memory-pin.mjs",
+            "async": true,
+            "timeout": 130
+          }
+        ]
       }
     ],
     "PostToolUseFailure": [
