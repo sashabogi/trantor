@@ -37,7 +37,7 @@ const probe = join(snapshot, "probe.mjs");
 writeFileSync(probe, `const m = await import("./hooks/lib/memory-start.mjs"); console.log(JSON.stringify(await m.memoryStartLine(${JSON.stringify(project)})));`);
 const run = spawnSync(process.execPath, [probe], {
   cwd: work, encoding: "utf8",
-  env: { ...process.env, CLAUDE_CONFIG_DIR: config, npm_config_prefix: prefix, NODE_PATH: "" },
+  env: { ...process.env, TRANTOR_PIN_CHECK_BUDGET_MS: "10000", CLAUDE_CONFIG_DIR: config, npm_config_prefix: prefix, NODE_PATH: "" },
 });
 let line = "";
 try { line = JSON.parse(run.stdout.trim().split("\n").pop()); } catch {}

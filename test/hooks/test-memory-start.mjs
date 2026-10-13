@@ -27,12 +27,13 @@ function fixture(t) {
   writeFileSync(graph, JSON.stringify({ nodes: [{ id: "src/code.mjs#advice", path: "src/code.mjs", kind: "function", span: "L1-L1" }] }));
   const note = (name, pins) => writeFileSync(join(memoryDir, name), `---\npins: ${JSON.stringify(pins)}\n---\nA note.\n`);
   const pin = { symbol: "src/code.mjs#advice", fp: fingerprint(source) };
-  const run = (preload, cwd = project) => {
+  // Correctness runs get a loaded-CI-sized budget; the slow-worker test passes the real 500 ms.
+  const run = (preload, cwd = project, budget = "4000") => {
     const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !/^(RELAY_|TRANTOR_|HERDR_|CREW_|RUNNER_|CLAUDE_|AGENT_BUS_)/.test(key)));
     const result = spawnSync(process.execPath, [...(preload ? ["--import", preload] : []), join(root, "hooks/sessionstart.mjs")], {
       cwd: root, encoding: "utf8", timeout: 10000,
       input: JSON.stringify({ cwd, source: "startup" }),
-      env: { ...env, HOME: join(dir, "home"), AGENT_BUS_DIR: join(dir, "bus"), CLAUDE_CONFIG_DIR: config,
+      env: { ...env, TRANTOR_PIN_CHECK_BUDGET_MS: budget, HOME: join(dir, "home"), AGENT_BUS_DIR: join(dir, "bus"), CLAUDE_CONFIG_DIR: config,
         RELAY_URL: "http://127.0.0.1:1", RELAY_SESSION: "memory-drill:fixture", RELAY_PROJECT: "fixture",
         TRANTOR_NO_UPDATE_CHECK: "1", TRANTOR_NO_BALANCE_CHECK: "1" },
     });
@@ -98,7 +99,7 @@ test("a slow worker is stopped at the budget and session start emits just the sk
   const slow = join(f.dir, "slow-worker.mjs");
   writeFileSync(slow, 'import { isMainThread } from "node:worker_threads"; if (!isMainThread) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 5000);');
   const start = performance.now();
-  const context = f.run(slow);
+  const context = f.run(slow, undefined, "500");
   assert.ok(performance.now() - start < 3000, "session did not wait for the five-second worker");
   assert.deepEqual(memoryLines(context), ["pin check skipped (slow), run trantor memory check"]);
 });

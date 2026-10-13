@@ -4,6 +4,8 @@ import { isMainThread, parentPort, Worker, workerData } from "node:worker_thread
 import { gitCheckoutRoot } from "./git-checkout.mjs";
 
 const SLOW = "pin check skipped (slow), run trantor memory check";
+// Tests on a loaded CI runner raise this; the hook itself keeps 500 ms.
+const BUDGET_MS = Number(process.env.TRANTOR_PIN_CHECK_BUDGET_MS) || 500;
 
 export function memoryStartLine(project) {
   return new Promise(resolveLine => {
@@ -17,7 +19,7 @@ export function memoryStartLine(project) {
       if (worker) void worker.terminate().catch(() => {});
     };
     // Keep synchronous graph parsing and file reads off the hook's deadline timer.
-    const timer = setTimeout(() => finish(SLOW), 500);
+    const timer = setTimeout(() => finish(SLOW), BUDGET_MS);
     try {
       worker = new Worker(new URL(import.meta.url), { workerData: { project } });
       worker.once("message", finish);
