@@ -7,6 +7,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { InvokeArgs } from "@tauri-apps/api/core";
 import { Composer } from "../features/chat/Composer";
+import { draftSlots } from "../features/chat/composerDraft";
 import { TerminalPane } from "../features/workspace/TerminalPane";
 import { installResizeObserver, makeTerminalDouble, type TerminalDouble } from "../features/workspace/terminalDouble";
 import { dropPointToCss } from "./dropPoint";
@@ -134,6 +135,8 @@ describe("a drop between the terminal and the composer (#11513)", () => {
   let d: TerminalDouble;
 
   beforeEach(() => {
+    // #11665: drafts outlive a composer by design, so each case starts from a fresh launch.
+    draftSlots.reset();
     installStore();
     installInternals();
     installHitTesting();
