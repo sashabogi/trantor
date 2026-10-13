@@ -243,6 +243,7 @@ pub fn run() {
             file_write_plain,
             project_changes,
             graft_cli::code_graph,
+            crate::code_attribution::code_attribution,
             app_log,
             create_file,
             delete_file,

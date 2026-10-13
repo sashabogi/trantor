@@ -79,7 +79,7 @@ describe("S-unread · the Unread lens on the graph view", () => {
     act(() => card("@dir:lib")?.click());
     const a = card("lib/a.ts");
     expect(a?.dataset.graphTone).toBe("unread");
-    expect(a?.style.borderColor).toBe("var(--color-tr-fail)");
+    expect(a?.style.borderTopColor).toBe("var(--color-tr-fail)");
     expect(card("lib/b.ts")?.dataset.graphTone).toBe("calm");
 
     act(() => a?.click());
@@ -103,7 +103,7 @@ describe("S-unread · the Unread lens on the graph view", () => {
     expect(count()).toBe("1 unread");
     expect(card("lib/a.ts")?.dataset.graphTone).toBe("unread");
     expect(card("lib/b.ts")?.dataset.graphTone).toBe("read");
-    expect(card("lib/b.ts")?.style.borderColor).toBe("var(--color-tr-ok)");
+    expect(card("lib/b.ts")?.style.borderTopColor).toBe("var(--color-tr-ok)");
     evidence.push(`a=unread b=read count=${count()}`);
   });
 

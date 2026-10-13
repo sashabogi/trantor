@@ -1,0 +1,70 @@
+{
+  "head": "18fe0a94f9e0165b256759558190365ab3bc5558",
+  "total": 1477,
+  "files": 1170,
+  "rules": [
+    {
+      "rule": "harvest",
+      "commits": 106,
+      "percent": 7.176709546377793
+    },
+    {
+      "rule": "card",
+      "commits": 101,
+      "percent": 6.838185511171293
+    },
+    {
+      "rule": "author",
+      "commits": 16,
+      "percent": 1.0832769126607988
+    },
+    {
+      "rule": "claude",
+      "commits": 830,
+      "percent": 56.19498984427894
+    },
+    {
+      "rule": "unknown",
+      "commits": 424,
+      "percent": 28.70683818551117
+    }
+  ],
+  "agents": [
+    {
+      "agent": "orchestrator",
+      "commits": 830
+    },
+    {
+      "agent": "unknown",
+      "commits": 424
+    },
+    {
+      "agent": "MacBook-Pro-M1",
+      "commits": 82
+    },
+    {
+      "agent": "claude",
+      "commits": 56
+    },
+    {
+      "agent": "glm",
+      "commits": 38
+    },
+    {
+      "agent": "codex",
+      "commits": 30
+    },
+    {
+      "agent": "kimi",
+      "commits": 14
+    },
+    {
+      "agent": "openrouter",
+      "commits": 2
+    },
+    {
+      "agent": "deepseek",
+      "commits": 1
+    }
+  ]
+}

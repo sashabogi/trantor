@@ -10,6 +10,7 @@ export type GraphLayout = "flow" | "districts";
 export type GraphViewState = {
   expanded: ReadonlySet<string>;
   lens: GraphLens;
+  agentFilter: string | null;
   layout: GraphLayout;
   selected: string | null;
   /** The canvas scroll offsets: the graph's pan. */
@@ -20,6 +21,7 @@ export type GraphViewState = {
 const fresh = (): GraphViewState => ({
   expanded: new Set(),
   lens: "clusters",
+  agentFilter: null,
   layout: "flow",
   selected: null,
   scrollLeft: 0,
