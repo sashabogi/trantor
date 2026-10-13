@@ -229,6 +229,8 @@ pub fn run() {
             dismissed_sessions_clear,
             right_panel_get,
             right_panel_set,
+            project_lens_get,
+            project_lens_set,
             save_pasted_image,
             attachment_info,
             draft_persist,

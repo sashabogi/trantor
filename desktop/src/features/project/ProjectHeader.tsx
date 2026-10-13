@@ -4,7 +4,7 @@
 // live right and shrink FIRST. One component here keeps BOARD/FEED/CHAT from drifting apart.
 import type { ReactNode } from "react";
 
-const LENSES = ["workspace", "code", "board", "feed", "bus"] as const;
+export const LENSES = ["workspace", "code", "graph", "board", "feed", "bus"] as const;
 export type Lens = (typeof LENSES)[number];
 /** Lens values that may still arrive from a pane opened before the v3 rename (#5814). They are
  *  not tabs — AppShell routes them to the Code surface; nothing here renders them. */

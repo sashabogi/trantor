@@ -59,6 +59,18 @@ pub(crate) fn right_panel_set(project: String, tab: String, dock: String) -> Res
     serde_json::to_string(&right_panel::set(project, tab, dock)?).map_err(|e| e.to_string())
 }
 
+/// #11597 — the project lens (Workspace/Code/Graph/Board/Feed/Bus) the app reopens on, durable
+/// per project so a restart lands where the operator left it. See project_lens.rs.
+#[tauri::command]
+pub(crate) fn project_lens_get(project: String) -> Result<String, String> {
+    serde_json::to_string(&project_lens::get(project)?).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub(crate) fn project_lens_set(project: String, lens: String) -> Result<String, String> {
+    serde_json::to_string(&project_lens::set(project, lens)?).map_err(|e| e.to_string())
+}
+
 /// The autonomy dials, read and written through the CLI: the dependency rules between dials live
 /// in lib/autonomy.mjs, and a Rust copy would drift on the side that decides whether we push.
 #[tauri::command]

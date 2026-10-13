@@ -17,11 +17,10 @@ import { stripLabelsNeed, tabsMode, type TabsMode } from "./tabStrip";
 import { clampPaneWidth, loadPaneWidth, PANE_DEFAULT, PANE_MIN, PANE_ROW_RESERVED, PANE_STEP, savePaneWidth, clearPaneWidth } from "./paneWidth";
 import type { SessionRow } from "./sessionsApi";
 import { chatTabNeedsYou, initialTab, rightPanelApi } from "./rightPanelState";
+import { scopeSeats } from "./scopeSeats";
 import { orchestratorOf } from "../workspace/herdr";
 
 type Mode = "files" | "git" | "sessions" | "chat";
-
-const seatName = (session: string) => session.split(":")[0];
 
 /** "…/features/code/Files.tsx" — the CHANGED rows truncate from the LEFT, the way the artboard
  *  does it (Main.dc.html:113): what you recognize in a changed file is the end of the path. */
@@ -172,7 +171,8 @@ export function ModePane({ client, project, seat, onSeat, onOpenFile }: {
     setWidthOverride(null);
   };
 
-  // The seats of this project — the footer's scope chips. Same peers poll every lens runs.
+  // The seats of this project — the footer's scope chips. Same peers poll every lens runs, and
+  // the SAME rule the Graph lens's chips read (scopeSeats.ts), so the pickers never disagree.
   const [peers, setPeers] = useState<Peer[]>([]);
   useEffect(() => {
     let alive = true;
@@ -202,10 +202,7 @@ export function ModePane({ client, project, seat, onSeat, onOpenFile }: {
 
   // Changed-file count per seat, for the footer chips: the one-click answer to "which worktree
   // has edits". Absent = clean, never a zero.
-  const seats = useMemo(
-    () => peers.filter(p => p.session.endsWith(`:${project}`) && !p.session.toLowerCase().startsWith("macbook")),
-    [peers, project],
-  );
+  const seats = useMemo(() => scopeSeats(peers, project), [peers, project]);
   const seatCount = (name: string) => changeRows.filter(r => r.seat === name).length;
 
   // The note composer refs the seat's in-flight card, so a note lands as "#id <note>" exactly
@@ -545,12 +542,11 @@ export function ModePane({ client, project, seat, onSeat, onOpenFile }: {
                 <span className="tr-mono flex-1">project</span>
                 <span className="text-[10.5px] text-tr-muted/70">the checkout</span>
               </button>
-              {seats.map(s => {
-                const name = seatName(s.session);
+              {seats.map(name => {
                 const n = seatCount(name);
                 return (
                   <button
-                    key={s.session}
+                    key={name}
                     type="button"
                     onClick={() => { onSeat(name); setScopeOpen(false); }}
                     data-on={seat === name}

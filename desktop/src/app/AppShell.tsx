@@ -46,6 +46,9 @@ import { Overseer } from "../features/overseer/Overseer";
 import { Settings } from "../features/settings/Settings";
 import { Files } from "../features/code/Files";
 import { ModePane } from "../features/code/ModePane";
+import { GraphLens } from "../features/code/graph/GraphLens";
+import type { Lens } from "../features/project/ProjectHeader";
+import { projectLensApi } from "../features/project/lensState";
 import { Conversation } from "../features/chat/Conversation";
 import { BalanceStrip } from "../features/fleet/BalanceStrip";
 import { notifyIfWorthIt } from "../shared/notify";
@@ -297,8 +300,28 @@ export function AppShell() {
 
   const openProject = (p: string) => {
     if (projects.includes(p)) setActive(p);
-    setPane({ kind: "project", lens: "board" });
+    openLens("board", p);
   };
+
+  // One door for landing on a project lens (#11597): it sets the pane AND remembers the lens
+  // per project (config.json via lensState.ts), so a restart reopens where the operator left
+  // off — the Graph lens included. The project is a parameter because callers that also set
+  // `active` hold the OLD value in `active` at call time.
+  const openLens = (lens: Lens, project: string = active) => {
+    setPane({ kind: "project", lens });
+    if (project) void projectLensApi.set(project, lens);
+  };
+
+  // #11597: once at launch, the first resolved project reopens its remembered lens (graph
+  // included). Only a pane still on Home yields — an operator who already navigated wins.
+  const lensRestored = useRef(false);
+  useEffect(() => {
+    if (!active || lensRestored.current) return;
+    lensRestored.current = true;
+    void projectLensApi.get(active).then(stored => {
+      if (stored) setPane(cur => (cur.kind === "home" ? { kind: "project", lens: stored } : cur));
+    }).catch(() => {});
+  }, [active]);
 
   // WAKE makes a sleeping project live without leaving the app: one `trantor open` via the
   // frozen herdr bridge, which reattaches rather than stacks and claims any waiting handoff
@@ -337,7 +360,7 @@ export function AppShell() {
       const result = await invoke<string>("project_wake", { project: p, kickoff: PLAIN_WAKE_KICKOFF });
       showOutcome(p, classifyWakeOutcome(result, null));
       setActive(p);
-      setPane({ kind: "project", lens: "workspace" });
+      openLens("workspace", p);
       // #7269 — drop through the settle loop's mirror: state alone would resurrect the
       // just-resumed row on the next poll, until the new pane registers as live.
       dropRestorable(p);
@@ -689,26 +712,32 @@ export function AppShell() {
           : pane.kind === "settings" ? <Settings me={ME} update={update} projects={[...activeProjects, ...restProjects]} project={active}
               onReopenOnboarding={() => onboardingApi.get().then(state => { setOnboarding(state); setForcedOnboarding(true); })}
               onStartDrill={() => setDrill(true)} />
-          : pane.lens === "workspace" ? <Workspace client={client} project={active} lens={pane.lens} onLens={l => setPane({ kind: "project", lens: l })} />
-          : pane.lens === "board" ? <Board client={client} project={active} lens={pane.lens} onLens={l => setPane({ kind: "project", lens: l })} focusCard={focusCard} onFocusConsumed={() => setFocusCard(null)} />
-          : pane.lens === "bus" ? <Conversation client={client} project={active} me={ME} lens={pane.lens} onLens={l => setPane({ kind: "project", lens: l })} />
-          : pane.lens === "code" || pane.lens === "files" || pane.lens === "review" ? <Files client={client} project={active} lens="code" onLens={l => setPane({ kind: "project", lens: l })}
+          : pane.lens === "workspace" ? <Workspace client={client} project={active} lens={pane.lens} onLens={openLens} />
+          : pane.lens === "board" ? <Board client={client} project={active} lens={pane.lens} onLens={openLens} focusCard={focusCard} onFocusConsumed={() => setFocusCard(null)} />
+          : pane.lens === "bus" ? <Conversation client={client} project={active} me={ME} lens={pane.lens} onLens={openLens} />
+          : pane.lens === "graph" ? <GraphLens client={client} project={active} lens={pane.lens} onLens={openLens}
+              seat={fileSeat} onSeat={setFileSeat}
+              onOpenFile={p => { setFilePath(p); openLens("code"); }} />
+          : pane.lens === "code" || pane.lens === "files" || pane.lens === "review" ? <Files client={client} project={active} lens="code" onLens={openLens}
                                            path={filePath} seat={fileSeat} onSeat={setFileSeat} />
-           : <Feed client={client} project={active} lens={pane.lens} onLens={l => setPane({ kind: "project", lens: l })} />}
+           : <Feed client={client} project={active} lens={pane.lens} onLens={openLens} />}
         </div>
       </main>
       </div>
       {/* The mode pane (#5841): ONE right pane for the project — Files (CHANGED pinned above the
           tree), Git (PR affordance, notes), Sessions (ghost), Chat (the orchestrator conversation,
           moved whole from the old dock). It REPLACES the left tree column, the chat dock, and the
-          in-lens SCM rail by owning their pieces; the editor narrows, never disappears. */}
-      {pane.kind === "project" && active && client && (
+          in-lens SCM rail by owning their pieces; the editor narrows, never disappears.
+          EXCEPT on the Graph lens (#11597): the graph is the operator's full-width view of the
+          code — a peer of Board and Feed, not a tab in the editor — so the pane stands down and
+          the surface spans the whole column; its seat-scope picker rides the lens itself. */}
+      {pane.kind === "project" && pane.lens !== "graph" && active && client && (
         <ModePane
           client={client}
           project={active}
           seat={fileSeat}
           onSeat={setFileSeat}
-          onOpenFile={p => { setFilePath(p); setPane({ kind: "project", lens: "code" }); }}
+          onOpenFile={p => { setFilePath(p); openLens("code"); }}
         />
       )}
     </div>
@@ -719,8 +748,8 @@ export function AppShell() {
         searchProjects={palette.kind === "project" ? [palette.project]
           : [...new Set([active, ...activeProjects])].filter(Boolean)}
         onClose={() => setPalette(null)}
-        onJumpProject={p => { setActive(p); setPane({ kind: "project", lens: "board" }); }}
-        onOpenCard={(p, id) => { setActive(p); setPane({ kind: "project", lens: "board" }); setFocusCard(id); }}
+        onJumpProject={p => { setActive(p); openLens("board", p); }}
+        onOpenCard={(p, id) => { setActive(p); openLens("board", p); setFocusCard(id); }}
       />
     )}
     {genesisRoot !== null && (
@@ -734,7 +763,7 @@ export function AppShell() {
           // `trantor new` is done — close the sheet and land on the project NOW. The wake it
           // kicks off next is a detached step the sheet reports with a toast, not a wait (#6161).
           setActive(project);
-          setPane({ kind: "project", lens: "workspace" });
+          openLens("workspace", project);
           setGenesisRoot(null);
         }}
       />
