@@ -1,0 +1,4 @@
+{"type":"metadata","protocol_version":"1.5","created_at":1791903600000}
+{"type":"usage.record","model":"kimi-code/k3","usage":{"inputOther":2000,"output":60,"inputCacheRead":50000,"inputCacheCreation":0},"usageScope":"turn","time":1791903660000}
+{"type":"context.append_loop_event","event":{"type":"tool.result","result":{"output":"ok"}}}
+{"type":"usage.record","model":"kimi-code/k3","usage":{"inputOther":1000,"output":80,"inputCacheRead":140000,"inputCacheCreation":500},"usageScope":"turn","time":1791903700000}

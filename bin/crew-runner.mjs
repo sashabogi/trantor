@@ -28,7 +28,8 @@ import {
   CUT_CHAIN_PARK_MIN, cutChainEvidence, isBoundedPark, askDuringTurn, askedVerdict,
 } from "../lib/turn-policy.mjs";
 import { snapshotBeforeCut } from "./cut-snapshot.mjs";
-import { ocTurnUsage, dshTurnUsage, usageTotal } from "../lib/turn-usage.mjs";
+import { ocTurnUsage, dshTurnUsage, usageTotal, processedInput, codexStepInput, kimiStepInput, claudeStepInput } from "../lib/turn-usage.mjs";
+import { capConfig, capDecision, capHandoffPrompt, capPointerLine, capExhaustedNote } from "../lib/context-cap.mjs";
 import { ocCompactionContent, ocCompactionLogLine } from "../lib/seat-compaction.mjs";
 import { seatSignalPrefix } from "../lib/seat-signal-guard.mjs";
 import { listContainers, newContainers, recordContainers, statePathFor as dockerStatePathFor, sweep as dockerSweep } from "../lib/docker-janitor.mjs";
@@ -759,6 +760,24 @@ let cardStartedAt = releaseState?.cardStartedAt || 0;
 let budgetStop = releaseState?.budgetStop || null;   // { card, tokens } once the card crossed
 let budgetRetryAt = releaseState?.budgetRetryAt || 0;   // paces the paused card's OWN redeliveries
 
+// #11855: card context cap (decision in lib/context-cap.mjs). codex/kimi/claude resume one session
+// per card with no compaction knob; a clean turn whose last step passed the cap earns one handoff
+// note, and the card's next wake starts a fresh session pointed at it. opencode and dsh are exempt.
+const CAPCFG = capConfig();
+let capHandoffs = releaseState?.capHandoffs || {};   // { cardId: handoffs so far }
+let capLogged = releaseState?.capLogged || {};       // { cardId: true } the exhausted note was posted
+let capArmed = releaseState?.capArmed || null;       // { card, tokens }: that card's next wake goes fresh
+let capFreshTurn = releaseState?.capFreshTurn || 0;  // TURN of the last fresh session start
+
+// Last step's processed input from the harness's own record; null = unreadable, never trips.
+function capStepProcessed(sinceMs) {
+  const u = DRIVER === "codex" ? codexStepInput(join(homedir(), ".codex", "sessions"), sinceMs, TURN_DIR)
+    : DRIVER === "kimi" ? kimiStepInput(join(homedir(), ".kimi-code", "sessions"), sid, sinceMs)
+    : DRIVER === "claude" ? claudeStepInput(TRANSCRIPT_DIR, sinceMs)
+    : null;
+  return u ? processedInput(u) : null;
+}
+
 // #11559: the compaction block injected to opencode-family seats via OPENCODE_CONFIG_CONTENT (""
 // injects nothing: TRANTOR_OC_COMPACTION=off or invalid JSON). opencode has no absolute-threshold
 // knob — auto-compact fires at window − reserved (opencode.ai/config.json; calculateCeiling in
@@ -785,7 +804,8 @@ async function runTurn(prompt, isFirst, trigger = "kickoff", opts = {}) {
   const t0 = Date.now();
   // A fresh session must not resume the old one's id: `first` is chosen by isFirst OR a missing
   // sid, so a stale sid would quietly resume the session this turn exists to leave behind.
-  if (isFirst) sid = "";
+  // #11855: the min-steps guard counts from the last fresh start; a state step never resets it.
+  if (isFirst) { sid = ""; if (!opts.state) capFreshTurn = TURN; }
   // #5965 — TURN START. The hub peer row is where the app reads activity from, and the runner is
   // the only one who knows a turn is starting, so say so before the CLI spawn (awaited: the spawn
   // below blocks the loop, an unawaited fetch would not leave the machine until the turn ended).
@@ -1195,6 +1215,26 @@ exit $turn_exit`;
     try { return await runTurn(TIME_BOX_PROMPT, false, "time-box follow-up"); }
     finally { inFollowUp = false; }
   }
+  // #11855: a clean card turn only; a cut turn belongs to the box follow-up chain, and the handoff
+  // follow-up's own end must not arm another.
+  if (CAPCFG.cap > 0 && !cut && !inFollowUp && !opts.state && effExit === 0 && sessionCard > 0) {
+    const step = capStepProcessed(t0);
+    const doneHandoffs = capHandoffs[sessionCard] || 0;
+    const act = capDecision({ ...CAPCFG, step, turn: TURN, freshTurn: capFreshTurn, handoffs: doneHandoffs, logged: !!capLogged[sessionCard] });
+    if (act === "log-exhausted") {
+      capLogged[sessionCard] = true;
+      const text = capExhaustedNote(sessionCard, CAPCFG.cap, step, doneHandoffs, CAPCFG.maxHandoffs);
+      log(`\x1b[33m${text}\x1b[0m`);
+      await api("/task/update", { id: sessionCard, note: text, by: SESSION }).catch(() => {});
+    } else if (act === "handoff") {
+      log(`\x1b[33mcontext cap: the last step processed ${step} > ${CAPCFG.cap}; #${sessionCard} hands off to a fresh session (${doneHandoffs + 1}/${CAPCFG.maxHandoffs})\x1b[0m`);
+      capHandoffs[sessionCard] = doneHandoffs + 1;
+      capArmed = { card: sessionCard, tokens: step };
+      inFollowUp = true;
+      try { await runTurn(capHandoffPrompt(sessionCard), false, "context-cap handoff"); }
+      finally { inFollowUp = false; }
+    }
+  }
   return effExit;
 }
 
@@ -1492,7 +1532,8 @@ async function resolveWakeCard(messages, { session }) {
         wake: pendingWake, bcast: pendingBcast, seen: seenLedger, ask: awaitingAsk?.id || 0, askTo: awaitingAsk?.to || "" }));
       const state = { cursor, turn: TURN, sid, sessionCard, retryAt, deliveryFails,
         noDeliveryRetry, askReleased, lastTurnAt, attempted: [...attemptedVersions],
-        cardTokens, cardStartedAt, budgetStop, budgetRetryAt };
+        cardTokens, cardStartedAt, budgetStop, budgetRetryAt,
+        capHandoffs, capLogged, capArmed, capFreshTurn };
       process.execve(process.execPath, [process.execPath, ...process.execArgv, ...process.argv.slice(1)],
         { ...process.env, CREW_RELEASE_STATE: JSON.stringify(state) });
     } catch (error) { log(`runner restart failed: ${error.message}`); }
@@ -1784,7 +1825,10 @@ async function resolveWakeCard(messages, { session }) {
     // #10824: the LABEL is the binding, 0 included — a wake that binds nothing labels its turn 0
     // and never inherits the previous contract's card (#10197's judge then reads the right card).
     const sessionCardForTurn = card || baseCard;
-    const fresh = !resumedAfterAsk && sessionCardForTurn > 0 && sessionCardForTurn !== sessionCard;
+    const newCard = !resumedAfterAsk && sessionCardForTurn > 0 && sessionCardForTurn !== sessionCard;
+    // #11855: the armed card's next wake starts a fresh session that reads the handoff note.
+    const capFresh = !resumedAfterAsk && !!capArmed && capArmed.card === sessionCardForTurn;
+    const fresh = newCard || capFresh;
     // #11559: a pause rides the card, not the seat — a contract for a DIFFERENT card lifts it
     // (and resets the counter with the fresh session below); the paused card itself never buys
     // another CLI session. The wake stays owed and retries on a long clock, so the orchestrator
@@ -1797,17 +1841,19 @@ async function resolveWakeCard(messages, { session }) {
       budgetRetryAt = Date.now() + BUDGET_RETRY_MS;
       return;
     }
-    if (budgetStop && fresh) { budgetStop = null; budgetRetryAt = 0; }
-    if (fresh) { cardTokens = 0; cardStartedAt = Date.now(); }
+    if (budgetStop && newCard) { budgetStop = null; budgetRetryAt = 0; }
+    if (newCard) { cardTokens = 0; cardStartedAt = Date.now(); }
     sessionCard = card;
     const cited = [...new Set(wakeForTurn.flatMap(m => cardRefs(m.text)))];
-    const freshText = fresh
+    const capPointer = capFresh ? capPointerLine(sessionCardForTurn) : "";
+    if (capFresh) capArmed = null;
+    const freshText = capPointer + (newCard
       ? `\n(FRESH SESSION for card #${card} — you are not the session that worked earlier cards and you remember none of them. Read your card first: relay_board with card:${card}.)\n`
       // A wake naming several cards used to leave the seat guessing which one the machine believed
       // — the prompt named two and committed to neither. Say it, even when the session continues.
       : (card && cited.length > 1
         ? `\n(This turn is card #${card} — the wake cites ${cited.length} cards; the rest are context.)\n`
-        : "");
+        : ""));
     const prompt = composedTurn({
       wakeText, ctxText, againText: againText + freshText + baseText + dutyNudgeDirective(dutyPlan),
       tailText: "\nAct on what's addressed to you, then end your turn.\n\n",
@@ -1996,6 +2042,14 @@ async function resolveWakeCard(messages, { session }) {
         try {
           const { task } = await api(`/card?project=${encodeURIComponent(PROJ)}&id=${sessionCard}`);
           if (task && (task.status === "testing" || task.status === "done")) await janitorStop(`#${sessionCard} → ${task.status}`, sessionCard);
+          // #11855: a handoff was written and no wake is queued, so the card would idle; wake it
+          // ourselves into the fresh session unless the seat already moved it to testing/done.
+          else if (task && capArmed?.card === sessionCard && !pendingWake.length) {
+            pendingWake.push({ id: `cap-${sessionCard}-${capHandoffs[sessionCard] || 0}`, from: SESSION, to: SESSION, card: sessionCard, kind: "status", ts: Date.now(),
+              text: `#${sessionCard}: the context cap handoff note is written; continue the card in this fresh session.` });
+            savePending(pendingWake, pendingBcast);
+            log(`context cap: #${sessionCard} re-queued itself into a fresh session`);
+          }
         } catch {}
       }
       await notifyAssigners(assigners,

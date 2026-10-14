@@ -1,0 +1,4 @@
+{"type":"user","message":{"role":"user","content":"go"},"timestamp":"2026-10-13T15:00:00.000Z","sessionId":"c-1"}
+{"type":"assistant","isSidechain":false,"message":{"role":"assistant","usage":{"input_tokens":2,"cache_creation_input_tokens":100,"cache_read_input_tokens":60000,"output_tokens":30}},"timestamp":"2026-10-13T15:00:10.000Z","sessionId":"c-1"}
+{"type":"assistant","isSidechain":false,"message":{"role":"assistant","usage":{"input_tokens":3,"cache_creation_input_tokens":500,"cache_read_input_tokens":125000,"output_tokens":40}},"timestamp":"2026-10-13T15:00:40.000Z","sessionId":"c-1"}
+{"type":"assistant","isSidechain":true,"message":{"role":"assistant","usage":{"input_tokens":900000,"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"output_tokens":1}},"timestamp":"2026-10-13T15:00:50.000Z","sessionId":"c-1"}
