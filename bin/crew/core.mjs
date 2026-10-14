@@ -1,4 +1,4 @@
-import { accessSync, constants, existsSync, mkdirSync, readFileSync } from "node:fs";
+import { accessSync, constants, existsSync, mkdirSync, readFileSync, realpathSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
@@ -85,8 +85,20 @@ function selectMux(env, have) {
   return "terminal";
 }
 
+// PWD keeps a symlinked spelling of the cwd, so prefer it, but only while it still names the cwd.
+// A parent that spawns with a different cwd leaves its own PWD behind: the app relaunched from a
+// trantor shell ran every `trantor open <other>` as trantor and the handoff refused.
+export function workingDir(env = process.env, cwd = process.cwd()) {
+  if (!env.PWD) return cwd;
+  try {
+    return realpathSync(env.PWD) === realpathSync(cwd) ? env.PWD : cwd;
+  } catch {
+    return cwd;
+  }
+}
+
 export function createContext(command, env = process.env) {
-  const dir = env.PWD || process.cwd();
+  const dir = workingDir(env);
   const home = env.HOME || "";
   const project = env.RELAY_PROJECT || projectFromGit(dir);
   const have = {
