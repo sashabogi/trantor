@@ -51,6 +51,9 @@ try {
       String(out.sessionTitle || "").includes(proj) && String(out.sessionTitle || "").includes(CARD));
   }
 
+  const cleared = parse(runHook("clear"));
+  ok("clear (an emptied context) gets the full block", (cleared.additionalContext || "").includes("<trantor-project-state"));
+
   const unknown = parse(runHook(""));
   ok("empty/unknown source fails OPEN to the full block", (unknown.additionalContext || "").includes("<trantor-project-state"));
 } finally {

@@ -305,7 +305,7 @@ try {
     // it got at startup and a compacted one carries the summary, so each `claude -c` was welding another
     // 2-4K-token board snapshot into the transcript for good. Empty/unknown source fails open to the
     // full block (a launcher that omits it is starting fresh); the pointer keeps the model staleness-honest.
-    const freshStart = !source || source === "startup";
+    const freshStart = !source || source === "startup" || source === "clear";   // /clear empties the context, so it needs the board too
     let gitlog = "";
     if (freshStart) {
       try { gitlog = execSync(`git -C ${JSON.stringify(projectDir)} log --oneline -5 2>/dev/null`, { encoding: "utf8", timeout: 2500 }).trim(); } catch {}
