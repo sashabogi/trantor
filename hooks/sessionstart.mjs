@@ -300,10 +300,20 @@ try {
   // SAME project where it stands instead of starting blind. Cheap + LLM-free.
   try {
     const cu = await jget(`${url}/catchup?project=${encodeURIComponent(project)}`, session).catch(() => null);
-    sessionTitle = sessionTitleFrom(project, cu);   // "<project> · <current work>" for the picker/--resume/mobile
+    sessionTitle = sessionTitleFrom(project, cu);   // "<project> · <current work>" — computed on EVERY source; the picker/--resume/mobile read it
+    // #11853: only a FRESH start pays for the full board dump. A resumed session still carries the copy
+    // it got at startup and a compacted one carries the summary, so each `claude -c` was welding another
+    // 2-4K-token board snapshot into the transcript for good. Empty/unknown source fails open to the
+    // full block (a launcher that omits it is starting fresh); the pointer keeps the model staleness-honest.
+    const freshStart = !source || source === "startup";
     let gitlog = "";
-    try { gitlog = execSync(`git -C ${JSON.stringify(projectDir)} log --oneline -5 2>/dev/null`, { encoding: "utf8", timeout: 2500 }).trim(); } catch {}
-    if ((cu && cu.total > 0) || gitlog) {
+    if (freshStart) {
+      try { gitlog = execSync(`git -C ${JSON.stringify(projectDir)} log --oneline -5 2>/dev/null`, { encoding: "utf8", timeout: 2500 }).trim(); } catch {}
+    }
+    if (!freshStart && cu && cu.total > 0) {
+      additionalContext += `<trantor-board-pointer project="${sanitize(project)}" source="${sanitize(source)}">Board may have moved since this session last ran — one \`relay_board\` call gets the current board before you act on remembered cards.</trantor-board-pointer>\n`;
+      process.stderr.write(`[trantor] ${source}: board pointer only for ${project} — full catch-up skipped (#11853)\n`);
+    } else if (freshStart && ((cu && cu.total > 0) || gitlog)) {
       const line = (arr) => (arr || []).map(t => `#${t.id} ${String(t.title).slice(0, 72)}${t.assignee ? ` @${t.assignee}` : ""}`).join("\n  ");
       additionalContext += `<trantor-project-state project="${sanitize(project)}">\n`;
       additionalContext += `📋 **Catching up on the continuous "${sanitize(project)}" board** (this project's living record across all sessions — read it before starting; don't duplicate done work).\n`;
