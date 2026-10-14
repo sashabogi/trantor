@@ -1,5 +1,6 @@
 // The graph view's bridge to `code_graph` (#7952): one command, file-level nodes and edges only,
 // or `{error}` when graft is missing. The lens shows the error where the canvas would be.
+import type { Attribution } from "./attribution";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { projectChanges, type ProjectChangeRow } from "../gitApi";
@@ -64,6 +65,7 @@ export function watchFileChanges(project: string, onBatch: (paths: string[]) => 
 
 /** What GraphView reads, as an object so a drill can hand it fixtures without module mocking. */
 export type GraphApi = {
+  attribution?: (project: string, seat?: string) => Promise<Attribution>;
   graph: (project: string, seat?: string) => Promise<CodeGraphResponse>;
   changes: (project: string) => Promise<ProjectChangeRow[]>;
   fileChanges: (project: string, onBatch: (paths: string[]) => void) => () => void;
@@ -71,7 +73,7 @@ export type GraphApi = {
   fileEvents?: (project: string) => Promise<FileEvent[]>;
 };
 
-export const graphApi: GraphApi = { graph: codeGraph, changes: projectChanges, fileChanges: watchFileChanges };
+export const graphApi: GraphApi = { attribution: async (project, seat) => JSON.parse(await invoke<string>("code_attribution", { project, seat: seat ?? null })), graph: codeGraph, changes: projectChanges, fileChanges: watchFileChanges };
 
 /** The app's api: the commands above plus the hub's file events, exact types, newest 2000. */
 export function graphApiFor(client: Pick<HubClient, "events">): GraphApi {

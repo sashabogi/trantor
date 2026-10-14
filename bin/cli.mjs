@@ -36,6 +36,7 @@ switch (cmd) {
   case "agent-settings": run("bin/agent-settings.mjs"); break;
   case "adopt":   spawn(process.execPath, [join(ROOT, "bin/adopt.mjs"), ...args], { stdio: "inherit", cwd: process.cwd() }).on("exit", c => process.exit(c ?? 0)); break;
   case "integrate": spawn(process.execPath, [join(ROOT, "bin/integrate.mjs"), ...args], { stdio: "inherit", cwd: process.cwd() }).on("exit", c => process.exit(c ?? 0)); break;
+  case "attribution": run("bin/attribution.mjs"); break;
   case "harvest": run("bin/harvest.mjs"); break;
   case "sync": run("bin/sync.mjs"); break;
   case "down":    runCrew(); break;

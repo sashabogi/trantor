@@ -1,6 +1,7 @@
 // The districts layout on the Code surface (#7978, blueprint §4.1): the second layout behind
 // the graph's tr-seg. Cluster blocks over the pane, file tiles inside by size; the lenses
 // recolour the same tiles the flow layout draws as cards. Layout maths: graph/districts.ts.
+import { whoFill, whoTitle } from "./graph/attribution";
 import { hueOf } from "../../shared/Avatar";
 import { BLOCK_HEAD, heatFill, type Districts } from "./graph/districts";
 import type { GraphLens, RenderNode } from "./graph/deriveGraph";
@@ -21,9 +22,9 @@ export function DistrictsView({ districts, lens, selected, width, height, onCard
         <div
           key={b.cluster}
           className="absolute overflow-hidden rounded-[6px] border border-tr-edge"
-          style={{ left: b.x, top: b.y, width: b.w, height: b.h, background: clusterTint(b.cluster, 0.08) }}
+          style={{ opacity: lens === "who" && b.dimmed ? 0.4 : 1, left: b.x, top: b.y, width: b.w, height: b.h, background: lens === "who" ? whoFill(b.agents ?? []) : clusterTint(b.cluster, 0.08) }}
           data-district={b.cluster}
-          title={`${b.cluster} · ${b.files} files · ${b.chars.toLocaleString()} chars`}
+          title={lens === "who" ? `${b.cluster}\n${whoTitle(b.agents ?? [], true)}` : `${b.cluster} · ${b.files} files · ${b.chars.toLocaleString()} chars`}
         >
           {b.w > 36 && (
             <div
@@ -37,7 +38,7 @@ export function DistrictsView({ districts, lens, selected, width, height, onCard
       ))}
       {districts.tiles.map(({ node, x, y, w, h }) => {
         const isSelected = node.id === selected;
-        const fill = lens === "hotspots" ? heatFill(node.heat) : clusterTint(node.cluster, 0.22);
+        const fill = lens === "who" ? whoFill(node.agents ?? []) : lens === "hotspots" ? heatFill(node.heat) : clusterTint(node.cluster, 0.22);
         return (
           <button
             key={node.id}
@@ -49,7 +50,7 @@ export function DistrictsView({ districts, lens, selected, width, height, onCard
             data-graph-tone={node.tone}
             data-graph-heat={node.heat}
             data-graph-area={Math.round(w * h)}
-            title={`${node.id} · ${node.chars.toLocaleString()} chars · heat ${node.heat}`}
+            title={lens === "who" ? `${node.id}\n${whoTitle(node.agents ?? [])}` : `${node.id} · ${node.chars.toLocaleString()} chars · heat ${node.heat}`}
             className="absolute overflow-hidden rounded-[4px] text-left text-[10.5px] text-tr-text"
             style={{
               left: x,

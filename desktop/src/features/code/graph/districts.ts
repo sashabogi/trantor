@@ -2,6 +2,7 @@
 // proportional to its size packed inside its cluster, the picture for "how much of the code is
 // in this state". squarify is vendored from Flare src/components/DistrictsView.tsx (5adc94b),
 // MIT License, Copyright (c) 2026 AlgoNoRhythm; the notice is LICENSE.flare beside this file.
+import { aggregateAgents, type AgentHistory } from "./attribution";
 import { ROOT_CLUSTER, type RenderNode } from "./deriveGraph";
 
 export type Rect = { id: string; x: number; y: number; w: number; h: number };
@@ -70,7 +71,7 @@ export const BLOCK_PAD = 3;
 export const BLOCK_HEAD = 16;
 export const PANE_PAD = 8;
 
-export type DistrictBlock = Rect & { cluster: string; files: number; chars: number; heat: number };
+export type DistrictBlock = Rect & { cluster: string; files: number; chars: number; heat: number; agents?: AgentHistory[]; dimmed?: boolean };
 export type DistrictTile = Rect & { node: RenderNode };
 export type Districts = { blocks: DistrictBlock[]; tiles: DistrictTile[] };
 
@@ -98,6 +99,8 @@ export function districtsOf(nodes: readonly RenderNode[], width: number, height:
     const members = groups.get(rect.id) ?? [];
     blocks.push({
       ...rect,
+      dimmed: members.every(node => node.tone === "dim"),
+      agents: aggregateAgents(members.map(node => node.agents ?? [])),
       cluster: rect.id,
       files: members.length,
       chars: members.reduce((a, n) => a + n.chars, 0),

@@ -3,6 +3,7 @@
 // directory (rule 7), each cluster expanding in place. Clusters / Activity / Cycles are tones
 // over the same cards. No drag, no persisted positions: the layout is deterministic.
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { agentColor, whoFill, whoTitle, type Attribution } from "./graph/attribution";
 import { hueOf } from "../../shared/Avatar";
 import { DistrictsView } from "./DistrictsView";
 import { districtsOf, heatFill } from "./graph/districts";
@@ -134,6 +135,8 @@ export function GraphView({ project, seat, onOpen, api = graphApi }: {
   api?: GraphApi;
 }) {
   const [response, setResponse] = useState<CodeGraphResponse | null>(null);
+  const [attribution, setAttribution] = useState<Attribution | null>(null);
+  const [attributionError, setAttributionError] = useState<string | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [dirty, setDirty] = useState<DirtyMark[]>([]);
   const [fileEvents, setFileEvents] = useState<FileEvent[]>([]);
@@ -144,6 +147,7 @@ export function GraphView({ project, seat, onOpen, api = graphApi }: {
   // leaving the graph for a file and returning finds layout, lens, districts, selection and pan.
   const [saved] = useState(() => graphViewState(project));
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(saved.expanded);
+  const [agentFilter, setAgentFilter] = useState<string | null>(saved.agentFilter);
   const [lens, setLens] = useState<GraphLens>(saved.lens);
   const [layout, setLayout] = useState<GraphLayout>(saved.layout);
   const [selected, setSelected] = useState<string | null>(saved.selected);
@@ -152,29 +156,52 @@ export function GraphView({ project, seat, onOpen, api = graphApi }: {
   const [rebuilding, setRebuilding] = useState(false);
   // Only the newest request may land: a slow build must not overwrite a newer scope's graph.
   const requestRef = useRef(0);
+  const attributionRequestRef = useRef(0);
+  const attributionBusyRef = useRef(false);
 
   useEffect(() => {
-    saveGraphViewState(project, { expanded, lens, layout, selected });
-  }, [project, expanded, lens, layout, selected]);
+    saveGraphViewState(project, { expanded, lens, layout, selected, agentFilter });
+  }, [project, expanded, lens, layout, selected, agentFilter]);
+
+  const loadAttribution = useCallback((skipBusy = false) => {
+    if (skipBusy && attributionBusyRef.current) return Promise.resolve();
+    const id = ++attributionRequestRef.current;
+    if (!api.attribution) return Promise.resolve();
+    attributionBusyRef.current = true;
+    return api.attribution(project, seat ?? undefined)
+      .then(r => { if (id === attributionRequestRef.current) { setAttribution(r); setAttributionError(null); } })
+      .catch(e => { if (id === attributionRequestRef.current) { setAttribution(null); setAttributionError(e instanceof Error ? e.message : String(e)); } })
+      .finally(() => { if (id === attributionRequestRef.current) attributionBusyRef.current = false; });
+  }, [api, project, seat]);
+
+  // Commits may only touch .git, which the file watcher excludes. HEAD cache makes polling cheap.
+  useEffect(() => {
+    if (lens !== "who") return;
+    const timer = setInterval(() => { void loadAttribution(true); }, 12_000);
+    return () => clearInterval(timer);
+  }, [lens, loadAttribution]);
 
   const load = useCallback((mode: "fresh" | "rebuild") => {
     const id = ++requestRef.current;
     if (mode === "fresh") {
       setResponse(null);
+      setAttribution(null);
+      setAttributionError(null);
       setLoadError(null);
       setRebuilding(false);
     } else {
       setRebuilding(true);
     }
-    return api.graph(project, seat ?? undefined)
+    const who = loadAttribution();
+    const graphRequest = api.graph(project, seat ?? undefined)
       .then(r => { if (id === requestRef.current) { setResponse(r); setLoadError(null); } })
-      .catch(e => { if (id === requestRef.current) setLoadError(e instanceof Error ? e.message : String(e)); })
-      .finally(() => { if (id === requestRef.current) setRebuilding(false); });
-  }, [api, project, seat]);
+      .catch(e => { if (id === requestRef.current) setLoadError(e instanceof Error ? e.message : String(e)); });
+    return Promise.all([graphRequest, who]).then(() => {}).finally(() => { if (id === requestRef.current) setRebuilding(false); });
+  }, [api, project, seat, loadAttribution]);
 
   useEffect(() => {
     void load("fresh");
-    return () => { requestRef.current++; };
+    return () => { requestRef.current++; attributionRequestRef.current++; };
   }, [load]);
 
   // Refresh (#7953): one rebuild per quiet second, the old canvas up while graft runs. The
@@ -227,17 +254,18 @@ export function GraphView({ project, seat, onOpen, api = graphApi }: {
   }, []);
 
   const graph = response && !isGraphError(response) ? response : null;
+  const attributionByPath = useMemo(() => new Map(attribution?.files.map(file => [file.path, file.agents]) ?? []), [attribution]);
   const derived = useMemo(
-    () => (graph ? deriveGraph(graph, { expanded, lens, dirty, selected, unread }) : null),
-    [graph, expanded, lens, dirty, selected, unread],
+    () => (graph ? deriveGraph(graph, { expanded, lens, dirty, selected, unread, attribution: attributionByPath, agentFilter }) : null),
+    [graph, expanded, lens, dirty, selected, unread, attributionByPath, agentFilter],
   );
   const scene = useMemo(() => (derived ? place(derived.nodes, derived.edges) : null), [derived]);
   // Districts show every file: the same derivation with every cluster expanded.
   const districts = useMemo(() => {
     if (!graph || !derived || layout !== "districts") return null;
-    const full = deriveGraph(graph, { expanded: new Set(derived.clusters), lens, dirty, selected });
+    const full = deriveGraph(graph, { expanded: new Set(derived.clusters), lens, dirty, selected, unread, attribution: attributionByPath, agentFilter });
     return districtsOf(full.nodes, pane.w, pane.h);
-  }, [graph, derived, layout, lens, dirty, selected, pane]);
+  }, [graph, derived, layout, lens, dirty, selected, pane, unread, attributionByPath, agentFilter]);
   const hottest = useMemo(() => (graph ? hotspotRank(graph, dirty)[0] ?? null : null), [graph, dirty]);
 
   const onCard = (node: RenderNode) => {
@@ -272,7 +300,7 @@ export function GraphView({ project, seat, onOpen, api = graphApi }: {
         <div className="tr-seg" data-testid="graph-lens" role="tablist" aria-label="Graph lens">
           {LENSES.map(l => (
             <button key={l} type="button" role="tab" data-on={lens === l} aria-selected={lens === l} onClick={() => setLens(l)}>
-              {l}
+              {l === "who" ? "Who" : l}
             </button>
           ))}
         </div>
@@ -312,6 +340,22 @@ export function GraphView({ project, seat, onOpen, api = graphApi }: {
               ))}
             </span>
           </>
+        )}
+        {lens === "who" && (
+          <div className="flex flex-wrap items-center gap-2 text-[11px] text-tr-muted" data-testid="who-legend" aria-label="Agent history">
+            {attribution ? <>
+              <span>{attribution.coverage.total} commits</span>
+              {attribution.agents.map(row => (
+                <button key={row.agent} type="button" className="tr-chip" aria-pressed={agentFilter === row.agent}
+                  data-who-agent={row.agent} onClick={() => setAgentFilter(current => current === row.agent ? null : row.agent)}
+                  title={`Show files ${row.agent} touched; click again to clear`}>
+                  <span className="tr-dot" style={{ background: agentColor(row.agent), width: 7, height: 7 }} />
+                  {row.agent} · {row.commits} commits
+                </button>
+              ))}
+              {agentFilter && <button type="button" className="tr-chip" onClick={() => setAgentFilter(null)}>clear agent filter</button>}
+            </> : <span role={attributionError ? "alert" : "status"}>{attributionError ?? (api.attribution ? "loading agent history…" : "Agent history unavailable")}</span>}
+          </div>
         )}
         <div className="ml-auto flex items-center gap-1.5">
           {expanded.size > 0 && (
@@ -397,7 +441,7 @@ export function GraphView({ project, seat, onOpen, api = graphApi }: {
                 data-graph-cluster={node.cluster}
                 data-graph-tone={node.tone}
                 data-graph-heat={node.heat}
-                title={node.kind === "cluster"
+                title={lens === "who" ? `${node.id}\n${whoTitle(node.agents ?? [], node.kind === "cluster")}` : node.kind === "cluster"
                   ? `${node.label} · ${node.files} files · click to expand`
                   : `${node.id} · ${node.inDegree} in · ${node.outDegree} out`}
                 className="tr-card absolute flex items-center gap-1.5 px-2 text-left text-[11.5px] text-tr-text"
@@ -408,9 +452,11 @@ export function GraphView({ project, seat, onOpen, api = graphApi }: {
                   height: CARD_H,
                   borderRadius: 8,
                   borderLeftWidth: 3,
-                  borderLeftColor: clusterTint(node.cluster),
-                  borderColor: NODE_BORDER[node.tone],
-                  background: lens === "hotspots" ? heatFill(node.heat) : NODE_FILL[node.tone],
+                  borderLeftColor: lens === "who" ? agentColor(node.agents?.[0]?.agent ?? "unknown") : clusterTint(node.cluster),
+                  borderTopColor: NODE_BORDER[node.tone],
+                  borderRightColor: NODE_BORDER[node.tone],
+                  borderBottomColor: NODE_BORDER[node.tone],
+                  background: lens === "who" ? whoFill(node.agents ?? []) : lens === "hotspots" ? heatFill(node.heat) : NODE_FILL[node.tone],
                   opacity: node.tone === "dim" ? 0.35 : 1,
                   fontWeight: node.kind === "cluster" ? 600 : 400,
                 }}

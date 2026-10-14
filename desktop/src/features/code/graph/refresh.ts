@@ -8,8 +8,8 @@ export const QUIET_MS = 1000;
 /** graft's own output lives under `graft/` in the checkout, which the watcher does not skip:
  *  a rebuild that heard its own writes would rebuild forever. */
 export function isBuildOutput(path: string): boolean {
-  const first = path.replace(/^[/\\]+/, "").split(/[/\\]/, 1)[0];
-  return first === "graft";
+  const parts = path.replace(/^[/\\]+/, "").split(/[/\\]/);
+  return parts[0] === "graft" || (parts[0] === ".trantor" && parts[1] === "cache");
 }
 
 /** Whether a watcher batch holds anything a rebuild would see differently. */

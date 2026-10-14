@@ -2,11 +2,12 @@
 // one card per top-level directory, expanded in place per cluster, and recoloured per lens. Every
 // lens is a tone over the same cards, never a second drawing.
 import type { CodeGraph, GraphEdge, GraphNode } from "./graphApi";
+import { aggregateAgents, type AgentHistory } from "./attribution";
 import type { UnreadState } from "./unread";
 
-export type GraphLens = "clusters" | "activity" | "cycles" | "unread" | "hotspots";
+export type GraphLens = "clusters" | "activity" | "cycles" | "unread" | "hotspots" | "who";
 
-export const LENSES: readonly GraphLens[] = ["clusters", "activity", "cycles", "unread", "hotspots"];
+export const LENSES: readonly GraphLens[] = ["clusters", "activity", "cycles", "unread", "hotspots", "who"];
 
 /** Flare's hotspot (insights.ts): complexity × (min(churn, 50) + sessionChurn × 3 + 1). */
 export const CHURN_CAP = 50;
@@ -57,6 +58,7 @@ export type RenderNode = {
   heat: number;
   /** graft's size, the districts layout's area; a cluster carries its members' sum */
   chars: number;
+  agents?: AgentHistory[];
   tone: Tone;
 };
 
@@ -79,6 +81,8 @@ export type GraphView = {
   selected: string | null;
   /** per path, from unreadMarks(); absent = nothing is unread */
   unread?: ReadonlyMap<string, UnreadState>;
+  attribution?: ReadonlyMap<string, AgentHistory[]>;
+  agentFilter?: string | null;
 };
 
 export const CLUSTER_PREFIX = "@dir:";
@@ -140,6 +144,7 @@ export function deriveGraph(graph: CodeGraph, view: GraphView): DerivedGraph {
     if (view.expanded.has(cluster)) {
       for (const node of list) {
         nodes.push({
+          agents: view.attribution?.get(node.id) ?? [],
           id: node.id,
           kind: "file",
           label: baseName(node.id),
@@ -161,6 +166,7 @@ export function deriveGraph(graph: CodeGraph, view: GraphView): DerivedGraph {
     const seats: (string | null)[] = [];
     for (const node of list) for (const seat of dirtyByPath.get(node.id) ?? []) addSeat(seats, seat);
     nodes.push({
+      agents: aggregateAgents(list.map(node => view.attribution?.get(node.id) ?? [])),
       id: clusterId(cluster),
       kind: "cluster",
       label: cluster,
@@ -236,7 +242,8 @@ function tone(nodes: RenderNode[], edges: RenderEdge[], view: GraphView) {
     }
   }
   for (const n of nodes) {
-    if (n.id === view.selected) n.tone = "selected";
+    if (view.lens === "who" && view.agentFilter && !n.agents?.some(row => row.agent === view.agentFilter)) n.tone = "dim";
+    else if (n.id === view.selected) n.tone = "selected";
     else if (linked.has(n.id)) n.tone = "linked";
     else if (view.lens === "cycles") n.tone = n.cycle ? "warn" : "dim";
     else if (view.lens === "activity") n.tone = dirty.has(n.id) ? "calm" : "dim";
@@ -244,9 +251,11 @@ function tone(nodes: RenderNode[], edges: RenderEdge[], view: GraphView) {
     else if (view.lens === "hotspots") n.tone = n.heat > 0 ? "calm" : "dim";
     else n.tone = "calm";
   }
+  const dimmed = new Set(nodes.filter(n => n.tone === "dim").map(n => n.id));
   for (const e of edges) {
     const touchesSelected = e.source === view.selected || e.target === view.selected;
-    if (touchesSelected) e.tone = "linked";
+    if (view.lens === "who" && (dimmed.has(e.source) || dimmed.has(e.target))) e.tone = "dim";
+    else if (touchesSelected) e.tone = "linked";
     else if (view.lens === "cycles") e.tone = e.cycle ? "warn" : "dim";
     else if (view.lens === "activity") e.tone = dirty.has(e.source) || dirty.has(e.target) ? "calm" : "dim";
     else if (view.lens === "hotspots") e.tone = "dim";
