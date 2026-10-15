@@ -93,6 +93,8 @@ echo 'the runner can move on to its next wake without a redelivery ladder or a p
     sessionCard: 0,
     // #7914: runTurn records each BOX cut on the module-scope cut chain the park notice reads.
     cutChain: [],
+    // #11855: the card context cap is off here; these drills measure the box, not the cap.
+    CAPCFG: { cap: 0 }, capFreshTurn: 0,
   });
   runInContext(`const cli = ${kimiSource};\n${inheritBoxOutput ? turnSource.replace(") >/dev/null 2>&1 & boxpid", ") & boxpid") : turnSource}`, context);
   await runInContext('runTurn("finish this drill", true)', context);

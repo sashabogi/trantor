@@ -68,6 +68,8 @@ async function drill(t, { maxMs, cliBody }) {
     TURN_CEILING_MS: 0, TURN_EXTEND_MS: 0, TURN_EXTENSIONS_MAX: 0,
     // #7914: runTurn records each BOX cut on the module-scope cut chain the park notice reads.
     cutChain: [],
+    // #11855: the card context cap is off here; this drill measures turn state, not the cap.
+    CAPCFG: { cap: 0 }, capFreshTurn: 0,
   });
   runInContext(`const cli = ${kimiSource};\n${turnSource}`, context);
   await runInContext('runTurn("finish this drill", true)', context);
