@@ -219,6 +219,8 @@ const cleanup = () => {
   try { if (ws) herdr(["workspace", "close", ws.workspace_id], { json: true }); } catch {}
   if (fail > 0) { console.log(`failed-run evidence retained at ${world}`); return; }
   try { rmSync(world, { recursive: true, force: true }); } catch {}
+  // the pane's real claude wrote its transcript under ~/.claude/projects; it is the drill's too
+  try { rmSync(tDir, { recursive: true, force: true }); } catch {}
 };
 process.on("exit", cleanup);
 for (const signal of ["SIGINT", "SIGTERM"]) process.once(signal, () => {

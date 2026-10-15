@@ -5,6 +5,8 @@ import { SeatTab } from "./SeatTab";
 import type { PaneTarget } from "./paneTargets";
 import { availableAgent, balanceFor, canStart, crewApi, parkReason, quotaLabel, type CrewAction, type CrewApi, type CrewCatalog, type SeatWhy } from "./crewControlApi";
 
+// each check is a node CLI spawn per seat tab; 3s across six tabs kept the machine busy
+export const SEAT_WHY_POLL_MS = 15_000;
 const menuItem = "block w-full rounded px-3 py-1.5 text-left text-[12px] text-tr-text hover:bg-tr-panel disabled:opacity-50";
 type Report = (text: string, failed?: boolean, busy?: boolean) => void;
 
@@ -112,7 +114,7 @@ function CrewSeatTab({ project, target, active, onSelect, catalog, api, onChange
     mounted.current = true;
     let pending = false;
     const refresh = async () => {
-      if (pending || locked.current) return;
+      if (pending || locked.current || document.hidden) return;
       pending = true;
       const version = generation.current;
       try {
@@ -122,7 +124,7 @@ function CrewSeatTab({ project, target, active, onSelect, catalog, api, onChange
       finally { pending = false; }
     };
     void refresh();
-    const timer = setInterval(refresh, 3000);
+    const timer = setInterval(refresh, SEAT_WHY_POLL_MS);
     return () => { mounted.current = false; clearInterval(timer); };
   }, [api, project, seat]);
   const action = async (command: CrewAction, replacement?: string) => {

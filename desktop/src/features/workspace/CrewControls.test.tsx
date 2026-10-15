@@ -2,7 +2,7 @@
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { CrewControls } from "./CrewControls";
+import { CrewControls, SEAT_WHY_POLL_MS } from "./CrewControls";
 import type { PaneTarget } from "./paneTargets";
 import { availableAgent, quotaLabel, createCrewApi, type CrewApi, type CrewCatalog, type CrewResult, type SeatWhy } from "./crewControlApi";
 
@@ -33,6 +33,25 @@ describe("Workspace crew controls", () => {
   const mount = async (api: CrewApi, onChanged = vi.fn()) => {
     await act(async () => root.render(<CrewControls project="trantor" targets={[target("glm")]} onSelect={vi.fn()} api={api} onChanged={onChanged} />));
   };
+  it("checks a seat at most every SEAT_WHY_POLL_MS and never while the app is hidden", async () => {
+    vi.useFakeTimers();
+    try {
+      const api = fakeApi();
+      await mount(api);
+      const calls = () => vi.mocked(api.why).mock.calls.length;
+      const first = calls();
+      await act(async () => { vi.advanceTimersByTime(3_000); });
+      expect(calls()).toBe(first);
+      await act(async () => { vi.advanceTimersByTime(SEAT_WHY_POLL_MS); });
+      expect(calls()).toBe(first + 1);
+      Object.defineProperty(document, "hidden", { configurable: true, get: () => true });
+      await act(async () => { vi.advanceTimersByTime(SEAT_WHY_POLL_MS * 3); });
+      expect(calls()).toBe(first + 1);
+    } finally {
+      Reflect.deleteProperty(document, "hidden");
+      vi.useRealTimers();
+    }
+  });
   it("disables actions when seat state cannot be read", async () => {
     const api = fakeApi(); api.why = vi.fn(async () => { throw new Error("checkout unavailable"); });
     await mount(api);

@@ -130,6 +130,12 @@ pub(crate) async fn start_stream(app: tauri::AppHandle, base: String) {
 /// The PATH a terminal would have. A Finder-launched app inherits a bare PATH, so every brew/npm/
 /// cargo CLI is invisible to what we spawn; the login shell's answer wins, then the usual roots.
 pub(crate) fn terminal_path() -> String {
+    // one login shell per app run: every CLI spawn asked for it, about 60 shells a minute
+    static PATH: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    PATH.get_or_init(resolve_terminal_path).clone()
+}
+
+fn resolve_terminal_path() -> String {
     let home = std::env::var("HOME").unwrap_or_default();
     let mut parts: Vec<String> = Vec::new();
     let mut push = |raw: &str| {
@@ -383,5 +389,18 @@ mod local_enrollment_tests {
             |_, _, _| { count += 1; ready(Err("connection refused".into())) }).await.unwrap_err();
         assert_eq!(count, 1);
         assert_eq!(error, "connection refused");
+    }
+}
+
+#[cfg(test)]
+mod terminal_path_tests {
+    #[test]
+    fn terminal_path_runs_the_login_shell_once_per_app_run() {
+        let first = super::terminal_path();
+        let started = std::time::Instant::now();
+        for _ in 0..50 {
+            assert_eq!(super::terminal_path(), first);
+        }
+        assert!(started.elapsed() < std::time::Duration::from_millis(50), "{:?}", started.elapsed());
     }
 }
