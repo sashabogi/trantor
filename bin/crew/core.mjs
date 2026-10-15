@@ -4,6 +4,9 @@ import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { STATE_FLAGS } from "../../lib/state/flags.mjs";
 
+// the card limits the runner reads (#11559 budget, #11855 context cap), tunable at `trantor up`
+export const RUNNER_LIMIT_FLAGS = ["TRANTOR_CARD_TOKEN_BUDGET", "TRANTOR_CARD_CONTEXT_CAP", "TRANTOR_CARD_CAP_MIN_STEPS", "TRANTOR_CARD_CAP_MAX_HANDOFFS"];
+
 export const ROOT = dirname(dirname(dirname(fileURLToPath(import.meta.url))));
 
 export function commandExists(name, env = process.env) {
@@ -149,7 +152,7 @@ export function gridColumns(size) {
 // in lib/state/flags.mjs beside the resolver: the launcher env stays the forwarder (the runner boots
 // before any file is sourced), and #7159 lets the runner fall back to ~/.agent-bus/.env itself, so a
 // flag documented there finally arms the seat that reads it.
-const FORWARDED_ENV = STATE_FLAGS;
+const FORWARDED_ENV = [...STATE_FLAGS, ...RUNNER_LIMIT_FLAGS];
 
 export function runnerCommand(ctx, agent, model = "", effort = null, persona = agent) {
   const forwarded = FORWARDED_ENV

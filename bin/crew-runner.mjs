@@ -250,7 +250,9 @@ const CLI = {
   // kimi-code (successor to kimi-cli) has no --print (-p alone is non-interactive), REJECTS
   // --yolo in prompt mode (prompt mode auto-approves tools), and emits session_-prefixed ids.
   kimi:     { first: `kimi{M} -p "$(cat {P})" < /dev/null`,
-              next:  `kimi{M} -r {SID} -p "$(cat {P})" < /dev/null`, mflag: " --model ", sid: /To resume this session: kimi -r (\S+)/ },
+              // -S resumes; kimi-code 0.34 silently ignores -r (its own exit hint still prints -r) and
+              // opens a new session, so every kimi turn ran cold with no history
+              next:  `kimi{M} -S {SID} -p "$(cat {P})" < /dev/null`, mflag: " --model ", sid: /To resume this session:\s*kimi (?:-r|-S|--session) (\S+)/ },
   // #6154: `run -c` resumes the globally last session on this machine, any project's, and its stored
   // directory becomes the path root. So every spawn pins --dir and a resume pins -s (ocSid below).
   deepseek: { first: `opencode run --dir {DIR}{M} "$(cat {P})"`,
@@ -1051,7 +1053,8 @@ exit $turn_exit`;
     if (env.turn) log(`state step: ${describeTurn(env.turn)} · ${costLine(env.cost)}`);
     else log(`\x1b[33mstate step: no TurnResult — ${env.error}\x1b[0m`);
   }
-  if (cli.sid && r.stdout) { const m = r.stdout.match(cli.sid); if (m) sid = m[1]; }
+  // kimi prints its resume hint on stderr, so a stdout-only match never captured its sid
+  if (cli.sid) { const all = [...`${r.stdout || ""}\n${ownOut}`.matchAll(new RegExp(cli.sid.source, "g"))]; if (all.length) sid = all.at(-1)[1]; }
   // #6154: the opencode family prints no sid on stdout — the id comes from opencode's own DB,
   // keyed by the worktree the session was created in. Fail-open: nothing found leaves sid empty,
   // and the next turn starts fresh rather than resuming whatever other project ran last.
