@@ -851,9 +851,10 @@ rmSync(projDir, { recursive: true, force: true });
   rmSync(bus, { recursive: true, force: true });
 }
 
-// ---- #11641: a pending handoff is not claimed over a NEWER conversation. The incident: an auto
-// handoff written 10-10 sat unconsumed while its own session kept working until 10-13; `trantor open`
-// still spawned a fresh session to claim it and dropped two days of context. Temp HOME throughout.
+// ---- #11641: a pending handoff is not claimed over a NEWER conversation, meaning a person kept
+// prompting the session after its handoff. Machine traffic never counts: 10-14 the old mtime rule
+// resumed crebral-legal's 90%-full session over a fresh handoff because the dying turn, a wake nudge
+// and a task notice kept writing. Temp HOME throughout.
 {
   const home = join(tmpdir(), `tt-superseded-${process.pid}`);
   const bus = join(home, ".agent-bus");
@@ -866,23 +867,33 @@ rmSync(projDir, { recursive: true, force: true });
   const ctx = { env: { AGENT_BUS_DIR: bus }, home, project: "proj", dir: projDir };
   const arm = (extra = {}) => writeFileSync(hf, JSON.stringify({ id: "proj-1000000300", project: projDir, projectName: "proj", trigger: "auto", stamp, summary: "STALE", consumed: false, session_id: "rec-sid", states: [{ state: "written", ts: 1, by: "rec-sid" }], ...extra }));
   const transcript = join(slugDir, "rec-sid.jsonl");
-  const touch = (path, secs) => { writeFileSync(path, "{}\n"); utimesSync(path, secs, secs); };
+  const iso = secs => new Date(secs * 1000).toISOString();
+  const human = (secs, text = "keep going on the export") => JSON.stringify({ type: "user", timestamp: iso(secs), origin: { kind: "human" }, message: { role: "user", content: text } });
+  const machine = secs => [
+    JSON.stringify({ type: "assistant", timestamp: iso(secs), message: { content: [{ type: "tool_use" }] } }),
+    JSON.stringify({ type: "user", timestamp: iso(secs), message: { content: [{ type: "tool_result" }] } }),
+    JSON.stringify({ type: "user", isMeta: true, timestamp: iso(secs), origin: { kind: "peer" }, message: { content: "Another Claude session sent a message" } }),
+    JSON.stringify({ type: "user", timestamp: iso(secs), origin: { kind: "task-notification" }, message: { content: "<task-notification>" } }),
+  ];
+  const write = rows => { writeFileSync(transcript, rows.join("\n") + "\n"); utimesSync(transcript, stamp + 2 * 86400, stamp + 2 * 86400); };
   const before = () => readFileSync(hf, "utf8");
 
-  arm(); touch(transcript, stamp + 2 * 86400);
+  arm(); write([human(stamp - 900), ...machine(stamp + 600)]);
+  ok("superseded: machine traffic after the handoff (dying turn, nudges, task notices) takes over fresh", takeoverSessionId(ctx, "rec-sid") !== "rec-sid");
+  write([...machine(stamp + 600), human(stamp + 610, "You have just taken over via handoff. Recap now per your instructions.")]);
+  ok("superseded: the app's own recap kickoff is not a person's prompt", takeoverSessionId(ctx, "rec-sid") !== "rec-sid");
+
+  write([human(stamp - 900), human(stamp + 2 * 86400)]);
   const snap = before();
-  ok("superseded: a transcript days newer than the handoff resumes the recorded session", takeoverSessionId(ctx, "rec-sid") === "rec-sid");
+  ok("superseded: a person prompting days after the handoff resumes the recorded session", takeoverSessionId(ctx, "rec-sid") === "rec-sid");
   const sup = supersededHandoff(ctx, "rec-sid");
   ok("superseded: both times are reported", sup && sup.handoffAt === stamp && sup.workedAt === stamp + 2 * 86400);
   ok("superseded: the handoff file is left untouched and unclaimed", before() === snap);
 
-  touch(transcript, stamp + HANDOFF_SUPERSEDE_GRACE_SECS - 1);
-  ok("superseded: work inside the grace window is not later work (fresh takeover)", takeoverSessionId(ctx, "rec-sid") !== "rec-sid");
+  write([human(stamp + HANDOFF_SUPERSEDE_GRACE_SECS - 1)]);
+  ok("superseded: a prompt inside the grace window is not later work (fresh takeover)", takeoverSessionId(ctx, "rec-sid") !== "rec-sid");
 
-  touch(transcript, stamp - 500);
-  ok("superseded: a transcript not newer than the handoff takes over fresh", takeoverSessionId(ctx, "rec-sid") !== "rec-sid");
-
-  touch(transcript, stamp + 2 * 86400);
+  write([human(stamp + 2 * 86400)]);
   ok("superseded: a handoff from a different session still takes over fresh", takeoverSessionId(ctx, "other-sid") !== "other-sid");
   arm({ session_id: "someone-else" });
   ok("superseded: a handoff whose session differs from the recorded one takes over fresh", takeoverSessionId(ctx, "rec-sid") !== "rec-sid");
@@ -890,7 +901,8 @@ rmSync(projDir, { recursive: true, force: true });
   arm(); rmSync(transcript);
   ok("superseded: a missing transcript takes over fresh", takeoverSessionId(ctx, "rec-sid") !== "rec-sid");
 
-  arm({ transcript_path: join(home, "elsewhere.jsonl") }); touch(join(home, "elsewhere.jsonl"), stamp + 2 * 86400);
+  const elsewhere = join(home, "elsewhere.jsonl");
+  arm({ transcript_path: elsewhere }); writeFileSync(elsewhere, human(stamp + 2 * 86400) + "\n");
   ok("superseded: the handoff's own transcript_path is honoured", takeoverSessionId(ctx, "rec-sid") === "rec-sid");
   rmSync(home, { recursive: true, force: true });
 }

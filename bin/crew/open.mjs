@@ -60,16 +60,35 @@ function unconsumedHandoffs(ctx) {
   return out;
 }
 
-// The handoff written BY the recorded session `id` whose transcript has since grown past it, or null.
+// A person's prompt (origin.kind "human") in a transcript, at or after `afterSecs`, or null. The app's
+// own recap kickoff is not one: a resumed-by-mistake session would otherwise vouch for itself.
+function humanPromptAfter(transcriptPath, afterSecs) {
+  let text;
+  try { text = readFileSync(transcriptPath, "utf8"); } catch { return null; }
+  for (const line of text.split("\n")) {
+    if (!line.includes('"human"')) continue;
+    let e; try { e = JSON.parse(line); } catch { continue; }
+    if (e?.type !== "user" || e?.origin?.kind !== "human") continue;
+    const at = Date.parse(e.timestamp || "") / 1000;
+    if (!(at >= afterSecs)) continue;
+    const c = e.message?.content;
+    const body = typeof c === "string" ? c : Array.isArray(c) ? c.map(x => x?.text || "").join("") : "";
+    if (body.startsWith("You have just taken over via handoff")) continue;
+    return at;
+  }
+  return null;
+}
+
+// The handoff written BY the recorded session `id` that a person kept talking past, or null. Machine
+// traffic after the handoff (the dying turn, wake nudges, task notices) never supersedes it: 10-14 the
+// mtime check resumed crebral-legal's 90%-full session over its own fresh handoff.
 export function supersededHandoff(ctx, id) {
   for (const { file, rec } of unconsumedHandoffs(ctx)) {
     if (!id || rec.session_id !== id || !(Number(rec.stamp) > 0)) continue;
     const slug = String(rec.project || ctx.dir || "").replace(/[/.]/g, "-");
     const transcript = rec.transcript_path || join(ctx.home, ".claude", "projects", slug, `${id}.jsonl`);
-    try {
-      const workedAt = statSync(transcript).mtimeMs / 1000;
-      if (workedAt > Number(rec.stamp) + HANDOFF_SUPERSEDE_GRACE_SECS) return { file, handoffAt: Number(rec.stamp), workedAt };
-    } catch {}
+    const workedAt = humanPromptAfter(transcript, Number(rec.stamp) + HANDOFF_SUPERSEDE_GRACE_SECS);
+    if (workedAt !== null) return { file, handoffAt: Number(rec.stamp), workedAt };
   }
   return null;
 }
