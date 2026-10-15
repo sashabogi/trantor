@@ -109,7 +109,7 @@ server.tool("relay_whoami", "Show this session's relay identity, project, hub UR
   return { content: [{ type: "text", text }] };
 });
 
-server.tool("relay_contracts", "What you dispatched and are still owed. Lists every DIRECT message you sent to another session, with how long it has been outstanding, whether that session is still alive, and its last known status. Each one carries a disposition: WAITING (assignee alive and working — normal), STALLED (assignee offline or overdue — poke it, swap it, or reassign), ABANDONED (assignee gone so long the contract can never be answered — the work needs reassigning, nobody is coming back), SUPERSEDED (the assignee is alive and has since answered a NEWER contract from you, so this row was never going to be answered — no action needed), or answered, with the outcome text. Call this before concluding a crew is idle, stuck, or done — silence on the bus is not evidence either way.", {},
+server.tool("relay_contracts", "What you dispatched and are still owed: each direct message you sent, its age, whether the assignee is alive, and a disposition. WAITING (alive, working), STALLED (offline or overdue: poke, swap or reassign), ABANDONED (gone for good: reassign), SUPERSEDED (they answered a newer contract: no action), or answered with the outcome. Call before concluding a crew is idle, stuck or done; bus silence is not evidence.", {},
   async () => {
     let r;
     try { r = await api("GET", `/contracts?session=${encodeURIComponent(SESSION)}&project=${encodeURIComponent(PROJECT)}`); }
@@ -159,23 +159,23 @@ server.tool("relay_contracts", "What you dispatched and are still owed. Lists ev
     return { content: [{ type: "text", text }] };
   });
 
-server.tool("relay_task_add", "Add a Kanban card to a project's board on the dashboard (what you're about to work on). Defaults: THIS project, assigned to you, status 'todo'. Pass `project` to target another board — e.g. when you orchestrate a crew that runs in a different directory than the one you launched Claude from. Keep the team's progress visible. Attach a `note` whenever context isn't obvious from the title — it lands on the card's permanent log ({ts,by,text}, kept: last 40).",
-  { title: z.string().describe("short task title"), status: z.enum(["todo","doing","testing","failed","done","blocked"]).optional(), assignee: z.string().optional().describe("session id to assign (default: you)"), difficulty: z.enum(["easy","medium","hard"]).optional().describe("difficulty tag — drives model/agent routing (relay_advise) and shows on the board"), model: z.string().optional().describe("the model this card is routed to (from relay_advise routing, or the CLI default) — shown on the card"), deps: z.array(z.number()).optional().describe("card ids this card depends on — drawn as branch edges in the Flow view (e.g. integration depends on every crew card)"), phase: z.string().optional().describe("phase/milestone this card belongs to (e.g. 'P5', 'Auth', 'Launch') — groups it in the Flow view's phase flowchart. Optional; otherwise inferred from the title prefix + time."), note: z.string().max(2000).optional().describe("optional card-log entry (<=2000 chars): context, the plan, or a link — stored on the card as {ts,by,text}"), project: z.string().optional().describe("board to add to (default: this session's project). Set to the crew's project when you orchestrate from a different directory"), checklist: z.array(z.string().max(200)).max(20).optional().describe("acceptance items for the card — the honest denominator for its progress bar. Tick them off with relay_task_check as each is truly met"), drill: z.string().max(300).optional().describe("the card's DRILL (build doctrine rule 1, <=300 chars): the exact thing a person does on the built artifact and what they must see — not a test command. The hub refuses to move a card to done without a drill line (this field, a checklist item or a note starting with 'Drill:'), so a card cut without one is not ready to be worked") },
+server.tool("relay_task_add", "Add a Kanban card (defaults: this project, assigned to you, status todo). `project` targets another board. Attach a `note` when the title alone lacks context; it lands on the card's log (last 40 kept).",
+  { title: z.string(), status: z.enum(["todo","doing","testing","failed","done","blocked"]).optional(), assignee: z.string().optional(), difficulty: z.enum(["easy","medium","hard"]).optional(), model: z.string().optional(), deps: z.array(z.number()).optional(), phase: z.string().optional(), note: z.string().max(2000).optional(), project: z.string().optional(), checklist: z.array(z.string().max(200)).max(20).optional().describe("acceptance items; tick with relay_task_check only when truly met"), drill: z.string().max(300).optional().describe("the DRILL: what a person does on the built artifact and must see, not a test command. The hub refuses done without a drill line (this field, a checklist item or a note starting 'Drill:')") },
   async ({ title, status, assignee, difficulty, model, deps, phase, note, project, checklist, drill }) => {
     const proj = project || PROJECT;
     const { task } = await api("POST", "/task", { project: proj, title, status: status || "todo", assignee: assignee || SESSION, difficulty, model, deps, phase, note, checklist, drill, by: SESSION });
     return { content: [{ type: "text", text: `card #${task.id} added to ${proj}: "${title}" [${task.status}]${phase?` · phase ${phase}`:""}${task.checklist?.length?` · ${task.checklist.length} acceptance item(s)`:""}${task.drill ? " · drill set" : " · NO DRILL — the hub will refuse done until one is set"}` }] };
   });
 
-server.tool("relay_task_check", "Tick (or untick) ONE acceptance item on a card's checklist — the card's progress bar reads checked/total, so tick an item only when it is genuinely met (tests run, behavior observed), never to make the bar move. Items are 0-indexed in the order relay_task_add listed them.",
-  { id: z.number().describe("card id"), index: z.number().int().min(0).describe("0-based checklist item index"), done: z.boolean().optional().describe("default true; pass false to untick") },
+server.tool("relay_task_check", "Tick (or untick) one checklist item on a card. Tick only when genuinely met (tests run, behavior observed), never to move the progress bar. Items are 0-indexed in relay_task_add order.",
+  { id: z.number().describe("card id"), index: z.number().int().min(0), done: z.boolean().optional() },
   async ({ id, index, done }) => {
     const { task } = await api("POST", "/task/checklist-toggle", { id, index, done: done !== false, by: SESSION });
     const n = task.checklist.filter(c => c.done).length;
     return { content: [{ type: "text", text: `card #${id} checklist: [${done !== false ? "x" : " "}] "${task.checklist[index].text}" — ${n}/${task.checklist.length} done` }] };
   });
 
-server.tool("relay_phase_goal", "Set what a PHASE is for — its goal — shown as the phase header in the Flow view (overrides the theme auto-derived from card titles). Capture this when you plan a phase so the board says what each milestone needs to do, not just 'P5'. Phase keys match relay_task_add's `phase` (or the inferred title-prefix family like 'P5').",
+server.tool("relay_phase_goal", "Set a phase's goal, shown as its header in the Flow view. Set it when you plan a phase. Phase keys match relay_task_add's `phase`.",
   { phase: z.string().describe("the phase key (e.g. 'P5', 'Auth', 'Launch')"), goal: z.string().describe("1-2 sentences: what this phase delivers + done-criteria"), project: z.string().optional().describe("board (default: this session's project)") },
   async ({ phase, goal, project }) => {
     const proj = project || PROJECT;
@@ -183,8 +183,8 @@ server.tool("relay_phase_goal", "Set what a PHASE is for — its goal — shown 
     return { content: [{ type: "text", text: `phase "${phase}" goal set for ${proj}` }] };
   });
 
-server.tool("relay_task_move", "Move a Kanban card as you progress: todo -> doing -> testing -> done. NEVER move straight to done: move to 'testing' when you finish, run the project's tests/typecheck, then 'done' only if green — or 'failed' (with a relay_send explaining what broke) if not. The orchestrator bounces failed cards back to doing. blocked = waiting on something external. A move to 'testing' or 'done' MUST carry a `note` (<=2000 chars): what you changed and the evidence (the test command + counts). The note lands on the card's permanent log — the board shows its ·N count, so a silent move reads as unverified work.",
-  { id: z.number(), status: z.enum(["todo","doing","testing","failed","done","blocked"]), note: z.string().max(2000).optional().describe("card-log entry (<=2000 chars) — REQUIRED on moves to testing/done: what changed + the evidence (command, pass counts)"), drill: z.string().max(300).optional().describe("set or fix the card's drill line (<=300 chars) in the same call — what a person does on the built artifact and must see. A move to done is refused by the hub when the card has no drill line") },
+server.tool("relay_task_move", "Move a card: todo -> doing -> testing -> done. Never go straight to done: move to 'testing' when finished, run the tests/typecheck, then 'done' only if green, else 'failed' (relay_send what broke). blocked = waiting on something external. A move to testing or done MUST carry a `note`: what changed plus the evidence (command, pass counts).",
+  { id: z.number(), status: z.enum(["todo","doing","testing","failed","done","blocked"]), note: z.string().max(2000).optional().describe("card-log entry; REQUIRED on testing/done"), drill: z.string().max(300).optional().describe("set the drill line in this call; done is refused without one") },
   async ({ id, status, note, drill }) => {
     // #7750: seat-side hollow-move check. The hub cannot see this worktree, so the evidence is
     // gathered HERE at report time; a hollow move still lands (never blocks a no-code card), the
@@ -224,7 +224,7 @@ server.tool("relay_task_move", "Move a Kanban card as you progress: todo -> doin
     return { content: [{ type: "text", text: `card #${id} -> ${status}` }] };
   });
 
-server.tool("relay_project_brief", "Set a one-paragraph brief for a project shown on the dashboard: what it is, why it matters, and the goal. Defaults to THIS project; pass `project` to brief a crew board you orchestrate from elsewhere. Set it once when you start work so anyone watching the board understands the project at a glance (the board itself shows where it is in the process).",
+server.tool("relay_project_brief", "Set a one-paragraph project brief shown on the dashboard: what it is, why it matters, the goal. Defaults to this project; set it once when you start work.",
   { brief: z.string().describe("1-3 sentences: what this project is + why + the goal"), project: z.string().optional().describe("board to brief (default: this session's project)") },
   async ({ brief, project }) => {
     const proj = project || PROJECT;
@@ -232,10 +232,10 @@ server.tool("relay_project_brief", "Set a one-paragraph brief for a project show
     return { content: [{ type: "text", text: `brief set for ${proj}` }] };
   });
 
-server.tool("relay_advise", "THE ADVISOR — ask the brain how to execute a body of work before spending tokens. Give it your work packages (with difficulty); it weighs task shape x the user's plan economics x context horizon and returns: mode (solo|scrooge|crew|hybrid), per-package executor+model routing, and a real-money estimate with quota-pool accounting. Call this at project kickoff and PRESENT the summary to the user before firing anything up.",
-  { task: z.string().describe("one-line description of the overall job"),
-    packages: z.array(z.object({ title: z.string(), difficulty: z.enum(["easy","medium","hard"]).optional(), kind: z.string().optional() })).describe("the work packages you'd cut as cards"),
-    horizon: z.enum(["short","medium","long"]).optional().describe("how long this build will run (default inferred from package count)") },
+server.tool("relay_advise", "Ask how to execute a body of work before spending tokens. Returns mode (solo|scrooge|crew|hybrid), per-package executor+model routing and a cost estimate. Call at project kickoff and present the summary to the user before starting anything.",
+  { task: z.string(),
+    packages: z.array(z.object({ title: z.string(), difficulty: z.enum(["easy","medium","hard"]).optional(), kind: z.string().optional() })),
+    horizon: z.enum(["short","medium","long"]).optional() },
   async ({ task, packages, horizon }) => {
     // #7762: the advisor reads THIS project's seat record (derived, fail-open) so a seat whose
     // recent cards produced nothing is benched at that difficulty instead of re-picked as cheap.
@@ -245,9 +245,9 @@ server.tool("relay_advise", "THE ADVISOR — ask the brain how to execute a body
     return { content: [{ type: "text", text: JSON.stringify(out, null, 2) }] };
   });
 
-server.tool("relay_scrooge", "Delegate a SMALL, SELF-CONTAINED piece of grunt work (draft a function, summarize, extract, classify, boilerplate) to a cheap external model via Scrooge — costs a fraction of a cent and keeps the result OUT of expensive context where possible. Returns the model's output plus the ledger receipt. Use for stateless one-shots; use the crew for anything stateful or large.",
-  { prompt: z.string().describe("the complete, self-contained task (include all needed context — the cheap model sees ONLY this)"),
-    task: z.string().optional().describe("scrooge task type: code, summarize, extract, draft, verify, reason, cheap (default code)"),
+server.tool("relay_scrooge", "Delegate a small, self-contained piece of grunt work (draft, summarize, extract, classify, boilerplate) to a cheap external model via Scrooge. Returns the output plus the ledger receipt. Stateless one-shots only; use the crew for anything stateful or large.",
+  { prompt: z.string().describe("complete self-contained task; the model sees only this"),
+    task: z.string().optional().describe("code (default) | summarize | extract | draft | verify | reason | cheap"),
     difficulty: z.enum(["easy","medium","hard"]).optional() },
   async ({ prompt, task, difficulty }) => {
     const r = spawnSync("scrooge", ["-t", task || "code", "-d", difficulty || "easy"], { input: prompt, encoding: "utf8", timeout: 120000, maxBuffer: 8 * 1024 * 1024 });
@@ -257,21 +257,21 @@ server.tool("relay_scrooge", "Delegate a SMALL, SELF-CONTAINED piece of grunt wo
   });
 
 server.tool("relay_lesson", "Record a LESSON learned from a failure so future crews avoid it — injected into agents' kickoff prompts automatically. Use when you diagnose a recurring or preventable failure. scope: 'global' (applies to every agent) or an agent brand ('kimi','codex','gemini','deepseek') when it's that CLI's quirk.",
-  { text: z.string().describe("one-line imperative guardrail, e.g. 'never move a card to done without npm test passing'"), scope: z.string().optional().describe("'global' (default) or an agent brand") },
+  { text: z.string().describe("one-line imperative guardrail"), scope: z.string().optional().describe("'global' (default) or an agent brand") },
   async ({ text, scope }) => {
     const r = await api("POST", "/lesson", { text, scope: scope || "global", by: SESSION });
     return { content: [{ type: "text", text: r.dedup ? "lesson already recorded" : `lesson recorded (${r.count} total)` }] };
   });
 
-server.tool("relay_verify_gate", "Record a VERIFICATION GATE — a claim that MUST be independently verified before the related work ships (e.g. 'Gail breast coefficients match the published BCRAT model'). Unlike a note buried in a handoff narrative, a gate is STRUCTURED: it travels with handoffs and is shown PROMINENTLY to whoever takes over, so a safety-critical 'verify before commit' can't be skimmed past. action 'add' when you produce code whose correctness you have NOT independently proven (especially formulas/coefficients/security/data-shape); 'resolve' once you've verified it (or waived with the user); 'list' to see open gates. Defaults to THIS project.",
-  { action: z.enum(["add", "resolve", "list"]).describe("add a gate · resolve one · list open gates"),
-    claim: z.string().optional().describe("what must be verified (required for add) — a specific, checkable claim"),
-    why: z.string().optional().describe("why it matters / the risk if it ships unverified"),
-    howToVerify: z.string().optional().describe("the concrete check that would verify it (source to cross-check, command to run)"),
+server.tool("relay_verify_gate", "Record a verification gate: a claim that must be independently verified before the work ships. It travels with handoffs and is shown prominently to whoever takes over. 'add' when you wrote code whose correctness you have not proven (formulas, security, data shape); 'resolve' once verified or waived with the user; 'list' open gates.",
+  { action: z.enum(["add", "resolve", "list"]),
+    claim: z.string().optional().describe("claim to verify (required for add)"),
+    why: z.string().optional(),
+    howToVerify: z.string().optional(),
     id: z.number().optional().describe("gate id to resolve"),
-    status: z.string().optional().describe("resolve status: 'verified' (default) | 'failed' | 'waived'"),
-    note: z.string().optional().describe("resolution note (what you checked / why waived)"),
-    project: z.string().optional().describe("target project (default: this session's project)") },
+    status: z.string().optional(),
+    note: z.string().optional(),
+    project: z.string().optional().describe("project (default: this one)") },
   async ({ action, claim, why, howToVerify, id, status, note, project }) => {
     const proj = project || PROJECT;
     if (action === "list") {
@@ -289,12 +289,12 @@ server.tool("relay_verify_gate", "Record a VERIFICATION GATE — a claim that MU
     return { content: [{ type: "text", text: r.dedup ? `gate already open (#${r.gate.id})` : `🔒 verification gate #${r.gate.id} recorded — surfaces on every handoff until you resolve it` }] };
   });
 
-server.tool("relay_propose", "PROPOSE a standing permission or scope change to the human operator — the ONLY approver; nothing auto-approves. A proposal must state its BOUND: scope (what), condition (when it applies), exclusions (what is still NOT covered) — a permission without a bound is a blank cheque and is rejected. It sits pending (max 3 per session — withdraw one to file another) until the operator decides in the app or CLI; you get a bus message with the decision. Denials are REMEMBERED: a near-duplicate of a denied proposal is refused, so never re-propose — refine the bound or move on. File it and continue your mission; never nag.",
-  { scope: z.string().describe("WHAT standing permission you want, specific and checkable — e.g. 'push directly to main in this repo'"),
-    condition: z.string().describe("WHEN it applies — e.g. 'only after the full test suite exits 0'"),
-    exclusions: z.string().describe("what is still NOT covered — e.g. 'never force-push, never touch release tags'"),
-    key: z.string().optional().describe("optional machine-readable capability slug (e.g. 'patrol.reap-orphans') — lets tools check the grant exactly instead of matching prose"),
-    project: z.string().optional().describe("project the permission concerns (default: this session's project)") },
+server.tool("relay_propose", "Propose a standing permission or scope change to the human operator, the only approver. It must state its bound (scope, condition, exclusions) or it is rejected. Pending max 3 per session (withdraw one to file another); the decision arrives as a bus message. A near-duplicate of a denied proposal is refused: refine the bound or move on. File it, continue your mission, never nag.",
+  { scope: z.string(),
+    condition: z.string(),
+    exclusions: z.string(),
+    key: z.string().optional(),
+    project: z.string().optional().describe("project (default: this one)") },
   async ({ scope, condition, exclusions, key, project }) => {
     // signedPost directly (not api()) — a refusal's BODY is the teaching moment (denial note,
     // queue guidance) and api() throws it away, leaving only "hub 409".
@@ -310,7 +310,7 @@ server.tool("relay_propose", "PROPOSE a standing permission or scope change to t
       : `proposal #${pr.id} filed and PENDING operator review. Continue your mission — you'll get a bus message when it's decided. Do NOT act as if it were approved.` }] };
   });
 
-server.tool("relay_proposals", "List THIS session's permission proposals and their statuses (pending / approved / denied / revoked / withdrawn), including the operator's decision notes. An APPROVED proposal is a standing GRANT — act within its stated bound without re-asking. Check here before relying on a permission you proposed — pending is not approved.", {},
+server.tool("relay_proposals", "List this session's permission proposals and statuses (pending / approved / denied / revoked / withdrawn) with decision notes. An approved proposal is a standing grant: act within its bound without re-asking. Pending is not approved.", {},
   async () => {
     const { proposals } = await api("GET", `/proposals?session=${encodeURIComponent(SESSION)}`);
     if (!proposals?.length) return { content: [{ type: "text", text: "no proposals filed by this session" }] };
@@ -375,10 +375,10 @@ function cardView(tasks, id, proj) {
   return out.join("\n");
 }
 
-server.tool("relay_board", "Show a project's Kanban board (all cards + their status + assignee). Defaults to THIS project; pass `project` to read a crew board you orchestrate from elsewhere. Cards carrying log notes show a ·N count (the card's note-log size).",
-  { project: z.string().optional().describe("board to show (default: this session's project)"),
-    card: z.number().optional().describe("read ONE card instead of the board: the card itself, its notes, and the last five done cards whose title shares a word with it. This is what a seat starting a card should call — the whole board is 1900+ cards of someone else's work."),
-    mine: z.boolean().optional().describe("your cards instead of the board: everything assigned to the calling session in doing/testing/todo, newest first, each with the full card:<id> shape. The FIRST call of a turn whose wake names no card id (#7763) — no second message from the orchestrator needed.") },
+server.tool("relay_board", "Show a project's Kanban board (cards, status, assignee; ·N = note count). Defaults to this project.",
+  { project: z.string().optional(),
+    card: z.number().optional().describe("read ONE card (with its notes and related done cards) instead of the board; call this when starting a card"),
+    mine: z.boolean().optional().describe("cards assigned to the calling session (doing/testing/todo), newest first; the first call of a turn whose wake names no card id") },
   async ({ project, card, mine }) => {
   const proj = project || PROJECT;
   // #6983: ask for the SLIM projection, and for that one card full when opening one. The board
@@ -419,10 +419,10 @@ server.tool("relay_peers", "Find who you can talk to: the live agent sessions on
   return { content: [{ type: "text", text: lines.join("\n") || "no peers yet" }] };
 });
 
-server.tool("relay_send", "Send a live message to another agent session (or 'all' to broadcast). Reach the other agent YOURSELF: if you are about to ask the human to pass something along, tell the session directly instead — asking a person to carry a message between two agents is a failure, not politeness. Don't know the id? relay_peers lists them, linked projects included. Cross-project action is a breach unless the operator linked the projects (`trantor policy link <a> <b> --reason \"<why>\"`) — the hub answers 403 for a send into an unlinked project.",
-  { to: z.string().describe("target session id, or 'all'"), text: z.string().describe("message body"),
-    wake: z.boolean().optional().describe("false = context, not a contract: the message batches into the target's next turn instead of buying it a whole CLI session. With wake unset or true, a direct message ALWAYS earns a turn whatever its text says (#7766) — so set false on every ack, FYI and queue note, not just on obvious chatter."),
-    re: z.number().optional().describe("the message id you are ANSWERING. Set it whenever you reply to a specific message. Without it the hub matches your reply to the peer's OLDEST outstanding contract, so answering their newest question silently closes their oldest one and leaves the real one reading WAITING forever — which is how seats end up chasing contracts that were answered long ago.") },
+server.tool("relay_send", "Send a live message to another agent session (or 'all'). Message the agent yourself; never ask the human to relay. Ids: relay_peers. Cross-project sends are a breach unless the operator linked the projects (`trantor policy link <a> <b> --reason \"<why>\"`); the hub answers 403 for an unlinked project.",
+  { to: z.string(), text: z.string(),
+    wake: z.boolean().optional().describe("false = context, not a contract: batches into the target's next turn. Unset or true, a direct message ALWAYS earns a turn whatever its text says, so set false on every ack, FYI and queue note."),
+    re: z.number().optional().describe("message id you are answering; set it on every reply. Without it the hub matches your reply to the peer's OLDEST outstanding contract, closing the wrong one.") },
   async ({ to, text, wake, re }) => {
     // The event log is append-only — a secret in it is unrecoverable, so refuse BEFORE
     // anything reaches the hub. Returns the offending kinds so the caller can fix it.
@@ -446,9 +446,9 @@ server.tool("relay_send", "Send a live message to another agent session (or 'all
     return { content: [{ type: "text", text: `sent #${id} to ${to}${wake === false ? " (batched — no turn)" : ""}` }] };
   });
 
-server.tool("relay_ask", "Ask a BLOCKING question on your card without forfeiting the contract (#7756). This is the correct move when the contract omits a fact you cannot proceed without — never invent the value. Sends a kind:ask message to the card's assigner: the hub blocks the card with your question as its note so the board reads why nothing is moving, your runner keeps the wake owed (no failure, no park), and the assigner's answer resumes THIS session with the original contract re-attached. End your turn right after calling it.",
-  { card: z.number().describe("the card your current contract is working"),
-    question: z.string().describe("the ONE missing fact you cannot proceed without, stated precisely") },
+server.tool("relay_ask", "Ask a blocking question on your card without forfeiting the contract. Use it when the contract omits a fact you cannot proceed without; never invent the value. Sends a kind:ask to the card's assigner, blocks the card with your question as its note, and the answer resumes this session with the original contract re-attached. End your turn right after calling it.",
+  { card: z.number(),
+    question: z.string().describe("the one missing fact, stated precisely") },
   async ({ card, question }) => {
     // Append-only log rule, same as relay_send: a secret is refused BEFORE anything reaches the hub.
     const scrub = assertNoSecrets(question);
@@ -474,7 +474,7 @@ server.tool("relay_ask", "Ask a BLOCKING question on your card without forfeitin
   });
 
 server.tool("relay_duty_failure", "Duty-seat only: record that a required cross-session socket nudge was skipped or that a relay send returned 403. The hub appends the failure to the target project's active focus card and exposes it in trantor doctor.",
-  { recipient: z.string().describe("recipient session whose project is affected"), project: z.string().optional().describe("target project; normally inferred from the recipient"), kind: z.enum(["relay-403", "skipped-nudge"]), detail: z.string().max(500).optional() },
+  { recipient: z.string(), project: z.string().optional(), kind: z.enum(["relay-403", "skipped-nudge"]), detail: z.string().max(500).optional() },
   async ({ recipient, project, kind, detail }) => {
     const { failure } = await api("POST", "/duty/failure", { recipient, project, kind, detail });
     return { content: [{ type: "text", text: `recorded: ${failure.text}${failure.focusCard ? ` (focus card #${failure.focusCard})` : " (no active focus card)"}` }] };
@@ -506,7 +506,7 @@ server.tool("relay_handoff", "Write a rich handoff for THIS session so a fresh s
     return { content: [{ type: "text", text: `handoff saved (${rec.id}). A fresh session in ${name} will load it on start. Tell the user to open a new terminal here.` }] };
   });
 
-server.tool("relay_inbox", "Read NEW messages addressed to this session since the last read (non-blocking). The result is a bounded page — newest first, repeats of the same notice collapsed with ×N, capped near 20K chars. When older messages exist it ends with a before-cursor: pass it back as relay_inbox({before}) to page into older history.",
+server.tool("relay_inbox", "Read new messages for this session since the last read (non-blocking). Bounded page, newest first, repeats collapsed with ×N. When older messages exist it ends with a before-cursor: pass it back as relay_inbox({before}).",
   { before: z.number().optional().describe("page BACK: return only messages with id < before (the cursor from the 'older not shown' footer). A peek — does not advance the new-message cursor.") },
   async ({ before }) => {
     if (before) {
@@ -522,7 +522,7 @@ server.tool("relay_inbox", "Read NEW messages addressed to this session since th
     return { content: [{ type: "text", text: page.text || "(no new messages)" }] };
   });
 
-server.tool("relay_wait", "Block up to `timeout` seconds waiting for the next message to this session (long-poll). Returns the instant a message arrives. When idle, park by calling this repeatedly. IMPORTANT: MCP clients cap or background long tool calls — OpenCode ~60s; Codex ~120s; Claude Code auto-backgrounds ANY MCP call at 120s (CC 2.1.212+, tunable via CLAUDE_CODE_MCP_AUTO_BACKGROUND_MS), which breaks inline parking. Use timeout 50 and loop for cross-client safety.",
+server.tool("relay_wait", "Long-poll up to `timeout` seconds for the next message to this session; returns the instant one arrives. When idle, park by calling it repeatedly. MCP clients cap long calls (OpenCode ~60s, Codex ~120s, Claude Code backgrounds at 120s), so use timeout 50 and loop.",
   { timeout: z.number().optional().describe("seconds to wait, default 25. Effective wait is capped at 110s so the call always returns inline (a longer wait would be auto-backgrounded by Claude Code's 120s MCP floor or dropped by other clients). Use 50 and call repeatedly to park while idle.") },
   async ({ timeout }) => {
     // Cap below the 120s MCP auto-background floor (CC 2.1.212+) so relay_wait always

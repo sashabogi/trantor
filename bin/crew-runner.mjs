@@ -30,7 +30,7 @@ import {
 import { snapshotBeforeCut } from "./cut-snapshot.mjs";
 import { ocTurnUsage, dshTurnUsage, usageTotal, processedInput, codexStepInput, kimiStepInput, claudeStepInput } from "../lib/turn-usage.mjs";
 import { capConfig, capDecision, capHandoffPrompt, capPointerLine, capExhaustedNote } from "../lib/context-cap.mjs";
-import { ocCompactionContent, ocCompactionLogLine } from "../lib/seat-compaction.mjs";
+import { ocCompactionContent, ocCompactionLogLine, readOpencodeUserConfig, seatMcpOverlay, seatConfigContent } from "../lib/seat-compaction.mjs";
 import { seatSignalPrefix } from "../lib/seat-signal-guard.mjs";
 import { listContainers, newContainers, recordContainers, statePathFor as dockerStatePathFor, sweep as dockerSweep } from "../lib/docker-janitor.mjs";
 import {
@@ -784,6 +784,8 @@ function capStepProcessed(sinceMs) {
 // core/src/session/compaction.ts) — so reserved is sized from the seat model's catalog window.
 const OC_COMPACTION_WINDOW = contextWindow(MODEL);
 const OC_COMPACTION = ocCompactionContent(process.env, OC_COMPACTION_WINDOW);
+// #11854: plus every non-relay MCP server of the user's opencode config switched off for the seat.
+const OC_SEAT_CONFIG = seatConfigContent(OC_COMPACTION, seatMcpOverlay(readOpencodeUserConfig()));
 
 let sid = releaseState?.sid || "";
 // #6206: the watchdog is DETACHED, so a runner that dies without ending it leaves an orphan
@@ -985,7 +987,7 @@ exit $turn_exit`;
   // #11559: opencode only compacts when the context is FULL, which on big-limit models is far
   // past the point a seat card should reach. The merged-content injection arms compaction per
   // seat (schema: opencode.ai/config.json) without touching the operator's global config.
-  if (cli.pinned && OC_COMPACTION) spawnEnv.OPENCODE_CONFIG_CONTENT = OC_COMPACTION;
+  if (cli.pinned && OC_SEAT_CONFIG) spawnEnv.OPENCODE_CONFIG_CONTENT = OC_SEAT_CONFIG;
   spawnOpts.env = spawnEnv;
   spawnOpts.maxBuffer = 16 * 1024 * 1024;
   // The timeout signals the shell to snapshot before sweeping, just like the normal box.
