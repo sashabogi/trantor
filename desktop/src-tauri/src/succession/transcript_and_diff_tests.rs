@@ -714,3 +714,33 @@ fn seat_diff_reports_branch_base_files_patch_and_truncation() {
     assert_eq!(patch.len(), 400_000);
     assert!(truncated);
 }
+
+#[test]
+fn idle_compaction_shows_one_notice_and_an_ordinary_one_shows_none() {
+    let boundary = serde_json::json!({
+        "type": "system", "subtype": "compact_boundary", "content": "Conversation compacted",
+    });
+    let idle = serde_json::json!({
+        "type": "system", "subtype": "informational",
+        "content": "Compacted while idle, before the prompt cache expired",
+    });
+    let other = serde_json::json!({
+        "type": "system", "subtype": "informational", "content": "Something else happened",
+    });
+    let decode = |rows: Vec<&serde_json::Value>| {
+        decode_chat_lines_with_context_window(rows.iter().map(|r| r.to_string()), 1, 0)
+    };
+
+    let snap = decode(vec![&boundary, &idle]);
+    assert_eq!(snap.turns.len(), 1);
+    assert_eq!(snap.turns[0].blocks[0].kind, "divider");
+    assert_eq!(snap.turns[0].blocks[0].text, crate::chat::IDLE_COMPACTION_NOTICE);
+
+    // Written the other way round, the notice is the same and still shows once.
+    assert_eq!(decode(vec![&idle, &boundary]).turns.len(), 1);
+    // An ordinary compaction and an unrelated informational row add nothing.
+    assert!(decode(vec![&boundary]).turns.is_empty());
+    assert!(decode(vec![&boundary, &other]).turns.is_empty());
+    assert!(!crate::chat::idle_compaction_row(&other));
+    assert!(crate::chat::idle_compaction_row(&idle));
+}

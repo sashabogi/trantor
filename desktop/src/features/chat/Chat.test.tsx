@@ -77,7 +77,7 @@ function makeDeps(wakeProjects: string[] = []) {
 
 const META = { model: "", version: "", branch: "", context: { tokens: null, window: 0, frac: null } };
 
-function rowsPayload(extra: Partial<{ project: string; sessionId: string; after: number; total: number; turn_ended: boolean }> = {}): string {
+function rowsPayload(extra: Partial<{ project: string; sessionId: string; after: number; total: number; turn_ended: boolean; turns: unknown[] }> = {}): string {
   return JSON.stringify({
     project: "p", sessionId: "s1", after: 0, total: 0, turns: [], results: [], meta: META,
     ...extra,
@@ -1688,5 +1688,46 @@ describe("Claude Code's own suggested next prompt (#11649)", () => {
     await flush();
     await status(d.handlers, { status: "idle", suggestion: GHOST });
     expect(chipLabels()).toEqual([GHOST]);
+  });
+});
+
+// #11851: an idle compaction (Claude Code compacting before the prompt cache expires) reaches the
+// feed as a quiet divider turn; an ordinary compaction sends no turn, so no notice appears.
+describe("Chat idle compaction notice (#11851)", () => {
+  const NOTICE = "Claude Code compacted this session while it sat idle, before its prompt cache expired. Earlier messages are now a summary.";
+  let host: HTMLDivElement;
+  let root: Root;
+
+  const mountAndFire = async (turns: unknown[]) => {
+    const d = makeDeps();
+    act(() => { root.render(<Chat project="p" dock="right" onDock={() => {}} onClose={() => {}} deps={d.deps} />); });
+    await flush();
+    await flush();
+    await act(async () => {
+      for (const cb of d.handlers.get("chat-rows") ?? []) cb({ payload: rowsPayload({ after: 0, total: 1, turns }) });
+    });
+    await flush();
+  };
+
+  beforeEach(() => {
+    host = document.createElement("div");
+    document.body.appendChild(host);
+    root = createRoot(host);
+  });
+
+  afterEach(() => {
+    act(() => root.unmount());
+    host.remove();
+  });
+
+  it("shows the notice as one divider line for an idle compaction", async () => {
+    await mountAndFire([{ role: "system", blocks: [{ kind: "divider", text: NOTICE }] }]);
+    const lines = Array.from(host.querySelectorAll("div")).filter(el => el.textContent === NOTICE && el.children.length === 0);
+    expect(lines).toHaveLength(1);
+  });
+
+  it("shows no notice for an ordinary compaction", async () => {
+    await mountAndFire([]);
+    expect(host.textContent).not.toContain("prompt cache expired");
   });
 });

@@ -307,6 +307,19 @@ pub(crate) fn text_content(content: &serde_json::Value) -> String {
     }
 }
 
+/// What the feed says when Claude Code compacts an idle session just before its prompt cache expires.
+pub(crate) const IDLE_COMPACTION_NOTICE: &str = "Claude Code compacted this session while it sat idle, before its prompt cache expired. Earlier messages are now a summary.";
+
+/// True for the informational row that marks an idle compaction. The plain `compact_boundary`
+/// row that precedes it is the same for every compaction, so only this row tells the cases apart.
+pub(crate) fn idle_compaction_row(v: &serde_json::Value) -> bool {
+    v.get("type").and_then(|t| t.as_str()) == Some("system")
+        && v.get("subtype").and_then(|s| s.as_str()) == Some("informational")
+        && v.get("content")
+            .and_then(|c| c.as_str())
+            .is_some_and(|c| c.contains("Compacted while idle"))
+}
+
 pub(crate) fn bookkeeping_divider_text(v: &serde_json::Value, content: &serde_json::Value) -> Option<String> {
     if v.get("isMeta").and_then(|m| m.as_bool()).unwrap_or(false) {
         let text = text_content(content);
@@ -695,6 +708,20 @@ where
             // `turn_duration`, or the stop hook's `stop_hook_summary`. The pushed status stream can
             // freeze on `working`, so the rows batch carries the truth. Bookkeeping, never a bubble.
             Some("system") => {
+                if idle_compaction_row(&v) {
+                    turns.push(ChatTurn {
+                        role: "system".into(),
+                        blocks: vec![ChatBlock {
+                            kind: "divider".into(),
+                            text: IDLE_COMPACTION_NOTICE.into(),
+                            tool: None,
+                            tool_id: None,
+                            ask: None,
+                        }],
+                        queued: None,
+                    });
+                    continue;
+                }
                 if matches!(
                     v.get("subtype").and_then(|s| s.as_str()),
                     Some("turn_duration") | Some("stop_hook_summary")
