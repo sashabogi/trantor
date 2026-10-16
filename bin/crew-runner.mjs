@@ -23,7 +23,7 @@ import {
 } from "../lib/classify-failure.mjs";
 import { capWake, capBcast, pickLessons, composePrompt, contractBase, baseLine } from "./crew-payload.mjs";
 import {
-  cardRefs, servedContractCard, carriesWork, parseTurnTokens, parseResetAt, reasonWithBalances, quotaResetAt, queuedWording, turnDelivered, PARKING_REASONS,
+  cardRefs, servedContractCard, carriesWork, parseTurnTokens, parseResetAt, reasonWithBalances, quotaResetAt, queuedWording, turnDelivered, budgetPause, PARKING_REASONS,
   senderProjectOf, isLinkedProject, stateSkipReason, isMessageCardTitle, OPEN_CARD_STATUSES,
   CUT_CHAIN_PARK_MIN, cutChainEvidence, isBoundedPark, askDuringTurn, askedVerdict,
 } from "../lib/turn-policy.mjs";
@@ -1773,7 +1773,7 @@ async function resolveWakeCard(messages, { session }) {
       await releaseDutyNudgeClaims({ ids: skippedNudgeIds, statePath: DUTY_NUDGE_STATE, owner: dutyOwner });
     }
     const claimedIds = new Set(dutyPlan.items.map(item => item.id));
-    const wakeForTurn = DUTY_NUDGES
+    let wakeForTurn = DUTY_NUDGES
       ? wake.filter(message => {
         const escalation = dutyEscalations([message])[0];
         return !escalation || claimedIds.has(escalation.id);
@@ -1784,6 +1784,21 @@ async function resolveWakeCard(messages, { session }) {
       savePending([], pendingBcast);
       log("duty escalation already nudged or reserved by another turn — consumed without a duplicate model wake");
       return;
+    }
+    // #11864: the pause lifts when its card moves on, and a newer contract for another card beats
+    // the stale messages that still cite the paused one.
+    if (budgetStop) {
+      const status = await api(`/card?project=${encodeURIComponent(PROJ)}&id=${budgetStop.card}`).then(r => String(r?.task?.status || "")).catch(() => "");
+      const bp = budgetPause({ paused: budgetStop, status, messages: wakeForTurn, session: SESSION });
+      if (bp.action === "lift") {
+        log(`#${budgetStop.card} is ${status} — token-budget pause lifted`);
+        budgetStop = null; budgetRetryAt = 0; cardTokens = 0;
+      } else if (bp.action === "bind") {
+        log(`#${budgetStop.card} is paused over its token budget — serving the newer contract for #${bp.card}, dropping ${bp.drop.length} stale message(s)`);
+        wakeForTurn = wakeForTurn.filter(m => !bp.drop.includes(m));
+        pendingWake = pendingWake.filter(m => !bp.drop.includes(m));
+        savePending(pendingWake, pendingBcast);
+      }
     }
     const wakeCapped = capWake(wakeForTurn);
     const bcastCapped = capBcast(pendingBcast);
