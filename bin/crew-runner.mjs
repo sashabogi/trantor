@@ -23,7 +23,7 @@ import {
 } from "../lib/classify-failure.mjs";
 import { capWake, capBcast, pickLessons, composePrompt, contractBase, baseLine } from "./crew-payload.mjs";
 import {
-  cardRefs, servedContractCard, carriesWork, parseTurnTokens, parseResetAt, reasonWithBalances, quotaResetAt, PARKING_REASONS,
+  cardRefs, servedContractCard, carriesWork, parseTurnTokens, parseResetAt, reasonWithBalances, quotaResetAt, queuedWording, PARKING_REASONS,
   senderProjectOf, isLinkedProject, stateSkipReason, isMessageCardTitle, OPEN_CARD_STATUSES,
   CUT_CHAIN_PARK_MIN, cutChainEvidence, isBoundedPark, askDuringTurn, askedVerdict,
 } from "../lib/turn-policy.mjs";
@@ -1692,7 +1692,7 @@ async function resolveWakeCard(messages, { session }) {
     }
     // Respect an active backoff: a new message during an outage joins the batch, it does not
     // reset the clock and hammer a CLI that is already failing.
-    if (Date.now() < retryAt) { log(`queued — ${pendingWake.length} undelivered, next attempt in ${Math.max(0, Math.round((retryAt - Date.now()) / 1000))}s`); continue; }
+    if (Date.now() < retryAt) { log(queuedWording(retryAt, parkState?.reason, AGENT, pendingWake.length)); continue; }
     await deliverWake();
     log("parked — waiting for the next message");
   }
