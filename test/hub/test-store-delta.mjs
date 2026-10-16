@@ -1,14 +1,6 @@
 #!/usr/bin/env node
-// test-store-delta.mjs — the boot-cache fix: incremental persist (saveDelta) + LISTEN/NOTIFY.
-//
-// The property under test: the hub's persist tick must ONLY touch rows the hub has itself seen.
-// saveSnapshot's delete-everything-and-rewrite semantics destroyed a second writer's rows every
-// second; saveDelta diffs against the last persisted snapshot, so foreign rows survive.
-//
-// Section 1 (always runs): PgStore.saveDelta against a recording mock pool — asserts exactly which
-// statements are issued, and above all that NO blanket deletes exist on the delta path.
-// Section 2 (only when RELAY_TEST_PG_URL is set): the real thing against a live Postgres —
-// two stores on one database, LISTEN/NOTIFY round-trip, foreign-row survival.
+// saveDelta + LISTEN/NOTIFY: the persist tick touches only rows this hub has seen, so a second
+// writer's rows survive. Mock-pool checks always run; set RELAY_TEST_PG_URL to also run them live.
 import { PgStore } from "../../lib/store-pg.mjs";
 import { CHANGE_CHANNEL } from "../../lib/store-contract.mjs";
 
@@ -72,11 +64,8 @@ console.log("saveDelta: statement selection");
 
 console.log("the append-only log actually appends (the 18-day silent death)");
 {
-  // Production hub, 2026-08-25: the events table had not grown since 7 August. Cause: eventFromRow
-  // spread the JSON payload AFTER the column fields, so an event whose payload carried its own `id`
-  // came back with the WRONG id. 1198 rows on the live hub carried one. The array tail then reported
-  // id 4655 while the table held 9903, appendEvent minted 4656, and every insert from then on hit
-  // ON CONFLICT (id) DO NOTHING and was thrown away without a word.
+  // eventFromRow spread the JSON payload over the column fields, so a payload carrying its own `id`
+  // came back with the wrong one and every later insert hit ON CONFLICT DO NOTHING in silence.
   const { PgStore: PS } = await import("../../lib/store-pg.mjs");
 
   // 1. the read side: a column can never be clobbered by the payload
@@ -160,6 +149,25 @@ console.log("contractReap: the kv key survives the round-trip (the ghost backlog
   const store = new PgStore({ pool: { query: client.query, connect: async () => client } });
   const snap = await store.loadSnapshot("local");
   ok(snap.contractReap && snap.contractReap["42"]?.to === "codex:p", "loadSnapshot rehydrates contractReap from kv");
+}
+
+console.log("balancesByMachine: the meta kv row round-trips per-machine snapshots (#12010)");
+{
+  // netcup runs the Postgres store, so the per-machine usage snapshots have to survive its meta row
+  const byMachine = { "MacBook-Pro-M1": { ts: 9, by: "", entries: [{ provider: "kimi", ok: true }], profile: { kimi: { tier: "capped-sub" } } } };
+  const { log, pool } = mockPool();
+  const store = new PgStore({ pool });
+  await store.saveDelta("local", baseState({ balancesByMachine: {} }), baseState({ balancesByMachine: byMachine }), { src: "test-hub" });
+  const meta = log.filter(l => l.sql.includes("INSERT INTO kv") && l.vals[1] === "meta");
+  ok(meta.length === 1 && JSON.parse(meta[0].vals[2] || "{}").balancesByMachine?.["MacBook-Pro-M1"]?.entries?.[0]?.provider === "kimi",
+     "saveDelta writes balancesByMachine inside the meta row");
+  const rows = { tasks: [], peers: [], events: [], messages: [], identities: [], kv: [{ key: "meta", value: { balancesByMachine: byMachine } }] };
+  const client = {
+    query: async (sql) => ({ rows: rows[String(sql).match(/FROM (\w+)/)?.[1] || ""] || [], rowCount: 0 }),
+    release: () => {}, on: () => client, once: () => client,
+  };
+  const loaded = await new PgStore({ pool: { query: client.query, connect: async () => client } }).loadSnapshot("local");
+  ok(loaded.balancesByMachine?.["MacBook-Pro-M1"]?.profile?.kimi?.tier === "capped-sub", "loadSnapshot rehydrates balancesByMachine from meta");
 }
 
 console.log("task extra fields: pack + unpack (the cost-metadata fidelity fix)");
