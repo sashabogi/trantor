@@ -52,7 +52,7 @@ async function drill(t, { maxMs, cliBody }) {
     writeTurnState: (agent, proj, patch) => writeTurnState(agent, proj, patch, bus),
     process: { env: drillEnv({ HOME: work, PATH: `${bin}:${process.env.PATH}` }), execPath: process.execPath },
     homedir: () => work, gitOut: () => "unchanged-head", registerStatus: record,
-    latestBusEventId: async () => 0, busActivitySince: async () => false,
+    latestBusEventId: async () => 0, busActivitySince: async () => false, busMessagesSince: async () => [], turnDelivered: () => false,
     // #9778: runTurn snapshots containers at both ends — docker reads as absent in this sandbox.
     listContainers: () => null, newContainers, recordContainers, snapshotBeforeCut,
     OC_DB: join(work, "absent-opencode.db"),

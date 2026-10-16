@@ -63,7 +63,7 @@ echo 'the runner can move on to its next wake without a redelivery ladder or a p
     process: { env: drillEnv({ HOME: work, PATH: `${bin}:${process.env.PATH}` }), execPath: process.execPath },
     homedir: () => work, gitOut: () => "unchanged-head", registerStatus: record,
     // #7759 helpers, stubbed like gitOut: no hub in this sandbox, so bus activity reads as none.
-    latestBusEventId: async () => 0, busActivitySince: async () => false,
+    latestBusEventId: async () => 0, busActivitySince: async () => false, busMessagesSince: async () => [], turnDelivered: () => false,
     // #9778: runTurn snapshots containers at both ends — docker reads as absent in this sandbox.
     listContainers: () => null, newContainers, recordContainers, snapshotBeforeCut,
     OC_DB: join(work, "absent-opencode.db"),

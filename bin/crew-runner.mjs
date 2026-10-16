@@ -23,7 +23,7 @@ import {
 } from "../lib/classify-failure.mjs";
 import { capWake, capBcast, pickLessons, composePrompt, contractBase, baseLine } from "./crew-payload.mjs";
 import {
-  cardRefs, servedContractCard, carriesWork, parseTurnTokens, parseResetAt, reasonWithBalances, quotaResetAt, queuedWording, PARKING_REASONS,
+  cardRefs, servedContractCard, carriesWork, parseTurnTokens, parseResetAt, reasonWithBalances, quotaResetAt, queuedWording, turnDelivered, PARKING_REASONS,
   senderProjectOf, isLinkedProject, stateSkipReason, isMessageCardTitle, OPEN_CARD_STATUSES,
   CUT_CHAIN_PARK_MIN, cutChainEvidence, isBoundedPark, askDuringTurn, askedVerdict,
 } from "../lib/turn-policy.mjs";
@@ -627,6 +627,13 @@ async function notifyAssigners(pairs, text) {
 async function latestBusEventId() {
   try { const r = await api("/events?limit=1"); return Number(r?.latest) || 0; } catch { return 0; }
 }
+// #11860: this seat's direct messages since `seq`, to tell a reply to the assigner from silence.
+async function busMessagesSince(seq) {
+  try {
+    const r = await api(`/events?by=${encodeURIComponent(SESSION)}&since=${seq}&limit=500`);
+    return Array.isArray(r?.events) ? r.events.filter(e => e?.type === "message") : [];
+  } catch { return []; }
+}
 async function busActivitySince(seq) {
   try {
     const r = await api(`/events?by=${encodeURIComponent(SESSION)}&since=${seq}&limit=500`);
@@ -1149,9 +1156,10 @@ exit $turn_exit`;
   // Judged on hub reads of the card status; a failed read keeps today's label, never no-delivery.
   let cardStatusAtEnd = "", noDelivery = false, blockedVerdict = "";
   if (!cut && !opts.state && realExit === 0 && effExit === 0 && sessionCard > 0 && cardStatusBefore !== null) {
-    let endStatus = null;
+    let endStatus = null, endTask = null;
     try {
       const { task } = await api(`/card?project=${encodeURIComponent(PROJ)}&id=${sessionCard}`);
+      endTask = task;
       endStatus = task ? String(task.status || "") : null;
       const freshNote = (task?.log || []).filter(n => n.by === SESSION && n.ts >= t0
         && !cardLogBefore.some(old => old.ts === n.ts && old.by === n.by && old.text === n.text)).at(-1);
@@ -1170,7 +1178,11 @@ exit $turn_exit`;
       // still IS testing/done: a mid-turn bounce to doing (endStatus doing) reopens the contract.
       const alreadyDelivered = ["testing", "done"].includes(cardStatusBefore)
         && ["testing", "done"].includes(endStatus);
-      noDelivery = !newCommit && !moved && !alreadyDelivered && !askVerdict && !blockedVerdict;
+      noDelivery = !alreadyDelivered && !askVerdict && !blockedVerdict && !newCommit && !moved;
+      if (noDelivery) {
+        const events = await busMessagesSince(busSeqBefore);
+        noDelivery = !turnDelivered({ newCommit, moved, session: SESSION, t0, cardLogBefore, cardLog: endTask?.log || [], events, assigners: opts.assigners, seqBefore: busSeqBefore });
+      }
     }
   }
   lastNoDelivery = noDelivery;
