@@ -40,6 +40,8 @@ async function main() {
   try { writeFileSync(join(dir, "usage-claude-live.json"), JSON.stringify({ ts: Date.now(), ...payload })); } catch {}
   // SECONDARY, best-effort: the hub copy, for dashboard surfaces that read hub state.
   const { signedPost } = await import("./lib/api.mjs");
+  const { hostId } = await import("../lib/project.mjs");
+  payload.machine = hostId();
   await signedPost("/usage/claude", payload, { timeoutMs: 2500 });
 }
 

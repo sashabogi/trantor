@@ -158,6 +158,34 @@ pub(crate) fn balances_refresh() -> Result<(), String> {
     }
 }
 
+fn machine_id_in(dir: &std::path::Path) -> String {
+    std::fs::read_to_string(dir.join("machine-id"))
+        .map(|v| v.trim().to_string())
+        .unwrap_or_default()
+}
+
+/// This Mac's machine key (the CLI's `hostId()`, persisted in ~/.agent-bus/machine-id), so the
+/// usage strip can ask a shared hub for THIS machine's balances. Empty when the file is missing.
+#[tauri::command]
+pub(crate) fn machine_id() -> String {
+    machine_id_in(&desktop_bus_dir())
+}
+
+#[cfg(test)]
+mod machine_id_tests {
+    use super::machine_id_in;
+
+    #[test]
+    fn machine_id_is_trimmed_and_empty_when_missing() {
+        let dir = std::env::temp_dir().join(format!("trantor-machine-id-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        assert_eq!(machine_id_in(&dir), "");
+        std::fs::write(dir.join("machine-id"), "MacBook-Pro\n").unwrap();
+        assert_eq!(machine_id_in(&dir), "MacBook-Pro");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub(crate) struct OrchStatusPayload {
     pub(crate) project: String,

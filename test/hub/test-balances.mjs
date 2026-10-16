@@ -5,7 +5,7 @@ import { chmodSync, existsSync, mkdtempSync, writeFileSync, mkdirSync } from "no
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import http from "node:http";
-import { isLow, fmtBalance, fetchBalances, qwenResetFromMessage, DEFAULT_LOW } from "../../lib/balances.mjs";
+import { isLow, fmtBalance, fetchBalances, qwenResetFromMessage, snapshotPayload, DEFAULT_LOW } from "../../lib/balances.mjs";
 import { detectedCliBalanceRows } from "../../lib/providers.mjs";
 import { startTestHub } from "../lib/test-hub.mjs";
 
@@ -31,6 +31,15 @@ ok(fmtBalance({ ok: true, label: "Qwen", kind: "quota", plan: "token plan", rema
 ok(fmtBalance({ ok: true, label: "Qwen", kind: "quota", plan: "token plan", remainingPct: 0, detail: "7-day token plan exhausted", resetTime: Date.now() + 3 * 86400e3 }).startsWith("Qwen (token plan): 0% left · resets"), "fmtBalance: the exhausted wall still prints 0% left with the reset");
 ok(isLow({ ok: true, kind: "quota", remainingPct: null }) === false, "isLow: quota unknown% → never low");
 ok(fmtBalance({ ok: true, kind: "quota", label: "Kimi Code", plan: "intermediate", remainingPct: 99 }).includes("99% left"), "fmtBalance: quota shows % left + plan");
+
+// #12010 — the pushed snapshot carries the machine key and the provider profile.
+{
+  const snap = snapshotPayload([{ provider: "deepseek" }], { machine: "MacBook", profile: { deepseek: { plan: "api", tier: "api" } }, ts: 5 });
+  ok(snap.machine === "MacBook" && snap.ts === 5 && snap.balances.length === 1, "snapshotPayload: carries machine, ts and balances");
+  ok(snap.profile.deepseek?.tier === "api", "snapshotPayload: carries the provider profile");
+  ok(snapshotPayload([], { machine: "m", profile: null }).profile && Object.keys(snapshotPayload([], { machine: "m", profile: null }).profile).length === 0, "snapshotPayload: a missing profile becomes {}");
+  ok(snapshotPayload([], { machine: "m", profile: {}, by: "s" }).by === "s" && !("by" in snapshotPayload([], { machine: "m", profile: {} })), "snapshotPayload: by only when given");
+}
 
 // --- #6131: Qwen token-plan probe — the reset-time parser, then the adapter live against a mock
 // gateway (its own base URL is overridable via env.QWEN_BASE_URL, no real network) ---
@@ -146,9 +155,8 @@ writeFileSync(join(dir, ".agent-bus", "profile.json"), JSON.stringify({ provider
   openrouter: { plan: "api", tier: "api" }, deepseek: { plan: "api", tier: "api" }, zai: { plan: "coding-plan", tier: "capped-sub" },
 } }));
 const hub = await startTestHub({ dir });
-const base = hub.base;
-const post = (p, b) => fetch(base + p, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(b) }).then(r => r.json());
-const get = (p) => fetch(base + p).then(r => r.json());
+const post = (p, b) => fetch(hub.base + p, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(b) }).then(r => r.json());
+const get = (p) => fetch(hub.base + p).then(r => r.json());
 
 await post("/balances", { ts: 1000, by: "old:trantor", balances: [{ provider: "openrouter", label: "OpenRouter", kind: "prepaid", ok: true, remaining: 99, currency: "USD" }] });
 await post("/balances", { ts: 2000, by: "new:trantor", balances: [
@@ -181,6 +189,35 @@ ok(g.entries.filter(e => e.provider === "moonshot" || e.provider === "kimi").len
 await post("/balances", { ts: 500, balances: [{ provider: "openrouter", label: "OpenRouter", kind: "prepaid", ok: true, remaining: 0.01, currency: "USD" }] });
 const g2 = await get("/balances");
 ok(g2.entries.find(e => e.provider === "openrouter").remaining === 11.68, "hub: stale snapshot rejected (kept newer)");
+
+// --- #12010: one snapshot per machine, filtered by that machine's own posted profile ---
+await post("/balances", { ts: 3000, by: "mac:a", machine: "MacBook", profile: { deepseek: { plan: "api", tier: "api" }, mistral: { plan: "api", tier: "api" } },
+  balances: [{ provider: "mistral", label: "Mistral", kind: "prepaid", ok: true, remaining: 40, currency: "USD" },
+    { provider: "deepseek", label: "DeepSeek", kind: "prepaid", ok: true, remaining: 20, currency: "USD" }] });
+await post("/balances", { ts: 4000, by: "mac:b", machine: "MacMini", profile: { openrouter: { plan: "api", tier: "api" } },
+  balances: [{ provider: "openrouter", label: "OpenRouter", kind: "prepaid", ok: true, remaining: 7, currency: "USD" }] });
+const gA = await get("/balances?machine=MacBook");
+ok(gA.by === "mac:a" && gA.ts === 3000, "machine: MacBook reads its own snapshot even though MacMini pushed later");
+ok(gA.entries.some(e => e.provider === "mistral" && e.remaining === 40), "machine: a provider only in the posted profile is shown though the hub's profile file lacks it");
+ok(!gA.entries.some(e => e.provider === "openrouter"), "machine: MacBook does not see MacMini's providers");
+const gB = await get("/balances?machine=MacMini");
+ok(gB.by === "mac:b" && gB.entries.length === 1 && gB.entries[0].provider === "openrouter", "machine: MacMini reads its own snapshot");
+const gL = await get("/balances");
+ok(gL.by === "mac:b" && gL.ts === 4000, "machine: GET without machine still returns the legacy latest push");
+const gU = await get("/balances?machine=Nobody");
+ok(gU.by === "mac:b", "machine: an unknown machine falls back to the legacy snapshot");
+await post("/balances", { ts: 100, machine: "MacBook", balances: [] });
+ok((await get("/balances?machine=MacBook")).ts === 3000, "machine: an older push for a machine is rejected");
+
+// per-machine snapshots survive a hub restart (JSON store whitelist)
+await new Promise(r => setTimeout(r, 1500));   // let the 1s persist tick flush
+await hub.stop();
+const hub2 = await startTestHub({ dir });
+const gR = await fetch(hub2.base + "/balances?machine=MacBook").then(r => r.json());
+ok(gR.by === "mac:a" && gR.entries.some(e => e.provider === "mistral"), "machine: the per-machine snapshot and its profile persist across a hub restart");
+await hub2.stop();
+const hub3 = await startTestHub({ dir });
+hub.base = hub3.base; hub.stop = () => hub3.stop();
 
 // --- hub guard: an old/buggy client can't inject an inflated cc-subagent cost (v0.17.37) ---
 const bogus = await post("/task", { project: "guardp", title: "subagent: recall memory", status: "done",

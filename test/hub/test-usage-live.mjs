@@ -50,6 +50,17 @@ try {
   r = await post("/usage/claude", { fiveHour: { used_percentage: 44.6, resets_at: 1788200000 }, sevenDay: { utilization: 41 } });
   ok("a same-value post inside 30s dedupes", (await r.json()).deduped === true);
 
+  // #12010: a live post that names a machine patches that machine's snapshot only.
+  await post("/balances", { ts: Date.now(), by: "m1", machine: "MacBook", profile: { claude: "max" }, balances: [
+    { provider: "claude", label: "Claude", kind: "windows", ok: true, windows: [{ name: "5h", usedPct: 10 }] } ] });
+  await post("/balances", { ts: Date.now(), by: "m2", machine: "MacMini", profile: { claude: "max" }, balances: [
+    { provider: "claude", label: "Claude", kind: "windows", ok: true, windows: [{ name: "5h", usedPct: 20 }] } ] });
+  r = await post("/usage/claude", { machine: "MacMini", fiveHour: { used_percentage: 77, resets_at: 1788200000 } });
+  ok("a machine-tagged live post is accepted", r.status === 200, String(r.status));
+  const pct = async (m) => (await (await fetch(BASE + "/balances?machine=" + m)).json()).entries.find(e => e.provider === "claude")?.windows?.find(w => w.name === "5h")?.usedPct;
+  ok("the named machine's 5h window is patched", (await pct("MacMini")) === 77);
+  ok("the other machine's window is untouched", (await pct("MacBook")) === 10);
+
   // Garbage refuses loudly.
   r = await post("/usage/claude", { hello: "nothing here" });
   ok("a payload with no usable windows is a 400", r.status === 400);

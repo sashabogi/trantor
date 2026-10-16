@@ -5,7 +5,8 @@
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
-import { fetchBalances, isLow, fmtBalance, DEFAULT_LOW, DEFAULT_LOW_QUOTA_PCT } from "../../lib/balances.mjs";
+import { fetchBalances, isLow, fmtBalance, snapshotPayload, DEFAULT_LOW, DEFAULT_LOW_QUOTA_PCT } from "../../lib/balances.mjs";
+import { hostId } from "../../lib/project.mjs";
 import { loadProfile } from "../../bin/profile.mjs";
 import { resolveKeys } from "../../lib/provider-keys.mjs";
 import { signedPost } from "./api.mjs";
@@ -38,7 +39,7 @@ export async function maybeCheckBalances() {
   if (!Array.isArray(balances) || !balances.length) { try { writeFileSync(STAMP, JSON.stringify({ ts: Date.now(), low: [] })); } catch {} return { low: [] }; }
 
   // push the fresh snapshot to the hub for the dashboard + other sessions (best-effort, signed)
-  const snap = { balances, ts: Date.now(), by: process.env.TRANTOR_SESSION || "" };
+  const snap = snapshotPayload(balances, { machine: hostId(), profile: loadProfile().providers, by: process.env.TRANTOR_SESSION || "" });
   await signedPost("/balances", snap, { timeoutMs: 2000 });
   // The desktop reads balances from the LOCAL hub (machine-local data); a pinned project's
   // default push lands on the REMOTE one — the 11-day-stale-header bug. Push both.

@@ -18,6 +18,14 @@ const REFRESH_MS = 5 * 60 * 1000;
 // statusline sidechannel) is noted in RESEARCH-orca.md.
 const REFETCH_AFTER_MS = 10 * 60 * 1000;
 
+// This Mac's machine key, cached once read; a failure means no ?machine= param (the hub's latest push).
+let machineIdCache: string | undefined;
+async function machineId(): Promise<string | undefined> {
+  if (machineIdCache) return machineIdCache;
+  try { machineIdCache = (await invoke<string>("machine_id")) || undefined; } catch { /* no id: the hub answers with its latest push */ }
+  return machineIdCache;
+}
+
 export function BalanceStrip({ client }: { client: HubClient }) {
   const [report, setReport] = useState<BalancesReport | null>(null);
   const [failure, setFailure] = useState<string | null>(null);
@@ -29,9 +37,11 @@ export function BalanceStrip({ client }: { client: HubClient }) {
   // CLI throttles provider calls; the hub snapshot is cheap to read). A failed fetch keeps the
   // last values and dims.
   const isLocal = client.baseUrl.includes("127.0.0.1") || client.baseUrl.includes("localhost");
-  const local = isLocal ? client : new HubClient(LOCAL_HUB);
-  const pull = useCallback(() => {
-    return local.balances()
+  const pull = useCallback(async () => {
+    const machine = await machineId();
+    // The app's own hub comes first; the local hub is only a fallback when it cannot answer.
+    const read = isLocal ? client.balances(machine) : client.balances(machine).catch(() => new HubClient(LOCAL_HUB).balances(machine));
+    return read
       .then(r => { setReport(r); setFailure(null); return r; })
       .catch((error: Error) => {
         setFailure(error.message);

@@ -387,8 +387,21 @@ export async function routeAdmin({ req, res, q, P, auth, ctx }) {
       const b = await body(req);
       const entries = Array.isArray(b.balances) ? b.balances.slice(0, 30) : [];
       const ts = (Number.isFinite(b.ts) && b.ts > 0) ? Math.floor(b.ts) : now();
+      const by = String(b.by || "").slice(0, 120);
       // only accept a newer snapshot (avoid an older session clobbering a fresh push)
-      if (ts >= (state.balances?.ts || 0)) { state.balances = { ts, by: String(b.by || "").slice(0, 120), entries }; markDirty(); }
+      if (ts >= (state.balances?.ts || 0)) { state.balances = { ts, by, entries }; markDirty(); }
+      // Per-machine copy: two Macs on one hub each keep their own providers and profile.
+      const machine = String(b.machine || "").trim().slice(0, 60);
+      if (machine) {
+        const byM = (state.balancesByMachine ||= {});
+        if (ts >= (byM[machine]?.ts || 0)) {
+          const prof = (b.profile && typeof b.profile === "object" && !Array.isArray(b.profile)) ? Object.fromEntries(Object.entries(b.profile).slice(0, 30)) : {};
+          byM[machine] = { ts, by, entries, profile: prof };
+          const keys = Object.keys(byM);
+          if (keys.length > 20) for (const k of keys.sort((x, y) => byM[x].ts - byM[y].ts).slice(0, keys.length - 20)) delete byM[k];
+          markDirty();
+        }
+      }
       return json(res, 200, { ok: true });
     }
     // USAGE v2: the Claude statusline sidechannel. Claude Code >=2.1.80 pipes rate_limits into the
@@ -402,14 +415,23 @@ export async function routeAdmin({ req, res, q, P, auth, ctx }) {
       const wins = [["fiveHour", "5h"], ["sevenDay", "7d"], ["fable", "Fable"]]
         .map(([k, n]) => win(b[k], n)).filter(Boolean);
       if (!wins.length) return json(res, 400, { error: "no usable windows" });
-      state.balances ||= { ts: 0, by: "", entries: [] };
-      let e = state.balances.entries.find(x => x.provider === "claude");
-      if (!e) { e = { provider: "claude", label: "Claude", kind: "windows", ok: true, windows: [] }; state.balances.entries.push(e); }
+      const patchSnaps = [(state.balances ||= { ts: 0, by: "", entries: [] })];
+      const machine = String(b.machine || "").trim().slice(0, 60);
+      if (machine) patchSnaps.push(((state.balancesByMachine ||= {})[machine] ||= { ts: now(), by: "", entries: [], profile: {} }));
+      const claudeEntry = (snap) => {
+        let c = snap.entries.find(x => x.provider === "claude");
+        if (!c) { c = { provider: "claude", label: "Claude", kind: "windows", ok: true, windows: [] }; snap.entries.push(c); }
+        return c;
+      };
+      const e = claudeEntry(patchSnaps[patchSnaps.length - 1]);   // dedupe against the most specific copy
       // Same-value posts inside 30s are dropped (the statusline ticks ~3x/sec while streaming).
       const sig = JSON.stringify(wins);
       if (e._liveSig === sig && now() - (e.liveTs || 0) < 30_000) return json(res, 200, { ok: true, deduped: true });
-      for (const w of wins) { const cur = (e.windows ||= []).find(x => x.name === w.name); if (cur) Object.assign(cur, w); else e.windows.push(w); }
-      e.ok = true; e.liveTs = now(); e._liveSig = sig; e.liveSource = "statusline";
+      for (const snap of patchSnaps) {
+        const t = claudeEntry(snap);
+        for (const w of wins) { const cur = (t.windows ||= []).find(x => x.name === w.name); if (cur) Object.assign(cur, w); else t.windows.push({ ...w }); }
+        t.ok = true; t.liveTs = now(); t._liveSig = sig; t.liveSource = "statusline";
+      }
       markDirty();
       return json(res, 200, { ok: true, windows: wins.length });
     }
@@ -422,7 +444,12 @@ export async function routeAdmin({ req, res, q, P, auth, ctx }) {
         : (e.remaining != null && e.remaining < (low[e.currency] ?? low.USD ?? 5)));
       const ALIAS = { kimi: "moonshot", moonshot: "moonshot", glm: "zhipu", zai: "zhipu", zhipu: "zhipu" };
       const canonP = p => ALIAS[p] || p;
-      let prof = {}; try { prof = JSON.parse(readFileSync(join(homedir(), ".agent-bus", "profile.json"), "utf8")).providers || {}; } catch {}
+      // ?machine=X serves that machine's own snapshot and profile; otherwise the legacy latest.
+      const mSnap = q.machine ? state.balancesByMachine?.[String(q.machine).trim().slice(0, 60)] : null;
+      const snap = mSnap || state.balances;
+      let prof = {};
+      if (mSnap?.profile && Object.keys(mSnap.profile).length) prof = mSnap.profile;
+      else { try { prof = JSON.parse(readFileSync(join(homedir(), ".agent-bus", "profile.json"), "utf8")).providers || {}; } catch {} }
       const profByCanon = {}; for (const [p, v] of Object.entries(prof)) profByCanon[canonP(p)] = v;
       const detectedCli = new Set(["claude", "codex"]);
       // API-key rows remain profile-scoped so a stray ambient key never appears. Claude and Codex
@@ -430,7 +457,7 @@ export async function routeAdmin({ req, res, q, P, auth, ctx }) {
       // missing quota declaration must not hide those machine-login rows from the bottom bar. A
       // prepaid entry that ERRORED but is a subscription per profile is really one (401 expected).
       const isSub = (t) => !!t && t !== "api";   // capped-sub / high-sub → a subscription (nothing to refill)
-      const entries = (state.balances?.entries || []).filter(e => detectedCli.has(e.provider) || profByCanon[canonP(e.provider)]).map(e => {
+      const entries = (snap?.entries || []).filter(e => detectedCli.has(e.provider) || profByCanon[canonP(e.provider)]).map(e => {
         const pv = profByCanon[canonP(e.provider)];
         if (!e.ok && isSub(pv?.tier)) return { provider: e.provider, label: e.label, kind: "subscription", plan: pv.plan, ok: true, remaining: null, low: false };
         return { ...e, low: lowOf(e) };
@@ -441,8 +468,8 @@ export async function routeAdmin({ req, res, q, P, auth, ctx }) {
       const subs = Object.entries(prof)
         .filter(([p, v]) => !detectedCli.has(p) && isSub(v?.tier) && !known.has(canonP(p)))
         .map(([p, v]) => ({ provider: p, label: p, kind: "subscription", plan: v.plan, ok: true, remaining: null, low: false }));
-      return json(res, 200, { ts: state.balances?.ts || 0, by: state.balances?.by || "", thresholds: low,
-        entries: [...entries, ...subs], lowCount: entries.filter(e => e.low).length, stale: (now() - (state.balances?.ts || 0)) > 6 * 3600e3 });
+      return json(res, 200, { ts: snap?.ts || 0, by: snap?.by || "", thresholds: low,
+        entries: [...entries, ...subs], lowCount: entries.filter(e => e.low).length, stale: (now() - (snap?.ts || 0)) > 6 * 3600e3 });
     }
     // Rebuild cc-subagent notional cards for a project from recomputed on-disk transcript costs
     // (`trantor recost`). REPLACES the project's existing cc-subagent cards with the supplied set so the

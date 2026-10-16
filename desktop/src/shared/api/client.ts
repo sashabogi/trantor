@@ -254,10 +254,13 @@ export class HubClient {
   }
 
   /**
-   * Provider balances/quotas/subscriptions. MACHINE-LOCAL (profile.json and the crew's balance
-   * snapshots live on this machine), so callers should always ask the LOCAL hub, not a remote one.
+   * Provider balances/quotas/subscriptions. A hub keeps one snapshot per machine, so pass this
+   * Mac's machine id to read its own; without it the hub answers with the latest push from anyone.
    */
-  balances() { return this.request<BalancesReport>("GET", "/balances"); }
+  balances(machine?: string) {
+    const q = machine ? `?machine=${encodeURIComponent(machine)}` : "";
+    return this.request<BalancesReport>("GET", `/balances${q}`);
+  }
 
   /**
    * Messages addressed to `session`. peek=1 reads without advancing the delivery ledger: the app

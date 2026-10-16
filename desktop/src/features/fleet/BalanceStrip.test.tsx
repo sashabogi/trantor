@@ -20,8 +20,9 @@ describe("BalanceStrip hub failures", () => {
   beforeEach(() => {
     transport.mockReset();
     mockIPC((command, args) => {
+      if (command === "machine_id") return "MacBook-Test";
       expect(command).toBe("hub_request");
-      expect(args).toMatchObject({ base: "http://127.0.0.1:4477", method: "GET", path: "/balances" });
+      expect(args).toMatchObject({ base: "http://127.0.0.1:4477", method: "GET", path: "/balances?machine=MacBook-Test" });
       return transport();
     });
     host = document.createElement("div");
@@ -69,5 +70,45 @@ describe("BalanceStrip hub failures", () => {
     await refresh();
     expect(host.querySelector('[role="status"]')?.textContent).toContain("403");
     expect(host.querySelector("footer")).not.toBeNull();
+  });
+});
+
+describe("BalanceStrip remote hub", () => {
+  let host: HTMLDivElement;
+  let root: Root;
+  const calls: { base: string; path: string }[] = [];
+  const failBase = new Set<string>();
+  beforeEach(() => {
+    calls.length = 0; failBase.clear();
+    mockIPC((command, args) => {
+      if (command === "machine_id") return "MacBook-Test";
+      // SAFETY: the strip only ever invokes hub_request with a string base and path.
+      const { base, path } = args as { base: string; path: string };
+      calls.push({ base, path });
+      if (failBase.has(base)) return Promise.reject("connection refused");
+      return snapshot();
+    });
+    host = document.createElement("div");
+    document.body.append(host);
+    root = createRoot(host);
+  });
+  afterEach(() => { act(() => root.unmount()); host.remove(); clearMocks(); vi.restoreAllMocks(); });
+  const mount = () => act(async () => { root.render(<BalanceStrip client={new HubClient("https://hub.example.test")} />); });
+
+  it("reads only the app's own remote hub, with this machine's id", async () => {
+    await mount();
+    expect(calls).toEqual([{ base: "https://hub.example.test", path: "/balances?machine=MacBook-Test" }]);
+    expect(host.textContent).toContain("$12.3");
+  });
+
+  it("falls back to the local hub with the same machine param when the remote fails", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    failBase.add("https://hub.example.test");
+    await mount();
+    expect(calls).toEqual([
+      { base: "https://hub.example.test", path: "/balances?machine=MacBook-Test" },
+      { base: "http://127.0.0.1:4477", path: "/balances?machine=MacBook-Test" },
+    ]);
+    expect(host.textContent).toContain("$12.3");
   });
 });

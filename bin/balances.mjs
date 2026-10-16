@@ -1,14 +1,13 @@
 #!/usr/bin/env node
 /* oxlint-disable anti-slop/no-runtime-typeof -- SAFETY: config.json is user-editable external input; thresholds validates its optional number/object fields at that I/O boundary. */
-// trantor balances — show how much credit is left on each prepaid provider (DeepSeek, Kimi, OpenRouter…)
-// so you can refill BEFORE a build stalls. Reads keys from the environment, queries each provider's
-// balance API, prints them, and pushes the snapshot to the hub so the dashboard + other sessions see it.
-//
+// trantor balances: how much credit is left on each provider, so you can refill before a build
+// stalls. Queries each provider with the env keys and pushes the snapshot to the hub.
 // Usage: trantor balances [--json] [--no-push]
 import { readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
-import { fetchBalances, isLow, fmtBalance, DEFAULT_LOW, DEFAULT_LOW_QUOTA_PCT } from "../lib/balances.mjs";
+import { fetchBalances, isLow, fmtBalance, snapshotPayload, DEFAULT_LOW, DEFAULT_LOW_QUOTA_PCT } from "../lib/balances.mjs";
+import { hostId } from "../lib/project.mjs";
 import { detectedCliBalanceRows } from "../lib/providers.mjs";
 import { loadProfile } from "./profile.mjs";
 import { resolveKeys } from "../lib/provider-keys.mjs";
@@ -19,9 +18,10 @@ const noPush = args.includes("--no-push");
 
 // API-key providers stay profile-scoped so ambient keys are never scraped. Claude and Codex are
 // machine CLI logins: the registry admits them from binary + credential + live-probe detection.
-const configured = Object.keys(loadProfile().providers || {});
+const profileProviders = loadProfile().providers || {};
+const configured = Object.keys(profileProviders);
 
-// Signed via the shared client (2026-07-31, agent-UX audit): unsigned POST rejected under enforce.
+// Signed via the shared client: an unsigned POST is rejected under enforce.
 import { signedPost } from "../hooks/lib/api.mjs";
 let _qpct = DEFAULT_LOW_QUOTA_PCT;
 function thresholds() {
@@ -35,14 +35,10 @@ const profileScoped = await fetchBalances(env, { only: configured.filter((provid
 const balances = [...detected, ...profileScoped];
 const low = thresholds();
 
-// push the snapshot to the hub (best-effort) so the dashboard + warning line can use it.
-// TWO pushes on purpose: the project hub (fleet visibility) AND the LOCAL hub explicitly —
-// the desktop app reads balances from 127.0.0.1 because the data is machine-local, and the
-// project-resolved push goes to the REMOTE hub for pinned projects. That mismatch left the
-// local snapshot 11 days stale on 2026-08-28: the header chips faithfully rendered Aug-16
-// numbers, dimmed, while fresh pushes landed on a hub the app never asks.
+// Push the snapshot to the project hub and the LOCAL hub (best-effort); the machine key and
+// profile let a shared hub keep one snapshot per machine.
 if (!noPush) {
-  const snap = { balances, ts: Date.now() };
+  const snap = snapshotPayload(balances, { machine: hostId(), profile: profileProviders });
   try { await signedPost("/balances", snap, { timeoutMs: 2500 }); } catch {}
   try { await signedPost("http://127.0.0.1:4477/balances", snap, { timeoutMs: 2500 }); } catch {}
 }

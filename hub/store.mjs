@@ -6,7 +6,7 @@ import { DEFAULT_ORG } from "../lib/store-contract.mjs";
 
 export async function createStoreRuntime({ STORE_KIND, PG_URL, ORG_ID, DATA }) {
 function emptyState() {
-  return { messages: [], peers: {}, seq: 0, tasks: [], taskSeq: 0, projectMeta: {}, lessons: [], events: [], cardEventsBackfilled: false, aliases: {}, phaseMeta: {}, verifyGates: [], verifyGateSeq: 0, proposals: [], proposalSeq: 0, balances: { ts: 0, by: "", entries: [] }, subagentCostReset: false, handoffLog: [], identities: {}, inviteTokens: {}, focus: {}, orgPolicy: {}, overseerState: {}, instances: {}, dutySession: "", contractReap: {}, eventSeq: 0 };
+  return { messages: [], peers: {}, seq: 0, tasks: [], taskSeq: 0, projectMeta: {}, lessons: [], events: [], cardEventsBackfilled: false, aliases: {}, phaseMeta: {}, verifyGates: [], verifyGateSeq: 0, proposals: [], proposalSeq: 0, balances: { ts: 0, by: "", entries: [] }, balancesByMachine: {}, subagentCostReset: false, handoffLog: [], identities: {}, inviteTokens: {}, focus: {}, orgPolicy: {}, overseerState: {}, instances: {}, dutySession: "", contractReap: {}, eventSeq: 0 };
 }
 
 const CARD_LOG_MAX = 40;
@@ -103,6 +103,7 @@ function normalizeState(loaded = {}) {
   s.proposals = Array.isArray(loaded.proposals) ? loaded.proposals : [];
   s.proposalSeq = Number(loaded.proposalSeq || Math.max(0, ...s.proposals.map(p => Number(p.id) || 0))) || 0;
   s.balances = loaded.balances && typeof loaded.balances === "object" ? loaded.balances : { ts: 0, by: "", entries: [] };
+  s.balancesByMachine = loaded.balancesByMachine && typeof loaded.balancesByMachine === "object" ? loaded.balancesByMachine : {};
   s.subagentCostReset = !!loaded.subagentCostReset;
   s.handoffLog = Array.isArray(loaded.handoffLog) ? loaded.handoffLog : [];
   s.identities = loaded.identities && typeof loaded.identities === "object" ? loaded.identities : {};
