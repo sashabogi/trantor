@@ -146,6 +146,8 @@ pub(crate) struct ChatMeta {
 pub(crate) struct ContextGuard {
     pub(crate) max: u64,
     pub(crate) recent: Vec<u64>,
+    /// A compaction was seen in this batch: whoever absorbs it starts over before its readings.
+    pub(crate) reset: bool,
 }
 
 impl ContextGuard {
@@ -165,11 +167,19 @@ impl ContextGuard {
         }
     }
 
+    /// A compaction starts the session over: readings before it say nothing about the window now.
+    pub(crate) fn compacted(&mut self) {
+        *self = ContextGuard { reset: true, ..ContextGuard::default() };
+    }
+
     pub(crate) fn absorb(&mut self, other: &ContextGuard) {
+        if other.reset {
+            *self = ContextGuard::default();
+        }
         for t in &other.recent {
             self.push(*t);
         }
-        if other.max > self.max {
+        if other.max > self.max && !other.reset {
             self.max = other.max;
         }
     }
@@ -370,7 +380,8 @@ pub(crate) fn merge_chat_meta(current: &mut ChatMeta, next: ChatMeta) {
     // poison filter must live across batches, in the meta the watcher carries — never in the
     // stateless per-batch decode alone.
     current.guard.absorb(&next.guard);
-    let tokens = current.guard.report().or(current.context.tokens);
+    let stale = if next.guard.reset { None } else { current.context.tokens };
+    let tokens = current.guard.report().or(stale);
     current.context = chat_context(tokens, current.context.window);
 }
 
@@ -708,6 +719,10 @@ where
             // `turn_duration`, or the stop hook's `stop_hook_summary`. The pushed status stream can
             // freeze on `working`, so the rows batch carries the truth. Bookkeeping, never a bubble.
             Some("system") => {
+                if v.get("subtype").and_then(|s| s.as_str()) == Some("compact_boundary") {
+                    meta.guard.compacted();
+                    meta.context = chat_context(None, context_window);
+                }
                 if idle_compaction_row(&v) {
                     turns.push(ChatTurn {
                         role: "system".into(),
@@ -931,6 +946,31 @@ pub(crate) fn orchestrator_chat(project: String, after: usize, session_id: Optio
 mod context_guard_tests {
     use super::*;
 
+    /// A compaction in a later batch wipes the high readings the watcher carried from earlier ones,
+    /// so the gauge and the handoff countdown stop reporting the pre-compaction fill.
+    #[test]
+    fn a_compaction_in_a_later_batch_resets_the_carried_reading() {
+        let mut current = ChatMeta::default();
+        current.context.window = 1_000_000;
+        for t in [400_000, 884_056, 888_059] {
+            current.guard.push(t);
+        }
+        current.context = chat_context(current.guard.report(), 1_000_000);
+        assert_eq!(current.context.tokens, Some(888_059));
+
+        let mut compacted = ChatMeta::default();
+        compacted.context.window = 1_000_000;
+        compacted.guard.compacted();
+        merge_chat_meta(&mut current, compacted);
+        assert_eq!(current.context.tokens, None, "no reading yet after the compaction");
+
+        let mut next = ChatMeta::default();
+        next.context.window = 1_000_000;
+        next.guard.push(52_000);
+        merge_chat_meta(&mut current, next);
+        assert_eq!(current.context.tokens, Some(52_000));
+    }
+
     /// The SHARED #5572 manifest — the mjs twin (hooks/lib/handoff.mjs guardContextTokens,
     /// drilled by test-handoff.mjs) runs the same file. One spec, two bindings, zero drift.
     const MANIFEST: &str = include_str!("../../../test/fixtures/context/manifest.json");
@@ -942,6 +982,10 @@ mod context_guard_tests {
             let name = case["name"].as_str().unwrap();
             let mut g = ContextGuard::default();
             for t in case["rows"].as_array().unwrap() {
+                if t.as_str() == Some("compact") {
+                    g.compacted();
+                    continue;
+                }
                 g.push(t.as_u64().unwrap());
             }
             let got = g.report();

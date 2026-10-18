@@ -1,5 +1,5 @@
 {
-  "comment": "Shared spec for the #5572 context guard. BOTH implementations (hooks/lib/handoff.mjs guardContextTokens, desktop/src-tauri ContextGuard) must pass every case — one manifest so they cannot drift. rows = assistant usage-token sums in transcript order; expect = the guarded reading (null = no reading). Rule: report the last row unless it falls below 40% of the session max — then report the recent maximum (transient artifact) unless the last FIVE rows all sit below the floor (sustained new level: accept and re-baseline).",
+  "comment": "Shared spec for the #5572 context guard. BOTH implementations (hooks/lib/handoff.mjs guardContextTokens, desktop/src-tauri ContextGuard) must pass every case — one manifest so they cannot drift. rows = assistant usage-token sums in transcript order; expect = the guarded reading (null = no reading). Rule: report the last row unless it falls below 40% of the session max — then report the recent maximum (transient artifact) unless the last FIVE rows all sit below the floor (sustained new level: accept and re-baseline). A row \"compact\" is a compaction (a compact_boundary transcript row): the guard starts over, so the first reading after it counts at once, and none at all reads as no reading.",
   "cases": [
     { "name": "monotone-normal",  "rows": [100000, 400000, 884056, 888059, 889929], "expect": 889929 },
     { "name": "poisoned-tail",    "rows": [400000, 884056, 888059, 889929, 70000],  "expect": 889929 },
@@ -7,6 +7,10 @@
     { "name": "sustained-drop-rebaselines", "rows": [889929, 70211, 70600, 71000, 70100, 70050], "expect": 70050 },
     { "name": "zero-rows-are-not-evidence", "rows": [0, 500000, 0], "expect": 500000 },
     { "name": "single-row", "rows": [70000], "expect": 70000 },
-    { "name": "no-rows", "rows": [], "expect": null }
+    { "name": "no-rows", "rows": [], "expect": null },
+    { "name": "compaction-resets", "rows": [400000, 884056, 888059, "compact", 52000], "expect": 52000 },
+    { "name": "compaction-no-reading-yet", "rows": [400000, 884056, 888059, "compact"], "expect": null },
+    { "name": "compaction-then-growth", "rows": [884056, "compact", 52000, 61000, 70000], "expect": 70000 },
+    { "name": "poison-after-compaction", "rows": [884056, "compact", 300000, 310000, 20000], "expect": 310000 }
   ]
 }

@@ -59,6 +59,7 @@ export function contextUsage(transcriptPath, conf = readConfig()) {
   let model = "";
   for (const line of lines) {
     let r; try { r = JSON.parse(line); } catch { continue; }
+    if (r?.type === "system" && r?.subtype === "compact_boundary") { rows.push("compact"); continue; }
     const u = r?.message?.usage;
     if (r?.type !== "assistant" || !u) continue;
     const tokens = (u.input_tokens || 0) + (u.cache_read_input_tokens || 0) + (u.cache_creation_input_tokens || 0);
@@ -78,6 +79,8 @@ export function guardContextTokens(rows) {
   let max = 0;
   const recent = [];
   for (const t of rows) {
+    // a compaction starts the session over: readings before it say nothing about the window now
+    if (t === "compact") { max = 0; recent.length = 0; continue; }
     if (!t || t <= 0) continue;
     recent.push(t);
     if (recent.length > 5) recent.shift();
