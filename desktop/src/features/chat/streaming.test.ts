@@ -407,11 +407,20 @@ describe("bannerVisible (#5509 W1)", () => {
 });
 
 describe("composerSlot (#5556)", () => {
-  it("while the agent works the slot is STOP — and interrupting is never gated", () => {
-    // Not by liveness, not by an empty draft, not by a send in flight: a working turn is its own
-    // proof there is something to interrupt.
-    expect(composerSlot(true, true, "hello", false)).toEqual({ kind: "stop" });
-    expect(composerSlot(true, false, "", true)).toEqual({ kind: "stop" });
+  it("while the agent works an empty draft gets STOP, never gated by liveness or a send in flight", () => {
+    expect(composerSlot(true, true, "", false)).toEqual({ kind: "stop" });
+    expect(composerSlot(true, false, "  ", true)).toEqual({ kind: "stop" });
+  });
+
+  it("while the agent works a draft with text or images gets SEND, since Claude Code queues it", () => {
+    expect(composerSlot(true, true, "hello", false)).toEqual({ kind: "send", disabled: false });
+    expect(composerSlot(true, true, "", false, 1)).toEqual({ kind: "send", disabled: false });
+    expect(composerSlot(true, false, "hello", false)).toEqual({ kind: "send", disabled: true });
+  });
+
+  it("an image-only draft is a real send when idle", () => {
+    expect(composerSlot(false, true, "", false, 1)).toEqual({ kind: "send", disabled: false });
+    expect(composerSlot(false, true, "", false, 0)).toEqual({ kind: "send", disabled: true });
   });
 
   it("otherwise the slot is SEND, enabled only when live, not busy, and the draft has words", () => {

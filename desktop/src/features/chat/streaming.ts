@@ -370,9 +370,12 @@ export type ComposerSlot = { kind: "stop" } | { kind: "send"; disabled: boolean 
 
 /** Decide what the slot shows. The send state carries its own disabled rule so the wiring stays
  *  honest: not live, mid-send (busy), or a draft of nothing leaves the button visible but inert. */
-export function composerSlot(working: boolean, live: boolean, draft: string, busy: boolean): ComposerSlot {
-  if (working) return { kind: "stop" };
-  return { kind: "send", disabled: !live || busy || !draft.trim() };
+export function composerSlot(working: boolean, live: boolean, draft: string, busy: boolean, attachments = 0): ComposerSlot {
+  // Claude Code queues a message typed mid-turn, and "working" stays true while background agents
+  // run after the turn ends, so a draft with text or images gets send; stop needs an empty draft
+  const payload = !!draft.trim() || attachments > 0;
+  if (working && !payload) return { kind: "stop" };
+  return { kind: "send", disabled: !live || busy || !payload };
 }
 
 /** The handoff banner's thresholds (#5509 W1). `HANDOFF_WARN_FRAC` IS the gauge's red threshold

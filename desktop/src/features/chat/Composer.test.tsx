@@ -6,6 +6,8 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { InvokeArgs } from "@tauri-apps/api/core";
+import { draftSlots, nextChipId } from "./composerDraft";
+import { makeChip } from "./attachments";
 import { Composer, composerTakesDrop } from "./Composer";
 import { clampComposerPx, maxComposerPx, minComposerPx } from "./composerHeight";
 import { LOST_AFTER_MS } from "./streaming";
@@ -235,6 +237,15 @@ describe("a pending send keeps its own project and pane (#6250)", () => {
       />,
     ));
   };
+
+  it("an image-only draft gets an enabled send button even while the session reads as working", () => {
+    draftSlots.put({ project: "img-only", text: "", chips: [makeChip(nextChipId(), "/tmp/shot.png", 110_000)] });
+    view("img-only", "w1:p1", [], true);
+    const send = host.querySelector<HTMLButtonElement>('button[title="Send"]');
+    expect(send).not.toBeNull();
+    expect(send!.disabled).toBe(false);
+    expect(host.querySelector('button[title="interrupt this turn"]')).toBeNull();
+  });
 
   // SAFETY: React dedupes a direct .value write; the prototype setter plus a bubbling input
   // event is the one write the controlled textarea always sees (GenesisSheet.test's pattern).

@@ -724,11 +724,8 @@ export function Composer({ project, target, live, liveWhy, blockedAsk, model, mo
   // Interrupting is a KEY, not a message. Escape is what stops a turn in the harness.
   const stop = () => { if (target) invoke("pane_keys", { target, keys: "Escape" }).catch(e => setError(String(e))); };
 
-  // What the field's one slot shows (#5556): the pure rule lives in streaming.ts so it is
-  // drilled there; this is just its wiring. Chips count as payload too — an attachments-only send
-  // is a real send — so a " " stands in for the chips this component owns while the rule stays
-  // pure on the draft.
-  const slot = composerSlot(working, live, chips.length && !draft.trim() ? " " : draft, busy);
+  // the slot rule lives in streaming.ts; chips are payload, so an image-only draft can be sent
+  const slot = composerSlot(working, live, draft, busy, chips.length);
 
   // A slash command is typed as a person would, then marked dispatched until the transcript echoes it.
   // #11657: the pick is PER PROJECT (CC writes /model to the user file), so it lands in this
