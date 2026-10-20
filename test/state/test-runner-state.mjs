@@ -37,7 +37,7 @@ ok("the state row drops `-c` (§4.6: the resumed transcript is what this path ex
   && !/stateNext: `claude -c/.test(RUNNER));
 ok("nothing selects the state row except opts.state", RUNNER.includes("if (opts.state && cli.stateNext) cmd = cli.stateNext;"));
 ok("and the flag is the only door into state mode",
-  RUNNER.includes('const STATE_FLAG_ON = process.env[STATE_ENV] === "1";'));
+  RUNNER.includes('const STATE_FLAG_ON = stateFeatureOn(STATE_ENV, stateFlags, ["1"]);'));
 // {S} is the schema path. It appears in exactly ONE command template, so the unconditional
 // replaceAll that carries it is a no-op on every other row — which is what byte-identical has to
 // mean once a substitution has been added to a shared line. Comments are stripped first: a

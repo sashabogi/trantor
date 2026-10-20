@@ -977,7 +977,7 @@ learning-as-deltas (undesigned until the 2a gate passes).
 
 | flag | default | turns on | rollback |
 |---|---|---|---|
-| `TRANTOR_STATE` | `0` | core read/write of sidecars | delete `~/.agent-bus/state/` — state is derived |
+| `TRANTOR_STATE` | unset | master kill switch: set to `0`, `false`, `off` or `no` and every state sub-feature below is off, whatever its own flag says; unset lets each sub-flag decide | delete `~/.agent-bus/state/` — state is derived |
 | `TRANTOR_STATE_HANDOFF` | `0` | Phase 1 attach + render | flag off; prose handoff is untouched and still written |
 | `TRANTOR_STATE_ASSEMBLE` | `0` | Phase 2a `claude.next` assembly | flag off; `claude -c` row is restored verbatim |
 | `TRANTOR_STATE_GATE` | unset | overrides the §4.8 gate command for a project | unset falls back to the scoped suite, then `scripts.test` |

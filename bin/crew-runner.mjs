@@ -45,7 +45,7 @@ import {
   breakerVerdict, describeTurn, hasJsonSchemaFlag, parseEnvelope, renderCardTail, runStep,
 } from "../lib/state/driver.mjs";
 import { costLine } from "../lib/state/cost.mjs";
-import { resolveStateFlags } from "../lib/state/flags.mjs";
+import { resolveStateFlags, stateFeatureOn } from "../lib/state/flags.mjs";
 
 import { awaitSwapRelease } from "./crew/stage.mjs";
 
@@ -660,7 +660,8 @@ const stateFlags = resolveStateFlags();
 for (const [name, flag] of Object.entries(stateFlags)) {
   if (flag.value && process.env[name] === undefined) process.env[name] = flag.value;
 }
-const STATE_FLAG_ON = process.env[STATE_ENV] === "1";
+// TRANTOR_STATE=0 is the master kill switch (#12070): it beats an ASSEMBLE=1 from any layer.
+const STATE_FLAG_ON = stateFeatureOn(STATE_ENV, stateFlags, ["1"]);
 const STATE_SCHEMA_FILE = join(homedir(), ".agent-bus", `state-schema-${PERSONA}-${PROJ}.json`);
 const STATE_MODE = (() => {
   if (!STATE_FLAG_ON) return false;

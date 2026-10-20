@@ -71,8 +71,11 @@ const opts = { project: PROJECT, seat: SEAT, card: CARD, worktree: REPO };
   const rec = record();
   const s = attachState(rec, { ...opts, env: { ...bare } });
   ok("a handoff written with the flag only in the file carries state", s !== null && rec.state === s, JSON.stringify(Object.keys(rec)));
+  ok("master TRANTOR_STATE=0 beats the file's HANDOFF=1", stateHandoffEnabled({ ...bare, TRANTOR_STATE: "0" }) === false);
   rmSync(envFile);
   ok("file gone: off again", stateHandoffEnabled(bare) === false);
+  ok("master off + HANDOFF=1 in process env => off", stateHandoffEnabled({ ...bare, TRANTOR_STATE: "off", TRANTOR_STATE_HANDOFF: "1" }) === false);
+  ok("master unset + HANDOFF=1 in process env => on", stateHandoffEnabled({ ...bare, TRANTOR_STATE_HANDOFF: "1" }) === true);
 }
 
 const ON = { ...process.env, TRANTOR_STATE_HANDOFF: "1" };

@@ -10,7 +10,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { drillEnv } from "../drill-env.mjs";
-import { resolveStateFlags } from "../../lib/state/flags.mjs";
+import { resolveStateFlags, stateFeatureOn, stateMasterOff, STATE_ENV } from "../../lib/state/flags.mjs";
 
 const ROOT = fileURLToPath(new URL("../..", import.meta.url));
 let pass = 0, fail = 0;
@@ -41,6 +41,25 @@ console.log("\n## the resolver");
   const missing = resolveStateFlags({}, join(file, "nope"));
   ok("a missing file is not an error — every flag reads unset",
     missing.TRANTOR_STATE_ASSEMBLE.layer === "unset" && missing.TRANTOR_STATE_GATE.layer === "unset");
+}
+
+// ---- #12070: TRANTOR_STATE is the master kill switch ---------------------------------------------
+console.log("\n## the master switch");
+{
+  const r = (env) => resolveStateFlags(env, "/nonexistent/.env");
+  ok("master unset: the sub-flag decides (on)", stateFeatureOn("TRANTOR_STATE_HANDOFF", r({ TRANTOR_STATE_HANDOFF: "1" })) === true);
+  ok("master unset: the sub-flag decides (off)", stateFeatureOn("TRANTOR_STATE_HANDOFF", r({})) === false);
+  for (const off of ["0", "false", "off", "no", "OFF"]) {
+    ok(`master ${off} + sub-flag on => off`, stateFeatureOn("TRANTOR_STATE_HANDOFF", r({ TRANTOR_STATE: off, TRANTOR_STATE_HANDOFF: "1" })) === false);
+  }
+  ok("master 1 does not switch a sub-flag on by itself", stateFeatureOn("TRANTOR_STATE_HANDOFF", r({ TRANTOR_STATE: "1" })) === false);
+  ok("ASSEMBLE resolution: master off + ASSEMBLE=1 => off", stateFeatureOn(STATE_ENV, r({ TRANTOR_STATE: "0", [STATE_ENV]: "1" }), ["1"]) === false);
+  ok("ASSEMBLE resolution: master unset + ASSEMBLE=1 => on", stateFeatureOn(STATE_ENV, r({ [STATE_ENV]: "1" }), ["1"]) === true);
+  ok("ASSEMBLE accepts only 1 when asked to", stateFeatureOn(STATE_ENV, r({ [STATE_ENV]: "true" }), ["1"]) === false);
+  ok("stateMasterOff tolerates no resolution at all", stateMasterOff(undefined) === false);
+  const file = join(mkdtempSync(join(tmpdir(), "tt-master-")), ".env");
+  writeFileSync(file, "TRANTOR_STATE=0\nTRANTOR_STATE_ASSEMBLE=1\n");
+  ok("master off in the .env file switches ASSEMBLE off", stateFeatureOn(STATE_ENV, resolveStateFlags({}, file), ["1"]) === false);
 }
 
 // ---- the real runner, against a mock hub -------------------------------------------------------
