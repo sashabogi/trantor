@@ -265,6 +265,20 @@ CC 2.1.294-2.1.304 audit (#12093, installed was 2.1.293):
   `--output-format json` envelope, `updatedInput` (we do not return it). New `onFailure: "block"`
   hook option (2.1.295): not used, our hooks stay fail-open on purpose.
 
+Adopted from CC 2.1.251-2.1.295 (#12094):
+- **Status line `prompt_cache` (2.1.251/2.1.260)** — `hooks/statusline.mjs` forwards a trimmed copy
+  (`hit_ratio`, `warm`, `ttl`, `misses`, `recache_tokens_if_cold`, `last_miss_cause.causes[0]`) to
+  `POST /usage/claude`; the hub keeps it on the machine's Claude entry; the Claude chip tooltip reads it.
+- **PostModelSwitch (2.1.251)** — `hooks/model-switch.mjs` registers `to_model` on the peer row at once
+  (the heartbeat lags a turn). `subagent-cost` already prices by each turn's transcript model, so
+  it was never wrong after a switch; PreModelSwitch is unadopted (it can only block).
+- **SessionStart resume staleness (2.1.251)** — `seconds_since_last_response`, `context_tokens`,
+  `prompt_cache_likely_expired`, `estimated_cache_write_usd` become one `<trantor-resume-staleness>` line.
+- **Program Status Protocol, OSC 7501 (2.1.295)** — Claude Code emits working/waiting/done for
+  terminals that implement it. herdr 0.8.2 does NOT: no 7501 or "program status" string in the binary,
+  it parses OSC 9;4 progress and titles, and its own claude integration (`herdr integration status`)
+  feeds agent state. Nothing to read there today; lifecycle detection stays on hooks. Revisit if
+  herdr adds it or Trantor ever owns the terminal backend.
 The register gets a line whenever a CC release lands something we half-own. Salvage phases must
 check this register before building — never rebuild what CC now provides for Claude seats.
 
