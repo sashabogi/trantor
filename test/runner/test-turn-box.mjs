@@ -95,6 +95,7 @@ echo 'the runner can move on to its next wake without a redelivery ladder or a p
     cutChain: [],
     // #11855: the card context cap is off here; these drills measure the box, not the cap.
     CAPCFG: { cap: 0 }, capFreshTurn: 0,
+    DRIVER: "kimi", effortForTurn: () => ({ flag: "", text: "", changed: false }),
   });
   runInContext(`const cli = ${kimiSource};\n${inheritBoxOutput ? turnSource.replace(") >/dev/null 2>&1 & boxpid", ") & boxpid") : turnSource}`, context);
   await runInContext('runTurn("finish this drill", true)', context);

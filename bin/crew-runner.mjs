@@ -39,7 +39,7 @@ import {
 } from "../lib/duty-nudges.mjs";
 import { reserveNudgeIds, releaseNudgeIds } from "../lib/nudge-ledger.mjs";
 import { dutyRecipientResolver } from "../lib/duty-recipient.mjs";
-import { cliEffortFlag, contextWindow } from "../lib/model-catalog.mjs";
+import { cliEffortFlag, contextWindow, effortForTurn } from "../lib/model-catalog.mjs";
 import {
   BREAKER_WINDOW, STATE_ENV, TURN_RESULT_SCHEMA,
   breakerVerdict, describeTurn, hasJsonSchemaFlag, parseEnvelope, renderCardTail, runStep,
@@ -837,12 +837,13 @@ async function runTurn(prompt, isFirst, trigger = "kickoff", opts = {}) {
   // #10197: the card status snapshot the turn is judged against at its end — a move to
   // testing/done under the turn is delivery even without a commit. null = the hub read failed:
   // the delivery check stands down rather than claim no-delivery on a transport error.
-  let cardStatusBefore = null, cardLogBefore = [];
+  let cardStatusBefore = null, cardLogBefore = [], cardDifficulty = "";
   if (!opts.state && sessionCard > 0) {
     try {
       const { task } = await api(`/card?project=${encodeURIComponent(PROJ)}&id=${sessionCard}`);
       cardStatusBefore = task ? String(task.status || "") : null;
       cardLogBefore = task?.log || [];
+      cardDifficulty = task?.difficulty || "";
     } catch { cardStatusBefore = null; }
   }
   // #9778: the docker snapshot the turn is judged against — containers the CLI spawns are recorded
@@ -857,7 +858,9 @@ async function runTurn(prompt, isFirst, trigger = "kickoff", opts = {}) {
   // The flagged row (TDD §4.6). `{S}` exists only in `stateNext`, so the replaceAll below is a
   // no-op on every other path — which is what "flag off = byte-identical" has to mean.
   if (opts.state && cli.stateNext) cmd = cli.stateNext;
-  const mfrag = (MODEL && cli.mflag ? `${cli.mflag}${MODEL}` : "") + EFFORT_FLAG.flag;
+  // Effort follows the bound card's difficulty each turn; kickoff, pulse and unreadable cards keep the launch effort.
+  const turnEffort = effortForTurn({ agent: DRIVER, model: MODEL, launchEffort: EFFORT, cardDifficulty });
+  const mfrag = (MODEL && cli.mflag ? `${cli.mflag}${MODEL}` : "") + turnEffort.flag;
   cmd = cmd.replaceAll("{M}", mfrag).replaceAll("{P}", pf).replaceAll("{SID}", sid).replaceAll("{DIR}", TURN_DIR)
     .replaceAll("{S}", STATE_SCHEMA_FILE);
   // PRECEDENCE: each file is PREPENDED, so the list is iterated in written order, highest priority
@@ -869,7 +872,8 @@ async function runTurn(prompt, isFirst, trigger = "kickoff", opts = {}) {
   cmd = withEnvFiles(withSecretExports(seatSignalPrefix(TURN_DIR) + cmd, Object.keys(secrets)), envs);
   log(`turn starting (${isFirst ? "fresh session" : "resume"})${MODEL ? ` · model=${MODEL}` : ""}`);
   // #7777: the one effort line — which effort parameters were set, or that the model is uncatalogued.
-  if (EFFORT && EFFORT_FLAG.text) log(EFFORT_FLAG.text);
+  if (turnEffort.changed) log(`effort: ${turnEffort.effort.difficulty} for #${sessionCard} (launch ${EFFORT?.difficulty || "none"}) — ${turnEffort.text}`);
+  else if (EFFORT && EFFORT_FLAG.text) log(EFFORT_FLAG.text);
   // #11559: the one compaction line — only where the block actually rides the spawn.
   if (cli.pinned && OC_COMPACTION) log(ocCompactionLogLine(OC_COMPACTION_WINDOW));
   cmuxStatus("building", "#4a90d9", "hammer", { priority: 50 }); herdrAgent("working");

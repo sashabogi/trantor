@@ -70,6 +70,7 @@ async function drill(t, { maxMs, cliBody }) {
     cutChain: [],
     // #11855: the card context cap is off here; this drill measures turn state, not the cap.
     CAPCFG: { cap: 0 }, capFreshTurn: 0,
+    DRIVER: "kimi", effortForTurn: () => ({ flag: "", text: "", changed: false }),
   });
   runInContext(`const cli = ${kimiSource};\n${turnSource}`, context);
   await runInContext('runTurn("finish this drill", true)', context);
