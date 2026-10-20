@@ -37,6 +37,14 @@ const HARNESS_MARKERS = [
   "<command-name", "<environment_context", "[SYSTEM NOTIFICATION",
 ];
 const isHarnessInjection = (t) => HARNESS_MARKERS.some(m => t.startsWith(m));
+// CC 2.1.299 runs this hook BEFORE a slash command expands, so it sees the raw `/foo args`.
+// A bare command is never a focus; with arguments the focus is the arguments. Anchored on
+// `/name` then whitespace or end, so an absolute path ("/Users/x/y") is not a command.
+const SLASH_COMMAND = /^\/[A-Za-z][\w:.-]*(?:\s+([\s\S]*))?$/;
+function stripSlashCommand(text) {
+  const m = SLASH_COMMAND.exec(text);
+  return m ? (m[1] || "").trim() : text;
+}
 function titleFrom(prompt) {
   let s = String(prompt || "").replace(/\s+/g, " ").trim();
   // strip a leading politeness/imperative wrapper so the card reads as the WORK, not "can you please…"
@@ -80,7 +88,7 @@ try {
   // don't card home-dir sessions (matches sessionstart's phantom-project guard)
   if (!process.env.RELAY_SESSION && !process.env.RELAY_PROJECT && cwd === homedir()) { emitAndExit(); }
   const trimmed = prompt.replace(/\s+/g, " ").trim();
-  const text = unwrapPasted(trimmed);   // a paste's wrapper is transport; judge the words inside
+  const text = stripSlashCommand(unwrapPasted(trimmed));   // a paste's wrapper is transport; a raw /command is not the work
   // skip empties, tiny continuations, and pure acks — they're not a new focus
   if (!text || text.length < 12 || ACK.test(text)) { emitAndExit(); }
   // The Accounts ask drill launches a real Claude session, so its scripted prompt traverses this
