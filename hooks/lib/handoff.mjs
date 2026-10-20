@@ -41,24 +41,30 @@ export function relayUrl(conf = readConfig()) {
 // Read only the tail of the (potentially huge, append-only) transcript and find
 // the most recent assistant turn's usage. Current context tokens ≈ input +
 // cache_read + cache_creation (the cached prompt IS part of the window).
-export function contextUsage(transcriptPath, conf = readConfig()) {
-  if (!transcriptPath || !existsSync(transcriptPath)) return null;
-  let buf = "";
-  try {
-    const fd = openSync(transcriptPath, "r");
-    try {
-      const size = fstatSync(fd).size;
-      const tail = Math.min(size, 1_500_000); // last ~1.5MB is plenty for recent turns
-      const b = Buffer.alloc(tail);
-      readSync(fd, b, 0, tail, size - tail);
-      buf = b.toString("utf8");
-    } finally { closeSync(fd); }
-  } catch { return null; }
 
-  const lines = buf.split("\n").filter(Boolean);
+// CC 2.1.300 also writes each API request's system prompt and tools into the transcript: huge rows
+// with no usage. A long row is parsed only if it names "usage" or the compaction marker.
+const BIG_ROW_BYTES = 64 * 1024;
+const TAIL_BYTES_STEPS = [1_500_000, 6_000_000];   // a tail full of request rows widens once
+
+function tailText(transcriptPath, want) {
+  let fd;
+  try {
+    fd = openSync(transcriptPath, "r");
+    const size = fstatSync(fd).size;
+    const tail = Math.min(size, want);
+    const b = Buffer.alloc(tail);
+    readSync(fd, b, 0, tail, size - tail);
+    return { text: b.toString("utf8"), whole: tail >= size };
+  } catch { return null; } finally { if (fd !== undefined) { try { closeSync(fd); } catch {} } }
+}
+
+function usageRows(text) {
   const rows = [];
   let model = "";
-  for (const line of lines) {
+  for (const line of text.split("\n")) {
+    if (!line) continue;
+    if (line.length > BIG_ROW_BYTES && !line.includes("\"usage\"") && !line.includes("compact_boundary")) continue;
     let r; try { r = JSON.parse(line); } catch { continue; }
     if (r?.type === "system" && r?.subtype === "compact_boundary") { rows.push("compact"); continue; }
     const u = r?.message?.usage;
@@ -68,6 +74,19 @@ export function contextUsage(transcriptPath, conf = readConfig()) {
     rows.push(tokens);
     model = r.message.model || model;
   }
+  return { rows, model };
+}
+
+export function contextUsage(transcriptPath, conf = readConfig()) {
+  if (!transcriptPath || !existsSync(transcriptPath)) return null;
+  let found = { rows: [], model: "" };
+  for (const want of TAIL_BYTES_STEPS) {
+    const t = tailText(transcriptPath, want);
+    if (!t) return null;
+    found = usageRows(t.text);
+    if (found.rows.length || t.whole) break;
+  }
+  const { rows, model } = found;
   const tokens = guardContextTokens(rows);
   if (tokens == null) return null;
   const window = resolveWindow(model, conf);

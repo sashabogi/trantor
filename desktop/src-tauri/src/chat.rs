@@ -613,6 +613,32 @@ pub(crate) fn preview_of(v: &serde_json::Value) -> String {
     }
 }
 
+/// Rows longer than this get a type probe before the full parse.
+const BIG_ROW_BYTES: usize = 64 * 1024;
+
+#[derive(serde::Deserialize)]
+struct RowKind<'a> {
+    #[serde(rename = "type", borrow)]
+    kind: Option<std::borrow::Cow<'a, str>>,
+}
+
+/// Claude Code 2.1.300 records each API request's system prompt, tools and parameters in the
+/// transcript. Those rows are huge and nothing here renders or counts them. For a long line only the
+/// `type` is read (every other field is skipped without being built); a row whose type is not one
+/// the decoder knows is dropped before the full parse. Short rows and unparseable ones fall through.
+pub(crate) fn skippable_big_row(line: &str) -> bool {
+    if line.len() < BIG_ROW_BYTES {
+        return false;
+    }
+    match serde_json::from_str::<RowKind>(line) {
+        Ok(row) => !matches!(
+            row.kind.as_deref(),
+            Some("user") | Some("assistant") | Some("system") | Some("queue-operation")
+        ),
+        Err(_) => false,
+    }
+}
+
 pub(crate) fn decode_chat_lines<I, S>(lines: I, total: usize) -> ChatSnapshot
 where
     I: IntoIterator<Item = S>,
@@ -640,6 +666,9 @@ where
     };
 
     for line in lines {
+        if skippable_big_row(line.as_ref()) {
+            continue;
+        }
         let v: serde_json::Value = match serde_json::from_str(line.as_ref()) {
             Ok(v) => v,
             Err(_) => continue,
@@ -1028,3 +1057,53 @@ mod context_guard_tests {
         );
     }
 }
+
+#[cfg(test)]
+mod request_row_tests {
+    use super::*;
+
+    fn request_row(kind: &str) -> String {
+        serde_json::json!({
+            "type": kind,
+            "system": "x".repeat(200_000),
+            "tools": [{ "name": "Bash", "description": "y".repeat(1000) }],
+            "parameters": { "model": "claude-sonnet-5-5", "max_tokens": 32000 },
+            "message": { "usage": { "input_tokens": 999_999 } },
+        })
+        .to_string()
+    }
+
+    /// 2.1.300: the per-request row is skipped cheaply, never rendered and never counted as usage,
+    /// even when it carries a `message.usage` look-alike.
+    #[test]
+    fn a_request_row_is_skipped_and_never_counted() {
+        let assistant = serde_json::json!({
+            "type": "assistant",
+            "message": {
+                "model": "claude-sonnet-5-5",
+                "content": [{ "type": "text", "text": "done" }],
+                "usage": { "input_tokens": 1000, "cache_read_input_tokens": 500 },
+            }
+        })
+        .to_string();
+        let row = request_row("api_request");
+        assert!(skippable_big_row(&row));
+        let with =
+            decode_chat_lines_with_context_window([row.clone(), assistant.clone()], 2, 200_000);
+        let without = decode_chat_lines_with_context_window([assistant], 1, 200_000);
+        assert_eq!(with.turns.len(), 1);
+        assert_eq!(with.meta.context.tokens, Some(1500));
+        assert_eq!(with.meta.context.tokens, without.meta.context.tokens);
+    }
+
+    #[test]
+    fn big_rows_of_a_known_type_still_decode() {
+        assert!(!skippable_big_row(&request_row("assistant")));
+        assert!(!skippable_big_row(&request_row("system")));
+        assert!(
+            !skippable_big_row(r#"{"type":"api_request"}"#),
+            "short rows take the normal path"
+        );
+    }
+}
+
