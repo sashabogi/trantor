@@ -5,6 +5,11 @@
 // keyed by agent_id if none exists). Registering both never double-posts. Fail-silent throughout.
 import { resolveProject, hostId } from "../lib/project.mjs";
 import { signedPost } from "./lib/api.mjs";
+import { failOpenAfter } from "./lib/fail-open.mjs";
+
+// PreToolUse (Task|Agent) gates the dispatch: CC 2.1.299 refuses it if this hook cannot answer in time.
+failOpenAfter(Number(process.env.RELAY_SUBAGENT_WATCHDOG_MS || 5000));
+const HUB_TIMEOUT_MS = 3000;
 
 function readStdin() {
   return new Promise(res => { let d = ""; process.stdin.setEncoding("utf8");
@@ -29,7 +34,7 @@ try {
         project, enrich: true, agentType, agentId, parent,
         by: `${hostId()}:${project}`,
         source: "cc-subagent", costKind: "subagent-notional", phase: "sub-agents",
-      });
+      }, { timeoutMs: HUB_TIMEOUT_MS });
     }
   } else {
     // CREATE path (PreToolUse Task|Agent) — dispatch time, has the prompt → good title.
@@ -46,7 +51,7 @@ try {
       parent: String(input.session_id || "").slice(0, 120),
       assignee: `${agentType}:${project}`, by: `${hostId()}:${project}`,
       source: "cc-subagent", costKind: "subagent-notional", phase: "sub-agents",
-    });
+    }, { timeoutMs: HUB_TIMEOUT_MS });
   }
 } catch (e) {
   process.stderr.write(`[trantor] subagent-start error: ${e?.message || e}\n`);

@@ -2,6 +2,7 @@
 import { gitCheckoutRoot } from "./lib/git-checkout.mjs";
 import { relative, resolve } from "node:path";
 import { relayUrl, sessionContext, signedPost } from "./lib/api.mjs";
+import { failOpenAfter, readStdinWithin } from "./lib/fail-open.mjs";
 import { readOverseerLevel, writeOverseerLevel } from "./lib/overseer-level-cache.mjs";
 
 function deny(reason) {
@@ -15,9 +16,12 @@ function unavailable() {
   process.stdout.write("{}");
 }
 
+// 2.1.299: a gating hook that cannot answer in time is refused, which would block the edit. The hub
+// call below is capped at 2.5s; this backstop answers "no decision" if anything else hangs.
+failOpenAfter(Number(process.env.RELAY_HOLD_WATCHDOG_MS || 5000));
+
 try {
-  let raw = "";
-  for await (const chunk of process.stdin) raw += chunk;
+  const raw = await readStdinWithin(1000);
   const input = JSON.parse(raw || "{}");
   const path = input.tool_name === "NotebookEdit" ? input.tool_input?.notebook_path : input.tool_input?.file_path;
   const ctx = sessionContext(input.cwd);
@@ -47,3 +51,5 @@ try {
 } catch {
   unavailable();
 }
+// The hook has answered. A host that left stdin open must not keep the process (and a second watchdog answer) alive.
+process.exit(0);

@@ -51,7 +51,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node ${CLAUDE_PLUGIN_ROOT}/hooks/subagent-start.mjs"
+            "command": "node ${CLAUDE_PLUGIN_ROOT}/hooks/subagent-start.mjs",
+            "timeout": 10
           }
         ]
       },
@@ -60,7 +61,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node ${CLAUDE_PLUGIN_ROOT}/hooks/file-claim.mjs"
+            "command": "node ${CLAUDE_PLUGIN_ROOT}/hooks/file-claim.mjs",
+            "timeout": 15
           }
         ]
       },
@@ -69,7 +71,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node ${CLAUDE_PLUGIN_ROOT}/hooks/ask-sidecar.mjs"
+            "command": "node ${CLAUDE_PLUGIN_ROOT}/hooks/ask-sidecar.mjs",
+            "timeout": 10
           }
         ]
       },
@@ -78,7 +81,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node ${CLAUDE_PLUGIN_ROOT}/hooks/ask-sidecar.mjs"
+            "command": "node ${CLAUDE_PLUGIN_ROOT}/hooks/ask-sidecar.mjs",
+            "timeout": 10
           }
         ]
       },
@@ -87,7 +91,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node ${CLAUDE_PLUGIN_ROOT}/hooks/file-hold.mjs"
+            "command": "node ${CLAUDE_PLUGIN_ROOT}/hooks/file-hold.mjs",
+            "timeout": 10
           }
         ]
       }
@@ -98,7 +103,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node ${CLAUDE_PLUGIN_ROOT}/hooks/ask-sidecar.mjs"
+            "command": "node ${CLAUDE_PLUGIN_ROOT}/hooks/ask-sidecar.mjs",
+            "timeout": 10
           }
         ]
       }

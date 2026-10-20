@@ -9,10 +9,14 @@ import { join, relative, resolve } from "node:path";
 import { homedir } from "node:os";
 import { relayUrl, sessionContext, signedPost } from "./lib/api.mjs";
 import { writeOverseerLevel } from "./lib/overseer-level-cache.mjs";
+import { failOpenAfter } from "./lib/fail-open.mjs";
 import { overlapsFor } from "../lib/remote-overlap.mjs";
 
 const FETCH_TIMEOUT_MS = Number(process.env.RELAY_CLAIM_TIMEOUT_MS || 900);
 const RECLAIM_MS = Number(process.env.RELAY_RECLAIM_MS || 60 * 1000);
+
+// 2.1.299: a gating hook that cannot answer in time is refused, which would block the edit.
+failOpenAfter(Number(process.env.RELAY_CLAIM_WATCHDOG_MS || 6000));
 
 const allow = () => { process.stdout.write("{}"); process.exit(0); };
 
