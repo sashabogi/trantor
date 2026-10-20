@@ -1,0 +1,5 @@
+{
+  "name": "trantor-band",
+  "version": "0.1.0",
+  "description": "Pilot: a line above the Claude Code prompt with live context fill and the project's handoff state, read from Trantor's files. Off unless TRANTOR_MOD=1."
+}

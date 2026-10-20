@@ -3,7 +3,7 @@
 import {
   bandText, basename, contextFraction, contextPercent, contextRecord, handoffState,
   newestHandoffName, projectFromMarker, safeId,
-} from "../../hooks/mods/band-lib.mjs";
+} from "../../mods/trantor-band/hooks/band-lib.mjs";
 
 let pass = 0, fail = 0;
 const ok = (condition, name) => {

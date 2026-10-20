@@ -1,6 +1,4 @@
-// The engine's own headless harness for mods. `claude plugin test` scans the whole folder it is
-// given, so run it on a folder that holds only the mod (see docs/SYSTEM-CONTRACT.md section 9),
-// copied there as plugin "trantor": hooks/hooks.json modules plus hooks/mods/*.
+// The engine's own headless harness for mods: `claude plugin test mods/trantor-band`.
 import { expect, mock, test } from 'claude-code/testing'
 
 // The stand-ins below only need the fields the mod reads; the full engine types are not the point.

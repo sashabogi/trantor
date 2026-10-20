@@ -254,8 +254,5 @@
         ]
       }
     ]
-  },
-  "modules": [
-    "./mods/trantor-band.tsx"
-  ]
+  }
 }

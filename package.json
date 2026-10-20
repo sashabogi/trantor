@@ -22,6 +22,7 @@
     "ui.html",
     "bin/",
     "hooks/",
+    "mods/",
     "lib/",
     "skills/",
     "deploy/",

@@ -288,20 +288,17 @@ Adopted from CC 2.1.251-2.1.295 (#12094):
   it parses OSC 9;4 progress and titles, and its own claude integration (`herdr integration status`)
   feeds agent state. Nothing to read there today; lifecycle detection stays on hooks. Revisit if
   herdr adds it or Trantor ever owns the terminal backend.
-- **Claude Code mods (2.1.287+, early-access API) — pilot `trantor-band`, #12091.** A mod is a
-  function-hooks module the plugin names under `modules` in `hooks/hooks.json`
-  (`./mods/trantor-band.tsx`; the pure helpers are `hooks/mods/band-lib.mjs`). It is read-only and
-  OFF by default: set `TRANTOR_MOD=1` in the environment Claude Code starts with. It draws one dim
-  line above the prompt (`AbovePrompt`, which renders in a normal terminal, no fullscreen needed):
-  `ctx 34% · handoff pending`. Context comes from `$.session.usage()`, the handoff from a read of
-  `~/.agent-bus/handoffs/<project>-<ts>.json` (newest, `consumed` / `claim.expiresAt`), and each
-  turn it writes `~/.agent-bus/mod-context/<session>.json` as `{ts, tokens, window, frac}` for
-  Trantor code to read later. Unread bus count is NOT shown: the local cursor has no total to
-  compare with, and the total needs a signed hub call, which a mod must not carry. Built against
-  CC 2.1.304 (types from 2.1.293). Validate with `claude plugin validate .`; mod tests run with
-  `claude plugin test <folder holding only the mod>` (it scans a whole folder, so not the repo
-  root), the file being `test/mods/trantor-band.test.ts`. Nothing in the hooks or the app reads the
-  mod's output yet; the mod only proves the data is live.
+- **Claude Code mods (2.1.287+, early-access API) — pilot `trantor-band`, #12091.** A separate opt-in
+  plugin at `mods/trantor-band/` (its own `.claude-plugin/plugin.json`; `hooks/hooks.json` names the
+  module under `modules`). It is NOT part of the main Trantor plugin, so no session loads it unless
+  pointed at it: `claude --plugin-dir <trantor>/mods/trantor-band` or `CLAUDE_CODE_PLUGIN_DIRS`, plus
+  `TRANTOR_MOD=1` in Claude Code's environment. It draws one dim line above the prompt (`AbovePrompt`,
+  no fullscreen needed): `ctx 34% · handoff pending`, from `$.session.usage()` and a read of the newest
+  `~/.agent-bus/handoffs/<project>-<ts>.json`, and each turn writes
+  `~/.agent-bus/mod-context/<session>.json` as `{ts, tokens, window, frac}`. No hub calls, so no
+  unread count (that needs a signed call). Built against CC 2.1.304 (types from 2.1.293). Check with
+  `claude plugin validate mods/trantor-band` and `claude plugin test mods/trantor-band`. Nothing reads
+  its output yet: it proves the live data is there before the gauge, handoff trigger or chat feed move.
 The register gets a line whenever a CC release lands something we half-own. Salvage phases must
 check this register before building — never rebuild what CC now provides for Claude seats.
 
