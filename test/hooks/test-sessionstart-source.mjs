@@ -56,6 +56,22 @@ try {
 
   const unknown = parse(runHook(""));
   ok("empty/unknown source fails OPEN to the full block", (unknown.additionalContext || "").includes("<trantor-project-state"));
+
+  // #12094: a resume carrying CC's staleness fields gets ONE staleness line; without them, none.
+  const stale = { seconds_since_last_response: 5400, context_tokens: 182340, prompt_cache_likely_expired: true, estimated_cache_write_usd: 1.1396 };
+  const runWith = (source, extra) => spawnSync("node", ["hooks/sessionstart.mjs"], {
+    input: JSON.stringify({ source, session_id: `sess-stale-${source}`, cwd: projDir, ...extra }),
+    encoding: "utf8", timeout: 20000, cwd: process.cwd(),
+    env: { ...drillEnv(), CLAUDE_PROJECT_DIR: projDir, RELAY_SESSION: `probe:${proj}`, RELAY_URL: hub.base,
+      TRANTOR_NO_UPDATE_CHECK: "1", TRANTOR_NO_BALANCE_CHECK: "1" },
+  });
+  const staleRun = runWith("resume", stale);
+  const staleCtx = parse(staleRun).additionalContext || "";
+  const tag = staleCtx.match(/<trantor-resume-staleness>([^<]*)<\/trantor-resume-staleness>/);
+  ok("resume with staleness fields injects the staleness line", !!tag && tag[1].includes("1.5h") && tag[1].includes("$1.14") && !tag[1].includes("\n"), staleCtx.slice(0, 200));
+  ok("the staleness line also reaches stderr", staleRun.stderr.includes("1.5h stale"));
+  ok("resume without the fields injects no staleness line", !(parse(runWith("resume", {})).additionalContext || "").includes("trantor-resume-staleness"));
+  ok("startup ignores the fields", !(parse(runWith("startup", stale)).additionalContext || "").includes("trantor-resume-staleness"));
 } finally {
   await hub.stop();
   try { rmSync(hubDir, { recursive: true, force: true }); } catch {}

@@ -17,6 +17,7 @@ import { getJSON, signedGet, signedPost, loadIdentity } from "./lib/api.mjs";
 import { ledgerPaths, ensureStart, anchorCursor, writeCursor } from "./lib/inbox-ledger.mjs";
 import { ensureEnrolled } from "../lib/enroll.mjs";
 import { memoryStartLine } from "./lib/memory-start.mjs";
+import { staleResumeLine } from "./lib/cc-signals.mjs";
 
 // The build doctrine (docs/BUILD-DOCTRINE.md) in short form, one line per rule, injected for every
 // project's ORCHESTRATOR at boot (#6452): orchestrators that never opened the doc missed the ruling.
@@ -292,6 +293,14 @@ try {
       ], { detached: true, stdio: "ignore", env: { ...process.env, RELAY_PROJECT: project } });
       kid.unref();
     } catch {}
+  }
+
+  // Claude Code hands a resume its staleness and re-cache estimate: one line so the model and the
+  // operator can pick resume vs fresh. Nothing when the fields are absent.
+  const staleLine = staleResumeLine(stdinObj);
+  if (staleLine) {
+    additionalContext += `<trantor-resume-staleness>${sanitize(staleLine)}</trantor-resume-staleness>\n`;
+    process.stderr.write(`[trantor] ${staleLine}\n`);
   }
 
   // CATCH-UP: a project is a DURABLE, continuous lane — not a session. Before doing
