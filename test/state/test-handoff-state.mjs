@@ -1,14 +1,7 @@
 #!/usr/bin/env node
-// Trantor State P4 — the handoff path (TDD §4.5). The writer BUILDS a state, the reader renders
-// it, and neither may cost a handoff.
-//
-// Two rules are load-bearing here, and both are the kind that only a deliberate test catches:
-//   1. `state` is attached beside `summary`, never inside it. capSummary's mid-string elision is
-//      #6528 — it ate the STATE section of the prose — and the structured field cannot lose a
-//      member because the lossy operation is not applied to it.
-//   2. A state that will not validate attaches NULL and logs. A session at the context wall must
-//      never lose its baton because an object failed a shape check; the successor reading prose is
-//      exactly what it read before this field existed.
+// Trantor State P4 — the handoff path (TDD §4.5): the writer builds a state, the reader renders it,
+// and neither may cost a handoff. `state` rides beside `summary` (capSummary ate STATE, #6528), and
+// a state that fails validation attaches null and logs, so the baton is never lost to a shape check.
 import { spawnSync } from "node:child_process";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { join, dirname } from "node:path";
@@ -56,14 +49,30 @@ const opts = { project: PROJECT, seat: SEAT, card: CARD, worktree: REPO };
 
 // --- the flag: dark by default ------------------------------------------------------------------
 {
-  ok("the flag is OFF unless set", stateHandoffEnabled({}) === false);
-  ok("TRANTOR_STATE_HANDOFF=0 is off", stateHandoffEnabled({ TRANTOR_STATE_HANDOFF: "0" }) === false);
-  ok("TRANTOR_STATE_HANDOFF=1 is on", stateHandoffEnabled({ TRANTOR_STATE_HANDOFF: "1" }) === true);
+  ok("the flag is OFF unless set", stateHandoffEnabled({ AGENT_BUS_DIR: BUS }) === false);
+  ok("TRANTOR_STATE_HANDOFF=0 is off", stateHandoffEnabled({ AGENT_BUS_DIR: BUS, TRANTOR_STATE_HANDOFF: "0" }) === false);
+  ok("TRANTOR_STATE_HANDOFF=1 is on", stateHandoffEnabled({ AGENT_BUS_DIR: BUS, TRANTOR_STATE_HANDOFF: "1" }) === true);
 
   const rec = record();
   ok("with the flag off, attachState returns null", attachState(rec, opts) === null);
   ok("…and does not touch the record at all", !("state" in rec), JSON.stringify(Object.keys(rec)));
   ok("…leaving the prose summary exactly as it was", rec.summary === SUMMARY);
+}
+
+// --- #12069: the hooks never source ~/.agent-bus/.env, so the flag has to be read from it ----------
+{
+  const envFile = join(BUS, ".env");
+  const bare = { AGENT_BUS_DIR: BUS };
+  ok("neither process env nor file: off", stateHandoffEnabled(bare) === false);
+  writeFileSync(envFile, "# crew layer\nTRANTOR_STATE_HANDOFF=1\n");
+  ok("flag only in the .env file: on", stateHandoffEnabled(bare) === true);
+  ok("an explicit file path is honoured", stateHandoffEnabled({}, envFile) === true);
+  ok("process env 0 beats file 1", stateHandoffEnabled({ ...bare, TRANTOR_STATE_HANDOFF: "0" }) === false);
+  const rec = record();
+  const s = attachState(rec, { ...opts, env: { ...bare } });
+  ok("a handoff written with the flag only in the file carries state", s !== null && rec.state === s, JSON.stringify(Object.keys(rec)));
+  rmSync(envFile);
+  ok("file gone: off again", stateHandoffEnabled(bare) === false);
 }
 
 const ON = { ...process.env, TRANTOR_STATE_HANDOFF: "1" };

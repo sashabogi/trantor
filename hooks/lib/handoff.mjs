@@ -18,6 +18,7 @@ import { resolveProject, orchSessionsPath, hostId } from "../../lib/project.mjs"
 // attachState async on a path that is deliberately synchronous.
 import { statePath, readState } from "../../lib/state/store.mjs";
 import { stateError } from "../../lib/state/schema.mjs";
+import { resolveStateFlags } from "../../lib/state/flags.mjs";
 import { deriveState } from "../../lib/state/derive.mjs";
 
 // Writer and reader MUST resolve the same directory — see lib/project.mjs busDir(). This used to
@@ -444,9 +445,12 @@ export function capSummary(text, cap = 4096) {
 // `state` rides beside it, validated on write and NEVER capped, so capSummary cannot eat a member (#6528).
 
 /** Dark by default. The prose path is untouched either way; this flag only decides whether the
- *  structured field is built and rendered (TDD §4.5, "Fallback"). */
-export function stateHandoffEnabled(env = process.env) {
-  return ["1", "true", "on", "yes"].includes(String(env.TRANTOR_STATE_HANDOFF || "").toLowerCase());
+ *  structured field is built and rendered (TDD §4.5, "Fallback"). The hooks never source
+ *  ~/.agent-bus/.env, so the flag resolves like the runner's: process env first, that file second
+ *  (#12069). */
+export function stateHandoffEnabled(env = process.env, file) {
+  const { value } = resolveStateFlags(env, file).TRANTOR_STATE_HANDOFF;
+  return ["1", "true", "on", "yes"].includes(String(value).toLowerCase());
 }
 
 /** The bus id of the seat writing this handoff — the same resolution sessionstart.mjs uses, so a
