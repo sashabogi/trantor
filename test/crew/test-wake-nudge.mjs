@@ -10,7 +10,7 @@ import { shortSocketDir } from "../lib/socket-dir.mjs";
 import { spawn, execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { once } from "node:events";
-import { resolveRecipient, tokenFromEnvironment, processRows, wakeOnce, keepalivePlist } from "../../bin/wake-nudge.mjs";
+import { resolveRecipient, resolveRecipientDetailed, fallbackSocketDirs, postNudgeDetailed, tokenFromEnvironment, processRows, wakeOnce, keepalivePlist } from "../../bin/wake-nudge.mjs";
 import { planDutyNudges, readDutyNudgeState } from "../../lib/duty-nudges.mjs";
 import { ledgerPaths } from "../../hooks/lib/inbox-ledger.mjs";
 
@@ -263,3 +263,117 @@ process.stdout.write(JSON.stringify({jsonrpc:'2.0',id:q.id,result})+'\\n'); });\
     child.kill("SIGTERM"); hub.close();
   }
 });
+
+// #12092: hardening against Claude Code's cross-session socket changes (2.1.232 to 2.1.304).
+function envCommand(envText, options = {}) {
+  return (cmd, args) => {
+    if (cmd === "herdr" && args[0] === "agent") return JSON.stringify({ result: { agents: [{ agent: "claude", cwd: "/work/trantor", pane_id: "w1:p1", agent_session: { value: sid } }] } });
+    if (cmd === "ps" && args[0] === "-axo") return `101 1 claude --resume ${sid}\n102 101 node mcp.mjs\n`;
+    if (cmd === "ps") return args[2] === (options.envPid || "102") ? `PID TTY STAT TIME COMMAND\n102 ?? S 0:00 claude ${envText}` : "no-token";
+    throw new Error("unexpected command");
+  };
+}
+const resolveBus = name => { const bus = join(dir, name); mkdirSync(bus, { recursive: true }); writeFileSync(join(bus, "orch-sessions.txt"), `trantor\t${sid}\n`); return bus; };
+
+test("socket path comes from the target's env var, not an assumed /tmp/cc-socks", () => {
+  const bus = resolveBus("env-path");
+  const elsewhere = resolve(sockets, "private-uid-dir"); mkdirSync(elsewhere);
+  const socketPath = join(elsewhere, "101.sock"); writeFileSync(socketPath, "");
+  const target = resolveRecipient(recipient, { bus, localHost: "local", command: fixtureCommand(socketPath) });
+  assert.equal(target.socketPath, socketPath);
+  assert.equal(target.token, "private-token");
+  // the moved-aside spelling CC uses when another live socket owns the pid name is honored too
+  const moved = join(elsewhere, "101-ab12cd34.sock"); writeFileSync(moved, "");
+  assert.equal(resolveRecipient(recipient, { bus, localHost: "local", command: fixtureCommand(moved) }).socketPath, moved);
+});
+
+test("fallback directories know the default and the per-uid private location", () => {
+  const dirs = fallbackSocketDirs({ env: { XDG_RUNTIME_DIR: "/run/user/501" }, uid: 501 });
+  for (const expected of ["/run/user/501/cc-socks", "/tmp/cc-socks", "/tmp/cc-socks-501", "/private/tmp/cc-socks", "/private/tmp/cc-socks-501"]) assert.ok(dirs.includes(expected), expected);
+  assert.ok(!fallbackSocketDirs({ env: {}, uid: 7 }).some(d => d.startsWith("/run/user")));
+});
+
+test("a token with no usable env socket falls back to a directory scan for <pid>.sock", () => {
+  const bus = resolveBus("fallback");
+  const fallbackDir = join(sockets, "cc-socks-501"); mkdirSync(fallbackDir);
+  const socketPath = join(fallbackDir, "101.sock"); writeFileSync(socketPath, "");
+  const onlyToken = envCommand("CLAUDE_CODE_MESSAGING_TOKEN=tok");
+  assert.equal(resolveRecipient(recipient, { bus, localHost: "local", socketDir: [join(sockets, "nowhere"), fallbackDir], command: onlyToken }).socketPath, socketPath);
+  const staleEnv = envCommand(`CLAUDE_CODE_MESSAGING_SOCKET=${join(sockets, "gone.sock")} CLAUDE_CODE_MESSAGING_TOKEN=tok`);
+  assert.equal(resolveRecipient(recipient, { bus, localHost: "local", socketDir: fallbackDir, command: staleEnv }).socketPath, socketPath);
+});
+
+test("a session with no socket or token is unreachable with a reason, and wakeOnce reports it once and moves on", async () => {
+  const bus = resolveBus("unreachable");
+  const restricted = envCommand("");
+  const emptyDir = resolve(sockets, "empty-dir"); mkdirSync(emptyDir);
+  const detail = { bus, localHost: "local", socketDir: emptyDir, command: restricted };
+  const verdict = resolveRecipientDetailed(recipient, detail);
+  assert.equal(verdict.ok, false);
+  assert.equal(verdict.quiet, false);
+  assert.match(verdict.reason, /--restricted|messaging off/);
+  assert.equal(resolveRecipient(recipient, detail), null);
+  const missingFile = resolveRecipientDetailed(recipient, { ...detail, command: envCommand(`CLAUDE_CODE_MESSAGING_SOCKET=${resolve(sockets, "none.sock")} CLAUDE_CODE_MESSAGING_TOKEN=tok`) });
+  assert.match(missingFile.reason, /no socket exists at/);
+  assert.equal(resolveRecipientDetailed("remote:trantor", { bus, localHost: "local" }).quiet, true, "remote recipients are an ordinary skip");
+  const logs = [];
+  const event = alert(71);
+  const resolver = target => { const v = resolveRecipientDetailed(target, detail); return v.ok ? v.target : { unreachable: v.reason }; };
+  const result = await wakeOnce({ bus, resolver, log: m => logs.push(m), api: async path => path.startsWith("/events") ? { events: [event] } : { deliveredUpTo: 0 } });
+  assert.deepEqual([result.nudged.length, result.missing.length], [0, 0]);
+  assert.equal(logs.filter(m => /unreachable: .*(--restricted|messaging off)/.test(m)).length, 1);
+});
+
+async function fakeInbox(name, onConnection) {
+  const socketPath = join(sockets, name);
+  const server = netServer(onConnection).listen(socketPath);
+  await once(server, "listening");
+  return { socketPath, server };
+}
+
+test("socket post: two newline-ended lines arrive at once and a close with no reply counts as delivered", async () => {
+  let received = ""; let firstDataAt = 0; let closedAt = 0;
+  const { socketPath, server } = await fakeInbox("p1.sock", socket => {
+    socket.on("data", chunk => { firstDataAt ||= Date.now(); received += chunk; });
+    socket.on("end", () => { closedAt = Date.now(); socket.end(); });
+  });
+  try {
+    const result = await postNudgeDetailed({ socketPath, token: "t", sid }, [5, 6]);
+    assert.equal(result.ok, true);
+    assert.ok(received.endsWith("\n"));
+    const lines = received.trim().split("\n").map(l => JSON.parse(l));
+    assert.deepEqual(lines.map(l => l.type), ["auth", "user"]);
+    assert.ok(closedAt - firstDataAt < 1000, "the client never sits on a half-written line");
+  } finally { server.close(); }
+});
+
+test("socket post: an inbox that never reads or closes times out fast instead of hanging", async () => {
+  const { socketPath, server } = await fakeInbox("p2.sock", socket => { socket.pause(); });
+  const started = Date.now();
+  try {
+    const result = await postNudgeDetailed({ socketPath, token: "t", sid }, [7], 300);
+    assert.equal(result.ok, false);
+    assert.match(result.reason, /no close|timed out/);
+    assert.ok(Date.now() - started < 1200, `took ${Date.now() - started}ms`);
+  } finally { server.close(); }
+});
+
+test("socket post: a missing socket reports a reason instead of throwing", async () => {
+  const gone = await postNudgeDetailed({ socketPath: join(sockets, "absent.sock"), token: "t", sid }, [8]);
+  assert.equal(gone.ok, false);
+  assert.match(gone.reason, /socket error/);
+});
+
+test("a posted-then-ignored send (hold/refuse look-alike) is logged as not polled and the claim is released", async () => {
+  const bus = join(dir, "held-log"); mkdirSync(bus);
+  const { socketPath, server } = await fakeInbox("p4.sock", socket => { socket.resume(); socket.on("end", () => socket.end()); });
+  const logs = [];
+  const event = alert(72);
+  try {
+    const result = await wakeOnce({ bus, verifyMs: 150, log: m => logs.push(m), api: async path => path.startsWith("/events") ? { events: [event] } : { deliveredUpTo: 0 }, resolver: () => ({ sid, socketPath, token: "secret", pollStamp: join(bus, "no-poll") }) });
+    assert.equal(result.missing.length, 1);
+    assert.ok(logs.some(m => /posted but not polled .*held, refused or dropped/.test(m)));
+    assert.deepEqual(readDutyNudgeState(join(bus, "duty-nudged.json")).nudged, {});
+  } finally { server.close(); }
+});
+

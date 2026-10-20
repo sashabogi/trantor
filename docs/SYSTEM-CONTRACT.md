@@ -228,6 +228,15 @@ Known overlaps as of CC 2.1.228 (audited; see trantor-cc-2.1.215-compat memory):
   Claude↔Claude only; the duty seat already rides it (T3). Non-Claude seats, board state, and
   the overseer remain ours. Caveat: a bypassPermissions receiver holds messages unless the
   sender also bypasses (`crossSessionInbound: accept`).
+- **Cross-session socket hardening (2.1.232 to 2.1.304, #12092)** — `bin/wake-nudge.mjs` now takes the
+  socket path from the target's `CLAUDE_CODE_MESSAGING_SOCKET` (CC may bind in `/tmp/cc-socks-<uid>`,
+  2.1.248) and scans only as a fallback; a session with no token or socket (`--restricted`, 2.1.290) is
+  logged as unreachable with a reason; the post is one prompt newline-ended write with a hard timeout
+  (inbox closes silent connections at 30s, 2.1.243). The inbox sends NO verdict on the connection:
+  held/refused/dropped arrive as `peer_message_status` frames at the SENDER's own inbox, which wake-nudge
+  lacks, so those are only seen as "posted but not polled". `notify_when_idle` (2.1.236) is a control frame
+  that needs the sender to host a vetted CC inbox socket: native path for Claude-session senders only, not
+  usable from a script.
 - **Native SubagentStart/Stop with agent_id (2.1.215+)** — adopted 0.17.49; our cards enrich
   from native events. Open: subagent spawn cap REMOVED in .224 (board-flood guard wanted);
   `subagent-cost` may price the requested not the actual model.

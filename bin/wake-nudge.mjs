@@ -60,18 +60,41 @@ export function tokenFromEnvironment(text, socketPath) {
   return /(?:^|\s)CLAUDE_CODE_MESSAGING_TOKEN=(\S+)/.exec(text)?.[1] || "";
 }
 
-export function resolveRecipient(recipient, { bus = busDir(), localHost = hostId(), command = run, socketDir = "/tmp/cc-socks" } = {}) {
-  if (!recipient.startsWith(`${localHost}:`)) return null;
+// #12092: CC 2.1.248 may bind under a private per-user directory instead of the default one, so the
+// socket path comes from the target's own CLAUDE_CODE_MESSAGING_SOCKET. This is the same text read as above.
+export function messagingFromEnvironment(text) {
+  const socket = /(?:^|\s)CLAUDE_CODE_MESSAGING_SOCKET=(\S+)/.exec(text)?.[1] || "";
+  const token = /(?:^|\s)CLAUDE_CODE_MESSAGING_TOKEN=(\S+)/.exec(text)?.[1] || "";
+  return { socket: socket.startsWith("/") && !socket.split("/").includes("..") ? socket : "", token };
+}
+
+// #12092: where CC binds when the env var cannot be trusted (read from the CC 2.1.304 binary): the
+// default <XDG_RUNTIME_DIR or tmp>/cc-socks, and the per-uid fallback <tmp>/cc-socks-<uid> used when
+// the default is refused or the path is over 103 bytes. macOS /tmp is /private/tmp, so both spellings.
+export function fallbackSocketDirs({ env = process.env, uid = process.getuid?.() ?? 0 } = {}) {
+  const dirs = [];
+  if (env.XDG_RUNTIME_DIR) dirs.push(join(env.XDG_RUNTIME_DIR, "cc-socks"));
+  for (const base of ["/tmp", "/private/tmp"]) dirs.push(join(base, "cc-socks"), join(base, `cc-socks-${uid}`));
+  return [...new Set(dirs)];
+}
+
+// #12092: a structured verdict so an unreachable session carries a reason; resolveRecipient keeps
+// the old null-or-target contract. `quiet` marks ordinary skips (remote, busy, ambiguous) from
+// reportable ones (the session is local and idle but has no usable socket).
+export function resolveRecipientDetailed(recipient, { bus = busDir(), localHost = hostId(), command = run, socketDir } = {}) {
+  const skip = reason => ({ ok: false, quiet: true, reason });
+  const unreachable = reason => ({ ok: false, quiet: false, reason });
+  if (!recipient.startsWith(`${localHost}:`)) return skip("not a local recipient");
   const project = recipient.slice(localHost.length + 1);
   const mapped = read(join(bus, "orch-sessions.txt")).split("\n").find(line => line.split("\t")[0] === project)?.split("\t")[1]?.trim();
   let agents = [];
   try { agents = JSON.parse(command("herdr", ["agent", "list"])).result.agents; } catch { /* #7429: map remains available without herdr. */ }
   const panes = recipientPanes(project, mapped, agents);
-  if (panes.length > 1) return null;
+  if (panes.length > 1) return skip("more than one candidate pane");
   const pane = panes[0];
-  if (["working", "busy"].includes(pane?.agent_status)) return null;
+  if (["working", "busy"].includes(pane?.agent_status)) return skip("busy");
   const sid = pane?.agent_session?.value || mapped;
-  if (!sid || !/^[\w-]+$/.test(sid)) return null;
+  if (!sid || !/^[\w-]+$/.test(sid)) return skip("no session id");
   const rows = processRows(command("ps", ["-axo", "pid=,ppid=,command="]));
   let matches = rows.filter(row => claudeProcess(row.command) && new RegExp(`(?:--session-id|--resume|-r)\\s+${sid}(?:\\s|$)`).test(row.command));
   if (!matches.length && pane) {
@@ -79,36 +102,56 @@ export function resolveRecipient(recipient, { bus = busDir(), localHost = hostId
       const info = JSON.parse(command("herdr", ["pane", "process-info", "--pane", pane.pane_id])).result.process_info;
       const pids = new Set(info.foreground_processes.filter(p => /^(claude|claude.exe)$/.test(p.name)).map(p => p.pid));
       matches = rows.filter(row => pids.has(row.pid) && claudeProcess(row.command));
-    } catch { return null; }
+    } catch { return skip("claude process not found via herdr"); }
   }
-  if (matches.length !== 1) return null;
+  if (matches.length !== 1) return skip(matches.length ? "more than one claude process" : "claude process not found");
   const pid = matches[0].pid;
-  const socketPath = join(socketDir, `${pid}.sock`);
-  if (!existsSync(socketPath)) return null;
-  // #7429: preserve ps's default columns for env; descendants must name this exact socket.
+  // #7429: preserve ps's default columns for env. Only the target's own process tree is read.
+  let socket = ""; let token = "";
   for (const envPid of descendants(pid, rows)) {
-    let token = "";
-    try { token = tokenFromEnvironment(command("ps", ["eww", "-p", String(envPid)]), socketPath); } catch { continue; }
-    if (token) return { pid, sid, token, socketPath, pollStamp: ledgerPaths(recipient, sid, bus).pollStamp };
+    let found;
+    try { found = messagingFromEnvironment(command("ps", ["eww", "-p", String(envPid)])); } catch { continue; }
+    if (found.token && (found.socket || !socket)) { ({ socket, token } = found); if (socket) break; }
   }
-  return null;
+  // #12092: CC 2.1.290 --restricted sessions (and any session with messaging off) never open a socket.
+  if (!token) return unreachable(`no CLAUDE_CODE_MESSAGING_TOKEN in claude pid ${pid}'s environment (--restricted or cross-session messaging off); no socket to nudge`);
+  const dirs = socketDir ? [].concat(socketDir) : fallbackSocketDirs();
+  const tried = [socket, ...dirs.map(dir => join(dir, `${pid}.sock`))].filter(Boolean);
+  const socketPath = tried.find(path => existsSync(path));
+  if (!socketPath) return unreachable(`claude pid ${pid} has a messaging token but no socket exists at ${tried.join(" or ")}`);
+  return { ok: true, target: { pid, sid, token, socketPath, pollStamp: ledgerPaths(recipient, sid, bus).pollStamp } };
 }
 
-export function postNudge({ socketPath, token, sid }, ids, timeoutMs = 1500) {
+export function resolveRecipient(recipient, options = {}) {
+  const verdict = resolveRecipientDetailed(recipient, options);
+  return verdict.ok ? verdict.target : null;
+}
+
+// #12092: the inbox drops a silent connection after 30s, so write both newline-ended lines at once,
+// half-close and time out fast. It never replies here (held/refused go to the sender's own inbox).
+export function postNudgeDetailed({ socketPath, token, sid }, ids, timeoutMs = 1500) {
   const content = `<cross-session-message from="trantor:wake">\nYour Trantor bus inbox has unread message ids ${ids.map(id => `#${id}`).join(", ")}. Read them with relay_inbox and reply over the bus with relay_send. This nudge carries no message content; the signed bus messages are the source of truth.\n</cross-session-message>`;
   const lines = [{ type: "auth", token }, { type: "user", session_id: sid, message: { role: "user", content } }];
   return new Promise(resolve => {
     const socket = createConnection(socketPath);
-    let sent = false;
-    const finish = ok => { socket.destroy(); resolve(ok); };
-    socket.setTimeout(timeoutMs, () => finish(false));
-    socket.on("error", () => finish(false));
+    let sent = false; let settled = false; let failure = "";
+    const finish = (ok, reason) => {
+      if (settled) return;
+      settled = true; clearTimeout(hard); socket.destroy(); resolve({ ok, reason });
+    };
+    const hard = setTimeout(() => finish(false, sent ? "no close from the inbox after the write" : "connect or write timed out"), timeoutMs);
+    hard.unref();
+    socket.on("error", error => { failure = error.code || error.message; finish(false, `socket error ${failure}`); });
     socket.on("connect", () => socket.end(lines.map(line => JSON.stringify(line)).join("\n") + "\n", () => { sent = true; }));
-    socket.on("close", hadError => finish(sent && !hadError));
+    socket.on("close", hadError => finish(sent && !hadError, sent ? "" : "closed before the write finished"));
   });
 }
 
-export async function wakeOnce({ api, bus = busDir(), resolver = recipient => resolveRecipient(recipient, { bus }), verifyMs = 10000, now = Date.now(), attempted = new Set(), cursor = { id: 0, ts: 0 }, log = m => console.error(m) }) {
+export async function postNudge(target, ids, timeoutMs) {
+  return (await postNudgeDetailed(target, ids, timeoutMs)).ok;
+}
+
+export async function wakeOnce({ api, bus = busDir(), resolver = recipient => { const verdict = resolveRecipientDetailed(recipient, { bus }); return verdict.ok ? verdict.target : verdict.quiet ? null : { unreachable: verdict.reason }; }, verifyMs = 10000, now = Date.now(), attempted = new Set(), cursor = { id: 0, ts: 0 }, log = m => console.error(m) }) {
   const feed = await api(`/events?type=message&by=hub%3Aduty&since=${cursor.id}${cursor.id ? "" : "&limit=2000"}`);
   if (Number.isFinite(feed.latest) && feed.latest < cursor.id) {
     cursor.id = 0; cursor.ts = 0;
@@ -121,7 +164,12 @@ export async function wakeOnce({ api, bus = busDir(), resolver = recipient => re
     .map(event => ({ from: event.by, text: event.text, ts: event.ts }));
   const resolved = new Map();
   for (const { recipient } of dutyEscalations(messages)) {
-    if (!resolved.has(recipient)) resolved.set(recipient, resolver(recipient));
+    if (resolved.has(recipient)) continue;
+    const target = resolver(recipient);
+    // #12092: a local idle session with no usable socket is reported, never dropped silently; the
+    // cursor has moved past this alert so it is not retried, and duty's own triage path stays open.
+    if (target?.unreachable) log(`wake-nudge: ${recipient} unreachable: ${target.unreachable}; leaving it to the duty seat`);
+    resolved.set(recipient, target?.unreachable ? null : target);
   }
   const reachable = messages.filter(message => {
     const item = dutyEscalations([message])[0];
@@ -153,7 +201,8 @@ export async function wakeOnce({ api, bus = busDir(), resolver = recipient => re
       const local = resolved.get(target.recipient);
       const before = Number(read(local.pollStamp));
       const postedAt = Date.now();
-      if (!await postNudge(local, target.ids)) return;
+      const post = await postNudgeDetailed(local, target.ids);
+      if (!post.ok) { log(`wake-nudge: ${target.recipient} socket post failed: ${post.reason}`); return; }
       while (Date.now() - postedAt < verifyMs) {
         const stamp = Number(read(local.pollStamp));
         if (stamp > before && stamp >= postedAt) {
@@ -162,6 +211,9 @@ export async function wakeOnce({ api, bus = busDir(), resolver = recipient => re
         }
         await sleep(100);
       }
+      // #12092: written and closed, but the session never polled. The inbox gives no verdict on this
+      // connection, so held (bypassPermissions receiver, crossSessionInbound hold), refused and dropped look alike.
+      log(`wake-nudge: ${target.recipient} posted but not polled within ${verifyMs}ms: held, refused or dropped by the session (no verdict on this socket); duty keeps the triage path`);
     }));
     // #11355: a tick that ends with unverified sends releases their stamps — the ledger must
     // mirror the claim release below, or a failed send would silence the duty path for the TTL.
