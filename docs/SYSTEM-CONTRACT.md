@@ -239,6 +239,32 @@ Known overlaps as of CC 2.1.228 (audited; see trantor-cc-2.1.215-compat memory):
   the second was a permission bypass in our own hook).
 - **Unhandled new events** — `DirectoryAdded`, `TaskCreated`/`TaskCompleted`/`TeammateIdle`:
   tracked, unadopted.
+CC 2.1.294-2.1.304 audit (#12093, installed was 2.1.293):
+- **Raw slash commands in UserPromptSubmit (2.1.299)** — hooks now see `/trantor:handoff` or
+  `/foo args`, not the expanded text. prompt-focus would have carded the bare command as a focus;
+  it now skips a bare command and focuses on the arguments. ask-sidecar and await-operator never
+  read the prompt text, so they needed no change (both now have a raw-command test).
+- **Gating hooks must answer in time (2.1.299)** — a PreToolUse/PermissionRequest hook that cannot
+  answer is now refused, which would block the edit. file-claim, file-hold, subagent-start and
+  ask-sidecar have explicit hooks.json timeouts, a watchdog that answers "no decision" if the hub
+  hangs, and a stdin that gives up (hooks/lib/fail-open.mjs). subagent-start's hub write was 8s; now 3s.
+- **`claude -p` defaults (2.1.302)** — the permission mode default and fork subagents
+  changed for `-p`. Claude seats now pass `--permission-mode bypassPermissions` next to
+  `--dangerously-skip-permissions`, so the mode cannot move. Fork subagents being on by default in
+  `-p` is NOT pinned (the operator enables them anyway); a seat's own subagent calls now run in the
+  foreground. Watch seat token use after the update.
+- **Request rows in transcripts (2.1.300)** — the changelog gives no shape for the new row. Readers
+  already ignored unknown types; they now skip huge rows without a full parse (chat.rs probes only
+  `type`; handoff contextUsage and lastAssistantText use a substring test) and widen their tail
+  window once when such rows crowd out the real ones.
+- **Idle compaction (2.1.299) and PreCompact** — the changelog does not say whether PreCompact
+  fires for it or what `trigger` it carries (UNKNOWN). precompact.mjs now writes the handoff but
+  opens no fresh session or prompt for any trigger other than auto/manual. chat.rs already shows an
+  idle-compaction divider.
+- **Checked, no change** — statusline stdin (no field changes listed), SessionStart, MCP, the
+  `--output-format json` envelope, `updatedInput` (we do not return it). New `onFailure: "block"`
+  hook option (2.1.295): not used, our hooks stay fail-open on purpose.
+
 The register gets a line whenever a CC release lands something we half-own. Salvage phases must
 check this register before building — never rebuild what CC now provides for Claude seats.
 
