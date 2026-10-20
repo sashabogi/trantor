@@ -31,7 +31,13 @@ try {
   // Spawn a fresh session UNLESS the heartbeat early-warning already did so for this
   // window (shared guard). The handoff file is always refreshed above regardless.
   const cur = contextUsage(transcript, conf)?.tokens || 0;
-  if (alreadyHandedOff(sessionId, cur)) {
+  // CC 2.1.299 compacts an idle 200K+ session on its own before the prompt cache expires. The
+  // changelog does not say whether PreCompact fires for it or what `trigger` it carries. Nobody is
+  // at the keyboard then, so only the two known triggers may open a fresh session or a prompt; any
+  // other value keeps the handoff file fresh and stops there.
+  if (trigger !== "auto" && trigger !== "manual") {
+    process.stderr.write(`[trantor] compaction trigger "${trigger}" is not auto/manual (idle compaction?) — handoff refreshed only, no fresh session\n`);
+  } else if (alreadyHandedOff(sessionId, cur)) {
     process.stderr.write(`[trantor] fresh session already spawned for this window — handoff refreshed only\n`);
   } else if (maybeSpawn(projectDir, conf)) {
     markHandedOff(sessionId, cur);
