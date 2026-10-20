@@ -6,6 +6,7 @@
 import { readFileSync, writeFileSync, statSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
+import { promptCacheOf } from "./lib/cc-signals.mjs";
 
 const FLOOR_MS = 15_000;
 
@@ -14,11 +15,12 @@ async function main() {
   for await (const c of process.stdin) raw += c;
   const j = JSON.parse(raw);
   const rl = j.rate_limits;
+  const promptCache = promptCacheOf(j);
   // SAFETY: rate_limits is the Claude statusline envelope decoded by JSON.parse above; the check
   // separates "tick carries a rate_limits envelope" (any object, even field-less — it refreshes
   // the stamp below) from "no envelope" (primitives/null — a free exit).
   // oxlint-disable-next-line anti-slop/no-runtime-typeof
-  if (!rl || typeof rl !== "object") return;               // most ticks carry none — free exit
+  if ((!rl || typeof rl !== "object") && !promptCache) return;   // most ticks carry neither — free exit
   const sid = String(j.session_id || j.sessionId || "nosession").replace(/[^A-Za-z0-9_.-]/g, "_").slice(0, 80);
   const dir = join(homedir(), ".agent-bus");
   const stamp = join(dir, `usage-claude-${sid}.stamp`);
@@ -27,17 +29,19 @@ async function main() {
 
   const payload = {
     configDir: process.env.CLAUDE_CONFIG_DIR || null,
-    fiveHour: rl.five_hour ?? rl.fiveHour ?? null,
-    sevenDay: rl.seven_day ?? rl.sevenDay ?? null,
+    fiveHour: rl?.five_hour ?? rl?.fiveHour ?? null,
+    sevenDay: rl?.seven_day ?? rl?.sevenDay ?? null,
     // The fable/model-scoped window normally arrives via the OAuth poller, but accept the
     // statusline-shaped variants too — schema drift degrades instead of going dark.
-    fable: rl.fable_weekly ?? rl.fable ?? null,
+    fable: rl?.fable_weekly ?? rl?.fable ?? null,
   };
-  if (!payload.fiveHour && !payload.sevenDay && !payload.fable) return;
+  const hasWindows = !!(payload.fiveHour || payload.sevenDay || payload.fable);
+  if (!hasWindows && !promptCache) return;
+  if (promptCache) payload.promptCache = promptCache;
   // PRIMARY: the local live cache — lib/balances.mjs merges it and skips the OAuth poll while
   // it is fresh (Orca's isLiveClaudeUsageFresh, docs/RESEARCH-orca-usage.md §2). This is the
   // path the app's footer actually reads (it shells the local CLI, not the hub).
-  try { writeFileSync(join(dir, "usage-claude-live.json"), JSON.stringify({ ts: Date.now(), ...payload })); } catch {}
+  if (hasWindows) try { writeFileSync(join(dir, "usage-claude-live.json"), JSON.stringify({ ts: Date.now(), ...payload })); } catch {}
   // SECONDARY, best-effort: the hub copy, for dashboard surfaces that read hub state.
   const { signedPost } = await import("./lib/api.mjs");
   const { hostId } = await import("../lib/project.mjs");

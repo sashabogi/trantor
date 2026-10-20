@@ -414,7 +414,15 @@ export async function routeAdmin({ req, res, q, P, auth, ctx }) {
         ? { name, usedPct: Math.round(Number(w.used_percentage ?? w.utilization)), resetsAt: w.resets_at ?? null } : null;
       const wins = [["fiveHour", "5h"], ["sevenDay", "7d"], ["fable", "Fable"]]
         .map(([k, n]) => win(b[k], n)).filter(Boolean);
-      if (!wins.length) return json(res, 400, { error: "no usable windows" });
+      // The statusline's prompt_cache stats ride along (or alone) and land on the same Claude entry.
+      const pcIn = b.promptCache;
+      const pcNum = (v) => (Number.isFinite(v) ? v : null);
+      const pc = (pcIn && pcIn instanceof Object && !Array.isArray(pcIn)) ? {
+        warm: pcIn.warm === true, hitRatio: pcNum(pcIn.hitRatio), requests: pcNum(pcIn.requests), misses: pcNum(pcIn.misses),
+        ttl: pcIn.ttl === "1h" || pcIn.ttl === "5m" ? pcIn.ttl : null, recacheTokensIfCold: pcNum(pcIn.recacheTokensIfCold),
+        lastMissCause: pcIn.lastMissCause ? String(pcIn.lastMissCause).slice(0, 40) : null,
+      } : null;
+      if (!wins.length && !pc) return json(res, 400, { error: "no usable windows" });
       const patchSnaps = [(state.balances ||= { ts: 0, by: "", entries: [] })];
       const machine = String(b.machine || "").trim().slice(0, 60);
       if (machine) patchSnaps.push(((state.balancesByMachine ||= {})[machine] ||= { ts: now(), by: "", entries: [], profile: {} }));
@@ -425,12 +433,14 @@ export async function routeAdmin({ req, res, q, P, auth, ctx }) {
       };
       const e = claudeEntry(patchSnaps[patchSnaps.length - 1]);   // dedupe against the most specific copy
       // Same-value posts inside 30s are dropped (the statusline ticks ~3x/sec while streaming).
-      const sig = JSON.stringify(wins);
-      if (e._liveSig === sig && now() - (e.liveTs || 0) < 30_000) return json(res, 200, { ok: true, deduped: true });
+      const sig = JSON.stringify([wins, pc]);
+      if (wins.length && e._liveSig === sig && now() - (e.liveTs || 0) < 30_000) return json(res, 200, { ok: true, deduped: true });
       for (const snap of patchSnaps) {
         const t = claudeEntry(snap);
         for (const w of wins) { const cur = (t.windows ||= []).find(x => x.name === w.name); if (cur) Object.assign(cur, w); else t.windows.push({ ...w }); }
-        t.ok = true; t.liveTs = now(); t._liveSig = sig; t.liveSource = "statusline";
+        // Only live windows stamp liveTs: a cache-only post must not make the OAuth poller skip Claude.
+        if (wins.length) { t.ok = true; t.liveTs = now(); t._liveSig = sig; t.liveSource = "statusline"; }
+        if (pc) t.promptCache = { ...pc, ts: now() };
       }
       markDirty();
       return json(res, 200, { ok: true, windows: wins.length });

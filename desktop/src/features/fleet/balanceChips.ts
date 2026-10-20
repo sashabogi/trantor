@@ -17,7 +17,16 @@ export type BalanceWindow = {
   scoped?: boolean; // a model-scoped window ("Fable") shows its scope name, never a countdown
 };
 
+// Claude Code's prompt_cache stats as the hub stores them (statusline sidechannel).
+export type PromptCacheStats = {
+  warm?: boolean;
+  hitRatio?: number | null;
+  misses?: number | null;
+  lastMissCause?: string | null;
+};
+
 export type BalanceRow = Omit<BalanceEntry, "kind"> & {
+  promptCache?: PromptCacheStats | null;
   kind: BalanceEntry["kind"] | "windows";
   usage?: number | null;
   limit?: number | null;
@@ -127,6 +136,13 @@ function agoLabel(ms: number): string {
   return `${Math.round(hrs / 24)}d`;
 }
 
+/** "prompt cache 94% hit (warm)" for the Claude chip tooltip; empty when the hub has no ratio yet. */
+export function promptCacheLine(pc: PromptCacheStats | null | undefined): string {
+  if (pc?.hitRatio == null) return "";
+  const cause = !pc.warm && pc.lastMissCause ? `, last miss: ${pc.lastMissCause.replace(/_/g, " ")}` : "";
+  return `prompt cache ${Math.round(pc.hitRatio * 100)}% hit (${pc.warm ? "warm" : "cold"}${cause})`;
+}
+
 // A windows row reads as Orca's footer does: one segment per window, "N% used <time-left>",
 // and a model-SCOPED window shows its scope's name instead of a countdown ("37% used Fable" —
 // the time matches the weekly anyway). Tone from LOW (remaining < LOW_QUOTA_PCT) or locked.
@@ -208,6 +224,8 @@ export function chipFrom(e: BalanceRow, opts: ChipOpts = {}): BalanceChip | null
   } else if (e.kind === "windows") {
     const w = windowsInfo(e, now);
     value = w.value; barPct = w.barPct; tone = w.tone; detail = w.tooltip;
+    const pcLine = promptCacheLine(e.promptCache);
+    if (pcLine) detail += ` · ${pcLine}`;
   } else if (e.kind === "quota") {
     const rs = resetShort(e.resetTime);
     if (e.remainingPct != null) {

@@ -61,6 +61,23 @@ try {
   ok("the named machine's 5h window is patched", (await pct("MacMini")) === 77);
   ok("the other machine's window is untouched", (await pct("MacBook")) === 10);
 
+  // #12094: the statusline's prompt_cache stats land on the machine's Claude entry and come back from GET /balances.
+  const cache = { warm: true, hitRatio: 0.94, requests: 14, misses: 2, ttl: "1h", recacheTokensIfCold: 45000, lastMissCause: "tools_changed" };
+  r = await post("/usage/claude", { machine: "MacMini", fiveHour: { used_percentage: 78, resets_at: 1788200000 }, promptCache: cache });
+  ok("a post carrying promptCache is accepted", r.status === 200, String(r.status));
+  const claudeOf = async (m) => (await (await fetch(BASE + "/balances?machine=" + m)).json()).entries.find(e => e.provider === "claude");
+  const mini = await claudeOf("MacMini");
+  ok("GET /balances returns the machine's promptCache", mini?.promptCache?.hitRatio === 0.94 && mini.promptCache.warm === true && mini.promptCache.lastMissCause === "tools_changed", JSON.stringify(mini?.promptCache));
+  ok("the other machine has no promptCache", (await claudeOf("MacBook"))?.promptCache === undefined);
+  ok("the 5h window still patched alongside", mini?.windows?.find(w => w.name === "5h")?.usedPct === 78);
+  r = await post("/usage/claude", { machine: "MacBook", promptCache: { ...cache, hitRatio: 0.5, bogus: "x" } });
+  ok("a cache-only post is accepted", r.status === 200, String(r.status));
+  const book = await claudeOf("MacBook");
+  ok("a cache-only post stores the cache and drops unknown fields", book?.promptCache?.hitRatio === 0.5 && book.promptCache.bogus === undefined);
+  ok("a cache-only post does not stamp the entry live", !book?.liveTs);
+  r = await post("/usage/claude", { machine: "MacBook", promptCache: "junk" });
+  ok("a non-object promptCache with no windows is a 400", r.status === 400);
+
   // Garbage refuses loudly.
   r = await post("/usage/claude", { hello: "nothing here" });
   ok("a payload with no usable windows is a 400", r.status === 400);

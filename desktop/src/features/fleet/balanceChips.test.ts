@@ -2,7 +2,7 @@
 // the pure helper. Pure inputs, pure assertions — no window. Reset short-forms are asserted
 // against Date.now()-relative timestamps so they cannot decay.
 import { describe, expect, it } from "vitest";
-import { chipFrom, isStale, isZombie, sortRows, toneClass, untilLong, type BalanceRow } from "./balanceChips";
+import { chipFrom, isStale, isZombie, promptCacheLine, sortRows, toneClass, untilLong, type BalanceRow } from "./balanceChips";
 
 const row = (r: Partial<BalanceRow>): BalanceRow => ({
   provider: "openrouter", label: "OpenRouter", kind: "prepaid", ok: true, low: false,
@@ -247,6 +247,25 @@ describe("chip order", () => {
     const claude = row({ provider: "claude", kind: "windows", windows: [] });
     const sorted = sortRows([sub, quota, prepaid, claude]).map(e => e.provider);
     expect(sorted).toEqual(["claude", "openrouter", "zai", "kimi"]);
+  });
+});
+
+describe("prompt cache line (#12094)", () => {
+  const claude = (promptCache: BalanceRow["promptCache"]) => row({
+    provider: "claude", label: "Claude", kind: "windows", windows: [{ name: "5h", usedPct: 30 }], promptCache,
+  });
+  it("adds a one-line prompt cache read to the Claude chip tooltip", () => {
+    const c = chipFrom(claude({ warm: true, hitRatio: 0.94 }))!;
+    expect(c.tooltip).toContain("prompt cache 94% hit (warm)");
+  });
+  it("says cold with the last miss cause when the cache went cold", () => {
+    expect(promptCacheLine({ warm: false, hitRatio: 0.5, lastMissCause: "tools_changed" }))
+      .toBe("prompt cache 50% hit (cold, last miss: tools changed)");
+  });
+  it("adds nothing without a ratio", () => {
+    expect(promptCacheLine({ warm: true, hitRatio: null })).toBe("");
+    expect(promptCacheLine(null)).toBe("");
+    expect(chipFrom(claude(undefined))!.tooltip).not.toContain("prompt cache");
   });
 });
 
