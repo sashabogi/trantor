@@ -26,8 +26,8 @@ const RUNNER = readFileSync(new URL("../../bin/crew-runner.mjs", import.meta.url
 // "flag off = today's path byte-identical, proven by test not by reading": the assertions are
 // against the literal strings the runner ships, so a refactor that "tidies" them fails here.
 console.log("\n0. flag off leaves the transcript path byte-identical");
-const CLAUDE_FIRST = 'first: `claude{M} -p "$(cat {P})" --dangerously-skip-permissions`';
-const CLAUDE_NEXT = 'next:  `claude -c{M} -p "$(cat {P})" --dangerously-skip-permissions`';
+const CLAUDE_FIRST = 'first: `claude{M} -p "$(cat {P})" --permission-mode bypassPermissions --dangerously-skip-permissions`';
+const CLAUDE_NEXT = 'next:  `claude -c{M} -p "$(cat {P})" --permission-mode bypassPermissions --dangerously-skip-permissions`';
 ok("the pre-Phase-2a `first` row is untouched", RUNNER.includes(CLAUDE_FIRST));
 ok("the pre-Phase-2a `next` row is untouched — `-c`, no json flags", RUNNER.includes(CLAUDE_NEXT));
 ok("the state row is a THIRD row, not a rewrite of either",

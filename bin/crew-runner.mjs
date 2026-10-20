@@ -265,11 +265,11 @@ const CLI = {
   // the token-scrooge .env so an existing OPENROUTER_API_KEY authenticates with no extra wiring.
   openrouter: { first: `opencode run --dir {DIR}{M} "$(cat {P})"`,
               next:  `opencode run --dir {DIR} -s {SID}{M} "$(cat {P})"`, mflag: " -m ", pinned: true, env: join(homedir(), ".token-scrooge", ".env") },
-  claude:   { first: `claude{M} -p "$(cat {P})" --dangerously-skip-permissions`,
-              next:  `claude -c{M} -p "$(cat {P})" --dangerously-skip-permissions`,
+  claude:   { first: `claude{M} -p "$(cat {P})" --permission-mode bypassPermissions --dangerously-skip-permissions`,
+              next:  `claude -c{M} -p "$(cat {P})" --permission-mode bypassPermissions --dangerously-skip-permissions`,
               // TDD §4.6: a state step is a fresh `claude -p` (no `-c`) carrying the assembled prefix, held
               // to the TurnResult grammar by --json-schema; test/state/test-runner-state.mjs pins the strings.
-              stateNext: `claude{M} -p "$(cat {P})" --dangerously-skip-permissions --output-format json --json-schema "$(cat {S})"`,
+              stateNext: `claude{M} -p "$(cat {P})" --permission-mode bypassPermissions --dangerously-skip-permissions --output-format json --json-schema "$(cat {S})"`,
               mflag: " --model " },
   // DeepSeek Harness: every turn is a fresh session (headless has no resume), so the seat leans on
   // the wake prompt and the board. `trantor connect` builds ~/.dsh/profiles/trantor; no model flag.
