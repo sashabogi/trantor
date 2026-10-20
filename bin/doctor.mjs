@@ -14,6 +14,7 @@ import { sfetchJson } from "../lib/signed-fetch.mjs";
 import { scan } from "../lib/splitbrain.mjs";
 import { resolveSecrets, envFileSecrets, backendFor } from "../lib/secrets.mjs";
 import { resolveStateFlags } from "../lib/state/flags.mjs";
+import { probeClaudeIntegration, HERDR_CLAUDE_INSTALL } from "../lib/herdr-integration.mjs";
 
 const H = homedir();
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
@@ -180,6 +181,17 @@ else {
   Object.keys(st.enabledPlugins || {}).some(k => k.startsWith("agent-bus@") || k.startsWith("trantor@"))
     ? ok("plugin installed")
     : warn("plugin not installed", "claude plugin marketplace add sashabogi/trantor && claude plugin install trantor");
+}
+
+// herdr's own claude integration reports the session id at SessionStart; without it the desktop app
+// cannot tell which session a pane is running. Read-only probe, and an odd answer is "unknown".
+section("herdr (session identity)");
+{
+  const h = probeClaudeIntegration();
+  if (h.state === "absent") note("herdr: skipped (not installed)");
+  else if (h.state === "installed") ok(`herdr claude integration installed (${h.detail})`);
+  else if (h.state === "unknown") note(`herdr claude integration: unknown (${h.detail})`);
+  else warn(h.state === "outdated" ? `herdr claude integration is outdated (${h.detail})` : "herdr claude integration is not installed", HERDR_CLAUDE_INSTALL);
 }
 
 // crew CLIs: installed / wired / authenticated
