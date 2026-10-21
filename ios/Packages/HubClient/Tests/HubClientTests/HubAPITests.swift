@@ -50,6 +50,32 @@ final class HubAPITests: XCTestCase {
         api = HubAPI(baseURL: URL(string: "http://100.79.242.104:4477")!, signer: signer, session: URLSession(configuration: cfg))
     }
 
+    func testDeviceRegistrationAndUnregistrationSignTheJSONBody() async throws {
+        StubURLProtocol.reset { _, _ in .init(status: 200, body: "{}") }
+        let token = String(repeating: "ab", count: 32)
+        try await api.registerDevice(apnsToken: token, environment: "sandbox", bundleId: "ai.trantor.companion",
+                                     name: "ios-test", mutedProjects: ["z", "a"])
+        let (request, body) = try XCTUnwrap(StubURLProtocol.seen.first)
+        XCTAssertEqual(request.url?.path, "/device/register")
+        XCTAssertEqual(request.httpMethod, "POST")
+        XCTAssertEqual(request.value(forHTTPHeaderField: "Content-Type"), "application/json")
+        let json = try XCTUnwrap(JSONSerialization.jsonObject(with: XCTUnwrap(body)) as? [String: Any])
+        XCTAssertEqual(json["apnsToken"] as? String, token)
+        XCTAssertEqual(json["env"] as? String, "sandbox")
+        XCTAssertEqual(json["bundleId"] as? String, "ai.trantor.companion")
+        XCTAssertEqual(json["name"] as? String, "ios-test")
+        XCTAssertEqual(json["mutedProjects"] as? [String], ["a", "z"])
+        XCTAssertNotNil(json["_op"])
+        try assertSignatureValid(request, body)
+        try await api.unregisterDevice(apnsToken: token)
+        let (unregister, unregisterBody) = try XCTUnwrap(StubURLProtocol.seen.last)
+        XCTAssertEqual(unregister.url?.path, "/device/unregister")
+        XCTAssertEqual(unregister.httpMethod, "POST")
+        let unregisterJSON = try XCTUnwrap(JSONSerialization.jsonObject(with: XCTUnwrap(unregisterBody)) as? [String: Any])
+        XCTAssertEqual(unregisterJSON["apnsToken"] as? String, token)
+        try assertSignatureValid(unregister, unregisterBody)
+    }
+
     func testGetUsesPathQueryAndSignedHeaders() async throws {
         StubURLProtocol.reset { _, _ in .init(status: 200, body: #"{"tasks":[{"id":1,"title":"a"}],"fields":"slim"}"#) }
         let cards = try await api.tasks(project: "my proj")

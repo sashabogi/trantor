@@ -74,6 +74,13 @@ try {
   await sleep(80);
   const disk = JSON.parse(readFileSync(join(dir, "bus.json"), "utf8"));
   ok("JSON store persists the device collection", disk.devices?.length === 2 && disk.devices.some(d => d.apns_token === tokenB));
+
+  // The same phone re-paired: a new key, the same APNs token. The newest registration wins.
+  const repaired = await signed(hub.base, other, "POST", "/device/register", { apnsToken: tokenA, env: "sandbox", name: "re-paired" });
+  ok("a re-paired phone takes its token over from the old identity", repaired.status === 200 && repaired.json.device?.pubkey === other.pubkey, JSON.stringify(repaired.json));
+  const oldOwner = await signed(hub.base, owner, "GET", "/devices");
+  ok("the old identity no longer holds the token", oldOwner.json.devices?.length === 0);
+  await sleep(80);
 } finally {
   await hub.stop();
 }
@@ -84,7 +91,7 @@ try {
   ok("JSON device registry survives restart", restored.json.devices?.length === 1 && restored.json.devices[0].name === "reader-renamed");
   const removed = await signed(hub.base, reader, "POST", "/device/unregister", { apnsToken: tokenB });
   ok("owner can unregister its own device", removed.status === 200 && removed.json.ok === true);
-  const remaining = await signed(hub.base, owner, "GET", "/devices");
+  const remaining = await signed(hub.base, other, "GET", "/devices");
   ok("unregister removes only the matching device", remaining.json.devices?.length === 1 && remaining.json.devices[0].apns_token === tokenA);
 } finally {
   await hub.stop();

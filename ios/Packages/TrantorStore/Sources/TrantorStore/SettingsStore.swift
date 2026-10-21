@@ -33,6 +33,15 @@ public final class SettingsStore {
     public private(set) var scopes: [Scope] = []
     public private(set) var pairing: PairingState = .idle
 
+    public static var defaultRequireBiometrics: Bool {
+        #if targetEnvironment(simulator)
+        false
+        #else
+        true
+        #endif
+    }
+
+    public var requireBiometrics: Bool { didSet { defaults.set(requireBiometrics, forKey: Keys.biometrics) } }
     public var notifyHolds: Bool { didSet { defaults.set(notifyHolds, forKey: Keys.notifyHolds) } }
     public var notifyProposals: Bool { didSet { defaults.set(notifyProposals, forKey: Keys.notifyProposals) } }
     public var notifyMessages: Bool { didSet { defaults.set(notifyMessages, forKey: Keys.notifyMessages) } }
@@ -43,6 +52,7 @@ public final class SettingsStore {
     private enum Keys {
         static let hub = "hubURL", name = "identityName", scopes = "scopes"
         static let notifyHolds = "notifyHolds", notifyProposals = "notifyProposals", notifyMessages = "notifyMessages"
+        static let biometrics = "requireBiometrics"
         static let muted = "mutedProjects"
     }
 
@@ -57,6 +67,7 @@ public final class SettingsStore {
         hubURL = defaults.string(forKey: Keys.hub).flatMap(URL.init(string:))
         identityName = defaults.string(forKey: Keys.name) ?? ""
         if let data = defaults.data(forKey: Keys.scopes), let s = try? JSONDecoder().decode([Scope].self, from: data) { scopes = s }
+        requireBiometrics = defaults.object(forKey: Keys.biometrics) as? Bool ?? Self.defaultRequireBiometrics
         notifyHolds = defaults.object(forKey: Keys.notifyHolds) as? Bool ?? true
         notifyProposals = defaults.object(forKey: Keys.notifyProposals) as? Bool ?? true
         notifyMessages = defaults.object(forKey: Keys.notifyMessages) as? Bool ?? true

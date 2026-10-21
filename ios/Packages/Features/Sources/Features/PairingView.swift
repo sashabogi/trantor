@@ -2,9 +2,12 @@ import SwiftUI
 import TrantorDesign
 import TrantorStore
 import UIKit
+import VisionKit
 
 public struct PairingView: View {
     @Environment(AppModel.self) private var model
+    @State private var scanning = false
+    @State private var scanMessage: String?
     @State private var hub = ""
     @State private var token = ""
     @State private var deviceName = SettingsStore.defaultDeviceName(UIDevice.current.model)
@@ -29,6 +32,16 @@ public struct PairingView: View {
                     Eyebrow("Invite token")
                     WellField("Invite token", text: $token, mono: true)
                         .textInputAutocapitalization(.never).autocorrectionDisabled()
+                    Button("Scan QR", systemImage: "qrcode.viewfinder") {
+                        if DataScannerViewController.isSupported && DataScannerViewController.isAvailable {
+                            scanning = true
+                        } else {
+                            scanMessage = "Camera scanning is unavailable. Paste your invite link below."
+                        }
+                    }.buttonStyle(.ghost)
+                    if let scanMessage {
+                        Text(scanMessage).font(.tCallout).foregroundStyle(Palette.text2)
+                    }
                     Button("Paste from clipboard", systemImage: "doc.on.clipboard") { pasteInvite() }
                         .buttonStyle(.ghost)
                 }
@@ -68,6 +81,23 @@ public struct PairingView: View {
             } else if case .failed = state, !settings.isPaired {
                 model.showPairingSummary = false
             }
+        }
+        .sheet(isPresented: $scanning) {
+            NavigationStack {
+                InviteScanner { text in
+                    guard let url = URL(string: text), let link = PairingLink.parse(url) else {
+                        scanMessage = "That QR code is not a Trantor invite. Scan your hub's pairing code or paste its link."
+                        scanning = false
+                        return
+                    }
+                    hub = link.hub; token = link.token
+                    scanMessage = nil; scanning = false
+                } onFailure: { message in
+                    scanMessage = message; scanning = false
+                }
+                .navigationTitle("Scan pairing QR")
+                .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Cancel") { scanning = false } } }
+            }.trantorTheme()
         }
         .onAppear { applyPending() }
         .onChange(of: model.pendingLink) { _, _ in applyPending() }
@@ -117,4 +147,52 @@ public struct PairingView: View {
 
 #Preview("Pairing") {
     NavigationStack { PairingView() }.environment(DemoData.model()).trantorTheme()
+}
+
+private struct InviteScanner: UIViewControllerRepresentable {
+    var onScan: (String) -> Void
+    var onFailure: (String) -> Void
+
+    func makeCoordinator() -> Coordinator { Coordinator(parent: self) }
+
+    func makeUIViewController(context: Context) -> DataScannerViewController {
+        let scanner = DataScannerViewController(recognizedDataTypes: [.barcode(symbologies: [.qr])],
+                                                recognizesMultipleItems: false,
+                                                isGuidanceEnabled: true, isHighlightingEnabled: true)
+        scanner.delegate = context.coordinator
+        do { try scanner.startScanning() }
+        catch {
+            Task { @MainActor in onFailure("Could not start the camera. Paste your invite link instead.") }
+        }
+        return scanner
+    }
+
+    func updateUIViewController(_ controller: DataScannerViewController, context: Context) {}
+
+    static func dismantleUIViewController(_ controller: DataScannerViewController, coordinator: Coordinator) {
+        controller.stopScanning()
+    }
+
+    final class Coordinator: NSObject, DataScannerViewControllerDelegate {
+        let parent: InviteScanner
+        private var consumed = false
+        init(parent: InviteScanner) { self.parent = parent }
+
+        func dataScanner(_ scanner: DataScannerViewController, didAdd addedItems: [RecognizedItem], allItems: [RecognizedItem]) {
+            guard !consumed else { return }
+            for item in addedItems {
+                if case .barcode(let barcode) = item, let value = barcode.payloadStringValue {
+                    consumed = true
+                    scanner.stopScanning()
+                    parent.onScan(value)
+                    return
+                }
+            }
+        }
+
+        func dataScanner(_ scanner: DataScannerViewController, becameUnavailableWithError error: DataScannerViewController.ScanningUnavailable) {
+            scanner.stopScanning()
+            parent.onFailure("Camera scanning is unavailable. Paste your invite link instead.")
+        }
+    }
 }

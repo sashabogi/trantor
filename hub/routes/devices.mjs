@@ -29,8 +29,11 @@ export async function routeDevices({ req, res, q, P, auth, ctx }) {
   const requestedEnv = String(b.env || "production").toLowerCase();
   const env = requestedEnv === "development" ? "sandbox" : requestedEnv;
   if (env !== "sandbox" && env !== "production") return json(res, 400, { error: "env must be sandbox or production" });
-  const other = state.devices.find(d => d.apns_token === token && d.pubkey !== pubkey);
-  if (other) return json(res, 409, { error: "apnsToken is registered to another identity" });
+  // A token is one physical device. Re-pairing makes a new key for the same phone, so the newest
+  // registration wins and the old identity's row goes; otherwise a re-paired phone loses push.
+  const before = state.devices.length;
+  state.devices = state.devices.filter(d => d.apns_token !== token || d.pubkey === pubkey);
+  if (state.devices.length !== before) markDirty();
   const existing = state.devices.find(d => d.apns_token === token && d.pubkey === pubkey);
   const muted = Array.isArray(b.muted_projects) ? b.muted_projects : b.mutedProjects;
   const device = {

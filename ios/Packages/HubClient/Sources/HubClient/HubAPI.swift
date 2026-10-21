@@ -154,13 +154,17 @@ public final class HubAPI: HubServing, @unchecked Sendable {
         ])
     }
 
-    /// APNs registration. The hub route is card #12114 and may not exist yet, so callers guard it
-    /// (see PushRegistrar); a 404 surfaces as `.notFound`.
-    public func registerDevice(apnsToken: String, environment: String, name: String) async throws {
+    public func registerDevice(apnsToken: String, environment: String, bundleId: String,
+                               name: String, mutedProjects: Set<String>) async throws {
         _ = try await post("/device/register", [
             "apnsToken": .string(apnsToken), "env": .string(environment),
-            "bundleId": .string("ai.trantor.companion"), "name": .string(name),
+            "bundleId": .string(bundleId), "name": .string(name),
+            "mutedProjects": .array(mutedProjects.sorted().map(JSONValue.string)),
         ])
+    }
+
+    public func unregisterDevice(apnsToken: String) async throws {
+        _ = try await post("/device/unregister", ["apnsToken": .string(apnsToken)])
     }
 
     // MARK: Transport

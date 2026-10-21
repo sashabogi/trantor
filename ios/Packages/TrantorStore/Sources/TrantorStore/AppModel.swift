@@ -27,12 +27,16 @@ public final class AppModel {
     /// Paired with a hub, or running the demo.
     public var isReady: Bool { settings.isPaired || isDemo }
 
+    public private(set) var isUnpairing = false
+    public var unregisterDevice: (() async throws -> Void)?
     private let cache: StoreCache
     private var client: HubServing?
 
-    public init(settings: SettingsStore = SettingsStore(), cache: StoreCache = .default) {
+    public init(settings: SettingsStore = SettingsStore(), cache: StoreCache = .default,
+                authenticator: any Authenticator = DeviceAuthenticator()) {
         self.settings = settings; self.cache = cache
-        decisions = DecisionsStore(cache: cache)
+        decisions = DecisionsStore(cache: cache, authenticator: authenticator)
+        decisions.requiresAuthentication = { [weak settings] in settings?.requireBiometrics ?? true }
         projects = ProjectsStore(cache: cache)
         board = BoardStore(cache: cache)
         feed = FeedStore(cache: cache)
@@ -43,12 +47,14 @@ public final class AppModel {
     }
 
     /// Previews and tests: every store talks to `hub`.
-    public init(stub hub: HubServing, identity: String = "ios-preview", demo: Bool = false) {
+    public init(stub hub: HubServing, identity: String = "ios-preview", demo: Bool = false,
+                authenticator: any Authenticator = DeviceAuthenticator()) {
         isDemo = demo
         settings = SettingsStore(defaults: UserDefaults(suiteName: "preview-\(UUID().uuidString)") ?? .standard, keyStore: InMemoryKeyStore())
         cache = StoreCache(directory: nil)
-        decisions = DecisionsStore(cache: cache); projects = ProjectsStore(cache: cache); board = BoardStore(cache: cache)
+        decisions = DecisionsStore(cache: cache, authenticator: authenticator); projects = ProjectsStore(cache: cache); board = BoardStore(cache: cache)
         feed = FeedStore(cache: cache); inbox = InboxStore(cache: cache); fleet = FleetStore(cache: cache); cost = CostStore(cache: cache)
+        decisions.requiresAuthentication = { [weak settings] in settings?.requireBiometrics ?? true }
         bind(hub, identity: identity)
     }
 
@@ -91,7 +97,13 @@ public final class AppModel {
 
     public func stopFeed() { feed.stop() }
 
-    public func unpair() {
+    /// Forgetting the hub always works, even when the hub can't be reached: telling it to stop
+    /// pushing is best effort, and a later pair from this phone replaces the old registration.
+    public func unpair() async {
+        guard !isUnpairing else { return }
+        isUnpairing = true
+        defer { isUnpairing = false }
+        try? await unregisterDevice?()
         feed.stop()
         settings.unpair()
         client = nil

@@ -4,18 +4,14 @@ import TrantorStore
 import UIKit
 import UserNotifications
 
-/// Gets the APNs token and, once the hub can take it, tells the hub.
-/// The hub route (`POST /device/register`) is card #12114 and does not exist yet, so the upload is
-/// switched off. Nothing here can crash the app: every failure is swallowed and logged.
+@MainActor
 enum PushRegistrar {
-    /// Flip when #12114 ships `POST /device/register`.
-    static let hubSupportsDeviceRegistration = false
-
+    private static var registration: Task<Void, Never>?
     private static let tokenKey = "apnsTokenHex"
 
     static var storedToken: String? { UserDefaults.standard.string(forKey: tokenKey) }
 
-    @MainActor static func requestAuthorizationAndRegister() async {
+    static func requestAuthorizationAndRegister() async {
         let center = UNUserNotificationCenter.current()
         let granted = (try? await center.requestAuthorization(options: [.alert, .sound, .badge])) ?? false
         if granted { UIApplication.shared.registerForRemoteNotifications() }
@@ -30,18 +26,34 @@ enum PushRegistrar {
         NSLog("Trantor: remote notification registration failed: \(error.localizedDescription)")
     }
 
-    @MainActor static func registerWithHubIfPossible(model: AppModel) async {
-        guard hubSupportsDeviceRegistration, let token = storedToken,
+    static func registerWithHubIfPossible(model: AppModel) async {
+        guard !model.isUnpairing, let token = storedToken,
+              let bundleId = Bundle.main.bundleIdentifier,
               let api = model.settings.makeClient() as? HubAPI else { return }
         #if DEBUG
-        let environment = "development"
+        let environment = "sandbox"
         #else
         let environment = "production"
         #endif
-        do {
-            try await api.registerDevice(apnsToken: token, environment: environment, name: model.settings.identityName)
-        } catch {
-            NSLog("Trantor: device registration failed: \(error)")
+        let previous = registration
+        let name = model.settings.identityName
+        let mutedProjects = model.settings.mutedProjects
+        let task = Task {
+            await previous?.value
+            do {
+                try await api.registerDevice(apnsToken: token, environment: environment, bundleId: bundleId,
+                                             name: name, mutedProjects: mutedProjects)
+            } catch {
+                NSLog("Trantor: device registration failed: \(error)")
+            }
         }
+        registration = task
+        await task.value
+    }
+
+    static func unregisterFromHub(model: AppModel) async throws {
+        await registration?.value
+        guard let token = storedToken, let api = model.settings.makeClient() as? HubAPI else { return }
+        try await api.unregisterDevice(apnsToken: token)
     }
 }

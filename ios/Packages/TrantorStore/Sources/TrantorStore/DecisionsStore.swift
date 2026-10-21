@@ -53,11 +53,15 @@ public final class DecisionsStore {
     /// The phone's identity name: its mailbox, and the author on gate resolutions and replies.
     public var identity: String = ""
 
+    public var requiresAuthentication: () -> Bool = { true }
+    private let authenticator: any Authenticator
     private let cache: StoreCache
 
     public var pendingCount: Int { items.count }
 
-    public init(api: HubServing? = nil, identity: String = "", cache: StoreCache = StoreCache(directory: nil)) {
+    public init(api: HubServing? = nil, identity: String = "", cache: StoreCache = StoreCache(directory: nil),
+                authenticator: any Authenticator = DeviceAuthenticator()) {
+        self.authenticator = authenticator
         self.api = api; self.identity = identity; self.cache = cache
         if let c = cache.load([DecisionCacheRow].self, name: "decisions") {
             items = Self.merge(holds: c.value.compactMap(\.hold), proposals: c.value.compactMap(\.proposal),
@@ -137,6 +141,11 @@ public final class DecisionsStore {
         guard let api else { actions[id] = .failed("Not connected to a hub."); return }
         if case .pending? = actions[id] { return }          // a second tap while waiting does nothing
         actions[id] = .pending
+        if requiresAuthentication(), !(await authenticator.authenticate()) {
+            actions[id] = .failed("Not confirmed")
+            return
+        }
+        guard !Task.isCancelled else { actions[id] = .failed("Not confirmed"); return }
         do {
             try await action(api)
             actions[id] = nil

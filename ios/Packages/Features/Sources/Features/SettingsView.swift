@@ -39,7 +39,7 @@ public struct SettingsView: View {
                     Toggle("Proposals and verify gates", isOn: $settings.notifyProposals)
                     Hairline()
                     Toggle("Messages to me", isOn: $settings.notifyMessages)
-                    Text("Push needs hub support that is not live yet. These switches are saved for when it is.")
+                    Text("These switches are saved. Use project mutes below to control push notifications.")
                         .font(.tCaption).foregroundStyle(Palette.textDim)
                 }
                 Panel("Mute projects") {
@@ -58,6 +58,8 @@ public struct SettingsView: View {
                     }
                 }
                 Panel("Device access") {
+                    Toggle("Confirm decisions with Face ID or passcode", isOn: $settings.requireBiometrics)
+                    Hairline()
                     Button("Pair again or remove this device", role: .destructive) { confirmUnpair = true }
                         .buttonStyle(.danger)
                     Text("This deletes the key from this device. The hub keeps the identity until an owner revokes it.")
@@ -69,7 +71,9 @@ public struct SettingsView: View {
         .stage()
         .navigationTitle("Settings")
         .confirmationDialog("Forget this hub?", isPresented: $confirmUnpair, titleVisibility: .visible) {
-            Button("Forget and delete key", role: .destructive) { model.unpair() }
+            Button("Forget and delete key", role: .destructive) {
+                Task { await model.unpair() }
+            }
             Button("Cancel", role: .cancel) {}
         }
     }
