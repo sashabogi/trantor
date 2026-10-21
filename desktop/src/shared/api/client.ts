@@ -133,6 +133,14 @@ export type HubHealth = {
   duty?: DutyHealth;
 };
 
+/** POST /invite's answer: the token plus the scopes the hub actually stored (it may fold a role it does not know down to read). */
+export type PairInviteResponse = {
+  ok: boolean;
+  token: string;
+  scopes: { project: string; role: string }[];
+  expiresAt: number;
+};
+
 export class HubClient {
   constructor(readonly baseUrl: string) {}
 
@@ -251,6 +259,15 @@ export class HubClient {
   /** THE human act in the governance loop — owner-signed via hub_request; nothing auto-approves. */
   decideProposal(id: number, status: "approved" | "denied", note?: string): Promise<{ ok: boolean; proposal: Proposal }> {
     return this.request("POST", "/proposal/decide", { id, status, note });
+  }
+
+  /**
+   * #12115 — the phone-pairing invite, owner-signed like every other write. The hub ECHOES the
+   * scopes it stored (an older hub folds an unknown role down to read), so callers check scopes[0].role.
+   */
+  pairInvite(role: "approver" | "owner" = "approver") {
+    return this.request<PairInviteResponse, { scopes: { project: string; role: string }[]; ttlSec: number; kind: string }>(
+      "POST", "/invite", { scopes: [{ project: "*", role }], ttlSec: 600, kind: "human" });
   }
 
   /**

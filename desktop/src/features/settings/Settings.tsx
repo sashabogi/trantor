@@ -10,6 +10,7 @@ import { Avatar } from "../../shared/Avatar";
 import { notificationsEnabled, setNotificationsEnabled } from "../../shared/notify";
 import { AccountsPane } from "./providers/AccountsPane";
 import { AgentsPane } from "./agents/AgentsPane";
+import { PairPhone } from "./PairPhone";
 import { SettingsBoundary } from "./SettingsBoundary";
 import { onboardingApi } from "../onboarding/onboardingApi";
 
@@ -130,6 +131,12 @@ function SettingsContent({ me, update: updateFromShell, projects = [], project =
               </div>
             </div>
           </div>
+        </section>
+
+        <section className="mb-8">
+          <h2 className="tr-sec-title">Phone</h2>
+          <p className="tr-sec-sub">The companion app enrolls itself from a QR — one invite, single use, ten minutes.</p>
+          <PairPhone hubBase={hubs[0]?.url ?? ""} />
         </section>
 
         <section className="mb-8">

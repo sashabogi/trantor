@@ -187,6 +187,7 @@ switch (cmd) {
     else console.error(`Invite failed: ${j.error || r.statusText}`);
     break;
   }
+  case "pair":    run("bin/pair.mjs"); break;
   case "enroll": {
     const token = args[0];
     if (!token) { console.error("usage: trantor enroll <token>"); process.exit(1); }
@@ -256,6 +257,7 @@ switch (cmd) {
   trantor down        tear the crew down (kills processes, closes windows, no dialogs)
   trantor prune       drop dead crew-window tracking rows (ghost workspaces/panes) without spawning anything
   trantor ui          open the live dashboard (board + flow views)
+  trantor pair        pair a phone: mint a trantor://enroll link for the companion app — [--role owner] [--sim] [--json]
   trantor app         the DESKTOP app: status | install | update — pulls the latest DMG from GitHub Releases
   trantor catchup     "where are we?" — the continuous board + git, with a synthesized brief
   trantor agents      what this session's sub-agents did (task · returned? · files written · survived on disk) — [<sessionId>] [--json]
