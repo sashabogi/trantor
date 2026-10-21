@@ -85,3 +85,19 @@ The first test is a signature vector checked both ways: Swift signs fixed inputs
 4. Just you, or teammates later (Tailscale, bundle id, separate repo)?
 5. Which iPhone and iPadOS versions, to set the minimum?
 6. Bundle id `ai.trantor.companion`, or another domain you own?
+
+## Build
+
+Scaffold lives in `ios/` (card #12079). The `.xcodeproj` is generated and not committed.
+
+```
+cd ios && xcodegen generate
+xcodebuild -project TrantorCompanion.xcodeproj -scheme TrantorCompanion \
+  -destination 'platform=iOS Simulator,name=iPhone 17 Pro' CODE_SIGNING_ALLOWED=NO build
+# same with name='iPad Pro 13-inch (M5)'; replace `build` with `test` for the app tests
+for p in TrantorCore HubClient TrantorStore; do (cd Packages/$p && swift test); done
+node Packages/HubClient/Tests/verify-vector.mjs   # the hub's real verifier accepts the Swift signature
+TRANTOR_WRITE_VECTOR=1 swift test                  # in Packages/HubClient: regenerate the fixture
+```
+
+Not done in the scaffold: push (the device registration call is switched off in `PushRegistrar` until #12114), the QR scanner, Face ID gating, the stream scoping and `approver` role on the hub.
