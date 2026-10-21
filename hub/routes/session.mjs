@@ -204,7 +204,10 @@ export function createSessionRuntime({ state, markDirty, appendEvent, pushEventT
     // session, toolId, picks and other so the claiming desktop has everything it needs.
     const promptView = (p) => {
       const view = { id: p.id, project: p.project, text: p.text, by: p.by, ts: p.ts, status: p.status, kind: p.kind || "prompt" };
-      if (p.kind === "answer") { view.session = p.session; view.toolId = p.toolId; view.picks = p.picks; view.other = p.other; }
+      if (p.kind === "answer") {
+        view.session = p.session; view.toolId = p.toolId; view.picks = p.picks;
+        if (p.other && p.other.trim()) view.other = p.other;   // absent, never "", when nothing was typed
+      }
       return view;
     };
 

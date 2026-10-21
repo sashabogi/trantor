@@ -48,3 +48,11 @@ fn other_walks_past_options_and_preserves_text_bytes() {
         );
     }
 }
+
+// Regression from the live drill: the hub sent `other: ""` beside picks [0], the blank text won,
+// and the relay typed nothing ("No answer was selected").
+#[test]
+fn blank_other_is_ignored_and_the_pick_is_typed() {
+    assert_eq!(answer_keystrokes(question(false), vec![0], Some(String::new())), "\r");
+    assert_eq!(answer_keystrokes(question(false), vec![1], Some("   ".into())), "\x1b[B\r");
+}

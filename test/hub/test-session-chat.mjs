@@ -163,6 +163,8 @@ try {
   ok("claim carries the full answer payload",
     r.status === 200 && r.json.prompt?.kind === "answer" && r.json.prompt.toolId === "toolu_ask1"
     && JSON.stringify(r.json.prompt.picks) === "[1,2]" && r.json.prompt.session === "s9", JSON.stringify(r.json.prompt));
+  // live drill regression: a picks-only answer must not carry other:"" (the relay read it as typed text)
+  ok("a picks-only answer carries no other field", !("other" in (r.json.prompt || {})), JSON.stringify(r.json.prompt));
   r = await sFetch(base, owner, "POST", "/session/prompt/ack", { id: answerId, outcome: "stale", error: "That question was already answered or replaced." });
   ok("ack stale lands as failed with the error kept", r.status === 200 && r.json.status === "failed", JSON.stringify(r.json));
   r = await sFetch(base, phone, "GET", `/session/prompt?id=${answerId}`);

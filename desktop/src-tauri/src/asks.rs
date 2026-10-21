@@ -71,6 +71,8 @@ pub(crate) fn answer_keystrokes(
     other: Option<String>,
 ) -> String {
     const DOWN: &str = "\x1b[B";
+    // a blank "other" is no free text: the hub sends "" with plain picks (#12136 drill)
+    let other = other.filter(|text| !text.trim().is_empty());
     if let Some(text) = other {
         return if text.trim().is_empty() {
             String::new()
