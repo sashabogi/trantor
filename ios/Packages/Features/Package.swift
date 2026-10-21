@@ -11,5 +11,6 @@ let package = Package(
     targets: [
         .target(name: "Features", dependencies: ["TrantorCore", "HubClient", "TrantorStore", "TrantorDesign"],
                 swiftSettings: [.enableExperimentalFeature("StrictConcurrency")]),
+        .testTarget(name: "FeaturesTests", dependencies: ["Features", "HubClient", "TrantorStore"]),
     ]
 )

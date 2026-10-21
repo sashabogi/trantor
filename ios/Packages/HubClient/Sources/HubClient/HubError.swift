@@ -29,7 +29,7 @@ public enum HubError: Error, Equatable, Sendable {
         case .notFound(let m): return m.isEmpty ? "Not found." : m
         case .badRequest(let m): return m.isEmpty ? "The hub refused the request." : m
         case .offline: return "Can't reach the hub. Check that Tailscale is connected."
-        case .timeout: return "The hub did not answer in time."
+        case .timeout: return "The hub did not answer. Is Tailscale on?"
         case .server(_, let m): return m.isEmpty ? "The hub had an error." : m
         case .decoding(let m): return "Unexpected answer from the hub: \(m)"
         case .invalidURL: return "That hub address is not valid."
