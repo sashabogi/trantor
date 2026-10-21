@@ -63,11 +63,12 @@ The operator asked to see the orchestrator's full chat and drive the project fro
 
 **Hub (routes; scope = the project; the desktop signs as the operator's owner key):**
 
-- `POST /session/chat` (write) `{project, session, total, turns:[{idx, role, blocks:[{kind, text, tool}], queued?}], meta:{working, model, context}}`: the desktop publishes turns decoded by `chat.rs` (never a second decoder), as a delta from the hub's `have`. The answer is `{ok, have}`. The hub keeps the last 400 turns per project in memory. A hub restart answers `have: 0` and the desktop resends its window. Not written to the event log.
+- `POST /session/chat` (write) `{project, session, total, turns:[{idx, role, blocks:[{kind, text, tool}], queued?}], meta:{working, model, context}}`: the desktop publishes turns decoded by `chat.rs` (never a second decoder), as a delta from the hub's `have`. The answer is `{ok, have}`. `idx` is the 0-based position of the DECODED turn in the session's full decode (not a raw transcript row), `total` is the decoded turn count, and `have` is the hub's count (highest idx + 1). The last turn can grow while the assistant writes, so the desktop resends from the lowest changed idx and the hub replaces by idx. A different `session` than the hub holds resets that project's mirror (handoff or compaction), and the desktop then sends its whole window. The hub keeps the last 400 turns per project in memory. A hub restart answers `have: 0` and the desktop resends its window. Not written to the event log.
 - `GET /session/chat?project=&after=<idx>` (read): `{session, total, turns (idx > after, at most 200), meta, updatedAt, host}`, with an empty `turns` when nothing is newer.
 - Stream: `chat.updated {project, total, working}` goes to `/stream?events=1` readers who can read the project. It is pushed live, never appended to the log (it would flood the FEED).
 - `POST /session/prompt` (write) `{project, text (<= 8000 chars), _op}` answers `{id, status: "queued"}`, appends `chat.prompt.queued` (by the phone's identity, text truncated to 500) and pushes `chat.prompt {id, project}` live.
-- `POST /session/prompt/claim` (owner) `{id, host}`: the first claim wins (200), later ones get 409.
+- `GET /session/prompts?project=&status=queued` (owner) `{prompts:[{id, project, text, by, ts, status}]}`: what the desktop picks up at boot and after a stream reconnect.
+- `POST /session/prompt/claim` (owner) `{id, host}`: the first claim wins with `200 {ok, prompt:{id, project, text, by, ts}}` (the full text goes only to the claimer); later claims get 409.
 - `POST /session/prompt/ack` (owner) `{id, outcome: delivered|blocked|not_ready|stalled|no_agent, error}` appends `chat.prompt.delivered` or `chat.prompt.failed`.
 - `GET /session/prompt?id=` (read): `{id, status: queued|claimed|delivered|failed|expired, outcome, error}`. A prompt still queued after 120 s expires with "No Mac is relaying this project. Is the Trantor app open?".
 
