@@ -3,6 +3,9 @@ import TrantorCore
 
 /// Everything the app asks of the hub. Stores depend on this, so tests can stub it.
 public protocol HubServing: Sendable {
+    func chat(project: String, after: Int) async throws -> ChatSnapshot
+    func sendPrompt(project: String, text: String) async throws -> PromptStatus
+    func promptStatus(id: String) async throws -> PromptStatus
     func health() async throws -> HealthInfo
     func enroll(token: String, name: String) async throws -> EnrollResult
     func projects() async throws -> [Project]
@@ -39,6 +42,19 @@ public final class HubAPI: HubServing, @unchecked Sendable {
 
     public init(baseURL: URL, signer: Signer, session: URLSession = .shared) {
         self.baseURL = baseURL; self.signer = signer; self.session = session
+    }
+
+    public func chat(project: String, after: Int) async throws -> ChatSnapshot {
+        try await get(ChatSnapshot.self, "/session/chat", ["project": project, "after": String(after)])
+    }
+
+    public func sendPrompt(project: String, text: String) async throws -> PromptStatus {
+        let data = try await post("/session/prompt", ["project": .string(project), "text": .string(text)])
+        return try decode(PromptStatus.self, data)
+    }
+
+    public func promptStatus(id: String) async throws -> PromptStatus {
+        try await get(PromptStatus.self, "/session/prompt", ["id": id])
     }
 
     // MARK: Reads

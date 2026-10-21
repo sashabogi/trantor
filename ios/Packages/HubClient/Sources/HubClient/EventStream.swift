@@ -39,6 +39,7 @@ public struct SSEParser: Sendable {
 public enum StreamUpdate: Sendable {
     case connected
     case event(HubEvent)
+    case chat(ChatSignal)
     case disconnected(retryIn: TimeInterval)
 }
 
@@ -88,6 +89,14 @@ public final class EventStream: @unchecked Sendable {
         }
     }
 
+    public static func chatSignal(_ frame: SSEParser.Frame) -> ChatSignal? {
+        guard let body = try? JSONDecoder().decode(JSONValue.self, from: Data(frame.data.utf8)) else { return nil }
+        let type = frame.event == "ev" ? body["type"]?.stringValue : frame.event
+        guard type == "chat.updated" || type == "chat.prompt",
+              let project = body["project"]?.stringValue, !project.isEmpty else { return nil }
+        return ChatSignal(project: project, promptID: type == "chat.prompt" ? body["id"]?.stringValue : nil)
+    }
+
     private func listen(_ last: inout Int, attempt: inout Int, continuation: AsyncStream<StreamUpdate>.Continuation) async throws {
         let wire = HubAPI.wirePath("/stream", [("events", "1"), ("session", sessionName)])
         guard let url = URL(string: baseURL.absoluteString.trimmingSuffix("/") + wire) else { throw HubError.invalidURL }
@@ -110,9 +119,13 @@ public final class EventStream: @unchecked Sendable {
             var line = String(decoding: buffer, as: UTF8.self)
             buffer.removeAll(keepingCapacity: true)
             if line.hasSuffix("\r") { line.removeLast() }
-            guard let frame = parser.feed(line: line), frame.event == "ev",
-                  let ev = try? JSONDecoder().decode(HubEvent.self, from: Data(frame.data.utf8)) else { continue }
-            if ev.id > last { last = ev.id; continuation.yield(.event(ev)) }
+            guard let frame = parser.feed(line: line) else { continue }
+            if let signal = Self.chatSignal(frame) {
+                continuation.yield(.chat(signal))
+            } else if frame.event == "ev",
+                      let ev = try? JSONDecoder().decode(HubEvent.self, from: Data(frame.data.utf8)), ev.id > last {
+                last = ev.id; continuation.yield(.event(ev))
+            }
         }
         throw HubError.offline(op: nil)     // the server closed the stream: reconnect
     }

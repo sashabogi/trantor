@@ -23,7 +23,7 @@ public struct ProjectsView: View {
         }
         .stage()
         .navigationTitle("Projects")
-        .navigationDestination(for: String.self) { BoardView(project: $0) }
+        .navigationDestination(for: String.self) { ProjectView(project: $0) }
         .refreshable { await store.refresh() }
     }
 }

@@ -158,15 +158,18 @@ public final class FeedStore {
 
     /// Follow the live stream. `updates` is built from the current `lastEventID`, so it can be a real
     /// `EventStream` or a scripted one in tests. Replaces any stream already running.
-    public func start(updates: @escaping (Int) -> AsyncStream<StreamUpdate>) {
+    public func start(updates: @escaping (Int) -> AsyncStream<StreamUpdate>, onChat: @escaping (ChatSignal?) -> Void = { _ in }) {
         stop()
         let since = lastEventID
         task = Task { [weak self] in
             for await u in updates(since) {
                 guard let self, !Task.isCancelled else { return }
                 switch u {
-                case .connected: self.connection = .live; self.freshness.fresh()
-                case .event(let e): self.ingest([e])
+                case .connected: self.connection = .live; self.freshness.fresh(); onChat(nil)
+                case .event(let e):
+                    self.ingest([e])
+                    if e.type.hasPrefix("chat.prompt.") { onChat(ChatSignal(project: e.project, promptID: e.payload["promptId"]?.stringValue)) }
+                case .chat(let signal): onChat(signal)
                 case .disconnected(let wait): self.connection = .reconnecting(wait); self.freshness.failed("Reconnecting")
                 }
             }

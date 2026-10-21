@@ -15,6 +15,7 @@ final class StageScreensTests: XCTestCase {
         XCTAssertTrue(project.waitForExistence(timeout: 5))
         capture("projects")
         project.tap()
+        app.buttons["Board"].tap()
         let card = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "iOS companion: the full build")).firstMatch
         XCTAssertTrue(card.waitForExistence(timeout: 5))
         app.buttons["Doing"].tap()
@@ -84,8 +85,8 @@ final class StageScreensTests: XCTestCase {
         app.terminate()
         app.launchArguments = []
         app.launch()
-        XCTAssertTrue(app.buttons["Pair"].waitForExistence(timeout: 5))
-        XCTAssertFalse(app.buttons["Pair"].isEnabled)
+        XCTAssertTrue(app.buttons["onboarding.primary"].waitForExistence(timeout: 5))
+        XCTAssertEqual(app.buttons["onboarding.primary"].label, "Get started")
         capture("pairing")
     }
 

@@ -54,6 +54,20 @@ public enum DemoData {
             Project(project: "crebral-legal", brief: "Contract review", phase: "handoff pending",
                     lastActivity: ago(70), counts: ["doing": 1, "testing": 1, "done": 41, "blocked": 1]),
         ]
+        hub.chatsData = ["trantor": ChatSnapshot(
+            session: "demo-orchestrator", total: 4,
+            turns: [
+                ChatTurn(idx: 0, role: "user", blocks: [ChatBlock(text: "What are you working on?")]),
+                ChatTurn(idx: 1, role: "assistant", blocks: [
+                    ChatBlock(text: "I'm connecting **project chat** to the phone. Pairing now walks you through each step, with the action always in reach."),
+                    ChatBlock(kind: "tool", text: "hub/events.mjs", tool: "Read"),
+                ]),
+                ChatTurn(idx: 2, role: "assistant", blocks: [ChatBlock(kind: "tool", tool: "AskUserQuestion", ask: [
+                    ChatQuestion(question: "Which project should we review next?", options: [ChatOption(label: "Trantor"), ChatOption(label: "IBKR")]),
+                ])]),
+                ChatTurn(idx: 3, role: "assistant", blocks: [ChatBlock(text: "The focused tests pass. I'm checking how live replies appear on the iPad.")]),
+            ], meta: ChatMeta(working: true, model: "Orchestrator", context: ChatContext(tokens: 42000, window: 200000, frac: 0.21)),
+            updatedAt: ago(0.1), host: "demo-mac")]
         hub.cardsData = [
             Card(id: 12079, project: "trantor", title: "iOS companion: the full build", status: "doing", assignee: "MacBook-Pro-M1:trantor",
                  difficulty: "hard", phase: "building", updated: ago(1),

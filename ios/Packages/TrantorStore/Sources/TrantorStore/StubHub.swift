@@ -7,6 +7,9 @@ import TrantorCore
 public final class StubHub: HubServing, @unchecked Sendable {
     private let lock = NSLock()
 
+    private var _chats: [String: ChatSnapshot] = [:]
+    private var _prompts: [String: PromptStatus] = [:]
+    private var nextPrompt = 1
     private var _projects: [Project] = []
     private var _cards: [Card] = []
     private var _events: [HubEvent] = []
@@ -27,6 +30,8 @@ public final class StubHub: HubServing, @unchecked Sendable {
 
     private func locked<T>(_ body: () -> T) -> T { lock.lock(); defer { lock.unlock() }; return body() }
 
+    public var chatsData: [String: ChatSnapshot] { get { locked { _chats } } set { locked { _chats = newValue } } }
+    public var promptsData: [String: PromptStatus] { get { locked { _prompts } } set { locked { _prompts = newValue } } }
     public var projectsData: [Project] { get { locked { _projects } } set { locked { _projects = newValue } } }
     public var cardsData: [Card] { get { locked { _cards } } set { locked { _cards = newValue } } }
     public var eventsData: [HubEvent] { get { locked { _events } } set { locked { _events = newValue } } }
@@ -67,6 +72,24 @@ public final class StubHub: HubServing, @unchecked Sendable {
             }
         }
         if let e = writeError { throw e }
+    }
+
+    public func chat(project: String, after: Int) async throws -> ChatSnapshot {
+        var snapshot = try await read("chat:\(project):after=\(after)", chatsData[project] ?? ChatSnapshot())
+        snapshot.turns = Array(snapshot.turns.filter { $0.idx > after }.sorted { $0.idx < $1.idx }.prefix(200))
+        return snapshot
+    }
+    public func sendPrompt(project: String, text: String) async throws -> PromptStatus {
+        try await write("prompt:\(project):\(text)")
+        return locked {
+            let id = String(nextPrompt); nextPrompt += 1
+            let status = PromptStatus(id: id, status: "queued")
+            _prompts[id] = status
+            return status
+        }
+    }
+    public func promptStatus(id: String) async throws -> PromptStatus {
+        try await read("promptStatus:\(id)", promptsData[id] ?? PromptStatus(id: id, status: "queued"))
     }
 
     public func health() async throws -> HealthInfo { try await read("health", HealthInfo(ok: true, authMode: "enforce", peers: 3, messages: 10)) }

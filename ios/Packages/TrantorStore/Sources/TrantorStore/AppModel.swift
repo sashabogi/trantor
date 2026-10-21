@@ -31,6 +31,7 @@ public final class AppModel {
     public var unregisterDevice: (() async throws -> Void)?
     private let cache: StoreCache
     private var client: HubServing?
+    private var chats: [String: ChatStore] = [:]
     @ObservationIgnored private var widgetSyncStarted = false
 
     public init(settings: SettingsStore = SettingsStore(), cache: StoreCache = .default,
@@ -74,6 +75,23 @@ public final class AppModel {
         inbox.api = api; inbox.identity = identity
         fleet.api = api
         cost.api = api
+        for chat in chats.values { chat.api = api }
+    }
+
+    public func chat(project: String) -> ChatStore {
+        if let store = chats[project] { return store }
+        let store = ChatStore(project: project, api: client, cache: cache)
+        store.mayWrite = { [weak self] in
+            guard let self else { return false }
+            return self.isDemo || (self.settings.isPaired && ChatStore.allowsWriting(scopes: self.settings.scopes, project: project))
+        }
+        chats[project] = store
+        return store
+    }
+
+    private func refreshChat(_ signal: ChatSignal?) {
+        let stores = signal.map { chats[$0.project].map { [$0] } ?? [] } ?? Array(chats.values)
+        for store in stores { Task { await store.refresh() } }
     }
 
     public var isConnected: Bool { client != nil }
@@ -93,7 +111,7 @@ public final class AppModel {
     public func startFeed() {
         guard let url = settings.hubURL, let signer = settings.signer(), let client else { return }
         let stream = EventStream(baseURL: url, signer: signer, api: client, sessionName: settings.identityName)
-        feed.start { stream.updates(since: $0) }
+        feed.start(updates: { stream.updates(since: $0) }, onChat: { [weak self] signal in self?.refreshChat(signal) })
     }
 
     public func stopFeed() { feed.stop() }
@@ -138,6 +156,8 @@ public final class AppModel {
         feed.stop()
         settings.unpair()
         client = nil
+        for chat in chats.values { chat.disconnect() }
+        chats.removeAll()
         decisions.api = nil; projects.api = nil; board.api = nil; feed.api = nil
         inbox.api = nil; fleet.api = nil; cost.api = nil
         cache.clear()
