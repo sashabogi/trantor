@@ -8,7 +8,7 @@ import { join } from "node:path";
 import { homedir } from "node:os";
 import { load, migrateKeysToKeychain, keyLocationReport, IDENTITY_SERVICE } from "../lib/identity.mjs";
 import { sfetch } from "../lib/signed-fetch.mjs";
-import { pruneTestKeys } from "../lib/key-prune.mjs";
+import { pruneTestKeys, pruneStaleTmp } from "../lib/key-prune.mjs";
 
 const args = process.argv.slice(2);
 const verb = args[0] || "status";
@@ -65,6 +65,10 @@ async function prune() {
   const idleDays = at < 0 ? 7 : Number(args[at + 1]);
   if (!Number.isFinite(idleDays) || idleDays <= 0) throw new Error("--idle-days must be a positive number");
   if (args.includes("--apply") && args.includes("--dry-run")) throw new Error("choose --apply or --dry-run");
+  const apply = args.includes("--apply");
+  // The tmp sweep is local (a stranded atomic-write temp is not a key and needs no hub) and runs
+  // first, so it works even when the hub is unreachable; --apply gates it like the rest of prune.
+  const tmp = pruneStaleTmp({ apply });
   const bus = process.env.AGENT_BUS_DIR || join(homedir(), ".agent-bus");
   let config = {};
   try { config = JSON.parse(readFileSync(join(bus, "config.json"), "utf8")); }
@@ -79,8 +83,11 @@ async function prune() {
       snapshots.push(await response.json());
     } catch (error) { throw new Error(`cannot check hub ${hub}: ${error.message}; no keys pruned`); }
   }
-  const result = pruneTestKeys({ snapshots, idleDays, apply: args.includes("--apply") });
-  if (JSON_MODE) { console.log(JSON.stringify(result, null, 2)); return; }
+  const result = pruneTestKeys({ snapshots, idleDays, apply });
+  if (JSON_MODE) { console.log(JSON.stringify({ ...result, tmp }, null, 2)); return; }
+  const tmpDid = tmp.dryRun ? "dry run — would remove" : "removed";
+  console.log(`${tmpDid} ${tmp.removed.length} stale key-write tmp file(s) older than 1h${tmp.dryRun && tmp.removed.length ? "; use --apply to remove them" : ""}`);
+  for (const f of tmp.removed) console.log(`  ${f}`);
   console.log(`${result.dryRun ? "dry run — would remove" : "removed"} ${result.removed.length} test key file(s), idle over ${idleDays} days`);
   for (const name of result.removed) console.log(`  ${name}`);
   console.log(`kept ${result.kept.length} key file(s)${result.dryRun ? "; use --apply to remove the listed files" : ""}`);
