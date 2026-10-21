@@ -6,7 +6,7 @@ import { DEFAULT_ORG } from "../lib/store-contract.mjs";
 
 export async function createStoreRuntime({ STORE_KIND, PG_URL, ORG_ID, DATA }) {
 function emptyState() {
-  return { messages: [], peers: {}, seq: 0, tasks: [], taskSeq: 0, projectMeta: {}, lessons: [], events: [], cardEventsBackfilled: false, aliases: {}, phaseMeta: {}, verifyGates: [], verifyGateSeq: 0, proposals: [], proposalSeq: 0, balances: { ts: 0, by: "", entries: [] }, balancesByMachine: {}, subagentCostReset: false, handoffLog: [], identities: {}, devices: [], inviteTokens: {}, focus: {}, orgPolicy: {}, overseerState: {}, instances: {}, dutySession: "", contractReap: {}, eventSeq: 0 };
+  return { messages: [], peers: {}, seq: 0, tasks: [], taskSeq: 0, projectMeta: {}, lessons: [], events: [], cardEventsBackfilled: false, aliases: {}, phaseMeta: {}, verifyGates: [], verifyGateSeq: 0, proposals: [], proposalSeq: 0, balances: { ts: 0, by: "", entries: [] }, balancesByMachine: {}, subagentCostReset: false, handoffLog: [], identities: {}, devices: [], inviteTokens: {}, focus: {}, orgPolicy: {}, overseerState: {}, instances: {}, dutySession: "", contractReap: {}, eventSeq: 0, sessionPrompts: [], sessionPromptSeq: 0 };
 }
 
 const CARD_LOG_MAX = 40;
@@ -115,6 +115,10 @@ function normalizeState(loaded = {}) {
   s.overseerState = loaded.overseerState || {};
   s.dutySession = String(loaded.dutySession || "");
   s.contractReap = loaded.contractReap && typeof loaded.contractReap === "object" ? loaded.contractReap : {};
+  // #12129: the phone's prompt queue survives a hub restart (JSON store); the id high-water mark
+  // is rebuilt from the rows so a reloaded queue never mints a colliding id.
+  s.sessionPrompts = Array.isArray(loaded.sessionPrompts) ? loaded.sessionPrompts : [];
+  s.sessionPromptSeq = Number(loaded.sessionPromptSeq || Math.max(0, ...s.sessionPrompts.map(p => Number(p.id) || 0))) || 0;
   // The event id high-water mark. Seeded from the store's own MAX(id) where it supplied one, and
   // otherwise from the largest id in the array — never from the array TAIL, which is exactly the
   // assumption that let a clobbered id mint colliding event ids and kill the log.

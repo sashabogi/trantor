@@ -18,6 +18,7 @@ import { routeCards } from "./hub/routes/cards.mjs";
 import { routeInsights } from "./hub/routes/insights.mjs";
 import { routeMessages } from "./hub/routes/messages.mjs";
 import { routeDevices } from "./hub/routes/devices.mjs";
+import { createSessionRuntime } from "./hub/routes/session.mjs";
 import { createNotifier } from "./hub/notifier.mjs";
 
 const PORT = Number(process.env.RELAY_PORT || 4477);
@@ -125,7 +126,11 @@ const context = {
   hubSend: duty.hubSend, assertNoSecrets, UI, AUTH_MODE, ONLINE_MS, PEER_TTL_MS,
   REAP_GRACE_MS, CONTRACT_WINDOW_MS,
 };
-const routes = [routeDevices, routeAdmin, routeCards, routeInsights, routeMessages];
+const sessionChat = createSessionRuntime({
+  state: store.state, markDirty: store.markDirty,
+  appendEvent: events.appendEvent, pushEventToStreams: events.pushEventToStreams,
+});
+const routes = [routeDevices, routeAdmin, routeCards, routeInsights, routeMessages, sessionChat.route];
 
 const server = http.createServer(async (req, res) => {
   const u = new URL(req.url, "http://x");

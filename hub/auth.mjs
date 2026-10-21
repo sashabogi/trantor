@@ -53,9 +53,9 @@ function cmpSemver(a, b) {
 }
 const AUTH_HEADERS = ["x-trantor-pubkey", "x-trantor-sig", "x-trantor-ts", "x-trantor-nonce"];
 const PUBLIC_ENDPOINTS = new Set(["/", "/ui", "/health", "/enroll"]);
-const OWNER_ENDPOINTS = new Set(["/project/delete", "/sweep", "/reconcile", "/invite", "/import", "/policy"]);
+const OWNER_ENDPOINTS = new Set(["/project/delete", "/sweep", "/reconcile", "/invite", "/import", "/policy", "/session/prompts", "/session/prompt/claim", "/session/prompt/ack"]);
 const DEVICE_ENDPOINTS = new Set(["/device/register", "/device/unregister", "/devices"]);
-const READ_ENDPOINTS = new Set(["/peers", "/tasks", "/events", "/inbox", "/peer", "/card", "/stream", "/history", "/projects", "/catchup", "/phases", "/recent", "/handoffs", "/verify-gates", "/claims", "/proposals", "/grants", "/overseer/context", "/overseer/status"]);
+const READ_ENDPOINTS = new Set(["/peers", "/tasks", "/events", "/inbox", "/peer", "/card", "/stream", "/history", "/projects", "/catchup", "/phases", "/recent", "/handoffs", "/verify-gates", "/claims", "/proposals", "/grants", "/overseer/context", "/overseer/status", "/session/chat", "/session/prompt"]);
 const roleRank = { read: 1, write: 2, approver: 3, owner: 4 };
 const hasAuthHeaders = (req) => AUTH_HEADERS.some(h => !!req.headers[h]);
 const authPath = (u) => `${u.pathname}${u.search || ""}`;
@@ -115,6 +115,13 @@ function projectFromRequest(P, q, b) {
   if (P === "/proposal/decide" || P === "/proposal/withdraw") {
     const p = state.proposals.find(x => x.id === Number(b?.id ?? q?.id));
     return p?.project || "";
+  }
+  // claim/ack and the single-prompt GET carry only an id — authorization runs against the
+  // PROMPT's project, or a project-scoped key could claim any project's queued prompt (#12129).
+  if (P === "/session/prompt" || P === "/session/prompt/claim" || P === "/session/prompt/ack") {
+    const pr = (state.sessionPrompts || []).find(x => x.id === Number(b?.id ?? q?.id));
+    if (pr) return pr.project || "";
+    if (P !== "/session/prompt") return "";
   }
   return canon(String(b?.project || q?.project || "").slice(0, 80));
 }
