@@ -1,5 +1,6 @@
 import SwiftUI
 import TrantorCore
+import TrantorDesign
 import TrantorStore
 
 public struct FeedView: View {
@@ -9,30 +10,31 @@ public struct FeedView: View {
 
     public var body: some View {
         let feed = model.feed
-        List {
-            Section {
+        ScrollView {
+            LazyVStack(alignment: .leading, spacing: Space.md) {
                 ScrollView(.horizontal, showsIndicators: false) {
-                    HStack {
+                    HStack(spacing: Space.sm) {
+                        Button("All") { feed.activeChips.removeAll() }
+                            .buttonStyle(.action(feed.activeChips.isEmpty ? .primary : .ghost, compact: true))
+                            .accessibilityAddTraits(feed.activeChips.isEmpty ? .isSelected : [])
                         ForEach(FeedStore.chips, id: \.label) { chip in
-                            let on = feed.activeChips.contains(chip.label)
-                            Button(chip.label) {
-                                if on { feed.activeChips.remove(chip.label) } else { feed.activeChips.insert(chip.label) }
-                            }
-                            .buttonStyle(.bordered)
-                            .tint(on ? .accentColor : .secondary)
-                            .accessibilityAddTraits(on ? .isSelected : [])
+                            // Separate pills retain the tape's existing multi-select filtering.
+                            PillPicker([(true, chip.label)], selection: Binding(
+                                get: { feed.activeChips.contains(chip.label) },
+                                set: { _ in
+                                    if feed.activeChips.contains(chip.label) { feed.activeChips.remove(chip.label) }
+                                    else { feed.activeChips.insert(chip.label) }
+                                }))
                         }
                     }
-                }
-                .listRowInsets(EdgeInsets(top: 4, leading: 12, bottom: 4, trailing: 12))
+                }.padding(.vertical, Space.xs)
+                if feed.freshness.isStale { FreshnessBanner(freshness: feed.freshness) }
+                if feed.filtered.isEmpty { EmptyState(title: "No events", systemImage: "list.bullet.rectangle").card() }
+                ForEach(feed.filtered) { event in EventRow(event: event).card(padding: Space.md) }
             }
-            if feed.freshness.isStale { FreshnessBanner(freshness: feed.freshness) }
-            if feed.filtered.isEmpty { EmptyState(title: "No events", systemImage: "list.bullet.rectangle") }
-            ForEach(feed.filtered) { event in
-                EventRow(event: event)
-            }
+            .padding(.horizontal, Space.lg).padding(.bottom, Space.xl)
         }
-        .listStyle(.plain)
+        .stage()
         .navigationTitle("Feed")
         .toolbar { ToolbarItem(placement: .topBarTrailing) { ConnectionDot(connection: feed.connection) } }
         .refreshable { await feed.refresh() }
@@ -41,32 +43,76 @@ public struct FeedView: View {
 
 struct ConnectionDot: View {
     let connection: FeedConnection
+    private var label: String {
+        switch connection { case .live: return "Live"; case .reconnecting: return "Reconnecting"; case .idle: return "Paused" }
+    }
+    private var color: Color {
+        switch connection { case .live: return Palette.live; case .reconnecting: return Palette.amber; case .idle: return Palette.textDim }
+    }
     var body: some View {
-        switch connection {
-        case .live: Label("Live", systemImage: "circle.fill").foregroundStyle(.green).labelStyle(.titleAndIcon).font(.caption)
-        case .reconnecting: Label("Reconnecting", systemImage: "arrow.triangle.2.circlepath").foregroundStyle(.orange).font(.caption)
-        case .idle: Label("Paused", systemImage: "pause.circle").foregroundStyle(.secondary).font(.caption)
-        }
+        HStack(spacing: Space.sm) {
+            StatusDot(color, live: connection == .live)
+            Text(label).font(.tCaption).foregroundStyle(color)
+        }.accessibilityElement(children: .combine)
     }
 }
 
 struct EventRow: View {
     let event: HubEvent
-    var body: some View {
-        VStack(alignment: .leading, spacing: 2) {
-            HStack {
-                Text(event.type).font(.caption.monospaced()).foregroundStyle(.secondary)
-                Spacer()
-                TimeAgo(millis: event.ts).font(.caption).foregroundStyle(.secondary)
-            }
-            Text(event.summary).lineLimit(3)
-            HStack(spacing: 8) {
-                if !event.by.isEmpty { Text(event.by) }
-                if !event.project.isEmpty { Text(event.project) }
-                if let t = event.taskId { Text("#\(t)") }
-            }
-            .font(.caption).foregroundStyle(.secondary)
+    private var color: Color {
+        switch event.type {
+        case let type where type.hasPrefix("hold"): return Palette.amber
+        case let type where type.hasPrefix("verify"): return Palette.accent
+        case let type where type.hasPrefix("proposal"): return Palette.purple
+        case let type where type.hasPrefix("presence"): return Palette.up
+        default: return Palette.blue
         }
-        .padding(.vertical, 2)
     }
+    private var glyph: String {
+        switch event.type {
+        case let type where type.hasPrefix("hold"): return "hand.raised"
+        case let type where type.hasPrefix("verify"): return "checkmark.shield"
+        case let type where type.hasPrefix("proposal"): return "doc.badge.plus"
+        case let type where type.hasPrefix("presence"): return "person.crop.circle"
+        case let type where type.hasPrefix("message"): return "bubble.left"
+        default: return "rectangle.stack"
+        }
+    }
+    var body: some View {
+        HStack(alignment: .top, spacing: Space.md) {
+            Image(systemName: glyph).font(.ui(14)).foregroundStyle(color).frame(width: 20).padding(.top, 2)
+            VStack(alignment: .leading, spacing: Space.sm) {
+                HStack {
+                    Text(event.type).font(.tDataSmall).foregroundStyle(color)
+                    Spacer()
+                    TimeAgo(millis: event.ts)
+                }
+                Text(event.summary).font(.tCallout).foregroundStyle(Palette.text).lineLimit(3)
+                ViewThatFits(in: .horizontal) {
+                    metadata
+                    VStack(alignment: .leading, spacing: Space.sm) {
+                        if !event.by.isEmpty { SeatLine(seat: event.by, verb: "") }
+                        tags
+                    }
+                }
+            }
+        }
+    }
+    private var metadata: some View {
+        HStack(spacing: Space.sm) {
+            if !event.by.isEmpty { SeatLine(seat: event.by, verb: "") }
+            Spacer(minLength: Space.sm)
+            tags
+        }
+    }
+    private var tags: some View {
+        HStack(spacing: Space.sm) {
+            if !event.project.isEmpty { Chip(event.project, color: Palette.hue(for: event.project)) }
+            if let id = event.taskId { Mono("#\(id)", font: .tDataSmall) }
+        }
+    }
+}
+
+#Preview("Feed") {
+    NavigationStack { FeedView() }.environment(DemoData.model()).trantorTheme()
 }

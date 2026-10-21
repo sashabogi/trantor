@@ -1,4 +1,5 @@
 import SwiftUI
+import TrantorDesign
 import TrantorStore
 import UIKit
 
@@ -12,46 +13,48 @@ public struct PairingView: View {
 
     public var body: some View {
         let settings = model.settings
-        Form {
-            Section {
-                Text("Pair this device with your Trantor hub. On the Mac, create an invite; it gives a hub address and a one-time token. Opening a trantor://enroll link fills both in.")
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-            }
-            Section("Hub") {
-                TextField("100.79.242.104:4477", text: $hub)
-                    .textInputAutocapitalization(.never)
-                    .autocorrectionDisabled()
-                    .keyboardType(.URL)
-                    .textContentType(.URL)
-                TextField("Invite token", text: $token)
-                    .textInputAutocapitalization(.never)
-                    .autocorrectionDisabled()
-                Button("Paste from clipboard") { pasteInvite() }
-            }
-            Section {
-                TextField("Device name", text: $deviceName)
-                    .textInputAutocapitalization(.never)
-                    .autocorrectionDisabled()
-            } header: {
-                Text("This device")
-            } footer: {
-                Text("This is the name seats see when you message them. A new signing key is created and kept in this device's Keychain.")
-            }
-            Section {
+        ScrollView {
+            LazyVStack(alignment: .leading, spacing: Space.md) {
+                VStack(alignment: .leading, spacing: Space.md) {
+                    BrandMark()
+                    Text("Your fleet, within reach.").font(.tTitle)
+                    Text("Pair this device with your Trantor hub. On the Mac, create an invite; it gives a hub address and a one-time token. Opening a trantor://enroll link fills both in.")
+                        .font(.tCallout).foregroundStyle(Palette.text2)
+                }.card(highlighted: true)
+                Panel("Hub") {
+                    Eyebrow("Address")
+                    WellField("Hub address", text: $hub, mono: true)
+                        .textInputAutocapitalization(.never).autocorrectionDisabled()
+                        .keyboardType(.URL).textContentType(.URL)
+                    Eyebrow("Invite token")
+                    WellField("Invite token", text: $token, mono: true)
+                        .textInputAutocapitalization(.never).autocorrectionDisabled()
+                    Button("Paste from clipboard", systemImage: "doc.on.clipboard") { pasteInvite() }
+                        .buttonStyle(.ghost)
+                }
+                Panel("This device") {
+                    WellField("Device name", text: $deviceName, mono: true)
+                        .textInputAutocapitalization(.never).autocorrectionDisabled()
+                    Text("This is the name seats see when you message them. A new signing key is created and kept in this device's Keychain.")
+                        .font(.tCaption).foregroundStyle(Palette.textDim)
+                }
                 Button {
                     model.showPairingSummary = true
                     Task { await settings.pair(hub: hub, token: token, deviceName: deviceName) }
                 } label: {
-                    HStack {
+                    HStack(spacing: Space.sm) {
                         Text("Pair")
-                        if case .working = settings.pairing { Spacer(); ProgressView() }
+                        if case .working = settings.pairing { ProgressView().tint(Palette.onAccent) }
+                        else { Image(systemName: "arrow.right") }
                     }
                 }
+                .buttonStyle(.primary)
                 .disabled(isWorking || hub.isEmpty || token.isEmpty)
+                status(settings.pairing)
             }
-            status(settings.pairing)
+            .padding(.horizontal, Space.lg).padding(.bottom, Space.xl)
         }
+        .stage()
         .navigationTitle("Pair with Trantor")
         .toolbar {
             if settings.isPaired, !isPairedNow {
@@ -76,17 +79,25 @@ public struct PairingView: View {
     @ViewBuilder private func status(_ state: PairingState) -> some View {
         switch state {
         case .idle: EmptyView()
-        case .working(let step): Section { Label(step, systemImage: "hourglass") }
-        case .failed(let message): Section { Label(message, systemImage: "exclamationmark.triangle").foregroundStyle(.red) }
+        case .working(let step):
+            HStack(spacing: Space.sm) {
+                ProgressView().tint(Palette.accent)
+                Text(step).font(.tCallout).foregroundStyle(Palette.text2)
+            }.card()
+        case .failed(let message):
+            Label(message, systemImage: "exclamationmark.triangle").font(.tCallout).foregroundStyle(Palette.down).card()
         case .paired(let health, let scopes):
-            Section {
-                Button("Continue") { model.showPairingSummary = false }.buttonStyle(.borderedProminent)
-            }
-            Section("Paired") {
-                LabeledContent("Hub", value: health.ok ? "Reachable" : "Not healthy")
-                LabeledContent("Auth mode", value: health.authMode.isEmpty ? "unknown" : health.authMode)
-                LabeledContent("Seats online", value: String(health.peers))
-                ForEach(scopes, id: \.self) { s in LabeledContent(s.project.isEmpty ? "All projects" : s.project, value: s.role) }
+            Panel("Paired", accessory: { Chip(health.ok ? "reachable" : "not healthy", color: health.ok ? Palette.up : Palette.amber) }) {
+                Detail(label: "Auth", text: health.authMode.isEmpty ? "unknown" : health.authMode, mono: true)
+                HStack { Eyebrow("Seats online"); Spacer(); Mono(String(health.peers)) }
+                ForEach(scopes, id: \.self) { scope in
+                    HStack {
+                        Text(scope.project.isEmpty ? "All projects" : scope.project).font(.tData)
+                        Spacer()
+                        Chip(scope.role, color: Palette.blue)
+                    }
+                }
+                Button("Continue", systemImage: "arrow.right") { model.showPairingSummary = false }.buttonStyle(.primary)
             }
         }
     }
@@ -102,4 +113,8 @@ public struct PairingView: View {
         hub = link.hub; token = link.token
         model.pendingLink = nil
     }
+}
+
+#Preview("Pairing") {
+    NavigationStack { PairingView() }.environment(DemoData.model()).trantorTheme()
 }
