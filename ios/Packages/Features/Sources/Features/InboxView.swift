@@ -16,6 +16,7 @@ public struct InboxView: View {
                 if inbox.freshness.isStale { FreshnessBanner(freshness: inbox.freshness) }
                 if inbox.threads.isEmpty { EmptyState(title: "No messages", systemImage: "tray").card() }
                 ForEach(inbox.threads) { thread in
+                    let unread = thread.messages.contains { $0.to == inbox.identity && $0.id > inbox.readUpTo }
                     NavigationLink(value: thread.counterpart) {
                         HStack(alignment: .top, spacing: Space.md) {
                             NameMark(thread.counterpart, size: 34)
@@ -23,6 +24,9 @@ public struct InboxView: View {
                                 HStack {
                                     Text(thread.counterpart).font(.mono(14, .medium)).foregroundStyle(Palette.text)
                                     Spacer()
+                                    if unread {
+                                        Circle().fill(Palette.accent).frame(width: 6, height: 6).accessibilityHidden(true)
+                                    }
                                     TimeAgo(millis: thread.last?.ts ?? 0)
                                 }
                                 Text(thread.last?.text ?? "").lineLimit(2).font(.tCallout).foregroundStyle(Palette.text2)
@@ -32,7 +36,7 @@ public struct InboxView: View {
                             }
                             Image(systemName: "chevron.right").font(.tCaption).foregroundStyle(Palette.textDim)
                         }.card()
-                    }.buttonStyle(.plain)
+                    }.buttonStyle(.plain).accessibilityValue(unread ? "Unread" : "Read")
                 }
             }
             .padding(.horizontal, Space.lg).padding(.bottom, Space.xl)

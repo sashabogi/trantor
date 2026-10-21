@@ -33,8 +33,9 @@ func laneColor(_ status: String) -> Color {
     case "doing": return Palette.blue
     case "testing": return Palette.purple
     case "done": return Palette.up
-    case "blocked": return Palette.amber
+    case "blocked": return Palette.down
     case "failed": return Palette.down
+    case "todo": return Palette.textFaint
     default: return Palette.textDim
     }
 }
@@ -119,6 +120,7 @@ struct ProjectRow: View {
 public struct BoardView: View {
     @Environment(AppModel.self) private var model
     let project: String
+    @State private var selectedLane = ""
 
     public init(project: String) { self.project = project }
 
@@ -126,10 +128,13 @@ public struct BoardView: View {
         let board = model.board
         ScrollView {
             LazyVStack(alignment: .leading, spacing: Space.md) {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    PillPicker([("", "All")] + board.lanes.map { ($0.status, $0.status.capitalized) }, selection: $selectedLane)
+                }.padding(.vertical, Space.xs)
                 if board.freshness.isStale { FreshnessBanner(freshness: board.freshness) }
                 if let error = board.writeError { Label(error, systemImage: "exclamationmark.triangle").foregroundStyle(Palette.down).card() }
                 if board.lanes.isEmpty { EmptyState(title: "No cards", systemImage: "rectangle.stack").card() }
-                ForEach(board.lanes) { lane in
+                ForEach(board.lanes.filter { selectedLane.isEmpty || $0.status == selectedLane }) { lane in
                     HStack(spacing: Space.sm) {
                         Eyebrow(lane.status, color: laneColor(lane.status))
                         CountBadge(lane.cards.count, hot: false)
@@ -147,6 +152,9 @@ public struct BoardView: View {
         .navigationDestination(for: Card.self) { CardDetailView(card: $0) }
         .refreshable { await board.load(project: project) }
         .task(id: project) { await board.load(project: project) }
+        .onChange(of: board.lanes.map(\.status)) { _, statuses in
+            if !statuses.contains(selectedLane) { selectedLane = "" }
+        }
     }
 }
 

@@ -17,6 +17,11 @@ final class StageScreensTests: XCTestCase {
         project.tap()
         let card = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "iOS companion: the full build")).firstMatch
         XCTAssertTrue(card.waitForExistence(timeout: 5))
+        app.buttons["Doing"].tap()
+        XCTAssertTrue(card.exists)
+        XCTAssertFalse(app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "Kill guard for runner suites")).firstMatch.exists)
+        app.buttons["All"].tap()
+        XCTAssertTrue(app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "Kill guard for runner suites")).firstMatch.exists)
         capture("board")
         card.tap()
         XCTAssertTrue(app.buttons["Post note"].waitForExistence(timeout: 5))
@@ -41,6 +46,7 @@ final class StageScreensTests: XCTestCase {
         app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Inbox")).firstMatch.tap()
         let thread = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "Want me to take the QR scanner next?")).firstMatch
         XCTAssertTrue(thread.waitForExistence(timeout: 5))
+        XCTAssertEqual(thread.value as? String, "Unread")
         capture("inbox")
         thread.tap()
         XCTAssertTrue(app.buttons["Send"].waitForExistence(timeout: 5))
@@ -53,6 +59,8 @@ final class StageScreensTests: XCTestCase {
         app.buttons["Hide keyboard"].tap()
         capture("conversation")
         app.navigationBars.buttons.firstMatch.tap()
+        let readThread = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "The stage screens are ready for review.")).firstMatch
+        XCTAssertEqual(readThread.value as? String, "Read")
         app.buttons["New"].tap()
         XCTAssertTrue(app.buttons["Send message"].waitForExistence(timeout: 5))
         XCTAssertFalse(app.buttons["Send message"].isEnabled)
