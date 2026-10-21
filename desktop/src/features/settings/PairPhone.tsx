@@ -11,7 +11,7 @@ type PairPhoneProps = { hubBase: string; api?: PairPhoneApi; renderQr?: (link: s
 
 type Phase = { s: "idle" } | { s: "minting" } | { s: "ready"; invite: PairInvite; qr: string } | { s: "error"; message: string; roleBlocked?: PairRole };
 
-export function PairPhone({ hubBase, api = pairInviteApi(hubBase), renderQr = (link: string) => toDataURL(link, { width: 220, margin: 1 }) }: PairPhoneProps) {
+export function PairPhone({ hubBase, api = pairInviteApi(hubBase), renderQr = (link: string) => toDataURL(link, { width: 280, margin: 4, errorCorrectionLevel: "M" }) }: PairPhoneProps) {
   const [phase, setPhase] = useState<Phase>({ s: "idle" });
   const [copied, setCopied] = useState(false);
   const copyTimer = useRef<number | null>(null);
@@ -80,14 +80,23 @@ export function PairPhone({ hubBase, api = pairInviteApi(hubBase), renderQr = (l
 
 function ReadyView({ invite, qr, copied, onCopy }: { invite: PairInvite; qr: string; copied: boolean; onCopy: () => void }) {
   const [left, setLeft] = useState(() => Math.max(0, invite.expiresAt - Date.now()));
+  const [full, setFull] = useState(false);
   useEffect(() => {
     const t = window.setInterval(() => setLeft(Math.max(0, invite.expiresAt - Date.now())), 1000);
     return () => window.clearInterval(t);
   }, [invite.expiresAt]);
+  useEffect(() => {
+    if (!full) return;
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") setFull(false); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [full]);
   const mm = Math.floor(left / 60000), ss = Math.floor((left % 60000) / 1000);
   return (
     <div className="mt-2.5 flex items-start gap-4">
-      <img src={qr} width={110} height={110} alt="Pairing QR code" className="shrink-0 rounded-lg bg-white p-1.5" />
+      <div className="shrink-0 rounded-lg bg-white p-2">
+        <img src={qr} width={280} height={280} alt="Pairing QR code" />
+      </div>
       <div className="min-w-0 flex-1">
         <input readOnly value={invite.link} onFocus={e => e.currentTarget.select()}
                className="tr-input w-full text-[11px]" aria-label="Pairing link" />
@@ -95,11 +104,25 @@ function ReadyView({ invite, qr, copied, onCopy }: { invite: PairInvite; qr: str
           <button type="button" onClick={onCopy} className="tr-input shrink-0">
             {copied ? (<><Check size={12} className="mr-1 inline" />Copied</>) : (<><Copy size={12} className="mr-1 inline" />Copy link</>)}
           </button>
+          <button type="button" onClick={() => setFull(true)} className="tr-input shrink-0">Show full screen</button>
           <span className="text-[11px] text-[var(--color-tr-muted)]">
             {left > 0 ? `Expires in ${mm}:${String(ss).padStart(2, "0")}` : "Expired — mint another."}
           </span>
         </div>
       </div>
+      {full && (
+        <div role="dialog" aria-modal="true" aria-label="Pairing QR code, full screen"
+             className="fixed inset-0 z-50 flex items-center justify-center bg-black"
+             onClick={() => setFull(false)}>
+          <div className="flex flex-col items-center gap-4 rounded-xl bg-white p-6" onClick={e => e.stopPropagation()}>
+            <img src={qr} alt="Pairing QR code, full screen"
+                 style={{ width: "min(70vh, 70vw)", height: "min(70vh, 70vw)", imageRendering: "pixelated" }} />
+            <div className="text-[14px] text-black">
+              {left > 0 ? `Expires in ${mm}:${String(ss).padStart(2, "0")}` : "Expired — mint another."}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

@@ -66,6 +66,37 @@ describe("Settings Pair a phone", () => {
     expect(document.body.textContent).toMatch(/Expires in \d+:\d\d/);
   });
 
+  it("renders the QR big enough to scan and opens a full-screen overlay Esc or a backdrop click closes", async () => {
+    const invite = inviteFor();
+    const api: PairPhoneApi = { mint: vi.fn(async () => invite) };
+    await mount({ hubBase: HUB, api, renderQr: stubQr });
+    await click($("button")!);
+
+    // SAFETY: the inline QR must be at least 260 px on a white card so a phone can read it off the screen.
+    const img = $("img")!;
+    expect(Number(img.getAttribute("width"))).toBeGreaterThanOrEqual(260);
+    expect(img.parentElement?.className).toContain("bg-white");
+
+    const show = [...document.querySelectorAll("button")].find(b => b.textContent === "Show full screen")!;
+    await click(show);
+
+    const dialog = $("[role=dialog]")!;
+    expect(dialog.getAttribute("aria-modal")).toBe("true");
+    expect(dialog.querySelector("img")).not.toBeNull();
+    expect(dialog.textContent).toMatch(/Expires in \d+:\d\d/);
+
+    // SAFETY: Esc closes the overlay.
+    await act(async () => { window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" })); });
+    expect($("[role=dialog]")).toBeNull();
+
+    // SAFETY: re-open, a backdrop click closes it too.
+    await click(show);
+    await click($("[role=dialog]")!);
+    expect($("[role=dialog]")).toBeNull();
+    // The inline QR card is still there underneath.
+    expect($("img")!.getAttribute("alt")).toBe("Pairing QR code");
+  });
+
   it("explains a hub without the approver role and retries as owner", async () => {
     const invite = inviteFor();
     const api: PairPhoneApi = {
