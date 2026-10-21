@@ -58,8 +58,11 @@ struct TrantorApp: App {
                 .onOpenURL { url in
                     // trantor://enroll?hub=...&token=...
                     if let link = PairingLink.parse(url) { model.pendingLink = link }
+                    // trantor://decisions from the home-screen widget
+                    else if url.scheme == "trantor", url.host == "decisions" { model.selection = .decisions }
                 }
                 .task {
+                    model.startWidgetSnapshotSync()
                     #if DEBUG
                     await debugEnroll()
                     #endif

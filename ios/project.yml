@@ -40,6 +40,7 @@ targets:
       - package: TrantorStore
       - package: Features
       - package: TrantorDesign
+      - target: TrantorWidget
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: ai.trantor.companion
@@ -51,6 +52,28 @@ targets:
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
         ENABLE_PREVIEWS: YES
+  TrantorWidget:
+    type: app-extension
+    platform: iOS
+    deploymentTarget: "17.0"
+    sources:
+      - path: TrantorWidget
+        excludes:
+          - Info.plist
+          - TrantorWidget.entitlements
+    dependencies:
+      - package: TrantorStore
+      - package: TrantorDesign
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: ai.trantor.companion.widget
+        PRODUCT_NAME: TrantorWidget
+        TARGETED_DEVICE_FAMILY: "1,2"
+        INFOPLIST_FILE: TrantorWidget/Info.plist
+        GENERATE_INFOPLIST_FILE: NO
+        CODE_SIGN_ENTITLEMENTS: TrantorWidget/TrantorWidget.entitlements
+        APPLICATION_EXTENSION_API_ONLY: YES
+        SKIP_INSTALL: NO
   TrantorCompanionTests:
     type: bundle.unit-test
     platform: iOS

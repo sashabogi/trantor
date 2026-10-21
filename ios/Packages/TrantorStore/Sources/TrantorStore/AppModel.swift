@@ -31,6 +31,7 @@ public final class AppModel {
     public var unregisterDevice: (() async throws -> Void)?
     private let cache: StoreCache
     private var client: HubServing?
+    @ObservationIgnored private var widgetSyncStarted = false
 
     public init(settings: SettingsStore = SettingsStore(), cache: StoreCache = .default,
                 authenticator: any Authenticator = DeviceAuthenticator()) {
@@ -97,6 +98,36 @@ public final class AppModel {
 
     public func stopFeed() { feed.stop() }
 
+    // MARK: Widget snapshot
+
+    /// Writes the home-screen widget's snapshot now and re-writes it whenever the decisions
+    /// queue changes. Call once from the app root; a no-op after the first call.
+    public func startWidgetSnapshotSync() {
+        guard !widgetSyncStarted else { return }
+        widgetSyncStarted = true
+        publishWidgetSnapshot()
+        trackDecisionsForWidget()
+    }
+
+    /// Snapshot the current queue into the App Group container and reload the widget timeline.
+    public func publishWidgetSnapshot() {
+        // unpaired: no snapshot, so the widget says "Not paired" rather than "0 waiting"
+        guard isReady else { WidgetSnapshotStore().clearAndReload(); return }
+        WidgetSnapshotStore().publish(.derive(from: decisions.items))
+    }
+
+    private func trackDecisionsForWidget() {
+        withObservationTracking {
+            _ = decisions.items
+        } onChange: { [weak self] in
+            Task { @MainActor in
+                guard let self else { return }
+                self.publishWidgetSnapshot()
+                self.trackDecisionsForWidget()
+            }
+        }
+    }
+
     /// Forgetting the hub always works, even when the hub can't be reached: telling it to stop
     /// pushing is best effort, and a later pair from this phone replaces the old registration.
     public func unpair() async {
@@ -110,6 +141,7 @@ public final class AppModel {
         decisions.api = nil; projects.api = nil; board.api = nil; feed.api = nil
         inbox.api = nil; fleet.api = nil; cost.api = nil
         cache.clear()
+        WidgetSnapshotStore().clearAndReload()
     }
 }
 
