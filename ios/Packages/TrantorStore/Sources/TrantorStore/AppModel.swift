@@ -21,6 +21,8 @@ public final class AppModel {
     public var pendingLink: PairingLink?
     /// Keeps the pairing screen up after a successful pair so the person sees health and scope first.
     public var showPairingSummary = false
+    /// A project screen to open on its own (debug `-project <name>`, and later deep links).
+    public var openProject: String?
     /// Running on canned data (previews, the `-demo` launch flag): no hub, no pairing.
     public private(set) var isDemo = false
 

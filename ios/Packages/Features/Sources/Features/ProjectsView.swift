@@ -24,6 +24,7 @@ public struct ProjectsView: View {
         .stage()
         .navigationTitle("Projects")
         .navigationDestination(for: String.self) { ProjectView(project: $0) }
+        .navigationDestination(item: Binding(get: { model.openProject }, set: { model.openProject = $0 })) { ProjectView(project: $0) }
         .refreshable { await store.refresh() }
     }
 }

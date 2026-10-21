@@ -92,6 +92,11 @@ extension TrantorApp {
         if let t = args.firstIndex(of: "-tab"), t + 1 < args.count, let section = AppSection(rawValue: args[t + 1]) {
             model.selection = section
         }
+        // -project <name>: open that project's screen (Chat first)
+        if let t = args.firstIndex(of: "-project"), t + 1 < args.count {
+            model.selection = .projects
+            model.openProject = args[t + 1]
+        }
         guard let i = args.firstIndex(of: "-enroll"), i + 1 < args.count,
               let url = URL(string: args[i + 1]), let link = PairingLink.parse(url) else { return }
         let name = args.firstIndex(of: "-name").flatMap { $0 + 1 < args.count ? args[$0 + 1] : nil } ?? "ios-sim"
