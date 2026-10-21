@@ -77,14 +77,18 @@ iPad: `NavigationSplitView` (sidebar Decisions/Projects/Feed/Inbox/Fleet, list, 
 
 The first test is a signature vector checked both ways: Swift signs fixed inputs and `lib/identity.mjs`'s `verifyRequest` accepts it, so signing drift fails a test instead of returning 401 at runtime.
 
-## Open decisions
+## Decisions (made 2026-10-21, operator said build it all without asking)
 
-1. Phone scope: build the `approver` role first, or start with `*:owner` behind Face ID?
-2. Push in v1 (needs a `.p8` key), or an ntfy stopgap first?
-3. Is answering AskUserQuestion from the phone a v1 must? It brings the Mac relay into v1.
-4. Just you, or teammates later (Tailscale, bundle id, separate repo)?
-5. Which iPhone and iPadOS versions, to set the minimum?
-6. Bundle id `ai.trantor.companion`, or another domain you own?
+1. Phone scope: the `approver` role (#12113). A phone key holds `*:approver`: it decides holds, proposals and gates, moves and notes cards, and can never delete projects, mint invites or import.
+2. Push in v1 over APNs (#12114, #12123). Off until a `.p8` exists in the hub env (`APNS_KEY_PATH` or `APNS_PRIVATE_KEY`, `APNS_KEY_ID`, `APNS_TEAM_ID`); no ntfy stopgap.
+3. AskUserQuestion from the phone stays v2 (it needs the Mac relay).
+4. Just the operator for now: Tailscale, bundle `ai.trantor.companion`, this repo.
+5. iOS 17 minimum, iPhone and iPad.
+6. Bundle id `ai.trantor.companion` (registered 2026-10-21 with Push and App Groups, plus `ai.trantor.companion.widget`).
+
+## Look
+
+The ibkr "stage" design (ibkr `ui/src/theme/tokens.css`, the Trading Dock Refit): `ios/Packages/TrantorDesign` holds the tokens, Geist and JetBrains Mono (bundled, OFL) and the components. Every screen is cards on the lit navy stage, mono for every number, mint for what needs a look.
 
 ## Build
 
@@ -100,4 +104,11 @@ node Packages/HubClient/Tests/verify-vector.mjs   # the hub's real verifier acce
 TRANTOR_WRITE_VECTOR=1 swift test                  # in Packages/HubClient: regenerate the fixture
 ```
 
-Not done in the scaffold: push (the device registration call is switched off in `PushRegistrar` until #12114), the QR scanner, Face ID gating, the `approver` role on the hub.
+Simulator drills (Debug builds):
+
+- Sign ad hoc or the Keychain refuses the key: `CODE_SIGN_IDENTITY=- CODE_SIGN_STYLE=Manual DEVELOPMENT_TEAM=` on the xcodebuild line (unsigned builds get errSecMissingEntitlement).
+- `-demo` runs on canned fleet data with no hub.
+- `-enroll '<trantor://enroll link>' -name <device>` pairs without the system "Open in Trantor?" prompt. `trantor pair --json` mints the link (approver, ten minutes, single use).
+- `-tab <decisions|projects|feed|inbox|fleet>` opens on a screen.
+
+Shipped: design system, all screens, the widget, QR pairing, Face ID before decisions, push registration and silent clears. Still owed: the APNs `.p8` key on the hub, the App Group and App Store record for TestFlight (both need the operator's Apple ID), and a drill on a physical phone (camera, Face ID, push).

@@ -417,8 +417,15 @@ rate, not work rate.
 ```
 trantor setup | doctor | connect | profile | provider | models
         | new <name> | up <agents…> | swap <old> <new> | down | seat-why <agent> | ui | advise | hub | watch
-        | adopt <project> | reconcile | duty | orchestrate | patrol | app | backfill | init-hooks
+        | adopt <project> | reconcile | duty | orchestrate | patrol | app | backfill | init-hooks | pair
 ```
+
+- **`trantor pair`** pairs the iPhone and iPad companion app (`ios/`, an operator console for
+  fleet decisions). It mints a single-use, ten-minute invite with the `approver` role (decides
+  holds, proposals and gates; never deletes projects or mints invites) and prints a
+  `trantor://enroll` link. `--sim` opens it in the booted simulator, `--json` prints it for
+  scripts, and `--role owner` widens the scope. The desktop app's Settings shows the same invite
+  as a QR code. It signs as the operator's owner identity (`TRANTOR_IDENTITY`, default `sasha@mac`).
 
 - **`trantor new <name>`** — project genesis in one command: makes the dir under your dev root
   (`TRANTOR_DEV_ROOT` or `~/development`), git on main (or `--from <git-url>`, or `--adopt` an
