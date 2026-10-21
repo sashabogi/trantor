@@ -290,12 +290,18 @@ const askTurn = { role: "assistant", blocks: [askBlock] };
  *  the backfilled transcript — the render() every test using it starts from. */
 function makeBlockedDeps() {
   const answered: Array<{ target: string; data: string }> = [];
+  const mappings: InvokeArgs[] = [];
   const handlers = new Map<string, Handler[]>();
   const deps: ChatDeps = {
     // The real backend answers `after` — a second fetch past line 0 gets nothing new, never
     // the same turn again. A mock that ignored `after` doubled the ask (2 tool blocks batched
     // into one collapsed "2 tools" row) the instant `target` resolved and re-ran the effect.
     invoke: <T,>(cmd: string, args?: InvokeArgs): Promise<T> => {
+      if (cmd === "answer_keystrokes") {
+        if (args) mappings.push(args);
+        // SAFETY: this command returns a string; mapping bytes are tested by Rust.
+        return Promise.resolve("\x1b[B\r" as T);
+      }
       if (cmd === "orchestrator_chat") {
         // SAFETY: Chat always calls orchestrator_chat with a plain `{ after: number }` object —
         // never the array/buffer arms of InvokeArgs — so this narrow read is exactly what
@@ -344,7 +350,7 @@ function makeBlockedDeps() {
     Composer: () => null,
     TerminalPane: () => null,
   };
-  return { deps, answered };
+  return { deps, answered, mappings };
 }
 
 // #6094 — the question card: a blocked AskUserQuestion tool_use renders as something the
@@ -431,8 +437,8 @@ describe("AskCard question card (#6094)", () => {
     expect(buttons.some(t => t.includes("No"))).toBe(true);
   });
 
-  it("picking an option writes answerKeystrokes' arrow-navigation sequence into the pane", async () => {
-    const { deps, answered } = makeBlockedDeps();
+  it("picking an option invokes the Rust mapping and sends its returned keys", async () => {
+    const { deps, answered, mappings } = makeBlockedDeps();
     act(() => { root.render(<Chat project="p" dock="right" onDock={() => {}} onClose={() => {}} deps={deps} />); });
     await flush();
     await flush();
@@ -440,6 +446,7 @@ describe("AskCard question card (#6094)", () => {
     await act(async () => { noButton.dispatchEvent(new MouseEvent("click", { bubbles: true })); });
     await flush();
     // "No" is index 1: one Down arrow to reach it, then Enter — never a typed digit.
+    expect(mappings).toEqual([{ question: askBlock.ask[0], picks: [1], other: null }]);
     expect(answered).toEqual([{ target: "ask-session", data: "\x1b[B\r" }]);
   });
 
@@ -466,6 +473,10 @@ describe("orch-ask is the pending-card source (#6533)", () => {
     const deps: ChatDeps = {
       invoke: <T,>(cmd: string, args?: InvokeArgs): Promise<T> => {
         commands.push(cmd);
+        if (cmd === "answer_keystrokes") {
+          // SAFETY: Rust returns the mapped string for this fixture's No choice.
+          return Promise.resolve("\x1b[B\r" as T);
+        }
         if (cmd === "app_log") {
           // SAFETY: Chat sends app_log the documented object containing a string line.
           const fields = args as { line?: unknown } | undefined;

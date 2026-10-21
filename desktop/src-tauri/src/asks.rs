@@ -55,13 +55,80 @@ struct AskDeclaredOption {
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct AskQuestion {
+pub(crate) struct AskQuestion {
     question: String,
     #[serde(default)]
     header: String,
     #[serde(default)]
     multi_select: bool,
     options: Vec<AskOption>,
+}
+
+#[tauri::command]
+pub(crate) fn answer_keystrokes(
+    question: AskQuestion,
+    picks: Vec<i64>,
+    other: Option<String>,
+) -> String {
+    const DOWN: &str = "\x1b[B";
+    if let Some(text) = other {
+        return if text.trim().is_empty() {
+            String::new()
+        } else {
+            format!("{}\r{text}\r", DOWN.repeat(question.options.len()))
+        };
+    }
+    let valid: BTreeSet<usize> = picks
+        .into_iter()
+        .filter_map(|i| usize::try_from(i).ok())
+        .filter(|i| *i < question.options.len())
+        .collect();
+    let Some(first) = valid.first() else {
+        return String::new();
+    };
+    if !question.multi_select {
+        return format!("{}\r", DOWN.repeat(*first));
+    }
+    let mut keys = String::new();
+    let mut at = 0;
+    for i in valid {
+        keys.push_str(&DOWN.repeat(i - at));
+        keys.push(' ');
+        at = i;
+    }
+    keys.push('\r');
+    keys
+}
+
+pub(crate) fn live_answer_keys(
+    dir: &Path,
+    session: &str,
+    tool_id: &str,
+    picks: Vec<i64>,
+    other: Option<String>,
+) -> Option<String> {
+    if session.is_empty()
+        || tool_id.is_empty()
+        || Path::new(session).components().count() != 1
+        || !matches!(
+            Path::new(session).components().next(),
+            Some(std::path::Component::Normal(_))
+        )
+    {
+        return None;
+    }
+    let ask = read_sidecar(&dir.join(format!("{session}.json")), |ask| {
+        Some(ask.project.clone())
+    })
+    .ok()?;
+    if ask.tool_use_id.as_deref() != Some(tool_id) || ask.questions.len() != 1 {
+        return None;
+    }
+    Some(answer_keystrokes(
+        ask.questions.into_iter().next()?,
+        picks,
+        other,
+    ))
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
@@ -437,7 +504,9 @@ const DRILL_MODE_PROJECT_PREFIX: &str = "drill-";
 /// The headless drill runs only for the project TRANTOR_ASK_DRILL names; Drill Mode may seed an
 /// ask on a disposable stage without the variable. A real project never gets a drill session.
 fn drill_enabled(project: &str) -> Result<(), String> {
-    if project.len() > DRILL_MODE_PROJECT_PREFIX.len() && project.starts_with(DRILL_MODE_PROJECT_PREFIX) {
+    if project.len() > DRILL_MODE_PROJECT_PREFIX.len()
+        && project.starts_with(DRILL_MODE_PROJECT_PREFIX)
+    {
         return Ok(());
     }
     match std::env::var("TRANTOR_ASK_DRILL") {
@@ -800,7 +869,10 @@ mod tests {
     #[test]
     fn drill_mode_stage_is_allowed_without_the_env_and_real_projects_are_not() {
         assert!(drill_enabled("drill-20260907-2104").is_ok());
-        assert!(drill_enabled("drill-").is_err(), "the bare prefix is not a stage");
+        assert!(
+            drill_enabled("drill-").is_err(),
+            "the bare prefix is not a stage"
+        );
         assert!(drill_enabled("trantor").is_err());
         assert!(drill_enabled("crebral-health").is_err());
     }
@@ -1088,3 +1160,7 @@ mod tests {
         assert_eq!(transcript_facts(raw, "cold-1"), (false, false));
     }
 }
+
+#[cfg(test)]
+#[path = "asks_answer_tests.rs"]
+mod answer_tests;

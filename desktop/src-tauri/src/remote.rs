@@ -1,5 +1,5 @@
 //! Phone chat relay (#12130): the transcript decoder and herdr remain the owners of chat and delivery.
-use crate::{chat, herdr, hub, identity, local_sessions, panes};
+use crate::{asks, chat, herdr, hub, identity, local_sessions, panes};
 use serde_json::{json, Value};
 use std::{
     collections::{HashMap, VecDeque},
@@ -182,6 +182,21 @@ impl Mirror {
             self.total += 1;
             self.turns.push(value);
         }
+        for turn in &mut self.turns {
+            if let Some(blocks) = turn["blocks"].as_array_mut() {
+                for block in blocks {
+                    if block["tool"] == "AskUserQuestion" {
+                        if let Some(result) = snapshot
+                            .results
+                            .iter()
+                            .find(|r| block["tool_id"] == r.tool_id)
+                        {
+                            block["answer"] = json!(result.preview);
+                        }
+                    }
+                }
+            }
+        }
         if self.turns.len() > WINDOW {
             self.turns.drain(..self.turns.len() - WINDOW);
         }
@@ -308,7 +323,7 @@ async fn claim_and_deliver<F, Fut>(
     deliver: F,
 ) -> Result<Option<Value>, String>
 where
-    F: FnOnce(String) -> Fut,
+    F: FnOnce(Value) -> Fut,
     Fut: std::future::Future<Output = panes::PromptDelivery>,
 {
     if !on.load(Ordering::SeqCst) {
@@ -326,23 +341,62 @@ where
     }
     require_ok(status, &body)?;
     let prompt = &body["prompt"];
-    let delivery =
-        if prompt["id"] != id || prompt["project"] != project || !prompt["text"].is_string() {
-            panes::PromptDelivery {
-                outcome: "not_ready",
-                error: Some("Hub claim returned an invalid prompt; nothing was typed.".into()),
-            }
-        } else if !on.load(Ordering::SeqCst) {
-            panes::PromptDelivery {
-                outcome: "not_ready",
-                error: Some("Relay chat to my phone was turned off; nothing was typed.".into()),
-            }
-        } else {
-            deliver(prompt["text"].as_str().unwrap_or_default().into()).await
-        };
+    let delivery = if prompt["id"] != id
+        || prompt["project"] != project
+        || (prompt["kind"] != "answer" && !prompt["text"].is_string())
+    {
+        panes::PromptDelivery {
+            outcome: "not_ready",
+            error: Some("Hub claim returned an invalid prompt; nothing was typed.".into()),
+        }
+    } else if !on.load(Ordering::SeqCst) {
+        panes::PromptDelivery {
+            outcome: "not_ready",
+            error: Some("Relay chat to my phone was turned off; nothing was typed.".into()),
+        }
+    } else {
+        deliver(prompt.clone()).await
+    };
     Ok(Some(
         json!({"id": id, "outcome": delivery.outcome, "error": delivery.error}),
     ))
+}
+
+async fn deliver_answer<F, Fut>(prompt: &Value, dir: &Path, send: F) -> panes::PromptDelivery
+where
+    F: FnOnce(String, String) -> Fut,
+    Fut: std::future::Future<Output = Result<(), String>>,
+{
+    let session = prompt["session"].as_str().unwrap_or_default();
+    let tool_id = prompt["toolId"].as_str().unwrap_or_default();
+    let picks = serde_json::from_value::<Vec<i64>>(prompt["picks"].clone());
+    let other = serde_json::from_value::<Option<String>>(prompt["other"].clone());
+    let keys = match (picks, other) {
+        (Ok(picks), Ok(other)) => asks::live_answer_keys(dir, session, tool_id, picks, other),
+        _ => None,
+    };
+    let Some(keys) = keys else {
+        return panes::PromptDelivery {
+            outcome: "stale",
+            error: Some("That question was already answered or replaced.".into()),
+        };
+    };
+    if keys.is_empty() {
+        return panes::PromptDelivery {
+            outcome: "not_ready",
+            error: Some("No answer was selected.".into()),
+        };
+    }
+    match send(session.into(), keys).await {
+        Ok(()) => panes::PromptDelivery {
+            outcome: "delivered",
+            error: None,
+        },
+        Err(error) => panes::PromptDelivery {
+            outcome: "stalled",
+            error: Some(error),
+        },
+    }
 }
 
 async fn ack(hub: &impl Hub, body: Value) -> Result<(), String> {
@@ -440,7 +494,28 @@ async fn prompt_worker(mut events: mpsc::UnboundedReceiver<RelayEvent>) {
                     &project,
                     id,
                     enabled(),
-                    move |text| async move {
+                    move |prompt| async move {
+                        if prompt["kind"] == "answer" {
+                            let current = tokio::task::spawn_blocking(move || {
+                                hosted().ok().is_some_and(|seats| {
+                                    seats.iter().any(|s| {
+                                        s.project == seat.project && s.surface == seat.surface
+                                    })
+                                })
+                            })
+                            .await
+                            .unwrap_or(false);
+                            if !current || !enabled().load(Ordering::SeqCst) {
+                                return panes::prompt_delivery(Ok(herdr::PromptOutcome::NoAgent));
+                            }
+                            return deliver_answer(
+                                &prompt,
+                                &crate::desktop_bus_dir().join("asks"),
+                                asks::ask_answer_session,
+                            )
+                            .await;
+                        }
+                        let text = prompt["text"].as_str().unwrap_or_default().to_string();
                         tokio::task::spawn_blocking(move || {
                             if !enabled().load(Ordering::SeqCst) {
                                 return panes::PromptDelivery {

@@ -21,7 +21,7 @@ import {
   saveDismissedAt, saveFontStep, savePanelSize, saveTrayOpen, type FontStep,
 } from "./prefs";
 import {
-  answerKeystrokes, applyBackfill, applyRows, applySessionChanged, bannerVisible, DOWN_ARROW, emptyChat, isDividerTurn,
+  applyBackfill, applyRows, applySessionChanged, bannerVisible, emptyChat, isDividerTurn,
   lastToolLabel, sessionLiveness, tickerText,
   type AskQuestion, type Backfill, type Block, type ChatState, type OpenQuestion, type RowsPayload,
   type SessionPayload, type ToolResult, type Turn,
@@ -176,9 +176,9 @@ function ToolCard({ block, result }: { block: Block; result?: ToolResult }) {
  *  answer, with buttons, a multi-select tray, or free text. Answered state comes only from the
  *  transcript's tool_result landing, never asserted locally. A click writes keystrokes into the
  *  pane hosting that session rather than claiming success itself. */
-function AskCard({ tool_id, questions, result, target, visible = true, onAnswer }: {
+function AskCard({ tool_id, questions, result, target, visible = true, onAnswer, invokeFn = invoke }: {
   tool_id: string | null; questions: AskQuestion[]; result?: ToolResult;
-  target: string | null; visible?: boolean;
+  target: string | null; visible?: boolean; invokeFn?: ChatDeps["invoke"];
   onAnswer: (toolId: string | null, data: string) => Promise<void>;
 }) {
   const [picked, setPicked] = useState<Set<number>>(new Set());
@@ -202,11 +202,12 @@ function AskCard({ tool_id, questions, result, target, visible = true, onAnswer 
     );
   }
 
-  const send = async (data: string) => {
+  const send = async (picks: number[], other: string | null = null) => {
     if (!target || !visible || busy) return;
     setBusy(true); setError(null);
     try {
-      await onAnswer(tool_id, data);
+      const data = await invokeFn<string>("answer_keystrokes", { question: q, picks, other });
+      if (data) await onAnswer(tool_id, data);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -214,18 +215,14 @@ function AskCard({ tool_id, questions, result, target, visible = true, onAnswer 
     }
   };
 
-  const pickSingle = (i: number) => { void send(answerKeystrokes(q, [i])); };
+  const pickSingle = (i: number) => { void send([i]); };
   const toggleMulti = (i: number) => {
     setPicked(s => { const n = new Set(s); n.has(i) ? n.delete(i) : n.add(i); return n; });
   };
-  const submitMulti = () => { void send(answerKeystrokes(q, [...picked])); };
+  const submitMulti = () => { void send([...picked]); };
   const submitOther = () => {
     if (!otherText.trim()) return;
-    // "Type something" is the picker's own always-appended free-text option, one row past the
-    // model's own list — walk Down to it the same way answerKeystrokes reaches any other row,
-    // Enter opens its text input, then the text and its own Enter (#6094; see answerKeystrokes'
-    // doc comment for the evidence behind the arrow-navigation contract).
-    void send(`${DOWN_ARROW.repeat(q.options.length)}\r${otherText}\r`);
+    void send([], otherText);
   };
 
   return (
@@ -324,6 +321,7 @@ function LiveAskCard({ ask, onAnswer, invokeFn }: {
       questions={ask.questions}
       target={ask.target}
       visible={ask.visible}
+      invokeFn={invokeFn}
       onAnswer={(_toolId, data) => onAnswer(ask, data)}
     />
   );
@@ -1403,7 +1401,12 @@ export function Chat({ project, sessionId, dock, onDock, onClose, deps = DEFAULT
           onPick={text => {
             if (activeLiveAsk && askQuestion) {
               const idx = askQuestion.options.findIndex(o => o.label === text);
-              if (idx >= 0) { void answerAsk(activeLiveAsk, answerKeystrokes(askQuestion, [idx])); return; }
+              if (idx >= 0) {
+                void invokeFn<string>("answer_keystrokes", { question: askQuestion, picks: [idx], other: null })
+                  .then(data => { if (data) return answerAsk(activeLiveAsk, data); })
+                  .catch(error => { void invokeFn("app_log", { line: `ask suggestion failed: ${String(error)}` }).catch(() => {}); });
+                return;
+              }
             }
             setActiveSuggestion(text);
           }}

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
-  answerKeystrokes, applyBackfill, applyRows, applySessionChanged, bannerVisible, composerSlot, emptyChat,
+  applyBackfill, applyRows, applySessionChanged, bannerVisible, composerSlot, emptyChat,
   gaugeLabel, gaugeTone, gaugeUnknownWindow, insertPaths, isDividerTurn, openQuestion,
   sessionLiveness, normalizeAttachments, receiptFor, LOST_AFTER_MS, HANDOFF_WARN_FRAC,
   elapsedShort, lastToolLabel, tickerText,
@@ -519,38 +519,6 @@ describe("openQuestion (#6094)", () => {
       { role: "assistant", blocks: [{ kind: "tool", text: "ls", tool: "Bash", tool_id: "b1" }] },
     ];
     expect(openQuestion(turns, {})).toBe(null);
-  });
-});
-
-describe("answerKeystrokes (#6094)", () => {
-  const Q: AskQuestion = {
-    header: "Ship", question: "Ship it?", multiSelect: false,
-    options: [{ label: "Yes", description: "" }, { label: "No", description: "" }, { label: "Maybe", description: "" }],
-  };
-  const DOWN = "\x1b[B";
-
-  it("a single choice at row 0 needs no navigation, just Enter", () => {
-    expect(answerKeystrokes(Q, [0])).toBe("\r");
-  });
-
-  it("a single choice walks Down to its row, then Enter", () => {
-    expect(answerKeystrokes(Q, [2])).toBe(`${DOWN}${DOWN}\r`);
-  });
-
-  it("multi-select toggles each chosen row with Space in one downward sweep, then Enter", () => {
-    expect(answerKeystrokes({ ...Q, multiSelect: true }, [0, 2])).toBe(` ${DOWN}${DOWN} \r`);
-  });
-
-  it("multi-select sorts unordered indices so the sweep never reverses", () => {
-    expect(answerKeystrokes({ ...Q, multiSelect: true }, [2, 0])).toBe(` ${DOWN}${DOWN} \r`);
-  });
-
-  it("an out-of-range index is dropped rather than walking toward a row that was never offered", () => {
-    expect(answerKeystrokes(Q, [0, 99, -1])).toBe("\r");
-  });
-
-  it("no valid indices sends nothing", () => {
-    expect(answerKeystrokes(Q, [99, -1])).toBe("");
   });
 });
 

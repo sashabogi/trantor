@@ -127,7 +127,7 @@ async fn claim_precedes_delivery_and_ack_uses_claim_text() {
         json!("prompt-1"),
         &AtomicBool::new(true),
         move |text| async move {
-            assert_eq!(text, "full claimed text");
+            assert_eq!(text["text"], "full claimed text");
             order.lock().unwrap().push("herdr".into());
             panes::prompt_delivery(Ok(herdr::PromptOutcome::Delivered))
         },
@@ -410,4 +410,108 @@ async fn retrying_failed_ack_does_not_reclaim_or_redeliver() {
             "/session/prompt/ack"
         ]
     );
+}
+
+#[tokio::test]
+async fn answer_claim_does_not_require_text() {
+    let mut body = claim();
+    body["prompt"].as_object_mut().unwrap().remove("text");
+    body["prompt"]["kind"] = json!("answer");
+    body["prompt"]["toolId"] = json!("ask-1");
+    let hub = FakeHub::new(vec![(200, body)]);
+    let result = claim_and_deliver(
+        &hub,
+        "host",
+        "trantor",
+        json!("prompt-1"),
+        &AtomicBool::new(true),
+        |prompt| async move {
+            assert_eq!(prompt["toolId"], "ask-1");
+            panes::PromptDelivery {
+                outcome: "delivered",
+                error: None,
+            }
+        },
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert_eq!(result["outcome"], "delivered");
+}
+
+#[tokio::test]
+async fn answer_requires_matching_single_live_question_and_stale_types_nothing() {
+    let dir = scratch("answer");
+    let prompt = json!({"session":"sid", "toolId":"ask-1", "picks":[1]});
+    let question = json!({"question":"Ship?", "options":[{"label":"Yes"},{"label":"No"}]});
+    let path = dir.join("sid.json");
+    for sidecar in [
+        None,
+        Some(
+            json!({"session_id":"sid", "project":"trantor", "cwd":"/tmp",
+        "tool_use_id":"old", "questions":[question.clone()], "ts":0}),
+        ),
+        Some(
+            json!({"session_id":"sid", "project":"trantor", "cwd":"/tmp",
+        "tool_use_id":"ask-1", "questions":[question.clone(), question.clone()], "ts":0}),
+        ),
+    ] {
+        if let Some(sidecar) = sidecar {
+            std::fs::write(&path, sidecar.to_string()).unwrap();
+        }
+        let result = deliver_answer(&prompt, &dir, |_, _| async {
+            panic!("stale answer typed keys")
+        })
+        .await;
+        assert_eq!(result.outcome, "stale");
+        assert_eq!(
+            result.error.as_deref(),
+            Some("That question was already answered or replaced.")
+        );
+    }
+    std::fs::write(
+        &path,
+        json!({"session_id":"sid", "project":"trantor", "cwd":"/tmp",
+        "tool_use_id":"ask-1", "questions":[question], "ts":0})
+        .to_string(),
+    )
+    .unwrap();
+    let result = deliver_answer(&prompt, &dir, |session, keys| async move {
+        assert_eq!(session, "sid");
+        assert_eq!(keys, "\x1b[B\r");
+        Ok(())
+    })
+    .await;
+    assert_eq!(result.outcome, "delivered");
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn published_ask_gains_answer_when_result_arrives_in_later_snapshot() {
+    let dir = scratch("answer-publish");
+    let path = dir.join("transcript.jsonl");
+    let ask = format!(
+        "{}\n",
+        json!({"type":"assistant", "message":{"content":[{
+        "type":"tool_use", "id":"ask-1", "name":"AskUserQuestion", "input":{"questions":[{
+            "question":"Ship?", "options":[{"label":"Yes"},{"label":"No"}]}]}}]}})
+    );
+    std::fs::write(&path, &ask).unwrap();
+    let mut mirror = Mirror::default();
+    mirror.read("sid", &path).unwrap();
+    assert_eq!(mirror.turns[0]["blocks"][0]["tool_id"], "ask-1");
+    assert!(mirror.turns[0]["blocks"][0].get("answer").is_none());
+    mirror.published = mirror.turns.clone();
+    mirror.have = mirror.total;
+    let result = format!(
+        "{}\n",
+        json!({"type":"user", "message":{"content":[{
+        "type":"tool_result", "tool_use_id":"ask-1", "content":"No"}]}})
+    );
+    std::fs::write(&path, format!("{ask}{result}")).unwrap();
+    mirror.read("sid", &path).unwrap();
+    let payload = mirror.payload("trantor", false);
+    assert_eq!(payload["turns"][0]["idx"], 0);
+    assert_eq!(payload["turns"][0]["blocks"][0]["answer"], "No");
+    std::fs::remove_dir_all(dir).unwrap();
 }

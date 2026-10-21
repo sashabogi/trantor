@@ -274,27 +274,6 @@ export function openQuestion(turns: Turn[], results: Record<string, ToolResult>)
   return null;
 }
 
-/** Down arrow — ANSI, the same byte sequence a terminal keyboard sends. Shared by the answer
- *  path and the "Other" free-text path (#6094), both of which walk the same option list. */
-export const DOWN_ARROW = "\x1b[B";
-
-/** The keystrokes that answer one AskUserQuestion the way a person at the keyboard would (#6094):
- *  walk Down from row 0 to the target index, then Enter to confirm. Multi-select toggles each
- *  picked row with Space in one downward sweep, then Enter submits. `indices` are 0-based into
- *  `q.options`; out-of-range indices are dropped rather than walking past what the picker offers. */
-export function answerKeystrokes(q: AskQuestion, indices: number[]): string {
-  const valid = [...new Set(indices.filter(i => i >= 0 && i < q.options.length))].sort((a, b) => a - b);
-  if (valid.length === 0) return "";
-  if (!q.multiSelect) return DOWN_ARROW.repeat(valid[0]) + "\r";
-  let keys = "";
-  let at = 0;
-  for (const i of valid) {
-    keys += DOWN_ARROW.repeat(i - at) + " ";
-    at = i;
-  }
-  return keys + "\r";
-}
-
 /** #5608 — the live turn ticker's tool label: the most recent tool the agent touched, with a
  *  one-line whiff of its argument. Scans backward so the newest row wins; only rendered while
  *  the agent is working/blocked, so a finished turn's last tool never masquerades as "now". */
