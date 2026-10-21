@@ -112,6 +112,7 @@ pub(crate) static STREAMS: std::sync::Mutex<Option<std::collections::HashSet<Str
 #[tauri::command]
 pub(crate) async fn start_stream(app: tauri::AppHandle, base: String) {
     use tauri::Emitter;
+    let base = base.trim_end_matches('/').to_string();
     {
         let mut g = lock_or_recover(&STREAMS);
         let set = g.get_or_insert_with(std::collections::HashSet::new);
@@ -120,9 +121,12 @@ pub(crate) async fn start_stream(app: tauri::AppHandle, base: String) {
         } // already streaming this hub
     }
     tauri::async_runtime::spawn(async move {
+        let event_base = base.clone();
+        let connect_base = base.clone();
         identity::stream(&owner_identity(), &base, move |data| {
+            remote::stream_event(&event_base, &data);
             let _ = app.emit("hub-event", data);
-        })
+        }, move || remote::stream_connected(&connect_base))
         .await;
     });
 }

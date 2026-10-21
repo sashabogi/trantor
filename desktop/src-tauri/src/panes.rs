@@ -90,28 +90,44 @@ pub(crate) fn ask_answer(target: String, data: String) -> Result<(), String> {
 /// Delivery truth is unchanged: the transcript receipt decides what the operator is told.
 #[tauri::command]
 pub(crate) fn pane_send(target: String, text: String) -> Result<(), String> {
+    let delivery = deliver_prompt(&target, &text);
+    match delivery.error {
+        Some(error) => Err(error),
+        None => Ok(()),
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub(crate) struct PromptDelivery {
+    pub(crate) outcome: &'static str,
+    pub(crate) error: Option<String>,
+}
+
+pub(crate) fn deliver_prompt(target: &str, text: &str) -> PromptDelivery {
     if target.trim().is_empty() {
-        return Err("no pane".into());
+        return PromptDelivery { outcome: "no_agent", error: Some("no pane".into()) };
     }
-    match herdr::prompt(&target, &text)? {
-        herdr::PromptOutcome::Delivered => Ok(()),
-        herdr::PromptOutcome::Blocked => Err(
+    prompt_delivery(herdr::prompt(target, text))
+}
+
+// Composer and phone acknowledgments share both herdr's outcome and the explanation (#12130).
+pub(crate) fn prompt_delivery(result: Result<herdr::PromptOutcome, String>) -> PromptDelivery {
+    use herdr::PromptOutcome;
+    let (outcome, error) = match result {
+        Ok(PromptOutcome::Delivered) => ("delivered", None),
+        Ok(PromptOutcome::Blocked) => ("blocked", Some(
             "The agent is waiting on an approval or question in its terminal — answer it there \
-             (Terminal tray), then send again. Nothing was typed."
-                .into(),
-        ),
-        herdr::PromptOutcome::NotReady => {
-            Err("The agent is still starting up — try again in a moment. Nothing was typed.".into())
-        }
-        herdr::PromptOutcome::Stalled => Err(
+             (Terminal tray), then send again. Nothing was typed.".into())),
+        Ok(PromptOutcome::NotReady) => ("not_ready", Some(
+            "The agent is still starting up — try again in a moment. Nothing was typed.".into())),
+        Ok(PromptOutcome::Stalled) => ("stalled", Some(
             "The send didn't register with the agent — no lifecycle change was observed. \
-             Try again."
-                .into(),
-        ),
-        herdr::PromptOutcome::NoAgent => {
-            Err("No agent is running in this pane — reopen the session first.".into())
-        }
-    }
+             Try again.".into())),
+        Ok(PromptOutcome::NoAgent) => ("no_agent", Some(
+            "No agent is running in this pane — reopen the session first.".into())),
+        Err(error) => ("stalled", Some(error)),
+    };
+    PromptDelivery { outcome, error }
 }
 
 /// Is this seat writing to its worktree right now? One owner for this answer: herdr, which

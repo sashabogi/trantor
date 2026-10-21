@@ -33,6 +33,7 @@ mod watchers;
 mod panes;
 mod file_ops;
 mod settings;
+mod remote;
 mod icons;
 mod local_sessions;
 mod succession;

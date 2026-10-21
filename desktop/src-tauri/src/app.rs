@@ -132,6 +132,7 @@ pub fn run() {
             // #6317 acceptance drill: TRANTOR_KEY_DRILL=post|throw posts a real right-arrow key
             // event through AppKit once the webview is live (src/key_drill.rs). Inert otherwise.
             key_drill::arm(app.handle());
+            remote::start(app.handle().clone());
             // #6668 acceptance drill: TRANTOR_HANDOFF_DRILL=<project> opens that project's Chat
             // on a pane holding a bare shell and proves no chain starts (src/handoff_drill.rs).
             handoff_drill::arm(app.handle());
@@ -158,6 +159,8 @@ pub fn run() {
             known_projects,
             hub_request,
             start_stream,
+            remote::relay_chat_get,
+            remote::relay_chat_set,
             doctor,
             card_code,
             open_code,

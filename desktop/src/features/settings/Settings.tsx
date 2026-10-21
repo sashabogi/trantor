@@ -11,6 +11,7 @@ import { notificationsEnabled, setNotificationsEnabled } from "../../shared/noti
 import { AccountsPane } from "./providers/AccountsPane";
 import { AgentsPane } from "./agents/AgentsPane";
 import { PairPhone } from "./PairPhone";
+import { RelayChat } from "./RelayChat";
 import { SettingsBoundary } from "./SettingsBoundary";
 import { onboardingApi } from "../onboarding/onboardingApi";
 
@@ -137,6 +138,7 @@ function SettingsContent({ me, update: updateFromShell, projects = [], project =
           <h2 className="tr-sec-title">Phone</h2>
           <p className="tr-sec-sub">The companion app enrolls itself from a QR — one invite, single use, ten minutes.</p>
           <PairPhone hubBase={hubs[0]?.url ?? ""} />
+          <RelayChat />
         </section>
 
         <section className="mb-8">

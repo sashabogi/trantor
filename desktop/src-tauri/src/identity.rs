@@ -484,20 +484,30 @@ pub async fn request(identity: &str, base: &str, method: &str, path: &str, body:
 
 /// The hub's SSE stream, each event handed to `on_event`. In Rust for the same ATS reason as
 /// request(). Reconnect is ours: capped backoff, and `since` resumes from the last id so nothing drops.
-pub async fn stream(identity: &str, base: &str, mut on_event: impl FnMut(String)) {
+pub async fn stream(identity: &str, base: &str, mut on_event: impl FnMut(String), mut on_connect: impl FnMut()) {
     use futures_util::StreamExt;
     let mut last_id: u64 = 0;
     let mut backoff = 1u64;
     loop {
         let path = if last_id > 0 { format!("/stream?events=1&since={last_id}") } else { "/stream?events=1".into() };
-        let headers = match sign(identity, "GET", &path, None) { Ok(h) => h, Err(_) => return };
-        let client = match reqwest::Client::builder().build() { Ok(c) => c, Err(_) => return };
+        let headers = match sign(identity, "GET", &path, None) {
+            Ok(h) => h,
+            Err(_) => {
+                tokio::time::sleep(std::time::Duration::from_secs(backoff)).await;
+                backoff = (backoff * 2).min(15);
+                continue;
+            }
+        };
+        let client = match reqwest::Client::builder()
+            .connect_timeout(std::time::Duration::from_secs(10))
+            .redirect(reqwest::redirect::Policy::none()).build() { Ok(c) => c, Err(_) => return };
         let mut req = client.get(format!("{}{}", base.trim_end_matches('/'), path));
         for (k, v) in headers { req = req.header(k, v); }
 
         match req.send().await {
             Ok(res) if res.status().is_success() => {
                 backoff = 1;
+                on_connect();
                 let mut buf = String::new();
                 let mut body = res.bytes_stream();
                 while let Some(chunk) = body.next().await {
