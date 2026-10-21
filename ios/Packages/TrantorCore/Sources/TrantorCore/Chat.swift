@@ -5,26 +5,46 @@ public struct ChatBlock: Codable, Equatable, Sendable {
     public var text: String
     public var tool: String
     public var ask: [ChatQuestion]
+    public var toolID: String
+    public var answer: String?
 
-    public init(kind: String = "text", text: String = "", tool: String = "", ask: [ChatQuestion] = []) {
+    public init(kind: String = "text", text: String = "", tool: String = "", ask: [ChatQuestion] = [], toolID: String = "", answer: String? = nil) {
         self.kind = kind; self.text = text; self.tool = tool; self.ask = ask
+        self.toolID = toolID; self.answer = answer
     }
-    enum CodingKeys: String, CodingKey { case kind, text, tool, ask }
+    enum CodingKeys: String, CodingKey {
+        case kind, text, tool, ask, questions, answer
+        case toolID = "tool_id"
+    }
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         kind = c.lenientString(.kind); text = c.lenientString(.text); tool = c.lenientString(.tool)
-        ask = c.lenientArray(ChatQuestion.self, .ask)
+        ask = c.lenientArray(ChatQuestion.self, .questions)
+        if ask.isEmpty { ask = c.lenientArray(ChatQuestion.self, .ask) }
+        toolID = c.lenientString(.toolID)
+        answer = c.lenient(String.self, .answer)
+    }
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(kind, forKey: .kind); try c.encode(text, forKey: .text)
+        try c.encode(tool, forKey: .tool); try c.encode(ask, forKey: .questions)
+        try c.encode(toolID, forKey: .toolID); try c.encodeIfPresent(answer, forKey: .answer)
     }
     public var isQuestion: Bool { kind == "ask" || tool == "AskUserQuestion" }
 }
 
 public struct ChatQuestion: Codable, Equatable, Sendable {
     public var question: String
+    public var header: String
+    public var multiSelect: Bool
     public var options: [ChatOption]
-    public init(question: String, options: [ChatOption] = []) { self.question = question; self.options = options }
-    enum CodingKeys: String, CodingKey { case question, options }
+    public init(question: String, options: [ChatOption] = [], header: String = "", multiSelect: Bool = false) {
+        self.question = question; self.options = options; self.header = header; self.multiSelect = multiSelect
+    }
+    enum CodingKeys: String, CodingKey { case question, options, header, multiSelect }
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
+        header = c.lenientString(.header); multiSelect = c.lenientBool(.multiSelect)
         question = c.lenientString(.question); options = c.lenientArray(ChatOption.self, .options)
     }
 }
@@ -133,6 +153,7 @@ public struct PromptStatus: Codable, Equatable, Sendable {
     public var failureReason: String {
         if !error.isEmpty { return error }
         switch outcome {
+        case "stale": return "That question was already answered or replaced."
         case "blocked": return "The session is waiting for a response on the Mac."
         case "not_ready": return "The session is not ready. Open it on the Mac."
         case "stalled": return "The session stopped responding. Check it on the Mac."

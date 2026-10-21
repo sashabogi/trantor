@@ -32,6 +32,24 @@ final class ChatDecodingTests: XCTestCase {
         XCTAssertTrue(PromptStatus(status: "expired").failureReason.contains("Is the Trantor app open?"))
     }
 
+    func testAskWireFieldsAndCacheRoundTrip() throws {
+        let fixture = #"{"kind":"ask","tool_id":"tool-7","questions":[{"header":"Scope","question":"Which?","multiSelect":1,"options":[{"label":"A","description":"First"},null,{"label":"B"}]}],"answer":"A, B"}"#
+        let block = try JSONDecoder().decode(ChatBlock.self, from: Data(fixture.utf8))
+        XCTAssertTrue(block.isQuestion)
+        XCTAssertEqual(block.toolID, "tool-7")
+        XCTAssertEqual(block.answer, "A, B")
+        XCTAssertEqual(block.ask.first?.header, "Scope")
+        XCTAssertEqual(block.ask.first?.multiSelect, true)
+        XCTAssertEqual(block.ask.first?.options.map(\.label), ["A", "B"])
+        XCTAssertEqual(try JSONDecoder().decode(ChatBlock.self, from: JSONEncoder().encode(block)), block)
+        let absent = try JSONDecoder().decode(ChatBlock.self, from: Data(#"{"kind":"ask","questions":null,"answer":null}"#.utf8))
+        XCTAssertNil(absent.answer)
+        XCTAssertTrue(absent.ask.isEmpty)
+        let empty = try JSONDecoder().decode(ChatBlock.self, from: Data(#"{"kind":"ask","answer":""}"#.utf8))
+        XCTAssertEqual(empty.answer, "")
+        XCTAssertEqual(PromptStatus(status: "failed", outcome: "stale").failureReason, "That question was already answered or replaced.")
+    }
+
     func testContextDerivesOnlyFromKnownUsage() {
         XCTAssertEqual(ChatContext(tokens: 200, window: 1000).fraction, 0.2)
         XCTAssertNil(ChatContext(tokens: 200, window: 0).fraction)

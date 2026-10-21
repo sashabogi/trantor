@@ -24,6 +24,7 @@ enum NotificationCommand: Equatable {
     case gate(id: Int, project: String, status: GateResolution)
     /// A plain tap: open the app on Decisions.
     case open
+    case ask(project: String, toolId: String)
 }
 
 enum NotificationRouter {
@@ -62,7 +63,13 @@ enum NotificationRouter {
             guard let id, let project = userInfo["project"] as? String, !project.isEmpty else { return nil }
             return .gate(id: id, project: project,
                          status: actionIdentifier == NotificationIDs.gateVerified ? .verified : .failed)
-        case UNNotificationDefaultActionIdentifier: return .open
+        case UNNotificationDefaultActionIdentifier:
+            if userInfo["kind"] as? String == "ask" {
+                guard let project = userInfo["project"] as? String, !project.isEmpty,
+                      let toolId = userInfo["toolId"] as? String, !toolId.isEmpty else { return nil }
+                return .ask(project: project, toolId: toolId)
+            }
+            return .open
         default: return nil
         }
     }
@@ -95,6 +102,10 @@ final class NotificationCoordinator: NSObject, UNUserNotificationCenterDelegate,
         switch command {
         case .open:
             model.selection = .decisions
+        case .ask(let project, let toolId):
+            model.chat(project: project).focusedToolID = toolId
+            model.selection = .projects
+            model.openProject = project
         case .hold(let id, let go):
             await model.decisions.decideHold(Hold(id: id), go: go)
         case .gate(let id, let project, let status):
@@ -107,18 +118,29 @@ final class NotificationCoordinator: NSObject, UNUserNotificationCenterDelegate,
 
 struct NotificationClear: Equatable {
     let kind: String
-    let id: Int
+    let id: Int?
+    let project: String?
+    let toolId: String?
 
     init?(userInfo: [AnyHashable: Any]) {
         guard let aps = userInfo["aps"] as? [String: Any],
               aps["content-available"] as? Int == 1,
-              let kind = userInfo["kind"] as? String, !kind.isEmpty,
-              let id = Self.itemID(userInfo) else { return nil }
-        self.kind = kind; self.id = id
+              let kind = userInfo["kind"] as? String, !kind.isEmpty else { return nil }
+        self.kind = kind
+        if kind == "ask" {
+            guard let project = userInfo["project"] as? String, !project.isEmpty,
+                  let toolId = userInfo["toolId"] as? String, !toolId.isEmpty else { return nil }
+            self.project = project; self.toolId = toolId; id = nil
+        } else {
+            guard let id = Self.itemID(userInfo) else { return nil }
+            self.id = id; project = nil; toolId = nil
+        }
     }
 
     func matches(_ userInfo: [AnyHashable: Any]) -> Bool {
-        userInfo["kind"] as? String == kind && Self.itemID(userInfo) == id
+        guard userInfo["kind"] as? String == kind else { return false }
+        if kind == "ask" { return userInfo["project"] as? String == project && userInfo["toolId"] as? String == toolId }
+        return Self.itemID(userInfo) == id
     }
 
     private static func itemID(_ userInfo: [AnyHashable: Any]) -> Int? {

@@ -25,6 +25,32 @@ final class NotificationRouterTests: XCTestCase {
         XCTAssertEqual(NotificationRouter.command(actionIdentifier: UNNotificationDefaultActionIdentifier, userInfo: [:]), .open)
     }
 
+    @MainActor func testAskTapOpensProjectChatAndTargetsQuestion() async {
+        let info: [AnyHashable: Any] = ["kind": "ask", "project": "trantor", "toolId": "tool-7"]
+        let command = NotificationRouter.command(actionIdentifier: UNNotificationDefaultActionIdentifier, userInfo: info)
+        XCTAssertEqual(command, .ask(project: "trantor", toolId: "tool-7"))
+        let model = AppModel(stub: StubHub())
+        model.selection = .feed
+        let coordinator = NotificationCoordinator()
+        coordinator.model = model
+        await coordinator.handle(command!)
+        XCTAssertEqual(model.selection, .projects)
+        XCTAssertEqual(model.openProject, "trantor")
+        XCTAssertEqual(model.chat(project: "trantor").focusedToolID, "tool-7")
+        XCTAssertNil(model.chat(project: "another").focusedToolID)
+        for payload: [AnyHashable: Any] in [["kind": "ask"], ["kind": "ask", "project": "trantor"], ["kind": "ask", "project": "", "toolId": "tool-7"]] {
+            XCTAssertNil(NotificationRouter.command(actionIdentifier: UNNotificationDefaultActionIdentifier, userInfo: payload))
+        }
+    }
+
+    func testAskSilentClearMatchesProjectAndTool() throws {
+        let clear = try XCTUnwrap(NotificationClear(userInfo: ["aps": ["content-available": 1], "kind": "ask", "project": "trantor", "toolId": "tool-7"]))
+        XCTAssertTrue(clear.matches(["kind": "ask", "project": "trantor", "toolId": "tool-7"]))
+        XCTAssertFalse(clear.matches(["kind": "ask", "project": "another", "toolId": "tool-7"]))
+        XCTAssertFalse(clear.matches(["kind": "ask", "project": "trantor", "toolId": "tool-8"]))
+        XCTAssertNil(NotificationClear(userInfo: ["aps": ["content-available": 1], "kind": "ask", "project": "trantor"]))
+    }
+
     func testMissingIdOrUnknownActionDoesNothing() {
         XCTAssertNil(NotificationRouter.command(actionIdentifier: "HOLD_GO", userInfo: [:]))
         XCTAssertNil(NotificationRouter.command(actionIdentifier: "SOMETHING_ELSE", userInfo: ["id": 1]))

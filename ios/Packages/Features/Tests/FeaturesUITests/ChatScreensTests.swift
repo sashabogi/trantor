@@ -28,7 +28,7 @@ final class ChatScreensTests: XCTestCase {
         let composer = app.textFields["chat.composer"].exists ? app.textFields["chat.composer"] : app.textViews["chat.composer"]
         XCTAssertTrue(composer.waitForExistence(timeout: 8))
         XCTAssertTrue(app.staticTexts["Context 21%"].exists)
-        XCTAssertTrue(app.staticTexts["Answer it on the Mac"].exists)
+        XCTAssertTrue(app.buttons["chat.ask.option.demo-project-question.0"].exists)
         XCTAssertFalse(app.buttons["chat.send"].isEnabled)
         capture("project-chat")
         composer.tap()

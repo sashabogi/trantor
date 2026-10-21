@@ -88,6 +88,15 @@ public final class StubHub: HubServing, @unchecked Sendable {
             return status
         }
     }
+    public func answer(project: String, session: String, toolId: String, picks: [Int], other: String?) async throws -> PromptStatus {
+        try await write("answer:\(project):\(session):\(toolId):\(picks):\(other ?? "")")
+        return locked {
+            let id = String(nextPrompt); nextPrompt += 1
+            let status = PromptStatus(id: id, status: "queued")
+            _prompts[id] = status
+            return status
+        }
+    }
     public func promptStatus(id: String) async throws -> PromptStatus {
         try await read("promptStatus:\(id)", promptsData[id] ?? PromptStatus(id: id, status: "queued"))
     }

@@ -31,6 +31,7 @@ public final class AppModel {
 
     public private(set) var isUnpairing = false
     public var unregisterDevice: (() async throws -> Void)?
+    private let authenticator: any Authenticator
     private let cache: StoreCache
     private var client: HubServing?
     private var chats: [String: ChatStore] = [:]
@@ -38,6 +39,7 @@ public final class AppModel {
 
     public init(settings: SettingsStore = SettingsStore(), cache: StoreCache = .default,
                 authenticator: any Authenticator = DeviceAuthenticator()) {
+        self.authenticator = authenticator
         self.settings = settings; self.cache = cache
         decisions = DecisionsStore(cache: cache, authenticator: authenticator)
         decisions.requiresAuthentication = { [weak settings] in settings?.requireBiometrics ?? true }
@@ -53,6 +55,7 @@ public final class AppModel {
     /// Previews and tests: every store talks to `hub`.
     public init(stub hub: HubServing, identity: String = "ios-preview", demo: Bool = false,
                 authenticator: any Authenticator = DeviceAuthenticator()) {
+        self.authenticator = authenticator
         isDemo = demo
         settings = SettingsStore(defaults: UserDefaults(suiteName: "preview-\(UUID().uuidString)") ?? .standard, keyStore: InMemoryKeyStore())
         cache = StoreCache(directory: nil)
@@ -82,7 +85,8 @@ public final class AppModel {
 
     public func chat(project: String) -> ChatStore {
         if let store = chats[project] { return store }
-        let store = ChatStore(project: project, api: client, cache: cache)
+        let store = ChatStore(project: project, api: client, cache: cache, authenticator: authenticator)
+        store.requiresAuthentication = { [weak settings] in settings?.requireBiometrics ?? true }
         store.mayWrite = { [weak self] in
             guard let self else { return false }
             return self.isDemo || (self.settings.isPaired && ChatStore.allowsWriting(scopes: self.settings.scopes, project: project))

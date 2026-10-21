@@ -5,6 +5,7 @@ import TrantorCore
 public protocol HubServing: Sendable {
     func chat(project: String, after: Int) async throws -> ChatSnapshot
     func sendPrompt(project: String, text: String) async throws -> PromptStatus
+    func answer(project: String, session: String, toolId: String, picks: [Int], other: String?) async throws -> PromptStatus
     func promptStatus(id: String) async throws -> PromptStatus
     func health() async throws -> HealthInfo
     func enroll(token: String, name: String) async throws -> EnrollResult
@@ -51,6 +52,15 @@ public final class HubAPI: HubServing, @unchecked Sendable {
     public func sendPrompt(project: String, text: String) async throws -> PromptStatus {
         let data = try await post("/session/prompt", ["project": .string(project), "text": .string(text)])
         return try decode(PromptStatus.self, data)
+    }
+
+    public func answer(project: String, session: String, toolId: String, picks: [Int], other: String? = nil) async throws -> PromptStatus {
+        var fields: [String: JSONValue] = [
+            "project": .string(project), "session": .string(session), "toolId": .string(toolId),
+            "picks": .array(picks.map { .number(Double($0)) }),
+        ]
+        if let other { fields["other"] = .string(other) }
+        return try decode(PromptStatus.self, await post("/session/answer", fields))
     }
 
     public func promptStatus(id: String) async throws -> PromptStatus {

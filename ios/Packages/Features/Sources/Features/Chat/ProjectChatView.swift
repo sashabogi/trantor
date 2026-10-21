@@ -16,6 +16,9 @@ struct ProjectView: View {
             else { BoardView(project: project) }
         }
         .stage()
+        .onChange(of: model.chat(project: project).focusedToolID, initial: true) { _, target in
+            if target != nil { section = "chat" }
+        }
         .navigationTitle(project)
         .navigationBarTitleDisplayMode(.inline)
     }
@@ -40,7 +43,8 @@ struct ProjectChatView: View {
                                        message: store.snapshot.host.isEmpty ? "Open this project in Trantor on your Mac to see the session here." : "Send a message to your orchestrator.")
                         }
                         ForEach(store.turns) { turn in
-                            ChatTurnRow(turn: turn, delivery: store.delivery(for: turn))
+                            ChatTurnRow(turn: turn, delivery: store.delivery(for: turn), store: store)
+                                .id(turn.idx)
                         }
                         ForEach(store.unmirroredOutgoing) { prompt in
                             HStack {
@@ -65,8 +69,10 @@ struct ProjectChatView: View {
                 }
                 .defaultScrollAnchor(.bottom)
                 .scrollDismissesKeyboard(.interactively)
+                .onChange(of: store.focusedToolID, initial: true) { _, _ in scrollToQuestion(proxy) }
                 .onChange(of: store.turns) { _, _ in
-                    if followingBottom { proxy.scrollTo("chat-bottom", anchor: .bottom) }
+                    if store.focusedToolID != nil { scrollToQuestion(proxy) }
+                    else if followingBottom { proxy.scrollTo("chat-bottom", anchor: .bottom) }
                 }
                 .onChange(of: store.outgoing) { _, _ in
                     if followingBottom || store.sending { proxy.scrollTo("chat-bottom", anchor: .bottom) }
@@ -87,6 +93,14 @@ struct ProjectChatView: View {
                 Button("Hide keyboard") { composing = false }.accessibilityIdentifier("chat.hide-keyboard")
             }
         }
+    }
+
+    private func scrollToQuestion(_ proxy: ScrollViewProxy) {
+        guard let toolID = store.focusedToolID,
+              let turn = store.turns.first(where: { $0.blocks.contains { $0.toolID == toolID } }) else { return }
+        followingBottom = false
+        proxy.scrollTo(turn.idx, anchor: .top)
+        store.focusedToolID = nil
     }
 
     private var header: some View {
@@ -151,6 +165,7 @@ struct ProjectChatView: View {
 private struct ChatTurnRow: View {
     let turn: ChatTurn
     let delivery: PromptDelivery?
+    let store: ChatStore
     private var mine: Bool { turn.role == "user" }
 
     var body: some View {
@@ -159,17 +174,8 @@ private struct ChatTurnRow: View {
             VStack(alignment: .leading, spacing: Space.sm) {
                 ForEach(Array(turn.blocks.enumerated()), id: \.offset) { _, block in
                     if block.isQuestion {
-                        VStack(alignment: .leading, spacing: Space.sm) {
-                            if block.ask.isEmpty { Text(block.text).font(.tCallout) }
-                            ForEach(Array(block.ask.enumerated()), id: \.offset) { _, question in
-                                Text(question.question).font(.tCallout)
-                                ForEach(Array(question.options.enumerated()), id: \.offset) { _, option in
-                                    Text("• \(option.label)\(option.description.isEmpty ? "" : ": \(option.description)")")
-                                        .font(.tCaption).foregroundStyle(Palette.text2)
-                                }
-                            }
-                            Label("Answer it on the Mac", systemImage: "desktopcomputer").font(.tCaption).foregroundStyle(Palette.amber)
-                        }.card()
+                        ChatQuestionCard(block: block, store: store)
+                            .id(block.toolID)
                     } else if block.kind == "tool" {
                         Text([block.tool, block.text].filter { !$0.isEmpty }.joined(separator: " "))
                             .font(.tDataSmall).lineLimit(1).truncationMode(.middle)

@@ -64,7 +64,7 @@ public enum DemoData {
                 ]),
                 ChatTurn(idx: 2, role: "assistant", blocks: [ChatBlock(kind: "tool", tool: "AskUserQuestion", ask: [
                     ChatQuestion(question: "Which project should we review next?", options: [ChatOption(label: "Trantor"), ChatOption(label: "IBKR")]),
-                ])]),
+                ], toolID: "demo-project-question")]),
                 ChatTurn(idx: 3, role: "assistant", blocks: [ChatBlock(text: "The focused tests pass. I'm checking how live replies appear on the iPad.")]),
             ], meta: ChatMeta(working: true, model: "Orchestrator", context: ChatContext(tokens: 42000, window: 200000, frac: 0.21)),
             updatedAt: ago(0.1), host: "demo-mac")]
