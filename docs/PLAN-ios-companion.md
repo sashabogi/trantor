@@ -82,7 +82,7 @@ The operator asked to see the orchestrator's full chat and drive the project fro
 
 ## Onboarding (v1.1, card #12129)
 
-Pairing is a paged flow with the action pinned at the bottom of every page: Welcome, then Tailscale (a reachability check of the hub's `/health` that says "Turn on Tailscale" when it fails), then Scan (a custom AVFoundation scanner: continuous autofocus with near range, exposure bias down for screens, auto zoom from `minimumFocusDistance`, a torch toggle, and a hint line while it hunts; paste and Universal Clipboard as the fallback), then Name this device, then Done (the hub, the scope, and "Open Decisions"). The desktop's QR is shown large, with a full-screen option.
+Pairing is a paged flow with the action pinned at the bottom of every page: Welcome, then Tailscale (a reachability check of the hub's `/health` that says "Turn on Tailscale" when it fails), then Scan (a custom AVFoundation scanner: continuous autofocus with near range, exposure bias down for screens, auto zoom from `minimumFocusDistance`, a torch toggle, and a hint line while it hunts; paste and Universal Clipboard as the fallback), then Connect (calls the scanned hub's `/health`; on failure "Can't reach your hub. Turn on Tailscale, then Retry"), then Name this device (runs the pair), then Done (the hub, the scope, and "Open Decisions"). The check comes after Scan because a fresh install only learns the hub address from the code. The desktop's QR is shown large, with a full-screen option.
 
 ## v2
 
