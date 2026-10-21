@@ -9,6 +9,14 @@ const APNS_HOSTS = {
 const JWT_REUSE_MS = 50 * 60 * 1000;
 const text = (value, max = 300) => String(value || "").slice(0, max);
 
+// #12137: ask alerts are keyed by a tool id string, but the APNs payload's id field is numeric —
+// a stable FNV-1a hash bridges the two, and the toolId string rides along so the phone can match.
+function hashId(s) {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 0x01000193) >>> 0; }
+  return h >>> 0;
+}
+
 function apnsTransport({ host, path, headers, body }) {
   return new Promise((resolve, reject) => {
     const session = http2.connect(`https://${host}`);
@@ -40,6 +48,10 @@ function apnsTransport({ host, path, headers, body }) {
 
 function clearFor(event) {
   // Whatever ends the item clears the phone's alert: decided, resolved, expired or withdrawn.
+  if (event.type === "ask.answered" && event.toolId) {
+    const toolId = text(event.toolId, 200);
+    return { kind: "ask", id: hashId(toolId), toolId, collapse: `ask-${toolId}`, project: text(event.project, 80), silent: true };
+  }
   const match = /^(hold|verify\.gate|proposal)\.(?:decided|resolved|closed|expired|withdrawn)$/.exec(event.type || "");
   if (!match) return null;
   const kind = match[1] === "verify.gate" ? "gate" : match[1];
@@ -61,6 +73,11 @@ function alertFor(event, state) {
   if (event.type === "proposal.filed" && Number(event.proposalId)) {
     return { ...base, kind: "proposal", id: Number(event.proposalId), category: "PROPOSAL",
       title: `Proposal #${Number(event.proposalId)}`, body: text(event.scope) };
+  }
+  if (event.type === "ask.opened" && event.toolId) {
+    const toolId = text(event.toolId, 200);
+    return { ...base, kind: "ask", id: hashId(toolId), toolId, collapse: `ask-${toolId}`,
+      title: `${base.project} asks`, body: text(event.question) };
   }
   if (event.type === "message" && Number(event.msgId)) {
     return { ...base, kind: "message", id: Number(event.msgId), direct: true,
@@ -116,9 +133,11 @@ export function createNotifier({ state, markDirty, canRead, transport = apnsTran
       ? { "content-available": 1 }
       : { alert: { title: delivery.title, body: delivery.body }, sound: "default" };
     if (delivery.category) aps.category = delivery.category;
-    const payload = JSON.stringify({ aps, kind: delivery.kind, id: delivery.id, project: delivery.project });
-    // kind in the id: hold #5 and gate #5 are different alerts
-    const collapseId = `${delivery.kind}-${delivery.id}`;
+    const body = { aps, kind: delivery.kind, id: delivery.id, project: delivery.project };
+    if (delivery.toolId) body.toolId = delivery.toolId;
+    const payload = JSON.stringify(body);
+    // kind in the id: hold #5 and gate #5 are different alerts; an ask collapses on its tool id
+    const collapseId = delivery.collapse || `${delivery.kind}-${delivery.id}`;
     try {
       const result = await transport({
         host: APNS_HOSTS[device.env] || APNS_HOSTS.production,

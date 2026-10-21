@@ -128,7 +128,7 @@ const context = {
 };
 const sessionChat = createSessionRuntime({
   state: store.state, markDirty: store.markDirty,
-  appendEvent: events.appendEvent, pushEventToStreams: events.pushEventToStreams,
+  appendEvent: events.appendEvent, pushEventToStreams: events.pushEventToStreams, notifier,
 });
 const routes = [routeDevices, routeAdmin, routeCards, routeInsights, routeMessages, sessionChat.route];
 

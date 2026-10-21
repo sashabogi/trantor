@@ -12,9 +12,11 @@ const EVENT_TEXT_MAX = 500;
 const PROMPT_TTL_MS = Number(process.env.RELAY_PROMPT_TTL_MS || 120000);
 const PROMPT_SWEEP_MS = Number(process.env.RELAY_PROMPT_SWEEP_MS || 30000);
 const EXPIRED_REASON = "No Mac is relaying this project. Is the Trantor app open?";
-const ACK_OUTCOMES = new Set(["delivered", "blocked", "not_ready", "stalled", "no_agent"]);
+const ACK_OUTCOMES = new Set(["delivered", "blocked", "not_ready", "stalled", "no_agent", "stale"]);
+const ANSWER_PICKS_MAX = 10;
+const ANSWER_OTHER_MAX = 2000;
 
-export function createSessionRuntime({ state, markDirty, appendEvent, pushEventToStreams }) {
+export function createSessionRuntime({ state, markDirty, appendEvent, pushEventToStreams, notifier }) {
   const now = () => Date.now();
   const mirrors = new Map();     // project -> { session, total, turns: Map(idx->turn), have, meta, updatedAt, host }
   state.sessionPrompts ||= [];
@@ -51,6 +53,7 @@ export function createSessionRuntime({ state, markDirty, appendEvent, pushEventT
     if (!m || m.session !== session) {
       m = { session, total: 0, turns: new Map(), have: 0, meta: {}, updatedAt: 0, host: "" };
       mirrors.set(project, m);
+      asked.delete(project);   // a session switch orphans the old asks; its alerts go stale on the phone
     }
     // The last turn grows while the assistant writes, so the desktop resends from the lowest
     // changed idx and the hub REPLACES by idx — re-sends are idempotent by construction.
@@ -81,15 +84,82 @@ export function createSessionRuntime({ state, markDirty, appendEvent, pushEventT
     m.updatedAt = now();
     m.host = String(b.host || auth?.identity?.name || "").slice(0, 120);
     pushEventToStreams({ ts: m.updatedAt, type: "chat.updated", project, total: m.total, working: m.meta.working });
+    scanAsks(m, project);
     return { code: 200, body: { ok: true, have: m.have } };
+  }
+
+  // #12137: an unanswered AskUserQuestion block in the mirror raises ONE push per tool id
+  // ("<project> asks: <question>"); when the desktop republishes the block with its answer, the
+  // phone's alert is silently cleared. Dedupe is in-memory like the mirror itself, and ask events
+  // never touch the audit log — the prompt queue already carries the durable record.
+  const asked = new Map();     // project -> Set(toolId) alerted and still unanswered
+  function askNotify(event) {
+    try { notifier?.notify(event)?.catch?.(() => {}); } catch {}
+  }
+  function firstQuestion(blk) {
+    const a = blk?.ask;
+    if (Array.isArray(a) && a.length) return String(a[0]?.question ?? a[0] ?? "").slice(0, 300);
+    return String(blk?.text || "").slice(0, 300);
+  }
+  function scanAsks(m, project) {
+    if (!notifier) return;
+    for (const t of m.turns.values()) {
+      for (const blk of t.blocks) {
+        if (!blk || (blk.kind !== "ask" && !blk.ask)) continue;
+        const toolId = String(blk.toolId || blk.tool_id || "").slice(0, 200);
+        if (!toolId) continue;
+        let seen = asked.get(project);
+        if (blk.answer) {
+          if (seen?.has(toolId)) {
+            seen.delete(toolId);
+            askNotify({ type: "ask.answered", project, by: m.host, toolId });
+          }
+        } else if (!seen?.has(toolId)) {
+          if (!seen) { seen = new Set(); asked.set(project, seen); }
+          seen.add(toolId);
+          askNotify({ type: "ask.opened", project, by: m.host, toolId, question: firstQuestion(blk) });
+        }
+      }
+    }
   }
 
   async function route({ req, res, q, P, auth, ctx }) {
     const isChat = P === "/session/chat";
     const isPrompts = P === "/session/prompts";
     const isPrompt = P === "/session/prompt" || P === "/session/prompt/claim" || P === "/session/prompt/ack";
-    if (!isChat && !isPrompts && !isPrompt) return false;
+    const isAnswer = P === "/session/answer";
+    if (!isChat && !isPrompts && !isPrompt && !isAnswer) return false;
     const { body, json, canon } = ctx;
+
+    // #12137: the phone's answer to an AskUserQuestion joins the SAME queue as a plain prompt,
+    // as kind "answer" — same claim, ack, expiry and audit trail; the desktop relay maps the
+    // picks to keystrokes and types them, or acks "stale" when the ask is gone.
+    if (req.method === "POST" && isAnswer) {
+      const b = await body(req);
+      const project = canon(String(b.project || "").slice(0, 80));
+      const session = String(b.session || "").slice(0, 200);
+      const toolId = String(b.toolId || "").slice(0, 200);
+      if (!project) return json(res, 400, { error: "project required" });
+      if (!session) return json(res, 400, { error: "session required" });
+      if (!toolId) return json(res, 400, { error: "toolId required" });
+      const picks = (Array.isArray(b.picks) ? b.picks : []).map(Number).filter(Number.isInteger).slice(0, ANSWER_PICKS_MAX);
+      const other = String(b.other || "").slice(0, ANSWER_OTHER_MAX);
+      if (!picks.length && !other.trim()) return json(res, 400, { error: "picks or other required" });
+      expireQueued();
+      state.sessionPromptSeq += 1;
+      const text = other.trim() ? other : `picks ${picks.join(", ")}`;
+      const p = { id: state.sessionPromptSeq, project, kind: "answer", session, toolId, picks, other,
+        text, by: String(auth?.identity?.name || "").slice(0, 120), ts: now(), status: "queued" };
+      state.sessionPrompts.push(p);
+      while (state.sessionPrompts.length > PROMPT_CAP) {
+        const ti = state.sessionPrompts.findIndex(x => x.status !== "queued" && x.status !== "claimed");
+        state.sessionPrompts.splice(ti >= 0 ? ti : 0, 1);
+      }
+      markDirty();
+      appendEvent("chat.prompt.queued", project, p.by, { promptId: p.id, kind: "answer", toolId, text: text.slice(0, EVENT_TEXT_MAX) });
+      pushEventToStreams({ ts: p.ts, type: "chat.prompt", id: p.id, project });
+      return json(res, 200, { id: p.id, status: "queued" });
+    }
 
     if (req.method === "POST" && isChat) {
       const b = await body(req);
@@ -130,13 +200,21 @@ export function createSessionRuntime({ state, markDirty, appendEvent, pushEventT
       return json(res, 200, { id: p.id, status: "queued" });
     }
 
+    // The public view of a queue row: plain prompts are kind "prompt"; answers carry their
+    // session, toolId, picks and other so the claiming desktop has everything it needs.
+    const promptView = (p) => {
+      const view = { id: p.id, project: p.project, text: p.text, by: p.by, ts: p.ts, status: p.status, kind: p.kind || "prompt" };
+      if (p.kind === "answer") { view.session = p.session; view.toolId = p.toolId; view.picks = p.picks; view.other = p.other; }
+      return view;
+    };
+
     if (req.method === "GET" && isPrompts) {
       expireQueued();
       const project = canon(String(q.project || "").slice(0, 80));
       const status = String(q.status || "").slice(0, 40);
       const prompts = state.sessionPrompts
         .filter(p => (!project || p.project === project) && (!status || p.status === status))
-        .map(p => ({ id: p.id, project: p.project, text: p.text, by: p.by, ts: p.ts, status: p.status }));
+        .map(promptView);
       return json(res, 200, { prompts });
     }
 
@@ -150,7 +228,7 @@ export function createSessionRuntime({ state, markDirty, appendEvent, pushEventT
       p.status = "claimed"; p.host = String(b.host || "").slice(0, 120); p.claimedAt = now();
       markDirty();
       // The full text goes only to the claimer.
-      return json(res, 200, { ok: true, prompt: { id: p.id, project: p.project, text: p.text, by: p.by, ts: p.ts } });
+      return json(res, 200, { ok: true, prompt: promptView(p) });
     }
 
     if (req.method === "POST" && P === "/session/prompt/ack") {

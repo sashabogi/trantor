@@ -1,13 +1,15 @@
 #!/usr/bin/env node
-// #12129: chat mirror + prompt queue on an enforce hub — delta merge by idx, session-switch
-// reset, have:0 after restart with the queue surviving it, projA/projB scope, first-claim-wins
-// (409 for the loser), ack outcomes, expiry reason, stream scope, and no chat.updated in the log.
+// #12129: chat mirror + prompt queue on an enforce hub — delta merge, session-switch reset,
+// restart semantics, scope, first-claim-wins, ack outcomes, expiry, stream scope, audit events.
+// #12137: /session/answer queues as kind "answer" (ack gains "stale"); unanswered ask blocks
+// raise one ask.opened push per toolId, cleared by ask.answered.
 import { mkdtempSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { startTestHub } from "../lib/test-hub.mjs";
 import { generate, signRequest } from "../../lib/identity.mjs";
+import { createSessionRuntime } from "../../hub/routes/session.mjs";
 
 let pass = 0, fail = 0;
 const ok = (name, cond, detail = "") => { if (cond) { pass++; console.log(`  ✓ ${name}`); } else { fail++; console.log(`  ✗ ${name} ${detail}`); } };
@@ -133,6 +135,49 @@ try {
   r = await sFetch(base, phone, "POST", "/session/prompt/claim", { id: probeId, host: "phone" });
   ok("phone approver cannot claim (owner-only)", r.status === 403, `status ${r.status}`);
 
+  // ---- /session/answer: the phone's pick joins the same queue as kind answer (#12137) ------
+  r = await sFetch(base, phone, "POST", "/session/answer", { project: "projA", session: "s9", toolId: "toolu_ask1", picks: [1, 2], _op: "op-answer-1" });
+  ok("answer queued by phone approver", r.status === 200 && r.json.status === "queued" && r.json.id > 0, JSON.stringify(r.json));
+  const answerId = r.json.id;
+  const dupAnswer = await sFetch(base, phone, "POST", "/session/answer", { project: "projA", session: "s9", toolId: "toolu_ask1", picks: [1, 2], _op: "op-answer-1" });
+  ok("_op replay returns the same answer id", dupAnswer.json.id === answerId, JSON.stringify(dupAnswer.json));
+  r = await sFetch(base, phone, "POST", "/session/answer", { project: "projA", session: "s9", picks: [1] });
+  ok("answer without toolId is 400", r.status === 400, `status ${r.status}`);
+  r = await sFetch(base, phone, "POST", "/session/answer", { project: "projA", session: "s9", toolId: "toolu_empty" });
+  ok("answer with neither picks nor other is 400", r.status === 400, `status ${r.status}`);
+  r = await sFetch(base, phone, "POST", "/session/answer", { project: "projA", session: "s9", toolId: "toolu_many", picks: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11] });
+  ok("picks are capped at 10", r.status === 200, `status ${r.status}`);
+  const manyId = r.json.id;
+  r = await sFetch(base, phone, "POST", "/session/answer", { project: "projB", session: "s9", toolId: "toolu_cross", picks: [0] });
+  ok("projA approver cannot answer projB", r.status === 403, `status ${r.status}`);
+  r = await sFetch(base, owner, "GET", "/session/prompts?project=projA&status=queued");
+  const answerRow = (r.json.prompts || []).find(p => p.id === answerId);
+  ok("pickup lists the answer with kind, session, toolId and picks",
+    answerRow?.kind === "answer" && answerRow.session === "s9" && answerRow.toolId === "toolu_ask1"
+    && JSON.stringify(answerRow.picks) === "[1,2]", JSON.stringify(answerRow));
+  ok("plain prompts list as kind prompt", (r.json.prompts || []).filter(p => p.id !== answerId && p.id !== manyId).every(p => p.kind === "prompt"),
+    JSON.stringify((r.json.prompts || []).map(p => [p.id, p.kind])));
+  const manyRow = (r.json.prompts || []).find(p => p.id === manyId);
+  ok("capped picks visible in the queue view", manyRow?.picks?.length === 10, JSON.stringify(manyRow?.picks));
+  r = await sFetch(base, owner, "POST", "/session/prompt/claim", { id: answerId, host: "mac" });
+  ok("claim carries the full answer payload",
+    r.status === 200 && r.json.prompt?.kind === "answer" && r.json.prompt.toolId === "toolu_ask1"
+    && JSON.stringify(r.json.prompt.picks) === "[1,2]" && r.json.prompt.session === "s9", JSON.stringify(r.json.prompt));
+  r = await sFetch(base, owner, "POST", "/session/prompt/ack", { id: answerId, outcome: "stale", error: "That question was already answered or replaced." });
+  ok("ack stale lands as failed with the error kept", r.status === 200 && r.json.status === "failed", JSON.stringify(r.json));
+  r = await sFetch(base, phone, "GET", `/session/prompt?id=${answerId}`);
+  ok("phone reads the stale outcome", r.json.status === "failed" && r.json.outcome === "stale" && r.json.error.includes("already answered"), JSON.stringify(r.json));
+  r = await sFetch(base, phone, "POST", "/session/answer", { project: "projA", session: "s9", toolId: "toolu_other", other: "do it differently", _op: "op-answer-other" });
+  ok("other-only answer queues with the text as summary", r.status === 200 && r.json.id > 0, JSON.stringify(r.json));
+  const otherId = r.json.id;
+  r = await sFetch(base, owner, "POST", "/session/prompt/claim", { id: otherId, host: "mac" });
+  ok("claim of an other-answer carries the text", r.json.prompt?.other === "do it differently" && r.json.prompt.text === "do it differently", JSON.stringify(r.json.prompt));
+  r = await sFetch(base, owner, "POST", "/session/prompt/ack", { id: otherId, outcome: "delivered" });
+  ok("other-answer acks delivered", r.status === 200 && r.json.status === "delivered", JSON.stringify(r.json));
+  r = await sFetch(base, owner, "GET", "/events?project=projA&type=chat.prompt.queued&limit=2000");
+  const answerEv = (r.json.events || []).find(e => e.promptId === answerId);
+  ok("answer queueing is audited with kind and toolId", answerEv?.kind === "answer" && answerEv.toolId === "toolu_ask1", JSON.stringify(answerEv));
+
   // ---- streams: frames reach only scoped readers -----------------------------
   const ownerStream = await openStream(base, owner, "owner");
   const readerStream = await openStream(base, reader, "readerA");
@@ -174,6 +219,60 @@ try {
   ok("expiry is audit-appended as chat.prompt.failed", (r.json.events || []).some(e => e.promptId === expId && e.outcome === "expired"), JSON.stringify(r.json.events?.map(e => e.promptId)));
 } finally {
   await hub.stop();
+}
+
+// ---- ask blocks raise pushes: one ask.opened per toolId, cleared by ask.answered (#12137) ---
+console.log("# ask push wiring on the chat mirror");
+{
+  const pushed = [];
+  const logged = [];
+  const rt = createSessionRuntime({
+    state: { sessionPrompts: [] }, markDirty: () => {},
+    appendEvent: (type) => logged.push(type),
+    pushEventToStreams: () => {},
+    notifier: { notify: async (event) => { pushed.push(event); } },
+  });
+  // mergeChat is route-internal; drive it through route() the way the hub does.
+  async function merge(b) {
+    let out = null;
+    await rt.route({
+      req: { method: "POST" }, res: {}, q: {}, P: "/session/chat", auth: { identity: { name: "mac" } },
+      ctx: { body: async () => b, json: (res, code, body) => { out = { code, body }; return true; }, canon: (x) => x },
+    });
+    return out;
+  }
+  const askTurn = (answer) => {
+    const block = { kind: "tool", tool: "AskUserQuestion", tool_id: "toolu_1", ask: [{ question: "Ship it?" }] };
+    if (answer) block.answer = answer;
+    return { idx: 0, role: "assistant", blocks: [block] };
+  };
+  const publish = (turns, session = "s1") => merge({ project: "askproj", session, total: turns.length, turns, host: "mac" });
+  const r0 = await publish([askTurn(null)]);
+  ok("publish with an unanswered ask returns ok", r0?.code === 200, JSON.stringify(r0));
+  await sleep(20);
+  ok("one ask.opened push with the first question text",
+    pushed.length === 1 && pushed[0].type === "ask.opened" && pushed[0].toolId === "toolu_1"
+    && pushed[0].project === "askproj" && pushed[0].question === "Ship it?" && pushed[0].by === "mac", JSON.stringify(pushed));
+  await publish([askTurn(null)]);
+  await sleep(20);
+  ok("republishing the same open ask does not re-alert", pushed.length === 1, `got ${pushed.length}`);
+  await publish([askTurn("Yes, ship it")]);
+  await sleep(20);
+  ok("the block gaining an answer emits ask.answered once",
+    pushed.length === 2 && pushed[1].type === "ask.answered" && pushed[1].toolId === "toolu_1", JSON.stringify(pushed));
+  await publish([askTurn("Yes, ship it")]);
+  await sleep(20);
+  ok("an answered block never re-alerts or re-clears", pushed.length === 2, `got ${pushed.length}`);
+  // the kind:"ask" wire variant alerts too, keyed on toolId
+  await publish([{ idx: 1, role: "assistant", blocks: [{ kind: "ask", toolId: "toolu_2", text: "Plain ask?" }] }]);
+  await sleep(20);
+  ok("a kind:ask block alerts with its text as the question",
+    pushed.length === 3 && pushed[2].type === "ask.opened" && pushed[2].question === "Plain ask?", JSON.stringify(pushed[2]));
+  // a session switch forgets the old asks; the same toolId alerts again under the new session
+  await publish([askTurn(null)], "s2");
+  await sleep(20);
+  ok("a session switch re-arms the dedupe", pushed.length === 4 && pushed[3].type === "ask.opened" && pushed[3].toolId === "toolu_1", `got ${pushed.length}`);
+  ok("ask events never touch the audit log", !logged.some(t => String(t).startsWith("ask.")), logged.join(","));
 }
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

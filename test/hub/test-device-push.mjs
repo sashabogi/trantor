@@ -1,6 +1,8 @@
 #!/usr/bin/env node
 // Device registration is self-keyed and durable; pushes carry only readable transitions, with a
-// matching background clear and no live APNs dependency in the tests.
+// matching background clear and no live APNs dependency in the tests. #12137 adds session asks:
+// ask.opened is an alert keyed by the tool id (hashed numeric id + toolId string in the payload),
+// ask.answered its silent clear.
 import { mkdtempSync, mkdirSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -194,6 +196,28 @@ await notifier.notify({ id: 14, type: "hold.opened", project: "projB", by: "code
 batch = take();
 ok("APNs JWT rotates after 50 minutes", batch[0].headers.authorization !== firstJwt);
 ok("successful pushes update last_ok", state.devices.find(d => d.apns_token === tokenA)?.last_ok > 0 && dirty > 0);
+
+// #12137: a session's AskUserQuestion pushes one alert per toolId; the answer clears it silently.
+await notifier.notify({ id: 20, type: "ask.opened", project: "projA", by: "mac", toolId: "toolu_1", question: "Ship it?" });
+batch = take();
+ok("ask alert reaches readable devices and honours mute", batch.length === 2 && batch.some(r => r.path.endsWith(tokenA)) && batch.some(r => r.path.endsWith(tokenB)), `got ${batch.length}`);
+const askPayload = payload(batch[0]);
+ok("ask payload carries kind, numeric id and the toolId string",
+  askPayload.kind === "ask" && Number.isInteger(askPayload.id) && askPayload.id > 0 && askPayload.toolId === "toolu_1" && askPayload.project === "projA", JSON.stringify(askPayload));
+ok("ask alert titles '<project> asks' with the question as body and no category",
+  askPayload.aps.alert.title === "projA asks" && askPayload.aps.alert.body === "Ship it?" && !askPayload.aps.category, JSON.stringify(askPayload.aps));
+ok("ask alert collapses on the tool id", batch[0].headers["apns-collapse-id"] === "ask-toolu_1" && batch[0].headers["apns-push-type"] === "alert", batch[0].headers["apns-collapse-id"]);
+await notifier.notify({ id: 21, type: "ask.opened", project: "projA", by: "mac", toolId: "toolu_1", question: "Ship it?" });
+ok("the notifier itself does not dedupe — the mirror does (same event resends)", take().length === 2);
+await notifier.notify({ id: 22, type: "ask.opened", project: "projB", by: "mac", toolId: "toolu_9", question: "Other project?" });
+batch = take();
+ok("ask alerts honour project scope", batch.length === 2 && !batch.some(r => r.path.endsWith(tokenB)), `got ${batch.length}`);
+await notifier.notify({ id: 23, type: "ask.answered", project: "projA", by: "mac", toolId: "toolu_1" });
+batch = take();
+ok("ask.answered sends a silent clear with the same collapse id",
+  batch.length === 2 && payload(batch[0]).kind === "ask" && payload(batch[0]).toolId === "toolu_1"
+  && payload(batch[0]).aps["content-available"] === 1 && !payload(batch[0]).aps.alert
+  && batch[0].headers["apns-collapse-id"] === "ask-toolu_1" && batch[0].headers["apns-push-type"] === "background", JSON.stringify(payload(batch[0])));
 
 responder = async request => request.path.endsWith(tokenB) ? { status: 410, body: "" } : { status: 200, body: "{}" };
 await notifier.notify({ id: 15, type: "hold.opened", project: "projA", by: "codex:projA", holdId: 46 });
