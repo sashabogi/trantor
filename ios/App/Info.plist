@@ -33,10 +33,8 @@
 	</array>
 	<key>CFBundleVersion</key>
 	<string>$(CURRENT_PROJECT_VERSION)</string>
-	<key>NSCameraUsageDescription</key>
-	<string>Scan the invite QR code from your Trantor hub to pair this device.</string>
-	<key>NSFaceIDUsageDescription</key>
-	<string>Confirm your identity before sending a decision to your Trantor hub.</string>
+	<key>ITSAppUsesNonExemptEncryption</key>
+	<false/>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
 	<key>NSAppTransportSecurity</key>
@@ -50,6 +48,10 @@
 			</dict>
 		</dict>
 	</dict>
+	<key>NSCameraUsageDescription</key>
+	<string>Scan the invite QR code from your Trantor hub to pair this device.</string>
+	<key>NSFaceIDUsageDescription</key>
+	<string>Confirm your identity before sending a decision to your Trantor hub.</string>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>

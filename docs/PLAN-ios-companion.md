@@ -111,4 +111,14 @@ Simulator drills (Debug builds):
 - `-enroll '<trantor://enroll link>' -name <device>` pairs without the system "Open in Trantor?" prompt. `trantor pair --json` mints the link (approver, ten minutes, single use).
 - `-tab <decisions|projects|feed|inbox|fleet>` opens on a screen.
 
-Shipped: design system, all screens, the widget, QR pairing, Face ID before decisions, push registration and silent clears. Still owed: the APNs `.p8` key on the hub, the App Group and App Store record for TestFlight (both need the operator's Apple ID), and a drill on a physical phone (camera, Face ID, push).
+TestFlight (App Store app 6825307788, internal group "Operator", which gets every build): archive with Xcode's signed-in account, then upload. Bump CURRENT_PROJECT_VERSION for each upload.
+
+```
+xcodebuild -project TrantorCompanion.xcodeproj -scheme TrantorCompanion -configuration Release -destination generic/platform=iOS \
+  -archivePath build/Trantor.xcarchive -allowProvisioningUpdates MARKETING_VERSION=0.1.0 CURRENT_PROJECT_VERSION=<n> archive
+xcodebuild -exportArchive -archivePath build/Trantor.xcarchive -exportOptionsPlist <app-store-connect, team 68KA9HJDSF, automatic> \
+  -exportPath build/export -allowProvisioningUpdates
+asc builds upload --app 6825307788 --ipa build/export/Trantor.ipa --wait
+```
+
+Shipped: design system, all screens, the widget, QR pairing, Face ID before decisions, push registration and silent clears. Build 0.1.0 (1) is on TestFlight as of 2026-10-21. Still owed: the APNs `.p8` key on the hub, and a drill on a physical phone (camera, Face ID, push).
