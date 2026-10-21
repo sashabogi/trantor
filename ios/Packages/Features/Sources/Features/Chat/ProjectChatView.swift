@@ -75,6 +75,8 @@ struct ProjectChatView: View {
             }
         }
         .safeAreaInset(edge: .bottom, spacing: 0) { composer }
+        // A destination can appear before the scene becomes active; load its first snapshot on appearance.
+        .task { await store.refresh() }
         .task(id: scenePhase) {
             guard scenePhase == .active else { return }
             await store.follow()

@@ -1,6 +1,23 @@
 import XCTest
 
 final class ChatScreensTests: XCTestCase {
+    @MainActor func testDirectDemoProjectLaunchLoadsChatAndCanSend() {
+        let app = XCUIApplication()
+        app.launchArguments = ["-demo", "-project", "trantor"]
+        app.launch()
+        defer { app.terminate() }
+        XCTAssertTrue(app.staticTexts["Context 21%"].waitForExistence(timeout: 10))
+        XCTAssertTrue(app.staticTexts["The focused tests pass. I'm checking how live replies appear on the iPad."].exists)
+        let composer = app.textFields["chat.composer"].exists ? app.textFields["chat.composer"] : app.textViews["chat.composer"]
+        XCTAssertTrue(composer.waitForExistence(timeout: 5))
+        composer.tap()
+        composer.typeText("Continue the direct launch demo")
+        XCTAssertTrue(app.buttons["chat.send"].isEnabled)
+        app.buttons["chat.send"].tap()
+        XCTAssertTrue(app.staticTexts["Queued"].waitForExistence(timeout: 5))
+        capture("direct-demo-project-chat")
+    }
+
     @MainActor func testProjectDefaultsToChatAndCanQueueMessageThenOpenBoard() {
         let app = XCUIApplication()
         app.launchArguments = ["-demo", "-tab", "projects"]
