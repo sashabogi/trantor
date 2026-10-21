@@ -48,6 +48,7 @@ import { costLine } from "../lib/state/cost.mjs";
 import { resolveStateFlags, stateFeatureOn } from "../lib/state/flags.mjs";
 
 import { awaitSwapRelease } from "./crew/stage.mjs";
+import { codexRelayFlags } from "./crew/codex-relay.mjs";
 
 const releaseState = process.env.CREW_RELEASE_STATE ? JSON.parse(process.env.CREW_RELEASE_STATE) : null;
 delete process.env.CREW_RELEASE_STATE;
@@ -243,8 +244,8 @@ let MODEL = process.env.CREW_MODEL || "";
 // ZAI-coding-plan models into deepseek/…). `scrooge route` returns qualified ids.
 if (MODEL && !MODEL.includes("/") && AGENT === "deepseek") MODEL = `deepseek/${MODEL}`;
 const CLI = {
-  codex:    { first: `codex exec{M} --skip-git-repo-check --dangerously-bypass-approvals-and-sandbox "$(cat {P})" < /dev/null`,
-              next:  `codex exec resume --last{M} --skip-git-repo-check --dangerously-bypass-approvals-and-sandbox "$(cat {P})" < /dev/null`, mflag: " -m " },
+  codex:    { first: `codex exec{M}{R} --skip-git-repo-check --dangerously-bypass-approvals-and-sandbox "$(cat {P})" < /dev/null`,
+              next:  `codex exec resume --last{M}{R} --skip-git-repo-check --dangerously-bypass-approvals-and-sandbox "$(cat {P})" < /dev/null`, mflag: " -m " },
   gemini:   { first: `gemini --yolo{M} -p "$(cat {P})"`,
               next:  `gemini --yolo{M} -r latest -p "$(cat {P})"`, mflag: " -m " },
   // kimi-code (successor to kimi-cli) has no --print (-p alone is non-interactive), REJECTS
@@ -863,7 +864,8 @@ async function runTurn(prompt, isFirst, trigger = "kickoff", opts = {}) {
   const turnEffort = effortForTurn({ agent: DRIVER, model: MODEL, launchEffort: EFFORT, cardDifficulty });
   const mfrag = (MODEL && cli.mflag ? `${cli.mflag}${MODEL}` : "") + turnEffort.flag;
   cmd = cmd.replaceAll("{M}", mfrag).replaceAll("{P}", pf).replaceAll("{SID}", sid).replaceAll("{DIR}", TURN_DIR)
-    .replaceAll("{S}", STATE_SCHEMA_FILE);
+    .replaceAll("{S}", STATE_SCHEMA_FILE)
+    .replaceAll("{R}", () => codexRelayFlags({ persona: PERSONA, session: SESSION, project: PROJ, hub: HUB }));
   // PRECEDENCE: each file is PREPENDED, so the list is iterated in written order, highest priority
   // first, and the CREW layer (~/.agent-bus/.env) wins. test-crew-env.mjs runs the real shell.
   const envs = [join(homedir(), ".agent-bus", ".env"), cli.env].filter(f => f && existsSync(f));
