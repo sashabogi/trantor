@@ -1,0 +1,14 @@
+{
+  "body" : "{\"id\":1}",
+  "bodyHash" : "037c9214eef74cc3887f3a4f085b4e17d76280dafd273b0ee160c09c4ba1cfd4",
+  "headers" : {
+    "x-trantor-nonce" : "00112233445566778899aabbccddeeff",
+    "x-trantor-pubkey" : "03a107bff3ce10be1d70dd18e74bc09967e4d6309ba50d5f1ddc8664125531b8",
+    "x-trantor-sig" : "nWtz/2xUM3jAyO0s2p6A+CQKyrFFciAcvNK+eR2cylwsxfrvD+UslJPT2gnq0ADdR20lkT+N6u4mqiMcObY+CQ==",
+    "x-trantor-ts" : "1700000000000"
+  },
+  "message" : "trantor-v1\nPOST\n/task/update?x=1\n037c9214eef74cc3887f3a4f085b4e17d76280dafd273b0ee160c09c4ba1cfd4\n1700000000000\n00112233445566778899aabbccddeeff",
+  "method" : "POST",
+  "path" : "/task/update?x=1",
+  "ts" : 1700000000000
+}
