@@ -9,12 +9,14 @@ import { spawnSync } from "node:child_process";
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const args = process.argv.slice(2);
+const USAGE = "usage: trantor pair [--role owner] [--sim] [--json]";
+if (args.includes("--help") || args.includes("-h")) { console.log(USAGE); process.exit(0); }
 const asJson = args.includes("--json");
 const openSim = args.includes("--sim");
 const roleIdx = args.indexOf("--role");
 const role = roleIdx >= 0 ? (args[roleIdx + 1] || "") : "approver";
 if (!role || role.startsWith("--")) {
-  console.error("usage: trantor pair [--role owner] [--sim] [--json]");
+  console.error(USAGE);
   process.exit(1);
 }
 

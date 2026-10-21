@@ -95,6 +95,13 @@ try {
       `status ${use.status} ${JSON.stringify(scopes)}`);
   }
 
+  console.log("\n[3b] --help prints usage and mints nothing:");
+  {
+    const r = runPair(["--help"], tmp);
+    ok("--help exits 0 with usage", r.status === 0 && /usage: trantor pair/.test(r.stdout), r.stdout.slice(0, 120));
+    ok("--help prints no link", !/trantor:\/\/enroll/.test(r.stdout + r.stderr));
+  }
+
   console.log("\n[4] hub down → clear error, not a stack:");
   {
     const dead = { base: "http://127.0.0.1:1" };
