@@ -54,6 +54,7 @@ function cmpSemver(a, b) {
 const AUTH_HEADERS = ["x-trantor-pubkey", "x-trantor-sig", "x-trantor-ts", "x-trantor-nonce"];
 const PUBLIC_ENDPOINTS = new Set(["/", "/ui", "/health", "/enroll"]);
 const OWNER_ENDPOINTS = new Set(["/project/delete", "/sweep", "/reconcile", "/invite", "/import", "/policy"]);
+const DEVICE_ENDPOINTS = new Set(["/device/register", "/device/unregister", "/devices"]);
 const READ_ENDPOINTS = new Set(["/peers", "/tasks", "/events", "/inbox", "/peer", "/card", "/stream", "/history", "/projects", "/catchup", "/phases", "/recent", "/handoffs", "/verify-gates", "/claims", "/proposals", "/grants", "/overseer/context", "/overseer/status"]);
 const roleRank = { read: 1, write: 2, approver: 3, owner: 4 };
 const hasAuthHeaders = (req) => AUTH_HEADERS.some(h => !!req.headers[h]);
@@ -247,6 +248,8 @@ function authorize(auth, method, P, project) {
   if (AUTH_MODE === "off" || PUBLIC_ENDPOINTS.has(P)) return { ok: true };
   if (auth?.warning && AUTH_MODE === "warn") return { ok: true };
   if (!auth?.identity) return { ok: false, code: 401, error: "signature required" };
+  // Device management is self-keyed, not project-scoped; the route enforces the signer boundary.
+  if (DEVICE_ENDPOINTS.has(P)) return { ok: true };
   const need = OWNER_ENDPOINTS.has(P) ? "owner" : (method === "POST" ? "write" : (READ_ENDPOINTS.has(P) ? "read" : "read"));
   if (isDutyIdentity(auth) && (need === "read" || P === "/send" || P === "/duty/failure")) return { ok: true };
   return scopeAllows(auth.identity, project, need) ? { ok: true } : { ok: false, code: 403, error: "forbidden" };

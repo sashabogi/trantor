@@ -17,6 +17,8 @@ import { routeAdmin } from "./hub/routes/admin.mjs";
 import { routeCards } from "./hub/routes/cards.mjs";
 import { routeInsights } from "./hub/routes/insights.mjs";
 import { routeMessages } from "./hub/routes/messages.mjs";
+import { routeDevices } from "./hub/routes/devices.mjs";
+import { createNotifier } from "./hub/notifier.mjs";
 
 const PORT = Number(process.env.RELAY_PORT || 4477);
 const HOST = process.env.RELAY_HOST || "127.0.0.1";
@@ -63,7 +65,8 @@ const authRuntime = createAuthRuntime({
   state: store.state, markDirty: store.markDirty, AUTH_MODE, SUPERSEDE_GRACE_MS,
   LOOPBACK_BIND, ENROLL_MODE,
 });
-const events = createEventRuntime({ state: store.state, markDirty: store.markDirty, AUTH_MODE, ONLINE_MS, canon: authRuntime.canon });
+const notifier = createNotifier({ state: store.state, markDirty: store.markDirty, canRead: authRuntime.canRead });
+const events = createEventRuntime({ state: store.state, markDirty: store.markDirty, AUTH_MODE, ONLINE_MS, canon: authRuntime.canon, notifier });
 runStoreMigrations({ ...store, subFp: authRuntime.subFp });
 if (process.argv.includes("--smoke")) {
   // The smoke exists to refuse a restart that would boot into a broken store: a configured pg
@@ -122,7 +125,7 @@ const context = {
   hubSend: duty.hubSend, assertNoSecrets, UI, AUTH_MODE, ONLINE_MS, PEER_TTL_MS,
   REAP_GRACE_MS, CONTRACT_WINDOW_MS,
 };
-const routes = [routeAdmin, routeCards, routeInsights, routeMessages];
+const routes = [routeDevices, routeAdmin, routeCards, routeInsights, routeMessages];
 
 const server = http.createServer(async (req, res) => {
   const u = new URL(req.url, "http://x");

@@ -6,7 +6,7 @@ import { DEFAULT_ORG } from "../lib/store-contract.mjs";
 
 export async function createStoreRuntime({ STORE_KIND, PG_URL, ORG_ID, DATA }) {
 function emptyState() {
-  return { messages: [], peers: {}, seq: 0, tasks: [], taskSeq: 0, projectMeta: {}, lessons: [], events: [], cardEventsBackfilled: false, aliases: {}, phaseMeta: {}, verifyGates: [], verifyGateSeq: 0, proposals: [], proposalSeq: 0, balances: { ts: 0, by: "", entries: [] }, balancesByMachine: {}, subagentCostReset: false, handoffLog: [], identities: {}, inviteTokens: {}, focus: {}, orgPolicy: {}, overseerState: {}, instances: {}, dutySession: "", contractReap: {}, eventSeq: 0 };
+  return { messages: [], peers: {}, seq: 0, tasks: [], taskSeq: 0, projectMeta: {}, lessons: [], events: [], cardEventsBackfilled: false, aliases: {}, phaseMeta: {}, verifyGates: [], verifyGateSeq: 0, proposals: [], proposalSeq: 0, balances: { ts: 0, by: "", entries: [] }, balancesByMachine: {}, subagentCostReset: false, handoffLog: [], identities: {}, devices: [], inviteTokens: {}, focus: {}, orgPolicy: {}, overseerState: {}, instances: {}, dutySession: "", contractReap: {}, eventSeq: 0 };
 }
 
 const CARD_LOG_MAX = 40;
@@ -107,6 +107,7 @@ function normalizeState(loaded = {}) {
   s.subagentCostReset = !!loaded.subagentCostReset;
   s.handoffLog = Array.isArray(loaded.handoffLog) ? loaded.handoffLog : [];
   s.identities = loaded.identities && typeof loaded.identities === "object" ? loaded.identities : {};
+  s.devices = Array.isArray(loaded.devices) ? loaded.devices : [];
   s.inviteTokens = loaded.inviteTokens && typeof loaded.inviteTokens === "object" ? loaded.inviteTokens : {};
   s.instances = loaded.instances && typeof loaded.instances === "object" ? loaded.instances : {};
   s.focus = loaded.focus && typeof loaded.focus === "object" ? loaded.focus : {};

@@ -1,7 +1,7 @@
 /* oxlint-disable anti-slop/no-runtime-typeof -- SAFETY: Event payloads preserve the established card wire contract, including numeric cost fields from legacy durable rows. */
 import { publicView } from "../lib/identity.mjs";
 
-export function createEventRuntime({ state, markDirty, AUTH_MODE, ONLINE_MS, canon }) {
+export function createEventRuntime({ state, markDirty, AUTH_MODE, ONLINE_MS, canon, notifier = null }) {
 const streams = [];
 // live file claims: "project file session" -> { project, file, session, ts }. Ephemeral like
 // presence — see the /claim handler for the design.
@@ -26,12 +26,9 @@ function applyPeerAuth(p, auth) {
 function touch(session, status, project, hookVersion, auth) {
   if (!session || session === "all") return;   // "all" is a wildcard, not a real peer
   const p = state.peers[session] || { lastSeen: 0, status: "", project: "" };
-  // NOTE: peers deliberately carry NO terminal address (tty/window). A short-lived experiment recorded
-  // one so an idle session could be woken by typing into its terminal; that was removed as unsafe.
-  // /send is unauthenticated and `from` is self-asserted, so a routable terminal address turns any local
-  // process into arbitrary keystrokes in a session that may be running with permissions bypassed. A
-  // message must reach an agent through a channel the agent's own harness controls (see hooks/
-  // inbox-deliver.mjs and hooks/stop-inbox.mjs), never by driving a process we do not own.
+  // Peers carry no terminal address: /send is unauthenticated and `from` is self-asserted, so one
+  // would turn any local process into arbitrary keystrokes. Messages reach agents only through
+  // channels their own harness controls (hooks/inbox-deliver.mjs and hooks/stop-inbox.mjs).
   delete p.tty; delete p.windowId; delete p.host;
   const wasOnline = p._on === true;   // explicit flag, so the log gets ONE event per transition
   p.lastSeen = now();
@@ -70,11 +67,9 @@ function healthOf(status) {
   return "ok";
 }
 function deliverable(m, session) { return (m.to === session || m.to === "all") && m.from !== session; }
-// The delivery ledger: the highest message id this session has actually been handed. Every read path
-// (/inbox, /poll) reports here, so ONE record answers "has this session seen message N yet?" regardless
-// of whether it was the model polling (relay_inbox) or the PostToolUse hook injecting mid-turn.
-// That is what lets the deferred waker give in-session delivery first refusal and only type into
-// somebody's terminal when nothing else got there first. Monotonic — a later read never lowers it.
+// The delivery ledger records the highest message id handed to a session across /inbox and /poll,
+// whether read by relay_inbox or a PostToolUse hook. The deferred waker gives in-session delivery
+// first refusal; the high-water mark is monotonic.
 function markDelivered(session, upTo) {
   const p = state.peers[session]; const n = Number(upTo || 0);
   if (!p || !n) return;
@@ -111,14 +106,9 @@ function pushEventToStreams(ev) {
     try { s.res.write(`event: ev\ndata: ${JSON.stringify(ev)}\n\n`); } catch {}
   }
 }
-// --- the unified event log ---------------------------------------------------------------
-// One append-only stream for everything that happens in a project. Two families share it:
-//   • CARD events keep the LEGACY flat shape and legacy type names ("created"/"moved"/"updated")
-//     so /history, /card, /project/merge and the TIMELINE view are byte-for-byte unaffected.
-//   • Everything else uses a DOTTED type ("message", "presence.online", "focus", "handoff.written",
-//     "lesson", "verify.gate.opened", …) and is filtered OUT of /history — it surfaces via /events.
-// Card events carry `source` + `costUsd` so the FEED can render a git commit or a sub-agent's
-// spend distinctly from an ordinary card move without a second lookup.
+// The unified log keeps card events in their legacy flat shape for /history, /card and TIMELINE.
+// Dotted non-card types surface only through /events. Card events also carry source and costUsd
+// so the FEED can distinguish commits and sub-agent spend without another lookup.
 const EVENT_CAP = Number(process.env.RELAY_EVENT_CAP || 20000);
 const CARD_TYPES = new Set(["created", "moved", "updated"]);
 const isCardEvent = e => CARD_TYPES.has(e?.type);
@@ -134,6 +124,13 @@ function appendEvent(type, project, by, extra = {}) {
   state.events.push(ev);
   if (state.events.length > EVENT_CAP) state.events.splice(0, state.events.length - EVENT_CAP);
   pushEventToStreams(ev);
+  try {
+    if (notifier) Promise.resolve(notifier.notify(ev)).catch(error => {
+      process.stderr.write(`[trantor] push failed: ${error?.message || error}\n`);
+    });
+  } catch (error) {
+    process.stderr.write(`[trantor] push failed: ${error?.message || error}\n`);
+  }
   markDirty();
   return ev;
 }
@@ -159,13 +156,3 @@ function appendCardEvent(type, task, by, from = null, to = null, extra = {}) {
     appendCardEvent, EVENT_CAP, CARD_TYPES, isCardEvent,
   };
 }
-
-// --- FLOW v2: derive a project's PHASES (the orchestrator-rooted flowchart spine) ---
-// Real data is deps-sparse (most cards carry no deps), so we DON'T derive phases from the
-// dependency graph. Instead: a card's phase = its title-prefix family (P5a/P5b → "P5",
-// CBv2-1/CBfix → "CB", FA-comp1 → "FA", …) when present; otherwise it's clustered with its
-// time-neighbours into a "Setup N" round (gap > 8h opens a new round). Phases are ordered by
-// first-seen. The orchestrator (host session, "machine:project") vs crew ("brand:project")
-// split gives each phase its fan-out actors; the plan/integrate spine nodes are synthetic
-// because real per-phase orchestrator cards are rare. `sparse` flags a board that's mostly
-// un-prefixed (the UI shows an "inferred phases" notice — never a silent blob).
