@@ -56,6 +56,33 @@ Local to the Mac (not on the hub): AskUserQuestion prompts (sidecar files answer
 
 Decisions are never optimistic: a tap shows pending until the hub answers (it returns 409 if the Mac decided first).
 
+
+## Session chat from the phone (v1.1, cards #12130-#12133)
+
+The operator asked to see the orchestrator's full chat and drive the project from the phone, like the Code tab in Claude's app. The conversation lives on the Mac (the Claude Code transcript), and only the desktop app may deliver a prompt into a session (`herdr::prompt`, the composer's path). So the desktop app is the relay; the hub is the meeting point; the phone never talks to the Mac directly.
+
+**Hub (routes; scope = the project; the desktop signs as the operator's owner key):**
+
+- `POST /session/chat` (write) `{project, session, total, turns:[{idx, role, blocks:[{kind, text, tool}], queued?}], meta:{working, model, context}}`: the desktop publishes turns decoded by `chat.rs` (never a second decoder), as a delta from the hub's `have`. The answer is `{ok, have}`. The hub keeps the last 400 turns per project in memory. A hub restart answers `have: 0` and the desktop resends its window. Not written to the event log.
+- `GET /session/chat?project=&after=<idx>` (read): `{session, total, turns (idx > after, at most 200), meta, updatedAt, host}`, with an empty `turns` when nothing is newer.
+- Stream: `chat.updated {project, total, working}` goes to `/stream?events=1` readers who can read the project. It is pushed live, never appended to the log (it would flood the FEED).
+- `POST /session/prompt` (write) `{project, text (<= 8000 chars), _op}` answers `{id, status: "queued"}`, appends `chat.prompt.queued` (by the phone's identity, text truncated to 500) and pushes `chat.prompt {id, project}` live.
+- `POST /session/prompt/claim` (owner) `{id, host}`: the first claim wins (200), later ones get 409.
+- `POST /session/prompt/ack` (owner) `{id, outcome: delivered|blocked|not_ready|stalled|no_agent, error}` appends `chat.prompt.delivered` or `chat.prompt.failed`.
+- `GET /session/prompt?id=` (read): `{id, status: queued|claimed|delivered|failed|expired, outcome, error}`. A prompt still queued after 120 s expires with "No Mac is relaying this project. Is the Trantor app open?".
+
+**Desktop relay (`desktop/src-tauri/src/remote.rs`, runs while the app is open):**
+
+- For every project whose orchestrator pane the app hosts (herdr seat kind `orch`), it finds the session with `orch_session_id`, tails the transcript with `TranscriptTail`, decodes new lines with the existing decoder, and publishes the delta. It checks the transcript's size every 1.5 s and does nothing when it is unchanged.
+- It holds one `/stream?events=1` subscription. On `chat.prompt` for a hosted project, and once at startup for anything still queued, it claims the prompt, delivers it with the same function `pane_send` uses, then acks with the outcome.
+- Delivery truth stays the transcript: the phone shows a sent message as delivered on the ack, and as seen when a user turn containing it arrives in the chat.
+
+**Phone:** a project opens on Chat (with Board beside it). The history shows user and assistant turns, tool calls as one-line chips, a working indicator and context use. The composer sends via `/session/prompt` and shows queued, delivered and seen; a failure shows its reason. An AskUserQuestion in the session shows read-only with "answer it on the Mac" (answering from the phone is v2). Live updates come over `chat.updated`, with `after=` catch-up.
+
+## Onboarding (v1.1, card #12129)
+
+Pairing is a paged flow with the action pinned at the bottom of every page: Welcome, then Tailscale (a reachability check of the hub's `/health` that says "Turn on Tailscale" when it fails), then Scan (a custom AVFoundation scanner: continuous autofocus with near range, exposure bias down for screens, auto zoom from `minimumFocusDistance`, a torch toggle, and a hint line while it hunts; paste and Universal Clipboard as the fallback), then Name this device, then Done (the hub, the scope, and "Open Decisions"). The desktop's QR is shown large, with a full-screen option.
+
 ## v2
 
 AskUserQuestion round-trip, a Live Activity for a handoff or turn in progress, a read-only chat transcript via the Mac relay, widgets, App Intents/Siri, card creation and reassignment, crew controls via the relay, an offline outbox, a Watch complication.
