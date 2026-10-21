@@ -70,7 +70,7 @@ The operator asked to see the orchestrator's full chat and drive the project fro
 - `GET /session/prompts?project=&status=queued` (owner) `{prompts:[{id, project, text, by, ts, status}]}`: what the desktop picks up at boot and after a stream reconnect.
 - `POST /session/prompt/claim` (owner) `{id, host}`: the first claim wins with `200 {ok, prompt:{id, project, text, by, ts}}` (the full text goes only to the claimer); later claims get 409.
 - `POST /session/prompt/ack` (owner) `{id, outcome: delivered|blocked|not_ready|stalled|no_agent, error}` appends `chat.prompt.delivered` or `chat.prompt.failed`.
-- `GET /session/prompt?id=` (read): `{id, status: queued|claimed|delivered|failed|expired, outcome, error}`. A prompt still queued after 120 s expires with "No Mac is relaying this project. Is the Trantor app open?".
+- `GET /session/prompt?id=` (read): `{id, status: queued|claimed|delivered|failed|expired, outcome, error}`. A prompt still queued after 120 s expires with "No Mac is relaying this project. Is the Trantor app open?". The queue persists in the JSON store only; a Postgres hub (netcup) keeps it in memory, which is fine for a 120 s life.
 
 **Desktop relay (`desktop/src-tauri/src/remote.rs`, runs while the app is open):**
 

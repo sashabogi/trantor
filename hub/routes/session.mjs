@@ -92,7 +92,10 @@ export function createSessionRuntime({ state, markDirty, appendEvent, pushEventT
     const { body, json, canon } = ctx;
 
     if (req.method === "POST" && isChat) {
-      const r = mergeChat(await body(req), auth);
+      const b = await body(req);
+      // the same canon the GET reads with, or a publish and a read could name two mirrors
+      b.project = canon(String(b.project || "").slice(0, 80));
+      const r = mergeChat(b, auth);
       return json(res, r.code, r.body);
     }
 
