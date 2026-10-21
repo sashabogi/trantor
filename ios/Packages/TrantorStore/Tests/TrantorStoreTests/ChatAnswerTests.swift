@@ -12,8 +12,8 @@ final class ChatAnswerTests: XCTestCase {
         ])], host: "mac")
     }
 
-    private func store(_ hub: StubHub, auth: AnswerAuthenticator = AnswerAuthenticator()) -> ChatStore {
-        let store = ChatStore(project: "trantor", api: hub, authenticator: auth)
+    private func store(_ hub: StubHub, auth: AnswerAuthenticator? = nil) -> ChatStore {
+        let store = ChatStore(project: "trantor", api: hub, authenticator: auth ?? AnswerAuthenticator())
         store.mayWrite = { true }
         store.merge(snapshot())
         return store
