@@ -59,7 +59,7 @@ struct ProjectRow: View {
                 Chip(project.idle ? "idle" : "active", color: project.idle ? Palette.textDim : Palette.up)
                 Image(systemName: "chevron.right").font(.tCaption).foregroundStyle(Palette.textDim)
             }
-            if !project.brief.isEmpty { Text(project.brief).font(.tCallout).foregroundStyle(Palette.textDim) }
+            if !project.brief.isEmpty { Text(project.brief).font(.tCallout).foregroundStyle(Palette.textDim).lineLimit(2) }
             if total > 0 {
                 GeometryReader { geo in
                     HStack(spacing: 0) {

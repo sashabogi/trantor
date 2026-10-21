@@ -5,6 +5,25 @@ import TrantorCore
 
 @MainActor
 final class OtherStoreTests: XCTestCase {
+    func testProjectsDropTheUnassignedBucket() async {
+        let hub = StubHub()
+        hub.projectsData = [Project(project: "(unassigned)", lastActivity: 9), Project(project: "trantor", lastActivity: 5),
+                            Project(project: "ibkr", lastActivity: 7)]
+        let store = ProjectsStore(api: hub)
+        await store.refresh()
+        XCTAssertEqual(store.projects.map(\.project), ["ibkr", "trantor"])
+    }
+
+    func testInboxCountsUnreadUntilLooked() async {
+        let hub = StubHub()
+        hub.inboxData = [BusMessage(id: 5, from: "codex:t", to: "ios", text: "a"), BusMessage(id: 6, from: "kimi:t", to: "all", text: "b")]
+        let inbox = InboxStore(api: hub, identity: "ios")
+        await inbox.refresh()
+        XCTAssertEqual(inbox.unreadCount, 1, "only messages addressed to this device count")
+        await inbox.markRead()
+        XCTAssertEqual(inbox.unreadCount, 0)
+    }
+
     func testFeedDedupesOrdersAndFilters() {
         let feed = FeedStore()
         feed.ingest([HubEvent(id: 3, type: "message", project: "a"), HubEvent(id: 1, type: "card.moved", project: "a")])

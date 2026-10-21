@@ -34,7 +34,17 @@ public final class InMemoryKeyStore: KeyStore, @unchecked Sendable {
     public func deleteKey() throws { lock.lock(); raw = nil; lock.unlock() }
 }
 
-public struct KeychainError: Error, Equatable { public let status: OSStatus }
+public struct KeychainError: Error, Equatable, LocalizedError {
+    public let status: OSStatus
+    public init(status: OSStatus) { self.status = status }
+    public var errorDescription: String? {
+        if status == errSecMissingEntitlement {
+            return "This build can't use the Keychain (\(status)): it isn't code signed."
+        }
+        let why = SecCopyErrorMessageString(status, nil) as String? ?? "unknown"
+        return "The Keychain refused the signing key (\(status): \(why))."
+    }
+}
 
 /// Generic-password item, readable only while unlocked and never synced or migrated off this device.
 public struct KeychainKeyStore: KeyStore {

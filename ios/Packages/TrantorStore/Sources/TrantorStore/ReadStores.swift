@@ -19,7 +19,8 @@ public final class ProjectsStore {
         guard let api else { return }
         do {
             let rows = try await api.projects()
-            projects = rows.sorted { $0.lastActivity > $1.lastActivity }
+            // "(unassigned)" is the hub's bucket for sessions with no project, not a project
+            projects = rows.filter { !$0.project.hasPrefix("(") }.sorted { $0.lastActivity > $1.lastActivity }
             freshness.fresh(); cache.save(projects, name: "projects")
         } catch { freshness.failed(DecisionsStore.describe(error)) }
     }
