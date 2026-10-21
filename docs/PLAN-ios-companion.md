@@ -36,7 +36,7 @@ Local to the Mac (not on the hub): AskUserQuestion prompts (sidecar files answer
 
 ## Hub work this needs
 
-- **Scope the event stream.** `/stream` pushes every project's events to any signed reader (`pushEventToStreams` does not filter). Fix before issuing narrow keys.
+- **Scope the event stream.** Done in #12112: each `/stream` entry carries the signer's read checks (`inboxReadable` for messages, `canRead` for events), so a narrow key sees only its projects live (`test/hub/test-stream-scope.mjs`).
 - **An `approver` role** between write and owner, accepted by `/hold/decide` and `/proposal/decide`, so a phone never holds owner (which can delete projects and mint invites). Interim: `*:owner` with Face ID gating.
 - **Push.** A device registry (`devices(pubkey, apns_token, env, bundle_id, name, created, last_ok, muted_projects)`), `POST /device/register|unregister`, and `hub/notifier.mjs` on `appendEvent` sending APNs (HTTP/2 + ES256 JWT, no new dependency) for `hold.opened`, `verify.gate.opened`, `proposal.filed`, messages to the operator, crew `presence.offline` and later `ask.opened`; a silent push on the matching `*.decided`/`resolved` clears the phone's notification (`collapse-id` = the item id). One push per transition, never a repeating warning. Needs a `.p8` key from the Developer account in the hub's env. Actionable buttons (Go/No-go, Approve/Deny) sign and POST from the app.
 - **Pairing on the Mac:** the desktop app shows the invite as a QR.
@@ -100,4 +100,4 @@ node Packages/HubClient/Tests/verify-vector.mjs   # the hub's real verifier acce
 TRANTOR_WRITE_VECTOR=1 swift test                  # in Packages/HubClient: regenerate the fixture
 ```
 
-Not done in the scaffold: push (the device registration call is switched off in `PushRegistrar` until #12114), the QR scanner, Face ID gating, the stream scoping and `approver` role on the hub.
+Not done in the scaffold: push (the device registration call is switched off in `PushRegistrar` until #12114), the QR scanner, Face ID gating, the `approver` role on the hub.

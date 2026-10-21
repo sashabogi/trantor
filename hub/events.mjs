@@ -82,7 +82,7 @@ function markDelivered(session, upTo) {
 }
 function pushToStreams(msg) {
   for (const s of streams) {
-    if (!deliverable(msg, s.session) || s.res.writableEnded || s.res.destroyed) continue;
+    if (!deliverable(msg, s.session) || (s.readsMessage && !s.readsMessage(msg)) || s.res.writableEnded || s.res.destroyed) continue;
     try { s.res.write(`data: ${JSON.stringify(msg)}\n\n`); } catch {}
   }
 }
@@ -107,7 +107,7 @@ function inboxResponse(auth, messages, cursor, rewound = false) {
 // message and nothing else — can never see it. Backwards-safe by construction.
 function pushEventToStreams(ev) {
   for (const s of streams) {
-    if (!s.events || s.res.writableEnded || s.res.destroyed) continue;
+    if (!s.events || (s.readsEvent && !s.readsEvent(ev)) || s.res.writableEnded || s.res.destroyed) continue;
     try { s.res.write(`event: ev\ndata: ${JSON.stringify(ev)}\n\n`); } catch {}
   }
 }

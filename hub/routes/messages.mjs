@@ -7,7 +7,7 @@ export async function routeMessages({ req, res, q, P, auth, ctx }) {
   const {
     state, body, json, stripNulText, crossProjectGuard, touch, pushToStreams,
     appendEvent, appendCardEvent, appendTaskLog, markDelivered, contractsFor, canUseInboxSession, inboxWindow,
-    deliverable, inboxReadable, inboxResponse, filterReadable, streams, UI,
+    deliverable, inboxReadable, inboxResponse, filterReadable, canRead, streams, UI,
     AUTH_MODE, persistHealth, duty, now, markDirty, assertNoSecrets, PEER_TTL_MS,
     CONTRACT_WINDOW_MS,
   } = ctx;
@@ -143,7 +143,13 @@ export async function routeMessages({ req, res, q, P, auth, ctx }) {
       touch(session, q.status, undefined, undefined, auth);
       // events=1 opts this stream into the unified log as NAMED "ev" frames (see pushEventToStreams).
       // Existing consumers omit it and keep receiving bus messages on the default channel only.
-      const entry = { session, res, events: q.events === "1" };
+      // #12112: a stream carries only what its signer may read, by the same checks /inbox and /events
+      // apply, so a key scoped to one project never sees another project's messages or events live.
+      const entry = {
+        session, res, events: q.events === "1",
+        readsMessage: m => inboxReadable(auth, m, session),
+        readsEvent: ev => canRead(auth, ev.project || ""),
+      };
       streams.push(entry);
       const ka = setInterval(() => {
         if (res.writableEnded || res.destroyed) return;
