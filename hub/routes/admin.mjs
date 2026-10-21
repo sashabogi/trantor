@@ -305,7 +305,7 @@ export async function routeAdmin({ req, res, q, P, auth, ctx }) {
       const b = await body(req);
       const hold = overseer.listHolds().find(h => h.id === Number(b.id));
       if (!hold) return json(res, 404, { error: "hold expired or not found" });
-      if (AUTH_MODE !== "off" && !scopeAllows(auth?.identity, hold.project, "owner")) return json(res, 403, { error: "operator permission required" });
+      if (AUTH_MODE !== "off" && !scopeAllows(auth?.identity, hold.project, "approver")) return json(res, 403, { error: "operator permission required" });
       if (b.status !== "go" && b.status !== "nogo") return json(res, 400, { error: "status must be go or nogo" });
       const decided = overseer.decideHold(hold.id, b.status, auth?.identity?.name || "operator");
       return decided ? json(res, 200, { ok: true, hold: decided }) : json(res, 409, { error: "hold already decided" });

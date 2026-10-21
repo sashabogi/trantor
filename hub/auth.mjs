@@ -53,15 +53,15 @@ function cmpSemver(a, b) {
 }
 const AUTH_HEADERS = ["x-trantor-pubkey", "x-trantor-sig", "x-trantor-ts", "x-trantor-nonce"];
 const PUBLIC_ENDPOINTS = new Set(["/", "/ui", "/health", "/enroll"]);
-const OWNER_ENDPOINTS = new Set(["/project/delete", "/sweep", "/reconcile", "/invite", "/import", "/policy", "/proposal/decide"]);
+const OWNER_ENDPOINTS = new Set(["/project/delete", "/sweep", "/reconcile", "/invite", "/import", "/policy"]);
 const READ_ENDPOINTS = new Set(["/peers", "/tasks", "/events", "/inbox", "/peer", "/card", "/stream", "/history", "/projects", "/catchup", "/phases", "/recent", "/handoffs", "/verify-gates", "/claims", "/proposals", "/grants", "/overseer/context", "/overseer/status"]);
-const roleRank = { read: 1, write: 2, owner: 3 };
+const roleRank = { read: 1, write: 2, approver: 3, owner: 4 };
 const hasAuthHeaders = (req) => AUTH_HEADERS.some(h => !!req.headers[h]);
 const authPath = (u) => `${u.pathname}${u.search || ""}`;
 function cleanScope(s) {
   if (!s || typeof s !== "object") return null;
   const project = canon(String(s.project || s.proj || "*").slice(0, 80)) || "*";
-  const role = ["read", "write", "owner"].includes(s.role) ? s.role : "read";
+  const role = ["read", "write", "approver", "owner"].includes(s.role) ? s.role : "read";
   return { project, role };
 }
 function defaultScopesFor(identity, b) {
@@ -69,7 +69,7 @@ function defaultScopesFor(identity, b) {
   if (explicit.length) return explicit.slice(0, 20);
   const name = String(b.name || identity.name || "");
   const project = canon(String(b.project || (name.includes(":") ? name.split(":").pop() : "*")).slice(0, 80)) || "*";
-  const role = ["read", "write", "owner"].includes(b.role) ? b.role : (String(b.kind || identity.kind || "") === "agent" ? "write" : "owner");
+  const role = ["read", "write", "approver", "owner"].includes(b.role) ? b.role : (String(b.kind || identity.kind || "") === "agent" ? "write" : "owner");
   return [{ project, role }];
 }
 function findIdentity(pubkey) {

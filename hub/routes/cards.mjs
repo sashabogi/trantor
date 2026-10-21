@@ -38,7 +38,7 @@ export async function routeCards({ req, res, q, P, auth, ctx }) {
     appendTaskLog, appendTaskNote, cleanChecklist, cleanDrill, hasDrillLine, linkCommitToFocus,
     derivePhases, PROPOSAL_CAP, propFp, healthOf, REAP_GRACE_MS, subFp,
     prunePeers, canRead, HUB_VERSION, cmpSemver, isCardEvent, fmtAge, hubSend,
-    ONLINE_MS, PEER_TTL_MS, AUTH_MODE,
+    ONLINE_MS, PEER_TTL_MS, AUTH_MODE, scopeAllows,
   } = ctx;
     if (req.method === "POST" && P === "/task") {           // create a card
       const b = await body(req);
@@ -647,7 +647,7 @@ export async function routeCards({ req, res, q, P, auth, ctx }) {
     // --- agent-proposed permissions (governance): the autonomy ladder made two-directional ---
     // An agent needing more rope FILES A PROPOSAL here instead of assuming or working around.
     // Enforced HERE: unbounded proposal = 400; queue caps at 3 pending/session; near-duplicate of
-    // a DENIED proposal = refused. Deciding is the HUMAN's alone — /proposal/decide is owner-gated.
+    // a DENIED proposal = refused. Deciding is the HUMAN's alone — /proposal/decide requires approver or owner.
     if (req.method === "POST" && P === "/propose") {
       const b = await body(req);
       const session = String(b.session || b.by || "").slice(0, 120);
@@ -689,6 +689,7 @@ export async function routeCards({ req, res, q, P, auth, ctx }) {
       const b = await body(req);
       const pr = state.proposals.find(p => p.id === Number(b.id));
       if (!pr) return json(res, 404, { error: "no such proposal" });
+      if (AUTH_MODE !== "off" && !scopeAllows(auth?.identity, pr.project, "approver")) return json(res, 403, { error: "operator permission required" });
       // A grant that GATES tool behavior needs an off-switch: the operator may REVOKE an
       // approved proposal. Revocation is not a denial — it leaves no denial memory, so the
       // agent may re-propose a refined bound later.
