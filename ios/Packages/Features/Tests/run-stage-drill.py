@@ -62,7 +62,9 @@ command = [
     "-derivedDataPath", str(OUT / "UIDerivedData"), "-resultBundlePath", str(result),
     "-parallel-testing-enabled", "NO", "CODE_SIGNING_ALLOWED=NO", "test",
 ]
-with (OUT / "ui-tests.log").open("w") as log:
+log_path = OUT / f"ui-tests-{stamp}.log"
+print(f"UI log: {log_path}", flush=True)
+with log_path.open("w") as log:
     process = subprocess.Popen(command, cwd=ROOT, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
     for line in process.stdout:
         log.write(line)
