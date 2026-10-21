@@ -1,5 +1,6 @@
 import SwiftUI
 import TrantorCore
+import TrantorDesign
 import TrantorStore
 
 /// iPad: sidebar and detail. iPhone: tabs with Decisions first. Unpaired: pairing.
@@ -12,7 +13,7 @@ public struct RootView: View {
 
     public var body: some View {
         Group {
-            if !model.settings.isPaired || model.showPairingSummary {
+            if !model.isReady || model.showPairingSummary {
                 NavigationStack { PairingView() }
             } else if sizeClass == .regular {
                 SplitRoot()
@@ -23,14 +24,14 @@ public struct RootView: View {
         .onChange(of: model.pendingLink) { _, link in
             if link != nil && model.settings.isPaired { model.showPairingSummary = true }
         }
-        .task(id: model.settings.isPaired) {
-            guard model.settings.isPaired else { return }
+        .task(id: model.isReady) {
+            guard model.isReady else { return }
             if !model.isConnected { model.connect() }
             await model.refreshAll()
             model.startFeed()
         }
         .onChange(of: scenePhase) { _, phase in
-            guard model.settings.isPaired else { return }
+            guard model.isReady else { return }
             if phase == .active {
                 Task { await model.refreshAll(); model.startFeed() }
             } else if phase == .background {
@@ -53,12 +54,20 @@ struct TabRoot: View {
     var body: some View {
         @Bindable var model = model
         TabView(selection: $model.selection) {
-            ForEach(AppSection.allCases) { section in
+            ForEach(AppSection.tabs) { section in
                 NavigationStack { SectionView(section: section) }
                     .tabItem { Label(section.title, systemImage: section.systemImage) }
-                    .badge(section == .decisions ? model.decisions.pendingCount : 0)
+                    .badge(badge(for: section))
                     .tag(section)
             }
+        }
+    }
+
+    private func badge(for section: AppSection) -> Int {
+        switch section {
+        case .decisions: return model.decisions.pendingCount
+        case .inbox: return model.inbox.unreadCount
+        default: return 0
         }
     }
 }
@@ -69,13 +78,25 @@ struct SplitRoot: View {
     var body: some View {
         @Bindable var model = model
         NavigationSplitView {
-            List(AppSection.allCases, selection: Binding<AppSection?>(
-                get: { model.selection }, set: { if let s = $0 { model.selection = s } })) { section in
-                Label(section.title, systemImage: section.systemImage)
-                    .badge(section == .decisions ? model.decisions.pendingCount : 0)
-                    .tag(section)
+            ScrollView {
+                VStack(alignment: .leading, spacing: Space.lg) {
+                    BrandMark().padding(.horizontal, Space.sm).padding(.top, Space.sm)
+                    VStack(spacing: 2) {
+                        ForEach(AppSection.allCases) { section in
+                            SidebarRow(section: section, selected: model.selection == section,
+                                       count: section == .decisions ? model.decisions.pendingCount
+                                            : section == .inbox ? model.inbox.unreadCount : 0)
+                                .onTapGesture { withAnimation(Motion.ease) { model.selection = section } }
+                        }
+                    }
+                    Spacer(minLength: Space.xl)
+                    ConnectionPill().padding(.horizontal, Space.sm)
+                }
+                .padding(Space.md)
             }
-            .navigationTitle("Trantor")
+            .background(Palette.ground.opacity(0.92).ignoresSafeArea())
+            .toolbar(.hidden, for: .navigationBar)
+            .navigationSplitViewColumnWidth(min: 240, ideal: 260)
         } detail: {
             NavigationStack { SectionView(section: model.selection) }
                 .id(model.selection)
@@ -83,38 +104,111 @@ struct SplitRoot: View {
     }
 }
 
+/// The wordmark: mint diamond and the name in mono caps.
+struct BrandMark: View {
+    var body: some View {
+        HStack(spacing: Space.sm) {
+            Image(systemName: "diamond.fill")
+                .font(.system(size: 13, weight: .bold))
+                .foregroundStyle(Palette.accent)
+                .shadow(color: Palette.accent.opacity(0.6), radius: 8)
+            Text("TRANTOR").font(.mono(13, .semibold)).tracking(2.6).foregroundStyle(Palette.text)
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Trantor")
+    }
+}
+
+struct SidebarRow: View {
+    let section: AppSection
+    let selected: Bool
+    let count: Int
+
+    var body: some View {
+        HStack(spacing: Space.md) {
+            Image(systemName: section.systemImage)
+                .font(.system(size: 15, weight: .regular))
+                .frame(width: 22)
+                .foregroundStyle(selected ? Palette.accent : Palette.textDim)
+            Text(section.title).font(.ui(15, selected ? .semibold : .medium))
+                .foregroundStyle(selected ? Palette.text : Palette.text2)
+            Spacer()
+            if count > 0 { CountBadge(count, hot: section == .decisions) }
+        }
+        .padding(.horizontal, Space.md).padding(.vertical, 10)
+        .background(
+            RoundedRectangle(cornerRadius: Radius.md, style: .continuous)
+                .fill(selected ? Palette.raise : .clear)
+        )
+        .overlay(alignment: .leading) {
+            if selected {
+                Capsule().fill(Palette.accent).frame(width: 3, height: 18)
+                    .shadow(color: Palette.accent.opacity(0.7), radius: 6)
+            }
+        }
+        .contentShape(Rectangle())
+        .accessibilityElement(children: .combine)
+        .accessibilityAddTraits(selected ? [.isButton, .isSelected] : .isButton)
+    }
+}
+
+/// "Connected 103 ms" pill from the ibkr top bar: live dot plus the hub's state.
+struct ConnectionPill: View {
+    @Environment(AppModel.self) private var model
+
+    var body: some View {
+        let stale = model.decisions.freshness.isStale
+        HStack(spacing: Space.sm) {
+            StatusDot(stale ? Palette.amber : Palette.live, live: !stale)
+            Text(model.isDemo ? "Demo" : stale ? "Reconnecting" : "Connected").font(.ui(13, .medium))
+                .foregroundStyle(Palette.text)
+            Text(model.isDemo ? "no hub" : (model.settings.hubURL?.host ?? "")).font(.tDataSmall).foregroundStyle(Palette.textDim)
+                .lineLimit(1)
+        }
+        .padding(.horizontal, 12).padding(.vertical, 7)
+        .background(Capsule().fill(Palette.panel.opacity(0.8)))
+        .overlay(Capsule().strokeBorder(Palette.line2))
+        .accessibilityElement(children: .combine)
+    }
+}
+
 struct SectionView: View {
     let section: AppSection
     var body: some View {
-        switch section {
-        case .decisions: DecisionsView()
-        case .projects: ProjectsView()
-        case .feed: FeedView()
-        case .inbox: InboxView()
-        case .fleet: FleetView()
-        case .cost: CostView()
-        case .settings: SettingsView()
+        Group {
+            switch section {
+            case .decisions: DecisionsView()
+            case .projects: ProjectsView()
+            case .feed: FeedView()
+            case .inbox: InboxView()
+            case .fleet: FleetView()
+            case .cost: CostView()
+            case .settings: SettingsView()
+            }
         }
+        .stage()
+        .toolbarBackground(.hidden, for: .navigationBar)
     }
 }
 
 // MARK: - Shared pieces
 
-/// "Showing data from 3 minutes ago" when the hub has not confirmed what is on screen.
+/// "Last confirmed 3 minutes ago" when the hub has not confirmed what is on screen.
 struct FreshnessBanner: View {
     let freshness: Freshness
 
     var body: some View {
         if let since = freshness.staleSince {
-            HStack(spacing: 6) {
-                Image(systemName: "wifi.slash")
-                Text("Last confirmed")
-                Text(since, style: .relative)
-                Text("ago")
+            HStack(spacing: Space.sm) {
+                StatusDot(Palette.amber, live: false)
+                Text("Offline. Last confirmed").font(.tCaption).foregroundStyle(Palette.text2)
+                Text(since, style: .relative).font(.tDataSmall).monospacedDigit().foregroundStyle(Palette.amber)
+                Text("ago").font(.tCaption).foregroundStyle(Palette.text2)
                 Spacer()
             }
-            .font(.footnote)
-            .foregroundStyle(.secondary)
+            .padding(.horizontal, 12).padding(.vertical, 8)
+            .background(RoundedRectangle(cornerRadius: Radius.md, style: .continuous).fill(Palette.amber.opacity(0.08)))
+            .overlay(RoundedRectangle(cornerRadius: Radius.md, style: .continuous).strokeBorder(Palette.amber.opacity(0.25)))
             .accessibilityElement(children: .combine)
         }
     }
@@ -126,15 +220,28 @@ struct EmptyState: View {
     var message: String = ""
 
     var body: some View {
-        ContentUnavailableView(title, systemImage: systemImage, description: message.isEmpty ? nil : Text(message))
+        StageEmpty(title, systemImage: systemImage, message: message)
     }
 }
 
 func date(fromMillis ms: Double) -> Date { Date(timeIntervalSince1970: ms / 1000) }
 
+/// "4m", "2h", "3d": compact age in mono.
 struct TimeAgo: View {
     let millis: Double
+    var color: Color = Palette.textDim
     var body: some View {
-        if millis > 0 { Text(date(fromMillis: millis), style: .relative) } else { Text("") }
+        TimelineView(.periodic(from: .now, by: 30)) { ctx in
+            Text(millis > 0 ? compactAge(millis, now: ctx.date) : "")
+                .font(.tDataSmall).monospacedDigit().foregroundStyle(color)
+        }
     }
+}
+
+func compactAge(_ millis: Double, now: Date = .now) -> String {
+    let s = max(0, now.timeIntervalSince1970 - millis / 1000)
+    if s < 60 { return "now" }
+    if s < 3600 { return "\(Int(s / 60))m" }
+    if s < 86400 { return "\(Int(s / 3600))h" }
+    return "\(Int(s / 86400))d"
 }

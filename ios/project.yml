@@ -22,6 +22,8 @@ packages:
     path: Packages/TrantorStore
   Features:
     path: Packages/Features
+  TrantorDesign:
+    path: Packages/TrantorDesign
 targets:
   TrantorCompanion:
     type: application
@@ -37,6 +39,7 @@ targets:
       - package: HubClient
       - package: TrantorStore
       - package: Features
+      - package: TrantorDesign
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: ai.trantor.companion

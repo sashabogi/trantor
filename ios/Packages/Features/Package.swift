@@ -6,10 +6,10 @@ let package = Package(
     platforms: [.iOS(.v17)],
     products: [.library(name: "Features", targets: ["Features"])],
     dependencies: [
-        .package(path: "../TrantorCore"), .package(path: "../HubClient"), .package(path: "../TrantorStore"),
+        .package(path: "../TrantorCore"), .package(path: "../HubClient"), .package(path: "../TrantorStore"), .package(path: "../TrantorDesign"),
     ],
     targets: [
-        .target(name: "Features", dependencies: ["TrantorCore", "HubClient", "TrantorStore"],
+        .target(name: "Features", dependencies: ["TrantorCore", "HubClient", "TrantorStore", "TrantorDesign"],
                 swiftSettings: [.enableExperimentalFeature("StrictConcurrency")]),
     ]
 )

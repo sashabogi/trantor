@@ -21,6 +21,11 @@ public final class AppModel {
     public var pendingLink: PairingLink?
     /// Keeps the pairing screen up after a successful pair so the person sees health and scope first.
     public var showPairingSummary = false
+    /// Running on canned data (previews, the `-demo` launch flag): no hub, no pairing.
+    public private(set) var isDemo = false
+
+    /// Paired with a hub, or running the demo.
+    public var isReady: Bool { settings.isPaired || isDemo }
 
     private let cache: StoreCache
     private var client: HubServing?
@@ -38,7 +43,8 @@ public final class AppModel {
     }
 
     /// Previews and tests: every store talks to `hub`.
-    public init(stub hub: HubServing, identity: String = "ios-preview") {
+    public init(stub hub: HubServing, identity: String = "ios-preview", demo: Bool = false) {
+        isDemo = demo
         settings = SettingsStore(defaults: UserDefaults(suiteName: "preview-\(UUID().uuidString)") ?? .standard, keyStore: InMemoryKeyStore())
         cache = StoreCache(directory: nil)
         decisions = DecisionsStore(cache: cache); projects = ProjectsStore(cache: cache); board = BoardStore(cache: cache)
@@ -98,6 +104,9 @@ public final class AppModel {
 public enum AppSection: String, CaseIterable, Identifiable, Sendable {
     case decisions, projects, feed, inbox, fleet, cost, settings
     public var id: String { rawValue }
+    /// The phone's tab bar: five, so nothing hides behind "More". Cost lives inside Fleet and
+    /// Settings behind the toolbar gear.
+    public static let tabs: [AppSection] = [.decisions, .projects, .feed, .inbox, .fleet]
     public var title: String {
         switch self {
         case .decisions: return "Decisions"

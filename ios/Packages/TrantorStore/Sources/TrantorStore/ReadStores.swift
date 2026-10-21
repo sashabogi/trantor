@@ -191,6 +191,8 @@ public final class InboxStore {
     public private(set) var sent: [BusMessage] = []
     public private(set) var freshness = Freshness()
     public private(set) var cursor = 0
+    /// Highest message id the person has looked at on this device.
+    public private(set) var readUpTo = 0
     public var sendError: String?
 
     public var api: HubServing?
@@ -200,7 +202,11 @@ public final class InboxStore {
     public init(api: HubServing? = nil, identity: String = "", cache: StoreCache = StoreCache(directory: nil)) {
         self.api = api; self.identity = identity; self.cache = cache
         if let c = cache.load([BusMessage].self, name: "inbox") { received = c.value; freshness.fromCache(savedAt: c.savedAt) }
+        if let r = cache.load(Int.self, name: "inbox-read") { readUpTo = r.value }
     }
+
+    /// Messages addressed to this device that arrived after the last look.
+    public var unreadCount: Int { received.filter { $0.id > readUpTo && $0.to == identity }.count }
 
     /// Conversations by the other party, newest activity first.
     public var threads: [InboxThread] {
@@ -222,6 +228,8 @@ public final class InboxStore {
     }
 
     public func markRead() async {
+        let top = max(cursor, received.map(\.id).max() ?? 0)
+        if top > readUpTo { readUpTo = top; cache.save(readUpTo, name: "inbox-read") }
         guard let api, cursor > 0 else { return }
         try? await api.delivered(session: identity, upTo: cursor)
     }
