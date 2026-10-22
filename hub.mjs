@@ -32,6 +32,9 @@ const PG_URL = process.env.RELAY_DATABASE_URL || process.env.POSTGRES_URL ||
 const STORE_KIND = RAW_STORE_KIND || (PG_URL ? "pg" : "json");
 const ORG_ID = process.env.RELAY_ORG_ID || DEFAULT_ORG;
 const AUTH_MODE = ["off", "warn", "enforce"].includes(process.env.RELAY_AUTH) ? process.env.RELAY_AUTH : "enforce";
+// The public front door (Tailscale Funnel, v1.4) — /health reports it so clients learn the
+// address the phone can reach without Tailscale. Empty when the hub has none.
+const PUBLIC_URL = String(process.env.RELAY_PUBLIC_URL || "").trim().replace(/\/+$/, "");
 const ENROLL_MODE = process.env.RELAY_ENROLL || "tofu";
 const ONLINE_MS = Number(process.env.RELAY_ONLINE_MS || 5 * 60 * 1000);
 const PEER_TTL_DEFAULT_MS = 21600000;
@@ -126,7 +129,7 @@ try { UI = readFileSync(new URL("./ui.html", import.meta.url), "utf8"); } catch 
 const context = {
   ...store, ...authRuntime, ...events, ...reaper, duty, overseer, derivePhases,
   hubSend: duty.hubSend, assertNoSecrets, UI, AUTH_MODE, ONLINE_MS, PEER_TTL_MS,
-  REAP_GRACE_MS, CONTRACT_WINDOW_MS,
+  REAP_GRACE_MS, CONTRACT_WINDOW_MS, PUBLIC_URL,
 };
 const sessionChat = createSessionRuntime({
   state: store.state, markDirty: store.markDirty,

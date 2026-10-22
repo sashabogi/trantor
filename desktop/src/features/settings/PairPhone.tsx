@@ -109,6 +109,9 @@ function ReadyView({ invite, qr, copied, onCopy }: { invite: PairInvite; qr: str
             {left > 0 ? `Expires in ${mm}:${String(ss).padStart(2, "0")}` : "Expired — mint another."}
           </span>
         </div>
+        <div className={`mt-1 text-[11px] ${invite.hubPublic ? "text-[var(--color-tr-ok)]" : "text-[var(--color-tr-muted)]"}`}>
+          {invite.hubPublic ? "Works without Tailscale" : "Needs Tailscale on the phone"}
+        </div>
       </div>
       {full && (
         <div role="dialog" aria-modal="true" aria-label="Pairing QR code, full screen"

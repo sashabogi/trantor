@@ -14,6 +14,7 @@ const inviteFor = (overrides: Partial<PairInvite> = {}): PairInvite => ({
   link: `trantor://enroll?hub=${encodeURIComponent(HUB)}&token=${"ab".repeat(32)}`,
   token: "ab".repeat(32),
   hub: HUB,
+  hubPublic: false,
   expiresAt: Date.now() + 600000,
   ...overrides,
 });
@@ -132,5 +133,27 @@ describe("Settings Pair a phone", () => {
     expect(document.body.textContent).toContain("No hub configured yet");
     expect($("button")).toBeNull();
     expect(api.mint).not.toHaveBeenCalled();
+  });
+
+  it("says the public link works without Tailscale (#12153)", async () => {
+    const invite = inviteFor({
+      hub: "https://netcup-qdrant.tail0f2afd.ts.net",
+      link: `trantor://enroll?hub=${encodeURIComponent("https://netcup-qdrant.tail0f2afd.ts.net")}&token=${"ab".repeat(32)}`,
+      hubPublic: true,
+    });
+    const api: PairPhoneApi = { mint: vi.fn(async () => invite) };
+    await mount({ hubBase: HUB, api, renderQr: stubQr });
+    await click($("button")!);
+    expect(document.body.textContent).toContain("Works without Tailscale");
+    expect(document.body.textContent).not.toContain("Needs Tailscale on the phone");
+  });
+
+  it("says a tailnet link needs Tailscale on the phone (#12153)", async () => {
+    const invite = inviteFor({ hubPublic: false });
+    const api: PairPhoneApi = { mint: vi.fn(async () => invite) };
+    await mount({ hubBase: HUB, api, renderQr: stubQr });
+    await click($("button")!);
+    expect(document.body.textContent).toContain("Needs Tailscale on the phone");
+    expect(document.body.textContent).not.toContain("Works without Tailscale");
   });
 });

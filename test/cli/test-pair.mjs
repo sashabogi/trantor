@@ -32,7 +32,6 @@ function runPair(extraArgs, home) {
     timeout: 30000,
   });
 }
-
 const tmp = mkdtempSync(join(tmpdir(), "trantor-pair-"));
 let HUB = null;
 
@@ -60,6 +59,7 @@ try {
     const m = j && /^trantor:\/\/enroll\?hub=([^&]+)&token=([0-9a-f]{64})$/.exec(j.link);
     ok("link parses: trantor://enroll?hub=<enc>&token=<64hex>", !!m, j?.link || "(no link)");
     ok("link hub round-trips the test hub", !!m && decodeURIComponent(m[1]) === HUB.base, m && decodeURIComponent(m[1]));
+    ok("hub reports no publicUrl — link stays on the tailnet, hubPublic false", j.hubPublic === false, JSON.stringify(j.hubPublic));
     ok("expiresAt ~10 minutes out", !!j && j.expiresAt > Date.now() + 570000 && j.expiresAt < Date.now() + 630000,
       j && `${Math.round((j.expiresAt - Date.now()) / 1000)}s`);
 
@@ -80,6 +80,7 @@ try {
     ok("pair (human mode) exits 0", r.status === 0, `exit ${r.status} err=${r.stderr.slice(0, 200)}`);
     ok("prints a trantor://enroll link", /trantor:\/\/enroll\?hub=[^&]+&token=[0-9a-f]{64}/.test(r.stdout), r.stdout.slice(0, 200));
     ok("says how long it lives", /Expires in \d+ minutes?/.test(r.stdout), r.stdout.slice(0, 200));
+    ok("says which hub the link carries", /Hub in the link: /.test(r.stdout) && /tailnet — the phone needs Tailscale/.test(r.stdout), r.stdout.slice(0, 300));
   }
 
   console.log("\n[3] the default pairs the phone as an approver, never owner (#12113):");
@@ -110,6 +111,40 @@ try {
     HUB = saved;
     ok("unreachable hub exits 1", r.status === 1, `exit ${r.status}`);
     ok("unreachable hub error is readable", /unreachable/.test(r.stderr), r.stderr.slice(0, 200));
+  }
+
+  console.log("\n[5] RELAY_PUBLIC_URL set → the link hands out the public hub (#12153):");
+  {
+    const pub = "https://netcup-qdrant.tail0f2afd.ts.net/";
+    await HUB.stop();
+    HUB = await startTestHub({ env: { RELAY_AUTH: "enforce", RELAY_ENROLL: "tofu", RELAY_PUBLIC_URL: pub } });
+    const health = await fetch(HUB.base + "/health").then((r) => r.json());
+    ok("/health reports the publicUrl, trailing slash trimmed", health.publicUrl === pub.replace(/\/+$/, ""), JSON.stringify(health.publicUrl));
+    // A fresh hub knows no keys — the admin TOFU-enrolls here too.
+    const enroll2 = await sFetch(admin, "POST", "/enroll", { name: "admin", kind: "human", scopes: [{ project: "*", role: "owner" }] });
+    ok("admin TOFU-enrolled on the public-URL hub", enroll2.status < 400, `status ${enroll2.status}`);
+
+    const r = runPair(["--json", "--role", "owner"], tmp);
+    let j = null;
+    try { j = JSON.parse(r.stdout); } catch {}
+    const m = j && /^trantor:\/\/enroll\?hub=([^&]+)&token=([0-9a-f]{64})$/.exec(j.link);
+    ok("pair --json hands out the public hub", r.status === 0 && j?.hub === pub.replace(/\/+$/, "") && j.hubPublic === true,
+      JSON.stringify(j || r.stdout).slice(0, 200));
+    ok("the link itself carries the public hub", !!m && decodeURIComponent(m[1]) === pub.replace(/\/+$/, ""), m && decodeURIComponent(m[1]));
+
+    const rt = runPair(["--json", "--role", "owner", "--tailnet"], tmp);
+    let jt = null;
+    try { jt = JSON.parse(rt.stdout); } catch {}
+    ok("--tailnet forces the tailnet hub", rt.status === 0 && jt?.hub === HUB.base && jt.hubPublic === false,
+      JSON.stringify(jt || rt.stdout).slice(0, 200));
+
+    // Owner routes never answer in public: the mint still POSTs /invite to the tailnet hub, and
+    // the single-use token enrolls there — the phone just learns the public address from the link.
+    if (j?.token) {
+      const phone = generate();
+      const use = await sFetch(phone, "POST", "/enroll", { token: j.token, name: "phone-public", kind: "human" });
+      ok("the public-hub link's token still enrolls on the tailnet hub", use.status < 400, `status ${use.status}`);
+    }
   }
 
   console.log(`\ntest-pair: ${pass} passed, ${fail} failed`);

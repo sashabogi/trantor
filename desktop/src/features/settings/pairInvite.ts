@@ -4,7 +4,7 @@
 import { HubClient, type PairInviteResponse } from "../../shared/api/client";
 
 export type PairRole = "approver" | "owner";
-export type PairInvite = { link: string; token: string; hub: string; expiresAt: number };
+export type PairInvite = { link: string; token: string; hub: string; hubPublic: boolean; expiresAt: number };
 
 /** The hub predates the approver role (#12113) and stored something narrower than asked. */
 export class PairRoleUnsupportedError extends Error {
@@ -30,8 +30,19 @@ export function pairInviteApi(hubBase: string): PairPhoneApi {
       const j: PairInviteResponse = await client.pairInvite(role);
       const echoed = String(j.scopes?.[0]?.role ?? "");
       if (echoed !== role) throw new PairRoleUnsupportedError(role, echoed);
-      const hub = hubBase.replace(/\/+$/, "");
-      return { link: enrollLink(hub, j.token), token: j.token, hub, expiresAt: j.expiresAt };
+      // v1.4: the link carries the hub's public address (Tailscale Funnel) so the phone pairs
+      // without Tailscale. /invite itself always goes to the tailnet hub — owner routes never
+      // answer in public. No publicUrl (or /health unreachable — the invite already minted)
+      // falls back to the tailnet hub.
+      const tailnet = hubBase.replace(/\/+$/, "");
+      let hub = tailnet;
+      let hubPublic = false;
+      try {
+        const health = await client.health();
+        const pub = String(health.publicUrl || "").trim().replace(/\/+$/, "");
+        if (pub) { hub = pub; hubPublic = true; }
+      } catch { /* fall back to the tailnet hub */ }
+      return { link: enrollLink(hub, j.token), token: j.token, hub, hubPublic, expiresAt: j.expiresAt };
     },
   };
 }

@@ -130,6 +130,8 @@ export type HubHealth = {
   peers: number;
   messages: number;
   streams: number;
+  /** v1.4: the public front door (Tailscale Funnel). Absent or empty when the hub has none. */
+  publicUrl?: string;
   duty?: DutyHealth;
 };
 

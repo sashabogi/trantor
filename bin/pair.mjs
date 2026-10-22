@@ -9,10 +9,11 @@ import { spawnSync } from "node:child_process";
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const args = process.argv.slice(2);
-const USAGE = "usage: trantor pair [--role owner] [--sim] [--json]";
+const USAGE = "usage: trantor pair [--role owner] [--sim] [--tailnet] [--json]";
 if (args.includes("--help") || args.includes("-h")) { console.log(USAGE); process.exit(0); }
 const asJson = args.includes("--json");
 const openSim = args.includes("--sim");
+const forceTailnet = args.includes("--tailnet");
 const roleIdx = args.indexOf("--role");
 const role = roleIdx >= 0 ? (args[roleIdx + 1] || "") : "approver";
 if (!role || role.startsWith("--")) {
@@ -63,14 +64,30 @@ if (!r.ok) {
   process.exit(1);
 }
 
-const link = `trantor://enroll?hub=${encodeURIComponent(hub)}&token=${j.token}`;
+// v1.4: the link carries the hub's public address (Tailscale Funnel) so the phone pairs without
+// Tailscale. /invite itself always goes to the tailnet hub — owner routes never answer in public.
+// /health reports publicUrl; --tailnet forces the tailnet address. No publicUrl (or /health
+// unreachable — the invite already minted) falls back to the tailnet hub.
+const linkHub = (async () => {
+  if (forceTailnet) return { hub, public: false };
+  try {
+    const h = await fetch(`${hub}/health`).then((r) => r.json()).catch(() => ({}));
+    const pub = String(h.publicUrl || "").trim().replace(/\/+$/, "");
+    if (pub) return { hub: pub, public: true };
+  } catch {}
+  return { hub, public: false };
+})();
+
+const used = await linkHub;
+const link = `trantor://enroll?hub=${encodeURIComponent(used.hub)}&token=${j.token}`;
 const expiresAt = Number(j.expiresAt) || Date.now() + 600000;
 const mins = Math.max(0, Math.round((expiresAt - Date.now()) / 60000));
 
 if (asJson) {
-  console.log(JSON.stringify({ link, token: j.token, hub, expiresAt }));
+  console.log(JSON.stringify({ link, token: j.token, hub: used.hub, hubPublic: used.public, expiresAt }));
 } else {
-  console.log(`Pair link (single use):\n${link}\nExpires in ${mins} minute${mins === 1 ? "" : "s"}.`);
+  const where = used.public ? "public — the phone needs no Tailscale" : "tailnet — the phone needs Tailscale";
+  console.log(`Pair link (single use):\n${link}\nHub in the link: ${used.hub} (${where}).\nExpires in ${mins} minute${mins === 1 ? "" : "s"}.`);
 }
 
 if (openSim) {
