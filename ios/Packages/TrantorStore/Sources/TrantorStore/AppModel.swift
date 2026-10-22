@@ -136,9 +136,13 @@ public final class AppModel {
     @discardableResult
     public func switchHub(to url: URL, probe: (URL) async throws -> Void) async -> Bool {
         do { try await probe(url) } catch { return false }
+        // the live feed holds a stream to the old address: stop it before the switch, restart after
+        let feeding = feed.isRunning
+        stopFeed()
         settings.setHub(url)
         cache.clear()
         connect()
+        if feeding { startFeed() }
         return true
     }
 

@@ -158,6 +158,9 @@ public final class FeedStore {
 
     /// Follow the live stream. `updates` is built from the current `lastEventID`, so it can be a real
     /// `EventStream` or a scripted one in tests. Replaces any stream already running.
+    /// A stream is open (or reconnecting).
+    public var isRunning: Bool { task != nil }
+
     public func start(updates: @escaping (Int) -> AsyncStream<StreamUpdate>, onChat: @escaping (ChatSignal?) -> Void = { _ in }) {
         stop()
         let since = lastEventID
