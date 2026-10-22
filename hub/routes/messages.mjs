@@ -166,7 +166,7 @@ export async function routeMessages({ req, res, q, P, auth, ctx }) {
       res.writeHead(200, { "content-type": "text/html; charset=utf-8" }); return res.end(UI || "<h1>trantor</h1><p>dashboard unavailable</p>");
     }
     // #8723: the count is a listing in aggregate — memory rows (past PEER_TTL_MS) never count.
-    if (P === "/health") return json(res, 200, { ok: true, publicUrl: process.env.RELAY_PUBLIC_URL || "", authMode: AUTH_MODE, peers: Object.values(state.peers).filter(v => (v.lastSeen || 0) >= now() - PEER_TTL_MS).length, messages: state.messages.length, streams: streams.length,
+    if (P === "/health") return json(res, 200, { ok: true, authMode: AUTH_MODE, peers: Object.values(state.peers).filter(v => (v.lastSeen || 0) >= now() - PEER_TTL_MS).length, messages: state.messages.length, streams: streams.length,
       persist: persistHealth.view(),
       // v1.4: the public front door, empty when RELAY_PUBLIC_URL is unset — pairing hands it out.
       publicUrl: PUBLIC_URL,
