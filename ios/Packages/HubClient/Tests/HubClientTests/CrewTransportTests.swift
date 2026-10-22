@@ -15,7 +15,7 @@ final class CrewTransportTests: XCTestCase {
         let roster = try await api.crewRoster()
         XCTAssertEqual(roster.first?.machine, "sasha@mac")
         XCTAssertEqual(roster.first?.seats.first?.agent, "glm")
-        let receipt = try await api.crewCommand(project: "a & b", action: .up, seats: ["glm"])
+        let receipt = try await api.crewCommand(project: "a & b", action: .up, seats: [try XCTUnwrap(roster.first?.seats.first?.launchSpec)])
         XCTAssertEqual(receipt.status, "queued")
         let final = try await api.crewCommandStatus(id: receipt.id)
         XCTAssertEqual(final.status, "done")
@@ -29,7 +29,7 @@ final class CrewTransportTests: XCTestCase {
         let up = try XCTUnwrap(JSONSerialization.jsonObject(with: XCTUnwrap(requests[1].1)) as? [String: Any])
         XCTAssertEqual(up["project"] as? String, "a & b")
         XCTAssertEqual(up["action"] as? String, "up")
-        XCTAssertEqual(up["seats"] as? [String], ["glm"])
+        XCTAssertEqual(up["seats"] as? [String], ["glm:zai-coding-plan"])
         XCTAssertNil(up["from"])
         XCTAssertNil(up["to"])
         XCTAssertNotNil(UUID(uuidString: try XCTUnwrap(up["_op"] as? String)))
@@ -75,7 +75,7 @@ private final class CrewURLProtocol: URLProtocol {
         Self.lock.lock(); Self.captured.append((request, body)); Self.lock.unlock()
         let payload: String
         if request.url?.path == "/crew/roster" {
-            payload = #"{"machines":[{"machine":"sasha@mac","updatedAt":1000,"seats":[{"agent":"glm","metered":false,"available":true,"reason":""}]}]}"#
+            payload = #"{"machines":[{"machine":"sasha@mac","updatedAt":1000,"seats":[{"agent":"glm","spec":"glm:zai-coding-plan","metered":false,"available":true,"reason":""}]}]}"#
         } else if request.httpMethod == "POST" { payload = #"{"id":77,"status":"queued"}"# }
         else { payload = #"{"id":77,"status":"done","outcome":"done","output":"glm started"}"# }
         let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: "HTTP/1.1", headerFields: nil)!

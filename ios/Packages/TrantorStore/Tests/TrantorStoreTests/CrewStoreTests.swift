@@ -9,10 +9,10 @@ final class CrewStoreTests: XCTestCase {
         let hub = StubHub()
         hub.chatsData = ["trantor": ChatSnapshot(host: "demo-mac")]
         hub.rosterData = [
-            RosterSeat(agent: "glm", metered: false, available: true),
-            RosterSeat(agent: "kimi", metered: true, available: true),
-            RosterSeat(agent: "deepseek", metered: true, available: false, reason: "No API key"),
-            RosterSeat(agent: "claude", metered: false, available: true),
+            RosterSeat(agent: "glm", spec: "glm", metered: false, available: true),
+            RosterSeat(agent: "kimi", spec: "kimi", metered: true, available: true),
+            RosterSeat(agent: "deepseek", spec: "deepseek", metered: true, available: false, reason: "No API key"),
+            RosterSeat(agent: "claude", spec: "claude", metered: false, available: true),
         ]
         let store = CrewStore(project: "trantor", fleet: FleetStore(api: hub), api: hub, authenticator: auth ?? CrewAuthenticator())
         store.mayControl = { true }
@@ -24,8 +24,8 @@ final class CrewStoreTests: XCTestCase {
     func testRosterUsesOnlyHostingMachineAndNoHostDisablesCommands() async {
         let (hub, store) = await setup()
         hub.rosterMachinesData = [
-            CrewRosterMachine(machine: "other-mac", seats: [RosterSeat(agent: "kimi", metered: false, available: true)]),
-            CrewRosterMachine(machine: "demo-mac", seats: [RosterSeat(agent: "glm", metered: false, available: true)]),
+            CrewRosterMachine(machine: "other-mac", seats: [RosterSeat(agent: "kimi", spec: "kimi", metered: false, available: true)]),
+            CrewRosterMachine(machine: "demo-mac", seats: [RosterSeat(agent: "glm", spec: "glm", metered: false, available: true)]),
         ]
         await store.refresh()
         XCTAssertEqual(store.roster.map(\.agent), ["glm"])
@@ -35,6 +35,46 @@ final class CrewStoreTests: XCTestCase {
         XCTAssertTrue(store.roster.isEmpty)
         let sent = await store.command(.down)
         XCTAssertFalse(sent)
+        XCTAssertFalse(hub.calls.contains { $0.hasPrefix("crew:") })
+    }
+
+    func testLaunchSpecsAreSentForAddAndSwapAndKeepCostGate() async {
+        let (hub, store) = await setup()
+        hub.rosterData = [RosterSeat(agent: "glm", spec: "glm:zai-coding-plan", label: "GLM", metered: true, available: true)]
+        await store.refresh()
+        XCTAssertEqual(store.roster.first?.agent, "glm")
+        XCTAssertTrue(store.needsCostConfirmation(seats: ["glm:zai-coding-plan"]))
+        let bare = await store.command(.up, seats: ["glm"], costConfirmed: true)
+        XCTAssertFalse(bare)
+        let unconfirmed = await store.command(.up, seats: ["glm:zai-coding-plan"])
+        XCTAssertFalse(unconfirmed)
+        XCTAssertFalse(hub.calls.contains { $0.hasPrefix("crew:") })
+        let sent = await store.command(.up, seats: ["glm:zai-coding-plan"], costConfirmed: true)
+        XCTAssertTrue(sent)
+        XCTAssertTrue(hub.calls.contains("crew:trantor:up:[\"glm:zai-coding-plan\"]::"))
+        hub.crewCommandsData["1"] = CrewCommandStatus(id: "1", status: "done")
+        await store.refreshCommands()
+        let swapped = await store.command(.swap, from: "kimi", to: "glm:zai-coding-plan", costConfirmed: true)
+        XCTAssertTrue(swapped)
+        XCTAssertTrue(hub.calls.contains("crew:trantor:swap:[]:kimi:glm:zai-coding-plan"))
+    }
+
+    func testMissingOrInvalidSpecStaysVisibleButCannotLaunch() async {
+        let auth = CrewAuthenticator()
+        let (hub, store) = await setup(auth: auth)
+        for spec in ["", "--all", "claude:opus"] {
+            hub.rosterData = [RosterSeat(agent: "glm", spec: spec, metered: false, available: true)]
+            await store.refresh()
+            XCTAssertEqual(store.roster.count, 1)
+            XCTAssertFalse(store.roster[0].available)
+            XCTAssertEqual(store.roster[0].reason, "Can't launch this seat from the phone")
+            XCTAssertEqual(store.roster[0].launchSpec, spec.isEmpty ? "glm" : spec)
+            let up = await store.command(.up, seats: [store.roster[0].launchSpec])
+            let swap = await store.command(.swap, from: "kimi", to: store.roster[0].launchSpec)
+            XCTAssertFalse(up)
+            XCTAssertFalse(swap)
+        }
+        XCTAssertEqual(auth.calls, 0)
         XCTAssertFalse(hub.calls.contains { $0.hasPrefix("crew:") })
     }
 

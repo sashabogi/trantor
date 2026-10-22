@@ -100,7 +100,8 @@ public final class StubHub: HubServing, @unchecked Sendable {
                         (action == .down ? seats.isEmpty || seats.contains(String(peer.session.split(separator: ":").first ?? "")) : peer.session == "\(from ?? ""):\(project)")
                     }
                 }
-                let additions = action == .up ? seats : (action == .swap ? to.map { [$0] } ?? [] : [])
+                let additions = (action == .up ? seats : (action == .swap ? to.map { [$0] } ?? [] : []))
+                    .map { String($0.split(separator: ":").first ?? "") }
                 for seat in additions where !_peers.contains(where: { $0.session == "\(seat):\(project)" }) {
                     _peers.append(Peer(session: "\(seat):\(project)", online: true, status: "working", project: project,
                                        llm: seat, kind: "agent", lastSeen: Date().timeIntervalSince1970 * 1000))

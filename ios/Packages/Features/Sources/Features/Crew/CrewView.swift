@@ -138,11 +138,11 @@ private struct CrewRosterSheet: View {
                         StageEmpty("No roster available", systemImage: "person.3", message: "Open Trantor on your Mac to publish its available seats.").card()
                     }
                     ForEach(store.roster) { seat in
-                        Button { toggle(seat.agent) } label: { rosterRow(seat) }
+                        Button { toggle(seat.launchSpec) } label: { rosterRow(seat) }
                             .buttonStyle(.plain).accessibilityIdentifier("crew.roster.\(seat.agent)")
                             .disabled(!seat.available || seat.agent == replacing || store.busy ||
-                                      (replacing == nil && selected.count >= 6 && !selected.contains(seat.agent)))
-                            .accessibilityAddTraits(selected.contains(seat.agent) ? .isSelected : [])
+                                      (replacing == nil && selected.count >= 6 && !selected.contains(seat.launchSpec)))
+                            .accessibilityAddTraits(selected.contains(seat.launchSpec) ? .isSelected : [])
                     }
                 }.padding(Space.lg)
             }
@@ -166,14 +166,14 @@ private struct CrewRosterSheet: View {
             .alert("This seat costs money per token", isPresented: $confirmCost) {
                 Button("Confirm cost and continue") { submit(costConfirmed: true) }
                 Button("Cancel", role: .cancel) {}
-            } message: { Text("\(selected.sorted().joined(separator: ", ")) includes a metered seat. Usage is billed to its API plan.") }
+            } message: { Text("\(selectedLabels) includes a metered seat. Usage is billed to its API plan.") }
         }
         .presentationDetents([.large])
     }
 
     private func rosterRow(_ seat: RosterSeat) -> some View {
         HStack(spacing: Space.md) {
-            Image(systemName: selected.contains(seat.agent) ? "checkmark.circle.fill" : "circle").foregroundStyle(Palette.accent)
+            Image(systemName: selected.contains(seat.launchSpec) ? "checkmark.circle.fill" : "circle").foregroundStyle(Palette.accent)
             NameMark(seat.agent, size: 30)
             VStack(alignment: .leading, spacing: Space.sm) {
                 Text(seat.label.isEmpty ? seat.agent : seat.label).font(.tHeadline).foregroundStyle(Palette.text)
@@ -187,10 +187,15 @@ private struct CrewRosterSheet: View {
         }.card().opacity(seat.available ? 1 : 0.6)
     }
 
-    private func toggle(_ agent: String) {
-        if selected.contains(agent) { selected.remove(agent) }
-        else if replacing != nil { selected = [agent] }
-        else if selected.count < 6 { selected.insert(agent) }
+    private var selectedLabels: String {
+        store.roster.filter { selected.contains($0.launchSpec) }
+            .map { $0.label.isEmpty ? $0.agent : $0.label }.joined(separator: ", ")
+    }
+
+    private func toggle(_ spec: String) {
+        if selected.contains(spec) { selected.remove(spec) }
+        else if replacing != nil { selected = [spec] }
+        else if selected.count < 6 { selected.insert(spec) }
     }
 
     private func submit(costConfirmed: Bool) {

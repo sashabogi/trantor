@@ -3,17 +3,20 @@ import XCTest
 
 final class CrewDecodingTests: XCTestCase {
     func testMachineRosterEnvelopeSkipsMalformedRows() throws {
-        let payload = #"{"machines":[null,{"machine":"sasha@mac","updatedAt":"1000","seats":[false,{"agent":"glm","metered":false,"available":true,"reason":""}]}]}"#
+        let payload = #"{"machines":[null,{"machine":"sasha@mac","updatedAt":"1000","seats":[false,{"agent":"glm","spec":"glm:zai-coding-plan","metered":false,"available":true,"reason":""}]}]}"#
         let roster = try JSONDecoder().decode(CrewRosterResponse.self, from: Data(payload.utf8))
         XCTAssertEqual(roster.machines.count, 1)
         XCTAssertEqual(roster.machines[0].machine, "sasha@mac")
         XCTAssertEqual(roster.machines[0].updatedAt, 1000)
         XCTAssertEqual(roster.machines[0].seats.map(\.agent), ["glm"])
+        XCTAssertEqual(roster.machines[0].seats.first?.launchSpec, "glm:zai-coding-plan")
     }
 
     func testRosterToleratesMissingFieldsWithoutAssumingFreeOrAvailable() throws {
         let seat = try JSONDecoder().decode(RosterSeat.self, from: Data(#"{"agent":"glm","label":42,"plan":null,"metered":"unknown","available":1,"reason":"No key","newField":true}"#.utf8))
         XCTAssertEqual(seat.agent, "glm")
+        XCTAssertEqual(seat.spec, "")
+        XCTAssertEqual(seat.launchSpec, "glm")
         XCTAssertEqual(seat.label, "42")
         XCTAssertEqual(seat.plan, "")
         XCTAssertTrue(seat.metered)

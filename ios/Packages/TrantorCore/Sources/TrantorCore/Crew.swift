@@ -2,23 +2,25 @@ import Foundation
 
 public struct RosterSeat: Codable, Equatable, Sendable, Identifiable {
     public var agent: String
+    public var spec: String
     public var label: String
     public var plan: String
     public var metered: Bool
     public var available: Bool
     public var reason: String
     public var id: String { agent }
+    public var launchSpec: String { spec.isEmpty ? agent : spec }
 
-    public init(agent: String, label: String = "", plan: String = "", metered: Bool = true,
+    public init(agent: String, spec: String = "", label: String = "", plan: String = "", metered: Bool = true,
                 available: Bool = false, reason: String = "") {
-        self.agent = agent; self.label = label; self.plan = plan
+        self.agent = agent; self.spec = spec; self.label = label; self.plan = plan
         self.metered = metered; self.available = available; self.reason = reason
     }
 
-    enum CodingKeys: String, CodingKey { case agent, label, plan, metered, available, reason }
+    enum CodingKeys: String, CodingKey { case agent, spec, label, plan, metered, available, reason }
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
-        agent = c.lenientString(.agent); label = c.lenientString(.label); plan = c.lenientString(.plan)
+        agent = c.lenientString(.agent); spec = c.lenientString(.spec); label = c.lenientString(.label); plan = c.lenientString(.plan)
         // An incomplete roster must never silently bypass a cost confirmation.
         metered = c.lenient(Bool.self, .metered) ?? true
         available = c.lenientBool(.available); reason = c.lenientString(.reason)

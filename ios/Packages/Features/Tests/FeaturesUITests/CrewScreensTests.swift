@@ -20,6 +20,9 @@ final class CrewScreensTests: XCTestCase {
         let glm = app.buttons["crew.roster.glm"]
         XCTAssertTrue(glm.waitForExistence(timeout: 5))
         XCTAssertFalse(app.buttons["crew.roster.deepseek"].isEnabled)
+        XCTAssertTrue(app.staticTexts["Can't launch this seat from the phone"].exists)
+        XCTAssertTrue(glm.staticTexts["GLM"].exists)
+        XCTAssertFalse(app.staticTexts["glm:zai-coding-plan"].exists)
         glm.tap()
         app.buttons["crew.submit"].tap()
         XCTAssertFalse(app.alerts["This seat costs money per token"].exists)

@@ -21,9 +21,9 @@ public enum DemoData {
         let hub = StubHub()
         hub.demoCrew = true
         hub.rosterData = [
-            RosterSeat(agent: "codex", label: "Codex", plan: "subscription", metered: false, available: true),
-            RosterSeat(agent: "glm", label: "GLM", plan: "subscription", metered: false, available: true),
-            RosterSeat(agent: "kimi", label: "Kimi", plan: "API", metered: true, available: true),
+            RosterSeat(agent: "codex", spec: "codex", label: "Codex", plan: "subscription", metered: false, available: true),
+            RosterSeat(agent: "glm", spec: "glm:zai-coding-plan", label: "GLM", plan: "subscription", metered: false, available: true),
+            RosterSeat(agent: "kimi", spec: "kimi", label: "Kimi", plan: "API", metered: true, available: true),
             RosterSeat(agent: "deepseek", label: "DeepSeek", plan: "API", metered: true, reason: "API key is not configured"),
         ]
         hub.holdsData = [

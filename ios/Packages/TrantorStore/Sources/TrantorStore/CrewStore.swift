@@ -66,6 +66,14 @@ public final class CrewStore {
             guard current == generation else { return }
             host = snapshot.host
             roster = (incoming.first { $0.machine == host }?.seats ?? []).filter { Self.validSpec($0.agent) }
+                .map { seat in
+                    var seat = seat
+                    if seat.spec.isEmpty || !Self.validSpec(seat.spec) {
+                        seat.available = false
+                        seat.reason = "Can't launch this seat from the phone"
+                    }
+                    return seat
+                }
                 .reduce(into: [String: RosterSeat]()) { $0[$1.agent] = $1 }.values.sorted { $0.agent < $1.agent }
             freshness.fresh()
         } catch { if current == generation { freshness.failed(DecisionsStore.describe(error)) } }
@@ -73,7 +81,7 @@ public final class CrewStore {
     }
 
     public func needsCostConfirmation(seats: [String]) -> Bool {
-        seats.contains { spec in roster.first { $0.agent == spec }?.metered ?? true }
+        seats.contains { spec in roster.first { $0.launchSpec == spec }?.metered ?? true }
     }
 
     private func validate(action: CrewAction, seats: [String], from: String?, to: String?, costConfirmed: Bool) -> String? {
@@ -95,7 +103,7 @@ public final class CrewStore {
             targets = [to]
         }
         for spec in targets {
-            guard let seat = roster.first(where: { $0.agent == spec }) else { return "Refresh the roster before choosing a seat." }
+            guard let seat = roster.first(where: { $0.launchSpec == spec }) else { return "Refresh the roster before choosing a seat." }
             guard seat.available else { return seat.reason.isEmpty ? "\(seat.agent) is unavailable on the Mac." : seat.reason }
         }
         if needsCostConfirmation(seats: targets), !costConfirmed { return "This seat costs money per token" }
