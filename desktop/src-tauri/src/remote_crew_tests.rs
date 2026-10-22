@@ -319,6 +319,7 @@ async fn roster_uses_launchable_seats_tiers_and_matching_provider_health() {
         {"agent":"deepseek","spec":"deepseek:deepseek","tier":"api","available":true},
         {"agent":"openrouter","spec":"openrouter:openrouter","tier":"api","available":false},
         {"agent":"custom","spec":"custom:custom/model","tier":"api","available":true},
+        {"agent":"kimi","spec":"kimi","tier":"capped-sub","available":true},
         {"agent":"unsafe","spec":"--all","tier":"api","available":true},
         {"agent":"mismatch","spec":"codex","tier":"api","available":true}
     ])
@@ -329,7 +330,8 @@ async fn roster_uses_launchable_seats_tiers_and_matching_provider_health() {
         {"provider":"deepseek","kind":"prepaid","state":"connected","reason":"Funded"},
         {"provider":"openrouter","kind":"prepaid","state":"connected","reason":"Funded"},
         {"provider":"moonshot","state":"connected"},
-        {"provider":"dsh","state":"connected"}
+        {"provider":"dsh","state":"connected"},
+        {"provider":"kimi","state":"unknown","reason":"live probe returned nothing"}
     ])
     .to_string();
     let runner = FakeRunner::new(vec![output(true, &list, ""), output(true, &status, "")]);
@@ -341,8 +343,9 @@ async fn roster_uses_launchable_seats_tiers_and_matching_provider_health() {
             {"agent":"codex","spec":"codex","label":"codex","plan":"capped-sub","metered":false,"available":true,"reason":""},
             {"agent":"glm","spec":"glm:zai-coding-plan","label":"glm","plan":"capped-sub","metered":false,"available":false,"reason":"Quota spent"},
             {"agent":"deepseek","spec":"deepseek:deepseek","label":"deepseek","plan":"api","metered":true,"available":true,"reason":""},
-            {"agent":"openrouter","spec":"openrouter:openrouter","label":"openrouter","plan":"api","metered":true,"available":false,"reason":"Funded"},
-            {"agent":"custom","spec":"custom:custom/model","label":"custom","plan":"api","metered":true,"available":false,"reason":""}
+            {"agent":"openrouter","spec":"openrouter:openrouter","label":"openrouter","plan":"api","metered":true,"available":false,"reason":"Not available on this Mac"},
+            {"agent":"custom","spec":"custom:custom/model","label":"custom","plan":"api","metered":true,"available":true,"reason":""},
+            {"agent":"kimi","spec":"kimi","label":"kimi","plan":"capped-sub","metered":false,"available":true,"reason":""}
         ]})
     );
     let calls = runner.calls.lock().unwrap();

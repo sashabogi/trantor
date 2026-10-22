@@ -249,15 +249,18 @@ fn roster(list: &str, status: &str, machine: &str) -> Result<Value, String> {
             }
             let provider = if agent == "glm" { "zai" } else { agent };
             let status = providers.iter().find(|p| p["provider"] == provider);
-            let available =
-                row["available"] == true && status.is_some_and(|p| p["state"] == "connected");
+            // Only a definite failure makes a seat unavailable. "unknown" (a probe that came back
+            // empty) or no status row at all says nothing about the seat, which may be running.
+            const DOWN: [&str; 5] = ["over_quota", "not_installed", "not_logged_in", "expired", "missing"];
+            let down = status.is_some_and(|p| DOWN.iter().any(|s| p["state"] == *s));
+            let available = row["available"] == true && !down;
             let plan = row["tier"].as_str().unwrap_or_default();
             let reason = if available {
                 ""
+            } else if down {
+                status.and_then(|p| p["reason"].as_str()).unwrap_or_default()
             } else {
-                status
-                    .and_then(|p| p["reason"].as_str())
-                    .unwrap_or_default()
+                "Not available on this Mac"
             };
             Some(
                 json!({"agent": agent, "spec": spec, "label": agent, "plan": plan,
