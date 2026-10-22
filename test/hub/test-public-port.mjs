@@ -36,11 +36,13 @@ async function boot(auth = "enforce", publicUrl = "https://phone.example") {
 }
 
 const reqIP = (socket, xff) => ({ socket: { remoteAddress: socket }, headers: { "x-forwarded-for": xff } });
-equal(publicClientIP(reqIP("127.0.0.1", "198.51.100.1, 198.51.100.2")), "198.51.100.1", "first XFF from loopback");
+// the proxy appends the address it saw: the LAST entry is the real client, the first is caller-supplied
+equal(publicClientIP(reqIP("127.0.0.1", "198.51.100.1, 198.51.100.2")), "198.51.100.2", "last XFF from loopback is the real client");
+equal(publicClientIP(reqIP("127.0.0.1", "203.0.113.77, 198.51.100.2")), "198.51.100.2", "a spoofed leading XFF entry cannot pick the bucket");
 equal(publicClientIP(reqIP("::ffff:127.0.0.1", "2001:0db8::1")), "2001:db8::1", "mapped loopback and canonical IPv6");
 equal(publicClientIP(reqIP("::1", "::ffff:192.0.2.8")), "192.0.2.8", "mapped client shares IPv4 bucket");
 equal(publicClientIP(reqIP("198.51.100.9", "192.0.2.9")), "198.51.100.9", "remote socket cannot spoof XFF");
-equal(publicClientIP(reqIP("127.0.0.1", "invalid, 192.0.2.9")), "127.0.0.1", "invalid first XFF falls back to socket");
+equal(publicClientIP(reqIP("127.0.0.1", "192.0.2.9, invalid")), "127.0.0.1", "an invalid last XFF falls back to socket");
 
 equal(publicClientIP(reqIP("127.0.0.1", "fe80::1%lo0")), "127.0.0.1", "scoped forwarded address cannot bypass limits");
 
@@ -112,8 +114,9 @@ try {
   equal((await request(hub.base, null, "GET", "/tasks")).status, 401, "private enforce unchanged");
 
   for (let i = 0; i < 120; i++) equal((await request(pub, null, "GET", "/health", undefined, "198.51.100.10")).status, 200, "general limit allowance");
-  let limited = await request(pub, null, "GET", "/health", undefined, "198.51.100.10, 203.0.113.2");
-  equal(limited.status, 429, "121st request limited using first XFF");
+  // a caller that prepends a fake address still lands in its real bucket (the proxy appends the real one last)
+  let limited = await request(pub, null, "GET", "/health", undefined, "203.0.113.2, 198.51.100.10");
+  equal(limited.status, 429, "121st request limited by the last XFF entry despite a spoofed first one");
   assert.ok(Number(limited.retry) > 0 && Number(limited.retry) <= 60); checks++;
   equal((await request(pub, null, "GET", "/health", undefined, "198.51.100.11")).status, 200, "different IP unaffected");
   equal((await request(hub.base, null, "GET", "/health", undefined, "198.51.100.10")).status, 200, "private port unthrottled");

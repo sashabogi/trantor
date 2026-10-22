@@ -25,7 +25,9 @@ export function publicClientIP(req) {
   const socket = normalizedIP(req.socket.remoteAddress || "") || "unknown";
   const loopback = socket === "::1" || socket.startsWith("127.");
   if (!loopback) return socket;
-  const forwarded = String(req.headers["x-forwarded-for"] || "").split(",", 1)[0].trim();
+  // The proxy (tailscale serve/funnel) APPENDS the address it saw, so only the last entry is
+  // trustworthy; the first is whatever the caller sent and would let anyone dodge the limits.
+  const forwarded = String(req.headers["x-forwarded-for"] || "").split(",").pop().trim();
   return normalizedIP(forwarded) || socket;
 }
 
