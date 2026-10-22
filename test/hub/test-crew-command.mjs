@@ -66,6 +66,8 @@ try {
     r.status === 400 && String(r.json.error || "").includes("Claude quota"), JSON.stringify(r.json));
   r = await sFetch(base, phone, "POST", "/crew/command", { project: "projA", action: "up", seats: ["claude:projA"] });
   ok("claude with a project suffix is refused too", r.status === 400, `status ${r.status}`);
+  r = await sFetch(base, phone, "POST", "/crew/command", { project: "projA", action: "up", seats: ["claude-2"] });
+  ok("a numbered claude seat is refused too", r.status === 400, `status ${r.status}`);
   r = await sFetch(base, phone, "POST", "/crew/command", { project: "projA", action: "down", seats: ["--all"] });
   ok("--all as a seat is refused", r.status === 400, `status ${r.status}`);
   r = await sFetch(base, phone, "POST", "/crew/command", { project: "projA", action: "swap", from: "glm", to: "--all" });

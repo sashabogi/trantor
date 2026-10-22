@@ -196,7 +196,8 @@ export function createSessionRuntime({ state, markDirty, appendEvent, pushEventT
       if (flagged) return json(res, 400, { error: `flag-like value refused: ${flagged}` });
       const invalid = specs.find(v => !CREW_SPEC.test(v));
       if (invalid) return json(res, 400, { error: `invalid seat spec: ${invalid}` });
-      if (specs.some(v => v.split(":")[0] === "claude")) return json(res, 400, { error: CREW_CLAUDE_REFUSAL });
+      // numbered claude seats (claude-2) draw the same quota as claude
+      if (specs.some(v => /^claude(-\d+)?$/.test(v.split(":")[0]))) return json(res, 400, { error: CREW_CLAUDE_REFUSAL });
       if (action === "up" && !seats.length) return json(res, 400, { error: "up needs at least one seat" });
       if (action === "swap" && (!from || !to)) return json(res, 400, { error: "swap needs from and to" });
       expireQueued();
