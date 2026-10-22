@@ -231,29 +231,37 @@ pub(super) async fn deliver(
     }
 }
 
-fn roster(raw: &str, machine: &str) -> Result<Value, String> {
-    let rows: Vec<Value> =
-        serde_json::from_str(raw).map_err(|e| format!("Provider roster: {e}"))?;
+fn roster(list: &str, status: &str, machine: &str) -> Result<Value, String> {
+    let rows: Vec<Value> = serde_json::from_str(list).map_err(|e| format!("Crew roster: {e}"))?;
+    let providers: Vec<Value> =
+        serde_json::from_str(status).map_err(|e| format!("Provider status: {e}"))?;
     let seats: Vec<Value> = rows
         .iter()
         .filter_map(|row| {
-            let agent = row["provider"].as_str()?;
-            if !valid_spec(agent) || agent.contains(':') {
+            let agent = row["agent"].as_str()?;
+            let spec = row["spec"].as_str()?;
+            if !valid_spec(agent)
+                || agent.contains(':')
+                || !valid_spec(spec)
+                || spec.split(':').next() != Some(agent)
+            {
                 return None;
             }
-            let kind = row["kind"].as_str().unwrap_or_default();
-            let plan = row["usage"]["plan"]
-                .as_str()
-                .filter(|s| !s.is_empty())
-                .unwrap_or(kind);
+            let provider = if agent == "glm" { "zai" } else { agent };
+            let status = providers.iter().find(|p| p["provider"] == provider);
+            let available =
+                row["available"] == true && status.is_some_and(|p| p["state"] == "connected");
+            let plan = row["tier"].as_str().unwrap_or_default();
+            let reason = if available {
+                ""
+            } else {
+                status
+                    .and_then(|p| p["reason"].as_str())
+                    .unwrap_or_default()
+            };
             Some(
-                json!({"agent": agent, "label": row["label"].as_str().unwrap_or(agent),
-                "plan": plan, "metered": kind == "api" || plan.to_ascii_lowercase().contains("api"),
-                "available": row["state"] == "connected",
-                "reason": if row["state"] == "connected" { "" } else {
-                    row["reason"].as_str().filter(|s| !s.is_empty())
-                        .or_else(|| row["state"].as_str()).unwrap_or_default()
-                }}),
+                json!({"agent": agent, "spec": spec, "label": agent, "plan": plan,
+            "metered": plan == "api", "available": available, "reason": reason}),
             )
         })
         .collect();
@@ -272,6 +280,20 @@ async fn sample_roster(runner: &impl Runner, on: &AtomicBool) -> Result<Option<V
     if !on.load(Ordering::SeqCst) {
         return Ok(None);
     }
+    let list = runner
+        .run(
+            "trantor",
+            &["provider".into(), "list".into(), "--json".into()],
+            None,
+            COMMAND_TIMEOUT,
+        )
+        .await?;
+    if !list.success {
+        return Err(output_tail(&list.stderr));
+    }
+    if !on.load(Ordering::SeqCst) {
+        return Ok(None);
+    }
     let status = runner
         .run(
             "trantor",
@@ -283,35 +305,75 @@ async fn sample_roster(runner: &impl Runner, on: &AtomicBool) -> Result<Option<V
     if !status.success {
         return Err(output_tail(&status.stderr));
     }
-    roster(&status.stdout, &hub::owner_identity()).map(Some)
+    roster(&list.stdout, &status.stdout, &hub::owner_identity()).map(Some)
+}
+
+struct RosterMirror {
+    payload: Value,
+    published: HashMap<String, u64>,
+}
+
+impl RosterMirror {
+    fn new(payload: Value) -> Self {
+        Self {
+            payload,
+            published: HashMap::new(),
+        }
+    }
+
+    async fn publish(
+        &mut self,
+        base: &str,
+        connection: u64,
+        hub: &impl Hub,
+        on: &AtomicBool,
+    ) -> Result<(), String> {
+        if !on.load(Ordering::SeqCst) || self.published.get(base) == Some(&connection) {
+            return Ok(());
+        }
+        publish_roster(hub, self.payload.clone(), on).await?;
+        self.published.insert(base.into(), connection);
+        Ok(())
+    }
 }
 
 pub(super) async fn roster_worker() {
     let mut next = tokio::time::Instant::now();
+    let mut mirror: Option<RosterMirror> = None;
     loop {
         if !enabled().load(Ordering::SeqCst) {
             next = tokio::time::Instant::now();
-        } else if tokio::time::Instant::now() >= next {
-            next = tokio::time::Instant::now() + ROSTER_INTERVAL;
-            match sample_roster(&LiveRunner, enabled()).await {
-                Ok(Some(payload)) => {
-                    let mut bases = vec![hub_base("")];
-                    for seat in hosted().unwrap_or_default() {
-                        let base = hub_base(&seat.project);
-                        if !bases.contains(&base) {
-                            bases.push(base);
-                        }
-                    }
-                    for base in bases {
-                        if let Err(error) =
-                            publish_roster(&LiveHub { base }, payload.clone(), enabled()).await
-                        {
-                            eprintln!("phone relay roster: {error}");
-                        }
+            mirror = None;
+        } else {
+            if tokio::time::Instant::now() >= next {
+                next = tokio::time::Instant::now() + ROSTER_INTERVAL;
+                match sample_roster(&LiveRunner, enabled()).await {
+                    Ok(Some(payload)) => mirror = Some(RosterMirror::new(payload)),
+                    Ok(None) => {}
+                    Err(error) => eprintln!("phone relay roster: {error}"),
+                }
+            }
+            if let Some(mirror) = mirror.as_mut() {
+                let mut connections = crate::lock_or_recover(&CONNECTIONS)
+                    .clone()
+                    .unwrap_or_default();
+                connections.entry(hub_base("")).or_default();
+                for seat in hosted().unwrap_or_default() {
+                    connections.entry(hub_base(&seat.project)).or_default();
+                }
+                for (base, connection) in connections {
+                    if let Err(error) = mirror
+                        .publish(
+                            &base,
+                            connection,
+                            &LiveHub { base: base.clone() },
+                            enabled(),
+                        )
+                        .await
+                    {
+                        eprintln!("phone relay roster: {error}");
                     }
                 }
-                Ok(None) => {}
-                Err(error) => eprintln!("phone relay roster: {error}"),
             }
         }
         tokio::time::sleep(TICK).await;

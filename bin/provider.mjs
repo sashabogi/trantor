@@ -46,18 +46,27 @@ function opencodeModelCount(providerOc) {
   catch { return 0; }
 }
 
-function listSeats() {
-  const world = loadWorld();
+export function crewSeats(world = loadWorld(), countModels = opencodeModelCount) {
   const { roster, agents, profile } = world;
+  return Object.entries(roster).map(([agent, seat]) => ({
+    agent,
+    spec: seat.launch,
+    tier: profile?.providers?.[seat.provider]?.tier || (seat.cli === "opencode" ? "—" : ""),
+    available: agents.includes(agent),
+    brought: !!seat.discovered,
+    models: seat.cli === "opencode" ? countModels(seat.providerOc) : null,
+  }));
+}
+
+function listSeats(opts) {
+  const rows = crewSeats();
+  if (opts.json) { console.log(JSON.stringify(rows, null, 2)); return; }
   console.log("CREW SEATS — built-in + brought (BYOM). ● = available now\n");
-  for (const [label, s] of Object.entries(roster)) {
-    const live = agents.includes(label);
-    const tier = profile?.providers?.[s.provider]?.tier || (s.cli === "opencode" ? "—" : "");
-    const kind = s.discovered ? "brought " : "built-in";
-    const models = s.cli === "opencode" ? opencodeModelCount(s.providerOc) : null;
+  for (const { agent, spec, tier, available, brought, models } of rows) {
+    const kind = brought ? "brought " : "built-in";
     const mtxt = models == null ? "" : `${models} models`;
-    const dot = live ? `${C.grn}●${C.off}` : `${C.dim}○${C.off}`;
-    console.log(`  ${dot} ${label.padEnd(14)} ${C.dim}${kind}${C.off}  launch: ${s.launch.padEnd(26)} ${tier ? `tier=${tier}` : ""} ${C.dim}${mtxt}${C.off}`);
+    const dot = available ? `${C.grn}●${C.off}` : `${C.dim}○${C.off}`;
+    console.log(`  ${dot} ${agent.padEnd(14)} ${C.dim}${kind}${C.off}  launch: ${spec.padEnd(26)} ${tier ? `tier=${tier}` : ""} ${C.dim}${mtxt}${C.off}`);
   }
   console.log(`\n${C.dim}add one:${C.off} trantor provider add <name> --key sk-… --plan api`);
   console.log(`${C.dim}browse models:${C.off} trantor models [<provider>]`);
@@ -279,7 +288,8 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   // The default list leads with the seats roster and closes with the provider status board —
   // one command answers both "what can I launch" and "what is actually alive" (#6390).
   const defaultList = async () => {
-    listSeats();
+    listSeats(opts);
+    if (opts.json) return;
     console.log("");
     printStatusRows(await providerStatus());
   };

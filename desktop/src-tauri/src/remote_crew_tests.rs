@@ -311,28 +311,44 @@ fn output_tail_strips_ansi_and_counts_unicode_characters() {
 }
 
 #[tokio::test]
-async fn roster_uses_provider_usage_and_signer_and_posts_exact_payload() {
-    let raw = json!([
-        {"provider":"claude","label":"Claude","kind":"windows","state":"connected"},
-        {"provider":"codex","label":"Codex","kind":"windows","usage":{"plan":"Pro"},"state":"connected"},
-        {"provider":"custom","label":"Custom","kind":"api","state":"unknown","reason":"No credentials"},
-        {"provider":"glm","label":"GLM","kind":"quota","usage":{"plan":"API monthly"},"state":"over_quota"}
-    ]).to_string();
-    let runner = FakeRunner::new(vec![output(true, &raw, "")]);
+async fn roster_uses_launchable_seats_tiers_and_matching_provider_health() {
+    let list = json!([
+        {"agent":"claude","spec":"claude","tier":"capped-sub","available":true},
+        {"agent":"codex","spec":"codex","tier":"capped-sub","available":true},
+        {"agent":"glm","spec":"glm:zai-coding-plan","tier":"capped-sub","available":true},
+        {"agent":"deepseek","spec":"deepseek:deepseek","tier":"api","available":true},
+        {"agent":"openrouter","spec":"openrouter:openrouter","tier":"api","available":false},
+        {"agent":"custom","spec":"custom:custom/model","tier":"api","available":true},
+        {"agent":"unsafe","spec":"--all","tier":"api","available":true},
+        {"agent":"mismatch","spec":"codex","tier":"api","available":true}
+    ])
+    .to_string();
+    let status = json!([
+        {"provider":"codex","state":"connected","reason":"Signed in"},
+        {"provider":"zai","state":"over_quota","reason":"Quota spent"},
+        {"provider":"deepseek","kind":"prepaid","state":"connected","reason":"Funded"},
+        {"provider":"openrouter","kind":"prepaid","state":"connected","reason":"Funded"},
+        {"provider":"moonshot","state":"connected"},
+        {"provider":"dsh","state":"connected"}
+    ])
+    .to_string();
+    let runner = FakeRunner::new(vec![output(true, &list, ""), output(true, &status, "")]);
     let on = AtomicBool::new(true);
     let payload = sample_roster(&runner, &on).await.unwrap().unwrap();
     assert_eq!(
         payload,
         json!({"machine":hub::owner_identity(),"seats":[
-            {"agent":"codex","label":"Codex","plan":"Pro","metered":false,"available":true,"reason":""},
-            {"agent":"custom","label":"Custom","plan":"api","metered":true,"available":false,"reason":"No credentials"},
-            {"agent":"glm","label":"GLM","plan":"API monthly","metered":true,"available":false,"reason":"over_quota"}
+            {"agent":"codex","spec":"codex","label":"codex","plan":"capped-sub","metered":false,"available":true,"reason":""},
+            {"agent":"glm","spec":"glm:zai-coding-plan","label":"glm","plan":"capped-sub","metered":false,"available":false,"reason":"Quota spent"},
+            {"agent":"deepseek","spec":"deepseek:deepseek","label":"deepseek","plan":"api","metered":true,"available":true,"reason":""},
+            {"agent":"openrouter","spec":"openrouter:openrouter","label":"openrouter","plan":"api","metered":true,"available":false,"reason":"Funded"},
+            {"agent":"custom","spec":"custom:custom/model","label":"custom","plan":"api","metered":true,"available":false,"reason":""}
         ]})
     );
-    assert_eq!(
-        runner.calls.lock().unwrap()[0].1,
-        ["provider", "status", "--json"]
-    );
+    let calls = runner.calls.lock().unwrap();
+    assert_eq!(calls[0].1, ["provider", "list", "--json"]);
+    assert_eq!(calls[1].1, ["provider", "status", "--json"]);
+    drop(calls);
     let hub = FakeHub::new(vec![(200, json!({"ok":true}))]);
     publish_roster(&hub, payload.clone(), &on).await.unwrap();
     assert_eq!(
@@ -340,6 +356,52 @@ async fn roster_uses_provider_usage_and_signer_and_posts_exact_payload() {
         ("/crew/roster".into(), Some(payload))
     );
     assert_eq!(ROSTER_INTERVAL, Duration::from_secs(600));
+}
+
+#[tokio::test]
+async fn roster_republishes_on_each_connection_and_retries_failed_posts() {
+    let payload = json!({"machine":"mac", "seats":[]});
+    let mut mirror = RosterMirror::new(payload.clone());
+    let on = AtomicBool::new(true);
+    let hub = FakeHub::new(vec![
+        (200, json!({})),
+        (503, json!({"error":"restart"})),
+        (200, json!({})),
+        (200, json!({})),
+    ]);
+    mirror.publish("hub", 0, &hub, &on).await.unwrap();
+    mirror.publish("hub", 0, &hub, &on).await.unwrap();
+    assert_eq!(hub.requests.lock().unwrap().len(), 1);
+    assert!(mirror.publish("hub", 1, &hub, &on).await.is_err());
+    mirror.publish("hub", 1, &hub, &on).await.unwrap();
+    mirror.publish("hub", 1, &hub, &on).await.unwrap();
+    mirror
+        .publish("hub", 2, &hub, &AtomicBool::new(false))
+        .await
+        .unwrap();
+    assert_eq!(hub.requests.lock().unwrap().len(), 3);
+    mirror.publish("hub", 2, &hub, &on).await.unwrap();
+    assert_eq!(hub.requests.lock().unwrap().len(), 4);
+    for (_, body) in hub.requests.lock().unwrap().iter() {
+        assert_eq!(body.as_ref(), Some(&payload));
+    }
+    let other = FakeHub::new(vec![(200, json!({}))]);
+    mirror.publish("other", 0, &other, &on).await.unwrap();
+    assert_eq!(other.requests.lock().unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn invalid_or_failed_list_never_becomes_a_provider_roster() {
+    let runner = FakeRunner::new(vec![output(false, "", "list unsupported")]);
+    assert_eq!(
+        sample_roster(&runner, &AtomicBool::new(true))
+            .await
+            .unwrap_err(),
+        "list unsupported"
+    );
+    assert_eq!(runner.calls.lock().unwrap().len(), 1);
+    assert!(roster("{}", "[]", "mac").is_err());
+    assert!(roster("[]", "{}", "mac").is_err());
 }
 
 #[tokio::test]
