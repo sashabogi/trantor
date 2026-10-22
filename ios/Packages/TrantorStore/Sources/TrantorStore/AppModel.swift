@@ -23,6 +23,8 @@ public final class AppModel {
     public var showPairingSummary = false
     /// A project screen to open on its own (debug `-project <name>`, and later deep links).
     public var openProject: String?
+    /// The segment that screen opens on (chat, board, crew); consumed once.
+    public var openProjectSection: String?
     /// Running on canned data (previews, the `-demo` launch flag): no hub, no pairing.
     public private(set) var isDemo = false
 

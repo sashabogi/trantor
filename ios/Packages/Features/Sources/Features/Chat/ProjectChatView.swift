@@ -12,6 +12,9 @@ struct ProjectView: View {
         VStack(spacing: 0) {
             PillPicker([("chat", "Chat"), ("board", "Board"), ("crew", "Crew")], selection: $section)
                 .padding(.horizontal, Space.lg).padding(.vertical, Space.sm)
+                .onAppear {
+                    if let wanted = model.openProjectSection { section = wanted; model.openProjectSection = nil }
+                }
             if section == "chat" { ProjectChatView(store: model.chat(project: project)) }
             else if section == "board" { BoardView(project: project) }
             else { CrewView(store: model.crew(project: project)) }
