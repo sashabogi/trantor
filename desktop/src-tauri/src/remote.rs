@@ -602,8 +602,7 @@ async fn prompt_worker(mut events: mpsc::UnboundedReceiver<RelayEvent>) {
                 }
                 let lock = project_lock(&mut locks, &project);
                 tokio::spawn(async move {
-                    let _guard = lock.lock().await;
-                    // Resolve ownership after waiting, before claiming anything on this Mac.
+                    // Claim promptly so a queued command does not expire behind a slow one.
                     let seats = tokio::task::spawn_blocking(hosted).await;
                     let Ok(Ok(seats)) = seats else {
                         return;
@@ -615,7 +614,10 @@ async fn prompt_worker(mut events: mpsc::UnboundedReceiver<RelayEvent>) {
                         id,
                         enabled(),
                         &seats,
-                        deliver_claimed,
+                        move |prompt, seat| async move {
+                            let _guard = lock.lock().await;
+                            deliver_claimed(prompt, seat).await
+                        },
                     )
                     .await;
                     match result {
