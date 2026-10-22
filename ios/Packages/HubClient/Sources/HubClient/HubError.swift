@@ -28,11 +28,26 @@ public enum HubError: Error, Equatable, Sendable {
         case .conflict(let m): return m.isEmpty ? "Already decided." : m
         case .notFound(let m): return m.isEmpty ? "Not found." : m
         case .badRequest(let m): return m.isEmpty ? "The hub refused the request." : m
-        case .offline: return "Can't reach the hub. Check that Tailscale is connected."
-        case .timeout: return "The hub did not answer. Is Tailscale on?"
+        case .offline: return "Can't reach the hub."
+        case .timeout: return "The hub did not answer."
         case .server(_, let m): return m.isEmpty ? "The hub had an error." : m
         case .decoding(let m): return "Unexpected answer from the hub: \(m)"
         case .invalidURL: return "That hub address is not valid."
+        }
+    }
+
+    /// The message for a failure against a known hub. Tailscale is only worth mentioning when the
+    /// hub's host is a 100.x (tailnet) address; an https hub answers over the plain internet.
+    public func userMessage(forHub hub: URL?) -> String {
+        let tailnet = HubNetwork.isTailnetHost(hub?.host)
+        switch self {
+        case .offline:
+            return tailnet ? "Can't reach the hub. Check that Tailscale is connected."
+                           : "Can't reach the hub. Check your internet connection."
+        case .timeout:
+            return tailnet ? "The hub did not answer. Is Tailscale on?" : userMessage
+        default:
+            return userMessage
         }
     }
 }

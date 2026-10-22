@@ -77,8 +77,36 @@ final class OnboardingTests: XCTestCase {
         XCTAssertEqual(ScannerOptics.zoom(minimumFocusDistance: 60, fieldOfView: 60, reticleFraction: 0.5, minimumZoom: 1, maximumZoom: 4), 1.732, accuracy: 0.001)
     }
 
-    func testTimeoutGivesTailscaleHint() {
-        XCTAssertEqual(HubError.timeout(op: nil).userMessage, "The hub did not answer. Is Tailscale on?")
+    func testTimeoutAndOfflineMentionTailscaleOnlyForTailnetHubs() {
+        let tailnet = URL(string: "http://100.79.242.104:4477")
+        let publicHub = URL(string: "https://netcup-qdrant.tail0f2afd.ts.net")
+        XCTAssertEqual(HubError.timeout(op: nil).userMessage, "The hub did not answer.")
+        XCTAssertEqual(HubError.timeout(op: nil).userMessage(forHub: tailnet), "The hub did not answer. Is Tailscale on?")
+        XCTAssertEqual(HubError.timeout(op: nil).userMessage(forHub: publicHub), "The hub did not answer.")
+        XCTAssertEqual(HubError.offline(op: nil).userMessage(forHub: tailnet),
+                       "Can't reach the hub. Check that Tailscale is connected.")
+        XCTAssertEqual(HubError.offline(op: nil).userMessage(forHub: publicHub),
+                       "Can't reach the hub. Check your internet connection.")
+    }
+
+    func testConnectFailureCopyFollowsTheHubKind() {
+        XCTAssertEqual(HubReachability.connectFailureCopy(forHub: "http://100.79.242.104:4477"),
+                       "Can't reach your hub. Turn on Tailscale, then Retry")
+        XCTAssertEqual(HubReachability.connectFailureCopy(forHub: "https://netcup-qdrant.tail0f2afd.ts.net"),
+                       "Can't reach your hub. Check your internet connection, then Retry")
+        XCTAssertEqual(HubReachability.connectFailureCopy(forHub: "http://192.168.1.10:4477"),
+                       "Can't reach your hub. Check your internet connection, then Retry")
+    }
+
+    func testTailnetRangeIsOnlyTheCgnatBlock() {
+        XCTAssertTrue(HubNetwork.isTailnetHost("100.64.0.1"))
+        XCTAssertTrue(HubNetwork.isTailnetHost("100.127.255.254"))
+        XCTAssertFalse(HubNetwork.isTailnetHost("100.63.0.1"))
+        XCTAssertFalse(HubNetwork.isTailnetHost("100.128.0.1"))
+        XCTAssertFalse(HubNetwork.isTailnetHost("netcup-qdrant.tail0f2afd.ts.net"))
+        XCTAssertFalse(HubNetwork.isTailnetHost(nil))
+        XCTAssertTrue(HubNetwork.needsTailscale("http://100.79.242.104:4477"))
+        XCTAssertFalse(HubNetwork.needsTailscale("https://100.79.242.104:4477"))
     }
 
     func testReachabilityUsesFourSecondsAndRequiresHealthyResponse() async throws {

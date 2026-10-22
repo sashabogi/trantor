@@ -1,6 +1,7 @@
 import SwiftUI
 import TrantorDesign
 import TrantorStore
+import HubClient
 import UIKit
 
 public struct PairingView: View {
@@ -67,7 +68,10 @@ public struct PairingView: View {
         case .welcome:
             VStack(alignment: .leading, spacing: Space.md) {
                 Text("Your fleet, within reach.").font(.tHeadline)
-                Text("Turn on Tailscale on this phone first.").font(.tCallout)
+                // A known https invite reaches the hub over the internet; only tailnet hubs need this.
+                if welcomeShowsTailscaleLine {
+                    Text("Turn on Tailscale on this phone first.").font(.tCallout)
+                }
                 Text("On your Mac, open Pair Phone in Trantor to show an invite. We'll scan it, check the connection, and name this device.")
                     .font(.tCallout).foregroundStyle(Palette.text2)
             }.card(highlighted: true)
@@ -81,10 +85,10 @@ public struct PairingView: View {
                 } else if flow.connected {
                     Label("Connected", systemImage: "checkmark.circle.fill").foregroundStyle(Palette.up)
                 } else if connectionFailed {
-                    Text("Can't reach your hub. Turn on Tailscale, then Retry")
+                    Text(HubReachability.connectFailureCopy(forHub: flow.invite?.hub ?? ""))
                         .font(.tCallout).foregroundStyle(Palette.amber)
                 }
-                if canOpenTailscale {
+                if canOpenTailscale, HubNetwork.needsTailscale(flow.invite?.hub ?? "") {
                     Button("Open Tailscale", systemImage: "arrow.up.forward.app") {
                         UIApplication.shared.open(tailscaleURL)
                     }.buttonStyle(.ghost)
@@ -195,6 +199,13 @@ public struct PairingView: View {
 
     private var isWorking: Bool { if case .working = model.settings.pairing { true } else { false } }
     private var checkKey: String { "\(flow.step.rawValue)-\(checkRevision)" }
+
+    /// The Welcome page only tells people to turn on Tailscale when the invite (if one already
+    /// arrived by deep link) is a tailnet hub — or when nothing is known yet.
+    private var welcomeShowsTailscaleLine: Bool {
+        guard let hub = flow.invite?.hub ?? model.pendingLink?.hub else { return true }
+        return HubNetwork.needsTailscale(hub)
+    }
 
     private func primaryAction() {
         switch flow.step {

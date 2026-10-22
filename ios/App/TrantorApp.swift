@@ -67,7 +67,9 @@ struct TrantorApp: App {
                     await debugEnroll()
                     #endif
                 }
-                .task(id: model.settings.isPaired) {
+                // Re-runs on pair and on a hub-address switch (tailnet -> public): the same key
+                // re-registers its APNs token against the new address without re-pairing.
+                .task(id: model.settings.hubURL) {
                     guard model.settings.isPaired else { return }
                     await PushRegistrar.requestAuthorizationAndRegister()
                     await PushRegistrar.registerWithHubIfPossible(model: model)

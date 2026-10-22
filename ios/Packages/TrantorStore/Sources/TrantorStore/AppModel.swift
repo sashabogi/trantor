@@ -120,6 +120,28 @@ public final class AppModel {
 
     public var isConnected: Bool { client != nil }
 
+    /// The hub's public https address, offered when the paired hub is a tailnet (http 100.x) one
+    /// and its `/health` advertises a `publicUrl`. Nil when there is nothing to gain.
+    public func publicHubURL() async -> URL? {
+        guard let current = settings.hubURL, HubNetwork.needsTailscale(current), let client,
+              let health = try? await client.health(),
+              let raw = health.publicUrl, !raw.isEmpty,
+              let url = SettingsStore.normalizeHub(raw), url.scheme?.lowercased() == "https" else { return nil }
+        return url
+    }
+
+    /// Move the pairing to the hub's public address, but only after the probe (a `/health` call
+    /// against that address) answers — a failed probe leaves the pairing untouched. The key and
+    /// identity carry over; stores re-bind to a fresh client and cached snapshots are cleared.
+    @discardableResult
+    public func switchHub(to url: URL, probe: (URL) async throws -> Void) async -> Bool {
+        do { try await probe(url) } catch { return false }
+        settings.setHub(url)
+        cache.clear()
+        connect()
+        return true
+    }
+
     public func refreshAll() async {
         _ = try? await client?.health()          // calibrates the signing clock before anything else
         async let a: Void = decisions.refresh()

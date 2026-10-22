@@ -5,6 +5,9 @@ import TrantorStore
 public struct SettingsView: View {
     @Environment(AppModel.self) private var model
     @State private var confirmUnpair = false
+    @State private var publicHub: URL?
+    @State private var switchingHub = false
+    @State private var hubSwitchFailed = false
 
     public init() {}
 
@@ -17,6 +20,23 @@ public struct SettingsView: View {
                         Eyebrow("Address")
                         Text(settings.hubURL?.absoluteString ?? "Not paired").font(.tData).foregroundStyle(Palette.text2)
                             .textSelection(.enabled).well()
+                    }
+                    if let publicHub {
+                        Hairline()
+                        VStack(alignment: .leading, spacing: Space.sm) {
+                            Text("This hub also answers on the public internet — no Tailscale needed:")
+                                .font(.tCallout).foregroundStyle(Palette.text2)
+                            Text(publicHub.absoluteString).font(.tData).foregroundStyle(Palette.text2)
+                                .textSelection(.enabled)
+                            Button(switchingHub ? "Checking the public address…" : "Use the public address",
+                                   systemImage: "network") { Task { await usePublicHub(publicHub) } }
+                                .buttonStyle(.ghost).disabled(switchingHub)
+                                .accessibilityIdentifier("settings.usePublicHub")
+                            if hubSwitchFailed {
+                                Text("The public address did not answer; staying on this one.")
+                                    .font(.tCaption).foregroundStyle(Palette.amber)
+                            }
+                        }
                     }
                     Hairline()
                     Eyebrow("This device")
@@ -70,12 +90,21 @@ public struct SettingsView: View {
         }
         .stage()
         .navigationTitle("Settings")
+        .task { publicHub = await model.publicHubURL() }
         .confirmationDialog("Forget this hub?", isPresented: $confirmUnpair, titleVisibility: .visible) {
             Button("Forget and delete key", role: .destructive) {
                 Task { await model.unpair() }
             }
             Button("Cancel", role: .cancel) {}
         }
+    }
+
+    /// Probe the public address first; the pairing only moves when it answers (same key, no re-pair).
+    private func usePublicHub(_ url: URL) async {
+        switchingHub = true; hubSwitchFailed = false
+        defer { switchingHub = false }
+        let moved = await model.switchHub(to: url) { try await HubReachability.check($0.absoluteString) }
+        if moved { publicHub = nil } else { hubSwitchFailed = true }
     }
 }
 

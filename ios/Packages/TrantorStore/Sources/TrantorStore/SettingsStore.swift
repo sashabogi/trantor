@@ -128,10 +128,18 @@ public final class SettingsStore {
             if let data = try? JSONEncoder().encode(scopes) { defaults.set(data, forKey: Keys.scopes) }
             pairing = .paired(health: health, scopes: scopes)
         } catch let e as HubError {
-            pairing = .failed(e.userMessage)
+            pairing = .failed(e.userMessage(forHub: url))
         } catch {
             pairing = .failed(error.localizedDescription)
         }
+    }
+
+    /// Re-point at another address for the same hub (its public URL). The key, identity and scopes
+    /// stay: signatures do not depend on the host, so there is nothing to re-pair. Clients built by
+    /// `makeClient()` after this point at the new address.
+    public func setHub(_ url: URL) {
+        hubURL = url
+        defaults.set(url.absoluteString, forKey: Keys.hub)
     }
 
     /// Forget this device's pairing and delete its key. The hub keeps the identity until an owner revokes it.

@@ -21,7 +21,7 @@ final class OnboardingScreensTests: XCTestCase {
         XCTAssertTrue(app.staticTexts["That isn't a valid Trantor invite. Copy the full pairing link from your Mac."].exists)
         input.tap()
         input.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: "not-an-invite".count))
-        input.typeText("trantor://enroll?hub=http%3A%2F%2F127.0.0.1%3A1&token=drill")
+        input.typeText("trantor://enroll?hub=http%3A%2F%2F100.64.0.1%3A1&token=drill")
         primary.tap()
         XCTAssertTrue(app.staticTexts["Can't reach your hub. Turn on Tailscale, then Retry"].waitForExistence(timeout: 8))
         XCTAssertEqual(primary.label, "Retry")

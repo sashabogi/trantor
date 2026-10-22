@@ -318,14 +318,19 @@ public struct HealthInfo: Codable, Equatable, Sendable {
     public var authMode: String
     public var peers: Int
     public var messages: Int
-    public init(ok: Bool = false, authMode: String = "", peers: Int = 0, messages: Int = 0) {
+    /// The hub's public https address (Tailscale Funnel), when it has one.
+    public var publicUrl: String?
+    public init(ok: Bool = false, authMode: String = "", peers: Int = 0, messages: Int = 0, publicUrl: String? = nil) {
         self.ok = ok; self.authMode = authMode; self.peers = peers; self.messages = messages
+        self.publicUrl = publicUrl
     }
-    enum CodingKeys: String, CodingKey { case ok, authMode, peers, messages }
+    enum CodingKeys: String, CodingKey { case ok, authMode, peers, messages, publicUrl }
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         ok = c.lenientBool(.ok); authMode = c.lenientString(.authMode)
         peers = c.lenientInt(.peers); messages = c.lenientInt(.messages)
+        let rawPublicUrl = c.lenientString(.publicUrl)
+        publicUrl = rawPublicUrl.isEmpty ? nil : rawPublicUrl
     }
 }
 

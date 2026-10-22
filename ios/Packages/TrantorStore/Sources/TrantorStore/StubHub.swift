@@ -8,6 +8,7 @@ public final class StubHub: HubServing, @unchecked Sendable {
     private let lock = NSLock()
 
     private var _rosterMachines: [CrewRosterMachine]?
+    private var _health: HealthInfo?
     private var _roster: [RosterSeat] = []
     private var _crewCommands: [String: CrewCommandStatus] = [:]
     private var _crewSequences: [String: [CrewCommandStatus]] = [:]
@@ -36,6 +37,8 @@ public final class StubHub: HubServing, @unchecked Sendable {
     private func locked<T>(_ body: () -> T) -> T { lock.lock(); defer { lock.unlock() }; return body() }
 
     public var rosterMachinesData: [CrewRosterMachine]? { get { locked { _rosterMachines } } set { locked { _rosterMachines = newValue } } }
+    /// Overrides what `health()` answers when set.
+    public var healthData: HealthInfo? { get { locked { _health } } set { locked { _health = newValue } } }
     public var rosterData: [RosterSeat] { get { locked { _roster } } set { locked { _roster = newValue } } }
     public var crewCommandsData: [String: CrewCommandStatus] { get { locked { _crewCommands } } set { locked { _crewCommands = newValue } } }
     public var crewStatusSequences: [String: [CrewCommandStatus]] { get { locked { _crewSequences } } set { locked { _crewSequences = newValue } } }
@@ -147,7 +150,7 @@ public final class StubHub: HubServing, @unchecked Sendable {
         try await read("promptStatus:\(id)", promptsData[id] ?? PromptStatus(id: id, status: "queued"))
     }
 
-    public func health() async throws -> HealthInfo { try await read("health", HealthInfo(ok: true, authMode: "enforce", peers: 3, messages: 10)) }
+    public func health() async throws -> HealthInfo { try await read("health", healthData ?? HealthInfo(ok: true, authMode: "enforce", peers: 3, messages: 10)) }
     public func enroll(token: String, name: String) async throws -> EnrollResult {
         try await write("enroll")
         return EnrollResult(ok: true, name: name, scopes: [Scope(project: "*", role: "owner")])

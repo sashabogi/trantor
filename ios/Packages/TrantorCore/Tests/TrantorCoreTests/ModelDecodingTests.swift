@@ -6,6 +6,15 @@ final class ModelDecodingTests: XCTestCase {
         try JSONDecoder().decode(type, from: Data(json.utf8))
     }
 
+    func testHealthDecodesThePublicUrlWhenPresent() throws {
+        let withUrl = try decode(HealthInfo.self, #"{"ok":true,"authMode":"enforce","peers":3,"messages":9,"publicUrl":"https://netcup-qdrant.tail0f2afd.ts.net"}"#)
+        XCTAssertTrue(withUrl.ok)
+        XCTAssertEqual(withUrl.publicUrl, "https://netcup-qdrant.tail0f2afd.ts.net")
+        // Hubs before RELAY_PUBLIC_URL have no such field; an empty one means "no public address".
+        XCTAssertNil(try decode(HealthInfo.self, #"{"ok":true,"authMode":"enforce"}"#).publicUrl)
+        XCTAssertNil(try decode(HealthInfo.self, #"{"ok":true,"publicUrl":""}"#).publicUrl)
+    }
+
     func testProjectsResponseFromHubShape() throws {
         let json = #"""
         {"projects":[{"project":"trantor","brief":"the bus","agents":[
