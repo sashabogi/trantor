@@ -90,6 +90,23 @@ When the orchestrator calls AskUserQuestion, the session blocks on a picker in i
 - **Hub push:** when the mirror gains an unanswered ask block (no `answer`), the notifier sends one alert per `toolId`, "<project> asks: <question>", with `kind: "ask"`. Tapping it opens that project's chat. When the block gains its answer, a silent clear goes out.
 - **Phone:** an open ask in Chat becomes interactive. A single-choice ask is tappable rows; a multi-select ask gets checkboxes and Submit; "Something else" takes text. It asks for Face ID like any decision. The card shows sending, then delivered, then answered (from the published `answer`), or stale. A multi-question ask stays read-only with "Answer it on the Mac" (the terminal picker steps through tabs we don't drive yet).
 
+## Crew controls from the phone (v1.3)
+
+The phone starts, stops and swaps a project's crew seats. Seats run on the Mac, and the `trantor` CLI already owns their lifecycle (`up`, `down`, `swap`, `seat-why`), so the relay runs that CLI. It never reimplements a spawn or a kill.
+
+**Hub:**
+- `POST /crew/command` (approver or owner on the project) `{project, action: "up"|"down"|"swap", seats: [spec], from?, to?, _op}` joins the prompt queue as `kind: "crew"` (same claim, ack, 120 s expiry and audit events; `chat.prompt.queued` carries kind and action). The hub validates specs against `^[a-z][a-z0-9-]{0,30}(:[A-Za-z0-9._/-]{1,80})?$`, at most 6 seats. It refuses the `claude` seat (it draws the operator's own Claude quota) and any form of `--all`.
+- Ack for crew carries `{outcome: "done"|"failed", output}`: the CLI's last 2000 characters, ANSI stripped.
+- `POST /crew/roster` (owner) `{machine, seats: [{agent, label, plan, metered, available}]}`: the desktop publishes the seats this Mac can spawn, from `trantor provider status --json`, at boot and every 10 minutes. In memory. `GET /crew/roster` (read).
+
+**Desktop relay (`remote.rs`):** for a claimed crew command on a hosted project, it takes the project's checkout from the hosted orchestrator pane's cwd (herdr `agent list`), never from the phone. It runs `trantor <action> <args>` as an argv list (no shell), with that cwd and the app's terminal PATH, and a 4-minute timeout. It re-validates the same spec pattern and refusals before running, then acks done or failed with the output tail. One crew command per project at a time; a second one waits.
+
+**Phone:** the project screen gets a third segment, Chat | Board | Crew.
+- Crew lists this project's seats from the fleet: StatusDot, state (working, idle, stale, down), model, last seen. Each seat has Stop, plus Swap (pick a replacement from the roster).
+- "Add seats" opens the roster. Metered seats (API plans) carry a cost mark and need an explicit "This seat costs money per token" confirm; subscription seats don't.
+- "Stop the crew" (down for the whole project) asks for confirmation.
+- Every command needs Face ID and shows queued, running, then done with the CLI output (or failed with it), and the seat list refreshes.
+
 ## Onboarding (v1.1, card #12129)
 
 Pairing is a paged flow with the action pinned at the bottom of every page: Welcome, then Tailscale (a reachability check of the hub's `/health` that says "Turn on Tailscale" when it fails), then Scan (a custom AVFoundation scanner: continuous autofocus with near range, exposure bias down for screens, auto zoom from `minimumFocusDistance`, a torch toggle, and a hint line while it hunts; paste and Universal Clipboard as the fallback), then Connect (calls the scanned hub's `/health`; on failure "Can't reach your hub. Turn on Tailscale, then Retry"), then Name this device (runs the pair), then Done (the hub, the scope, and "Open Decisions"). The check comes after Scan because a fresh install only learns the hub address from the code. The desktop's QR is shown large, with a full-screen option.
