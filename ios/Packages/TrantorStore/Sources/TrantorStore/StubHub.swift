@@ -7,6 +7,11 @@ import TrantorCore
 public final class StubHub: HubServing, @unchecked Sendable {
     private let lock = NSLock()
 
+    private var _rosterMachines: [CrewRosterMachine]?
+    private var _roster: [RosterSeat] = []
+    private var _crewCommands: [String: CrewCommandStatus] = [:]
+    private var _crewSequences: [String: [CrewCommandStatus]] = [:]
+    private var _demoCrew = false
     private var _chats: [String: ChatSnapshot] = [:]
     private var _prompts: [String: PromptStatus] = [:]
     private var nextPrompt = 1
@@ -30,6 +35,11 @@ public final class StubHub: HubServing, @unchecked Sendable {
 
     private func locked<T>(_ body: () -> T) -> T { lock.lock(); defer { lock.unlock() }; return body() }
 
+    public var rosterMachinesData: [CrewRosterMachine]? { get { locked { _rosterMachines } } set { locked { _rosterMachines = newValue } } }
+    public var rosterData: [RosterSeat] { get { locked { _roster } } set { locked { _roster = newValue } } }
+    public var crewCommandsData: [String: CrewCommandStatus] { get { locked { _crewCommands } } set { locked { _crewCommands = newValue } } }
+    public var crewStatusSequences: [String: [CrewCommandStatus]] { get { locked { _crewSequences } } set { locked { _crewSequences = newValue } } }
+    public var demoCrew: Bool { get { locked { _demoCrew } } set { locked { _demoCrew = newValue } } }
     public var chatsData: [String: ChatSnapshot] { get { locked { _chats } } set { locked { _chats = newValue } } }
     public var promptsData: [String: PromptStatus] { get { locked { _prompts } } set { locked { _prompts = newValue } } }
     public var projectsData: [Project] { get { locked { _projects } } set { locked { _projects = newValue } } }
@@ -72,6 +82,41 @@ public final class StubHub: HubServing, @unchecked Sendable {
             }
         }
         if let e = writeError { throw e }
+    }
+
+    public func crewRoster() async throws -> [CrewRosterMachine] { try await read("crewRoster", rosterMachinesData ?? [CrewRosterMachine(machine: "demo-mac", seats: rosterData)]) }
+    public func crewCommand(project: String, action: CrewAction, seats: [String], from: String?, to: String?) async throws -> CrewCommandStatus {
+        try await write("crew:\(project):\(action.rawValue):\(seats):\(from ?? ""):\(to ?? "")")
+        return locked {
+            let id = String(nextPrompt); nextPrompt += 1
+            let receipt = CrewCommandStatus(id: id, status: "queued")
+            _crewCommands[id] = receipt
+            if _demoCrew {
+                _crewSequences[id] = [CrewCommandStatus(id: id, status: "claimed"),
+                                      CrewCommandStatus(id: id, status: "done", outcome: "done", output: "Demo: crew command completed.")]
+                if action == .down || action == .swap {
+                    _peers.removeAll { peer in
+                        peer.project == project && peer.kind == "agent" &&
+                        (action == .down ? seats.isEmpty || seats.contains(String(peer.session.split(separator: ":").first ?? "")) : peer.session == "\(from ?? ""):\(project)")
+                    }
+                }
+                let additions = action == .up ? seats : (action == .swap ? to.map { [$0] } ?? [] : [])
+                for seat in additions where !_peers.contains(where: { $0.session == "\(seat):\(project)" }) {
+                    _peers.append(Peer(session: "\(seat):\(project)", online: true, status: "working", project: project,
+                                       llm: seat, kind: "agent", lastSeen: Date().timeIntervalSince1970 * 1000))
+                }
+            }
+            return receipt
+        }
+    }
+    public func crewCommandStatus(id: String) async throws -> CrewCommandStatus {
+        _ = try await read("crewStatus:\(id)", true)
+        return locked {
+            if var sequence = _crewSequences[id], !sequence.isEmpty {
+                let next = sequence.removeFirst(); _crewSequences[id] = sequence; _crewCommands[id] = next
+            }
+            return _crewCommands[id] ?? CrewCommandStatus(id: id, status: "queued")
+        }
     }
 
     public func chat(project: String, after: Int) async throws -> ChatSnapshot {

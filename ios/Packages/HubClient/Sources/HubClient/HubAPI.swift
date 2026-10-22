@@ -3,6 +3,9 @@ import TrantorCore
 
 /// Everything the app asks of the hub. Stores depend on this, so tests can stub it.
 public protocol HubServing: Sendable {
+    func crewRoster() async throws -> [CrewRosterMachine]
+    func crewCommand(project: String, action: CrewAction, seats: [String], from: String?, to: String?) async throws -> CrewCommandStatus
+    func crewCommandStatus(id: String) async throws -> CrewCommandStatus
     func chat(project: String, after: Int) async throws -> ChatSnapshot
     func sendPrompt(project: String, text: String) async throws -> PromptStatus
     func answer(project: String, session: String, toolId: String, picks: [Int], other: String?) async throws -> PromptStatus
@@ -43,6 +46,22 @@ public final class HubAPI: HubServing, @unchecked Sendable {
 
     public init(baseURL: URL, signer: Signer, session: URLSession = .shared) {
         self.baseURL = baseURL; self.signer = signer; self.session = session
+    }
+
+    public func crewRoster() async throws -> [CrewRosterMachine] {
+        try await get(CrewRosterResponse.self, "/crew/roster").machines
+    }
+
+    public func crewCommand(project: String, action: CrewAction, seats: [String], from: String? = nil, to: String? = nil) async throws -> CrewCommandStatus {
+        var fields: [String: JSONValue] = ["project": .string(project), "action": .string(action.rawValue),
+                                           "seats": .array(seats.map(JSONValue.string))]
+        if let from { fields["from"] = .string(from) }
+        if let to { fields["to"] = .string(to) }
+        return try decode(CrewCommandStatus.self, await post("/crew/command", fields))
+    }
+
+    public func crewCommandStatus(id: String) async throws -> CrewCommandStatus {
+        try await get(CrewCommandStatus.self, "/session/prompt", ["id": id])
     }
 
     public func chat(project: String, after: Int) async throws -> ChatSnapshot {

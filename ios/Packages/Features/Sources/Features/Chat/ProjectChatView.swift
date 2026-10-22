@@ -10,10 +10,11 @@ struct ProjectView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            PillPicker([("chat", "Chat"), ("board", "Board")], selection: $section)
+            PillPicker([("chat", "Chat"), ("board", "Board"), ("crew", "Crew")], selection: $section)
                 .padding(.horizontal, Space.lg).padding(.vertical, Space.sm)
             if section == "chat" { ProjectChatView(store: model.chat(project: project)) }
-            else { BoardView(project: project) }
+            else if section == "board" { BoardView(project: project) }
+            else { CrewView(store: model.crew(project: project)) }
         }
         .stage()
         .onChange(of: model.chat(project: project).focusedToolID, initial: true) { _, target in

@@ -19,6 +19,13 @@ public enum DemoData {
 
     static func hub() -> StubHub {
         let hub = StubHub()
+        hub.demoCrew = true
+        hub.rosterData = [
+            RosterSeat(agent: "codex", label: "Codex", plan: "subscription", metered: false, available: true),
+            RosterSeat(agent: "glm", label: "GLM", plan: "subscription", metered: false, available: true),
+            RosterSeat(agent: "kimi", label: "Kimi", plan: "API", metered: true, available: true),
+            RosterSeat(agent: "deepseek", label: "DeepSeek", plan: "API", metered: true, reason: "API key is not configured"),
+        ]
         hub.holdsData = [
             Hold(id: 881, project: "trantor", file: "hub/events.mjs", session: "kimi-8:trantor", other: "codex-4:trantor", ts: ago(2)),
         ]
@@ -82,11 +89,11 @@ public enum DemoData {
         ]
         hub.peersData = [
             Peer(session: "MacBook-Pro-M1:trantor", online: true, status: "orchestrating", project: "trantor", model: "opus-5.5", kind: "claude", lastSeen: ago(0.2)),
-            Peer(session: "codex-4:trantor", online: true, status: "working", project: "trantor", llm: "codex", model: "gpt-5.5", lastSeen: ago(0.5)),
-            Peer(session: "kimi-8:trantor", online: true, status: "working", project: "trantor", llm: "kimi", model: "k3", lastSeen: ago(0.4)),
-            Peer(session: "glm-4:trantor", online: true, status: "idle", project: "trantor", llm: "glm", model: "glm-5.3-flash", lastSeen: ago(1)),
+            Peer(session: "codex-4:trantor", online: true, status: "working", project: "trantor", llm: "codex", model: "gpt-5.5", kind: "agent", lastSeen: ago(0.5)),
+            Peer(session: "kimi-8:trantor", online: true, status: "working", project: "trantor", llm: "kimi", model: "k3", kind: "agent", lastSeen: ago(0.4)),
+            Peer(session: "glm-4:trantor", online: true, status: "idle", project: "trantor", llm: "glm", model: "glm-5.3-flash", kind: "agent", lastSeen: ago(1)),
             Peer(session: "claude:trantor-duty", online: true, status: "on duty", project: "trantor-duty", model: "sonnet-5.5", kind: "claude", lastSeen: ago(0.3)),
-            Peer(session: "codex:ibkr", online: false, status: "stale", project: "ibkr", llm: "codex", lastSeen: ago(40)),
+            Peer(session: "codex:ibkr", online: false, status: "stale", project: "ibkr", llm: "codex", kind: "agent", lastSeen: ago(40)),
         ]
         hub.balancesData = [
             BalanceEntry(provider: "deepseek", label: "DeepSeek", kind: "api", remaining: 3.21, low: true),

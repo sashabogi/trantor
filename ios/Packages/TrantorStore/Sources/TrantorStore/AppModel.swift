@@ -34,6 +34,7 @@ public final class AppModel {
     private let authenticator: any Authenticator
     private let cache: StoreCache
     private var client: HubServing?
+    private var crews: [String: CrewStore] = [:]
     private var chats: [String: ChatStore] = [:]
     @ObservationIgnored private var widgetSyncStarted = false
 
@@ -81,6 +82,19 @@ public final class AppModel {
         fleet.api = api
         cost.api = api
         for chat in chats.values { chat.api = api }
+        for crew in crews.values { crew.api = api }
+    }
+
+    public func crew(project: String) -> CrewStore {
+        if let store = crews[project] { return store }
+        let store = CrewStore(project: project, fleet: fleet, api: client, authenticator: authenticator)
+        store.requiresAuthentication = { [weak settings] in settings?.requireBiometrics ?? true }
+        store.mayControl = { [weak self] in
+            guard let self else { return false }
+            return self.isDemo || (self.settings.isPaired && CrewStore.allowsControl(scopes: self.settings.scopes, project: project))
+        }
+        crews[project] = store
+        return store
     }
 
     public func chat(project: String) -> ChatStore {
@@ -98,6 +112,8 @@ public final class AppModel {
     private func refreshChat(_ signal: ChatSignal?) {
         let stores = signal.map { chats[$0.project].map { [$0] } ?? [] } ?? Array(chats.values)
         for store in stores { Task { await store.refresh() } }
+        let crewStores = signal.map { crews[$0.project].map { [$0] } ?? [] } ?? Array(crews.values)
+        for store in crewStores { Task { await store.refreshCommands() } }
     }
 
     public var isConnected: Bool { client != nil }
@@ -164,6 +180,8 @@ public final class AppModel {
         client = nil
         for chat in chats.values { chat.disconnect() }
         chats.removeAll()
+        for crew in crews.values { crew.disconnect() }
+        crews.removeAll()
         decisions.api = nil; projects.api = nil; board.api = nil; feed.api = nil
         inbox.api = nil; fleet.api = nil; cost.api = nil
         cache.clear()
