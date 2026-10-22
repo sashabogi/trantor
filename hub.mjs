@@ -7,6 +7,7 @@ import { assertNoSecrets } from "./lib/scrub.mjs";
 import { DEFAULT_ORG } from "./lib/store-contract.mjs";
 import { createStoreRuntime } from "./hub/store.mjs";
 import { createAuthRuntime } from "./hub/auth.mjs";
+import { createPublicGate } from "./hub/public.mjs";
 import { createEventRuntime } from "./hub/events.mjs";
 import { createReaper } from "./hub/reaper.mjs";
 import { createDuty } from "./hub/duty.mjs";
@@ -62,9 +63,10 @@ if (!LOOPBACK_BIND && AUTH_MODE !== "enforce") {
 }
 
 const store = await createStoreRuntime({ STORE_KIND, PG_URL, ORG_ID, DATA });
+const seenNonces = new Map();
 const authRuntime = createAuthRuntime({
   state: store.state, markDirty: store.markDirty, AUTH_MODE, SUPERSEDE_GRACE_MS,
-  LOOPBACK_BIND, ENROLL_MODE,
+  LOOPBACK_BIND, ENROLL_MODE, seenNonces,
 });
 const notifier = createNotifier({ state: store.state, markDirty: store.markDirty, canRead: authRuntime.canRead });
 const events = createEventRuntime({ state: store.state, markDirty: store.markDirty, AUTH_MODE, ONLINE_MS, canon: authRuntime.canon, notifier });
@@ -132,33 +134,50 @@ const sessionChat = createSessionRuntime({
 });
 const routes = [routeDevices, routeAdmin, routeCards, routeInsights, routeMessages, sessionChat.route];
 
-const server = http.createServer(async (req, res) => {
-  const u = new URL(req.url, "http://x");
-  const q = Object.fromEntries(u.searchParams);
-  const P = u.pathname;
-  try {
-    const b0 = req.method === "POST" ? await authRuntime.body(req) : {};
-    if (authRuntime.handleEnrollment({ req, res, P, u, b0 })) return;
-    const auth = authRuntime.PUBLIC_ENDPOINTS.has(P)
-      ? { ok: true, mode: AUTH_MODE, trusted: false }
-      : await authRuntime.authenticate(req, authRuntime.authPath(u));
-    if (authRuntime.handleInvite({ req, res, P, auth, b0 })) return;
-    if (!auth.ok) return authRuntime.json(res, auth.code || 401, { error: auth.error || "unauthorized" });
-    const authorization = authRuntime.authorize(auth, req.method, P, authRuntime.projectFromRequest(P, q, b0));
-    if (!authorization.ok) return authRuntime.json(res, authorization.code || 403, { error: authorization.error || "forbidden" });
-    if (req.method === "GET" && P === "/_op") {
-      const o = opOutcomes.get(String(q.id || "").slice(0, 80));
-      return authRuntime.json(res, 200, o ? { status: o.status, code: o.code, body: o.body } : { status: "unknown" });
-    }
-    const op = req.method === "POST" ? opIdOf(b0) : null;
-    const seen = op ? opOutcomes.get(op) : null;
-    if (seen) return authRuntime.json(res, seen.code, seen.body);
-    if (op) recordOpOutcome(res, op);
-    for (const route of routes) if (await route({ req, res, q, P, auth, ctx: context })) return;
-    authRuntime.json(res, 404, { error: "not found" });
-  } catch (error) {
-    authRuntime.json(res, 500, { error: String(error?.message || error) });
-  }
+const publicAuth = createAuthRuntime({
+  state: store.state, markDirty: store.markDirty, AUTH_MODE: "enforce", SUPERSEDE_GRACE_MS,
+  LOOPBACK_BIND: true, ENROLL_MODE: "invite", seenNonces,
 });
+const publicContext = { ...context, ...publicAuth, AUTH_MODE: "enforce" };
 
+function requestHandler(runtime, ctx, gate = null) {
+  return async (req, res) => {
+    try {
+      const u = new URL(req.url, "http://x");
+      const q = Object.fromEntries(u.searchParams);
+      const P = u.pathname;
+      if (gate && !gate.admit(req, res, P)) return;
+      const b0 = req.method === "POST" ? await runtime.body(req) : {};
+      if (runtime.handleEnrollment({ req, res, P, u, b0, inviteOnly: !!gate })) return;
+      const auth = runtime.PUBLIC_ENDPOINTS.has(P)
+        ? { ok: true, mode: ctx.AUTH_MODE, trusted: false }
+        : await runtime.authenticate(req, runtime.authPath(u));
+      if (runtime.handleInvite({ req, res, P, auth, b0 })) return;
+      if (!auth.ok) return runtime.json(res, auth.code || 401, { error: auth.error || "unauthorized" });
+      const authorization = runtime.authorize(auth, req.method, P, runtime.projectFromRequest(P, q, b0));
+      if (!authorization.ok) return runtime.json(res, authorization.code || 403, { error: authorization.error || "forbidden" });
+      if (gate && P === "/stream" && !gate.openStream(req, res)) return;
+      if (req.method === "GET" && P === "/_op") {
+        const o = opOutcomes.get(String(q.id || "").slice(0, 80));
+        return runtime.json(res, 200, o ? { status: o.status, code: o.code, body: o.body } : { status: "unknown" });
+      }
+      const op = req.method === "POST" ? opIdOf(b0) : null;
+      const seen = op ? opOutcomes.get(op) : null;
+      if (seen) return runtime.json(res, seen.code, seen.body);
+      if (op) recordOpOutcome(res, op);
+      for (const route of routes) if (await route({ req, res, q, P, auth, ctx })) return;
+      runtime.json(res, 404, { error: "not found" });
+    } catch (error) {
+      runtime.json(res, 500, { error: String(error?.message || error) });
+    }
+  };
+}
+
+const server = http.createServer(requestHandler(authRuntime, context));
 server.listen(PORT, HOST, () => console.error(`[trantor] hub on http://${HOST}:${PORT} (auth: ${AUTH_MODE}; data: ${DATA})`));
+
+if (process.env.RELAY_PUBLIC_PORT) {
+  const publicPort = Number(process.env.RELAY_PUBLIC_PORT);
+  const publicServer = http.createServer(requestHandler(publicAuth, publicContext, createPublicGate()));
+  publicServer.listen(publicPort, "127.0.0.1", () => console.error(`[trantor] public hub on http://127.0.0.1:${publicServer.address().port} (auth: enforce)`));
+}

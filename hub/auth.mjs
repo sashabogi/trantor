@@ -5,7 +5,7 @@ import { timingSafeEqual, randomBytes } from "node:crypto";
 import { publicView } from "../lib/identity.mjs";
 import { IDENTITY_KINDS } from "../lib/store-contract.mjs";
 
-export function createAuthRuntime({ state, markDirty, AUTH_MODE, SUPERSEDE_GRACE_MS, LOOPBACK_BIND, ENROLL_MODE }) {
+export function createAuthRuntime({ state, markDirty, AUTH_MODE, SUPERSEDE_GRACE_MS, LOOPBACK_BIND, ENROLL_MODE, seenNonces = new Map() }) {
 const now = () => Date.now();
 function rawBody(req) {
   if (req._rawBody !== undefined) return Promise.resolve(req._rawBody);
@@ -287,13 +287,13 @@ function inboxReadable(auth, msg, session) {
 function canUseInboxSession(auth, session) {
   return !auth?.identity || String(auth.identity.name || "") === String(session || "");
 }
-const seenNonces = new Map();
 
-  function handleEnrollment({ req, res, P, u, b0 }) {
+  function handleEnrollment({ req, res, P, u, b0, inviteOnly = false }) {
     if (req.method !== "POST" || P !== "/enroll") return false;
     const raw = req._rawBody || "";
     const verified = verifyRequest({ headers: req.headers, method: req.method, path: authPath(u), body: raw });
     if (!verified.ok) return json(res, 401, { error: verified.reason || "bad signature" });
+    if (inviteOnly && !b0?.token) return json(res, 403, { error: "invite token required" });
     const requestedKind = String(b0.kind || "agent").slice(0, 40);
     if (!IDENTITY_KINDS.includes(requestedKind)) {
       return json(res, 400, { error: `kind must be one of: ${IDENTITY_KINDS.join(", ")}`, allowedKinds: IDENTITY_KINDS });
@@ -305,9 +305,9 @@ const seenNonces = new Map();
     const token = String(b0.token || "");
     const bootstrap = String(process.env.RELAY_BOOTSTRAP_TOKEN || "");
     const noIdentitiesYet = Object.keys(state.identities || {}).length === 0;
-    const tokenMatchesBootstrap = !!bootstrap && !!token && token.length === bootstrap.length &&
+    const tokenMatchesBootstrap = !inviteOnly && !!bootstrap && !!token && token.length === bootstrap.length &&
       timingSafeEqual(Buffer.from(token), Buffer.from(bootstrap));
-    if (bootstrap && noIdentitiesYet && tokenMatchesBootstrap) {
+    if (!inviteOnly && bootstrap && noIdentitiesYet && tokenMatchesBootstrap) {
       scopes = [cleanScope({ project: "*", role: "owner" })].filter(Boolean);
       enrolledBy = "bootstrap";
     } else if (token) {
