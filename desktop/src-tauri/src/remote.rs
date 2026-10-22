@@ -6,11 +6,14 @@ use std::{
     path::{Path, PathBuf},
     sync::{
         atomic::{AtomicBool, Ordering},
-        Mutex, OnceLock,
+        Arc, Mutex, OnceLock,
     },
     time::Duration,
 };
 use tokio::sync::mpsc;
+
+#[path = "remote_crew.rs"]
+mod crew;
 
 const WINDOW: usize = 400;
 const TICK: Duration = Duration::from_millis(1500);
@@ -265,6 +268,10 @@ impl Mirror {
 
 #[derive(Debug)]
 enum RelayEvent {
+    Ack {
+        base: String,
+        body: Value,
+    },
     Pickup {
         base: String,
         project: Option<String>,
@@ -314,7 +321,7 @@ pub(crate) fn stream_event(base: &str, raw: &str) {
     }
 }
 
-async fn claim_and_deliver<F, Fut>(
+async fn claim_and_execute<F, Fut>(
     hub: &impl Hub,
     host: &str,
     project: &str,
@@ -324,7 +331,7 @@ async fn claim_and_deliver<F, Fut>(
 ) -> Result<Option<Value>, String>
 where
     F: FnOnce(Value) -> Fut,
-    Fut: std::future::Future<Output = panes::PromptDelivery>,
+    Fut: std::future::Future<Output = Value>,
 {
     if !on.load(Ordering::SeqCst) {
         return Ok(None);
@@ -341,25 +348,47 @@ where
     }
     require_ok(status, &body)?;
     let prompt = &body["prompt"];
-    let delivery = if prompt["id"] != id
+    let is_crew = prompt["kind"] == "crew";
+    let error = if prompt["id"] != id
         || prompt["project"] != project
-        || (prompt["kind"] != "answer" && !prompt["text"].is_string())
+        || (!is_crew && prompt["kind"] != "answer" && !prompt["text"].is_string())
     {
-        panes::PromptDelivery {
-            outcome: "not_ready",
-            error: Some("Hub claim returned an invalid prompt; nothing was typed.".into()),
-        }
+        Some("Hub claim returned an invalid prompt; nothing was executed.")
     } else if !on.load(Ordering::SeqCst) {
-        panes::PromptDelivery {
-            outcome: "not_ready",
-            error: Some("Relay chat to my phone was turned off; nothing was typed.".into()),
-        }
+        Some("Relay chat to my phone was turned off; nothing was executed.")
     } else {
-        deliver(prompt.clone()).await
+        None
     };
-    Ok(Some(
-        json!({"id": id, "outcome": delivery.outcome, "error": delivery.error}),
-    ))
+    let mut result = match error {
+        Some(error) if is_crew => crew::failure(error),
+        Some(error) => json!({"outcome": "not_ready", "error": error}),
+        None => deliver(prompt.clone()).await,
+    };
+    result["id"] = id;
+    Ok(Some(result))
+}
+
+fn prompt_result(delivery: panes::PromptDelivery) -> Value {
+    json!({"outcome": delivery.outcome, "error": delivery.error})
+}
+
+#[cfg(test)]
+async fn claim_and_deliver<F, Fut>(
+    hub: &impl Hub,
+    host: &str,
+    project: &str,
+    id: Value,
+    on: &AtomicBool,
+    deliver: F,
+) -> Result<Option<Value>, String>
+where
+    F: FnOnce(Value) -> Fut,
+    Fut: std::future::Future<Output = panes::PromptDelivery>,
+{
+    claim_and_execute(hub, host, project, id, on, |prompt| async move {
+        prompt_result(deliver(prompt).await)
+    })
+    .await
 }
 
 async fn deliver_answer<F, Fut>(prompt: &Value, dir: &Path, send: F) -> panes::PromptDelivery
@@ -419,8 +448,88 @@ fn queued_path(project: &str) -> Result<String, String> {
     ))
 }
 
+async fn deliver_claimed(prompt: Value, seat: local_sessions::HerdrSeat) -> Value {
+    if prompt["kind"] == "crew" {
+        return crew::deliver(&prompt, &seat, enabled(), &crew::LiveRunner).await;
+    }
+    if prompt["kind"] == "answer" {
+        let current = tokio::task::spawn_blocking(move || still_hosted(&seat))
+            .await
+            .unwrap_or(false);
+        if !current || !enabled().load(Ordering::SeqCst) {
+            return prompt_result(panes::prompt_delivery(Ok(herdr::PromptOutcome::NoAgent)));
+        }
+        return prompt_result(
+            deliver_answer(
+                &prompt,
+                &crate::desktop_bus_dir().join("asks"),
+                asks::ask_answer_session,
+            )
+            .await,
+        );
+    }
+    let text = prompt["text"].as_str().unwrap_or_default().to_string();
+    prompt_result(
+        tokio::task::spawn_blocking(move || {
+            if !enabled().load(Ordering::SeqCst) {
+                return panes::PromptDelivery {
+                    outcome: "not_ready",
+                    error: Some("Phone relay is off; nothing was typed.".into()),
+                };
+            }
+            if still_hosted(&seat) {
+                panes::deliver_prompt(&seat.surface, &text)
+            } else {
+                panes::prompt_delivery(Ok(herdr::PromptOutcome::NoAgent))
+            }
+        })
+        .await
+        .unwrap_or_else(|error| panes::PromptDelivery {
+            outcome: "stalled",
+            error: Some(error.to_string()),
+        }),
+    )
+}
+
+fn still_hosted(seat: &local_sessions::HerdrSeat) -> bool {
+    hosted()
+        .ok()
+        .is_some_and(|seats| seats.iter().any(|s| s == seat))
+}
+
+fn project_lock(
+    locks: &mut HashMap<String, Arc<tokio::sync::Mutex<()>>>,
+    project: &str,
+) -> Arc<tokio::sync::Mutex<()>> {
+    locks.entry(project.into()).or_default().clone()
+}
+
+async fn hosted_claim<F, Fut>(
+    hub: &impl Hub,
+    host: &str,
+    project: &str,
+    id: Value,
+    on: &AtomicBool,
+    seats: &[local_sessions::HerdrSeat],
+    deliver: F,
+) -> Result<Option<Value>, String>
+where
+    F: FnOnce(Value, local_sessions::HerdrSeat) -> Fut,
+    Fut: std::future::Future<Output = Value>,
+{
+    let Some(seat) = seats
+        .iter()
+        .find(|s| s.kind == "orch" && s.project == project)
+        .cloned()
+    else {
+        return Ok(None);
+    };
+    claim_and_execute(hub, host, project, id, on, |prompt| deliver(prompt, seat)).await
+}
+
 async fn prompt_worker(mut events: mpsc::UnboundedReceiver<RelayEvent>) {
     let mut pending_acks: VecDeque<(String, Value)> = VecDeque::new();
+    let mut locks = HashMap::new();
     loop {
         // Retry only the acknowledgment: a lost reply must never cause a second delivery.
         for _ in 0..pending_acks.len() {
@@ -435,6 +544,13 @@ async fn prompt_worker(mut events: mpsc::UnboundedReceiver<RelayEvent>) {
             Ok(Some(event)) => event,
             Ok(None) => return,
             Err(_) => continue,
+        };
+        let event = match event {
+            RelayEvent::Ack { base, body } => {
+                pending_acks.push_back((base, body));
+                continue;
+            }
+            event => event,
         };
         if !enabled().load(Ordering::SeqCst) {
             continue;
@@ -481,78 +597,35 @@ async fn prompt_worker(mut events: mpsc::UnboundedReceiver<RelayEvent>) {
                 }
             }
             RelayEvent::Prompt { base, project, id } => {
-                let Some(seat) = seats
-                    .into_iter()
-                    .find(|seat| seat.project == project && hub_base(&project) == base)
-                else {
+                if hub_base(&project) != base || !seats.iter().any(|s| s.project == project) {
                     continue;
-                };
-                let hub = LiveHub { base: base.clone() };
-                let result = claim_and_deliver(
-                    &hub,
-                    &hub::owner_identity(),
-                    &project,
-                    id,
-                    enabled(),
-                    move |prompt| async move {
-                        if prompt["kind"] == "answer" {
-                            let current = tokio::task::spawn_blocking(move || {
-                                hosted().ok().is_some_and(|seats| {
-                                    seats.iter().any(|s| {
-                                        s.project == seat.project && s.surface == seat.surface
-                                    })
-                                })
-                            })
-                            .await
-                            .unwrap_or(false);
-                            if !current || !enabled().load(Ordering::SeqCst) {
-                                return panes::prompt_delivery(Ok(herdr::PromptOutcome::NoAgent));
-                            }
-                            return deliver_answer(
-                                &prompt,
-                                &crate::desktop_bus_dir().join("asks"),
-                                asks::ask_answer_session,
-                            )
-                            .await;
-                        }
-                        let text = prompt["text"].as_str().unwrap_or_default().to_string();
-                        tokio::task::spawn_blocking(move || {
-                            if !enabled().load(Ordering::SeqCst) {
-                                return panes::PromptDelivery {
-                                    outcome: "not_ready",
-                                    error: Some("Phone relay is off; nothing was typed.".into()),
-                                };
-                            }
-                            // Recheck ownership after the claim: a pane may have closed while the hub answered.
-                            let current = hosted().ok().and_then(|seats| {
-                                seats.into_iter().find(|s| {
-                                    s.project == seat.project && s.surface == seat.surface
-                                })
-                            });
-                            match current {
-                                Some(current) => panes::deliver_prompt(&current.surface, &text),
-                                None => panes::prompt_delivery(Ok(herdr::PromptOutcome::NoAgent)),
-                            }
-                        })
-                        .await
-                        .unwrap_or_else(|error| panes::PromptDelivery {
-                            outcome: "stalled",
-                            error: Some(error.to_string()),
-                        })
-                    },
-                )
-                .await;
-                match result {
-                    Ok(Some(body)) => {
-                        if let Err(error) = ack(&hub, body.clone()).await {
-                            eprintln!("phone relay ack: {error}");
-                            pending_acks.push_back((base, body));
-                        }
-                    }
-                    Ok(None) => {}
-                    Err(error) => eprintln!("phone relay claim: {error}"),
                 }
+                let lock = project_lock(&mut locks, &project);
+                tokio::spawn(async move {
+                    let _guard = lock.lock().await;
+                    // Resolve ownership after waiting, before claiming anything on this Mac.
+                    let seats = tokio::task::spawn_blocking(hosted).await;
+                    let Ok(Ok(seats)) = seats else {
+                        return;
+                    };
+                    let result = hosted_claim(
+                        &LiveHub { base: base.clone() },
+                        &hub::owner_identity(),
+                        &project,
+                        id,
+                        enabled(),
+                        &seats,
+                        deliver_claimed,
+                    )
+                    .await;
+                    match result {
+                        Ok(Some(body)) => queue(RelayEvent::Ack { base, body }),
+                        Ok(None) => {}
+                        Err(error) => eprintln!("phone relay claim: {error}"),
+                    }
+                });
             }
+            RelayEvent::Ack { .. } => unreachable!(),
         }
     }
 }
@@ -563,6 +636,7 @@ pub(crate) fn start(app: tauri::AppHandle) {
         return;
     }
     tauri::async_runtime::spawn(prompt_worker(receiver));
+    tauri::async_runtime::spawn(crew::roster_worker());
     tauri::async_runtime::spawn(async move {
         let mut mirrors: HashMap<(String, String), Mirror> = HashMap::new();
         loop {
