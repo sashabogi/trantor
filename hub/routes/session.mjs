@@ -228,6 +228,8 @@ export function createSessionRuntime({ state, markDirty, appendEvent, pushEventT
       if (!machine) return json(res, 400, { error: "machine required" });
       const seats = (Array.isArray(b.seats) ? b.seats : []).slice(0, 50).map(s => ({
         agent: String(s?.agent || "").slice(0, 40),
+        // what `trantor up` takes for this seat (glm:zai-coding-plan); only a valid spec is kept
+        spec: CREW_SPEC.test(String(s?.spec || "")) ? String(s.spec) : "",
         label: String(s?.label || "").slice(0, 120),
         plan: String(s?.plan || "").slice(0, 40),
         metered: !!s?.metered,

@@ -132,12 +132,19 @@ try {
   r = await sFetch(base, owner, "POST", "/crew/roster", {
     machine: "spoofed",
     seats: [
-      { agent: "glm", label: "GLM 4.6", plan: "sub", metered: false, available: true },
-      { agent: "kimi", label: "Kimi K2", plan: "api", metered: true, available: false, reason: "balance low" },
+      { agent: "glm", spec: "glm:zai-coding-plan", label: "GLM 4.6", plan: "sub", metered: false, available: true },
+      { agent: "kimi", spec: "--all", label: "Kimi K2", plan: "api", metered: true, available: false, reason: "balance low" },
     ],
   });
   ok("owner publishes the roster under the signer's name, not the body machine",
     r.status === 200 && r.json.machine === "owner" && r.json.seats === 2, JSON.stringify(r.json));
+  {
+    const g = await sFetch(base, phone, "GET", "/crew/roster");
+    const seats = g.json.machines?.[0]?.seats || [];
+    ok("the roster keeps a valid launch spec and drops an invalid one",
+      seats.find(x => x.agent === "glm")?.spec === "glm:zai-coding-plan" && seats.find(x => x.agent === "kimi")?.spec === "",
+      JSON.stringify(seats));
+  }
   r = await sFetch(base, phone, "GET", "/crew/roster");
   const machines = r.json.machines || [];
   const row = machines.find(m => m.machine === "owner");
