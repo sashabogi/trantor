@@ -6,7 +6,8 @@ const ROSTER_INTERVAL: Duration = Duration::from_secs(600);
 const MISSING_CHECKOUT: &str = "Can't find this project's checkout on the Mac";
 
 pub(super) fn failure(error: impl AsRef<str>) -> Value {
-    json!({"outcome": "failed", "output": output_tail(error.as_ref())})
+    let error = output_tail(error.as_ref());
+    json!({"outcome": "failed", "output": error, "error": error})
 }
 
 fn valid_spec(spec: &str) -> bool {
@@ -213,10 +214,19 @@ pub(super) async fn deliver(
         .run("trantor", &args, Some(&cwd), COMMAND_TIMEOUT)
         .await
     {
-        Ok(out) => json!({
-            "outcome": if out.success { "done" } else { "failed" },
-            "output": output_tail(&format!("{}{}", out.stdout, out.stderr)),
-        }),
+        Ok(out) => {
+            let output = output_tail(&format!("{}{}", out.stdout, out.stderr));
+            let error = if out.success {
+                None
+            } else {
+                Some(if output.is_empty() {
+                    "Crew command failed".to_string()
+                } else {
+                    output.clone()
+                })
+            };
+            json!({"outcome": if out.success { "done" } else { "failed" }, "output": output, "error": error})
+        }
         Err(error) => failure(error),
     }
 }
@@ -238,8 +248,12 @@ fn roster(raw: &str, machine: &str) -> Result<Value, String> {
                 .unwrap_or(kind);
             Some(
                 json!({"agent": agent, "label": row["label"].as_str().unwrap_or(agent),
-            "plan": plan, "metered": kind == "api" || plan.to_ascii_lowercase().contains("api"),
-            "available": row["state"] == "connected"}),
+                "plan": plan, "metered": kind == "api" || plan.to_ascii_lowercase().contains("api"),
+                "available": row["state"] == "connected",
+                "reason": if row["state"] == "connected" { "" } else {
+                    row["reason"].as_str().filter(|s| !s.is_empty())
+                        .or_else(|| row["state"].as_str()).unwrap_or_default()
+                }}),
             )
         })
         .collect();
@@ -258,15 +272,6 @@ async fn sample_roster(runner: &impl Runner, on: &AtomicBool) -> Result<Option<V
     if !on.load(Ordering::SeqCst) {
         return Ok(None);
     }
-    let hostname = runner
-        .run("hostname", &[], None, Duration::from_secs(5))
-        .await?;
-    if !hostname.success || hostname.stdout.trim().is_empty() {
-        return Err("Could not read this Mac's hostname".into());
-    }
-    if !on.load(Ordering::SeqCst) {
-        return Ok(None);
-    }
     let status = runner
         .run(
             "trantor",
@@ -278,7 +283,7 @@ async fn sample_roster(runner: &impl Runner, on: &AtomicBool) -> Result<Option<V
     if !status.success {
         return Err(output_tail(&status.stderr));
     }
-    roster(&status.stdout, hostname.stdout.trim()).map(Some)
+    roster(&status.stdout, &hub::owner_identity()).map(Some)
 }
 
 pub(super) async fn roster_worker() {

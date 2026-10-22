@@ -272,6 +272,7 @@ async fn claimed_crew_ack_carries_id_outcome_and_output() {
         };
         assert_eq!(result["outcome"], expected);
         assert_eq!(result["id"], 42);
+        assert_eq!(result["error"].is_null(), expected == "done");
         ack(&hub, result.clone()).await.unwrap();
         let requests = hub.requests.lock().unwrap();
         assert_eq!(requests[0].0, "/session/prompt/claim");
@@ -310,26 +311,26 @@ fn output_tail_strips_ansi_and_counts_unicode_characters() {
 }
 
 #[tokio::test]
-async fn roster_uses_provider_usage_and_hostname_and_posts_exact_payload() {
+async fn roster_uses_provider_usage_and_signer_and_posts_exact_payload() {
     let raw = json!([
         {"provider":"claude","label":"Claude","kind":"windows","state":"connected"},
         {"provider":"codex","label":"Codex","kind":"windows","usage":{"plan":"Pro"},"state":"connected"},
-        {"provider":"custom","label":"Custom","kind":"api","state":"unknown"},
+        {"provider":"custom","label":"Custom","kind":"api","state":"unknown","reason":"No credentials"},
         {"provider":"glm","label":"GLM","kind":"quota","usage":{"plan":"API monthly"},"state":"over_quota"}
     ]).to_string();
-    let runner = FakeRunner::new(vec![output(true, "test-mac\n", ""), output(true, &raw, "")]);
+    let runner = FakeRunner::new(vec![output(true, &raw, "")]);
     let on = AtomicBool::new(true);
     let payload = sample_roster(&runner, &on).await.unwrap().unwrap();
     assert_eq!(
         payload,
-        json!({"machine":"test-mac","seats":[
-            {"agent":"codex","label":"Codex","plan":"Pro","metered":false,"available":true},
-            {"agent":"custom","label":"Custom","plan":"api","metered":true,"available":false},
-            {"agent":"glm","label":"GLM","plan":"API monthly","metered":true,"available":false}
+        json!({"machine":hub::owner_identity(),"seats":[
+            {"agent":"codex","label":"Codex","plan":"Pro","metered":false,"available":true,"reason":""},
+            {"agent":"custom","label":"Custom","plan":"api","metered":true,"available":false,"reason":"No credentials"},
+            {"agent":"glm","label":"GLM","plan":"API monthly","metered":true,"available":false,"reason":"over_quota"}
         ]})
     );
     assert_eq!(
-        runner.calls.lock().unwrap()[1].1,
+        runner.calls.lock().unwrap()[0].1,
         ["provider", "status", "--json"]
     );
     let hub = FakeHub::new(vec![(200, json!({"ok":true}))]);
