@@ -207,4 +207,21 @@ final class ChatStoreTests: XCTestCase {
         store.disconnect()
         XCTAssertEqual(store.draft, "")
     }
+
+    func testPhotosRideTheSendAndOverFourAreRefused() async {
+        let hub = StubHub(), store = store(StubHub())
+        store.api = hub
+        let photo = PromptAttachment(name: "shot.jpg", jpegData: Data([0xff, 0xd8, 0xff, 1, 2, 3]))
+        let sent = await store.send("What is in this screenshot?", attachments: [photo])
+        XCTAssertTrue(sent)
+        XCTAssertTrue(hub.calls.contains("prompt:trantor:What is in this screenshot?:att=1"))
+        store.draft = "kept while sending"
+        let refused = await store.send("too many", attachments: Array(repeating: photo, count: 5))
+        XCTAssertFalse(refused)
+        XCTAssertEqual(store.sendError, "Attach at most 4 photos.")
+        XCTAssertFalse(hub.calls.contains { $0.hasSuffix("too many") })
+        let plain = await store.send("no photos")
+        XCTAssertTrue(plain)
+        XCTAssertTrue(hub.calls.contains("prompt:trantor:no photos"))
+    }
 }

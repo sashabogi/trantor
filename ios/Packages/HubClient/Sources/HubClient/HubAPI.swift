@@ -7,7 +7,7 @@ public protocol HubServing: Sendable {
     func crewCommand(project: String, action: CrewAction, seats: [String], from: String?, to: String?) async throws -> CrewCommandStatus
     func crewCommandStatus(id: String) async throws -> CrewCommandStatus
     func chat(project: String, after: Int) async throws -> ChatSnapshot
-    func sendPrompt(project: String, text: String) async throws -> PromptStatus
+    func sendPrompt(project: String, text: String, attachments: [PromptAttachment]) async throws -> PromptStatus
     func answer(project: String, session: String, toolId: String, picks: [Int], other: String?) async throws -> PromptStatus
     func promptStatus(id: String) async throws -> PromptStatus
     func health() async throws -> HealthInfo
@@ -39,6 +39,18 @@ public enum GateResolution: String, Sendable, CaseIterable {
     case verified, failed, waived
 }
 
+/// A photo riding a prompt (#12161): JPEG bytes, base64. The phone downscales to the hub's
+/// 2 MB cap before building one of these; the hub refuses anything larger.
+public struct PromptAttachment: Equatable, Sendable {
+    public let name: String
+    public let dataBase64: String
+
+    public init(name: String, jpegData: Data) {
+        self.name = name
+        self.dataBase64 = jpegData.base64EncodedString()
+    }
+}
+
 public final class HubAPI: HubServing, @unchecked Sendable {
     public let baseURL: URL
     public let signer: Signer
@@ -68,8 +80,14 @@ public final class HubAPI: HubServing, @unchecked Sendable {
         try await get(ChatSnapshot.self, "/session/chat", ["project": project, "after": String(after)])
     }
 
-    public func sendPrompt(project: String, text: String) async throws -> PromptStatus {
-        let data = try await post("/session/prompt", ["project": .string(project), "text": .string(text)])
+    public func sendPrompt(project: String, text: String, attachments: [PromptAttachment] = []) async throws -> PromptStatus {
+        var fields: [String: JSONValue] = ["project": .string(project), "text": .string(text)]
+        if !attachments.isEmpty {
+            fields["attachments"] = .array(attachments.map {
+                .object(["name": .string($0.name), "data": .string($0.dataBase64)])
+            })
+        }
+        let data = try await post("/session/prompt", fields)
         return try decode(PromptStatus.self, data)
     }
 
@@ -295,6 +313,13 @@ public final class HubAPI: HubServing, @unchecked Sendable {
         f.timeZone = TimeZone(secondsFromGMT: 0)
         f.dateFormat = "EEE, dd MMM yyyy HH:mm:ss zzz"
         return f.date(from: s)
+    }
+}
+
+public extension HubServing {
+    /// Text-only prompt: every caller without photos goes through here.
+    func sendPrompt(project: String, text: String) async throws -> PromptStatus {
+        try await sendPrompt(project: project, text: text, attachments: [])
     }
 }
 

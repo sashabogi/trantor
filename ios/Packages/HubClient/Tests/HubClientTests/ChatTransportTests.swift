@@ -51,8 +51,40 @@ final class ChatTransportTests: XCTestCase {
         }
     }
 
-    func testLiveChatFramesAreSeparateFromFeedEventCursor() {
-        var parser = SSEParser()
+    func testPromptAttachmentsRideTheSignedJSONBody() async throws {
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [ChatURLProtocol.self]
+        let key = Curve25519.Signing.PrivateKey()
+        let session = URLSession(configuration: config)
+        defer { session.invalidateAndCancel() }
+        let api = HubAPI(baseURL: URL(string: "https://hub.example")!, signer: Signer(privateKey: key), session: session)
+        ChatURLProtocol.reset()
+        let jpeg = Data([0xff, 0xd8, 0xff, 0xe0, 1, 2, 3, 4])
+        _ = try await api.sendPrompt(project: "trantor", text: "What is in this?", attachments: [
+            PromptAttachment(name: "shot.jpg", jpegData: jpeg),
+        ])
+        let requests = ChatURLProtocol.requests
+        XCTAssertEqual(requests.count, 1)
+        XCTAssertEqual(requests[0].0.url?.path, "/session/prompt")
+        let json = try XCTUnwrap(JSONSerialization.jsonObject(with: XCTUnwrap(requests[0].1)) as? [String: Any])
+        XCTAssertEqual(json["text"] as? String, "What is in this?")
+        let attachments = try XCTUnwrap(json["attachments"] as? [[String: Any]])
+        XCTAssertEqual(attachments.count, 1)
+        XCTAssertEqual(attachments[0]["name"] as? String, "shot.jpg")
+        let data = try XCTUnwrap(attachments[0]["data"] as? String)
+        XCTAssertEqual(Data(base64Encoded: data), jpeg)
+        // the signature still covers the whole body
+        let request = requests[0].0
+        let body = try XCTUnwrap(requests[0].1)
+        let path = try XCTUnwrap(request.url).path
+        let timestamp = try XCTUnwrap(Int64(try XCTUnwrap(request.value(forHTTPHeaderField: "x-trantor-ts"))))
+        let nonce = try XCTUnwrap(request.value(forHTTPHeaderField: "x-trantor-nonce"))
+        let canonical = Signer.canonicalString(method: "POST", path: path, hash: Signer.bodyHash(body), ts: timestamp, nonce: nonce)
+        let signature = try XCTUnwrap(Data(base64Encoded: try XCTUnwrap(request.value(forHTTPHeaderField: "x-trantor-sig"))))
+        XCTAssertTrue(key.publicKey.isValidSignature(signature, for: Data(canonical.utf8)))
+    }
+
+    func testLiveChatFramesAreSeparateFromFeedEventCursor() {        var parser = SSEParser()
         _ = parser.feed(line: "event: ev")
         _ = parser.feed(line: #"data: {"type":"chat.updated","project":"trantor","total":2,"working":true}"#)
         let frame = parser.feed(line: "")!

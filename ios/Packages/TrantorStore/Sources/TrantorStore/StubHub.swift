@@ -128,8 +128,10 @@ public final class StubHub: HubServing, @unchecked Sendable {
         snapshot.turns = Array(snapshot.turns.filter { $0.idx > after }.sorted { $0.idx < $1.idx }.prefix(200))
         return snapshot
     }
-    public func sendPrompt(project: String, text: String) async throws -> PromptStatus {
-        try await write("prompt:\(project):\(text)")
+    public func sendPrompt(project: String, text: String, attachments: [PromptAttachment]) async throws -> PromptStatus {
+        // the attachment count only joins the call name when photos ride along, so the existing
+        // "prompt:<project>:<text>" assertions stay exact
+        try await write(attachments.isEmpty ? "prompt:\(project):\(text)" : "prompt:\(project):\(text):att=\(attachments.count)")
         return locked {
             let id = String(nextPrompt); nextPrompt += 1
             let status = PromptStatus(id: id, status: "queued")

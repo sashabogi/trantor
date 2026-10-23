@@ -159,11 +159,12 @@ public final class ChatStore {
     }
 
     @discardableResult
-    public func send(_ raw: String) async -> Bool {
+    public func send(_ raw: String, attachments: [PromptAttachment] = []) async -> Bool {
         guard !sending else { return false }
         let text = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return false }
         guard text.utf16.count <= 8000 else { sendError = "Keep your message under 8,000 characters."; return false }
+        guard attachments.count <= 4 else { sendError = "Attach at most 4 photos."; return false }
         if let reason = disabledReason { sendError = reason; return false }
         guard let api else { return false }
         sending = true; sendError = nil
@@ -173,7 +174,7 @@ public final class ChatStore {
         if outgoing.count > 200 { outgoing.removeFirst(outgoing.count - 200) }
         defer { sending = false }
         do {
-            let receipt = try await api.sendPrompt(project: project, text: text)
+            let receipt = try await api.sendPrompt(project: project, text: text, attachments: attachments)
             guard generation == currentGeneration else { return false }
             try accept(receipt, localID: localID)
             markSeen()

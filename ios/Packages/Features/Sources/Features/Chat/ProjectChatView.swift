@@ -1,3 +1,4 @@
+import PhotosUI
 import SwiftUI
 import TrantorCore
 import TrantorDesign
@@ -43,6 +44,8 @@ struct ProjectChatView: View {
     @Bindable var store: ChatStore
     @Environment(\.scenePhase) private var scenePhase
     @State private var followingBottom = true
+    @State private var pickedPhotos: [PhotosPickerItem] = []
+    @State private var pending: [PreparedAttachment] = []
     // The keyboard belongs to a deliberate tap on the composer: nothing here ever sets `composing`
     // programmatically (no autofocus on appear); a transcript tap or drag ends it.
     @FocusState private var composing: Bool
@@ -135,6 +138,7 @@ struct ProjectChatView: View {
 
     private var composer: some View {
         VStack(alignment: .leading, spacing: Space.sm) {
+            if !pending.isEmpty { attachmentChips }
             if let reason = store.disabledReason {
                 Text(reason).font(.tCaption).foregroundStyle(Palette.textDim)
             } else if let error = store.sendError {
@@ -144,12 +148,29 @@ struct ProjectChatView: View {
                 Text("Keep your message under 8,000 characters.").font(.tCaption).foregroundStyle(Palette.amber)
             }
             HStack(alignment: .bottom, spacing: Space.sm) {
+                PhotosPicker(selection: $pickedPhotos,
+                             maxSelectionCount: max(1, ChatAttachment.maxCount - pending.count),
+                             matching: .images) {
+                    Image(systemName: "photo")
+                        .font(.tBody)
+                        .foregroundStyle(Palette.text2)
+                        .frame(minWidth: 32, minHeight: 32)
+                }
+                .accessibilityLabel("Attach photo")
+                .accessibilityIdentifier("chat.attach")
+                .disabled(store.disabledReason != nil || pending.count >= ChatAttachment.maxCount)
                 WellField("Message your orchestrator", text: $store.draft, axis: .vertical)
                     .lineLimit(1...5).focused($composing)
                     .accessibilityIdentifier("chat.composer")
                 Button {
                     let text = store.draft
-                    Task { if await store.send(text), store.draft == text { store.draft = "" } }
+                    let attachments = pending.map(\.attachment)
+                    Task {
+                        if await store.send(text, attachments: attachments), store.draft == text {
+                            store.draft = ""
+                            if pending.map(\.attachment) == attachments { pending = [] }
+                        }
+                    }
                 } label: {
                     if store.sending { ProgressView().tint(Palette.onAccent) }
                     else { Image(systemName: "arrow.up") }
@@ -163,6 +184,52 @@ struct ProjectChatView: View {
         .padding(Space.lg)
         .background(Palette.ground)
         .overlay(alignment: .top) { Hairline() }
+        .onChange(of: pickedPhotos) { _, items in
+            guard !items.isEmpty else { return }
+            Task { await attach(items) }
+        }
+    }
+
+    /// Downscale the picked library photos in order; the picker selection clears once consumed
+    /// so picking the same photo again still fires the change.
+    private func attach(_ items: [PhotosPickerItem]) async {
+        for item in items where pending.count < ChatAttachment.maxCount {
+            let data = try? await item.loadTransferable(type: Data.self)
+            if let prepared = ChatAttachment.prepare(data) { pending.append(prepared) }
+        }
+        pickedPhotos = []
+    }
+
+    private var attachmentChips: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: Space.sm) {
+                ForEach(pending) { prepared in
+                    VStack(spacing: Space.xs) {
+                        if let thumbnail = prepared.thumbnail {
+                            Image(uiImage: thumbnail)
+                                .resizable().scaledToFill()
+                                .frame(width: 56, height: 56)
+                                .clipShape(RoundedRectangle(cornerRadius: Radius.sm))
+                        } else {
+                            Image(systemName: "photo")
+                                .frame(width: 56, height: 56)
+                                .background(Palette.raise, in: RoundedRectangle(cornerRadius: Radius.sm))
+                        }
+                        Text(prepared.name).font(.tCaption).lineLimit(1).frame(maxWidth: 56)
+                    }
+                    .overlay(alignment: .topTrailing) {
+                        Button {
+                            pending.removeAll { $0.id == prepared.id }
+                        } label: {
+                            Image(systemName: "xmark.circle.fill")
+                                .font(.tCallout)
+                                .foregroundStyle(Palette.text2)
+                        }
+                        .accessibilityLabel("Remove \(prepared.name)")
+                    }
+                }
+            }
+        }
     }
 
     private func deliveryColor(_ delivery: PromptDelivery) -> Color {
