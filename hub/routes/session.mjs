@@ -2,6 +2,8 @@
 // is MEMORY-ONLY (a restart answers have:0, the desktop resends its window); the prompt queue
 // lives in state so a restart never strands a queued prompt. Live frames ride pushEventToStreams
 // (scope-filtered, never logged); only chat.prompt.queued/.delivered/.failed are audit-appended.
+import { mkdirSync, readdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { setInterval } from "node:timers";
 
 const CHAT_CAP = 400;            // turns kept per project, highest idx wins
@@ -15,6 +17,13 @@ const EXPIRED_REASON = "No Mac is relaying this project. Is the Trantor app open
 const ACK_OUTCOMES = new Set(["delivered", "blocked", "not_ready", "stalled", "no_agent", "stale"]);
 const ANSWER_PICKS_MAX = 10;
 const ANSWER_OTHER_MAX = 2000;
+// #12161: photo attachments ride POST /session/prompt as base64 JPEGs. The phone downscales to
+// the byte cap; the hub stores the bytes on disk next to its state (never in bus.json) and hands
+// metadata to the claiming desktop, which downloads them through GET /session/attachment.
+const ATTACHMENTS_MAX = 4;
+const ATTACHMENT_BYTES_MAX = 2 * 1024 * 1024;
+const ATTACHMENT_B64_MAX = Math.ceil(ATTACHMENT_BYTES_MAX / 3) * 4;
+const JPEG_MAGIC = Buffer.from([0xff, 0xd8, 0xff]);
 // #12140: crew commands from the phone. The hub validates and queues; the desktop relay runs the
 // trantor CLI and acks done|failed with the output tail. A seat spec is "agent[:project]".
 const CREW_SPEC = /^[a-z][a-z0-9-]{0,30}(:[A-Za-z0-9._/-]{1,80})?$/;
@@ -24,13 +33,67 @@ const CREW_CLAUDE_REFUSAL = "The claude seat draws your own Claude quota; start 
 // oxlint-disable-next-line no-control-regex -- stripping ANSI escape sequences IS matching control characters
 const stripAnsi = (s) => String(s).replace(/\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])/g, "");
 
-export function createSessionRuntime({ state, markDirty, appendEvent, pushEventToStreams, notifier }) {
+export function createSessionRuntime({ state, markDirty, appendEvent, pushEventToStreams, notifier, attachmentsDir }) {
   const now = () => Date.now();
   const mirrors = new Map();     // project -> { session, total, turns: Map(idx->turn), have, meta, updatedAt, host }
   state.sessionPrompts ||= [];
   state.sessionPromptSeq = Number(state.sessionPromptSeq || 0);
 
   const findPrompt = (id) => state.sessionPrompts.find(p => p.id === Number(id));
+
+  // ---- attachments (#12161): bytes live on disk as <id>-<n>.jpg; the row keeps metadata ----
+  function attachmentPath(file) { return join(attachmentsDir, file); }
+  function unlinkAttachments(p) {
+    if (!attachmentsDir) return;
+    for (const a of p.attachments || []) { try { unlinkSync(attachmentPath(a.file)); } catch {} }
+  }
+  // Startup/sweep GC: remove files no queued-or-claimed row references (evicted rows, restarts,
+  // lost races). Cheap: a directory listing every sweep.
+  function sweepAttachments() {
+    if (!attachmentsDir) return;
+    let live;
+    try { live = new Set(state.sessionPrompts.filter(p => p.status === "queued" || p.status === "claimed")
+      .flatMap(p => (p.attachments || []).map(a => a.file))); } catch { return; }
+    let entries;
+    try { entries = readdirSync(attachmentsDir); } catch { return; }
+    for (const name of entries) {
+      if (!live.has(name)) { try { unlinkSync(attachmentPath(name)); } catch {} }
+    }
+  }
+  try { mkdirSync(attachmentsDir, { recursive: true }); } catch {}
+  sweepAttachments();
+  // Validate and decode the wire shape: [{name, data(base64 JPEG)}]. Returns rows for the prompt
+  // (files not yet written) or { error }.
+  function parseAttachments(raw) {
+    if (raw == null) return { attachments: [] };
+    if (!Array.isArray(raw) || raw.length > ATTACHMENTS_MAX) return { error: `at most ${ATTACHMENTS_MAX} attachments` };
+    const attachments = [];
+    for (const a of raw) {
+      const name = String(a?.name || "photo.jpg").slice(0, 120);
+      const data = a?.data;
+      if (typeof data !== "string" || !data.length || data.length > ATTACHMENT_B64_MAX
+        || !/^[A-Za-z0-9+/=\s]+$/.test(data)) return { error: "attachment must be base64 JPEG of 2 MB or less" };
+      let bytes;
+      try { bytes = Buffer.from(data, "base64"); } catch { return { error: "attachment must be base64 JPEG of 2 MB or less" }; }
+      if (!bytes.length || bytes.length > ATTACHMENT_BYTES_MAX || !bytes.subarray(0, 3).equals(JPEG_MAGIC)) {
+        return { error: "attachment must be a JPEG of 2 MB or less" };
+      }
+      attachments.push({ name, size: bytes.length, bytes });
+    }
+    return { attachments };
+  }
+  function storeAttachments(id, attachments) {
+    if (!attachmentsDir) {
+      if (attachments.length) throw new Error("attachment storage is not configured");
+      return [];
+    }
+    mkdirSync(attachmentsDir, { recursive: true });
+    return attachments.map((a, n) => {
+      const file = `${id}-${n}.jpg`;
+      writeFileSync(attachmentPath(file), a.bytes);
+      return { name: a.name, size: a.size, file };
+    });
+  }
 
   // A prompt still queued past the TTL means no desktop relay claimed it. Expiry is lazy (on
   // read) plus a sweep that is a no-op when nothing is queued, so an idle hub does no work.
@@ -39,13 +102,24 @@ export function createSessionRuntime({ state, markDirty, appendEvent, pushEventT
     for (const p of state.sessionPrompts) {
       if (p.status !== "queued" || now() - p.ts <= PROMPT_TTL_MS) continue;
       p.status = "expired"; p.outcome = "expired"; p.error = EXPIRED_REASON;
+      unlinkAttachments(p);
       appendEvent("chat.prompt.failed", p.project, p.by, { promptId: p.id, outcome: "expired", error: EXPIRED_REASON });
       changed = true;
     }
     if (changed) markDirty();
     return changed;
   }
+  // Evict oldest terminal rows first so live work is never the first casualty; their attachment
+  // bytes go with them.
+  function trimPrompts() {
+    while (state.sessionPrompts.length > PROMPT_CAP) {
+      const ti = state.sessionPrompts.findIndex(x => x.status !== "queued" && x.status !== "claimed");
+      const [evicted] = state.sessionPrompts.splice(ti >= 0 ? ti : 0, 1);
+      unlinkAttachments(evicted);
+    }
+  }
   const sweep = setInterval(() => {
+    sweepAttachments();
     if (state.sessionPrompts.some(p => p.status === "queued")) expireQueued();
   }, PROMPT_SWEEP_MS);
   sweep.unref?.();
@@ -140,10 +214,11 @@ export function createSessionRuntime({ state, markDirty, appendEvent, pushEventT
     const isChat = P === "/session/chat";
     const isPrompts = P === "/session/prompts";
     const isPrompt = P === "/session/prompt" || P === "/session/prompt/claim" || P === "/session/prompt/ack";
+    const isAttachment = P === "/session/attachment";
     const isAnswer = P === "/session/answer";
     const isCrewCommand = P === "/crew/command";
     const isCrewRoster = P === "/crew/roster";
-    if (!isChat && !isPrompts && !isPrompt && !isAnswer && !isCrewCommand && !isCrewRoster) return false;
+    if (!isChat && !isPrompts && !isPrompt && !isAttachment && !isAnswer && !isCrewCommand && !isCrewRoster) return false;
     const { body, json, canon, scopeAllows } = ctx;
 
     // #12137: the phone's answer to an AskUserQuestion joins the SAME queue as a plain prompt,
@@ -268,26 +343,33 @@ export function createSessionRuntime({ state, markDirty, appendEvent, pushEventT
       const text = String(b.text || "");
       if (!project || !text.trim()) return json(res, 400, { error: "project and non-empty text required" });
       if (text.length > PROMPT_TEXT_MAX) return json(res, 400, { error: `text must be <= ${PROMPT_TEXT_MAX} chars` });
+      const parsed = parseAttachments(b.attachments);
+      if (parsed.error) return json(res, 400, { error: parsed.error });
       expireQueued();
       state.sessionPromptSeq += 1;
       const p = { id: state.sessionPromptSeq, project, text, by: String(auth?.identity?.name || "").slice(0, 120), ts: now(), status: "queued" };
-      state.sessionPrompts.push(p);
-      // Cap: evict oldest terminal rows first so live work is never the first casualty.
-      while (state.sessionPrompts.length > PROMPT_CAP) {
-        const ti = state.sessionPrompts.findIndex(x => x.status !== "queued" && x.status !== "claimed");
-        state.sessionPrompts.splice(ti >= 0 ? ti : 0, 1);
+      try {
+        p.attachments = storeAttachments(p.id, parsed.attachments);
+      } catch (error) {
+        return json(res, 500, { error: String(error?.message || error) });
       }
+      state.sessionPrompts.push(p);
+      trimPrompts();
       markDirty();
-      appendEvent("chat.prompt.queued", project, p.by, { promptId: p.id, text: text.slice(0, EVENT_TEXT_MAX) });
+      if (p.attachments.length) appendEvent("chat.prompt.queued", project, p.by,
+        { promptId: p.id, text: text.slice(0, EVENT_TEXT_MAX), attachments: p.attachments.length });
+      else appendEvent("chat.prompt.queued", project, p.by, { promptId: p.id, text: text.slice(0, EVENT_TEXT_MAX) });
       pushEventToStreams({ ts: p.ts, type: "chat.prompt", id: p.id, project });
       return json(res, 200, { id: p.id, status: "queued" });
     }
 
     // The public view of a queue row: plain prompts are kind "prompt"; answers carry their
     // session, toolId, picks and other; crew commands carry action, seats, from and to —
-    // so the claiming desktop has everything it needs.
+    // so the claiming desktop has everything it needs. Attachments ride as metadata only;
+    // the bytes go to the claimer through GET /session/attachment.
     const promptView = (p) => {
       const view = { id: p.id, project: p.project, text: p.text, by: p.by, ts: p.ts, status: p.status, kind: p.kind || "prompt" };
+      if (p.attachments?.length) view.attachments = p.attachments.map(({ name, size }) => ({ name, size }));
       if (p.kind === "answer") {
         view.session = p.session; view.toolId = p.toolId; view.picks = p.picks;
         if (p.other && p.other.trim()) view.other = p.other;   // absent, never "", when nothing was typed
@@ -346,6 +428,8 @@ export function createSessionRuntime({ state, markDirty, appendEvent, pushEventT
       } else {
         p.status = outcome === "delivered" ? "delivered" : "failed";
       }
+      // A terminal row will never be claimed or downloaded again: its bytes go now.
+      unlinkAttachments(p);
       markDirty();
       const extra = { promptId: p.id, outcome };
       if (error) extra.error = error;
@@ -359,6 +443,21 @@ export function createSessionRuntime({ state, markDirty, appendEvent, pushEventT
       const p = findPrompt(q.id);
       if (!p) return json(res, 404, { error: "prompt not found" });
       return json(res, 200, { id: p.id, status: p.status, outcome: p.outcome || "", output: p.output || "", error: p.error || "" });
+    }
+
+    // The claiming desktop fetches one attachment's bytes. Owner-gated in auth.mjs, absent from
+    // the public listener's allowlist — phones upload, they never read back.
+    if (req.method === "GET" && P === "/session/attachment") {
+      const p = findPrompt(q.id);
+      const n = Number(q.n);
+      const meta = p && Number.isInteger(n) ? (p.attachments || [])[n] : null;
+      let bytes = null;
+      if (meta && attachmentsDir) { try { bytes = readFileSync(attachmentPath(meta.file)); } catch {} }
+      if (!bytes) return json(res, 404, { error: "attachment not found" });
+      if (res.headersSent || res.writableEnded || res.destroyed) return true;
+      res.writeHead(200, { "content-type": "image/jpeg", "content-length": bytes.length });
+      res.end(bytes);
+      return true;
     }
 
     return false;

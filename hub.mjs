@@ -134,6 +134,7 @@ const context = {
 const sessionChat = createSessionRuntime({
   state: store.state, markDirty: store.markDirty,
   appendEvent: events.appendEvent, pushEventToStreams: events.pushEventToStreams, notifier,
+  attachmentsDir: join(DATA_DIR, "attachments"),
 });
 const routes = [routeDevices, routeAdmin, routeCards, routeInsights, routeMessages, sessionChat.route];
 

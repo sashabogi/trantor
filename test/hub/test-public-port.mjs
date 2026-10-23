@@ -97,6 +97,7 @@ try {
     ["POST", "/project/delete"], ["POST", "/import"], ["GET", "/policy"], ["POST", "/policy"],
     ["POST", "/sweep"], ["POST", "/reconcile"], ["POST", "/crew/roster"],
     ["POST", "/session/prompt/claim"], ["POST", "/session/prompt/ack"], ["GET", "/session/prompts"],
+    ["GET", "/session/attachment"],
     ["POST", "/session/chat"], ["POST", "/health"], ["GET", "/enroll"], ["HEAD", "/tasks"],
     ["GET", "/tasks/"], ["GET", "/%74asks"],
   ]) {

@@ -3,7 +3,7 @@
 // restart semantics, scope, first-claim-wins, ack outcomes, expiry, stream scope, audit events.
 // #12137: /session/answer queues as kind "answer" (ack gains "stale"); unanswered ask blocks
 // raise one ask.opened push per toolId, cleared by ask.answered.
-import { mkdtempSync, mkdirSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
@@ -221,6 +221,108 @@ try {
   ok("expiry is audit-appended as chat.prompt.failed", (r.json.events || []).some(e => e.promptId === expId && e.outcome === "expired"), JSON.stringify(r.json.events?.map(e => e.promptId)));
 } finally {
   await hub.stop();
+}
+
+// ---- photo attachments ride the prompt queue (#12161) ------------------------
+console.log("# photo attachments on the prompt queue");
+{
+  const attachDir = mkdtempSync(join(tmpdir(), "trantor-12161-"));
+  mkdirSync(join(attachDir, ".agent-bus"), { recursive: true });
+  let hub = await startTestHub({ dir: attachDir, env });
+  const attachmentsPath = join(attachDir, "attachments");
+  try {
+    let base = hub.base;
+    const owner = generate();
+    const phone = generate();
+    await sFetch(base, owner, "POST", "/enroll", { name: "owner", kind: "human", scopes: [{ project: "*", role: "owner" }] });
+    const inv = await sFetch(base, owner, "POST", "/invite", { scopes: [{ project: "projA", role: "approver" }], ttlSec: 60, kind: "human" });
+    await sFetch(base, phone, "POST", "/enroll", { token: inv.json.token || "", name: "phone", kind: "human" });
+
+    const jpeg = Buffer.alloc(2048);
+    jpeg[0] = 0xff; jpeg[1] = 0xd8; jpeg[2] = 0xff;   // SOI + marker: the hub checks the JPEG magic
+    const b64 = jpeg.toString("base64");
+
+    let r = await sFetch(base, phone, "POST", "/session/prompt", { project: "projA", text: "what is in this screenshot?", attachments: [{ name: "screenshot.jpg", data: b64 }] });
+    ok("phone queues a prompt with a JPEG attachment", r.status === 200 && r.json.status === "queued", JSON.stringify(r.json));
+    const photoId = r.json.id;
+    let files = [];
+    try { files = readdirSync(attachmentsPath); } catch {}
+    ok("the bytes are stored on disk next to the state", files.length === 1 && files[0] === `${photoId}-0.jpg`, JSON.stringify(files));
+
+    r = await sFetch(base, phone, "POST", "/session/prompt", { project: "projA", text: "no magic", attachments: [{ name: "x.jpg", data: Buffer.alloc(1024, 7).toString("base64") }] });
+    ok("a non-JPEG payload is refused", r.status === 400 && /JPEG/.test(r.json.error), JSON.stringify(r.json));
+    r = await sFetch(base, phone, "POST", "/session/prompt", { project: "projA", text: "too big", attachments: [{ name: "x.jpg", data: Buffer.concat([Buffer.from([0xff, 0xd8, 0xff]), Buffer.alloc(2 * 1024 * 1024)]).toString("base64") }] });
+    ok("an attachment over 2 MB is refused", r.status === 400 && /2 MB/.test(r.json.error), JSON.stringify(r.json));
+    r = await sFetch(base, phone, "POST", "/session/prompt", { project: "projA", text: "garbage", attachments: [{ name: "x.jpg", data: "!!!not base64!!!" }] });
+    ok("non-base64 data is refused", r.status === 400, JSON.stringify(r.json));
+    r = await sFetch(base, phone, "POST", "/session/prompt", { project: "projA", text: "five", attachments: Array.from({ length: 5 }, () => ({ name: "x.jpg", data: b64 })) });
+    ok("more than four attachments are refused", r.status === 400 && /at most 4/.test(r.json.error), JSON.stringify(r.json));
+
+    r = await sFetch(base, owner, "GET", "/session/prompts?project=projA&status=queued");
+    const row = (r.json.prompts || []).find(p => p.id === photoId);
+    ok("the pickup listing carries attachment metadata only",
+      row && Array.isArray(row.attachments) && row.attachments.length === 1
+      && row.attachments[0].name === "screenshot.jpg" && row.attachments[0].size === jpeg.length
+      && !row.attachments[0].data && !row.attachments[0].file, JSON.stringify(row?.attachments));
+
+    r = await sFetch(base, owner, "POST", "/session/prompt/claim", { id: photoId, host: "mac" });
+    ok("the claim hands the claiming desktop the attachment metadata",
+      r.status === 200 && r.json.prompt?.attachments?.[0]?.name === "screenshot.jpg", JSON.stringify(r.json.prompt?.attachments));
+    const dl = await fetch(`${base}/session/attachment?id=${photoId}&n=0`, { headers: signRequest({ pubkey: owner.pubkey, privkey: owner.privkey }, { method: "GET", path: `/session/attachment?id=${photoId}&n=0` }) });
+    const bytes = Buffer.from(await dl.arrayBuffer());
+    ok("the claimed attachment downloads byte-for-byte as JPEG",
+      dl.status === 200 && dl.headers.get("content-type") === "image/jpeg" && bytes.equals(jpeg), `status ${dl.status} len ${bytes.length}`);
+    const missing = await sFetch(base, owner, "GET", `/session/attachment?id=${photoId}&n=1`);
+    ok("an out-of-range attachment index is 404", missing.status === 404, `status ${missing.status}`);
+    const forbidden = await sFetch(base, phone, "GET", `/session/attachment?id=${photoId}&n=0`);
+    ok("the phone cannot read attachments back (owner-only)", forbidden.status === 403, `status ${forbidden.status}`);
+
+    r = await sFetch(base, owner, "POST", "/session/prompt/ack", { id: photoId, outcome: "delivered" });
+    ok("delivery acked", r.status === 200 && r.json.status === "delivered", JSON.stringify(r.json));
+    try { files = readdirSync(attachmentsPath); } catch { files = []; }
+    ok("a terminal prompt's bytes are removed", files.length === 0, JSON.stringify(files));
+
+    // a queued attachment prompt survives a restart; a stray file is swept at boot
+    r = await sFetch(base, phone, "POST", "/session/prompt", { project: "projA", text: "restart with photo", attachments: [{ name: "again.jpg", data: b64 }] });
+    const survivor = r.json.id;
+    writeFileSync(join(attachmentsPath, "999-0.jpg"), Buffer.from("stray"));
+    await sleep(1300);
+    await hub.stop();
+    hub = await startTestHub({ dir: attachDir, env });
+    base = hub.base;
+    try { files = readdirSync(attachmentsPath); } catch { files = []; }
+    ok("a stray unreferenced file is swept at boot", !files.includes("999-0.jpg"), JSON.stringify(files));
+    ok("the queued prompt's bytes survive the restart", files.includes(`${survivor}-0.jpg`), JSON.stringify(files));
+    const redownload = await fetch(`${base}/session/attachment?id=${survivor}&n=0`, { headers: signRequest({ pubkey: owner.pubkey, privkey: owner.privkey }, { method: "GET", path: `/session/attachment?id=${survivor}&n=0` }) });
+    ok("the attachment still downloads after the restart", redownload.status === 200, `status ${redownload.status}`);
+    r = await sFetch(base, owner, "POST", "/session/prompt/claim", { id: survivor, host: "mac" });
+    ok("the attachment prompt claims after the restart", r.status === 200, `status ${r.status}`);
+  } finally {
+    await hub.stop();
+  }
+}
+
+// ---- attachments need a configured store ------------------------------------
+console.log("# attachment storage guard");
+{
+  const rt = createSessionRuntime({
+    state: { sessionPrompts: [] }, markDirty: () => {},
+    appendEvent: () => {}, pushEventToStreams: () => {},
+  });
+  let out = null;
+  await rt.route({
+    req: { method: "POST" }, res: {}, q: {}, P: "/session/prompt", auth: { identity: { name: "phone" } },
+    ctx: { body: async () => ({ project: "projA", text: "hi", attachments: [{ name: "x.jpg", data: "aGk=" }] }),
+      json: (res, code, body) => { out = { code, body }; return true; }, canon: (x) => x },
+  });
+  ok("a runtime without attachment storage refuses attachments", out?.code === 400, JSON.stringify(out));
+  out = null;
+  await rt.route({
+    req: { method: "POST" }, res: {}, q: {}, P: "/session/prompt", auth: { identity: { name: "phone" } },
+    ctx: { body: async () => ({ project: "projA", text: "hi" }),
+      json: (res, code, body) => { out = { code, body }; return true; }, canon: (x) => x },
+  });
+  ok("plain prompts still queue without attachment storage", out?.code === 200, JSON.stringify(out));
 }
 
 // ---- ask blocks raise pushes: one ask.opened per toolId, cleared by ask.answered (#12137) ---

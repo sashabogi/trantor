@@ -53,7 +53,7 @@ function cmpSemver(a, b) {
 }
 const AUTH_HEADERS = ["x-trantor-pubkey", "x-trantor-sig", "x-trantor-ts", "x-trantor-nonce"];
 const PUBLIC_ENDPOINTS = new Set(["/", "/ui", "/health", "/enroll"]);
-const OWNER_ENDPOINTS = new Set(["/project/delete", "/sweep", "/reconcile", "/invite", "/import", "/policy", "/session/prompts", "/session/prompt/claim", "/session/prompt/ack"]);
+const OWNER_ENDPOINTS = new Set(["/project/delete", "/sweep", "/reconcile", "/invite", "/import", "/policy", "/session/prompts", "/session/prompt/claim", "/session/prompt/ack", "/session/attachment"]);
 const DEVICE_ENDPOINTS = new Set(["/device/register", "/device/unregister", "/devices"]);
 const READ_ENDPOINTS = new Set(["/peers", "/tasks", "/events", "/inbox", "/peer", "/card", "/stream", "/history", "/projects", "/catchup", "/phases", "/recent", "/handoffs", "/verify-gates", "/claims", "/proposals", "/grants", "/overseer/context", "/overseer/status", "/session/chat", "/session/prompt", "/crew/roster"]);
 const roleRank = { read: 1, write: 2, approver: 3, owner: 4 };
@@ -118,7 +118,8 @@ function projectFromRequest(P, q, b) {
   }
   // claim/ack and the single-prompt GET carry only an id — authorization runs against the
   // PROMPT's project, or a project-scoped key could claim any project's queued prompt (#12129).
-  if (P === "/session/prompt" || P === "/session/prompt/claim" || P === "/session/prompt/ack") {
+  // The attachment download (#12161) is keyed the same way.
+  if (P === "/session/prompt" || P === "/session/prompt/claim" || P === "/session/prompt/ack" || P === "/session/attachment") {
     const pr = (state.sessionPrompts || []).find(x => x.id === Number(b?.id ?? q?.id));
     if (pr) return pr.project || "";
     if (P !== "/session/prompt") return "";
