@@ -91,12 +91,6 @@ struct ProjectChatView: View {
             guard scenePhase == .active else { return }
             await store.follow()
         }
-        .toolbar {
-            ToolbarItemGroup(placement: .keyboard) {
-                Spacer()
-                Button("Hide keyboard") { composing = false }.accessibilityIdentifier("chat.hide-keyboard")
-            }
-        }
     }
 
     private func scrollToQuestion(_ proxy: ScrollViewProxy) {

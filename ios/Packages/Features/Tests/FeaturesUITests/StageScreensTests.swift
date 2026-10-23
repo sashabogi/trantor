@@ -57,7 +57,7 @@ final class StageScreensTests: XCTestCase {
         reply.typeText("The stage screens are ready for review.")
         app.buttons["Send"].tap()
         XCTAssertTrue(app.staticTexts["The stage screens are ready for review."].waitForExistence(timeout: 5))
-        app.buttons["Hide keyboard"].tap()
+        app.swipeDown()   // the list dismisses the keyboard interactively; there is no keyboard toolbar
         capture("conversation")
         app.navigationBars.buttons.firstMatch.tap()
         let readThread = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "The stage screens are ready for review.")).firstMatch
