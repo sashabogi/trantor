@@ -4,6 +4,14 @@ import { loadOrCreate } from "../../lib/identity.mjs";
 import { ensureEnrolled } from "../../lib/enroll.mjs";
 import { sfetchJson } from "../../lib/signed-fetch.mjs";
 
+export async function unregisterSwapStage(hub, project, session) {
+  const identity = loadOrCreate(session, "agent");
+  const response = await sfetchJson(`${hub}/unregister`, {
+    identity, payload: { session, project }, signal: AbortSignal.timeout(8000),
+  });
+  if (!response.ok) throw new Error(`replacement deregistration failed: ${response.status}`);
+}
+
 // A replacement registers before it touches the old runner's worktree or queue.
 export async function awaitSwapRelease(env = process.env) {
   if (!env.CREW_SWAP_STAGE) return;
@@ -25,4 +33,5 @@ export async function awaitSwapRelease(env = process.env) {
   }
   const handoff = JSON.parse(readFileSync(`${stage}.release`, "utf8"));
   if (handoff.agent !== env.CREW_SWAP_AGENT) throw new Error("swap release names a different seat");
+  await unregisterSwapStage(env.RELAY_URL, env.RELAY_PROJECT, session);
 }

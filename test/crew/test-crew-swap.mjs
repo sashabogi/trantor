@@ -146,6 +146,7 @@ try {
   writeFileSync(`${stage}.release`, JSON.stringify({ agent: "codex" }));
   const code = await new Promise(resolveExit => stageChild.once("exit", resolveExit));
   check("staged runner proceeds only after handoff release", code === 0);
+  check("released runner removes temporary stage from roster", !(await get("/peers")).peers.some(p => p.session === "staging:swap-drill"));
 
   const fakeRunner = join(fakebin, "crew-runner.mjs");
   writeFileSync(fakeRunner, "setInterval(() => {}, 1000);\n");

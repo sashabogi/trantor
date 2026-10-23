@@ -36,6 +36,18 @@ export async function routeAdmin({ req, res, q, P, auth, ctx }) {
       }
       return json(res, 200, keyUsageSnapshot(state, now(), ONLINE_MS));
     }
+    if (req.method === "POST" && P === "/unregister") {
+      const b = await body(req);
+      if (!b.session || !b.project) return json(res, 400, { error: "session and project required" });
+      if (AUTH_MODE !== "off" && (auth?.identity?.name !== b.session || !scopeAllows(auth.identity, b.project, "write"))) {
+        return json(res, 403, { error: "only the session owner can unregister its peer" });
+      }
+      const peer = state.peers[b.session];
+      if (peer && peer.project !== canon(b.project)) return json(res, 403, { error: "peer belongs to a different project" });
+      delete state.peers[b.session];
+      markDirty();
+      return json(res, 200, { ok: true });
+    }
     if (req.method === "POST" && P === "/register") {
       const b = await body(req);
       const cpg = crossProjectGuard(auth, P, b);

@@ -1,3 +1,4 @@
+import { unregisterSwapStage } from "./stage.mjs";
 import { updatePersona } from "../../lib/persona.mjs";
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -103,8 +104,17 @@ export function swapRuntime(ctx, adapters, spawn) {
         await setTimeout(100);
       }
       const ready = JSON.parse(readFileSync(`${stage.path}.ready`, "utf8"));
-      const response = await signedGet(`${ctx.hub}/peers?project=${encodeURIComponent(ctx.project)}`, { project: ctx.project });
-      if (!response.ok || !response.json?.peers?.some(p => p.session === ready.session)) throw new Error("replacement registration is not visible on the bus");
+      let failure = "status=0 reason=readiness deadline elapsed timedOut=false";
+      let visible = false;
+      while (Date.now() < deadline) {
+        const response = await signedGet(`${ctx.hub}/peers?project=${encodeURIComponent(ctx.project)}`, {
+          project: ctx.project, timeoutMs: Math.min(8000, deadline - Date.now()),
+        });
+        if (response.ok && response.json?.peers?.some(p => p.session === ready.session)) { visible = true; break; }
+        failure = `status=${response.status} reason=${response.reason || response.json?.error || "replacement absent from roster"} timedOut=${response.timedOut === true}`;
+        await setTimeout(Math.min(100, Math.max(0, deadline - Date.now())));
+      }
+      if (!visible) throw new Error(`replacement registration is not visible on the bus: ${failure}`);
       process.kill(ready.pid, 0);
       replacementPid = ready.pid;
       return ready.session;
@@ -117,7 +127,10 @@ export function swapRuntime(ctx, adapters, spawn) {
       await down(ctx, [agent], adapters);
       signalProcesses(pids, "SIGKILL");
     },
-    async cancel(stage) { await down(ctx, [stage.label], adapters); },
+    async cancel(stage) {
+      await down(ctx, [stage.label], adapters);
+      await unregisterSwapStage(ctx.hub, ctx.project, `${stage.label}:${ctx.project}`);
+    },
     release(stage, persona, cursor) {
       writeRows(ctx, readRows(ctx).map(row => row.project === ctx.project && row.persona === stage.label ? { ...row, persona } : row));
       writeFileSync(runnerRecord(ctx, ctx.project, persona), JSON.stringify({ label: stage.label, dir: ctx.dir }));
@@ -154,7 +167,10 @@ export async function performSwap(ctx, options, runtime) {
   } catch (error) {
     if (!transferred) {
       if (frozen) await runtime.resume();
-      if (stage) await runtime.cancel(stage);
+      if (stage) {
+        try { await runtime.cancel(stage); }
+        catch (cleanupError) { error.message += `; replacement cleanup failed: ${cleanupError.message}`; }
+      }
     }
     result.reason = error.message;
     if (transferred) result.reason += "; handoff recorded on hub; old seat held for recovery";
