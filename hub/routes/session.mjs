@@ -70,11 +70,13 @@ export function createSessionRuntime({ state, markDirty, appendEvent, pushEventT
     const attachments = [];
     for (const a of raw) {
       const name = String(a?.name || "photo.jpg").slice(0, 120);
-      const data = a?.data;
-      if (typeof data !== "string" || !data.length || data.length > ATTACHMENT_B64_MAX
-        || !/^[A-Za-z0-9+/=\s]+$/.test(data)) return { error: "attachment must be base64 JPEG of 2 MB or less" };
-      let bytes;
-      try { bytes = Buffer.from(data, "base64"); } catch { return { error: "attachment must be base64 JPEG of 2 MB or less" }; }
+      // Coerce, then judge the value: any non-base64 or non-JPEG bytes dies at the magic check,
+      // so the wire shape never needs a runtime type probe.
+      const data = String(a?.data ?? "");
+      if (!data.length || data.length > ATTACHMENT_B64_MAX || !/^[A-Za-z0-9+/=\s]+$/.test(data)) {
+        return { error: "attachment must be base64 JPEG of 2 MB or less" };
+      }
+      const bytes = Buffer.from(data, "base64");
       if (!bytes.length || bytes.length > ATTACHMENT_BYTES_MAX || !bytes.subarray(0, 3).equals(JPEG_MAGIC)) {
         return { error: "attachment must be a JPEG of 2 MB or less" };
       }
