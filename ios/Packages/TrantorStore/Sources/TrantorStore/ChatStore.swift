@@ -49,6 +49,9 @@ public enum AnswerDelivery: Equatable, Sendable {
 @MainActor @Observable
 public final class ChatStore {
     public let project: String
+    /// The composer's unsent text. Lives here (one store per project, held by AppModel) so it
+    /// survives switching Chat/Board/Crew and leaving the project; each project keeps its own.
+    public var draft = ""
     public private(set) var snapshot = ChatSnapshot()
     public private(set) var outgoing: [OutgoingPrompt] = []
     public private(set) var freshness = Freshness()
@@ -382,5 +385,6 @@ public final class ChatStore {
         generation += 1
         api = nil; hasLiveSnapshot = false
         snapshot = ChatSnapshot(); outgoing = []; answers = [:]; answerReceipts = [:]; focusedToolID = nil
+        draft = ""
     }
 }

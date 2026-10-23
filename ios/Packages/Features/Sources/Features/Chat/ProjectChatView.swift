@@ -29,9 +29,10 @@ struct ProjectView: View {
 }
 
 struct ProjectChatView: View {
-    let store: ChatStore
+    // Bindable so the composer can hold `$store.draft`: the draft lives on the per-project
+    // ChatStore, so it survives switching Chat/Board/Crew and leaving the project.
+    @Bindable var store: ChatStore
     @Environment(\.scenePhase) private var scenePhase
-    @State private var draft = ""
     @State private var followingBottom = true
     @FocusState private var composing: Bool
 
@@ -129,16 +130,16 @@ struct ProjectChatView: View {
             } else if let error = store.sendError {
                 Text(error).font(.tCaption).foregroundStyle(Palette.down)
             }
-            if draft.utf16.count > 8000 {
+            if store.draft.utf16.count > 8000 {
                 Text("Keep your message under 8,000 characters.").font(.tCaption).foregroundStyle(Palette.amber)
             }
             HStack(alignment: .bottom, spacing: Space.sm) {
-                WellField("Message your orchestrator", text: $draft, axis: .vertical)
+                WellField("Message your orchestrator", text: $store.draft, axis: .vertical)
                     .lineLimit(1...5).focused($composing)
                     .accessibilityIdentifier("chat.composer")
                 Button {
-                    let text = draft
-                    Task { if await store.send(text), draft == text { draft = "" } }
+                    let text = store.draft
+                    Task { if await store.send(text), store.draft == text { store.draft = "" } }
                 } label: {
                     if store.sending { ProgressView().tint(Palette.onAccent) }
                     else { Image(systemName: "arrow.up") }
@@ -146,7 +147,7 @@ struct ProjectChatView: View {
                 .buttonStyle(.primary)
                 .accessibilityLabel("Send message")
                 .accessibilityIdentifier("chat.send")
-                .disabled(store.disabledReason != nil || store.sending || draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || draft.utf16.count > 8000)
+                .disabled(store.disabledReason != nil || store.sending || store.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || store.draft.utf16.count > 8000)
             }
         }
         .padding(Space.lg)

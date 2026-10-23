@@ -191,4 +191,20 @@ final class ChatStoreTests: XCTestCase {
         await store.refresh()
         XCTAssertEqual(store.turns.map(\.text), ["edited earlier", "tail changed"])
     }
+
+    func testDraftLivesOnTheStoreSurvivesRefreshAndStaysPerProject() async {
+        let hub = StubHub()
+        let model = AppModel(stub: hub, demo: true)
+        let store = model.chat(project: "a")
+        store.draft = "fix the gate"
+        model.chat(project: "b").draft = "ship it"
+        hub.chatsData = ["a": snapshot([turn(0, "row")])]
+        await store.refresh()
+        store.merge(snapshot([turn(0, "row"), turn(1, "more")]))
+        XCTAssertEqual(store.draft, "fix the gate")
+        XCTAssertEqual(model.chat(project: "b").draft, "ship it")
+        XCTAssertTrue(model.chat(project: "a") === store)
+        store.disconnect()
+        XCTAssertEqual(store.draft, "")
+    }
 }
