@@ -16,6 +16,7 @@ use tokio::sync::mpsc;
 mod crew;
 
 const WINDOW: usize = 400;
+const CLAIM_RENEW_INTERVAL: Duration = Duration::from_secs(30);
 const TICK: Duration = Duration::from_millis(1500);
 static ENABLED: OnceLock<AtomicBool> = OnceLock::new();
 static EVENTS: OnceLock<mpsc::UnboundedSender<RelayEvent>> = OnceLock::new();
@@ -135,6 +136,7 @@ impl AttachmentFetcher for LiveFetcher {
 const JPEG_MAGIC: [u8; 3] = [0xff, 0xd8, 0xff];
 // Mirrors the hub's per-image cap: the hub refuses uploads over 2 MiB, so anything larger in a
 // claim is not a photo this app sent (#12161 review: the download was previously uncapped).
+const ATTACHMENTS_MAX: usize = 4;
 const ATTACHMENT_BYTES_MAX: usize = 2 * 1024 * 1024;
 // Delivered images are read by the agent within minutes of the prompt landing; a day is a
 // generous TTL for the local copies (#12161 review: successful sends used to accumulate forever).
@@ -174,7 +176,10 @@ async fn download_attachments(
     prompt: &Value,
     dir: &Path,
 ) -> Result<Vec<PathBuf>, String> {
-    let metas = prompt["attachments"].as_array().cloned().unwrap_or_default();
+    let metas = prompt["attachments"].as_array().map(Vec::as_slice).unwrap_or_default();
+    if metas.len() > ATTACHMENTS_MAX {
+        return Err(format!("at most {ATTACHMENTS_MAX} attachments"));
+    }
     if metas.is_empty() {
         return Ok(Vec::new());
     }
@@ -203,6 +208,7 @@ async fn download_attachments(
         }
         let file = dir.join(format!("{stem}-{n}.jpg"));
         if let Err(e) = std::fs::write(&file, &bytes) {
+            let _ = std::fs::remove_file(&file);
             remove_files(&paths);
             return Err(e.to_string());
         }
@@ -512,10 +518,35 @@ where
     let mut result = match error {
         Some(error) if is_crew => crew::failure(error),
         Some(error) => json!({"outcome": "not_ready", "error": error}),
-        None => deliver(prompt.clone()).await,
+        None => execute_with_renewal(hub, host, &id, deliver(prompt.clone()), CLAIM_RENEW_INTERVAL).await,
     };
     result["id"] = id;
     Ok(Some(result))
+}
+
+// Keep claims alive while waiting for the project lock as well as while executing the operation.
+async fn execute_with_renewal(
+    hub: &impl Hub,
+    host: &str,
+    id: &Value,
+    operation: impl std::future::Future<Output = Value>,
+    interval: Duration,
+) -> Value {
+    tokio::pin!(operation);
+    let renewals = async {
+        loop {
+            tokio::time::sleep(interval).await;
+            let result = hub.request("POST", "/session/prompt/claim",
+                Some(json!({"id": id, "host": host, "renew": true}))).await;
+            if let Err(error) = result.and_then(|(status, body)| require_ok(status, &body)) {
+                eprintln!("phone relay claim renewal: {error}");
+            }
+        }
+    };
+    tokio::select! {
+        result = &mut operation => result,
+        _ = renewals => unreachable!(),
+    }
 }
 
 fn prompt_result(delivery: panes::PromptDelivery) -> Value {

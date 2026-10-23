@@ -727,3 +727,72 @@ fn attachments_past_the_ttl_are_pruned_and_fresh_ones_kept() {
     assert!(fresh.exists(), "the fresh file survives");
     std::fs::remove_dir_all(root).unwrap();
 }
+
+#[tokio::test]
+async fn more_than_four_attachments_stalls_before_any_fetch_or_directory_creation() {
+    let root = scratch("attach-count");
+    let dir = root.join("not-created");
+    let fetcher = FakeFetcher::new(vec![]);
+    let prompt = json!({"id": 42, "project": "trantor", "text": "five photos",
+        "attachments": vec![json!({"name": "a.jpg", "size": 64}); 5]});
+    let result = deliver_prompt_claimed(&fetcher, prompt, attach_seat(), &dir, |_, _| async {
+        panic!("an over-count claim must never be typed")
+    }).await;
+    assert_eq!(result["outcome"], "stalled");
+    assert!(result["error"].as_str().unwrap().contains("at most 4"));
+    assert!(fetcher.requests.lock().unwrap().is_empty());
+    assert!(!dir.exists());
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[tokio::test]
+async fn four_attachments_are_delivered() {
+    let dir = scratch("attach-four");
+    let fetcher = FakeFetcher::new(vec![Ok((200, jpeg(64))); 4]);
+    let prompt = json!({"id": 42, "attachments": vec![json!({"name": "a.jpg", "size": 64}); 4]});
+    let paths = download_attachments(&fetcher, &prompt, &dir).await.unwrap();
+    assert_eq!(paths.len(), 4);
+    assert!(paths.iter().all(|p| p.exists()));
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[tokio::test]
+async fn claim_renewals_continue_during_lock_wait_and_execution() {
+    struct RenewHub {
+        requests: Mutex<Vec<Value>>,
+        renewed: tokio::sync::Notify,
+    }
+    impl Hub for RenewHub {
+        async fn request(&self, method: &str, path: &str, body: Option<Value>) -> Result<(u16, Value), String> {
+            assert_eq!((method, path), ("POST", "/session/prompt/claim"));
+            let body = body.unwrap();
+            assert_eq!(body, json!({"id": 42, "host": "mac", "renew": true}));
+            self.requests.lock().unwrap().push(body);
+            self.renewed.notify_one();
+            Ok((200, json!({"ok": true})))
+        }
+    }
+    let hub = RenewHub { requests: Mutex::new(Vec::new()), renewed: tokio::sync::Notify::new() };
+    let mut locks = HashMap::new();
+    let lock = project_lock(&mut locks, "trantor");
+    let guard = lock.lock().await;
+    let operation = async {
+        let _guard = lock.lock().await;
+        hub.renewed.notified().await;
+        json!({"outcome": "delivered"})
+    };
+    let unlock = async {
+        hub.renewed.notified().await;
+        drop(guard);
+    };
+    let id = json!(42);
+    let run = execute_with_renewal(&hub, "mac", &id, operation, Duration::from_millis(5));
+    let (result, ()) = tokio::time::timeout(Duration::from_secs(2), async {
+        tokio::join!(run, unlock)
+    }).await.unwrap();
+    assert_eq!(result["outcome"], "delivered");
+    let count = hub.requests.lock().unwrap().len();
+    assert!(count >= 2, "both lock wait and execution need renewal");
+    tokio::time::sleep(Duration::from_millis(15)).await;
+    assert_eq!(hub.requests.lock().unwrap().len(), count, "renewals end with delivery");
+}
