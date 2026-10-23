@@ -117,7 +117,7 @@ Decided 2026-10-22: the hub stays on netcup (it is the record; no move to Cloudf
 - **`/health` on both ports** reports `publicUrl` (from `RELAY_PUBLIC_URL`) so clients learn the public address.
 - **Pairing:** `trantor pair` and the desktop's Pair a phone put the public URL in the link (`hub=https://netcup-qdrant.tail0f2afd.ts.net`), taken from the hub's `/health` `publicUrl`, and fall back to the tailnet address when the hub has none. `--tailnet` forces the tailnet address.
 - **The phone** treats an https hub as reachable without Tailscale: onboarding's Connect page says "Check your internet connection" instead of "Turn on Tailscale" for a public hub. Settings shows the hub address and offers "Use the public address" when a paired phone is on the tailnet one and the hub reports a `publicUrl` (re-registering the same key; no re-pair needed, since signatures don't depend on the host).
-- **netcup:** `tailscale funnel --bg --https=443 http://127.0.0.1:4478`, and the systemd unit gets `RELAY_PUBLIC_PORT=4478` and `RELAY_PUBLIC_URL=https://netcup-qdrant.tail0f2afd.ts.net`.
+- **netcup (live since 2026-10-23):** `tailscale funnel --bg --https=443 http://127.0.0.1:4478`, and the systemd drop-in `trantor-hub.service.d/public.conf` sets `RELAY_PUBLIC_PORT=4478` and `RELAY_PUBLIC_URL=https://netcup-qdrant.tail0f2afd.ts.net`. To take the front door down: `tailscale funnel --https=443 off` and remove `RELAY_PUBLIC_URL` (pairing then falls back to the tailnet address).
 
 ## Onboarding (v1.1, card #12129)
 
