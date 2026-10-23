@@ -12,6 +12,8 @@ const PROMPT_CAP = 200;
 const PROMPT_TEXT_MAX = 8000;
 const EVENT_TEXT_MAX = 500;
 const PROMPT_TTL_MS = Number(process.env.RELAY_PROMPT_TTL_MS || 120000);
+// Claims cover the desktop's 240s crew timeout plus ack slack; heartbeats cover lock waits.
+const CLAIM_TTL_MS = 300000;
 const PROMPT_SWEEP_MS = Number(process.env.RELAY_PROMPT_SWEEP_MS || 30000);
 const EXPIRED_REASON = "No Mac is relaying this project. Is the Trantor app open?";
 const CLAIMED_EXPIRED_REASON = "The Mac claimed this prompt but never delivered it. Try sending it again.";
@@ -98,16 +100,13 @@ export function createSessionRuntime({ state, markDirty, appendEvent, pushEventT
     });
   }
 
-  // A prompt queued past the TTL means no relay claimed it; a CLAIMED prompt past the TTL means
-  // the relay claimed it and died before its ack (#12161 review) — left alone, its attachment
-  // bytes would survive every sweep forever. Expiry is lazy (on read) plus a sweep that is a
-  // no-op when nothing is queued-or-claimed, so an idle hub does no work.
+  // Queued work expires quickly; claimed work keeps its bytes while the relay renews its lease.
   function expireQueued() {
     let changed = false;
     for (const p of state.sessionPrompts) {
-      const from = p.status === "queued" ? p.ts : p.status === "claimed" ? p.claimedAt : 0;
-      if (!from || now() - from <= PROMPT_TTL_MS) continue;
       const claimed = p.status === "claimed";
+      const from = p.status === "queued" ? p.ts : claimed ? (p.renewedAt || p.claimedAt) : 0;
+      if (!from || now() - from <= (claimed ? CLAIM_TTL_MS : PROMPT_TTL_MS)) continue;
       p.status = "expired"; p.outcome = "expired";
       p.error = claimed ? CLAIMED_EXPIRED_REASON : EXPIRED_REASON;
       unlinkAttachments(p);
@@ -405,6 +404,15 @@ export function createSessionRuntime({ state, markDirty, appendEvent, pushEventT
       expireQueued();
       const p = findPrompt(b.id);
       if (!p) return json(res, 404, { error: "prompt not found" });
+      // Renewal never grants a second delivery; only the original host can extend a live claim.
+      if (b.renew === true) {
+        if (p.status !== "claimed" || p.host !== String(b.host || "").slice(0, 120)) {
+          return json(res, 409, { error: "no matching live claim", status: p.status });
+        }
+        p.renewedAt = now();
+        markDirty();
+        return json(res, 200, { ok: true });
+      }
       // The first claim wins; a second claim — even from the same host — gets 409.
       if (p.status !== "queued") return json(res, 409, { error: `prompt already ${p.status}`, status: p.status });
       p.status = "claimed"; p.host = String(b.host || "").slice(0, 120); p.claimedAt = now();

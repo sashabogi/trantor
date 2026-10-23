@@ -3,7 +3,7 @@
 // restart semantics, scope, first-claim-wins, ack outcomes, expiry, stream scope, audit events.
 // #12137: /session/answer queues as kind "answer" (ack gains "stale"); unanswered ask blocks
 // raise one ask.opened push per toolId, cleared by ask.answered.
-import { mkdtempSync, mkdirSync, readdirSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
@@ -324,6 +324,9 @@ console.log("# photo attachments on the prompt queue");
     await sFetch(base, owner, "POST", "/session/prompt/claim", { id: abandoned, host: "mac" });
     await sleep(1300);   // let the JSON store's 1s persist tick land the claim before the kill
     await hub.stop();
+    const persisted = JSON.parse(readFileSync(join(attachDir, "bus.json"), "utf8"));
+    persisted.sessionPrompts.find(p => p.id === abandoned).claimedAt = Date.now() - 301000;
+    writeFileSync(join(attachDir, "bus.json"), JSON.stringify(persisted));
     hub = await startTestHub({ dir: attachDir, env: { ...env, RELAY_PROMPT_TTL_MS: "800", RELAY_PROMPT_SWEEP_MS: "300" } });
     base = hub.base;
     await sleep(1300);
@@ -442,6 +445,43 @@ console.log("# ask push wiring on the chat mirror");
   await sleep(20);
   ok("a session switch re-arms the dedupe", pushed.length === 4 && pushed[3].type === "ask.opened" && pushed[3].toolId === "toolu_1", `got ${pushed.length}`);
   ok("ask events never touch the audit log", !logged.some(t => String(t).startsWith("ask.")), logged.join(","));
+}
+// Claim leases must cover both the crew execution window and prompts waiting behind its lock.
+{
+  const state = { sessionPrompts: [], sessionPromptSeq: 0 };
+  const events = [];
+  const runtime = createSessionRuntime({ state, markDirty() {}, appendEvent: (...args) => events.push(args), pushEventToStreams() {} });
+  async function call(path, body = {}, method = "POST") {
+    let out;
+    await runtime.route({ req: { method }, res: {}, q: body, P: path, auth: { identity: { name: "mac" } },
+      ctx: { body: async () => body, json: (_res, code, value) => { out = { code, value }; return true; }, canon: x => x } });
+    return out;
+  }
+  for (const kind of ["crew", "prompt"]) {
+    for (const seconds of [200, 240]) {
+      const row = { id: ++state.sessionPromptSeq, project: "projA", kind, text: "live", status: "claimed", host: "mac", claimedAt: Date.now() - seconds * 1000 };
+      state.sessionPrompts.push(row);
+      const read = await call("/session/prompt", { id: row.id }, "GET");
+      ok(`${seconds}s ${kind} claim survives a sweep`, read.value.status === "claimed", JSON.stringify(read));
+      const ack = await call("/session/prompt/ack", { id: row.id, outcome: kind === "crew" ? "done" : "delivered" });
+      ok(`${seconds}s ${kind} claim acks successfully`, ack.code === 200, JSON.stringify(ack));
+    }
+  }
+  const waiting = { id: ++state.sessionPromptSeq, project: "projA", status: "claimed", host: "mac", claimedAt: Date.now() - 240000 };
+  state.sessionPrompts.push(waiting);
+  let result = await call("/session/prompt/claim", { id: waiting.id, host: "other", renew: true });
+  ok("another host cannot renew a claim", result.code === 409 && !waiting.renewedAt);
+  result = await call("/session/prompt/claim", { id: waiting.id, host: "mac", renew: true });
+  ok("the claiming host can renew without receiving another delivery payload", result.code === 200 && !result.value.prompt && waiting.renewedAt > 0);
+  waiting.claimedAt = Date.now() - 600000;
+  result = await call("/session/prompt", { id: waiting.id }, "GET");
+  ok("renewals keep lock-waiting work live beyond its original lease", result.value.status === "claimed");
+  waiting.renewedAt = Date.now() - 301000;
+  result = await call("/session/prompt", { id: waiting.id }, "GET");
+  ok("an abandoned renewed claim eventually expires", result.value.status === "expired");
+  result = await call("/session/prompt/claim", { id: waiting.id, host: "mac", renew: true });
+  ok("renewal cannot resurrect an expired claim", result.code === 409);
+  ok("only the abandoned claim emits an expiry event", events.length === 5 && events.filter(e => e[0] === "chat.prompt.failed").length === 1);
 }
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
