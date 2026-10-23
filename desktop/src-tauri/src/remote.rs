@@ -116,6 +116,110 @@ fn require_ok(status: u16, body: &Value) -> Result<(), String> {
     }
 }
 
+// #12161: a claimed prompt may carry photo attachments. The hub stores the bytes; the relay
+// downloads them to ~/.agent-bus/attachments/<project>/<id>-<n>.jpg and appends the absolute
+// paths to the prompt text — Claude Code reads image paths it is named.
+trait AttachmentFetcher {
+    fn fetch(&self, path: &str) -> impl std::future::Future<Output = Result<(u16, Vec<u8>), String>> + Send;
+}
+
+struct LiveFetcher {
+    base: String,
+}
+impl AttachmentFetcher for LiveFetcher {
+    async fn fetch(&self, path: &str) -> Result<(u16, Vec<u8>), String> {
+        identity::request_bytes(&hub::owner_identity(), &self.base, path).await
+    }
+}
+
+const JPEG_MAGIC: [u8; 3] = [0xff, 0xd8, 0xff];
+
+fn sanitize_file_stem(raw: &str) -> String {
+    // Alphanumeric, dash and underscore only: the stem joins a fixed directory as ONE component,
+    // so no separator (and no "..") can ever survive into a path.
+    let cleaned: String = raw
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() || matches!(c, '-' | '_') { c } else { '_' })
+        .collect();
+    if cleaned.is_empty() { "prompt".into() } else { cleaned }
+}
+
+fn prompt_id_string(prompt: &Value) -> String {
+    match &prompt["id"] {
+        Value::Number(n) => n.to_string(),
+        Value::String(s) => s.clone(),
+        _ => String::new(),
+    }
+}
+
+fn attachments_dir(project: &str) -> PathBuf {
+    crate::desktop_bus_dir().join("attachments").join(project)
+}
+
+async fn download_attachments(
+    fetcher: &impl AttachmentFetcher,
+    prompt: &Value,
+    dir: &Path,
+) -> Result<Vec<PathBuf>, String> {
+    let metas = prompt["attachments"].as_array().cloned().unwrap_or_default();
+    if metas.is_empty() {
+        return Ok(Vec::new());
+    }
+    let id = prompt_id_string(prompt);
+    let stem = sanitize_file_stem(&id);
+    std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+    let mut paths = Vec::new();
+    for n in 0..metas.len() {
+        let (status, bytes) = fetcher.fetch(&format!("/session/attachment?id={id}&n={n}")).await?;
+        if status != 200 {
+            return Err(format!("hub HTTP {status} fetching attachment {n}"));
+        }
+        if !bytes.starts_with(&JPEG_MAGIC) {
+            return Err(format!("attachment {n} is not a JPEG"));
+        }
+        let file = dir.join(format!("{stem}-{n}.jpg"));
+        std::fs::write(&file, &bytes).map_err(|e| e.to_string())?;
+        paths.push(file);
+    }
+    Ok(paths)
+}
+
+fn prompt_with_attachments(text: &str, files: &[PathBuf]) -> String {
+    if files.is_empty() {
+        return text.to_string();
+    }
+    let list = files
+        .iter()
+        .map(|p| p.display().to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+    format!("{text}\n\nAttached images:\n{list}")
+}
+
+async fn deliver_prompt_claimed<F, Fut>(
+    fetcher: &impl AttachmentFetcher,
+    prompt: Value,
+    seat: local_sessions::HerdrSeat,
+    dir: &Path,
+    deliver: F,
+) -> Value
+where
+    F: FnOnce(String, String) -> Fut,
+    Fut: std::future::Future<Output = panes::PromptDelivery>,
+{
+    let files = match download_attachments(fetcher, &prompt, dir).await {
+        Ok(files) => files,
+        Err(error) => {
+            return prompt_result(panes::PromptDelivery {
+                outcome: "stalled",
+                error: Some(format!("The photo could not be fetched from your hub; nothing was typed. {error}")),
+            });
+        }
+    };
+    let text = prompt_with_attachments(prompt["text"].as_str().unwrap_or_default(), &files);
+    prompt_result(deliver(seat.surface.clone(), text).await)
+}
+
 fn hub_base(project: &str) -> String {
     identity::hub_for_project(project)
         .trim_end_matches('/')
@@ -448,7 +552,7 @@ fn queued_path(project: &str) -> Result<String, String> {
     ))
 }
 
-async fn deliver_claimed(prompt: Value, seat: local_sessions::HerdrSeat) -> Value {
+async fn deliver_claimed(prompt: Value, seat: local_sessions::HerdrSeat, base: String) -> Value {
     if prompt["kind"] == "crew" {
         return crew::deliver(&prompt, &seat, enabled(), &crew::LiveRunner).await;
     }
@@ -468,27 +572,44 @@ async fn deliver_claimed(prompt: Value, seat: local_sessions::HerdrSeat) -> Valu
             .await,
         );
     }
-    let text = prompt["text"].as_str().unwrap_or_default().to_string();
-    prompt_result(
-        tokio::task::spawn_blocking(move || {
-            if !enabled().load(Ordering::SeqCst) {
-                return panes::PromptDelivery {
-                    outcome: "not_ready",
-                    error: Some("Phone relay is off; nothing was typed.".into()),
-                };
-            }
-            if still_hosted(&seat) {
-                panes::deliver_prompt(&seat.surface, &text)
-            } else {
-                panes::prompt_delivery(Ok(herdr::PromptOutcome::NoAgent))
-            }
-        })
-        .await
-        .unwrap_or_else(|error| panes::PromptDelivery {
-            outcome: "stalled",
-            error: Some(error.to_string()),
-        }),
+    let dir = attachments_dir(&prompt_project(&prompt));
+    deliver_prompt_claimed(
+        &LiveFetcher { base },
+        prompt,
+        seat,
+        &dir,
+        |surface, text| async move {
+            tokio::task::spawn_blocking(move || {
+                if !enabled().load(Ordering::SeqCst) {
+                    return panes::PromptDelivery {
+                        outcome: "not_ready",
+                        error: Some("Phone relay is off; nothing was typed.".into()),
+                    };
+                }
+                if still_hosted_surface(&surface) {
+                    panes::deliver_prompt(&surface, &text)
+                } else {
+                    panes::prompt_delivery(Ok(herdr::PromptOutcome::NoAgent))
+                }
+            })
+            .await
+            .unwrap_or_else(|error| panes::PromptDelivery {
+                outcome: "stalled",
+                error: Some(error.to_string()),
+            })
+        },
     )
+    .await
+}
+
+fn prompt_project(prompt: &Value) -> String {
+    prompt["project"].as_str().unwrap_or_default().to_string()
+}
+
+fn still_hosted_surface(surface: &str) -> bool {
+    hosted()
+        .ok()
+        .is_some_and(|seats| seats.iter().any(|s| s.surface == surface))
 }
 
 fn still_hosted(seat: &local_sessions::HerdrSeat) -> bool {
@@ -614,9 +735,12 @@ async fn prompt_worker(mut events: mpsc::UnboundedReceiver<RelayEvent>) {
                         id,
                         enabled(),
                         &seats,
-                        move |prompt, seat| async move {
-                            let _guard = lock.lock().await;
-                            deliver_claimed(prompt, seat).await
+                        {
+                            let base = base.clone();
+                            move |prompt, seat| async move {
+                                let _guard = lock.lock().await;
+                                deliver_claimed(prompt, seat, base).await
+                            }
                         },
                     )
                     .await;

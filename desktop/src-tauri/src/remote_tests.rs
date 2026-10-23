@@ -440,8 +440,7 @@ async fn answer_claim_does_not_require_text() {
 }
 
 #[tokio::test]
-async fn answer_requires_matching_single_live_question_and_stale_types_nothing() {
-    let dir = scratch("answer");
+async fn answer_requires_matching_single_live_question_and_stale_types_nothing() {    let dir = scratch("answer");
     let prompt = json!({"session":"sid", "toolId":"ask-1", "picks":[1]});
     let question = json!({"question":"Ship?", "options":[{"label":"Yes"},{"label":"No"}]});
     let path = dir.join("sid.json");
@@ -514,4 +513,136 @@ fn published_ask_gains_answer_when_result_arrives_in_later_snapshot() {
     assert_eq!(payload["turns"][0]["idx"], 0);
     assert_eq!(payload["turns"][0]["blocks"][0]["answer"], "No");
     std::fs::remove_dir_all(dir).unwrap();
+}
+
+// ---- photo attachments: download on claim, paths appended to the prompt (#12161) ----
+
+struct FakeFetcher {
+    replies: Mutex<VecDeque<Result<(u16, Vec<u8>), String>>>,
+    requests: Mutex<Vec<String>>,
+}
+impl FakeFetcher {
+    fn new(replies: Vec<Result<(u16, Vec<u8>), String>>) -> Self {
+        Self {
+            replies: Mutex::new(replies.into_iter().collect()),
+            requests: Mutex::new(Vec::new()),
+        }
+    }
+}
+impl AttachmentFetcher for FakeFetcher {
+    async fn fetch(&self, path: &str) -> Result<(u16, Vec<u8>), String> {
+        self.requests.lock().unwrap().push(path.into());
+        self.replies
+            .lock()
+            .unwrap()
+            .pop_front()
+            .expect("unexpected attachment fetch")
+    }
+}
+
+fn jpeg(len: usize) -> Vec<u8> {
+    let mut bytes = vec![0u8; len];
+    bytes[0] = 0xff;
+    bytes[1] = 0xd8;
+    bytes[2] = 0xff;
+    bytes
+}
+
+fn attach_seat() -> local_sessions::HerdrSeat {
+    local_sessions::HerdrSeat {
+        project: "trantor".into(),
+        agent: "op".into(),
+        surface: "pane-1".into(),
+        kind: "orch".into(),
+    }
+}
+
+#[tokio::test]
+async fn claimed_attachments_download_and_the_prompt_names_existing_files() {
+    let dir = scratch("attach");
+    let fetcher = FakeFetcher::new(vec![Ok((200, jpeg(64))), Ok((200, jpeg(32)))]);
+    let prompt = json!({"id": 42, "project": "trantor", "text": "look at this",
+        "attachments": [{"name": "a.jpg", "size": 64}, {"name": "b.jpg", "size": 32}]});
+    let delivered = Arc::new(Mutex::new(Vec::<String>::new()));
+    let captured = delivered.clone();
+    let body = deliver_prompt_claimed(&fetcher, prompt, attach_seat(), &dir, move |surface, text| async move {
+        assert_eq!(surface, "pane-1");
+        captured.lock().unwrap().push(text);
+        panes::PromptDelivery { outcome: "delivered", error: None }
+    })
+    .await;
+    assert_eq!(body["outcome"], "delivered");
+    let text = delivered.lock().unwrap()[0].clone();
+    assert!(
+        text.starts_with("look at this\n\nAttached images:\n"),
+        "prompt text was not preserved: {text}"
+    );
+    let paths: Vec<PathBuf> = text
+        .lines()
+        .filter(|line| line.starts_with('/'))
+        .map(PathBuf::from)
+        .collect();
+    assert_eq!(paths.len(), 2, "one line per attachment: {text}");
+    assert!(paths.iter().all(|p| p.is_absolute() && p.exists()), "{text}");
+    assert_eq!(std::fs::read(&paths[0]).unwrap(), jpeg(64));
+    assert_eq!(std::fs::read(&paths[1]).unwrap(), jpeg(32));
+    assert_eq!(
+        *fetcher.requests.lock().unwrap(),
+        vec![
+            "/session/attachment?id=42&n=0".to_string(),
+            "/session/attachment?id=42&n=1".to_string()
+        ]
+    );
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[tokio::test]
+async fn a_failed_or_non_jpeg_attachment_stalls_delivery_and_types_nothing() {
+    let dir = scratch("attach-bad");
+    let fetcher = FakeFetcher::new(vec![Ok((404, Vec::new()))]);
+    let prompt = json!({"id": 7, "project": "trantor", "text": "hello",
+        "attachments": [{"name": "a.jpg", "size": 64}]});
+    let body = deliver_prompt_claimed(&fetcher, prompt, attach_seat(), &dir, |_surface, _text| async {
+        panic!("a failed download must not deliver")
+    })
+    .await;
+    assert_eq!(body["outcome"], "stalled");
+    assert!(body["error"].as_str().unwrap().contains("nothing was typed"));
+
+    let fetcher = FakeFetcher::new(vec![Ok((200, b"\x89PNG-not-a-jpeg".to_vec()))]);
+    let prompt = json!({"id": 8, "project": "trantor", "text": "hello",
+        "attachments": [{"name": "a.jpg", "size": 15}]});
+    let body = deliver_prompt_claimed(&fetcher, prompt, attach_seat(), &dir, |_surface, _text| async {
+        panic!("non-JPEG bytes must not deliver")
+    })
+    .await;
+    assert_eq!(body["outcome"], "stalled");
+    assert!(body["error"].as_str().unwrap().contains("not a JPEG"));
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[tokio::test]
+async fn a_prompt_without_attachments_types_its_plain_text() {
+    let dir = scratch("attach-none");
+    let fetcher = FakeFetcher::new(vec![]);
+    let prompt = json!({"id": 9, "project": "trantor", "text": "plain prompt"});
+    let delivered = Arc::new(Mutex::new(Vec::<String>::new()));
+    let captured = delivered.clone();
+    let body = deliver_prompt_claimed(&fetcher, prompt, attach_seat(), &dir, move |_surface, text| async move {
+        captured.lock().unwrap().push(text);
+        panes::PromptDelivery { outcome: "delivered", error: None }
+    })
+    .await;
+    assert_eq!(body["outcome"], "delivered");
+    assert_eq!(delivered.lock().unwrap()[0], "plain prompt");
+    assert!(fetcher.requests.lock().unwrap().is_empty());
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn attachment_file_stems_are_filesystem_safe() {
+    assert_eq!(sanitize_file_stem("42"), "42");
+    assert_eq!(sanitize_file_stem("prompt-1"), "prompt-1");
+    assert_eq!(sanitize_file_stem("../etc/passwd"), "___etc_passwd");
+    assert_eq!(sanitize_file_stem(""), "prompt");
 }

@@ -482,6 +482,23 @@ pub async fn request(identity: &str, base: &str, method: &str, path: &str, body:
     Ok((status, text))
 }
 
+/// The same signed request, but the body stays bytes — prompt attachments (#12161) are JPEGs,
+/// and a text round-trip would corrupt them.
+pub async fn request_bytes(identity: &str, base: &str, path: &str) -> Result<(u16, Vec<u8>), String> {
+    let headers = sign(identity, "GET", path, None)?;
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(30))
+        .redirect(reqwest::redirect::Policy::none())
+        .build().map_err(|e| e.to_string())?;
+    let url = format!("{}{}", base.trim_end_matches('/'), path);
+    let mut req = client.get(&url);
+    for (k, v) in headers { req = req.header(k, v); }
+    let res = req.send().await.map_err(|e| format!("{e}"))?;
+    let status = res.status().as_u16();
+    let bytes = res.bytes().await.map_err(|e| e.to_string())?.to_vec();
+    Ok((status, bytes))
+}
+
 /// The hub's SSE stream, each event handed to `on_event`. In Rust for the same ATS reason as
 /// request(). Reconnect is ours: capped backoff, and `since` resumes from the last id so nothing drops.
 pub async fn stream(identity: &str, base: &str, mut on_event: impl FnMut(String), mut on_connect: impl FnMut()) {
