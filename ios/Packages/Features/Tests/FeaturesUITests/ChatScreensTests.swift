@@ -6,7 +6,7 @@ final class ChatScreensTests: XCTestCase {
         app.launchArguments = ["-demo", "-project", "trantor"]
         app.launch()
         defer { app.terminate() }
-        XCTAssertTrue(app.staticTexts["Context 21%"].waitForExistence(timeout: 10))
+        XCTAssertTrue(app.staticTexts["Context use"].waitForExistence(timeout: 10))
         XCTAssertTrue(app.staticTexts["The focused tests pass. I'm checking how live replies appear on the iPad."].exists)
         let composer = app.textFields["chat.composer"].exists ? app.textFields["chat.composer"] : app.textViews["chat.composer"]
         XCTAssertTrue(composer.waitForExistence(timeout: 5))
@@ -27,7 +27,7 @@ final class ChatScreensTests: XCTestCase {
         project.tap()
         let composer = app.textFields["chat.composer"].exists ? app.textFields["chat.composer"] : app.textViews["chat.composer"]
         XCTAssertTrue(composer.waitForExistence(timeout: 8))
-        XCTAssertTrue(app.staticTexts["Context 21%"].exists)
+        XCTAssertTrue(app.staticTexts["Context use"].exists)
         XCTAssertTrue(app.buttons["chat.ask.option.demo-project-question.0"].exists)
         XCTAssertFalse(app.buttons["chat.send"].isEnabled)
         capture("project-chat")
@@ -37,7 +37,7 @@ final class ChatScreensTests: XCTestCase {
         app.buttons["chat.send"].tap()
         XCTAssertTrue(app.staticTexts["Queued"].waitForExistence(timeout: 5))
         capture("prompt-queued")
-        app.buttons["chat.hide-keyboard"].tap()
+        app.swipeDown()   // the transcript dismisses the keyboard interactively; there is no keyboard toolbar
         app.buttons["Board"].tap()
         XCTAssertTrue(app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "iOS companion: the full build")).firstMatch.waitForExistence(timeout: 8))
         app.terminate()
@@ -53,6 +53,30 @@ final class ChatScreensTests: XCTestCase {
         XCTAssertTrue(app.staticTexts["No Mac is relaying this project. Open Trantor on your Mac."].waitForExistence(timeout: 8))
         XCTAssertFalse(app.buttons["chat.send"].isEnabled)
         app.terminate()
+    }
+
+    // The operator's real path: no -project/-section shortcut. The keyboard belongs to a tap on
+    // the composer only — opening the chat, switching to Crew and back must never raise it.
+    @MainActor func testChatOpensAndSwitchesSectionsWithoutKeyboardUntilComposerTap() {
+        let app = XCUIApplication()
+        app.launchArguments = ["-demo", "-tab", "projects"]
+        app.launch()
+        defer { app.terminate() }
+        let project = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "trantor")).firstMatch
+        XCTAssertTrue(project.waitForExistence(timeout: 10))
+        project.tap()
+        let composer = app.textFields["chat.composer"].exists ? app.textFields["chat.composer"] : app.textViews["chat.composer"]
+        XCTAssertTrue(composer.waitForExistence(timeout: 8))
+        XCTAssertFalse(app.keyboards.firstMatch.waitForExistence(timeout: 2))
+        app.buttons["Crew"].tap()
+        XCTAssertTrue(app.buttons["crew.add"].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.keyboards.firstMatch.waitForExistence(timeout: 2))
+        app.buttons["Chat"].tap()
+        XCTAssertTrue(composer.waitForExistence(timeout: 5))
+        XCTAssertFalse(app.keyboards.firstMatch.waitForExistence(timeout: 2))
+        composer.tap()
+        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 8))
+        capture("chat-keyboard-on-tap")
     }
 
     @MainActor private func capture(_ name: String) {

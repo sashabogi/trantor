@@ -104,6 +104,8 @@ struct ProjectChatView: View {
             guard scenePhase == .active else { return }
             await store.follow()
         }
+        // Leaving the chat (section switch or nav pop) drops the keyboard, so returning can't restore focus.
+        .onDisappear { composing = false }
     }
 
     private func scrollToQuestion(_ proxy: ScrollViewProxy) {
