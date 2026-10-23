@@ -10,21 +10,30 @@ struct ProjectView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            PillPicker([("chat", "Chat"), ("board", "Board"), ("crew", "Crew")], selection: $section)
-                .padding(.horizontal, Space.lg).padding(.vertical, Space.sm)
-                .onAppear {
-                    if let wanted = model.openProjectSection { section = wanted; model.openProjectSection = nil }
-                }
             if section == "chat" { ProjectChatView(store: model.chat(project: project)) }
             else if section == "board" { BoardView(project: project) }
             else { CrewView(store: model.crew(project: project)) }
         }
         .stage()
+        .onAppear {
+            if let wanted = model.openProjectSection { section = wanted; model.openProjectSection = nil }
+        }
         .onChange(of: model.chat(project: project).focusedToolID, initial: true) { _, target in
             if target != nil { section = "chat" }
         }
         .navigationTitle(project)
         .navigationBarTitleDisplayMode(.inline)
+        // The Chat/Board/Crew picker lives in the nav bar so the transcript starts high on screen.
+        .toolbar {
+            ToolbarItem(placement: .principal) {
+                HStack(spacing: Space.md) {
+                    Text(project)
+                        .font(.ui(14, .semibold, relativeTo: .callout))
+                        .foregroundStyle(Palette.text).lineLimit(1)
+                    PillPicker([("chat", "Chat"), ("board", "Board"), ("crew", "Crew")], selection: $section)
+                }
+            }
+        }
     }
 }
 
@@ -34,6 +43,8 @@ struct ProjectChatView: View {
     @Bindable var store: ChatStore
     @Environment(\.scenePhase) private var scenePhase
     @State private var followingBottom = true
+    // The keyboard belongs to a deliberate tap on the composer: nothing here ever sets `composing`
+    // programmatically (no autofocus on appear); a transcript tap or drag ends it.
     @FocusState private var composing: Bool
 
     var body: some View {
@@ -74,6 +85,7 @@ struct ProjectChatView: View {
                 }
                 .defaultScrollAnchor(.bottom)
                 .scrollDismissesKeyboard(.interactively)
+                .onTapGesture { composing = false }
                 .onChange(of: store.focusedToolID, initial: true) { _, _ in scrollToQuestion(proxy) }
                 .onChange(of: store.turns) { _, _ in
                     if store.focusedToolID != nil { scrollToQuestion(proxy) }
@@ -102,25 +114,21 @@ struct ProjectChatView: View {
         store.focusedToolID = nil
     }
 
+    // One slim line: model on the left, context share on the right. Amber past 80%.
     private var header: some View {
-        HStack(spacing: Space.md) {
-            VStack(alignment: .leading, spacing: Space.xs) {
-                Eyebrow("Session")
-                Text(store.snapshot.meta.model.isEmpty ? "Orchestrator" : store.snapshot.meta.model)
-                    .font(.tDataSmall).foregroundStyle(Palette.text2).lineLimit(1)
-            }
+        HStack(spacing: Space.sm) {
+            Text(store.snapshot.meta.model.isEmpty ? "Orchestrator" : store.snapshot.meta.model)
+                .font(.tCaption).foregroundStyle(Palette.text2).lineLimit(1)
             Spacer()
-            VStack(alignment: .trailing, spacing: Space.xs) {
-                if let fraction = store.snapshot.meta.context.fraction {
-                    Text("Context \(Int(min(fraction, 1) * 100))%")
-                        .font(.tDataSmall).foregroundStyle(Palette.text2)
-                    ProgressView(value: min(1, fraction)).tint(fraction >= 0.8 ? Palette.amber : Palette.accent).frame(width: 112)
-                        .accessibilityLabel("Context use").accessibilityValue("\(Int(min(fraction, 1) * 100)) percent")
-                } else {
-                    Text("Context —").font(.tDataSmall).foregroundStyle(Palette.textDim)
-                }
+            if let fraction = store.snapshot.meta.context.fraction {
+                Text("Context \(Int(min(fraction, 1) * 100))%")
+                    .font(.tCaption)
+                    .foregroundStyle(fraction >= 0.8 ? Palette.amber : Palette.text2)
+                    .accessibilityLabel("Context use").accessibilityValue("\(Int(min(fraction, 1) * 100)) percent")
+            } else {
+                Text("Context —").font(.tCaption).foregroundStyle(Palette.textDim)
             }
-        }.padding(.horizontal, Space.lg).padding(.vertical, Space.sm)
+        }.padding(.horizontal, Space.lg).padding(.vertical, Space.xs)
     }
 
     private var composer: some View {
