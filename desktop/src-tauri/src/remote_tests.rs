@@ -646,3 +646,84 @@ fn attachment_file_stems_are_filesystem_safe() {
     assert_eq!(sanitize_file_stem("../etc/passwd"), "___etc_passwd");
     assert_eq!(sanitize_file_stem(""), "prompt");
 }
+
+// ---- #12161 review fixes: byte cap, path components, TTL cleanup + rollback ----
+
+#[tokio::test]
+async fn an_attachment_over_the_byte_cap_stalls_and_leaves_no_files() {
+    let dir = scratch("attach-cap");
+    let fetcher = FakeFetcher::new(vec![Ok((200, jpeg(ATTACHMENT_BYTES_MAX + 1)))]);
+    let prompt = json!({"id": 60, "project": "trantor", "text": "huge",
+        "attachments": [{"name": "a.jpg", "size": 99999999}]});
+    let body = deliver_prompt_claimed(&fetcher, prompt, attach_seat(), &dir, |_surface, _text| async {
+        panic!("an over-cap attachment must not deliver")
+    })
+    .await;
+    assert_eq!(body["outcome"], "stalled");
+    assert!(
+        body["error"].as_str().unwrap().contains("byte cap"),
+        "the error names the cap: {:?}",
+        body["error"]
+    );
+    let left: Vec<_> = std::fs::read_dir(&dir)
+        .unwrap()
+        .flatten()
+        .map(|e| e.file_name())
+        .collect();
+    assert!(left.is_empty(), "over-cap download left files behind: {left:?}");
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[tokio::test]
+async fn a_failed_second_download_removes_the_first_image() {
+    let dir = scratch("attach-rollback");
+    let fetcher = FakeFetcher::new(vec![Ok((200, jpeg(64))), Err("hub went away".into())]);
+    let prompt = json!({"id": 61, "project": "trantor", "text": "two pics",
+        "attachments": [{"name": "a.jpg", "size": 64}, {"name": "b.jpg", "size": 32}]});
+    let body = deliver_prompt_claimed(&fetcher, prompt, attach_seat(), &dir, |_surface, _text| async {
+        panic!("a partial download must not deliver")
+    })
+    .await;
+    assert_eq!(body["outcome"], "stalled");
+    let left: Vec<_> = std::fs::read_dir(&dir)
+        .unwrap()
+        .flatten()
+        .map(|e| e.file_name())
+        .collect();
+    assert!(left.is_empty(), "orphaned first image left behind: {left:?}");
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn attachment_project_names_cannot_escape_the_attachments_root() {
+    // attachments_dir("") is the root plus one sanitized component; its parent IS the root.
+    let root = attachments_dir("").parent().unwrap().to_path_buf();
+    for project in ["../../escape", "/etc/passwd", "a/b", "..", ".", "trantor"] {
+        let dir = attachments_dir(project);
+        assert!(dir.starts_with(&root), "{project} escaped the root: {}", dir.display());
+    }
+    assert_eq!(attachments_dir("trantor"), root.join("trantor"));
+}
+
+#[test]
+fn attachments_past_the_ttl_are_pruned_and_fresh_ones_kept() {
+    let root = scratch("prune");
+    let project = root.join("trantor");
+    std::fs::create_dir_all(&project).unwrap();
+    let old = project.join("1-0.jpg");
+    std::fs::write(&old, b"old").unwrap();
+    let stale = std::time::SystemTime::now() - ATTACHMENT_TTL - Duration::from_secs(60);
+    std::fs::File::options()
+        .write(true)
+        .open(&old)
+        .unwrap()
+        .set_times(std::fs::FileTimes::new().set_modified(stale))
+        .unwrap();
+    let fresh = project.join("2-0.jpg");
+    std::fs::write(&fresh, b"fresh").unwrap();
+    let removed = prune_attachments(&root, ATTACHMENT_TTL, std::time::SystemTime::now());
+    assert_eq!(removed, 1, "only the stale file goes");
+    assert!(!old.exists(), "the stale file was removed");
+    assert!(fresh.exists(), "the fresh file survives");
+    std::fs::remove_dir_all(root).unwrap();
+}

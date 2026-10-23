@@ -482,9 +482,16 @@ pub async fn request(identity: &str, base: &str, method: &str, path: &str, body:
     Ok((status, text))
 }
 
-/// The same signed request, but the body stays bytes — prompt attachments (#12161) are JPEGs,
-/// and a text round-trip would corrupt them.
-pub async fn request_bytes(identity: &str, base: &str, path: &str) -> Result<(u16, Vec<u8>), String> {
+/// GET whose response body is streamed under a hard byte cap (#12161 review: `res.bytes()`
+/// buffered whatever the hub sent — a malformed or compromised hub could exhaust memory; a
+/// timeout is not a byte limit). Returns Err once the stream would exceed `max`. The cap keeps
+/// the attachment download honest: prompt attachments (#12161) are JPEGs of a bounded size.
+pub async fn request_bytes_capped(
+    identity: &str,
+    base: &str,
+    path: &str,
+    max: usize,
+) -> Result<(u16, Vec<u8>), String> {
     let headers = sign(identity, "GET", path, None)?;
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(30))
@@ -493,9 +500,20 @@ pub async fn request_bytes(identity: &str, base: &str, path: &str) -> Result<(u1
     let url = format!("{}{}", base.trim_end_matches('/'), path);
     let mut req = client.get(&url);
     for (k, v) in headers { req = req.header(k, v); }
-    let res = req.send().await.map_err(|e| format!("{e}"))?;
+    let mut res = req.send().await.map_err(|e| format!("{e}"))?;
     let status = res.status().as_u16();
-    let bytes = res.bytes().await.map_err(|e| e.to_string())?.to_vec();
+    if let Some(len) = res.content_length() {
+        if len as usize > max {
+            return Err(format!("response of {len} bytes exceeds the {max} byte cap"));
+        }
+    }
+    let mut bytes = Vec::new();
+    while let Some(chunk) = res.chunk().await.map_err(|e| e.to_string())? {
+        if bytes.len() + chunk.len() > max {
+            return Err(format!("response exceeds the {max} byte cap"));
+        }
+        bytes.extend_from_slice(&chunk);
+    }
     Ok((status, bytes))
 }
 
@@ -550,5 +568,121 @@ pub async fn stream(identity: &str, base: &str, mut on_event: impl FnMut(String)
         }
         tokio::time::sleep(std::time::Duration::from_secs(backoff)).await;
         backoff = (backoff * 2).min(15);
+    }
+}
+
+#[cfg(test)]
+mod cap_tests {
+    use super::*;
+    use std::io::{Read, Write};
+
+    /// One-shot HTTP server: reads the request head, answers with `head` + `body`, then closes.
+    fn serve_once(head: String, body: Vec<u8>) -> std::net::SocketAddr {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        std::thread::spawn(move || {
+            let (mut sock, _) = listener.accept().unwrap();
+            let mut buf = [0u8; 4096];
+            let mut got = 0;
+            while got < buf.len() {
+                match sock.read(&mut buf[got..]) {
+                    Ok(0) | Err(_) => break,
+                    Ok(n) => got += n,
+                }
+                if buf[..got].windows(4).any(|w| w == b"\r\n\r\n") { break; }
+            }
+            let _ = sock.write_all(head.as_bytes());
+            let _ = sock.write_all(&body);
+            let _ = sock.flush();
+        });
+        addr
+    }
+
+    /// A test identity whose key file lives in a scratch bus dir (no Keychain).
+    fn cap_bus_dir(tag: &str) -> std::path::PathBuf {
+        let base = std::env::temp_dir().join(format!("trantor-12161-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(base.join("keys")).unwrap();
+        let key = SigningKey::from_bytes(&[7u8; 32]);
+        std::fs::write(
+            base.join("keys").join(format!("{}.json", safe_name("captest"))),
+            format!(
+                r#"{{"pubkey":"{}","privkey":"{}"}}"#,
+                hex(&key.verifying_key().to_bytes()),
+                hex(&key.to_bytes())
+            ),
+        )
+        .unwrap();
+        base
+    }
+
+    // Repoints the process-wide AGENT_BUS_DIR at the scratch dir for the whole await, serialized
+    // by the repo's env lock, restoring the PRIOR value (never a bare remove_var).
+    macro_rules! capped_over_scratch_bus {
+        ($base:expr, $call:expr) => {{
+            let _guard = crate::local_sessions::BUS_DIR_TEST_LOCK.lock().unwrap();
+            let prior = std::env::var("AGENT_BUS_DIR").ok();
+            unsafe { std::env::set_var("AGENT_BUS_DIR", $base) };
+            let out = $call.await;
+            unsafe {
+                match prior {
+                    Some(v) => std::env::set_var("AGENT_BUS_DIR", v),
+                    None => std::env::remove_var("AGENT_BUS_DIR"),
+                }
+            }
+            out
+        }};
+    }
+
+    #[tokio::test]
+    async fn a_streamed_response_over_the_cap_is_refused_not_buffered() {
+        let base = cap_bus_dir("stream");
+        let body: Vec<u8> = [[0xffu8, 0xd8, 0xff].as_slice(), vec![0u8; 8192].as_slice()].concat();
+        let addr = serve_once("HTTP/1.1 200 OK\r\ncontent-type: image/jpeg\r\n\r\n".into(), body);
+        let result = capped_over_scratch_bus!(
+            &base,
+            request_bytes_capped("captest", &format!("http://{addr}"), "/session/attachment?id=1&n=0", 1024)
+        );
+        assert!(
+            result.is_err(),
+            "an 8 KiB body over a 1 KiB cap must be refused: {:?}",
+            result.as_ref().map(|(s, b)| (s, b.len())).map_err(|e| e.clone())
+        );
+        assert!(result.unwrap_err().contains("cap"));
+    }
+
+    #[tokio::test]
+    async fn a_content_length_over_the_cap_is_refused_before_reading() {
+        let base = cap_bus_dir("length");
+        let addr = serve_once(
+            "HTTP/1.1 200 OK\r\ncontent-length: 99999999\r\n\r\n".into(),
+            b"tiny".to_vec(),
+        );
+        let result = capped_over_scratch_bus!(
+            &base,
+            request_bytes_capped("captest", &format!("http://{addr}"), "/session/attachment?id=1&n=0", 1024)
+        );
+        assert!(
+            result.is_err(),
+            "a declared 99 MB body must be refused: {:?}",
+            result.as_ref().map(|(s, b)| (s, b.len())).map_err(|e| e.clone())
+        );
+    }
+
+    #[tokio::test]
+    async fn a_response_under_the_cap_downloads_whole() {
+        let base = cap_bus_dir("under");
+        let jpeg: Vec<u8> = [[0xffu8, 0xd8, 0xff].as_slice(), vec![0u8; 509].as_slice()].concat();
+        let addr = serve_once(
+            format!("HTTP/1.1 200 OK\r\ncontent-type: image/jpeg\r\ncontent-length: {}\r\n\r\n", jpeg.len()),
+            jpeg.clone(),
+        );
+        let result = capped_over_scratch_bus!(
+            &base,
+            request_bytes_capped("captest", &format!("http://{addr}"), "/session/attachment?id=1&n=0", 1024)
+        );
+        let (status, bytes) = result.unwrap();
+        assert_eq!(status, 200);
+        assert_eq!(bytes, jpeg);
     }
 }

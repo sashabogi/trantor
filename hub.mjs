@@ -151,14 +151,17 @@ function requestHandler(runtime, ctx, gate = null) {
       const q = Object.fromEntries(u.searchParams);
       const P = u.pathname;
       if (gate && !gate.admit(req, res, P)) return;
-      const b0 = req.method === "POST" ? await runtime.body(req) : {};
+      // The body is read ONCE here, under a per-endpoint byte cap, before any authentication:
+      // an overflow answers 413 and never buffers the rest (#12161 review).
+      const b0 = req.method === "POST" ? await runtime.body(req, runtime.bodyCap(P)) : {};
+      if (b0 === undefined) return runtime.json(res, 413, { error: `request body over the ${runtime.bodyCap(P)} byte cap` });
       if (runtime.handleEnrollment({ req, res, P, u, b0, inviteOnly: !!gate })) return;
       const auth = runtime.PUBLIC_ENDPOINTS.has(P)
         ? { ok: true, mode: ctx.AUTH_MODE, trusted: false }
         : await runtime.authenticate(req, runtime.authPath(u));
       if (runtime.handleInvite({ req, res, P, auth, b0 })) return;
       if (!auth.ok) return runtime.json(res, auth.code || 401, { error: auth.error || "unauthorized" });
-      const authorization = runtime.authorize(auth, req.method, P, runtime.projectFromRequest(P, q, b0));
+      const authorization = runtime.authorize(auth, req.method, P, runtime.projectFromRequest(P, q, b0, req.method));
       if (!authorization.ok) return runtime.json(res, authorization.code || 403, { error: authorization.error || "forbidden" });
       if (gate && P === "/stream" && !gate.openStream(req, res)) return;
       if (req.method === "GET" && P === "/_op") {

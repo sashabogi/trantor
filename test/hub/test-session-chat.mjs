@@ -21,6 +21,12 @@ async function sFetch(base, id, method, path, bodyObj) {
   let json = {}; try { json = await r.json(); } catch {}
   return { status: r.status, json };
 }
+// deliberately unsigned: the cap must fire before authentication even looks at the request
+async function rawFetch(base, method, path, bodyStr) {
+  const r = await fetch(base + path, { method, headers: { "content-type": "application/json" }, body: bodyStr });
+  let json = {}; try { json = await r.json(); } catch {}
+  return { status: r.status, json };
+}
 async function openStream(base, id, session) {
   const path = `/stream?session=${encodeURIComponent(session)}&events=1`;
   const ac = new AbortController();
@@ -134,6 +140,13 @@ try {
   ok("unknown outcome is 400", r.status === 400, `status ${r.status}`);
   r = await sFetch(base, phone, "POST", "/session/prompt/claim", { id: probeId, host: "phone" });
   ok("phone approver cannot claim (owner-only)", r.status === 403, `status ${r.status}`);
+
+  // ---- #12161 review: POST /session/prompt authorizes the project the write LANDS in --------
+  // shipId names an existing projA row; borrowing it must not let a projA key queue into projB.
+  r = await sFetch(base, phone, "POST", "/session/prompt", { id: shipId, project: "projB", text: "smuggled into projB" });
+  ok("an A-scoped key cannot borrow an A row id to write projB", r.status === 403, `status ${r.status} ${JSON.stringify(r.json)}`);
+  r = await sFetch(base, owner, "GET", "/session/prompts?project=projB");
+  ok("the smuggled prompt never landed in projB", !(r.json.prompts || []).some(p => p.text === "smuggled into projB"), JSON.stringify(r.json.prompts));
 
   // ---- /session/answer: the phone's pick joins the same queue as kind answer (#12137) ------
   r = await sFetch(base, phone, "POST", "/session/answer", { project: "projA", session: "s9", toolId: "toolu_ask1", picks: [1, 2], _op: "op-answer-1" });
@@ -297,6 +310,58 @@ console.log("# photo attachments on the prompt queue");
     ok("the attachment still downloads after the restart", redownload.status === 200, `status ${redownload.status}`);
     r = await sFetch(base, owner, "POST", "/session/prompt/claim", { id: survivor, host: "mac" });
     ok("the attachment prompt claims after the restart", r.status === 200, `status ${r.status}`);
+
+    // #12161 review: a 1.5 MiB JPEG (over the 4 MiB default body cap's neighborhood, well under
+    // the 16 MiB prompt cap) must still upload — the cap is per-endpoint, not a flat wall.
+    const bigJpeg = Buffer.concat([Buffer.from([0xff, 0xd8, 0xff]), Buffer.alloc(1536 * 1024)]);
+    r = await sFetch(base, phone, "POST", "/session/prompt", { project: "projA", text: "big but real", attachments: [{ name: "big.jpg", data: bigJpeg.toString("base64") }] });
+    ok("a 1.5 MiB JPEG rides the prompt body cap", r.status === 200 && r.json.status === "queued", JSON.stringify(r.json));
+
+    // #12161 review: a claim the Mac never finishes must not pin its bytes past the TTL.
+    r = await sFetch(base, phone, "POST", "/session/prompt", { project: "projA", text: "claimed then abandoned", attachments: [{ name: "c.jpg", data: b64 }] });
+    const abandoned = r.json.id;
+    ok("abandoned prompt queued with photo", r.status === 200 && abandoned > 0, JSON.stringify(r.json));
+    await sFetch(base, owner, "POST", "/session/prompt/claim", { id: abandoned, host: "mac" });
+    await sleep(1300);   // let the JSON store's 1s persist tick land the claim before the kill
+    await hub.stop();
+    hub = await startTestHub({ dir: attachDir, env: { ...env, RELAY_PROMPT_TTL_MS: "800", RELAY_PROMPT_SWEEP_MS: "300" } });
+    base = hub.base;
+    await sleep(1300);
+    r = await sFetch(base, phone, "GET", `/session/prompt?id=${abandoned}`);
+    ok("a claimed-but-never-delivered prompt expires", r.json.status === "expired" && /never delivered/.test(r.json.error || ""), JSON.stringify(r.json));
+    try { files = readdirSync(attachmentsPath); } catch { files = []; }
+    ok("the expired claim's bytes are removed", !files.includes(`${abandoned}-0.jpg`), JSON.stringify(files));
+  } finally {
+    await hub.stop();
+  }
+}
+
+// ---- request bodies are capped before authentication (#12161 review) ----------
+console.log("# request body caps");
+{
+  const capDir = mkdtempSync(join(tmpdir(), "trantor-12161-cap-"));
+  mkdirSync(join(capDir, ".agent-bus"), { recursive: true });
+  let hub = await startTestHub({ dir: capDir, env });
+  try {
+    const base = hub.base;
+    const owner = generate();
+    let r = await sFetch(base, owner, "POST", "/enroll", { name: "owner", kind: "human", scopes: [{ project: "*", role: "owner" }] });
+    ok("owner enrolled on the caps hub", r.status < 400, `status ${r.status}`);
+
+    // An UNSIGNED 5 MiB body never reaches auth: the default 4 MiB cap fires while streaming.
+    // Before the cap this request was fully buffered and then answered 401.
+    r = await rawFetch(base, "POST", "/send", JSON.stringify({ text: "z".repeat(5 * 1024 * 1024) }));
+    ok("an unsigned 5 MiB body is 413 at the default cap, before auth", r.status === 413, `status ${r.status} ${JSON.stringify(r.json)}`);
+
+    // /session/prompt alone rides the 16 MiB cap: 5 MiB of text parses (and dies on the
+    // text-length rule), proving the cap is per-endpoint rather than a flat wall.
+    r = await sFetch(base, owner, "POST", "/session/prompt", { project: "projA", text: "w".repeat(5 * 1024 * 1024) });
+    ok("a 5 MiB prompt body parses under the 16 MiB prompt cap", r.status === 400 && /8000/.test(r.json.error || ""), `status ${r.status} ${JSON.stringify(r.json)}`);
+
+    r = await sFetch(base, owner, "POST", "/session/prompt", { project: "projA", text: "y".repeat(17 * 1024 * 1024) });
+    ok("a 17 MiB prompt body is 413 even under the prompt cap", r.status === 413, `status ${r.status} ${JSON.stringify(r.json)}`);
+    r = await sFetch(base, owner, "GET", "/session/prompts?project=projA");
+    ok("no over-cap prompt ever reached the queue", (r.json.prompts || []).length === 0, JSON.stringify(r.json.prompts));
   } finally {
     await hub.stop();
   }

@@ -7,13 +7,38 @@ import { IDENTITY_KINDS } from "../lib/store-contract.mjs";
 
 export function createAuthRuntime({ state, markDirty, AUTH_MODE, SUPERSEDE_GRACE_MS, LOOPBACK_BIND, ENROLL_MODE, seenNonces = new Map() }) {
 const now = () => Date.now();
-function rawBody(req) {
+// #12161 review: bodies are capped WHILE STREAMING — the hub used to buffer a whole request
+// before auth. /session/prompt alone gets 16 MiB (4 base64 JPEGs of 2 MiB); raise per-endpoint
+// only when a route grows a real need.
+const BODY_CAP_DEFAULT = 4 * 1024 * 1024;
+const BODY_CAP_PROMPT = 16 * 1024 * 1024;
+function bodyCap(P) { return P === "/session/prompt" ? BODY_CAP_PROMPT : BODY_CAP_DEFAULT; }
+function rawBody(req, maxBytes = BODY_CAP_DEFAULT) {
+  if (req._bodyTooLarge) return Promise.resolve(undefined);
   if (req._rawBody !== undefined) return Promise.resolve(req._rawBody);
-  return new Promise(r => { let d = ""; req.on("data", c => (d += c)); req.on("end", () => { req._rawBody = d; r(d); }); });
+  return new Promise(r => {
+    let d = "", bytes = 0, done = false;
+    const finish = (v) => { if (!done) { done = true; r(v); } };
+    req.on("data", c => {
+      if (done) return;
+      bytes += c.length;
+      if (bytes > maxBytes) {
+        req._bodyTooLarge = true;
+        finish(undefined);
+        req.resume();   // keep draining (and discarding) so the socket can close cleanly
+        return;
+      }
+      d += c;
+    });
+    req.on("end", () => { if (!req._bodyTooLarge) { req._rawBody = d; finish(d); } });
+    req.on("error", () => finish(undefined));
+  });
 }
-async function body(req) {
+async function body(req, maxBytes = BODY_CAP_DEFAULT) {
+  if (req._bodyTooLarge) return undefined;
   if (req._jsonBody !== undefined) return req._jsonBody;
-  const d = await rawBody(req);
+  const d = await rawBody(req, maxBytes);
+  if (d === undefined) return undefined;
   try { req._jsonBody = d ? JSON.parse(d) : {}; } catch { req._jsonBody = {}; }
   return req._jsonBody;
 }
@@ -99,7 +124,7 @@ function isDutyIdentity(auth) {
 const canRead = (auth, project) => AUTH_MODE !== "enforce" && !auth?.identity
   ? true
   : isDutyIdentity(auth) || scopeAllows(auth?.identity, project, "read");
-function projectFromRequest(P, q, b) {
+function projectFromRequest(P, q, b, method) {
   if (P === "/task/update" || P === "/card") {
     const t = state.tasks.find(x => x.id === Number(b?.id ?? q?.id));
     return t?.project || "";
@@ -117,9 +142,11 @@ function projectFromRequest(P, q, b) {
     return p?.project || "";
   }
   // claim/ack and the single-prompt GET carry only an id — authorization runs against the
-  // PROMPT's project, or a project-scoped key could claim any project's queued prompt (#12129).
-  // The attachment download (#12161) is keyed the same way.
+  // PROMPT's project (#12129); the attachment download is keyed the same way. POST
+  // /session/prompt is the exception: it CREATES a row in b.project, so an id in the body must
+  // not borrow an existing row's project to write elsewhere (#12161 review).
   if (P === "/session/prompt" || P === "/session/prompt/claim" || P === "/session/prompt/ack" || P === "/session/attachment") {
+    if (P === "/session/prompt" && method === "POST") return canon(String(b?.project || q?.project || "").slice(0, 80));
     const pr = (state.sessionPrompts || []).find(x => x.id === Number(b?.id ?? q?.id));
     if (pr) return pr.project || "";
     if (P !== "/session/prompt") return "";
@@ -352,7 +379,7 @@ function canUseInboxSession(auth, session) {
   }
 
   return {
-    PUBLIC_ENDPOINTS, authPath, authenticate, authorize, body, rawBody, json,
+    PUBLIC_ENDPOINTS, authPath, authenticate, authorize, body, bodyCap, rawBody, json,
     canon, cleanScope, defaultScopesFor, findIdentity, scopeAllows, canRead, isDutyIdentity,
     projectFromRequest, crossProjectGuard, filterReadable, filterDiscoverable,
     inboxReadable, canUseInboxSession, overseerPolicy, subFp, PROPOSAL_CAP,

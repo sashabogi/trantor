@@ -128,11 +128,17 @@ struct LiveFetcher {
 }
 impl AttachmentFetcher for LiveFetcher {
     async fn fetch(&self, path: &str) -> Result<(u16, Vec<u8>), String> {
-        identity::request_bytes(&hub::owner_identity(), &self.base, path).await
+        identity::request_bytes_capped(&hub::owner_identity(), &self.base, path, ATTACHMENT_BYTES_MAX).await
     }
 }
 
 const JPEG_MAGIC: [u8; 3] = [0xff, 0xd8, 0xff];
+// Mirrors the hub's per-image cap: the hub refuses uploads over 2 MiB, so anything larger in a
+// claim is not a photo this app sent (#12161 review: the download was previously uncapped).
+const ATTACHMENT_BYTES_MAX: usize = 2 * 1024 * 1024;
+// Delivered images are read by the agent within minutes of the prompt landing; a day is a
+// generous TTL for the local copies (#12161 review: successful sends used to accumulate forever).
+const ATTACHMENT_TTL: Duration = Duration::from_secs(24 * 60 * 60);
 
 fn sanitize_file_stem(raw: &str) -> String {
     // Alphanumeric, dash and underscore only: the stem joins a fixed directory as ONE component,
@@ -153,7 +159,14 @@ fn prompt_id_string(prompt: &Value) -> String {
 }
 
 fn attachments_dir(project: &str) -> PathBuf {
-    crate::desktop_bus_dir().join("attachments").join(project)
+    // The project name comes from the hub's claim payload and joins the attachments root as ONE
+    // path component, so it is sanitized exactly like the id stem — no separator, no "..",
+    // never absolute (#12161 review: it used to join verbatim and could escape the root).
+    crate::desktop_bus_dir().join("attachments").join(sanitize_file_stem(project))
+}
+
+fn remove_files(paths: &[PathBuf]) {
+    for path in paths { let _ = std::fs::remove_file(path); }
 }
 
 async fn download_attachments(
@@ -170,18 +183,51 @@ async fn download_attachments(
     std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
     let mut paths = Vec::new();
     for n in 0..metas.len() {
-        let (status, bytes) = fetcher.fetch(&format!("/session/attachment?id={id}&n={n}")).await?;
+        // A failure after some files landed must leave no orphaned halves behind.
+        let fetched = fetcher.fetch(&format!("/session/attachment?id={id}&n={n}")).await;
+        let (status, bytes) = match fetched {
+            Ok(pair) => pair,
+            Err(error) => { remove_files(&paths); return Err(error); }
+        };
         if status != 200 {
+            remove_files(&paths);
             return Err(format!("hub HTTP {status} fetching attachment {n}"));
         }
+        if bytes.len() > ATTACHMENT_BYTES_MAX {
+            remove_files(&paths);
+            return Err(format!("attachment {n} is over the {ATTACHMENT_BYTES_MAX} byte cap"));
+        }
         if !bytes.starts_with(&JPEG_MAGIC) {
+            remove_files(&paths);
             return Err(format!("attachment {n} is not a JPEG"));
         }
         let file = dir.join(format!("{stem}-{n}.jpg"));
-        std::fs::write(&file, &bytes).map_err(|e| e.to_string())?;
+        if let Err(e) = std::fs::write(&file, &bytes) {
+            remove_files(&paths);
+            return Err(e.to_string());
+        }
         paths.push(file);
     }
     Ok(paths)
+}
+
+/// Delete attachment files older than the TTL, across every project directory (#12161 review:
+/// the Mac never cleaned its downloads up). Returns how many files were removed.
+fn prune_attachments(root: &Path, ttl: Duration, now: std::time::SystemTime) -> usize {
+    let mut removed = 0;
+    let Ok(projects) = std::fs::read_dir(root) else { return 0 };
+    for project in projects.flatten() {
+        let Ok(files) = std::fs::read_dir(project.path()) else { continue };
+        for file in files.flatten() {
+            let path = file.path();
+            if !path.is_file() { continue; }
+            let stale = file.metadata().ok()
+                .and_then(|m| m.modified().ok())
+                .is_some_and(|modified| now.duration_since(modified).map(|age| age > ttl).unwrap_or(false));
+            if stale && std::fs::remove_file(&path).is_ok() { removed += 1; }
+        }
+    }
+    removed
 }
 
 fn prompt_with_attachments(text: &str, files: &[PathBuf]) -> String {
@@ -652,6 +698,13 @@ async fn prompt_worker(mut events: mpsc::UnboundedReceiver<RelayEvent>) {
     let mut pending_acks: VecDeque<(String, Value)> = VecDeque::new();
     let mut locks = HashMap::new();
     loop {
+        // Expired downloads are swept on the idle tick; the walk is a directory listing of a
+        // handful of files, so running it every turn costs nothing measurable.
+        prune_attachments(
+            &crate::desktop_bus_dir().join("attachments"),
+            ATTACHMENT_TTL,
+            std::time::SystemTime::now(),
+        );
         // Retry only the acknowledgment: a lost reply must never cause a second delivery.
         for _ in 0..pending_acks.len() {
             if let Some((base, body)) = pending_acks.pop_front() {

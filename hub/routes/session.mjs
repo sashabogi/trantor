@@ -14,6 +14,7 @@ const EVENT_TEXT_MAX = 500;
 const PROMPT_TTL_MS = Number(process.env.RELAY_PROMPT_TTL_MS || 120000);
 const PROMPT_SWEEP_MS = Number(process.env.RELAY_PROMPT_SWEEP_MS || 30000);
 const EXPIRED_REASON = "No Mac is relaying this project. Is the Trantor app open?";
+const CLAIMED_EXPIRED_REASON = "The Mac claimed this prompt but never delivered it. Try sending it again.";
 const ACK_OUTCOMES = new Set(["delivered", "blocked", "not_ready", "stalled", "no_agent", "stale"]);
 const ANSWER_PICKS_MAX = 10;
 const ANSWER_OTHER_MAX = 2000;
@@ -97,15 +98,20 @@ export function createSessionRuntime({ state, markDirty, appendEvent, pushEventT
     });
   }
 
-  // A prompt still queued past the TTL means no desktop relay claimed it. Expiry is lazy (on
-  // read) plus a sweep that is a no-op when nothing is queued, so an idle hub does no work.
+  // A prompt queued past the TTL means no relay claimed it; a CLAIMED prompt past the TTL means
+  // the relay claimed it and died before its ack (#12161 review) — left alone, its attachment
+  // bytes would survive every sweep forever. Expiry is lazy (on read) plus a sweep that is a
+  // no-op when nothing is queued-or-claimed, so an idle hub does no work.
   function expireQueued() {
     let changed = false;
     for (const p of state.sessionPrompts) {
-      if (p.status !== "queued" || now() - p.ts <= PROMPT_TTL_MS) continue;
-      p.status = "expired"; p.outcome = "expired"; p.error = EXPIRED_REASON;
+      const from = p.status === "queued" ? p.ts : p.status === "claimed" ? p.claimedAt : 0;
+      if (!from || now() - from <= PROMPT_TTL_MS) continue;
+      const claimed = p.status === "claimed";
+      p.status = "expired"; p.outcome = "expired";
+      p.error = claimed ? CLAIMED_EXPIRED_REASON : EXPIRED_REASON;
       unlinkAttachments(p);
-      appendEvent("chat.prompt.failed", p.project, p.by, { promptId: p.id, outcome: "expired", error: EXPIRED_REASON });
+      appendEvent("chat.prompt.failed", p.project, p.by, { promptId: p.id, outcome: "expired", error: p.error });
       changed = true;
     }
     if (changed) markDirty();
@@ -122,7 +128,7 @@ export function createSessionRuntime({ state, markDirty, appendEvent, pushEventT
   }
   const sweep = setInterval(() => {
     sweepAttachments();
-    if (state.sessionPrompts.some(p => p.status === "queued")) expireQueued();
+    if (state.sessionPrompts.some(p => p.status === "queued" || p.status === "claimed")) expireQueued();
   }, PROMPT_SWEEP_MS);
   sweep.unref?.();
 
