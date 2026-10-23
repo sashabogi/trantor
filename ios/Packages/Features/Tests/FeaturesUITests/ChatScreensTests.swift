@@ -10,6 +10,7 @@ final class ChatScreensTests: XCTestCase {
         XCTAssertTrue(app.staticTexts["The focused tests pass. I'm checking how live replies appear on the iPad."].exists)
         let composer = app.textFields["chat.composer"].exists ? app.textFields["chat.composer"] : app.textViews["chat.composer"]
         XCTAssertTrue(composer.waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["chat.attach"].isEnabled)
         composer.tap()
         composer.typeText("Continue the direct launch demo")
         XCTAssertTrue(app.buttons["chat.send"].isEnabled)
