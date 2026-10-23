@@ -54,6 +54,7 @@ public final class SettingsStore {
         static let notifyHolds = "notifyHolds", notifyProposals = "notifyProposals", notifyMessages = "notifyMessages"
         static let biometrics = "requireBiometrics"
         static let muted = "mutedProjects"
+        static let publicHub = "publicHubURL"
     }
 
     private let defaults: UserDefaults
@@ -137,6 +138,13 @@ public final class SettingsStore {
     /// Re-point at another address for the same hub (its public URL). The key, identity and scopes
     /// stay: signatures do not depend on the host, so there is nothing to re-pair. Clients built by
     /// `makeClient()` after this point at the new address.
+    /// The hub's public https address, remembered whenever /health advertised one, so the phone can
+    /// move to it later even when the address it is paired on (the tailnet one) no longer answers.
+    public var knownPublicHub: URL? {
+        get { defaults.string(forKey: Keys.publicHub).flatMap(URL.init(string:)) }
+        set { defaults.set(newValue?.absoluteString, forKey: Keys.publicHub) }
+    }
+
     public func setHub(_ url: URL) {
         hubURL = url
         defaults.set(url.absoluteString, forKey: Keys.hub)

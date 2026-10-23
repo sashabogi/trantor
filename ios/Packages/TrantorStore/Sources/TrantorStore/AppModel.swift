@@ -147,7 +147,14 @@ public final class AppModel {
     }
 
     public func refreshAll() async {
-        _ = try? await client?.health()          // calibrates the signing clock before anything else
+        // calibrates the signing clock before anything else, and remembers the public address
+        if let health = try? await client?.health() {
+            if let raw = health.publicUrl, let url = SettingsStore.normalizeHub(raw), url.scheme == "https" {
+                settings.knownPublicHub = url
+            }
+        } else if await moveToKnownPublicHub() {
+            _ = try? await client?.health()
+        }
         async let a: Void = decisions.refresh()
         async let b: Void = projects.refresh()
         async let c: Void = inbox.refresh()
@@ -198,11 +205,31 @@ public final class AppModel {
 
     /// Forgetting the hub always works, even when the hub can't be reached: telling it to stop
     /// pushing is best effort, and a later pair from this phone replaces the old registration.
+    /// The paired (tailnet) hub didn't answer: if a public address is known and answers, move there.
+    /// Same key, no re-pair. Returns whether it moved.
+    public func moveToKnownPublicHub(probe: ((URL) async throws -> Void)? = nil) async -> Bool {
+        guard let current = settings.hubURL, HubNetwork.needsTailscale(current),
+              let target = settings.knownPublicHub, target != current else { return false }
+        let check = probe ?? { url in
+            var req = URLRequest(url: url.appendingPathComponent("health")); req.timeoutInterval = 5
+            let (_, response) = try await URLSession.shared.data(for: req)
+            guard (response as? HTTPURLResponse)?.statusCode == 200 else { throw HubError.offline(op: nil) }
+        }
+        return await switchHub(to: target, probe: check)
+    }
+
     public func unpair() async {
         guard !isUnpairing else { return }
         isUnpairing = true
         defer { isUnpairing = false }
-        try? await unregisterDevice?()
+        // Telling the hub to stop pushing is best effort and gets 3 seconds: with Tailscale off a
+        // tailnet hub never answers, and waiting out the network timeout froze the button.
+        if let unregister = unregisterDevice {
+            let work = Task { @MainActor in try? await unregister() }
+            let deadline = Task { try? await Task.sleep(nanoseconds: 3_000_000_000); work.cancel() }
+            await work.value
+            deadline.cancel()
+        }
         feed.stop()
         settings.unpair()
         client = nil

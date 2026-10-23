@@ -1,3 +1,4 @@
+import HubClient
 import SwiftUI
 import TrantorDesign
 import TrantorStore
@@ -8,6 +9,10 @@ public struct SettingsView: View {
     @State private var publicHub: URL?
     @State private var switchingHub = false
     @State private var hubSwitchFailed = false
+    @State private var editingHub = false
+    @State private var hubDraft = ""
+    @State private var removing = false
+    @Environment(\.dismiss) private var dismiss
 
     public init() {}
 
@@ -20,6 +25,30 @@ public struct SettingsView: View {
                         Eyebrow("Address")
                         Text(settings.hubURL?.absoluteString ?? "Not paired").font(.tData).foregroundStyle(Palette.text2)
                             .textSelection(.enabled).well()
+                        if editingHub {
+                            WellField("https://your-hub.ts.net", text: $hubDraft, mono: true)
+                                .textInputAutocapitalization(.never).autocorrectionDisabled().keyboardType(.URL)
+                                .accessibilityIdentifier("settings.hubField")
+                            HStack(spacing: Space.sm) {
+                                Button(switchingHub ? "Checking…" : "Connect") {
+                                    if let url = SettingsStore.normalizeHub(hubDraft) { Task { await usePublicHub(url) } }
+                                    else { hubSwitchFailed = true }
+                                }
+                                .buttonStyle(.primary).disabled(switchingHub || hubDraft.trimmingCharacters(in: .whitespaces).isEmpty)
+                                Button("Cancel") { editingHub = false; hubSwitchFailed = false }.buttonStyle(.ghost)
+                            }
+                        } else if settings.isPaired {
+                            Button("Change address", systemImage: "pencil") {
+                                hubDraft = settings.knownPublicHub?.absoluteString ?? ""
+                                editingHub = true
+                            }
+                            .buttonStyle(.action(.quiet, compact: true))
+                            .accessibilityIdentifier("settings.changeHub")
+                        }
+                        if hubSwitchFailed {
+                            Text("That address did not answer. Check it, or your connection, and try again.")
+                                .font(.tCaption).foregroundStyle(Palette.amber)
+                        }
                     }
                     if let publicHub {
                         Hairline()
@@ -32,10 +61,6 @@ public struct SettingsView: View {
                                    systemImage: "network") { Task { await usePublicHub(publicHub) } }
                                 .buttonStyle(.ghost).disabled(switchingHub)
                                 .accessibilityIdentifier("settings.usePublicHub")
-                            if hubSwitchFailed {
-                                Text("The public address did not answer; staying on this one.")
-                                    .font(.tCaption).foregroundStyle(Palette.amber)
-                            }
                         }
                     }
                     Hairline()
@@ -80,8 +105,9 @@ public struct SettingsView: View {
                 Panel("Device access") {
                     Toggle("Confirm decisions with Face ID or passcode", isOn: $settings.requireBiometrics)
                     Hairline()
-                    Button("Pair again or remove this device", role: .destructive) { confirmUnpair = true }
-                        .buttonStyle(.danger)
+                    Button(removing ? "Removing…" : "Pair again or remove this device", role: .destructive) { confirmUnpair = true }
+                        .buttonStyle(.danger).disabled(removing)
+                        .accessibilityIdentifier("settings.unpair")
                     Text("This deletes the key from this device. The hub keeps the identity until an owner revokes it.")
                         .font(.tCaption).foregroundStyle(Palette.textDim)
                 }
@@ -90,12 +116,27 @@ public struct SettingsView: View {
         }
         .stage()
         .navigationTitle("Settings")
-        .task { publicHub = await model.publicHubURL() }
-        .confirmationDialog("Forget this hub?", isPresented: $confirmUnpair, titleVisibility: .visible) {
+        .task {
+            // the remembered public address works even when the paired (tailnet) hub can't answer
+            if let current = settings.hubURL, HubNetwork.needsTailscale(current), let known = settings.knownPublicHub {
+                publicHub = known
+            } else {
+                publicHub = await model.publicHubURL()
+            }
+        }
+        // an alert, not a confirmation dialog: the dialog did not reliably present inside this sheet
+        .alert("Forget this hub?", isPresented: $confirmUnpair) {
             Button("Forget and delete key", role: .destructive) {
-                Task { await model.unpair() }
+                removing = true
+                Task {
+                    await model.unpair()
+                    removing = false
+                    dismiss()
+                }
             }
             Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("This deletes the signing key from this phone. You can pair again right after.")
         }
     }
 
@@ -104,7 +145,11 @@ public struct SettingsView: View {
         switchingHub = true; hubSwitchFailed = false
         defer { switchingHub = false }
         let moved = await model.switchHub(to: url) { try await HubReachability.check($0.absoluteString) }
-        if moved { publicHub = nil } else { hubSwitchFailed = true }
+        if moved {
+            if url.scheme == "https" { model.settings.knownPublicHub = url }
+            publicHub = nil; editingHub = false
+            await model.refreshAll()
+        } else { hubSwitchFailed = true }
     }
 }
 

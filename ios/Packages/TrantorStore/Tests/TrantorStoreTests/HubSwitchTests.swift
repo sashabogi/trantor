@@ -76,6 +76,40 @@ final class HubSwitchTests: XCTestCase {
         XCTAssertEqual(settings.hubURL, publicURL)
         XCTAssertEqual(bound.value.last, publicURL, "connect() rebuilt the client against the public address")
     }
+
+    // The phone on 2026-10-23: Tailscale off, paired on the tailnet address, Remove did nothing.
+    func testUnpairFinishesWithinSecondsWhenTheHubNeverAnswers() async {
+        let hub = StubHub()
+        let settings = await pair(hub: hub, address: tailnet, bound: Locked([]), defaults: freshDefaults())
+        let model = AppModel(settings: settings, cache: StoreCache(directory: nil))
+        model.unregisterDevice = { try await Task.sleep(nanoseconds: 60_000_000_000) }   // a hub that never answers
+        let start = Date()
+        await model.unpair()
+        XCTAssertLessThan(Date().timeIntervalSince(start), 5, "unpair must not wait out the network timeout")
+        XCTAssertFalse(settings.isPaired)
+    }
+
+    func testTheAdvertisedPublicAddressIsRemembered() async {
+        let hub = StubHub()
+        hub.healthData = HealthInfo(ok: true, authMode: "enforce", publicUrl: publicURL.absoluteString)
+        let settings = await pair(hub: hub, address: tailnet, bound: Locked([]), defaults: freshDefaults())
+        let model = AppModel(settings: settings, cache: StoreCache(directory: nil))
+        await model.refreshAll()
+        XCTAssertEqual(settings.knownPublicHub, publicURL)
+    }
+
+    func testAnUnreachableTailnetHubMovesToTheRememberedPublicAddressOnlyIfItAnswers() async {
+        let hub = StubHub()
+        let settings = await pair(hub: hub, address: tailnet, bound: Locked([]), defaults: freshDefaults())
+        settings.knownPublicHub = publicURL
+        let model = AppModel(settings: settings, cache: StoreCache(directory: nil))
+        let refused = await model.moveToKnownPublicHub(probe: { _ in throw HubError.offline(op: nil) })
+        XCTAssertFalse(refused)
+        XCTAssertEqual(settings.hubURL?.absoluteString, tailnet, "a dead public address leaves the pairing alone")
+        let moved = await model.moveToKnownPublicHub(probe: { _ in })
+        XCTAssertTrue(moved)
+        XCTAssertEqual(settings.hubURL, publicURL)
+    }
 }
 
 /// A tiny Sendable box for capturing values out of @Sendable closures in tests.
