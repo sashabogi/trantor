@@ -86,7 +86,7 @@ async function hubRequest(ctx, path, body) {
   return response.json;
 }
 
-export function swapRuntime(ctx, adapters, spawn) {
+export function swapRuntime(ctx, adapters, spawn, { now = Date.now, pause = setTimeout, requestTimeoutMs = 8000 } = {}) {
   let pids = [];
   let replacementPid;
   return {
@@ -98,21 +98,21 @@ export function swapRuntime(ctx, adapters, spawn) {
       spawn(staged, { ...seat, persona: stage.label });
     },
     async ready(stage) {
-      const deadline = Date.now() + 30000;
+      const deadline = now() + 30000;
       while (!existsSync(`${stage.path}.ready`)) {
-        if (Date.now() > deadline) throw new Error("replacement did not join the bus within 30s; old seat unchanged");
-        await setTimeout(100);
+        if (now() > deadline) throw new Error("replacement did not join the bus within 30s; old seat unchanged");
+        await pause(100);
       }
       const ready = JSON.parse(readFileSync(`${stage.path}.ready`, "utf8"));
       let failure = "status=0 reason=readiness deadline elapsed timedOut=false";
       let visible = false;
-      while (Date.now() < deadline) {
+      while (now() < deadline) {
         const response = await signedGet(`${ctx.hub}/peers?project=${encodeURIComponent(ctx.project)}`, {
-          project: ctx.project, timeoutMs: Math.min(8000, deadline - Date.now()),
+          project: ctx.project, timeoutMs: Math.min(requestTimeoutMs, deadline - now()),
         });
         if (response.ok && response.json?.peers?.some(p => p.session === ready.session)) { visible = true; break; }
         failure = `status=${response.status} reason=${response.reason || response.json?.error || "replacement absent from roster"} timedOut=${response.timedOut === true}`;
-        await setTimeout(Math.min(100, Math.max(0, deadline - Date.now())));
+        await pause(Math.min(100, Math.max(0, deadline - now())));
       }
       if (!visible) throw new Error(`replacement registration is not visible on the bus: ${failure}`);
       process.kill(ready.pid, 0);

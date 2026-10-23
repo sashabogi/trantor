@@ -35,6 +35,7 @@ let reads = 0, mode = "slow";
 const proxy = createServer(async (req, res) => {
   if (req.url.startsWith("/peers")) {
     reads++;
+    if (mode === "timeout") return;
     if (mode === "fail" || reads === 1) {
       if (reads === 1) await setTimeout(1800);
       res.writeHead(503, { "content-type": "application/json" });
@@ -95,12 +96,29 @@ try {
   assert.equal((await post(other, "/unregister", { session: otherSession, project })).status, 200);
   pass("deregistration requires the session owner and is idempotent");
 
+  const failureRuntime = requestTimeoutMs => {
+    let clock = 0;
+    return swapRuntime(ctx, {}, () => {}, {
+      now: () => clock,
+      pause: async () => { clock = 30000; },
+      requestTimeoutMs,
+    });
+  };
   mode = "fail";
-  const failed = await performSwap(ctx, options, lifecycle);
+  const httpReads = reads;
+  const failed = await performSwap(ctx, options, { ...lifecycle, ready: failureRuntime(8000).ready });
   assert.equal(failed.ok, false);
-  assert.match(failed.reason, /status=503 reason=controlled slow roster timedOut=false|status=0 reason=timed out after \d+ms timedOut=true/);
+  assert.equal(reads, httpReads + 1);
+  assert.equal(failed.reason, "replacement registration is not visible on the bus: status=503 reason=controlled slow roster timedOut=false");
   assert.ok(!(await roster()).some(p => p.session === stageSession));
-  pass("deadline failure retains HTTP diagnostics and removes stage");
+  pass("controlled deadline retains exact HTTP diagnostics and removes stage");
+
+  mode = "timeout";
+  const timedOut = await performSwap(ctx, options, { ...lifecycle, ready: failureRuntime(50).ready });
+  assert.equal(timedOut.ok, false);
+  assert.equal(timedOut.reason, "replacement registration is not visible on the bus: status=0 reason=timed out after 50ms timedOut=true");
+  assert.ok(!(await roster()).some(p => p.session === stageSession));
+  pass("unanswered request retains exact timeout diagnostics and removes stage");
   console.log(`${checks} passed, 0 failed`);
 } finally {
   proxy.closeAllConnections();
