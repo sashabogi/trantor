@@ -3,6 +3,7 @@ import { setTimeout } from "node:timers/promises";
 import { loadOrCreate } from "../../lib/identity.mjs";
 import { ensureEnrolled } from "../../lib/enroll.mjs";
 import { sfetchJson } from "../../lib/signed-fetch.mjs";
+import { personaName } from "../../lib/persona.mjs";
 
 export async function unregisterSwapStage(hub, project, session) {
   const identity = loadOrCreate(session, "agent");
@@ -33,5 +34,8 @@ export async function awaitSwapRelease(env = process.env) {
   }
   const handoff = JSON.parse(readFileSync(`${stage}.release`, "utf8"));
   if (handoff.agent !== env.CREW_SWAP_AGENT) throw new Error("swap release names a different seat");
+  const persona = personaName(handoff.persona);
+  if (env.CREW_PERSONA && env.CREW_PERSONA !== persona) throw new Error("swap release names a different persona");
+  env.CREW_PERSONA = persona;
   await unregisterSwapStage(env.RELAY_URL, env.RELAY_PROJECT, session);
 }

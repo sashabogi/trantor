@@ -3,6 +3,7 @@ import { dirname, join } from "node:path";
 import { seatProcesses, signalProcesses } from "./processes.mjs";
 import { call, listPids, run } from "./core.mjs";
 import { hostId } from "../../lib/project.mjs";
+import { signedPost } from "../../hooks/lib/api.mjs";
 import { statePathFor as dockerStatePathFor, sweep as dockerSweep } from "../../lib/docker-janitor.mjs";
 
 export function parseRow(line) {
@@ -122,15 +123,22 @@ function closeTmux(ctx, row, perSeat, seen) {
   run(ctx, "tmux", ["kill-session", "-t", session], { rendered: `tmux kill-session -t '${session}' 2>/dev/null` });
 }
 
-export async function down(ctx, args, adapters) {
+async function unregisterSeat(ctx, project, persona) {
+  const path = project === ctx.project ? `${ctx.hub}/unregister` : "/unregister";
+  const response = await signedPost(path, { session: `${persona}:${project}`, project }, { project });
+  if (!response.ok || !response.json?.ok) throw new Error(response.json?.error || response.reason || `hub HTTP ${response.status}`);
+  return response.json;
+}
+
+export async function down(ctx, args, adapters, { unregister = unregisterSeat } = {}) {
   const options = parseDownArgs(ctx, args);
   if (options.help) return 0;
   if (options.error) return 1;
   const rows = readRows(ctx);
-  if (!rows.length) { console.log("no tracked crew windows"); return 0; }
+  if (!rows.length && !options.agents.length) { console.log("no tracked crew windows"); return 0; }
   const scoped = rows.filter(row => (options.all || row.project === ctx.project) && (!options.agents.length || options.agents.includes(row.persona)));
   const scope = options.all ? "all projects" : `project \"${ctx.project}\"`;
-  if (!scoped.length) { console.log(`nothing to tear down for ${scope}`); return 0; }
+  if (!scoped.length && !options.agents.length) { console.log(`nothing to tear down for ${scope}`); return 0; }
   console.log(`— tearing down (${scope}):`);
   for (const row of scoped) if (!["attach", "cmuxws", "herdrws", "orch"].includes(row.kind)) console.log(`  • ${row.project || "<legacy>"} · ${row.persona} (${row.kind})`);
   if (options.all && !options.yes) {
@@ -144,6 +152,21 @@ export async function down(ctx, args, adapters) {
   const kept = rows.filter(row => !removed.has(`${row.project}|${row.kind}|${row.persona}|${row.handle}`) || (orchProjects.has(row.project) && ["herdrws", "cmuxws", "orch"].includes(row.kind)));
   writeRows(ctx, kept);
   const seatRows = scoped.filter(row => !["attach", "cmuxws", "herdrws", "orch"].includes(row.kind));
+  const staleSeats = options.agents.filter(persona => !scoped.some(row => row.persona === persona))
+    .map(persona => ({ project: ctx.project, persona, stale: true }));
+  const seats = new Map([...seatRows, ...staleSeats].map(row => [`${row.project}/${row.persona}`, row]));
+  const failures = [];
+  for (const row of seats.values()) {
+    if (!row.project) continue;
+    if (ctx.dry) { console.log(`[dry] unregister ${row.persona}:${row.project}`); continue; }
+    try {
+      const result = await unregister(ctx, row.project, row.persona);
+      if (row.stale) console.log(result.removed ? `  removed a stale seat row: ${row.persona}:${row.project}` : `  no hub seat row: ${row.persona}:${row.project}`);
+    } catch (error) {
+      failures.push(`${row.persona}:${row.project}: ${error.message}`);
+      console.error(`  ${row.persona}:${row.project}: hub row removal failed: ${error.message}`);
+    }
+  }
   if (!ctx.dry) {
     const logDir = join(dirname(ctx.statePath), "logs");
     mkdirSync(logDir, { recursive: true });
@@ -151,6 +174,10 @@ export async function down(ctx, args, adapters) {
       appendFileSync(join(logDir, `${row.persona}-${row.project}.jsonl`),
         `${JSON.stringify({ ts: Date.now(), agent: row.persona, project: row.project, stopped: true })}\n`);
     }
+  }
+  if (failures.length) {
+    console.log(`— hub row removal incomplete; retry Stop: ${failures.join("; ")}`);
+    return 1;
   }
   if (options.agents.length) {
     const stopped = [...new Set(seatRows.map(row => row.persona))];

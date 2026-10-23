@@ -1,6 +1,6 @@
 import { unregisterSwapStage } from "./stage.mjs";
-import { updatePersona } from "../../lib/persona.mjs";
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { allocatePersona, updatePersona } from "../../lib/persona.mjs";
+import { existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { setTimeout } from "node:timers/promises";
@@ -124,12 +124,15 @@ export function swapRuntime(ctx, adapters, spawn, { now = Date.now, pause = setT
     transfer: body => hubRequest(ctx, "/contracts/transfer", body),
     async stop(agent) {
       process.kill(replacementPid, 0);
-      await down(ctx, [agent], adapters);
+      if (await down(ctx, [agent], adapters)) throw new Error("old seat stopped locally but its hub row could not be removed");
       signalProcesses(pids, "SIGKILL");
     },
     async cancel(stage) {
-      await down(ctx, [stage.label], adapters);
-      await unregisterSwapStage(ctx.hub, ctx.project, `${stage.label}:${ctx.project}`);
+      const code = await down(ctx, [stage.label], adapters, { unregister: async () => {
+        await unregisterSwapStage(ctx.hub, ctx.project, `${stage.label}:${ctx.project}`);
+        return { removed: true };
+      } });
+      if (code) throw new Error("replacement hub row could not be removed");
     },
     release(stage, persona, cursor) {
       writeRows(ctx, readRows(ctx).map(row => row.project === ctx.project && row.persona === stage.label ? { ...row, persona } : row));
@@ -145,24 +148,28 @@ export async function performSwap(ctx, options, runtime) {
   let stage, frozen = false, transferred = false;
   try {
     const seat = await runtime.validate(options);
+    const occupied = [options.from, seat.agent, ...readRows(ctx).filter(row => row.project === ctx.project).map(row => row.persona)];
+    const { persona } = allocatePersona({ dir: join(ctx.home, ".agent-bus"), project: ctx.project, agent: seat.agent, model: seat.model, occupied });
+    result.to = persona;
     const label = `${options.agent}-swap-${randomUUID().slice(0, 8)}`;
     mkdirSync(ctx.seatDir, { recursive: true });
-    stage = { label, path: join(ctx.seatDir, label), persona: options.from, agent: seat.agent, model: seat.model };
+    stage = { label, path: join(ctx.seatDir, label), persona, agent: seat.agent, model: seat.model };
     await runtime.start(seat, stage);
     const readySession = await runtime.ready(stage);
     frozen = true;
     await runtime.freeze(options.from);
     const pending = readPending(ctx, options.from);
-    const target = pending;
-    const from = `${options.from}:${ctx.project}`, to = from;
+    const target = readPending(ctx, persona);
+    const from = `${options.from}:${ctx.project}`, to = `${persona}:${ctx.project}`;
     const handoff = await runtime.transfer({ from, to, project: ctx.project, readySession, _op: `swap-${stage.label}`, heldAsk: pending.ask || 0, pendingIds: pending.wake.map(m => m.id) });
     transferred = true;
     result.moved = [...new Set([...pending.wake.map(m => m.id), ...handoff.moved])];
     const wake = new Map([...target.wake, ...pending.wake, ...handoff.messages].map(m => [m.id, { ...m, to }]));
-    savePending(ctx, options.from, { ...target, wake: [...wake.values()], bcast: [...new Map([...target.bcast, ...pending.bcast].map(m => [m.id, m])).values()], ask: handoff.messages.some(m => m.re === pending.ask) ? 0 : pending.ask || target.ask, askTo: pending.askTo || target.askTo });
+    savePending(ctx, persona, { ...target, wake: [...wake.values()], bcast: [...new Map([...target.bcast, ...pending.bcast].map(m => [m.id, m])).values()], seen: [...new Set([...target.seen, ...pending.seen])], ask: handoff.messages.some(m => m.re === pending.ask) ? 0 : pending.ask || target.ask, askTo: pending.askTo || target.askTo });
     await runtime.stop(options.from);
     frozen = false;
-    await runtime.release(stage, options.from, handoff.cursor);
+    await runtime.release(stage, persona, handoff.cursor);
+    if (existsSync(pendingPath(ctx, options.from))) unlinkSync(pendingPath(ctx, options.from));
     return { ...result, ok: true };
   } catch (error) {
     if (!transferred) {

@@ -12,6 +12,8 @@ const ctx = { project: "fixture", statePath, env: { CREW_NO_PROC_KILL: "1" }, dr
 const closed = [], lines = [];
 const adapters = { herdr: { closePane: pane => closed.push(pane), closeWorkspace: pane => closed.push(pane) } };
 const log = console.log;
+const removed = [];
+const cleanup = { unregister: async (_ctx, project, persona) => { removed.push(`${persona}:${project}`); return { removed: true }; } };
 const diagnose = (agent = "glm", pids = []) => seatWhy("fixture", agent, { dir, pidCheck: () => pids });
 const seed = () => writeFileSync(statePath, "fixture\therdr\tglm\tp1\nfixture\therdr\tcodex\tp2\nfixture\therdr\tkimi\tp3\nother\therdr\tglm\tp4\n");
 try {
@@ -19,10 +21,11 @@ try {
   seed();
   writeFileSync(join(dir, "err-glm-fixture.txt"), "429 quota exhausted\n");
   assert.equal(diagnose().state, "dead-quota");
-  await down(ctx, ["glm"], adapters);
+  await down(ctx, ["glm"], adapters, cleanup);
   assert.match(lines.at(-1), /glm stopped \(codex, kimi still running\)/);
   assert.ok(!lines.at(-1).includes("crew torn down"));
   assert.deepEqual(closed, ["p1"]);
+  assert.deepEqual(removed, ["glm:fixture"]);
   assert.ok(readFileSync(statePath, "utf8").includes("other\therdr\tglm\tp4"));
   assert.equal(diagnose().state, "stopped");
   assert.match(diagnose().advice, /trantor up/);
@@ -35,18 +38,20 @@ try {
   log("ok 3 - a later boot supersedes the operator stop");
 
   lines.length = 0;
-  await down(ctx, [], adapters);
+  await down(ctx, [], adapters, cleanup);
   assert.match(lines.at(-1), /crew torn down \(project "fixture"\)/);
   assert.equal(diagnose("codex").state, "stopped");
   assert.equal(diagnose("kimi").state, "stopped");
   assert.equal(readFileSync(statePath, "utf8"), "other\therdr\tglm\tp4\n");
+  assert.deepEqual(removed, ["glm:fixture", "codex:fixture", "kimi:fixture"]);
   log("ok 4 - whole-project shutdown keeps its message and marks each seat stopped");
 
   seed();
   const before = readFileSync(join(dir, "logs/glm-fixture.jsonl"), "utf8");
-  await down({...ctx, dry: true}, ["glm"], adapters);
+  await down({...ctx, dry: true}, ["glm"], adapters, cleanup);
   assert.equal(readFileSync(join(dir, "logs/glm-fixture.jsonl"), "utf8"), before);
   assert.ok(readFileSync(statePath, "utf8").includes("fixture\therdr\tglm\tp1"));
+  assert.equal(removed.length, 3);
   log("ok 5 - dry run leaves state and stop evidence unchanged");
 } finally {
   console.log = log;

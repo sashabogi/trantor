@@ -16,6 +16,7 @@ ok(){ if eval "$2"; then PASS=$((PASS+1)); echo "  ✓ $1"; else FAIL=$((FAIL+1)
 mkdir -p "$ROOT/.agent-bus-out"
 TMP="$(mktemp -d "$ROOT/.agent-bus-out/crew-test.XXXXXX")"
 export AGENT_BUS_DIR="$TMP/.agent-bus"
+export RELAY_URL="http://127.0.0.1:1" CREW_HUB="http://127.0.0.1:1"
 export TRANTOR_NO_KEYCHAIN=1
 export GIT_CEILING_DIRECTORIES="$ROOT/.agent-bus-out"
 trap 'rm -rf "$TMP"' EXIT

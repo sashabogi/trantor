@@ -12,6 +12,7 @@ unset TRANTOR_ORCH TRANTOR_SEAT HERDR_ENV HERDR_PANE_ID RELAY_PROJECT RELAY_SESS
 mkdir -p "$ROOT/.agent-bus-out"
 TMP="$(mktemp -d "$ROOT/.agent-bus-out/crew-test.XXXXXX")"
 export AGENT_BUS_DIR="$TMP/.agent-bus"
+export RELAY_URL="http://127.0.0.1:1"
 export TRANTOR_NO_KEYCHAIN=1
 export GIT_CEILING_DIRECTORIES="$ROOT/.agent-bus-out"
 trap 'rm -rf "$TMP"' EXIT
@@ -68,7 +69,7 @@ rows(){ [ -f "$STATE" ] && wc -l < "$STATE" | tr -d ' ' || echo 0; }
 has_row(){ [ -f "$STATE" ] && grep -qF "$1" "$STATE"; }
 # CREW_NO_PROC_KILL: these tests seed REAL project names (crebral-health) — without the guard, the
 # per-seat proc-kill sweep would pgrep live crew runners on the host machine during `npm test`.
-downcmd(){ HOME="$TMP" PATH="$TMP/fakebin:$PATH" RELAY_PROJECT="$1" CREW_NO_PROC_KILL=1 "${CREW[@]}" down "${@:2}" </dev/null; }
+downcmd(){ HOME="$TMP" PATH="$TMP/fakebin:$PATH" RELAY_PROJECT="$1" CREW_HUB="http://127.0.0.1:1" CREW_NO_PROC_KILL=1 "${CREW[@]}" down "${@:2}" </dev/null; }
 
 echo "# trantor crew teardown-scoping tests"
 

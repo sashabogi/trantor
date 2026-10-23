@@ -66,20 +66,30 @@ try {
   assert.equal((await ensureEnrolled(hub.base, reviewer, project)).ok, true);
   await register(reviewer, "glm");
   const sent = await request(owner, "/send", { from: owner.name, to: reviewer.name, project, text: "contract: preserve this history" });
-  const ctx = { home, project, seatDir: join(bus, "seats") };
+  const ctx = { home, project, seatDir: join(bus, "seats"), statePath: join(bus, "crew-windows.txt") };
   const swapped = await performSwap(ctx, { from: "reviewer", agent: "kimi" }, {
     validate: async () => ({ agent: "kimi", model: "" }),
     start: async () => {}, ready: async () => reviewer.name,
-    freeze: async () => {}, resume: async () => {}, stop: async () => {}, cancel: async () => {},
+    freeze: async () => {}, resume: async () => {}, stop: async () => { await request(owner, "/unregister", { session: reviewer.name, project }); }, cancel: async () => {},
     transfer: body => request(owner, "/contracts/transfer", body),
-    release: async (stage, persona) => { assert.equal(persona, "reviewer"); await register(loadOrCreate(`${persona}:${project}`), stage.agent); },
+    release: async (stage, persona) => {
+      assert.match(persona, /^kimi-\d+$/);
+      const next = loadOrCreate(`${persona}:${project}`);
+      assert.equal((await ensureEnrolled(hub.base, next, project)).ok, true);
+      await register(next, stage.agent);
+    },
   });
   assert.equal(swapped.ok, true, swapped.reason);
   assert.ok(swapped.moved.includes(sent.id));
   assert.equal(loadOrCreate(reviewer.name).pubkey, reviewer.pubkey);
-  const after = (await request(owner, `/peers?project=${project}`)).peers.find(peer => peer.session === reviewer.name);
+  const roster = (await request(owner, `/peers?project=${project}`)).peers;
+  assert.ok(!roster.some(peer => peer.session === reviewer.name));
+  const after = roster.find(peer => peer.session === `${swapped.to}:${project}`);
+  assert.notEqual(after.pubkey, reviewer.pubkey);
+  const contracts = await request(owner, `/contracts?session=operator&project=${project}`);
+  assert.equal(contracts.contracts.find(c => c.id === sent.id).to, after.session);
   assert.equal(after.llm, "kimi");
-  console.log("enforce persona drill passed: distinct signed seats, stable swap session/key/history, legacy enrollment retained");
+  console.log("enforce persona drill passed: distinct signed seats, swap gets its own signed name and retains contract ids, legacy enrollment retained");
 } finally {
   for (const runner of runners) {
     runner.kill("SIGTERM");

@@ -24,7 +24,7 @@ for (const binary of ["codex", "opencode", "python3", "tmux", "osascript"]) {
   writeFileSync(join(fakebin, binary), `#!/bin/sh\n${output}\n`, { mode: 0o755 });
 }
 const hub = await startTestHub({ dir: join(home, "hub"), env: { RELAY_AUTH: "off" } });
-const ctx = { home, env, project: "swap-drill", seatDir: join(home, ".agent-bus/seats"), hub: hub.base, root: resolve("."), dir: home };
+const ctx = { home, env, project: "swap-drill", seatDir: join(home, ".agent-bus/seats"), statePath: join(home, ".agent-bus/crew-windows.txt"), hub: hub.base, root: resolve("."), dir: home };
 const post = async (path, body) => {
   const response = await fetch(hub.base + path, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
   const result = await response.json();
@@ -69,16 +69,18 @@ try {
   mkdirSync(join(home, ".codex"));
   writeFileSync(join(home, ".codex/auth.json"), JSON.stringify({ tokens: { access_token: "fake-for-test" } }));
   const order = [];
+  let replacementPersona;
   const runtime = {
     validate: options => validateReplacement(ctx, options, status),
-    async start(seat, stage) { order.push("start"); await register(`${stage.label}:${ctx.project}`); },
+    async start(seat, stage) { order.push("start"); replacementPersona = stage.persona; await register(`${stage.label}:${ctx.project}`); },
     async ready(stage) { order.push("ready"); return `${stage.label}:${ctx.project}`; },
     freeze() { order.push("freeze"); },
     resume() { order.push("resume"); },
     transfer(body) { order.push("transfer"); return post("/contracts/transfer", body); },
     stop() {
       order.push("stop");
-      const pending = JSON.parse(readFileSync(pendingPath(ctx, "kimi")));
+      assert.match(replacementPersona, /^codex-\d+$/);
+      const pending = JSON.parse(readFileSync(pendingPath(ctx, replacementPersona)));
       check("replacement queue is durable before old seat stops", pending.wake.length === 2);
     },
     release() { order.push("release"); },
@@ -87,9 +89,9 @@ try {
   const swapped = await performSwap(ctx, swapOptions(["kimi", "codex"]), runtime);
   check("happy swap moved pending and hub-only contracts", swapped.ok && swapped.moved.includes(held.id) && swapped.moved.includes(owed.id) && !swapped.moved.includes(answered.id));
   check("startup, readiness and transfer precede teardown", order.join(",") === "start,ready,freeze,transfer,stop,release");
-  check("persona ownership survives without losing original message ids", (await ledger()).contracts.filter(c => swapped.moved.includes(c.id)).every(c => c.to === "kimi:swap-drill"));
-  check("persona pending queue is retained", JSON.parse(readFileSync(pendingPath(ctx, "kimi"))).wake.length === 2);
-  await post("/send", { from: "kimi:swap-drill", to: "orch:swap-drill", text: "done", project: ctx.project, re: held.id });
+  check("replacement owns transferred contracts without losing original message ids", (await ledger()).contracts.filter(c => swapped.moved.includes(c.id)).every(c => c.to === `${swapped.to}:swap-drill`));
+  check("pending wakes move to replacement and old queue is removed", !existsSync(pendingPath(ctx, "kimi")) && JSON.parse(readFileSync(pendingPath(ctx, swapped.to))).wake.length === 2);
+  await post("/send", { from: `${swapped.to}:swap-drill`, to: "orch:swap-drill", text: "done", project: ctx.project, re: held.id });
   check("replacement reply settles original sender's contract", (await ledger()).contracts.find(c => c.id === held.id).answered);
 
   order.length = 0;
@@ -103,7 +105,7 @@ try {
     validate: options => validateReplacement({ ...ctx, env: { ...env, OPENROUTER_API_KEY: "fake-test-key" } }, options, status),
     stop() { order.push("stop"); },
   });
-  check("same-agent provider swap succeeds with concrete model", same.ok && same.seat === "codex" && same.to === "codex");
+  check("same-agent provider swap succeeds with concrete model", same.ok && same.seat === "codex" && /^codex-\d+$/.test(same.to) && same.to !== swapped.to);
   order.length = 0;
   const timeout = await performSwap(ctx, swapOptions(["kimi", "codex"]), { ...runtime, ready() { throw new Error("not on bus"); } });
   check("readiness failure cancels only replacement", !timeout.ok && order.join(",") === "start,cancel");
@@ -120,9 +122,9 @@ try {
   const question = await post("/send", { from: "kimi:swap-drill", to: "orch:swap-drill", text: "which target?", project: ctx.project, kind: "ask", re: questionContract.id });
   writeFileSync(pendingPath(ctx, "kimi"), JSON.stringify({ wake: [], bcast: [], seen: [], ask: question.id, askTo: "orch:swap-drill" }));
   const heldAsk = await performSwap(ctx, swapOptions(["kimi", "codex"]), { ...runtime, stop() {} });
-  const restored = JSON.parse(readFileSync(pendingPath(ctx, "kimi")));
+  const restored = JSON.parse(readFileSync(pendingPath(ctx, heldAsk.to)));
   check("held ask metadata survives handoff", heldAsk.ok && restored.ask === question.id && restored.askTo === "orch:swap-drill");
-  const questions = await get("/contracts?session=kimi:swap-drill&project=swap-drill");
+  const questions = await get(`/contracts?session=${heldAsk.to}:swap-drill&project=swap-drill`);
   check("held ask now belongs to replacement's ledger", questions.contracts.some(c => c.id === question.id && c.kind === "ask"));
   const crossed = await fetch(hub.base + "/contracts/transfer", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ from: "codex:swap-drill", to: "codex:other-project", project: ctx.project }) });
   check("transfer refuses cross-project destination", crossed.status === 400);
@@ -143,7 +145,7 @@ try {
   while (!existsSync(`${stage}.ready`) && stageChild.exitCode === null && Date.now() < deadline) await setTimeout(50);
   check("staged runner registers without running a CLI", existsSync(`${stage}.ready`) && stageChild.exitCode === null);
   check("staging identity is visible on test bus", (await get("/peers")).peers.some(p => p.session === "staging:swap-drill"));
-  writeFileSync(`${stage}.release`, JSON.stringify({ agent: "codex" }));
+  writeFileSync(`${stage}.release`, JSON.stringify({ agent: "codex", persona: "codex-2" }));
   const code = await new Promise(resolveExit => stageChild.once("exit", resolveExit));
   check("staged runner proceeds only after handoff release", code === 0);
   check("released runner removes temporary stage from roster", !(await get("/peers")).peers.some(p => p.session === "staging:swap-drill"));
@@ -161,6 +163,7 @@ try {
   check("replacement survives old runner teardown", replacement.exitCode === null);
 
   const runnerProject = "swap-runner-drill";
+  const runnerPersona = "codex-20";
   const invocationLog = join(home, "invocations.log");
   writeFileSync(join(fakebin, "opencode"), `#!${process.execPath}\nimport { appendFileSync } from 'node:fs';\nappendFileSync(${JSON.stringify(invocationLog)}, JSON.stringify(process.argv.slice(2)) + '\\n');\nconsole.log('The isolated replacement processed its handed-off request and recorded the concrete result for the test runner.');\n`, { mode: 0o755 });
   const runnerStage = join(home, "runner-stage");
@@ -173,14 +176,16 @@ try {
     const readyDeadline = Date.now() + 10000;
     while (!existsSync(`${runnerStage}.ready`) && realRunner.exitCode === null && Date.now() < readyDeadline) await setTimeout(50);
     check("real runner waits before opening the provider CLI", existsSync(`${runnerStage}.ready`) && !existsSync(invocationLog));
-    const work = await post("/send", { from: `orch:${runnerProject}`, to: `codex:${runnerProject}`, project: runnerProject, text: "contract: uniquely-carried-swap-work" });
-    writeFileSync(pendingPath({ ...ctx, project: runnerProject }, "codex"), JSON.stringify({ wake: [{ id: work.id, from: `orch:${runnerProject}`, to: `codex:${runnerProject}`, text: "contract: uniquely-carried-swap-work", project: runnerProject }], bcast: [], seen: [] }));
-    writeFileSync(`${runnerStage}.release`, JSON.stringify({ agent: "codex", cursor: work.id }));
+    const work = await post("/send", { from: `orch:${runnerProject}`, to: `${runnerPersona}:${runnerProject}`, project: runnerProject, text: "contract: uniquely-carried-swap-work" });
+    writeFileSync(pendingPath({ ...ctx, project: runnerProject }, runnerPersona), JSON.stringify({ wake: [{ id: work.id, from: `orch:${runnerProject}`, to: `${runnerPersona}:${runnerProject}`, text: "contract: uniquely-carried-swap-work", project: runnerProject }], bcast: [], seen: [] }));
+    writeFileSync(`${runnerStage}.release`, JSON.stringify({ agent: "codex", persona: runnerPersona, cursor: work.id }));
     const wakeDeadline = Date.now() + 20000;
     while ((!existsSync(invocationLog) || !readFileSync(invocationLog, "utf8").includes("uniquely-carried-swap-work")) && realRunner.exitCode === null && Date.now() < wakeDeadline) await setTimeout(100);
     const invocations = existsSync(invocationLog) ? readFileSync(invocationLog, "utf8") : "";
     check("same-agent provider runner executes the handed-off contract through opencode", invocations.includes("uniquely-carried-swap-work") && invocations.includes("openrouter/test-model"));
-    check("replacement uses canonical seat identity on bus", (await get(`/peers?project=${runnerProject}`)).peers.some(p => p.session === `codex:${runnerProject}`));
+    const roster = (await get(`/peers?project=${runnerProject}`)).peers;
+    check("replacement uses its released persona on bus", roster.some(p => p.session === `${runnerPersona}:${runnerProject}`));
+    check("replacement does not register under its driver or stage label", !roster.some(p => [`codex:${runnerProject}`, `codex-swap-test:${runnerProject}`].includes(p.session)));
   } finally { try { process.kill(-realRunner.pid, "SIGKILL"); } catch {} }
   console.log(`${checks} passed, 0 failed`);
 } finally {

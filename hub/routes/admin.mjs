@@ -39,14 +39,16 @@ export async function routeAdmin({ req, res, q, P, auth, ctx }) {
     if (req.method === "POST" && P === "/unregister") {
       const b = await body(req);
       if (!b.session || !b.project) return json(res, 400, { error: "session and project required" });
-      if (AUTH_MODE !== "off" && (auth?.identity?.name !== b.session || !scopeAllows(auth.identity, b.project, "write"))) {
-        return json(res, 403, { error: "only the session owner can unregister its peer" });
-      }
       const peer = state.peers[b.session];
       if (peer && peer.project !== canon(b.project)) return json(res, 403, { error: "peer belongs to a different project" });
+      const self = auth?.identity?.name === b.session && scopeAllows(auth.identity, b.project, "write");
+      const owner = scopeAllows(auth?.identity, b.project, "owner") && (!peer || peer.kind === "agent");
+      if (AUTH_MODE !== "off" && !self && !owner) {
+        return json(res, 403, { error: "only the session itself or a project owner removing an agent can unregister its peer" });
+      }
       delete state.peers[b.session];
       markDirty();
-      return json(res, 200, { ok: true });
+      return json(res, 200, { ok: true, removed: !!peer });
     }
     if (req.method === "POST" && P === "/register") {
       const b = await body(req);
