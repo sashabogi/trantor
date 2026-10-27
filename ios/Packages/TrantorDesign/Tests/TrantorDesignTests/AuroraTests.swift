@@ -20,8 +20,10 @@ final class AuroraTests: XCTestCase {
             for (name, light, strength) in lights {
                 for (role, foreground) in [("text", Palette.text), ("text2", Palette.text2)] {
                     let view = ZStack {
-                        Palette.auroraGround
-                        light.opacity(strength * (reduced ? 0.4 : 1))
+                        ZStack {
+                            Palette.auroraGround
+                            light.opacity(strength * (reduced ? 0.4 : 1))
+                        }.drawingGroup(colorMode: .linear)
                         AuroraSurface(shape: Rectangle())
                         Text("Aurora \(role)").font(.ui(16)).foregroundStyle(foreground)
                         HStack { Spacer(); Rectangle().fill(foreground).frame(width: 24) }
@@ -56,6 +58,28 @@ final class AuroraTests: XCTestCase {
                     }
                 }
             }
+        }
+    }
+
+    @MainActor func testPanelStaysDarkWithoutGlowInEitherHostScheme() throws {
+        var samples: [[Double]] = []
+        for scheme in [ColorScheme.light, .dark] {
+            let view = ZStack {
+                Palette.auroraGround
+                AuroraSurface(shape: Rectangle())
+            }
+            .frame(width: 100, height: 100)
+            .environment(\.colorScheme, scheme)
+            let renderer = ImageRenderer(content: view)
+            renderer.scale = 1
+            let snapshot = try XCTUnwrap(renderer.uiImage)
+            let sample = try pixel(snapshot, x: 50, y: 50)
+            XCTAssertGreaterThan(luminance(sample), 0.005, "Panel fill must remain visible")
+            XCTAssertLessThan(luminance(sample), 0.03, "Unlit glass must stay near the navy ground")
+            samples.append(sample)
+        }
+        for (light, dark) in zip(samples[0], samples[1]) {
+            XCTAssertEqual(light, dark, accuracy: 0.01, "Host appearance must not lighten Aurora glass")
         }
     }
 

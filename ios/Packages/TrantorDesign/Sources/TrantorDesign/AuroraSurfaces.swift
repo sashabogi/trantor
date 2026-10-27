@@ -37,24 +37,27 @@ public struct AuroraBackground: View {
     public init(state: AuroraState) { self.state = state }
 
     public var body: some View {
-        GeometryReader { _ in
+        GeometryReader { geometry in
             ZStack {
                 Palette.auroraGround
-                light(Glow.primary(state), strength: Glow.primaryStrength, x: 0.12, y: 0.18)
-                light(Glow.secondary, strength: Glow.secondaryStrength, x: 0.70, y: 0.30)
-                light(Glow.tertiary, strength: Glow.tertiaryStrength, x: 0.50, y: 1)
+                light(Glow.primary(state), strength: Glow.primaryStrength, x: 0.12, y: 0.18, size: geometry.size)
+                light(Glow.secondary, strength: Glow.secondaryStrength, x: 0.70, y: 0.30, size: geometry.size)
+                light(Glow.tertiary, strength: Glow.tertiaryStrength, x: 0.50, y: 1, size: geometry.size)
             }
+            .drawingGroup(colorMode: .linear)
             .clipped()
         }
         .ignoresSafeArea()
         .accessibilityHidden(true)
     }
 
-    private func light(_ color: Color, strength: Double, x: CGFloat, y: CGFloat) -> some View {
+    private func light(_ color: Color, strength: Double, x: CGFloat, y: CGFloat, size: CGSize) -> some View {
         EllipticalGradient(stops: [
             .init(color: color.opacity(strength * (reduceTransparency ? 0.4 : 1)), location: 0),
-            .init(color: Glass.transparent, location: 0.70)
-        ], center: UnitPoint(x: x, y: y), startRadiusFraction: 0, endRadiusFraction: 1)
+            .init(color: Glass.transparent, location: 0.68)
+        ], center: .center, startRadiusFraction: 0, endRadiusFraction: 0.5)
+        .frame(width: size.width * 0.70 / 0.68, height: size.height * 0.70 / 0.68)
+        .position(x: size.width * x, y: size.height * y)
     }
 }
 
@@ -79,6 +82,8 @@ public struct AuroraSurface<S: InsettableShape>: View {
                 shape.fill(Palette.panel2)
             } else {
                 shape.fill(.ultraThinMaterial)
+                    .environment(\.colorScheme, .dark)
+                    .blendMode(.multiply)
                 shape.fill(fill ?? glass.fill)
             }
             shape.strokeBorder(contrast == .increased ? Glass.contrastStroke : (stroke ?? glass.stroke), lineWidth: 1)

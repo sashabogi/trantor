@@ -87,7 +87,7 @@ public struct SeatCard: View {
                 }
             }
             if !compact {
-                if activity.count > 1 { Sparkline(activity, idle: idle).frame(height: 28) }
+                if activity.count > 1 { Sparkline(activity, idle: idle).frame(maxWidth: 200).frame(height: 28) }
                 if let caption { Text(caption).font(.ui(13, relativeTo: .caption)).foregroundStyle(secondary) }
             }
         }
