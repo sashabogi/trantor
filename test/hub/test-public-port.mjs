@@ -97,6 +97,9 @@ try {
   equal((await request(pub, null, "GET", "/tasks")).status, 401, "unsigned public read refused");
   equal(await headersOnlyPost(pub), 401, "unsigned 16 MiB POST refused before any body bytes are sent");
   const completeHeaders = signRequest(phone, { method: "POST", path: "/session/prompt", body: "" });
+  equal(await headersOnlyPost(pub, completeHeaders), 401, "unknown pubkey with all signature headers refused before body read");
+  equal(await headersOnlyPost(pub, Object.fromEntries(Object.keys(completeHeaders).map(key => [key, "dummy"]))),
+    401, "dummy signature headers cannot obtain a 16 MiB read");
   for (const header of ["x-trantor-pubkey", "x-trantor-sig", "x-trantor-ts", "x-trantor-nonce"]) {
     const incomplete = { ...completeHeaders };
     delete incomplete[header];
@@ -108,6 +111,12 @@ try {
   const invite = await request(hub.base, owner, "POST", "/invite", { scopes: [{ project: "demo", role: "approver" }], kind: "human" });
   equal(invite.status, 200, "owner private invite unchanged");
   equal((await request(pub, phone, "POST", "/enroll", { token: invite.json.token, name: "phone", kind: "human" })).status, 200, "signed invite enrolls new phone");
+  const readOnly = generate();
+  const readInvite = await request(hub.base, owner, "POST", "/invite", { scopes: [{ project: "demo", role: "read" }], kind: "human" });
+  equal((await request(pub, readOnly, "POST", "/enroll", { token: readInvite.json.token, name: "reader", kind: "human" })).status,
+    200, "read-only key enrolls through the exempt route");
+  equal(await headersOnlyPost(pub, signRequest(readOnly, { method: "POST", path: "/session/prompt", body: "" })),
+    401, "enrolled read-only key refused before body read");
   equal((await request(pub, generate(), "POST", "/enroll", { token: invite.json.token })).status, 403, "invite cannot be reused for a new key");
   equal((await request(pub, owner, "POST", "/enroll", {})).status, 403, "existing owner still needs token");
   for (const path of ["/projects", "/tasks?project=demo", "/session/chat?project=demo", "/crew/roster?project=demo"]) {
@@ -187,7 +196,7 @@ for (const mode of ["off", "warn"]) {
     equal((await request(weak.base, reader, "POST", "/enroll", { name: "reader", scopes: [{ project: "demo", role: "read" }] })).status, 200, "private reader enrollment");
     equal((await request(weak.publicBase, reader, "GET", "/tasks?project=demo")).status, 200, "public known reader works");
     equal((await request(weak.publicBase, reader, "GET", "/tasks?project=other")).status, 403, "public reader scope stays strict");
-    equal((await request(weak.publicBase, reader, "POST", "/session/prompt", { project: "demo", text: "denied" })).status, 403, "public write authorization stays strict");
+    equal((await request(weak.publicBase, reader, "POST", "/session/prompt", { project: "demo", text: "denied" })).status, 401, "public read-only upload is refused before body processing");
   } finally { await weak.stop(); }
 }
 console.log(`public port: ${checks} checks passed`);

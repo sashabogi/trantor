@@ -32,7 +32,7 @@ export function publicClientIP(req) {
   return normalizedIP(forwarded) || socket;
 }
 
-export function createPublicGate({ now = Date.now, log = line => process.stderr.write(`${line}\n`) } = {}) {
+export function createPublicGate({ now = Date.now, log = line => process.stderr.write(`${line}\n`), canUpload = () => false } = {}) {
   const clients = new Map();
   const admissions = new WeakMap();
   const refusals = new Map();
@@ -97,6 +97,12 @@ export function createPublicGate({ now = Date.now, log = line => process.stderr.
     if (path !== "/health" && Object.values(HDR).some(header => !req.headers[header])) {
       res.writeHead(401, { "content-type": "application/json", "connection": "close" });
       res.end(JSON.stringify({ error: "signature required" }));
+      return false;
+    }
+    // The photo endpoint has a larger body budget; unknown or read-only keys get no read budget.
+    if (req.method === "POST" && path === "/session/prompt" && !canUpload(req.headers[HDR.pubkey])) {
+      res.writeHead(401, { "content-type": "application/json", "connection": "close" });
+      res.end(JSON.stringify({ error: "enrolled phone write scope required" }));
       return false;
     }
     return true;

@@ -117,14 +117,17 @@ export function createSessionRuntime({ state, markDirty, appendEvent, pushEventT
     if (changed) markDirty();
     return changed;
   }
-  // Evict oldest terminal rows first so live work is never the first casualty; their attachment
-  // bytes go with them.
+  // Only terminal rows can be discarded; live work keeps its queue slot and attachment bytes.
   function trimPrompts() {
     while (state.sessionPrompts.length > PROMPT_CAP) {
       const ti = state.sessionPrompts.findIndex(x => x.status !== "queued" && x.status !== "claimed");
-      const [evicted] = state.sessionPrompts.splice(ti >= 0 ? ti : 0, 1);
+      if (ti < 0) break;
+      const [evicted] = state.sessionPrompts.splice(ti, 1);
       unlinkAttachments(evicted);
     }
+  }
+  function queueFull() {
+    return state.sessionPrompts.filter(p => p.status === "queued" || p.status === "claimed").length >= PROMPT_CAP;
   }
   const sweep = setInterval(() => {
     sweepAttachments();
@@ -244,15 +247,13 @@ export function createSessionRuntime({ state, markDirty, appendEvent, pushEventT
       const other = String(b.other || "").slice(0, ANSWER_OTHER_MAX);
       if (!picks.length && !other.trim()) return json(res, 400, { error: "picks or other required" });
       expireQueued();
+      if (queueFull()) return json(res, 429, { error: "prompt queue full; try again after pending work finishes" });
       state.sessionPromptSeq += 1;
       const text = other.trim() ? other : `picks ${picks.join(", ")}`;
       const p = { id: state.sessionPromptSeq, project, kind: "answer", session, toolId, picks, other,
         text, by: String(auth?.identity?.name || "").slice(0, 120), ts: now(), status: "queued" };
       state.sessionPrompts.push(p);
-      while (state.sessionPrompts.length > PROMPT_CAP) {
-        const ti = state.sessionPrompts.findIndex(x => x.status !== "queued" && x.status !== "claimed");
-        state.sessionPrompts.splice(ti >= 0 ? ti : 0, 1);
-      }
+      trimPrompts();
       markDirty();
       appendEvent("chat.prompt.queued", project, p.by, { promptId: p.id, kind: "answer", toolId, text: text.slice(0, EVENT_TEXT_MAX) });
       pushEventToStreams({ ts: p.ts, type: "chat.prompt", id: p.id, project });
@@ -284,6 +285,7 @@ export function createSessionRuntime({ state, markDirty, appendEvent, pushEventT
       if (action === "up" && !seats.length) return json(res, 400, { error: "up needs at least one seat" });
       if (action === "swap" && (!from || !to)) return json(res, 400, { error: "swap needs from and to" });
       expireQueued();
+      if (queueFull()) return json(res, 429, { error: "prompt queue full; try again after pending work finishes" });
       state.sessionPromptSeq += 1;
       // down with an empty seat list means the whole project.
       const text = action === "swap" ? `swap ${from} ${to}` : seats.length ? `${action} ${seats.join(" ")}` : `${action} ${project}`;
@@ -292,10 +294,7 @@ export function createSessionRuntime({ state, markDirty, appendEvent, pushEventT
       if (from) p.from = from;
       if (to) p.to = to;
       state.sessionPrompts.push(p);
-      while (state.sessionPrompts.length > PROMPT_CAP) {
-        const ti = state.sessionPrompts.findIndex(x => x.status !== "queued" && x.status !== "claimed");
-        state.sessionPrompts.splice(ti >= 0 ? ti : 0, 1);
-      }
+      trimPrompts();
       markDirty();
       appendEvent("chat.prompt.queued", project, p.by, { promptId: p.id, kind: "crew", action, text: text.slice(0, EVENT_TEXT_MAX) });
       pushEventToStreams({ ts: p.ts, type: "chat.prompt", id: p.id, project });
@@ -354,6 +353,7 @@ export function createSessionRuntime({ state, markDirty, appendEvent, pushEventT
       const parsed = parseAttachments(b.attachments);
       if (parsed.error) return json(res, 400, { error: parsed.error });
       expireQueued();
+      if (queueFull()) return json(res, 429, { error: "prompt queue full; try again after pending work finishes" });
       const liveBytes = state.sessionPrompts
         .filter(p => p.project === project && (p.status === "queued" || p.status === "claimed"))
         .reduce((total, p) => total + (p.attachments || []).reduce((sum, a) => sum + a.size, 0), 0);

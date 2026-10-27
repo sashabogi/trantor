@@ -195,6 +195,8 @@ server.listen(PORT, HOST, () => console.error(`[trantor] hub on http://${HOST}:$
 
 if (process.env.RELAY_PUBLIC_PORT) {
   const publicPort = Number(process.env.RELAY_PUBLIC_PORT);
-  const publicServer = http.createServer(requestHandler(publicAuth, publicContext, createPublicGate()));
+  const publicGate = createPublicGate({ canUpload: pubkey =>
+    publicAuth.scopeAllows(publicAuth.findIdentity(pubkey), "", "write") });
+  const publicServer = http.createServer(requestHandler(publicAuth, publicContext, publicGate));
   publicServer.listen(publicPort, "127.0.0.1", () => console.error(`[trantor] public hub on http://127.0.0.1:${publicServer.address().port} (auth: enforce)`));
 }

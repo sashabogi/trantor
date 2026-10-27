@@ -22,7 +22,7 @@ Only the private listener considers the larger chat/import limits. All four sign
 
 For a body over the ordinary route limit, the handler verifies the signature, enrollment and nonce before JSON parsing, then checks owner scope against the destination project before dispatch. This strict path also applies when private authentication is configured as `off` or `warn`. Unknown identities, writers and unsigned requests keep the ordinary cap. UTF-8 decoding preserves characters split across network chunks so signatures verify against the original text.
 
-The public listener never consults the private owner limits. It rejects missing signature headers before reading a protected route's body; its existing route allowlist excludes `/import` and chat publishing. Allowed ordinary writes remain capped at 4 MiB even for owner identities. The existing phone-image exception remains 16 MiB.
+The public listener never consults the private owner limits. It rejects missing signature headers before reading a protected route's body. The photo-upload endpoint additionally requires an enrolled, non-revoked pubkey with a write, approver or owner scope before reading any bytes. Target-project authorization still follows signature verification because the project is inside the JSON body. Enrollment is exempt from the enrolled-key check. This rejects dummy or unknown keys without buffering a 16 MiB upload; a known key header is still only a hint until the signature verifies. The existing route allowlist excludes `/import` and chat publishing. Allowed ordinary writes remain capped at 4 MiB even for owner identities. The existing phone-image exception remains 16 MiB.
 
 ## Regression coverage
 
