@@ -111,10 +111,9 @@ public enum Glow {
 public struct Glass: Sendable {
     public let fill: Color
     public let stroke: Color
-    public let blur: CGFloat
-    public static let panel = Glass(fill: .white.opacity(0.07), stroke: .white.opacity(0.14), blur: 30)
-    public static let control = Glass(fill: .white.opacity(0.10), stroke: .white.opacity(0.16), blur: 30)
-    public static let selected = Glass(fill: .white.opacity(0.18), stroke: .clear, blur: 0)
+    public static let panel = Glass(fill: .white.opacity(0.07), stroke: .white.opacity(0.14))
+    public static let control = Glass(fill: .white.opacity(0.10), stroke: .white.opacity(0.16))
+    public static let selected = Glass(fill: .white.opacity(0.18), stroke: .clear)
     public static let contrastStroke = Color.white.opacity(0.30)
     public static let operatorFill = Palette.accent.opacity(0.22)
     public static let operatorStroke = Palette.accent.opacity(0.35)
