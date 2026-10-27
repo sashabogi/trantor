@@ -521,6 +521,7 @@ where
         None => execute_with_renewal(hub, host, &id, deliver(prompt.clone()), CLAIM_RENEW_INTERVAL).await,
     };
     result["id"] = id;
+    result["host"] = json!(host);
     Ok(Some(result))
 }
 

@@ -137,7 +137,7 @@ async fn claim_precedes_delivery_and_ack_uses_claim_text() {
     .unwrap();
     assert_eq!(
         body,
-        json!({"id":"prompt-1", "outcome":"delivered", "error":null})
+        json!({"id":"prompt-1", "host":"host", "outcome":"delivered", "error":null})
     );
     ack(&hub, body).await.unwrap();
     assert_eq!(
@@ -399,6 +399,7 @@ async fn retrying_failed_ack_does_not_reclaim_or_redeliver() {
     .await
     .unwrap()
     .unwrap();
+    assert_eq!(body["host"], "host");
     assert!(ack(&hub, body.clone()).await.is_err());
     ack(&hub, body).await.unwrap();
     assert_eq!(

@@ -272,6 +272,7 @@ async fn claimed_crew_ack_carries_id_outcome_and_output() {
         };
         assert_eq!(result["outcome"], expected);
         assert_eq!(result["id"], 42);
+        assert_eq!(result["host"], "mac");
         assert_eq!(result["error"].is_null(), expected == "done");
         ack(&hub, result.clone()).await.unwrap();
         let requests = hub.requests.lock().unwrap();
