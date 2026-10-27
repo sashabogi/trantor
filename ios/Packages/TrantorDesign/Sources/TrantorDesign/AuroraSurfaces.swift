@@ -52,11 +52,16 @@ public struct AuroraBackground: View {
     }
 
     private func light(_ color: Color, strength: Double, x: CGFloat, y: CGFloat, size: CGSize) -> some View {
-        EllipticalGradient(stops: [
-            .init(color: color.opacity(strength * (reduceTransparency ? 0.4 : 1)), location: 0),
-            .init(color: Glass.transparent, location: 0.68)
+        let peak = strength * (reduceTransparency ? 0.4 : 1)
+        return EllipticalGradient(stops: [
+            .init(color: color.opacity(peak), location: 0),
+            .init(color: color.opacity(peak * 0.35), location: 0.45),
+            .init(color: color.opacity(peak * 0.08), location: 0.58),
+            .init(color: color.opacity(peak * 0.008), location: 0.64),
+            .init(color: color.opacity(0), location: 0.68),
+            .init(color: color.opacity(0), location: 1)
         ], center: .center, startRadiusFraction: 0, endRadiusFraction: 0.5)
-        .frame(width: size.width * 0.70 / 0.68, height: size.height * 0.70 / 0.68)
+        .frame(width: size.width * 0.70 / 0.68, height: size.width * 0.70 * 0.55 / 0.68)
         .position(x: size.width * x, y: size.height * y)
     }
 }
