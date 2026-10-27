@@ -48,8 +48,7 @@ public struct AskCard: View {
         }
         .padding(16)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .auroraPanel(stroke: Glass.waitingStroke)
-        .shadow(color: Glass.waitingShadow, radius: 60)
+        .auroraPanel(stroke: Glass.waitingStroke, shadow: Glass.waitingShadow)
     }
 }
 

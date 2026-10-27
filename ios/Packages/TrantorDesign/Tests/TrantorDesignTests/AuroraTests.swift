@@ -66,7 +66,7 @@ final class AuroraTests: XCTestCase {
         for scheme in [ColorScheme.light, .dark] {
             let view = ZStack {
                 Palette.auroraGround
-                AuroraSurface(shape: Rectangle())
+                AuroraSurface(shape: Rectangle(), stroke: Glass.waitingStroke, shadow: Glass.waitingShadow)
             }
             .frame(width: 100, height: 100)
             .environment(\.colorScheme, scheme)

@@ -20,8 +20,7 @@ public struct DecisionCard: View {
         }
         .padding(16)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .auroraPanel(stroke: Glass.waitingStroke)
-        .shadow(color: Glass.waitingShadow, radius: 60)
+        .auroraPanel(stroke: Glass.waitingStroke, shadow: Glass.waitingShadow)
     }
     private var details: some View {
         VStack(alignment: .leading, spacing: 8) {

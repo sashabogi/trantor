@@ -67,13 +67,14 @@ public struct AuroraSurface<S: InsettableShape>: View {
     let glass: Glass
     let fill: Color?
     let stroke: Color?
+    let shadow: Color?
     @Environment(\.accessibilityReduceTransparency) private var systemReduceTransparency
     @Environment(\.auroraReduceTransparency) private var previewReduceTransparency
     private var reduceTransparency: Bool { systemReduceTransparency || previewReduceTransparency }
     @Environment(\.colorSchemeContrast) private var contrast
 
-    public init(shape: S, glass: Glass = .panel, fill: Color? = nil, stroke: Color? = nil) {
-        self.shape = shape; self.glass = glass; self.fill = fill; self.stroke = stroke
+    public init(shape: S, glass: Glass = .panel, fill: Color? = nil, stroke: Color? = nil, shadow: Color? = nil) {
+        self.shape = shape; self.glass = glass; self.fill = fill; self.stroke = stroke; self.shadow = shadow
     }
 
     public var body: some View {
@@ -87,13 +88,14 @@ public struct AuroraSurface<S: InsettableShape>: View {
                 shape.fill(fill ?? glass.fill)
             }
             shape.strokeBorder(contrast == .increased ? Glass.contrastStroke : (stroke ?? glass.stroke), lineWidth: 1)
+                .shadow(color: shadow ?? Glass.transparent, radius: 60)
         }
     }
 }
 
 extension View {
-    public func auroraPanel(radius: CGFloat = Radius.card, stroke: Color? = nil) -> some View {
-        background(AuroraSurface(shape: RoundedRectangle(cornerRadius: radius, style: .continuous), stroke: stroke))
+    public func auroraPanel(radius: CGFloat = Radius.card, stroke: Color? = nil, shadow: Color? = nil) -> some View {
+        background(AuroraSurface(shape: RoundedRectangle(cornerRadius: radius, style: .continuous), stroke: stroke, shadow: shadow))
     }
 }
 
