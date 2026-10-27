@@ -12,6 +12,18 @@ public struct RootView: View {
     public init() {}
 
     public var body: some View {
+        #if DEBUG
+        if ProcessInfo.processInfo.arguments.contains("-gallery") {
+            AuroraGallery()
+        } else {
+            applicationRoot
+        }
+        #else
+        applicationRoot
+        #endif
+    }
+
+    private var applicationRoot: some View {
         Group {
             if !model.isReady || model.showPairingSummary {
                 NavigationStack { PairingView() }

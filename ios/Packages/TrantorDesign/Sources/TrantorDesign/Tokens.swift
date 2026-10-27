@@ -16,6 +16,7 @@ extension Color {
 
 public enum Palette {
     // Surfaces, darkest to lightest
+    public static let auroraGround = Color(hex: 0x070A16)
     public static let ground = Color(hex: 0x060912)
     public static let stage = Color(hex: 0x0B1020)
     public static let ink = Color(hex: 0x0D1117)
@@ -30,8 +31,8 @@ public enum Palette {
     public static let line3 = Color(hex: 0x8CA2D6, opacity: 0.24)
 
     // Text
-    public static let text = Color(hex: 0xE8EDF7)
-    public static let text2 = Color(hex: 0xAEB8CF)
+    public static let text = Color(hex: 0xF2F5FB)
+    public static let text2 = Color(hex: 0xC9D2E6)
     public static let textDim = Color(hex: 0x71809E)
     public static let textFaint = Color(hex: 0x4A5672)
 
@@ -75,6 +76,10 @@ public enum Space {
 }
 
 public enum Radius {
+    public static let card: CGFloat = 28
+    public static let tile: CGFloat = 24
+    public static let bubble: CGFloat = 24
+    public static let tail: CGFloat = 8
     public static let xs: CGFloat = 4
     public static let sm: CGFloat = 6
     public static let md: CGFloat = 8
@@ -85,4 +90,37 @@ public enum Motion {
     /// cubic-bezier(0.2, 0.7, 0.3, 1)
     public static let ease = Animation.timingCurve(0.2, 0.7, 0.3, 1, duration: 0.22)
     public static let flash = Animation.easeOut(duration: 0.6)
+}
+
+
+public enum Glow {
+    public static func primary(_ state: AuroraState) -> Color {
+        switch state {
+        case .clear: return Palette.accent
+        case .waiting: return Palette.amber
+        case .failed: return Palette.down
+        }
+    }
+    public static let secondary = Color(hex: 0x7F9CFF)
+    public static let tertiary = Color(hex: 0xA76EFF)
+    public static let primaryStrength = 0.32
+    public static let secondaryStrength = 0.26
+    public static let tertiaryStrength = 0.20
+}
+
+public struct Glass: Sendable {
+    public let fill: Color
+    public let stroke: Color
+    public let blur: CGFloat
+    public static let panel = Glass(fill: .white.opacity(0.07), stroke: .white.opacity(0.14), blur: 30)
+    public static let control = Glass(fill: .white.opacity(0.10), stroke: .white.opacity(0.16), blur: 30)
+    public static let selected = Glass(fill: .white.opacity(0.18), stroke: .clear, blur: 0)
+    public static let contrastStroke = Color.white.opacity(0.30)
+    public static let operatorFill = Palette.accent.opacity(0.22)
+    public static let operatorStroke = Palette.accent.opacity(0.35)
+    public static let waitingStroke = Palette.amber.opacity(0.28)
+    public static let waitingShadow = Palette.amber.opacity(0.13)
+    public static let focusStroke = Palette.accent.opacity(0.45)
+    public static let transparent = Color.clear
+    public static let orbHighlight = Color.white
 }

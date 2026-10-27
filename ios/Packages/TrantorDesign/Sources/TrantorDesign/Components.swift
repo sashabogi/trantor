@@ -238,51 +238,6 @@ public struct Hairline: View {
     public var body: some View { Rectangle().fill(Palette.hairline).frame(height: 1) }
 }
 
-/// A sparkline, mint when the last point is above the first, red below.
-public struct Sparkline: View {
-    let values: [Double]
-    public init(_ values: [Double]) { self.values = values }
-    public var body: some View {
-        GeometryReader { geo in
-            let lo = values.min() ?? 0, hi = values.max() ?? 1
-            let span = max(hi - lo, 0.0001)
-            let up = (values.last ?? 0) >= (values.first ?? 0)
-            Path { p in
-                for (i, v) in values.enumerated() {
-                    let x = geo.size.width * CGFloat(i) / CGFloat(max(values.count - 1, 1))
-                    let y = geo.size.height * (1 - CGFloat((v - lo) / span))
-                    i == 0 ? p.move(to: CGPoint(x: x, y: y)) : p.addLine(to: CGPoint(x: x, y: y))
-                }
-            }
-            .stroke(up ? Palette.up : Palette.down, style: StrokeStyle(lineWidth: 1.4, lineCap: .round, lineJoin: .round))
-        }
-        .accessibilityHidden(true)
-    }
-}
-
-/// A big stat: eyebrow label over a mono hero number, with an optional delta.
-public struct StatTile: View {
-    let label: String
-    let value: String
-    var delta: String?
-    var deltaUp: Bool
-    public init(_ label: String, value: String, delta: String? = nil, deltaUp: Bool = true) {
-        self.label = label; self.value = value; self.delta = delta; self.deltaUp = deltaUp
-    }
-    public var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Eyebrow(label)
-            Text(value).font(.mono(24, .medium, relativeTo: .title)).monospacedDigit().foregroundStyle(Palette.text)
-                .lineLimit(1).minimumScaleFactor(0.6)
-            if let delta {
-                Text(delta).font(.tDataSmall).monospacedDigit().foregroundStyle(deltaUp ? Palette.up : Palette.down)
-            }
-        }
-        .card()
-        .accessibilityElement(children: .combine)
-    }
-}
-
 /// A segmented pill row ("Since open | Vs settle").
 public struct PillPicker<T: Hashable>: View {
     let options: [(T, String)]
