@@ -787,7 +787,7 @@ async fn claim_renewals_continue_during_lock_wait_and_execution() {
         drop(guard);
     };
     let id = json!(42);
-    let run = execute_with_renewal(&hub, "mac", &id, operation, Duration::from_millis(5));
+    let run = execute_with_renewal(&hub, "mac", &id, operation, ClaimExecution::default(), Duration::from_millis(5));
     let (result, ()) = tokio::time::timeout(Duration::from_secs(2), async {
         tokio::join!(run, unlock)
     }).await.unwrap();
@@ -796,4 +796,77 @@ async fn claim_renewals_continue_during_lock_wait_and_execution() {
     assert!(count >= 2, "both lock wait and execution need renewal");
     tokio::time::sleep(Duration::from_millis(15)).await;
     assert_eq!(hub.requests.lock().unwrap().len(), count, "renewals end with delivery");
+}
+
+struct LostClaimHub {
+    renewed: tokio::sync::Notify,
+}
+
+#[tokio::test]
+async fn lost_claim_ack_is_reported_without_permanent_retry() {
+    let hub = FakeHub::new(vec![(409, json!({"error": "claim lost"}))]);
+    assert!(ack(&hub, json!({"id": 42, "host": "mac", "outcome": "not_ready"})).await.is_ok());
+}
+impl Hub for LostClaimHub {
+    async fn request(&self, _: &str, _: &str, _: Option<Value>) -> Result<(u16, Value), String> {
+        self.renewed.notify_one();
+        Ok((409, json!({"error": "claim lost"})))
+    }
+}
+
+#[tokio::test]
+async fn lost_claim_cancels_before_project_lock_or_download_can_deliver() {
+    let hub = LostClaimHub { renewed: tokio::sync::Notify::new() };
+    let lock = tokio::sync::Mutex::new(());
+    let held = lock.lock().await;
+    let execution = ClaimExecution::default();
+    let operation = async {
+        let _guard = lock.lock().await;
+        assert!(execution.begin());
+        panic!("lost claim must never reach delivery");
+    };
+    let result = tokio::time::timeout(Duration::from_secs(1), execute_with_renewal(
+        &hub, "mac", &json!(42), operation, execution.clone(), Duration::from_millis(5),
+    )).await.expect("409 must cancel the lock wait");
+    assert_eq!(result["outcome"], "not_ready");
+    assert_eq!(result["error"], CLAIM_LOST);
+    drop(held);
+    assert!(!execution.begin(), "a late worker cannot start after cancellation");
+}
+
+#[tokio::test]
+async fn lost_claim_does_not_cancel_typing_that_already_started() {
+    let hub = LostClaimHub { renewed: tokio::sync::Notify::new() };
+    let execution = ClaimExecution::default();
+    let operation = async {
+        assert!(execution.begin());
+        hub.renewed.notified().await;
+        tokio::time::sleep(Duration::from_millis(10)).await;
+        json!({"outcome": "delivered"})
+    };
+    let result = execute_with_renewal(&hub, "mac", &json!(42), operation,
+        execution.clone(), Duration::from_millis(5)).await;
+    assert_eq!(result["outcome"], "delivered");
+}
+
+#[tokio::test]
+async fn lost_claim_stops_a_blocking_worker_that_has_not_started_typing() {
+    let hub = LostClaimHub { renewed: tokio::sync::Notify::new() };
+    let execution = ClaimExecution::default();
+    let worker_claim = execution.clone();
+    let (release, wait) = std::sync::mpsc::channel();
+    let (done, completion) = tokio::sync::oneshot::channel();
+    let operation = async move {
+        tokio::task::spawn_blocking(move || {
+            wait.recv().unwrap();
+            let typed = worker_claim.begin();
+            done.send(typed).unwrap();
+        }).await.unwrap();
+        json!({"outcome": "delivered"})
+    };
+    let result = execute_with_renewal(&hub, "mac", &json!(42), operation,
+        execution, Duration::from_millis(5)).await;
+    release.send(()).unwrap();
+    assert!(!completion.await.unwrap(), "spawn_blocking survives future cancellation, so it must check the claim");
+    assert_eq!(result["outcome"], "not_ready");
 }

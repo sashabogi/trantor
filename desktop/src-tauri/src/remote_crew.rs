@@ -184,6 +184,7 @@ pub(super) async fn deliver(
     seat: &local_sessions::HerdrSeat,
     on: &AtomicBool,
     runner: &impl Runner,
+    execution: &ClaimExecution,
 ) -> Value {
     let args = match argv(prompt) {
         Ok(args) => args,
@@ -210,6 +211,7 @@ pub(super) async fn deliver(
     if !on.load(Ordering::SeqCst) || !runner.hosts(seat) {
         return failure("Phone relay is off or this project is no longer hosted on this Mac");
     }
+    if !execution.begin() { return failure(CLAIM_LOST); }
     match runner
         .run("trantor", &args, Some(&cwd), COMMAND_TIMEOUT)
         .await

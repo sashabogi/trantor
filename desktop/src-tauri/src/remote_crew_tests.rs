@@ -153,7 +153,7 @@ async fn refuses_invalid_actions_specs_and_claude_before_any_command() {
     let runner = FakeRunner::new(vec![]);
     for p in invalid {
         assert_eq!(
-            deliver(&p, &seat(), &AtomicBool::new(true), &runner).await["outcome"],
+            deliver(&p, &seat(), &AtomicBool::new(true), &runner, &ClaimExecution::default()).await["outcome"],
             "failed",
             "{p}"
         );
@@ -168,7 +168,7 @@ async fn uses_only_matching_herdr_pane_checkout_and_maps_exit_status() {
             agents(),
             output(success, "\x1b[32mstarted\x1b[0m", "\nerr"),
         ]);
-        let result = deliver(&prompt(), &seat(), &AtomicBool::new(true), &runner).await;
+        let result = deliver(&prompt(), &seat(), &AtomicBool::new(true), &runner, &ClaimExecution::default()).await;
         assert_eq!(result["outcome"], if success { "done" } else { "failed" });
         assert_eq!(result["output"], "started\nerr");
         let calls = runner.calls.lock().unwrap();
@@ -196,7 +196,7 @@ async fn missing_or_relative_checkout_never_runs_trantor() {
         r#"{"result":{"agents":[{"pane_id":"w2:p8"}]}}"#,
     ] {
         let runner = FakeRunner::new(vec![output(true, raw, "")]);
-        let result = deliver(&prompt(), &seat(), &AtomicBool::new(true), &runner).await;
+        let result = deliver(&prompt(), &seat(), &AtomicBool::new(true), &runner, &ClaimExecution::default()).await;
         assert_eq!(result, failure(MISSING_CHECKOUT));
         assert_eq!(runner.calls.lock().unwrap().len(), 1);
     }
@@ -216,7 +216,7 @@ async fn never_claims_unhosted_and_never_executes_unclaimed_commands() {
         json!(42),
         &on,
         &[seat()],
-        |p, s| async move { deliver(&p, &s, on, runner).await },
+        |p, s, execution| async move { deliver(&p, &s, on, runner, &execution).await },
     )
     .await
     .unwrap();
@@ -230,7 +230,7 @@ async fn never_claims_unhosted_and_never_executes_unclaimed_commands() {
         json!(42),
         &on,
         &[seat()],
-        |p, s| async move { deliver(&p, &s, on, runner).await },
+        |p, s, execution| async move { deliver(&p, &s, on, runner, &execution).await },
     )
     .await
     .unwrap();
@@ -260,7 +260,7 @@ async fn claimed_crew_ack_carries_id_outcome_and_output() {
             json!(42),
             &on,
             &[seat()],
-            |p, s| async move { deliver(&p, &s, on, runner).await },
+            |p, s, execution| async move { deliver(&p, &s, on, runner, &execution).await },
         )
         .await
         .unwrap()
@@ -286,7 +286,7 @@ async fn off_switch_or_lost_host_stops_execution_and_roster() {
     let runner = FakeRunner::new(vec![]);
     let off = AtomicBool::new(false);
     assert_eq!(
-        deliver(&prompt(), &seat(), &off, &runner).await["outcome"],
+        deliver(&prompt(), &seat(), &off, &runner, &ClaimExecution::default()).await["outcome"],
         "failed"
     );
     assert!(sample_roster(&runner, &off).await.unwrap().is_none());
@@ -294,7 +294,7 @@ async fn off_switch_or_lost_host_stops_execution_and_roster() {
     publish_roster(&hub, json!({}), &off).await.unwrap();
     runner.hosted.store(false, Ordering::SeqCst);
     assert_eq!(
-        deliver(&prompt(), &seat(), &AtomicBool::new(true), &runner).await["outcome"],
+        deliver(&prompt(), &seat(), &AtomicBool::new(true), &runner, &ClaimExecution::default()).await["outcome"],
         "failed"
     );
     assert!(runner.calls.lock().unwrap().is_empty());
@@ -489,7 +489,7 @@ async fn rechecks_host_and_switch_after_resolving_checkout() {
             on: &on,
             disable,
         };
-        let result = deliver(&prompt(), &seat(), &on, &runner).await;
+        let result = deliver(&prompt(), &seat(), &on, &runner, &ClaimExecution::default()).await;
         assert_eq!(result["outcome"], "failed");
         assert_eq!(runner.fake.calls.lock().unwrap().len(), 1);
     }
@@ -507,7 +507,7 @@ async fn crew_claim_rejects_wrong_identity_and_project_without_commands() {
             "trantor",
             json!(42),
             &AtomicBool::new(true),
-            |_| async {
+            |_, _| async {
                 panic!("invalid claim executed");
             },
         )

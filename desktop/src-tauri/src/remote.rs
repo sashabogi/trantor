@@ -5,7 +5,7 @@ use std::{
     collections::{HashMap, VecDeque},
     path::{Path, PathBuf},
     sync::{
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicU8, Ordering},
         Arc, Mutex, OnceLock,
     },
     time::Duration,
@@ -486,7 +486,7 @@ async fn claim_and_execute<F, Fut>(
     deliver: F,
 ) -> Result<Option<Value>, String>
 where
-    F: FnOnce(Value) -> Fut,
+    F: FnOnce(Value, ClaimExecution) -> Fut,
     Fut: std::future::Future<Output = Value>,
 {
     if !on.load(Ordering::SeqCst) {
@@ -518,11 +518,36 @@ where
     let mut result = match error {
         Some(error) if is_crew => crew::failure(error),
         Some(error) => json!({"outcome": "not_ready", "error": error}),
-        None => execute_with_renewal(hub, host, &id, deliver(prompt.clone()), CLAIM_RENEW_INTERVAL).await,
+        None => {
+            let execution = ClaimExecution::default();
+            execute_with_renewal(hub, host, &id, deliver(prompt.clone(), execution.clone()),
+                execution, CLAIM_RENEW_INTERVAL).await
+        },
     };
+    if is_crew && result["outcome"] == "not_ready" {
+        result = crew::failure(result["error"].as_str().unwrap_or(CLAIM_LOST));
+    }
     result["id"] = id;
     result["host"] = json!(host);
     Ok(Some(result))
+}
+
+const CLAIM_LOST: &str = "The hub claim was lost before delivery; nothing was executed.";
+const CLAIM_WAITING: u8 = 0;
+const CLAIM_EXECUTING: u8 = 1;
+const CLAIM_CANCELLED: u8 = 2;
+
+#[derive(Clone, Default)]
+struct ClaimExecution(Arc<AtomicU8>);
+
+impl ClaimExecution {
+    fn begin(&self) -> bool {
+        self.0.compare_exchange(CLAIM_WAITING, CLAIM_EXECUTING, Ordering::SeqCst, Ordering::SeqCst).is_ok()
+    }
+
+    fn cancel_before_start(&self) -> bool {
+        self.0.compare_exchange(CLAIM_WAITING, CLAIM_CANCELLED, Ordering::SeqCst, Ordering::SeqCst).is_ok()
+    }
 }
 
 // Keep claims alive while waiting for the project lock as well as while executing the operation.
@@ -531,6 +556,7 @@ async fn execute_with_renewal(
     host: &str,
     id: &Value,
     operation: impl std::future::Future<Output = Value>,
+    execution: ClaimExecution,
     interval: Duration,
 ) -> Value {
     tokio::pin!(operation);
@@ -539,6 +565,14 @@ async fn execute_with_renewal(
             tokio::time::sleep(interval).await;
             let result = hub.request("POST", "/session/prompt/claim",
                 Some(json!({"id": id, "host": host, "renew": true}))).await;
+            if matches!(&result, Ok((409, _))) {
+                if execution.cancel_before_start() {
+                    eprintln!("phone relay claim {id}: {CLAIM_LOST}");
+                    return json!({"outcome": "not_ready", "error": CLAIM_LOST});
+                }
+                eprintln!("phone relay claim {id} lost after execution started; waiting for its result");
+                return std::future::pending::<Value>().await;
+            }
             if let Err(error) = result.and_then(|(status, body)| require_ok(status, &body)) {
                 eprintln!("phone relay claim renewal: {error}");
             }
@@ -546,7 +580,7 @@ async fn execute_with_renewal(
     };
     tokio::select! {
         result = &mut operation => result,
-        _ = renewals => unreachable!(),
+        result = renewals => result,
     }
 }
 
@@ -567,7 +601,7 @@ where
     F: FnOnce(Value) -> Fut,
     Fut: std::future::Future<Output = panes::PromptDelivery>,
 {
-    claim_and_execute(hub, host, project, id, on, |prompt| async move {
+    claim_and_execute(hub, host, project, id, on, |prompt, _execution| async move {
         prompt_result(deliver(prompt).await)
     })
     .await
@@ -614,6 +648,11 @@ async fn ack(hub: &impl Hub, body: Value) -> Result<(), String> {
     let (status, response) = hub
         .request("POST", "/session/prompt/ack", Some(body))
         .await?;
+    // A lost or expired claim cannot be acknowledged later; retry only recoverable failures.
+    if status == 409 {
+        eprintln!("phone relay ack refused for a lost or finished claim: {response}");
+        return Ok(());
+    }
     require_ok(status, &response)
 }
 
@@ -630,9 +669,9 @@ fn queued_path(project: &str) -> Result<String, String> {
     ))
 }
 
-async fn deliver_claimed(prompt: Value, seat: local_sessions::HerdrSeat, base: String) -> Value {
+async fn deliver_claimed(prompt: Value, seat: local_sessions::HerdrSeat, base: String, execution: ClaimExecution) -> Value {
     if prompt["kind"] == "crew" {
-        return crew::deliver(&prompt, &seat, enabled(), &crew::LiveRunner).await;
+        return crew::deliver(&prompt, &seat, enabled(), &crew::LiveRunner, &execution).await;
     }
     if prompt["kind"] == "answer" {
         let current = tokio::task::spawn_blocking(move || still_hosted(&seat))
@@ -645,7 +684,10 @@ async fn deliver_claimed(prompt: Value, seat: local_sessions::HerdrSeat, base: S
             deliver_answer(
                 &prompt,
                 &crate::desktop_bus_dir().join("asks"),
-                asks::ask_answer_session,
+                |session, keys| async move {
+                    if !execution.begin() { return Err(CLAIM_LOST.into()); }
+                    asks::ask_answer_session(session, keys).await
+                },
             )
             .await,
         );
@@ -656,7 +698,7 @@ async fn deliver_claimed(prompt: Value, seat: local_sessions::HerdrSeat, base: S
         prompt,
         seat,
         &dir,
-        |surface, text| async move {
+        move |surface, text| async move {
             tokio::task::spawn_blocking(move || {
                 if !enabled().load(Ordering::SeqCst) {
                     return panes::PromptDelivery {
@@ -665,6 +707,9 @@ async fn deliver_claimed(prompt: Value, seat: local_sessions::HerdrSeat, base: S
                     };
                 }
                 if still_hosted_surface(&surface) {
+                    if !execution.begin() {
+                        return panes::PromptDelivery { outcome: "not_ready", error: Some(CLAIM_LOST.into()) };
+                    }
                     panes::deliver_prompt(&surface, &text)
                 } else {
                     panes::prompt_delivery(Ok(herdr::PromptOutcome::NoAgent))
@@ -713,7 +758,7 @@ async fn hosted_claim<F, Fut>(
     deliver: F,
 ) -> Result<Option<Value>, String>
 where
-    F: FnOnce(Value, local_sessions::HerdrSeat) -> Fut,
+    F: FnOnce(Value, local_sessions::HerdrSeat, ClaimExecution) -> Fut,
     Fut: std::future::Future<Output = Value>,
 {
     let Some(seat) = seats
@@ -723,7 +768,7 @@ where
     else {
         return Ok(None);
     };
-    claim_and_execute(hub, host, project, id, on, |prompt| deliver(prompt, seat)).await
+    claim_and_execute(hub, host, project, id, on, |prompt, execution| deliver(prompt, seat, execution)).await
 }
 
 async fn prompt_worker(mut events: mpsc::UnboundedReceiver<RelayEvent>) {
@@ -822,9 +867,9 @@ async fn prompt_worker(mut events: mpsc::UnboundedReceiver<RelayEvent>) {
                         &seats,
                         {
                             let base = base.clone();
-                            move |prompt, seat| async move {
+                            move |prompt, seat, execution| async move {
                                 let _guard = lock.lock().await;
-                                deliver_claimed(prompt, seat, base).await
+                                deliver_claimed(prompt, seat, base, execution).await
                             }
                         },
                     )
