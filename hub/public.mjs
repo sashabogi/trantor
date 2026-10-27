@@ -1,4 +1,5 @@
 import { isIP } from "node:net";
+import { HDR } from "../lib/identity.mjs";
 
 const ALLOWED = new Set([
   ...["/health", "/projects", "/catchup", "/tasks", "/card", "/events", "/stream",
@@ -92,6 +93,12 @@ export function createPublicGate({ now = Date.now, log = line => process.stderr.
         count("auth");
       } else if (res.statusCode === 403) count(path === "/enroll" ? "enrollment" : "authorization");
     });
+    // Only health is unsigned; reject absent signature fields before the handler reads a body.
+    if (path !== "/health" && Object.values(HDR).some(header => !req.headers[header])) {
+      res.writeHead(401, { "content-type": "application/json", "connection": "close" });
+      res.end(JSON.stringify({ error: "signature required" }));
+      return false;
+    }
     return true;
   }
 

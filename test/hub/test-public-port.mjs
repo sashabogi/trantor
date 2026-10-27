@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
+import { request as httpRequest } from "node:http";
 import { mkdtempSync, mkdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
@@ -20,6 +21,20 @@ async function request(base, key, method, path, data, ip = "192.0.2.1", extra = 
   const res = await fetch(base + path, { method, body, headers });
   return { status: res.status, json: await res.json(), retry: res.headers.get("retry-after") };
 }
+async function headersOnlyPost(base, headers = {}) {
+  return new Promise((resolve, reject) => {
+    const req = httpRequest(`${base}/session/prompt`, {
+      method: "POST", headers: { "content-length": String(16 * 1024 * 1024), ...headers },
+    }, res => {
+      res.resume();
+      res.on("end", () => { req.destroy(); resolve(res.statusCode); });
+    });
+    req.setTimeout(3000, () => req.destroy(new Error("public listener waited for the unsigned body")));
+    req.on("error", reject);
+    req.flushHeaders();
+  });
+}
+
 const scratch = new URL("../../.agent-bus-out/", import.meta.url);
 mkdirSync(scratch, { recursive: true });
 async function boot(auth = "enforce", publicUrl = "https://phone.example") {
@@ -80,6 +95,14 @@ try {
   equal((await request(pub, generate(), "POST", "/enroll", { token: "é".repeat(17) })).status, 403, "public invite skips bootstrap comparison");
   equal((await request(hub.base, owner, "POST", "/enroll", { name: "owner", kind: "human" })).status, 200, "private TOFU unchanged");
   equal((await request(pub, null, "GET", "/tasks")).status, 401, "unsigned public read refused");
+  equal(await headersOnlyPost(pub), 401, "unsigned 16 MiB POST refused before any body bytes are sent");
+  const completeHeaders = signRequest(phone, { method: "POST", path: "/session/prompt", body: "" });
+  for (const header of ["x-trantor-pubkey", "x-trantor-sig", "x-trantor-ts", "x-trantor-nonce"]) {
+    const incomplete = { ...completeHeaders };
+    delete incomplete[header];
+    equal(await headersOnlyPost(pub, incomplete), 401, `missing ${header} refused without reading a body`);
+  }
+
   equal((await request(pub, null, "POST", "/enroll", {})).status, 401, "unsigned tokenless enrollment refused");
   equal((await request(pub, phone, "POST", "/enroll", { name: "phone", kind: "human" })).status, 403, "public TOFU refused");
   const invite = await request(hub.base, owner, "POST", "/invite", { scopes: [{ project: "demo", role: "approver" }], kind: "human" });
