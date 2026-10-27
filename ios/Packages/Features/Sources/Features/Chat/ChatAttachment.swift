@@ -1,10 +1,12 @@
 import Foundation
 import HubClient
+import ImageIO
+import Observation
 import UIKit
 
 /// One photo the composer will ride with the prompt (#12161): the JPEG bytes the hub gets,
 /// downscaled to its 2 MB cap, plus a thumbnail for the chip row.
-struct PreparedAttachment: Identifiable, Equatable {
+struct PreparedAttachment: Identifiable, Equatable, Sendable {
     let id: UUID
     let attachment: PromptAttachment
     let thumbnail: UIImage?
@@ -21,7 +23,6 @@ enum ChatAttachment {
     static func prepare(_ data: Data?, name: String = "photo.jpg") -> PreparedAttachment? {
         guard let data, let source = CGImageSourceCreateWithData(data as CFData, nil) else { return nil }
         var pixelSize: CGFloat = 4096
-        var best: Data?
         for _ in 0..<12 {
             let options: [CFString: Any] = [
                 kCGImageSourceCreateThumbnailFromImageAlways: true,
@@ -33,17 +34,46 @@ enum ChatAttachment {
             let rendered = image.jpegData(compressionQuality: 0.8)
             guard let rendered else { break }
             if rendered.count <= maxBytes {
-                let thumbnail = UIImage(data: rendered) ?? image
+                let chipOptions: [CFString: Any] = [
+                    kCGImageSourceCreateThumbnailFromImageAlways: true,
+                    kCGImageSourceCreateThumbnailWithTransform: true,
+                    kCGImageSourceThumbnailMaxPixelSize: 200,
+                ]
+                let thumbnail = CGImageSourceCreateThumbnailAtIndex(source, 0, chipOptions as CFDictionary)
+                    .map { UIImage(cgImage: $0) }
                 return PreparedAttachment(id: UUID(),
                                           attachment: PromptAttachment(name: name, jpegData: rendered),
                                           thumbnail: thumbnail)
             }
-            best = rendered
             pixelSize = max(320, pixelSize / 1.6)
         }
-        guard let best else { return nil }
-        return PreparedAttachment(id: UUID(),
-                                  attachment: PromptAttachment(name: name, jpegData: best),
-                                  thumbnail: UIImage(data: best))
+        return nil
+    }
+}
+
+@MainActor @Observable
+final class ChatAttachmentQueue {
+    var pending: [PreparedAttachment] = []
+    private(set) var preparingCount = 0
+    private let prepare: @Sendable (Data?) -> PreparedAttachment?
+
+    var readyToSend: Bool { preparingCount == 0 }
+
+    init(prepare: @escaping @Sendable (Data?) -> PreparedAttachment? = { ChatAttachment.prepare($0) }) {
+        self.prepare = prepare
+    }
+
+    // Reserve before starting the task so Send cannot snapshot an incomplete photo selection.
+    func beginPreparation(count: Int) -> Int {
+        let accepted = min(count, max(0, ChatAttachment.maxCount - pending.count - preparingCount))
+        preparingCount += accepted
+        return accepted
+    }
+
+    func finishPreparation(_ data: Data?) async {
+        defer { preparingCount -= 1 }
+        let prepare = self.prepare
+        let result = await Task.detached(priority: .userInitiated) { prepare(data) }.value
+        if let result { pending.append(result) }
     }
 }
