@@ -124,20 +124,20 @@ try {
   ok("first claim wins and gets the full text", c1.status === 200 && c1.json.prompt?.text === "ship it", JSON.stringify(c1.json));
   const c2 = await sFetch(base, owner, "POST", "/session/prompt/claim", { id: shipId, host: "mac" });
   ok("second claim gets 409", c2.status === 409, `status ${c2.status}`);
-  r = await sFetch(base, owner, "POST", "/session/prompt/ack", { id: shipId, outcome: "delivered" });
+  r = await sFetch(base, owner, "POST", "/session/prompt/ack", { host: "mac", id: shipId, outcome: "delivered" });
   ok("ack delivered lands", r.status === 200 && r.json.status === "delivered", JSON.stringify(r.json));
   r = await sFetch(base, phone, "GET", `/session/prompt?id=${shipId}`);
   ok("phone reads status delivered", r.json.status === "delivered", JSON.stringify(r.json));
-  r = await sFetch(base, owner, "POST", "/session/prompt/ack", { id: shipId, outcome: "delivered" });
+  r = await sFetch(base, owner, "POST", "/session/prompt/ack", { host: "mac", id: shipId, outcome: "delivered" });
   ok("re-acking a terminal prompt is 409", r.status === 409, `status ${r.status}`);
   r = await sFetch(base, owner, "POST", "/session/prompt/claim", { id: probeId, host: "mac" });
   ok("probe prompt claims", r.status === 200, `status ${r.status}`);
-  r = await sFetch(base, owner, "POST", "/session/prompt/ack", { id: probeId, outcome: "blocked", error: "pane busy" });
+  r = await sFetch(base, owner, "POST", "/session/prompt/ack", { host: "mac", id: probeId, outcome: "bogus" });
+  ok("unknown outcome is 400", r.status === 400, `status ${r.status}`);
+  r = await sFetch(base, owner, "POST", "/session/prompt/ack", { host: "mac", id: probeId, outcome: "blocked", error: "pane busy" });
   ok("ack blocked marks failed with the outcome", r.status === 200 && r.json.status === "failed", JSON.stringify(r.json));
   r = await sFetch(base, phone, "GET", `/session/prompt?id=${probeId}`);
   ok("phone reads failed + outcome + error", r.json.status === "failed" && r.json.outcome === "blocked" && r.json.error === "pane busy", JSON.stringify(r.json));
-  r = await sFetch(base, owner, "POST", "/session/prompt/ack", { id: probeId, outcome: "bogus" });
-  ok("unknown outcome is 400", r.status === 400, `status ${r.status}`);
   r = await sFetch(base, phone, "POST", "/session/prompt/claim", { id: probeId, host: "phone" });
   ok("phone approver cannot claim (owner-only)", r.status === 403, `status ${r.status}`);
 
@@ -178,7 +178,7 @@ try {
     && JSON.stringify(r.json.prompt.picks) === "[1,2]" && r.json.prompt.session === "s9", JSON.stringify(r.json.prompt));
   // live drill regression: a picks-only answer must not carry other:"" (the relay read it as typed text)
   ok("a picks-only answer carries no other field", !("other" in (r.json.prompt || {})), JSON.stringify(r.json.prompt));
-  r = await sFetch(base, owner, "POST", "/session/prompt/ack", { id: answerId, outcome: "stale", error: "That question was already answered or replaced." });
+  r = await sFetch(base, owner, "POST", "/session/prompt/ack", { host: "mac", id: answerId, outcome: "stale", error: "That question was already answered or replaced." });
   ok("ack stale lands as failed with the error kept", r.status === 200 && r.json.status === "failed", JSON.stringify(r.json));
   r = await sFetch(base, phone, "GET", `/session/prompt?id=${answerId}`);
   ok("phone reads the stale outcome", r.json.status === "failed" && r.json.outcome === "stale" && r.json.error.includes("already answered"), JSON.stringify(r.json));
@@ -187,7 +187,7 @@ try {
   const otherId = r.json.id;
   r = await sFetch(base, owner, "POST", "/session/prompt/claim", { id: otherId, host: "mac" });
   ok("claim of an other-answer carries the text", r.json.prompt?.other === "do it differently" && r.json.prompt.text === "do it differently", JSON.stringify(r.json.prompt));
-  r = await sFetch(base, owner, "POST", "/session/prompt/ack", { id: otherId, outcome: "delivered" });
+  r = await sFetch(base, owner, "POST", "/session/prompt/ack", { host: "mac", id: otherId, outcome: "delivered" });
   ok("other-answer acks delivered", r.status === 200 && r.json.status === "delivered", JSON.stringify(r.json));
   r = await sFetch(base, owner, "GET", "/events?project=projA&type=chat.prompt.queued&limit=2000");
   const answerEv = (r.json.events || []).find(e => e.promptId === answerId);
@@ -278,9 +278,19 @@ console.log("# photo attachments on the prompt queue");
       && row.attachments[0].name === "screenshot.jpg" && row.attachments[0].size === jpeg.length
       && !row.attachments[0].data && !row.attachments[0].file, JSON.stringify(row?.attachments));
 
+    r = await sFetch(base, owner, "POST", "/session/prompt/ack", { id: photoId, host: "mac", outcome: "delivered" });
+    ok("an unclaimed photo cannot be acked", r.status === 409, JSON.stringify(r.json));
+    ok("an unclaimed photo survives the refused ack", readFileSync(join(attachmentsPath, `${photoId}-0.jpg`)).equals(jpeg));
     r = await sFetch(base, owner, "POST", "/session/prompt/claim", { id: photoId, host: "mac" });
     ok("the claim hands the claiming desktop the attachment metadata",
       r.status === 200 && r.json.prompt?.attachments?.[0]?.name === "screenshot.jpg", JSON.stringify(r.json.prompt?.attachments));
+    for (const host of [undefined, "another-mac"]) {
+      r = await sFetch(base, owner, "POST", "/session/prompt/ack", { id: photoId, host, outcome: "delivered" });
+      ok(`a photo ack from ${host || "no host"} is refused`, r.status === 409, JSON.stringify(r.json));
+      ok("the refused ack leaves the claimed photo bytes intact", readFileSync(join(attachmentsPath, `${photoId}-0.jpg`)).equals(jpeg));
+      const status = await sFetch(base, phone, "GET", `/session/prompt?id=${photoId}`);
+      ok("the refused ack leaves the claim live", status.json.status === "claimed");
+    }
     const dl = await fetch(`${base}/session/attachment?id=${photoId}&n=0`, { headers: signRequest({ pubkey: owner.pubkey, privkey: owner.privkey }, { method: "GET", path: `/session/attachment?id=${photoId}&n=0` }) });
     const bytes = Buffer.from(await dl.arrayBuffer());
     ok("the claimed attachment downloads byte-for-byte as JPEG",
@@ -290,10 +300,35 @@ console.log("# photo attachments on the prompt queue");
     const forbidden = await sFetch(base, phone, "GET", `/session/attachment?id=${photoId}&n=0`);
     ok("the phone cannot read attachments back (owner-only)", forbidden.status === 403, `status ${forbidden.status}`);
 
-    r = await sFetch(base, owner, "POST", "/session/prompt/ack", { id: photoId, outcome: "delivered" });
+    r = await sFetch(base, owner, "POST", "/session/prompt/ack", { host: "mac", id: photoId, outcome: "delivered" });
     ok("delivery acked", r.status === 200 && r.json.status === "delivered", JSON.stringify(r.json));
     try { files = readdirSync(attachmentsPath); } catch { files = []; }
     ok("a terminal prompt's bytes are removed", files.length === 0, JSON.stringify(files));
+
+    // Exactly 64 MiB is allowed across queued and claimed rows; completion releases the budget.
+    const maxJPEG = Buffer.alloc(2 * 1024 * 1024);
+    maxJPEG.set([0xff, 0xd8, 0xff]);
+    const fourPhotos = Array.from({ length: 4 }, () => ({ name: "full.jpg", data: maxJPEG.toString("base64") }));
+    const quotaIds = [];
+    for (let batch = 0; batch < 8; batch++) {
+      r = await sFetch(base, owner, "POST", "/session/prompt", { project: "quota", text: "photos", attachments: fourPhotos });
+      ok(`quota accepts 8 MiB batch ${batch + 1} up to exactly 64 MiB`, r.status === 200, JSON.stringify(r.json));
+      quotaIds.push(r.json.id);
+      if (batch === 0) await sFetch(base, owner, "POST", "/session/prompt/claim", { id: r.json.id, host: "mac" });
+    }
+    const filesAtCap = readdirSync(attachmentsPath).sort();
+    r = await sFetch(base, owner, "POST", "/session/prompt", { project: "quota", text: "over budget", attachments: [{ name: "small.jpg", data: b64 }] });
+    ok("queued plus claimed photos over 64 MiB return 413", r.status === 413 && /64 MiB/.test(r.json.error), JSON.stringify(r.json));
+    ok("quota refusal writes no attachment files", JSON.stringify(readdirSync(attachmentsPath).sort()) === JSON.stringify(filesAtCap));
+    const quotaRows = await sFetch(base, owner, "GET", "/session/prompts?project=quota");
+    ok("quota refusal does not queue a prompt", quotaRows.json.prompts.length === 8);
+    r = await sFetch(base, owner, "POST", "/session/prompt", { project: "quota", text: "text needs no image budget" });
+    ok("text-only prompts still work at the image quota", r.status === 200);
+    r = await sFetch(base, owner, "POST", "/session/prompt", { project: "other-quota", text: "independent budget", attachments: [{ name: "small.jpg", data: b64 }] });
+    ok("another project has an independent image quota", r.status === 200);
+    await sFetch(base, owner, "POST", "/session/prompt/ack", { id: quotaIds[0], host: "mac", outcome: "delivered" });
+    r = await sFetch(base, owner, "POST", "/session/prompt", { project: "quota", text: "freed budget", attachments: fourPhotos });
+    ok("a terminal row frees its image budget", r.status === 200, JSON.stringify(r.json));
 
     // a queued attachment prompt survives a restart; a stray file is swept at boot
     r = await sFetch(base, phone, "POST", "/session/prompt", { project: "projA", text: "restart with photo", attachments: [{ name: "again.jpg", data: b64 }] });
@@ -463,7 +498,7 @@ console.log("# ask push wiring on the chat mirror");
       state.sessionPrompts.push(row);
       const read = await call("/session/prompt", { id: row.id }, "GET");
       ok(`${seconds}s ${kind} claim survives a sweep`, read.value.status === "claimed", JSON.stringify(read));
-      const ack = await call("/session/prompt/ack", { id: row.id, outcome: kind === "crew" ? "done" : "delivered" });
+      const ack = await call("/session/prompt/ack", { host: "mac", id: row.id, outcome: kind === "crew" ? "done" : "delivered" });
       ok(`${seconds}s ${kind} claim acks successfully`, ack.code === 200, JSON.stringify(ack));
     }
   }

@@ -24,6 +24,7 @@ const ANSWER_OTHER_MAX = 2000;
 // the byte cap; the hub stores the bytes on disk next to its state (never in bus.json) and hands
 // metadata to the claiming desktop, which downloads them through GET /session/attachment.
 const ATTACHMENTS_MAX = 4;
+const PROJECT_ATTACHMENT_BYTES_MAX = 64 * 1024 * 1024;
 const ATTACHMENT_BYTES_MAX = 2 * 1024 * 1024;
 const ATTACHMENT_B64_MAX = Math.ceil(ATTACHMENT_BYTES_MAX / 3) * 4;
 const JPEG_MAGIC = Buffer.from([0xff, 0xd8, 0xff]);
@@ -353,6 +354,13 @@ export function createSessionRuntime({ state, markDirty, appendEvent, pushEventT
       const parsed = parseAttachments(b.attachments);
       if (parsed.error) return json(res, 400, { error: parsed.error });
       expireQueued();
+      const liveBytes = state.sessionPrompts
+        .filter(p => p.project === project && (p.status === "queued" || p.status === "claimed"))
+        .reduce((total, p) => total + (p.attachments || []).reduce((sum, a) => sum + a.size, 0), 0);
+      const incomingBytes = parsed.attachments.reduce((sum, a) => sum + a.bytes.length, 0);
+      if (liveBytes + incomingBytes > PROJECT_ATTACHMENT_BYTES_MAX) {
+        return json(res, 413, { error: "project queued and claimed attachments exceed 64 MiB" });
+      }
       state.sessionPromptSeq += 1;
       const p = { id: state.sessionPromptSeq, project, text, by: String(auth?.identity?.name || "").slice(0, 120), ts: now(), status: "queued" };
       try {
@@ -425,6 +433,9 @@ export function createSessionRuntime({ state, markDirty, appendEvent, pushEventT
       const b = await body(req);
       const p = findPrompt(b.id);
       if (!p) return json(res, 404, { error: "prompt not found" });
+      if (p.status !== "claimed" || p.host !== b.host) {
+        return json(res, 409, { error: "no matching live claim", status: p.status });
+      }
       const outcome = String(b.outcome || "");
       // #12140: a crew command acks done|failed with the CLI output tail, and the status IS the
       // outcome — never "delivered". Other kinds keep the delivered/blocked/… vocabulary.
@@ -432,9 +443,6 @@ export function createSessionRuntime({ state, markDirty, appendEvent, pushEventT
         if (outcome !== "done" && outcome !== "failed") return json(res, 400, { error: "crew outcome must be done or failed" });
       } else if (!ACK_OUTCOMES.has(outcome)) {
         return json(res, 400, { error: `outcome must be one of: ${[...ACK_OUTCOMES].join(", ")}` });
-      }
-      if (p.status === "delivered" || p.status === "done" || p.status === "failed" || p.status === "expired") {
-        return json(res, 409, { error: `prompt already ${p.status}`, status: p.status });
       }
       const error = String(b.error || "").slice(0, EVENT_TEXT_MAX);
       p.outcome = outcome; p.error = error; p.ackedAt = now();

@@ -102,20 +102,20 @@ try {
     r.json.prompt?.action === "down" && JSON.stringify(r.json.prompt.seats) === "[]" && r.json.prompt.text === "down projA", JSON.stringify(r.json.prompt));
 
   // ---- crew ack: done|failed with the output tail -------------------------------
-  r = await sFetch(base, owner, "POST", "/session/prompt/ack", { id: upId, outcome: "delivered" });
+  r = await sFetch(base, owner, "POST", "/session/prompt/ack", { host: "mac", id: upId, outcome: "delivered" });
   ok("crew ack rejects the delivered outcome", r.status === 400, `status ${r.status}`);
   const noisy = "\x1b[32m✓\x1b[0m crew up: glm (window 3)\n" + "x".repeat(3000);
-  r = await sFetch(base, owner, "POST", "/session/prompt/ack", { id: upId, outcome: "done", output: noisy });
+  r = await sFetch(base, owner, "POST", "/session/prompt/ack", { host: "mac", id: upId, outcome: "done", output: noisy });
   ok("crew ack done lands with status done", r.status === 200 && r.json.status === "done", JSON.stringify(r.json));
   r = await sFetch(base, phone, "GET", `/session/prompt?id=${upId}`);
   ok("phone reads done with the ANSI-stripped 2000-char tail",
     r.json.status === "done" && r.json.outcome === "done" && r.json.output?.length === 2000
     && !r.json.output.includes("\x1b") && r.json.output.endsWith("xxx"),
     JSON.stringify({ status: r.json.status, len: r.json.output?.length }));
-  r = await sFetch(base, owner, "POST", "/session/prompt/ack", { id: upId, outcome: "done" });
+  r = await sFetch(base, owner, "POST", "/session/prompt/ack", { host: "mac", id: upId, outcome: "done" });
   ok("re-acking a terminal crew prompt is 409", r.status === 409, `status ${r.status}`);
 
-  r = await sFetch(base, owner, "POST", "/session/prompt/ack", { id: downId, outcome: "failed", output: "spawn failed: no window", error: "exit 1" });
+  r = await sFetch(base, owner, "POST", "/session/prompt/ack", { host: "mac", id: downId, outcome: "failed", output: "spawn failed: no window", error: "exit 1" });
   ok("crew ack failed lands with the error kept", r.status === 200 && r.json.status === "failed", JSON.stringify(r.json));
   r = await sFetch(base, phone, "GET", `/session/prompt?id=${downId}`);
   ok("phone reads failed with output and error",
