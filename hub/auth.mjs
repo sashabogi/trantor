@@ -1,23 +1,39 @@
 /* oxlint-disable anti-slop/no-runtime-typeof -- SAFETY: Auth normalizes untrusted request and persisted identity shapes at their established hub boundary; this split preserves those guards unchanged. */
-import { verifyRequest, verifyEndorsement } from "../lib/identity.mjs";
+import { verifyRequest, verifyEndorsement, HDR } from "../lib/identity.mjs";
 import { readFileSync } from "node:fs";
+import { StringDecoder } from "node:string_decoder";
 import { timingSafeEqual, randomBytes } from "node:crypto";
 import { publicView } from "../lib/identity.mjs";
 import { IDENTITY_KINDS } from "../lib/store-contract.mjs";
 
 export function createAuthRuntime({ state, markDirty, AUTH_MODE, SUPERSEDE_GRACE_MS, LOOPBACK_BIND, ENROLL_MODE, seenNonces = new Map() }) {
 const now = () => Date.now();
-// #12161 review: bodies are capped WHILE STREAMING — the hub used to buffer a whole request
-// before auth. /session/prompt alone gets 16 MiB (4 base64 JPEGs of 2 MiB); raise per-endpoint
-// only when a route grows a real need.
+// Route measurements and supported envelopes: docs/REQUEST-BODY-LIMITS.md.
 const BODY_CAP_DEFAULT = 4 * 1024 * 1024;
 const BODY_CAP_PROMPT = 16 * 1024 * 1024;
+// More than 100x the measured 115,194-byte desktop snapshot.
+const BODY_CAP_OWNER_CHAT = 16 * 1024 * 1024;
+// About 6x the measured 10,659,828-byte real state.
+const BODY_CAP_OWNER_IMPORT = 64 * 1024 * 1024;
+const OWNER_BODY_CAPS = new Map([
+  ["/session/chat", BODY_CAP_OWNER_CHAT],
+  ["/import", BODY_CAP_OWNER_IMPORT],
+  ["/handoff", BODY_CAP_DEFAULT], ["/task", BODY_CAP_DEFAULT], ["/task/update", BODY_CAP_DEFAULT],
+]);
 function bodyCap(P) { return P === "/session/prompt" ? BODY_CAP_PROMPT : BODY_CAP_DEFAULT; }
+function ownerBodyCap(req, P) {
+  const cap = OWNER_BODY_CAPS.get(P) || bodyCap(P);
+  if (cap <= bodyCap(P) || !Object.values(HDR).every(h => req.headers[h])) return bodyCap(P);
+  // Header identity is only a read-budget hint. Larger bodies require strict owner auth before parsing.
+  const identity = findIdentity(req.headers[HDR.pubkey]) || findIdentity(req.headers["x-trantor-durable"]);
+  return identity?.scopes?.some(s => s.role === "owner") ? cap : bodyCap(P);
+}
 function rawBody(req, maxBytes = BODY_CAP_DEFAULT) {
   if (req._bodyTooLarge) return Promise.resolve(undefined);
   if (req._rawBody !== undefined) return Promise.resolve(req._rawBody);
   return new Promise(r => {
     let d = "", bytes = 0, done = false;
+    const decoder = new StringDecoder("utf8");
     const finish = (v) => { if (!done) { done = true; r(v); } };
     req.on("data", c => {
       if (done) return;
@@ -28,9 +44,9 @@ function rawBody(req, maxBytes = BODY_CAP_DEFAULT) {
         req.resume();   // keep draining (and discarding) so the socket can close cleanly
         return;
       }
-      d += c;
+      d += decoder.write(c);
     });
-    req.on("end", () => { if (!req._bodyTooLarge) { req._rawBody = d; finish(d); } });
+    req.on("end", () => { if (!req._bodyTooLarge) { req._bodyBytes = bytes; req._rawBody = d + decoder.end(); finish(req._rawBody); } });
     req.on("error", () => finish(undefined));
   });
 }
@@ -226,11 +242,11 @@ function supersessionActive(rec) {
   }
   return insts.some(i => i !== rec && i.name === rec.name && !i.superseded && (i.lastSeen || 0) > cut);
 }
-async function authenticate(req, path) {
-  if (AUTH_MODE === "off") return { ok: true, mode: AUTH_MODE, trusted: true };
+async function authenticate(req, path, strict = false) {
+  if (AUTH_MODE === "off" && !strict) return { ok: true, mode: AUTH_MODE, trusted: true };
   const signed = hasAuthHeaders(req);
   if (!signed) {
-    if (AUTH_MODE === "warn") {
+    if (AUTH_MODE === "warn" && !strict) {
       process.stderr.write(`[trantor] auth warn: unsigned ${req.method} ${path}\n`);
       return { ok: true, mode: AUTH_MODE, trusted: false, warning: "unsigned" };
     }
@@ -238,7 +254,7 @@ async function authenticate(req, path) {
   }
   const raw = req.method === "GET" || req.method === "HEAD" ? undefined : await rawBody(req);
   // Auth warn mode annotates signature, replay and enrollment failures; enforce mode rejects them.
-  const soft = (warning) => AUTH_MODE === "warn"
+  const soft = (warning) => AUTH_MODE === "warn" && !strict
     ? { ok: true, mode: AUTH_MODE, trusted: false, warning }
     : { ok: false, code: 401, error: warning };
   const verified = verifyRequest({ headers: req.headers, method: req.method, path, body: raw });
@@ -379,7 +395,7 @@ function canUseInboxSession(auth, session) {
   }
 
   return {
-    PUBLIC_ENDPOINTS, authPath, authenticate, authorize, body, bodyCap, rawBody, json,
+    PUBLIC_ENDPOINTS, authPath, authenticate, authorize, body, bodyCap, ownerBodyCap, rawBody, json,
     canon, cleanScope, defaultScopesFor, findIdentity, scopeAllows, canRead, isDutyIdentity,
     projectFromRequest, crossProjectGuard, filterReadable, filterDiscoverable,
     inboxReadable, canUseInboxSession, overseerPolicy, subFp, PROPOSAL_CAP,

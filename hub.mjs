@@ -151,14 +151,24 @@ function requestHandler(runtime, ctx, gate = null) {
       const q = Object.fromEntries(u.searchParams);
       const P = u.pathname;
       if (gate && !gate.admit(req, res, P)) return;
-      // The body is read ONCE here, under a per-endpoint byte cap, before any authentication:
-      // an overflow answers 413 and never buffers the rest (#12161 review).
-      const b0 = req.method === "POST" ? await runtime.body(req, runtime.bodyCap(P)) : {};
-      if (b0 === undefined) return runtime.json(res, 413, { error: `request body over the ${runtime.bodyCap(P)} byte cap` });
+      const cap = gate ? runtime.bodyCap(P) : runtime.ownerBodyCap(req, P);
+      let ownerAuth;
+      if (req.method === "POST") {
+        const raw = await runtime.rawBody(req, cap);
+        if (raw === undefined) return runtime.json(res, 413, { error: `request body over the ${cap} byte cap` });
+        if (req._bodyBytes > runtime.bodyCap(P)) {
+          ownerAuth = await runtime.authenticate(req, runtime.authPath(u), true);
+          if (!ownerAuth.ok) return runtime.json(res, ownerAuth.code || 401, { error: ownerAuth.error });
+        }
+      }
+      const b0 = req.method === "POST" ? await runtime.body(req) : {};
+      if (ownerAuth && !runtime.scopeAllows(ownerAuth.identity, runtime.projectFromRequest(P, q, b0, req.method), "owner")) {
+        return runtime.json(res, 403, { error: "large request body requires a project owner" });
+      }
       if (runtime.handleEnrollment({ req, res, P, u, b0, inviteOnly: !!gate })) return;
-      const auth = runtime.PUBLIC_ENDPOINTS.has(P)
+      const auth = ownerAuth || (runtime.PUBLIC_ENDPOINTS.has(P)
         ? { ok: true, mode: ctx.AUTH_MODE, trusted: false }
-        : await runtime.authenticate(req, runtime.authPath(u));
+        : await runtime.authenticate(req, runtime.authPath(u)));
       if (runtime.handleInvite({ req, res, P, auth, b0 })) return;
       if (!auth.ok) return runtime.json(res, auth.code || 401, { error: auth.error || "unauthorized" });
       const authorization = runtime.authorize(auth, req.method, P, runtime.projectFromRequest(P, q, b0, req.method));
