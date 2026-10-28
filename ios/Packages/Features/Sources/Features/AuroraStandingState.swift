@@ -40,6 +40,11 @@ struct AuroraStandingState: Equatable {
 }
 
 extension AppModel {
+    func standingState(for crew: CrewStore) -> AuroraStandingState {
+        let pending = decisions.items.filter { $0.project == crew.project }.count
+        return AuroraStandingState(peers: crew.seats, waiting: pending)
+    }
+
     func standingState(project: String? = nil, questions: Int = 0) -> AuroraStandingState {
         let peers = fleet.peers.filter { project == nil || $0.project == project }
         let pending = decisions.items.filter { project == nil || $0.project == project }.count

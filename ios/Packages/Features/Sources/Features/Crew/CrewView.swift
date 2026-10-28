@@ -13,7 +13,7 @@ struct CrewView: View {
     var body: some View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: Space.md) {
-                StatusHeadline(model.standingState(project: store.project).headline, eyebrow: "\(store.project) · Crew")
+                StatusHeadline(model.standingState(for: store).headline, eyebrow: "\(store.project) · Crew")
                 ViewThatFits(in: .horizontal) {
                     HStack { controls }
                     VStack(alignment: .leading, spacing: Space.sm) { controls }
@@ -35,7 +35,7 @@ struct CrewView: View {
             }
             .padding(.horizontal, Space.lg).padding(.vertical, Space.md)
         }
-        .auroraScreen(model.standingState(project: store.project).wash)
+        .auroraScreen(model.standingState(for: store).wash)
         .task { await store.refresh(); await store.refreshCommands() }
         .onChange(of: scenePhase) { _, phase in
             if phase == .active { Task { await store.refresh(); await store.refreshCommands() } }
@@ -54,7 +54,7 @@ struct CrewView: View {
         Button { picker = CrewPicker() } label: { Label("Add seats", systemImage: "plus") }
             .buttonStyle(AuroraButtonStyle(.primary)).accessibilityIdentifier("crew.add")
         Button("Stop the crew", role: .destructive) { stopCrew = true }
-            .buttonStyle(AuroraButtonStyle()).foregroundStyle(Palette.down).accessibilityIdentifier("crew.stopAll")
+            .buttonStyle(AuroraButtonStyle(.destructive)).accessibilityIdentifier("crew.stopAll")
     }
 
     private func seatRow(_ peer: Peer) -> some View {
@@ -64,7 +64,7 @@ struct CrewView: View {
             HStack {
                 Button("Swap") { picker = CrewPicker(from: CrewStore.spec(for: peer)) }.buttonStyle(AuroraButtonStyle()).accessibilityIdentifier("crew.swap.\(CrewStore.spec(for: peer))")
                 Button("Stop", role: .destructive) { Task { await store.command(.down, seats: [CrewStore.spec(for: peer)]) } }
-                    .buttonStyle(AuroraButtonStyle()).foregroundStyle(Palette.down).accessibilityIdentifier("crew.stop.\(CrewStore.spec(for: peer))")
+                    .buttonStyle(AuroraButtonStyle(.destructive)).accessibilityIdentifier("crew.stop.\(CrewStore.spec(for: peer))")
             }.disabled(store.busy || store.disabledReason != nil)
         }
     }
@@ -135,7 +135,7 @@ private struct CrewRosterSheet: View {
                     }
                 }.padding(Space.lg)
             }
-            .auroraScreen(model.standingState(project: store.project).wash)
+            .auroraScreen(model.standingState(for: store).wash)
             .navigationTitle(replacing == nil ? "Add seats" : "Swap seat")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } } }

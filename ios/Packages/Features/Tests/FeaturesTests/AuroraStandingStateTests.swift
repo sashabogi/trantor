@@ -33,6 +33,21 @@ final class AuroraStandingStateTests: XCTestCase {
         XCTAssertEqual(state.headline, "1 working · 1 idle")
     }
 
+    func testCrewCountsOnlyTheSeatsShownInItsList() async {
+        let hub = StubHub()
+        hub.peersData = [
+            Peer(session: "orchestrator:one", online: true, project: "one", kind: "claude"),
+            Peer(session: "codex-1:one", online: true, status: "working", project: "one", kind: "agent"),
+            Peer(session: "glm-1:one", online: true, status: "idle", project: "one", kind: "agent"),
+            Peer(session: "codex-2:two", online: true, status: "working", project: "two", kind: "agent")
+        ]
+        let model = AppModel(stub: hub)
+        await model.refreshAll()
+        let state = model.standingState(for: model.crew(project: "one"))
+        XCTAssertEqual(state.headline, "1 working · 1 idle")
+        XCTAssertEqual(state.working + state.idle, model.crew(project: "one").seats.count)
+    }
+
     func testStoreRefreshScopesStateAndClearsWaitingWithoutUsingFeedEvents() async {
         let hub = StubHub()
         hub.holdsData = [Hold(id: 1, project: "one", file: "app.swift", session: "seat:one")]
