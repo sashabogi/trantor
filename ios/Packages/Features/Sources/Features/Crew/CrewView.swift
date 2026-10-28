@@ -4,6 +4,7 @@ import TrantorDesign
 import TrantorStore
 
 struct CrewView: View {
+    @Environment(AppModel.self) private var model
     let store: CrewStore
     @State private var picker: CrewPicker?
     @State private var stopCrew = false
@@ -12,28 +13,29 @@ struct CrewView: View {
     var body: some View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: Space.md) {
+                StatusHeadline(model.standingState(project: store.project).headline, eyebrow: "\(store.project) · Crew")
                 ViewThatFits(in: .horizontal) {
                     HStack { controls }
                     VStack(alignment: .leading, spacing: Space.sm) { controls }
                 }
                 .disabled(store.busy || store.disabledReason != nil)
-                if let reason = store.disabledReason { Text(reason).font(.tCallout).foregroundStyle(Palette.textDim).card() }
+                if let reason = store.disabledReason { Text(reason).font(.tCallout).foregroundStyle(Palette.textDim).padding(Space.md).auroraPanel() }
                 if store.freshness.isStale { FreshnessBanner(freshness: store.freshness) }
                 if store.fleet.freshness.isStale { FreshnessBanner(freshness: store.fleet.freshness) }
-                if let error = store.error { Label(error, systemImage: "exclamationmark.triangle").foregroundStyle(Palette.down).card() }
+                if let error = store.error { Label(error, systemImage: "exclamationmark.triangle").foregroundStyle(Palette.down).padding(Space.md).auroraPanel() }
                 if store.sending {
-                    HStack { ProgressView(); Text("Confirming command…").font(.tCallout) }.card()
+                    HStack { ProgressView(); Text("Confirming command…").font(.tCallout) }.padding(Space.md).auroraPanel()
                 }
                 ForEach(store.commands) { CrewCommandBanner(command: $0) }
                 HStack { Eyebrow("Seats"); CountBadge(store.seats.count, hot: false) }
                 if store.seats.isEmpty {
-                    StageEmpty("No crew seats", systemImage: "person.3", message: "Add seats to work on this project.").card()
+                    StageEmpty("No crew seats", systemImage: "person.3", message: "Add seats to work on this project.").padding(Space.md).auroraPanel()
                 }
                 ForEach(store.seats) { peer in seatRow(peer) }
             }
             .padding(.horizontal, Space.lg).padding(.vertical, Space.md)
         }
-        .stage()
+        .auroraScreen(model.standingState(project: store.project).wash)
         .task { await store.refresh(); await store.refreshCommands() }
         .onChange(of: scenePhase) { _, phase in
             if phase == .active { Task { await store.refresh(); await store.refreshCommands() } }
@@ -50,35 +52,21 @@ struct CrewView: View {
 
     @ViewBuilder private var controls: some View {
         Button { picker = CrewPicker() } label: { Label("Add seats", systemImage: "plus") }
-            .buttonStyle(.primary).accessibilityIdentifier("crew.add")
+            .buttonStyle(AuroraButtonStyle(.primary)).accessibilityIdentifier("crew.add")
         Button("Stop the crew", role: .destructive) { stopCrew = true }
-            .buttonStyle(.ghost).foregroundStyle(Palette.down).accessibilityIdentifier("crew.stopAll")
+            .buttonStyle(AuroraButtonStyle()).foregroundStyle(Palette.down).accessibilityIdentifier("crew.stopAll")
     }
 
     private func seatRow(_ peer: Peer) -> some View {
-        let state = CrewStore.state(for: peer)
-        return VStack(alignment: .leading, spacing: Space.md) {
-            HStack(alignment: .top, spacing: Space.md) {
-                NameMark(peer.session, size: 34)
-                VStack(alignment: .leading, spacing: Space.sm) {
-                    Text(CrewStore.spec(for: peer)).font(.tHeadline).foregroundStyle(Palette.text)
-                    if !peer.model.isEmpty || !peer.llm.isEmpty { Chip(peer.model.isEmpty ? peer.llm : peer.model) }
-                }
-                Spacer()
-                VStack(alignment: .trailing, spacing: Space.sm) {
-                    HStack(spacing: Space.sm) {
-                        StatusDot(live: peer.online && state != "stale" && state != "down")
-                        Text(state).font(.tDataSmall).foregroundStyle(state == "working" ? Palette.up : Palette.textDim)
-                    }
-                    TimeAgo(millis: peer.lastSeen)
-                }
-            }
+        return VStack(alignment: .leading, spacing: Space.sm) {
+            SeatCard(CrewStore.spec(for: peer), caption: AuroraStandingState.caption(peer),
+                     idle: !peer.online || !peer.status.hasPrefix("working"))
             HStack {
-                Button("Swap") { picker = CrewPicker(from: CrewStore.spec(for: peer)) }.buttonStyle(.ghost).accessibilityIdentifier("crew.swap.\(CrewStore.spec(for: peer))")
+                Button("Swap") { picker = CrewPicker(from: CrewStore.spec(for: peer)) }.buttonStyle(AuroraButtonStyle()).accessibilityIdentifier("crew.swap.\(CrewStore.spec(for: peer))")
                 Button("Stop", role: .destructive) { Task { await store.command(.down, seats: [CrewStore.spec(for: peer)]) } }
-                    .buttonStyle(.ghost).foregroundStyle(Palette.down).accessibilityIdentifier("crew.stop.\(CrewStore.spec(for: peer))")
+                    .buttonStyle(AuroraButtonStyle()).foregroundStyle(Palette.down).accessibilityIdentifier("crew.stop.\(CrewStore.spec(for: peer))")
             }.disabled(store.busy || store.disabledReason != nil)
-        }.card()
+        }
     }
 }
 
@@ -94,7 +82,7 @@ private struct CrewCommandBanner: View {
         switch command.status {
         case "done": Palette.up
         case "failed", "expired": Palette.down
-        default: Palette.blue
+        default: Palette.text2
         }
     }
     var body: some View {
@@ -116,11 +104,12 @@ private struct CrewCommandBanner: View {
                         .accessibilityLabel("CLI output: \(command.output)")
                 }.font(.tCallout).tint(Palette.accent)
             }
-        }.card()
+        }.padding(Space.md).auroraPanel()
     }
 }
 
 private struct CrewRosterSheet: View {
+    @Environment(AppModel.self) private var model
     let store: CrewStore
     let replacing: String?
     @State private var selected: Set<String> = []
@@ -133,9 +122,9 @@ private struct CrewRosterSheet: View {
                 LazyVStack(alignment: .leading, spacing: Space.md) {
                     if let replacing { Text("Replace \(replacing) with a seat from this Mac.").font(.tCallout).foregroundStyle(Palette.textDim) }
                     if store.freshness.isStale { FreshnessBanner(freshness: store.freshness) }
-                    if let error = store.error { Text(error).font(.tCallout).foregroundStyle(Palette.down).card() }
+                    if let error = store.error { Text(error).font(.tCallout).foregroundStyle(Palette.down).padding(Space.md).auroraPanel() }
                     if store.roster.isEmpty {
-                        StageEmpty("No roster available", systemImage: "person.3", message: "Open Trantor on your Mac to publish its available seats.").card()
+                        StageEmpty("No roster available", systemImage: "person.3", message: "Open Trantor on your Mac to publish its available seats.").padding(Space.md).auroraPanel()
                     }
                     ForEach(store.roster) { seat in
                         Button { toggle(seat.launchSpec) } label: { rosterRow(seat) }
@@ -146,7 +135,7 @@ private struct CrewRosterSheet: View {
                     }
                 }.padding(Space.lg)
             }
-            .stage()
+            .auroraScreen(model.standingState(project: store.project).wash)
             .navigationTitle(replacing == nil ? "Add seats" : "Swap seat")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } } }
@@ -155,11 +144,11 @@ private struct CrewRosterSheet: View {
                     if store.needsCostConfirmation(seats: Array(selected)) { confirmCost = true }
                     else { submit(costConfirmed: false) }
                 }
-                .buttonStyle(.primary).accessibilityIdentifier("crew.submit")
+                .buttonStyle(AuroraButtonStyle(.primary)).accessibilityIdentifier("crew.submit")
                 .disabled(selected.isEmpty || store.busy || store.disabledReason != nil)
                 .padding(Space.lg)
                 .frame(maxWidth: .infinity)
-                .background(Palette.stage)
+                .background(AuroraSurface(shape: Rectangle()))
             }
             .task { await store.refresh() }
             .refreshable { await store.refresh() }
@@ -174,7 +163,7 @@ private struct CrewRosterSheet: View {
     private func rosterRow(_ seat: RosterSeat) -> some View {
         HStack(spacing: Space.md) {
             Image(systemName: selected.contains(seat.launchSpec) ? "checkmark.circle.fill" : "circle").foregroundStyle(Palette.accent)
-            NameMark(seat.agent, size: 30)
+            SeatOrb(seat.agent, size: 28)
             VStack(alignment: .leading, spacing: Space.sm) {
                 Text(seat.label.isEmpty ? seat.agent : seat.label).font(.tHeadline).foregroundStyle(Palette.text)
                 if !seat.plan.isEmpty { Text(seat.plan).font(.tCallout).foregroundStyle(Palette.textDim) }
@@ -183,8 +172,8 @@ private struct CrewRosterSheet: View {
                 }
             }
             Spacer()
-            if seat.metered { Chip("$", color: Palette.amber).accessibilityLabel("Metered, costs money per token") }
-        }.card().opacity(seat.available ? 1 : 0.6)
+            if seat.metered { Chip("$", color: Palette.text2).accessibilityLabel("Metered, costs money per token") }
+        }.padding(Space.md).auroraPanel().opacity(seat.available ? 1 : 0.6)
     }
 
     private var selectedLabels: String {
