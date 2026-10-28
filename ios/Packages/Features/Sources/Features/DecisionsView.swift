@@ -16,15 +16,17 @@ public struct DecisionsView: View {
         let store = model.decisions
         ScrollView {
             LazyVStack(alignment: .leading, spacing: Space.md) {
-                DecisionsHeader(count: store.items.count, kinds: kindCounts(store.items))
+                StatusHeadline(model.standingState().headline, eyebrow: "Decisions")
+                    .padding(.top, Space.md)
+                ConnectionPill()
                 if store.freshness.isStale { FreshnessBanner(freshness: store.freshness) }
                 if store.items.isEmpty && !store.isLoading {
                     EmptyState(title: "Nothing waiting", systemImage: "checkmark.seal",
                                message: "Holds, proposals, verify gates and questions from seats show up here.")
-                        .card()
+                        .padding(Space.md).auroraPanel()
                 }
                 ForEach(store.items) { item in
-                    DecisionCard(item: item, state: store.actions[item.id])
+                    DecisionItemCard(item: item, state: store.actions[item.id])
                         .transition(.asymmetric(insertion: .opacity.combined(with: .move(edge: .top)), removal: .opacity))
                 }
             }
@@ -32,7 +34,9 @@ public struct DecisionsView: View {
             .padding(.bottom, Space.xl)
             .animation(Motion.ease, value: store.items.map(\.id))
         }
+        .auroraScreen(model.standingState().wash)
         .navigationTitle("Decisions")
+        .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
                 Button { showSettings = true } label: { Image(systemName: "gearshape") }
@@ -46,51 +50,9 @@ public struct DecisionsView: View {
         .overlay { if store.isLoading && store.items.isEmpty { ProgressView().tint(Palette.accent) } }
     }
 
-    private func kindCounts(_ items: [DecisionItem]) -> [(String, Int)] {
-        var holds = 0, gates = 0, props = 0, asks = 0
-        for i in items {
-            switch i.kind { case .hold: holds += 1; case .gate: gates += 1; case .proposal: props += 1; case .ask: asks += 1 }
-        }
-        return [("Holds", holds), ("Gates", gates), ("Proposals", props), ("Questions", asks)]
-    }
 }
 
-/// The hero: how many things wait on you, and the split by kind.
-struct DecisionsHeader: View {
-    let count: Int
-    let kinds: [(String, Int)]
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: Space.md) {
-            HStack(alignment: .firstTextBaseline, spacing: Space.sm) {
-                Text("\(count)")
-                    .font(.tNumberHero).monospacedDigit()
-                    .foregroundStyle(count > 0 ? Palette.accent : Palette.text)
-                    .shadow(color: count > 0 ? Palette.accent.opacity(0.5) : .clear, radius: 14)
-                    .contentTransition(.numericText())
-                Text("waiting on you").font(.tCallout).foregroundStyle(Palette.text2)
-                Spacer()
-                ConnectionPill()
-            }
-            HStack(spacing: 0) {
-                ForEach(Array(kinds.enumerated()), id: \.offset) { i, k in
-                    VStack(alignment: .leading, spacing: 3) {
-                        Eyebrow(k.0)
-                        Text("\(k.1)").font(.mono(15, .medium)).monospacedDigit()
-                            .foregroundStyle(k.1 > 0 ? Palette.text : Palette.textFaint)
-                    }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    if i < kinds.count - 1 { Rectangle().fill(Palette.hairline).frame(width: 1, height: 28).padding(.trailing, Space.md) }
-                }
-            }
-        }
-        .card(highlighted: count > 0)
-        .padding(.top, Space.xs)
-        .accessibilityElement(children: .combine)
-    }
-}
-
-struct DecisionCard: View {
+struct DecisionItemCard: View {
     @Environment(AppModel.self) private var model
     let item: DecisionItem
     let state: DecisionActionState?
@@ -100,14 +62,26 @@ struct DecisionCard: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: Space.md) {
-            header
-            content
+            if case .hold(let hold) = item.kind {
+                TimelineView(.periodic(from: .now, by: 30)) { context in
+                    TrantorDesign.DecisionCard(
+                        "\(hold.session.isEmpty ? "A seat" : hold.session) wants to edit \(hold.file)" +
+                        (hold.other.isEmpty ? "" : ". \(hold.other) is also working on it."),
+                        age: compactAge(item.ts, now: context.date),
+                        go: { Task { await model.decisions.decideHold(hold, go: true) } },
+                        noGo: { Task { await model.decisions.decideHold(hold, go: false) } })
+                        .disabled(pending)
+                }
+            } else {
+                VStack(alignment: .leading, spacing: Space.md) {
+                    Text("Waiting for you").font(.ui(13, relativeTo: .caption))
+                    header
+                    content
+                }
+                .padding(Space.md)
+                .auroraPanel(stroke: Glass.waitingStroke, shadow: Glass.waitingShadow)
+            }
             if let state { stateLine(state) }
-        }
-        .card()
-        .overlay(alignment: .leading) {
-            RoundedRectangle(cornerRadius: 2).fill(kindColor).frame(width: 3).padding(.vertical, 14)
-                .shadow(color: kindColor.opacity(0.6), radius: 6)
         }
         .accessibilityElement(children: .contain)
     }
@@ -117,7 +91,7 @@ struct DecisionCard: View {
             Image(systemName: kindIcon).font(.system(size: 12, weight: .semibold)).foregroundStyle(kindColor)
             Eyebrow(kindTitle, color: kindColor)
             Spacer()
-            if !item.project.isEmpty { Chip(item.project, color: Palette.hue(for: item.project)) }
+            if !item.project.isEmpty { Chip(item.project) }
             TimeAgo(millis: item.ts)
         }
     }
@@ -125,23 +99,8 @@ struct DecisionCard: View {
     @ViewBuilder private var content: some View {
         let store = model.decisions
         switch item.kind {
-        case .hold(let h):
-            SeatLine(seat: h.session.isEmpty ? "A seat" : h.session, verb: "wants to edit")
-            Text(h.file).font(.mono(14, .medium)).foregroundStyle(Palette.text)
-                .frame(maxWidth: .infinity, alignment: .leading).well()
-            if !h.other.isEmpty {
-                HStack(spacing: 6) {
-                    Image(systemName: "exclamationmark.triangle.fill").font(.system(size: 11)).foregroundStyle(Palette.amber)
-                    Text("\(h.other) is also working on it").font(.tCallout).foregroundStyle(Palette.text2)
-                }
-            }
-            HStack(spacing: Space.sm) {
-                Button { Task { await store.decideHold(h, go: true) } } label: { Label("Go", systemImage: "checkmark") }
-                    .buttonStyle(.primary)
-                Button { Task { await store.decideHold(h, go: false) } } label: { Label("No-go", systemImage: "xmark") }
-                    .buttonStyle(.ghost)
-                Spacer()
-            }.disabled(pending)
+        case .hold:
+            EmptyView()
 
         case .gate(let g):
             Text(g.claim).font(.tHeadline).foregroundStyle(Palette.text)
@@ -150,9 +109,9 @@ struct DecisionCard: View {
             if !g.howToVerify.isEmpty { Detail(label: "How", text: g.howToVerify, mono: true) }
             WellField("Note (optional)", text: $note, axis: .vertical)
             HStack(spacing: Space.sm) {
-                Button("Verified") { Task { await store.resolveGate(g, as: .verified, note: note) } }.buttonStyle(.primary)
-                Button("Failed") { Task { await store.resolveGate(g, as: .failed, note: note) } }.buttonStyle(.danger)
-                Button("Waive") { Task { await store.resolveGate(g, as: .waived, note: note) } }.buttonStyle(.ghost)
+                Button("Verified") { Task { await store.resolveGate(g, as: .verified, note: note) } }.buttonStyle(AuroraButtonStyle(.primary))
+                Button("Failed") { Task { await store.resolveGate(g, as: .failed, note: note) } }.buttonStyle(AuroraButtonStyle(.destructive))
+                Button("Waive") { Task { await store.resolveGate(g, as: .waived, note: note) } }.buttonStyle(AuroraButtonStyle())
                 Spacer()
             }.disabled(pending)
 
@@ -163,8 +122,8 @@ struct DecisionCard: View {
             if !p.exclusions.isEmpty { Detail(label: "Not covered", text: p.exclusions) }
             WellField("Note (optional)", text: $note, axis: .vertical)
             HStack(spacing: Space.sm) {
-                Button("Approve") { Task { await store.decideProposal(p, approve: true, note: note) } }.buttonStyle(.primary)
-                Button("Deny") { Task { await store.decideProposal(p, approve: false, note: note) } }.buttonStyle(.ghost)
+                Button("Approve") { Task { await store.decideProposal(p, approve: true, note: note) } }.buttonStyle(AuroraButtonStyle(.primary))
+                Button("Deny") { Task { await store.decideProposal(p, approve: false, note: note) } }.buttonStyle(AuroraButtonStyle())
                 Spacer()
             }.disabled(pending)
 
@@ -176,7 +135,7 @@ struct DecisionCard: View {
                 Button { Task { await store.reply(to: m, text: note); note = "" } } label: {
                     Label("Send reply", systemImage: "arrow.up")
                 }
-                .buttonStyle(.primary)
+                .buttonStyle(AuroraButtonStyle(.primary))
                 .disabled(pending || note.trimmingCharacters(in: .whitespaces).isEmpty)
                 Spacer()
             }
@@ -209,12 +168,7 @@ struct DecisionCard: View {
         case .proposal: return "doc.badge.plus"; case .ask: return "questionmark.bubble.fill"
         }
     }
-    private var kindColor: Color {
-        switch item.kind {
-        case .hold: return Palette.amber; case .gate: return Palette.accent
-        case .proposal: return Palette.purple; case .ask: return Palette.blue
-        }
-    }
+    private var kindColor: Color { Palette.text2 }
 }
 
 /// "kimi-8 · wants to edit": the seat's mark, name and what it wants.

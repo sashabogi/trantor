@@ -198,7 +198,6 @@ struct SectionView: View {
             case .settings: SettingsView()
             }
         }
-        .stage()
         .toolbarBackground(.hidden, for: .navigationBar)
     }
 }
