@@ -77,6 +77,11 @@ def main():
                "-destination", f"platform=iOS Simulator,id={args.device}", "-derivedDataPath", str(OUT / "DerivedData"),
                "-resultBundlePath", str(result), "-parallel-testing-enabled", "NO", "-jobs", "2",
                "-collect-test-diagnostics", "never", "CODE_SIGNING_ALLOWED=NO", "test"]
+    if args.phase == "design":
+        subprocess.run(["xcodegen", "generate", "--spec", str(ROOT / "ios/project.yml")], cwd=ROOT, check=True)
+        command[command.index("-project") + 1] = str(ROOT / "ios/TrantorCompanion.xcodeproj")
+        command[command.index("-scheme") + 1] = "TrantorDesign"
+        selection = "TrantorDesignTests"
     command += ["-only-testing:" + test for test in (args.only or [selection])]
     if args.phase == "app":
         command += ["-skip-testing:AuroraAppTests/AuroraScreenCaptureTests"]
