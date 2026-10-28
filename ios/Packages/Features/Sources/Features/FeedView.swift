@@ -12,14 +12,16 @@ public struct FeedView: View {
         let feed = model.feed
         ScrollView {
             LazyVStack(alignment: .leading, spacing: Space.md) {
+                StatusHeadline("\(feed.filtered.count) events · " + model.standingState().headline, eyebrow: "Feed")
+                    .padding(.top, Space.md)
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: Space.sm) {
                         Button("All") { feed.activeChips.removeAll() }
-                            .buttonStyle(.action(feed.activeChips.isEmpty ? .primary : .ghost, compact: true))
+                            .buttonStyle(AuroraButtonStyle(feed.activeChips.isEmpty ? .primary : .standard))
                             .accessibilityAddTraits(feed.activeChips.isEmpty ? .isSelected : [])
                         ForEach(FeedStore.chips, id: \.label) { chip in
                             // Separate pills retain the tape's existing multi-select filtering.
-                            PillPicker([(true, chip.label)], selection: Binding(
+                            AuroraPicker([(true, chip.label)], selection: Binding(
                                 get: { feed.activeChips.contains(chip.label) },
                                 set: { _ in
                                     if feed.activeChips.contains(chip.label) { feed.activeChips.remove(chip.label) }
@@ -29,13 +31,14 @@ public struct FeedView: View {
                     }
                 }.padding(.vertical, Space.xs)
                 if feed.freshness.isStale { FreshnessBanner(freshness: feed.freshness) }
-                if feed.filtered.isEmpty { EmptyState(title: "No events", systemImage: "list.bullet.rectangle").card() }
-                ForEach(feed.filtered) { event in EventRow(event: event).card(padding: Space.md) }
+                if feed.filtered.isEmpty { EmptyState(title: "No events", systemImage: "list.bullet.rectangle").padding(Space.md).auroraPanel() }
+                ForEach(feed.filtered) { event in EventRow(event: event).padding(Space.md).auroraPanel() }
             }
             .padding(.horizontal, Space.lg).padding(.bottom, Space.xl)
         }
-        .stage()
+        .auroraScreen(model.standingState().wash)
         .navigationTitle("Feed")
+        .navigationBarTitleDisplayMode(.inline)
         .toolbar { ToolbarItem(placement: .topBarTrailing) { ConnectionDot(connection: feed.connection) } }
         .refreshable { await feed.refresh() }
     }
@@ -59,15 +62,7 @@ struct ConnectionDot: View {
 
 struct EventRow: View {
     let event: HubEvent
-    private var color: Color {
-        switch event.type {
-        case let type where type.hasPrefix("hold"): return Palette.amber
-        case let type where type.hasPrefix("verify"): return Palette.accent
-        case let type where type.hasPrefix("proposal"): return Palette.purple
-        case let type where type.hasPrefix("presence"): return Palette.up
-        default: return Palette.blue
-        }
-    }
+    private var color: Color { Palette.text2 }
     private var glyph: String {
         switch event.type {
         case let type where type.hasPrefix("hold"): return "hand.raised"
@@ -107,7 +102,7 @@ struct EventRow: View {
     }
     private var tags: some View {
         HStack(spacing: Space.sm) {
-            if !event.project.isEmpty { Chip(event.project, color: Palette.hue(for: event.project)) }
+            if !event.project.isEmpty { Chip(event.project) }
             if let id = event.taskId { Mono("#\(id)", font: .tDataSmall) }
         }
     }
