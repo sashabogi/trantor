@@ -11,6 +11,7 @@ final class AuroraScreenCaptureTests: XCTestCase {
     func testClosedPhoneTabsInMintAndAmber() async throws {
         let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.first as? UIWindowScene)
         XCTAssertLessThan(scene.screen.bounds.width, scene.screen.bounds.height, "Use the closed Duo display")
+        XCTAssertEqual(scene.traitCollection.horizontalSizeClass, .compact, "Open-display captures do not satisfy this drill")
         for waiting in [false, true] {
             let hub = DemoData.hub()
             hub.holdsData = waiting ? [Hold(id: 1, project: "trantor", file: "Sources/Chat.swift", session: "codex-4:trantor",

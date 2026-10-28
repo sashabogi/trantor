@@ -13,9 +13,9 @@ final class AuroraChatPhotoScreensTests: XCTestCase {
         let photo = app.collectionViews.cells.firstMatch
         XCTAssertTrue(photo.waitForExistence(timeout: 10), "The drill simulator must contain a library photo")
         photo.tap()
-        let add = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Add")).firstMatch
-        XCTAssertTrue(add.waitForExistence(timeout: 5))
-        add.tap()
+        let addButton = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Add")).firstMatch
+        XCTAssertTrue(addButton.waitForExistence(timeout: 5))
+        addButton.tap()
         let remove = app.buttons["Remove photo.jpg"]
         XCTAssertTrue(remove.waitForExistence(timeout: 10))
         let composer = app.textFields["chat.composer"].exists ? app.textFields["chat.composer"] : app.textViews["chat.composer"]
