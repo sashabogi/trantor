@@ -4,6 +4,7 @@ import argparse
 import json
 import os
 import plistlib
+import signal
 from pathlib import Path
 import subprocess
 import sys
@@ -38,7 +39,7 @@ def run_monitored(command, device, log):
                 high_since = high_since or time.monotonic()
                 if time.monotonic() - high_since >= 120:
                     print(f"Stopping own test run: load stayed above 150 for two minutes ({load:.2f})", flush=True)
-                    process.terminate()
+                    process.send_signal(signal.SIGINT)
                     try:
                         process.wait(timeout=30)
                     except subprocess.TimeoutExpired:

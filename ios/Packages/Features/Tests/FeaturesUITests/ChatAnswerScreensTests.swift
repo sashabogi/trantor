@@ -34,6 +34,10 @@ final class ChatAnswerScreensTests: XCTestCase {
         field.tap(); field.typeText("Review the companion app")
         XCTAssertTrue(send.isEnabled)
         send.tap()
+        let answerShot = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
+        answerShot.name = "free-text-answer-after-send"
+        answerShot.lifetime = .keepAlways
+        add(answerShot)
         let status = app.staticTexts["chat.ask.status.demo-project-question"]
         XCTAssertTrue(status.waitForExistence(timeout: 5))
         XCTAssertEqual(status.label, "Sending…")

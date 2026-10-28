@@ -13,6 +13,11 @@ final class AuroraChatPhotoScreensTests: XCTestCase {
         let photo = app.collectionViews.cells.firstMatch
         XCTAssertTrue(photo.waitForExistence(timeout: 10), "The drill simulator must contain a library photo")
         photo.tap()
+        print("PHOTO_PICKER_TREE \(app.debugDescription)")
+        let pickerShot = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
+        pickerShot.name = "photo-picker-selection"
+        pickerShot.lifetime = .keepAlways
+        add(pickerShot)
         let addButton = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Add")).firstMatch
         XCTAssertTrue(addButton.waitForExistence(timeout: 5))
         addButton.tap()
