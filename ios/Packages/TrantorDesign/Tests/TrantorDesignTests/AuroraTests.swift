@@ -13,17 +13,11 @@ final class AuroraTests: XCTestCase {
 
     /// Render real panels and text, plus solid foreground swatches to avoid measuring glyph antialiasing.
     @MainActor func testContrastSnapshots() throws {
-        let lights: [(String, Color, Double)] = AuroraState.allCases.map {
-            ($0.rawValue, Glow.primary($0), Glow.primaryStrength)
-        } + [("secondary", Glow.secondary, Glow.secondaryStrength), ("tertiary", Glow.tertiary, Glow.tertiaryStrength)]
         for reduced in [false, true] {
-            for (name, light, strength) in lights {
+            for state in AuroraState.allCases {
                 for (role, foreground) in [("text", Palette.text), ("text2", Palette.text2)] {
                     let view = ZStack {
-                        ZStack {
-                            Palette.auroraGround
-                            light.opacity(strength * (reduced ? 0.4 : 1))
-                        }.drawingGroup(colorMode: .linear)
+                        StateWash.top(state)
                         AuroraSurface(shape: Rectangle())
                         Text("Aurora \(role)").font(.ui(16)).foregroundStyle(foreground)
                         HStack { Spacer(); Rectangle().fill(foreground).frame(width: 24) }
@@ -35,7 +29,7 @@ final class AuroraTests: XCTestCase {
                     renderer.scale = 1
                     let snapshot = try XCTUnwrap(renderer.uiImage)
                     let attachment = XCTAttachment(image: snapshot)
-                    attachment.name = "\(name)-\(role)-\(reduced ? "solid" : "glass")"
+                    attachment.name = "\(state.rawValue)-\(role)-\(reduced ? "solid" : "glass")"
                     attachment.lifetime = .keepAlways
                     add(attachment)
                     let background = try pixel(snapshot, x: 8, y: 8)
@@ -61,7 +55,7 @@ final class AuroraTests: XCTestCase {
         }
     }
 
-    @MainActor func testPanelStaysDarkWithoutGlowInEitherHostScheme() throws {
+    @MainActor func testPanelStaysDarkWithoutWashInEitherHostScheme() throws {
         var samples: [[Double]] = []
         for scheme in [ColorScheme.light, .dark] {
             let view = ZStack {
@@ -80,6 +74,34 @@ final class AuroraTests: XCTestCase {
         }
         for (light, dark) in zip(samples[0], samples[1]) {
             XCTAssertEqual(light, dark, accuracy: 0.01, "Host appearance must not lighten Aurora glass")
+        }
+    }
+
+    @MainActor func testWashStopsAreFullWidthAndUnaffectedByReduceTransparency() throws {
+        let states: [(AuroraState, UInt32, UInt32)] = [
+            (.clear, 0x0F2A26, 0x0A1416),
+            (.waiting, 0x2A220C, 0x15120C),
+            (.failed, 0x2C1119, 0x160C12)
+        ]
+        for (state, top, middle) in states {
+            for reduced in [false, true] {
+                let view = AuroraBackground(state: state)
+                    .frame(width: 240, height: 200)
+                    .environment(\.auroraReduceTransparency, reduced)
+                let renderer = ImageRenderer(content: view)
+                renderer.scale = 1
+                let snapshot = try XCTUnwrap(renderer.uiImage)
+                for (row, hex) in [(0, top), (90, middle), (199, UInt32(0x070A16))] {
+                    let expected = [16, 8, 0].map { Double((hex >> $0) & 0xff) / 255 }
+                    for column in [0, 120, 239] {
+                        let actual = try pixel(snapshot, x: column, y: row)
+                        for (channel, wanted) in zip(actual, expected) {
+                            XCTAssertEqual(channel, wanted, accuracy: 0.008,
+                                           "\(state) row \(row), column \(column), reduced \(reduced)")
+                        }
+                    }
+                }
+            }
         }
     }
 

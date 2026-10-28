@@ -28,41 +28,18 @@ public enum AuroraState: String, CaseIterable, Sendable {
     }
 }
 
-/// One static background per screen. Elliptical lights follow the available bounds.
+/// One opaque wash per screen; only a standing-state change transitions its colors.
 public struct AuroraBackground: View {
     let state: AuroraState
-    @Environment(\.accessibilityReduceTransparency) private var systemReduceTransparency
-    @Environment(\.auroraReduceTransparency) private var previewReduceTransparency
-    private var reduceTransparency: Bool { systemReduceTransparency || previewReduceTransparency }
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     public init(state: AuroraState) { self.state = state }
 
     public var body: some View {
-        GeometryReader { geometry in
-            ZStack {
-                Palette.auroraGround
-                light(Glow.primary(state), strength: Glow.primaryStrength, x: 0.12, y: 0.18, size: geometry.size)
-                light(Glow.secondary, strength: Glow.secondaryStrength, x: 0.70, y: 0.30, size: geometry.size)
-                light(Glow.tertiary, strength: Glow.tertiaryStrength, x: 0.50, y: 1, size: geometry.size)
-            }
-            .drawingGroup(colorMode: .linear)
-            .clipped()
-        }
-        .ignoresSafeArea()
-        .accessibilityHidden(true)
-    }
-
-    private func light(_ color: Color, strength: Double, x: CGFloat, y: CGFloat, size: CGSize) -> some View {
-        let peak = strength * (reduceTransparency ? 0.4 : 1)
-        return EllipticalGradient(stops: [
-            .init(color: color.opacity(peak), location: 0),
-            .init(color: color.opacity(peak * 0.35), location: 0.45),
-            .init(color: color.opacity(peak * 0.08), location: 0.58),
-            .init(color: color.opacity(peak * 0.008), location: 0.64),
-            .init(color: color.opacity(0), location: 0.68),
-            .init(color: color.opacity(0), location: 1)
-        ], center: .center, startRadiusFraction: 0, endRadiusFraction: 0.5)
-        .frame(width: size.width * 0.70 / 0.68, height: size.width * 0.70 * 0.55 / 0.68)
-        .position(x: size.width * x, y: size.height * y)
+        LinearGradient(stops: StateWash.stops(state), startPoint: .top, endPoint: .bottom)
+            .background(Palette.auroraGround)
+            .animation(reduceMotion ? nil : Motion.ease, value: state)
+            .ignoresSafeArea()
+            .accessibilityHidden(true)
     }
 }
 

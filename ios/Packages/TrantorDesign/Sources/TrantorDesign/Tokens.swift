@@ -93,19 +93,28 @@ public enum Motion {
 }
 
 
-public enum Glow {
-    public static func primary(_ state: AuroraState) -> Color {
+public enum StateWash {
+    public static func top(_ state: AuroraState) -> Color {
         switch state {
-        case .clear: return Palette.accent
-        case .waiting: return Palette.amber
-        case .failed: return Palette.down
+        case .clear: return Color(hex: 0x0F2A26)
+        case .waiting: return Color(hex: 0x2A220C)
+        case .failed: return Color(hex: 0x2C1119)
         }
     }
-    public static let secondary = Color(hex: 0x7F9CFF)
-    public static let tertiary = Color(hex: 0xA76EFF)
-    public static let primaryStrength = 0.32
-    public static let secondaryStrength = 0.26
-    public static let tertiaryStrength = 0.20
+
+    public static func middle(_ state: AuroraState) -> Color {
+        switch state {
+        case .clear: return Color(hex: 0x0A1416)
+        case .waiting: return Color(hex: 0x15120C)
+        case .failed: return Color(hex: 0x160C12)
+        }
+    }
+
+    public static func stops(_ state: AuroraState) -> [Gradient.Stop] {
+        [.init(color: top(state), location: 0),
+         .init(color: middle(state), location: 0.45),
+         .init(color: Palette.auroraGround, location: 1)]
+    }
 }
 
 public struct Glass: Sendable {
