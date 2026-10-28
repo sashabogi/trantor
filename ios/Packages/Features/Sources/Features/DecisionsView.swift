@@ -177,7 +177,7 @@ struct SeatLine: View {
     let verb: String
     var body: some View {
         HStack(spacing: Space.sm) {
-            NameMark(seat, size: 22)
+            SeatOrb(seat, size: 28)
             Text(seat).font(.mono(13, .medium)).foregroundStyle(Palette.text).lineLimit(1)
             Text(verb).font(.tCallout).foregroundStyle(Palette.textDim)
         }
