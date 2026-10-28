@@ -33,6 +33,12 @@ final class ChatAnswerScreensTests: XCTestCase {
         XCTAssertTrue(field.waitForExistence(timeout: 5))
         field.tap(); field.typeText("Review the companion app")
         XCTAssertTrue(send.isEnabled)
+        // Keyboard resizing moves this card; do not tap its pre-keyboard coordinates.
+        let aboveKeyboard = NSPredicate { _, _ in
+            !app.keyboards.firstMatch.exists || send.frame.maxY <= app.keyboards.firstMatch.frame.minY
+        }
+        expectation(for: aboveKeyboard, evaluatedWith: send)
+        waitForExpectations(timeout: 5)
         send.tap()
         let answerShot = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
         answerShot.name = "free-text-answer-after-send"

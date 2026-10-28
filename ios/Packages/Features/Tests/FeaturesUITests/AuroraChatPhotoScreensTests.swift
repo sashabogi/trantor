@@ -10,15 +10,14 @@ final class AuroraChatPhotoScreensTests: XCTestCase {
         let attach = app.buttons["chat.attach"]
         XCTAssertTrue(attach.waitForExistence(timeout: 10))
         attach.tap()
-        let photo = app.collectionViews.cells.firstMatch
+        let photo = app.images.matching(NSPredicate(format: "label BEGINSWITH %@", "Photo,")).firstMatch
         XCTAssertTrue(photo.waitForExistence(timeout: 10), "The drill simulator must contain a library photo")
         photo.tap()
-        print("PHOTO_PICKER_TREE \(app.debugDescription)")
         let pickerShot = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
         pickerShot.name = "photo-picker-selection"
         pickerShot.lifetime = .keepAlways
         add(pickerShot)
-        let addButton = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Add")).firstMatch
+        let addButton = app.buttons["Done"]
         XCTAssertTrue(addButton.waitForExistence(timeout: 5))
         addButton.tap()
         let remove = app.buttons["Remove photo.jpg"]
