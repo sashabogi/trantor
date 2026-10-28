@@ -16,7 +16,7 @@ public struct DecisionsView: View {
         let store = model.decisions
         ScrollView {
             LazyVStack(alignment: .leading, spacing: Space.md) {
-                StatusHeadline(model.standingState().headline, eyebrow: "Decisions")
+                StatusHeadline(store.items.isEmpty ? "Nothing waiting" : "\(store.items.count) waiting on you")
                     .padding(.top, Space.md)
                 ConnectionPill()
                 if store.freshness.isStale { FreshnessBanner(freshness: store.freshness) }

@@ -130,7 +130,6 @@ struct ProjectChatView: View {
 
     private var header: some View {
         VStack(alignment: .leading, spacing: Space.sm) {
-            StatusHeadline(standingState.headline, eyebrow: "\(store.project) · Chat", keyboardVisible: composing)
             HStack(spacing: Space.sm) {
                 Text(store.snapshot.meta.model.isEmpty ? "Orchestrator" : store.snapshot.meta.model)
                     .font(.ui(13, relativeTo: .caption)).foregroundStyle(Palette.text2).lineLimit(1)

@@ -13,7 +13,7 @@ struct CrewView: View {
     var body: some View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: Space.md) {
-                StatusHeadline(model.standingState(for: store).headline, eyebrow: "\(store.project) · Crew")
+                StatusHeadline("\(store.seats.count) seats · \(model.standingState(for: store).working) working")
                 ViewThatFits(in: .horizontal) {
                     HStack { controls }
                     VStack(alignment: .leading, spacing: Space.sm) { controls }

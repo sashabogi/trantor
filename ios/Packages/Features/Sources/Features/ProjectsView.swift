@@ -12,7 +12,7 @@ public struct ProjectsView: View {
         let store = model.projects
         ScrollView {
             LazyVStack(alignment: .leading, spacing: Space.md) {
-                StatusHeadline("\(store.projects.count) projects · " + model.standingState().headline, eyebrow: "Projects")
+                StatusHeadline("\(store.projects.count) projects · \(model.decisions.items.count) waiting")
                     .padding(.top, Space.md)
                 if store.freshness.isStale { FreshnessBanner(freshness: store.freshness) }
                 if store.projects.isEmpty { EmptyState(title: "No projects", systemImage: "square.stack.3d.up").padding(Space.md).auroraPanel() }
@@ -132,7 +132,7 @@ public struct BoardView: View {
         let board = model.board
         ScrollView {
             LazyVStack(alignment: .leading, spacing: Space.md) {
-                StatusHeadline(model.standingState(project: project).headline, eyebrow: "\(project) · Board")
+                StatusHeadline(board.lanes.isEmpty ? "No cards" : board.lanes.filter { selectedLane.isEmpty || $0.status == selectedLane }.map { "\($0.cards.count) \($0.status)" }.joined(separator: " · "))
                     .padding(.top, Space.md)
                 ScrollView(.horizontal, showsIndicators: false) {
                     AuroraPicker([("", "All")] + board.lanes.map { ($0.status, $0.status.capitalized) }, selection: $selectedLane)

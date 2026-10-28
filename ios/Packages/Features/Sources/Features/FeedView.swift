@@ -12,7 +12,7 @@ public struct FeedView: View {
         let feed = model.feed
         ScrollView {
             LazyVStack(alignment: .leading, spacing: Space.md) {
-                StatusHeadline("\(feed.filtered.count) events · " + model.standingState().headline, eyebrow: "Feed")
+                StatusHeadline("\(feed.filtered.count) events")
                     .padding(.top, Space.md)
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: Space.sm) {

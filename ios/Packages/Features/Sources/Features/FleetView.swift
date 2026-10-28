@@ -13,7 +13,7 @@ public struct FleetView: View {
         let fleet = model.fleet
         ScrollView {
             LazyVStack(alignment: .leading, spacing: Space.md) {
-                StatusHeadline(model.standingState().headline, eyebrow: "Fleet")
+                StatusHeadline("\(fleet.online.count) online · \(fleet.peers.count) seats")
                     .padding(.top, Space.md)
                 AuroraPicker([(false, "Seats"), (true, "Cost")], selection: $showCost).padding(.vertical, Space.xs)
                 if showCost {
@@ -74,7 +74,7 @@ public struct CostView: View {
     public var body: some View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: Space.md) {
-                StatusHeadline("\(model.cost.entries.count) balances", eyebrow: "Cost").padding(.top, Space.md)
+                StatusHeadline("\(model.cost.entries.count) balances").padding(.top, Space.md)
                 CostContent()
             }
                 .padding(.horizontal, Space.lg).padding(.bottom, Space.xl)

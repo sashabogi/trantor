@@ -13,7 +13,7 @@ public struct InboxView: View {
         let inbox = model.inbox
         ScrollView {
             LazyVStack(alignment: .leading, spacing: Space.md) {
-                StatusHeadline("\(inbox.unreadCount) unread · " + model.standingState().headline, eyebrow: "Inbox")
+                StatusHeadline("\(inbox.unreadCount) unread")
                     .padding(.top, Space.md)
                 if inbox.freshness.isStale { FreshnessBanner(freshness: inbox.freshness) }
                 if inbox.threads.isEmpty { EmptyState(title: "No messages", systemImage: "tray").padding(Space.md).auroraPanel() }

@@ -19,8 +19,12 @@ sparklines, never as grey footnotes.
 
 ## Principles
 
-1. **State first.** Every top-level screen opens with one headline that states the standing
-   state: "1 needs you · 2 working", "3 working · 2 idle". Counts only, no adjectives.
+1. **Headlines are per screen.** Each headline counts only what its screen shows: Decisions
+   "1 waiting on you", Projects "4 projects · 1 waiting", Board counts by column, Crew
+   "3 seats · 2 working", Fleet "5 online · 6 seats", Feed "6 events", Inbox "1 unread".
+   Chat keeps only its slim model and context line. Headlines use 26pt with Dynamic Type,
+   stay on one line and truncate rather than wrap. Omit the eyebrow when navigation already
+   names the screen. The wash still carries the standing state. Counts only, no adjectives.
 2. **Color carries state, never events.** The wash changes when the standing state changes
    and stays until it changes again. It never flashes, pulses or animates (monitoring
    doctrine: state, not event).

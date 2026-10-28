@@ -116,18 +116,21 @@ public struct AuroraButtonStyle: ButtonStyle {
 }
 
 public struct StatusHeadline: View {
-    let eyebrow: String
+    let eyebrow: String?
     let headline: String
     let keyboardVisible: Bool
     @Environment(\.colorSchemeContrast) private var contrast
-    public init(_ headline: String, eyebrow: String, keyboardVisible: Bool = false) {
+    public init(_ headline: String, eyebrow: String? = nil, keyboardVisible: Bool = false) {
         self.eyebrow = eyebrow; self.headline = headline; self.keyboardVisible = keyboardVisible
     }
     public var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text(eyebrow.uppercased()).font(.mono(12, relativeTo: .caption)).tracking(2)
-                .foregroundStyle(contrast == .increased ? Palette.text : Palette.text2)
-            Text(headline).font(.ui(keyboardVisible ? 26 : 32, .semibold, relativeTo: .largeTitle)).tracking(-0.4)
+            if let eyebrow {
+                Text(eyebrow.uppercased()).font(.mono(12, relativeTo: .caption)).tracking(2)
+                    .foregroundStyle(contrast == .increased ? Palette.text : Palette.text2)
+            }
+            Text(headline).font(.ui(26, .semibold, relativeTo: .largeTitle)).tracking(-0.4)
+                .lineLimit(1).truncationMode(.tail)
                 .foregroundStyle(Palette.text)
         }
         .accessibilityAddTraits(.isHeader)
