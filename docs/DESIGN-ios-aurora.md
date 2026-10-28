@@ -11,9 +11,9 @@ and card #12175. This doc defines the look; the layout rules decide where things
 
 ## The idea in one paragraph
 
-A deep navy ground lit by soft colored light. The light carries the crew's standing state:
+A deep navy ground whose top edge is washed in a dark tint of the crew's standing state:
 mint when all is well, amber while something waits on the operator, red while a seat has
-failed. Content sits on translucent glass. Controls are Liquid Glass. Every screen opens on a
+failed. The tint fades to plain navy by mid-screen. Content sits on translucent glass. Controls are Liquid Glass. Every screen opens on a
 status headline, and live numbers (turns, context, spend, activity) are shown as numbers and
 sparklines, never as grey footnotes.
 
@@ -21,7 +21,7 @@ sparklines, never as grey footnotes.
 
 1. **State first.** Every top-level screen opens with one headline that states the standing
    state: "1 needs you · 2 working", "3 working · 2 idle". Counts only, no adjectives.
-2. **Light carries state, never events.** The glow changes when the standing state changes
+2. **Color carries state, never events.** The wash changes when the standing state changes
    and stays until it changes again. It never flashes, pulses or animates (monitoring
    doctrine: state, not event).
 3. **Glass for surfaces, solid color for actions.** Panels and controls are glass. The one
@@ -46,37 +46,36 @@ file that defines a color. Existing names keep their values unless listed here.
 | `Palette.text2` | `#C9D2E6` (was `#AEB8CF`) | secondary text on glass |
 
 `text2` gets lighter because glass over light lowers contrast. Both pass 4.5:1 on the
-lightest glass over the brightest glow; check with the contrast test below.
+lightest glass over the brightest point of each state wash; check with the contrast test below.
 
-### Glow (the aurora)
+### State wash
 
-Three radial lights over `auroraGround`, each an ellipse fading to transparent at 68 to 70%:
+Changed 2026-10-28: the operator dropped the radial glows ("the blobs") after seeing them in
+the simulator, and chose option B on the canvas row "Option: no blobs, the background itself
+changes color". No radial shapes anywhere.
 
-| Light | Color | Strength | Where |
+The background is one full-width vertical gradient over `auroraGround`, three stops:
+
+| Standing state | 0% (top) | 45% | 100% (bottom) |
 |---|---|---|---|
-| `Glow.primary` | state color (below) | 0.32 | top leading, about 12% x, 18% y |
-| `Glow.secondary` | `#7F9CFF` | 0.26 | top trailing, about 70% x, 30% y |
-| `Glow.tertiary` | `#A76EFF` | 0.20 | bottom center |
+| all clear (nothing waits, nothing failed) | `#0F2A26` | `#0A1416` | `#070A16` |
+| something waits on the operator | `#2A220C` | `#15120C` | `#070A16` |
+| a seat or gate has failed | `#2C1119` | `#160C12` | `#070A16` |
 
-State color for `Glow.primary`, from the standing state of what the screen shows:
-
-| Standing state | Color |
-|---|---|
-| all clear (nothing waits, nothing failed) | mint `#3EF0C2` |
-| something waits on the operator | amber `#F5B301` |
-| a seat or gate has failed | red `#EF5A6F` |
-
-Red outranks amber, which outranks mint. Positions are fractions of the screen, so the light
-follows the layout on any size. The glow is drawn once per screen as a background, never per
-card.
+Red outranks amber, which outranks mint. The stops are fractions of the screen height, so the
+wash follows any size and pose. It is drawn once per screen as the background, never per card,
+and never animated: a state change swaps it with the standard 0.22 s ease, nothing more.
 
 ### Glass
 
-| Token | Fill | Stroke | Blur | Use |
+| Token | Fill | Stroke | Material | Use |
 |---|---|---|---|---|
-| `Glass.panel` | white 7% | white 14% | 30 | cards, tiles, chat bubbles |
-| `Glass.control` | white 10% | white 16% | 30 | buttons on glass, segmented pickers |
+| `Glass.panel` | white 7% | white 14% | `.ultraThinMaterial` | cards, tiles, chat bubbles |
+| `Glass.control` | white 10% | white 16% | `.ultraThinMaterial` | buttons on glass, segmented pickers |
 | `Glass.selected` | white 18% | none | none | selected tab, selected segment |
+
+The blur comes from the system material, which sets its own radius; the mockups' CSS blur of
+30 has no native equivalent and is not a token.
 
 On iOS 26 and later, controls use the system Liquid Glass (`.glassEffect`) where SwiftUI
 offers it, and `Glass.control` is the fallback. Panels use `Glass.panel` as a material.
@@ -127,7 +126,7 @@ All sizes scale with Dynamic Type.
 
 Each is a TrantorDesign view; screens compose them and never restyle them inline.
 
-- **`AuroraBackground(state:)`**: the ground plus the three lights for a standing state.
+- **`AuroraBackground(state:)`**: the ground plus the state wash for a standing state.
 - **`StatusHeadline`**: the eyebrow (project or section) and the headline counts.
 - **`StatTile`**: a mono figure and a caption on `Glass.panel`. Up to three in a row, and
   only for numbers the hub reports (turns today, cards shipped, metered spend).
@@ -166,23 +165,23 @@ and come with the Duo layout work.
 ## Accessibility
 
 - **Reduce Transparency:** glass becomes solid `Palette.panel2` with the same strokes, and the
-  glow drops to 40% strength.
+  state wash keeps its colors (it has no transparency to remove).
 - **Increase Contrast:** strokes go to 30%, `text2` becomes `text`.
 - **Reduce Motion:** nothing in this look animates, so nothing changes.
 - **Contrast test:** a snapshot test renders `text` and `text2` on `Glass.panel` over each
-  glow color at its brightest point and fails under 4.5:1.
+  state wash at its top stop and fails under 4.5:1.
 - Color never carries meaning alone. Every amber or red state also has words ("Waiting for
   you", "Failed").
 
 ## Performance
 
-- The glow is one static background per screen, not per view, and never animated.
+- The state wash is one static background per screen, not per view, and never animated.
 - Blur only on panels, controls and the composer; never nested more than two deep.
 - Sparklines draw from data already on the device; no extra network calls to draw them.
 
 ## Not part of this look
 
-- No glow on the desktop app. It keeps its calm neutral system.
+- No state wash or glow on the desktop app. It keeps its calm neutral system.
 - No gradients inside cards, no glowing text, no emoji, no left-border accent cards.
 - No decorative charts. A sparkline with no data behind it is not drawn.
 
