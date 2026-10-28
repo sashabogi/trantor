@@ -117,7 +117,7 @@ spend, card ids, timestamps). Mono never appears in chrome labels.
 
 | Role | Size / weight |
 |---|---|
-| Status headline | 32 semibold, tracking -0.4 (26 when the keyboard is up) |
+| Status headline | 26 semibold, tracking -0.4, one line with tail truncation |
 | Stat tile figure | 26 mono medium |
 | Card title / seat name | 16 to 17 semibold |
 | Body and chat | 16 regular, line height 1.55 |
@@ -131,7 +131,7 @@ All sizes scale with Dynamic Type.
 Each is a TrantorDesign view; screens compose them and never restyle them inline.
 
 - **`AuroraBackground(state:)`**: the ground plus the state wash for a standing state.
-- **`StatusHeadline`**: the eyebrow (project or section) and the headline counts.
+- **`StatusHeadline`**: per-screen headline counts, with an optional eyebrow only when navigation does not name the screen.
 - **`StatTile`**: a mono figure and a caption on `Glass.panel`. Up to three in a row, and
   only for numbers the hub reports (turns today, cards shipped, metered spend).
 - **`DecisionCard`**: amber ring, "Waiting for you · <age>", one sentence, and the two
