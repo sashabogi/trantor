@@ -58,6 +58,8 @@ def main():
     parser.add_argument("--phase", choices=["app", "design", "ui", "screens"], required=True)
     parser.add_argument("--only", action="append", default=[])
     parser.add_argument("--wait-for-load", type=int, default=0)
+    parser.add_argument("--result-name")
+    parser.add_argument("--keep-simulator", action="store_true")
     args = parser.parse_args()
     load_gate(args.wait_for_load)
     OUT.mkdir(parents=True, exist_ok=True)
@@ -106,7 +108,10 @@ def main():
         raise SystemExit("Another simulator is booted; coordinate before running this drill")
     selection = {"app": "AuroraAppTests", "design": "AuroraDesignTests", "ui": "AuroraUITests",
                  "screens": "AuroraAppTests/AuroraScreenCaptureTests"}[args.phase]
-    result = OUT / f"{args.phase}.xcresult"
+    result_name = args.result_name or args.phase
+    if Path(result_name).name != result_name:
+        raise SystemExit("Result name must be a filename, not a path")
+    result = OUT / f"{result_name}.xcresult"
     if result.exists():
         raise SystemExit(f"Keep the earlier evidence: move {result} aside before rerunning")
     command = ["xcodebuild", "-project", str(OUT / "AuroraDrill.xcodeproj"), "-scheme", "AuroraDrill",
@@ -122,13 +127,15 @@ def main():
     if args.phase == "app":
         command += ["-skip-testing:AuroraAppTests/AuroraScreenCaptureTests"]
     load_gate(args.wait_for_load)
+    exit_code = 75
     try:
-        with (OUT / f"{args.phase}.log").open("w") as log:
+        with (OUT / f"{result_name}.log").open("w") as log:
             exit_code = run_monitored(command, args.device, log)
         print(f"{args.phase}: exit {exit_code}; {result}", flush=True)
         return exit_code
     finally:
-        subprocess.run(["xcrun", "simctl", "shutdown", "all"], cwd=ROOT, check=False)
+        if exit_code != 0 or not args.keep_simulator:
+            subprocess.run(["xcrun", "simctl", "shutdown", "all"], cwd=ROOT, check=False)
 
 
 if __name__ == "__main__":
