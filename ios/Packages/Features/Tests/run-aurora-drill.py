@@ -129,6 +129,9 @@ def main():
     load_gate(args.wait_for_load)
     exit_code = 75
     try:
+        if args.keep_simulator and args.device not in booted:
+            subprocess.run(["xcrun", "simctl", "boot", args.device], cwd=ROOT, check=True)
+            subprocess.run(["xcrun", "simctl", "bootstatus", args.device, "-b"], cwd=ROOT, check=True)
         with (OUT / f"{result_name}.log").open("w") as log:
             exit_code = run_monitored(command, args.device, log)
         print(f"{args.phase}: exit {exit_code}; {result}", flush=True)
