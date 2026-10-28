@@ -15,7 +15,6 @@ struct ProjectView: View {
             else if section == "board" { BoardView(project: project) }
             else { CrewView(store: model.crew(project: project)) }
         }
-        .stage()
         .onAppear {
             if let wanted = model.openProjectSection { section = wanted; model.openProjectSection = nil }
         }
@@ -31,7 +30,7 @@ struct ProjectView: View {
                     Text(project)
                         .font(.ui(14, .semibold, relativeTo: .callout))
                         .foregroundStyle(Palette.text).lineLimit(1)
-                    PillPicker([("chat", "Chat"), ("board", "Board"), ("crew", "Crew")], selection: $section)
+                    AuroraPicker([("chat", "Chat"), ("board", "Board"), ("crew", "Crew")], selection: $section)
                 }
             }
         }
@@ -41,6 +40,7 @@ struct ProjectView: View {
 struct ProjectChatView: View {
     // Bindable so the composer can hold `$store.draft`: the draft lives on the per-project
     // ChatStore, so it survives switching Chat/Board/Crew and leaving the project.
+    @Environment(AppModel.self) private var model
     @Bindable var store: ChatStore
     @Environment(\.scenePhase) private var scenePhase
     @State private var followingBottom = true
@@ -69,11 +69,10 @@ struct ProjectChatView: View {
                             HStack {
                                 Spacer(minLength: 44)
                                 VStack(alignment: .trailing, spacing: Space.sm) {
-                                    Text(prompt.text).font(.tBody).textSelection(.enabled)
+                                    ChatBubble(prompt.text, speaker: .operator).textSelection(.enabled)
                                     Text(prompt.delivery.label).font(.tCaption).foregroundStyle(deliveryColor(prompt.delivery))
                                 }
-                                .padding(Space.md)
-                                .background(Palette.accentSoft, in: RoundedRectangle(cornerRadius: Radius.md))
+
                             }
                         }
                         if store.snapshot.meta.working {
@@ -101,6 +100,7 @@ struct ProjectChatView: View {
             }
         }
         .safeAreaInset(edge: .bottom, spacing: 0) { composer }
+        .auroraScreen(standingState.wash)
         // A destination can appear before the scene becomes active; load its first snapshot on appearance.
         .task { await store.refresh() }
         .task(id: scenePhase) {
@@ -119,21 +119,29 @@ struct ProjectChatView: View {
         store.focusedToolID = nil
     }
 
-    // One slim line: model on the left, context share on the right. Amber past 80%.
+    private var standingState: AuroraStandingState {
+        let questions = store.turns.flatMap(\.blocks).filter { block in
+            guard block.isQuestion, block.answer == nil else { return false }
+            if case .answered = store.answers[block.toolID] { return false }
+            return true
+        }.count
+        return model.standingState(project: store.project, questions: questions)
+    }
+
     private var header: some View {
-        HStack(spacing: Space.sm) {
-            Text(store.snapshot.meta.model.isEmpty ? "Orchestrator" : store.snapshot.meta.model)
-                .font(.tCaption).foregroundStyle(Palette.text2).lineLimit(1)
-            Spacer()
-            if let fraction = store.snapshot.meta.context.fraction {
-                Text("Context \(Int(min(fraction, 1) * 100))%")
-                    .font(.tCaption)
-                    .foregroundStyle(fraction >= 0.8 ? Palette.amber : Palette.text2)
-                    .accessibilityLabel("Context use").accessibilityValue("\(Int(min(fraction, 1) * 100)) percent")
-            } else {
-                Text("Context —").font(.tCaption).foregroundStyle(Palette.textDim)
+        VStack(alignment: .leading, spacing: Space.sm) {
+            StatusHeadline(standingState.headline, eyebrow: "\(store.project) · Chat", keyboardVisible: composing)
+            HStack(spacing: Space.sm) {
+                Text(store.snapshot.meta.model.isEmpty ? "Orchestrator" : store.snapshot.meta.model)
+                    .font(.ui(13, relativeTo: .caption)).foregroundStyle(Palette.text2).lineLimit(1)
+                Spacer()
+                if let fraction = store.snapshot.meta.context.fraction {
+                    Text("Context \(Int(min(fraction, 1) * 100))%")
+                        .font(.mono(13, relativeTo: .caption)).foregroundStyle(Palette.text2)
+                        .accessibilityLabel("Context use").accessibilityValue("\(Int(min(fraction, 1) * 100)) percent")
+                }
             }
-        }.padding(.horizontal, Space.lg).padding(.vertical, Space.xs)
+        }.padding(.horizontal, Space.lg).padding(.vertical, Space.sm)
     }
 
     private var composer: some View {
@@ -150,19 +158,21 @@ struct ProjectChatView: View {
             if store.draft.utf16.count > 8000 {
                 Text("Keep your message under 8,000 characters.").font(.tCaption).foregroundStyle(Palette.amber)
             }
-            HStack(alignment: .bottom, spacing: Space.sm) {
+            Composer(focused: composing) {
                 PhotosPicker(selection: $pickedPhotos,
                              maxSelectionCount: max(1, ChatAttachment.maxCount - photos.pending.count),
                              matching: .images) {
                     Image(systemName: "photo")
                         .font(.tBody)
                         .foregroundStyle(Palette.text2)
-                        .frame(minWidth: 32, minHeight: 32)
+                        .frame(minWidth: 44, minHeight: 44)
                 }
                 .accessibilityLabel("Attach photo")
                 .accessibilityIdentifier("chat.attach")
                 .disabled(store.disabledReason != nil || !photos.readyToSend || photos.pending.count >= ChatAttachment.maxCount)
-                WellField("Message your orchestrator", text: $store.draft, axis: .vertical)
+                TextField("Message your orchestrator", text: $store.draft, axis: .vertical)
+                    .font(.ui(16)).foregroundStyle(Palette.text).tint(Palette.accent)
+                    .padding(.vertical, Space.sm)
                     .lineLimit(1...5).focused($composing)
                     .accessibilityIdentifier("chat.composer")
                 Button {
@@ -179,15 +189,13 @@ struct ProjectChatView: View {
                     if store.sending { ProgressView().tint(Palette.onAccent) }
                     else { Image(systemName: "arrow.up") }
                 }
-                .buttonStyle(.primary)
+                .buttonStyle(AuroraButtonStyle(.primary))
                 .accessibilityLabel("Send message")
                 .accessibilityIdentifier("chat.send")
                 .disabled(store.disabledReason != nil || !photos.readyToSend || store.sending || store.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || store.draft.utf16.count > 8000)
             }
         }
         .padding(Space.lg)
-        .background(Palette.ground)
-        .overlay(alignment: .top) { Hairline() }
         .onChange(of: pickedPhotos) { _, items in
             guard !items.isEmpty else { return }
             let count = photos.beginPreparation(count: items.count)
@@ -261,11 +269,11 @@ private struct ChatTurnRow: View {
                         Text([block.tool, block.text].filter { !$0.isEmpty }.joined(separator: " "))
                             .font(.tDataSmall).lineLimit(1).truncationMode(.middle)
                             .padding(.horizontal, Space.sm).padding(.vertical, Space.xs)
-                            .background(Palette.raise, in: RoundedRectangle(cornerRadius: Radius.xs))
+                            .background(AuroraSurface(shape: Capsule(), glass: .control))
                             .accessibilityLabel([block.tool, block.text].joined(separator: " "))
                     } else if block.kind == "text" || block.kind == "thinking" {
-                        Text(mine ? AttributedString(block.text) : (try? AttributedString(markdown: block.text, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace))) ?? AttributedString(block.text))
-                            .font(.tBody).foregroundStyle(block.kind == "thinking" ? Palette.textDim : Palette.text)
+                        ChatBubble(mine ? AttributedString(block.text) : (try? AttributedString(markdown: block.text, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace))) ?? AttributedString(block.text),
+                                   speaker: mine ? .operator : .orchestrator)
                             .textSelection(.enabled)
                     } else if !block.text.isEmpty {
                         Text(block.text).font(.tCallout).foregroundStyle(Palette.textDim)
@@ -275,8 +283,7 @@ private struct ChatTurnRow: View {
                     Text(delivery?.label ?? "Queued").font(.tCaption).foregroundStyle(Palette.textDim)
                 }
             }
-            .padding(mine ? Space.md : 0)
-            .background(mine ? Palette.accentSoft : .clear, in: RoundedRectangle(cornerRadius: Radius.md))
+
             if !mine { Spacer(minLength: 24) }
         }
     }

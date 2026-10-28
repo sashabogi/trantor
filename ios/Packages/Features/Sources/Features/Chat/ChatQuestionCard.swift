@@ -41,7 +41,8 @@ struct ChatQuestionCard: View {
                 Text(reason).font(.tCaption).foregroundStyle(Palette.textDim)
             }
         }
-        .card()
+        .padding(Space.md)
+        .auroraPanel(stroke: answered ? nil : Glass.waitingStroke, shadow: answered ? nil : Glass.waitingShadow)
         .opacity(answered ? 0.6 : 1)
     }
 
@@ -63,17 +64,17 @@ struct ChatQuestionCard: View {
                         Spacer(minLength: 0)
                     }
                     .padding(Space.sm).frame(maxWidth: .infinity, alignment: .leading)
-                    .background(Palette.raise, in: RoundedRectangle(cornerRadius: Radius.sm))
+
                     .contentShape(Rectangle())
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(AuroraButtonStyle())
                 .accessibilityIdentifier("chat.ask.option.\(block.toolID).\(index)")
                 .accessibilityValue(question.multiSelect ? (picks.contains(index) ? "Selected" : "Not selected") : "")
                 .disabled(disabled)
             }
             if !answered {
                 Button("Something else…") { writingOther.toggle() }
-                    .font(.tCallout).foregroundStyle(Palette.accent)
+                    .buttonStyle(AuroraButtonStyle())
                     .disabled(disabled)
                     .accessibilityIdentifier("chat.ask.other.\(block.toolID)")
                 if writingOther {
@@ -88,7 +89,7 @@ struct ChatQuestionCard: View {
                     Button(writingOther ? "Send" : "Submit") {
                         submit(question.multiSelect ? picks.sorted() : [], other: writingOther ? other : nil)
                     }
-                    .buttonStyle(.primary)
+                    .buttonStyle(AuroraButtonStyle(.primary))
                     .disabled(disabled || (writingOther && (other.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || other.utf16.count > 2000)) || (!writingOther && picks.isEmpty))
                     .accessibilityIdentifier("chat.ask.submit.\(block.toolID)")
                 }

@@ -2,12 +2,15 @@ import SwiftUI
 
 public struct ChatBubble: View {
     public enum Speaker { case `operator`, orchestrator }
-    let message: String
+    let message: AttributedString
     let speaker: Speaker
     let toolSummary: String?
     @ScaledMetric private var lineSpacing = 8.8
     @Environment(\.colorSchemeContrast) private var contrast
     public init(_ message: String, speaker: Speaker, toolSummary: String? = nil) {
+        self.message = AttributedString(message); self.speaker = speaker; self.toolSummary = toolSummary
+    }
+    public init(_ message: AttributedString, speaker: Speaker, toolSummary: String? = nil) {
         self.message = message; self.speaker = speaker; self.toolSummary = toolSummary
     }
     public var body: some View {
@@ -52,14 +55,33 @@ public struct AskCard: View {
     }
 }
 
-public struct Composer: View {
+/// The same capsule accepts a PhotosPicker and a store-owned field without taking over focus.
+public struct Composer<Content: View>: View {
+    let focused: Bool
+    let content: Content
+    public init(focused: Bool, @ViewBuilder content: () -> Content) {
+        self.focused = focused
+        self.content = content()
+    }
+    public var body: some View {
+        HStack(alignment: .bottom, spacing: 4) { content }
+            .padding(8)
+            .background(AuroraSurface(shape: Capsule(), stroke: focused ? Glass.focusStroke : nil))
+    }
+}
+
+extension Composer where Content == ComposerInput {
+    public init(text: Binding<String>, attach: @escaping () -> Void, send: @escaping () -> Void) {
+        focused = false
+        content = ComposerInput(text: text, attach: attach, send: send)
+    }
+}
+
+public struct ComposerInput: View {
     @Binding var text: String
     let attach: () -> Void
     let send: () -> Void
     @FocusState private var focused: Bool
-    public init(text: Binding<String>, attach: @escaping () -> Void, send: @escaping () -> Void) {
-        self._text = text; self.attach = attach; self.send = send
-    }
     public var body: some View {
         HStack(spacing: 4) {
             Button(action: attach) { Image(systemName: "plus") }
@@ -74,7 +96,8 @@ public struct Composer: View {
                 .disabled(text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 .accessibilityLabel("Send")
         }
-        .padding(8)
-        .background(AuroraSurface(shape: Capsule(), stroke: focused ? Glass.focusStroke : nil))
+        .overlay {
+            if focused { Capsule().strokeBorder(Glass.focusStroke, lineWidth: 1).allowsHitTesting(false) }
+        }
     }
 }
