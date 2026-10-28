@@ -12,8 +12,10 @@ public struct ProjectsView: View {
         let store = model.projects
         ScrollView {
             LazyVStack(alignment: .leading, spacing: Space.md) {
+                StatusHeadline("\(store.projects.count) projects · " + model.standingState().headline, eyebrow: "Projects")
+                    .padding(.top, Space.md)
                 if store.freshness.isStale { FreshnessBanner(freshness: store.freshness) }
-                if store.projects.isEmpty { EmptyState(title: "No projects", systemImage: "square.stack.3d.up").card() }
+                if store.projects.isEmpty { EmptyState(title: "No projects", systemImage: "square.stack.3d.up").padding(Space.md).auroraPanel() }
                 ForEach(store.projects) { project in
                     NavigationLink(value: project.project) { ProjectRow(project: project) }
                         .buttonStyle(.plain)
@@ -21,8 +23,9 @@ public struct ProjectsView: View {
             }
             .padding(.horizontal, Space.lg).padding(.bottom, Space.xl)
         }
-        .stage()
+        .auroraScreen(model.standingState().wash)
         .navigationTitle("Projects")
+        .navigationBarTitleDisplayMode(.inline)
         .navigationDestination(for: String.self) { ProjectView(project: $0) }
         .navigationDestination(item: Binding(get: { model.openProject }, set: { model.openProject = $0 })) { ProjectView(project: $0) }
         .refreshable { await store.refresh() }
@@ -31,10 +34,10 @@ public struct ProjectsView: View {
 
 func laneColor(_ status: String) -> Color {
     switch status {
-    case "doing": return Palette.blue
-    case "testing": return Palette.purple
+    case "doing": return Palette.accent
+    case "testing": return Palette.accent
     case "done": return Palette.up
-    case "blocked": return Palette.down
+    case "blocked": return Palette.text2
     case "failed": return Palette.down
     case "todo": return Palette.textFaint
     default: return Palette.textDim
@@ -82,7 +85,7 @@ struct ProjectRow: View {
                 Eyebrow("In progress")
                 ForEach(Array(project.doingTitles.enumerated()), id: \.offset) { _, title in
                     HStack(alignment: .firstTextBaseline, spacing: Space.sm) {
-                        Image(systemName: "arrow.up.right").font(.tCaption).foregroundStyle(Palette.blue)
+                        Image(systemName: "arrow.up.right").font(.tCaption).foregroundStyle(Palette.accent)
                         Text(title).font(.tCallout).foregroundStyle(Palette.text2)
                     }
                 }
@@ -92,7 +95,7 @@ struct ProjectRow: View {
                     HStack(spacing: Space.md) {
                         ForEach(Array(project.agents.enumerated()), id: \.offset) { _, agent in
                             HStack(spacing: Space.sm) {
-                                NameMark(agent.session, size: 22)
+                                SeatOrb(agent.session, size: 28)
                                 StatusDot(live: agent.online)
                                 Text(agent.session).font(.tDataSmall).foregroundStyle(Palette.text2)
                             }
@@ -103,7 +106,7 @@ struct ProjectRow: View {
                 }
             }
         }
-        .card()
+        .padding(Space.md).auroraPanel()
     }
 
     private var laneCounts: some View {
@@ -129,12 +132,14 @@ public struct BoardView: View {
         let board = model.board
         ScrollView {
             LazyVStack(alignment: .leading, spacing: Space.md) {
+                StatusHeadline(model.standingState(project: project).headline, eyebrow: "\(project) · Board")
+                    .padding(.top, Space.md)
                 ScrollView(.horizontal, showsIndicators: false) {
-                    PillPicker([("", "All")] + board.lanes.map { ($0.status, $0.status.capitalized) }, selection: $selectedLane)
+                    AuroraPicker([("", "All")] + board.lanes.map { ($0.status, $0.status.capitalized) }, selection: $selectedLane)
                 }.padding(.vertical, Space.xs)
                 if board.freshness.isStale { FreshnessBanner(freshness: board.freshness) }
-                if let error = board.writeError { Label(error, systemImage: "exclamationmark.triangle").foregroundStyle(Palette.down).card() }
-                if board.lanes.isEmpty { EmptyState(title: "No cards", systemImage: "rectangle.stack").card() }
+                if let error = board.writeError { Label(error, systemImage: "exclamationmark.triangle").foregroundStyle(Palette.down).padding(Space.md).auroraPanel() }
+                if board.lanes.isEmpty { EmptyState(title: "No cards", systemImage: "rectangle.stack").padding(Space.md).auroraPanel() }
                 ForEach(board.lanes.filter { selectedLane.isEmpty || $0.status == selectedLane }) { lane in
                     HStack(spacing: Space.sm) {
                         Eyebrow(lane.status, color: laneColor(lane.status))
@@ -142,13 +147,13 @@ public struct BoardView: View {
                         Spacer()
                     }.padding(.top, Space.sm)
                     ForEach(lane.cards) { card in
-                        NavigationLink(value: card) { CardRow(card: card).card() }.buttonStyle(.plain)
+                        NavigationLink(value: card) { CardRow(card: card).padding(Space.md).auroraPanel() }.buttonStyle(.plain)
                     }
                 }
             }
             .padding(.horizontal, Space.lg).padding(.bottom, Space.xl)
         }
-        .stage()
+        .auroraScreen(model.standingState(project: project).wash)
         .navigationTitle(project)
         .navigationDestination(for: Card.self) { CardDetailView(card: $0) }
         .refreshable { await board.load(project: project) }
@@ -199,20 +204,20 @@ struct CardDetailView: View {
                     Text(c.title).font(.tTitle)
                     if !c.assignee.isEmpty { SeatLine(seat: c.assignee, verb: "") }
                     if !c.drill.isEmpty { Detail(label: "Drill", text: c.drill) }
-                }.card()
-                if let error = board.writeError { Label(error, systemImage: "exclamationmark.triangle").foregroundStyle(Palette.down).card() }
-                Panel("Move to") {
+                }.padding(Space.md).auroraPanel()
+                if let error = board.writeError { Label(error, systemImage: "exclamationmark.triangle").foregroundStyle(Palette.down).padding(Space.md).auroraPanel() }
+                AuroraSection("Move to") {
                     LazyVGrid(columns: [GridItem(.adaptive(minimum: 100))], alignment: .leading, spacing: Space.sm) {
                         ForEach(["todo", "doing", "testing", "blocked", "done"].filter { $0 != c.status }, id: \.self) { status in
                             Button(status.capitalized) {
                                 if status == "done" { askDone = true } else { Task { await board.move(c, to: status) } }
                             }
-                            .buttonStyle(.ghost).disabled(board.busy)
+                            .buttonStyle(AuroraButtonStyle()).disabled(board.busy)
                         }
                     }
                 }
                 if !c.checklist.isEmpty {
-                    Panel("Checklist") {
+                    AuroraSection("Checklist") {
                         ForEach(Array(c.checklist.enumerated()), id: \.offset) { i, item in
                             Button { Task { await board.toggle(c, index: i, done: !item.done) } } label: {
                                 HStack(alignment: .firstTextBaseline, spacing: Space.sm) {
@@ -226,15 +231,15 @@ struct CardDetailView: View {
                         }
                     }
                 }
-                Panel("Add a note") {
+                AuroraSection("Add a note") {
                     WellField("Note", text: $note, axis: .vertical)
                     Button("Post note") {
                         let text = note
                         Task { await board.addNote(c, text); note = "" }
-                    }.buttonStyle(.primary).disabled(note.trimmingCharacters(in: .whitespaces).isEmpty || board.busy)
+                    }.buttonStyle(AuroraButtonStyle(.primary)).disabled(note.trimmingCharacters(in: .whitespaces).isEmpty || board.busy)
                 }
                 if !c.log.isEmpty {
-                    Panel("Log") {
+                    AuroraSection("Log") {
                         ForEach(Array(c.log.reversed().enumerated()), id: \.offset) { i, entry in
                             if i > 0 { Hairline() }
                             VStack(alignment: .leading, spacing: Space.sm) {
@@ -245,7 +250,7 @@ struct CardDetailView: View {
                     }
                 }
                 if let messages = board.detail?.messages, !messages.isEmpty {
-                    Panel("Messages") {
+                    AuroraSection("Messages") {
                         ForEach(messages) { message in
                             VStack(alignment: .leading, spacing: Space.sm) {
                                 SeatLine(seat: message.from, verb: "to \(message.to)")
@@ -257,7 +262,7 @@ struct CardDetailView: View {
             }
             .padding(.horizontal, Space.lg).padding(.bottom, Space.xl)
         }
-        .stage()
+        .auroraScreen(model.standingState(project: card.project).wash)
         .navigationTitle("Card")
         .navigationBarTitleDisplayMode(.inline)
         .task(id: card.id) { await board.open(card: card.id) }
