@@ -13,7 +13,9 @@ public struct FleetView: View {
         let fleet = model.fleet
         ScrollView {
             LazyVStack(alignment: .leading, spacing: Space.md) {
-                PillPicker([(false, "Seats"), (true, "Cost")], selection: $showCost).padding(.vertical, Space.xs)
+                StatusHeadline(model.standingState().headline, eyebrow: "Fleet")
+                    .padding(.top, Space.md)
+                AuroraPicker([(false, "Seats"), (true, "Cost")], selection: $showCost).padding(.vertical, Space.xs)
                 if showCost {
                     CostContent()
                 } else {
@@ -23,7 +25,7 @@ public struct FleetView: View {
                         StatTile("Seats", value: "\(fleet.peers.count)")
                     }
                     if !fleet.collisions.isEmpty {
-                        Panel("File collisions", accessory: { CountBadge(fleet.collisions.count) }) {
+                        AuroraSection("File collisions", accessory: { CountBadge(fleet.collisions.count) }) {
                             ForEach(Array(fleet.collisions.enumerated()), id: \.offset) { _, collision in
                                 Label(collisionText(collision), systemImage: "exclamationmark.triangle.fill")
                                     .font(.tData).foregroundStyle(Palette.amber)
@@ -31,14 +33,15 @@ public struct FleetView: View {
                         }
                     }
                     Eyebrow("Seats").padding(.top, Space.sm)
-                    if fleet.peers.isEmpty { EmptyState(title: "No seats", systemImage: "person.3").card() }
-                    ForEach(fleet.peers) { PeerRow(peer: $0).card() }
+                    if fleet.peers.isEmpty { EmptyState(title: "No seats", systemImage: "person.3").padding(Space.md).auroraPanel() }
+                    ForEach(fleet.peers) { PeerRow(peer: $0) }
                 }
             }
             .padding(.horizontal, Space.lg).padding(.bottom, Space.xl)
         }
-        .stage()
+        .auroraScreen(model.standingState().wash)
         .navigationTitle("Fleet")
+        .navigationBarTitleDisplayMode(.inline)
         .refreshable {
             if showCost { await model.cost.refresh() } else { await fleet.refresh() }
         }
@@ -56,36 +59,10 @@ public struct FleetView: View {
 struct PeerRow: View {
     let peer: Peer
     var body: some View {
-        HStack(alignment: .top, spacing: Space.md) {
-            NameMark(peer.session, size: 34)
-            VStack(alignment: .leading, spacing: Space.sm) {
-                HStack(spacing: Space.sm) {
-                    Text(peer.session).font(.mono(14, .medium)).foregroundStyle(Palette.text)
-                    Spacer()
-                    StatusDot(live: peer.online)
-                    Text(peer.online ? "online" : "offline").font(.tDataSmall).foregroundStyle(peer.online ? Palette.up : Palette.textDim)
-                }
-                ViewThatFits(in: .horizontal) {
-                    tags
-                    ScrollView(.horizontal, showsIndicators: false) { tags }
-                }
-                if !peer.status.isEmpty {
-                    HStack {
-                        Text(peer.status).font(.tCallout).foregroundStyle(Palette.text2)
-                        Spacer()
-                        TimeAgo(millis: peer.lastSeen)
-                    }
-                }
-            }
-        }
-        .accessibilityElement(children: .combine)
-    }
-    private var tags: some View {
-        HStack(spacing: Space.sm) {
-            if !peer.project.isEmpty { Chip(peer.project, color: Palette.hue(for: peer.project)) }
-            if !peer.model.isEmpty { Chip(peer.model) } else if !peer.llm.isEmpty { Chip(peer.llm) }
-            if !peer.kind.isEmpty { Chip(peer.kind, color: Palette.textDim) }
-        }
+        SeatCard(peer.session,
+                 caption: ([peer.project, AuroraStandingState.caption(peer)]).filter { !$0.isEmpty }.joined(separator: " · "),
+                 idle: !peer.online || !peer.status.hasPrefix("working"))
+            .accessibilityElement(children: .combine)
     }
 }
 
@@ -96,10 +73,13 @@ public struct CostView: View {
 
     public var body: some View {
         ScrollView {
-            LazyVStack(alignment: .leading, spacing: Space.md) { CostContent() }
+            LazyVStack(alignment: .leading, spacing: Space.md) {
+                StatusHeadline("\(model.cost.entries.count) balances", eyebrow: "Cost").padding(.top, Space.md)
+                CostContent()
+            }
                 .padding(.horizontal, Space.lg).padding(.bottom, Space.xl)
         }
-        .stage()
+        .auroraScreen(model.standingState().wash)
         .navigationTitle("Cost")
         .refreshable { await model.cost.refresh() }
     }
@@ -116,20 +96,15 @@ struct CostContent: View {
                 Image(systemName: "exclamationmark.triangle.fill")
                 Mono("\(cost.lowCount)", color: Palette.amber)
                 Text("provider\(cost.lowCount == 1 ? "" : "s") running low").font(.tCallout)
-            }.foregroundStyle(Palette.amber).card()
+            }.foregroundStyle(Palette.amber).padding(Space.md).auroraPanel()
         }
         if cost.entries.isEmpty {
-            EmptyState(title: "No balances", systemImage: "dollarsign.circle", message: "A Mac pushes provider balances to the hub.").card()
+            EmptyState(title: "No balances", systemImage: "dollarsign.circle", message: "A Mac pushes provider balances to the hub.").padding(Space.md).auroraPanel()
         }
-        LazyVGrid(columns: [GridItem(.adaptive(minimum: 220), spacing: Space.md)], spacing: Space.md) {
+        LazyVStack(alignment: .leading, spacing: Space.md) {
             ForEach(cost.entries) { entry in
                 VStack(alignment: .leading, spacing: Space.sm) {
                     StatTile(entry.label.isEmpty ? entry.provider : entry.label, value: amount(entry))
-                        .overlay(alignment: .leading) {
-                            if entry.low || !entry.ok {
-                                Capsule().fill(entry.ok ? Palette.amber : Palette.down).frame(width: 3).padding(.vertical, Space.md)
-                            }
-                        }
                     HStack {
                         if !entry.plan.isEmpty || !entry.kind.isEmpty {
                             Chip(entry.plan.isEmpty ? entry.kind : entry.plan)
