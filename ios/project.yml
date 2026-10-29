@@ -88,6 +88,23 @@ targets:
         GENERATE_INFOPLIST_FILE: YES
         TEST_HOST: "$(BUILT_PRODUCTS_DIR)/Trantor.app/Trantor"
         BUNDLE_LOADER: "$(TEST_HOST)"
+  DuoNavigationTests:
+    type: bundle.unit-test
+    platform: iOS
+    deploymentTarget: "17.0"
+    sources:
+      - path: Packages/Features/Tests/FeaturesTests/DuoNavigationTests.swift
+    dependencies:
+      - target: TrantorCompanion
+      - package: Features
+      - package: TrantorStore
+      - package: TrantorDesign
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: ai.trantor.duo.tests
+        GENERATE_INFOPLIST_FILE: YES
+        TEST_HOST: "$(BUILT_PRODUCTS_DIR)/Trantor.app/Trantor"
+        BUNDLE_LOADER: "$(TEST_HOST)"
   TrantorDesignTests:
     type: bundle.unit-test
     platform: iOS
@@ -101,6 +118,15 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: ai.trantor.design.tests
         GENERATE_INFOPLIST_FILE: YES
 schemes:
+  DuoNavigation:
+    build:
+      targets:
+        TrantorCompanion: all
+        DuoNavigationTests: [test]
+    test:
+      config: Debug
+      targets:
+        - DuoNavigationTests
   TrantorDesign:
     build:
       targets:

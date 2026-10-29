@@ -171,6 +171,7 @@ struct SectionView: View {
             case .settings: SettingsView()
             }
         }
+        .modifier(DuoContentBounds())
         .toolbarBackground(.hidden, for: .navigationBar)
     }
 }
