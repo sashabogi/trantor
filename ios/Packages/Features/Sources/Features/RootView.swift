@@ -3,10 +3,9 @@ import TrantorCore
 import TrantorDesign
 import TrantorStore
 
-/// iPad: sidebar and detail. iPhone: tabs with Decisions first. Unpaired: pairing.
+/// One navigation tree adapts between the sidebar and tabs without losing the current screen.
 public struct RootView: View {
     @Environment(AppModel.self) private var model
-    @Environment(\.horizontalSizeClass) private var sizeClass
     @Environment(\.scenePhase) private var scenePhase
 
     public init() {}
@@ -27,8 +26,6 @@ public struct RootView: View {
         Group {
             if !model.isReady || model.showPairingSummary {
                 NavigationStack { PairingView() }
-            } else if sizeClass == .regular {
-                SplitRoot()
             } else {
                 TabRoot()
             }
@@ -64,8 +61,16 @@ struct TabRoot: View {
     @Environment(AppModel.self) private var model
 
     var body: some View {
+        if #available(iOS 18.0, *) {
+            tabs.tabViewStyle(.sidebarAdaptable)
+        } else {
+            tabs
+        }
+    }
+
+    private var tabs: some View {
         @Bindable var model = model
-        TabView(selection: $model.selection) {
+        return TabView(selection: $model.selection) {
             ForEach(AppSection.tabs) { section in
                 NavigationStack { SectionView(section: section) }
                     .tabItem { Label(section.title, systemImage: section.systemImage) }
@@ -80,38 +85,6 @@ struct TabRoot: View {
         case .decisions: return model.decisions.pendingCount
         case .inbox: return model.inbox.unreadCount
         default: return 0
-        }
-    }
-}
-
-struct SplitRoot: View {
-    @Environment(AppModel.self) private var model
-
-    var body: some View {
-        @Bindable var model = model
-        NavigationSplitView {
-            ScrollView {
-                VStack(alignment: .leading, spacing: Space.lg) {
-                    BrandMark().padding(.horizontal, Space.sm).padding(.top, Space.sm)
-                    VStack(spacing: 2) {
-                        ForEach(AppSection.allCases) { section in
-                            SidebarRow(section: section, selected: model.selection == section,
-                                       count: section == .decisions ? model.decisions.pendingCount
-                                            : section == .inbox ? model.inbox.unreadCount : 0)
-                                .onTapGesture { withAnimation(Motion.ease) { model.selection = section } }
-                        }
-                    }
-                    Spacer(minLength: Space.xl)
-                    ConnectionPill().padding(.horizontal, Space.sm)
-                }
-                .padding(Space.md)
-            }
-            .background(Palette.ground.opacity(0.92).ignoresSafeArea())
-            .toolbar(.hidden, for: .navigationBar)
-            .navigationSplitViewColumnWidth(min: 240, ideal: 260)
-        } detail: {
-            NavigationStack { SectionView(section: model.selection) }
-                .id(model.selection)
         }
     }
 }
