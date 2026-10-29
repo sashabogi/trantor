@@ -1,10 +1,14 @@
 import SwiftUI
-import UIKit
 
 private struct DuoTypingKey: EnvironmentKey { static let defaultValue = false }
 private struct DuoCompactPortraitKey: EnvironmentKey { static let defaultValue = false }
+private struct DuoComposingKey: EnvironmentKey { static let defaultValue: Binding<Bool>? = nil }
 
 extension EnvironmentValues {
+    var duoComposing: Binding<Bool>? {
+        get { self[DuoComposingKey.self] }
+        set { self[DuoComposingKey.self] = newValue }
+    }
     var duoTyping: Bool {
         get { self[DuoTypingKey.self] }
         set { self[DuoTypingKey.self] = newValue }
@@ -43,17 +47,19 @@ private struct DuoArrangement<Leading: View, Detail: View>: View {
             let division = geometry.reservedRegions(kind: .division, options: .includeInactive, layoutDirectionBehavior: .fixed).first
             let horizontal = division.map { $0.frame.height > $0.frame.width } ?? (geometry.size.width > geometry.size.height)
             let compactPortrait = typing && !horizontal && division?.isActive != true
+            let extent = horizontal ? geometry.size.width : geometry.size.height
+            let fold = division.map { horizontal ? $0.frame.midX : $0.frame.midY }
+            let ratio = fold.map { min(1, max(0, $0 / max(1, extent))) } ?? 0.5
             ArrangementView {
                 leading().frame(maxWidth: .infinity, maxHeight: .infinity)
                     .environment(\.duoTyping, typing)
                     .environment(\.duoCompactPortrait, compactPortrait)
-                    .splitArrangementLayoutRatio(compactPortrait ? 0.18 : 0.5)
+                    .splitArrangementLayoutRatio(compactPortrait ? 0.18 : ratio)
             } secondary: {
                 detail().frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .environment(\.duoComposing, $typing)
             }
             .arrangementViewStyle(.split)
         }
-        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { _ in typing = true }
-        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in typing = false }
     }
 }

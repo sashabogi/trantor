@@ -89,6 +89,7 @@ public struct FleetView: View {
 
 private struct FleetSeatDetail: View {
     @Environment(AppModel.self) private var model
+    @Environment(\.duoComposing) private var duoComposing
     let peer: Peer
     @State private var draft = ""
     @State private var sending = false
@@ -109,6 +110,8 @@ private struct FleetSeatDetail: View {
             }.padding(Space.lg)
         }
         .scrollDismissesKeyboard(.interactively)
+        .onChange(of: composing) { _, focused in duoComposing?.wrappedValue = focused }
+        .onDisappear { duoComposing?.wrappedValue = false }
         .safeAreaInset(edge: .bottom, spacing: 0) {
             VStack(alignment: .leading, spacing: Space.sm) {
                 if let error = model.inbox.sendError { Text(error).font(.tCaption).foregroundStyle(Palette.down) }
@@ -131,7 +134,6 @@ private struct FleetSeatDetail: View {
                 }
             }.padding(Space.lg)
         }
-        .accessibilityIdentifier("fleet.detail")
     }
 }
 

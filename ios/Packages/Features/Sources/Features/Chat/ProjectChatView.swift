@@ -54,6 +54,7 @@ struct ProjectChatView: View {
     // Bindable so the composer can hold `$store.draft`: the draft lives on the per-project
     // ChatStore, so it survives switching Chat/Board/Crew and leaving the project.
     @Environment(AppModel.self) private var model
+    @Environment(\.duoComposing) private var duoComposing
     @Bindable var store: ChatStore
     @Environment(\.scenePhase) private var scenePhase
     @State private var followingBottom = true
@@ -122,6 +123,7 @@ struct ProjectChatView: View {
         }
         // Leaving the chat (section switch or nav pop) drops the keyboard, so returning can't restore focus.
         .onDisappear { composing = false }
+        .onChange(of: composing) { _, focused in duoComposing?.wrappedValue = focused }
     }
 
     private func scrollToQuestion(_ proxy: ScrollViewProxy) {

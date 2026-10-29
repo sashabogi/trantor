@@ -104,9 +104,11 @@ public struct DecisionsView: View {
 
 struct DecisionItemCard: View {
     @Environment(AppModel.self) private var model
+    @Environment(\.duoComposing) private var duoComposing
     let item: DecisionItem
     let state: DecisionActionState?
     @State private var note = ""
+    @FocusState private var composing: Bool
 
     private var pending: Bool { state == .pending }
 
@@ -134,6 +136,8 @@ struct DecisionItemCard: View {
             if let state { stateLine(state) }
         }
         .accessibilityElement(children: .contain)
+        .onChange(of: composing) { _, focused in duoComposing?.wrappedValue = focused }
+        .onDisappear { duoComposing?.wrappedValue = false }
     }
 
     private var header: some View {
@@ -159,6 +163,7 @@ struct DecisionItemCard: View {
             if !g.howToVerify.isEmpty { Detail(label: "How", text: g.howToVerify, mono: true) }
             WellField("Note (optional)", text: $note, axis: .vertical)
                 .accessibilityIdentifier("decision.note")
+                .focused($composing)
             HStack(spacing: Space.sm) {
                 Button("Verified") { Task { await store.resolveGate(g, as: .verified, note: note) } }.buttonStyle(AuroraButtonStyle(.primary))
                 Button("Failed") { Task { await store.resolveGate(g, as: .failed, note: note) } }.buttonStyle(AuroraButtonStyle(.destructive))
@@ -172,6 +177,7 @@ struct DecisionItemCard: View {
             if !p.condition.isEmpty { Detail(label: "When", text: p.condition) }
             if !p.exclusions.isEmpty { Detail(label: "Not covered", text: p.exclusions) }
             WellField("Note (optional)", text: $note, axis: .vertical)
+                .focused($composing)
             HStack(spacing: Space.sm) {
                 Button("Approve") { Task { await store.decideProposal(p, approve: true, note: note) } }.buttonStyle(AuroraButtonStyle(.primary))
                 Button("Deny") { Task { await store.decideProposal(p, approve: false, note: note) } }.buttonStyle(AuroraButtonStyle())
@@ -182,6 +188,7 @@ struct DecisionItemCard: View {
             SeatLine(seat: m.from, verb: "asks")
             Text(m.text).font(.tBody).foregroundStyle(Palette.text).fixedSize(horizontal: false, vertical: true)
             WellField("Reply", text: $note, axis: .vertical)
+                .focused($composing)
             HStack {
                 Button { Task { await store.reply(to: m, text: note); note = "" } } label: {
                     Label("Send reply", systemImage: "arrow.up")
