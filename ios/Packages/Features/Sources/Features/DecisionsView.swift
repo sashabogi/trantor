@@ -8,31 +8,32 @@ import TrantorStore
 /// questions, each with its decision buttons.
 public struct DecisionsView: View {
     @Environment(AppModel.self) private var model
+    @Environment(\.horizontalSizeClass) private var sizeClass
     @State private var showSettings = false
+    @State private var selectedID: String?
 
     public init() {}
 
     public var body: some View {
         let store = model.decisions
-        ScrollView {
-            LazyVStack(alignment: .leading, spacing: Space.md) {
-                StatusHeadline(store.items.isEmpty ? "Nothing waiting" : "\(store.items.count) waiting on you")
-                    .padding(.top, Space.md)
-                ConnectionPill()
-                if store.freshness.isStale { FreshnessBanner(freshness: store.freshness) }
-                if store.items.isEmpty && !store.isLoading {
-                    EmptyState(title: "Nothing waiting", systemImage: "checkmark.seal",
-                               message: "Holds, proposals, verify gates and questions from seats show up here.")
-                        .padding(Space.md).auroraPanel()
+        Group {
+            if sizeClass == .regular {
+                DuoSplitView {
+                    queue
+                } detail: {
+                    ScrollView {
+                        if let item = selectedItem {
+                            DecisionItemCard(item: item, state: store.actions[item.id])
+                                .id(item.id).padding(Space.lg)
+                        } else {
+                            EmptyState(title: "Nothing waiting", systemImage: "checkmark.seal").padding(Space.lg)
+                        }
+                    }
+                    .accessibilityIdentifier("decisions.detail")
                 }
-                ForEach(store.items) { item in
-                    DecisionItemCard(item: item, state: store.actions[item.id])
-                        .transition(.asymmetric(insertion: .opacity.combined(with: .move(edge: .top)), removal: .opacity))
-                }
+            } else {
+                queue.modifier(DuoContentBounds())
             }
-            .padding(.horizontal, Space.lg)
-            .padding(.bottom, Space.xl)
-            .animation(Motion.ease, value: store.items.map(\.id))
         }
         .auroraScreen(model.standingState().wash)
         .navigationTitle("Decisions")
@@ -50,6 +51,55 @@ public struct DecisionsView: View {
         .overlay { if store.isLoading && store.items.isEmpty { ProgressView().tint(Palette.accent) } }
     }
 
+    private var selectedItem: DecisionItem? {
+        model.decisions.items.first { $0.id == selectedID } ?? model.decisions.items.first
+    }
+
+    private var queue: some View {
+        let store = model.decisions
+        return ScrollView {
+            LazyVStack(alignment: .leading, spacing: Space.md) {
+                StatusHeadline(store.items.isEmpty ? "Nothing waiting" : "\(store.items.count) waiting on you")
+                    .padding(.top, Space.md)
+                ConnectionPill()
+                if store.freshness.isStale { FreshnessBanner(freshness: store.freshness) }
+                if store.items.isEmpty && !store.isLoading {
+                    EmptyState(title: "Nothing waiting", systemImage: "checkmark.seal",
+                               message: "Holds, proposals, verify gates and questions from seats show up here.")
+                        .padding(Space.md).auroraPanel()
+                }
+                ForEach(store.items) { item in
+                    if sizeClass == .regular {
+                        Button { selectedID = item.id } label: {
+                            VStack(alignment: .leading, spacing: Space.sm) {
+                                HStack { Eyebrow(item.project); Spacer(); TimeAgo(millis: item.ts) }
+                                Text(summary(item)).font(.tHeadline).foregroundStyle(Palette.text).lineLimit(3)
+                            }.frame(maxWidth: .infinity, alignment: .leading)
+                                .padding(Space.md).auroraPanel()
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityIdentifier("decisions.select.\(item.id)")
+                        .accessibilityAddTraits(selectedItem?.id == item.id ? [.isSelected] : [])
+                    } else {
+                        DecisionItemCard(item: item, state: store.actions[item.id])
+                    }
+                }
+            }
+            .padding(.horizontal, Space.lg)
+            .padding(.bottom, Space.xl)
+            .animation(Motion.ease, value: store.items.map(\.id))
+        }
+        .accessibilityIdentifier("decisions.queue")
+    }
+
+    private func summary(_ item: DecisionItem) -> String {
+        switch item.kind {
+        case .hold(let hold): return "\(hold.session) wants to edit \(hold.file)"
+        case .gate(let gate): return gate.claim
+        case .proposal(let proposal): return proposal.scope
+        case .ask(let message): return message.text
+        }
+    }
 }
 
 struct DecisionItemCard: View {
