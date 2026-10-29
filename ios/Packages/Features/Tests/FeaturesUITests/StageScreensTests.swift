@@ -81,6 +81,8 @@ final class StageScreensTests: XCTestCase {
         XCTAssertTrue(app.staticTexts["$3.21"].waitForExistence(timeout: 5))
         capture("cost")
 
+        app.buttons["Decisions"].tap()
+        XCTAssertTrue(app.buttons["Settings"].waitForExistence(timeout: 5))
         app.buttons["Settings"].tap()
         XCTAssertTrue(app.switches["Holds"].waitForExistence(timeout: 5))
         capture("settings")
