@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // trantor disk — report where the disk went; --clean runs the safe tier ONLY;
-// install wires a Monday 09:00 launchd job; --weekly is what that job runs
-// (safe clean, then exactly ONE summary message on the bus for the operator).
+// install wires a daily 09:00 launchd job; --daily (or the legacy --weekly) is what
+// that job runs (safe clean, then exactly ONE summary message on the bus for the operator).
 import { spawnSync } from "node:child_process";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -52,7 +52,7 @@ async function install() {
     // bootout+bootstrap can race an existing job; load -w is the legacy fallback.
     exec("launchctl", ["load", "-w", plistPath]);
   }
-  console.log(`installed: ${plistPath}\nruns every Monday 09:00 (safe tier only); result lands as one bus message. Log: ${logPath}`);
+  console.log(`installed: ${plistPath}\nruns every day at 09:00 (safe tier only); result lands as one bus message. Log: ${logPath}`);
 }
 
 function exec(file, args) {
@@ -64,19 +64,23 @@ if (args.includes("--help") || args.includes("-h") || args[0] === "help") {
   console.log(`trantor disk — where the space went, and the provably safe slice to reclaim
 
   trantor disk              report only (also prints exactly what the safe tier would delete)
-  trantor disk --dry-run    the same report, explicit
-  trantor disk --clean      run the SAFE tier: unavailable simulators, build output and
-                            stale scratch (.agent-bus-out/.scratch entries idle 2+ days) in
-                            seat worktrees with no live turn (ps + the runner's turn stamp),
-                            opencode sessions idle >14 days. Everything else stays.
+  trantor disk --dry-run    the same report, explicit — never cleans
+  trantor disk --clean      run the SAFE tier: unavailable simulators, whole seat worktrees
+                            idle 7+ days with no uncommitted changes (branch kept), build
+                            output (DerivedData, *.xcresult, target/) idle 3+ days, stale
+                            scratch (.agent-bus-out/.scratch entries idle 2+ days) and build
+                            dirs in seat worktrees with no live turn, opencode sessions idle
+                            >14 days. Everything else stays. Every removal is printed first.
   trantor disk --json       machine-readable report
-  trantor disk install      Monday 09:00 launchd job (runs --weekly: clean + one bus message)`);
+  trantor disk install      daily 09:00 launchd job (runs --daily: clean + one bus message)`);
   process.exit(0);
 }
 if (args[0] === "install") { await install(); process.exit(0); }
 
-const weekly = args.includes("--weekly");
-const passArgs = weekly ? [...args, "--clean"] : args;
+// #12269: daily cadence (--daily; --weekly kept as the old plist's flag). --dry-run wins.
+const periodic = args.includes("--weekly") || args.includes("--daily");
+const dryRun = args.includes("--dry-run");
+const passArgs = periodic && !dryRun ? [...args, "--clean"] : args;
 const { report, results, json } = await runDisk({ args: passArgs });
 if (json) {
   process.stdout.write(`${JSON.stringify({ report, results }, null, 2)}\n`);
@@ -87,4 +91,4 @@ if (json) {
     for (const r of results.filter((r) => !r.ok)) console.log(`  FAILED ${r.type} ${r.path || r.id || ""}: ${r.error}`);
   }
 }
-if (weekly) await sendWeeklyMessage(summaryLine(report, results));
+if (periodic) await sendWeeklyMessage(summaryLine(report, results));

@@ -3,6 +3,7 @@ import { dirname, join } from "node:path";
 import { seatProcesses, signalProcesses } from "./processes.mjs";
 import { call, listPids, run } from "./core.mjs";
 import { hostId } from "../../lib/project.mjs";
+import { removeSeatWorktree } from "../../lib/seat-worktree.mjs";
 import { signedPost } from "../../hooks/lib/api.mjs";
 import { statePathFor as dockerStatePathFor, sweep as dockerSweep } from "../../lib/docker-janitor.mjs";
 
@@ -130,7 +131,7 @@ async function unregisterSeat(ctx, project, persona) {
   return response.json;
 }
 
-export async function down(ctx, args, adapters, { unregister = unregisterSeat } = {}) {
+export async function down(ctx, args, adapters, { unregister = unregisterSeat, removeWorktree = removeSeatWorktree } = {}) {
   const options = parseDownArgs(ctx, args);
   if (options.help) return 0;
   if (options.error) return 1;
@@ -174,6 +175,15 @@ export async function down(ctx, args, adapters, { unregister = unregisterSeat } 
       appendFileSync(join(logDir, `${row.persona}-${row.project}.jsonl`),
         `${JSON.stringify({ ts: Date.now(), agent: row.persona, project: row.project, stopped: true })}\n`);
     }
+  }
+  // #12269: a stopped seat's worktree goes with it — `git worktree remove`, branch kept; a tree
+  // with uncommitted changes stays on disk and is named here so the operator can recover it.
+  for (const row of seats.values()) {
+    if (!row.project) continue;
+    const r = await removeWorktree({ project: row.project, agent: row.persona, home: ctx.home || undefined, env: ctx.env, dry: ctx.dry });
+    if (r.status === "removed") console.log(`  worktree removed: ${r.path} (branch seat/${row.persona} kept)`);
+    else if (r.status === "kept") console.log(`  worktree kept (${r.reason}): ${r.path}`);
+    else if (r.status === "would-remove") console.log(`  [dry] would remove worktree: ${r.path}`);
   }
   if (failures.length) {
     console.log(`— hub row removal incomplete; retry Stop: ${failures.join("; ")}`);
