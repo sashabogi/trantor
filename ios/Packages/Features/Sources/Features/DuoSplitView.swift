@@ -71,7 +71,7 @@ private struct DuoArrangement<Leading: View, Detail: View>: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .clipped()
             }
-            .arrangementViewStyle(.split.axes(horizontal ? .horizontal : .vertical))
+            .arrangementViewStyle(.split)
         }
         // Keep the split's pose stable while making room for the keyboard inside its panes.
         .ignoresSafeArea(.keyboard, edges: .bottom)
