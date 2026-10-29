@@ -40,17 +40,11 @@ public struct FleetView: View {
         let fleet = model.fleet
         return ScrollView {
             LazyVStack(alignment: .leading, spacing: Space.md) {
-                StatusHeadline("\(fleet.online.count) online · \(fleet.peers.count) seats")
-                    .padding(.top, Space.md)
-                AuroraPicker([(false, "Seats"), (true, "Cost")], selection: $showCost).padding(.vertical, Space.xs)
+                FleetSessionOverview(showCost: $showCost)
                 if showCost {
                     CostContent()
                 } else {
                     if fleet.freshness.isStale { FreshnessBanner(freshness: fleet.freshness) }
-                    HStack(spacing: Space.md) {
-                        StatTile("Online", value: "\(fleet.online.count)")
-                        StatTile("Seats", value: "\(fleet.peers.count)")
-                    }
                     if !fleet.collisions.isEmpty {
                         AuroraSection("File collisions", accessory: { CountBadge(fleet.collisions.count) }) {
                             ForEach(Array(fleet.collisions.enumerated()), id: \.offset) { _, collision in
@@ -87,6 +81,37 @@ public struct FleetView: View {
     }
 }
 
+private struct FleetSessionOverview: View {
+    @Environment(AppModel.self) private var model
+    @Environment(\.duoTyping) private var typing
+    @Binding var showCost: Bool
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: Space.sm) {
+            if typing {
+                HStack {
+                    Text("\(model.fleet.online.count) online · \(model.fleet.peers.count) seats").font(.tHeadline)
+                    Spacer()
+                    picker
+                }
+            } else {
+                StatusHeadline("\(model.fleet.online.count) online · \(model.fleet.peers.count) seats")
+                picker
+                if !showCost {
+                    HStack(spacing: Space.md) {
+                        StatTile("Online", value: "\(model.fleet.online.count)")
+                        StatTile("Seats", value: "\(model.fleet.peers.count)")
+                    }
+                }
+            }
+        }.padding(.top, Space.md)
+    }
+
+    private var picker: some View {
+        AuroraPicker([(false, "Seats"), (true, "Cost")], selection: $showCost).padding(.vertical, Space.xs)
+    }
+}
+
 private struct FleetSeatDetail: View {
     @Environment(AppModel.self) private var model
     @Environment(\.duoComposing) private var duoComposing
@@ -96,45 +121,50 @@ private struct FleetSeatDetail: View {
     @FocusState private var composing: Bool
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: Space.md) {
-                PeerRow(peer: peer)
-                AuroraSection("Seat") {
-                    if !peer.status.isEmpty { Detail(label: "Status", text: peer.status) }
-                    if !peer.health.isEmpty { Detail(label: "Health", text: peer.health) }
-                    if !peer.project.isEmpty { Detail(label: "Project", text: peer.project) }
-                    if !peer.phase.isEmpty { Detail(label: "Phase", text: peer.phase) }
-                    if !peer.model.isEmpty { Detail(label: "Model", text: peer.model) }
-                    if peer.lastSeen > 0 { HStack { Eyebrow("Last seen"); TimeAgo(millis: peer.lastSeen) } }
-                }
-            }.padding(Space.lg)
+        VStack(spacing: 0) {
+            ScrollView {
+                VStack(alignment: .leading, spacing: Space.md) {
+                    PeerRow(peer: peer)
+                    AuroraSection("Seat") {
+                        if !peer.status.isEmpty { Detail(label: "Status", text: peer.status) }
+                        if !peer.health.isEmpty { Detail(label: "Health", text: peer.health) }
+                        if !peer.project.isEmpty { Detail(label: "Project", text: peer.project) }
+                        if !peer.phase.isEmpty { Detail(label: "Phase", text: peer.phase) }
+                        if !peer.model.isEmpty { Detail(label: "Model", text: peer.model) }
+                        if peer.lastSeen > 0 { HStack { Eyebrow("Last seen"); TimeAgo(millis: peer.lastSeen) } }
+                    }
+                }.padding(Space.lg)
+            }
+            .clipped()
+            .scrollDismissesKeyboard(.interactively)
+            composer
         }
-        .scrollDismissesKeyboard(.interactively)
         .onChange(of: composing) { _, focused in duoComposing?.wrappedValue = focused }
         .onDisappear { duoComposing?.wrappedValue = false }
-        .safeAreaInset(edge: .bottom, spacing: 0) {
-            VStack(alignment: .leading, spacing: Space.sm) {
-                if let error = model.inbox.sendError { Text(error).font(.tCaption).foregroundStyle(Palette.down) }
-                Composer(focused: composing) {
-                    TextField("Message this seat", text: $draft, axis: .vertical)
-                        .font(.ui(16)).lineLimit(1...5).focused($composing)
-                        .padding(.vertical, Space.sm)
-                        .accessibilityIdentifier("fleet.composer")
-                    Button("Send", systemImage: "arrow.up") {
-                        let message = draft
-                        sending = true
-                        Task {
-                            await model.inbox.send(to: peer.session, text: message, project: peer.project)
-                            if model.inbox.sendError == nil && draft == message { draft = "" }
-                            sending = false
-                        }
+    }
+
+    private var composer: some View {
+        VStack(alignment: .leading, spacing: Space.sm) {
+            if let error = model.inbox.sendError { Text(error).font(.tCaption).foregroundStyle(Palette.down) }
+            Composer(focused: composing) {
+                TextField("Message this seat", text: $draft, axis: .vertical)
+                    .font(.ui(16)).lineLimit(1...5).focused($composing)
+                    .padding(.vertical, Space.sm)
+                    .accessibilityIdentifier("fleet.composer")
+                Button("Send", systemImage: "arrow.up") {
+                    let message = draft
+                    sending = true
+                    Task {
+                        await model.inbox.send(to: peer.session, text: message, project: peer.project)
+                        if model.inbox.sendError == nil && draft == message { draft = "" }
+                        sending = false
                     }
-                    .buttonStyle(AuroraButtonStyle(.primary))
-                    .disabled(sending || draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                    .accessibilityIdentifier("fleet.send")
                 }
-            }.padding(Space.lg)
-        }
+                .buttonStyle(AuroraButtonStyle(.primary))
+                .disabled(sending || draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                .accessibilityIdentifier("fleet.send")
+            }
+        }.padding(Space.lg)
     }
 }
 
