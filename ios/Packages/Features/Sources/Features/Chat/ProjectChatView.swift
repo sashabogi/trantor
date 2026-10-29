@@ -13,7 +13,7 @@ struct ProjectView: View {
     var body: some View {
         Group {
             if sizeClass == .regular {
-                DuoSplitView {
+                DuoSplitView(compactLeadingWhenTyping: true) {
                     if section == "board" { BoardView(project: project) }
                     else { CrewView(store: model.crew(project: project)) }
                 } detail: {
@@ -99,6 +99,7 @@ struct ProjectChatView: View {
                     }
                     .padding(Space.lg)
                 }
+                .clipped()
                 .defaultScrollAnchor(.bottom)
                 .scrollDismissesKeyboard(.interactively)
                 .onTapGesture { composing = false }
@@ -112,8 +113,8 @@ struct ProjectChatView: View {
                 }
                 .refreshable { await store.refresh() }
             }
+            composer
         }
-        .safeAreaInset(edge: .bottom, spacing: 0) { composer }
         .auroraScreen(standingState.wash)
         // A destination can appear before the scene becomes active; load its first snapshot on appearance.
         .task { await store.refresh() }

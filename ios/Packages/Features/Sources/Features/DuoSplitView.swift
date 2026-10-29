@@ -22,12 +22,13 @@ extension EnvironmentValues {
 
 /// The system split follows the display division and keeps both panes out of the crease.
 struct DuoSplitView<Leading: View, Detail: View>: View {
+    var compactLeadingWhenTyping = false
     @ViewBuilder var leading: () -> Leading
     @ViewBuilder var detail: () -> Detail
 
     var body: some View {
         if #available(iOS 27.1, *) {
-            DuoArrangement(leading: leading, detail: detail)
+            DuoArrangement(compactLeadingWhenTyping: compactLeadingWhenTyping, leading: leading, detail: detail)
         } else {
             HStack(spacing: 0) {
                 leading().frame(maxWidth: .infinity)
@@ -39,6 +40,7 @@ struct DuoSplitView<Leading: View, Detail: View>: View {
 
 @available(iOS 27.1, *)
 private struct DuoArrangement<Leading: View, Detail: View>: View {
+    var compactLeadingWhenTyping: Bool
     @State private var typing = false
     @State private var keyboardFrame = CGRect.zero
     @ViewBuilder var leading: () -> Leading
@@ -48,7 +50,7 @@ private struct DuoArrangement<Leading: View, Detail: View>: View {
         GeometryReader { geometry in
             let division = geometry.reservedRegions(kind: .division, options: .includeInactive, layoutDirectionBehavior: .fixed).first
             let horizontal = division.map { $0.frame.height > $0.frame.width } ?? (geometry.size.width > geometry.size.height)
-            let compactPortrait = typing && !horizontal && division?.isActive != true
+            let compactPortrait = compactLeadingWhenTyping && typing && !horizontal && division?.isActive != true
             let extent = horizontal ? geometry.size.width : geometry.size.height
             let fold = division.map { horizontal ? $0.frame.midX : $0.frame.midY }
             let ratio = fold.map { min(1, max(0, $0 / max(1, extent))) } ?? 0.5
@@ -60,14 +62,16 @@ private struct DuoArrangement<Leading: View, Detail: View>: View {
                     .environment(\.duoCompactPortrait, compactPortrait)
                     .padding(.bottom, horizontal ? overlap : 0)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .clipped()
                     .splitArrangementLayoutRatio(compactPortrait ? summaryRatio : ratio)
             } secondary: {
                 detail()
                     .environment(\.duoComposing, $typing)
                     .padding(.bottom, overlap)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .clipped()
             }
-            .arrangementViewStyle(.split)
+            .arrangementViewStyle(.split.axes(horizontal ? .horizontal : .vertical))
         }
         // Keep the split's pose stable while making room for the keyboard inside its panes.
         .ignoresSafeArea(.keyboard, edges: .bottom)
