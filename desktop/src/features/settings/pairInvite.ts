@@ -19,6 +19,13 @@ export function enrollLink(hub: string, token: string): string {
   return `trantor://enroll?hub=${encodeURIComponent(hub.replace(/\/+$/, ""))}&token=${token}`;
 }
 
+export function phoneHubAddress(hub: string): void {
+  const url = new URL(hub);
+  if (!/^https?:$/.test(url.protocol) || ["localhost", "localhost.", "[::1]", "0.0.0.0", "[::]"].includes(url.hostname) || /^127(?:\.\d{1,3}){3}$/.test(url.hostname)) {
+    throw new Error(`Your phone cannot reach ${hub}: this address only works on this Mac. Use Tailscale on the Mac and iPhone and configure the hub with the Mac's Tailscale address (then use trantor pair --tailnet), or configure a public hub URL.`);
+  }
+}
+
 export type PairPhoneApi = {
   mint: (role: PairRole) => Promise<PairInvite>;
 };
@@ -27,21 +34,14 @@ export function pairInviteApi(hubBase: string): PairPhoneApi {
   const client = new HubClient(hubBase);
   return {
     async mint(role: PairRole): Promise<PairInvite> {
+      const health = await client.health();
+      const pub = String(health.publicUrl || "").trim().replace(/\/+$/, "");
+      const hub = pub || hubBase.replace(/\/+$/, "");
+      const hubPublic = !!pub;
+      phoneHubAddress(hub);
       const j: PairInviteResponse = await client.pairInvite(role);
       const echoed = String(j.scopes?.[0]?.role ?? "");
       if (echoed !== role) throw new PairRoleUnsupportedError(role, echoed);
-      // v1.4: the link carries the hub's public address (Tailscale Funnel) so the phone pairs
-      // without Tailscale. /invite itself always goes to the tailnet hub — owner routes never
-      // answer in public. No publicUrl (or /health unreachable — the invite already minted)
-      // falls back to the tailnet hub.
-      const tailnet = hubBase.replace(/\/+$/, "");
-      let hub = tailnet;
-      let hubPublic = false;
-      try {
-        const health = await client.health();
-        const pub = String(health.publicUrl || "").trim().replace(/\/+$/, "");
-        if (pub) { hub = pub; hubPublic = true; }
-      } catch { /* fall back to the tailnet hub */ }
       return { link: enrollLink(hub, j.token), token: j.token, hub, hubPublic, expiresAt: j.expiresAt };
     },
   };

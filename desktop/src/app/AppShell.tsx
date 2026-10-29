@@ -66,9 +66,6 @@ type Pane =
   | { kind: "overseer" }
   | { kind: "settings" };
 
-// Who this app signs as. Mirrors the Rust default; RELAY_OWNER_IDENTITY overrides it there.
-const ME = "sasha@mac";
-
 // FLEET_NAV is data, not hand-written <NavItem> lines, so the fleet and project rows in
 // the sidebar don't drift visually apart.
 // Icons are Lucide, not hand-rolled SVGs: they are the only signal that separates FLEET
@@ -104,6 +101,7 @@ function SectionLabel({ children, count, action }: { children: React.ReactNode; 
 const wakeUnderway = (s?: WakeRowState) => s?.phase === "running" || s?.phase === "kickoff";
 
 export function AppShell() {
+  const [ME, setMe] = useState("");
   const [projects, setProjects] = useState<string[]>([]);
   const [active, setActive] = useState<string>("");
   const [hub, setHub] = useState<string>("");
@@ -163,6 +161,14 @@ export function AppShell() {
     void invoke("file_watch", { project: active });
     return () => { void invoke("file_unwatch", { project: active }); };
   }, [active]);
+
+  useEffect(() => {
+    let alive = true;
+    void invoke<string>("identity_name", { base: hub || undefined }).then(name => {
+      if (alive) setMe(name);
+    }).catch(() => {});
+    return () => { alive = false; };
+  }, [hub]);
 
   const client = useMemo(() => (hub ? new HubClient(hub) : null), [hub]);
   // The balance strip reads the MACHINE-LOCAL hub (balances/profile are files on this machine).
@@ -253,7 +259,7 @@ export function AppShell() {
   const [unread, setUnread] = useState(0);
   const directIds = useRef<number[]>([]);
   useEffect(() => {
-    if (!client) return;
+    if (!client || !ME) return;
     let alive = true;
     // Counts only what the human has not seen. inbox() peeks with since=0 and returns
     // everything ever addressed to ME, so "seen" is tracked locally instead of advancing
@@ -272,7 +278,7 @@ export function AppShell() {
     // Re-count the instant a row is read, rather than waiting up to 30s for the next poll.
     const offSeen = onSeenChange(() => { if (alive) setUnread(countUnseen(directIds.current)); });
     return () => { alive = false; clearInterval(t); off(); offSeen(); };
-  }, [client]);
+  }, [client, ME]);
 
   // Home badges the pending proposals and file holds shown in its decision queue.
   const pendingHolds = usePendingHolds(client).length;
@@ -284,7 +290,7 @@ export function AppShell() {
   // that is idle, the HUMAN gets the notification — nothing else can safely wake it.
   const lastSeenRef = useRef(new Map<string, number>());
   useEffect(() => {
-    if (!client) return;
+    if (!client || !ME) return;
     const pull = () => client.peers().then(ps => {
       const m = new Map<string, number>();
       for (const p of ps) m.set(p.session, p.online ? Date.now() : (p.lastSeen ?? 0));
@@ -293,15 +299,15 @@ export function AppShell() {
     pull();
     const t = setInterval(pull, 60_000);
     return () => clearInterval(t);
-  }, [client]);
+  }, [client, ME]);
   useEffect(() => {
-    if (!client) return;
+    if (!client || !ME) return;
     const isOffline = (session: string) => {
       const seen = lastSeenRef.current.get(session);
       return seen === undefined || Date.now() - seen > 5 * 60 * 1000;
     };
     return client.streamEvents(ev => { void notifyIfWorthIt(ev, ME, isOffline); });
-  }, [client]);
+  }, [client, ME]);
 
   const openProject = (p: string) => {
     if (projects.includes(p)) setActive(p);
@@ -667,7 +673,7 @@ export function AppShell() {
           <NavItem label="Settings" Icon={SettingsIcon} on={pane.kind === "settings"} onClick={() => setPane({ kind: "settings" })} />
           <div className="flex items-center gap-2.5 px-3 pt-2">
             <span className="relative flex h-7 w-7 items-center justify-center rounded-full bg-[var(--color-tr-panel)] text-[12px] font-semibold">
-              {ME[0].toUpperCase()}
+              {(ME[0] || "?").toUpperCase()}
               <span className="tr-dot absolute -right-0.5 -bottom-0.5 border-2 border-[var(--color-tr-bg)]"
                     style={{ background: "var(--color-tr-ok)", width: 9, height: 9 }} />
             </span>

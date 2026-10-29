@@ -169,15 +169,15 @@ switch (cmd) {
     break;
   }
   case "invite": {
-    const { loadOrCreate, signRequest } = await import(join(ROOT, "lib/identity.mjs"));
+    const { resolveOwnerIdentity, signRequest } = await import(join(ROOT, "lib/identity.mjs"));
     const nameIdx = args.indexOf("--name"), scopeIdx = args.indexOf("--scope");
     const name = nameIdx >= 0 ? args[nameIdx + 1] : "";
     const scopeRaw = scopeIdx >= 0 ? (args[scopeIdx + 1] || "") : "";
     if (!name || !scopeRaw) { console.error("usage: trantor invite --name <name> --scope <project>:<role>"); process.exit(1); }
     const [project, role = "write"] = scopeRaw.split(":");
-    let hub = "http://127.0.0.1:4477";
-    try { hub = JSON.parse(readFileSync(join(process.env.HOME || "", ".agent-bus", "config.json"), "utf8")).url || hub; } catch {}
-    const id = loadOrCreate("admin", "human");
+    const { resolveHubInfo } = await import(join(ROOT, "lib/project.mjs"));
+    const hub = resolveHubInfo().url;
+    const id = await resolveOwnerIdentity(hub);
     const payload = { scopes: [{ project, role }], ttlSec: 86400 };
     const body = JSON.stringify(payload);
     const sig = signRequest(id, { method: "POST", path: "/invite", body });

@@ -301,7 +301,7 @@ export class HubClient {
   /** The name we SIGN as, fetched once from Rust. */
   private meCache = "";
   private async me(): Promise<string> {
-    if (!this.meCache) this.meCache = await invoke<string>("identity_name");
+    if (!this.meCache) this.meCache = await invoke<string>("identity_name", { base: this.baseUrl });
     return this.meCache;
   }
 

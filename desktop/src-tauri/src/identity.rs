@@ -1,6 +1,6 @@
 // trantor desktop request signing, in Rust so the private key never reaches the webview. MUST
 // produce byte-identical signatures to lib/identity.mjs (canonical string: docs/CONTRACT-desktop.md);
-// any divergence is a generic 401. CLI key files and trantor-identity Keychain records are read only.
+// any divergence is a generic 401. Existing keys are read only; a fresh local owner gets a key file.
 use base64::{engine::general_purpose::STANDARD as B64, Engine};
 use ed25519_dalek::{Signer, SigningKey};
 use rand::RngCore;
@@ -18,6 +18,140 @@ fn bus_dir() -> PathBuf {
         let home = std::env::var("HOME").unwrap_or_default();
         PathBuf::from(home).join(".agent-bus")
     })
+}
+
+fn owner_candidates(dir: &Path, explicit: Option<String>) -> Vec<String> {
+    let configured = explicit.filter(|name| !name.is_empty()).or_else(|| {
+        let raw = fs::read_to_string(dir.join("config.json")).ok()?;
+        let config: serde_json::Value = serde_json::from_str(&raw).ok()?;
+        config.get("ownerIdentity")?.as_str().filter(|name| !name.is_empty()).map(str::to_owned)
+    });
+    if let Some(name) = configured { return vec![name]; }
+    let mut names = Vec::new();
+    if let Ok(files) = fs::read_dir(dir.join("keys")) {
+        for file in files.flatten() {
+            if file.path().extension().and_then(|s| s.to_str()) != Some("json") { continue; }
+            let Ok(raw) = fs::read_to_string(file.path()) else { continue };
+            let Ok(record) = serde_json::from_str::<serde_json::Value>(&raw) else { continue };
+            if record.get("kind").and_then(|v| v.as_str()) == Some("human") {
+                if let Some(name) = record.get("name").and_then(|v| v.as_str()) { names.push(name.to_string()); }
+            }
+        }
+    }
+    names.sort();
+    names.dedup();
+    names
+}
+
+fn configured_owner_candidates() -> Vec<String> {
+    let explicit = std::env::var("TRANTOR_IDENTITY").ok().filter(|s| !s.is_empty())
+        .or_else(|| std::env::var("RELAY_OWNER_IDENTITY").ok());
+    owner_candidates(&bus_dir(), explicit)
+}
+
+static OWNERS: std::sync::Mutex<Option<HashMap<String, String>>> = std::sync::Mutex::new(None);
+
+pub fn owner_name() -> String {
+    let base = hub_for_project("").trim_end_matches('/').to_string();
+    if let Some(name) = crate::lock_or_recover(&OWNERS).as_ref().and_then(|m| m.get(&base)) {
+        return name.clone();
+    }
+    configured_owner_candidates().into_iter().next().unwrap_or_else(|| "human".into())
+}
+
+fn create_local_owner(dir: &Path) -> Result<String, String> {
+    use std::io::Write;
+    use std::os::unix::fs::OpenOptionsExt;
+    let name = "human";
+    let keys = dir.join("keys");
+    fs::create_dir_all(&keys).map_err(|e| format!("Could not create identity directory: {e}"))?;
+    let path = keys.join(format!("{name}.json"));
+    if path.exists() { return Ok(name.into()); }
+    let mut bytes = [0u8; 32];
+    rand::rng().fill_bytes(&mut bytes);
+    let key = SigningKey::from_bytes(&bytes);
+    let record = serde_json::json!({ "name": name, "kind": "human", "privkey": hex(&bytes),
+        "pubkey": hex(&key.verifying_key().to_bytes()), "createdAt": SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_millis() });
+    let mut nonce = [0u8; 16];
+    rand::rng().fill_bytes(&mut nonce);
+    let tmp = keys.join(format!(".owner-{}.tmp", hex(&nonce)));
+    let result = (|| {
+        let mut file = fs::OpenOptions::new().write(true).create_new(true).mode(0o600).open(&tmp)?;
+        file.write_all(record.to_string().as_bytes())?;
+        match fs::hard_link(&tmp, &path) {
+            Ok(()) => Ok(()),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => Ok(()),
+            Err(e) => Err(e),
+        }
+    })();
+    let _ = fs::remove_file(tmp);
+    result.map_err(|e: std::io::Error| format!("Could not save the local owner identity: {e}"))?;
+    Ok(name.into())
+}
+
+pub async fn resolve_owner(base: &str) -> Result<String, String> {
+    let base = base.trim_end_matches('/');
+    if let Some(name) = crate::lock_or_recover(&OWNERS).as_ref().and_then(|m| m.get(base)).cloned() {
+        return Ok(name);
+    }
+    let mut names = configured_owner_candidates();
+    if names.is_empty() && crate::hub::loopback_hub(base) { names.push(create_local_owner(&bus_dir())?); }
+    let mut unavailable = None;
+    for name in names {
+        if let Err(error) = load_key(&name) {
+            unavailable = Some(error);
+            continue;
+        }
+        let mut response = request(&name, base, "GET", "/keys/usage", None).await?;
+        let unknown = serde_json::from_str::<serde_json::Value>(&response.1).ok()
+            .is_some_and(|v| v.get("error").and_then(|e| e.as_str()) == Some("unknown identity"));
+        if response.0 == 401 && unknown && crate::hub::loopback_hub(base) {
+            let body = serde_json::json!({ "name": name, "kind": "human" }).to_string();
+            let enrolled = request(&name, base, "POST", "/enroll", Some(body)).await?;
+            if !(200..300).contains(&enrolled.0) {
+                return Err("The local hub refused owner enrollment. Ask its owner for an invite or configure the existing owner identity.".into());
+            }
+            response = request(&name, base, "GET", "/keys/usage", None).await?;
+        }
+        if (200..300).contains(&response.0) {
+            crate::lock_or_recover(&OWNERS).get_or_insert_with(HashMap::new).insert(base.into(), name.clone());
+            return Ok(name);
+        }
+    }
+    Err(unavailable.unwrap_or_else(|| format!("No local owner identity is authorized on {base}. Enroll this Mac with an owner invite, or select its existing owner key with TRANTOR_IDENTITY.")))
+}
+
+#[cfg(test)]
+mod owner_tests {
+    use super::*;
+
+    #[test]
+    fn fresh_home_creates_a_reusable_private_owner_key() {
+        let dir = std::env::temp_dir().join(format!("trantor-owner-fresh-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        assert!(owner_candidates(&dir, None).is_empty());
+        let name = create_local_owner(&dir).unwrap();
+        let path = dir.join("keys/human.json");
+        let raw = fs::read_to_string(&path).unwrap();
+        resolve_key(&name, Some(&raw), |_| panic!("fresh owner must not need Keychain")).unwrap();
+        assert_eq!(owner_candidates(&dir, None), vec![name.clone()]);
+        assert_eq!(create_local_owner(&dir).unwrap(), name);
+        assert_eq!(fs::read_to_string(path).unwrap(), raw);
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn respects_explicit_configured_and_existing_operator_identities() {
+        let dir = std::env::temp_dir().join(format!("trantor-owner-existing-{}", std::process::id()));
+        fs::create_dir_all(dir.join("keys")).unwrap();
+        fs::write(dir.join("keys/sasha_mac.json"), r#"{"name":"sasha@mac","kind":"human","pubkey":"stub"}"#).unwrap();
+        fs::write(dir.join("keys/seat.json"), r#"{"name":"seat","kind":"agent"}"#).unwrap();
+        assert_eq!(owner_candidates(&dir, None), vec!["sasha@mac"]);
+        fs::write(dir.join("config.json"), r#"{"ownerIdentity":"julian@mac"}"#).unwrap();
+        assert_eq!(owner_candidates(&dir, None), vec!["julian@mac"]);
+        assert_eq!(owner_candidates(&dir, Some("override".into())), vec!["override"]);
+        fs::remove_dir_all(dir).unwrap();
+    }
 }
 
 /// Mirrors safe() in lib/identity.mjs: collapse dot-runs FIRST (so no `..` can survive even in
@@ -55,7 +189,7 @@ fn resolve_key(
         // A freshly rotated file wins over an older Keychain entry, matching the CLI.
         if !record.privkey.is_empty() { return key_pair(raw); }
     }
-    let raw = read_keychain(name)?.ok_or("Identity key missing from Keychain; restore the key or rerun keys migrate")?;
+    let raw = read_keychain(name)?.ok_or_else(|| format!("The key for \"{name}\" is unavailable on this Mac. Unlock the identity Keychain or restore this identity's key."))?;
     key_pair(&raw)
 }
 
@@ -316,7 +450,7 @@ mod keychain_tests {
     fn locked_or_missing_keychain_is_an_explicit_error() {
         let stub = "{\"pubkey\":\"stub\"}";
         let missing = resolve_key("human", Some(stub), |_| Ok(None)).err().expect("missing fails");
-        assert!(missing.contains("missing from Keychain"));
+        assert!(missing.contains("unavailable on this Mac"));
         let locked = resolve_key("human", Some(stub), |_| Err("Keychain locked".into())).err().expect("locked fails");
         assert!(locked.contains("locked"));
     }

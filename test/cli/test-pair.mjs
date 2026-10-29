@@ -3,7 +3,7 @@
 // invite on an enforce hub, the link parses to hub+token, and the token enrolls a fresh key.
 // Isolated: random port, TMP HOME — never :4477 or the real ~/.agent-bus.
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -24,20 +24,21 @@ async function sFetch(id, method, path, bodyObj) {
 }
 
 // `trantor pair` as a child process: RELAY_URL pins the test hub, HOME/AGENT_BUS_DIR pin the keys.
-function runPair(extraArgs, home) {
+function runPair(extraArgs, home, identity = "admin") {
   return spawnSync(process.execPath, [CLI, "pair", ...extraArgs], {
     encoding: "utf8",
     cwd: ROOT,
-    env: drillEnv({ HOME: home, RELAY_URL: HUB.base, TRANTOR_NO_UPDATE_CHECK: "1", TRANTOR_IDENTITY: "admin" }),
+    env: drillEnv({ HOME: home, RELAY_URL: HUB.base, TRANTOR_NO_UPDATE_CHECK: "1", TRANTOR_IDENTITY: identity, RELAY_OWNER_IDENTITY: "", TRANTOR_IDENTITY_KEYCHAIN: join(home, "isolated.keychain"), TRANTOR_NO_KEYCHAIN: "1" }),
     timeout: 30000,
   });
 }
 const tmp = mkdtempSync(join(tmpdir(), "trantor-pair-"));
 let HUB = null;
+const phoneHub = "http://100.64.0.10:4477";
 
 try {
   console.log("\n# test-pair — trantor pair (isolated, no :4477)");
-  HUB = await startTestHub({ env: { RELAY_AUTH: "enforce", RELAY_ENROLL: "tofu" } });
+  HUB = await startTestHub({ env: { RELAY_AUTH: "enforce", RELAY_ENROLL: "tofu", RELAY_PUBLIC_URL: phoneHub } });
 
   // The CLI signs as the operator's owner identity (TRANTOR_IDENTITY, here "admin"). Mint it in the test HOME
   // and TOFU-enroll it with a wildcard owner scope so /invite answers.
@@ -54,12 +55,12 @@ try {
     ok("pair exits 0", r.status === 0, `exit ${r.status} out=${r.stdout.slice(0, 200)} err=${r.stderr.slice(0, 200)}`);
     let j = null;
     try { j = JSON.parse(r.stdout); } catch {}
-    ok("stdout is {link, token, hub, expiresAt} JSON", !!j && /^trantor:\/\//.test(j.link || "") && /^[0-9a-f]{64}$/.test(j.token || "") && j.hub === HUB.base && Number.isFinite(j.expiresAt),
+    ok("stdout is {link, token, hub, expiresAt} JSON", !!j && /^trantor:\/\//.test(j.link || "") && /^[0-9a-f]{64}$/.test(j.token || "") && j.hub === phoneHub && Number.isFinite(j.expiresAt),
       JSON.stringify(j || r.stdout).slice(0, 200));
     const m = j && /^trantor:\/\/enroll\?hub=([^&]+)&token=([0-9a-f]{64})$/.exec(j.link);
     ok("link parses: trantor://enroll?hub=<enc>&token=<64hex>", !!m, j?.link || "(no link)");
-    ok("link hub round-trips the test hub", !!m && decodeURIComponent(m[1]) === HUB.base, m && decodeURIComponent(m[1]));
-    ok("hub reports no publicUrl — link stays on the tailnet, hubPublic false", j.hubPublic === false, JSON.stringify(j.hubPublic));
+    ok("link hub round-trips the test hub", !!m && decodeURIComponent(m[1]) === phoneHub, m && decodeURIComponent(m[1]));
+    ok("hub reports the configured phone address", j.hubPublic === true, JSON.stringify(j.hubPublic));
     ok("expiresAt ~10 minutes out", !!j && j.expiresAt > Date.now() + 570000 && j.expiresAt < Date.now() + 630000,
       j && `${Math.round((j.expiresAt - Date.now()) / 1000)}s`);
 
@@ -80,7 +81,7 @@ try {
     ok("pair (human mode) exits 0", r.status === 0, `exit ${r.status} err=${r.stderr.slice(0, 200)}`);
     ok("prints a trantor://enroll link", /trantor:\/\/enroll\?hub=[^&]+&token=[0-9a-f]{64}/.test(r.stdout), r.stdout.slice(0, 200));
     ok("says how long it lives", /Expires in \d+ minutes?/.test(r.stdout), r.stdout.slice(0, 200));
-    ok("says which hub the link carries", /Hub in the link: /.test(r.stdout) && /tailnet — the phone needs Tailscale/.test(r.stdout), r.stdout.slice(0, 300));
+    ok("says which hub the link carries", /Hub in the link: /.test(r.stdout) && /public — the phone needs no Tailscale/.test(r.stdout), r.stdout.slice(0, 300));
   }
 
   console.log("\n[3] the default pairs the phone as an approver, never owner (#12113):");
@@ -110,7 +111,7 @@ try {
     const r = runPair(["--json", "--role", "owner"], tmp);
     HUB = saved;
     ok("unreachable hub exits 1", r.status === 1, `exit ${r.status}`);
-    ok("unreachable hub error is readable", /unreachable/.test(r.stderr), r.stderr.slice(0, 200));
+    ok("unreachable hub error is readable", /fetch failed/.test(r.stdout), r.stdout.slice(0, 200));
   }
 
   console.log("\n[5] RELAY_PUBLIC_URL set → the link hands out the public hub (#12153):");
@@ -135,7 +136,7 @@ try {
     const rt = runPair(["--json", "--role", "owner", "--tailnet"], tmp);
     let jt = null;
     try { jt = JSON.parse(rt.stdout); } catch {}
-    ok("--tailnet forces the tailnet hub", rt.status === 0 && jt?.hub === HUB.base && jt.hubPublic === false,
+    ok("--tailnet refuses a loopback hub before minting", rt.status === 1 && /cannot reach/.test(jt?.error || "") && !jt?.token,
       JSON.stringify(jt || rt.stdout).slice(0, 200));
 
     // Owner routes never answer in public: the mint still POSTs /invite to the tailnet hub, and
@@ -145,6 +146,44 @@ try {
       const use = await sFetch(phone, "POST", "/enroll", { token: j.token, name: "phone-public", kind: "human" });
       ok("the public-hub link's token still enrolls on the tailnet hub", use.status < 400, `status ${use.status}`);
     }
+  }
+
+  console.log("\n[6] discover the existing operator key and bootstrap a fresh Mac:");
+  {
+    const operatorHome = join(tmp, "operator");
+    process.env.AGENT_BUS_DIR = join(operatorHome, ".agent-bus");
+    const operator = loadOrCreate("sasha@mac", "human");
+    delete process.env.AGENT_BUS_DIR;
+    const enrolled = await sFetch(operator, "POST", "/enroll", { name: operator.name, kind: "human" });
+    ok("existing operator enrolled on netcup fixture", enrolled.status === 200);
+    const r = runPair(["--json"], operatorHome, "");
+    const result = JSON.parse(r.stdout);
+    ok("discovers sasha@mac with no identity override and keeps netcup link", r.status === 0 && result.hub === "https://netcup-qdrant.tail0f2afd.ts.net", r.stdout + r.stderr);
+    const invite = spawnSync(process.execPath, [CLI, "invite", "--name", "phone", "--scope", "*:approver"], {
+      cwd: ROOT, encoding: "utf8", timeout: 30000,
+      env: drillEnv({ HOME: operatorHome, RELAY_URL: HUB.base, TRANTOR_IDENTITY: "", RELAY_OWNER_IDENTITY: "", TRANTOR_NO_KEYCHAIN: "1", TRANTOR_IDENTITY_KEYCHAIN: join(operatorHome, "isolated.keychain") }),
+    });
+    ok("invite uses the same discovered operator and target hub", invite.status === 0 && /Invite token: [0-9a-f]{64}/.test(invite.stdout), invite.stdout + invite.stderr);
+
+    await HUB.stop();
+    HUB = await startTestHub({ env: { RELAY_AUTH: "enforce", RELAY_ENROLL: "tofu", RELAY_PUBLIC_URL: phoneHub } });
+    const freshHome = join(tmp, "fresh");
+    mkdirSync(freshHome, { recursive: true });
+    const fresh = runPair(["--json"], freshHome, "");
+    const fj = JSON.parse(fresh.stdout);
+    ok("fresh home creates and enrolls a local owner without a Keychain error", fresh.status === 0 && !!fj.token, fresh.stdout + fresh.stderr);
+    ok("fresh home reuses its persisted owner", runPair(["--json"], freshHome, "").status === 0);
+    const cfgHome = join(tmp, "configured");
+    mkdirSync(join(cfgHome, ".agent-bus"), { recursive: true });
+    writeFileSync(join(cfgHome, ".agent-bus", "config.json"), JSON.stringify({ ownerIdentity: "missing-owner" }));
+    const missing = runPair(["--json"], cfgHome, "");
+    ok("missing configured key gets an identity-specific explanation", missing.status === 1 && /missing-owner.*unavailable/.test(missing.stdout), missing.stdout);
+
+    await HUB.stop();
+    HUB = await startTestHub({ env: { RELAY_AUTH: "enforce", RELAY_ENROLL: "tofu" } });
+    const local = runPair(["--json"], join(tmp, "no-identity"), "");
+    const lj = JSON.parse(local.stdout);
+    ok("loopback fresh home explains phone reachability before touching keys", local.status === 1 && /cannot reach.*127\.0\.0\.1/.test(lj.error) && /Tailscale.*public hub URL/.test(lj.error) && !lj.token, local.stdout);
   }
 
   console.log(`\ntest-pair: ${pass} passed, ${fail} failed`);

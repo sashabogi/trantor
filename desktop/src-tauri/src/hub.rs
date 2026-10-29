@@ -9,7 +9,7 @@ pub(crate) fn greet(name: &str) -> String {
 
 /// The identity this app signs as. Configurable so a second machine or a test can use another key.
 pub(crate) fn owner_identity() -> String {
-    std::env::var("TRANTOR_IDENTITY").unwrap_or_else(|_| "sasha@mac".to_string())
+    identity::owner_name()
 }
 
 #[tauri::command]
@@ -22,11 +22,11 @@ pub(crate) fn sign_request(
 }
 
 /// The name this app SIGNS as. The hub rejects any /send whose `from` does not match the signer,
-/// so the web side has to know it rather than assume "sasha@mac" — TRANTOR_IDENTITY can change it,
+/// so the web side reads the resolved owner identity rather than assuming a personal name,
 /// and a hardcoded copy would 403 the moment it did.
 #[tauri::command]
-pub(crate) fn identity_name() -> String {
-    owner_identity()
+pub(crate) async fn identity_name(base: Option<String>) -> Result<String, String> {
+    identity::resolve_owner(&base.unwrap_or_else(|| identity::hub_for_project(""))).await
 }
 
 #[tauri::command]
@@ -52,7 +52,14 @@ pub(crate) async fn hub_request(
     path: String,
     body: Option<String>,
 ) -> Result<HubResponse, String> {
-    let owner = owner_identity();
+    if method == "GET" && path == "/health" {
+        let response = reqwest::Client::new().get(format!("{}/health", base.trim_end_matches('/')))
+            .timeout(std::time::Duration::from_secs(8)).send().await.map_err(|e| format!("Hub unreachable: {e}"))?;
+        let status = response.status().as_u16();
+        let body = response.text().await.map_err(|e| e.to_string())?;
+        return Ok(HubResponse { status, body });
+    }
+    let owner = identity::resolve_owner(&base).await?;
     let (status, body) = request_with_local_enrollment(
         &owner, &base, &method, &path, body,
         |method, path, body| {
@@ -64,7 +71,7 @@ pub(crate) async fn hub_request(
     Ok(HubResponse { status, body })
 }
 
-fn loopback_hub(base: &str) -> bool {
+pub(crate) fn loopback_hub(base: &str) -> bool {
     let Ok(url) = reqwest::Url::parse(base) else { return false };
     if !matches!(url.scheme(), "http" | "https") || !url.username().is_empty()
         || url.password().is_some() || url.query().is_some() || url.fragment().is_some()
@@ -123,7 +130,15 @@ pub(crate) async fn start_stream(app: tauri::AppHandle, base: String) {
     tauri::async_runtime::spawn(async move {
         let event_base = base.clone();
         let connect_base = base.clone();
-        identity::stream(&owner_identity(), &base, move |data| {
+        let owner = match identity::resolve_owner(&base).await {
+            Ok(owner) => owner,
+            Err(error) => {
+                eprintln!("Hub stream: {error}");
+                if let Some(streams) = lock_or_recover(&STREAMS).as_mut() { streams.remove(&base); }
+                return;
+            }
+        };
+        identity::stream(&owner, &base, move |data| {
             remote::stream_event(&event_base, &data);
             let _ = app.emit("hub-event", data);
         }, move || remote::stream_connected(&connect_base))

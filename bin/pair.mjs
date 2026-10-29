@@ -21,15 +21,23 @@ if (!role || role.startsWith("--")) {
   process.exit(1);
 }
 
-const { load, signRequest } = await import(join(ROOT, "lib/identity.mjs"));
+const { resolveOwnerIdentity, phoneHubAddress, signRequest } = await import(join(ROOT, "lib/identity.mjs"));
 const { resolveHubInfo } = await import(join(ROOT, "lib/project.mjs"));
 
 const hub = resolveHubInfo().url.replace(/\/+$/, "");
-// The operator's owner key, the same one the desktop app signs with (hub.rs owner_identity).
-// Loaded, never minted: a fresh key is unknown to the hub and every invite would 401.
-const owner = process.env.TRANTOR_IDENTITY || "sasha@mac";
-const id = load(owner);
-if (!id) { console.error(`error: no key for the owner identity "${owner}". Set TRANTOR_IDENTITY, or run \`trantor keys status\``); process.exit(1); }
+let id, used;
+try {
+  const response = await fetch(`${hub}/health`, { signal: AbortSignal.timeout(8000) });
+  if (!response.ok) throw new Error(`hub health returned HTTP ${response.status}`);
+  const health = await response.json();
+  used = phoneHubAddress(hub, String(health.publicUrl || ""), forceTailnet);
+  id = await resolveOwnerIdentity(hub);
+} catch (error) {
+  const message = `Pairing failed: ${error.message}. Hub: ${hub}`;
+  if (asJson) console.log(JSON.stringify({ error: message }));
+  else console.error(message);
+  process.exit(1);
+}
 
 const payload = { scopes: [{ project: "*", role }], ttlSec: 600, kind: "human" };
 const body = JSON.stringify(payload);
@@ -64,21 +72,6 @@ if (!r.ok) {
   process.exit(1);
 }
 
-// v1.4: the link carries the hub's public address (Tailscale Funnel) so the phone pairs without
-// Tailscale. /invite itself always goes to the tailnet hub — owner routes never answer in public.
-// /health reports publicUrl; --tailnet forces the tailnet address. No publicUrl (or /health
-// unreachable — the invite already minted) falls back to the tailnet hub.
-const linkHub = (async () => {
-  if (forceTailnet) return { hub, public: false };
-  try {
-    const h = await fetch(`${hub}/health`).then((r) => r.json()).catch(() => ({}));
-    const pub = String(h.publicUrl || "").trim().replace(/\/+$/, "");
-    if (pub) return { hub: pub, public: true };
-  } catch {}
-  return { hub, public: false };
-})();
-
-const used = await linkHub;
 const link = `trantor://enroll?hub=${encodeURIComponent(used.hub)}&token=${j.token}`;
 const expiresAt = Number(j.expiresAt) || Date.now() + 600000;
 const mins = Math.max(0, Math.round((expiresAt - Date.now()) / 60000));

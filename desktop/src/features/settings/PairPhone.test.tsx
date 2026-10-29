@@ -3,7 +3,8 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { PairPhone } from "./PairPhone";
-import { PairRoleUnsupportedError, type PairInvite, type PairPhoneApi } from "./pairInvite";
+import { pairInviteApi, phoneHubAddress, PairRoleUnsupportedError, type PairInvite, type PairPhoneApi } from "./pairInvite";
+import { HubClient } from "../../shared/api/client";
 
 // SAFETY: React's act() reads this flag off globalThis; the cast adds the one key TS does not know.
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -37,6 +38,7 @@ describe("Settings Pair a phone", () => {
   afterEach(() => {
     act(() => root.unmount());
     host.remove();
+    vi.restoreAllMocks();
   });
 
   const mount = async (props: Parameters<typeof PairPhone>[0]) => {
@@ -46,6 +48,37 @@ describe("Settings Pair a phone", () => {
   const click = async (button: Element) => {
     await act(async () => { button.dispatchEvent(new MouseEvent("click", { bubbles: true })); });
   };
+
+  it.each(["http://127.0.0.1:4477", "http://localhost:4477", "http://[::1]:4477"])("explains %s before minting and never renders a QR", async hubBase => {
+    vi.spyOn(HubClient.prototype, "health").mockResolvedValue({ ok: true, authMode: "enforce", peers: 0, messages: 0, streams: 0, publicUrl: "" });
+    const mint = vi.spyOn(HubClient.prototype, "pairInvite");
+    const qr = vi.fn(async () => FAKE_QR);
+    await mount({ hubBase, renderQr: qr });
+    await click($("button")!);
+    expect(document.body.textContent).toContain("Your phone cannot reach");
+    expect(document.body.textContent).toContain("Tailscale on the Mac and iPhone");
+    expect(document.body.textContent).toContain("public hub URL");
+    expect(mint).not.toHaveBeenCalled();
+    expect(qr).not.toHaveBeenCalled();
+    expect($("img")).toBeNull();
+  });
+
+  it("checks the public netcup address before minting on the configured hub", async () => {
+    const publicUrl = "https://netcup-qdrant.tail0f2afd.ts.net";
+    const health = vi.spyOn(HubClient.prototype, "health").mockResolvedValue({ ok: true, authMode: "enforce", peers: 0, messages: 0, streams: 0, publicUrl });
+    const mint = vi.spyOn(HubClient.prototype, "pairInvite").mockResolvedValue({ ok: true, token: "ab".repeat(32), expiresAt: Date.now() + 600000, scopes: [{ project: "*", role: "approver" }] });
+    const invite = await pairInviteApi(HUB).mint("approver");
+    expect(invite.hub).toBe(publicUrl);
+    expect(invite.hubPublic).toBe(true);
+    expect(health.mock.invocationCallOrder[0]).toBeLessThan(mint.mock.invocationCallOrder[0]);
+  });
+
+  it("accepts a Tailscale address and rejects wildcard and non-http addresses", () => {
+    expect(() => phoneHubAddress("http://100.79.242.104:4477")).not.toThrow();
+    for (const hub of ["http://0.0.0.0:4477", "http://[::]:4477", "file://localhost"]) {
+      expect(() => phoneHubAddress(hub)).toThrow("cannot reach");
+    }
+  });
 
   it("mints the invite on click and shows the QR, the link and the countdown", async () => {
     const invite = inviteFor();
