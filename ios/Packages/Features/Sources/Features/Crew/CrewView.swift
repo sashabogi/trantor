@@ -9,31 +9,16 @@ struct CrewView: View {
     @State private var picker: CrewPicker?
     @State private var stopCrew = false
     @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.duoTyping) private var typing
+    @Environment(\.duoCompactPortrait) private var compactPortrait
 
     var body: some View {
-        ScrollView {
-            LazyVStack(alignment: .leading, spacing: Space.md) {
-                StatusHeadline("\(store.seats.count) seats · \(model.standingState(for: store).working) working")
-                ViewThatFits(in: .horizontal) {
-                    HStack { controls }
-                    VStack(alignment: .leading, spacing: Space.sm) { controls }
-                }
-                .disabled(store.busy || store.disabledReason != nil)
-                if let reason = store.disabledReason { Text(reason).font(.tCallout).foregroundStyle(Palette.textDim).padding(Space.md).auroraPanel() }
-                if store.freshness.isStale { FreshnessBanner(freshness: store.freshness) }
-                if store.fleet.freshness.isStale { FreshnessBanner(freshness: store.fleet.freshness) }
-                if let error = store.error { Label(error, systemImage: "exclamationmark.triangle").foregroundStyle(Palette.down).padding(Space.md).auroraPanel() }
-                if store.sending {
-                    HStack { ProgressView(); Text("Confirming command…").font(.tCallout) }.padding(Space.md).auroraPanel()
-                }
-                ForEach(store.commands) { CrewCommandBanner(command: $0) }
-                HStack { Eyebrow("Seats"); CountBadge(store.seats.count, hot: false) }
-                if store.seats.isEmpty {
-                    StageEmpty("No crew seats", systemImage: "person.3", message: "Add seats to work on this project.").padding(Space.md).auroraPanel()
-                }
-                ForEach(store.seats) { peer in seatRow(peer) }
+        Group {
+            if compactPortrait {
+                compactSummary
+            } else {
+                crewList
             }
-            .padding(.horizontal, Space.lg).padding(.vertical, Space.md)
         }
         .auroraScreen(model.standingState(for: store).wash)
         .task { await store.refresh(); await store.refreshCommands() }
@@ -48,6 +33,53 @@ struct CrewView: View {
             Button("Stop the crew", role: .destructive) { Task { await store.command(.down) } }
             Button("Cancel", role: .cancel) {}
         } message: { Text("Stop every crew seat in \(store.project).") }
+    }
+
+    private var compactSummary: some View {
+        HStack(spacing: Space.sm) {
+            Text("\(store.seats.count) seats").font(.tHeadline)
+            ForEach(store.seats.prefix(4)) { peer in SeatOrb(CrewStore.spec(for: peer), size: 28) }
+            Spacer(minLength: 0)
+            let waiting = model.decisions.items.filter { $0.project == store.project }.count
+            if waiting > 0 {
+                Button("\(waiting) waiting") { model.selection = .decisions }
+                    .buttonStyle(AuroraButtonStyle())
+            }
+        }.padding(Space.md).auroraPanel().padding(.horizontal, Space.lg)
+    }
+
+    private var crewList: some View {
+        ScrollView {
+            LazyVStack(alignment: .leading, spacing: Space.md) {
+                StatusHeadline("\(store.seats.count) seats · \(model.standingState(for: store).working) working")
+                if !typing {
+                    ViewThatFits(in: .horizontal) {
+                        HStack { controls }
+                        VStack(alignment: .leading, spacing: Space.sm) { controls }
+                    }
+                    .disabled(store.busy || store.disabledReason != nil)
+                }
+                if let reason = store.disabledReason { Text(reason).font(.tCallout).foregroundStyle(Palette.textDim).padding(Space.md).auroraPanel() }
+                if store.freshness.isStale { FreshnessBanner(freshness: store.freshness) }
+                if store.fleet.freshness.isStale { FreshnessBanner(freshness: store.fleet.freshness) }
+                if let error = store.error { Label(error, systemImage: "exclamationmark.triangle").foregroundStyle(Palette.down).padding(Space.md).auroraPanel() }
+                if store.sending {
+                    HStack { ProgressView(); Text("Confirming command…").font(.tCallout) }.padding(Space.md).auroraPanel()
+                }
+                ForEach(store.commands) { CrewCommandBanner(command: $0) }
+                HStack { Eyebrow("Seats"); CountBadge(store.seats.count, hot: false) }
+                if store.seats.isEmpty {
+                    StageEmpty("No crew seats", systemImage: "person.3", message: "Add seats to work on this project.").padding(Space.md).auroraPanel()
+                }
+                ForEach(store.seats) { peer in
+                    if typing {
+                        SeatLine(seat: CrewStore.spec(for: peer), verb: AuroraStandingState.caption(peer))
+                            .padding(Space.sm).auroraPanel()
+                    } else { seatRow(peer) }
+                }
+            }
+            .padding(.horizontal, Space.lg).padding(.vertical, Space.md)
+        }
     }
 
     @ViewBuilder private var controls: some View {
