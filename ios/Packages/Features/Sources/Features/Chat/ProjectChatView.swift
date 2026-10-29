@@ -108,8 +108,10 @@ struct ProjectChatView: View {
                     if store.focusedToolID != nil { scrollToQuestion(proxy) }
                     else if followingBottom { proxy.scrollTo("chat-bottom", anchor: .bottom) }
                 }
-                .onChange(of: store.outgoing) { _, _ in
-                    if followingBottom || store.sending { proxy.scrollTo("chat-bottom", anchor: .bottom) }
+                .onChange(of: store.outgoing) { previous, current in
+                    if current.last?.id != previous.last?.id || followingBottom || store.sending {
+                        proxy.scrollTo("chat-bottom", anchor: .bottom)
+                    }
                 }
                 .refreshable { await store.refresh() }
             }
