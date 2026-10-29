@@ -28,9 +28,9 @@ private struct DuoArrangement<Leading: View, Detail: View>: View {
             let division = geometry.reservedRegions(kind: .division, layoutDirectionBehavior: .fixed).first
             let horizontal = division.map { $0.frame.height > $0.frame.width } ?? (toolbarEdge != nil)
             ArrangementView {
-                leading().frame(maxWidth: .infinity, maxHeight: .infinity)
-            } secondary: {
                 detail().frame(maxWidth: .infinity, maxHeight: .infinity)
+            } secondary: {
+                leading().frame(maxWidth: .infinity, maxHeight: .infinity)
             }
             .arrangementViewStyle(.split.axes(horizontal ? .horizontal : .vertical))
         }
