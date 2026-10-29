@@ -138,7 +138,7 @@ def main():
         return exit_code
     finally:
         if exit_code != 0 or not args.keep_simulator:
-            subprocess.run(["xcrun", "simctl", "shutdown", "all"], cwd=ROOT, check=False)
+            subprocess.run(["xcrun", "simctl", "shutdown", args.device], cwd=ROOT, check=False)
 
 
 if __name__ == "__main__":

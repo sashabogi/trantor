@@ -32,11 +32,16 @@ final class DuoSplitScreensTests: XCTestCase {
     @MainActor private func capturePoses(screen: String, arguments: [String], composer: String, send: String?, prepare: (XCUIApplication) -> Void) {
         continueAfterFailure = false
         let app = XCUIApplication()
-        defer { app.terminate(); XCUIDevice.shared.orientation = .portrait }
+        defer { app.terminate() }
         for landscape in [true, false] {
-            XCUIDevice.shared.orientation = landscape ? .landscapeLeft : .portrait
             app.launchArguments = ["-demo"] + arguments
             app.launch()
+            for _ in 0..<4 {
+                let frame = app.windows.firstMatch.frame
+                if (frame.width > frame.height) == landscape { break }
+                print("DUO_ROTATE")
+                Thread.sleep(forTimeInterval: 3)
+            }
             prepare(app)
             let field = app.textViews[composer].exists ? app.textViews[composer] : app.textFields[composer]
             XCTAssertTrue(field.waitForExistence(timeout: 5))
@@ -64,9 +69,8 @@ final class DuoSplitScreensTests: XCTestCase {
     }
 
     @MainActor private func capture(_ name: String) {
-        let attachment = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
-        attachment.name = name
-        attachment.lifetime = .keepAlways
-        add(attachment)
+        // The open display is primary-1; XCUIScreen.main captures the inactive closed display.
+        print("DUO_CAPTURE \(name)")
+        Thread.sleep(forTimeInterval: 2)
     }
 }
