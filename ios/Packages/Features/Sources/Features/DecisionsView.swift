@@ -158,6 +158,7 @@ struct DecisionItemCard: View {
             if !g.why.isEmpty { Detail(label: "Why", text: g.why) }
             if !g.howToVerify.isEmpty { Detail(label: "How", text: g.howToVerify, mono: true) }
             WellField("Note (optional)", text: $note, axis: .vertical)
+                .accessibilityIdentifier("decision.note")
             HStack(spacing: Space.sm) {
                 Button("Verified") { Task { await store.resolveGate(g, as: .verified, note: note) } }.buttonStyle(AuroraButtonStyle(.primary))
                 Button("Failed") { Task { await store.resolveGate(g, as: .failed, note: note) } }.buttonStyle(AuroraButtonStyle(.destructive))
