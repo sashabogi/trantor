@@ -46,6 +46,7 @@ final class DuoSplitScreensTests: XCTestCase {
             let field = app.textViews[composer].exists ? app.textViews[composer] : app.textFields[composer]
             XCTAssertTrue(field.waitForExistence(timeout: 5))
             let pose = landscape ? "landscape" : "portrait"
+            XCTAssertFalse(app.keyboards.firstMatch.exists, "The plain pose must have its keyboard hidden")
             capture("\(screen)-\(pose)")
             let full = app.windows.firstMatch.frame
             if landscape {
@@ -76,7 +77,14 @@ final class DuoSplitScreensTests: XCTestCase {
 
     @MainActor private func capture(_ name: String) {
         // The open display is primary-1; XCUIScreen.main captures the inactive closed display.
+        let acknowledgment = FileManager.default.temporaryDirectory.appendingPathComponent("duo-captured-\(name)")
+        try? FileManager.default.removeItem(at: acknowledgment)
         print("DUO_CAPTURE \(name)")
-        Thread.sleep(forTimeInterval: 2)
+        fflush(stdout)
+        let deadline = Date().addingTimeInterval(30)
+        while !FileManager.default.fileExists(atPath: acknowledgment.path) && Date() < deadline {
+            Thread.sleep(forTimeInterval: 0.1)
+        }
+        XCTAssertTrue(FileManager.default.fileExists(atPath: acknowledgment.path), "The host must capture this pose before the UI advances")
     }
 }

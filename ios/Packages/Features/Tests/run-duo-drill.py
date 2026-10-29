@@ -64,9 +64,13 @@ def watch_output(log_path, device, stop, errors):
                 if line.strip() == 'DUO_ROTATE':
                     control(4, 'Rotate Right')
                 match = re.fullmatch(r'DUO_CAPTURE ([a-z-]+)\n', line)
-                if match and not SKIP_CAPTURES:
-                    target = OUT / (match[1] + '.png')
-                    subprocess.run(['xcrun', 'simctl', 'io', device, 'screenshot', '--display=primary-1', str(target)], cwd=ROOT, check=True)
+                if match:
+                    if not SKIP_CAPTURES:
+                        target = OUT / (match[1] + '.png')
+                        subprocess.run(['xcrun', 'simctl', 'io', device, 'screenshot', '--display=primary-1', str(target)], cwd=ROOT, check=True)
+                    container = subprocess.check_output(['xcrun', 'simctl', 'get_app_container', device,
+                                                         'ai.trantor.aurorauitests.xctrunner', 'data'], text=True).strip()
+                    (Path(container) / 'tmp' / ('duo-captured-' + match[1])).touch()
             stop.wait(0.2 if opened else 1)
     except Exception as error:
         errors.append(str(error))
