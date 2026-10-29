@@ -53,14 +53,14 @@ private struct DuoArrangement<Leading: View, Detail: View>: View {
             let fold = division.map { horizontal ? $0.frame.midX : $0.frame.midY }
             let ratio = fold.map { min(1, max(0, $0 / max(1, extent))) } ?? 0.5
             let overlap = typing ? geometry.frame(in: .global).intersection(keyboardFrame).height : 0
+            let summaryRatio = min(0.5, 76 / max(1, geometry.size.height))
             ArrangementView {
                 leading()
                     .environment(\.duoTyping, typing)
                     .environment(\.duoCompactPortrait, compactPortrait)
-                    .padding(.top, compactPortrait ? geometry.safeAreaInsets.top : 0)
                     .padding(.bottom, horizontal ? overlap : 0)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .splitArrangementLayoutRatio(compactPortrait ? 0.18 : ratio)
+                    .splitArrangementLayoutRatio(compactPortrait ? summaryRatio : ratio)
             } secondary: {
                 detail()
                     .environment(\.duoComposing, $typing)

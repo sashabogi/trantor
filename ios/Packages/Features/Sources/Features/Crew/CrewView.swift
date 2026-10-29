@@ -20,6 +20,7 @@ struct CrewView: View {
                 crewList
             }
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .auroraScreen(model.standingState(for: store).wash)
         .task { await store.refresh(); await store.refreshCommands() }
         .onChange(of: scenePhase) { _, phase in

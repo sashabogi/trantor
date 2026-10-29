@@ -4,11 +4,13 @@ import TrantorDesign
 import TrantorStore
 
 struct ChatQuestionCard: View {
+    @Environment(\.duoComposing) private var duoComposing
     let block: ChatBlock
     let store: ChatStore
     @State private var picks: Set<Int> = []
     @State private var writingOther = false
     @State private var other = ""
+    @FocusState private var composing: Bool
 
     private var delivery: AnswerDelivery? {
         if let answer = block.answer { return .answered(answer) }
@@ -44,6 +46,8 @@ struct ChatQuestionCard: View {
         .padding(Space.md)
         .auroraPanel(stroke: answered ? nil : Glass.waitingStroke, shadow: answered ? nil : Glass.waitingShadow)
         .opacity(answered ? 0.6 : 1)
+        .onChange(of: composing) { _, focused in duoComposing?.wrappedValue = focused }
+        .onDisappear { if composing { duoComposing?.wrappedValue = false } }
     }
 
     private func choices(_ question: ChatQuestion) -> some View {
@@ -79,6 +83,7 @@ struct ChatQuestionCard: View {
                     .accessibilityIdentifier("chat.ask.other.\(block.toolID)")
                 if writingOther {
                     WellField("Your answer", text: $other, axis: .vertical).lineLimit(2...5)
+                        .focused($composing)
                         .disabled(disabled)
                         .accessibilityIdentifier("chat.ask.field.\(block.toolID)")
                     if other.utf16.count > 2000 {
