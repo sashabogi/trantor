@@ -56,20 +56,27 @@ private struct DuoArrangement<Leading: View, Detail: View>: View {
             let ratio = fold.map { min(1, max(0, $0 / max(1, extent))) } ?? 0.5
             let overlap = typing ? geometry.frame(in: .global).intersection(keyboardFrame).height : 0
             let summaryRatio = min(0.5, 76 / max(1, geometry.size.height))
+            let visibleRatio = max(0, geometry.size.height - overlap) / max(1, geometry.size.height) / 2
+            let typingRatio = compactLeadingWhenTyping ? summaryRatio : visibleRatio
+            let leadingRatio = typing && !horizontal && division?.isActive != true ? typingRatio : ratio
             ArrangementView {
-                leading()
+                GeometryReader { pane in
+                    leading()
                     .environment(\.duoTyping, typing)
                     .environment(\.duoCompactPortrait, compactPortrait)
                     .padding(.bottom, horizontal ? overlap : 0)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .frame(width: pane.size.width, height: pane.size.height)
                     .clipped()
-                    .splitArrangementLayoutRatio(compactPortrait ? summaryRatio : ratio)
+                }
+                .splitArrangementLayoutRatio(leadingRatio)
             } secondary: {
-                detail()
+                GeometryReader { pane in
+                    detail()
                     .environment(\.duoComposing, $typing)
                     .padding(.bottom, overlap)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .frame(width: pane.size.width, height: pane.size.height)
                     .clipped()
+                }
             }
             .arrangementViewStyle(.split)
         }
