@@ -124,7 +124,16 @@ private struct FleetSeatDetail: View {
         VStack(spacing: 0) {
             ScrollView {
                 VStack(alignment: .leading, spacing: Space.md) {
-                    PeerRow(peer: peer)
+                    if duoComposing != nil {
+                        VStack(alignment: .leading, spacing: Space.sm) {
+                            Eyebrow("Selected seat")
+                            Text(peer.session).font(.tHeadline)
+                                .accessibilityIdentifier("fleet.detail.title")
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    } else {
+                        PeerRow(peer: peer)
+                    }
                     AuroraSection("Seat") {
                         if !peer.status.isEmpty { Detail(label: "Status", text: peer.status) }
                         if !peer.health.isEmpty { Detail(label: "Health", text: peer.health) }
