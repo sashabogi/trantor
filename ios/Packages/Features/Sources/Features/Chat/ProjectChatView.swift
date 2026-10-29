@@ -6,16 +6,28 @@ import TrantorStore
 
 struct ProjectView: View {
     @Environment(AppModel.self) private var model
+    @Environment(\.horizontalSizeClass) private var sizeClass
     let project: String
     @State private var section = "chat"
 
     var body: some View {
-        VStack(spacing: 0) {
-            if section == "chat" { ProjectChatView(store: model.chat(project: project)) }
-            else if section == "board" { BoardView(project: project) }
-            else { CrewView(store: model.crew(project: project)) }
+        Group {
+            if sizeClass == .regular {
+                DuoSplitView {
+                    if section == "board" { BoardView(project: project) }
+                    else { CrewView(store: model.crew(project: project)) }
+                } detail: {
+                    ProjectChatView(store: model.chat(project: project))
+                }
+            } else {
+                VStack(spacing: 0) {
+                    if section == "chat" { ProjectChatView(store: model.chat(project: project)) }
+                    else if section == "board" { BoardView(project: project) }
+                    else { CrewView(store: model.crew(project: project)) }
+                }
+                .modifier(DuoContentBounds())
+            }
         }
-        .modifier(DuoContentBounds())
         .onAppear {
             if let wanted = model.openProjectSection { section = wanted; model.openProjectSection = nil }
         }

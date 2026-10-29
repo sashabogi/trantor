@@ -163,15 +163,14 @@ struct SectionView: View {
         Group {
             switch section {
             case .decisions: DecisionsView()
-            case .projects: ProjectsView()
-            case .feed: FeedView()
-            case .inbox: InboxView()
+            case .projects: ProjectsView().modifier(DuoContentBounds())
+            case .feed: FeedView().modifier(DuoContentBounds())
+            case .inbox: InboxView().modifier(DuoContentBounds())
             case .fleet: FleetView()
-            case .cost: CostView()
-            case .settings: SettingsView()
+            case .cost: CostView().modifier(DuoContentBounds())
+            case .settings: SettingsView().modifier(DuoContentBounds())
             }
         }
-        .modifier(DuoContentBounds())
         .toolbarBackground(.hidden, for: .navigationBar)
     }
 }
