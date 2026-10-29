@@ -18,7 +18,8 @@ drill.OUT = OUT
 OPEN_DISPLAY = '--open-display' in sys.argv
 CLOSED_DISPLAY = '--closed-display' in sys.argv
 SEED_PHOTO = '--seed-photo' in sys.argv
-for flag in ['--open-display', '--closed-display', '--seed-photo']:
+SKIP_CAPTURES = '--skip-captures' in sys.argv
+for flag in ['--open-display', '--closed-display', '--seed-photo', '--skip-captures']:
     if flag in sys.argv:
         sys.argv.remove(flag)
 
@@ -63,7 +64,7 @@ def watch_output(log_path, device, stop, errors):
                 if line.strip() == 'DUO_ROTATE':
                     control(4, 'Rotate Right')
                 match = re.fullmatch(r'DUO_CAPTURE ([a-z-]+)\n', line)
-                if match:
+                if match and not SKIP_CAPTURES:
                     target = OUT / (match[1] + '.png')
                     subprocess.run(['xcrun', 'simctl', 'io', device, 'screenshot', '--display=primary-1', str(target)], cwd=ROOT, check=True)
             stop.wait(0.2 if opened else 1)
