@@ -148,6 +148,22 @@ try {
       });
       ok("dry down passes dry through the seam", seen.join(",") === "glm:fixture:dry=true", JSON.stringify(seen));
       ok("dry prints the would-remove line", lines.some((l) => l.includes("[dry] would remove worktree")), lines.join(" | "));
+
+      seen.length = 0; lines.length = 0;
+      await down(ctx, ["glm"], adapters, {
+        unregister, processes: () => [123],
+        removeWorktree: () => { seen.push("removed"); },
+      });
+      ok("a surviving process prevents removal after Stop", seen.length === 0
+        && lines.some(line => line.includes("crew row or process remains")));
+
+      seen.length = 0; lines.length = 0;
+      await down(ctx, ["glm"], adapters, {
+        unregister: async () => { writeFileSync(statePath, "fixture\therdr\tglm\tnew-pane\n"); return { removed: true }; },
+        processes: () => [], removeWorktree: () => { seen.push("removed"); },
+      });
+      ok("a seat re-registered during Stop keeps its worktree", seen.length === 0
+        && lines.some(line => line.includes("crew row or process remains")));
     } finally {
       console.log = realLog;
     }

@@ -4,7 +4,7 @@ import { call } from "./core.mjs";
 
 export const runnerRecord = (ctx, project, agent) => join(ctx.seatDir, `${project}-${agent}.runner.json`);
 
-export function seatProcesses(ctx, project, agent) {
+export function seatProcesses(ctx, project, agent, exec = call) {
   if (ctx.env.CREW_NO_PROC_KILL === "1") return [];
   let label = agent, dir = ctx.dir;
   try {
@@ -12,7 +12,9 @@ export function seatProcesses(ctx, project, agent) {
     label = record.label;
     dir = record.dir;
   } catch (error) { if (error.code !== "ENOENT") throw error; }
-  const rows = call("ps", ["-axo", "pid=,ppid=,command="]).stdout.split("\n").map(line => {
+  const snapshot = exec("ps", ["-axo", "pid=,ppid=,command="]);
+  if (snapshot.status !== 0) throw new Error("could not read crew processes");
+  const rows = snapshot.stdout.split("\n").map(line => {
     const match = line.trim().match(/^(\d+)\s+(\d+)\s+(.+)$/);
     return match ? { pid: Number(match[1]), parent: Number(match[2]), command: match[3] } : null;
   }).filter(Boolean);

@@ -8,7 +8,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   assertUnderHome, buildDiskReport, runClean, runDisk, formatHuman,
-  launchdPlist, fmtBytes, dirSize, gitTracked, DAY, freedOnDiskBytes, turnStampPath,
+  launchdPlist, fmtBytes, dirSize, gitTracked, DAY, freedOnDiskBytes,
   SCRATCH_DIRS, SCRATCH_IDLE_MAX,
 } from "../../lib/disk.mjs";
 
@@ -40,7 +40,7 @@ function ageTree(fsmod, root, t) {
   }
 }
 try {
-  // ---- fixture: seat worktrees — dead, live (ps + fresh turn stamp), tracked, stale-stamp ----
+  // ---- fixture: seat worktrees — dead, live processes, tracked, and crew-owned ----
   const dead = join(HOME, ".agent-bus", "worktrees", "proj", "dead-seat");
   const live = join(HOME, ".agent-bus", "worktrees", "proj", "live-seat");
   const tracked = join(HOME, ".agent-bus", "worktrees", "proj", "tracked-seat");
@@ -79,16 +79,12 @@ try {
   // "fresh" means NOW on the FIXED clock: real creation time drifts stale against it
   for (const p of [join(dead, ".agent-bus-out", "fresh-entry"), join(dead, ".agent-bus-out", "fresh-entry", "now.txt"),
     join(dead, ".scratch", "recent.txt"), join(live, ".next")]) ageTree(await import("node:fs"), p, NOW);
-  // the runner's turn stamps: live-seat and stamp-live-seat FRESH (a turn may be live;
-  // stamp-live has NO ps line — the stamp alone must protect it), stamp-seat's stale
-  // (3d — no turn can still be running; the time box kills in hours)
   mkdirSync(join(HOME, ".agent-bus"), { recursive: true });
-  for (const seat of ["live-seat", "stamp-live-seat"]) {
-    writeFileSync(turnStampPath(HOME, "proj", seat), "{}");
-    utimesSync(turnStampPath(HOME, "proj", seat), new Date(NOW), new Date(NOW));
-  }
-  writeFileSync(turnStampPath(HOME, "proj", "stamp-seat"), "{}");
-  utimesSync(turnStampPath(HOME, "proj", "stamp-seat"), new Date(OLD), new Date(OLD));
+  writeFileSync(join(HOME, ".agent-bus", "crew-windows.txt"), "proj\therdr\tstamp-live-seat\tp1\n");
+  // A stamp is not crew liveness, even when it is fresh.
+  const stamp = join(HOME, ".agent-bus", "turnstamp-stamp-seat-proj.json");
+  writeFileSync(stamp, "{}");
+  utimesSync(stamp, new Date(NOW), new Date(NOW));
   const DEAD_BYTES = 1024 + 2048 + 1024 + 1024 + 512 + 256 + 128; // every planned on-disk item
 
   // ---- HF cache fixture: shared-blob layout, the real weights at the end of
@@ -124,7 +120,7 @@ try {
   const exec = (file, args) => {
     calls.push([file, ...args]);
     const a = args.join(" ");
-    if (file === "ps") return { stdout: `node crew-runner ${live}\n/portless serve ${live}\n`, status: 0 };
+    if (file === "ps") return { stdout: `100 1 node /fixture/crew-runner.mjs live-seat ${live}\n101 100 /portless serve ${live}\n`, status: 0 };
     if (file === "opencode" && a.includes("list")) return { stdout: opencodeJson, status: 0 };
     if (file === "xcrun") return { stdout: "-- iOS 17.2 --\n    iPhone (AAA) (Shutdown)\n-- Unavailable: iOS 15.4 --\n    iPhone (BBB) (Shutdown)\n    iPad (CCC) (Shutdown)\n", status: 0 };
     if (file === "git") return { stdout: a.includes(" target") && a.includes("tracked-seat") ? "target/keep.js\n" : "", status: 0 };
@@ -142,7 +138,7 @@ try {
   ok("dead seat's .next is planned for deletion", planPaths.includes(join(dead, ".next")), JSON.stringify(planPaths));
   ok("dead seat's target is planned for deletion", planPaths.includes(join(dead, "target")));
   ok("live seat's .next is never planned", !planPaths.some((p) => p.startsWith(live)));
-  ok("a stale turn stamp does not keep a seat live — stamp-seat's .next is planned",
+  ok("a fresh turn stamp does not keep an unowned dead seat live",
     planPaths.includes(join(stamped, ".next")), JSON.stringify(planPaths));
   ok("git-tracked target is never planned", !planPaths.some((p) => p === join(tracked, "target")));
   ok("only the idle >14d session is planned", JSON.stringify(planSessions) === JSON.stringify(["ses_old"]), JSON.stringify(planSessions));
@@ -156,12 +152,12 @@ try {
     !scratchPaths.some((p) => p.endsWith(".agent-bus-out") || p === join(dead, ".scratch")));
   ok("session inside a live seat worktree is KEPT with a reason", report.kept.some((k) => k.path === live && /ses_livewt/.test(k.reason)));
   ok("live seat .next listed as KEPT", report.kept.some((k) => k.path === join(live, ".next")));
-  ok("a fresh turn stamp alone keeps a seat's scratch — stamp-live has no ps line",
+  ok("a crew state row alone keeps a seat's scratch without a process",
     !report.plan.some((p) => String(p.path || "").startsWith(stampLive))
-    && report.kept.some((k) => k.path === join(stampLive, ".agent-bus-out", "old-but-fresh-stamp") && /turn stamp/.test(k.reason)),
+    && report.kept.some((k) => k.path === join(stampLive, ".agent-bus-out", "old-but-fresh-stamp") && /crew state row/.test(k.reason)),
     JSON.stringify(report.kept.filter((k) => k.path.startsWith(stampLive))));
   ok("live seat's old scratch is KEPT (ps liveness)",
-    report.kept.some((k) => k.path === join(live, ".agent-bus-out", "old-but-live") && /live seat process/.test(k.reason)));
+    report.kept.some((k) => k.path === join(live, ".agent-bus-out", "old-but-live") && /live crew processes/.test(k.reason)));
   ok("tracked target listed as KEPT", report.kept.some((k) => k.path === join(tracked, "target") && /git-tracked/.test(k.reason)));
   ok("fresh scratch listed as KEPT with its age reason",
     report.kept.some((k) => k.path === join(dead, ".agent-bus-out", "fresh-entry") && /touched within/.test(k.reason)));
@@ -186,8 +182,8 @@ try {
     human.includes(`DELETE 512 B ${join(dead, ".agent-bus-out", "old-entry")}`)
     && human.includes(`DELETE 256 B ${join(dead, ".scratch", "old-note.txt")}`),
     human.split("\n").filter((l) => l.includes("DELETE")).join(" | "));
-  ok("drill: KEPT lines carry their reasons", /KEPT: .*live seat process/.test(human) && /KEPT: .*git-tracked/.test(human));
-  ok("drill: KEPT lines name the path, same as DELETE", human.includes(`KEPT: a live seat process uses this worktree  ${join(live, ".next")}`));
+  ok("drill: KEPT lines carry their reasons", /KEPT: .*live crew processes/.test(human) && /KEPT: .*git-tracked/.test(human));
+  ok("drill: KEPT lines name the path, same as DELETE", human.includes(`KEPT: live-seat:proj has live crew processes  ${join(live, ".next")}`));
   ok("drill: HF cache header is formatted, not a raw byte count",
     human.includes(`huggingface cache: ${fmtBytes(HF_TOTAL)}`) && !human.includes(`huggingface cache: ${HF_TOTAL}`));
 

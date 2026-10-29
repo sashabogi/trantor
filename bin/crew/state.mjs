@@ -131,7 +131,7 @@ async function unregisterSeat(ctx, project, persona) {
   return response.json;
 }
 
-export async function down(ctx, args, adapters, { unregister = unregisterSeat, removeWorktree = removeSeatWorktree } = {}) {
+export async function down(ctx, args, adapters, { unregister = unregisterSeat, removeWorktree = removeSeatWorktree, processes = seatProcesses } = {}) {
   const options = parseDownArgs(ctx, args);
   if (options.help) return 0;
   if (options.error) return 1;
@@ -180,6 +180,18 @@ export async function down(ctx, args, adapters, { unregister = unregisterSeat, r
   // with uncommitted changes stays on disk and is named here so the operator can recover it.
   for (const row of seats.values()) {
     if (!row.project) continue;
+    if (!ctx.dry) {
+      try {
+        const tracked = readRows(ctx).some(current => current.project === row.project && current.persona === row.persona);
+        if (tracked || processes(ctx, row.project, row.persona).length) {
+          console.log(`  worktree kept (crew row or process remains): ${row.persona}:${row.project}`);
+          continue;
+        }
+      } catch (error) {
+        console.log(`  worktree kept (crew liveness unknown: ${error.message}): ${row.persona}:${row.project}`);
+        continue;
+      }
+    }
     const r = await removeWorktree({ project: row.project, agent: row.persona, home: ctx.home || undefined, env: ctx.env, dry: ctx.dry });
     if (r.status === "removed") console.log(`  worktree removed: ${r.path} (branch seat/${row.persona} kept)`);
     else if (r.status === "kept") console.log(`  worktree kept (${r.reason}): ${r.path}`);

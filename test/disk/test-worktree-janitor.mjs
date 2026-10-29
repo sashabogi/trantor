@@ -73,7 +73,7 @@ try {
   const dirty = wt("proj", "dirty");           // 8d old, uncommitted changes → KEPT, NAMED
   const fresh = wt("proj", "fresh");           // touched now → KEPT
   const live = wt("proj", "live");             // a live process names its path → KEPT
-  const stamped = wt("proj", "stamped");       // fresh turn stamp → KEPT
+  const stamped = wt("proj", "stamped");       // crew row alone → KEPT
   for (const w of [idle, dirty, fresh, live, stamped]) {
     mkdirSync(join(w, "src"), { recursive: true });
     writeFileSync(join(w, "src", "a.js"), "x".repeat(2048));
@@ -97,7 +97,7 @@ try {
   ageTree(stamped, NOW);
 
   const { exec } = makeExec({
-    psLines: [`/bin/sh ${live}/some-server`],
+    psLines: [`100 1 node /fixture/crew-runner.mjs live ${live}`, "101 100 worker"],
     dirty: { [dirty]: " M src/a.js" },
     tracked: { [join(".agent-bus-out", "vendored", "target")]: "some/file" },
   });
@@ -116,18 +116,33 @@ try {
   ok("a freshly touched worktree is kept", !!keptReasons[fresh], JSON.stringify(Object.keys(keptReasons)));
   ok("a worktree a live process uses is kept", !!keptReasons[live]);
   ok("a freshly touched worktree is kept by the age rule", (keptReasons[stamped] || "").includes("touched within 7 days"), keptReasons[stamped]);
-  // Age the tree past the window; now ONLY a fresh turn stamp may keep it.
   ageTree(stamped, OLD7);
-  const stale2 = scanStaleWorktrees({ fs: nodeFs, exec, home: HOME, now: NOW, worktreesRoot: ROOT, entryBudget: 50_000 });
-  ok("an 8d-old clean dead worktree with no stamp is planned",
-    stale2.plan.some((p) => p.path === stamped), JSON.stringify(stale2.plan.map((p) => p.path)));
-  const stampPath = join(HOME, ".agent-bus", "turnstamp-stamped-proj.json");
+  const statePath = join(HOME, ".agent-bus", "crew-windows.txt");
+  const scan = (run = exec) => scanStaleWorktrees({ fs: nodeFs, exec: run, home: HOME, now: NOW, worktreesRoot: ROOT, entryBudget: 50_000 });
+  const stale2 = scan();
+  ok("an old clean seat without a crew row or process is planned", stale2.plan.some(p => p.path === stamped));
+  writeFileSync(statePath, "proj\therdr\tstamped\tp1\nother\therdr\tidle-clean\tp2\n");
+  const stale3 = scan();
+  ok("a crew row alone keeps an old seat", !stale3.plan.some(p => p.path === stamped)
+    && stale3.kept.some(k => k.path === stamped && k.reason.includes("crew state row")));
+  ok("the same persona in another project does not hold this seat", stale3.plan.some(p => p.path === idle));
+  const stampPath = join(HOME, ".agent-bus", "turnstamp-idle-clean-proj.json");
   writeFileSync(stampPath, "{}");
   utimesSync(stampPath, new Date(NOW), new Date(NOW));
-  const stale3 = scanStaleWorktrees({ fs: nodeFs, exec, home: HOME, now: NOW, worktreesRoot: ROOT, entryBudget: 50_000 });
-  ok("with a fresh turn stamp the same worktree is kept",
-    stale3.plan.every((p) => p.path !== stamped) && (stale3.kept.find((k) => k.path === stamped)?.reason || "").includes("turn stamp"),
-    JSON.stringify(stale3.plan.map((p) => p.path)));
+  ok("fresh turnstamp does not replace crew liveness", scan().plan.some(p => p.path === idle));
+  const unrelated = makeExec({ psLines: [`200 1 /bin/sh ${idle}/some-server`] }).exec;
+  ok("a path mentioned by an unrelated process does not become crew liveness", scan(unrelated).plan.some(p => p.path === idle));
+  const missingPs = (file, args) => file === "ps" ? { stdout: "", status: 1 } : exec(file, args);
+  ok("failed process lookup keeps worktrees", scan(missingPs).plan.length === 0);
+  const seatsDir = join(HOME, ".agent-bus", "seats");
+  mkdirSync(seatsDir, { recursive: true });
+  writeFileSync(join(seatsDir, "proj-idle-clean.runner.json"), JSON.stringify({ label: "promoted", dir: "/fixture/source" }));
+  const promoted = makeExec({ psLines: ["300 1 node /fixture/crew-runner.mjs promoted /fixture/source", "301 300 worker"] }).exec;
+  ok("a promoted runner record keeps the seat without a crew row", !scan(promoted).plan.some(p => p.path === idle));
+  const source = makeExec({ psLines: ["400 1 node /fixture/crew-runner.mjs live /fixture/main"] }).exec;
+  const sourceExec = (file, args) => file === "git" && args.includes("list")
+    ? { stdout: "worktree /fixture/main\n", status: 0 } : source(file, args);
+  ok("an ordinary runner is found by its source checkout", !scan(sourceExec).plan.some(p => p.path === live));
 
   // ---- scanNestedBuildOutput ----
   console.log("\nscanNestedBuildOutput finds DerivedData/xcresult/target inside scratch:");
@@ -185,6 +200,28 @@ try {
     { exec: dirtyExec, home: HOME, now: NOW, worktreesRoot: ROOT, remove: () => { throw new Error("must not be called"); }, log: () => {} },
   );
   ok("the re-check fails the item with the dirty reason", results2.length === 1 && !results2[0].ok && results2[0].error.includes("uncommitted changes"), JSON.stringify(results2));
+
+  console.log("\nrunClean checks crew ownership again before each on-disk deletion:");
+  const racePlan = [
+    { type: "seat-worktree", path: idle },
+    { type: "build-dir", path: join(idle, "target") },
+    { type: "scratch-entry", path: join(idle, ".agent-bus-out", "build") },
+    { type: "build-output", path: dd },
+  ];
+  writeFileSync(statePath, "proj\therdr\tidle-clean\tnew-pane\n");
+  const rowRace = await runClean({ plan: racePlan }, {
+    exec: cleanExec, home: HOME, now: NOW, log: () => {},
+    remove: () => { throw new Error("must not remove a registered seat"); },
+  });
+  ok("a newly registered seat keeps its worktree and all output", rowRace.length === 4
+    && rowRace.every(r => !r.ok && r.error.includes("crew state row")));
+  writeFileSync(statePath, "");
+  const processRace = await runClean({ plan: racePlan }, {
+    exec: promoted, home: HOME, now: NOW, log: () => {},
+    remove: () => { throw new Error("must not remove a running seat"); },
+  });
+  ok("a restarted runner keeps its worktree and all output", processRace.length === 4
+    && processRace.every(r => !r.ok && r.error.includes("live crew processes")));
 
   // ---- runDisk --dry-run never cleans ----
   console.log("\nrunDisk: --dry-run wins over --clean:");
