@@ -5,13 +5,40 @@ import TrantorStore
 
 public struct FleetView: View {
     @Environment(AppModel.self) private var model
+    @Environment(\.horizontalSizeClass) private var sizeClass
     @State private var showCost = false
+    @State private var selectedID: String?
 
     public init() {}
 
     public var body: some View {
+        Group {
+            if sizeClass == .regular && !showCost {
+                DuoSplitView {
+                    sessions
+                } detail: {
+                    if let peer = model.fleet.peers.first(where: { $0.id == selectedID }) ?? model.fleet.peers.first {
+                        FleetSeatDetail(peer: peer).id(peer.id)
+                    } else {
+                        EmptyState(title: "No seats", systemImage: "person.3")
+                    }
+                }
+            } else {
+                sessions.modifier(DuoContentBounds())
+            }
+        }
+        .auroraScreen(model.standingState().wash)
+        .navigationTitle("Fleet")
+        .navigationBarTitleDisplayMode(.inline)
+        .navigationDestination(for: Peer.self) { FleetSeatDetail(peer: $0).modifier(DuoContentBounds()) }
+        .refreshable {
+            if showCost { await model.cost.refresh() } else { await model.fleet.refresh() }
+        }
+    }
+
+    private var sessions: some View {
         let fleet = model.fleet
-        ScrollView {
+        return ScrollView {
             LazyVStack(alignment: .leading, spacing: Space.md) {
                 StatusHeadline("\(fleet.online.count) online · \(fleet.peers.count) seats")
                     .padding(.top, Space.md)
@@ -34,17 +61,21 @@ public struct FleetView: View {
                     }
                     Eyebrow("Seats").padding(.top, Space.sm)
                     if fleet.peers.isEmpty { EmptyState(title: "No seats", systemImage: "person.3").padding(Space.md).auroraPanel() }
-                    ForEach(fleet.peers) { PeerRow(peer: $0) }
+                    ForEach(fleet.peers) { peer in
+                        if sizeClass == .regular {
+                            Button { selectedID = peer.id } label: { PeerRow(peer: peer) }
+                                .buttonStyle(.plain)
+                                .accessibilityIdentifier("fleet.select.\(peer.id)")
+                                .accessibilityAddTraits((selectedID ?? fleet.peers.first?.id) == peer.id ? [.isSelected] : [])
+                        } else {
+                            NavigationLink(value: peer) { PeerRow(peer: peer) }.buttonStyle(.plain)
+                        }
+                    }
                 }
             }
             .padding(.horizontal, Space.lg).padding(.bottom, Space.xl)
         }
-        .auroraScreen(model.standingState().wash)
-        .navigationTitle("Fleet")
-        .navigationBarTitleDisplayMode(.inline)
-        .refreshable {
-            if showCost { await model.cost.refresh() } else { await fleet.refresh() }
-        }
+        .accessibilityIdentifier("fleet.sessions")
     }
 
     private func collisionText(_ collision: JSONValue) -> String {
@@ -53,6 +84,54 @@ public struct FleetView: View {
             if case .array(let names) = value { return names.compactMap(\.stringValue).joined(separator: ", ") } else { return nil }
         } ?? ""
         return who.isEmpty ? file : "\(file): \(who)"
+    }
+}
+
+private struct FleetSeatDetail: View {
+    @Environment(AppModel.self) private var model
+    let peer: Peer
+    @State private var draft = ""
+    @State private var sending = false
+    @FocusState private var composing: Bool
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: Space.md) {
+                PeerRow(peer: peer)
+                AuroraSection("Seat") {
+                    if !peer.status.isEmpty { Detail(label: "Status", text: peer.status) }
+                    if !peer.health.isEmpty { Detail(label: "Health", text: peer.health) }
+                    if !peer.project.isEmpty { Detail(label: "Project", text: peer.project) }
+                    if !peer.phase.isEmpty { Detail(label: "Phase", text: peer.phase) }
+                    if !peer.model.isEmpty { Detail(label: "Model", text: peer.model) }
+                    if peer.lastSeen > 0 { HStack { Eyebrow("Last seen"); TimeAgo(millis: peer.lastSeen) } }
+                }
+            }.padding(Space.lg)
+        }
+        .scrollDismissesKeyboard(.interactively)
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            VStack(alignment: .leading, spacing: Space.sm) {
+                if let error = model.inbox.sendError { Text(error).font(.tCaption).foregroundStyle(Palette.down) }
+                Composer(focused: composing) {
+                    TextField("Message this seat", text: $draft, axis: .vertical)
+                        .font(.ui(16)).lineLimit(1...5).focused($composing)
+                        .accessibilityIdentifier("fleet.composer")
+                    Button("Send", systemImage: "arrow.up") {
+                        let message = draft
+                        sending = true
+                        Task {
+                            await model.inbox.send(to: peer.session, text: message, project: peer.project)
+                            if model.inbox.sendError == nil && draft == message { draft = "" }
+                            sending = false
+                        }
+                    }
+                    .buttonStyle(AuroraButtonStyle(.primary))
+                    .disabled(sending || draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    .accessibilityIdentifier("fleet.send")
+                }
+            }.padding(Space.lg)
+        }
+        .accessibilityIdentifier("fleet.detail")
     }
 }
 
