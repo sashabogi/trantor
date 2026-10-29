@@ -118,6 +118,7 @@ private struct FleetSeatDetail: View {
                 Composer(focused: composing) {
                     TextField("Message this seat", text: $draft, axis: .vertical)
                         .font(.ui(16)).lineLimit(1...5).focused($composing)
+                        .padding(.vertical, Space.sm)
                         .accessibilityIdentifier("fleet.composer")
                     Button("Send", systemImage: "arrow.up") {
                         let message = draft

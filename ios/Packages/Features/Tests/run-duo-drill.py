@@ -7,7 +7,6 @@ import re
 import subprocess
 import sys
 import threading
-import time
 
 sys.dont_write_bytecode = True
 ROOT = Path(__file__).resolve().parents[4]
@@ -17,8 +16,11 @@ drill = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(drill)
 drill.OUT = OUT
 OPEN_DISPLAY = '--open-display' in sys.argv
-if OPEN_DISPLAY:
-    sys.argv.remove('--open-display')
+CLOSED_DISPLAY = '--closed-display' in sys.argv
+SEED_PHOTO = '--seed-photo' in sys.argv
+for flag in ['--open-display', '--closed-display', '--seed-photo']:
+    if flag in sys.argv:
+        sys.argv.remove(flag)
 
 
 def control(button, expected_help):
@@ -45,7 +47,13 @@ def watch_output(log_path, device, stop, errors):
                     raise RuntimeError('The Duo drill requires the owned Trantor Duo 13 simulator')
                 if owned['state'] == 'Booted':
                     subprocess.run(['xcrun', 'simctl', 'bootstatus', device, '-b'], cwd=ROOT, check=True, stdout=subprocess.DEVNULL)
-                    control(7, 'Open')
+                    if OPEN_DISPLAY:
+                        control(7, 'Open')
+                    elif CLOSED_DISPLAY:
+                        control(5, 'Closed')
+                    if SEED_PHOTO:
+                        photo = ROOT / 'ios/App/Assets.xcassets/AppIcon.appiconset/icon-1024.png'
+                        subprocess.run(['xcrun', 'simctl', 'addmedia', device, str(photo)], cwd=ROOT, check=True)
                     opened = True
             with log_path.open() as source:
                 source.seek(cursor)
@@ -71,7 +79,7 @@ def run_monitored(command, device, log):
     stop = threading.Event()
     errors = []
     watcher = None
-    if OPEN_DISPLAY:
+    if OPEN_DISPLAY or CLOSED_DISPLAY or SEED_PHOTO:
         watcher = threading.Thread(target=watch_output, args=(Path(log.name), device, stop, errors), daemon=True)
         watcher.start()
     try:
