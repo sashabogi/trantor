@@ -46,12 +46,21 @@ struct CrewView: View {
                     .buttonStyle(AuroraButtonStyle())
             }
         }.padding(Space.md).auroraPanel().padding(.horizontal, Space.lg)
+            .accessibilityElement(children: .contain)
+            .accessibilityIdentifier("crew.summary")
     }
 
     private var crewList: some View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: Space.md) {
                 StatusHeadline("\(store.seats.count) seats · \(model.standingState(for: store).working) working")
+                if typing {
+                    let waiting = model.decisions.items.filter { $0.project == store.project }.count
+                    if waiting > 0 {
+                        Button("\(waiting) waiting on you", systemImage: "checkmark.seal") { model.selection = .decisions }
+                            .buttonStyle(AuroraButtonStyle())
+                    }
+                }
                 if !typing {
                     ViewThatFits(in: .horizontal) {
                         HStack { controls }

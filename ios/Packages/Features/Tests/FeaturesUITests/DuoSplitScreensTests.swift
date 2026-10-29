@@ -64,6 +64,12 @@ final class DuoSplitScreensTests: XCTestCase {
                 XCTAssertLessThanOrEqual(app.buttons[send].frame.maxY, app.keyboards.firstMatch.frame.minY + 1)
             }
             capture("\(screen)-\(pose)-keyboard")
+            if screen == "project" && !landscape {
+                let summary = app.otherElements["crew.summary"]
+                XCTAssertTrue(summary.waitForExistence(timeout: 5))
+                XCTAssertLessThanOrEqual(summary.frame.maxY, app.staticTexts["Context use"].frame.minY + 1,
+                                         "Portrait typing keeps the crew strip above the chat")
+            }
             app.terminate()
         }
     }
