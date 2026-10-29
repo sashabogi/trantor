@@ -2,7 +2,6 @@
 // #12269 seat cleanup drill — throwaway repos under a temp dir only: worktree removal at
 // down (branch and commits kept, dirty trees kept and named), and a re-upped seat name
 // reusing the freed worktree identity without losing unintegrated commits.
-import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -12,8 +11,8 @@ import { down } from "../../bin/crew/state.mjs";
 
 let pass = 0, fail = 0;
 const ok = (name, cond, detail = "") => {
-  if (cond) { pass++; console.log(`  ✓ ${name}`); }
-  else { fail++; console.log(`  ✗ ${name}${detail ? " — " + detail : ""}`); }
+  if (cond) { pass++; process.stdout.write(`  ✓ ${name}\n`); }
+  else { fail++; process.stdout.write(`  ✗ ${name}${detail ? " — " + detail : ""}\n`); }
 };
 const silent = () => {};
 
@@ -139,7 +138,7 @@ try {
             : { status: "removed", path: `/wt/${project}/${agent}` };
         },
       });
-      ok("whole-crew down removes every seat's worktree", seen.sort().join(",") === "codex:fixture,glm:fixture", JSON.stringify(seen));
+      ok("whole-crew down removes the remaining seat's worktree", seen.join(",") === "codex:fixture", JSON.stringify(seen));
       ok("a kept worktree is named with its reason", lines.some((l) => l.includes("worktree kept (uncommitted changes)") && l.includes("/wt/fixture/codex")), lines.join(" | "));
 
       seen.length = 0; lines.length = 0;

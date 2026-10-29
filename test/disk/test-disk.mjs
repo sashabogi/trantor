@@ -221,9 +221,9 @@ try {
   const run = await runDisk({ ...d, args: [] });
   ok("runDisk without --clean never cleans", run.results.length === 0 && removed.length === before + 7);
 
-  // ---- launchd plist is Monday 09:00 running --weekly ----
+  // ---- launchd plist is daily at 09:00 ----
   const plist = launchdPlist({ nodePath: "/usr/local/bin/node", scriptPath: "/x/bin/disk.mjs", logPath: "/x/log" });
-  ok("plist fires Weekday 1 at 09:00 with --weekly", plist.includes("<key>Weekday</key><integer>1</integer>") && plist.includes("<key>Hour</key><integer>9</integer>") && plist.includes("--weekly"));
+  ok("plist fires daily at 09:00 with --daily", !plist.includes("<key>Weekday</key>") && plist.includes("<key>Hour</key><integer>9</integer>") && plist.includes("--daily"));
 
   // ---- guards: dirSize ignores symlinked dirs, gitTracked reads git ----
   const symW = mkdtempSync(join(tmpdir(), "trantor-disk-sym-"));
