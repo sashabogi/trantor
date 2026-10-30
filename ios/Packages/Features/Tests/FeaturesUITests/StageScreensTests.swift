@@ -9,8 +9,8 @@ final class StageScreensTests: XCTestCase {
         XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "waiting on you")).firstMatch.waitForExistence(timeout: 10))
         capture("decisions")
 
-        if !app.buttons["Projects"].isHittable { app.buttons["Show Sidebar"].tap() }
-        app.buttons["Projects"].tap()
+        // iPad's top tab bar nests a same-named button in each tab, so tabs use firstMatch (#12274).
+        app.buttons["Projects"].firstMatch.tap()
         let project = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "building: iOS companion")).firstMatch
         XCTAssertTrue(project.waitForExistence(timeout: 5))
         capture("projects")
@@ -33,7 +33,7 @@ final class StageScreensTests: XCTestCase {
         XCTAssertTrue(app.buttons["Live hub run, incomplete"].exists)
         capture("card-detail")
 
-        app.buttons["Feed"].tap()
+        app.buttons["Feed"].firstMatch.tap()
         XCTAssertTrue(app.staticTexts["hold.opened"].waitForExistence(timeout: 5))
         capture("feed")
         app.buttons["Holds"].tap()
@@ -70,7 +70,7 @@ final class StageScreensTests: XCTestCase {
         capture("compose")
         app.buttons["Cancel"].tap()
 
-        app.buttons["Fleet"].tap()
+        app.buttons["Fleet"].firstMatch.tap()
         XCTAssertTrue(app.buttons["Seats"].waitForExistence(timeout: 5))
         capture("fleet")
         app.buttons.matching(NSPredicate(format: "label == %@", "Cost")).allElementsBoundByIndex.last?.tap()
@@ -81,7 +81,7 @@ final class StageScreensTests: XCTestCase {
         XCTAssertTrue(app.staticTexts["$3.21"].waitForExistence(timeout: 5))
         capture("cost")
 
-        app.buttons["Decisions"].tap()
+        app.buttons["Decisions"].firstMatch.tap()
         XCTAssertTrue(app.buttons["Settings"].waitForExistence(timeout: 5))
         app.buttons["Settings"].tap()
         XCTAssertTrue(app.switches["Holds"].waitForExistence(timeout: 5))
