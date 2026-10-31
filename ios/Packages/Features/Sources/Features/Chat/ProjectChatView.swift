@@ -34,6 +34,8 @@ struct ProjectView: View {
         .onChange(of: model.chat(project: project).focusedToolID, initial: true) { _, target in
             if target != nil { section = "chat" }
         }
+        // The panes clip their own wash, so the screen carries one to the display edges (#12300).
+        .auroraScreen(model.standingState(for: model.chat(project: project)).wash)
         .navigationTitle(project)
         .navigationBarTitleDisplayMode(.inline)
         // The Chat/Board/Crew picker lives in the nav bar so the transcript starts high on screen.
@@ -117,7 +119,7 @@ struct ProjectChatView: View {
             }
             composer
         }
-        .auroraScreen(standingState.wash)
+        .auroraScreen(model.standingState(for: store).wash)
         // A destination can appear before the scene becomes active; load its first snapshot on appearance.
         .task { await store.refresh() }
         .task(id: scenePhase) {
@@ -135,15 +137,6 @@ struct ProjectChatView: View {
         followingBottom = false
         proxy.scrollTo(turn.idx, anchor: .top)
         store.focusedToolID = nil
-    }
-
-    private var standingState: AuroraStandingState {
-        let questions = store.turns.flatMap(\.blocks).filter { block in
-            guard block.isQuestion, block.answer == nil else { return false }
-            if case .answered = store.answers[block.toolID] { return false }
-            return true
-        }.count
-        return model.standingState(project: store.project, questions: questions)
     }
 
     private var header: some View {

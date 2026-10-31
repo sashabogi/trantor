@@ -45,6 +45,15 @@ extension AppModel {
         return AuroraStandingState(peers: crew.seats, waiting: pending)
     }
 
+    func standingState(for chat: ChatStore) -> AuroraStandingState {
+        let questions = chat.turns.flatMap(\.blocks).filter { block in
+            guard block.isQuestion, block.answer == nil else { return false }
+            if case .answered = chat.answers[block.toolID] { return false }
+            return true
+        }.count
+        return standingState(project: chat.project, questions: questions)
+    }
+
     func standingState(project: String? = nil, questions: Int = 0) -> AuroraStandingState {
         let peers = fleet.peers.filter { project == nil || $0.project == project }
         let pending = decisions.items.filter { project == nil || $0.project == project }.count
