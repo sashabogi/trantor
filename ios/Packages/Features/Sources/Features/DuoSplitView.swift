@@ -4,8 +4,14 @@ import UIKit
 private struct DuoTypingKey: EnvironmentKey { static let defaultValue = false }
 private struct DuoCompactPortraitKey: EnvironmentKey { static let defaultValue = false }
 private struct DuoComposingKey: EnvironmentKey { static let defaultValue: Binding<Bool>? = nil }
+private struct DuoPaneKey: EnvironmentKey { static let defaultValue = false }
 
 extension EnvironmentValues {
+    // A pane leaves the wash to its screen so the gradient runs once across the fold (#12319).
+    var duoPane: Bool {
+        get { self[DuoPaneKey.self] }
+        set { self[DuoPaneKey.self] = newValue }
+    }
     var duoComposing: Binding<Bool>? {
         get { self[DuoComposingKey.self] }
         set { self[DuoComposingKey.self] = newValue }
@@ -34,6 +40,7 @@ struct DuoSplitView<Leading: View, Detail: View>: View {
                 leading().frame(maxWidth: .infinity)
                 detail().frame(maxWidth: .infinity)
             }
+            .environment(\.duoPane, true)
         }
     }
 }
@@ -79,6 +86,7 @@ private struct DuoArrangement<Leading: View, Detail: View>: View {
                 }
             }
             .arrangementViewStyle(.split)
+            .environment(\.duoPane, true)
         }
         // Keep the split's pose stable while making room for the keyboard inside its panes.
         .ignoresSafeArea(.keyboard, edges: .bottom)

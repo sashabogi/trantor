@@ -29,6 +29,7 @@ struct CrewView: View {
         .refreshable { await store.refresh(); await store.refreshCommands() }
         .sheet(item: $picker) { selection in
             CrewRosterSheet(store: store, replacing: selection.from)
+                .environment(\.duoPane, false)
         }
         .alert("Stop the crew?", isPresented: $stopCrew) {
             Button("Stop the crew", role: .destructive) { Task { await store.command(.down) } }

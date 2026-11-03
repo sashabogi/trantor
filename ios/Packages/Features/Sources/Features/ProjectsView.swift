@@ -155,7 +155,8 @@ public struct BoardView: View {
         }
         .auroraScreen(model.standingState(project: project).wash)
         .navigationTitle(project)
-        .navigationDestination(for: Card.self) { CardDetailView(card: $0) }
+        // Inside a Duo pane the card still needs its own wash (#12319).
+        .navigationDestination(for: Card.self) { CardDetailView(card: $0).environment(\.duoPane, false) }
         .refreshable { await board.load(project: project) }
         .task(id: project) { await board.load(project: project) }
         .onChange(of: board.lanes.map(\.status)) { _, statuses in

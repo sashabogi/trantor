@@ -64,10 +64,11 @@ extension AppModel {
 /// Reused by the phone screens, with one wash behind the whole scrolling surface.
 private struct AuroraScreen: ViewModifier {
     let state: AuroraState
+    @Environment(\.duoPane) private var inPane
     func body(content: Content) -> some View {
         content
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .background { AuroraBackground(state: state) }
+            .background { if !inPane { AuroraBackground(state: state) } }
             .foregroundStyle(Palette.text)
             .toolbarBackground(.hidden, for: .navigationBar)
     }

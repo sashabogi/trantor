@@ -49,6 +49,7 @@ final class DuoSplitScreensTests: XCTestCase {
             XCTAssertFalse(app.keyboards.firstMatch.exists, "The plain pose must have its keyboard hidden")
             capture("\(screen)-\(pose)")
             assertGroundReachesEdges(app, pose: pose)
+            if screen == "project" && !landscape { assertNoSeamAtFold(app) }
             let full = app.windows.firstMatch.frame
             if landscape {
                 XCTAssertGreaterThan(full.width, full.height)
@@ -80,14 +81,26 @@ final class DuoSplitScreensTests: XCTestCase {
     @MainActor private func assertGroundReachesEdges(_ app: XCUIApplication, pose: String) {
         guard let image = app.windows.firstMatch.screenshot().image.cgImage else { return XCTFail("No screenshot") }
         for (edge, y) in [("top", 0.02), ("bottom", 0.985)] {
-            var pixel = [UInt8](repeating: 0, count: 4)
-            let context = CGContext(data: &pixel, width: 1, height: 1, bitsPerComponent: 8, bytesPerRow: 4,
-                                    space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)
-            let sample = CGRect(x: CGFloat(image.width) * 0.1, y: CGFloat(image.height) * y, width: 1, height: 1)
-            guard let dot = image.cropping(to: sample) else { return XCTFail("No \(edge) sample") }
-            context?.draw(dot, in: CGRect(x: 0, y: 0, width: 1, height: 1))
-            XCTAssertGreaterThan(pixel[0...2].max() ?? 0, 5, "\(pose) \(edge) edge is black")
+            XCTAssertGreaterThan(pixel(image, x: 0.1, y: y).max() ?? 0, 5, "\(pose) \(edge) edge is black")
         }
+    }
+
+    // One wash spans both panes, so its color doesn't step at the fold (#12319).
+    @MainActor private func assertNoSeamAtFold(_ app: XCUIApplication) {
+        guard let image = app.windows.firstMatch.screenshot().image.cgImage else { return XCTFail("No screenshot") }
+        let above = pixel(image, x: 0.01, y: 0.47), below = pixel(image, x: 0.01, y: 0.53)
+        XCTAssertEqual(above.count, 3)
+        XCTAssertLessThan(zip(above, below).map { abs($0 - $1) }.max() ?? 255, 12, "portrait wash steps at the fold")
+    }
+
+    private func pixel(_ image: CGImage, x: Double, y: Double) -> [Int] {
+        var bytes = [UInt8](repeating: 0, count: 4)
+        let context = CGContext(data: &bytes, width: 1, height: 1, bitsPerComponent: 8, bytesPerRow: 4,
+                                space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)
+        let sample = CGRect(x: Double(image.width) * x, y: Double(image.height) * y, width: 1, height: 1)
+        guard let dot = image.cropping(to: sample) else { return [] }
+        context?.draw(dot, in: CGRect(x: 0, y: 0, width: 1, height: 1))
+        return bytes[0...2].map { Int($0) }
     }
 
     @MainActor private func capture(_ name: String) {
