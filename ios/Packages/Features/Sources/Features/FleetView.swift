@@ -24,13 +24,13 @@ public struct FleetView: View {
                     }
                 }
             } else {
-                sessions.modifier(DuoContentBounds())
+                sessions
             }
         }
         .auroraScreen(model.standingState().wash)
         .navigationTitle("Fleet")
         .navigationBarTitleDisplayMode(.inline)
-        .navigationDestination(for: Peer.self) { FleetSeatDetail(peer: $0).modifier(DuoContentBounds()) }
+        .navigationDestination(for: Peer.self) { FleetSeatDetail(peer: $0) }
         .refreshable {
             if showCost { await model.cost.refresh() } else { await model.fleet.refresh() }
         }

@@ -17,9 +17,10 @@ SPEC.loader.exec_module(drill)
 drill.OUT = OUT
 OPEN_DISPLAY = '--open-display' in sys.argv
 CLOSED_DISPLAY = '--closed-display' in sys.argv
+HALF_FOLD = '--half-fold' in sys.argv
 SEED_PHOTO = '--seed-photo' in sys.argv
 SKIP_CAPTURES = '--skip-captures' in sys.argv
-for flag in ['--open-display', '--closed-display', '--seed-photo', '--skip-captures']:
+for flag in ['--open-display', '--closed-display', '--half-fold', '--seed-photo', '--skip-captures']:
     if flag in sys.argv:
         sys.argv.remove(flag)
 
@@ -52,6 +53,8 @@ def watch_output(log_path, device, stop, errors):
                         control(7, 'Open')
                     elif CLOSED_DISPLAY:
                         control(5, 'Closed')
+                    elif HALF_FOLD:
+                        control(6, 'Partially Open')
                     if SEED_PHOTO:
                         photo = ROOT / 'ios/App/Assets.xcassets/AppIcon.appiconset/icon-1024.png'
                         subprocess.run(['xcrun', 'simctl', 'addmedia', device, str(photo)], cwd=ROOT, check=True)
@@ -80,11 +83,11 @@ original_run = drill.run_monitored
 
 
 def run_monitored(command, device, log):
-    command = command + ['-sdk', 'iphonesimulator27.1']
+    command = command + ['-sdk', 'iphonesimulator']
     stop = threading.Event()
     errors = []
     watcher = None
-    if OPEN_DISPLAY or CLOSED_DISPLAY or SEED_PHOTO:
+    if OPEN_DISPLAY or CLOSED_DISPLAY or HALF_FOLD or SEED_PHOTO:
         watcher = threading.Thread(target=watch_output, args=(Path(log.name), device, stop, errors), daemon=True)
         watcher.start()
     try:

@@ -72,19 +72,12 @@ final class DuoNavigationTests: XCTestCase {
         }
     }
 
-    func testSingleColumnControlsAvoidVerticalAndHorizontalDivisions() {
-        let available = CGRect(x: 0, y: 0, width: 800, height: 600)
+    func testReplyInsetClearsOnlyAVerticalFoldItCrosses() {
         let vertical = CGRect(x: 390, y: 0, width: 20, height: 600)
-        let right = duoSingleColumnBounds(in: available, divisions: [vertical], toolbarEdge: .trailing)
-        XCTAssertEqual(right, CGRect(x: 410, y: 0, width: 390, height: 600))
-        XCTAssertFalse(right.intersects(vertical))
-        let horizontal = CGRect(x: 0, y: 290, width: 800, height: 20)
-        let bottom = duoSingleColumnBounds(in: available, divisions: [horizontal], toolbarEdge: nil)
-        XCTAssertEqual(bottom, CGRect(x: 0, y: 310, width: 800, height: 290))
-        XCTAssertFalse(bottom.intersects(horizontal))
-        XCTAssertEqual(duoSingleColumnBounds(in: available, divisions: [], toolbarEdge: .trailing), available)
-        XCTAssertEqual(duoSingleColumnBounds(in: available, divisions: [vertical], toolbarEdge: .leading),
-                       CGRect(x: 0, y: 0, width: 390, height: 600))
+        XCTAssertEqual(duoFoldClearInset(width: 800, divisions: [vertical]), 410)
+        XCTAssertEqual(duoFoldClearInset(width: 800, divisions: [CGRect(x: 0, y: 290, width: 800, height: 20)]), 0)
+        XCTAssertEqual(duoFoldClearInset(width: 800, divisions: []), 0)
+        XCTAssertEqual(duoFoldClearInset(width: 300, divisions: [vertical]), 0)
     }
 
     private func settle(_ window: UIWindow) async throws {

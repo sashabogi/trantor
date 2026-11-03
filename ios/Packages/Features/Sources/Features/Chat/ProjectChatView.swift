@@ -25,7 +25,6 @@ struct ProjectView: View {
                     else if section == "board" { BoardView(project: project) }
                     else { CrewView(store: model.crew(project: project)) }
                 }
-                .modifier(DuoContentBounds())
             }
         }
         .onAppear {

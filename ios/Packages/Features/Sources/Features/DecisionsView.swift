@@ -32,7 +32,7 @@ public struct DecisionsView: View {
                     .accessibilityIdentifier("decisions.detail")
                 }
             } else {
-                queue.modifier(DuoContentBounds())
+                queue
             }
         }
         .auroraScreen(model.standingState().wash)

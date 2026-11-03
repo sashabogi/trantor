@@ -91,6 +91,7 @@ struct ThreadView: View {
                     TextField("Reply", text: $text, axis: .vertical)
                         .font(.ui(16)).lineLimit(1...5).focused($composing)
                         .padding(.horizontal, Space.sm)
+                        .accessibilityIdentifier("thread.reply")
                     Button("Send", systemImage: "arrow.up") {
                         let body = text
                         guard let thread else { return }
@@ -101,7 +102,7 @@ struct ThreadView: View {
                 }
             }
             .padding(Space.lg)
-
+            .modifier(DuoFoldClear())
         }
         .auroraScreen(model.standingState().wash)
         .navigationTitle(counterpart)
