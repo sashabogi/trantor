@@ -9,12 +9,13 @@ struct ProjectView: View {
     @Environment(\.horizontalSizeClass) private var sizeClass
     let project: String
     @State private var section = "chat"
+    @State private var openCard: Card?
 
     var body: some View {
         Group {
             if sizeClass == .regular {
                 DuoSplitView(compactLeadingWhenTyping: true) {
-                    if section == "board" { BoardView(project: project) }
+                    if section == "board" { BoardView(project: project) { openCard = $0 } }
                     else { CrewView(store: model.crew(project: project)) }
                 } detail: {
                     ProjectChatView(store: model.chat(project: project))
@@ -22,7 +23,7 @@ struct ProjectView: View {
             } else {
                 VStack(spacing: 0) {
                     if section == "chat" { ProjectChatView(store: model.chat(project: project)) }
-                    else if section == "board" { BoardView(project: project) }
+                    else if section == "board" { BoardView(project: project) { openCard = $0 } }
                     else { CrewView(store: model.crew(project: project)) }
                 }
             }
@@ -37,6 +38,8 @@ struct ProjectView: View {
         .auroraScreen(model.standingState(for: model.chat(project: project)).wash)
         .navigationTitle(project)
         .navigationBarTitleDisplayMode(.inline)
+        // Declared outside the arrangement view, which navigation must stay out of (#12360).
+        .navigationDestination(item: $openCard) { CardDetailView(card: $0) }
         // The Chat/Board/Crew picker lives in the nav bar so the transcript starts high on screen.
         .toolbar {
             ToolbarItem(placement: .principal) {

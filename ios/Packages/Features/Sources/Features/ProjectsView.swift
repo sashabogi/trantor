@@ -124,9 +124,13 @@ struct ProjectRow: View {
 public struct BoardView: View {
     @Environment(AppModel.self) private var model
     let project: String
+    var open: ((Card) -> Void)?
     @State private var selectedLane = ""
 
-    public init(project: String) { self.project = project }
+    public init(project: String, open: ((Card) -> Void)? = nil) {
+        self.project = project
+        self.open = open
+    }
 
     public var body: some View {
         let board = model.board
@@ -147,7 +151,12 @@ public struct BoardView: View {
                         Spacer()
                     }.padding(.top, Space.sm)
                     ForEach(lane.cards) { card in
-                        NavigationLink(value: card) { CardRow(card: card).padding(Space.md).auroraPanel() }.buttonStyle(.plain)
+                        // A link inside a Duo pane never reaches the stack, so the project opens cards (#12360).
+                        if let open {
+                            Button { open(card) } label: { CardRow(card: card).padding(Space.md).auroraPanel() }.buttonStyle(.plain)
+                        } else {
+                            NavigationLink(value: card) { CardRow(card: card).padding(Space.md).auroraPanel() }.buttonStyle(.plain)
+                        }
                     }
                 }
             }

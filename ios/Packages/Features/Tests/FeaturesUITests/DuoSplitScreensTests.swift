@@ -5,8 +5,15 @@ final class DuoSplitScreensTests: XCTestCase {
         capturePoses(screen: "project", arguments: ["-project", "trantor"], composer: "chat.composer", send: "chat.send") { app in
             XCTAssertTrue(app.buttons["crew.add"].waitForExistence(timeout: 10), "Use the open Duo display")
             app.buttons["Board"].tap()
-            XCTAssertTrue(app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "iOS companion: the full build")).firstMatch.waitForExistence(timeout: 5))
+            let card = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "iOS companion: the full build")).firstMatch
+            XCTAssertTrue(card.waitForExistence(timeout: 5))
             XCTAssertTrue(app.buttons["chat.send"].exists)
+            // A card opens from the Board pane and keeps its wash (#12360).
+            card.tap()
+            XCTAssertTrue(app.buttons["Post note"].waitForExistence(timeout: 5), "The card must open from the Board pane")
+            self.assertGroundReachesEdges(app, pose: "card detail")
+            app.buttons["BackButton"].firstMatch.tap()
+            XCTAssertTrue(app.buttons["Board"].waitForExistence(timeout: 5))
             app.buttons["Crew"].tap()
             XCTAssertTrue(app.buttons["crew.add"].waitForExistence(timeout: 5))
         }
